@@ -5,12 +5,11 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
 ./scripts/setup-codex-remotes.sh >/dev/null
-git fetch --quiet codex-fork open-codex
 git fetch --quiet codex-upstream main
 
 metadata=.sync/codex-upstream.json
 integrated="$(jq -r '.integratedUpstreamCommit' "$metadata")"
-custom="$(jq -r '.customSourceCommit' "$metadata")"
+custom_commits="$(jq -r '.customCommitsAboveBase' "$metadata")"
 upstream="$(git rev-parse codex-upstream/main)"
 
 if ! git merge-base --is-ancestor "$integrated" "$upstream"; then
@@ -19,7 +18,6 @@ if ! git merge-base --is-ancestor "$integrated" "$upstream"; then
 fi
 
 upstream_commits="$(git rev-list --count "$integrated..$upstream")"
-custom_commits="$(git rev-list --count "$integrated..$custom")"
 
 printf 'Codex subtree: codex/\n'
 printf 'Integrated upstream: %s\n' "$integrated"
