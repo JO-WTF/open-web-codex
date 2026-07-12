@@ -94,6 +94,20 @@ async fn process_event(data: &[u8], db: &PgPool) -> Result<(), String> {
 
             if run_updated > 0 {
                 tracing::info!(thread_id, status, "run & task auto-transitioned via supervisor");
+
+                // Persist event for replay
+                let _ = sqlx::query(
+                    "INSERT INTO run_events (run_id, event_type, payload) \
+                     SELECT r.id, $1, $2::jsonb \
+                     FROM runs r WHERE r.codex_thread_id = $3 AND r.status = $4",
+                )
+                .bind(inner_method)
+                .bind(value.to_string())
+                .bind(thread_id)
+                .bind(status)
+                .execute(db)
+                .await
+                .map_err(|e| format!("event insert error: {e}"))?;
             }
 
             Ok(())
