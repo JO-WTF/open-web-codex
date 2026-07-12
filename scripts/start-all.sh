@@ -34,16 +34,16 @@ echo "  Daemon PID: $!"
 sleep 1
 
 # ── Start Vite frontend ──
-echo "[4/4] Starting Vite frontend on :1420..."
+echo "[4/4] Starting Vite frontend on :1421..."
 cd "$ROOT/apps/web"
-npx vite --port 1420 --host 0.0.0.0 &
+npx vite --port 1421 --host 0.0.0.0 &
 VITE_PID=$!
 sleep 3
 
 # ── Verify ──
 echo ""
 echo "=== Services ==="
-echo "  Frontend:  http://127.0.0.1:1420/web"
+echo "  Frontend:  http://127.0.0.1:1421/web"
 echo "  Daemon:    http://127.0.0.1:4733 (api)"
 echo ""
 
