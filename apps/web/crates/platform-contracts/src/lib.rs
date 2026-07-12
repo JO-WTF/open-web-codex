@@ -171,3 +171,26 @@ pub struct AddMemberRequest {
     pub email: String,
     pub role: Option<String>,
 }
+
+// ── Run ────────────────────────────────────────────────────────────
+
+/// Database/API run representation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Run {
+    pub id: Uuid,
+    pub task_id: Uuid,
+    pub status: String,
+    pub codex_thread_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Request to start a run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StartRunRequest {}
+
+/// Response from starting a run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StartRunResponse {
+    pub run: Run,
+}
