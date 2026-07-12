@@ -579,10 +579,12 @@ export default function WebApp() {
               ? String(((item.content as Record<string, unknown>[])[0] as Record<string, unknown>)?.text ?? '')
               : '');
           if (!text) continue;
-          const role = typeof item.role === 'string' ? item.role : '';
-          if (role === 'user') {
+          const itemType = typeof item.type === 'string' ? item.type : '';
+          if (itemType === 'reasoning') {
+            loaded.push({ id: newLogId(), level: 'user' as const, text: `[thinking] ${text}` });
+          } else if (itemType === 'userMessage') {
             loaded.push({ id: newLogId(), level: 'user' as const, text });
-          } else if (role === 'assistant') {
+          } else if (itemType === 'agentMessage') {
             loaded.push({ id: newLogId(), level: 'assistant' as const, text });
           }
         }
