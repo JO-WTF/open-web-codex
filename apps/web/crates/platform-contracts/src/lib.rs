@@ -32,3 +32,45 @@ impl Default for Cursor {
 /// Platform event projection cursor (opaque to clients).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventCursor(pub String);
+
+// ── Project ──────────────────────────────────────────────────────────
+
+/// Database/API project representation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Project {
+    pub id: Uuid,
+    pub name: String,
+    pub git_url: String,
+    pub default_branch: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Request body to create a project.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateProjectRequest {
+    pub name: String,
+    pub git_url: String,
+    #[serde(default)]
+    pub default_branch: Option<String>,
+}
+
+// ── Task ──────────────────────────────────────────────────────────────
+
+/// Database/API task representation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Task {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub title: String,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Request body to create a task.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateTaskRequest {
+    pub project_id: Uuid,
+    pub title: String,
+}
