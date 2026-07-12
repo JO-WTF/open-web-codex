@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AppServerEvent, WorkspaceInfo } from "./types";
+import type { AppServerEvent, ThreadTokenUsage, WorkspaceInfo } from "./types";
 import { CodexMonitorWebClient } from "./services/webClient";
 import Layout from "./components/Layout";
 import Sidebar from "./components/Sidebar";
@@ -88,13 +88,18 @@ export default function WebApp() {
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
-  const [threads] = useState<ThreadInfo[]>([]);
+  const [threadsByWorkspace, setThreadsByWorkspace] = useState<Record<string, ThreadInfo[]>>({});
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [messages, setMessages] = useState<LogEntry[]>([]);
   const [gatewayState, setGatewayState] = useState<GatewayState>("checking");
   const [gatewayVersion, setGatewayVersion] = useState<string | null>(null);
   const [thinking, setThinking] = useState(false);
+  const [tokenUsage, setTokenUsage] = useState<ThreadTokenUsage | null>(null);
+  const [threadStatus, setThreadStatus] = useState<string>("idle");
+  const [threadSettings, setThreadSettings] = useState<Record<string, unknown> | null>(null);
+  const [rateLimits, setRateLimits] = useState<Record<string, unknown> | null>(null);
+  const [mcpServers, setMcpServers] = useState<Record<string, {name: string; status: string; error?: string | null; failureReason?: string | null}>>({});
 
   const client = useMemo(() => new CodexMonitorWebClient({ baseUrl, token }), [baseUrl, token]);
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
@@ -149,12 +154,22 @@ export default function WebApp() {
         case "mcpServer/startupStatus/updated": {
           const serverName = typeof params.name === "string" ? params.name : "";
           const status = typeof params.status === "string" ? params.status : "";
-          const err = params.error != null ? " (error)" : "";
-          const reason = typeof params.failureReason === "string" && params.failureReason ? `: ${params.failureReason}` : "";
-          return {
-            level: "info",
-            text: `MCP ${serverName}: ${status}${err}${reason}`,
-          };
+          if (!serverName) return null;
+          setMcpServers(prev => ({
+            ...prev,
+            [serverName]: {
+              name: serverName,
+              status,
+              error: params.error != null ? String(params.error) : null,
+              failureReason: typeof params.failureReason === "string" ? params.failureReason : null,
+            },
+          }));
+          if (status === "error") {
+            const msg = typeof params.failureReason === "string" && params.failureReason
+              ? `: ${params.failureReason}` : "";
+            return { level: "error" as const, text: `MCP ${serverName} error${msg}` };
+          }
+          return null;
         }
 
         case "item/reasoning/summaryTextDelta":
@@ -315,7 +330,11 @@ export default function WebApp() {
         case "thread/status/changed": {
           const status = params.status as Record<string, unknown> | undefined;
           const type = typeof status?.type === "string" ? status.type : "unknown";
-          return { level: "info" as const, text: `Thread: ${type}` };
+          setThreadStatus(type);
+          if (type === "error") {
+            return { level: "error" as const, text: "Thread error" };
+          }
+          return null;
         }
 
         case "turn/plan/updated":
@@ -323,6 +342,43 @@ export default function WebApp() {
 
         case "turn/diff/updated":
           return { level: "info" as const, text: "Diff updated" };
+
+        case "thread/tokenUsage/updated": {
+          const raw = params.tokenUsage as Record<string, unknown> | undefined;
+          if (raw?.total && typeof raw.total === "object") {
+            const tu: ThreadTokenUsage = {
+              total: raw.total as ThreadTokenUsage["total"],
+              last: raw.last as ThreadTokenUsage["last"],
+              modelContextWindow:
+                typeof raw.modelContextWindow === "number" ? raw.modelContextWindow : null,
+            };
+            setTokenUsage(tu);
+          }
+          return null;
+        }
+
+        case "thread/settings/updated": {
+          const s = params as Record<string, unknown>;
+          setThreadSettings(s);
+          return null;
+        }
+
+        case "item/reasoning/summaryPartAdded": {
+          const partItemId = typeof params.itemId === "string" ? params.itemId : null;
+          if (partItemId) {
+            const key = `reason_${partItemId}`;
+            streamingTexts.current.delete(key);
+            streamingLogIds.current.delete(key);
+          }
+          return null;
+        }
+
+        case "account/rateLimits/updated": {
+          const raw = params.rateLimits as Record<string, unknown> | undefined;
+          if (raw) setRateLimits(raw);
+          return null;
+        }
+
 
         default: {
           const text = summarizeEvent(event);
@@ -362,7 +418,6 @@ export default function WebApp() {
       const next = await client.listWorkspaces();
       setWorkspaces(next);
       setActiveWorkspaceId((cur) => cur ?? next[0]?.id ?? null);
-      appendLog("info", `Loaded ${next.length} workspace(s).`);
     } catch (error) {
       appendLog("error", error instanceof Error ? error.message : String(error));
     } finally {
@@ -370,9 +425,41 @@ export default function WebApp() {
     }
   }, [appendLog, client]);
 
-  useEffect(() => {
-    void checkGateway();
-    const unsub = client.subscribeAppServerEvents(
+  const refreshThreads = useCallback(async (forWorkspaceId?: string) => {
+    const wid = forWorkspaceId ?? activeWorkspaceId;
+    if (!wid) return;
+    try {
+      const raw = await client.listThreads(wid);
+      const arr = (raw as Record<string, unknown>)?.threads ?? raw ?? [];
+      if (Array.isArray(arr)) {
+        setThreadsByWorkspace(prev => ({
+          ...prev,
+          [wid]: arr.map((t: Record<string, unknown>) => ({
+            id: String(t.id ?? ""),
+            label: String(t.name ?? t.label ?? "Thread"),
+            updatedAt: typeof t.updatedAt === "number" ? t.updatedAt : 0,
+            turnCount: typeof t.turnCount === "number" ? t.turnCount : undefined,
+          })),
+        }));
+      }
+    } catch { /* not fatal */ }
+  }, [activeWorkspaceId, client]);
+
+  const connectWorkspace = useCallback(async (id: string) => {
+    if (!activeWorkspaceId || activeWorkspaceId !== id) {
+      setActiveWorkspaceId(id);
+    }
+    try {
+      await client.connectWorkspace(id);
+      await refreshWorkspaces();
+      // threads will refresh via the activeWorkspaceId effect
+    } catch { /* not fatal */ }
+  }, [client, refreshWorkspaces]);
+
+ useEffect(() => {
+   void checkGateway();
+    void refreshWorkspaces();
+   const unsub = client.subscribeAppServerEvents(
       (event) => {
         if (activeWorkspaceId && event.workspace_id !== activeWorkspaceId) return;
         const tid = extractThreadIdFromEvent(event);
@@ -388,13 +475,19 @@ export default function WebApp() {
     return unsub;
   }, [activeWorkspaceId, appendLog, checkGateway, client]);
 
+  // Auto-refresh threads when workspace changes
+  useEffect(() => {
+    void refreshThreads();
+  }, [activeWorkspaceId, refreshThreads]);
+
   /* ─── Workspace actions ─── */
 
-  const addWorkspace = useCallback(
-    async (path: string) => {
+
+  const createWorkspace = useCallback(
+    async (name: string) => {
       setBusy(true);
       try {
-        await client.addWorkspace(path);
+        await client.createWorkspace(name);
         await refreshWorkspaces();
       } catch (error) {
         appendLog("error", error instanceof Error ? error.message : String(error));
@@ -405,20 +498,30 @@ export default function WebApp() {
     [appendLog, client, refreshWorkspaces],
   );
 
-  const startThread = useCallback(async () => {
-    if (!activeWorkspaceId) return;
-    setBusy(true);
-    try {
-      const result = await client.startThread(activeWorkspaceId);
-      const tid = extractThreadId(result);
-      if (tid) setActiveThreadId(tid);
-      appendLog("info", `Started thread${tid ? ` ${tid}` : ""}.`);
-    } catch (error) {
-      appendLog("error", error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  }, [activeWorkspaceId, appendLog, client]);
+
+ const startThread = useCallback(async (workspaceId?: string) => {
+   const wid = workspaceId ?? activeWorkspaceId;
+   if (!wid) return;
+   setBusy(true);
+   try {
+     setActiveWorkspaceId(wid);
+     const result = await client.startThread(wid);
+     // Handle Codex CLI JSON-RPC error embedded in result
+     if (result && typeof result === "object" && "error" in result) {
+       const err = (result as Record<string,unknown>).error as Record<string,unknown> | undefined;
+       const msg = typeof err?.message === "string" ? err.message : JSON.stringify(err);
+       throw new Error(msg);
+     }
+     const tid = extractThreadId(result);
+     if (tid) setActiveThreadId(tid);
+      await refreshThreads(wid);
+     appendLog("info", `Started thread${tid ? ` ${tid}` : ""}.`);
+   } catch (error) {
+     appendLog("error", error instanceof Error ? error.message : String(error));
+   } finally {
+     setBusy(false);
+   }
+  }, [activeWorkspaceId, appendLog, client, refreshThreads]);
 
   const sendMessage = useCallback(async () => {
     const text = draft.trim();
@@ -440,6 +543,7 @@ export default function WebApp() {
   const selectThread = useCallback((id: string) => {
     setActiveThreadId(id);
     setMessages([]);
+    setTokenUsage(null);
   }, []);
 
   /* ─── Render ─── */
@@ -453,9 +557,10 @@ export default function WebApp() {
           workspaces={workspaces}
           activeWorkspaceId={activeWorkspaceId}
           onSelectWorkspace={setActiveWorkspaceId}
-          onAddWorkspace={addWorkspace}
-          threads={threads}
+          threadsByWorkspace={threadsByWorkspace}
           activeThreadId={activeThreadId}
+          onCreateWorkspace={createWorkspace}
+
           onSelectThread={selectThread}
           onNewThread={startThread}
           baseUrl={baseUrl}
@@ -465,12 +570,20 @@ export default function WebApp() {
           onCheckGateway={checkGateway}
           onLoadWorkspaces={refreshWorkspaces}
           busy={busy}
+          mcpServers={mcpServers}
+          rateLimits={rateLimits}
+
+          onConnectWorkspace={connectWorkspace}
         />
       }
     >
       <Conversation
         workspaceName={activeWorkspace?.name ?? null}
         threadTitle={activeThreadId ? activeThreadId.slice(0, 12) + "…" : null}
+          tokenUsage={tokenUsage}
+          threadStatus={threadStatus}
+          threadSettings={threadSettings}
+
         messages={messages}
         draft={draft}
         onDraftChange={setDraft}

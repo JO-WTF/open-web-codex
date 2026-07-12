@@ -1,8 +1,9 @@
-import { useState } from "react";
-import type { WorkspaceInfo } from "../../types";
+ import { useState } from "react";
+ import ChevronRight from "lucide-react/dist/esm/icons/chevron-right";
+ import type { WorkspaceInfo } from "../../types";
 import Brand from "./Brand";
 import Workspaces from "./Workspaces";
-import Threads from "./Threads";
+import McpStatus from "./McpStatus";
 
 type ThreadInfo = {
   id: string;
@@ -17,17 +18,20 @@ type Props = {
   workspaces: WorkspaceInfo[];
   activeWorkspaceId: string | null;
   onSelectWorkspace: (id: string) => void;
-  onAddWorkspace: (path: string) => void;
-  threads: ThreadInfo[];
+  onCreateWorkspace: (name: string) => void;
+  onLoadWorkspaces: () => void;
+  onConnectWorkspace: (id: string) => void;
+  threadsByWorkspace: Record<string, ThreadInfo[]>;
   activeThreadId: string | null;
   onSelectThread: (id: string) => void;
-  onNewThread: () => void;
+  onNewThread: (workspaceId: string) => void;
   baseUrl: string;
   token: string;
   onBaseUrlChange: (url: string) => void;
   onTokenChange: (token: string) => void;
   onCheckGateway: () => void;
-  onLoadWorkspaces: () => void;
+  mcpServers: Record<string, {name: string; status: string; error?: string | null; failureReason?: string | null}>;
+  rateLimits: Record<string, unknown> | null;
   busy: boolean;
 };
 
@@ -37,8 +41,10 @@ export default function Sidebar({
   workspaces,
   activeWorkspaceId,
   onSelectWorkspace,
-  onAddWorkspace,
-  threads,
+  onCreateWorkspace,
+  onLoadWorkspaces,
+  onConnectWorkspace,
+  threadsByWorkspace,
   activeThreadId,
   onSelectThread,
   onNewThread,
@@ -47,23 +53,66 @@ export default function Sidebar({
   onBaseUrlChange,
   onTokenChange,
   onCheckGateway,
-  onLoadWorkspaces,
+  mcpServers,
+  rateLimits,
   busy,
 }: Props) {
   const [showSettings, setShowSettings] = useState(false);
 
   return (
     <aside className="web-sidebar">
-      <div className="web-sidebar-inner">
+      <div className="web-sidebar-scroll">
         <Brand state={gatewayState} version={gatewayVersion} />
 
+        {rateLimits && (() => {
+          const rl = rateLimits as Record<string, unknown>;
+          const primary = rl.primary as Record<string, unknown> | null | undefined;
+          const usedPct = primary?.usedPercent != null ? Math.round(primary.usedPercent as number) : null;
+          const planType = typeof rl.planType === "string" ? rl.planType : null;
+          return (
+            <div className="web-rate-limit">
+              {usedPct != null && (
+                <span className="web-rate-pct" title={`Rate limit: ${usedPct}% used`}>
+                  <span className="web-rate-bar">
+                    <span className="web-rate-fill" style={{width: `${Math.min(usedPct, 100)}%`}} />
+                  </span>
+                  <span className="web-rate-text">{usedPct}%</span>
+                </span>
+              )}
+              {planType && <span className="web-rate-plan">{planType}</span>}
+            </div>
+          );
+        })()}
+
+        <Workspaces
+          workspaces={workspaces}
+          activeId={activeWorkspaceId}
+          onSelect={onSelectWorkspace}
+          onCreate={onCreateWorkspace}
+          onConnect={onConnectWorkspace}
+          onLoad={onLoadWorkspaces}
+          threadsByWorkspace={threadsByWorkspace}
+          activeThreadId={activeThreadId}
+          onSelectThread={onSelectThread}
+          onNewThread={onNewThread}
+          busy={busy}
+        />
+
+        <McpStatus servers={mcpServers} />
+
+
+      </div>
+
+      <div className="web-sidebar-bottom">
         <div
           className="web-settings-toggle"
           onClick={() => setShowSettings(!showSettings)}
         >
-          {showSettings ? "▼" : "▶"} Connection Settings
+          <span className={`web-settings-toggle-icon${showSettings ? " web-settings-icon-open" : ""}`}>
+            <ChevronRight size={10} />
+          </span>
+          Settings
         </div>
-
         {showSettings && (
           <div className="web-settings-panel">
             <label>
@@ -91,35 +140,12 @@ export default function Sidebar({
               >
                 Save & Check
               </button>
-              <button
-                className="web-settings-btn web-settings-btn-ghost"
-                onClick={onLoadWorkspaces}
-                disabled={busy}
-              >
-                Load
-              </button>
             </div>
             {gatewayVersion && (
               <div className="web-version-info">Gateway v{gatewayVersion}</div>
             )}
           </div>
         )}
-
-        <Workspaces
-          workspaces={workspaces}
-          activeId={activeWorkspaceId}
-          onSelect={onSelectWorkspace}
-          onAdd={onAddWorkspace}
-          busy={busy}
-        />
-
-        <Threads
-          threads={threads}
-          activeId={activeThreadId}
-          onSelect={onSelectThread}
-          onNew={onNewThread}
-          busy={busy}
-        />
       </div>
     </aside>
   );
