@@ -44,6 +44,11 @@ function extractThreadId(result: Record<string, unknown> | null | undefined) {
     if (typeof r.id === "string") return r.id;
     if (typeof r.threadId === "string") return r.threadId;
   }
+  // Handle nested start_thread response: {result: {thread: {id: "..."}}}
+  const inner = result.result;
+  if (inner && typeof inner === "object") {
+    return extractThreadId(inner as Record<string, unknown>);
+  }
   return null;
 }
 
@@ -461,7 +466,9 @@ export default function WebApp() {
     void refreshWorkspaces();
    const unsub = client.subscribeAppServerEvents(
       (event) => {
-        if (activeWorkspaceId && event.workspace_id !== activeWorkspaceId) return;
+        // Accept events for any workspace; caller filters
+        const wsId = activeWorkspaceId;
+        if (wsId && event.workspace_id !== wsId) return;
         const tid = extractThreadIdFromEvent(event);
         if (tid) setActiveThreadId(tid);
         const entry = handleAppEvent(event);
@@ -473,7 +480,7 @@ export default function WebApp() {
       { onOpen: () => setGatewayState("online"), onError: () => setGatewayState("offline") },
     );
     return unsub;
-  }, [activeWorkspaceId, appendLog, checkGateway, client]);
+  }, [appendLog, checkGateway, client]);
 
   // Auto-refresh threads when workspace changes
   useEffect(() => {
@@ -504,6 +511,7 @@ export default function WebApp() {
    if (!wid) return;
    setBusy(true);
    try {
+     await connectWorkspace(wid);
      setActiveWorkspaceId(wid);
      const result = await client.startThread(wid);
      // Handle Codex CLI JSON-RPC error embedded in result
@@ -521,7 +529,7 @@ export default function WebApp() {
    } finally {
      setBusy(false);
    }
-  }, [activeWorkspaceId, appendLog, client, refreshThreads]);
+  }, [activeWorkspaceId, appendLog, client, connectWorkspace, refreshThreads]);
 
   const sendMessage = useCallback(async () => {
     const text = draft.trim();
