@@ -1,0 +1,157 @@
+.web-app-shell {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) 1fr;
+  min-height: 100vh;
+  background: #090b10;
+  color: #eef2ff;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.web-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 24px;
+  border-right: 1px solid rgb(148 163 184 / 18%);
+  background: linear-gradient(180deg, rgb(15 23 42 / 96%), rgb(2 6 23 / 96%));
+}
+
+.web-sidebar h1 {
+  margin: 0 0 8px;
+  font-size: 22px;
+}
+
+.web-sidebar label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: #aeb9d4;
+}
+
+.web-sidebar input,
+.web-sidebar select,
+.web-composer textarea {
+  border: 1px solid rgb(148 163 184 / 25%);
+  border-radius: 12px;
+  background: rgb(15 23 42 / 80%);
+  color: #f8fafc;
+  padding: 10px 12px;
+  font: inherit;
+}
+
+.web-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.web-actions button,
+.web-composer button {
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #60a5fa, #a78bfa);
+  color: #020617;
+  font-weight: 700;
+  padding: 10px 16px;
+  cursor: pointer;
+}
+
+.web-actions button:disabled,
+.web-composer button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.web-path {
+  margin: 0;
+  color: #94a3b8;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.web-chat {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  min-width: 0;
+  height: 100vh;
+}
+
+.web-log {
+  overflow-y: auto;
+  padding: 24px;
+}
+
+.web-empty {
+  display: grid;
+  min-height: 60vh;
+  place-items: center;
+  color: #94a3b8;
+  text-align: center;
+}
+
+.web-log-entry {
+  margin: 0 0 12px;
+  border: 1px solid rgb(148 163 184 / 16%);
+  border-radius: 16px;
+  background: rgb(15 23 42 / 55%);
+  padding: 12px 14px;
+}
+
+.web-log-entry strong {
+  display: block;
+  margin-bottom: 6px;
+  color: #93c5fd;
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+.web-log-entry pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.web-log-error {
+  border-color: rgb(248 113 113 / 40%);
+}
+
+.web-log-error strong {
+  color: #fca5a5;
+}
+
+.web-log-user strong {
+  color: #86efac;
+}
+
+.web-composer {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  padding: 18px 24px 24px;
+  border-top: 1px solid rgb(148 163 184 / 18%);
+  background: rgb(2 6 23 / 86%);
+}
+
+.web-composer textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+
+@media (max-width: 760px) {
+  .web-app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .web-sidebar {
+    border-right: 0;
+    border-bottom: 1px solid rgb(148 163 184 / 18%);
+  }
+
+  .web-composer {
+    grid-template-columns: 1fr;
+  }
+}

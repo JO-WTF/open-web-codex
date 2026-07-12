@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codexmonitor.local/contracts/codex/protocol-fixture.schema.json",
+  "title": "Codex Protocol Replay Fixture",
+  "type": "object",
+  "required": ["fixtureVersion", "protocolVersion", "capabilityId", "scenario", "messages"],
+  "properties": {
+    "fixtureVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "protocolVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "capabilityId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$"
+    },
+    "scenario": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]+$"
+    },
+    "serverBuild": {
+      "type": "object",
+      "properties": {
+        "version": { "type": "string" },
+        "commit": { "type": "string" },
+        "target": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "messages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["direction", "kind", "payload"],
+        "properties": {
+          "direction": {
+            "enum": ["client_to_server", "server_to_client"]
+          },
+          "kind": {
+            "enum": ["request", "response", "notification", "server_request"]
+          },
+          "correlation": {
+            "type": ["string", "number", "null"]
+          },
+          "delayMs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": true
+}

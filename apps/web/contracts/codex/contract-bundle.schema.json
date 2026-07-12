@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codexmonitor.local/contracts/codex/contract-bundle.schema.json",
+  "title": "Codex Contract Bundle",
+  "type": "object",
+  "required": ["bundleVersion", "createdAt", "build", "files"],
+  "properties": {
+    "bundleVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "build": {
+      "type": "object",
+      "required": ["version", "commit", "target"],
+      "properties": {
+        "version": { "type": "string", "minLength": 1 },
+        "commit": { "type": "string", "minLength": 7 },
+        "target": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["path", "sha256", "contentBase64"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^(?:manifest|schemas|fixtures)/[A-Za-z0-9._/-]+\\.json$"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "contentBase64": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": true
+}

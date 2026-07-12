@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codexmonitor.local/contracts/codex/error.schema.json",
+  "title": "Codex Integration Error",
+  "type": "object",
+  "required": ["code", "category", "retryable", "message"],
+  "properties": {
+    "code": {
+      "type": "string",
+      "pattern": "^codex\\.[a-z][a-z0-9_.-]+$"
+    },
+    "category": {
+      "enum": [
+        "authentication",
+        "authorization",
+        "compatibility",
+        "conflict",
+        "invalid_request",
+        "not_found",
+        "rate_limit",
+        "runtime",
+        "transport",
+        "unavailable"
+      ]
+    },
+    "retryable": {
+      "type": "boolean"
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1
+    },
+    "capabilityId": {
+      "type": "string"
+    },
+    "method": {
+      "type": "string"
+    },
+    "requestId": {
+      "type": ["string", "number", "null"]
+    },
+    "details": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "cause": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

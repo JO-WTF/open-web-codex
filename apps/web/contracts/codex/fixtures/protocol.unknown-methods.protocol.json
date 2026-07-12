@@ -1,0 +1,49 @@
+{
+  "fixtureVersion": "1.0.0",
+  "protocolVersion": "2.0.0",
+  "capabilityId": "protocol.initialize",
+  "scenario": "unknown_methods",
+  "serverBuild": {
+    "version": "fixture-v1",
+    "commit": "0000000000000000000000000000000000000000",
+    "target": "x86_64-unknown-linux-gnu"
+  },
+  "messages": [
+    {
+      "direction": "server_to_client",
+      "kind": "notification",
+      "payload": {
+        "method": "future/notification",
+        "params": {
+          "unknownField": {
+            "nested": true
+          }
+        }
+      }
+    },
+    {
+      "direction": "server_to_client",
+      "kind": "server_request",
+      "correlation": "future-request-1",
+      "payload": {
+        "id": "future-request-1",
+        "method": "future/serverRequest",
+        "params": {
+          "unknownField": true
+        }
+      }
+    },
+    {
+      "direction": "client_to_server",
+      "kind": "response",
+      "correlation": "future-request-1",
+      "payload": {
+        "id": "future-request-1",
+        "error": {
+          "code": -32601,
+          "message": "Method not supported by this client"
+        }
+      }
+    }
+  ]
+}
