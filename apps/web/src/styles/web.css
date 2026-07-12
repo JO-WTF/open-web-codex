@@ -1685,3 +1685,49 @@ body {
 .web-ws-row-active:hover .web-ws-new-thread-btn {
   color: var(--text-muted);
 }
+
+.web-approval-card {
+  margin: var(--space-3) var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-warning, #f59e0b);
+  border-radius: var(--radius-md);
+  background: var(--bg-warning, #fffbeb);
+  max-width: 100%;
+  overflow: hidden;
+}
+.web-approval-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-warning, #92400e);
+}
+.web-approval-icon {
+  font-size: 14px;
+}
+.web-approval-label {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 11px;
+}
+.web-approval-command {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  background: rgb(0 0 0 / 4%);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.web-approval-command code {
+  font-family: var(--font-mono, "SF Mono", "Fira Code", monospace);
+}
+.web-approval-hint {
+  margin-top: var(--space-2);
+  font-size: 11px;
+  color: var(--text-muted);
+}

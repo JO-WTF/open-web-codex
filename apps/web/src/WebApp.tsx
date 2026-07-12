@@ -12,7 +12,8 @@ export type LogEntry = {
   id: string;
   level: "event" | "error" | "info" | "user" | "assistant" | "system";
   text: string;
-  kind?: "reasoning" | "tool" | "diff";
+  approvalId?: string;
+  kind?: "reasoning" | "tool" | "diff" | "approval";
   toolType?: string;
   toolTitle?: string;
   toolStatus?: string;
@@ -382,6 +383,17 @@ export default function WebApp() {
           const raw = params.rateLimits as Record<string, unknown> | undefined;
           if (raw) setRateLimits(raw);
           return null;
+
+        case "item/commandExecution/requestApproval": {
+          const cmd = typeof params.command === "string" ? params.command : null;
+          if (!cmd) return null;
+          const itemId = typeof params.itemId === "string" ? params.itemId : undefined;
+          return {
+            level: "info" as const,
+            text: cmd,
+            kind: "approval" as const,
+            approvalId: itemId,
+          };
         }
 
 

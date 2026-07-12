@@ -4,6 +4,7 @@ import AssistantMessage from "./messages/AssistantMessage";
 import ReasoningBlock from "./messages/ReasoningBlock";
 import ToolCallCard from "./messages/ToolCallCard";
 import DiffBlock from "./messages/DiffBlock";
+import ApprovalCard from "./messages/ApprovalCard";
 import SystemNotice from "./messages/SystemNotice";
 
 type DiffLine = {
@@ -49,6 +50,15 @@ export default function MessageList({ items }: Props) {
   return (
     <>
       {items.map((entry) => {
+        if (entry.kind === "approval") {
+          return (
+            <ApprovalCard
+              key={entry.id}
+              command={entry.text}
+            />
+          );
+        }
+
         if (entry.kind === "reasoning") {
           return (
             <ReasoningBlock
