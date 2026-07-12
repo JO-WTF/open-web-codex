@@ -3,6 +3,7 @@ pub mod tasks;
 pub mod codex_proxy;
 pub mod bootstrap;
 pub mod me;
+pub mod organizations;
 pub mod sessions;
 pub mod health;
 
@@ -18,6 +19,9 @@ pub fn router(adapter: Arc<dyn CodexAdapter>) -> Router<AppState> {
         .route("/bootstrap", axum::routing::post(bootstrap::bootstrap))
         .route("/sessions", axum::routing::post(sessions::create_session))
         .route("/me", axum::routing::get(me::me))
+        .route("/organizations", axum::routing::get(organizations::list_organizations).post(organizations::create_organization))
+        .route("/organizations/{id}", axum::routing::get(organizations::get_organization))
+        .route("/organizations/{id}/members", axum::routing::get(organizations::list_members).post(organizations::add_member))
         .route("/health", axum::routing::get(health::health_check))
         .route("/projects", axum::routing::get(projects::list_projects).post(projects::create_project))
         .route("/projects/{id}", axum::routing::get(projects::get_project))

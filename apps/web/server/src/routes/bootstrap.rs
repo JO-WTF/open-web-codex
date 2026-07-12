@@ -49,7 +49,7 @@ pub async fn bootstrap(
 
     // Create owner user
     let user = sqlx::query(
-        "INSERT INTO users (name, email, password_hash, role) VALUES ($1, $2, $3, 'owner') \
+        "INSERT INTO users (name, email, password_hash, role) VALUES ($1, $2, $3, 'owner') 
          RETURNING id, name, email, role, created_at, updated_at",
     )
     .bind(&req.name)
@@ -75,8 +75,30 @@ pub async fn bootstrap(
     hasher.update(session_token.as_bytes());
     let token_hash = hex::encode(hasher.finalize());
 
+
+    // Create default organization
+    let org_name = format!("{}'s Organization", req.name);
+    let org = sqlx::query("INSERT INTO organizations (name, slug) VALUES ($1, $2) RETURNING id, name, slug, created_at, updated_at")
+        .bind(&org_name)
+        .bind(&org_name.to_lowercase().replace(' ', "-"))
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(PlatformError::internal(format!("{e}"))))
+        })?;
+
+    // Add owner as member
+    sqlx::query("INSERT INTO memberships (organization_id, user_id, role) VALUES ($1, $2, 'owner')")
+        .bind(org.get::<Uuid, _>("id"))
+        .bind(user.get::<Uuid, _>("id"))
+        .execute(&state.db)
+        .await
+        .map_err(|e| {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(PlatformError::internal(format!("{e}"))))
+        })?;
+
     sqlx::query(
-        "INSERT INTO sessions (user_id, token_hash, expires_at) \
+        "INSERT INTO sessions (user_id, token_hash, expires_at) 
          VALUES ($1, $2, now() + interval '7 days')",
     )
     .bind(user.get::<Uuid, _>("id"))
@@ -99,8 +121,17 @@ pub async fn bootstrap(
         updated_at: user.get("updated_at"),
     };
 
+    let org_data = open_web_codex_platform_contracts::Organization {
+        id: org.get("id"),
+        name: org.get("name"),
+        slug: org.get("slug"),
+        created_at: org.get("created_at"),
+        updated_at: org.get("updated_at"),
+    };
+
     Ok(Json(BootstrapResponse {
         user: user_data,
         session_token,
+        organization: org_data,
     }))
 }

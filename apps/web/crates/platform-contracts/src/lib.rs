@@ -99,6 +99,7 @@ pub struct BootstrapRequest {
 /// Response from bootstrap.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BootstrapResponse {
+    pub organization: Organization,
     pub user: User,
     pub session_token: String,
 }
@@ -124,4 +125,49 @@ pub struct MeResponse {
     pub name: String,
     pub email: String,
     pub role: String,
+}
+
+// ── Organization ────────────────────────────────────────────────────
+
+/// Database/API organization representation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Organization {
+    pub id: Uuid,
+    pub name: String,
+    pub slug: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Request to create an organization.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateOrganizationRequest {
+    pub name: String,
+    pub slug: Option<String>,
+}
+
+/// Organization membership record.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Membership {
+    pub id: Uuid,
+    pub organization_id: Uuid,
+    pub user_id: Uuid,
+    pub role: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Member info returned in member list.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemberInfo {
+    pub user_id: Uuid,
+    pub name: String,
+    pub email: String,
+    pub role: String,
+}
+
+/// Request to add a member.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddMemberRequest {
+    pub email: String,
+    pub role: Option<String>,
 }
