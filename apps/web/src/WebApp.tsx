@@ -435,7 +435,9 @@ export default function WebApp() {
     if (!wid) return;
     try {
       const raw = await client.listThreads(wid);
-      const arr = (raw as Record<string, unknown>)?.threads ?? raw ?? [];
+      const inner = (raw as Record<string, unknown>)?.result;
+      const arr =
+        (inner as Record<string, unknown>)?.data ?? raw ?? [];
       if (Array.isArray(arr)) {
         setThreadsByWorkspace(prev => ({
           ...prev,
