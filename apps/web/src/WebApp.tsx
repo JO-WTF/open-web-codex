@@ -132,9 +132,30 @@ export default function WebApp() {
           setThinking(true);
           return { level: "system", text: "Thinking..." };
 
-        case "turn/completed":
-          setThinking(false);
-          return { level: "system", text: "Turn complete" };
+       case "turn/completed":
+         setThinking(false);
+         return { level: "system", text: "Turn complete" };
+
+        case "thread/started": {
+          const thread = params.thread as Record<string, unknown> | undefined;
+          const threadName = typeof thread?.name === "string" && thread.name ? thread.name : null;
+          const cliVersion = typeof thread?.cliVersion === "string" ? thread.cliVersion : null;
+          return {
+            level: "info",
+            text: `Thread started${threadName ? `: ${threadName}` : ""}${cliVersion ? ` (${cliVersion})` : ""}`,
+          };
+        }
+
+        case "mcpServer/startupStatus/updated": {
+          const serverName = typeof params.name === "string" ? params.name : "";
+          const status = typeof params.status === "string" ? params.status : "";
+          const err = params.error != null ? " (error)" : "";
+          const reason = typeof params.failureReason === "string" && params.failureReason ? `: ${params.failureReason}` : "";
+          return {
+            level: "info",
+            text: `MCP ${serverName}: ${status}${err}${reason}`,
+          };
+        }
 
         case "item/reasoning/summaryTextDelta":
         case "item/reasoning/textDelta": {
