@@ -1,0 +1,13 @@
+.DS_Store
+.idea/
+.vscode/
+.cache/
+artifacts/
+tmp/
+
+# Component build output
+apps/web/node_modules/
+apps/web/dist/
+apps/web/src-tauri/target/
+codex/codex-rs/target/
+codex/target/
