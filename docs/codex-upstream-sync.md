@@ -3,8 +3,10 @@
 ## Goal
 
 The `codex/` directory contains the customized runtime and tracks
-`openai/codex/main`. The imported source history remains reachable so an update
-can use the common upstream base instead of replacing the entire directory.
+`openai/codex/main`. To keep the monorepo clone compact, main contains subtree
+snapshots rather than every imported commit. The sync tools fetch the customized
+branch and official history before merging, restoring the common upstream base
+without replacing the entire directory.
 
 ## Inspect
 

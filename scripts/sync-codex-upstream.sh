@@ -16,6 +16,7 @@ if [[ -n "$(git status --porcelain)" ]]; then
 fi
 
 ./scripts/setup-codex-remotes.sh >/dev/null
+git fetch codex-fork open-codex
 git fetch codex-upstream main
 
 metadata=.sync/codex-upstream.json

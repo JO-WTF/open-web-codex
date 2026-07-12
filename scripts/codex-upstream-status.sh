@@ -5,6 +5,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
 ./scripts/setup-codex-remotes.sh >/dev/null
+git fetch --quiet codex-fork open-codex
 git fetch --quiet codex-upstream main
 
 metadata=.sync/codex-upstream.json

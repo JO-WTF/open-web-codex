@@ -21,7 +21,8 @@ Status: in progress.
 Deliverables:
 
 - [x] Import CodexMonitor and customized Codex into one repository.
-- [x] Preserve the custom Codex history required for upstream three-way merges.
+- [x] Preserve custom source/base metadata and fetch history on demand for
+  upstream three-way merges.
 - [x] Add official upstream status and guarded sync tooling.
 - [x] Replace outdated product, capability and plan baselines.
 - [ ] Reconcile main-only changes in both source forks and decide whether each is
