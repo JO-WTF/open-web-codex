@@ -1,0 +1,107 @@
+{
+  "schemaVersion": "1.0.0",
+  "capabilities": [
+    {
+      "id": "protocol.initialize",
+      "owner": "codex-rust",
+      "requiredForV1": true,
+      "description": "Version negotiation and Capability Manifest delivery"
+    },
+    {
+      "id": "thread.lifecycle",
+      "owner": "codex-rust",
+      "requiredForV1": true,
+      "description": "Thread start, read, resume, list, archive and recovery"
+    },
+    {
+      "id": "turn.lifecycle",
+      "owner": "codex-rust",
+      "requiredForV1": true,
+      "description": "Turn start, steer, interrupt and lifecycle events"
+    },
+    {
+      "id": "approval.lifecycle",
+      "owner": "codex-rust",
+      "requiredForV1": true,
+      "description": "Approval and structured user-input server requests"
+    },
+    {
+      "id": "profile.multi_workspace",
+      "owner": "codex-rust",
+      "requiredForV1": true,
+      "description": "Multiple authorized Workspaces on one Profile session"
+    },
+    {
+      "id": "memory.lifecycle",
+      "owner": "codex-rust",
+      "requiredForV1": true,
+      "description": "Compaction, consolidation, status, export and reset"
+    },
+    {
+      "id": "agents.crud",
+      "owner": "codex-rust",
+      "requiredForV1": true,
+      "description": "Native Agent create, read, update, delete and reload"
+    },
+    {
+      "id": "agents.multi_agent",
+      "owner": "codex-rust",
+      "requiredForV1": true,
+      "description": "Native multi-agent settings, limits and collaboration events"
+    },
+    {
+      "id": "skills.crud",
+      "owner": "codex-rust",
+      "requiredForV1": true,
+      "description": "Personal and project Skill lifecycle"
+    },
+    {
+      "id": "skills.validation",
+      "owner": "codex-rust",
+      "requiredForV1": true,
+      "description": "Native Skill validation, reload and discovery"
+    },
+    {
+      "id": "skills.test",
+      "owner": "codex-rust",
+      "requiredForV1": true,
+      "description": "Isolated Skill test hook and result events"
+    },
+    {
+      "id": "plugins.lifecycle",
+      "owner": "codex-rust",
+      "requiredForV1": true,
+      "description": "Plugin manifest, install, update, enable, disable and uninstall"
+    },
+    {
+      "id": "plugins.permissions",
+      "owner": "codex-rust",
+      "requiredForV1": true,
+      "description": "Plugin integrity, permission declaration and upgrade diff"
+    },
+    {
+      "id": "mcp.config",
+      "owner": "codex-rust",
+      "requiredForV1": true,
+      "description": "MCP Server configuration, reload, status and diagnostics"
+    },
+    {
+      "id": "mcp.oauth",
+      "owner": "codex-rust",
+      "requiredForV1": true,
+      "description": "MCP OAuth start, completion, cancellation and errors"
+    },
+    {
+      "id": "mcp.elicitation",
+      "owner": "codex-rust",
+      "requiredForV1": true,
+      "description": "MCP elicitation request and response lifecycle"
+    },
+    {
+      "id": "tools.discovery",
+      "owner": "codex-rust",
+      "requiredForV1": true,
+      "description": "Tool discovery, schema and permission metadata"
+    }
+  ]
+}

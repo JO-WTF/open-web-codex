@@ -1,0 +1,112 @@
+{
+  "fixtureVersion": "1.0.0",
+  "protocolVersion": "2.0.0",
+  "capabilityId": "thread.lifecycle",
+  "scenario": "success",
+  "serverBuild": {
+    "version": "fixture-v1",
+    "commit": "0000000000000000000000000000000000000000",
+    "target": "x86_64-unknown-linux-gnu"
+  },
+  "messages": [
+    {
+      "direction": "client_to_server",
+      "kind": "request",
+      "correlation": 1,
+      "payload": {
+        "id": 1,
+        "method": "initialize",
+        "params": {
+          "clientInfo": {
+            "name": "codex_monitor_contract_harness",
+            "version": "1.0.0"
+          }
+        }
+      }
+    },
+    {
+      "direction": "server_to_client",
+      "kind": "response",
+      "correlation": 1,
+      "payload": {
+        "id": 1,
+        "result": {
+          "serverInfo": {
+            "name": "fixture",
+            "version": "1.0.0"
+          }
+        }
+      }
+    },
+    {
+      "direction": "client_to_server",
+      "kind": "notification",
+      "payload": {
+        "method": "initialized"
+      }
+    },
+    {
+      "direction": "client_to_server",
+      "kind": "request",
+      "correlation": 2,
+      "payload": {
+        "id": 2,
+        "method": "thread/start",
+        "params": {
+          "cwd": "/workspace/project"
+        }
+      }
+    },
+    {
+      "direction": "server_to_client",
+      "kind": "response",
+      "correlation": 2,
+      "payload": {
+        "id": 2,
+        "result": {
+          "thread": {
+            "id": "thread-fixture-1"
+          }
+        }
+      }
+    },
+    {
+      "direction": "server_to_client",
+      "kind": "notification",
+      "payload": {
+        "method": "thread/started",
+        "params": {
+          "thread": {
+            "id": "thread-fixture-1"
+          }
+        }
+      }
+    },
+    {
+      "direction": "client_to_server",
+      "kind": "request",
+      "correlation": 3,
+      "payload": {
+        "id": 3,
+        "method": "thread/read",
+        "params": {
+          "threadId": "thread-fixture-1"
+        }
+      }
+    },
+    {
+      "direction": "server_to_client",
+      "kind": "response",
+      "correlation": 3,
+      "payload": {
+        "id": 3,
+        "result": {
+          "thread": {
+            "id": "thread-fixture-1",
+            "status": "idle"
+          }
+        }
+      }
+    }
+  ]
+}

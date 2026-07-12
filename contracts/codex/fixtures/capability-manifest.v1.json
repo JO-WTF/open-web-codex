@@ -1,0 +1,229 @@
+{
+  "schemaVersion": "1.0.0",
+  "generatedAt": "2026-07-12T00:00:00Z",
+  "server": {
+    "protocolVersion": "2.0.0",
+    "buildVersion": "fixture-v1",
+    "commit": "0000000000000000000000000000000000000000",
+    "target": "x86_64-unknown-linux-gnu"
+  },
+  "compatibility": {
+    "minimumClientProtocol": "1.0.0",
+    "maximumClientProtocol": "1.0.0"
+  },
+  "capabilities": [
+    {
+      "id": "protocol.initialize",
+      "version": "1.0.0",
+      "status": "supported",
+      "methods": {
+        "clientRequests": ["initialize"],
+        "notifications": ["initialized"]
+      },
+      "limits": {}
+    },
+    {
+      "id": "thread.lifecycle",
+      "version": "1.0.0",
+      "status": "supported",
+      "methods": {
+        "clientRequests": [
+          "thread/start",
+          "thread/read",
+          "thread/resume",
+          "thread/list",
+          "thread/archive"
+        ],
+        "notifications": [
+          "thread/started",
+          "thread/status/changed",
+          "thread/archived"
+        ]
+      },
+      "limits": {
+        "maxConcurrentThreads": 16
+      }
+    },
+    {
+      "id": "turn.lifecycle",
+      "version": "1.0.0",
+      "status": "supported",
+      "methods": {
+        "clientRequests": ["turn/start", "turn/steer", "turn/interrupt"],
+        "notifications": ["turn/started", "turn/completed"]
+      },
+      "limits": {}
+    },
+    {
+      "id": "approval.lifecycle",
+      "version": "1.0.0",
+      "status": "supported",
+      "methods": {
+        "serverRequests": [
+          "item/commandExecution/requestApproval",
+          "item/fileChange/requestApproval",
+          "item/permissions/requestApproval",
+          "item/tool/requestUserInput"
+        ]
+      },
+      "limits": {}
+    },
+    {
+      "id": "profile.multi_workspace",
+      "version": "1.0.0",
+      "status": "degraded",
+      "methods": {
+        "clientRequests": ["thread/start", "thread/list"]
+      },
+      "limits": {
+        "maxWorkspacesPerProfile": 8
+      },
+      "reason": {
+        "code": "profile.registration.partial",
+        "message": "Explicit Workspace registration methods are not available in this fixture.",
+        "remediation": "Install a build that implements CR-101 and CR-102."
+      }
+    },
+    {
+      "id": "memory.lifecycle",
+      "version": "1.0.0",
+      "status": "unsupported",
+      "methods": {},
+      "limits": {},
+      "reason": {
+        "code": "memory.bridge.missing",
+        "message": "Memory status, export and reset are unavailable.",
+        "remediation": "Install a build that implements CR-104 through CR-108."
+      }
+    },
+    {
+      "id": "agents.crud",
+      "version": "1.0.0",
+      "status": "unsupported",
+      "methods": {},
+      "limits": {},
+      "reason": {
+        "code": "agents.bridge.missing",
+        "message": "Native Agent CRUD is unavailable."
+      }
+    },
+    {
+      "id": "agents.multi_agent",
+      "version": "1.0.0",
+      "status": "experimental",
+      "experimental": true,
+      "methods": {
+        "notifications": ["item/started", "item/completed", "thread/started"]
+      },
+      "limits": {
+        "maxAgentThreads": 8,
+        "maxAgentDepth": 3
+      }
+    },
+    {
+      "id": "skills.crud",
+      "version": "1.0.0",
+      "status": "degraded",
+      "methods": {
+        "clientRequests": ["skills/list"]
+      },
+      "limits": {},
+      "reason": {
+        "code": "skills.write.missing",
+        "message": "Skill listing is available but write operations are not."
+      }
+    },
+    {
+      "id": "skills.validation",
+      "version": "1.0.0",
+      "status": "unsupported",
+      "methods": {},
+      "limits": {},
+      "reason": {
+        "code": "skills.validation.missing",
+        "message": "Native Skill validation is unavailable."
+      }
+    },
+    {
+      "id": "skills.test",
+      "version": "1.0.0",
+      "status": "unsupported",
+      "methods": {},
+      "limits": {},
+      "reason": {
+        "code": "skills.test.missing",
+        "message": "The isolated Skill test hook is unavailable."
+      }
+    },
+    {
+      "id": "plugins.lifecycle",
+      "version": "1.0.0",
+      "status": "unsupported",
+      "methods": {},
+      "limits": {},
+      "reason": {
+        "code": "plugins.bridge.missing",
+        "message": "Plugin lifecycle operations are unavailable."
+      }
+    },
+    {
+      "id": "plugins.permissions",
+      "version": "1.0.0",
+      "status": "unsupported",
+      "methods": {},
+      "limits": {},
+      "reason": {
+        "code": "plugins.permissions.missing",
+        "message": "Plugin permission metadata is unavailable."
+      }
+    },
+    {
+      "id": "mcp.config",
+      "version": "1.0.0",
+      "status": "degraded",
+      "methods": {
+        "clientRequests": ["mcpServerStatus/list"]
+      },
+      "limits": {
+        "maxMcpServers": 16
+      },
+      "reason": {
+        "code": "mcp.config.read_only",
+        "message": "MCP status is available but configuration and reload are not."
+      }
+    },
+    {
+      "id": "mcp.oauth",
+      "version": "1.0.0",
+      "status": "unsupported",
+      "methods": {},
+      "limits": {},
+      "reason": {
+        "code": "mcp.oauth.missing",
+        "message": "MCP OAuth is unavailable."
+      }
+    },
+    {
+      "id": "mcp.elicitation",
+      "version": "1.0.0",
+      "status": "unsupported",
+      "methods": {},
+      "limits": {},
+      "reason": {
+        "code": "mcp.elicitation.missing",
+        "message": "MCP elicitation is unavailable."
+      }
+    },
+    {
+      "id": "tools.discovery",
+      "version": "1.0.0",
+      "status": "unsupported",
+      "methods": {},
+      "limits": {},
+      "reason": {
+        "code": "tools.discovery.missing",
+        "message": "Managed tool discovery metadata is unavailable."
+      }
+    }
+  ]
+}

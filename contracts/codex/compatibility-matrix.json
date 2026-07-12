@@ -1,0 +1,26 @@
+{
+  "matrixVersion": "1.0.0",
+  "web": {
+    "productVersion": "0.7.68",
+    "contractSchemaRange": ">=1.0.0 <2.0.0",
+    "clientProtocolRange": ">=1.0.0 <2.0.0"
+  },
+  "serverBuilds": [],
+  "observedBuilds": [
+    {
+      "identity": "OpenAI.Codex Windows App 26.707.3748.0",
+      "status": "unverified",
+      "reason": "The packaged app-server binary cannot be executed by the current shell ACL and does not emit Capability Manifest v1."
+    }
+  ],
+  "releaseOrder": [
+    "Publish and sign the Codex Rust build, Manifest, Schema and Fixtures.",
+    "Run CodexMonitor offline contract replay against the published artifacts.",
+    "Run real app-server smoke and Profile restart tests in a controlled environment.",
+    "Add the exact server build to serverBuilds with status compatible.",
+    "Deploy the server build to a canary Codex Host pool.",
+    "Deploy Web/Server code with dependent features disabled by policy.",
+    "Enable capabilities incrementally after health and error checks.",
+    "Rollback Web feature policy first, then server build, without rewriting Profile Home."
+  ]
+}

@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codexmonitor.local/contracts/codex/capability-manifest.schema.json",
+  "title": "Codex App-Server Capability Manifest",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "server",
+    "compatibility",
+    "capabilities"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "server": {
+      "type": "object",
+      "required": ["protocolVersion", "buildVersion", "commit", "target"],
+      "properties": {
+        "protocolVersion": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "buildVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commit": {
+          "type": "string",
+          "minLength": 7
+        },
+        "target": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true
+    },
+    "compatibility": {
+      "type": "object",
+      "required": ["minimumClientProtocol", "maximumClientProtocol"],
+      "properties": {
+        "minimumClientProtocol": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "maximumClientProtocol": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        }
+      },
+      "additionalProperties": true
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/capability"
+      }
+    }
+  },
+  "$defs": {
+    "methodSet": {
+      "type": "object",
+      "properties": {
+        "clientRequests": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "serverRequests": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "notifications": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "reason": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_.-]+$"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "remediation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "minimumServerVersion": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true
+    },
+    "capability": {
+      "type": "object",
+      "required": ["id", "version", "status", "methods", "limits"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "status": {
+          "enum": [
+            "supported",
+            "unsupported",
+            "degraded",
+            "incompatible",
+            "experimental"
+          ]
+        },
+        "experimental": {
+          "type": "boolean"
+        },
+        "methods": {
+          "$ref": "#/$defs/methodSet"
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": {
+            "type": ["string", "number", "integer", "boolean", "null"]
+          }
+        },
+        "reason": {
+          "$ref": "#/$defs/reason"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "enum": ["unsupported", "degraded", "incompatible"]
+              }
+            },
+            "required": ["status"]
+          },
+          "then": {
+            "required": ["reason"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": { "const": "experimental" }
+            },
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "experimental": { "const": true }
+            },
+            "required": ["experimental"]
+          }
+        }
+      ],
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}
