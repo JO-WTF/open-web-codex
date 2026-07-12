@@ -1,54 +1,37 @@
+use std::convert::Infallible;
+use std::sync::Arc;
+
 use axum::{
     body::Body,
     http::StatusCode,
     response::{IntoResponse, Response},
     Extension, Json,
 };
-use futures_util::StreamExt;
 use serde_json::Value;
 
-/// Configuration for proxying to the existing Tauri daemon.
-#[derive(Clone)]
-pub struct DaemonProxy {
-    pub base_url: String,
-    pub client: reqwest::Client,
-}
+use open_web_codex_adapter::CodexAdapter;
 
-/// POST /api/rpc — proxy JSON-RPC calls to the Tauri daemon.
-pub async fn rpc_proxy(
-    Extension(daemon): Extension<DaemonProxy>,
+/// POST /api/rpc — dispatch JSON-RPC calls through the CodexAdapter.
+pub async fn rpc_handler(
+    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
     Json(body): Json<Value>,
 ) -> Response {
-    match daemon
-        .client
-        .post(format!("{}/api/rpc", daemon.base_url))
-        .json(&body)
-        .send()
-        .await
-    {
-        Ok(resp) => {
-            let status = resp.status();
-            let content_type = resp
-                .headers()
-                .get("content-type")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("application/json")
-                .to_owned();
-            let body = resp.bytes().await.unwrap_or_default();
+    let method = body["method"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+    let params = body.get("params").cloned().unwrap_or(Value::Null);
 
-            let mut response = Response::new(Body::from(body));
-            *response.status_mut() = status;
-            response
-                .headers_mut()
-                .insert("content-type", content_type.parse().unwrap());
-            response
+    match adapter.rpc(&method, params).await {
+        Ok(result) => {
+            Json(serde_json::json!({ "result": result })).into_response()
         }
         Err(e) => {
-            tracing::warn!("RPC proxy error: {e}");
+            tracing::warn!("RPC '{method}' error: {e}");
             (
                 StatusCode::BAD_GATEWAY,
                 Json(serde_json::json!({
-                    "error": { "message": format!("daemon unreachable: {e}") }
+                    "error": { "message": e.to_string() }
                 })),
             )
                 .into_response()
@@ -56,33 +39,30 @@ pub async fn rpc_proxy(
     }
 }
 
-/// GET /api/events — proxy SSE event stream from the Tauri daemon.
-pub async fn events_proxy(
-    Extension(daemon): Extension<DaemonProxy>,
+/// GET /api/events — SSE event stream from the CodexAdapter.
+pub async fn events_handler(
+    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
 ) -> Response {
-    match daemon
-        .client
-        .get(format!("{}/api/events", daemon.base_url))
-        .send()
-        .await
-    {
-        Ok(resp) => {
-            let stream = resp.bytes_stream().map(|result| {
-                result
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
-            });
-            let body = Body::from_stream(stream);
-            Response::builder()
-                .status(StatusCode::OK)
-                .header("content-type", "text/event-stream")
-                .header("cache-control", "no-cache")
-                .header("connection", "keep-alive")
-                .body(body)
-                .unwrap()
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+
+    // Subscribe in background — the adapter pushes SSE frames into tx.
+    let adapter_clone = adapter.clone();
+    tokio::spawn(async move {
+        if let Err(e) = adapter_clone.subscribe_events(tx).await {
+            tracing::warn!("events subscription ended: {e}");
         }
-        Err(e) => {
-            tracing::warn!("Events proxy error: {e}");
-            (StatusCode::BAD_GATEWAY, "daemon unreachable").into_response()
-        }
-    }
+    });
+
+    // Convert the mpsc receiver into an axum body stream.
+    let stream = futures_util::stream::unfold(rx, |mut rx| async move {
+        rx.recv().await.map(|data| (Ok::<_, Infallible>(data), rx))
+    });
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "text/event-stream")
+        .header("cache-control", "no-cache")
+        .header("connection", "keep-alive")
+        .body(Body::from_stream(stream))
+        .unwrap()
 }

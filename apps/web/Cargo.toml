@@ -1,9 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "server",
+    "crates/codex-adapter",
     "crates/platform-contracts",
     "crates/platform-store",
+    "server",
 ]
 
 [workspace.dependencies]

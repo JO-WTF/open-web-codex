@@ -1,6 +1,7 @@
 mod config;
 mod routes;
 
+use std::sync::Arc;
 use std::net::SocketAddr;
 
 use axum::Router;
@@ -9,7 +10,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
-use routes::codex_proxy::DaemonProxy;
+use open_web_codex_adapter::{CodexAdapter, fake::FakeCodexAdapter, real::RealCodexAdapter};
 use open_web_codex_platform_store::AppState;
 
 #[derive(Parser, Debug)]
@@ -30,6 +31,9 @@ struct Cli {
     /// Run database migrations on startup.
     #[arg(long, default_value_t = true)]
     migrate: bool,
+    /// Codex adapter mode: "fake" (in-memory) or "real" (proxy to daemon).
+    #[arg(long, env = "CODEX_MODE", default_value = "real")]
+    codex_mode: String,
     /// URL of the existing Tauri daemon for /api/rpc and /api/events proxying.
     #[arg(long, env = "CODEX_DAEMON_URL", default_value = "http://127.0.0.1:4733")]
     daemon_url: String,
@@ -63,14 +67,20 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let state = AppState::new(pool);
-    let daemon_proxy = DaemonProxy {
-        base_url: cli.daemon_url.clone(),
-        client: reqwest::Client::new(),
+    let adapter: Arc<dyn CodexAdapter> = match cli.codex_mode.as_str() {
+        "fake" => {
+            tracing::info!("starting in fake codex mode");
+            Arc::new(FakeCodexAdapter::new().with_demo_workspace().await)
+        }
+        "real" => {
+            tracing::info!(daemon_url = %cli.daemon_url, "proxying to codex daemon");
+            Arc::new(RealCodexAdapter::new(&cli.daemon_url))
+        }
+        other => anyhow::bail!("unknown --codex-mode '{other}'; expected 'fake' or 'real'"),
     };
-    tracing::info!(daemon_url = %cli.daemon_url, "proxying to codex daemon");
 
     let app = Router::new()
-        .nest("/api", routes::router(daemon_proxy))
+        .nest("/api", routes::router(adapter))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
         .with_state(state);
