@@ -15,23 +15,18 @@
 ```rust
 #[async_trait]
 pub trait CodexAdapter: Send + Sync {
-    /// 发送 initialize 请求并获取 Capability Manifest
-    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResponse>;
-
-    /// 启动新 Thread
-    async fn start_thread(&self, params: ThreadStartParams) -> Result<ThreadStartResponse>;
-
-    /// 发送用户消息到现有 Thread
-    async fn send_message(&self, thread_id: &str, message: &str) -> Result<()>;
-
-    /// 从 Manfiest 中读取能力信息
-    fn capability_manifest(&self) -> Option<&CapabilityManifest>;
+    async fn health(&self) -> Result<HealthStatus, AdapterError>;
+    async fn rpc(&self, method: &str, params: Value) -> Result<Value, AdapterError>;
+    async fn subscribe_events(
+        &self,
+        sender: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+    ) -> Result<(), AdapterError>;
 }
 ```
 
 两个实现:
 
-- **RealCodexAdapter**: 通过 JSON-RPC over stdin/stdout 连接真实的 Codex app-server 进程
+- **RealCodexAdapter**: 当前通过 loopback daemon HTTP/SSE 连接 Runtime，属于迁移实现；生产目标是由 Profile Host 管理 app-server stdin/stdout 和 Profile 生命周期
 - **FakeCodexAdapter**: 内存中模拟 app-server 行为, 用于开发和集成测试
 
 ## 理由
@@ -50,3 +45,9 @@ pub trait CodexAdapter: Send + Sync {
 
 - 正向: 离线开发可行; 集成测试不需要真实 app-server; 接口变更影响在一个地方
 - 负向: trait 需要随协议演进维护; 增加一层间接调用
+
+## 当前约束
+
+`rpc` 是内部迁移接口，不能原样成为浏览器公共 API。后续 Profile Host
+落地时，应将它收窄为 Thread/Turn/Approval/Capability 等类型化内部操作，
+并在调用前完成 Profile、Thread 和 Workspace 归属校验。

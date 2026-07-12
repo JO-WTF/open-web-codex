@@ -1,4 +1,4 @@
-# CodexMonitor Agent Guide
+# open-web-codex Web Platform Agent Guide
 
 All docs must be canonical, with no past commentary, only live state.
 
@@ -13,16 +13,40 @@ Detailed navigation/runbooks live in:
 
 ## Project Snapshot
 
-CodexMonitor is a Tauri app that orchestrates Codex agents across local workspaces.
+This directory contains both the inherited CodexMonitor client and the emerging
+multi-user Web platform:
 
-- Frontend: React + Vite (`src/`)
-- Backend app: Tauri Rust process (`src-tauri/src/lib.rs`)
-- Backend daemon: JSON-RPC process (`src-tauri/src/bin/codex_monitor_daemon.rs`)
-- Shared backend source of truth: `src-tauri/src/shared/*`
+- Browser frontend: React + Vite (`src/`)
+- Platform server: Axum (`server/`)
+- Platform libraries: contracts, persistence and Codex adapter (`crates/`)
+- PostgreSQL schema: `migrations/`
+- Transitional desktop/loopback runtime: Tauri and daemon (`src-tauri/`)
+
+The root canonical documents define product scope, architecture, verified
+capabilities and delivery status. The Tauri/daemon code is a migration source
+and local MVP, not the target production boundary.
+
+## Platform Architecture Rules
+
+1. Browser product calls use stable platform DTOs; do not expose raw app-server
+   JSON-RPC, request IDs, local paths or credentials.
+2. `server/` owns HTTP/WebSocket composition and authorization middleware;
+   reusable domain/persistence/adapter logic belongs in `crates/`.
+3. PostgreSQL owns users, authorization and workflow state. Codex Profile owns
+   Thread/Turn, context, memory, agents, skills, plugins and MCP state.
+4. Every database/resource lookup must enforce organization, membership and
+   action scope. Every Runtime call must enforce Profile/Thread/Workspace scope.
+5. The legacy `/api/rpc` and SSE Gateway are local migration surfaces. Do not
+   add production features that depend on raw passthrough or query tokens.
+6. Do not duplicate Task/Run/Profile behavior in Tauri and the platform server.
+   New production behavior lands in platform crates first; transitional adapters
+   call that behavior where practical.
 
 ## Non-Negotiable Architecture Rules
 
-1. Put shared/domain backend logic in `src-tauri/src/shared/*` first.
+These rules apply while changing inherited Tauri/daemon behavior:
+
+1. Put transitional shared backend logic in `src-tauri/src/shared/*` first.
 2. Keep app and daemon as thin adapters around shared cores.
 3. Do not duplicate logic between app and daemon.
 4. Keep JSON-RPC method names and payload shapes stable unless intentionally changing contracts.
@@ -123,6 +147,12 @@ Run validations based on touched areas:
 
 - Always: `npm run typecheck`
 - Frontend behavior/state/hooks/components: `npm run test`
+- Platform Rust: from `apps/web`, run `cargo fmt --check`, `cargo check --workspace`
+  and targeted tests for touched crates/routes.
+- Database changes: run migrations against a blank PostgreSQL database and
+  rerun them to prove idempotent startup behavior.
+- Runtime bridge/contract changes: run contract tests plus the real app-server
+  smoke harness; Fake adapter tests alone are insufficient.
 - Rust backend changes: `cd src-tauri && cargo check`
 - Use targeted tests for touched modules before full-suite runs when iterating.
 

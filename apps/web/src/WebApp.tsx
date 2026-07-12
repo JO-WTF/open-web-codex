@@ -580,8 +580,8 @@ export default function WebApp() {
               : '');
           if (!text) continue;
           const itemType = typeof item.type === 'string' ? item.type : '';
-          if (itemType === 'reasoning') {
-            loaded.push({ id: newLogId(), level: 'user' as const, text: `[thinking] ${text}` });
+          if (itemType === 'reasoning' && text) {
+            loaded.push({ id: newLogId(), level: 'system' as const, text, kind: 'reasoning' as const });
           } else if (itemType === 'userMessage') {
             loaded.push({ id: newLogId(), level: 'user' as const, text });
           } else if (itemType === 'agentMessage') {

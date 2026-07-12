@@ -276,6 +276,40 @@ impl DaemonState {
         .await
     }
 
+
+    async fn create_workspace(
+        &self,
+        name: String,
+        parent_dir: Option<String>,
+        client_version: String,
+    ) -> Result<WorkspaceInfo, String> {
+        let base = parent_dir.unwrap_or_else(|| {
+            std::env::var("HOME").unwrap_or_else(|_| ".".to_string())
+        });
+        let path = format!("{}/{}", base, name);
+        std::fs::create_dir_all(&path)
+            .map_err(|e| format!("Failed to create workspace directory: {e}"))?;
+        let client_version = client_version.clone();
+        workspaces_core::add_workspace_core(
+            path,
+            &self.workspaces,
+            &self.sessions,
+            &self.app_settings,
+            &self.storage_path,
+            move |entry, default_bin, codex_args, codex_home| {
+                spawn_with_client(
+                    self.event_sink.clone(),
+                    client_version.clone(),
+                    entry,
+                    default_bin,
+                    codex_args,
+                    codex_home,
+                )
+            },
+        )
+        .await
+    }
+
     async fn add_workspace_from_git_url(
         &self,
         url: String,

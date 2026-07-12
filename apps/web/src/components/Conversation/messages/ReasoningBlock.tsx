@@ -8,6 +8,7 @@ type Props = {
 
 export default function ReasoningBlock({ text, summary, meta }: Props) {
   const [open, setOpen] = useState(false);
+  if (!text) return null;
   return (
     <div className="web-reasoning">
       <div className="web-reasoning-header" onClick={() => setOpen(!open)}>

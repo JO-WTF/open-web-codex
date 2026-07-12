@@ -45,6 +45,18 @@
 - **显式交付：** 平台不自动 Commit、Force Push、Merge 或删除远端分支。
 - **渐进交付：** 先完成单用户纵向闭环，再增加多用户和 Studio，不以“大爆炸”方式替换桌面端。
 
+### 1.3 最终目标的完成定义
+
+最终产品不是把 Codex UI 简单搬到浏览器，也不是在 Web Server 中实现一个兼容 Codex 的新 Agent Runtime。完成状态必须同时满足：
+
+1. 标准浏览器可以完成创建项目、长期对话、运行控制、审批、Diff、Commit/Push、恢复和 Codex Studio 管理，不依赖用户本机 CLI、桌面进程或浏览器扩展。
+2. Codex 原生 Thread/Turn、上下文压缩、记忆、多 Agent、模型、Skills、Plugins、MCP 和工具语义通过 app-server 桥接复用；平台只提供授权、生命周期、持久工作流和安全投影。
+3. 每个用户的身份、Profile Home、配置、Secret、Thread、记忆与扩展状态隔离；每个 Run 的 Workspace、事件、审批和交付权限隔离，并有跨用户负向测试证明。
+4. Runtime 与 Web 通过生成的版本化合同和 Capability Manifest 协商；不支持或未验证的能力在 UI 中明确禁用，不能由平台 fallback 实现。
+5. `codex/` 能持续同步官方 `openai/codex/main`。产品定制集中在稳定桥接 seam，任何上游高频文件修改都有必要性、测试和 patch map 记录。
+
+这五项是架构和里程碑取舍的最高优先级；局部功能如果破坏复用、隔离或可同步性，即使短期可用也不算目标实现。
+
 ## 2. 目标与非目标
 
 ### 2.1 V1 目标
@@ -117,6 +129,25 @@
 - 一个 Profile 可以处理多个已授权 Workspace，但 Profile Host 必须先验证 Workspace 归属。
 - Workspace 属于 Run；Profile 不拥有 Workspace，Run 结束也不删除 Profile。
 - Task 恢复可以创建后继 Run/Worktree，并继续原 Thread；不得复用另一 Task 的可写目录。
+
+### 4.2 多用户隔离键
+
+所有可持久化或可恢复资源必须能沿以下链路完成归属校验：
+
+```text
+authenticated user
+  -> organization membership
+  -> project membership and action permission
+  -> task / run
+  -> profile and codex thread
+  -> workspace / approval / event / artifact
+```
+
+- 数据库查询不能只凭资源 ID 命中后返回，必须同时验证组织、成员关系、状态和动作权限。
+- Profile Host 必须验证 `profile_id + user_id`，Runner 必须验证 `run_id + workspace_id`；浏览器不能提供可信本地路径。
+- Codex Thread ID、app-server request ID 和 Profile 路径只能作为内部映射，不能成为绕过平台资源归属的公共 API 标识。
+- 缓存、事件订阅、模型目录和 Secret 引用的 key 必须包含 Profile 或用户作用域；禁止使用跨用户全局“当前 Profile/Provider”。
+- 自动化测试必须覆盖相邻用户、相邻项目和猜测 ID 的拒绝路径，不能只验证正常用户流程。
 
 ## 5. 信息架构
 

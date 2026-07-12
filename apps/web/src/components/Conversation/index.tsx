@@ -7,6 +7,9 @@ import Composer from "./Composer";
 type Props = {
   workspaceName: string | null;
   threadTitle: string | null;
+  tokenUsage: import("../../types").ThreadTokenUsage | null;
+  threadStatus: string;
+  threadSettings: Record<string, unknown> | null;
   messages: MessageEntry[];
   thinking?: boolean;
   draft: string;
@@ -19,6 +22,9 @@ type Props = {
 export default function Conversation({
   workspaceName,
   threadTitle,
+  tokenUsage,
+  threadStatus,
+  threadSettings,
   messages,
   thinking,
   draft,
@@ -29,7 +35,7 @@ export default function Conversation({
 }: Props) {
   return (
     <section className="web-chat">
-      <Header workspaceName={workspaceName} threadTitle={threadTitle} />
+      <Header workspaceName={workspaceName} threadTitle={threadTitle} tokenUsage={tokenUsage} threadStatus={threadStatus} threadSettings={threadSettings} />
       <div className="web-message-area">
         {thinking && <ThinkingIndicator />}
         <MessageList items={messages} />
