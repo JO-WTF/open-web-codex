@@ -4,7 +4,7 @@ use axum::{
     Extension, Json,
 };
 use open_web_codex_platform_contracts::error::PlatformError;
-use open_web_codex_platform_contracts::{CreateTaskRequest, SendMessageRequest, SendMessageResponse, Task};
+use open_web_codex_platform_contracts::{CreateTaskRequest, ListTaskEventsParams, RunEvent, SendMessageRequest, SendMessageResponse, Task};
 use open_web_codex_platform_store::AppState;
 use open_web_codex_adapter::CodexAdapter;
 use serde::Deserialize;
@@ -87,6 +87,57 @@ pub async fn create_task(
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     }))
+}
+
+/// GET /api/tasks/:id/events — list persisted run events for a task.
+pub async fn list_task_events(
+    _auth: AuthenticatedUser,
+    State(state): State<AppState>,
+    Path(task_id): Path<Uuid>,
+    Query(params): Query<ListTaskEventsParams>,
+) -> ApiResult<Vec<RunEvent>> {
+    let limit = params.limit.unwrap_or(50).min(200);
+    let query = match params.after_id {
+        Some(after) => sqlx::query(
+            "SELECT e.id, e.run_id, e.event_type, e.payload, e.created_at \
+             FROM run_events e \
+             JOIN runs r ON r.id = e.run_id \
+             WHERE r.task_id = $1 AND e.created_at < (SELECT created_at FROM run_events WHERE id = $2) \
+             ORDER BY e.created_at DESC LIMIT $3",
+        )
+        .bind(task_id)
+        .bind(after)
+        .bind(limit),
+        None => sqlx::query(
+            "SELECT e.id, e.run_id, e.event_type, e.payload, e.created_at \
+             FROM run_events e \
+             JOIN runs r ON r.id = e.run_id \
+             WHERE r.task_id = $1 \
+             ORDER BY e.created_at DESC LIMIT $2",
+        )
+        .bind(task_id)
+        .bind(limit),
+    };
+
+    let rows = query
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(PlatformError::internal(format!("{e}"))))
+        })?;
+
+    let events: Vec<RunEvent> = rows.iter().map(|row| {
+        let payload: serde_json::Value = row.get("payload");
+        RunEvent {
+            id: row.get("id"),
+            run_id: row.get("run_id"),
+            event_type: row.get("event_type"),
+            payload,
+            created_at: row.get("created_at"),
+        }
+    }).collect();
+
+    Ok(Json(events))
 }
 
 /// POST /api/tasks/:id/messages — send a user message to the task's active thread.

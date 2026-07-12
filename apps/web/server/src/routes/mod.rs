@@ -33,6 +33,7 @@ pub fn router(adapter: Arc<dyn CodexAdapter>) -> Router<AppState> {
         .route("/tasks", axum::routing::get(tasks::list_tasks).post(tasks::create_task))
         .route("/tasks/{id}", axum::routing::get(tasks::get_task))
         .route("/tasks/{id}/messages", axum::routing::post(tasks::send_message))
+        .route("/tasks/{id}/events", axum::routing::get(tasks::list_task_events))
         .route("/rpc", axum::routing::post(codex_proxy::rpc_handler))
         .route("/events", axum::routing::get(codex_proxy::events_handler))
         .layer(Extension(adapter))

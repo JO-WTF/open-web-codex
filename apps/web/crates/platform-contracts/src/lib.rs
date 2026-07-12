@@ -209,3 +209,22 @@ pub struct SendMessageResponse {
     pub status: String,
     pub thread_id: String,
 }
+
+// ── Events ────────────────────────────────────────────────────────
+
+/// A persisted run event returned by the task events endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunEvent {
+    pub id: Uuid,
+    pub run_id: Uuid,
+    pub event_type: String,
+    pub payload: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Query parameters for listing task events.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListTaskEventsParams {
+    pub limit: Option<i64>,
+    pub after_id: Option<Uuid>,
+}
