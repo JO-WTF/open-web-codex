@@ -5,6 +5,7 @@ members = [
     "crates/platform-contracts",
     "crates/platform-store",
     "server",
+    "src-tauri",
 ]
 
 [workspace.dependencies]
