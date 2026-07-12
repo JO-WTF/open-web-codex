@@ -54,7 +54,6 @@ async fn retries_on_early_close() {
         auth: None,
         aws: None,
         wire_api: WireApi::Responses,
-        models: Vec::new(),
         query_params: None,
         http_headers: None,
         env_http_headers: None,
