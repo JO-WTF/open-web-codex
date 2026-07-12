@@ -1,29 +1,48 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AppServerEvent, WorkspaceInfo } from "./types";
 import { CodexMonitorWebClient } from "./services/webClient";
+import Layout from "./components/Layout";
+import Sidebar from "./components/Sidebar";
+import Conversation from "./components/Conversation";
 import "./styles/web.css";
 
-type LogEntry = {
+/* ─────────── Types ─────────── */
+
+export type LogEntry = {
   id: string;
   level: "event" | "error" | "info" | "user" | "assistant" | "system";
   text: string;
+  kind?: "reasoning" | "tool" | "diff";
+  toolType?: string;
+  toolTitle?: string;
+  toolStatus?: string;
+  filePath?: string;
+  diffTitle?: string;
+  diffLines?: { type: "add" | "del" | "ctx"; text: string }[];
+  meta?: string;
+  streaming?: boolean;
 };
 
 type GatewayState = "checking" | "online" | "offline";
 
+type ThreadInfo = {
+  id: string;
+  label: string;
+  updatedAt: number;
+  turnCount?: number;
+};
+
+/* ─────────── Helpers ─────────── */
+
 function extractThreadId(result: Record<string, unknown> | null | undefined) {
   if (!result) return null;
   const candidates = [result.threadId, result.thread_id, result.id];
-  for (const candidate of candidates) {
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate;
-    }
-  }
+  for (const c of candidates) if (typeof c === "string" && c.trim()) return c;
   const thread = result.thread;
   if (thread && typeof thread === "object") {
-    const record = thread as Record<string, unknown>;
-    if (typeof record.id === "string") return record.id;
-    if (typeof record.threadId === "string") return record.threadId;
+    const r = thread as Record<string, unknown>;
+    if (typeof r.id === "string") return r.id;
+    if (typeof r.threadId === "string") return r.threadId;
   }
   return null;
 }
@@ -56,6 +75,11 @@ function extractThreadIdFromEvent(event: AppServerEvent) {
   return extractThreadId(params);
 }
 
+const newLogId = () =>
+  crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+/* ─────────── Component ─────────── */
+
 export default function WebApp() {
   const [baseUrl, setBaseUrl] = useState(
     localStorage.getItem("codexMonitorWebBaseUrl") ?? "http://127.0.0.1:4733",
@@ -64,32 +88,33 @@ export default function WebApp() {
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [threads] = useState<ThreadInfo[]>([]);
   const [draft, setDraft] = useState("");
-  const [newWorkspacePath, setNewWorkspacePath] = useState("");
   const [busy, setBusy] = useState(false);
-  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [messages, setMessages] = useState<LogEntry[]>([]);
   const [gatewayState, setGatewayState] = useState<GatewayState>("checking");
   const [gatewayVersion, setGatewayVersion] = useState<string | null>(null);
+  const [thinking, setThinking] = useState(false);
 
   const client = useMemo(() => new CodexMonitorWebClient({ baseUrl, token }), [baseUrl, token]);
-  const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null;
+  const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
 
-  // Track streaming assistant message deltas keyed by itemId
+  // Streaming accumulators
   const streamingTexts = useRef<Map<string, string>>(new Map());
   const streamingLogIds = useRef<Map<string, string>>(new Map());
 
-  const appendLog = useCallback((level: LogEntry["level"], text: string) => {
-    setLogs((current) => [
-      ...current.slice(-199),
-      { id: crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`, level, text },
-    ]);
-  }, []);
+  const appendLog = useCallback(
+    (level: LogEntry["level"], text: string, extra?: Partial<Omit<LogEntry, "id" | "level" | "text">>) => {
+      setMessages((prev) => [
+        ...prev.slice(-199),
+        { id: newLogId(), level, text, ...extra },
+      ]);
+    },
+    [],
+  );
 
-  const newLogId = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
-  /** Returns { level, text } for simple entries or null (streaming handled inline). */
   const handleAppEvent = useCallback(
-    (event: AppServerEvent): { level: LogEntry["level"]; text: string } | null => {
+    (event: AppServerEvent): (Partial<Omit<LogEntry, "id" | "level" | "text">> & { level: LogEntry["level"]; text: string }) | null => {
       const message = event.message ?? {};
       const method = typeof message.method === "string" ? message.method : null;
       if (!method) return null;
@@ -100,37 +125,63 @@ export default function WebApp() {
           : {};
 
       const itemId = typeof params.itemId === "string" ? params.itemId : null;
+      const delta = typeof params.delta === "string" ? params.delta : "";
 
       switch (method) {
         case "turn/started":
+          setThinking(true);
           return { level: "system", text: "Thinking..." };
 
         case "turn/completed":
+          setThinking(false);
           return { level: "system", text: "Turn complete" };
+
+        case "item/reasoning/summaryTextDelta":
+        case "item/reasoning/textDelta": {
+          if (!itemId || !delta) return null;
+          const key = `reason_${itemId}`;
+          const current = streamingTexts.current.get(key) ?? "";
+          const updated = current + delta;
+          streamingTexts.current.set(key, updated);
+
+          const existingLogId = streamingLogIds.current.get(key);
+          if (existingLogId) {
+            setMessages((prev) =>
+              prev.map((e) => (e.id === existingLogId ? { ...e, text: updated } : e)),
+            );
+            return null;
+          }
+          const id = newLogId();
+          streamingLogIds.current.set(key, id);
+          setMessages((prev) => [
+            ...prev.slice(-199),
+            { id, level: "system", text: updated, kind: "reasoning" },
+          ]);
+          return null;
+        }
 
         case "item/agentMessage/delta": {
           if (!itemId) return null;
-          const delta = typeof params.delta === "string" ? params.delta : "";
           if (!delta) return null;
+          if (streamingTexts.current.has(`reason_${itemId}`)) return null;
+
           const current = streamingTexts.current.get(itemId) ?? "";
           const updated = current + delta;
           streamingTexts.current.set(itemId, updated);
 
           const existingLogId = streamingLogIds.current.get(itemId);
           if (existingLogId) {
-            // Update the existing streaming entry in-place
-            setLogs((prev) =>
-              prev.map((entry) =>
-                entry.id === existingLogId ? { ...entry, text: updated } : entry,
-              ),
+            setMessages((prev) =>
+              prev.map((e) => (e.id === existingLogId ? { ...e, text: updated, streaming: true } : e)),
             );
             return null;
           }
-
-          // First delta — directly add to logs so we control the id for future updates
-          const newId = newLogId();
-          streamingLogIds.current.set(itemId, newId);
-          setLogs((prev) => [...prev.slice(-199), { id: newId, level: "assistant", text: updated }]);
+          const id = newLogId();
+          streamingLogIds.current.set(itemId, id);
+          setMessages((prev) => [
+            ...prev.slice(-199),
+            { id, level: "assistant", text: updated, streaming: true },
+          ]);
           return null;
         }
 
@@ -140,44 +191,79 @@ export default function WebApp() {
           const role = typeof item.role === "string" ? item.role : null;
           const kind = typeof item.kind === "string" ? item.kind : null;
 
-          // User message — already logged by sendMessage()
           if (role === "user") return null;
 
-          // Assistant message — finalize streaming entry or log final text
           if (role === "assistant") {
-            const text = typeof item.text === "string" ? item.text : "";
             if (itemId && streamingTexts.current.has(itemId)) {
-              const accumulated = streamingTexts.current.get(itemId)!;
-              const existingLogId = streamingLogIds.current.get(itemId);
-              if (existingLogId) {
-                setLogs((prev) =>
-                  prev.map((entry) =>
-                    entry.id === existingLogId ? { ...entry, text: accumulated } : entry,
-                  ),
+              const acc = streamingTexts.current.get(itemId)!;
+              const eid = streamingLogIds.current.get(itemId);
+              if (eid)
+                setMessages((prev) =>
+                  prev.map((e) => (e.id === eid ? { ...e, text: acc, streaming: false } : e)),
                 );
-              }
               streamingTexts.current.delete(itemId);
               streamingLogIds.current.delete(itemId);
               return null;
             }
-            return { level: "assistant", text: text || "(no response)" };
+            return {
+              level: "assistant",
+              text: (typeof item.text === "string" ? item.text : "") || "(no response)",
+            };
           }
 
           if (kind === "tool") {
-           const toolType = typeof item.toolType === "string" ? item.toolType : "";
-           const title = typeof item.title === "string" ? item.title : "";
-           const status = typeof item.status === "string" ? item.status : "";
-           return { level: "info", text: `Tool: ${toolType} — ${title} (${status})` };
+            const toolType = typeof item.toolType === "string" ? item.toolType : "";
+            const title = typeof item.title === "string" ? item.title : "";
+            const status = typeof item.status === "string" ? item.status : "";
+            const filePath = typeof item.filePath === "string" ? item.filePath : undefined;
+            return {
+              level: "info" as const,
+              text: `${toolType}: ${title}`,
+              kind: "tool" as const,
+              toolType,
+              toolTitle: title,
+              toolStatus: status,
+              filePath,
+            };
           }
 
           if (kind === "reasoning") {
+            const key = itemId ? `reason_${itemId}` : null;
+            if (key && streamingTexts.current.has(key)) {
+              const acc = streamingTexts.current.get(key)!;
+              const eid = streamingLogIds.current.get(key);
+              if (eid)
+                setMessages((prev) =>
+                  prev.map((e) => (e.id === eid ? { ...e, text: acc } : e)),
+                );
+              streamingTexts.current.delete(key);
+              streamingLogIds.current.delete(key);
+              return null;
+            }
             const summary = typeof item.summary === "string" ? item.summary : "";
-            return summary ? { level: "system", text: `Reasoning: ${summary}` } : null;
+            return summary
+              ? { level: "system" as const, text: summary, kind: "reasoning" as const }
+              : null;
           }
 
           if (kind === "diff") {
             const title = typeof item.title === "string" ? item.title : "";
-            return { level: "info", text: `Diff: ${title}` };
+            const diff = typeof item.diff === "string" ? item.diff : "";
+            const lines = diff
+              .split("\n")
+              .filter(Boolean)
+              .map((l: string) => {
+                if (l.startsWith("+")) return { type: "add" as const, text: l.slice(1) };
+                if (l.startsWith("-")) return { type: "del" as const, text: l.slice(1) };
+                return { type: "ctx" as const, text: l };
+              });
+            return {
+              level: "info" as const,
+              text: title,
+              kind: "diff" as const,
+              diffTitle: title,
+              diffLines: lines.slice(0, 100),
+            };
           }
 
           return null;
@@ -187,42 +273,51 @@ export default function WebApp() {
           const item = params.item as Record<string, unknown> | undefined;
           const itemKind = typeof item?.kind === "string" ? item.kind : null;
           if (itemKind === "tool") {
-            return { level: "info", text: "Running tool..." };
+            return {
+              level: "info" as const,
+              text: "Running tool...",
+              kind: "tool" as const,
+              toolType: "",
+              toolTitle: "",
+              toolStatus: "running",
+            };
           }
           return null;
         }
 
         case "turn/error": {
           const msg = typeof params.message === "string" ? params.message : "Unknown error";
-          return { level: "error", text: `Turn error: ${msg}` };
+          setThinking(false);
+          return { level: "error" as const, text: `Turn error: ${msg}` };
         }
 
         case "thread/status/changed": {
           const status = params.status as Record<string, unknown> | undefined;
           const type = typeof status?.type === "string" ? status.type : "unknown";
-          return { level: "info", text: `Thread: ${type}` };
+          return { level: "info" as const, text: `Thread: ${type}` };
         }
 
         case "turn/plan/updated":
-          return { level: "info", text: "Plan updated" };
+          return { level: "info" as const, text: "Plan updated" };
 
         case "turn/diff/updated":
-          return { level: "info", text: "Diff updated" };
+          return { level: "info" as const, text: "Diff updated" };
 
         default: {
           const text = summarizeEvent(event);
-          return text && text !== "{}" ? { level: "event", text } : null;
+          return text && text !== "{}" ? { level: "event" as const, text } : null;
         }
       }
     },
     [],
   );
 
+  /* ─── Connection ─── */
+
   const saveConnection = useCallback(() => {
     localStorage.setItem("codexMonitorWebBaseUrl", baseUrl);
     sessionStorage.setItem("codexMonitorWebToken", token);
-    appendLog("info", "Saved web gateway connection settings.");
-  }, [appendLog, baseUrl, token]);
+  }, [baseUrl, token]);
 
   const checkGateway = useCallback(async () => {
     setGatewayState("checking");
@@ -230,6 +325,7 @@ export default function WebApp() {
       const health = await client.health();
       setGatewayState("online");
       setGatewayVersion(health.version);
+      saveConnection();
       return true;
     } catch (error) {
       setGatewayState("offline");
@@ -237,14 +333,14 @@ export default function WebApp() {
       appendLog("error", error instanceof Error ? error.message : String(error));
       return false;
     }
-  }, [appendLog, client]);
+  }, [appendLog, client, saveConnection]);
 
   const refreshWorkspaces = useCallback(async () => {
     setBusy(true);
     try {
       const next = await client.listWorkspaces();
       setWorkspaces(next);
-      setActiveWorkspaceId((current) => current ?? next[0]?.id ?? null);
+      setActiveWorkspaceId((cur) => cur ?? next[0]?.id ?? null);
       appendLog("info", `Loaded ${next.length} workspace(s).`);
     } catch (error) {
       appendLog("error", error instanceof Error ? error.message : String(error));
@@ -255,52 +351,47 @@ export default function WebApp() {
 
   useEffect(() => {
     void checkGateway();
-    const unsubscribe = client.subscribeAppServerEvents(
+    const unsub = client.subscribeAppServerEvents(
       (event) => {
-        if (activeWorkspaceId && event.workspace_id !== activeWorkspaceId) {
-          return;
-        }
-        const startedThreadId = extractThreadIdFromEvent(event);
-        if (startedThreadId) {
-          setActiveThreadId(startedThreadId);
-        }
-        const _entry = handleAppEvent(event);
-        if (_entry) {
-          appendLog(_entry.level, _entry.text);
+        if (activeWorkspaceId && event.workspace_id !== activeWorkspaceId) return;
+        const tid = extractThreadIdFromEvent(event);
+        if (tid) setActiveThreadId(tid);
+        const entry = handleAppEvent(event);
+        if (entry) {
+          const { level, text, ...extra } = entry;
+          appendLog(level, text, extra);
         }
       },
-      {
-        onOpen: () => setGatewayState("online"),
-        onError: () => setGatewayState("offline"),
-      },
+      { onOpen: () => setGatewayState("online"), onError: () => setGatewayState("offline") },
     );
-    return unsubscribe;
+    return unsub;
   }, [activeWorkspaceId, appendLog, checkGateway, client]);
 
-  const connectWorkspace = useCallback(async () => {
-    if (!activeWorkspaceId) return;
-    setBusy(true);
-    try {
-      await client.connectWorkspace(activeWorkspaceId);
-      appendLog("info", `Connected workspace ${activeWorkspaceId}.`);
-      await refreshWorkspaces();
-    } catch (error) {
-      appendLog("error", error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  }, [activeWorkspaceId, appendLog, client, refreshWorkspaces]);
+  /* ─── Workspace actions ─── */
+
+  const addWorkspace = useCallback(
+    async (path: string) => {
+      setBusy(true);
+      try {
+        await client.addWorkspace(path);
+        await refreshWorkspaces();
+      } catch (error) {
+        appendLog("error", error instanceof Error ? error.message : String(error));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [appendLog, client, refreshWorkspaces],
+  );
 
   const startThread = useCallback(async () => {
     if (!activeWorkspaceId) return;
     setBusy(true);
     try {
       const result = await client.startThread(activeWorkspaceId);
-      const threadId = extractThreadId(result);
-      if (threadId) {
-        setActiveThreadId(threadId);
-      }
-      appendLog("info", `Started thread${threadId ? ` ${threadId}` : ""}.`);
+      const tid = extractThreadId(result);
+      if (tid) setActiveThreadId(tid);
+      appendLog("info", `Started thread${tid ? ` ${tid}` : ""}.`);
     } catch (error) {
       appendLog("error", error instanceof Error ? error.message : String(error));
     } finally {
@@ -323,140 +414,50 @@ export default function WebApp() {
     }
   }, [activeThreadId, activeWorkspaceId, appendLog, client, draft]);
 
+  /* ─── Thread management ─── */
+
+  const selectThread = useCallback((id: string) => {
+    setActiveThreadId(id);
+    setMessages([]);
+  }, []);
+
+  /* ─── Render ─── */
+
   return (
-    <main className="web-app-shell">
-      <aside className="web-sidebar">
-        <div className="web-brand">
-          <div>
-            <span className="web-kicker">Local MVP</span>
-            <h1>open-web-codex</h1>
-          </div>
-          <span className={`web-status web-status-${gatewayState}`}>
-            {gatewayState === "checking" ? "Checking" : gatewayState}
-          </span>
-        </div>
-        <p className="web-intro">
-          Run Codex in a local workspace from your browser. This MVP binds the gateway to this
-          machine only.
-        </p>
-        {gatewayVersion ? <p className="web-version">Gateway v{gatewayVersion}</p> : null}
-        <label>
-          Gateway URL
-          <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} />
-        </label>
-        <label>
-          Token
-          <input value={token} onChange={(event) => setToken(event.target.value)} type="password" />
-        </label>
-        <div className="web-actions">
-          <button
-            onClick={() => {
-              saveConnection();
-              void checkGateway();
-            }}
-          >
-            Save &amp; check
-          </button>
-          <button onClick={refreshWorkspaces} disabled={busy}>Load workspaces</button>
-        </div>
-        <label>
-          Workspace
-          <select
-            value={activeWorkspaceId ?? ""}
-            onChange={(event) => setActiveWorkspaceId(event.target.value || null)}
-          >
-            <option value="">Select a workspace</option>
-            {workspaces.map((workspace) => (
-              <option key={workspace.id} value={workspace.id}>
-                {workspace.name} {workspace.connected ? "●" : "○"}
-              </option>
-            ))}
-          </select>
-        </label>
-        {activeWorkspace ? <p className="web-path">{activeWorkspace.path}</p> : null}
-        <div className="web-actions">
-          <button onClick={connectWorkspace} disabled={!activeWorkspaceId || busy}>Connect</button>
-          <button onClick={startThread} disabled={!activeWorkspaceId || busy}>New thread</button>
-        </div>
-        <label>
-          Add workspace
-          <input
-            value={newWorkspacePath}
-            onChange={(event) => setNewWorkspacePath(event.target.value)}
-            placeholder="/path/to/workspace"
-          />
-        </label>
-        <div className="web-actions">
-          <button
-            onClick={async () => {
-              if (newWorkspacePath.trim()) {
-                setBusy(true);
-                try {
-                  await client.addWorkspace(newWorkspacePath.trim());
-                  appendLog("info", "Added workspace.");
-                  setNewWorkspacePath("");
-                  await refreshWorkspaces();
-                } catch (error) {
-                  appendLog("error", error instanceof Error ? error.message : String(error));
-                } finally {
-                  setBusy(false);
-                }
-              }
-            }}
-            disabled={!newWorkspacePath.trim() || busy}
-          >
-            Add
-          </button>
-        </div>
-        <label>
-          Thread ID
-          <input
-            value={activeThreadId ?? ""}
-            onChange={(event) => setActiveThreadId(event.target.value || null)}
-            placeholder="Start a thread or paste an existing ID"
-          />
-        </label>
-      </aside>
-      <section className="web-chat">
-        <div className="web-log">
-          {logs.length === 0 ? (
-            <div className="web-empty">
-              <div>
-                <span className="web-kicker">Ready when you are</span>
-                <h2>Start a real Codex task from the browser</h2>
-                <ol>
-                  <li>Load or add a workspace.</li>
-                  <li>Connect it and start a thread.</li>
-                  <li>Describe the coding task below.</li>
-                </ol>
-              </div>
-            </div>
-          ) : (
-            logs.map((entry) => (
-              <article key={entry.id} className={`web-log-entry web-log-${entry.level}`}>
-                <strong>{entry.level}</strong>
-                <pre>{entry.text}</pre>
-              </article>
-            ))
-          )}
-        </div>
-        <form
-          className="web-composer"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void sendMessage();
-          }}
-        >
-          <textarea
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            placeholder="Ask Codex to perform a task in the selected workspace…"
-          />
-          <button disabled={busy || !activeWorkspaceId || !activeThreadId || !draft.trim()}>
-            {busy ? "Working…" : "Send"}
-          </button>
-        </form>
-      </section>
-    </main>
+    <Layout
+      sidebar={
+        <Sidebar
+          gatewayState={gatewayState}
+          gatewayVersion={gatewayVersion}
+          workspaces={workspaces}
+          activeWorkspaceId={activeWorkspaceId}
+          onSelectWorkspace={setActiveWorkspaceId}
+          onAddWorkspace={addWorkspace}
+          threads={threads}
+          activeThreadId={activeThreadId}
+          onSelectThread={selectThread}
+          onNewThread={startThread}
+          baseUrl={baseUrl}
+          token={token}
+          onBaseUrlChange={setBaseUrl}
+          onTokenChange={setToken}
+          onCheckGateway={checkGateway}
+          onLoadWorkspaces={refreshWorkspaces}
+          busy={busy}
+        />
+      }
+    >
+      <Conversation
+        workspaceName={activeWorkspace?.name ?? null}
+        threadTitle={activeThreadId ? activeThreadId.slice(0, 12) + "…" : null}
+        messages={messages}
+        draft={draft}
+        onDraftChange={setDraft}
+        onSend={sendMessage}
+        busy={busy}
+        sendDisabled={!activeWorkspaceId || !activeThreadId}
+        thinking={thinking}
+      />
+    </Layout>
   );
 }
