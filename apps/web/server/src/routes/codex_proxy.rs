@@ -1,12 +1,12 @@
-use std::convert::Infallible;
 use std::sync::Arc;
 
 use axum::{
-    body::Body,
+    extract::State,
     http::StatusCode,
     response::{IntoResponse, Response},
     Extension, Json,
 };
+use open_web_codex_platform_store::AppState;
 use serde_json::Value;
 
 use open_web_codex_adapter::CodexAdapter;
@@ -41,21 +41,26 @@ pub async fn rpc_handler(
 
 /// GET /api/events — SSE event stream from the CodexAdapter.
 pub async fn events_handler(
-    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
+    State(state): State<AppState>,
+    Extension(_adapter): Extension<Arc<dyn CodexAdapter>>,
 ) -> Response {
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+    let rx = state.event_bus.subscribe();
 
-    // Subscribe in background — the adapter pushes SSE frames into tx.
-    let adapter_clone = adapter.clone();
-    tokio::spawn(async move {
-        if let Err(e) = adapter_clone.subscribe_events(tx).await {
-            tracing::warn!("events subscription ended: {e}");
-        }
-    });
-
-    // Convert the mpsc receiver into an axum body stream.
+    // Convert broadcast receiver into an SSE stream using unfold
     let stream = futures_util::stream::unfold(rx, |mut rx| async move {
-        rx.recv().await.map(|data| (Ok::<_, Infallible>(data), rx))
+        loop {
+            match rx.recv().await {
+                Ok(data) => return Some((Ok::<_, std::convert::Infallible>(data), rx)),
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(n, "SSE client lagged");
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    tracing::debug!("SSE event bus closed");
+                    return None;
+                }
+            }
+        }
     });
 
     Response::builder()
@@ -63,6 +68,6 @@ pub async fn events_handler(
         .header("content-type", "text/event-stream")
         .header("cache-control", "no-cache")
         .header("connection", "keep-alive")
-        .body(Body::from_stream(stream))
+            .body(axum::body::Body::from_stream(stream))
         .unwrap()
 }

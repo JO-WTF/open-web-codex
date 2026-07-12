@@ -20,7 +20,7 @@ type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
 /// POST /api/tasks/:id/runs — start a new run, creating a Codex thread.
 pub async fn start_run(
     State(state): State<AppState>,
-    auth: AuthenticatedUser,
+    _auth: AuthenticatedUser,
     Path(task_id): Path<Uuid>,
     Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
 ) -> ApiResult<StartRunResponse> {
@@ -40,7 +40,7 @@ pub async fn start_run(
         )
     })?;
 
-    let (_, project_id) = match task {
+    let (_, _project_id) = match task {
         Some(r) => (r.get::<Uuid, _>("id"), r.get::<Uuid, _>("project_id")),
         None => {
             return Err((
@@ -145,7 +145,7 @@ pub async fn start_run(
 /// GET /api/runs?task_id=... — list runs for a task.
 pub async fn list_runs(
     State(state): State<AppState>,
-    auth: AuthenticatedUser,
+    _auth: AuthenticatedUser,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, Uuid>>,
 ) -> ApiResult<Vec<Run>> {
     let task_id = params.get("task_id").copied();
@@ -197,7 +197,7 @@ pub async fn list_runs(
 /// GET /api/runs/:id — get a single run.
 pub async fn get_run(
     State(state): State<AppState>,
-    auth: AuthenticatedUser,
+    _auth: AuthenticatedUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Run> {
     let row = sqlx::query(
@@ -233,7 +233,7 @@ pub async fn get_run(
 /// POST /api/runs/:id/cancel — cancel a running run.
 pub async fn cancel_run(
     State(state): State<AppState>,
-    auth: AuthenticatedUser,
+    _auth: AuthenticatedUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Run> {
     let row = sqlx::query(

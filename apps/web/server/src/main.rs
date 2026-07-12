@@ -1,6 +1,7 @@
 mod config;
 mod middleware;
 mod routes;
+mod supervisor;
 
 use std::sync::Arc;
 use std::net::SocketAddr;
@@ -79,6 +80,41 @@ async fn main() -> anyhow::Result<()> {
         }
         other => anyhow::bail!("unknown --codex-mode '{other}'; expected 'fake' or 'real'"),
     };
+
+    // ── Event Bus ───────────────────────────────────────────────────
+    // Bridge adapter events into a broadcast channel so that both
+    // the SSE endpoint and the RunSupervisor can consume from one stream.
+    let event_bus = state.event_bus.clone();
+    {
+        let event_bus = event_bus.clone();
+        let adapter = adapter.clone();
+        tokio::spawn(async move {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+
+            // Subscribe to adapter events
+            let adapter_clone = adapter.clone();
+            let sub = tokio::spawn(async move {
+                if let Err(e) = adapter_clone.subscribe_events(tx).await {
+                    tracing::warn!("adapter event subscription ended: {e}");
+                }
+            });
+
+            // Relay to broadcast channel
+            while let Some(data) = rx.recv().await {
+                if event_bus.send(data).is_err() {
+                    tracing::debug!("event bus: no active receivers, dropping event");
+                }
+            }
+
+            let _ = sub.await;
+            tracing::info!("event bridge task exiting");
+        });
+    }
+
+    // ── Run Supervisor ──────────────────────────────────────────────
+    // Background listener that auto-transitions run statuses from
+    // adapter thread lifecycle events.
+    supervisor::start(event_bus, state.db.clone());
 
     let app = Router::new()
         .nest("/api", routes::router(adapter))

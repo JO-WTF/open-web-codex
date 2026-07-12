@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::{json, Value};
@@ -81,6 +83,19 @@ impl FakeCodexAdapter {
                 "workspace_id": ws_id,
                 "message": {
                     "method": "thread/started",
+                    "params": { "threadId": th_id },
+                },
+            },
+        })
+    }
+
+    fn completed_event(ws_id: &str, th_id: &str) -> Value {
+        json!({
+            "method": "app-server-event",
+            "params": {
+                "workspace_id": ws_id,
+                "message": {
+                    "method": "thread/completed",
                     "params": { "threadId": th_id },
                 },
             },
@@ -207,6 +222,7 @@ impl CodexAdapter for FakeCodexAdapter {
             let mut heartbeat = tokio::time::interval(tokio::time::Duration::from_secs(10));
             let mut item_timer = tokio::time::interval(tokio::time::Duration::from_secs(8));
             let mut item_seq: u64 = 0;
+            let mut thread_ticks: HashMap<String, u32> = HashMap::new();
 
             // Helper: send an SSE frame
             let mut send = |data: Value| {
@@ -242,11 +258,27 @@ impl CodexAdapter for FakeCodexAdapter {
                         let threads = {
                             let s = state.lock().await;
                             s.threads.iter()
-                                .filter(|t| t.status == "active" && t.msg_count > 0)
+                                .filter(|t| t.status == "active")
                                 .map(|t| (t.id.clone(), t.ws_id.clone()))
                                 .collect::<Vec<_>>()
                         };
                         for (th_id, ws_id) in &threads {
+                            let ticks = thread_ticks.entry(th_id.clone()).or_insert(0);
+                            if *ticks >= 3 {
+                                // Emit thread/completed
+                                send(FakeCodexAdapter::completed_event(ws_id, th_id));
+                                // Mark thread completed in state
+                                {
+                                    let mut s = state.lock().await;
+                                    if let Some(th) = s.threads.iter_mut().find(|t| t.id == *th_id) {
+                                        th.status = "completed".to_string();
+                                    }
+                                }
+                                tracing::info!(thread = %th_id, "mock thread completed after {ticks} ticks");
+                                continue;
+                            }
+                            *ticks += 1;
+
                             item_seq += 1;
                             let item_id = format!("mock-item-{item_seq:04x}");
 
