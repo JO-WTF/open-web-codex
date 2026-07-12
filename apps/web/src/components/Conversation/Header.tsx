@@ -59,6 +59,11 @@ export default function Header({
         )}
       </div>
       <div className="web-chat-header-right">
+        {threadStatus && threadStatus.includes("waitingOnApproval") && (
+          <span className="web-header-approval-badge" title="Waiting for approval">
+            ⚠ Approval needed
+          </span>
+        )}
         {collabLabel && (
           <span className="web-header-badge" title="Collaboration mode">
             {collabLabel}

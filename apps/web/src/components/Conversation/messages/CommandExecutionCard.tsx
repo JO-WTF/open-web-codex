@@ -1,14 +1,20 @@
 import { useState } from "react";
 
+type CommandAction = {
+  type: string;
+  path: string;
+};
+
 type Props = {
   command: string;
   output?: string;
   exitCode?: number;
   durationMs?: number;
   cwd?: string;
+  commandActions?: CommandAction[];
 };
 
-export default function CommandExecutionCard({ command, output, exitCode, durationMs, cwd }: Props) {
+export default function CommandExecutionCard({ command, output, exitCode, durationMs, cwd, commandActions }: Props) {
   const [open, setOpen] = useState(false);
   const ok = exitCode === 0;
 
@@ -26,6 +32,15 @@ export default function CommandExecutionCard({ command, output, exitCode, durati
       </div>
       {open && (
         <div className="web-cmdex-body">
+          {commandActions && commandActions.length > 0 && (
+            <div className="web-cmdex-actions">
+              {commandActions.map((a, i) => (
+                <span key={i} className="web-cmdex-action">
+                  {a.type}{a.path ? ': ' + a.path : ''}
+                </span>
+              ))}
+            </div>
+          )}
           {output ? (
             <pre className="web-cmdex-output"><code>{output}</code></pre>
           ) : (

@@ -1030,4 +1030,20 @@ mod tests {
         assert!(THREAD_LIST_SOURCE_KINDS.contains(&"subAgentCompact"));
         assert!(THREAD_LIST_SOURCE_KINDS.contains(&"subAgentThreadSpawn"));
     }
+
+pub(crate) async fn resolve_approval_core(
+    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    workspace_id: String,
+    thread_id: String,
+    decision: String,
+) -> Result<Value, String> {
+    let session = get_session_clone(sessions, &workspace_id).await?;
+    let mut params = Map::new();
+    params.insert("threadId".to_string(), json!(thread_id));
+    params.insert("decision".to_string(), json!(decision));
+    session
+        .send_request_for_workspace(&workspace_id, "resolveApproval", Value::Object(params))
+        .await
+}
+
 }

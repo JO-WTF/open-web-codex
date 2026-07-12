@@ -146,4 +146,13 @@ export class CodexMonitorWebClient {
     };
     return () => source.close();
   }
+
+  async resolveApproval(
+    workspaceId: string,
+    threadId: string,
+    decision: string,
+  ): Promise<unknown> {
+    return this.rpc("resolve_approval", { workspaceId, threadId, decision });
+  }
+
 }

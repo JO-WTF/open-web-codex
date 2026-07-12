@@ -65,7 +65,7 @@ sleep 1
 # ── 4. Start Vite frontend ──
 echo "[4/5] Starting Vite frontend on :1421..."
 cd "$ROOT/apps/web"
-nohup npx vite --port 1421 --host 0.0.0.0 </dev/null >/tmp/vite-1421.log 2>&1 &
+nohup npx vite --port 1421 --host 0.0.0.0 > /tmp/vite-1421.log 2>&1 & disown
 echo "  Vite PID: $!"
 sleep 3
 

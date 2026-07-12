@@ -30,6 +30,7 @@ export type MessageEntry = LogEntry & {
 
 type Props = {
   items: MessageEntry[];
+  onResolveApproval?: (workspaceId: string, threadId: string, decision: string) => void;
 };
 
 export default function MessageList({ items }: Props) {
@@ -69,6 +70,7 @@ export default function MessageList({ items }: Props) {
               exitCode={entry.cmdExitCode}
               durationMs={entry.cmdDurationMs}
               cwd={entry.cmdCwd}
+              commandActions={entry.cmdActions}
             />
           );
         }

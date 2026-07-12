@@ -984,6 +984,15 @@ impl DaemonState {
         codex_core::remember_approval_rule_core(&self.workspaces, workspace_id, command).await
     }
 
+    async fn resolve_approval(
+        &self,
+        workspace_id: String,
+        thread_id: String,
+        decision: String,
+    ) -> Result<Value, String> {
+        codex_core::resolve_approval_core(&self.sessions, workspace_id, thread_id, decision).await
+    }
+
     async fn get_config_model(&self, workspace_id: String) -> Result<Value, String> {
         codex_core::get_config_model_core(&self.workspaces, workspace_id).await
     }

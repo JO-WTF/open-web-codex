@@ -4,6 +4,7 @@ import { CodexMonitorWebClient } from "./services/webClient";
 import Layout from "./components/Layout";
 import Sidebar from "./components/Sidebar";
 import Conversation from "./components/Conversation";
+import type { GoalInfo } from "./components/Conversation/GoalBanner";
 import "./styles/web.css";
 
 /* ─────────── Types ─────────── */
@@ -26,6 +27,7 @@ export type LogEntry = {
   cmdDurationMs?: number;
   cmdCwd?: string;
   cmdOutput?: string;
+  cmdActions?: { type: string; path: string }[];
 };
 
 type GatewayState = "checking" | "online" | "offline";
@@ -91,6 +93,7 @@ const newLogId = () =>
 /* ─────────── Component ─────────── */
 
 export default function WebApp() {
+  console.log('[open-web-codex] build:', '2026-07-12T21:20:00Z');
   const [baseUrl, setBaseUrl] = useState(
     localStorage.getItem("codexMonitorWebBaseUrl") ?? "http://127.0.0.1:4733",
   );
@@ -109,6 +112,7 @@ export default function WebApp() {
   const [threadStatus, setThreadStatus] = useState<string>("idle");
   const [threadSettings, setThreadSettings] = useState<Record<string, unknown> | null>(null);
   const [rateLimits, setRateLimits] = useState<Record<string, unknown> | null>(null);
+  const [goal, setGoal] = useState<GoalInfo | null>(null);
   const [mcpServers, setMcpServers] = useState<Record<string, {name: string; status: string; error?: string | null; failureReason?: string | null}>>({});
 
   const client = useMemo(() => new CodexMonitorWebClient({ baseUrl, token }), [baseUrl, token]);
@@ -236,6 +240,7 @@ export default function WebApp() {
           if (!item) return null;
           const role = typeof item.role === "string" ? item.role : null;
           const kind = typeof item.kind === "string" ? item.kind : null;
+          const itemIdFromItem = typeof item?.id === "string" ? item.id : null;
 
           if (role === "user") return null;
 
@@ -274,21 +279,25 @@ export default function WebApp() {
           }
 
           if (kind === "reasoning") {
-            const key = itemId ? `reason_${itemId}` : null;
+            const key = itemId ? `reason_${itemId}` : (itemIdFromItem ? `reason_${itemIdFromItem}` : null);
             if (key && streamingTexts.current.has(key)) {
               const acc = streamingTexts.current.get(key)!;
               const eid = streamingLogIds.current.get(key);
-              if (eid)
+              if (eid && acc.trim()) {
                 setMessages((prev) =>
                   prev.map((e) => (e.id === eid ? { ...e, text: acc } : e)),
                 );
+              }
               streamingTexts.current.delete(key);
               streamingLogIds.current.delete(key);
-              return null;
+              if (eid && acc.trim()) return null;
             }
-            const summary = typeof item.summary === "string" ? item.summary : "";
-            return summary
-              ? { level: "system" as const, text: summary, kind: "reasoning" as const }
+            const summary = (Array.isArray(item.summary) && (item.summary as unknown[]).length > 0)
+              ? (item.summary as unknown[]).map(s => String(s)).join("\n\n")
+              : typeof item.summary === "string" ? item.summary : "";
+            const finalText = summary.trim() || (key && streamingTexts.current.has(key) ? (streamingTexts.current.get(key) ?? "").trim() : "");
+            return finalText
+              ? { level: "system" as const, text: finalText, kind: "reasoning" as const }
               : null;
           }
 
@@ -314,12 +323,39 @@ export default function WebApp() {
 
 
           const itemType2 = typeof item.type === "string" ? item.type : null;
+
+          if (itemType2 === "reasoning") {
+            const key = itemId ? `reason_${itemId}` : (itemIdFromItem ? `reason_${itemIdFromItem}` : null);
+            if (key && streamingTexts.current.has(key)) {
+              const acc = streamingTexts.current.get(key)!;
+              const eid = streamingLogIds.current.get(key);
+              if (eid && acc.trim()) {
+                setMessages((prev) =>
+                  prev.map((e) => (e.id === eid ? { ...e, text: acc } : e)),
+                );
+              }
+              streamingTexts.current.delete(key);
+              streamingLogIds.current.delete(key);
+              if (eid && acc.trim()) return null;
+            }
+            const summary = (Array.isArray(item.summary) && (item.summary as unknown[]).length > 0)
+              ? (item.summary as unknown[]).map(s => String(s)).join("\n\n")
+              : typeof item.summary === "string" ? item.summary : "";
+            const finalText = summary.trim() || (key && streamingTexts.current.has(key) ? (streamingTexts.current.get(key) ?? "").trim() : "");
+            return finalText
+              ? { level: "system" as const, text: finalText, kind: "reasoning" as const }
+              : null;
+          }
+
           if (itemType2 === "commandExecution") {
             const cmd = typeof item.command === "string" ? item.command : "";
             const output = typeof item.aggregatedOutput === "string" ? item.aggregatedOutput : "";
             const exitCode = typeof item.exitCode === "number" ? item.exitCode : undefined;
             const durationMs = typeof item.durationMs === "number" ? item.durationMs : undefined;
             const cwd = typeof item.cwd === "string" ? item.cwd : undefined;
+            const cmdActions = Array.isArray(item.commandActions)
+              ? (item.commandActions as Record<string,unknown>[]).map(a => ({type: String(a.type ?? ""), path: String(a.path ?? "")}))
+              : [];
             return {
               level: "info" as const,
               text: cmd,
@@ -328,6 +364,7 @@ export default function WebApp() {
               cmdExitCode: exitCode,
               cmdDurationMs: durationMs,
               cmdCwd: cwd,
+              cmdActions,
             };
           }
           return null;
@@ -336,16 +373,18 @@ export default function WebApp() {
         case "item/started": {
           const item = params.item as Record<string, unknown> | undefined;
           const itemKind = typeof item?.kind === "string" ? item.kind : null;
+          const itemType = typeof item?.type === "string" ? item.type : null;
           if (itemKind === "tool") {
             return {
               level: "info" as const,
-              text: "Running tool...",
+              text: "",
               kind: "tool" as const,
               toolType: "",
               toolTitle: "",
               toolStatus: "running",
             };
           }
+          if (itemKind === "reasoning" || itemType === "reasoning") return null;
           return null;
         }
 
@@ -358,7 +397,9 @@ export default function WebApp() {
         case "thread/status/changed": {
           const status = params.status as Record<string, unknown> | undefined;
           const type = typeof status?.type === "string" ? status.type : "unknown";
-          setThreadStatus(type);
+          const activeFlags = Array.isArray(status?.activeFlags) ? (status as Record<string, unknown>).activeFlags as string[] : [];
+          const flagsStr = activeFlags.length > 0 ? ":" + activeFlags.join(",") : "";
+          setThreadStatus(type + flagsStr);
           if (type === "error") {
             return { level: "error" as const, text: "Thread error" };
           }
@@ -367,6 +408,9 @@ export default function WebApp() {
 
         case "turn/plan/updated":
           return { level: "info" as const, text: "Plan updated" };
+
+        case "item/plan/ready":
+          return { level: "info" as const, text: "Plan ready" };
 
         case "turn/diff/updated":
           return { level: "info" as const, text: "Diff updated" };
@@ -395,9 +439,31 @@ export default function WebApp() {
           const partItemId = typeof params.itemId === "string" ? params.itemId : null;
           if (partItemId) {
             const key = `reason_${partItemId}`;
-            streamingTexts.current.delete(key);
-            streamingLogIds.current.delete(key);
+            // Keep streaming entry alive — just add a paragraph break between parts
+            const current = streamingTexts.current.get(key) ?? "";
+            if (current && !current.endsWith("\n\n")) {
+              streamingTexts.current.set(key, current + "\n\n");
+            }
           }
+          return null;
+        }
+
+        case "thread/goal/updated": {
+          const g = params.goal as Record<string, unknown> | undefined;
+          if (g) {
+            setGoal({
+              objective: typeof g.objective === "string" ? g.objective : "",
+              status: typeof g.status === "string" ? g.status : "active",
+              tokenBudget: typeof g.tokenBudget === "number" ? g.tokenBudget : null,
+              tokensUsed: typeof g.tokensUsed === "number" ? g.tokensUsed : 0,
+              timeUsedSeconds: typeof g.timeUsedSeconds === "number" ? g.timeUsedSeconds : 0,
+            });
+          }
+          return null;
+        }
+
+        case "thread/goal/cleared": {
+          setGoal(null);
           return null;
         }
 
@@ -596,6 +662,7 @@ export default function WebApp() {
     setActiveThreadId(id);
     setMessages([]);
     setTokenUsage(null);
+    setGoal(null);
     const wid = activeWorkspaceId;
     if (!wid) return;
     try {
@@ -608,13 +675,27 @@ export default function WebApp() {
       for (const turn of turns) {
         const items = Array.isArray(turn?.items) ? turn.items as Record<string, unknown>[] : [];
         for (const item of items) {
-          const text = typeof item.text === 'string' && item.text
+          const itemType = typeof item.type === 'string' ? item.type : '';
+          let text: string;
+
+          // reasoning items: summary is now an array of strings
+          if (itemType === 'reasoning') {
+            const summary = item.summary;
+            if (Array.isArray(summary) && summary.length > 0) {
+              text = summary.map((s: unknown) => String(s)).join('\n\n');
+            } else if (typeof summary === 'string' && summary) {
+              text = summary;
+            } else {
+              text = '';
+            }
+          } else {
+            text = typeof item.text === 'string' && item.text
             ? item.text
             : (Array.isArray(item.content) && (item.content as Record<string, unknown>[]).length > 0
               ? String(((item.content as Record<string, unknown>[])[0] as Record<string, unknown>)?.text ?? '')
               : '');
+          }
           if (!text) continue;
-          const itemType = typeof item.type === 'string' ? item.type : '';
           if (itemType === 'reasoning' && text) {
             loaded.push({ id: newLogId(), level: 'system' as const, text, kind: 'reasoning' as const });
           } else if (itemType === 'userMessage') {
@@ -625,6 +706,9 @@ export default function WebApp() {
             const exitCode = typeof item.exitCode === 'number' ? item.exitCode : undefined;
             const durationMs = typeof item.durationMs === 'number' ? item.durationMs : undefined;
             const cwd = typeof item.cwd === 'string' ? item.cwd : undefined;
+            const cmdActions = Array.isArray(item.commandActions)
+              ? (item.commandActions as Record<string,unknown>[]).map(a => ({type: String(a.type ?? ''), path: String(a.path ?? '')}))
+              : [];
             loaded.push({
               id: newLogId(),
               level: 'info' as const,
@@ -634,6 +718,7 @@ export default function WebApp() {
               cmdExitCode: exitCode,
               cmdDurationMs: durationMs,
               cmdCwd: cwd,
+              cmdActions,
             });
 
           } else if (itemType === 'agentMessage') {
@@ -677,6 +762,7 @@ export default function WebApp() {
       }
     >
       <Conversation
+        goal={goal}
         workspaceName={activeWorkspace?.name ?? null}
         threadTitle={activeThreadId ? activeThreadId.slice(0, 12) + "…" : null}
           tokenUsage={tokenUsage}
