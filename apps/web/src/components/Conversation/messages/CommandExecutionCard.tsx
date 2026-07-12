@@ -9,22 +9,24 @@ type Props = {
   command: string;
   output?: string;
   exitCode?: number;
+  status?: string;
   durationMs?: number;
   cwd?: string;
   commandActions?: CommandAction[];
 };
 
-export default function CommandExecutionCard({ command, output, exitCode, durationMs, cwd, commandActions }: Props) {
+export default function CommandExecutionCard({ command, output, exitCode, status, durationMs, cwd, commandActions }: Props) {
   const [open, setOpen] = useState(false);
-  const ok = exitCode === 0;
+  const running = status === "inProgress" || status === "running" || exitCode == null;
+  const ok = !running && exitCode === 0;
 
   const shortCmd = command.replace(/^\/bin\/zsh -lc '/, "").replace(/'$/, "").slice(0, 120);
 
   return (
     <div className="web-cmdex-card">
       <div className="web-cmdex-header" onClick={() => setOpen(!open)}>
-        <span className={`web-cmdex-status ${ok ? "web-cmdex-ok" : "web-cmdex-err"}`}>
-          {ok ? "\u2713" : "\u2717"} {ok ? "OK" : `exit ${exitCode}`}
+        <span className={`web-cmdex-status ${running ? "web-cmdex-running" : ok ? "web-cmdex-ok" : "web-cmdex-err"}`}>
+          {running ? "\u2022 running" : ok ? "\u2713 OK" : `\u2717 exit ${exitCode}`}
         </span>
         <code className="web-cmdex-cmd">{shortCmd}</code>
         {durationMs != null && <span className="web-cmdex-dur">{durationMs}ms</span>}

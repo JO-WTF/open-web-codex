@@ -30,10 +30,11 @@ export type MessageEntry = LogEntry & {
 
 type Props = {
   items: MessageEntry[];
-  onResolveApproval?: (workspaceId: string, threadId: string, decision: string) => void;
+  workspaceId?: string;
+  onResolveApproval?: (workspaceId: string, requestId: number | string, decision: "accept" | "decline") => void;
 };
 
-export default function MessageList({ items }: Props) {
+export default function MessageList({ items, workspaceId, onResolveApproval }: Props) {
   if (items.length === 0) {
     return (
       <div className="web-empty">
@@ -57,6 +58,9 @@ export default function MessageList({ items }: Props) {
             <ApprovalCard
               key={entry.id}
               command={entry.text}
+              workspaceId={workspaceId}
+              requestId={entry.approvalRequestId}
+              onResolve={onResolveApproval}
             />
           );
         }
@@ -68,6 +72,7 @@ export default function MessageList({ items }: Props) {
               command={entry.text}
               output={entry.cmdOutput ?? void 0}
               exitCode={entry.cmdExitCode}
+              status={entry.toolStatus}
               durationMs={entry.cmdDurationMs}
               cwd={entry.cmdCwd}
               commandActions={entry.cmdActions}

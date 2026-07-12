@@ -107,6 +107,10 @@ export class CodexMonitorWebClient {
     return this.rpc<Record<string, unknown>>("resume_thread", { workspaceId, threadId });
   }
 
+  readThread(workspaceId: string, threadId: string) {
+    return this.rpc<Record<string, unknown>>("read_thread", { workspaceId, threadId });
+  }
+
   listThreads(workspaceId: string) {
     return this.rpc<Record<string, unknown>>("list_threads", { workspaceId, limit: 50 });
   }
@@ -153,6 +157,14 @@ export class CodexMonitorWebClient {
     decision: string,
   ): Promise<unknown> {
     return this.rpc("resolve_approval", { workspaceId, threadId, decision });
+  }
+
+  respondToServerRequest(
+    workspaceId: string,
+    requestId: number | string,
+    result: Record<string, unknown>,
+  ): Promise<unknown> {
+    return this.rpc("respond_to_server_request", { workspaceId, requestId, result });
   }
 
 }

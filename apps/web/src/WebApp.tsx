@@ -5,6 +5,7 @@ import Layout from "./components/Layout";
 import Sidebar from "./components/Sidebar";
 import Conversation from "./components/Conversation";
 import type { GoalInfo } from "./components/Conversation/GoalBanner";
+import { buildWebThreadHistory, commandText } from "./utils/webThreadHistory";
 import "./styles/web.css";
 
 /* ─────────── Types ─────────── */
@@ -14,6 +15,7 @@ export type LogEntry = {
   level: "event" | "error" | "info" | "user" | "assistant" | "system";
   text: string;
   approvalId?: string;
+  approvalRequestId?: number | string;
   kind?: "reasoning" | "tool" | "diff" | "approval" | "command_exec";
   toolType?: string;
   toolTitle?: string;
@@ -121,6 +123,9 @@ export default function WebApp() {
   // Streaming accumulators
   const streamingTexts = useRef<Map<string, string>>(new Map());
   const streamingLogIds = useRef<Map<string, string>>(new Map());
+  const selectThreadRef = useRef<((threadId: string) => Promise<void>) | null>(null);
+  const activeThreadIdRef = useRef<string | null>(activeThreadId);
+  activeThreadIdRef.current = activeThreadId;
 
   const appendLog = useCallback(
     (level: LogEntry["level"], text: string, extra?: Partial<Omit<LogEntry, "id" | "level" | "text">>) => {
@@ -151,8 +156,16 @@ export default function WebApp() {
           setThinking(true);
           return { level: "system", text: "Thinking..." };
 
-       case "turn/completed":
+        case "turn/completed":
          setThinking(false);
+         const completedThreadId = typeof params.threadId === "string"
+           ? params.threadId
+           : typeof params.thread_id === "string" ? params.thread_id : null;
+         if (completedThreadId && completedThreadId === activeThreadIdRef.current) {
+           // The completed item event can omit reasoning summaries. Once a turn is
+           // durable, refresh from the Runtime's thread projection as the source of truth.
+           void selectThreadRef.current?.(completedThreadId);
+         }
          return { level: "system", text: "Turn complete" };
 
         case "thread/started": {
@@ -348,7 +361,7 @@ export default function WebApp() {
           }
 
           if (itemType2 === "commandExecution") {
-            const cmd = typeof item.command === "string" ? item.command : "";
+            const cmd = commandText(item.command);
             const output = typeof item.aggregatedOutput === "string" ? item.aggregatedOutput : "";
             const exitCode = typeof item.exitCode === "number" ? item.exitCode : undefined;
             const durationMs = typeof item.durationMs === "number" ? item.durationMs : undefined;
@@ -361,6 +374,7 @@ export default function WebApp() {
               text: cmd,
               kind: "command_exec" as const,
               cmdOutput: output,
+              toolStatus: typeof item.status === "string" ? item.status : undefined,
               cmdExitCode: exitCode,
               cmdDurationMs: durationMs,
               cmdCwd: cwd,
@@ -474,14 +488,18 @@ export default function WebApp() {
         }
 
         case "item/commandExecution/requestApproval": {
-          const cmd = typeof params.command === "string" ? params.command : null;
+          const cmd = commandText(params.command);
           if (!cmd) return null;
-          const itemId = typeof params.itemId === "string" ? params.itemId : undefined;
+          const requestId = message.id;
           return {
             level: "info" as const,
             text: cmd,
             kind: "approval" as const,
-            approvalId: itemId,
+            approvalId: typeof params.itemId === "string" ? params.itemId : undefined,
+            approvalRequestId:
+              typeof requestId === "number" || typeof requestId === "string"
+                ? requestId
+                : undefined,
           };
         }
 
@@ -547,18 +565,23 @@ export default function WebApp() {
             wsPath ? String(t.cwd ?? '').startsWith(wsPath) : true)
         : [];
       if (arr.length > 0 || Array.isArray(arr)) {
-        setThreadsByWorkspace(prev => ({
-          ...prev,
-          [wid]: arr.map((t: Record<string, unknown>) => ({
+        setThreadsByWorkspace(prev => {
+          const received = arr.map((t: Record<string, unknown>) => ({
             id: String(t.id ?? ""),
             label: String(t.name ?? t.label ?? "Thread"),
             updatedAt: typeof t.updatedAt === "number" ? t.updatedAt : 0,
             turnCount: typeof t.turnCount === "number" ? t.turnCount : undefined,
-          })),
-        }));
+          }));
+          // Newly started threads are not listed until their first persisted turn.
+          // Preserve the optimistic entry until Runtime returns the canonical row.
+          const pending = (prev[wid] ?? []).filter(
+            (thread) => thread.label === "New thread" && !received.some((next) => next.id === thread.id),
+          );
+          return { ...prev, [wid]: [...pending, ...received] };
+        });
       }
     } catch { /* not fatal */ }
-  }, [activeWorkspaceId, client]);
+  }, [activeWorkspaceId, client, workspaces]);
 
   const connectWorkspace = useCallback(async (id: string) => {
     if (!activeWorkspaceId || activeWorkspaceId !== id) {
@@ -631,8 +654,27 @@ export default function WebApp() {
        throw new Error(msg);
      }
      const tid = extractThreadId(result);
-     if (tid) setActiveThreadId(tid);
-      await refreshThreads(wid);
+     if (tid) {
+       // A new thread must begin with a clean transcript, even before its first
+       // user message makes it into `thread/list`.
+       setActiveThreadId(tid);
+       setMessages([]);
+       setTokenUsage(null);
+       setGoal(null);
+       setThinking(false);
+       setThreadStatus("idle");
+       setThreadsByWorkspace((previous) => {
+         const existing = previous[wid] ?? [];
+         if (existing.some((thread) => thread.id === tid)) {
+           return previous;
+         }
+         return {
+           ...previous,
+           [wid]: [{ id: tid, label: "New thread", updatedAt: Date.now() }, ...existing],
+         };
+       });
+     }
+     await refreshThreads(wid);
      appendLog("info", `Started thread${tid ? ` ${tid}` : ""}.`);
    } catch (error) {
      appendLog("error", error instanceof Error ? error.message : String(error));
@@ -656,6 +698,21 @@ export default function WebApp() {
     }
   }, [activeThreadId, activeWorkspaceId, appendLog, client, draft]);
 
+  const resolveApproval = useCallback(async (
+    workspaceId: string,
+    requestId: number | string,
+    decision: "accept" | "decline",
+  ) => {
+    try {
+      await client.respondToServerRequest(workspaceId, requestId, { decision });
+      setMessages((previous) => previous.filter(
+        (entry) => entry.approvalRequestId !== requestId,
+      ));
+    } catch (error) {
+      appendLog("error", error instanceof Error ? error.message : String(error));
+    }
+  }, [appendLog, client]);
+
   /* ─── Thread management ─── */
 
   const selectThread = useCallback(async (id: string) => {
@@ -666,69 +723,27 @@ export default function WebApp() {
     const wid = activeWorkspaceId;
     if (!wid) return;
     try {
-      const raw = await client.resumeThread(wid, id);
-      const inner = (raw as Record<string, unknown>)?.result;
-      const obj = (inner ?? raw) as Record<string, unknown>;
-      const thread = obj.thread as Record<string, unknown> | undefined;
-      const turns = Array.isArray(thread?.turns) ? thread!.turns as Record<string, unknown>[] : (Array.isArray(obj.turns) ? obj.turns as Record<string, unknown>[] : []);
-      const loaded: LogEntry[] = [];
-      for (const turn of turns) {
-        const items = Array.isArray(turn?.items) ? turn.items as Record<string, unknown>[] : [];
-        for (const item of items) {
-          const itemType = typeof item.type === 'string' ? item.type : '';
-          let text: string;
-
-          // reasoning items: summary is now an array of strings
-          if (itemType === 'reasoning') {
-            const summary = item.summary;
-            if (Array.isArray(summary) && summary.length > 0) {
-              text = summary.map((s: unknown) => String(s)).join('\n\n');
-            } else if (typeof summary === 'string' && summary) {
-              text = summary;
-            } else {
-              text = '';
-            }
-          } else {
-            text = typeof item.text === 'string' && item.text
-            ? item.text
-            : (Array.isArray(item.content) && (item.content as Record<string, unknown>[]).length > 0
-              ? String(((item.content as Record<string, unknown>[])[0] as Record<string, unknown>)?.text ?? '')
-              : '');
-          }
-          if (!text) continue;
-          if (itemType === 'reasoning' && text) {
-            loaded.push({ id: newLogId(), level: 'system' as const, text, kind: 'reasoning' as const });
-          } else if (itemType === 'userMessage') {
-            loaded.push({ id: newLogId(), level: 'user' as const, text });
-          } else if (itemType === 'commandExecution') {
-            const cmd = typeof item.command === 'string' ? item.command : text;
-            const cmdOut = typeof item.aggregatedOutput === 'string' ? item.aggregatedOutput : undefined;
-            const exitCode = typeof item.exitCode === 'number' ? item.exitCode : undefined;
-            const durationMs = typeof item.durationMs === 'number' ? item.durationMs : undefined;
-            const cwd = typeof item.cwd === 'string' ? item.cwd : undefined;
-            const cmdActions = Array.isArray(item.commandActions)
-              ? (item.commandActions as Record<string,unknown>[]).map(a => ({type: String(a.type ?? ''), path: String(a.path ?? '')}))
-              : [];
-            loaded.push({
-              id: newLogId(),
-              level: 'info' as const,
-              text: cmd,
-              kind: 'command_exec' as const,
-              cmdOutput: cmdOut,
-              cmdExitCode: exitCode,
-              cmdDurationMs: durationMs,
-              cmdCwd: cwd,
-              cmdActions,
-            });
-
-          } else if (itemType === 'agentMessage') {
-            loaded.push({ id: newLogId(), level: 'assistant' as const, text });
-          }
-        }
+      let resumed: Record<string, unknown> | null = null;
+      // Resuming an already-active thread may be rejected; history remains readable.
+      try {
+        resumed = await client.resumeThread(wid, id);
+      } catch {
+        // Best effort: `thread/read` below is the source for the browser projection.
       }
+      // `thread/resume` is the authoritative loaded-thread projection. In
+      // particular it preserves the reasoning summaries for interrupted turns;
+      // `thread/read` may legitimately return an empty turns projection.
+      const raw = resumed ?? await client.readThread(wid, id);
+      const inner = (raw as Record<string, unknown>)?.result;
+      let obj = (inner ?? raw) as Record<string, unknown>;
+      let thread = obj.thread as Record<string, unknown> | undefined;
+      let turns = Array.isArray(thread?.turns) ? thread.turns as Record<string, unknown>[] : (Array.isArray(obj.turns) ? obj.turns as Record<string, unknown>[] : []);
+      const loaded = buildWebThreadHistory({ turns }, newLogId);
       if (loaded.length > 0) setMessages(loaded);
     } catch { /* history load is best-effort */ }
   }, [activeWorkspaceId, client]);
+
+  selectThreadRef.current = selectThread;
 
   /* ─── Render ─── */
 
@@ -770,12 +785,14 @@ export default function WebApp() {
           threadSettings={threadSettings}
 
         messages={messages}
+        workspaceId={activeWorkspaceId ?? undefined}
         draft={draft}
         onDraftChange={setDraft}
         onSend={sendMessage}
         busy={busy}
         sendDisabled={!activeWorkspaceId || !activeThreadId}
         thinking={thinking}
+        onResolveApproval={resolveApproval}
       />
     </Layout>
   );

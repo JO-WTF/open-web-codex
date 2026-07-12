@@ -14,13 +14,14 @@ type Props = {
   threadStatus: string;
   threadSettings: Record<string, unknown> | null;
   messages: MessageEntry[];
+  workspaceId?: string;
   thinking?: boolean;
   draft: string;
   onDraftChange: (text: string) => void;
   onSend: () => void;
   busy: boolean;
   sendDisabled: boolean;
-  onResolveApproval?: (workspaceId: string, threadId: string, decision: string) => void;
+  onResolveApproval?: (workspaceId: string, requestId: number | string, decision: "accept" | "decline") => void;
 };
 
 export default function Conversation({
@@ -31,6 +32,7 @@ export default function Conversation({
   threadStatus,
   threadSettings,
   messages,
+  workspaceId,
   thinking,
   draft,
   onDraftChange,
@@ -44,7 +46,11 @@ export default function Conversation({
       <Header workspaceName={workspaceName} threadTitle={threadTitle} tokenUsage={tokenUsage} threadStatus={threadStatus} threadSettings={threadSettings} />
       <div className="web-message-area">
         {thinking && <ThinkingIndicator />}
-        <MessageList items={messages} onResolveApproval={onResolveApproval} />
+        <MessageList
+          items={messages}
+          workspaceId={workspaceId}
+          onResolveApproval={onResolveApproval}
+        />
       </div>
       {goal && (
         <GoalBanner goal={goal} />

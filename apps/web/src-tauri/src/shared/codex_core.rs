@@ -282,7 +282,10 @@ pub(crate) async fn read_thread_core(
     thread_id: String,
 ) -> Result<Value, String> {
     let session = get_session_clone(sessions, &workspace_id).await?;
-    let params = json!({ "threadId": thread_id });
+    let params = json!({
+        "threadId": thread_id,
+        "includeTurns": true
+    });
     session
         .send_request_for_workspace(&workspace_id, "thread/read", params)
         .await
@@ -888,6 +891,21 @@ pub(crate) async fn get_config_model_core(
     Ok(json!({ "model": model }))
 }
 
+pub(crate) async fn resolve_approval_core(
+    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    workspace_id: String,
+    thread_id: String,
+    decision: String,
+) -> Result<Value, String> {
+    let session = get_session_clone(sessions, &workspace_id).await?;
+    let mut params = Map::new();
+    params.insert("threadId".to_string(), json!(thread_id));
+    params.insert("decision".to_string(), json!(decision));
+    session
+        .send_request_for_workspace(&workspace_id, "resolveApproval", Value::Object(params))
+        .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1030,20 +1048,5 @@ mod tests {
         assert!(THREAD_LIST_SOURCE_KINDS.contains(&"subAgentCompact"));
         assert!(THREAD_LIST_SOURCE_KINDS.contains(&"subAgentThreadSpawn"));
     }
-
-pub(crate) async fn resolve_approval_core(
-    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
-    workspace_id: String,
-    thread_id: String,
-    decision: String,
-) -> Result<Value, String> {
-    let session = get_session_clone(sessions, &workspace_id).await?;
-    let mut params = Map::new();
-    params.insert("threadId".to_string(), json!(thread_id));
-    params.insert("decision".to_string(), json!(decision));
-    session
-        .send_request_for_workspace(&workspace_id, "resolveApproval", Value::Object(params))
-        .await
-}
 
 }
