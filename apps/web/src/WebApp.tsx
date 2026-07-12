@@ -436,9 +436,16 @@ export default function WebApp() {
     try {
       const raw = await client.listThreads(wid);
       const inner = (raw as Record<string, unknown>)?.result;
-      const arr =
+      const allData =
         (inner as Record<string, unknown>)?.data ?? raw ?? [];
-      if (Array.isArray(arr)) {
+      // Filter to this workspace by cwd
+      const ws = workspaces.find(w => w.id === wid);
+      const wsPath = ws?.path ?? '';
+      const arr = Array.isArray(allData)
+        ? allData.filter((t: Record<string, unknown>) =>
+            wsPath ? String(t.cwd ?? '').startsWith(wsPath) : true)
+        : [];
+      if (arr.length > 0 || Array.isArray(arr)) {
         setThreadsByWorkspace(prev => ({
           ...prev,
           [wid]: arr.map((t: Record<string, unknown>) => ({
@@ -550,11 +557,39 @@ export default function WebApp() {
 
   /* ─── Thread management ─── */
 
-  const selectThread = useCallback((id: string) => {
+  const selectThread = useCallback(async (id: string) => {
     setActiveThreadId(id);
     setMessages([]);
     setTokenUsage(null);
-  }, []);
+    const wid = activeWorkspaceId;
+    if (!wid) return;
+    try {
+      const raw = await client.resumeThread(wid, id);
+      const inner = (raw as Record<string, unknown>)?.result;
+      const obj = (inner ?? raw) as Record<string, unknown>;
+      const thread = obj.thread as Record<string, unknown> | undefined;
+      const turns = Array.isArray(thread?.turns) ? thread!.turns as Record<string, unknown>[] : (Array.isArray(obj.turns) ? obj.turns as Record<string, unknown>[] : []);
+      const loaded: LogEntry[] = [];
+      for (const turn of turns) {
+        const items = Array.isArray(turn?.items) ? turn.items as Record<string, unknown>[] : [];
+        for (const item of items) {
+          const text = typeof item.text === 'string' && item.text
+            ? item.text
+            : (Array.isArray(item.content) && (item.content as Record<string, unknown>[]).length > 0
+              ? String(((item.content as Record<string, unknown>[])[0] as Record<string, unknown>)?.text ?? '')
+              : '');
+          if (!text) continue;
+          const role = typeof item.role === 'string' ? item.role : '';
+          if (role === 'user') {
+            loaded.push({ id: newLogId(), level: 'user' as const, text });
+          } else if (role === 'assistant') {
+            loaded.push({ id: newLogId(), level: 'assistant' as const, text });
+          }
+        }
+      }
+      if (loaded.length > 0) setMessages(loaded);
+    } catch { /* history load is best-effort */ }
+  }, [activeWorkspaceId, client]);
 
   /* ─── Render ─── */
 

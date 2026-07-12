@@ -91,12 +91,20 @@ export class CodexMonitorWebClient {
     return this.rpc<Record<string, unknown>>("add_workspace", { path });
   }
 
+  createWorkspace(name: string, parent_dir?: string) {
+    return this.rpc<Record<string, unknown>>("create_workspace", { name, parent_dir });
+  }
+
   connectWorkspace(workspaceId: string) {
     return this.rpc<void>("connect_workspace", { id: workspaceId });
   }
 
   startThread(workspaceId: string) {
     return this.rpc<Record<string, unknown>>("start_thread", { workspaceId });
+  }
+
+  resumeThread(workspaceId: string, threadId: string) {
+    return this.rpc<Record<string, unknown>>("resume_thread", { workspaceId, threadId });
   }
 
   listThreads(workspaceId: string) {
