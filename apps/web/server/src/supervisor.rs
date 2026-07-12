@@ -67,8 +67,14 @@ async fn process_event(data: &[u8], db: &PgPool) -> Result<(), String> {
             };
 
             let result = sqlx::query(
-                "UPDATE runs SET status = $1, updated_at = now() \
-                 WHERE codex_thread_id = $2 AND status = 'running'",
+                "WITH updated_run AS (
+                    UPDATE runs SET status = $1, updated_at = now()
+                    WHERE codex_thread_id = $2 AND status = 'running'
+                    RETURNING task_id
+                )
+                UPDATE tasks SET status = $1, updated_at = now()
+                WHERE id IN (SELECT task_id FROM updated_run)
+                  AND status NOT IN ('completed', 'cancelled', 'archived')",
             )
             .bind(status)
             .bind(thread_id)
@@ -76,8 +82,18 @@ async fn process_event(data: &[u8], db: &PgPool) -> Result<(), String> {
             .await
             .map_err(|e| format!("db update error: {e}"))?;
 
-            if result.rows_affected() > 0 {
-                tracing::info!(thread_id, status, "run auto-transitioned via supervisor");
+            // result reflects tasks updated, check runs separately
+            let run_updated = sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM runs WHERE codex_thread_id = $1 AND status = $2",
+            )
+            .bind(thread_id)
+            .bind(status)
+            .fetch_one(db)
+            .await
+            .map_err(|e| format!("db verify error: {e}"))?;
+
+            if run_updated > 0 {
+                tracing::info!(thread_id, status, "run & task auto-transitioned via supervisor");
             }
 
             Ok(())

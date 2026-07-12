@@ -194,3 +194,18 @@ pub struct StartRunRequest {}
 pub struct StartRunResponse {
     pub run: Run,
 }
+
+// ── Messages ──────────────────────────────────────────────────────
+
+/// Request to send a user message to a task's active thread.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SendMessageRequest {
+    pub text: String,
+}
+
+/// Response from sending a message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SendMessageResponse {
+    pub status: String,
+    pub thread_id: String,
+}

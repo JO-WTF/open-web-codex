@@ -9,10 +9,13 @@ use open_web_codex_platform_store::AppState;
 use sqlx::Row;
 use uuid::Uuid;
 
+use crate::middleware::auth::AuthenticatedUser;
+
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
 
 /// GET /api/projects
 pub async fn list_projects(
+    _auth: AuthenticatedUser,
     State(state): State<AppState>,
 ) -> ApiResult<Vec<Project>> {
     let rows = sqlx::query(
@@ -43,6 +46,7 @@ pub async fn list_projects(
 
 /// POST /api/projects
 pub async fn create_project(
+    _auth: AuthenticatedUser,
     State(state): State<AppState>,
     Json(req): Json<CreateProjectRequest>,
 ) -> ApiResult<Project> {
@@ -85,6 +89,7 @@ pub async fn create_project(
 
 /// GET /api/projects/:id
 pub async fn get_project(
+    _auth: AuthenticatedUser,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Project> {
