@@ -74,3 +74,54 @@ pub struct CreateTaskRequest {
     pub project_id: Uuid,
     pub title: String,
 }
+
+// ── Auth ────────────────────────────────────────────────────────────
+
+/// Public user representation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct User {
+    pub id: Uuid,
+    pub name: String,
+    pub email: String,
+    pub role: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Request body for one-time bootstrap.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BootstrapRequest {
+    pub name: String,
+    pub email: String,
+    pub password: String,
+}
+
+/// Response from bootstrap.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BootstrapResponse {
+    pub user: User,
+    pub session_token: String,
+}
+
+/// Request body for login.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoginRequest {
+    pub email: String,
+    pub password: String,
+}
+
+/// Response from login.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoginResponse {
+    pub user: User,
+    pub session_token: String,
+}
+
+/// Response from /api/me.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeResponse {
+    pub id: Uuid,
+    pub name: String,
+    pub email: String,
+    pub role: String,
+}

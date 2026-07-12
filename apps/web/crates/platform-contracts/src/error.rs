@@ -36,8 +36,13 @@ impl PlatformError {
         Self { kind: ErrorKind::NotFound, message: message.into(), request_id: None, retry_after_ms: None }
     }
 
+
     pub fn internal(message: impl Into<String>) -> Self {
         Self { kind: ErrorKind::Internal, message: message.into(), request_id: None, retry_after_ms: None }
+    }
+
+    pub fn unauthorized(message: impl Into<String>) -> Self {
+        Self { kind: ErrorKind::Unauthorized, message: message.into(), request_id: None, retry_after_ms: None }
     }
 
     pub fn with_request_id(mut self, request_id: String) -> Self {

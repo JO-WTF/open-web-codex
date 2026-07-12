@@ -1,6 +1,9 @@
 pub mod projects;
 pub mod tasks;
 pub mod codex_proxy;
+pub mod bootstrap;
+pub mod me;
+pub mod sessions;
 pub mod health;
 
 use std::sync::Arc;
@@ -12,6 +15,9 @@ use open_web_codex_platform_store::AppState;
 /// Assemble all platform API routes.
 pub fn router(adapter: Arc<dyn CodexAdapter>) -> Router<AppState> {
     Router::new()
+        .route("/bootstrap", axum::routing::post(bootstrap::bootstrap))
+        .route("/sessions", axum::routing::post(sessions::create_session))
+        .route("/me", axum::routing::get(me::me))
         .route("/health", axum::routing::get(health::health_check))
         .route("/projects", axum::routing::get(projects::list_projects).post(projects::create_project))
         .route("/projects/{id}", axum::routing::get(projects::get_project))

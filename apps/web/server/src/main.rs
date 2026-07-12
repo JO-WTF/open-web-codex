@@ -1,4 +1,5 @@
 mod config;
+mod middleware;
 mod routes;
 
 use std::sync::Arc;
