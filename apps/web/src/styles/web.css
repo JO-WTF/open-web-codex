@@ -211,6 +211,41 @@
   min-height: 72px;
   resize: vertical;
 }
+.web-log-event strong {
+  color: #c4b5fd;
+}
+
+.web-log-system strong {
+  color: #fbbf24;
+}
+
+.web-log-assistant strong {
+  color: #93c5fd;
+}
+
+.web-log-info strong {
+  color: #94a3b8;
+}
+
+.web-log-assistant {
+  border-color: rgb(96 165 250 / 30%);
+  background: rgb(30 58 138 / 20%);
+}
+
+.web-log-system {
+  border-color: rgb(251 191 36 / 25%);
+  background: rgb(120 53 15 / 15%);
+}
+
+.web-log-event {
+  border-color: rgb(196 181 253 / 22%);
+}
+
+.web-log-info {
+  border-color: rgb(148 163 184 / 14%);
+  background: rgb(15 23 42 / 30%);
+}
+
 
 @media (max-width: 760px) {
   .web-app-shell {

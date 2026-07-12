@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AppServerEvent, WorkspaceInfo } from "./types";
 import { CodexMonitorWebClient } from "./services/webClient";
 import "./styles/web.css";
 
 type LogEntry = {
   id: string;
-  level: "event" | "error" | "info" | "user";
+  level: "event" | "error" | "info" | "user" | "assistant" | "system";
   text: string;
 };
 
@@ -74,12 +74,149 @@ export default function WebApp() {
   const client = useMemo(() => new CodexMonitorWebClient({ baseUrl, token }), [baseUrl, token]);
   const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null;
 
+  // Track streaming assistant message deltas keyed by itemId
+  const streamingTexts = useRef<Map<string, string>>(new Map());
+  const streamingLogIds = useRef<Map<string, string>>(new Map());
+
   const appendLog = useCallback((level: LogEntry["level"], text: string) => {
     setLogs((current) => [
       ...current.slice(-199),
-      { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, level, text },
+      { id: crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`, level, text },
     ]);
   }, []);
+
+  const newLogId = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+  /** Returns { level, text } for simple entries or null (streaming handled inline). */
+  const handleAppEvent = useCallback(
+    (event: AppServerEvent): { level: LogEntry["level"]; text: string } | null => {
+      const message = event.message ?? {};
+      const method = typeof message.method === "string" ? message.method : null;
+      if (!method) return null;
+
+      const params =
+        message.params && typeof message.params === "object"
+          ? (message.params as Record<string, unknown>)
+          : {};
+
+      const itemId = typeof params.itemId === "string" ? params.itemId : null;
+
+      switch (method) {
+        case "turn/started":
+          return { level: "system", text: "Thinking..." };
+
+        case "turn/completed":
+          return { level: "system", text: "Turn complete" };
+
+        case "item/agentMessage/delta": {
+          if (!itemId) return null;
+          const delta = typeof params.delta === "string" ? params.delta : "";
+          if (!delta) return null;
+          const current = streamingTexts.current.get(itemId) ?? "";
+          const updated = current + delta;
+          streamingTexts.current.set(itemId, updated);
+
+          const existingLogId = streamingLogIds.current.get(itemId);
+          if (existingLogId) {
+            // Update the existing streaming entry in-place
+            setLogs((prev) =>
+              prev.map((entry) =>
+                entry.id === existingLogId ? { ...entry, text: updated } : entry,
+              ),
+            );
+            return null;
+          }
+
+          // First delta — directly add to logs so we control the id for future updates
+          const newId = newLogId();
+          streamingLogIds.current.set(itemId, newId);
+          setLogs((prev) => [...prev.slice(-199), { id: newId, level: "assistant", text: updated }]);
+          return null;
+        }
+
+        case "item/completed": {
+          const item = params.item as Record<string, unknown> | undefined;
+          if (!item) return null;
+          const role = typeof item.role === "string" ? item.role : null;
+          const kind = typeof item.kind === "string" ? item.kind : null;
+
+          // User message — already logged by sendMessage()
+          if (role === "user") return null;
+
+          // Assistant message — finalize streaming entry or log final text
+          if (role === "assistant") {
+            const text = typeof item.text === "string" ? item.text : "";
+            if (itemId && streamingTexts.current.has(itemId)) {
+              const accumulated = streamingTexts.current.get(itemId)!;
+              const existingLogId = streamingLogIds.current.get(itemId);
+              if (existingLogId) {
+                setLogs((prev) =>
+                  prev.map((entry) =>
+                    entry.id === existingLogId ? { ...entry, text: accumulated } : entry,
+                  ),
+                );
+              }
+              streamingTexts.current.delete(itemId);
+              streamingLogIds.current.delete(itemId);
+              return null;
+            }
+            return { level: "assistant", text: text || "(no response)" };
+          }
+
+          if (kind === "tool") {
+           const toolType = typeof item.toolType === "string" ? item.toolType : "";
+           const title = typeof item.title === "string" ? item.title : "";
+           const status = typeof item.status === "string" ? item.status : "";
+           return { level: "info", text: `Tool: ${toolType} — ${title} (${status})` };
+          }
+
+          if (kind === "reasoning") {
+            const summary = typeof item.summary === "string" ? item.summary : "";
+            return summary ? { level: "system", text: `Reasoning: ${summary}` } : null;
+          }
+
+          if (kind === "diff") {
+            const title = typeof item.title === "string" ? item.title : "";
+            return { level: "info", text: `Diff: ${title}` };
+          }
+
+          return null;
+        }
+
+        case "item/started": {
+          const item = params.item as Record<string, unknown> | undefined;
+          const itemKind = typeof item?.kind === "string" ? item.kind : null;
+          if (itemKind === "tool") {
+            return { level: "info", text: "Running tool..." };
+          }
+          return null;
+        }
+
+        case "turn/error": {
+          const msg = typeof params.message === "string" ? params.message : "Unknown error";
+          return { level: "error", text: `Turn error: ${msg}` };
+        }
+
+        case "thread/status/changed": {
+          const status = params.status as Record<string, unknown> | undefined;
+          const type = typeof status?.type === "string" ? status.type : "unknown";
+          return { level: "info", text: `Thread: ${type}` };
+        }
+
+        case "turn/plan/updated":
+          return { level: "info", text: "Plan updated" };
+
+        case "turn/diff/updated":
+          return { level: "info", text: "Diff updated" };
+
+        default: {
+          const text = summarizeEvent(event);
+          return text && text !== "{}" ? { level: "event", text } : null;
+        }
+      }
+    },
+    [],
+  );
 
   const saveConnection = useCallback(() => {
     localStorage.setItem("codexMonitorWebBaseUrl", baseUrl);
@@ -127,7 +264,10 @@ export default function WebApp() {
         if (startedThreadId) {
           setActiveThreadId(startedThreadId);
         }
-        appendLog("event", summarizeEvent(event));
+        const _entry = handleAppEvent(event);
+        if (_entry) {
+          appendLog(_entry.level, _entry.text);
+        }
       },
       {
         onOpen: () => setGatewayState("online"),
