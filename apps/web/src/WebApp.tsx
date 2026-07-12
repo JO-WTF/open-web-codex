@@ -13,7 +13,7 @@ export type LogEntry = {
   level: "event" | "error" | "info" | "user" | "assistant" | "system";
   text: string;
   approvalId?: string;
-  kind?: "reasoning" | "tool" | "diff" | "approval";
+  kind?: "reasoning" | "tool" | "diff" | "approval" | "command_exec";
   toolType?: string;
   toolTitle?: string;
   toolStatus?: string;
@@ -22,6 +22,10 @@ export type LogEntry = {
   diffLines?: { type: "add" | "del" | "ctx"; text: string }[];
   meta?: string;
   streaming?: boolean;
+  cmdExitCode?: number;
+  cmdDurationMs?: number;
+  cmdCwd?: string;
+  cmdOutput?: string;
 };
 
 type GatewayState = "checking" | "online" | "offline";
@@ -308,6 +312,24 @@ export default function WebApp() {
             };
           }
 
+
+          const itemType2 = typeof item.type === "string" ? item.type : null;
+          if (itemType2 === "commandExecution") {
+            const cmd = typeof item.command === "string" ? item.command : "";
+            const output = typeof item.aggregatedOutput === "string" ? item.aggregatedOutput : "";
+            const exitCode = typeof item.exitCode === "number" ? item.exitCode : undefined;
+            const durationMs = typeof item.durationMs === "number" ? item.durationMs : undefined;
+            const cwd = typeof item.cwd === "string" ? item.cwd : undefined;
+            return {
+              level: "info" as const,
+              text: cmd,
+              kind: "command_exec" as const,
+              cmdOutput: output,
+              cmdExitCode: exitCode,
+              cmdDurationMs: durationMs,
+              cmdCwd: cwd,
+            };
+          }
           return null;
         }
 
@@ -383,6 +405,7 @@ export default function WebApp() {
           const raw = params.rateLimits as Record<string, unknown> | undefined;
           if (raw) setRateLimits(raw);
           return null;
+        }
 
         case "item/commandExecution/requestApproval": {
           const cmd = typeof params.command === "string" ? params.command : null;
@@ -596,6 +619,23 @@ export default function WebApp() {
             loaded.push({ id: newLogId(), level: 'system' as const, text, kind: 'reasoning' as const });
           } else if (itemType === 'userMessage') {
             loaded.push({ id: newLogId(), level: 'user' as const, text });
+          } else if (itemType === 'commandExecution') {
+            const cmd = typeof item.command === 'string' ? item.command : text;
+            const cmdOut = typeof item.aggregatedOutput === 'string' ? item.aggregatedOutput : undefined;
+            const exitCode = typeof item.exitCode === 'number' ? item.exitCode : undefined;
+            const durationMs = typeof item.durationMs === 'number' ? item.durationMs : undefined;
+            const cwd = typeof item.cwd === 'string' ? item.cwd : undefined;
+            loaded.push({
+              id: newLogId(),
+              level: 'info' as const,
+              text: cmd,
+              kind: 'command_exec' as const,
+              cmdOutput: cmdOut,
+              cmdExitCode: exitCode,
+              cmdDurationMs: durationMs,
+              cmdCwd: cwd,
+            });
+
           } else if (itemType === 'agentMessage') {
             loaded.push({ id: newLogId(), level: 'assistant' as const, text });
           }

@@ -5,6 +5,7 @@ import ReasoningBlock from "./messages/ReasoningBlock";
 import ToolCallCard from "./messages/ToolCallCard";
 import DiffBlock from "./messages/DiffBlock";
 import ApprovalCard from "./messages/ApprovalCard";
+import CommandExecutionCard from "./messages/CommandExecutionCard";
 import SystemNotice from "./messages/SystemNotice";
 
 type DiffLine = {
@@ -16,7 +17,7 @@ type DiffLine = {
 export type { DiffLine };
 
 export type MessageEntry = LogEntry & {
-  kind?: "reasoning" | "tool" | "diff";
+  kind?: "reasoning" | "tool" | "diff" | "approval" | "command_exec";
   toolType?: string;
   toolTitle?: string;
   toolStatus?: string;
@@ -55,6 +56,19 @@ export default function MessageList({ items }: Props) {
             <ApprovalCard
               key={entry.id}
               command={entry.text}
+            />
+          );
+        }
+
+        if (entry.kind === "command_exec") {
+          return (
+            <CommandExecutionCard
+              key={entry.id}
+              command={entry.text}
+              output={entry.cmdOutput ?? void 0}
+              exitCode={entry.cmdExitCode}
+              durationMs={entry.cmdDurationMs}
+              cwd={entry.cmdCwd}
             />
           );
         }

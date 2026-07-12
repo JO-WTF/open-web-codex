@@ -1731,3 +1731,84 @@ body {
   font-size: 11px;
   color: var(--text-muted);
 }
+
+.web-cmdex-card {
+  margin: var(--space-2) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  overflow: hidden;
+  font-size: 13px;
+}
+.web-cmdex-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  user-select: none;
+}
+.web-cmdex-header:hover {
+  background: rgb(0 0 0 / 2%);
+}
+.web-cmdex-status {
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  flex-shrink: 0;
+}
+.web-cmdex-ok { color: #16a34a; }
+.web-cmdex-err { color: #dc2626; }
+.web-cmdex-cmd {
+  flex: 1;
+  font-family: var(--font-mono, "SF Mono", "Fira Code", monospace);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+.web-cmdex-dur {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.web-cmdex-chevron {
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  transition: transform 0.15s;
+  display: inline-block;
+}
+.web-cmdex-chevron-open {
+  transform: rotate(90deg);
+}
+.web-cmdex-body {
+  padding: 0 var(--space-3) var(--space-2);
+}
+.web-cmdex-output {
+  margin: 0 0 var(--space-1);
+  padding: var(--space-2);
+  background: rgb(0 0 0 / 3%);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  line-height: 1.5;
+  max-height: 200px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.web-cmdex-output code {
+  font-family: var(--font-mono, "SF Mono", "Fira Code", monospace);
+}
+.web-cmdex-no-output {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-style: italic;
+  padding: var(--space-1) 0;
+}
+.web-cmdex-cwd {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: var(--space-1);
+}
