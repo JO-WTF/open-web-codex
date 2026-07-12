@@ -4,9 +4,188 @@
     "AbsolutePathBuf": {
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
+    },
+    "CapabilityDeclaration": {
+      "properties": {
+        "experimental": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "limits": {
+          "additionalProperties": true,
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "methods": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MethodSet"
+            }
+          ],
+          "default": {}
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/StructuredReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/CapabilityStatus"
+        },
+        "version": {
+          "default": "1.0.0",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "status"
+      ],
+      "type": "object"
+    },
+    "CapabilityManifest": {
+      "description": "Top-level capability manifest returned during `initialize`.",
+      "properties": {
+        "capabilities": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/CapabilityDeclaration"
+          },
+          "type": "array"
+        },
+        "compatibility": {
+          "$ref": "#/definitions/CompatibilityRange"
+        },
+        "generatedAt": {
+          "type": "string"
+        },
+        "schemaVersion": {
+          "type": "string"
+        },
+        "server": {
+          "$ref": "#/definitions/ServerIdentity"
+        }
+      },
+      "required": [
+        "compatibility",
+        "generatedAt",
+        "schemaVersion",
+        "server"
+      ],
+      "type": "object"
+    },
+    "CapabilityStatus": {
+      "enum": [
+        "supported",
+        "degraded",
+        "unsupported",
+        "experimental"
+      ],
+      "type": "string"
+    },
+    "CompatibilityRange": {
+      "properties": {
+        "maximumClientProtocol": {
+          "type": "string"
+        },
+        "minimumClientProtocol": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "maximumClientProtocol",
+        "minimumClientProtocol"
+      ],
+      "type": "object"
+    },
+    "MethodSet": {
+      "properties": {
+        "clientRequests": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "notifications": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "serverRequests": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ServerIdentity": {
+      "properties": {
+        "buildVersion": {
+          "type": "string"
+        },
+        "commit": {
+          "type": "string"
+        },
+        "protocolVersion": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "buildVersion",
+        "commit",
+        "protocolVersion",
+        "target"
+      ],
+      "type": "object"
+    },
+    "StructuredReason": {
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "remediation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
     }
   },
   "properties": {
+    "capabilityManifest": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/CapabilityManifest"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "codexHome": {
       "allOf": [
         {

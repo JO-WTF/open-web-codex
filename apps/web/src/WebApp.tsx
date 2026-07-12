@@ -9,6 +9,8 @@ type LogEntry = {
   text: string;
 };
 
+type GatewayState = "checking" | "online" | "offline";
+
 function extractThreadId(result: Record<string, unknown> | null | undefined) {
   if (!result) return null;
   const candidates = [result.threadId, result.thread_id, result.id];
@@ -44,11 +46,21 @@ function summarizeEvent(event: AppServerEvent) {
   return `${method}${threadId ? ` · ${threadId}` : ""}${text && text !== "{}" ? ` · ${text}` : ""}`;
 }
 
+function extractThreadIdFromEvent(event: AppServerEvent) {
+  const message = event.message ?? {};
+  if (message.method !== "thread/started") return null;
+  const params =
+    message.params && typeof message.params === "object"
+      ? (message.params as Record<string, unknown>)
+      : null;
+  return extractThreadId(params);
+}
+
 export default function WebApp() {
   const [baseUrl, setBaseUrl] = useState(
     localStorage.getItem("codexMonitorWebBaseUrl") ?? "http://127.0.0.1:4733",
   );
-  const [token, setToken] = useState(localStorage.getItem("codexMonitorWebToken") ?? "");
+  const [token, setToken] = useState(sessionStorage.getItem("codexMonitorWebToken") ?? "");
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
@@ -56,6 +68,8 @@ export default function WebApp() {
   const [newWorkspacePath, setNewWorkspacePath] = useState("");
   const [busy, setBusy] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [gatewayState, setGatewayState] = useState<GatewayState>("checking");
+  const [gatewayVersion, setGatewayVersion] = useState<string | null>(null);
 
   const client = useMemo(() => new CodexMonitorWebClient({ baseUrl, token }), [baseUrl, token]);
   const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null;
@@ -69,9 +83,24 @@ export default function WebApp() {
 
   const saveConnection = useCallback(() => {
     localStorage.setItem("codexMonitorWebBaseUrl", baseUrl);
-    localStorage.setItem("codexMonitorWebToken", token);
+    sessionStorage.setItem("codexMonitorWebToken", token);
     appendLog("info", "Saved web gateway connection settings.");
   }, [appendLog, baseUrl, token]);
+
+  const checkGateway = useCallback(async () => {
+    setGatewayState("checking");
+    try {
+      const health = await client.health();
+      setGatewayState("online");
+      setGatewayVersion(health.version);
+      return true;
+    } catch (error) {
+      setGatewayState("offline");
+      setGatewayVersion(null);
+      appendLog("error", error instanceof Error ? error.message : String(error));
+      return false;
+    }
+  }, [appendLog, client]);
 
   const refreshWorkspaces = useCallback(async () => {
     setBusy(true);
@@ -88,14 +117,25 @@ export default function WebApp() {
   }, [appendLog, client]);
 
   useEffect(() => {
-    const unsubscribe = client.subscribeAppServerEvents((event) => {
-      if (activeWorkspaceId && event.workspace_id !== activeWorkspaceId) {
-        return;
-      }
-      appendLog("event", summarizeEvent(event));
-    });
+    void checkGateway();
+    const unsubscribe = client.subscribeAppServerEvents(
+      (event) => {
+        if (activeWorkspaceId && event.workspace_id !== activeWorkspaceId) {
+          return;
+        }
+        const startedThreadId = extractThreadIdFromEvent(event);
+        if (startedThreadId) {
+          setActiveThreadId(startedThreadId);
+        }
+        appendLog("event", summarizeEvent(event));
+      },
+      {
+        onOpen: () => setGatewayState("online"),
+        onError: () => setGatewayState("offline"),
+      },
+    );
     return unsubscribe;
-  }, [activeWorkspaceId, appendLog, client]);
+  }, [activeWorkspaceId, appendLog, checkGateway, client]);
 
   const connectWorkspace = useCallback(async () => {
     if (!activeWorkspaceId) return;
@@ -133,17 +173,33 @@ export default function WebApp() {
     if (!activeWorkspaceId || !activeThreadId || !text) return;
     setDraft("");
     appendLog("user", text);
+    setBusy(true);
     try {
       await client.sendUserMessage(activeWorkspaceId, activeThreadId, text);
     } catch (error) {
       appendLog("error", error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
     }
   }, [activeThreadId, activeWorkspaceId, appendLog, client, draft]);
 
   return (
     <main className="web-app-shell">
       <aside className="web-sidebar">
-        <h1>CodexMonitor Web</h1>
+        <div className="web-brand">
+          <div>
+            <span className="web-kicker">Local MVP</span>
+            <h1>open-web-codex</h1>
+          </div>
+          <span className={`web-status web-status-${gatewayState}`}>
+            {gatewayState === "checking" ? "Checking" : gatewayState}
+          </span>
+        </div>
+        <p className="web-intro">
+          Run Codex in a local workspace from your browser. This MVP binds the gateway to this
+          machine only.
+        </p>
+        {gatewayVersion ? <p className="web-version">Gateway v{gatewayVersion}</p> : null}
         <label>
           Gateway URL
           <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} />
@@ -153,7 +209,14 @@ export default function WebApp() {
           <input value={token} onChange={(event) => setToken(event.target.value)} type="password" />
         </label>
         <div className="web-actions">
-          <button onClick={saveConnection}>Save</button>
+          <button
+            onClick={() => {
+              saveConnection();
+              void checkGateway();
+            }}
+          >
+            Save &amp; check
+          </button>
           <button onClick={refreshWorkspaces} disabled={busy}>Load workspaces</button>
         </div>
         <label>
@@ -217,7 +280,17 @@ export default function WebApp() {
       <section className="web-chat">
         <div className="web-log">
           {logs.length === 0 ? (
-            <div className="web-empty">Connect to the daemon gateway, load a workspace, start a thread, then send a task.</div>
+            <div className="web-empty">
+              <div>
+                <span className="web-kicker">Ready when you are</span>
+                <h2>Start a real Codex task from the browser</h2>
+                <ol>
+                  <li>Load or add a workspace.</li>
+                  <li>Connect it and start a thread.</li>
+                  <li>Describe the coding task below.</li>
+                </ol>
+              </div>
+            </div>
           ) : (
             logs.map((entry) => (
               <article key={entry.id} className={`web-log-entry web-log-${entry.level}`}>
@@ -239,7 +312,9 @@ export default function WebApp() {
             onChange={(event) => setDraft(event.target.value)}
             placeholder="Ask Codex to perform a task in the selected workspace…"
           />
-          <button disabled={!activeWorkspaceId || !activeThreadId || !draft.trim()}>Send</button>
+          <button disabled={busy || !activeWorkspaceId || !activeThreadId || !draft.trim()}>
+            {busy ? "Working…" : "Send"}
+          </button>
         </form>
       </section>
     </main>

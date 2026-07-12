@@ -7,6 +7,17 @@ type WebClientOptions = {
   token?: string;
 };
 
+export type GatewayHealth = {
+  ok: boolean;
+  name: string;
+  version: string;
+};
+
+type EventSubscriptionStatus = {
+  onOpen?: () => void;
+  onError?: () => void;
+};
+
 function defaultBaseUrl() {
   return import.meta.env.VITE_CODEX_MONITOR_WEB_API ?? "http://127.0.0.1:4733";
 }
@@ -28,20 +39,45 @@ export class CodexMonitorWebClient {
     this.baseUrl = baseUrl.trim().replace(/\/$/, "");
   }
 
-  async rpc<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
-    const response = await fetch(`${this.baseUrl}/api/rpc`, {
-      method: "POST",
+  private async fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      ...init,
       headers: {
-        "content-type": "application/json",
+        ...(init?.body ? { "content-type": "application/json" } : {}),
         ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
+        ...init?.headers,
       },
+    });
+    const body = await response.text();
+    let payload: RpcResponse<T> | T | null = null;
+    if (body) {
+      try {
+        payload = JSON.parse(body) as RpcResponse<T> | T;
+      } catch {
+        throw new Error(`Gateway returned invalid JSON (HTTP ${response.status}).`);
+      }
+    }
+    if (!response.ok) {
+      const rpcPayload = payload as RpcResponse<T> | null;
+      const error = rpcPayload?.error;
+      const message = typeof error === "string" ? error : error?.message;
+      throw new Error(message ?? `Gateway request failed (HTTP ${response.status}).`);
+    }
+    return payload as T;
+  }
+
+  health() {
+    return this.fetchJson<GatewayHealth>("/api/health");
+  }
+
+  async rpc<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+    const payload = await this.fetchJson<RpcResponse<T>>("/api/rpc", {
+      method: "POST",
       body: JSON.stringify({ method, params, clientVersion: "web" }),
     });
-    const payload = (await response.json()) as RpcResponse<T>;
-    if (!response.ok || payload.error) {
+    if (payload.error) {
       const error = payload.error;
-      const message =
-        typeof error === "string" ? error : error?.message ?? response.statusText;
+      const message = typeof error === "string" ? error : error?.message ?? "Gateway RPC failed.";
       throw new Error(message);
     }
     return payload.result as T;
@@ -76,12 +112,17 @@ export class CodexMonitorWebClient {
     });
   }
 
-  subscribeAppServerEvents(onEvent: (event: AppServerEvent) => void) {
+  subscribeAppServerEvents(
+    onEvent: (event: AppServerEvent) => void,
+    status: EventSubscriptionStatus = {},
+  ) {
     const url = new URL(`${this.baseUrl}/api/events`);
     if (this.token) {
       url.searchParams.set("token", this.token);
     }
     const source = new EventSource(url.toString());
+    source.onopen = () => status.onOpen?.();
+    source.onerror = () => status.onError?.();
     source.onmessage = (message) => {
       try {
         const payload = JSON.parse(message.data) as {

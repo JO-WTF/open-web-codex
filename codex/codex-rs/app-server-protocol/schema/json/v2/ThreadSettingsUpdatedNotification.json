@@ -323,6 +323,15 @@
         "modelProvider": {
           "type": "string"
         },
+        "multiAgentMode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MultiAgentMode"
+            }
+          ],
+          "default": "explicitRequestOnly",
+          "description": "Current multi-agent mode for this thread."
+        },
         "personality": {
           "anyOf": [
             {
