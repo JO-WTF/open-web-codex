@@ -891,28 +891,43 @@ body:has(.web-app-shell) {
   line-height: 1.5;
 }
 
-.web-execution-timeline .web-cmdex-card {
+.web-execution-timeline .web-cmdex-card,
+.web-execution-current .web-cmdex-card {
   width: 100%;
   margin: 0;
-  border: 0;
+  border: 1px solid rgb(148 163 184 / 14%);
   border-radius: 6px;
   color: #aeb6c3;
   background: #090c12;
-  box-shadow: inset 0 0 0 1px rgb(148 163 184 / 14%);
+  box-shadow: none;
 }
 
-.web-execution-timeline .web-cmdex-header {
+.web-execution-timeline .web-cmdex-card.is-running,
+.web-execution-current .web-cmdex-card.is-running {
+  border-color: rgb(222 151 82 / 30%);
+  background: #0c0f15;
+}
+
+.web-execution-timeline .web-cmdex-header,
+.web-execution-current .web-cmdex-header {
   min-height: 30px;
   padding: 5px 9px;
   color: #c9d0db;
   background: #090c12;
 }
 
-.web-execution-timeline .web-cmdex-header:hover { background: #10151e; }
-.web-execution-timeline .web-cmdex-cmd { color: #c7ced9; }
+.web-execution-timeline .web-cmdex-card.is-running .web-cmdex-header,
+.web-execution-current .web-cmdex-card.is-running .web-cmdex-header { background: #0c0f15; }
+.web-execution-timeline .web-cmdex-header:hover,
+.web-execution-current .web-cmdex-header:hover { background: #10151e; }
+.web-execution-timeline .web-cmdex-cmd,
+.web-execution-current .web-cmdex-cmd { color: #c7ced9; }
 .web-execution-timeline .web-cmdex-dur,
-.web-execution-timeline .web-cmdex-chevron { color: #788395; }
-.web-execution-timeline .web-cmdex-body {
+.web-execution-timeline .web-cmdex-chevron,
+.web-execution-current .web-cmdex-dur,
+.web-execution-current .web-cmdex-chevron { color: #788395; }
+.web-execution-timeline .web-cmdex-body,
+.web-execution-current .web-cmdex-body {
   border-top-color: rgb(148 163 184 / 18%);
   color: #c3cad5;
   background: #090c12;

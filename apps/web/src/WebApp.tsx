@@ -7,7 +7,7 @@ import Conversation from "./components/Conversation";
 import FileManager from "./components/FileManager";
 import type { GoalInfo } from "./components/Conversation/GoalBanner";
 import type { QueuedFollowUp } from "./components/Conversation/FollowUpQueue";
-import { appendTerminalInteractionOutput, buildWebThreadHistory, commandText, isUserThreadItem, unwrapWebRpcResult, webLogEntryFromThreadItem } from "./utils/webThreadHistory";
+import { appendTerminalInteractionOutput, buildWebThreadHistory, commandText, isUserThreadItem, mergeWebThreadHistory, unwrapWebRpcResult, webLogEntryFromThreadItem } from "./utils/webThreadHistory";
 import { normalizeTokenUsage } from "./features/threads/utils/threadNormalize";
 import { normalizePlanUpdate } from "./features/threads/utils/threadNormalize";
 import { parseWebTurnDiff } from "./utils/webTurnDiff";
@@ -200,6 +200,7 @@ export default function WebApp() {
   const commandStartedAt = useRef<Map<string, number>>(new Map());
   const interruptRequestTurnId = useRef<string | null>(null);
   const queueDispatching = useRef(false);
+  const threadHydrationSequence = useRef(0);
   const appendLog = useCallback(
     (level: LogEntry["level"], text: string, extra?: Partial<Omit<LogEntry, "id" | "level" | "text">>) => {
       setMessages((prev) => [
@@ -1246,6 +1247,8 @@ export default function WebApp() {
   /* ─── Thread management ─── */
 
   const selectThread = useCallback(async (id: string) => {
+    const hydrationSequence = threadHydrationSequence.current + 1;
+    threadHydrationSequence.current = hydrationSequence;
     setActiveThreadId(id);
     setMessages([]);
     setTokenUsage(null);
@@ -1318,7 +1321,8 @@ export default function WebApp() {
         ? { ...thread, turns }
         : { turns, status: obj.status };
       const loaded = buildWebThreadHistory(historyThread, newLogId);
-      setMessages(loaded);
+      if (threadHydrationSequence.current !== hydrationSequence) return;
+      setMessages((current) => mergeWebThreadHistory(loaded, current));
     } catch { /* history load is best-effort */ }
   }, [activeWorkspaceId, client]);
 

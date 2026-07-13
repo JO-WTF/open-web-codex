@@ -1,11 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { appendTerminalInteractionOutput, buildWebThreadHistory, isUserThreadItem, unwrapWebRpcResult } from "./webThreadHistory";
+import { appendTerminalInteractionOutput, buildWebThreadHistory, isUserThreadItem, mergeWebThreadHistory, unwrapWebRpcResult } from "./webThreadHistory";
 
 describe("isUserThreadItem", () => {
   it("recognizes both live and persisted user message shapes", () => {
     expect(isUserThreadItem({ type: "userMessage" })).toBe(true);
     expect(isUserThreadItem({ type: "message", role: "user" })).toBe(true);
     expect(isUserThreadItem({ type: "agentMessage" })).toBe(false);
+  });
+});
+
+describe("mergeWebThreadHistory", () => {
+  it("preserves messages sent while historical turns are loading", () => {
+    expect(mergeWebThreadHistory(
+      [{ id: "old", level: "assistant", text: "Earlier response" }],
+      [{ id: "optimistic", level: "user", text: "New request" }],
+    )).toEqual([
+      { id: "old", level: "assistant", text: "Earlier response" },
+      { id: "optimistic", level: "user", text: "New request" },
+    ]);
+  });
+
+  it("does not duplicate an optimistic user message already persisted", () => {
+    expect(mergeWebThreadHistory(
+      [{ id: "persisted", level: "user", text: "New request" }],
+      [{ id: "optimistic", level: "user", text: "New request" }],
+    )).toHaveLength(1);
   });
 });
 

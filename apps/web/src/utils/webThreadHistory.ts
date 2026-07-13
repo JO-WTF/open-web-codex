@@ -115,6 +115,25 @@ export function isUserThreadItem(item: Record<string, unknown>): boolean {
   return item.type === "userMessage" || item.role === "user";
 }
 
+export function mergeWebThreadHistory(history: LogEntry[], live: LogEntry[]): LogEntry[] {
+  const merged = [...history];
+  for (const entry of live) {
+    const stableIndex = merged.findIndex((candidate) => candidate.id === entry.id);
+    if (stableIndex >= 0) {
+      merged[stableIndex] = entry;
+      continue;
+    }
+    const lastMerged = merged[merged.length - 1];
+    const echoedUserIndex = entry.level === "user" && lastMerged?.level === "user"
+      && lastMerged.text === entry.text
+      ? merged.length - 1
+      : -1;
+    if (echoedUserIndex >= 0) continue;
+    merged.push(entry);
+  }
+  return merged.slice(-200);
+}
+
 export function webLogEntryFromThreadItem(
   item: Record<string, unknown>,
   createId: () => string,

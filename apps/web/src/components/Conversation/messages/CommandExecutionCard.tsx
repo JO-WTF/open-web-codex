@@ -28,10 +28,10 @@ export default function CommandExecutionCard({ command, output, exitCode, status
   const shortCmd = command.replace(/^\/bin\/zsh -lc '/, "").replace(/'$/, "").slice(0, 120);
 
   return (
-    <div className="web-cmdex-card">
+    <div className={`web-cmdex-card${running ? " is-running" : ok ? " is-completed" : " is-failed"}`}>
       <div className="web-cmdex-header" onClick={() => setOpen(!open)}>
         <SquareTerminal size={14} className="web-cmdex-icon" aria-hidden="true" />
-        <span className={`web-cmdex-status ${running ? "web-cmdex-running" : ok ? "web-cmdex-ok" : "web-cmdex-err"}`}>
+        <span className={`web-cmdex-status ${running ? "web-cmdex-running" : ok ? "web-cmdex-ok" : "web-cmdex-err"}`} aria-live={running ? "polite" : undefined}>
           {running && <span className="web-cmdex-spinner" aria-hidden="true" />}
           {running ? "running" : ok ? "\u2713 OK" : `\u2717 ${exitCode == null ? status || "failed" : `exit ${exitCode}`}`}
         </span>

@@ -10,6 +10,8 @@ describe("CommandExecutionCard", () => {
     );
 
     expect(screen.getByText("running")).toBeTruthy();
+    expect(view.container.querySelector(".web-cmdex-status")?.getAttribute("aria-live")).toBe("polite");
+    expect(view.container.querySelector(".web-cmdex-card.is-running")).toBeTruthy();
 
     view.rerender(
       <CommandExecutionCard
@@ -31,6 +33,7 @@ describe("CommandExecutionCard", () => {
     );
     expect(screen.getByText("✓ OK")).toBeTruthy();
     expect(screen.queryByText("running")).toBeNull();
+    expect(view.container.querySelector(".web-cmdex-card.is-completed")).toBeTruthy();
   });
 
   it("does not show an invalid zero duration", () => {
