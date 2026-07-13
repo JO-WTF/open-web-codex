@@ -24,6 +24,7 @@ use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigBatchWriteParams;
+use codex_app_server_protocol::ConfigRequirementsReadResponse;
 use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
 use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
@@ -39,6 +40,7 @@ use codex_app_server_protocol::MemoryResetResponse;
 use codex_app_server_protocol::Model as ApiModel;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
+use codex_app_server_protocol::NewThreadModelDefaults;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewDelivery;
@@ -178,6 +180,7 @@ pub(crate) struct AppServerSession {
     thread_settings_update_supported: bool,
     default_model: Option<String>,
     available_models: Vec<ModelPreset>,
+    managed_new_thread_defaults: Option<NewThreadModelDefaults>,
     external_agent_config_import_completion_pending: AtomicBool,
 }
 
@@ -212,21 +215,6 @@ pub(crate) enum TurnPermissionsOverride {
     LegacySandbox(PermissionProfile),
 }
 
-#[derive(Clone, Copy)]
-enum ModelListRefresh {
-    UseCachedProviderModels,
-    ForceProviderFetch,
-}
-
-impl ModelListRefresh {
-    fn force_refresh(self) -> Option<bool> {
-        match self {
-            Self::UseCachedProviderModels => None,
-            Self::ForceProviderFetch => Some(true),
-        }
-    }
-}
-
 impl AppServerSession {
     pub(crate) fn new(client: AppServerClient, thread_params_mode: ThreadParamsMode) -> Self {
         Self {
@@ -237,6 +225,7 @@ impl AppServerSession {
             thread_settings_update_supported: true,
             default_model: None,
             available_models: Vec::new(),
+            managed_new_thread_defaults: None,
             external_agent_config_import_completion_pending: AtomicBool::new(false),
         }
     }
@@ -275,6 +264,21 @@ impl AppServerSession {
     pub(crate) async fn bootstrap(&mut self, config: &Config) -> Result<AppServerBootstrap> {
         let started_at = Instant::now();
         let account = self.read_account().await?;
+        let requirements_request_id = self.next_request_id();
+        let requirements: ConfigRequirementsReadResponse = self
+            .client
+            .request_typed(ClientRequest::ConfigRequirementsRead {
+                request_id: requirements_request_id,
+                params: None,
+            })
+            .await
+            .map_err(|err| {
+                bootstrap_request_error("configRequirements/read failed during TUI bootstrap", err)
+            })?;
+        self.managed_new_thread_defaults = requirements
+            .requirements
+            .and_then(|requirements| requirements.models)
+            .and_then(|models| models.new_thread);
         let model_request_id = self.next_request_id();
         let models: ModelListResponse = self
             .client
@@ -284,7 +288,6 @@ impl AppServerSession {
                     cursor: None,
                     limit: None,
                     include_hidden: Some(true),
-                    force_refresh: None,
                 },
             })
             .await
@@ -366,41 +369,8 @@ impl AppServerSession {
         })
     }
 
-    pub(crate) async fn fetch_available_models(&mut self) -> Result<Vec<ModelPreset>> {
-        self.fetch_available_models_for(ModelListRefresh::UseCachedProviderModels)
-            .await
-    }
-
-    pub(crate) async fn force_fetch_available_models(&mut self) -> Result<Vec<ModelPreset>> {
-        self.fetch_available_models_for(ModelListRefresh::ForceProviderFetch)
-            .await
-    }
-
-    async fn fetch_available_models_for(
-        &mut self,
-        refresh: ModelListRefresh,
-    ) -> Result<Vec<ModelPreset>> {
-        let model_request_id = self.next_request_id();
-        let models: ModelListResponse = self
-            .client
-            .request_typed(ClientRequest::ModelList {
-                request_id: model_request_id,
-                params: ModelListParams {
-                    cursor: None,
-                    limit: None,
-                    include_hidden: Some(true),
-                    force_refresh: refresh.force_refresh(),
-                },
-            })
-            .await
-            .wrap_err("model/list failed while refreshing provider models")?;
-        let available_models = models
-            .data
-            .into_iter()
-            .map(model_preset_from_api_model)
-            .collect::<Vec<_>>();
-        self.available_models = available_models.clone();
-        Ok(available_models)
+    pub(crate) fn managed_new_thread_defaults(&self) -> Option<&NewThreadModelDefaults> {
+        self.managed_new_thread_defaults.as_ref()
     }
 
     /// Fetches the current account info without refreshing the auth token.
@@ -809,7 +779,6 @@ impl AppServerSession {
         permissions_override: TurnPermissionsOverride,
         workspace_roots: &[AbsolutePathBuf],
         model: String,
-        model_provider: String,
         effort: Option<codex_protocol::openai_models::ReasoningEffort>,
         summary: Option<codex_protocol::config_types::ReasoningSummary>,
         service_tier: Option<Option<String>>,
@@ -837,7 +806,6 @@ impl AppServerSession {
                     sandbox_policy,
                     permissions,
                     model: Some(model),
-                    model_provider: Some(model_provider),
                     service_tier,
                     effort,
                     summary,
@@ -1239,7 +1207,7 @@ pub(crate) fn status_account_display_from_auth_mode(
             email: None,
             plan: plan_type.map(plan_type_display_name),
         }),
-        Some(AuthMode::BedrockApiKey) => None,
+        Some(AuthMode::Headers) | Some(AuthMode::BedrockApiKey) => None,
         None => None,
     }
 }
@@ -2381,6 +2349,7 @@ mod tests {
                 parent_thread_id: None,
                 preview: "hello".to_string(),
                 ephemeral: false,
+                history_mode: Default::default(),
                 model_provider: "openai".to_string(),
                 created_at: 1,
                 updated_at: 2,

@@ -26,6 +26,16 @@ scripts/                  Monorepo and upstream-sync tooling
 
 ## Get started
 
+Run the current local Web MVP:
+
+```bash
+make mvp
+```
+
+Then open `http://127.0.0.1:1420/web`. The launcher builds/starts the loopback
+gateway and Web client together. See [the MVP runbook](docs/mvp-runbook.md) for
+the browser flow, binary override and known limitations.
+
 Web application:
 
 ```bash

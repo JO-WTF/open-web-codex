@@ -1,0 +1,28 @@
+[package]
+name = "open-web-codex-server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+open-web-codex-platform-contracts = { path = "../crates/platform-contracts" }
+open-web-codex-platform-store = { path = "../crates/platform-store" }
+open-web-codex-adapter = { path = "../crates/codex-adapter" }
+
+serde.workspace = true
+serde_json.workspace = true
+futures-util = "0.3"
+tokio.workspace = true
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+hex.workspace = true
+rand.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+sqlx.workspace = true

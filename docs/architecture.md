@@ -1,73 +1,162 @@
 # Architecture
 
+## Architectural objective
+
+`open-web-codex` is a multi-user Web control plane around the official Codex
+runtime. It is not a browser reimplementation of Codex. The design maximizes
+reuse of `codex/`, keeps product-specific Runtime changes behind narrow
+app-server contracts, and preserves regular subtree synchronization with
+`openai/codex/main`.
+
+The initial deployable is a modular monolith with PostgreSQL and colocated
+Profile Host/Runner processes. Boundaries are interfaces and ownership rules,
+not a requirement to create network microservices. Components separate only
+when measured capacity or isolation needs justify it.
+
 ## System shape
 
 ```text
 Browser
-  -> Web API and authenticated WebSocket
-  -> Task / Run / Approval services
-  -> Profile Host
-  -> Codex app-server
-  -> Codex runtime capabilities
+  -> authenticated platform HTTP + WebSocket API
+  -> authorization / Task / Run / Approval services
+  -> Profile Host ---------------------> persistent per-user Profile Home
+  -> Codex app-server                   -> Thread / Turn / memory / agents
+  -> event normalizer and durable projection
 
-Runner
-  -> repository mirror
-  -> per-Run worktree
-  -> sandboxed command and Git operations
+Run orchestrator
+  -> repository mirror (read-only to Agent)
+  -> per-Run worktree (authorized writable workspace)
+  -> Runner sandbox / Git delivery
+
+Codex build
+  -> generated protocol Schema + TypeScript
+  -> generated Capability Manifest + fixtures + digest
+  -> Web feature policy and compatibility gate
 ```
 
-The first deployment is a modular monolith with PostgreSQL and colocated Profile
-Host/Runner processes. The boundaries are interfaces, not mandatory network
-services. Components may be separated only after capacity or isolation data
-justifies it.
+The checked-in repository currently contains two bridge paths:
+
+- `apps/web/src` plus the loopback daemon RPC/SSE Gateway is the local MVP and
+  migration source. It is single-user, accepts server-local paths and is not a
+  production boundary.
+- `apps/web/server`, `apps/web/crates` and `apps/web/migrations` are the emerging
+  multi-user platform. Until it removes raw `/api/rpc`, query-token SSE and
+  permissive CORS, it is also a prototype rather than an externally exposed API.
 
 ## Facts and ownership
 
-| Fact | Owner |
-| --- | --- |
-| User, organization, membership and session | Web platform database |
-| Project, Task, Run, lease, approval and audit | Web platform database |
-| Thread, Turn, items, compaction and agent context | Codex Profile/app-server |
-| Model Provider and runtime model catalog | Codex Profile/app-server |
-| Agent scheduling and parent/child execution | Codex runtime |
-| Repository object data and worktree contents | Git/Runner |
-| Browser projection and reconnect cursor | Web platform cache/database |
+| Fact | Authoritative owner | Web may persist |
+| --- | --- | --- |
+| User, organization, membership and session | Web platform database | complete platform record |
+| Project, Task, Run, lease, approval and audit | Web platform database | complete platform record |
+| Profile ownership and process health | Web database + Profile Host | mapping, health, build and capability snapshot |
+| Thread, Turn, items, compaction and model-visible context | Codex Profile/app-server | opaque IDs, event projection and search index |
+| Provider config and runtime model catalog | Codex Profile/app-server | secret references, policy and display cache scoped to Profile |
+| Agent scheduling and parent/child execution | Codex runtime | observable trajectory and status projection |
+| Skills, plugins, MCP and memory state | Codex Profile/app-server | permissions, audit and capability-gated projection |
+| Repository objects and worktree contents | Git/Runner | metadata, status, diff summary and artifact references |
 
-The platform may index Codex identifiers and cache event projections. It must
-recover model-visible history from Codex rather than treating those projections
-as a second agent history.
+The platform must recover model-visible history from Codex. Event projections
+are rebuildable UI/read models and never become a second Thread store, memory
+engine or agent scheduler.
 
-## Isolation
+## Multi-user isolation model
+
+The authorization chain is:
+
+```text
+session -> user -> organization membership -> project permission
+        -> task/run -> profile/thread -> workspace/event/approval/artifact
+```
 
 - One member has one persistent personal Profile by default.
-- A Profile owns a dedicated `CODEX_HOME`, credentials, Provider configuration,
-  threads, memory, skills, plugins, and MCP configuration.
-- One Profile has at most one primary app-server process at a time.
-- A Profile may execute multiple authorized Tasks, subject to measured Codex
-  concurrency limits.
+- A Profile has a dedicated `CODEX_HOME`, credentials, Provider configuration,
+  Threads, memory, skills, plugins and MCP configuration.
+- One Profile has at most one primary app-server process. Cross-process locking
+  and a process registry enforce the invariant.
+- A Profile may execute multiple authorized Tasks only within measured Runtime
+  concurrency limits. It never shares a Home with another user.
 - Every Run uses a distinct writable Git worktree. Repository mirrors are not
-  agent-writable.
-- Authorization of server paths belongs to the Profile Host and Runner. Raw
-  filesystem paths are never accepted from a normal browser user.
+  Agent-writable, and a successor Run may continue a Thread without reusing an
+  unrelated writable directory.
+- Profile Host validates Profile/User/Thread/Workspace relationships. Runner
+  validates Project/Run/Workspace relationships. Normal browser users never
+  submit trusted filesystem paths.
+- Cache, subscription, model and secret keys include their user/Profile scope.
+  Cross-user and guessed-ID denial tests are release gates.
 
-## Internal contract
+## Runtime bridge
 
-Codex produces a build-specific bundle containing:
+Codex produces a build-specific contract bundle containing:
 
-1. JSON Schema and TypeScript definitions generated by app-server.
-2. A Capability Manifest with method groups, versions, limits, experimental
-   status, and build identity.
+1. JSON Schema and TypeScript definitions generated by app-server protocol.
+2. A Capability Manifest derived from the build's method registry,
+   experimental annotations, limits and build identity.
 3. Protocol fixtures and stable structured error metadata.
-4. The Codex commit, target, binary digest, and compatibility notes.
+4. Codex commit, target, binary digest and compatibility notes.
 
-The Web repository consumes that bundle by digest. Product policy separately
-maps UI modules to required capabilities. Generated server facts and desired
-product policy must never share the same hand-maintained fixture.
+The Web build consumes the bundle by digest. A separate Web feature policy maps
+product features to capability IDs and minimum versions; it cannot claim a
+server supports a feature. A capability is enabled only when generated
+contracts, offline fixtures and a real app-server smoke test agree.
 
-## Provider model
+Browser DTOs are stable platform resources, not passthrough JSON-RPC. Raw
+app-server request IDs, Profile paths, local paths, credentials and unknown
+protocol payloads remain inside the Host/adapter boundary. Unknown Runtime
+events may be retained for diagnostics but cannot be exposed as an unsafe public
+API or crash the event stream.
 
-Third-party Providers are first-class Profile configuration. Codex owns provider
-transport, model discovery, wire API translation, runtime selection, and context
-window semantics. The Web platform owns secret references, permissions, forms,
-audit, and feature gating. Provider API keys are injected into the Profile Host
-environment and are never returned to the browser.
+## Primary runtime flows
+
+### Create and run a Task
+
+1. Platform authenticates the session and authorizes project/task creation.
+2. A transaction creates the Task and queued Run using an idempotency key.
+3. Scheduler leases the Run; Runner prepares mirror and isolated worktree.
+4. Profile Host locks/starts the user's Profile, verifies contract compatibility
+   and starts or resumes the mapped Codex Thread in the authorized workspace.
+5. Runtime events are normalized, assigned a per-Task monotonic sequence and
+   persisted before browser fan-out.
+6. Terminal state is reconciled across database, Codex Profile and Git. No Run
+   remains `running` without a valid lease/heartbeat and recoverable owner.
+
+### Approval or structured input
+
+1. Profile Host receives a Codex Server Request and persists an internal mapping
+   to Profile/Task/Run/Thread before notification.
+2. Platform filters recipients by resource permission and approval policy.
+3. The first valid decision wins through compare-and-swap semantics.
+4. Host responds to the still-live Codex request; restart, expiry or Run
+   termination produces an explicit cancelled/expired state instead of reuse.
+
+### Commit and push
+
+Runner revalidates workspace ownership and Git status immediately before the
+operation. Commit and Push are explicit user actions with audit records. Force
+Push, implicit Merge and automatic remote branch deletion are outside the
+product contract.
+
+## Upstream synchronization boundary
+
+`codex/` is a Git subtree tracking official `openai/codex/main`. Before touching
+high-churn Runtime files, run `scripts/codex-upstream-status.sh`. Official
+updates use `scripts/sync-codex-upstream.sh --apply` on a dedicated
+`codex/sync-upstream-*` branch.
+
+Prefer, in order:
+
+1. consume an existing upstream app-server method;
+2. add generated protocol/manifest metadata around upstream structure;
+3. add the smallest isolated Runtime seam with scoped tests;
+4. implement platform policy outside `codex/`.
+
+Never fork Thread history, compaction, memory, multi-agent scheduling, Skills,
+Plugins or MCP into the Web platform for short-term convenience.
+
+## Current implementation boundary
+
+The live capability and delivery status are intentionally not duplicated here.
+Use `docs/capability-baseline.md` for verified Runtime/platform facts and
+`docs/development-plan.md` for completed and next work. ADRs under `docs/adr/`
+record accepted implementation choices without redefining these ownership
+rules.

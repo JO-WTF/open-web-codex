@@ -74,7 +74,10 @@ async fn wait_for_model_available(manager: &SharedModelsManager, slug: &str) -> 
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         if let Some(model) = manager
-            .list_models(RefreshStrategy::Online)
+            .list_models(
+                RefreshStrategy::Online,
+                codex_core::test_support::default_http_client_factory(),
+            )
             .await
             .iter()
             .find(|model| model.model == slug)
@@ -125,7 +128,6 @@ async fn response_for_remote_model(
         &test.codex,
         ThreadSettingsOverrides {
             model: Some(model_slug),
-            model_provider_id: None,
             ..Default::default()
         },
     )
@@ -199,9 +201,8 @@ async fn remote_tool_mode_selector_overrides_feature_flags() -> Result<()> {
             codex_code_mode::PUBLIC_TOOL_NAME.to_string(),
             codex_code_mode::WAIT_TOOL_NAME.to_string(),
             "request_user_input".to_string(),
-            // Hosted Responses tools.
+            // Hosted Responses tool.
             "web_search".to_string(),
-            "image_generation".to_string(),
         ]
     );
 
@@ -278,7 +279,6 @@ async fn unsupported_code_mode_warning_is_emitted_each_turn() -> Result<()> {
         &test.codex,
         ThreadSettingsOverrides {
             model: Some(model_slug.to_string()),
-            model_provider_id: None,
             ..Default::default()
         },
     )
@@ -407,7 +407,6 @@ async fn remote_multi_agent_selector_uses_model_selected_before_first_turn() -> 
         &test.codex,
         ThreadSettingsOverrides {
             model: Some(CHILD_MODEL.to_string()),
-            model_provider_id: None,
             ..Default::default()
         },
     )

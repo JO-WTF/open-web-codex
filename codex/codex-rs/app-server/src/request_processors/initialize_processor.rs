@@ -10,6 +10,7 @@ use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::default_client::set_default_originator;
 
 use super::*;
+use codex_app_server_protocol::build_manifest;
 use crate::message_processor::ConnectionSessionState;
 use crate::message_processor::InitializedConnectionSessionState;
 
@@ -140,6 +141,7 @@ impl InitializeRequestProcessor {
             codex_home,
             platform_family: std::env::consts::FAMILY.to_string(),
             platform_os: std::env::consts::OS.to_string(),
+            capability_manifest: Some(build_manifest()),
         };
 
         self.outgoing

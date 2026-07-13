@@ -1,0 +1,16 @@
+[package]
+name = "open-web-codex-adapter"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+async-trait = "0.1"
+tracing = { workspace = true }
+reqwest = { workspace = true }
+futures-util = "0.3"

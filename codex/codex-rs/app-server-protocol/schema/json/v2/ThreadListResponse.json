@@ -463,6 +463,18 @@
     },
     "McpToolCallAppContext": {
       "properties": {
+        "actionName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "appName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "connectorId": {
           "type": "string"
         },
@@ -473,6 +485,12 @@
           ]
         },
         "resourceUri": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "templateId": {
           "type": [
             "string",
             "null"
@@ -847,6 +865,17 @@
           "description": "Whether the thread is ephemeral and should not be materialized on disk.",
           "type": "boolean"
         },
+        "extra": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadExtra"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional implementation-specific thread data."
+        },
         "forkedFromId": {
           "description": "Source thread id when this thread was created by forking another thread.",
           "type": [
@@ -976,6 +1005,13 @@
     "ThreadExtra": {
       "description": "Extra app-server data for a thread.",
       "type": "object"
+    },
+    "ThreadHistoryMode": {
+      "enum": [
+        "legacy",
+        "paginated"
+      ],
+      "type": "string"
     },
     "ThreadId": {
       "type": "string"

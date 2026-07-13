@@ -473,6 +473,21 @@ pub(super) async fn try_handle(
             };
             Some(state.remember_approval_rule(workspace_id, command).await)
         }
+        "resolve_approval" => {
+            let workspace_id = match parse_string(params, "workspaceId") {
+                Ok(value) => value,
+                Err(err) => return Some(Err(err)),
+            };
+            let thread_id = match parse_string(params, "threadId") {
+                Ok(value) => value,
+                Err(err) => return Some(Err(err)),
+            };
+            let decision = match parse_string(params, "decision") {
+                Ok(value) => value,
+                Err(err) => return Some(Err(err)),
+            };
+            Some(state.resolve_approval(workspace_id, thread_id, decision).await)
+        }
         "codex_doctor" => {
             let codex_bin = parse_optional_string(params, "codexBin");
             let codex_args = parse_optional_string(params, "codexArgs");

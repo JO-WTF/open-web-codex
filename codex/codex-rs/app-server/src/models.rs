@@ -1,19 +1,22 @@
+use std::sync::Arc;
+
 use codex_app_server_protocol::Model;
 use codex_app_server_protocol::ModelServiceTier;
 use codex_app_server_protocol::ModelUpgradeInfo;
 use codex_app_server_protocol::ReasoningEffortOption;
+use codex_core::ThreadManager;
+use codex_http_client::HttpClientFactory;
 use codex_models_manager::manager::RefreshStrategy;
-use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 
 pub async fn supported_models(
-    models_manager: SharedModelsManager,
+    thread_manager: Arc<ThreadManager>,
     include_hidden: bool,
-    refresh_strategy: RefreshStrategy,
+    http_client_factory: HttpClientFactory,
 ) -> Vec<Model> {
-    models_manager
-        .list_models(refresh_strategy)
+    thread_manager
+        .list_models(RefreshStrategy::OnlineIfUncached, http_client_factory)
         .await
         .into_iter()
         .filter(|preset| include_hidden || preset.show_in_picker)

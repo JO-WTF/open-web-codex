@@ -16,7 +16,7 @@ pub(crate) fn resolve_default_codex_home() -> Option<PathBuf> {
             return Some(path);
         }
     }
-    resolve_home_dir().map(|home| home.join(".codex"))
+    resolve_home_dir().map(|home| home.join(".open-web-codex"))
 }
 
 fn normalize_codex_home(value: &str) -> Option<PathBuf> {
