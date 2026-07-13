@@ -7,7 +7,7 @@ import Conversation from "./components/Conversation";
 import FileManager from "./components/FileManager";
 import type { GoalInfo } from "./components/Conversation/GoalBanner";
 import type { QueuedFollowUp } from "./components/Conversation/FollowUpQueue";
-import { appendTerminalInteractionOutput, buildWebThreadHistory, commandText, unwrapWebRpcResult } from "./utils/webThreadHistory";
+import { appendTerminalInteractionOutput, buildWebThreadHistory, commandText, unwrapWebRpcResult, webLogEntryFromThreadItem } from "./utils/webThreadHistory";
 import { normalizeTokenUsage } from "./features/threads/utils/threadNormalize";
 import { normalizePlanUpdate } from "./features/threads/utils/threadNormalize";
 import { parseWebTurnDiff } from "./utils/webTurnDiff";
@@ -29,6 +29,8 @@ export type LogEntry = {
   toolType?: string;
   toolTitle?: string;
   toolStatus?: string;
+  toolDetail?: string;
+  toolOutput?: string;
   filePath?: string;
   diffTitle?: string;
   diffLines?: { type: "add" | "del" | "ctx"; text: string }[];
@@ -190,6 +192,7 @@ export default function WebApp() {
   const streamingLogIds = useRef<Map<string, string>>(new Map());
   const turnDiffLogIds = useRef<Map<string, string>>(new Map());
   const commandLogIds = useRef<Map<string, string>>(new Map());
+  const toolLogIds = useRef<Map<string, string>>(new Map());
   const commandOutputs = useRef<Map<string, string>>(new Map());
   const commandStartedAt = useRef<Map<string, number>>(new Map());
   const interruptRequestTurnId = useRef<string | null>(null);
@@ -531,7 +534,16 @@ export default function WebApp() {
               cmdActions,
             };
           }
-          return null;
+          const entry = webLogEntryFromThreadItem(item, newLogId);
+          const existingId = completedItemId ? toolLogIds.current.get(completedItemId) : undefined;
+          if (entry && existingId) {
+            setMessages((previous) => previous.map((candidate) => candidate.id === existingId
+              ? { ...entry, id: existingId, streaming: false }
+              : candidate));
+            if (completedItemId) toolLogIds.current.delete(completedItemId);
+            return null;
+          }
+          return entry;
         }
 
         case "item/started": {
@@ -585,6 +597,15 @@ export default function WebApp() {
                 streaming: true,
               },
             ]);
+            return null;
+          }
+          if (itemType) {
+            const entry = webLogEntryFromThreadItem(item as Record<string, unknown>, newLogId);
+            if (!entry) return null;
+            const id = startedItemId || entry.id;
+            if (startedItemId) toolLogIds.current.set(startedItemId, id);
+            setMessages((previous) => [...previous.slice(-199), { ...entry, id, streaming: true }]);
+            return null;
           }
           return null;
         }

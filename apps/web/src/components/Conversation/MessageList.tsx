@@ -22,6 +22,8 @@ export type MessageEntry = LogEntry & {
   toolType?: string;
   toolTitle?: string;
   toolStatus?: string;
+  toolDetail?: string;
+  toolOutput?: string;
   filePath?: string;
   diffTitle?: string;
   diffLines?: DiffLine[];
@@ -109,6 +111,8 @@ export default function MessageList({ items, thinking = false, onOpenFile, works
               title={entry.toolTitle ?? ""}
               status={entry.toolStatus ?? ""}
               filePath={entry.filePath}
+              detail={entry.toolDetail}
+              output={entry.toolOutput}
             />
           );
         }
