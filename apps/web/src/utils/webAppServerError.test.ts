@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isWebAppServerRecoveryEvent, parseWebAppServerError } from "./webAppServerError";
+import { isWebAppServerRecoveryEvent, parseCodexStderr, parseWebAppServerError } from "./webAppServerError";
 
 describe("isWebAppServerRecoveryEvent", () => {
   it.each([
@@ -41,5 +41,22 @@ describe("parseWebAppServerError", () => {
       recoverable: false,
       text: "Authentication failed",
     });
+  });
+});
+
+describe("parseCodexStderr", () => {
+  it("turns structured sampling retry warnings into a reconnect status", () => {
+    expect(parseCodexStderr({
+      message: JSON.stringify({
+        level: "WARN",
+        fields: { message: "stream disconnected - retrying sampling request (1/5 in 217ms)..." },
+        target: "codex_core::responses_retry",
+      }),
+    })).toEqual({ recoverable: true, text: "Connection interrupted. Reconnecting (1/5)…" });
+  });
+
+  it("ignores unrelated stderr records", () => {
+    expect(parseCodexStderr({ message: JSON.stringify({ level: "INFO", fields: { message: "ready" } }) }))
+      .toBeNull();
   });
 });

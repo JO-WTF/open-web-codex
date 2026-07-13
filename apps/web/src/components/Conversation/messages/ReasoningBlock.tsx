@@ -24,6 +24,7 @@ export default function ReasoningBlock({ text, summary, meta, streaming = false 
   if (!trimmedText) return null;
 
   const genericText = /^(reasoning completed|reasoning in progress|reasoning)$/i.test(trimmedText);
+  if (genericText && !streaming && !summary?.trim()) return null;
   const usefulSummary = summary && !/^(reasoning completed|reasoning in progress|reasoning)$/i.test(summary.trim())
     ? summary.trim()
     : "";

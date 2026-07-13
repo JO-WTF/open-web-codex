@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { appendTerminalInteractionOutput, buildWebThreadHistory, unwrapWebRpcResult } from "./webThreadHistory";
+import { appendTerminalInteractionOutput, buildWebThreadHistory, isUserThreadItem, unwrapWebRpcResult } from "./webThreadHistory";
+
+describe("isUserThreadItem", () => {
+  it("recognizes both live and persisted user message shapes", () => {
+    expect(isUserThreadItem({ type: "userMessage" })).toBe(true);
+    expect(isUserThreadItem({ type: "message", role: "user" })).toBe(true);
+    expect(isUserThreadItem({ type: "agentMessage" })).toBe(false);
+  });
+});
 
 describe("appendTerminalInteractionOutput", () => {
   it("ignores empty terminal polls", () => {

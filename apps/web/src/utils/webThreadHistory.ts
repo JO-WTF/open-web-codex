@@ -111,6 +111,10 @@ function diffLines(value: string) {
     .slice(0, 500);
 }
 
+export function isUserThreadItem(item: Record<string, unknown>): boolean {
+  return item.type === "userMessage" || item.role === "user";
+}
+
 export function webLogEntryFromThreadItem(
   item: Record<string, unknown>,
   createId: () => string,

@@ -27,9 +27,9 @@ describe("ReasoningBlock", () => {
     expect(screen.queryByText("Reasoning completed")).toBeNull();
   });
 
-  it("renders an empty completed reasoning item as a single row", () => {
-    render(<ReasoningBlock text="Reasoning completed" />);
+  it("does not render a completed reasoning item without visible content", () => {
+    const view = render(<ReasoningBlock text="Reasoning completed" />);
 
-    expect(screen.getAllByText("Reasoning")).toHaveLength(1);
+    expect(view.container.innerHTML).toBe("");
   });
 });

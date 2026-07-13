@@ -17,7 +17,10 @@ export default function ExecutionGroup({ items, active, startedAt, activeItem, t
   const [fallbackStartedAt] = useState(Date.now);
   const [elapsed, setElapsed] = useState(0);
   const toolCount = useMemo(() => items.filter((item) => item.kind && item.kind !== "reasoning").length, [items]);
-  const messageCount = useMemo(() => items.filter((item) => item.level === "assistant" || item.kind === "reasoning").length, [items]);
+  const messageCount = useMemo(() => items.filter((item) => item.level === "assistant"
+    || (item.kind === "reasoning"
+      && (!/^(reasoning completed|reasoning in progress|reasoning)$/i.test(item.text.trim())
+        || Boolean(item.reasoningSummary?.trim())))).length, [items]);
 
   useEffect(() => {
     if (!active) return;

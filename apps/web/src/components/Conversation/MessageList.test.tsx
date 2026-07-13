@@ -91,6 +91,25 @@ describe("MessageList", () => {
     expect(timeline?.textContent).not.toContain("The project is ready.");
   });
 
+  it("renders tool calls as timeline siblings and drops empty reasoning wrappers", () => {
+    const view = render(
+      <MessageList
+        items={[
+          { id: "user-1", level: "user", text: "Check the weather" },
+          { id: "reasoning-empty", level: "system", kind: "reasoning", text: "Reasoning completed" },
+          { id: "search-1", level: "info", kind: "tool", text: "Web search", toolType: "Search", toolTitle: "weather Shenzhen", toolStatus: "completed" },
+          { id: "final-1", level: "assistant", text: "It is sunny." },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "1 tool call, 0 messages" }));
+    const toolCard = screen.getByText("weather Shenzhen").closest(".web-tool-card");
+    expect(toolCard).toBeTruthy();
+    expect(toolCard?.closest(".web-reasoning")).toBeNull();
+    expect(view.container.querySelector(".web-reasoning")).toBeNull();
+  });
+
   it("renders live turn activity at the top level, then collapses it when the final answer completes", () => {
     const liveItems = [
       { id: "user-1", level: "user" as const, text: "Inspect the project" },

@@ -3,6 +3,15 @@ export type WebAppServerError = {
   text: string;
 };
 
+function reconnectStatus(message: string, details = ""): WebAppServerError | null {
+  const combined = `${message} ${details}`;
+  const progress = combined.match(/(?:Reconnecting\.\.\.|retrying sampling request)\s*\(?(\d+)\s*\/\s*(\d+)/i);
+  const disconnected = /stream disconnected|websocket request/i.test(combined);
+  if (!progress && !disconnected) return null;
+  const suffix = progress ? ` (${progress[1]}/${progress[2]})` : "";
+  return { recoverable: true, text: `Connection interrupted. Reconnecting${suffix}…` };
+}
+
 export function isWebAppServerRecoveryEvent(method: string): boolean {
   return method === "turn/started"
     || method === "turn/completed"
@@ -22,16 +31,29 @@ export function parseWebAppServerError(params: Record<string, unknown>): WebAppS
   const codexInfo = error.codexErrorInfo && typeof error.codexErrorInfo === "object"
     ? error.codexErrorInfo as Record<string, unknown>
     : null;
-  const reconnectMatch = `${message} ${details}`.match(/Reconnecting\.\.\.\s*(\d+)\s*\/\s*(\d+)/i);
-  const disconnected = Boolean(codexInfo?.responseStreamDisconnected) || /stream disconnected|websocket request/i.test(details);
-
-  if (reconnectMatch || disconnected) {
-    const progress = reconnectMatch ? ` (${reconnectMatch[1]}/${reconnectMatch[2]})` : "";
-    return { recoverable: true, text: `Connection interrupted. Reconnecting${progress}…` };
+  const reconnect = reconnectStatus(message, details);
+  if (reconnect || codexInfo?.responseStreamDisconnected) {
+    return reconnect ?? { recoverable: true, text: "Connection interrupted. Reconnecting…" };
   }
 
   return {
     recoverable: false,
     text: message || details || "The runtime reported an unknown error.",
   };
+}
+
+export function parseCodexStderr(params: Record<string, unknown>): WebAppServerError | null {
+  const raw = typeof params.message === "string" ? params.message.trim() : "";
+  if (!raw) return null;
+  let message = raw;
+  try {
+    const record = JSON.parse(raw) as Record<string, unknown>;
+    const fields = record.fields && typeof record.fields === "object"
+      ? record.fields as Record<string, unknown>
+      : null;
+    if (typeof fields?.message === "string") message = fields.message;
+  } catch {
+    // Plain-text stderr from older runtimes is still supported.
+  }
+  return reconnectStatus(message);
 }

@@ -7,11 +7,11 @@ import Conversation from "./components/Conversation";
 import FileManager from "./components/FileManager";
 import type { GoalInfo } from "./components/Conversation/GoalBanner";
 import type { QueuedFollowUp } from "./components/Conversation/FollowUpQueue";
-import { appendTerminalInteractionOutput, buildWebThreadHistory, commandText, unwrapWebRpcResult, webLogEntryFromThreadItem } from "./utils/webThreadHistory";
+import { appendTerminalInteractionOutput, buildWebThreadHistory, commandText, isUserThreadItem, unwrapWebRpcResult, webLogEntryFromThreadItem } from "./utils/webThreadHistory";
 import { normalizeTokenUsage } from "./features/threads/utils/threadNormalize";
 import { normalizePlanUpdate } from "./features/threads/utils/threadNormalize";
 import { parseWebTurnDiff } from "./utils/webTurnDiff";
-import { isWebAppServerRecoveryEvent, parseWebAppServerError } from "./utils/webAppServerError";
+import { isWebAppServerRecoveryEvent, parseCodexStderr, parseWebAppServerError } from "./utils/webAppServerError";
 import { parseWebUserInputRequest } from "./utils/webUserInput";
 import "./styles/web.css";
 import "./styles/web-refactor.css";
@@ -232,6 +232,29 @@ export default function WebApp() {
       }
 
       switch (method) {
+        case "codex/stderr": {
+          const parsed = parseCodexStderr(params);
+          if (!parsed) return null;
+          setThinking(true);
+          setThreadStatus("reconnecting");
+          setMessages((previous) => {
+            const existing = previous.findIndex((entry) => entry.kind === "connection");
+            if (existing < 0) {
+              return [...previous.slice(-199), {
+                id: newLogId(),
+                level: "info" as const,
+                text: parsed.text,
+                kind: "connection" as const,
+                streaming: true,
+              }];
+            }
+            return previous.map((entry, index) => index === existing
+              ? { ...entry, text: parsed.text, streaming: true }
+              : entry);
+          });
+          return null;
+        }
+
         case "turn/started":
           setThinking(true);
           setTurnStartedAt(() => {
@@ -264,14 +287,16 @@ export default function WebApp() {
           setStopping(false);
           interruptRequestTurnId.current = null;
           setMessages((previous) => previous
-            .filter((entry) => entry.kind !== "connection" && !(entry.level === "system" && entry.text === "Thinking..."))
+            .filter((entry) => entry.kind !== "connection"
+              && !(entry.level === "system" && entry.text === "Thinking...")
+              && !(entry.kind === "reasoning"
+                && /^(reasoning completed|reasoning in progress|reasoning)$/i.test(entry.text.trim())
+                && !entry.reasoningSummary?.trim()))
             .map((entry) => entry.streaming
               ? {
                   ...entry,
                   streaming: false,
-                  text: entry.kind === "reasoning" && entry.text === "Reasoning in progress"
-                    ? "Reasoning completed"
-                    : entry.text,
+                  text: entry.text,
                 }
               : entry));
           return null;
@@ -415,7 +440,7 @@ export default function WebApp() {
             ? item.content.map((part) => String(part)).join("\n\n").trim()
             : typeof item.content === "string" ? item.content.trim() : "";
 
-          if (role === "user") return null;
+          if (role === "user" || isUserThreadItem(item)) return null;
 
           if (role === "assistant" || itemType2 === "agentMessage") {
             if (completedItemId && streamingTexts.current.has(completedItemId)) {
@@ -457,24 +482,26 @@ export default function WebApp() {
               const acc = streamingTexts.current.get(key) ?? "";
               const eid = streamingLogIds.current.get(key);
               if (eid) {
-                const text = acc.trim() || completedReasoningContent || completedReasoningSummary || "Reasoning completed";
-                setMessages((prev) =>
-                  prev.map((e) => (e.id === eid ? {
-                    ...e,
-                    text,
-                    reasoningSummary: completedReasoningSummary || reasoningSummaries.current.get(key),
-                    streaming: false,
-                  } : e)),
-                );
+                const text = acc.trim() || completedReasoningContent || completedReasoningSummary;
+                const summary = completedReasoningSummary || reasoningSummaries.current.get(key);
+                setMessages((prev) => text || summary
+                  ? prev.map((e) => (e.id === eid ? {
+                      ...e,
+                      text: text || summary || "",
+                      reasoningSummary: summary,
+                      streaming: false,
+                    } : e))
+                  : prev.filter((e) => e.id !== eid));
               }
               streamingTexts.current.delete(key);
               reasoningSummaries.current.delete(key);
               streamingLogIds.current.delete(key);
               if (eid) return null;
             }
+            if (!completedReasoningContent && !completedReasoningSummary) return null;
             return {
               level: "system" as const,
-              text: completedReasoningContent || completedReasoningSummary || "Reasoning completed",
+              text: completedReasoningContent || completedReasoningSummary,
               reasoningSummary: completedReasoningSummary || undefined,
               kind: "reasoning" as const,
               streaming: false,
@@ -508,24 +535,26 @@ export default function WebApp() {
               const acc = streamingTexts.current.get(key) ?? "";
               const eid = streamingLogIds.current.get(key);
               if (eid) {
-                const text = acc.trim() || completedReasoningContent || completedReasoningSummary || "Reasoning completed";
-                setMessages((prev) =>
-                  prev.map((e) => (e.id === eid ? {
-                    ...e,
-                    text,
-                    reasoningSummary: completedReasoningSummary || reasoningSummaries.current.get(key),
-                    streaming: false,
-                  } : e)),
-                );
+                const text = acc.trim() || completedReasoningContent || completedReasoningSummary;
+                const summary = completedReasoningSummary || reasoningSummaries.current.get(key);
+                setMessages((prev) => text || summary
+                  ? prev.map((e) => (e.id === eid ? {
+                      ...e,
+                      text: text || summary || "",
+                      reasoningSummary: summary,
+                      streaming: false,
+                    } : e))
+                  : prev.filter((e) => e.id !== eid));
               }
               streamingTexts.current.delete(key);
               reasoningSummaries.current.delete(key);
               streamingLogIds.current.delete(key);
               if (eid) return null;
             }
+            if (!completedReasoningContent && !completedReasoningSummary) return null;
             return {
               level: "system" as const,
-              text: completedReasoningContent || completedReasoningSummary || "Reasoning completed",
+              text: completedReasoningContent || completedReasoningSummary,
               reasoningSummary: completedReasoningSummary || undefined,
               kind: "reasoning" as const,
               streaming: false,
@@ -595,6 +624,7 @@ export default function WebApp() {
 
         case "item/started": {
           const item = params.item as Record<string, unknown> | undefined;
+          if (item && isUserThreadItem(item)) return null;
           const itemKind = typeof item?.kind === "string" ? item.kind : null;
           const itemType = typeof item?.type === "string" ? item.type : null;
           const startedItemId = typeof item?.id === "string" ? item.id : itemId;
