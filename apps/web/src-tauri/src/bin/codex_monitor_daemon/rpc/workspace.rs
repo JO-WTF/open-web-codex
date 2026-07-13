@@ -82,6 +82,14 @@ pub(super) async fn try_handle(
                     .await,
             )
         }
+        "create_workspace" => {
+            let request = parse_request_or_err!(params, workspace_rpc::CreateWorkspaceRequest);
+            Some(
+                serialize_result(state.create_workspace(request.name, request.parent_dir, client_version.to_string()))
+                    .await,
+            )
+        }
+
         "add_workspace_from_git_url" => {
             let request =
                 parse_request_or_err!(params, workspace_rpc::AddWorkspaceFromGitUrlRequest);

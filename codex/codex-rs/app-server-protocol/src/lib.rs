@@ -3,11 +3,15 @@ mod export;
 mod protocol;
 pub mod rpc;
 mod schema_fixtures;
+pub mod capability_manifest;
+
 
 pub use experimental_api::*;
 pub use export::GenerateTsOptions;
 pub use export::generate_internal_json_schema;
 pub use export::generate_json;
+pub use capability_manifest::*;
+
 pub use export::generate_json_with_experimental;
 pub use export::generate_ts;
 pub use export::generate_ts_with_options;
@@ -16,6 +20,7 @@ pub use protocol::common::*;
 pub use protocol::event_mapping::*;
 pub use protocol::item_builders::*;
 pub use protocol::thread_history::*;
+pub use protocol::thread_history_projection::*;
 pub use protocol::v1::ApplyPatchApprovalParams;
 pub use protocol::v1::ApplyPatchApprovalResponse;
 pub use protocol::v1::ClientInfo;

@@ -108,3 +108,9 @@ pub(crate) struct OpenWorkspaceInRequest {
 pub(crate) struct GetOpenAppIconRequest {
     pub(crate) app_name: String,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct CreateWorkspaceRequest {
+    pub(crate) name: String,
+    pub(crate) parent_dir: Option<String>,
+}
