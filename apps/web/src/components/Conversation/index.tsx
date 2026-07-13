@@ -7,6 +7,8 @@ import MessageList from "./MessageList";
 import Composer from "./Composer";
 import GoalBanner from "./GoalBanner";
 import FollowUpQueue, { type QueuedFollowUp } from "./FollowUpQueue";
+import UserInputCard from "./messages/UserInputCard";
+import type { RequestUserInputRequest, RequestUserInputResponse } from "../../types";
 import {
   initialConversationStart,
   previousConversationStart,
@@ -38,6 +40,9 @@ type Props = {
   canSteer: boolean;
   onSteerFollowUp: (id: string) => void;
   onDeleteFollowUp: (id: string) => void;
+  userInputRequest: RequestUserInputRequest | null;
+  submittingUserInput: boolean;
+  onSubmitUserInput: (request: RequestUserInputRequest, response: RequestUserInputResponse) => void;
   busy: boolean;
   sendDisabled: boolean;
   onResolveApproval?: (workspaceId: string, requestId: number | string, decision: "accept" | "decline") => void;
@@ -69,6 +74,9 @@ export default function Conversation({
   canSteer,
   onSteerFollowUp,
   onDeleteFollowUp,
+  userInputRequest,
+  submittingUserInput,
+  onSubmitUserInput,
   busy,
   sendDisabled,
   onResolveApproval,
@@ -128,6 +136,7 @@ export default function Conversation({
           workspaceId={workspaceId}
           onResolveApproval={onResolveApproval}
         />
+        {userInputRequest ? <UserInputCard request={userInputRequest} submitting={submittingUserInput} onSubmit={onSubmitUserInput} /> : null}
         {thinking && !visibleMessages.some((entry) => entry.level === "user") && <ThinkingIndicator />}
       </div>
       <GoalBanner goal={goal} />

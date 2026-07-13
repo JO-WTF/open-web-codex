@@ -1477,6 +1477,165 @@ body:has(.web-app-shell) {
   border: 0;
 }
 
+.web-user-input-card {
+  align-self: flex-start;
+  width: min(100%, 640px);
+  padding: 16px;
+  border: 1px solid #303846;
+  border-radius: 14px;
+  background: #111720;
+  box-shadow: 0 12px 30px rgb(0 0 0 / 18%);
+  color: #d5dae3;
+}
+
+.web-user-input-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  color: #65dfbe;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.web-user-input-question + .web-user-input-question {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid #28303c;
+}
+
+.web-user-input-header {
+  margin-bottom: 5px;
+  color: #929bab;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.web-user-input-prompt {
+  margin-bottom: 11px;
+  color: #e3e7ed;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.web-user-input-options {
+  display: grid;
+  gap: 8px;
+}
+
+.web-user-input-option {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 9px;
+  width: 100%;
+  padding: 10px 11px;
+  border: 1px solid #2d3643;
+  border-radius: 9px;
+  background: #0d1219;
+  color: #cdd3dd;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.web-user-input-option:hover {
+  border-color: #4b5a6e;
+  background: #151c26;
+  color: #f2f5f8;
+}
+
+.web-user-input-option.is-selected {
+  border-color: #568bd1;
+  background: rgb(67 117 182 / 18%);
+  color: #f1f6fc;
+}
+
+.web-user-input-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border: 1px solid #596577;
+  border-radius: 50%;
+  color: #8fc1ff;
+}
+
+.web-user-input-option.is-selected .web-user-input-check {
+  border-color: #66a3f3;
+  background: #315f9a;
+}
+
+.web-user-input-option strong,
+.web-user-input-option small {
+  display: block;
+}
+
+.web-user-input-option strong {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.web-user-input-option small {
+  margin-top: 3px;
+  color: #939dad;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.web-user-input-note {
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 9px;
+  padding: 9px 10px;
+  border: 1px solid #303a48;
+  border-radius: 8px;
+  outline: none;
+  background: #0b1017;
+  color: #e3e8ef;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.web-user-input-note:focus {
+  border-color: #568bd1;
+  box-shadow: 0 0 0 2px rgb(86 139 209 / 16%);
+}
+
+.web-user-input-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
+.web-user-input-actions button {
+  padding: 8px 16px;
+  border: 1px solid #6099e2;
+  border-radius: 8px;
+  background: #3f76b9;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.web-user-input-actions button:hover:not(:disabled) {
+  background: #4b86cd;
+}
+
+.web-user-input-actions button:disabled {
+  border-color: #374251;
+  background: #252d38;
+  color: #727d8e;
+  cursor: not-allowed;
+}
+
 @media (max-width: 900px) {
   .web-app-shell {
     grid-template-columns: 230px minmax(0, 1fr);

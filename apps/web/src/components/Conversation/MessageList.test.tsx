@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import MessageList from "./MessageList";
 
@@ -82,10 +82,45 @@ describe("MessageList", () => {
       />,
     );
 
-    expect(screen.getByText("1 tool call, 2 messages")).toBeTruthy();
+    const summary = screen.getByRole("button", { name: "1 tool call, 2 messages" });
+    expect(summary.getAttribute("aria-expanded")).toBe("false");
+    expect(view.container.querySelector(".web-execution-timeline")).toBeNull();
+    fireEvent.click(summary);
     const timeline = view.container.querySelector(".web-execution-timeline");
     expect(timeline?.textContent).toContain("I am checking the relevant files.");
     expect(timeline?.textContent).not.toContain("The project is ready.");
+  });
+
+  it("renders live turn activity at the top level, then collapses it when the final answer completes", () => {
+    const liveItems = [
+      { id: "user-1", level: "user" as const, text: "Inspect the project" },
+      { id: "reasoning-1", level: "system" as const, kind: "reasoning" as const, text: "Reviewing project files" },
+      { id: "commentary-1", level: "assistant" as const, text: "I am checking the relevant files." },
+      { id: "command-1", level: "info" as const, kind: "command_exec" as const, text: "rg --files", toolStatus: "running" },
+      { id: "final-1", level: "assistant" as const, text: "The project is rea", streaming: true },
+    ];
+    const view = render(<MessageList items={liveItems} thinking />);
+
+    expect(within(view.container).queryByText("1 tool call, 2 messages")).toBeNull();
+    expect(view.container.querySelector(".web-execution-timeline")?.textContent).toContain("The project is rea");
+    expect(screen.getByText("Working…")).toBeTruthy();
+
+    view.rerender(
+      <MessageList
+        items={liveItems.map((item) => item.id === "command-1"
+          ? { ...item, toolStatus: "completed" }
+          : item.id === "final-1"
+            ? { ...item, text: "The project is ready.", streaming: false }
+            : item)}
+        thinking={false}
+      />,
+    );
+
+    const summary = within(view.container).getByRole("button", { name: "1 tool call, 2 messages" });
+    expect(summary.getAttribute("aria-expanded")).toBe("false");
+    expect(view.container.querySelector(".web-execution-timeline")).toBeNull();
+    expect(within(view.container).getByText("The project is ready.")).toBeTruthy();
+    expect(within(view.container).queryByText("Working…")).toBeNull();
   });
 
   it("passes the live reasoning state through to its collapsible block", () => {

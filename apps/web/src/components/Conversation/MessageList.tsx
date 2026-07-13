@@ -148,7 +148,12 @@ export default function MessageList({ items, thinking = false, onOpenFile, works
     let end = index + 1;
     while (end < items.length && items[end].level !== "user") end += 1;
     const turnItems = items.slice(index + 1, end);
-    const isActiveTurn = thinking && end === items.length;
+    const hasLiveItem = turnItems.some((item) =>
+      item.streaming
+      || item.toolStatus === "inProgress"
+      || item.toolStatus === "running"
+    );
+    const isActiveTurn = end === items.length && (thinking || hasLiveItem);
     let finalIndex = -1;
     if (!isActiveTurn) {
       for (let cursor = turnItems.length - 1; cursor >= 0; cursor -= 1) {

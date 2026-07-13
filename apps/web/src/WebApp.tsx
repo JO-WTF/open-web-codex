@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AppServerEvent, ThreadTokenUsage, WorkspaceInfo } from "./types";
+import type { AppServerEvent, RequestUserInputRequest, RequestUserInputResponse, ThreadTokenUsage, WorkspaceInfo } from "./types";
 import { CodexMonitorWebClient } from "./services/webClient";
 import Layout from "./components/Layout";
 import Sidebar from "./components/Sidebar";
@@ -12,6 +12,7 @@ import { normalizeTokenUsage } from "./features/threads/utils/threadNormalize";
 import { normalizePlanUpdate } from "./features/threads/utils/threadNormalize";
 import { parseWebTurnDiff } from "./utils/webTurnDiff";
 import { isWebAppServerRecoveryEvent, parseWebAppServerError } from "./utils/webAppServerError";
+import { parseWebUserInputRequest } from "./utils/webUserInput";
 import "./styles/web.css";
 import "./styles/web-refactor.css";
 
@@ -126,6 +127,8 @@ export default function WebApp() {
   const [stopping, setStopping] = useState(false);
   const [queuedFollowUps, setQueuedFollowUps] = useState<QueuedFollowUp[]>([]);
   const [steeringFollowUpId, setSteeringFollowUpId] = useState<string | null>(null);
+  const [userInputRequests, setUserInputRequests] = useState<RequestUserInputRequest[]>([]);
+  const [submittingUserInputId, setSubmittingUserInputId] = useState<number | string | null>(null);
   const [messages, setMessages] = useState<LogEntry[]>([]);
   const [gatewayState, setGatewayState] = useState<GatewayState>("checking");
   const [gatewayVersion, setGatewayVersion] = useState<string | null>(null);
@@ -796,6 +799,18 @@ export default function WebApp() {
           };
         }
 
+        case "item/tool/requestUserInput": {
+          const requestId = message.id;
+          if (typeof requestId !== "number" && typeof requestId !== "string") return null;
+          const request = parseWebUserInputRequest(event.workspace_id, requestId, params);
+          if (!request) return null;
+          setUserInputRequests((previous) => [
+            ...previous.filter((candidate) => !(candidate.workspace_id === request.workspace_id && candidate.request_id === request.request_id)),
+            request,
+          ]);
+          return null;
+        }
+
         case "serverRequest/resolved": {
           const requestId = params.requestId ?? params.request_id;
           if (typeof requestId !== "number" && typeof requestId !== "string") return null;
@@ -808,6 +823,7 @@ export default function WebApp() {
                     : "resolved",
                 }
               : entry));
+          setUserInputRequests((previous) => previous.filter((request) => request.request_id !== requestId));
           return null;
         }
 
@@ -1091,6 +1107,19 @@ export default function WebApp() {
     setQueuedFollowUps((previous) => previous.filter((item) => item.id !== id));
   }, []);
 
+  const submitUserInput = useCallback(async (request: RequestUserInputRequest, response: RequestUserInputResponse) => {
+    if (submittingUserInputId !== null) return;
+    setSubmittingUserInputId(request.request_id);
+    try {
+      await client.respondToServerRequest(request.workspace_id, request.request_id, { answers: response.answers });
+      setUserInputRequests((previous) => previous.filter((candidate) => !(candidate.workspace_id === request.workspace_id && candidate.request_id === request.request_id)));
+    } catch (error) {
+      appendLog("error", error instanceof Error ? error.message : String(error));
+    } finally {
+      setSubmittingUserInputId(null);
+    }
+  }, [appendLog, client, submittingUserInputId]);
+
   const resolveApproval = useCallback(async (
     workspaceId: string,
     requestId: number | string,
@@ -1166,6 +1195,10 @@ export default function WebApp() {
 
   /* ─── Render ─── */
 
+  const activeUserInputRequest = userInputRequests.find((request) =>
+    request.workspace_id === activeWorkspaceId && request.params.thread_id === activeThreadId,
+  ) ?? null;
+
   return (
     <Layout
       sidebarCollapsed={sidebarCollapsed}
@@ -1237,6 +1270,9 @@ export default function WebApp() {
         canSteer={Boolean(activeTurnId) && thinking && !stopping}
         onSteerFollowUp={(id) => { void steerFollowUp(id); }}
         onDeleteFollowUp={deleteFollowUp}
+        userInputRequest={activeUserInputRequest}
+        submittingUserInput={activeUserInputRequest?.request_id === submittingUserInputId}
+        onSubmitUserInput={(request, response) => { void submitUserInput(request, response); }}
         busy={busy}
         sendDisabled={!activeWorkspaceId || !activeThreadId}
         thinking={thinking}

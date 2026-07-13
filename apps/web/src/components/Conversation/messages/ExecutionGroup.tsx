@@ -10,7 +10,7 @@ type Props = {
 };
 
 export default function ExecutionGroup({ items, active, children }: Props) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(active);
   const [startedAt] = useState(Date.now);
   const [elapsed, setElapsed] = useState(0);
   const toolCount = useMemo(() => items.filter((item) => item.kind && item.kind !== "reasoning").length, [items]);
@@ -24,14 +24,22 @@ export default function ExecutionGroup({ items, active, children }: Props) {
     return () => window.clearInterval(timer);
   }, [active, startedAt]);
 
+  useEffect(() => {
+    // Live activity stays at the top level. Once the turn completes, collapse
+    // that activity behind the summary while the final answer remains visible.
+    setOpen(active);
+  }, [active]);
+
   const elapsedLabel = `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}`;
   return (
     <section className={`web-execution-group${active ? " is-active" : ""}`}>
-      <button type="button" className="web-execution-summary" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
-        <ChevronRight size={12} className={open ? "is-open" : ""} />
-        <span>{toolCount} tool {toolCount === 1 ? "call" : "calls"}, {messageCount} {messageCount === 1 ? "message" : "messages"}</span>
-      </button>
-      {open && <div className="web-execution-timeline">{children}</div>}
+      {!active && (
+        <button type="button" className="web-execution-summary" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+          <ChevronRight size={12} className={open ? "is-open" : ""} />
+          <span>{toolCount} tool {toolCount === 1 ? "call" : "calls"}, {messageCount} {messageCount === 1 ? "message" : "messages"}</span>
+        </button>
+      )}
+      {(active || open) && <div className="web-execution-timeline">{children}</div>}
       {active && (
         <div className="web-execution-working" role="status">
           <span className="web-thinking-spinner" aria-hidden="true" />
