@@ -1,18 +1,19 @@
-import type { ThreadTokenUsage } from "../../types";
+import ChevronDown from "lucide-react/dist/esm/icons/chevron-down";
+import ChevronRight from "lucide-react/dist/esm/icons/chevron-right";
+import FolderOpen from "lucide-react/dist/esm/icons/folder-open";
+import PanelLeftClose from "lucide-react/dist/esm/icons/panel-left-close";
+import PanelLeftOpen from "lucide-react/dist/esm/icons/panel-left-open";
 
 type Props = {
   workspaceName: string | null;
   threadTitle: string | null;
-  tokenUsage?: ThreadTokenUsage | null;
   threadStatus?: string;
   threadSettings?: Record<string, unknown> | null;
+  sidebarCollapsed: boolean;
+  onToggleSidebar: () => void;
+  filePanelOpen?: boolean;
+  onToggleFilePanel?: () => void;
 };
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
-}
 
 function statusDotClass(status: string): string {
   switch (status) {
@@ -29,31 +30,35 @@ function statusDotClass(status: string): string {
 
 export default function Header({
   workspaceName,
-  threadTitle,
-  tokenUsage,
   threadStatus,
   threadSettings,
+  sidebarCollapsed,
+  onToggleSidebar,
+  filePanelOpen = false,
+  onToggleFilePanel,
 }: Props) {
-  const showAny = workspaceName || threadTitle || tokenUsage || (threadStatus !== "idle");
-  if (!showAny) return null;
-
   // Extract useful settings for display
   const ts = threadSettings as Record<string, unknown> | null | undefined;
   const rawSettings = ts?.threadSettings as Record<string, unknown> | null | undefined;
   const collabMode = rawSettings?.collaborationMode as Record<string, unknown> | null | undefined;
   const collabLabel = typeof collabMode?.mode === "string" ? collabMode.mode : null;
   const approvalPolicy = typeof rawSettings?.approvalPolicy === "string" ? rawSettings.approvalPolicy : null;
-
   return (
     <div className="web-chat-header">
       <div className="web-chat-header-left">
-        {workspaceName && (
-          <>
-            <span>{workspaceName}</span>
-            <span className="web-chat-header-sep">/</span>
-          </>
-        )}
-        {threadTitle && <span>{threadTitle}</span>}
+        <button
+          type="button"
+          className="web-icon-button"
+          title={sidebarCollapsed ? "Expand projects panel" : "Collapse projects panel"}
+          aria-label={sidebarCollapsed ? "Expand projects panel" : "Collapse projects panel"}
+          onClick={onToggleSidebar}
+        >
+          {sidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+        </button>
+        <span className="web-chat-product">CodexMonitor</span>
+        <ChevronRight size={14} className="web-chat-header-sep" aria-hidden="true" />
+        <span className="web-chat-workspace">{workspaceName ?? "Select a project"}</span>
+        {workspaceName ? <ChevronDown size={13} className="web-chat-workspace-chevron" aria-hidden="true" /> : null}
         {threadStatus && threadStatus !== "idle" && (
           <span className={`web-status-dot ${statusDotClass(threadStatus)}`} title={`Thread: ${threadStatus}`} />
         )}
@@ -74,21 +79,9 @@ export default function Header({
             {approvalPolicy}
           </span>
         )}
-        {tokenUsage && (
-          <div className="web-chat-header-tokens" title={`Total tokens: ${tokenUsage.total.totalTokens.toLocaleString()}`}>
-            <svg className="web-token-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <circle cx="8" cy="8" r="6.5" />
-              <path d="M5 8h6M8 5v6" />
-            </svg>
-            <span className="web-token-value">{formatTokens(tokenUsage.total.totalTokens)}</span>
-            <span className="web-token-sep">·</span>
-            <span className="web-token-label">in</span>
-            <span className="web-token-value">{formatTokens(tokenUsage.total.inputTokens)}</span>
-            <span className="web-token-sep">·</span>
-            <span className="web-token-label">out</span>
-            <span className="web-token-value">{formatTokens(tokenUsage.total.outputTokens)}</span>
-          </div>
-        )}
+        <button type="button" className={`web-icon-button${filePanelOpen ? " is-active" : ""}`} title="File manager" aria-label="File manager" aria-pressed={filePanelOpen} onClick={onToggleFilePanel}>
+          <FolderOpen size={16} />
+        </button>
       </div>
     </div>
   );

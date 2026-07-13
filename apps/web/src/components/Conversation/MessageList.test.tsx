@@ -49,7 +49,60 @@ describe("MessageList", () => {
       />,
     );
 
-    expect(screen.getByText("• running")).toBeTruthy();
+    expect(screen.getByText("running")).toBeTruthy();
+  });
+
+  it("renders a recoverable connection error as an active status", () => {
+    const view = render(
+      <MessageList
+        items={[{
+          id: "connection-1",
+          level: "info",
+          kind: "connection",
+          text: "Connection interrupted. Reconnecting (1/5)…",
+          streaming: true,
+        }]}
+      />,
+    );
+
+    expect(screen.getByRole("status").textContent).toContain("Reconnecting (1/5)");
+    expect(view.container.querySelector(".web-thinking-spinner")).toBeTruthy();
+  });
+
+  it("groups turn activity and keeps the final answer outside the execution timeline", () => {
+    const view = render(
+      <MessageList
+        items={[
+          { id: "user-1", level: "user", text: "Inspect the project" },
+          { id: "reasoning-1", level: "system", kind: "reasoning", text: "Reviewing project files" },
+          { id: "commentary-1", level: "assistant", text: "I am checking the relevant files." },
+          { id: "command-1", level: "info", kind: "command_exec", text: "rg --files", cmdExitCode: 0 },
+          { id: "final-1", level: "assistant", text: "The project is ready." },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("1 tool call, 2 messages")).toBeTruthy();
+    const timeline = view.container.querySelector(".web-execution-timeline");
+    expect(timeline?.textContent).toContain("I am checking the relevant files.");
+    expect(timeline?.textContent).not.toContain("The project is ready.");
+  });
+
+  it("passes the live reasoning state through to its collapsible block", () => {
+    const view = render(
+      <MessageList
+        items={[{
+          id: "reasoning-running",
+          level: "system",
+          kind: "reasoning",
+          text: "Inspecting files",
+          streaming: true,
+        }]}
+      />,
+    );
+
+    expect(screen.getAllByText("Inspecting files")).toHaveLength(2);
+    expect(view.container.querySelector(".web-reasoning-working")).toBeTruthy();
   });
 
   it("passes workspace and thread context to approval decisions", () => {
@@ -72,5 +125,28 @@ describe("MessageList", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Accept" }));
     expect(onResolve).toHaveBeenCalledWith("workspace-1", 42, "accept");
+  });
+
+  it("renders a resolved server request as non-interactive history", () => {
+    const onResolve = vi.fn();
+    const view = render(
+      <MessageList
+        workspaceId="workspace-1"
+        onResolveApproval={onResolve}
+        items={[{
+          id: "approval-resolved",
+          level: "info",
+          kind: "approval",
+          text: "git init",
+          approvalRequestId: 43,
+          approvalStatus: "resolved",
+        }]}
+      />,
+    );
+
+    expect(screen.getByText("Approval resolved")).toBeTruthy();
+    expect(screen.getByText("Resolved")).toBeTruthy();
+    expect(view.container.querySelector(".web-approval-accept")).toBeNull();
+    expect(view.container.querySelector(".web-approval-deny")).toBeNull();
   });
 });

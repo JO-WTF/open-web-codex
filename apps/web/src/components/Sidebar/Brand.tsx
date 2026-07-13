@@ -12,14 +12,15 @@ const LABELS: Record<BrandProps["state"], string> = {
 export default function Brand({ state, version }: BrandProps) {
   return (
     <div className="web-brand">
-      <div>
-        <div className="web-brand-sub">open-web-codex</div>
-        <div className="web-brand-title">Codex</div>
+      <div className="web-brand-heading">
+        <FolderKanban size={18} aria-hidden="true" />
+        <div className="web-brand-title">Projects</div>
       </div>
-      <span className={`web-badge web-badge-${state}`}>
+      <span className={`web-brand-connection web-badge-${state}`} title={version ?? LABELS[state]}>
         <span className="web-badge-dot" />
-        {version ?? LABELS[state]}
+        <span className="web-sr-only">{version ?? LABELS[state]}</span>
       </span>
     </div>
   );
 }
+import FolderKanban from "lucide-react/dist/esm/icons/folder-kanban";

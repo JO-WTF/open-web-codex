@@ -6,6 +6,7 @@ import Header from "./Header";
 import MessageList from "./MessageList";
 import Composer from "./Composer";
 import GoalBanner from "./GoalBanner";
+import FollowUpQueue, { type QueuedFollowUp } from "./FollowUpQueue";
 import {
   initialConversationStart,
   previousConversationStart,
@@ -16,6 +17,11 @@ type Props = {
   workspaceName: string | null;
   threadTitle: string | null;
   conversationId: string | null;
+  sidebarCollapsed: boolean;
+  onToggleSidebar: () => void;
+  filePanelOpen?: boolean;
+  onToggleFilePanel?: () => void;
+  onOpenFile?: (path: string) => void;
   tokenUsage: import("../../types").ThreadTokenUsage | null;
   threadStatus: string;
   threadSettings: Record<string, unknown> | null;
@@ -25,6 +31,13 @@ type Props = {
   draft: string;
   onDraftChange: (text: string) => void;
   onSend: () => void;
+  onStop: () => void;
+  stopping: boolean;
+  queuedFollowUps: QueuedFollowUp[];
+  steeringFollowUpId: string | null;
+  canSteer: boolean;
+  onSteerFollowUp: (id: string) => void;
+  onDeleteFollowUp: (id: string) => void;
   busy: boolean;
   sendDisabled: boolean;
   onResolveApproval?: (workspaceId: string, requestId: number | string, decision: "accept" | "decline") => void;
@@ -35,6 +48,11 @@ export default function Conversation({
   workspaceName,
   threadTitle,
   conversationId,
+  sidebarCollapsed,
+  onToggleSidebar,
+  filePanelOpen = false,
+  onToggleFilePanel,
+  onOpenFile,
   tokenUsage,
   threadStatus,
   threadSettings,
@@ -44,6 +62,13 @@ export default function Conversation({
   draft,
   onDraftChange,
   onSend,
+  onStop,
+  stopping,
+  queuedFollowUps,
+  steeringFollowUpId,
+  canSteer,
+  onSteerFollowUp,
+  onDeleteFollowUp,
   busy,
   sendDisabled,
   onResolveApproval,
@@ -71,7 +96,7 @@ export default function Conversation({
     const area = messageAreaRef.current;
     if (!area || !isAtBottomRef.current) return;
     area.scrollTop = area.scrollHeight;
-  }, [conversationId, messages.length, visibleStart]);
+  }, [conversationId, messages, visibleStart]);
 
   const loadOlderMessages = useCallback(() => {
     setVisibleStart((current) => previousConversationStart(messages, current));
@@ -89,29 +114,40 @@ export default function Conversation({
 
   return (
     <section className="web-chat">
-      <Header workspaceName={workspaceName} threadTitle={threadTitle} tokenUsage={tokenUsage} threadStatus={threadStatus} threadSettings={threadSettings} />
+      <Header workspaceName={workspaceName} threadTitle={threadTitle} threadStatus={threadStatus} threadSettings={threadSettings} sidebarCollapsed={sidebarCollapsed} onToggleSidebar={onToggleSidebar} filePanelOpen={filePanelOpen} onToggleFilePanel={onToggleFilePanel} />
       <div className="web-message-area" ref={messageAreaRef} onScroll={handleScroll}>
         {hasOlderMessages && (
           <button type="button" className="web-load-older" onClick={loadOlderMessages}>
             Load previous messages
           </button>
         )}
-        {thinking && <ThinkingIndicator />}
         <MessageList
           items={visibleMessages}
+          thinking={thinking}
+          onOpenFile={onOpenFile}
           workspaceId={workspaceId}
           onResolveApproval={onResolveApproval}
         />
+        {thinking && !visibleMessages.some((entry) => entry.level === "user") && <ThinkingIndicator />}
       </div>
-      {goal && (
-        <GoalBanner goal={goal} />
-      )}
+      <GoalBanner goal={goal} />
+      <FollowUpQueue
+        items={queuedFollowUps}
+        canSteer={canSteer}
+        steeringId={steeringFollowUpId}
+        onSteer={onSteerFollowUp}
+        onDelete={onDeleteFollowUp}
+      />
       <Composer
         draft={draft}
         onDraftChange={onDraftChange}
         onSend={onSend}
+        onStop={onStop}
+        running={thinking || threadStatus === "running" || threadStatus === "reconnecting" || threadStatus.startsWith("active")}
+        stopping={stopping}
         busy={busy}
         disabled={sendDisabled}
+        tokenUsage={tokenUsage}
       />
     </section>
   );

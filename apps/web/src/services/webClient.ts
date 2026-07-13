@@ -1,4 +1,4 @@
-import type { AppServerEvent, WorkspaceInfo } from "../types";
+import type { AppServerEvent, GitFileStatus, WorkspaceInfo } from "../types";
 
 type RpcResponse<T> = { result?: T; error?: { message?: string } | string };
 
@@ -115,12 +115,41 @@ export class CodexMonitorWebClient {
     return this.rpc<Record<string, unknown>>("list_threads", { workspaceId, limit: 50 });
   }
 
+  listWorkspaceFiles(workspaceId: string) {
+    return this.rpc<string[]>("list_workspace_files", { workspaceId });
+  }
+
+  readWorkspaceFile(workspaceId: string, path: string) {
+    return this.rpc<{ content: string; truncated: boolean }>("read_workspace_file", { workspaceId, path });
+  }
+
+  getGitStatus(workspaceId: string) {
+    return this.rpc<{ files: GitFileStatus[] }>("get_git_status", { workspaceId });
+  }
+
   sendUserMessage(workspaceId: string, threadId: string, text: string) {
     return this.rpc<Record<string, unknown>>("send_user_message", {
       workspaceId,
       threadId,
       text,
       accessMode: "current",
+    });
+  }
+
+  interruptTurn(workspaceId: string, threadId: string, turnId: string) {
+    return this.rpc<Record<string, unknown>>("turn_interrupt", {
+      workspaceId,
+      threadId,
+      turnId,
+    });
+  }
+
+  steerTurn(workspaceId: string, threadId: string, turnId: string, text: string) {
+    return this.rpc<Record<string, unknown>>("turn_steer", {
+      workspaceId,
+      threadId,
+      turnId,
+      text,
     });
   }
 
