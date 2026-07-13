@@ -6,6 +6,7 @@ import type { WorkspaceInfo } from "../../types";
 import Brand from "./Brand";
 import Workspaces from "./Workspaces";
 import McpStatus from "./McpStatus";
+import RateLimitCard from "./RateLimitCard";
 
 type ThreadInfo = {
   id: string;
@@ -75,26 +76,6 @@ export default function Sidebar({
       <div className="web-sidebar-scroll">
         <Brand state={gatewayState} version={gatewayVersion} />
 
-        {rateLimits && (() => {
-          const rl = rateLimits as Record<string, unknown>;
-          const primary = rl.primary as Record<string, unknown> | null | undefined;
-          const usedPct = primary?.usedPercent != null ? Math.round(primary.usedPercent as number) : null;
-          const planType = typeof rl.planType === "string" ? rl.planType : null;
-          return (
-            <div className="web-rate-limit">
-              {usedPct != null && (
-                <span className="web-rate-pct" title={`Rate limit: ${usedPct}% used`}>
-                  <span className="web-rate-bar">
-                    <span className="web-rate-fill" style={{width: `${Math.min(usedPct, 100)}%`}} />
-                  </span>
-                  <span className="web-rate-text">{usedPct}%</span>
-                </span>
-              )}
-              {planType && <span className="web-rate-plan">{planType}</span>}
-            </div>
-          );
-        })()}
-
         <Workspaces
           workspaces={workspaces}
           activeId={activeWorkspaceId}
@@ -115,6 +96,7 @@ export default function Sidebar({
       </div>
 
       <div className="web-sidebar-bottom">
+        {rateLimits ? <RateLimitCard rateLimits={rateLimits} /> : null}
         <button
           type="button"
           className="web-settings-toggle"

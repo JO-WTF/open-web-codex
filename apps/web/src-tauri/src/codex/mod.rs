@@ -131,6 +131,27 @@ pub(crate) async fn read_thread(
 }
 
 #[tauri::command]
+pub(crate) async fn list_thread_turns(
+    workspace_id: String,
+    thread_id: String,
+    cursor: Option<String>,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<Value, String> {
+    if remote_backend::is_remote_mode(&*state).await {
+        return remote_backend::call_remote(
+            &*state,
+            app,
+            "list_thread_turns",
+            json!({ "workspaceId": workspace_id, "threadId": thread_id, "cursor": cursor }),
+        )
+        .await;
+    }
+
+    codex_core::list_thread_turns_core(&state.sessions, workspace_id, thread_id, cursor).await
+}
+
+#[tauri::command]
 pub(crate) async fn thread_live_subscribe(
     workspace_id: String,
     thread_id: String,

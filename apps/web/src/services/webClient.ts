@@ -18,6 +18,18 @@ type EventSubscriptionStatus = {
   onError?: () => void;
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function unwrapRpcResult(value: unknown): Record<string, unknown> {
+  let current = value;
+  while (isRecord(current) && isRecord(current.result)) {
+    current = current.result;
+  }
+  return isRecord(current) ? current : {};
+}
+
 function defaultBaseUrl() {
   return import.meta.env.VITE_CODEX_MONITOR_WEB_API ?? "http://127.0.0.1:4733";
 }
@@ -109,6 +121,26 @@ export class CodexMonitorWebClient {
 
   readThread(workspaceId: string, threadId: string) {
     return this.rpc<Record<string, unknown>>("read_thread", { workspaceId, threadId });
+  }
+
+  async listThreadTurns(workspaceId: string, threadId: string) {
+    const turns: Record<string, unknown>[] = [];
+    let cursor: string | null = null;
+    do {
+      const raw = await this.rpc<Record<string, unknown>>("list_thread_turns", {
+        workspaceId,
+        threadId,
+        ...(cursor ? { cursor } : {}),
+      });
+      const page = unwrapRpcResult(raw);
+      if (Array.isArray(page.data)) {
+        turns.push(...page.data.filter(isRecord));
+      }
+      cursor = typeof page.nextCursor === "string" && page.nextCursor
+        ? page.nextCursor
+        : null;
+    } while (cursor);
+    return turns.reverse();
   }
 
   listThreads(workspaceId: string) {

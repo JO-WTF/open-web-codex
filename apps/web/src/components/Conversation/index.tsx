@@ -30,6 +30,7 @@ type Props = {
   messages: MessageEntry[];
   workspaceId?: string;
   thinking?: boolean;
+  turnStartedAt?: number | null;
   draft: string;
   onDraftChange: (text: string) => void;
   onSend: () => void;
@@ -64,6 +65,7 @@ export default function Conversation({
   messages,
   workspaceId,
   thinking,
+  turnStartedAt,
   draft,
   onDraftChange,
   onSend,
@@ -132,6 +134,7 @@ export default function Conversation({
         <MessageList
           items={visibleMessages}
           thinking={thinking}
+          turnStartedAt={turnStartedAt}
           onOpenFile={onOpenFile}
           workspaceId={workspaceId}
           onResolveApproval={onResolveApproval}

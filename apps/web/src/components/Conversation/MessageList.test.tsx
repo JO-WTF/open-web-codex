@@ -27,7 +27,7 @@ describe("MessageList", () => {
       />,
     );
 
-    expect(screen.getAllByText(/Checking whether/)).toHaveLength(2);
+    expect(screen.getByText(/Checking whether/)).toBeTruthy();
     expect(screen.getByText("git status")).toBeTruthy();
     expect(screen.getByText("✗ exit 128")).toBeTruthy();
     fireEvent.click(screen.getByText("git status"));
@@ -102,7 +102,9 @@ describe("MessageList", () => {
     const view = render(<MessageList items={liveItems} thinking />);
 
     expect(within(view.container).queryByText("1 tool call, 2 messages")).toBeNull();
-    expect(view.container.querySelector(".web-execution-timeline")?.textContent).toContain("The project is rea");
+    expect(view.container.querySelector(".web-execution-timeline")?.textContent).not.toContain("The project is rea");
+    expect(view.container.querySelector(".web-execution-current")?.textContent).toContain("The project is rea");
+    expect(within(view.container).getByRole("button", { name: "1 tool call, 3 messages" }).getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByText("Working…")).toBeTruthy();
 
     view.rerender(
@@ -136,7 +138,7 @@ describe("MessageList", () => {
       />,
     );
 
-    expect(screen.getAllByText("Inspecting files")).toHaveLength(2);
+    expect(screen.getByText("Inspecting files")).toBeTruthy();
     expect(view.container.querySelector(".web-reasoning-working")).toBeTruthy();
   });
 

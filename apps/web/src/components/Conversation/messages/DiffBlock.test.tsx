@@ -15,10 +15,10 @@ describe("DiffBlock", () => {
 
     const toggle = screen.getByRole("button", { name: /2 files changed/ });
     expect(screen.getByText("Updating files…")).toBeTruthy();
-    expect(screen.getByText("const value = 1;")).toBeTruthy();
-    fireEvent.click(toggle);
     expect(screen.queryByText("const value = 1;")).toBeNull();
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(toggle);
+    expect(screen.getByText("const value = 1;")).toBeTruthy();
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
   });
 
   it("shows completion after the turn finishes", () => {

@@ -59,6 +59,26 @@ pub(super) async fn try_handle(
             };
             Some(state.read_thread(workspace_id, thread_id).await)
         }
+        "list_thread_turns" => {
+            let workspace_id = match parse_string(params, "workspaceId") {
+                Ok(value) => value,
+                Err(err) => return Some(Err(err)),
+            };
+            let thread_id = match parse_string(params, "threadId") {
+                Ok(value) => value,
+                Err(err) => return Some(Err(err)),
+            };
+            let cursor = params
+                .as_object()
+                .and_then(|map| map.get("cursor"))
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            Some(
+                state
+                    .list_thread_turns(workspace_id, thread_id, cursor)
+                    .await,
+            )
+        }
         "thread_live_subscribe" => {
             let workspace_id = match parse_string(params, "workspaceId") {
                 Ok(value) => value,

@@ -143,8 +143,15 @@ export function webLogEntryFromThreadItem(
       ? item.summary.map(String).join("\n\n")
       : asText(item.summary);
     const content = Array.isArray(item.content) ? item.content.map(String).join("\n\n") : "";
-    const text = summary || content;
-    return text ? { id, level: "system", text, kind: "reasoning" } : null;
+    const genericSummary = /^(reasoning completed|reasoning in progress|reasoning)$/i.test(summary.trim());
+    const text = content || summary;
+    return text ? {
+      id,
+      level: "system",
+      text,
+      kind: "reasoning",
+      reasoningSummary: summary && !genericSummary ? summary : undefined,
+    } : null;
   }
   const text = messageText(item);
   if (type === "userMessage") return text ? { id, level: "user", text } : null;

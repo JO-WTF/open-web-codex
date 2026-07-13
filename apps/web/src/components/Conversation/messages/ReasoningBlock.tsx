@@ -23,8 +23,12 @@ export default function ReasoningBlock({ text, summary, meta, streaming = false 
   const trimmedText = text.trim();
   if (!trimmedText) return null;
 
-  const label = streaming ? previewLabel(trimmedText === "Reasoning in progress" ? "Reasoning" : trimmedText) : summary || previewLabel(trimmedText === "Reasoning completed" ? "Reasoning" : trimmedText);
-  const hasDetails = streaming || trimmedText !== "Reasoning completed";
+  const genericText = /^(reasoning completed|reasoning in progress|reasoning)$/i.test(trimmedText);
+  const usefulSummary = summary && !/^(reasoning completed|reasoning in progress|reasoning)$/i.test(summary.trim())
+    ? summary.trim()
+    : "";
+  const label = usefulSummary || previewLabel(genericText ? "Reasoning" : trimmedText);
+  const hasDetails = !genericText && trimmedText !== label;
 
   return (
     <div className="web-reasoning">

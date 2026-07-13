@@ -31,6 +31,7 @@ export type LogEntry = {
   toolStatus?: string;
   toolDetail?: string;
   toolOutput?: string;
+  reasoningSummary?: string;
   filePath?: string;
   diffTitle?: string;
   diffLines?: { type: "add" | "del" | "ctx"; text: string }[];
@@ -135,6 +136,7 @@ export default function WebApp() {
   const [gatewayState, setGatewayState] = useState<GatewayState>("checking");
   const [gatewayVersion, setGatewayVersion] = useState<string | null>(null);
   const [thinking, setThinking] = useState(false);
+  const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null);
   const [tokenUsage, setTokenUsage] = useState<ThreadTokenUsage | null>(null);
   const [threadStatus, setThreadStatus] = useState<string>("idle");
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
@@ -189,6 +191,7 @@ export default function WebApp() {
 
   // Streaming accumulators
   const streamingTexts = useRef<Map<string, string>>(new Map());
+  const reasoningSummaries = useRef<Map<string, string>>(new Map());
   const streamingLogIds = useRef<Map<string, string>>(new Map());
   const turnDiffLogIds = useRef<Map<string, string>>(new Map());
   const commandLogIds = useRef<Map<string, string>>(new Map());
@@ -231,6 +234,15 @@ export default function WebApp() {
       switch (method) {
         case "turn/started":
           setThinking(true);
+          setTurnStartedAt(() => {
+            const turn = params.turn && typeof params.turn === "object"
+              ? params.turn as Record<string, unknown>
+              : null;
+            const raw = turn?.startedAt ?? params.startedAt ?? params.started_at;
+            return typeof raw === "number" && Number.isFinite(raw)
+              ? raw < 10_000_000_000 ? raw * 1000 : raw
+              : Date.now();
+          });
           setThreadStatus("running");
           setActiveTurnId(() => {
             const turn = params.turn && typeof params.turn === "object"
@@ -246,6 +258,7 @@ export default function WebApp() {
           // reasoning and tool items, so replacing the transcript here made every
           // execution step disappear as soon as the final answer arrived.
           setThinking(false);
+          setTurnStartedAt(null);
           setThreadStatus("idle");
           setActiveTurnId(null);
           setStopping(false);
@@ -267,6 +280,7 @@ export default function WebApp() {
           const parsed = parseWebAppServerError(params);
           if (!parsed.recoverable) {
             setThinking(false);
+            setTurnStartedAt(null);
             setActiveTurnId(null);
             setStopping(false);
             interruptRequestTurnId.current = null;
@@ -325,14 +339,23 @@ export default function WebApp() {
         case "item/reasoning/textDelta": {
           if (!itemId || !delta) return null;
           const key = `reason_${itemId}`;
-          const current = streamingTexts.current.get(key) ?? "";
+          const isSummary = method === "item/reasoning/summaryTextDelta";
+          const target = isSummary ? reasoningSummaries.current : streamingTexts.current;
+          const current = target.get(key) ?? "";
           const updated = current + delta;
-          streamingTexts.current.set(key, updated);
+          target.set(key, updated);
 
           const existingLogId = streamingLogIds.current.get(key);
           if (existingLogId) {
             setMessages((prev) =>
-              prev.map((e) => (e.id === existingLogId ? { ...e, text: updated, streaming: true } : e)),
+              prev.map((e) => (e.id === existingLogId
+                ? {
+                    ...e,
+                    text: isSummary ? e.text : updated,
+                    reasoningSummary: isSummary ? updated : e.reasoningSummary,
+                    streaming: true,
+                  }
+                : e)),
             );
             return null;
           }
@@ -340,7 +363,14 @@ export default function WebApp() {
           streamingLogIds.current.set(key, id);
           setMessages((prev) => [
             ...prev.slice(-199),
-            { id, level: "system", text: updated, kind: "reasoning", streaming: true },
+            {
+              id,
+              level: "system",
+              text: isSummary ? "Reasoning in progress" : updated,
+              reasoningSummary: isSummary ? updated : undefined,
+              kind: "reasoning",
+              streaming: true,
+            },
           ]);
           return null;
         }
@@ -381,6 +411,9 @@ export default function WebApp() {
           const completedReasoningSummary = (Array.isArray(item.summary) && item.summary.length > 0)
             ? item.summary.map((part) => String(part)).join("\n\n").trim()
             : typeof item.summary === "string" ? item.summary.trim() : "";
+          const completedReasoningContent = Array.isArray(item.content)
+            ? item.content.map((part) => String(part)).join("\n\n").trim()
+            : typeof item.content === "string" ? item.content.trim() : "";
 
           if (role === "user") return null;
 
@@ -420,22 +453,29 @@ export default function WebApp() {
 
           if (kind === "reasoning") {
             const key = itemId ? `reason_${itemId}` : (itemIdFromItem ? `reason_${itemIdFromItem}` : null);
-            if (key && streamingTexts.current.has(key)) {
-              const acc = streamingTexts.current.get(key)!;
+            if (key && streamingLogIds.current.has(key)) {
+              const acc = streamingTexts.current.get(key) ?? "";
               const eid = streamingLogIds.current.get(key);
               if (eid) {
-                const text = acc.trim() || completedReasoningSummary || "Reasoning completed";
+                const text = acc.trim() || completedReasoningContent || completedReasoningSummary || "Reasoning completed";
                 setMessages((prev) =>
-                  prev.map((e) => (e.id === eid ? { ...e, text, streaming: false } : e)),
+                  prev.map((e) => (e.id === eid ? {
+                    ...e,
+                    text,
+                    reasoningSummary: completedReasoningSummary || reasoningSummaries.current.get(key),
+                    streaming: false,
+                  } : e)),
                 );
               }
               streamingTexts.current.delete(key);
+              reasoningSummaries.current.delete(key);
               streamingLogIds.current.delete(key);
               if (eid) return null;
             }
             return {
               level: "system" as const,
-              text: completedReasoningSummary || "Reasoning completed",
+              text: completedReasoningContent || completedReasoningSummary || "Reasoning completed",
+              reasoningSummary: completedReasoningSummary || undefined,
               kind: "reasoning" as const,
               streaming: false,
             };
@@ -464,22 +504,29 @@ export default function WebApp() {
 
           if (itemType2 === "reasoning") {
             const key = itemId ? `reason_${itemId}` : (itemIdFromItem ? `reason_${itemIdFromItem}` : null);
-            if (key && streamingTexts.current.has(key)) {
-              const acc = streamingTexts.current.get(key)!;
+            if (key && streamingLogIds.current.has(key)) {
+              const acc = streamingTexts.current.get(key) ?? "";
               const eid = streamingLogIds.current.get(key);
               if (eid) {
-                const text = acc.trim() || completedReasoningSummary || "Reasoning completed";
+                const text = acc.trim() || completedReasoningContent || completedReasoningSummary || "Reasoning completed";
                 setMessages((prev) =>
-                  prev.map((e) => (e.id === eid ? { ...e, text, streaming: false } : e)),
+                  prev.map((e) => (e.id === eid ? {
+                    ...e,
+                    text,
+                    reasoningSummary: completedReasoningSummary || reasoningSummaries.current.get(key),
+                    streaming: false,
+                  } : e)),
                 );
               }
               streamingTexts.current.delete(key);
+              reasoningSummaries.current.delete(key);
               streamingLogIds.current.delete(key);
               if (eid) return null;
             }
             return {
               level: "system" as const,
-              text: completedReasoningSummary || "Reasoning completed",
+              text: completedReasoningContent || completedReasoningSummary || "Reasoning completed",
+              reasoningSummary: completedReasoningSummary || undefined,
               kind: "reasoning" as const,
               streaming: false,
             };
@@ -654,6 +701,7 @@ export default function WebApp() {
         case "turn/error": {
           const msg = typeof params.message === "string" ? params.message : "Unknown error";
           setThinking(false);
+          setTurnStartedAt(null);
           setActiveTurnId(null);
           setStopping(false);
           interruptRequestTurnId.current = null;
@@ -666,15 +714,20 @@ export default function WebApp() {
           const activeFlags = Array.isArray(status?.activeFlags) ? (status as Record<string, unknown>).activeFlags as string[] : [];
           const flagsStr = activeFlags.length > 0 ? ":" + activeFlags.join(",") : "";
           setThreadStatus(type + flagsStr);
-          if (type === "active") setThinking(true);
+          if (type === "active") {
+            setThinking(true);
+            setTurnStartedAt((previous) => previous ?? Date.now());
+          }
           if (type === "idle") {
             setThinking(false);
+            setTurnStartedAt(null);
             setActiveTurnId(null);
             setStopping(false);
             interruptRequestTurnId.current = null;
           }
           if (type === "error") {
             setThinking(false);
+            setTurnStartedAt(null);
             setActiveTurnId(null);
             setStopping(false);
             interruptRequestTurnId.current = null;
@@ -682,6 +735,7 @@ export default function WebApp() {
           }
           if (type === "systemError") {
             setThinking(false);
+            setTurnStartedAt(null);
             setActiveTurnId(null);
             setStopping(false);
             interruptRequestTurnId.current = null;
@@ -1037,6 +1091,7 @@ export default function WebApp() {
     if (!activeWorkspaceId || !activeThreadId || !text.trim()) return false;
     appendLog("user", text);
     setThinking(true);
+    setTurnStartedAt(Date.now());
     setThreadStatus("running");
     setStopping(false);
     setBusy(true);
@@ -1054,6 +1109,7 @@ export default function WebApp() {
       return true;
     } catch (error) {
       setThinking(false);
+      setTurnStartedAt(null);
       setThreadStatus("idle");
       setStopping(false);
       appendLog("error", error instanceof Error ? error.message : String(error));
@@ -1177,9 +1233,17 @@ export default function WebApp() {
       } catch {
         // Best effort: `thread/read` below is the source for the browser projection.
       }
-      // `thread/resume` is the authoritative loaded-thread projection. In
-      // particular it preserves the reasoning summaries for interrupted turns;
-      // `thread/read` may legitimately return an empty turns projection.
+      // A resumed thread is the source for live status, but its embedded turns
+      // may be a summary projection. Request persisted turns explicitly with
+      // `itemsView: full` so history restores commands, reasoning, diffs, MCP
+      // calls, and other non-message items. Older runtimes fall back to read.
+      let persistedTurns: Record<string, unknown>[] | null = null;
+      try {
+        persistedTurns = await client.listThreadTurns(wid, id);
+      } catch {
+        // The paginated history API is experimental and may be absent on an
+        // older app-server; retain compatibility with thread/read.
+      }
       const raw = resumed ?? await client.readThread(wid, id);
       const payload = unwrapWebRpcResult(raw);
       const obj = payload && typeof payload === "object"
@@ -1188,11 +1252,14 @@ export default function WebApp() {
       const thread = obj.thread && typeof obj.thread === "object"
         ? obj.thread as Record<string, unknown>
         : undefined;
-      const turns = Array.isArray(thread?.turns)
+      const embeddedTurns = Array.isArray(thread?.turns)
         ? thread.turns as Record<string, unknown>[]
         : Array.isArray(obj.turns)
           ? obj.turns as Record<string, unknown>[]
           : [];
+      const turns = persistedTurns && persistedTurns.length > 0
+        ? persistedTurns
+        : embeddedTurns;
       const status = thread?.status;
       if (status && typeof status === "object") {
         const statusType = (status as Record<string, unknown>).type;
@@ -1209,7 +1276,18 @@ export default function WebApp() {
             && ["inProgress", "running"].includes(String((turnStatus as Record<string, unknown>).type ?? "")));
       });
       setActiveTurnId(typeof activeTurn?.id === "string" ? activeTurn.id : null);
-      const loaded = buildWebThreadHistory(thread ?? { turns, status: obj.status }, newLogId);
+      if (activeTurn) {
+        const rawStartedAt = activeTurn.startedAt ?? activeTurn.started_at;
+        setTurnStartedAt(typeof rawStartedAt === "number" && Number.isFinite(rawStartedAt)
+          ? rawStartedAt < 10_000_000_000 ? rawStartedAt * 1000 : rawStartedAt
+          : Date.now());
+      } else {
+        setTurnStartedAt(null);
+      }
+      const historyThread = thread
+        ? { ...thread, turns }
+        : { turns, status: obj.status };
+      const loaded = buildWebThreadHistory(historyThread, newLogId);
       setMessages(loaded);
     } catch { /* history load is best-effort */ }
   }, [activeWorkspaceId, client]);
@@ -1297,6 +1375,7 @@ export default function WebApp() {
         busy={busy}
         sendDisabled={!activeWorkspaceId || !activeThreadId}
         thinking={thinking}
+        turnStartedAt={turnStartedAt}
         onResolveApproval={resolveApproval}
       />
     </Layout>

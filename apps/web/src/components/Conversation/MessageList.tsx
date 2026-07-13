@@ -34,12 +34,13 @@ export type MessageEntry = LogEntry & {
 type Props = {
   items: MessageEntry[];
   thinking?: boolean;
+  turnStartedAt?: number | null;
   onOpenFile?: (path: string) => void;
   workspaceId?: string;
   onResolveApproval?: (workspaceId: string, requestId: number | string, decision: "accept" | "decline") => void;
 };
 
-export default function MessageList({ items, thinking = false, onOpenFile, workspaceId, onResolveApproval }: Props) {
+export default function MessageList({ items, thinking = false, turnStartedAt, onOpenFile, workspaceId, onResolveApproval }: Props) {
   if (items.length === 0) {
     return (
       <div className="web-empty">
@@ -98,6 +99,7 @@ export default function MessageList({ items, thinking = false, onOpenFile, works
             <ReasoningBlock
               key={entry.id}
               text={entry.text}
+              summary={entry.reasoningSummary}
               meta={entry.meta}
               streaming={entry.streaming}
             />
@@ -164,10 +166,29 @@ export default function MessageList({ items, thinking = false, onOpenFile, works
         if (turnItems[cursor].level === "assistant") { finalIndex = cursor; break; }
       }
     }
-    const executionItems = turnItems.filter((_, cursor) => cursor !== finalIndex);
+    let liveIndex = -1;
+    if (isActiveTurn) {
+      for (let cursor = turnItems.length - 1; cursor >= 0; cursor -= 1) {
+        const item = turnItems[cursor];
+        if (item.streaming || item.toolStatus === "inProgress" || item.toolStatus === "running") {
+          liveIndex = cursor;
+          break;
+        }
+      }
+      if (liveIndex < 0 && turnItems.length > 0) liveIndex = turnItems.length - 1;
+    }
+    const executionItems = turnItems.filter((_, cursor) => cursor !== finalIndex && cursor !== liveIndex);
+    const activeItem = liveIndex >= 0 ? turnItems[liveIndex] : null;
     if (executionItems.length > 0 || isActiveTurn) {
       rendered.push(
-        <ExecutionGroup key={`execution-${entry.id}`} items={executionItems} active={isActiveTurn}>
+        <ExecutionGroup
+          key={`execution-${entry.id}`}
+          items={turnItems.filter((_, cursor) => cursor !== finalIndex)}
+          active={isActiveTurn}
+          startedAt={turnStartedAt}
+          timelineItemCount={executionItems.length}
+          activeItem={activeItem ? renderEntry(activeItem) : null}
+        >
           {executionItems.map(renderEntry)}
         </ExecutionGroup>,
       );

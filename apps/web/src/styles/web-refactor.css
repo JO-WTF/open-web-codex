@@ -119,13 +119,25 @@ body:has(.web-app-shell) {
 .web-brand-connection.web-badge-offline .web-badge-dot { background: #f06464; }
 .web-brand-connection.web-badge-checking .web-badge-dot { background: var(--web-orange); }
 
-.web-rate-limit {
-  margin: 0 6px 14px;
-  padding: 10px 12px;
-  border: 1px solid var(--web-border);
-  border-radius: 10px;
-  background: rgb(31 39 54 / 66%);
+.web-quota-card {
+  display: grid;
+  gap: 11px;
+  margin-bottom: 12px;
+  padding: 11px 12px;
+  border: 1px solid var(--web-border-strong);
+  border-radius: 12px;
+  color: var(--web-muted);
+  background: rgb(31 39 54 / 72%);
 }
+
+.web-quota-row { display: grid; gap: 6px; }
+.web-quota-copy { display: flex; min-width: 0; align-items: baseline; gap: 5px; font-size: 10px; }
+.web-quota-copy strong { color: #d7dce4; font-size: 10px; font-weight: 680; }
+.web-quota-copy span { min-width: 0; overflow: hidden; color: var(--web-faint); text-overflow: ellipsis; white-space: nowrap; }
+.web-quota-copy b { margin-left: auto; color: #c7cdd7; font-size: 10px; font-variant-numeric: tabular-nums; }
+.web-quota-track { height: 5px; overflow: hidden; border-radius: 999px; background: #293142; }
+.web-quota-track > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #6ce3b9, #65bff1); }
+.web-quota-credits { padding-top: 1px; border-top: 1px solid rgb(148 163 184 / 13%); color: #aeb6c3; font-size: 10px; }
 
 .web-ws-section { padding: 0; }
 
@@ -232,7 +244,7 @@ body:has(.web-app-shell) {
 .web-ws-row {
   min-height: 42px;
   margin: 2px 0;
-  padding: 0 8px;
+  padding: 0 10px;
   border-radius: 10px;
   color: #c8cdd7;
 }
@@ -257,11 +269,11 @@ body:has(.web-app-shell) {
   content: "";
 }
 
-.web-ws-arrow { color: var(--web-faint); }
+.web-ws-arrow,
+.web-ws-folder-icon { display: none; }
 .web-ws-dot { display: none; }
-.web-ws-folder-icon { color: var(--web-muted); }
-.web-ws-name { color: inherit; font-size: 13px; font-weight: 620; }
-.web-ws-thread-count { color: var(--web-faint); background: transparent; }
+.web-ws-name { color: inherit; font-size: 14px; font-weight: 680; letter-spacing: -0.01em; }
+.web-ws-thread-count { margin-left: auto; color: var(--web-faint); background: transparent; font-size: 10px; }
 
 .web-ws-row:hover .web-ws-arrow,
 .web-ws-row:hover .web-ws-folder-icon {
@@ -328,13 +340,16 @@ body:has(.web-app-shell) {
 }
 
 .web-sidebar-bottom {
-  padding: 12px 18px 16px;
+  padding: 12px 16px 16px;
   background: transparent;
 }
 
 .web-settings-toggle {
-  width: 36px;
-  height: 36px;
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  align-items: center;
   justify-content: center;
   padding: 0;
   border: 1px solid var(--web-border-strong);
@@ -345,7 +360,17 @@ body:has(.web-app-shell) {
   cursor: pointer;
 }
 
-.web-settings-toggle-icon { margin: 0; }
+.web-settings-toggle-icon {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  line-height: 0;
+}
+
+.web-settings-toggle-icon svg { display: block; width: 16px; height: 16px; }
 
 .web-settings-backdrop {
   position: fixed;
@@ -755,11 +780,14 @@ body:has(.web-app-shell) {
 }
 
 .web-msg-assistant-body {
-  max-width: 100%;
-  padding: 0;
-  border: 0;
-  color: #c5cad3;
-  background: transparent;
+  width: fit-content;
+  max-width: min(86%, 760px);
+  padding: 11px 14px;
+  border: 1px solid rgb(148 163 184 / 13%);
+  border-radius: 13px;
+  color: #d6dae1;
+  background: #3a404b;
+  box-shadow: inset 0 1px rgb(255 255 255 / 4%);
   font-size: 13px;
   line-height: 1.55;
 }
@@ -833,6 +861,7 @@ body:has(.web-app-shell) {
 
 .web-execution-summary svg { color: var(--web-muted); transition: transform 140ms ease; }
 .web-execution-summary svg.is-open { transform: rotate(90deg); }
+.web-execution-summary[aria-disabled="true"] { cursor: default; }
 
 .web-execution-timeline {
   display: flex;
@@ -850,7 +879,14 @@ body:has(.web-app-shell) {
 .web-reasoning-icon { flex: 0 0 auto; color: var(--web-mint); }
 
 .web-execution-timeline .web-msg-assistant-body {
+  width: 100%;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
   color: #aeb5c1;
+  background: transparent;
+  box-shadow: none;
   font-size: 12px;
   line-height: 1.5;
 }
@@ -892,6 +928,15 @@ body:has(.web-app-shell) {
   color: var(--web-muted);
   font-size: 12px;
 }
+
+.web-execution-current {
+  margin-top: 8px;
+  padding-left: 14px;
+}
+
+.web-execution-current > * { width: 100%; }
+.web-execution-current .web-reasoning { border-left: 0; }
+.web-execution-current .web-reasoning-header { padding-left: 0; }
 
 .web-execution-elapsed {
   min-width: 28px;

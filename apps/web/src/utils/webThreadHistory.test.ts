@@ -69,6 +69,21 @@ describe("buildWebThreadHistory", () => {
     ]);
   });
 
+  it("restores reasoning content when the persisted summary is generic", () => {
+    const [entry] = buildWebThreadHistory({ turns: [{ items: [{
+      id: "reasoning-content",
+      type: "reasoning",
+      summary: ["Reasoning completed"],
+      content: ["Comparing the current layout with the target screenshot."],
+    }] }] }, () => "log-1");
+
+    expect(entry).toMatchObject({
+      kind: "reasoning",
+      text: "Comparing the current layout with the target screenshot.",
+    });
+    expect(entry.reasoningSummary).toBeUndefined();
+  });
+
   it("restores persisted dynamic tools as commands, diffs, and expandable tool cards", () => {
     let id = 0;
     const result = buildWebThreadHistory({

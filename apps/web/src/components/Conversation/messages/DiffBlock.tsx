@@ -11,7 +11,7 @@ type Props = {
 };
 
 export default function DiffBlock({ title, lines, updating = false }: Props) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
 
   return (
     <div className="web-diff-block">

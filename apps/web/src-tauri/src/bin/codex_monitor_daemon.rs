@@ -737,6 +737,21 @@ impl DaemonState {
         codex_core::read_thread_core(&self.sessions, workspace_id, thread_id).await
     }
 
+    async fn list_thread_turns(
+        &self,
+        workspace_id: String,
+        thread_id: String,
+        cursor: Option<String>,
+    ) -> Result<Value, String> {
+        codex_core::list_thread_turns_core(
+            &self.sessions,
+            workspace_id,
+            thread_id,
+            cursor,
+        )
+        .await
+    }
+
     async fn thread_live_subscribe(
         &self,
         workspace_id: String,
