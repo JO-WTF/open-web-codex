@@ -161,6 +161,64 @@ describe("Web Composer context usage", () => {
 });
 
 describe("Web Composer provider credentials", () => {
+  it("does not report an empty built-in catalog as zero models", () => {
+    render(
+      <Composer
+        draft=""
+        onDraftChange={vi.fn()}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+        running={false}
+        stopping={false}
+        busy={false}
+        disabled={false}
+        tokenUsage={null}
+        providers={[{
+          id: "openai",
+          name: "OpenAI",
+          kind: "builtIn",
+          isCurrent: false,
+          modelCount: 0,
+          canEdit: false,
+          canDelete: false,
+          canFetchModels: false,
+        }]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Codex" }));
+    expect(screen.getByText("builtIn · Built-in catalog")).not.toBeNull();
+    expect(screen.queryByText("builtIn · 0 models")).toBeNull();
+  });
+
+  it("renders a model name and id as separate text rows", () => {
+    render(
+      <Composer
+        draft=""
+        onDraftChange={vi.fn()}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+        running={false}
+        stopping={false}
+        busy={false}
+        disabled={false}
+        tokenUsage={null}
+        models={[{
+          id: "deepseek-v4-flash",
+          model: "deepseek-v4-flash",
+          displayName: "DeepSeek V4 Flash",
+        }]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Codex" }));
+    const name = screen.getByText("DeepSeek V4 Flash");
+    const id = screen.getByText("deepseek-v4-flash");
+    expect(name.tagName).toBe("STRONG");
+    expect(id.tagName).toBe("SMALL");
+    expect(name.parentElement).toBe(id.parentElement);
+  });
+
   it("submits a direct API key without displaying it in the provider catalog", async () => {
     const onWriteProvider = vi.fn(async () => undefined);
     render(

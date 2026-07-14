@@ -239,7 +239,7 @@ export default function Composer({ draft, onDraftChange, onSend, onStop, running
                 <h3>Providers</h3>
                 {providers.length === 0 ? <p>{catalogLoading ? "Loading providers…" : "No providers available"}</p> : providers.map((provider) => (
                   <div className={`web-model-catalog-row${provider.isCurrent ? " is-current" : ""}`} key={provider.id}>
-                    <span><strong>{provider.name}</strong><small>{provider.kind} · {provider.modelCount} models</small></span>
+                    <span><strong>{provider.name}</strong><small>{provider.kind} · {provider.modelCount > 0 ? `${provider.modelCount} models` : provider.kind === "builtIn" ? "Built-in catalog" : "No models fetched"}</small></span>
                     <span className="web-model-catalog-actions">
                       {provider.isCurrent ? <em>Current</em> : <button type="button" onClick={() => writeProvider({ action: "select", id: provider.id })}>Use</button>}
                       {provider.canEdit ? <button type="button" onClick={() => openProviderForm(provider)}>Edit</button> : null}
