@@ -34,27 +34,6 @@ const CURATED_PLUGINS_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const CURATED_PLUGINS_BACKUP_ARCHIVE_TIMEOUT: Duration = Duration::from_secs(30);
 // Keep this comfortably above a normal sync attempt so we do not race another Codex process.
 const CURATED_PLUGINS_STALE_TEMP_DIR_MAX_AGE: Duration = Duration::from_secs(10 * 60);
-// These variables can redirect Git away from the repository selected by `-C`,
-// or inject command-scoped configuration into the sync commands.
-const REPOSITORY_LOCAL_GIT_ENVIRONMENT_VARIABLES: &[&str] = &[
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "GIT_CEILING_DIRECTORIES",
-    "GIT_COMMON_DIR",
-    "GIT_CONFIG",
-    "GIT_CONFIG_COUNT",
-    "GIT_CONFIG_PARAMETERS",
-    "GIT_DIR",
-    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
-    "GIT_GRAFT_FILE",
-    "GIT_IMPLICIT_WORK_TREE",
-    "GIT_INDEX_FILE",
-    "GIT_NAMESPACE",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_PREFIX",
-    "GIT_REPLACE_REF_BASE",
-    "GIT_SHALLOW_FILE",
-    "GIT_WORK_TREE",
-];
 
 #[derive(Debug, Deserialize)]
 struct GitHubRepositorySummary {
@@ -93,17 +72,9 @@ fn curated_plugins_sha_path(codex_home: &Path) -> PathBuf {
 }
 
 pub fn sync_openai_plugins_repo(codex_home: &Path) -> Result<String, String> {
-    #[cfg(target_os = "macos")]
-    let git_binary = match which::which("git") {
-        Ok(git_path) => macos_git_binary_from_path(git_path, apple_developer_tools_available()),
-        Err(_) => None,
-    };
-    #[cfg(not(target_os = "macos"))]
-    let git_binary = Some(PathBuf::from("git"));
-
     sync_openai_plugins_repo_with_transport_overrides(
         codex_home,
-        git_binary.as_deref(),
+        "git",
         GITHUB_API_BASE_URL,
         CURATED_PLUGINS_BACKUP_ARCHIVE_API_URL,
     )
@@ -111,18 +82,13 @@ pub fn sync_openai_plugins_repo(codex_home: &Path) -> Result<String, String> {
 
 fn sync_openai_plugins_repo_with_transport_overrides(
     codex_home: &Path,
-    git_binary: Option<&Path>,
+    git_binary: &str,
     api_base_url: &str,
     backup_archive_api_url: &str,
 ) -> Result<String, String> {
     let _file_guard = lock_curated_plugins_startup_sync(codex_home)?;
 
-    let git_sync_result = match git_binary {
-        Some(git_binary) => sync_openai_plugins_repo_via_git(codex_home, git_binary),
-        None => Err("git executable is unavailable".to_string()),
-    };
-
-    match git_sync_result {
+    match sync_openai_plugins_repo_via_git(codex_home, git_binary) {
         Ok(remote_sha) => {
             emit_curated_plugins_startup_sync_metric("git", "success");
             emit_curated_plugins_startup_sync_final_metric("git", "success");
@@ -132,6 +98,7 @@ fn sync_openai_plugins_repo_with_transport_overrides(
             emit_curated_plugins_startup_sync_metric("git", "failure");
             warn!(
                 error = %err,
+                git_binary,
                 "git sync failed for curated plugin sync; falling back to GitHub HTTP"
             );
             match sync_openai_plugins_repo_via_http(codex_home, api_base_url) {
@@ -194,10 +161,7 @@ fn lock_curated_plugins_startup_sync(codex_home: &Path) -> Result<File, String> 
     Ok(lock_file)
 }
 
-fn sync_openai_plugins_repo_via_git(
-    codex_home: &Path,
-    git_binary: &Path,
-) -> Result<String, String> {
+fn sync_openai_plugins_repo_via_git(codex_home: &Path, git_binary: &str) -> Result<String, String> {
     let repo_path = curated_plugins_repo_path(codex_home);
     let sha_path = codex_home.join(CURATED_PLUGINS_SHA_FILE);
     let remote_sha = git_ls_remote_head_sha(git_binary)?;
@@ -244,7 +208,7 @@ fn sync_openai_plugins_repo_via_git(
 fn fetch_curated_plugins_commit(
     repo_path: &Path,
     remote_sha: &str,
-    git_binary: &Path,
+    git_binary: &str,
 ) -> Result<(), String> {
     fetch_curated_plugins_commit_from(
         repo_path,
@@ -259,7 +223,7 @@ fn fetch_curated_plugins_commit_from_source(
     repo_path: &Path,
     source_repo_path: &Path,
     remote_sha: &str,
-    git_binary: &Path,
+    git_binary: &str,
 ) -> Result<(), String> {
     fetch_curated_plugins_commit_from(
         repo_path,
@@ -274,22 +238,25 @@ fn fetch_curated_plugins_commit_from(
     repo_path: &Path,
     source: &Path,
     source_revision: &str,
-    git_binary: &Path,
+    git_binary: &str,
     context: &str,
 ) -> Result<(), String> {
     let fetch_refspec = format!("+{source_revision}:{CURATED_PLUGINS_FETCH_REF}");
-    let mut command = git_command(git_binary);
-    command
-        .arg("-C")
-        .arg(repo_path)
-        .args(["fetch", "--depth", "1", "--no-tags"])
-        .arg(source)
-        .arg(fetch_refspec);
-    let output = run_git_command_with_timeout(&mut command, context, CURATED_PLUGINS_GIT_TIMEOUT)?;
+    let output = run_git_command_with_timeout(
+        Command::new(git_binary)
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .arg("-C")
+            .arg(repo_path)
+            .args(["fetch", "--depth", "1", "--no-tags"])
+            .arg(source)
+            .arg(fetch_refspec),
+        context,
+        CURATED_PLUGINS_GIT_TIMEOUT,
+    )?;
     ensure_git_success(&output, context)
 }
 
-fn reset_curated_plugins_checkout(repo_path: &Path, git_binary: &Path) -> Result<(), String> {
+fn reset_curated_plugins_checkout(repo_path: &Path, git_binary: &str) -> Result<(), String> {
     run_git_in_repo(
         repo_path,
         git_binary,
@@ -306,13 +273,19 @@ fn reset_curated_plugins_checkout(repo_path: &Path, git_binary: &Path) -> Result
 
 fn run_git_in_repo(
     repo_path: &Path,
-    git_binary: &Path,
+    git_binary: &str,
     args: &[&str],
     context: &str,
 ) -> Result<(), String> {
-    let mut command = git_command(git_binary);
-    command.arg("-C").arg(repo_path).args(args);
-    let output = run_git_command_with_timeout(&mut command, context, CURATED_PLUGINS_GIT_TIMEOUT)?;
+    let output = run_git_command_with_timeout(
+        Command::new(git_binary)
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .arg("-C")
+            .arg(repo_path)
+            .args(args),
+        context,
+        CURATED_PLUGINS_GIT_TIMEOUT,
+    )?;
     ensure_git_success(&output, context)
 }
 
@@ -598,7 +571,7 @@ fn write_curated_plugins_sha(sha_path: &Path, remote_sha: &str) -> Result<(), St
 fn read_local_git_or_sha_file(
     repo_path: &Path,
     sha_path: &Path,
-    git_binary: &Path,
+    git_binary: &str,
 ) -> Option<String> {
     if repo_path.join(".git").is_dir()
         && let Ok(sha) = git_head_sha(repo_path, git_binary)
@@ -609,14 +582,13 @@ fn read_local_git_or_sha_file(
     read_sha_file(sha_path)
 }
 
-fn git_ls_remote_head_sha(git_binary: &Path) -> Result<String, String> {
-    let mut command = git_command(git_binary);
-    command
-        .arg("ls-remote")
-        .arg("https://github.com/openai/plugins.git")
-        .arg("HEAD");
+fn git_ls_remote_head_sha(git_binary: &str) -> Result<String, String> {
     let output = run_git_command_with_timeout(
-        &mut command,
+        Command::new(git_binary)
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .arg("ls-remote")
+            .arg("https://github.com/openai/plugins.git")
+            .arg("HEAD"),
         "git ls-remote curated plugins repo",
         CURATED_PLUGINS_GIT_TIMEOUT,
     )?;
@@ -637,8 +609,9 @@ fn git_ls_remote_head_sha(git_binary: &Path) -> Result<String, String> {
     Ok(sha.to_string())
 }
 
-fn git_head_sha(repo_path: &Path, git_binary: &Path) -> Result<String, String> {
-    let output = git_command(git_binary)
+fn git_head_sha(repo_path: &Path, git_binary: &str) -> Result<String, String> {
+    let output = Command::new(git_binary)
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .arg("-C")
         .arg(repo_path)
         .arg("rev-parse")
@@ -660,38 +633,6 @@ fn git_head_sha(repo_path: &Path, git_binary: &Path) -> Result<String, String> {
         ));
     }
     Ok(sha)
-}
-
-fn git_command(git_binary: &Path) -> Command {
-    let mut command = Command::new(git_binary);
-    command.env("GIT_OPTIONAL_LOCKS", "0");
-    for name in REPOSITORY_LOCAL_GIT_ENVIRONMENT_VARIABLES {
-        command.env_remove(name);
-    }
-    command
-}
-
-#[cfg(any(target_os = "macos", test))]
-fn macos_git_binary_from_path(
-    git_path: PathBuf,
-    apple_developer_tools_available: bool,
-) -> Option<PathBuf> {
-    if git_path == Path::new("/usr/bin/git") && !apple_developer_tools_available {
-        None
-    } else {
-        Some(git_path)
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn apple_developer_tools_available() -> bool {
-    Command::new("/usr/bin/xcode-select")
-        .arg("-p")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
 }
 
 fn run_git_command_with_timeout(

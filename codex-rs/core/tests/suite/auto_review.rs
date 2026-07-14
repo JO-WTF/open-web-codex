@@ -131,10 +131,7 @@ async fn remote_model_override_uses_catalog_model_for_strict_auto_review() -> Re
 
     let models_manager = thread_manager.get_models_manager();
     models_manager
-        .list_models(
-            RefreshStrategy::OnlineIfUncached,
-            codex_core::test_support::default_http_client_factory(),
-        )
+        .list_models(RefreshStrategy::OnlineIfUncached)
         .await;
     let model_info = models_manager
         .get_model_info(model, &config.to_models_manager_config())
@@ -148,6 +145,7 @@ async fn remote_model_override_uses_catalog_model_for_strict_auto_review() -> Re
         &codex,
         codex_protocol::protocol::ThreadSettingsOverrides {
             model: Some(model.to_string()),
+            model_provider_id: None,
             ..Default::default()
         },
     )
@@ -166,6 +164,7 @@ async fn remote_model_override_uses_catalog_model_for_strict_auto_review() -> Re
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                model_provider_id: None,
                 environments: Some(local_selections(cwd_path)),
                 approval_policy: Some(AskForApproval::OnRequest),
                 sandbox_policy: Some(sandbox_policy),
@@ -244,8 +243,7 @@ fn remote_model_with_auto_review_override(slug: &str, review_model: &str) -> Mod
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: None,
-        include_skills_usage_instructions: false,
-        supports_reasoning_summary_parameter: true,
+        supports_reasoning_summaries: false,
         default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,
         default_verbosity: None,

@@ -20,6 +20,7 @@ fn model_info() -> ModelInfo {
         "upgrade": null,
         "base_instructions": "base",
         "model_messages": null,
+        "supports_reasoning_summaries": false,
         "default_reasoning_summary": "auto",
         "support_verbosity": false,
         "default_verbosity": null,

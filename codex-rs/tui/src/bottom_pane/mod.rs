@@ -190,8 +190,6 @@ use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::status_indicator_widget::StatusIndicatorWidget;
 pub(crate) use experimental_features_view::ExperimentalFeatureItem;
 pub(crate) use experimental_features_view::ExperimentalFeaturesView;
-pub(crate) use list_selection_view::SELECTION_TOGGLE_BLOCKED_PREFIX;
-pub(crate) use list_selection_view::SELECTION_TOGGLE_UNAVAILABLE_PREFIX;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
 
@@ -1357,6 +1355,17 @@ impl BottomPane {
 
     pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
         self.push_view(view);
+    }
+
+    /// Dismiss all active modal views before opening a new top-level surface.
+    pub(crate) fn clear_active_views(&mut self) {
+        if self.view_stack.is_empty() {
+            return;
+        }
+
+        self.view_stack.clear();
+        self.on_active_view_complete();
+        self.request_redraw();
     }
 
     /// Called when the agent requests user approval.

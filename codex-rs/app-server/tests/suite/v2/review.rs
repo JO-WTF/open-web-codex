@@ -59,10 +59,7 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .build()
-        .await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_id = start_default_thread(&mut mcp).await?;
@@ -113,8 +110,8 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
         let started: ItemStartedNotification =
             serde_json::from_value(item_started.params.expect("params must be present"))?;
         match started.item {
-            ThreadItem::EnteredReviewMode { review, .. } => {
-                assert_eq!(started.turn_id, turn_id);
+            ThreadItem::EnteredReviewMode { id, review } => {
+                assert_eq!(id, turn_id);
                 assert_eq!(review, "commit 1234567: Tidy UI colors");
                 saw_entered_review_mode = true;
                 break;
@@ -139,8 +136,8 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
         let completed: ItemCompletedNotification =
             serde_json::from_value(review_notif.params.expect("params must be present"))?;
         match completed.item {
-            ThreadItem::ExitedReviewMode { review, .. } => {
-                assert_eq!(completed.turn_id, turn_id);
+            ThreadItem::ExitedReviewMode { id, review } => {
+                assert_eq!(id, turn_id);
                 review_body = Some(review);
                 break;
             }
@@ -176,10 +173,7 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
     let codex_home = TempDir::new()?;
     create_config_toml_with_approval_policy(codex_home.path(), &server.uri(), "untrusted")?;
 
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .build()
-        .await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_id = start_default_thread(&mut mcp).await?;
@@ -262,10 +256,7 @@ async fn review_start_rejects_empty_base_branch() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .build()
-        .await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let thread_id = start_default_thread(&mut mcp).await?;
 
@@ -308,10 +299,7 @@ async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<(
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .build()
-        .await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_id = start_default_thread(&mut mcp).await?;
@@ -389,10 +377,7 @@ async fn review_start_rejects_empty_commit_sha() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .build()
-        .await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let thread_id = start_default_thread(&mut mcp).await?;
 
@@ -427,10 +412,7 @@ async fn review_start_rejects_empty_custom_instructions() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .build()
-        .await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let thread_id = start_default_thread(&mut mcp).await?;
 

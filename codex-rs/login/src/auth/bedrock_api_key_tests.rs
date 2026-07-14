@@ -85,7 +85,6 @@ async fn login_with_bedrock_api_key_replaces_openai_auth() -> anyhow::Result<()>
             CodexAuth::ApiKey(_)
             | CodexAuth::Chatgpt(_)
             | CodexAuth::ChatgptAuthTokens(_)
-            | CodexAuth::Headers(_)
             | CodexAuth::AgentIdentity(_)
             | CodexAuth::PersonalAccessToken(_) => None,
         }),
@@ -149,7 +148,6 @@ async fn bedrock_only_auth_storage_creates_primary_auth() -> anyhow::Result<()> 
             CodexAuth::ApiKey(_)
             | CodexAuth::Chatgpt(_)
             | CodexAuth::ChatgptAuthTokens(_)
-            | CodexAuth::Headers(_)
             | CodexAuth::AgentIdentity(_)
             | CodexAuth::PersonalAccessToken(_) => None,
         }),

@@ -30,6 +30,8 @@ use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_connectors::AppInfo;
 use codex_file_search::FileMatch;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -120,8 +122,7 @@ pub(crate) struct PluginRemoteSectionError {
 /// invocation and must call `finish_status_rate_limit_refresh` when done so the
 /// card stops showing a "refreshing" state. A `UsageMenu` refreshes a cached
 /// zero reset count so the disabled menu entry can become available without a
-/// restart. A `ResetPicker` refreshes the rate limits and detailed reset-credit
-/// rows before showing redemption choices.
+/// restart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RateLimitRefreshOrigin {
     /// Eagerly fetched after bootstrap for `/status` data and reset availability.
@@ -131,8 +132,6 @@ pub(crate) enum RateLimitRefreshOrigin {
     StatusCommand { request_id: u64 },
     /// User reopened `/usage` while the cached reset-credit count was zero.
     UsageMenu { request_id: u64 },
-    /// User opened the reset-credit picker.
-    ResetPicker { request_id: u64 },
     /// Refresh requested after a reset credit was successfully consumed.
     ResetConsume { request_id: u64 },
 }
@@ -142,6 +141,63 @@ pub(crate) enum KeymapEditIntent {
     ReplaceAll,
     AddAlternate,
     ReplaceOne { old_key: String },
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum ProviderConfigAction {
+    Upsert {
+        id: String,
+        provider: ModelProviderInfo,
+    },
+    FetchModelsForNewProvider {
+        draft: ProviderFormDraft,
+        provider: ModelProviderInfo,
+    },
+    Delete {
+        id: String,
+    },
+    Use {
+        id: String,
+    },
+    FetchModels {
+        id: String,
+    },
+    /// Persist a context window update for a specific model under a provider.
+    UpdateModelContextWindow {
+        id: String,
+        model_id: String,
+        context_window: i64,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProviderFormMode {
+    Add,
+    Edit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProviderFormField {
+    Id,
+    Name,
+    BaseUrl,
+    EnvKey,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ProviderFormDraft {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) base_url: String,
+    pub(crate) env_key: String,
+    pub(crate) wire_api: WireApi,
+}
+
+impl ProviderFormDraft {
+    pub(crate) fn with_wire_api(mut self, wire_api: WireApi) -> Self {
+        self.wire_api = wire_api;
+        self
+    }
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -162,14 +218,6 @@ pub(crate) enum AppEvent {
     SubmitThreadOp {
         thread_id: ThreadId,
         op: AppCommand,
-    },
-
-    /// Interrupt, roll back, and retry a safety-buffered turn with the server-selected model.
-    RetrySafetyBufferedTurn {
-        thread_id: ThreadId,
-        turn_id: String,
-        model: String,
-        turn: AppCommand,
     },
 
     /// Deliver a synthetic history lookup response to a specific thread channel.
@@ -323,20 +371,63 @@ pub(crate) enum AppEvent {
     /// Open the default token-activity view selected from the `/usage` menu.
     OpenTokenActivity,
 
+    /// Open the provider management popup.
+    OpenProviderManager,
+
+    /// Open details for a specific model provider.
+    OpenProviderDetail {
+        id: String,
+    },
+
+    /// Confirm deletion for a model provider.
+    OpenProviderDeleteConfirm {
+        id: String,
+    },
+
+    /// Open the add/edit provider form.
+    OpenProviderForm {
+        mode: ProviderFormMode,
+        draft: ProviderFormDraft,
+    },
+
+    /// Apply one submitted provider form field and continue the form.
+    ProviderFormFieldSubmitted {
+        mode: ProviderFormMode,
+        draft: ProviderFormDraft,
+        field: ProviderFormField,
+        value: String,
+    },
+
+    /// Apply a selected provider wire API and continue the form.
+    ProviderFormWireApiSelected {
+        mode: ProviderFormMode,
+        draft: ProviderFormDraft,
+        wire_api: WireApi,
+    },
+
+    /// Persist a provider configuration mutation.
+    ProviderConfigAction {
+        action: ProviderConfigAction,
+    },
+
     /// Open the reset-credit flow selected from the `/usage` menu.
     OpenRateLimitResetCredits,
+
+    /// Result of reading the current reset-credit balance.
+    RateLimitResetCreditsLoaded {
+        request_id: u64,
+        result: Result<GetAccountRateLimitsResponse, String>,
+    },
 
     /// Consume one reset credit using a stable idempotency key.
     ConsumeRateLimitResetCredit {
         idempotency_key: String,
-        credit_id: Option<String>,
     },
 
     /// Result of consuming one reset credit.
     RateLimitResetCreditConsumed {
         request_id: u64,
         idempotency_key: String,
-        credit_id: Option<String>,
         result: Result<ConsumeAccountRateLimitResetCreditResponse, String>,
     },
 
@@ -750,6 +841,15 @@ pub(crate) enum AppEvent {
     /// Open the full model picker (non-auto models).
     OpenAllModelsPopup {
         models: Vec<ModelPreset>,
+    },
+
+    /// Open the context window configuration popup for a specific model.
+    /// When `pending_selection` is `Some` the popup will automatically complete
+    /// the model selection after the context window is saved.
+    OpenModelContextWindowPopup {
+        model_id: String,
+        provider_id: String,
+        pending_selection: Option<crate::chatwidget::model_popups::PendingModelSelection>,
     },
 
     /// Open the confirmation prompt before enabling full access mode.

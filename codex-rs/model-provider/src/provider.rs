@@ -10,19 +10,28 @@ use codex_api::SharedAuthProvider;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::ProviderModelInfo;
+use codex_models_manager::manager::ModelsEndpointClient;
 use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::Verbosity;
 use codex_protocol::error::CodexErr;
+use codex_protocol::openai_models::ApplyPatchToolType;
+use codex_protocol::openai_models::ConfigShellToolType;
+use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::TruncationPolicyConfig;
+use codex_protocol::openai_models::WebSearchToolType;
+use codex_protocol::openai_models::default_input_modalities;
 
 use crate::amazon_bedrock::AmazonBedrockModelProvider;
-use crate::auth::ProviderAuthScope;
-use crate::auth::ResolvedProviderAuth;
 use crate::auth::auth_manager_for_provider;
 use crate::auth::resolve_provider_auth;
-use crate::auth::resolve_provider_auth_for_scope;
 use crate::models_endpoint::OpenAiModelsEndpoint;
 
 /// Optional provider-backed features that Codex may expose at runtime.
@@ -178,21 +187,6 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         })
     }
 
-    /// Returns request credentials, optionally scoped to a Codex session task.
-    fn api_auth_for_scope(
-        &self,
-        scope: ProviderAuthScope,
-    ) -> ModelProviderFuture<'_, codex_protocol::error::Result<ResolvedProviderAuth>> {
-        Box::pin(async move {
-            if !provider_uses_first_party_auth_path(self.info()) {
-                return self.api_auth().await.map(ResolvedProviderAuth::new);
-            }
-            let auth = self.auth().await;
-            resolve_provider_auth_for_scope(self.auth_manager(), auth.as_ref(), self.info(), scope)
-                .await
-        })
-    }
-
     /// Creates the model manager implementation appropriate for this provider.
     fn models_manager(
         &self,
@@ -206,12 +200,15 @@ pub type ModelProviderFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a
 /// Shared runtime model provider handle.
 pub type SharedModelProvider = Arc<dyn ModelProvider>;
 
-fn provider_uses_first_party_auth_path(provider: &ModelProviderInfo) -> bool {
-    provider.requires_openai_auth
-        && provider.env_key.is_none()
-        && provider.experimental_bearer_token.is_none()
-        && provider.auth.is_none()
-        && provider.aws.is_none()
+/// Fetches the provider-owned remote model list without falling back to cached or bundled models.
+pub async fn fetch_provider_models(
+    provider_info: ModelProviderInfo,
+    auth_manager: Option<Arc<AuthManager>>,
+) -> codex_protocol::error::Result<Vec<ModelInfo>> {
+    let endpoint = OpenAiModelsEndpoint::new(provider_info, auth_manager);
+    let client_version = codex_models_manager::client_version_to_whole();
+    let (models, _etag) = endpoint.list_models(&client_version).await?;
+    Ok(models)
 }
 
 /// Creates the default runtime model provider for configured provider metadata.
@@ -277,9 +274,6 @@ impl ModelProvider for ConfiguredModelProvider {
                     if auth_manager.refresh_failure_for_auth(&auth).is_some() {
                         return None;
                     }
-                    if matches!(auth, CodexAuth::Headers(_)) {
-                        return None;
-                    }
                     Some(auth)
                 })
                 .map(|auth| match &auth {
@@ -289,7 +283,6 @@ impl ModelProvider for ConfiguredModelProvider {
                     }
                     CodexAuth::Chatgpt(_)
                     | CodexAuth::ChatgptAuthTokens(_)
-                    | CodexAuth::Headers(_)
                     | CodexAuth::AgentIdentity(_)
                     | CodexAuth::PersonalAccessToken(_) => {
                         let email = auth.get_account_email();
@@ -321,6 +314,17 @@ impl ModelProvider for ConfiguredModelProvider {
                 self.auth_manager.clone(),
                 model_catalog,
             )),
+            None if !self.info.models.is_empty() => Arc::new(StaticModelsManager::new(
+                self.auth_manager.clone(),
+                ModelsResponse {
+                    models: self
+                        .info
+                        .models
+                        .iter()
+                        .map(provider_model_to_model_info)
+                        .collect(),
+                },
+            )),
             None => {
                 let endpoint = Arc::new(OpenAiModelsEndpoint::new(
                     self.info.clone(),
@@ -336,23 +340,74 @@ impl ModelProvider for ConfiguredModelProvider {
     }
 }
 
+fn provider_model_to_model_info(model: &ProviderModelInfo) -> ModelInfo {
+    let max_token_len = model.max_token_len.unwrap_or(128_000);
+    let configured_context_window = model.context_window.or(model.max_token_len);
+    let context_window = Some(configured_context_window.unwrap_or(max_token_len));
+    ModelInfo {
+        slug: model.model_id.clone(),
+        display_name: model
+            .model_name
+            .clone()
+            .unwrap_or_else(|| model.model_id.clone()),
+        description: None,
+        default_reasoning_level: model
+            .default_reasoning_level
+            .clone()
+            .or(Some(ReasoningEffort::None)),
+        supported_reasoning_levels: model.supported_reasoning_levels.clone(),
+        shell_type: ConfigShellToolType::ShellCommand,
+        visibility: if model.show_in_picker {
+            ModelVisibility::List
+        } else {
+            ModelVisibility::Hide
+        },
+        supported_in_api: true,
+        priority: 0,
+        additional_speed_tiers: Vec::new(),
+        service_tiers: Vec::new(),
+        default_service_tier: None,
+        availability_nux: None,
+        upgrade: None,
+        base_instructions: "base instructions".to_string(),
+        model_messages: None,
+        supports_reasoning_summaries: false,
+        default_reasoning_summary: ReasoningSummary::Auto,
+        support_verbosity: false,
+        default_verbosity: None::<Verbosity>,
+        apply_patch_tool_type: None::<ApplyPatchToolType>,
+        web_search_tool_type: WebSearchToolType::Text,
+        truncation_policy: TruncationPolicyConfig::tokens(max_token_len),
+        supports_parallel_tool_calls: false,
+        supports_image_detail_original: false,
+        context_window,
+        max_context_window: configured_context_window,
+        auto_compact_token_limit: None,
+        comp_hash: None,
+        effective_context_window_percent: 95,
+        experimental_supported_tools: Vec::new(),
+        input_modalities: default_input_modalities(),
+        used_fallback_model_metadata: false,
+        supports_search_tool: false,
+        use_responses_lite: false,
+        auto_review_model_override: None,
+        tool_mode: None,
+        multi_agent_version: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU64;
 
-    use codex_http_client::HttpClientFactory;
-    use codex_http_client::OutboundProxyPolicy;
-    use codex_login::auth::AgentIdentityAuthPolicy;
     use codex_login::auth::BedrockApiKeyAuth;
     use codex_model_provider_info::ModelProviderAwsAuthInfo;
     use codex_model_provider_info::WireApi;
-    use codex_model_provider_info::create_oss_provider_with_base_url;
     use codex_models_manager::manager::RefreshStrategy;
     use codex_protocol::account::PlanType;
     use codex_protocol::config_types::ModelProviderAuthInfo;
     use codex_protocol::openai_models::ModelInfo;
     use codex_protocol::openai_models::ModelsResponse;
-    use codex_protocol::protocol::SessionSource;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use wiremock::Mock;
@@ -363,7 +418,6 @@ mod tests {
     use wiremock::matchers::path;
 
     use super::*;
-    use crate::auth::AgentIdentitySessionFallback;
 
     fn provider_info_with_command_auth() -> ModelProviderInfo {
         ModelProviderInfo {
@@ -396,6 +450,7 @@ mod tests {
             auth: None,
             aws: None,
             wire_api: WireApi::Responses,
+            models: Vec::new(),
             query_params: None,
             http_headers: None,
             env_http_headers: None,
@@ -421,6 +476,7 @@ mod tests {
             "priority": 0,
             "upgrade": null,
             "base_instructions": "base instructions",
+            "supports_reasoning_summaries": false,
             "support_verbosity": false,
             "default_verbosity": null,
             "apply_patch_tool_type": null,
@@ -434,30 +490,38 @@ mod tests {
         .expect("valid model")
     }
 
+    #[test]
+    fn provider_model_context_window_sets_model_context_window() {
+        let model = ProviderModelInfo {
+            model_id: "provider-model".to_string(),
+            context_window: Some(200_000),
+            ..Default::default()
+        };
+
+        let model_info = provider_model_to_model_info(&model);
+
+        assert_eq!(model_info.context_window, Some(200_000));
+        assert_eq!(model_info.max_context_window, Some(200_000));
+    }
+
+    #[test]
+    fn provider_model_context_window_fallback_does_not_set_max_context_window() {
+        let model = ProviderModelInfo {
+            model_id: "provider-model".to_string(),
+            ..Default::default()
+        };
+
+        let model_info = provider_model_to_model_info(&model);
+
+        assert_eq!(model_info.context_window, Some(128_000));
+        assert_eq!(model_info.max_context_window, None);
+    }
+
     fn bedrock_api_key_auth() -> CodexAuth {
         CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
             api_key: "bedrock-api-key-test".to_string(),
             region: "us-east-1".to_string(),
         })
-    }
-
-    #[tokio::test]
-    async fn scoped_auth_ignores_scope_for_non_openai_provider() {
-        let provider = create_model_provider(
-            create_oss_provider_with_base_url("http://localhost:11434/v1", WireApi::Responses),
-            /*auth_manager*/ None,
-        );
-
-        let auth = provider
-            .api_auth_for_scope(ProviderAuthScope {
-                agent_identity_policy: AgentIdentityAuthPolicy::JwtOnly,
-                session_source: SessionSource::Cli,
-                agent_identity_session_fallback: AgentIdentitySessionFallback::default(),
-            })
-            .await
-            .expect("auth should resolve");
-
-        assert!(auth.auth.to_auth_headers().is_empty());
     }
 
     #[test]
@@ -614,6 +678,7 @@ mod tests {
                 name: "Custom".to_string(),
                 base_url: Some("http://localhost:1234/v1".to_string()),
                 wire_api: WireApi::Responses,
+                models: Vec::new(),
                 requires_openai_auth: false,
                 ..Default::default()
             },
@@ -657,55 +722,23 @@ mod tests {
         let manager =
             provider.models_manager(test_codex_home(), /*config_model_catalog*/ None);
 
-        let catalog = manager
-            .raw_model_catalog(
-                RefreshStrategy::Online,
-                HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
-            )
-            .await;
-        let models = catalog
+        let catalog = manager.raw_model_catalog(RefreshStrategy::Online).await;
+        let model_ids = catalog
             .models
             .iter()
-            .map(|model| (model.slug.as_str(), model.display_name.as_str()))
+            .map(|model| model.slug.as_str())
             .collect::<Vec<_>>();
 
-        assert_eq!(
-            models,
-            vec![
-                ("openai.gpt-5.6-sol", "GPT-5.6 Sol"),
-                ("openai.gpt-5.6-terra", "GPT-5.6 Terra"),
-                ("openai.gpt-5.6-luna", "GPT-5.6 Luna"),
-                ("openai.gpt-5.5", "GPT-5.5"),
-                ("openai.gpt-5.4", "GPT-5.4"),
-            ]
-        );
+        assert_eq!(model_ids, vec!["openai.gpt-5.5", "openai.gpt-5.4"]);
 
-        let available_models = manager
-            .list_models(
-                RefreshStrategy::Online,
-                HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
-            )
-            .await;
-        assert_eq!(
-            available_models
-                .iter()
-                .map(|preset| preset.model.as_str())
-                .collect::<Vec<_>>(),
-            vec![
-                "openai.gpt-5.6-sol",
-                "openai.gpt-5.6-terra",
-                "openai.gpt-5.6-luna",
-                "openai.gpt-5.5",
-                "openai.gpt-5.4",
-            ]
-        );
-
-        let default_model = available_models
-            .iter()
+        let default_model = manager
+            .list_models(RefreshStrategy::Online)
+            .await
+            .into_iter()
             .find(|preset| preset.is_default)
             .expect("Bedrock catalog should have a default model");
 
-        assert_eq!(default_model.model, "openai.gpt-5.6-sol");
+        assert_eq!(default_model.model, "openai.gpt-5.5");
     }
 
     #[tokio::test]
@@ -730,12 +763,7 @@ mod tests {
             }),
         );
 
-        let catalog = manager
-            .raw_model_catalog(
-                RefreshStrategy::Online,
-                HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
-            )
-            .await;
+        let catalog = manager.raw_model_catalog(RefreshStrategy::Online).await;
 
         assert_eq!(catalog.models.len(), 1);
         assert_eq!(catalog.models[0].slug, "gpt-5.5");
@@ -777,12 +805,7 @@ mod tests {
 
         let manager =
             provider.models_manager(test_codex_home(), /*config_model_catalog*/ None);
-        let catalog = manager
-            .raw_model_catalog(
-                RefreshStrategy::Online,
-                HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
-            )
-            .await;
+        let catalog = manager.raw_model_catalog(RefreshStrategy::Online).await;
 
         assert!(
             catalog

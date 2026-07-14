@@ -37,13 +37,6 @@
       ],
       "type": "string"
     },
-    "PluginInstallPolicySource": {
-      "enum": [
-        "WORKSPACE_SETTING",
-        "IMPLICIT_CANONICAL_APP"
-      ],
-      "type": "string"
-    },
     "PluginInterface": {
       "properties": {
         "brandColor": {
@@ -377,40 +370,6 @@
           "type": "object"
         },
         {
-          "properties": {
-            "package": {
-              "type": "string"
-            },
-            "registry": {
-              "description": "Optional HTTPS registry URL. Authentication stays in the user's npm config.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "npm"
-              ],
-              "title": "NpmPluginSourceType",
-              "type": "string"
-            },
-            "version": {
-              "description": "Optional npm version or version range.",
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "package",
-            "type"
-          ],
-          "title": "NpmPluginSource",
-          "type": "object"
-        },
-        {
           "description": "The plugin is available in the remote catalog. Download metadata is kept server-side and is not exposed through the app-server API.",
           "properties": {
             "type": {
@@ -451,16 +410,6 @@
         },
         "installPolicy": {
           "$ref": "#/definitions/PluginInstallPolicy"
-        },
-        "installPolicySource": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/PluginInstallPolicySource"
-            },
-            {
-              "type": "null"
-            }
-          ]
         },
         "installed": {
           "type": "boolean"
@@ -513,14 +462,6 @@
         },
         "source": {
           "$ref": "#/definitions/PluginSource"
-        },
-        "version": {
-          "default": null,
-          "description": "Version advertised by the remote marketplace backend when available.",
-          "type": [
-            "string",
-            "null"
-          ]
         }
       },
       "required": [

@@ -5,10 +5,7 @@ use codex_protocol::protocol::APPS_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::APPS_INSTRUCTIONS_OPEN_TAG;
 
 pub(crate) fn render_apps_section(connectors: &[AppInfo]) -> Option<String> {
-    connectors
-        .iter()
-        .any(|connector| connector.is_accessible && connector.is_enabled)
-        .then(|| AppsInstructions.render())
+    AppsInstructions::from_connectors(connectors).map(|instructions| instructions.render())
 }
 
 #[cfg(test)]
@@ -22,8 +19,6 @@ mod tests {
             description: None,
             logo_url: None,
             logo_url_dark: None,
-            icon_assets: None,
-            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,

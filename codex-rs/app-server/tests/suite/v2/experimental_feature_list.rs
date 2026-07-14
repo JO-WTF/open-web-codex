@@ -50,11 +50,7 @@ async fn experimental_feature_list_returns_feature_metadata_with_stage() -> Resu
         ))
         .build()
         .await?;
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .without_auto_env()
-        .build()
-        .await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
 
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
@@ -138,12 +134,7 @@ async fn experimental_feature_list_marks_apps_and_plugins_disabled_by_workspace_
         .mount(&server)
         .await;
 
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .without_auto_env()
-        .without_managed_config()
-        .build()
-        .await?;
+    let mut mcp = TestAppServer::new_without_managed_config(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -204,15 +195,11 @@ memories = true
 "#,
     )?;
 
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .without_managed_config()
-        .build()
-        .await?;
+    let mut mcp = TestAppServer::new_without_managed_config(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let thread_start_id = mcp
-        .send_thread_start_request_with_auto_env(ThreadStartParams {
+        .send_thread_start_request(ThreadStartParams {
             cwd: Some(workspace.path().display().to_string()),
             ..Default::default()
         })
@@ -242,11 +229,7 @@ memories = true
 #[tokio::test]
 async fn experimental_feature_list_rejects_unknown_thread_id() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .without_auto_env()
-        .build()
-        .await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -281,11 +264,7 @@ async fn experimental_feature_enablement_set_applies_to_global_and_thread_config
     let project_cwd = codex_home.path().join("project");
     std::fs::create_dir_all(&project_cwd)?;
 
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .without_auto_env()
-        .build()
-        .await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let actual = set_experimental_feature_enablement(
@@ -322,11 +301,7 @@ async fn experimental_feature_enablement_set_does_not_override_user_config() -> 
         codex_home.path().join("config.toml"),
         "[features]\nmemories = false\n",
     )?;
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .without_auto_env()
-        .build()
-        .await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let actual = set_experimental_feature_enablement(
@@ -357,11 +332,7 @@ async fn experimental_feature_enablement_set_does_not_override_user_config() -> 
 #[tokio::test]
 async fn experimental_feature_enablement_set_only_updates_named_features() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .without_auto_env()
-        .build()
-        .await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     set_experimental_feature_enablement(
@@ -436,11 +407,7 @@ async fn experimental_feature_enablement_set_only_updates_named_features() -> Re
 #[tokio::test]
 async fn experimental_feature_enablement_set_allows_remote_control() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .without_auto_env()
-        .build()
-        .await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     let remote_control_enabled = false;
     let enablement = BTreeMap::from([("remote_control".to_string(), remote_control_enabled)]);
@@ -458,11 +425,7 @@ async fn experimental_feature_enablement_set_allows_remote_control() -> Result<(
 #[tokio::test]
 async fn experimental_feature_enablement_set_empty_map_is_no_op() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .without_auto_env()
-        .build()
-        .await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     set_experimental_feature_enablement(
@@ -495,11 +458,7 @@ async fn experimental_feature_enablement_set_empty_map_is_no_op() -> Result<()> 
 #[tokio::test]
 async fn experimental_feature_enablement_set_ignores_invalid_features() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .without_auto_env()
-        .build()
-        .await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let actual = set_experimental_feature_enablement(

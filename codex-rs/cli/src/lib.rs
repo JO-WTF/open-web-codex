@@ -53,12 +53,7 @@ pub struct SeatbeltCommand {
     pub sandbox_state: SandboxStateArgs,
 
     /// Named permissions profile to apply from the active configuration stack.
-    #[arg(
-        long = "permission-profile",
-        alias = "permissions-profile",
-        short = 'P',
-        value_name = "NAME"
-    )]
+    #[arg(long = "permissions-profile", short = 'P', value_name = "NAME")]
     pub permissions_profile: Option<String>,
 
     /// Layer $CODEX_HOME/<name>.config.toml on top of the base user config.
@@ -109,12 +104,7 @@ pub struct LandlockCommand {
     pub sandbox_state: SandboxStateArgs,
 
     /// Named permissions profile to apply from the active configuration stack.
-    #[arg(
-        long = "permission-profile",
-        alias = "permissions-profile",
-        short = 'P',
-        value_name = "NAME"
-    )]
+    #[arg(long = "permissions-profile", short = 'P', value_name = "NAME")]
     pub permissions_profile: Option<String>,
 
     /// Layer $CODEX_HOME/<name>.config.toml on top of the base user config.
@@ -152,12 +142,7 @@ pub struct WindowsCommand {
     pub sandbox_state: SandboxStateArgs,
 
     /// Named permissions profile to apply from the active configuration stack.
-    #[arg(
-        long = "permission-profile",
-        alias = "permissions-profile",
-        short = 'P',
-        value_name = "NAME"
-    )]
+    #[arg(long = "permissions-profile", short = 'P', value_name = "NAME")]
     pub permissions_profile: Option<String>,
 
     /// Layer $CODEX_HOME/<name>.config.toml on top of the base user config.

@@ -819,7 +819,6 @@ mod tests {
             let parsed_thread_id = ThreadId::from_string(thread_id).expect("thread id");
             let rollout_line = RolloutLine {
                 timestamp: timestamp.to_string(),
-                ordinal: None,
                 item: RolloutItem::SessionMeta(codex_protocol::protocol::SessionMetaLine {
                     meta: codex_protocol::protocol::SessionMeta {
                         session_id: parsed_thread_id.into(),

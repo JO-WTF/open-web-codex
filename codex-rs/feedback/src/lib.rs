@@ -4,7 +4,6 @@ use std::collections::btree_map::Entry;
 use std::fs;
 use std::io::Write;
 use std::io::{self};
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -18,7 +17,6 @@ use codex_protocol::protocol::SessionSource;
 use tracing::Event;
 use tracing::Level;
 use tracing::field::Visit;
-use tracing::level_filters::LevelFilter;
 use tracing_subscriber::Layer;
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::fmt::writer::MakeWriter;
@@ -206,11 +204,7 @@ impl CodexFeedback {
             .with_target(false)
             // Capture everything, regardless of the caller's `RUST_LOG`, so feedback includes the
             // full trace when the user uploads a report.
-            .with_filter(
-                Targets::new()
-                    .with_default(Level::TRACE)
-                    .with_target("codex_api::responses_websocket_timing", LevelFilter::OFF),
-            )
+            .with_filter(Targets::new().with_default(Level::TRACE))
     }
 
     /// Returns a [`tracing_subscriber`] layer that collects structured metadata for feedback.
@@ -599,22 +593,10 @@ impl FeedbackSnapshot {
                         .map(|s| s.to_string_lossy().to_string())
                         .unwrap_or_else(|| "extra-log.log".to_string())
                 });
-            let content_type = match Path::new(&filename)
-                .extension()
-                .and_then(|extension| extension.to_str())
-            {
-                Some(extension) if extension.eq_ignore_ascii_case("jsonl") => {
-                    "text/plain".to_string()
-                }
-                _ => mime_guess::from_path(&filename)
-                    .first_or_octet_stream()
-                    .essence_str()
-                    .to_string(),
-            };
             attachments.push(Attachment {
                 buffer: data,
                 filename,
-                content_type: Some(content_type),
+                content_type: Some("text/plain".to_string()),
                 ty: None,
             });
         }
@@ -728,21 +710,6 @@ mod tests {
     }
 
     #[test]
-    fn logger_layer_excludes_responses_websocket_timing_payloads() {
-        let fb = CodexFeedback::new();
-        let _guard = tracing_subscriber::registry()
-            .with(fb.logger_layer())
-            .set_default();
-
-        tracing::trace!(target: "codex_api::responses_websocket_timing", payload = "secret");
-        tracing::trace!(target: "codex_feedback_test", "retained");
-
-        let logs = String::from_utf8(fb.snapshot(/*session_id*/ None).bytes).unwrap();
-        assert!(!logs.contains("secret"));
-        assert!(logs.contains("retained"));
-    }
-
-    #[test]
     fn metadata_layer_records_tags_from_feedback_target() {
         let fb = CodexFeedback::new();
         let _guard = tracing_subscriber::registry()
@@ -808,10 +775,6 @@ mod tests {
         );
         assert_eq!(attachments_with_diagnostics[3].buffer, b"rollout".to_vec());
         assert_eq!(
-            attachments_with_diagnostics[3].content_type.as_deref(),
-            Some("text/plain")
-        );
-        assert_eq!(
             OsStr::new(attachments_with_diagnostics[3].filename.as_str()),
             OsStr::new(extra_filename.as_str())
         );
@@ -829,62 +792,6 @@ mod tests {
         );
         assert_eq!(attachments_without_diagnostics[0].buffer, vec![1]);
         fs::remove_file(extra_path).expect("extra attachment should be removed");
-    }
-
-    #[test]
-    fn path_backed_attachments_use_binary_content_types() {
-        let suffix = ThreadId::new();
-        let gzip_filename = format!("codex-desktop-app-logs-{suffix}.tar.gz");
-        let unknown_filename = format!("codex-feedback-extra-{suffix}.binunknown");
-        let gzip_path = std::env::temp_dir().join(&gzip_filename);
-        let unknown_path = std::env::temp_dir().join(&unknown_filename);
-        let gzip_bytes = b"\x1f\x8b\x08\x00\xff";
-        let unknown_bytes = b"\x00\x9f\x92\x96";
-        fs::write(&gzip_path, gzip_bytes).expect("gzip attachment should be written");
-        fs::write(&unknown_path, unknown_bytes).expect("unknown attachment should be written");
-
-        let attachments = CodexFeedback::new()
-            .snapshot(/*session_id*/ None)
-            .feedback_attachments(
-                /*include_logs*/ false,
-                &[],
-                &[
-                    FeedbackAttachmentPath {
-                        path: gzip_path.clone(),
-                        attachment_filename_override: None,
-                    },
-                    FeedbackAttachmentPath {
-                        path: unknown_path.clone(),
-                        attachment_filename_override: None,
-                    },
-                ],
-                /*logs_override*/ None,
-            );
-
-        fs::remove_file(gzip_path).expect("gzip attachment should be removed");
-        fs::remove_file(unknown_path).expect("unknown attachment should be removed");
-        assert_eq!(
-            attachments
-                .iter()
-                .map(|attachment| (
-                    attachment.filename.as_str(),
-                    attachment.content_type.as_deref(),
-                    attachment.buffer.as_slice(),
-                ))
-                .collect::<Vec<_>>(),
-            vec![
-                (
-                    gzip_filename.as_str(),
-                    Some("application/gzip"),
-                    gzip_bytes.as_slice(),
-                ),
-                (
-                    unknown_filename.as_str(),
-                    Some("application/octet-stream"),
-                    unknown_bytes.as_slice(),
-                ),
-            ]
-        );
     }
 
     #[test]

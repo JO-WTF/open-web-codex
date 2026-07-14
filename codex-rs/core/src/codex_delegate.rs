@@ -40,7 +40,6 @@ use crate::guardian::spawn_approval_request_review;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_ACCEPT;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC;
-use crate::mcp_tool_call::McpToolApprovalMetadata;
 use crate::mcp_tool_call::build_guardian_mcp_tool_review_request;
 use crate::mcp_tool_call::is_mcp_tool_approval_question_id;
 use crate::mcp_tool_call::lookup_mcp_tool_metadata;
@@ -60,12 +59,6 @@ use codex_protocol::protocol::MultiAgentVersion;
 
 #[cfg(test)]
 use crate::session::completed_session_loop_termination;
-
-#[derive(Clone)]
-struct PendingMcpInvocation {
-    invocation: McpInvocation,
-    metadata: Option<McpToolApprovalMetadata>,
-}
 
 /// Start an interactive sub-Codex thread and return IO channels.
 ///
@@ -93,7 +86,6 @@ pub(crate) async fn run_codex_thread_interactive(
     };
     let CodexSpawnOk { codex, .. } = Box::pin(Codex::spawn(CodexSpawnArgs {
         config,
-        allow_provider_model_fallback: false,
         user_instructions,
         installation_id: parent_session.installation_id.clone(),
         auth_manager,
@@ -105,10 +97,8 @@ pub(crate) async fn run_codex_thread_interactive(
         skills_service: Arc::clone(&parent_session.services.skills_service),
         plugins_manager: Arc::clone(&parent_session.services.plugins_manager),
         mcp_manager: Arc::clone(&parent_session.services.mcp_manager),
-        code_mode_session_provider: parent_session.services.code_mode_service.session_provider(),
         extensions: Arc::clone(&parent_session.services.extensions),
         conversation_history,
-        requested_history_mode: None,
         session_source: SessionSource::SubAgent(subagent_source.clone()),
         forked_from_thread_id,
         parent_thread_id: Some(parent_session.thread_id),
@@ -133,6 +123,7 @@ pub(crate) async fn run_codex_thread_interactive(
         attestation_provider: parent_session.services.attestation_provider.clone(),
         external_time_provider: Some(Arc::clone(&parent_session.services.time_provider)),
         inherited_multi_agent_version: Some(MultiAgentVersion::Disabled),
+        initial_multi_agent_mode: None,
     }))
     .or_cancel(&cancel_token)
     .await??;
@@ -158,10 +149,10 @@ pub(crate) async fn run_codex_thread_interactive(
     let parent_session_clone = Arc::clone(&parent_session);
     let parent_ctx_clone = Arc::clone(&parent_ctx);
     let codex_for_events = Arc::clone(&codex);
-    // Cache the child call's MCP metadata at begin time. The later legacy
-    // RequestUserInput approval event only carries a call_id and question metadata.
-    let pending_mcp_invocations =
-        Arc::new(Mutex::new(HashMap::<String, PendingMcpInvocation>::new()));
+    // Cache delegated MCP invocations so guardian can recover the full tool call
+    // context when the later legacy RequestUserInput approval event only carries
+    // a call_id plus approval question metadata.
+    let pending_mcp_invocations = Arc::new(Mutex::new(HashMap::<String, McpInvocation>::new()));
     tokio::spawn(async move {
         forward_events(
             codex_for_events,
@@ -279,7 +270,7 @@ async fn forward_events(
     tx_sub: Sender<Event>,
     parent_session: Arc<Session>,
     parent_ctx: Arc<TurnContext>,
-    pending_mcp_invocations: Arc<Mutex<HashMap<String, PendingMcpInvocation>>>,
+    pending_mcp_invocations: Arc<Mutex<HashMap<String, McpInvocation>>>,
     cancel_token: CancellationToken,
 ) {
     let cancelled = cancel_token.cancelled();
@@ -299,11 +290,11 @@ async fn forward_events(
                 match event {
                     Event {
                         id: _,
-                        msg:
-                            EventMsg::TokenCount(_)
-                            | EventMsg::SessionConfigured(_)
-                            | EventMsg::McpStartupUpdate(_)
-                            | EventMsg::McpStartupComplete(_),
+                        msg: EventMsg::TokenCount(_),
+                    } => {}
+                    Event {
+                        id: _,
+                        msg: EventMsg::SessionConfigured(_),
                     } => {}
                     Event {
                         id,
@@ -366,34 +357,10 @@ async fn forward_events(
                         id,
                         msg: EventMsg::McpToolCallBegin(event),
                     } => {
-                        // Runtime refreshes are published before a request step is captured, so
-                        // the child runtime at call begin is the one executing this invocation.
-                        // Cache its metadata now; the later approval event has only a call ID.
-                        let metadata = if let Some(turn_context) =
-                            codex.session.turn_context_for_sub_id(&id).await
-                        {
-                            let mcp = codex.session.services.latest_mcp_runtime();
-                            lookup_mcp_tool_metadata(
-                                codex.session.as_ref(),
-                                turn_context.as_ref(),
-                                mcp.manager(),
-                                &event.invocation.server,
-                                &event.invocation.tool,
-                            )
-                            .await
-                        } else {
-                            None
-                        };
                         pending_mcp_invocations
                             .lock()
                             .await
-                            .insert(
-                                event.call_id.clone(),
-                                PendingMcpInvocation {
-                                    invocation: event.invocation.clone(),
-                                    metadata,
-                                },
-                            );
+                            .insert(event.call_id.clone(), event.invocation.clone());
                         if !forward_event_or_shutdown(
                             &codex,
                             &tx_sub,
@@ -656,10 +623,11 @@ async fn handle_patch_approval(
     let decision = if let Some(decision) = guardian_decision {
         decision
     } else {
-        let decision =
-            parent_session.request_patch_approval(parent_ctx, call_id, changes, reason, grant_root);
+        let decision_rx = parent_session
+            .request_patch_approval(parent_ctx, call_id, changes, reason, grant_root)
+            .await;
         await_approval_with_cancel(
-            decision,
+            async move { decision_rx.await.unwrap_or_default() },
             parent_session,
             &approval_id,
             cancel_token,
@@ -680,7 +648,7 @@ async fn handle_request_user_input(
     id: String,
     parent_session: &Arc<Session>,
     parent_ctx: &Arc<TurnContext>,
-    pending_mcp_invocations: &Arc<Mutex<HashMap<String, PendingMcpInvocation>>>,
+    pending_mcp_invocations: &Arc<Mutex<HashMap<String, McpInvocation>>>,
     event: RequestUserInputEvent,
     cancel_token: &CancellationToken,
 ) {
@@ -718,12 +686,12 @@ async fn handle_request_user_input(
 /// programmatically after running the guardian review.
 ///
 /// The RequestUserInput event only carries `call_id` plus approval question
-/// metadata, so this helper joins it back to the child runtime metadata cached at
-/// `McpToolCallBegin` in order to rebuild the full guardian review request.
+/// metadata, so this helper joins it back to the cached `McpToolCallBegin`
+/// invocation in order to rebuild the full guardian review request.
 async fn maybe_auto_review_mcp_request_user_input(
     parent_session: &Arc<Session>,
     parent_ctx: &Arc<TurnContext>,
-    pending_mcp_invocations: &Arc<Mutex<HashMap<String, PendingMcpInvocation>>>,
+    pending_mcp_invocations: &Arc<Mutex<HashMap<String, McpInvocation>>>,
     event: &RequestUserInputEvent,
     cancel_token: &CancellationToken,
 ) -> Option<RequestUserInputResponse> {
@@ -734,13 +702,18 @@ async fn maybe_auto_review_mcp_request_user_input(
         .questions
         .iter()
         .find(|question| is_mcp_tool_approval_question_id(&question.id))?;
-    let pending = pending_mcp_invocations
+    let invocation = pending_mcp_invocations
         .lock()
         .await
         .get(&event.call_id)
         .cloned()?;
-    let invocation = pending.invocation;
-    let metadata = pending.metadata;
+    let metadata = lookup_mcp_tool_metadata(
+        parent_session.as_ref(),
+        parent_ctx.as_ref(),
+        &invocation.server,
+        &invocation.tool,
+    )
+    .await;
     let approvals_reviewer =
         mcp_approvals_reviewer(parent_ctx, &invocation.server, metadata.as_ref());
     if !routes_approval_to_guardian_with_reviewer(parent_ctx, approvals_reviewer) {

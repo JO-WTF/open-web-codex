@@ -27,7 +27,6 @@ use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::WebSearchAction as ApiWebSearchAction;
-use codex_app_server_protocol::WebSearchItem as ApiWebSearchItem;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::PermissionProfile;
@@ -363,14 +362,14 @@ fn web_search_completion_preserves_query_and_action() {
 
     let collected = processor.collect_thread_events(ServerNotification::ItemCompleted(
         ItemCompletedNotification {
-            item: ThreadItem::WebSearch(ApiWebSearchItem {
+            item: ThreadItem::WebSearch {
                 id: "search-1".to_string(),
                 query: "rust async await".to_string(),
                 action: Some(ApiWebSearchAction::Search {
                     query: Some("rust async await".to_string()),
                     queries: None,
                 }),
-            }),
+            },
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
             completed_at_ms: 0,
@@ -404,11 +403,11 @@ fn web_search_start_and_completion_reuse_item_id() {
 
     let started =
         processor.collect_thread_events(ServerNotification::ItemStarted(ItemStartedNotification {
-            item: ThreadItem::WebSearch(ApiWebSearchItem {
+            item: ThreadItem::WebSearch {
                 id: "search-1".to_string(),
                 query: String::new(),
                 action: None,
-            }),
+            },
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
             started_at_ms: 0,
@@ -416,14 +415,14 @@ fn web_search_start_and_completion_reuse_item_id() {
 
     let completed = processor.collect_thread_events(ServerNotification::ItemCompleted(
         ItemCompletedNotification {
-            item: ThreadItem::WebSearch(ApiWebSearchItem {
+            item: ThreadItem::WebSearch {
                 id: "search-1".to_string(),
                 query: "rust async await".to_string(),
                 action: Some(ApiWebSearchAction::Search {
                     query: Some("rust async await".to_string()),
                     queries: None,
                 }),
-            }),
+            },
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
             completed_at_ms: 0,

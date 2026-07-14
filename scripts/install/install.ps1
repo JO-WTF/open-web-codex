@@ -79,10 +79,11 @@ function Assert-ValidReleaseVersion {
 function Find-ReleaseAssetMetadata {
     param(
         [string]$AssetName,
-        [object]$ReleaseMetadata
+        [string]$ResolvedVersion
     )
 
-    $asset = $ReleaseMetadata.assets | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1
+    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/openai/codex/releases/tags/rust-v$ResolvedVersion"
+    $asset = $release.assets | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1
     if ($null -eq $asset) {
         return $null
     }
@@ -96,6 +97,20 @@ function Find-ReleaseAssetMetadata {
         Url = $asset.browser_download_url
         Sha256 = $digestMatch.Groups[1].Value.ToLowerInvariant()
     }
+}
+
+function Get-ReleaseAssetMetadata {
+    param(
+        [string]$AssetName,
+        [string]$ResolvedVersion
+    )
+
+    $metadata = Find-ReleaseAssetMetadata -AssetName $AssetName -ResolvedVersion $ResolvedVersion
+    if ($null -eq $metadata) {
+        throw "Could not find release asset $AssetName for Codex $ResolvedVersion."
+    }
+
+    return $metadata
 }
 
 function Test-ArchiveDigest {
@@ -201,38 +216,22 @@ function Remove-StaleInstallArtifacts {
     }
 }
 
-function Resolve-Release {
+function Resolve-Version {
     $normalizedVersion = Normalize-Version -RawVersion $Release
     Assert-ValidReleaseVersion -Version $normalizedVersion
-
-    if ($normalizedVersion -eq "latest") {
-        $requestedRelease = "latest"
-        $metadataUri = "https://api.github.com/repos/openai/codex/releases/latest"
-    } else {
-        $resolvedVersion = $normalizedVersion
-        $requestedRelease = $resolvedVersion
-        $metadataUri = "https://api.github.com/repos/openai/codex/releases/tags/rust-v$resolvedVersion"
+    if ($normalizedVersion -ne "latest") {
+        return $normalizedVersion
     }
 
-    try {
-        $releaseMetadata = Invoke-RestMethod -Uri $metadataUri
-    } catch {
-        throw "Could not fetch GitHub release metadata for Codex $requestedRelease. GitHub API may be unavailable or rate limited. $($_.Exception.Message)"
+    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/openai/codex/releases/latest"
+    if (-not $release.tag_name) {
+        Write-Error "Failed to resolve the latest Codex release version."
+        exit 1
     }
 
-    if ($normalizedVersion -eq "latest") {
-        if (-not $releaseMetadata.tag_name) {
-            throw "Failed to resolve the latest Codex release version."
-        }
-
-        $resolvedVersion = Normalize-Version -RawVersion $releaseMetadata.tag_name
-        Assert-ValidReleaseVersion -Version $resolvedVersion
-    }
-
-    return [PSCustomObject]@{
-        Version = $resolvedVersion
-        Metadata = $releaseMetadata
-    }
+    $resolvedVersion = Normalize-Version -RawVersion $release.tag_name
+    Assert-ValidReleaseVersion -Version $resolvedVersion
+    return $resolvedVersion
 }
 
 function Get-VersionFromBinary {
@@ -538,7 +537,6 @@ function Test-PackageContentsAreComplete {
     $expectedFiles = @(
         "codex-package.json",
         "bin\codex.exe",
-        "bin\codex-code-mode-host.exe",
         "codex-path\rg.exe",
         "codex-resources\codex-command-runner.exe",
         "codex-resources\codex-windows-sandbox-setup.exe"
@@ -748,9 +746,7 @@ if ([string]::IsNullOrWhiteSpace($env:CODEX_INSTALL_DIR)) {
 }
 
 $currentVersion = Get-CurrentInstalledVersion -StandaloneCurrentDir $currentDir
-$resolvedRelease = Resolve-Release
-$resolvedVersion = $resolvedRelease.Version
-$releaseMetadata = $resolvedRelease.Metadata
+$resolvedVersion = Resolve-Version
 $releaseName = "$resolvedVersion-$target"
 $releaseDir = Join-Path $releasesDir $releaseName
 
@@ -769,12 +765,12 @@ $oldStandaloneBackup = $null
 
 $packageAsset = "codex-package-$target.tar.gz"
 $checksumAsset = "codex-package_SHA256SUMS"
-$packageMetadata = Find-ReleaseAssetMetadata -AssetName $packageAsset -ReleaseMetadata $releaseMetadata
-$checksumMetadata = Find-ReleaseAssetMetadata -AssetName $checksumAsset -ReleaseMetadata $releaseMetadata
+$packageMetadata = Find-ReleaseAssetMetadata -AssetName $packageAsset -ResolvedVersion $resolvedVersion
+$checksumMetadata = Find-ReleaseAssetMetadata -AssetName $checksumAsset -ResolvedVersion $resolvedVersion
 $installLayout = "Package"
 if ($null -eq $packageMetadata -or $null -eq $checksumMetadata) {
     $packageAsset = "codex-npm-$npmTag-$resolvedVersion.tgz"
-    $packageMetadata = Find-ReleaseAssetMetadata -AssetName $packageAsset -ReleaseMetadata $releaseMetadata
+    $packageMetadata = Find-ReleaseAssetMetadata -AssetName $packageAsset -ResolvedVersion $resolvedVersion
     if ($null -ne $packageMetadata) {
         $installLayout = "LegacyPlatformNpm"
     } else {

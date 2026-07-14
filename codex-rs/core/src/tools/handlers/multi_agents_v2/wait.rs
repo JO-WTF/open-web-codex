@@ -2,6 +2,7 @@ use super::*;
 use crate::session::InputQueueActivity;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use crate::tools::handlers::multi_agents_spec::create_wait_agent_tool_v2;
+use crate::turn_timing::now_unix_timestamp_ms;
 use codex_tools::ToolSpec;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -75,20 +76,16 @@ impl Handler {
             .await;
 
         session
-            .emit_turn_item_started(
+            .send_event(
                 &turn,
-                &TurnItem::CollabAgentToolCall(CollabAgentToolCallItem {
-                    id: call_id.clone(),
-                    tool: CollabAgentTool::Wait,
-                    status: CollabAgentToolCallStatus::InProgress,
+                CollabWaitingBeginEvent {
+                    started_at_ms: now_unix_timestamp_ms(),
                     sender_thread_id: session.thread_id,
                     receiver_thread_ids: Vec::new(),
                     receiver_agents: Vec::new(),
-                    prompt: None,
-                    model: None,
-                    reasoning_effort: None,
-                    agents_states: Default::default(),
-                }),
+                    call_id: call_id.clone(),
+                }
+                .into(),
             )
             .await;
 
@@ -97,20 +94,16 @@ impl Handler {
         let result = WaitAgentResult::from_outcome(outcome);
 
         session
-            .emit_turn_item_completed(
+            .send_event(
                 &turn,
-                TurnItem::CollabAgentToolCall(CollabAgentToolCallItem {
-                    id: call_id,
-                    tool: CollabAgentTool::Wait,
-                    status: CollabAgentToolCallStatus::Completed,
+                CollabWaitingEndEvent {
                     sender_thread_id: session.thread_id,
-                    receiver_thread_ids: Vec::new(),
-                    receiver_agents: Vec::new(),
-                    prompt: None,
-                    model: None,
-                    reasoning_effort: None,
-                    agents_states: HashMap::new(),
-                }),
+                    call_id,
+                    completed_at_ms: now_unix_timestamp_ms(),
+                    agent_statuses: Vec::new(),
+                    statuses: HashMap::new(),
+                }
+                .into(),
             )
             .await;
 

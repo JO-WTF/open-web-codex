@@ -53,11 +53,7 @@ async fn marketplace_remove_deletes_config_and_installed_root() -> Result<()> {
     write_installed_marketplace(codex_home.path(), "debug")?;
     let installed_root = marketplace_install_root(codex_home.path()).join("debug");
 
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .without_auto_env()
-        .build()
-        .await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -95,11 +91,7 @@ async fn marketplace_remove_deletes_config_and_installed_root() -> Result<()> {
 async fn marketplace_remove_rejects_unknown_marketplace() -> Result<()> {
     let codex_home = TempDir::new()?;
 
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .without_auto_env()
-        .build()
-        .await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp

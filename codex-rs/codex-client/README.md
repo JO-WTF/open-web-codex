@@ -1,8 +1,8 @@
 # codex-client
 
-Higher-level request policy layered on `codex-http-client` without any Codex/OpenAI API awareness.
+Generic transport layer that wraps HTTP requests, retries, and streaming primitives without any Codex/OpenAI awareness.
 
+- Defines `HttpTransport` and a default `ReqwestTransport` plus thin `Request`/`Response` types.
 - Provides retry utilities (`RetryPolicy`, `RetryOn`, `run_with_retry`, `backoff`) that callers plug into for unary and streaming calls.
 - Supplies the `sse_stream` helper to turn byte streams into raw SSE `data:` frames with idle timeouts and surfaced stream errors.
-- Defines the request telemetry callback used by higher-level clients.
-- Re-exports the low-level HTTP types temporarily so consumers can migrate to `codex-http-client` incrementally.
+- Consumed by higher-level crates like `codex-api`; it stays neutral on endpoints, headers, or API-specific error shapes.

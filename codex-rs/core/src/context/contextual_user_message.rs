@@ -75,7 +75,7 @@ pub(crate) fn is_contextual_user_fragment(content_item: &ContentItem) -> bool {
 }
 
 pub(crate) fn parse_visible_hook_prompt_message(
-    id: Option<&str>,
+    id: Option<&String>,
     content: &[ContentItem],
 ) -> Option<HookPromptItem> {
     let mut fragments = Vec::new();

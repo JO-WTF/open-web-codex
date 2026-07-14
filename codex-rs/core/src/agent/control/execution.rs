@@ -32,16 +32,7 @@ impl AgentControl {
         thread_id: ThreadId,
         op: &Op,
     ) -> CodexResult<()> {
-        self.ensure_execution_capacity_for_turn_start(thread_id, op_starts_turn(op))
-            .await
-    }
-
-    pub(super) async fn ensure_execution_capacity_for_turn_start(
-        &self,
-        thread_id: ThreadId,
-        starts_turn: bool,
-    ) -> CodexResult<()> {
-        if !starts_turn {
+        if !op_starts_turn(op) {
             return Ok(());
         }
         let state = self.upgrade()?;

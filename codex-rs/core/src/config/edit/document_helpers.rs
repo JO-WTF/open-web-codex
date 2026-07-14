@@ -1,5 +1,4 @@
 use codex_config::types::AppToolApproval;
-use codex_config::types::McpServerAuth;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerEnvVar;
 use codex_config::types::McpServerToolConfig;
@@ -96,9 +95,6 @@ fn serialize_mcp_server_table(config: &McpServerConfig) -> TomlTable {
         }
     }
 
-    if matches!(&config.auth, McpServerAuth::ChatGpt) {
-        entry["auth"] = value("chatgpt");
-    }
     if !config.enabled {
         entry["enabled"] = value(false);
     }
@@ -121,7 +117,6 @@ fn serialize_mcp_server_table(config: &McpServerConfig) -> TomlTable {
         entry["default_tools_approval_mode"] = value(match approval_mode {
             AppToolApproval::Auto => "auto",
             AppToolApproval::Prompt => "prompt",
-            AppToolApproval::Writes => "writes",
             AppToolApproval::Approve => "approve",
         });
     }
@@ -174,7 +169,6 @@ fn serialize_mcp_server_tool(config: &McpServerToolConfig) -> TomlItem {
         entry["approval_mode"] = value(match approval_mode {
             AppToolApproval::Auto => "auto",
             AppToolApproval::Prompt => "prompt",
-            AppToolApproval::Writes => "writes",
             AppToolApproval::Approve => "approve",
         });
     }

@@ -13,7 +13,6 @@ use crate::LogRow;
 use crate::MEMORIES_DB_FILENAME;
 use crate::STATE_DB_FILENAME;
 use crate::SortKey;
-use crate::THREAD_HISTORY_DB_FILENAME;
 use crate::ThreadMetadata;
 use crate::ThreadMetadataBuilder;
 use crate::ThreadsPage;
@@ -145,16 +144,7 @@ const MEMORIES_DB: RuntimeDbSpec = RuntimeDbSpec {
     migrate_phase: "migrate_memories",
 };
 
-const THREAD_HISTORY_DB: RuntimeDbSpec = RuntimeDbSpec {
-    label: "thread history DB",
-    filename: THREAD_HISTORY_DB_FILENAME,
-    kind: DbKind::ThreadHistory,
-    open_phase: "open_thread_history",
-    migrate_phase: "migrate_thread_history",
-};
-
-const RUNTIME_DBS: [RuntimeDbSpec; 5] =
-    [STATE_DB, LOGS_DB, GOALS_DB, MEMORIES_DB, THREAD_HISTORY_DB];
+const RUNTIME_DBS: [RuntimeDbSpec; 4] = [STATE_DB, LOGS_DB, GOALS_DB, MEMORIES_DB];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeDbPath {
@@ -177,9 +167,9 @@ pub struct StateRuntime {
 impl StateRuntime {
     /// Initialize the state runtime using the provided Codex home and default provider.
     ///
-    /// This opens (and migrates) the SQLite databases under `codex_home`.
-    /// Logs and paginated thread history live in dedicated files to reduce
-    /// lock contention with the rest of the state store.
+    /// This opens (and migrates) the SQLite databases under `codex_home`,
+    /// keeping logs in a dedicated file to reduce lock contention with the
+    /// rest of the state store.
     pub async fn init(codex_home: PathBuf, default_provider: String) -> anyhow::Result<Arc<Self>> {
         Self::init_inner(
             codex_home,
@@ -518,14 +508,6 @@ pub fn memories_db_path(codex_home: &Path) -> PathBuf {
     MEMORIES_DB.path(codex_home)
 }
 
-pub fn thread_history_db_filename() -> String {
-    THREAD_HISTORY_DB.filename.to_string()
-}
-
-pub fn thread_history_db_path(codex_home: &Path) -> PathBuf {
-    THREAD_HISTORY_DB.path(codex_home)
-}
-
 pub fn runtime_db_paths(codex_home: &Path) -> Vec<RuntimeDbPath> {
     RUNTIME_DBS
         .iter()
@@ -752,7 +734,8 @@ mod tests {
         .collect::<BTreeSet<_>>();
         assert_eq!(phases, expected);
 
-        runtime.close().await;
+        runtime.pool.close().await;
+        runtime.logs_pool.close().await;
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
 }

@@ -81,8 +81,8 @@ impl EventProcessorWithHumanOutput {
                     "started".style(self.dimmed)
                 );
             }
-            ThreadItem::WebSearch(item) => {
-                eprintln!("{} {}", "web search:".style(self.bold), item.query);
+            ThreadItem::WebSearch { query, .. } => {
+                eprintln!("{} {}", "web search:".style(self.bold), query);
             }
             ThreadItem::FileChange { .. } => {
                 eprintln!("{}", "apply patch".style(self.bold));
@@ -196,8 +196,8 @@ impl EventProcessorWithHumanOutput {
                     eprintln!("{}", error.message.style(self.red));
                 }
             }
-            ThreadItem::WebSearch(item) => {
-                eprintln!("{} {}", "web search:".style(self.bold), item.query);
+            ThreadItem::WebSearch { query, .. } => {
+                eprintln!("{} {}", "web search:".style(self.bold), query);
             }
             ThreadItem::ContextCompaction { .. } => {
                 eprintln!("{}", "context compacted".style(self.dimmed));

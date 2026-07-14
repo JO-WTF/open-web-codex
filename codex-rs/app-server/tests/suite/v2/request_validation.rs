@@ -30,10 +30,7 @@ async fn request_handlers_reject_remote_image_urls() -> Result<()> {
         "http://localhost/unused",
         "http://localhost/unused",
     )?;
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .build()
-        .await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_request_id = mcp

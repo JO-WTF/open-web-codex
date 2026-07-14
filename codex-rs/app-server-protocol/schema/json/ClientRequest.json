@@ -556,13 +556,6 @@
     },
     "ConsumeAccountRateLimitResetCreditParams": {
       "properties": {
-        "creditId": {
-          "description": "Opaque reset-credit identifier to redeem. When omitted, the backend selects the next available credit.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "idempotencyKey": {
           "description": "Identifies one logical reset attempt. A UUID is recommended; reuse the same value when retrying that attempt.",
           "type": "string"
@@ -1463,17 +1456,6 @@
         },
         {
           "properties": {
-            "appBrand": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/LoginAppBrand"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
-            },
             "codexStreamlinedLogin": {
               "type": "boolean"
             },
@@ -1483,9 +1465,6 @@
               ],
               "title": "ChatgptLoginAccountParamsType",
               "type": "string"
-            },
-            "useHostedLoginSuccessPage": {
-              "type": "boolean"
             }
           },
           "required": [
@@ -1543,40 +1522,8 @@
           ],
           "title": "ChatgptAuthTokensLoginAccountParams",
           "type": "object"
-        },
-        {
-          "description": "[UNSTABLE] Managed Amazon Bedrock login is experimental.",
-          "properties": {
-            "apiKey": {
-              "type": "string"
-            },
-            "region": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "amazonBedrock"
-              ],
-              "title": "AmazonBedrockLoginAccountParamsType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "apiKey",
-            "region",
-            "type"
-          ],
-          "title": "AmazonBedrockLoginAccountParams",
-          "type": "object"
         }
       ]
-    },
-    "LoginAppBrand": {
-      "enum": [
-        "codex",
-        "chatgpt"
-      ],
-      "type": "string"
     },
     "MarketplaceAddParams": {
       "properties": {
@@ -1669,12 +1616,6 @@
           },
           "type": [
             "array",
-            "null"
-          ]
-        },
-        "threadId": {
-          "type": [
-            "string",
             "null"
           ]
         },
@@ -1782,13 +1723,6 @@
           },
           "type": "array"
         },
-        "skills": {
-          "default": [],
-          "items": {
-            "$ref": "#/definitions/SkillMigration"
-          },
-          "type": "array"
-        },
         "subagents": {
           "default": [],
           "items": {
@@ -1823,6 +1757,13 @@
             "null"
           ]
         },
+        "forceRefresh": {
+          "description": "When true, bypass provider-cached models and fetch from the provider endpoint.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "limit": {
           "description": "Optional page size; defaults to a reasonable server-side value.",
           "format": "uint32",
@@ -1839,29 +1780,13 @@
       "type": "object"
     },
     "MultiAgentMode": {
-      "description": "Controls the effective multi-agent delegation instructions for a turn. `custom` means the configured mode hint defines the policy instead of a built-in policy.",
-      "oneOf": [
-        {
-          "enum": [
-            "explicitRequestOnly",
-            "proactive"
-          ],
-          "type": "string"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "custom": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "custom"
-          ],
-          "title": "CustomMultiAgentMode",
-          "type": "object"
-        }
-      ]
+      "description": "Controls whether the model receives multi-agent delegation instructions and, when it does, whether it should only spawn sub-agents after an explicit user request or may delegate proactively when doing so would help. `none` leaves the multi-agent tools available without injecting delegation instructions.",
+      "enum": [
+        "none",
+        "explicitRequestOnly",
+        "proactive"
+      ],
+      "type": "string"
     },
     "NetworkAccess": {
       "enum": [
@@ -2752,12 +2677,6 @@
             "name": {
               "type": "string"
             },
-            "namespace": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
             "status": {
               "type": [
                 "string",
@@ -3495,17 +3414,6 @@
       ],
       "type": "object"
     },
-    "SkillMigration": {
-      "properties": {
-        "name": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "name"
-      ],
-      "type": "object"
-    },
     "SkillsConfigWriteParams": {
       "properties": {
         "enabled": {
@@ -3706,13 +3614,6 @@
         "ephemeral": {
           "type": "boolean"
         },
-        "lastTurnId": {
-          "description": "Optional last turn id to fork through, inclusive.\n\nWhen specified, turns after `last_turn_id` are omitted from the fork. The referenced turn cannot be in progress.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "model": {
           "description": "Configuration overrides for the forked thread, if any.",
           "type": [
@@ -3826,13 +3727,6 @@
         "usageLimited",
         "budgetLimited",
         "complete"
-      ],
-      "type": "string"
-    },
-    "ThreadHistoryMode": {
-      "enum": [
-        "legacy",
-        "paginated"
       ],
       "type": "string"
     },
@@ -4263,7 +4157,6 @@
       "type": "object"
     },
     "ThreadRollbackParams": {
-      "description": "DEPRECATED: `thread/rollback` will be removed soon.",
       "properties": {
         "numTurns": {
           "description": "The number of turns to drop from the end of the thread. Must be >= 1.\n\nThis only modifies the thread's history and does not revert local file changes that have been made by the agent. Clients are responsible for reverting these changes.",

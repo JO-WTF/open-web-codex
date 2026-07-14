@@ -156,7 +156,6 @@ fn write_rollout_with_user_message(
     let lines = [
         RolloutLine {
             timestamp: "2026-06-01T14:26:25Z".to_string(),
-            ordinal: None,
             item: RolloutItem::SessionMeta(SessionMetaLine {
                 meta: SessionMeta {
                     session_id: thread_id.into(),
@@ -175,9 +174,7 @@ fn write_rollout_with_user_message(
                     model_provider: Some("test-provider".to_string()),
                     base_instructions: None,
                     dynamic_tools: None,
-                    selected_capability_roots: Vec::new(),
                     memory_mode: None,
-                    history_mode: Default::default(),
                     multi_agent_version: None,
                     context_window: None,
                 },
@@ -186,7 +183,6 @@ fn write_rollout_with_user_message(
         },
         RolloutLine {
             timestamp: "2026-06-01T14:26:26Z".to_string(),
-            ordinal: None,
             item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
                 message: message.to_string(),
                 ..Default::default()

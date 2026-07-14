@@ -16,11 +16,7 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 #[tokio::test]
 async fn read_default_provider_capabilities() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .without_auto_env()
-        .build()
-        .await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -50,11 +46,7 @@ async fn read_amazon_bedrock_provider_capabilities() -> Result<()> {
         r#"model_provider = "amazon-bedrock"
 "#,
     )?;
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .without_auto_env()
-        .build()
-        .await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp

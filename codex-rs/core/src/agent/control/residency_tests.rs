@@ -142,6 +142,7 @@ async fn spawn_v2_subagent(
             /*forked_from_thread_id*/ None,
             Some(ThreadSource::Subagent),
             /*metrics_service_name*/ None,
+            /*initial_multi_agent_mode*/ None,
             /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
             /*environments*/ None,
@@ -159,9 +160,7 @@ async fn mark_thread_completed(thread: &CodexThread) {
             turn.as_ref(),
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: turn.sub_id.clone(),
-                started_at: None,
                 last_agent_message: Some("done".to_string()),
-                error: None,
                 completed_at: None,
                 duration_ms: None,
                 time_to_first_token_ms: None,
@@ -180,7 +179,6 @@ async fn mark_thread_interrupted(thread: &CodexThread) {
             turn.as_ref(),
             EventMsg::TurnAborted(TurnAbortedEvent {
                 turn_id: Some(turn.sub_id.clone()),
-                started_at: None,
                 reason: TurnAbortReason::Interrupted,
                 completed_at: None,
                 duration_ms: None,

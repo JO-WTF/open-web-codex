@@ -1,17 +1,11 @@
 use codex_protocol::ThreadId;
-use codex_protocol::items::EnteredReviewModeItem;
-use codex_protocol::items::ExitedReviewModeItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::EnteredReviewModeEvent;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
-use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
@@ -51,9 +45,7 @@ fn turn_started(turn_id: &str) -> RolloutItem {
 fn turn_complete(turn_id: &str) -> RolloutItem {
     RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
         turn_id: turn_id.to_string(),
-        started_at: None,
         last_agent_message: None,
-        error: None,
         completed_at: None,
         duration_ms: None,
         time_to_first_token_ms: None,
@@ -63,7 +55,6 @@ fn turn_complete(turn_id: &str) -> RolloutItem {
 fn turn_aborted(turn_id: &str) -> RolloutItem {
     RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
         turn_id: Some(turn_id.to_string()),
-        started_at: None,
         reason: TurnAbortReason::Interrupted,
         completed_at: None,
         duration_ms: None,
@@ -74,7 +65,7 @@ fn update_for_batch(
     state: &mut TurnMeasurementState,
     items: &[RolloutItem],
 ) -> super::TurnMeasurementUpdate {
-    let (_, measurement) = measure_and_filter_rollout_items(items, ThreadHistoryMode::Legacy);
+    let (_, measurement) = measure_and_filter_rollout_items(items);
     update_turn_measurements(state, items, &measurement)
 }
 
@@ -109,8 +100,7 @@ fn mixed_batch_reports_exact_policy_counts_and_bytes() {
     let dropped = RolloutItem::ResponseItem(ResponseItem::Other);
     let items = vec![kept.clone(), dropped.clone()];
 
-    let (persisted, measurement) =
-        measure_and_filter_rollout_items(&items, ThreadHistoryMode::Legacy);
+    let (persisted, measurement) = measure_and_filter_rollout_items(&items);
     let kept_bytes = serde_json::to_vec(&kept)
         .expect("serialize kept item")
         .len() as u64;
@@ -138,8 +128,7 @@ fn mixed_batch_reports_exact_policy_counts_and_bytes() {
 #[test]
 fn retained_items_are_byte_identical() {
     let item = retained_message("a moderately sized payload");
-    let (persisted, measurement) =
-        measure_and_filter_rollout_items(std::slice::from_ref(&item), ThreadHistoryMode::Legacy);
+    let (persisted, measurement) = measure_and_filter_rollout_items(std::slice::from_ref(&item));
 
     assert_eq!(
         serde_json::to_vec(&persisted[0]).expect("serialize persisted item"),
@@ -166,10 +155,8 @@ fn turn_measurements_span_batches_and_include_items_before_start() {
         retained_message("second response"),
         turn_aborted("turn-2"),
     ];
-    let (_, first_expected) =
-        measure_and_filter_rollout_items(&first_turn, ThreadHistoryMode::Legacy);
-    let (_, second_expected) =
-        measure_and_filter_rollout_items(&second_turn, ThreadHistoryMode::Legacy);
+    let (_, first_expected) = measure_and_filter_rollout_items(&first_turn);
+    let (_, second_expected) = measure_and_filter_rollout_items(&second_turn);
     let batches = [
         first_turn[..1].to_vec(),
         first_turn[1..3].to_vec(),
@@ -230,8 +217,7 @@ fn invalid_turn_boundaries_reset_partial_measurements() {
         retained_message("retained turn"),
         turn_complete("turn-2"),
     ];
-    let (_, expected) =
-        measure_and_filter_rollout_items(&replacement[2..], ThreadHistoryMode::Legacy);
+    let (_, expected) = measure_and_filter_rollout_items(&replacement[2..]);
     let update = update_for_batch(&mut state, &replacement);
 
     assert_eq!(
@@ -249,7 +235,7 @@ fn invalid_turn_boundaries_reset_partial_measurements() {
 }
 
 #[test]
-fn item_completion_persistence_depends_on_history_mode() {
+fn filtered_item_completion_includes_its_nested_item_type() {
     let item = RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
         thread_id: ThreadId::default(),
         turn_id: "turn".to_string(),
@@ -261,87 +247,14 @@ fn item_completion_persistence_depends_on_history_mode() {
         completed_at_ms: 0,
     }));
 
-    let (_, legacy_measurement) =
-        measure_and_filter_rollout_items(std::slice::from_ref(&item), ThreadHistoryMode::Legacy);
+    let (_, measurement) = measure_and_filter_rollout_items(&[item]);
 
     assert_eq!(
-        legacy_measurement.items[0].rollout_item_type,
+        measurement.items[0].rollout_item_type,
         "event.item_completed.user_message"
     );
     assert_eq!(
-        legacy_measurement.items[0].decision,
+        measurement.items[0].decision,
         super::PersistenceDecision::Dropped
-    );
-
-    let (persisted, paginated_measurement) =
-        measure_and_filter_rollout_items(std::slice::from_ref(&item), ThreadHistoryMode::Paginated);
-
-    assert_eq!(
-        serde_json::to_value(persisted).expect("serialize persisted items"),
-        serde_json::to_value([item]).expect("serialize expected items")
-    );
-    assert_eq!(
-        paginated_measurement.items[0].decision,
-        super::PersistenceDecision::Kept
-    );
-}
-
-#[test]
-fn review_mode_persistence_depends_on_history_mode() {
-    let completed_items = vec![
-        RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
-            thread_id: ThreadId::default(),
-            turn_id: "turn".to_string(),
-            item: TurnItem::EnteredReviewMode(EnteredReviewModeItem {
-                id: "entered-review".to_string(),
-                target: ReviewTarget::Custom {
-                    instructions: "review this".to_string(),
-                },
-                user_facing_hint: "Review requested.".to_string(),
-            }),
-            completed_at_ms: 0,
-        })),
-        RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
-            thread_id: ThreadId::default(),
-            turn_id: "turn".to_string(),
-            item: TurnItem::ExitedReviewMode(ExitedReviewModeItem {
-                id: "exited-review".to_string(),
-                review_output: None,
-            }),
-            completed_at_ms: 0,
-        })),
-    ];
-    let legacy_events = vec![
-        RolloutItem::EventMsg(EventMsg::EnteredReviewMode(EnteredReviewModeEvent {
-            target: ReviewTarget::Custom {
-                instructions: "review this".to_string(),
-            },
-            user_facing_hint: Some("Review requested.".to_string()),
-            turn_id: Some("turn".to_string()),
-            item_id: Some("entered-review".to_string()),
-        })),
-        RolloutItem::EventMsg(EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
-            turn_id: Some("turn".to_string()),
-            item_id: Some("exited-review".to_string()),
-            review_output: None,
-        })),
-    ];
-    let items = completed_items
-        .iter()
-        .chain(&legacy_events)
-        .cloned()
-        .collect::<Vec<_>>();
-
-    let (persisted_legacy, _) = measure_and_filter_rollout_items(&items, ThreadHistoryMode::Legacy);
-    assert_eq!(
-        serde_json::to_value(persisted_legacy).expect("serialize persisted items"),
-        serde_json::to_value(legacy_events).expect("serialize expected items")
-    );
-
-    let (persisted_paginated, _) =
-        measure_and_filter_rollout_items(&items, ThreadHistoryMode::Paginated);
-    assert_eq!(
-        serde_json::to_value(persisted_paginated).expect("serialize persisted items"),
-        serde_json::to_value(completed_items).expect("serialize expected items")
     );
 }

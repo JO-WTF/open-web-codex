@@ -4,10 +4,8 @@ use crate::config::AgentRoleConfig;
 use crate::config::DEFAULT_AGENT_MAX_DEPTH;
 use crate::function_tool::FunctionCallError;
 use crate::init_state_db;
-use crate::local_agent_graph_store_from_state_db;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
-use crate::session::turn_context::TurnContext;
 use crate::session_prefix::format_inter_agent_completion_message;
 use crate::thread_manager::thread_store_from_config;
 use crate::tools::context::ToolOutput;
@@ -27,6 +25,7 @@ use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::models::BaseInstructions;
@@ -548,7 +547,7 @@ async fn spawn_agent_service_tier_override_validates_the_effective_child_model()
                 "spawn_agent",
                 function_payload(json!({
                     "message": "inspect this repo",
-                    "model": "gpt-5.4-mini",
+                    "model": "gpt-5.3-codex",
                     "service_tier": ServiceTier::Fast.request_value()
                 })),
             ))
@@ -559,7 +558,7 @@ async fn spawn_agent_service_tier_override_validates_the_effective_child_model()
         assert_eq!(
             err,
             FunctionCallError::RespondToModel(
-                "Service tier `priority` is not supported for model `gpt-5.4-mini`. Supported service tiers: none"
+                "Service tier `priority` is not supported for model `gpt-5.3-codex`. Supported service tiers: none"
                     .to_string()
             )
         );
@@ -637,7 +636,7 @@ async fn spawn_agent_service_tier_inheritance_preserves_supported_or_configured_
                 "spawn_agent",
                 function_payload(json!({
                     "message": "inspect this repo",
-                    "model": "gpt-5.4-mini"
+                    "model": "gpt-5.3-codex"
                 })),
             ))
             .await
@@ -1152,6 +1151,7 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
         .features
         .enable(Feature::MultiAgentV2)
         .expect("test config should allow feature update");
+    turn.multi_agent_mode = MultiAgentMode::Proactive;
     set_turn_config(&mut turn, config);
 
     let session = Arc::new(session);
@@ -1190,6 +1190,7 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
         child_snapshot.session_source.get_agent_path().as_deref(),
         Some("/root/test_process")
     );
+    assert_eq!(child_snapshot.multi_agent_mode, MultiAgentMode::Proactive);
     assert!(manager.captured_ops().iter().any(|(id, op)| {
         *id == child_thread_id
             && matches!(
@@ -1378,7 +1379,8 @@ async fn multi_agent_v2_send_message_accepts_root_target_from_child() {
             vec![UserInput::Text {
                 text: "inspect this repo".to_string(),
                 text_elements: Vec::new(),
-            }],
+            }]
+            .into(),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: root.thread_id,
                 depth: 1,
@@ -1454,7 +1456,8 @@ async fn multi_agent_v2_followup_task_rejects_root_target_from_child() {
             vec![UserInput::Text {
                 text: "inspect this repo".to_string(),
                 text_elements: Vec::new(),
-            }],
+            }]
+            .into(),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: root.thread_id,
                 depth: 1,
@@ -1558,9 +1561,7 @@ async fn multi_agent_v2_list_agents_returns_completed_status_without_encrypted_s
             child_turn.as_ref(),
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: child_turn.sub_id.clone(),
-                started_at: None,
                 last_agent_message: Some("done".to_string()),
-                error: None,
                 completed_at: None,
                 duration_ms: None,
                 time_to_first_token_ms: None,
@@ -1627,7 +1628,8 @@ async fn multi_agent_v2_list_agents_filters_by_relative_path_prefix() {
             vec![UserInput::Text {
                 text: "research".to_string(),
                 text_elements: Vec::new(),
-            }],
+            }]
+            .into(),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: root.thread_id,
                 depth: 1,
@@ -1647,7 +1649,8 @@ async fn multi_agent_v2_list_agents_filters_by_relative_path_prefix() {
             vec![UserInput::Text {
                 text: "build".to_string(),
                 text_elements: Vec::new(),
-            }],
+            }]
+            .into(),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: root.thread_id,
                 depth: 2,
@@ -2009,9 +2012,7 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
             first_turn.as_ref(),
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: first_turn.sub_id.clone(),
-                started_at: None,
                 last_agent_message: Some("first done".to_string()),
-                error: None,
                 completed_at: None,
                 duration_ms: None,
                 time_to_first_token_ms: None,
@@ -2052,9 +2053,7 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
             second_turn.as_ref(),
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: second_turn.sub_id.clone(),
-                started_at: None,
                 last_agent_message: Some("second done".to_string()),
-                error: None,
                 completed_at: None,
                 duration_ms: None,
                 time_to_first_token_ms: None,
@@ -2216,7 +2215,6 @@ async fn multi_agent_v2_interrupted_turn_does_not_notify_parent() {
             aborted_turn.as_ref(),
             EventMsg::TurnAborted(TurnAbortedEvent {
                 turn_id: Some(aborted_turn.sub_id.clone()),
-                started_at: None,
                 reason: TurnAbortReason::Interrupted,
                 completed_at: None,
                 duration_ms: None,
@@ -4101,7 +4099,8 @@ async fn multi_agent_v2_interrupt_agent_rejects_self_target_by_id() {
             vec![UserInput::Text {
                 text: "inspect this repo".to_string(),
                 text_elements: Vec::new(),
-            }],
+            }]
+            .into(),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: root.thread_id,
                 depth: 1,
@@ -4168,7 +4167,8 @@ async fn multi_agent_v2_interrupt_agent_rejects_self_target_by_task_name() {
             vec![UserInput::Text {
                 text: "inspect this repo".to_string(),
                 text_elements: Vec::new(),
-            }],
+            }]
+            .into(),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: root.thread_id,
                 depth: 1,
@@ -4267,7 +4267,7 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
         Arc::new(crate::test_support::EmptyUserInstructionsProvider),
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, state_db.clone()),
-        local_agent_graph_store_from_state_db(state_db.as_ref()),
+        state_db.clone(),
         "11111111-1111-4111-8111-111111111111".to_string(),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,

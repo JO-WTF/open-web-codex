@@ -34,7 +34,6 @@ use codex_features::FEATURES;
 use codex_features::Feature;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
-use core_test_support::skip_if_remote;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -49,11 +48,6 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test]
 async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
-    // TODO(anp): Remove after zsh-fork fixtures can run in the selected remote environment.
-    skip_if_remote!(
-        Ok(()),
-        "zsh-fork fixtures use host-local zsh and workspace paths"
-    );
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
@@ -107,7 +101,7 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
-        .send_thread_start_request_with_auto_env(ThreadStartParams {
+        .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
             cwd: Some(workspace.to_string_lossy().into_owned()),
             ..Default::default()
@@ -183,11 +177,6 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
 
 #[tokio::test]
 async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
-    // TODO(anp): Remove after zsh-fork fixtures can run in the selected remote environment.
-    skip_if_remote!(
-        Ok(()),
-        "zsh-fork fixtures use host-local zsh and workspace paths"
-    );
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
@@ -231,7 +220,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
-        .send_thread_start_request_with_auto_env(ThreadStartParams {
+        .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
             cwd: Some(workspace.to_string_lossy().into_owned()),
             ..Default::default()
@@ -324,11 +313,6 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
 
 #[tokio::test]
 async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
-    // TODO(anp): Remove after zsh-fork fixtures can run in the selected remote environment.
-    skip_if_remote!(
-        Ok(()),
-        "zsh-fork fixtures use host-local zsh and workspace paths"
-    );
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
@@ -369,7 +353,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
-        .send_thread_start_request_with_auto_env(ThreadStartParams {
+        .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
             cwd: Some(workspace.to_string_lossy().into_owned()),
             ..Default::default()
@@ -460,11 +444,6 @@ async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
 
 #[tokio::test]
 async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2() -> Result<()> {
-    // TODO(anp): Remove after zsh-fork fixtures can run in the selected remote environment.
-    skip_if_remote!(
-        Ok(()),
-        "zsh-fork fixtures use host-local zsh and workspace paths"
-    );
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
@@ -533,7 +512,7 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
-        .send_thread_start_request_with_auto_env(ThreadStartParams {
+        .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
             cwd: Some(workspace.to_string_lossy().into_owned()),
             ..Default::default()
@@ -767,12 +746,12 @@ async fn create_zsh_test_mcp_process(
 ) -> Result<TestAppServer> {
     let app_server = create_test_package_app_server(codex_home, zsh_path)?;
     let zdotdir = zdotdir.to_string_lossy().into_owned();
-    TestAppServer::builder()
-        .with_codex_home(codex_home)
-        .with_program(&app_server)
-        .with_env_overrides(&[("ZDOTDIR", Some(zdotdir.as_str()))])
-        .build()
-        .await
+    TestAppServer::new_with_program_and_env(
+        codex_home,
+        &app_server,
+        &[("ZDOTDIR", Some(zdotdir.as_str()))],
+    )
+    .await
 }
 
 fn create_test_package_app_server(codex_home: &Path, zsh_path: &Path) -> Result<PathBuf> {

@@ -36,7 +36,7 @@ async fn websocket_model_switch_to_responses_lite_omits_top_level_tools() -> Res
         .with_model_info_override("gpt-5.4", |model_info| {
             model_info.use_responses_lite = true;
         })
-        .with_model("gpt-5.2");
+        .with_model("gpt-5.3-codex");
     let test = builder.build_with_websocket_server(&server).await?;
 
     test.submit_turn("non-lite turn").await?;
@@ -51,6 +51,7 @@ async fn websocket_model_switch_to_responses_lite_omits_top_level_tools() -> Res
             additional_context: Default::default(),
             thread_settings: ThreadSettingsOverrides {
                 model: Some("gpt-5.4".to_string()),
+                model_provider_id: None,
                 ..Default::default()
             },
         })
@@ -72,7 +73,7 @@ async fn websocket_model_switch_to_responses_lite_omits_top_level_tools() -> Res
         .expect("missing lite turn request")
         .body_json();
 
-    assert_eq!(non_lite_turn["model"].as_str(), Some("gpt-5.2"));
+    assert_eq!(non_lite_turn["model"].as_str(), Some("gpt-5.3-codex"));
     assert_eq!(lite_turn["model"].as_str(), Some("gpt-5.4"));
     assert!(
         non_lite_turn
@@ -110,7 +111,7 @@ async fn websocket_test_codex_shell_chain() -> Result<()> {
         ],
         vec![
             ev_response_created("resp-2"),
-            ev_assistant_message("msg_1", "done"),
+            ev_assistant_message("msg-1", "done"),
             ev_completed("resp-2"),
         ],
     ]])
@@ -155,7 +156,7 @@ async fn websocket_first_turn_uses_startup_prewarm_and_create() -> Result<()> {
         vec![ev_response_created("warm-1"), ev_completed("warm-1")],
         vec![
             ev_response_created("resp-1"),
-            ev_assistant_message("msg_1", "hello"),
+            ev_assistant_message("msg-1", "hello"),
             ev_completed("resp-1"),
         ],
     ]])
@@ -213,7 +214,7 @@ async fn websocket_first_turn_handles_handshake_delay_with_startup_prewarm() -> 
             vec![ev_response_created("warm-1"), ev_completed("warm-1")],
             vec![
                 ev_response_created("resp-1"),
-                ev_assistant_message("msg_1", "hello"),
+                ev_assistant_message("msg-1", "hello"),
                 ev_completed("resp-1"),
             ],
         ],
@@ -268,7 +269,7 @@ async fn websocket_v2_test_codex_shell_chain() -> Result<()> {
         ],
         vec![
             ev_response_created("resp-2"),
-            ev_assistant_message("msg_1", "done"),
+            ev_assistant_message("msg-1", "done"),
             ev_completed("resp-2"),
         ],
     ]])
@@ -347,7 +348,7 @@ async fn websocket_v2_first_turn_uses_updated_fast_tier_after_startup_prewarm() 
         vec![ev_response_created("warm-1"), ev_completed("warm-1")],
         vec![
             ev_response_created("resp-1"),
-            ev_assistant_message("msg_1", "fast"),
+            ev_assistant_message("msg-1", "fast"),
             ev_completed("resp-1"),
         ],
     ]])
@@ -402,7 +403,7 @@ async fn websocket_v2_first_turn_drops_fast_tier_after_startup_prewarm() -> Resu
         vec![ev_response_created("warm-1"), ev_completed("warm-1")],
         vec![
             ev_response_created("resp-1"),
-            ev_assistant_message("msg_1", "standard"),
+            ev_assistant_message("msg-1", "standard"),
             ev_completed("resp-1"),
         ],
     ]])
@@ -458,12 +459,12 @@ async fn websocket_v2_next_turn_uses_updated_service_tier() -> Result<()> {
         vec![ev_response_created("warm-1"), ev_completed("warm-1")],
         vec![
             ev_response_created("resp-1"),
-            ev_assistant_message("msg_1", "fast"),
+            ev_assistant_message("msg-1", "fast"),
             ev_completed("resp-1"),
         ],
         vec![
             ev_response_created("resp-2"),
-            ev_assistant_message("msg_2", "standard"),
+            ev_assistant_message("msg-2", "standard"),
             ev_completed("resp-2"),
         ],
     ]])

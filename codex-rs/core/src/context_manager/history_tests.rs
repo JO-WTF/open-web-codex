@@ -1,11 +1,9 @@
 use super::*;
-use crate::context::UserInstructions;
+use crate::context::world_state::EnvironmentsState;
 use crate::context::world_state::WorldState;
-use crate::context::world_state::WorldStateSection;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::AgentPath;
-use codex_protocol::ResponseItemId;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
@@ -21,10 +19,8 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::default_input_modalities;
-use codex_protocol::protocol::APPS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::InterAgentCommunication;
-use codex_protocol::protocol::PLUGINS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnContextItem;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -36,6 +32,7 @@ use image::Luma;
 use image::Rgba;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
+use std::sync::Arc;
 
 const EXEC_FORMAT_MAX_BYTES: usize = 10_000;
 const EXEC_FORMAT_MAX_TOKENS: usize = 2_500;
@@ -79,85 +76,23 @@ fn create_history_with_items(items: Vec<ResponseItem>) -> ContextManager {
     h
 }
 
-struct TestWorldStateSection;
-
-impl WorldStateSection for TestWorldStateSection {
-    const ID: &'static str = "test";
-    type Snapshot = bool;
-
-    fn snapshot(&self) -> Self::Snapshot {
-        true
-    }
-
-    fn matches_legacy_fragment(role: &str, text: &str) -> bool {
-        role == "user" && UserInstructions::matches_text(text)
-    }
-
-    fn render_diff(
-        &self,
-        previous: crate::context::world_state::PreviousSectionState<'_, Self::Snapshot>,
-    ) -> Option<Box<dyn crate::context::ContextualUserFragment>> {
-        let text = match previous {
-            crate::context::world_state::PreviousSectionState::Known(true) => return None,
-            crate::context::world_state::PreviousSectionState::Unknown => "unknown",
-            crate::context::world_state::PreviousSectionState::Absent
-            | crate::context::world_state::PreviousSectionState::Known(false) => "test",
-        };
-        Some(Box::new(UserInstructions {
-            directory: None,
-            text: text.to_string(),
-        })
-            as Box<dyn crate::context::ContextualUserFragment>)
-    }
-}
-
 #[test]
 fn world_state_baseline_deduplicates_until_history_is_replaced() {
     let world_state = || {
         let mut state = WorldState::default();
-        state.add_section(TestWorldStateSection);
-        state
+        state.add_section(EnvironmentsState::from_turn_context_item(
+            &reference_context_item(),
+        ));
+        Arc::new(state)
     };
     let mut history = ContextManager::new();
 
-    let (initial_fragments, initial_item) = history.update_world_state(&world_state());
-    assert_eq!(1, initial_fragments.len());
-    assert!(initial_item.is_some_and(|item| item.full));
-
-    let (unchanged_fragments, unchanged_item) = history.update_world_state(&world_state());
-    assert!(unchanged_fragments.is_empty());
-    assert_eq!(unchanged_item, None);
+    assert_eq!(1, history.update_world_state(world_state()).len());
+    assert!(history.update_world_state(world_state()).is_empty());
 
     history.replace(Vec::new());
 
-    let (replacement_fragments, replacement_item) = history.update_world_state(&world_state());
-    assert_eq!(1, replacement_fragments.len());
-    assert!(replacement_item.is_some_and(|item| item.full));
-}
-
-#[test]
-fn world_state_reconciles_matching_legacy_history_once() {
-    let item = crate::context::ContextualUserFragment::into(UserInstructions {
-        directory: None,
-        text: "legacy".to_string(),
-    });
-    let mut history = create_history_with_items(vec![item]);
-    let mut world_state = WorldState::default();
-    world_state.add_section(TestWorldStateSection);
-
-    let (fragments, rollout_item) = history.update_world_state(&world_state);
-    assert_eq!(
-        vec!["\n\n<INSTRUCTIONS>\nunknown\n"],
-        fragments
-            .into_iter()
-            .map(|fragment| fragment.body())
-            .collect::<Vec<_>>()
-    );
-    assert!(rollout_item.is_some_and(|item| item.full));
-
-    let (fragments, rollout_item) = history.update_world_state(&world_state);
-    assert!(fragments.is_empty());
-    assert_eq!(rollout_item, None);
+    assert_eq!(1, history.update_world_state(world_state()).len());
 }
 
 fn user_msg(text: &str) -> ResponseItem {
@@ -224,7 +159,6 @@ fn reference_context_item() -> TurnContextItem {
         current_date: Some("2026-03-23".to_string()),
         timezone: Some("America/Los_Angeles".to_string()),
         approval_policy: AskForApproval::OnRequest,
-        approvals_reviewer: None,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         permission_profile: None,
         network: None,
@@ -517,7 +451,6 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
             status: None,
             call_id: "tool-1".to_string(),
             name: "js_repl".to_string(),
-            namespace: None,
             input: "view_image".to_string(),
             internal_chat_message_metadata_passthrough: None,
         },
@@ -587,7 +520,6 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
             status: None,
             call_id: "tool-1".to_string(),
             name: "js_repl".to_string(),
-            namespace: None,
             input: "view_image".to_string(),
             internal_chat_message_metadata_passthrough: None,
         },
@@ -640,7 +572,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
 fn for_prompt_preserves_image_generation_calls_when_images_are_supported() {
     let history = create_history_with_items(vec![
         ResponseItem::ImageGenerationCall {
-            id: Some(ResponseItemId::with_suffix("ig", "123")),
+            id: Some("ig_123".to_string()),
             status: "generating".to_string(),
             revised_prompt: Some("lobster".to_string()),
             result: "Zm9v".to_string(),
@@ -661,7 +593,7 @@ fn for_prompt_preserves_image_generation_calls_when_images_are_supported() {
         history.for_prompt(&default_input_modalities()),
         vec![
             ResponseItem::ImageGenerationCall {
-                id: Some(ResponseItemId::with_suffix("ig", "123")),
+                id: Some("ig_123".to_string()),
                 status: "generating".to_string(),
                 revised_prompt: Some("lobster".to_string()),
                 result: "Zm9v".to_string(),
@@ -693,7 +625,7 @@ fn for_prompt_clears_image_generation_result_when_images_are_unsupported() {
             internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ImageGenerationCall {
-            id: Some(ResponseItemId::with_suffix("ig", "123")),
+            id: Some("ig_123".to_string()),
             status: "completed".to_string(),
             revised_prompt: Some("lobster".to_string()),
             result: "Zm9v".to_string(),
@@ -714,7 +646,7 @@ fn for_prompt_clears_image_generation_result_when_images_are_unsupported() {
                 internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::ImageGenerationCall {
-                id: Some(ResponseItemId::with_suffix("ig", "123")),
+                id: Some("ig_123".to_string()),
                 status: "completed".to_string(),
                 revised_prompt: Some("lobster".to_string()),
                 result: String::new(),
@@ -1025,12 +957,6 @@ fn drop_last_n_user_turns_trims_context_updates_above_rolled_back_turn() {
         user_input_text_msg("turn 1 user"),
         assistant_msg("turn 1 assistant"),
         developer_msg("Generated images are saved to /tmp as /tmp/image-1.png by default."),
-        developer_msg(&format!(
-            "{APPS_INSTRUCTIONS_OPEN_TAG}\nROLLED_BACK_APPS_INSTRUCTIONS"
-        )),
-        developer_msg(&format!(
-            "{PLUGINS_INSTRUCTIONS_OPEN_TAG}\nROLLED_BACK_PLUGIN_INSTRUCTIONS"
-        )),
         developer_msg("<collaboration_mode>ROLLED_BACK_DEV_INSTRUCTIONS</collaboration_mode>"),
         developer_msg("<multi_agent_mode>ROLLED_BACK_MULTI_AGENT_MODE</multi_agent_mode>"),
         user_input_text_msg(
@@ -1102,7 +1028,6 @@ fn remove_first_item_handles_custom_tool_pair() {
             status: None,
             call_id: "tool-1".to_string(),
             name: "my_tool".to_string(),
-            namespace: None,
             input: "{}".to_string(),
             internal_chat_message_metadata_passthrough: None,
         },
@@ -1391,7 +1316,6 @@ fn normalize_adds_missing_output_for_custom_tool_call() {
         status: None,
         call_id: "tool-x".to_string(),
         name: "custom".to_string(),
-        namespace: None,
         input: "{}".to_string(),
         internal_chat_message_metadata_passthrough: None,
     }];
@@ -1407,7 +1331,6 @@ fn normalize_adds_missing_output_for_custom_tool_call() {
                 status: None,
                 call_id: "tool-x".to_string(),
                 name: "custom".to_string(),
-                namespace: None,
                 input: "{}".to_string(),
                 internal_chat_message_metadata_passthrough: None,
             },
@@ -1527,7 +1450,6 @@ fn normalize_mixed_inserts_and_removals() {
             status: None,
             call_id: "t1".to_string(),
             name: "tool".to_string(),
-            namespace: None,
             input: "{}".to_string(),
             internal_chat_message_metadata_passthrough: None,
         },
@@ -1572,7 +1494,6 @@ fn normalize_mixed_inserts_and_removals() {
                 status: None,
                 call_id: "t1".to_string(),
                 name: "tool".to_string(),
-                namespace: None,
                 input: "{}".to_string(),
                 internal_chat_message_metadata_passthrough: None,
             },
@@ -1640,49 +1561,6 @@ fn normalize_adds_missing_output_for_function_call_inserts_output() {
 }
 
 #[test]
-fn for_prompt_assigns_stable_id_to_synthetic_output_without_reordering_history() {
-    let items = vec![
-        ResponseItem::FunctionCall {
-            id: Some(ResponseItemId::with_suffix("fc", "existing")),
-            name: "do_it".to_string(),
-            namespace: None,
-            arguments: "{}".to_string(),
-            call_id: "call-x".to_string(),
-            internal_chat_message_metadata_passthrough: None,
-        },
-        ResponseItem::Message {
-            id: Some(ResponseItemId::with_suffix("msg", "later")),
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "later turn".to_string(),
-            }],
-            phase: None,
-            internal_chat_message_metadata_passthrough: None,
-        },
-    ];
-
-    let first = create_history_with_items(items.clone()).for_prompt(&default_input_modalities());
-    let second = create_history_with_items(items).for_prompt(&default_input_modalities());
-
-    assert_eq!(
-        first, second,
-        "repeated prompt projections should assign the same ID to the synthetic output"
-    );
-    let [
-        ResponseItem::FunctionCall { .. },
-        ResponseItem::FunctionCallOutput { id: Some(id), .. },
-        ResponseItem::Message { .. },
-    ] = first.as_slice()
-    else {
-        panic!("expected the synthetic output between its call and the later message");
-    };
-    assert!(
-        id.starts_with("fco_"),
-        "the synthetic function call output should use the Responses API output ID prefix"
-    );
-}
-
-#[test]
 fn normalize_adds_missing_output_for_tool_search_call() {
     let items = vec![ResponseItem::ToolSearchCall {
         id: None,
@@ -1728,7 +1606,6 @@ fn normalize_adds_missing_output_for_custom_tool_call_panics_in_debug() {
         status: None,
         call_id: "tool-x".to_string(),
         name: "custom".to_string(),
-        namespace: None,
         input: "{}".to_string(),
         internal_chat_message_metadata_passthrough: None,
     }];
@@ -1871,7 +1748,6 @@ fn normalize_mixed_inserts_and_removals_panics_in_debug() {
             status: None,
             call_id: "t1".to_string(),
             name: "tool".to_string(),
-            namespace: None,
             input: "{}".to_string(),
             internal_chat_message_metadata_passthrough: None,
         },

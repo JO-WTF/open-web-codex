@@ -1,8 +1,7 @@
 use super::*;
 use crate::agent::next_thread_spawn_depth;
-use crate::session::session::Session;
-use crate::session::turn_context::TurnContext;
 use crate::tools::handlers::multi_agents_spec::create_resume_agent_tool;
+use crate::turn_timing::now_unix_timestamp_ms;
 use codex_tools::ToolSpec;
 use std::sync::Arc;
 
@@ -58,24 +57,17 @@ async fn handle_resume_agent(
     }
 
     session
-        .emit_turn_item_started(
+        .send_event(
             &turn,
-            &TurnItem::CollabAgentToolCall(CollabAgentToolCallItem {
-                id: call_id.clone(),
-                tool: CollabAgentTool::ResumeAgent,
-                status: CollabAgentToolCallStatus::InProgress,
+            CollabResumeBeginEvent {
+                call_id: call_id.clone(),
+                started_at_ms: now_unix_timestamp_ms(),
                 sender_thread_id: session.thread_id,
-                receiver_thread_ids: vec![receiver_thread_id],
-                receiver_agents: vec![CollabAgentRef {
-                    thread_id: receiver_thread_id,
-                    agent_nickname: receiver_agent.agent_nickname.clone(),
-                    agent_role: receiver_agent.agent_role.clone(),
-                }],
-                prompt: None,
-                model: None,
-                reasoning_effort: None,
-                agents_states: Default::default(),
-            }),
+                receiver_thread_id,
+                receiver_agent_nickname: receiver_agent.agent_nickname.clone(),
+                receiver_agent_role: receiver_agent.agent_role.clone(),
+            }
+            .into(),
         )
         .await;
 
@@ -121,24 +113,18 @@ async fn handle_resume_agent(
         (receiver_agent, None)
     };
     session
-        .emit_turn_item_completed(
+        .send_event(
             &turn,
-            TurnItem::CollabAgentToolCall(CollabAgentToolCallItem {
-                id: call_id,
-                tool: CollabAgentTool::ResumeAgent,
-                status: collab_tool_call_status(&status, Some(receiver_thread_id)),
+            CollabResumeEndEvent {
+                call_id,
+                completed_at_ms: now_unix_timestamp_ms(),
                 sender_thread_id: session.thread_id(),
-                receiver_thread_ids: vec![receiver_thread_id],
-                receiver_agents: vec![CollabAgentRef {
-                    thread_id: receiver_thread_id,
-                    agent_nickname: receiver_agent.agent_nickname,
-                    agent_role: receiver_agent.agent_role,
-                }],
-                prompt: None,
-                model: None,
-                reasoning_effort: None,
-                agents_states: [(receiver_thread_id, status.clone())].into_iter().collect(),
-            }),
+                receiver_thread_id,
+                receiver_agent_nickname: receiver_agent.agent_nickname,
+                receiver_agent_role: receiver_agent.agent_role,
+                status: status.clone(),
+            }
+            .into(),
         )
         .await;
 
