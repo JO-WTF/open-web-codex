@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import SquareTerminal from "lucide-react/dist/esm/icons/square-terminal";
 
 type CommandAction = {
   type: string;
@@ -17,19 +18,25 @@ type Props = {
 
 export default function CommandExecutionCard({ command, output, exitCode, status, durationMs, cwd, commandActions }: Props) {
   const [open, setOpen] = useState(false);
-  const running = status === "inProgress" || status === "running" || exitCode == null;
+  const running = status === "inProgress" || status === "running" || (!status && exitCode == null);
   const ok = !running && exitCode === 0;
+
+  useEffect(() => {
+    if (running && output) setOpen(true);
+  }, [output, running]);
 
   const shortCmd = command.replace(/^\/bin\/zsh -lc '/, "").replace(/'$/, "").slice(0, 120);
 
   return (
-    <div className="web-cmdex-card">
+    <div className={`web-cmdex-card${running ? " is-running" : ok ? " is-completed" : " is-failed"}`}>
       <div className="web-cmdex-header" onClick={() => setOpen(!open)}>
-        <span className={`web-cmdex-status ${running ? "web-cmdex-running" : ok ? "web-cmdex-ok" : "web-cmdex-err"}`}>
-          {running ? "\u2022 running" : ok ? "\u2713 OK" : `\u2717 exit ${exitCode}`}
+        <SquareTerminal size={14} className="web-cmdex-icon" aria-hidden="true" />
+        <span className={`web-cmdex-status ${running ? "web-cmdex-running" : ok ? "web-cmdex-ok" : "web-cmdex-err"}`} aria-live={running ? "polite" : undefined}>
+          {running && <span className="web-cmdex-spinner" aria-hidden="true" />}
+          {running ? "running" : ok ? "\u2713 OK" : `\u2717 ${exitCode == null ? status || "failed" : `exit ${exitCode}`}`}
         </span>
         <code className="web-cmdex-cmd">{shortCmd}</code>
-        {durationMs != null && <span className="web-cmdex-dur">{durationMs}ms</span>}
+        {durationMs != null && durationMs > 0 && <span className="web-cmdex-dur">{durationMs}ms</span>}
         <span className={`web-cmdex-chevron${open ? " web-cmdex-chevron-open" : ""}`}>&#9654;</span>
       </div>
       {open && (

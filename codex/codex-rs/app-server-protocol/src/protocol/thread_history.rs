@@ -238,6 +238,15 @@ pub struct ThreadHistoryBuilder {
     current_rollout_index: usize,
     next_rollout_index: usize,
     active_change_set: Option<ThreadHistoryChangeSet>,
+    response_tool_calls: HashMap<String, ResponseToolCallSnapshot>,
+}
+
+#[derive(Clone)]
+struct ResponseToolCallSnapshot {
+    turn_id: Option<String>,
+    namespace: Option<String>,
+    tool: String,
+    arguments: serde_json::Value,
 }
 
 impl Default for ThreadHistoryBuilder {
@@ -255,6 +264,7 @@ impl ThreadHistoryBuilder {
             current_rollout_index: 0,
             next_rollout_index: 0,
             active_change_set: None,
+            response_tool_calls: HashMap::new(),
         }
     }
 
@@ -436,29 +446,151 @@ impl ThreadHistoryBuilder {
     }
 
     fn handle_response_item(&mut self, item: &codex_protocol::models::ResponseItem) {
-        let codex_protocol::models::ResponseItem::Message {
-            role, content, id, ..
-        } = item
-        else {
+        use codex_protocol::models::ResponseItem;
+
+        match item {
+            ResponseItem::Message {
+                role, content, id, ..
+            } if role == "user" => {
+                let Some(hook_prompt) = parse_hook_prompt_message(id.as_deref(), content) else {
+                    return;
+                };
+                self.push_item_in_current_turn(ThreadItem::HookPrompt {
+                    id: hook_prompt.id,
+                    fragments: hook_prompt
+                        .fragments
+                        .into_iter()
+                        .map(crate::protocol::v2::HookPromptFragment::from)
+                        .collect(),
+                });
+            }
+            ResponseItem::FunctionCall {
+                name,
+                namespace,
+                arguments,
+                call_id,
+                ..
+            } => {
+                let arguments = serde_json::from_str(arguments)
+                    .unwrap_or_else(|_| serde_json::Value::String(arguments.clone()));
+                self.handle_response_tool_call(
+                    call_id,
+                    item.turn_id(),
+                    namespace.clone(),
+                    name.clone(),
+                    arguments,
+                );
+            }
+            ResponseItem::CustomToolCall {
+                call_id,
+                name,
+                namespace,
+                input,
+                ..
+            } => self.handle_response_tool_call(
+                call_id,
+                item.turn_id(),
+                namespace.clone(),
+                name.clone(),
+                serde_json::Value::String(input.clone()),
+            ),
+            ResponseItem::FunctionCallOutput {
+                call_id, output, ..
+            }
+            | ResponseItem::CustomToolCallOutput {
+                call_id, output, ..
+            } => self.handle_response_tool_output(call_id, item.turn_id(), output),
+            _ => {}
+        }
+    }
+
+    fn handle_response_tool_call(
+        &mut self,
+        call_id: &str,
+        turn_id: Option<&str>,
+        namespace: Option<String>,
+        tool: String,
+        arguments: serde_json::Value,
+    ) {
+        let snapshot = ResponseToolCallSnapshot {
+            turn_id: turn_id.map(str::to_owned),
+            namespace: namespace.clone(),
+            tool: tool.clone(),
+            arguments: arguments.clone(),
+        };
+        self.response_tool_calls
+            .insert(call_id.to_string(), snapshot);
+        let item = ThreadItem::DynamicToolCall {
+            id: call_id.to_string(),
+            namespace,
+            tool,
+            arguments,
+            status: DynamicToolCallStatus::InProgress,
+            content_items: None,
+            success: None,
+            duration_ms: None,
+        };
+        self.upsert_response_tool_item(turn_id, item);
+    }
+
+    fn handle_response_tool_output(
+        &mut self,
+        call_id: &str,
+        output_turn_id: Option<&str>,
+        output: &codex_protocol::models::FunctionCallOutputPayload,
+    ) {
+        let Some(snapshot) = self.response_tool_calls.get(call_id).cloned() else {
             return;
         };
-
-        if role != "user" {
+        let turn_id = output_turn_id.or(snapshot.turn_id.as_deref());
+        if self
+            .response_tool_item(turn_id, call_id)
+            .is_some_and(|item| !matches!(item, ThreadItem::DynamicToolCall { .. }))
+        {
             return;
         }
-
-        let Some(hook_prompt) = parse_hook_prompt_message(id.as_deref(), content) else {
-            return;
+        let success = output.success.unwrap_or(true);
+        let status = if success {
+            DynamicToolCallStatus::Completed
+        } else {
+            DynamicToolCallStatus::Failed
         };
+        let content_items = response_tool_output_content_items(output);
+        let item = ThreadItem::DynamicToolCall {
+            id: call_id.to_string(),
+            namespace: snapshot.namespace,
+            tool: snapshot.tool,
+            arguments: snapshot.arguments,
+            status,
+            content_items: Some(content_items),
+            success: Some(success),
+            duration_ms: None,
+        };
+        self.upsert_response_tool_item(turn_id, item);
+    }
 
-        self.push_item_in_current_turn(ThreadItem::HookPrompt {
-            id: hook_prompt.id,
-            fragments: hook_prompt
-                .fragments
-                .into_iter()
-                .map(crate::protocol::v2::HookPromptFragment::from)
-                .collect(),
-        });
+    fn response_tool_item(&self, turn_id: Option<&str>, item_id: &str) -> Option<&ThreadItem> {
+        if let Some(turn_id) = turn_id {
+            if let Some(turn) = self.current_turn.as_ref().filter(|turn| turn.id == turn_id) {
+                return turn.items.iter().find(|item| item.id() == item_id);
+            }
+            return self
+                .turns
+                .iter()
+                .find(|turn| turn.id == turn_id)
+                .and_then(|turn| turn.items.iter().find(|item| item.id() == item_id));
+        }
+        self.current_turn
+            .as_ref()
+            .and_then(|turn| turn.items.iter().find(|item| item.id() == item_id))
+    }
+
+    fn upsert_response_tool_item(&mut self, turn_id: Option<&str>, item: ThreadItem) {
+        if let Some(turn_id) = turn_id {
+            self.upsert_item_in_turn_id(turn_id, item);
+        } else {
+            self.upsert_item_in_current_turn(item);
+        }
     }
 
     fn handle_user_message(&mut self, payload: &UserMessageEvent) {
@@ -1318,7 +1450,20 @@ impl ThreadHistoryBuilder {
     }
 
     fn finish_current_turn(&mut self) {
-        if let Some(turn) = self.current_turn.take() {
+        if let Some(mut turn) = self.current_turn.take() {
+            for item in &mut turn.items {
+                if !self.response_tool_calls.contains_key(item.id()) {
+                    continue;
+                }
+                if let ThreadItem::DynamicToolCall {
+                    status, success, ..
+                } = item
+                    && *status == DynamicToolCallStatus::InProgress
+                {
+                    *status = DynamicToolCallStatus::Failed;
+                    *success = Some(false);
+                }
+            }
             if turn.items.is_empty() && !turn.opened_explicitly && !turn.saw_compaction {
                 return;
             }
@@ -1503,6 +1648,33 @@ fn convert_dynamic_tool_content_items(
         .collect()
 }
 
+fn response_tool_output_content_items(
+    output: &codex_protocol::models::FunctionCallOutputPayload,
+) -> Vec<DynamicToolCallOutputContentItem> {
+    use codex_protocol::models::FunctionCallOutputBody;
+    use codex_protocol::models::FunctionCallOutputContentItem;
+
+    match &output.body {
+        FunctionCallOutputBody::Text(text) => {
+            vec![DynamicToolCallOutputContentItem::InputText { text: text.clone() }]
+        }
+        FunctionCallOutputBody::ContentItems(items) => items
+            .iter()
+            .filter_map(|item| match item {
+                FunctionCallOutputContentItem::InputText { text } => {
+                    Some(DynamicToolCallOutputContentItem::InputText { text: text.clone() })
+                }
+                FunctionCallOutputContentItem::InputImage { image_url, .. } => {
+                    Some(DynamicToolCallOutputContentItem::InputImage {
+                        image_url: image_url.clone(),
+                    })
+                }
+                FunctionCallOutputContentItem::EncryptedContent { .. } => None,
+            })
+            .collect(),
+    }
+}
+
 fn upsert_turn_item(items: &mut Vec<ThreadItem>, item: ThreadItem) -> &ThreadItem {
     if let Some(existing_item_index) = items
         .iter()
@@ -1598,8 +1770,11 @@ mod tests {
     use codex_protocol::items::UserMessageItem as CoreUserMessageItem;
     use codex_protocol::items::build_hook_prompt_message;
     use codex_protocol::mcp::CallToolResult;
+    use codex_protocol::models::FunctionCallOutputPayload;
     use codex_protocol::models::ImageDetail;
+    use codex_protocol::models::InternalChatMessageMetadataPassthrough;
     use codex_protocol::models::MessagePhase as CoreMessagePhase;
+    use codex_protocol::models::ResponseItem;
     use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
     use codex_protocol::parse_command::ParsedCommand;
     use codex_protocol::protocol::AgentMessageEvent;
@@ -2129,6 +2304,176 @@ mod tests {
                 duration_ms: Some(12),
             }]
         );
+    }
+
+    #[test]
+    fn rebuilds_function_calls_from_persisted_response_items() {
+        let turn_id = "turn-tools";
+        let metadata = || {
+            Some(InternalChatMessageMetadataPassthrough {
+                turn_id: Some(turn_id.to_string()),
+            })
+        };
+        let items = vec![
+            RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: turn_id.to_string(),
+                trace_id: None,
+                started_at: None,
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            })),
+            RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+                id: None,
+                name: "exec_command".into(),
+                namespace: None,
+                arguments: r#"{"cmd":"git status"}"#.into(),
+                call_id: "call-1".into(),
+                internal_chat_message_metadata_passthrough: metadata(),
+            }),
+            RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+                id: None,
+                call_id: "call-1".into(),
+                output: FunctionCallOutputPayload::from_text("Process exited with code 0".into()),
+                internal_chat_message_metadata_passthrough: metadata(),
+            }),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: turn_id.to_string(),
+                started_at: None,
+                last_agent_message: None,
+                error: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            })),
+        ];
+
+        let turns = build_turns_from_rollout_items(&items);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].items.len(), 1);
+        assert_eq!(
+            turns[0].items[0],
+            ThreadItem::DynamicToolCall {
+                id: "call-1".into(),
+                namespace: None,
+                tool: "exec_command".into(),
+                arguments: serde_json::json!({"cmd":"git status"}),
+                status: DynamicToolCallStatus::Completed,
+                content_items: Some(vec![DynamicToolCallOutputContentItem::InputText {
+                    text: "Process exited with code 0".into(),
+                }]),
+                success: Some(true),
+                duration_ms: None,
+            }
+        );
+    }
+
+    #[test]
+    fn closes_persisted_response_tool_without_output_when_turn_finishes() {
+        let turn_id = "turn-interrupted-tool";
+        let items = vec![
+            RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: turn_id.to_string(),
+                trace_id: None,
+                started_at: None,
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            })),
+            RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+                id: None,
+                name: "exec_command".into(),
+                namespace: None,
+                arguments: r#"{"cmd":"false"}"#.into(),
+                call_id: "call-no-output".into(),
+                internal_chat_message_metadata_passthrough: Some(
+                    InternalChatMessageMetadataPassthrough {
+                        turn_id: Some(turn_id.to_string()),
+                    },
+                ),
+            }),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: turn_id.to_string(),
+                started_at: None,
+                last_agent_message: None,
+                error: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            })),
+        ];
+
+        let turns = build_turns_from_rollout_items(&items);
+        assert!(matches!(
+            turns[0].items[0],
+            ThreadItem::DynamicToolCall {
+                status: DynamicToolCallStatus::Failed,
+                success: Some(false),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn semantic_tool_events_override_generic_response_tool_history() {
+        let turn_id = "turn-native";
+        let metadata = || {
+            Some(InternalChatMessageMetadataPassthrough {
+                turn_id: Some(turn_id.to_string()),
+            })
+        };
+        let command_item = CoreTurnItem::CommandExecution(CoreCommandExecutionItem {
+            id: "call-native".into(),
+            process_id: None,
+            command: vec!["git".into(), "status".into()],
+            cwd: test_path_buf("/tmp").abs().into(),
+            parsed_cmd: vec![ParsedCommand::Unknown {
+                cmd: "git status".into(),
+            }],
+            source: ExecCommandSource::Agent,
+            interaction_input: None,
+            status: CoreCommandExecutionStatus::Completed,
+            stdout: Some("clean\n".into()),
+            stderr: Some(String::new()),
+            aggregated_output: Some("clean\n".into()),
+            exit_code: Some(0),
+            duration: Some(Duration::from_millis(4)),
+            formatted_output: Some("clean\n".into()),
+        });
+        let items = vec![
+            RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: turn_id.into(),
+                trace_id: None,
+                started_at: None,
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            })),
+            RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+                id: None,
+                name: "exec_command".into(),
+                namespace: None,
+                arguments: r#"{"cmd":"git status"}"#.into(),
+                call_id: "call-native".into(),
+                internal_chat_message_metadata_passthrough: metadata(),
+            }),
+            RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+                thread_id: ThreadId::new(),
+                turn_id: turn_id.into(),
+                item: command_item,
+                completed_at_ms: 1,
+            })),
+            RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+                id: None,
+                call_id: "call-native".into(),
+                output: FunctionCallOutputPayload::from_text("generic output".into()),
+                internal_chat_message_metadata_passthrough: metadata(),
+            }),
+        ];
+
+        let turns = build_turns_from_rollout_items(&items);
+        assert_eq!(turns[0].items.len(), 1);
+        assert!(matches!(
+            turns[0].items[0],
+            ThreadItem::CommandExecution { .. }
+        ));
     }
 
     #[test]

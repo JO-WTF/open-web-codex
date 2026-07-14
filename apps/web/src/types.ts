@@ -401,6 +401,7 @@ export type RequestUserInputQuestion = {
   header: string;
   question: string;
   isOther?: boolean;
+  isSecret?: boolean;
   options?: RequestUserInputOption[];
 };
 
@@ -409,6 +410,7 @@ export type RequestUserInputParams = {
   turn_id: string;
   item_id: string;
   questions: RequestUserInputQuestion[];
+  auto_resolution_ms?: number | null;
 };
 
 export type RequestUserInputRequest = {

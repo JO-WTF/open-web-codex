@@ -501,6 +501,13 @@ Use `thread/turns/list` with `capabilities.experimentalApi = true` to page a sto
 
 Every returned `Turn` includes `itemsView`, which tells clients whether the `items` array was omitted intentionally (`notLoaded`), contains only summary items (`summary`), or contains every item available from persisted app-server history (`full`). Pass `itemsView` to choose the returned detail level; omitted `itemsView` defaults to `"summary"`.
 
+For full history, persisted Responses function and custom tool calls are reconstructed as
+`dynamicToolCall` items when no purpose-built item with the same call ID exists. Their output
+updates the same item in place. Purpose-built command, file-change, MCP, search, image, and other
+items take precedence, so clients receive one semantic history item instead of a generic duplicate.
+If a persisted tool call has no output before its Turn closes, it is returned as failed rather than
+remaining indefinitely in progress.
+
 ```json
 { "method": "thread/turns/list", "id": 24, "params": {
     "threadId": "thr_123",

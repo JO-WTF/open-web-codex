@@ -2,7 +2,6 @@ import { useState } from "react";
 import ChevronRight from "lucide-react/dist/esm/icons/chevron-right";
 import Folder from "lucide-react/dist/esm/icons/folder";
 import MessageSquare from "lucide-react/dist/esm/icons/message-square";
-import Plus from "lucide-react/dist/esm/icons/plus";
 import type { WorkspaceInfo } from "../../types";
 
 type ThreadInfo = {
@@ -26,15 +25,8 @@ type Props = {
   onNewThread: (workspaceId: string) => void;
 };
 
-function relativeTime(ts: number): string {
-  const seconds = Math.floor((Date.now() - ts) / 1000);
-  if (seconds < 60) return "now";
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  const days = Math.floor(hours / 24);
-  return `${days}d`;
+function compactThreadId(id: string): string {
+  return id.length > 8 ? `${id.slice(0, 8)}…` : id;
 }
 
 export default function Workspaces({
@@ -87,7 +79,7 @@ export default function Workspaces({
           disabled={busy || !createName.trim()}
           title="Create workspace"
         >
-          <Plus size={14} />
+          <span className="web-ws-create-plus" aria-hidden="true" />
         </button>
       </div>
 
@@ -97,7 +89,7 @@ export default function Workspaces({
 
       <div className="web-ws-list">
         {workspaces.map((ws) => {
-          const isExpanded = expandedId === ws.id;
+          const isExpanded = expandedId === ws.id || (expandedId === null && ws.id === activeId);
           const threads = threadsFor(ws.id);
           const isActive = ws.id === activeId;
 
@@ -131,7 +123,7 @@ export default function Workspaces({
                   disabled={busy}
                   title="New thread"
                 >
-                  <Plus size={12} />
+                  <span className="web-ws-create-plus web-ws-create-plus-small" aria-hidden="true" />
                 </button>
               </div>
 
@@ -149,7 +141,7 @@ export default function Workspaces({
                   >
                     <MessageSquare size={12} className="web-ws-thread-icon" />
                     <span className="web-ws-thread-label">{t.label}</span>
-                    <span className="web-ws-thread-time">{relativeTime(t.updatedAt)}</span>
+                    <span className="web-ws-thread-time" title={t.id}>{compactThreadId(t.id)}</span>
                   </div>
                 ))}
 

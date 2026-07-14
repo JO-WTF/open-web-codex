@@ -1,10 +1,12 @@
 import { useState } from "react";
 import ChevronRight from "lucide-react/dist/esm/icons/chevron-right";
+import Brain from "lucide-react/dist/esm/icons/brain";
 
 type Props = {
   text: string;
   summary?: string;
   meta?: string;
+  streaming?: boolean;
 };
 
 function previewLabel(text: string): string {
@@ -14,14 +16,20 @@ function previewLabel(text: string): string {
   return firstLine || "Reasoning";
 }
 
-export default function ReasoningBlock({ text, summary, meta }: Props) {
+export default function ReasoningBlock({ text, summary, meta, streaming = false }: Props) {
   // Reasoning is valuable execution context; show it on arrival instead of
   // leaving a barely discoverable collapsed row between messages.
   const [open, setOpen] = useState(true);
   const trimmedText = text.trim();
   if (!trimmedText) return null;
 
-  const label = summary || previewLabel(trimmedText);
+  const genericText = /^(reasoning completed|reasoning in progress|reasoning)$/i.test(trimmedText);
+  if (genericText && !streaming && !summary?.trim()) return null;
+  const usefulSummary = summary && !/^(reasoning completed|reasoning in progress|reasoning)$/i.test(summary.trim())
+    ? summary.trim()
+    : "";
+  const label = usefulSummary || previewLabel(genericText ? "Reasoning" : trimmedText);
+  const hasDetails = !genericText && trimmedText !== label;
 
   return (
     <div className="web-reasoning">
@@ -29,10 +37,12 @@ export default function ReasoningBlock({ text, summary, meta }: Props) {
         <span className={`web-reasoning-chevron${open ? " web-reasoning-chevron-open" : ""}`}>
           <ChevronRight size={12} />
         </span>
+        <Brain size={14} className="web-reasoning-icon" aria-hidden="true" />
+        {streaming && <span className="web-reasoning-working" aria-hidden="true" />}
         <span className="web-reasoning-label" title={trimmedText}>{label}</span>
         {meta && <span className="web-reasoning-meta">{meta}</span>}
       </div>
-      {open && (
+      {open && hasDetails && (
         <div className="web-reasoning-body">
           {trimmedText.split("\n").map((line, i) => (
             <p key={i} className="web-reasoning-line">{line || "\u00A0"}</p>

@@ -220,6 +220,7 @@ pub fn run() {
             codex::generate_agent_description,
             codex::resume_thread,
             codex::read_thread,
+            codex::list_thread_turns,
             codex::thread_live_subscribe,
             codex::thread_live_unsubscribe,
             codex::fork_thread,

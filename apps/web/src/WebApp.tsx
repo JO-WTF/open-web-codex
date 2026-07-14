@@ -1,12 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AppServerEvent, ThreadTokenUsage, WorkspaceInfo } from "./types";
+import type { AppServerEvent, RequestUserInputRequest, RequestUserInputResponse, ThreadTokenUsage, WorkspaceInfo } from "./types";
 import { CodexMonitorWebClient } from "./services/webClient";
 import Layout from "./components/Layout";
 import Sidebar from "./components/Sidebar";
 import Conversation from "./components/Conversation";
+import FileManager from "./components/FileManager";
 import type { GoalInfo } from "./components/Conversation/GoalBanner";
-import { buildWebThreadHistory, commandText } from "./utils/webThreadHistory";
+import type { QueuedFollowUp } from "./components/Conversation/FollowUpQueue";
+import { appendTerminalInteractionOutput, buildWebThreadHistory, commandText, isUserThreadItem, mergeWebThreadHistory, unwrapWebRpcResult, webLogEntryFromThreadItem } from "./utils/webThreadHistory";
+import { normalizeTokenUsage } from "./features/threads/utils/threadNormalize";
+import { normalizePlanUpdate } from "./features/threads/utils/threadNormalize";
+import { parseWebTurnDiff } from "./utils/webTurnDiff";
+import { isWebAppServerRecoveryEvent, parseCodexStderr, parseWebAppServerError } from "./utils/webAppServerError";
+import { parseWebUserInputRequest } from "./utils/webUserInput";
 import "./styles/web.css";
+import "./styles/web-refactor.css";
 
 /* ─────────── Types ─────────── */
 
@@ -16,10 +24,14 @@ export type LogEntry = {
   text: string;
   approvalId?: string;
   approvalRequestId?: number | string;
-  kind?: "reasoning" | "tool" | "diff" | "approval" | "command_exec";
+  approvalStatus?: "pending" | "accepted" | "declined" | "resolved";
+  kind?: "reasoning" | "tool" | "diff" | "approval" | "command_exec" | "connection";
   toolType?: string;
   toolTitle?: string;
   toolStatus?: string;
+  toolDetail?: string;
+  toolOutput?: string;
+  reasoningSummary?: string;
   filePath?: string;
   diffTitle?: string;
   diffLines?: { type: "add" | "del" | "ctx"; text: string }[];
@@ -92,6 +104,15 @@ function extractThreadIdFromEvent(event: AppServerEvent) {
 const newLogId = () =>
   crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
+function parseThreadUpdatedAt(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
 /* ─────────── Component ─────────── */
 
 export default function WebApp() {
@@ -106,27 +127,80 @@ export default function WebApp() {
   const [threadsByWorkspace, setThreadsByWorkspace] = useState<Record<string, ThreadInfo[]>>({});
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [queuedFollowUps, setQueuedFollowUps] = useState<QueuedFollowUp[]>([]);
+  const [steeringFollowUpId, setSteeringFollowUpId] = useState<string | null>(null);
+  const [userInputRequests, setUserInputRequests] = useState<RequestUserInputRequest[]>([]);
+  const [submittingUserInputId, setSubmittingUserInputId] = useState<number | string | null>(null);
   const [messages, setMessages] = useState<LogEntry[]>([]);
   const [gatewayState, setGatewayState] = useState<GatewayState>("checking");
   const [gatewayVersion, setGatewayVersion] = useState<string | null>(null);
   const [thinking, setThinking] = useState(false);
+  const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null);
   const [tokenUsage, setTokenUsage] = useState<ThreadTokenUsage | null>(null);
   const [threadStatus, setThreadStatus] = useState<string>("idle");
+  const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const [threadSettings, setThreadSettings] = useState<Record<string, unknown> | null>(null);
   const [rateLimits, setRateLimits] = useState<Record<string, unknown> | null>(null);
   const [goal, setGoal] = useState<GoalInfo | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() =>
+    typeof window !== "undefined" && window.matchMedia("(max-width: 760px)").matches,
+  );
+  const [filePanelOpen, setFilePanelOpen] = useState(false);
+  const [filePanelWidth, setFilePanelWidth] = useState(() => {
+    if (typeof window === "undefined") return 360;
+    const stored = Number(window.localStorage.getItem("open-web-codex:file-panel-width:v1"));
+    return Number.isFinite(stored) && stored >= 260 && stored <= 720 ? stored : 360;
+  });
+  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
   const [mcpServers, setMcpServers] = useState<Record<string, {name: string; status: string; error?: string | null; failureReason?: string | null}>>({});
+
+  useEffect(() => {
+    const narrowScreen = window.matchMedia("(max-width: 760px)");
+    const syncSidebarWithViewport = (event: MediaQueryListEvent) => {
+      setSidebarCollapsed(event.matches);
+    };
+    narrowScreen.addEventListener("change", syncSidebarWithViewport);
+    return () => narrowScreen.removeEventListener("change", syncSidebarWithViewport);
+  }, []);
+
+  useEffect(() => {
+    setSelectedFilePath(null);
+  }, [activeWorkspaceId]);
+
+  useEffect(() => {
+    setQueuedFollowUps([]);
+    setSteeringFollowUpId(null);
+  }, [activeThreadId]);
+
+  useEffect(() => {
+    window.localStorage.setItem("open-web-codex:file-panel-width:v1", String(filePanelWidth));
+  }, [filePanelWidth]);
 
   const client = useMemo(() => new CodexMonitorWebClient({ baseUrl, token }), [baseUrl, token]);
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
+  const listWorkspaceFiles = useCallback((workspaceId: string) => client.listWorkspaceFiles(workspaceId), [client]);
+  const readWorkspaceFile = useCallback((workspaceId: string, path: string) => client.readWorkspaceFile(workspaceId, path), [client]);
+  const loadWorkspaceGitStatus = useCallback((workspaceId: string) => client.getGitStatus(workspaceId), [client]);
+  const openFile = useCallback((path: string) => {
+    const workspacePath = activeWorkspace?.path?.replace(/\/$/, "");
+    const normalized = workspacePath && path.startsWith(`${workspacePath}/`) ? path.slice(workspacePath.length + 1) : path.replace(/^\//, "");
+    setSelectedFilePath(normalized);
+    setFilePanelOpen(true);
+  }, [activeWorkspace?.path]);
 
   // Streaming accumulators
   const streamingTexts = useRef<Map<string, string>>(new Map());
+  const reasoningSummaries = useRef<Map<string, string>>(new Map());
   const streamingLogIds = useRef<Map<string, string>>(new Map());
-  const selectThreadRef = useRef<((threadId: string) => Promise<void>) | null>(null);
-  const activeThreadIdRef = useRef<string | null>(activeThreadId);
-  activeThreadIdRef.current = activeThreadId;
-
+  const turnDiffLogIds = useRef<Map<string, string>>(new Map());
+  const commandLogIds = useRef<Map<string, string>>(new Map());
+  const toolLogIds = useRef<Map<string, string>>(new Map());
+  const commandOutputs = useRef<Map<string, string>>(new Map());
+  const commandStartedAt = useRef<Map<string, number>>(new Map());
+  const interruptRequestTurnId = useRef<string | null>(null);
+  const queueDispatching = useRef(false);
+  const threadHydrationSequence = useRef(0);
   const appendLog = useCallback(
     (level: LogEntry["level"], text: string, extra?: Partial<Omit<LogEntry, "id" | "level" | "text">>) => {
       setMessages((prev) => [
@@ -151,22 +225,110 @@ export default function WebApp() {
       const itemId = typeof params.itemId === "string" ? params.itemId : null;
       const delta = typeof params.delta === "string" ? params.delta : "";
 
+      if (isWebAppServerRecoveryEvent(method)) {
+        setMessages((previous) => previous.some((entry) => entry.kind === "connection")
+          ? previous.filter((entry) => entry.kind !== "connection")
+          : previous);
+        setThreadStatus((previous) => previous === "reconnecting" ? "running" : previous);
+      }
+
       switch (method) {
+        case "codex/stderr": {
+          const parsed = parseCodexStderr(params);
+          if (!parsed) return null;
+          setThinking(true);
+          setThreadStatus("reconnecting");
+          setMessages((previous) => {
+            const existing = previous.findIndex((entry) => entry.kind === "connection");
+            if (existing < 0) {
+              return [...previous.slice(-199), {
+                id: newLogId(),
+                level: "info" as const,
+                text: parsed.text,
+                kind: "connection" as const,
+                streaming: true,
+              }];
+            }
+            return previous.map((entry, index) => index === existing
+              ? { ...entry, text: parsed.text, streaming: true }
+              : entry);
+          });
+          return null;
+        }
+
         case "turn/started":
           setThinking(true);
-          return { level: "system", text: "Thinking..." };
+          setTurnStartedAt(() => {
+            const turn = params.turn && typeof params.turn === "object"
+              ? params.turn as Record<string, unknown>
+              : null;
+            const raw = turn?.startedAt ?? params.startedAt ?? params.started_at;
+            return typeof raw === "number" && Number.isFinite(raw)
+              ? raw < 10_000_000_000 ? raw * 1000 : raw
+              : Date.now();
+          });
+          setThreadStatus("running");
+          setActiveTurnId(() => {
+            const turn = params.turn && typeof params.turn === "object"
+              ? params.turn as Record<string, unknown>
+              : null;
+            const id = turn?.id ?? params.turnId ?? params.turn_id;
+            return typeof id === "string" && id ? id : null;
+          });
+          return null;
 
         case "turn/completed":
-         setThinking(false);
-         const completedThreadId = typeof params.threadId === "string"
-           ? params.threadId
-           : typeof params.thread_id === "string" ? params.thread_id : null;
-         if (completedThreadId && completedThreadId === activeThreadIdRef.current) {
-           // The completed item event can omit reasoning summaries. Once a turn is
-           // durable, refresh from the Runtime's thread projection as the source of truth.
-           void selectThreadRef.current?.(completedThreadId);
-         }
-         return { level: "system", text: "Turn complete" };
+          // Keep the richer live transcript. The durable thread projection can omit
+          // reasoning and tool items, so replacing the transcript here made every
+          // execution step disappear as soon as the final answer arrived.
+          setThinking(false);
+          setTurnStartedAt(null);
+          setThreadStatus("idle");
+          setActiveTurnId(null);
+          setStopping(false);
+          interruptRequestTurnId.current = null;
+          setMessages((previous) => previous
+            .filter((entry) => entry.kind !== "connection"
+              && !(entry.level === "system" && entry.text === "Thinking...")
+              && !(entry.kind === "reasoning"
+                && /^(reasoning completed|reasoning in progress|reasoning)$/i.test(entry.text.trim())
+                && !entry.reasoningSummary?.trim()))
+            .map((entry) => entry.streaming
+              ? {
+                  ...entry,
+                  streaming: false,
+                  text: entry.text,
+                }
+              : entry));
+          return null;
+
+        case "error": {
+          const parsed = parseWebAppServerError(params);
+          if (!parsed.recoverable) {
+            setThinking(false);
+            setTurnStartedAt(null);
+            setActiveTurnId(null);
+            setStopping(false);
+            interruptRequestTurnId.current = null;
+            return { level: "error" as const, text: parsed.text };
+          }
+          setThinking(true);
+          setThreadStatus("reconnecting");
+          setMessages((previous) => {
+            const existing = previous.findIndex((entry) => entry.kind === "connection");
+            if (existing < 0) {
+              return [...previous.slice(-199), {
+                id: newLogId(),
+                level: "info" as const,
+                text: parsed.text,
+                kind: "connection" as const,
+                streaming: true,
+              }];
+            }
+            return previous.map((entry, index) => index === existing ? { ...entry, text: parsed.text, streaming: true } : entry);
+          });
+          return null;
+        }
 
         case "thread/started": {
           const thread = params.thread as Record<string, unknown> | undefined;
@@ -203,14 +365,23 @@ export default function WebApp() {
         case "item/reasoning/textDelta": {
           if (!itemId || !delta) return null;
           const key = `reason_${itemId}`;
-          const current = streamingTexts.current.get(key) ?? "";
+          const isSummary = method === "item/reasoning/summaryTextDelta";
+          const target = isSummary ? reasoningSummaries.current : streamingTexts.current;
+          const current = target.get(key) ?? "";
           const updated = current + delta;
-          streamingTexts.current.set(key, updated);
+          target.set(key, updated);
 
           const existingLogId = streamingLogIds.current.get(key);
           if (existingLogId) {
             setMessages((prev) =>
-              prev.map((e) => (e.id === existingLogId ? { ...e, text: updated } : e)),
+              prev.map((e) => (e.id === existingLogId
+                ? {
+                    ...e,
+                    text: isSummary ? e.text : updated,
+                    reasoningSummary: isSummary ? updated : e.reasoningSummary,
+                    streaming: true,
+                  }
+                : e)),
             );
             return null;
           }
@@ -218,7 +389,14 @@ export default function WebApp() {
           streamingLogIds.current.set(key, id);
           setMessages((prev) => [
             ...prev.slice(-199),
-            { id, level: "system", text: updated, kind: "reasoning" },
+            {
+              id,
+              level: "system",
+              text: isSummary ? "Reasoning in progress" : updated,
+              reasoningSummary: isSummary ? updated : undefined,
+              kind: "reasoning",
+              streaming: true,
+            },
           ]);
           return null;
         }
@@ -254,19 +432,27 @@ export default function WebApp() {
           const role = typeof item.role === "string" ? item.role : null;
           const kind = typeof item.kind === "string" ? item.kind : null;
           const itemIdFromItem = typeof item?.id === "string" ? item.id : null;
+          const itemType2 = typeof item.type === "string" ? item.type : null;
+          const completedItemId = itemId ?? itemIdFromItem;
+          const completedReasoningSummary = (Array.isArray(item.summary) && item.summary.length > 0)
+            ? item.summary.map((part) => String(part)).join("\n\n").trim()
+            : typeof item.summary === "string" ? item.summary.trim() : "";
+          const completedReasoningContent = Array.isArray(item.content)
+            ? item.content.map((part) => String(part)).join("\n\n").trim()
+            : typeof item.content === "string" ? item.content.trim() : "";
 
-          if (role === "user") return null;
+          if (role === "user" || isUserThreadItem(item)) return null;
 
-          if (role === "assistant") {
-            if (itemId && streamingTexts.current.has(itemId)) {
-              const acc = streamingTexts.current.get(itemId)!;
-              const eid = streamingLogIds.current.get(itemId);
+          if (role === "assistant" || itemType2 === "agentMessage") {
+            if (completedItemId && streamingTexts.current.has(completedItemId)) {
+              const acc = streamingTexts.current.get(completedItemId)!;
+              const eid = streamingLogIds.current.get(completedItemId);
               if (eid)
                 setMessages((prev) =>
                   prev.map((e) => (e.id === eid ? { ...e, text: acc, streaming: false } : e)),
                 );
-              streamingTexts.current.delete(itemId);
-              streamingLogIds.current.delete(itemId);
+              streamingTexts.current.delete(completedItemId);
+              streamingLogIds.current.delete(completedItemId);
               return null;
             }
             return {
@@ -293,25 +479,34 @@ export default function WebApp() {
 
           if (kind === "reasoning") {
             const key = itemId ? `reason_${itemId}` : (itemIdFromItem ? `reason_${itemIdFromItem}` : null);
-            if (key && streamingTexts.current.has(key)) {
-              const acc = streamingTexts.current.get(key)!;
+            if (key && streamingLogIds.current.has(key)) {
+              const acc = streamingTexts.current.get(key) ?? "";
               const eid = streamingLogIds.current.get(key);
-              if (eid && acc.trim()) {
-                setMessages((prev) =>
-                  prev.map((e) => (e.id === eid ? { ...e, text: acc } : e)),
-                );
+              if (eid) {
+                const text = acc.trim() || completedReasoningContent || completedReasoningSummary;
+                const summary = completedReasoningSummary || reasoningSummaries.current.get(key);
+                setMessages((prev) => text || summary
+                  ? prev.map((e) => (e.id === eid ? {
+                      ...e,
+                      text: text || summary || "",
+                      reasoningSummary: summary,
+                      streaming: false,
+                    } : e))
+                  : prev.filter((e) => e.id !== eid));
               }
               streamingTexts.current.delete(key);
+              reasoningSummaries.current.delete(key);
               streamingLogIds.current.delete(key);
-              if (eid && acc.trim()) return null;
+              if (eid) return null;
             }
-            const summary = (Array.isArray(item.summary) && (item.summary as unknown[]).length > 0)
-              ? (item.summary as unknown[]).map(s => String(s)).join("\n\n")
-              : typeof item.summary === "string" ? item.summary : "";
-            const finalText = summary.trim() || (key && streamingTexts.current.has(key) ? (streamingTexts.current.get(key) ?? "").trim() : "");
-            return finalText
-              ? { level: "system" as const, text: finalText, kind: "reasoning" as const }
-              : null;
+            if (!completedReasoningContent && !completedReasoningSummary) return null;
+            return {
+              level: "system" as const,
+              text: completedReasoningContent || completedReasoningSummary,
+              reasoningSummary: completedReasoningSummary || undefined,
+              kind: "reasoning" as const,
+              streaming: false,
+            };
           }
 
           if (kind === "diff") {
@@ -335,40 +530,75 @@ export default function WebApp() {
           }
 
 
-          const itemType2 = typeof item.type === "string" ? item.type : null;
-
           if (itemType2 === "reasoning") {
             const key = itemId ? `reason_${itemId}` : (itemIdFromItem ? `reason_${itemIdFromItem}` : null);
-            if (key && streamingTexts.current.has(key)) {
-              const acc = streamingTexts.current.get(key)!;
+            if (key && streamingLogIds.current.has(key)) {
+              const acc = streamingTexts.current.get(key) ?? "";
               const eid = streamingLogIds.current.get(key);
-              if (eid && acc.trim()) {
-                setMessages((prev) =>
-                  prev.map((e) => (e.id === eid ? { ...e, text: acc } : e)),
-                );
+              if (eid) {
+                const text = acc.trim() || completedReasoningContent || completedReasoningSummary;
+                const summary = completedReasoningSummary || reasoningSummaries.current.get(key);
+                setMessages((prev) => text || summary
+                  ? prev.map((e) => (e.id === eid ? {
+                      ...e,
+                      text: text || summary || "",
+                      reasoningSummary: summary,
+                      streaming: false,
+                    } : e))
+                  : prev.filter((e) => e.id !== eid));
               }
               streamingTexts.current.delete(key);
+              reasoningSummaries.current.delete(key);
               streamingLogIds.current.delete(key);
-              if (eid && acc.trim()) return null;
+              if (eid) return null;
             }
-            const summary = (Array.isArray(item.summary) && (item.summary as unknown[]).length > 0)
-              ? (item.summary as unknown[]).map(s => String(s)).join("\n\n")
-              : typeof item.summary === "string" ? item.summary : "";
-            const finalText = summary.trim() || (key && streamingTexts.current.has(key) ? (streamingTexts.current.get(key) ?? "").trim() : "");
-            return finalText
-              ? { level: "system" as const, text: finalText, kind: "reasoning" as const }
-              : null;
+            if (!completedReasoningContent && !completedReasoningSummary) return null;
+            return {
+              level: "system" as const,
+              text: completedReasoningContent || completedReasoningSummary,
+              reasoningSummary: completedReasoningSummary || undefined,
+              kind: "reasoning" as const,
+              streaming: false,
+            };
           }
 
           if (itemType2 === "commandExecution") {
             const cmd = commandText(item.command);
-            const output = typeof item.aggregatedOutput === "string" ? item.aggregatedOutput : "";
+            const liveOutput = completedItemId ? commandOutputs.current.get(completedItemId) ?? "" : "";
+            const output = typeof item.aggregatedOutput === "string" && item.aggregatedOutput
+              ? item.aggregatedOutput
+              : liveOutput;
             const exitCode = typeof item.exitCode === "number" ? item.exitCode : undefined;
-            const durationMs = typeof item.durationMs === "number" ? item.durationMs : undefined;
+            const startedAt = completedItemId ? commandStartedAt.current.get(completedItemId) : undefined;
+            const durationMs = typeof item.durationMs === "number" && item.durationMs > 0
+              ? item.durationMs
+              : startedAt ? Date.now() - startedAt : undefined;
             const cwd = typeof item.cwd === "string" ? item.cwd : undefined;
             const cmdActions = Array.isArray(item.commandActions)
               ? (item.commandActions as Record<string,unknown>[]).map(a => ({type: String(a.type ?? ""), path: String(a.path ?? "")}))
               : [];
+            const existingId = completedItemId ? commandLogIds.current.get(completedItemId) : undefined;
+            if (existingId) {
+              setMessages((previous) => previous.map((entry) => entry.id === existingId
+                ? {
+                    ...entry,
+                    text: cmd || entry.text,
+                    cmdOutput: output,
+                    toolStatus: typeof item.status === "string" ? item.status : "completed",
+                    cmdExitCode: exitCode,
+                    cmdDurationMs: durationMs,
+                    cmdCwd: cwd,
+                    cmdActions,
+                    streaming: false,
+                  }
+                : entry));
+              if (completedItemId) {
+                commandLogIds.current.delete(completedItemId);
+                commandOutputs.current.delete(completedItemId);
+                commandStartedAt.current.delete(completedItemId);
+              }
+              return null;
+            }
             return {
               level: "info" as const,
               text: cmd,
@@ -381,13 +611,44 @@ export default function WebApp() {
               cmdActions,
             };
           }
-          return null;
+          const entry = webLogEntryFromThreadItem(item, newLogId);
+          const existingId = completedItemId ? toolLogIds.current.get(completedItemId) : undefined;
+          if (entry && existingId) {
+            setMessages((previous) => previous.map((candidate) => candidate.id === existingId
+              ? { ...entry, id: existingId, streaming: false }
+              : candidate));
+            if (completedItemId) toolLogIds.current.delete(completedItemId);
+            return null;
+          }
+          return entry;
         }
 
         case "item/started": {
           const item = params.item as Record<string, unknown> | undefined;
+          if (item && isUserThreadItem(item)) return null;
           const itemKind = typeof item?.kind === "string" ? item.kind : null;
           const itemType = typeof item?.type === "string" ? item.type : null;
+          const startedItemId = typeof item?.id === "string" ? item.id : itemId;
+          if (itemType === "commandExecution" && startedItemId) {
+            const command = commandText(item?.command);
+            const id = newLogId();
+            commandLogIds.current.set(startedItemId, id);
+            commandOutputs.current.set(startedItemId, "");
+            commandStartedAt.current.set(startedItemId, Date.now());
+            setMessages((previous) => [
+              ...previous.slice(-199),
+              {
+                id,
+                level: "info",
+                text: command || "Command",
+                kind: "command_exec",
+                toolStatus: "inProgress",
+                cmdCwd: typeof item?.cwd === "string" ? item.cwd : undefined,
+                streaming: true,
+              },
+            ]);
+            return null;
+          }
           if (itemKind === "tool") {
             return {
               level: "info" as const,
@@ -398,13 +659,83 @@ export default function WebApp() {
               toolStatus: "running",
             };
           }
-          if (itemKind === "reasoning" || itemType === "reasoning") return null;
+          if ((itemKind === "reasoning" || itemType === "reasoning") && startedItemId) {
+            const key = `reason_${startedItemId}`;
+            if (streamingLogIds.current.has(key)) return null;
+            const id = newLogId();
+            streamingTexts.current.set(key, "");
+            streamingLogIds.current.set(key, id);
+            setMessages((previous) => [
+              ...previous.slice(-199),
+              {
+                id,
+                level: "system",
+                text: "Reasoning in progress",
+                kind: "reasoning",
+                streaming: true,
+              },
+            ]);
+            return null;
+          }
+          if (itemType) {
+            const entry = webLogEntryFromThreadItem(item as Record<string, unknown>, newLogId);
+            if (!entry) return null;
+            const id = startedItemId || entry.id;
+            if (startedItemId) toolLogIds.current.set(startedItemId, id);
+            setMessages((previous) => [...previous.slice(-199), { ...entry, id, streaming: true }]);
+            return null;
+          }
+          return null;
+        }
+
+        case "item/commandExecution/outputDelta": {
+          if (!itemId || !delta) return null;
+          const previousOutput = commandOutputs.current.get(itemId) ?? "";
+          const output = (previousOutput + delta).slice(-200_000);
+          commandOutputs.current.set(itemId, output);
+          const logId = commandLogIds.current.get(itemId);
+          if (logId) {
+            setMessages((previous) => previous.map((entry) => entry.id === logId
+              ? {
+                  ...entry,
+                  cmdOutput: output,
+                  toolStatus: "inProgress",
+                  streaming: true,
+                }
+              : entry));
+          }
+          return null;
+        }
+
+        case "item/commandExecution/terminalInteraction": {
+          if (!itemId) return null;
+          const stdin = typeof params.stdin === "string" ? params.stdin : "";
+          // Empty stdin represents a terminal poll. It is protocol activity, not a
+          // user-facing message, so keep the command running without adding output.
+          if (!stdin) return null;
+          const output = appendTerminalInteractionOutput(commandOutputs.current.get(itemId) ?? "", stdin);
+          commandOutputs.current.set(itemId, output);
+          const logId = commandLogIds.current.get(itemId);
+          if (logId) {
+            setMessages((previous) => previous.map((entry) => entry.id === logId
+              ? {
+                  ...entry,
+                  cmdOutput: output,
+                  toolStatus: "inProgress",
+                  streaming: true,
+                }
+              : entry));
+          }
           return null;
         }
 
         case "turn/error": {
           const msg = typeof params.message === "string" ? params.message : "Unknown error";
           setThinking(false);
+          setTurnStartedAt(null);
+          setActiveTurnId(null);
+          setStopping(false);
+          interruptRequestTurnId.current = null;
           return { level: "error" as const, text: `Turn error: ${msg}` };
         }
 
@@ -414,32 +745,98 @@ export default function WebApp() {
           const activeFlags = Array.isArray(status?.activeFlags) ? (status as Record<string, unknown>).activeFlags as string[] : [];
           const flagsStr = activeFlags.length > 0 ? ":" + activeFlags.join(",") : "";
           setThreadStatus(type + flagsStr);
+          if (type === "active") {
+            setThinking(true);
+            setTurnStartedAt((previous) => previous ?? Date.now());
+          }
+          if (type === "idle") {
+            setThinking(false);
+            setTurnStartedAt(null);
+            setActiveTurnId(null);
+            setStopping(false);
+            interruptRequestTurnId.current = null;
+          }
           if (type === "error") {
+            setThinking(false);
+            setTurnStartedAt(null);
+            setActiveTurnId(null);
+            setStopping(false);
+            interruptRequestTurnId.current = null;
             return { level: "error" as const, text: "Thread error" };
+          }
+          if (type === "systemError") {
+            setThinking(false);
+            setTurnStartedAt(null);
+            setActiveTurnId(null);
+            setStopping(false);
+            interruptRequestTurnId.current = null;
+            return {
+              level: "error" as const,
+              text: "System error. The runtime did not provide any additional error details.",
+            };
           }
           return null;
         }
 
-        case "turn/plan/updated":
-          return { level: "info" as const, text: "Plan updated" };
+        case "turn/plan/updated": {
+          const turnId = String(params.turnId ?? params.turn_id ?? "");
+          const plan = normalizePlanUpdate(turnId, params.explanation, params.plan ?? params.steps);
+          if (plan) setGoal((previous) => previous ? { ...previous, steps: plan.steps } : previous);
+          return null;
+        }
 
         case "item/plan/ready":
           return { level: "info" as const, text: "Plan ready" };
 
         case "turn/diff/updated":
-          return { level: "info" as const, text: "Diff updated" };
+        {
+          const turnId = typeof params.turnId === "string"
+            ? params.turnId
+            : typeof params.turn_id === "string" ? params.turn_id : null;
+          const diff = typeof params.diff === "string" ? params.diff : "";
+          if (!turnId || !diff) return null;
+
+          const parsed = parseWebTurnDiff(diff);
+          setGoal((previous) => previous ? {
+            ...previous,
+            fileCount: parsed.fileCount,
+            additions: parsed.additions,
+            deletions: parsed.deletions,
+          } : previous);
+          const existingId = turnDiffLogIds.current.get(turnId);
+          if (existingId) {
+            setMessages((previous) => previous.map((entry) => entry.id === existingId
+              ? {
+                  ...entry,
+                  text: parsed.title,
+                  diffTitle: parsed.title,
+                  diffLines: parsed.lines.slice(0, 400),
+                  streaming: true,
+                }
+              : entry));
+            return null;
+          }
+
+          const id = newLogId();
+          turnDiffLogIds.current.set(turnId, id);
+          setMessages((previous) => [
+            ...previous.slice(-199),
+            {
+              id,
+              level: "info",
+              text: parsed.title,
+              kind: "diff",
+              diffTitle: parsed.title,
+              diffLines: parsed.lines.slice(0, 400),
+              streaming: true,
+            },
+          ]);
+          return null;
+        }
 
         case "thread/tokenUsage/updated": {
           const raw = params.tokenUsage as Record<string, unknown> | undefined;
-          if (raw?.total && typeof raw.total === "object") {
-            const tu: ThreadTokenUsage = {
-              total: raw.total as ThreadTokenUsage["total"],
-              last: raw.last as ThreadTokenUsage["last"],
-              modelContextWindow:
-                typeof raw.modelContextWindow === "number" ? raw.modelContextWindow : null,
-            };
-            setTokenUsage(tu);
-          }
+          if (raw) setTokenUsage(normalizeTokenUsage(raw));
           return null;
         }
 
@@ -465,13 +862,17 @@ export default function WebApp() {
         case "thread/goal/updated": {
           const g = params.goal as Record<string, unknown> | undefined;
           if (g) {
-            setGoal({
+            setGoal((previous) => ({
               objective: typeof g.objective === "string" ? g.objective : "",
               status: typeof g.status === "string" ? g.status : "active",
               tokenBudget: typeof g.tokenBudget === "number" ? g.tokenBudget : null,
               tokensUsed: typeof g.tokensUsed === "number" ? g.tokensUsed : 0,
               timeUsedSeconds: typeof g.timeUsedSeconds === "number" ? g.timeUsedSeconds : 0,
-            });
+              steps: previous?.steps ?? [],
+              fileCount: previous?.fileCount,
+              additions: previous?.additions,
+              deletions: previous?.deletions,
+            }));
           }
           return null;
         }
@@ -500,7 +901,36 @@ export default function WebApp() {
               typeof requestId === "number" || typeof requestId === "string"
                 ? requestId
                 : undefined,
+            approvalStatus: "pending" as const,
           };
+        }
+
+        case "item/tool/requestUserInput": {
+          const requestId = message.id;
+          if (typeof requestId !== "number" && typeof requestId !== "string") return null;
+          const request = parseWebUserInputRequest(event.workspace_id, requestId, params);
+          if (!request) return null;
+          setUserInputRequests((previous) => [
+            ...previous.filter((candidate) => !(candidate.workspace_id === request.workspace_id && candidate.request_id === request.request_id)),
+            request,
+          ]);
+          return null;
+        }
+
+        case "serverRequest/resolved": {
+          const requestId = params.requestId ?? params.request_id;
+          if (typeof requestId !== "number" && typeof requestId !== "string") return null;
+          setMessages((previous) => previous.map((entry) =>
+            entry.approvalRequestId === requestId && entry.kind === "approval"
+              ? {
+                  ...entry,
+                  approvalStatus: entry.approvalStatus === "accepted" || entry.approvalStatus === "declined"
+                    ? entry.approvalStatus
+                    : "resolved",
+                }
+              : entry));
+          setUserInputRequests((previous) => previous.filter((request) => request.request_id !== requestId));
+          return null;
         }
 
 
@@ -554,9 +984,11 @@ export default function WebApp() {
     if (!wid) return;
     try {
       const raw = await client.listThreads(wid);
-      const inner = (raw as Record<string, unknown>)?.result;
-      const allData =
-        (inner as Record<string, unknown>)?.data ?? raw ?? [];
+      const payload = unwrapWebRpcResult(raw);
+      const payloadRecord = payload && typeof payload === "object"
+        ? payload as Record<string, unknown>
+        : null;
+      const allData = payloadRecord?.data ?? payload ?? [];
       // Filter to this workspace by cwd
       const ws = workspaces.find(w => w.id === wid);
       const wsPath = ws?.path ?? '';
@@ -569,7 +1001,7 @@ export default function WebApp() {
           const received = arr.map((t: Record<string, unknown>) => ({
             id: String(t.id ?? ""),
             label: String(t.name ?? t.label ?? "Thread"),
-            updatedAt: typeof t.updatedAt === "number" ? t.updatedAt : 0,
+            updatedAt: parseThreadUpdatedAt(t.updatedAt ?? t.updated_at),
             turnCount: typeof t.turnCount === "number" ? t.turnCount : undefined,
           }));
           // Newly started threads are not listed until their first persisted turn.
@@ -661,8 +1093,11 @@ export default function WebApp() {
        setMessages([]);
        setTokenUsage(null);
        setGoal(null);
-       setThinking(false);
-       setThreadStatus("idle");
+     setThinking(false);
+     setThreadStatus("idle");
+     setActiveTurnId(null);
+     setStopping(false);
+     interruptRequestTurnId.current = null;
        setThreadsByWorkspace((previous) => {
          const existing = previous[wid] ?? [];
          if (existing.some((thread) => thread.id === tid)) {
@@ -683,20 +1118,115 @@ export default function WebApp() {
    }
   }, [activeWorkspaceId, appendLog, client, connectWorkspace, refreshThreads]);
 
+  const sendText = useCallback(async (text: string) => {
+    if (!activeWorkspaceId || !activeThreadId || !text.trim()) return false;
+    appendLog("user", text);
+    setThinking(true);
+    setTurnStartedAt(Date.now());
+    setThreadStatus("running");
+    setStopping(false);
+    setBusy(true);
+    try {
+      const response = await client.sendUserMessage(activeWorkspaceId, activeThreadId, text);
+      const payload = unwrapWebRpcResult(response);
+      const record = payload && typeof payload === "object"
+        ? payload as Record<string, unknown>
+        : null;
+      const turn = record?.turn && typeof record.turn === "object"
+        ? record.turn as Record<string, unknown>
+        : record;
+      const turnId = turn?.id ?? record?.turnId ?? record?.turn_id;
+      if (typeof turnId === "string" && turnId) setActiveTurnId(turnId);
+      return true;
+    } catch (error) {
+      setThinking(false);
+      setTurnStartedAt(null);
+      setThreadStatus("idle");
+      setStopping(false);
+      appendLog("error", error instanceof Error ? error.message : String(error));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }, [activeThreadId, activeWorkspaceId, appendLog, client]);
+
   const sendMessage = useCallback(async () => {
     const text = draft.trim();
     if (!activeWorkspaceId || !activeThreadId || !text) return;
     setDraft("");
-    appendLog("user", text);
-    setBusy(true);
+    const running = thinking
+      || threadStatus === "running"
+      || threadStatus === "reconnecting"
+      || threadStatus.startsWith("active");
+    if (running) {
+      setQueuedFollowUps((previous) => [...previous, { id: newLogId(), text }]);
+      return;
+    }
+    await sendText(text);
+  }, [activeThreadId, activeWorkspaceId, draft, sendText, thinking, threadStatus]);
+
+  const stopTurn = useCallback(() => {
+    if (!activeWorkspaceId || !activeThreadId || stopping) return;
+    interruptRequestTurnId.current = null;
+    setStopping(true);
+  }, [activeThreadId, activeWorkspaceId, stopping]);
+
+  useEffect(() => {
+    if (!stopping || !activeWorkspaceId || !activeThreadId || !activeTurnId) return;
+    if (interruptRequestTurnId.current === activeTurnId) return;
+    interruptRequestTurnId.current = activeTurnId;
+    void client.interruptTurn(activeWorkspaceId, activeThreadId, activeTurnId).catch((error) => {
+      if (interruptRequestTurnId.current === activeTurnId) interruptRequestTurnId.current = null;
+      setStopping(false);
+      appendLog("error", error instanceof Error ? error.message : String(error));
+    });
+  }, [activeThreadId, activeTurnId, activeWorkspaceId, appendLog, client, stopping]);
+
+  useEffect(() => {
+    const running = thinking
+      || threadStatus === "running"
+      || threadStatus === "reconnecting"
+      || threadStatus.startsWith("active");
+    const next = queuedFollowUps[0];
+    if (running || busy || !next || queueDispatching.current) return;
+    queueDispatching.current = true;
+    setQueuedFollowUps((previous) => previous.filter((item) => item.id !== next.id));
+    void sendText(next.text).finally(() => {
+      queueDispatching.current = false;
+    });
+  }, [busy, queuedFollowUps, sendText, thinking, threadStatus]);
+
+  const steerFollowUp = useCallback(async (id: string) => {
+    if (!activeWorkspaceId || !activeThreadId || !activeTurnId || steeringFollowUpId) return;
+    const item = queuedFollowUps.find((candidate) => candidate.id === id);
+    if (!item) return;
+    setSteeringFollowUpId(id);
     try {
-      await client.sendUserMessage(activeWorkspaceId, activeThreadId, text);
+      await client.steerTurn(activeWorkspaceId, activeThreadId, activeTurnId, item.text);
+      setQueuedFollowUps((previous) => previous.filter((candidate) => candidate.id !== id));
     } catch (error) {
       appendLog("error", error instanceof Error ? error.message : String(error));
     } finally {
-      setBusy(false);
+      setSteeringFollowUpId(null);
     }
-  }, [activeThreadId, activeWorkspaceId, appendLog, client, draft]);
+  }, [activeThreadId, activeTurnId, activeWorkspaceId, appendLog, client, queuedFollowUps, steeringFollowUpId]);
+
+  const deleteFollowUp = useCallback((id: string) => {
+    setQueuedFollowUps((previous) => previous.filter((item) => item.id !== id));
+  }, []);
+
+  const submitUserInput = useCallback(async (request: RequestUserInputRequest, response: RequestUserInputResponse) => {
+    if (submittingUserInputId !== null) return;
+    setSubmittingUserInputId(request.request_id);
+    try {
+      await client.respondToServerRequest(request.workspace_id, request.request_id, { answers: response.answers });
+      setUserInputRequests((previous) => previous.filter((candidate) => !(candidate.workspace_id === request.workspace_id && candidate.request_id === request.request_id)));
+    } catch (error) {
+      appendLog("error", error instanceof Error ? error.message : String(error));
+    } finally {
+      setSubmittingUserInputId(null);
+    }
+  }, [appendLog, client, submittingUserInputId]);
 
   const resolveApproval = useCallback(async (
     workspaceId: string,
@@ -705,9 +1235,10 @@ export default function WebApp() {
   ) => {
     try {
       await client.respondToServerRequest(workspaceId, requestId, { decision });
-      setMessages((previous) => previous.filter(
-        (entry) => entry.approvalRequestId !== requestId,
-      ));
+      setMessages((previous) => previous.map((entry) =>
+        entry.approvalRequestId === requestId
+          ? { ...entry, approvalStatus: decision === "accept" ? "accepted" : "declined" }
+          : entry));
     } catch (error) {
       appendLog("error", error instanceof Error ? error.message : String(error));
     }
@@ -716,10 +1247,15 @@ export default function WebApp() {
   /* ─── Thread management ─── */
 
   const selectThread = useCallback(async (id: string) => {
+    const hydrationSequence = threadHydrationSequence.current + 1;
+    threadHydrationSequence.current = hydrationSequence;
     setActiveThreadId(id);
     setMessages([]);
     setTokenUsage(null);
     setGoal(null);
+    setActiveTurnId(null);
+    setStopping(false);
+    interruptRequestTurnId.current = null;
     const wid = activeWorkspaceId;
     if (!wid) return;
     try {
@@ -730,25 +1266,90 @@ export default function WebApp() {
       } catch {
         // Best effort: `thread/read` below is the source for the browser projection.
       }
-      // `thread/resume` is the authoritative loaded-thread projection. In
-      // particular it preserves the reasoning summaries for interrupted turns;
-      // `thread/read` may legitimately return an empty turns projection.
+      // A resumed thread is the source for live status, but its embedded turns
+      // may be a summary projection. Request persisted turns explicitly with
+      // `itemsView: full` so history restores commands, reasoning, diffs, MCP
+      // calls, and other non-message items. Older runtimes fall back to read.
+      let persistedTurns: Record<string, unknown>[] | null = null;
+      try {
+        persistedTurns = await client.listThreadTurns(wid, id);
+      } catch {
+        // The paginated history API is experimental and may be absent on an
+        // older app-server; retain compatibility with thread/read.
+      }
       const raw = resumed ?? await client.readThread(wid, id);
-      const inner = (raw as Record<string, unknown>)?.result;
-      let obj = (inner ?? raw) as Record<string, unknown>;
-      let thread = obj.thread as Record<string, unknown> | undefined;
-      let turns = Array.isArray(thread?.turns) ? thread.turns as Record<string, unknown>[] : (Array.isArray(obj.turns) ? obj.turns as Record<string, unknown>[] : []);
-      const loaded = buildWebThreadHistory({ turns }, newLogId);
-      if (loaded.length > 0) setMessages(loaded);
+      const payload = unwrapWebRpcResult(raw);
+      const obj = payload && typeof payload === "object"
+        ? payload as Record<string, unknown>
+        : {};
+      const thread = obj.thread && typeof obj.thread === "object"
+        ? obj.thread as Record<string, unknown>
+        : undefined;
+      const embeddedTurns = Array.isArray(thread?.turns)
+        ? thread.turns as Record<string, unknown>[]
+        : Array.isArray(obj.turns)
+          ? obj.turns as Record<string, unknown>[]
+          : [];
+      const turns = persistedTurns && persistedTurns.length > 0
+        ? persistedTurns
+        : embeddedTurns;
+      const status = thread?.status;
+      if (status && typeof status === "object") {
+        const statusType = (status as Record<string, unknown>).type;
+        if (typeof statusType === "string") {
+          setThreadStatus(statusType);
+          setThinking(statusType === "active");
+        }
+      }
+      const activeTurn = [...turns].reverse().find((turn) => {
+        const turnStatus = turn.status;
+        return turnStatus === "inProgress"
+          || turnStatus === "running"
+          || (turnStatus && typeof turnStatus === "object"
+            && ["inProgress", "running"].includes(String((turnStatus as Record<string, unknown>).type ?? "")));
+      });
+      setActiveTurnId(typeof activeTurn?.id === "string" ? activeTurn.id : null);
+      if (activeTurn) {
+        const rawStartedAt = activeTurn.startedAt ?? activeTurn.started_at;
+        setTurnStartedAt(typeof rawStartedAt === "number" && Number.isFinite(rawStartedAt)
+          ? rawStartedAt < 10_000_000_000 ? rawStartedAt * 1000 : rawStartedAt
+          : Date.now());
+      } else {
+        setTurnStartedAt(null);
+      }
+      const historyThread = thread
+        ? { ...thread, turns }
+        : { turns, status: obj.status };
+      const loaded = buildWebThreadHistory(historyThread, newLogId);
+      if (threadHydrationSequence.current !== hydrationSequence) return;
+      setMessages((current) => mergeWebThreadHistory(loaded, current));
     } catch { /* history load is best-effort */ }
   }, [activeWorkspaceId, client]);
 
-  selectThreadRef.current = selectThread;
-
   /* ─── Render ─── */
+
+  const activeUserInputRequest = userInputRequests.find((request) =>
+    request.workspace_id === activeWorkspaceId && request.params.thread_id === activeThreadId,
+  ) ?? null;
 
   return (
     <Layout
+      sidebarCollapsed={sidebarCollapsed}
+      rightPanelOpen={filePanelOpen}
+      rightPanelWidth={filePanelWidth}
+      rightPanel={
+        <FileManager
+          workspaceId={activeWorkspaceId}
+          selectedPath={selectedFilePath}
+          onSelectedPathChange={setSelectedFilePath}
+          onClose={() => setFilePanelOpen(false)}
+          panelWidth={filePanelWidth}
+          onPanelWidthChange={setFilePanelWidth}
+          listFiles={listWorkspaceFiles}
+          readFile={readWorkspaceFile}
+          loadGitStatus={loadWorkspaceGitStatus}
+        />
+      }
       sidebar={
         <Sidebar
           gatewayState={gatewayState}
@@ -780,6 +1381,12 @@ export default function WebApp() {
         goal={goal}
         workspaceName={activeWorkspace?.name ?? null}
         threadTitle={activeThreadId ? activeThreadId.slice(0, 12) + "…" : null}
+        conversationId={activeThreadId}
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleSidebar={() => setSidebarCollapsed((collapsed) => !collapsed)}
+        filePanelOpen={filePanelOpen}
+        onToggleFilePanel={() => setFilePanelOpen((open) => !open)}
+        onOpenFile={openFile}
           tokenUsage={tokenUsage}
           threadStatus={threadStatus}
           threadSettings={threadSettings}
@@ -789,9 +1396,20 @@ export default function WebApp() {
         draft={draft}
         onDraftChange={setDraft}
         onSend={sendMessage}
+        onStop={stopTurn}
+        stopping={stopping}
+        queuedFollowUps={queuedFollowUps}
+        steeringFollowUpId={steeringFollowUpId}
+        canSteer={Boolean(activeTurnId) && thinking && !stopping}
+        onSteerFollowUp={(id) => { void steerFollowUp(id); }}
+        onDeleteFollowUp={deleteFollowUp}
+        userInputRequest={activeUserInputRequest}
+        submittingUserInput={activeUserInputRequest?.request_id === submittingUserInputId}
+        onSubmitUserInput={(request, response) => { void submitUserInput(request, response); }}
         busy={busy}
         sendDisabled={!activeWorkspaceId || !activeThreadId}
         thinking={thinking}
+        turnStartedAt={turnStartedAt}
         onResolveApproval={resolveApproval}
       />
     </Layout>

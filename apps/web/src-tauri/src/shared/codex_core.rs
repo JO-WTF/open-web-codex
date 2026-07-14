@@ -291,6 +291,25 @@ pub(crate) async fn read_thread_core(
         .await
 }
 
+pub(crate) async fn list_thread_turns_core(
+    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    workspace_id: String,
+    thread_id: String,
+    cursor: Option<String>,
+) -> Result<Value, String> {
+    let session = get_session_clone(sessions, &workspace_id).await?;
+    let params = json!({
+        "threadId": thread_id,
+        "cursor": cursor,
+        "limit": 100,
+        "sortDirection": "desc",
+        "itemsView": "full"
+    });
+    session
+        .send_request_for_workspace(&workspace_id, "thread/turns/list", params)
+        .await
+}
+
 pub(crate) async fn thread_live_subscribe_core(
     sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
     workspace_id: String,
