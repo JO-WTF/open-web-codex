@@ -19,6 +19,7 @@ import { summarizeWebAppServerEvent } from "./utils/webAppServerEventSummary";
 import { mergeRateLimits, parseInitialMcpServers, parseInitialRateLimits } from "./utils/webInitialStatus";
 import { appendWebLogEntry } from "./utils/webApprovalLog";
 import { rememberAppServerEvent } from "./utils/webAppServerEventDedup";
+import { getAppServerThreadId } from "./utils/appServerEvents";
 import "./styles/web.css";
 import "./styles/web-refactor.css";
 
@@ -294,6 +295,9 @@ export default function WebApp() {
   const queueDispatching = useRef(false);
   const threadHydrationSequence = useRef(0);
   const recentAppServerEvents = useRef<Map<string, number>>(new Map());
+  const pendingApprovalsByThread = useRef<Map<string, LogEntry[]>>(new Map());
+  const activeThreadIdRef = useRef(activeThreadId);
+  activeThreadIdRef.current = activeThreadId;
   const appendLog = useCallback(
     (level: LogEntry["level"], text: string, extra?: Partial<Omit<LogEntry, "id" | "level" | "text">>) => {
       setMessages((prev) => appendWebLogEntry(prev, {
@@ -316,6 +320,20 @@ export default function WebApp() {
         message.params && typeof message.params === "object"
           ? (message.params as Record<string, unknown>)
           : {};
+
+      const eventThreadId = getAppServerThreadId(event);
+      const belongsToBackgroundThread = Boolean(
+        eventThreadId
+        && activeThreadIdRef.current
+        && eventThreadId !== activeThreadIdRef.current,
+      );
+      if (
+        belongsToBackgroundThread
+        && method !== "item/commandExecution/requestApproval"
+        && method !== "serverRequest/resolved"
+      ) {
+        return null;
+      }
 
       const itemId = typeof params.itemId === "string" ? params.itemId : null;
       const delta = typeof params.delta === "string" ? params.delta : "";
@@ -989,6 +1007,26 @@ export default function WebApp() {
           if (!cmd) return null;
           const requestId = message.id;
           const approvalId = typeof params.itemId === "string" ? params.itemId : undefined;
+          const approvalThreadId = typeof params.threadId === "string"
+            ? params.threadId
+            : typeof params.thread_id === "string" ? params.thread_id : null;
+          if (approvalThreadId && (typeof requestId === "number" || typeof requestId === "string")) {
+            const cachedApproval: LogEntry = {
+              id: `approval-${event.workspace_id}-${String(requestId)}`,
+              level: "info",
+              text: cmd,
+              kind: "approval",
+              approvalId,
+              approvalRequestId: requestId,
+              approvalStatus: "pending",
+            };
+            const current = pendingApprovalsByThread.current.get(approvalThreadId) ?? [];
+            pendingApprovalsByThread.current.set(
+              approvalThreadId,
+              appendWebLogEntry(current, cachedApproval),
+            );
+          }
+          if (belongsToBackgroundThread) return null;
           if (approvalId && (typeof requestId === "number" || typeof requestId === "string")) {
             setMessages((previous) => previous.map((entry) =>
               entry.kind === "command_exec" && entry.approvalId === approvalId
@@ -1023,6 +1061,12 @@ export default function WebApp() {
         case "serverRequest/resolved": {
           const requestId = params.requestId ?? params.request_id;
           if (typeof requestId !== "number" && typeof requestId !== "string") return null;
+          for (const [threadId, approvals] of pendingApprovalsByThread.current) {
+            const remaining = approvals.filter((entry) => entry.approvalRequestId !== requestId);
+            if (remaining.length > 0) pendingApprovalsByThread.current.set(threadId, remaining);
+            else pendingApprovalsByThread.current.delete(threadId);
+          }
+          if (belongsToBackgroundThread) return null;
           setMessages((previous) => {
             const approval = previous.find((entry) =>
               entry.kind === "approval" && entry.approvalRequestId === requestId);
@@ -1144,7 +1188,7 @@ export default function WebApp() {
         const wsId = activeWorkspaceId;
         if (wsId && event.workspace_id !== wsId) return;
         const tid = extractThreadIdFromEvent(event);
-        if (tid) setActiveThreadId(tid);
+        if (tid && !activeThreadIdRef.current) setActiveThreadId(tid);
         const entry = handleAppEvent(event);
         if (entry) {
           const { level, text, ...extra } = entry;
@@ -1374,6 +1418,12 @@ export default function WebApp() {
   ) => {
     try {
       await client.respondToServerRequest(workspaceId, requestId, { decision });
+      for (const [threadId, approvals] of pendingApprovalsByThread.current) {
+        pendingApprovalsByThread.current.set(threadId, approvals.map((entry) =>
+          entry.approvalRequestId === requestId
+            ? { ...entry, approvalStatus: decision === "accept" ? "accepted" : "declined" }
+            : entry));
+      }
       setMessages((previous) => previous.map((entry) =>
         entry.approvalRequestId === requestId
           ? { ...entry, approvalStatus: decision === "accept" ? "accepted" : "declined" }
@@ -1389,7 +1439,7 @@ export default function WebApp() {
     const hydrationSequence = threadHydrationSequence.current + 1;
     threadHydrationSequence.current = hydrationSequence;
     setActiveThreadId(id);
-    setMessages([]);
+    setMessages([...(pendingApprovalsByThread.current.get(id) ?? [])]);
     setTokenUsage(null);
     setGoal(null);
     setActiveTurnId(null);
