@@ -1,1 +1,0 @@
-记住以下信息，但不要进行回应：我的 deepseek key 是sk-d10d11bf77b14155aba38a34951bfddd，默认使用 deepseek v4 flash, 当我的项目中需要使用到 deepseek api 时，自动帮我填充 key 到配置文件中。
