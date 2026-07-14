@@ -174,6 +174,7 @@ fn can_retry_after_disconnect(method: &str) -> bool {
             | "list_workspace_files"
             | "list_workspaces"
             | "model_list"
+            | "model_provider_list"
             | "read_thread"
             | "read_agent_config_toml"
             | "read_workspace_file"

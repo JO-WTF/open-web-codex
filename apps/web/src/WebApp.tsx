@@ -7,6 +7,8 @@ import Conversation from "./components/Conversation";
 import FileManager from "./components/FileManager";
 import type { GoalInfo } from "./components/Conversation/GoalBanner";
 import type { QueuedFollowUp } from "./components/Conversation/FollowUpQueue";
+import type { ModelProviderSummary, ModelSummary } from "./components/Conversation/Composer";
+import { parseModelListResponse } from "./features/models/utils/modelListResponse";
 import { appendTerminalInteractionOutput, buildWebThreadHistory, commandText, isUserThreadItem, mergeWebThreadHistory, unwrapWebRpcResult, webLogEntryFromThreadItem } from "./utils/webThreadHistory";
 import { normalizeTokenUsage } from "./features/threads/utils/threadNormalize";
 import { normalizePlanUpdate } from "./features/threads/utils/threadNormalize";
@@ -137,6 +139,11 @@ export default function WebApp() {
   });
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
   const [mcpServers, setMcpServers] = useState<Record<string, {name: string; status: string; error?: string | null; failureReason?: string | null}>>({});
+  const [modelProviders, setModelProviders] = useState<ModelProviderSummary[]>([]);
+  const [currentProviderId, setCurrentProviderId] = useState<string | null>(null);
+  const [providerModels, setProviderModels] = useState<ModelSummary[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
 
   useEffect(() => {
     const narrowScreen = window.matchMedia("(max-width: 760px)");
@@ -161,6 +168,50 @@ export default function WebApp() {
   }, [filePanelWidth]);
 
   const client = useMemo(() => new CodexMonitorWebClient({ baseUrl, token }), [baseUrl, token]);
+
+  const refreshModelCatalog = useCallback(async () => {
+    if (!activeWorkspaceId) return;
+    setCatalogLoading(true);
+    setCatalogError(null);
+    try {
+      const [providerResponse, modelResponse] = await Promise.all([
+        client.listModelProviders(activeWorkspaceId),
+        client.listModels(activeWorkspaceId),
+      ]);
+      const providerPayload = unwrapWebRpcResult(providerResponse);
+      const providerRecord = providerPayload && typeof providerPayload === "object"
+        ? providerPayload as Record<string, unknown>
+        : {};
+      const rawProviders = Array.isArray(providerRecord.data) ? providerRecord.data : [];
+      setModelProviders(rawProviders.flatMap((value): ModelProviderSummary[] => {
+        if (!value || typeof value !== "object") return [];
+        const provider = value as Record<string, unknown>;
+        if (typeof provider.id !== "string" || typeof provider.name !== "string") return [];
+        return [{
+          id: provider.id,
+          name: provider.name,
+          kind: provider.kind === "local" || provider.kind === "custom" ? provider.kind : "builtIn",
+          isCurrent: provider.isCurrent === true,
+          modelCount: typeof provider.modelCount === "number" ? provider.modelCount : 0,
+        }];
+      }));
+      setCurrentProviderId(typeof providerRecord.currentProviderId === "string" ? providerRecord.currentProviderId : null);
+      setProviderModels(parseModelListResponse(modelResponse));
+    } catch (error) {
+      setCatalogError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCatalogLoading(false);
+    }
+  }, [activeWorkspaceId, client]);
+
+  useEffect(() => {
+    setModelProviders([]);
+    setProviderModels([]);
+    setCurrentProviderId(null);
+    setCatalogError(null);
+    if (activeWorkspaceId) void refreshModelCatalog();
+  }, [activeWorkspaceId, refreshModelCatalog]);
+
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
   const listWorkspaceFiles = useCallback((workspaceId: string) => client.listWorkspaceFiles(workspaceId), [client]);
   const readWorkspaceFile = useCallback((workspaceId: string, path: string) => client.readWorkspaceFile(workspaceId, path), [client]);
@@ -1373,6 +1424,12 @@ export default function WebApp() {
           tokenUsage={tokenUsage}
           threadStatus={threadStatus}
           threadSettings={threadSettings}
+          providers={modelProviders}
+          currentProviderId={currentProviderId}
+          models={providerModels}
+          catalogLoading={catalogLoading}
+          catalogError={catalogError}
+          onRefreshCatalog={() => { void refreshModelCatalog(); }}
 
         messages={messages}
         workspaceId={activeWorkspaceId ?? undefined}

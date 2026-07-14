@@ -287,6 +287,13 @@ pub(super) async fn try_handle(
             };
             Some(state.model_list(workspace_id).await)
         }
+        "model_provider_list" => {
+            let workspace_id = match parse_string(params, "workspaceId") {
+                Ok(value) => value,
+                Err(err) => return Some(Err(err)),
+            };
+            Some(state.model_provider_list(workspace_id).await)
+        }
         "experimental_feature_list" => {
             let workspace_id = match parse_string(params, "workspaceId") {
                 Ok(value) => value,

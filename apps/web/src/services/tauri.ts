@@ -734,6 +734,10 @@ export async function getModelList(workspaceId: string) {
   return invoke<any>("model_list", { workspaceId });
 }
 
+export async function getModelProviderList(workspaceId: string) {
+  return invoke<any>("model_provider_list", { workspaceId });
+}
+
 export async function getExperimentalFeatureList(
   workspaceId: string,
   cursor?: string | null,

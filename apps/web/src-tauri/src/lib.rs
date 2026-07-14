@@ -262,6 +262,7 @@ pub fn run() {
             git::checkout_git_branch,
             git::create_git_branch,
             codex::model_list,
+            codex::model_provider_list,
             codex::experimental_feature_list,
             codex::set_codex_feature_flag,
             codex::get_agents_settings,

@@ -115,6 +115,14 @@ export class CodexMonitorWebClient {
     return this.rpc<Record<string, unknown>>("start_thread", { workspaceId });
   }
 
+  listModelProviders(workspaceId: string) {
+    return this.rpc<Record<string, unknown>>("model_provider_list", { workspaceId });
+  }
+
+  listModels(workspaceId: string) {
+    return this.rpc<Record<string, unknown>>("model_list", { workspaceId });
+  }
+
   resumeThread(workspaceId: string, threadId: string) {
     return this.rpc<Record<string, unknown>>("resume_thread", { workspaceId, threadId });
   }

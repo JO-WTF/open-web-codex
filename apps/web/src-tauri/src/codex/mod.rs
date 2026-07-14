@@ -559,6 +559,25 @@ pub(crate) async fn model_list(
 }
 
 #[tauri::command]
+pub(crate) async fn model_provider_list(
+    workspace_id: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<Value, String> {
+    if remote_backend::is_remote_mode(&*state).await {
+        return remote_backend::call_remote(
+            &*state,
+            app,
+            "model_provider_list",
+            json!({ "workspaceId": workspace_id }),
+        )
+        .await;
+    }
+
+    codex_core::model_provider_list_core(&state.sessions, workspace_id).await
+}
+
+#[tauri::command]
 pub(crate) async fn experimental_feature_list(
     workspace_id: String,
     cursor: Option<String>,

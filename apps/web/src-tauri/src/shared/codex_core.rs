@@ -623,6 +623,16 @@ pub(crate) async fn model_list_core(
         .await
 }
 
+pub(crate) async fn model_provider_list_core(
+    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    workspace_id: String,
+) -> Result<Value, String> {
+    let session = get_session_clone(sessions, &workspace_id).await?;
+    session
+        .send_request_for_workspace(&workspace_id, "modelProvider/list", json!({}))
+        .await
+}
+
 pub(crate) async fn experimental_feature_list_core(
     sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
     workspace_id: String,

@@ -930,6 +930,10 @@ impl DaemonState {
         codex_core::model_list_core(&self.sessions, workspace_id).await
     }
 
+    async fn model_provider_list(&self, workspace_id: String) -> Result<Value, String> {
+        codex_core::model_provider_list_core(&self.sessions, workspace_id).await
+    }
+
     async fn experimental_feature_list(
         &self,
         workspace_id: String,

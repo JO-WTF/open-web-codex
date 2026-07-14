@@ -9,6 +9,7 @@ import GoalBanner from "./GoalBanner";
 import FollowUpQueue, { type QueuedFollowUp } from "./FollowUpQueue";
 import UserInputCard from "./messages/UserInputCard";
 import type { RequestUserInputRequest, RequestUserInputResponse } from "../../types";
+import type { ModelProviderSummary, ModelSummary } from "./Composer";
 import {
   initialConversationStart,
   previousConversationStart,
@@ -27,6 +28,12 @@ type Props = {
   tokenUsage: import("../../types").ThreadTokenUsage | null;
   threadStatus: string;
   threadSettings: Record<string, unknown> | null;
+  providers?: ModelProviderSummary[];
+  currentProviderId?: string | null;
+  models?: ModelSummary[];
+  catalogLoading?: boolean;
+  catalogError?: string | null;
+  onRefreshCatalog?: () => void;
   messages: MessageEntry[];
   workspaceId?: string;
   thinking?: boolean;
@@ -62,6 +69,12 @@ export default function Conversation({
   tokenUsage,
   threadStatus,
   threadSettings,
+  providers,
+  currentProviderId,
+  models,
+  catalogLoading,
+  catalogError,
+  onRefreshCatalog,
   messages,
   workspaceId,
   thinking,
@@ -160,6 +173,12 @@ export default function Conversation({
         busy={busy}
         disabled={sendDisabled}
         tokenUsage={tokenUsage}
+        providers={providers}
+        currentProviderId={currentProviderId}
+        models={models}
+        catalogLoading={catalogLoading}
+        catalogError={catalogError}
+        onRefreshCatalog={onRefreshCatalog}
       />
     </section>
   );

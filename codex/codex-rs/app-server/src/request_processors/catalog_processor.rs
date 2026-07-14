@@ -162,6 +162,50 @@ impl CatalogRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn model_provider_list(
+        &self,
+        _params: ModelProviderListParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let config = self.load_latest_config(None).await?;
+        let built_in = codex_model_provider_info::built_in_model_providers(None);
+        let mut providers = config
+            .model_providers
+            .iter()
+            .map(|(id, provider)| {
+                let is_built_in = built_in.contains_key(id);
+                let is_local = matches!(id.as_str(), "ollama" | "lmstudio");
+                let kind = if is_local {
+                    ModelProviderKind::Local
+                } else if is_built_in {
+                    ModelProviderKind::BuiltIn
+                } else {
+                    ModelProviderKind::Custom
+                };
+                ModelProviderSummary {
+                    id: id.clone(),
+                    name: provider.name.clone(),
+                    base_url: provider.base_url.clone(),
+                    env_key: provider.env_key.clone(),
+                    wire_api: provider.wire_api.to_string(),
+                    kind,
+                    is_current: id == &config.model_provider_id,
+                    model_count: provider.models.len(),
+                    can_edit: !is_built_in,
+                    can_delete: !is_built_in && id != &config.model_provider_id,
+                    can_fetch_models: !is_built_in,
+                }
+            })
+            .collect::<Vec<_>>();
+        providers.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(Some(
+            ModelProviderListResponse {
+                data: providers,
+                current_provider_id: config.model_provider_id.clone(),
+            }
+            .into(),
+        ))
+    }
+
     pub(crate) async fn experimental_feature_list(
         &self,
         params: ExperimentalFeatureListParams,

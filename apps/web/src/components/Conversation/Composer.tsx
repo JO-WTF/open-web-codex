@@ -1,4 +1,4 @@
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import type { ThreadTokenUsage } from "../../types";
 import Bot from "lucide-react/dist/esm/icons/bot";
@@ -19,15 +19,46 @@ type Props = {
   busy: boolean;
   disabled: boolean;
   tokenUsage: ThreadTokenUsage | null;
+  providers?: ModelProviderSummary[];
+  currentProviderId?: string | null;
+  models?: ModelSummary[];
+  catalogLoading?: boolean;
+  catalogError?: string | null;
+  onRefreshCatalog?: () => void;
+};
+
+export type ModelProviderSummary = {
+  id: string;
+  name: string;
+  kind: "builtIn" | "local" | "custom";
+  isCurrent: boolean;
+  modelCount: number;
+};
+
+export type ModelSummary = {
+  id: string;
+  displayName: string;
+  model: string;
 };
 
 function formatTokens(value: number): string {
   return new Intl.NumberFormat("en-US").format(value);
 }
 
-export default function Composer({ draft, onDraftChange, onSend, onStop, running, stopping, busy, disabled, tokenUsage }: Props) {
+export default function Composer({ draft, onDraftChange, onSend, onStop, running, stopping, busy, disabled, tokenUsage, providers = [], currentProviderId = null, models = [], catalogLoading = false, catalogError = null, onRefreshCatalog }: Props) {
   const textRef = useRef<HTMLTextAreaElement>(null);
+  const catalogRef = useRef<HTMLDivElement>(null);
   const composingRef = useRef(false);
+  const [catalogOpen, setCatalogOpen] = useState(false);
+
+  useEffect(() => {
+    if (!catalogOpen) return;
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (!catalogRef.current?.contains(event.target as Node)) setCatalogOpen(false);
+    };
+    window.addEventListener("mousedown", closeOnOutsideClick);
+    return () => window.removeEventListener("mousedown", closeOnOutsideClick);
+  }, [catalogOpen]);
 
   useEffect(() => {
     if (textRef.current) {
@@ -118,7 +149,46 @@ export default function Composer({ draft, onDraftChange, onSend, onStop, running
         </button>
       </div>
       <div className="web-composer-footer" aria-label="Thread settings summary">
-        <span className="web-composer-chip"><Bot size={13} />Codex<ChevronDown size={12} /></span>
+        <div className="web-composer-catalog" ref={catalogRef}>
+          <button
+            className="web-composer-chip web-composer-chip-button"
+            type="button"
+            aria-expanded={catalogOpen}
+            aria-haspopup="dialog"
+            onClick={() => setCatalogOpen((open) => !open)}
+          >
+            <Bot size={13} />
+            {providers.find((provider) => provider.id === currentProviderId)?.name ?? "Codex"}
+            <ChevronDown size={12} />
+          </button>
+          {catalogOpen ? (
+            <section className="web-model-catalog" role="dialog" aria-label="Providers and models">
+              <header>
+                <div><strong>Provider & model</strong><span>Managed by this Codex Profile</span></div>
+                <button type="button" onClick={onRefreshCatalog} disabled={catalogLoading}>Refresh</button>
+              </header>
+              {catalogError ? <p className="web-model-catalog-error">{catalogError}</p> : null}
+              <div className="web-model-catalog-section">
+                <h3>Providers</h3>
+                {providers.length === 0 ? <p>{catalogLoading ? "Loading providers…" : "No providers available"}</p> : providers.map((provider) => (
+                  <div className={`web-model-catalog-row${provider.isCurrent ? " is-current" : ""}`} key={provider.id}>
+                    <span><strong>{provider.name}</strong><small>{provider.kind} · {provider.modelCount} models</small></span>
+                    {provider.isCurrent ? <em>Current</em> : null}
+                  </div>
+                ))}
+              </div>
+              <div className="web-model-catalog-section">
+                <h3>Models</h3>
+                {models.length === 0 ? <p>{catalogLoading ? "Loading models…" : "No models returned by this provider"}</p> : models.map((model) => (
+                  <div className="web-model-catalog-row" key={model.id}>
+                    <span><strong>{model.displayName || model.model}</strong><small>{model.model}</small></span>
+                  </div>
+                ))}
+              </div>
+              <footer>Adding, editing and selecting providers is enabled in the next implementation step.</footer>
+            </section>
+          ) : null}
+        </div>
         <span className="web-composer-chip"><Gauge size={13} />medium<ChevronDown size={12} /></span>
         <span className="web-composer-chip"><ShieldCheck size={13} />Workspace access<ChevronDown size={12} /></span>
         <span className="web-composer-activity" tabIndex={0} aria-label={contextLabel}>
