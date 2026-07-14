@@ -444,7 +444,7 @@ impl ThreadHistoryBuilder {
             ResponseItem::Message {
                 role, content, id, ..
             } if role == "user" => {
-                let Some(hook_prompt) = parse_hook_prompt_message(id.as_deref(), content) else {
+                let Some(hook_prompt) = parse_hook_prompt_message(id.as_ref(), content) else {
                     return;
                 };
                 self.push_item_in_current_turn(ThreadItem::HookPrompt {
@@ -476,13 +476,12 @@ impl ThreadHistoryBuilder {
             ResponseItem::CustomToolCall {
                 call_id,
                 name,
-                namespace,
                 input,
                 ..
             } => self.handle_response_tool_call(
                 call_id,
                 item.turn_id(),
-                namespace.clone(),
+                None,
                 name.clone(),
                 serde_json::Value::String(input.clone()),
             ),
