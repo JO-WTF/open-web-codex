@@ -851,12 +851,35 @@ body {
   font-size: 0.9em;
 }
 .web-msg-assistant-body pre {
-  margin: 0 0 var(--space-2);
+  display: flow-root;
+  margin: 0 0 var(--space-4);
   padding: var(--space-3);
   overflow-x: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgb(148 163 184 / 38%) transparent;
   border-radius: var(--radius-sm);
   background: #18181b;
   color: #f4f4f5;
+}
+.web-msg-assistant-body pre::-webkit-scrollbar {
+  height: 6px;
+}
+.web-msg-assistant-body pre::-webkit-scrollbar-track {
+  background: transparent;
+}
+.web-msg-assistant-body pre::-webkit-scrollbar-thumb {
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: rgb(148 163 184 / 38%);
+  background-clip: padding-box;
+}
+.web-msg-assistant-body pre::-webkit-scrollbar-thumb:hover {
+  background: rgb(148 163 184 / 58%);
+  background-clip: padding-box;
+}
+.web-msg-assistant-body pre + * {
+  margin-top: var(--space-4);
 }
 .web-msg-assistant-body pre code { padding: 0; background: transparent; color: inherit; }
 .web-msg-assistant-body blockquote {

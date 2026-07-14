@@ -17,6 +17,7 @@ import { isWebAppServerRecoveryEvent, parseCodexStderr, parseWebAppServerError }
 import { parseWebUserInputRequest } from "./utils/webUserInput";
 import { summarizeWebAppServerEvent } from "./utils/webAppServerEventSummary";
 import { mergeRateLimits, parseInitialMcpServers, parseInitialRateLimits } from "./utils/webInitialStatus";
+import { appendWebLogEntry } from "./utils/webApprovalLog";
 import "./styles/web.css";
 import "./styles/web-refactor.css";
 
@@ -293,10 +294,12 @@ export default function WebApp() {
   const threadHydrationSequence = useRef(0);
   const appendLog = useCallback(
     (level: LogEntry["level"], text: string, extra?: Partial<Omit<LogEntry, "id" | "level" | "text">>) => {
-      setMessages((prev) => [
-        ...prev.slice(-199),
-        { id: newLogId(), level, text, ...extra },
-      ]);
+      setMessages((prev) => appendWebLogEntry(prev, {
+        id: newLogId(),
+        level,
+        text,
+        ...extra,
+      }));
     },
     [],
   );
