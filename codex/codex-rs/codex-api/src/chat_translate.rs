@@ -235,11 +235,7 @@ pub fn responses_input_to_chat_messages(
                 call_id, output, ..
             } => {
                 let content = output.body.to_text().unwrap_or_default();
-                messages.push(ChatMessage::ToolResult {
-                    role: "tool".to_string(),
-                    tool_call_id: call_id.clone(),
-                    content,
-                });
+                push_tool_result(&mut messages, call_id.clone(), content);
             }
             // Responses-only concepts with no chat equivalent.
             ResponseItem::Reasoning { .. }
@@ -338,6 +334,28 @@ fn push_assistant_tool_call(messages: &mut Vec<ChatMessage>, tool_call: ChatTool
         content: None,
         tool_calls: vec![tool_call],
     });
+}
+
+fn push_tool_result(messages: &mut Vec<ChatMessage>, tool_call_id: String, content: String) {
+    let insert_at = messages
+        .iter()
+        .rposition(|message| matches!(message, ChatMessage::AssistantWithToolCalls { .. }))
+        .map(|idx| idx + 1)
+        .unwrap_or(messages.len());
+    let mut insert_at = insert_at;
+    while insert_at < messages.len()
+        && matches!(messages[insert_at], ChatMessage::ToolResult { .. })
+    {
+        insert_at += 1;
+    }
+    messages.insert(
+        insert_at,
+        ChatMessage::ToolResult {
+            role: "tool".to_string(),
+            tool_call_id,
+            content,
+        },
+    );
 }
 
 #[cfg(test)]

@@ -198,6 +198,33 @@ fn full_conversation_round_trip() {
 }
 
 #[test]
+fn tool_result_is_emitted_immediately_after_tool_calls_when_text_intervenes() {
+    let input = vec![
+        user_msg("what's the weather?"),
+        function_call("get_weather", r#"{"city":"SF"}"#, "call_1"),
+        assistant_msg("Checking the forecast now."),
+        ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: "call_1".to_string(),
+            output: FunctionCallOutputPayload::from_text("sunny".to_string()),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        assistant_msg("It's sunny in SF."),
+    ];
+    let messages = responses_input_to_chat_messages(&input, "");
+
+    let tool_call_idx = messages
+        .iter()
+        .position(|message| matches!(message, ChatMessage::AssistantWithToolCalls { .. }))
+        .unwrap();
+    let tool_result_idx = messages
+        .iter()
+        .position(|message| matches!(message, ChatMessage::ToolResult { .. }))
+        .unwrap();
+    assert_eq!(tool_result_idx, tool_call_idx + 1);
+}
+
+#[test]
 fn convert_function_tool_preserves_schema() {
     let tools = vec![json!({
         "type": "function",
