@@ -258,27 +258,35 @@ body:has(.web-app-shell) {
   margin: 2px 0;
   padding: 0 10px;
   border-radius: 10px;
+  background: rgb(255 255 255 / 2.5%);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 3.5%);
   color: #c8cdd7;
 }
 
 .web-ws-row:hover {
   color: #f5f6f8;
-  background: rgb(255 255 255 / 4%);
+  background: rgb(255 255 255 / 5%);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 6%);
 }
 
 .web-ws-row-active {
   position: relative;
-  background: rgb(255 255 255 / 6%);
+  background: rgb(85 184 232 / 11%);
+  box-shadow:
+    inset 4px 0 0 #55b8e8,
+    inset 0 0 0 1px rgb(85 184 232 / 22%);
   color: #f5f6f8;
 }
 
+.web-ws-row-active:hover {
+  background: rgb(85 184 232 / 14%);
+  box-shadow:
+    inset 4px 0 0 #55b8e8,
+    inset 0 0 0 1px rgb(85 184 232 / 28%);
+}
+
 .web-ws-row-active::before {
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 4px;
-  border-radius: 10px 0 0 10px;
-  background: #55b8e8;
-  content: "";
+  content: none;
 }
 
 .web-ws-arrow,
