@@ -458,7 +458,7 @@ body {
   align-items: center;
   gap: var(--space-1);
   padding: var(--space-2) var(--space-1);
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -493,7 +493,7 @@ body {
 }
 
 .web-mcp-count {
-  color: var(--text-muted);
+  color: var(--text-tertiary);
   font-size: 10px;
   font-weight: 500;
 }
@@ -1910,7 +1910,7 @@ body {
 
 .web-ws-threads-empty {
   padding: var(--space-2) var(--space-2);
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: 11px;
   font-style: italic;
 }
@@ -2011,7 +2011,7 @@ body {
 }
 
 /* New thread button on workspace row */
-.web-ws-new-thread-btn {
+.web-ws-row-action {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2028,9 +2028,14 @@ body {
   opacity: 0;
 }
 
-.web-ws-row:hover .web-ws-new-thread-btn {
+.web-ws-row:hover .web-ws-row-action {
   color: var(--text-muted);
   opacity: 1;
+}
+
+.web-ws-remove-btn:hover {
+  background: var(--error-bg);
+  color: var(--error) !important;
 }
 
 .web-ws-new-thread-btn:hover {
@@ -2038,16 +2043,36 @@ body {
   color: var(--accent) !important;
 }
 
-.web-ws-new-thread-btn:disabled {
+.web-ws-row-action:disabled {
   opacity: 0 !important;
   cursor: not-allowed;
 }
 
-.web-ws-row-active .web-ws-new-thread-btn {
+.web-ws-row-active .web-ws-row-action {
   color: transparent;
 }
-.web-ws-row-active:hover .web-ws-new-thread-btn {
+.web-ws-row-active:hover .web-ws-row-action {
   color: var(--text-muted);
+}
+
+.web-external-link {
+  color: #8fc0ff;
+  text-decoration-line: underline;
+  text-decoration-color: rgb(143 192 255 / 45%);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.web-external-link::after {
+  margin-left: 0.22em;
+  content: "↗";
+  font-size: 0.78em;
+  opacity: 0.75;
+}
+
+.web-external-link:hover {
+  color: #b9d8ff;
+  text-decoration-color: currentColor;
 }
 
 .web-approval-card {

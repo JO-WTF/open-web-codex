@@ -2,6 +2,7 @@ import { useState } from "react";
 import ChevronRight from "lucide-react/dist/esm/icons/chevron-right";
 import Folder from "lucide-react/dist/esm/icons/folder";
 import MessageSquare from "lucide-react/dist/esm/icons/message-square";
+import Trash2 from "lucide-react/dist/esm/icons/trash-2";
 import type { WorkspaceInfo } from "../../types";
 
 type ThreadInfo = {
@@ -23,6 +24,7 @@ type Props = {
   activeThreadId: string | null;
   onSelectThread: (id: string) => void;
   onNewThread: (workspaceId: string) => void;
+  onRemoveWorkspace: (workspaceId: string) => void;
 };
 
 function compactThreadId(id: string): string {
@@ -40,6 +42,7 @@ export default function Workspaces({
   activeThreadId,
   onSelectThread,
   onNewThread,
+  onRemoveWorkspace,
 }: Props) {
   const [createName, setCreateName] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -118,9 +121,24 @@ export default function Workspaces({
                   <span className="web-ws-thread-count">{threads.length}</span>
                 )}
                 <button
-                  className="web-ws-new-thread-btn"
+                  type="button"
+                  className="web-ws-row-action web-ws-remove-btn"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onRemoveWorkspace(ws.id);
+                  }}
+                  disabled={busy}
+                  aria-label={`Remove workspace ${ws.name}`}
+                  title="Remove workspace"
+                >
+                  <Trash2 size={13} aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  className="web-ws-row-action web-ws-new-thread-btn"
                   onClick={(e) => { e.stopPropagation(); setExpandedId(ws.id); onNewThread(ws.id); }}
                   disabled={busy}
+                  aria-label={`New thread in ${ws.name}`}
                   title="New thread"
                 >
                   <span className="web-ws-create-plus web-ws-create-plus-small" aria-hidden="true" />

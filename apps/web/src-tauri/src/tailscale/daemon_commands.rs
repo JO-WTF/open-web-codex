@@ -2,6 +2,7 @@ use super::rpc_client::{
     probe_daemon, request_daemon_shutdown, wait_for_daemon_shutdown, DaemonInfo, DaemonProbe,
 };
 use super::*;
+use crate::daemon_protocol::DAEMON_RPC_REVISION;
 
 const EXPECTED_DAEMON_NAME: &str = "codex-monitor-daemon";
 const EXPECTED_DAEMON_MODE: &str = "tcp";
@@ -21,6 +22,7 @@ fn should_restart_daemon(info: Option<&DaemonInfo>) -> bool {
     };
     !is_managed_daemon(info)
         || info.version != CURRENT_APP_VERSION
+        || info.rpc_revision != Some(DAEMON_RPC_REVISION)
         || info.mode != EXPECTED_DAEMON_MODE
 }
 
@@ -35,6 +37,12 @@ fn daemon_restart_reason(info: Option<&DaemonInfo>) -> String {
         return format!(
             "Daemon version {} is different from app version {}",
             info.version, CURRENT_APP_VERSION
+        );
+    }
+    if info.rpc_revision != Some(DAEMON_RPC_REVISION) {
+        return format!(
+            "Daemon RPC revision {:?} does not match expected {}",
+            info.rpc_revision, DAEMON_RPC_REVISION
         );
     }
     if info.mode != EXPECTED_DAEMON_MODE {
@@ -422,13 +430,14 @@ pub(super) async fn tailscale_daemon_status(
 mod tests {
     use super::{
         can_force_stop_daemon, should_restart_daemon, DaemonInfo, CURRENT_APP_VERSION,
-        EXPECTED_DAEMON_MODE, EXPECTED_DAEMON_NAME,
+        DAEMON_RPC_REVISION, EXPECTED_DAEMON_MODE, EXPECTED_DAEMON_NAME,
     };
 
     fn daemon_info(version: &str) -> DaemonInfo {
         DaemonInfo {
             name: EXPECTED_DAEMON_NAME.to_string(),
             version: version.to_string(),
+            rpc_revision: Some(DAEMON_RPC_REVISION),
             pid: Some(42),
             mode: EXPECTED_DAEMON_MODE.to_string(),
             binary_path: Some("/tmp/codex-monitor-daemon".to_string()),
@@ -445,6 +454,13 @@ mod tests {
     fn no_restart_for_same_version_and_mode() {
         let info = daemon_info(CURRENT_APP_VERSION);
         assert!(!should_restart_daemon(Some(&info)));
+    }
+
+    #[test]
+    fn restart_required_when_rpc_revision_is_missing() {
+        let mut info = daemon_info(CURRENT_APP_VERSION);
+        info.rpc_revision = None;
+        assert!(should_restart_daemon(Some(&info)));
     }
 
     #[test]

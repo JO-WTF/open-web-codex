@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Composer from "./Composer";
 
@@ -157,5 +157,54 @@ describe("Web Composer context usage", () => {
     expect(onStop).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Stop" }));
     expect(onStop).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Web Composer provider credentials", () => {
+  it("submits a direct API key without displaying it in the provider catalog", async () => {
+    const onWriteProvider = vi.fn(async () => undefined);
+    render(
+      <Composer
+        draft=""
+        onDraftChange={vi.fn()}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+        running={false}
+        stopping={false}
+        busy={false}
+        disabled={false}
+        tokenUsage={null}
+        onWriteProvider={onWriteProvider}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Codex" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.change(screen.getByLabelText("ID"), { target: { value: "deepseek" } });
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "DeepSeek" } });
+    fireEvent.change(screen.getByLabelText("Base URL"), {
+      target: { value: "https://api.deepseek.com" },
+    });
+    fireEvent.change(screen.getByLabelText("Credential source"), {
+      target: { value: "direct" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Paste API key"), {
+      target: { value: "test-direct-key" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save provider" }));
+
+    await waitFor(() => {
+      expect(onWriteProvider).toHaveBeenCalledWith({
+        action: "upsert",
+        id: "deepseek",
+        name: "DeepSeek",
+        baseUrl: "https://api.deepseek.com",
+        credentialMode: "direct",
+        envKey: "",
+        apiKey: "test-direct-key",
+        wireApi: "responses",
+        select: true,
+      });
+    });
   });
 });

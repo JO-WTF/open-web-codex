@@ -1451,6 +1451,14 @@
   color: var(--text-stronger);
 }
 
+.markdown a.external-link::after,
+.markdown-linkblock a.external-link::after {
+  margin-left: 0.22em;
+  content: "↗";
+  font-size: 0.78em;
+  opacity: 0.72;
+}
+
 .message .markdown a,
 .message .markdown a:visited {
   color: var(--message-link-color);

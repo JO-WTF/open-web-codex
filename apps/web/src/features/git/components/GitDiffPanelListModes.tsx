@@ -247,8 +247,10 @@ export function GitIssuesModeContent({
         return (
           <a
             key={issue.number}
-            className="git-issue-entry"
+            className="git-issue-entry external-link"
             href={issue.url}
+            target="_blank"
+            rel="noopener noreferrer"
             onClick={(event) => {
               event.preventDefault();
               void openUrl(issue.url);

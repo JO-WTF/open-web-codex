@@ -70,8 +70,9 @@ export function UpdateToast({
                       return (
                         <a
                           href={href}
+                          className="external-link"
                           target="_blank"
-                          rel="noreferrer"
+                          rel="noopener noreferrer"
                           onClick={(event) => {
                             event.preventDefault();
                             void openUrl(href);

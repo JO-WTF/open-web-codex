@@ -1,5 +1,7 @@
 #[path = "../daemon_binary.rs"]
 mod daemon_binary;
+#[path = "../daemon_protocol.rs"]
+mod daemon_protocol;
 #[allow(dead_code)]
 #[path = "../storage.rs"]
 mod storage;
@@ -53,6 +55,7 @@ enum CliCommand {
 struct DaemonInfo {
     name: String,
     version: String,
+    rpc_revision: Option<u32>,
     pid: Option<u32>,
     mode: String,
     binary_path: Option<String>,
@@ -473,6 +476,10 @@ fn parse_daemon_info(value: &Value) -> Result<DaemonInfo, String> {
         .filter(|entry| !entry.is_empty())
         .ok_or_else(|| "daemon_info missing `mode`".to_string())?
         .to_string();
+    let rpc_revision = value
+        .get("rpcRevision")
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok());
     let pid = value
         .get("pid")
         .and_then(Value::as_u64)
@@ -487,6 +494,7 @@ fn parse_daemon_info(value: &Value) -> Result<DaemonInfo, String> {
     Ok(DaemonInfo {
         name,
         version,
+        rpc_revision,
         pid,
         mode,
         binary_path,
@@ -719,6 +727,7 @@ fn should_restart_daemon(info: Option<&DaemonInfo>) -> bool {
     };
     !is_managed_daemon(info)
         || info.version != CURRENT_APP_VERSION
+        || info.rpc_revision != Some(daemon_protocol::DAEMON_RPC_REVISION)
         || info.mode != EXPECTED_DAEMON_MODE
 }
 
@@ -733,6 +742,13 @@ fn daemon_restart_reason(info: Option<&DaemonInfo>) -> String {
         return format!(
             "Daemon version {} is different from app version {}",
             info.version, CURRENT_APP_VERSION
+        );
+    }
+    if info.rpc_revision != Some(daemon_protocol::DAEMON_RPC_REVISION) {
+        return format!(
+            "Daemon RPC revision {:?} does not match expected {}",
+            info.rpc_revision,
+            daemon_protocol::DAEMON_RPC_REVISION
         );
     }
     if info.mode != EXPECTED_DAEMON_MODE {

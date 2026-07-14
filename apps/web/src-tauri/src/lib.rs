@@ -9,6 +9,7 @@ use tauri::WindowEvent;
 mod backend;
 mod codex;
 mod daemon_binary;
+mod daemon_protocol;
 mod dictation;
 mod event_sink;
 mod files;

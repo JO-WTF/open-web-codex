@@ -6,6 +6,7 @@ const DAEMON_RPC_TIMEOUT: Duration = Duration::from_millis(700);
 pub(super) struct DaemonInfo {
     pub(super) name: String,
     pub(super) version: String,
+    pub(super) rpc_revision: Option<u32>,
     pub(super) pid: Option<u32>,
     pub(super) mode: String,
     pub(super) binary_path: Option<String>,
@@ -59,6 +60,10 @@ fn parse_daemon_info(value: &Value) -> Result<DaemonInfo, String> {
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "daemon_info missing `mode`".to_string())?
         .to_string();
+    let rpc_revision = value
+        .get("rpcRevision")
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok());
     let pid = value
         .get("pid")
         .and_then(Value::as_u64)
@@ -73,6 +78,7 @@ fn parse_daemon_info(value: &Value) -> Result<DaemonInfo, String> {
     Ok(DaemonInfo {
         name,
         version,
+        rpc_revision,
         pid,
         mode,
         binary_path,

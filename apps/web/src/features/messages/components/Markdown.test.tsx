@@ -9,6 +9,15 @@ describe("Markdown file-like href behavior", () => {
     cleanup();
   });
 
+  it("marks external links to open in a new window", () => {
+    render(<Markdown value="Read [the docs](https://example.com/docs)" className="markdown" />);
+
+    const link = screen.getByRole("link", { name: "the docs" });
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(link.classList.contains("external-link")).toBe(true);
+  });
+
   it("prevents file-like href navigation when no file opener is provided", () => {
     render(
       <Markdown

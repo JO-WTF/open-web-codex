@@ -28,6 +28,7 @@ type Props = {
   activeThreadId: string | null;
   onSelectThread: (id: string) => void;
   onNewThread: (workspaceId: string) => void;
+  onRemoveWorkspace: (workspaceId: string) => void;
   baseUrl: string;
   token: string;
   onBaseUrlChange: (url: string) => void;
@@ -51,6 +52,7 @@ export default function Sidebar({
   activeThreadId,
   onSelectThread,
   onNewThread,
+  onRemoveWorkspace,
   baseUrl,
   token,
   onBaseUrlChange,
@@ -87,6 +89,7 @@ export default function Sidebar({
           activeThreadId={activeThreadId}
           onSelectThread={onSelectThread}
           onNewThread={onNewThread}
+          onRemoveWorkspace={onRemoveWorkspace}
           busy={busy}
         />
 

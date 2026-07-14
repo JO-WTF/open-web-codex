@@ -30,3 +30,33 @@ describe("CodexMonitorWebClient.listThreadTurns", () => {
     expect(secondRequest.params.cursor).toBe("older");
   });
 });
+
+describe("CodexMonitorWebClient workspace status snapshots", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("requests MCP and account usage snapshots for the active workspace", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ result: {} }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new CodexMonitorWebClient({ baseUrl: "http://gateway.test" });
+    await Promise.all([
+      client.listMcpServerStatus("workspace-1"),
+      client.getAccountRateLimits("workspace-1"),
+    ]);
+
+    const requests = fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)));
+    expect(requests).toContainEqual({
+      method: "list_mcp_server_status",
+      params: { workspaceId: "workspace-1", limit: 100 },
+      clientVersion: "web",
+    });
+    expect(requests).toContainEqual({
+      method: "account_rate_limits",
+      params: { workspaceId: "workspace-1" },
+      clientVersion: "web",
+    });
+  });
+});

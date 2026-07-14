@@ -16,6 +16,7 @@ import { parseWebTurnDiff } from "./utils/webTurnDiff";
 import { isWebAppServerRecoveryEvent, parseCodexStderr, parseWebAppServerError } from "./utils/webAppServerError";
 import { parseWebUserInputRequest } from "./utils/webUserInput";
 import { summarizeWebAppServerEvent } from "./utils/webAppServerEventSummary";
+import { mergeRateLimits, parseInitialMcpServers, parseInitialRateLimits } from "./utils/webInitialStatus";
 import "./styles/web.css";
 import "./styles/web-refactor.css";
 
@@ -231,6 +232,41 @@ export default function WebApp() {
     setCatalogError(null);
     if (activeWorkspaceId) void refreshModelCatalog();
   }, [activeWorkspaceId, refreshModelCatalog]);
+
+  useEffect(() => {
+    setMcpServers({});
+    setRateLimits(null);
+    if (!activeWorkspaceId) return;
+
+    let cancelled = false;
+    const initializeWorkspaceStatus = async () => {
+      try {
+        await client.connectWorkspace(activeWorkspaceId);
+      } catch {
+        return;
+      }
+      if (cancelled) return;
+
+      const [mcpResult, rateLimitResult] = await Promise.allSettled([
+        client.listMcpServerStatus(activeWorkspaceId),
+        client.getAccountRateLimits(activeWorkspaceId),
+      ]);
+      if (cancelled) return;
+      if (mcpResult.status === "fulfilled") {
+        const snapshot = parseInitialMcpServers(mcpResult.value);
+        setMcpServers((current) => ({ ...snapshot, ...current }));
+      }
+      if (rateLimitResult.status === "fulfilled") {
+        const snapshot = parseInitialRateLimits(rateLimitResult.value);
+        setRateLimits((current) => mergeRateLimits(snapshot, current));
+      }
+    };
+
+    void initializeWorkspaceStatus();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkspaceId, client]);
 
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
   const listWorkspaceFiles = useCallback((workspaceId: string) => client.listWorkspaceFiles(workspaceId), [client]);
@@ -938,7 +974,7 @@ export default function WebApp() {
 
         case "account/rateLimits/updated": {
           const raw = params.rateLimits as Record<string, unknown> | undefined;
-          if (raw) setRateLimits(raw);
+          if (raw) setRateLimits((current) => mergeRateLimits(current, raw));
           return null;
         }
 
@@ -1123,6 +1159,35 @@ export default function WebApp() {
     },
     [appendLog, client, refreshWorkspaces],
   );
+
+  const removeWorkspace = useCallback(async (workspaceId: string) => {
+    const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
+    if (!workspace) return;
+    const confirmed = window.confirm(
+      `Remove workspace '${workspace.name}'? The repository folder is kept, but linked worktrees may be removed from disk.`,
+    );
+    if (!confirmed) return;
+
+    setBusy(true);
+    try {
+      await client.removeWorkspace(workspaceId);
+      setThreadsByWorkspace((previous) => {
+        const next = { ...previous };
+        delete next[workspaceId];
+        return next;
+      });
+      if (activeWorkspaceId === workspaceId) {
+        setActiveWorkspaceId(null);
+        setActiveThreadId(null);
+        setMessages([]);
+      }
+      await refreshWorkspaces();
+    } catch (error) {
+      appendLog("error", error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }, [activeWorkspaceId, appendLog, client, refreshWorkspaces, workspaces]);
 
 
  const startThread = useCallback(async (workspaceId?: string) => {
@@ -1418,6 +1483,7 @@ export default function WebApp() {
 
           onSelectThread={selectThread}
           onNewThread={startThread}
+          onRemoveWorkspace={removeWorkspace}
           baseUrl={baseUrl}
           token={token}
           onBaseUrlChange={setBaseUrl}

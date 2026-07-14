@@ -51,6 +51,28 @@ export type ModelSummary = {
   model: string;
 };
 
+type ProviderCredentialMode = "environment" | "direct" | "preserve" | "none";
+
+type ProviderDraft = {
+  id: string;
+  name: string;
+  baseUrl: string;
+  credentialMode: ProviderCredentialMode;
+  envKey: string;
+  apiKey: string;
+  wireApi: string;
+};
+
+const EMPTY_PROVIDER_DRAFT: ProviderDraft = {
+  id: "",
+  name: "",
+  baseUrl: "",
+  credentialMode: "environment",
+  envKey: "",
+  apiKey: "",
+  wireApi: "responses",
+};
+
 function formatTokens(value: number): string {
   return new Intl.NumberFormat("en-US").format(value);
 }
@@ -61,11 +83,26 @@ export default function Composer({ draft, onDraftChange, onSend, onStop, running
   const composingRef = useRef(false);
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [editingProvider, setEditingProvider] = useState<ModelProviderSummary | "new" | null>(null);
-  const [providerDraft, setProviderDraft] = useState({ id: "", name: "", baseUrl: "", envKey: "", wireApi: "responses" });
+  const [providerDraft, setProviderDraft] = useState<ProviderDraft>(EMPTY_PROVIDER_DRAFT);
   const [contextDrafts, setContextDrafts] = useState<Record<string, string>>({});
   const currentProvider = providers.find((provider) => provider.id === currentProviderId);
   const writeProvider = (input: Record<string, unknown>) => {
     void onWriteProvider?.(input).catch(() => undefined);
+  };
+  const providerDraftValid = Boolean(
+    providerDraft.id.trim() &&
+    providerDraft.name.trim() &&
+    providerDraft.baseUrl.trim() &&
+    (providerDraft.credentialMode !== "environment" || providerDraft.envKey.trim()) &&
+    (providerDraft.credentialMode !== "direct" || providerDraft.apiKey.trim()),
+  );
+  const saveProviderDraft = () => {
+    if (!providerDraftValid) return;
+    void onWriteProvider?.({
+      action: "upsert",
+      ...providerDraft,
+      select: editingProvider === "new",
+    }).then(() => setEditingProvider(null)).catch(() => undefined);
   };
 
   const openProviderForm = (provider?: ModelProviderSummary) => {
@@ -74,9 +111,11 @@ export default function Composer({ draft, onDraftChange, onSend, onStop, running
       id: provider.id,
       name: provider.name,
       baseUrl: provider.baseUrl ?? "",
+      credentialMode: provider.envKey ? "environment" : "preserve",
       envKey: provider.envKey ?? "",
+      apiKey: "",
       wireApi: provider.wireApi ?? "responses",
-    } : { id: "", name: "", baseUrl: "", envKey: "", wireApi: "responses" });
+    } : EMPTY_PROVIDER_DRAFT);
   };
 
   useEffect(() => {
@@ -205,25 +244,29 @@ export default function Composer({ draft, onDraftChange, onSend, onStop, running
                       {provider.isCurrent ? <em>Current</em> : <button type="button" onClick={() => writeProvider({ action: "select", id: provider.id })}>Use</button>}
                       {provider.canEdit ? <button type="button" onClick={() => openProviderForm(provider)}>Edit</button> : null}
                       {provider.canFetchModels ? <button type="button" onClick={() => writeProvider({ action: "fetch", id: provider.id })}>Fetch</button> : null}
-                      {provider.canEdit ? <button type="button" onClick={() => { setEditingProvider("new"); setProviderDraft({ id: `${provider.id}-copy`, name: `${provider.name} Copy`, baseUrl: provider.baseUrl ?? "", envKey: provider.envKey ?? "", wireApi: provider.wireApi ?? "responses" }); }}>Copy</button> : null}
+                      {provider.canEdit ? <button type="button" onClick={() => { setEditingProvider("new"); setProviderDraft({ id: `${provider.id}-copy`, name: `${provider.name} Copy`, baseUrl: provider.baseUrl ?? "", credentialMode: provider.envKey ? "environment" : "none", envKey: provider.envKey ?? "", apiKey: "", wireApi: provider.wireApi ?? "responses" }); }}>Copy</button> : null}
                       {provider.canDelete ? <button className="is-danger" type="button" onClick={() => { if (window.confirm(`Delete provider '${provider.name}'?`)) writeProvider({ action: "delete", id: provider.id }); }}>Delete</button> : null}
                     </span>
                   </div>
                 ))}
               </div>
               {editingProvider ? (
-                <form className="web-provider-form" onSubmit={(event) => {
-                  event.preventDefault();
-                  void onWriteProvider?.({ action: "upsert", ...providerDraft, select: editingProvider === "new" }).then(() => setEditingProvider(null)).catch(() => undefined);
-                }}>
+                <div className="web-provider-form" role="group" aria-label="Provider settings">
                   <h3>{editingProvider === "new" ? "Add provider" : `Edit ${editingProvider.name}`}</h3>
                   <label>ID<input value={providerDraft.id} disabled={editingProvider !== "new" && providerDraft.id === editingProvider.id} onChange={(event) => setProviderDraft((draft) => ({ ...draft, id: event.target.value }))} placeholder="deepseek" required /></label>
                   <label>Name<input value={providerDraft.name} onChange={(event) => setProviderDraft((draft) => ({ ...draft, name: event.target.value }))} placeholder="DeepSeek" required /></label>
                   <label>Base URL<input value={providerDraft.baseUrl} onChange={(event) => setProviderDraft((draft) => ({ ...draft, baseUrl: event.target.value }))} placeholder="https://api.deepseek.com" type="url" required /></label>
-                  <label>API key environment variable<input value={providerDraft.envKey} onChange={(event) => setProviderDraft((draft) => ({ ...draft, envKey: event.target.value.toUpperCase() }))} placeholder="DEEPSEEK_API_KEY" /><small>Enter the environment variable name, never the secret value.</small></label>
+                  <label>Credential source<select value={providerDraft.credentialMode} onChange={(event) => setProviderDraft((draft) => ({ ...draft, credentialMode: event.target.value as ProviderCredentialMode }))}>
+                    {editingProvider !== "new" ? <option value="preserve">Keep current credential</option> : null}
+                    <option value="environment">Environment variable</option>
+                    <option value="direct">Direct API key</option>
+                    <option value="none">No API key</option>
+                  </select></label>
+                  {providerDraft.credentialMode === "environment" ? <label>API key environment variable<input value={providerDraft.envKey} onChange={(event) => setProviderDraft((draft) => ({ ...draft, envKey: event.target.value.toUpperCase() }))} placeholder="DEEPSEEK_API_KEY" required /><small>Codex reads the secret from this variable when making requests.</small></label> : null}
+                  {providerDraft.credentialMode === "direct" ? <label>API key<input value={providerDraft.apiKey} onChange={(event) => setProviderDraft((draft) => ({ ...draft, apiKey: event.target.value }))} placeholder="Paste API key" type="password" autoComplete="off" required /><small>Stored directly in the Profile config. Environment variables are safer when available.</small></label> : null}
                   <label>Wire API<select value={providerDraft.wireApi} onChange={(event) => setProviderDraft((draft) => ({ ...draft, wireApi: event.target.value }))}><option value="responses">Responses</option><option value="chat">Chat</option></select></label>
-                  <div><button type="button" onClick={() => setEditingProvider(null)}>Cancel</button><button type="submit" disabled={catalogLoading}>Save provider</button></div>
-                </form>
+                  <div><button type="button" onClick={() => setEditingProvider(null)}>Cancel</button><button type="button" onClick={saveProviderDraft} disabled={catalogLoading || !providerDraftValid}>Save provider</button></div>
+                </div>
               ) : null}
               <div className="web-model-catalog-section">
                 <h3>Models</h3>
@@ -237,7 +280,7 @@ export default function Composer({ draft, onDraftChange, onSend, onStop, running
                   </div>
                 ))}
               </div>
-              <footer>Credentials remain in the Profile environment and are never returned to the browser.</footer>
+              <footer>Credentials are stored in the Codex Profile configuration or read from its environment. Secret values are never returned by the provider catalog.</footer>
             </section>
           ) : null}
         </div>

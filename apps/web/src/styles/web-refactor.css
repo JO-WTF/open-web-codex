@@ -297,9 +297,16 @@ body:has(.web-app-shell) {
 }
 
 .web-ws-row:hover .web-ws-new-thread-btn,
-.web-ws-row-active:hover .web-ws-new-thread-btn {
+.web-ws-row:hover .web-ws-remove-btn,
+.web-ws-row-active:hover .web-ws-new-thread-btn,
+.web-ws-row-active:hover .web-ws-remove-btn {
   color: #c8cfdb;
 }
+
+.web-ws-threads-empty { color: #aeb6c5; }
+
+.web-mcp-toggle { color: #bbc2ce; }
+.web-mcp-toggle:hover { color: #eef1f6; }
 
 .web-ws-threads {
   margin: 2px 0 12px;

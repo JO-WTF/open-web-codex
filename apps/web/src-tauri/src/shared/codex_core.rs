@@ -255,10 +255,13 @@ pub(crate) async fn start_thread_core(
 ) -> Result<Value, String> {
     let session = get_session_clone(sessions, &workspace_id).await?;
     let workspace_path = resolve_workspace_path_core(workspaces, &workspace_id).await?;
-    let params = json!({
+    let mut params = json!({
         "cwd": workspace_path,
         "approvalPolicy": "on-request"
     });
+    if let Some(provider_id) = current_model_provider_id(&session, &workspace_id).await {
+        params["modelProvider"] = json!(provider_id);
+    }
     session
         .send_request_for_workspace(&workspace_id, "thread/start", params)
         .await
@@ -270,7 +273,10 @@ pub(crate) async fn resume_thread_core(
     thread_id: String,
 ) -> Result<Value, String> {
     let session = get_session_clone(sessions, &workspace_id).await?;
-    let params = json!({ "threadId": thread_id });
+    let mut params = json!({ "threadId": thread_id });
+    if let Some(provider_id) = current_model_provider_id(&session, &workspace_id).await {
+        params["modelProvider"] = json!(provider_id);
+    }
     session
         .send_request_for_workspace(&workspace_id, "thread/resume", params)
         .await
@@ -535,6 +541,9 @@ pub(crate) async fn send_user_message_core(
     params.insert("approvalPolicy".to_string(), json!(approval_policy));
     params.insert("sandboxPolicy".to_string(), json!(sandbox_policy));
     params.insert("model".to_string(), json!(model));
+    if let Some(provider_id) = current_model_provider_id(&session, &workspace_id).await {
+        params.insert("modelProvider".to_string(), json!(provider_id));
+    }
     params.insert("effort".to_string(), json!(effort));
     insert_optional_nullable_string(&mut params, "serviceTier", service_tier);
     if let Some(mode) = collaboration_mode {
@@ -633,6 +642,28 @@ pub(crate) async fn model_provider_list_core(
         .await
 }
 
+async fn current_model_provider_id(
+    session: &WorkspaceSession,
+    workspace_id: &str,
+) -> Option<String> {
+    let response = session
+        .send_request_for_workspace(workspace_id, "modelProvider/list", json!({}))
+        .await
+        .ok()?;
+    model_provider_id_from_catalog(&response)
+}
+
+fn model_provider_id_from_catalog(response: &Value) -> Option<String> {
+    response
+        .get("result")
+        .unwrap_or(response)
+        .get("currentProviderId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
 pub(crate) async fn model_provider_write_core(
     sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
     workspace_id: String,
@@ -674,6 +705,7 @@ pub(crate) async fn model_provider_write_core(
         .and_then(Value::as_str)
         == Some("builtIn");
     let current_id = catalog.get("currentProviderId").and_then(Value::as_str);
+    let provider_exists = existing.is_some();
 
     let edit = |key_path: String, value: Value| {
         json!({ "keyPath": key_path, "value": value, "mergeStrategy": "replace" })
@@ -696,20 +728,21 @@ pub(crate) async fn model_provider_write_core(
             if !matches!(wire_api, "chat" | "responses") {
                 return Err("wire API must be 'chat' or 'responses'".to_string());
             }
-            let env_key = object.get("envKey").and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty());
-            if let Some(env_key) = env_key {
-                if !env_key.chars().all(|character| character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_') {
-                    return Err("API key environment variable must contain only A-Z, 0-9 and '_'".to_string());
-                }
-            }
+            let credentials = parse_provider_credentials(object, provider_exists)?;
             let mut provider = Map::new();
             provider.insert("name".to_string(), json!(name));
             provider.insert("base_url".to_string(), json!(base_url.trim_end_matches('/')));
             provider.insert("wire_api".to_string(), json!(wire_api));
-            if let Some(env_key) = env_key {
-                provider.insert("env_key".to_string(), json!(env_key));
+            if !provider_exists {
+                credentials.apply_to_new_provider(&mut provider);
+                edits.push(edit(format!("model_providers.{}", serde_json::to_string(id).map_err(|err| err.to_string())?), Value::Object(provider)));
+            } else {
+                let provider_path = format!("model_providers.{}", serde_json::to_string(id).map_err(|err| err.to_string())?);
+                edits.push(edit(format!("{provider_path}.name"), json!(name)));
+                edits.push(edit(format!("{provider_path}.base_url"), json!(base_url.trim_end_matches('/'))));
+                edits.push(edit(format!("{provider_path}.wire_api"), json!(wire_api)));
+                credentials.append_existing_provider_edits(&provider_path, &edit, &mut edits);
             }
-            edits.push(edit(format!("model_providers.{}", serde_json::to_string(id).map_err(|err| err.to_string())?), Value::Object(provider)));
             if existing.is_none() || object.get("select").and_then(Value::as_bool) == Some(true) {
                 edits.push(edit("model_provider".to_string(), json!(id)));
             }
@@ -730,23 +763,10 @@ pub(crate) async fn model_provider_write_core(
                 .filter(|value| !value.is_empty()).ok_or_else(|| "model id is required".to_string())?;
             let context_window = object.get("contextWindow").and_then(Value::as_i64)
                 .filter(|value| *value >= 1024).ok_or_else(|| "context window must be at least 1024 tokens".to_string())?;
-            let raw_models = existing.and_then(|entry| entry.get("models")).and_then(Value::as_array)
-                .ok_or_else(|| "provider has no persisted model metadata; fetch models first".to_string())?;
-            let mut found = false;
-            let models = raw_models.iter().map(|value| {
-                let model = value.as_object().cloned().unwrap_or_default();
-                let current_model_id = model.get("modelId").and_then(Value::as_str).unwrap_or_default();
-                let next_context = if current_model_id == model_id { found = true; Some(context_window) } else { model.get("contextWindow").and_then(Value::as_i64) };
-                json!({
-                    "model_id": current_model_id,
-                    "model_name": model.get("modelName").cloned().unwrap_or(Value::Null),
-                    "max_token_len": model.get("maxTokenLen").cloned().unwrap_or(Value::Null),
-                    "max_output_tokens": model.get("maxOutputTokens").cloned().unwrap_or(Value::Null),
-                    "show_in_picker": model.get("showInPicker").and_then(Value::as_bool).unwrap_or(true),
-                    "context_window": next_context,
-                })
-            }).collect::<Vec<_>>();
-            if !found { return Err(format!("model '{model_id}' is not persisted for provider '{id}'")); }
+            let raw_models = existing
+                .and_then(|entry| entry.get("models"))
+                .and_then(Value::as_array);
+            let models = upsert_provider_model_context(raw_models, model_id, context_window);
             edits.push(edit(format!("model_providers.{}.models", serde_json::to_string(id).map_err(|err| err.to_string())?), json!(models)));
         }
         "delete" => {
@@ -781,17 +801,12 @@ pub(crate) async fn model_provider_write_core(
                 json!({ "forceRefresh": true }),
             )
             .await?;
-        let models = models_response.get("data").and_then(Value::as_array).cloned().unwrap_or_default();
+        let models = model_list_data(&models_response);
         if models.is_empty() { return Err(format!("provider '{id}' returned no models")); }
-        let persisted_models = models.iter().filter_map(|value| value.as_object()).map(|model| {
-            let model_id = model.get("model").or_else(|| model.get("id")).and_then(Value::as_str).unwrap_or_default();
-            json!({
-                "model_id": model_id,
-                "model_name": model.get("displayName").or_else(|| model.get("display_name")).cloned().unwrap_or_else(|| json!(model_id)),
-                "show_in_picker": true,
-                "context_window": model.get("contextWindow").or_else(|| model.get("context_window")).cloned().unwrap_or(Value::Null),
-            })
-        }).collect::<Vec<_>>();
+        let persisted_models = models
+            .iter()
+            .filter_map(provider_model_config_from_catalog)
+            .collect::<Vec<_>>();
         session.send_request_for_workspace(
             &workspace_id,
             "config/batchWrite",
@@ -802,6 +817,196 @@ pub(crate) async fn model_provider_write_core(
     session
         .send_request_for_workspace(&workspace_id, "modelProvider/list", json!({}))
         .await
+}
+
+fn model_list_data(response: &Value) -> Vec<Value> {
+    response
+        .get("result")
+        .unwrap_or(response)
+        .get("data")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn provider_model_config_from_catalog(value: &Value) -> Option<Value> {
+    let model = value.as_object()?;
+    let model_id = model
+        .get("model")
+        .or_else(|| model.get("id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let mut persisted = Map::new();
+    persisted.insert("model_id".to_string(), json!(model_id));
+    persisted.insert(
+        "model_name".to_string(),
+        model
+            .get("displayName")
+            .or_else(|| model.get("display_name"))
+            .filter(|value| !value.is_null())
+            .cloned()
+            .unwrap_or_else(|| json!(model_id)),
+    );
+    persisted.insert("show_in_picker".to_string(), json!(true));
+    if let Some(context_window) = model
+        .get("contextWindow")
+        .or_else(|| model.get("context_window"))
+        .filter(|value| !value.is_null())
+    {
+        persisted.insert("context_window".to_string(), context_window.clone());
+    }
+    Some(Value::Object(persisted))
+}
+
+fn upsert_provider_model_context(
+    raw_models: Option<&Vec<Value>>,
+    model_id: &str,
+    context_window: i64,
+) -> Vec<Value> {
+    let mut found = false;
+    let mut models = raw_models
+        .into_iter()
+        .flatten()
+        .map(|value| {
+            let model = value.as_object().cloned().unwrap_or_default();
+            let current_model_id = model
+                .get("modelId")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let next_context = if current_model_id == model_id {
+                found = true;
+                Some(context_window)
+            } else {
+                model.get("contextWindow").and_then(Value::as_i64)
+            };
+            let mut persisted = Map::new();
+            persisted.insert("model_id".to_string(), json!(current_model_id));
+            persisted.insert(
+                "model_name".to_string(),
+                model
+                    .get("modelName")
+                    .filter(|value| !value.is_null())
+                    .cloned()
+                    .unwrap_or_else(|| json!(current_model_id)),
+            );
+            persisted.insert(
+                "show_in_picker".to_string(),
+                json!(model.get("showInPicker").and_then(Value::as_bool).unwrap_or(true)),
+            );
+            for (source, target) in [
+                ("maxTokenLen", "max_token_len"),
+                ("maxOutputTokens", "max_output_tokens"),
+            ] {
+                if let Some(value) = model.get(source).filter(|value| !value.is_null()) {
+                    persisted.insert(target.to_string(), value.clone());
+                }
+            }
+            if let Some(next_context) = next_context {
+                persisted.insert("context_window".to_string(), json!(next_context));
+            }
+            Value::Object(persisted)
+        })
+        .collect::<Vec<_>>();
+
+    if !found {
+        models.push(json!({
+            "model_id": model_id,
+            "model_name": model_id,
+            "show_in_picker": true,
+            "context_window": context_window,
+        }));
+    }
+    models
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ProviderCredentials {
+    Preserve,
+    Environment(String),
+    Direct(String),
+    None,
+}
+
+impl ProviderCredentials {
+    fn apply_to_new_provider(&self, provider: &mut Map<String, Value>) {
+        match self {
+            Self::Environment(env_key) => {
+                provider.insert("env_key".to_string(), json!(env_key));
+            }
+            Self::Direct(api_key) => {
+                provider.insert("experimental_bearer_token".to_string(), json!(api_key));
+            }
+            Self::Preserve | Self::None => {}
+        }
+    }
+
+    fn append_existing_provider_edits<F>(
+        &self,
+        provider_path: &str,
+        edit: &F,
+        edits: &mut Vec<Value>,
+    ) where
+        F: Fn(String, Value) -> Value,
+    {
+        match self {
+            Self::Preserve => {}
+            Self::Environment(env_key) => {
+                edits.push(edit(format!("{provider_path}.env_key"), json!(env_key)));
+                edits.push(edit(format!("{provider_path}.experimental_bearer_token"), Value::Null));
+            }
+            Self::Direct(api_key) => {
+                edits.push(edit(format!("{provider_path}.env_key"), Value::Null));
+                edits.push(edit(format!("{provider_path}.experimental_bearer_token"), json!(api_key)));
+            }
+            Self::None => {
+                edits.push(edit(format!("{provider_path}.env_key"), Value::Null));
+                edits.push(edit(format!("{provider_path}.experimental_bearer_token"), Value::Null));
+            }
+        }
+    }
+}
+
+fn parse_provider_credentials(
+    object: &Map<String, Value>,
+    provider_exists: bool,
+) -> Result<ProviderCredentials, String> {
+    let mode = object
+        .get("credentialMode")
+        .and_then(Value::as_str)
+        .or_else(|| object.get("envKey").and_then(Value::as_str).map(|_| "environment"))
+        .unwrap_or(if provider_exists { "preserve" } else { "none" });
+    match mode {
+        "preserve" if provider_exists => Ok(ProviderCredentials::Preserve),
+        "preserve" => Err("cannot preserve credentials for a new provider".to_string()),
+        "environment" => {
+            let env_key = object
+                .get("envKey")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "API key environment variable is required".to_string())?;
+            if !env_key.chars().all(|character| {
+                character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
+            }) {
+                return Err(
+                    "API key environment variable must contain only A-Z, 0-9 and '_'".to_string(),
+                );
+            }
+            Ok(ProviderCredentials::Environment(env_key.to_string()))
+        }
+        "direct" => {
+            let api_key = object
+                .get("apiKey")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "API key is required".to_string())?;
+            Ok(ProviderCredentials::Direct(api_key.to_string()))
+        }
+        "none" => Ok(ProviderCredentials::None),
+        other => Err(format!("unsupported credential mode '{other}'")),
+    }
 }
 
 pub(crate) async fn experimental_feature_list_core(
@@ -1247,6 +1452,133 @@ mod tests {
         assert!(THREAD_LIST_SOURCE_KINDS.contains(&"subAgentReview"));
         assert!(THREAD_LIST_SOURCE_KINDS.contains(&"subAgentCompact"));
         assert!(THREAD_LIST_SOURCE_KINDS.contains(&"subAgentThreadSpawn"));
+    }
+
+    #[test]
+    fn provider_credentials_support_environment_variable_and_direct_key_modes() {
+        let environment = json!({
+            "credentialMode": "environment",
+            "envKey": "DEEPSEEK_API_KEY",
+        });
+        assert_eq!(
+            parse_provider_credentials(environment.as_object().unwrap(), false),
+            Ok(ProviderCredentials::Environment(
+                "DEEPSEEK_API_KEY".to_string()
+            ))
+        );
+
+        let direct = json!({
+            "credentialMode": "direct",
+            "apiKey": "test-direct-key",
+        });
+        let credentials = parse_provider_credentials(direct.as_object().unwrap(), false).unwrap();
+        assert_eq!(
+            credentials,
+            ProviderCredentials::Direct("test-direct-key".to_string())
+        );
+        let mut provider = Map::new();
+        credentials.apply_to_new_provider(&mut provider);
+        assert_eq!(
+            provider.get("experimental_bearer_token"),
+            Some(&json!("test-direct-key"))
+        );
+        assert!(!provider.contains_key("env_key"));
+    }
+
+    #[test]
+    fn direct_provider_credentials_clear_the_environment_key() {
+        let edit = |key_path: String, value: Value| json!({ "keyPath": key_path, "value": value });
+        let mut edits = Vec::new();
+        ProviderCredentials::Direct("test-direct-key".to_string())
+            .append_existing_provider_edits("model_providers.deepseek", &edit, &mut edits);
+
+        assert_eq!(
+            edits,
+            vec![
+                json!({ "keyPath": "model_providers.deepseek.env_key", "value": null }),
+                json!({ "keyPath": "model_providers.deepseek.experimental_bearer_token", "value": "test-direct-key" }),
+            ]
+        );
+    }
+
+    #[test]
+    fn provider_model_context_persists_a_newly_discovered_model() {
+        let models = upsert_provider_model_context(None, "deepseek-v4-flash", 128_000);
+
+        assert_eq!(
+            models,
+            vec![json!({
+                "model_id": "deepseek-v4-flash",
+                "model_name": "deepseek-v4-flash",
+                "show_in_picker": true,
+                "context_window": 128_000,
+            })]
+        );
+        assert!(!models[0].as_object().unwrap().values().any(Value::is_null));
+    }
+
+    #[test]
+    fn provider_model_context_updates_an_existing_model() {
+        let persisted = vec![json!({
+            "modelId": "deepseek-v4-flash",
+            "modelName": "DeepSeek V4 Flash",
+            "maxTokenLen": 64_000,
+            "maxOutputTokens": 8_192,
+            "showInPicker": true,
+            "contextWindow": 64_000,
+        })];
+
+        let models =
+            upsert_provider_model_context(Some(&persisted), "deepseek-v4-flash", 128_000);
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["model_id"], json!("deepseek-v4-flash"));
+        assert_eq!(models[0]["model_name"], json!("DeepSeek V4 Flash"));
+        assert_eq!(models[0]["context_window"], json!(128_000));
+    }
+
+    #[test]
+    fn model_list_data_reads_json_rpc_and_unwrapped_responses() {
+        let models = json!([{"model": "deepseek-v4-flash"}]);
+
+        assert_eq!(
+            model_list_data(&json!({"result": {"data": models.clone()}})),
+            models.as_array().unwrap().clone()
+        );
+        assert_eq!(
+            model_list_data(&json!({"data": models.clone()})),
+            models.as_array().unwrap().clone()
+        );
+    }
+
+    #[test]
+    fn provider_model_catalog_omits_null_toml_values() {
+        let model = provider_model_config_from_catalog(&json!({
+            "model": "deepseek-v4-flash",
+            "displayName": null,
+            "contextWindow": null,
+        }))
+        .unwrap();
+
+        assert_eq!(model["model_name"], json!("deepseek-v4-flash"));
+        assert!(!model.as_object().unwrap().contains_key("context_window"));
+        assert!(!model.as_object().unwrap().values().any(Value::is_null));
+    }
+
+    #[test]
+    fn model_provider_id_reads_json_rpc_and_unwrapped_catalogs() {
+        assert_eq!(
+            model_provider_id_from_catalog(&json!({
+                "result": {"currentProviderId": "deepseek"}
+            })),
+            Some("deepseek".to_string())
+        );
+        assert_eq!(
+            model_provider_id_from_catalog(&json!({
+                "currentProviderId": "deepseek"
+            })),
+            Some("deepseek".to_string())
+        );
     }
 
 }

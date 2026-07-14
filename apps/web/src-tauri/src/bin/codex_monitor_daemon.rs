@@ -7,6 +7,8 @@ mod codex_args;
 mod codex_config;
 #[path = "../codex/home.rs"]
 mod codex_home;
+#[path = "../daemon_protocol.rs"]
+mod daemon_protocol;
 #[path = "../files/io.rs"]
 mod file_io;
 #[path = "../files/ops.rs"]
@@ -195,6 +197,7 @@ impl DaemonState {
         json!({
             "name": DAEMON_NAME,
             "version": env!("CARGO_PKG_VERSION"),
+            "rpcRevision": daemon_protocol::DAEMON_RPC_REVISION,
             "pid": std::process::id(),
             "mode": "tcp",
             "binaryPath": self.daemon_binary_path,
@@ -1868,6 +1871,10 @@ mod tests {
             assert_eq!(
                 result.get("version").and_then(Value::as_str),
                 Some(env!("CARGO_PKG_VERSION"))
+            );
+            assert_eq!(
+                result.get("rpcRevision").and_then(Value::as_u64),
+                Some(u64::from(daemon_protocol::DAEMON_RPC_REVISION))
             );
             let _ = std::fs::remove_dir_all(&tmp);
         });

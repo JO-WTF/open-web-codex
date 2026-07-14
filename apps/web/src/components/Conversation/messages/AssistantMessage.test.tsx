@@ -18,4 +18,13 @@ describe("AssistantMessage", () => {
     fireEvent.click(screen.getByRole("link", { name: "config" }));
     expect(onOpenFile).toHaveBeenCalledWith("src/config.ts");
   });
+
+  it("marks external links to open in a new window", () => {
+    render(<AssistantMessage text="Read [the docs](https://example.com/docs)." />);
+
+    const link = screen.getByRole("link", { name: "the docs" });
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(link.classList.contains("web-external-link")).toBe(true);
+  });
 });

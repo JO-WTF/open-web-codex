@@ -303,6 +303,9 @@ function LinkBlock({ urls }: LinkBlockProps) {
         <a
           key={`${url}-${index}`}
           href={url}
+          className="external-link"
+          target="_blank"
+          rel="noopener noreferrer"
           onClick={(event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -567,6 +570,9 @@ export function Markdown({
       return (
         <a
           href={href}
+          className="external-link"
+          target="_blank"
+          rel="noopener noreferrer"
           onClick={(event) => {
             event.preventDefault();
             event.stopPropagation();

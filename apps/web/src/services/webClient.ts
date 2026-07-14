@@ -107,6 +107,10 @@ export class CodexMonitorWebClient {
     return this.rpc<Record<string, unknown>>("create_workspace", { name, parent_dir });
   }
 
+  removeWorkspace(id: string) {
+    return this.rpc<void>("remove_workspace", { id });
+  }
+
   connectWorkspace(workspaceId: string) {
     return this.rpc<void>("connect_workspace", { id: workspaceId });
   }
@@ -125,6 +129,17 @@ export class CodexMonitorWebClient {
 
   listModels(workspaceId: string) {
     return this.rpc<Record<string, unknown>>("model_list", { workspaceId });
+  }
+
+  listMcpServerStatus(workspaceId: string) {
+    return this.rpc<Record<string, unknown>>("list_mcp_server_status", {
+      workspaceId,
+      limit: 100,
+    });
+  }
+
+  getAccountRateLimits(workspaceId: string) {
+    return this.rpc<Record<string, unknown>>("account_rate_limits", { workspaceId });
   }
 
   resumeThread(workspaceId: string, threadId: string) {
