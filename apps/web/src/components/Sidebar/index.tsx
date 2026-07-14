@@ -36,6 +36,7 @@ type Props = {
   onCheckGateway: () => void;
   mcpServers: Record<string, {name: string; status: string; error?: string | null; failureReason?: string | null}>;
   rateLimits: Record<string, unknown> | null;
+  currentProviderId: string | null;
   busy: boolean;
 };
 
@@ -60,6 +61,7 @@ export default function Sidebar({
   onCheckGateway,
   mcpServers,
   rateLimits,
+  currentProviderId,
   busy,
 }: Props) {
   const [showSettings, setShowSettings] = useState(false);
@@ -99,7 +101,7 @@ export default function Sidebar({
       </div>
 
       <div className="web-sidebar-bottom">
-        {rateLimits ? <RateLimitCard rateLimits={rateLimits} /> : null}
+        {rateLimits && currentProviderId === "openai" ? <RateLimitCard rateLimits={rateLimits} /> : null}
         <button
           type="button"
           className="web-settings-toggle"

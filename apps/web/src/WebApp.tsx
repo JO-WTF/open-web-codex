@@ -1496,6 +1496,7 @@ export default function WebApp() {
           busy={busy}
           mcpServers={mcpServers}
           rateLimits={rateLimits}
+          currentProviderId={currentProviderId}
 
           onConnectWorkspace={connectWorkspace}
         />

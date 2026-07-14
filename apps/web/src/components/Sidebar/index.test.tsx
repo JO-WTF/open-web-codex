@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import Sidebar from "./index";
 
 describe("Sidebar settings", () => {
+  afterEach(cleanup);
   it("opens settings in a dialog and closes it with Escape", () => {
     render(
       <Sidebar
@@ -27,6 +28,7 @@ describe("Sidebar settings", () => {
         onCheckGateway={vi.fn()}
         mcpServers={{}}
         rateLimits={null}
+        currentProviderId={null}
         busy={false}
       />,
     );
@@ -66,6 +68,7 @@ describe("Sidebar settings", () => {
           secondary: { usedPercent: 67, resetsAt: Date.now() + 86_400_000 },
           credits: { hasCredits: true, unlimited: false, balance: "40" },
         }}
+        currentProviderId={"openai"}
         busy={false}
       />,
     );
@@ -77,4 +80,39 @@ describe("Sidebar settings", () => {
     const bottom = view.container.querySelector(".web-sidebar-bottom");
     expect(bottom?.firstElementChild?.classList.contains("web-quota-card")).toBe(true);
   });
+  it("hides quota windows when provider is not OpenAI", () => {
+    render(
+      <Sidebar
+        gatewayState="online"
+        gatewayVersion="1.0.0"
+        workspaces={[]}
+        activeWorkspaceId={null}
+        onSelectWorkspace={vi.fn()}
+        onCreateWorkspace={vi.fn()}
+        onLoadWorkspaces={vi.fn()}
+        onConnectWorkspace={vi.fn()}
+        threadsByWorkspace={{}}
+        activeThreadId={null}
+        onSelectThread={vi.fn()}
+        onNewThread={vi.fn()}
+        onRemoveWorkspace={vi.fn()}
+        baseUrl="http://127.0.0.1:4733"
+        token=""
+        onBaseUrlChange={vi.fn()}
+        onTokenChange={vi.fn()}
+        onCheckGateway={vi.fn()}
+        mcpServers={{}}
+        rateLimits={{
+          primary: { usedPercent: 12, resetsAt: Date.now() + 3_600_000 },
+          secondary: { usedPercent: 67, resetsAt: Date.now() + 86_400_000 },
+        }}
+        currentProviderId={"deepseek"}
+        busy={false}
+      />,
+    );
+
+    expect(screen.queryByLabelText("Codex usage limits")).toBeNull();
+    expect(screen.queryByText("Session")).toBeNull();
+  });
+
 });
