@@ -1628,6 +1628,12 @@ disabled_tools = [
 
     let original = session.get_config().await;
     let mut next_config = load_latest_config_for_session(&session).await;
+    let custom_provider_id = "custom-provider";
+    let mut custom_provider = original.model_provider.clone();
+    custom_provider.name = "Custom Provider".to_string();
+    next_config
+        .model_providers
+        .insert(custom_provider_id.to_string(), custom_provider);
     next_config.model = Some("gpt-5.4".to_string());
     next_config.notify = Some(vec!["echo".to_string()]);
 
@@ -1651,7 +1657,9 @@ disabled_tools = [
     assert!(!app.enabled);
     assert_eq!(app.destructive_enabled, Some(false));
     assert_eq!(config.model, original.model);
+    assert_eq!(config.model_provider_id, original.model_provider_id);
     assert_eq!(config.notify, original.notify);
+    assert!(config.model_providers.contains_key(custom_provider_id));
     assert_eq!(
         config.tool_suggest.disabled_tools,
         vec![
@@ -1659,6 +1667,15 @@ disabled_tools = [
             ToolSuggestDisabledTool::plugin("slack@openai-curated"),
         ]
     );
+
+    let preview = session
+        .preview_settings(&SessionSettingsUpdate {
+            model_provider_id: Some(custom_provider_id.to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("newly configured provider should be selectable");
+    assert_eq!(preview.model_provider_id, custom_provider_id);
 }
 
 #[test]

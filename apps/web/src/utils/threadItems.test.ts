@@ -3,6 +3,7 @@ import type { ConversationItem } from "../types";
 import {
   buildConversationItem,
   buildConversationItemFromThreadItem,
+  buildItemsFromThread,
   getThreadCreatedTimestamp,
   getThreadTimestamp,
   mergeThreadItems,
@@ -12,6 +13,92 @@ import {
 } from "./threadItems";
 
 describe("threadItems", () => {
+  it.each([
+    ["hookPrompt", { fragments: [{ text: "Run hook" }] }, "Hook prompt"],
+    [
+      "dynamicToolCall",
+      {
+        tool: "write_stdin",
+        arguments: { session_id: 1, chars: "secret" },
+        contentItems: [{ type: "inputText", text: "done" }],
+      },
+      "Tool: write_stdin",
+    ],
+    ["imageGeneration", { revisedPrompt: "A diagram", savedPath: "image.png" }, "Image generation"],
+    ["sleep", { durationMs: 25 }, "Wait"],
+    ["subAgentActivity", { kind: "started", agentPath: "reviewer" }, "Sub-agent activity"],
+  ])("restores persisted %s items", (type, fields, title) => {
+    const converted = buildConversationItemFromThreadItem({
+      id: `item-${type}`,
+      type,
+      ...fields,
+    });
+
+    expect(converted).toMatchObject({
+      id: `item-${type}`,
+      kind: "tool",
+      toolType: type,
+      title,
+    });
+  });
+
+  it("keeps unknown persisted items visible with sensitive fields redacted", () => {
+    const converted = buildConversationItemFromThreadItem({
+      id: "future-1",
+      type: "futureCodexItem",
+      status: "completed",
+      apiKey: "must-not-leak",
+      payload: { token: "also-secret", value: "visible" },
+    });
+
+    expect(converted).toMatchObject({
+      id: "future-1",
+      kind: "tool",
+      toolType: "futureCodexItem",
+      title: "Unsupported item: futureCodexItem",
+      status: "completed",
+    });
+    if (converted?.kind === "tool") {
+      expect(converted.detail).toContain("[redacted]");
+      expect(converted.detail).toContain("visible");
+      expect(converted.detail).not.toContain("must-not-leak");
+      expect(converted.detail).not.toContain("also-secret");
+    }
+  });
+
+  it("normalizes live and persisted terminal tool items identically", () => {
+    const raw = {
+      id: "tool-restore",
+      type: "dynamicToolCall",
+      namespace: "functions",
+      tool: "update_plan",
+      arguments: { plan: [{ step: "Inspect", status: "completed" }] },
+      status: "completed",
+      contentItems: [{ type: "inputText", text: "updated" }],
+    };
+
+    expect(buildConversationItem(raw)).toEqual(
+      buildConversationItemFromThreadItem(raw),
+    );
+  });
+
+  it("recovers every item in a thread without dropping future types", () => {
+    const items = buildItemsFromThread({
+      turns: [
+        {
+          items: [
+            { id: "user", type: "userMessage", content: [{ type: "text", text: "Hello" }] },
+            { id: "agent", type: "agentMessage", text: "Done" },
+            { id: "future", type: "futureCodexItem", payload: { value: 1 } },
+          ],
+        },
+      ],
+    });
+
+    expect(items).toHaveLength(3);
+    expect(items.map((item) => item.id)).toEqual(["user", "agent", "future"]);
+  });
+
   it("truncates long message text in normalizeItem", () => {
     const text = "a".repeat(21000);
     const item: ConversationItem = {

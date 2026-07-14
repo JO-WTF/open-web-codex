@@ -45,6 +45,24 @@ All `ThreadItem` variants returned by `thread/resume` and `thread/read` have a v
 `sleep`, `imageGeneration`, `enteredReviewMode`, `exitedReviewMode`, and `contextCompaction`.
 Unknown future variants use an expandable generic card rather than disappearing.
 
+## Durable Web recovery
+
+The production Web path persists a versioned projection before broadcasting an app-server event.
+Each projected event has a database-generated monotonic `sequence`, protocol-independent event
+type, Thread/Turn/Item correlation IDs and a redacted UI payload. Absolute server paths, embedded
+data and credential-like fields are not copied into the public projection.
+
+Reconnect recovery follows this order:
+
+1. replay projected events after the browser's last `sequence`;
+2. materialize active or projection-only Items with the same Web item normalizer used for live
+   notifications;
+3. read Codex Thread history and merge by stable Item ID;
+4. prefer Codex history for terminal state while retaining newer active projected Items.
+
+Streaming deltas are recoverable UI progress, not a second model-visible Thread history. Codex
+remains authoritative for completed Turns and model context.
+
 ## Server requests
 
 | Method | Behavior | Web status | Missing behavior |

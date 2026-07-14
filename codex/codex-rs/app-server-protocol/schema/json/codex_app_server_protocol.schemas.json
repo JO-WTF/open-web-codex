@@ -102,6 +102,93 @@
       "title": "AttestationGenerateResponse",
       "type": "object"
     },
+    "CapabilityDeclaration": {
+      "properties": {
+        "experimental": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "limits": {
+          "additionalProperties": true,
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "methods": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MethodSet"
+            }
+          ],
+          "default": {}
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/StructuredReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/CapabilityStatus"
+        },
+        "version": {
+          "default": "1.0.0",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "status"
+      ],
+      "type": "object"
+    },
+    "CapabilityManifest": {
+      "description": "Top-level capability manifest returned during `initialize`.",
+      "properties": {
+        "capabilities": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/CapabilityDeclaration"
+          },
+          "type": "array"
+        },
+        "compatibility": {
+          "$ref": "#/definitions/CompatibilityRange"
+        },
+        "generatedAt": {
+          "type": "string"
+        },
+        "schemaVersion": {
+          "type": "string"
+        },
+        "server": {
+          "$ref": "#/definitions/ServerIdentity"
+        }
+      },
+      "required": [
+        "compatibility",
+        "generatedAt",
+        "schemaVersion",
+        "server"
+      ],
+      "type": "object"
+    },
+    "CapabilityStatus": {
+      "enum": [
+        "supported",
+        "degraded",
+        "unsupported",
+        "experimental"
+      ],
+      "type": "string"
+    },
     "ChatgptAuthTokensRefreshParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -1508,6 +1595,30 @@
             },
             "method": {
               "enum": [
+                "modelProvider/list"
+              ],
+              "title": "ModelProvider/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ModelProviderListParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "ModelProvider/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "modelProvider/capabilities/read"
               ],
               "title": "ModelProvider/capabilities/readRequestMethod",
@@ -2492,6 +2603,21 @@
       "title": "CommandExecutionRequestApprovalResponse",
       "type": "object"
     },
+    "CompatibilityRange": {
+      "properties": {
+        "maximumClientProtocol": {
+          "type": "string"
+        },
+        "minimumClientProtocol": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "maximumClientProtocol",
+        "minimumClientProtocol"
+      ],
+      "type": "object"
+    },
     "DynamicToolCallParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -2971,6 +3097,16 @@
     "InitializeResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "capabilityManifest": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CapabilityManifest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "codexHome": {
           "allOf": [
             {
@@ -3772,6 +3908,29 @@
       "title": "McpServerElicitationRequestResponse",
       "type": "object"
     },
+    "MethodSet": {
+      "properties": {
+        "clientRequests": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "notifications": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "serverRequests": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "NetworkApprovalContext": {
       "properties": {
         "host": {
@@ -4102,6 +4261,29 @@
           "type": "string"
         }
       ]
+    },
+    "ServerIdentity": {
+      "properties": {
+        "buildVersion": {
+          "type": "string"
+        },
+        "commit": {
+          "type": "string"
+        },
+        "protocolVersion": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "buildVersion",
+        "commit",
+        "protocolVersion",
+        "target"
+      ],
+      "type": "object"
     },
     "ServerNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -5740,6 +5922,27 @@
         }
       ],
       "title": "ServerRequest"
+    },
+    "StructuredReason": {
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "remediation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
     },
     "ToolRequestUserInputAnswer": {
       "description": "EXPERIMENTAL. Captures a user's answer to a request_user_input question.",
@@ -12708,6 +12911,13 @@
               "null"
             ]
           },
+          "forceRefresh": {
+            "description": "When true, bypass provider-cached models and fetch from the provider endpoint.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "includeHidden": {
             "description": "When true, include models that are hidden from the default picker list.",
             "type": [
@@ -12775,6 +12985,145 @@
           "webSearch"
         ],
         "title": "ModelProviderCapabilitiesReadResponse",
+        "type": "object"
+      },
+      "ModelProviderKind": {
+        "enum": [
+          "builtIn",
+          "local",
+          "custom"
+        ],
+        "type": "string"
+      },
+      "ModelProviderListParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ModelProviderListParams",
+        "type": "object"
+      },
+      "ModelProviderListResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "currentProviderId": {
+            "type": "string"
+          },
+          "data": {
+            "items": {
+              "$ref": "#/definitions/v2/ModelProviderSummary"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "currentProviderId",
+          "data"
+        ],
+        "title": "ModelProviderListResponse",
+        "type": "object"
+      },
+      "ModelProviderModelSummary": {
+        "properties": {
+          "contextWindow": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxOutputTokens": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxTokenLen": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "modelId": {
+            "type": "string"
+          },
+          "modelName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "showInPicker": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "modelId",
+          "showInPicker"
+        ],
+        "type": "object"
+      },
+      "ModelProviderSummary": {
+        "properties": {
+          "baseUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "canDelete": {
+            "type": "boolean"
+          },
+          "canEdit": {
+            "type": "boolean"
+          },
+          "canFetchModels": {
+            "type": "boolean"
+          },
+          "envKey": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "isCurrent": {
+            "type": "boolean"
+          },
+          "kind": {
+            "$ref": "#/definitions/v2/ModelProviderKind"
+          },
+          "modelCount": {
+            "format": "uint",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/definitions/v2/ModelProviderModelSummary"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "wireApi": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "canDelete",
+          "canEdit",
+          "canFetchModels",
+          "id",
+          "isCurrent",
+          "kind",
+          "modelCount",
+          "models",
+          "name",
+          "wireApi"
+        ],
         "type": "object"
       },
       "ModelRerouteReason": {
@@ -20593,6 +20942,13 @@
           },
           "model": {
             "description": "Override the model for this turn and subsequent turns.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "modelProvider": {
+            "description": "Override the model provider for this turn and subsequent turns.",
             "type": [
               "string",
               "null"

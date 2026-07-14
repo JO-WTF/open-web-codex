@@ -2,9 +2,9 @@ pub mod error;
 pub mod event;
 pub mod idempotency;
 
-use uuid::Uuid;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 /// Platform-level health response.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -25,7 +25,11 @@ pub struct Cursor {
 
 impl Default for Cursor {
     fn default() -> Self {
-        Self { before: None, after: None, limit: 50 }
+        Self {
+            before: None,
+            after: None,
+            limit: 50,
+        }
     }
 }
 
@@ -216,8 +220,13 @@ pub struct SendMessageResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunEvent {
     pub id: Uuid,
+    pub sequence: i64,
     pub run_id: Uuid,
     pub event_type: String,
+    pub projection_version: i16,
+    pub thread_id: Option<String>,
+    pub turn_id: Option<String>,
+    pub item_id: Option<String>,
     pub payload: serde_json::Value,
     pub created_at: DateTime<Utc>,
 }
@@ -226,5 +235,5 @@ pub struct RunEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListTaskEventsParams {
     pub limit: Option<i64>,
-    pub after_id: Option<Uuid>,
+    pub after_sequence: Option<i64>,
 }

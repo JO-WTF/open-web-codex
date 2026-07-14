@@ -4,7 +4,7 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 计划基线 | 2026-07-12 |
+| 计划基线 | 2026-07-14 |
 | 当前里程碑 | M0 合同固化与 M1 平台纵向骨架（并行） |
 | 默认分支 | `main` |
 | Web 目录 | `apps/web` |
@@ -13,9 +13,9 @@
 | 能力基线 | `docs/capability-baseline.md` |
 | 上游同步 | `docs/codex-upstream-sync.md` |
 
-Codex subtree 已同步到记录的官方 `openai/codex` 提交 `9e552e9d15ba`，状态脚本报告待集成提交和记录基线以上定制提交均为 0。Capability Manifest v1 类型、Schema 和 `initialize` 返回已落地，真实本地 app-server Smoke 观察到 17 个能力声明。
+Codex subtree 已同步到记录的官方 `openai/codex` 提交 `5bed6447998c`，状态脚本报告待集成提交和记录基线以上定制提交均为 0。Capability Manifest v1 类型、Schema 和 `initialize` 返回已落地，真实本地 app-server Smoke 观察到 17 个能力声明。
 
-M1 平台已建立 Axum/SQLx/PostgreSQL workspace、Fake/Real Codex Adapter，以及 bootstrap/session、organization/membership、project、Task、Run 和 Run event 的首批路由与迁移。这仍是纵向原型：浏览器仍主要连接 loopback RPC/SSE Gateway；Profile Host、Git Worktree/Runner、持久审批、Lease、审计、完整 RBAC、幂等调度和生产 WebSocket replay 尚未完成。当前 `/api/rpc`、permissive CORS 和 SSE query token 只能用于本地迁移期，不得作为多用户 Beta 边界。
+M1 平台已建立 Axum/SQLx/PostgreSQL workspace、Fake/Real Codex Adapter，以及 bootstrap/session、organization/membership、project、Task、Run 和版本化 Run event 投影。Item/Delta 会先以单调 sequence、稳定平台事件类型和脱敏 UI payload 落库，再向浏览器广播；Web reducer 可用 cursor 投影恢复活动状态并以 Codex Thread 历史校准终态。这仍是纵向原型：浏览器仍主要连接 loopback RPC/SSE Gateway；Profile Host、Git Worktree/Runner、持久审批、Lease、审计、完整 RBAC、幂等调度和认证 WebSocket 尚未完成。当前 `/api/rpc`、permissive CORS 和 SSE query token 只能用于本地迁移期，不得作为多用户 Beta 边界。
 
 本计划只记录当前有效工作。任务完成必须有代码、测试和运行证据，不能仅凭源码检查将 Runtime 或恢复能力标记为完成。
 
@@ -288,8 +288,8 @@ Alpha 可以只有一名 Owner，但必须使用正式 Session/RBAC 接口，不
 | M1-E03 | P0/L | 编排 Mirror→Worktree→Profile→Thread→running | 失败补偿测试 |
 | M1-E04 | P0/M | Task 与 Codex Thread 稳定映射 | 继续 Run 不误建 Thread |
 | M1-E05 | P0/M | Turn start/steer/interrupt 适配 | 活动 Turn 规则测试 |
-| M1-E06 | P0/L | app-server event→平台事件投影 | 关键 Item/Delta tests |
-| M1-E07 | P0/M | 单 Task 单调 sequence 与批量落库 | 并发序号无重复 |
+| M1-E06 | P0/L | [x] app-server event→平台事件投影 | 关键 Item/Delta tests |
+| M1-E07 | P0/M | [x] 单 Task 单调 sequence 与顺序落库 | 数据库 identity 唯一索引与 cursor reducer tests |
 | M1-E08 | P0/M | 认证 WebSocket、订阅授权和 cursor replay | 断线/重复/越权测试 |
 | M1-E09 | P0/M | 大输出截断和 Artifact 转存 | 单事件/单 Task 上限测试 |
 | M1-E10 | P0/M | pending Approval 落库后再向 Web 推送 | 崩溃窗口测试 |

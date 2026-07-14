@@ -45,8 +45,10 @@ pub struct CapabilityDeclaration {
     #[serde(default)]
     pub methods: MethodSet,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub limits: Option<HashMap<String, serde_json::Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub reason: Option<StructuredReason>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub experimental: bool,
@@ -85,6 +87,7 @@ pub struct StructuredReason {
     pub code: String,
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub remediation: Option<String>,
 }
 

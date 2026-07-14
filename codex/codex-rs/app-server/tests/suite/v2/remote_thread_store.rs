@@ -383,6 +383,9 @@ fn assert_no_local_persistence_artifacts(codex_home: &Path) -> Result<()> {
     // That is not thread persistence; keep the assertion focused on rollout,
     // session, sqlite, and other unexpected thread-store artifacts.
     entries.remove("shell_snapshots");
+    // Model catalogs are runtime caches, not thread persistence. Third-party
+    // providers use a provider-scoped filename to prevent catalog collisions.
+    entries.retain(|entry| !entry.starts_with("models_cache-") || !entry.ends_with(".json"));
     assert_eq!(
         entries,
         BTreeSet::from([

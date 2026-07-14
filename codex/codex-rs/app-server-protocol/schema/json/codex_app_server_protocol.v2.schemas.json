@@ -2546,6 +2546,30 @@
             },
             "method": {
               "enum": [
+                "modelProvider/list"
+              ],
+              "title": "ModelProvider/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ModelProviderListParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "ModelProvider/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "modelProvider/capabilities/read"
               ],
               "title": "ModelProvider/capabilities/readRequestMethod",
@@ -9105,6 +9129,13 @@
             "null"
           ]
         },
+        "forceRefresh": {
+          "description": "When true, bypass provider-cached models and fetch from the provider endpoint.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "includeHidden": {
           "description": "When true, include models that are hidden from the default picker list.",
           "type": [
@@ -9172,6 +9203,145 @@
         "webSearch"
       ],
       "title": "ModelProviderCapabilitiesReadResponse",
+      "type": "object"
+    },
+    "ModelProviderKind": {
+      "enum": [
+        "builtIn",
+        "local",
+        "custom"
+      ],
+      "type": "string"
+    },
+    "ModelProviderListParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ModelProviderListParams",
+      "type": "object"
+    },
+    "ModelProviderListResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "currentProviderId": {
+          "type": "string"
+        },
+        "data": {
+          "items": {
+            "$ref": "#/definitions/ModelProviderSummary"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "currentProviderId",
+        "data"
+      ],
+      "title": "ModelProviderListResponse",
+      "type": "object"
+    },
+    "ModelProviderModelSummary": {
+      "properties": {
+        "contextWindow": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "maxOutputTokens": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "maxTokenLen": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "modelId": {
+          "type": "string"
+        },
+        "modelName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "showInPicker": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "modelId",
+        "showInPicker"
+      ],
+      "type": "object"
+    },
+    "ModelProviderSummary": {
+      "properties": {
+        "baseUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "canDelete": {
+          "type": "boolean"
+        },
+        "canEdit": {
+          "type": "boolean"
+        },
+        "canFetchModels": {
+          "type": "boolean"
+        },
+        "envKey": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "isCurrent": {
+          "type": "boolean"
+        },
+        "kind": {
+          "$ref": "#/definitions/ModelProviderKind"
+        },
+        "modelCount": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "models": {
+          "items": {
+            "$ref": "#/definitions/ModelProviderModelSummary"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "wireApi": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "canDelete",
+        "canEdit",
+        "canFetchModels",
+        "id",
+        "isCurrent",
+        "kind",
+        "modelCount",
+        "models",
+        "name",
+        "wireApi"
+      ],
       "type": "object"
     },
     "ModelRerouteReason": {
@@ -18372,6 +18542,13 @@
         },
         "model": {
           "description": "Override the model for this turn and subsequent turns.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "modelProvider": {
+          "description": "Override the model provider for this turn and subsequent turns.",
           "type": [
             "string",
             "null"

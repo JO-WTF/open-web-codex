@@ -104,7 +104,8 @@ impl OpenAiModelsEndpoint {
                 .build(http_client_factory, request_url.clone())
                 .await?;
             let client = ModelsClient::new(transport, api_provider, api_auth)
-                .with_telemetry(Some(request_telemetry));
+                .with_telemetry(Some(request_telemetry))
+                .with_openai_models_format(self.provider_info.is_chat_wire_api());
             client
                 .list_models(request_url, HeaderMap::new())
                 .await
@@ -126,6 +127,26 @@ impl OpenAiModelsEndpoint {
 impl ModelsEndpointClient for OpenAiModelsEndpoint {
     fn has_command_auth(&self) -> bool {
         self.provider_info.has_command_auth()
+    }
+
+    fn supports_remote_model_refresh(&self) -> bool {
+        !self.provider_info.requires_openai_auth || self.provider_info.has_command_auth()
+    }
+
+    fn remote_models_are_authoritative(&self) -> bool {
+        !self.provider_info.requires_openai_auth
+    }
+
+    fn cache_namespace(&self) -> Option<String> {
+        if self.provider_info.requires_openai_auth {
+            None
+        } else {
+            Some(format!(
+                "{}:{}",
+                self.provider_info.name,
+                self.provider_info.base_url.as_deref().unwrap_or_default()
+            ))
+        }
     }
 
     fn uses_codex_backend(&self) -> ModelsEndpointFuture<'_, bool> {

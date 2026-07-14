@@ -866,15 +866,15 @@ client_request_definitions! {
         serialization: None,
         response: v2::ModelListResponse,
     },
+    ModelProviderList => "modelProvider/list" {
+        params: v2::ModelProviderListParams,
+        serialization: None,
+        response: v2::ModelProviderListResponse,
+    },
     ModelProviderCapabilitiesRead => "modelProvider/capabilities/read" {
         params: v2::ModelProviderCapabilitiesReadParams,
         serialization: None,
         response: v2::ModelProviderCapabilitiesReadResponse,
-    },
-    ModelProviderList => "modelProvider/list" {
-        params: v2::ModelProviderListParams,
-        serialization: global_shared_read("config"),
-        response: v2::ModelProviderListResponse,
     },
     ExperimentalFeatureList => "experimentalFeature/list" {
         params: v2::ExperimentalFeatureListParams,
@@ -3041,7 +3041,8 @@ mod tests {
                 "params": {
                     "limit": null,
                     "cursor": null,
-                    "includeHidden": null
+                    "includeHidden": null,
+                    "forceRefresh": null
                 }
             }),
             serde_json::to_value(&request)?,

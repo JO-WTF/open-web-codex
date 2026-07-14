@@ -367,12 +367,14 @@ use self::skills::find_skill_mentions_with_tool_mentions;
 use self::skills::is_app_mentionable;
 mod plugin_catalog;
 mod plugins;
+mod provider_popups;
+mod provider_sections;
 use self::plugins::PluginInstallAuthFlowState;
 use self::plugins::PluginListFetchState;
 use self::plugins::PluginsCacheState;
 mod plan_implementation;
 use self::plan_implementation::PLAN_IMPLEMENTATION_TITLE;
-mod model_popups;
+pub(crate) mod model_popups;
 mod notifications;
 use self::notifications::Notification;
 mod permission_popups;
@@ -1884,6 +1886,9 @@ impl ChatWidget {
         self.config.features = config.features.clone();
         self.config.config_layer_stack = config.config_layer_stack.clone();
         self.config.memories = config.memories.clone();
+        self.config.model_provider_id = config.model_provider_id.clone();
+        self.config.model_provider = config.model_provider.clone();
+        self.config.model_providers = config.model_providers.clone();
         self.config.terminal_resize_reflow = config.terminal_resize_reflow;
         self.sync_mentions_v2_enabled();
     }

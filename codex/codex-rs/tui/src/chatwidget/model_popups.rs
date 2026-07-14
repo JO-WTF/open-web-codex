@@ -195,19 +195,53 @@ impl ChatWidget {
             return;
         }
 
+        let provider_id = self.config.model_provider_id.clone();
+        let provider_models = self
+            .config
+            .model_providers
+            .get(&provider_id)
+            .map(|provider| provider.models.clone());
+
         let mut items: Vec<SelectionItem> = Vec::new();
         for preset in presets.into_iter() {
-            let description =
-                (!preset.description.is_empty()).then_some(preset.description.to_string());
+            let context_window = provider_models
+                .as_ref()
+                .and_then(|models| models.iter().find(|model| model.model_id == preset.model))
+                .and_then(|model| model.context_window);
+            let description = match (
+                (!preset.description.is_empty()).then_some(preset.description.to_string()),
+                context_window,
+            ) {
+                (Some(description), Some(context_window)) => Some(format!(
+                    "{description} · {}K context",
+                    context_window / 1024
+                )),
+                (None, Some(context_window)) => Some(format!("{}K context", context_window / 1024)),
+                (description, None) => description,
+            };
             let is_current = preset.model.as_str() == self.current_model();
             let single_supported_effort = preset.supported_reasoning_efforts.len() == 1;
             let preset_for_action = preset.clone();
-            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+            let mut actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                 let preset_for_event = preset_for_action.clone();
                 tx.send(AppEvent::OpenReasoningPopup {
                     model: preset_for_event,
                 });
             })];
+            if provider_models
+                .as_ref()
+                .is_some_and(|models| models.iter().any(|model| model.model_id == preset.model))
+            {
+                let context_model_id = preset.model.clone();
+                let context_provider_id = provider_id.clone();
+                actions.push(Box::new(move |tx| {
+                    tx.send(AppEvent::OpenModelContextWindowPopup {
+                        model_id: context_model_id.clone(),
+                        provider_id: context_provider_id.clone(),
+                        pending_selection: None,
+                    });
+                }));
+            }
             items.push(SelectionItem {
                 name: preset.model.clone(),
                 description,
@@ -220,10 +254,13 @@ impl ChatWidget {
             });
         }
 
-        let header = self.model_menu_header(
-            "Select Model and Effort",
-            "Access legacy models by running codex -m <model_name> or in your config.toml",
-        );
+        let subtitle = if provider_id == codex_model_provider_info::OPENAI_PROVIDER_ID {
+            "Access legacy models by running codex -m <model_name> or in your config.toml"
+                .to_string()
+        } else {
+            format!("Showing models for provider '{provider_id}'.")
+        };
+        let header = self.model_menu_header("Select Model and Effort", &subtitle);
         self.bottom_pane.show_selection_view(SelectionViewParams {
             footer_hint: Some(self.bottom_pane.standard_popup_hint_line()),
             items,
@@ -705,5 +742,65 @@ impl ChatWidget {
         self.app_event_tx
             .send(AppEvent::PersistModelSelection { model, effort });
     }
+
+    pub(crate) fn open_model_context_window_popup(
+        &mut self,
+        model_id: &str,
+        provider_id: &str,
+        pending_selection: Option<PendingModelSelection>,
+    ) {
+        let Some(provider) = self.config.model_providers.get(provider_id).cloned() else {
+            self.add_error_message(format!("Provider '{provider_id}' not found."));
+            return;
+        };
+        let current_context_window = provider
+            .models
+            .iter()
+            .find(|model| model.model_id == model_id)
+            .and_then(|model| model.context_window)
+            .unwrap_or(262_144);
+        let tx = self.app_event_tx.clone();
+        let provider_id = provider_id.to_string();
+        let model_id = model_id.to_string();
+        let view = CustomPromptView::new(
+            format!("Context window for {model_id}"),
+            format!("Number of tokens (current: {current_context_window})"),
+            current_context_window.to_string(),
+            Some(
+                "Context window limit for this model in tokens; higher means longer conversations."
+                    .to_string(),
+            ),
+            Box::new(move |value: String| {
+                let parsed = value
+                    .trim()
+                    .parse::<i64>()
+                    .unwrap_or(current_context_window);
+                tx.send(AppEvent::ProviderConfigAction {
+                    action: crate::app_event::ProviderConfigAction::UpdateModelContextWindow {
+                        id: provider_id.clone(),
+                        model_id: model_id.clone(),
+                        context_window: parsed,
+                    },
+                });
+                if let Some(selection) = pending_selection.as_ref() {
+                    tx.send(AppEvent::UpdateModel(selection.model.clone()));
+                    if let Some(effort) = selection.effort.as_ref() {
+                        tx.send(AppEvent::UpdateReasoningEffort(Some(effort.clone())));
+                    }
+                    tx.send(AppEvent::PersistModelSelection {
+                        model: selection.model.clone(),
+                        effort: selection.effort.clone(),
+                    });
+                }
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
+    }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct PendingModelSelection {
+    pub(crate) model: String,
+    pub(crate) effort: Option<ReasoningEffortConfig>,
+}

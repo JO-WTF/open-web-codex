@@ -1306,6 +1306,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        models: Vec::new(),
     };
 
     let codex_home = TempDir::new().unwrap();
@@ -3034,6 +3035,7 @@ async fn azure_responses_request_includes_store_and_prefixed_item_ids() {
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        models: Vec::new(),
     };
 
     let codex_home = TempDir::new().unwrap();
@@ -3677,6 +3679,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        models: Vec::new(),
     };
 
     // Init session
@@ -3766,6 +3769,7 @@ async fn env_var_overrides_loaded_auth() {
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        models: Vec::new(),
     };
 
     // Init session

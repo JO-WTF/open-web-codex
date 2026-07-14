@@ -7,15 +7,29 @@ use std::sync::Arc;
 use codex_api::ApiError;
 use codex_api::Provider;
 use codex_api::SharedAuthProvider;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::ProviderModelInfo;
+use codex_models_manager::manager::ModelsEndpointClient;
 use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::Verbosity;
 use codex_protocol::error::CodexErr;
+use codex_protocol::openai_models::ApplyPatchToolType;
+use codex_protocol::openai_models::ConfigShellToolType;
+use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::TruncationPolicyConfig;
+use codex_protocol::openai_models::WebSearchToolType;
+use codex_protocol::openai_models::default_input_modalities;
 
 use crate::amazon_bedrock::AmazonBedrockModelProvider;
 use crate::auth::ProviderAuthScope;
@@ -220,6 +234,21 @@ pub type ModelProviderFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a
 /// Shared runtime model provider handle.
 pub type SharedModelProvider = Arc<dyn ModelProvider>;
 
+pub async fn fetch_provider_models(
+    provider_info: ModelProviderInfo,
+    auth_manager: Option<Arc<AuthManager>>,
+) -> codex_protocol::error::Result<Vec<ModelInfo>> {
+    let endpoint = OpenAiModelsEndpoint::new(provider_info, auth_manager);
+    let client_version = codex_models_manager::client_version_to_whole();
+    let (models, _etag) = endpoint
+        .list_models(
+            &client_version,
+            HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy),
+        )
+        .await?;
+    Ok(models)
+}
+
 fn provider_uses_first_party_auth_path(provider: &ModelProviderInfo) -> bool {
     provider.requires_openai_auth
         && provider.env_key.is_none()
@@ -335,6 +364,17 @@ impl ModelProvider for ConfiguredModelProvider {
                 self.auth_manager.clone(),
                 model_catalog,
             )),
+            None if !self.info.models.is_empty() => Arc::new(StaticModelsManager::new(
+                self.auth_manager.clone(),
+                ModelsResponse {
+                    models: self
+                        .info
+                        .models
+                        .iter()
+                        .map(provider_model_to_model_info)
+                        .collect(),
+                },
+            )),
             None => {
                 let endpoint = Arc::new(OpenAiModelsEndpoint::new(
                     self.info.clone(),
@@ -369,6 +409,62 @@ impl ModelProvider for ConfiguredModelProvider {
                 ))
             }
         }
+    }
+}
+
+fn provider_model_to_model_info(model: &ProviderModelInfo) -> ModelInfo {
+    let max_token_len = model.max_token_len.unwrap_or(128_000);
+    let configured_context_window = model.context_window.or(model.max_token_len);
+    ModelInfo {
+        slug: model.model_id.clone(),
+        display_name: model
+            .model_name
+            .clone()
+            .unwrap_or_else(|| model.model_id.clone()),
+        description: None,
+        default_reasoning_level: model
+            .default_reasoning_level
+            .clone()
+            .or(Some(ReasoningEffort::None)),
+        supported_reasoning_levels: model.supported_reasoning_levels.clone(),
+        shell_type: ConfigShellToolType::ShellCommand,
+        visibility: if model.show_in_picker {
+            ModelVisibility::List
+        } else {
+            ModelVisibility::Hide
+        },
+        supported_in_api: true,
+        priority: 0,
+        additional_speed_tiers: Vec::new(),
+        service_tiers: Vec::new(),
+        default_service_tier: None,
+        availability_nux: None,
+        upgrade: None,
+        base_instructions: "base instructions".to_string(),
+        model_messages: None,
+        include_skills_usage_instructions: false,
+        supports_reasoning_summary_parameter: false,
+        default_reasoning_summary: ReasoningSummary::Auto,
+        support_verbosity: false,
+        default_verbosity: None::<Verbosity>,
+        apply_patch_tool_type: None::<ApplyPatchToolType>,
+        web_search_tool_type: WebSearchToolType::Text,
+        truncation_policy: TruncationPolicyConfig::tokens(max_token_len),
+        supports_parallel_tool_calls: false,
+        supports_image_detail_original: false,
+        context_window: Some(configured_context_window.unwrap_or(max_token_len)),
+        max_context_window: configured_context_window,
+        auto_compact_token_limit: None,
+        comp_hash: None,
+        effective_context_window_percent: 95,
+        experimental_supported_tools: Vec::new(),
+        input_modalities: default_input_modalities(),
+        used_fallback_model_metadata: false,
+        supports_search_tool: false,
+        use_responses_lite: false,
+        auto_review_model_override: None,
+        tool_mode: None,
+        multi_agent_version: None,
     }
 }
 
@@ -432,6 +528,7 @@ mod tests {
             auth: None,
             aws: None,
             wire_api: WireApi::Responses,
+            models: Vec::new(),
             query_params: None,
             http_headers: None,
             env_http_headers: None,

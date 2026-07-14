@@ -850,6 +850,7 @@ impl Codex {
     ) -> ConstraintResult<()> {
         self.session
             .update_settings(SessionSettingsUpdate {
+                model_provider_id: None,
                 app_server_client_name,
                 app_server_client_version,
                 ..Default::default()
@@ -1611,6 +1612,9 @@ impl Session {
             config.config_layer_stack = config
                 .config_layer_stack
                 .with_user_layer_from(&next_config.config_layer_stack);
+            // Refresh the provider catalog so an existing thread can select providers added via
+            // config writes. Keep the thread's active provider unchanged until a settings update.
+            config.model_providers = next_config.model_providers.clone();
             config.tool_suggest =
                 resolve_tool_suggest_config_from_layer_stack(&config.config_layer_stack);
             let config = Arc::new(config);

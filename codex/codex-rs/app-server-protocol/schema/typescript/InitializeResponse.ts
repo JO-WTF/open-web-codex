@@ -18,4 +18,4 @@ platformFamily: string,
  * Operating system for the running app-server target, for example
  * `"macos"`, `"linux"`, or `"windows"`.
  */
-platformOs: string, capabilityManifest?: CapabilityManifest | null, };
+platformOs: string, capabilityManifest?: CapabilityManifest, };

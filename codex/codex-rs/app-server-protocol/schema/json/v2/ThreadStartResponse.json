@@ -1074,17 +1074,6 @@
           "description": "Whether the thread is ephemeral and should not be materialized on disk.",
           "type": "boolean"
         },
-        "extra": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ThreadExtra"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Optional implementation-specific thread data."
-        },
         "forkedFromId": {
           "description": "Source thread id when this thread was created by forking another thread.",
           "type": [
@@ -2428,18 +2417,6 @@
     }
   },
   "properties": {
-    "activePermissionProfile": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/ActivePermissionProfile"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "description": "Named or implicit built-in profile that produced the active permissions, when known."
-    },
     "approvalPolicy": {
       "$ref": "#/definitions/AskForApproval"
     },
@@ -2468,15 +2445,6 @@
     "modelProvider": {
       "type": "string"
     },
-    "multiAgentMode": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/MultiAgentMode"
-        }
-      ],
-      "default": "explicitRequestOnly",
-      "description": "Current multi-agent mode for this thread."
-    },
     "reasoningEffort": {
       "anyOf": [
         {
@@ -2486,14 +2454,6 @@
           "type": "null"
         }
       ]
-    },
-    "runtimeWorkspaceRoots": {
-      "default": [],
-      "description": "Thread-scoped runtime workspace roots used to materialize `:workspace_roots`.",
-      "items": {
-        "$ref": "#/definitions/AbsolutePathBuf"
-      },
-      "type": "array"
     },
     "sandbox": {
       "allOf": [

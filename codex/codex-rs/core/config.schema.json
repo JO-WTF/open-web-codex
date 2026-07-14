@@ -1667,6 +1667,13 @@
           "description": "Additional HTTP headers to include in requests to this provider where the (key, value) pairs are the header name and value.",
           "type": "object"
         },
+        "models": {
+          "description": "Custom-provider models fetched from that provider and cached in config.toml.",
+          "items": {
+            "$ref": "#/definitions/ProviderModelInfo"
+          },
+          "type": "array"
+        },
         "name": {
           "default": "",
           "description": "Friendly display name.",
@@ -2474,6 +2481,60 @@
       },
       "type": "object"
     },
+    "ProviderModelInfo": {
+      "additionalProperties": false,
+      "description": "User-configurable model metadata cached under a custom provider.\n\nThird-party providers own their model namespace, so fetched models are stored with the provider instead of being merged into Codex's built-in OpenAI catalog.",
+      "properties": {
+        "context_window": {
+          "description": "Context window length for this model. When unset, falls back to `max_token_len` or 128K at conversion time.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "default_reasoning_level": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            }
+          ],
+          "description": "Default reasoning effort level for this model."
+        },
+        "max_output_tokens": {
+          "description": "Maximum output tokens advertised or configured for this model.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "max_token_len": {
+          "description": "Maximum input context length advertised or configured for this model.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "model_id": {
+          "description": "Provider-specific model identifier used on API requests.",
+          "type": "string"
+        },
+        "model_name": {
+          "description": "Friendly model name shown in Codex UI. Defaults to `model_id`.",
+          "type": "string"
+        },
+        "show_in_picker": {
+          "default": true,
+          "description": "Whether this model should be displayed in the model picker.",
+          "type": "boolean"
+        },
+        "supported_reasoning_levels": {
+          "default": [],
+          "description": "Supported reasoning effort levels with descriptions.",
+          "items": {
+            "$ref": "#/definitions/ReasoningEffortPreset"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "model_id"
+      ],
+      "type": "object"
+    },
     "RawMcpServerConfig": {
       "additionalProperties": false,
       "description": "Raw MCP config shape used for deserialization and supported-field JSON Schema generation.\n\nFields that are accepted only to produce targeted validation errors should be skipped in the generated schema.\n\nKeep `TryFrom<RawMcpServerConfig> for McpServerConfig` exhaustively destructuring this struct so new TOML fields cannot be added here without updating the validation/mapping logic that produces [`McpServerConfig`].",
@@ -2704,6 +2765,28 @@
       "description": "A non-empty reasoning effort value advertised by the model.",
       "minLength": 1,
       "type": "string"
+    },
+    "ReasoningEffortPreset": {
+      "description": "A reasoning effort option that can be surfaced for a model.",
+      "properties": {
+        "description": {
+          "description": "Short human description shown next to the effort in UIs.",
+          "type": "string"
+        },
+        "effort": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            }
+          ],
+          "description": "Effort level that the model supports."
+        }
+      },
+      "required": [
+        "description",
+        "effort"
+      ],
+      "type": "object"
     },
     "ReasoningSummary": {
       "description": "A summary of the reasoning performed by the model. This can be useful for debugging and understanding the model's reasoning process. See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries",
@@ -4602,6 +4685,13 @@
           "description": "The Responses API exposed by OpenAI at `/v1/responses`.",
           "enum": [
             "responses"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The OpenAI-compatible Chat Completions API exposed at `/v1/chat/completions`. This is the lingua franca of third-party providers (DeepSeek, OpenRouter, vLLM, Ollama's OpenAI shim, etc.). Use this for any provider that is not the native OpenAI Responses API.",
+          "enum": [
+            "chat"
           ],
           "type": "string"
         }

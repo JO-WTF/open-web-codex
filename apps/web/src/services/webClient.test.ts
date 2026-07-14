@@ -37,7 +37,7 @@ describe("CodexMonitorWebClient workspace status snapshots", () => {
   });
 
   it("requests MCP and account usage snapshots for the active workspace", async () => {
-    const fetchMock = vi.fn(async () =>
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       new Response(JSON.stringify({ result: {} }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -58,5 +58,25 @@ describe("CodexMonitorWebClient workspace status snapshots", () => {
       params: { workspaceId: "workspace-1" },
       clientVersion: "web",
     });
+  });
+});
+
+describe("CodexMonitorWebClient.listTaskEvents", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("requests monotonic replay after the last persisted sequence", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify([]), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new CodexMonitorWebClient({ baseUrl: "http://platform.test" });
+    await client.listTaskEvents("task/one", 42, 100);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://platform.test/api/tasks/task%2Fone/events?limit=100&after_sequence=42",
+      expect.objectContaining({ headers: {} }),
+    );
   });
 });

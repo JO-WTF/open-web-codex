@@ -5,6 +5,7 @@ use crate::protocol::item_builders::build_file_change_begin_item;
 use crate::protocol::item_builders::build_file_change_end_item;
 use crate::protocol::item_builders::build_item_from_guardian_event;
 use crate::protocol::item_builders::review_output_text;
+use crate::protocol::legacy_response_tool_history::LegacyResponseToolHistory;
 use crate::protocol::v2::CollabAgentState;
 use crate::protocol::v2::CollabAgentTool;
 use crate::protocol::v2::CollabAgentToolCallStatus;
@@ -238,15 +239,7 @@ pub struct ThreadHistoryBuilder {
     current_rollout_index: usize,
     next_rollout_index: usize,
     active_change_set: Option<ThreadHistoryChangeSet>,
-    response_tool_calls: HashMap<String, ResponseToolCallSnapshot>,
-}
-
-#[derive(Clone)]
-struct ResponseToolCallSnapshot {
-    turn_id: Option<String>,
-    namespace: Option<String>,
-    tool: String,
-    arguments: serde_json::Value,
+    legacy_response_tool_history: LegacyResponseToolHistory,
 }
 
 impl Default for ThreadHistoryBuilder {
@@ -264,7 +257,7 @@ impl ThreadHistoryBuilder {
             current_rollout_index: 0,
             next_rollout_index: 0,
             active_change_set: None,
-            response_tool_calls: HashMap::new(),
+            legacy_response_tool_history: LegacyResponseToolHistory::default(),
         }
     }
 
@@ -452,7 +445,7 @@ impl ThreadHistoryBuilder {
             ResponseItem::Message {
                 role, content, id, ..
             } if role == "user" => {
-                let Some(hook_prompt) = parse_hook_prompt_message(id.as_ref(), content) else {
+                let Some(hook_prompt) = parse_hook_prompt_message(id.as_deref(), content) else {
                     return;
                 };
                 self.push_item_in_current_turn(ThreadItem::HookPrompt {
@@ -511,24 +504,9 @@ impl ThreadHistoryBuilder {
         tool: String,
         arguments: serde_json::Value,
     ) {
-        let snapshot = ResponseToolCallSnapshot {
-            turn_id: turn_id.map(str::to_owned),
-            namespace: namespace.clone(),
-            tool: tool.clone(),
-            arguments: arguments.clone(),
-        };
-        self.response_tool_calls
-            .insert(call_id.to_string(), snapshot);
-        let item = ThreadItem::DynamicToolCall {
-            id: call_id.to_string(),
-            namespace,
-            tool,
-            arguments,
-            status: DynamicToolCallStatus::InProgress,
-            content_items: None,
-            success: None,
-            duration_ms: None,
-        };
+        let item = self
+            .legacy_response_tool_history
+            .start(call_id, turn_id, namespace, tool, arguments);
         self.upsert_response_tool_item(turn_id, item);
     }
 
@@ -538,34 +516,19 @@ impl ThreadHistoryBuilder {
         output_turn_id: Option<&str>,
         output: &codex_protocol::models::FunctionCallOutputPayload,
     ) {
-        let Some(snapshot) = self.response_tool_calls.get(call_id).cloned() else {
+        let Some((turn_id, item)) =
+            self.legacy_response_tool_history
+                .complete(call_id, output_turn_id, output)
+        else {
             return;
         };
-        let turn_id = output_turn_id.or(snapshot.turn_id.as_deref());
         if self
-            .response_tool_item(turn_id, call_id)
+            .response_tool_item(turn_id.as_deref(), call_id)
             .is_some_and(|item| !matches!(item, ThreadItem::DynamicToolCall { .. }))
         {
             return;
         }
-        let success = output.success.unwrap_or(true);
-        let status = if success {
-            DynamicToolCallStatus::Completed
-        } else {
-            DynamicToolCallStatus::Failed
-        };
-        let content_items = response_tool_output_content_items(output);
-        let item = ThreadItem::DynamicToolCall {
-            id: call_id.to_string(),
-            namespace: snapshot.namespace,
-            tool: snapshot.tool,
-            arguments: snapshot.arguments,
-            status,
-            content_items: Some(content_items),
-            success: Some(success),
-            duration_ms: None,
-        };
-        self.upsert_response_tool_item(turn_id, item);
+        self.upsert_response_tool_item(turn_id.as_deref(), item);
     }
 
     fn response_tool_item(&self, turn_id: Option<&str>, item_id: &str) -> Option<&ThreadItem> {
@@ -1452,19 +1415,8 @@ impl ThreadHistoryBuilder {
 
     fn finish_current_turn(&mut self) {
         if let Some(mut turn) = self.current_turn.take() {
-            for item in &mut turn.items {
-                if !self.response_tool_calls.contains_key(item.id()) {
-                    continue;
-                }
-                if let ThreadItem::DynamicToolCall {
-                    status, success, ..
-                } = item
-                    && *status == DynamicToolCallStatus::InProgress
-                {
-                    *status = DynamicToolCallStatus::Failed;
-                    *success = Some(false);
-                }
-            }
+            self.legacy_response_tool_history
+                .fail_incomplete(&mut turn.items);
             if turn.items.is_empty() && !turn.opened_explicitly && !turn.saw_compaction {
                 return;
             }
@@ -1647,33 +1599,6 @@ fn convert_dynamic_tool_content_items(
             } => DynamicToolCallOutputContentItem::InputImage { image_url },
         })
         .collect()
-}
-
-fn response_tool_output_content_items(
-    output: &codex_protocol::models::FunctionCallOutputPayload,
-) -> Vec<DynamicToolCallOutputContentItem> {
-    use codex_protocol::models::FunctionCallOutputBody;
-    use codex_protocol::models::FunctionCallOutputContentItem;
-
-    match &output.body {
-        FunctionCallOutputBody::Text(text) => {
-            vec![DynamicToolCallOutputContentItem::InputText { text: text.clone() }]
-        }
-        FunctionCallOutputBody::ContentItems(items) => items
-            .iter()
-            .filter_map(|item| match item {
-                FunctionCallOutputContentItem::InputText { text } => {
-                    Some(DynamicToolCallOutputContentItem::InputText { text: text.clone() })
-                }
-                FunctionCallOutputContentItem::InputImage { image_url, .. } => {
-                    Some(DynamicToolCallOutputContentItem::InputImage {
-                        image_url: image_url.clone(),
-                    })
-                }
-                FunctionCallOutputContentItem::EncryptedContent { .. } => None,
-            })
-            .collect(),
-    }
 }
 
 fn upsert_turn_item(items: &mut Vec<ThreadItem>, item: ThreadItem) -> &ThreadItem {

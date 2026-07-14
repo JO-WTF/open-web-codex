@@ -157,13 +157,9 @@ impl CatalogRequestProcessor {
         &self,
         params: ModelListParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        Self::list_models(
-            self.thread_manager.clone(),
-            self.config.http_client_factory(),
-            params,
-        )
-        .await
-        .map(|response| Some(response.into()))
+        self.list_models(params)
+            .await
+            .map(|response| Some(response.into()))
     }
 
     pub(crate) async fn model_provider_list(
@@ -306,19 +302,51 @@ impl CatalogRequestProcessor {
     }
 
     async fn list_models(
-        thread_manager: Arc<ThreadManager>,
-        http_client_factory: codex_http_client::HttpClientFactory,
+        &self,
         params: ModelListParams,
     ) -> Result<ModelListResponse, JSONRPCErrorError> {
         let ModelListParams {
             limit,
             cursor,
             include_hidden,
+            force_refresh,
         } = params;
+        let latest_config = self.load_latest_config(None).await?;
+        let force_refresh = force_refresh.unwrap_or(false);
+        let uses_startup_provider = !force_refresh
+            && latest_config.model_provider_id == self.config.model_provider_id
+            && latest_config.model_provider == self.config.model_provider
+            && latest_config.model_catalog == self.config.model_catalog;
+        let (models_manager, refresh_strategy) = if uses_startup_provider {
+            (
+                self.thread_manager.get_models_manager(),
+                codex_models_manager::manager::RefreshStrategy::OnlineIfUncached,
+            )
+        } else {
+            let mut provider_info = latest_config.model_provider.clone();
+            if force_refresh {
+                provider_info.models.clear();
+            }
+            let provider =
+                create_model_provider(provider_info.clone(), Some(self.auth_manager.clone()));
+            let refresh_strategy = if force_refresh || !provider_info.requires_openai_auth {
+                codex_models_manager::manager::RefreshStrategy::Online
+            } else {
+                codex_models_manager::manager::RefreshStrategy::OnlineIfUncached
+            };
+            (
+                provider.models_manager(
+                    latest_config.codex_home.to_path_buf(),
+                    latest_config.model_catalog.clone(),
+                ),
+                refresh_strategy,
+            )
+        };
         let models = supported_models(
-            thread_manager,
+            models_manager,
             include_hidden.unwrap_or(false),
-            http_client_factory,
+            refresh_strategy,
+            latest_config.http_client_factory(),
         )
         .await;
         let total = models.len();

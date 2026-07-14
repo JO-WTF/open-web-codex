@@ -8,10 +8,15 @@ import {
 const fixture = JSON.parse(
   readFileSync(resolve("contracts/codex/fixtures/capability-manifest.v1.json"), "utf8"),
 );
+const registry = JSON.parse(
+  readFileSync(resolve("contracts/codex/capability-ids.v1.json"), "utf8"),
+);
 
 const parsed = parseCapabilityManifest(fixture);
-if (parsed.byId.size !== 17) {
-  throw new Error(`expected 17 capabilities, received ${parsed.byId.size}`);
+if (parsed.byId.size !== registry.capabilities.length) {
+  throw new Error(
+    `expected ${registry.capabilities.length} registered capabilities, received ${parsed.byId.size}`,
+  );
 }
 
 const compatible = negotiateCapabilityManifest(fixture, {

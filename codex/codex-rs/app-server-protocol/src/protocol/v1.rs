@@ -73,6 +73,7 @@ pub struct InitializeResponse {
     /// `"macos"`, `"linux"`, or `"windows"`.
     pub platform_os: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub capability_manifest: Option<CapabilityManifest>,
 }
 

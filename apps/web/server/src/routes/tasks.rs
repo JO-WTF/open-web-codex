@@ -3,10 +3,13 @@ use axum::{
     http::StatusCode,
     Extension, Json,
 };
-use open_web_codex_platform_contracts::error::PlatformError;
-use open_web_codex_platform_contracts::{CreateTaskRequest, ListTaskEventsParams, RunEvent, SendMessageRequest, SendMessageResponse, Task};
-use open_web_codex_platform_store::AppState;
 use open_web_codex_adapter::CodexAdapter;
+use open_web_codex_platform_contracts::error::PlatformError;
+use open_web_codex_platform_contracts::{
+    CreateTaskRequest, ListTaskEventsParams, RunEvent, SendMessageRequest, SendMessageResponse,
+    Task,
+};
+use open_web_codex_platform_store::AppState;
 use serde::Deserialize;
 use serde_json::json;
 use sqlx::Row;
@@ -36,7 +39,10 @@ pub async fn list_tasks(
     .fetch_all(&state.db)
     .await
     .map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(PlatformError::internal(format!("{e}"))))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PlatformError::internal(format!("{e}"))),
+        )
     })?;
 
     let tasks: Vec<Task> = rows
@@ -76,7 +82,10 @@ pub async fn create_task(
     .fetch_one(&state.db)
     .await
     .map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(PlatformError::internal(format!("{e}"))))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PlatformError::internal(format!("{e}"))),
+        )
     })?;
 
     Ok(Json(Task {
@@ -97,45 +106,57 @@ pub async fn list_task_events(
     Query(params): Query<ListTaskEventsParams>,
 ) -> ApiResult<Vec<RunEvent>> {
     let limit = params.limit.unwrap_or(50).min(200);
-    let query = match params.after_id {
+    let query = match params.after_sequence {
         Some(after) => sqlx::query(
-            "SELECT e.id, e.run_id, e.event_type, e.payload, e.created_at \
+            "SELECT e.id, e.sequence, e.run_id, e.event_type, e.projection_version, \
+                    e.thread_id, e.turn_id, e.item_id, e.payload, e.created_at \
              FROM run_events e \
              JOIN runs r ON r.id = e.run_id \
-             WHERE r.task_id = $1 AND e.created_at < (SELECT created_at FROM run_events WHERE id = $2) \
-             ORDER BY e.created_at DESC LIMIT $3",
+             WHERE r.task_id = $1 AND e.sequence > $2 \
+             ORDER BY e.sequence ASC LIMIT $3",
         )
         .bind(task_id)
         .bind(after)
         .bind(limit),
         None => sqlx::query(
-            "SELECT e.id, e.run_id, e.event_type, e.payload, e.created_at \
-             FROM run_events e \
-             JOIN runs r ON r.id = e.run_id \
-             WHERE r.task_id = $1 \
-             ORDER BY e.created_at DESC LIMIT $2",
+            "SELECT * FROM ( \
+                 SELECT e.id, e.sequence, e.run_id, e.event_type, e.projection_version, \
+                        e.thread_id, e.turn_id, e.item_id, e.payload, e.created_at \
+                 FROM run_events e \
+                 JOIN runs r ON r.id = e.run_id \
+                 WHERE r.task_id = $1 \
+                 ORDER BY e.sequence DESC LIMIT $2 \
+             ) recent ORDER BY sequence ASC",
         )
         .bind(task_id)
         .bind(limit),
     };
 
-    let rows = query
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| {
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(PlatformError::internal(format!("{e}"))))
-        })?;
+    let rows = query.fetch_all(&state.db).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PlatformError::internal(format!("{e}"))),
+        )
+    })?;
 
-    let events: Vec<RunEvent> = rows.iter().map(|row| {
-        let payload: serde_json::Value = row.get("payload");
-        RunEvent {
-            id: row.get("id"),
-            run_id: row.get("run_id"),
-            event_type: row.get("event_type"),
-            payload,
-            created_at: row.get("created_at"),
-        }
-    }).collect();
+    let events: Vec<RunEvent> = rows
+        .iter()
+        .map(|row| {
+            let payload: serde_json::Value = row.get("payload");
+            RunEvent {
+                id: row.get("id"),
+                sequence: row.get("sequence"),
+                run_id: row.get("run_id"),
+                event_type: row.get("event_type"),
+                projection_version: row.get("projection_version"),
+                thread_id: row.get("thread_id"),
+                turn_id: row.get("turn_id"),
+                item_id: row.get("item_id"),
+                payload,
+                created_at: row.get("created_at"),
+            }
+        })
+        .collect();
 
     Ok(Json(events))
 }
@@ -165,30 +186,45 @@ pub async fn send_message(
     .fetch_optional(&state.db)
     .await
     .map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(PlatformError::internal(format!("{e}"))))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PlatformError::internal(format!("{e}"))),
+        )
     })?
     .ok_or_else(|| {
-        (StatusCode::BAD_REQUEST, Json(PlatformError::bad_request(
-            "no active run for this task; start a run first"
-        )))
+        (
+            StatusCode::BAD_REQUEST,
+            Json(PlatformError::bad_request(
+                "no active run for this task; start a run first",
+            )),
+        )
     })?;
 
     let thread_id: Option<String> = active_run.get("codex_thread_id");
     let thread_id = thread_id.ok_or_else(|| {
-        (StatusCode::BAD_REQUEST, Json(PlatformError::bad_request(
-            "active run has no thread yet; try again shortly"
-        )))
+        (
+            StatusCode::BAD_REQUEST,
+            Json(PlatformError::bad_request(
+                "active run has no thread yet; try again shortly",
+            )),
+        )
     })?;
 
     // Send message via adapter
     let rpc_result = adapter
-        .rpc("send_user_message", json!({
-            "threadId": &thread_id,
-            "text": req.text,
-        }))
+        .rpc(
+            "send_user_message",
+            json!({
+                "threadId": &thread_id,
+                "text": req.text,
+            }),
+        )
         .await
         .map_err(|e| {
-            (StatusCode::BAD_GATEWAY, Json(PlatformError::internal(format!("adapter error: {e}"))))
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(PlatformError::internal(format!("adapter error: {e}"))),
+            )
         })?;
 
     let status = rpc_result
@@ -197,10 +233,7 @@ pub async fn send_message(
         .unwrap_or("sent")
         .to_string();
 
-    Ok(Json(SendMessageResponse {
-        status,
-        thread_id,
-    }))
+    Ok(Json(SendMessageResponse { status, thread_id }))
 }
 
 /// GET /api/tasks/:id
@@ -217,10 +250,16 @@ pub async fn get_task(
     .fetch_optional(&state.db)
     .await
     .map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(PlatformError::internal(format!("{e}"))))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PlatformError::internal(format!("{e}"))),
+        )
     })?
     .ok_or_else(|| {
-        (StatusCode::NOT_FOUND, Json(PlatformError::not_found(format!("task {id} not found"))))
+        (
+            StatusCode::NOT_FOUND,
+            Json(PlatformError::not_found(format!("task {id} not found"))),
+        )
     })?;
 
     Ok(Json(Task {
