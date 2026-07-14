@@ -6,47 +6,25 @@ use codex_client::HttpTransport;
 use codex_client::RequestTelemetry;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
-use codex_protocol::openai_models::OpenAiModelEntry;
 use http::HeaderMap;
 use http::Method;
 use http::header::ETAG;
 use std::sync::Arc;
 
-/// Client for fetching model lists from an OpenAI-compatible `/models` endpoint.
-///
-/// Supports both the Codex-native response format (`{"models": [...]}`) and
-/// the standard OpenAI response format (`{"data": [...]}`).
 pub struct ModelsClient<T: HttpTransport> {
     session: EndpointSession<T>,
-    use_openai_models_format: bool,
 }
 
 impl<T: HttpTransport> ModelsClient<T> {
     pub fn new(transport: T, provider: Provider, auth: SharedAuthProvider) -> Self {
         Self {
             session: EndpointSession::new(transport, provider, auth),
-            use_openai_models_format: false,
         }
     }
 
     pub fn with_telemetry(self, request: Option<Arc<dyn RequestTelemetry>>) -> Self {
         Self {
             session: self.session.with_request_telemetry(request),
-            ..self
-        }
-    }
-
-    /// When set, the client parses the standard OpenAI `/v1/models` response
-    /// format (`{"data": [{"id": "...", "object": "model", ...}]}`) instead of
-    /// the Codex-native format (`{"models": [...]}`).
-    ///
-    /// This should be set for third-party providers that speak the Chat
-    /// Completions API (`WireApi::Chat`), as they typically expose the
-    /// standard OpenAI models endpoint.
-    pub fn with_openai_models_format(self, use_openai: bool) -> Self {
-        Self {
-            use_openai_models_format: use_openai,
-            ..self
         }
     }
 
@@ -59,9 +37,15 @@ impl<T: HttpTransport> ModelsClient<T> {
         req.url = format!("{}{}client_version={client_version}", req.url, separator);
     }
 
+    pub fn request_url(provider: &Provider, client_version: &str) -> String {
+        let mut request = provider.build_request(Method::GET, Self::path());
+        Self::append_client_version_query(&mut request, client_version);
+        request.url
+    }
+
     pub async fn list_models(
         &self,
-        client_version: &str,
+        request_url: String,
         extra_headers: HeaderMap,
     ) -> Result<(Vec<ModelInfo>, Option<String>), ApiError> {
         let resp = self
@@ -71,8 +55,8 @@ impl<T: HttpTransport> ModelsClient<T> {
                 Self::path(),
                 extra_headers,
                 /*body*/ None,
-                |req| {
-                    Self::append_client_version_query(req, client_version);
+                move |req| {
+                    req.url.clone_from(&request_url);
                 },
             )
             .await?;
@@ -83,28 +67,13 @@ impl<T: HttpTransport> ModelsClient<T> {
             .and_then(|value| value.to_str().ok())
             .map(ToString::to_string);
 
-        let models = if self.use_openai_models_format {
-            #[derive(serde::Deserialize)]
-            struct OpenAiModelsData {
-                data: Vec<OpenAiModelEntry>,
-            }
-            let data: OpenAiModelsData = serde_json::from_slice(&resp.body).map_err(|e| {
+        let ModelsResponse { models } = serde_json::from_slice::<ModelsResponse>(&resp.body)
+            .map_err(|e| {
                 ApiError::Stream(format!(
-                    "failed to decode OpenAI /v1/models response: {e}; body: {}",
+                    "failed to decode models response: {e}; body: {}",
                     String::from_utf8_lossy(&resp.body)
                 ))
             })?;
-            data.data.into_iter().map(ModelInfo::from).collect()
-        } else {
-            let ModelsResponse { models } = serde_json::from_slice::<ModelsResponse>(&resp.body)
-                .map_err(|e| {
-                    ApiError::Stream(format!(
-                        "failed to decode models response: {e}; body: {}",
-                        String::from_utf8_lossy(&resp.body)
-                    ))
-                })?;
-            models
-        };
 
         Ok((models, header_etag))
     }
@@ -198,14 +167,12 @@ mod tests {
             etag: None,
         };
 
-        let client = ModelsClient::new(
-            transport.clone(),
-            provider("https://example.com/api/codex"),
-            Arc::new(DummyAuth),
-        );
+        let provider = provider("https://example.com/api/codex");
+        let request_url = ModelsClient::<CapturingTransport>::request_url(&provider, "0.99.0");
+        let client = ModelsClient::new(transport.clone(), provider, Arc::new(DummyAuth));
 
         let (models, _) = client
-            .list_models("0.99.0", HeaderMap::new())
+            .list_models(request_url, HeaderMap::new())
             .await
             .expect("request should succeed");
 
@@ -242,7 +209,6 @@ mod tests {
                     "priority": 1,
                     "upgrade": null,
                     "base_instructions": "base instructions",
-                    "supports_reasoning_summaries": false,
                     "support_verbosity": false,
                     "default_verbosity": null,
                     "apply_patch_tool_type": null,
@@ -262,14 +228,12 @@ mod tests {
             etag: None,
         };
 
-        let client = ModelsClient::new(
-            transport,
-            provider("https://example.com/api/codex"),
-            Arc::new(DummyAuth),
-        );
+        let provider = provider("https://example.com/api/codex");
+        let request_url = ModelsClient::<CapturingTransport>::request_url(&provider, "0.99.0");
+        let client = ModelsClient::new(transport, provider, Arc::new(DummyAuth));
 
         let (models, _) = client
-            .list_models("0.99.0", HeaderMap::new())
+            .list_models(request_url, HeaderMap::new())
             .await
             .expect("request should succeed");
 
@@ -289,14 +253,12 @@ mod tests {
             etag: Some("\"abc\"".to_string()),
         };
 
-        let client = ModelsClient::new(
-            transport,
-            provider("https://example.com/api/codex"),
-            Arc::new(DummyAuth),
-        );
+        let provider = provider("https://example.com/api/codex");
+        let request_url = ModelsClient::<CapturingTransport>::request_url(&provider, "0.1.0");
+        let client = ModelsClient::new(transport, provider, Arc::new(DummyAuth));
 
         let (models, etag) = client
-            .list_models("0.1.0", HeaderMap::new())
+            .list_models(request_url, HeaderMap::new())
             .await
             .expect("request should succeed");
 

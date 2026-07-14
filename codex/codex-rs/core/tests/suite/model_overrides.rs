@@ -28,7 +28,6 @@ async fn thread_settings_update_does_not_persist_when_config_exists() {
         &codex,
         codex_protocol::protocol::ThreadSettingsOverrides {
             model: Some("o3".to_string()),
-            model_provider_id: None,
             effort: Some(Some(ReasoningEffort::High)),
             ..Default::default()
         },
@@ -61,7 +60,6 @@ async fn thread_settings_update_does_not_create_config_file() {
         &codex,
         codex_protocol::protocol::ThreadSettingsOverrides {
             model: Some("o3".to_string()),
-            model_provider_id: None,
             effort: Some(Some(ReasoningEffort::Medium)),
             ..Default::default()
         },

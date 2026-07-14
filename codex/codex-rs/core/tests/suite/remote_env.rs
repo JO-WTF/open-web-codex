@@ -1,5 +1,7 @@
 use anyhow::Context;
 use anyhow::Result;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_config::types::ApprovalsReviewer;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Constrained;
@@ -12,18 +14,24 @@ use codex_exec_server::RemoveOptions;
 use codex_features::Feature;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::SandboxPermissions;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
@@ -36,6 +44,7 @@ use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::TestTargetOs;
 use core_test_support::responses::ResponseMock;
+use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -53,6 +62,7 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::test_env;
+use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::test_docker_container_name;
 use core_test_support::test_target_os;
 use core_test_support::wait_for_event;
@@ -108,7 +118,6 @@ async fn submit_turn_with_approval_and_environments(
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                model_provider_id: None,
                 environments: Some(turn_environment_selections),
                 approval_policy: Some(approval_policy),
                 approvals_reviewer: Some(ApprovalsReviewer::User),
@@ -298,6 +307,7 @@ async fn explicit_remote_shell_runs_in_remote_cwd() -> Result<()> {
         Some(vec![TurnEnvironmentSelection {
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&test.config.cwd),
+            workspace_roots: vec![PathUri::from_abs_path(&test.config.cwd)],
         }]),
     )
     .await?;
@@ -367,7 +377,7 @@ async fn read_exec_server_json(websocket: &mut WebSocketStream<TcpStream>) -> Va
     }
 }
 
-async fn serve_environment_info(listener: TcpListener) {
+async fn accept_initialized_exec_server(listener: TcpListener) -> WebSocketStream<TcpStream> {
     let (stream, _) = listener.accept().await.expect("connection");
     let mut websocket = accept_async(stream).await.expect("websocket handshake");
 
@@ -387,7 +397,11 @@ async fn serve_environment_info(listener: TcpListener) {
     let initialized = read_exec_server_json(&mut websocket).await;
     assert_eq!(initialized["method"], "initialized");
 
-    let info = read_exec_server_json(&mut websocket).await;
+    websocket
+}
+
+async fn send_environment_info(websocket: &mut WebSocketStream<TcpStream>) {
+    let info = read_exec_server_json(websocket).await;
     assert_eq!(info["method"], "environment/info");
     websocket
         .send(Message::Text(
@@ -400,6 +414,64 @@ async fn serve_environment_info(listener: TcpListener) {
         ))
         .await
         .expect("environment info response");
+}
+
+async fn serve_environment_info(listener: TcpListener) {
+    let mut websocket = accept_initialized_exec_server(listener).await;
+    send_environment_info(&mut websocket).await;
+}
+
+async fn serve_environment_with_agents_md(
+    listener: TcpListener,
+    contents: &str,
+    attach: tokio::sync::oneshot::Receiver<()>,
+    mut shutdown: tokio::sync::oneshot::Receiver<()>,
+) -> usize {
+    let mut websocket = accept_initialized_exec_server(listener).await;
+    attach.await.expect("attach signal");
+    send_environment_info(&mut websocket).await;
+
+    let mut agents_md_reads = 0;
+    loop {
+        let request = tokio::select! {
+            request = read_exec_server_json(&mut websocket) => request,
+            _ = &mut shutdown => return agents_md_reads,
+        };
+        let is_agents_md = request["params"]["path"]
+            .as_str()
+            .is_some_and(|path| path.ends_with("/AGENTS.md"));
+        let response = match request["method"].as_str() {
+            Some("fs/getMetadata") if is_agents_md => {
+                json!({
+                    "id": request["id"],
+                    "result": {
+                        "isDirectory": false,
+                        "isFile": true,
+                        "isSymlink": false,
+                        "size": contents.len(),
+                        "createdAtMs": 0,
+                        "modifiedAtMs": 0,
+                    }
+                })
+            }
+            Some("fs/getMetadata") => json!({
+                "id": request["id"],
+                "error": { "code": -32004, "message": "not found" }
+            }),
+            Some("fs/readFile") if is_agents_md => {
+                agents_md_reads += 1;
+                json!({
+                    "id": request["id"],
+                    "result": { "dataBase64": BASE64_STANDARD.encode(contents) }
+                })
+            }
+            method => panic!("unexpected exec-server request: {method:?}"),
+        };
+        websocket
+            .send(Message::Text(response.to_string().into()))
+            .await
+            .expect("filesystem response");
+    }
 }
 
 fn tool_names(body: &Value) -> Vec<String> {
@@ -464,24 +536,26 @@ async fn deferred_executor_updates_context_and_tools_after_startup() -> Result<(
         ],
     )
     .await;
-    let mut builder = test_codex()
-        .with_exec_server_url(format!("ws://{}", listener.local_addr()?))
-        .with_config(|config| {
-            config.use_experimental_unified_exec_tool = true;
-            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
-            config.approvals_reviewer = ApprovalsReviewer::User;
-            assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
-            assert!(config.features.enable(Feature::UnifiedExec).is_ok());
-            assert!(
-                config
-                    .features
-                    .enable(Feature::RequestPermissionsTool)
-                    .is_ok()
-            );
-        });
+    let mut builder = test_codex().with_config(|config| {
+        config.project_doc_max_bytes = 0;
+        config.use_experimental_unified_exec_tool = true;
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config.approvals_reviewer = ApprovalsReviewer::User;
+        assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
+        assert!(config.features.enable(Feature::UnifiedExec).is_ok());
+        assert!(
+            config
+                .features
+                .enable(Feature::RequestPermissionsTool)
+                .is_ok()
+        );
+    });
     let test = timeout(Duration::from_secs(5), builder.build(&server))
         .await
         .context("thread startup should not wait for the remote environment")??;
+    let environment_manager = test.thread_manager.environment_manager();
+    let registration =
+        environment_manager.register_pending_environment(REMOTE_ENVIRONMENT_ID.to_string())?;
 
     test.codex
         .submit(Op::UserInput {
@@ -492,11 +566,22 @@ async fn deferred_executor_updates_context_and_tools_after_startup() -> Result<(
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
-            thread_settings: Default::default(),
+            thread_settings: ThreadSettingsOverrides {
+                environments: Some(TurnEnvironmentSelections::new(
+                    test.config.cwd.clone(),
+                    vec![TurnEnvironmentSelection {
+                        environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                        cwd: PathUri::from_abs_path(&test.config.cwd),
+                        workspace_roots: vec![PathUri::from_abs_path(&test.config.cwd)],
+                    }],
+                )),
+                ..Default::default()
+            },
         })
         .await?;
     wait_for_response_request_count(&response_mock, /*expected_count*/ 1).await;
     assert_eq!(response_mock.requests().len(), 1);
+    registration.complete(Ok(format!("ws://{}", listener.local_addr()?)))?;
     serve_environment_info(listener).await;
     let event = wait_for_event(&test.codex, |event| {
         matches!(
@@ -579,8 +664,100 @@ async fn deferred_executor_updates_context_and_tools_after_startup() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn deferred_executor_wait_reports_startup_failure() -> Result<()> {
+async fn deferred_executor_loads_agents_md_when_environment_becomes_ready() -> Result<()> {
+    const AGENTS_CONTENT: &str = "REMOTE_AGENTS_INSTRUCTIONS";
+
     let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    "wait-1",
+                    "wait_for_environment",
+                    &json!({ "environment_id": REMOTE_ENVIRONMENT_ID }).to_string(),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_function_call(
+                    "wait-2",
+                    "wait_for_environment",
+                    &json!({ "environment_id": REMOTE_ENVIRONMENT_ID }).to_string(),
+                ),
+                ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_assistant_message("msg-3", "done"),
+                ev_completed("resp-3"),
+            ]),
+        ],
+    )
+    .await;
+    let mut builder = test_codex()
+        .with_exec_server_url(format!("ws://{}", listener.local_addr()?))
+        .with_config(|config| {
+            assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
+        });
+    let (attach_tx, attach_rx) = tokio::sync::oneshot::channel();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let exec_server = tokio::spawn(serve_environment_with_agents_md(
+        listener,
+        AGENTS_CONTENT,
+        attach_rx,
+        shutdown_rx,
+    ));
+    let test = timeout(Duration::from_secs(5), builder.build(&server))
+        .await
+        .context("thread startup should not wait for the remote environment")??;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "load the environment instructions".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_response_request_count(&response_mock, /*expected_count*/ 1).await;
+    let agents_path = PathUri::from_abs_path(&test.config.cwd).join("AGENTS.md")?;
+    attach_tx.send(()).expect("attach environment");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    shutdown_tx.send(()).expect("stop exec server");
+    let agents_md_reads = exec_server.await?;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(agents_md_reads, 1);
+    assert_eq!(agents_md_occurrences(&requests[0], AGENTS_CONTENT), 0);
+    assert_eq!(agents_md_occurrences(&requests[1], AGENTS_CONTENT), 1);
+    assert_eq!(agents_md_occurrences(&requests[2], AGENTS_CONTENT), 1);
+    assert_eq!(test.codex.instruction_sources().await, vec![agents_path]);
+
+    Ok(())
+}
+
+fn agents_md_occurrences(request: &ResponsesRequest, contents: &str) -> usize {
+    request
+        .message_input_texts("user")
+        .iter()
+        .filter(|text| text.contains(contents))
+        .count()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deferred_executor_wait_reports_startup_failure() -> Result<()> {
     let server = start_mock_server().await;
     let wait_call_id = "wait-for-failure";
     let response_mock = mount_sse_sequence(
@@ -606,16 +783,17 @@ async fn deferred_executor_wait_reports_startup_failure() -> Result<()> {
         ],
     )
     .await;
-    let mut builder = test_codex()
-        .with_exec_server_url(format!("ws://{}", listener.local_addr()?))
-        .with_config(|config| {
-            config.use_experimental_unified_exec_tool = true;
-            assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
-            assert!(config.features.enable(Feature::UnifiedExec).is_ok());
-        });
+    let mut builder = test_codex().with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
+        assert!(config.features.enable(Feature::UnifiedExec).is_ok());
+    });
     let test = timeout(Duration::from_secs(5), builder.build(&server))
         .await
         .context("thread startup should not wait for the remote environment")??;
+    let environment_manager = test.thread_manager.environment_manager();
+    let registration =
+        environment_manager.register_pending_environment(REMOTE_ENVIRONMENT_ID.to_string())?;
 
     test.codex
         .submit(Op::UserInput {
@@ -626,15 +804,22 @@ async fn deferred_executor_wait_reports_startup_failure() -> Result<()> {
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
-            thread_settings: Default::default(),
+            thread_settings: ThreadSettingsOverrides {
+                environments: Some(TurnEnvironmentSelections::new(
+                    test.config.cwd.clone(),
+                    vec![TurnEnvironmentSelection {
+                        environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                        cwd: PathUri::from_abs_path(&test.config.cwd),
+                        workspace_roots: vec![PathUri::from_abs_path(&test.config.cwd)],
+                    }],
+                )),
+                ..Default::default()
+            },
         })
         .await?;
     wait_for_response_request_count(&response_mock, /*expected_count*/ 1).await;
     assert_eq!(response_mock.requests().len(), 1);
-    let (stream, _) = timeout(Duration::from_secs(5), listener.accept())
-        .await
-        .context("exec-server connection should arrive")??;
-    drop(stream);
+    registration.complete(Err("CCA provisioning failed".to_string()))?;
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
@@ -710,6 +895,7 @@ async fn deferred_executor_compaction_preserves_then_updates_environment_once() 
     let mut builder = test_codex()
         .with_exec_server_url(format!("ws://{}", listener.local_addr()?))
         .with_config(|config| {
+            config.project_doc_max_bytes = 0;
             assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
             assert!(
                 config
@@ -796,6 +982,46 @@ async fn deferred_executor_compaction_preserves_then_updates_environment_once() 
         .position(|text| text.contains("<shell>zsh</shell>"))
         .expect("the next sampling step should report that the environment is ready");
     assert!(starting_index < ready_index);
+
+    test.codex.ensure_rollout_materialized().await;
+    test.codex.flush_rollout().await?;
+    let rollout_path = test.codex.rollout_path().context("rollout path")?;
+    let rollout = fs::read_to_string(rollout_path)?;
+    let world_state_items = rollout
+        .lines()
+        .map(serde_json::from_str::<RolloutLine>)
+        .collect::<serde_json::Result<Vec<_>>>()?
+        .into_iter()
+        .filter_map(|line| match line.item {
+            RolloutItem::WorldState(item) => Some(item),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        world_state_items
+            .iter()
+            .map(|item| item.full)
+            .collect::<Vec<_>>(),
+        vec![true, true, false]
+    );
+    assert_eq!(
+        world_state_items[0]
+            .state
+            .pointer("/environments/environments/remote/status"),
+        Some(&json!("starting"))
+    );
+    assert_eq!(
+        world_state_items[2]
+            .state
+            .pointer("/environments/environments/remote/status"),
+        Some(&json!("available"))
+    );
+    assert_eq!(
+        world_state_items[2]
+            .state
+            .pointer("/environments/environments/remote/shell"),
+        Some(&json!("zsh"))
+    );
 
     Ok(())
 }
@@ -933,6 +1159,7 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
     let remote_selection = TurnEnvironmentSelection {
         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
         cwd: PathUri::from_abs_path(&remote_cwd),
+        workspace_roots: vec![PathUri::from_abs_path(&remote_cwd)],
     };
     let multi_env_output = exec_command_routing_output(
         &test,
@@ -955,6 +1182,161 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
     assert!(
         !multi_env_output.contains("local-routing"),
         "multi-env command should not route to local: {multi_env_output}",
+    );
+
+    test.fs()
+        .remove(
+            &remote_cwd_uri,
+            RemoveOptions {
+                recursive: true,
+                force: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_exec_materializes_target_roots_before_sandbox_selection() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_target_windows!(
+        Ok(()),
+        "sandboxed process launch is not supported by the exec-server Windows backend"
+    );
+    skip_if_no_remote_env!(Ok(()));
+
+    const SECRET: &str = "target-root-secret";
+    const SECRET_FILE: &str = "secret.txt";
+
+    let server = start_mock_server().await;
+    let test = unified_exec_test(&server).await?;
+    let local_cwd = TempDir::new()?;
+    let remote_cwd = PathBuf::from(format!(
+        "/tmp/codex-remote-target-roots-{}",
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
+    ))
+    .abs();
+    let remote_cwd_uri = PathUri::from_abs_path(&remote_cwd);
+    test.fs()
+        .create_directory(
+            &remote_cwd_uri,
+            CreateDirectoryOptions { recursive: true },
+            /*sandbox*/ None,
+        )
+        .await?;
+    test.fs()
+        .write_file(
+            &remote_cwd_uri.join(SECRET_FILE)?,
+            SECRET.as_bytes().to_vec(),
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    let call_id = "remote-target-root-sandbox";
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    call_id,
+                    "exec_command",
+                    &json!({
+                        "shell": "bash",
+                        "cmd": format!("cat {SECRET_FILE}"),
+                        "login": false,
+                        "yield_time_ms": 1_000,
+                        "environment_id": REMOTE_ENVIRONMENT_ID,
+                        "sandbox_permissions": SandboxPermissions::RequireEscalated,
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+                },
+                access: FileSystemAccessMode::Deny,
+            },
+        ]),
+        NetworkSandboxPolicy::Restricted,
+    );
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(permission_profile, test.config.cwd.as_path());
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "try to read the denied remote workspace root".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: ThreadSettingsOverrides {
+                environments: Some(TurnEnvironmentSelections::new(
+                    test.config.cwd.clone(),
+                    vec![
+                        TurnEnvironmentSelection {
+                            environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+                            cwd: PathUri::from_abs_path(&local_cwd.path().abs()),
+                            workspace_roots: Vec::new(),
+                        },
+                        TurnEnvironmentSelection {
+                            environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                            cwd: remote_cwd_uri.clone(),
+                            workspace_roots: vec![remote_cwd_uri.clone()],
+                        },
+                    ],
+                )),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: test.session_configured.model.clone(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let request = response_mock
+        .last_request()
+        .context("model should receive the denied remote command output")?;
+    let (output, success) = request
+        .function_call_output_content_and_success(call_id)
+        .context("remote command output should be model visible")?;
+    assert_ne!(success, Some(true));
+    assert!(
+        output.is_none_or(|output| !output.contains(SECRET)),
+        "denied remote workspace contents should not be readable"
     );
 
     test.fs()
@@ -1089,6 +1471,7 @@ async fn remote_request_permissions_grant_unblocks_later_remote_exec() -> Result
             TurnEnvironmentSelection {
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd: PathUri::from_abs_path(&remote_cwd),
+                workspace_roots: vec![PathUri::from_abs_path(&remote_cwd)],
             },
         ],
         AskForApproval::OnRequest,
@@ -1230,6 +1613,7 @@ async fn apply_patch_freeform_routes_to_selected_remote_environment() -> Result<
             TurnEnvironmentSelection {
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd: PathUri::from_abs_path(&remote_cwd),
+                workspace_roots: vec![PathUri::from_abs_path(&remote_cwd)],
             },
         ]),
     )
@@ -1313,6 +1697,7 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
         TurnEnvironmentSelection {
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&remote_cwd),
+            workspace_roots: vec![PathUri::from_abs_path(&remote_cwd)],
         },
     ];
     let local_patch = format!(
@@ -1514,6 +1899,7 @@ async fn apply_patch_intercepted_exec_command_routes_to_selected_remote_environm
             TurnEnvironmentSelection {
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd: PathUri::from_abs_path(&remote_cwd),
+                workspace_roots: vec![PathUri::from_abs_path(&remote_cwd)],
             },
         ]),
     )

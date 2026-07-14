@@ -106,7 +106,6 @@ async fn submit_without_wait_with_turn_permissions(
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                model_provider_id: None,
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -1654,6 +1653,7 @@ async fn apply_patch_turn_diff_tracks_local_and_remote_environment_paths() -> Re
         TurnEnvironmentSelection {
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&shared_cwd),
+            workspace_roots: vec![PathUri::from_abs_path(&shared_cwd)],
         },
     ];
     test.codex
@@ -1666,7 +1666,6 @@ async fn apply_patch_turn_diff_tracks_local_and_remote_environment_paths() -> Re
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                model_provider_id: None,
                 environments: Some(codex_protocol::protocol::TurnEnvironmentSelections::new(
                     test.config.cwd.clone(),
                     environments,

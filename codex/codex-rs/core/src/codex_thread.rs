@@ -1,14 +1,15 @@
 use crate::agent::AgentStatus;
 use crate::config::ConstraintResult;
+use crate::elicitation::ElicitationRegistration;
 use crate::session::Codex;
 use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
+use codex_exec_server::SelectedCapabilityRootsStatus;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -30,6 +31,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -72,8 +74,8 @@ pub struct ThreadConfigSnapshot {
     pub reasoning_summary: Option<ReasoningSummary>,
     pub personality: Option<Personality>,
     pub collaboration_mode: CollaborationMode,
-    pub multi_agent_mode: MultiAgentMode,
     pub session_source: SessionSource,
+    pub history_mode: ThreadHistoryMode,
     pub forked_from_thread_id: Option<ThreadId>,
     pub parent_thread_id: Option<ThreadId>,
     pub thread_source: Option<ThreadSource>,
@@ -141,7 +143,6 @@ impl ThreadConfigSnapshot {
 #[derive(Clone, Default)]
 pub struct CodexThreadSettingsOverrides {
     pub environments: Option<TurnEnvironmentSelections>,
-    pub workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub profile_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub approval_policy: Option<AskForApproval>,
     pub approvals_reviewer: Option<ApprovalsReviewer>,
@@ -150,12 +151,10 @@ pub struct CodexThreadSettingsOverrides {
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub windows_sandbox_level: Option<WindowsSandboxLevel>,
     pub model: Option<String>,
-    pub model_provider_id: Option<String>,
     pub effort: Option<Option<ReasoningEffort>>,
     pub summary: Option<ReasoningSummary>,
     pub service_tier: Option<Option<String>>,
     pub collaboration_mode: Option<CollaborationMode>,
-    pub multi_agent_mode: Option<MultiAgentMode>,
     pub personality: Option<Personality>,
 }
 
@@ -164,7 +163,13 @@ pub struct CodexThread {
     pub(crate) session_source: SessionSource,
     session_configured: SessionConfiguredEvent,
     rollout_path: Option<PathBuf>,
-    out_of_band_elicitation_count: Mutex<u64>,
+    out_of_band_elicitations: Mutex<OutOfBandElicitations>,
+}
+
+#[derive(Default)]
+struct OutOfBandElicitations {
+    count: i64,
+    registration: Option<ElicitationRegistration>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -189,7 +194,7 @@ impl CodexThread {
             session_source,
             session_configured,
             rollout_path,
-            out_of_band_elicitation_count: Mutex::new(0),
+            out_of_band_elicitations: Mutex::new(OutOfBandElicitations::default()),
         }
     }
 
@@ -362,9 +367,7 @@ impl CodexThread {
         overrides: CodexThreadSettingsOverrides,
     ) -> SessionSettingsUpdate {
         let CodexThreadSettingsOverrides {
-            model_provider_id,
             environments,
-            workspace_roots,
             profile_workspace_roots,
             approval_policy,
             approvals_reviewer,
@@ -377,7 +380,6 @@ impl CodexThread {
             summary,
             service_tier,
             collaboration_mode,
-            multi_agent_mode,
             personality,
         } = overrides;
         let collaboration_mode = if let Some(collaboration_mode) = collaboration_mode {
@@ -392,7 +394,6 @@ impl CodexThread {
 
         SessionSettingsUpdate {
             environments,
-            workspace_roots,
             profile_workspace_roots,
             approval_policy,
             approvals_reviewer,
@@ -400,9 +401,7 @@ impl CodexThread {
             permission_profile,
             active_permission_profile,
             windows_sandbox_level,
-            model_provider_id,
             collaboration_mode: Some(collaboration_mode),
-            multi_agent_mode,
             reasoning_summary: summary,
             service_tier,
             personality,
@@ -474,9 +473,15 @@ impl CodexThread {
 
         let turn_context = self.codex.session.new_default_turn().await;
         if self.codex.session.reference_context_item().await.is_none() {
+            // This history-only API runs without run_turn, so it owns its initial step.
+            let step_context = self
+                .codex
+                .session
+                .capture_step_context(Arc::clone(&turn_context))
+                .await;
             self.codex
                 .session
-                .record_context_updates_and_set_reference_context_item(turn_context.as_ref())
+                .record_context_updates_and_set_reference_context_item(step_context.as_ref())
                 .await;
         }
         self.codex
@@ -596,6 +601,17 @@ impl CodexThread {
         self.codex.session.runtime_mcp_config(config).await
     }
 
+    /// Returns the exact MCP config, environment bindings, and manager most recently published.
+    pub async fn current_mcp_runtime(&self) -> Arc<crate::session::McpRuntimeSnapshot> {
+        let turn_context = self.codex.session.new_default_turn().await;
+        self.codex
+            .session
+            .capture_step_context(turn_context)
+            .await
+            .mcp
+            .clone()
+    }
+
     pub fn multi_agent_version(&self) -> Option<MultiAgentVersion> {
         self.codex.session.multi_agent_version()
     }
@@ -611,14 +627,27 @@ impl CodexThread {
         self.codex.thread_environment_selections().await
     }
 
+    /// Passively inspects the selected capability roots whose environments are ready now.
+    pub fn inspect_selected_capability_roots(&self) -> SelectedCapabilityRootsStatus {
+        self.codex
+            .session
+            .services
+            .turn_environments
+            .environment_manager()
+            .inspect_selected_capability_roots(
+                &self.codex.session.services.selected_capability_roots,
+            )
+    }
+
     pub async fn read_mcp_resource(
         &self,
         server: &str,
         uri: &str,
     ) -> anyhow::Result<serde_json::Value> {
         let result = self
-            .codex
-            .session
+            .current_mcp_runtime()
+            .await
+            .manager_arc()
             .read_resource(server, ReadResourceRequestParams::new(uri))
             .await?;
 
@@ -632,8 +661,9 @@ impl CodexThread {
         arguments: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
     ) -> anyhow::Result<CallToolResult> {
-        self.codex
-            .session
+        self.current_mcp_runtime()
+            .await
+            .manager_arc()
             .call_tool(server, tool, arguments, meta)
             .await
     }
@@ -642,38 +672,30 @@ impl CodexThread {
         self.codex.enabled(feature)
     }
 
-    pub async fn increment_out_of_band_elicitation_count(&self) -> CodexResult<u64> {
-        let mut guard = self.out_of_band_elicitation_count.lock().await;
-        let was_zero = *guard == 0;
-        *guard = guard.checked_add(1).ok_or_else(|| {
+    pub async fn increment_out_of_band_elicitation_count(&self) -> CodexResult<i64> {
+        let mut elicitations = self.out_of_band_elicitations.lock().await;
+        let incremented = elicitations.count.checked_add(1).ok_or_else(|| {
             CodexErr::Fatal("out-of-band elicitation count overflowed".to_string())
         })?;
-
-        if was_zero {
-            self.codex
-                .session
-                .set_out_of_band_elicitation_pause_state(/*paused*/ true);
+        if elicitations.count == 0 {
+            elicitations.registration = Some(self.codex.session.services.elicitations.register());
         }
-
-        Ok(*guard)
+        elicitations.count = incremented;
+        Ok(incremented)
     }
 
-    pub async fn decrement_out_of_band_elicitation_count(&self) -> CodexResult<u64> {
-        let mut guard = self.out_of_band_elicitation_count.lock().await;
-        if *guard == 0 {
+    pub async fn decrement_out_of_band_elicitation_count(&self) -> CodexResult<i64> {
+        let mut elicitations = self.out_of_band_elicitations.lock().await;
+        if elicitations.count == 0 {
             return Err(CodexErr::InvalidRequest(
                 "out-of-band elicitation count is already zero".to_string(),
             ));
         }
 
-        *guard -= 1;
-        let now_zero = *guard == 0;
-        if now_zero {
-            self.codex
-                .session
-                .set_out_of_band_elicitation_pause_state(/*paused*/ false);
+        elicitations.count -= 1;
+        if elicitations.count == 0 {
+            elicitations.registration = None;
         }
-
-        Ok(*guard)
+        Ok(elicitations.count)
     }
 }

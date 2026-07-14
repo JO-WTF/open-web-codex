@@ -39,7 +39,6 @@ async fn thread_settings_update_without_user_turn_does_not_record_permissions_up
     core_test_support::submit_thread_settings(
         &test.codex,
         codex_protocol::protocol::ThreadSettingsOverrides {
-            model_provider_id: None,
             approval_policy: Some(AskForApproval::Never),
             ..Default::default()
         },
@@ -70,7 +69,6 @@ async fn thread_settings_update_without_user_turn_does_not_record_environment_up
     core_test_support::submit_thread_settings(
         &test.codex,
         codex_protocol::protocol::ThreadSettingsOverrides {
-            model_provider_id: None,
             environments: Some(local_selections(new_cwd.abs())),
             ..Default::default()
         },
@@ -102,7 +100,6 @@ async fn thread_settings_update_without_user_turn_does_not_record_collaboration_
     core_test_support::submit_thread_settings(
         &test.codex,
         codex_protocol::protocol::ThreadSettingsOverrides {
-            model_provider_id: None,
             collaboration_mode: Some(collaboration_mode),
             ..Default::default()
         },
