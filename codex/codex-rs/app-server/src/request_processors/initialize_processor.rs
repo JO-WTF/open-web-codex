@@ -10,9 +10,9 @@ use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::default_client::set_default_originator;
 
 use super::*;
-use codex_app_server_protocol::build_manifest;
 use crate::message_processor::ConnectionSessionState;
 use crate::message_processor::InitializedConnectionSessionState;
+use codex_app_server_protocol::build_manifest;
 
 const NON_ORIGINATING_CLIENT_NAMES: &[&str] = &["codex_app_server_daemon", "codex-backend"];
 

@@ -686,7 +686,10 @@ impl ChatWidget {
                     .to_string(),
             ),
             Box::new(move |value: String| {
-                let parsed = value.trim().parse::<i64>().unwrap_or(current_context_window);
+                let parsed = value
+                    .trim()
+                    .parse::<i64>()
+                    .unwrap_or(current_context_window);
                 tx.send(AppEvent::ProviderConfigAction {
                     action: crate::app_event::ProviderConfigAction::UpdateModelContextWindow {
                         id: provider_id.clone(),

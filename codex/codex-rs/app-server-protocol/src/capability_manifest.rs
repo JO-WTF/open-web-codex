@@ -7,7 +7,6 @@ use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
-
 /// Top-level capability manifest returned during `initialize`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -89,7 +88,6 @@ pub struct StructuredReason {
     pub remediation: Option<String>,
 }
 
-
 fn timestamp_now() -> String {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -151,41 +149,74 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
             id: "protocol.initialize".into(),
             version: "1.0.0".into(),
             status: CapabilityStatus::Supported,
-            methods: MethodSet { client_requests: vec!["initialize".into()], notifications: vec!["initialized".into()], ..Default::default() },
-            limits: None, reason: None, experimental: false,
+            methods: MethodSet {
+                client_requests: vec!["initialize".into()],
+                notifications: vec!["initialized".into()],
+                ..Default::default()
+            },
+            limits: None,
+            reason: None,
+            experimental: false,
         },
         CapabilityDeclaration {
             id: "thread.lifecycle".into(),
             version: "1.0.0".into(),
             status: CapabilityStatus::Supported,
             methods: MethodSet {
-                client_requests: vec!["thread/start".into(), "thread/read".into(), "thread/resume".into(), "thread/list".into(), "thread/archive".into()],
-                notifications: vec!["thread/started".into(), "thread/status/changed".into(), "thread/archived".into()],
+                client_requests: vec![
+                    "thread/start".into(),
+                    "thread/read".into(),
+                    "thread/resume".into(),
+                    "thread/list".into(),
+                    "thread/archive".into(),
+                ],
+                notifications: vec![
+                    "thread/started".into(),
+                    "thread/status/changed".into(),
+                    "thread/archived".into(),
+                ],
                 ..Default::default()
             },
-            limits: Some(HashMap::from([("maxConcurrentThreads".into(), serde_json::json!(16))])),
-            reason: None, experimental: false,
+            limits: Some(HashMap::from([(
+                "maxConcurrentThreads".into(),
+                serde_json::json!(16),
+            )])),
+            reason: None,
+            experimental: false,
         },
         CapabilityDeclaration {
             id: "turn.lifecycle".into(),
             version: "1.0.0".into(),
             status: CapabilityStatus::Supported,
             methods: MethodSet {
-                client_requests: vec!["turn/start".into(), "turn/steer".into(), "turn/interrupt".into()],
+                client_requests: vec![
+                    "turn/start".into(),
+                    "turn/steer".into(),
+                    "turn/interrupt".into(),
+                ],
                 notifications: vec!["turn/started".into(), "turn/completed".into()],
                 ..Default::default()
             },
-            limits: None, reason: None, experimental: false,
+            limits: None,
+            reason: None,
+            experimental: false,
         },
         CapabilityDeclaration {
             id: "approval.lifecycle".into(),
             version: "1.0.0".into(),
             status: CapabilityStatus::Supported,
             methods: MethodSet {
-                server_requests: vec!["item/commandExecution/requestApproval".into(), "item/fileChange/requestApproval".into(), "item/permissions/requestApproval".into(), "item/tool/requestUserInput".into()],
+                server_requests: vec![
+                    "item/commandExecution/requestApproval".into(),
+                    "item/fileChange/requestApproval".into(),
+                    "item/permissions/requestApproval".into(),
+                    "item/tool/requestUserInput".into(),
+                ],
                 ..Default::default()
             },
-            limits: None, reason: None, experimental: false,
+            limits: None,
+            reason: None,
+            experimental: false,
         },
         CapabilityDeclaration {
             id: "profile.multi_workspace".into(),
@@ -195,14 +226,19 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
                 client_requests: vec!["thread/start".into(), "thread/list".into()],
                 ..Default::default()
             },
-            limits: Some(HashMap::from([("maxWorkspacesPerProfile".into(), serde_json::json!(8))])),
-            reason: None, experimental: false,
+            limits: Some(HashMap::from([(
+                "maxWorkspacesPerProfile".into(),
+                serde_json::json!(8),
+            )])),
+            reason: None,
+            experimental: false,
         },
         CapabilityDeclaration {
             id: "memory.lifecycle".into(),
             version: "1.0.0".into(),
             status: CapabilityStatus::Unsupported,
-            methods: MethodSet::default(), limits: None,
+            methods: MethodSet::default(),
+            limits: None,
             reason: Some(StructuredReason {
                 code: "memory.bridge.missing".into(),
                 message: "Memory status, export and reset are unavailable.".into(),
@@ -212,89 +248,160 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
         },
         CapabilityDeclaration {
             id: "agents.crud".into(),
-            version: "1.0.0".into(), status: CapabilityStatus::Unsupported,
-            methods: MethodSet::default(), limits: None,
+            version: "1.0.0".into(),
+            status: CapabilityStatus::Unsupported,
+            methods: MethodSet::default(),
+            limits: None,
             reason: Some(StructuredReason {
-                code: "agents.bridge.missing".into(), message: "Native Agent CRUD is unavailable.".into(), remediation: None,
+                code: "agents.bridge.missing".into(),
+                message: "Native Agent CRUD is unavailable.".into(),
+                remediation: None,
             }),
             experimental: false,
         },
         CapabilityDeclaration {
             id: "agents.multi_agent".into(),
-            version: "1.0.0".into(), status: CapabilityStatus::Experimental,
+            version: "1.0.0".into(),
+            status: CapabilityStatus::Experimental,
             methods: MethodSet {
-                notifications: vec!["item/started".into(), "item/completed".into(), "thread/started".into()],
+                notifications: vec![
+                    "item/started".into(),
+                    "item/completed".into(),
+                    "thread/started".into(),
+                ],
                 ..Default::default()
             },
             limits: Some(HashMap::from([
                 ("maxAgentThreads".into(), serde_json::json!(8)),
                 ("maxAgentDepth".into(), serde_json::json!(3)),
             ])),
-            reason: None, experimental: true,
+            reason: None,
+            experimental: true,
         },
         CapabilityDeclaration {
             id: "skills.crud".into(),
-            version: "1.0.0".into(), status: CapabilityStatus::Degraded,
-            methods: MethodSet { client_requests: vec!["skills/list".into()], ..Default::default() },
+            version: "1.0.0".into(),
+            status: CapabilityStatus::Degraded,
+            methods: MethodSet {
+                client_requests: vec!["skills/list".into()],
+                ..Default::default()
+            },
             limits: None,
-            reason: Some(StructuredReason { code: "skills.write.missing".into(), message: "Skill listing is available but write operations are not.".into(), remediation: None }),
+            reason: Some(StructuredReason {
+                code: "skills.write.missing".into(),
+                message: "Skill listing is available but write operations are not.".into(),
+                remediation: None,
+            }),
             experimental: false,
         },
         CapabilityDeclaration {
             id: "skills.validation".into(),
-            version: "1.0.0".into(), status: CapabilityStatus::Unsupported,
-            methods: MethodSet::default(), limits: None,
-            reason: Some(StructuredReason { code: "skills.validation.missing".into(), message: "Native Skill validation is unavailable.".into(), remediation: None }),
+            version: "1.0.0".into(),
+            status: CapabilityStatus::Unsupported,
+            methods: MethodSet::default(),
+            limits: None,
+            reason: Some(StructuredReason {
+                code: "skills.validation.missing".into(),
+                message: "Native Skill validation is unavailable.".into(),
+                remediation: None,
+            }),
             experimental: false,
         },
         CapabilityDeclaration {
             id: "skills.test".into(),
-            version: "1.0.0".into(), status: CapabilityStatus::Unsupported,
-            methods: MethodSet::default(), limits: None,
-            reason: Some(StructuredReason { code: "skills.test.missing".into(), message: "The isolated Skill test hook is unavailable.".into(), remediation: None }),
+            version: "1.0.0".into(),
+            status: CapabilityStatus::Unsupported,
+            methods: MethodSet::default(),
+            limits: None,
+            reason: Some(StructuredReason {
+                code: "skills.test.missing".into(),
+                message: "The isolated Skill test hook is unavailable.".into(),
+                remediation: None,
+            }),
             experimental: false,
         },
         CapabilityDeclaration {
             id: "plugins.lifecycle".into(),
-            version: "1.0.0".into(), status: CapabilityStatus::Unsupported,
-            methods: MethodSet::default(), limits: None,
-            reason: Some(StructuredReason { code: "plugins.bridge.missing".into(), message: "Plugin lifecycle operations are unavailable.".into(), remediation: None }),
+            version: "1.0.0".into(),
+            status: CapabilityStatus::Unsupported,
+            methods: MethodSet::default(),
+            limits: None,
+            reason: Some(StructuredReason {
+                code: "plugins.bridge.missing".into(),
+                message: "Plugin lifecycle operations are unavailable.".into(),
+                remediation: None,
+            }),
             experimental: false,
         },
         CapabilityDeclaration {
             id: "plugins.permissions".into(),
-            version: "1.0.0".into(), status: CapabilityStatus::Unsupported,
-            methods: MethodSet::default(), limits: None,
-            reason: Some(StructuredReason { code: "plugins.permissions.missing".into(), message: "Plugin permission metadata is unavailable.".into(), remediation: None }),
+            version: "1.0.0".into(),
+            status: CapabilityStatus::Unsupported,
+            methods: MethodSet::default(),
+            limits: None,
+            reason: Some(StructuredReason {
+                code: "plugins.permissions.missing".into(),
+                message: "Plugin permission metadata is unavailable.".into(),
+                remediation: None,
+            }),
             experimental: false,
         },
         CapabilityDeclaration {
             id: "mcp.config".into(),
-            version: "1.0.0".into(), status: CapabilityStatus::Degraded,
-            methods: MethodSet { client_requests: vec!["mcpServerStatus/list".into()], ..Default::default() },
-            limits: Some(HashMap::from([("maxMcpServers".into(), serde_json::json!(16))])),
-            reason: Some(StructuredReason { code: "mcp.config.read_only".into(), message: "MCP status is available but configuration and reload are not.".into(), remediation: None }),
+            version: "1.0.0".into(),
+            status: CapabilityStatus::Degraded,
+            methods: MethodSet {
+                client_requests: vec!["mcpServerStatus/list".into()],
+                ..Default::default()
+            },
+            limits: Some(HashMap::from([(
+                "maxMcpServers".into(),
+                serde_json::json!(16),
+            )])),
+            reason: Some(StructuredReason {
+                code: "mcp.config.read_only".into(),
+                message: "MCP status is available but configuration and reload are not.".into(),
+                remediation: None,
+            }),
             experimental: false,
         },
         CapabilityDeclaration {
             id: "mcp.oauth".into(),
-            version: "1.0.0".into(), status: CapabilityStatus::Unsupported,
-            methods: MethodSet::default(), limits: None,
-            reason: Some(StructuredReason { code: "mcp.oauth.missing".into(), message: "MCP OAuth is unavailable.".into(), remediation: None }),
+            version: "1.0.0".into(),
+            status: CapabilityStatus::Unsupported,
+            methods: MethodSet::default(),
+            limits: None,
+            reason: Some(StructuredReason {
+                code: "mcp.oauth.missing".into(),
+                message: "MCP OAuth is unavailable.".into(),
+                remediation: None,
+            }),
             experimental: false,
         },
         CapabilityDeclaration {
             id: "mcp.elicitation".into(),
-            version: "1.0.0".into(), status: CapabilityStatus::Unsupported,
-            methods: MethodSet::default(), limits: None,
-            reason: Some(StructuredReason { code: "mcp.elicitation.missing".into(), message: "MCP elicitation is unavailable.".into(), remediation: None }),
+            version: "1.0.0".into(),
+            status: CapabilityStatus::Unsupported,
+            methods: MethodSet::default(),
+            limits: None,
+            reason: Some(StructuredReason {
+                code: "mcp.elicitation.missing".into(),
+                message: "MCP elicitation is unavailable.".into(),
+                remediation: None,
+            }),
             experimental: false,
         },
         CapabilityDeclaration {
             id: "tools.discovery".into(),
-            version: "1.0.0".into(), status: CapabilityStatus::Unsupported,
-            methods: MethodSet::default(), limits: None,
-            reason: Some(StructuredReason { code: "tools.discovery.missing".into(), message: "Managed tool discovery metadata is unavailable.".into(), remediation: None }),
+            version: "1.0.0".into(),
+            status: CapabilityStatus::Unsupported,
+            methods: MethodSet::default(),
+            limits: None,
+            reason: Some(StructuredReason {
+                code: "tools.discovery.missing".into(),
+                message: "Managed tool discovery metadata is unavailable.".into(),
+                remediation: None,
+            }),
             experimental: false,
         },
     ]
@@ -318,7 +425,11 @@ mod tests {
     #[test]
     fn manifest_has_alpha_capabilities() {
         let manifest = build_manifest();
-        let ids: Vec<&str> = manifest.capabilities.iter().map(|c| c.id.as_str()).collect();
+        let ids: Vec<&str> = manifest
+            .capabilities
+            .iter()
+            .map(|c| c.id.as_str())
+            .collect();
         assert!(ids.contains(&"protocol.initialize"));
         assert!(ids.contains(&"thread.lifecycle"));
         assert!(ids.contains(&"turn.lifecycle"));
@@ -331,12 +442,20 @@ mod tests {
         for cap in &manifest.capabilities {
             match cap.status {
                 CapabilityStatus::Supported => {
-                    assert!(!cap.methods.client_requests.is_empty() || !cap.methods.server_requests.is_empty() || !cap.methods.notifications.is_empty(),
-                        "Supported capability '{}' must have at least one method", cap.id);
+                    assert!(
+                        !cap.methods.client_requests.is_empty()
+                            || !cap.methods.server_requests.is_empty()
+                            || !cap.methods.notifications.is_empty(),
+                        "Supported capability '{}' must have at least one method",
+                        cap.id
+                    );
                 }
                 CapabilityStatus::Unsupported => {
-                    assert!(cap.reason.is_some(),
-                        "Unsupported capability '{}' should provide a reason", cap.id);
+                    assert!(
+                        cap.reason.is_some(),
+                        "Unsupported capability '{}' should provide a reason",
+                        cap.id
+                    );
                 }
                 _ => {}
             }

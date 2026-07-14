@@ -1,16 +1,15 @@
+pub mod capability_manifest;
 mod experimental_api;
 mod export;
 mod protocol;
 pub mod rpc;
 mod schema_fixtures;
-pub mod capability_manifest;
 
-
+pub use capability_manifest::*;
 pub use experimental_api::*;
 pub use export::GenerateTsOptions;
 pub use export::generate_internal_json_schema;
 pub use export::generate_json;
-pub use capability_manifest::*;
 
 pub use export::generate_json_with_experimental;
 pub use export::generate_ts;
