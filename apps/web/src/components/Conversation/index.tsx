@@ -159,7 +159,7 @@ export default function Conversation({
           onResolveApproval={onResolveApproval}
         />
         {userInputRequest ? <UserInputCard request={userInputRequest} submitting={submittingUserInput} onSubmit={onSubmitUserInput} /> : null}
-        {thinking && !visibleMessages.some((entry) => entry.level === "user") && <ThinkingIndicator />}
+        {thinking && threadStatus !== "reconnecting" && !visibleMessages.some((entry) => entry.level === "user") && <ThinkingIndicator />}
       </div>
       <GoalBanner goal={goal} />
       <FollowUpQueue

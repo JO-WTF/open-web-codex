@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import Conversation from "./index";
+
+afterEach(cleanup);
 
 const baseProps = {
   goal: null,
@@ -33,6 +35,32 @@ const baseProps = {
 };
 
 describe("Conversation auto-scroll", () => {
+  it("does not show Working while the connection is reconnecting", () => {
+    render(
+      <Conversation
+        {...baseProps}
+        thinking
+        threadStatus="reconnecting"
+        messages={[]}
+      />,
+    );
+
+    expect(screen.queryByText("Working…")).toBeNull();
+  });
+
+  it("still shows Working for an active turn", () => {
+    render(
+      <Conversation
+        {...baseProps}
+        thinking
+        threadStatus="running"
+        messages={[]}
+      />,
+    );
+
+    expect(screen.getByText("Working…")).toBeTruthy();
+  });
+
   it("keeps the goal panel visible without an active goal", () => {
     render(<Conversation {...baseProps} messages={[]} />);
     expect(screen.getByRole("button", { name: "No active goal" })).toBeTruthy();
