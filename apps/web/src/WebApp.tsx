@@ -13,6 +13,7 @@ import { normalizePlanUpdate } from "./features/threads/utils/threadNormalize";
 import { parseWebTurnDiff } from "./utils/webTurnDiff";
 import { isWebAppServerRecoveryEvent, parseCodexStderr, parseWebAppServerError } from "./utils/webAppServerError";
 import { parseWebUserInputRequest } from "./utils/webUserInput";
+import { summarizeWebAppServerEvent } from "./utils/webAppServerEventSummary";
 import "./styles/web.css";
 import "./styles/web-refactor.css";
 
@@ -71,24 +72,6 @@ function extractThreadId(result: Record<string, unknown> | null | undefined) {
     return extractThreadId(inner as Record<string, unknown>);
   }
   return null;
-}
-
-function summarizeEvent(event: AppServerEvent) {
-  const message = event.message ?? {};
-  const method = typeof message.method === "string" ? message.method : "app-server-event";
-  const params =
-    message.params && typeof message.params === "object"
-      ? (message.params as Record<string, unknown>)
-      : {};
-  const threadId =
-    typeof params.threadId === "string"
-      ? params.threadId
-      : typeof params.thread_id === "string"
-        ? params.thread_id
-        : null;
-  const item = params.item && typeof params.item === "object" ? params.item : null;
-  const text = item ? JSON.stringify(item).slice(0, 240) : JSON.stringify(params).slice(0, 240);
-  return `${method}${threadId ? ` · ${threadId}` : ""}${text && text !== "{}" ? ` · ${text}` : ""}`;
 }
 
 function extractThreadIdFromEvent(event: AppServerEvent) {
@@ -935,7 +918,7 @@ export default function WebApp() {
 
 
         default: {
-          const text = summarizeEvent(event);
+          const text = summarizeWebAppServerEvent(event);
           return text && text !== "{}" ? { level: "event" as const, text } : null;
         }
       }
