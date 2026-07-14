@@ -13,6 +13,7 @@ fi
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DAEMON_BIN="$ROOT/apps/web/target/debug/codex_monitor_daemon"
+LOCAL_CODEX_BIN="$ROOT/codex/codex-rs/target/debug/codex"
 DATA_DIR="$HOME/Library/Application Support/com.dimillian.codexmonitor"
 
 # ── Stop mode ──
@@ -54,7 +55,12 @@ fi
 
 # ── 3. Start daemon ──
 echo "[3/5] Starting daemon on :4732 (tcp) and :4733 (web)..."
-nohup "$DAEMON_BIN" \
+if [ ! -x "$LOCAL_CODEX_BIN" ]; then
+  echo "  Local Codex binary not found: $LOCAL_CODEX_BIN" >&2
+  echo "  Build it first with: (cd codex/codex-rs && cargo build --bin codex)" >&2
+  exit 1
+fi
+PATH="$(dirname "$LOCAL_CODEX_BIN"):$PATH" nohup "$DAEMON_BIN" \
   --listen 127.0.0.1:4732 \
   --web-listen 0.0.0.0:4733 \
   --data-dir "$DATA_DIR" \
