@@ -39,8 +39,6 @@ mod tests {
             description: None,
             logo_url: None,
             logo_url_dark: None,
-            icon_assets: None,
-            icon_dark_assets: None,
             distribution_channel: None,
             install_url: None,
             branding: None,

@@ -20,7 +20,6 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_app_server_protocol::WebSearchAction;
-use codex_app_server_protocol::WebSearchItem;
 use codex_config::types::AuthCredentialsStoreMode;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
@@ -79,15 +78,12 @@ async fn standalone_web_search_round_trips_output() -> Result<()> {
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .with_env_overrides(&[("OPENAI_API_KEY", None)])
-        .build()
-        .await?;
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
-        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
+        .send_thread_start_request(ThreadStartParams::default())
         .await?;
     let thread_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -183,28 +179,25 @@ async fn standalone_web_search_round_trips_output() -> Result<()> {
     );
     assert_eq!(
         started.item,
-        ThreadItem::WebSearch(WebSearchItem {
+        ThreadItem::WebSearch {
             id: call_id.to_string(),
             query: String::new(),
-            action: None,
-        })
+            action: Some(WebSearchAction::Other),
+        }
     );
-    let expected_completed_item = ThreadItem::WebSearch(WebSearchItem {
+    let expected_completed_item = ThreadItem::WebSearch {
         id: call_id.to_string(),
         query: "standalone web search".to_string(),
         action: Some(WebSearchAction::Search {
             query: Some("standalone web search".to_string()),
             queries: None,
         }),
-    });
+    };
     assert_eq!(completed.item, expected_completed_item);
 
     drop(mcp);
-    let mut reloaded_mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .with_env_overrides(&[("OPENAI_API_KEY", None)])
-        .build()
-        .await?;
+    let mut reloaded_mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
     timeout(DEFAULT_READ_TIMEOUT, reloaded_mcp.initialize()).await??;
     let read_req = reloaded_mcp
         .send_thread_read_request(ThreadReadParams {
@@ -222,7 +215,7 @@ async fn standalone_web_search_round_trips_output() -> Result<()> {
         .turns
         .iter()
         .flat_map(|turn| &turn.items)
-        .filter(|item| matches!(item, ThreadItem::WebSearch(_)))
+        .filter(|item| matches!(item, ThreadItem::WebSearch { .. }))
         .collect();
     assert_eq!(persisted_web_searches, vec![&expected_completed_item]);
 
@@ -239,7 +232,7 @@ async fn wait_for_web_search_started(mcp: &mut TestAppServer) -> Result<ItemStar
                 .params
                 .context("item/started notification should include params")?,
         )?;
-        if matches!(&started.item, ThreadItem::WebSearch(_)) {
+        if matches!(&started.item, ThreadItem::WebSearch { .. }) {
             return Ok(started);
         }
     }
@@ -257,7 +250,7 @@ async fn wait_for_web_search_completed(
                 .params
                 .context("item/completed notification should include params")?,
         )?;
-        if matches!(&completed.item, ThreadItem::WebSearch(_)) {
+        if matches!(&completed.item, ThreadItem::WebSearch { .. }) {
             return Ok(completed);
         }
     }

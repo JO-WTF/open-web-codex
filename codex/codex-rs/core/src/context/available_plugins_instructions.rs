@@ -1,10 +1,25 @@
+use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::protocol::PLUGINS_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::PLUGINS_INSTRUCTIONS_OPEN_TAG;
 
 use super::ContextualUserFragment;
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct AvailablePluginsInstructions;
+pub(crate) struct AvailablePluginsInstructions {
+    plugins: Vec<PluginCapabilitySummary>,
+}
+
+impl AvailablePluginsInstructions {
+    pub(crate) fn from_plugins(plugins: &[PluginCapabilitySummary]) -> Option<Self> {
+        if plugins.is_empty() {
+            return None;
+        }
+
+        Some(Self {
+            plugins: plugins.to_vec(),
+        })
+    }
+}
 
 impl ContextualUserFragment for AvailablePluginsInstructions {
     fn role(&self) -> &'static str {

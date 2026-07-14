@@ -8,6 +8,7 @@ use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
 use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v1;
+use crate::turn_timing::now_unix_timestamp_ms;
 use codex_tools::ToolSpec;
 
 #[derive(Default)]
@@ -70,20 +71,17 @@ async fn handle_spawn_agent(
         ));
     }
     session
-        .emit_turn_item_started(
+        .send_event(
             &turn,
-            &TurnItem::CollabAgentToolCall(CollabAgentToolCallItem {
-                id: call_id.clone(),
-                tool: CollabAgentTool::SpawnAgent,
-                status: CollabAgentToolCallStatus::InProgress,
+            CollabAgentSpawnBeginEvent {
+                call_id: call_id.clone(),
+                started_at_ms: now_unix_timestamp_ms(),
                 sender_thread_id: session.thread_id,
-                receiver_thread_ids: Vec::new(),
-                receiver_agents: Vec::new(),
-                prompt: Some(prompt.clone()),
-                model: Some(args.model.clone().unwrap_or_default()),
-                reasoning_effort: Some(args.reasoning_effort.clone().unwrap_or_default()),
-                agents_states: Default::default(),
-            }),
+                prompt: prompt.clone(),
+                model: args.model.clone().unwrap_or_default(),
+                reasoning_effort: args.reasoning_effort.clone().unwrap_or_default(),
+            }
+            .into(),
         )
         .await;
     let mut config =
@@ -134,6 +132,7 @@ async fn handle_spawn_agent(
             fork_mode: args.fork_context.then_some(SpawnAgentForkMode::FullHistory),
             parent_thread_id: Some(session.thread_id),
             environments: Some(turn.environments.to_selections()),
+            initial_multi_agent_mode: None,
         },
     ))
     .await
@@ -179,33 +178,22 @@ async fn handle_spawn_agent(
         .and_then(|snapshot| snapshot.reasoning_effort.clone())
         .unwrap_or(args.reasoning_effort.unwrap_or_default());
     let nickname = new_agent_nickname.clone();
-    let receiver_thread_ids = new_thread_id.into_iter().collect();
-    let receiver_agents = new_thread_id
-        .map(|thread_id| CollabAgentRef {
-            thread_id,
-            agent_nickname: new_agent_nickname,
-            agent_role: new_agent_role,
-        })
-        .into_iter()
-        .collect();
-    let agents_states = new_thread_id
-        .map(|thread_id| [(thread_id, status.clone())].into_iter().collect())
-        .unwrap_or_default();
     session
-        .emit_turn_item_completed(
+        .send_event(
             &turn,
-            TurnItem::CollabAgentToolCall(CollabAgentToolCallItem {
-                id: call_id,
-                tool: CollabAgentTool::SpawnAgent,
-                status: collab_tool_call_status(&status, new_thread_id),
+            CollabAgentSpawnEndEvent {
+                call_id,
+                completed_at_ms: now_unix_timestamp_ms(),
                 sender_thread_id: session.thread_id,
-                receiver_thread_ids,
-                receiver_agents,
-                prompt: Some(prompt),
-                model: Some(effective_model),
-                reasoning_effort: Some(effective_reasoning_effort),
-                agents_states,
-            }),
+                new_thread_id,
+                new_agent_nickname,
+                new_agent_role,
+                prompt,
+                model: effective_model,
+                reasoning_effort: effective_reasoning_effort,
+                status,
+            }
+            .into(),
         )
         .await;
     let new_thread_id = result?.thread_id;

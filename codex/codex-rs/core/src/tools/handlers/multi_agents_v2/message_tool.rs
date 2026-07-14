@@ -4,9 +4,8 @@
 //! resulting `InterAgentCommunication` should wake the target immediately.
 
 use super::*;
-use crate::agent_communication::AgentCommunicationContext;
-use crate::agent_communication::AgentCommunicationKind;
 use crate::tools::context::FunctionToolOutput;
+use crate::turn_timing::now_unix_timestamp_ms;
 use codex_protocol::protocol::InterAgentCommunication;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -47,7 +46,7 @@ pub(crate) struct FollowupTaskArgs {
     pub(crate) message: String,
 }
 
-pub(super) fn message_content(message: String) -> Result<String, FunctionCallError> {
+fn message_content(message: String) -> Result<String, FunctionCallError> {
     if message.trim().is_empty() {
         return Err(FunctionCallError::RespondToModel(
             "Empty message can't be sent to an agent".to_string(),
@@ -102,29 +101,26 @@ pub(crate) async fn handle_message_string_tool(
         .unwrap_or_else(AgentPath::root);
     let communication =
         communication_from_tool_message(author, receiver_agent_path.clone(), message);
-    let kind = match mode {
-        MessageDeliveryMode::QueueOnly => AgentCommunicationKind::Message,
-        MessageDeliveryMode::TriggerTurn => AgentCommunicationKind::Followup,
-    };
-    let context = AgentCommunicationContext::new(kind, session.thread_id);
     let result = session
         .services
         .agent_control
-        .send_inter_agent_communication(receiver_thread_id, mode.apply(communication), context)
+        .send_inter_agent_communication(receiver_thread_id, mode.apply(communication))
         .await
         .map_err(|err| collab_agent_error(receiver_thread_id, err));
     result?;
-    emit_sub_agent_activity(
-        &session,
-        &turn,
-        SubAgentActivityItem {
-            id: call_id,
-            agent_thread_id: receiver_thread_id,
-            agent_path: receiver_agent_path,
-            kind: SubAgentActivityKind::Interacted,
-        },
-    )
-    .await;
+    session
+        .send_event(
+            &turn,
+            SubAgentActivityEvent {
+                event_id: call_id,
+                occurred_at_ms: now_unix_timestamp_ms(),
+                agent_thread_id: receiver_thread_id,
+                agent_path: receiver_agent_path,
+                kind: SubAgentActivityKind::Interacted,
+            }
+            .into(),
+        )
+        .await;
 
     Ok(FunctionToolOutput::from_text(String::new(), Some(true)))
 }

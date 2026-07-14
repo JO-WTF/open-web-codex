@@ -61,7 +61,6 @@ async fn stdio_listen_transport_serves_initialize() {
         server_reader,
         server_writer,
         test_runtime_paths(),
-        crate::ExecServerTelemetry::default(),
     ));
     let mut client_lines = BufReader::new(client_reader).lines();
 
@@ -75,7 +74,6 @@ async fn stdio_listen_transport_serves_initialize() {
             })
             .expect("initialize params should serialize"),
         ),
-        trace: None,
     });
     write_jsonrpc_line(&mut client_writer, &initialize).await;
 

@@ -14,4 +14,4 @@ verificationUrl: string,
 /**
  * One-time code the user must enter after signing in.
  */
-userCode: string, } | { "type": "chatgptAuthTokens", } | { "type": "amazonBedrock", };
+userCode: string, } | { "type": "chatgptAuthTokens", };

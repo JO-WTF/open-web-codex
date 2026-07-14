@@ -147,9 +147,6 @@ impl ChatWidget {
             ServerNotification::ModelVerification(notification) => {
                 self.on_app_server_model_verification(&notification.verifications)
             }
-            ServerNotification::ModelSafetyBufferingUpdated(notification) => {
-                self.on_model_safety_buffering_updated(notification, replay_kind)
-            }
             ServerNotification::Warning(notification) => self.on_warning(notification.message),
             ServerNotification::GuardianWarning(notification) => {
                 self.on_warning(notification.message)
@@ -211,6 +208,7 @@ impl ChatWidget {
             | ServerNotification::ExternalAgentConfigImportProgress(_)
             | ServerNotification::ExternalAgentConfigImportCompleted(_)
             | ServerNotification::FsChanged(_)
+            | ServerNotification::ModelSafetyBufferingUpdated(_)
             | ServerNotification::TurnModerationMetadata(_)
             | ServerNotification::FuzzyFileSearchSessionUpdated(_)
             | ServerNotification::FuzzyFileSearchSessionCompleted(_)
@@ -290,10 +288,10 @@ impl ChatWidget {
                 self.on_patch_apply_begin(file_update_changes_to_display(changes));
             }
             item @ ThreadItem::McpToolCall { .. } => self.on_mcp_tool_call_started(item),
-            ThreadItem::WebSearch(item) => {
-                self.on_web_search_begin(item.id);
+            ThreadItem::WebSearch { id, .. } => {
+                self.on_web_search_begin(id);
             }
-            ThreadItem::ImageGeneration(_) => {
+            ThreadItem::ImageGeneration { .. } => {
                 self.on_image_generation_begin();
             }
             ThreadItem::CollabAgentToolCall {

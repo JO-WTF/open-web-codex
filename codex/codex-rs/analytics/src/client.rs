@@ -16,9 +16,6 @@ use crate::facts::ExternalAgentConfigImportFailureInput;
 use crate::facts::HookRunFact;
 use crate::facts::HookRunInput;
 use crate::facts::PluginInstallFailedInput;
-use crate::facts::PluginInstallRequested;
-use crate::facts::PluginInstallRequestedInput;
-use crate::facts::PluginInstallSource;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
 use crate::facts::SkillInvocation;
@@ -313,19 +310,6 @@ impl AnalyticsEventsClient {
         )));
     }
 
-    pub fn track_plugin_install_requested(
-        &self,
-        tracking: TrackEventsContext,
-        request: PluginInstallRequested,
-    ) {
-        self.record_fact(AnalyticsFact::Custom(
-            CustomAnalyticsFact::PluginInstallRequested(PluginInstallRequestedInput {
-                tracking,
-                request,
-            }),
-        ));
-    }
-
     pub fn track_compaction(&self, event: crate::facts::CodexCompactionEvent) {
         self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::Compaction(
             Box::new(event),
@@ -371,16 +355,10 @@ impl AnalyticsEventsClient {
         ));
     }
 
-    pub fn track_plugin_install_failed(
-        &self,
-        plugin: PluginTelemetryMetadata,
-        source: PluginInstallSource,
-        error_type: String,
-    ) {
+    pub fn track_plugin_install_failed(&self, plugin: PluginTelemetryMetadata, error_type: String) {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::PluginInstallFailed(PluginInstallFailedInput {
                 plugin,
-                source,
                 error_type,
             }),
         ));
@@ -443,31 +421,6 @@ impl AnalyticsEventsClient {
         request_id: RequestId,
         response: ClientResponsePayload,
     ) {
-        self.track_response_inner(
-            connection_id,
-            request_id,
-            response,
-            /*thread_originator*/ None,
-        );
-    }
-
-    pub fn track_response_with_thread_originator(
-        &self,
-        connection_id: u64,
-        request_id: RequestId,
-        response: ClientResponsePayload,
-        thread_originator: String,
-    ) {
-        self.track_response_inner(connection_id, request_id, response, Some(thread_originator));
-    }
-
-    fn track_response_inner(
-        &self,
-        connection_id: u64,
-        request_id: RequestId,
-        response: ClientResponsePayload,
-        thread_originator: Option<String>,
-    ) {
         if !matches!(
             response,
             ClientResponsePayload::ThreadStart(_)
@@ -482,7 +435,6 @@ impl AnalyticsEventsClient {
             connection_id,
             request_id,
             response: Box::new(response),
-            thread_originator,
         });
     }
 

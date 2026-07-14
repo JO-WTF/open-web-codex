@@ -23,8 +23,7 @@ use codex_extension_api::ToolOutput;
 use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolSpec;
 use codex_extension_api::parse_tool_input_schema;
-use codex_extension_items::ExtensionItem;
-use codex_extension_items::image_generation::ImageGenerationItem;
+use codex_protocol::items::ImageGenerationItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -32,9 +31,6 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::ImageGenerationBeginEvent;
-use codex_protocol::protocol::ImageGenerationEndEvent;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ResponsesApiTool;
@@ -90,23 +86,6 @@ struct ImagegenArgs {
     num_last_images_to_include: Option<usize>,
 }
 
-fn legacy_end_event(item: &ImageGenerationItem) -> EventMsg {
-    EventMsg::ImageGenerationEnd(ImageGenerationEndEvent {
-        call_id: item.id.clone(),
-        status: item.status.clone(),
-        revised_prompt: item.revised_prompt.clone(),
-        result: item.result.clone(),
-        saved_path: item.saved_path.clone(),
-    })
-}
-
-fn extension_turn_item(item: ImageGenerationItem, legacy_event: EventMsg) -> ExtensionTurnItem {
-    ExtensionTurnItem {
-        item: ExtensionItem::ImageGeneration(item),
-        legacy_events: vec![legacy_event],
-    }
-}
-
 impl ToolExecutor<ToolCall> for ImageGenerationTool {
     /// Keeps the tool in the existing image-generation Responses namespace.
     fn tool_name(&self) -> ToolName {
@@ -136,18 +115,13 @@ impl ImageGenerationTool {
             request_for_call_args(&args, call.conversation_history.items(), &call.environments)
                 .await?;
         call.turn_item_emitter
-            .emit_started(extension_turn_item(
-                ImageGenerationItem {
-                    id: call.call_id.clone(),
-                    status: "in_progress".to_string(),
-                    revised_prompt: None,
-                    result: String::new(),
-                    saved_path: None,
-                },
-                EventMsg::ImageGenerationBegin(ImageGenerationBeginEvent {
-                    call_id: call.call_id.clone(),
-                }),
-            ))
+            .emit_started(ExtensionTurnItem::ImageGeneration(ImageGenerationItem {
+                id: call.call_id.clone(),
+                status: "in_progress".to_string(),
+                revised_prompt: None,
+                result: String::new(),
+                saved_path: None,
+            }))
             .await;
         let result = match request {
             ImageRequest::Generate(request) => self.backend.generate(request).await,
@@ -165,16 +139,14 @@ impl ImageGenerationTool {
         let result = match result {
             Ok(result) => result,
             Err(message) => {
-                let item = ImageGenerationItem {
-                    id: call.call_id.clone(),
-                    status: "failed".to_string(),
-                    revised_prompt: Some(args.prompt),
-                    result: String::new(),
-                    saved_path: None,
-                };
-                let legacy_event = legacy_end_event(&item);
                 call.turn_item_emitter
-                    .emit_completed(extension_turn_item(item, legacy_event))
+                    .emit_completed(ExtensionTurnItem::ImageGeneration(ImageGenerationItem {
+                        id: call.call_id.clone(),
+                        status: "failed".to_string(),
+                        revised_prompt: Some(args.prompt.clone()),
+                        result: String::new(),
+                        saved_path: None,
+                    }))
                     .await;
                 return Err(FunctionCallError::RespondToModel(message));
             }
@@ -204,16 +176,14 @@ impl ImageGenerationTool {
             },
             None => None,
         };
-        let item = ImageGenerationItem {
-            id: call.call_id.clone(),
-            status: "completed".to_string(),
-            revised_prompt: Some(args.prompt),
-            result: result.clone(),
-            saved_path: saved_path.clone(),
-        };
-        let legacy_event = legacy_end_event(&item);
         call.turn_item_emitter
-            .emit_completed(extension_turn_item(item, legacy_event))
+            .emit_completed(ExtensionTurnItem::ImageGeneration(ImageGenerationItem {
+                id: call.call_id.clone(),
+                status: "completed".to_string(),
+                revised_prompt: Some(args.prompt),
+                result: result.clone(),
+                saved_path: saved_path.clone(),
+            }))
             .await;
         let output_hint = saved_path.as_ref().and_then(|output_path| {
             let output_dir = output_path.parent()?;

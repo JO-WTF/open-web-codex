@@ -5,8 +5,6 @@
 
 use super::*;
 
-const ULTRA_REASONING_CONCURRENCY_WARNING_THRESHOLD: usize = 8;
-
 impl ChatWidget {
     /// Open a popup to choose a quick auto model. Selecting "All models"
     /// opens the full picker with every available preset.
@@ -104,7 +102,7 @@ impl ChatWidget {
                     model.as_str(),
                     Some(preset.default_reasoning_effort.clone()),
                 );
-                let actions = self.model_selection_actions(
+                let actions = Self::model_selection_actions(
                     model.clone(),
                     Some(preset.default_reasoning_effort.clone()),
                     should_prompt_plan_mode_scope,
@@ -144,9 +142,12 @@ impl ChatWidget {
             });
         }
 
+        let provider_id = self.config.model_provider_id.as_str();
         let header = self.model_menu_header(
             "Select Model",
-            "Pick a quick auto mode or browse all models.",
+            &format!(
+                "Showing models for provider '{provider_id}'. Switch providers to use a different model set."
+            ),
         );
         self.bottom_pane.show_selection_view(SelectionViewParams {
             footer_hint: Some(standard_popup_hint_line()),
@@ -178,26 +179,116 @@ impl ChatWidget {
             return;
         }
 
+        // Determine if the current provider is a third-party provider with cached models.
+        let provider_id = self.config.model_provider_id.clone();
+        let provider_models = self
+            .config
+            .model_providers
+            .get(&provider_id)
+            .map(|p| &p.models)
+            .cloned();
+
         let mut items: Vec<SelectionItem> = Vec::new();
         for preset in presets.into_iter() {
-            let description =
+            let _description =
                 (!preset.description.is_empty()).then_some(preset.description.to_string());
             let is_current = preset.model.as_str() == self.current_model();
             let single_supported_effort = preset.supported_reasoning_efforts.len() == 1;
+            let no_supported_effort = preset.supported_reasoning_efforts.is_empty();
             let preset_for_action = preset.clone();
-            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                let preset_for_event = preset_for_action.clone();
-                tx.send(AppEvent::OpenReasoningPopup {
-                    model: preset_for_event,
-                });
-            })];
+
+            // Look up the model's context window from the provider's cached models.
+            let context_window = provider_models
+                .as_ref()
+                .and_then(|models| models.iter().find(|m| m.model_id == preset.model))
+                .and_then(|pm| pm.context_window);
+
+            // Append context window info to the model name when available.
+            let model_name = match context_window {
+                Some(cw) => format!("{} ({}KB ctx)", preset.model, cw / 1024),
+                None => preset.model.clone(),
+            };
+
+            let actions: Vec<SelectionAction> = if no_supported_effort || single_supported_effort {
+                let model_for_action = preset.model.clone();
+                let effort_for_action = if no_supported_effort {
+                    None
+                } else {
+                    Some(preset.default_reasoning_effort.clone())
+                };
+                let context_window_for_model = provider_models
+                    .as_ref()
+                    .and_then(|models| models.iter().find(|m| m.model_id == model_for_action))
+                    .and_then(|pm| pm.context_window);
+                let mut base_actions = Self::model_selection_actions_with_context_window(
+                    model_for_action.clone(),
+                    effort_for_action,
+                    /*preserve_provider*/ false,
+                    Some(provider_id.clone()),
+                    context_window_for_model,
+                );
+                // Add "Set context window" action for third-party provider models
+                if provider_models.is_some() {
+                    let context_model_id = model_for_action.clone();
+                    let context_provider_id = provider_id.clone();
+                    base_actions.push(Box::new(move |tx| {
+                        tx.send(AppEvent::OpenModelContextWindowPopup {
+                            model_id: context_model_id.clone(),
+                            provider_id: context_provider_id.clone(),
+                            pending_selection: None,
+                        });
+                    }));
+                }
+                base_actions
+            } else {
+                let model_for_action = preset.model.clone();
+                let context_window_for_model = provider_models
+                    .as_ref()
+                    .and_then(|models| models.iter().find(|m| m.model_id == model_for_action))
+                    .and_then(|pm| pm.context_window);
+                let mut actions: Vec<SelectionAction> = if let (Some(pid), None) =
+                    (Some(provider_id.clone()), context_window_for_model)
+                {
+                    // No context window configured for this third‑party model —
+                    // redirect the primary action to set it first. Once the user
+                    // sets the context window the pending model selection completes.
+                    let provider_id = pid.clone();
+                    let pending = PendingModelSelection {
+                        model: model_for_action.clone(),
+                        effort: Some(preset_for_action.default_reasoning_effort.clone()),
+                    };
+                    vec![Box::new(move |tx| {
+                        tx.send(AppEvent::OpenModelContextWindowPopup {
+                            model_id: model_for_action.clone(),
+                            provider_id: provider_id.clone(),
+                            pending_selection: Some(pending.clone()),
+                        });
+                    })]
+                } else {
+                    vec![Box::new(move |tx| {
+                        let preset_for_event = preset_for_action.clone();
+                        tx.send(AppEvent::OpenReasoningPopup {
+                            model: preset_for_event,
+                        });
+                    })]
+                };
+                let context_model_id = preset.model.clone();
+                let context_provider_id = provider_id.clone();
+                actions.push(Box::new(move |tx| {
+                    tx.send(AppEvent::OpenModelContextWindowPopup {
+                        model_id: context_model_id.clone(),
+                        provider_id: context_provider_id.clone(),
+                        pending_selection: None,
+                    });
+                }));
+                actions
+            };
             items.push(SelectionItem {
-                name: preset.model.clone(),
-                description,
+                name: model_name,
                 is_current,
                 is_default: preset.is_default,
                 actions,
-                dismiss_on_select: single_supported_effort,
+                dismiss_on_select: no_supported_effort || single_supported_effort,
                 dismiss_parent_on_child_accept: !single_supported_effort,
                 ..Default::default()
             });
@@ -205,7 +296,9 @@ impl ChatWidget {
 
         let header = self.model_menu_header(
             "Select Model and Effort",
-            "Access legacy models by running codex -m <model_name> or in your config.toml",
+            &format!(
+                "Showing models for provider '{provider_id}'. Switch providers to use a different model set."
+            ),
         );
         self.bottom_pane.show_selection_view(SelectionViewParams {
             footer_hint: Some(self.bottom_pane.standard_popup_hint_line()),
@@ -216,14 +309,42 @@ impl ChatWidget {
     }
 
     fn model_selection_actions(
-        &self,
         model_for_action: String,
         effort_for_action: Option<ReasoningEffortConfig>,
         should_prompt_plan_mode_scope: bool,
     ) -> Vec<SelectionAction> {
-        let warning = effort_for_action
-            .as_ref()
-            .and_then(|effort| self.ultra_reasoning_concurrency_warning(effort));
+        Self::model_selection_actions_with_context_window(
+            model_for_action,
+            effort_for_action,
+            should_prompt_plan_mode_scope,
+            None,
+            None,
+        )
+    }
+
+    /// Like `model_selection_actions`, but when `context_window` is `None` for a
+    /// third-party provider the action redirects to the context‑window popup first.
+    /// After the window is saved, the original selection completes automatically.
+    fn model_selection_actions_with_context_window(
+        model_for_action: String,
+        effort_for_action: Option<ReasoningEffortConfig>,
+        should_prompt_plan_mode_scope: bool,
+        provider_id: Option<String>,
+        context_window: Option<i64>,
+    ) -> Vec<SelectionAction> {
+        // If this is a third‑party provider model without a configured context window,
+        // redirect to the context‑window popup before completing the selection.
+        let needs_context_window = provider_id.is_some() && context_window.is_none();
+        if needs_context_window {
+            let provider_id = provider_id.unwrap();
+            return vec![Box::new(move |tx| {
+                tx.send(AppEvent::OpenModelContextWindowPopup {
+                    model_id: model_for_action.clone(),
+                    provider_id: provider_id.clone(),
+                    pending_selection: None,
+                });
+            })];
+        }
         vec![Box::new(move |tx| {
             if should_prompt_plan_mode_scope {
                 tx.send(AppEvent::OpenPlanReasoningScopePrompt {
@@ -239,11 +360,6 @@ impl ChatWidget {
                 model: model_for_action.clone(),
                 effort: effort_for_action.clone(),
             });
-            if let Some(warning) = warning.clone() {
-                tx.send(AppEvent::InsertHistoryCell(Box::new(
-                    history_cell::new_warning_event(warning),
-                )));
-            }
         })]
     }
 
@@ -310,23 +426,14 @@ impl ChatWidget {
             "Set the global default reasoning level and the Plan mode override. This replaces the current {plan_reasoning_source}."
         );
         let subtitle = format!("Choose where to apply {reasoning_phrase}.");
-        let warning = effort
-            .as_ref()
-            .and_then(|effort| self.ultra_reasoning_concurrency_warning(effort));
 
         let plan_only_actions: Vec<SelectionAction> = vec![Box::new({
             let model = model.clone();
             let effort = effort.clone();
-            let warning = warning.clone();
             move |tx| {
                 tx.send(AppEvent::UpdateModel(model.clone()));
                 tx.send(AppEvent::UpdatePlanModeReasoningEffort(effort.clone()));
                 tx.send(AppEvent::PersistPlanModeReasoningEffort(effort.clone()));
-                if let Some(warning) = warning.clone() {
-                    tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        history_cell::new_warning_event(warning),
-                    )));
-                }
             }
         })];
         let all_modes_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
@@ -338,11 +445,6 @@ impl ChatWidget {
                 model: model.clone(),
                 effort: effort.clone(),
             });
-            if let Some(warning) = warning.clone() {
-                tx.send(AppEvent::InsertHistoryCell(Box::new(
-                    history_cell::new_warning_event(warning),
-                )));
-            }
         })];
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
@@ -372,7 +474,6 @@ impl ChatWidget {
         });
     }
 
-    /// Open a popup to choose the reasoning effort (stage 2) for the given model.
     pub(crate) fn open_reasoning_popup(&mut self, preset: ModelPreset) {
         let default_effort = preset.default_reasoning_effort;
         let supported = preset.supported_reasoning_efforts;
@@ -452,7 +553,6 @@ impl ChatWidget {
         let mut items: Vec<SelectionItem> = Vec::new();
         for choice in choices.iter() {
             let effort = choice.clone();
-            let warning = self.ultra_reasoning_concurrency_warning(&effort);
             let mut effort_label = Self::reasoning_effort_label(&effort);
             if Some(choice) == default_choice.as_ref() {
                 effort_label.push_str(" (default)");
@@ -495,11 +595,6 @@ impl ChatWidget {
                         model: model_for_action.clone(),
                         effort: choice_effort.clone(),
                     });
-                    if let Some(warning) = warning.clone() {
-                        tx.send(AppEvent::InsertHistoryCell(Box::new(
-                            history_cell::new_warning_event(warning),
-                        )));
-                    }
                 }
             })];
 
@@ -536,8 +631,6 @@ impl ChatWidget {
             ReasoningEffortConfig::Medium => "Medium".to_string(),
             ReasoningEffortConfig::High => "High".to_string(),
             ReasoningEffortConfig::XHigh => "Extra high".to_string(),
-            ReasoningEffortConfig::Max => "Max".to_string(),
-            ReasoningEffortConfig::Ultra => "Ultra".to_string(),
             ReasoningEffortConfig::Custom(value) => value.clone(),
         }
     }
@@ -549,47 +642,14 @@ impl ChatWidget {
         }
     }
 
-    pub(super) fn ultra_reasoning_concurrency_warning(
-        &self,
-        effort: &ReasoningEffortConfig,
-    ) -> Option<String> {
-        if effort != &ReasoningEffortConfig::Ultra {
-            return None;
-        }
-
-        let max_threads = self
-            .config
-            .multi_agent_v2
-            .max_concurrent_threads_per_session;
-        if max_threads < ULTRA_REASONING_CONCURRENCY_WARNING_THRESHOLD {
-            return None;
-        }
-
-        let max_subagents = max_threads.saturating_sub(1);
-        Some(format!(
-            "Ultra reasoning may proactively use multiple agents. This session is configured for \
-             {max_threads} concurrent threads with up to {max_subagents} subagents which can \
-             increase usage quickly. Consider setting \
-             features.multi_agent_v2.max_concurrent_threads_per_session below 8."
-        ))
-    }
-
     pub(super) fn apply_model_and_effort_without_persist(
         &self,
         model: String,
         effort: Option<ReasoningEffortConfig>,
     ) {
-        let warning = effort
-            .as_ref()
-            .and_then(|effort| self.ultra_reasoning_concurrency_warning(effort));
         self.app_event_tx.send(AppEvent::UpdateModel(model));
         self.app_event_tx
             .send(AppEvent::UpdateReasoningEffort(effort));
-        if let Some(warning) = warning {
-            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                history_cell::new_warning_event(warning),
-            )));
-        }
     }
 
     fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
@@ -597,4 +657,64 @@ impl ChatWidget {
         self.app_event_tx
             .send(AppEvent::PersistModelSelection { model, effort });
     }
+
+    pub(crate) fn open_model_context_window_popup(
+        &mut self,
+        model_id: &str,
+        provider_id: &str,
+        pending_selection: Option<PendingModelSelection>,
+    ) {
+        let Some(provider) = self.config.model_providers.get(provider_id).cloned() else {
+            self.add_error_message(format!("Provider '{provider_id}' not found."));
+            return;
+        };
+        let current_context_window = provider
+            .models
+            .iter()
+            .find(|m| m.model_id == model_id)
+            .and_then(|m| m.context_window)
+            .unwrap_or(262_144);
+        let tx = self.app_event_tx.clone();
+        let provider_id = provider_id.to_string();
+        let model_id = model_id.to_string();
+        let view = CustomPromptView::new(
+            format!("Context window for {model_id}"),
+            format!("Number of tokens (current: {current_context_window})"),
+            current_context_window.to_string(),
+            Some(
+                "Context window limit for this model in tokens; higher means longer conversations."
+                    .to_string(),
+            ),
+            Box::new(move |value: String| {
+                let parsed = value.trim().parse::<i64>().unwrap_or(current_context_window);
+                tx.send(AppEvent::ProviderConfigAction {
+                    action: crate::app_event::ProviderConfigAction::UpdateModelContextWindow {
+                        id: provider_id.clone(),
+                        model_id: model_id.clone(),
+                        context_window: parsed,
+                    },
+                });
+                // Chain the pending model selection after setting context window.
+                if let Some(ref sel) = pending_selection {
+                    tx.send(AppEvent::UpdateModel(sel.model.clone()));
+                    if let Some(ref effort) = sel.effort {
+                        tx.send(AppEvent::UpdateReasoningEffort(Some(effort.clone())));
+                    }
+                    tx.send(AppEvent::PersistModelSelection {
+                        model: sel.model.clone(),
+                        effort: sel.effort.clone(),
+                    });
+                }
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
+    }
+}
+
+/// A model selection that is pending completion after setting context window.
+#[derive(Debug, Clone)]
+pub(crate) struct PendingModelSelection {
+    pub(crate) model: String,
+    pub(crate) effort: Option<ReasoningEffortConfig>,
 }

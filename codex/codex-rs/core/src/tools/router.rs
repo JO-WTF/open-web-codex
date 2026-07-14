@@ -25,7 +25,7 @@ use tracing::instrument;
 
 pub use crate::tools::context::ToolCallSource;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct ToolCall {
     pub tool_name: ToolName,
     pub call_id: String,
@@ -147,12 +147,11 @@ impl ToolRouter {
             ResponseItem::ToolSearchCall { .. } => Ok(None),
             ResponseItem::CustomToolCall {
                 name,
-                namespace,
                 input,
                 call_id,
                 ..
             } => Ok(Some(ToolCall {
-                tool_name: ToolName::new(namespace, name),
+                tool_name: ToolName::plain(name),
                 call_id,
                 payload: ToolPayload::Custom { input },
             })),

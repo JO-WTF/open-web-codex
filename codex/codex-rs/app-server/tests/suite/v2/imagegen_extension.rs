@@ -7,7 +7,6 @@ use app_test_support::ChatGptAuthFixture;
 use app_test_support::TestAppServer;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
-use codex_app_server_protocol::ImageGenerationItem;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
@@ -19,7 +18,6 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
 use core_test_support::responses;
-use core_test_support::skip_if_remote;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
@@ -89,11 +87,8 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model() -> Resul
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .with_env_overrides(&[("OPENAI_API_KEY", None)])
-        .build()
-        .await?;
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     start_image_generation_turn(&mut mcp).await?;
 
@@ -108,13 +103,13 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model() -> Resul
     )
     .await??;
 
-    let ThreadItem::ImageGeneration(ImageGenerationItem {
+    let ThreadItem::ImageGeneration {
         status,
         revised_prompt,
         result,
         saved_path: Some(saved_path),
         ..
-    }) = completed.item
+    } = completed.item
     else {
         panic!("expected completed image generation item with saved path");
     };
@@ -190,11 +185,8 @@ async fn standalone_image_generation_failure_emits_terminal_item() -> Result<()>
         ChatGptAuthFixture::new("access-chatgpt"),
         AuthCredentialsStoreMode::File,
     )?;
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .with_env_overrides(&[("OPENAI_API_KEY", None)])
-        .build()
-        .await?;
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     start_image_generation_turn(&mut mcp).await?;
 
@@ -205,13 +197,13 @@ async fn standalone_image_generation_failure_emits_terminal_item() -> Result<()>
     .await??;
     assert_eq!(
         completed.item,
-        ThreadItem::ImageGeneration(ImageGenerationItem {
+        ThreadItem::ImageGeneration {
             id: call_id.to_string(),
             status: "failed".to_string(),
             revised_prompt: Some("paint a blue whale".to_string()),
             result: String::new(),
             saved_path: None,
-        })
+        }
     );
 
     timeout(
@@ -235,11 +227,6 @@ async fn standalone_image_generation_failure_emits_terminal_item() -> Result<()>
 
 #[tokio::test]
 async fn standalone_image_edit_uses_attached_model_visible_image() -> Result<()> {
-    skip_if_remote!(
-        Ok(()),
-        "remote executors use different imagegen storage approaches, so host-local image paths are unavailable"
-    );
-
     let edit_request = run_image_edit_test(|codex_home| {
         let image_path = codex_home.join("attached.png");
         std::fs::write(&image_path, TINY_PNG_BYTES)?;
@@ -319,11 +306,8 @@ async fn standalone_image_generation_is_exposed_in_code_mode_only() -> Result<()
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .with_env_overrides(&[("OPENAI_API_KEY", None)])
-        .build()
-        .await?;
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     start_image_generation_turn(&mut mcp).await?;
     timeout(
@@ -385,11 +369,8 @@ generatedImage(result);
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .with_env_overrides(&[("OPENAI_API_KEY", None)])
-        .build()
-        .await?;
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     start_image_generation_turn(&mut mcp).await?;
     timeout(
@@ -468,11 +449,8 @@ async fn run_image_edit_test(
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .with_env_overrides(&[("OPENAI_API_KEY", None)])
-        .build()
-        .await?;
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     start_turn(&mut mcp, input).await?;
     timeout(
@@ -500,7 +478,7 @@ async fn run_image_edit_test(
 
 async fn start_turn(mcp: &mut TestAppServer, input: Vec<V2UserInput>) -> Result<()> {
     let thread_req = mcp
-        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
+        .send_thread_start_request(ThreadStartParams::default())
         .await?;
     let thread_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -539,7 +517,7 @@ async fn wait_for_image_generation_completed(
                 .params
                 .context("item/completed notification should include params")?,
         )?;
-        if matches!(&completed.item, ThreadItem::ImageGeneration(_)) {
+        if matches!(&completed.item, ThreadItem::ImageGeneration { .. }) {
             return Ok(completed);
         }
     }
@@ -589,6 +567,7 @@ model_provider = "openai-custom"
 chatgpt_base_url = "{server_uri}"
 
 [features]
+imagegenext = true
 {code_mode_only}
 
 [model_providers.openai-custom]

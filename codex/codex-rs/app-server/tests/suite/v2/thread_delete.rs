@@ -55,11 +55,7 @@ async fn thread_delete_deletes_spawned_descendants() -> Result<()> {
             .await?;
     }
 
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .without_auto_env()
-        .build()
-        .await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let delete_id = mcp
@@ -126,10 +122,7 @@ fn create_delete_test_rollout(codex_home: &Path, minute: u8, preview: &str) -> R
 async fn thread_delete_handles_live_threads_before_rollout_exists() -> Result<()> {
     let codex_home = TempDir::new()?;
 
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .build()
-        .await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp

@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use codex_features::Feature;
@@ -30,7 +31,6 @@ use codex_tools::ToolSpec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
-use crate::config::CurrentTimeReminderConfig;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
@@ -82,6 +82,7 @@ impl ToolPlanProbe {
                 )),
                 ToolSpec::Function(_)
                 | ToolSpec::ToolSearch { .. }
+                | ToolSpec::ImageGeneration { .. }
                 | ToolSpec::WebSearch { .. }
                 | ToolSpec::Freeform(_) => None,
             })
@@ -273,23 +274,43 @@ fn use_bedrock_provider(turn: &mut TurnContext) {
     turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
 }
 
-struct TestNamespaceExtensionTool {
-    namespace: &'static str,
-    tool_name: &'static str,
+fn use_provider_auth(
+    turn: &mut TurnContext,
+    requires_openai_auth: bool,
+    actor_header: Option<(&str, &str)>,
+) {
+    let mut provider_info = turn.config.model_provider.clone();
+    provider_info.requires_openai_auth = requires_openai_auth;
+    provider_info.http_headers = actor_header.map(|(name, value)| {
+        HashMap::from([
+            (name.to_string(), value.to_string()),
+            (
+                "ChatGPT-Account-ID".to_string(),
+                "test-account-id".to_string(),
+            ),
+        ])
+    });
+    turn.auth_manager = None;
+    update_config(turn, |config| {
+        config.model_provider = provider_info.clone();
+    });
+    turn.provider = create_model_provider(provider_info, /*auth_manager*/ None);
 }
 
-impl ToolExecutor<ExtensionToolCall> for TestNamespaceExtensionTool {
+struct WebRunExtensionTool;
+
+impl ToolExecutor<ExtensionToolCall> for WebRunExtensionTool {
     fn tool_name(&self) -> ToolName {
-        ToolName::namespaced(self.namespace, self.tool_name)
+        ToolName::namespaced("web", "run")
     }
 
     fn spec(&self) -> ToolSpec {
         ToolSpec::Namespace(codex_tools::ResponsesApiNamespace {
-            name: self.namespace.to_string(),
-            description: "Test namespace.".to_string(),
+            name: "web".to_string(),
+            description: "Test web namespace.".to_string(),
             tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
-                name: self.tool_name.to_string(),
-                description: "Test namespace tool.".to_string(),
+                name: "run".to_string(),
+                description: "Test standalone web search tool.".to_string(),
                 strict: false,
                 defer_loading: None,
                 parameters: codex_tools::JsonSchema::default(),
@@ -362,7 +383,6 @@ fn mcp_tool(server: &str, namespace: &str, name: &str) -> ToolInfo {
                 "additionalProperties": false,
             }))),
         ),
-        openai_file_input_optional_fields: Default::default(),
         connector_id: None,
         connector_name: None,
         plugin_display_names: Vec::new(),
@@ -665,14 +685,7 @@ async fn environment_tools_follow_the_step_context() {
 
     let environments = turn.environments.clone();
     turn.environments.turn_environments.clear();
-    let turn = Arc::new(turn);
-    let step_context = Arc::new(StepContext::new(
-        Arc::clone(&turn),
-        environments,
-        Vec::new(),
-        crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(&turn.config),
-        /*loaded_agents_md*/ None,
-    ));
+    let step_context = Arc::new(StepContext::new(Arc::new(turn), environments));
 
     let plan = ToolPlanProbe::from_router(ToolRouter::from_context(
         step_context.as_ref(),
@@ -708,27 +721,18 @@ async fn host_context_gates_agent_job_tools() {
 }
 
 #[tokio::test]
-async fn sleep_tool_follows_current_time_config() {
+async fn sleep_tool_follows_feature_gate() {
     let disabled = probe(|turn| {
-        set_feature(turn, Feature::CurrentTimeReminder, /*enabled*/ true);
+        set_feature(turn, Feature::SleepTool, /*enabled*/ false);
     })
     .await;
-    assert_eq!(disabled.namespace_function_names("clock"), ["curr_time"]);
+    disabled.assert_visible_lacks(&["sleep"]);
 
     let enabled = probe(|turn| {
-        set_feature(turn, Feature::CurrentTimeReminder, /*enabled*/ true);
-        let mut config = (*turn.config).clone();
-        config.current_time_reminder = Some(CurrentTimeReminderConfig {
-            sleep_tool: true,
-            ..CurrentTimeReminderConfig::default()
-        });
-        turn.config = Arc::new(config);
+        set_feature(turn, Feature::SleepTool, /*enabled*/ true);
     })
     .await;
-    assert_eq!(
-        enabled.namespace_function_names("clock"),
-        ["curr_time", "sleep"]
-    );
+    enabled.assert_visible_contains(&["sleep"]);
 }
 
 #[tokio::test]
@@ -1479,7 +1483,7 @@ async fn code_mode_only_can_expose_namespaced_multi_agent_v2_as_normal_tools() {
             "wait",
             "request_user_input",
             "agents",
-            // Hosted Responses tool.
+            // Hosted Responses tools.
             "web_search",
         ]
     );
@@ -1508,63 +1512,135 @@ async fn code_mode_only_can_expose_namespaced_multi_agent_v2_as_normal_tools() {
 }
 
 #[tokio::test]
-async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates() {
-    let image_generation_tool = Arc::new(TestNamespaceExtensionTool {
-        namespace: "image_gen",
-        tool_name: "imagegen",
-    });
-    let image_generation = probe_with(
-        |turn| {
-            use_chatgpt_auth(turn);
-            turn.model_info.input_modalities = vec![InputModality::Image];
-        },
-        ToolPlanInputs {
-            extension_tool_executors: vec![image_generation_tool.clone()],
-            ..Default::default()
-        },
-    )
+async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
+    let api_key_auth = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
     .await;
-    image_generation.assert_visible_contains(&["image_gen"]);
+    api_key_auth.assert_visible_lacks(&["image_generation"]);
 
-    let extension_disabled = probe_with(
-        |turn| {
-            use_chatgpt_auth(turn);
-            set_feature(turn, Feature::ImageGeneration, /*enabled*/ false);
-            turn.model_info.input_modalities = vec![InputModality::Image];
-        },
-        ToolPlanInputs {
-            extension_tool_executors: vec![image_generation_tool.clone()],
-            ..Default::default()
-        },
-    )
+    let unrelated_chatgpt_auth = probe(|turn| {
+        use_chatgpt_auth(turn);
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        let mut provider_info = turn.provider.info().clone();
+        provider_info.requires_openai_auth = false;
+        provider_info.http_headers = None;
+        update_config(turn, |config| {
+            config.model_provider = provider_info.clone();
+        });
+        turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
     .await;
-    extension_disabled.assert_visible_lacks(&["image_gen"]);
+    unrelated_chatgpt_auth.assert_visible_lacks(&["image_generation"]);
 
-    let text_only_model = probe_with(
-        |turn| {
-            use_chatgpt_auth(turn);
-            turn.model_info.input_modalities = vec![];
-        },
-        ToolPlanInputs {
-            extension_tool_executors: vec![image_generation_tool.clone()],
-            ..Default::default()
-        },
-    )
+    let provider_without_actor_auth = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        use_provider_auth(
+            turn, /*requires_openai_auth*/ false, /*actor_header*/ None,
+        );
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
     .await;
-    text_only_model.assert_visible_lacks(&["image_gen"]);
+    provider_without_actor_auth.assert_visible_lacks(&["image_generation"]);
 
-    let unsupported_provider = probe_with(
-        |turn| {
-            use_bedrock_provider(turn);
-            turn.model_info.input_modalities = vec![InputModality::Image];
-        },
-        ToolPlanInputs {
-            extension_tool_executors: vec![image_generation_tool],
-            ..Default::default()
-        },
-    )
+    let provider_authenticated = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        use_provider_auth(
+            turn,
+            /*requires_openai_auth*/ false,
+            Some(("X-OpenAI-Actor-Authorization", "test-actor-authorization")),
+        );
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
     .await;
-    unsupported_provider.assert_visible_lacks(&["image_gen"]);
+    provider_authenticated.assert_visible_contains(&["image_generation"]);
+
+    let empty_actor_auth = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        use_provider_auth(
+            turn,
+            /*requires_openai_auth*/ false,
+            Some(("x-openai-actor-authorization", "  ")),
+        );
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    empty_actor_auth.assert_visible_lacks(&["image_generation"]);
+
+    let feature_disabled = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ false);
+        use_provider_auth(
+            turn,
+            /*requires_openai_auth*/ false,
+            Some(("x-openai-actor-authorization", "test-actor-authorization")),
+        );
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    feature_disabled.assert_visible_lacks(&["image_generation"]);
+
+    let text_only_model = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        use_provider_auth(
+            turn,
+            /*requires_openai_auth*/ false,
+            Some(("x-openai-actor-authorization", "test-actor-authorization")),
+        );
+        turn.model_info.input_modalities = vec![];
+    })
+    .await;
+    text_only_model.assert_visible_lacks(&["image_generation"]);
+
+    let unsupported_image_generation_provider = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        use_bedrock_provider(turn);
+        let mut provider_info = turn.provider.info().clone();
+        provider_info.requires_openai_auth = false;
+        provider_info.http_headers = Some(HashMap::from([(
+            "x-openai-actor-authorization".to_string(),
+            "test-actor-authorization".to_string(),
+        )]));
+        turn.auth_manager = None;
+        update_config(turn, |config| {
+            config.model_provider = provider_info.clone();
+        });
+        turn.provider = create_model_provider(provider_info, /*auth_manager*/ None);
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    unsupported_image_generation_provider.assert_visible_lacks(&["image_generation"]);
+
+    let codex_managed_auth_provider = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        use_provider_auth(
+            turn,
+            /*requires_openai_auth*/ true,
+            Some(("x-openai-actor-authorization", "test-actor-authorization")),
+        );
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    codex_managed_auth_provider.assert_visible_lacks(&["image_generation"]);
+
+    let image_generation = probe(|turn| {
+        use_chatgpt_auth(turn);
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    image_generation.assert_visible_contains(&["image_generation"]);
+
+    let extension_flag_without_imagegen_tool = probe(|turn| {
+        use_chatgpt_auth(turn);
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        set_feature(turn, Feature::ImageGenExt, /*enabled*/ true);
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    extension_flag_without_imagegen_tool.assert_visible_contains(&["image_generation"]);
+    extension_flag_without_imagegen_tool.assert_visible_lacks(&["image_gen"]);
 
     let live_web_search = probe(|turn| {
         set_web_search_mode(turn, WebSearchMode::Live);
@@ -1575,7 +1651,7 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
         live_web_search.visible_spec("web_search"),
         &ToolSpec::WebSearch {
             external_web_access: Some(true),
-            indexed_web_access: None,
+            index_gated_web_access: None,
             filters: None,
             user_location: None,
             search_context_size: None,
@@ -1601,6 +1677,7 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
             MULTI_AGENT_V2_NAMESPACE,
             // Hosted Responses tools.
             "web_search",
+            "image_generation",
         ]
     );
 
@@ -1617,10 +1694,7 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
             set_web_search_mode(turn, WebSearchMode::Live);
         },
         ToolPlanInputs {
-            extension_tool_executors: vec![Arc::new(TestNamespaceExtensionTool {
-                namespace: "web",
-                tool_name: "run",
-            })],
+            extension_tool_executors: vec![Arc::new(WebRunExtensionTool)],
             ..Default::default()
         },
     )

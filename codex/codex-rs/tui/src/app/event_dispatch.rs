@@ -5,12 +5,24 @@
 
 use super::resize_reflow::trailing_run_start;
 use super::*;
+use crate::app_event::ProviderFormMode;
 use crate::config_update::format_config_error;
 use crate::external_agent_config_migration_flow::ExternalAgentConfigMigrationFlowOutcome;
 #[cfg(target_os = "windows")]
 use codex_config::types::WindowsSandboxModeToml;
+use std::sync::Arc;
 
 const SHUTDOWN_FIRST_EXIT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 2);
+
+enum ModelCatalogRefresh<'a> {
+    CurrentProvider {
+        app_server: &'a mut AppServerSession,
+    },
+    FetchAndPersistProvider {
+        app_server: &'a mut AppServerSession,
+        provider_id: &'a str,
+    },
+}
 
 impl App {
     pub(super) async fn handle_event(
@@ -119,8 +131,8 @@ impl App {
                 )
                 .await
                 {
-                    Ok(ExternalAgentConfigMigrationFlowOutcome::Started(lines)) => {
-                        self.chat_widget.add_plain_history_lines(lines);
+                    Ok(ExternalAgentConfigMigrationFlowOutcome::Started(message)) => {
+                        self.chat_widget.add_info_message(message, /*hint*/ None);
                     }
                     Ok(ExternalAgentConfigMigrationFlowOutcome::NoItems) => {
                         self.chat_widget.add_info_message(
@@ -336,79 +348,6 @@ impl App {
             AppEvent::CodexOp(op) => {
                 self.chat_widget.prepare_local_op_submission(&op);
                 self.submit_active_thread_op(app_server, op).await?;
-            }
-            AppEvent::RetrySafetyBufferedTurn {
-                thread_id,
-                turn_id,
-                model,
-                mut turn,
-            } => {
-                if self.active_thread_id != Some(thread_id)
-                    || self.chat_widget.thread_id() != Some(thread_id)
-                {
-                    return Ok(AppRunControl::Continue);
-                }
-                if !self.chat_widget.can_retry_safety_buffered_turn(&turn_id) {
-                    self.app_event_tx.send(AppEvent::UpdateModel(model));
-                    self.app_event_tx.send(AppEvent::UpdateReasoningEffort(Some(
-                        ReasoningEffortConfig::Low,
-                    )));
-                    return Ok(AppRunControl::Continue);
-                }
-
-                let AppCommand::UserTurn {
-                    model: turn_model,
-                    effort,
-                    collaboration_mode,
-                    ..
-                } = &mut turn
-                else {
-                    self.chat_widget.add_error_message(
-                        "Failed to retry with a faster model: original turn is unavailable."
-                            .to_string(),
-                    );
-                    return Ok(AppRunControl::Continue);
-                };
-                *turn_model = model.clone();
-                *effort = Some(ReasoningEffortConfig::Low);
-                *collaboration_mode = collaboration_mode.as_ref().map(|mode| {
-                    mode.with_updates(
-                        Some(model),
-                        Some(Some(ReasoningEffortConfig::Low)),
-                        /*developer_instructions*/ None,
-                    )
-                });
-
-                if let Err(err) = app_server.turn_interrupt(thread_id, turn_id).await {
-                    self.chat_widget
-                        .add_error_message(format!("Failed to retry with a faster model: {err}"));
-                    return Ok(AppRunControl::Continue);
-                }
-                let rollback_response =
-                    match app_server.thread_rollback(thread_id, /*num_turns*/ 1).await {
-                        Ok(response) => response,
-                        Err(err) => {
-                            self.chat_widget.add_error_message(format!(
-                                "Failed to retry with a faster model: {err}"
-                            ));
-                            return Ok(AppRunControl::Continue);
-                        }
-                    };
-
-                self.chat_widget.prepare_safety_buffering_retry();
-                self.handle_thread_rollback_response_with_origin(
-                    thread_id,
-                    /*num_turns*/ 1,
-                    &rollback_response,
-                    super::thread_routing::ThreadRollbackOrigin::SafetyBufferingRetry,
-                )
-                .await;
-
-                if let Err(err) = self.submit_thread_op(app_server, thread_id, turn).await {
-                    self.chat_widget.fail_safety_buffering_retry();
-                    self.chat_widget
-                        .add_error_message(format!("Failed to retry with a faster model: {err}"));
-                }
             }
             AppEvent::RestoreCancelledTurn(prompt) => {
                 self.apply_cancelled_turn_edit(prompt);
@@ -869,16 +808,6 @@ impl App {
                                 snapshots,
                                 rate_limit_reset_credits.ok_or_else(|| {
                                     "account/rateLimits/read response did not include rateLimitResetCredits"
-                                    .to_string()
-                                }),
-                            );
-                        }
-                        RateLimitRefreshOrigin::ResetPicker { request_id } => {
-                            self.chat_widget.finish_rate_limit_reset_credits_refresh(
-                                request_id,
-                                snapshots,
-                                rate_limit_reset_credits.ok_or_else(|| {
-                                    "account/rateLimits/read response did not include rateLimitResetCredits"
                                         .to_string()
                                 }),
                             );
@@ -915,13 +844,6 @@ impl App {
                                 Err(err),
                             );
                         }
-                        RateLimitRefreshOrigin::ResetPicker { request_id } => {
-                            self.chat_widget.finish_rate_limit_reset_credits_refresh(
-                                request_id,
-                                Vec::new(),
-                                Err(err),
-                            );
-                        }
                     }
                 }
             },
@@ -929,29 +851,87 @@ impl App {
                 self.chat_widget
                     .add_token_activity_output(crate::chatwidget::TokenActivityView::Daily);
             }
+            AppEvent::OpenProviderManager => {
+                self.refresh_in_memory_config_from_disk_best_effort("opening provider manager")
+                    .await;
+                self.chat_widget.dismiss_provider_form();
+                self.chat_widget.open_provider_manager();
+            }
+            AppEvent::OpenProviderDetail { id } => {
+                self.chat_widget.open_provider_detail(&id);
+            }
+            AppEvent::OpenProviderDeleteConfirm { id } => {
+                self.chat_widget.open_provider_delete_confirm(&id);
+            }
+            AppEvent::OpenProviderForm { mode, draft } => {
+                self.chat_widget.open_provider_form(mode, draft);
+            }
+            AppEvent::ProviderFormFieldSubmitted {
+                mode,
+                draft,
+                field,
+                value,
+            } => {
+                self.chat_widget
+                    .handle_provider_form_field(mode, draft, field, value);
+            }
+            AppEvent::ProviderFormWireApiSelected {
+                mode,
+                draft,
+                wire_api,
+            } => {
+                let draft = draft.with_wire_api(wire_api);
+                if mode == ProviderFormMode::Add {
+                    // For new providers, save immediately and open model picker
+                    // so the user can select a model and configure context window.
+                    let provider = self.chat_widget.provider_from_form_draft(mode, &draft);
+                    self.app_event_tx.send(AppEvent::ProviderConfigAction {
+                        action: crate::app_event::ProviderConfigAction::Upsert {
+                            id: draft.id.clone(),
+                            provider,
+                        },
+                    });
+                } else {
+                    self.chat_widget.open_provider_form_confirm(mode, draft);
+                }
+            }
+            AppEvent::ProviderConfigAction { action } => {
+                self.handle_provider_config_action(app_server, action).await;
+            }
             AppEvent::OpenRateLimitResetCredits => {
                 let request_id = self.chat_widget.show_rate_limit_reset_loading_popup();
-                self.refresh_rate_limits(
-                    app_server,
-                    RateLimitRefreshOrigin::ResetPicker { request_id },
-                );
+                self.refresh_rate_limit_reset_credits(app_server, request_id);
             }
-            AppEvent::ConsumeRateLimitResetCredit {
-                idempotency_key,
-                credit_id,
-            } => {
+            AppEvent::RateLimitResetCreditsLoaded { request_id, result } => match result {
+                Ok(response) => {
+                    let rate_limit_reset_credits = response.rate_limit_reset_credits.clone();
+                    self.chat_widget.finish_rate_limit_reset_credits_refresh(
+                        request_id,
+                        app_server_rate_limit_snapshots(response),
+                        rate_limit_reset_credits.ok_or_else(|| {
+                            "account/rateLimits/read response did not include rateLimitResetCredits"
+                                .to_string()
+                        }),
+                    );
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        "account/rateLimits/read failed during reset-credit refresh: {err}"
+                    );
+                    self.chat_widget.finish_rate_limit_reset_credits_refresh(
+                        request_id,
+                        Vec::new(),
+                        Err(err),
+                    );
+                }
+            },
+            AppEvent::ConsumeRateLimitResetCredit { idempotency_key } => {
                 let request_id = self.chat_widget.show_rate_limit_reset_consuming_popup();
-                self.consume_rate_limit_reset_credit(
-                    app_server,
-                    request_id,
-                    idempotency_key,
-                    credit_id,
-                );
+                self.consume_rate_limit_reset_credit(app_server, request_id, idempotency_key);
             }
             AppEvent::RateLimitResetCreditConsumed {
                 request_id,
                 idempotency_key,
-                credit_id,
                 result,
             } => {
                 if let Err(err) = &result {
@@ -962,7 +942,6 @@ impl App {
                 if self.chat_widget.finish_rate_limit_reset_consume(
                     request_id,
                     idempotency_key,
-                    credit_id,
                     result,
                 ) {
                     self.refresh_rate_limits(
@@ -1554,12 +1533,6 @@ impl App {
                             .map(std::string::ToString::to_string)
                             .unwrap_or_else(|| "default".to_string());
                         tracing::info!("Selected model: {model}, Selected effort: {effort_label}");
-                        let mut message = format!("Model changed to {model}");
-                        if let Some(label) = Self::reasoning_label_for(&model, effort.as_ref()) {
-                            message.push(' ');
-                            message.push_str(&label);
-                        }
-                        self.chat_widget.add_info_message(message, /*hint*/ None);
                     }
                     Err(err) => {
                         let error = format_config_error(&err);
@@ -2245,6 +2218,17 @@ impl App {
             AppEvent::KeymapCleared { context, action } => {
                 self.apply_keymap_clear(context, action).await;
             }
+            AppEvent::OpenModelContextWindowPopup {
+                model_id,
+                provider_id,
+                pending_selection,
+            } => {
+                self.chat_widget.open_model_context_window_popup(
+                    &model_id,
+                    &provider_id,
+                    pending_selection,
+                );
+            }
         }
         Ok(AppRunControl::Continue)
     }
@@ -2457,6 +2441,373 @@ impl App {
                 self.chat_widget
                     .add_error_message(format!("Failed to delete current thread: {err}"));
                 AppRunControl::Continue
+            }
+        }
+    }
+
+    async fn handle_provider_config_action(
+        &mut self,
+        app_server: &mut AppServerSession,
+        action: crate::app_event::ProviderConfigAction,
+    ) {
+        let builtin_ids = codex_model_provider_info::built_in_model_providers(None);
+        enum ProviderPostSaveAction {
+            None,
+            RefreshCurrentProvider,
+            FetchAndOpenModels { provider_id: String },
+        }
+
+        let action = match action {
+            crate::app_event::ProviderConfigAction::FetchModelsForNewProvider {
+                draft,
+                provider,
+            } => {
+                let id = draft.id.clone();
+                if builtin_ids.contains_key(&id) {
+                    self.chat_widget.add_error_message(format!(
+                        "Built-in provider '{id}' cannot be edited here."
+                    ));
+                    self.chat_widget.dismiss_provider_form();
+                    self.chat_widget
+                        .open_provider_form(ProviderFormMode::Add, draft);
+                    return;
+                }
+                if self.config.model_providers.contains_key(&id) {
+                    self.chat_widget.add_error_message(format!(
+                        "Provider '{id}' already exists. Choose a different id."
+                    ));
+                    self.chat_widget.dismiss_provider_form();
+                    self.chat_widget
+                        .open_provider_form(ProviderFormMode::Add, draft);
+                    return;
+                }
+                if let Err(err) = provider.validate() {
+                    self.chat_widget
+                        .add_error_message(format!("Invalid provider '{id}': {err}"));
+                    self.chat_widget.dismiss_provider_form();
+                    self.chat_widget
+                        .open_provider_form(ProviderFormMode::Add, draft);
+                    return;
+                }
+
+                let models = match codex_model_provider::fetch_provider_models(
+                    provider.clone(),
+                    /*auth_manager*/ None,
+                )
+                .await
+                {
+                    Ok(models) if !models.is_empty() => models,
+                    Ok(_) => {
+                        self.chat_widget
+                            .add_error_message(format!("Provider '{id}' returned no models."));
+                        self.chat_widget.dismiss_provider_form();
+                        self.chat_widget
+                            .open_provider_form(ProviderFormMode::Add, draft);
+                        return;
+                    }
+                    Err(err) => {
+                        self.chat_widget.add_error_message(format!(
+                        "Failed to fetch models for provider '{id}': {err}. Check the form values and try again."
+                    ));
+                        self.chat_widget.dismiss_provider_form();
+                        self.chat_widget
+                            .open_provider_form(ProviderFormMode::Add, draft);
+                        return;
+                    }
+                };
+
+                let provider_models = models
+                    .into_iter()
+                    .map(codex_protocol::openai_models::ModelPreset::from)
+                    .map(|model| codex_model_provider_info::ProviderModelInfo::from(&model))
+                    .collect::<Vec<_>>();
+                let mut provider = provider;
+                provider.models = provider_models.clone();
+
+                let edit = match crate::config_update::build_model_provider_edit(&id, &provider) {
+                    Ok(edit) => edit,
+                    Err(err) => {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to serialize provider '{id}': {err}"
+                        ));
+                        self.chat_widget.dismiss_provider_form();
+                        self.chat_widget
+                            .open_provider_form(ProviderFormMode::Add, draft);
+                        return;
+                    }
+                };
+                let edits = vec![
+                    edit,
+                    crate::config_update::build_model_provider_selection_edit(&id),
+                    crate::config_update::build_model_provider_models_edit(&id, &provider_models),
+                ];
+
+                match crate::config_update::write_config_batch(app_server.request_handle(), edits)
+                    .await
+                {
+                    Ok(_) => {
+                        self.refresh_in_memory_config_from_disk_best_effort("adding provider")
+                            .await;
+                        if self
+                            .refresh_model_catalog_from_app_server(
+                                ModelCatalogRefresh::CurrentProvider { app_server },
+                            )
+                            .await
+                        {
+                            self.chat_widget.dismiss_provider_form();
+                            self.chat_widget.open_model_popup();
+                        } else {
+                            self.chat_widget.open_provider_manager();
+                        }
+                    }
+                    Err(err) => {
+                        let error = crate::config_update::format_config_error(&err);
+                        self.chat_widget.add_error_message(format!(
+                            "Fetched models, but failed to save provider '{id}': {error}"
+                        ));
+                        self.chat_widget.dismiss_provider_form();
+                        self.chat_widget
+                            .open_provider_form(ProviderFormMode::Add, draft);
+                    }
+                }
+                return;
+            }
+            action => action,
+        };
+
+        let (edits, success_message, post_save_action) = match action {
+            crate::app_event::ProviderConfigAction::Upsert { id, provider } => {
+                if builtin_ids.contains_key(&id) {
+                    self.chat_widget.add_error_message(format!(
+                        "Built-in provider '{id}' cannot be edited here."
+                    ));
+                    return;
+                }
+                let edit = match crate::config_update::build_model_provider_edit(&id, &provider) {
+                    Ok(edit) => edit,
+                    Err(err) => {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to serialize provider '{id}': {err}"
+                        ));
+                        return;
+                    }
+                };
+                let provider_is_new = !self.config.model_providers.contains_key(&id);
+                let mut edits = vec![edit];
+                let post_save_action = if provider_is_new {
+                    edits.push(crate::config_update::build_model_provider_selection_edit(
+                        &id,
+                    ));
+                    ProviderPostSaveAction::FetchAndOpenModels {
+                        provider_id: id.clone(),
+                    }
+                } else if self.config.model_provider_id == id {
+                    ProviderPostSaveAction::RefreshCurrentProvider
+                } else {
+                    ProviderPostSaveAction::None
+                };
+                let success_message = if provider_is_new {
+                    tracing::info!("Saved and selected provider '{id}'.");
+                    String::new()
+                } else {
+                    tracing::info!("Saved provider '{id}'.");
+                    String::new()
+                };
+                (edits, success_message, post_save_action)
+            }
+            crate::app_event::ProviderConfigAction::FetchModelsForNewProvider { .. } => {
+                unreachable!("new provider model fetch is handled before config edits are built")
+            }
+            crate::app_event::ProviderConfigAction::Delete { id } => {
+                if builtin_ids.contains_key(&id) {
+                    self.chat_widget
+                        .add_error_message(format!("Built-in provider '{id}' cannot be deleted."));
+                    return;
+                }
+                if !self.config.model_providers.contains_key(&id) {
+                    self.chat_widget
+                        .add_error_message(format!("Provider '{id}' does not exist."));
+                    return;
+                }
+                if self.config.model_provider_id == id {
+                    self.chat_widget.add_error_message(format!(
+                        "Provider '{id}' is selected. Choose another provider before deleting it."
+                    ));
+                    return;
+                }
+                (
+                    vec![crate::config_update::build_model_provider_delete_edit(&id)],
+                    String::new(),
+                    ProviderPostSaveAction::None,
+                )
+            }
+            crate::app_event::ProviderConfigAction::Use { id } => {
+                if !self.config.model_providers.contains_key(&id) {
+                    self.chat_widget
+                        .add_error_message(format!("Provider '{id}' does not exist."));
+                    return;
+                }
+                (
+                    vec![crate::config_update::build_model_provider_selection_edit(
+                        &id,
+                    )],
+                    String::new(),
+                    ProviderPostSaveAction::RefreshCurrentProvider,
+                )
+            }
+            crate::app_event::ProviderConfigAction::FetchModels { id } => {
+                if builtin_ids.contains_key(&id) {
+                    self.chat_widget.add_error_message(format!(
+                        "Built-in provider '{id}' uses Codex's built-in model catalog."
+                    ));
+                    return;
+                }
+                if !self.config.model_providers.contains_key(&id) {
+                    self.chat_widget
+                        .add_error_message(format!("Provider '{id}' does not exist."));
+                    return;
+                }
+                (
+                    vec![crate::config_update::build_model_provider_selection_edit(
+                        &id,
+                    )],
+                    String::new(),
+                    ProviderPostSaveAction::FetchAndOpenModels { provider_id: id },
+                )
+            }
+            crate::app_event::ProviderConfigAction::UpdateModelContextWindow {
+                id,
+                model_id,
+                context_window,
+            } => {
+                if !self.config.model_providers.contains_key(&id) {
+                    self.chat_widget
+                        .add_error_message(format!("Provider '{id}' does not exist."));
+                    return;
+                }
+                let Some(provider) = self.config.model_providers.get(&id) else {
+                    return;
+                };
+                let mut models = provider.models.clone();
+                if let Some(model) = models.iter_mut().find(|m| m.model_id == model_id) {
+                    model.context_window = Some(context_window);
+                }
+                (
+                    vec![crate::config_update::build_model_provider_models_edit(
+                        &id, &models,
+                    )],
+                    String::new(),
+                    ProviderPostSaveAction::RefreshCurrentProvider,
+                )
+            }
+        };
+
+        match crate::config_update::write_config_batch(app_server.request_handle(), edits).await {
+            Ok(_) => {
+                self.refresh_in_memory_config_from_disk_best_effort("updating providers")
+                    .await;
+                if !success_message.is_empty() {
+                    self.chat_widget.add_info_message(success_message, None);
+                }
+                let ref_succeeded = match &post_save_action {
+                    ProviderPostSaveAction::None => false,
+                    ProviderPostSaveAction::RefreshCurrentProvider => {
+                        self.refresh_model_catalog_from_app_server(
+                            ModelCatalogRefresh::CurrentProvider { app_server },
+                        )
+                        .await
+                    }
+                    ProviderPostSaveAction::FetchAndOpenModels { provider_id } => {
+                        self.refresh_model_catalog_from_app_server(
+                            ModelCatalogRefresh::FetchAndPersistProvider {
+                                app_server,
+                                provider_id: provider_id.as_str(),
+                            },
+                        )
+                        .await
+                    }
+                };
+                match (post_save_action, ref_succeeded) {
+                    (ProviderPostSaveAction::FetchAndOpenModels { .. }, true) => {
+                        self.chat_widget.open_model_popup();
+                    }
+                    (ProviderPostSaveAction::RefreshCurrentProvider, true) => {
+                        // Context window updated and models refreshed — no navigation needed.
+                    }
+                    (ProviderPostSaveAction::None, _)
+                    | (ProviderPostSaveAction::RefreshCurrentProvider, false)
+                    | (ProviderPostSaveAction::FetchAndOpenModels { .. }, false) => {
+                        self.chat_widget.open_provider_manager();
+                    }
+                }
+            }
+            Err(err) => {
+                let error = crate::config_update::format_config_error(&err);
+                self.chat_widget
+                    .add_error_message(format!("Failed to save provider configuration: {error}"));
+            }
+        }
+    }
+
+    async fn refresh_model_catalog_from_app_server(
+        &mut self,
+        refresh: ModelCatalogRefresh<'_>,
+    ) -> bool {
+        let (app_server, persist_provider_id, fetch_result) = match refresh {
+            ModelCatalogRefresh::CurrentProvider { app_server } => {
+                let fetch_result = app_server.fetch_available_models().await;
+                (app_server, None, fetch_result)
+            }
+            ModelCatalogRefresh::FetchAndPersistProvider {
+                app_server,
+                provider_id,
+            } => {
+                let fetch_result = app_server.force_fetch_available_models().await;
+                (app_server, Some(provider_id), fetch_result)
+            }
+        };
+
+        match fetch_result {
+            Ok(available_models) => {
+                let model_count = available_models.len();
+                if let Some(provider_id) = persist_provider_id {
+                    let provider_models = available_models
+                        .iter()
+                        .map(codex_model_provider_info::ProviderModelInfo::from)
+                        .collect::<Vec<_>>();
+                    let edit = crate::config_update::build_model_provider_models_edit(
+                        provider_id,
+                        &provider_models,
+                    );
+                    if let Err(err) = crate::config_update::write_config_batch(
+                        app_server.request_handle(),
+                        vec![edit],
+                    )
+                    .await
+                    {
+                        let error = crate::config_update::format_config_error(&err);
+                        self.chat_widget.add_error_message(format!(
+                            "Fetched models, but failed to save provider models: {error}"
+                        ));
+                        return false;
+                    }
+                    self.refresh_in_memory_config_from_disk_best_effort("saving provider models")
+                        .await;
+                }
+                let model_catalog = Arc::new(ModelCatalog::new(available_models));
+                self.model_catalog = model_catalog.clone();
+                self.chat_widget.set_model_catalog(model_catalog);
+                tracing::info!(
+                    "Loaded {model_count} models for provider '{}'.",
+                    self.config.model_provider_id
+                );
+                true
+            }
+            Err(err) => {
+                self.chat_widget.add_error_message(format!(
+                    "Provider saved, but failed to refresh models: {err:#}"
+                ));
+                false
             }
         }
     }

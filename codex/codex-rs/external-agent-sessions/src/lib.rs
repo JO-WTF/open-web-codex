@@ -4,7 +4,6 @@ mod detect;
 mod export;
 mod ledger;
 mod records;
-mod title;
 
 use codex_protocol::protocol::RolloutItem;
 use std::io;

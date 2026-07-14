@@ -1,7 +1,7 @@
 use super::*;
+use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
-use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AdditionalContextEntry as CoreAdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -114,10 +114,12 @@ struct ThreadSettingsBuildParams {
     sandbox_policy: Option<codex_app_server_protocol::SandboxPolicy>,
     permissions: Option<String>,
     model: Option<String>,
+    model_provider: Option<String>,
     service_tier: Option<Option<String>>,
     effort: Option<ReasoningEffort>,
     summary: Option<ReasoningSummary>,
     collaboration_mode: Option<CollaborationMode>,
+    multi_agent_mode: Option<MultiAgentMode>,
     personality: Option<Personality>,
 }
 
@@ -510,21 +512,16 @@ impl TurnRequestProcessor {
                     sandbox_policy: params.sandbox_policy,
                     permissions: params.permissions,
                     model: params.model,
+                    model_provider: params.model_provider,
                     service_tier: params.service_tier,
                     effort: params.effort,
                     summary: params.summary,
                     collaboration_mode: params.collaboration_mode,
+                    multi_agent_mode: params.multi_agent_mode,
                     personality: params.personality,
                 },
             )
             .await?;
-        let parent_permission_profile_override =
-            thread_settings.permission_profile.clone().or_else(|| {
-                thread_settings
-                    .sandbox_policy
-                    .as_ref()
-                    .map(PermissionProfile::from_legacy_sandbox_policy)
-            });
 
         // Start the turn by submitting the user input. Return its submission id as turn_id.
         let turn_op = Op::UserInput {
@@ -549,15 +546,12 @@ impl TurnRequestProcessor {
 
         if turn_has_input {
             let config_snapshot = thread.config_snapshot().await;
-            let parent_permission_profile =
-                parent_permission_profile_override.unwrap_or(config_snapshot.permission_profile);
             codex_memories_write::start_memories_startup_task(
                 Arc::clone(&self.thread_manager),
                 Arc::clone(&self.auth_manager),
                 thread_id,
                 Arc::clone(&thread),
                 thread.config().await,
-                parent_permission_profile,
                 &config_snapshot.session_source,
             );
         }
@@ -626,10 +620,12 @@ impl TurnRequestProcessor {
             sandbox_policy,
             permissions,
             model,
+            model_provider,
             service_tier,
             effort,
             summary,
             collaboration_mode,
+            multi_agent_mode,
             personality,
         } = params;
 
@@ -659,10 +655,12 @@ impl TurnRequestProcessor {
             || sandbox_policy.is_some()
             || permissions.is_some()
             || model.is_some()
+            || model_provider.is_some()
             || service_tier.is_some()
             || effort.is_some()
             || summary.is_some()
             || collaboration_mode.is_some()
+            || multi_agent_mode.is_some()
             || personality.is_some();
 
         let runtime_workspace_roots =
@@ -735,10 +733,12 @@ impl TurnRequestProcessor {
                     profile_workspace_roots: profile_workspace_roots.clone(),
                     windows_sandbox_level: None,
                     model: model.clone(),
+                    model_provider_id: model_provider.clone(),
                     effort: effort.clone(),
                     summary,
                     service_tier: service_tier.clone(),
                     collaboration_mode: collaboration_mode.clone(),
+                    multi_agent_mode,
                     personality,
                 })
                 .await
@@ -758,10 +758,12 @@ impl TurnRequestProcessor {
             active_permission_profile,
             windows_sandbox_level: None,
             model,
+            model_provider_id: model_provider,
             effort,
             summary,
             service_tier,
             collaboration_mode,
+            multi_agent_mode,
             personality,
         })
     }
@@ -788,10 +790,12 @@ impl TurnRequestProcessor {
                     sandbox_policy: params.sandbox_policy,
                     permissions: params.permissions,
                     model: params.model,
+                    model_provider: params.model_provider,
                     service_tier: params.service_tier,
                     effort: params.effort,
                     summary: params.summary,
                     collaboration_mode: params.collaboration_mode,
+                    multi_agent_mode: params.multi_agent_mode,
                     personality: params.personality,
                 },
             )
@@ -1013,9 +1017,6 @@ impl TurnRequestProcessor {
             thread.as_ref(),
             Op::RealtimeConversationStart(ConversationStartParams {
                 client_managed_handoffs: params.client_managed_handoffs.unwrap_or(false),
-                flush_transcript_tail_on_session_end: params
-                    .flush_transcript_tail_on_session_end
-                    .unwrap_or(false),
                 codex_responses_as_items: params.codex_responses_as_items.unwrap_or(false),
                 codex_response_item_prefix: params.codex_response_item_prefix,
                 codex_response_handoff_prefix: params.codex_response_handoff_prefix,

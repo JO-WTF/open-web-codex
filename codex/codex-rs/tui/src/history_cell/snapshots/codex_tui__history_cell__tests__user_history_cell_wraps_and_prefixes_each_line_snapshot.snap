@@ -1,6 +1,9 @@
 ---
-source: tui/src/history_cell/tests.rs
+source: tui/src/history_cell.rs
 expression: rendered
 ---
-› _count_ro
-  ws
+
+› one two
+  three
+  four five
+  six seven

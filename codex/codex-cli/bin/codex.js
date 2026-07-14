@@ -11,7 +11,6 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const require = createRequire(import.meta.url);
-const codexPackageRoot = realpathSync(path.join(__dirname, ".."));
 
 const PLATFORM_PACKAGE_BY_TARGET = {
   "x86_64-unknown-linux-musl": "@openai/codex-linux-x64",
@@ -99,9 +98,7 @@ function findCodexExecutable() {
   const updateCommand =
     packageManager === "bun"
       ? "bun install -g @openai/codex@latest"
-      : packageManager === "pnpm"
-        ? "pnpm add -g @openai/codex@latest"
-        : "npm install -g @openai/codex@latest";
+      : "npm install -g @openai/codex@latest";
   throw new Error(
     `Missing optional dependency ${platformPackage}. Reinstall Codex: ${updateCommand}`,
   );
@@ -115,47 +112,11 @@ const binaryPath = findCodexExecutable();
 // and guarantees that when either the child terminates or the parent
 // receives a fatal signal, both processes exit in a predictable manner.
 
-function isPnpmOwnedCodexInstall(nodeModulesDir) {
-  if (!existsSync(path.join(nodeModulesDir, ".modules.yaml"))) {
-    return false;
-  }
-
-  try {
-    return (
-      realpathSync(path.join(nodeModulesDir, "@openai", "codex")) ===
-      codexPackageRoot
-    );
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Use heuristics to detect the package manager that was used to install Codex
  * in order to give the user a hint about how to update it.
  */
 function detectPackageManager() {
-  // pnpm's owning node_modules directory can be several parents above the
-  // package in isolated global layouts. Search ancestors of both the canonical
-  // package root and lexical entrypoint because pnpm may link either path.
-  const entrypointDir = path.dirname(path.resolve(process.argv[1]));
-  for (const startDir of new Set([codexPackageRoot, entrypointDir])) {
-    const filesystemRoot = path.parse(startDir).root;
-    for (
-      let currentDir = startDir;
-      currentDir !== filesystemRoot;
-      currentDir = path.dirname(currentDir)
-    ) {
-      if (isPnpmOwnedCodexInstall(path.join(currentDir, "node_modules"))) {
-        return "pnpm";
-      }
-    }
-
-    if (isPnpmOwnedCodexInstall(path.join(filesystemRoot, "node_modules"))) {
-      return "pnpm";
-    }
-  }
-
   const userAgent = process.env.npm_config_user_agent || "";
   if (/\bbun\//.test(userAgent)) {
     return "bun";
@@ -176,21 +137,15 @@ function detectPackageManager() {
   return userAgent ? "npm" : null;
 }
 
-const packageManager = detectPackageManager();
 const packageManagerEnvVar =
-  packageManager === "bun"
+  detectPackageManager() === "bun"
     ? "CODEX_MANAGED_BY_BUN"
-    : packageManager === "pnpm"
-      ? "CODEX_MANAGED_BY_PNPM"
-      : "CODEX_MANAGED_BY_NPM";
+    : "CODEX_MANAGED_BY_NPM";
 const env = {
   ...process.env,
-  CODEX_MANAGED_PACKAGE_ROOT: codexPackageRoot,
+  [packageManagerEnvVar]: "1",
+  CODEX_MANAGED_PACKAGE_ROOT: realpathSync(path.join(__dirname, "..")),
 };
-delete env.CODEX_MANAGED_BY_NPM;
-delete env.CODEX_MANAGED_BY_BUN;
-delete env.CODEX_MANAGED_BY_PNPM;
-env[packageManagerEnvVar] = "1";
 
 const child = spawn(binaryPath, process.argv.slice(2), {
   stdio: "inherit",

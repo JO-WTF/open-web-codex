@@ -159,6 +159,7 @@ fn model_provider_from_proto(
     let id = provider.id;
     let wire_api = match proto::WireApi::try_from(provider.wire_api) {
         Ok(proto::WireApi::Responses) => WireApi::Responses,
+        Ok(proto::WireApi::Chat) => WireApi::Chat,
         Ok(proto::WireApi::Unspecified) => {
             return Err(parse_error("remote thread config omitted wire_api"));
         }
@@ -190,6 +191,7 @@ fn model_provider_from_proto(
         websocket_connect_timeout_ms: provider.websocket_connect_timeout_ms,
         requires_openai_auth: provider.requires_openai_auth,
         supports_websockets: provider.supports_websockets,
+        models: Vec::new(),
     };
     Ok((id, info))
 }
@@ -208,6 +210,7 @@ fn model_provider_to_proto(
         auth,
         aws: _,
         wire_api,
+        models: _,
         query_params,
         http_headers,
         env_http_headers,
@@ -289,6 +292,7 @@ fn proto_string_map(values: HashMap<String, String>) -> proto::StringMap {
 fn proto_wire_api(wire_api: WireApi) -> proto::WireApi {
     match wire_api {
         WireApi::Responses => proto::WireApi::Responses,
+        WireApi::Chat => proto::WireApi::Chat,
     }
 }
 
@@ -427,6 +431,22 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
+    #[test]
+    fn chat_wire_api_roundtrips_through_model_provider_proto() {
+        let expected = ModelProviderInfo {
+            wire_api: WireApi::Chat,
+            models: Vec::new(),
+            ..expected_provider()
+        };
+        let proto = model_provider_to_proto("local", expected.clone());
+        assert_eq!(proto.wire_api, proto::WireApi::Chat as i32);
+
+        let (id, actual) = model_provider_from_proto(proto).expect("model provider from proto");
+
+        assert_eq!(id, "local");
+        assert_eq!(actual, expected);
+    }
+
     fn proto_sources() -> Vec<proto::ThreadConfigSource> {
         let workspace_cwd = workspace_dir().to_string_lossy().into_owned();
         vec![
@@ -518,6 +538,7 @@ mod tests {
                 cwd: workspace_dir(),
             }),
             wire_api: WireApi::Responses,
+            models: Vec::new(),
             query_params: Some(HashMap::from([(
                 "api-version".to_string(),
                 "2026-04-16".to_string(),

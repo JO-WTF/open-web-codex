@@ -75,6 +75,8 @@ async fn extension_tool_receives_turn_environment_sandbox() -> Result<()> {
         })
         .with_config(|config| {
             assert!(config.web_search_mode.set(WebSearchMode::Live).is_ok());
+            assert!(config.features.enable(Feature::ImageGeneration).is_ok());
+            assert!(config.features.disable(Feature::ImageGenExt).is_ok());
         });
     let test = builder.build(&server).await?;
     let denied_path = test.config.cwd.join("denied.png");
@@ -181,6 +183,8 @@ async fn extension_tool_uses_granted_turn_permissions_without_local_persistence(
                 .set_permission_profile(permission_profile_for_config)
                 .expect("set permission profile");
             assert!(config.web_search_mode.set(WebSearchMode::Live).is_ok());
+            assert!(config.features.enable(Feature::ImageGeneration).is_ok());
+            assert!(config.features.disable(Feature::ImageGenExt).is_ok());
             assert!(
                 config
                     .features
@@ -252,6 +256,7 @@ async fn extension_tool_uses_granted_turn_permissions_without_local_persistence(
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                model_provider_id: None,
                 environments: Some(local_selections(test.config.cwd.clone())),
                 approval_policy: Some(AskForApproval::OnRequest),
                 approvals_reviewer: Some(ApprovalsReviewer::User),

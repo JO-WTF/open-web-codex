@@ -2,7 +2,6 @@ use super::*;
 use crate::session::tests::build_world_state_from_turn_context;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
-use codex_protocol::ResponseItemId;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use pretty_assertions::assert_eq;
@@ -13,7 +12,6 @@ async fn process_compacted_history_with_test_session(
     previous_turn_settings: Option<&PreviousTurnSettings>,
 ) -> (Vec<ResponseItem>, Vec<ResponseItem>) {
     let (session, turn_context) = crate::session::tests::make_session_and_context().await;
-    let turn_context = Arc::new(turn_context);
     session
         .set_previous_turn_settings(previous_turn_settings.cloned())
         .await;
@@ -86,7 +84,7 @@ fn content_items_to_text_ignores_image_only_content() {
 fn collect_user_messages_extracts_user_text_only() {
     let items = vec![
         ResponseItem::Message {
-            id: Some(ResponseItemId::with_suffix("msg", "assistant")),
+            id: Some("assistant".to_string()),
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
                 text: "ignored".to_string(),
@@ -95,7 +93,7 @@ fn collect_user_messages_extracts_user_text_only() {
             internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::Message {
-            id: Some(ResponseItemId::with_suffix("msg", "user")),
+            id: Some("user".to_string()),
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
                 text: "first".to_string(),
@@ -268,6 +266,7 @@ fn should_use_remote_compact_task_for_azure_provider() {
         auth: None,
         aws: None,
         wire_api: WireApi::Responses,
+        models: Vec::new(),
         query_params: None,
         http_headers: None,
         env_http_headers: None,

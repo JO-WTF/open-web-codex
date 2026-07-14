@@ -47,8 +47,6 @@ impl AppsRequestProcessor {
         request_id: &ConnectionRequestId,
         params: AppsListParams,
     ) -> Result<Option<AppsListResponse>, JSONRPCErrorError> {
-        let installed_start = Instant::now();
-        let reload = params.force_refetch;
         let thread = if let Some(thread_id) = params.thread_id.as_deref() {
             let (_, loaded_thread) = self.load_thread(thread_id).await?;
             Some(loaded_thread)
@@ -72,24 +70,20 @@ impl AppsRequestProcessor {
             .features
             .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::uses_codex_backend))
         {
-            let response = AppsListResponse {
+            return Ok(Some(AppsListResponse {
                 data: Vec::new(),
                 next_cursor: None,
-            };
-            record_legacy_apps_installed_duration(installed_start, reload);
-            return Ok(Some(response));
+            }));
         }
 
         if !self
             .workspace_codex_plugins_enabled(&config, auth.as_ref())
             .await
         {
-            let response = AppsListResponse {
+            return Ok(Some(AppsListResponse {
                 data: Vec::new(),
                 next_cursor: None,
-            };
-            record_legacy_apps_installed_duration(installed_start, reload);
-            return Ok(Some(response));
+            }));
         }
 
         let request = request_id.clone();
@@ -109,7 +103,6 @@ impl AppsRequestProcessor {
                     environment_manager,
                     mcp_manager,
                     plugins_manager,
-                    installed_start,
                 ) => {}
             }
         });
@@ -120,7 +113,6 @@ impl AppsRequestProcessor {
         self.shutdown_token.cancel();
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn apps_list_task(
         outgoing: Arc<OutgoingMessageSender>,
         request_id: ConnectionRequestId,
@@ -129,9 +121,7 @@ impl AppsRequestProcessor {
         environment_manager: Arc<EnvironmentManager>,
         mcp_manager: Arc<McpManager>,
         plugins_manager: Arc<PluginsManager>,
-        installed_start: Instant,
     ) {
-        let reload = params.force_refetch;
         let retry_params = params.clone();
         let retry_config = config.clone();
         let retry_environment_manager = Arc::clone(&environment_manager);
@@ -146,9 +136,6 @@ impl AppsRequestProcessor {
             plugins_manager,
         )
         .await;
-        if result.is_ok() {
-            record_legacy_apps_installed_duration(installed_start, reload);
-        }
         let should_retry = result
             .as_ref()
             .is_ok_and(|(_, codex_apps_ready)| !codex_apps_ready);
@@ -196,14 +183,10 @@ impl AppsRequestProcessor {
             None => 0,
         };
 
-        let loaded_plugins = plugins_manager
+        let plugin_apps = plugins_manager
             .plugins_for_config(&config.plugins_config_input())
-            .await;
-        let connector_snapshot =
-            codex_connectors::ConnectorSnapshot::from_plugin_capability_summaries(
-                loaded_plugins.capability_summaries(),
-            );
-        let plugin_apps = connector_snapshot.connector_ids().to_vec();
+            .await
+            .effective_apps();
         let (mut accessible_connectors, mut all_connectors) = tokio::join!(
             connectors::list_cached_accessible_connectors_from_mcp_tools(&config),
             connectors::list_cached_all_connectors(&config, &plugin_apps)
@@ -376,20 +359,6 @@ impl AppsRequestProcessor {
 }
 
 const APP_LIST_LOAD_TIMEOUT: Duration = Duration::from_secs(90);
-// `app/list` is the legacy request-path baseline for the future `app/installed` endpoint;
-// `path=legacy` keeps it separate from the new snapshot-backed implementation in dashboards.
-const APPS_INSTALLED_DURATION_METRIC: &str = "codex.apps.installed.duration_ms";
-
-fn record_legacy_apps_installed_duration(started_at: Instant, reload: bool) {
-    let reload = if reload { "true" } else { "false" };
-    if let Some(metrics) = codex_otel::global() {
-        let _ = metrics.record_duration(
-            APPS_INSTALLED_DURATION_METRIC,
-            started_at.elapsed(),
-            &[("path", "legacy"), ("reload", reload)],
-        );
-    }
-}
 
 enum AppListLoadResult {
     Accessible(Result<AccessibleConnectorsStatus, String>),

@@ -9,13 +9,14 @@ use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolExposure;
+use crate::turn_timing::now_unix_timestamp_ms;
+use codex_protocol::dynamic_tools::DynamicToolCallRequest;
 use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
-use codex_protocol::items::DynamicToolCallItem;
-use codex_protocol::items::DynamicToolCallStatus;
-use codex_protocol::items::TurnItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::protocol::DynamicToolCallResponseEvent;
+use codex_protocol::protocol::EventMsg;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
@@ -177,6 +178,7 @@ async fn request_dynamic_tool(
 ) -> Option<DynamicToolResponse> {
     let namespace = tool_name.namespace;
     let tool = tool_name.name;
+    let turn_id = turn_context.sub_id.clone();
     let (tx_response, rx_response) = oneshot::channel();
     let event_id = call_id.clone();
     let prev_entry = {
@@ -194,55 +196,45 @@ async fn request_dynamic_tool(
     }
 
     let started_at = Instant::now();
-    session
-        .emit_turn_item_started(
-            turn_context,
-            &TurnItem::DynamicToolCall(DynamicToolCallItem {
-                id: call_id.clone(),
-                namespace: namespace.clone(),
-                tool: tool.clone(),
-                arguments: arguments.clone(),
-                status: DynamicToolCallStatus::InProgress,
-                content_items: None,
-                success: None,
-                error: None,
-                duration: None,
-            }),
-        )
-        .await;
+    let started_at_ms = now_unix_timestamp_ms();
+    let event = EventMsg::DynamicToolCallRequest(DynamicToolCallRequest {
+        call_id: call_id.clone(),
+        turn_id: turn_id.clone(),
+        started_at_ms,
+        namespace: namespace.clone(),
+        tool: tool.clone(),
+        arguments: arguments.clone(),
+    });
+    session.send_event(turn_context, event).await;
     let response = rx_response.await.ok();
 
-    let item = match &response {
-        Some(response) => DynamicToolCallItem {
-            id: call_id,
+    let response_event = match &response {
+        Some(response) => EventMsg::DynamicToolCallResponse(DynamicToolCallResponseEvent {
+            call_id,
+            turn_id,
+            completed_at_ms: now_unix_timestamp_ms(),
             namespace,
             tool,
             arguments,
-            status: if response.success {
-                DynamicToolCallStatus::Completed
-            } else {
-                DynamicToolCallStatus::Failed
-            },
-            content_items: Some(response.content_items.clone()),
-            success: Some(response.success),
+            content_items: response.content_items.clone(),
+            success: response.success,
             error: None,
-            duration: Some(started_at.elapsed()),
-        },
-        None => DynamicToolCallItem {
-            id: call_id,
+            duration: started_at.elapsed(),
+        }),
+        None => EventMsg::DynamicToolCallResponse(DynamicToolCallResponseEvent {
+            call_id,
+            turn_id,
+            completed_at_ms: now_unix_timestamp_ms(),
             namespace,
             tool,
             arguments,
-            status: DynamicToolCallStatus::Failed,
-            content_items: Some(Vec::new()),
-            success: Some(false),
+            content_items: Vec::new(),
+            success: false,
             error: Some("dynamic tool call was cancelled before receiving a response".to_string()),
-            duration: Some(started_at.elapsed()),
-        },
+            duration: started_at.elapsed(),
+        }),
     };
-    session
-        .emit_turn_item_completed(turn_context, TurnItem::DynamicToolCall(item))
-        .await;
+    session.send_event(turn_context, response_event).await;
 
     response
 }

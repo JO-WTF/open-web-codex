@@ -637,7 +637,7 @@ impl Session {
             let network_proxy_active = match network_proxy.as_ref() {
                 Some(started_network_proxy) => {
                     match started_network_proxy.proxy().current_cfg().await {
-                        Ok(config) => config.enabled,
+                        Ok(config) => config.network.enabled,
                         Err(err) => {
                             warn!(
                                 "failed to read managed network proxy state for turn metrics: {err:#}"
@@ -740,7 +740,6 @@ impl Session {
             turn_context.config.memories.use_memories,
             turn_had_memory_citation,
         );
-        let started_at = turn_context.turn_timing_state.started_at_unix_secs().await;
         let (completed_at, duration_ms) = turn_context
             .turn_timing_state
             .completed_at_and_duration_ms()
@@ -757,7 +756,6 @@ impl Session {
             EventMsg::TurnAborted(TurnAbortedEvent {
                 turn_id: Some(turn_context.sub_id.clone()),
                 reason,
-                started_at,
                 completed_at,
                 duration_ms,
             })
@@ -766,14 +764,11 @@ impl Session {
                 .turn_timing_state
                 .time_to_first_token_ms()
                 .await;
-            let error = turn_context.terminal_error.lock().await.clone();
             self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref())
                 .await;
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: turn_context.sub_id.clone(),
                 last_agent_message,
-                error,
-                started_at,
                 completed_at,
                 duration_ms,
                 time_to_first_token_ms,
@@ -798,14 +793,10 @@ impl Session {
                 false
             }
         };
-        if cleared_active_turn {
-            self.emit_thread_idle_lifecycle_if_idle().await;
+        if !cleared_active_turn {
+            return;
         }
-        // Regular items were flushed before this terminal event was appended; buffering
-        // thread writers may not flush it without another explicit barrier.
-        if let Err(err) = self.flush_rollout().await {
-            warn!("failed to flush rollout after emitting terminal turn event: {err}");
-        }
+        self.emit_thread_idle_lifecycle_if_idle().await;
     }
 
     async fn take_active_turn(&self) -> Option<ActiveTurn> {
@@ -882,11 +873,6 @@ impl Session {
             }
         }
 
-        let started_at = task
-            .turn_context
-            .turn_timing_state
-            .started_at_unix_secs()
-            .await;
         let (completed_at, duration_ms) = task
             .turn_context
             .turn_timing_state
@@ -901,7 +887,6 @@ impl Session {
         let event = EventMsg::TurnAborted(TurnAbortedEvent {
             turn_id: Some(task.turn_context.sub_id.clone()),
             reason,
-            started_at,
             completed_at,
             duration_ms,
         });
@@ -911,11 +896,6 @@ impl Session {
             .lock()
             .await
             .clear_turn(&task.turn_context.sub_id);
-        // Regular items were flushed before this terminal event was appended; buffering
-        // thread writers may not flush it without another explicit barrier.
-        if let Err(err) = self.flush_rollout().await {
-            warn!("failed to flush rollout after emitting terminal turn event: {err}");
-        }
     }
 }
 

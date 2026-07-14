@@ -1,7 +1,8 @@
-use super::manager::CodexAuth;
 use super::manager::ExternalAuth;
 use super::manager::ExternalAuthFuture;
 use super::manager::ExternalAuthRefreshContext;
+use super::manager::ExternalAuthTokens;
+use codex_protocol::auth::AuthMode;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 use std::fmt;
 use std::io;
@@ -29,7 +30,7 @@ impl BearerTokenRefresher {
         clippy::await_holding_invalid_type,
         reason = "external bearer cache misses intentionally hold cached_token across the provider command to avoid duplicate refreshes"
     )]
-    async fn resolve(&self) -> io::Result<CodexAuth> {
+    async fn resolve(&self) -> io::Result<Option<ExternalAuthTokens>> {
         let access_token = {
             let mut cached = self.state.cached_token.lock().await;
             if let Some(cached_token) = cached.as_ref() {
@@ -38,7 +39,9 @@ impl BearerTokenRefresher {
                     None => true,
                 };
                 if should_use_cached_token {
-                    return Ok(CodexAuth::from_api_key(cached_token.access_token.as_str()));
+                    return Ok(Some(ExternalAuthTokens::access_token_only(
+                        cached_token.access_token.clone(),
+                    )));
                 }
             }
 
@@ -49,26 +52,36 @@ impl BearerTokenRefresher {
             });
             access_token
         };
-        Ok(CodexAuth::from_api_key(access_token.as_str()))
+        Ok(Some(ExternalAuthTokens::access_token_only(access_token)))
     }
 
-    async fn refresh(&self, _context: ExternalAuthRefreshContext) -> io::Result<CodexAuth> {
+    async fn refresh(
+        &self,
+        _context: ExternalAuthRefreshContext,
+    ) -> io::Result<ExternalAuthTokens> {
         let access_token = run_provider_auth_command(&self.state.config).await?;
         let mut cached = self.state.cached_token.lock().await;
         *cached = Some(CachedExternalBearerToken {
             access_token: access_token.clone(),
             fetched_at: Instant::now(),
         });
-        Ok(CodexAuth::from_api_key(access_token.as_str()))
+        Ok(ExternalAuthTokens::access_token_only(access_token))
     }
 }
 
 impl ExternalAuth for BearerTokenRefresher {
-    fn resolve(&self) -> ExternalAuthFuture<'_, CodexAuth> {
+    fn auth_mode(&self) -> AuthMode {
+        AuthMode::ApiKey
+    }
+
+    fn resolve(&self) -> ExternalAuthFuture<'_, Option<ExternalAuthTokens>> {
         Box::pin(BearerTokenRefresher::resolve(self))
     }
 
-    fn refresh(&self, context: ExternalAuthRefreshContext) -> ExternalAuthFuture<'_, CodexAuth> {
+    fn refresh(
+        &self,
+        context: ExternalAuthRefreshContext,
+    ) -> ExternalAuthFuture<'_, ExternalAuthTokens> {
         Box::pin(BearerTokenRefresher::refresh(self, context))
     }
 }
