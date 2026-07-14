@@ -14,6 +14,7 @@ use crate::facts::CompactionTrigger;
 use crate::facts::GoalEventKind;
 use crate::facts::HookRunFact;
 use crate::facts::InvocationType;
+use crate::facts::PluginInstallRequested;
 use crate::facts::PluginState;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
@@ -80,6 +81,7 @@ pub(crate) enum TrackEventRequest {
     #[allow(dead_code)]
     ReviewEvent(CodexReviewEventRequest),
     PluginUsed(CodexPluginUsedEventRequest),
+    PluginInstallRequested(CodexPluginInstallRequestedEventRequest),
     PluginInstalled(CodexPluginEventRequest),
     PluginUninstalled(CodexPluginEventRequest),
     PluginEnabled(CodexPluginEventRequest),
@@ -92,6 +94,15 @@ pub(crate) enum TrackEventRequest {
 impl TrackEventRequest {
     pub(crate) fn should_send_in_isolated_request(&self) -> bool {
         matches!(self, Self::AcceptedLineFingerprints(_))
+    }
+
+    pub(crate) fn can_send_with_api_key_auth(&self) -> bool {
+        match self {
+            Self::PluginUsed(event) => event.event_params.plugin.plugin_id.is_some(),
+            Self::SkillInvocation(event) => event.event_params.plugin_id.is_some(),
+            Self::McpToolCall(event) => event.event_params.plugin_id.is_some(),
+            _ => false,
+        }
     }
 }
 
@@ -516,6 +527,7 @@ pub(crate) enum ToolItemFailureKind {
 #[derive(Serialize)]
 pub(crate) struct CodexToolItemEventBase {
     pub(crate) thread_id: String,
+    pub(crate) session_id: String,
     pub(crate) turn_id: String,
     /// App-server ThreadItem.id. For tool-originated items this generally
     /// corresponds to the originating core call_id.
@@ -672,6 +684,7 @@ pub(crate) struct CodexMcpToolCallEventParams {
     pub(crate) mcp_tool_name: String,
     pub(crate) mcp_error_present: bool,
     pub(crate) plugin_id: Option<String>,
+    pub(crate) connector_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -955,6 +968,31 @@ pub(crate) struct CodexPluginUsedMetadata {
 }
 
 #[derive(Serialize)]
+pub(crate) struct CodexPluginInstallRequestedPluginMetadata {
+    pub(crate) plugin_id: String,
+    pub(crate) remote_plugin_id: Option<String>,
+    pub(crate) plugin_name: String,
+    pub(crate) connector_ids: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexPluginInstallRequestedMetadata {
+    pub(crate) suggestion_id: String,
+    pub(crate) plugins: Vec<CodexPluginInstallRequestedPluginMetadata>,
+    pub(crate) source: crate::facts::PluginInstallRequestSource,
+    pub(crate) thread_id: String,
+    pub(crate) turn_id: String,
+    pub(crate) model_slug: String,
+    pub(crate) product_client_id: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexPluginInstallRequestedEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexPluginInstallRequestedMetadata,
+}
+
+#[derive(Serialize)]
 pub(crate) struct CodexPluginEventRequest {
     pub(crate) event_type: &'static str,
     pub(crate) event_params: CodexPluginMetadata,
@@ -964,6 +1002,7 @@ pub(crate) struct CodexPluginEventRequest {
 pub(crate) struct CodexPluginInstallFailedMetadata {
     #[serde(flatten)]
     pub(crate) plugin: CodexPluginMetadata,
+    pub(crate) source: crate::facts::PluginInstallSource,
     pub(crate) error_type: String,
 }
 
@@ -1071,6 +1110,30 @@ fn codex_plugin_metadata_with_product_client_id(
                 .collect()
         }),
         product_client_id: Some(product_client_id),
+    }
+}
+
+pub(crate) fn codex_plugin_install_requested_metadata(
+    tracking: &TrackEventsContext,
+    request: PluginInstallRequested,
+) -> CodexPluginInstallRequestedMetadata {
+    CodexPluginInstallRequestedMetadata {
+        suggestion_id: request.suggestion_id,
+        plugins: request
+            .plugins
+            .into_iter()
+            .map(|plugin| CodexPluginInstallRequestedPluginMetadata {
+                plugin_id: plugin.plugin_id,
+                remote_plugin_id: plugin.remote_plugin_id,
+                plugin_name: plugin.plugin_name,
+                connector_ids: plugin.connector_ids,
+            })
+            .collect(),
+        source: request.source,
+        thread_id: tracking.thread_id.clone(),
+        turn_id: tracking.turn_id.clone(),
+        model_slug: tracking.model_slug.clone(),
+        product_client_id: Some(originator().value),
     }
 }
 
