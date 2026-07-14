@@ -25,6 +25,17 @@ export function summarizeWebAppServerEvent(event: AppServerEvent): string | null
     return `Remote control ${statusLabel}${serverName ? ` · ${serverName}` : ""}`;
   }
 
+  // These events already have structured conversation projections. Showing a
+  // raw fallback beside the dedicated card makes one lifecycle look duplicated.
+  if (
+    method.startsWith("item/commandExecution/")
+    || method === "item/fileChange/requestApproval"
+    || method === "item/permissions/requestApproval"
+    || method === "serverRequest/resolved"
+  ) {
+    return null;
+  }
+
   const threadId =
     typeof params.threadId === "string"
       ? params.threadId

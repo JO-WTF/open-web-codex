@@ -14,9 +14,10 @@ type Props = {
   durationMs?: number;
   cwd?: string;
   commandActions?: CommandAction[];
+  approvalStatus?: "pending" | "accepted" | "declined" | "resolved";
 };
 
-export default function CommandExecutionCard({ command, output, exitCode, status, durationMs, cwd, commandActions }: Props) {
+export default function CommandExecutionCard({ command, output, exitCode, status, durationMs, cwd, commandActions, approvalStatus }: Props) {
   const [open, setOpen] = useState(false);
   const running = status === "inProgress" || status === "running" || (!status && exitCode == null);
   const ok = !running && exitCode === 0;
@@ -36,6 +37,9 @@ export default function CommandExecutionCard({ command, output, exitCode, status
           {running ? "running" : ok ? "\u2713 OK" : `\u2717 ${exitCode == null ? status || "failed" : `exit ${exitCode}`}`}
         </span>
         <code className="web-cmdex-cmd">{shortCmd}</code>
+        {approvalStatus && approvalStatus !== "pending" && (
+          <span className={`web-cmdex-approval is-${approvalStatus}`}>{approvalStatus === "accepted" ? "Accepted" : approvalStatus === "declined" ? "Declined" : "Approved"}</span>
+        )}
         {durationMs != null && durationMs > 0 && <span className="web-cmdex-dur">{durationMs}ms</span>}
         <span className={`web-cmdex-chevron${open ? " web-cmdex-chevron-open" : ""}`}>&#9654;</span>
       </div>

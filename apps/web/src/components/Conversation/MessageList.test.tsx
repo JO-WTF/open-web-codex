@@ -52,6 +52,25 @@ describe("MessageList", () => {
     expect(screen.getByText("running")).toBeTruthy();
   });
 
+  it("shows a resolved approval on the command card", () => {
+    render(
+      <MessageList
+        items={[{
+          id: "command-approved",
+          level: "info",
+          kind: "command_exec",
+          text: "git push",
+          toolStatus: "completed",
+          cmdExitCode: 0,
+          approvalStatus: "accepted",
+        }]}
+      />,
+    );
+
+    expect(screen.getByText("Accepted")).toBeTruthy();
+    expect(screen.queryByText("Approval resolved")).toBeNull();
+  });
+
   it("renders a recoverable connection error as an active status", () => {
     const view = render(
       <MessageList

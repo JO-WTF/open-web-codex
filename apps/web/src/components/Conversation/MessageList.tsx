@@ -90,6 +90,7 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
               durationMs={entry.cmdDurationMs}
               cwd={entry.cmdCwd}
               commandActions={entry.cmdActions}
+              approvalStatus={entry.approvalStatus}
             />
           );
         }

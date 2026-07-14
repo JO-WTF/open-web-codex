@@ -18,6 +18,7 @@ import { parseWebUserInputRequest } from "./utils/webUserInput";
 import { summarizeWebAppServerEvent } from "./utils/webAppServerEventSummary";
 import { mergeRateLimits, parseInitialMcpServers, parseInitialRateLimits } from "./utils/webInitialStatus";
 import { appendWebLogEntry } from "./utils/webApprovalLog";
+import { rememberAppServerEvent } from "./utils/webAppServerEventDedup";
 import "./styles/web.css";
 import "./styles/web-refactor.css";
 
@@ -292,6 +293,7 @@ export default function WebApp() {
   const interruptRequestTurnId = useRef<string | null>(null);
   const queueDispatching = useRef(false);
   const threadHydrationSequence = useRef(0);
+  const recentAppServerEvents = useRef<Map<string, number>>(new Map());
   const appendLog = useCallback(
     (level: LogEntry["level"], text: string, extra?: Partial<Omit<LogEntry, "id" | "level" | "text">>) => {
       setMessages((prev) => appendWebLogEntry(prev, {
@@ -735,6 +737,7 @@ export default function WebApp() {
                 level: "info",
                 text: command || "Command",
                 kind: "command_exec",
+                approvalId: startedItemId,
                 toolStatus: "inProgress",
                 cmdCwd: typeof item?.cwd === "string" ? item.cwd : undefined,
                 streaming: true,
@@ -985,11 +988,18 @@ export default function WebApp() {
           const cmd = commandText(params.command);
           if (!cmd) return null;
           const requestId = message.id;
+          const approvalId = typeof params.itemId === "string" ? params.itemId : undefined;
+          if (approvalId && (typeof requestId === "number" || typeof requestId === "string")) {
+            setMessages((previous) => previous.map((entry) =>
+              entry.kind === "command_exec" && entry.approvalId === approvalId
+                ? { ...entry, approvalRequestId: requestId, approvalStatus: "pending" }
+                : entry));
+          }
           return {
             level: "info" as const,
             text: cmd,
             kind: "approval" as const,
-            approvalId: typeof params.itemId === "string" ? params.itemId : undefined,
+            approvalId,
             approvalRequestId:
               typeof requestId === "number" || typeof requestId === "string"
                 ? requestId
@@ -1013,15 +1023,20 @@ export default function WebApp() {
         case "serverRequest/resolved": {
           const requestId = params.requestId ?? params.request_id;
           if (typeof requestId !== "number" && typeof requestId !== "string") return null;
-          setMessages((previous) => previous.map((entry) =>
-            entry.approvalRequestId === requestId && entry.kind === "approval"
-              ? {
-                  ...entry,
-                  approvalStatus: entry.approvalStatus === "accepted" || entry.approvalStatus === "declined"
-                    ? entry.approvalStatus
-                    : "resolved",
-                }
-              : entry));
+          setMessages((previous) => {
+            const approval = previous.find((entry) =>
+              entry.kind === "approval" && entry.approvalRequestId === requestId);
+            const status = approval?.approvalStatus === "accepted" || approval?.approvalStatus === "declined"
+              ? approval.approvalStatus
+              : "resolved";
+            return previous
+              .filter((entry) => !(entry.kind === "approval" && entry.approvalRequestId === requestId))
+              .map((entry) => entry.kind === "command_exec"
+                && (entry.approvalRequestId === requestId
+                  || (approval?.approvalId && entry.approvalId === approval.approvalId))
+                ? { ...entry, approvalRequestId: requestId, approvalStatus: status }
+                : entry);
+          });
           setUserInputRequests((previous) => previous.filter((request) => request.request_id !== requestId));
           return null;
         }
@@ -1124,6 +1139,7 @@ export default function WebApp() {
     void refreshWorkspaces();
    const unsub = client.subscribeAppServerEvents(
       (event) => {
+        if (!rememberAppServerEvent(recentAppServerEvents.current, event)) return;
         // Accept events for any workspace; caller filters
         const wsId = activeWorkspaceId;
         if (wsId && event.workspace_id !== wsId) return;

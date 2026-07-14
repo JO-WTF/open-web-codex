@@ -2213,6 +2213,19 @@ body {
   color: var(--text-muted);
   flex-shrink: 0;
 }
+.web-cmdex-approval {
+  border: 1px solid color-mix(in srgb, #16a34a 35%, transparent);
+  border-radius: 999px;
+  padding: 1px 6px;
+  color: #15803d;
+  font-size: 10px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.web-cmdex-approval.is-declined {
+  border-color: color-mix(in srgb, #dc2626 35%, transparent);
+  color: #dc2626;
+}
 .web-cmdex-chevron {
   font-size: 10px;
   color: var(--text-muted);

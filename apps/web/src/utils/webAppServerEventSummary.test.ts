@@ -27,4 +27,14 @@ describe("summarizeWebAppServerEvent", () => {
       },
     })).toBe("Remote control disabled · ZhongdeMacBook-Air.local");
   });
+
+  it("does not duplicate events that have structured conversation cards", () => {
+    expect(summarizeWebAppServerEvent({
+      workspace_id: "workspace-1",
+      message: {
+        method: "item/commandExecution/requestApproval",
+        params: { itemId: "item-1", command: "git push" },
+      },
+    })).toBeNull();
+  });
 });
