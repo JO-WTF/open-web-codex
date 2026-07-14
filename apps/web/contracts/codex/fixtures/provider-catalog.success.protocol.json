@@ -1,0 +1,55 @@
+{
+  "fixtureVersion": "1.0.0",
+  "protocolVersion": "2.0.0",
+  "capabilityId": "models.providers",
+  "scenario": "provider-catalog-success",
+  "serverBuild": {
+    "version": "0.0.0",
+    "commit": "unknown",
+    "target": "aarch64-macos"
+  },
+  "messages": [
+    {
+      "direction": "client_to_server",
+      "kind": "request",
+      "correlation": 2,
+      "payload": { "id": 2, "method": "modelProvider/list", "params": {} }
+    },
+    {
+      "direction": "server_to_client",
+      "kind": "response",
+      "correlation": 2,
+      "payload": {
+        "id": 2,
+        "result": {
+          "data": [
+            {
+              "id": "deepseek",
+              "name": "DeepSeek",
+              "baseUrl": "https://api.deepseek.com",
+              "envKey": "DEEPSEEK_API_KEY",
+              "wireApi": "chat",
+              "kind": "custom",
+              "isCurrent": true,
+              "modelCount": 1,
+              "canEdit": true,
+              "canDelete": false,
+              "canFetchModels": true,
+              "models": [
+                {
+                  "modelId": "deepseek-chat",
+                  "modelName": "DeepSeek Chat",
+                  "maxTokenLen": null,
+                  "maxOutputTokens": null,
+                  "showInPicker": true,
+                  "contextWindow": 64000
+                }
+              ]
+            }
+          ],
+          "currentProviderId": "deepseek"
+        }
+      }
+    }
+  ]
+}

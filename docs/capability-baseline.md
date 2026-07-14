@@ -50,7 +50,7 @@ security.
 | Plugins | declared unsupported | do not enable Studio lifecycle or permissions UI |
 | MCP | config degraded; OAuth/elicitation unsupported | status listing is declared; Web-safe CRUD, reload and lifecycle validation are pending |
 | Tools discovery | declared unsupported | do not expose a platform fallback catalog |
-| Provider/model management | present in upstream Runtime, absent from current manifest taxonomy | add generated capability IDs and run provider-scoped model/credential smoke before Web enablement |
+| Provider/model management | declared supported by the checked-in Runtime | `modelProvider/list`, controlled Profile config writes, provider-scoped refresh, model selection and context-window persistence are wired; real credential smoke remains required for release promotion |
 
 ## Web platform assessment
 

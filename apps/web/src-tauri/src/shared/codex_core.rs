@@ -633,6 +633,177 @@ pub(crate) async fn model_provider_list_core(
         .await
 }
 
+pub(crate) async fn model_provider_write_core(
+    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    workspace_id: String,
+    input: Value,
+) -> Result<Value, String> {
+    let session = get_session_clone(sessions, &workspace_id).await?;
+    let object = input
+        .as_object()
+        .ok_or_else(|| "provider mutation must be an object".to_string())?;
+    let action = object
+        .get("action")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "missing provider action".to_string())?;
+    let id = object
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "provider id is required".to_string())?;
+    if !id
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        return Err("provider id may only contain letters, numbers, '-' and '_'".to_string());
+    }
+
+    let catalog_response = session
+        .send_request_for_workspace(&workspace_id, "modelProvider/list", json!({}))
+        .await?;
+    let catalog = catalog_response.get("result").unwrap_or(&catalog_response);
+    let entries = catalog
+        .get("data")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let existing = entries.iter().find(|entry| entry.get("id") == Some(&json!(id)));
+    let is_built_in = existing
+        .and_then(|entry| entry.get("kind"))
+        .and_then(Value::as_str)
+        == Some("builtIn");
+    let current_id = catalog.get("currentProviderId").and_then(Value::as_str);
+
+    let edit = |key_path: String, value: Value| {
+        json!({ "keyPath": key_path, "value": value, "mergeStrategy": "replace" })
+    };
+    let mut edits = Vec::new();
+    match action {
+        "upsert" => {
+            if is_built_in {
+                return Err(format!("built-in provider '{id}' cannot be edited"));
+            }
+            let name = object.get("name").and_then(Value::as_str).map(str::trim)
+                .filter(|value| !value.is_empty()).ok_or_else(|| "provider name is required".to_string())?;
+            let base_url = object.get("baseUrl").and_then(Value::as_str).map(str::trim)
+                .filter(|value| !value.is_empty()).ok_or_else(|| "provider base URL is required".to_string())?;
+            let parsed_url = reqwest::Url::parse(base_url).map_err(|_| "provider base URL is invalid".to_string())?;
+            if !matches!(parsed_url.scheme(), "http" | "https") {
+                return Err("provider base URL must use http or https".to_string());
+            }
+            let wire_api = object.get("wireApi").and_then(Value::as_str).unwrap_or("responses");
+            if !matches!(wire_api, "chat" | "responses") {
+                return Err("wire API must be 'chat' or 'responses'".to_string());
+            }
+            let env_key = object.get("envKey").and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty());
+            if let Some(env_key) = env_key {
+                if !env_key.chars().all(|character| character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_') {
+                    return Err("API key environment variable must contain only A-Z, 0-9 and '_'".to_string());
+                }
+            }
+            let mut provider = Map::new();
+            provider.insert("name".to_string(), json!(name));
+            provider.insert("base_url".to_string(), json!(base_url.trim_end_matches('/')));
+            provider.insert("wire_api".to_string(), json!(wire_api));
+            if let Some(env_key) = env_key {
+                provider.insert("env_key".to_string(), json!(env_key));
+            }
+            edits.push(edit(format!("model_providers.{}", serde_json::to_string(id).map_err(|err| err.to_string())?), Value::Object(provider)));
+            if existing.is_none() || object.get("select").and_then(Value::as_bool) == Some(true) {
+                edits.push(edit("model_provider".to_string(), json!(id)));
+            }
+        }
+        "select" => {
+            if existing.is_none() { return Err(format!("provider '{id}' does not exist")); }
+            edits.push(edit("model_provider".to_string(), json!(id)));
+        }
+        "fetch" => {
+            if existing.is_none() { return Err(format!("provider '{id}' does not exist")); }
+            if is_built_in { return Err(format!("built-in provider '{id}' uses the bundled model catalog")); }
+            edits.push(edit("model_provider".to_string(), json!(id)));
+        }
+        "context" => {
+            if existing.is_none() { return Err(format!("provider '{id}' does not exist")); }
+            if is_built_in { return Err("built-in model metadata cannot be edited".to_string()); }
+            let model_id = object.get("modelId").and_then(Value::as_str).map(str::trim)
+                .filter(|value| !value.is_empty()).ok_or_else(|| "model id is required".to_string())?;
+            let context_window = object.get("contextWindow").and_then(Value::as_i64)
+                .filter(|value| *value >= 1024).ok_or_else(|| "context window must be at least 1024 tokens".to_string())?;
+            let raw_models = existing.and_then(|entry| entry.get("models")).and_then(Value::as_array)
+                .ok_or_else(|| "provider has no persisted model metadata; fetch models first".to_string())?;
+            let mut found = false;
+            let models = raw_models.iter().map(|value| {
+                let model = value.as_object().cloned().unwrap_or_default();
+                let current_model_id = model.get("modelId").and_then(Value::as_str).unwrap_or_default();
+                let next_context = if current_model_id == model_id { found = true; Some(context_window) } else { model.get("contextWindow").and_then(Value::as_i64) };
+                json!({
+                    "model_id": current_model_id,
+                    "model_name": model.get("modelName").cloned().unwrap_or(Value::Null),
+                    "max_token_len": model.get("maxTokenLen").cloned().unwrap_or(Value::Null),
+                    "max_output_tokens": model.get("maxOutputTokens").cloned().unwrap_or(Value::Null),
+                    "show_in_picker": model.get("showInPicker").and_then(Value::as_bool).unwrap_or(true),
+                    "context_window": next_context,
+                })
+            }).collect::<Vec<_>>();
+            if !found { return Err(format!("model '{model_id}' is not persisted for provider '{id}'")); }
+            edits.push(edit(format!("model_providers.{}.models", serde_json::to_string(id).map_err(|err| err.to_string())?), json!(models)));
+        }
+        "delete" => {
+            if existing.is_none() { return Err(format!("provider '{id}' does not exist")); }
+            if is_built_in { return Err(format!("built-in provider '{id}' cannot be deleted")); }
+            if current_id == Some(id) { return Err("select another provider before deleting the current provider".to_string()); }
+            edits.push(edit(format!("model_providers.{}", serde_json::to_string(id).map_err(|err| err.to_string())?), Value::Null));
+        }
+        _ => return Err(format!("unsupported provider action '{action}'")),
+    }
+    let write_response = session
+        .send_request_for_workspace(
+            &workspace_id,
+            "config/batchWrite",
+            json!({ "edits": edits, "reloadUserConfig": true }),
+        )
+        .await?;
+    if let Some(error) = write_response.get("error") {
+        return Err(error.get("message").and_then(Value::as_str).unwrap_or("provider configuration write failed").to_string());
+    }
+    if write_response.pointer("/result/status").and_then(Value::as_str) == Some("error") {
+        let message = write_response.pointer("/result/error/message").and_then(Value::as_str)
+            .or_else(|| write_response.pointer("/result/message").and_then(Value::as_str))
+            .unwrap_or("provider configuration write failed");
+        return Err(message.to_string());
+    }
+    if action == "fetch" {
+        let models_response = session
+            .send_request_for_workspace(
+                &workspace_id,
+                "model/list",
+                json!({ "forceRefresh": true }),
+            )
+            .await?;
+        let models = models_response.get("data").and_then(Value::as_array).cloned().unwrap_or_default();
+        if models.is_empty() { return Err(format!("provider '{id}' returned no models")); }
+        let persisted_models = models.iter().filter_map(|value| value.as_object()).map(|model| {
+            let model_id = model.get("model").or_else(|| model.get("id")).and_then(Value::as_str).unwrap_or_default();
+            json!({
+                "model_id": model_id,
+                "model_name": model.get("displayName").or_else(|| model.get("display_name")).cloned().unwrap_or_else(|| json!(model_id)),
+                "show_in_picker": true,
+                "context_window": model.get("contextWindow").or_else(|| model.get("context_window")).cloned().unwrap_or(Value::Null),
+            })
+        }).collect::<Vec<_>>();
+        session.send_request_for_workspace(
+            &workspace_id,
+            "config/batchWrite",
+            json!({ "edits": [edit(format!("model_providers.{}.models", serde_json::to_string(id).map_err(|err| err.to_string())?), json!(persisted_models))], "reloadUserConfig": true }),
+        ).await?;
+        return Ok(models_response);
+    }
+    session
+        .send_request_for_workspace(&workspace_id, "modelProvider/list", json!({}))
+        .await
+}
+
 pub(crate) async fn experimental_feature_list_core(
     sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
     workspace_id: String,

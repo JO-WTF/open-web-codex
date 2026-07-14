@@ -66,6 +66,19 @@ pub struct ModelProviderSummary {
     pub can_edit: bool,
     pub can_delete: bool,
     pub can_fetch_models: bool,
+    pub models: Vec<ModelProviderModelSummary>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelProviderModelSummary {
+    pub model_id: String,
+    pub model_name: Option<String>,
+    pub max_token_len: Option<i64>,
+    pub max_output_tokens: Option<i64>,
+    pub show_in_picker: bool,
+    pub context_window: Option<i64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

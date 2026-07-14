@@ -934,6 +934,10 @@ impl DaemonState {
         codex_core::model_provider_list_core(&self.sessions, workspace_id).await
     }
 
+    async fn model_provider_write(&self, workspace_id: String, input: Value) -> Result<Value, String> {
+        codex_core::model_provider_write_core(&self.sessions, workspace_id, input).await
+    }
+
     async fn experimental_feature_list(
         &self,
         workspace_id: String,

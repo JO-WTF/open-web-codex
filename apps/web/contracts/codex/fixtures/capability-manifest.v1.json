@@ -224,6 +224,15 @@
         "code": "tools.discovery.missing",
         "message": "Managed tool discovery metadata is unavailable."
       }
+    },
+    {
+      "id": "models.providers",
+      "version": "1.0.0",
+      "status": "supported",
+      "methods": {
+        "clientRequests": ["modelProvider/list", "model/list", "config/batchWrite"]
+      },
+      "limits": {}
     }
   ]
 }

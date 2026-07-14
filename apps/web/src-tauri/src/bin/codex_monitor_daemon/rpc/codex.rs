@@ -294,6 +294,17 @@ pub(super) async fn try_handle(
             };
             Some(state.model_provider_list(workspace_id).await)
         }
+        "model_provider_write" => {
+            let workspace_id = match parse_string(params, "workspaceId") {
+                Ok(value) => value,
+                Err(err) => return Some(Err(err)),
+            };
+            let input = match params.get("input").cloned() {
+                Some(value) => value,
+                None => return Some(Err("missing `input`".to_string())),
+            };
+            Some(state.model_provider_write(workspace_id, input).await)
+        }
         "experimental_feature_list" => {
             let workspace_id = match parse_string(params, "workspaceId") {
                 Ok(value) => value,

@@ -1,0 +1,136 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ModelProviderKind": {
+      "enum": [
+        "builtIn",
+        "local",
+        "custom"
+      ],
+      "type": "string"
+    },
+    "ModelProviderModelSummary": {
+      "properties": {
+        "contextWindow": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "maxOutputTokens": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "maxTokenLen": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "modelId": {
+          "type": "string"
+        },
+        "modelName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "showInPicker": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "modelId",
+        "showInPicker"
+      ],
+      "type": "object"
+    },
+    "ModelProviderSummary": {
+      "properties": {
+        "baseUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "canDelete": {
+          "type": "boolean"
+        },
+        "canEdit": {
+          "type": "boolean"
+        },
+        "canFetchModels": {
+          "type": "boolean"
+        },
+        "envKey": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "isCurrent": {
+          "type": "boolean"
+        },
+        "kind": {
+          "$ref": "#/definitions/ModelProviderKind"
+        },
+        "modelCount": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "models": {
+          "items": {
+            "$ref": "#/definitions/ModelProviderModelSummary"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "wireApi": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "canDelete",
+        "canEdit",
+        "canFetchModels",
+        "id",
+        "isCurrent",
+        "kind",
+        "modelCount",
+        "models",
+        "name",
+        "wireApi"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "currentProviderId": {
+      "type": "string"
+    },
+    "data": {
+      "items": {
+        "$ref": "#/definitions/ModelProviderSummary"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "currentProviderId",
+    "data"
+  ],
+  "title": "ModelProviderListResponse",
+  "type": "object"
+}

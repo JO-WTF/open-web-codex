@@ -404,6 +404,22 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
             }),
             experimental: false,
         },
+        CapabilityDeclaration {
+            id: "models.providers".into(),
+            version: "1.0.0".into(),
+            status: CapabilityStatus::Supported,
+            methods: MethodSet {
+                client_requests: vec![
+                    "modelProvider/list".into(),
+                    "model/list".into(),
+                    "config/batchWrite".into(),
+                ],
+                ..Default::default()
+            },
+            limits: None,
+            reason: None,
+            experimental: false,
+        },
     ]
 }
 

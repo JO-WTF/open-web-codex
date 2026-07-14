@@ -156,7 +156,7 @@ M0-A07 拆分建议：
 | M0-B01 | P0/M | [x] | 定义 Manifest v1 Rust 类型与构建入口 | JSON Schema、TypeScript 与 roundtrip tests 已存在 |
 | M0-B02 | P0/M | [ ] | 从 app-server 方法注册表生成 Client/Server/Notification 方法集合 | 与生成协议 Schema 一致 |
 | M0-B03 | P0/M | [ ] | 从 experimental annotation 生成能力实验状态 | stable/experimental 构建对照 |
-| M0-B04 | P0/M | [-] | 定义能力 ID 并覆盖全部方法域 | 17 个 Alpha 声明已存在；Provider/model IDs 和全方法归属待补 |
+| M0-B04 | P0/M | [-] | 定义能力 ID 并覆盖全部方法域 | 18 个 Alpha 声明已存在，含 `models.providers`；全方法归属仍待生成化 |
 | M0-B05 | P0/S | [x] | Manifest 加入 build commit、version、target、protocol range | initialize 实测返回 |
 | M0-B06 | P0/M | [-] | 定义 limits 与 structured reason | 类型与初始值已存在；生成规则和兼容测试待补 |
 | M0-B07 | P0/M | [x] | `initialize` 返回 Manifest | `--require-manifest` 真实 Smoke 通过 |

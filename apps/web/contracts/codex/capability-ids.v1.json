@@ -102,6 +102,12 @@
       "owner": "codex-rust",
       "requiredForV1": true,
       "description": "Tool discovery, schema and permission metadata"
+    },
+    {
+      "id": "models.providers",
+      "owner": "codex-rust",
+      "requiredForV1": false,
+      "description": "Provider catalog, provider configuration, remote model refresh and model selection"
     }
   ]
 }

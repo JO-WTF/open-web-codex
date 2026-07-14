@@ -34,6 +34,9 @@ type Props = {
   catalogLoading?: boolean;
   catalogError?: string | null;
   onRefreshCatalog?: () => void;
+  onWriteProvider?: (input: Record<string, unknown>) => Promise<void>;
+  selectedModelId?: string | null;
+  onSelectModel?: (modelId: string) => void;
   messages: MessageEntry[];
   workspaceId?: string;
   thinking?: boolean;
@@ -75,6 +78,9 @@ export default function Conversation({
   catalogLoading,
   catalogError,
   onRefreshCatalog,
+  onWriteProvider,
+  selectedModelId,
+  onSelectModel,
   messages,
   workspaceId,
   thinking,
@@ -179,6 +185,9 @@ export default function Conversation({
         catalogLoading={catalogLoading}
         catalogError={catalogError}
         onRefreshCatalog={onRefreshCatalog}
+        onWriteProvider={onWriteProvider}
+        selectedModelId={selectedModelId}
+        onSelectModel={onSelectModel}
       />
     </section>
   );

@@ -142,6 +142,7 @@ export default function WebApp() {
   const [modelProviders, setModelProviders] = useState<ModelProviderSummary[]>([]);
   const [currentProviderId, setCurrentProviderId] = useState<string | null>(null);
   const [providerModels, setProviderModels] = useState<ModelSummary[]>([]);
+  const [selectedProviderModelId, setSelectedProviderModelId] = useState<string | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
 
@@ -193,10 +194,28 @@ export default function WebApp() {
           kind: provider.kind === "local" || provider.kind === "custom" ? provider.kind : "builtIn",
           isCurrent: provider.isCurrent === true,
           modelCount: typeof provider.modelCount === "number" ? provider.modelCount : 0,
+          baseUrl: typeof provider.baseUrl === "string" ? provider.baseUrl : null,
+          envKey: typeof provider.envKey === "string" ? provider.envKey : null,
+          wireApi: typeof provider.wireApi === "string" ? provider.wireApi : "responses",
+          canEdit: provider.canEdit === true,
+          canDelete: provider.canDelete === true,
+          canFetchModels: provider.canFetchModels === true,
+          models: Array.isArray(provider.models) ? provider.models.flatMap((value) => {
+            if (!value || typeof value !== "object") return [];
+            const model = value as Record<string, unknown>;
+            if (typeof model.modelId !== "string") return [];
+            return [{ modelId: model.modelId, modelName: typeof model.modelName === "string" ? model.modelName : null, contextWindow: typeof model.contextWindow === "number" ? model.contextWindow : null }];
+          }) : [],
         }];
       }));
       setCurrentProviderId(typeof providerRecord.currentProviderId === "string" ? providerRecord.currentProviderId : null);
-      setProviderModels(parseModelListResponse(modelResponse));
+      const nextModels = parseModelListResponse(modelResponse);
+      setProviderModels(nextModels);
+      setSelectedProviderModelId((selected) =>
+        selected && nextModels.some((model) => model.id === selected)
+          ? selected
+          : nextModels[0]?.id ?? null,
+      );
     } catch (error) {
       setCatalogError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -207,6 +226,7 @@ export default function WebApp() {
   useEffect(() => {
     setModelProviders([]);
     setProviderModels([]);
+    setSelectedProviderModelId(null);
     setCurrentProviderId(null);
     setCatalogError(null);
     if (activeWorkspaceId) void refreshModelCatalog();
@@ -1161,7 +1181,8 @@ export default function WebApp() {
     setStopping(false);
     setBusy(true);
     try {
-      const response = await client.sendUserMessage(activeWorkspaceId, activeThreadId, text);
+      const selectedModel = providerModels.find((model) => model.id === selectedProviderModelId);
+      const response = await client.sendUserMessage(activeWorkspaceId, activeThreadId, text, selectedModel?.model ?? selectedProviderModelId);
       const payload = unwrapWebRpcResult(response);
       const record = payload && typeof payload === "object"
         ? payload as Record<string, unknown>
@@ -1182,7 +1203,7 @@ export default function WebApp() {
     } finally {
       setBusy(false);
     }
-  }, [activeThreadId, activeWorkspaceId, appendLog, client]);
+  }, [activeThreadId, activeWorkspaceId, appendLog, client, providerModels, selectedProviderModelId]);
 
   const sendMessage = useCallback(async () => {
     const text = draft.trim();
@@ -1430,6 +1451,22 @@ export default function WebApp() {
           catalogLoading={catalogLoading}
           catalogError={catalogError}
           onRefreshCatalog={() => { void refreshModelCatalog(); }}
+          onWriteProvider={async (input) => {
+            if (!activeWorkspaceId) return;
+            setCatalogLoading(true);
+            setCatalogError(null);
+            try {
+              await client.writeModelProvider(activeWorkspaceId, input);
+              await refreshModelCatalog();
+            } catch (error) {
+              setCatalogError(error instanceof Error ? error.message : String(error));
+              throw error;
+            } finally {
+              setCatalogLoading(false);
+            }
+          }}
+          selectedModelId={selectedProviderModelId}
+          onSelectModel={setSelectedProviderModelId}
 
         messages={messages}
         workspaceId={activeWorkspaceId ?? undefined}

@@ -193,6 +193,18 @@ impl CatalogRequestProcessor {
                     can_edit: !is_built_in,
                     can_delete: !is_built_in && id != &config.model_provider_id,
                     can_fetch_models: !is_built_in,
+                    models: provider
+                        .models
+                        .iter()
+                        .map(|model| ModelProviderModelSummary {
+                            model_id: model.model_id.clone(),
+                            model_name: model.model_name.clone(),
+                            max_token_len: model.max_token_len,
+                            max_output_tokens: model.max_output_tokens,
+                            show_in_picker: model.show_in_picker,
+                            context_window: model.context_window,
+                        })
+                        .collect(),
                 }
             })
             .collect::<Vec<_>>();

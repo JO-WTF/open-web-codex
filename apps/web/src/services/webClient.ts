@@ -119,6 +119,10 @@ export class CodexMonitorWebClient {
     return this.rpc<Record<string, unknown>>("model_provider_list", { workspaceId });
   }
 
+  writeModelProvider(workspaceId: string, input: Record<string, unknown>) {
+    return this.rpc<Record<string, unknown>>("model_provider_write", { workspaceId, input });
+  }
+
   listModels(workspaceId: string) {
     return this.rpc<Record<string, unknown>>("model_list", { workspaceId });
   }
@@ -167,12 +171,13 @@ export class CodexMonitorWebClient {
     return this.rpc<{ files: GitFileStatus[] }>("get_git_status", { workspaceId });
   }
 
-  sendUserMessage(workspaceId: string, threadId: string, text: string) {
+  sendUserMessage(workspaceId: string, threadId: string, text: string, model?: string | null) {
     return this.rpc<Record<string, unknown>>("send_user_message", {
       workspaceId,
       threadId,
       text,
       accessMode: "current",
+      ...(model ? { model } : {}),
     });
   }
 
