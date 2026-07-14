@@ -18,6 +18,7 @@ import { parseWebUserInputRequest } from "./utils/webUserInput";
 import { summarizeWebAppServerEvent } from "./utils/webAppServerEventSummary";
 import { mergeRateLimits, parseInitialMcpServers, parseInitialRateLimits } from "./utils/webInitialStatus";
 import { appendWebLogEntry } from "./utils/webApprovalLog";
+import { loadWebApprovalHistory, resolveStoredWebApproval, saveWebApproval } from "./utils/webApprovalHistory";
 import { rememberAppServerEvent } from "./utils/webAppServerEventDedup";
 import { getAppServerThreadId } from "./utils/appServerEvents";
 import "./styles/web.css";
@@ -188,6 +189,7 @@ export default function WebApp() {
         ? providerPayload as Record<string, unknown>
         : {};
       const rawProviders = Array.isArray(providerRecord.data) ? providerRecord.data : [];
+      const nextModels = parseModelListResponse(modelResponse);
       setModelProviders(rawProviders.flatMap((value): ModelProviderSummary[] => {
         if (!value || typeof value !== "object") return [];
         const provider = value as Record<string, unknown>;
@@ -197,7 +199,9 @@ export default function WebApp() {
           name: provider.name,
           kind: provider.kind === "local" || provider.kind === "custom" ? provider.kind : "builtIn",
           isCurrent: provider.isCurrent === true,
-          modelCount: typeof provider.modelCount === "number" ? provider.modelCount : 0,
+          modelCount: provider.isCurrent === true
+            ? nextModels.length
+            : typeof provider.modelCount === "number" ? provider.modelCount : 0,
           baseUrl: typeof provider.baseUrl === "string" ? provider.baseUrl : null,
           envKey: typeof provider.envKey === "string" ? provider.envKey : null,
           wireApi: typeof provider.wireApi === "string" ? provider.wireApi : "responses",
@@ -213,7 +217,6 @@ export default function WebApp() {
         }];
       }));
       setCurrentProviderId(typeof providerRecord.currentProviderId === "string" ? providerRecord.currentProviderId : null);
-      const nextModels = parseModelListResponse(modelResponse);
       setProviderModels(nextModels);
       setSelectedProviderModelId((selected) =>
         selected && nextModels.some((model) => model.id === selected)
@@ -1025,6 +1028,7 @@ export default function WebApp() {
               approvalThreadId,
               appendWebLogEntry(current, cachedApproval),
             );
+            saveWebApproval(event.workspace_id, approvalThreadId, cachedApproval);
           }
           if (belongsToBackgroundThread) return null;
           if (approvalId && (typeof requestId === "number" || typeof requestId === "string")) {
@@ -1061,6 +1065,7 @@ export default function WebApp() {
         case "serverRequest/resolved": {
           const requestId = params.requestId ?? params.request_id;
           if (typeof requestId !== "number" && typeof requestId !== "string") return null;
+          resolveStoredWebApproval(event.workspace_id, requestId, "resolved");
           for (const [threadId, approvals] of pendingApprovalsByThread.current) {
             const remaining = approvals.filter((entry) => entry.approvalRequestId !== requestId);
             if (remaining.length > 0) pendingApprovalsByThread.current.set(threadId, remaining);
@@ -1418,6 +1423,11 @@ export default function WebApp() {
   ) => {
     try {
       await client.respondToServerRequest(workspaceId, requestId, { decision });
+      resolveStoredWebApproval(
+        workspaceId,
+        requestId,
+        decision === "accept" ? "accepted" : "declined",
+      );
       for (const [threadId, approvals] of pendingApprovalsByThread.current) {
         pendingApprovalsByThread.current.set(threadId, approvals.map((entry) =>
           entry.approvalRequestId === requestId
@@ -1439,7 +1449,13 @@ export default function WebApp() {
     const hydrationSequence = threadHydrationSequence.current + 1;
     threadHydrationSequence.current = hydrationSequence;
     setActiveThreadId(id);
-    setMessages([...(pendingApprovalsByThread.current.get(id) ?? [])]);
+    const restoredApprovals = activeWorkspaceId
+      ? loadWebApprovalHistory(activeWorkspaceId, id)
+      : [];
+    setMessages(mergeWebThreadHistory(
+      restoredApprovals,
+      pendingApprovalsByThread.current.get(id) ?? [],
+    ));
     setTokenUsage(null);
     setGoal(null);
     setActiveTurnId(null);

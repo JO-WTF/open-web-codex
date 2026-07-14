@@ -7,6 +7,7 @@ import {
   getAppServerParams,
   getAppServerRawMethod,
   getAppServerRequestId,
+  getAppServerThreadId,
   isApprovalRequestMethod,
   isAppListUpdatedEvent,
   isSkillsUpdateAvailableEvent,
@@ -31,6 +32,15 @@ describe("appServerEvents", () => {
     expect(getAppServerRawMethod(event)).toBe("turn/started");
     expect(getAppServerParams(event)).toEqual({ threadId: "thread-1" });
     expect(getAppServerRequestId(event)).toBe(7);
+    expect(getAppServerThreadId(event)).toBe("thread-1");
+  });
+
+  it("extracts a thread id from thread lifecycle payloads", () => {
+    expect(getAppServerThreadId(makeEvent({
+      method: "thread/started",
+      params: { thread: { id: "thread-2" } },
+    }))).toBe("thread-2");
+    expect(getAppServerThreadId(makeEvent({ method: "codex/connected", params: {} }))).toBeNull();
   });
 
   it("checks supported method and approval requests", () => {
@@ -89,6 +99,7 @@ describe("appServerEvents", () => {
     expect(getAppServerRequestId(missingMessage)).toBeNull();
     expect(getAppServerRequestId(nonObjectMessage)).toBeNull();
     expect(getAppServerRequestId(arrayMessage)).toBeNull();
+    expect(getAppServerThreadId(arrayMessage)).toBeNull();
   });
 
   it("keeps supported methods aligned with useAppServerEvents routing", () => {

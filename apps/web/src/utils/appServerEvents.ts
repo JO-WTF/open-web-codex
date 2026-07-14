@@ -100,6 +100,19 @@ export function getAppServerRequestId(event: AppServerEvent): string | number | 
   return null;
 }
 
+export function getAppServerThreadId(event: AppServerEvent): string | null {
+  const params = getAppServerParams(event);
+  const direct = params.threadId ?? params.thread_id;
+  if (typeof direct === "string" && direct.trim()) return direct;
+
+  const thread = params.thread;
+  if (thread && typeof thread === "object" && !Array.isArray(thread)) {
+    const id = (thread as Record<string, unknown>).id;
+    if (typeof id === "string" && id.trim()) return id;
+  }
+  return null;
+}
+
 export function isApprovalRequestMethod(method: string): boolean {
   return method.endsWith("requestApproval");
 }
