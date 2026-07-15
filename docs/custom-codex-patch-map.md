@@ -31,6 +31,10 @@ classified before they are moved or removed. Do not infer that a difference is
 unnecessary solely because it is outside the Provider paths: first verify
 whether current upstream already supplies its behavior.
 
+Use `scripts/codex-customization-status.sh` as the inventory input. It compares
+`HEAD:codex` directly with the current `codex-upstream/main` tree; this
+repository's `main` branch is never the convergence baseline.
+
 ## Retained seams
 
 | ID | Seam and source paths | Reason to retain | Replay order | Required validation | Removal condition |
@@ -61,6 +65,8 @@ For every official sync:
 
 1. Run `scripts/codex-upstream-status.sh` and compare each retained seam with
    the new upstream implementation.
+   Run `scripts/codex-customization-status.sh` to record the exact source-tree
+   difference set against that official commit.
 2. Apply seams in the `Replay order` column.
 3. Regenerate protocol artifacts after each protocol/configuration change.
 4. Run the seam validations, then the Web contract checks and real smoke.

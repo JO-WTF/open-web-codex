@@ -133,6 +133,10 @@ infer delivery status from the target product design.
   subtree synchronization.
 - Run `scripts/codex-upstream-status.sh` before modifying a high-churn upstream
   file.
+- Run `scripts/codex-customization-status.sh` before classifying, moving, or
+  deleting a Codex difference. It compares `HEAD:codex` directly with
+  `codex-upstream/main`; never use this repository's `main` branch as the
+  convergence baseline.
 - Use `scripts/sync-codex-upstream.sh --apply` for official updates. It creates a
   `codex/sync-upstream-*` branch; never sync directly on `main`.
 - Resolve conflicts by preserving upstream structure first and reapplying the
