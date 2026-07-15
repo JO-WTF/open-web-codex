@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Tracks the current official-tree comparison and convergence classification progress for codex/.",
+  "comparison": {
+    "upstreamRef": "codex-upstream/main",
+    "upstreamCommit": "1bbdb32789e1f79932df44941236ea3658f6e965",
+    "localTree": "HEAD:codex",
+    "observedAt": "2026-07-15T12:40:29Z",
+    "differenceCount": 589,
+    "addedLocally": 163,
+    "modified": 381,
+    "missingLocally": 45
+  },
+  "progress": {
+    "state": "inventory-in-progress",
+    "classificationSource": "docs/custom-codex-patch-map.md",
+    "classifiedRetainCore": [
+      "provider-chat-transport",
+      "provider-metadata-models",
+      "provider-app-server-api",
+      "provider-tui-workflows",
+      "legacy-response-tool-history",
+      "capability-manifest"
+    ],
+    "nextAction": "Classify every remaining non-generated difference against this upstream commit before moving or deleting it."
+  }
+}

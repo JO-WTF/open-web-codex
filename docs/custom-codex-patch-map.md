@@ -34,6 +34,9 @@ whether current upstream already supplies its behavior.
 Use `scripts/codex-customization-status.sh` as the inventory input. It compares
 `HEAD:codex` directly with the current `codex-upstream/main` tree; this
 repository's `main` branch is never the convergence baseline.
+`.sync/codex-customization-inventory.json` records the latest comparison
+commit, counts, and classification progress. Refresh it whenever the inventory
+is updated or an official sync changes the target tree.
 
 ## Retained seams
 
