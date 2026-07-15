@@ -43,6 +43,7 @@ pub struct EventCursor(pub String);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
     pub id: Uuid,
+    pub organization_id: Uuid,
     pub name: String,
     pub git_url: String,
     pub default_branch: String,
@@ -55,6 +56,8 @@ pub struct Project {
 pub struct CreateProjectRequest {
     pub name: String,
     pub git_url: String,
+    #[serde(default)]
+    pub organization_id: Option<Uuid>,
     #[serde(default)]
     pub default_branch: Option<String>,
 }

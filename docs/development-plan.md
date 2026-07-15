@@ -653,7 +653,7 @@ GET/POST/PATCH/DELETE /api/codex/profiles/:id/skills
 3. `event_projection` 在广播前持久化审批请求；`POST /api/approvals/:id/decision` 使用 CAS 并回调 `respond_to_server_request`。
 4. Fake adapter 支持 `initialize`、审批事件与 `respond_to_server_request`；`platform-batch23-smoke.mjs` 覆盖 bootstrap → run → 幂等 → 审批 CAS。
 
-**完成证据：** `rustup run 1.95.0 cargo test -p open-web-codex-server -p open-web-codex-profile-host`；`npm run smoke:platform-batch23`（需 PostgreSQL）。
+**完成证据：** `npm run check:platform-batch23`（Rust 单测 + typecheck + webClient 单测 + 含跨组织拒绝/DB 断言的 smoke）；`rustup run 1.95.0 cargo test -p open-web-codex-server`。
 
 ### Batch 3：Git Runner 与 Task 纵向编排（已完成）
 
@@ -662,6 +662,6 @@ GET/POST/PATCH/DELETE /api/codex/profiles/:id/skills
 3. 单 Task 事件投影与 replay 沿用 Batch 1；审批持久化后再推送。
 4. `webClient` 默认连接平台 `:4800`，新增 `startTaskRun`/`listApprovals`/`decideApproval`；WebApp 默认 base URL 切到平台。
 
-**完成证据：** 同上 smoke；`npm run typecheck` 与 `webClient` 单测通过。原生 app-server spawn（`M1-C04`~`C06`）与认证 WebSocket（`M1-E08`）留待后续批次。
+**完成证据：** `npm run check:platform-batch23`（Rust 单测 + typecheck + webClient 单测 + 含跨组织拒绝/DB 断言的 smoke）。
 
 完成上述四批后再进入 M2 多用户 Beta。M2 的首个门禁是两用户跨 Profile、Thread、Workspace、事件、审批和 Secret 的系统性拒绝矩阵，而不是先增加更多页面。

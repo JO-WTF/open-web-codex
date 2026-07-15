@@ -16,6 +16,7 @@
     "generate:codex-consumer-types": "node scripts/generate-codex-consumer-types.mjs",
     "check:tauri-boundary": "node scripts/check-tauri-boundary.mjs",
     "fetch:codex-contracts": "node scripts/fetch-codex-contracts.mjs",
+    "check:platform-batch23": "node scripts/check-platform-batch23.mjs",
     "smoke:codex-app-server": "node scripts/codex-app-server-smoke.mjs --require-manifest",
     "smoke:platform-batch23": "node scripts/platform-batch23-smoke.mjs",
     "test:codex-capabilities": "node scripts/test-codex-capability-manifest.mjs",

@@ -1,3 +1,4 @@
+mod access;
 mod config;
 mod event_projection;
 mod git_workspace;

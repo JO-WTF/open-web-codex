@@ -16,6 +16,7 @@ use sqlx::Row;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::access::{ensure_project_access, ensure_task_access};
 use crate::middleware::auth::AuthenticatedUser;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
@@ -27,10 +28,12 @@ pub struct ListTasksParams {
 
 /// GET /api/tasks?project_id=...
 pub async fn list_tasks(
-    _auth: AuthenticatedUser,
+    auth: AuthenticatedUser,
     State(state): State<AppState>,
     Query(params): Query<ListTasksParams>,
 ) -> ApiResult<Vec<Task>> {
+    ensure_project_access(&state.db, auth.user_id, params.project_id).await?;
+
     let rows = sqlx::query(
         "SELECT id, project_id, title, status, created_at, updated_at \
          FROM tasks WHERE project_id = $1 ORDER BY created_at DESC",
@@ -62,7 +65,7 @@ pub async fn list_tasks(
 
 /// POST /api/tasks
 pub async fn create_task(
-    _auth: AuthenticatedUser,
+    auth: AuthenticatedUser,
     State(state): State<AppState>,
     Json(req): Json<CreateTaskRequest>,
 ) -> ApiResult<Task> {
@@ -72,6 +75,8 @@ pub async fn create_task(
             Json(PlatformError::bad_request("title must not be empty")),
         ));
     }
+
+    ensure_project_access(&state.db, auth.user_id, req.project_id).await?;
 
     let row = sqlx::query(
         "INSERT INTO tasks (project_id, title) VALUES ($1, $2) \
@@ -100,11 +105,13 @@ pub async fn create_task(
 
 /// GET /api/tasks/:id/events — list persisted run events for a task.
 pub async fn list_task_events(
-    _auth: AuthenticatedUser,
+    auth: AuthenticatedUser,
     State(state): State<AppState>,
     Path(task_id): Path<Uuid>,
     Query(params): Query<ListTaskEventsParams>,
 ) -> ApiResult<Vec<RunEvent>> {
+    ensure_task_access(&state.db, auth.user_id, task_id).await?;
+
     let limit = params.limit.unwrap_or(50).min(200);
     let query = match params.after_sequence {
         Some(after) => sqlx::query(
@@ -164,7 +171,7 @@ pub async fn list_task_events(
 /// POST /api/tasks/:id/messages — send a user message to the task's active thread.
 pub async fn send_message(
     State(state): State<AppState>,
-    _auth: AuthenticatedUser,
+    auth: AuthenticatedUser,
     Path(task_id): Path<Uuid>,
     Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
     Json(req): Json<SendMessageRequest>,
@@ -175,6 +182,8 @@ pub async fn send_message(
             Json(PlatformError::bad_request("message text must not be empty")),
         ));
     }
+
+    ensure_task_access(&state.db, auth.user_id, task_id).await?;
 
     // Find the active run for this task (latest running or pending run)
     let active_run = sqlx::query(
@@ -238,10 +247,12 @@ pub async fn send_message(
 
 /// GET /api/tasks/:id
 pub async fn get_task(
-    _auth: AuthenticatedUser,
+    auth: AuthenticatedUser,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Task> {
+    ensure_task_access(&state.db, auth.user_id, id).await?;
+
     let row = sqlx::query(
         "SELECT id, project_id, title, status, created_at, updated_at \
          FROM tasks WHERE id = $1",

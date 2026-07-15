@@ -14,6 +14,7 @@ use serde_json::json;
 use sqlx::Row;
 use uuid::Uuid;
 
+use crate::access::{ensure_approval_access, ensure_run_access};
 use crate::middleware::auth::AuthenticatedUser;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
@@ -21,7 +22,7 @@ type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
 /// GET /api/approvals?run_id=...
 pub async fn list_approvals(
     State(state): State<AppState>,
-    _auth: AuthenticatedUser,
+    auth: AuthenticatedUser,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> ApiResult<Vec<Approval>> {
     let run_id = params
@@ -29,6 +30,7 @@ pub async fn list_approvals(
         .and_then(|value| Uuid::parse_str(value).ok());
 
     let rows = if let Some(run_id) = run_id {
+        ensure_run_access(&state.db, auth.user_id, run_id).await?;
         sqlx::query(
             "SELECT id, run_id, request_type, request_payload, status, codex_request_id, \
                     workspace_id, thread_id, decision, decided_by, decided_at, created_at, expires_at \
@@ -39,10 +41,19 @@ pub async fn list_approvals(
         .await
     } else {
         sqlx::query(
-            "SELECT id, run_id, request_type, request_payload, status, codex_request_id, \
-                    workspace_id, thread_id, decision, decided_by, decided_at, created_at, expires_at \
-             FROM approvals WHERE status = 'pending' ORDER BY created_at ASC",
+            "SELECT a.id, a.run_id, a.request_type, a.request_payload, a.status, a.codex_request_id, \
+                    a.workspace_id, a.thread_id, a.decision, a.decided_by, a.decided_at, a.created_at, a.expires_at
+             FROM approvals a
+             JOIN runs r ON r.id = a.run_id
+             JOIN tasks t ON t.id = r.task_id
+             JOIN projects p ON p.id = t.project_id
+             JOIN memberships m
+               ON m.organization_id = p.organization_id
+              AND m.user_id = $1
+             WHERE a.status = 'pending'
+             ORDER BY a.created_at ASC",
         )
+        .bind(auth.user_id)
         .fetch_all(&state.db)
         .await
     }
@@ -70,6 +81,8 @@ pub async fn decide_approval(
             Json(PlatformError::bad_request("decision must be approved or rejected")),
         ));
     }
+
+    ensure_approval_access(&state.db, auth.user_id, approval_id).await?;
 
     let mut transaction = state.db.begin().await.map_err(|error| {
         (
@@ -120,28 +133,7 @@ pub async fn decide_approval(
     let workspace_id: Option<String> = row.get("workspace_id");
     let codex_request_id: Option<String> = row.get("codex_request_id");
 
-    sqlx::query(
-        "UPDATE runs SET status = 'running', updated_at = now()
-         WHERE id = $1 AND status = 'waiting_approval'",
-    )
-    .bind(run_id)
-    .execute(&mut *transaction)
-    .await
-    .map_err(|error| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(PlatformError::internal(format!("{error}"))),
-        )
-    })?;
-
-    transaction.commit().await.map_err(|error| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(PlatformError::internal(format!("{error}"))),
-        )
-    })?;
-
-    if let (Some(workspace_id), Some(request_id)) = (workspace_id, codex_request_id) {
+    if let (Some(workspace_id), Some(request_id)) = (workspace_id.clone(), codex_request_id.clone()) {
         let result = if body.decision == "approved" {
             json!({ "approved": true })
         } else {
@@ -164,6 +156,27 @@ pub async fn decide_approval(
                 )
             })?;
     }
+
+    sqlx::query(
+        "UPDATE runs SET status = 'running', updated_at = now()
+         WHERE id = $1 AND status = 'waiting_approval'",
+    )
+    .bind(run_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PlatformError::internal(format!("{error}"))),
+        )
+    })?;
+
+    transaction.commit().await.map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PlatformError::internal(format!("{error}"))),
+        )
+    })?;
 
     Ok(Json(ApprovalDecisionResponse {
         approval: map_approval_row(&row),

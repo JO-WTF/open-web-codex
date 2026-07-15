@@ -477,6 +477,19 @@ mod tests {
     }
 
     #[test]
+    fn extracts_approval_requests_from_server_events() {
+        let frame = br#"data: {"method":"app-server-event","params":{"workspace_id":"ws-1","message":{"id":42,"method":"item/commandExecution/requestApproval","params":{"threadId":"thread-1","command":["echo"]}}}}
+
+"#;
+        let (_, raw) = project_frame(frame).unwrap().unwrap();
+        let approval = extract_approval_request(&raw, Uuid::nil()).unwrap();
+        assert_eq!(approval.request_type, "item/commandExecution/requestApproval");
+        assert_eq!(approval.codex_request_id.as_deref(), Some("42"));
+        assert_eq!(approval.workspace_id.as_deref(), Some("ws-1"));
+        assert_eq!(approval.thread_id.as_deref(), Some("thread-1"));
+    }
+
+    #[test]
     fn ignores_sse_keepalive_frames() {
         assert_eq!(project_frame(b": keepalive\n\n").unwrap(), None);
     }

@@ -15,12 +15,13 @@ use open_web_codex_codex_contracts::{
 use open_web_codex_platform_contracts::error::PlatformError;
 use open_web_codex_platform_contracts::{Run, StartRunResponse};
 use open_web_codex_platform_store::AppState;
-use open_web_codex_profile_host::{ensure_profile_home, provision_profile};
+use open_web_codex_profile_host::{provision_profile, ProfileLock};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::Row;
 use uuid::Uuid;
 
+use crate::access::{ensure_run_access, ensure_task_access};
 use crate::git_workspace;
 use crate::middleware::auth::AuthenticatedUser;
 use crate::run_lifecycle;
@@ -35,6 +36,65 @@ struct TaskContext {
     default_branch: String,
 }
 
+struct ProfileSession {
+    db: sqlx::PgPool,
+    profile_id: Uuid,
+    home: PathBuf,
+    _lock: ProfileLock,
+}
+
+impl ProfileSession {
+    async fn release(self) -> Result<(), (StatusCode, Json<PlatformError>)> {
+        sqlx::query("DELETE FROM profile_processes WHERE profile_id = $1")
+            .bind(self.profile_id)
+            .execute(&self.db)
+            .await
+            .map_err(db_error)?;
+        Ok(())
+    }
+}
+
+struct IdempotencyGuard {
+    db: sqlx::PgPool,
+    lock_key: i64,
+    active: bool,
+}
+
+impl IdempotencyGuard {
+    async fn acquire(db: &sqlx::PgPool, key_hash: &str, route: &str) -> Result<Option<Self>, sqlx::Error> {
+        let lock_key = stable_lock_key(key_hash, route);
+        let acquired = sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_lock($1)")
+            .bind(lock_key)
+            .fetch_one(db)
+            .await?;
+        if !acquired {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            db: db.clone(),
+            lock_key,
+            active: true,
+        }))
+    }
+}
+
+impl Drop for IdempotencyGuard {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        let db = self.db.clone();
+        let lock_key = self.lock_key;
+        self.active = false;
+        tokio::spawn(async move {
+            let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
+                .bind(lock_key)
+                .execute(&db)
+                .await;
+        });
+    }
+}
+
 /// POST /api/tasks/:id/runs — queue and start a run with orchestration.
 pub async fn start_run(
     State(state): State<AppState>,
@@ -43,14 +103,38 @@ pub async fn start_run(
     headers: HeaderMap,
     Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
 ) -> ApiResult<StartRunResponse> {
-    if let Some(cached) = lookup_idempotent_response(
-        &state,
-        &headers,
-        &idempotency_route(task_id),
-    )
-    .await?
-    {
-        return Ok(cached);
+    ensure_task_access(&state.db, auth.user_id, task_id).await?;
+
+    let route = idempotency_route(task_id);
+    let idempotency_key = idempotency_key(&headers);
+    let key_hash = idempotency_key.as_deref().map(hash_idempotency_key);
+
+    let _idempotency_guard = if let Some(key_hash) = key_hash.as_deref() {
+        match IdempotencyGuard::acquire(&state.db, key_hash, &route).await {
+            Ok(Some(guard)) => Some(guard),
+            Ok(None) => {
+                if let Some(cached) =
+                    wait_for_idempotent_response(&state, key_hash, &route, 30).await?
+                {
+                    return Ok(cached);
+                }
+                return Err((
+                    StatusCode::CONFLICT,
+                    Json(PlatformError::bad_request(
+                        "another identical start_run request is still in progress",
+                    )),
+                ));
+            }
+            Err(error) => return Err(db_error(error)),
+        }
+    } else {
+        None
+    };
+
+    if let Some(key_hash) = key_hash.as_deref() {
+        if let Some(cached) = lookup_idempotent_response(&state, key_hash, &route).await? {
+            return Ok(cached);
+        }
     }
 
     ensure_thread_capability(&adapter).await?;
@@ -70,56 +154,96 @@ pub async fn start_run(
     let run_id: Uuid = run.get("id");
     transition_run(&state, run_id, "queued", "provisioning").await?;
 
-    let profile_home = provision_user_profile(&state, &auth, &data_root).await?;
+    let profile_session = provision_user_profile(&state, &auth, &data_root).await?;
 
-    if let Ok(workspace_key) = git_workspace::provision_run_workspace(
+    let workspace_key = match git_workspace::provision_run_workspace(
         &data_root,
         run_id,
         &task.git_url,
         &task.default_branch,
     ) {
-        sqlx::query(
-            "INSERT INTO run_workspaces (run_id, state, workspace_key) VALUES ($1, 'ready', $2)",
-        )
-        .bind(run_id)
-        .bind(&workspace_key)
-        .execute(&state.db)
-        .await
-        .map_err(db_error)?;
+        Ok(workspace_key) => workspace_key,
+        Err(error) => {
+            return fail_run_and_release(
+                &state,
+                run_id,
+                profile_session,
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(PlatformError::bad_request(format!(
+                        "git workspace provisioning failed: {error}"
+                    ))),
+                ),
+            )
+            .await;
+        }
+    };
+
+    if let Err(error) = sqlx::query(
+        "INSERT INTO run_workspaces (run_id, state, workspace_key) VALUES ($1, 'ready', $2)",
+    )
+    .bind(run_id)
+    .bind(&workspace_key)
+    .execute(&state.db)
+    .await
+    {
+        return fail_run_and_release(&state, run_id, profile_session, db_error(error)).await;
     }
 
-    let workspaces = adapter.rpc("list_workspaces", json!({})).await.map_err(adapter_error)?;
-    let ws_id = workspaces
+    let workspaces = match adapter.rpc("list_workspaces", json!({})).await {
+        Ok(workspaces) => workspaces,
+        Err(error) => {
+            let _ = transition_run_sync(&state.db, run_id, "provisioning", "failed").await;
+            let _ = profile_session.release().await;
+            return Err(adapter_error(error));
+        }
+    };
+    let ws_id = match workspaces
         .as_array()
         .and_then(|items| items.first())
         .and_then(|item| item.get("id"))
         .and_then(Value::as_str)
-        .ok_or_else(|| adapter_error(open_web_codex_adapter::AdapterError::Internal(
-            "no workspace available".into(),
-        )))?
-        .to_string();
+    {
+        Some(ws_id) => ws_id.to_string(),
+        None => {
+            return fail_run_and_release(&state, run_id, profile_session, adapter_error(
+                open_web_codex_adapter::AdapterError::Internal("no workspace available".into()),
+            ))
+            .await;
+        }
+    };
 
-    let result = adapter
+    let result = match adapter
         .rpc("start_thread", json!({ "workspaceId": ws_id }))
         .await
-        .map_err(|error| {
-            let _ = transition_run_sync(&state.db, run_id, "provisioning", "failed");
-            adapter_error(error)
-        })?;
+    {
+        Ok(result) => result,
+        Err(error) => {
+            return fail_run_and_release(&state, run_id, profile_session, adapter_error(error)).await;
+        }
+    };
 
-    let thread_id = result
+    let thread_id = match result
         .get("threadId")
         .or_else(|| result.pointer("/thread/id"))
         .and_then(Value::as_str)
-        .ok_or_else(|| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(PlatformError::internal("no threadId in response".to_string())),
+    {
+        Some(thread_id) => thread_id.to_string(),
+        None => {
+            return fail_run_and_release(
+                &state,
+                run_id,
+                profile_session,
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(PlatformError::internal("no threadId in response".to_string())),
+                ),
             )
-        })?
-        .to_string();
+            .await;
+        }
+    };
 
-    let run = sqlx::query(
+    let run = match sqlx::query(
         "UPDATE runs SET status = 'running', codex_thread_id = $1, updated_at = now() \
          WHERE id = $2 AND status = 'provisioning' \
          RETURNING id, task_id, status, codex_thread_id, created_at, updated_at",
@@ -128,22 +252,33 @@ pub async fn start_run(
     .bind(run_id)
     .fetch_one(&state.db)
     .await
-    .map_err(db_error)?;
+    {
+        Ok(run) => run,
+        Err(error) => {
+            return fail_run_and_release(&state, run_id, profile_session, db_error(error)).await;
+        }
+    };
 
-    let _profile_home = profile_home;
+    profile_session.release().await?;
 
     let response = StartRunResponse {
         run: map_run_row(&run),
     };
-    store_idempotent_response(
-        &state,
-        &headers,
-        &idempotency_route(task_id),
-        StatusCode::OK,
-        &response,
-    )
-    .await?;
+    if let Some(key_hash) = key_hash.as_deref() {
+        store_idempotent_response(&state, key_hash, &route, StatusCode::OK, &response).await?;
+    }
     Ok(Json(response))
+}
+
+async fn fail_run_and_release(
+    state: &AppState,
+    run_id: Uuid,
+    profile_session: ProfileSession,
+    error: (StatusCode, Json<PlatformError>),
+) -> ApiResult<StartRunResponse> {
+    let _ = transition_run_sync(&state.db, run_id, "provisioning", "failed").await;
+    let _ = profile_session.release().await;
+    Err(error)
 }
 
 async fn ensure_thread_capability(adapter: &Arc<dyn CodexAdapter>) -> Result<(), (StatusCode, Json<PlatformError>)> {
@@ -233,30 +368,60 @@ async fn load_task_context(state: &AppState, task_id: Uuid) -> Result<TaskContex
 async fn provision_user_profile(
     state: &AppState,
     auth: &AuthenticatedUser,
-    data_root: &PathBuf,
-) -> Result<PathBuf, (StatusCode, Json<PlatformError>)> {
-    let (_layout, _lock, home) = provision_profile(data_root, &auth.user_id.to_string()).map_err(|error| {
+    data_root: &std::path::Path,
+) -> Result<ProfileSession, (StatusCode, Json<PlatformError>)> {
+    let (_layout, lock, home) = provision_profile(data_root, &auth.user_id.to_string()).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            return (
+                StatusCode::CONFLICT,
+                Json(PlatformError::bad_request(
+                    "profile host is already active for this user",
+                )),
+            );
+        }
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(PlatformError::internal(format!("profile provision failed: {error}"))),
         )
     })?;
 
-    sqlx::query(
+    let profile_id: Uuid = sqlx::query_scalar(
         "INSERT INTO profiles (user_id, home_path) VALUES ($1, $2) \
-         ON CONFLICT (user_id) DO UPDATE SET home_path = EXCLUDED.home_path, updated_at = now()",
+         ON CONFLICT (user_id) DO UPDATE SET home_path = EXCLUDED.home_path, updated_at = now() \
+         RETURNING id",
     )
     .bind(auth.user_id)
     .bind(home.to_string_lossy().to_string())
+    .fetch_one(&state.db)
+    .await
+    .map_err(db_error)?;
+
+    let lock_token = Uuid::now_v7().to_string();
+    let inserted = sqlx::query(
+        "INSERT INTO profile_processes (profile_id, lock_token) VALUES ($1, $2) \
+         ON CONFLICT (profile_id) DO NOTHING",
+    )
+    .bind(profile_id)
+    .bind(&lock_token)
     .execute(&state.db)
     .await
     .map_err(db_error)?;
 
-    if let Ok(canonical) = ensure_profile_home(&home) {
-        std::env::set_var("CODEX_HOME", &canonical);
-        return Ok(canonical);
+    if inserted.rows_affected() == 0 {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(PlatformError::bad_request(
+                "profile host is already running for this user",
+            )),
+        ));
     }
-    Ok(home)
+
+    Ok(ProfileSession {
+        db: state.db.clone(),
+        profile_id,
+        home,
+        _lock: lock,
+    })
 }
 
 async fn transition_run(
@@ -307,20 +472,31 @@ fn data_root_from_env() -> PathBuf {
         .unwrap_or_else(|_| std::env::temp_dir().join("open-web-codex-data"))
 }
 
+async fn wait_for_idempotent_response(
+    state: &AppState,
+    key_hash: &str,
+    route: &str,
+    attempts: u32,
+) -> Result<Option<Json<StartRunResponse>>, (StatusCode, Json<PlatformError>)> {
+    for _ in 0..attempts {
+        if let Some(cached) = lookup_idempotent_response(state, key_hash, route).await? {
+            return Ok(Some(cached));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    Ok(None)
+}
+
 async fn lookup_idempotent_response(
     state: &AppState,
-    headers: &HeaderMap,
+    key_hash: &str,
     route: &str,
 ) -> Result<Option<Json<StartRunResponse>>, (StatusCode, Json<PlatformError>)> {
-    let Some(key) = idempotency_key(headers) else {
-        return Ok(None);
-    };
-    let key_hash = hash_idempotency_key(&key);
     let row = sqlx::query(
         "SELECT response_status, response_body FROM idempotency_keys \
          WHERE key_hash = $1 AND route = $2 AND expires_at > now()",
     )
-    .bind(&key_hash)
+    .bind(key_hash)
     .bind(route)
     .fetch_optional(&state.db)
     .await
@@ -341,20 +517,20 @@ async fn lookup_idempotent_response(
 
 async fn store_idempotent_response(
     state: &AppState,
-    headers: &HeaderMap,
+    key_hash: &str,
     route: &str,
     status: StatusCode,
     response: &StartRunResponse,
 ) -> Result<(), (StatusCode, Json<PlatformError>)> {
-    let Some(key) = idempotency_key(headers) else {
-        return Ok(());
-    };
-    let key_hash = hash_idempotency_key(&key);
     let expires_at = Utc::now() + Duration::hours(24);
     sqlx::query(
         "INSERT INTO idempotency_keys (key_hash, route, response_status, response_body, expires_at) \
          VALUES ($1, $2, $3, $4, $5) \
-         ON CONFLICT (key_hash) DO NOTHING",
+         ON CONFLICT (key_hash) DO UPDATE \
+         SET route = EXCLUDED.route, \
+             response_status = EXCLUDED.response_status, \
+             response_body = EXCLUDED.response_body, \
+             expires_at = EXCLUDED.expires_at",
     )
     .bind(key_hash)
     .bind(route)
@@ -391,6 +567,14 @@ fn hash_idempotency_key(key: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
+fn stable_lock_key(key_hash: &str, route: &str) -> i64 {
+    let mut hasher = Sha256::new();
+    hasher.update(key_hash.as_bytes());
+    hasher.update(route.as_bytes());
+    let digest = hasher.finalize();
+    i64::from_be_bytes(digest[..8].try_into().expect("8 byte slice"))
+}
+
 fn map_run_row(row: &sqlx::postgres::PgRow) -> Run {
     Run {
         id: row.get("id"),
@@ -419,25 +603,33 @@ fn adapter_error(error: open_web_codex_adapter::AdapterError) -> (StatusCode, Js
 /// GET /api/runs?task_id=... — list runs for a task.
 pub async fn list_runs(
     State(state): State<AppState>,
-    _auth: AuthenticatedUser,
+    auth: AuthenticatedUser,
     axum::extract::Query(params): axum::extract::Query<HashMap<String, Uuid>>,
 ) -> ApiResult<Vec<Run>> {
     let task_id = params.get("task_id").copied();
 
-    let rows = if let Some(tid) = task_id {
+    let rows = if let Some(task_id) = task_id {
+        ensure_task_access(&state.db, auth.user_id, task_id).await?;
         sqlx::query(
             "SELECT id, task_id, status, codex_thread_id, created_at, updated_at \
              FROM runs WHERE task_id = $1 ORDER BY created_at DESC",
         )
-        .bind(tid)
+        .bind(task_id)
         .fetch_all(&state.db)
         .await
         .map_err(db_error)?
     } else {
         sqlx::query(
-            "SELECT id, task_id, status, codex_thread_id, created_at, updated_at \
-             FROM runs ORDER BY created_at DESC",
+            "SELECT r.id, r.task_id, r.status, r.codex_thread_id, r.created_at, r.updated_at
+             FROM runs r
+             JOIN tasks t ON t.id = r.task_id
+             JOIN projects p ON p.id = t.project_id
+             JOIN memberships m
+               ON m.organization_id = p.organization_id
+              AND m.user_id = $1
+             ORDER BY r.created_at DESC",
         )
+        .bind(auth.user_id)
         .fetch_all(&state.db)
         .await
         .map_err(db_error)?
@@ -449,9 +641,11 @@ pub async fn list_runs(
 /// GET /api/runs/:id — get a single run.
 pub async fn get_run(
     State(state): State<AppState>,
-    _auth: AuthenticatedUser,
+    auth: AuthenticatedUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Run> {
+    ensure_run_access(&state.db, auth.user_id, id).await?;
+
     let row = sqlx::query(
         "SELECT id, task_id, status, codex_thread_id, created_at, updated_at \
          FROM runs WHERE id = $1",
@@ -473,9 +667,11 @@ pub async fn get_run(
 /// POST /api/runs/:id/cancel — cancel a running run.
 pub async fn cancel_run(
     State(state): State<AppState>,
-    _auth: AuthenticatedUser,
+    auth: AuthenticatedUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Run> {
+    ensure_run_access(&state.db, auth.user_id, id).await?;
+
     let row = sqlx::query(
         "UPDATE runs SET status = 'cancelled', updated_at = now() \
          WHERE id = $1 AND status NOT IN ('completed', 'cancelled', 'failed') \
