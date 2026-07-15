@@ -373,18 +373,21 @@ fn external_agent_config_plugins_details_round_trip() {
     }))
     .expect("plugins migration item should deserialize");
 
-    assert_eq!(item, ExternalAgentConfigMigrationItem {
-        item_type: ExternalAgentConfigMigrationItemType::Plugins,
-        description: "Install supported plugins from Claude settings".to_string(),
-        cwd: Some(PathBuf::from(absolute_path_string("repo"))),
-        details: Some(MigrationDetails {
-            plugins: vec![PluginsMigration {
-                marketplace_name: "team-marketplace".to_string(),
-                plugin_names: vec!["asana".to_string()],
-            }],
-            ..Default::default()
-        }),
-    });
+    assert_eq!(
+        item,
+        ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Plugins,
+            description: "Install supported plugins from Claude settings".to_string(),
+            cwd: Some(PathBuf::from(absolute_path_string("repo"))),
+            details: Some(MigrationDetails {
+                plugins: vec![PluginsMigration {
+                    marketplace_name: "team-marketplace".to_string(),
+                    plugin_names: vec!["asana".to_string()],
+                }],
+                ..Default::default()
+            }),
+        }
+    );
 }
 
 #[test]
@@ -406,21 +409,24 @@ fn external_agent_config_import_params_accept_legacy_plugin_details() {
     }))
     .expect("legacy plugin import params should deserialize");
 
-    assert_eq!(params, ExternalAgentConfigImportParams {
-        migration_items: vec![ExternalAgentConfigMigrationItem {
-            item_type: ExternalAgentConfigMigrationItemType::Plugins,
-            description: "Install supported plugins from Claude settings".to_string(),
-            cwd: Some(PathBuf::from(absolute_path_string("repo"))),
-            details: Some(MigrationDetails {
-                plugins: vec![PluginsMigration {
-                    marketplace_name: "team-marketplace".to_string(),
-                    plugin_names: vec!["asana".to_string()],
-                }],
-                ..Default::default()
-            }),
-        }],
-        source: None,
-    });
+    assert_eq!(
+        params,
+        ExternalAgentConfigImportParams {
+            migration_items: vec![ExternalAgentConfigMigrationItem {
+                item_type: ExternalAgentConfigMigrationItemType::Plugins,
+                description: "Install supported plugins from Claude settings".to_string(),
+                cwd: Some(PathBuf::from(absolute_path_string("repo"))),
+                details: Some(MigrationDetails {
+                    plugins: vec![PluginsMigration {
+                        marketplace_name: "team-marketplace".to_string(),
+                        plugin_names: vec!["asana".to_string()],
+                    }],
+                    ..Default::default()
+                }),
+            }],
+            source: None,
+        }
+    );
 }
 
 #[test]
@@ -490,23 +496,26 @@ fn permissions_request_approval_uses_request_permission_profile() {
 
     assert_eq!(params.cwd, absolute_path("repo"));
     assert_eq!(params.environment_id.as_deref(), Some("remote"));
-    assert_eq!(params.permissions, RequestPermissionProfile {
-        network: Some(AdditionalNetworkPermissions {
-            enabled: Some(true),
-        }),
-        file_system: Some(AdditionalFileSystemPermissions {
-            read: Some(vec![
-                serde_json::from_value(json!(read_only_path))
-                    .expect("API path string should deserialize")
-            ]),
-            write: Some(vec![
-                serde_json::from_value(json!(read_write_path))
-                    .expect("API path string should deserialize")
-            ]),
-            glob_scan_max_depth: None,
-            entries: None,
-        }),
-    });
+    assert_eq!(
+        params.permissions,
+        RequestPermissionProfile {
+            network: Some(AdditionalNetworkPermissions {
+                enabled: Some(true),
+            }),
+            file_system: Some(AdditionalFileSystemPermissions {
+                read: Some(vec![
+                    serde_json::from_value(json!(read_only_path))
+                        .expect("API path string should deserialize")
+                ]),
+                write: Some(vec![
+                    serde_json::from_value(json!(read_write_path))
+                        .expect("API path string should deserialize")
+                ]),
+                glob_scan_max_depth: None,
+                entries: None,
+            }),
+        }
+    );
 
     assert_eq!(
         CoreRequestPermissionProfile::try_from(params.permissions)
@@ -581,25 +590,28 @@ fn additional_file_system_permissions_preserves_canonical_entries() {
     };
 
     let permissions = AdditionalFileSystemPermissions::from(core_permissions.clone());
-    assert_eq!(permissions, AdditionalFileSystemPermissions {
-        read: None,
-        write: None,
-        glob_scan_max_depth: NonZeroUsize::new(2),
-        entries: Some(vec![
-            FileSystemSandboxEntry {
-                path: FileSystemPath::Special {
-                    value: FileSystemSpecialPath::Root,
+    assert_eq!(
+        permissions,
+        AdditionalFileSystemPermissions {
+            read: None,
+            write: None,
+            glob_scan_max_depth: NonZeroUsize::new(2),
+            entries: Some(vec![
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::Root,
+                    },
+                    access: FileSystemAccessMode::Write,
                 },
-                access: FileSystemAccessMode::Write,
-            },
-            FileSystemSandboxEntry {
-                path: FileSystemPath::GlobPattern {
-                    pattern: "**/*.env".to_string(),
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::GlobPattern {
+                        pattern: "**/*.env".to_string(),
+                    },
+                    access: FileSystemAccessMode::Deny,
                 },
-                access: FileSystemAccessMode::Deny,
-            },
-        ]),
-    });
+            ]),
+        }
+    );
     assert_eq!(
         CoreFileSystemPermissions::try_from(permissions)
             .expect("API paths should convert to native paths"),
@@ -620,25 +632,28 @@ fn additional_file_system_permissions_populates_entries_for_legacy_roots() {
     let read_only_api_path = LegacyAppPathString::from_abs_path(&read_only_path);
     let read_write_api_path = LegacyAppPathString::from_abs_path(&read_write_path);
 
-    assert_eq!(permissions, AdditionalFileSystemPermissions {
-        read: Some(vec![read_only_api_path.clone()]),
-        write: Some(vec![read_write_api_path.clone()]),
-        glob_scan_max_depth: None,
-        entries: Some(vec![
-            FileSystemSandboxEntry {
-                path: FileSystemPath::Path {
-                    path: read_only_api_path,
+    assert_eq!(
+        permissions,
+        AdditionalFileSystemPermissions {
+            read: Some(vec![read_only_api_path.clone()]),
+            write: Some(vec![read_write_api_path.clone()]),
+            glob_scan_max_depth: None,
+            entries: Some(vec![
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path {
+                        path: read_only_api_path,
+                    },
+                    access: FileSystemAccessMode::Read,
                 },
-                access: FileSystemAccessMode::Read,
-            },
-            FileSystemSandboxEntry {
-                path: FileSystemPath::Path {
-                    path: read_write_api_path,
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path {
+                        path: read_write_api_path,
+                    },
+                    access: FileSystemAccessMode::Write,
                 },
-                access: FileSystemAccessMode::Write,
-            },
-        ]),
-    });
+            ]),
+        }
+    );
     assert_eq!(
         CoreFileSystemPermissions::try_from(permissions)
             .expect("API paths should convert to native paths"),
@@ -664,9 +679,10 @@ fn legacy_current_working_directory_special_path_deserializes_as_project_roots()
     }))
     .expect("legacy cwd special path should deserialize");
 
-    assert_eq!(special_path, FileSystemSpecialPath::ProjectRoots {
-        subpath: None
-    });
+    assert_eq!(
+        special_path,
+        FileSystemSpecialPath::ProjectRoots { subpath: None }
+    );
     assert_eq!(
         serde_json::to_value(&special_path).expect("serialize special path"),
         json!({
@@ -701,23 +717,26 @@ fn permissions_request_approval_response_uses_granted_permission_profile_without
     }))
     .expect("permissions response should deserialize");
 
-    assert_eq!(response.permissions, GrantedPermissionProfile {
-        network: Some(AdditionalNetworkPermissions {
-            enabled: Some(true),
-        }),
-        file_system: Some(AdditionalFileSystemPermissions {
-            read: Some(vec![
-                serde_json::from_value(json!(read_only_path))
-                    .expect("API path string should deserialize")
-            ]),
-            write: Some(vec![
-                serde_json::from_value(json!(read_write_path))
-                    .expect("API path string should deserialize")
-            ]),
-            glob_scan_max_depth: None,
-            entries: None,
-        }),
-    });
+    assert_eq!(
+        response.permissions,
+        GrantedPermissionProfile {
+            network: Some(AdditionalNetworkPermissions {
+                enabled: Some(true),
+            }),
+            file_system: Some(AdditionalFileSystemPermissions {
+                read: Some(vec![
+                    serde_json::from_value(json!(read_only_path))
+                        .expect("API path string should deserialize")
+                ]),
+                write: Some(vec![
+                    serde_json::from_value(json!(read_write_path))
+                        .expect("API path string should deserialize")
+                ]),
+                glob_scan_max_depth: None,
+                entries: None,
+            }),
+        }
+    );
 
     assert_eq!(
         CoreAdditionalPermissionProfile::try_from(response.permissions)
@@ -1059,22 +1078,25 @@ fn command_exec_params_default_optional_streaming_flags() {
     }))
     .expect("command/exec payload should deserialize");
 
-    assert_eq!(params, CommandExecParams {
-        command: vec!["ls".to_string(), "-la".to_string()],
-        process_id: None,
-        tty: false,
-        stream_stdin: false,
-        stream_stdout_stderr: false,
-        output_bytes_cap: None,
-        disable_output_cap: false,
-        disable_timeout: false,
-        timeout_ms: Some(1000),
-        cwd: Some(PathBuf::from("/tmp")),
-        env: None,
-        size: None,
-        sandbox_policy: None,
-        permission_profile: None,
-    });
+    assert_eq!(
+        params,
+        CommandExecParams {
+            command: vec!["ls".to_string(), "-la".to_string()],
+            process_id: None,
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: Some(1000),
+            cwd: Some(PathBuf::from("/tmp")),
+            env: None,
+            size: None,
+            sandbox_policy: None,
+            permission_profile: None,
+        }
+    );
 }
 
 #[test]
@@ -1182,11 +1204,14 @@ fn process_spawn_params_distinguish_omitted_null_and_value_limits() {
         "timeoutMs": null,
     }))
     .expect("deserialize disabled limits");
-    assert_eq!(decoded, ProcessSpawnParams {
-        output_bytes_cap: Some(None),
-        timeout_ms: Some(None),
-        ..expected_omitted.clone()
-    });
+    assert_eq!(
+        decoded,
+        ProcessSpawnParams {
+            output_bytes_cap: Some(None),
+            timeout_ms: Some(None),
+            ..expected_omitted.clone()
+        }
+    );
 
     let decoded = serde_json::from_value::<ProcessSpawnParams>(json!({
         "command": ["sleep", "30"],
@@ -1196,11 +1221,14 @@ fn process_spawn_params_distinguish_omitted_null_and_value_limits() {
         "timeoutMs": 456,
     }))
     .expect("deserialize explicit limits");
-    assert_eq!(decoded, ProcessSpawnParams {
-        output_bytes_cap: Some(Some(123)),
-        timeout_ms: Some(Some(456)),
-        ..expected_omitted
-    });
+    assert_eq!(
+        decoded,
+        ProcessSpawnParams {
+            output_bytes_cap: Some(Some(123)),
+            timeout_ms: Some(Some(456)),
+            ..expected_omitted
+        }
+    );
 }
 
 #[test]
@@ -1638,13 +1666,16 @@ fn ask_for_approval_granular_defaults_missing_optional_flags_to_false() {
     }))
     .expect("granular approval policy should deserialize");
 
-    assert_eq!(decoded, AskForApproval::Granular {
-        sandbox_approval: true,
-        rules: false,
-        skill_approval: false,
-        request_permissions: false,
-        mcp_elicitations: true,
-    });
+    assert_eq!(
+        decoded,
+        AskForApproval::Granular {
+            sandbox_approval: true,
+            rules: false,
+            skill_approval: false,
+            request_permissions: false,
+            mcp_elicitations: true,
+        }
+    );
 }
 
 #[test]
@@ -1868,13 +1899,16 @@ fn mcp_server_elicitation_response_round_trips_rmcp_result() {
     };
 
     let v2_response = McpServerElicitationRequestResponse::from(rmcp_result.clone());
-    assert_eq!(v2_response, McpServerElicitationRequestResponse {
-        action: McpServerElicitationAction::Accept,
-        content: Some(json!({
-            "confirmed": true,
-        })),
-        meta: None,
-    });
+    assert_eq!(
+        v2_response,
+        McpServerElicitationRequestResponse {
+            action: McpServerElicitationAction::Accept,
+            content: Some(json!({
+                "confirmed": true,
+            })),
+            meta: None,
+        }
+    );
     assert_eq!(
         rmcp::model::CreateElicitationResult::from(v2_response),
         rmcp_result
@@ -1891,12 +1925,15 @@ fn mcp_server_elicitation_request_from_core_url_request() {
     })
     .expect("URL request should convert");
 
-    assert_eq!(request, McpServerElicitationRequest::Url {
-        meta: None,
-        message: "Finish sign-in".to_string(),
-        url: "https://example.com/complete".to_string(),
-        elicitation_id: "elicitation-123".to_string(),
-    });
+    assert_eq!(
+        request,
+        McpServerElicitationRequest::Url {
+            meta: None,
+            message: "Finish sign-in".to_string(),
+            url: "https://example.com/complete".to_string(),
+            elicitation_id: "elicitation-123".to_string(),
+        }
+    );
 }
 
 #[test]
@@ -1927,11 +1964,14 @@ fn mcp_server_elicitation_request_from_core_form_request() {
     }))
     .expect("expected schema should deserialize");
 
-    assert_eq!(request, McpServerElicitationRequest::Form {
-        meta: None,
-        message: "Allow this request?".to_string(),
-        requested_schema: expected_schema,
-    });
+    assert_eq!(
+        request,
+        McpServerElicitationRequest::Form {
+            meta: None,
+            message: "Allow this request?".to_string(),
+            requested_schema: expected_schema,
+        }
+    );
 }
 
 #[test]
@@ -1958,11 +1998,14 @@ fn mcp_server_elicitation_request_from_core_openai_form_request() {
     })
     .expect("OpenAI form request should convert");
 
-    assert_eq!(request, McpServerElicitationRequest::OpenAiForm {
-        meta: None,
-        message: "Choose a report".to_string(),
-        requested_schema,
-    });
+    assert_eq!(
+        request,
+        McpServerElicitationRequest::OpenAiForm {
+            meta: None,
+            message: "Choose a report".to_string(),
+            requested_schema,
+        }
+    );
 }
 
 #[test]
@@ -2005,58 +2048,61 @@ fn mcp_elicitation_schema_matches_mcp_2025_11_25_primitives() {
     }))
     .expect("schema should deserialize");
 
-    assert_eq!(schema, McpElicitationSchema {
-        schema_uri: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
-        type_: McpElicitationObjectType::Object,
-        properties: BTreeMap::from([
-            (
-                "confirmed".to_string(),
-                McpElicitationPrimitiveSchema::Boolean(McpElicitationBooleanSchema {
-                    type_: McpElicitationBooleanType::Boolean,
-                    title: Some("Confirm".to_string()),
-                    description: Some("Approve the pending action".to_string()),
-                    default: Some(true),
-                }),
-            ),
-            (
-                "count".to_string(),
-                McpElicitationPrimitiveSchema::Number(McpElicitationNumberSchema {
-                    type_: McpElicitationNumberType::Integer,
-                    title: Some("Count".to_string()),
-                    description: Some("How many items to create".to_string()),
-                    minimum: Some(1.0),
-                    maximum: Some(5.0),
-                    default: Some(3.0),
-                }),
-            ),
-            (
-                "email".to_string(),
-                McpElicitationPrimitiveSchema::String(McpElicitationStringSchema {
-                    type_: McpElicitationStringType::String,
-                    title: Some("Email".to_string()),
-                    description: Some("Work email address".to_string()),
-                    min_length: None,
-                    max_length: None,
-                    format: Some(McpElicitationStringFormat::Email),
-                    default: Some("dev@example.com".to_string()),
-                }),
-            ),
-            (
-                "legacyChoice".to_string(),
-                McpElicitationPrimitiveSchema::Enum(McpElicitationEnumSchema::Legacy(
-                    McpElicitationLegacyTitledEnumSchema {
+    assert_eq!(
+        schema,
+        McpElicitationSchema {
+            schema_uri: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+            type_: McpElicitationObjectType::Object,
+            properties: BTreeMap::from([
+                (
+                    "confirmed".to_string(),
+                    McpElicitationPrimitiveSchema::Boolean(McpElicitationBooleanSchema {
+                        type_: McpElicitationBooleanType::Boolean,
+                        title: Some("Confirm".to_string()),
+                        description: Some("Approve the pending action".to_string()),
+                        default: Some(true),
+                    }),
+                ),
+                (
+                    "count".to_string(),
+                    McpElicitationPrimitiveSchema::Number(McpElicitationNumberSchema {
+                        type_: McpElicitationNumberType::Integer,
+                        title: Some("Count".to_string()),
+                        description: Some("How many items to create".to_string()),
+                        minimum: Some(1.0),
+                        maximum: Some(5.0),
+                        default: Some(3.0),
+                    }),
+                ),
+                (
+                    "email".to_string(),
+                    McpElicitationPrimitiveSchema::String(McpElicitationStringSchema {
                         type_: McpElicitationStringType::String,
-                        title: Some("Action".to_string()),
-                        description: Some("Legacy titled enum form".to_string()),
-                        enum_: vec!["allow".to_string(), "deny".to_string()],
-                        enum_names: Some(vec!["Allow".to_string(), "Deny".to_string(),]),
-                        default: Some("allow".to_string()),
-                    },
-                )),
-            ),
-        ]),
-        required: Some(vec!["email".to_string(), "confirmed".to_string()]),
-    });
+                        title: Some("Email".to_string()),
+                        description: Some("Work email address".to_string()),
+                        min_length: None,
+                        max_length: None,
+                        format: Some(McpElicitationStringFormat::Email),
+                        default: Some("dev@example.com".to_string()),
+                    }),
+                ),
+                (
+                    "legacyChoice".to_string(),
+                    McpElicitationPrimitiveSchema::Enum(McpElicitationEnumSchema::Legacy(
+                        McpElicitationLegacyTitledEnumSchema {
+                            type_: McpElicitationStringType::String,
+                            title: Some("Action".to_string()),
+                            description: Some("Legacy titled enum form".to_string()),
+                            enum_: vec!["allow".to_string(), "deny".to_string()],
+                            enum_names: Some(vec!["Allow".to_string(), "Deny".to_string(),]),
+                            default: Some("allow".to_string()),
+                        },
+                    )),
+                ),
+            ]),
+            required: Some(vec!["email".to_string(), "confirmed".to_string()]),
+        }
+    );
 }
 
 #[test]
@@ -2271,9 +2317,12 @@ fn sandbox_policy_deserializes_legacy_read_only_full_access_field() {
         "networkAccess": true
     }))
     .expect("read-only policy should ignore legacy fullAccess field");
-    assert_eq!(policy, SandboxPolicy::ReadOnly {
-        network_access: true
-    });
+    assert_eq!(
+        policy,
+        SandboxPolicy::ReadOnly {
+            network_access: true
+        }
+    );
 }
 
 #[test]
@@ -2290,12 +2339,15 @@ fn sandbox_policy_deserializes_legacy_workspace_write_full_access_field() {
         "excludeSlashTmp": true
     }))
     .expect("workspace-write policy should ignore legacy fullAccess field");
-    assert_eq!(policy, SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![absolute_path("/workspace")],
-        network_access: true,
-        exclude_tmpdir_env_var: true,
-        exclude_slash_tmp: true,
-    });
+    assert_eq!(
+        policy,
+        SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![absolute_path("/workspace")],
+            network_access: true,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        }
+    );
 }
 
 #[test]
@@ -2339,12 +2391,15 @@ fn automatic_approval_review_deserializes_aborted_status() {
         "rationale": null
     }))
     .expect("aborted automatic review should deserialize");
-    assert_eq!(review, GuardianApprovalReview {
-        status: GuardianApprovalReviewStatus::Aborted,
-        risk_level: None,
-        user_authorization: None,
-        rationale: None,
-    });
+    assert_eq!(
+        review,
+        GuardianApprovalReview {
+            status: GuardianApprovalReviewStatus::Aborted,
+            risk_level: None,
+            user_authorization: None,
+            rationale: None,
+        }
+    );
 }
 
 #[test]
@@ -2358,11 +2413,14 @@ fn guardian_approval_review_action_round_trips_command_shape() {
     let action: GuardianApprovalReviewAction =
         serde_json::from_value(value.clone()).expect("guardian review action");
 
-    assert_eq!(action, GuardianApprovalReviewAction::Command {
-        source: GuardianCommandSource::Shell,
-        command: "rm -rf /tmp/example.sqlite".to_string(),
-        cwd: absolute_path("tmp"),
-    });
+    assert_eq!(
+        action,
+        GuardianApprovalReviewAction::Command {
+            source: GuardianCommandSource::Shell,
+            command: "rm -rf /tmp/example.sqlite".to_string(),
+            cwd: absolute_path("tmp"),
+        }
+    );
     assert_eq!(
         serde_json::to_value(&action).expect("serialize guardian review action"),
         value
@@ -2378,21 +2436,24 @@ fn network_requirements_deserializes_legacy_fields() {
     }))
     .expect("legacy network requirements should deserialize");
 
-    assert_eq!(requirements, NetworkRequirements {
-        enabled: None,
-        http_port: None,
-        socks_port: None,
-        allow_upstream_proxy: None,
-        dangerously_allow_non_loopback_proxy: None,
-        dangerously_allow_all_unix_sockets: None,
-        domains: None,
-        managed_allowed_domains_only: None,
-        allowed_domains: Some(vec!["api.openai.com".to_string()]),
-        denied_domains: Some(vec!["blocked.example.com".to_string()]),
-        unix_sockets: None,
-        allow_unix_sockets: Some(vec!["/tmp/proxy.sock".to_string()]),
-        allow_local_binding: None,
-    });
+    assert_eq!(
+        requirements,
+        NetworkRequirements {
+            enabled: None,
+            http_port: None,
+            socks_port: None,
+            allow_upstream_proxy: None,
+            dangerously_allow_non_loopback_proxy: None,
+            dangerously_allow_all_unix_sockets: None,
+            domains: None,
+            managed_allowed_domains_only: None,
+            allowed_domains: Some(vec!["api.openai.com".to_string()]),
+            denied_domains: Some(vec!["blocked.example.com".to_string()]),
+            unix_sockets: None,
+            allow_unix_sockets: Some(vec!["/tmp/proxy.sock".to_string()]),
+            allow_local_binding: None,
+        }
+    );
 }
 
 #[test]
@@ -2483,32 +2544,35 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         ],
     });
 
-    assert_eq!(ThreadItem::from(user_item), ThreadItem::UserMessage {
-        id: "user-1".to_string(),
-        client_id: Some("client-message-1".to_string()),
-        content: vec![
-            UserInput::Text {
-                text: "hello".to_string(),
-                text_elements: Vec::new(),
-            },
-            UserInput::Image {
-                url: "https://example.com/image.png".to_string(),
-                detail: Some(ImageDetail::Original),
-            },
-            UserInput::LocalImage {
-                path: PathBuf::from("local/image.png"),
-                detail: Some(ImageDetail::Original),
-            },
-            UserInput::Skill {
-                name: "skill-creator".to_string(),
-                path: PathBuf::from("/repo/.codex/skills/skill-creator/SKILL.md"),
-            },
-            UserInput::Mention {
-                name: "Demo App".to_string(),
-                path: "app://demo-app".to_string(),
-            },
-        ],
-    });
+    assert_eq!(
+        ThreadItem::from(user_item),
+        ThreadItem::UserMessage {
+            id: "user-1".to_string(),
+            client_id: Some("client-message-1".to_string()),
+            content: vec![
+                UserInput::Text {
+                    text: "hello".to_string(),
+                    text_elements: Vec::new(),
+                },
+                UserInput::Image {
+                    url: "https://example.com/image.png".to_string(),
+                    detail: Some(ImageDetail::Original),
+                },
+                UserInput::LocalImage {
+                    path: PathBuf::from("local/image.png"),
+                    detail: Some(ImageDetail::Original),
+                },
+                UserInput::Skill {
+                    name: "skill-creator".to_string(),
+                    path: PathBuf::from("/repo/.codex/skills/skill-creator/SKILL.md"),
+                },
+                UserInput::Mention {
+                    name: "Demo App".to_string(),
+                    path: "app://demo-app".to_string(),
+                },
+            ],
+        }
+    );
 
     let agent_item = TurnItem::AgentMessage(AgentMessageItem {
         id: "agent-1".to_string(),
@@ -2524,12 +2588,15 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         memory_citation: None,
     });
 
-    assert_eq!(ThreadItem::from(agent_item), ThreadItem::AgentMessage {
-        id: "agent-1".to_string(),
-        text: "Hello world".to_string(),
-        phase: None,
-        memory_citation: None,
-    });
+    assert_eq!(
+        ThreadItem::from(agent_item),
+        ThreadItem::AgentMessage {
+            id: "agent-1".to_string(),
+            text: "Hello world".to_string(),
+            phase: None,
+            memory_citation: None,
+        }
+    );
 
     let agent_item_with_phase = TurnItem::AgentMessage(AgentMessageItem {
         id: "agent-2".to_string(),
@@ -2572,11 +2639,14 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         raw_content: vec![],
     });
 
-    assert_eq!(ThreadItem::from(reasoning_item), ThreadItem::Reasoning {
-        id: "reasoning-1".to_string(),
-        summary: vec!["line one".to_string(), "line two".to_string()],
-        content: vec![],
-    });
+    assert_eq!(
+        ThreadItem::from(reasoning_item),
+        ThreadItem::Reasoning {
+            id: "reasoning-1".to_string(),
+            summary: vec!["line one".to_string(), "line two".to_string()],
+            content: vec![],
+        }
+    );
 
     let command_item = TurnItem::CommandExecution(CommandExecutionItem {
         id: "exec-1".to_string(),
@@ -2675,10 +2745,13 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
             prompt: Some("continue".to_string()),
             model: None,
             reasoning_effort: None,
-            agents_states: [(receiver_thread_id.to_string(), CollabAgentState {
-                status: CollabAgentStatus::Completed,
-                message: None,
-            },)]
+            agents_states: [(
+                receiver_thread_id.to_string(),
+                CollabAgentState {
+                    status: CollabAgentStatus::Completed,
+                    message: None,
+                },
+            )]
             .into_iter()
             .collect(),
         }
@@ -2747,10 +2820,13 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         path: PathUri::from_abs_path(&test_path_buf("/tmp/view-image.png").abs()),
     });
 
-    assert_eq!(ThreadItem::from(image_view_item), ThreadItem::ImageView {
-        id: "view-image-1".to_string(),
-        path: LegacyAppPathString::from_abs_path(&test_path_buf("/tmp/view-image.png").abs()),
-    });
+    assert_eq!(
+        ThreadItem::from(image_view_item),
+        ThreadItem::ImageView {
+            id: "view-image-1".to_string(),
+            path: LegacyAppPathString::from_abs_path(&test_path_buf("/tmp/view-image.png").abs()),
+        }
+    );
 
     let file_change_item = TurnItem::FileChange(FileChangeItem {
         id: "patch-1".to_string(),
@@ -2768,15 +2844,18 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         stderr: Some(String::new()),
     });
 
-    assert_eq!(ThreadItem::from(file_change_item), ThreadItem::FileChange {
-        id: "patch-1".to_string(),
-        changes: vec![FileUpdateChange {
-            path: "README.md".to_string(),
-            kind: PatchChangeKind::Add,
-            diff: "hello\n".to_string(),
-        }],
-        status: PatchApplyStatus::Completed,
-    });
+    assert_eq!(
+        ThreadItem::from(file_change_item),
+        ThreadItem::FileChange {
+            id: "patch-1".to_string(),
+            changes: vec![FileUpdateChange {
+                path: "README.md".to_string(),
+                kind: PatchChangeKind::Add,
+                diff: "hello\n".to_string(),
+            }],
+            status: PatchApplyStatus::Completed,
+        }
+    );
 
     let mcp_tool_call_item = TurnItem::McpToolCall(McpToolCallItem {
         id: "mcp-1".to_string(),
@@ -3964,15 +4043,18 @@ fn thread_lifecycle_responses_default_missing_optional_fields() {
     assert_eq!(fork.instruction_sources, vec![foreign_source]);
     let foreign_source_uri =
         PathUri::parse("file:///C:/workspace/AGENTS.md").expect("foreign source URI");
-    assert_eq!(start.instruction_source_path_uris(), vec![
-        foreign_source_uri.clone()
-    ]);
-    assert_eq!(resume.instruction_source_path_uris(), vec![
-        foreign_source_uri.clone()
-    ]);
-    assert_eq!(fork.instruction_source_path_uris(), vec![
-        foreign_source_uri
-    ]);
+    assert_eq!(
+        start.instruction_source_path_uris(),
+        vec![foreign_source_uri.clone()]
+    );
+    assert_eq!(
+        resume.instruction_source_path_uris(),
+        vec![foreign_source_uri.clone()]
+    );
+    assert_eq!(
+        fork.instruction_source_path_uris(),
+        vec![foreign_source_uri]
+    );
 }
 
 #[test]
@@ -4245,9 +4327,12 @@ fn realtime_append_text_defaults_role_to_user() {
     }))
     .expect("params should deserialize");
 
-    assert_eq!(params, ThreadRealtimeAppendTextParams {
-        thread_id: "thread_123".to_string(),
-        text: "hello".to_string(),
-        role: ConversationTextRole::User,
-    });
+    assert_eq!(
+        params,
+        ThreadRealtimeAppendTextParams {
+            thread_id: "thread_123".to_string(),
+            text: "hello".to_string(),
+            role: ConversationTextRole::User,
+        }
+    );
 }
