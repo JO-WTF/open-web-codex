@@ -9,7 +9,10 @@
     "differenceCount": 589,
     "addedLocally": 163,
     "modified": 381,
-    "missingLocally": 45
+    "missingLocally": 45,
+    "upstreamOnly": 342,
+    "localOnly": 215,
+    "diverged": 32
   },
   "progress": {
     "state": "inventory-in-progress",
@@ -22,6 +25,9 @@
       "legacy-response-tool-history",
       "capability-manifest"
     ],
-    "nextAction": "Classify every remaining non-generated difference against this upstream commit before moving or deleting it."
+    "completed": [
+      "Separated pending official updates from candidate local changes using the integrated upstream base."
+    ],
+    "nextAction": "Classify the 215 local-only and 32 diverged paths by source behavior before moving or deleting them."
   }
 }
