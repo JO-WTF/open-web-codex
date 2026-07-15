@@ -31,8 +31,9 @@
     },
     "completed": [
       "Separated pending official updates from candidate local changes using the integrated upstream base.",
-      "Mapped the first-pass non-generated source candidates to retained seams, upstream-first replay, or verification."
+      "Mapped the first-pass non-generated source candidates to retained seams, upstream-first replay, or verification.",
+      "Classified Turn-level Provider override and Provider propagation followers as retained; classified missing-CODEX_HOME auto-creation as Platform Host work to move out of codex/."
     ],
-    "nextAction": "Trace verification candidates to a retained seam or official equivalent, then classify them as retain-core, upstreamed, move-out, or drop."
+    "nextAction": "Trace the remaining test-only verification candidates, then implement Profile Host directory creation before returning utils/home-dir to official semantics."
   }
 }
