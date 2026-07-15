@@ -16,6 +16,11 @@ export type ThreadRealtimeStartParams = { threadId: string,
  */
 clientManagedHandoffs?: boolean | null,
 /**
+ * Routes any transcript tail remaining at session end through Codex. Defaults to false.
+ * TODO: Remove this rollout knob once transcript-tail flushing is always enabled.
+ */
+flushTranscriptTailOnSessionEnd?: boolean | null,
+/**
  * Sends automatic Codex responses as realtime conversation items instead of handoff appends.
  */
 codexResponsesAsItems?: boolean | null,
@@ -24,9 +29,9 @@ codexResponsesAsItems?: boolean | null,
  */
 codexResponseItemPrefix?: string | null,
 /**
- * Optional prefix added to automatic V1 Codex commentary sent with
- * `conversation.handoff.append` when `codexResponsesAsItems` is not true. Final answers are
- * sent without the prefix.
+ * Optional prefix added to automatic V1 or V3 Codex commentary sent through the selected
+ * Bidi handoff wire event when `codexResponsesAsItems` is not true. Final answers are sent
+ * without the prefix.
  */
 codexResponseHandoffPrefix?: string | null,
 /**
