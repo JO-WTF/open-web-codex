@@ -247,6 +247,68 @@ async function main() {
     );
     assertStatus("send message", message.status, 200);
 
+    const providers = await fetchJson(baseUrl, "/api/codex/model-providers", {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    assertStatus("list model providers", providers.status, 200);
+    if (!providers.body.currentProviderId || !Array.isArray(providers.body.data)) {
+      throw new Error("model provider catalog response missing fields");
+    }
+
+    const models = await fetchJson(baseUrl, "/api/codex/models", {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    assertStatus("list models", models.status, 200);
+    if (!Array.isArray(models.body.data) || models.body.data.length === 0) {
+      throw new Error("model list response missing data");
+    }
+
+    const contextWrite = await fetchJson(baseUrl, "/api/codex/model-providers/write", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        action: "context",
+        id: "deepseek",
+        modelId: "deepseek-chat",
+        contextWindow: 131072,
+      }),
+    });
+    assertStatus("write provider context", contextWrite.status, 200);
+
+    const invalidContext = await fetchJson(baseUrl, "/api/codex/model-providers/write", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        action: "context",
+        id: "deepseek",
+        modelId: "deepseek-chat",
+        contextWindow: 512,
+      }),
+    });
+    assertStatus("reject invalid context window", invalidContext.status, 502);
+
+    const threadSettings = await fetchJson(
+      baseUrl,
+      `/api/tasks/${encodeURIComponent(task.body.id)}/thread-settings`,
+      {
+        method: "PATCH",
+        headers: { authorization: `Bearer ${token}` },
+        body: JSON.stringify({ model: models.body.data[0].id }),
+      },
+    );
+    assertStatus("update thread settings", threadSettings.status, 200);
+
+    const messageWithModel = await fetchJson(
+      baseUrl,
+      `/api/tasks/${encodeURIComponent(task.body.id)}/messages`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+        body: JSON.stringify({ text: "hello with model", model: models.body.data[0].id }),
+      },
+    );
+    assertStatus("send message with model", messageWithModel.status, 200);
+
     const interrupt = await fetchJson(
       baseUrl,
       `/api/runs/${encodeURIComponent(run.body.run.id)}/interrupt`,

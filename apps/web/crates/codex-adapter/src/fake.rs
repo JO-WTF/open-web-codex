@@ -27,6 +27,10 @@ struct FakeState {
     threads: Vec<MockThread>,
     /// Events queued by RPC handlers (e.g. thread/started).
     pending_events: Vec<Value>,
+    current_provider_id: String,
+    providers: Vec<Value>,
+    models: Vec<Value>,
+    thread_settings: HashMap<String, Value>,
 }
 
 /// In-memory Codex adapter that simulates workspace, thread and event flows.
@@ -48,11 +52,105 @@ impl FakeCodexAdapter {
                 workspaces: vec![],
                 threads: vec![],
                 pending_events: vec![],
+                current_provider_id: "openai".to_string(),
+                providers: default_providers(),
+                models: default_models(),
+                thread_settings: HashMap::new(),
             })),
             notify: Arc::new(tokio::sync::Notify::new()),
             counter: Arc::new(AtomicU64::new(1)),
         }
     }
+
+    fn provider_catalog(state: &FakeState) -> Value {
+        let current = &state.current_provider_id;
+        let data = state
+            .providers
+            .iter()
+            .map(|provider| {
+                let mut entry = provider.clone();
+                if let Some(object) = entry.as_object_mut() {
+                    let id = object
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    object.insert("isCurrent".to_string(), json!(id == current));
+                    if let Some(models) = object.get("models").and_then(Value::as_array) {
+                        object.insert("modelCount".to_string(), json!(models.len()));
+                    }
+                }
+                entry
+            })
+            .collect::<Vec<_>>();
+        json!({
+            "data": data,
+            "currentProviderId": current,
+        })
+    }
+
+    fn model_list_response(state: &FakeState) -> Value {
+        json!({
+            "data": state.models.clone(),
+            "nextCursor": Value::Null,
+        })
+    }
+}
+
+fn default_providers() -> Vec<Value> {
+    vec![
+        json!({
+            "id": "openai",
+            "name": "OpenAI",
+            "baseUrl": null,
+            "envKey": "OPENAI_API_KEY",
+            "wireApi": "responses",
+            "kind": "builtIn",
+            "isCurrent": true,
+            "modelCount": 0,
+            "canEdit": false,
+            "canDelete": false,
+            "canFetchModels": false,
+            "models": [],
+        }),
+        json!({
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "baseUrl": "https://api.deepseek.com",
+            "envKey": "DEEPSEEK_API_KEY",
+            "wireApi": "responses",
+            "kind": "custom",
+            "isCurrent": false,
+            "modelCount": 1,
+            "canEdit": true,
+            "canDelete": true,
+            "canFetchModels": true,
+            "models": [{
+                "modelId": "deepseek-chat",
+                "modelName": "DeepSeek Chat",
+                "contextWindow": 65536,
+            }],
+        }),
+    ]
+}
+
+fn default_models() -> Vec<Value> {
+    vec![
+        json!({
+            "id": "gpt-5.4",
+            "model": "gpt-5.4",
+            "displayName": "GPT-5.4",
+            "isDefault": true,
+        }),
+        json!({
+            "id": "deepseek-chat",
+            "model": "deepseek-chat",
+            "displayName": "DeepSeek Chat",
+            "isDefault": false,
+        }),
+    ]
+}
+
+impl FakeCodexAdapter {
 
     /// Pre-populate with a sample workspace.
     pub async fn with_demo_workspace(self) -> Self {
@@ -236,7 +334,8 @@ impl CodexAdapter for FakeCodexAdapter {
                     .or_else(|| params["thread_id"].as_str())
                     .unwrap_or("");
                 let text = params["text"].as_str().unwrap_or("");
-                tracing::info!(thread = %th_id, text = %text, "fake: user message");
+                let model = params.get("model").and_then(Value::as_str);
+                tracing::info!(thread = %th_id, text = %text, model = ?model, "fake: user message");
 
                 {
                     let mut s = self.state.lock().await;
@@ -247,6 +346,164 @@ impl CodexAdapter for FakeCodexAdapter {
                 }
 
                 Ok(json!({ "status": "sent" }))
+            }
+
+            "model_provider_list" => Ok({
+                let s = self.state.lock().await;
+                Self::provider_catalog(&s)
+            }),
+
+            "model_list" => Ok({
+                let s = self.state.lock().await;
+                Self::model_list_response(&s)
+            }),
+
+            "model_provider_write" => {
+                let input = params
+                    .get("input")
+                    .cloned()
+                    .unwrap_or_else(|| params.clone());
+                let object = input
+                    .as_object()
+                    .ok_or_else(|| AdapterError::Rpc("provider mutation must be an object".into()))?;
+                let action = object
+                    .get("action")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| AdapterError::Rpc("missing provider action".into()))?;
+                let id = object
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| AdapterError::Rpc("provider id is required".into()))?;
+
+                let mut s = self.state.lock().await;
+                match action {
+                    "select" => {
+                        if !s.providers.iter().any(|provider| provider["id"] == id) {
+                            return Err(AdapterError::Rpc(format!("provider '{id}' does not exist")));
+                        }
+                        s.current_provider_id = id.to_string();
+                    }
+                    "context" => {
+                        let provider = s
+                            .providers
+                            .iter_mut()
+                            .find(|provider| provider["id"] == id)
+                            .ok_or_else(|| AdapterError::Rpc(format!("provider '{id}' does not exist")))?;
+                        if provider["kind"] == "builtIn" {
+                            return Err(AdapterError::Rpc(
+                                "built-in model metadata cannot be edited".into(),
+                            ));
+                        }
+                        let model_id = object
+                            .get("modelId")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .ok_or_else(|| AdapterError::Rpc("model id is required".into()))?;
+                        let context_window = object
+                            .get("contextWindow")
+                            .and_then(Value::as_i64)
+                            .filter(|value| *value >= 1024)
+                            .ok_or_else(|| {
+                                AdapterError::Rpc(
+                                    "context window must be at least 1024 tokens".into(),
+                                )
+                            })?;
+                        if let Some(models) = provider
+                            .get_mut("models")
+                            .and_then(Value::as_array_mut)
+                        {
+                            if let Some(entry) = models
+                                .iter_mut()
+                                .find(|entry| entry["modelId"] == model_id)
+                            {
+                                entry["contextWindow"] = json!(context_window);
+                            } else {
+                                models.push(json!({
+                                    "modelId": model_id,
+                                    "modelName": model_id,
+                                    "contextWindow": context_window,
+                                }));
+                            }
+                            let count = models.len();
+                            provider["modelCount"] = json!(count);
+                        }
+                    }
+                    "upsert" => {
+                        if s.providers.iter().any(|provider| provider["id"] == id) {
+                            return Err(AdapterError::Rpc(format!(
+                                "provider '{id}' already exists; use edit flow"
+                            )));
+                        }
+                        let name = object
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or(id);
+                        let base_url = object
+                            .get("baseUrl")
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+                        s.providers.push(json!({
+                            "id": id,
+                            "name": name,
+                            "baseUrl": base_url,
+                            "envKey": object.get("envKey").cloned().unwrap_or(Value::Null),
+                            "wireApi": object.get("wireApi").and_then(Value::as_str).unwrap_or("responses"),
+                            "kind": "custom",
+                            "isCurrent": false,
+                            "modelCount": 0,
+                            "canEdit": true,
+                            "canDelete": true,
+                            "canFetchModels": true,
+                            "models": [],
+                        }));
+                        if object.get("select").and_then(Value::as_bool) == Some(true) {
+                            s.current_provider_id = id.to_string();
+                        }
+                    }
+                    "delete" => {
+                        if id == "openai" {
+                            return Err(AdapterError::Rpc(
+                                "built-in provider 'openai' cannot be deleted".into(),
+                            ));
+                        }
+                        if s.current_provider_id == id {
+                            return Err(AdapterError::Rpc(
+                                "select another provider before deleting the current provider"
+                                    .into(),
+                            ));
+                        }
+                        s.providers.retain(|provider| provider["id"] != id);
+                    }
+                    "fetch" => {
+                        if !s.providers.iter().any(|provider| provider["id"] == id) {
+                            return Err(AdapterError::Rpc(format!("provider '{id}' does not exist")));
+                        }
+                        s.current_provider_id = id.to_string();
+                        return Ok(Self::model_list_response(&s));
+                    }
+                    other => {
+                        return Err(AdapterError::Rpc(format!(
+                            "unsupported provider action '{other}'"
+                        )));
+                    }
+                }
+                Ok(Self::provider_catalog(&s))
+            }
+
+            "thread_settings_update" => {
+                let thread_id = params["threadId"]
+                    .as_str()
+                    .ok_or_else(|| AdapterError::Rpc("missing threadId".into()))?;
+                let settings = params
+                    .get("settings")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                let mut s = self.state.lock().await;
+                s.thread_settings.insert(thread_id.to_string(), settings);
+                Ok(json!({ "status": "updated" }))
             }
 
             "turn_interrupt" | "turn_steer" => Ok(json!({ "status": "ok" })),
@@ -272,7 +529,7 @@ impl CodexAdapter for FakeCodexAdapter {
             let mut thread_ticks: HashMap<String, u32> = HashMap::new();
 
             // Helper: send an SSE frame
-            let mut send = |data: Value| {
+            let send = |data: Value| {
                 let frame = format!("data: {}\n\n", data.to_string());
                 let _ = sender.send(frame.into_bytes());
             };

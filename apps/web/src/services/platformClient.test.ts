@@ -122,14 +122,14 @@ describe("PlatformClient.tasks and runs", () => {
     await client.getActiveRun("task-1");
   });
 
-  it("sends a message", async () => {
+  it("sends a message with model selection", async () => {
     const fetchMock = mockFetch((url, init) => {
       expect(url).toBe("http://platform.test/api/tasks/task-1/messages");
-      expect(JSON.parse(String(init?.body))).toEqual({ text: "hello" });
+      expect(JSON.parse(String(init?.body))).toEqual({ text: "hello", model: "gpt-5.4" });
       return new Response(JSON.stringify({ status: "sent", thread_id: "th-1" }), { status: 200 });
     });
     const client = new PlatformClient({ baseUrl: "http://platform.test", token: "t" });
-    await client.sendMessage("task-1", "hello");
+    await client.sendMessage("task-1", "hello", { model: "gpt-5.4" });
     expect(fetchMock).toHaveBeenCalled();
   });
 
@@ -140,6 +140,53 @@ describe("PlatformClient.tasks and runs", () => {
     });
     const client = new PlatformClient({ baseUrl: "http://platform.test", token: "t" });
     await client.listTaskEvents("task/1", 42);
+    expect(fetchMock).toHaveBeenCalled();
+  });
+});
+
+describe("PlatformClient.codex catalog", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("lists model providers", async () => {
+    const fetchMock = mockFetch((url) => {
+      expect(url).toBe("http://platform.test/api/codex/model-providers");
+      return new Response(JSON.stringify({ currentProviderId: "openai", data: [] }), { status: 200 });
+    });
+    const client = new PlatformClient({ baseUrl: "http://platform.test", token: "t" });
+    await client.listModelProviders();
+    expect(fetchMock).toHaveBeenCalled();
+  });
+
+  it("writes provider settings", async () => {
+    const fetchMock = mockFetch((url, init) => {
+      expect(url).toBe("http://platform.test/api/codex/model-providers/write");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        action: "context",
+        id: "deepseek",
+        modelId: "deepseek-chat",
+        contextWindow: 65536,
+      });
+      return new Response(JSON.stringify({ currentProviderId: "deepseek", data: [] }), { status: 200 });
+    });
+    const client = new PlatformClient({ baseUrl: "http://platform.test", token: "t" });
+    await client.writeModelProvider({
+      action: "context",
+      id: "deepseek",
+      modelId: "deepseek-chat",
+      contextWindow: 65536,
+    });
+    expect(fetchMock).toHaveBeenCalled();
+  });
+
+  it("updates thread settings", async () => {
+    const fetchMock = mockFetch((url, init) => {
+      expect(url).toBe("http://platform.test/api/tasks/task-1/thread-settings");
+      expect(init?.method).toBe("PATCH");
+      expect(JSON.parse(String(init?.body))).toEqual({ model: "gpt-5.4" });
+      return new Response(JSON.stringify({ status: "updated", thread_id: "th-1" }), { status: 200 });
+    });
+    const client = new PlatformClient({ baseUrl: "http://platform.test", token: "t" });
+    await client.updateThreadSettings("task-1", { model: "gpt-5.4" });
     expect(fetchMock).toHaveBeenCalled();
   });
 });

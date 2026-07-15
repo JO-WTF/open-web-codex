@@ -265,4 +265,47 @@ describe("Web Composer provider credentials", () => {
       });
     });
   });
+
+  it("rejects context windows below 1024 tokens", async () => {
+    const onWriteProvider = vi.fn(async () => undefined);
+    render(
+      <Composer
+        draft=""
+        onDraftChange={vi.fn()}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+        running={false}
+        stopping={false}
+        busy={false}
+        disabled={false}
+        tokenUsage={null}
+        providers={[{
+          id: "deepseek",
+          name: "DeepSeek",
+          kind: "custom",
+          isCurrent: true,
+          modelCount: 1,
+          canEdit: true,
+          canDelete: true,
+          canFetchModels: true,
+          models: [{ modelId: "deepseek-chat", contextWindow: 65536 }],
+        }]}
+        currentProviderId="deepseek"
+        models={[{
+          id: "deepseek-chat",
+          model: "deepseek-chat",
+          displayName: "DeepSeek Chat",
+        }]}
+        onWriteProvider={onWriteProvider}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "DeepSeek" }));
+    fireEvent.change(screen.getByLabelText("Context window for deepseek-chat"), {
+      target: { value: "512" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Set context" }));
+    expect(onWriteProvider).not.toHaveBeenCalled();
+    expect(screen.getByText("Context window must be at least 1024 tokens")).not.toBeNull();
+  });
 });

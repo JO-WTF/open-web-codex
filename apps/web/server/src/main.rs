@@ -1,4 +1,5 @@
 mod access;
+mod codex_workspace;
 mod config;
 mod event_projection;
 mod git_workspace;

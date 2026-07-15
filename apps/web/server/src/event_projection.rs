@@ -276,6 +276,7 @@ fn classify_method(method: &str) -> (&'static str, &'static str) {
         "thread/started" => ("codex.thread.started", "started"),
         "thread/completed" => ("codex.thread.completed", "completed"),
         "thread/failed" => ("codex.thread.failed", "failed"),
+        "thread/tokenUsage/updated" => ("codex.thread.token_usage", "updated"),
         method
             if method.starts_with("item/")
                 && (method.ends_with("/delta") || method.ends_with("Delta")) =>
@@ -295,6 +296,10 @@ fn project_event_data(method: &str, params: &Map<String, Value>) -> Value {
         "contentIndex",
         "startedAtMs",
         "completedAtMs",
+        "tokenUsage",
+        "token_usage",
+        "modelContextWindow",
+        "model_context_window",
     ] {
         if let Some(value) = params.get(key) {
             data.insert(key.to_string(), sanitize_value(value, key));

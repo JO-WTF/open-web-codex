@@ -85,9 +85,21 @@ export default function Composer({ draft, onDraftChange, onSend, onStop, running
   const [editingProvider, setEditingProvider] = useState<ModelProviderSummary | "new" | null>(null);
   const [providerDraft, setProviderDraft] = useState<ProviderDraft>(EMPTY_PROVIDER_DRAFT);
   const [contextDrafts, setContextDrafts] = useState<Record<string, string>>({});
+  const [actionError, setActionError] = useState<string | null>(null);
   const currentProvider = providers.find((provider) => provider.id === currentProviderId);
-  const writeProvider = (input: Record<string, unknown>) => {
-    void onWriteProvider?.(input).catch(() => undefined);
+  const writeProvider = async (input: Record<string, unknown>) => {
+    if (!onWriteProvider) {
+      return;
+    }
+    setActionError(null);
+    try {
+      await onWriteProvider(input);
+      if (input.action === "context") {
+        await onRefreshCatalog?.();
+      }
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
+    }
   };
   const providerDraftValid = Boolean(
     providerDraft.id.trim() &&
@@ -96,13 +108,20 @@ export default function Composer({ draft, onDraftChange, onSend, onStop, running
     (providerDraft.credentialMode !== "environment" || providerDraft.envKey.trim()) &&
     (providerDraft.credentialMode !== "direct" || providerDraft.apiKey.trim()),
   );
-  const saveProviderDraft = () => {
-    if (!providerDraftValid) return;
-    void onWriteProvider?.({
-      action: "upsert",
-      ...providerDraft,
-      select: editingProvider === "new",
-    }).then(() => setEditingProvider(null)).catch(() => undefined);
+  const saveProviderDraft = async () => {
+    if (!providerDraftValid || !onWriteProvider) return;
+    setActionError(null);
+    try {
+      await onWriteProvider({
+        action: "upsert",
+        ...providerDraft,
+        select: editingProvider === "new",
+      });
+      setEditingProvider(null);
+      await onRefreshCatalog?.();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
+    }
   };
 
   const openProviderForm = (provider?: ModelProviderSummary) => {
@@ -235,6 +254,7 @@ export default function Composer({ draft, onDraftChange, onSend, onStop, running
                 <span className="web-model-catalog-actions"><button type="button" onClick={() => openProviderForm()} disabled={catalogLoading}>Add</button><button type="button" onClick={onRefreshCatalog} disabled={catalogLoading}>Refresh</button></span>
               </header>
               {catalogError ? <p className="web-model-catalog-error">{catalogError}</p> : null}
+              {actionError ? <p className="web-model-catalog-error">{actionError}</p> : null}
               <div className="web-model-catalog-section">
                 <h3>Providers</h3>
                 {providers.length === 0 ? <p>{catalogLoading ? "Loading providers…" : "No providers available"}</p> : providers.map((provider) => (
@@ -276,7 +296,21 @@ export default function Composer({ draft, onDraftChange, onSend, onStop, running
                     <span><strong>{model.displayName || model.model}</strong><small>{model.model}</small></span>
                     {selectedModelId === model.id ? <em>Selected</em> : null}
                     </button>
-                    {currentProvider?.kind === "custom" ? <span className="web-context-editor"><input aria-label={`Context window for ${model.model}`} inputMode="numeric" value={contextDrafts[model.model] ?? String(currentProvider.models?.find((entry) => entry.modelId === model.model)?.contextWindow ?? "")} placeholder="128000" onChange={(event) => setContextDrafts((drafts) => ({ ...drafts, [model.model]: event.target.value.replace(/\D/g, "") }))} /><button type="button" onClick={() => writeProvider({ action: "context", id: currentProvider.id, modelId: model.model, contextWindow: Number(contextDrafts[model.model] ?? currentProvider.models?.find((entry) => entry.modelId === model.model)?.contextWindow) })}>Set context</button></span> : null}
+                    {currentProvider?.kind === "custom" ? <span className="web-context-editor"><input aria-label={`Context window for ${model.model}`} inputMode="numeric" value={contextDrafts[model.model] ?? String(currentProvider.models?.find((entry) => entry.modelId === model.model)?.contextWindow ?? "")} placeholder="128000" onChange={(event) => setContextDrafts((drafts) => ({ ...drafts, [model.model]: event.target.value.replace(/\D/g, "") }))} /><button type="button" onClick={() => {
+                      const raw = contextDrafts[model.model]
+                        ?? String(currentProvider.models?.find((entry) => entry.modelId === model.model)?.contextWindow ?? "");
+                      const contextWindow = Number(raw);
+                      if (!Number.isFinite(contextWindow) || contextWindow < 1024) {
+                        setActionError("Context window must be at least 1024 tokens");
+                        return;
+                      }
+                      void writeProvider({
+                        action: "context",
+                        id: currentProvider.id,
+                        modelId: model.model,
+                        contextWindow,
+                      });
+                    }}>Set context</button></span> : null}
                   </div>
                 ))}
               </div>

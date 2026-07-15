@@ -3,6 +3,7 @@ pub mod tasks;
 pub mod runs;
 pub mod approvals;
 pub mod bootstrap;
+pub mod codex_catalog;
 pub mod me;
 pub mod organizations;
 pub mod sessions;
@@ -73,6 +74,19 @@ pub fn router(adapter: Arc<dyn CodexAdapter>) -> Router<AppState> {
         )
         .route("/tasks/{id}", axum::routing::get(tasks::get_task))
         .route("/tasks/{id}/messages", axum::routing::post(tasks::send_message))
+        .route(
+            "/tasks/{id}/thread-settings",
+            axum::routing::patch(tasks::update_thread_settings),
+        )
         .route("/tasks/{id}/events", axum::routing::get(tasks::list_task_events))
+        .route(
+            "/codex/model-providers",
+            axum::routing::get(codex_catalog::list_model_providers),
+        )
+        .route("/codex/models", axum::routing::get(codex_catalog::list_models))
+        .route(
+            "/codex/model-providers/write",
+            axum::routing::post(codex_catalog::write_model_provider),
+        )
         .layer(Extension(adapter))
 }

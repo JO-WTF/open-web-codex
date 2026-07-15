@@ -7,16 +7,17 @@ use open_web_codex_adapter::CodexAdapter;
 use open_web_codex_platform_contracts::error::PlatformError;
 use open_web_codex_platform_contracts::{
     CreateTaskRequest, ActiveRunResponse, ListTaskEventsParams, RunEvent, SendMessageRequest,
-    SendMessageResponse, Task,
+    SendMessageResponse, Task, ThreadSettingsUpdateRequest, ThreadSettingsUpdateResponse,
 };
 use open_web_codex_platform_store::AppState;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use sqlx::Row;
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::access::{ensure_project_access, ensure_task_access};
+use crate::codex_workspace::resolve_workspace_id;
 use crate::middleware::auth::AuthenticatedUser;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
@@ -220,14 +221,19 @@ pub async fn send_message(
     })?;
 
     // Send message via adapter
+    let mut rpc_params = json!({
+        "threadId": &thread_id,
+        "text": req.text,
+    });
+    if let Some(model) = req.model.as_ref().filter(|value| !value.trim().is_empty()) {
+        rpc_params["model"] = json!(model);
+    }
+    if let Some(effort) = req.effort.as_ref().filter(|value| !value.trim().is_empty()) {
+        rpc_params["effort"] = json!(effort);
+    }
+
     let rpc_result = adapter
-        .rpc(
-            "send_user_message",
-            json!({
-                "threadId": &thread_id,
-                "text": req.text,
-            }),
-        )
+        .rpc("send_user_message", rpc_params)
         .await
         .map_err(|e| {
             (
@@ -320,5 +326,99 @@ pub async fn get_active_run(
 
     Ok(Json(ActiveRunResponse {
         run: row.as_ref().map(map_run_row),
+    }))
+}
+
+/// PATCH /api/tasks/:id/thread-settings — update model/effort for the active thread.
+pub async fn update_thread_settings(
+    State(_state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(task_id): Path<Uuid>,
+    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
+    Json(req): Json<ThreadSettingsUpdateRequest>,
+) -> ApiResult<ThreadSettingsUpdateResponse> {
+    if req.model.as_ref().is_none_or(|value| value.trim().is_empty())
+        && req.effort.as_ref().is_none_or(|value| value.trim().is_empty())
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(PlatformError::bad_request(
+                "at least one of model or effort must be provided",
+            )),
+        ));
+    }
+
+    ensure_task_access(&_state.db, auth.user_id, task_id).await?;
+
+    let active_run = sqlx::query(
+        "SELECT codex_thread_id FROM runs \
+         WHERE task_id = $1 AND status IN ('pending', 'queued', 'provisioning', 'running', 'waiting_approval') \
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(task_id)
+    .fetch_optional(&_state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PlatformError::internal(format!("{e}"))),
+        )
+    })?
+    .ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(PlatformError::bad_request(
+                "no active run for this task; start a run first",
+            )),
+        )
+    })?;
+
+    let thread_id: Option<String> = active_run.get("codex_thread_id");
+    let thread_id = thread_id.ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(PlatformError::bad_request(
+                "active run has no thread yet; try again shortly",
+            )),
+        )
+    })?;
+
+    let workspace_id = resolve_workspace_id(&adapter)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(PlatformError::internal(format!("adapter error: {error}"))),
+            )
+        })?;
+
+    let mut settings = serde_json::Map::new();
+    if let Some(model) = req.model.as_ref().filter(|value| !value.trim().is_empty()) {
+        settings.insert("model".to_string(), json!(model));
+    }
+    if let Some(effort) = req.effort.as_ref().filter(|value| !value.trim().is_empty()) {
+        settings.insert("effort".to_string(), json!(effort));
+    }
+
+    adapter
+        .rpc(
+            "thread_settings_update",
+            json!({
+                "workspaceId": workspace_id,
+                "threadId": thread_id,
+                "settings": Value::Object(settings),
+            }),
+        )
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(PlatformError::internal(format!("adapter error: {error}"))),
+            )
+        })?;
+
+    Ok(Json(ThreadSettingsUpdateResponse {
+        thread_id,
+        status: "updated".to_string(),
     }))
 }

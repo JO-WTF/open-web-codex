@@ -156,14 +156,53 @@ export class PlatformClient {
     );
   }
 
-  sendMessage(taskId: string, text: string) {
+  sendMessage(taskId: string, text: string, options?: { model?: string | null; effort?: string | null }) {
+    const body: Record<string, string> = { text };
+    if (options?.model?.trim()) {
+      body.model = options.model.trim();
+    }
+    if (options?.effort?.trim()) {
+      body.effort = options.effort.trim();
+    }
     return this.fetchJson<{ status: string; thread_id: string }>(
       `/api/tasks/${encodeURIComponent(taskId)}/messages`,
       {
         method: "POST",
-        body: JSON.stringify({ text }),
+        body: JSON.stringify(body),
       },
     );
+  }
+
+  updateThreadSettings(taskId: string, settings: { model?: string | null; effort?: string | null }) {
+    const body: Record<string, string> = {};
+    if (settings.model?.trim()) {
+      body.model = settings.model.trim();
+    }
+    if (settings.effort?.trim()) {
+      body.effort = settings.effort.trim();
+    }
+    return this.fetchJson<{ status: string; thread_id: string }>(
+      `/api/tasks/${encodeURIComponent(taskId)}/thread-settings`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      },
+    );
+  }
+
+  listModelProviders() {
+    return this.fetchJson<Record<string, unknown>>("/api/codex/model-providers");
+  }
+
+  listModels() {
+    return this.fetchJson<Record<string, unknown>>("/api/codex/models");
+  }
+
+  writeModelProvider(input: Record<string, unknown>) {
+    return this.fetchJson<Record<string, unknown>>("/api/codex/model-providers/write", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
   }
 
   listTaskEvents(taskId: string, afterSequence?: number, limit = 200) {

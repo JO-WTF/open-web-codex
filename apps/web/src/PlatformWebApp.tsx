@@ -1,15 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Layout from "./components/Layout";
 import MessageList from "./components/Conversation/MessageList";
+import Composer from "./components/Conversation/Composer";
+import type { ModelProviderSummary, ModelSummary } from "./components/Conversation/Composer";
 import FileManager from "./components/FileManager";
 import type { MessageEntry } from "./components/Conversation/MessageList";
 import { PlatformClient } from "./services/platformClient";
 import type { PlatformProject, PlatformRun, PlatformRunEvent, PlatformTask } from "./services/platformTypes";
+import type { ThreadTokenUsage } from "./types";
+import {
+  parseModelCatalog,
+  parseModelProviderCatalog,
+  readStoredModelId,
+  writeStoredModelId,
+} from "./utils/modelCatalog";
 import {
   latestTurnId,
   maxEventSequence,
   projectedEventsToLogEntries,
 } from "./utils/projectedRunEventsToLogEntries";
+import { tokenUsageFromRunEvents } from "./utils/tokenUsageFromRunEvents";
 import "./styles/web.css";
 import "./styles/web-refactor.css";
 
@@ -68,6 +78,13 @@ export default function PlatformWebApp() {
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectGitUrl, setNewProjectGitUrl] = useState("");
   const [newTaskTitle, setNewTaskTitle] = useState("");
+  const [providers, setProviders] = useState<ModelProviderSummary[]>([]);
+  const [currentProviderId, setCurrentProviderId] = useState<string | null>(null);
+  const [models, setModels] = useState<ModelSummary[]>([]);
+  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [tokenUsage, setTokenUsage] = useState<ThreadTokenUsage | null>(null);
   const eventSequenceRef = useRef(0);
   const eventsRef = useRef<PlatformRunEvent[]>([]);
   const pendingUserMessagesRef = useRef<MessageEntry[]>([]);
@@ -135,6 +152,7 @@ export default function PlatformWebApp() {
       eventsRef.current = [...eventsRef.current, ...events];
       eventSequenceRef.current = maxEventSequence(eventsRef.current);
       setActiveTurnId(latestTurnId(eventsRef.current));
+      setTokenUsage(tokenUsageFromRunEvents(eventsRef.current));
     }
     const approvals = run ? await client.listApprovals(run.id) : [];
     const projected = projectedEventsToLogEntries(eventsRef.current, approvals);
@@ -165,11 +183,51 @@ export default function PlatformWebApp() {
     pendingUserMessagesRef.current = [];
     setMessages([]);
     setActiveRun(null);
+    setTokenUsage(null);
+    setSelectedModelId(readStoredModelId(activeTaskId));
     void (async () => {
       const run = await refreshRunState(activeTaskId);
       await syncTaskEvents(activeTaskId, run);
     })().catch((error) => setAuthError(String(error)));
   }, [activeTaskId, token, refreshRunState, syncTaskEvents]);
+
+  const refreshModelCatalog = useCallback(async () => {
+    if (!token) return;
+    setCatalogLoading(true);
+    setCatalogError(null);
+    try {
+      const [providerResponse, modelResponse] = await Promise.all([
+        client.listModelProviders(),
+        client.listModels(),
+      ]);
+      const providerCatalog = parseModelProviderCatalog(providerResponse);
+      setProviders(providerCatalog.providers);
+      setCurrentProviderId(providerCatalog.currentProviderId);
+      const nextModels = parseModelCatalog(modelResponse);
+      setModels(nextModels);
+      setSelectedModelId((current) => {
+        if (current && nextModels.some((model) => model.id === current)) {
+          return current;
+        }
+        const stored = activeTaskIdRef.current
+          ? readStoredModelId(activeTaskIdRef.current)
+          : null;
+        if (stored && nextModels.some((model) => model.id === stored)) {
+          return stored;
+        }
+        return nextModels[0]?.id ?? null;
+      });
+    } catch (error) {
+      setCatalogError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCatalogLoading(false);
+    }
+  }, [client, token]);
+
+  useEffect(() => {
+    if (!token) return;
+    void refreshModelCatalog();
+  }, [token, refreshModelCatalog]);
 
   useEffect(() => {
     if (!activeTaskId || !token) return undefined;
@@ -290,7 +348,9 @@ export default function PlatformWebApp() {
       setMessages((current) => [...current, optimistic]);
       setDraft("");
       await ensureActiveRun(activeTaskId);
-      await client.sendMessage(activeTaskId, text);
+      await client.sendMessage(activeTaskId, text, {
+        model: selectedModelId,
+      });
       const run = await refreshRunState(activeTaskId);
       await syncTaskEvents(activeTaskId, run);
     } catch (error) {
@@ -298,6 +358,30 @@ export default function PlatformWebApp() {
       setAuthError(error instanceof Error ? error.message : String(error));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const handleSelectModel = async (modelId: string) => {
+    setSelectedModelId(modelId);
+    if (activeTaskId) {
+      writeStoredModelId(activeTaskId, modelId);
+      try {
+        await client.updateThreadSettings(activeTaskId, { model: modelId });
+      } catch (error) {
+        setCatalogError(error instanceof Error ? error.message : String(error));
+      }
+    }
+  };
+
+  const handleWriteProvider = async (input: Record<string, unknown>) => {
+    const response = await client.writeModelProvider(input);
+    const providerCatalog = parseModelProviderCatalog(response);
+    setProviders(providerCatalog.providers);
+    setCurrentProviderId(providerCatalog.currentProviderId);
+    if (input.action === "fetch") {
+      setModels(parseModelCatalog(response));
+    } else {
+      await refreshModelCatalog();
     }
   };
 
@@ -496,24 +580,26 @@ export default function PlatformWebApp() {
           thinking={thinking}
           onDecideApproval={(approvalId, decision) => void handleDecideApproval(approvalId, decision)}
         />
-        <footer className="web-composer">
-          <textarea
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            placeholder="Describe what Codex should do..."
-            rows={3}
-          />
-          <div className="web-composer-actions">
-            <button type="button" disabled={busy || !draft.trim()} onClick={() => void handleSend()}>
-              Send
-            </button>
-            {activeTurnId && activeRun ? (
-              <button type="button" disabled={busy} onClick={() => void handleInterrupt()}>
-                Stop
-              </button>
-            ) : null}
-          </div>
-        </footer>
+        <Composer
+          draft={draft}
+          onDraftChange={setDraft}
+          onSend={() => void handleSend()}
+          onStop={() => void handleInterrupt()}
+          running={thinking}
+          stopping={busy}
+          busy={busy}
+          disabled={!draft.trim() || !activeTaskId}
+          tokenUsage={tokenUsage}
+          providers={providers}
+          currentProviderId={currentProviderId}
+          models={models}
+          catalogLoading={catalogLoading}
+          catalogError={catalogError}
+          onRefreshCatalog={() => void refreshModelCatalog()}
+          onWriteProvider={handleWriteProvider}
+          selectedModelId={selectedModelId}
+          onSelectModel={(modelId) => void handleSelectModel(modelId)}
+        />
       </section>
     </Layout>
   );

@@ -237,6 +237,26 @@ pub struct ApprovalDecisionResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendMessageRequest {
     pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+}
+
+/// Request to update persisted thread settings for a task's active thread.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreadSettingsUpdateRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+}
+
+/// Response from updating thread settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreadSettingsUpdateResponse {
+    pub thread_id: String,
+    pub status: String,
 }
 
 /// Response from sending a message.
