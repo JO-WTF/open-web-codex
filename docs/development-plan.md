@@ -13,7 +13,7 @@
 | 能力基线 | `docs/capability-baseline.md` |
 | 上游同步 | `docs/codex-upstream-sync.md` |
 
-Codex subtree 已同步到记录的官方 `openai/codex` 提交 `5bed6447998c`，状态脚本报告待集成提交和记录基线以上定制提交均为 0。Capability Manifest v1 类型、Schema 和 `initialize` 返回已落地，真实本地 app-server Smoke 观察到 17 个能力声明。
+Codex subtree 已同步到记录的官方 `openai/codex` 提交 `1bbdb32789e1`，状态脚本报告待集成提交和记录基线以上定制提交均为 0。第三方 Provider、TUI Provider、Capability Manifest 和旧历史兼容 seam 已按 patch map 重放；app-server Schema 再生和 scoped Codex 验证仍因当前环境缺少 OpenSSL 开发文件而待完成。Capability Manifest v1 类型、Schema 和 `initialize` 返回已落地，真实本地 app-server Smoke 曾观察到 17 个能力声明。
 
 M1 平台已建立 Axum/SQLx/PostgreSQL workspace、Fake/Real Codex Adapter，以及 bootstrap/session、organization/membership、project、Task、Run 和版本化 Run event 投影。Item/Delta 会先以单调 sequence、稳定平台事件类型和脱敏 UI payload 落库，再向浏览器广播；Web reducer 可用 cursor 投影恢复活动状态并以 Codex Thread 历史校准终态。这仍是纵向原型：浏览器仍主要连接 loopback RPC/SSE Gateway；Profile Host、Git Worktree/Runner、持久审批、Lease、审计、完整 RBAC、幂等调度和认证 WebSocket 尚未完成。当前 `/api/rpc`、permissive CORS 和 SSE query token 只能用于本地迁移期，不得作为多用户 Beta 边界。
 

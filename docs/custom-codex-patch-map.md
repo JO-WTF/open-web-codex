@@ -6,7 +6,7 @@ after an official subtree update. Generated schemas, TypeScript definitions,
 fixtures, and snapshots are derivatives of the source seams and are not
 independent custom behavior.
 
-The integrated official base is `5bed6447998c754d154dbd796517310b8f04d4ce`.
+The integrated official base is `1bbdb32789e1f79932df44941236ea3658f6e965`.
 The target is a small, explicit set of Provider Runtime and TUI seams; it is
 not a zero-diff Codex subtree.
 
@@ -60,10 +60,10 @@ The script separates the raw tree difference into:
 
 ## Current inventory classification
 
-The current comparison against `codex-upstream/main` contains 342
-`upstream-only` paths. They are pending official changes and are not candidates
-for local deletion. The non-generated source candidates are classified below;
-their generated artifacts, tests, and snapshots follow the owning source seam.
+The current comparison against `codex-upstream/main` contains 247
+`local-only` paths and no pending official or diverged paths. The
+non-generated source candidates are classified below; their generated
+artifacts, tests, and snapshots follow the owning source seam.
 
 | Classification | Source paths | Decision and reason |
 | --- | --- | --- |
