@@ -106,6 +106,7 @@ authorization, or browser-state logic.
 - Runtime capability truth: `docs/capability-baseline.md`
 - Delivery status and order: `docs/development-plan.md`
 - Official Codex synchronization: `docs/codex-upstream-sync.md`
+- Custom Codex seams: `docs/custom-codex-patch-map.md`
 
 Component documents may add implementation detail, but must not redefine product
 scope, capability status, or milestone state.
@@ -145,9 +146,13 @@ infer delivery status from the target product design.
 
 ## Validation
 
-- Root docs/scripts: run `bash -n scripts/*.sh` and the upstream status command.
+- Root docs/scripts: run `bash -n scripts/*.sh`,
+  `scripts/codex-upstream-status.sh`, and
+  `scripts/codex-customization-status.sh` when the change affects Codex
+  convergence state.
 - `apps/web`: run `npm run typecheck` and relevant tests; run contract tests for
   integration changes.
 - `codex`: follow `codex/AGENTS.md`, including `just fmt` and scoped `just test`.
-- Cross-project protocol changes require both component checks and the real
-  app-server smoke harness.
+- Cross-project protocol changes require both component checks,
+  `npm run check:codex-contracts`, and the real
+  `npm run smoke:codex-app-server -- --require-manifest` harness.

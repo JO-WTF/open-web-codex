@@ -12,11 +12,19 @@ without replacing the entire directory.
 
 ```bash
 ./scripts/codex-upstream-status.sh
+./scripts/codex-customization-status.sh
 ```
 
 The command configures local `codex-upstream` and `codex-fork` remotes, fetches
 official main, and reports official commits beyond the recorded integrated base.
 It does not modify source files.
+
+The customization status command compares `HEAD:codex` directly with
+`codex-upstream/main`. `docs/custom-codex-patch-map.md` is the authoritative
+human-readable seam record and `.sync/codex-customization-inventory.json`
+records the current machine-readable comparison and validation state. The
+`customSource*` fields in `.sync/codex-upstream.json` are import provenance;
+daily synchronization tracks only `openai/codex/main`.
 
 ## Apply
 
@@ -35,8 +43,9 @@ review it like a normal runtime change.
 Resolve by architectural layer:
 
 1. Accept official file/module moves and public API shapes first.
-2. Reapply custom Provider support at its narrow seams: provider metadata,
-   endpoint routing, model discovery/cache, app-server parameters and UI.
+2. Reapply retained seams in this order: Chat transport; Provider metadata,
+   model discovery and cache; app-server Provider API; TUI Provider workflows;
+   legacy history compatibility; Capability Manifest; generated artifacts.
 3. Do not preserve a custom workaround when upstream now provides the behavior.
 4. Keep protocol/schema generated files aligned with their Rust source.
 5. Avoid mixing product Web changes into an upstream runtime sync.
@@ -58,9 +67,18 @@ just test -p codex-model-provider
 just test -p codex-tui
 ```
 
-Then from the repository root run the Web contract checks and real app-server
-smoke against the newly built binary. A complete Codex test suite still requires
-explicit approval under the imported Codex repository rules.
+Then run:
+
+```bash
+cd apps/web
+npm run check:codex-contracts
+npm run smoke:codex-app-server -- --require-manifest
+```
+
+Update both `.sync/codex-upstream.json` and
+`.sync/codex-customization-inventory.json` after the sync. A complete Codex
+test suite still requires explicit approval under the imported Codex repository
+rules.
 
 ## Release rule
 
