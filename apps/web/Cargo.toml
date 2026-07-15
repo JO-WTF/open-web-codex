@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/codex-adapter",
+    "crates/profile-host",
     "crates/platform-contracts",
     "crates/platform-store",
     "server",

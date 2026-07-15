@@ -50,6 +50,7 @@ libc = "0.2"
 chrono = { version = "0.4", features = ["clock"] }
 shell-words = "1.1"
 toml_edit = "0.20.2"
+open-web-codex-profile-host = { path = "../crates/profile-host" }
 
 [target."cfg(not(any(target_os = \"android\", target_os = \"ios\")))".dependencies]
 tauri-plugin-updater = "2.10.0"
