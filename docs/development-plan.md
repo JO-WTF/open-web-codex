@@ -170,7 +170,7 @@ M0-A07 拆分建议：
 | M0-B06 | P0/M | [-] | 定义 limits 与 structured reason | 类型与初始值已存在；生成规则和兼容测试待补 |
 | M0-B07 | P0/M | [x] | `initialize` 返回 Manifest | `--require-manifest` 真实 Smoke 通过 |
 | M0-B08 | P0/M | [ ] | 定义稳定错误 envelope/category/retryability | 遵循 `docs/architecture.md` 上游优先四层顺序（消费上游形状 → 生成元数据 → 最小 Runtime seam → Platform policy）；关键错误 Fixture |
-| M0-B09 | P0/M | [ ] | 生成合同 Bundle、每文件 SHA-256 和总摘要 | 篡改/路径逃逸测试 |
+| M0-B09 | P0/M | [-] | 生成合同 Bundle、每文件 SHA-256 和总摘要 | `npm run generate:codex-contracts` 与 `fetch-codex-contracts` 校验已落地；CI 固定摘要门禁仍待完成 |
 | M0-B10 | P0/S | [ ] | Codex CI 校验生成文件无漂移 | 修改协议不更新 Schema 时失败 |
 | M0-B11 | P1/M | [ ] | 生成真实 Thread/Approval/Provider/MCP/Multi-agent Fixtures | 离线回放通过 |
 | M0-B12 | P1/S | [ ] | 发布兼容说明和已知限制模板 | 每个构建有机器/人可读说明 |
