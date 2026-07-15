@@ -38,6 +38,15 @@ repository's `main` branch is never the convergence baseline.
 commit, counts, and classification progress. Refresh it whenever the inventory
 is updated or an official sync changes the target tree.
 
+The script separates the raw tree difference into:
+
+- `upstream-only`: the local subtree still matches the integrated upstream
+  base; this is pending official work, not a local customization.
+- `local-only`: the current official tree still matches the integrated base;
+  this is a candidate local customization to classify.
+- `diverged`: both local and current official trees differ from the integrated
+  base; this needs an explicit replay or upstream-equivalence decision.
+
 ## Retained seams
 
 | ID | Seam and source paths | Reason to retain | Replay order | Required validation | Removal condition |
