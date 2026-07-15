@@ -58,6 +58,23 @@ The script separates the raw tree difference into:
 | `legacy-response-tool-history` | `app-server-protocol/src/protocol/legacy_response_tool_history.rs`, narrow integration in `thread_history.rs` | Existing Profiles can contain raw `ResponseItem` tool-call/output pairs that official semantic history projection does not materialize. | 5 | Protocol tests plus reload fixture containing raw call/output pairs | Supported Profiles no longer contain this rollout format, or upstream materializes it. |
 | `capability-manifest` | `app-server-protocol/src/capability_manifest.rs`, `initialize_processor.rs`, generated Schema/TypeScript, `apps/web/contracts/codex/**` fixtures | Lets the Platform Host gate product features against the actual Runtime build instead of assuming support. | 6 | Protocol tests, generated artifacts, fixture replay, `--require-manifest` smoke | Method facts and experimental state are generated from the official protocol/build and an upstream equivalent contract exists. |
 
+## Current inventory classification
+
+The current comparison against `codex-upstream/main` contains 342
+`upstream-only` paths. They are pending official changes and are not candidates
+for local deletion. The non-generated source candidates are classified below;
+their generated artifacts, tests, and snapshots follow the owning source seam.
+
+| Classification | Source paths | Decision and reason |
+| --- | --- | --- |
+| `retain-core`: Chat transport | `codex-api/src/chat_translate.rs`, `common.rs`, `endpoint/chat.rs`, `endpoint/models.rs`, `endpoint/mod.rs`, `sse/chat.rs`, `sse/mod.rs`, minimal `core/src/client.rs` dispatch | Required third-party Chat Completions transport. During sync, accept the current upstream Core client and replay only a narrow transport dispatch. |
+| `retain-core`: Provider metadata and models | `model-provider-info/src/lib.rs`, `model-provider/src/{lib.rs,models_endpoint.rs,provider.rs}`, `models-manager/src/manager.rs`, `config/src/thread_config/**`, Provider fields in `core` session/config integration | Required Provider identity, model discovery, scoped cache/refresh, and Thread propagation. Accept upstream model/catalog changes, including official model migrations, before replaying Provider-specific behavior. |
+| `retain-core`: app-server Provider API | `app-server-protocol/src/protocol/{common.rs,mod.rs,v1.rs,v2/model.rs}`, `app-server/src/{models.rs,message_processor.rs,request_processors.rs}`, `request_processors/catalog_processor.rs` | Required `modelProvider/list`, Provider-scoped models, refresh, selection, and capability exposure. Keep only Provider request registrations and handlers when replaying high-churn dispatch files. |
+| `retain-core`: TUI Provider workflows | `tui/src/chatwidget/{provider_popups.rs,provider_sections.rs,model_popups.rs,settings.rs,slash_dispatch.rs}`, `tui/src/{config_update.rs,slash_command.rs,onboarding/auth.rs,onboarding/keys.rs,onboarding/onboarding_screen.rs,app/thread_settings.rs}`, narrow integration in `chatwidget.rs`, `app/event_dispatch.rs`, `app_server_session.rs`, and `bottom_pane/mod.rs` | TUI Provider configuration, model selection, onboarding, refresh, and error UX are core behavior. Take upstream TUI orchestration first; reattach isolated Provider modules and their event handlers. |
+| `retain-core`: compatibility and capability | `app-server-protocol/src/capability_manifest.rs`, `protocol/legacy_response_tool_history.rs`, narrow integration in `thread_history.rs`, `initialize_processor.rs` | The Manifest gates Platform features; legacy history preserves supported existing Profiles. Neither is browser implementation code. |
+| `upstream-first, then replay` | `core/src/{codex_thread.rs,guardian/review_session.rs,session/**}`, `protocol/src/{openai_models.rs,protocol.rs}`, `app-server/src/request_processors/turn_processor.rs`, `app-server/README.md`, TUI thread-routing/event files | These files contain substantial official SessionIo, AgentRunner, model-catalog, rate-limit, paging, fork, and TUI behavior. Preserve upstream structure and reapply only the adjacent retained seam. |
+| `verify before final classification` | `app-server-protocol/src/protocol/v2/turn.rs`, `app-server` remote-thread/turn tests, `core/src/session/handlers.rs`, `core` stream/header tests, `exec/src/lib.rs`, `login/src/auth_env_telemetry.rs`, `utils/home-dir/src/lib.rs` | Their current behavior must be traced to a retained Provider/TUI seam or an official equivalent before they are classified as `retain-core`, `upstreamed`, `move-out`, or `drop`. No deletion is authorized yet. |
+
 ## Required boundaries
 
 - Keep Chat translation in `codex-api`, Provider facts in Provider crates,

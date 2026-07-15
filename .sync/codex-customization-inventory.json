@@ -25,9 +25,14 @@
       "legacy-response-tool-history",
       "capability-manifest"
     ],
+    "sourceCandidates": {
+      "localOnly": 49,
+      "diverged": 25
+    },
     "completed": [
-      "Separated pending official updates from candidate local changes using the integrated upstream base."
+      "Separated pending official updates from candidate local changes using the integrated upstream base.",
+      "Mapped the first-pass non-generated source candidates to retained seams, upstream-first replay, or verification."
     ],
-    "nextAction": "Classify the 215 local-only and 32 diverged paths by source behavior before moving or deleting them."
+    "nextAction": "Trace verification candidates to a retained seam or official equivalent, then classify them as retain-core, upstreamed, move-out, or drop."
   }
 }
