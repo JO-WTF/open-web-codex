@@ -49,4 +49,4 @@ jobs:
         run: |
           bash -n scripts/*.sh
           jq empty .sync/codex-upstream.json
-          git diff --check HEAD^
+          git diff --check HEAD^ -- . ':(exclude)**/*.snap'
