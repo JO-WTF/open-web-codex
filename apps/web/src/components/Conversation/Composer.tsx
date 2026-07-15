@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState } from "react";
 import type { CSSProperties } from "react";
-import type { ThreadTokenUsage } from "../../types";
+import type { ThreadTokenUsage, AccessMode } from "../../types";
 import Bot from "lucide-react/dist/esm/icons/bot";
 import ArrowUp from "lucide-react/dist/esm/icons/arrow-up";
 import ChevronDown from "lucide-react/dist/esm/icons/chevron-down";
@@ -28,6 +28,11 @@ type Props = {
   onWriteProvider?: (input: Record<string, unknown>) => Promise<void>;
   selectedModelId?: string | null;
   onSelectModel?: (modelId: string) => void;
+  effortOptions?: string[];
+  selectedEffort?: string | null;
+  onSelectEffort?: (effort: string) => void;
+  accessMode?: AccessMode;
+  onSelectAccessMode?: (mode: AccessMode) => void;
 };
 
 export type ModelProviderSummary = {
@@ -77,7 +82,7 @@ function formatTokens(value: number): string {
   return new Intl.NumberFormat("en-US").format(value);
 }
 
-export default function Composer({ draft, onDraftChange, onSend, onStop, running, stopping, busy, disabled, tokenUsage, providers = [], currentProviderId = null, models = [], catalogLoading = false, catalogError = null, onRefreshCatalog, onWriteProvider, selectedModelId = null, onSelectModel }: Props) {
+export default function Composer({ draft, onDraftChange, onSend, onStop, running, stopping, busy, disabled, tokenUsage, providers = [], currentProviderId = null, models = [], catalogLoading = false, catalogError = null, onRefreshCatalog, onWriteProvider, selectedModelId = null, onSelectModel, effortOptions = ["low", "medium", "high"], selectedEffort = "medium", onSelectEffort, accessMode = "current", onSelectAccessMode }: Props) {
   const textRef = useRef<HTMLTextAreaElement>(null);
   const catalogRef = useRef<HTMLDivElement>(null);
   const composingRef = useRef(false);
@@ -94,7 +99,7 @@ export default function Composer({ draft, onDraftChange, onSend, onStop, running
     setActionError(null);
     try {
       await onWriteProvider(input);
-      if (input.action === "context") {
+      if (input.action === "context" || input.action === "select" || input.action === "delete") {
         await onRefreshCatalog?.();
       }
     } catch (error) {
@@ -318,8 +323,32 @@ export default function Composer({ draft, onDraftChange, onSend, onStop, running
             </section>
           ) : null}
         </div>
-        <span className="web-composer-chip"><Gauge size={13} />medium<ChevronDown size={12} /></span>
-        <span className="web-composer-chip"><ShieldCheck size={13} />Workspace access<ChevronDown size={12} /></span>
+        <label className="web-composer-chip web-composer-chip-button">
+          <Gauge size={13} aria-hidden="true" />
+          <select
+            aria-label="Reasoning effort"
+            value={selectedEffort ?? "medium"}
+            disabled={busy || catalogLoading}
+            onChange={(event) => onSelectEffort?.(event.target.value)}
+          >
+            {effortOptions.map((effort) => (
+              <option key={effort} value={effort}>{effort}</option>
+            ))}
+          </select>
+        </label>
+        <label className="web-composer-chip web-composer-chip-button">
+          <ShieldCheck size={13} aria-hidden="true" />
+          <select
+            aria-label="Workspace access"
+            value={accessMode}
+            disabled={busy}
+            onChange={(event) => onSelectAccessMode?.(event.target.value as AccessMode)}
+          >
+            <option value="current">Workspace write</option>
+            <option value="read-only">Read only</option>
+            <option value="full-access">Full access</option>
+          </select>
+        </label>
         <span className="web-composer-activity" tabIndex={0} aria-label={contextLabel}>
           <span
             className="web-composer-activity-ring"

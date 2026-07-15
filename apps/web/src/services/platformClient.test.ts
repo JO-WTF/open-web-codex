@@ -157,6 +157,16 @@ describe("PlatformClient.codex catalog", () => {
     expect(fetchMock).toHaveBeenCalled();
   });
 
+  it("lists models with force refresh", async () => {
+    const fetchMock = mockFetch((url) => {
+      expect(url).toBe("http://platform.test/api/codex/models?force_refresh=true");
+      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+    });
+    const client = new PlatformClient({ baseUrl: "http://platform.test", token: "t" });
+    await client.listModels(true);
+    expect(fetchMock).toHaveBeenCalled();
+  });
+
   it("writes provider settings", async () => {
     const fetchMock = mockFetch((url, init) => {
       expect(url).toBe("http://platform.test/api/codex/model-providers/write");

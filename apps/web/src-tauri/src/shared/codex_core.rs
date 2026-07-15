@@ -625,10 +625,49 @@ pub(crate) async fn start_review_core(
 pub(crate) async fn model_list_core(
     sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
     workspace_id: String,
+    force_refresh: bool,
 ) -> Result<Value, String> {
     let session = get_session_clone(sessions, &workspace_id).await?;
+    let mut params = Map::new();
+    if force_refresh {
+        params.insert("forceRefresh".to_string(), json!(true));
+    }
     session
-        .send_request_for_workspace(&workspace_id, "model/list", json!({}))
+        .send_request_for_workspace(&workspace_id, "model/list", Value::Object(params))
+        .await
+}
+
+pub(crate) async fn thread_settings_update_core(
+    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    workspace_id: String,
+    thread_id: String,
+    settings: Value,
+) -> Result<Value, String> {
+    let session = get_session_clone(sessions, &workspace_id).await?;
+    let object = settings
+        .as_object()
+        .ok_or_else(|| "thread settings must be an object".to_string())?;
+    let mut params = Map::new();
+    params.insert("threadId".to_string(), json!(thread_id));
+    if let Some(model) = object.get("model").and_then(Value::as_str) {
+        if !model.trim().is_empty() {
+            params.insert("model".to_string(), json!(model));
+        }
+    }
+    if let Some(effort) = object.get("effort").and_then(Value::as_str) {
+        if !effort.trim().is_empty() {
+            params.insert("effort".to_string(), json!(effort));
+        }
+    }
+    if params.len() <= 1 {
+        return Err("thread settings must include model and/or effort".to_string());
+    }
+    session
+        .send_request_for_workspace(
+            &workspace_id,
+            "thread/settings/update",
+            Value::Object(params),
+        )
         .await
 }
 

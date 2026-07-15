@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
 use axum::{
+    extract::Query,
     http::StatusCode,
     Extension, Json,
 };
 use open_web_codex_adapter::CodexAdapter;
 use open_web_codex_platform_contracts::error::PlatformError;
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::codex_workspace::resolve_workspace_id;
@@ -42,15 +44,25 @@ pub async fn list_model_providers(
 pub async fn list_models(
     _auth: AuthenticatedUser,
     Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
+    Query(params): Query<ListModelsParams>,
 ) -> ApiResult<Value> {
     let workspace_id = resolve_workspace_id(&adapter)
         .await
         .map_err(adapter_error)?;
+    let mut rpc_params = json!({ "workspaceId": workspace_id });
+    if params.force_refresh == Some(true) {
+        rpc_params["forceRefresh"] = json!(true);
+    }
     let response = adapter
-        .rpc("model_list", json!({ "workspaceId": workspace_id }))
+        .rpc("model_list", rpc_params)
         .await
         .map_err(adapter_error)?;
     Ok(Json(unwrap_adapter_result(response)))
+}
+
+#[derive(Deserialize)]
+pub struct ListModelsParams {
+    pub force_refresh: Option<bool>,
 }
 
 /// POST /api/codex/model-providers/write

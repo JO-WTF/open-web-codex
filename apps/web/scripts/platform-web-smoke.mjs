@@ -287,16 +287,42 @@ async function main() {
     });
     assertStatus("reject invalid context window", invalidContext.status, 502);
 
+    const providerSelect = await fetchJson(baseUrl, "/api/codex/model-providers/write", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+      body: JSON.stringify({ action: "select", id: "deepseek" }),
+    });
+    assertStatus("select provider", providerSelect.status, 200);
+
+    const deepseekModels = await fetchJson(baseUrl, "/api/codex/models?force_refresh=true", {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    assertStatus("list models after provider select", deepseekModels.status, 200);
+    if (!deepseekModels.body.data.some((model) => String(model.id).includes("deepseek"))) {
+      throw new Error("expected deepseek models after selecting deepseek provider");
+    }
+
     const threadSettings = await fetchJson(
       baseUrl,
       `/api/tasks/${encodeURIComponent(task.body.id)}/thread-settings`,
       {
         method: "PATCH",
         headers: { authorization: `Bearer ${token}` },
-        body: JSON.stringify({ model: models.body.data[0].id }),
+        body: JSON.stringify({ model: deepseekModels.body.data[0].id }),
       },
     );
-    assertStatus("update thread settings", threadSettings.status, 200);
+    assertStatus("update thread settings model", threadSettings.status, 200);
+
+    const threadSettingsEffort = await fetchJson(
+      baseUrl,
+      `/api/tasks/${encodeURIComponent(task.body.id)}/thread-settings`,
+      {
+        method: "PATCH",
+        headers: { authorization: `Bearer ${token}` },
+        body: JSON.stringify({ effort: "high" }),
+      },
+    );
+    assertStatus("update thread settings effort", threadSettingsEffort.status, 200);
 
     const messageWithModel = await fetchJson(
       baseUrl,
@@ -304,7 +330,12 @@ async function main() {
       {
         method: "POST",
         headers: { authorization: `Bearer ${token}` },
-        body: JSON.stringify({ text: "hello with model", model: models.body.data[0].id }),
+        body: JSON.stringify({
+          text: "hello with model",
+          model: deepseekModels.body.data[0].id,
+          effort: "high",
+          access_mode: "current",
+        }),
       },
     );
     assertStatus("send message with model", messageWithModel.status, 200);

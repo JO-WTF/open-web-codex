@@ -285,7 +285,11 @@ pub(super) async fn try_handle(
                 Ok(value) => value,
                 Err(err) => return Some(Err(err)),
             };
-            Some(state.model_list(workspace_id).await)
+            let force_refresh = params
+                .get("forceRefresh")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            Some(state.model_list(workspace_id, force_refresh).await)
         }
         "model_provider_list" => {
             let workspace_id = match parse_string(params, "workspaceId") {
@@ -304,6 +308,25 @@ pub(super) async fn try_handle(
                 None => return Some(Err("missing `input`".to_string())),
             };
             Some(state.model_provider_write(workspace_id, input).await)
+        }
+        "thread_settings_update" => {
+            let workspace_id = match parse_string(params, "workspaceId") {
+                Ok(value) => value,
+                Err(err) => return Some(Err(err)),
+            };
+            let thread_id = match parse_string(params, "threadId") {
+                Ok(value) => value,
+                Err(err) => return Some(Err(err)),
+            };
+            let settings = match params.get("settings").cloned() {
+                Some(value) => value,
+                None => return Some(Err("missing `settings`".to_string())),
+            };
+            Some(
+                state
+                    .thread_settings_update(workspace_id, thread_id, settings)
+                    .await,
+            )
         }
         "experimental_feature_list" => {
             let workspace_id = match parse_string(params, "workspaceId") {

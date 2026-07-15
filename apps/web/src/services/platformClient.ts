@@ -156,13 +156,20 @@ export class PlatformClient {
     );
   }
 
-  sendMessage(taskId: string, text: string, options?: { model?: string | null; effort?: string | null }) {
+  sendMessage(
+    taskId: string,
+    text: string,
+    options?: { model?: string | null; effort?: string | null; accessMode?: string | null },
+  ) {
     const body: Record<string, string> = { text };
     if (options?.model?.trim()) {
       body.model = options.model.trim();
     }
     if (options?.effort?.trim()) {
       body.effort = options.effort.trim();
+    }
+    if (options?.accessMode?.trim()) {
+      body.access_mode = options.accessMode.trim();
     }
     return this.fetchJson<{ status: string; thread_id: string }>(
       `/api/tasks/${encodeURIComponent(taskId)}/messages`,
@@ -194,8 +201,9 @@ export class PlatformClient {
     return this.fetchJson<Record<string, unknown>>("/api/codex/model-providers");
   }
 
-  listModels() {
-    return this.fetchJson<Record<string, unknown>>("/api/codex/models");
+  listModels(forceRefresh = false) {
+    const query = forceRefresh ? "?force_refresh=true" : "";
+    return this.fetchJson<Record<string, unknown>>(`/api/codex/models${query}`);
   }
 
   writeModelProvider(input: Record<string, unknown>) {

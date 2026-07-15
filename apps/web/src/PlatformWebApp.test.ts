@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { isRunInFlight, isRunTerminal, mergeProjectedMessages } from "./PlatformWebApp";
+import { isRunInFlight, isRunTerminal } from "./PlatformWebApp";
+import { mergeProjectedMessages } from "./utils/platformWebAppHelpers";
 
 describe("PlatformWebApp run helpers", () => {
   it("treats waiting_approval as in-flight", () => {

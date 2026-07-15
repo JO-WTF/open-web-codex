@@ -929,8 +929,23 @@ impl DaemonState {
             .await
     }
 
-    async fn model_list(&self, workspace_id: String) -> Result<Value, String> {
-        codex_core::model_list_core(&self.sessions, workspace_id).await
+    async fn model_list(&self, workspace_id: String, force_refresh: bool) -> Result<Value, String> {
+        codex_core::model_list_core(&self.sessions, workspace_id, force_refresh).await
+    }
+
+    async fn thread_settings_update(
+        &self,
+        workspace_id: String,
+        thread_id: String,
+        settings: Value,
+    ) -> Result<Value, String> {
+        codex_core::thread_settings_update_core(
+            &self.sessions,
+            workspace_id,
+            thread_id,
+            settings,
+        )
+        .await
     }
 
     async fn model_provider_list(&self, workspace_id: String) -> Result<Value, String> {

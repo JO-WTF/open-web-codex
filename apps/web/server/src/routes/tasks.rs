@@ -231,6 +231,9 @@ pub async fn send_message(
     if let Some(effort) = req.effort.as_ref().filter(|value| !value.trim().is_empty()) {
         rpc_params["effort"] = json!(effort);
     }
+    if let Some(access_mode) = req.access_mode.as_ref().filter(|value| !value.trim().is_empty()) {
+        rpc_params["accessMode"] = json!(access_mode);
+    }
 
     let rpc_result = adapter
         .rpc("send_user_message", rpc_params)

@@ -265,6 +265,7 @@ pub fn run() {
             codex::model_list,
             codex::model_provider_list,
             codex::model_provider_write,
+            codex::thread_settings_update,
             codex::experimental_feature_list,
             codex::set_codex_feature_flag,
             codex::get_agents_settings,

@@ -88,9 +88,26 @@ impl FakeCodexAdapter {
         })
     }
 
-    fn model_list_response(state: &FakeState) -> Value {
+    fn model_list_response(state: &FakeState, _force_refresh: bool) -> Value {
+        let provider_id = &state.current_provider_id;
+        let models = state
+            .models
+            .iter()
+            .filter(|model| match provider_id.as_str() {
+                "openai" => model["id"]
+                    .as_str()
+                    .map(|id| !id.contains("deepseek"))
+                    .unwrap_or(true),
+                "deepseek" => model["id"]
+                    .as_str()
+                    .map(|id| id.contains("deepseek"))
+                    .unwrap_or(false),
+                _ => true,
+            })
+            .cloned()
+            .collect::<Vec<_>>();
         json!({
-            "data": state.models.clone(),
+            "data": models,
             "nextCursor": Value::Null,
         })
     }
@@ -353,10 +370,16 @@ impl CodexAdapter for FakeCodexAdapter {
                 Self::provider_catalog(&s)
             }),
 
-            "model_list" => Ok({
-                let s = self.state.lock().await;
-                Self::model_list_response(&s)
-            }),
+            "model_list" => {
+                let force_refresh = params
+                    .get("forceRefresh")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                Ok({
+                    let s = self.state.lock().await;
+                    Self::model_list_response(&s, force_refresh)
+                })
+            }
 
             "model_provider_write" => {
                 let input = params
@@ -482,7 +505,7 @@ impl CodexAdapter for FakeCodexAdapter {
                             return Err(AdapterError::Rpc(format!("provider '{id}' does not exist")));
                         }
                         s.current_provider_id = id.to_string();
-                        return Ok(Self::model_list_response(&s));
+                        return Ok(Self::model_list_response(&s, true));
                     }
                     other => {
                         return Err(AdapterError::Rpc(format!(

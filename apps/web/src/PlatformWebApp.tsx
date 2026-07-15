@@ -7,13 +7,21 @@ import FileManager from "./components/FileManager";
 import type { MessageEntry } from "./components/Conversation/MessageList";
 import { PlatformClient } from "./services/platformClient";
 import type { PlatformProject, PlatformRun, PlatformRunEvent, PlatformTask } from "./services/platformTypes";
-import type { ThreadTokenUsage } from "./types";
+import type { AccessMode, ThreadTokenUsage } from "./types";
 import {
   parseModelCatalog,
   parseModelProviderCatalog,
   readStoredModelId,
   writeStoredModelId,
 } from "./utils/modelCatalog";
+import {
+  appendRunEvents,
+  mergeProjectedMessages,
+  readStoredEffort,
+  runStartIdempotencyKey,
+  shouldPollTaskRun,
+  writeStoredEffort,
+} from "./utils/platformWebAppHelpers";
 import {
   latestTurnId,
   maxEventSequence,
@@ -39,18 +47,7 @@ function isRunInFlight(status: string) {
     || status === "waiting_approval";
 }
 
-function mergeProjectedMessages(projected: MessageEntry[], pendingUser: MessageEntry[]) {
-  if (pendingUser.length === 0) {
-    return projected;
-  }
-  const seen = new Set(
-    projected
-      .filter((entry) => entry.level === "user")
-      .map((entry) => entry.text.trim()),
-  );
-  const extras = pendingUser.filter((entry) => !seen.has(entry.text.trim()));
-  return [...projected, ...extras];
-}
+const EFFORT_OPTIONS = ["low", "medium", "high"] as const;
 
 export default function PlatformWebApp() {
   const [baseUrl, setBaseUrl] = useState(
@@ -82,6 +79,8 @@ export default function PlatformWebApp() {
   const [currentProviderId, setCurrentProviderId] = useState<string | null>(null);
   const [models, setModels] = useState<ModelSummary[]>([]);
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+  const [selectedEffort, setSelectedEffort] = useState<string>("medium");
+  const [accessMode, setAccessMode] = useState<AccessMode>("current");
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [tokenUsage, setTokenUsage] = useState<ThreadTokenUsage | null>(null);
@@ -89,6 +88,8 @@ export default function PlatformWebApp() {
   const eventsRef = useRef<PlatformRunEvent[]>([]);
   const pendingUserMessagesRef = useRef<MessageEntry[]>([]);
   const activeTaskIdRef = useRef<string | null>(null);
+  const syncInFlightRef = useRef(false);
+  const runStartInFlightRef = useRef<Promise<PlatformRun> | null>(null);
 
   const client = useMemo(() => new PlatformClient({ baseUrl, token }), [baseUrl, token]);
 
@@ -149,12 +150,14 @@ export default function PlatformWebApp() {
       return;
     }
     if (events.length > 0) {
-      eventsRef.current = [...eventsRef.current, ...events];
+      eventsRef.current = appendRunEvents(eventsRef.current, events);
       eventSequenceRef.current = maxEventSequence(eventsRef.current);
       setActiveTurnId(latestTurnId(eventsRef.current));
       setTokenUsage(tokenUsageFromRunEvents(eventsRef.current));
     }
-    const approvals = run ? await client.listApprovals(run.id) : [];
+    const approvals = run && (run.status === "waiting_approval" || isRunInFlight(run.status))
+      ? await client.listApprovals(run.id)
+      : [];
     const projected = projectedEventsToLogEntries(eventsRef.current, approvals);
     const merged = mergeProjectedMessages(projected, pendingUserMessagesRef.current);
     pendingUserMessagesRef.current = pendingUserMessagesRef.current.filter(
@@ -185,20 +188,21 @@ export default function PlatformWebApp() {
     setActiveRun(null);
     setTokenUsage(null);
     setSelectedModelId(readStoredModelId(activeTaskId));
+    setSelectedEffort(readStoredEffort(activeTaskId) ?? "medium");
     void (async () => {
       const run = await refreshRunState(activeTaskId);
       await syncTaskEvents(activeTaskId, run);
     })().catch((error) => setAuthError(String(error)));
   }, [activeTaskId, token, refreshRunState, syncTaskEvents]);
 
-  const refreshModelCatalog = useCallback(async () => {
+  const refreshModelCatalog = useCallback(async (options?: { forceModels?: boolean }) => {
     if (!token) return;
     setCatalogLoading(true);
     setCatalogError(null);
     try {
       const [providerResponse, modelResponse] = await Promise.all([
         client.listModelProviders(),
-        client.listModels(),
+        client.listModels(Boolean(options?.forceModels)),
       ]);
       const providerCatalog = parseModelProviderCatalog(providerResponse);
       setProviders(providerCatalog.providers);
@@ -231,18 +235,37 @@ export default function PlatformWebApp() {
 
   useEffect(() => {
     if (!activeTaskId || !token) return undefined;
-    const timer = window.setInterval(() => {
+    let cancelled = false;
+    const tick = async () => {
+      if (syncInFlightRef.current) {
+        return;
+      }
       const taskId = activeTaskId;
-      void (async () => {
+      syncInFlightRef.current = true;
+      try {
         const run = await refreshRunState(taskId);
-        await syncTaskEvents(taskId, run);
-      })().catch((error) => {
+        if (cancelled || activeTaskIdRef.current !== taskId) {
+          return;
+        }
+        if (!run || shouldPollTaskRun(run.status)) {
+          await syncTaskEvents(taskId, run);
+        }
+      } catch (error) {
         if (activeTaskIdRef.current === taskId) {
           setAuthError(error instanceof Error ? error.message : String(error));
         }
-      });
+      } finally {
+        syncInFlightRef.current = false;
+      }
+    };
+    void tick();
+    const timer = window.setInterval(() => {
+      void tick();
     }, 1200);
-    return () => window.clearInterval(timer);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, [activeTaskId, token, refreshRunState, syncTaskEvents]);
 
   const handleLogin = async () => {
@@ -318,8 +341,11 @@ export default function PlatformWebApp() {
       setNewTaskTitle("");
       setTasks((current) => [task, ...current]);
       setActiveTaskId(task.id);
-      const run = await client.startTaskRun(task.id, newId());
-      setActiveRun(run.run);
+      const run = await client.startTaskRun(task.id, runStartIdempotencyKey(task.id));
+      if (activeTaskIdRef.current === task.id) {
+        setActiveRun(run.run);
+        await syncTaskEvents(task.id, run.run);
+      }
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -328,14 +354,31 @@ export default function PlatformWebApp() {
   };
 
   const ensureActiveRun = async (taskId: string) => {
+    if (activeTaskIdRef.current !== taskId) {
+      throw new Error("task changed before run could be ensured");
+    }
     const { run } = await client.getActiveRun(taskId);
+    if (activeTaskIdRef.current !== taskId) {
+      throw new Error("task changed before run could be ensured");
+    }
     if (run && !isRunTerminal(run.status)) {
       setActiveRun(run);
       return run;
     }
-    const started = await client.startTaskRun(taskId, newId());
-    setActiveRun(started.run);
-    return started.run;
+    if (!runStartInFlightRef.current) {
+      runStartInFlightRef.current = client
+        .startTaskRun(taskId, runStartIdempotencyKey(taskId))
+        .then((started) => {
+          if (activeTaskIdRef.current === taskId) {
+            setActiveRun(started.run);
+          }
+          return started.run;
+        })
+        .finally(() => {
+          runStartInFlightRef.current = null;
+        });
+    }
+    return runStartInFlightRef.current;
   };
 
   const handleSend = async () => {
@@ -350,6 +393,8 @@ export default function PlatformWebApp() {
       await ensureActiveRun(activeTaskId);
       await client.sendMessage(activeTaskId, text, {
         model: selectedModelId,
+        effort: selectedEffort,
+        accessMode,
       });
       const run = await refreshRunState(activeTaskId);
       await syncTaskEvents(activeTaskId, run);
@@ -373,16 +418,30 @@ export default function PlatformWebApp() {
     }
   };
 
+  const handleSelectEffort = async (effort: string) => {
+    setSelectedEffort(effort);
+    if (activeTaskId) {
+      writeStoredEffort(activeTaskId, effort);
+      try {
+        await client.updateThreadSettings(activeTaskId, { effort });
+      } catch (error) {
+        setCatalogError(error instanceof Error ? error.message : String(error));
+      }
+    }
+  };
+
   const handleWriteProvider = async (input: Record<string, unknown>) => {
     const response = await client.writeModelProvider(input);
     const providerCatalog = parseModelProviderCatalog(response);
     setProviders(providerCatalog.providers);
     setCurrentProviderId(providerCatalog.currentProviderId);
+    const forceModels = input.action === "fetch"
+      || input.action === "select"
+      || (input.action === "upsert" && input.select === true);
     if (input.action === "fetch") {
       setModels(parseModelCatalog(response));
-    } else {
-      await refreshModelCatalog();
     }
+    await refreshModelCatalog({ forceModels });
   };
 
   const handleInterrupt = async () => {
@@ -595,14 +654,20 @@ export default function PlatformWebApp() {
           models={models}
           catalogLoading={catalogLoading}
           catalogError={catalogError}
-          onRefreshCatalog={() => void refreshModelCatalog()}
+          onRefreshCatalog={() => void refreshModelCatalog({ forceModels: true })}
           onWriteProvider={handleWriteProvider}
           selectedModelId={selectedModelId}
           onSelectModel={(modelId) => void handleSelectModel(modelId)}
+          effortOptions={[...EFFORT_OPTIONS]}
+          selectedEffort={selectedEffort}
+          onSelectEffort={(effort) => void handleSelectEffort(effort)}
+          accessMode={accessMode}
+          onSelectAccessMode={setAccessMode}
         />
       </section>
     </Layout>
   );
 }
 
-export { isRunInFlight, isRunTerminal, mergeProjectedMessages };
+export { isRunInFlight, isRunTerminal };
+export { mergeProjectedMessages } from "./utils/platformWebAppHelpers";

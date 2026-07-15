@@ -241,6 +241,8 @@ pub struct SendMessageRequest {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_mode: Option<String>,
 }
 
 /// Request to update persisted thread settings for a task's active thread.

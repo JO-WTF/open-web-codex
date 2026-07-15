@@ -87,6 +87,17 @@ Use project aliases for frontend imports:
 
 ## Key File Anchors
 
+### Platform web browser path
+
+- Web entry gate: `src/main.tsx` (`/web`, `?web=1`)
+- Browser composition root: `src/PlatformWebApp.tsx`
+- Platform HTTP client: `src/services/platformClient.ts`
+- Web composer UI: `src/components/Conversation/Composer.tsx`
+- Platform server routes: `server/src/routes/*`
+- Validation gate: `npm run check:platform-web`
+
+### Desktop / Tauri path
+
 - Frontend composition root: `src/App.tsx`
 - Frontend IPC wrapper: `src/services/tauri.ts`
 - Frontend event hub: `src/services/events.ts`

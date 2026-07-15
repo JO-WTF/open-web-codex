@@ -21,7 +21,7 @@ function run(command, args, env = {}) {
 
 run("rustup", ["run", "1.95.0", "cargo", "test", "-p", "open-web-codex-server", "-p", "open-web-codex-profile-host", "-p", "open-web-codex-adapter"]);
 run("npm", ["run", "typecheck"]);
-run("npm", ["test", "--", "src/services/platformClient.test.ts", "src/utils/projectedRunEventsToLogEntries.test.ts", "src/utils/modelCatalog.test.ts", "src/utils/tokenUsageFromRunEvents.test.ts", "src/components/Conversation/Composer.test.tsx", "src/PlatformWebApp.test.ts"]);
+run("npm", ["test", "--", "src/services/platformClient.test.ts", "src/utils/projectedRunEventsToLogEntries.test.ts", "src/utils/modelCatalog.test.ts", "src/utils/tokenUsageFromRunEvents.test.ts", "src/utils/platformWebAppHelpers.test.ts", "src/components/Conversation/Composer.test.tsx", "src/PlatformWebApp.test.ts"]);
 run("node", ["scripts/platform-batch23-smoke.mjs"], {
   PLATFORM_SMOKE_DB_PASSWORD: process.env.PLATFORM_SMOKE_DB_PASSWORD ?? "ubuntu",
 });

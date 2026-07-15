@@ -542,6 +542,7 @@ pub(crate) async fn start_review(
 #[tauri::command]
 pub(crate) async fn model_list(
     workspace_id: String,
+    force_refresh: Option<bool>,
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<Value, String> {
@@ -550,12 +551,51 @@ pub(crate) async fn model_list(
             &*state,
             app,
             "model_list",
-            json!({ "workspaceId": workspace_id }),
+            json!({
+                "workspaceId": workspace_id,
+                "forceRefresh": force_refresh.unwrap_or(false),
+            }),
         )
         .await;
     }
 
-    codex_core::model_list_core(&state.sessions, workspace_id).await
+    codex_core::model_list_core(
+        &state.sessions,
+        workspace_id,
+        force_refresh.unwrap_or(false),
+    )
+    .await
+}
+
+#[tauri::command]
+pub(crate) async fn thread_settings_update(
+    workspace_id: String,
+    thread_id: String,
+    settings: Value,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<Value, String> {
+    if remote_backend::is_remote_mode(&*state).await {
+        return remote_backend::call_remote(
+            &*state,
+            app,
+            "thread_settings_update",
+            json!({
+                "workspaceId": workspace_id,
+                "threadId": thread_id,
+                "settings": settings,
+            }),
+        )
+        .await;
+    }
+
+    codex_core::thread_settings_update_core(
+        &state.sessions,
+        workspace_id,
+        thread_id,
+        settings,
+    )
+    .await
 }
 
 #[tauri::command]
