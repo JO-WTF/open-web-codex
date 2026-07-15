@@ -111,6 +111,15 @@ macro_rules! experimental_type_entry {
     };
 }
 
+macro_rules! experimental_method_reason {
+    (#[experimental($reason:expr)]) => {
+        Some($reason)
+    };
+    () => {
+        None
+    };
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientRequestSerializationScope {
     Global(&'static str),
@@ -223,6 +232,44 @@ macro_rules! client_request_definitions {
                     params: $params,
                 },
             )*
+        }
+
+        /// A registered client-to-server wire method.
+        ///
+        /// This enum is generated from the same registry that defines
+        /// `ClientRequest`, so protocol consumers can enumerate method facts
+        /// without maintaining a second list of wire names.
+        #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+        #[serde(rename_all = "camelCase")]
+        pub enum ClientRequestMethod {
+            $(
+                $(#[serde(rename = $wire)])?
+                $variant,
+            )*
+        }
+
+        impl ClientRequestMethod {
+            pub const ALL: &[Self] = &[
+                $(Self::$variant,)*
+            ];
+
+            pub fn wire_name(self) -> String {
+                serde_json::to_value(self)
+                    .expect("client request method enum always serializes")
+                    .as_str()
+                    .expect("client request method enum serializes as a string")
+                    .to_string()
+            }
+
+            pub const fn experimental_reason(self) -> Option<&'static str> {
+                match self {
+                    $(
+                        Self::$variant => {
+                            experimental_method_reason!($(#[experimental($reason)])?)
+                        }
+                    )*
+                }
+            }
         }
 
         impl ClientRequest {
@@ -1237,6 +1284,44 @@ macro_rules! server_request_definitions {
                     params: $params,
                 },
             )*
+        }
+
+        /// A registered server-to-client wire method.
+        ///
+        /// This enum is generated from the same registry that defines
+        /// `ServerRequest`, so protocol consumers can enumerate method facts
+        /// without maintaining a second list of wire names.
+        #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+        #[serde(rename_all = "camelCase")]
+        pub enum ServerRequestMethod {
+            $(
+                $(#[serde(rename = $wire)])?
+                $variant,
+            )*
+        }
+
+        impl ServerRequestMethod {
+            pub const ALL: &[Self] = &[
+                $(Self::$variant,)*
+            ];
+
+            pub fn wire_name(self) -> String {
+                serde_json::to_value(self)
+                    .expect("server request method enum always serializes")
+                    .as_str()
+                    .expect("server request method enum serializes as a string")
+                    .to_string()
+            }
+
+            pub const fn experimental_reason(self) -> Option<&'static str> {
+                match self {
+                    $(
+                        Self::$variant => {
+                            experimental_method_reason!($(#[experimental($reason)])?)
+                        }
+                    )*
+                }
+            }
         }
 
         impl ServerRequest {

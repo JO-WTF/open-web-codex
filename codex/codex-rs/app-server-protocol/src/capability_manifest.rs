@@ -7,6 +7,9 @@ use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
+use crate::ClientRequestMethod;
+use crate::ServerRequestMethod;
+
 /// Top-level capability manifest returned during `initialize`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -127,6 +130,12 @@ fn rfc3339_parts(unix_secs: i64) -> (i64, u32, u32, u32, u32, u32) {
 }
 
 pub fn build_manifest() -> CapabilityManifest {
+    let capabilities = alpha_capabilities();
+    debug_assert!(
+        manifest_methods_are_registered(&capabilities).is_ok(),
+        "capability manifest references an unregistered protocol method"
+    );
+
     CapabilityManifest {
         schema_version: "1.0.0".to_string(),
         generated_at: timestamp_now(),
@@ -142,8 +151,41 @@ pub fn build_manifest() -> CapabilityManifest {
             minimum_client_protocol: "1.0.0".to_string(),
             maximum_client_protocol: "2.0.0".to_string(),
         },
-        capabilities: alpha_capabilities(),
+        capabilities,
     }
+}
+
+fn manifest_methods_are_registered(
+    capabilities: &[CapabilityDeclaration],
+) -> Result<(), String> {
+    let client_methods = ClientRequestMethod::ALL
+        .iter()
+        .map(|method| method.wire_name())
+        .collect::<std::collections::HashSet<_>>();
+    let server_methods = ServerRequestMethod::ALL
+        .iter()
+        .map(|method| method.wire_name())
+        .collect::<std::collections::HashSet<_>>();
+
+    for capability in capabilities {
+        for method in &capability.methods.client_requests {
+            if !client_methods.contains(method) {
+                return Err(format!(
+                    "capability {} references unknown client method {method}",
+                    capability.id
+                ));
+            }
+        }
+        for method in &capability.methods.server_requests {
+            if !server_methods.contains(method) {
+                return Err(format!(
+                    "capability {} references unknown server method {method}",
+                    capability.id
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
@@ -494,5 +536,12 @@ mod tests {
         let json = serde_json::to_value(&manifest).expect("serialize");
         let back: CapabilityManifest = serde_json::from_value(json).expect("deserialize");
         assert_eq!(manifest, back);
+    }
+
+    #[test]
+    fn manifest_request_methods_are_registered() {
+        let manifest = build_manifest();
+        manifest_methods_are_registered(&manifest.capabilities)
+            .expect("manifest request methods must come from the protocol registry");
     }
 }
