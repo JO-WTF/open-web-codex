@@ -154,9 +154,9 @@ M0-A07 拆分建议：
 | ID | P/规模 | 状态 | 任务 | 验证 |
 | --- | --- | --- | --- | --- |
 | M0-B01 | P0/M | [x] | 定义 Manifest v1 Rust 类型与构建入口 | JSON Schema、TypeScript 与 roundtrip tests 已存在 |
-| M0-B02 | P0/M | [-] | 从 app-server 方法注册表生成 Client/Server/Notification 方法集合 | Client/Server Request 枚举已由注册宏生成并校验 Manifest 引用；Notification 方法集合与完整 Manifest policy 仍待完成 |
-| M0-B03 | P0/M | [ ] | 从 experimental annotation 生成能力实验状态 | stable/experimental 构建对照 |
-| M0-B04 | P0/M | [-] | 定义能力 ID 并覆盖全部方法域 | 18 个 Alpha 声明已存在，含 `models.providers`；全方法归属仍待生成化 |
+| M0-B02 | P0/M | [x] | 从 app-server 方法注册表生成 Client/Server/Notification 方法集合 | Client/Server Request 与 Server/Client Notification 方法枚举均由注册宏生成；Manifest 引用四类 wire 名均已校验 |
+| M0-B03 | P0/M | [-] | 从 experimental annotation 生成能力实验状态 | 已有注册表 `experimental_reason` 查找与 Manifest experimental 一致性校验；stable/experimental 构建对照与声明自动生成仍待完成 |
+| M0-B04 | P0/M | [-] | 定义能力 ID 并覆盖全部方法域 | 18 个 Alpha 声明已存在，含 `models.providers`；覆盖跟踪测试已落地，全方法归属 policy 仍待完成 |
 | M0-B05 | P0/S | [x] | Manifest 加入 build commit、version、target、protocol range | initialize 实测返回 |
 | M0-B06 | P0/M | [-] | 定义 limits 与 structured reason | 类型与初始值已存在；生成规则和兼容测试待补 |
 | M0-B07 | P0/M | [x] | `initialize` 返回 Manifest | `--require-manifest` 真实 Smoke 通过 |

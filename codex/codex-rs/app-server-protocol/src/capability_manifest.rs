@@ -7,7 +7,9 @@ use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
+use crate::ClientNotificationMethod;
 use crate::ClientRequestMethod;
+use crate::ServerNotificationMethod;
 use crate::ServerRequestMethod;
 
 /// Top-level capability manifest returned during `initialize`.
@@ -135,6 +137,10 @@ pub fn build_manifest() -> CapabilityManifest {
         manifest_methods_are_registered(&capabilities).is_ok(),
         "capability manifest references an unregistered protocol method"
     );
+    debug_assert!(
+        manifest_experimental_flags_are_consistent(&capabilities).is_ok(),
+        "capability manifest experimental flags are inconsistent with the method registry"
+    );
 
     CapabilityManifest {
         schema_version: "1.0.0".to_string(),
@@ -166,6 +172,15 @@ fn manifest_methods_are_registered(
         .iter()
         .map(|method| method.wire_name())
         .collect::<std::collections::HashSet<_>>();
+    let notification_methods = ServerNotificationMethod::ALL
+        .iter()
+        .map(|method| method.wire_name())
+        .chain(
+            ClientNotificationMethod::ALL
+                .iter()
+                .map(|method| method.wire_name()),
+        )
+        .collect::<std::collections::HashSet<_>>();
 
     for capability in capabilities {
         for method in &capability.methods.client_requests {
@@ -183,6 +198,85 @@ fn manifest_methods_are_registered(
                     capability.id
                 ));
             }
+        }
+        for method in &capability.methods.notifications {
+            if !notification_methods.contains(method) {
+                return Err(format!(
+                    "capability {} references unknown notification method {method}",
+                    capability.id
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Returns the experimental reason for a registered wire method, if any.
+pub fn registry_method_experimental_reason(method: &str) -> Option<&'static str> {
+    ClientRequestMethod::ALL
+        .iter()
+        .find(|entry| entry.wire_name() == method)
+        .and_then(|entry| entry.experimental_reason())
+        .or_else(|| {
+            ServerRequestMethod::ALL
+                .iter()
+                .find(|entry| entry.wire_name() == method)
+                .and_then(|entry| entry.experimental_reason())
+        })
+        .or_else(|| {
+            ServerNotificationMethod::ALL
+                .iter()
+                .find(|entry| entry.wire_name() == method)
+                .and_then(|entry| entry.experimental_reason())
+        })
+        .or_else(|| {
+            ClientNotificationMethod::ALL
+                .iter()
+                .find(|entry| entry.wire_name() == method)
+                .and_then(|entry| entry.experimental_reason())
+        })
+}
+
+fn capability_references_experimental_method(capability: &CapabilityDeclaration) -> bool {
+    capability
+        .methods
+        .client_requests
+        .iter()
+        .chain(capability.methods.server_requests.iter())
+        .chain(capability.methods.notifications.iter())
+        .any(|method| registry_method_experimental_reason(method).is_some())
+}
+
+/// Capabilities that declare product-level experimental status without relying
+/// solely on protocol `#[experimental]` method annotations.
+const PRODUCT_EXPERIMENTAL_CAPABILITY_IDS: &[&str] = &["agents.multi_agent"];
+
+fn manifest_experimental_flags_are_consistent(
+    capabilities: &[CapabilityDeclaration],
+) -> Result<(), String> {
+    for capability in capabilities {
+        let references_experimental = capability_references_experimental_method(capability);
+        let product_experimental = PRODUCT_EXPERIMENTAL_CAPABILITY_IDS.contains(&capability.id.as_str());
+
+        if references_experimental && !capability.experimental {
+            return Err(format!(
+                "capability {} references experimental protocol methods but experimental=false",
+                capability.id
+            ));
+        }
+
+        if capability.experimental && !references_experimental && !product_experimental {
+            return Err(format!(
+                "capability {} is marked experimental without experimental methods or an allowlisted product reason",
+                capability.id
+            ));
+        }
+
+        if capability.status == CapabilityStatus::Experimental && !capability.experimental {
+            return Err(format!(
+                "capability {} has Experimental status but experimental=false",
+                capability.id
+            ));
         }
     }
     Ok(())
@@ -543,5 +637,82 @@ mod tests {
         let manifest = build_manifest();
         manifest_methods_are_registered(&manifest.capabilities)
             .expect("manifest request methods must come from the protocol registry");
+    }
+
+    #[test]
+    fn manifest_experimental_flags_match_registry() {
+        let manifest = build_manifest();
+        manifest_experimental_flags_are_consistent(&manifest.capabilities)
+            .expect("manifest experimental flags must match registry annotations");
+    }
+
+    #[test]
+    fn registry_exposes_experimental_notification_methods() {
+        assert_eq!(
+            registry_method_experimental_reason("thread/settings/updated"),
+            Some("thread/settings/updated")
+        );
+        assert_eq!(
+            registry_method_experimental_reason("initialized"),
+            None
+        );
+        assert!(
+            ServerNotificationMethod::ALL
+                .iter()
+                .any(|method| method.wire_name() == "item/started")
+        );
+        assert!(
+            ClientNotificationMethod::ALL
+                .iter()
+                .any(|method| method.wire_name() == "initialized")
+        );
+    }
+
+    #[test]
+    fn alpha_manifest_method_coverage_is_tracked() {
+        let manifest = build_manifest();
+        let attributed = manifest
+            .capabilities
+            .iter()
+            .flat_map(|capability| {
+                capability
+                    .methods
+                    .client_requests
+                    .iter()
+                    .chain(capability.methods.server_requests.iter())
+                    .chain(capability.methods.notifications.iter())
+                    .cloned()
+            })
+            .collect::<std::collections::HashSet<_>>();
+
+        let registered = ClientRequestMethod::ALL
+            .iter()
+            .map(|method| method.wire_name())
+            .chain(ServerRequestMethod::ALL.iter().map(|method| method.wire_name()))
+            .chain(
+                ServerNotificationMethod::ALL
+                    .iter()
+                    .map(|method| method.wire_name()),
+            )
+            .chain(
+                ClientNotificationMethod::ALL
+                    .iter()
+                    .map(|method| method.wire_name()),
+            )
+            .collect::<std::collections::HashSet<_>>();
+
+        assert!(
+            attributed.is_subset(&registered),
+            "manifest methods must be a subset of the protocol registry"
+        );
+        // M0-B04 tracks full attribution; Alpha currently declares a focused subset.
+        assert!(
+            !attributed.is_empty(),
+            "alpha manifest must attribute at least one method"
+        );
+        assert!(
+            registered.len() > attributed.len(),
+            "expected unattributed registry methods while full coverage policy is incomplete"
+        );
     }
 }
