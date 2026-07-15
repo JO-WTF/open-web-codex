@@ -1,4 +1,4 @@
-import type { LogEntry } from "../WebApp";
+import type { LogEntry } from "../types/logEntry";
 
 const STORAGE_KEY = "open-web-codex:approval-history:v1";
 const MAX_APPROVALS_PER_THREAD = 100;

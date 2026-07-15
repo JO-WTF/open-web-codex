@@ -13,7 +13,10 @@ use open_web_codex_codex_contracts::{
     negotiate_capability_manifest, CapabilityManifest, NegotiationPolicy,
 };
 use open_web_codex_platform_contracts::error::PlatformError;
-use open_web_codex_platform_contracts::{Run, StartRunResponse};
+use open_web_codex_platform_contracts::{
+    Run, RunFileContentResponse, RunFileListResponse, RunGitStatusResponse, StartRunResponse,
+    TurnControlRequest,
+};
 use open_web_codex_platform_store::AppState;
 use open_web_codex_profile_host::{provision_profile, ProfileLock};
 use serde_json::{json, Value};
@@ -691,4 +694,162 @@ pub async fn cancel_run(
     })?;
 
     Ok(Json(map_run_row(&row)))
+}
+
+/// POST /api/runs/:id/interrupt — interrupt the active turn.
+pub async fn interrupt_run(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(id): Path<Uuid>,
+    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
+    Json(body): Json<TurnControlRequest>,
+) -> ApiResult<serde_json::Value> {
+    ensure_run_access(&state.db, auth.user_id, id).await?;
+    let thread_id = load_run_thread_id(&state.db, id).await?;
+
+    adapter
+        .rpc(
+            "turn_interrupt",
+            json!({
+                "threadId": thread_id,
+                "turnId": body.turn_id,
+            }),
+        )
+        .await
+        .map_err(adapter_error)?;
+
+    Ok(Json(json!({ "status": "interrupted" })))
+}
+
+/// POST /api/runs/:id/steer — steer the active turn.
+pub async fn steer_run(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(id): Path<Uuid>,
+    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
+    Json(body): Json<TurnControlRequest>,
+) -> ApiResult<serde_json::Value> {
+    ensure_run_access(&state.db, auth.user_id, id).await?;
+    let thread_id = load_run_thread_id(&state.db, id).await?;
+    let text = body.text.unwrap_or_default();
+    if text.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(PlatformError::bad_request("steer text must not be empty")),
+        ));
+    }
+
+    adapter
+        .rpc(
+            "turn_steer",
+            json!({
+                "threadId": thread_id,
+                "turnId": body.turn_id,
+                "text": text,
+            }),
+        )
+        .await
+        .map_err(adapter_error)?;
+
+    Ok(Json(json!({ "status": "steered" })))
+}
+
+#[derive(serde::Deserialize)]
+pub struct RunFileQuery {
+    pub path: String,
+}
+
+/// GET /api/runs/:id/files — list workspace files for a run.
+pub async fn list_run_files(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(id): Path<Uuid>,
+) -> ApiResult<RunFileListResponse> {
+    ensure_run_access(&state.db, auth.user_id, id).await?;
+    let workspace_key = crate::run_workspace_api::load_run_workspace_key(&state.db, id)
+        .await
+        .map_err(workspace_error)?;
+    let root = crate::run_workspace_api::workspace_root(
+        &crate::run_workspace_api::data_root_from_env(),
+        &workspace_key,
+    )
+    .map_err(workspace_error)?;
+    let files = crate::run_workspace_api::list_workspace_files(&root, 2_000)
+        .map_err(workspace_error)?;
+    Ok(Json(RunFileListResponse { files }))
+}
+
+/// GET /api/runs/:id/files/content?path=... — read a workspace file.
+pub async fn read_run_file(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<RunFileQuery>,
+) -> ApiResult<RunFileContentResponse> {
+    ensure_run_access(&state.db, auth.user_id, id).await?;
+    let workspace_key = crate::run_workspace_api::load_run_workspace_key(&state.db, id)
+        .await
+        .map_err(workspace_error)?;
+    let root = crate::run_workspace_api::workspace_root(
+        &crate::run_workspace_api::data_root_from_env(),
+        &workspace_key,
+    )
+    .map_err(workspace_error)?;
+    let file_path = crate::run_workspace_api::resolve_workspace_file(&root, &query.path)
+        .map_err(workspace_error)?;
+    let (content, truncated) =
+        crate::run_workspace_api::read_workspace_file_limited(&file_path, 512 * 1024)
+            .map_err(workspace_error)?;
+    Ok(Json(RunFileContentResponse {
+        path: query.path,
+        content,
+        truncated,
+    }))
+}
+
+/// GET /api/runs/:id/git-status — git status for the run workspace.
+pub async fn get_run_git_status(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(id): Path<Uuid>,
+) -> ApiResult<RunGitStatusResponse> {
+    ensure_run_access(&state.db, auth.user_id, id).await?;
+    let workspace_key = crate::run_workspace_api::load_run_workspace_key(&state.db, id)
+        .await
+        .map_err(workspace_error)?;
+    let root = crate::run_workspace_api::workspace_root(
+        &crate::run_workspace_api::data_root_from_env(),
+        &workspace_key,
+    )
+    .map_err(workspace_error)?;
+    let files = crate::run_workspace_api::git_status(&root).map_err(workspace_error)?;
+    Ok(Json(RunGitStatusResponse { files }))
+}
+
+async fn load_run_thread_id(
+    db: &sqlx::PgPool,
+    run_id: Uuid,
+) -> Result<String, (StatusCode, Json<PlatformError>)> {
+    let thread_id = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT codex_thread_id FROM runs WHERE id = $1",
+    )
+    .bind(run_id)
+    .fetch_one(db)
+    .await
+    .map_err(db_error)?;
+    thread_id.ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(PlatformError::bad_request(
+                "run has no Codex thread yet; try again shortly",
+            )),
+        )
+    })
+}
+
+fn workspace_error(error: String) -> (StatusCode, Json<PlatformError>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(PlatformError::bad_request(error)),
+    )
 }

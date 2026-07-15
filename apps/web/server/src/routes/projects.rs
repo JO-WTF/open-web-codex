@@ -113,6 +113,35 @@ pub async fn get_project(
     Ok(Json(map_project_row(&row)))
 }
 
+/// DELETE /api/projects/:id
+pub async fn delete_project(
+    auth: AuthenticatedUser,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<serde_json::Value> {
+    ensure_project_access(&state.db, auth.user_id, id).await?;
+
+    let deleted = sqlx::query("DELETE FROM projects WHERE id = $1")
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(PlatformError::internal(format!("{e}"))),
+            )
+        })?;
+
+    if deleted.rows_affected() == 0 {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(PlatformError::not_found(format!("project {id} not found"))),
+        ));
+    }
+
+    Ok(Json(serde_json::json!({ "deleted": true, "id": id })))
+}
+
 fn map_project_row(row: &sqlx::postgres::PgRow) -> Project {
     Project {
         id: row.get("id"),

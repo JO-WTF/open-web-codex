@@ -269,3 +269,44 @@ pub struct ListTaskEventsParams {
     pub limit: Option<i64>,
     pub after_sequence: Option<i64>,
 }
+
+/// Active run summary for a task.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActiveRunResponse {
+    pub run: Option<Run>,
+}
+
+/// Request to steer or interrupt a turn.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TurnControlRequest {
+    pub turn_id: String,
+    #[serde(default)]
+    pub text: Option<String>,
+}
+
+/// Workspace file listing for a run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunFileListResponse {
+    pub files: Vec<String>,
+}
+
+/// Workspace file content for a run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunFileContentResponse {
+    pub path: String,
+    pub content: String,
+    pub truncated: bool,
+}
+
+/// Git status file entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitStatusFile {
+    pub path: String,
+    pub status: String,
+}
+
+/// Git status for a run workspace.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunGitStatusResponse {
+    pub files: Vec<GitStatusFile>,
+}

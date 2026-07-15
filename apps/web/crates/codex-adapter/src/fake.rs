@@ -231,12 +231,13 @@ impl CodexAdapter for FakeCodexAdapter {
             }
 
             "send_user_message" => {
-                let ws_id = params["workspaceId"].as_str().unwrap_or("");
-                let th_id = params["threadId"].as_str().unwrap_or("");
+                let th_id = params["threadId"]
+                    .as_str()
+                    .or_else(|| params["thread_id"].as_str())
+                    .unwrap_or("");
                 let text = params["text"].as_str().unwrap_or("");
-                tracing::info!(ws = %ws_id, thread = %th_id, text = %text, "fake: user message");
+                tracing::info!(thread = %th_id, text = %text, "fake: user message");
 
-                // Increment message count
                 {
                     let mut s = self.state.lock().await;
                     if let Some(th) = s.threads.iter_mut().find(|t| t.id == th_id) {
@@ -245,10 +246,10 @@ impl CodexAdapter for FakeCodexAdapter {
                     }
                 }
 
-                // Schedule a mock turn after a brief delay (handled by subscribe_events)
-                // For now just acknowledge
                 Ok(json!({ "status": "sent" }))
             }
+
+            "turn_interrupt" | "turn_steer" => Ok(json!({ "status": "ok" })),
 
             other => Err(AdapterError::NotImplemented(format!(
                 "fake adapter: method '{other}' not implemented"

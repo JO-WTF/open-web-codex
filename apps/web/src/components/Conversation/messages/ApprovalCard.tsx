@@ -4,11 +4,21 @@ type Props = {
   command: string;
   workspaceId?: string;
   requestId?: number | string;
+  approvalId?: string;
   status?: "pending" | "accepted" | "declined" | "resolved";
   onResolve?: (workspaceId: string, requestId: number | string, decision: "accept" | "decline") => void;
+  onDecide?: (approvalId: string, decision: "approved" | "rejected") => void;
 };
 
-export default function ApprovalCard({ command, workspaceId, requestId, status = "pending", onResolve }: Props) {
+export default function ApprovalCard({
+  command,
+  workspaceId,
+  requestId,
+  approvalId,
+  status = "pending",
+  onResolve,
+  onDecide,
+}: Props) {
   const shortCmd = command.replace(/^\/bin\/zsh -lc '/, "").replace(/'$/, "").slice(0, 120);
   const pending = status === "pending";
   const resolvedLabel = status === "accepted"
@@ -18,12 +28,20 @@ export default function ApprovalCard({ command, workspaceId, requestId, status =
       : "Resolved";
 
   const handleAccept = () => {
+    if (approvalId && onDecide) {
+      onDecide(approvalId, "approved");
+      return;
+    }
     if (workspaceId && requestId !== undefined && onResolve) {
       onResolve(workspaceId, requestId, "accept");
     }
   };
 
   const handleDeny = () => {
+    if (approvalId && onDecide) {
+      onDecide(approvalId, "rejected");
+      return;
+    }
     if (workspaceId && requestId !== undefined && onResolve) {
       onResolve(workspaceId, requestId, "decline");
     }
@@ -42,6 +60,15 @@ export default function ApprovalCard({ command, workspaceId, requestId, status =
       <pre className="web-approval-command"><code>{shortCmd}</code></pre>
       {!pending ? (
         <div className={`web-approval-resolution is-${status}`}>{resolvedLabel}</div>
+      ) : approvalId && onDecide ? (
+        <div className="web-approval-actions">
+          <button className="web-approval-accept" onClick={handleAccept}>
+            Accept
+          </button>
+          <button className="web-approval-deny" onClick={handleDeny}>
+            Deny
+          </button>
+        </div>
       ) : workspaceId && requestId !== undefined ? (
         <div className="web-approval-actions">
           <button className="web-approval-accept" onClick={handleAccept}>

@@ -653,15 +653,24 @@ GET/POST/PATCH/DELETE /api/codex/profiles/:id/skills
 3. `event_projection` 在广播前持久化审批请求；`POST /api/approvals/:id/decision` 使用 CAS 并回调 `respond_to_server_request`。
 4. Fake adapter 支持 `initialize`、审批事件与 `respond_to_server_request`；`platform-batch23-smoke.mjs` 覆盖 bootstrap → run → 幂等 → 审批 CAS。
 
-**完成证据：** `npm run check:platform-batch23`（Rust 单测 + typecheck + webClient 单测 + 含跨组织拒绝/DB 断言的 smoke）；`rustup run 1.95.0 cargo test -p open-web-codex-server`。
+**完成证据：** `npm run check:platform-batch23`（Rust 单测 + typecheck + platformClient 单测 + 含跨组织拒绝/DB 断言的 smoke）；`rustup run 1.95.0 cargo test -p open-web-codex-server`。
 
 ### Batch 3：Git Runner 与 Task 纵向编排（已完成）
 
 1. `git_workspace`：Git URL/分支校验、路径逃逸防护、`provision_run_workspace`（`run_workspaces` 表）。
 2. `run_lifecycle` 状态转移表；`start_run` 串联 `queued → provisioning → running`，支持 `Idempotency-Key`。
 3. 单 Task 事件投影与 replay 沿用 Batch 1；审批持久化后再推送。
-4. `webClient` 默认连接平台 `:4800`，新增 `startTaskRun`/`listApprovals`/`decideApproval`；WebApp 默认 base URL 切到平台。
 
-**完成证据：** `npm run check:platform-batch23`（Rust 单测 + typecheck + webClient 单测 + 含跨组织拒绝/DB 断言的 smoke）。
+**完成证据：** `npm run check:platform-batch23`。
+
+### Batch 4：浏览器平台 API 迁移（已完成）
+
+1. 移除 legacy `/api/rpc` 与 `/api/events` 代理；平台 server 仅暴露 REST API。
+2. 新增 `active-run`、`interrupt`/`steer`、run 文件列表/读取、`git-status`、`DELETE /api/projects/:id`。
+3. `PlatformWebApp` 完全基于 `PlatformClient`（认证、项目/任务/运行、事件轮询、平台审批、文件面板）。
+4. `projectedRunEventsToLogEntries` 将持久化 `RunEvent` 投影为浏览器消息；`ApprovalCard` 支持 `approvalId`。
+5. 严格门禁 `npm run check:platform-web`（Rust 单测 + typecheck + 细分单测 + batch23 smoke + web smoke）。
+
+**完成证据：** `npm run check:platform-web`。
 
 完成上述四批后再进入 M2 多用户 Beta。M2 的首个门禁是两用户跨 Profile、Thread、Workspace、事件、审批和 Secret 的系统性拒绝矩阵，而不是先增加更多页面。

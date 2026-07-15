@@ -1,4 +1,4 @@
-import type { LogEntry } from "../WebApp";
+import type { LogEntry } from "../types/logEntry";
 
 function isSameApproval(left: LogEntry, right: LogEntry) {
   if (left.kind !== "approval" || right.kind !== "approval") {

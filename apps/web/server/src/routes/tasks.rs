@@ -6,8 +6,8 @@ use axum::{
 use open_web_codex_adapter::CodexAdapter;
 use open_web_codex_platform_contracts::error::PlatformError;
 use open_web_codex_platform_contracts::{
-    CreateTaskRequest, ListTaskEventsParams, RunEvent, SendMessageRequest, SendMessageResponse,
-    Task,
+    CreateTaskRequest, ActiveRunResponse, ListTaskEventsParams, RunEvent, SendMessageRequest,
+    SendMessageResponse, Task,
 };
 use open_web_codex_platform_store::AppState;
 use serde::Deserialize;
@@ -185,10 +185,10 @@ pub async fn send_message(
 
     ensure_task_access(&state.db, auth.user_id, task_id).await?;
 
-    // Find the active run for this task (latest running or pending run)
+    // Find the active run for this task (latest non-terminal run)
     let active_run = sqlx::query(
         "SELECT id, codex_thread_id FROM runs \
-         WHERE task_id = $1 AND status IN ('pending', 'running') \
+         WHERE task_id = $1 AND status IN ('pending', 'queued', 'provisioning', 'running', 'waiting_approval') \
          ORDER BY created_at DESC LIMIT 1",
     )
     .bind(task_id)
@@ -280,5 +280,45 @@ pub async fn get_task(
         status: row.get("status"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
+    }))
+}
+
+fn map_run_row(row: &sqlx::postgres::PgRow) -> open_web_codex_platform_contracts::Run {
+    open_web_codex_platform_contracts::Run {
+        id: row.get("id"),
+        task_id: row.get("task_id"),
+        status: row.get("status"),
+        codex_thread_id: row.get("codex_thread_id"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    }
+}
+
+/// GET /api/tasks/:id/active-run — latest non-terminal run for a task.
+pub async fn get_active_run(
+    auth: AuthenticatedUser,
+    State(state): State<AppState>,
+    Path(task_id): Path<Uuid>,
+) -> ApiResult<ActiveRunResponse> {
+    ensure_task_access(&state.db, auth.user_id, task_id).await?;
+
+    let row = sqlx::query(
+        "SELECT id, task_id, status, codex_thread_id, created_at, updated_at \
+         FROM runs \
+         WHERE task_id = $1 AND status NOT IN ('completed', 'cancelled', 'failed') \
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(task_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PlatformError::internal(format!("{e}"))),
+        )
+    })?;
+
+    Ok(Json(ActiveRunResponse {
+        run: row.as_ref().map(map_run_row),
     }))
 }

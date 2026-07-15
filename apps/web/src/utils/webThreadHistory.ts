@@ -1,4 +1,4 @@
-import type { LogEntry } from "../WebApp";
+import type { LogEntry } from "../types/logEntry";
 
 export function unwrapWebRpcResult(value: unknown): unknown {
   let current = value;

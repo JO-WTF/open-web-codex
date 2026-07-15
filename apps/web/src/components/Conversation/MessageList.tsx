@@ -1,4 +1,4 @@
-import type { LogEntry } from "../../WebApp";
+import type { LogEntry } from "../../types/logEntry";
 import UserMessage from "./messages/UserMessage";
 import AssistantMessage from "./messages/AssistantMessage";
 import ReasoningBlock from "./messages/ReasoningBlock";
@@ -37,10 +37,20 @@ type Props = {
   turnStartedAt?: number | null;
   onOpenFile?: (path: string) => void;
   workspaceId?: string;
+  approvalId?: string;
+  onDecideApproval?: (approvalId: string, decision: "approved" | "rejected") => void;
   onResolveApproval?: (workspaceId: string, requestId: number | string, decision: "accept" | "decline") => void;
 };
 
-export default function MessageList({ items, thinking = false, turnStartedAt, onOpenFile, workspaceId, onResolveApproval }: Props) {
+export default function MessageList({
+  items,
+  thinking = false,
+  turnStartedAt,
+  onOpenFile,
+  workspaceId,
+  onResolveApproval,
+  onDecideApproval,
+}: Props) {
   if (items.length === 0) {
     return (
       <div className="web-empty">
@@ -73,8 +83,10 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
               command={entry.text}
               workspaceId={workspaceId}
               requestId={entry.approvalRequestId}
+              approvalId={entry.approvalId}
               status={entry.approvalStatus}
               onResolve={onResolveApproval}
+              onDecide={onDecideApproval}
             />
           );
         }

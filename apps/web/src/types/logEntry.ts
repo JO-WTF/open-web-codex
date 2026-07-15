@@ -1,0 +1,25 @@
+export type LogEntry = {
+  id: string;
+  level: "event" | "error" | "info" | "user" | "assistant" | "system";
+  text: string;
+  approvalId?: string;
+  approvalRequestId?: number | string;
+  approvalStatus?: "pending" | "accepted" | "declined" | "resolved";
+  kind?: "reasoning" | "tool" | "diff" | "approval" | "command_exec" | "connection";
+  toolType?: string;
+  toolTitle?: string;
+  toolStatus?: string;
+  toolDetail?: string;
+  toolOutput?: string;
+  reasoningSummary?: string;
+  filePath?: string;
+  diffTitle?: string;
+  diffLines?: { type: "add" | "del" | "ctx"; text: string }[];
+  meta?: string;
+  streaming?: boolean;
+  cmdExitCode?: number;
+  cmdDurationMs?: number;
+  cmdCwd?: string;
+  cmdOutput?: string;
+  cmdActions?: { type: string; path: string }[];
+};

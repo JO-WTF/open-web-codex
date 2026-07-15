@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { LogEntry } from "../WebApp";
+import type { LogEntry } from "../types/logEntry";
 import { appendWebLogEntry } from "./webApprovalLog";
 
 const approval = (overrides: Partial<LogEntry> = {}): LogEntry => ({
