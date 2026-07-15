@@ -137,7 +137,7 @@ M0-A 官方同步稳定（已完成当前 checkpoint）
 | M0-A05 | P0/M | [x] | 审查 CodexMonitor Web 迁移边界并保留过渡实现 | ADR、Tauri boundary 与独立 server 结构存在 |
 | M0-A06 | P0/M | [x] | 审查 Codex Fork Provider WIP | Patch Map 已将提交归类为 upstreamed/retain/drop/check |
 | M0-A07 | P0/L | [x] | 创建官方同步分支并合并选定 `openai/codex` checkpoint | subtree 已同步到 `9e552e9d15ba`，状态为 synchronized |
-| M0-A08 | P0/M | [x] | 将 38 个定制提交归类 | `docs/custom-codex-patch-map.md` 已建立 |
+| M0-A08 | P0/M | [-] | 将所有非生成 Codex 差异归类为 retain-core、upstreamed、move-out 或 drop，并维护可重放 seam 清单 | 每个差异有归属；每个 retain-core seam 有路径、原因、重放顺序、测试和删除条件 |
 | M0-A09 | P0/M | [ ] | 重点重验 Provider Wire API、模型缓存和当前 Provider 传播 | scoped Rust tests 通过 |
 | M0-A10 | P1/S | [-] | 固定首个兼容 Codex commit、Rust toolchain、target 和 binary digest | `.sync` 已固定 commit；兼容矩阵和 digest 待补 |
 
@@ -610,6 +610,16 @@ GET/POST/PATCH/DELETE /api/codex/profiles/:id/skills
 ## 13. 建议的下一开发批次
 
 当前不应扩展完整 Studio 或继续围绕旧 RPC/SSE Gateway 增加产品功能。建议按以下顺序执行：
+
+### Batch 0：Codex 定制收敛与可重放记录
+
+1. 完成 `M0-A08`：逐一分类全部非生成 `codex/` 差异；先核验上游是否已有等价行为，再决定 retain-core、upstreamed、move-out 或 drop。
+2. 以 `docs/custom-codex-patch-map.md` 作为当前 seam 事实：保留 Chat 翻译、Provider 元数据、模型目录/缓存、app-server Provider API、TUI Provider 工作流、旧历史兼容和 Capability Manifest。
+3. 将 Chat 适配集中于 `codex-api`、Provider 事实集中于 Provider crates、协议集中于 app-server protocol、TUI 集中于独立 Provider 模块；将 `core` 收敛到最小 transport dispatch。
+4. 不再将 Tauri、raw RPC proxy、Profile/授权/浏览器状态等平台逻辑加入 `codex/`；迁移时先在 `apps/web` 建立类型化 Host/DTO 边界。
+5. 用一次当前官方 Codex 更新演练验证重放顺序：Provider 元数据/Chat transport → 模型目录/缓存 → app-server Provider API → TUI → 生成物 → Web contract/真实 Smoke。
+
+**完成证据：** 非生成差异全部已分类；仅批准 seam 保留在 Runtime；每个 seam 的 scoped tests、生成合同和 Provider/TUI smoke 均通过；最新官方更新可按清单重放。
 
 ### Batch 1：生成式合同与安全平台边界
 
