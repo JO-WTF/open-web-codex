@@ -64,7 +64,7 @@ export default function Header({
         )}
       </div>
       <div className="web-chat-header-right">
-        {(threadStatus === "waiting_approval" || threadStatus?.includes("waitingOnApproval")) && (
+        {threadStatus && threadStatus.includes("waitingOnApproval") && (
           <span className="web-header-approval-badge" title="Waiting for approval">
             ⚠ Approval needed
           </span>

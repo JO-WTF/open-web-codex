@@ -37,11 +37,6 @@ type Props = {
   onWriteProvider?: (input: Record<string, unknown>) => Promise<void>;
   selectedModelId?: string | null;
   onSelectModel?: (modelId: string) => void;
-  effortOptions?: string[];
-  selectedEffort?: string | null;
-  onSelectEffort?: (effort: string) => void;
-  accessMode?: import("../../types").AccessMode;
-  onSelectAccessMode?: (mode: import("../../types").AccessMode) => void;
   messages: MessageEntry[];
   workspaceId?: string;
   thinking?: boolean;
@@ -62,7 +57,6 @@ type Props = {
   busy: boolean;
   sendDisabled: boolean;
   onResolveApproval?: (workspaceId: string, requestId: number | string, decision: "accept" | "decline") => void;
-  onDecideApproval?: (approvalId: string, decision: "approved" | "rejected") => void;
 };
 
 export default function Conversation({
@@ -87,11 +81,6 @@ export default function Conversation({
   onWriteProvider,
   selectedModelId,
   onSelectModel,
-  effortOptions,
-  selectedEffort,
-  onSelectEffort,
-  accessMode,
-  onSelectAccessMode,
   messages,
   workspaceId,
   thinking,
@@ -112,7 +101,6 @@ export default function Conversation({
   busy,
   sendDisabled,
   onResolveApproval,
-  onDecideApproval,
 }: Props) {
   const messageAreaRef = useRef<HTMLDivElement | null>(null);
   const isAtBottomRef = useRef(true);
@@ -169,7 +157,6 @@ export default function Conversation({
           onOpenFile={onOpenFile}
           workspaceId={workspaceId}
           onResolveApproval={onResolveApproval}
-          onDecideApproval={onDecideApproval}
         />
         {userInputRequest ? <UserInputCard request={userInputRequest} submitting={submittingUserInput} onSubmit={onSubmitUserInput} /> : null}
         {thinking && threadStatus !== "reconnecting" && !visibleMessages.some((entry) => entry.level === "user") && <ThinkingIndicator />}
@@ -201,11 +188,6 @@ export default function Conversation({
         onWriteProvider={onWriteProvider}
         selectedModelId={selectedModelId}
         onSelectModel={onSelectModel}
-        effortOptions={effortOptions}
-        selectedEffort={selectedEffort}
-        onSelectEffort={onSelectEffort}
-        accessMode={accessMode}
-        onSelectAccessMode={onSelectAccessMode}
       />
     </section>
   );
