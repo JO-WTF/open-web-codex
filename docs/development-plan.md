@@ -13,7 +13,7 @@
 | 能力基线 | `docs/capability-baseline.md` |
 | 上游同步 | `docs/codex-upstream-sync.md` |
 
-Codex subtree 已同步到记录的官方 `openai/codex` 提交 `1bbdb32789e1`，状态脚本报告待集成提交和记录基线以上定制提交均为 0。第三方 Provider、TUI Provider、Capability Manifest 和旧历史兼容 seam 已按 patch map 重放；app-server Schema 再生和 scoped Codex 验证仍因当前环境缺少 OpenSSL 开发文件而待完成。Capability Manifest v1 类型、Schema 和 `initialize` 返回已落地，真实本地 app-server Smoke 曾观察到 17 个能力声明。
+Codex subtree 已同步到记录的官方 `openai/codex` 提交 `1bbdb32789e1`，状态脚本报告待集成提交和记录基线以上定制提交均为 0。第三方 Provider、TUI Provider、Capability Manifest 和旧历史兼容 seam 已按 patch map 重放，并已通过 app-server Schema 再生、Provider/TUI scoped tests、真实 app-server Manifest Smoke 和 Web contract check。Capability Manifest v1 类型、Schema 和 `initialize` 已验证可用，真实本地 app-server Smoke 返回 18 个能力声明。
 
 M1 平台已建立 Axum/SQLx/PostgreSQL workspace、Fake/Real Codex Adapter，以及 bootstrap/session、organization/membership、project、Task、Run 和版本化 Run event 投影。Item/Delta 会先以单调 sequence、稳定平台事件类型和脱敏 UI payload 落库，再向浏览器广播；Web reducer 可用 cursor 投影恢复活动状态并以 Codex Thread 历史校准终态。这仍是纵向原型：浏览器仍主要连接 loopback RPC/SSE Gateway；Profile Host、Git Worktree/Runner、持久审批、Lease、审计、完整 RBAC、幂等调度和认证 WebSocket 尚未完成。当前 `/api/rpc`、permissive CORS 和 SSE query token 只能用于本地迁移期，不得作为多用户 Beta 边界。
 
@@ -138,7 +138,7 @@ M0-A 官方同步稳定（已完成当前 checkpoint）
 | M0-A06 | P0/M | [x] | 审查 Codex Fork Provider WIP | Patch Map 已将提交归类为 upstreamed/retain/drop/check |
 | M0-A07 | P0/L | [x] | 创建官方同步分支并合并选定 `openai/codex` checkpoint | subtree 已同步到 `9e552e9d15ba`，状态为 synchronized |
 | M0-A08 | P0/M | [x] | 将所有非生成 Codex 差异归类为 retain-core、upstreamed、move-out 或 drop，并维护可重放 seam 清单 | 每个差异有归属；每个 retain-core seam 有路径、原因、重放顺序、测试和删除条件 |
-| M0-A09 | P0/M | [ ] | 重点重验 Provider Wire API、模型缓存和当前 Provider 传播 | scoped Rust tests 通过 |
+| M0-A09 | P0/M | [x] | 重点重验 Provider Wire API、模型缓存和当前 Provider 传播 | codex-api、model-provider、models-manager、app-server model_list 和 TUI scoped tests 通过；真实 Manifest Smoke 和 Web contract check 通过 |
 | M0-A10 | P1/S | [-] | 固定首个兼容 Codex commit、Rust toolchain、target 和 binary digest | `.sync` 已固定 commit；兼容矩阵和 digest 待补 |
 
 M0-A07 拆分建议：

@@ -37,10 +37,14 @@
       "Added apps/web Profile Host provisioning before the transitional app-server spawn so Codex can return to official missing-CODEX_HOME validation semantics.",
       "Synchronized the Codex subtree through official commit 1bbdb32789e1f79932df44941236ea3658f6e965 and replayed the documented core seams."
     ],
-    "validationBlockers": [
-      "The app-server Schema generator and scoped protocol tests require OpenSSL development files; the current environment cannot install them.",
-      "`just fmt` also requires the upstream dotslash and uv tools, which are unavailable in the current environment."
-    ],
-    "nextAction": "Regenerate app-server artifacts and run scoped Codex tests in an environment with OpenSSL development files, then use the Profile Host provisioner from the native platform spawn path before returning utils/home-dir to official semantics."
+    "validation": {
+      "format": "passed",
+      "appServerSchema": "passed",
+      "protocolTests": "passed",
+      "providerAndTuiTests": "passed",
+      "realAppServerSmoke": "passed",
+      "webContractCheck": "passed"
+    },
+    "nextAction": "Use the Profile Host provisioner from the native platform spawn path before returning utils/home-dir to official semantics."
   }
 }
