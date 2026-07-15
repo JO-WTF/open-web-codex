@@ -199,6 +199,35 @@ pub struct StartRunResponse {
     pub run: Run,
 }
 
+// ── Approvals ─────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Approval {
+    pub id: Uuid,
+    pub run_id: Uuid,
+    pub request_type: String,
+    pub request_payload: serde_json::Value,
+    pub status: String,
+    pub codex_request_id: Option<String>,
+    pub workspace_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub decision: Option<String>,
+    pub decided_by: Option<Uuid>,
+    pub decided_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalDecisionRequest {
+    pub decision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalDecisionResponse {
+    pub approval: Approval,
+}
+
 // ── Messages ──────────────────────────────────────────────────────
 
 /// Request to send a user message to a task's active thread.

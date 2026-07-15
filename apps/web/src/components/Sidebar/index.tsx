@@ -140,7 +140,7 @@ export default function Sidebar({
                   autoFocus
                   value={baseUrl}
                   onChange={(e) => onBaseUrlChange(e.target.value)}
-                  placeholder="http://127.0.0.1:4733"
+                  placeholder="http://127.0.0.1:4800"
                 />
               </label>
               <label>

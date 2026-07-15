@@ -1,6 +1,8 @@
 mod config;
 mod event_projection;
+mod git_workspace;
 mod middleware;
+mod run_lifecycle;
 mod routes;
 
 use std::net::SocketAddr;

@@ -2,6 +2,8 @@ use serde_json::{json, Map, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::routes::approvals::{approval_expires_at, is_approval_method};
+
 const PROJECTION_VERSION: i16 = 1;
 
 #[derive(Debug, PartialEq)]
@@ -14,7 +16,7 @@ struct ProjectedEvent {
 }
 
 pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<(), String> {
-    let Some(event) = project_frame(data)? else {
+    let Some((event, raw)) = project_frame(data)? else {
         return Ok(());
     };
 
@@ -33,6 +35,10 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<(), String> {
     let Some(run_id) = run_id else {
         return Ok(());
     };
+
+    if let Some(approval) = extract_approval_request(&raw, run_id) {
+        persist_approval(&mut transaction, approval).await?;
+    }
 
     sqlx::query(
         "INSERT INTO run_events (
@@ -85,7 +91,7 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<(), String> {
         .map_err(|error| format!("event transaction commit error: {error}"))
 }
 
-fn project_frame(data: &[u8]) -> Result<Option<ProjectedEvent>, String> {
+fn project_frame(data: &[u8]) -> Result<Option<(ProjectedEvent, Value)>, String> {
     let text = std::str::from_utf8(data).map_err(|error| format!("invalid utf8: {error}"))?;
     let json_text = text
         .lines()
@@ -154,13 +160,111 @@ fn project_frame(data: &[u8]) -> Result<Option<ProjectedEvent>, String> {
         "data": data,
     });
 
-    Ok(Some(ProjectedEvent {
-        event_type: event_type.to_string(),
+    Ok(Some((
+        ProjectedEvent {
+            event_type: event_type.to_string(),
+            thread_id,
+            turn_id,
+            item_id,
+            payload,
+        },
+        value,
+    )))
+}
+
+struct ApprovalInsert {
+    run_id: Uuid,
+    request_type: String,
+    request_payload: Value,
+    codex_request_id: Option<String>,
+    workspace_id: Option<String>,
+    thread_id: Option<String>,
+}
+
+fn extract_approval_request(value: &Value, run_id: Uuid) -> Option<ApprovalInsert> {
+    if value.get("method").and_then(Value::as_str) != Some("app-server-event") {
+        return None;
+    }
+    let message = value.pointer("/params/message")?.as_object()?;
+    let method = message.get("method")?.as_str()?;
+    if !is_approval_method(method) {
+        return None;
+    }
+    let params = message
+        .get("params")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let thread_id = string_field(&params, "threadId")
+        .or_else(|| string_field(&params, "thread_id"));
+    let workspace_id = value
+        .pointer("/params/workspace_id")
+        .or_else(|| value.pointer("/params/workspaceId"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let codex_request_id = message
+        .get("id")
+        .map(|id| match id {
+            Value::Number(number) => number.to_string(),
+            Value::String(text) => text.clone(),
+            _ => String::new(),
+        })
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            params
+                .get("requestId")
+                .or_else(|| params.get("request_id"))
+                .map(|id| match id {
+                    Value::Number(number) => number.to_string(),
+                    Value::String(text) => text.clone(),
+                    _ => String::new(),
+                })
+                .filter(|value| !value.is_empty())
+        });
+
+    Some(ApprovalInsert {
+        run_id,
+        request_type: method.to_string(),
+        request_payload: Value::Object(params),
+        codex_request_id,
+        workspace_id,
         thread_id,
-        turn_id,
-        item_id,
-        payload,
-    }))
+    })
+}
+
+async fn persist_approval(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    approval: ApprovalInsert,
+) -> Result<(), String> {
+    sqlx::query(
+        "INSERT INTO approvals (
+            run_id, request_type, request_payload, status, codex_request_id,
+            workspace_id, thread_id, expires_at
+         ) VALUES ($1, $2, $3, 'pending', $4, $5, $6, $7)
+         ON CONFLICT (run_id, codex_request_id)
+             WHERE status = 'pending' AND codex_request_id IS NOT NULL
+         DO NOTHING",
+    )
+    .bind(approval.run_id)
+    .bind(&approval.request_type)
+    .bind(&approval.request_payload)
+    .bind(&approval.codex_request_id)
+    .bind(&approval.workspace_id)
+    .bind(&approval.thread_id)
+    .bind(approval_expires_at())
+    .execute(&mut **transaction)
+    .await
+    .map_err(|error| format!("approval insert error: {error}"))?;
+
+    sqlx::query(
+        "UPDATE runs SET status = 'waiting_approval', updated_at = now()
+         WHERE id = $1 AND status = 'running'",
+    )
+    .bind(approval.run_id)
+    .execute(&mut **transaction)
+    .await
+    .map_err(|error| format!("run waiting_approval update error: {error}"))?;
+    Ok(())
 }
 
 fn classify_method(method: &str) -> (&'static str, &'static str) {
@@ -337,7 +441,7 @@ mod tests {
 
 "#;
 
-        let event = project_frame(frame).unwrap().unwrap();
+        let (event, _) = project_frame(frame).unwrap().unwrap();
 
         assert_eq!(event.event_type, "codex.item.completed");
         assert_eq!(event.thread_id, "thread-1");
@@ -355,7 +459,7 @@ mod tests {
 
 "#;
 
-        let event = project_frame(frame).unwrap().unwrap();
+        let (event, _) = project_frame(frame).unwrap().unwrap();
 
         assert_eq!(event.event_type, "codex.unknown");
         assert_eq!(event.payload["data"]["sourceType"], "item/futureEvent");

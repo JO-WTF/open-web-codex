@@ -1,8 +1,65 @@
 //! Profile-host primitives shared by platform runtime adapters.
 
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
+
+/// Canonical layout for a per-user Profile home under a data root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileLayout {
+    pub root: PathBuf,
+    pub home: PathBuf,
+    pub runtime: PathBuf,
+    pub lock_file: PathBuf,
+}
+
+impl ProfileLayout {
+    pub fn for_user(data_root: &Path, user_id: &str) -> Self {
+        let root = data_root.join("profiles").join(user_id);
+        Self {
+            home: root.join("home"),
+            runtime: root.join("runtime"),
+            lock_file: root.join("runtime").join("profile.lock"),
+            root,
+        }
+    }
+
+    pub fn ensure_directories(&self) -> io::Result<()> {
+        fs::create_dir_all(&self.home)?;
+        fs::create_dir_all(&self.runtime)?;
+        Ok(())
+    }
+}
+
+/// Exclusive profile lock backed by a lock file.
+pub struct ProfileLock {
+    path: PathBuf,
+    _file: std::fs::File,
+}
+
+impl ProfileLock {
+    pub fn acquire(layout: &ProfileLayout) -> io::Result<Self> {
+        layout.ensure_directories()?;
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&layout.lock_file)?;
+        Ok(Self {
+            path: layout.lock_file.clone(),
+            _file: file,
+        })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for ProfileLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
 
 /// Creates a missing Profile home and returns its canonical directory path.
 ///
@@ -33,11 +90,21 @@ pub fn ensure_profile_home(path: &Path) -> io::Result<PathBuf> {
     Ok(canonical_path)
 }
 
+/// Provisions a Profile layout and acquires the single-primary lock.
+pub fn provision_profile(
+    data_root: &Path,
+    user_id: &str,
+) -> io::Result<(ProfileLayout, ProfileLock, PathBuf)> {
+    let layout = ProfileLayout::for_user(data_root, user_id);
+    layout.ensure_directories()?;
+    let home = ensure_profile_home(&layout.home)?;
+    let lock = ProfileLock::acquire(&layout)?;
+    Ok((layout, lock, home))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::ensure_profile_home;
-    use std::fs;
-    use std::path::PathBuf;
+    use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temporary_path(name: &str) -> PathBuf {
@@ -71,5 +138,16 @@ mod tests {
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
 
         fs::remove_file(path).expect("remove file");
+    }
+
+    #[test]
+    fn profile_lock_rejects_a_second_holder() {
+        let root = temporary_path("lock");
+        let layout = ProfileLayout::for_user(&root, "user-a");
+        let _first = ProfileLock::acquire(&layout).expect("first lock");
+        let second = ProfileLock::acquire(&layout);
+        assert!(second.is_err());
+        drop(_first);
+        fs::remove_dir_all(root).expect("cleanup");
     }
 }

@@ -108,7 +108,7 @@ function parseThreadUpdatedAt(value: unknown): number {
 export default function WebApp() {
   console.log('[open-web-codex] build:', '2026-07-12T21:20:00Z');
   const [baseUrl, setBaseUrl] = useState(
-    localStorage.getItem("codexMonitorWebBaseUrl") ?? "http://127.0.0.1:4733",
+    localStorage.getItem("codexMonitorWebBaseUrl") ?? "http://127.0.0.1:4800",
   );
   const [token, setToken] = useState(sessionStorage.getItem("codexMonitorWebToken") ?? "");
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);

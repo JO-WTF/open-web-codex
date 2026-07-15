@@ -61,6 +61,32 @@ describe("CodexMonitorWebClient workspace status snapshots", () => {
   });
 });
 
+describe("CodexMonitorWebClient platform run APIs", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("starts a task run with an idempotency key", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ run: { id: "run-1", status: "running" } }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new CodexMonitorWebClient({ baseUrl: "http://platform.test", token: "session" });
+    await client.startTaskRun("task-1", "idem-key");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://platform.test/api/tasks/task-1/runs",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          authorization: "Bearer session",
+          "idempotency-key": "idem-key",
+        }),
+      }),
+    );
+  });
+});
+
 describe("CodexMonitorWebClient.listTaskEvents", () => {
   afterEach(() => {
     vi.unstubAllGlobals();

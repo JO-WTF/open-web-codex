@@ -36,7 +36,7 @@ function unwrapRpcResult(value: unknown): Record<string, unknown> {
 }
 
 function defaultBaseUrl() {
-  return import.meta.env.VITE_CODEX_MONITOR_WEB_API ?? "http://127.0.0.1:4733";
+  return import.meta.env.VITE_OPEN_WEB_CODEX_API ?? "http://127.0.0.1:4800";
 }
 
 export class CodexMonitorWebClient {
@@ -85,6 +85,32 @@ export class CodexMonitorWebClient {
 
   health() {
     return this.fetchJson<GatewayHealth>("/api/health");
+  }
+
+  startTaskRun(taskId: string, idempotencyKey?: string) {
+    return this.fetchJson<{ run: Record<string, unknown> }>(
+      `/api/tasks/${encodeURIComponent(taskId)}/runs`,
+      {
+        method: "POST",
+        body: "{}",
+        headers: idempotencyKey ? { "idempotency-key": idempotencyKey } : {},
+      },
+    );
+  }
+
+  listApprovals(runId?: string) {
+    const query = runId ? `?run_id=${encodeURIComponent(runId)}` : "";
+    return this.fetchJson<Record<string, unknown>[]>(`/api/approvals${query}`);
+  }
+
+  decideApproval(approvalId: string, decision: "approved" | "rejected") {
+    return this.fetchJson<{ approval: Record<string, unknown> }>(
+      `/api/approvals/${encodeURIComponent(approvalId)}/decision`,
+      {
+        method: "POST",
+        body: JSON.stringify({ decision }),
+      },
+    );
   }
 
   listTaskEvents(taskId: string, afterSequence?: number, limit = 200) {

@@ -2,6 +2,7 @@ pub mod projects;
 pub mod tasks;
 pub mod codex_proxy;
 pub mod runs;
+pub mod approvals;
 pub mod bootstrap;
 pub mod me;
 pub mod organizations;
@@ -21,6 +22,11 @@ pub fn router(adapter: Arc<dyn CodexAdapter>, legacy_codex_proxy: bool) -> Route
         .route("/sessions", axum::routing::post(sessions::create_session))
         .route("/me", axum::routing::get(me::me))
         .route("/tasks/{id}/runs", axum::routing::post(runs::start_run))
+        .route("/approvals", axum::routing::get(approvals::list_approvals))
+        .route(
+            "/approvals/{id}/decision",
+            axum::routing::post(approvals::decide_approval),
+        )
         .route("/runs", axum::routing::get(runs::list_runs))
         .route("/runs/{id}", axum::routing::get(runs::get_run))
         .route("/runs/{id}/cancel", axum::routing::post(runs::cancel_run))

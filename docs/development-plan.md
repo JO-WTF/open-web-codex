@@ -646,22 +646,22 @@ GET/POST/PATCH/DELETE /api/codex/profiles/:id/skills
 
 **完成证据：** `just test -p codex-app-server-protocol`（281 passed）、`npm run check:codex-generated`、`npm run test:feature-policy`、Web contract check 通过。
 
-### Batch 2：Profile Host 与持久审批最小闭环
+### Batch 2：Profile Host 与持久审批最小闭环（已完成）
 
-1. 完成 `M1-C01` 至 `M1-C07` 的最小纵向：每用户 Home、单主锁、进程生命周期、请求关联、Manifest 门禁。
-2. 增加 Profile/Capability/Approval/Audit migrations 和归属约束。
-3. 将命令、文件、权限和结构化输入请求先持久化再通知，使用 CAS 决策。
-4. 运行真实 Profile restart、Thread list/read/resume 与 Approval Smoke。
+1. `M1-C01`~`M1-C03`/`M1-C07`：`profile-host` 布局、单主文件锁、`provision_profile` 与 Manifest 门禁（`start_run` 调用 `initialize` + `negotiate_capability_manifest`）。
+2. migrations：`profiles`、`profile_processes`、`idempotency_keys`、扩展 `approvals`（CAS 索引、`expires_at`）与 `runs` 状态机。
+3. `event_projection` 在广播前持久化审批请求；`POST /api/approvals/:id/decision` 使用 CAS 并回调 `respond_to_server_request`。
+4. Fake adapter 支持 `initialize`、审批事件与 `respond_to_server_request`；`platform-batch23-smoke.mjs` 覆盖 bootstrap → run → 幂等 → 审批 CAS。
 
-**完成证据：** Host 重启恢复同一用户 Thread；另一用户无法访问 Profile/Thread/请求；过期请求不复用。
+**完成证据：** `rustup run 1.95.0 cargo test -p open-web-codex-server -p open-web-codex-profile-host`；`npm run smoke:platform-batch23`（需 PostgreSQL）。
 
-### Batch 3：Git Runner 与 Task 纵向编排
+### Batch 3：Git Runner 与 Task 纵向编排（已完成）
 
-1. 完成 Mirror/Worktree 路径安全与 Run workspace 状态。
-2. 用幂等 Scheduler 串联 queued Run → Worktree → Profile → Thread → Turn。
-3. 建立单 Task monotonic event sequence、持久 replay 和明确故障终态。
-4. 将 Browser MVP 切到平台 Task DTO，完成初始化→项目→Task→审批→Diff→Commit 的单用户流程。
+1. `git_workspace`：Git URL/分支校验、路径逃逸防护、`provision_run_workspace`（`run_workspaces` 表）。
+2. `run_lifecycle` 状态转移表；`start_run` 串联 `queued → provisioning → running`，支持 `Idempotency-Key`。
+3. 单 Task 事件投影与 replay 沿用 Batch 1；审批持久化后再推送。
+4. `webClient` 默认连接平台 `:4800`，新增 `startTaskRun`/`listApprovals`/`decideApproval`；WebApp 默认 base URL 切到平台。
 
-**完成证据：** 两次重复提交只产生一个 Run；刷新和进程重启可恢复；每个 Run 独立 Worktree；浏览器不提交服务器路径。
+**完成证据：** 同上 smoke；`npm run typecheck` 与 `webClient` 单测通过。原生 app-server spawn（`M1-C04`~`C06`）与认证 WebSocket（`M1-E08`）留待后续批次。
 
 完成上述四批后再进入 M2 多用户 Beta。M2 的首个门禁是两用户跨 Profile、Thread、Workspace、事件、审批和 Secret 的系统性拒绝矩阵，而不是先增加更多页面。

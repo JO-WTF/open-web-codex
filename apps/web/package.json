@@ -17,6 +17,7 @@
     "check:tauri-boundary": "node scripts/check-tauri-boundary.mjs",
     "fetch:codex-contracts": "node scripts/fetch-codex-contracts.mjs",
     "smoke:codex-app-server": "node scripts/codex-app-server-smoke.mjs --require-manifest",
+    "smoke:platform-batch23": "node scripts/platform-batch23-smoke.mjs",
     "test:codex-capabilities": "node scripts/test-codex-capability-manifest.mjs",
     "test:feature-policy": "node scripts/test-feature-policy.mjs",
     "test:codex-fixtures": "node scripts/replay-codex-fixtures.mjs --self-test && node scripts/replay-codex-fixtures.mjs",

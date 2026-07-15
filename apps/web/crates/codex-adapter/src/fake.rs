@@ -12,6 +12,9 @@ use uuid::Uuid;
 
 use crate::{AdapterError, CodexAdapter, HealthStatus};
 
+const MANIFEST_FIXTURE: &str =
+    include_str!("../../../contracts/codex/fixtures/capability-manifest.v1.json");
+
 /// A tracked mock thread for list/show responses.
 #[derive(Clone)] struct MockThread {
     id: String, ws_id: String, created_at: String, status: String,
@@ -101,6 +104,24 @@ impl FakeCodexAdapter {
             },
         })
     }
+
+    fn approval_request_event(ws_id: &str, th_id: &str, request_id: u64) -> Value {
+        json!({
+            "method": "app-server-event",
+            "params": {
+                "workspace_id": ws_id,
+                "message": {
+                    "id": request_id,
+                    "method": "item/commandExecution/requestApproval",
+                    "params": {
+                        "threadId": th_id,
+                        "command": ["echo", "hello"],
+                        "reason": "mock approval for smoke tests",
+                    },
+                },
+            },
+        })
+    }
 }
 
 #[async_trait]
@@ -111,6 +132,15 @@ impl CodexAdapter for FakeCodexAdapter {
 
     async fn rpc(&self, method: &str, params: Value) -> Result<Value, AdapterError> {
         match method {
+            "initialize" => {
+                let manifest: Value = serde_json::from_str(MANIFEST_FIXTURE).map_err(|error| {
+                    AdapterError::Internal(format!("manifest fixture invalid: {error}"))
+                })?;
+                Ok(json!({ "manifest": manifest }))
+            }
+
+            "respond_to_server_request" => Ok(json!({ "ok": true })),
+
             "list_workspaces" => {
                 let s = self.state.lock().await;
                 Ok(Value::Array(s.workspaces.clone()))
@@ -164,8 +194,11 @@ impl CodexAdapter for FakeCodexAdapter {
                         msg_count: 0, updated_at: updated_ts,
                     });
                 }
-                // Emit thread/started event immediately
+                // Emit thread/started and a pending approval request for platform smoke.
                 self.emit(Self::started_event(ws_id, &thread_id)).await;
+                let request_id = self.counter.fetch_add(1, Ordering::SeqCst);
+                self.emit(Self::approval_request_event(ws_id, &thread_id, request_id))
+                    .await;
 
                 Ok(json!({ "threadId": thread_id, "createdAt": created }))
             }
