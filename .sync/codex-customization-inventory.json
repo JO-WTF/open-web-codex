@@ -33,8 +33,9 @@
       "Separated pending official updates from candidate local changes using the integrated upstream base.",
       "Mapped the first-pass non-generated source candidates to retained seams, upstream-first replay, or verification.",
       "Classified Turn-level Provider override and Provider propagation followers as retained; classified missing-CODEX_HOME auto-creation as Platform Host work to move out of codex/.",
-      "Completed first-pass classification of all non-generated local-only and diverged source candidates; generated artifacts and focused tests follow their owning seam."
+      "Completed first-pass classification of all non-generated local-only and diverged source candidates; generated artifacts and focused tests follow their owning seam.",
+      "Added apps/web Profile Host provisioning before the transitional app-server spawn so Codex can return to official missing-CODEX_HOME validation semantics."
     ],
-    "nextAction": "Implement Profile Host directory creation before returning utils/home-dir to official semantics, then begin the official subtree replay on a dedicated sync branch."
+    "nextAction": "Use the Profile Host provisioner from the native platform spawn path, then return utils/home-dir to official semantics during the official subtree replay."
   }
 }
