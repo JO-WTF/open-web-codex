@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Layout from "./components/Layout";
+import PlatformAuthScreen from "./components/PlatformAuthScreen";
 import Conversation from "./components/Conversation";
 import type { ModelProviderSummary, ModelSummary } from "./components/Conversation/Composer";
 import type { QueuedFollowUp } from "./components/Conversation/FollowUpQueue";
@@ -564,38 +565,20 @@ export default function PlatformWebApp() {
 
   if (!token) {
     return (
-      <div className="web-auth-shell">
-        <div className="web-auth-card">
-          <h1>open-web-codex</h1>
-          <p>Sign in to the platform API.</p>
-          <label>
-            API base URL
-            <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} />
-          </label>
-          <label>
-            Email
-            <input value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="username" />
-          </label>
-          <label>
-            Password
-            <input
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              autoComplete="current-password"
-            />
-          </label>
-          {authError ? <div className="web-auth-error">{authError}</div> : null}
-          <div className="web-auth-actions">
-            <button type="button" disabled={busy} onClick={() => void handleLogin()}>
-              Sign in
-            </button>
-            <button type="button" disabled={busy} onClick={() => void handleBootstrap()}>
-              Bootstrap first user
-            </button>
-          </div>
-        </div>
-      </div>
+      <PlatformAuthScreen
+        baseUrl={baseUrl}
+        onBaseUrlChange={setBaseUrl}
+        email={email}
+        onEmailChange={setEmail}
+        password={password}
+        onPasswordChange={setPassword}
+        authError={authError}
+        busy={busy}
+        gatewayState={gatewayState}
+        gatewayVersion={gatewayVersion}
+        onLogin={() => void handleLogin()}
+        onBootstrap={() => void handleBootstrap()}
+      />
     );
   }
 
