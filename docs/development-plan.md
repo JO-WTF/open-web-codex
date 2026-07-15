@@ -137,7 +137,7 @@ M0-A 官方同步稳定（已完成当前 checkpoint）
 | M0-A05 | P0/M | [x] | 审查 CodexMonitor Web 迁移边界并保留过渡实现 | ADR、Tauri boundary 与独立 server 结构存在 |
 | M0-A06 | P0/M | [x] | 审查 Codex Fork Provider WIP | Patch Map 已将提交归类为 upstreamed/retain/drop/check |
 | M0-A07 | P0/L | [x] | 创建官方同步分支并合并选定 `openai/codex` checkpoint | subtree 已同步到 `9e552e9d15ba`，状态为 synchronized |
-| M0-A08 | P0/M | [-] | 将所有非生成 Codex 差异归类为 retain-core、upstreamed、move-out 或 drop，并维护可重放 seam 清单 | 每个差异有归属；每个 retain-core seam 有路径、原因、重放顺序、测试和删除条件 |
+| M0-A08 | P0/M | [x] | 将所有非生成 Codex 差异归类为 retain-core、upstreamed、move-out 或 drop，并维护可重放 seam 清单 | 每个差异有归属；每个 retain-core seam 有路径、原因、重放顺序、测试和删除条件 |
 | M0-A09 | P0/M | [ ] | 重点重验 Provider Wire API、模型缓存和当前 Provider 传播 | scoped Rust tests 通过 |
 | M0-A10 | P1/S | [-] | 固定首个兼容 Codex commit、Rust toolchain、target 和 binary digest | `.sync` 已固定 commit；兼容矩阵和 digest 待补 |
 
