@@ -64,6 +64,20 @@ fn default_version() -> String {
     "1.0.0".to_string()
 }
 
+impl Default for CapabilityDeclaration {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            version: default_version(),
+            status: CapabilityStatus::Supported,
+            methods: MethodSet::default(),
+            limits: None,
+            reason: None,
+            experimental: false,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 pub enum CapabilityStatus {
     #[serde(rename = "supported")]
@@ -132,8 +146,15 @@ fn rfc3339_parts(unix_secs: i64) -> (i64, u32, u32, u32, u32, u32) {
     (y, m as u32, d as u32, hour, min, sec)
 }
 
+fn apply_registry_derived_metadata(capabilities: &mut [CapabilityDeclaration]) {
+    for capability in capabilities {
+        capability.experimental = suggested_capability_experimental(capability);
+    }
+}
+
 pub fn build_manifest() -> CapabilityManifest {
-    let capabilities = alpha_capabilities();
+    let mut capabilities = alpha_capabilities();
+    apply_registry_derived_metadata(&mut capabilities);
     debug_assert!(
         manifest_methods_are_registered(&capabilities).is_ok(),
         "capability manifest references an unregistered protocol method"
@@ -336,7 +357,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
             },
             limits: None,
             reason: None,
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "thread.lifecycle".into(),
@@ -362,7 +383,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
                 serde_json::json!(16),
             )])),
             reason: None,
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "turn.lifecycle".into(),
@@ -379,7 +400,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
             },
             limits: None,
             reason: None,
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "approval.lifecycle".into(),
@@ -396,7 +417,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
             },
             limits: None,
             reason: None,
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "profile.multi_workspace".into(),
@@ -411,7 +432,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
                 serde_json::json!(8),
             )])),
             reason: None,
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "memory.lifecycle".into(),
@@ -424,7 +445,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
                 message: "Memory status, export and reset are unavailable.".into(),
                 remediation: Some("Install a build that implements CR-104 through CR-108.".into()),
             }),
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "agents.crud".into(),
@@ -437,7 +458,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
                 message: "Native Agent CRUD is unavailable.".into(),
                 remediation: None,
             }),
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "agents.multi_agent".into(),
@@ -456,7 +477,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
                 ("maxAgentDepth".into(), serde_json::json!(3)),
             ])),
             reason: None,
-            experimental: true,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "skills.crud".into(),
@@ -472,7 +493,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
                 message: "Skill listing is available but write operations are not.".into(),
                 remediation: None,
             }),
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "skills.validation".into(),
@@ -485,7 +506,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
                 message: "Native Skill validation is unavailable.".into(),
                 remediation: None,
             }),
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "skills.test".into(),
@@ -498,7 +519,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
                 message: "The isolated Skill test hook is unavailable.".into(),
                 remediation: None,
             }),
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "plugins.lifecycle".into(),
@@ -511,7 +532,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
                 message: "Plugin lifecycle operations are unavailable.".into(),
                 remediation: None,
             }),
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "plugins.permissions".into(),
@@ -524,7 +545,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
                 message: "Plugin permission metadata is unavailable.".into(),
                 remediation: None,
             }),
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "mcp.config".into(),
@@ -543,7 +564,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
                 message: "MCP status is available but configuration and reload are not.".into(),
                 remediation: None,
             }),
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "mcp.oauth".into(),
@@ -556,7 +577,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
                 message: "MCP OAuth is unavailable.".into(),
                 remediation: None,
             }),
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "mcp.elicitation".into(),
@@ -569,7 +590,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
                 message: "MCP elicitation is unavailable.".into(),
                 remediation: None,
             }),
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "tools.discovery".into(),
@@ -582,7 +603,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
                 message: "Managed tool discovery metadata is unavailable.".into(),
                 remediation: None,
             }),
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "models.providers".into(),
@@ -598,7 +619,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
             },
             limits: None,
             reason: None,
-            experimental: false,
+            ..Default::default()
         },
     ]
 }

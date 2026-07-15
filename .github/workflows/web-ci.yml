@@ -35,7 +35,9 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run check:codex-contracts
+      - run: npm run check:codex-generated
       - run: npm run test:codex-capabilities
+      - run: npm run test:feature-policy
       - run: npm run test:codex-fixtures
       - run: npm run test:codex-harness
 

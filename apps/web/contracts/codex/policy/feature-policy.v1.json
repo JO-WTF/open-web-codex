@@ -30,7 +30,7 @@
       "id": "profile.multiWorkspace",
       "capabilityId": "profile.multi_workspace",
       "minimumCapabilityVersion": "1.0.0",
-      "allowedStatuses": ["supported"]
+      "allowedStatuses": ["supported", "degraded"]
     },
     {
       "id": "studio.providers",
@@ -54,7 +54,7 @@
       "id": "studio.multiAgent",
       "capabilityId": "agents.multi_agent",
       "minimumCapabilityVersion": "1.0.0",
-      "allowedStatuses": ["experimental"],
+      "allowedStatuses": ["experimental", "supported"],
       "requiresExplicitEnable": true
     }
   ]

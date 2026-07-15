@@ -1,0 +1,25 @@
+name: Codex protocol drift checks
+
+on:
+  push:
+    paths:
+      - "codex/**"
+      - ".github/workflows/codex-protocol-ci.yml"
+  pull_request:
+    paths:
+      - "codex/**"
+      - ".github/workflows/codex-protocol-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  schema-fixtures:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: codex
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: just test -p codex-app-server-protocol schema_fixtures::

@@ -32,7 +32,17 @@ function buildIdentity() {
   return { version, commit, target };
 }
 
-export function buildContractBundle({ createdAt = new Date().toISOString() } = {}) {
+function stableCreatedAt(files) {
+  const digest = createHash("sha256");
+  for (const file of files) {
+    digest.update(file.path);
+    digest.update(file.sha256);
+  }
+  const epochSeconds = Number.parseInt(digest.digest("hex").slice(0, 8), 16);
+  return new Date(epochSeconds * 1000).toISOString();
+}
+
+export function buildContractBundle({ createdAt } = {}) {
   const files = INPUTS.map(({ source, bundlePath }) => {
     const content = readFileSync(resolve(ROOT, source));
     return {
@@ -44,7 +54,7 @@ export function buildContractBundle({ createdAt = new Date().toISOString() } = {
 
   return {
     bundleVersion: "1.0.0",
-    createdAt,
+    createdAt: createdAt ?? stableCreatedAt(files),
     build: buildIdentity(),
     files,
   };

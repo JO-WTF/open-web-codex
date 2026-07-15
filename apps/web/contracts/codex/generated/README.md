@@ -3,10 +3,11 @@
 Files in this directory are produced from a specific Codex build. Do not edit
 them by hand.
 
-Generate the bundle with:
+Generate the bundle and consumer types with:
 
 ```bash
 npm run generate:codex-contracts
+npm run generate:codex-consumer-types
 ```
 
 Verify downloads with:
