@@ -11,6 +11,7 @@ use crate::ClientNotificationMethod;
 use crate::ClientRequestMethod;
 use crate::ServerNotificationMethod;
 use crate::ServerRequestMethod;
+use crate::manifest_method_policy::manifest_method_policy_is_consistent;
 
 /// Top-level capability manifest returned during `initialize`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -141,6 +142,10 @@ pub fn build_manifest() -> CapabilityManifest {
         manifest_experimental_flags_are_consistent(&capabilities).is_ok(),
         "capability manifest experimental flags are inconsistent with the method registry"
     );
+    debug_assert!(
+        manifest_method_policy_is_consistent(&capabilities).is_ok(),
+        "capability manifest method attribution policy is inconsistent"
+    );
 
     CapabilityManifest {
         schema_version: "1.0.0".to_string(),
@@ -209,6 +214,42 @@ fn manifest_methods_are_registered(
         }
     }
     Ok(())
+}
+
+/// Returns every wire method marked experimental in the protocol registry.
+pub fn registry_experimental_wire_methods() -> Vec<String> {
+    let mut methods = ClientRequestMethod::ALL
+        .iter()
+        .filter_map(|method| {
+            method
+                .experimental_reason()
+                .map(|_| method.wire_name())
+        })
+        .chain(ServerRequestMethod::ALL.iter().filter_map(|method| {
+            method
+                .experimental_reason()
+                .map(|_| method.wire_name())
+        }))
+        .chain(ServerNotificationMethod::ALL.iter().filter_map(|method| {
+            method
+                .experimental_reason()
+                .map(|_| method.wire_name())
+        }))
+        .chain(ClientNotificationMethod::ALL.iter().filter_map(|method| {
+            method
+                .experimental_reason()
+                .map(|_| method.wire_name())
+        }))
+        .collect::<Vec<_>>();
+    methods.sort();
+    methods.dedup();
+    methods
+}
+
+/// Suggested `experimental` flag derived purely from registry annotations.
+pub fn suggested_capability_experimental(capability: &CapabilityDeclaration) -> bool {
+    capability_references_experimental_method(capability)
+        || PRODUCT_EXPERIMENTAL_CAPABILITY_IDS.contains(&capability.id.as_str())
 }
 
 /// Returns the experimental reason for a registered wire method, if any.
@@ -665,6 +706,39 @@ mod tests {
             ClientNotificationMethod::ALL
                 .iter()
                 .any(|method| method.wire_name() == "initialized")
+        );
+    }
+
+    #[test]
+    fn manifest_method_policy_is_consistent_for_alpha() {
+        let manifest = build_manifest();
+        crate::manifest_method_policy::manifest_method_policy_is_consistent(&manifest.capabilities)
+            .expect("alpha manifest must satisfy method attribution policy");
+    }
+
+    #[test]
+    fn suggested_experimental_flags_match_declared_alpha_capabilities() {
+        let manifest = build_manifest();
+        for capability in &manifest.capabilities {
+            assert_eq!(
+                capability.experimental,
+                suggested_capability_experimental(capability),
+                "capability {} experimental flag should match registry-derived suggestion",
+                capability.id
+            );
+        }
+    }
+
+    #[test]
+    fn registry_lists_experimental_wire_methods() {
+        let methods = registry_experimental_wire_methods();
+        assert!(
+            methods.contains(&"thread/settings/update".to_string()),
+            "expected experimental client request in registry listing"
+        );
+        assert!(
+            methods.contains(&"thread/settings/updated".to_string()),
+            "expected experimental notification in registry listing"
         );
     }
 

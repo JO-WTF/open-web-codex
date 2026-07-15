@@ -3716,6 +3716,7 @@ dependencies = [
  "open-web-codex-adapter",
  "open-web-codex-platform-contracts",
  "open-web-codex-platform-store",
+ "open-web-codex-profile-host",
  "rand 0.8.7",
  "serde",
  "serde_json",
