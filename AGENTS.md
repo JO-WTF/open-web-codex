@@ -19,6 +19,77 @@ approvals, audit and browser projections. Preserve this boundary so `codex/`
 can continue to synchronize with `openai/codex` using the smallest possible
 product-specific seam.
 
+## Codex customization convergence
+
+The target is not a zero-diff Codex subtree. The target is a small, explicit,
+replayable set of third-party Provider and TUI extensions that can be carried
+through each official Codex subtree update. Treat all other product behavior as
+Web-platform work unless the official runtime has no suitable boundary.
+
+### Retained Runtime and TUI core
+
+These are intentional, product-critical `codex/` changes. Do not remove,
+replace with Web-only behavior, or broaden without preserving their tests and
+the corresponding app-server contract:
+
+- Third-party Chat Completions transport: request translation, streaming/SSE
+  translation, tool-call translation, and the narrow Core transport dispatch.
+- Provider metadata and configuration: `WireApi::Chat`, provider-scoped model
+  metadata, provider identity, and selection semantics.
+- Provider model discovery and caching: scoped catalog retrieval, refresh,
+  normalization, and isolation between Providers.
+- Versioned app-server Provider API: Provider listing, provider-scoped model
+  listing, controlled configuration writes, model refresh, and selected
+  Provider/model propagation.
+- TUI Provider workflows: Provider selection, model selection, onboarding,
+  configuration updates, refresh, and error states. TUI parity is a core
+  requirement, not an optional Web migration artifact.
+
+Keep this code concentrated in Provider-specific modules. In particular, place
+Chat translation in `codex-api`, Provider facts in Provider crates, app-server
+wire types in `app-server-protocol`, request handling in the app-server, and
+TUI presentation in dedicated TUI Provider modules. `core` may contain only
+the minimal transport-selection seam; it must not acquire Web, Profile,
+authorization, or browser-state logic.
+
+### Product boundaries and legacy code
+
+- `apps/web` owns Profile lifecycle, credentials injection, authorization,
+  Provider CRUD orchestration, browser DTOs, and all Web UI state. It may call
+  typed app-server methods internally through the Host, but must not expose raw
+  JSON-RPC or configuration key paths to the browser.
+- Do not add Tauri, daemon proxy, Web route, platform persistence, or browser
+  adaptation code under `codex/`. Prefer platform DTOs and the Profile Host.
+- Do not hand-edit generated app-server Schema or TypeScript files; regenerate
+  them from Rust protocol types.
+- Do not preserve a local workaround when upstream provides equivalent behavior.
+  Record an upstreamed replacement in the patch map and return to upstream code.
+- `legacy_response_tool_history` is a compatibility seam for existing Profile
+  rollout history, not a new feature surface. Keep it isolated, test reload
+  behavior, and remove it once supported legacy histories are retired.
+- The Capability Manifest is a platform compatibility seam. Its method facts
+  must converge on generated protocol/build data rather than hand-maintained
+  lists.
+
+### Required workflow for Codex changes
+
+1. Before changing a high-churn upstream file, run
+   `scripts/codex-upstream-status.sh` and inspect
+   `docs/custom-codex-patch-map.md`.
+2. Classify every non-generated Codex difference as `retain-core`,
+   `upstreamed`, `move-out`, or `drop`. Do not add an unclassified difference.
+3. Make the smallest change at the owning layer; avoid scattering Provider
+   behavior through `core`, generic TUI orchestration, or Web code.
+4. For protocol changes, regenerate Schema and TypeScript, update offline
+   fixtures, and validate a real app-server smoke.
+5. For TUI changes, add or update snapshot coverage. For Provider changes,
+   cover Provider switching, cache isolation, refresh, credentials failure,
+   Chat tool calls, and interrupted-stream recovery.
+6. During an official sync, accept upstream structure first, then reapply only
+   the documented retained seams in this order: Provider metadata/Chat
+   transport, model catalog/cache, app-server Provider API, TUI Provider
+   workflows, generated artifacts, and Web contract smoke.
+
 ## Repository scopes
 
 - `apps/web/**`: follow `apps/web/AGENTS.md`. This area owns the browser product,
