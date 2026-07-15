@@ -41,7 +41,7 @@ security.
 | Capability | Manifest/source state | Validation status |
 | --- | --- | --- |
 | Protocol Schema | available | generated JSON/TypeScript artifacts exist |
-| Capability negotiation | available, provisional | `initialize` emits schema version, build identity, protocol range, status, limits and reasons; declarations are still assembled in code rather than derived from the full method registry |
+| Capability negotiation | available, provisional | `initialize` emits schema version, build identity, protocol range, status, limits and reasons; method registries validate Manifest wire-name refs, experimental consistency, and product attribution policy; capability declarations remain hand-assembled Alpha subset rather than full generated policy |
 | Thread lifecycle | declared supported | initialize smoke passed; multi-cwd and restart recovery smoke still required |
 | Turn lifecycle | declared supported | real lifecycle smoke beyond initialize still required |
 | Approval lifecycle | declared supported | runtime methods exist; platform durable request/decision bridge is not implemented |

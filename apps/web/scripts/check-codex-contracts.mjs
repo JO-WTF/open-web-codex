@@ -1,15 +1,20 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
+import { verifyContractBundle } from "./fetch-codex-contracts.mjs";
+
 const CONTRACT_PATHS = {
-  registry: "contracts/codex/capability-ids.v1.json",
+  registry: "contracts/codex/policy/capability-ids.v1.json",
+  featurePolicy: "contracts/codex/policy/feature-policy.v1.json",
   manifestSchema: "contracts/codex/capability-manifest.schema.json",
   manifestFixture: "contracts/codex/fixtures/capability-manifest.v1.json",
   errorSchema: "contracts/codex/error.schema.json",
   fixtureSchema: "contracts/codex/protocol-fixture.schema.json",
   bundleSchema: "contracts/codex/contract-bundle.schema.json",
-  compatibility: "contracts/codex/compatibility-matrix.json",
+  compatibility: "contracts/codex/policy/compatibility-matrix.json",
+  generatedBundle: "contracts/codex/generated/contract-bundle.v1.json",
+  generatedBundleDigest: "contracts/codex/generated/contract-bundle.v1.sha256",
 };
 
 const SEMVER = /^[0-9]+\.[0-9]+\.[0-9]+$/;
@@ -91,12 +96,15 @@ export function validateContracts(contracts) {
   const errors = [];
   const {
     registry,
+    featurePolicy,
     manifestSchema,
     manifestFixture,
     errorSchema,
     fixtureSchema,
     bundleSchema,
     compatibility,
+    generatedBundle,
+    generatedBundleDigest,
   } = contracts;
 
   assert(SEMVER.test(registry.schemaVersion ?? ""), "registry.schemaVersion must be SemVer", errors);
@@ -110,6 +118,27 @@ export function validateContracts(contracts) {
     assert(entry.owner === "codex-rust", `${entry.id} must be owned by codex-rust`, errors);
     assert(typeof entry.requiredForV1 === "boolean", `${entry.id} must declare requiredForV1`, errors);
     assert(typeof entry.description === "string" && entry.description.length > 0, `${entry.id} needs a description`, errors);
+  }
+
+  assert(SEMVER.test(featurePolicy.schemaVersion ?? ""), "featurePolicy.schemaVersion must be SemVer", errors);
+  assert(Array.isArray(featurePolicy.features), "featurePolicy.features must be an array", errors);
+  for (const feature of featurePolicy.features ?? []) {
+    assert(typeof feature.id === "string" && feature.id.length > 0, "feature policy entry needs id", errors);
+    assert(CAPABILITY_ID.test(feature.capabilityId ?? ""), `invalid feature capabilityId: ${feature.capabilityId}`, errors);
+    assert(registryIds.includes(feature.capabilityId), `feature ${feature.id} references unknown capability ${feature.capabilityId}`, errors);
+    assert(SEMVER.test(feature.minimumCapabilityVersion ?? ""), `${feature.id} minimumCapabilityVersion must be SemVer`, errors);
+    assert(Array.isArray(feature.allowedStatuses) && feature.allowedStatuses.length > 0, `${feature.id} needs allowedStatuses`, errors);
+    for (const status of feature.allowedStatuses) {
+      assert(CAPABILITY_STATUSES.has(status), `${feature.id} has invalid allowed status ${status}`, errors);
+    }
+  }
+
+  if (generatedBundle && generatedBundleDigest) {
+    try {
+      verifyContractBundle(generatedBundle, generatedBundleDigest.trim());
+    } catch (error) {
+      assert(false, `generated contract bundle failed verification: ${error}`, errors);
+    }
   }
 
   assert(SEMVER.test(manifestFixture.schemaVersion ?? ""), "manifest schemaVersion must be SemVer", errors);
@@ -245,7 +274,18 @@ export function findBreakingChanges(current, previous) {
 
 function loadCurrentContracts() {
   return Object.fromEntries(
-    Object.entries(CONTRACT_PATHS).map(([key, path]) => [key, readJson(path)]),
+    Object.entries(CONTRACT_PATHS).map(([key, path]) => {
+      if (!existsSync(resolve(path))) {
+        return [key, null];
+      }
+      if (key === "generatedBundle") {
+        return [key, readFileSync(resolve(path))];
+      }
+      if (key === "generatedBundleDigest") {
+        return [key, readFileSync(resolve(path), "utf8").trim()];
+      }
+      return [key, readJson(path)];
+    }),
   );
 }
 

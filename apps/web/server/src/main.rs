@@ -4,10 +4,12 @@ mod middleware;
 mod routes;
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::Router;
 use clap::Parser;
+use open_web_codex_profile_host::ensure_profile_home;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
@@ -46,6 +48,19 @@ struct Cli {
         default_value = "http://127.0.0.1:4733"
     )]
     daemon_url: String,
+    /// Profile home directory to provision before Codex interactions.
+    ///
+    /// When set, the platform server creates a missing directory and exports a
+    /// canonical `CODEX_HOME` for child processes. Codex itself rejects a
+    /// configured but missing home.
+    #[arg(long, env = "CODEX_HOME")]
+    codex_home: Option<PathBuf>,
+    /// Expose legacy `/api/rpc` and `/api/events` Codex proxy routes.
+    ///
+    /// Disabled by default. Local migration may opt in with
+    /// `CODEX_ALLOW_LEGACY_PROXY=1`.
+    #[arg(long, env = "CODEX_ALLOW_LEGACY_PROXY", default_value_t = false, action = clap::ArgAction::SetTrue)]
+    legacy_codex_proxy: bool,
 }
 
 #[tokio::main]
@@ -55,6 +70,20 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
+
+    if let Some(codex_home) = cli.codex_home.as_ref() {
+        let canonical = ensure_profile_home(codex_home).map_err(|error| {
+            anyhow::anyhow!(
+                "failed to provision CODEX_HOME {}: {error}",
+                codex_home.display()
+            )
+        })?;
+        std::env::set_var("CODEX_HOME", &canonical);
+        tracing::info!(
+            codex_home = %canonical.display(),
+            "provisioned profile home for platform server"
+        );
+    }
 
     tracing::info!(bind = %cli.bind, "starting open-web-codex server");
 
@@ -124,10 +153,18 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    if cli.legacy_codex_proxy {
+        tracing::warn!(
+            "legacy Codex RPC/SSE proxy is enabled; do not use this as a multi-user production boundary"
+        );
+    } else {
+        tracing::info!("legacy Codex RPC/SSE proxy routes are disabled");
+    }
+
     let app = Router::new()
-        .nest("/api", routes::router(adapter))
+        .nest("/api", routes::router(adapter, cli.legacy_codex_proxy))
         .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive())
+        .layer(cors_layer(cli.legacy_codex_proxy))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(cli.bind).await?;
@@ -136,4 +173,12 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+fn cors_layer(legacy_codex_proxy: bool) -> CorsLayer {
+    if legacy_codex_proxy {
+        CorsLayer::permissive()
+    } else {
+        CorsLayer::new()
+    }
 }

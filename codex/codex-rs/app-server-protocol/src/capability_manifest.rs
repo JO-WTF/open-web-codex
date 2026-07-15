@@ -7,6 +7,12 @@ use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
+use crate::ClientNotificationMethod;
+use crate::ClientRequestMethod;
+use crate::ServerNotificationMethod;
+use crate::ServerRequestMethod;
+use crate::manifest_method_policy::manifest_method_policy_is_consistent;
+
 /// Top-level capability manifest returned during `initialize`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -56,6 +62,20 @@ pub struct CapabilityDeclaration {
 
 fn default_version() -> String {
     "1.0.0".to_string()
+}
+
+impl Default for CapabilityDeclaration {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            version: default_version(),
+            status: CapabilityStatus::Supported,
+            methods: MethodSet::default(),
+            limits: None,
+            reason: None,
+            experimental: false,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -126,7 +146,28 @@ fn rfc3339_parts(unix_secs: i64) -> (i64, u32, u32, u32, u32, u32) {
     (y, m as u32, d as u32, hour, min, sec)
 }
 
+fn apply_registry_derived_metadata(capabilities: &mut [CapabilityDeclaration]) {
+    for capability in capabilities {
+        capability.experimental = suggested_capability_experimental(capability);
+    }
+}
+
 pub fn build_manifest() -> CapabilityManifest {
+    let mut capabilities = alpha_capabilities();
+    apply_registry_derived_metadata(&mut capabilities);
+    debug_assert!(
+        manifest_methods_are_registered(&capabilities).is_ok(),
+        "capability manifest references an unregistered protocol method"
+    );
+    debug_assert!(
+        manifest_experimental_flags_are_consistent(&capabilities).is_ok(),
+        "capability manifest experimental flags are inconsistent with the method registry"
+    );
+    debug_assert!(
+        manifest_method_policy_is_consistent(&capabilities).is_ok(),
+        "capability manifest method attribution policy is inconsistent"
+    );
+
     CapabilityManifest {
         schema_version: "1.0.0".to_string(),
         generated_at: timestamp_now(),
@@ -142,8 +183,165 @@ pub fn build_manifest() -> CapabilityManifest {
             minimum_client_protocol: "1.0.0".to_string(),
             maximum_client_protocol: "2.0.0".to_string(),
         },
-        capabilities: alpha_capabilities(),
+        capabilities,
     }
+}
+
+fn manifest_methods_are_registered(
+    capabilities: &[CapabilityDeclaration],
+) -> Result<(), String> {
+    let client_methods = ClientRequestMethod::ALL
+        .iter()
+        .map(|method| method.wire_name())
+        .collect::<std::collections::HashSet<_>>();
+    let server_methods = ServerRequestMethod::ALL
+        .iter()
+        .map(|method| method.wire_name())
+        .collect::<std::collections::HashSet<_>>();
+    let notification_methods = ServerNotificationMethod::ALL
+        .iter()
+        .map(|method| method.wire_name())
+        .chain(
+            ClientNotificationMethod::ALL
+                .iter()
+                .map(|method| method.wire_name()),
+        )
+        .collect::<std::collections::HashSet<_>>();
+
+    for capability in capabilities {
+        for method in &capability.methods.client_requests {
+            if !client_methods.contains(method) {
+                return Err(format!(
+                    "capability {} references unknown client method {method}",
+                    capability.id
+                ));
+            }
+        }
+        for method in &capability.methods.server_requests {
+            if !server_methods.contains(method) {
+                return Err(format!(
+                    "capability {} references unknown server method {method}",
+                    capability.id
+                ));
+            }
+        }
+        for method in &capability.methods.notifications {
+            if !notification_methods.contains(method) {
+                return Err(format!(
+                    "capability {} references unknown notification method {method}",
+                    capability.id
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Returns every wire method marked experimental in the protocol registry.
+pub fn registry_experimental_wire_methods() -> Vec<String> {
+    let mut methods = ClientRequestMethod::ALL
+        .iter()
+        .filter_map(|method| {
+            method
+                .experimental_reason()
+                .map(|_| method.wire_name())
+        })
+        .chain(ServerRequestMethod::ALL.iter().filter_map(|method| {
+            method
+                .experimental_reason()
+                .map(|_| method.wire_name())
+        }))
+        .chain(ServerNotificationMethod::ALL.iter().filter_map(|method| {
+            method
+                .experimental_reason()
+                .map(|_| method.wire_name())
+        }))
+        .chain(ClientNotificationMethod::ALL.iter().filter_map(|method| {
+            method
+                .experimental_reason()
+                .map(|_| method.wire_name())
+        }))
+        .collect::<Vec<_>>();
+    methods.sort();
+    methods.dedup();
+    methods
+}
+
+/// Suggested `experimental` flag derived purely from registry annotations.
+pub fn suggested_capability_experimental(capability: &CapabilityDeclaration) -> bool {
+    capability_references_experimental_method(capability)
+        || PRODUCT_EXPERIMENTAL_CAPABILITY_IDS.contains(&capability.id.as_str())
+}
+
+/// Returns the experimental reason for a registered wire method, if any.
+pub fn registry_method_experimental_reason(method: &str) -> Option<&'static str> {
+    ClientRequestMethod::ALL
+        .iter()
+        .find(|entry| entry.wire_name() == method)
+        .and_then(|entry| entry.experimental_reason())
+        .or_else(|| {
+            ServerRequestMethod::ALL
+                .iter()
+                .find(|entry| entry.wire_name() == method)
+                .and_then(|entry| entry.experimental_reason())
+        })
+        .or_else(|| {
+            ServerNotificationMethod::ALL
+                .iter()
+                .find(|entry| entry.wire_name() == method)
+                .and_then(|entry| entry.experimental_reason())
+        })
+        .or_else(|| {
+            ClientNotificationMethod::ALL
+                .iter()
+                .find(|entry| entry.wire_name() == method)
+                .and_then(|entry| entry.experimental_reason())
+        })
+}
+
+fn capability_references_experimental_method(capability: &CapabilityDeclaration) -> bool {
+    capability
+        .methods
+        .client_requests
+        .iter()
+        .chain(capability.methods.server_requests.iter())
+        .chain(capability.methods.notifications.iter())
+        .any(|method| registry_method_experimental_reason(method).is_some())
+}
+
+/// Capabilities that declare product-level experimental status without relying
+/// solely on protocol `#[experimental]` method annotations.
+const PRODUCT_EXPERIMENTAL_CAPABILITY_IDS: &[&str] = &["agents.multi_agent"];
+
+fn manifest_experimental_flags_are_consistent(
+    capabilities: &[CapabilityDeclaration],
+) -> Result<(), String> {
+    for capability in capabilities {
+        let references_experimental = capability_references_experimental_method(capability);
+        let product_experimental = PRODUCT_EXPERIMENTAL_CAPABILITY_IDS.contains(&capability.id.as_str());
+
+        if references_experimental && !capability.experimental {
+            return Err(format!(
+                "capability {} references experimental protocol methods but experimental=false",
+                capability.id
+            ));
+        }
+
+        if capability.experimental && !references_experimental && !product_experimental {
+            return Err(format!(
+                "capability {} is marked experimental without experimental methods or an allowlisted product reason",
+                capability.id
+            ));
+        }
+
+        if capability.status == CapabilityStatus::Experimental && !capability.experimental {
+            return Err(format!(
+                "capability {} has Experimental status but experimental=false",
+                capability.id
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
@@ -159,7 +357,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
             },
             limits: None,
             reason: None,
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "thread.lifecycle".into(),
@@ -185,7 +383,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
                 serde_json::json!(16),
             )])),
             reason: None,
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "turn.lifecycle".into(),
@@ -202,7 +400,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
             },
             limits: None,
             reason: None,
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "approval.lifecycle".into(),
@@ -219,7 +417,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
             },
             limits: None,
             reason: None,
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "profile.multi_workspace".into(),
@@ -234,7 +432,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
                 serde_json::json!(8),
             )])),
             reason: None,
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "memory.lifecycle".into(),
@@ -247,7 +445,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
                 message: "Memory status, export and reset are unavailable.".into(),
                 remediation: Some("Install a build that implements CR-104 through CR-108.".into()),
             }),
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "agents.crud".into(),
@@ -260,7 +458,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
                 message: "Native Agent CRUD is unavailable.".into(),
                 remediation: None,
             }),
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "agents.multi_agent".into(),
@@ -279,7 +477,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
                 ("maxAgentDepth".into(), serde_json::json!(3)),
             ])),
             reason: None,
-            experimental: true,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "skills.crud".into(),
@@ -295,7 +493,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
                 message: "Skill listing is available but write operations are not.".into(),
                 remediation: None,
             }),
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "skills.validation".into(),
@@ -308,7 +506,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
                 message: "Native Skill validation is unavailable.".into(),
                 remediation: None,
             }),
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "skills.test".into(),
@@ -321,7 +519,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
                 message: "The isolated Skill test hook is unavailable.".into(),
                 remediation: None,
             }),
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "plugins.lifecycle".into(),
@@ -334,7 +532,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
                 message: "Plugin lifecycle operations are unavailable.".into(),
                 remediation: None,
             }),
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "plugins.permissions".into(),
@@ -347,7 +545,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
                 message: "Plugin permission metadata is unavailable.".into(),
                 remediation: None,
             }),
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "mcp.config".into(),
@@ -366,7 +564,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
                 message: "MCP status is available but configuration and reload are not.".into(),
                 remediation: None,
             }),
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "mcp.oauth".into(),
@@ -379,7 +577,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
                 message: "MCP OAuth is unavailable.".into(),
                 remediation: None,
             }),
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "mcp.elicitation".into(),
@@ -392,7 +590,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
                 message: "MCP elicitation is unavailable.".into(),
                 remediation: None,
             }),
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "tools.discovery".into(),
@@ -405,7 +603,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
                 message: "Managed tool discovery metadata is unavailable.".into(),
                 remediation: None,
             }),
-            experimental: false,
+            ..Default::default()
         },
         CapabilityDeclaration {
             id: "models.providers".into(),
@@ -421,7 +619,7 @@ fn alpha_capabilities() -> Vec<CapabilityDeclaration> {
             },
             limits: None,
             reason: None,
-            experimental: false,
+            ..Default::default()
         },
     ]
 }
@@ -494,5 +692,122 @@ mod tests {
         let json = serde_json::to_value(&manifest).expect("serialize");
         let back: CapabilityManifest = serde_json::from_value(json).expect("deserialize");
         assert_eq!(manifest, back);
+    }
+
+    #[test]
+    fn manifest_request_methods_are_registered() {
+        let manifest = build_manifest();
+        manifest_methods_are_registered(&manifest.capabilities)
+            .expect("manifest request methods must come from the protocol registry");
+    }
+
+    #[test]
+    fn manifest_experimental_flags_match_registry() {
+        let manifest = build_manifest();
+        manifest_experimental_flags_are_consistent(&manifest.capabilities)
+            .expect("manifest experimental flags must match registry annotations");
+    }
+
+    #[test]
+    fn registry_exposes_experimental_notification_methods() {
+        assert_eq!(
+            registry_method_experimental_reason("thread/settings/updated"),
+            Some("thread/settings/updated")
+        );
+        assert_eq!(
+            registry_method_experimental_reason("initialized"),
+            None
+        );
+        assert!(
+            ServerNotificationMethod::ALL
+                .iter()
+                .any(|method| method.wire_name() == "item/started")
+        );
+        assert!(
+            ClientNotificationMethod::ALL
+                .iter()
+                .any(|method| method.wire_name() == "initialized")
+        );
+    }
+
+    #[test]
+    fn manifest_method_policy_is_consistent_for_alpha() {
+        let manifest = build_manifest();
+        crate::manifest_method_policy::manifest_method_policy_is_consistent(&manifest.capabilities)
+            .expect("alpha manifest must satisfy method attribution policy");
+    }
+
+    #[test]
+    fn suggested_experimental_flags_match_declared_alpha_capabilities() {
+        let manifest = build_manifest();
+        for capability in &manifest.capabilities {
+            assert_eq!(
+                capability.experimental,
+                suggested_capability_experimental(capability),
+                "capability {} experimental flag should match registry-derived suggestion",
+                capability.id
+            );
+        }
+    }
+
+    #[test]
+    fn registry_lists_experimental_wire_methods() {
+        let methods = registry_experimental_wire_methods();
+        assert!(
+            methods.contains(&"thread/settings/update".to_string()),
+            "expected experimental client request in registry listing"
+        );
+        assert!(
+            methods.contains(&"thread/settings/updated".to_string()),
+            "expected experimental notification in registry listing"
+        );
+    }
+
+    #[test]
+    fn alpha_manifest_method_coverage_is_tracked() {
+        let manifest = build_manifest();
+        let attributed = manifest
+            .capabilities
+            .iter()
+            .flat_map(|capability| {
+                capability
+                    .methods
+                    .client_requests
+                    .iter()
+                    .chain(capability.methods.server_requests.iter())
+                    .chain(capability.methods.notifications.iter())
+                    .cloned()
+            })
+            .collect::<std::collections::HashSet<_>>();
+
+        let registered = ClientRequestMethod::ALL
+            .iter()
+            .map(|method| method.wire_name())
+            .chain(ServerRequestMethod::ALL.iter().map(|method| method.wire_name()))
+            .chain(
+                ServerNotificationMethod::ALL
+                    .iter()
+                    .map(|method| method.wire_name()),
+            )
+            .chain(
+                ClientNotificationMethod::ALL
+                    .iter()
+                    .map(|method| method.wire_name()),
+            )
+            .collect::<std::collections::HashSet<_>>();
+
+        assert!(
+            attributed.is_subset(&registered),
+            "manifest methods must be a subset of the protocol registry"
+        );
+        // M0-B04 tracks full attribution; Alpha currently declares a focused subset.
+        assert!(
+            !attributed.is_empty(),
+            "alpha manifest must attribute at least one method"
+        );
+        assert!(
+            registered.len() > attributed.len(),
+            "expected unattributed registry methods while full coverage policy is incomplete"
+        );
     }
 }

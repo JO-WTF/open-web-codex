@@ -111,6 +111,15 @@ macro_rules! experimental_type_entry {
     };
 }
 
+macro_rules! experimental_method_reason {
+    (#[experimental($reason:expr)]) => {
+        Some($reason)
+    };
+    () => {
+        None
+    };
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientRequestSerializationScope {
     Global(&'static str),
@@ -223,6 +232,44 @@ macro_rules! client_request_definitions {
                     params: $params,
                 },
             )*
+        }
+
+        /// A registered client-to-server wire method.
+        ///
+        /// This enum is generated from the same registry that defines
+        /// `ClientRequest`, so protocol consumers can enumerate method facts
+        /// without maintaining a second list of wire names.
+        #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+        #[serde(rename_all = "camelCase")]
+        pub enum ClientRequestMethod {
+            $(
+                $(#[serde(rename = $wire)])?
+                $variant,
+            )*
+        }
+
+        impl ClientRequestMethod {
+            pub const ALL: &[Self] = &[
+                $(Self::$variant,)*
+            ];
+
+            pub fn wire_name(self) -> String {
+                serde_json::to_value(self)
+                    .expect("client request method enum always serializes")
+                    .as_str()
+                    .expect("client request method enum serializes as a string")
+                    .to_string()
+            }
+
+            pub const fn experimental_reason(self) -> Option<&'static str> {
+                match self {
+                    $(
+                        Self::$variant => {
+                            experimental_method_reason!($(#[experimental($reason)])?)
+                        }
+                    )*
+                }
+            }
         }
 
         impl ClientRequest {
@@ -1239,6 +1286,44 @@ macro_rules! server_request_definitions {
             )*
         }
 
+        /// A registered server-to-client wire method.
+        ///
+        /// This enum is generated from the same registry that defines
+        /// `ServerRequest`, so protocol consumers can enumerate method facts
+        /// without maintaining a second list of wire names.
+        #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+        #[serde(rename_all = "camelCase")]
+        pub enum ServerRequestMethod {
+            $(
+                $(#[serde(rename = $wire)])?
+                $variant,
+            )*
+        }
+
+        impl ServerRequestMethod {
+            pub const ALL: &[Self] = &[
+                $(Self::$variant,)*
+            ];
+
+            pub fn wire_name(self) -> String {
+                serde_json::to_value(self)
+                    .expect("server request method enum always serializes")
+                    .as_str()
+                    .expect("server request method enum serializes as a string")
+                    .to_string()
+            }
+
+            pub const fn experimental_reason(self) -> Option<&'static str> {
+                match self {
+                    $(
+                        Self::$variant => {
+                            experimental_method_reason!($(#[experimental($reason)])?)
+                        }
+                    )*
+                }
+            }
+        }
+
         impl ServerRequest {
             pub fn id(&self) -> &RequestId {
                 match self {
@@ -1379,7 +1464,8 @@ macro_rules! server_request_definitions {
 macro_rules! server_notification_definitions {
     (
         $(
-            $(#[$variant_meta:meta])*
+            $(#[experimental($reason:expr)])?
+            $(#[doc = $variant_doc:literal])*
             $variant:ident $(=> $wire:literal)? ( $payload:ty )
         ),* $(,)?
     ) => {
@@ -1399,10 +1485,49 @@ macro_rules! server_notification_definitions {
         #[strum(serialize_all = "camelCase")]
         pub enum ServerNotification {
             $(
-                $(#[$variant_meta])*
+                $(#[experimental($reason)])?
+                $(#[doc = $variant_doc])*
                 $(#[serde(rename = $wire)] #[ts(rename = $wire)] #[strum(serialize = $wire)])?
                 $variant($payload),
             )*
+        }
+
+        /// A registered server-to-client notification wire method.
+        ///
+        /// This enum is generated from the same registry that defines
+        /// `ServerNotification`, so protocol consumers can enumerate method
+        /// facts without maintaining a second list of wire names.
+        #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+        #[serde(rename_all = "camelCase")]
+        pub enum ServerNotificationMethod {
+            $(
+                $(#[serde(rename = $wire)])?
+                $variant,
+            )*
+        }
+
+        impl ServerNotificationMethod {
+            pub const ALL: &[Self] = &[
+                $(Self::$variant,)*
+            ];
+
+            pub fn wire_name(self) -> String {
+                serde_json::to_value(self)
+                    .expect("server notification method enum always serializes")
+                    .as_str()
+                    .expect("server notification method enum serializes as a string")
+                    .to_string()
+            }
+
+            pub const fn experimental_reason(self) -> Option<&'static str> {
+                match self {
+                    $(
+                        Self::$variant => {
+                            experimental_method_reason!($(#[experimental($reason)])?)
+                        }
+                    )*
+                }
+            }
         }
 
         impl ServerNotification {
@@ -1421,6 +1546,12 @@ macro_rules! server_notification_definitions {
             }
         }
 
+        pub(crate) const EXPERIMENTAL_SERVER_NOTIFICATIONS: &[&str] = &[
+            $(
+                experimental_method_entry!($(#[experimental($reason)])? $(=> $wire)?),
+            )*
+        ];
+
         #[allow(clippy::vec_init_then_push)]
         pub fn export_server_notification_schemas(
             out_dir: &::std::path::Path,
@@ -1435,19 +1566,66 @@ macro_rules! server_notification_definitions {
 macro_rules! client_notification_definitions {
     (
         $(
-            $(#[$variant_meta:meta])*
-            $variant:ident $( ( $payload:ty ) )?
+            $(#[experimental($reason:expr)])?
+            $(#[doc = $variant_doc:literal])*
+            $variant:ident $(=> $wire:literal)? $( ( $payload:ty ) )?
         ),* $(,)?
     ) => {
-        #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS, Display)]
+        #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS, Display, ExperimentalApi)]
         #[serde(tag = "method", content = "params", rename_all = "camelCase")]
         #[strum(serialize_all = "camelCase")]
         pub enum ClientNotification {
             $(
-                $(#[$variant_meta])*
+                $(#[experimental($reason)])?
+                $(#[doc = $variant_doc])*
+                $(#[serde(rename = $wire)] #[ts(rename = $wire)] #[strum(serialize = $wire)])?
                 $variant $( ( $payload ) )?,
             )*
         }
+
+        /// A registered client-to-server notification wire method.
+        ///
+        /// This enum is generated from the same registry that defines
+        /// `ClientNotification`, so protocol consumers can enumerate method
+        /// facts without maintaining a second list of wire names.
+        #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+        #[serde(rename_all = "camelCase")]
+        pub enum ClientNotificationMethod {
+            $(
+                $(#[serde(rename = $wire)])?
+                $variant,
+            )*
+        }
+
+        impl ClientNotificationMethod {
+            pub const ALL: &[Self] = &[
+                $(Self::$variant,)*
+            ];
+
+            pub fn wire_name(self) -> String {
+                serde_json::to_value(self)
+                    .expect("client notification method enum always serializes")
+                    .as_str()
+                    .expect("client notification method enum serializes as a string")
+                    .to_string()
+            }
+
+            pub const fn experimental_reason(self) -> Option<&'static str> {
+                match self {
+                    $(
+                        Self::$variant => {
+                            experimental_method_reason!($(#[experimental($reason)])?)
+                        }
+                    )*
+                }
+            }
+        }
+
+        pub(crate) const EXPERIMENTAL_CLIENT_NOTIFICATIONS: &[&str] = &[
+            $(
+                experimental_method_entry!($(#[experimental($reason)])? $(=> $wire)?),
+            )*
+        ];
 
         pub fn export_client_notification_schemas(
             _out_dir: &::std::path::Path,
@@ -1661,11 +1839,11 @@ server_notification_definitions! {
     PlanDelta => "item/plan/delta" (v2::PlanDeltaNotification),
     /// Stream base64-encoded stdout/stderr chunks for a running `command/exec` session.
     CommandExecOutputDelta => "command/exec/outputDelta" (v2::CommandExecOutputDeltaNotification),
-    /// Stream base64-encoded stdout/stderr chunks for a running `process/spawn` session.
     #[experimental("process/outputDelta")]
+    /// Stream base64-encoded stdout/stderr chunks for a running `process/spawn` session.
     ProcessOutputDelta => "process/outputDelta" (v2::ProcessOutputDeltaNotification),
-    /// Final exit notification for a `process/spawn` session.
     #[experimental("process/exited")]
+    /// Final exit notification for a `process/spawn` session.
     ProcessExited => "process/exited" (v2::ProcessExitedNotification),
     CommandExecutionOutputDelta => "item/commandExecution/outputDelta" (v2::CommandExecutionOutputDeltaNotification),
     TerminalInteraction => "item/commandExecution/terminalInteraction" (v2::TerminalInteractionNotification),
@@ -1720,10 +1898,7 @@ server_notification_definitions! {
     WindowsWorldWritableWarning => "windows/worldWritableWarning" (v2::WindowsWorldWritableWarningNotification),
     WindowsSandboxSetupCompleted => "windowsSandbox/setupCompleted" (v2::WindowsSandboxSetupCompletedNotification),
 
-    #[serde(rename = "account/login/completed")]
-    #[ts(rename = "account/login/completed")]
-    #[strum(serialize = "account/login/completed")]
-    AccountLoginCompleted(v2::AccountLoginCompletedNotification),
+    AccountLoginCompleted => "account/login/completed" (v2::AccountLoginCompletedNotification),
 
 }
 

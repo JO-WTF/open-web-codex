@@ -31,9 +31,8 @@ or diverged paths. All non-generated source candidates are classified, core
 seams have been replayed and validated, and the machine-readable evidence is
 in `.sync/codex-customization-inventory.json`.
 
-The next convergence action is to use the Profile Host provisioner from the
-native Platform Server spawn path. Once that path exists,
-`utils/home-dir` can return to official missing-`CODEX_HOME` semantics.
+The next convergence action is to complete Batch 1 (`M0-B03/B04` policy generation and
+Web bundle consumption) while keeping new `codex/` differences classified.
 
 Use `scripts/codex-customization-status.sh` as the inventory input. It compares
 `HEAD:codex` directly with the current `codex-upstream/main` tree; this
@@ -78,7 +77,7 @@ artifacts, tests, and snapshots follow the owning source seam.
 | `retain-core`: compatibility and capability | `app-server-protocol/src/capability_manifest.rs`, `protocol/legacy_response_tool_history.rs`, narrow integration in `thread_history.rs`, `initialize_processor.rs` | The Manifest gates Platform features; legacy history preserves supported existing Profiles. Neither is browser implementation code. |
 | `upstream-first, then replay` | `core/src/{codex_thread.rs,guardian/review_session.rs,session/**}`, `protocol/src/{openai_models.rs,protocol.rs}`, `app-server/src/request_processors/turn_processor.rs`, `app-server/README.md`, TUI thread-routing/event files | These files contain substantial official SessionIo, AgentRunner, model-catalog, rate-limit, paging, fork, and TUI behavior. Preserve upstream structure and reapply only the adjacent retained seam. |
 | `retain-core`: Provider propagation followers | `core/src/session/handlers.rs`, `exec/src/lib.rs`, `login/src/auth_env_telemetry.rs`, `app-server` remote-thread/turn tests, and `core` stream/header tests | These changes propagate the selected Provider, preserve Provider-scoped cache test isolation, or satisfy the expanded Provider metadata shape. They follow the owning Provider seam and are not independent feature surfaces. |
-| `move-out` | `utils/home-dir/src/lib.rs` missing-`CODEX_HOME` auto-creation | Profile creation belongs to the Platform Host. `apps/web/crates/profile-host::ensure_profile_home` now provisions the directory before the transitional app-server spawn. Return this utility to official validation semantics when the native Platform Host spawn path also uses this crate. |
+| `move-out` | `utils/home-dir/src/lib.rs` missing-`CODEX_HOME` auto-creation | Profile creation belongs to the Platform Host. `apps/web/crates/profile-host::ensure_profile_home` provisions the directory before transitional Tauri and native Platform Server spawn; `utils/home-dir` has returned to official missing-`CODEX_HOME` rejection semantics. |
 | Derived artifacts and tests | Schema, TypeScript, fixtures, snapshots, lockfiles, and focused tests not named above | They follow the owning source seam. Regenerate artifacts and update tests/snapshots through their normal build/test commands; do not classify or replay them independently. |
 
 ## Required boundaries

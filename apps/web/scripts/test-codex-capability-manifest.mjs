@@ -9,7 +9,7 @@ const fixture = JSON.parse(
   readFileSync(resolve("contracts/codex/fixtures/capability-manifest.v1.json"), "utf8"),
 );
 const registry = JSON.parse(
-  readFileSync(resolve("contracts/codex/capability-ids.v1.json"), "utf8"),
+  readFileSync(resolve("contracts/codex/policy/capability-ids.v1.json"), "utf8"),
 );
 
 const parsed = parseCapabilityManifest(fixture);
