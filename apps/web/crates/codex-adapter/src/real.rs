@@ -5,6 +5,38 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{AdapterError, CodexAdapter, HealthStatus};
 
+#[derive(Default)]
+struct SseFrameDecoder {
+    buffer: Vec<u8>,
+}
+
+impl SseFrameDecoder {
+    fn push(&mut self, chunk: &[u8]) -> Vec<Vec<u8>> {
+        self.buffer.extend_from_slice(chunk);
+        let mut frames = Vec::new();
+        while let Some(frame_end) = find_frame_end(&self.buffer) {
+            frames.push(self.buffer.drain(..frame_end).collect());
+        }
+        frames
+    }
+}
+
+fn find_frame_end(buffer: &[u8]) -> Option<usize> {
+    let lf = buffer
+        .windows(2)
+        .position(|window| window == b"\n\n")
+        .map(|index| index + 2);
+    let crlf = buffer
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|index| index + 4);
+    match (lf, crlf) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(end), None) | (None, Some(end)) => Some(end),
+        (None, None) => None,
+    }
+}
+
 /// Adapter that proxies JSON-RPC and events to a real (or Tauri-daemon)
 /// HTTP endpoint.
 pub struct RealCodexAdapter {
@@ -37,17 +69,15 @@ impl CodexAdapter for RealCodexAdapter {
             )));
         }
 
-        let raw: Value = resp.json().await.map_err(|e| {
-            AdapterError::Rpc(format!("failed to parse health response: {e}"))
-        })?;
+        let raw: Value = resp
+            .json()
+            .await
+            .map_err(|e| AdapterError::Rpc(format!("failed to parse health response: {e}")))?;
 
         Ok(HealthStatus {
             ok: raw["ok"].as_bool().unwrap_or(false),
             version: raw["version"].as_str().unwrap_or("unknown").to_string(),
-            name: raw["name"]
-                .as_str()
-                .unwrap_or("codex-daemon")
-                .to_string(),
+            name: raw["name"].as_str().unwrap_or("codex-daemon").to_string(),
         })
     }
 
@@ -66,9 +96,10 @@ impl CodexAdapter for RealCodexAdapter {
             .await?;
 
         let status = resp.status();
-        let result: Value = resp.json().await.map_err(|e| {
-            AdapterError::Rpc(format!("failed to parse RPC response: {e}"))
-        })?;
+        let result: Value = resp
+            .json()
+            .await
+            .map_err(|e| AdapterError::Rpc(format!("failed to parse RPC response: {e}")))?;
 
         if status.is_success() {
             if let Some(error) = result.get("error") {
@@ -88,10 +119,7 @@ impl CodexAdapter for RealCodexAdapter {
         }
     }
 
-    async fn subscribe_events(
-        &self,
-        sender: UnboundedSender<Vec<u8>>,
-    ) -> Result<(), AdapterError> {
+    async fn subscribe_events(&self, sender: UnboundedSender<Vec<u8>>) -> Result<(), AdapterError> {
         let response = self
             .client
             .get(format!("{}/api/events", self.base_url))
@@ -101,11 +129,14 @@ impl CodexAdapter for RealCodexAdapter {
         let mut stream = response.bytes_stream();
 
         tokio::spawn(async move {
+            let mut decoder = SseFrameDecoder::default();
             while let Some(chunk) = stream.next().await {
                 match chunk {
                     Ok(bytes) => {
-                        if sender.send(bytes.to_vec()).is_err() {
-                            break;
+                        for frame in decoder.push(&bytes) {
+                            if sender.send(frame).is_err() {
+                                return;
+                            }
                         }
                     }
                     Err(e) => {
@@ -117,5 +148,34 @@ impl CodexAdapter for RealCodexAdapter {
         });
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_frames_split_across_http_chunks() {
+        let mut decoder = SseFrameDecoder::default();
+
+        assert!(decoder.push(b"data: {\"method\":\"one\"}").is_empty());
+        assert_eq!(
+            decoder.push(b"\n\ndata: {\"method\":\"two\"}\n\n"),
+            vec![
+                b"data: {\"method\":\"one\"}\n\n".to_vec(),
+                b"data: {\"method\":\"two\"}\n\n".to_vec(),
+            ],
+        );
+    }
+
+    #[test]
+    fn decodes_crlf_frames() {
+        let mut decoder = SseFrameDecoder::default();
+
+        assert_eq!(
+            decoder.push(b"data: {}\r\n\r\n"),
+            vec![b"data: {}\r\n\r\n".to_vec()],
+        );
     }
 }

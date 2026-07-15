@@ -827,6 +827,7 @@ dependencies = [
  "objc2-app-kit",
  "objc2-av-foundation",
  "objc2-foundation",
+ "open-web-codex-profile-host",
  "portable-pty",
  "reqwest 0.12.28",
  "serde",
@@ -3697,6 +3698,10 @@ dependencies = [
  "tracing",
  "uuid",
 ]
+
+[[package]]
+name = "open-web-codex-profile-host"
+version = "0.1.0"
 
 [[package]]
 name = "open-web-codex-server"

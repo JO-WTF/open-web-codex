@@ -4,7 +4,7 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 计划基线 | 2026-07-12 |
+| 计划基线 | 2026-07-14 |
 | 当前里程碑 | M0 合同固化与 M1 平台纵向骨架（并行） |
 | 默认分支 | `main` |
 | Web 目录 | `apps/web` |
@@ -13,9 +13,9 @@
 | 能力基线 | `docs/capability-baseline.md` |
 | 上游同步 | `docs/codex-upstream-sync.md` |
 
-Codex subtree 已同步到记录的官方 `openai/codex` 提交 `9e552e9d15ba`，状态脚本报告待集成提交和记录基线以上定制提交均为 0。Capability Manifest v1 类型、Schema 和 `initialize` 返回已落地，真实本地 app-server Smoke 观察到 17 个能力声明。
+Codex subtree 已同步到记录的官方 `openai/codex` 提交 `1bbdb32789e1`，状态脚本报告待集成提交和记录基线以上定制提交均为 0。第三方 Provider、TUI Provider、Capability Manifest 和旧历史兼容 seam 已按 patch map 重放，并已通过 app-server Schema 再生、Provider/TUI scoped tests、真实 app-server Manifest Smoke 和 Web contract check。Capability Manifest v1 类型、Schema 和 `initialize` 已验证可用，真实本地 app-server Smoke 返回 18 个能力声明。
 
-M1 平台已建立 Axum/SQLx/PostgreSQL workspace、Fake/Real Codex Adapter，以及 bootstrap/session、organization/membership、project、Task、Run 和 Run event 的首批路由与迁移。这仍是纵向原型：浏览器仍主要连接 loopback RPC/SSE Gateway；Profile Host、Git Worktree/Runner、持久审批、Lease、审计、完整 RBAC、幂等调度和生产 WebSocket replay 尚未完成。当前 `/api/rpc`、permissive CORS 和 SSE query token 只能用于本地迁移期，不得作为多用户 Beta 边界。
+M1 平台已建立 Axum/SQLx/PostgreSQL workspace、Fake/Real Codex Adapter，以及 bootstrap/session、organization/membership、project、Task、Run 和版本化 Run event 投影。Item/Delta 会先以单调 sequence、稳定平台事件类型和脱敏 UI payload 落库，再向浏览器广播；Web reducer 可用 cursor 投影恢复活动状态并以 Codex Thread 历史校准终态。这仍是纵向原型：浏览器仍主要连接 loopback RPC/SSE Gateway；Profile Host、Git Worktree/Runner、持久审批、Lease、审计、完整 RBAC、幂等调度和认证 WebSocket 尚未完成。当前 `/api/rpc`、permissive CORS 和 SSE query token 只能用于本地迁移期，不得作为多用户 Beta 边界。
 
 本计划只记录当前有效工作。任务完成必须有代码、测试和运行证据，不能仅凭源码检查将 Runtime 或恢复能力标记为完成。
 
@@ -137,8 +137,8 @@ M0-A 官方同步稳定（已完成当前 checkpoint）
 | M0-A05 | P0/M | [x] | 审查 CodexMonitor Web 迁移边界并保留过渡实现 | ADR、Tauri boundary 与独立 server 结构存在 |
 | M0-A06 | P0/M | [x] | 审查 Codex Fork Provider WIP | Patch Map 已将提交归类为 upstreamed/retain/drop/check |
 | M0-A07 | P0/L | [x] | 创建官方同步分支并合并选定 `openai/codex` checkpoint | subtree 已同步到 `9e552e9d15ba`，状态为 synchronized |
-| M0-A08 | P0/M | [x] | 将 38 个定制提交归类 | `docs/custom-codex-patch-map.md` 已建立 |
-| M0-A09 | P0/M | [ ] | 重点重验 Provider Wire API、模型缓存和当前 Provider 传播 | scoped Rust tests 通过 |
+| M0-A08 | P0/M | [x] | 将所有非生成 Codex 差异归类为 retain-core、upstreamed、move-out 或 drop，并维护可重放 seam 清单 | 每个差异有归属；每个 retain-core seam 有路径、原因、重放顺序、测试和删除条件 |
+| M0-A09 | P0/M | [x] | 重点重验 Provider Wire API、模型缓存和当前 Provider 传播 | codex-api、model-provider、models-manager、app-server model_list 和 TUI scoped tests 通过；真实 Manifest Smoke 和 Web contract check 通过 |
 | M0-A10 | P1/S | [-] | 固定首个兼容 Codex commit、Rust toolchain、target 和 binary digest | `.sync` 已固定 commit；兼容矩阵和 digest 待补 |
 
 M0-A07 拆分建议：
@@ -288,8 +288,8 @@ Alpha 可以只有一名 Owner，但必须使用正式 Session/RBAC 接口，不
 | M1-E03 | P0/L | 编排 Mirror→Worktree→Profile→Thread→running | 失败补偿测试 |
 | M1-E04 | P0/M | Task 与 Codex Thread 稳定映射 | 继续 Run 不误建 Thread |
 | M1-E05 | P0/M | Turn start/steer/interrupt 适配 | 活动 Turn 规则测试 |
-| M1-E06 | P0/L | app-server event→平台事件投影 | 关键 Item/Delta tests |
-| M1-E07 | P0/M | 单 Task 单调 sequence 与批量落库 | 并发序号无重复 |
+| M1-E06 | P0/L | [x] app-server event→平台事件投影 | 关键 Item/Delta tests |
+| M1-E07 | P0/M | [x] 单 Task 单调 sequence 与顺序落库 | 数据库 identity 唯一索引与 cursor reducer tests |
 | M1-E08 | P0/M | 认证 WebSocket、订阅授权和 cursor replay | 断线/重复/越权测试 |
 | M1-E09 | P0/M | 大输出截断和 Artifact 转存 | 单事件/单 Task 上限测试 |
 | M1-E10 | P0/M | pending Approval 落库后再向 Web 推送 | 崩溃窗口测试 |
@@ -610,6 +610,16 @@ GET/POST/PATCH/DELETE /api/codex/profiles/:id/skills
 ## 13. 建议的下一开发批次
 
 当前不应扩展完整 Studio 或继续围绕旧 RPC/SSE Gateway 增加产品功能。建议按以下顺序执行：
+
+### Batch 0：Codex 定制收敛与可重放记录
+
+1. 完成 `M0-A08`：逐一分类全部非生成 `codex/` 差异；先核验上游是否已有等价行为，再决定 retain-core、upstreamed、move-out 或 drop。
+2. 以 `docs/custom-codex-patch-map.md` 作为当前 seam 事实：保留 Chat 翻译、Provider 元数据、模型目录/缓存、app-server Provider API、TUI Provider 工作流、旧历史兼容和 Capability Manifest。
+3. 将 Chat 适配集中于 `codex-api`、Provider 事实集中于 Provider crates、协议集中于 app-server protocol、TUI 集中于独立 Provider 模块；将 `core` 收敛到最小 transport dispatch。
+4. 不再将 Tauri、raw RPC proxy、Profile/授权/浏览器状态等平台逻辑加入 `codex/`；迁移时先在 `apps/web` 建立类型化 Host/DTO 边界。
+5. 用一次当前官方 Codex 更新演练验证重放顺序：Provider 元数据/Chat transport → 模型目录/缓存 → app-server Provider API → TUI → 生成物 → Web contract/真实 Smoke。
+
+**完成证据：** 非生成差异全部已分类；仅批准 seam 保留在 Runtime；每个 seam 的 scoped tests、生成合同和 Provider/TUI smoke 均通过；最新官方更新可按清单重放。
 
 ### Batch 1：生成式合同与安全平台边界
 

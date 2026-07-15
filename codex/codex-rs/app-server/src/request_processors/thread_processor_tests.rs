@@ -483,6 +483,7 @@ mod thread_processor_behavior_tests {
             cwd: PathBuf::from("/tmp"),
             cli_version: "0.0.0".to_string(),
             source: SessionSource::Cli,
+            history_mode: Default::default(),
             thread_source: Some(codex_protocol::protocol::ThreadSource::User),
             agent_nickname: None,
             agent_role: None,
@@ -676,7 +677,6 @@ mod thread_processor_behavior_tests {
             auth: None,
             aws: None,
             wire_api: WireApi::Responses,
-            models: Vec::new(),
             query_params: None,
             http_headers: None,
             env_http_headers: None,
@@ -686,6 +686,7 @@ mod thread_processor_behavior_tests {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: true,
+            models: Vec::new(),
         };
         let config_manager = ConfigManager::new(
             temp_dir.path().to_path_buf(),
@@ -777,8 +778,8 @@ mod thread_processor_behavior_tests {
                     developer_instructions: None,
                 },
             },
-            multi_agent_mode: Default::default(),
             session_source: SessionSource::Cli,
+            history_mode: Default::default(),
             forked_from_thread_id: None,
             parent_thread_id: None,
             thread_source: None,
@@ -1015,6 +1016,7 @@ mod thread_processor_behavior_tests {
 
         let line = RolloutLine {
             timestamp: timestamp.clone(),
+            ordinal: None,
             item: RolloutItem::SessionMeta(SessionMetaLine {
                 meta: session_meta.clone(),
                 git: None,
@@ -1082,6 +1084,7 @@ mod thread_processor_behavior_tests {
 
         let line = RolloutLine {
             timestamp,
+            ordinal: None,
             item: RolloutItem::SessionMeta(SessionMetaLine {
                 meta: session_meta,
                 git: None,
@@ -1124,6 +1127,7 @@ mod thread_processor_behavior_tests {
 
         let line = RolloutLine {
             timestamp,
+            ordinal: None,
             item: RolloutItem::SessionMeta(SessionMetaLine {
                 meta: session_meta,
                 git: None,

@@ -57,11 +57,11 @@ security.
 | Surface | Current state | Production gap |
 | --- | --- | --- |
 | Independent server | Axum server and Cargo workspace build structure exist | deployment/config hardening and end-to-end startup gate remain |
-| Persistence | PostgreSQL migrations cover users/sessions, organizations/memberships, projects, tasks, runs and run events | Profiles, Workspaces, approvals, leases, audit, artifacts, jobs and complete constraints are missing |
+| Persistence | PostgreSQL migrations cover users/sessions, organizations/memberships, projects, tasks, runs and versioned run-event projections with monotonic replay sequence | Profiles, Workspaces, approvals, leases, audit, artifacts, jobs, retention and complete constraints are missing |
 | Authentication | bootstrap, password session creation and auth extractor exist | HttpOnly-only session flow, CSRF, logout/revocation, rate limiting and complete tests are missing |
 | Authorization | membership checks exist on part of the organization surface | centralized resource/action RBAC and cross-user denial matrix are missing |
 | Codex bridge | Fake/Real adapter and event fan-out exist | current Real adapter proxies legacy daemon RPC/SSE; raw `/api/rpc`, permissive CORS and query-token SSE are prototype-only and violate the production boundary |
-| Task/Run | CRUD/start/cancel/message and lifecycle projection exist | worktree provisioning, Profile Host, idempotent scheduler, approvals, recovery and monotonic replay contract are incomplete |
+| Task/Run | CRUD/start/cancel/message, safe Item/Delta projection, monotonic cursor replay and Thread-history reconciliation exist | worktree provisioning, Profile Host, idempotent scheduler, approvals, authenticated subscriptions and restart E2E remain incomplete |
 | Browser | loopback MVP can connect workspace, start Thread and send text | it still targets the local preview Gateway and accepts server paths; it is not the authenticated multi-user product UI |
 
 ## Immediate capability gates

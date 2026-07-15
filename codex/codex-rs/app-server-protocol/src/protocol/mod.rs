@@ -4,8 +4,10 @@
 pub mod common;
 pub mod event_mapping;
 pub mod item_builders;
+mod legacy_response_tool_history;
 mod mappers;
 mod serde_helpers;
 pub mod thread_history;
+pub mod thread_history_projection;
 pub mod v1;
 pub mod v2;

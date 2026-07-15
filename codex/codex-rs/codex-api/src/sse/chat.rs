@@ -154,7 +154,9 @@ async fn finish_chat_stream(
 
     for tool_call in tool_calls {
         let item = ResponseItem::FunctionCall {
-            id: Some(tool_call.id.clone()),
+            id: Some(codex_protocol::ResponseItemId::from_server(
+                tool_call.id.clone(),
+            )),
             name: tool_call.function.name,
             namespace: None,
             arguments: tool_call.function.arguments,
@@ -198,7 +200,7 @@ async fn finish_chat_stream(
 fn assistant_message_item(response_id: Option<&str>, text: String) -> ResponseItem {
     let id = response_id.unwrap_or("chatcmpl").to_string() + "-message";
     ResponseItem::Message {
-        id: Some(id),
+        id: Some(codex_protocol::ResponseItemId::from_server(id)),
         role: "assistant".to_string(),
         content: if text.is_empty() {
             Vec::new()

@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_file_system::FileSystemSandboxContext;
+pub use codex_file_system::WalkOptions;
+pub use codex_file_system::WalkOutcome;
 use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
 use codex_shell_command::shell_detect::DetectedShell;
@@ -22,6 +24,7 @@ pub const EXEC_OUTPUT_DELTA_METHOD: &str = "process/output";
 pub const EXEC_EXITED_METHOD: &str = "process/exited";
 pub const EXEC_CLOSED_METHOD: &str = "process/closed";
 pub const ENVIRONMENT_INFO_METHOD: &str = "environment/info";
+pub const ENVIRONMENT_STATUS_METHOD: &str = "environment/status";
 pub const FS_READ_FILE_METHOD: &str = "fs/readFile";
 pub const FS_OPEN_METHOD: &str = "fs/open";
 pub const FS_READ_BLOCK_METHOD: &str = "fs/readBlock";
@@ -31,12 +34,15 @@ pub const FS_CREATE_DIRECTORY_METHOD: &str = "fs/createDirectory";
 pub const FS_GET_METADATA_METHOD: &str = "fs/getMetadata";
 pub const FS_CANONICALIZE_METHOD: &str = "fs/canonicalize";
 pub const FS_READ_DIRECTORY_METHOD: &str = "fs/readDirectory";
+pub const FS_WALK_METHOD: &str = "fs/walk";
 pub const FS_REMOVE_METHOD: &str = "fs/remove";
 pub const FS_COPY_METHOD: &str = "fs/copy";
 /// JSON-RPC request method for executor-side HTTP requests.
 pub const HTTP_REQUEST_METHOD: &str = "http/request";
 /// JSON-RPC notification method for streamed executor HTTP response bodies.
 pub const HTTP_REQUEST_BODY_DELTA_METHOD: &str = "http/request/bodyDelta";
+/// Maximum decoded response-body bytes carried by one streamed HTTP notification.
+pub const MAX_HTTP_BODY_DELTA_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -76,6 +82,25 @@ pub struct EnvironmentInfo {
     /// Working directory inherited by the exec-server process.
     #[serde(default)]
     pub cwd: Option<PathUri>,
+}
+
+/// Status returned by an initialized exec-server connection.
+///
+/// The response is intentionally small today. New status details can be added
+/// without changing the method used by clients to verify that an initialized
+/// exec-server connection is still responsive.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentStatus {
+    pub status: EnvironmentStatusKind,
+}
+
+/// High-level status reported by exec-server itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EnvironmentStatusKind {
+    /// The connection is initialized and exec-server can handle requests.
+    Ready,
 }
 
 impl EnvironmentInfo {
@@ -372,6 +397,16 @@ pub struct FsReadDirectoryResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct FsWalkParams {
+    pub path: PathUri,
+    pub options: WalkOptions,
+    pub sandbox: Option<FileSystemSandboxContext>,
+}
+
+pub type FsWalkResponse = WalkOutcome;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FsRemoveParams {
     pub path: PathUri,
     pub recursive: Option<bool>,
@@ -406,6 +441,17 @@ pub struct HttpHeader {
     pub value: String,
 }
 
+/// Redirect behavior for an executor-side HTTP request.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HttpRedirectPolicy {
+    /// Follow redirects using the HTTP client's normal limits.
+    #[default]
+    Follow,
+    /// Return the redirect response without following its location.
+    Stop,
+}
+
 /// Executor-side HTTP request envelope.
 ///
 /// This intentionally stays transport-shaped rather than MCP-shaped so callers
@@ -430,6 +476,9 @@ pub struct HttpRequestParams {
     /// millisecond deadline.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    /// Whether the executor should follow HTTP redirects.
+    #[serde(default)]
+    pub redirect_policy: HttpRedirectPolicy,
     /// Caller-chosen stream id for `http/request/bodyDelta` notifications.
     ///
     /// The id must remain unique on a connection until the terminal body delta
@@ -500,6 +549,8 @@ pub struct ExecExitedNotification {
     pub process_id: ProcessId,
     pub seq: u64,
     pub exit_code: i32,
+    #[serde(default)]
+    pub sandbox_denied: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -537,6 +588,7 @@ mod base64_bytes {
 #[cfg(test)]
 mod tests {
     use super::EnvironmentInfo;
+    use super::ExecExitedNotification;
     use super::ExecParams;
     use super::FsReadFileParams;
     use super::HttpRequestParams;
@@ -545,6 +597,11 @@ mod tests {
     use codex_file_system::FileSystemSandboxContext;
     use codex_network_proxy::ManagedNetworkSandboxContext;
     use codex_protocol::models::PermissionProfile;
+    use codex_protocol::permissions::FileSystemAccessMode;
+    use codex_protocol::permissions::FileSystemPath;
+    use codex_protocol::permissions::FileSystemSandboxEntry;
+    use codex_protocol::permissions::FileSystemSandboxPolicy;
+    use codex_protocol::permissions::NetworkSandboxPolicy;
     use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
@@ -643,6 +700,38 @@ mod tests {
     }
 
     #[test]
+    fn filesystem_protocol_round_trips_permission_paths_as_uris() {
+        let native_cwd = std::env::current_dir().expect("current directory");
+        let cwd = PathUri::from_host_native_path(&native_cwd).expect("cwd URI");
+        let mut file_system_policy =
+            FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: native_cwd.try_into().expect("absolute cwd"),
+                },
+                access: FileSystemAccessMode::Read,
+            }]);
+        file_system_policy.glob_scan_max_depth = Some(2);
+        let permissions = PermissionProfile::from_runtime_permissions(
+            &file_system_policy,
+            NetworkSandboxPolicy::Restricted,
+        );
+        let sandbox =
+            FileSystemSandboxContext::from_permission_profile_with_cwd(permissions, cwd.clone());
+
+        let serialized = serde_json::to_value(&sandbox).expect("serialize sandbox");
+
+        assert_eq!(
+            serialized["permissions"]["file_system"]["entries"][0]["path"]["path"],
+            serde_json::json!(cwd.to_string())
+        );
+        assert_eq!(
+            serde_json::from_value::<FileSystemSandboxContext>(serialized)
+                .expect("deserialize sandbox"),
+            sandbox
+        );
+    }
+
+    #[test]
     fn http_request_timeout_treats_omitted_and_null_as_no_timeout() {
         let omitted: HttpRequestParams = serde_json::from_value(serde_json::json!({
             "method": "GET",
@@ -680,5 +769,17 @@ mod tests {
             ),
             ("req-explicit-timeout", Some(1234))
         );
+    }
+
+    #[test]
+    fn exited_notification_accepts_legacy_payload_without_sandbox_denied() {
+        let notification: ExecExitedNotification = serde_json::from_value(serde_json::json!({
+            "processId": "proc-1",
+            "seq": 3,
+            "exitCode": 1,
+        }))
+        .expect("legacy exited notification should deserialize");
+
+        assert_eq!(notification.sandbox_denied, None);
     }
 }

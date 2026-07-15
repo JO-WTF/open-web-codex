@@ -6,4 +6,4 @@ import type { MethodSet } from "./MethodSet";
 import type { StructuredReason } from "./StructuredReason";
 import type { JsonValue } from "./serde_json/JsonValue";
 
-export type CapabilityDeclaration = { id: string, version: string, status: CapabilityStatus, methods: MethodSet, limits?: { [key in string]?: JsonValue } | null, reason?: StructuredReason | null, experimental?: boolean, };
+export type CapabilityDeclaration = { id: string, version: string, status: CapabilityStatus, methods: MethodSet, limits?: { [key in string]?: JsonValue }, reason?: StructuredReason, experimental?: boolean, };

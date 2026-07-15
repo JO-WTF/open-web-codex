@@ -167,7 +167,6 @@ async fn run_snapshot_command_with_options(
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                model_provider_id: None,
                 environments: Some(local_selections(cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
@@ -266,7 +265,6 @@ async fn run_shell_command_snapshot_with_options(
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                model_provider_id: None,
                 environments: Some(local_selections(cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
@@ -346,7 +344,6 @@ async fn run_tool_turn_on_harness(
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                model_provider_id: None,
                 environments: Some(local_selections(cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
@@ -590,7 +587,6 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                model_provider_id: None,
                 environments: Some(local_selections(cwd.clone())),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),

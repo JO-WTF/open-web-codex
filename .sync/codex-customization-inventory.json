@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Tracks the current official-tree comparison and convergence classification progress for codex/.",
+  "comparison": {
+    "upstreamRef": "codex-upstream/main",
+    "upstreamCommit": "1bbdb32789e1f79932df44941236ea3658f6e965",
+    "localTree": "HEAD:codex",
+    "observedAt": "2026-07-15T13:02:39Z",
+    "differenceCount": 247,
+    "addedLocally": 161,
+    "modified": 86,
+    "missingLocally": 0,
+    "upstreamOnly": 0,
+    "localOnly": 247,
+    "diverged": 0
+  },
+  "progress": {
+    "state": "official-sync-validation-in-progress",
+    "classificationSource": "docs/custom-codex-patch-map.md",
+    "classifiedRetainCore": [
+      "provider-chat-transport",
+      "provider-metadata-models",
+      "provider-app-server-api",
+      "provider-tui-workflows",
+      "legacy-response-tool-history",
+      "capability-manifest"
+    ],
+    "sourceCandidates": {
+      "localOnly": 49,
+      "diverged": 25
+    },
+    "completed": [
+      "Separated pending official updates from candidate local changes using the integrated upstream base.",
+      "Mapped the first-pass non-generated source candidates to retained seams, upstream-first replay, or verification.",
+      "Classified Turn-level Provider override and Provider propagation followers as retained; classified missing-CODEX_HOME auto-creation as Platform Host work to move out of codex/.",
+      "Completed first-pass classification of all non-generated local-only and diverged source candidates; generated artifacts and focused tests follow their owning seam.",
+      "Added apps/web Profile Host provisioning before the transitional app-server spawn so Codex can return to official missing-CODEX_HOME validation semantics.",
+      "Synchronized the Codex subtree through official commit 1bbdb32789e1f79932df44941236ea3658f6e965 and replayed the documented core seams."
+    ],
+    "validation": {
+      "format": "passed",
+      "appServerSchema": "passed",
+      "protocolTests": "passed",
+      "providerAndTuiTests": "passed",
+      "realAppServerSmoke": "passed",
+      "webContractCheck": "passed"
+    },
+    "nextAction": "Use the Profile Host provisioner from the native platform spawn path before returning utils/home-dir to official semantics."
+  }
+}

@@ -329,12 +329,10 @@ impl CatalogRequestProcessor {
             }
             let provider =
                 create_model_provider(provider_info.clone(), Some(self.auth_manager.clone()));
-            let refresh_strategy = if force_refresh {
+            let refresh_strategy = if force_refresh || !provider_info.requires_openai_auth {
                 codex_models_manager::manager::RefreshStrategy::Online
-            } else if provider_info.requires_openai_auth {
-                codex_models_manager::manager::RefreshStrategy::OnlineIfUncached
             } else {
-                codex_models_manager::manager::RefreshStrategy::Online
+                codex_models_manager::manager::RefreshStrategy::OnlineIfUncached
             };
             (
                 provider.models_manager(
@@ -348,6 +346,7 @@ impl CatalogRequestProcessor {
             models_manager,
             include_hidden.unwrap_or(false),
             refresh_strategy,
+            latest_config.http_client_factory(),
         )
         .await;
         let total = models.len();

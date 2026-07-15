@@ -190,6 +190,8 @@ use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::status_indicator_widget::StatusIndicatorWidget;
 pub(crate) use experimental_features_view::ExperimentalFeatureItem;
 pub(crate) use experimental_features_view::ExperimentalFeaturesView;
+pub(crate) use list_selection_view::SELECTION_TOGGLE_BLOCKED_PREFIX;
+pub(crate) use list_selection_view::SELECTION_TOGGLE_UNAVAILABLE_PREFIX;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
 
@@ -2664,7 +2666,7 @@ mod tests {
 
         while let Ok(ev) = rx.try_recv() {
             assert!(
-                !matches!(ev, AppEvent::CodexOp(Op::Interrupt { .. })),
+                !matches!(ev, AppEvent::CodexOp(Op::Interrupt)),
                 "expected Esc to not send Op::Interrupt when dismissing skill popup"
             );
         }
@@ -2675,7 +2677,7 @@ mod tests {
     }
 
     #[test]
-    fn esc_with_slash_command_popup_does_not_interrupt_task() {
+    fn esc_dismisses_slash_command_popup_without_interrupting_task() {
         let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
@@ -2691,22 +2693,34 @@ mod tests {
 
         pane.set_task_running(/*running*/ true);
 
-        // Repro: a running task + slash-command popup + Esc should not interrupt the task.
-        pane.insert_str("/");
+        // Repro: a running task + slash-command popup + Esc should dismiss the popup without
+        // interrupting the task.
+        pane.insert_str("/rev");
         assert!(
             pane.composer.popup_active(),
-            "expected command popup after typing `/`"
+            "expected command popup after typing `/rev`"
         );
 
         pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
         while let Ok(ev) = rx.try_recv() {
             assert!(
-                !matches!(ev, AppEvent::CodexOp(Op::Interrupt { .. })),
+                !matches!(ev, AppEvent::CodexOp(Op::Interrupt)),
                 "expected Esc to not send Op::Interrupt while command popup is active"
             );
         }
-        assert_eq!(pane.composer_text(), "/");
+        assert!(!pane.composer.popup_active());
+        assert_eq!(pane.composer_text(), "/rev");
+
+        let width = 60;
+        let area = Rect::new(0, 0, width, pane.desired_height(width));
+        assert_snapshot!(
+            "slash_command_popup_dismissed",
+            render_snapshot(&pane, area)
+        );
+
+        pane.insert_str("i");
+        assert!(pane.composer.popup_active());
     }
 
     #[test]
@@ -2738,7 +2752,7 @@ mod tests {
 
         while let Ok(ev) = rx.try_recv() {
             assert!(
-                !matches!(ev, AppEvent::CodexOp(Op::Interrupt { .. })),
+                !matches!(ev, AppEvent::CodexOp(Op::Interrupt)),
                 "expected Esc to not send Op::Interrupt while typing `/agent`"
             );
         }
@@ -2783,7 +2797,7 @@ mod tests {
 
         while let Ok(ev) = rx.try_recv() {
             assert!(
-                !matches!(ev, AppEvent::CodexOp(Op::Interrupt { .. })),
+                !matches!(ev, AppEvent::CodexOp(Op::Interrupt)),
                 "expected Esc release after dismissing agent picker to not interrupt"
             );
         }
@@ -2813,7 +2827,7 @@ mod tests {
         pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
         assert!(
-            matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt { .. }))),
+            matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt))),
             "expected Esc to send Op::Interrupt while a task is running"
         );
     }
@@ -2837,7 +2851,7 @@ mod tests {
 
         pane.handle_key_event(KeyEvent::new(KeyCode::F(12), KeyModifiers::NONE));
         assert!(
-            matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt { .. }))),
+            matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt))),
             "expected configured key to interrupt while `/agent` is being edited"
         );
     }

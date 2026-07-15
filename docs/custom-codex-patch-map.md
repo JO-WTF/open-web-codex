@@ -1,98 +1,131 @@
- # Custom Codex Patch Map
+# Custom Codex patch map
 
- 日期：2026-07-12
- 基线上游 Commit：`f959e7fc9832dfa0ebfb6542ab1bbf829638ac24`
- 定制源 Commit：`0de018a81223aacb6306b4f19ef7a54ee3bfcf8a`（JO-WTF/codex `open-codex` 分支）
- 上游最新 Commit：`9e552e9d15ba52bed7077d5357f3e18e330f8f38`
+This is the current, replay-oriented record of product-specific seams under
+`codex/`. It is the authority for deciding which local changes are reapplied
+after an official subtree update. Generated schemas, TypeScript definitions,
+fixtures, and snapshots are derivatives of the source seams and are not
+independent custom behavior.
 
- 本文件记录来自 `JO-WTF/codex` fork 的 38 个定制提交的分类和处理策略。
+The integrated official base is `1bbdb32789e1f79932df44941236ea3658f6e965`.
+The target is a small, explicit set of Provider Runtime and TUI seams; it is
+not a zero-diff Codex subtree.
 
- ## 分类说明
+## Long-term acceptance criteria
 
- | 分类 | 含义 |
- |------|------|
- | upstreamed | 功能已在上游被原生实现，不再需要重新应用 |
- | retain | 需要保留的定制补丁，同步后重新应用 |
- | drop | 不再需要（被新架构淘汰或无关） |
- | rewrite | 需要以不同的方式重新实现 |
+1. Every non-generated `codex/` difference is classified as `retain-core`,
+   `upstreamed`, `move-out`, or `drop`.
+2. Only the retained seams below remain after convergence. `core` keeps only
+   the minimum transport dispatch required by the Provider Runtime.
+3. The Web platform owns Profiles, credentials injection, authorization,
+   Provider CRUD orchestration, and browser DTOs. It never exposes raw
+   app-server JSON-RPC or configuration paths.
+4. A current official Codex update can be replayed in the documented order,
+   followed by generated-contract validation, focused Runtime/TUI tests, and a
+   real Provider app-server smoke.
 
- ## 定制提交清单
+## Current short-term objective
 
- ### Provider 定制（30 个提交）
+The active task is the source-difference inventory. The retained core seams
+below are recorded now; all remaining non-generated differences must be
+classified before they are moved or removed. Do not infer that a difference is
+unnecessary solely because it is outside the Provider paths: first verify
+whether current upstream already supplies its behavior.
 
- 这些是 fork 的主要工作——在 OpenAI 上游基础上增加第三方/自托管 Provider 支持。
+Use `scripts/codex-customization-status.sh` as the inventory input. It compares
+`HEAD:codex` directly with the current `codex-upstream/main` tree; this
+repository's `main` branch is never the convergence baseline.
+`.sync/codex-customization-inventory.json` records the latest comparison
+commit, counts, and classification progress. Refresh it whenever the inventory
+is updated or an official sync changes the target tree.
 
- | Commit | 描述 | 分类 | 说明 |
- |--------|------|------|------|
- | `33b2b54` | [WIP] 添加第三方 Provider 支持 | upstreamed | 上游已有 `BearerAuthProvider` 和 `models_endpoint` 模块 |
- | `5291e03` | 添加自定义 Provider 管理 | upstreamed | 上游的 Provider 管理系统已大幅演进 |
- | `4b63b68` | 修复 Provider 管理器交互 | upstreamed | 上游 TUI 和 Provider 管理已演进 |
- | `a11d213` | 改进自定义 Provider 引导输入 | upstreamed | 上游引导流程已演进 |
- | `59a36fb` | 避免 Provider 引导中空配置清除 | upstreamed | 上游已解决此类问题 |
- | `f3d6282` | 创建缺失的 CODEX_HOME 目录 | upstreamed | 上游 app-server 初始化已处理 |
- | `b83fa32` | 修复 Provider 配置序列化和 Wire API 选择 | upstreamed | 上游 Provider 配置系统已演进 |
- | `3583c3b` | 改进 Provider 管理器导航和模型刷新 | upstreamed | 上游有原生模型刷新机制 |
- | `822ba41` | 将模型列表限定到活动 Provider | upstreamed | 上游有 Provider 级模型作用域 |
- | `5cbd5d9` | 持久化 Provider 范围的模型目录 | upstreamed | 上游模型缓存已演进 |
- | `5f543a0` | 支持第三方 Provider 的 OpenAI /v1/models 格式 | upstreamed | 上游有 `bearer_auth_provider` + `models_endpoint` |
- | `5499301` | Merge PR（UI 交互问题） | upstreamed | 上游 UI 已演进 |
- | `b1685a5` | feat: 为自定义 Provider 添加上下文窗口支持 | check | 需要检查上游上下文窗口处理 |
- | `5b5d20c` | 简化 Provider 上下文窗口处理 | check | 同上 |
- | `a269992` | Merge PR（上下文窗口） | check | 同上 |
- | `22c8ff8` | 收紧 Provider 缓存身份审查 | upstreamed | 上游缓存机制已演进 |
- | `e5fd338` | Merge PR（缓存问题） | upstreamed | 上游缓存机制已演进 |
- | `e05d05b` | 审查 Provider 分支缓存间隙 | upstreamed | 上游缓存机制已演进 |
- | `8da5a67` | 改进 Provider 管理器分组 UI | drop | TUI 代码，我们的 Web 平台会替换 |
- | `5762148` | MSVC 目标跨平台通用通道恢复 | drop | TUI/codex 构建问题，不相关 |
- | `87c2d0d` | 修复损坏的 provider_popups.rs 和 MSVC 工具链 | drop | TUI 代码 |
- | `54797e8` | 添加模型级上下文窗口 TUI 配置 | drop | TUI 配置 UI，将用 Web 实现 |
- | `40bdf00` | 向 Provider 表单草稿添加 context_window 字段 | check | 数据层变更，可能需要 |
- | `fc47366` | 从 Provider 配置操作中移除 UI 消息，改用 tracing::info! | retain | 好的日志实践 |
- | `a3a5d08` | 修复 Provider 管理器弹出栈 | drop | TUI 弹出代码 |
- | `6bbb03f` | 在引导设置期间获取 Provider 模型 | upstreamed | 上游引导有原生模型获取 |
- | `3e9410d` | 添加单屏 Provider 表单 | drop | TUI 表单，用 Web 表单替换 |
- | `214749e` | 优化 Provider 表单占位符和加载状态 | drop | TUI 代码 |
- | `f65493a` | 对齐引导 Provider 设置与单页表单 | drop | TUI 代码 |
- | `ce19673` | 修复 Provider 表单视图导入 | drop | TUI 代码 |
- | `28b482e` | 为 Provider 获取导入模型端点 trait | upstreamed | 上游 API 已演进 |
- | `2ee8f72` | 重新导出 Provider 模型获取助手 | upstreamed | 上游 API 已演进 |
- | `88b620c` | 穷尽式处理 Provider 模型获取操作 | retain | 好的代码实践 |
- | `2ee3881` | 将选定 Provider 传播到活动 Turn | check | 需要检查上游 Turn 如何处理 |
- | `879d798` | 支持 Provider 表单键盘快捷键 | drop | TUI 快捷键 |
- | `2d2bcea` | 修复结构体解构中的重复 model_provider_id 绑定 | retain | 真正的代码修复 |
+The script separates the raw tree difference into:
 
- ### Web 相关定制（3 个提交）
+- `upstream-only`: the local subtree still matches the integrated upstream
+  base; this is pending official work, not a local customization.
+- `local-only`: the current official tree still matches the integrated base;
+  this is a candidate local customization to classify.
+- `diverged`: both local and current official trees differ from the integrated
+  base; this needs an explicit replay or upstream-equivalence decision.
 
- | Commit | 描述 | 分类 | 说明 |
- |--------|------|------|------|
- | `0de018a` | Refactor post-save action handling with exhaustive match | retain | 真正的代码质量修复（非 TUI 相关） |
- | `87c2d0d` | Fix corrupt provider_popups.rs and update toolchain to MSVC | drop | TUI 代码 |
- | `576214` | Restore generic channel with MSVC target | drop | TUI 构建配置 |
+## Retained seams
 
- ### 合并提交（4 个）
+| ID | Seam and source paths | Reason to retain | Replay order | Required validation | Removal condition |
+| --- | --- | --- | --- | --- | --- |
+| `provider-chat-transport` | `codex-api/src/chat_translate.rs`, `chat_translate_tests.rs`, `common.rs`, `endpoint/chat.rs`, `sse/chat.rs`; minimal dispatch in `core/src/client.rs` | Translates third-party Chat Completions requests, streams, and mixed/interrupted tool calls into Codex semantics. | 1 | `just test -p codex-api`; focused interrupted and tool-call translation tests | Upstream provides equivalent supported third-party wire translation, including the same stream and tool behavior. |
+| `provider-metadata-models` | `model-provider-info/src/lib.rs`, `PROVIDER_MODELS.md`, `model-provider/src/provider.rs`, `models_endpoint.rs`, `models-manager/src/manager.rs` | Defines `WireApi::Chat`, Provider-scoped model metadata, model discovery, selection, normalization, and cache isolation. | 2 | `just test -p codex-model-provider`; `just test -p codex-models-manager`; Provider switch/cache-isolation smoke | Upstream exposes equivalent Provider metadata, scoped catalog, and cache semantics. |
+| `provider-app-server-api` | `app-server-protocol/src/protocol/v2/model.rs`, `app-server/src/request_processors/catalog_processor.rs`, `app-server/src/models.rs`, request registration, generated capability declarations | Provides versioned Provider listing, Provider-scoped model listing, controlled selection/configuration, and forced refresh for both TUI and Platform Host. | 3 | `just test -p codex-app-server-protocol`; `just test -p codex-app-server model_list`; generated Schema/TypeScript; real app-server Provider smoke | Upstream provides the required stable API and generated contract. |
+| `provider-tui-workflows` | `tui/src/chatwidget/provider_popups.rs`, `provider_sections.rs`, `model_popups.rs`, `settings.rs`, `slash_dispatch.rs`, `config_update.rs`, `onboarding/auth.rs`, `slash_command.rs` | TUI Provider selection, model selection, onboarding, refresh, configuration, and error UX are product-critical client behavior. | 4 | `just test -p codex-tui`; Provider workflow snapshots | Upstream TUI provides equivalent Provider and model workflows, or the product explicitly retires TUI parity. |
+| `legacy-response-tool-history` | `app-server-protocol/src/protocol/legacy_response_tool_history.rs`, narrow integration in `thread_history.rs` | Existing Profiles can contain raw `ResponseItem` tool-call/output pairs that official semantic history projection does not materialize. | 5 | Protocol tests plus reload fixture containing raw call/output pairs | Supported Profiles no longer contain this rollout format, or upstream materializes it. |
+| `capability-manifest` | `app-server-protocol/src/capability_manifest.rs`, `initialize_processor.rs`, generated Schema/TypeScript, `apps/web/contracts/codex/**` fixtures | Lets the Platform Host gate product features against the actual Runtime build instead of assuming support. | 6 | Protocol tests, generated artifacts, fixture replay, `--require-manifest` smoke | Method facts and experimental state are generated from the official protocol/build and an upstream equivalent contract exists. |
 
- | Commit | 描述 | 分类 |
- |--------|------|------|
- | `7ff0ad6` | Merge PR #9 | n/a |
- | `e5fd338` | Merge PR #7 | n/a |
- | `a269992` | Merge PR #3 | n/a |
- | `5499301` | Merge PR #2 | n/a |
+## Current inventory classification
 
- ## 摘要
+The current comparison against `codex-upstream/main` contains 247
+`local-only` paths and no pending official or diverged paths. The
+non-generated source candidates are classified below; their generated
+artifacts, tests, and snapshots follow the owning source seam.
 
- | 分类 | 数量 | 处理方式 |
- |------|------|------|
- | upstreamed | ~20 | 同步后自动覆盖，无需额外操作 |
- | retain | ~3-4 | 同步后手工 cherry-pick 或重写 |
- | drop | ~10 | 明确放弃，由上游代码替换 |
- | check | ~4 | 同步后手动审查 |
- | n/a (merge) | 4 | 无操作 |
+| Classification | Source paths | Decision and reason |
+| --- | --- | --- |
+| `retain-core`: Chat transport | `codex-api/src/chat_translate.rs`, `common.rs`, `endpoint/chat.rs`, `endpoint/models.rs`, `endpoint/mod.rs`, `sse/chat.rs`, `sse/mod.rs`, minimal `core/src/client.rs` dispatch | Required third-party Chat Completions transport. During sync, accept the current upstream Core client and replay only a narrow transport dispatch. |
+| `retain-core`: Provider metadata and models | `model-provider-info/src/lib.rs`, `model-provider/src/{lib.rs,models_endpoint.rs,provider.rs}`, `models-manager/src/manager.rs`, `config/src/thread_config/**`, Provider fields in `core` session/config integration | Required Provider identity, model discovery, scoped cache/refresh, and Thread propagation. Accept upstream model/catalog changes, including official model migrations, before replaying Provider-specific behavior. |
+| `retain-core`: app-server Provider API | `app-server-protocol/src/protocol/{common.rs,mod.rs,v1.rs,v2/model.rs,v2/thread.rs,v2/turn.rs}`, `app-server/src/{models.rs,message_processor.rs,request_processors.rs}`, `request_processors/catalog_processor.rs` | Required `modelProvider/list`, Provider-scoped models, refresh, selection, Thread/Turn-level Provider override, and capability exposure. Keep only Provider request registrations and handlers when replaying high-churn dispatch files. |
+| `retain-core`: TUI Provider workflows | `tui/src/chatwidget/{provider_popups.rs,provider_sections.rs,model_popups.rs,settings.rs,slash_dispatch.rs}`, `tui/src/{config_update.rs,slash_command.rs,onboarding/auth.rs,onboarding/keys.rs,onboarding/onboarding_screen.rs,app/thread_settings.rs}`, narrow integration in `chatwidget.rs`, `app/event_dispatch.rs`, `app_server_session.rs`, and `bottom_pane/mod.rs` | TUI Provider configuration, model selection, onboarding, refresh, and error UX are core behavior. Take upstream TUI orchestration first; reattach isolated Provider modules and their event handlers. |
+| `retain-core`: compatibility and capability | `app-server-protocol/src/capability_manifest.rs`, `protocol/legacy_response_tool_history.rs`, narrow integration in `thread_history.rs`, `initialize_processor.rs` | The Manifest gates Platform features; legacy history preserves supported existing Profiles. Neither is browser implementation code. |
+| `upstream-first, then replay` | `core/src/{codex_thread.rs,guardian/review_session.rs,session/**}`, `protocol/src/{openai_models.rs,protocol.rs}`, `app-server/src/request_processors/turn_processor.rs`, `app-server/README.md`, TUI thread-routing/event files | These files contain substantial official SessionIo, AgentRunner, model-catalog, rate-limit, paging, fork, and TUI behavior. Preserve upstream structure and reapply only the adjacent retained seam. |
+| `retain-core`: Provider propagation followers | `core/src/session/handlers.rs`, `exec/src/lib.rs`, `login/src/auth_env_telemetry.rs`, `app-server` remote-thread/turn tests, and `core` stream/header tests | These changes propagate the selected Provider, preserve Provider-scoped cache test isolation, or satisfy the expanded Provider metadata shape. They follow the owning Provider seam and are not independent feature surfaces. |
+| `move-out` | `utils/home-dir/src/lib.rs` missing-`CODEX_HOME` auto-creation | Profile creation belongs to the Platform Host. `apps/web/crates/profile-host::ensure_profile_home` now provisions the directory before the transitional app-server spawn. Return this utility to official validation semantics when the native Platform Host spawn path also uses this crate. |
+| Derived artifacts and tests | Schema, TypeScript, fixtures, snapshots, lockfiles, and focused tests not named above | They follow the owning source seam. Regenerate artifacts and update tests/snapshots through their normal build/test commands; do not classify or replay them independently. |
 
- ## 同步策略
+## Required boundaries
 
- 1. 运行 `scripts/sync-codex-upstream.sh --apply` 创建同步分支
- 2. 在 `git subtree pull` 冲突阶段，优先保留上游结构
- 3. 冲突文件中属于 `drop` 分类的，以上游为准
- 4. 冲突文件中属于 `retain` 分类的，手工合并定制逻辑
- 5. 冲突文件中属于 `check` 分类的，逐个审查
- 6. 对 `retain` 提交进行 cherry-pick 或手工重新实现
+- Keep Chat translation in `codex-api`, Provider facts in Provider crates,
+  Provider wire types in `app-server-protocol`, request handling in
+  `app-server`, and presentation in dedicated TUI Provider modules.
+- Do not add Web routes, Tauri commands, Profile lifecycle, authorization,
+  browser state, or raw RPC proxies under `codex/`.
+- Do not hand-edit generated Schema or TypeScript files.
+- Do not broaden `core/src/client.rs`; extract Provider transport behavior into
+  Provider-specific modules and keep only the dispatch seam in Core.
+- Do not preserve an implementation that upstream now supplies. Mark it
+  `upstreamed`, return to upstream code, and remove it from this table.
+
+## Sync and progress protocol
+
+For every official sync:
+
+1. Run `scripts/codex-upstream-status.sh` and compare each retained seam with
+   the new upstream implementation.
+   Run `scripts/codex-customization-status.sh` to record the exact source-tree
+   difference set against that official commit.
+2. Apply seams in the `Replay order` column.
+3. Regenerate protocol artifacts after each protocol/configuration change.
+4. Run the seam validations, then the Web contract checks and real smoke.
+5. Update this file with the current paths, symbols, validation evidence, and
+   removal conditions. Do not retain historical status narratives here.
+
+For every convergence change:
+
+1. Add its source files to the inventory with one of the four classifications.
+2. Link any retained behavior to a seam above, or create a narrowly scoped new
+   seam with a reason, validation command, and removal condition.
+3. Move Web/platform behavior to `apps/web` before deleting its Runtime
+   counterpart.
+
+## Legacy response tool history audit
+
+Official paginated rollout history persists semantic `ItemCompleted(TurnItem)` records and
+`thread_history_projection.rs` intentionally ignores raw `ResponseItem` records. Existing Profiles
+can still contain older rollouts with only `FunctionCall`/`CustomToolCall` and matching output
+records. Without the compatibility seam those tool calls disappear after reload.
+
+The seam is restricted to protocol projection:
+
+- it correlates raw calls and outputs by `call_id`;
+- a richer semantic item with the same ID always wins;
+- an unmatched call is closed as failed when its Turn ends;
+- it does not change model-visible context, tool execution or Thread/Turn ownership;
+- it is isolated in one module so an upstream replacement can remove it atomically.
+
+No additional Codex changes are required for browser event replay. Live notification durability,
+cursor replay and UI reconciliation are owned by `apps/web`.

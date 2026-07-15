@@ -122,7 +122,8 @@ pub(crate) struct PluginRemoteSectionError {
 /// invocation and must call `finish_status_rate_limit_refresh` when done so the
 /// card stops showing a "refreshing" state. A `UsageMenu` refreshes a cached
 /// zero reset count so the disabled menu entry can become available without a
-/// restart.
+/// restart. A `ResetPicker` refreshes the rate limits and detailed reset-credit
+/// rows before showing redemption choices.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RateLimitRefreshOrigin {
     /// Eagerly fetched after bootstrap for `/status` data and reset availability.
@@ -132,6 +133,8 @@ pub(crate) enum RateLimitRefreshOrigin {
     StatusCommand { request_id: u64 },
     /// User reopened `/usage` while the cached reset-credit count was zero.
     UsageMenu { request_id: u64 },
+    /// User opened the reset-credit picker.
+    ResetPicker { request_id: u64 },
     /// Refresh requested after a reset credit was successfully consumed.
     ResetConsume { request_id: u64 },
 }
@@ -220,6 +223,15 @@ pub(crate) enum AppEvent {
         op: AppCommand,
     },
 
+    /// Interrupt, fork, and retry a safety-buffered turn with the server-selected model.
+    RetrySafetyBufferedTurn {
+        thread_id: ThreadId,
+        turn_id: String,
+        model: String,
+        turn: AppCommand,
+        prompt: UserMessage,
+    },
+
     /// Deliver a synthetic history lookup response to a specific thread channel.
     ThreadHistoryEntryResponse {
         thread_id: ThreadId,
@@ -288,6 +300,13 @@ pub(crate) enum AppEvent {
     /// Fork the current session into a new thread.
     ForkCurrentSession,
 
+    /// Branch before a selected prompt and reopen it in the new thread's composer.
+    ForkSessionForPromptEdit {
+        thread_id: ThreadId,
+        nth_user_message: usize,
+        prompt: UserMessage,
+    },
+
     /// Request to exit the application.
     ///
     /// Use `ShutdownFirst` for user-initiated quits so core cleanup runs and the
@@ -306,9 +325,6 @@ pub(crate) enum AppEvent {
     /// Forward a command to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
     CodexOp(AppCommand),
-
-    /// Restore an output-free interrupted turn into the composer and roll it back.
-    RestoreCancelledTurn(UserMessage),
 
     /// Approve one retry of a recent auto-review denial selected in the TUI.
     ApproveRecentAutoReviewDenial {
@@ -365,6 +381,7 @@ pub(crate) enum AppEvent {
     /// Result of refreshing rate limits.
     RateLimitsLoaded {
         origin: RateLimitRefreshOrigin,
+        hard_stop_generation: u64,
         result: Result<GetAccountRateLimitsResponse, String>,
     },
 
@@ -413,21 +430,17 @@ pub(crate) enum AppEvent {
     /// Open the reset-credit flow selected from the `/usage` menu.
     OpenRateLimitResetCredits,
 
-    /// Result of reading the current reset-credit balance.
-    RateLimitResetCreditsLoaded {
-        request_id: u64,
-        result: Result<GetAccountRateLimitsResponse, String>,
-    },
-
     /// Consume one reset credit using a stable idempotency key.
     ConsumeRateLimitResetCredit {
         idempotency_key: String,
+        credit_id: Option<String>,
     },
 
     /// Result of consuming one reset credit.
     RateLimitResetCreditConsumed {
         request_id: u64,
         idempotency_key: String,
+        credit_id: Option<String>,
         result: Result<ConsumeAccountRateLimitResetCreditResponse, String>,
     },
 
@@ -784,15 +797,6 @@ pub(crate) enum AppEvent {
     /// finalization.
     ConsolidateProposedPlan(String),
 
-    /// Apply rollback semantics to local transcript cells.
-    ///
-    /// This is emitted when rollback was not initiated by the current
-    /// backtrack flow so trimming occurs in AppEvent queue order relative to
-    /// inserted history cells.
-    ApplyThreadRollback {
-        num_turns: u32,
-    },
-
     StartCommitAnimation,
     StopCommitAnimation,
     CommitTick,
@@ -830,6 +834,17 @@ pub(crate) enum AppEvent {
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {
         model: ModelPreset,
+    },
+
+    /// Open the explicit Max/Ultra reasoning selection popup for a model.
+    OpenAdvancedReasoningPopup {
+        model: ModelPreset,
+    },
+
+    /// Apply an advanced reasoning effort to the active conversation without changing defaults.
+    ApplyAdvancedReasoning {
+        model: String,
+        effort: ReasoningEffort,
     },
 
     /// Open the Plan-mode reasoning scope prompt for the selected model/effort.
@@ -953,9 +968,6 @@ pub(crate) enum AppEvent {
     /// Clear all persisted local memory artifacts via the app-server.
     ResetMemories,
 
-    /// Update whether the full access warning prompt has been acknowledged.
-    UpdateFullAccessWarningAcknowledged(bool),
-
     /// Update whether the world-writable directories warning has been acknowledged.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     UpdateWorldWritableWarningAcknowledged(bool),
@@ -965,9 +977,6 @@ pub(crate) enum AppEvent {
 
     /// Update the Plan-mode-specific reasoning effort in memory.
     UpdatePlanModeReasoningEffort(Option<ReasoningEffort>),
-
-    /// Persist the acknowledgement flag for the full access warning prompt.
-    PersistFullAccessWarningAcknowledged,
 
     /// Persist the acknowledgement flag for the world-writable directories warning.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]

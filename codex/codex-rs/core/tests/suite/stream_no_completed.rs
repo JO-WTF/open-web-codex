@@ -54,7 +54,6 @@ async fn retries_on_early_close() {
         auth: None,
         aws: None,
         wire_api: WireApi::Responses,
-        models: Vec::new(),
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -65,6 +64,7 @@ async fn retries_on_early_close() {
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        models: Vec::new(),
     };
 
     let TestCodex { codex, .. } = test_codex()

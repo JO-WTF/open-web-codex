@@ -24,6 +24,25 @@ pub enum ConstraintError {
         requirement_source: RequirementSource,
         reason: String,
     },
+
+    #[error(
+        "invalid requirement for MCP server `{server_name}` (set by {requirement_source}): {reason}"
+    )]
+    McpServerRequirementParse {
+        server_name: String,
+        requirement_source: RequirementSource,
+        reason: String,
+    },
+
+    #[error(
+        "network proxy configuration requires `[windows] allowed_sandbox_implementations = [\"elevated\"]` in requirements"
+    )]
+    NetworkProxyRequiresElevatedWindowsSandboxRequirement,
+
+    #[error(
+        "the network proxy is incompatible with the unelevated Windows sandbox; set `windows.sandbox = \"elevated\"` or disable the network proxy"
+    )]
+    NetworkProxyIncompatibleWithUnelevatedWindowsSandbox,
 }
 
 impl ConstraintError {
@@ -31,6 +50,14 @@ impl ConstraintError {
         Self::EmptyField {
             field_name: field_name.into(),
         }
+    }
+
+    pub fn is_windows_network_configuration_error(&self) -> bool {
+        matches!(
+            self,
+            Self::NetworkProxyRequiresElevatedWindowsSandboxRequirement
+                | Self::NetworkProxyIncompatibleWithUnelevatedWindowsSandbox
+        )
     }
 }
 

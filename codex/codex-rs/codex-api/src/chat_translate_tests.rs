@@ -109,22 +109,10 @@ fn parallel_function_calls_group_into_one_assistant_message() {
         &[
             function_call("read", "{}", "call_1"),
             function_call("write", "{}", "call_2"),
-            ResponseItem::FunctionCallOutput {
-                id: None,
-                call_id: "call_1".to_string(),
-                output: FunctionCallOutputPayload::from_text("read result".to_string()),
-                internal_chat_message_metadata_passthrough: None,
-            },
-            ResponseItem::FunctionCallOutput {
-                id: None,
-                call_id: "call_2".to_string(),
-                output: FunctionCallOutputPayload::from_text("write result".to_string()),
-                internal_chat_message_metadata_passthrough: None,
-            },
         ],
         "",
     );
-    assert_eq!(messages.len(), 3);
+    assert_eq!(messages.len(), 1);
     match &messages[0] {
         ChatMessage::AssistantWithToolCalls {
             tool_calls,
@@ -145,19 +133,16 @@ fn parallel_function_calls_group_into_one_assistant_message() {
 #[test]
 fn function_call_output_becomes_tool_role_message() {
     let messages = responses_input_to_chat_messages(
-        &[
-            function_call("read", "{}", "call_1"),
-            ResponseItem::FunctionCallOutput {
-                id: None,
-                call_id: "call_1".to_string(),
-                output: FunctionCallOutputPayload::from_text("result data".to_string()),
-                internal_chat_message_metadata_passthrough: None,
-            },
-        ],
+        &[ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: "call_1".to_string(),
+            output: FunctionCallOutputPayload::from_text("result data".to_string()),
+            internal_chat_message_metadata_passthrough: None,
+        }],
         "",
     );
-    assert_eq!(messages.len(), 2);
-    match &messages[1] {
+    assert_eq!(messages.len(), 1);
+    match &messages[0] {
         ChatMessage::ToolResult {
             role,
             tool_call_id,
@@ -213,53 +198,30 @@ fn full_conversation_round_trip() {
 }
 
 #[test]
-fn incomplete_parallel_tool_call_group_gets_an_interrupted_result() {
+fn tool_result_is_emitted_immediately_after_tool_calls_when_text_intervenes() {
     let input = vec![
-        user_msg("inspect both files"),
-        function_call("read", r#"{"path":"a"}"#, "call_1"),
-        function_call("read", r#"{"path":"b"}"#, "call_2"),
+        user_msg("what's the weather?"),
+        function_call("get_weather", r#"{"city":"SF"}"#, "call_1"),
+        assistant_msg("Checking the forecast now."),
         ResponseItem::FunctionCallOutput {
             id: None,
             call_id: "call_1".to_string(),
-            output: FunctionCallOutputPayload::from_text("a contents".to_string()),
+            output: FunctionCallOutputPayload::from_text("sunny".to_string()),
             internal_chat_message_metadata_passthrough: None,
         },
-        assistant_msg("continuing after an interrupted tool call"),
+        assistant_msg("It's sunny in SF."),
     ];
-
     let messages = responses_input_to_chat_messages(&input, "");
 
-    assert_eq!(messages.len(), 5);
-    assert!(matches!(messages[0], ChatMessage::Text { ref role, .. } if role == "user"));
-    assert!(matches!(
-        messages[1],
-        ChatMessage::AssistantWithToolCalls { .. }
-    ));
-    assert!(
-        matches!(messages[2], ChatMessage::ToolResult { ref tool_call_id, .. } if tool_call_id == "call_1")
-    );
-    assert!(
-        matches!(messages[3], ChatMessage::ToolResult { ref tool_call_id, ref content, .. } if tool_call_id == "call_2" && content.contains("interrupted"))
-    );
-    assert!(matches!(messages[4], ChatMessage::Text { ref role, .. } if role == "assistant"));
-}
-
-#[test]
-fn orphan_tool_result_is_omitted() {
-    let input = vec![
-        user_msg("continue"),
-        ResponseItem::FunctionCallOutput {
-            id: None,
-            call_id: "missing_call".to_string(),
-            output: FunctionCallOutputPayload::from_text("stale output".to_string()),
-            internal_chat_message_metadata_passthrough: None,
-        },
-    ];
-
-    let messages = responses_input_to_chat_messages(&input, "");
-
-    assert_eq!(messages.len(), 1);
-    assert!(matches!(messages[0], ChatMessage::Text { ref role, .. } if role == "user"));
+    let tool_call_idx = messages
+        .iter()
+        .position(|message| matches!(message, ChatMessage::AssistantWithToolCalls { .. }))
+        .unwrap();
+    let tool_result_idx = messages
+        .iter()
+        .position(|message| matches!(message, ChatMessage::ToolResult { .. }))
+        .unwrap();
+    assert_eq!(tool_result_idx, tool_call_idx + 1);
 }
 
 #[test]

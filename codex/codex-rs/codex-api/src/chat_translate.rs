@@ -21,7 +21,6 @@ use codex_protocol::models::ResponseItem;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::HashSet;
 
 /// The reasoning effort hint expressed in the way most chat-compatible
 /// providers understand it (OpenAI o-series and DeepSeek-R1 style).
@@ -236,11 +235,7 @@ pub fn responses_input_to_chat_messages(
                 call_id, output, ..
             } => {
                 let content = output.body.to_text().unwrap_or_default();
-                messages.push(ChatMessage::ToolResult {
-                    role: "tool".to_string(),
-                    tool_call_id: call_id.clone(),
-                    content,
-                });
+                push_tool_result(&mut messages, call_id.clone(), content);
             }
             // Responses-only concepts with no chat equivalent.
             ResponseItem::Reasoning { .. }
@@ -274,57 +269,7 @@ pub fn responses_input_to_chat_messages(
         }
     }
 
-    repair_incomplete_tool_call_groups(messages)
-}
-
-/// Chat Completions requires every assistant tool call to be followed
-/// immediately by a tool result with the same id. Responses histories can be
-/// incomplete after an interruption or denied approval, so preserve the group
-/// and synthesize an explicit interrupted result for each missing call.
-fn repair_incomplete_tool_call_groups(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
-    let mut sanitized = Vec::with_capacity(messages.len());
-    let mut index = 0;
-
-    while index < messages.len() {
-        let ChatMessage::AssistantWithToolCalls { tool_calls, .. } = &messages[index] else {
-            if !matches!(messages[index], ChatMessage::ToolResult { .. }) {
-                sanitized.push(messages[index].clone());
-            }
-            index += 1;
-            continue;
-        };
-
-        let expected = tool_calls
-            .iter()
-            .map(|tool_call| tool_call.id.as_str())
-            .collect::<HashSet<_>>();
-        let mut results = Vec::new();
-        let mut received = HashSet::new();
-        let mut next = index + 1;
-        while let Some(ChatMessage::ToolResult { tool_call_id, .. }) = messages.get(next) {
-            if expected.contains(tool_call_id.as_str()) {
-                received.insert(tool_call_id.as_str());
-                results.push(messages[next].clone());
-            }
-            next += 1;
-        }
-
-        sanitized.push(messages[index].clone());
-        sanitized.extend(results);
-        for tool_call in tool_calls {
-            if !received.contains(tool_call.id.as_str()) {
-                sanitized.push(ChatMessage::ToolResult {
-                    role: "tool".to_string(),
-                    tool_call_id: tool_call.id.clone(),
-                    content: "Tool execution did not complete because it was interrupted."
-                        .to_string(),
-                });
-            }
-        }
-        index = next;
-    }
-
-    sanitized
+    messages
 }
 
 /// Map Responses roles onto the set most chat providers accept.
@@ -389,6 +334,28 @@ fn push_assistant_tool_call(messages: &mut Vec<ChatMessage>, tool_call: ChatTool
         content: None,
         tool_calls: vec![tool_call],
     });
+}
+
+fn push_tool_result(messages: &mut Vec<ChatMessage>, tool_call_id: String, content: String) {
+    let insert_at = messages
+        .iter()
+        .rposition(|message| matches!(message, ChatMessage::AssistantWithToolCalls { .. }))
+        .map(|idx| idx + 1)
+        .unwrap_or(messages.len());
+    let mut insert_at = insert_at;
+    while insert_at < messages.len()
+        && matches!(messages[insert_at], ChatMessage::ToolResult { .. })
+    {
+        insert_at += 1;
+    }
+    messages.insert(
+        insert_at,
+        ChatMessage::ToolResult {
+            role: "tool".to_string(),
+            tool_call_id,
+            content,
+        },
+    );
 }
 
 #[cfg(test)]

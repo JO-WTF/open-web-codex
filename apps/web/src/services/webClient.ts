@@ -1,4 +1,9 @@
-import type { AppServerEvent, GitFileStatus, WorkspaceInfo } from "../types";
+import type {
+  AppServerEvent,
+  GitFileStatus,
+  ProjectedRunEvent,
+  WorkspaceInfo,
+} from "../types";
 
 type RpcResponse<T> = { result?: T; error?: { message?: string } | string };
 
@@ -80,6 +85,16 @@ export class CodexMonitorWebClient {
 
   health() {
     return this.fetchJson<GatewayHealth>("/api/health");
+  }
+
+  listTaskEvents(taskId: string, afterSequence?: number, limit = 200) {
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (afterSequence != null) {
+      query.set("after_sequence", String(afterSequence));
+    }
+    return this.fetchJson<ProjectedRunEvent[]>(
+      `/api/tasks/${encodeURIComponent(taskId)}/events?${query.toString()}`,
+    );
   }
 
   async rpc<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {

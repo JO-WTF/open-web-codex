@@ -133,6 +133,7 @@ async fn thread_delete_with_non_local_thread_store_does_not_create_local_persist
                 use_state_db_only: false,
                 search_term: None,
                 parent_thread_id: None,
+                ancestor_thread_id: None,
             },
         })
         .await?
@@ -157,7 +158,9 @@ async fn thread_delete_with_non_local_thread_store_does_not_create_local_persist
             originator: "test_originator".to_string(),
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
+            selected_capability_roots: Vec::new(),
             multi_agent_version: None,
+            history_mode: Default::default(),
             initial_window_id: Uuid::now_v7().to_string(),
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(codex_home.path().to_path_buf()),
@@ -380,6 +383,9 @@ fn assert_no_local_persistence_artifacts(codex_home: &Path) -> Result<()> {
     // That is not thread persistence; keep the assertion focused on rollout,
     // session, sqlite, and other unexpected thread-store artifacts.
     entries.remove("shell_snapshots");
+    // Model catalogs are runtime caches, not thread persistence. Third-party
+    // providers use a provider-scoped filename to prevent catalog collisions.
+    entries.retain(|entry| !entry.starts_with("models_cache-") || !entry.ends_with(".json"));
     assert_eq!(
         entries,
         BTreeSet::from([

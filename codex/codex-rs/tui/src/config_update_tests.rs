@@ -103,6 +103,7 @@ fn build_model_provider_models_edit_writes_provider_models() {
                     "max_output_tokens": 8000,
                     "show_in_picker": true,
                     "context_window": 128000,
+                    "supported_reasoning_levels": [],
                 }
             ]),
             merge_strategy: MergeStrategy::Replace,

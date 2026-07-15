@@ -1,10 +1,10 @@
 mod config;
+mod event_projection;
 mod middleware;
 mod routes;
-mod supervisor;
 
-use std::sync::Arc;
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use axum::Router;
 use clap::Parser;
@@ -12,11 +12,14 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
-use open_web_codex_adapter::{CodexAdapter, fake::FakeCodexAdapter, real::RealCodexAdapter};
+use open_web_codex_adapter::{fake::FakeCodexAdapter, real::RealCodexAdapter, CodexAdapter};
 use open_web_codex_platform_store::AppState;
 
 #[derive(Parser, Debug)]
-#[command(name = "open-web-codex-server", about = "open-web-codex platform server")]
+#[command(
+    name = "open-web-codex-server",
+    about = "open-web-codex platform server"
+)]
 struct Cli {
     /// Address to bind the HTTP server.
     #[arg(long, default_value = "127.0.0.1:4800")]
@@ -37,7 +40,11 @@ struct Cli {
     #[arg(long, env = "CODEX_MODE", default_value = "real")]
     codex_mode: String,
     /// URL of the existing Tauri daemon for /api/rpc and /api/events proxying.
-    #[arg(long, env = "CODEX_DAEMON_URL", default_value = "http://127.0.0.1:4733")]
+    #[arg(
+        long,
+        env = "CODEX_DAEMON_URL",
+        default_value = "http://127.0.0.1:4733"
+    )]
     daemon_url: String,
 }
 
@@ -82,12 +89,12 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // ── Event Bus ───────────────────────────────────────────────────
-    // Bridge adapter events into a broadcast channel so that both
-    // the SSE endpoint and the RunSupervisor can consume from one stream.
+    // Bridge adapter events into durable projections and the live event bus.
     let event_bus = state.event_bus.clone();
     {
         let event_bus = event_bus.clone();
         let adapter = adapter.clone();
+        let projection_db = state.db.clone();
         tokio::spawn(async move {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
 
@@ -99,8 +106,14 @@ async fn main() -> anyhow::Result<()> {
                 }
             });
 
-            // Relay to broadcast channel
+            // Persist a safe, versioned projection before exposing the event
+            // to connected browsers. The database cursor is therefore always
+            // available when a client reconnects after seeing an event.
             while let Some(data) = rx.recv().await {
+                if let Err(error) = event_projection::persist_frame(&data, &projection_db).await {
+                    tracing::warn!("event projection failed: {error}");
+                    continue;
+                }
                 if event_bus.send(data).is_err() {
                     tracing::debug!("event bus: no active receivers, dropping event");
                 }
@@ -110,11 +123,6 @@ async fn main() -> anyhow::Result<()> {
             tracing::info!("event bridge task exiting");
         });
     }
-
-    // ── Run Supervisor ──────────────────────────────────────────────
-    // Background listener that auto-transitions run statuses from
-    // adapter thread lifecycle events.
-    supervisor::start(event_bus, state.db.clone());
 
     let app = Router::new()
         .nest("/api", routes::router(adapter))

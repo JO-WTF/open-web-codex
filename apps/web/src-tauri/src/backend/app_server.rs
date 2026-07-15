@@ -1,3 +1,4 @@
+use open_web_codex_profile_host::ensure_profile_home;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -764,7 +765,10 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
     )?;
     command.current_dir(&entry.path);
     if let Some(path) = codex_home.as_ref() {
-        command.env("CODEX_HOME", path);
+        let profile_home = ensure_profile_home(path).map_err(|error| {
+            format!("Failed to provision CODEX_HOME {}: {error}", path.display())
+        })?;
+        command.env("CODEX_HOME", profile_home);
     }
     command.stdin(std::process::Stdio::piped());
     command.stdout(std::process::Stdio::piped());

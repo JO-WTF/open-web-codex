@@ -21,6 +21,16 @@ use rmcp::model::ElicitationAction;
 use serde_json::json;
 use tempfile::tempdir;
 
+#[test]
+fn request_plugin_install_does_not_support_parallel_tool_calls() {
+    let handler = RequestPluginInstallHandler::new(
+        Vec::new(),
+        ToolSuggestPresentation::RecommendationContext,
+    );
+
+    assert!(!handler.supports_parallel_tool_calls());
+}
+
 #[tokio::test]
 async fn verified_plugin_install_completed_requires_installed_plugin() {
     let codex_home = tempdir().expect("tempdir should succeed");
@@ -235,6 +245,8 @@ fn connector_tool(id: &str, name: &str) -> DiscoverableTool {
         description: None,
         logo_url: None,
         logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
         distribution_channel: None,
         branding: None,
         app_metadata: None,

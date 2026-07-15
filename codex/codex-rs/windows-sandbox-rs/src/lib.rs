@@ -195,6 +195,8 @@ pub use identity::sandbox_setup_is_complete;
 #[cfg(target_os = "windows")]
 pub use ipc_framed::ErrorPayload;
 #[cfg(target_os = "windows")]
+pub use ipc_framed::ErrorStage;
+#[cfg(target_os = "windows")]
 pub use ipc_framed::ExitPayload;
 #[cfg(target_os = "windows")]
 pub use ipc_framed::FramedMessage;
@@ -232,6 +234,8 @@ pub use logging::log_note;
 pub use logging::log_writer;
 #[cfg(target_os = "windows")]
 pub use path_normalization::canonicalize_path;
+#[cfg(target_os = "windows")]
+pub use process::ConsoleMode;
 #[cfg(target_os = "windows")]
 pub use process::PipeSpawnHandles;
 #[cfg(target_os = "windows")]
@@ -350,6 +354,7 @@ mod windows_impl {
     use super::WindowsSandboxCancellationToken;
     use super::logging::log_failure;
     use super::logging::log_success;
+    use super::process::ConsoleMode;
     use super::process::create_process_as_user;
     use super::sandbox_utils::ensure_codex_home_exists;
     use super::spawn_prep::LegacyAclSids;
@@ -567,6 +572,7 @@ mod windows_impl {
                 &env_map,
                 logs_base_dir,
                 Some((in_r, out_w, err_w)),
+                ConsoleMode::Inherit,
                 use_private_desktop,
             )
         };

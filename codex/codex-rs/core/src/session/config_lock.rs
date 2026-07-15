@@ -248,6 +248,9 @@ mod tests {
         config.token_budget = Some(crate::config::TokenBudgetConfig {
             reminder_threshold_tokens: Some(16_000),
             reminder_message_template: "Locked reminder: {n_remaining} tokens.".to_string(),
+            guidance_message: Some("Locked context-window guidance.".to_string()),
+            auto_compact_fallback_prompt: Some("Write notes before rollover.".to_string()),
+            auto_compact_fallback_buffer_tokens: Some(8_000),
         });
         config
             .features
@@ -340,6 +343,9 @@ mod tests {
                 reminder_message_template: Some(
                     "Locked reminder: {n_remaining} tokens.".to_string()
                 ),
+                guidance_message: Some("Locked context-window guidance.".to_string()),
+                auto_compact_fallback_prompt: Some("Write notes before rollover.".to_string()),
+                auto_compact_fallback_buffer_tokens: Some(8_000),
             }))
         );
 
@@ -359,6 +365,8 @@ mod tests {
                 enabled: Some(true),
                 reminder_interval_seconds: Some(1),
                 clock_source: Some(codex_features::CurrentTimeSource::System),
+                delivery_mode: Some(codex_features::CurrentTimeReminderDeliveryMode::AnyInference),
+                sleep_tool: Some(false),
             }))
         );
 
