@@ -99,7 +99,7 @@ function dynamicCommand(item: Record<string, unknown>) {
   }
 }
 
-function diffLines(value: string) {
+export function diffLines(value: string) {
   return value
     .split("\n")
     .filter((line) => line && !line.startsWith("*** "))

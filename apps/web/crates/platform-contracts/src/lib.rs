@@ -231,6 +231,16 @@ pub struct ApprovalDecisionResponse {
     pub approval: Approval,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalRespondRequest {
+    pub result: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalRespondResponse {
+    pub approval: Approval,
+}
+
 // ── Messages ──────────────────────────────────────────────────────
 
 /// Request to send a user message to a task's active thread.

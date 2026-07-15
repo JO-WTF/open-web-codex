@@ -31,6 +31,10 @@ pub fn router(adapter: Arc<dyn CodexAdapter>) -> Router<AppState> {
             "/approvals/{id}/decision",
             axum::routing::post(approvals::decide_approval),
         )
+        .route(
+            "/approvals/{id}/respond",
+            axum::routing::post(approvals::respond_approval),
+        )
         .route("/runs", axum::routing::get(runs::list_runs))
         .route("/runs/{id}", axum::routing::get(runs::get_run))
         .route("/runs/{id}/cancel", axum::routing::post(runs::cancel_run))

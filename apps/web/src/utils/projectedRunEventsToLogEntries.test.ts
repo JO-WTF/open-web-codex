@@ -4,6 +4,7 @@ import {
   latestTurnId,
   maxEventSequence,
   projectedEventsToLogEntries,
+  turnStartedAtFromEvents,
 } from "./projectedRunEventsToLogEntries";
 
 function event(sequence: number, eventType: string, itemId: string, itemType: string, data: Record<string, unknown>): PlatformRunEvent {
@@ -74,5 +75,43 @@ describe("projectedRunEventsToLogEntries", () => {
     ];
     expect(latestTurnId(events)).toBe("turn-1");
     expect(maxEventSequence(events)).toBe(2);
+  });
+
+  it("maps command execution items into command_exec log entries", () => {
+    const entries = projectedEventsToLogEntries([
+      event(1, "codex.item.completed", "cmd-1", "commandExecution", {
+        type: "commandExecution",
+        command: ["npm", "test"],
+        status: "completed",
+        aggregatedOutput: "ok",
+        durationMs: 1200,
+        cwd: "/workspace",
+      }),
+    ]);
+    expect(entries[0]).toMatchObject({
+      kind: "command_exec",
+      text: "npm test",
+      cmdOutput: "ok",
+      cmdDurationMs: 1200,
+      cmdCwd: "/workspace",
+    });
+  });
+
+  it("reads turn start timestamps from codex.turn.started events", () => {
+    const startedAt = turnStartedAtFromEvents([
+      {
+        ...event(1, "codex.turn.started", "turn-1", "turn", {}),
+        payload: {
+          schemaVersion: 1,
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "turn-1",
+          lifecycle: "started",
+          itemType: "turn",
+          data: { startedAtMs: 1_700_000_000_000 },
+        },
+      },
+    ]);
+    expect(startedAt).toBe(1_700_000_000_000);
   });
 });

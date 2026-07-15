@@ -238,6 +238,16 @@ export class PlatformClient {
     );
   }
 
+  respondToApproval(approvalId: string, result: Record<string, unknown>) {
+    return this.fetchJson<{ approval: PlatformApproval }>(
+      `/api/approvals/${encodeURIComponent(approvalId)}/respond`,
+      {
+        method: "POST",
+        body: JSON.stringify({ result }),
+      },
+    );
+  }
+
   getRun(runId: string) {
     return this.fetchJson<PlatformRun>(`/api/runs/${encodeURIComponent(runId)}`);
   }

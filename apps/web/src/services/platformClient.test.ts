@@ -224,6 +224,21 @@ describe("PlatformClient.approvals", () => {
     await client.decideApproval("appr-1", "approved");
     expect(fetchMock).toHaveBeenCalled();
   });
+
+  it("responds to a user-input approval", async () => {
+    const fetchMock = mockFetch((url, init) => {
+      expect(url).toBe("http://platform.test/api/approvals/appr-1/respond");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        result: { answers: [{ questionId: "q1", answer: "Ada" }] },
+      });
+      return new Response(JSON.stringify({ approval: { id: "appr-1" } }), { status: 200 });
+    });
+    const client = new PlatformClient({ baseUrl: "http://platform.test", token: "t" });
+    await client.respondToApproval("appr-1", {
+      answers: [{ questionId: "q1", answer: "Ada" }],
+    });
+    expect(fetchMock).toHaveBeenCalled();
+  });
 });
 
 describe("PlatformClient.run controls and files", () => {

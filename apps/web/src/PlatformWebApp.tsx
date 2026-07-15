@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Layout from "./components/Layout";
-import MessageList from "./components/Conversation/MessageList";
-import Composer from "./components/Conversation/Composer";
+import Conversation from "./components/Conversation";
 import type { ModelProviderSummary, ModelSummary } from "./components/Conversation/Composer";
+import type { QueuedFollowUp } from "./components/Conversation/FollowUpQueue";
 import FileManager from "./components/FileManager";
 import type { MessageEntry } from "./components/Conversation/MessageList";
 import { PlatformClient } from "./services/platformClient";
-import type { PlatformProject, PlatformRun, PlatformRunEvent, PlatformTask } from "./services/platformTypes";
-import type { AccessMode, ThreadTokenUsage } from "./types";
+import type { PlatformApproval, PlatformProject, PlatformRun, PlatformRunEvent, PlatformTask } from "./services/platformTypes";
+import type {
+  AccessMode,
+  RequestUserInputRequest,
+  RequestUserInputResponse,
+  ThreadTokenUsage,
+} from "./types";
 import {
   parseModelCatalog,
   parseModelProviderCatalog,
@@ -26,7 +31,9 @@ import {
   latestTurnId,
   maxEventSequence,
   projectedEventsToLogEntries,
+  turnStartedAtFromEvents,
 } from "./utils/projectedRunEventsToLogEntries";
+import { parseUserInputFromApproval } from "./utils/parseUserInputFromApproval";
 import { tokenUsageFromRunEvents } from "./utils/tokenUsageFromRunEvents";
 import "./styles/web.css";
 import "./styles/web-refactor.css";
@@ -67,7 +74,13 @@ export default function PlatformWebApp() {
   const [messages, setMessages] = useState<MessageEntry[]>([]);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [thinking, setThinking] = useState(false);
+  const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null);
+  const [queuedFollowUps, setQueuedFollowUps] = useState<QueuedFollowUp[]>([]);
+  const [steeringFollowUpId, setSteeringFollowUpId] = useState<string | null>(null);
+  const [submittingUserInputId, setSubmittingUserInputId] = useState<string | number | null>(null);
+  const [pendingApprovals, setPendingApprovals] = useState<PlatformApproval[]>([]);
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const [filePanelOpen, setFilePanelOpen] = useState(false);
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
@@ -154,10 +167,15 @@ export default function PlatformWebApp() {
       eventSequenceRef.current = maxEventSequence(eventsRef.current);
       setActiveTurnId(latestTurnId(eventsRef.current));
       setTokenUsage(tokenUsageFromRunEvents(eventsRef.current));
+      setTurnStartedAt(turnStartedAtFromEvents(eventsRef.current));
     }
     const approvals = run && (run.status === "waiting_approval" || isRunInFlight(run.status))
       ? await client.listApprovals(run.id)
       : [];
+    if (activeTaskIdRef.current !== taskId) {
+      return;
+    }
+    setPendingApprovals(approvals);
     const projected = projectedEventsToLogEntries(eventsRef.current, approvals);
     const merged = mergeProjectedMessages(projected, pendingUserMessagesRef.current);
     pendingUserMessagesRef.current = pendingUserMessagesRef.current.filter(
@@ -187,6 +205,9 @@ export default function PlatformWebApp() {
     setMessages([]);
     setActiveRun(null);
     setTokenUsage(null);
+    setTurnStartedAt(null);
+    setQueuedFollowUps([]);
+    setPendingApprovals([]);
     setSelectedModelId(readStoredModelId(activeTaskId));
     setSelectedEffort(readStoredEffort(activeTaskId) ?? "medium");
     void (async () => {
@@ -384,12 +405,18 @@ export default function PlatformWebApp() {
   const handleSend = async () => {
     const text = draft.trim();
     if (!activeTaskId || !text) return;
+    if (thinking) {
+      setQueuedFollowUps((current) => [...current, { id: newId(), text }]);
+      setDraft("");
+      return;
+    }
     setBusy(true);
     try {
       const optimistic: MessageEntry = { id: newId(), level: "user", text };
       pendingUserMessagesRef.current = [...pendingUserMessagesRef.current, optimistic];
       setMessages((current) => [...current, optimistic]);
       setDraft("");
+      setTurnStartedAt(Date.now());
       await ensureActiveRun(activeTaskId);
       await client.sendMessage(activeTaskId, text, {
         model: selectedModelId,
@@ -400,10 +427,61 @@ export default function PlatformWebApp() {
       await syncTaskEvents(activeTaskId, run);
     } catch (error) {
       pendingUserMessagesRef.current = pendingUserMessagesRef.current.filter((entry) => entry.text !== text);
+      setTurnStartedAt(null);
       setAuthError(error instanceof Error ? error.message : String(error));
     } finally {
       setBusy(false);
     }
+  };
+
+  const handleSteerFollowUp = async (followUpId: string) => {
+    if (!activeRun?.id || !activeTurnId || steeringFollowUpId) return;
+    const item = queuedFollowUps.find((entry) => entry.id === followUpId);
+    if (!item) return;
+    setSteeringFollowUpId(followUpId);
+    try {
+      await client.steerRun(activeRun.id, activeTurnId, item.text);
+      setQueuedFollowUps((current) => current.filter((entry) => entry.id !== followUpId));
+      if (activeTaskId) {
+        const run = await refreshRunState(activeTaskId);
+        await syncTaskEvents(activeTaskId, run);
+      }
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSteeringFollowUpId(null);
+    }
+  };
+
+  const handleSubmitUserInput = async (
+    request: RequestUserInputRequest,
+    response: RequestUserInputResponse,
+  ) => {
+    if (submittingUserInputId !== null) return;
+    const approval = pendingApprovals.find(
+      (entry) => entry.codex_request_id === String(request.request_id),
+    );
+    if (!approval) {
+      setAuthError("No pending platform approval found for this input request.");
+      return;
+    }
+    setSubmittingUserInputId(request.request_id);
+    try {
+      await client.respondToApproval(approval.id, { answers: response.answers });
+      if (activeTaskId) {
+        const run = await refreshRunState(activeTaskId);
+        await syncTaskEvents(activeTaskId, run);
+      }
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSubmittingUserInputId(null);
+    }
+  };
+
+  const openFile = (path: string) => {
+    setSelectedFilePath(path);
+    setFilePanelOpen(true);
   };
 
   const handleSelectModel = async (modelId: string) => {
@@ -445,18 +523,25 @@ export default function PlatformWebApp() {
   };
 
   const handleInterrupt = async () => {
-    if (!activeRun?.id || !activeTurnId) return;
-    setBusy(true);
+    if (!activeRun?.id || !activeTurnId || stopping) return;
+    setStopping(true);
     try {
       await client.interruptRun(activeRun.id, activeTurnId);
+      if (activeTaskId) {
+        const run = await refreshRunState(activeTaskId);
+        await syncTaskEvents(activeTaskId, run);
+      }
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : String(error));
     } finally {
-      setBusy(false);
+      setStopping(false);
     }
   };
 
-  const handleDecideApproval = async (approvalId: string, decision: "approved" | "rejected") => {
+  const handleDecideApproval = async (
+    approvalId: string,
+    decision: "approved" | "rejected",
+  ) => {
     setBusy(true);
     try {
       await client.decideApproval(approvalId, decision);
@@ -470,6 +555,12 @@ export default function PlatformWebApp() {
       setBusy(false);
     }
   };
+
+  const activeUserInputRequest = pendingApprovals
+    .map((approval) => parseUserInputFromApproval(approval))
+    .find((request): request is RequestUserInputRequest => request !== null) ?? null;
+  const activeTask = tasks.find((task) => task.id === activeTaskId) ?? null;
+  const threadStatus = activeRun?.status ?? "idle";
 
   if (!token) {
     return (
@@ -612,43 +703,25 @@ export default function PlatformWebApp() {
       )}
     >
       <section className="web-main">
-        <header className="web-header">
-          <button type="button" onClick={() => setSidebarCollapsed((value) => !value)}>
-            Menu
-          </button>
-          <div className="web-header-title">
-            {tasks.find((task) => task.id === activeTaskId)?.title ?? "Select a task"}
-          </div>
-          <div className="web-header-meta">
-            {activeRun ? `run: ${activeRun.status}` : "no active run"}
-          </div>
-          {activeRun ? (
-            <button type="button" onClick={() => setFilePanelOpen((value) => !value)}>
-              Files
-            </button>
-          ) : null}
-        </header>
         {authError ? (
           <div className="web-error-banner">
             <span>{authError}</span>
             <button type="button" onClick={() => setAuthError(null)}>Dismiss</button>
           </div>
         ) : null}
-        <MessageList
-          items={messages}
-          thinking={thinking}
-          onDecideApproval={(approvalId, decision) => void handleDecideApproval(approvalId, decision)}
-        />
-        <Composer
-          draft={draft}
-          onDraftChange={setDraft}
-          onSend={() => void handleSend()}
-          onStop={() => void handleInterrupt()}
-          running={thinking}
-          stopping={busy}
-          busy={busy}
-          disabled={!draft.trim() || !activeTaskId}
+        <Conversation
+          goal={null}
+          workspaceName={projects.find((project) => project.id === activeProjectId)?.name ?? null}
+          threadTitle={activeTask?.title ?? null}
+          conversationId={activeTaskId}
+          sidebarCollapsed={sidebarCollapsed}
+          onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
+          filePanelOpen={filePanelOpen}
+          onToggleFilePanel={() => setFilePanelOpen((value) => !value)}
+          onOpenFile={openFile}
           tokenUsage={tokenUsage}
+          threadStatus={threadStatus}
+          threadSettings={null}
           providers={providers}
           currentProviderId={currentProviderId}
           models={models}
@@ -663,6 +736,26 @@ export default function PlatformWebApp() {
           onSelectEffort={(effort) => void handleSelectEffort(effort)}
           accessMode={accessMode}
           onSelectAccessMode={setAccessMode}
+          messages={messages}
+          workspaceId={activeRun?.id}
+          thinking={thinking}
+          turnStartedAt={turnStartedAt}
+          draft={draft}
+          onDraftChange={setDraft}
+          onSend={() => void handleSend()}
+          onStop={() => void handleInterrupt()}
+          stopping={stopping}
+          queuedFollowUps={queuedFollowUps}
+          steeringFollowUpId={steeringFollowUpId}
+          canSteer={Boolean(activeTurnId) && thinking && !stopping}
+          onSteerFollowUp={(id) => void handleSteerFollowUp(id)}
+          onDeleteFollowUp={(id) => setQueuedFollowUps((current) => current.filter((entry) => entry.id !== id))}
+          userInputRequest={activeUserInputRequest}
+          submittingUserInput={submittingUserInputId === activeUserInputRequest?.request_id}
+          onSubmitUserInput={(request, response) => void handleSubmitUserInput(request, response)}
+          busy={busy}
+          sendDisabled={!draft.trim() || !activeTaskId}
+          onDecideApproval={(approvalId, decision) => void handleDecideApproval(approvalId, decision)}
         />
       </section>
     </Layout>

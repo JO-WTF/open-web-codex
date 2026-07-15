@@ -143,7 +143,7 @@ CODEX_MONITOR_DAEMON_TOKEN=dev-token \
   --web-listen 127.0.0.1:4733
 ```
 
-Then open the Vite app in web mode (`/web` or `/?web=1`) and point it at `http://127.0.0.1:4733`. The preview supports loading workspaces, connecting one workspace, starting a thread, sending a text task, and streaming `app-server-event` notifications over `GET /api/events`.
+Then open the Vite app in web mode (`/web` or `/?web=1`) and point it at the platform server (default `http://127.0.0.1:4800`). The browser UI uses the versioned platform REST API (`/api/sessions`, `/api/projects`, `/api/tasks`, `/api/approvals`, and related routes) instead of the legacy daemon `/api/rpc` and `/api/events` gateway.
 
 
 Useful overrides:

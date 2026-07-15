@@ -8,7 +8,7 @@ use axum::{
 use chrono::{Duration, Utc};
 use open_web_codex_adapter::CodexAdapter;
 use open_web_codex_platform_contracts::error::PlatformError;
-use open_web_codex_platform_contracts::{Approval, ApprovalDecisionRequest, ApprovalDecisionResponse};
+use open_web_codex_platform_contracts::{Approval, ApprovalDecisionRequest, ApprovalDecisionResponse, ApprovalRespondRequest, ApprovalRespondResponse};
 use open_web_codex_platform_store::AppState;
 use serde_json::json;
 use sqlx::Row;
@@ -179,6 +179,104 @@ pub async fn decide_approval(
     })?;
 
     Ok(Json(ApprovalDecisionResponse {
+        approval: map_approval_row(&row),
+    }))
+}
+
+/// POST /api/approvals/:id/respond — respond to a Codex server request with an arbitrary result.
+pub async fn respond_approval(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(approval_id): Path<Uuid>,
+    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
+    Json(body): Json<ApprovalRespondRequest>,
+) -> ApiResult<ApprovalRespondResponse> {
+    ensure_approval_access(&state.db, auth.user_id, approval_id).await?;
+
+    let mut transaction = state.db.begin().await.map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PlatformError::internal(format!("{error}"))),
+        )
+    })?;
+
+    let row = sqlx::query(
+        "UPDATE approvals
+         SET status = 'approved',
+             decision = 'responded',
+             decided_by = $1,
+             decided_at = now()
+         WHERE id = $2
+           AND status = 'pending'
+           AND (expires_at IS NULL OR expires_at > now())
+         RETURNING id, run_id, request_type, request_payload, status, codex_request_id, \
+                   workspace_id, thread_id, decision, decided_by, decided_at, created_at, expires_at",
+    )
+    .bind(auth.user_id)
+    .bind(approval_id)
+    .fetch_optional(&mut *transaction)
+    .await
+    .map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PlatformError::internal(format!("{error}"))),
+        )
+    })?;
+
+    let Some(row) = row else {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(PlatformError::bad_request(
+                "approval is not pending or has expired",
+            )),
+        ));
+    };
+
+    let run_id: Uuid = row.get("run_id");
+    let workspace_id: Option<String> = row.get("workspace_id");
+    let codex_request_id: Option<String> = row.get("codex_request_id");
+
+    if let (Some(workspace_id), Some(request_id)) = (workspace_id, codex_request_id) {
+        adapter
+            .rpc(
+                "respond_to_server_request",
+                json!({
+                    "workspaceId": workspace_id,
+                    "requestId": request_id,
+                    "result": body.result,
+                }),
+            )
+            .await
+            .map_err(|error| {
+                (
+                    StatusCode::BAD_GATEWAY,
+                    Json(PlatformError::internal(format!("adapter error: {error}"))),
+                )
+            })?;
+    }
+
+    sqlx::query(
+        "UPDATE runs SET status = 'running', updated_at = now()
+         WHERE id = $1 AND status = 'waiting_approval'",
+    )
+    .bind(run_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PlatformError::internal(format!("{error}"))),
+        )
+    })?;
+
+    transaction.commit().await.map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PlatformError::internal(format!("{error}"))),
+        )
+    })?;
+
+    Ok(Json(ApprovalRespondResponse {
         approval: map_approval_row(&row),
     }))
 }
