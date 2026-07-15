@@ -23,13 +23,17 @@ not a zero-diff Codex subtree.
    followed by generated-contract validation, focused Runtime/TUI tests, and a
    real Provider app-server smoke.
 
-## Current short-term objective
+## Current state
 
-The active task is the source-difference inventory. The retained core seams
-below are recorded now; all remaining non-generated differences must be
-classified before they are moved or removed. Do not infer that a difference is
-unnecessary solely because it is outside the Provider paths: first verify
-whether current upstream already supplies its behavior.
+The integrated base is `1bbdb32789e1`. The current comparison against
+`codex-upstream/main` contains 111 `local-only` paths and no pending official
+or diverged paths. All non-generated source candidates are classified, core
+seams have been replayed and validated, and the machine-readable evidence is
+in `.sync/codex-customization-inventory.json`.
+
+The next convergence action is to use the Profile Host provisioner from the
+native Platform Server spawn path. Once that path exists,
+`utils/home-dir` can return to official missing-`CODEX_HOME` semantics.
 
 Use `scripts/codex-customization-status.sh` as the inventory input. It compares
 `HEAD:codex` directly with the current `codex-upstream/main` tree; this
@@ -60,7 +64,7 @@ The script separates the raw tree difference into:
 
 ## Current inventory classification
 
-The current comparison against `codex-upstream/main` contains 247
+The current comparison against `codex-upstream/main` contains 111
 `local-only` paths and no pending official or diverged paths. The
 non-generated source candidates are classified below; their generated
 artifacts, tests, and snapshots follow the owning source seam.
@@ -102,7 +106,10 @@ For every official sync:
 3. Regenerate protocol artifacts after each protocol/configuration change.
 4. Run the seam validations, then the Web contract checks and real smoke.
 5. Update this file with the current paths, symbols, validation evidence, and
-   removal conditions. Do not retain historical status narratives here.
+   removal conditions. Update `.sync/codex-upstream.json` and
+   `.sync/codex-customization-inventory.json` with the integrated commit,
+   comparison, validation, and next action. Do not retain historical status
+   narratives here.
 
 For every convergence change:
 
