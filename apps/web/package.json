@@ -11,6 +11,7 @@
     "prebuild": "npm run sync:material-icons",
     "build": "tsc && vite build",
     "check:codex-contracts": "node scripts/check-codex-contracts.mjs",
+    "generate:codex-contracts": "node scripts/generate-codex-contract-bundle.mjs",
     "check:tauri-boundary": "node scripts/check-tauri-boundary.mjs",
     "fetch:codex-contracts": "node scripts/fetch-codex-contracts.mjs",
     "smoke:codex-app-server": "node scripts/codex-app-server-smoke.mjs --require-manifest",

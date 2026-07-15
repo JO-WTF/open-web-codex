@@ -1546,6 +1546,12 @@ macro_rules! server_notification_definitions {
             }
         }
 
+        pub(crate) const EXPERIMENTAL_SERVER_NOTIFICATIONS: &[&str] = &[
+            $(
+                experimental_method_entry!($(#[experimental($reason)])? $(=> $wire)?),
+            )*
+        ];
+
         #[allow(clippy::vec_init_then_push)]
         pub fn export_server_notification_schemas(
             out_dir: &::std::path::Path,
@@ -1614,6 +1620,12 @@ macro_rules! client_notification_definitions {
                 }
             }
         }
+
+        pub(crate) const EXPERIMENTAL_CLIENT_NOTIFICATIONS: &[&str] = &[
+            $(
+                experimental_method_entry!($(#[experimental($reason)])? $(=> $wire)?),
+            )*
+        ];
 
         pub fn export_client_notification_schemas(
             _out_dir: &::std::path::Path,

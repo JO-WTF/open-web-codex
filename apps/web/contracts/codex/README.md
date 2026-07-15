@@ -4,13 +4,12 @@
 
 | Artifact | Purpose |
 | --- | --- |
+| `policy/capability-ids.v1.json` | Stable V1 capability ID registry and ownership |
+| `policy/compatibility-matrix.json` | Explicit Web/contract/server build compatibility and release order |
+| `policy/feature-policy.v1.json` | Browser feature to capability ID mapping |
+| `generated/contract-bundle.v1.json` | Signed-build contract bundle emitted from a Codex build |
 | `capability-manifest.schema.json` | Machine-readable app-server Capability Manifest v1 |
-| `capability-ids.v1.json` | Stable V1 capability ID registry and ownership |
 | `fixtures/capability-manifest.v1.json` | Valid mixed-state Manifest used by Web contract tests |
-| `error.schema.json` | Stable Host/Web error envelope |
-| `protocol-fixture.schema.json` | Replay Fixture envelope for requests, responses and notifications |
-| `contract-bundle.schema.json` | Signed-build contract bundle and per-file integrity envelope |
-| `compatibility-matrix.json` | Explicit Web/contract/server build compatibility and release order |
 
 ## Negotiation Order
 

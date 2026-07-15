@@ -55,6 +55,12 @@ struct Cli {
     /// configured but missing home.
     #[arg(long, env = "CODEX_HOME")]
     codex_home: Option<PathBuf>,
+    /// Expose legacy `/api/rpc` and `/api/events` Codex proxy routes.
+    ///
+    /// Disabled by default. Local migration may opt in with
+    /// `CODEX_ALLOW_LEGACY_PROXY=1`.
+    #[arg(long, env = "CODEX_ALLOW_LEGACY_PROXY", default_value_t = false, action = clap::ArgAction::SetTrue)]
+    legacy_codex_proxy: bool,
 }
 
 #[tokio::main]
@@ -147,10 +153,18 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    if cli.legacy_codex_proxy {
+        tracing::warn!(
+            "legacy Codex RPC/SSE proxy is enabled; do not use this as a multi-user production boundary"
+        );
+    } else {
+        tracing::info!("legacy Codex RPC/SSE proxy routes are disabled");
+    }
+
     let app = Router::new()
-        .nest("/api", routes::router(adapter))
+        .nest("/api", routes::router(adapter, cli.legacy_codex_proxy))
         .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive())
+        .layer(cors_layer(cli.legacy_codex_proxy))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(cli.bind).await?;
@@ -159,4 +173,12 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+fn cors_layer(legacy_codex_proxy: bool) -> CorsLayer {
+    if legacy_codex_proxy {
+        CorsLayer::permissive()
+    } else {
+        CorsLayer::new()
+    }
 }

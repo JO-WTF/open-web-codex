@@ -15,9 +15,11 @@ use crate::export_server_responses;
 use crate::protocol::common::EXPERIMENTAL_CLIENT_METHOD_PARAM_TYPES;
 use crate::protocol::common::EXPERIMENTAL_CLIENT_METHOD_RESPONSE_TYPES;
 use crate::protocol::common::EXPERIMENTAL_CLIENT_METHODS;
+use crate::protocol::common::EXPERIMENTAL_CLIENT_NOTIFICATIONS;
 use crate::protocol::common::EXPERIMENTAL_SERVER_METHOD_PARAM_TYPES;
 use crate::protocol::common::EXPERIMENTAL_SERVER_METHOD_RESPONSE_TYPES;
 use crate::protocol::common::EXPERIMENTAL_SERVER_METHODS;
+use crate::protocol::common::EXPERIMENTAL_SERVER_NOTIFICATIONS;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -262,6 +264,8 @@ fn filter_experimental_ts(out_dir: &Path) -> Result<()> {
     // post-processing because they encode method/field information locally.
     filter_request_ts(out_dir, "ClientRequest.ts", EXPERIMENTAL_CLIENT_METHODS)?;
     filter_request_ts(out_dir, "ServerRequest.ts", EXPERIMENTAL_SERVER_METHODS)?;
+    filter_request_ts(out_dir, "ServerNotification.ts", EXPERIMENTAL_SERVER_NOTIFICATIONS)?;
+    filter_request_ts(out_dir, "ClientNotification.ts", EXPERIMENTAL_CLIENT_NOTIFICATIONS)?;
     filter_experimental_type_fields_ts(out_dir, &registered_fields)?;
     remove_generated_type_files(out_dir, &experimental_method_types, "ts")?;
     Ok(())
@@ -273,9 +277,19 @@ pub(crate) fn filter_experimental_ts_tree(tree: &mut BTreeMap<PathBuf, String>) 
     for (file_name, experimental_methods) in [
         ("ClientRequest.ts", EXPERIMENTAL_CLIENT_METHODS),
         ("ServerRequest.ts", EXPERIMENTAL_SERVER_METHODS),
+        ("ServerNotification.ts", EXPERIMENTAL_SERVER_NOTIFICATIONS),
+        ("ClientNotification.ts", EXPERIMENTAL_CLIENT_NOTIFICATIONS),
     ] {
+        let experimental_methods: Vec<&str> = experimental_methods
+            .iter()
+            .copied()
+            .filter(|method| !method.is_empty())
+            .collect();
+        if experimental_methods.is_empty() {
+            continue;
+        }
         if let Some(content) = tree.get_mut(Path::new(file_name)) {
-            *content = filter_request_ts_contents(std::mem::take(content), experimental_methods);
+            *content = filter_request_ts_contents(std::mem::take(content), &experimental_methods);
         }
     }
 
@@ -307,13 +321,21 @@ pub(crate) fn filter_experimental_ts_tree(tree: &mut BTreeMap<PathBuf, String>) 
 
 /// Removes union arms from a generated request type for methods marked experimental.
 fn filter_request_ts(out_dir: &Path, file_name: &str, experimental_methods: &[&str]) -> Result<()> {
+    let experimental_methods: Vec<&str> = experimental_methods
+        .iter()
+        .copied()
+        .filter(|method| !method.is_empty())
+        .collect();
+    if experimental_methods.is_empty() {
+        return Ok(());
+    }
     let path = out_dir.join(file_name);
     if !path.exists() {
         return Ok(());
     }
     let mut content =
         fs::read_to_string(&path).with_context(|| format!("Failed to read {}", path.display()))?;
-    content = filter_request_ts_contents(content, experimental_methods);
+    content = filter_request_ts_contents(content, &experimental_methods);
 
     fs::write(&path, content).with_context(|| format!("Failed to write {}", path.display()))?;
     Ok(())
@@ -417,6 +439,8 @@ fn filter_experimental_schema(bundle: &mut Value) -> Result<()> {
     filter_experimental_fields_in_definitions(bundle, &registered_fields);
     prune_experimental_methods(bundle, EXPERIMENTAL_CLIENT_METHODS);
     prune_experimental_methods(bundle, EXPERIMENTAL_SERVER_METHODS);
+    prune_experimental_methods(bundle, EXPERIMENTAL_SERVER_NOTIFICATIONS);
+    prune_experimental_methods(bundle, EXPERIMENTAL_CLIENT_NOTIFICATIONS);
     remove_experimental_method_type_definitions(bundle);
     Ok(())
 }
@@ -3030,6 +3054,87 @@ permissionProfile?: string | null};
             "RemoteControlClientsRevokeResponse.json",
         ] {
             assert!(output_dir.join("v2").join(schema).exists());
+        }
+
+        let _cleanup = fs::remove_dir_all(&output_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn experimental_annotation_tables_match_method_registry() {
+        use std::collections::HashSet;
+
+        let registry: HashSet<String> = crate::registry_experimental_wire_methods()
+            .into_iter()
+            .collect();
+        let annotated = EXPERIMENTAL_CLIENT_METHODS
+            .iter()
+            .chain(EXPERIMENTAL_SERVER_METHODS.iter())
+            .chain(EXPERIMENTAL_SERVER_NOTIFICATIONS.iter())
+            .chain(EXPERIMENTAL_CLIENT_NOTIFICATIONS.iter())
+            .filter(|method| !method.is_empty())
+            .map(|method| (*method).to_string())
+            .collect::<HashSet<_>>();
+
+        assert_eq!(
+            registry, annotated,
+            "method registry experimental_reason values must match annotation tables"
+        );
+    }
+
+    #[test]
+    fn stable_schema_excludes_method_registry_experimental_wire_names() -> Result<()> {
+        use std::collections::HashSet;
+
+        fn notification_methods_from_schema(json: &str) -> HashSet<String> {
+            let value: Value = serde_json::from_str(json).expect("notification schema json");
+            value["oneOf"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|variant| {
+                    variant["properties"]["method"]["const"]
+                        .as_str()
+                        .or_else(|| {
+                            variant["properties"]["method"]["enum"]
+                                .as_array()
+                                .and_then(|values| values.first())
+                                .and_then(Value::as_str)
+                        })
+                        .map(str::to_string)
+                })
+                .collect()
+        }
+
+        let output_dir = std::env::temp_dir().join(format!("codex_schema_{}", Uuid::now_v7()));
+        fs::create_dir(&output_dir)?;
+        generate_json_with_experimental(&output_dir, /*experimental_api*/ false)?;
+
+        let client_request_json = fs::read_to_string(output_dir.join("ClientRequest.json"))?;
+        let server_request_json = fs::read_to_string(output_dir.join("ServerRequest.json"))?;
+        let server_notification_json =
+            fs::read_to_string(output_dir.join("ServerNotification.json"))?;
+        let experimental_methods: HashSet<_> =
+            crate::registry_experimental_wire_methods().into_iter().collect();
+
+        for method in &experimental_methods {
+            assert!(
+                !client_request_json.contains(&format!("\"{method}\"")),
+                "stable ClientRequest must not include experimental method {method}"
+            );
+            assert!(
+                !server_request_json.contains(&format!("\"{method}\"")),
+                "stable ServerRequest must not include experimental method {method}"
+            );
+        }
+
+        let server_notification_methods =
+            notification_methods_from_schema(&server_notification_json);
+        for method in experimental_methods {
+            assert!(
+                !server_notification_methods.contains(&method),
+                "stable ServerNotification must not include experimental method {method}"
+            );
         }
 
         let _cleanup = fs::remove_dir_all(&output_dir);

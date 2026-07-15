@@ -1,0 +1,61 @@
+{
+  "schemaVersion": "1.0.0",
+  "description": "Maps browser product features to capability IDs. This file is product policy; it does not claim server support.",
+  "features": [
+    {
+      "id": "shell.initialize",
+      "capabilityId": "protocol.initialize",
+      "minimumCapabilityVersion": "1.0.0",
+      "allowedStatuses": ["supported"]
+    },
+    {
+      "id": "task.threadLifecycle",
+      "capabilityId": "thread.lifecycle",
+      "minimumCapabilityVersion": "1.0.0",
+      "allowedStatuses": ["supported"]
+    },
+    {
+      "id": "task.turnControl",
+      "capabilityId": "turn.lifecycle",
+      "minimumCapabilityVersion": "1.0.0",
+      "allowedStatuses": ["supported"]
+    },
+    {
+      "id": "task.approvals",
+      "capabilityId": "approval.lifecycle",
+      "minimumCapabilityVersion": "1.0.0",
+      "allowedStatuses": ["supported"]
+    },
+    {
+      "id": "profile.multiWorkspace",
+      "capabilityId": "profile.multi_workspace",
+      "minimumCapabilityVersion": "1.0.0",
+      "allowedStatuses": ["supported"]
+    },
+    {
+      "id": "studio.providers",
+      "capabilityId": "models.providers",
+      "minimumCapabilityVersion": "1.0.0",
+      "allowedStatuses": ["supported"]
+    },
+    {
+      "id": "studio.skillsList",
+      "capabilityId": "skills.crud",
+      "minimumCapabilityVersion": "1.0.0",
+      "allowedStatuses": ["supported", "degraded"]
+    },
+    {
+      "id": "studio.mcpStatus",
+      "capabilityId": "mcp.config",
+      "minimumCapabilityVersion": "1.0.0",
+      "allowedStatuses": ["supported", "degraded"]
+    },
+    {
+      "id": "studio.multiAgent",
+      "capabilityId": "agents.multi_agent",
+      "minimumCapabilityVersion": "1.0.0",
+      "allowedStatuses": ["experimental"],
+      "requiresExplicitEnable": true
+    }
+  ]
+}
