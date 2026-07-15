@@ -43,7 +43,13 @@ pub async fn start_run(
     headers: HeaderMap,
     Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
 ) -> ApiResult<StartRunResponse> {
-    if let Some(cached) = lookup_idempotent_response(&state, &headers, "POST /api/tasks/:id/runs").await? {
+    if let Some(cached) = lookup_idempotent_response(
+        &state,
+        &headers,
+        &idempotency_route(task_id),
+    )
+    .await?
+    {
         return Ok(cached);
     }
 
@@ -115,7 +121,7 @@ pub async fn start_run(
 
     let run = sqlx::query(
         "UPDATE runs SET status = 'running', codex_thread_id = $1, updated_at = now() \
-         WHERE id = $2 \
+         WHERE id = $2 AND status = 'provisioning' \
          RETURNING id, task_id, status, codex_thread_id, created_at, updated_at",
     )
     .bind(&thread_id)
@@ -132,7 +138,7 @@ pub async fn start_run(
     store_idempotent_response(
         &state,
         &headers,
-        "POST /api/tasks/:id/runs",
+        &idempotency_route(task_id),
         StatusCode::OK,
         &response,
     )
@@ -364,6 +370,10 @@ async fn store_idempotent_response(
     .await
     .map_err(db_error)?;
     Ok(())
+}
+
+fn idempotency_route(task_id: Uuid) -> String {
+    format!("POST /api/tasks/{task_id}/runs")
 }
 
 fn idempotency_key(headers: &HeaderMap) -> Option<String> {

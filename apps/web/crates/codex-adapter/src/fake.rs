@@ -30,6 +30,7 @@ struct FakeState {
 }
 
 /// In-memory Codex adapter that simulates workspace, thread and event flows.
+#[derive(Clone)]
 pub struct FakeCodexAdapter {
     state: Arc<Mutex<FakeState>>,
     notify: Arc<tokio::sync::Notify>,
@@ -194,11 +195,23 @@ impl CodexAdapter for FakeCodexAdapter {
                         msg_count: 0, updated_at: updated_ts,
                     });
                 }
-                // Emit thread/started and a pending approval request for platform smoke.
+                // Emit thread/started immediately; defer approval until after start_thread returns
+                // so event_projection can resolve codex_thread_id on the run row.
                 self.emit(Self::started_event(ws_id, &thread_id)).await;
-                let request_id = self.counter.fetch_add(1, Ordering::SeqCst);
-                self.emit(Self::approval_request_event(ws_id, &thread_id, request_id))
-                    .await;
+                let adapter = self.clone();
+                let ws_id = ws_id.to_string();
+                let thread_id_for_approval = thread_id.clone();
+                tokio::spawn(async move {
+                    tokio::task::yield_now().await;
+                    let request_id = adapter.counter.fetch_add(1, Ordering::SeqCst);
+                    adapter
+                        .emit(Self::approval_request_event(
+                            &ws_id,
+                            &thread_id_for_approval,
+                            request_id,
+                        ))
+                        .await;
+                });
 
                 Ok(json!({ "threadId": thread_id, "createdAt": created }))
             }
