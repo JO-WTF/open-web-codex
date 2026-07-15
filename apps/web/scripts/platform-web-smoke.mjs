@@ -189,6 +189,13 @@ async function main() {
     );
     assertStatus("start run", run.status, 200);
 
+    const duplicateRun = await fetchJson(
+      baseUrl,
+      `/api/tasks/${encodeURIComponent(task.body.id)}/runs`,
+      { method: "POST", headers: { authorization: `Bearer ${token}` }, body: "{}" },
+    );
+    assertStatus("reject duplicate active run", duplicateRun.status, 409);
+
     const active = await fetchJson(
       baseUrl,
       `/api/tasks/${encodeURIComponent(task.body.id)}/active-run`,
@@ -278,6 +285,7 @@ async function main() {
           ok: true,
           checks: [
             "legacy_proxy_removed",
+            "reject_duplicate_active_run",
             "delete_project",
             "active_run",
             "run_files",

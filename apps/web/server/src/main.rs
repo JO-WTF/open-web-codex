@@ -14,7 +14,7 @@ use std::sync::Arc;
 use axum::Router;
 use clap::Parser;
 use open_web_codex_profile_host::ensure_profile_home;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
@@ -154,7 +154,12 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .nest("/api", routes::router(adapter))
         .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::new())
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any),
+        )
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(cli.bind).await?;

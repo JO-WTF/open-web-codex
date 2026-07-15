@@ -18,6 +18,30 @@ type GatewayState = "checking" | "online" | "offline";
 const newId = () =>
   crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
+function isRunTerminal(status: string) {
+  return status === "completed" || status === "cancelled" || status === "failed";
+}
+
+function isRunInFlight(status: string) {
+  return status === "running"
+    || status === "provisioning"
+    || status === "queued"
+    || status === "waiting_approval";
+}
+
+function mergeProjectedMessages(projected: MessageEntry[], pendingUser: MessageEntry[]) {
+  if (pendingUser.length === 0) {
+    return projected;
+  }
+  const seen = new Set(
+    projected
+      .filter((entry) => entry.level === "user")
+      .map((entry) => entry.text.trim()),
+  );
+  const extras = pendingUser.filter((entry) => !seen.has(entry.text.trim()));
+  return [...projected, ...extras];
+}
+
 export default function PlatformWebApp() {
   const [baseUrl, setBaseUrl] = useState(
     localStorage.getItem("open-web-codex:api-base") ?? "http://127.0.0.1:4800",
@@ -46,6 +70,8 @@ export default function PlatformWebApp() {
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const eventSequenceRef = useRef(0);
   const eventsRef = useRef<PlatformRunEvent[]>([]);
+  const pendingUserMessagesRef = useRef<MessageEntry[]>([]);
+  const activeTaskIdRef = useRef<string | null>(null);
 
   const client = useMemo(() => new PlatformClient({ baseUrl, token }), [baseUrl, token]);
 
@@ -73,39 +99,51 @@ export default function PlatformWebApp() {
     sessionStorage.setItem("open-web-codex:session", token);
   }, [token]);
 
+  useEffect(() => {
+    activeTaskIdRef.current = activeTaskId;
+  }, [activeTaskId]);
+
   const loadProjects = useCallback(async () => {
     const next = await client.listProjects();
     setProjects(next);
-    if (!activeProjectId && next.length > 0) {
-      setActiveProjectId(next[0].id);
-    }
-  }, [activeProjectId, client]);
+    setActiveProjectId((current) => current ?? next[0]?.id ?? null);
+  }, [client]);
 
   const loadTasks = useCallback(async (projectId: string) => {
     const next = await client.listTasks(projectId);
     setTasks(next);
-    if (!activeTaskId && next.length > 0) {
-      setActiveTaskId(next[0].id);
-    }
-  }, [activeTaskId, client]);
+    setActiveTaskId((current) => current ?? next[0]?.id ?? null);
+  }, [client]);
 
   const refreshRunState = useCallback(async (taskId: string) => {
     const { run } = await client.getActiveRun(taskId);
-    setActiveRun(run);
+    if (activeTaskIdRef.current === taskId) {
+      setActiveRun(run);
+    }
     return run;
   }, [client]);
 
   const syncTaskEvents = useCallback(async (taskId: string, run: PlatformRun | null) => {
-    const events = await client.listTaskEvents(taskId, eventSequenceRef.current || undefined);
+    const events = await client.listTaskEvents(
+      taskId,
+      eventSequenceRef.current > 0 ? eventSequenceRef.current : undefined,
+    );
+    if (activeTaskIdRef.current !== taskId) {
+      return;
+    }
     if (events.length > 0) {
       eventsRef.current = [...eventsRef.current, ...events];
       eventSequenceRef.current = maxEventSequence(eventsRef.current);
       setActiveTurnId(latestTurnId(eventsRef.current));
     }
     const approvals = run ? await client.listApprovals(run.id) : [];
-    setMessages(projectedEventsToLogEntries(eventsRef.current, approvals));
-    const running = run?.status === "running" || run?.status === "provisioning" || run?.status === "queued";
-    setThinking(running);
+    const projected = projectedEventsToLogEntries(eventsRef.current, approvals);
+    const merged = mergeProjectedMessages(projected, pendingUserMessagesRef.current);
+    pendingUserMessagesRef.current = pendingUserMessagesRef.current.filter(
+      (entry) => !projected.some((projectedEntry) => projectedEntry.level === "user" && projectedEntry.text.trim() === entry.text.trim()),
+    );
+    setMessages(merged);
+    setThinking(run ? isRunInFlight(run.status) : false);
   }, [client]);
 
   useEffect(() => {
@@ -115,6 +153,8 @@ export default function PlatformWebApp() {
 
   useEffect(() => {
     if (!activeProjectId || !token) return;
+    setTasks([]);
+    setActiveTaskId(null);
     void loadTasks(activeProjectId).catch((error) => setAuthError(String(error)));
   }, [activeProjectId, token, loadTasks]);
 
@@ -122,7 +162,9 @@ export default function PlatformWebApp() {
     if (!activeTaskId || !token) return;
     eventsRef.current = [];
     eventSequenceRef.current = 0;
+    pendingUserMessagesRef.current = [];
     setMessages([]);
+    setActiveRun(null);
     void (async () => {
       const run = await refreshRunState(activeTaskId);
       await syncTaskEvents(activeTaskId, run);
@@ -132,10 +174,15 @@ export default function PlatformWebApp() {
   useEffect(() => {
     if (!activeTaskId || !token) return undefined;
     const timer = window.setInterval(() => {
+      const taskId = activeTaskId;
       void (async () => {
-        const run = await refreshRunState(activeTaskId);
-        await syncTaskEvents(activeTaskId, run);
-      })().catch(() => undefined);
+        const run = await refreshRunState(taskId);
+        await syncTaskEvents(taskId, run);
+      })().catch((error) => {
+        if (activeTaskIdRef.current === taskId) {
+          setAuthError(error instanceof Error ? error.message : String(error));
+        }
+      });
     }, 1200);
     return () => window.clearInterval(timer);
   }, [activeTaskId, token, refreshRunState, syncTaskEvents]);
@@ -223,13 +270,14 @@ export default function PlatformWebApp() {
   };
 
   const ensureActiveRun = async (taskId: string) => {
-    let run = activeRun;
-    if (!run || run.task_id !== taskId || ["completed", "cancelled", "failed"].includes(run.status)) {
-      const started = await client.startTaskRun(taskId, newId());
-      run = started.run;
+    const { run } = await client.getActiveRun(taskId);
+    if (run && !isRunTerminal(run.status)) {
       setActiveRun(run);
+      return run;
     }
-    return run;
+    const started = await client.startTaskRun(taskId, newId());
+    setActiveRun(started.run);
+    return started.run;
   };
 
   const handleSend = async () => {
@@ -237,16 +285,16 @@ export default function PlatformWebApp() {
     if (!activeTaskId || !text) return;
     setBusy(true);
     try {
+      const optimistic: MessageEntry = { id: newId(), level: "user", text };
+      pendingUserMessagesRef.current = [...pendingUserMessagesRef.current, optimistic];
+      setMessages((current) => [...current, optimistic]);
+      setDraft("");
       await ensureActiveRun(activeTaskId);
       await client.sendMessage(activeTaskId, text);
-      setDraft("");
-      setMessages((current) => [
-        ...current,
-        { id: newId(), level: "user", text },
-      ]);
       const run = await refreshRunState(activeTaskId);
       await syncTaskEvents(activeTaskId, run);
     } catch (error) {
+      pendingUserMessagesRef.current = pendingUserMessagesRef.current.filter((entry) => entry.text !== text);
       setAuthError(error instanceof Error ? error.message : String(error));
     } finally {
       setBusy(false);
@@ -470,3 +518,5 @@ export default function PlatformWebApp() {
     </Layout>
   );
 }
+
+export { isRunInFlight, isRunTerminal, mergeProjectedMessages };

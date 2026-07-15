@@ -642,7 +642,7 @@ GET/POST/PATCH/DELETE /api/codex/profiles/:id/skills
 1. `M0-B03/B04`：`experimental` 全自动声明生成、Feature Policy 单测覆盖。
 2. `M0-B09` 与 `M0-C03/C04/C05`：CI 固定 bundle 摘要、从 Bundle 生成消费类型。
 3. 真实 `--require-manifest` Smoke 保留；Schema/Manifest 漂移门禁由 `codex-protocol-ci` 与 `check:codex-generated` 承担。
-4. Legacy `/api/rpc` 与 permissive CORS 默认关闭；本地迁移需 `CODEX_ALLOW_LEGACY_PROXY=1`。
+4. Legacy `/api/rpc` 与 `/api/events` 代理已移除；平台 server 仅暴露 REST API。
 
 **完成证据：** `just test -p codex-app-server-protocol`（281 passed）、`npm run check:codex-generated`、`npm run test:feature-policy`、Web contract check 通过。
 

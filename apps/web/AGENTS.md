@@ -36,8 +36,8 @@ and local MVP, not the target production boundary.
    Thread/Turn, context, memory, agents, skills, plugins and MCP state.
 4. Every database/resource lookup must enforce organization, membership and
    action scope. Every Runtime call must enforce Profile/Thread/Workspace scope.
-5. The legacy `/api/rpc` and SSE Gateway are local migration surfaces. Do not
-   add production features that depend on raw passthrough or query tokens.
+5. Legacy `/api/rpc` and SSE Gateway have been removed from the platform server.
+   Browser product code must use platform REST APIs only.
 6. Do not duplicate Task/Run/Profile behavior in Tauri and the platform server.
    New production behavior lands in platform crates first; transitional adapters
    call that behavior where practical.

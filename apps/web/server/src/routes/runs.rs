@@ -142,6 +142,24 @@ pub async fn start_run(
 
     ensure_thread_capability(&adapter).await?;
 
+    let existing_active = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM runs \
+         WHERE task_id = $1 AND status NOT IN ('completed', 'cancelled', 'failed') \
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(task_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(db_error)?;
+    if let Some(existing_id) = existing_active {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(PlatformError::bad_request(format!(
+                "task {task_id} already has an active run ({existing_id})"
+            ))),
+        ));
+    }
+
     let task = load_task_context(&state, task_id).await?;
     let data_root = data_root_from_env();
 

@@ -220,10 +220,20 @@ describe("PlatformClient.run controls and files", () => {
 describe("PlatformClient errors", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("throws platform error messages", async () => {
+  it("throws platform error messages from PlatformError body", async () => {
     mockFetch(() =>
-      new Response(JSON.stringify({ error: { message: "forbidden" } }), { status: 403 }));
+      new Response(JSON.stringify({
+        kind: "forbidden",
+        message: "organization access denied",
+        request_id: null,
+      }), { status: 403 }));
     const client = new PlatformClient({ baseUrl: "http://platform.test", token: "t" });
-    await expect(client.me()).rejects.toThrow("forbidden");
+    await expect(client.me()).rejects.toThrow("organization access denied");
+  });
+
+  it("falls back to generic message for empty bodies", async () => {
+    mockFetch(() => new Response("", { status: 500 }));
+    const client = new PlatformClient({ baseUrl: "http://platform.test", token: "t" });
+    await expect(client.me()).rejects.toThrow("Platform request failed (HTTP 500).");
   });
 });

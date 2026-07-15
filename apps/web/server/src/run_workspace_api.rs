@@ -144,6 +144,17 @@ mod tests {
     use std::fs;
 
     #[test]
+    fn rejects_path_escape() {
+        let root = std::env::temp_dir().join(format!("owc-path-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("safe.txt"), "ok").unwrap();
+        let canonical = root.canonicalize().unwrap();
+        let err = resolve_workspace_file(&canonical, "../etc/passwd");
+        assert!(err.is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn parses_git_status_lines() {
         let root = std::env::temp_dir().join(format!("owc-git-{}", std::process::id()));
         fs::create_dir_all(&root).unwrap();

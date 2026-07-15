@@ -15,9 +15,23 @@ type PlatformClientOptions = {
 };
 
 type PlatformErrorBody = {
-  error?: { message?: string; code?: string };
+  kind?: string;
   message?: string;
+  error?: { message?: string; code?: string };
 };
+
+function platformErrorMessage(payload: PlatformErrorBody | null, status: number) {
+  if (!payload) {
+    return `Platform request failed (HTTP ${status}).`;
+  }
+  if (typeof payload.message === "string" && payload.message.trim()) {
+    return payload.message;
+  }
+  if (typeof payload.error?.message === "string" && payload.error.message.trim()) {
+    return payload.error.message;
+  }
+  return `Platform request failed (HTTP ${status}).`;
+}
 
 function defaultBaseUrl() {
   return import.meta.env.VITE_OPEN_WEB_CODEX_API ?? "http://127.0.0.1:4800";
@@ -60,11 +74,7 @@ export class PlatformClient {
     }
     if (!response.ok) {
       const errorBody = payload as PlatformErrorBody | null;
-      const message =
-        errorBody?.error?.message ??
-        errorBody?.message ??
-        `Platform request failed (HTTP ${response.status}).`;
-      throw new Error(message);
+      throw new Error(platformErrorMessage(errorBody, response.status));
     }
     return payload as T;
   }
