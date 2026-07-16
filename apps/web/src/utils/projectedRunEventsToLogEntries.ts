@@ -136,19 +136,3 @@ export function latestTurnId(events: PlatformRunEvent[]): string | null {
 export function maxEventSequence(events: PlatformRunEvent[]): number {
   return events.reduce((max, event) => Math.max(max, event.sequence), 0);
 }
-
-export function turnStartedAtFromEvents(events: PlatformRunEvent[]): number | null {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index];
-    if (event.event_type !== "codex.turn.started") {
-      continue;
-    }
-    const startedAtMs = event.payload?.data?.startedAtMs;
-    if (typeof startedAtMs === "number" && Number.isFinite(startedAtMs)) {
-      return startedAtMs;
-    }
-    const createdAt = Date.parse(event.created_at);
-    return Number.isFinite(createdAt) ? createdAt : Date.now();
-  }
-  return null;
-}
