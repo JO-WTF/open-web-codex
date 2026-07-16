@@ -116,7 +116,7 @@ fi
 # ─── Start platform server ──────────────────────────────────────────
 printf 'Starting the platform server (mode=%s)...\n' "$codex_mode"
 server_args=(
-  --bind "127.0.0.1:$server_port"
+  --bind "0.0.0.0:$server_port"
   --codex-mode "$codex_mode"
   --migrate
 )

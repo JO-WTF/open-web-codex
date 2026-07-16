@@ -103,7 +103,7 @@ if [ ! -x "$SERVER_BIN" ]; then
 fi
 
 SERVER_ARGS=(
-  --bind "127.0.0.1:${SERVER_PORT}"
+  --bind "0.0.0.0:${SERVER_PORT}"
   --codex-mode "$CODEX_MODE"
   --migrate
 )

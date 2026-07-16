@@ -152,15 +152,16 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any)
+        .expose_headers(Any);
+
     let app = Router::new()
         .nest("/api", routes::router(adapter))
         .layer(TraceLayer::new_for_http())
-        .layer(
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods(Any)
-                .allow_headers(Any),
-        )
+        .layer(cors)
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(cli.bind).await?;
