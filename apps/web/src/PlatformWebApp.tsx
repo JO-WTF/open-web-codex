@@ -18,9 +18,14 @@ import {
 import {
   appendRunEvents,
   mergeProjectedMessages,
+  readStoredActiveProjectId,
+  readStoredActiveTaskId,
   readStoredEffort,
+  resolveActiveTaskId,
   runStartIdempotencyKey,
   shouldPollTaskRun,
+  writeStoredActiveProjectId,
+  writeStoredActiveTaskId,
   writeStoredEffort,
 } from "./utils/platformWebAppHelpers";
 import {
@@ -61,7 +66,7 @@ export default function PlatformWebApp() {
   const [gatewayState, setGatewayState] = useState<GatewayState>("checking");
   const [gatewayVersion, setGatewayVersion] = useState<string | null>(null);
   const [projects, setProjects] = useState<PlatformProject[]>([]);
-  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(() => readStoredActiveProjectId());
   const [tasks, setTasks] = useState<PlatformTask[]>([]);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [activeRun, setActiveRun] = useState<PlatformRun | null>(null);
@@ -91,6 +96,7 @@ export default function PlatformWebApp() {
   const activeTaskIdRef = useRef<string | null>(null);
   const syncInFlightRef = useRef(false);
   const runStartInFlightRef = useRef<Promise<PlatformRun> | null>(null);
+  const previousProjectIdRef = useRef<string | null>(null);
 
   const client = useMemo(() => new PlatformClient({ baseUrl, token }), [baseUrl, token]);
 
@@ -125,13 +131,23 @@ export default function PlatformWebApp() {
   const loadProjects = useCallback(async () => {
     const next = await client.listProjects();
     setProjects(next);
-    setActiveProjectId((current) => current ?? next[0]?.id ?? null);
+    setActiveProjectId((current) => {
+      const preferred = current ?? readStoredActiveProjectId();
+      const resolved = resolveActiveTaskId(next, preferred);
+      if (resolved) {
+        writeStoredActiveProjectId(resolved);
+      }
+      return resolved;
+    });
   }, [client]);
 
   const loadTasks = useCallback(async (projectId: string) => {
     const next = await client.listTasks(projectId);
     setTasks(next);
-    setActiveTaskId((current) => current ?? next[0]?.id ?? null);
+    const preferredTaskId = readStoredActiveTaskId(projectId);
+    const resolvedTaskId = resolveActiveTaskId(next, preferredTaskId);
+    setActiveTaskId(resolvedTaskId);
+    writeStoredActiveTaskId(projectId, resolvedTaskId);
   }, [client]);
 
   const refreshRunState = useCallback(async (taskId: string) => {
@@ -178,10 +194,24 @@ export default function PlatformWebApp() {
 
   useEffect(() => {
     if (!activeProjectId || !token) return;
-    setTasks([]);
-    setActiveTaskId(null);
+    const projectChanged = previousProjectIdRef.current !== null
+      && previousProjectIdRef.current !== activeProjectId;
+    previousProjectIdRef.current = activeProjectId;
+    if (projectChanged) {
+      setTasks([]);
+      setActiveTaskId(null);
+      writeStoredActiveTaskId(activeProjectId, null);
+    }
     void loadTasks(activeProjectId).catch((error) => setAuthError(String(error)));
   }, [activeProjectId, token, loadTasks]);
+
+  useEffect(() => {
+    writeStoredActiveProjectId(activeProjectId);
+  }, [activeProjectId]);
+
+  useEffect(() => {
+    writeStoredActiveTaskId(activeProjectId, activeTaskId);
+  }, [activeProjectId, activeTaskId]);
 
   useEffect(() => {
     if (!activeTaskId || !token) return;
@@ -329,6 +359,8 @@ export default function PlatformWebApp() {
       if (activeProjectId === projectId) {
         setActiveProjectId(null);
         setActiveTaskId(null);
+        writeStoredActiveProjectId(null);
+        writeStoredActiveTaskId(projectId, null);
       }
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : String(error));

@@ -33,6 +33,72 @@ export function runStartIdempotencyKey(taskId: string) {
   return `active-run:${taskId}`;
 }
 
+export function activeProjectStorageKey() {
+  return "open-web-codex:active-project-id";
+}
+
+export function activeTaskStorageKey(projectId: string) {
+  return `open-web-codex:active-task-id:${projectId}`;
+}
+
+export function readStoredActiveProjectId(): string | null {
+  try {
+    return localStorage.getItem(activeProjectStorageKey());
+  } catch {
+    return null;
+  }
+}
+
+export function writeStoredActiveProjectId(projectId: string | null) {
+  try {
+    const key = activeProjectStorageKey();
+    if (!projectId) {
+      localStorage.removeItem(key);
+      return;
+    }
+    localStorage.setItem(key, projectId);
+  } catch {
+    // ignore storage failures
+  }
+}
+
+export function readStoredActiveTaskId(projectId: string | null): string | null {
+  if (!projectId) {
+    return null;
+  }
+  try {
+    return localStorage.getItem(activeTaskStorageKey(projectId));
+  } catch {
+    return null;
+  }
+}
+
+export function writeStoredActiveTaskId(projectId: string | null, taskId: string | null) {
+  if (!projectId) {
+    return;
+  }
+  try {
+    const key = activeTaskStorageKey(projectId);
+    if (!taskId) {
+      localStorage.removeItem(key);
+      return;
+    }
+    localStorage.setItem(key, taskId);
+  } catch {
+    // ignore storage failures
+  }
+}
+
+export function resolveActiveTaskId(
+  items: Array<{ id: string }>,
+  preferredId: string | null | undefined,
+): string | null {
+  if (preferredId && items.some((item) => item.id === preferredId)) {
+    return preferredId;
+  }
+  return items[0]?.id ?? null;
+}
+
 export function selectedEffortStorageKey(taskId: string) {
   return `open-web-codex:task-effort:${taskId}`;
 }

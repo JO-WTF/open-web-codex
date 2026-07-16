@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   appendRunEvents,
+  readStoredActiveProjectId,
+  readStoredActiveTaskId,
+  resolveActiveTaskId,
   runStartIdempotencyKey,
   shouldPollTaskRun,
+  writeStoredActiveProjectId,
+  writeStoredActiveTaskId,
 } from "./platformWebAppHelpers";
 
 describe("platformWebAppHelpers", () => {
@@ -26,5 +31,22 @@ describe("platformWebAppHelpers", () => {
     expect(shouldPollTaskRun("running")).toBe(true);
     expect(shouldPollTaskRun("waiting_approval")).toBe(true);
     expect(shouldPollTaskRun("completed")).toBe(false);
+  });
+
+  it("restores stored project and task selections", () => {
+    localStorage.clear();
+    writeStoredActiveProjectId("project-b");
+    writeStoredActiveTaskId("project-b", "task-2");
+    expect(readStoredActiveProjectId()).toBe("project-b");
+    expect(readStoredActiveTaskId("project-b")).toBe("task-2");
+    expect(resolveActiveTaskId(
+      [{ id: "task-1" }, { id: "task-2" }],
+      readStoredActiveTaskId("project-b"),
+    )).toBe("task-2");
+    expect(resolveActiveTaskId(
+      [{ id: "task-1" }],
+      readStoredActiveTaskId("project-b"),
+    )).toBe("task-1");
+    localStorage.clear();
   });
 });
