@@ -44,8 +44,15 @@ if [ "$codex_mode" = "real" ]; then
   fi
 
   printf 'Building the local Web gateway (Tauri daemon)...\n'
-  (cd "$daemon_root" && cargo build --no-default-features --bin codex_monitor_daemon)
-  daemon_bin="$daemon_root/target/debug/codex_monitor_daemon"
+  (cd "$web_root" && cargo build --no-default-features -p codex-monitor --bin codex_monitor_daemon)
+  daemon_bin="$web_root/target/debug/codex_monitor_daemon"
+  if [[ ! -x "$daemon_bin" && -x "$daemon_root/target/debug/codex_monitor_daemon" ]]; then
+    daemon_bin="$daemon_root/target/debug/codex_monitor_daemon"
+  fi
+  if [[ ! -x "$daemon_bin" ]]; then
+    printf 'Daemon binary is not executable: %s\n' "$daemon_bin" >&2
+    exit 1
+  fi
 fi
 
 # ─── Build platform server ──────────────────────────────────────────
