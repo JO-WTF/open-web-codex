@@ -209,14 +209,6 @@ pub(crate) enum ProviderFormMode {
     Edit,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ProviderFormField {
-    Id,
-    Name,
-    BaseUrl,
-    EnvKey,
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct ProviderFormDraft {
     pub(crate) id: String,
@@ -224,13 +216,6 @@ pub(crate) struct ProviderFormDraft {
     pub(crate) base_url: String,
     pub(crate) env_key: String,
     pub(crate) wire_api: WireApi,
-}
-
-impl ProviderFormDraft {
-    pub(crate) fn with_wire_api(mut self, wire_api: WireApi) -> Self {
-        self.wire_api = wire_api;
-        self
-    }
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -442,21 +427,6 @@ pub(crate) enum AppEvent {
     OpenProviderForm {
         mode: ProviderFormMode,
         draft: ProviderFormDraft,
-    },
-
-    /// Apply one submitted provider form field and continue the form.
-    ProviderFormFieldSubmitted {
-        mode: ProviderFormMode,
-        draft: ProviderFormDraft,
-        field: ProviderFormField,
-        value: String,
-    },
-
-    /// Apply a selected provider wire API and continue the form.
-    ProviderFormWireApiSelected {
-        mode: ProviderFormMode,
-        draft: ProviderFormDraft,
-        wire_api: WireApi,
     },
 
     /// Persist a provider configuration mutation.

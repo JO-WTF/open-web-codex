@@ -6,7 +6,7 @@ after an official subtree update. Generated schemas, TypeScript definitions,
 fixtures, and snapshots are derivatives of the source seams and are not
 independent custom behavior.
 
-The integrated official base is `7442f5f9323d116755dfe630e22c931a8aeaa5c7`.
+The integrated official base is `6c00dc087e4c01312017389483573500001e9fe9`.
 The target is a small, explicit set of Provider Runtime and TUI seams; it is
 not a zero-diff Codex subtree.
 
@@ -26,7 +26,7 @@ not a zero-diff Codex subtree.
 ## Current state
 
 The integrated base and current official main are both
-`7442f5f9323d116755dfe630e22c931a8aeaa5c7`; no official commit is pending.
+`6c00dc087e4c01312017389483573500001e9fe9`; no official commit is pending.
 The current comparison contains 123 local differences: 25 files added locally
 and 98 modified. All 123 are `local-only`; `upstream-only` and `diverged` are
 both zero.
@@ -96,6 +96,11 @@ remaining attachment points in `core/src/tools/spec_plan_tests.rs`,
 top of the current upstream files. `ClientRequest.ts` and the other protocol
 artifacts are generated from Rust protocol sources and currently reproduce
 without drift.
+
+The TUI Provider form uses one inline `ProviderFormView`. The superseded
+field-by-field prompt events, confirmation picker, wire picker, and unused
+onboarding wire renderer were dropped after full TUI coverage proved that they
+had no call path. They are not part of the retained replay seam.
 
 The upstream tree still rejects `wire_api = "chat"`, does not expose
 `modelProvider/list`, does not provide the custom TUI Provider management flow,

@@ -10,8 +10,8 @@ Observed on 2026-07-21 from the current synchronization branch:
 
 | Component | State |
 | --- | --- |
-| Codex subtree | integrated through `openai/codex` `7442f5f9323d116755dfe630e22c931a8aeaa5c7` |
-| Observed official main | `7442f5f9323d116755dfe630e22c931a8aeaa5c7`; no commit awaits integration |
+| Codex subtree | integrated through `openai/codex` `6c00dc087e4c01312017389483573500001e9fe9` |
+| Observed official main | `6c00dc087e4c01312017389483573500001e9fe9`; no commit awaits integration |
 | Local Codex seams vs official main | 123 local-only paths: 25 added and 98 modified; no upstream-only, diverged, or missing local paths |
 | Local customization footprint | six retained Runtime/TUI seams, one temporary upstreamed fix, derived artifacts and focused tests |
 | Web platform | Axum/PostgreSQL platform, native Profile Registry/Host, encrypted Provider Secret injection, durable approvals, isolated Git workspaces, lease-based Run orchestration, typed REST resources and authenticated WebSocket |
@@ -29,12 +29,10 @@ Observed on 2026-07-21 from the current synchronization branch:
 - The observed manifest contains 18 declarations, including
   `models.providers`.
 - On the current Runtime lineage, `just fmt`, app-server Schema generation,
-  287 app-server protocol tests, 174 Chat transport tests, the Core Chat endpoint
-  integration test, 83 Provider tests,
-  the 970-test app-server suite, 41 focused Plugin tests, and current TUI
-  diff/highlight/Provider/terminal tests pass. The final upstream delta only
-  adds a Unix compile gate to the TUI restore helper and is covered by the
-  35-test terminal/Provider target.
+  288 app-server protocol tests, 174 Chat transport tests, the Core Chat endpoint
+  integration test, the scoped Provider suites, 221 config tests, 110 MCP tests,
+  124 Core Skills tests, the 981-test app-server suite, and the full TUI suite
+  pass.
 - The Web contract check passes, and the locally built current Codex CLI passes
   the real app-server initialize Smoke with 18 Capability Manifest declarations.
 - The platform source contains PostgreSQL migrations and API handlers for
@@ -61,10 +59,10 @@ Observed on 2026-07-21 from the current synchronization branch:
   `/api/events/ws` stream. Durable events are replayed by Task sequence; live
   delivery is filtered by Organization. The former local gateway, raw RPC,
   query-token event stream and desktop application are absent.
-- The latest official MCP catalog-revision and keyed shell-environment changes
-  are integrated. `codex-config` 219, `codex-mcp` 109 and app-server 976 tests
-  pass; four app-server fixtures required their expected binaries and local
-  test ports after the build cache was cleaned.
+- The latest official managed-config exact-value enforcement, missing sandbox
+  path handling, and skill-name metrics sanitization changes are integrated.
+  Their config, MCP, Core Skills, protocol and app-server regressions pass on
+  the synchronized tree.
 
 The successful checks prove only the surfaces named above. They do not prove
 multi-Profile process routing, production sandbox strength, complete Cookie/CSRF

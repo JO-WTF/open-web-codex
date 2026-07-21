@@ -5,8 +5,8 @@
 | 字段 | 内容 |
 | --- | --- |
 | 更新日期 | 2026-07-21 |
-| 当前分支 | `codex/sync-upstream-7442f5f9323d` |
-| Codex 基线 | `openai/codex` `7442f5f9323d116755dfe630e22c931a8aeaa5c7` |
+| 当前分支 | `codex/sync-upstream-6c00dc087e4c` |
+| Codex 基线 | `openai/codex` `6c00dc087e4c01312017389483573500001e9fe9` |
 | 上游待同步 | 0 |
 | 当前工作 | Codex 定制收敛、平台迁移与桌面运行时淘汰的最终回归 |
 
@@ -46,7 +46,7 @@
 
 ## A. Codex 上游同步与定制收敛
 
-- [x] 同步官方 main 到 `7442f5f9323d`，确认无待集成提交。
+- [x] 同步官方 main 到 `6c00dc087e4c`，确认无待集成提交。
 - [x] 将全部非生成差异分类为 `retain-core`、`upstreamed`、`move-out` 或
   `drop`，机器清单与 patch map 一致。
 - [x] Chat DTO、Responses-to-Chat 转换、工具名反向映射和 SSE 翻译集中到
@@ -103,24 +103,24 @@
   Fake/Real 和外部数据库配置。
 - [x] CI 增加禁止桌面代码回流的静态门禁，并构建浏览器、平台 Rust 与
   PostgreSQL 集成测试。
-- [-] 清理 lockfile、文档与残留引用，完成全量回归和提交。
+- [x] 清理 lockfile、文档与残留引用，完成全量回归和提交。
 
 桌面删除完成标准：源码、依赖、构建产物、CI、运行手册和发布入口均不存在；
 `npm run check:no-desktop` 与仓库级搜索同时通过。
 
 ## E. 本分支最终验证矩阵
 
-- [ ] `bash -n scripts/*.sh` 和本地启动脚本 help/status 路径。
-- [ ] `npm ci`、boundary、lint、typecheck、test、build。
-- [ ] `cargo fmt --all --check`、`cargo test --workspace --locked`。
-- [ ] PostgreSQL migration/restart、两组织安全、Git Runtime 与 Run Orchestrator
+- [x] `bash -n scripts/*.sh` 和本地启动脚本 help/status 路径。
+- [x] `npm ci`、boundary、lint、typecheck、test、build。
+- [x] `cargo fmt --all --check`、`cargo test --workspace --locked`。
+- [x] PostgreSQL migration/restart、两组织安全、Git Runtime 与 Run Orchestrator
   ignored integration tests。
-- [ ] `npm run check:codex-generated`、`npm run check:codex-contracts`、fixtures、
+- [x] `npm run check:codex-generated`、`npm run check:codex-contracts`、fixtures、
   Feature Policy 和真实 `--require-manifest` smoke。
-- [ ] `scripts/codex-upstream-status.sh` 与
+- [x] `scripts/codex-upstream-status.sh` 与
   `scripts/codex-customization-status.sh` 最终一致。
-- [ ] Fake Server HTTP/static/WebSocket 端到端启动验证。
-- [ ] Git status/diff 审查，确认没有未分类 Codex 差异或意外用户文件。
+- [x] Fake Server HTTP/static/WebSocket 端到端启动验证。
+- [x] Git status/diff 审查，确认没有未分类 Codex 差异或意外用户文件。
 
 ## 当前发布边界与后续里程碑
 

@@ -1859,36 +1859,6 @@ fn provider_setup_form_row(
     Line::from(vec![marker, format!("{label:<11}").dim(), value])
 }
 
-fn provider_setup_wire_api_lines(selected: WireApi) -> Vec<Line<'static>> {
-    [
-        (
-            WireApi::Chat,
-            "Chat Completions",
-            "OpenAI-compatible /v1/chat/completions",
-        ),
-        (WireApi::Responses, "Responses", "OpenAI /v1/responses"),
-    ]
-    .into_iter()
-    .map(|(wire_api, label, description)| {
-        if wire_api == selected {
-            Line::from(vec![
-                "  › ".cyan(),
-                label.cyan().bold(),
-                " — ".dim(),
-                description.cyan(),
-            ])
-        } else {
-            Line::from(vec![
-                "    ".into(),
-                label.into(),
-                " — ".dim(),
-                description.dim(),
-            ])
-        }
-    })
-    .collect()
-}
-
 fn provider_setup_model_lines(state: &ProviderSetupState) -> Vec<Line<'static>> {
     let selected = state.selected_model_index;
     state

@@ -1003,35 +1003,6 @@ impl App {
             AppEvent::OpenProviderForm { mode, draft } => {
                 self.chat_widget.open_provider_form(mode, draft);
             }
-            AppEvent::ProviderFormFieldSubmitted {
-                mode,
-                draft,
-                field,
-                value,
-            } => {
-                self.chat_widget
-                    .handle_provider_form_field(mode, draft, field, value);
-            }
-            AppEvent::ProviderFormWireApiSelected {
-                mode,
-                draft,
-                wire_api,
-            } => {
-                let draft = draft.with_wire_api(wire_api);
-                if mode == ProviderFormMode::Add {
-                    // For new providers, save immediately and open model picker
-                    // so the user can select a model and configure context window.
-                    let provider = self.chat_widget.provider_from_form_draft(mode, &draft);
-                    self.app_event_tx.send(AppEvent::ProviderConfigAction {
-                        action: crate::app_event::ProviderConfigAction::Upsert {
-                            id: draft.id.clone(),
-                            provider,
-                        },
-                    });
-                } else {
-                    self.chat_widget.open_provider_form_confirm(mode, draft);
-                }
-            }
             AppEvent::ProviderConfigAction { action } => {
                 self.handle_provider_config_action(app_server, action).await;
             }
