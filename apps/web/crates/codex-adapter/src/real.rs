@@ -31,6 +31,12 @@ impl RealCodexAdapter {
         })
     }
 
+    /// Clone the native Profile connection for server-owned typed services.
+    /// The browser must never receive this transport directly.
+    pub fn profile_host(&self) -> ProfileHost {
+        self.host.clone()
+    }
+
     fn require_workspace(&self, params: &Value) -> Result<(), AdapterError> {
         let requested = params
             .get("workspaceId")

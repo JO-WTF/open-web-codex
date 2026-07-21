@@ -1,0 +1,14 @@
+[package]
+name = "open-web-codex-provider-service"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+open-web-codex-platform-contracts = { path = "../platform-contracts" }
+open-web-codex-profile-host = { path = "../profile-host" }
+
+async-trait = "0.1"
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+url.workspace = true

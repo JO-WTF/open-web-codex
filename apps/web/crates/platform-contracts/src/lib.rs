@@ -214,6 +214,89 @@ pub struct SendMessageResponse {
     pub thread_id: String,
 }
 
+// ── Model Providers ──────────────────────────────────────────────
+
+/// Stable platform projection of a Codex model Provider kind.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ProviderKind {
+    BuiltIn,
+    Local,
+    Custom,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderModelSummary {
+    pub model_id: String,
+    pub model_name: Option<String>,
+    pub max_token_len: Option<i64>,
+    pub max_output_tokens: Option<i64>,
+    pub show_in_picker: bool,
+    pub context_window: Option<i64>,
+}
+
+/// Provider facts returned to browsers. Credential values are intentionally
+/// absent; only the configured environment-variable name may be projected.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderSummary {
+    pub id: String,
+    pub name: String,
+    pub base_url: Option<String>,
+    pub env_key: Option<String>,
+    pub wire_api: String,
+    pub kind: ProviderKind,
+    pub is_current: bool,
+    pub model_count: usize,
+    pub can_edit: bool,
+    pub can_delete: bool,
+    pub can_fetch_models: bool,
+    pub models: Vec<ProviderModelSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderCatalog {
+    pub data: Vec<ProviderSummary>,
+    pub current_provider_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(
+    tag = "mode",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ProviderCredentialInput {
+    Preserve,
+    Environment {
+        env_key: String,
+    },
+    Direct {
+        api_key: String,
+    },
+    #[serde(rename = "none")]
+    NoCredential,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpsertProviderRequest {
+    pub name: String,
+    pub base_url: String,
+    pub wire_api: String,
+    pub credentials: ProviderCredentialInput,
+    #[serde(default)]
+    pub select: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateProviderModelRequest {
+    pub context_window: i64,
+}
+
 // ── Events ────────────────────────────────────────────────────────
 
 /// A persisted run event returned by the task events endpoint.

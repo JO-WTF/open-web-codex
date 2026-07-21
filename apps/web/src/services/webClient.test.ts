@@ -123,3 +123,72 @@ describe("CodexMonitorWebClient.listTaskEvents", () => {
     );
   });
 });
+
+describe("CodexMonitorWebClient Provider API", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("uses credential-safe typed routes instead of the legacy RPC proxy", async () => {
+    const catalog = { data: [], currentProviderId: "" };
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(JSON.stringify(catalog), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new CodexMonitorWebClient({
+      baseUrl: "http://platform.test",
+      token: "session-token",
+    });
+
+    await client.listModelProviders("workspace-1");
+    await client.writeModelProvider("workspace-1", {
+      action: "upsert",
+      id: "deepseek",
+      name: "DeepSeek",
+      baseUrl: "https://api.deepseek.com",
+      wireApi: "chat",
+      credentialMode: "environment",
+      envKey: "DEEPSEEK_API_KEY",
+      select: true,
+    });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://platform.test/api/providers");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("http://platform.test/api/providers/deepseek");
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
+      method: "PUT",
+      headers: {
+        authorization: "Bearer session-token",
+        "content-type": "application/json",
+      },
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({
+      name: "DeepSeek",
+      baseUrl: "https://api.deepseek.com",
+      wireApi: "chat",
+      credentials: { mode: "environment", envKey: "DEEPSEEK_API_KEY" },
+      select: true,
+    });
+  });
+
+  it("maps model context updates and surfaces platform error messages", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(JSON.stringify({
+        kind: "bad_request",
+        message: "context window must be at least 1024 tokens",
+      }), { status: 400 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new CodexMonitorWebClient({ baseUrl: "http://platform.test" });
+
+    await expect(client.writeModelProvider("workspace-1", {
+      action: "context",
+      id: "provider/one",
+      modelId: "model one",
+      contextWindow: 512,
+    })).rejects.toThrow("context window must be at least 1024 tokens");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "http://platform.test/api/providers/provider%2Fone/models/model%20one",
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      contextWindow: 512,
+    });
+  });
+});

@@ -9,6 +9,9 @@ use std::sync::Arc;
 use axum::Router;
 use clap::Parser;
 use open_web_codex_profile_host::ProfileHostConfig;
+use open_web_codex_provider_service::{
+    InMemoryProviderService, ProviderOperations, ProviderService,
+};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
@@ -91,32 +94,38 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let state = AppState::new(pool);
-    let adapter: Arc<dyn CodexAdapter> = match cli.codex_mode.as_str() {
-        "fake" => {
-            tracing::info!("starting in fake codex mode");
-            Arc::new(FakeCodexAdapter::new().with_demo_workspace().await)
-        }
-        "real" => {
-            let codex_home = cli.codex_home.clone().ok_or_else(|| {
-                anyhow::anyhow!("--codex-home / CODEX_HOME is required in real Codex mode")
-            })?;
-            let workspace_root = match cli.workspace_root.clone() {
-                Some(path) => path,
-                None => std::env::current_dir()?,
-            };
-            tracing::info!(
-                profile_id = %cli.profile_id,
-                workspace_id = %cli.workspace_id,
-                workspace_root = %workspace_root.display(),
-                "starting native Codex Profile Host"
-            );
-            let host_config =
-                ProfileHostConfig::new(cli.profile_id.clone(), codex_home, workspace_root)
-                    .with_codex_bin(cli.codex_bin.clone());
-            Arc::new(RealCodexAdapter::spawn(host_config, cli.workspace_id.clone()).await?)
-        }
-        other => anyhow::bail!("unknown --codex-mode '{other}'; expected 'fake' or 'real'"),
-    };
+    let (adapter, providers): (Arc<dyn CodexAdapter>, Arc<dyn ProviderOperations>) =
+        match cli.codex_mode.as_str() {
+            "fake" => {
+                tracing::info!("starting in fake codex mode");
+                (
+                    Arc::new(FakeCodexAdapter::new().with_demo_workspace().await),
+                    Arc::new(InMemoryProviderService::default()),
+                )
+            }
+            "real" => {
+                let codex_home = cli.codex_home.clone().ok_or_else(|| {
+                    anyhow::anyhow!("--codex-home / CODEX_HOME is required in real Codex mode")
+                })?;
+                let workspace_root = match cli.workspace_root.clone() {
+                    Some(path) => path,
+                    None => std::env::current_dir()?,
+                };
+                tracing::info!(
+                    profile_id = %cli.profile_id,
+                    workspace_id = %cli.workspace_id,
+                    workspace_root = %workspace_root.display(),
+                    "starting native Codex Profile Host"
+                );
+                let host_config =
+                    ProfileHostConfig::new(cli.profile_id.clone(), codex_home, workspace_root)
+                        .with_codex_bin(cli.codex_bin.clone());
+                let real = RealCodexAdapter::spawn(host_config, cli.workspace_id.clone()).await?;
+                let providers = ProviderService::for_profile_host(real.profile_host());
+                (Arc::new(real), Arc::new(providers))
+            }
+            other => anyhow::bail!("unknown --codex-mode '{other}'; expected 'fake' or 'real'"),
+        };
 
     // ── Event Bus ───────────────────────────────────────────────────
     // Bridge adapter events into durable projections and the live event bus.
@@ -163,7 +172,10 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let app = Router::new()
-        .nest("/api", routes::router(adapter, cli.legacy_codex_proxy))
+        .nest(
+            "/api",
+            routes::router(adapter, providers, cli.legacy_codex_proxy),
+        )
         .layer(TraceLayer::new_for_http())
         .layer(cors_layer(cli.legacy_codex_proxy))
         .with_state(state);

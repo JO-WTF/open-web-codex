@@ -8,6 +8,7 @@ open-web-codex-platform-contracts = { path = "../crates/platform-contracts" }
 open-web-codex-platform-store = { path = "../crates/platform-store" }
 open-web-codex-adapter = { path = "../crates/codex-adapter" }
 open-web-codex-profile-host = { path = "../crates/profile-host" }
+open-web-codex-provider-service = { path = "../crates/provider-service" }
 
 serde.workspace = true
 serde_json.workspace = true

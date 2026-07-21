@@ -23,6 +23,35 @@ type EventSubscriptionStatus = {
   onError?: () => void;
 };
 
+export type ProviderModelSummary = {
+  modelId: string;
+  modelName?: string | null;
+  maxTokenLen?: number | null;
+  maxOutputTokens?: number | null;
+  showInPicker: boolean;
+  contextWindow?: number | null;
+};
+
+export type ProviderSummary = {
+  id: string;
+  name: string;
+  baseUrl?: string | null;
+  envKey?: string | null;
+  wireApi: string;
+  kind: "builtIn" | "local" | "custom";
+  isCurrent: boolean;
+  modelCount: number;
+  canEdit: boolean;
+  canDelete: boolean;
+  canFetchModels: boolean;
+  models: ProviderModelSummary[];
+};
+
+export type ProviderCatalog = {
+  data: ProviderSummary[];
+  currentProviderId: string;
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -77,7 +106,11 @@ export class CodexMonitorWebClient {
     if (!response.ok) {
       const rpcPayload = payload as RpcResponse<T> | null;
       const error = rpcPayload?.error;
-      const message = typeof error === "string" ? error : error?.message;
+      const payloadRecord: Record<string, unknown> | null = isRecord(payload) ? payload : null;
+      const platformMessage = typeof payloadRecord?.message === "string"
+        ? payloadRecord.message
+        : undefined;
+      const message = typeof error === "string" ? error : error?.message ?? platformMessage;
       throw new Error(message ?? `Gateway request failed (HTTP ${response.status}).`);
     }
     return payload as T;
@@ -134,12 +167,62 @@ export class CodexMonitorWebClient {
     return this.rpc<Record<string, unknown>>("start_thread", { workspaceId });
   }
 
-  listModelProviders(workspaceId: string) {
-    return this.rpc<Record<string, unknown>>("model_provider_list", { workspaceId });
+  listModelProviders(_workspaceId: string) {
+    return this.fetchJson<ProviderCatalog>("/api/providers");
   }
 
-  writeModelProvider(workspaceId: string, input: Record<string, unknown>) {
-    return this.rpc<Record<string, unknown>>("model_provider_write", { workspaceId, input });
+  writeModelProvider(_workspaceId: string, input: Record<string, unknown>) {
+    const action = typeof input.action === "string" ? input.action : "";
+    const id = typeof input.id === "string" ? input.id : "";
+    const encodedId = encodeURIComponent(id);
+    if (action === "select") {
+      return this.fetchJson<ProviderCatalog>(`/api/providers/${encodedId}/select`, {
+        method: "POST",
+      });
+    }
+    if (action === "delete") {
+      return this.fetchJson<ProviderCatalog>(`/api/providers/${encodedId}`, {
+        method: "DELETE",
+      });
+    }
+    if (action === "fetch") {
+      return this.fetchJson<ProviderCatalog>(`/api/providers/${encodedId}/models/refresh`, {
+        method: "POST",
+      });
+    }
+    if (action === "context") {
+      const modelId = typeof input.modelId === "string" ? input.modelId : "";
+      return this.fetchJson<ProviderCatalog>(
+        `/api/providers/${encodedId}/models/${encodeURIComponent(modelId)}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ contextWindow: input.contextWindow }),
+        },
+      );
+    }
+    if (action === "upsert") {
+      const credentialMode = typeof input.credentialMode === "string"
+        ? input.credentialMode
+        : "none";
+      const credentials = credentialMode === "environment"
+        ? { mode: "environment", envKey: input.envKey }
+        : credentialMode === "direct"
+          ? { mode: "direct", apiKey: input.apiKey }
+          : credentialMode === "preserve"
+            ? { mode: "preserve" }
+            : { mode: "none" };
+      return this.fetchJson<ProviderCatalog>(`/api/providers/${encodedId}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          name: input.name,
+          baseUrl: input.baseUrl,
+          wireApi: input.wireApi,
+          credentials,
+          select: input.select === true,
+        }),
+      });
+    }
+    return Promise.reject(new Error(`Unsupported Provider action '${action}'.`));
   }
 
   listModels(workspaceId: string) {

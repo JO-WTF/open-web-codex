@@ -814,6 +814,7 @@ dependencies = [
 name = "codex-monitor"
 version = "0.7.68"
 dependencies = [
+ "async-trait",
  "base64 0.22.1",
  "block2",
  "chrono",
@@ -827,7 +828,9 @@ dependencies = [
  "objc2-app-kit",
  "objc2-av-foundation",
  "objc2-foundation",
+ "open-web-codex-platform-contracts",
  "open-web-codex-profile-host",
+ "open-web-codex-provider-service",
  "portable-pty",
  "reqwest 0.12.28",
  "serde",
@@ -3632,6 +3635,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "open-web-codex-provider-service"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "open-web-codex-platform-contracts",
+ "open-web-codex-profile-host",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "open-web-codex-server"
 version = "0.1.0"
 dependencies = [
@@ -3645,6 +3661,7 @@ dependencies = [
  "open-web-codex-platform-contracts",
  "open-web-codex-platform-store",
  "open-web-codex-profile-host",
+ "open-web-codex-provider-service",
  "rand 0.8.7",
  "serde",
  "serde_json",

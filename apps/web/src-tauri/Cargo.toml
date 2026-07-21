@@ -51,6 +51,9 @@ chrono = { version = "0.4", features = ["clock"] }
 shell-words = "1.1"
 toml_edit = "0.20.2"
 open-web-codex-profile-host = { path = "../crates/profile-host" }
+open-web-codex-platform-contracts = { path = "../crates/platform-contracts" }
+open-web-codex-provider-service = { path = "../crates/provider-service" }
+async-trait = "0.1"
 
 [target."cfg(not(any(target_os = \"android\", target_os = \"ios\")))".dependencies]
 tauri-plugin-updater = "2.10.0"

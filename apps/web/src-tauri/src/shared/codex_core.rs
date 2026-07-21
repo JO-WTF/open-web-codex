@@ -1,4 +1,8 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use open_web_codex_platform_contracts::{
+    ProviderCredentialInput, UpdateProviderModelRequest, UpsertProviderRequest,
+};
+use open_web_codex_provider_service::{ProviderService, ProviderTransport};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -632,14 +636,40 @@ pub(crate) async fn model_list_core(
         .await
 }
 
+struct WorkspaceProviderTransport {
+    session: Arc<WorkspaceSession>,
+    workspace_id: String,
+}
+
+#[async_trait::async_trait]
+impl ProviderTransport for WorkspaceProviderTransport {
+    async fn request(&self, method: &str, params: Value) -> Result<Value, String> {
+        self.session
+            .send_request_for_workspace(&self.workspace_id, method, params)
+            .await
+    }
+}
+
+fn provider_service(
+    session: Arc<WorkspaceSession>,
+    workspace_id: &str,
+) -> ProviderService {
+    ProviderService::new(Arc::new(WorkspaceProviderTransport {
+        session,
+        workspace_id: workspace_id.to_string(),
+    }))
+}
+
 pub(crate) async fn model_provider_list_core(
     sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
     workspace_id: String,
 ) -> Result<Value, String> {
     let session = get_session_clone(sessions, &workspace_id).await?;
-    session
-        .send_request_for_workspace(&workspace_id, "modelProvider/list", json!({}))
+    let catalog = provider_service(session, &workspace_id)
+        .list()
         .await
+        .map_err(|error| error.to_string())?;
+    serde_json::to_value(catalog).map_err(|error| error.to_string())
 }
 
 async fn current_model_provider_id(
@@ -670,6 +700,7 @@ pub(crate) async fn model_provider_write_core(
     input: Value,
 ) -> Result<Value, String> {
     let session = get_session_clone(sessions, &workspace_id).await?;
+    let service = provider_service(session, &workspace_id);
     let object = input
         .as_object()
         .ok_or_else(|| "provider mutation must be an object".to_string())?;
@@ -683,301 +714,72 @@ pub(crate) async fn model_provider_write_core(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "provider id is required".to_string())?;
-    if !id
-        .chars()
-        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
-    {
-        return Err("provider id may only contain letters, numbers, '-' and '_'".to_string());
-    }
-
-    let catalog_response = session
-        .send_request_for_workspace(&workspace_id, "modelProvider/list", json!({}))
-        .await?;
-    let catalog = catalog_response.get("result").unwrap_or(&catalog_response);
-    let entries = catalog
-        .get("data")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let existing = entries.iter().find(|entry| entry.get("id") == Some(&json!(id)));
-    let is_built_in = existing
-        .and_then(|entry| entry.get("kind"))
-        .and_then(Value::as_str)
-        == Some("builtIn");
-    let current_id = catalog.get("currentProviderId").and_then(Value::as_str);
-    let provider_exists = existing.is_some();
-
-    let edit = |key_path: String, value: Value| {
-        json!({ "keyPath": key_path, "value": value, "mergeStrategy": "replace" })
-    };
-    let mut edits = Vec::new();
-    match action {
+    let catalog = match action {
         "upsert" => {
-            if is_built_in {
-                return Err(format!("built-in provider '{id}' cannot be edited"));
-            }
-            let name = object.get("name").and_then(Value::as_str).map(str::trim)
-                .filter(|value| !value.is_empty()).ok_or_else(|| "provider name is required".to_string())?;
-            let base_url = object.get("baseUrl").and_then(Value::as_str).map(str::trim)
-                .filter(|value| !value.is_empty()).ok_or_else(|| "provider base URL is required".to_string())?;
-            let parsed_url = reqwest::Url::parse(base_url).map_err(|_| "provider base URL is invalid".to_string())?;
-            if !matches!(parsed_url.scheme(), "http" | "https") {
-                return Err("provider base URL must use http or https".to_string());
-            }
-            let wire_api = object.get("wireApi").and_then(Value::as_str).unwrap_or("responses");
-            if !matches!(wire_api, "chat" | "responses") {
-                return Err("wire API must be 'chat' or 'responses'".to_string());
-            }
-            let credentials = parse_provider_credentials(object, provider_exists)?;
-            let mut provider = Map::new();
-            provider.insert("name".to_string(), json!(name));
-            provider.insert("base_url".to_string(), json!(base_url.trim_end_matches('/')));
-            provider.insert("wire_api".to_string(), json!(wire_api));
-            if !provider_exists {
-                credentials.apply_to_new_provider(&mut provider);
-                edits.push(edit(format!("model_providers.{}", serde_json::to_string(id).map_err(|err| err.to_string())?), Value::Object(provider)));
-            } else {
-                let provider_path = format!("model_providers.{}", serde_json::to_string(id).map_err(|err| err.to_string())?);
-                edits.push(edit(format!("{provider_path}.name"), json!(name)));
-                edits.push(edit(format!("{provider_path}.base_url"), json!(base_url.trim_end_matches('/'))));
-                edits.push(edit(format!("{provider_path}.wire_api"), json!(wire_api)));
-                credentials.append_existing_provider_edits(&provider_path, &edit, &mut edits);
-            }
-            if existing.is_none() || object.get("select").and_then(Value::as_bool) == Some(true) {
-                edits.push(edit("model_provider".to_string(), json!(id)));
-            }
+            let current = service.list().await.map_err(|error| error.to_string())?;
+            let provider_exists = current.data.iter().any(|provider| provider.id == id);
+            service
+                .upsert(
+                    id,
+                    UpsertProviderRequest {
+                        name: object
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        base_url: object
+                            .get("baseUrl")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        wire_api: object
+                            .get("wireApi")
+                            .and_then(Value::as_str)
+                            .unwrap_or("responses")
+                            .to_string(),
+                        credentials: legacy_provider_credentials(object, provider_exists)?,
+                        select: object.get("select").and_then(Value::as_bool) == Some(true),
+                    },
+                )
+                .await
         }
-        "select" => {
-            if existing.is_none() { return Err(format!("provider '{id}' does not exist")); }
-            edits.push(edit("model_provider".to_string(), json!(id)));
-        }
-        "fetch" => {
-            if existing.is_none() { return Err(format!("provider '{id}' does not exist")); }
-            if is_built_in { return Err(format!("built-in provider '{id}' uses the bundled model catalog")); }
-            edits.push(edit("model_provider".to_string(), json!(id)));
-        }
+        "select" => service.select(id).await,
+        "fetch" => service.refresh_models(id).await,
         "context" => {
-            if existing.is_none() { return Err(format!("provider '{id}' does not exist")); }
-            if is_built_in { return Err("built-in model metadata cannot be edited".to_string()); }
-            let model_id = object.get("modelId").and_then(Value::as_str).map(str::trim)
-                .filter(|value| !value.is_empty()).ok_or_else(|| "model id is required".to_string())?;
-            let context_window = object.get("contextWindow").and_then(Value::as_i64)
-                .filter(|value| *value >= 1024).ok_or_else(|| "context window must be at least 1024 tokens".to_string())?;
-            let raw_models = existing
-                .and_then(|entry| entry.get("models"))
-                .and_then(Value::as_array);
-            let models = upsert_provider_model_context(raw_models, model_id, context_window);
-            edits.push(edit(format!("model_providers.{}.models", serde_json::to_string(id).map_err(|err| err.to_string())?), json!(models)));
-        }
-        "delete" => {
-            if existing.is_none() { return Err(format!("provider '{id}' does not exist")); }
-            if is_built_in { return Err(format!("built-in provider '{id}' cannot be deleted")); }
-            if current_id == Some(id) { return Err("select another provider before deleting the current provider".to_string()); }
-            edits.push(edit(format!("model_providers.{}", serde_json::to_string(id).map_err(|err| err.to_string())?), Value::Null));
-        }
-        _ => return Err(format!("unsupported provider action '{action}'")),
-    }
-    let write_response = session
-        .send_request_for_workspace(
-            &workspace_id,
-            "config/batchWrite",
-            json!({ "edits": edits, "reloadUserConfig": true }),
-        )
-        .await?;
-    if let Some(error) = write_response.get("error") {
-        return Err(error.get("message").and_then(Value::as_str).unwrap_or("provider configuration write failed").to_string());
-    }
-    if write_response.pointer("/result/status").and_then(Value::as_str) == Some("error") {
-        let message = write_response.pointer("/result/error/message").and_then(Value::as_str)
-            .or_else(|| write_response.pointer("/result/message").and_then(Value::as_str))
-            .unwrap_or("provider configuration write failed");
-        return Err(message.to_string());
-    }
-    if action == "fetch" {
-        let models_response = session
-            .send_request_for_workspace(
-                &workspace_id,
-                "model/list",
-                json!({ "forceRefresh": true }),
-            )
-            .await?;
-        let models = model_list_data(&models_response);
-        if models.is_empty() { return Err(format!("provider '{id}' returned no models")); }
-        let persisted_models = models
-            .iter()
-            .filter_map(provider_model_config_from_catalog)
-            .collect::<Vec<_>>();
-        session.send_request_for_workspace(
-            &workspace_id,
-            "config/batchWrite",
-            json!({ "edits": [edit(format!("model_providers.{}.models", serde_json::to_string(id).map_err(|err| err.to_string())?), json!(persisted_models))], "reloadUserConfig": true }),
-        ).await?;
-        return Ok(models_response);
-    }
-    session
-        .send_request_for_workspace(&workspace_id, "modelProvider/list", json!({}))
-        .await
-}
-
-fn model_list_data(response: &Value) -> Vec<Value> {
-    response
-        .get("result")
-        .unwrap_or(response)
-        .get("data")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-}
-
-fn provider_model_config_from_catalog(value: &Value) -> Option<Value> {
-    let model = value.as_object()?;
-    let model_id = model
-        .get("model")
-        .or_else(|| model.get("id"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    let mut persisted = Map::new();
-    persisted.insert("model_id".to_string(), json!(model_id));
-    persisted.insert(
-        "model_name".to_string(),
-        model
-            .get("displayName")
-            .or_else(|| model.get("display_name"))
-            .filter(|value| !value.is_null())
-            .cloned()
-            .unwrap_or_else(|| json!(model_id)),
-    );
-    persisted.insert("show_in_picker".to_string(), json!(true));
-    if let Some(context_window) = model
-        .get("contextWindow")
-        .or_else(|| model.get("context_window"))
-        .filter(|value| !value.is_null())
-    {
-        persisted.insert("context_window".to_string(), context_window.clone());
-    }
-    Some(Value::Object(persisted))
-}
-
-fn upsert_provider_model_context(
-    raw_models: Option<&Vec<Value>>,
-    model_id: &str,
-    context_window: i64,
-) -> Vec<Value> {
-    let mut found = false;
-    let mut models = raw_models
-        .into_iter()
-        .flatten()
-        .map(|value| {
-            let model = value.as_object().cloned().unwrap_or_default();
-            let current_model_id = model
+            let model_id = object
                 .get("modelId")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            let next_context = if current_model_id == model_id {
-                found = true;
-                Some(context_window)
-            } else {
-                model.get("contextWindow").and_then(Value::as_i64)
-            };
-            let mut persisted = Map::new();
-            persisted.insert("model_id".to_string(), json!(current_model_id));
-            persisted.insert(
-                "model_name".to_string(),
-                model
-                    .get("modelName")
-                    .filter(|value| !value.is_null())
-                    .cloned()
-                    .unwrap_or_else(|| json!(current_model_id)),
-            );
-            persisted.insert(
-                "show_in_picker".to_string(),
-                json!(model.get("showInPicker").and_then(Value::as_bool).unwrap_or(true)),
-            );
-            for (source, target) in [
-                ("maxTokenLen", "max_token_len"),
-                ("maxOutputTokens", "max_output_tokens"),
-            ] {
-                if let Some(value) = model.get(source).filter(|value| !value.is_null()) {
-                    persisted.insert(target.to_string(), value.clone());
-                }
-            }
-            if let Some(next_context) = next_context {
-                persisted.insert("context_window".to_string(), json!(next_context));
-            }
-            Value::Object(persisted)
-        })
-        .collect::<Vec<_>>();
-
-    if !found {
-        models.push(json!({
-            "model_id": model_id,
-            "model_name": model_id,
-            "show_in_picker": true,
-            "context_window": context_window,
-        }));
-    }
-    models
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum ProviderCredentials {
-    Preserve,
-    Environment(String),
-    Direct(String),
-    None,
-}
-
-impl ProviderCredentials {
-    fn apply_to_new_provider(&self, provider: &mut Map<String, Value>) {
-        match self {
-            Self::Environment(env_key) => {
-                provider.insert("env_key".to_string(), json!(env_key));
-            }
-            Self::Direct(api_key) => {
-                provider.insert("experimental_bearer_token".to_string(), json!(api_key));
-            }
-            Self::Preserve | Self::None => {}
+            let context_window = object
+                .get("contextWindow")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            service
+                .update_model(
+                    id,
+                    model_id,
+                    UpdateProviderModelRequest { context_window },
+                )
+                .await
         }
+        "delete" => service.delete(id).await,
+        _ => return Err(format!("unsupported provider action '{action}'")),
     }
-
-    fn append_existing_provider_edits<F>(
-        &self,
-        provider_path: &str,
-        edit: &F,
-        edits: &mut Vec<Value>,
-    ) where
-        F: Fn(String, Value) -> Value,
-    {
-        match self {
-            Self::Preserve => {}
-            Self::Environment(env_key) => {
-                edits.push(edit(format!("{provider_path}.env_key"), json!(env_key)));
-                edits.push(edit(format!("{provider_path}.experimental_bearer_token"), Value::Null));
-            }
-            Self::Direct(api_key) => {
-                edits.push(edit(format!("{provider_path}.env_key"), Value::Null));
-                edits.push(edit(format!("{provider_path}.experimental_bearer_token"), json!(api_key)));
-            }
-            Self::None => {
-                edits.push(edit(format!("{provider_path}.env_key"), Value::Null));
-                edits.push(edit(format!("{provider_path}.experimental_bearer_token"), Value::Null));
-            }
-        }
-    }
+    .map_err(|error| error.to_string())?;
+    serde_json::to_value(catalog).map_err(|error| error.to_string())
 }
 
-fn parse_provider_credentials(
+fn legacy_provider_credentials(
     object: &Map<String, Value>,
     provider_exists: bool,
-) -> Result<ProviderCredentials, String> {
+) -> Result<ProviderCredentialInput, String> {
     let mode = object
         .get("credentialMode")
         .and_then(Value::as_str)
         .or_else(|| object.get("envKey").and_then(Value::as_str).map(|_| "environment"))
         .unwrap_or(if provider_exists { "preserve" } else { "none" });
     match mode {
-        "preserve" if provider_exists => Ok(ProviderCredentials::Preserve),
+        "preserve" if provider_exists => Ok(ProviderCredentialInput::Preserve),
         "preserve" => Err("cannot preserve credentials for a new provider".to_string()),
         "environment" => {
             let env_key = object
@@ -993,7 +795,9 @@ fn parse_provider_credentials(
                     "API key environment variable must contain only A-Z, 0-9 and '_'".to_string(),
                 );
             }
-            Ok(ProviderCredentials::Environment(env_key.to_string()))
+            Ok(ProviderCredentialInput::Environment {
+                env_key: env_key.to_string(),
+            })
         }
         "direct" => {
             let api_key = object
@@ -1002,9 +806,11 @@ fn parse_provider_credentials(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| "API key is required".to_string())?;
-            Ok(ProviderCredentials::Direct(api_key.to_string()))
+            Ok(ProviderCredentialInput::Direct {
+                api_key: api_key.to_string(),
+            })
         }
-        "none" => Ok(ProviderCredentials::None),
+        "none" => Ok(ProviderCredentialInput::NoCredential),
         other => Err(format!("unsupported credential mode '{other}'")),
     }
 }
@@ -1473,114 +1279,28 @@ mod tests {
     }
 
     #[test]
-    fn provider_credentials_support_environment_variable_and_direct_key_modes() {
+    fn legacy_provider_credentials_translate_environment_and_direct_key_modes() {
         let environment = json!({
             "credentialMode": "environment",
             "envKey": "DEEPSEEK_API_KEY",
         });
         assert_eq!(
-            parse_provider_credentials(environment.as_object().unwrap(), false),
-            Ok(ProviderCredentials::Environment(
-                "DEEPSEEK_API_KEY".to_string()
-            ))
+            legacy_provider_credentials(environment.as_object().unwrap(), false).unwrap(),
+            ProviderCredentialInput::Environment {
+                env_key: "DEEPSEEK_API_KEY".to_string(),
+            }
         );
 
         let direct = json!({
             "credentialMode": "direct",
             "apiKey": "test-direct-key",
         });
-        let credentials = parse_provider_credentials(direct.as_object().unwrap(), false).unwrap();
         assert_eq!(
-            credentials,
-            ProviderCredentials::Direct("test-direct-key".to_string())
+            legacy_provider_credentials(direct.as_object().unwrap(), false).unwrap(),
+            ProviderCredentialInput::Direct {
+                api_key: "test-direct-key".to_string(),
+            }
         );
-        let mut provider = Map::new();
-        credentials.apply_to_new_provider(&mut provider);
-        assert_eq!(
-            provider.get("experimental_bearer_token"),
-            Some(&json!("test-direct-key"))
-        );
-        assert!(!provider.contains_key("env_key"));
-    }
-
-    #[test]
-    fn direct_provider_credentials_clear_the_environment_key() {
-        let edit = |key_path: String, value: Value| json!({ "keyPath": key_path, "value": value });
-        let mut edits = Vec::new();
-        ProviderCredentials::Direct("test-direct-key".to_string())
-            .append_existing_provider_edits("model_providers.deepseek", &edit, &mut edits);
-
-        assert_eq!(
-            edits,
-            vec![
-                json!({ "keyPath": "model_providers.deepseek.env_key", "value": null }),
-                json!({ "keyPath": "model_providers.deepseek.experimental_bearer_token", "value": "test-direct-key" }),
-            ]
-        );
-    }
-
-    #[test]
-    fn provider_model_context_persists_a_newly_discovered_model() {
-        let models = upsert_provider_model_context(None, "deepseek-v4-flash", 128_000);
-
-        assert_eq!(
-            models,
-            vec![json!({
-                "model_id": "deepseek-v4-flash",
-                "model_name": "deepseek-v4-flash",
-                "show_in_picker": true,
-                "context_window": 128_000,
-            })]
-        );
-        assert!(!models[0].as_object().unwrap().values().any(Value::is_null));
-    }
-
-    #[test]
-    fn provider_model_context_updates_an_existing_model() {
-        let persisted = vec![json!({
-            "modelId": "deepseek-v4-flash",
-            "modelName": "DeepSeek V4 Flash",
-            "maxTokenLen": 64_000,
-            "maxOutputTokens": 8_192,
-            "showInPicker": true,
-            "contextWindow": 64_000,
-        })];
-
-        let models =
-            upsert_provider_model_context(Some(&persisted), "deepseek-v4-flash", 128_000);
-
-        assert_eq!(models.len(), 1);
-        assert_eq!(models[0]["model_id"], json!("deepseek-v4-flash"));
-        assert_eq!(models[0]["model_name"], json!("DeepSeek V4 Flash"));
-        assert_eq!(models[0]["context_window"], json!(128_000));
-    }
-
-    #[test]
-    fn model_list_data_reads_json_rpc_and_unwrapped_responses() {
-        let models = json!([{"model": "deepseek-v4-flash"}]);
-
-        assert_eq!(
-            model_list_data(&json!({"result": {"data": models.clone()}})),
-            models.as_array().unwrap().clone()
-        );
-        assert_eq!(
-            model_list_data(&json!({"data": models.clone()})),
-            models.as_array().unwrap().clone()
-        );
-    }
-
-    #[test]
-    fn provider_model_catalog_omits_null_toml_values() {
-        let model = provider_model_config_from_catalog(&json!({
-            "model": "deepseek-v4-flash",
-            "displayName": null,
-            "contextWindow": null,
-        }))
-        .unwrap();
-
-        assert_eq!(model["model_name"], json!("deepseek-v4-flash"));
-        assert!(!model.as_object().unwrap().contains_key("context_window"));
-        assert!(!model.as_object().unwrap().values().any(Value::is_null));
     }
 
     #[test]

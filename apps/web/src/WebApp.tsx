@@ -8,7 +8,6 @@ import FileManager from "./components/FileManager";
 import type { GoalInfo } from "./components/Conversation/GoalBanner";
 import type { QueuedFollowUp } from "./components/Conversation/FollowUpQueue";
 import type { ModelProviderSummary, ModelSummary } from "./components/Conversation/Composer";
-import { parseModelListResponse } from "./features/models/utils/modelListResponse";
 import { appendTerminalInteractionOutput, buildWebThreadHistory, commandText, isUserThreadItem, mergeWebThreadHistory, unwrapWebRpcResult, webLogEntryFromThreadItem } from "./utils/webThreadHistory";
 import { normalizeTokenUsage } from "./features/threads/utils/threadNormalize";
 import { normalizePlanUpdate } from "./features/threads/utils/threadNormalize";
@@ -198,43 +197,18 @@ export default function WebApp() {
     setCatalogLoading(true);
     setCatalogError(null);
     try {
-      const [providerResponse, modelResponse] = await Promise.all([
-        client.listModelProviders(activeWorkspaceId),
-        client.listModels(activeWorkspaceId),
-      ]);
-      const providerPayload = unwrapWebRpcResult(providerResponse);
-      const providerRecord = providerPayload && typeof providerPayload === "object"
-        ? providerPayload as Record<string, unknown>
-        : {};
-      const rawProviders = Array.isArray(providerRecord.data) ? providerRecord.data : [];
-      const nextModels = parseModelListResponse(modelResponse);
-      setModelProviders(rawProviders.flatMap((value): ModelProviderSummary[] => {
-        if (!value || typeof value !== "object") return [];
-        const provider = value as Record<string, unknown>;
-        if (typeof provider.id !== "string" || typeof provider.name !== "string") return [];
-        return [{
-          id: provider.id,
-          name: provider.name,
-          kind: provider.kind === "local" || provider.kind === "custom" ? provider.kind : "builtIn",
-          isCurrent: provider.isCurrent === true,
-          modelCount: provider.isCurrent === true
-            ? nextModels.length
-            : typeof provider.modelCount === "number" ? provider.modelCount : 0,
-          baseUrl: typeof provider.baseUrl === "string" ? provider.baseUrl : null,
-          envKey: typeof provider.envKey === "string" ? provider.envKey : null,
-          wireApi: typeof provider.wireApi === "string" ? provider.wireApi : "responses",
-          canEdit: provider.canEdit === true,
-          canDelete: provider.canDelete === true,
-          canFetchModels: provider.canFetchModels === true,
-          models: Array.isArray(provider.models) ? provider.models.flatMap((value) => {
-            if (!value || typeof value !== "object") return [];
-            const model = value as Record<string, unknown>;
-            if (typeof model.modelId !== "string") return [];
-            return [{ modelId: model.modelId, modelName: typeof model.modelName === "string" ? model.modelName : null, contextWindow: typeof model.contextWindow === "number" ? model.contextWindow : null }];
-          }) : [],
-        }];
-      }));
-      setCurrentProviderId(typeof providerRecord.currentProviderId === "string" ? providerRecord.currentProviderId : null);
+      const providerCatalog = await client.listModelProviders(activeWorkspaceId);
+      const currentProvider = providerCatalog.data.find((provider) => provider.isCurrent)
+        ?? providerCatalog.data.find((provider) => provider.id === providerCatalog.currentProviderId);
+      const nextModels = (currentProvider?.models ?? [])
+        .filter((model) => model.showInPicker)
+        .map((model): ModelSummary => ({
+          id: model.modelId,
+          model: model.modelId,
+          displayName: model.modelName ?? model.modelId,
+        }));
+      setModelProviders(providerCatalog.data as ModelProviderSummary[]);
+      setCurrentProviderId(providerCatalog.currentProviderId || null);
       setProviderModels(nextModels);
       setSelectedProviderModelId((selected) =>
         selected && nextModels.some((model) => model.id === selected)

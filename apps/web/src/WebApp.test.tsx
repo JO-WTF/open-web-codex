@@ -14,7 +14,6 @@ const client = {
   listThreads: vi.fn(),
   connectWorkspace: vi.fn(),
   listModelProviders: vi.fn(),
-  listModels: vi.fn(),
   listMcpServerStatus: vi.fn(),
   getAccountRateLimits: vi.fn(),
   startThread: vi.fn(),
@@ -50,8 +49,7 @@ describe("WebApp workspace-first messaging", () => {
     });
     client.listThreads.mockResolvedValue({ data: [] });
     client.connectWorkspace.mockResolvedValue({});
-    client.listModelProviders.mockResolvedValue({ data: [] });
-    client.listModels.mockResolvedValue({ data: [] });
+    client.listModelProviders.mockResolvedValue({ data: [], currentProviderId: "" });
     client.listMcpServerStatus.mockResolvedValue({ data: [] });
     client.getAccountRateLimits.mockResolvedValue({});
     client.startThread.mockResolvedValue({ thread: { id: "thread-new" } });
