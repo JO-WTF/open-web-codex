@@ -408,6 +408,14 @@ body:has(.web-app-shell) {
 
 .web-settings-toggle-icon svg { display: block; width: 16px; height: 16px; }
 
+.web-settings-toggle-icon {
+  transform: translateY(-0.5px);
+}
+
+.web-settings-toggle-icon.web-settings-icon-open {
+  transform: translateY(-0.5px) rotate(90deg);
+}
+
 .web-settings-backdrop {
   position: fixed;
   inset: 0;
@@ -462,6 +470,65 @@ body:has(.web-app-shell) {
   color: #cbd2dc;
   background: rgb(255 255 255 / 6%);
   cursor: pointer;
+  padding: 0;
+  visibility: visible;
+  opacity: 1;
+}
+
+.web-settings-close svg {
+  display: block;
+  width: 17px;
+  height: 17px;
+  stroke: currentColor;
+}
+
+.web-ws-thread-status {
+  display: inline-flex;
+  position: relative;
+  align-items: center;
+  justify-content: center;
+}
+
+.web-ws-thread-status.is-running::after {
+  position: absolute;
+  right: -2px;
+  bottom: -1px;
+  width: 5px;
+  height: 5px;
+  border: 1px solid var(--web-bg);
+  border-radius: 50%;
+  background: #46d68c;
+  box-shadow: 0 0 7px rgb(70 214 140 / 70%);
+  content: "";
+}
+
+.web-ws-thread-delete {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  color: transparent;
+  background: transparent;
+  cursor: pointer;
+}
+
+.web-ws-thread:hover .web-ws-thread-delete,
+.web-ws-thread-delete:focus-visible {
+  color: var(--web-muted);
+}
+
+.web-ws-thread-delete:hover {
+  color: var(--error);
+  background: var(--error-bg);
+}
+
+.web-ws-thread-delete:disabled {
+  visibility: hidden;
 }
 
 .web-settings-close:hover {

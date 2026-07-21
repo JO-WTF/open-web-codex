@@ -10,6 +10,7 @@ type ThreadInfo = {
   label: string;
   updatedAt: number;
   turnCount?: number;
+  status?: string;
 };
 
 type Props = {
@@ -24,6 +25,7 @@ type Props = {
   activeThreadId: string | null;
   onSelectThread: (id: string) => void;
   onNewThread: (workspaceId: string) => void;
+  onDeleteThread: (workspaceId: string, threadId: string) => void;
   onRemoveWorkspace: (workspaceId: string) => void;
 };
 
@@ -42,6 +44,7 @@ export default function Workspaces({
   activeThreadId,
   onSelectThread,
   onNewThread,
+  onDeleteThread,
   onRemoveWorkspace,
 }: Props) {
   const [createName, setCreateName] = useState("");
@@ -157,9 +160,27 @@ export default function Workspaces({
                     className={`web-ws-thread${t.id === activeThreadId ? " web-ws-thread-active" : ""}`}
                     onClick={() => onSelectThread(t.id)}
                   >
-                    <MessageSquare size={12} className="web-ws-thread-icon" />
+                    <span
+                      className={`web-ws-thread-status${t.status === "active" || t.status === "running" || t.status === "reconnecting" ? " is-running" : ""}`}
+                      aria-label={t.status === "active" || t.status === "running" || t.status === "reconnecting" ? "Running" : "Idle"}
+                    >
+                      <MessageSquare size={12} className="web-ws-thread-icon" />
+                    </span>
                     <span className="web-ws-thread-label">{t.label}</span>
                     <span className="web-ws-thread-time" title={t.id}>{compactThreadId(t.id)}</span>
+                    <button
+                      type="button"
+                      className="web-ws-thread-delete"
+                      aria-label={`Delete thread ${t.label}`}
+                      title="Delete thread"
+                      disabled={busy || t.status === "active" || t.status === "running" || t.status === "reconnecting"}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onDeleteThread(ws.id, t.id);
+                      }}
+                    >
+                      <Trash2 size={12} aria-hidden="true" />
+                    </button>
                   </div>
                 ))}
 

@@ -59,7 +59,17 @@ type ThreadInfo = {
   label: string;
   updatedAt: number;
   turnCount?: number;
+  status?: string;
 };
+
+function parseThreadStatus(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object") {
+    const type = (value as Record<string, unknown>).type;
+    if (typeof type === "string") return type;
+  }
+  return "idle";
+}
 
 /* ─────────── Helpers ─────────── */
 
@@ -325,6 +335,20 @@ export default function WebApp() {
           : {};
 
       const eventThreadId = getAppServerThreadId(event);
+      if (eventThreadId && event.workspace_id) {
+        const nextStatus = method === "turn/started"
+          ? "running"
+          : method === "turn/completed" || method === "thread/closed"
+            ? "idle"
+            : null;
+        if (nextStatus) {
+          setThreadsByWorkspace((previous) => ({
+            ...previous,
+            [event.workspace_id]: (previous[event.workspace_id] ?? []).map((thread) =>
+              thread.id === eventThreadId ? { ...thread, status: nextStatus } : thread),
+          }));
+        }
+      }
       const belongsToBackgroundThread = Boolean(
         eventThreadId
         && activeThreadIdRef.current
@@ -1151,7 +1175,9 @@ export default function WebApp() {
       const wsPath = ws?.path ?? '';
       const arr = Array.isArray(allData)
         ? allData.filter((t: Record<string, unknown>) =>
-            wsPath ? String(t.cwd ?? '').startsWith(wsPath) : true)
+            wsPath && typeof t.cwd === "string" && t.cwd
+              ? t.cwd === wsPath || t.cwd.startsWith(`${wsPath}/`) || t.cwd.startsWith(`${wsPath}\\`)
+              : true)
         : [];
       if (arr.length > 0 || Array.isArray(arr)) {
         setThreadsByWorkspace(prev => {
@@ -1160,6 +1186,7 @@ export default function WebApp() {
             label: String(t.name ?? t.label ?? "Thread"),
             updatedAt: parseThreadUpdatedAt(t.updatedAt ?? t.updated_at),
             turnCount: typeof t.turnCount === "number" ? t.turnCount : undefined,
+            status: parseThreadStatus(t.status),
           }));
           // Newly started threads are not listed until their first persisted turn.
           // Preserve the optimistic entry until Runtime returns the canonical row.
@@ -1304,6 +1331,31 @@ export default function WebApp() {
      setBusy(false);
    }
   }, [activeWorkspaceId, appendLog, client, connectWorkspace, refreshThreads]);
+
+  const deleteThread = useCallback(async (workspaceId: string, threadId: string) => {
+    const thread = (threadsByWorkspace[workspaceId] ?? []).find((candidate) => candidate.id === threadId);
+    if (!thread) return;
+    if (!window.confirm(`Delete thread '${thread.label}'?`)) return;
+    setBusy(true);
+    try {
+      // Codex exposes deletion as an archive operation so history remains recoverable.
+      await client.archiveThread(workspaceId, threadId);
+      setThreadsByWorkspace((previous) => ({
+        ...previous,
+        [workspaceId]: (previous[workspaceId] ?? []).filter((candidate) => candidate.id !== threadId),
+      }));
+      if (activeThreadId === threadId) {
+        setActiveThreadId(null);
+        setMessages([]);
+        setThreadStatus("idle");
+        setThinking(false);
+      }
+    } catch (error) {
+      appendLog("error", error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }, [activeThreadId, appendLog, client, threadsByWorkspace]);
 
   const sendText = useCallback(async (text: string) => {
     if (!activeWorkspaceId || !activeThreadId || !text.trim()) return false;
@@ -1568,6 +1620,7 @@ export default function WebApp() {
 
           onSelectThread={selectThread}
           onNewThread={startThread}
+          onDeleteThread={deleteThread}
           onRemoveWorkspace={removeWorkspace}
           baseUrl={baseUrl}
           token={token}
