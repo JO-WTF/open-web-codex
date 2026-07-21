@@ -18,8 +18,8 @@ pub enum AdapterError {
     #[error("Method not implemented: {0}")]
     NotImplemented(String),
 
-    #[error("Transport error: {0}")]
-    Transport(#[from] reqwest::Error),
+    #[error("Profile Host error: {0}")]
+    ProfileHost(#[from] open_web_codex_profile_host::ProfileHostError),
 
     #[error("Internal error: {0}")]
     Internal(String),
@@ -66,7 +66,9 @@ pub trait CodexAdapter: Send + Sync {
     /// Quick health probe.
     async fn health(&self) -> Result<HealthStatus, AdapterError>;
 
-    /// JSON-RPC call. `method` is e.g. "list_workspaces".
+    /// Transitional internal RPC call. Product routes should replace this
+    /// with typed Thread/Turn operations; it is never a public browser
+    /// contract.
     async fn rpc(&self, method: &str, params: Value) -> Result<Value, AdapterError>;
 
     /// Subscribe to the SSE event stream. The implementor sends SSE frames

@@ -225,7 +225,7 @@ impl CodexAdapter for FakeCodexAdapter {
             let mut thread_ticks: HashMap<String, u32> = HashMap::new();
 
             // Helper: send an SSE frame
-            let mut send = |data: Value| {
+            let send = |data: Value| {
                 let frame = format!("data: {}\n\n", data.to_string());
                 let _ = sender.send(frame.into_bytes());
             };

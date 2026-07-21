@@ -1,4 +1,3 @@
-mod config;
 mod event_projection;
 mod middleware;
 mod routes;
@@ -9,7 +8,7 @@ use std::sync::Arc;
 
 use axum::Router;
 use clap::Parser;
-use open_web_codex_profile_host::ensure_profile_home;
+use open_web_codex_profile_host::ProfileHostConfig;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
@@ -38,23 +37,24 @@ struct Cli {
     /// Run database migrations on startup.
     #[arg(long, default_value_t = true)]
     migrate: bool,
-    /// Codex adapter mode: "fake" (in-memory) or "real" (proxy to daemon).
+    /// Codex adapter mode: "fake" (in-memory) or "real" (native Profile Host).
     #[arg(long, env = "CODEX_MODE", default_value = "real")]
     codex_mode: String,
-    /// URL of the existing Tauri daemon for /api/rpc and /api/events proxying.
-    #[arg(
-        long,
-        env = "CODEX_DAEMON_URL",
-        default_value = "http://127.0.0.1:4733"
-    )]
-    daemon_url: String,
-    /// Profile home directory to provision before Codex interactions.
-    ///
-    /// When set, the platform server creates a missing directory and exports a
-    /// canonical `CODEX_HOME` for child processes. Codex itself rejects a
-    /// configured but missing home.
+    /// Persistent Profile home used by the native Codex app-server.
     #[arg(long, env = "CODEX_HOME")]
     codex_home: Option<PathBuf>,
+    /// Codex executable used by the native Profile Host.
+    #[arg(long, env = "CODEX_BIN", default_value = "codex")]
+    codex_bin: PathBuf,
+    /// Server-owned workspace root for the transitional single-workspace flow.
+    #[arg(long, env = "CODEX_WORKSPACE_ROOT")]
+    workspace_root: Option<PathBuf>,
+    /// Stable Profile identity for the transitional single-Profile flow.
+    #[arg(long, env = "CODEX_PROFILE_ID", default_value = "default-profile")]
+    profile_id: String,
+    /// Stable workspace identity for event and Thread routing.
+    #[arg(long, env = "CODEX_WORKSPACE_ID", default_value = "default-workspace")]
+    workspace_id: String,
     /// Expose legacy `/api/rpc` and `/api/events` Codex proxy routes.
     ///
     /// Disabled by default. Local migration may opt in with
@@ -70,20 +70,6 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
-
-    if let Some(codex_home) = cli.codex_home.as_ref() {
-        let canonical = ensure_profile_home(codex_home).map_err(|error| {
-            anyhow::anyhow!(
-                "failed to provision CODEX_HOME {}: {error}",
-                codex_home.display()
-            )
-        })?;
-        std::env::set_var("CODEX_HOME", &canonical);
-        tracing::info!(
-            codex_home = %canonical.display(),
-            "provisioned profile home for platform server"
-        );
-    }
 
     tracing::info!(bind = %cli.bind, "starting open-web-codex server");
 
@@ -111,8 +97,23 @@ async fn main() -> anyhow::Result<()> {
             Arc::new(FakeCodexAdapter::new().with_demo_workspace().await)
         }
         "real" => {
-            tracing::info!(daemon_url = %cli.daemon_url, "proxying to codex daemon");
-            Arc::new(RealCodexAdapter::new(&cli.daemon_url))
+            let codex_home = cli.codex_home.clone().ok_or_else(|| {
+                anyhow::anyhow!("--codex-home / CODEX_HOME is required in real Codex mode")
+            })?;
+            let workspace_root = match cli.workspace_root.clone() {
+                Some(path) => path,
+                None => std::env::current_dir()?,
+            };
+            tracing::info!(
+                profile_id = %cli.profile_id,
+                workspace_id = %cli.workspace_id,
+                workspace_root = %workspace_root.display(),
+                "starting native Codex Profile Host"
+            );
+            let host_config =
+                ProfileHostConfig::new(cli.profile_id.clone(), codex_home, workspace_root)
+                    .with_codex_bin(cli.codex_bin.clone());
+            Arc::new(RealCodexAdapter::spawn(host_config, cli.workspace_id.clone()).await?)
         }
         other => anyhow::bail!("unknown --codex-mode '{other}'; expected 'fake' or 'real'"),
     };

@@ -74,8 +74,8 @@ security.
 | Persistence | PostgreSQL migrations cover users/sessions, organizations/memberships, projects, tasks, runs and versioned run-event projections with monotonic replay sequence | Profiles, Workspaces, approvals, leases, audit, artifacts, jobs, retention and complete constraints are missing |
 | Authentication | bootstrap, password session creation and auth extractor exist | HttpOnly-only session flow, CSRF, logout/revocation, rate limiting and complete tests are missing |
 | Authorization | membership checks exist on part of the organization surface | centralized resource/action RBAC and cross-user denial matrix are missing |
-| Codex bridge | Fake/Real adapter and event fan-out exist; transitional `profile-host` provisions `CODEX_HOME` before Tauri app-server spawn | current Real adapter proxies legacy daemon RPC/SSE; a persistent native Profile Host, raw-RPC removal and production authorization boundary remain incomplete |
-| Task/Run | CRUD/start/cancel/message, safe Item/Delta projection, monotonic cursor replay and Thread-history reconciliation exist | worktree provisioning, Profile Host, idempotent scheduler, approvals, authenticated subscriptions and restart E2E remain incomplete |
+| Codex bridge | Fake/Real adapter and event fan-out exist; Real now uses the native `profile-host` JSONL connection with private Profile layout, single-owner lock, request correlation/timeouts, bounded events and negotiated Manifest gating | the server still has a transitional single-Profile/single-Workspace composition and internal raw `rpc`; durable Profile registry/ownership, typed operations, persistent approvals and authenticated browser subscriptions remain incomplete |
+| Task/Run | CRUD/start/cancel/message, safe Item/Delta projection, monotonic cursor replay, Thread-history reconciliation and a real Profile restart/resume/read smoke exist | worktree provisioning, multi-user Profile routing, idempotent scheduler, approvals and authenticated subscriptions remain incomplete |
 | Browser | loopback MVP can connect workspace, start Thread and send text | it still targets the local preview Gateway and accepts server paths; it is not the authenticated multi-user product UI |
 
 ## Immediate capability gates
@@ -84,7 +84,8 @@ security.
    protocol/build facts; add Provider/model capability IDs.
 2. Generate a digest-addressed contract bundle and separate it from Web product
    feature policy.
-3. Run real Thread restart/multi-cwd, Provider, approval, multi-agent and MCP
-   smoke suites before promoting declarations to product support.
+3. Keep the passing real Thread restart/resume/read smoke and add multi-cwd,
+   Provider, approval, multi-agent and MCP smoke suites before promoting the
+   corresponding declarations to product support.
 4. Replace the legacy raw RPC/SSE browser bridge with authenticated platform
    DTOs, durable event cursors and server-side ownership checks.

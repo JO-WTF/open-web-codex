@@ -15,7 +15,7 @@
 
 Codex subtree 已同步到官方 `openai/codex` 提交 `af71774d2645`，状态脚本报告待集成提交为 0。当前与官方树的 123 个差异全部是已分类的本地定制，没有 upstream-only 或 diverged 路径。第三方 Provider、TUI Provider、Capability Manifest 和旧历史兼容 seam 已按 patch map 重放；Chat DTO/转换/SSE 已集中到 `codex-api`，`codex-api/common.rs` 与官方对象一致。app-server Schema 无漂移，Runtime/app-server/TUI 定向验证通过。Capability Manifest v1 类型、Schema 和 `initialize` 已验证可用，真实本地 app-server Smoke 返回 18 个能力声明。
 
-M1 平台已建立 Axum/SQLx/PostgreSQL workspace、Fake/Real Codex Adapter，以及 bootstrap/session、organization/membership、project、Task、Run 和版本化 Run event 投影。Item/Delta 会先以单调 sequence、稳定平台事件类型和脱敏 UI payload 落库，再向浏览器广播；Web reducer 可用 cursor 投影恢复活动状态并以 Codex Thread 历史校准终态。`apps/web/crates/profile-host` 已在过渡 Tauri app-server spawn 前 provision `CODEX_HOME`，但持久、隔离的原生 Profile Host 尚未完成。浏览器仍主要连接 loopback RPC/SSE Gateway；Git Worktree/Runner、持久审批、Lease、审计、完整 RBAC、幂等调度和认证 WebSocket 也尚未完成。当前 `/api/rpc`、permissive CORS 和 SSE query token 只能用于本地迁移期，不得作为多用户 Beta 边界。
+M1 平台已建立 Axum/SQLx/PostgreSQL workspace、Fake/Real Codex Adapter，以及 bootstrap/session、organization/membership、project、Task、Run 和版本化 Run event 投影。Item/Delta 会先以单调 sequence、稳定平台事件类型和脱敏 UI payload 落库，再向浏览器广播；Web reducer 可用 cursor 投影恢复活动状态并以 Codex Thread 历史校准终态。`apps/web/crates/profile-host` 已拥有私有 Profile 目录、文件锁、原生 app-server stdio/JSONL 生命周期、请求关联/超时、有界事件流、Manifest 协商和健康快照；Real Adapter 已移除 Tauri daemon HTTP/SSE 依赖，真实二进制测试覆盖同一 Profile Home 上的离线 Turn、Host 重启及 Thread resume/read。当前 Server 组合仍是过渡期单 Profile/单 Workspace，持久 Profile Registry、归属/RBAC、Provider service 和持久审批尚未完成。浏览器仍主要连接 loopback RPC/SSE Gateway；Git Worktree/Runner、Lease、审计、完整 RBAC、幂等调度和认证 WebSocket 也尚未完成。当前 `/api/rpc`、permissive CORS 和 SSE query token 只能用于本地迁移期，不得作为多用户 Beta 边界。
 
 本计划只记录当前有效工作。任务完成必须有代码、测试和运行证据，不能仅凭源码检查将 Runtime 或恢复能力标记为完成。
 
@@ -705,11 +705,11 @@ GET/POST/PATCH/DELETE /api/codex/profiles/:id/skills
 
 ### Batch 2：Profile Host 与持久审批最小闭环
 
-1. 完成 `M1-C01` 至 `M1-C07` 的最小纵向：每用户 Home、单主锁、原生 app-server stdio 生命周期、请求关联、Manifest 门禁；用它替换 `RealCodexAdapter` 对 Tauri daemon 的依赖。
+1. [x] 完成 `M1-C01` 至 `M1-C07` 的单 Profile 最小纵向：私有 Home、单主锁、原生 app-server stdio 生命周期、请求关联、有界事件流和 Manifest 门禁；Real Adapter 不再依赖 Tauri daemon。
 2. 将 Provider CRUD 编排、Secret 注入和模型刷新从 `src-tauri/src/shared/codex_core.rs` 移入 Profile Host/provider service；Tauri 过渡适配器只能复用该服务。
 3. 增加 Profile/Capability/Approval/Audit migrations 和归属约束。
 4. 将命令、文件、权限和结构化输入请求先持久化再通知，使用 CAS 决策。
-5. 运行真实 Profile restart、Thread list/read/resume、Provider switch 与 Approval Smoke。
+5. [x] 运行真实 Profile restart、Thread resume/read Smoke；继续补齐 Thread list、多 Workspace、Provider switch 与 Approval Smoke。
 
 **完成证据：** Host 重启恢复同一用户 Thread；另一用户无法访问 Profile/Thread/请求；过期请求不复用。
 

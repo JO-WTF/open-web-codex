@@ -30,6 +30,11 @@ fixed during migration, keep its current parity path aligned:
 New cross-runtime behavior belongs in platform crates first. Tauri and daemon
 adapters may call those crates while compatibility is required.
 
+The production Real Adapter already starts Codex through
+`crates/profile-host`; do not add a new loopback daemon dependency. The current
+single-Profile/single-Workspace server wiring is transitional and must evolve
+through the Profile registry and typed platform services.
+
 ## If You Need X, Edit Y
 
 | Need | Primary files to edit |

@@ -19,16 +19,16 @@ The command registry in `src-tauri/src/lib.rs` is the canonical source for the c
 
 ## Current blocking chain
 
-Tauri cannot be deleted while the Platform Server's real adapter still proxies
-the Tauri daemon. The current dependency chain is:
+The first blocking edge has been removed: the Platform Server's real adapter
+now owns a native Profile Host connection and does not proxy the Tauri daemon.
+The remaining compatibility chain is:
 
 ```text
 Browser compatibility services
   -> raw /api/rpc and SSE Gateway
-  -> Platform RealCodexAdapter
-  -> Tauri daemon RPC
-  -> src-tauri shared Codex/Git/Workspace cores
-  -> Codex app-server and local Git
+  -> transitional platform RPC adapter and Tauri compatibility commands
+  -> src-tauri shared Provider/Git/Workspace cores
+  -> native Profile Host for Codex; src-tauri for remaining local Git/desktop behavior
 ```
 
 The removal path reverses that ownership. Native Profile Host, Git Runtime and
@@ -141,9 +141,11 @@ can only decrease during the migration.
 
 ### Execution Order
 
-1. Implement native Profile Host app-server stdio transport, process registry,
-   request correlation, bounded event queue and Manifest handshake in platform
-   crates. Replace the daemon-backed `RealCodexAdapter`.
+1. [x] Implement native Profile Host app-server stdio transport, single-owner
+   lock, request correlation, bounded event queue and Manifest handshake in
+   platform crates. Replace the daemon-backed `RealCodexAdapter`. A durable
+   multi-Profile registry and database lease remain part of the next platform
+   slice.
 2. Move Provider CRUD/Secret orchestration and model refresh from
    `src-tauri/src/shared/codex_core.rs` into the Profile Host/provider service.
    Keep Chat wire translation, Provider model semantics and cache isolation in
