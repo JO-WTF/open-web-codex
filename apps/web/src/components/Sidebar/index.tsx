@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import Settings from "lucide-react/dist/esm/icons/settings";
+import Moon from "lucide-react/dist/esm/icons/moon";
+import Sun from "lucide-react/dist/esm/icons/sun";
 import X from "lucide-react/dist/esm/icons/x";
 import type { WorkspaceInfo } from "../../types";
 import Brand from "./Brand";
@@ -29,7 +31,7 @@ type Props = {
   activeThreadId: string | null;
   onSelectThread: (id: string) => void;
   onNewThread: (workspaceId: string) => void;
-  onDeleteThread: (workspaceId: string, threadId: string) => void;
+  onArchiveThread: (workspaceId: string, threadId: string) => void;
   onRemoveWorkspace: (workspaceId: string) => void;
   baseUrl: string;
   token: string;
@@ -40,6 +42,8 @@ type Props = {
   rateLimits: Record<string, unknown> | null;
   currentProviderId: string | null;
   busy: boolean;
+  theme: "light" | "dark";
+  onToggleTheme: () => void;
 };
 
 export default function Sidebar({
@@ -55,7 +59,7 @@ export default function Sidebar({
   activeThreadId,
   onSelectThread,
   onNewThread,
-  onDeleteThread,
+  onArchiveThread,
   onRemoveWorkspace,
   baseUrl,
   token,
@@ -66,6 +70,8 @@ export default function Sidebar({
   rateLimits,
   currentProviderId,
   busy,
+  theme,
+  onToggleTheme,
 }: Props) {
   const [showSettings, setShowSettings] = useState(false);
 
@@ -94,7 +100,7 @@ export default function Sidebar({
           activeThreadId={activeThreadId}
           onSelectThread={onSelectThread}
           onNewThread={onNewThread}
-          onDeleteThread={onDeleteThread}
+          onArchiveThread={onArchiveThread}
           onRemoveWorkspace={onRemoveWorkspace}
           busy={busy}
         />
@@ -106,19 +112,30 @@ export default function Sidebar({
 
       <div className="web-sidebar-bottom">
         {rateLimits && currentProviderId === "openai" ? <RateLimitCard rateLimits={rateLimits} /> : null}
-        <button
-          type="button"
-          className="web-settings-toggle"
-          aria-label="Open settings"
-          aria-haspopup="dialog"
-          aria-expanded={showSettings}
-          onClick={() => setShowSettings(true)}
-        >
-          <span className={`web-settings-toggle-icon${showSettings ? " web-settings-icon-open" : ""}`}>
-            <Settings size={16} />
-          </span>
-          Settings
-        </button>
+        <div className="web-sidebar-actions">
+          <button
+            type="button"
+            className="web-theme-toggle"
+            aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+            title={theme === "dark" ? "Light theme" : "Dark theme"}
+            onClick={onToggleTheme}
+          >
+            {theme === "dark" ? <Sun size={16} aria-hidden="true" /> : <Moon size={16} aria-hidden="true" />}
+          </button>
+          <button
+            type="button"
+            className="web-settings-toggle"
+            aria-label="Open settings"
+            aria-haspopup="dialog"
+            aria-expanded={showSettings}
+            onClick={() => setShowSettings(true)}
+          >
+            <span className={`web-settings-toggle-icon${showSettings ? " web-settings-icon-open" : ""}`}>
+              <Settings size={16} />
+            </span>
+            Settings
+          </button>
+        </div>
       </div>
       {showSettings && createPortal(
         <div

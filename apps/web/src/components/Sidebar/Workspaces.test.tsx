@@ -26,7 +26,7 @@ describe("Web workspace actions", () => {
         activeThreadId={null}
         onSelectThread={vi.fn()}
         onNewThread={vi.fn()}
-        onDeleteThread={vi.fn()}
+        onArchiveThread={vi.fn()}
         onRemoveWorkspace={onRemoveWorkspace}
       />,
     );
@@ -39,8 +39,8 @@ describe("Web workspace actions", () => {
     expect(onRemoveWorkspace).toHaveBeenCalledWith("ws-1");
   });
 
-  it("shows running state and archives a thread from its delete action", () => {
-    const onDeleteThread = vi.fn();
+  it("shows running state and confirms before archiving a thread", () => {
+    const onArchiveThread = vi.fn();
     render(
       <Workspaces
         workspaces={[{
@@ -65,14 +65,18 @@ describe("Web workspace actions", () => {
         activeThreadId={null}
         onSelectThread={vi.fn()}
         onNewThread={vi.fn()}
-        onDeleteThread={onDeleteThread}
+        onArchiveThread={onArchiveThread}
         onRemoveWorkspace={vi.fn()}
       />,
     );
 
     expect(screen.getByLabelText("Running")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "Delete thread Running" }) as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "Delete thread Idle" }));
-    expect(onDeleteThread).toHaveBeenCalledWith("ws-1", "idle-thread");
+    expect((screen.getByRole("button", { name: "Archive thread Running" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Archive thread Idle" }));
+    expect(screen.getByRole("alertdialog", { name: "Archive thread?" })).toBeTruthy();
+    expect(onArchiveThread).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Archive" }));
+    expect(onArchiveThread).toHaveBeenCalledWith("ws-1", "idle-thread");
+    expect(screen.queryByRole("alertdialog", { name: "Archive thread?" })).toBeNull();
   });
 });

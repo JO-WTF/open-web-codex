@@ -160,6 +160,13 @@ export default function WebApp() {
   const [selectedProviderModelId, setSelectedProviderModelId] = useState<string | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [theme, setTheme] = useState<"light" | "dark">(() =>
+    localStorage.getItem("open-web-codex:theme") === "light" ? "light" : "dark",
+  );
+
+  useEffect(() => {
+    localStorage.setItem("open-web-codex:theme", theme);
+  }, [theme]);
 
   useEffect(() => {
     const narrowScreen = window.matchMedia("(max-width: 760px)");
@@ -1332,13 +1339,11 @@ export default function WebApp() {
    }
   }, [activeWorkspaceId, appendLog, client, connectWorkspace, refreshThreads]);
 
-  const deleteThread = useCallback(async (workspaceId: string, threadId: string) => {
+  const archiveThread = useCallback(async (workspaceId: string, threadId: string) => {
     const thread = (threadsByWorkspace[workspaceId] ?? []).find((candidate) => candidate.id === threadId);
     if (!thread) return;
-    if (!window.confirm(`Delete thread '${thread.label}'?`)) return;
     setBusy(true);
     try {
-      // Codex exposes deletion as an archive operation so history remains recoverable.
       await client.archiveThread(workspaceId, threadId);
       setThreadsByWorkspace((previous) => ({
         ...previous,
@@ -1591,6 +1596,7 @@ export default function WebApp() {
 
   return (
     <Layout
+      theme={theme}
       sidebarCollapsed={sidebarCollapsed}
       rightPanelOpen={filePanelOpen}
       rightPanelWidth={filePanelWidth}
@@ -1620,7 +1626,7 @@ export default function WebApp() {
 
           onSelectThread={selectThread}
           onNewThread={startThread}
-          onDeleteThread={deleteThread}
+          onArchiveThread={archiveThread}
           onRemoveWorkspace={removeWorkspace}
           baseUrl={baseUrl}
           token={token}
@@ -1632,6 +1638,8 @@ export default function WebApp() {
           mcpServers={mcpServers}
           rateLimits={rateLimits}
           currentProviderId={currentProviderId}
+          theme={theme}
+          onToggleTheme={() => setTheme((current) => current === "dark" ? "light" : "dark")}
 
           onConnectWorkspace={connectWorkspace}
         />
