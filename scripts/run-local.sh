@@ -410,6 +410,7 @@ if [[ "$skip_build" == "1" ]]; then
 fi
 
 codex_bin=""
+code_mode_host_bin=""
 daemon_bin="$web_root/target/debug/codex_monitor_daemon"
 server_bin="$web_root/target/debug/open-web-codex-server"
 
@@ -420,11 +421,18 @@ if [[ "$codex_mode" == "real" ]]; then
   else
     codex_bin="$runtime_root/target/debug/codex"
     if [[ "$skip_build" == "0" ]]; then
-      printf 'Building the repository Codex runtime (incremental)...\n'
-      (cd "$runtime_root" && cargo build -p codex-cli --bin codex)
+      printf 'Building the repository Codex runtime and code-mode host (incremental)...\n'
+      (
+        cd "$runtime_root" &&
+          cargo build \
+            -p codex-cli --bin codex \
+            -p codex-code-mode-host --bin codex-code-mode-host
+      )
     fi
   fi
   require_executable "Codex" "$codex_bin"
+  code_mode_host_bin="${CODEX_CODE_MODE_HOST_PATH:-$(dirname "$codex_bin")/codex-code-mode-host}"
+  require_executable "Codex code-mode host" "$code_mode_host_bin"
 
   if [[ "$skip_build" == "0" ]]; then
     printf 'Building the local Web gateway...\n'

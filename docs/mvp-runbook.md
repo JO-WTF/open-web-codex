@@ -70,6 +70,9 @@ OPEN_WEB_CODEX_BIN=/absolute/path/to/codex make mvp
 普通运行和 `--background` 都会先检查当前数据目录记录的 Supervisor PID；若
 已有本项目实例，会精确停止旧实例后再启动新实例。
 
+默认增量构建会同时更新 `codex` 和与其配套的 `codex-code-mode-host`，避免两者
+版本不一致导致 Code Mode 握手失败。
+
 只有在确认现有 Rust Binary 已是最新版本时，才应跳过增量构建：
 
 ```bash
