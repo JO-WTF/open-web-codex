@@ -8463,6 +8463,12 @@
               "null"
             ]
           },
+          "allowLoginShell": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "allowManagedHooksOnly": {
             "type": [
               "boolean",
@@ -8520,6 +8526,12 @@
               "null"
             ]
           },
+          "checkForUpdateOnStartup": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "computerUse": {
             "anyOf": [
               {
@@ -8555,6 +8567,28 @@
               "null"
             ]
           },
+          "feedback": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/FeedbackRequirements"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "logDir": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "modelCatalogJson": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "models": {
             "anyOf": [
               {
@@ -8563,6 +8597,18 @@
               {
                 "type": "null"
               }
+            ]
+          },
+          "sqliteHome": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "windowsSandboxPrivateDesktop": {
+            "type": [
+              "boolean",
+              "null"
             ]
           }
         },
@@ -9863,6 +9909,17 @@
           "remoteMcpServersConfig"
         ],
         "type": "string"
+      },
+      "FeedbackRequirements": {
+        "properties": {
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
       },
       "FeedbackUploadParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -13790,6 +13847,9 @@
             "type": "object"
           }
         ]
+      },
+      "PathUri": {
+        "type": "string"
       },
       "PermissionProfileListParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
