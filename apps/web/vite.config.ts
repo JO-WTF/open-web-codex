@@ -97,6 +97,7 @@ export default defineConfig(async () => ({
     port: 1420,
     strictPort: true,
     host: host || false,
+    allowedHosts: true,
     // SPA fallback: serve index.html for all routes (including /web)
     historyApiFallback: true,
     hmr: host
