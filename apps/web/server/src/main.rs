@@ -11,11 +11,13 @@ use std::sync::Arc;
 use axum::Router;
 use clap::Parser;
 use open_web_codex_approval_service::ApprovalService;
+use open_web_codex_git_runtime::{GitRuntime, GitRuntimeConfig};
 use open_web_codex_profile_host::{ProfileHost, ProfileHostConfig};
 use open_web_codex_profile_registry::ProfileRegistry;
 use open_web_codex_provider_service::secured::{
     AuthorizedProviderOperations, InMemoryAuthorizedProviderService, SecuredProviderService,
 };
+use open_web_codex_run_orchestrator::RunOrchestrator;
 use open_web_codex_secret_store::{MasterKey, PostgresSecretStore, SecretCipher};
 use sqlx::Row;
 use tower_http::cors::CorsLayer;
@@ -55,9 +57,16 @@ struct Cli {
     /// Codex executable used by the native Profile Host.
     #[arg(long, env = "CODEX_BIN", default_value = "codex")]
     codex_bin: PathBuf,
-    /// Server-owned workspace root for the transitional single-workspace flow.
-    #[arg(long, env = "CODEX_WORKSPACE_ROOT")]
-    workspace_root: Option<PathBuf>,
+    /// Private root for server-owned repository mirrors and Run workspaces.
+    #[arg(
+        long,
+        env = "OPEN_WEB_CODEX_RUNNER_ROOT",
+        default_value = ".open-web-codex/runner"
+    )]
+    runner_root: PathBuf,
+    /// Permit local filesystem Git sources. Intended only for isolated tests.
+    #[arg(long, env = "OPEN_WEB_CODEX_ALLOW_LOCAL_GIT_SOURCES", default_value_t = false, action = clap::ArgAction::SetTrue)]
+    allow_local_git_sources: bool,
     /// Stable Profile identity for the transitional single-Profile flow.
     #[arg(long, env = "CODEX_PROFILE_ID", default_value = "default-profile")]
     profile_id: String,
@@ -100,10 +109,15 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let state = AppState::new(pool);
+    let mut git_config = GitRuntimeConfig::new(cli.runner_root.clone());
+    if cli.allow_local_git_sources {
+        tracing::warn!("local filesystem Git sources are enabled");
+        git_config = git_config.with_local_sources();
+    }
+    let git = Arc::new(GitRuntime::new(git_config)?);
     let profile_binding = routes::RuntimeProfileBinding {
         runtime_key: cli.profile_id.clone(),
         name: cli.profile_id.clone(),
-        workspace_id: cli.workspace_id.clone(),
         capabilities: routes::RuntimeCapabilityState::default(),
     };
     let (adapter, providers): (Arc<dyn CodexAdapter>, Arc<dyn AuthorizedProviderOperations>) =
@@ -119,10 +133,7 @@ async fn main() -> anyhow::Result<()> {
                 let codex_home = cli.codex_home.clone().ok_or_else(|| {
                     anyhow::anyhow!("--codex-home / CODEX_HOME is required in real Codex mode")
                 })?;
-                let workspace_root = match cli.workspace_root.clone() {
-                    Some(path) => path,
-                    None => std::env::current_dir()?,
-                };
+                let workspace_root = git.workspace_root().to_path_buf();
                 tracing::info!(
                     profile_id = %cli.profile_id,
                     workspace_id = %cli.workspace_id,
@@ -175,6 +186,16 @@ async fn main() -> anyhow::Result<()> {
         state.db.clone(),
         profile_binding.runtime_key.clone(),
     ));
+    let orchestrator = Arc::new(RunOrchestrator::new(
+        state.db.clone(),
+        git.clone(),
+        adapter.clone(),
+        profile_binding.runtime_key.clone(),
+        format!("server-{}", uuid::Uuid::now_v7()),
+        std::time::Duration::from_secs(30),
+    )?);
+    let (runner_shutdown, runner_shutdown_rx) = tokio::sync::watch::channel(false);
+    let runner_task = tokio::spawn(orchestrator.clone().run_worker(runner_shutdown_rx));
 
     // ── Event Bus ───────────────────────────────────────────────────
     // Bridge adapter events into durable projections and the live event bus.
@@ -247,6 +268,8 @@ async fn main() -> anyhow::Result<()> {
                 adapter,
                 providers,
                 approvals,
+                git,
+                orchestrator,
                 profile_binding,
                 cli.legacy_codex_proxy,
             ),
@@ -258,7 +281,10 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(cli.bind).await?;
     tracing::info!("listening on {}", cli.bind);
 
-    axum::serve(listener, app).await?;
+    let serve_result = axum::serve(listener, app).await;
+    let _ = runner_shutdown.send(true);
+    let _ = runner_task.await;
+    serve_result?;
 
     Ok(())
 }

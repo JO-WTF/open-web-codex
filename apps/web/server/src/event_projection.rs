@@ -50,6 +50,32 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<(), String> {
     .await
     .map_err(|error| format!("event insert error: {error}"))?;
 
+    match event.event_type.as_str() {
+        "codex.turn.started" => {
+            sqlx::query(
+                "UPDATE runs SET active_turn_id = $1, updated_at = now() \
+                 WHERE id = $2 AND status = 'running'",
+            )
+            .bind(&event.turn_id)
+            .bind(run_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| format!("active Turn projection error: {error}"))?;
+        }
+        "codex.turn.completed" => {
+            sqlx::query(
+                "UPDATE runs SET active_turn_id = NULL, updated_at = now() \
+                 WHERE id = $1 AND active_turn_id = $2",
+            )
+            .bind(run_id)
+            .bind(&event.turn_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| format!("completed Turn projection error: {error}"))?;
+        }
+        _ => {}
+    }
+
     let terminal_status = match event.event_type.as_str() {
         "codex.thread.completed" => Some("completed"),
         "codex.thread.failed" => Some("failed"),
@@ -63,9 +89,13 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<(), String> {
         };
         sqlx::query(
             "WITH updated_run AS (
-                UPDATE runs SET status = $1, updated_at = now()
+                UPDATE runs SET status = $1, active_turn_id = NULL, lease_owner = NULL,
+                                lease_token = NULL, lease_expires_at = NULL, updated_at = now()
                 WHERE id = $2 AND status = 'running'
-                RETURNING task_id
+                RETURNING task_id, workspace_id
+             ), updated_workspace AS (
+                UPDATE workspaces SET state = 'ready', updated_at = now()
+                WHERE id IN (SELECT workspace_id FROM updated_run)
              )
              UPDATE tasks SET status = $3, updated_at = now()
              WHERE id IN (SELECT task_id FROM updated_run)

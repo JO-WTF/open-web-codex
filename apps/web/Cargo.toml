@@ -11,6 +11,7 @@ members = [
     "crates/platform-contracts",
     "crates/platform-store",
     "crates/provider-service",
+    "crates/run-orchestrator",
     "crates/secret-store",
     "server",
     "src-tauri",

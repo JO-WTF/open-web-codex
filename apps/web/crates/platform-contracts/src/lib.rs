@@ -202,18 +202,57 @@ pub struct Run {
     pub task_id: Uuid,
     pub status: String,
     pub codex_thread_id: Option<String>,
+    pub active_turn_id: Option<String>,
+    pub workspace_id: Option<Uuid>,
+    pub source_ref: Option<String>,
+    pub attempt: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
 /// Request to start a run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StartRunRequest {}
+pub struct StartRunRequest {
+    pub idempotency_key: String,
+    pub git_ref: Option<String>,
+}
 
 /// Response from starting a run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartRunResponse {
     pub run: Run,
+}
+
+/// A safe Git change projection. Paths are always workspace-relative.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceFileChange {
+    pub path: String,
+    pub status: String,
+    pub additions: Option<u64>,
+    pub deletions: Option<u64>,
+    pub binary: bool,
+    pub size_bytes: Option<u64>,
+    pub large: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RunWorkspaceStatus {
+    pub workspace_id: Uuid,
+    pub branch: String,
+    pub head_commit: String,
+    pub changes: Vec<WorkspaceFileChange>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitWorkspaceRequest {
+    pub selected_paths: Vec<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitWorkspaceResponse {
+    pub workspace_id: Uuid,
+    pub commit: String,
 }
 
 // ── Messages ──────────────────────────────────────────────────────

@@ -4,6 +4,7 @@ pub mod real;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::path::PathBuf;
 use thiserror::Error;
 
 /// Errors from the Codex adapter layer.
@@ -39,6 +40,20 @@ pub struct AdapterEvent {
     pub data: Vec<u8>,
 }
 
+/// Server-authorized workspace context for typed Runtime calls. The root is an
+/// internal Runner path and must never be constructed from a browser payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthorizedWorkspace {
+    pub id: String,
+    pub root: PathBuf,
+}
+
+/// Stable result of starting a Codex Thread in an authorized workspace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartedThread {
+    pub thread_id: String,
+}
+
 /// Mode for the Codex adapter.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AdapterMode {
@@ -70,6 +85,29 @@ pub trait CodexAdapter: Send + Sync {
     /// with typed Thread/Turn operations; it is never a public browser
     /// contract.
     async fn rpc(&self, method: &str, params: Value) -> Result<Value, AdapterError>;
+
+    /// Start a Thread in a server-owned, authorization-checked workspace.
+    async fn start_thread(
+        &self,
+        workspace: &AuthorizedWorkspace,
+    ) -> Result<StartedThread, AdapterError>;
+
+    /// Start a user turn in the authorized workspace bound to the Thread.
+    async fn send_user_message(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+        text: &str,
+    ) -> Result<Value, AdapterError>;
+
+    /// Interrupt the active Turn identified by the durable platform
+    /// projection. The caller must authorize both the Thread and workspace.
+    async fn interrupt_turn(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+        turn_id: &str,
+    ) -> Result<(), AdapterError>;
 
     /// Internal response path for app-server initiated requests. Public routes
     /// must resolve a platform-owned durable request before calling this.

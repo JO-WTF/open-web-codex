@@ -3727,6 +3727,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "open-web-codex-run-orchestrator"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "open-web-codex-adapter",
+ "open-web-codex-git-runtime",
+ "open-web-codex-platform-store",
+ "sqlx",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "open-web-codex-secret-store"
 version = "0.1.0"
 dependencies = [
@@ -3753,17 +3769,20 @@ dependencies = [
  "open-web-codex-adapter",
  "open-web-codex-approval-service",
  "open-web-codex-auth",
+ "open-web-codex-git-runtime",
  "open-web-codex-platform-contracts",
  "open-web-codex-platform-store",
  "open-web-codex-profile-host",
  "open-web-codex-profile-registry",
  "open-web-codex-provider-service",
+ "open-web-codex-run-orchestrator",
  "open-web-codex-secret-store",
  "rand 0.8.7",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "sqlx",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tower",

@@ -1,21 +1,26 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use std::collections::HashMap;
 
 use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::{json, Value};
-use tokio::sync::Mutex;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::{AdapterError, CodexAdapter, HealthStatus};
+use crate::{AdapterError, AuthorizedWorkspace, CodexAdapter, HealthStatus, StartedThread};
 
 /// A tracked mock thread for list/show responses.
-#[derive(Clone)] struct MockThread {
-    id: String, ws_id: String, created_at: String, status: String,
-    msg_count: u64, updated_at: i64,
+#[derive(Clone)]
+struct MockThread {
+    id: String,
+    ws_id: String,
+    created_at: String,
+    status: String,
+    msg_count: u64,
+    updated_at: i64,
 }
 
 /// In-memory state shared between RPC handlers and event generator.
@@ -34,7 +39,9 @@ pub struct FakeCodexAdapter {
 }
 
 impl Default for FakeCodexAdapter {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl FakeCodexAdapter {
@@ -106,7 +113,11 @@ impl FakeCodexAdapter {
 #[async_trait]
 impl CodexAdapter for FakeCodexAdapter {
     async fn health(&self) -> Result<HealthStatus, AdapterError> {
-        Ok(HealthStatus { ok: true, version: "0.1.0-mock".into(), name: "open-web-codex-mock".into() })
+        Ok(HealthStatus {
+            ok: true,
+            version: "0.1.0-mock".into(),
+            name: "open-web-codex-mock".into(),
+        })
     }
 
     async fn rpc(&self, method: &str, params: Value) -> Result<Value, AdapterError> {
@@ -117,8 +128,10 @@ impl CodexAdapter for FakeCodexAdapter {
             }
 
             "add_workspace" => {
-                let path = params["path"].as_str()
-                    .ok_or_else(|| AdapterError::Internal("missing path".into()))?.to_string();
+                let path = params["path"]
+                    .as_str()
+                    .ok_or_else(|| AdapterError::Internal("missing path".into()))?
+                    .to_string();
                 let mut s = self.state.lock().await;
                 let id = Uuid::now_v7().to_string();
                 let name = path.rsplit('/').next().unwrap_or("workspace").to_string();
@@ -132,17 +145,22 @@ impl CodexAdapter for FakeCodexAdapter {
             }
 
             "connect_workspace" => {
-                let id = params["id"].as_str()
+                let id = params["id"]
+                    .as_str()
                     .ok_or_else(|| AdapterError::Internal("missing id".into()))?;
                 let mut s = self.state.lock().await;
                 for ws in &mut s.workspaces {
-                    if ws["id"] == id { ws["connected"] = json!(true); return Ok(json!({})); }
+                    if ws["id"] == id {
+                        ws["connected"] = json!(true);
+                        return Ok(json!({}));
+                    }
                 }
                 Err(AdapterError::Rpc(format!("workspace not found: {id}")))
             }
 
             "start_thread" => {
-                let ws_id = params["workspaceId"].as_str()
+                let ws_id = params["workspaceId"]
+                    .as_str()
                     .ok_or_else(|| AdapterError::Internal("missing workspaceId".into()))?;
                 let now = Utc::now();
                 {
@@ -159,9 +177,12 @@ impl CodexAdapter for FakeCodexAdapter {
                 {
                     let mut s = self.state.lock().await;
                     s.threads.push(MockThread {
-                        id: thread_id.clone(), ws_id: ws_id.to_string(),
-                        created_at: created.clone(), status: "active".into(),
-                        msg_count: 0, updated_at: updated_ts,
+                        id: thread_id.clone(),
+                        ws_id: ws_id.to_string(),
+                        created_at: created.clone(),
+                        status: "active".into(),
+                        msg_count: 0,
+                        updated_at: updated_ts,
                     });
                 }
                 // Emit thread/started event immediately
@@ -173,13 +194,17 @@ impl CodexAdapter for FakeCodexAdapter {
             "list_threads" => {
                 let ws_id = params["workspaceId"].as_str().unwrap_or("");
                 let s = self.state.lock().await;
-                let threads: Vec<Value> = s.threads.iter()
+                let threads: Vec<Value> = s
+                    .threads
+                    .iter()
                     .filter(|t| t.ws_id == ws_id)
-                    .map(|t| json!({
-                        "id": t.id, "name": format!("Fake Thread ({})", &t.id[13..]),
-                        "createdAt": t.created_at, "updatedAt": t.updated_at,
-                        "messageCount": t.msg_count, "status": t.status,
-                    }))
+                    .map(|t| {
+                        json!({
+                            "id": t.id, "name": format!("Fake Thread ({})", &t.id[13..]),
+                            "createdAt": t.created_at, "updatedAt": t.updated_at,
+                            "messageCount": t.msg_count, "status": t.status,
+                        })
+                    })
                     .collect();
                 Ok(json!({ "threads": threads, "totalCount": threads.len() }))
             }
@@ -210,6 +235,79 @@ impl CodexAdapter for FakeCodexAdapter {
         }
     }
 
+    async fn start_thread(
+        &self,
+        workspace: &AuthorizedWorkspace,
+    ) -> Result<StartedThread, AdapterError> {
+        {
+            let mut state = self.state.lock().await;
+            if !state
+                .workspaces
+                .iter()
+                .any(|value| value["id"] == workspace.id)
+            {
+                state.workspaces.push(json!({
+                    "id": workspace.id,
+                    "name": workspace.id,
+                    "path": workspace.root,
+                    "connected": true,
+                    "kind": "run",
+                }));
+            }
+        }
+        let result = self
+            .rpc("start_thread", json!({ "workspaceId": workspace.id }))
+            .await?;
+        let thread_id = result
+            .get("threadId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AdapterError::Rpc("fake Thread omitted id".to_string()))?;
+        Ok(StartedThread {
+            thread_id: thread_id.to_string(),
+        })
+    }
+
+    async fn send_user_message(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+        text: &str,
+    ) -> Result<Value, AdapterError> {
+        self.rpc(
+            "send_user_message",
+            json!({
+                "workspaceId": workspace.id,
+                "threadId": thread_id,
+                "text": text,
+            }),
+        )
+        .await
+    }
+
+    async fn interrupt_turn(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+        turn_id: &str,
+    ) -> Result<(), AdapterError> {
+        if workspace.id.trim().is_empty()
+            || thread_id.trim().is_empty()
+            || turn_id.trim().is_empty()
+        {
+            return Err(AdapterError::Internal(
+                "workspace, Thread, and Turn ids are required".to_string(),
+            ));
+        }
+        let mut state = self.state.lock().await;
+        let thread = state
+            .threads
+            .iter_mut()
+            .find(|thread| thread.id == thread_id && thread.ws_id == workspace.id)
+            .ok_or_else(|| AdapterError::Rpc("fake Thread was not found".to_string()))?;
+        thread.status = "interrupted".to_string();
+        Ok(())
+    }
+
     async fn respond_to_server_request(
         &self,
         _request_id: Value,
@@ -218,10 +316,7 @@ impl CodexAdapter for FakeCodexAdapter {
         Ok(())
     }
 
-    async fn subscribe_events(
-        &self,
-        sender: UnboundedSender<Vec<u8>>,
-    ) -> Result<(), AdapterError> {
+    async fn subscribe_events(&self, sender: UnboundedSender<Vec<u8>>) -> Result<(), AdapterError> {
         let state = self.state.clone();
         let notify = self.notify.clone();
         let counter = self.counter.clone();

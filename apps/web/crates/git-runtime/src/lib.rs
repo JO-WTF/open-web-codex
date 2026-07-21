@@ -284,6 +284,28 @@ impl GitRuntime {
         let _lock = self.acquire_workspace_lock(workspace_id).await;
         let workspace = self.require_workspace(workspace_id)?;
         let selected = selected_paths.iter().cloned().collect::<BTreeSet<_>>();
+        let available = self
+            .git_output(
+                "read workspace changes",
+                Some(&workspace),
+                [
+                    OsString::from("status"),
+                    OsString::from("--porcelain=v1"),
+                    OsString::from("-z"),
+                    OsString::from("--untracked-files=all"),
+                ],
+                &[0],
+            )
+            .await?;
+        let available = parse_porcelain(&available.stdout)?
+            .into_iter()
+            .map(|change| change.path)
+            .collect::<BTreeSet<_>>();
+        if !selected.is_subset(&available) {
+            return Err(GitRuntimeError::Conflict(
+                "selection contains paths that are not exact workspace changes".to_string(),
+            ));
+        }
         let before = self.staged_paths(&workspace).await?;
         if !before.is_subset(&selected) {
             return Err(GitRuntimeError::Conflict(

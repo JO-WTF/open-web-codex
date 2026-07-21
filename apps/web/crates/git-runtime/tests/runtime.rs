@@ -185,6 +185,36 @@ async fn refuses_to_commit_when_an_unselected_path_is_already_staged() {
     assert_eq!(status.head_commit, checkout.head_commit);
 }
 
+#[tokio::test]
+async fn rejects_directory_pathspecs_before_they_can_expand_the_selection() {
+    let (_root, runtime, source) = fixture();
+    let source = runtime.validate_source(&source).unwrap();
+    let branch = runtime.validate_ref("main").unwrap();
+    let workspace_id = Uuid::now_v7();
+    let checkout = runtime
+        .provision(Uuid::now_v7(), workspace_id, &source, &branch)
+        .await
+        .unwrap();
+    std::fs::create_dir(checkout.root.join("src")).unwrap();
+    std::fs::write(checkout.root.join("src/first.rs"), "fn first() {}\n").unwrap();
+    std::fs::write(checkout.root.join("src/second.rs"), "fn second() {}\n").unwrap();
+
+    let error = runtime
+        .commit_selected(
+            workspace_id,
+            &["src".to_string()],
+            "must not expand directory pathspec",
+            &CommitAuthor {
+                name: "Codex User".to_string(),
+                email: "user@example.invalid".to_string(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, GitRuntimeError::Conflict(_)));
+    git(&checkout.root, &["diff", "--cached", "--quiet"]);
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn refuses_a_symlink_at_a_server_generated_workspace_path() {

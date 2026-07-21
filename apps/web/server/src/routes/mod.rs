@@ -9,14 +9,17 @@ pub mod providers;
 pub mod runs;
 pub mod sessions;
 pub mod tasks;
+pub mod workspaces;
 
 use std::sync::Arc;
 
 use axum::{Extension, Router};
 use open_web_codex_adapter::CodexAdapter;
 use open_web_codex_approval_service::ApprovalService;
+use open_web_codex_git_runtime::GitRuntime;
 use open_web_codex_platform_store::AppState;
 use open_web_codex_provider_service::secured::AuthorizedProviderOperations;
+use open_web_codex_run_orchestrator::RunOrchestrator;
 use tokio::sync::RwLock;
 
 #[derive(Clone)]
@@ -45,7 +48,6 @@ impl RuntimeCapabilityState {
 pub struct RuntimeProfileBinding {
     pub runtime_key: String,
     pub name: String,
-    pub workspace_id: String,
     pub capabilities: RuntimeCapabilityState,
 }
 
@@ -54,6 +56,8 @@ pub fn router(
     adapter: Arc<dyn CodexAdapter>,
     providers: Arc<dyn AuthorizedProviderOperations>,
     approvals: Arc<ApprovalService>,
+    git: Arc<GitRuntime>,
+    orchestrator: Arc<RunOrchestrator>,
     profile: RuntimeProfileBinding,
     legacy_codex_proxy: bool,
 ) -> Router<AppState> {
@@ -74,6 +78,14 @@ pub fn router(
         .route("/runs", axum::routing::get(runs::list_runs))
         .route("/runs/{id}", axum::routing::get(runs::get_run))
         .route("/runs/{id}/cancel", axum::routing::post(runs::cancel_run))
+        .route(
+            "/runs/{id}/workspace/status",
+            axum::routing::get(workspaces::status),
+        )
+        .route(
+            "/runs/{id}/workspace/commit",
+            axum::routing::post(workspaces::commit),
+        )
         .route(
             "/organizations",
             axum::routing::get(organizations::list_organizations)
@@ -134,5 +146,7 @@ pub fn router(
         .layer(Extension(adapter))
         .layer(Extension(providers))
         .layer(Extension(approvals))
+        .layer(Extension(git))
+        .layer(Extension(orchestrator))
         .layer(Extension(profile))
 }

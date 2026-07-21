@@ -1,12 +1,14 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    Json,
+    Extension, Json,
 };
+use open_web_codex_git_runtime::GitRuntime;
 use open_web_codex_platform_contracts::error::PlatformError;
 use open_web_codex_platform_contracts::{CreateProjectRequest, Project};
 use open_web_codex_platform_store::AppState;
 use sqlx::Row;
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::middleware::auth::AuthenticatedUser;
@@ -46,6 +48,7 @@ pub async fn list_projects(
 pub async fn create_project(
     auth: AuthenticatedUser,
     State(state): State<AppState>,
+    Extension(git): Extension<Arc<GitRuntime>>,
     Json(req): Json<CreateProjectRequest>,
 ) -> ApiResult<Project> {
     if req.name.trim().is_empty() {
@@ -62,19 +65,29 @@ pub async fn create_project(
             )),
         ));
     }
-    if req.git_url.trim().is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(PlatformError::bad_request("git_url must not be empty")),
-        ));
-    }
-
     let branch = req.default_branch.unwrap_or_else(|| "main".to_string());
+    git.validate_source(&req.git_url).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(PlatformError::bad_request(
+                "git_url is not an allowed Git source",
+            )),
+        )
+    })?;
+    git.validate_ref(&branch).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(PlatformError::bad_request(
+                "default_branch is not a valid Git ref",
+            )),
+        )
+    })?;
     let row = sqlx::query(
-        "INSERT INTO projects (organization_id, name, git_url, default_branch) VALUES ($1, $2, $3, $4) \
+        "INSERT INTO projects (organization_id, created_by, name, git_url, default_branch) VALUES ($1, $2, $3, $4, $5) \
          RETURNING id, name, git_url, default_branch, created_at, updated_at",
     )
     .bind(auth.organization_id)
+    .bind(auth.user_id)
     .bind(&req.name)
     .bind(&req.git_url)
     .bind(&branch)

@@ -6,8 +6,10 @@ use axum::Router;
 use open_web_codex_adapter::fake::FakeCodexAdapter;
 use open_web_codex_approval_service::ApprovalService;
 use open_web_codex_auth::hash_password;
+use open_web_codex_git_runtime::{GitRuntime, GitRuntimeConfig};
 use open_web_codex_platform_store::AppState;
 use open_web_codex_provider_service::secured::InMemoryAuthorizedProviderService;
+use open_web_codex_run_orchestrator::RunOrchestrator;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
@@ -33,18 +35,36 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     let profile = RuntimeProfileBinding {
         runtime_key: "security-test-profile".to_string(),
         name: "Security Test Profile".to_string(),
-        workspace_id: "security-test-workspace".to_string(),
         capabilities: routes::RuntimeCapabilityState::default(),
     };
     let state = AppState::new(pool.clone());
     let approval_service = Arc::new(ApprovalService::new(pool.clone(), "security-test-profile"));
+    let runner_root = tempfile::tempdir().expect("runner root");
+    let git = Arc::new(
+        GitRuntime::new(GitRuntimeConfig::new(runner_root.path()).with_local_sources())
+            .expect("Git runtime"),
+    );
+    let adapter = Arc::new(FakeCodexAdapter::new().with_demo_workspace().await);
+    let orchestrator = Arc::new(
+        RunOrchestrator::new(
+            pool.clone(),
+            git.clone(),
+            adapter.clone(),
+            "security-test-profile",
+            "security-test-worker",
+            std::time::Duration::from_secs(30),
+        )
+        .expect("Run orchestrator"),
+    );
     let app = Router::new()
         .nest(
             "/api",
             routes::router(
-                Arc::new(FakeCodexAdapter::new().with_demo_workspace().await),
+                adapter,
                 Arc::new(InMemoryAuthorizedProviderService::default()),
                 approval_service.clone(),
+                git,
+                orchestrator,
                 profile,
                 true,
             ),

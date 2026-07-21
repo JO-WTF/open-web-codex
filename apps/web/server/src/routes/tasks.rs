@@ -3,7 +3,7 @@ use axum::{
     http::StatusCode,
     Extension, Json,
 };
-use open_web_codex_adapter::CodexAdapter;
+use open_web_codex_adapter::{AuthorizedWorkspace, CodexAdapter};
 use open_web_codex_platform_contracts::error::PlatformError;
 use open_web_codex_platform_contracts::{
     CreateTaskRequest, ListTaskEventsParams, RunEvent, SendMessageRequest, SendMessageResponse,
@@ -11,7 +11,6 @@ use open_web_codex_platform_contracts::{
 };
 use open_web_codex_platform_store::AppState;
 use serde::Deserialize;
-use serde_json::json;
 use sqlx::Row;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -76,13 +75,14 @@ pub async fn create_task(
     }
 
     let row = sqlx::query(
-        "INSERT INTO tasks (organization_id, project_id, title) \
-         SELECT organization_id, id, $2 FROM projects WHERE id = $1 AND organization_id = $3 \
+        "INSERT INTO tasks (organization_id, project_id, created_by, title) \
+         SELECT organization_id, id, $4, $2 FROM projects WHERE id = $1 AND organization_id = $3 \
          RETURNING id, project_id, title, status, created_at, updated_at",
     )
     .bind(req.project_id)
     .bind(&req.title)
     .bind(auth.organization_id)
+    .bind(auth.user_id)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| {
@@ -190,14 +190,17 @@ pub async fn send_message(
     }
     require_runtime_profile(&state.db, &auth, &profile.runtime_key).await?;
 
-    // Find the active run for this task (latest running or pending run)
+    // Resolve the server-owned workspace; the browser never supplies a path.
     let active_run = sqlx::query(
-        "SELECT id, codex_thread_id FROM runs \
-         WHERE task_id = $1 AND organization_id = $2 AND status IN ('pending', 'running') \
+        "SELECT r.id, r.codex_thread_id, r.workspace_id, w.root_path \
+         FROM runs r LEFT JOIN workspaces w ON w.id = r.workspace_id \
+         WHERE r.task_id = $1 AND r.organization_id = $2 \
+           AND r.requested_by = $3 AND r.status = 'running' \
          ORDER BY created_at DESC LIMIT 1",
     )
     .bind(task_id)
     .bind(auth.organization_id)
+    .bind(auth.user_id)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| {
@@ -210,7 +213,7 @@ pub async fn send_message(
         (
             StatusCode::BAD_REQUEST,
             Json(PlatformError::bad_request(
-                "no active run for this task; start a run first",
+                "no active owned Run for this Task; start a Run first",
             )),
         )
     })?;
@@ -224,26 +227,51 @@ pub async fn send_message(
             )),
         )
     })?;
+    let workspace_id: Option<Uuid> = active_run.get("workspace_id");
+    let root_path: Option<String> = active_run.get("root_path");
+    let workspace = match (workspace_id, root_path) {
+        (Some(workspace_id), Some(root)) => AuthorizedWorkspace {
+            id: workspace_id.to_string(),
+            root: root.into(),
+        },
+        _ => {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(PlatformError::bad_request(
+                    "active Run workspace is not ready",
+                )),
+            ));
+        }
+    };
 
-    // Send message via adapter
-    let rpc_result = adapter
-        .rpc(
-            "send_user_message",
-            json!({
-                "threadId": &thread_id,
-                "text": &req.text,
-                "workspaceId": &profile.workspace_id,
-            }),
-        )
+    let result = adapter
+        .send_user_message(&workspace, &thread_id, &req.text)
         .await
-        .map_err(|e| {
+        .map_err(|_| {
             (
                 StatusCode::BAD_GATEWAY,
-                Json(PlatformError::internal(format!("adapter error: {e}"))),
+                Json(PlatformError::internal(
+                    "Codex Runtime failed to start the Turn",
+                )),
             )
         })?;
 
-    let status = rpc_result
+    if let Some(turn_id) = result.get("turnId").and_then(serde_json::Value::as_str) {
+        if let Err(error) = sqlx::query(
+            "UPDATE runs SET active_turn_id = $1, updated_at = now() \
+             WHERE id = $2 AND organization_id = $3 AND status = 'running'",
+        )
+        .bind(turn_id)
+        .bind(active_run.get::<Uuid, _>("id"))
+        .bind(auth.organization_id)
+        .execute(&state.db)
+        .await
+        {
+            tracing::warn!(%error, "active Turn delivery succeeded but projection update failed");
+        }
+    }
+
+    let status = result
         .get("status")
         .and_then(|v| v.as_str())
         .unwrap_or("sent")

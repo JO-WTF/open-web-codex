@@ -5,11 +5,12 @@ use axum::{
     http::StatusCode,
     Extension, Json,
 };
-use open_web_codex_adapter::CodexAdapter;
 use open_web_codex_platform_contracts::error::PlatformError;
-use open_web_codex_platform_contracts::{Run, StartRunResponse};
+use open_web_codex_platform_contracts::{Run, StartRunRequest, StartRunResponse};
 use open_web_codex_platform_store::AppState;
-use serde_json::json;
+use open_web_codex_run_orchestrator::{
+    CancelRunRequest, EnqueueRunRequest, RunOrchestrator, RunOrchestratorError, RunRecord,
+};
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -18,124 +19,29 @@ use crate::routes::RuntimeProfileBinding;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
 
-/// POST /api/tasks/:id/runs — start a new run, creating a Codex thread.
+/// Queue a Run. A worker owns all Git and Runtime side effects after this
+/// transaction, so retries are safe when the caller reuses its idempotency key.
 pub async fn start_run(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
     Path(task_id): Path<Uuid>,
-    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
+    Extension(orchestrator): Extension<Arc<RunOrchestrator>>,
     Extension(profile): Extension<RuntimeProfileBinding>,
+    Json(req): Json<StartRunRequest>,
 ) -> ApiResult<StartRunResponse> {
     require_runtime_profile(&state.db, &auth, &profile.runtime_key).await?;
-    // Verify task exists and user has access
-    let task = sqlx::query(
-        "SELECT t.id, t.project_id, p.name as project_name \
-         FROM tasks t JOIN projects p ON p.id = t.project_id \
-         WHERE t.id = $1 AND t.organization_id = $2 AND p.organization_id = $2",
-    )
-    .bind(task_id)
-    .bind(auth.organization_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(PlatformError::internal(format!("{e}"))),
-        )
-    })?;
-
-    let (_, _project_id) = match task {
-        Some(r) => (r.get::<Uuid, _>("id"), r.get::<Uuid, _>("project_id")),
-        None => {
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(PlatformError::not_found("task not found")),
-            ))
-        }
-    };
-
-    // Create run with pending status
-    let run = sqlx::query(
-        "INSERT INTO runs (organization_id, task_id, status) VALUES ($1, $2, 'pending') \
-         RETURNING id, task_id, status, codex_thread_id, created_at, updated_at",
-    )
-    .bind(auth.organization_id)
-    .bind(task_id)
-    .fetch_one(&state.db)
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(PlatformError::internal(format!("{e}"))),
-        )
-    })?;
-
-    let run_id: Uuid = run.get("id");
-
-    // Start thread via adapter
-    let result = match adapter
-        .rpc(
-            "start_thread",
-            json!({ "workspaceId": profile.workspace_id }),
-        )
+    let run = orchestrator
+        .enqueue_run(EnqueueRunRequest {
+            organization_id: auth.organization_id,
+            actor_id: auth.user_id,
+            task_id,
+            idempotency_key: req.idempotency_key,
+            git_ref: req.git_ref,
+        })
         .await
-    {
-        Ok(result) => result,
-        Err(_) => {
-            let _ = sqlx::query(
-                "UPDATE runs SET status = 'failed', updated_at = now() \
-                 WHERE id = $1 AND organization_id = $2",
-            )
-            .bind(run_id)
-            .bind(auth.organization_id)
-            .execute(&state.db)
-            .await;
-            return Err((
-                StatusCode::BAD_GATEWAY,
-                Json(PlatformError::internal("Codex failed to start the run")),
-            ));
-        }
-    };
-
-    let thread_id = result["threadId"]
-        .as_str()
-        .ok_or_else(|| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(PlatformError::internal(
-                    "no threadId in response".to_string(),
-                )),
-            )
-        })?
-        .to_string();
-
-    // Update run with thread_id and running status
-    let run = sqlx::query(
-        "UPDATE runs SET status = 'running', codex_thread_id = $1, updated_at = now() \
-         WHERE id = $2 AND organization_id = $3 \
-         RETURNING id, task_id, status, codex_thread_id, created_at, updated_at",
-    )
-    .bind(&thread_id)
-    .bind(run_id)
-    .bind(auth.organization_id)
-    .fetch_one(&state.db)
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(PlatformError::internal(format!("{e}"))),
-        )
-    })?;
-
+        .map_err(orchestrator_error)?;
     Ok(Json(StartRunResponse {
-        run: Run {
-            id: run.get("id"),
-            task_id: run.get("task_id"),
-            status: run.get("status"),
-            codex_thread_id: run.get("codex_thread_id"),
-            created_at: run.get("created_at"),
-            updated_at: run.get("updated_at"),
-        },
+        run: run_from_record(run),
     }))
 }
 
@@ -146,127 +52,123 @@ pub async fn list_runs(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, Uuid>>,
 ) -> ApiResult<Vec<Run>> {
     let task_id = params.get("task_id").copied();
-
-    let rows = if let Some(tid) = task_id {
+    let rows = if let Some(task_id) = task_id {
         sqlx::query(
-            "SELECT id, task_id, status, codex_thread_id, created_at, updated_at \
-             FROM runs WHERE task_id = $1 AND organization_id = $2 ORDER BY created_at DESC",
+            "SELECT id, task_id, status, codex_thread_id, active_turn_id, workspace_id, \
+                    source_ref, attempt, created_at, updated_at FROM runs \
+             WHERE task_id = $1 AND organization_id = $2 ORDER BY created_at DESC",
         )
-        .bind(tid)
+        .bind(task_id)
         .bind(auth.organization_id)
         .fetch_all(&state.db)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(PlatformError::internal(format!("{e}"))),
-            )
-        })?
+        .map_err(database_error)?
     } else {
         sqlx::query(
-            "SELECT id, task_id, status, codex_thread_id, created_at, updated_at \
-             FROM runs WHERE organization_id = $1 ORDER BY created_at DESC",
+            "SELECT id, task_id, status, codex_thread_id, active_turn_id, workspace_id, \
+                    source_ref, attempt, created_at, updated_at FROM runs \
+             WHERE organization_id = $1 ORDER BY created_at DESC",
         )
         .bind(auth.organization_id)
         .fetch_all(&state.db)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(PlatformError::internal(format!("{e}"))),
-            )
-        })?
+        .map_err(database_error)?
     };
-
-    let runs: Vec<Run> = rows
-        .iter()
-        .map(|r| Run {
-            id: r.get("id"),
-            task_id: r.get("task_id"),
-            status: r.get("status"),
-            codex_thread_id: r.get("codex_thread_id"),
-            created_at: r.get("created_at"),
-            updated_at: r.get("updated_at"),
-        })
-        .collect();
-
-    Ok(Json(runs))
+    Ok(Json(rows.iter().map(run_from_row).collect()))
 }
 
 /// GET /api/runs/:id — get a single run.
 pub async fn get_run(
-    State(state): State<AppState>,
     auth: AuthenticatedUser,
     Path(id): Path<Uuid>,
+    Extension(orchestrator): Extension<Arc<RunOrchestrator>>,
 ) -> ApiResult<Run> {
-    let row = sqlx::query(
-        "SELECT id, task_id, status, codex_thread_id, created_at, updated_at \
-         FROM runs WHERE id = $1 AND organization_id = $2",
-    )
-    .bind(id)
-    .bind(auth.organization_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(PlatformError::internal(format!("{e}"))),
-        )
-    })?
-    .ok_or_else(|| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(PlatformError::not_found("run not found")),
-        )
-    })?;
-
-    Ok(Json(Run {
-        id: row.get("id"),
-        task_id: row.get("task_id"),
-        status: row.get("status"),
-        codex_thread_id: row.get("codex_thread_id"),
-        created_at: row.get("created_at"),
-        updated_at: row.get("updated_at"),
-    }))
+    let run = orchestrator
+        .get_run(auth.organization_id, id)
+        .await
+        .map_err(orchestrator_error)?;
+    Ok(Json(run_from_record(run)))
 }
 
-/// POST /api/runs/:id/cancel — cancel a running run.
+/// Cancel a Run and interrupt its projected active Turn when one exists.
 pub async fn cancel_run(
-    State(state): State<AppState>,
     auth: AuthenticatedUser,
     Path(id): Path<Uuid>,
+    Extension(orchestrator): Extension<Arc<RunOrchestrator>>,
 ) -> ApiResult<Run> {
-    let row = sqlx::query(
-        "UPDATE runs SET status = 'cancelled', updated_at = now() \
-         WHERE id = $1 AND organization_id = $2 \
-           AND status NOT IN ('completed', 'cancelled', 'failed') \
-         RETURNING id, task_id, status, codex_thread_id, created_at, updated_at",
-    )
-    .bind(id)
-    .bind(auth.organization_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(PlatformError::internal(format!("{e}"))),
-        )
-    })?
-    .ok_or_else(|| {
-        (
-            StatusCode::CONFLICT,
-            Json(PlatformError::bad_request(
-                "run not found or already in terminal state",
-            )),
-        )
-    })?;
+    let run = orchestrator
+        .cancel_run(CancelRunRequest {
+            organization_id: auth.organization_id,
+            actor_id: auth.user_id,
+            allow_organization_admin: matches!(auth.organization_role.as_str(), "owner" | "admin"),
+            run_id: id,
+        })
+        .await
+        .map_err(orchestrator_error)?;
+    Ok(Json(run_from_record(run)))
+}
 
-    Ok(Json(Run {
+fn run_from_record(run: RunRecord) -> Run {
+    Run {
+        id: run.id,
+        task_id: run.task_id,
+        status: run.status,
+        codex_thread_id: run.codex_thread_id,
+        active_turn_id: run.active_turn_id,
+        workspace_id: run.workspace_id,
+        source_ref: run.source_ref,
+        attempt: run.attempt,
+        created_at: run.created_at,
+        updated_at: run.updated_at,
+    }
+}
+
+fn run_from_row(row: &sqlx::postgres::PgRow) -> Run {
+    Run {
         id: row.get("id"),
         task_id: row.get("task_id"),
         status: row.get("status"),
         codex_thread_id: row.get("codex_thread_id"),
+        active_turn_id: row.get("active_turn_id"),
+        workspace_id: row.get("workspace_id"),
+        source_ref: row.get("source_ref"),
+        attempt: row.get("attempt"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
-    }))
+    }
+}
+
+pub(crate) fn orchestrator_error(error: RunOrchestratorError) -> (StatusCode, Json<PlatformError>) {
+    let (status, platform) = match error {
+        RunOrchestratorError::Invalid(message) => {
+            (StatusCode::BAD_REQUEST, PlatformError::bad_request(message))
+        }
+        RunOrchestratorError::NotFound => (
+            StatusCode::NOT_FOUND,
+            PlatformError::not_found("Run resource was not found"),
+        ),
+        RunOrchestratorError::Conflict(message) => {
+            (StatusCode::CONFLICT, PlatformError::bad_request(message))
+        }
+        RunOrchestratorError::Adapter(_) => (
+            StatusCode::BAD_GATEWAY,
+            PlatformError::internal("Codex Runtime operation failed"),
+        ),
+        RunOrchestratorError::LeaseLost => (
+            StatusCode::CONFLICT,
+            PlatformError::bad_request("Run ownership changed; reload its current state"),
+        ),
+        RunOrchestratorError::Database(_) | RunOrchestratorError::Git(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            PlatformError::internal("Run operation failed"),
+        ),
+    };
+    (status, Json(platform))
+}
+
+fn database_error(_error: sqlx::Error) -> (StatusCode, Json<PlatformError>) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(PlatformError::internal("database operation failed")),
+    )
 }
