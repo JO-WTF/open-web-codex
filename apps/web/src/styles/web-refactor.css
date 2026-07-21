@@ -2135,8 +2135,51 @@ body:has(.web-app-shell[data-theme="light"]) {
   background: rgb(249 251 254 / 88%);
 }
 
-.web-app-shell[data-theme="light"] :is(.web-chat-workspace, .web-chat-title, .web-msg-assistant-body, .web-reasoning-label) {
+.web-app-shell[data-theme="light"] :is(.web-chat-title, .web-msg-assistant-body, .web-reasoning-label) {
   color: var(--web-text);
+}
+
+.web-app-shell[data-theme="light"] .web-chat-workspace {
+  color: #0f172a;
+  font-weight: 700;
+}
+
+.web-app-shell[data-theme="light"] .web-chat-product {
+  color: #172033;
+}
+
+.web-app-shell[data-theme="light"] .web-chat-header-sep {
+  color: #708096;
+}
+
+.web-app-shell[data-theme="light"] .web-chat-workspace-chevron {
+  color: #58677a;
+}
+
+.web-app-shell[data-theme="light"] .web-composer-activity-ring {
+  background:
+    radial-gradient(circle, #ffffff 52%, transparent 55%),
+    conic-gradient(
+      from -90deg,
+      var(--context-color) calc(var(--context-used) * 1%),
+      #cbd5e1 0
+    );
+  box-shadow: 0 0 0 1px rgb(51 65 85 / 10%), 0 2px 7px color-mix(in srgb, var(--context-color) 18%, transparent);
+}
+
+.web-app-shell[data-theme="light"] .web-composer-context-tooltip {
+  border-color: #cbd5e1;
+  color: #526075;
+  background: #ffffff;
+  box-shadow: 0 14px 34px rgb(63 76 98 / 18%);
+}
+
+.web-app-shell[data-theme="light"] .web-composer-context-tooltip strong {
+  color: #172033;
+}
+
+.web-app-shell[data-theme="light"] .web-composer-activity:focus-visible .web-composer-activity-ring {
+  outline-color: #3f6fae;
 }
 
 .web-app-shell[data-theme="light"] :is(.web-icon-button, .web-composer-chip, .web-system-notice-body) {
@@ -2291,11 +2334,31 @@ body:has(.web-app-shell[data-theme="light"]) {
   border-color: #d9c4a6;
   color: #39475b;
   background: #fffaf2;
+  box-shadow: 0 12px 30px rgb(91 65 29 / 10%);
 }
 
 .web-app-shell[data-theme="light"] :is(.web-approval-header, .web-approval-label, .web-approval-deny) { color: #9a5918; }
-.web-app-shell[data-theme="light"] .web-approval-command { color: #2c394d; }
+.web-app-shell[data-theme="light"] .web-approval-command {
+  border: 1px solid #ead9bf;
+  color: #2c394d;
+  background: #ffffff;
+}
+.web-app-shell[data-theme="light"] .web-approval-hint { color: #69768a; }
+.web-app-shell[data-theme="light"] .web-approval-accept {
+  border-color: #16754a;
+  color: #ffffff;
+  background: #198754;
+}
+.web-app-shell[data-theme="light"] .web-approval-accept:hover { background: #146c43; }
+.web-app-shell[data-theme="light"] .web-approval-deny {
+  border-color: #c98a41;
+  color: #8b4d12;
+  background: #ffffff;
+}
+.web-app-shell[data-theme="light"] .web-approval-deny:hover { background: #fff2df; }
 .web-app-shell[data-theme="light"] .web-approval-resolution { color: #5f6b7c; background: #ffffff; }
+.web-app-shell[data-theme="light"] .web-approval-resolution.is-accepted { color: #177a57; }
+.web-app-shell[data-theme="light"] .web-approval-resolution.is-declined { color: #a53c46; }
 
 .web-app-shell[data-theme="light"] .web-system-notice-body { background: #edf2f7; }
 .web-app-shell[data-theme="light"] .web-system-notice-success { color: #176b43; background: #e9f7ef; }
