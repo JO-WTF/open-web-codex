@@ -13,7 +13,7 @@
 | 能力基线 | `docs/capability-baseline.md` |
 | 上游同步 | `docs/codex-upstream-sync.md` |
 
-Codex subtree 已集成到官方 `openai/codex` 提交 `51200321eb7b`；最新官方 main 为 `7442f5f9323d`，有 2 个提交正在当前同步分支等待接纳。同步前比较为 119 个 local-only、36 个 upstream-only 和 4 个 diverged 路径。第三方 Provider、TUI Provider、Capability Manifest 和旧历史兼容 seam 已按 patch map 重放；Chat DTO/转换/SSE 已集中到 `codex-api`，`codex-api/common.rs` 与已集成官方对象一致。app-server Schema 无漂移，Runtime/app-server/TUI 定向验证通过。Capability Manifest v1 类型、Schema 和 `initialize` 已验证可用，真实本地 app-server Smoke 返回 18 个能力声明。
+Codex subtree 已同步到官方 `openai/codex` 提交 `7442f5f9323d`，待集成提交为 0。当前与官方树的 123 个差异全部是已分类的本地定制，没有 upstream-only 或 diverged 路径。第三方 Provider、TUI Provider、Capability Manifest 和旧历史兼容 seam 已按 patch map 重放；Chat DTO/转换/SSE 已集中到 `codex-api`，`codex-api/common.rs` 与官方对象一致。app-server Schema 无漂移，Runtime/app-server/TUI 定向验证通过。最新上游 MCP catalog-revision 与 keyed shell-environment 改动已接纳，`codex-config` 219、`codex-mcp` 109 和 app-server 976 项测试通过。Capability Manifest v1 类型、Schema 和 `initialize` 已验证可用，真实本地 app-server Smoke 返回 18 个能力声明。
 
 M1 平台已建立 Axum/SQLx/PostgreSQL workspace、Fake/Real Codex Adapter、原生 Profile Registry/Host、组织绑定 Session、资源级 RBAC、加密 Provider Secret 注入、持久审批/审计，以及 bootstrap、organization、project、Task、Run、Provider 和版本化 Run event API。Item/Delta 与审批安全投影均先落库再广播；浏览器不会收到 app-server request id、Secret 或审批中的服务器绝对路径。真实测试覆盖 Profile 原位重启和 Thread 恢复、双 Provider 缓存隔离、加密 Secret 写入/删除，以及双组织 ID 越权拒绝。密码使用 Argon2id，旧 SHA-256 只在成功登录后迁移。当前 Server 组合仍是过渡期单 Profile/单 Workspace；Git Worktree/Runner、Lease、幂等调度、认证 WebSocket、审批过期/重启恢复和完整 Cookie/CSRF 流程尚未完成。浏览器其他域仍主要连接 loopback RPC/SSE Gateway；`/api/rpc`、permissive CORS 和 SSE query token 只能用于本地迁移期，不得作为多用户边界。
 
@@ -145,14 +145,14 @@ M0-A 官方同步稳定（已完成当前 checkpoint）
 | M0-A04 | P0/S | [x] | 将旧产品/计划文档改为 canonical 根文档入口 | 仓库内只有一套产品/里程碑事实 |
 | M0-A05 | P0/M | [x] | 审查 CodexMonitor Web 迁移边界并保留过渡实现 | ADR、Tauri boundary 与独立 server 结构存在 |
 | M0-A06 | P0/M | [x] | 审查 Codex Fork Provider WIP | Patch Map 已将提交归类为 upstreamed/retain/drop/check |
-| M0-A07 | P0/L | [x] | 创建官方同步分支并合并选定 `openai/codex` checkpoint | subtree 已同步到 `51200321eb7b`，状态为 synchronized |
+| M0-A07 | P0/L | [x] | 创建官方同步分支并合并选定 `openai/codex` checkpoint | subtree 已同步到 `7442f5f9323d`，状态为 synchronized |
 | M0-A08 | P0/M | [x] | 将所有非生成 Codex 差异归类为 retain-core、upstreamed、move-out 或 drop，并维护可重放 seam 清单 | 每个差异有归属；每个 retain-core seam 有路径、原因、重放顺序、测试和删除条件 |
 | M0-A09 | P0/M | [x] | 重点重验 Provider Wire API、模型缓存和当前 Provider 传播 | codex-api、model-provider、models-manager、app-server model_list 和 TUI scoped tests 通过；真实 Manifest Smoke 和 Web contract check 通过 |
 | M0-A10 | P1/S | [-] | 固定首个兼容 Codex commit、Rust toolchain、target 和 binary digest | `.sync` 已固定 commit；兼容矩阵和 digest 待补 |
 
-已集成基线为 `51200321eb7b`，当前官方 main 为 `7442f5f9323d`。同步前
-比较结果为 119 个 local-only、36 个 upstream-only 和 4 个 diverged
-路径；全部既有非生成差异已归入 patch map。Chat 请求 DTO、转换与 SSE 已集中到
+当前官方 main 与已集成基线均为 `7442f5f9323d`。比较结果为 123 个
+local-only 路径、0 个 upstream-only 路径和 0 个 diverged 路径；全部
+非生成差异已归入 patch map。Chat 请求 DTO、转换与 SSE 已集中到
 `codex-api`；`core/src/client.rs` 只保留通用请求准备、认证/重试/遥测和
 `WireApi` 传输选择。
 
@@ -694,7 +694,7 @@ GET/POST/PATCH/DELETE /api/codex/profiles/:id/skills
 2. `codex/utils/home-dir` 恢复官方缺失 `CODEX_HOME` 拒绝语义（`move-out` 完成）。
 3. inventory 与 patch map 已刷新；后续 `codex/` 变更继续满足 `G0-06`。
 
-**证据：** 非生成差异已分类；Tauri 与 Platform Server 均在 spawn 前 provision Profile Home；Provider/TUI scoped tests、protocol tests、真实 Manifest Smoke 和 Web contract check 通过；官方 `51200321eb7b` 已按清单重放，`7442f5f9323d` 的 2 个后续提交正在同步。
+**证据：** 非生成差异已分类；Tauri 与 Platform Server 均在 spawn 前 provision Profile Home；Provider/TUI scoped tests、protocol tests、真实 Manifest Smoke 和 Web contract check 通过；官方 `7442f5f9323d` 已按清单重放，当前无待集成上游提交。
 
 ### Batch 1：生成式合同与安全平台边界（已完成）
 

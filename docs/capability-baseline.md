@@ -10,9 +10,9 @@ Observed on 2026-07-21 from the current synchronization branch:
 
 | Component | State |
 | --- | --- |
-| Codex subtree | integrated through `openai/codex` `51200321eb7b862a29ffceaba8b19db1934a9b38` |
-| Observed official main | `7442f5f9323d116755dfe630e22c931a8aeaa5c7`; two commits await integration |
-| Local Codex seams vs official main | 159 paths before replay: 119 local-only, 36 upstream-only and 4 diverged |
+| Codex subtree | integrated through `openai/codex` `7442f5f9323d116755dfe630e22c931a8aeaa5c7` |
+| Observed official main | `7442f5f9323d116755dfe630e22c931a8aeaa5c7`; no commit awaits integration |
+| Local Codex seams vs official main | 123 local-only paths: 25 added and 98 modified; no upstream-only, diverged, or missing local paths |
 | Local customization footprint | six retained Runtime/TUI seams, one temporary upstreamed fix, derived artifacts and focused tests |
 | Web platform | Axum/PostgreSQL platform, native Profile Registry/Host, encrypted Provider Secret injection, durable approvals and typed Provider routes plus remaining loopback Web MVP surfaces |
 
@@ -53,6 +53,10 @@ Observed on 2026-07-21 from the current synchronization branch:
   switching, role-gated writes, durable approval decision delivery and an audit
   record. Passwords use Argon2id; accepted legacy SHA-256 hashes are upgraded on
   successful login.
+- The latest official MCP catalog-revision and keyed shell-environment changes
+  are integrated. `codex-config` 219, `codex-mcp` 109 and app-server 976 tests
+  pass; four app-server fixtures required their expected binaries and local
+  test ports after the build cache was cleaned.
 
 The successful checks prove only the surfaces named above. They do not prove
 multi-Profile scheduling, Runner/worktree isolation, authenticated WebSocket

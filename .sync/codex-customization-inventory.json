@@ -5,17 +5,17 @@
     "upstreamRef": "codex-upstream/main",
     "upstreamCommit": "7442f5f9323d116755dfe630e22c931a8aeaa5c7",
     "localTree": "HEAD:codex",
-    "observedAt": "2026-07-21T18:38:16Z",
-    "differenceCount": 159,
+    "observedAt": "2026-07-21T18:58:04Z",
+    "differenceCount": 123,
     "addedLocally": 25,
-    "modified": 130,
-    "missingLocally": 4,
-    "upstreamOnly": 36,
-    "localOnly": 119,
-    "diverged": 4
+    "modified": 98,
+    "missingLocally": 0,
+    "upstreamOnly": 0,
+    "localOnly": 123,
+    "diverged": 0
   },
   "progress": {
-    "state": "upstream-update-available",
+    "state": "synchronized-validated-convergence-active",
     "classificationSource": "docs/custom-codex-patch-map.md",
     "classifiedRetainCore": [
       "provider-chat-transport",
@@ -26,7 +26,7 @@
       "capability-manifest"
     ],
     "classification": {
-      "classifiedLocalOnlyPaths": 119,
+      "classifiedLocalOnlyPaths": 123,
       "unclassifiedSourcePaths": 0,
       "temporaryUpstreamedFixes": 1
     },
@@ -44,13 +44,15 @@
       "protocolTests": "passed",
       "chatTransportTests": "174 passed; Core Chat endpoint and 3 focused recovery/tool-policy tests passed",
       "providerTests": "83 passed",
-      "appServerTests": "970 passed; latest Plugin delta 41 passed",
+      "latestUpstreamConfigTests": "219 passed",
+      "latestUpstreamMcpTests": "109 passed",
+      "appServerTests": "976 passed",
       "tuiTests": "latest diff/highlight/Provider 101 passed; terminal/Provider 35 passed",
       "realAppServerSmoke": "passed; 18 capability declarations",
       "webContractCheck": "passed"
     },
-    "validatedAgainstUpstream": "51200321eb7b862a29ffceaba8b19db1934a9b38",
-    "validatedAtCommit": "a139a59d5f7a255de15fe5a3bd795ab5968546db",
-    "nextAction": "Integrate official main 7442f5f9323d, accept its structure first, then replay and validate only the documented retained seams."
+    "validatedAgainstUpstream": "7442f5f9323d116755dfe630e22c931a8aeaa5c7",
+    "validatedAtCommit": "6a6b0bf688006ed59a3d9cfd2938b79defdb480a",
+    "nextAction": "Provision isolated Git worktrees and add lease-based Runner orchestration without adding product behavior under codex/."
   }
 }
