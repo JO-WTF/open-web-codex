@@ -6,7 +6,7 @@ after an official subtree update. Generated schemas, TypeScript definitions,
 fixtures, and snapshots are derivatives of the source seams and are not
 independent custom behavior.
 
-The integrated official base is `25d2dfcad010386610867a4635e0874296b468f1`.
+The integrated official base is `bdd3118c71a29f26b9df3a47f91efea38a0d58bd`.
 The target is a small, explicit set of Provider Runtime and TUI seams; it is
 not a zero-diff Codex subtree.
 
@@ -26,9 +26,9 @@ not a zero-diff Codex subtree.
 ## Current state
 
 The integrated base and current official main are both
-`25d2dfcad010386610867a4635e0874296b468f1`; no official commit is pending.
-The current comparison contains 123 local differences: 25 files added locally
-and 98 modified. All 123 are `local-only`; `upstream-only` and `diverged` are
+`bdd3118c71a29f26b9df3a47f91efea38a0d58bd`; no official commit is pending.
+The current comparison contains 125 local differences: 28 files added locally
+and 97 modified. All 125 are `local-only`; `upstream-only` and `diverged` are
 both zero.
 
 All non-generated differences are classified under the retained seams and
@@ -60,14 +60,14 @@ The script separates the raw tree difference into:
 | `provider-chat-transport` | `codex-api/src/chat_translate.rs`, `chat_translate_tests.rs`, `endpoint/chat.rs`, `sse/chat.rs`; minimal dispatch in `core/src/client.rs` | Translates third-party Chat Completions requests, streams, and mixed/interrupted tool calls into Codex semantics. Responses namespaces, including MCP plugin tools, are flattened to Chat functions with request-scoped reverse mapping; Responses-only tools without complete Chat semantics remain hidden. | 1 | `just test -p codex-api`; focused Core Chat endpoint, interrupted, namespace/MCP, unsupported-tool-policy, and tool-call translation tests | Upstream provides equivalent supported third-party wire translation, including the same stream, namespace/MCP, and tool behavior. |
 | `provider-metadata-models` | `model-provider-info/src/lib.rs`, `PROVIDER_MODELS.md`, `model-provider/src/provider.rs`, `models_endpoint.rs`, `models-manager/src/manager.rs`, `config/src/thread_config/**`; minimal capability consumption in `core/src/tools/spec_plan.rs` | Defines `WireApi::Chat`, Provider-scoped model and tool-capability metadata, model discovery, selection, normalization, and cache isolation. | 2 | `just test -p codex-model-provider-info`; `just test -p codex-model-provider`; `just test -p codex-config`; focused Core tool-plan tests; regenerated config Schema; Provider switch/cache-isolation smoke | Upstream exposes equivalent Provider metadata, scoped catalog, capability gates, and cache semantics. |
 | `provider-app-server-api` | `app-server-protocol/src/protocol/v2/model.rs`, `app-server/src/request_processors/catalog_processor.rs`, `app-server/src/models.rs`, request registration, generated capability declarations | Provides versioned Provider listing, Provider-scoped model listing, controlled selection/configuration, and forced refresh for both TUI and Platform Host. | 3 | `just test -p codex-app-server-protocol`; `just test -p codex-app-server model_list`; generated Schema/TypeScript; real app-server Provider smoke | Upstream provides the required stable API and generated contract. |
-| `provider-tui-workflows` | `tui/src/chatwidget/provider_popups.rs`, `provider_sections.rs`, `model_popups.rs`, `settings.rs`, `slash_dispatch.rs`, `config_update.rs`, `onboarding/auth.rs`, `slash_command.rs` | TUI Provider selection, model selection, onboarding, refresh, configuration, and error UX are product-critical client behavior. | 4 | `just test -p codex-tui`; Provider workflow snapshots | Upstream TUI provides equivalent Provider and model workflows, or the product explicitly retires TUI parity. |
+| `provider-tui-workflows` | `tui/src/chatwidget/provider_popups.rs`, `provider_sections.rs`, `model_popups.rs`, `settings.rs`, `slash_dispatch.rs`, `config_update.rs`; dedicated `app/event_dispatch/provider_config.rs` and `onboarding/auth/provider_setup{,/render}.rs` modules; narrow attachment points in `event_dispatch.rs`, `onboarding/auth.rs`, and `slash_command.rs` | TUI Provider selection, model selection, onboarding, refresh, configuration, and error UX are product-critical client behavior. | 4 | `just test -p codex-tui`; Provider workflow snapshots | Upstream TUI provides equivalent Provider and model workflows, or the product explicitly retires TUI parity. |
 | `legacy-response-tool-history` | `app-server-protocol/src/protocol/legacy_response_tool_history.rs`, narrow integration in `thread_history.rs` | Existing Profiles can contain raw `ResponseItem` tool-call/output pairs that official semantic history projection does not materialize. | 5 | Protocol tests plus reload fixture containing raw call/output pairs | Supported Profiles no longer contain this rollout format, or upstream materializes it. |
 | `capability-manifest` | `app-server-protocol/src/capability_manifest.rs`, `initialize_processor.rs`, generated Schema/TypeScript, `apps/web/contracts/codex/**` fixtures | Lets the Platform Host gate product features against the actual Runtime build instead of assuming support. | 6 | Protocol tests, generated artifacts, fixture replay, `--require-manifest` smoke | Method facts and experimental state are generated from the official protocol/build and an upstream equivalent contract exists. |
 
 ## Current inventory classification
 
-The current comparison against `codex-upstream/main` contains 123 paths, all
-`local-only`: 25 added and 98 modified. There are no pending official commits,
+The current comparison against `codex-upstream/main` contains 125 paths, all
+`local-only`: 28 added and 97 modified. There are no pending official commits,
 upstream-only paths, diverged paths, or missing local paths. Generated artifacts,
 tests, and snapshots follow their owning source seam.
 
@@ -76,7 +76,7 @@ tests, and snapshots follow their owning source seam.
 | `retain-core`: Chat transport | `codex-api/src/chat_translate.rs`, `endpoint/chat.rs`, `endpoint/models.rs`, `endpoint/mod.rs`, `sse/chat.rs`, `sse/mod.rs`, minimal `core/src/client.rs` dispatch | Required third-party Chat Completions transport. Request DTOs, Responses-to-Chat conversion, tool mapping and SSE translation live in `codex-api`; Core retains only request preparation, auth/retry/telemetry orchestration and `WireApi` dispatch. |
 | `retain-core`: Provider metadata and models | `model-provider-info/src/lib.rs`, `model-provider/src/{lib.rs,models_endpoint.rs,provider.rs}`, `models-manager/src/manager.rs`, `config/src/thread_config/**`, Provider fields in `core` session/config integration | Required Provider identity, model discovery, scoped cache/refresh, and Thread propagation. Accept upstream model/catalog changes, including official model migrations, before replaying Provider-specific behavior. |
 | `retain-core`: app-server Provider API | `app-server-protocol/src/protocol/{common.rs,mod.rs,v1.rs,v2/model.rs,v2/thread.rs,v2/turn.rs}`, `app-server/src/{models.rs,message_processor.rs,request_processors.rs}`, `request_processors/catalog_processor.rs` | Required `modelProvider/list`, Provider-scoped models, refresh, selection, Thread/Turn-level Provider override, and capability exposure. Keep only Provider request registrations and handlers when replaying high-churn dispatch files. |
-| `retain-core`: TUI Provider workflows | `tui/src/chatwidget/{provider_popups.rs,provider_sections.rs,model_popups.rs,settings.rs,slash_dispatch.rs}`, `tui/src/{config_update.rs,slash_command.rs,onboarding/auth.rs,onboarding/keys.rs,onboarding/onboarding_screen.rs,app/thread_settings.rs}`, narrow integration in `chatwidget.rs`, `app/event_dispatch.rs`, `app_server_session.rs`, and `bottom_pane/mod.rs` | TUI Provider configuration, model selection, onboarding, refresh, and error UX are core behavior. Take upstream TUI orchestration first; reattach isolated Provider modules and their event handlers. |
+| `retain-core`: TUI Provider workflows | `tui/src/chatwidget/{provider_popups.rs,provider_sections.rs,model_popups.rs,settings.rs,slash_dispatch.rs}`, `tui/src/{config_update.rs,slash_command.rs,onboarding/auth/provider_setup.rs,onboarding/auth/provider_setup/render.rs,onboarding/keys.rs,onboarding/onboarding_screen.rs,app/event_dispatch/provider_config.rs,app/thread_settings.rs}`, narrow integration in `chatwidget.rs`, `app/event_dispatch.rs`, `onboarding/auth.rs`, `app_server_session.rs`, and `bottom_pane/mod.rs` | TUI Provider configuration, model selection, onboarding, refresh, and error UX are core behavior. Take upstream TUI orchestration first; reattach isolated Provider modules and their event handlers. |
 | `retain-core`: compatibility and capability | `app-server-protocol/src/capability_manifest.rs`, `protocol/legacy_response_tool_history.rs`, narrow integration in `thread_history.rs`, `initialize_processor.rs` | The Manifest gates Platform features; legacy history preserves supported existing Profiles. Neither is browser implementation code. |
 | `upstream-first, then replay` | `core/src/{codex_thread.rs,guardian/review_session.rs,session/**}`, `protocol/src/{openai_models.rs,protocol.rs}`, `app-server/src/request_processors/turn_processor.rs`, `app-server/README.md`, TUI thread-routing/event files | These files contain substantial official SessionIo, AgentRunner, model-catalog, rate-limit, paging, fork, and TUI behavior. Preserve upstream structure and reapply only the adjacent retained seam. |
 | `retain-core`: Provider propagation followers | `core/src/session/handlers.rs`, `exec/src/lib.rs`, `login/src/auth_env_telemetry.rs`, `app-server` remote-thread/turn tests, and `core` stream/header tests | These changes propagate the selected Provider, preserve Provider-scoped cache test isolation, or satisfy the expanded Provider metadata shape. They follow the owning Provider seam and are not independent feature surfaces. |
@@ -101,6 +101,14 @@ The TUI Provider form uses one inline `ProviderFormView`. The superseded
 field-by-field prompt events, confirmation picker, wire picker, and unused
 onboarding wire renderer were dropped after full TUI coverage proved that they
 had no call path. They are not part of the retained replay seam.
+
+Provider configuration actions and model-catalog refresh now live in
+`app/event_dispatch/provider_config.rs`; custom Provider onboarding state,
+async persistence, and rendering live under `onboarding/auth/provider_setup/`.
+The high-churn upstream dispatcher and auth widget keep only narrow module and
+call attachments. This adds three local-only module paths while removing more
+than 1,200 lines of Provider implementation from the two upstream-owned files,
+so future replay is driven by dedicated modules instead of large inline hunks.
 
 The upstream tree still rejects `wire_api = "chat"`, does not expose
 `modelProvider/list`, does not provide the custom TUI Provider management flow,

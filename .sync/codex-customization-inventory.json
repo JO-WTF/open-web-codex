@@ -3,15 +3,15 @@
   "purpose": "Tracks the current official-tree comparison and convergence classification progress for codex/.",
   "comparison": {
     "upstreamRef": "codex-upstream/main",
-    "upstreamCommit": "25d2dfcad010386610867a4635e0874296b468f1",
+    "upstreamCommit": "bdd3118c71a29f26b9df3a47f91efea38a0d58bd",
     "localTree": "HEAD:codex",
-    "observedAt": "2026-07-21T20:28:35Z",
-    "differenceCount": 123,
-    "addedLocally": 25,
-    "modified": 98,
+    "observedAt": "2026-07-21T23:53:27Z",
+    "differenceCount": 125,
+    "addedLocally": 28,
+    "modified": 97,
     "missingLocally": 0,
     "upstreamOnly": 0,
-    "localOnly": 123,
+    "localOnly": 125,
     "diverged": 0
   },
   "progress": {
@@ -26,16 +26,16 @@
       "capability-manifest"
     ],
     "classification": {
-      "classifiedLocalOnlyPaths": 123,
+      "classifiedLocalOnlyPaths": 125,
       "unclassifiedSourcePaths": 0,
       "temporaryUpstreamedFixes": 1
     },
     "completed": [
       "The Codex subtree is synchronized through the current official commit with only the six documented retained seams.",
-      "All 123 local-only paths are classified; generated artifacts and tests follow their owning source seam.",
+      "All 125 local-only paths are classified; generated artifacts and tests follow their owning source seam.",
       "Profile lifecycle, encrypted credentials, authorization, durable approvals, Git workspaces, Run leases, browser DTOs, and event delivery are owned by apps/web.",
       "The browser uses typed REST and authenticated WebSocket transport; Tauri, desktop sidecars, raw browser RPC, desktop release chains, and desktop build dependencies are absent.",
-      "The TUI Provider workflow uses one inline form; the superseded prompt event chain and unused renderers were dropped after the full TUI suite passed.",
+      "Provider configuration and onboarding implementation live in three dedicated TUI modules; high-churn upstream dispatcher and auth files retain only narrow attachments.",
       "Generated contracts reproduce without drift and the current binary passes the real app-server Capability Manifest smoke."
     ],
     "validation": {
@@ -43,20 +43,20 @@
       "clippyFix": "not available: the repository toolchain does not provide an applicable cargo-clippy component; no fix was applied",
       "appServerSchema": "passed; no generated drift",
       "protocolTests": "288 passed",
-      "chatTransportTests": "174 passed; Core Chat endpoint and recovery/tool-policy coverage passed",
-      "providerTests": "all scoped Provider suites and the real two-Provider cache-isolation smoke passed",
+      "chatTransportTests": "174 codex-api tests and 17 focused Core Chat tests passed",
+      "providerTests": "26 Provider metadata, 57 Provider transport, 41 model-manager, 27 focused Core Provider, and 5 app-server model-list tests passed",
       "configTests": "221 passed",
       "mcpTests": "110 passed",
       "coreSkillsTests": "124 passed",
-      "appServerTests": "981 passed; 1 skipped",
-      "tuiTests": "3231 passed; 4 skipped",
+      "appServerTests": "focused model-list suite passed; the real initialize smoke passed against the locally built CLI",
+      "tuiTests": "3233 passed; 4 skipped",
       "networkProxyTests": "all 207 network-proxy tests passed across local-port and network-isolated runs; the new CLI sandbox cases are Linux-only and not applicable on the macOS validation host",
       "realAppServerSmoke": "passed; 18 capability declarations",
       "webContractCheck": "passed",
       "platformTests": "frontend, Rust workspace, PostgreSQL integration, Profile restart, Provider isolation, Git Runtime, Run lease, two-organization security, and fake-server HTTP/WebSocket checks passed"
     },
-    "validatedAgainstUpstream": "25d2dfcad010386610867a4635e0874296b468f1",
-    "validatedAtCommit": "f5df6e0b9089be7fc52921f431e57b991b120571",
-    "nextAction": "Replace the single configured Profile composition root with authorized per-user dynamic Profile routing, then complete the M2 session and Runner hardening gates."
+    "validatedAgainstUpstream": "bdd3118c71a29f26b9df3a47f91efea38a0d58bd",
+    "validatedAtCommit": "d8fd9ff46faff1c9df1d444a178cc85585583248",
+    "nextAction": "Keep the six retained seams replayable at the next official sync; product work continues with authorized per-user dynamic Profile routing and the remaining M2 session and Runner hardening gates."
   }
 }

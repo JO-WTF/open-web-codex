@@ -6,20 +6,20 @@ requirements belong in `product-design.md`; planned work belongs in
 
 ## Snapshot
 
-Observed on 2026-07-21 from the current synchronization branch:
+Observed on 2026-07-22 from the current synchronization branch:
 
 | Component | State |
 | --- | --- |
-| Codex subtree | integrated through `openai/codex` `25d2dfcad010386610867a4635e0874296b468f1` |
-| Observed official main | `25d2dfcad010386610867a4635e0874296b468f1`; no commit awaits integration |
-| Local Codex seams vs official main | 123 local-only paths: 25 added and 98 modified; no upstream-only, diverged, or missing local paths |
+| Codex subtree | integrated through `openai/codex` `bdd3118c71a29f26b9df3a47f91efea38a0d58bd` |
+| Observed official main | `bdd3118c71a29f26b9df3a47f91efea38a0d58bd`; no commit awaits integration |
+| Local Codex seams vs official main | 125 local-only paths: 28 added and 97 modified; no upstream-only, diverged, or missing local paths |
 | Local customization footprint | six retained Runtime/TUI seams, one temporary upstreamed fix, derived artifacts and focused tests |
 | Web platform | Axum/PostgreSQL platform, native Profile Registry/Host, encrypted Provider Secret injection, durable approvals, isolated Git workspaces, lease-based Run orchestration, typed REST resources and authenticated WebSocket |
 
 ## Reproduced evidence
 
 - `scripts/codex-upstream-status.sh` reports `Status: synchronized`; the
-  customization status script reports 123 local-only differences and zero
+  customization status script reports 125 local-only differences and zero
   upstream-only or diverged paths.
 - The current upstream structure and all six documented seams are integrated;
   regenerated app-server Schema and TypeScript fixtures have no drift.
@@ -28,11 +28,11 @@ Observed on 2026-07-21 from the current synchronization branch:
   `userAgent`.
 - The observed manifest contains 18 declarations, including
   `models.providers`.
-- On the current Runtime lineage, `just fmt`, app-server Schema generation,
-  288 app-server protocol tests, 174 Chat transport tests, the Core Chat endpoint
-  integration test, the scoped Provider suites, 221 config tests, 110 MCP tests,
-  124 Core Skills tests, the 981-test app-server suite, and the full TUI suite
-  pass.
+- On the current Runtime lineage, `just fmt`, app-server and config Schema
+  generation, 288 app-server protocol tests, 174 Chat transport tests, 26
+  Provider metadata tests, 57 Provider transport tests, 41 model-manager tests,
+  17 focused Core Chat tests, 27 focused Core Provider tests, five app-server
+  model-list tests, and the 3,233-test full TUI suite pass.
 - The Web contract check passes, and the locally built current Codex CLI passes
   the real app-server initialize Smoke with 18 Capability Manifest declarations.
 - The platform source contains PostgreSQL migrations and API handlers for
@@ -72,6 +72,10 @@ Observed on 2026-07-21 from the current synchronization branch:
 - The latest official named `/new` and `/clear` session lifecycle is integrated
   through the upstream TUI structure; the Provider event and slash-command
   seams merge without a parallel session implementation.
+- Official repository-rule review attribution, failed-turn TUI recovery, and
+  inherited-FD Windows process-tree coverage are integrated without new local
+  seams. The failed-turn TUI regression passes with the Provider dispatcher
+  attachment intact.
 
 The successful checks prove only the surfaces named above. They do not prove
 multi-Profile process routing, production sandbox strength, complete Cookie/CSRF
