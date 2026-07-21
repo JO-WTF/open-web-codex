@@ -3647,6 +3647,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "open-web-codex-git-runtime"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "open-web-codex-platform-contracts"
 version = "0.1.0"
 dependencies = [
