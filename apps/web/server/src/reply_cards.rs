@@ -7,14 +7,6 @@ pub struct ReplyCardCapability {
     pub artifact_policy: &'static str,
 }
 
-const REPLY_CARD_MARKERS: &[&str] = &[
-    "```open-web-card ",
-    "\"type\":\"reply_card.v1\"",
-    "\"type\": \"reply_card.v1\"",
-    "\"widget_type\":\"map\"",
-    "\"widget_type\": \"map\"",
-];
-
 const REPLY_CARD_CAPABILITIES: &[ReplyCardCapability] = &[ReplyCardCapability {
     kind: "map.v1",
     display_name: "Map card",
@@ -28,9 +20,33 @@ pub fn reply_card_capabilities() -> &'static [ReplyCardCapability] {
 }
 
 pub fn has_reply_card_marker(text: &str) -> bool {
-    REPLY_CARD_MARKERS
-        .iter()
-        .any(|marker| text.contains(marker))
+    text.contains("```open-web-card ")
+        || contains_json_string_field(text, "type", "reply_card.v1")
+        || contains_json_string_field(text, "widget_type", "map")
+}
+
+fn contains_json_string_field(text: &str, field: &str, value: &str) -> bool {
+    let field_literal = format!("\"{field}\"");
+    let value_literal = format!("\"{value}\"");
+    let mut search_start = 0;
+
+    while let Some(relative_field_start) = text[search_start..].find(&field_literal) {
+        let after_field = search_start + relative_field_start + field_literal.len();
+        let remainder = text[after_field..].trim_start();
+
+        let Some(after_colon) = remainder.strip_prefix(':') else {
+            search_start = after_field;
+            continue;
+        };
+
+        if after_colon.trim_start().starts_with(&value_literal) {
+            return true;
+        }
+
+        search_start = after_field;
+    }
+
+    false
 }
 
 pub fn build_reply_card_affordance_prompt(capabilities: &[ReplyCardCapability]) -> String {
@@ -122,5 +138,14 @@ mod tests {
         let text = "```open-web-card map.v1\n{}\n```";
         assert!(has_reply_card_marker(text));
         assert_eq!(prepare_message_text_for_reply_cards(text), text);
+    }
+
+    #[test]
+    fn detects_reply_card_json_markers_with_or_without_spaces() {
+        assert!(has_reply_card_marker(r#"{"type":"reply_card.v1"}"#));
+        assert!(has_reply_card_marker(r#"{"type"  :   "reply_card.v1"}"#));
+        assert!(has_reply_card_marker(r#"{"widget_type":"map"}"#));
+        assert!(has_reply_card_marker(r#"{"widget_type" : "map"}"#));
+        assert!(!has_reply_card_marker(r#"{"type":"other.v1"}"#));
     }
 }
