@@ -11,7 +11,7 @@ use tokio::sync::RwLock;
 use crate::{AdapterError, AuthorizedWorkspace, CodexAdapter, HealthStatus, StartedThread};
 
 /// Adapter backed directly by a native Profile Host and Codex app-server
-/// JSONL connection. No Tauri daemon or loopback RPC/SSE hop is involved.
+/// JSONL connection without an intermediate local gateway.
 pub struct RealCodexAdapter {
     host: ProfileHost,
     workspace_id: String,

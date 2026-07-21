@@ -34,14 +34,12 @@ Codex build
   -> Web feature policy and compatibility gate
 ```
 
-The checked-in repository currently contains two bridge paths:
-
-- `apps/web/src` plus the loopback daemon RPC/SSE Gateway is the local MVP and
-  migration source. It is single-user, accepts server-local paths and is not a
-  production boundary.
-- `apps/web/server`, `apps/web/crates` and `apps/web/migrations` are the emerging
-  multi-user platform. Until it removes raw `/api/rpc`, query-token SSE and
-  permissive CORS, it is also a prototype rather than an externally exposed API.
+The checked-in repository has one browser bridge. `apps/web/src/platform` calls
+typed platform resources under `/api`; live updates use an authenticated
+WebSocket whose first frame carries the session token. `apps/web/server`,
+`apps/web/crates` and `apps/web/migrations` own the server boundary. There is no
+local sidecar, raw browser JSON-RPC route, query-token event stream, or trusted
+browser-supplied filesystem path.
 
 ## Facts and ownership
 

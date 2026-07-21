@@ -1,132 +1,99 @@
 #!/usr/bin/env bash
+
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-script_path="$repo_root/scripts/run-local.sh"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$script_dir/.." && pwd)"
 web_root="$repo_root/apps/web"
-daemon_root="$web_root/src-tauri"
 runtime_root="$repo_root/codex/codex-rs"
 
-data_dir="${OPEN_WEB_CODEX_DATA_DIR:-$repo_root/.cache/mvp}"
-gateway_port="${OPEN_WEB_CODEX_GATEWAY_PORT:-4733}"
-rpc_port="${OPEN_WEB_CODEX_RPC_PORT:-4732}"
-server_port="${OPEN_WEB_CODEX_SERVER_PORT:-4800}"
-web_port="${OPEN_WEB_CODEX_WEB_PORT:-1420}"
-codex_mode="${CODEX_MODE:-real}"
+action="foreground"
 skip_build="${OPEN_WEB_CODEX_SKIP_BUILD:-0}"
+codex_mode="${CODEX_MODE:-real}"
+bind_host="${OPEN_WEB_CODEX_BIND_HOST:-127.0.0.1}"
+server_port="${OPEN_WEB_CODEX_SERVER_PORT:-4800}"
+data_dir="${OPEN_WEB_CODEX_DATA_DIR:-$repo_root/.local/open-web-codex}"
 database_url="${DATABASE_URL:-}"
 database_url_file=""
-database_url_source="${OPEN_WEB_CODEX_DATABASE_SOURCE:-environment}"
 database_max_connections="${DATABASE_MAX_CONNECTIONS:-10}"
 
 run_dir="$data_dir/run"
 log_dir="$data_dir/logs"
-supervisor_pid_file="$run_dir/run-local.pid"
-supervisor_log="$log_dir/run-local.log"
-
-action="run"
-supervisor_pid="$$"
-
-color_enabled() {
-  local fd="$1"
-  [[ -t "$fd" && "${TERM:-}" != "dumb" ]]
-}
-
-green_printf() {
-  if color_enabled 1; then
-    printf '\033[32m'
-    printf "$@"
-    printf '\033[0m'
-  else
-    printf "$@"
-  fi
-}
-
-red_printf() {
-  if color_enabled 1; then
-    printf '\033[31m'
-    printf "$@"
-    printf '\033[0m'
-  else
-    printf "$@"
-  fi
-}
-
-error_printf() {
-  if color_enabled 2; then
-    printf '\033[31m' >&2
-    printf "$@" >&2
-    printf '\033[0m' >&2
-  else
-    printf "$@" >&2
-  fi
-}
+pid_file="$run_dir/server.pid"
+server_log="$log_dir/server.log"
+master_key_file="$data_dir/master-key"
+profile_home="${CODEX_HOME:-$data_dir/profiles/default}"
+runner_root="${OPEN_WEB_CODEX_RUNNER_ROOT:-$data_dir/runner}"
+web_dist="$web_root/dist"
+server_bin="$web_root/target/debug/open-web-codex-server"
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/run-local.sh [option]
+Usage: ./scripts/run-local.sh [options]
 
 Options:
-  --background  Start the stack in the background.
-  --stop        Stop the stack recorded for OPEN_WEB_CODEX_DATA_DIR.
-  --status      Show supervisor and endpoint status.
-  --no-build    Reuse existing Rust binaries instead of compiling them.
-  --database-url URL
-                PostgreSQL connection URL (prefer --database-url-file for passwords).
-  --database-url-file PATH
-                Read the PostgreSQL connection URL from a local file.
+  --background              Start the platform in the background.
+  --stop                    Stop the platform recorded for the data directory.
+  --status                  Show process and health status.
+  --no-build                Reuse existing browser and Rust build outputs.
+  --fake                    Use the deterministic in-memory Codex adapter.
+  --bind HOST               Bind host (default: 127.0.0.1).
+  --port PORT               HTTP/WebSocket port (default: 4800).
+  --database-url URL        PostgreSQL connection URL.
+  --database-url-file PATH  Read the PostgreSQL URL from a local file.
   --database-max-connections COUNT
-                PostgreSQL pool size (default: 10).
-  -h, --help    Show this help.
+                            PostgreSQL pool size (default: 10).
+  -h, --help                Show this help.
 
 Environment:
-  CODEX_MODE                     real (default) or fake
-  OPEN_WEB_CODEX_BIN             Explicit Codex binary; skips repository Codex build
-  OPEN_WEB_CODEX_SKIP_BUILD      Set to 1 to reuse all existing Rust binaries
-  OPEN_WEB_CODEX_DATA_DIR        Runtime state and logs directory
-  OPEN_WEB_CODEX_{RPC,GATEWAY,SERVER,WEB}_PORT
-  DATABASE_URL                   PostgreSQL connection URL
-  DATABASE_MAX_CONNECTIONS       PostgreSQL pool size (default: 10)
+  CODEX_MODE                         real (default) or fake
+  CODEX_BIN                          Codex CLI binary used in real mode
+  CODEX_HOME                         Persistent Profile home
+  OPEN_WEB_CODEX_MASTER_KEY          Base64-encoded 32-byte key; a local key is
+                                     generated under the data directory if absent
+  OPEN_WEB_CODEX_RUNNER_ROOT         Private mirror/workspace root
+  OPEN_WEB_CODEX_DATA_DIR            Runtime data and logs directory
+  OPEN_WEB_CODEX_BIND_HOST           Bind host
+  OPEN_WEB_CODEX_SERVER_PORT         HTTP/WebSocket port
+  OPEN_WEB_CODEX_SKIP_BUILD          1 to reuse build outputs
+  DATABASE_URL                       PostgreSQL connection URL
+  DATABASE_MAX_CONNECTIONS           PostgreSQL pool size
 EOF
+}
+
+error() {
+  printf 'error: %s\n' "$*" >&2
 }
 
 while (($# > 0)); do
   case "$1" in
-    --background)
-      action="background"
+    --background) action="background" ;;
+    --stop) action="stop" ;;
+    --status) action="status" ;;
+    --no-build) skip_build="1" ;;
+    --fake) codex_mode="fake" ;;
+    --bind)
+      (($# >= 2)) || { error "$1 requires a value"; exit 2; }
+      bind_host="$2"
+      shift
       ;;
-    --stop)
-      action="stop"
-      ;;
-    --status)
-      action="status"
-      ;;
-    --no-build)
-      skip_build="1"
+    --port)
+      (($# >= 2)) || { error "$1 requires a value"; exit 2; }
+      server_port="$2"
+      shift
       ;;
     --database-url)
-      if (($# < 2)); then
-        error_printf '%s requires a value.\n' "$1"
-        exit 2
-      fi
+      (($# >= 2)) || { error "$1 requires a value"; exit 2; }
       database_url="$2"
-      database_url_source="command line"
       shift
       ;;
     --database-url-file)
-      if (($# < 2)); then
-        error_printf '%s requires a path.\n' "$1"
-        exit 2
-      fi
+      (($# >= 2)) || { error "$1 requires a value"; exit 2; }
       database_url_file="$2"
-      database_url_source="file"
       shift
       ;;
     --database-max-connections)
-      if (($# < 2)); then
-        error_printf '%s requires a value.\n' "$1"
-        exit 2
-      fi
+      (($# >= 2)) || { error "$1 requires a value"; exit 2; }
       database_max_connections="$2"
       shift
       ;;
@@ -135,7 +102,7 @@ while (($# > 0)); do
       exit 0
       ;;
     *)
-      error_printf 'Unknown option: %s\n\n' "$1"
+      error "unknown option: $1"
       usage >&2
       exit 2
       ;;
@@ -143,416 +110,166 @@ while (($# > 0)); do
   shift
 done
 
-if [[ "$action" != "stop" && "$action" != "status" ]]; then
-  if [[ -n "$database_url_file" ]]; then
-    if [[ ! -r "$database_url_file" ]]; then
-      error_printf 'Database URL file is not readable: %s\n' "$database_url_file"
-      exit 2
-    fi
-    IFS= read -r database_url <"$database_url_file" || true
-  fi
+case "$skip_build" in 0|1) ;; *) error "OPEN_WEB_CODEX_SKIP_BUILD must be 0 or 1"; exit 2 ;; esac
+case "$codex_mode" in real|fake) ;; *) error "CODEX_MODE must be real or fake"; exit 2 ;; esac
+[[ "$server_port" =~ ^[1-9][0-9]*$ ]] || { error "port must be a positive integer"; exit 2; }
+[[ "$database_max_connections" =~ ^[1-9][0-9]*$ ]] || { error "database pool size must be a positive integer"; exit 2; }
 
-  if [[ -z "$database_url" ]]; then
-    database_user="${USER:-postgres}"
-    database_url="postgres://$database_user@localhost:5432/open_web_codex"
-    database_url_source="local default"
-  fi
-
-  case "$database_url" in
-    postgres://*|postgresql://*) ;;
-    *)
-      error_printf 'Database URL must start with postgres:// or postgresql://.\n'
-      exit 2
-      ;;
-  esac
-
-  if [[ ! "$database_max_connections" =~ ^[1-9][0-9]*$ ]]; then
-    error_printf 'DATABASE_MAX_CONNECTIONS must be a positive integer, got: %s\n' "$database_max_connections"
-    exit 2
-  fi
-fi
-
-case "$skip_build" in
-  0|1) ;;
-  *)
-    error_printf 'OPEN_WEB_CODEX_SKIP_BUILD must be 0 or 1, got: %s\n' "$skip_build"
-    exit 2
-    ;;
-esac
-
-case "$codex_mode" in
-  real|fake) ;;
-  *)
-    error_printf 'CODEX_MODE must be real or fake, got: %s\n' "$codex_mode"
-    exit 2
-    ;;
-esac
-
-read_supervisor_pid() {
-  if [[ -f "$supervisor_pid_file" ]]; then
-    tr -d '[:space:]' <"$supervisor_pid_file"
-  fi
+read_pid() {
+  [[ -f "$pid_file" ]] && tr -d '[:space:]' <"$pid_file"
 }
 
-is_live_pid() {
+is_running() {
   local pid="${1:-}"
   [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
 }
 
-is_supervisor_pid() {
-  local pid="${1:-}"
-  local command_line
-  if ! is_live_pid "$pid"; then
-    return 1
-  fi
-  command_line="$(ps -p "$pid" -o command= 2>/dev/null || true)"
-  [[ "$command_line" == *run-local.sh* ]]
-}
-
-remove_stale_pid_file() {
-  local pid
-  pid="$(read_supervisor_pid)"
-  if [[ -n "$pid" ]] && ! is_supervisor_pid "$pid"; then
-    rm -f "$supervisor_pid_file"
-  fi
-}
-
-endpoint_status() {
-  local label="$1"
-  local url="$2"
-  if curl --silent --fail "$url" >/dev/null 2>&1; then
-    green_printf '%-9s healthy  %s\n' "$label" "$url"
-  else
-    red_printf '%-9s offline  %s\n' "$label" "$url"
-  fi
-}
-
 show_status() {
   local pid
-  remove_stale_pid_file
-  pid="$(read_supervisor_pid)"
-  if is_supervisor_pid "$pid"; then
-    green_printf 'Supervisor running (PID %s)\n' "$pid"
+  pid="$(read_pid || true)"
+  if is_running "$pid"; then
+    printf 'server: running (PID %s)\n' "$pid"
   else
-    red_printf 'Supervisor not running\n'
+    printf 'server: stopped\n'
   fi
-  if command -v curl >/dev/null 2>&1; then
-    if [[ "$codex_mode" == "real" ]]; then
-      endpoint_status "Gateway" "http://127.0.0.1:$gateway_port/api/health"
-    fi
-    endpoint_status "Server" "http://127.0.0.1:$server_port/api/health"
-    endpoint_status "Web" "http://127.0.0.1:$web_port/web"
+  if command -v curl >/dev/null 2>&1 && curl --silent --fail "http://$bind_host:$server_port/api/health" >/dev/null 2>&1; then
+    printf 'health: healthy\nweb:    http://%s:%s/\n' "$bind_host" "$server_port"
+  else
+    printf 'health: unavailable\n'
   fi
 }
 
-stop_stack() {
-  local pid
-  local attempt
-  remove_stale_pid_file
-  pid="$(read_supervisor_pid)"
-  if ! is_supervisor_pid "$pid"; then
-    printf 'open-web-codex is not running for data directory: %s\n' "$data_dir"
+stop_server() {
+  local pid attempt
+  pid="$(read_pid || true)"
+  if ! is_running "$pid"; then
+    rm -f "$pid_file"
+    printf 'open-web-codex is not running for %s\n' "$data_dir"
     return 0
   fi
-
-  printf 'Stopping open-web-codex supervisor (PID %s)...\n' "$pid"
   kill -TERM "$pid"
   for attempt in $(seq 1 100); do
-    if ! is_live_pid "$pid"; then
-      rm -f "$supervisor_pid_file"
-      green_printf 'Stopped.\n'
+    if ! is_running "$pid"; then
+      rm -f "$pid_file"
+      printf 'open-web-codex stopped.\n'
       return 0
     fi
     sleep 0.1
   done
-
-  error_printf 'Supervisor did not stop within 10 seconds; PID %s is still running.\n' "$pid"
-  return 1
-}
-
-stop_stack_if_running() {
-  local pid
-  remove_stale_pid_file
-  pid="$(read_supervisor_pid)"
-  if is_supervisor_pid "$pid"; then
-    stop_stack
-  fi
-}
-
-start_background() {
-  local existing_pid
-  local child_pid
-  local attempt
-
-  mkdir -p "$run_dir" "$log_dir"
-  remove_stale_pid_file
-  existing_pid="$(read_supervisor_pid)"
-  if is_supervisor_pid "$existing_pid"; then
-    error_printf 'open-web-codex is already running (PID %s).\n' "$existing_pid"
-    return 1
-  fi
-
-  if [[ "$skip_build" == "1" ]]; then
-    DATABASE_URL="$database_url" \
-      DATABASE_MAX_CONNECTIONS="$database_max_connections" \
-      OPEN_WEB_CODEX_DATABASE_SOURCE="$database_url_source" \
-      nohup "$script_path" --no-build >"$supervisor_log" 2>&1 </dev/null &
-  else
-    DATABASE_URL="$database_url" \
-      DATABASE_MAX_CONNECTIONS="$database_max_connections" \
-      OPEN_WEB_CODEX_DATABASE_SOURCE="$database_url_source" \
-      nohup "$script_path" >"$supervisor_log" 2>&1 </dev/null &
-  fi
-  child_pid=$!
-
-  for attempt in $(seq 1 50); do
-    existing_pid="$(read_supervisor_pid)"
-    if is_supervisor_pid "$existing_pid"; then
-      printf 'open-web-codex is starting in the background (PID %s).\n' "$existing_pid"
-      printf 'Logs: %s\n' "$supervisor_log"
-      printf 'Status: %s --status\n' "$script_path"
-      return 0
-    fi
-    if ! is_live_pid "$child_pid"; then
-      error_printf 'Background startup failed. See %s\n' "$supervisor_log"
-      return 1
-    fi
-    sleep 0.1
-  done
-
-  error_printf 'Background process started but did not register its PID. See %s\n' "$supervisor_log"
+  error "server PID $pid did not stop within 10 seconds"
   return 1
 }
 
 case "$action" in
-  background)
-    stop_stack_if_running
-    start_background
-    exit $?
-    ;;
-  stop)
-    stop_stack
-    exit $?
-    ;;
-  status)
-    show_status
-    exit 0
-    ;;
+  stop) stop_server; exit $? ;;
+  status) show_status; exit 0 ;;
 esac
 
-stop_stack_if_running
-
-required_commands=(npm curl)
-if [[ "$skip_build" == "0" ]]; then
-  required_commands+=(cargo)
+if [[ -n "$database_url_file" ]]; then
+  [[ -r "$database_url_file" ]] || { error "database URL file is not readable: $database_url_file"; exit 2; }
+  IFS= read -r database_url <"$database_url_file" || true
 fi
-for command_name in "${required_commands[@]}"; do
-  if ! command -v "$command_name" >/dev/null 2>&1; then
-    error_printf 'Missing required command: %s\n' "$command_name"
-    exit 1
-  fi
-done
-
-mkdir -p "$run_dir" "$log_dir"
-remove_stale_pid_file
-existing_pid="$(read_supervisor_pid)"
-if is_supervisor_pid "$existing_pid" && [[ "$existing_pid" != "$supervisor_pid" ]]; then
-  error_printf 'open-web-codex is already running (PID %s).\n' "$existing_pid"
-  exit 1
+if [[ -z "$database_url" ]]; then
+  database_user="${USER:-postgres}"
+  database_url="postgresql://$database_user@127.0.0.1:5432/open_web_codex"
 fi
-printf '%s\n' "$supervisor_pid" >"$supervisor_pid_file"
+case "$database_url" in postgres://*|postgresql://*) ;; *) error "database URL must use postgres:// or postgresql://"; exit 2 ;; esac
 
-daemon_pid=""
-server_pid=""
-web_pid=""
+mkdir -p "$run_dir" "$log_dir" "$profile_home" "$runner_root"
 
-child_pids() {
-  local parent_pid="$1"
-  ps -eo pid=,ppid= | awk -v parent="$parent_pid" '$2 == parent { print $1 }'
-}
-
-terminate_tree() {
-  local pid="$1"
-  local child_pid
-  if ! is_live_pid "$pid"; then
-    return 0
+if [[ "$codex_mode" == "real" && -z "${OPEN_WEB_CODEX_MASTER_KEY:-}" ]]; then
+  if [[ ! -f "$master_key_file" ]]; then
+    command -v openssl >/dev/null 2>&1 || { error "openssl is required to create the local Secret Store key"; exit 1; }
+    umask 077
+    openssl rand -base64 32 >"$master_key_file"
   fi
-  while IFS= read -r child_pid; do
-    if [[ -n "$child_pid" ]]; then
-      terminate_tree "$child_pid"
-    fi
-  done < <(child_pids "$pid")
-  kill -TERM "$pid" 2>/dev/null || true
-}
-
-cleanup() {
-  local recorded_pid
-  trap - EXIT INT TERM
-  for process_pid in "$web_pid" "$server_pid" "$daemon_pid"; do
-    if [[ -n "$process_pid" ]]; then
-      terminate_tree "$process_pid"
-    fi
-  done
-  for process_pid in "$web_pid" "$server_pid" "$daemon_pid"; do
-    if [[ -n "$process_pid" ]]; then
-      wait "$process_pid" 2>/dev/null || true
-    fi
-  done
-  recorded_pid="$(read_supervisor_pid)"
-  if [[ "$recorded_pid" == "$supervisor_pid" ]]; then
-    rm -f "$supervisor_pid_file"
-  fi
-}
-
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
-
-require_executable() {
-  local label="$1"
-  local path="$2"
-  if [[ ! -x "$path" ]]; then
-    error_printf '%s binary is not executable: %s\n' "$label" "$path"
-    exit 1
-  fi
-}
-
-wait_for_health() {
-  local label="$1"
-  local pid="$2"
-  local url="$3"
-  local log_file="$4"
-  local attempt
-  for attempt in $(seq 1 120); do
-    if curl --silent --fail "$url" >/dev/null 2>&1; then
-      green_printf '%s health check passed.\n' "$label"
-      return 0
-    fi
-    if ! is_live_pid "$pid"; then
-      error_printf '%s failed to start. See %s\n' "$label" "$log_file"
-      return 1
-    fi
-    sleep 0.25
-  done
-  error_printf '%s did not become healthy within 30 seconds. See %s\n' "$label" "$log_file"
-  return 1
-}
-
-printf 'Using codex mode: %s\n' "$codex_mode"
-printf 'Database: configured via %s (pool size %s)\n' "$database_url_source" "$database_max_connections"
-if [[ "$skip_build" == "1" ]]; then
-  printf 'Rust builds: skipped by request\n'
+  OPEN_WEB_CODEX_MASTER_KEY="$(tr -d '\r\n' <"$master_key_file")"
+  export OPEN_WEB_CODEX_MASTER_KEY
 fi
 
-codex_bin=""
-code_mode_host_bin=""
-daemon_bin="$web_root/target/debug/codex_monitor_daemon"
-server_bin="$web_root/target/debug/open-web-codex-server"
-
-if [[ "$codex_mode" == "real" ]]; then
-  if [[ -n "${OPEN_WEB_CODEX_BIN:-}" ]]; then
-    codex_bin="$OPEN_WEB_CODEX_BIN"
-    printf 'Using explicit Codex binary: %s\n' "$codex_bin"
-  else
-    codex_bin="$runtime_root/target/debug/codex"
-    if [[ "$skip_build" == "0" ]]; then
-      printf 'Building the repository Codex runtime and code-mode host (incremental)...\n'
-      (
-        cd "$runtime_root" &&
-          cargo build \
-            -p codex-cli --bin codex \
-            -p codex-code-mode-host --bin codex-code-mode-host
-      )
-    fi
-  fi
-  require_executable "Codex" "$codex_bin"
-  code_mode_host_bin="${CODEX_CODE_MODE_HOST_PATH:-$(dirname "$codex_bin")/codex-code-mode-host}"
-  require_executable "Codex code-mode host" "$code_mode_host_bin"
-
-  if [[ "$skip_build" == "0" ]]; then
-    printf 'Building the local Web gateway...\n'
-    (cd "$daemon_root" && cargo build --no-default-features --bin codex_monitor_daemon)
-  fi
-  require_executable "Gateway" "$daemon_bin"
+codex_bin="${CODEX_BIN:-}"
+using_repository_codex="0"
+if [[ "$codex_mode" == "real" && -z "$codex_bin" ]]; then
+  codex_bin="$runtime_root/target/debug/codex"
+  using_repository_codex="1"
 fi
+code_mode_host_bin="$runtime_root/target/debug/codex-code-mode-host"
+
+build_all() {
+  command -v npm >/dev/null 2>&1 || { error "npm is required"; exit 1; }
+  command -v cargo >/dev/null 2>&1 || { error "cargo is required"; exit 1; }
+  if [[ ! -d "$web_root/node_modules" ]]; then
+    (cd "$web_root" && npm ci)
+  fi
+  (cd "$web_root" && npm run build)
+  (cd "$web_root" && cargo build --locked -p open-web-codex-server)
+  if [[ "$codex_mode" == "real" && "$using_repository_codex" == "1" && ( ! -x "$codex_bin" || ! -x "$code_mode_host_bin" ) ]]; then
+    (cd "$runtime_root" && CARGO_INCREMENTAL=0 cargo build -p codex-cli --bin codex -p codex-code-mode-host --bin codex-code-mode-host)
+  fi
+}
 
 if [[ "$skip_build" == "0" ]]; then
-  printf 'Building the platform server...\n'
-  (cd "$web_root" && cargo build -p open-web-codex-server)
+  build_all
 fi
-require_executable "Platform server" "$server_bin"
-
-if [[ ! -d "$web_root/node_modules" ]]; then
-  printf 'Installing Web dependencies...\n'
-  (cd "$web_root" && npm ci)
-fi
-
+[[ -x "$server_bin" ]] || { error "platform server is missing: $server_bin"; exit 1; }
+[[ -f "$web_dist/index.html" ]] || { error "browser build is missing: $web_dist/index.html"; exit 1; }
 if [[ "$codex_mode" == "real" ]]; then
-  printf 'Starting the loopback gateway...\n'
-  PATH="$(dirname "$codex_bin"):$PATH" \
-    "$daemon_bin" \
-    --listen "127.0.0.1:$rpc_port" \
-    --web-listen "127.0.0.1:$gateway_port" \
-    --data-dir "$data_dir" \
-    --insecure-no-auth \
-    >"$log_dir/daemon.log" 2>&1 &
-  daemon_pid=$!
-  gateway_health_url="http://127.0.0.1:$gateway_port/api/health"
-  wait_for_health "Gateway" "$daemon_pid" "$gateway_health_url" "$log_dir/daemon.log"
+  [[ -x "$codex_bin" ]] || { error "Codex binary is missing: $codex_bin"; exit 1; }
+  if [[ "$using_repository_codex" == "1" ]]; then
+    [[ -x "$code_mode_host_bin" ]] || { error "Codex code-mode host is missing: $code_mode_host_bin"; exit 1; }
+    export CODEX_CODE_MODE_HOST_PATH="$code_mode_host_bin"
+  fi
 fi
 
-printf 'Starting the platform server...\n'
-server_args=(
-  --bind "127.0.0.1:$server_port"
+server_command=(
+  "$server_bin"
+  --bind "$bind_host:$server_port"
+  --database-url "$database_url"
+  --database-max-connections "$database_max_connections"
   --codex-mode "$codex_mode"
-  --migrate
+  --runner-root "$runner_root"
+  --web-dist "$web_dist"
 )
 if [[ "$codex_mode" == "real" ]]; then
-  server_args+=(--daemon-url "http://127.0.0.1:$gateway_port")
+  server_command+=(--codex-home "$profile_home" --codex-bin "$codex_bin")
 fi
-CODEX_MODE="$codex_mode" \
-  DATABASE_URL="$database_url" \
-  DATABASE_MAX_CONNECTIONS="$database_max_connections" \
-  "$server_bin" "${server_args[@]}" \
-  >"$log_dir/server.log" 2>&1 &
-server_pid=$!
-server_health_url="http://127.0.0.1:$server_port/api/health"
-wait_for_health "Platform server" "$server_pid" "$server_health_url" "$log_dir/server.log"
 
-printf 'Starting the Web client...\n'
-(
-  cd "$web_root"
-  VITE_CODEX_MONITOR_WEB_API="http://127.0.0.1:$server_port" \
-    npm run dev -- --host 127.0.0.1 --port "$web_port"
-) >"$log_dir/web.log" 2>&1 &
-web_pid=$!
-web_url="http://127.0.0.1:$web_port/web"
-wait_for_health "Web client" "$web_pid" "$web_url" "$log_dir/web.log"
+existing_pid="$(read_pid || true)"
+if is_running "$existing_pid"; then
+  error "open-web-codex is already running (PID $existing_pid)"
+  exit 1
+fi
+rm -f "$pid_file"
 
-green_printf '\n=== open-web-codex is running ===\n'
-printf 'Web UI:  %s\n' "$web_url"
-printf 'Server:  %s\n' "$server_health_url"
-printf 'Mode:    %s\n' "$codex_mode"
+export DATABASE_URL="$database_url"
+export DATABASE_MAX_CONNECTIONS="$database_max_connections"
+export CODEX_MODE="$codex_mode"
+export OPEN_WEB_CODEX_RUNNER_ROOT="$runner_root"
+export OPEN_WEB_CODEX_WEB_DIST="$web_dist"
 if [[ "$codex_mode" == "real" ]]; then
-  printf 'Gateway: %s\n' "$gateway_health_url"
-  printf 'Codex:   %s\n' "$codex_bin"
+  export CODEX_HOME="$profile_home"
+  export CODEX_BIN="$codex_bin"
+else
+  unset CODEX_HOME CODEX_BIN
 fi
-printf 'Data:    %s\n' "$data_dir"
-printf 'Logs:    %s\n' "$log_dir"
-printf 'Stop:    %s --stop\n\n' "$script_path"
 
-while true; do
-  if ! is_live_pid "$server_pid"; then
-    error_printf 'Platform server exited. See %s\n' "$log_dir/server.log"
-    exit 1
+if [[ "$action" == "background" ]]; then
+  nohup "${server_command[@]}" >"$server_log" 2>&1 </dev/null &
+  server_pid=$!
+  printf '%s\n' "$server_pid" >"$pid_file"
+  printf 'open-web-codex starting in background (PID %s)\n' "$server_pid"
+  printf 'web:  http://%s:%s/\nlogs: %s\n' "$bind_host" "$server_port" "$server_log"
+  exit 0
+fi
+
+cleanup() {
+  local recorded
+  recorded="$(read_pid || true)"
+  if [[ "$recorded" == "$$" ]]; then
+    rm -f "$pid_file"
   fi
-  if ! is_live_pid "$web_pid"; then
-    error_printf 'Web client exited. See %s\n' "$log_dir/web.log"
-    exit 1
-  fi
-  if [[ "$codex_mode" == "real" ]] && ! is_live_pid "$daemon_pid"; then
-    error_printf 'Gateway exited. See %s\n' "$log_dir/daemon.log"
-    exit 1
-  fi
-  sleep 1
-done
+}
+trap cleanup EXIT
+printf '%s\n' "$$" >"$pid_file"
+printf 'Starting open-web-codex at http://%s:%s/ (%s Codex mode)\n' "$bind_host" "$server_port" "$codex_mode"
+exec "${server_command[@]}"

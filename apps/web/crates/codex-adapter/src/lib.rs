@@ -34,7 +34,7 @@ pub struct HealthStatus {
     pub name: String,
 }
 
-/// Events emitted by the adapter for SSE streaming.
+/// Events emitted by the adapter for durable platform projection.
 #[derive(Debug, Clone)]
 pub struct AdapterEvent {
     pub data: Vec<u8>,
@@ -75,7 +75,7 @@ impl std::fmt::Display for AdapterMode {
 /// Abstract interface to the Codex runtime.
 ///
 /// Platform server routes call through this trait instead of talking
-/// directly to the Tauri daemon or the Codex process.
+/// directly to an app-server transport or the Codex process.
 #[async_trait]
 pub trait CodexAdapter: Send + Sync {
     /// Quick health probe.
@@ -117,8 +117,8 @@ pub trait CodexAdapter: Send + Sync {
         result: Value,
     ) -> Result<(), AdapterError>;
 
-    /// Subscribe to the SSE event stream. The implementor sends SSE frames
-    /// through `sender` and returns when the subscription ends (sender dropped).
+    /// Subscribe to the internal app-server event stream. The implementor sends
+    /// frames through `sender` and returns when the subscription ends.
     async fn subscribe_events(
         &self,
         sender: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,

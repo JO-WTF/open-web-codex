@@ -1,7 +1,8 @@
 # open-web-codex
 
 `open-web-codex` is a self-hosted, browser-first Codex workbench. It combines the
-CodexMonitor Web/host code with a customized Codex runtime in one repository.
+Self-hosted browser workbench and platform host with a narrowly customized
+Codex runtime in one repository.
 
 The product keeps the responsibilities deliberately separate:
 
@@ -15,7 +16,7 @@ The product keeps the responsibilities deliberately separate:
 ## Repository layout
 
 ```text
-apps/web/                 CodexMonitor-derived Web and host application
+apps/web/                 Browser client and authenticated platform server
 codex/                    Customized Codex runtime subtree
 docs/product-design.md    Canonical product requirements and release scope
 docs/capability-baseline.md

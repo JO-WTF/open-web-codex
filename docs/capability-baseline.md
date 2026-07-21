@@ -14,7 +14,7 @@ Observed on 2026-07-21 from the current synchronization branch:
 | Observed official main | `7442f5f9323d116755dfe630e22c931a8aeaa5c7`; no commit awaits integration |
 | Local Codex seams vs official main | 123 local-only paths: 25 added and 98 modified; no upstream-only, diverged, or missing local paths |
 | Local customization footprint | six retained Runtime/TUI seams, one temporary upstreamed fix, derived artifacts and focused tests |
-| Web platform | Axum/PostgreSQL platform, native Profile Registry/Host, encrypted Provider Secret injection, durable approvals and typed Provider routes plus remaining loopback Web MVP surfaces |
+| Web platform | Axum/PostgreSQL platform, native Profile Registry/Host, encrypted Provider Secret injection, durable approvals, isolated Git workspaces, lease-based Run orchestration, typed REST resources and authenticated WebSocket |
 
 ## Reproduced evidence
 
@@ -53,14 +53,22 @@ Observed on 2026-07-21 from the current synchronization branch:
   switching, role-gated writes, durable approval decision delivery and an audit
   record. Passwords use Argon2id; accepted legacy SHA-256 hashes are upgraded on
   successful login.
+- Git Runtime validation covers source/ref rejection, private mirror creation,
+  one clone per Run, locking, selected-path commit, status projection and
+  cleanup. Run orchestration covers idempotent creation, `SKIP LOCKED` leasing,
+  heartbeats, cancellation, recovery and authorized workspace binding.
+- The browser uses only typed platform REST resources and an authenticated
+  `/api/events/ws` stream. Durable events are replayed by Task sequence; live
+  delivery is filtered by Organization. The former local gateway, raw RPC,
+  query-token event stream and desktop application are absent.
 - The latest official MCP catalog-revision and keyed shell-environment changes
   are integrated. `codex-config` 219, `codex-mcp` 109 and app-server 976 tests
   pass; four app-server fixtures required their expected binaries and local
   test ports after the build cache was cleaned.
 
 The successful checks prove only the surfaces named above. They do not prove
-multi-Profile scheduling, Runner/worktree isolation, authenticated WebSocket
-subscriptions or production deployment security.
+multi-Profile process routing, production sandbox strength, complete Cookie/CSRF
+security, Push delivery, or every Studio capability.
 
 ## Runtime capability assessment
 
@@ -86,22 +94,21 @@ subscriptions or production deployment security.
 
 | Surface | Current state | Production gap |
 | --- | --- | --- |
-| Independent server | Axum server and Cargo workspace build structure exist | deployment/config hardening and end-to-end startup gate remain |
-| Persistence | PostgreSQL migrations cover users/sessions, organizations/memberships, Profiles/capabilities/encrypted Secrets, projects, tasks, runs, Workspaces, durable approvals/audit and versioned run-event projections | leases, artifacts, jobs, retention, legacy-row repair and complete constraints remain missing |
+| Independent server | Axum server serves the browser, REST API, authenticated WebSocket, Profile Host and Runner from one deployable | deployment/config hardening and supervised production packaging remain |
+| Persistence | PostgreSQL migrations cover users/sessions, organizations/memberships, Profiles/capabilities/encrypted Secrets, projects, tasks, Runs, leases, Workspaces, durable approvals/audit and versioned Run-event projections | artifacts, retention, legacy-row repair and complete constraints remain missing |
 | Authentication | bootstrap and login use Argon2id, sessions bind an Organization, and legacy hashes upgrade after successful verification | HttpOnly-only session flow, CSRF, logout/revocation, rate limiting and complete browser flows are missing |
 | Authorization | Project/Task/Run and runtime calls enforce session Organization; Provider/approval calls additionally enforce Profile ownership; a two-Organization denial regression passes | centralized policy abstraction, Project-specific roles and the full concurrent multi-user matrix remain missing |
-| Codex bridge | Fake/Real adapter and event fan-out exist; Real uses the native Profile Registry/Host JSONL connection. Provider Secrets are encrypted and injected only into the owned child environment. Provider and approval routes are typed and authenticated | composition is still one configured Profile/Workspace per server process; typed Thread/Turn operations and authenticated browser subscriptions remain incomplete, and legacy raw RPC/SSE code still exists behind an off-by-default flag |
-| Task/Run | CRUD/start/cancel/message, safe Item/Delta and approval projection, monotonic cursor replay, Thread-history reconciliation and a real Profile restart/resume/read smoke exist | worktree provisioning, multi-user Profile routing, idempotent scheduler, approval expiry/recovery and authenticated subscriptions remain incomplete |
-| Browser | loopback MVP can connect workspace, start Thread and send text; Provider catalog/write flows use typed authenticated platform resources rather than raw RPC | other flows still target the local preview Gateway and accept server paths; this is not yet the authenticated multi-user product UI |
+| Codex bridge | Fake/Real adapter and event projection exist; Real uses the native Profile Registry/Host JSONL connection. Provider Secrets are encrypted and injected only into the owned child environment. Runtime-facing operations remain internal and browser routes are typed | composition is still one configured Profile process per server; per-user dynamic process routing remains incomplete |
+| Task/Run | CRUD/start/cancel/message, idempotent scheduling, DB leases/heartbeats/recovery, isolated Git workspaces, safe Item/Delta and approval projection, monotonic replay, workspace status and selected-path Commit exist | Push, artifact storage, approval expiry/restart delivery and full multi-Profile routing remain incomplete |
+| Browser | authenticated bootstrap/login, Project/Task/Run, messages, durable event replay/live updates, approvals, Provider selection, workspace status and Commit use typed platform resources | full Studio, Push, rich Diff/file inspection, cookie-only sessions and production accessibility remain incomplete |
 
 ## Immediate capability gates
 
-1. Derive Manifest method sets and experimental state from generated Codex
-   protocol/build facts; add Provider/model capability IDs.
-2. Generate a digest-addressed contract bundle and separate it from Web product
-   feature policy.
+1. Derive the remaining Manifest method sets and experimental state from
+   generated Codex protocol/build facts.
+2. Keep the digest-addressed contract bundle and Web feature policy in sync.
 3. Keep the passing real Thread restart/resume/read smoke and add multi-cwd,
    Provider, approval, multi-agent and MCP smoke suites before promoting the
    corresponding declarations to product support.
-4. Replace the remaining legacy raw RPC/SSE browser bridge with typed Task,
-   Thread, Turn and Git DTOs plus authenticated WebSocket cursor replay.
+4. Replace the single configured Profile composition root with authorized
+   per-user Profile routing before multi-user Beta.

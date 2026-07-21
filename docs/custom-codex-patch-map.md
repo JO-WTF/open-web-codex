@@ -81,7 +81,7 @@ tests, and snapshots follow their owning source seam.
 | `upstream-first, then replay` | `core/src/{codex_thread.rs,guardian/review_session.rs,session/**}`, `protocol/src/{openai_models.rs,protocol.rs}`, `app-server/src/request_processors/turn_processor.rs`, `app-server/README.md`, TUI thread-routing/event files | These files contain substantial official SessionIo, AgentRunner, model-catalog, rate-limit, paging, fork, and TUI behavior. Preserve upstream structure and reapply only the adjacent retained seam. |
 | `retain-core`: Provider propagation followers | `core/src/session/handlers.rs`, `exec/src/lib.rs`, `login/src/auth_env_telemetry.rs`, `app-server` remote-thread/turn tests, and `core` stream/header tests | These changes propagate the selected Provider, preserve Provider-scoped cache test isolation, or satisfy the expanded Provider metadata shape. They follow the owning Provider seam and are not independent feature surfaces. |
 | `upstreamed` | `protocol/src/tool_name.rs`, with the Core flat-name caller delegated to `ToolName::to_string()` | Temporary correction that keeps namespaced tool display and Chat flattening on the canonical `namespace__tool` delimiter. Remove the local patch as soon as official Codex carries equivalent normalization. |
-| `move-out` | `utils/home-dir/src/lib.rs` missing-`CODEX_HOME` auto-creation | Profile creation belongs to the Platform Host. `apps/web/crates/profile-host::ensure_profile_home` provisions the directory before transitional Tauri and native Platform Server spawn; `utils/home-dir` has returned to official missing-`CODEX_HOME` rejection semantics. |
+| `move-out` | `utils/home-dir/src/lib.rs` missing-`CODEX_HOME` auto-creation | Profile creation belongs to the Platform Host. `apps/web/crates/profile-host::ensure_profile_home` provisions the directory before the native Platform Server spawn; `utils/home-dir` has returned to official missing-`CODEX_HOME` rejection semantics. |
 | Derived artifacts and tests | Schema, TypeScript, fixtures, snapshots, lockfiles, and focused tests not named above | They follow the owning source seam. Regenerate artifacts and update tests/snapshots through their normal build/test commands; do not classify or replay them independently. |
 
 ## Current convergence analysis
@@ -116,12 +116,9 @@ Provider CRUD, Secret injection, Profile lifecycle, authorization and browser
 DTO adaptation do not belong in `codex/`. Provider CRUD, controlled config
 writes, model refresh normalization and browser DTOs now live in
 `apps/web/crates/provider-service` and typed Server routes. The service calls the
-retained app-server Provider API; Tauri is a compatibility adapter over the same
-service. The Platform Server encrypts direct credentials with an external
+retained app-server Provider API. The Platform Server encrypts direct credentials with an external
 master key, writes only a generated environment-variable reference through the
 app-server config API, and injects plaintext only into the owned Profile child.
-The Tauri compatibility adapter still uses the older private Profile-config
-path and is removed with the desktop runtime.
 
 ### Third-party Chat tool policy
 
@@ -158,7 +155,7 @@ planning gates.
 - Keep Chat translation in `codex-api`, Provider facts in Provider crates,
   Provider wire types in `app-server-protocol`, request handling in
   `app-server`, and presentation in dedicated TUI Provider modules.
-- Do not add Web routes, Tauri commands, Profile lifecycle, authorization,
+- Do not add Web routes, desktop commands, Profile lifecycle, authorization,
   browser state, or raw RPC proxies under `codex/`.
 - Do not hand-edit generated Schema or TypeScript files.
 - Do not broaden `core/src/client.rs`; extract Provider transport behavior into
