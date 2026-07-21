@@ -27,8 +27,8 @@ not a zero-diff Codex subtree.
 
 The integrated base and current official main are both
 `af71774d2645ec900cccf2a40d186a56c7a42f71`; no official commit is pending.
-The current comparison contains 124 local differences: 25 files added locally
-and 99 modified. All 124 are `local-only`; `upstream-only` and `diverged` are
+The current comparison contains 123 local differences: 25 files added locally
+and 98 modified. All 123 are `local-only`; `upstream-only` and `diverged` are
 both zero.
 
 All non-generated differences are classified under the retained seams and
@@ -57,7 +57,7 @@ The script separates the raw tree difference into:
 
 | ID | Seam and source paths | Reason to retain | Replay order | Required validation | Removal condition |
 | --- | --- | --- | --- | --- | --- |
-| `provider-chat-transport` | `codex-api/src/chat_translate.rs`, `chat_translate_tests.rs`, `common.rs`, `endpoint/chat.rs`, `sse/chat.rs`; minimal dispatch in `core/src/client.rs` | Translates third-party Chat Completions requests, streams, and mixed/interrupted tool calls into Codex semantics. Responses namespaces, including MCP plugin tools, are flattened to Chat functions with request-scoped reverse mapping; Responses-only tools without complete Chat semantics remain hidden. | 1 | `just test -p codex-api`; focused interrupted, namespace/MCP, unsupported-tool-policy, and tool-call translation tests | Upstream provides equivalent supported third-party wire translation, including the same stream, namespace/MCP, and tool behavior. |
+| `provider-chat-transport` | `codex-api/src/chat_translate.rs`, `chat_translate_tests.rs`, `endpoint/chat.rs`, `sse/chat.rs`; minimal dispatch in `core/src/client.rs` | Translates third-party Chat Completions requests, streams, and mixed/interrupted tool calls into Codex semantics. Responses namespaces, including MCP plugin tools, are flattened to Chat functions with request-scoped reverse mapping; Responses-only tools without complete Chat semantics remain hidden. | 1 | `just test -p codex-api`; focused Core Chat endpoint, interrupted, namespace/MCP, unsupported-tool-policy, and tool-call translation tests | Upstream provides equivalent supported third-party wire translation, including the same stream, namespace/MCP, and tool behavior. |
 | `provider-metadata-models` | `model-provider-info/src/lib.rs`, `PROVIDER_MODELS.md`, `model-provider/src/provider.rs`, `models_endpoint.rs`, `models-manager/src/manager.rs`, `config/src/thread_config/**`; minimal capability consumption in `core/src/tools/spec_plan.rs` | Defines `WireApi::Chat`, Provider-scoped model and tool-capability metadata, model discovery, selection, normalization, and cache isolation. | 2 | `just test -p codex-model-provider-info`; `just test -p codex-model-provider`; `just test -p codex-config`; focused Core tool-plan tests; regenerated config Schema; Provider switch/cache-isolation smoke | Upstream exposes equivalent Provider metadata, scoped catalog, capability gates, and cache semantics. |
 | `provider-app-server-api` | `app-server-protocol/src/protocol/v2/model.rs`, `app-server/src/request_processors/catalog_processor.rs`, `app-server/src/models.rs`, request registration, generated capability declarations | Provides versioned Provider listing, Provider-scoped model listing, controlled selection/configuration, and forced refresh for both TUI and Platform Host. | 3 | `just test -p codex-app-server-protocol`; `just test -p codex-app-server model_list`; generated Schema/TypeScript; real app-server Provider smoke | Upstream provides the required stable API and generated contract. |
 | `provider-tui-workflows` | `tui/src/chatwidget/provider_popups.rs`, `provider_sections.rs`, `model_popups.rs`, `settings.rs`, `slash_dispatch.rs`, `config_update.rs`, `onboarding/auth.rs`, `slash_command.rs` | TUI Provider selection, model selection, onboarding, refresh, configuration, and error UX are product-critical client behavior. | 4 | `just test -p codex-tui`; Provider workflow snapshots | Upstream TUI provides equivalent Provider and model workflows, or the product explicitly retires TUI parity. |
@@ -66,14 +66,14 @@ The script separates the raw tree difference into:
 
 ## Current inventory classification
 
-The current comparison against `codex-upstream/main` contains 124 paths, all
-`local-only`: 25 added and 99 modified. There are no pending official commits,
+The current comparison against `codex-upstream/main` contains 123 paths, all
+`local-only`: 25 added and 98 modified. There are no pending official commits,
 upstream-only paths, diverged paths, or missing local paths. Generated artifacts,
 tests, and snapshots follow their owning source seam.
 
 | Classification | Source paths | Decision and reason |
 | --- | --- | --- |
-| `retain-core`: Chat transport | `codex-api/src/chat_translate.rs`, `common.rs`, `endpoint/chat.rs`, `endpoint/models.rs`, `endpoint/mod.rs`, `sse/chat.rs`, `sse/mod.rs`, minimal `core/src/client.rs` dispatch | Required third-party Chat Completions transport. During sync, accept the current upstream Core client and replay only a narrow transport dispatch. |
+| `retain-core`: Chat transport | `codex-api/src/chat_translate.rs`, `endpoint/chat.rs`, `endpoint/models.rs`, `endpoint/mod.rs`, `sse/chat.rs`, `sse/mod.rs`, minimal `core/src/client.rs` dispatch | Required third-party Chat Completions transport. Request DTOs, Responses-to-Chat conversion, tool mapping and SSE translation live in `codex-api`; Core retains only request preparation, auth/retry/telemetry orchestration and `WireApi` dispatch. |
 | `retain-core`: Provider metadata and models | `model-provider-info/src/lib.rs`, `model-provider/src/{lib.rs,models_endpoint.rs,provider.rs}`, `models-manager/src/manager.rs`, `config/src/thread_config/**`, Provider fields in `core` session/config integration | Required Provider identity, model discovery, scoped cache/refresh, and Thread propagation. Accept upstream model/catalog changes, including official model migrations, before replaying Provider-specific behavior. |
 | `retain-core`: app-server Provider API | `app-server-protocol/src/protocol/{common.rs,mod.rs,v1.rs,v2/model.rs,v2/thread.rs,v2/turn.rs}`, `app-server/src/{models.rs,message_processor.rs,request_processors.rs}`, `request_processors/catalog_processor.rs` | Required `modelProvider/list`, Provider-scoped models, refresh, selection, Thread/Turn-level Provider override, and capability exposure. Keep only Provider request registrations and handlers when replaying high-churn dispatch files. |
 | `retain-core`: TUI Provider workflows | `tui/src/chatwidget/{provider_popups.rs,provider_sections.rs,model_popups.rs,settings.rs,slash_dispatch.rs}`, `tui/src/{config_update.rs,slash_command.rs,onboarding/auth.rs,onboarding/keys.rs,onboarding/onboarding_screen.rs,app/thread_settings.rs}`, narrow integration in `chatwidget.rs`, `app/event_dispatch.rs`, `app_server_session.rs`, and `bottom_pane/mod.rs` | TUI Provider configuration, model selection, onboarding, refresh, and error UX are core behavior. Take upstream TUI orchestration first; reattach isolated Provider modules and their event handlers. |
@@ -87,8 +87,11 @@ tests, and snapshots follow their owning source seam.
 ## Current convergence analysis
 
 The official structure is integrated and there are no unresolved tree conflicts.
-The attachment points in `codex-api/src/common.rs`,
-`core/src/tools/spec_plan_tests.rs`, `tui/src/app_event.rs`, and
+`codex-api/src/common.rs` now matches the official object exactly. Chat request
+DTOs and owned Responses-to-Chat conversion live in `chat_translate.rs`; the
+Core client calls that converter immediately before the Chat endpoint. The
+remaining attachment points in `core/src/tools/spec_plan_tests.rs`,
+`tui/src/app_event.rs`, and
 `tui/src/app_server_session.rs` contain only the replayed Chat/Provider seams on
 top of the current upstream files. `ClientRequest.ts` and the other protocol
 artifacts are generated from Rust protocol sources and currently reproduce
@@ -102,12 +105,12 @@ behavior. Upstream already owns thread-level Provider selection and
 `modelProvider/capabilities/read`; replay must reuse those APIs rather than add
 parallel variants.
 
-The highest-value source convergence after the sync is to move Chat request
-construction and Chat streaming helpers out of the high-churn
-`core/src/client.rs` into `codex-api` or another Provider-specific module. Core
-must retain only transport selection and shared retry/telemetry hooks. This is a
-code-location reduction, not a behavior removal, and remains gated by the
-existing interrupted-stream, tool-call, namespace/MCP and credential tests.
+Chat request DTOs, wire conversion, tool identity mapping and SSE translation
+are concentrated in `codex-api`. `core/src/client.rs` retains the common
+Responses request preparation, Provider auth/retry/telemetry hooks and the
+`WireApi::Chat` transport branch. The Core branch is covered by a real mock
+`/v1/chat/completions` integration test in addition to interrupted-stream,
+tool-call and namespace/MCP tests.
 
 Provider CRUD, Secret injection, Profile lifecycle, authorization and browser
 DTO adaptation do not belong in `codex/`. The current transitional implementation

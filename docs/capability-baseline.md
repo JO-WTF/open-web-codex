@@ -13,14 +13,14 @@ Observed on 2026-07-21 from source commit
 | --- | --- |
 | Codex subtree | integrated through `openai/codex` `af71774d2645ec900cccf2a40d186a56c7a42f71` |
 | Observed official main | `af71774d2645ec900cccf2a40d186a56c7a42f71`; no commit awaits integration |
-| Local Codex seams vs official main | 124 local-only paths: 25 added and 99 modified; no upstream-only, diverged, or missing local paths |
+| Local Codex seams vs official main | 123 local-only paths: 25 added and 98 modified; no upstream-only, diverged, or missing local paths |
 | Local customization footprint | six retained Runtime/TUI seams, one temporary upstreamed fix, derived artifacts and focused tests |
 | Web platform | Axum/PostgreSQL prototype plus the earlier loopback Web MVP |
 
 ## Reproduced evidence
 
 - `scripts/codex-upstream-status.sh` reports `Status: synchronized`; the
-  customization status script reports 124 local-only differences and zero
+  customization status script reports 123 local-only differences and zero
   upstream-only or diverged paths.
 - The current upstream structure and all six documented seams are integrated;
   regenerated app-server Schema and TypeScript fixtures have no drift.
@@ -30,7 +30,8 @@ Observed on 2026-07-21 from source commit
 - The observed manifest contains 18 declarations, including
   `models.providers`.
 - On the current Runtime lineage, `just fmt`, app-server Schema generation,
-  287 app-server protocol tests, 172 Chat transport tests, 83 Provider tests,
+  287 app-server protocol tests, 174 Chat transport tests, the Core Chat endpoint
+  integration test, 83 Provider tests,
   the 970-test app-server suite, 41 focused Plugin tests, and current TUI
   diff/highlight/Provider/terminal tests pass. The final upstream delta only
   adds a Unix compile gate to the TUI restore helper and is covered by the

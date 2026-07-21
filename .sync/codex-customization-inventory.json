@@ -5,13 +5,13 @@
     "upstreamRef": "codex-upstream/main",
     "upstreamCommit": "af71774d2645ec900cccf2a40d186a56c7a42f71",
     "localTree": "HEAD:codex",
-    "observedAt": "2026-07-21T17:03:45Z",
-    "differenceCount": 124,
+    "observedAt": "2026-07-21T17:18:57Z",
+    "differenceCount": 123,
     "addedLocally": 25,
-    "modified": 99,
+    "modified": 98,
     "missingLocally": 0,
     "upstreamOnly": 0,
-    "localOnly": 124,
+    "localOnly": 123,
     "diverged": 0
   },
   "progress": {
@@ -26,7 +26,7 @@
       "capability-manifest"
     ],
     "classification": {
-      "classifiedLocalOnlyPaths": 124,
+      "classifiedLocalOnlyPaths": 123,
       "unclassifiedSourcePaths": 0,
       "temporaryUpstreamedFixes": 1
     },
@@ -35,13 +35,14 @@
       "Classified all current local-only differences; generated artifacts and focused tests follow their owning source seam.",
       "Kept Profile Home provisioning in apps/web/profile-host and restored official missing-CODEX_HOME validation in Codex.",
       "Regenerated app-server artifacts without drift and completed the Runtime, app-server, Provider, and TUI scoped validation matrix.",
-      "Recorded the ToolName namespace delimiter correction as a temporary upstreamed fix with an explicit removal condition."
+      "Recorded the ToolName namespace delimiter correction as a temporary upstreamed fix with an explicit removal condition.",
+      "Moved Chat request DTOs and owned wire conversion into codex-api, restored codex-api/common.rs to the exact official object, and added a Core Chat endpoint integration test."
     ],
     "validation": {
       "format": "passed",
       "appServerSchema": "passed",
       "protocolTests": "passed",
-      "chatTransportTests": "172 passed",
+      "chatTransportTests": "174 passed; Core Chat endpoint and 3 focused recovery/tool-policy tests passed",
       "providerTests": "83 passed",
       "appServerTests": "970 passed; latest Plugin delta 41 passed",
       "tuiTests": "latest diff/highlight/Provider 101 passed; terminal/Provider 35 passed",
@@ -49,7 +50,7 @@
       "webContractCheck": "passed"
     },
     "validatedAgainstUpstream": "af71774d2645ec900cccf2a40d186a56c7a42f71",
-    "validatedAtCommit": "f007589c6c08b561ddb4996661c515772024405b",
-    "nextAction": "Extract Chat request construction and stream translation from high-churn Core code into codex-api while preserving only the minimal transport-selection seam, then continue the native Profile Host migration."
+    "validatedAtCommit": "056d69f79bbb178cb9be09dad8ef84bda5721f4c",
+    "nextAction": "Complete the native Profile Host lifecycle and replace the RealCodexAdapter dependency on the transitional Tauri daemon."
   }
 }

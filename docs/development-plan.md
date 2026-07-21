@@ -13,7 +13,7 @@
 | 能力基线 | `docs/capability-baseline.md` |
 | 上游同步 | `docs/codex-upstream-sync.md` |
 
-Codex subtree 已同步到官方 `openai/codex` 提交 `af71774d2645`，状态脚本报告待集成提交为 0。当前与官方树的 124 个差异全部是已分类的本地定制，没有 upstream-only 或 diverged 路径。第三方 Provider、TUI Provider、Capability Manifest 和旧历史兼容 seam 已按 patch map 重放；app-server Schema 无漂移，Runtime/app-server/TUI 定向验证通过。Capability Manifest v1 类型、Schema 和 `initialize` 已验证可用，真实本地 app-server Smoke 返回 18 个能力声明。
+Codex subtree 已同步到官方 `openai/codex` 提交 `af71774d2645`，状态脚本报告待集成提交为 0。当前与官方树的 123 个差异全部是已分类的本地定制，没有 upstream-only 或 diverged 路径。第三方 Provider、TUI Provider、Capability Manifest 和旧历史兼容 seam 已按 patch map 重放；Chat DTO/转换/SSE 已集中到 `codex-api`，`codex-api/common.rs` 与官方对象一致。app-server Schema 无漂移，Runtime/app-server/TUI 定向验证通过。Capability Manifest v1 类型、Schema 和 `initialize` 已验证可用，真实本地 app-server Smoke 返回 18 个能力声明。
 
 M1 平台已建立 Axum/SQLx/PostgreSQL workspace、Fake/Real Codex Adapter，以及 bootstrap/session、organization/membership、project、Task、Run 和版本化 Run event 投影。Item/Delta 会先以单调 sequence、稳定平台事件类型和脱敏 UI payload 落库，再向浏览器广播；Web reducer 可用 cursor 投影恢复活动状态并以 Codex Thread 历史校准终态。`apps/web/crates/profile-host` 已在过渡 Tauri app-server spawn 前 provision `CODEX_HOME`，但持久、隔离的原生 Profile Host 尚未完成。浏览器仍主要连接 loopback RPC/SSE Gateway；Git Worktree/Runner、持久审批、Lease、审计、完整 RBAC、幂等调度和认证 WebSocket 也尚未完成。当前 `/api/rpc`、permissive CORS 和 SSE query token 只能用于本地迁移期，不得作为多用户 Beta 边界。
 
@@ -150,10 +150,11 @@ M0-A 官方同步稳定（已完成当前 checkpoint）
 | M0-A09 | P0/M | [x] | 重点重验 Provider Wire API、模型缓存和当前 Provider 传播 | codex-api、model-provider、models-manager、app-server model_list 和 TUI scoped tests 通过；真实 Manifest Smoke 和 Web contract check 通过 |
 | M0-A10 | P1/S | [-] | 固定首个兼容 Codex commit、Rust toolchain、target 和 binary digest | `.sync` 已固定 commit；兼容矩阵和 digest 待补 |
 
-当前官方 main 与已集成基线均为 `af71774d2645`。比较结果为 124 个
+当前官方 main 与已集成基线均为 `af71774d2645`。比较结果为 123 个
 local-only 路径、0 个 upstream-only 路径和 0 个 diverged 路径；全部
-非生成差异已归入 patch map。下一项 Runtime 收敛工作是把 Chat 请求构造
-与流转换继续集中到 `codex-api`，让 `core/src/client.rs` 只保留最小传输选择。
+非生成差异已归入 patch map。Chat 请求 DTO、转换与 SSE 已集中到
+`codex-api`；`core/src/client.rs` 只保留通用请求准备、认证/重试/遥测和
+`WireApi` 传输选择。
 
 M0-A07 拆分建议：
 
