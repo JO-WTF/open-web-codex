@@ -37,6 +37,9 @@ describe("AssistantMessage", () => {
     expect(screen.getByText("route")).toBeTruthy();
     expect(screen.getByText("Input ref")).toBeTruthy();
     expect(screen.getByText("ref-1")).toBeTruthy();
+    expect(screen.getByText("未配置 Mapbox Token")).toBeTruthy();
+    expect(screen.queryByLabelText("Mapbox map")).toBeNull();
+    expect(screen.getByRole("button", { name: "Open map card fullscreen" }).textContent).toContain("全屏");
     expect(screen.getByText("Done")).toBeTruthy();
     expect(screen.queryByText(/open-web-card/)).toBeNull();
   });

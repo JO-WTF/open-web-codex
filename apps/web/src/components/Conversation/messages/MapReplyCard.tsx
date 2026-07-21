@@ -3,7 +3,7 @@ import "mapbox-gl/dist/mapbox-gl.css";
 import Expand from "lucide-react/dist/esm/icons/expand";
 import MapPinned from "lucide-react/dist/esm/icons/map-pinned";
 import type { Map as MapboxMap, LngLatBoundsLike } from "mapbox-gl";
-import type { MapReplyCard as MapReplyCardData } from "../../../utils/replyCards";
+import type { MapBounds, MapReplyCard as MapReplyCardData } from "../../../utils/replyCards";
 
 type Props = {
   card: MapReplyCardData;
@@ -61,6 +61,63 @@ function boundsFromBbox(value: unknown): LngLatBoundsLike | null {
   return [[west, south], [east, north]];
 }
 
+function extendCoordinateBounds(bounds: MapBounds | null, longitude: number, latitude: number): MapBounds {
+  if (!bounds) return [longitude, latitude, longitude, latitude];
+  return [
+    Math.min(bounds[0], longitude),
+    Math.min(bounds[1], latitude),
+    Math.max(bounds[2], longitude),
+    Math.max(bounds[3], latitude),
+  ];
+}
+
+function collectGeoJsonCoordinates(value: unknown, visit: (longitude: number, latitude: number) => void) {
+  if (Array.isArray(value)) {
+    if (
+      value.length >= 2
+      && typeof value[0] === "number"
+      && Number.isFinite(value[0])
+      && typeof value[1] === "number"
+      && Number.isFinite(value[1])
+    ) {
+      visit(value[0], value[1]);
+      return;
+    }
+    for (const entry of value) collectGeoJsonCoordinates(entry, visit);
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  const record = value as Record<string, unknown>;
+  if (record.type === "FeatureCollection") collectGeoJsonCoordinates(record.features, visit);
+  else if (record.type === "Feature") collectGeoJsonCoordinates(record.geometry, visit);
+  else if (record.type === "GeometryCollection") collectGeoJsonCoordinates(record.geometries, visit);
+  else collectGeoJsonCoordinates(record.coordinates, visit);
+}
+
+export function dataBoundsForCard(card: MapReplyCardData): MapBounds | null {
+  let bounds: MapBounds | null = null;
+  const extend = (longitude: number, latitude: number) => {
+    if (longitude < -180 || longitude > 180 || latitude < -90 || latitude > 90) return;
+    bounds = extendCoordinateBounds(bounds, longitude, latitude);
+  };
+  for (const point of card.points ?? []) extend(point.longitude, point.latitude);
+  for (const line of card.lines ?? []) {
+    for (const [longitude, latitude] of line.coordinates) extend(longitude, latitude);
+  }
+  for (const polygon of card.polygons ?? []) {
+    for (const ring of polygon.coordinates) {
+      for (const [longitude, latitude] of ring) extend(longitude, latitude);
+    }
+  }
+  collectGeoJsonCoordinates(card.geojson, extend);
+  if (!bounds) return null;
+  if (bounds[0] === bounds[2] && bounds[1] === bounds[3]) {
+    const padding = 0.08;
+    return [bounds[0] - padding, bounds[1] - padding, bounds[2] + padding, bounds[3] + padding];
+  }
+  return bounds;
+}
+
 function MapCanvas({ card, fullscreen = false }: { card: MapReplyCardData; fullscreen?: boolean }) {
   const mapEl = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapboxMap | null>(null);
@@ -74,10 +131,11 @@ function MapCanvas({ card, fullscreen = false }: { card: MapReplyCardData; fulls
       if (cancelled || !mapEl.current) return;
       const mapboxgl = module.default;
       mapboxgl.accessToken = MAPBOX_TOKEN;
-      const bounds = boundsFromBbox(card.bbox ?? geojson.bbox);
+      const bounds = boundsFromBbox(card.bbox ?? geojson.bbox ?? dataBoundsForCard(card));
       const map = new mapboxgl.Map({
         container: mapEl.current,
         style: "mapbox://styles/mapbox/streets-v12",
+        projection: "mercator",
         center: card.center ? [card.center.longitude, card.center.latitude] : [0, 0],
         zoom: card.zoom ?? 2,
       });
@@ -102,10 +160,10 @@ function MapCanvas({ card, fullscreen = false }: { card: MapReplyCardData; fulls
 
   if (canRenderMap) return <div ref={mapEl} className="web-map-card-mapbox" aria-label="Mapbox map" />;
   return (
-    <div className="web-map-card-canvas" aria-hidden="true">
-      <div className="web-map-card-route" />
-      <span className="web-map-card-pin is-a" />
-      <span className="web-map-card-pin is-b" />
+    <div className="web-map-card-canvas" role="status" aria-label="Map unavailable">
+      <MapPinned size={28} aria-hidden="true" />
+      <strong>未配置 Mapbox Token</strong>
+      <span>配置 VITE_MAPBOX_ACCESS_TOKEN 后显示地图。</span>
     </div>
   );
 }
@@ -119,7 +177,12 @@ export default function MapReplyCard({ card }: Props) {
       <div className="web-map-card-header">
         <div className="web-map-card-title"><MapPinned size={16} aria-hidden="true" /><span>{card.title}</span></div>
         <span className="web-map-card-status">{statusLabel(status)}</span>
-        {!fullscreenBody && <button type="button" className="web-map-card-fullscreen" onClick={() => setFullscreen(true)} aria-label="Open map card fullscreen"><Expand size={14} aria-hidden="true" /></button>}
+        {!fullscreenBody && (
+          <button type="button" className="web-map-card-fullscreen" onClick={() => setFullscreen(true)} aria-label="Open map card fullscreen">
+            <Expand size={16} aria-hidden="true" />
+            <span>全屏</span>
+          </button>
+        )}
       </div>
       <MapCanvas card={card} fullscreen={fullscreenBody} />
       <div className="web-map-card-body">

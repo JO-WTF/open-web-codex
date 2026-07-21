@@ -1317,6 +1317,24 @@ mod tests {
     use serde_json::Value;
 
     #[test]
+    fn turn_input_preserves_user_text_without_capability_suffixes() {
+        let input = build_turn_input_items(
+            "用地图卡片展示印尼主要城市的位置".to_string(),
+            None,
+            None,
+        )
+        .expect("build turn input");
+
+        assert_eq!(
+            input,
+            vec![json!({
+                "type": "text",
+                "text": "用地图卡片展示印尼主要城市的位置",
+            })]
+        );
+    }
+
+    #[test]
     fn normalize_strips_file_uri_prefix() {
         assert_eq!(
             normalize_file_path("file:///var/mobile/Containers/Data/photo.jpg"),

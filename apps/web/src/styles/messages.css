@@ -1523,53 +1523,58 @@
 
 .web-map-card-fullscreen {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  gap: 5px;
+  min-width: 62px;
+  height: 32px;
+  padding: 0 10px;
+  border-color: #2563eb;
+  background: #2563eb;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 650;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.24);
+  cursor: pointer;
+}
+
+.web-map-card-fullscreen:hover {
+  border-color: #1d4ed8;
+  background: #1d4ed8;
+}
+
+.web-map-card-fullscreen:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: 2px;
+}
+
+.web-map-card-fullscreen svg {
+  flex: 0 0 auto;
+  stroke: currentColor;
 }
 
 .web-map-card-canvas {
-  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   height: 180px;
   overflow: hidden;
-  background:
-    linear-gradient(90deg, rgba(148, 163, 184, 0.08) 1px, transparent 1px),
-    linear-gradient(rgba(148, 163, 184, 0.08) 1px, transparent 1px),
-    radial-gradient(circle at 20% 20%, rgba(37, 99, 235, 0.22), transparent 28%),
-    radial-gradient(circle at 75% 70%, rgba(249, 115, 22, 0.18), transparent 30%),
-    var(--cm-surface-panel-soft);
-  background-size: 32px 32px, 32px 32px, auto, auto, auto;
+  border-block: 1px solid var(--cm-border);
+  background: var(--cm-surface-panel-soft);
+  color: var(--text-muted);
+  text-align: center;
 }
 
-.web-map-card-route {
-  position: absolute;
-  inset: 44px 72px 50px 80px;
-  border-bottom: 4px solid rgba(37, 99, 235, 0.78);
-  border-left: 4px solid rgba(37, 99, 235, 0.78);
-  border-radius: 0 0 0 72px;
-  transform: skewX(-14deg);
+.web-map-card-canvas strong {
+  color: var(--text-stronger);
+  font-size: 14px;
 }
 
-.web-map-card-pin {
-  position: absolute;
-  width: 16px;
-  height: 16px;
-  border: 3px solid #fff;
-  border-radius: 999px;
-  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.32);
-}
-
-.web-map-card-pin.is-a {
-  left: 78px;
-  top: 50px;
-  background: #2563eb;
-}
-
-.web-map-card-pin.is-b {
-  right: 74px;
-  bottom: 52px;
-  background: #f97316;
+.web-map-card-canvas span {
+  font-size: 12px;
 }
 
 .web-map-card-body {

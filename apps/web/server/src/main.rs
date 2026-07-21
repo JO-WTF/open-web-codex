@@ -1,7 +1,6 @@
 mod config;
 mod event_projection;
 mod middleware;
-mod reply_cards;
 mod routes;
 
 use std::net::SocketAddr;

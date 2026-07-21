@@ -17,7 +17,6 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::middleware::auth::AuthenticatedUser;
-use crate::reply_cards::prepare_message_text_for_reply_cards;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
 
@@ -217,7 +216,7 @@ pub async fn send_message(
             "send_user_message",
             json!({
                 "threadId": &thread_id,
-                "text": prepare_message_text_for_reply_cards(&req.text),
+                "text": &req.text,
             }),
         )
         .await
