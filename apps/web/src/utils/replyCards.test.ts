@@ -31,6 +31,27 @@ describe("parseReplyCards", () => {
     });
   });
 
+  it("supports multiple cards in one reply", () => {
+    const parts = parseReplyCards('A\n```open-web-card map.v1\n{"title":"One"}\n```\nB\n```open-web-card map.v1\n{"title":"Two"}\n```');
+
+    expect(parts.filter((part) => part.type === "card")).toHaveLength(2);
+    expect(parts.map((part) => part.type === "card" ? part.title : part.content.trim())).toEqual(["A", "One", "B", "Two"]);
+  });
+
+  it("normalizes point, line, polygon and GeoJSON payloads for one card", () => {
+    const [part] = parseReplyCards('```open-web-card map.v1\n{"title":"Mixed","points":[{"lat":1,"lng":2}],"lines":[{"coordinates":[[2,1],[3,4]]}],"polygons":[{"coordinates":[[[0,0],[1,0],[1,1],[0,0]]]}],"geojson":{"type":"FeatureCollection","features":[]}}\n```');
+
+    expect(part).toMatchObject({
+      type: "card",
+      title: "Mixed",
+      status: "ready",
+      points: [{ latitude: 1, longitude: 2 }],
+      lines: [{ coordinates: [[2, 1], [3, 4]] }],
+      polygons: [{ coordinates: [[[0, 0], [1, 0], [1, 1], [0, 0]]] }],
+      geojson: { type: "FeatureCollection", features: [] },
+    });
+  });
+
   it("keeps invalid card fences as markdown text", () => {
     const text = '```open-web-card map.v1\n{"title":\n```';
     expect(parseReplyCards(text)).toEqual([{ type: "text", content: text }]);

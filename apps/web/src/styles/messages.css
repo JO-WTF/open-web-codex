@@ -1636,3 +1636,14 @@
   margin: 0 0 10px 10px;
   padding: 6px 12px;
 }
+
+
+.web-map-card-mapbox {
+  height: 240px;
+  min-height: 180px;
+  background: var(--cm-surface-panel-soft);
+}
+
+.web-map-card-modal-panel .web-map-card-mapbox {
+  height: min(62vh, 640px);
+}
