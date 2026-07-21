@@ -3,8 +3,8 @@
 当前 MVP 是一条真实的本地纵向链路：
 
 ```text
-Browser -> Vite WebApp -> loopback HTTP/SSE Gateway
-        -> CodexMonitor daemon -> codex app-server -> local workspace
+Browser -> Vite WebApp -> Platform Server
+        -> loopback Gateway -> codex app-server -> local workspace
 ```
 
 它用于尽快验证浏览器运行 Codex 的核心价值，不代表最终的多用户生产架构。Gateway 以无认证模式运行，但强制只绑定 `127.0.0.1`，不得通过反向代理或端口映射对外暴露。
@@ -15,18 +15,35 @@ Browser -> Vite WebApp -> loopback HTTP/SSE Gateway
 make mvp
 ```
 
-脚本会：
+`make mvp` 在前台运行统一的 `scripts/run-local.sh`，Ctrl-C 会停止由它启动的
+全部进程。脚本会：
 
-1. 使用 `OPEN_WEB_CODEX_BIN`、仓库 Debug Binary 或 `PATH` 中的 `codex`。
-2. 找不到 Codex Binary 时构建 `codex-cli`。
+1. 增量构建仓库的 `codex-cli`，确保运行的 Codex 与当前源码一致。
+2. 仅在显式设置 `OPEN_WEB_CODEX_BIN` 时改用外部 Codex Binary。
 3. 构建不含语音依赖的 `codex_monitor_daemon`。
-4. 启动 `127.0.0.1:4733` Gateway 和 `127.0.0.1:1420/web` WebApp。
-5. 将本地数据和日志放在 `.cache/mvp`。
+4. 构建并启动 Platform Server。
+5. 启动 `127.0.0.1:4733` Gateway 和 `127.0.0.1:1420/web` WebApp。
+6. 将本地数据和日志放在 `.cache/mvp`。
 
 使用已有 Codex Binary 可缩短首次启动：
 
 ```bash
 OPEN_WEB_CODEX_BIN=/absolute/path/to/codex make mvp
+```
+
+也可以使用统一脚本管理后台实例：
+
+```bash
+./scripts/run-local.sh --background
+./scripts/run-local.sh --status
+./scripts/run-local.sh --restart
+./scripts/run-local.sh --stop
+```
+
+只有在确认现有 Rust Binary 已是最新版本时，才应跳过增量构建：
+
+```bash
+./scripts/run-local.sh --no-build
 ```
 
 ## 浏览器流程
@@ -40,13 +57,16 @@ OPEN_WEB_CODEX_BIN=/absolute/path/to/codex make mvp
 
 ## 停止与排错
 
-在启动终端按 Ctrl-C，会同时停止 Web 和 Gateway。
+在前台启动终端按 Ctrl-C，或执行 `./scripts/run-local.sh --stop`，会按 PID
+停止该数据目录对应的 Web、Platform Server、Gateway 和 app-server 进程。
 
 日志：
 
 ```text
 .cache/mvp/logs/daemon.log
+.cache/mvp/logs/server.log
 .cache/mvp/logs/web.log
+.cache/mvp/logs/run-local.log
 ```
 
 端口可通过以下变量修改，但监听地址始终是 loopback：
@@ -55,6 +75,7 @@ OPEN_WEB_CODEX_BIN=/absolute/path/to/codex make mvp
 OPEN_WEB_CODEX_WEB_PORT=1420
 OPEN_WEB_CODEX_GATEWAY_PORT=4733
 OPEN_WEB_CODEX_RPC_PORT=4732
+OPEN_WEB_CODEX_SERVER_PORT=4800
 ```
 
 ## MVP 已知限制
