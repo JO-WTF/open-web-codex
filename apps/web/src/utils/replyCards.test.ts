@@ -38,13 +38,14 @@ describe("parseReplyCards", () => {
     expect(parts.map((part) => part.type === "card" ? part.title : part.content.trim())).toEqual(["A", "One", "B", "Two"]);
   });
 
-  it("normalizes point, line, polygon and GeoJSON payloads for one card", () => {
-    const [part] = parseReplyCards('```open-web-card map.v1\n{"title":"Mixed","points":[{"lat":1,"lng":2}],"lines":[{"coordinates":[[2,1],[3,4]]}],"polygons":[{"coordinates":[[[0,0],[1,0],[1,1],[0,0]]]}],"geojson":{"type":"FeatureCollection","features":[]}}\n```');
+  it("normalizes point, line, polygon, bbox and GeoJSON payloads for one card", () => {
+    const [part] = parseReplyCards('```open-web-card map.v1\n{"title":"Mixed","bbox":[0,0,3,4],"points":[{"lat":1,"lng":2}],"lines":[{"coordinates":[[2,1],[3,4]]}],"polygons":[{"coordinates":[[[0,0],[1,0],[1,1],[0,0]]]}],"geojson":{"type":"FeatureCollection","features":[]}}\n```');
 
     expect(part).toMatchObject({
       type: "card",
       title: "Mixed",
       status: "ready",
+      bbox: [0, 0, 3, 4],
       points: [{ latitude: 1, longitude: 2 }],
       lines: [{ coordinates: [[2, 1], [3, 4]] }],
       polygons: [{ coordinates: [[[0, 0], [1, 0], [1, 1], [0, 0]]] }],

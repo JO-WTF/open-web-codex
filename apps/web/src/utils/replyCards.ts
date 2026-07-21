@@ -26,6 +26,8 @@ export type MapPolygon = {
   coordinates: [number, number][][];
 };
 
+export type MapBounds = [number, number, number, number];
+
 export type MapReplyCard = {
   type: "card";
   kind: "map.v1";
@@ -39,6 +41,7 @@ export type MapReplyCard = {
   status?: "loading" | "ready" | "error";
   center?: { latitude: number; longitude: number };
   zoom?: number;
+  bbox?: MapBounds;
   points?: MapPoint[];
   lines?: MapLine[];
   polygons?: MapPolygon[];
@@ -60,6 +63,8 @@ type RawCardPayload = {
   status?: unknown;
   center?: unknown;
   zoom?: unknown;
+  bbox?: unknown;
+  bounds?: unknown;
   points?: unknown;
   lines?: unknown;
   polygons?: unknown;
@@ -98,6 +103,18 @@ function normalizeCenter(value: unknown): MapReplyCard["center"] {
   const longitude = asNumber(value.longitude ?? value.lng ?? value.lon);
   if (latitude == null || longitude == null || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return undefined;
   return { latitude, longitude };
+}
+
+function normalizeBounds(value: unknown): MapBounds | undefined {
+  if (!Array.isArray(value) || value.length < 4) return undefined;
+  const west = asNumber(value[0]);
+  const south = asNumber(value[1]);
+  const east = asNumber(value[2]);
+  const north = asNumber(value[3]);
+  if (west == null || south == null || east == null || north == null) return undefined;
+  if (west < -180 || west > 180 || east < -180 || east > 180 || south < -90 || south > 90 || north < -90 || north > 90) return undefined;
+  if (west > east || south > north) return undefined;
+  return [west, south, east, north];
 }
 
 function normalizeCoordinate(value: unknown): [number, number] | undefined {
@@ -194,6 +211,7 @@ function normalizePayload(payload: RawCardPayload, index: number): MapReplyCard 
     status: normalizeStatus(payload.status, hasInlineData),
     center: normalizeCenter(payload.center),
     zoom: asNumber(payload.zoom),
+    bbox: normalizeBounds(payload.bbox ?? payload.bounds),
     points,
     lines,
     polygons,

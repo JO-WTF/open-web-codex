@@ -11,6 +11,7 @@ type Props = {
 
 type FeatureCollection = {
   type: "FeatureCollection";
+  bbox?: unknown;
   features: Array<Record<string, unknown>>;
 };
 
@@ -53,29 +54,11 @@ function featureCollectionForCard(card: MapReplyCardData): FeatureCollection | n
   return features.length ? { type: "FeatureCollection", features } : null;
 }
 
-function collectCoordinates(value: unknown, coordinates: [number, number][]) {
-  if (!value) return;
-  if (Array.isArray(value)) {
-    if (value.length >= 2 && typeof value[0] === "number" && typeof value[1] === "number") {
-      coordinates.push([value[0], value[1]]);
-      return;
-    }
-    value.forEach((entry) => collectCoordinates(entry, coordinates));
-    return;
-  }
-  if (typeof value === "object") {
-    Object.values(value as Record<string, unknown>).forEach((entry) => collectCoordinates(entry, coordinates));
-  }
-}
-
-function boundsForGeojson(geojson: FeatureCollection): LngLatBoundsLike | null {
-  const coordinates: [number, number][] = [];
-  collectCoordinates(geojson, coordinates);
-  const valid = coordinates.filter(([lng, lat]) => Number.isFinite(lng) && Number.isFinite(lat));
-  if (!valid.length) return null;
-  const lngs = valid.map(([lng]) => lng);
-  const lats = valid.map(([, lat]) => lat);
-  return [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]];
+function boundsFromBbox(value: unknown): LngLatBoundsLike | null {
+  if (!Array.isArray(value) || value.length < 4) return null;
+  const [west, south, east, north] = value;
+  if (![west, south, east, north].every((entry) => typeof entry === "number" && Number.isFinite(entry))) return null;
+  return [[west, south], [east, north]];
 }
 
 function MapCanvas({ card, fullscreen = false }: { card: MapReplyCardData; fullscreen?: boolean }) {
@@ -91,7 +74,7 @@ function MapCanvas({ card, fullscreen = false }: { card: MapReplyCardData; fulls
       if (cancelled || !mapEl.current) return;
       const mapboxgl = module.default;
       mapboxgl.accessToken = MAPBOX_TOKEN;
-      const bounds = boundsForGeojson(geojson);
+      const bounds = boundsFromBbox(card.bbox ?? geojson.bbox);
       const map = new mapboxgl.Map({
         container: mapEl.current,
         style: "mapbox://styles/mapbox/streets-v12",
@@ -115,7 +98,7 @@ function MapCanvas({ card, fullscreen = false }: { card: MapReplyCardData; fulls
       mapRef.current?.remove();
       mapRef.current = null;
     };
-  }, [canRenderMap, card.center, card.zoom, fullscreen, geojson]);
+  }, [canRenderMap, card.bbox, card.center, card.zoom, fullscreen, geojson]);
 
   if (canRenderMap) return <div ref={mapEl} className="web-map-card-mapbox" aria-label="Mapbox map" />;
   return (
