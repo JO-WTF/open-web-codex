@@ -99,7 +99,9 @@ semantics on an OpenAI-compatible Chat Completions wire:
 - remote Thread configuration does not currently transport these capability
   flags and therefore resolves both to the safe disabled default;
 - `tool_search` remains hidden because deferred discovery and result loading
-  do not have a complete Chat lifecycle;
+  do not have a complete Chat lifecycle; Chat Providers therefore disable the
+  Provider `tool_search` capability so MCP tools stay directly visible instead
+  of becoming unreachable deferred tools;
 - hosted `web_search` and `image_generation` remain hidden because a generic
   third-party endpoint cannot execute OpenAI-hosted tools;
 - `custom` freeform tools and unknown Responses tool kinds remain hidden

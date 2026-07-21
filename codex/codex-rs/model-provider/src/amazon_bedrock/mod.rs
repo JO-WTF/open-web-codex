@@ -109,6 +109,7 @@ impl ModelProvider for AmazonBedrockModelProvider {
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities {
             namespace_tools: true,
+            tool_search: true,
             image_generation: false,
             web_search: false,
         }
@@ -298,6 +299,7 @@ mod tests {
             provider.capabilities(),
             ProviderCapabilities {
                 namespace_tools: true,
+                tool_search: true,
                 image_generation: false,
                 web_search: false,
             }

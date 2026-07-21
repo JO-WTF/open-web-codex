@@ -47,6 +47,7 @@ use crate::models_endpoint::OpenAiModelsEndpoint;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderCapabilities {
     pub namespace_tools: bool,
+    pub tool_search: bool,
     pub image_generation: bool,
     pub web_search: bool,
 }
@@ -55,6 +56,7 @@ impl Default for ProviderCapabilities {
     fn default() -> Self {
         Self {
             namespace_tools: true,
+            tool_search: true,
             image_generation: true,
             web_search: true,
         }
@@ -294,6 +296,7 @@ impl ModelProvider for ConfiguredModelProvider {
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities {
             namespace_tools: true,
+            tool_search: !self.info.is_chat_wire_api(),
             image_generation: self.info.supports_image_generation,
             web_search: self.info.supports_web_search,
         }
@@ -628,6 +631,7 @@ mod tests {
             provider.capabilities(),
             ProviderCapabilities {
                 namespace_tools: true,
+                tool_search: false,
                 image_generation: false,
                 web_search: false,
             }
@@ -647,7 +651,15 @@ mod tests {
             /*auth_manager*/ None,
         );
 
-        assert_eq!(provider.capabilities(), ProviderCapabilities::default());
+        assert_eq!(
+            provider.capabilities(),
+            ProviderCapabilities {
+                namespace_tools: true,
+                tool_search: false,
+                image_generation: true,
+                web_search: true,
+            }
+        );
     }
 
     #[test]

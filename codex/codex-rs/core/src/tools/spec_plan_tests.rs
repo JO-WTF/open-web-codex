@@ -8,6 +8,7 @@ use codex_mcp::ToolInfo;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::openai_models::ApplyPatchToolType;
@@ -31,6 +32,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 use crate::config::CurrentTimeReminderConfig;
+use crate::mcp_tool_exposure::build_mcp_tool_runtimes;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
@@ -269,6 +271,19 @@ fn use_bedrock_provider(turn: &mut TurnContext) {
     let provider_info = ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None);
     update_config(turn, |config| {
         config.model_provider_id = AMAZON_BEDROCK_PROVIDER_ID.to_string();
+        config.model_provider = provider_info.clone();
+    });
+    turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
+}
+
+fn use_chat_provider(turn: &mut TurnContext) {
+    let provider_info = ModelProviderInfo {
+        name: "third-party chat".to_string(),
+        wire_api: WireApi::Chat,
+        ..ModelProviderInfo::default()
+    };
+    update_config(turn, |config| {
+        config.model_provider_id = "third-party-chat".to_string();
         config.model_provider = provider_info.clone();
     });
     turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
@@ -815,6 +830,46 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
         "tool_search",
         &ToolName::namespaced("mcp__searchable", "lookup").to_string(),
     ]);
+}
+
+#[tokio::test]
+async fn chat_provider_keeps_mcp_tools_direct_when_model_supports_tool_search() {
+    let (_session, mut turn) = make_session_and_context().await;
+    turn.model_info.supports_search_tool = true;
+    use_chat_provider(&mut turn);
+
+    let search_tool_enabled = super::search_tool_enabled(&turn);
+    assert!(!search_tool_enabled);
+    let tools = vec![mcp_tool("maps", "mcp__maps", "lookup")];
+    let tool_runtimes = build_mcp_tool_runtimes(
+        &tools,
+        /*connectors*/ None,
+        &turn.config,
+        search_tool_enabled,
+    );
+    let turn = Arc::new(turn);
+    let step_context = StepContext::for_test(Arc::clone(&turn));
+    let router = ToolRouter::from_context(
+        step_context.as_ref(),
+        ToolRouterParams {
+            tool_runtimes,
+            tool_suggest_candidates: None,
+            extension_tool_executors: Vec::new(),
+            dynamic_tools: &[],
+        },
+        &Default::default(),
+    );
+    let plan = ToolPlanProbe::from_router(router);
+
+    assert_eq!(
+        plan.namespace_function_names("mcp__maps"),
+        &["lookup".to_string()]
+    );
+    plan.assert_visible_lacks(&["tool_search"]);
+    assert_eq!(
+        plan.exposure(&ToolName::namespaced("mcp__maps", "lookup").to_string()),
+        ToolExposure::Direct
+    );
 }
 
 #[tokio::test]
