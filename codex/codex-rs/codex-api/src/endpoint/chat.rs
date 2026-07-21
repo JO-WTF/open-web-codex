@@ -1,5 +1,5 @@
 use crate::auth::SharedAuthProvider;
-use crate::common::ChatCompletionsApiRequest;
+use crate::chat_translate::ChatCompletionsApiRequest;
 use crate::common::ResponseStream;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;

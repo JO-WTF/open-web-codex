@@ -15,9 +15,11 @@
 //! agent loop runs identically regardless of wire protocol because both paths
 //! produce the same [`crate::common::ResponseEvent`] stream.
 
+use crate::common::ResponsesApiRequest;
 use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -106,8 +108,110 @@ pub struct ChatToolFunction {
     pub parameters: Value,
 }
 
+/// Request body for the OpenAI-compatible Chat Completions API
+/// (`POST {base_url}/chat/completions`).
+///
+/// This is the wire payload used by third-party providers configured with
+/// `wire_api = "chat"`. It is assembled from the same Responses-shaped session
+/// state via [`responses_request_to_chat_completions_request`]. Responses-only
+/// fields (`store`, `include`, `previous_response_id`, server-side reasoning)
+/// are intentionally absent because they have no Chat Completions equivalent.
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct ChatCompletionsApiRequest {
+    pub model: String,
+    pub messages: Vec<ChatMessage>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<ChatTool>,
+    /// `"auto"` by default; `"none"` when no compatible tool is exposed.
+    pub tool_choice: String,
+    pub stream: bool,
+    /// Requested alongside `stream: true` so the final chunk carries token
+    /// usage. Many providers only return usage when this is set.
+    pub stream_options: ChatStreamOptions,
+    /// Optional reasoning-effort hint understood by OpenAI o-series and
+    /// DeepSeek-R1 style models. Omitted from the body when `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ChatReasoningEffort>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+}
+
+/// `stream_options` object controlling usage reporting during streaming.
+#[derive(Debug, Default, Serialize, Clone, PartialEq)]
+pub struct ChatStreamOptions {
+    /// Include token usage in the terminal streamed chunk.
+    pub include_usage: bool,
+}
+
 fn skip_false(value: &bool) -> bool {
     !value
+}
+
+/// Converts an owned Responses request into the third-party Chat Completions
+/// wire request. Core owns prompt assembly and request-scoped metadata; this
+/// module owns every lossy wire-format decision.
+pub fn responses_request_to_chat_completions_request(
+    request: ResponsesApiRequest,
+) -> ChatCompletionsApiRequest {
+    let tools = request
+        .tools
+        .as_deref()
+        .map(responses_tools_to_chat_tools)
+        .unwrap_or_default();
+    let tool_choice = if tools.is_empty() {
+        "none".to_string()
+    } else {
+        request.tool_choice
+    };
+    let reasoning_effort = request
+        .reasoning
+        .and_then(|reasoning| reasoning.effort)
+        .and_then(chat_reasoning_effort);
+
+    ChatCompletionsApiRequest {
+        model: request.model,
+        messages: responses_input_to_chat_messages(&request.input, &request.instructions),
+        tools,
+        tool_choice,
+        stream: true,
+        stream_options: ChatStreamOptions {
+            include_usage: true,
+        },
+        reasoning_effort,
+        max_tokens: None,
+        temperature: None,
+        top_p: None,
+        service_tier: request.service_tier,
+        user: None,
+    }
+}
+
+fn chat_reasoning_effort(effort: ReasoningEffortConfig) -> Option<ChatReasoningEffort> {
+    match effort {
+        ReasoningEffortConfig::None => None,
+        ReasoningEffortConfig::Minimal | ReasoningEffortConfig::Low => {
+            Some(ChatReasoningEffort::Low)
+        }
+        ReasoningEffortConfig::Medium => Some(ChatReasoningEffort::Medium),
+        ReasoningEffortConfig::High
+        | ReasoningEffortConfig::XHigh
+        | ReasoningEffortConfig::Max
+        | ReasoningEffortConfig::Ultra => Some(ChatReasoningEffort::High),
+        ReasoningEffortConfig::Custom(value) => match value.as_str() {
+            "low" => Some(ChatReasoningEffort::Low),
+            "medium" => Some(ChatReasoningEffort::Medium),
+            "high" => Some(ChatReasoningEffort::High),
+            _ => None,
+        },
+    }
 }
 
 /// Converts a Responses-style tool spec list (`create_tools_json_for_responses_api`

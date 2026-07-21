@@ -1,7 +1,10 @@
 use super::*;
+use crate::common::Reasoning;
+use crate::common::ResponsesApiRequest;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use serde_json::json;
 
 fn user_msg(text: &str) -> ResponseItem {
@@ -396,4 +399,66 @@ fn strict_false_is_omitted_from_serialized_tool() {
     let chat_tools = responses_tools_to_chat_tools(&[value]);
     let serialized = serde_json::to_value(&chat_tools[0]).unwrap();
     assert!(serialized["function"].get("strict").is_none());
+}
+
+fn responses_request_with_tools(tools: Option<Vec<serde_json::Value>>) -> ResponsesApiRequest {
+    ResponsesApiRequest {
+        model: "third-party-reasoning-model".to_string(),
+        instructions: "be concise".to_string(),
+        input: vec![user_msg("hello")],
+        tools,
+        tool_choice: "auto".to_string(),
+        parallel_tool_calls: true,
+        reasoning: Some(Reasoning {
+            effort: Some(ReasoningEffortConfig::Ultra),
+            summary: None,
+            context: None,
+        }),
+        store: false,
+        stream: true,
+        stream_options: None,
+        include: Vec::new(),
+        service_tier: Some("priority".to_string()),
+        prompt_cache_key: None,
+        text: None,
+        client_metadata: None,
+    }
+}
+
+#[test]
+fn responses_request_conversion_owns_chat_wire_policy() {
+    let request = responses_request_with_tools(Some(vec![json!({
+        "type": "function",
+        "name": "lookup",
+        "description": "Look something up",
+        "parameters": {"type": "object"}
+    })]));
+
+    let chat = responses_request_to_chat_completions_request(request);
+
+    assert_eq!(chat.model, "third-party-reasoning-model");
+    assert_eq!(chat.tool_choice, "auto");
+    assert_eq!(chat.tools.len(), 1);
+    assert_eq!(chat.reasoning_effort, Some(ChatReasoningEffort::High));
+    assert_eq!(chat.service_tier.as_deref(), Some("priority"));
+    assert!(chat.stream);
+    assert!(chat.stream_options.include_usage);
+    assert!(matches!(
+        chat.messages.first(),
+        Some(ChatMessage::Text { role, content })
+            if role == "system" && content == "be concise"
+    ));
+}
+
+#[test]
+fn responses_request_conversion_disables_tool_choice_without_chat_safe_tools() {
+    let request = responses_request_with_tools(Some(vec![json!({
+        "type": "custom",
+        "name": "freeform"
+    })]));
+
+    let chat = responses_request_to_chat_completions_request(request);
+
+    assert!(chat.tools.is_empty());
+    assert_eq!(chat.tool_choice, "none");
 }

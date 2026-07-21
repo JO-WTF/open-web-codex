@@ -36,8 +36,6 @@ use codex_api::AuthProvider;
 use codex_api::ChatCompletionsApiRequest;
 use codex_api::ChatCompletionsClient as ApiChatCompletionsClient;
 use codex_api::ChatCompletionsOptions as ApiChatCompletionsOptions;
-use codex_api::ChatReasoningEffort;
-use codex_api::ChatStreamOptions;
 use codex_api::CompactClient as ApiCompactClient;
 use codex_api::CompactionInput as ApiCompactionInput;
 use codex_api::Compression;
@@ -68,8 +66,7 @@ use codex_api::auth_header_telemetry;
 use codex_api::build_session_headers;
 use codex_api::create_text_param_for_request;
 use codex_api::response_create_client_metadata;
-use codex_api::responses_input_to_chat_messages;
-use codex_api::responses_tools_to_chat_tools;
+use codex_api::responses_request_to_chat_completions_request;
 use codex_http_client::ClientRouteClass;
 use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
@@ -208,26 +205,6 @@ fn session_telemetry_for_chat_request(
         request.service_tier.as_deref(),
         None::<&ReasoningEffortConfig>,
     )
-}
-
-fn chat_reasoning_effort(effort: ReasoningEffortConfig) -> Option<ChatReasoningEffort> {
-    match effort {
-        ReasoningEffortConfig::None => None,
-        ReasoningEffortConfig::Minimal | ReasoningEffortConfig::Low => {
-            Some(ChatReasoningEffort::Low)
-        }
-        ReasoningEffortConfig::Medium => Some(ChatReasoningEffort::Medium),
-        ReasoningEffortConfig::High
-        | ReasoningEffortConfig::XHigh
-        | ReasoningEffortConfig::Max
-        | ReasoningEffortConfig::Ultra => Some(ChatReasoningEffort::High),
-        ReasoningEffortConfig::Custom(value) => match value.as_str() {
-            "low" => Some(ChatReasoningEffort::Low),
-            "medium" => Some(ChatReasoningEffort::Medium),
-            "high" => Some(ChatReasoningEffort::High),
-            _ => None,
-        },
-    }
 }
 
 /// Session-scoped state shared by all [`ModelClient`] clones.
@@ -946,64 +923,6 @@ impl ModelClient {
         Ok(request)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn build_chat_completions_request(
-        &self,
-        provider: &codex_api::Provider,
-        prompt: &Prompt,
-        model_info: &ModelInfo,
-        effort: Option<ReasoningEffortConfig>,
-        summary: ReasoningSummaryConfig,
-        service_tier: Option<String>,
-        responses_metadata: &CodexResponsesMetadata,
-    ) -> Result<ChatCompletionsApiRequest> {
-        let mut responses_request = self.build_responses_request(
-            provider,
-            prompt,
-            model_info,
-            effort,
-            summary,
-            service_tier,
-            responses_metadata,
-        )?;
-        self.prepare_response_items_for_request(
-            &mut responses_request.input,
-            responses_request.store,
-        );
-        let tools = responses_request
-            .tools
-            .as_deref()
-            .map(responses_tools_to_chat_tools)
-            .unwrap_or_default();
-        let tool_choice = if tools.is_empty() {
-            "none".to_string()
-        } else {
-            responses_request.tool_choice
-        };
-        Ok(ChatCompletionsApiRequest {
-            model: responses_request.model,
-            messages: responses_input_to_chat_messages(
-                &responses_request.input,
-                &responses_request.instructions,
-            ),
-            tools,
-            tool_choice,
-            stream: true,
-            stream_options: ChatStreamOptions {
-                include_usage: true,
-            },
-            reasoning_effort: responses_request
-                .reasoning
-                .and_then(|reasoning| reasoning.effort)
-                .and_then(chat_reasoning_effort),
-            max_tokens: None,
-            temperature: None,
-            top_p: None,
-            service_tier: responses_request.service_tier,
-            user: None,
-        })
-    }
-
     fn prepare_response_items_for_request(&self, input: &mut [ResponseItem], store: bool) {
         for item in input.iter_mut() {
             if item.id().is_some_and(|id| !id.is_prefixed()) {
@@ -1664,7 +1583,7 @@ impl ModelClientSession {
             let mut options = self
                 .build_chat_completions_options(responses_metadata)
                 .await;
-            let request = self.client.build_chat_completions_request(
+            let mut responses_request = self.client.build_responses_request(
                 &client_setup.api_provider,
                 prompt,
                 model_info,
@@ -1673,6 +1592,10 @@ impl ModelClientSession {
                 service_tier.clone(),
                 responses_metadata,
             )?;
+            let store = responses_request.store;
+            self.client
+                .prepare_response_items_for_request(&mut responses_request.input, store);
+            let request = responses_request_to_chat_completions_request(responses_request);
             let request_session_telemetry =
                 session_telemetry_for_chat_request(session_telemetry, &request);
             let inference_trace_attempt = inference_trace.start_attempt();

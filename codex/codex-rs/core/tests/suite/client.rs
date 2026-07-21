@@ -1467,6 +1467,69 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
     send_request_with_provider(provider).await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chat_provider_uses_chat_completions_translation() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_raw(
+                    concat!(
+                        "data: {\"id\":\"chatcmpl-1\",\"model\":\"third-party-model\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n",
+                        "data: [DONE]\n\n"
+                    ),
+                    "text/event-stream",
+                ),
+        )
+        .mount(&server)
+        .await;
+    let provider = ModelProviderInfo {
+        name: "chat-provider".into(),
+        base_url: Some(format!("{}/v1", server.uri())),
+        env_key: None,
+        env_key_instructions: None,
+        experimental_bearer_token: None,
+        auth: None,
+        aws: None,
+        wire_api: WireApi::Chat,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: Some(0),
+        stream_max_retries: Some(0),
+        stream_idle_timeout_ms: Some(5_000),
+        websocket_connect_timeout_ms: None,
+        requires_openai_auth: false,
+        supports_websockets: false,
+        supports_web_search: false,
+        supports_image_generation: false,
+        models: Vec::new(),
+    };
+
+    send_request_with_provider(provider).await;
+
+    let requests = server.received_requests().await.expect("recorded requests");
+    assert_eq!(requests.len(), 1);
+    let request = &requests[0];
+    assert_eq!(request.url.path(), "/v1/chat/completions");
+    let body: serde_json::Value = serde_json::from_slice(&request.body).expect("JSON body");
+    assert_eq!(body["messages"][0]["role"], "system");
+    let user_message = body["messages"]
+        .as_array()
+        .expect("messages array")
+        .iter()
+        .find(|message| message["role"] == "user")
+        .expect("user message");
+    assert_eq!(user_message["content"], "hello");
+    assert_eq!(body["tool_choice"], "none");
+    assert_eq!(body["stream"], true);
+    assert_eq!(body["stream_options"]["include_usage"], true);
+    assert!(body.get("input").is_none());
+    assert!(body.get("instructions").is_none());
+}
+
 #[expect(clippy::unwrap_used)]
 async fn send_request_with_provider(provider: ModelProviderInfo) {
     let codex_home = TempDir::new().unwrap();
