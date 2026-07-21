@@ -140,7 +140,7 @@ M0-A 官方同步稳定（已完成当前 checkpoint）
 | ID | P/规模 | 状态 | 任务 | 验证 |
 | --- | --- | --- | --- | --- |
 | M0-A01 | P0/M | [x] | 将 CodexMonitor 与 `open-codex` 导入 monorepo | 新 clone 包含 `apps/web`、`codex` |
-| M0-A02 | P0/S | [x] | 建立 `openai/codex` 状态与 guarded sync 脚本 | 当前报告 0/0 且默认不改文件 |
+| M0-A02 | P0/S | [x] | 建立 `openai/codex` 状态与 guarded sync 脚本 | 当前识别到 206 个待集成提交，检查默认不改源码 |
 | M0-A03 | P0/S | [x] | 建立根 AGENTS、CI、架构与同步规则 | GitHub CI 通过 |
 | M0-A04 | P0/S | [x] | 将旧产品/计划文档改为 canonical 根文档入口 | 仓库内只有一套产品/里程碑事实 |
 | M0-A05 | P0/M | [x] | 审查 CodexMonitor Web 迁移边界并保留过渡实现 | ADR、Tauri boundary 与独立 server 结构存在 |
@@ -149,6 +149,11 @@ M0-A 官方同步稳定（已完成当前 checkpoint）
 | M0-A08 | P0/M | [x] | 将所有非生成 Codex 差异归类为 retain-core、upstreamed、move-out 或 drop，并维护可重放 seam 清单 | 每个差异有归属；每个 retain-core seam 有路径、原因、重放顺序、测试和删除条件 |
 | M0-A09 | P0/M | [x] | 重点重验 Provider Wire API、模型缓存和当前 Provider 传播 | codex-api、model-provider、models-manager、app-server model_list 和 TUI scoped tests 通过；真实 Manifest Smoke 和 Web contract check 通过 |
 | M0-A10 | P1/S | [-] | 固定首个兼容 Codex commit、Rust toolchain、target 和 binary digest | `.sync` 已固定 commit；兼容矩阵和 digest 待补 |
+
+当前官方 main 为 `0b175e6439a8`。相对已集成的 `1bbdb32789e1`，三方
+比较有 1,049 个纯上游路径、63 个纯本地路径和 56 个 diverged 路径；
+合并预演只有 5 个文本冲突，其中 1 个是生成文件。下一次同步必须通过
+guarded sync 分支接受上游结构，再只重放 patch map 中的六个 seam。
 
 M0-A07 拆分建议：
 
@@ -699,10 +704,11 @@ GET/POST/PATCH/DELETE /api/codex/profiles/:id/skills
 
 ### Batch 2：Profile Host 与持久审批最小闭环
 
-1. 完成 `M1-C01` 至 `M1-C07` 的最小纵向：每用户 Home、单主锁、进程生命周期、请求关联、Manifest 门禁。
-2. 增加 Profile/Capability/Approval/Audit migrations 和归属约束。
-3. 将命令、文件、权限和结构化输入请求先持久化再通知，使用 CAS 决策。
-4. 运行真实 Profile restart、Thread list/read/resume 与 Approval Smoke。
+1. 完成 `M1-C01` 至 `M1-C07` 的最小纵向：每用户 Home、单主锁、原生 app-server stdio 生命周期、请求关联、Manifest 门禁；用它替换 `RealCodexAdapter` 对 Tauri daemon 的依赖。
+2. 将 Provider CRUD 编排、Secret 注入和模型刷新从 `src-tauri/src/shared/codex_core.rs` 移入 Profile Host/provider service；Tauri 过渡适配器只能复用该服务。
+3. 增加 Profile/Capability/Approval/Audit migrations 和归属约束。
+4. 将命令、文件、权限和结构化输入请求先持久化再通知，使用 CAS 决策。
+5. 运行真实 Profile restart、Thread list/read/resume、Provider switch 与 Approval Smoke。
 
 **完成证据：** Host 重启恢复同一用户 Thread；另一用户无法访问 Profile/Thread/请求；过期请求不复用。
 

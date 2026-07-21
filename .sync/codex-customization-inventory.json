@@ -3,19 +3,19 @@
   "purpose": "Tracks the current official-tree comparison and convergence classification progress for codex/.",
   "comparison": {
     "upstreamRef": "codex-upstream/main",
-    "upstreamCommit": "1bbdb32789e1f79932df44941236ea3658f6e965",
+    "upstreamCommit": "0b175e6439a8608ba7726ee153fd8590619e8f34",
     "localTree": "HEAD:codex",
-    "observedAt": "2026-07-15T14:01:57Z",
-    "differenceCount": 111,
-    "addedLocally": 24,
-    "modified": 87,
-    "missingLocally": 0,
-    "upstreamOnly": 0,
-    "localOnly": 111,
-    "diverged": 0
+    "observedAt": "2026-07-21T15:38:40Z",
+    "differenceCount": 1168,
+    "addedLocally": 56,
+    "modified": 897,
+    "missingLocally": 215,
+    "upstreamOnly": 1049,
+    "localOnly": 63,
+    "diverged": 56
   },
   "progress": {
-    "state": "core-seams-replayed-and-validated",
+    "state": "upstream-update-analyzed-replay-pending",
     "classificationSource": "docs/custom-codex-patch-map.md",
     "classifiedRetainCore": [
       "provider-chat-transport",
@@ -26,8 +26,8 @@
       "capability-manifest"
     ],
     "sourceCandidates": {
-      "nonGeneratedLocalOnly": 75,
-      "upstreamFirstReplayCandidates": 0
+      "nonGeneratedLocalOnly": 42,
+      "upstreamFirstReplayCandidates": 46
     },
     "completed": [
       "Separated pending official updates from candidate local changes using the integrated upstream base.",
@@ -37,7 +37,8 @@
       "Added apps/web Profile Host provisioning before the transitional app-server spawn so Codex can return to official missing-CODEX_HOME validation semantics.",
       "Provisioned Profile Home from the native Platform Server startup path via apps/web/crates/profile-host.",
       "Restored codex/utils/home-dir to official missing-CODEX_HOME rejection semantics.",
-      "Synchronized the Codex subtree through official commit 1bbdb32789e1f79932df44941236ea3658f6e965 and replayed the documented core seams."
+      "Synchronized the Codex subtree through official commit 1bbdb32789e1f79932df44941236ea3658f6e965 and replayed the documented core seams.",
+      "Compared the local Codex tree with official commit 0b175e6439a8608ba7726ee153fd8590619e8f34; the three-way merge preview has five textual conflict paths, including one generated TypeScript file."
     ],
     "validation": {
       "format": "passed",
@@ -49,6 +50,6 @@
     },
     "validatedAgainstUpstream": "1bbdb32789e1f79932df44941236ea3658f6e965",
     "validatedAtCommit": "26329a12767414ec0a1b6d0f0c9c7c5a65147529",
-    "nextAction": "Complete Batch 1 manifest policy generation (M0-B03/B04) and Web bundle consumption while keeping codex/ differences classified."
+    "nextAction": "Create the guarded official sync branch, accept upstream structure first, replay only the six classified seams, regenerate derived artifacts, and run the Runtime/TUI/Web contract validation matrix."
   }
 }

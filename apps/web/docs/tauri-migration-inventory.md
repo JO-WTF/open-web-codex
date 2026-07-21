@@ -5,17 +5,42 @@
 | Item | Count |
 | --- | ---: |
 | Commands registered by `tauri::generate_handler!` | 125 |
-| Rust files containing the desktop backend | 95 |
-| Total files under `src-tauri` | 189 |
+| Rust files containing the desktop backend | 96 |
+| Total files under `src-tauri` | 190 |
 | Frontend files importing `@tauri-apps/*` | 60 |
 | Frontend `@tauri-apps/*` import occurrences | 115 |
-| Lines in `src/services/tauri.ts` | 1,196 |
-| Direct `invoke(` calls in `src/services/tauri.ts` | 55 |
+| Lines in `src/services/tauri.ts` | 1,212 |
+| Direct `invoke` calls in `src/services/tauri.ts` | 129 |
 | Lines in `src/services/events.ts` | 370 |
 | Desktop/mobile icon files | 53 |
 | Generated Apple project files | 32 |
 
 The command registry in `src-tauri/src/lib.rs` is the canonical source for the command count. Conditional real/stub command definitions are counted once at the registry boundary.
+
+## Current blocking chain
+
+Tauri cannot be deleted while the Platform Server's real adapter still proxies
+the Tauri daemon. The current dependency chain is:
+
+```text
+Browser compatibility services
+  -> raw /api/rpc and SSE Gateway
+  -> Platform RealCodexAdapter
+  -> Tauri daemon RPC
+  -> src-tauri shared Codex/Git/Workspace cores
+  -> Codex app-server and local Git
+```
+
+The removal path reverses that ownership. Native Profile Host, Git Runtime and
+platform DTO services become the source of truth first; Tauri becomes a thin
+compatibility client of those services; browser imports then move to
+`PlatformClient` and authenticated WebSocket events; desktop-only features and
+packaging are deleted last.
+
+The monorepo root CI does not yet enforce `check:tauri-boundary`, and the script
+currently assumes standalone `apps/web` Git paths. Make the guard prefix-aware
+and wire it into root CI before beginning broad extraction, so Tauri references
+can only decrease during the migration.
 
 ## Command Inventory
 
@@ -113,6 +138,24 @@ The command registry in `src-tauri/src/lib.rs` is the canonical source for the c
 | Desktop documentation | Local workspace, tray, updater, mobile and installer instructions | Rewrite for server deployment |
 
 ## Migration Worklist
+
+### Execution Order
+
+1. Implement native Profile Host app-server stdio transport, process registry,
+   request correlation, bounded event queue and Manifest handshake in platform
+   crates. Replace the daemon-backed `RealCodexAdapter`.
+2. Move Provider CRUD/Secret orchestration and model refresh from
+   `src-tauri/src/shared/codex_core.rs` into the Profile Host/provider service.
+   Keep Chat wire translation, Provider model semantics and cache isolation in
+   the retained Codex Runtime seams.
+3. Extract Repository/Worktree/Diff/Commit/Push behavior into `git-runtime` and
+   route Task/Run APIs through authorized platform DTOs.
+4. Replace `src/services/tauri.ts` and `src/services/events.ts` consumers with a
+   typed `PlatformClient` and authenticated WebSocket Event Store with cursor
+   replay. Tauri adapters call the same services until Web parity is proven.
+5. Delete dictation, native window/menu/tray/updater, local-path operations,
+   interactive PTY, Tailscale client management, mobile projects and desktop
+   release pipelines after the Web Beta stability gate.
 
 ### Extract And Reuse
 

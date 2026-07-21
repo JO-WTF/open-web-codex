@@ -6,28 +6,36 @@ requirements belong in `product-design.md`; planned work belongs in
 
 ## Snapshot
 
-Captured on 2026-07-15 from commit `26329a12767414ec0a1b6d0f0c9c7c5a65147529`:
+Observed on 2026-07-21 from source commit
+`e8db56a4c7735dff09c8e18ac4a439508830b588`:
 
 | Component | State |
 | --- | --- |
-| Codex subtree | synchronized through `openai/codex` `1bbdb32789e1f79932df44941236ea3658f6e965` |
-| Pending official commits | 0 according to `scripts/codex-upstream-status.sh` |
-| Local Codex seams vs official main | 111 local-only paths; 0 upstream-only and 0 diverged, classified in `docs/custom-codex-patch-map.md` |
+| Codex subtree | integrated through `openai/codex` `1bbdb32789e1f79932df44941236ea3658f6e965` |
+| Observed official main | `0b175e6439a8608ba7726ee153fd8590619e8f34`; 206 commits await integration |
+| Local Codex seams vs official main | 63 local-only and 56 diverged paths; 1,049 upstream-only paths await the guarded sync |
+| Local customization footprint vs integrated base | 119 paths: 67 production source, 18 focused tests, 31 generated artifacts and 3 docs/config paths |
 | Web platform | Axum/PostgreSQL prototype plus the earlier loopback Web MVP |
 
 ## Reproduced evidence
 
-- `scripts/codex-upstream-status.sh` reports `Status: synchronized`; the
-  customization status script reports 111 local-only paths and no pending
-  official or diverged paths.
+- `scripts/codex-upstream-status.sh` reports `Status: update available`; the
+  customization status script reports 1,168 tree differences split into 1,049
+  upstream-only, 63 local-only and 56 diverged paths.
+- A three-way merge preview reports five textual conflict paths. One is a
+  generated TypeScript file; the source conflicts are concentrated in Chat API,
+  Provider tool-policy tests and TUI Provider integration.
 - The locally built `codex app-server` completes `initialize` and returns
   `capabilityManifest`, `codexHome`, `platformFamily`, `platformOs` and
   `userAgent`.
 - The observed manifest contains 18 declarations, including
   `models.providers`.
-- `just fmt`, app-server Schema generation, app-server protocol, Chat transport,
-  Provider/model-manager, app-server model-list and TUI scoped tests pass.
-- The Web contract check and real `--require-manifest` app-server smoke pass.
+- The last complete validation against integrated upstream `1bbdb32789e1` was
+  recorded at commit `26329a12767414ec0a1b6d0f0c9c7c5a65147529`: `just fmt`,
+  app-server Schema generation, app-server protocol, Chat transport,
+  Provider/model-manager, app-server model-list, TUI scoped tests, the Web
+  contract check and the real `--require-manifest` app-server smoke passed.
+- No validation claim is made yet for the pending replay onto `0b175e6439a8`.
 - The platform source contains PostgreSQL migrations and API handlers for
   bootstrap/session, organization membership, project, Task, Run and persisted
   Run events.

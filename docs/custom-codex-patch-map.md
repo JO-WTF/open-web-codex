@@ -25,14 +25,17 @@ not a zero-diff Codex subtree.
 
 ## Current state
 
-The integrated base is `1bbdb32789e1`. The current comparison against
-`codex-upstream/main` contains 111 `local-only` paths and no pending official
-or diverged paths. All non-generated source candidates are classified, core
-seams have been replayed and validated, and the machine-readable evidence is
-in `.sync/codex-customization-inventory.json`.
+The integrated base is `1bbdb32789e1`. Official main is currently
+`0b175e6439a8`, 206 commits ahead. The current comparison contains 1,168 paths:
+1,049 `upstream-only`, 63 `local-only` and 56 `diverged`. The local customization
+itself is 119 paths relative to the integrated base: 67 production source, 18
+focused tests, 31 generated artifacts and 3 docs/config paths.
 
-The next convergence action is to complete Batch 1 (`M0-B03/B04` policy generation and
-Web bundle consumption) while keeping new `codex/` differences classified.
+All local behavior remains classified under the six retained seams below. A
+three-way preview finds five textual conflict paths; one is generated. The next
+convergence action is the guarded official sync followed by replay and validation
+of only these seams. Machine-readable evidence is in
+`.sync/codex-customization-inventory.json`.
 
 Use `scripts/codex-customization-status.sh` as the inventory input. It compares
 `HEAD:codex` directly with the current `codex-upstream/main` tree; this
@@ -63,8 +66,8 @@ The script separates the raw tree difference into:
 
 ## Current inventory classification
 
-The current comparison against `codex-upstream/main` contains 1,109 paths:
-995 `upstream-only`, 63 `local-only`, and 51 `diverged`. There are 180 official
+The current comparison against `codex-upstream/main` contains 1,168 paths:
+1,049 `upstream-only`, 63 `local-only`, and 56 `diverged`. There are 206 official
 commits pending integration. The table below classifies the product-specific
 retained seams; upstream-only and diverged paths must be resolved through the
 official sync workflow rather than treated as additional local seams. Generated
@@ -81,6 +84,42 @@ artifacts, tests, and snapshots follow their owning source seam.
 | `retain-core`: Provider propagation followers | `core/src/session/handlers.rs`, `exec/src/lib.rs`, `login/src/auth_env_telemetry.rs`, `app-server` remote-thread/turn tests, and `core` stream/header tests | These changes propagate the selected Provider, preserve Provider-scoped cache test isolation, or satisfy the expanded Provider metadata shape. They follow the owning Provider seam and are not independent feature surfaces. |
 | `move-out` | `utils/home-dir/src/lib.rs` missing-`CODEX_HOME` auto-creation | Profile creation belongs to the Platform Host. `apps/web/crates/profile-host::ensure_profile_home` provisions the directory before transitional Tauri and native Platform Server spawn; `utils/home-dir` has returned to official missing-`CODEX_HOME` rejection semantics. |
 | Derived artifacts and tests | Schema, TypeScript, fixtures, snapshots, lockfiles, and focused tests not named above | They follow the owning source seam. Regenerate artifacts and update tests/snapshots through their normal build/test commands; do not classify or replay them independently. |
+
+## Current replay analysis
+
+The upstream update has five textual conflict paths:
+
+- `app-server-protocol/schema/typescript/ClientRequest.ts` is generated; take
+  upstream protocol structure and regenerate it after source replay.
+- `codex-api/src/common.rs` owns Chat request wire types; retain only the Chat
+  transport additions after accepting upstream structure.
+- `core/src/tools/spec_plan_tests.rs` follows Provider tool-capability policy;
+  retain the Chat-safe tool cases on top of the upstream tests.
+- `tui/src/app_event.rs` and `tui/src/app_server_session.rs` are TUI attachment
+  points; take upstream orchestration first and reattach isolated Provider
+  events and Provider API calls.
+
+The upstream tree still rejects `wire_api = "chat"`, does not expose
+`modelProvider/list`, does not provide the custom TUI Provider management flow,
+does not materialize legacy raw tool call/output pairs, and has no equivalent
+Capability Manifest. Those seams cannot be dropped without losing existing
+behavior. Upstream already owns thread-level Provider selection and
+`modelProvider/capabilities/read`; replay must reuse those APIs rather than add
+parallel variants.
+
+The highest-value source convergence after the sync is to move Chat request
+construction and Chat streaming helpers out of the high-churn
+`core/src/client.rs` into `codex-api` or another Provider-specific module. Core
+must retain only transport selection and shared retry/telemetry hooks. This is a
+code-location reduction, not a behavior removal, and remains gated by the
+existing interrupted-stream, tool-call, namespace/MCP and credential tests.
+
+Provider CRUD, Secret injection, Profile lifecycle, authorization and browser
+DTO adaptation do not belong in `codex/`. The current transitional implementation
+under `apps/web/src-tauri/src/shared/codex_core.rs` must move to the native
+Profile Host/provider service. That service should call the retained typed
+app-server Provider API and controlled config methods; the Tauri adapter may call
+the same service during migration but must not remain its owner.
 
 ### Third-party Chat tool policy
 

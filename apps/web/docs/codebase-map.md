@@ -9,18 +9,26 @@ Related docs:
 
 ## Start Here: How Changes Flow
 
-For backend behavior, follow this path in order:
+For production Web/platform behavior, follow this path in order:
 
-1. Frontend callsite: `src/features/**` hooks/components
-2. Frontend IPC API: `src/services/tauri.ts`
-3. Tauri command registration: `src-tauri/src/lib.rs` (`invoke_handler`)
-4. App adapter: `src-tauri/src/{codex,workspaces,git,files,settings,prompts}/*`
-5. Shared core source of truth: `src-tauri/src/shared/*`
-6. Daemon RPC method parity: `src-tauri/src/bin/codex_monitor_daemon/rpc.rs`
-7. Daemon state/wiring implementation: `src-tauri/src/bin/codex_monitor_daemon.rs`
-8. Standalone daemon lifecycle CLI: `src-tauri/src/bin/codex_monitor_daemonctl.rs`
+1. Frontend callsite: `src/features/**` hooks/components.
+2. Typed browser client under `src/services`, using platform resource DTOs.
+3. Authenticated HTTP/WebSocket routes under `server/`.
+4. Reusable Profile Host, Codex adapter, persistence and Git behavior under
+   `crates/`.
+5. Codex app-server through the versioned internal Host contract.
 
-If a behavior must work in both app and daemon, implement it in `src-tauri/src/shared/*` first.
+The `src-tauri` tree is a migration source and compatibility runtime, not the
+owner of new production behavior. When an existing desktop behavior must be
+fixed during migration, keep its current parity path aligned:
+
+1. `src/services/tauri.ts` compatibility call.
+2. `src-tauri/src/lib.rs` command registration and thin app adapter.
+3. Existing `src-tauri/src/shared/*` migration core.
+4. Daemon RPC parity under `src-tauri/src/bin/codex_monitor_daemon/rpc*`.
+
+New cross-runtime behavior belongs in platform crates first. Tauri and daemon
+adapters may call those crates while compatibility is required.
 
 ## If You Need X, Edit Y
 
@@ -112,9 +120,10 @@ Use TS/Vite aliases for refactor-safe imports:
 
 When adding a new method, keep method names and payload shape aligned with `src/services/tauri.ts` and app commands in `src-tauri/src/lib.rs`.
 
-## Shared Cores (Source of Truth)
+## Transitional Shared Cores (Migration Sources)
 
-All cross-runtime domain behavior belongs in `src-tauri/src/shared/*`:
+Existing cross-runtime desktop behavior is concentrated in
+`src-tauri/src/shared/*` and should be extracted into platform crates by domain:
 
 - Codex threads/approvals/account/skills/config: `src-tauri/src/shared/codex_core.rs`
 - Codex helper commands: `src-tauri/src/shared/codex_aux_core.rs`
