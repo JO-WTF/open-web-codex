@@ -113,11 +113,12 @@ Responses request preparation, Provider auth/retry/telemetry hooks and the
 tool-call and namespace/MCP tests.
 
 Provider CRUD, Secret injection, Profile lifecycle, authorization and browser
-DTO adaptation do not belong in `codex/`. The current transitional implementation
-under `apps/web/src-tauri/src/shared/codex_core.rs` must move to the native
-Profile Host/provider service. That service should call the retained typed
-app-server Provider API and controlled config methods; the Tauri adapter may call
-the same service during migration but must not remain its owner.
+DTO adaptation do not belong in `codex/`. Provider CRUD, controlled config
+writes, model refresh normalization and browser DTOs now live in
+`apps/web/crates/provider-service` and typed Server routes. The service calls the
+retained app-server Provider API; Tauri is a compatibility adapter over the same
+service. Direct credentials remain a transitional private Profile-config seam
+until the platform Secret Provider injects them into the owned Host process.
 
 ### Third-party Chat tool policy
 

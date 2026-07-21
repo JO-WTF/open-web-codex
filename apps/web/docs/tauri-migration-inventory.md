@@ -27,7 +27,7 @@ The remaining compatibility chain is:
 Browser compatibility services
   -> raw /api/rpc and SSE Gateway
   -> transitional platform RPC adapter and Tauri compatibility commands
-  -> src-tauri shared Provider/Git/Workspace cores
+  -> typed Provider service; src-tauri shared Git/Workspace cores
   -> native Profile Host for Codex; src-tauri for remaining local Git/desktop behavior
 ```
 
@@ -146,16 +146,19 @@ can only decrease during the migration.
    platform crates. Replace the daemon-backed `RealCodexAdapter`. A durable
    multi-Profile registry and database lease remain part of the next platform
    slice.
-2. Move Provider CRUD/Secret orchestration and model refresh from
-   `src-tauri/src/shared/codex_core.rs` into the Profile Host/provider service.
-   Keep Chat wire translation, Provider model semantics and cache isolation in
-   the retained Codex Runtime seams.
-3. Extract Repository/Worktree/Diff/Commit/Push behavior into `git-runtime` and
+2. [x] Move Provider CRUD, controlled config writes and model refresh from
+   `src-tauri/src/shared/codex_core.rs` into `crates/provider-service`; expose
+   authenticated typed routes and make Tauri call the same service. Keep Chat
+   wire translation, Provider model semantics and cache isolation in Codex.
+3. Move direct Provider credentials from the transitional private Profile
+   config into an encrypted platform Secret Provider and inject only into the
+   owned Profile Host process environment.
+4. Extract Repository/Worktree/Diff/Commit/Push behavior into `git-runtime` and
    route Task/Run APIs through authorized platform DTOs.
-4. Replace `src/services/tauri.ts` and `src/services/events.ts` consumers with a
+5. Replace `src/services/tauri.ts` and `src/services/events.ts` consumers with a
    typed `PlatformClient` and authenticated WebSocket Event Store with cursor
    replay. Tauri adapters call the same services until Web parity is proven.
-5. Delete dictation, native window/menu/tray/updater, local-path operations,
+6. Delete dictation, native window/menu/tray/updater, local-path operations,
    interactive PTY, Tailscale client management, mobile projects and desktop
    release pipelines after the Web Beta stability gate.
 

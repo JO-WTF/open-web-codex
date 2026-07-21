@@ -7,15 +7,15 @@ requirements belong in `product-design.md`; planned work belongs in
 ## Snapshot
 
 Observed on 2026-07-21 from source commit
-`f007589c6c08b561ddb4996661c515772024405b`:
+`4cfec57157da3bb1811ba83f793f21845485ca5d`:
 
 | Component | State |
 | --- | --- |
-| Codex subtree | integrated through `openai/codex` `af71774d2645ec900cccf2a40d186a56c7a42f71` |
-| Observed official main | `af71774d2645ec900cccf2a40d186a56c7a42f71`; no commit awaits integration |
+| Codex subtree | integrated through `openai/codex` `51200321eb7b862a29ffceaba8b19db1934a9b38` |
+| Observed official main | `51200321eb7b862a29ffceaba8b19db1934a9b38`; no commit awaits integration |
 | Local Codex seams vs official main | 123 local-only paths: 25 added and 98 modified; no upstream-only, diverged, or missing local paths |
 | Local customization footprint | six retained Runtime/TUI seams, one temporary upstreamed fix, derived artifacts and focused tests |
-| Web platform | Axum/PostgreSQL prototype plus the earlier loopback Web MVP |
+| Web platform | Axum/PostgreSQL prototype, native Profile Host and typed Provider service/routes plus the remaining loopback Web MVP surfaces |
 
 ## Reproduced evidence
 
@@ -41,6 +41,10 @@ Observed on 2026-07-21 from source commit
 - The platform source contains PostgreSQL migrations and API handlers for
   bootstrap/session, organization membership, project, Task, Run and persisted
   Run events.
+- The native Profile Host real-binary smoke covers an offline Turn, restart and
+  Thread resume/read. A second real-binary Provider smoke covers two custom
+  Providers, forced model refresh, switching, cache isolation and omission of
+  direct credentials from returned catalogs.
 
 The successful checks prove only the surfaces named above. They do not prove
 multi-user isolation, durable Profile recovery, Runner isolation or production
@@ -64,7 +68,7 @@ security.
 | MCP | config degraded; OAuth/elicitation unsupported | status listing is declared; Web-safe CRUD, reload and lifecycle validation are pending |
 | Tools discovery | declared unsupported | do not expose a platform fallback catalog |
 | Structured reply cards / map cards | declared unsupported | no generated card contract, card Artifact store, renderer gate or real app-server smoke exists |
-| Provider/model management | declared supported by the checked-in Runtime | `models.providers`, `modelProvider/list`, controlled Profile config writes, provider-scoped refresh, model selection and context-window persistence are wired and covered by scoped Runtime/TUI tests; real credential-isolation smoke remains required for release promotion |
+| Provider/model management | declared supported by the checked-in Runtime | `models.providers`, `modelProvider/list`, controlled Profile config writes, provider-scoped refresh, model selection and context-window persistence are wired; scoped Runtime/TUI tests and a real two-Provider switch/refresh/cache-isolation smoke pass. Turn-level Provider propagation and encrypted platform Secret injection remain release gates |
 
 ## Web platform assessment
 
@@ -74,9 +78,9 @@ security.
 | Persistence | PostgreSQL migrations cover users/sessions, organizations/memberships, projects, tasks, runs and versioned run-event projections with monotonic replay sequence | Profiles, Workspaces, approvals, leases, audit, artifacts, jobs, retention and complete constraints are missing |
 | Authentication | bootstrap, password session creation and auth extractor exist | HttpOnly-only session flow, CSRF, logout/revocation, rate limiting and complete tests are missing |
 | Authorization | membership checks exist on part of the organization surface | centralized resource/action RBAC and cross-user denial matrix are missing |
-| Codex bridge | Fake/Real adapter and event fan-out exist; Real now uses the native `profile-host` JSONL connection with private Profile layout, single-owner lock, request correlation/timeouts, bounded events and negotiated Manifest gating | the server still has a transitional single-Profile/single-Workspace composition and internal raw `rpc`; durable Profile registry/ownership, typed operations, persistent approvals and authenticated browser subscriptions remain incomplete |
+| Codex bridge | Fake/Real adapter and event fan-out exist; Real uses the native `profile-host` JSONL connection. Provider CRUD/model refresh use a reusable typed service and authenticated `/api/providers` routes; Tauri compatibility calls the same service | the server still has a transitional single-Profile/single-Workspace composition and raw `rpc` for other legacy domains; durable Profile registry/ownership, encrypted Secret injection, typed Thread/Turn operations, persistent approvals and authenticated browser subscriptions remain incomplete |
 | Task/Run | CRUD/start/cancel/message, safe Item/Delta projection, monotonic cursor replay, Thread-history reconciliation and a real Profile restart/resume/read smoke exist | worktree provisioning, multi-user Profile routing, idempotent scheduler, approvals and authenticated subscriptions remain incomplete |
-| Browser | loopback MVP can connect workspace, start Thread and send text | it still targets the local preview Gateway and accepts server paths; it is not the authenticated multi-user product UI |
+| Browser | loopback MVP can connect workspace, start Thread and send text; Provider catalog/write flows use typed authenticated platform resources rather than raw RPC | other flows still target the local preview Gateway and accept server paths; this is not yet the authenticated multi-user product UI |
 
 ## Immediate capability gates
 
