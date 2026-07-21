@@ -31,10 +31,6 @@ type Props = {
   onRemoveWorkspace: (workspaceId: string) => void;
 };
 
-function compactThreadId(id: string): string {
-  return id.length > 8 ? `${id.slice(0, 8)}…` : id;
-}
-
 export default function Workspaces({
   workspaces,
   activeId,
@@ -183,7 +179,6 @@ export default function Workspaces({
                       <MessageSquare size={12} className="web-ws-thread-icon" />
                     </span>
                     <span className="web-ws-thread-label">{t.label}</span>
-                    <span className="web-ws-thread-time" title={t.id}>{compactThreadId(t.id)}</span>
                     <button
                       type="button"
                       className="web-ws-thread-archive"

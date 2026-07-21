@@ -60,6 +60,7 @@ type ThreadInfo = {
   updatedAt: number;
   turnCount?: number;
   status?: string;
+  optimistic?: boolean;
 };
 
 function parseThreadStatus(value: unknown): string {
@@ -316,6 +317,7 @@ export default function WebApp() {
   const threadHydrationSequence = useRef(0);
   const recentAppServerEvents = useRef<Map<string, number>>(new Map());
   const pendingApprovalsByThread = useRef<Map<string, LogEntry[]>>(new Map());
+  const refreshThreadsRef = useRef<((workspaceId?: string) => Promise<void>) | null>(null);
   const activeThreadIdRef = useRef(activeThreadId);
   activeThreadIdRef.current = activeThreadId;
   const appendLog = useCallback(
@@ -343,6 +345,17 @@ export default function WebApp() {
 
       const eventThreadId = getAppServerThreadId(event);
       if (eventThreadId && event.workspace_id) {
+        if (method === "thread/name/updated") {
+          const rawName = params.threadName ?? params.thread_name;
+          const label = typeof rawName === "string" && rawName.trim()
+            ? rawName.trim()
+            : "Thread";
+          setThreadsByWorkspace((previous) => ({
+            ...previous,
+            [event.workspace_id]: (previous[event.workspace_id] ?? []).map((thread) =>
+              thread.id === eventThreadId ? { ...thread, label, optimistic: false } : thread),
+          }));
+        }
         const nextStatus = method === "turn/started"
           ? "running"
           : method === "turn/completed" || method === "thread/closed"
@@ -434,6 +447,7 @@ export default function WebApp() {
           setActiveTurnId(null);
           setStopping(false);
           interruptRequestTurnId.current = null;
+          void refreshThreadsRef.current?.(event.workspace_id);
           setMessages((previous) => previous
             .filter((entry) => entry.kind !== "connection"
               && !(entry.level === "system" && entry.text === "Thinking...")
@@ -1194,17 +1208,19 @@ export default function WebApp() {
             updatedAt: parseThreadUpdatedAt(t.updatedAt ?? t.updated_at),
             turnCount: typeof t.turnCount === "number" ? t.turnCount : undefined,
             status: parseThreadStatus(t.status),
+            optimistic: false,
           }));
           // Newly started threads are not listed until their first persisted turn.
           // Preserve the optimistic entry until Runtime returns the canonical row.
           const pending = (prev[wid] ?? []).filter(
-            (thread) => thread.label === "New thread" && !received.some((next) => next.id === thread.id),
+            (thread) => thread.optimistic && !received.some((next) => next.id === thread.id),
           );
           return { ...prev, [wid]: [...pending, ...received] };
         });
       }
     } catch { /* not fatal */ }
   }, [activeWorkspaceId, client, workspaces]);
+  refreshThreadsRef.current = refreshThreads;
 
   const connectWorkspace = useCallback(async (id: string) => {
     if (!activeWorkspaceId || activeWorkspaceId !== id) {
@@ -1292,9 +1308,9 @@ export default function WebApp() {
   }, [activeWorkspaceId, appendLog, client, refreshWorkspaces, workspaces]);
 
 
- const startThread = useCallback(async (workspaceId?: string) => {
+ const startThread = useCallback(async (workspaceId?: string): Promise<string | null> => {
    const wid = workspaceId ?? activeWorkspaceId;
-   if (!wid) return;
+   if (!wid) return null;
    setBusy(true);
    try {
      await connectWorkspace(wid);
@@ -1326,14 +1342,16 @@ export default function WebApp() {
          }
          return {
            ...previous,
-           [wid]: [{ id: tid, label: "New thread", updatedAt: Date.now() }, ...existing],
+           [wid]: [{ id: tid, label: "Thread", updatedAt: Date.now(), optimistic: true }, ...existing],
          };
        });
      }
      await refreshThreads(wid);
      appendLog("info", `Started thread${tid ? ` ${tid}` : ""}.`);
+     return tid;
    } catch (error) {
      appendLog("error", error instanceof Error ? error.message : String(error));
+     return null;
    } finally {
      setBusy(false);
    }
@@ -1362,8 +1380,12 @@ export default function WebApp() {
     }
   }, [activeThreadId, appendLog, client, threadsByWorkspace]);
 
-  const sendText = useCallback(async (text: string) => {
-    if (!activeWorkspaceId || !activeThreadId || !text.trim()) return false;
+  const sendText = useCallback(async (
+    text: string,
+    targetWorkspaceId = activeWorkspaceId,
+    targetThreadId = activeThreadId,
+  ) => {
+    if (!targetWorkspaceId || !targetThreadId || !text.trim()) return false;
     appendLog("user", text);
     setThinking(true);
     setTurnStartedAt(Date.now());
@@ -1372,7 +1394,7 @@ export default function WebApp() {
     setBusy(true);
     try {
       const selectedModel = providerModels.find((model) => model.id === selectedProviderModelId);
-      const response = await client.sendUserMessage(activeWorkspaceId, activeThreadId, text, selectedModel?.model ?? selectedProviderModelId);
+      const response = await client.sendUserMessage(targetWorkspaceId, targetThreadId, text, selectedModel?.model ?? selectedProviderModelId);
       const payload = unwrapWebRpcResult(response);
       const record = payload && typeof payload === "object"
         ? payload as Record<string, unknown>
@@ -1397,7 +1419,14 @@ export default function WebApp() {
 
   const sendMessage = useCallback(async () => {
     const text = draft.trim();
-    if (!activeWorkspaceId || !activeThreadId || !text) return;
+    if (!activeWorkspaceId || !text) return;
+    if (!activeThreadId) {
+      const threadId = await startThread(activeWorkspaceId);
+      if (!threadId) return;
+      setDraft("");
+      await sendText(text, activeWorkspaceId, threadId);
+      return;
+    }
     setDraft("");
     const running = thinking
       || threadStatus === "running"
@@ -1408,7 +1437,7 @@ export default function WebApp() {
       return;
     }
     await sendText(text);
-  }, [activeThreadId, activeWorkspaceId, draft, sendText, thinking, threadStatus]);
+  }, [activeThreadId, activeWorkspaceId, draft, sendText, startThread, thinking, threadStatus]);
 
   const stopTurn = useCallback(() => {
     if (!activeWorkspaceId || !activeThreadId || stopping) return;
@@ -1593,6 +1622,9 @@ export default function WebApp() {
   const activeUserInputRequest = userInputRequests.find((request) =>
     request.workspace_id === activeWorkspaceId && request.params.thread_id === activeThreadId,
   ) ?? null;
+  const activeThreadTitle = activeWorkspaceId && activeThreadId
+    ? threadsByWorkspace[activeWorkspaceId]?.find((thread) => thread.id === activeThreadId)?.label ?? "Thread"
+    : null;
 
   return (
     <Layout
@@ -1648,7 +1680,7 @@ export default function WebApp() {
       <Conversation
         goal={goal}
         workspaceName={activeWorkspace?.name ?? null}
-        threadTitle={activeThreadId ? activeThreadId.slice(0, 12) + "…" : null}
+        threadTitle={activeThreadTitle}
         conversationId={activeThreadId}
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={() => setSidebarCollapsed((collapsed) => !collapsed)}
@@ -1697,7 +1729,7 @@ export default function WebApp() {
         submittingUserInput={activeUserInputRequest?.request_id === submittingUserInputId}
         onSubmitUserInput={(request, response) => { void submitUserInput(request, response); }}
         busy={busy}
-        sendDisabled={!activeWorkspaceId || !activeThreadId}
+        sendDisabled={!activeWorkspaceId}
         thinking={thinking}
         turnStartedAt={turnStartedAt}
         onResolveApproval={resolveApproval}

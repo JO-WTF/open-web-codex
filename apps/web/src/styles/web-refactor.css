@@ -354,21 +354,7 @@ body:has(.web-app-shell) {
   opacity: 1;
 }
 
-.web-ws-thread:hover .web-ws-thread-time,
-.web-ws-thread-active:hover .web-ws-thread-time {
-  color: #c1c8d5;
-}
-
 .web-ws-thread-label { font-size: 12px; }
-.web-ws-thread-time {
-  max-width: 76px;
-  overflow: hidden;
-  color: var(--web-muted);
-  font-family: var(--font-code);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
 .web-mcp-section {
   margin: 18px 6px 0;
@@ -667,6 +653,16 @@ body:has(.web-app-shell) {
   max-width: 220px;
   overflow: hidden;
   color: var(--web-muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.web-chat-title {
+  max-width: 260px;
+  overflow: hidden;
+  color: var(--web-text);
   font-size: 12px;
   font-weight: 600;
   text-overflow: ellipsis;

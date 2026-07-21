@@ -71,6 +71,8 @@ describe("Web workspace actions", () => {
     );
 
     expect(screen.getByLabelText("Running")).toBeTruthy();
+    expect(screen.queryByText("running-…")).toBeNull();
+    expect(screen.queryByText("idle-thr…")).toBeNull();
     expect((screen.getByRole("button", { name: "Archive thread Running" }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Archive thread Idle" }));
     expect(screen.getByRole("alertdialog", { name: "Archive thread?" })).toBeTruthy();
