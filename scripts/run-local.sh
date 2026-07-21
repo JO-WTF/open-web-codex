@@ -14,6 +14,10 @@ server_port="${OPEN_WEB_CODEX_SERVER_PORT:-4800}"
 web_port="${OPEN_WEB_CODEX_WEB_PORT:-1420}"
 codex_mode="${CODEX_MODE:-real}"
 skip_build="${OPEN_WEB_CODEX_SKIP_BUILD:-0}"
+database_url="${DATABASE_URL:-}"
+database_url_file=""
+database_url_source="${OPEN_WEB_CODEX_DATABASE_SOURCE:-environment}"
+database_max_connections="${DATABASE_MAX_CONNECTIONS:-10}"
 
 run_dir="$data_dir/run"
 log_dir="$data_dir/logs"
@@ -29,10 +33,15 @@ Usage: ./scripts/run-local.sh [option]
 
 Options:
   --background  Start the stack in the background.
-  --restart     Stop the current stack and restart it in the background.
   --stop        Stop the stack recorded for OPEN_WEB_CODEX_DATA_DIR.
   --status      Show supervisor and endpoint status.
   --no-build    Reuse existing Rust binaries instead of compiling them.
+  --database-url URL
+                PostgreSQL connection URL (prefer --database-url-file for passwords).
+  --database-url-file PATH
+                Read the PostgreSQL connection URL from a local file.
+  --database-max-connections COUNT
+                PostgreSQL pool size (default: 10).
   -h, --help    Show this help.
 
 Environment:
@@ -41,6 +50,8 @@ Environment:
   OPEN_WEB_CODEX_SKIP_BUILD      Set to 1 to reuse all existing Rust binaries
   OPEN_WEB_CODEX_DATA_DIR        Runtime state and logs directory
   OPEN_WEB_CODEX_{RPC,GATEWAY,SERVER,WEB}_PORT
+  DATABASE_URL                   PostgreSQL connection URL
+  DATABASE_MAX_CONNECTIONS       PostgreSQL pool size (default: 10)
 EOF
 }
 
@@ -48,9 +59,6 @@ while (($# > 0)); do
   case "$1" in
     --background)
       action="background"
-      ;;
-    --restart)
-      action="restart"
       ;;
     --stop)
       action="stop"
@@ -60,6 +68,32 @@ while (($# > 0)); do
       ;;
     --no-build)
       skip_build="1"
+      ;;
+    --database-url)
+      if (($# < 2)); then
+        printf '%s requires a value.\n' "$1" >&2
+        exit 2
+      fi
+      database_url="$2"
+      database_url_source="command line"
+      shift
+      ;;
+    --database-url-file)
+      if (($# < 2)); then
+        printf '%s requires a path.\n' "$1" >&2
+        exit 2
+      fi
+      database_url_file="$2"
+      database_url_source="file"
+      shift
+      ;;
+    --database-max-connections)
+      if (($# < 2)); then
+        printf '%s requires a value.\n' "$1" >&2
+        exit 2
+      fi
+      database_max_connections="$2"
+      shift
       ;;
     -h|--help)
       usage
@@ -73,6 +107,35 @@ while (($# > 0)); do
   esac
   shift
 done
+
+if [[ "$action" != "stop" && "$action" != "status" ]]; then
+  if [[ -n "$database_url_file" ]]; then
+    if [[ ! -r "$database_url_file" ]]; then
+      printf 'Database URL file is not readable: %s\n' "$database_url_file" >&2
+      exit 2
+    fi
+    IFS= read -r database_url <"$database_url_file" || true
+  fi
+
+  if [[ -z "$database_url" ]]; then
+    database_user="${USER:-postgres}"
+    database_url="postgres://$database_user@localhost:5432/open_web_codex"
+    database_url_source="local default"
+  fi
+
+  case "$database_url" in
+    postgres://*|postgresql://*) ;;
+    *)
+      printf 'Database URL must start with postgres:// or postgresql://.\n' >&2
+      exit 2
+      ;;
+  esac
+
+  if [[ ! "$database_max_connections" =~ ^[1-9][0-9]*$ ]]; then
+    printf 'DATABASE_MAX_CONNECTIONS must be a positive integer, got: %s\n' "$database_max_connections" >&2
+    exit 2
+  fi
+fi
 
 case "$skip_build" in
   0|1) ;;
@@ -172,6 +235,15 @@ stop_stack() {
   return 1
 }
 
+stop_stack_if_running() {
+  local pid
+  remove_stale_pid_file
+  pid="$(read_supervisor_pid)"
+  if is_supervisor_pid "$pid"; then
+    stop_stack
+  fi
+}
+
 start_background() {
   local existing_pid
   local child_pid
@@ -186,9 +258,15 @@ start_background() {
   fi
 
   if [[ "$skip_build" == "1" ]]; then
-    nohup "$script_path" --no-build >"$supervisor_log" 2>&1 </dev/null &
+    DATABASE_URL="$database_url" \
+      DATABASE_MAX_CONNECTIONS="$database_max_connections" \
+      OPEN_WEB_CODEX_DATABASE_SOURCE="$database_url_source" \
+      nohup "$script_path" --no-build >"$supervisor_log" 2>&1 </dev/null &
   else
-    nohup "$script_path" >"$supervisor_log" 2>&1 </dev/null &
+    DATABASE_URL="$database_url" \
+      DATABASE_MAX_CONNECTIONS="$database_max_connections" \
+      OPEN_WEB_CODEX_DATABASE_SOURCE="$database_url_source" \
+      nohup "$script_path" >"$supervisor_log" 2>&1 </dev/null &
   fi
   child_pid=$!
 
@@ -213,11 +291,7 @@ start_background() {
 
 case "$action" in
   background)
-    start_background
-    exit $?
-    ;;
-  restart)
-    stop_stack
+    stop_stack_if_running
     start_background
     exit $?
     ;;
@@ -230,6 +304,8 @@ case "$action" in
     exit 0
     ;;
 esac
+
+stop_stack_if_running
 
 required_commands=(npm curl)
 if [[ "$skip_build" == "0" ]]; then
@@ -328,6 +404,7 @@ wait_for_health() {
 }
 
 printf 'Using codex mode: %s\n' "$codex_mode"
+printf 'Database: configured via %s (pool size %s)\n' "$database_url_source" "$database_max_connections"
 if [[ "$skip_build" == "1" ]]; then
   printf 'Rust builds: skipped by request\n'
 fi
@@ -391,6 +468,8 @@ if [[ "$codex_mode" == "real" ]]; then
   server_args+=(--daemon-url "http://127.0.0.1:$gateway_port")
 fi
 CODEX_MODE="$codex_mode" \
+  DATABASE_URL="$database_url" \
+  DATABASE_MAX_CONNECTIONS="$database_max_connections" \
   "$server_bin" "${server_args[@]}" \
   >"$log_dir/server.log" 2>&1 &
 server_pid=$!

@@ -25,6 +25,34 @@ make mvp
 5. 启动 `127.0.0.1:4733` Gateway 和 `127.0.0.1:1420/web` WebApp。
 6. 将本地数据和日志放在 `.cache/mvp`。
 
+Platform Server 必须连接 PostgreSQL。未配置时，脚本使用适合本机开发的默认值：
+
+```text
+postgres://$USER@localhost:5432/open_web_codex
+```
+
+其他机器或远程数据库应显式设置标准连接变量：
+
+```bash
+DATABASE_URL='postgres://user:password@host:5432/open_web_codex' \
+  ./scripts/run-local.sh --background
+```
+
+含密码时更推荐使用仅当前用户可读的文件，避免把密码留在命令历史中：
+
+```bash
+printf '%s\n' 'postgres://user:password@host:5432/open_web_codex' > .cache/database-url
+chmod 600 .cache/database-url
+./scripts/run-local.sh --database-url-file .cache/database-url --background
+```
+
+也可以调整连接池大小：
+
+```bash
+./scripts/run-local.sh --database-url-file .cache/database-url \
+  --database-max-connections 20 --background
+```
+
 使用已有 Codex Binary 可缩短首次启动：
 
 ```bash
@@ -36,9 +64,11 @@ OPEN_WEB_CODEX_BIN=/absolute/path/to/codex make mvp
 ```bash
 ./scripts/run-local.sh --background
 ./scripts/run-local.sh --status
-./scripts/run-local.sh --restart
 ./scripts/run-local.sh --stop
 ```
+
+普通运行和 `--background` 都会先检查当前数据目录记录的 Supervisor PID；若
+已有本项目实例，会精确停止旧实例后再启动新实例。
 
 只有在确认现有 Rust Binary 已是最新版本时，才应跳过增量构建：
 
