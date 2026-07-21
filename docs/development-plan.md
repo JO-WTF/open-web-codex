@@ -621,7 +621,58 @@ GET/POST/PATCH/DELETE /api/codex/profiles/:id/skills
 | 安全债阻塞 Beta | Critical/High 依赖或边界问题 | Platform/QA | 按 SLA 修复，Beta 前红线门禁 |
 | Studio 拖延 Alpha | 核心 Task 未闭环但 Studio 并行扩张 | Product/Experience | 冻结 M3，资源集中 M1 |
 
-## 13. 建议的下一开发批次
+## 13. 地图回复卡片交付计划
+
+**目标：** 在不扩大 Codex 定制面的前提下，让地理相关回答可以把地图卡片嵌入回复任意位置。服务端生成或整理需要可视化的 GeoJSON 与样式元数据并保存为受控 Artifact，浏览器通过 Mapbox GL 渲染点、线、面、边界、路线和大规模地理数据，并支持全屏查看。实现细节以 `docs/adr/005-map-reply-cards.md` 为准。
+
+### 13.1 设计边界
+
+- 卡片是平台 DTO 和 Artifact 能力，不是新的 Codex Thread、Memory 或 Agent 调度语义。
+- 模型正文只携带小型结构化标记或卡片引用；数 MB 级 GeoJSON 不进入 LLM 逐字输出路径。
+- 触发策略优先使用系统提示、平台后处理和可审计工具结果；只有现有 app-server 事件无法稳定承载卡片引用时，才增加最小 Runtime 协议 seam。
+- 浏览器只能访问授权后的平台 Artifact URL，不能看到 Profile 路径、Workspace 路径、原始 app-server request ID 或 Secret。
+- UI 能力必须由 Feature Policy 和生成合同共同门控；未验证构建显示降级文本和下载入口。
+
+### 13.2 卡片格式与数据合同
+
+| ID | P/规模 | 任务 | 验证 |
+| --- | --- | --- | --- |
+| MAP-A01 | P1/S | 定义 `reply_card.v1` 外层 DTO：`id`、`kind`、`placement`、`title`、`summary`、`artifact_id`、`schema_version`、`fallback_text` | DTO 单测和向后兼容 Fixture |
+| MAP-A02 | P1/M | 定义 `map_card.v1` schema：GeoJSON Artifact 引用、bbox、默认 viewport、layer/style 列表、交互开关和 size limits | JSON Schema、TypeScript、Rust 类型生成无漂移 |
+| MAP-A03 | P1/M | 约定回复内嵌标记格式，例如小型 fenced block 或 typed placeholder，并实现安全解析器 | 嵌入在段落前、中、后、多卡片和畸形标记测试 |
+| MAP-A04 | P1/M | 将卡片 schema 纳入 Capability Manifest / Feature Policy，不支持时保留普通回复 | `check:codex-contracts` 和 feature-policy 测试 |
+
+### 13.3 服务端生成与 Artifact 管理
+
+| ID | P/规模 | 任务 | 验证 |
+| --- | --- | --- | --- |
+| MAP-B01 | P1/M | 增加 `map-card-builder` 平台服务，接收坐标、路线、边界或已有 GeoJSON，输出规范化 GeoJSON + style metadata | 点/线/面/FeatureCollection 单元测试 |
+| MAP-B02 | P1/M | 大型 GeoJSON 写入 Artifact 存储并记录 MIME、大小、hash、owner、Task/Run 绑定和保留策略 | 未授权、越权、过期和大小上限测试 |
+| MAP-B03 | P1/M | 支持流式或后台生成路径：先展示 loading card，再用事件更新为 ready/error | 断线重连、重复事件和终态恢复测试 |
+| MAP-B04 | P1/M | 增加 tool-result resolver，允许卡片 marker 的 `input_ref` 安全引用先前边界、路线或地理工具输出 | 大型 GeoJSON 不进模型正文；跨 Task/Run/Profile 引用被拒绝 |
+| MAP-B05 | P1/M | 增加地理意图触发提示和平台后处理：经纬度、地名、路线/距离、边界和地理数据可视化 | prompt fixture、误触发/漏触发样本集 |
+| MAP-B06 | P2/M | 接入可选地理工具或 MCP 结果作为卡片 builder 输入，不把外部 API key 暴露给模型或浏览器 | Secret redaction、工具失败和限流测试 |
+
+### 13.4 浏览器渲染与体验
+
+| ID | P/规模 | 任务 | 验证 |
+| --- | --- | --- | --- |
+| MAP-C01 | P1/M | 实现回复流中的 card slot renderer，保持正文顺序并支持多个卡片 | React 单测和消息 replay 测试 |
+| MAP-C02 | P1/M | 使用 Mapbox GL 渲染 GeoJSON 点、线、面和样式，支持 bbox fit、图层开关、legend 和 tooltip | 组件测试、截图和目标视口验证 |
+| MAP-C03 | P1/S | 增加全屏查看、键盘退出、移动端布局和加载/空/错误/无权限状态 | 可访问性和移动端视口测试 |
+| MAP-C04 | P1/M | 增加 active map budget，离屏或超预算 Mapbox 实例进入 suspended 状态并可点击重新激活 | 多地图消息性能测试和资源释放断言 |
+| MAP-C05 | P1/M | 对超大数据采用 simplify/tiling/download fallback 策略，避免阻塞主线程 | 大文件性能预算和 worker 测试 |
+
+### 13.5 Codex 收敛与发布门禁
+
+| ID | P/规模 | 任务 | 验证 |
+| --- | --- | --- | --- |
+| MAP-D01 | P0/S | 在实现前确认现有 Codex message/event 是否足以传递卡片标记；若触及 `codex/`，先运行上游状态脚本并更新 patch map 分类 | `scripts/codex-upstream-status.sh`、patch map 审查 |
+| MAP-D02 | P1/M | 增加端到端 Smoke：模型回答中混排文本和地图卡片，Artifact 鉴权后由浏览器渲染 | 真实 app-server smoke + Web E2E |
+| MAP-D03 | P1/M | 覆盖安全门禁：XSS、GeoJSON 属性注入、Mapbox token 暴露、Artifact 越权、事件重放 | 安全测试和审计日志断言 |
+| MAP-D04 | P1/S | 发布能力说明：支持的数据规模、样式子集、降级行为和运维配置 | 兼容矩阵与用户文档 |
+
+## 14. 建议的下一开发批次
 
 当前不应扩展完整 Studio 或继续围绕旧 RPC/SSE Gateway 增加产品功能。建议按以下顺序执行：
 

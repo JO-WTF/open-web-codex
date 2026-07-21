@@ -16,6 +16,7 @@ use sqlx::Row;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::map_reply_cards::prepare_message_text_for_map_cards;
 use crate::middleware::auth::AuthenticatedUser;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
@@ -216,7 +217,7 @@ pub async fn send_message(
             "send_user_message",
             json!({
                 "threadId": &thread_id,
-                "text": req.text,
+                "text": prepare_message_text_for_map_cards(&req.text),
             }),
         )
         .await

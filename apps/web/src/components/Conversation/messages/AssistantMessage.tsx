@@ -1,5 +1,7 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import MapReplyCard from "./MapReplyCard";
+import { parseReplyCards } from "../../../utils/replyCards";
 
 type Props = {
   text: string;
@@ -7,11 +9,9 @@ type Props = {
   onOpenFile?: (path: string) => void;
 };
 
-export default function AssistantMessage({ text, streaming, onOpenFile }: Props) {
+function MarkdownText({ text, onOpenFile }: { text: string; onOpenFile?: Props["onOpenFile"] }) {
   return (
-    <div className="web-msg-assistant">
-      <div className="web-msg-assistant-body">
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
           a: ({ href, children, ...props }) => {
             const external = Boolean(href && /^(?:https?:|mailto:)/i.test(href));
             const navigational = external || Boolean(href?.startsWith("#"));
@@ -31,7 +31,20 @@ export default function AssistantMessage({ text, streaming, onOpenFile }: Props)
               }}
             >{children}</a>;
           },
-        }}>{text}</ReactMarkdown>
+    }}>{text}</ReactMarkdown>
+  );
+}
+
+export default function AssistantMessage({ text, streaming, onOpenFile }: Props) {
+  const parts = parseReplyCards(text);
+  return (
+    <div className="web-msg-assistant">
+      <div className="web-msg-assistant-body">
+        {parts.map((part, index) => part.type === "text" ? (
+          <MarkdownText key={`text-${index}`} text={part.content} onOpenFile={onOpenFile} />
+        ) : (
+          <MapReplyCard key={part.id || `map-${index}`} card={part} />
+        ))}
         {streaming && <span className="web-streaming-cursor" />}
       </div>
     </div>

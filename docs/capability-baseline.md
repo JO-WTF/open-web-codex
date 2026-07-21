@@ -53,6 +53,7 @@ security.
 | Plugins | declared unsupported | do not enable Studio lifecycle or permissions UI |
 | MCP | config degraded; OAuth/elicitation unsupported | status listing is declared; Web-safe CRUD, reload and lifecycle validation are pending |
 | Tools discovery | declared unsupported | do not expose a platform fallback catalog |
+| Structured reply cards / map cards | declared unsupported | no generated card contract, card Artifact store, renderer gate or real app-server smoke exists |
 | Provider/model management | declared supported by the checked-in Runtime | `models.providers`, `modelProvider/list`, controlled Profile config writes, provider-scoped refresh, model selection and context-window persistence are wired and covered by scoped Runtime/TUI tests; real credential-isolation smoke remains required for release promotion |
 
 ## Web platform assessment

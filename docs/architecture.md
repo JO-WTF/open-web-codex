@@ -106,6 +106,35 @@ protocol payloads remain inside the Host/adapter boundary. Unknown Runtime
 events may be retained for diagnostics but cannot be exposed as an unsafe public
 API or crash the event stream.
 
+
+### Rich reply cards and map visualization
+
+Structured reply cards are a Web-platform projection layered on top of Codex
+messages. Codex remains responsible for natural-language reasoning and tool use;
+the platform owns card storage, authorization, artifact retrieval, rendering
+policy and browser DTOs. A model-visible answer may contain a small, stable card
+marker such as a fenced block or typed placeholder, but large visualization data
+travels as a platform Artifact reference rather than as inline model text.
+
+Map cards follow this flow:
+
+1. Prompt guidance and platform post-processing identify geographic intents such
+   as coordinates, locations, routes, distances, boundaries and geospatial data
+   visualization.
+2. A server-side card builder validates or creates GeoJSON with style metadata,
+   stores the payload as an authorized Artifact and emits a compact card DTO in
+   the Task event stream.
+3. The browser renderer resolves only authorized platform Artifact URLs, parses
+   the card schema, renders points/lines/polygons with Mapbox GL and offers
+   inline and full-screen views.
+4. Oversized or invalid GeoJSON produces a safe error card; raw local paths,
+   credentials, app-server request IDs and unbounded protocol payloads never
+   reach the browser.
+
+This feature should not broaden the Codex subtree. Runtime changes are limited
+to a narrow generated protocol seam only if the official app-server cannot carry
+card markers or artifact references through existing message/event surfaces.
+
 ## Primary runtime flows
 
 ### Create and run a Task

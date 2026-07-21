@@ -1469,3 +1469,170 @@
   color: var(--message-link-color);
   font-size: 0.97em;
 }
+
+.web-map-card {
+  width: min(100%, 680px);
+  margin: 12px 0;
+  overflow: hidden;
+  border: 1px solid var(--cm-border-strong);
+  border-radius: 18px;
+  background: var(--cm-surface-panel-strong);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.web-map-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--cm-border-strong);
+}
+
+.web-map-card-title {
+  display: inline-flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-stronger);
+  font-weight: 650;
+}
+
+.web-map-card-title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.web-map-card-status {
+  flex: 0 0 auto;
+  border: 1px solid var(--cm-border-strong);
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.web-map-card-fullscreen,
+.web-map-card-modal-close {
+  border: 1px solid var(--cm-border-strong);
+  border-radius: 999px;
+  background: var(--cm-surface-panel-soft);
+  color: var(--text-stronger);
+}
+
+.web-map-card-fullscreen {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+}
+
+.web-map-card-canvas {
+  position: relative;
+  height: 180px;
+  overflow: hidden;
+  background:
+    linear-gradient(90deg, rgba(148, 163, 184, 0.08) 1px, transparent 1px),
+    linear-gradient(rgba(148, 163, 184, 0.08) 1px, transparent 1px),
+    radial-gradient(circle at 20% 20%, rgba(37, 99, 235, 0.22), transparent 28%),
+    radial-gradient(circle at 75% 70%, rgba(249, 115, 22, 0.18), transparent 30%),
+    var(--cm-surface-panel-soft);
+  background-size: 32px 32px, 32px 32px, auto, auto, auto;
+}
+
+.web-map-card-route {
+  position: absolute;
+  inset: 44px 72px 50px 80px;
+  border-bottom: 4px solid rgba(37, 99, 235, 0.78);
+  border-left: 4px solid rgba(37, 99, 235, 0.78);
+  border-radius: 0 0 0 72px;
+  transform: skewX(-14deg);
+}
+
+.web-map-card-pin {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border: 3px solid #fff;
+  border-radius: 999px;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.32);
+}
+
+.web-map-card-pin.is-a {
+  left: 78px;
+  top: 50px;
+  background: #2563eb;
+}
+
+.web-map-card-pin.is-b {
+  right: 74px;
+  bottom: 52px;
+  background: #f97316;
+}
+
+.web-map-card-body {
+  padding: 12px;
+  color: var(--text-muted);
+}
+
+.web-map-card-body p {
+  margin: 0 0 10px;
+}
+
+.web-map-card-body dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 10px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.web-map-card-body dt {
+  color: var(--text-fainter);
+}
+
+.web-map-card-body dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-stronger);
+}
+
+.web-map-card-modal {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.web-map-card-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.62);
+}
+
+.web-map-card-modal-panel {
+  position: relative;
+  width: min(1100px, 96vw);
+  max-height: 92vh;
+  overflow: auto;
+}
+
+.web-map-card-modal-panel .web-map-card {
+  width: 100%;
+  margin: 0;
+}
+
+.web-map-card-modal-panel .web-map-card-canvas {
+  height: min(62vh, 640px);
+}
+
+.web-map-card-modal-close {
+  float: right;
+  margin: 0 0 10px 10px;
+  padding: 6px 12px;
+}
