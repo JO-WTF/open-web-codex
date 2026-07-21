@@ -6,7 +6,7 @@ after an official subtree update. Generated schemas, TypeScript definitions,
 fixtures, and snapshots are derivatives of the source seams and are not
 independent custom behavior.
 
-The integrated official base is `1bbdb32789e1f79932df44941236ea3658f6e965`.
+The integrated official base is `af71774d2645ec900cccf2a40d186a56c7a42f71`.
 The target is a small, explicit set of Provider Runtime and TUI seams; it is
 not a zero-diff Codex subtree.
 
@@ -25,16 +25,16 @@ not a zero-diff Codex subtree.
 
 ## Current state
 
-The integrated base is `1bbdb32789e1`. Official main is currently
-`0b175e6439a8`, 206 commits ahead. The current comparison contains 1,168 paths:
-1,049 `upstream-only`, 63 `local-only` and 56 `diverged`. The local customization
-itself is 119 paths relative to the integrated base: 67 production source, 18
-focused tests, 31 generated artifacts and 3 docs/config paths.
+The integrated base and current official main are both
+`af71774d2645ec900cccf2a40d186a56c7a42f71`; no official commit is pending.
+The current comparison contains 124 local differences: 25 files added locally
+and 99 modified. All 124 are `local-only`; `upstream-only` and `diverged` are
+both zero.
 
-All local behavior remains classified under the six retained seams below. A
-three-way preview finds five textual conflict paths; one is generated. The next
-convergence action is the guarded official sync followed by replay and validation
-of only these seams. Machine-readable evidence is in
+All non-generated differences are classified under the retained seams and
+decisions below. The official structure is already integrated, generated
+app-server artifacts have no drift, and the Runtime/TUI scoped validation matrix
+passes on this base. Machine-readable evidence is in
 `.sync/codex-customization-inventory.json`.
 
 Use `scripts/codex-customization-status.sh` as the inventory input. It compares
@@ -66,12 +66,10 @@ The script separates the raw tree difference into:
 
 ## Current inventory classification
 
-The current comparison against `codex-upstream/main` contains 1,168 paths:
-1,049 `upstream-only`, 63 `local-only`, and 56 `diverged`. There are 206 official
-commits pending integration. The table below classifies the product-specific
-retained seams; upstream-only and diverged paths must be resolved through the
-official sync workflow rather than treated as additional local seams. Generated
-artifacts, tests, and snapshots follow their owning source seam.
+The current comparison against `codex-upstream/main` contains 124 paths, all
+`local-only`: 25 added and 99 modified. There are no pending official commits,
+upstream-only paths, diverged paths, or missing local paths. Generated artifacts,
+tests, and snapshots follow their owning source seam.
 
 | Classification | Source paths | Decision and reason |
 | --- | --- | --- |
@@ -82,22 +80,19 @@ artifacts, tests, and snapshots follow their owning source seam.
 | `retain-core`: compatibility and capability | `app-server-protocol/src/capability_manifest.rs`, `protocol/legacy_response_tool_history.rs`, narrow integration in `thread_history.rs`, `initialize_processor.rs` | The Manifest gates Platform features; legacy history preserves supported existing Profiles. Neither is browser implementation code. |
 | `upstream-first, then replay` | `core/src/{codex_thread.rs,guardian/review_session.rs,session/**}`, `protocol/src/{openai_models.rs,protocol.rs}`, `app-server/src/request_processors/turn_processor.rs`, `app-server/README.md`, TUI thread-routing/event files | These files contain substantial official SessionIo, AgentRunner, model-catalog, rate-limit, paging, fork, and TUI behavior. Preserve upstream structure and reapply only the adjacent retained seam. |
 | `retain-core`: Provider propagation followers | `core/src/session/handlers.rs`, `exec/src/lib.rs`, `login/src/auth_env_telemetry.rs`, `app-server` remote-thread/turn tests, and `core` stream/header tests | These changes propagate the selected Provider, preserve Provider-scoped cache test isolation, or satisfy the expanded Provider metadata shape. They follow the owning Provider seam and are not independent feature surfaces. |
+| `upstreamed` | `protocol/src/tool_name.rs`, with the Core flat-name caller delegated to `ToolName::to_string()` | Temporary correction that keeps namespaced tool display and Chat flattening on the canonical `namespace__tool` delimiter. Remove the local patch as soon as official Codex carries equivalent normalization. |
 | `move-out` | `utils/home-dir/src/lib.rs` missing-`CODEX_HOME` auto-creation | Profile creation belongs to the Platform Host. `apps/web/crates/profile-host::ensure_profile_home` provisions the directory before transitional Tauri and native Platform Server spawn; `utils/home-dir` has returned to official missing-`CODEX_HOME` rejection semantics. |
 | Derived artifacts and tests | Schema, TypeScript, fixtures, snapshots, lockfiles, and focused tests not named above | They follow the owning source seam. Regenerate artifacts and update tests/snapshots through their normal build/test commands; do not classify or replay them independently. |
 
-## Current replay analysis
+## Current convergence analysis
 
-The upstream update has five textual conflict paths:
-
-- `app-server-protocol/schema/typescript/ClientRequest.ts` is generated; take
-  upstream protocol structure and regenerate it after source replay.
-- `codex-api/src/common.rs` owns Chat request wire types; retain only the Chat
-  transport additions after accepting upstream structure.
-- `core/src/tools/spec_plan_tests.rs` follows Provider tool-capability policy;
-  retain the Chat-safe tool cases on top of the upstream tests.
-- `tui/src/app_event.rs` and `tui/src/app_server_session.rs` are TUI attachment
-  points; take upstream orchestration first and reattach isolated Provider
-  events and Provider API calls.
+The official structure is integrated and there are no unresolved tree conflicts.
+The attachment points in `codex-api/src/common.rs`,
+`core/src/tools/spec_plan_tests.rs`, `tui/src/app_event.rs`, and
+`tui/src/app_server_session.rs` contain only the replayed Chat/Provider seams on
+top of the current upstream files. `ClientRequest.ts` and the other protocol
+artifacts are generated from Rust protocol sources and currently reproduce
+without drift.
 
 The upstream tree still rejects `wire_api = "chat"`, does not expose
 `modelProvider/list`, does not provide the custom TUI Provider management flow,

@@ -7,35 +7,36 @@ requirements belong in `product-design.md`; planned work belongs in
 ## Snapshot
 
 Observed on 2026-07-21 from source commit
-`e8db56a4c7735dff09c8e18ac4a439508830b588`:
+`f007589c6c08b561ddb4996661c515772024405b`:
 
 | Component | State |
 | --- | --- |
-| Codex subtree | integrated through `openai/codex` `1bbdb32789e1f79932df44941236ea3658f6e965` |
-| Observed official main | `0b175e6439a8608ba7726ee153fd8590619e8f34`; 206 commits await integration |
-| Local Codex seams vs official main | 63 local-only and 56 diverged paths; 1,049 upstream-only paths await the guarded sync |
-| Local customization footprint vs integrated base | 119 paths: 67 production source, 18 focused tests, 31 generated artifacts and 3 docs/config paths |
+| Codex subtree | integrated through `openai/codex` `af71774d2645ec900cccf2a40d186a56c7a42f71` |
+| Observed official main | `af71774d2645ec900cccf2a40d186a56c7a42f71`; no commit awaits integration |
+| Local Codex seams vs official main | 124 local-only paths: 25 added and 99 modified; no upstream-only, diverged, or missing local paths |
+| Local customization footprint | six retained Runtime/TUI seams, one temporary upstreamed fix, derived artifacts and focused tests |
 | Web platform | Axum/PostgreSQL prototype plus the earlier loopback Web MVP |
 
 ## Reproduced evidence
 
-- `scripts/codex-upstream-status.sh` reports `Status: update available`; the
-  customization status script reports 1,168 tree differences split into 1,049
-  upstream-only, 63 local-only and 56 diverged paths.
-- A three-way merge preview reports five textual conflict paths. One is a
-  generated TypeScript file; the source conflicts are concentrated in Chat API,
-  Provider tool-policy tests and TUI Provider integration.
+- `scripts/codex-upstream-status.sh` reports `Status: synchronized`; the
+  customization status script reports 124 local-only differences and zero
+  upstream-only or diverged paths.
+- The current upstream structure and all six documented seams are integrated;
+  regenerated app-server Schema and TypeScript fixtures have no drift.
 - The locally built `codex app-server` completes `initialize` and returns
   `capabilityManifest`, `codexHome`, `platformFamily`, `platformOs` and
   `userAgent`.
 - The observed manifest contains 18 declarations, including
   `models.providers`.
-- The last complete validation against integrated upstream `1bbdb32789e1` was
-  recorded at commit `26329a12767414ec0a1b6d0f0c9c7c5a65147529`: `just fmt`,
-  app-server Schema generation, app-server protocol, Chat transport,
-  Provider/model-manager, app-server model-list, TUI scoped tests, the Web
-  contract check and the real `--require-manifest` app-server smoke passed.
-- No validation claim is made yet for the pending replay onto `0b175e6439a8`.
+- On the current Runtime lineage, `just fmt`, app-server Schema generation,
+  287 app-server protocol tests, 172 Chat transport tests, 83 Provider tests,
+  the 970-test app-server suite, 41 focused Plugin tests, and current TUI
+  diff/highlight/Provider/terminal tests pass. The final upstream delta only
+  adds a Unix compile gate to the TUI restore helper and is covered by the
+  35-test terminal/Provider target.
+- The Web contract check passes, and the locally built current Codex CLI passes
+  the real app-server initialize Smoke with 18 Capability Manifest declarations.
 - The platform source contains PostgreSQL migrations and API handlers for
   bootstrap/session, organization membership, project, Task, Run and persisted
   Run events.
