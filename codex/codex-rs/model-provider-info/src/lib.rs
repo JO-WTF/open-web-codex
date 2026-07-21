@@ -218,6 +218,13 @@ pub struct ModelProviderInfo {
     /// Whether this provider supports the Responses API WebSocket transport.
     #[serde(default)]
     pub supports_websockets: bool,
+    /// Whether this provider exposes the Codex Search API used by hosted and
+    /// standalone Web Search tools.
+    #[serde(default)]
+    pub supports_web_search: bool,
+    /// Whether this provider supports the image-generation extension backend.
+    #[serde(default)]
+    pub supports_image_generation: bool,
 }
 
 /// AWS SigV4 auth configuration for a model provider.
@@ -441,6 +448,8 @@ impl ModelProviderInfo {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: true,
             supports_websockets: true,
+            supports_web_search: true,
+            supports_image_generation: true,
         }
     }
 
@@ -472,6 +481,8 @@ impl ModelProviderInfo {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: false,
+            supports_web_search: false,
+            supports_image_generation: false,
         }
     }
 
@@ -623,6 +634,8 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        supports_web_search: false,
+        supports_image_generation: false,
     }
 }
 

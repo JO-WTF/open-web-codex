@@ -1,3 +1,4 @@
+use crate::chat_translate::ChatToolTarget;
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::error::ApiError;
@@ -10,6 +11,7 @@ use codex_protocol::protocol::TokenUsage;
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -25,6 +27,7 @@ pub fn spawn_chat_response_stream(
     stream_response: StreamResponse,
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
+    tool_targets: HashMap<String, ChatToolTarget>,
 ) -> ResponseStream {
     let upstream_request_id = stream_response
         .headers
@@ -41,7 +44,14 @@ pub fn spawn_chat_response_stream(
         if let Some(model) = server_model {
             let _ = tx_event.send(Ok(ResponseEvent::ServerModel(model))).await;
         }
-        process_chat_sse(stream_response.bytes, tx_event, idle_timeout, telemetry).await;
+        process_chat_sse(
+            stream_response.bytes,
+            tx_event,
+            idle_timeout,
+            telemetry,
+            tool_targets,
+        )
+        .await;
     });
 
     ResponseStream {
@@ -55,6 +65,7 @@ pub async fn process_chat_sse(
     tx_event: mpsc::Sender<Result<ResponseEvent, ApiError>>,
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
+    tool_targets: HashMap<String, ChatToolTarget>,
 ) {
     let mut stream = stream.eventsource();
     let mut state = ChatStreamState::default();
@@ -90,7 +101,7 @@ pub async fn process_chat_sse(
 
         trace!("Chat SSE event: {}", &sse.data);
         if sse.data.trim() == "[DONE]" {
-            finish_chat_stream(&tx_event, state).await;
+            finish_chat_stream(&tx_event, state, &tool_targets).await;
             return;
         }
 
@@ -143,6 +154,7 @@ pub async fn process_chat_sse(
 async fn finish_chat_stream(
     tx_event: &mpsc::Sender<Result<ResponseEvent, ApiError>>,
     state: ChatStreamState,
+    tool_targets: &HashMap<String, ChatToolTarget>,
 ) {
     let ChatStreamState {
         response_id,
@@ -153,12 +165,16 @@ async fn finish_chat_stream(
     } = state;
 
     for tool_call in tool_calls {
+        let wire_name = tool_call.function.name;
+        let target = tool_targets.get(&wire_name);
         let item = ResponseItem::FunctionCall {
             id: Some(codex_protocol::ResponseItemId::from_server(
                 tool_call.id.clone(),
             )),
-            name: tool_call.function.name,
-            namespace: None,
+            name: target
+                .map(|target| target.name.clone())
+                .unwrap_or_else(|| wire_name.clone()),
+            namespace: target.and_then(|target| target.namespace.clone()),
             arguments: tool_call.function.arguments,
             call_id: tool_call.id,
             internal_chat_message_metadata_passthrough: None,
@@ -346,6 +362,13 @@ mod tests {
     use tokio_util::io::ReaderStream;
 
     async fn collect_events(body: &str) -> Vec<ResponseEvent> {
+        collect_events_with_tool_targets(body, HashMap::new()).await
+    }
+
+    async fn collect_events_with_tool_targets(
+        body: &str,
+        tool_targets: HashMap<String, ChatToolTarget>,
+    ) -> Vec<ResponseEvent> {
         let mut builder = IoBuilder::new();
         builder.read(body.as_bytes());
         let reader = builder.build();
@@ -357,6 +380,7 @@ mod tests {
             tx,
             Duration::from_secs(1),
             /*telemetry*/ None,
+            tool_targets,
         ));
 
         let mut events = Vec::new();
@@ -439,5 +463,37 @@ mod tests {
                 total_tokens: 5,
             })
         );
+    }
+
+    #[tokio::test]
+    async fn chat_sse_restores_namespaced_tool_target() {
+        let body = concat!(
+            "data: {\"id\":\"chatcmpl-1\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"mcp__map_cards__create_map_card\",\"arguments\":\"{}\"}}]}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let tool_targets = HashMap::from([(
+            "mcp__map_cards__create_map_card".to_string(),
+            ChatToolTarget {
+                name: "create_map_card".to_string(),
+                namespace: Some("mcp__map_cards".to_string()),
+            },
+        )]);
+
+        let events = collect_events_with_tool_targets(body, tool_targets).await;
+
+        let ResponseEvent::OutputItemDone(ResponseItem::FunctionCall {
+            name,
+            namespace,
+            arguments,
+            call_id,
+            ..
+        }) = &events[1]
+        else {
+            panic!("expected namespaced function call, got {:?}", events[1]);
+        };
+        assert_eq!(name, "create_map_card");
+        assert_eq!(namespace.as_deref(), Some("mcp__map_cards"));
+        assert_eq!(arguments, "{}");
+        assert_eq!(call_id, "call_1");
     }
 }

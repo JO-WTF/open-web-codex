@@ -1645,6 +1645,23 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
     .await;
     standalone_web_search.assert_visible_lacks(&["web_search"]);
 
+    let unsupported_standalone_web_search = probe_with(
+        |turn| {
+            use_bedrock_provider(turn);
+            set_feature(turn, Feature::StandaloneWebSearch, /*enabled*/ true);
+            set_web_search_mode(turn, WebSearchMode::Live);
+        },
+        ToolPlanInputs {
+            extension_tool_executors: vec![Arc::new(TestNamespaceExtensionTool {
+                namespace: "web",
+                tool_name: "run",
+            })],
+            ..Default::default()
+        },
+    )
+    .await;
+    unsupported_standalone_web_search.assert_visible_lacks(&["web", "web_search"]);
+
     let unsupported_provider = probe(|turn| {
         set_web_search_mode(turn, WebSearchMode::Live);
         use_bedrock_provider(turn);

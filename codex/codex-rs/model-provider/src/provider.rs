@@ -291,6 +291,14 @@ impl ModelProvider for ConfiguredModelProvider {
         &self.info
     }
 
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities {
+            namespace_tools: true,
+            image_generation: self.info.supports_image_generation,
+            web_search: self.info.supports_web_search,
+        }
+    }
+
     fn auth_manager(&self) -> Option<Arc<AuthManager>> {
         self.auth_manager.clone()
     }
@@ -538,6 +546,8 @@ mod tests {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: false,
+            supports_web_search: false,
+            supports_image_generation: false,
         }
     }
 
@@ -597,6 +607,43 @@ mod tests {
     fn configured_provider_uses_default_capabilities() {
         let provider = create_model_provider(
             ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+            /*auth_manager*/ None,
+        );
+
+        assert_eq!(provider.capabilities(), ProviderCapabilities::default());
+    }
+
+    #[test]
+    fn configured_chat_provider_uses_safe_tool_capability_defaults() {
+        let provider = create_model_provider(
+            ModelProviderInfo {
+                name: "third-party chat".to_string(),
+                wire_api: WireApi::Chat,
+                ..ModelProviderInfo::default()
+            },
+            /*auth_manager*/ None,
+        );
+
+        assert_eq!(
+            provider.capabilities(),
+            ProviderCapabilities {
+                namespace_tools: true,
+                image_generation: false,
+                web_search: false,
+            }
+        );
+    }
+
+    #[test]
+    fn configured_chat_provider_honors_explicit_tool_capability_opt_ins() {
+        let provider = create_model_provider(
+            ModelProviderInfo {
+                name: "third-party chat".to_string(),
+                wire_api: WireApi::Chat,
+                supports_web_search: true,
+                supports_image_generation: true,
+                ..ModelProviderInfo::default()
+            },
             /*auth_manager*/ None,
         );
 

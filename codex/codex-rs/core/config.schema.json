@@ -1709,6 +1709,16 @@
           "minimum": 0.0,
           "type": "integer"
         },
+        "supports_image_generation": {
+          "default": false,
+          "description": "Whether this provider supports the image-generation extension backend.",
+          "type": "boolean"
+        },
+        "supports_web_search": {
+          "default": false,
+          "description": "Whether this provider exposes the Codex Search API used by hosted and standalone Web Search tools.",
+          "type": "boolean"
+        },
         "supports_websockets": {
           "default": false,
           "description": "Whether this provider supports the Responses API WebSocket transport.",

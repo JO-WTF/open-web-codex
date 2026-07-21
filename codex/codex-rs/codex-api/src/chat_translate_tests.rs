@@ -51,6 +51,22 @@ fn function_call(name: &str, args: &str, call_id: &str) -> ResponseItem {
     }
 }
 
+fn namespaced_function_call(
+    namespace: &str,
+    name: &str,
+    args: &str,
+    call_id: &str,
+) -> ResponseItem {
+    ResponseItem::FunctionCall {
+        id: None,
+        name: name.to_string(),
+        namespace: Some(namespace.to_string()),
+        arguments: args.to_string(),
+        call_id: call_id.to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    }
+}
+
 #[test]
 fn instructions_become_leading_system_message() {
     let messages = responses_input_to_chat_messages(&[], "you are helpful");
@@ -128,6 +144,27 @@ fn parallel_function_calls_group_into_one_assistant_message() {
         }
         other => panic!("expected AssistantWithToolCalls, got {other:?}"),
     }
+}
+
+#[test]
+fn namespaced_function_call_history_uses_flattened_chat_name() {
+    let messages = responses_input_to_chat_messages(
+        &[namespaced_function_call(
+            "mcp__map_cards",
+            "create_map_card",
+            "{}",
+            "call_1",
+        )],
+        "",
+    );
+
+    let ChatMessage::AssistantWithToolCalls { tool_calls, .. } = &messages[0] else {
+        panic!("expected AssistantWithToolCalls, got {:?}", messages[0]);
+    };
+    assert_eq!(
+        tool_calls[0].function.name,
+        "mcp__map_cards__create_map_card"
+    );
 }
 
 #[test]
@@ -240,13 +277,56 @@ fn convert_function_tool_preserves_schema() {
     assert_eq!(value["function"]["name"], "get_weather");
     assert_eq!(value["function"]["strict"], true);
     assert_eq!(value["function"]["parameters"]["type"], "object");
+    assert_eq!(
+        chat_tools[0].target,
+        ChatToolTarget {
+            name: "get_weather".to_string(),
+            namespace: None,
+        }
+    );
 }
 
 #[test]
-fn convert_drops_non_function_tools() {
-    // web_search / image_generation / tool_search have no chat equivalent.
+fn convert_namespace_functions_for_chat_and_preserves_dispatch_target() {
+    let tools = vec![json!({
+        "type": "namespace",
+        "name": "mcp__map_cards",
+        "description": "Map card tools.",
+        "tools": [{
+            "type": "function",
+            "name": "create_map_card",
+            "description": "Create a map card.",
+            "strict": false,
+            "parameters": {"type": "object", "properties": {"title": {"type": "string"}}}
+        }]
+    })];
+
+    let chat_tools = responses_tools_to_chat_tools(&tools);
+
+    assert_eq!(chat_tools.len(), 1);
+    assert_eq!(
+        chat_tools[0].function.name,
+        "mcp__map_cards__create_map_card"
+    );
+    assert_eq!(
+        chat_tools[0].function.description,
+        "Map card tools.\n\nCreate a map card."
+    );
+    assert_eq!(
+        chat_tools[0].target,
+        ChatToolTarget {
+            name: "create_map_card".to_string(),
+            namespace: Some("mcp__map_cards".to_string()),
+        }
+    );
+}
+
+#[test]
+fn convert_keeps_responses_only_tools_hidden() {
     let tools = vec![
         json!({"type": "web_search"}),
+        json!({"type": "tool_search", "execution": "client", "parameters": {}}),
+        json!({"type": "custom", "name": "freeform", "format": {"type": "grammar"}}),
         json!({"type": "function", "name": "ok", "description": "", "strict": false, "parameters": {}}),
         json!({"type": "image_generation", "output_format": "png"}),
     ];
@@ -256,6 +336,34 @@ fn convert_drops_non_function_tools() {
     assert_eq!(value["function"]["name"], "ok");
     // strict=false should be omitted (skip_serializing_if).
     assert!(value["function"].get("strict").is_none());
+}
+
+#[test]
+fn convert_drops_duplicate_flattened_chat_names() {
+    let tools = vec![
+        json!({
+            "type": "namespace",
+            "name": "mcp__demo",
+            "description": "",
+            "tools": [{"type": "function", "name": "lookup", "parameters": {}}]
+        }),
+        json!({
+            "type": "function",
+            "name": "mcp__demo__lookup",
+            "parameters": {}
+        }),
+    ];
+
+    let chat_tools = responses_tools_to_chat_tools(&tools);
+
+    assert_eq!(chat_tools.len(), 1);
+    assert_eq!(
+        chat_tools[0].target,
+        ChatToolTarget {
+            name: "lookup".to_string(),
+            namespace: Some("mcp__demo".to_string()),
+        }
+    );
 }
 
 #[test]

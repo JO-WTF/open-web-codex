@@ -288,6 +288,8 @@ mod tests {
                     wire_api = "responses"
                     requires_openai_auth = false
                     supports_websockets = true
+                    supports_web_search = false
+                    supports_image_generation = false
 
                     [features]
                     plugins = false
@@ -317,6 +319,8 @@ mod tests {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: true,
+            supports_web_search: false,
+            supports_image_generation: false,
         }
     }
 }

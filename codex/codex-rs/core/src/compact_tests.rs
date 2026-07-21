@@ -277,6 +277,8 @@ fn should_use_remote_compact_task_for_azure_provider() {
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        supports_web_search: false,
+        supports_image_generation: false,
         models: Vec::new(),
     };
 

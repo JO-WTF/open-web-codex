@@ -54,8 +54,8 @@ The script separates the raw tree difference into:
 
 | ID | Seam and source paths | Reason to retain | Replay order | Required validation | Removal condition |
 | --- | --- | --- | --- | --- | --- |
-| `provider-chat-transport` | `codex-api/src/chat_translate.rs`, `chat_translate_tests.rs`, `common.rs`, `endpoint/chat.rs`, `sse/chat.rs`; minimal dispatch in `core/src/client.rs` | Translates third-party Chat Completions requests, streams, and mixed/interrupted tool calls into Codex semantics. | 1 | `just test -p codex-api`; focused interrupted and tool-call translation tests | Upstream provides equivalent supported third-party wire translation, including the same stream and tool behavior. |
-| `provider-metadata-models` | `model-provider-info/src/lib.rs`, `PROVIDER_MODELS.md`, `model-provider/src/provider.rs`, `models_endpoint.rs`, `models-manager/src/manager.rs` | Defines `WireApi::Chat`, Provider-scoped model metadata, model discovery, selection, normalization, and cache isolation. | 2 | `just test -p codex-model-provider`; `just test -p codex-models-manager`; Provider switch/cache-isolation smoke | Upstream exposes equivalent Provider metadata, scoped catalog, and cache semantics. |
+| `provider-chat-transport` | `codex-api/src/chat_translate.rs`, `chat_translate_tests.rs`, `common.rs`, `endpoint/chat.rs`, `sse/chat.rs`; minimal dispatch in `core/src/client.rs` | Translates third-party Chat Completions requests, streams, and mixed/interrupted tool calls into Codex semantics. Responses namespaces, including MCP plugin tools, are flattened to Chat functions with request-scoped reverse mapping; Responses-only tools without complete Chat semantics remain hidden. | 1 | `just test -p codex-api`; focused interrupted, namespace/MCP, unsupported-tool-policy, and tool-call translation tests | Upstream provides equivalent supported third-party wire translation, including the same stream, namespace/MCP, and tool behavior. |
+| `provider-metadata-models` | `model-provider-info/src/lib.rs`, `PROVIDER_MODELS.md`, `model-provider/src/provider.rs`, `models_endpoint.rs`, `models-manager/src/manager.rs`, `config/src/thread_config/**`; minimal capability consumption in `core/src/tools/spec_plan.rs` | Defines `WireApi::Chat`, Provider-scoped model and tool-capability metadata, model discovery, selection, normalization, and cache isolation. | 2 | `just test -p codex-model-provider-info`; `just test -p codex-model-provider`; `just test -p codex-config`; focused Core tool-plan tests; regenerated config Schema; Provider switch/cache-isolation smoke | Upstream exposes equivalent Provider metadata, scoped catalog, capability gates, and cache semantics. |
 | `provider-app-server-api` | `app-server-protocol/src/protocol/v2/model.rs`, `app-server/src/request_processors/catalog_processor.rs`, `app-server/src/models.rs`, request registration, generated capability declarations | Provides versioned Provider listing, Provider-scoped model listing, controlled selection/configuration, and forced refresh for both TUI and Platform Host. | 3 | `just test -p codex-app-server-protocol`; `just test -p codex-app-server model_list`; generated Schema/TypeScript; real app-server Provider smoke | Upstream provides the required stable API and generated contract. |
 | `provider-tui-workflows` | `tui/src/chatwidget/provider_popups.rs`, `provider_sections.rs`, `model_popups.rs`, `settings.rs`, `slash_dispatch.rs`, `config_update.rs`, `onboarding/auth.rs`, `slash_command.rs` | TUI Provider selection, model selection, onboarding, refresh, configuration, and error UX are product-critical client behavior. | 4 | `just test -p codex-tui`; Provider workflow snapshots | Upstream TUI provides equivalent Provider and model workflows, or the product explicitly retires TUI parity. |
 | `legacy-response-tool-history` | `app-server-protocol/src/protocol/legacy_response_tool_history.rs`, narrow integration in `thread_history.rs` | Existing Profiles can contain raw `ResponseItem` tool-call/output pairs that official semantic history projection does not materialize. | 5 | Protocol tests plus reload fixture containing raw call/output pairs | Supported Profiles no longer contain this rollout format, or upstream materializes it. |
@@ -63,10 +63,12 @@ The script separates the raw tree difference into:
 
 ## Current inventory classification
 
-The current comparison against `codex-upstream/main` contains 111
-`local-only` paths and no pending official or diverged paths. The
-non-generated source candidates are classified below; their generated
-artifacts, tests, and snapshots follow the owning source seam.
+The current comparison against `codex-upstream/main` contains 1,109 paths:
+995 `upstream-only`, 63 `local-only`, and 51 `diverged`. There are 180 official
+commits pending integration. The table below classifies the product-specific
+retained seams; upstream-only and diverged paths must be resolved through the
+official sync workflow rather than treated as additional local seams. Generated
+artifacts, tests, and snapshots follow their owning source seam.
 
 | Classification | Source paths | Decision and reason |
 | --- | --- | --- |
@@ -79,6 +81,34 @@ artifacts, tests, and snapshots follow the owning source seam.
 | `retain-core`: Provider propagation followers | `core/src/session/handlers.rs`, `exec/src/lib.rs`, `login/src/auth_env_telemetry.rs`, `app-server` remote-thread/turn tests, and `core` stream/header tests | These changes propagate the selected Provider, preserve Provider-scoped cache test isolation, or satisfy the expanded Provider metadata shape. They follow the owning Provider seam and are not independent feature surfaces. |
 | `move-out` | `utils/home-dir/src/lib.rs` missing-`CODEX_HOME` auto-creation | Profile creation belongs to the Platform Host. `apps/web/crates/profile-host::ensure_profile_home` provisions the directory before transitional Tauri and native Platform Server spawn; `utils/home-dir` has returned to official missing-`CODEX_HOME` rejection semantics. |
 | Derived artifacts and tests | Schema, TypeScript, fixtures, snapshots, lockfiles, and focused tests not named above | They follow the owning source seam. Regenerate artifacts and update tests/snapshots through their normal build/test commands; do not classify or replay them independently. |
+
+### Third-party Chat tool policy
+
+The retained Chat transport exposes only tools that preserve their execution
+semantics on an OpenAI-compatible Chat Completions wire:
+
+- top-level `function` tools remain directly visible;
+- `namespace` function tools, including MCP plugin tools, are flattened to a
+  unique `namespace__tool` Chat name and restored through a request-scoped map
+  before Codex dispatch;
+- standalone and hosted Web Search require the Provider's explicit
+  `supports_web_search` capability; configured third-party Providers default
+  to disabled while the OpenAI Provider opts in;
+- image generation requires the Provider's explicit
+  `supports_image_generation` capability;
+- remote Thread configuration does not currently transport these capability
+  flags and therefore resolves both to the safe disabled default;
+- `tool_search` remains hidden because deferred discovery and result loading
+  do not have a complete Chat lifecycle;
+- hosted `web_search` and `image_generation` remain hidden because a generic
+  third-party endpoint cannot execute OpenAI-hosted tools;
+- `custom` freeform tools and unknown Responses tool kinds remain hidden
+  because Chat function calling cannot preserve their input grammar.
+
+Do not encode transport policy or tool-name classification in `core` or MCP
+configuration. Provider facts live in Provider crates, `codex-api` owns wire
+translation, and `core` only consumes Provider capabilities at existing tool
+planning gates.
 
 ## Required boundaries
 

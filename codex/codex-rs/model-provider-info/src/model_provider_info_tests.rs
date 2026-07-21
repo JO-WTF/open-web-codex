@@ -30,6 +30,8 @@ base_url = "http://localhost:11434/v1"
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        supports_web_search: false,
+        supports_image_generation: false,
     };
 
     let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -65,6 +67,8 @@ query_params = { api-version = "2025-04-01-preview" }
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        supports_web_search: false,
+        supports_image_generation: false,
     };
 
     let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -103,6 +107,8 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        supports_web_search: false,
+        supports_image_generation: false,
     };
 
     let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -122,6 +128,23 @@ wire_api = "chat"
 
     let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
     assert_eq!(provider.wire_api, WireApi::Chat);
+    assert!(!provider.supports_web_search);
+    assert!(!provider.supports_image_generation);
+}
+
+#[test]
+fn test_deserialize_provider_tool_capability_opt_ins() {
+    let provider_toml = r#"
+name = "Compatible provider"
+base_url = "https://example.com/v1"
+wire_api = "chat"
+supports_web_search = true
+supports_image_generation = true
+        "#;
+
+    let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
+    assert!(provider.supports_web_search);
+    assert!(provider.supports_image_generation);
 }
 
 #[test]
@@ -183,6 +206,8 @@ fn test_supports_remote_compaction_for_azure_name() {
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        supports_web_search: false,
+        supports_image_generation: false,
     };
 
     assert!(provider.supports_remote_compaction());
@@ -209,6 +234,8 @@ fn test_supports_remote_compaction_for_non_openai_non_azure_provider() {
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        supports_web_search: false,
+        supports_image_generation: false,
     };
 
     assert!(!provider.supports_remote_compaction());
@@ -318,6 +345,8 @@ fn test_create_amazon_bedrock_provider() {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: false,
+            supports_web_search: false,
+            supports_image_generation: false,
         }
     );
 }

@@ -21,6 +21,7 @@ use codex_protocol::models::ResponseItem;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::HashSet;
 
 /// The reasoning effort hint expressed in the way most chat-compatible
 /// providers understand it (OpenAI o-series and DeepSeek-R1 style).
@@ -80,6 +81,16 @@ pub struct ChatTool {
     #[serde(rename = "type")]
     pub r#type: String,
     pub function: ChatToolFunction,
+    #[serde(skip)]
+    pub target: ChatToolTarget,
+}
+
+/// The Responses-side identity for a function exposed on the flattened Chat
+/// Completions tool surface.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatToolTarget {
+    pub name: String,
+    pub namespace: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -102,49 +113,92 @@ fn skip_false(value: &bool) -> bool {
 /// Converts a Responses-style tool spec list (`create_tools_json_for_responses_api`
 /// output) into the Chat Completions `tools` array shape.
 ///
-/// Only function tools are representable on the chat wire; other tool kinds
-/// (`web_search`, `image_generation`, `tool_search`, OpenAI-hosted namespace
-/// tools) are Responses-only and silently dropped because a third-party
-/// provider cannot honor them.
+/// Plain functions are preserved. Namespace functions are flattened into
+/// request-unique Chat function names and retain their Responses identity in
+/// [`ChatTool::target`] so streamed calls can be restored before dispatch.
+/// Responses-native tools without complete Chat semantics remain hidden.
 pub fn responses_tools_to_chat_tools(tools: &[Value]) -> Vec<ChatTool> {
     let mut out = Vec::with_capacity(tools.len());
     for tool in tools {
-        if let Some(converted) = convert_tool_value(tool) {
-            out.push(converted);
+        match tool.get("type").and_then(Value::as_str) {
+            Some("function") => {
+                if let Some(converted) = convert_function_tool(tool, None, None) {
+                    out.push(converted);
+                }
+            }
+            Some("namespace") => convert_namespace_tool(tool, &mut out),
+            // These Responses-native tools do not have a complete Chat
+            // Completions equivalent. Keep them hidden rather than exposing a
+            // tool the provider cannot execute with the same semantics.
+            Some("tool_search" | "web_search" | "image_generation" | "custom") | None => {}
+            Some(_) => {}
         }
     }
+    let mut seen_names = HashSet::new();
+    out.retain(|tool| seen_names.insert(tool.function.name.clone()));
     out
 }
 
-fn convert_tool_value(tool: &Value) -> Option<ChatTool> {
-    // The Responses tool spec is a tagged union `{ "type": "<variant>", ... }`.
-    let kind = tool.get("type")?.as_str()?;
-    if kind != "function" {
-        // Non-function tools (web_search, image_generation, tool_search,
-        // namespace, custom) have no Chat Completions equivalent for a generic
-        // third-party provider. Skip them.
-        return None;
-    }
-
-    let name = tool.get("name").and_then(Value::as_str)?.to_string();
-    let description = tool
+fn convert_namespace_tool(tool: &Value, out: &mut Vec<ChatTool>) {
+    let Some(namespace) = tool.get("name").and_then(Value::as_str) else {
+        return;
+    };
+    let namespace_description = tool
         .get("description")
         .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
+        .filter(|description| !description.is_empty());
+    let Some(tools) = tool.get("tools").and_then(Value::as_array) else {
+        return;
+    };
+    for nested_tool in tools {
+        if nested_tool.get("type").and_then(Value::as_str) != Some("function") {
+            continue;
+        }
+        if let Some(converted) =
+            convert_function_tool(nested_tool, Some(namespace), namespace_description)
+        {
+            out.push(converted);
+        }
+    }
+}
+
+fn convert_function_tool(
+    tool: &Value,
+    namespace: Option<&str>,
+    namespace_description: Option<&str>,
+) -> Option<ChatTool> {
+    let name = tool.get("name").and_then(Value::as_str)?.to_string();
+    let tool_description = tool
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let description = match (namespace_description, tool_description.is_empty()) {
+        (Some(namespace_description), false) => {
+            format!("{namespace_description}\n\n{tool_description}")
+        }
+        (Some(namespace_description), true) => namespace_description.to_string(),
+        (None, _) => tool_description.to_string(),
+    };
     let strict = tool.get("strict").and_then(Value::as_bool).unwrap_or(false);
     let parameters = tool
         .get("parameters")
         .cloned()
         .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+    let wire_name = namespace
+        .map(|namespace| format!("{namespace}__{name}"))
+        .unwrap_or_else(|| name.clone());
 
     Some(ChatTool {
         r#type: "function".to_string(),
         function: ChatToolFunction {
-            name,
+            name: wire_name,
             description,
             strict,
             parameters,
+        },
+        target: ChatToolTarget {
+            name,
+            namespace: namespace.map(str::to_string),
         },
     })
 }
@@ -217,6 +271,7 @@ pub fn responses_input_to_chat_messages(
             }
             ResponseItem::FunctionCall {
                 name,
+                namespace,
                 arguments,
                 call_id,
                 ..
@@ -225,7 +280,10 @@ pub fn responses_input_to_chat_messages(
                     id: call_id.clone(),
                     r#type: "function".to_string(),
                     function: ChatToolCallFunction {
-                        name: name.clone(),
+                        name: namespace
+                            .as_deref()
+                            .map(|namespace| format!("{namespace}__{name}"))
+                            .unwrap_or_else(|| name.clone()),
                         arguments: arguments.clone(),
                     },
                 };
@@ -308,12 +366,11 @@ fn push_or_merge_text(messages: &mut Vec<ChatMessage>, role: String, text: Strin
         role: last_role,
         content,
     }) = messages.last_mut()
+        && *last_role == role
     {
-        if *last_role == role {
-            content.push('\n');
-            content.push_str(&text);
-            return;
-        }
+        content.push('\n');
+        content.push_str(&text);
+        return;
     }
     messages.push(ChatMessage::Text {
         role,

@@ -31,6 +31,7 @@ pub use crate::chat_translate::ChatMessage;
 pub use crate::chat_translate::ChatReasoningEffort;
 pub use crate::chat_translate::ChatTool;
 pub use crate::chat_translate::ChatToolCall;
+pub use crate::chat_translate::ChatToolTarget;
 pub use crate::chat_translate::responses_input_to_chat_messages;
 pub use crate::chat_translate::responses_tools_to_chat_tools;
 pub use crate::common::ChatCompletionsApiRequest;
