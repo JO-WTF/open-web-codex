@@ -2,6 +2,10 @@
 .idea/
 .vscode/
 .cache/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.codex/maps-tool-memory.json
 artifacts/
 tmp/
 .ua/
@@ -13,3 +17,4 @@ apps/web/target/
 apps/web/src-tauri/target/
 codex/codex-rs/target/
 codex/target/
+tools/maps-mcp/.venv/
