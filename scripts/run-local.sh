@@ -27,6 +27,41 @@ supervisor_log="$log_dir/run-local.log"
 action="run"
 supervisor_pid="$$"
 
+color_enabled() {
+  local fd="$1"
+  [[ -t "$fd" && "${TERM:-}" != "dumb" ]]
+}
+
+green_printf() {
+  if color_enabled 1; then
+    printf '\033[32m'
+    printf "$@"
+    printf '\033[0m'
+  else
+    printf "$@"
+  fi
+}
+
+red_printf() {
+  if color_enabled 1; then
+    printf '\033[31m'
+    printf "$@"
+    printf '\033[0m'
+  else
+    printf "$@"
+  fi
+}
+
+error_printf() {
+  if color_enabled 2; then
+    printf '\033[31m' >&2
+    printf "$@" >&2
+    printf '\033[0m' >&2
+  else
+    printf "$@" >&2
+  fi
+}
+
 usage() {
   cat <<'EOF'
 Usage: ./scripts/run-local.sh [option]
@@ -71,7 +106,7 @@ while (($# > 0)); do
       ;;
     --database-url)
       if (($# < 2)); then
-        printf '%s requires a value.\n' "$1" >&2
+        error_printf '%s requires a value.\n' "$1"
         exit 2
       fi
       database_url="$2"
@@ -80,7 +115,7 @@ while (($# > 0)); do
       ;;
     --database-url-file)
       if (($# < 2)); then
-        printf '%s requires a path.\n' "$1" >&2
+        error_printf '%s requires a path.\n' "$1"
         exit 2
       fi
       database_url_file="$2"
@@ -89,7 +124,7 @@ while (($# > 0)); do
       ;;
     --database-max-connections)
       if (($# < 2)); then
-        printf '%s requires a value.\n' "$1" >&2
+        error_printf '%s requires a value.\n' "$1"
         exit 2
       fi
       database_max_connections="$2"
@@ -100,7 +135,7 @@ while (($# > 0)); do
       exit 0
       ;;
     *)
-      printf 'Unknown option: %s\n\n' "$1" >&2
+      error_printf 'Unknown option: %s\n\n' "$1"
       usage >&2
       exit 2
       ;;
@@ -111,7 +146,7 @@ done
 if [[ "$action" != "stop" && "$action" != "status" ]]; then
   if [[ -n "$database_url_file" ]]; then
     if [[ ! -r "$database_url_file" ]]; then
-      printf 'Database URL file is not readable: %s\n' "$database_url_file" >&2
+      error_printf 'Database URL file is not readable: %s\n' "$database_url_file"
       exit 2
     fi
     IFS= read -r database_url <"$database_url_file" || true
@@ -126,13 +161,13 @@ if [[ "$action" != "stop" && "$action" != "status" ]]; then
   case "$database_url" in
     postgres://*|postgresql://*) ;;
     *)
-      printf 'Database URL must start with postgres:// or postgresql://.\n' >&2
+      error_printf 'Database URL must start with postgres:// or postgresql://.\n'
       exit 2
       ;;
   esac
 
   if [[ ! "$database_max_connections" =~ ^[1-9][0-9]*$ ]]; then
-    printf 'DATABASE_MAX_CONNECTIONS must be a positive integer, got: %s\n' "$database_max_connections" >&2
+    error_printf 'DATABASE_MAX_CONNECTIONS must be a positive integer, got: %s\n' "$database_max_connections"
     exit 2
   fi
 fi
@@ -140,7 +175,7 @@ fi
 case "$skip_build" in
   0|1) ;;
   *)
-    printf 'OPEN_WEB_CODEX_SKIP_BUILD must be 0 or 1, got: %s\n' "$skip_build" >&2
+    error_printf 'OPEN_WEB_CODEX_SKIP_BUILD must be 0 or 1, got: %s\n' "$skip_build"
     exit 2
     ;;
 esac
@@ -148,7 +183,7 @@ esac
 case "$codex_mode" in
   real|fake) ;;
   *)
-    printf 'CODEX_MODE must be real or fake, got: %s\n' "$codex_mode" >&2
+    error_printf 'CODEX_MODE must be real or fake, got: %s\n' "$codex_mode"
     exit 2
     ;;
 esac
@@ -186,9 +221,9 @@ endpoint_status() {
   local label="$1"
   local url="$2"
   if curl --silent --fail "$url" >/dev/null 2>&1; then
-    printf '%-9s healthy  %s\n' "$label" "$url"
+    green_printf '%-9s healthy  %s\n' "$label" "$url"
   else
-    printf '%-9s offline  %s\n' "$label" "$url"
+    red_printf '%-9s offline  %s\n' "$label" "$url"
   fi
 }
 
@@ -197,9 +232,9 @@ show_status() {
   remove_stale_pid_file
   pid="$(read_supervisor_pid)"
   if is_supervisor_pid "$pid"; then
-    printf 'Supervisor running (PID %s)\n' "$pid"
+    green_printf 'Supervisor running (PID %s)\n' "$pid"
   else
-    printf 'Supervisor not running\n'
+    red_printf 'Supervisor not running\n'
   fi
   if command -v curl >/dev/null 2>&1; then
     if [[ "$codex_mode" == "real" ]]; then
@@ -225,13 +260,13 @@ stop_stack() {
   for attempt in $(seq 1 100); do
     if ! is_live_pid "$pid"; then
       rm -f "$supervisor_pid_file"
-      printf 'Stopped.\n'
+      green_printf 'Stopped.\n'
       return 0
     fi
     sleep 0.1
   done
 
-  printf 'Supervisor did not stop within 10 seconds; PID %s is still running.\n' "$pid" >&2
+  error_printf 'Supervisor did not stop within 10 seconds; PID %s is still running.\n' "$pid"
   return 1
 }
 
@@ -253,7 +288,7 @@ start_background() {
   remove_stale_pid_file
   existing_pid="$(read_supervisor_pid)"
   if is_supervisor_pid "$existing_pid"; then
-    printf 'open-web-codex is already running (PID %s).\n' "$existing_pid" >&2
+    error_printf 'open-web-codex is already running (PID %s).\n' "$existing_pid"
     return 1
   fi
 
@@ -279,13 +314,13 @@ start_background() {
       return 0
     fi
     if ! is_live_pid "$child_pid"; then
-      printf 'Background startup failed. See %s\n' "$supervisor_log" >&2
+      error_printf 'Background startup failed. See %s\n' "$supervisor_log"
       return 1
     fi
     sleep 0.1
   done
 
-  printf 'Background process started but did not register its PID. See %s\n' "$supervisor_log" >&2
+  error_printf 'Background process started but did not register its PID. See %s\n' "$supervisor_log"
   return 1
 }
 
@@ -313,7 +348,7 @@ if [[ "$skip_build" == "0" ]]; then
 fi
 for command_name in "${required_commands[@]}"; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
-    printf 'Missing required command: %s\n' "$command_name" >&2
+    error_printf 'Missing required command: %s\n' "$command_name"
     exit 1
   fi
 done
@@ -322,7 +357,7 @@ mkdir -p "$run_dir" "$log_dir"
 remove_stale_pid_file
 existing_pid="$(read_supervisor_pid)"
 if is_supervisor_pid "$existing_pid" && [[ "$existing_pid" != "$supervisor_pid" ]]; then
-  printf 'open-web-codex is already running (PID %s).\n' "$existing_pid" >&2
+  error_printf 'open-web-codex is already running (PID %s).\n' "$existing_pid"
   exit 1
 fi
 printf '%s\n' "$supervisor_pid" >"$supervisor_pid_file"
@@ -377,7 +412,7 @@ require_executable() {
   local label="$1"
   local path="$2"
   if [[ ! -x "$path" ]]; then
-    printf '%s binary is not executable: %s\n' "$label" "$path" >&2
+    error_printf '%s binary is not executable: %s\n' "$label" "$path"
     exit 1
   fi
 }
@@ -390,16 +425,16 @@ wait_for_health() {
   local attempt
   for attempt in $(seq 1 120); do
     if curl --silent --fail "$url" >/dev/null 2>&1; then
-      printf '%s health check passed.\n' "$label"
+      green_printf '%s health check passed.\n' "$label"
       return 0
     fi
     if ! is_live_pid "$pid"; then
-      printf '%s failed to start. See %s\n' "$label" "$log_file" >&2
+      error_printf '%s failed to start. See %s\n' "$label" "$log_file"
       return 1
     fi
     sleep 0.25
   done
-  printf '%s did not become healthy within 30 seconds. See %s\n' "$label" "$log_file" >&2
+  error_printf '%s did not become healthy within 30 seconds. See %s\n' "$label" "$log_file"
   return 1
 }
 
@@ -494,7 +529,7 @@ web_pid=$!
 web_url="http://127.0.0.1:$web_port/web"
 wait_for_health "Web client" "$web_pid" "$web_url" "$log_dir/web.log"
 
-printf '\n=== open-web-codex is running ===\n'
+green_printf '\n=== open-web-codex is running ===\n'
 printf 'Web UI:  %s\n' "$web_url"
 printf 'Server:  %s\n' "$server_health_url"
 printf 'Mode:    %s\n' "$codex_mode"
@@ -508,15 +543,15 @@ printf 'Stop:    %s --stop\n\n' "$script_path"
 
 while true; do
   if ! is_live_pid "$server_pid"; then
-    printf 'Platform server exited. See %s\n' "$log_dir/server.log" >&2
+    error_printf 'Platform server exited. See %s\n' "$log_dir/server.log"
     exit 1
   fi
   if ! is_live_pid "$web_pid"; then
-    printf 'Web client exited. See %s\n' "$log_dir/web.log" >&2
+    error_printf 'Web client exited. See %s\n' "$log_dir/web.log"
     exit 1
   fi
   if [[ "$codex_mode" == "real" ]] && ! is_live_pid "$daemon_pid"; then
-    printf 'Gateway exited. See %s\n' "$log_dir/daemon.log" >&2
+    error_printf 'Gateway exited. See %s\n' "$log_dir/daemon.log"
     exit 1
   fi
   sleep 1
