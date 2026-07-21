@@ -1,10 +1,10 @@
 use std::collections::HashSet;
 
-use crate::capability_manifest::CapabilityDeclaration;
 use crate::ClientNotificationMethod;
 use crate::ClientRequestMethod;
 use crate::ServerNotificationMethod;
 use crate::ServerRequestMethod;
+use crate::capability_manifest::CapabilityDeclaration;
 
 /// Wire methods intentionally excluded from product capability attribution.
 ///
@@ -22,7 +22,11 @@ pub fn all_registered_wire_methods() -> HashSet<String> {
     ClientRequestMethod::ALL
         .iter()
         .map(|method| method.wire_name())
-        .chain(ServerRequestMethod::ALL.iter().map(|method| method.wire_name()))
+        .chain(
+            ServerRequestMethod::ALL
+                .iter()
+                .map(|method| method.wire_name()),
+        )
         .chain(
             ServerNotificationMethod::ALL
                 .iter()
@@ -76,7 +80,9 @@ pub fn manifest_method_policy_is_consistent(
 
     for method in EXCLUDED_FROM_PRODUCT_ATTRIBUTION {
         if !registered.contains(*method) {
-            return Err(format!("excluded method {method} is not registered in the protocol"));
+            return Err(format!(
+                "excluded method {method} is not registered in the protocol"
+            ));
         }
     }
 

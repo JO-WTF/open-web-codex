@@ -123,8 +123,37 @@ fn output_content_items(
                         image_url: image_url.clone(),
                     })
                 }
+                FunctionCallOutputContentItem::InputAudio { audio_url } => {
+                    Some(DynamicToolCallOutputContentItem::InputAudio {
+                        audio_url: audio_url.clone(),
+                    })
+                }
                 FunctionCallOutputContentItem::EncryptedContent { .. } => None,
             })
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_content_items_preserves_audio_from_legacy_tool_history() {
+        let output = FunctionCallOutputPayload {
+            body: FunctionCallOutputBody::ContentItems(vec![
+                FunctionCallOutputContentItem::InputAudio {
+                    audio_url: "data:audio/wav;base64,AA==".to_string(),
+                },
+            ]),
+            success: Some(true),
+        };
+
+        assert_eq!(
+            output_content_items(&output),
+            vec![DynamicToolCallOutputContentItem::InputAudio {
+                audio_url: "data:audio/wav;base64,AA==".to_string(),
+            }]
+        );
     }
 }

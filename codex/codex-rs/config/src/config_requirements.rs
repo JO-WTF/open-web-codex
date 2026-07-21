@@ -272,10 +272,6 @@ pub struct NetworkDomainPermissionsToml {
 }
 
 impl NetworkDomainPermissionsToml {
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
     pub fn allowed_domains(&self) -> Option<Vec<String>> {
         let allowed_domains: Vec<String> = self
             .entries
@@ -321,10 +317,6 @@ pub struct NetworkUnixSocketPermissionsToml {
 }
 
 impl NetworkUnixSocketPermissionsToml {
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
     pub fn allow_unix_sockets(&self) -> Vec<String> {
         self.entries
             .iter()
@@ -754,16 +746,6 @@ impl WindowsRequirementsToml {
     pub fn is_empty(&self) -> bool {
         self.allowed_sandbox_implementations.is_none()
     }
-
-    pub fn allows_only_elevated_sandbox(&self) -> bool {
-        let Some(modes) = self.allowed_sandbox_implementations.as_deref() else {
-            return false;
-        };
-        !modes.is_empty()
-            && modes
-                .iter()
-                .all(|&mode| mode == WindowsSandboxModeToml::Elevated)
-    }
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
@@ -889,14 +871,6 @@ pub struct ConfigRequirementsToml {
     pub permissions: Option<PermissionsRequirementsToml>,
     pub models: Option<ModelsRequirementsToml>,
     pub guardian_policy_config: Option<String>,
-}
-
-impl ConfigRequirementsToml {
-    pub fn allows_only_elevated_windows_sandbox(&self) -> bool {
-        self.windows
-            .as_ref()
-            .is_some_and(WindowsRequirementsToml::allows_only_elevated_sandbox)
-    }
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]

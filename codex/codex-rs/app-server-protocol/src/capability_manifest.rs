@@ -187,9 +187,7 @@ pub fn build_manifest() -> CapabilityManifest {
     }
 }
 
-fn manifest_methods_are_registered(
-    capabilities: &[CapabilityDeclaration],
-) -> Result<(), String> {
+fn manifest_methods_are_registered(capabilities: &[CapabilityDeclaration]) -> Result<(), String> {
     let client_methods = ClientRequestMethod::ALL
         .iter()
         .map(|method| method.wire_name())
@@ -241,26 +239,22 @@ fn manifest_methods_are_registered(
 pub fn registry_experimental_wire_methods() -> Vec<String> {
     let mut methods = ClientRequestMethod::ALL
         .iter()
-        .filter_map(|method| {
-            method
-                .experimental_reason()
-                .map(|_| method.wire_name())
-        })
-        .chain(ServerRequestMethod::ALL.iter().filter_map(|method| {
-            method
-                .experimental_reason()
-                .map(|_| method.wire_name())
-        }))
-        .chain(ServerNotificationMethod::ALL.iter().filter_map(|method| {
-            method
-                .experimental_reason()
-                .map(|_| method.wire_name())
-        }))
-        .chain(ClientNotificationMethod::ALL.iter().filter_map(|method| {
-            method
-                .experimental_reason()
-                .map(|_| method.wire_name())
-        }))
+        .filter_map(|method| method.experimental_reason().map(|_| method.wire_name()))
+        .chain(
+            ServerRequestMethod::ALL
+                .iter()
+                .filter_map(|method| method.experimental_reason().map(|_| method.wire_name())),
+        )
+        .chain(
+            ServerNotificationMethod::ALL
+                .iter()
+                .filter_map(|method| method.experimental_reason().map(|_| method.wire_name())),
+        )
+        .chain(
+            ClientNotificationMethod::ALL
+                .iter()
+                .filter_map(|method| method.experimental_reason().map(|_| method.wire_name())),
+        )
         .collect::<Vec<_>>();
     methods.sort();
     methods.dedup();
@@ -318,7 +312,8 @@ fn manifest_experimental_flags_are_consistent(
 ) -> Result<(), String> {
     for capability in capabilities {
         let references_experimental = capability_references_experimental_method(capability);
-        let product_experimental = PRODUCT_EXPERIMENTAL_CAPABILITY_IDS.contains(&capability.id.as_str());
+        let product_experimental =
+            PRODUCT_EXPERIMENTAL_CAPABILITY_IDS.contains(&capability.id.as_str());
 
         if references_experimental && !capability.experimental {
             return Err(format!(
@@ -714,10 +709,7 @@ mod tests {
             registry_method_experimental_reason("thread/settings/updated"),
             Some("thread/settings/updated")
         );
-        assert_eq!(
-            registry_method_experimental_reason("initialized"),
-            None
-        );
+        assert_eq!(registry_method_experimental_reason("initialized"), None);
         assert!(
             ServerNotificationMethod::ALL
                 .iter()
@@ -783,7 +775,11 @@ mod tests {
         let registered = ClientRequestMethod::ALL
             .iter()
             .map(|method| method.wire_name())
-            .chain(ServerRequestMethod::ALL.iter().map(|method| method.wire_name()))
+            .chain(
+                ServerRequestMethod::ALL
+                    .iter()
+                    .map(|method| method.wire_name()),
+            )
             .chain(
                 ServerNotificationMethod::ALL
                     .iter()

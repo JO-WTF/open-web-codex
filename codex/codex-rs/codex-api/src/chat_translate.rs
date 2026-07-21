@@ -353,9 +353,10 @@ fn content_item_to_text(item: &ContentItem) -> Option<String> {
             }
         }
         // Multimodal content is intentionally not translated here: support for
-        // image inputs varies widely across chat-compatible providers. A
-        // future enhancement can emit the `{type:"image_url"}` part array.
-        ContentItem::InputImage { .. } => None,
+        // image and audio inputs varies widely across chat-compatible
+        // providers. A future enhancement can emit provider-compatible part
+        // arrays once the transport contract supports them explicitly.
+        ContentItem::InputImage { .. } | ContentItem::InputAudio { .. } => None,
     }
 }
 

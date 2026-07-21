@@ -212,6 +212,24 @@ fn reasoning_items_are_dropped() {
 }
 
 #[test]
+fn unsupported_audio_input_is_not_emitted_as_chat_text() {
+    let messages = responses_input_to_chat_messages(
+        &[ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputAudio {
+                audio_url: "data:audio/wav;base64,AA==".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        }],
+        "",
+    );
+
+    assert!(messages.is_empty());
+}
+
+#[test]
 fn full_conversation_round_trip() {
     // A representative agent loop fragment: assistant calls a tool, tool
     // returns a result, then assistant replies with text.

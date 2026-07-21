@@ -330,6 +330,7 @@ impl From<ChatUsage> for TokenUsage {
                 .input_tokens_details
                 .map(|details| details.cached_tokens)
                 .unwrap_or(0),
+            cache_write_input_tokens: 0,
             output_tokens: value.output_tokens,
             reasoning_output_tokens: value
                 .output_tokens_details
@@ -458,6 +459,7 @@ mod tests {
             Some(&TokenUsage {
                 input_tokens: 2,
                 cached_input_tokens: 0,
+                cache_write_input_tokens: 0,
                 output_tokens: 3,
                 reasoning_output_tokens: 0,
                 total_tokens: 5,

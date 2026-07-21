@@ -441,6 +441,9 @@ pub struct ManagedHooksRequirements {
     #[serde(rename = "SessionStart")]
     #[ts(rename = "SessionStart")]
     pub session_start: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "SessionEnd", default)]
+    #[ts(rename = "SessionEnd")]
+    pub session_end: Vec<ConfiguredHookMatcherGroup>,
     #[serde(rename = "UserPromptSubmit")]
     #[ts(rename = "UserPromptSubmit")]
     pub user_prompt_submit: Vec<ConfiguredHookMatcherGroup>,
@@ -481,6 +484,13 @@ pub enum ConfiguredHookHandler {
         #[serde(rename = "statusMessage")]
         #[ts(rename = "statusMessage")]
         status_message: Option<String>,
+        /// Approximate token threshold for spilling this hook's `additionalContext` to disk.
+        /// `null` uses 2,500 tokens; `0` disables spilling for this hook. The threshold is
+        /// evaluated against the original context; a spilled preview also includes recovery
+        /// metadata.
+        #[serde(rename = "additionalContextLimit")]
+        #[ts(rename = "additionalContextLimit")]
+        additional_context_limit: Option<usize>,
     },
     #[serde(rename = "prompt")]
     #[ts(rename = "prompt")]
@@ -575,6 +585,9 @@ pub enum ExternalAgentConfigMigrationItemType {
     #[serde(rename = "COMMANDS")]
     #[ts(rename = "COMMANDS")]
     Commands,
+    #[serde(rename = "MEMORY")]
+    #[ts(rename = "MEMORY")]
+    Memory,
     #[serde(rename = "SESSIONS")]
     #[ts(rename = "SESSIONS")]
     Sessions,
@@ -654,6 +667,8 @@ pub struct MigrationDetails {
     pub subagents: Vec<SubagentMigration>,
     #[serde(default)]
     pub commands: Vec<CommandMigration>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub memory: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -684,10 +699,19 @@ pub struct ExternalAgentConfigDetectParams {
     /// Zero or more working directories to include for repo-scoped detection.
     #[ts(optional = nullable)]
     pub cwds: Option<Vec<PathBuf>>,
-    /// Optional import-source selector. Missing or unrecognized values use the default source for
-    /// backwards compatibility.
+    /// Maximum age in days for detected sessions. Missing values use the default limit.
+    #[ts(optional = nullable)]
+    pub max_session_age_days: Option<u32>,
+    /// Maximum number of sessions to detect. Missing values use the default limit.
+    #[ts(optional = nullable)]
+    pub max_sessions: Option<u32>,
+    /// Deprecated field retained for compatibility. This field is ignored; use `migrationSource`
+    /// to select the migration source.
     #[ts(optional = nullable)]
     pub source: Option<String>,
+    /// Optional migration-source selector. Missing or unrecognized values use the default source.
+    #[ts(optional = nullable)]
+    pub migration_source: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -695,11 +719,17 @@ pub struct ExternalAgentConfigDetectParams {
 #[ts(export_to = "v2/")]
 pub struct ExternalAgentConfigImportParams {
     pub migration_items: Vec<ExternalAgentConfigMigrationItem>,
-    /// Import-source selector used to produce the migration items. Pass the same value to detection
-    /// and import; missing or unrecognized values use the default source for backwards
-    /// compatibility.
+    /// Optional identifier for the product that initiated the import.
     #[ts(optional = nullable)]
     pub source: Option<String>,
+    /// Opaque provider identifier supplied by the caller for analytics attribution. This does not
+    /// select the migration source.
+    #[ts(optional = nullable)]
+    pub provider_id: Option<String>,
+    /// Migration-source selector used to produce the migration items. Pass the same value to
+    /// detection and import; missing or unrecognized values use the default source.
+    #[ts(optional = nullable)]
+    pub migration_source: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -756,6 +786,23 @@ pub struct ExternalAgentConfigImportHistory {
 #[ts(export_to = "v2/")]
 pub struct ExternalAgentConfigImportHistoriesReadResponse {
     pub data: Vec<ExternalAgentConfigImportHistory>,
+    pub connectors: Vec<ExternalAgentImportedConnectorCandidate>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ExternalAgentImportedConnectorSource {
+    RemoteMcpServersConfig,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExternalAgentImportedConnectorCandidate {
+    pub name: String,
+    pub session_count: u32,
+    pub source: ExternalAgentImportedConnectorSource,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
