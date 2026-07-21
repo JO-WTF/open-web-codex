@@ -5,8 +5,8 @@
 | 字段 | 内容 |
 | --- | --- |
 | 更新日期 | 2026-07-21 |
-| 当前分支 | `codex/sync-upstream-2497972808e7` |
-| Codex 基线 | `openai/codex` `2497972808e7a5fc2c4db50a140bbd1559fc1d75` |
+| 当前分支 | `codex/sync-upstream-25d2dfcad010` |
+| Codex 基线 | `openai/codex` `25d2dfcad010386610867a4635e0874296b468f1` |
 | 上游待同步 | 0 |
 | 当前工作 | Codex 定制收敛、平台迁移与桌面运行时淘汰的最终回归 |
 
@@ -46,7 +46,7 @@
 
 ## A. Codex 上游同步与定制收敛
 
-- [x] 同步官方 main 到 `2497972808e7`，确认无待集成提交。
+- [x] 同步官方 main 到 `25d2dfcad010`，确认无待集成提交。
 - [x] 将全部非生成差异分类为 `retain-core`、`upstreamed`、`move-out` 或
   `drop`，机器清单与 patch map 一致。
 - [x] Chat DTO、Responses-to-Chat 转换、工具名反向映射和 SSE 翻译集中到

@@ -10,8 +10,8 @@ Observed on 2026-07-21 from the current synchronization branch:
 
 | Component | State |
 | --- | --- |
-| Codex subtree | integrated through `openai/codex` `2497972808e7a5fc2c4db50a140bbd1559fc1d75` |
-| Observed official main | `2497972808e7a5fc2c4db50a140bbd1559fc1d75`; no commit awaits integration |
+| Codex subtree | integrated through `openai/codex` `25d2dfcad010386610867a4635e0874296b468f1` |
+| Observed official main | `25d2dfcad010386610867a4635e0874296b468f1`; no commit awaits integration |
 | Local Codex seams vs official main | 123 local-only paths: 25 added and 98 modified; no upstream-only, diverged, or missing local paths |
 | Local customization footprint | six retained Runtime/TUI seams, one temporary upstreamed fix, derived artifacts and focused tests |
 | Web platform | Axum/PostgreSQL platform, native Profile Registry/Host, encrypted Provider Secret injection, durable approvals, isolated Git workspaces, lease-based Run orchestration, typed REST resources and authenticated WebSocket |
@@ -69,6 +69,9 @@ Observed on 2026-07-21 from the current synchronization branch:
   isolation because the host resolver otherwise synthesizes an address for the
   reserved `.invalid` name. The added CLI sandbox cases are Linux-only and do
   not compile as tests on the current macOS host.
+- The latest official named `/new` and `/clear` session lifecycle is integrated
+  through the upstream TUI structure; the Provider event and slash-command
+  seams merge without a parallel session implementation.
 
 The successful checks prove only the surfaces named above. They do not prove
 multi-Profile process routing, production sandbox strength, complete Cookie/CSRF

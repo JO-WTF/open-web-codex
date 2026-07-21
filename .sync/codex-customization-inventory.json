@@ -3,9 +3,9 @@
   "purpose": "Tracks the current official-tree comparison and convergence classification progress for codex/.",
   "comparison": {
     "upstreamRef": "codex-upstream/main",
-    "upstreamCommit": "2497972808e7a5fc2c4db50a140bbd1559fc1d75",
+    "upstreamCommit": "25d2dfcad010386610867a4635e0874296b468f1",
     "localTree": "HEAD:codex",
-    "observedAt": "2026-07-21T20:14:01Z",
+    "observedAt": "2026-07-21T20:28:35Z",
     "differenceCount": 123,
     "addedLocally": 25,
     "modified": 98,
@@ -49,14 +49,14 @@
       "mcpTests": "110 passed",
       "coreSkillsTests": "124 passed",
       "appServerTests": "981 passed; 1 skipped",
-      "tuiTests": "3228 passed; 4 skipped",
+      "tuiTests": "3231 passed; 4 skipped",
       "networkProxyTests": "all 207 network-proxy tests passed across local-port and network-isolated runs; the new CLI sandbox cases are Linux-only and not applicable on the macOS validation host",
       "realAppServerSmoke": "passed; 18 capability declarations",
       "webContractCheck": "passed",
       "platformTests": "frontend, Rust workspace, PostgreSQL integration, Profile restart, Provider isolation, Git Runtime, Run lease, two-organization security, and fake-server HTTP/WebSocket checks passed"
     },
-    "validatedAgainstUpstream": "2497972808e7a5fc2c4db50a140bbd1559fc1d75",
-    "validatedAtCommit": "eb665d4eab1b4c2fc8bb96641d703c6933b21d5b",
+    "validatedAgainstUpstream": "25d2dfcad010386610867a4635e0874296b468f1",
+    "validatedAtCommit": "f5df6e0b9089be7fc52921f431e57b991b120571",
     "nextAction": "Replace the single configured Profile composition root with authorized per-user dynamic Profile routing, then complete the M2 session and Runner hardening gates."
   }
 }
