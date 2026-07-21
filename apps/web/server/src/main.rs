@@ -20,7 +20,7 @@ use open_web_codex_provider_service::secured::{
 use open_web_codex_run_orchestrator::RunOrchestrator;
 use open_web_codex_secret_store::{MasterKey, PostgresSecretStore, SecretCipher};
 use sqlx::Row;
-use tower_http::cors::CorsLayer;
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
@@ -67,18 +67,16 @@ struct Cli {
     /// Permit local filesystem Git sources. Intended only for isolated tests.
     #[arg(long, env = "OPEN_WEB_CODEX_ALLOW_LOCAL_GIT_SOURCES", default_value_t = false, action = clap::ArgAction::SetTrue)]
     allow_local_git_sources: bool,
+    /// Built browser assets served by this process. API-only mode is used
+    /// when the directory does not exist.
+    #[arg(long, env = "OPEN_WEB_CODEX_WEB_DIST", default_value = "dist")]
+    web_dist: PathBuf,
     /// Stable Profile identity for the transitional single-Profile flow.
     #[arg(long, env = "CODEX_PROFILE_ID", default_value = "default-profile")]
     profile_id: String,
     /// Stable workspace identity for event and Thread routing.
     #[arg(long, env = "CODEX_WORKSPACE_ID", default_value = "default-workspace")]
     workspace_id: String,
-    /// Expose legacy `/api/rpc` and `/api/events` Codex proxy routes.
-    ///
-    /// Disabled by default. Local migration may opt in with
-    /// `CODEX_ALLOW_LEGACY_PROXY=1`.
-    #[arg(long, env = "CODEX_ALLOW_LEGACY_PROXY", default_value_t = false, action = clap::ArgAction::SetTrue)]
-    legacy_codex_proxy: bool,
 }
 
 #[tokio::main]
@@ -237,14 +235,18 @@ async fn main() -> anyhow::Result<()> {
                     },
                     None => data,
                 };
-                if let Err(error) =
-                    event_projection::persist_frame(&public_data, &projection_db).await
-                {
-                    tracing::warn!("event projection failed: {error}");
-                    continue;
-                }
-                if event_bus.send(public_data).is_err() {
-                    tracing::debug!("event bus: no active receivers, dropping event");
+                match event_projection::persist_frame(&public_data, &projection_db).await {
+                    Ok(Some(projected)) => {
+                        let live = open_web_codex_platform_store::LiveEvent {
+                            organization_id: projected.organization_id,
+                            payload: projected.payload,
+                        };
+                        if event_bus.send(live).is_err() {
+                            tracing::debug!("event bus: no active receivers, dropping event");
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => tracing::warn!("event projection failed: {error}"),
                 }
             }
 
@@ -253,30 +255,25 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    if cli.legacy_codex_proxy {
-        tracing::warn!(
-            "legacy Codex RPC/SSE proxy is enabled; do not use this as a multi-user production boundary"
-        );
+    let mut app = Router::new().nest(
+        "/api",
+        routes::router(
+            adapter,
+            providers,
+            approvals,
+            git,
+            orchestrator,
+            profile_binding,
+        ),
+    );
+    if cli.web_dist.is_dir() {
+        let index = cli.web_dist.join("index.html");
+        app = app.fallback_service(ServeDir::new(&cli.web_dist).fallback(ServeFile::new(index)));
+        tracing::info!(web_dist = %cli.web_dist.display(), "serving browser application");
     } else {
-        tracing::info!("legacy Codex RPC/SSE proxy routes are disabled");
+        tracing::warn!(web_dist = %cli.web_dist.display(), "browser assets not found; serving API only");
     }
-
-    let app = Router::new()
-        .nest(
-            "/api",
-            routes::router(
-                adapter,
-                providers,
-                approvals,
-                git,
-                orchestrator,
-                profile_binding,
-                cli.legacy_codex_proxy,
-            ),
-        )
-        .layer(TraceLayer::new_for_http())
-        .layer(cors_layer(cli.legacy_codex_proxy))
-        .with_state(state);
+    let app = app.layer(TraceLayer::new_for_http()).with_state(state);
 
     let listener = tokio::net::TcpListener::bind(cli.bind).await?;
     tracing::info!("listening on {}", cli.bind);
@@ -402,14 +399,6 @@ async fn ensure_transitional_profile_binding(
         _ => anyhow::bail!(
             "Profile '{runtime_key}' has no ownership binding and multiple owner memberships exist"
         ),
-    }
-}
-
-fn cors_layer(legacy_codex_proxy: bool) -> CorsLayer {
-    if legacy_codex_proxy {
-        CorsLayer::permissive()
-    } else {
-        CorsLayer::new()
     }
 }
 

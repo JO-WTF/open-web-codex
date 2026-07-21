@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 /// Authenticated user extracted from the session token
 /// (Authorization: Bearer <token> header or session_token cookie).
+#[derive(Debug, Clone)]
 pub struct AuthenticatedUser {
     pub session_id: Uuid,
     pub user_id: Uuid,
@@ -54,48 +55,60 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
             )
         })?;
 
-        // Hash the token for lookup
-        let mut hasher = Sha256::new();
-        hasher.update(token.as_bytes());
-        let token_hash = hex::encode(hasher.finalize());
+        authenticate_token(&state.db, token).await
+    }
+}
 
-        let row = sqlx::query(
-            "SELECT s.id AS session_id, u.id, u.name, u.email, u.role, \
+pub async fn authenticate_token(
+    db: &sqlx::PgPool,
+    token: &str,
+) -> Result<AuthenticatedUser, AuthRejection> {
+    if token.trim().is_empty() || token.len() > 512 {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(PlatformError::unauthorized("invalid session token")),
+        ));
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(token.as_bytes());
+    let token_hash = hex::encode(hasher.finalize());
+
+    let row = sqlx::query(
+        "SELECT s.id AS session_id, u.id, u.name, u.email, u.role, \
                     m.organization_id, m.role AS organization_role \
              FROM sessions s \
              JOIN users u ON u.id = s.user_id \
              JOIN memberships m ON m.organization_id = s.organization_id AND m.user_id = s.user_id \
              WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now()",
+    )
+    .bind(&token_hash)
+    .fetch_optional(db)
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PlatformError::internal(
+                "authentication database operation failed",
+            )),
         )
-        .bind(&token_hash)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(PlatformError::internal(
-                    "authentication database operation failed",
-                )),
-            )
-        })?;
+    })?;
 
-        let row = row.ok_or_else(|| {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(PlatformError::unauthorized("invalid or expired session")),
-            )
-        })?;
+    let row = row.ok_or_else(|| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(PlatformError::unauthorized("invalid or expired session")),
+        )
+    })?;
 
-        Ok(AuthenticatedUser {
-            session_id: row.get("session_id"),
-            user_id: row.get("id"),
-            name: row.get("name"),
-            email: row.get("email"),
-            role: row.get("role"),
-            organization_id: row.get("organization_id"),
-            organization_role: row.get("organization_role"),
-        })
-    }
+    Ok(AuthenticatedUser {
+        session_id: row.get("session_id"),
+        user_id: row.get("id"),
+        name: row.get("name"),
+        email: row.get("email"),
+        role: row.get("role"),
+        organization_id: row.get("organization_id"),
+        organization_role: row.get("organization_role"),
+    })
 }
 
 pub async fn require_runtime_profile(

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use axum::Router;
+use futures_util::{SinkExt, StreamExt};
 use open_web_codex_adapter::fake::FakeCodexAdapter;
 use open_web_codex_approval_service::ApprovalService;
 use open_web_codex_auth::hash_password;
@@ -66,10 +67,9 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
                 git,
                 orchestrator,
                 profile,
-                true,
             ),
         )
-        .with_state(state);
+        .with_state(state.clone());
 
     let bootstrap = call(
         &app,
@@ -283,6 +283,54 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     )
     .await;
     assert_eq!(member_create.0, StatusCode::FORBIDDEN);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/api/events/ws"))
+        .await
+        .unwrap();
+    socket
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            json!({"type": "authenticate", "token": second_token})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    let ready = socket.next().await.unwrap().unwrap().into_text().unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&ready).unwrap()["type"],
+        "ready"
+    );
+    state
+        .event_bus
+        .send(open_web_codex_platform_store::LiveEvent {
+            organization_id: first_organization_id,
+            payload: br#"{"type":"run.event","event":{"sequence":1}}"#.to_vec(),
+        })
+        .unwrap();
+    state
+        .event_bus
+        .send(open_web_codex_platform_store::LiveEvent {
+            organization_id: second_organization_id,
+            payload: br#"{"type":"run.event","event":{"sequence":2}}"#.to_vec(),
+        })
+        .unwrap();
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap()
+        .into_text()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&event).unwrap()["event"]["sequence"],
+        2
+    );
+    server.abort();
 
     let password_hash: String = sqlx::query(
         "SELECT password_hash FROM users WHERE id = $1 AND id IN \

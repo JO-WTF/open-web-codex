@@ -1,6 +1,6 @@
 pub mod approvals;
 pub mod bootstrap;
-pub mod codex_proxy;
+pub mod events;
 pub mod health;
 pub mod me;
 pub mod organizations;
@@ -59,9 +59,8 @@ pub fn router(
     git: Arc<GitRuntime>,
     orchestrator: Arc<RunOrchestrator>,
     profile: RuntimeProfileBinding,
-    legacy_codex_proxy: bool,
 ) -> Router<AppState> {
-    let mut router = Router::new()
+    Router::new()
         .route("/bootstrap", axum::routing::post(bootstrap::bootstrap))
         .route("/sessions", axum::routing::post(sessions::create_session))
         .route(
@@ -100,6 +99,7 @@ pub fn router(
             axum::routing::get(organizations::list_members).post(organizations::add_member),
         )
         .route("/health", axum::routing::get(health::health_check))
+        .route("/events/ws", axum::routing::get(events::websocket))
         .route(
             "/projects",
             axum::routing::get(projects::list_projects).post(projects::create_project),
@@ -134,15 +134,7 @@ pub fn router(
         .route(
             "/providers/{provider_id}/models/{model_id}",
             axum::routing::patch(providers::update_provider_model),
-        );
-
-    if legacy_codex_proxy {
-        router = router
-            .route("/rpc", axum::routing::post(codex_proxy::rpc_handler))
-            .route("/events", axum::routing::get(codex_proxy::events_handler));
-    }
-
-    router
+        )
         .layer(Extension(adapter))
         .layer(Extension(providers))
         .layer(Extension(approvals))

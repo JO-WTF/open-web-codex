@@ -1,5 +1,7 @@
+use open_web_codex_platform_contracts::RunEvent;
 use serde_json::{json, Map, Value};
 use sqlx::PgPool;
+use sqlx::Row;
 use uuid::Uuid;
 
 const PROJECTION_VERSION: i16 = 1;
@@ -13,31 +15,40 @@ struct ProjectedEvent {
     payload: Value,
 }
 
-pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<(), String> {
+pub struct LiveProjection {
+    pub organization_id: Uuid,
+    pub payload: Vec<u8>,
+}
+
+pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjection>, String> {
     let Some(event) = project_frame(data)? else {
-        return Ok(());
+        return Ok(None);
     };
 
     let mut transaction = db
         .begin()
         .await
         .map_err(|error| format!("event transaction error: {error}"))?;
-    let run_id = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM runs WHERE codex_thread_id = $1 ORDER BY created_at DESC LIMIT 1",
+    let run = sqlx::query(
+        "SELECT id, organization_id FROM runs \
+         WHERE codex_thread_id = $1 ORDER BY created_at DESC LIMIT 1",
     )
     .bind(&event.thread_id)
     .fetch_optional(&mut *transaction)
     .await
     .map_err(|error| format!("event run lookup error: {error}"))?;
 
-    let Some(run_id) = run_id else {
-        return Ok(());
+    let Some(run) = run else {
+        return Ok(None);
     };
+    let run_id: Uuid = run.get("id");
+    let organization_id: Uuid = run.get("organization_id");
 
-    sqlx::query(
+    let persisted = sqlx::query(
         "INSERT INTO run_events (
             run_id, event_type, projection_version, thread_id, turn_id, item_id, payload
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id, sequence, created_at",
     )
     .bind(run_id)
     .bind(&event.event_type)
@@ -46,7 +57,7 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<(), String> {
     .bind(&event.turn_id)
     .bind(&event.item_id)
     .bind(&event.payload)
-    .execute(&mut *transaction)
+    .fetch_one(&mut *transaction)
     .await
     .map_err(|error| format!("event insert error: {error}"))?;
 
@@ -112,7 +123,30 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<(), String> {
     transaction
         .commit()
         .await
-        .map_err(|error| format!("event transaction commit error: {error}"))
+        .map_err(|error| format!("event transaction commit error: {error}"))?;
+
+    let public = RunEvent {
+        id: persisted.get("id"),
+        sequence: persisted.get("sequence"),
+        run_id,
+        event_type: event.event_type,
+        projection_version: PROJECTION_VERSION,
+        thread_id: Some(event.thread_id),
+        turn_id: event.turn_id,
+        item_id: event.item_id,
+        payload: event.payload,
+        created_at: persisted.get("created_at"),
+    };
+    let payload = serde_json::to_vec(&json!({
+        "type": "run.event",
+        "version": 1,
+        "event": public,
+    }))
+    .map_err(|error| format!("live projection encoding error: {error}"))?;
+    Ok(Some(LiveProjection {
+        organization_id,
+        payload,
+    }))
 }
 
 fn project_frame(data: &[u8]) -> Result<Option<ProjectedEvent>, String> {
@@ -195,6 +229,7 @@ fn project_frame(data: &[u8]) -> Result<Option<ProjectedEvent>, String> {
 
 fn classify_method(method: &str) -> (&'static str, &'static str) {
     match method {
+        "platform/approvalRequested" => ("platform.approval.requested", "requested"),
         "item/started" => ("codex.item.started", "started"),
         "item/completed" => ("codex.item.completed", "completed"),
         "turn/started" => ("codex.turn.started", "started"),
@@ -216,6 +251,7 @@ fn project_event_data(method: &str, params: &Map<String, Value>) -> Value {
     let mut data = Map::new();
     data.insert("sourceType".to_string(), Value::String(method.to_string()));
     for key in [
+        "approvalId",
         "delta",
         "summaryIndex",
         "contentIndex",
@@ -391,6 +427,17 @@ mod tests {
         assert_eq!(event.payload["data"]["sourceType"], "item/futureEvent");
         assert!(event.payload["data"].get("credential").is_none());
         assert!(event.payload["data"].get("payload").is_none());
+    }
+
+    #[test]
+    fn projects_platform_approvals_without_runtime_request_ids() {
+        let frame = br#"data: {"method":"app-server-event","params":{"message":{"method":"platform/approvalRequested","params":{"approvalId":"018f-id","threadId":"thread-1"}}}}
+
+"#;
+        let event = project_frame(frame).unwrap().unwrap();
+        assert_eq!(event.event_type, "platform.approval.requested");
+        assert_eq!(event.payload["data"]["approvalId"], "018f-id");
+        assert!(!event.payload.to_string().contains("requestId"));
     }
 
     #[test]
