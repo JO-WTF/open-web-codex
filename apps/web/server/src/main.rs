@@ -1,6 +1,8 @@
 mod event_projection;
 mod middleware;
 mod routes;
+#[cfg(test)]
+mod security_integration;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -8,10 +10,14 @@ use std::sync::Arc;
 
 use axum::Router;
 use clap::Parser;
-use open_web_codex_profile_host::ProfileHostConfig;
-use open_web_codex_provider_service::{
-    InMemoryProviderService, ProviderOperations, ProviderService,
+use open_web_codex_approval_service::ApprovalService;
+use open_web_codex_profile_host::{ProfileHost, ProfileHostConfig};
+use open_web_codex_profile_registry::ProfileRegistry;
+use open_web_codex_provider_service::secured::{
+    AuthorizedProviderOperations, InMemoryAuthorizedProviderService, SecuredProviderService,
 };
+use open_web_codex_secret_store::{MasterKey, PostgresSecretStore, SecretCipher};
+use sqlx::Row;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
@@ -94,13 +100,19 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let state = AppState::new(pool);
-    let (adapter, providers): (Arc<dyn CodexAdapter>, Arc<dyn ProviderOperations>) =
+    let profile_binding = routes::RuntimeProfileBinding {
+        runtime_key: cli.profile_id.clone(),
+        name: cli.profile_id.clone(),
+        workspace_id: cli.workspace_id.clone(),
+        capabilities: routes::RuntimeCapabilityState::default(),
+    };
+    let (adapter, providers): (Arc<dyn CodexAdapter>, Arc<dyn AuthorizedProviderOperations>) =
         match cli.codex_mode.as_str() {
             "fake" => {
                 tracing::info!("starting in fake codex mode");
                 (
                     Arc::new(FakeCodexAdapter::new().with_demo_workspace().await),
-                    Arc::new(InMemoryProviderService::default()),
+                    Arc::new(InMemoryAuthorizedProviderService::default()),
                 )
             }
             "real" => {
@@ -117,15 +129,52 @@ async fn main() -> anyhow::Result<()> {
                     workspace_root = %workspace_root.display(),
                     "starting native Codex Profile Host"
                 );
+                ensure_transitional_profile_binding(
+                    &state.db,
+                    &profile_binding.runtime_key,
+                    &profile_binding.name,
+                )
+                .await?;
+                let master_key = std::env::var("OPEN_WEB_CODEX_MASTER_KEY").map_err(|_| {
+                    anyhow::anyhow!("OPEN_WEB_CODEX_MASTER_KEY is required in real Codex mode")
+                })?;
+                let key_version = std::env::var("OPEN_WEB_CODEX_MASTER_KEY_VERSION")
+                    .unwrap_or_else(|_| "v1".to_string());
+                let cipher = SecretCipher::new(MasterKey::from_base64(&master_key)?, key_version)?;
+                let secret_store = PostgresSecretStore::new(state.db.clone(), cipher);
+                let registry = ProfileRegistry::new();
+                let providers = SecuredProviderService::new(
+                    state.db.clone(),
+                    profile_binding.runtime_key.clone(),
+                    registry.clone(),
+                    secret_store,
+                );
+                let secret_environment = providers.startup_secret_environment().await?;
                 let host_config =
                     ProfileHostConfig::new(cli.profile_id.clone(), codex_home, workspace_root)
                         .with_codex_bin(cli.codex_bin.clone());
-                let real = RealCodexAdapter::spawn(host_config, cli.workspace_id.clone()).await?;
-                let providers = ProviderService::for_profile_host(real.profile_host());
+                let workspace_root = host_config.workspace_root.clone();
+                let host = registry
+                    .register_with_secret_environment(host_config, secret_environment)
+                    .await?;
+                let capabilities = profile_capability_record(&host).await?;
+                profile_binding.capabilities.set(capabilities.clone()).await;
+                persist_profile_capabilities(
+                    &state.db,
+                    &profile_binding.runtime_key,
+                    &capabilities,
+                )
+                .await?;
+                let real =
+                    RealCodexAdapter::from_host(host, cli.workspace_id.clone(), workspace_root)?;
                 (Arc::new(real), Arc::new(providers))
             }
             other => anyhow::bail!("unknown --codex-mode '{other}'; expected 'fake' or 'real'"),
         };
+    let approvals = Arc::new(ApprovalService::new(
+        state.db.clone(),
+        profile_binding.runtime_key.clone(),
+    ));
 
     // ── Event Bus ───────────────────────────────────────────────────
     // Bridge adapter events into durable projections and the live event bus.
@@ -133,6 +182,7 @@ async fn main() -> anyhow::Result<()> {
     {
         let event_bus = event_bus.clone();
         let adapter = adapter.clone();
+        let approvals = approvals.clone();
         let projection_db = state.db.clone();
         tokio::spawn(async move {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
@@ -149,11 +199,30 @@ async fn main() -> anyhow::Result<()> {
             // to connected browsers. The database cursor is therefore always
             // available when a client reconnects after seeing an event.
             while let Some(data) = rx.recv().await {
-                if let Err(error) = event_projection::persist_frame(&data, &projection_db).await {
+                let captured = match approvals.capture_event_frame(&data).await {
+                    Ok(captured) => captured,
+                    Err(error) => {
+                        tracing::warn!("app-server request was not persisted: {error}");
+                        continue;
+                    }
+                };
+                let public_data = match captured {
+                    Some(approval_id) => match public_approval_frame(&data, approval_id) {
+                        Ok(frame) => frame,
+                        Err(error) => {
+                            tracing::warn!("approval projection failed: {error}");
+                            continue;
+                        }
+                    },
+                    None => data,
+                };
+                if let Err(error) =
+                    event_projection::persist_frame(&public_data, &projection_db).await
+                {
                     tracing::warn!("event projection failed: {error}");
                     continue;
                 }
-                if event_bus.send(data).is_err() {
+                if event_bus.send(public_data).is_err() {
                     tracing::debug!("event bus: no active receivers, dropping event");
                 }
             }
@@ -174,7 +243,13 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .nest(
             "/api",
-            routes::router(adapter, providers, cli.legacy_codex_proxy),
+            routes::router(
+                adapter,
+                providers,
+                approvals,
+                profile_binding,
+                cli.legacy_codex_proxy,
+            ),
         )
         .layer(TraceLayer::new_for_http())
         .layer(cors_layer(cli.legacy_codex_proxy))
@@ -188,10 +263,158 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn public_approval_frame(frame: &[u8], approval_id: uuid::Uuid) -> anyhow::Result<Vec<u8>> {
+    let payload = frame
+        .strip_prefix(b"data: ")
+        .and_then(|value| value.strip_suffix(b"\n\n"))
+        .ok_or_else(|| anyhow::anyhow!("invalid app-server event frame"))?;
+    let envelope: serde_json::Value = serde_json::from_slice(payload)?;
+    let workspace_id = envelope.pointer("/params/workspace_id").cloned();
+    let thread_id = envelope
+        .pointer("/params/message/params/threadId")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("approval omitted threadId"))?;
+    let public = serde_json::json!({
+        "method": "app-server-event",
+        "params": {
+            "workspace_id": workspace_id,
+            "message": {
+                "method": "platform/approvalRequested",
+                "params": {
+                    "approvalId": approval_id,
+                    "threadId": thread_id,
+                }
+            }
+        }
+    });
+    let mut projected = b"data: ".to_vec();
+    serde_json::to_writer(&mut projected, &public)?;
+    projected.extend_from_slice(b"\n\n");
+    Ok(projected)
+}
+
+async fn profile_capability_record(
+    host: &ProfileHost,
+) -> anyhow::Result<routes::RuntimeCapabilityRecord> {
+    let snapshot = host.snapshot().await;
+    let manifest = host
+        .capability_manifest()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("initialized Profile omitted its Capability Manifest"))?;
+    let server_build = snapshot
+        .server_build
+        .ok_or_else(|| anyhow::anyhow!("initialized Profile omitted its server build"))?;
+    let protocol_version = snapshot
+        .protocol_version
+        .ok_or_else(|| anyhow::anyhow!("initialized Profile omitted its protocol version"))?;
+    Ok(routes::RuntimeCapabilityRecord {
+        server_build,
+        protocol_version,
+        manifest: serde_json::to_value(manifest)?,
+    })
+}
+
+async fn persist_profile_capabilities(
+    db: &sqlx::PgPool,
+    runtime_key: &str,
+    capabilities: &routes::RuntimeCapabilityRecord,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO profile_capabilities \
+         (profile_id, server_build, protocol_version, manifest, observed_at) \
+         SELECT id, $1, $2, $3, now() FROM profiles WHERE runtime_key = $4 \
+         ON CONFLICT (profile_id) DO UPDATE SET server_build = EXCLUDED.server_build, \
+         protocol_version = EXCLUDED.protocol_version, manifest = EXCLUDED.manifest, \
+         observed_at = now()",
+    )
+    .bind(&capabilities.server_build)
+    .bind(&capabilities.protocol_version)
+    .bind(&capabilities.manifest)
+    .bind(runtime_key)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// Upgrade the previous single-user deployment without guessing ownership in
+/// a multi-owner database. New installations create this row in bootstrap.
+async fn ensure_transitional_profile_binding(
+    db: &sqlx::PgPool,
+    runtime_key: &str,
+    name: &str,
+) -> anyhow::Result<()> {
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM profiles WHERE runtime_key = $1)")
+            .bind(runtime_key)
+            .fetch_one(db)
+            .await?;
+    if exists {
+        return Ok(());
+    }
+
+    let owners = sqlx::query(
+        "SELECT m.organization_id, m.user_id FROM memberships m \
+         WHERE m.role = 'owner' ORDER BY m.created_at, m.id LIMIT 2",
+    )
+    .fetch_all(db)
+    .await?;
+    match owners.as_slice() {
+        [] => Ok(()),
+        [owner] => {
+            sqlx::query(
+                "INSERT INTO profiles (organization_id, owner_user_id, runtime_key, name) \
+                 VALUES ($1, $2, $3, $4) ON CONFLICT (runtime_key) DO NOTHING",
+            )
+            .bind(owner.get::<uuid::Uuid, _>("organization_id"))
+            .bind(owner.get::<uuid::Uuid, _>("user_id"))
+            .bind(runtime_key)
+            .bind(name)
+            .execute(db)
+            .await?;
+            Ok(())
+        }
+        _ => anyhow::bail!(
+            "Profile '{runtime_key}' has no ownership binding and multiple owner memberships exist"
+        ),
+    }
+}
+
 fn cors_layer(legacy_codex_proxy: bool) -> CorsLayer {
     if legacy_codex_proxy {
         CorsLayer::permissive()
     } else {
         CorsLayer::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::public_approval_frame;
+    use serde_json::Value;
+    use uuid::Uuid;
+
+    #[test]
+    fn public_approval_events_omit_runtime_request_ids_and_server_paths() {
+        let mut raw = br#"data: {"method":"app-server-event","params":{"workspace_id":"workspace-1","message":{"id":77,"method":"item/commandExecution/requestApproval","params":{"threadId":"thread-1","itemId":"item-1","cwd":"/private/server/path","command":"git status"}}}}"#.to_vec();
+        raw.extend_from_slice(b"\n\n");
+        let approval_id = Uuid::now_v7();
+        let projected = public_approval_frame(&raw, approval_id).expect("approval projection");
+        let text = String::from_utf8(projected.clone()).unwrap();
+        assert!(!text.contains("/private/server/path"));
+        assert!(!text.contains("\"id\":77"));
+
+        let payload = projected
+            .strip_prefix(b"data: ")
+            .and_then(|value| value.strip_suffix(b"\n\n"))
+            .unwrap();
+        let value: Value = serde_json::from_slice(payload).unwrap();
+        assert_eq!(
+            value.pointer("/params/message/method").unwrap(),
+            "platform/approvalRequested"
+        );
+        assert_eq!(
+            value.pointer("/params/message/params/approvalId").unwrap(),
+            &Value::String(approval_id.to_string())
+        );
     }
 }

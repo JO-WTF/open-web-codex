@@ -4,6 +4,8 @@
 //! transport semantics. This service validates authorized platform inputs and
 //! composes the typed app-server Provider/config methods.
 
+pub mod secured;
+
 use std::sync::Arc;
 
 use async_trait::async_trait;

@@ -71,6 +71,14 @@ pub trait CodexAdapter: Send + Sync {
     /// contract.
     async fn rpc(&self, method: &str, params: Value) -> Result<Value, AdapterError>;
 
+    /// Internal response path for app-server initiated requests. Public routes
+    /// must resolve a platform-owned durable request before calling this.
+    async fn respond_to_server_request(
+        &self,
+        request_id: Value,
+        result: Value,
+    ) -> Result<(), AdapterError>;
+
     /// Subscribe to the SSE event stream. The implementor sends SSE frames
     /// through `sender` and returns when the subscription ends (sender dropped).
     async fn subscribe_events(

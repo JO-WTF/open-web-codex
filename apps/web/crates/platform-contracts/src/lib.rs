@@ -113,12 +113,16 @@ pub struct BootstrapResponse {
 pub struct LoginRequest {
     pub email: String,
     pub password: String,
+    #[serde(default)]
+    pub organization_id: Option<Uuid>,
 }
 
 /// Response from login.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoginResponse {
     pub user: User,
+    pub organization: Organization,
+    pub membership_role: String,
     pub session_token: String,
 }
 
@@ -128,6 +132,19 @@ pub struct MeResponse {
     pub id: Uuid,
     pub name: String,
     pub email: String,
+    pub role: String,
+    pub organization_id: Uuid,
+    pub organization_role: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SelectOrganizationRequest {
+    pub organization_id: Uuid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionOrganization {
+    pub organization: Organization,
     pub role: String,
 }
 
@@ -212,6 +229,40 @@ pub struct SendMessageRequest {
 pub struct SendMessageResponse {
     pub status: String,
     pub thread_id: String,
+}
+
+// ── Approvals ─────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ApprovalDecision {
+    Accept,
+    AcceptForSession,
+    Decline,
+    Cancel,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DecideApprovalRequest {
+    pub decision: ApprovalDecision,
+    pub version: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalSummary {
+    pub id: Uuid,
+    pub run_id: Uuid,
+    pub thread_id: String,
+    pub request_type: String,
+    pub item_id: Option<String>,
+    pub reason: Option<String>,
+    pub command: Option<String>,
+    pub state: String,
+    pub version: i64,
+    pub created_at: DateTime<Utc>,
+    pub decided_at: Option<DateTime<Utc>>,
 }
 
 // ── Model Providers ──────────────────────────────────────────────

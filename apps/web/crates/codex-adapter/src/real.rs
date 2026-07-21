@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use open_web_codex_profile_host::{ProfileHost, ProfileHostConfig, ProfileHostState};
 use serde_json::{json, Value};
+use std::path::PathBuf;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -19,11 +20,20 @@ impl RealCodexAdapter {
         config: ProfileHostConfig,
         workspace_id: impl Into<String>,
     ) -> Result<Self, AdapterError> {
-        let workspace_root = config.workspace_root.canonicalize().map_err(|error| {
+        let workspace_root = config.workspace_root.clone();
+        let host = ProfileHost::spawn(config).await?;
+        Self::from_host(host, workspace_id, workspace_root)
+    }
+
+    pub fn from_host(
+        host: ProfileHost,
+        workspace_id: impl Into<String>,
+        workspace_root: PathBuf,
+    ) -> Result<Self, AdapterError> {
+        let workspace_root = workspace_root.canonicalize().map_err(|error| {
             AdapterError::Internal(format!("failed to resolve workspace root: {error}"))
         })?;
         let workspace_root = workspace_root.to_string_lossy().to_string();
-        let host = ProfileHost::spawn(config).await?;
         Ok(Self {
             host,
             workspace_id: workspace_id.into(),
@@ -142,6 +152,15 @@ impl CodexAdapter for RealCodexAdapter {
                 "native Profile Host adapter method '{other}' is not available through the transitional RPC interface"
             ))),
         }
+    }
+
+    async fn respond_to_server_request(
+        &self,
+        request_id: Value,
+        result: Value,
+    ) -> Result<(), AdapterError> {
+        self.host.respond(request_id, Ok(result)).await?;
+        Ok(())
     }
 
     async fn subscribe_events(&self, sender: UnboundedSender<Vec<u8>>) -> Result<(), AdapterError> {

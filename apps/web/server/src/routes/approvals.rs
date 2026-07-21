@@ -1,0 +1,93 @@
+use std::sync::Arc;
+
+use axum::{extract::Path, http::StatusCode, Extension, Json};
+use open_web_codex_adapter::CodexAdapter;
+use open_web_codex_approval_service::{ApprovalActor, ApprovalService, ApprovalServiceError};
+use open_web_codex_platform_contracts::error::PlatformError;
+use open_web_codex_platform_contracts::{ApprovalSummary, DecideApprovalRequest};
+use uuid::Uuid;
+
+use crate::middleware::auth::AuthenticatedUser;
+
+type ApiError = (StatusCode, Json<PlatformError>);
+
+pub async fn list_pending(
+    auth: AuthenticatedUser,
+    Extension(approvals): Extension<Arc<ApprovalService>>,
+) -> Result<Json<Vec<ApprovalSummary>>, ApiError> {
+    approvals
+        .list_pending(actor(&auth))
+        .await
+        .map(Json)
+        .map_err(approval_error)
+}
+
+pub async fn decide(
+    auth: AuthenticatedUser,
+    Path(id): Path<Uuid>,
+    Extension(approvals): Extension<Arc<ApprovalService>>,
+    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
+    Json(request): Json<DecideApprovalRequest>,
+) -> Result<StatusCode, ApiError> {
+    let actor = actor(&auth);
+    let dispatch = approvals
+        .begin_decision(actor, id, request)
+        .await
+        .map_err(approval_error)?;
+    if adapter
+        .respond_to_server_request(
+            dispatch.runtime_request_id.clone(),
+            dispatch.response.clone(),
+        )
+        .await
+        .is_err()
+    {
+        approvals
+            .mark_delivery_unknown(actor, &dispatch)
+            .await
+            .map_err(approval_error)?;
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            Json(PlatformError::internal(
+                "Approval delivery status is unknown; inspect before retrying",
+            )),
+        ));
+    }
+    approvals
+        .complete_decision(actor, &dispatch)
+        .await
+        .map_err(approval_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn actor(auth: &AuthenticatedUser) -> ApprovalActor {
+    ApprovalActor {
+        user_id: auth.user_id,
+        organization_id: auth.organization_id,
+    }
+}
+
+fn approval_error(error: ApprovalServiceError) -> ApiError {
+    match error {
+        ApprovalServiceError::NotFound => (
+            StatusCode::NOT_FOUND,
+            Json(PlatformError::not_found("Approval was not found")),
+        ),
+        ApprovalServiceError::Conflict => (
+            StatusCode::CONFLICT,
+            Json(PlatformError::bad_request(
+                "Approval was already decided or changed",
+            )),
+        ),
+        ApprovalServiceError::Invalid => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(PlatformError::bad_request("Approval request is invalid")),
+        ),
+        ApprovalServiceError::Database(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(PlatformError::internal(
+                "Approval service is temporarily unavailable",
+            )),
+        ),
+    }
+}

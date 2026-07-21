@@ -171,10 +171,14 @@ stream_max_retries = 0
     })
     .await
     .expect("turn completed before restart");
-    first.shutdown().await.expect("shutdown first host");
-    drop(first);
-
-    let second = spawn_host(&codex_bin, &home, &workspace).await;
+    first
+        .restart(
+            ProfileHostConfig::new("real-smoke-profile", &home, &workspace)
+                .with_codex_bin(&codex_bin),
+        )
+        .await
+        .expect("restart Profile Host in place");
+    let second = first;
     let resumed = second
         .request(
             "thread/resume",

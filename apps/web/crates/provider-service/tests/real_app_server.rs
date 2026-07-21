@@ -3,9 +3,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use open_web_codex_platform_contracts::{ProviderCredentialInput, UpsertProviderRequest};
 use open_web_codex_profile_host::{ProfileHost, ProfileHostConfig};
+use open_web_codex_profile_registry::ProfileRegistry;
+use open_web_codex_provider_service::secured::{
+    AuthorizedProviderOperations, ProviderActor, SecuredProviderService,
+};
 use open_web_codex_provider_service::ProviderService;
+use open_web_codex_secret_store::{PostgresSecretStore, SecretCipher};
+use sqlx::postgres::PgPoolOptions;
+use sqlx::Row;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use uuid::Uuid;
 
 fn temporary_profile_home() -> PathBuf {
     let timestamp = SystemTime::now()
@@ -168,6 +176,180 @@ async fn switches_and_refreshes_isolated_provider_catalogs() {
 
     host.shutdown().await.expect("shutdown Profile Host");
     drop(host);
+    models_server.abort();
+    std::fs::remove_dir_all(home).expect("remove smoke Profile home");
+}
+
+/// Proves that the production Provider path persists ciphertext, writes only a
+/// generated environment key to Codex config, and restarts the Profile with
+/// the decrypted value in its private child environment.
+#[tokio::test]
+#[ignore = "requires CODEX_BIN and a disposable TEST_DATABASE_URL"]
+async fn secured_provider_credentials_never_enter_codex_config() {
+    let codex_bin = PathBuf::from(std::env::var_os("CODEX_BIN").expect("CODEX_BIN is set"));
+    let database_url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL is set");
+    let db = PgPoolOptions::new()
+        .max_connections(3)
+        .connect(&database_url)
+        .await
+        .expect("connect disposable PostgreSQL database");
+    open_web_codex_platform_store::migrate::run(&db)
+        .await
+        .expect("migrate database");
+
+    let organization_id = Uuid::now_v7();
+    let user_id = Uuid::now_v7();
+    let profile_id = Uuid::now_v7();
+    let runtime_key = format!("secured-provider-{profile_id}");
+    sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, 'Test', $2)")
+        .bind(organization_id)
+        .bind(format!("test-{organization_id}"))
+        .execute(&db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO users (id, name, email, password_hash, role) \
+         VALUES ($1, 'Test', $2, 'test-only', 'owner')",
+    )
+    .bind(user_id)
+    .bind(format!("{user_id}@example.invalid"))
+    .execute(&db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO memberships (organization_id, user_id, role) VALUES ($1, $2, 'owner')",
+    )
+    .bind(organization_id)
+    .bind(user_id)
+    .execute(&db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO profiles (id, organization_id, owner_user_id, runtime_key, name) \
+         VALUES ($1, $2, $3, $4, 'Test Profile')",
+    )
+    .bind(profile_id)
+    .bind(organization_id)
+    .bind(user_id)
+    .bind(&runtime_key)
+    .execute(&db)
+    .await
+    .unwrap();
+
+    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("apps/web workspace root")
+        .canonicalize()
+        .expect("canonical workspace");
+    let home = temporary_profile_home();
+    std::fs::create_dir_all(&home).expect("create Profile home");
+    std::fs::write(home.join("config.toml"), "").expect("write empty Profile config");
+    let (models_uri, models_server) = start_mock_models_server().await;
+
+    let registry = ProfileRegistry::new();
+    let service = SecuredProviderService::new(
+        db.clone(),
+        runtime_key.clone(),
+        registry.clone(),
+        PostgresSecretStore::new(
+            db.clone(),
+            SecretCipher::generate("test-v1").expect("generate cipher"),
+        ),
+    );
+    let initial_environment = service.startup_secret_environment().await.unwrap();
+    assert!(initial_environment.is_empty());
+    let host = registry
+        .register_with_secret_environment(
+            ProfileHostConfig::new(&runtime_key, &home, &workspace).with_codex_bin(codex_bin),
+            initial_environment,
+        )
+        .await
+        .expect("register Profile");
+    let initial_process_id = host.snapshot().await.process_id;
+    let actor = ProviderActor {
+        user_id,
+        organization_id,
+    };
+    let secret = "secured-provider-secret-value";
+    let catalog = service
+        .upsert(
+            actor,
+            "secured-provider",
+            upsert_request(format!("{models_uri}/provider-one/v1"), secret),
+        )
+        .await
+        .expect("create secured Provider");
+    let provider = catalog
+        .data
+        .iter()
+        .find(|provider| provider.id == "secured-provider")
+        .expect("secured Provider catalog entry");
+    let environment_key = provider
+        .env_key
+        .as_deref()
+        .expect("generated environment key");
+    assert!(environment_key.starts_with("OPEN_WEB_CODEX_PROVIDER_"));
+    assert!(!serde_json::to_string(&catalog).unwrap().contains(secret));
+    let config = std::fs::read_to_string(home.join("config.toml")).expect("read Codex config");
+    assert!(config.contains(environment_key));
+    assert!(!config.contains(secret));
+    assert_ne!(
+        registry
+            .host(&runtime_key)
+            .await
+            .unwrap()
+            .snapshot()
+            .await
+            .process_id,
+        initial_process_id
+    );
+    assert_eq!(
+        registry
+            .secret_environment_keys(&runtime_key)
+            .await
+            .unwrap(),
+        vec![environment_key.to_string()]
+    );
+
+    let row = sqlx::query(
+        "SELECT ciphertext FROM profile_secrets WHERE profile_id = $1 AND provider_id = $2",
+    )
+    .bind(profile_id)
+    .bind("secured-provider")
+    .fetch_one(&db)
+    .await
+    .expect("encrypted Secret row");
+    let ciphertext: Vec<u8> = row.get("ciphertext");
+    assert!(!ciphertext
+        .windows(secret.len())
+        .any(|window| window == secret.as_bytes()));
+
+    service
+        .select(actor, "openai")
+        .await
+        .expect("select built-in Provider");
+    service
+        .delete(actor, "secured-provider")
+        .await
+        .expect("delete secured Provider");
+    let remaining: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM profile_secrets WHERE profile_id = $1")
+            .bind(profile_id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(remaining, 0);
+    assert!(registry
+        .secret_environment_keys(&runtime_key)
+        .await
+        .unwrap()
+        .is_empty());
+
+    registry
+        .shutdown(&runtime_key)
+        .await
+        .expect("shutdown Profile");
     models_server.abort();
     std::fs::remove_dir_all(home).expect("remove smoke Profile home");
 }

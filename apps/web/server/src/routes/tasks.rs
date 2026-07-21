@@ -16,7 +16,8 @@ use sqlx::Row;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::middleware::auth::AuthenticatedUser;
+use crate::middleware::auth::{require_runtime_profile, AuthenticatedUser};
+use crate::routes::RuntimeProfileBinding;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
 
@@ -27,15 +28,16 @@ pub struct ListTasksParams {
 
 /// GET /api/tasks?project_id=...
 pub async fn list_tasks(
-    _auth: AuthenticatedUser,
+    auth: AuthenticatedUser,
     State(state): State<AppState>,
     Query(params): Query<ListTasksParams>,
 ) -> ApiResult<Vec<Task>> {
     let rows = sqlx::query(
         "SELECT id, project_id, title, status, created_at, updated_at \
-         FROM tasks WHERE project_id = $1 ORDER BY created_at DESC",
+         FROM tasks WHERE project_id = $1 AND organization_id = $2 ORDER BY created_at DESC",
     )
     .bind(params.project_id)
+    .bind(auth.organization_id)
     .fetch_all(&state.db)
     .await
     .map_err(|e| {
@@ -62,7 +64,7 @@ pub async fn list_tasks(
 
 /// POST /api/tasks
 pub async fn create_task(
-    _auth: AuthenticatedUser,
+    auth: AuthenticatedUser,
     State(state): State<AppState>,
     Json(req): Json<CreateTaskRequest>,
 ) -> ApiResult<Task> {
@@ -74,17 +76,25 @@ pub async fn create_task(
     }
 
     let row = sqlx::query(
-        "INSERT INTO tasks (project_id, title) VALUES ($1, $2) \
+        "INSERT INTO tasks (organization_id, project_id, title) \
+         SELECT organization_id, id, $2 FROM projects WHERE id = $1 AND organization_id = $3 \
          RETURNING id, project_id, title, status, created_at, updated_at",
     )
     .bind(req.project_id)
     .bind(&req.title)
-    .fetch_one(&state.db)
+    .bind(auth.organization_id)
+    .fetch_optional(&state.db)
     .await
     .map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(PlatformError::internal(format!("{e}"))),
+        )
+    })?
+    .ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(PlatformError::not_found("project not found")),
         )
     })?;
 
@@ -100,7 +110,7 @@ pub async fn create_task(
 
 /// GET /api/tasks/:id/events — list persisted run events for a task.
 pub async fn list_task_events(
-    _auth: AuthenticatedUser,
+    auth: AuthenticatedUser,
     State(state): State<AppState>,
     Path(task_id): Path<Uuid>,
     Query(params): Query<ListTaskEventsParams>,
@@ -112,10 +122,11 @@ pub async fn list_task_events(
                     e.thread_id, e.turn_id, e.item_id, e.payload, e.created_at \
              FROM run_events e \
              JOIN runs r ON r.id = e.run_id \
-             WHERE r.task_id = $1 AND e.sequence > $2 \
-             ORDER BY e.sequence ASC LIMIT $3",
+             WHERE r.task_id = $1 AND r.organization_id = $2 AND e.sequence > $3 \
+             ORDER BY e.sequence ASC LIMIT $4",
         )
         .bind(task_id)
+        .bind(auth.organization_id)
         .bind(after)
         .bind(limit),
         None => sqlx::query(
@@ -124,11 +135,12 @@ pub async fn list_task_events(
                         e.thread_id, e.turn_id, e.item_id, e.payload, e.created_at \
                  FROM run_events e \
                  JOIN runs r ON r.id = e.run_id \
-                 WHERE r.task_id = $1 \
-                 ORDER BY e.sequence DESC LIMIT $2 \
+                 WHERE r.task_id = $1 AND r.organization_id = $2 \
+                 ORDER BY e.sequence DESC LIMIT $3 \
              ) recent ORDER BY sequence ASC",
         )
         .bind(task_id)
+        .bind(auth.organization_id)
         .bind(limit),
     };
 
@@ -164,9 +176,10 @@ pub async fn list_task_events(
 /// POST /api/tasks/:id/messages — send a user message to the task's active thread.
 pub async fn send_message(
     State(state): State<AppState>,
-    _auth: AuthenticatedUser,
+    auth: AuthenticatedUser,
     Path(task_id): Path<Uuid>,
     Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
+    Extension(profile): Extension<RuntimeProfileBinding>,
     Json(req): Json<SendMessageRequest>,
 ) -> ApiResult<SendMessageResponse> {
     if req.text.trim().is_empty() {
@@ -175,14 +188,16 @@ pub async fn send_message(
             Json(PlatformError::bad_request("message text must not be empty")),
         ));
     }
+    require_runtime_profile(&state.db, &auth, &profile.runtime_key).await?;
 
     // Find the active run for this task (latest running or pending run)
     let active_run = sqlx::query(
         "SELECT id, codex_thread_id FROM runs \
-         WHERE task_id = $1 AND status IN ('pending', 'running') \
+         WHERE task_id = $1 AND organization_id = $2 AND status IN ('pending', 'running') \
          ORDER BY created_at DESC LIMIT 1",
     )
     .bind(task_id)
+    .bind(auth.organization_id)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| {
@@ -217,6 +232,7 @@ pub async fn send_message(
             json!({
                 "threadId": &thread_id,
                 "text": &req.text,
+                "workspaceId": &profile.workspace_id,
             }),
         )
         .await
@@ -238,15 +254,16 @@ pub async fn send_message(
 
 /// GET /api/tasks/:id
 pub async fn get_task(
-    _auth: AuthenticatedUser,
+    auth: AuthenticatedUser,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Task> {
     let row = sqlx::query(
         "SELECT id, project_id, title, status, created_at, updated_at \
-         FROM tasks WHERE id = $1",
+         FROM tasks WHERE id = $1 AND organization_id = $2",
     )
     .bind(id)
+    .bind(auth.organization_id)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| {

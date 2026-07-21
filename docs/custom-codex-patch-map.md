@@ -6,7 +6,7 @@ after an official subtree update. Generated schemas, TypeScript definitions,
 fixtures, and snapshots are derivatives of the source seams and are not
 independent custom behavior.
 
-The integrated official base is `af71774d2645ec900cccf2a40d186a56c7a42f71`.
+The integrated official base is `51200321eb7b862a29ffceaba8b19db1934a9b38`.
 The target is a small, explicit set of Provider Runtime and TUI seams; it is
 not a zero-diff Codex subtree.
 
@@ -25,11 +25,10 @@ not a zero-diff Codex subtree.
 
 ## Current state
 
-The integrated base and current official main are both
-`af71774d2645ec900cccf2a40d186a56c7a42f71`; no official commit is pending.
-The current comparison contains 123 local differences: 25 files added locally
-and 98 modified. All 123 are `local-only`; `upstream-only` and `diverged` are
-both zero.
+The integrated base is `51200321eb7b862a29ffceaba8b19db1934a9b38` and
+current official main is `7442f5f9323d116755dfe630e22c931a8aeaa5c7`.
+Two official commits await integration. Before replay, the current comparison
+contains 159 paths: 119 local-only, 36 upstream-only and 4 diverged.
 
 All non-generated differences are classified under the retained seams and
 decisions below. The official structure is already integrated, generated
@@ -117,8 +116,11 @@ DTO adaptation do not belong in `codex/`. Provider CRUD, controlled config
 writes, model refresh normalization and browser DTOs now live in
 `apps/web/crates/provider-service` and typed Server routes. The service calls the
 retained app-server Provider API; Tauri is a compatibility adapter over the same
-service. Direct credentials remain a transitional private Profile-config seam
-until the platform Secret Provider injects them into the owned Host process.
+service. The Platform Server encrypts direct credentials with an external
+master key, writes only a generated environment-variable reference through the
+app-server config API, and injects plaintext only into the owned Profile child.
+The Tauri compatibility adapter still uses the older private Profile-config
+path and is removed with the desktop runtime.
 
 ### Third-party Chat tool policy
 

@@ -6,16 +6,15 @@ requirements belong in `product-design.md`; planned work belongs in
 
 ## Snapshot
 
-Observed on 2026-07-21 from source commit
-`4cfec57157da3bb1811ba83f793f21845485ca5d`:
+Observed on 2026-07-21 from the current synchronization branch:
 
 | Component | State |
 | --- | --- |
 | Codex subtree | integrated through `openai/codex` `51200321eb7b862a29ffceaba8b19db1934a9b38` |
-| Observed official main | `51200321eb7b862a29ffceaba8b19db1934a9b38`; no commit awaits integration |
-| Local Codex seams vs official main | 123 local-only paths: 25 added and 98 modified; no upstream-only, diverged, or missing local paths |
+| Observed official main | `7442f5f9323d116755dfe630e22c931a8aeaa5c7`; two commits await integration |
+| Local Codex seams vs official main | 159 paths before replay: 119 local-only, 36 upstream-only and 4 diverged |
 | Local customization footprint | six retained Runtime/TUI seams, one temporary upstreamed fix, derived artifacts and focused tests |
-| Web platform | Axum/PostgreSQL prototype, native Profile Host and typed Provider service/routes plus the remaining loopback Web MVP surfaces |
+| Web platform | Axum/PostgreSQL platform, native Profile Registry/Host, encrypted Provider Secret injection, durable approvals and typed Provider routes plus remaining loopback Web MVP surfaces |
 
 ## Reproduced evidence
 
@@ -45,10 +44,19 @@ Observed on 2026-07-21 from source commit
   Thread resume/read. A second real-binary Provider smoke covers two custom
   Providers, forced model refresh, switching, cache isolation and omission of
   direct credentials from returned catalogs.
+- Blank PostgreSQL migration and restart tests pass. AES-256-GCM Provider Secret
+  storage is identity-bound, and the real app-server secured-Provider smoke
+  proves that Codex config receives only a generated environment key while
+  ciphertext and private child environment are removed together on deletion.
+- The authenticated HTTP security regression uses two Organizations and proves
+  resource-ID isolation, Profile-owner enforcement, session Organization
+  switching, role-gated writes, durable approval decision delivery and an audit
+  record. Passwords use Argon2id; accepted legacy SHA-256 hashes are upgraded on
+  successful login.
 
 The successful checks prove only the surfaces named above. They do not prove
-multi-user isolation, durable Profile recovery, Runner isolation or production
-security.
+multi-Profile scheduling, Runner/worktree isolation, authenticated WebSocket
+subscriptions or production deployment security.
 
 ## Runtime capability assessment
 
@@ -58,7 +66,7 @@ security.
 | Capability negotiation | available, provisional | `initialize` emits schema version, build identity, protocol range, status, limits and reasons; method registries validate Manifest wire-name refs, experimental consistency, and product attribution policy; capability declarations remain hand-assembled Alpha subset rather than full generated policy |
 | Thread lifecycle | declared supported | initialize smoke passed; multi-cwd and restart recovery smoke still required |
 | Turn lifecycle | declared supported | real lifecycle smoke beyond initialize still required |
-| Approval lifecycle | declared supported | runtime methods exist; platform durable request/decision bridge is not implemented |
+| Approval lifecycle | declared supported | command, file and permission requests are persisted before a request-id-free browser projection; decisions use optimistic versioning and audit. A real interactive approval smoke, expiry and restart recovery remain gates |
 | Profile multi-workspace | declared supported | manifest limits are present; ownership and concurrency behavior remain unverified |
 | Memory lifecycle | declared unsupported | Codex contains compaction/memory surfaces, but the Web-safe status/export/reset bridge is absent |
 | Native Agent CRUD | declared unsupported | no stable Web-safe CRUD/validation contract |
@@ -68,18 +76,18 @@ security.
 | MCP | config degraded; OAuth/elicitation unsupported | status listing is declared; Web-safe CRUD, reload and lifecycle validation are pending |
 | Tools discovery | declared unsupported | do not expose a platform fallback catalog |
 | Structured reply cards / map cards | declared unsupported | no generated card contract, card Artifact store, renderer gate or real app-server smoke exists |
-| Provider/model management | declared supported by the checked-in Runtime | `models.providers`, `modelProvider/list`, controlled Profile config writes, provider-scoped refresh, model selection and context-window persistence are wired; scoped Runtime/TUI tests and a real two-Provider switch/refresh/cache-isolation smoke pass. Turn-level Provider propagation and encrypted platform Secret injection remain release gates |
+| Provider/model management | declared supported by the checked-in Runtime | `models.providers`, `modelProvider/list`, controlled Profile config writes, provider-scoped refresh, model selection and context-window persistence are wired; scoped Runtime/TUI tests, two-Provider cache-isolation smoke and encrypted platform Secret injection/deletion smoke pass. Turn-level Provider propagation remains a release gate |
 
 ## Web platform assessment
 
 | Surface | Current state | Production gap |
 | --- | --- | --- |
 | Independent server | Axum server and Cargo workspace build structure exist | deployment/config hardening and end-to-end startup gate remain |
-| Persistence | PostgreSQL migrations cover users/sessions, organizations/memberships, projects, tasks, runs and versioned run-event projections with monotonic replay sequence | Profiles, Workspaces, approvals, leases, audit, artifacts, jobs, retention and complete constraints are missing |
-| Authentication | bootstrap, password session creation and auth extractor exist | HttpOnly-only session flow, CSRF, logout/revocation, rate limiting and complete tests are missing |
-| Authorization | membership checks exist on part of the organization surface | centralized resource/action RBAC and cross-user denial matrix are missing |
-| Codex bridge | Fake/Real adapter and event fan-out exist; Real uses the native `profile-host` JSONL connection. Provider CRUD/model refresh use a reusable typed service and authenticated `/api/providers` routes; Tauri compatibility calls the same service | the server still has a transitional single-Profile/single-Workspace composition and raw `rpc` for other legacy domains; durable Profile registry/ownership, encrypted Secret injection, typed Thread/Turn operations, persistent approvals and authenticated browser subscriptions remain incomplete |
-| Task/Run | CRUD/start/cancel/message, safe Item/Delta projection, monotonic cursor replay, Thread-history reconciliation and a real Profile restart/resume/read smoke exist | worktree provisioning, multi-user Profile routing, idempotent scheduler, approvals and authenticated subscriptions remain incomplete |
+| Persistence | PostgreSQL migrations cover users/sessions, organizations/memberships, Profiles/capabilities/encrypted Secrets, projects, tasks, runs, Workspaces, durable approvals/audit and versioned run-event projections | leases, artifacts, jobs, retention, legacy-row repair and complete constraints remain missing |
+| Authentication | bootstrap and login use Argon2id, sessions bind an Organization, and legacy hashes upgrade after successful verification | HttpOnly-only session flow, CSRF, logout/revocation, rate limiting and complete browser flows are missing |
+| Authorization | Project/Task/Run and runtime calls enforce session Organization; Provider/approval calls additionally enforce Profile ownership; a two-Organization denial regression passes | centralized policy abstraction, Project-specific roles and the full concurrent multi-user matrix remain missing |
+| Codex bridge | Fake/Real adapter and event fan-out exist; Real uses the native Profile Registry/Host JSONL connection. Provider Secrets are encrypted and injected only into the owned child environment. Provider and approval routes are typed and authenticated | composition is still one configured Profile/Workspace per server process; typed Thread/Turn operations and authenticated browser subscriptions remain incomplete, and legacy raw RPC/SSE code still exists behind an off-by-default flag |
+| Task/Run | CRUD/start/cancel/message, safe Item/Delta and approval projection, monotonic cursor replay, Thread-history reconciliation and a real Profile restart/resume/read smoke exist | worktree provisioning, multi-user Profile routing, idempotent scheduler, approval expiry/recovery and authenticated subscriptions remain incomplete |
 | Browser | loopback MVP can connect workspace, start Thread and send text; Provider catalog/write flows use typed authenticated platform resources rather than raw RPC | other flows still target the local preview Gateway and accept server paths; this is not yet the authenticated multi-user product UI |
 
 ## Immediate capability gates
@@ -91,5 +99,5 @@ security.
 3. Keep the passing real Thread restart/resume/read smoke and add multi-cwd,
    Provider, approval, multi-agent and MCP smoke suites before promoting the
    corresponding declarations to product support.
-4. Replace the legacy raw RPC/SSE browser bridge with authenticated platform
-   DTOs, durable event cursors and server-side ownership checks.
+4. Replace the remaining legacy raw RPC/SSE browser bridge with typed Task,
+   Thread, Turn and Git DTOs plus authenticated WebSocket cursor replay.

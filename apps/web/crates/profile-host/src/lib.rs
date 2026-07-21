@@ -303,6 +303,8 @@ struct ProfileHostInner {
     snapshot: RwLock<ProfileHostSnapshot>,
     manifest: RwLock<Option<CapabilityManifest>>,
     negotiation: RwLock<Option<NegotiationResult>>,
+    lifecycle: RwLock<()>,
+    process_generation: AtomicU64,
     _profile_lock: ProfileLock,
 }
 
@@ -329,29 +331,8 @@ impl ProfileHost {
             ensure_profile_layout(&config.codex_home).map_err(ProfileHostError::ProfileIo)?;
         let profile_lock = ProfileLock::acquire(&runtime, &config.profile_id)?;
 
-        let mut command = Command::new(&config.codex_bin);
-        command
-            .args(&config.codex_args)
-            .arg("app-server")
-            .current_dir(&workspace_root)
-            .env("CODEX_HOME", &home)
-            .envs(config.environment.iter().map(|(key, value)| (key, value)))
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-
-        let mut child = command.spawn().map_err(ProfileHostError::Spawn)?;
-        let process_id = child.id();
-        let stdin = child.stdin.take().ok_or_else(|| {
-            ProfileHostError::InvalidInitialize("child stdin was not available".to_string())
-        })?;
-        let stdout = child.stdout.take().ok_or_else(|| {
-            ProfileHostError::InvalidInitialize("child stdout was not available".to_string())
-        })?;
-        let stderr = child.stderr.take().ok_or_else(|| {
-            ProfileHostError::InvalidInitialize("child stderr was not available".to_string())
-        })?;
+        let spawned = spawn_app_server(&config, &home, &workspace_root)?;
+        let process_id = spawned.child.id();
         let event_capacity = config.event_capacity.max(1);
         let (events, _) = broadcast::channel(event_capacity);
         let snapshot = ProfileHostSnapshot {
@@ -367,18 +348,20 @@ impl ProfileHost {
         let inner = Arc::new(ProfileHostInner {
             home,
             request_timeout: config.request_timeout,
-            stdin: Mutex::new(stdin),
-            child: Mutex::new(child),
+            stdin: Mutex::new(spawned.stdin),
+            child: Mutex::new(spawned.child),
             pending: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             events,
             snapshot: RwLock::new(snapshot),
             manifest: RwLock::new(None),
             negotiation: RwLock::new(None),
+            lifecycle: RwLock::new(()),
+            process_generation: AtomicU64::new(1),
             _profile_lock: profile_lock,
         });
-        spawn_stdout_reader(Arc::downgrade(&inner), stdout);
-        spawn_stderr_monitor(Arc::downgrade(&inner), stderr);
+        spawn_stdout_reader(Arc::downgrade(&inner), 1, spawned.stdout);
+        spawn_stderr_monitor(Arc::downgrade(&inner), 1, spawned.stderr);
 
         let host = Self { inner };
         if let Err(error) = host.initialize(&config).await {
@@ -392,25 +375,22 @@ impl ProfileHost {
     async fn initialize(&self, config: &ProfileHostConfig) -> Result<(), ProfileHostError> {
         let response = timeout(
             INITIALIZE_TIMEOUT,
-            self.request(
-                "initialize",
-                json!({
-                    "clientInfo": {
-                        "name": "open_web_codex_profile_host",
-                        "title": "Open Web Codex Profile Host",
-                        "version": config.client_version,
-                    },
-                    "capabilities": {
-                        "experimentalApi": true,
-                    },
-                }),
-            ),
+            self.request("initialize", initialize_params(config)),
         )
         .await
         .map_err(|_| ProfileHostError::RequestTimeout {
             method: "initialize".to_string(),
         })??;
 
+        self.finish_initialize(config, response, false).await
+    }
+
+    async fn finish_initialize(
+        &self,
+        config: &ProfileHostConfig,
+        response: Value,
+        lifecycle_locked: bool,
+    ) -> Result<(), ProfileHostError> {
         let returned_home = response
             .get("codexHome")
             .and_then(Value::as_str)
@@ -444,7 +424,11 @@ impl ProfileHost {
             ));
         }
 
-        self.notify("initialized", None).await?;
+        if lifecycle_locked {
+            self.notify_unlocked("initialized", None).await?;
+        } else {
+            self.notify("initialized", None).await?;
+        }
         {
             let mut snapshot = self.inner.snapshot.write().await;
             snapshot.state = ProfileHostState::Ready;
@@ -459,6 +443,15 @@ impl ProfileHost {
     }
 
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, ProfileHostError> {
+        let _lifecycle = self.inner.lifecycle.read().await;
+        self.request_unlocked(method, params).await
+    }
+
+    async fn request_unlocked(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, ProfileHostError> {
         let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
         let (sender, receiver) = oneshot::channel();
         self.inner.pending.lock().await.insert(id, sender);
@@ -507,6 +500,15 @@ impl ProfileHost {
         method: &str,
         params: Option<Value>,
     ) -> Result<(), ProfileHostError> {
+        let _lifecycle = self.inner.lifecycle.read().await;
+        self.notify_unlocked(method, params).await
+    }
+
+    async fn notify_unlocked(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<(), ProfileHostError> {
         let message = match params {
             Some(params) => json!({ "method": method, "params": params }),
             None => json!({ "method": method }),
@@ -519,6 +521,7 @@ impl ProfileHost {
         request_id: Value,
         result: Result<Value, Value>,
     ) -> Result<(), ProfileHostError> {
+        let _lifecycle = self.inner.lifecycle.read().await;
         let message = match result {
             Ok(result) => json!({ "id": request_id, "result": result }),
             Err(error) => json!({ "id": request_id, "error": error }),
@@ -560,6 +563,11 @@ impl ProfileHost {
     }
 
     pub async fn shutdown(&self) -> Result<(), ProfileHostError> {
+        let _lifecycle = self.inner.lifecycle.write().await;
+        self.shutdown_unlocked().await
+    }
+
+    async fn shutdown_unlocked(&self) -> Result<(), ProfileHostError> {
         {
             let mut snapshot = self.inner.snapshot.write().await;
             if snapshot.state == ProfileHostState::Stopped {
@@ -576,6 +584,82 @@ impl ProfileHost {
         Ok(())
     }
 
+    /// Restart the owned app-server in place while retaining the Profile lock,
+    /// request identity sequence and event subscription channel. This is used
+    /// when server-owned secret environment values change.
+    pub async fn restart(&self, config: ProfileHostConfig) -> Result<(), ProfileHostError> {
+        validate_config(&config)?;
+        let expected_profile = self.snapshot().await.profile_id;
+        if config.profile_id != expected_profile {
+            return Err(ProfileHostError::InvalidConfig(
+                "restart profile_id does not match the running Profile".to_string(),
+            ));
+        }
+        let home = config
+            .codex_home
+            .canonicalize()
+            .map_err(ProfileHostError::ProfileIo)?;
+        if home != self.inner.home {
+            return Err(ProfileHostError::InvalidConfig(
+                "restart CODEX_HOME does not match the running Profile".to_string(),
+            ));
+        }
+        let workspace_root = config
+            .workspace_root
+            .canonicalize()
+            .map_err(ProfileHostError::ProfileIo)?;
+        if !workspace_root.is_dir() {
+            return Err(ProfileHostError::InvalidConfig(format!(
+                "workspace root {} is not a directory",
+                workspace_root.display()
+            )));
+        }
+
+        let _lifecycle = self.inner.lifecycle.write().await;
+        self.inner.process_generation.fetch_add(1, Ordering::SeqCst);
+        self.shutdown_unlocked().await?;
+        let generation = self.inner.process_generation.load(Ordering::SeqCst);
+        let spawned = spawn_app_server(&config, &self.inner.home, &workspace_root)?;
+        let process_id = spawned.child.id();
+        *self.inner.stdin.lock().await = spawned.stdin;
+        *self.inner.child.lock().await = spawned.child;
+        *self.inner.manifest.write().await = None;
+        *self.inner.negotiation.write().await = None;
+        {
+            let mut snapshot = self.inner.snapshot.write().await;
+            snapshot.state = ProfileHostState::Initializing;
+            snapshot.process_id = process_id;
+            snapshot.server_build = None;
+            snapshot.protocol_version = None;
+            snapshot.capability_count = 0;
+            snapshot.last_error = None;
+        }
+        spawn_stdout_reader(Arc::downgrade(&self.inner), generation, spawned.stdout);
+        spawn_stderr_monitor(Arc::downgrade(&self.inner), generation, spawned.stderr);
+
+        if let Err(error) = self.initialize_unlocked(&config).await {
+            self.mark_failed(error.to_string()).await;
+            self.terminate_child().await;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    async fn initialize_unlocked(
+        &self,
+        config: &ProfileHostConfig,
+    ) -> Result<(), ProfileHostError> {
+        let response = timeout(
+            INITIALIZE_TIMEOUT,
+            self.request_unlocked("initialize", initialize_params(config)),
+        )
+        .await
+        .map_err(|_| ProfileHostError::RequestTimeout {
+            method: "initialize".to_string(),
+        })??;
+        self.finish_initialize(config, response, true).await
+    }
+
     async fn terminate_child(&self) {
         let mut child = self.inner.child.lock().await;
         let _ = child.start_kill();
@@ -589,6 +673,61 @@ impl ProfileHost {
             snapshot.last_error = Some(message);
         }
     }
+}
+
+struct SpawnedAppServer {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: tokio::process::ChildStdout,
+    stderr: tokio::process::ChildStderr,
+}
+
+fn spawn_app_server(
+    config: &ProfileHostConfig,
+    home: &Path,
+    workspace_root: &Path,
+) -> Result<SpawnedAppServer, ProfileHostError> {
+    let mut command = Command::new(&config.codex_bin);
+    command
+        .args(&config.codex_args)
+        .arg("app-server")
+        .current_dir(workspace_root)
+        .env("CODEX_HOME", home)
+        .envs(config.environment.iter().map(|(key, value)| (key, value)))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+
+    let mut child = command.spawn().map_err(ProfileHostError::Spawn)?;
+    let stdin = child.stdin.take().ok_or_else(|| {
+        ProfileHostError::InvalidInitialize("child stdin was not available".to_string())
+    })?;
+    let stdout = child.stdout.take().ok_or_else(|| {
+        ProfileHostError::InvalidInitialize("child stdout was not available".to_string())
+    })?;
+    let stderr = child.stderr.take().ok_or_else(|| {
+        ProfileHostError::InvalidInitialize("child stderr was not available".to_string())
+    })?;
+    Ok(SpawnedAppServer {
+        child,
+        stdin,
+        stdout,
+        stderr,
+    })
+}
+
+fn initialize_params(config: &ProfileHostConfig) -> Value {
+    json!({
+        "clientInfo": {
+            "name": "open_web_codex_profile_host",
+            "title": "Open Web Codex Profile Host",
+            "version": config.client_version,
+        },
+        "capabilities": {
+            "experimentalApi": true,
+        },
+    })
 }
 
 fn validate_config(config: &ProfileHostConfig) -> Result<(), ProfileHostError> {
@@ -612,6 +751,7 @@ fn validate_config(config: &ProfileHostConfig) -> Result<(), ProfileHostError> {
 
 fn spawn_stdout_reader(
     inner: std::sync::Weak<ProfileHostInner>,
+    generation: u64,
     stdout: tokio::process::ChildStdout,
 ) {
     tokio::spawn(async move {
@@ -628,6 +768,9 @@ fn spawn_stdout_reader(
             let Some(inner) = inner.upgrade() else {
                 return;
             };
+            if inner.process_generation.load(Ordering::SeqCst) != generation {
+                return;
+            }
             match serde_json::from_str::<Value>(&line) {
                 Ok(message) => dispatch_incoming(&inner, message).await,
                 Err(_) => {
@@ -640,6 +783,9 @@ fn spawn_stdout_reader(
         }
 
         if let Some(inner) = inner.upgrade() {
+            if inner.process_generation.load(Ordering::SeqCst) != generation {
+                return;
+            }
             {
                 let mut snapshot = inner.snapshot.write().await;
                 if snapshot.state != ProfileHostState::Stopped {
@@ -654,6 +800,7 @@ fn spawn_stdout_reader(
 
 fn spawn_stderr_monitor(
     inner: std::sync::Weak<ProfileHostInner>,
+    generation: u64,
     stderr: tokio::process::ChildStderr,
 ) {
     tokio::spawn(async move {
@@ -665,6 +812,9 @@ fn spawn_stderr_monitor(
             let Some(inner) = inner.upgrade() else {
                 return;
             };
+            if inner.process_generation.load(Ordering::SeqCst) != generation {
+                return;
+            }
             // stderr may contain paths or credentials. Record only the fact
             // that diagnostics were observed; do not forward its contents.
             let mut snapshot = inner.snapshot.write().await;
@@ -837,6 +987,8 @@ mod tests {
             }),
             manifest: RwLock::new(None),
             negotiation: RwLock::new(None),
+            lifecycle: RwLock::new(()),
+            process_generation: AtomicU64::new(1),
             _profile_lock: lock,
         });
         (inner, path)

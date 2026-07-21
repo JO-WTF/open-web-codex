@@ -3,19 +3,19 @@
   "purpose": "Tracks the current official-tree comparison and convergence classification progress for codex/.",
   "comparison": {
     "upstreamRef": "codex-upstream/main",
-    "upstreamCommit": "af71774d2645ec900cccf2a40d186a56c7a42f71",
+    "upstreamCommit": "7442f5f9323d116755dfe630e22c931a8aeaa5c7",
     "localTree": "HEAD:codex",
-    "observedAt": "2026-07-21T17:18:57Z",
-    "differenceCount": 123,
+    "observedAt": "2026-07-21T18:38:16Z",
+    "differenceCount": 159,
     "addedLocally": 25,
-    "modified": 98,
-    "missingLocally": 0,
-    "upstreamOnly": 0,
-    "localOnly": 123,
-    "diverged": 0
+    "modified": 130,
+    "missingLocally": 4,
+    "upstreamOnly": 36,
+    "localOnly": 119,
+    "diverged": 4
   },
   "progress": {
-    "state": "synchronized-validated-convergence-active",
+    "state": "upstream-update-available",
     "classificationSource": "docs/custom-codex-patch-map.md",
     "classifiedRetainCore": [
       "provider-chat-transport",
@@ -26,7 +26,7 @@
       "capability-manifest"
     ],
     "classification": {
-      "classifiedLocalOnlyPaths": 123,
+      "classifiedLocalOnlyPaths": 119,
       "unclassifiedSourcePaths": 0,
       "temporaryUpstreamedFixes": 1
     },
@@ -49,8 +49,8 @@
       "realAppServerSmoke": "passed; 18 capability declarations",
       "webContractCheck": "passed"
     },
-    "validatedAgainstUpstream": "af71774d2645ec900cccf2a40d186a56c7a42f71",
-    "validatedAtCommit": "056d69f79bbb178cb9be09dad8ef84bda5721f4c",
-    "nextAction": "Complete the native Profile Host lifecycle and replace the RealCodexAdapter dependency on the transitional Tauri daemon."
+    "validatedAgainstUpstream": "51200321eb7b862a29ffceaba8b19db1934a9b38",
+    "validatedAtCommit": "a139a59d5f7a255de15fe5a3bd795ab5968546db",
+    "nextAction": "Integrate official main 7442f5f9323d, accept its structure first, then replay and validate only the documented retained seams."
   }
 }

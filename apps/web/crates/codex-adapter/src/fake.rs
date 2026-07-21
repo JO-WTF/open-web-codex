@@ -210,6 +210,14 @@ impl CodexAdapter for FakeCodexAdapter {
         }
     }
 
+    async fn respond_to_server_request(
+        &self,
+        _request_id: Value,
+        _result: Value,
+    ) -> Result<(), AdapterError> {
+        Ok(())
+    }
+
     async fn subscribe_events(
         &self,
         sender: UnboundedSender<Vec<u8>>,

@@ -3,15 +3,20 @@ resolver = "2"
 members = [
     "crates/codex-adapter",
     "crates/codex-contracts",
+    "crates/auth",
+    "crates/approval-service",
     "crates/profile-host",
+    "crates/profile-registry",
     "crates/platform-contracts",
     "crates/platform-store",
     "crates/provider-service",
+    "crates/secret-store",
     "server",
     "src-tauri",
 ]
 
 [workspace.dependencies]
+argon2 = "0.5.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
@@ -39,3 +44,8 @@ sha2 = "0.10"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 libc = "0.2"
 url = "2"
+base64 = "0.22"
+ring = "0.17"
+rand_core = { version = "0.6", features = ["getrandom"] }
+subtle = "2.6"
+zeroize = "1"
