@@ -10,8 +10,8 @@ Observed on 2026-07-21 from the current synchronization branch:
 
 | Component | State |
 | --- | --- |
-| Codex subtree | integrated through `openai/codex` `6c00dc087e4c01312017389483573500001e9fe9` |
-| Observed official main | `6c00dc087e4c01312017389483573500001e9fe9`; no commit awaits integration |
+| Codex subtree | integrated through `openai/codex` `2497972808e7a5fc2c4db50a140bbd1559fc1d75` |
+| Observed official main | `2497972808e7a5fc2c4db50a140bbd1559fc1d75`; no commit awaits integration |
 | Local Codex seams vs official main | 123 local-only paths: 25 added and 98 modified; no upstream-only, diverged, or missing local paths |
 | Local customization footprint | six retained Runtime/TUI seams, one temporary upstreamed fix, derived artifacts and focused tests |
 | Web platform | Axum/PostgreSQL platform, native Profile Registry/Host, encrypted Provider Secret injection, durable approvals, isolated Git workspaces, lease-based Run orchestration, typed REST resources and authenticated WebSocket |
@@ -63,6 +63,12 @@ Observed on 2026-07-21 from the current synchronization branch:
   path handling, and skill-name metrics sanitization changes are integrated.
   Their config, MCP, Core Skills, protocol and app-server regressions pass on
   the synchronized tree.
+- The latest official loopback proxy allowlist behavior is integrated without
+  adding a local customization. All 207 network-proxy tests pass: 206 pass in
+  the local-port environment, while its DNS-failure case passes under network
+  isolation because the host resolver otherwise synthesizes an address for the
+  reserved `.invalid` name. The added CLI sandbox cases are Linux-only and do
+  not compile as tests on the current macOS host.
 
 The successful checks prove only the surfaces named above. They do not prove
 multi-Profile process routing, production sandbox strength, complete Cookie/CSRF

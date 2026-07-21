@@ -3,9 +3,9 @@
   "purpose": "Tracks the current official-tree comparison and convergence classification progress for codex/.",
   "comparison": {
     "upstreamRef": "codex-upstream/main",
-    "upstreamCommit": "7442f5f9323d116755dfe630e22c931a8aeaa5c7",
+    "upstreamCommit": "2497972808e7a5fc2c4db50a140bbd1559fc1d75",
     "localTree": "HEAD:codex",
-    "observedAt": "2026-07-21T18:58:04Z",
+    "observedAt": "2026-07-21T20:14:01Z",
     "differenceCount": 123,
     "addedLocally": 25,
     "modified": 98,
@@ -15,7 +15,7 @@
     "diverged": 0
   },
   "progress": {
-    "state": "synchronized-validated-convergence-active",
+    "state": "synchronized-validated-web-cutover-complete",
     "classificationSource": "docs/custom-codex-patch-map.md",
     "classifiedRetainCore": [
       "provider-chat-transport",
@@ -31,28 +31,32 @@
       "temporaryUpstreamedFixes": 1
     },
     "completed": [
-      "Synchronized the Codex subtree through the current official commit and replayed only the six documented retained seams.",
-      "Classified all current local-only differences; generated artifacts and focused tests follow their owning source seam.",
-      "Kept Profile Home provisioning in apps/web/profile-host and restored official missing-CODEX_HOME validation in Codex.",
-      "Regenerated app-server artifacts without drift and completed the Runtime, app-server, Provider, and TUI scoped validation matrix.",
-      "Recorded the ToolName namespace delimiter correction as a temporary upstreamed fix with an explicit removal condition.",
-      "Moved Chat request DTOs and owned wire conversion into codex-api, restored codex-api/common.rs to the exact official object, and added a Core Chat endpoint integration test."
+      "The Codex subtree is synchronized through the current official commit with only the six documented retained seams.",
+      "All 123 local-only paths are classified; generated artifacts and tests follow their owning source seam.",
+      "Profile lifecycle, encrypted credentials, authorization, durable approvals, Git workspaces, Run leases, browser DTOs, and event delivery are owned by apps/web.",
+      "The browser uses typed REST and authenticated WebSocket transport; Tauri, desktop sidecars, raw browser RPC, desktop release chains, and desktop build dependencies are absent.",
+      "The TUI Provider workflow uses one inline form; the superseded prompt event chain and unused renderers were dropped after the full TUI suite passed.",
+      "Generated contracts reproduce without drift and the current binary passes the real app-server Capability Manifest smoke."
     ],
     "validation": {
       "format": "passed",
-      "appServerSchema": "passed",
-      "protocolTests": "passed",
-      "chatTransportTests": "174 passed; Core Chat endpoint and 3 focused recovery/tool-policy tests passed",
-      "providerTests": "83 passed",
-      "latestUpstreamConfigTests": "219 passed",
-      "latestUpstreamMcpTests": "109 passed",
-      "appServerTests": "976 passed",
-      "tuiTests": "latest diff/highlight/Provider 101 passed; terminal/Provider 35 passed",
+      "clippyFix": "not available: the repository toolchain does not provide an applicable cargo-clippy component; no fix was applied",
+      "appServerSchema": "passed; no generated drift",
+      "protocolTests": "288 passed",
+      "chatTransportTests": "174 passed; Core Chat endpoint and recovery/tool-policy coverage passed",
+      "providerTests": "all scoped Provider suites and the real two-Provider cache-isolation smoke passed",
+      "configTests": "221 passed",
+      "mcpTests": "110 passed",
+      "coreSkillsTests": "124 passed",
+      "appServerTests": "981 passed; 1 skipped",
+      "tuiTests": "3228 passed; 4 skipped",
+      "networkProxyTests": "all 207 network-proxy tests passed across local-port and network-isolated runs; the new CLI sandbox cases are Linux-only and not applicable on the macOS validation host",
       "realAppServerSmoke": "passed; 18 capability declarations",
-      "webContractCheck": "passed"
+      "webContractCheck": "passed",
+      "platformTests": "frontend, Rust workspace, PostgreSQL integration, Profile restart, Provider isolation, Git Runtime, Run lease, two-organization security, and fake-server HTTP/WebSocket checks passed"
     },
-    "validatedAgainstUpstream": "7442f5f9323d116755dfe630e22c931a8aeaa5c7",
-    "validatedAtCommit": "6a6b0bf688006ed59a3d9cfd2938b79defdb480a",
-    "nextAction": "Provision isolated Git worktrees and add lease-based Runner orchestration without adding product behavior under codex/."
+    "validatedAgainstUpstream": "2497972808e7a5fc2c4db50a140bbd1559fc1d75",
+    "validatedAtCommit": "eb665d4eab1b4c2fc8bb96641d703c6933b21d5b",
+    "nextAction": "Replace the single configured Profile composition root with authorized per-user dynamic Profile routing, then complete the M2 session and Runner hardening gates."
   }
 }
