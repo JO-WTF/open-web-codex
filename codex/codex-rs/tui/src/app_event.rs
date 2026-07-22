@@ -8,6 +8,12 @@
 //! Exit is modelled explicitly via `AppEvent::Exit(ExitMode)` so callers can request shutdown-first
 //! quits without reaching into the app loop or coupling to shutdown/exit sequencing.
 
+mod provider;
+
+pub(crate) use provider::ProviderConfigAction;
+pub(crate) use provider::ProviderFormDraft;
+pub(crate) use provider::ProviderFormMode;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -34,8 +40,6 @@ use codex_app_server_protocol::ThreadGoalStatus;
 use codex_connectors::AppInfo;
 use codex_file_search::FileMatch;
 use codex_message_history::HistoryBatchCursor;
-use codex_model_provider_info::ModelProviderInfo;
-use codex_model_provider_info::WireApi;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -174,48 +178,6 @@ pub(crate) enum KeymapEditIntent {
     ReplaceAll,
     AddAlternate,
     ReplaceOne { old_key: String },
-}
-
-#[derive(Debug, Clone)]
-pub(crate) enum ProviderConfigAction {
-    Upsert {
-        id: String,
-        provider: ModelProviderInfo,
-    },
-    FetchModelsForNewProvider {
-        draft: ProviderFormDraft,
-        provider: ModelProviderInfo,
-    },
-    Delete {
-        id: String,
-    },
-    Use {
-        id: String,
-    },
-    FetchModels {
-        id: String,
-    },
-    /// Persist a context window update for a specific model under a provider.
-    UpdateModelContextWindow {
-        id: String,
-        model_id: String,
-        context_window: i64,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ProviderFormMode {
-    Add,
-    Edit,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct ProviderFormDraft {
-    pub(crate) id: String,
-    pub(crate) name: String,
-    pub(crate) base_url: String,
-    pub(crate) env_key: String,
-    pub(crate) wire_api: WireApi,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -886,7 +848,7 @@ pub(crate) enum AppEvent {
     OpenModelContextWindowPopup {
         model_id: String,
         provider_id: String,
-        pending_selection: Option<crate::chatwidget::model_popups::PendingModelSelection>,
+        pending_selection: Option<crate::chatwidget::PendingModelSelection>,
     },
 
     /// Open the confirmation prompt before enabling full access mode.

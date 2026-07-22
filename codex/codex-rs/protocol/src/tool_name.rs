@@ -37,31 +37,9 @@ impl ToolName {
 impl fmt::Display for ToolName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.namespace {
-            Some(namespace) => write!(
-                f,
-                "{}__{}",
-                namespace.trim_end_matches('_'),
-                self.name.trim_start_matches('_')
-            ),
+            Some(namespace) => write!(f, "{namespace}{}", self.name),
             None => f.write_str(&self.name),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn display_preserves_the_legacy_namespace_boundary() {
-        assert_eq!(
-            ToolName::namespaced("image_gen", "imagegen").to_string(),
-            "image_gen__imagegen"
-        );
-        assert_eq!(
-            ToolName::namespaced("mcp__maps__", "__lookup").to_string(),
-            "mcp__maps__lookup"
-        );
     }
 }
 

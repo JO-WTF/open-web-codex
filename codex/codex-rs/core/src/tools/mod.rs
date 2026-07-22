@@ -38,34 +38,14 @@ pub(crate) const TELEMETRY_PREVIEW_TRUNCATION_NOTICE: &str =
 /// names still require a single flattened string. Keep comparisons and sorting
 /// on `ToolName` itself; use this only when crossing those boundaries.
 pub(crate) fn flat_tool_name(tool_name: &ToolName) -> Cow<'_, str> {
-    match tool_name.namespace {
-        Some(_) => Cow::Owned(tool_name.to_string()),
+    match tool_name.namespace.as_deref() {
+        Some(namespace) => {
+            let mut name = String::with_capacity(namespace.len() + tool_name.name.len());
+            name.push_str(namespace);
+            name.push_str(&tool_name.name);
+            Cow::Owned(name)
+        }
         None => Cow::Borrowed(tool_name.name.as_str()),
-    }
-}
-
-#[cfg(test)]
-mod flat_tool_name_tests {
-    use super::*;
-
-    #[test]
-    fn namespaced_tool_names_use_the_legacy_double_underscore_boundary() {
-        assert_eq!(
-            flat_tool_name(&ToolName::namespaced("image_gen", "imagegen")),
-            "image_gen__imagegen"
-        );
-        assert_eq!(
-            flat_tool_name(&ToolName::namespaced("mcp__maps__", "__lookup")),
-            "mcp__maps__lookup"
-        );
-    }
-
-    #[test]
-    fn plain_tool_names_are_borrowed_unchanged() {
-        assert_eq!(
-            flat_tool_name(&ToolName::plain("exec_command")),
-            "exec_command"
-        );
     }
 }
 
