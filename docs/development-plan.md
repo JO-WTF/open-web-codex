@@ -5,13 +5,13 @@
 | 字段 | 内容 |
 | --- | --- |
 | 更新日期 | 2026-07-22 |
-| 当前分支 | `codex/restore-web-ui` |
-| Codex 基线 | `openai/codex` `4f3852107e5eedeb4cb89b57a6d4a35b49f8a59a` |
-| 上游待同步 | 3 个提交，目标 `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9` |
-| 当前工作 | 保持既有 Web UI/功能不变的类型化平台适配，以及随后一次官方同步 |
+| 当前分支 | `codex/sync-upstream-6e5a2d6b8d14` |
+| Codex 基线 | `openai/codex` `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9` |
+| 上游待同步 | 0；已与观测到的 official main 同步 |
+| 当前工作 | 完成既有 Web UI/功能的类型化平台适配，并验证同步后的 Runtime 合同 |
 
-当前 Codex 树与官方 main 之间有 136 个差异：126 个已分类的 local-only、10
-个待集成的 upstream-only；无 diverged 或 missing 路径。既有 `main` React
+当前 Codex 树与官方 main 之间有 126 个已分类的 local-only 差异，无
+upstream-only、diverged 或 missing 路径。既有 `main` React
 组件树、CSS、页面布局和交互分支已经恢复，差异仅限 Tauri import 的浏览器适配、
 认证 Session 壳和类型化平台接口。平台具备原生 Profile Host、Provider 服务、
 加密 Secret、持久审批、Git workspace 与租约式 Run 编排。桌面运行时、sidecar、
@@ -47,7 +47,7 @@
 
 ## A. Codex 上游同步与定制收敛
 
-- [x] 同步官方 main 到 `4f3852107e5e`，确认无待集成提交。
+- [x] 同步官方 main 到 `6e5a2d6b8d14`，确认无待集成提交。
 - [x] 将全部非生成差异分类为 `retain-core`、`upstreamed`、`move-out` 或
   `drop`，机器清单与 patch map 一致。
 - [x] Chat DTO、Responses-to-Chat 转换、工具名反向映射和 SSE 翻译集中到
@@ -131,8 +131,8 @@
   ignored integration tests。
 - [x] `npm run check:codex-generated`、`npm run check:codex-contracts`、fixtures、
   Feature Policy 和真实 `--require-manifest` smoke。
-- [-] 状态脚本已复核；当前检测到 3 个新上游提交，待 Web 恢复提交落地后在
-  专用 `codex/sync-upstream-*` 分支集成。
+- [x] 状态脚本已复核；官方 `6e5a2d6b8d14` 已在专用
+  `codex/sync-upstream-*` 分支无冲突集成，126 个本地差异保持已分类状态。
 - [x] Fake Server HTTP/static/WebSocket 端到端启动验证。
 - [x] Git status/diff 审查，确认没有未分类 Codex 差异或意外用户文件。
 

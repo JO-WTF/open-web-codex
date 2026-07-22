@@ -10,17 +10,17 @@ Observed on 2026-07-22 from the current synchronization branch:
 
 | Component | State |
 | --- | --- |
-| Codex subtree | integrated through `openai/codex` `4f3852107e5eedeb4cb89b57a6d4a35b49f8a59a` |
-| Observed official main | `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9`; three commits await integration |
-| Local Codex seams vs official main | 136 paths: 126 local-only and 10 upstream-only; no diverged or missing local paths |
+| Codex subtree | integrated through `openai/codex` `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9` |
+| Observed official main | `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9`; no commits await integration |
+| Local Codex seams vs official main | 126 local-only paths; no upstream-only, diverged or missing local paths |
 | Local customization footprint | six retained Runtime/TUI seams, derived artifacts and focused tests; `ToolName` uses the official implementation |
 | Web platform | Restored browser UI, Axum/PostgreSQL platform, native Profile Registry/Host, encrypted Provider Secret injection, durable approvals, isolated Git workspaces, lease-based Run orchestration, typed REST resources and authenticated WebSocket |
 
 ## Reproduced evidence
 
-- `scripts/codex-upstream-status.sh` reports three official commits pending;
-  the customization status script reports 126 local-only and 10 upstream-only
-  differences with zero diverged paths.
+- `scripts/codex-upstream-status.sh` reports the subtree synchronized with
+  official main; the customization status script reports 126 local-only
+  differences with zero upstream-only or diverged paths.
 - The current upstream structure and all six documented seams are integrated;
   regenerated app-server Schema and TypeScript fixtures have no drift.
 - The locally built `codex app-server` completes `initialize` and returns
@@ -91,6 +91,11 @@ Observed on 2026-07-22 from the current synchronization branch:
   inherited-FD Windows process-tree coverage are integrated without new local
   seams. The failed-turn TUI regression passes with the Provider dispatcher
   attachment intact.
+- The `6e5a2d6b8d14` update is conflict-free against the retained seams. Its 63
+  focused realtime-conversation tests pass, as do the HTTP client, LM Studio
+  and model-manager suites. The broader scoped run passes 3,144 of 3,149 tests;
+  the remaining five require binding local mock ports or launching a nested
+  exec-server, both denied by the current validation sandbox.
 
 The successful checks prove only the surfaces named above. They do not prove
 multi-Profile process routing, production sandbox strength, complete Cookie/CSRF
@@ -130,13 +135,11 @@ security, Push delivery, or every Studio capability.
 
 ## Immediate capability gates
 
-1. Integrate the three pending official commits and reapply only the documented
-   retained seams.
-2. Derive the remaining Manifest method sets and experimental state from
+1. Derive the remaining Manifest method sets and experimental state from
    generated Codex protocol/build facts.
-3. Keep the digest-addressed contract bundle and Web feature policy in sync.
-4. Keep the passing real Thread restart/resume/read smoke and add multi-cwd,
+2. Keep the digest-addressed contract bundle and Web feature policy in sync.
+3. Keep the passing real Thread restart/resume/read smoke and add multi-cwd,
    Provider, approval, multi-agent and MCP smoke suites before promoting the
    corresponding declarations to product support.
-5. Replace the single configured Profile composition root with authorized
+4. Replace the single configured Profile composition root with authorized
    per-user Profile routing before multi-user Beta.
