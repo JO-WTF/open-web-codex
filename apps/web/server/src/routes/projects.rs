@@ -6,7 +6,7 @@ use axum::{
 use open_web_codex_git_runtime::GitRuntime;
 use open_web_codex_platform_contracts::error::PlatformError;
 use open_web_codex_platform_contracts::{
-    CreateManagedProjectRequest, CreateProjectRequest, Project,
+    CreateManagedProjectRequest, CreateProjectRequest, Project, ProjectThreadContext, Run, Task,
 };
 use open_web_codex_platform_store::AppState;
 use sqlx::Row;
@@ -16,6 +16,72 @@ use uuid::Uuid;
 use crate::middleware::auth::AuthenticatedUser;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
+
+/// GET /api/projects/:id/thread-contexts — one joined navigation projection.
+pub async fn list_thread_contexts(
+    auth: AuthenticatedUser,
+    State(state): State<AppState>,
+    Path(project_id): Path<Uuid>,
+) -> ApiResult<Vec<ProjectThreadContext>> {
+    let rows = sqlx::query(
+        "SELECT p.id AS project_id, p.name AS project_name, p.git_url, p.default_branch, \
+                p.created_at AS project_created_at, p.updated_at AS project_updated_at, \
+                t.id AS task_id, t.title, t.status AS task_status, \
+                t.created_at AS task_created_at, t.updated_at AS task_updated_at, \
+                r.id AS run_id, r.status AS run_status, r.codex_thread_id, r.active_turn_id, \
+                r.workspace_id, r.source_ref, r.workspace_kind, r.workspace_name, \
+                r.workspace_parent_run_id, r.workspace_group_run_id, r.attempt, \
+                r.created_at AS run_created_at, r.updated_at AS run_updated_at \
+         FROM projects p JOIN tasks t ON t.project_id = p.id \
+         JOIN runs r ON r.task_id = t.id \
+         WHERE p.id = $1 AND p.organization_id = $2 AND t.organization_id = $2 \
+           AND r.organization_id = $2 AND r.codex_thread_id IS NOT NULL \
+         ORDER BY r.created_at DESC",
+    )
+    .bind(project_id)
+    .bind(auth.organization_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(internal_database_error)?;
+    Ok(Json(
+        rows.iter()
+            .map(|row| ProjectThreadContext {
+                project: Project {
+                    id: row.get("project_id"),
+                    name: row.get("project_name"),
+                    git_url: row.get("git_url"),
+                    default_branch: row.get("default_branch"),
+                    created_at: row.get("project_created_at"),
+                    updated_at: row.get("project_updated_at"),
+                },
+                task: Task {
+                    id: row.get("task_id"),
+                    project_id,
+                    title: row.get("title"),
+                    status: row.get("task_status"),
+                    created_at: row.get("task_created_at"),
+                    updated_at: row.get("task_updated_at"),
+                },
+                run: Run {
+                    id: row.get("run_id"),
+                    task_id: row.get("task_id"),
+                    status: row.get("run_status"),
+                    codex_thread_id: row.get("codex_thread_id"),
+                    active_turn_id: row.get("active_turn_id"),
+                    workspace_id: row.get("workspace_id"),
+                    source_ref: row.get("source_ref"),
+                    workspace_kind: row.get("workspace_kind"),
+                    workspace_name: row.get("workspace_name"),
+                    workspace_parent_run_id: row.get("workspace_parent_run_id"),
+                    workspace_group_run_id: row.get("workspace_group_run_id"),
+                    attempt: row.get("attempt"),
+                    created_at: row.get("run_created_at"),
+                    updated_at: row.get("run_updated_at"),
+                },
+            })
+            .collect(),
+    ))
+}
 
 /// GET /api/projects
 pub async fn list_projects(

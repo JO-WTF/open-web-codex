@@ -42,12 +42,14 @@ async fn serve(mut socket: WebSocket, state: AppState) {
             return;
         }
     };
+    // Subscribe before acknowledging readiness so events emitted during the
+    // handshake remain queued for this connection.
+    let mut events = state.event_bus.subscribe();
     let ready = json!({ "type": "ready", "version": 1 }).to_string();
     if socket.send(Message::Text(ready.into())).await.is_err() {
         return;
     }
 
-    let mut events = state.event_bus.subscribe();
     loop {
         tokio::select! {
             incoming = socket.next() => match incoming {

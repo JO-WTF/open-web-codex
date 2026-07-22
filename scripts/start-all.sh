@@ -12,6 +12,7 @@ RUN_DIR="$DATA_DIR/run"
 LOG_DIR="$DATA_DIR/logs"
 VITE_PID_FILE="$RUN_DIR/vite-1421.pid"
 VITE_LOG="$LOG_DIR/vite-1421.log"
+SERVER_PID_FILE="$RUN_DIR/server.pid"
 CODEX_MODE_VALUE="${CODEX_MODE:-real}"
 
 usage() {
@@ -25,8 +26,22 @@ read_vite_pid() {
 }
 
 vite_running() {
-  local pid="${1:-}"
-  [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
+  local pid="${1:-}" command
+  [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null || return 1
+  command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+  [[ "$command" == *"vite"* && "$command" == *"--port 1421"* ]]
+}
+
+server_running() {
+  local pid="${1:-}" command
+  [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null || return 1
+  command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+  [[ "$command" == *"open-web-codex-server"* ]]
+}
+
+health_ok() {
+  curl --silent --fail http://127.0.0.1:4800/api/health 2>/dev/null \
+    | grep -Eq '"ok"[[:space:]]*:[[:space:]]*true'
 }
 
 stop_all() {
@@ -96,8 +111,13 @@ fi
   printf '%s\n' "$!" >"$VITE_PID_FILE"
 )
 
-for _ in $(seq 1 50); do
-  if curl --silent --fail http://127.0.0.1:4800/api/health >/dev/null 2>&1 \
+for _ in $(seq 1 150); do
+  vite_pid="$(read_vite_pid || true)"
+  server_pid=""
+  [[ -f "$SERVER_PID_FILE" ]] && server_pid="$(tr -d '[:space:]' <"$SERVER_PID_FILE")"
+  if vite_running "$vite_pid" \
+    && server_running "$server_pid" \
+    && health_ok \
     && curl --silent --fail http://127.0.0.1:1421/web >/dev/null 2>&1; then
     printf 'Web UI:  http://127.0.0.1:1421/web\n'
     printf 'Server:  http://127.0.0.1:4800\n'
@@ -109,4 +129,5 @@ done
 
 printf 'error: services did not become healthy; inspect %s and %s\n' \
   "$VITE_LOG" "$LOG_DIR/server.log" >&2
+stop_all
 exit 1

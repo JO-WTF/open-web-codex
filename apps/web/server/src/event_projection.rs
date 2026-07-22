@@ -485,7 +485,7 @@ fn project_event_data(method: &str, params: &Map<String, Value>) -> Value {
     Value::Object(data)
 }
 
-fn project_item(item: &Map<String, Value>) -> Value {
+pub(crate) fn project_item(item: &Map<String, Value>) -> Value {
     let item_type = string_field(item, "type").unwrap_or_else(|| "unknown".to_string());
     let mut projected = Map::new();
     projected.insert("type".to_string(), Value::String(item_type.clone()));

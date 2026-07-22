@@ -183,6 +183,11 @@ pub fn router(
         .route("/tasks/{id}/runs", axum::routing::post(runs::start_run))
         .route("/runs", axum::routing::get(runs::list_runs))
         .route("/runs/{id}", axum::routing::get(runs::get_run))
+        .route("/runs/{id}/thread", axum::routing::get(threads::read))
+        .route(
+            "/runs/{id}/thread/turns",
+            axum::routing::get(threads::list_turns),
+        )
         .route(
             "/runs/{id}/thread/archive",
             axum::routing::post(threads::archive),
@@ -373,6 +378,10 @@ pub fn router(
         .route(
             "/projects/{id}",
             axum::routing::get(projects::get_project).delete(projects::delete_project),
+        )
+        .route(
+            "/projects/{id}/thread-contexts",
+            axum::routing::get(projects::list_thread_contexts),
         )
         .route(
             "/tasks",

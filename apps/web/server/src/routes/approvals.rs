@@ -16,9 +16,11 @@ type ApiError = (StatusCode, Json<PlatformError>);
 pub async fn list_pending(
     auth: AuthenticatedUser,
     Extension(approvals): Extension<Arc<ApprovalService>>,
+    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
 ) -> Result<Json<Vec<ApprovalSummary>>, ApiError> {
+    let runtime_instance_id = adapter.runtime_instance_id().await;
     approvals
-        .list_pending(actor(&auth))
+        .list_pending(actor(&auth), runtime_instance_id)
         .await
         .map(Json)
         .map_err(approval_error)
@@ -32,12 +34,14 @@ pub async fn decide(
     Json(request): Json<DecideApprovalRequest>,
 ) -> Result<StatusCode, ApiError> {
     let actor = actor(&auth);
+    let runtime_instance_id = adapter.runtime_instance_id().await;
     let dispatch = approvals
-        .begin_decision(actor, id, request)
+        .begin_decision(actor, id, runtime_instance_id, request)
         .await
         .map_err(approval_error)?;
     if adapter
         .respond_to_server_request(
+            dispatch.runtime_instance_id,
             dispatch.runtime_request_id.clone(),
             dispatch.response.clone(),
         )
@@ -70,12 +74,14 @@ pub async fn respond_user_input(
     Json(request): Json<RespondUserInputRequest>,
 ) -> Result<StatusCode, ApiError> {
     let actor = actor(&auth);
+    let runtime_instance_id = adapter.runtime_instance_id().await;
     let dispatch = approvals
-        .begin_user_input_response(actor, id, request)
+        .begin_user_input_response(actor, id, runtime_instance_id, request)
         .await
         .map_err(approval_error)?;
     if adapter
         .respond_to_server_request(
+            dispatch.runtime_instance_id,
             dispatch.runtime_request_id.clone(),
             dispatch.response.clone(),
         )

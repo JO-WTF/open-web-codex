@@ -132,6 +132,7 @@ stream_max_retries = 0
     .expect("write smoke config");
 
     let first = spawn_host(&codex_bin, &home, &workspace).await;
+    let first_runtime_instance_id = first.runtime_instance_id().await;
     let snapshot = first.snapshot().await;
     assert_eq!(snapshot.state, ProfileHostState::Ready);
     assert!(snapshot.capability_count >= 3);
@@ -162,8 +163,8 @@ stream_max_retries = 0
     timeout(Duration::from_secs(10), async {
         loop {
             let event = events.recv().await.expect("Profile Host event");
-            if event["method"] == "turn/completed"
-                && event["params"]["threadId"] == expected_thread_id
+            if event.message["method"] == "turn/completed"
+                && event.message["params"]["threadId"] == expected_thread_id
             {
                 return;
             }
@@ -171,6 +172,25 @@ stream_max_retries = 0
     })
     .await
     .expect("turn completed before restart");
+    let first_turn_page = first
+        .request(
+            "thread/turns/list",
+            json!({
+                "threadId": expected_thread_id,
+                "limit": 100,
+                "sortDirection": "asc",
+                "itemsView": "full",
+            }),
+        )
+        .await
+        .expect("list persisted Turns before restart");
+    assert_eq!(
+        first_turn_page
+            .get("data")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(1)
+    );
     first
         .restart(
             ProfileHostConfig::new("real-smoke-profile", &home, &workspace)
@@ -179,6 +199,10 @@ stream_max_retries = 0
         .await
         .expect("restart Profile Host in place");
     let second = first;
+    assert_ne!(
+        second.runtime_instance_id().await,
+        first_runtime_instance_id
+    );
     let resumed = second
         .request(
             "thread/resume",
@@ -200,6 +224,25 @@ stream_max_retries = 0
         .await
         .expect("read thread after host restart");
     assert_eq!(thread_id(&recovered), expected_thread_id);
+    let recovered_turn_page = second
+        .request(
+            "thread/turns/list",
+            json!({
+                "threadId": expected_thread_id,
+                "limit": 100,
+                "sortDirection": "asc",
+                "itemsView": "full",
+            }),
+        )
+        .await
+        .expect("list persisted Turns after restart");
+    assert_eq!(
+        recovered_turn_page
+            .get("data")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(1)
+    );
 
     second.shutdown().await.expect("shutdown second host");
     drop(second);

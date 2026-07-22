@@ -6,10 +6,11 @@ use axum::body::{to_bytes, Body};
 use axum::http::{HeaderMap, Request, StatusCode};
 use axum::Router;
 use futures_util::{SinkExt, StreamExt};
-use open_web_codex_adapter::fake::FakeCodexAdapter;
-use open_web_codex_approval_service::ApprovalService;
+use open_web_codex_adapter::{fake::FakeCodexAdapter, CodexAdapter};
+use open_web_codex_approval_service::{ApprovalActor, ApprovalService};
 use open_web_codex_auth::hash_password;
 use open_web_codex_git_runtime::{GitRuntime, GitRuntimeConfig};
+use open_web_codex_platform_contracts::{ApprovalDecision, DecideApprovalRequest};
 use open_web_codex_platform_store::AppState;
 use open_web_codex_provider_service::secured::InMemoryAuthorizedProviderService;
 use open_web_codex_run_orchestrator::RunOrchestrator;
@@ -65,7 +66,7 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
         .nest(
             "/api",
             routes::router(
-                adapter,
+                adapter.clone(),
                 Arc::new(InMemoryAuthorizedProviderService::default()),
                 approval_service.clone(),
                 git.clone(),
@@ -260,19 +261,23 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
         .await
         .unwrap();
     assert_eq!(missing_auth.status(), StatusCode::UNAUTHORIZED);
+    let runtime_instance_id = adapter.runtime_instance_id().await;
     let approval_id = approval_service
-        .capture_message(&json!({
-            "id": 77,
-            "method": "item/commandExecution/requestApproval",
-            "params": {
-                "threadId": "approval-thread",
-                "turnId": "turn-1",
-                "itemId": "item-1",
-                "command": "git status",
-                "cwd": "/private/server/path",
-                "reason": "inspect changes"
-            }
-        }))
+        .capture_message(
+            runtime_instance_id,
+            &json!({
+                "id": 77,
+                "method": "item/commandExecution/requestApproval",
+                "params": {
+                    "threadId": "approval-thread",
+                    "turnId": "turn-1",
+                    "itemId": "item-1",
+                    "command": "git status",
+                    "cwd": "/private/server/path",
+                    "reason": "inspect changes"
+                }
+            }),
+        )
         .await
         .unwrap()
         .expect("captured approval");
@@ -303,6 +308,93 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     .await
     .unwrap();
     assert_eq!(audit_count, 1);
+
+    let retry_approval_id = approval_service
+        .capture_message(
+            runtime_instance_id,
+            &json!({
+                "id": 78,
+                "method": "item/commandExecution/requestApproval",
+                "params": {
+                    "threadId": "approval-thread",
+                    "turnId": "turn-2",
+                    "itemId": "item-2",
+                    "command": "git diff"
+                }
+            }),
+        )
+        .await
+        .unwrap()
+        .expect("captured retryable approval");
+    let actor = ApprovalActor {
+        user_id: first_user_id,
+        organization_id: first_organization_id,
+    };
+    let first_dispatch = approval_service
+        .begin_decision(
+            actor,
+            retry_approval_id,
+            runtime_instance_id,
+            DecideApprovalRequest {
+                decision: ApprovalDecision::Accept,
+                version: 0,
+            },
+        )
+        .await
+        .expect("begin first delivery");
+    approval_service
+        .mark_delivery_unknown(actor, &first_dispatch)
+        .await
+        .expect("mark uncertain delivery");
+    let retry_dispatch = approval_service
+        .begin_decision(
+            actor,
+            retry_approval_id,
+            runtime_instance_id,
+            DecideApprovalRequest {
+                decision: ApprovalDecision::Accept,
+                version: 2,
+            },
+        )
+        .await
+        .expect("retry the same uncertain decision");
+    approval_service
+        .complete_decision(actor, &retry_dispatch)
+        .await
+        .expect("complete retried decision");
+
+    let next_runtime_instance_id = Uuid::now_v7();
+    let reused_request_id = approval_service
+        .capture_message(
+            next_runtime_instance_id,
+            &json!({
+                "id": 77,
+                "method": "item/commandExecution/requestApproval",
+                "params": {
+                    "threadId": "approval-thread",
+                    "turnId": "turn-after-restart",
+                    "itemId": "item-after-restart",
+                    "command": "git status"
+                }
+            }),
+        )
+        .await
+        .unwrap()
+        .expect("request ids may be reused by a new Runtime instance");
+    assert_ne!(reused_request_id, approval_id);
+    assert_eq!(
+        approval_service
+            .cancel_stale_runtime_requests(runtime_instance_id)
+            .await
+            .expect("cancel requests from another Runtime instance"),
+        1
+    );
+    let restarted_state: String = sqlx::query_scalar("SELECT state FROM approvals WHERE id = $1")
+        .bind(reused_request_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(restarted_state, "cancelled");
 
     let second_user_id = Uuid::now_v7();
     let second_organization_id = Uuid::now_v7();

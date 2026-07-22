@@ -26,6 +26,7 @@ pub struct ApprovalActor {
 #[derive(Debug)]
 pub struct ApprovalDispatch {
     pub approval_id: Uuid,
+    pub runtime_instance_id: Uuid,
     pub runtime_request_id: Value,
     pub response: Value,
     pub dispatch_version: i64,
@@ -78,14 +79,20 @@ impl ApprovalService {
             .ok_or(ApprovalServiceError::Invalid)?;
         let envelope: Value =
             serde_json::from_slice(payload).map_err(|_| ApprovalServiceError::Invalid)?;
+        let runtime_instance_id = envelope
+            .pointer("/params/runtime_instance_id")
+            .and_then(Value::as_str)
+            .and_then(|value| Uuid::parse_str(value).ok())
+            .ok_or(ApprovalServiceError::Invalid)?;
         let message = envelope
             .pointer("/params/message")
             .ok_or(ApprovalServiceError::Invalid)?;
-        self.capture_message(message).await
+        self.capture_message(runtime_instance_id, message).await
     }
 
     pub async fn capture_message(
         &self,
+        runtime_instance_id: Uuid,
         message: &Value,
     ) -> Result<Option<Uuid>, ApprovalServiceError> {
         let Some(method) = message.get("method").and_then(Value::as_str) else {
@@ -118,19 +125,20 @@ impl ApprovalService {
         let row = sqlx::query(
             "INSERT INTO approvals \
              (run_id, request_type, request_payload, organization_id, profile_id, thread_id, \
-              runtime_request_id, state, version) \
-             SELECT r.id, $1, $2, p.organization_id, p.id, $3, $4, 'pending', 0 \
+              runtime_instance_id, runtime_request_id, state, version) \
+             SELECT r.id, $1, $2, p.organization_id, p.id, $3, $4, $5, 'pending', 0 \
              FROM profiles p JOIN runs r \
                ON r.organization_id = p.organization_id AND r.codex_thread_id = $3 \
-             WHERE p.runtime_key = $5 AND p.status = 'active' \
+             WHERE p.runtime_key = $6 AND p.status = 'active' \
              ORDER BY r.created_at DESC LIMIT 1 \
-             ON CONFLICT (profile_id, thread_id, runtime_request_id) \
-             WHERE runtime_request_id IS NOT NULL AND thread_id IS NOT NULL \
+             ON CONFLICT (profile_id, runtime_instance_id, runtime_request_id) \
+             WHERE runtime_instance_id IS NOT NULL AND runtime_request_id IS NOT NULL \
              DO NOTHING RETURNING id",
         )
         .bind(method)
         .bind(stored_payload)
         .bind(&thread_id)
+        .bind(runtime_instance_id)
         .bind(&runtime_request_id)
         .bind(&self.runtime_key)
         .fetch_optional(&self.db)
@@ -140,10 +148,11 @@ impl ApprovalService {
         }
         let existing = sqlx::query(
             "SELECT a.id FROM approvals a JOIN profiles p ON p.id = a.profile_id \
-             WHERE p.runtime_key = $1 AND a.thread_id = $2 AND a.runtime_request_id = $3",
+             WHERE p.runtime_key = $1 AND a.runtime_instance_id = $2 \
+               AND a.runtime_request_id = $3",
         )
         .bind(&self.runtime_key)
-        .bind(&thread_id)
+        .bind(runtime_instance_id)
         .bind(runtime_request_id)
         .fetch_optional(&self.db)
         .await?;
@@ -155,18 +164,23 @@ impl ApprovalService {
     pub async fn list_pending(
         &self,
         actor: ApprovalActor,
+        runtime_instance_id: Uuid,
     ) -> Result<Vec<ApprovalSummary>, ApprovalServiceError> {
+        self.cancel_stale_runtime_requests(runtime_instance_id)
+            .await?;
         let rows = sqlx::query(
             "SELECT a.id, a.run_id, a.thread_id, a.request_type, a.request_payload, \
                     a.state, a.version, a.created_at, a.decided_at \
              FROM approvals a JOIN profiles p ON p.id = a.profile_id \
              WHERE a.organization_id = $1 AND p.owner_user_id = $2 \
                AND p.runtime_key = $3 AND a.state IN ('pending', 'dispatching', 'delivery_unknown') \
+               AND a.runtime_instance_id = $4 \
              ORDER BY a.created_at, a.id",
         )
         .bind(actor.organization_id)
         .bind(actor.user_id)
         .bind(&self.runtime_key)
+        .bind(runtime_instance_id)
         .fetch_all(&self.db)
         .await?;
         Ok(rows.iter().map(summary_from_row).collect())
@@ -182,6 +196,7 @@ impl ApprovalService {
     /// cancelled.
     pub async fn resolve_runtime_request(
         &self,
+        runtime_instance_id: Uuid,
         thread_id: &str,
         runtime_request_id: &Value,
     ) -> Result<Option<ResolvedApproval>, ApprovalServiceError> {
@@ -200,10 +215,12 @@ impl ApprovalService {
         let row = sqlx::query(
             "SELECT a.id, a.thread_id, a.request_payload, a.state, a.decision \
              FROM approvals a JOIN profiles p ON p.id = a.profile_id \
-             WHERE p.runtime_key = $1 AND a.thread_id = $2 AND a.runtime_request_id = $3 \
+             WHERE p.runtime_key = $1 AND a.runtime_instance_id = $2 \
+               AND a.thread_id = $3 AND a.runtime_request_id = $4 \
              FOR UPDATE OF a",
         )
         .bind(&self.runtime_key)
+        .bind(runtime_instance_id)
         .bind(thread_id)
         .bind(&runtime_request_id)
         .fetch_optional(&mut *transaction)
@@ -255,11 +272,13 @@ impl ApprovalService {
         &self,
         actor: ApprovalActor,
         approval_id: Uuid,
+        runtime_instance_id: Uuid,
         request: DecideApprovalRequest,
     ) -> Result<ApprovalDispatch, ApprovalServiceError> {
         let mut transaction = self.db.begin().await?;
         let row = sqlx::query(
-            "SELECT a.runtime_request_id, a.request_type, a.request_payload, a.state, a.version \
+            "SELECT a.runtime_instance_id, a.runtime_request_id, a.request_type, \
+                    a.request_payload, a.state, a.version, a.decision \
              FROM approvals a JOIN profiles p ON p.id = a.profile_id \
              WHERE a.id = $1 AND a.organization_id = $2 AND p.owner_user_id = $3 \
                AND p.runtime_key = $4 FOR UPDATE",
@@ -273,13 +292,20 @@ impl ApprovalService {
         .ok_or(ApprovalServiceError::NotFound)?;
         let state: String = row.get("state");
         let version: i64 = row.get("version");
-        if state != "pending" || version != request.version {
+        let stored_runtime_instance_id: Option<Uuid> = row.get("runtime_instance_id");
+        if stored_runtime_instance_id != Some(runtime_instance_id) || version != request.version {
             return Err(ApprovalServiceError::Conflict);
         }
         let request_type: String = row.get("request_type");
         let payload: Value = row.get("request_payload");
         let (response, terminal_state, decision) =
             approval_response(&request_type, &payload, request.decision)?;
+        let previous_decision: Option<String> = row.get("decision");
+        if state != "pending"
+            && !(state == "delivery_unknown" && previous_decision.as_deref() == Some(decision))
+        {
+            return Err(ApprovalServiceError::Conflict);
+        }
         let dispatch_version = version + 1;
         sqlx::query(
             "UPDATE approvals SET state = 'dispatching', decision = $1, decided_by = $2, \
@@ -296,6 +322,7 @@ impl ApprovalService {
         let runtime_request_id: String = row.get("runtime_request_id");
         Ok(ApprovalDispatch {
             approval_id,
+            runtime_instance_id,
             runtime_request_id: serde_json::from_str(&runtime_request_id)
                 .map_err(|_| ApprovalServiceError::Invalid)?,
             response,
@@ -309,11 +336,13 @@ impl ApprovalService {
         &self,
         actor: ApprovalActor,
         approval_id: Uuid,
+        runtime_instance_id: Uuid,
         request: RespondUserInputRequest,
     ) -> Result<ApprovalDispatch, ApprovalServiceError> {
         let mut transaction = self.db.begin().await?;
         let row = sqlx::query(
-            "SELECT a.runtime_request_id, a.request_type, a.request_payload, a.state, a.version \
+            "SELECT a.runtime_instance_id, a.runtime_request_id, a.request_type, \
+                    a.request_payload, a.state, a.version, a.decision \
              FROM approvals a JOIN profiles p ON p.id = a.profile_id \
              WHERE a.id = $1 AND a.organization_id = $2 AND p.owner_user_id = $3 \
                AND p.runtime_key = $4 FOR UPDATE",
@@ -329,7 +358,14 @@ impl ApprovalService {
         let version: i64 = row.get("version");
         let request_type: String = row.get("request_type");
         let payload: Value = row.get("request_payload");
-        if state != "pending" || version != request.version {
+        let stored_runtime_instance_id: Option<Uuid> = row.get("runtime_instance_id");
+        let previous_decision: Option<String> = row.get("decision");
+        if stored_runtime_instance_id != Some(runtime_instance_id)
+            || version != request.version
+            || (state != "pending"
+                && !(state == "delivery_unknown"
+                    && previous_decision.as_deref() == Some("answered")))
+        {
             return Err(ApprovalServiceError::Conflict);
         }
         if request_type != USER_INPUT_REQUEST {
@@ -350,6 +386,7 @@ impl ApprovalService {
         let runtime_request_id: String = row.get("runtime_request_id");
         Ok(ApprovalDispatch {
             approval_id,
+            runtime_instance_id,
             runtime_request_id: serde_json::from_str(&runtime_request_id)
                 .map_err(|_| ApprovalServiceError::Invalid)?,
             response: json!({ "answers": request.answers }),
@@ -413,6 +450,24 @@ impl ApprovalService {
         insert_audit(&mut transaction, actor, dispatch, "delivery_unknown").await?;
         transaction.commit().await?;
         Ok(())
+    }
+
+    pub async fn cancel_stale_runtime_requests(
+        &self,
+        runtime_instance_id: Uuid,
+    ) -> Result<u64, ApprovalServiceError> {
+        let result = sqlx::query(
+            "UPDATE approvals a SET state = 'cancelled', \
+                    decided_at = COALESCE(a.decided_at, now()), version = a.version + 1 \
+             FROM profiles p WHERE p.id = a.profile_id AND p.runtime_key = $1 \
+               AND a.state IN ('pending', 'dispatching', 'delivery_unknown') \
+               AND a.runtime_instance_id IS DISTINCT FROM $2",
+        )
+        .bind(&self.runtime_key)
+        .bind(runtime_instance_id)
+        .execute(&self.db)
+        .await?;
+        Ok(result.rows_affected())
     }
 }
 

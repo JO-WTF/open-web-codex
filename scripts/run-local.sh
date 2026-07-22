@@ -124,15 +124,28 @@ is_running() {
   [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
 }
 
+is_server_running() {
+  local pid="${1:-}" command
+  is_running "$pid" || return 1
+  command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+  [[ "$command" == "$server_bin" || "$command" == "$server_bin "* ]]
+}
+
+health_ok() {
+  command -v curl >/dev/null 2>&1 || return 1
+  curl --silent --fail "http://$bind_host:$server_port/api/health" 2>/dev/null \
+    | grep -Eq '"ok"[[:space:]]*:[[:space:]]*true'
+}
+
 show_status() {
   local pid
   pid="$(read_pid || true)"
-  if is_running "$pid"; then
+  if is_server_running "$pid"; then
     printf 'server: running (PID %s)\n' "$pid"
   else
     printf 'server: stopped\n'
   fi
-  if command -v curl >/dev/null 2>&1 && curl --silent --fail "http://$bind_host:$server_port/api/health" >/dev/null 2>&1; then
+  if health_ok; then
     printf 'health: healthy\nweb:    http://%s:%s/\n' "$bind_host" "$server_port"
   else
     printf 'health: unavailable\n'
@@ -142,14 +155,14 @@ show_status() {
 stop_server() {
   local pid attempt
   pid="$(read_pid || true)"
-  if ! is_running "$pid"; then
+  if ! is_server_running "$pid"; then
     rm -f "$pid_file"
     printf 'open-web-codex is not running for %s\n' "$data_dir"
     return 0
   fi
   kill -TERM "$pid"
   for attempt in $(seq 1 100); do
-    if ! is_running "$pid"; then
+    if ! is_server_running "$pid"; then
       rm -f "$pid_file"
       printf 'open-web-codex stopped.\n'
       return 0
@@ -235,7 +248,7 @@ if [[ "$codex_mode" == "real" ]]; then
 fi
 
 existing_pid="$(read_pid || true)"
-if is_running "$existing_pid"; then
+if is_server_running "$existing_pid"; then
   error "open-web-codex is already running (PID $existing_pid)"
   exit 1
 fi
@@ -257,9 +270,23 @@ if [[ "$action" == "background" ]]; then
   nohup "${server_command[@]}" >"$server_log" 2>&1 </dev/null &
   server_pid=$!
   printf '%s\n' "$server_pid" >"$pid_file"
-  printf 'open-web-codex starting in background (PID %s)\n' "$server_pid"
-  printf 'web:  http://%s:%s/\nlogs: %s\n' "$bind_host" "$server_port" "$server_log"
-  exit 0
+  for _ in $(seq 1 150); do
+    if ! is_server_running "$server_pid"; then
+      rm -f "$pid_file"
+      error "open-web-codex exited during startup; inspect $server_log"
+      exit 1
+    fi
+    if health_ok; then
+      printf 'open-web-codex running in background (PID %s)\n' "$server_pid"
+      printf 'web:  http://%s:%s/\nlogs: %s\n' "$bind_host" "$server_port" "$server_log"
+      exit 0
+    fi
+    sleep 0.2
+  done
+  kill -TERM "$server_pid" 2>/dev/null || true
+  rm -f "$pid_file"
+  error "open-web-codex did not become healthy; inspect $server_log"
+  exit 1
 fi
 
 cleanup() {

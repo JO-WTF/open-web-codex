@@ -23,6 +23,9 @@ import type {
   ProfileLoginStart,
   ProfileLoginCancel,
   ProfileLoginStatus,
+  ProjectThreadContext,
+  ThreadHistoryResponse,
+  ThreadHistoryTurn,
   BrowserWorkspacePreference,
   CreateGitHubRepositoryResponse,
 } from "./types";
@@ -143,6 +146,12 @@ export class PlatformClient {
     return this.request<Project>(`/api/projects/${encodeURIComponent(projectId)}`);
   }
 
+  listProjectThreadContexts(projectId: string) {
+    return this.request<ProjectThreadContext[]>(
+      `/api/projects/${encodeURIComponent(projectId)}/thread-contexts`,
+    );
+  }
+
   deleteProject(projectId: string) {
     return this.request<{ deleted: boolean; id: string }>(
       `/api/projects/${encodeURIComponent(projectId)}`,
@@ -185,6 +194,16 @@ export class PlatformClient {
 
   getRun(runId: string) {
     return this.request<Run>(`/api/runs/${encodeURIComponent(runId)}`);
+  }
+
+  readRunThread(runId: string) {
+    return this.request<ThreadHistoryResponse>(`/api/runs/${encodeURIComponent(runId)}/thread`);
+  }
+
+  listRunThreadTurns(runId: string) {
+    return this.request<ThreadHistoryTurn[]>(
+      `/api/runs/${encodeURIComponent(runId)}/thread/turns`,
+    );
   }
 
   archiveRunThread(runId: string) {
@@ -310,16 +329,19 @@ export class PlatformClient {
   async listAllEvents(taskId: string, afterSequence = 0) {
     const events: RunEvent[] = [];
     let cursor = afterSequence;
-    while (true) {
+    let hasAnotherPage = true;
+    while (hasAnotherPage) {
       const page = await this.listEvents(taskId, cursor, 200);
       events.push(...page);
-      if (page.length < 200) return events;
+      hasAnotherPage = page.length === 200;
+      if (!hasAnotherPage) break;
       const next = page[page.length - 1]?.sequence;
       if (typeof next !== "number" || next <= cursor) {
         throw new Error("Task event replay did not advance its sequence cursor");
       }
       cursor = next;
     }
+    return events;
   }
 
   listApprovals() {

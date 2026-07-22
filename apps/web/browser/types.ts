@@ -58,6 +58,34 @@ export type Run = {
   updated_at: string;
 };
 
+export type ProjectThreadContext = {
+  project: Project;
+  task: Task;
+  run: Run;
+};
+
+export type ThreadHistoryTurn = {
+  id: string;
+  status: string;
+  items: Record<string, unknown>[];
+  error?: { message: string; additionalDetails?: string | null } | null;
+  startedAt?: number | null;
+  completedAt?: number | null;
+  durationMs?: number | null;
+};
+
+export type ThreadHistoryResponse = {
+  thread: {
+    id: string;
+    name?: string | null;
+    preview: string;
+    createdAt: number;
+    updatedAt: number;
+    status: { type: string; activeFlags?: string[] };
+    turns: ThreadHistoryTurn[];
+  };
+};
+
 export type RunEvent = {
   id: string;
   sequence: number;

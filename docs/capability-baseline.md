@@ -42,8 +42,9 @@ Observed on 2026-07-23 from the current synchronization branch:
 - The platform source contains PostgreSQL migrations and API handlers for
   bootstrap/session, organization membership, project, Task, Run and persisted
   Run events.
-- The native Profile Host real-binary smoke covers an offline Turn, restart and
-  Thread resume/read. A second real-binary Provider smoke covers two custom
+- The native Profile Host real-binary smoke covers an offline Turn, paginated
+  full-item history, process-instance rotation, restart and Thread resume/read.
+  A second real-binary Provider smoke covers two custom
   Providers, forced model refresh, switching, cache isolation and omission of
   direct credentials from returned catalogs.
 - Blank PostgreSQL migration and restart tests pass. AES-256-GCM Provider Secret
@@ -52,9 +53,10 @@ Observed on 2026-07-23 from the current synchronization branch:
   ciphertext and private child environment are removed together on deletion.
 - The authenticated HTTP security regression uses two Organizations and proves
   resource-ID isolation, Profile-owner enforcement, session Organization
-  switching, role-gated writes, durable approval decision delivery and an audit
-  record. Passwords use Argon2id; accepted legacy SHA-256 hashes are upgraded on
-  successful login.
+  switching, role-gated writes, durable approval decision delivery, uncertain
+  delivery retry, Runtime request-id reuse isolation across process instances,
+  stale-request cancellation and an audit record. Passwords use Argon2id;
+  accepted legacy SHA-256 hashes are upgraded on successful login.
 - Git Runtime validation covers source/ref rejection, private mirror creation,
   one clone per Run, locking, selected-path commit, status projection and
   cleanup. Run orchestration covers idempotent creation, `SKIP LOCKED` leasing,
@@ -63,11 +65,12 @@ Observed on 2026-07-23 from the current synchronization branch:
   `/api/events/ws` stream. Durable events are replayed by Task sequence; live
   delivery is filtered by Organization. The former local gateway, raw RPC,
   query-token event stream and desktop application are absent.
-- The checked-in 1421 WebApp React component tree and CSS match the established
-  `main` WebApp byte-for-byte. `src/services/webClient.ts` is the only product
-  source seam: it preserves the existing UI method contract while calling typed
-  Server resources. Typecheck, production build, no-desktop and UI-parity gates
-  pass; all 1,123 browser tests pass. Direct-Server tests cover history,
+- The checked-in 1421 WebApp presentation and CSS match the established WebApp.
+  `src/services/webClient.ts` is the primary compatibility seam; three complete
+  source-file hashes pin the reviewed non-visual Thread-context wiring in
+  `WebApp.tsx` and FileManager so the exception cannot expand into UI drift.
+  Typecheck, production build, no-desktop and UI-parity gates pass; all 1,124
+  browser tests pass. Direct-Server tests cover authoritative history,
   reconnect/resync replay, status recovery, current-Thread checkout selection,
   Provider/model defaults, approvals, structured input, MCP and rate limits.
 - The 1421 WebApp adapter currently covers managed Projects, Threads/Turns,
@@ -77,8 +80,9 @@ Observed on 2026-07-23 from the current synchronization branch:
   switch, code execution, real stdio MCP invocation, approval resolution,
   delayed Turn state, cross-Thread history restore, file preview and durable/live
   event ordering. Browser smoke additionally verifies Running-to-Idle sidebar
-  convergence while switching Threads. The old root App Bridge has been deleted; both root and
-  `/web` now load only WebApp, while unused old App source awaits later pruning.
+  convergence while switching Threads. Both root and `/web` load only WebApp;
+  the old root App/Bridge remain as unreferenced source and are intentionally
+  deferred from pruning.
 - The latest official managed-config exact-value enforcement, missing sandbox
   path handling, and skill-name metrics sanitization changes are integrated.
   Their config, MCP, Core Skills, protocol and app-server regressions pass on
@@ -112,9 +116,9 @@ security, Push delivery, or every Studio capability.
 | --- | --- | --- |
 | Protocol Schema | available | generated JSON/TypeScript artifacts exist |
 | Capability negotiation | available, provisional | `initialize` emits schema version, build identity, protocol range, status, limits and reasons; method registries validate Manifest wire-name refs, experimental consistency, and product attribution policy; capability declarations remain hand-assembled Alpha subset rather than full generated policy |
-| Thread lifecycle | declared supported | initialize smoke passed; multi-cwd and restart recovery smoke still required |
-| Turn lifecycle | declared supported | real lifecycle smoke beyond initialize still required |
-| Approval lifecycle | declared supported | command, file and permission requests are persisted before a request-id-free browser projection; decisions use optimistic versioning and audit. A real interactive approval smoke, expiry and restart recovery remain gates |
+| Thread lifecycle | declared supported | real start, persisted full-history pagination, process restart, resume and read smoke passed; multi-cwd remains a gate |
+| Turn lifecycle | declared supported | real offline Turn start/completion and post-restart recovery passed |
+| Approval lifecycle | declared supported | command, file and permission requests are persisted before a request-id-free browser projection; decisions use optimistic versioning and audit; process-instance identity prevents stale response delivery and supports request-id reuse; uncertain delivery retry and restart cancellation regressions pass. Expiry remains a gate |
 | Profile multi-workspace | declared supported | manifest limits are present; ownership and concurrency behavior remain unverified |
 | Memory lifecycle | declared unsupported | Codex contains compaction/memory surfaces, but the Web-safe status/export/reset bridge is absent |
 | Native Agent CRUD | declared unsupported | no stable Web-safe CRUD/validation contract |
@@ -135,8 +139,8 @@ security, Push delivery, or every Studio capability.
 | Authentication | bootstrap and login use Argon2id, sessions bind an Organization, and legacy hashes upgrade after successful verification | HttpOnly-only session flow, CSRF, logout/revocation, rate limiting and complete browser flows are missing |
 | Authorization | Project/Task/Run and runtime calls enforce session Organization; Provider/approval calls additionally enforce Profile ownership; a two-Organization denial regression passes | centralized policy abstraction, Project-specific roles and the full concurrent multi-user matrix remain missing |
 | Codex bridge | Fake/Real adapter and event projection exist; Real uses the native Profile Registry/Host JSONL connection. Provider Secrets are encrypted and injected only into the owned child environment. Runtime-facing operations remain internal and browser routes are typed | composition is still one configured Profile process per server; per-user dynamic process routing remains incomplete |
-| Task/Run | CRUD/start/cancel/message/steer/compact/review, idempotent scheduling, DB leases/heartbeats/recovery, isolated Git workspaces, safe Item/Delta and approval projection, monotonic replay, terminal execution, workspace files, nested Git roots, full local Git operations and explicit remote operations exist | artifact storage, approval expiry/restart delivery, protected-branch policy and full multi-Profile routing remain incomplete |
-| Browser | established `main` 1421 WebApp UI and CSS run through typed resources for workspace/thread/message, approvals, Provider/model, MCP/rate-limit snapshots, files and Git status; the real core journey and Thread-switch browser smoke pass; no standalone Gateway or old root Bridge is loaded or built | broader visual/accessibility regression, unused old App source pruning, cookie-only sessions and production accessibility remain incomplete |
+| Task/Run | CRUD/start/cancel/message/steer/compact/review, idempotent scheduling, DB leases/heartbeats/recovery, isolated Git workspaces, authoritative Codex history, safe Item/Delta and approval projection, monotonic initial/reconnect replay, terminal execution, workspace files, nested Git roots, full local Git operations and explicit remote operations exist | artifact storage, approval expiry, protected-branch policy and full multi-Profile routing remain incomplete |
+| Browser | established 1421 WebApp presentation runs through typed resources for workspace/thread/message, approvals, Provider/model, MCP/rate-limit snapshots, files and Git status; files, Git and MCP resolve the selected Thread's Run; the real core journey and Thread-switch browser smoke pass; no standalone Gateway or old root Bridge is loaded or built | broader visual/accessibility regression, deferred unused-source pruning, cookie-only sessions and production accessibility remain incomplete |
 
 ## Immediate capability gates
 

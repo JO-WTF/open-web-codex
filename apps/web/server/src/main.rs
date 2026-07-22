@@ -218,7 +218,25 @@ async fn main() -> anyhow::Result<()> {
             // Persist a safe, versioned projection before exposing the event
             // to connected browsers. The database cursor is therefore always
             // available when a client reconnects after seeing an event.
+            let mut reconciled_runtime_instance_id = None;
             while let Some(data) = rx.recv().await {
+                let runtime_instance_id = match frame_runtime_instance_id(&data) {
+                    Ok(runtime_instance_id) => runtime_instance_id,
+                    Err(error) => {
+                        tracing::warn!("invalid Runtime instance event frame: {error}");
+                        continue;
+                    }
+                };
+                if reconciled_runtime_instance_id != Some(runtime_instance_id) {
+                    if let Err(error) = approvals
+                        .cancel_stale_runtime_requests(runtime_instance_id)
+                        .await
+                    {
+                        tracing::warn!("stale approval reconciliation failed: {error}");
+                        continue;
+                    }
+                    reconciled_runtime_instance_id = Some(runtime_instance_id);
+                }
                 let runtime_resolution = match runtime_resolved_request(&data) {
                     Ok(runtime_resolution) => runtime_resolution,
                     Err(error) => {
@@ -228,7 +246,11 @@ async fn main() -> anyhow::Result<()> {
                 };
                 if let Some((thread_id, runtime_request_id)) = runtime_resolution {
                     let resolved = match approvals
-                        .resolve_runtime_request(&thread_id, &runtime_request_id)
+                        .resolve_runtime_request(
+                            runtime_instance_id,
+                            &thread_id,
+                            &runtime_request_id,
+                        )
                         .await
                     {
                         Ok(Some(resolved)) => resolved,
@@ -360,6 +382,19 @@ fn runtime_resolved_request(frame: &[u8]) -> anyhow::Result<Option<(String, serd
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("server-request resolution omitted a valid requestId"))?;
     Ok(Some((thread_id, request_id)))
+}
+
+fn frame_runtime_instance_id(frame: &[u8]) -> anyhow::Result<uuid::Uuid> {
+    let payload = frame
+        .strip_prefix(b"data: ")
+        .and_then(|value| value.strip_suffix(b"\n\n"))
+        .ok_or_else(|| anyhow::anyhow!("invalid app-server event frame"))?;
+    let envelope: serde_json::Value = serde_json::from_slice(payload)?;
+    let value = envelope
+        .pointer("/params/runtime_instance_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("event omitted Runtime instance id"))?;
+    Ok(uuid::Uuid::parse_str(value)?)
 }
 
 fn public_resolved_approval_frame(

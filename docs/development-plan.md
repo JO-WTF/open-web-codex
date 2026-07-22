@@ -8,16 +8,16 @@
 | 当前分支 | `codex/sync-upstream-6e5a2d6b8d14` |
 | Codex 基线 | `openai/codex` `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9` |
 | 上游待同步 | 26；观测到的 official main 为 `10cc57c95c2c8f1d01c8deaa75efb29b099d9c28` |
-| 当前工作 | 以 `main` 的 1421 WebApp 为唯一前端基线，补齐其 Server 适配并移除旧根 App/Bridge |
+| 当前工作 | 以 1421 WebApp 为唯一前端，收紧其 Server 适配、恢复与运行时重启语义；当前部署按单用户 Profile 验证 |
 
 当前 Codex 基线上的定制仍按 patch map 分类；official main 已前进 26 个提交，
-下一轮必须通过专用 `codex/sync-upstream-*` 分支同步。既有 `main` 1421 WebApp 的 React
-组件树、CSS、页面布局和交互已经逐字节恢复；差异只允许出现在认证入口和
-`src/services/webClient.ts` Server 适配层。平台具备原生 Profile Host、Provider 服务、
+下一轮必须通过专用 `codex/sync-upstream-*` 分支同步。1421 WebApp 的 CSS、页面布局
+和交互保持既有产品形态；差异集中在认证入口、`src/services/webClient.ts` Server
+适配层，以及三个由完整文件哈希锁定的非视觉 Thread 上下文接线文件。平台具备原生 Profile Host、Provider 服务、
 加密 Secret、持久审批、Git workspace 与租约式 Run 编排。桌面运行时、sidecar、
-4732/4733 daemon Gateway、原始浏览器 RPC/SSE、旧根 App 浏览器 Bridge 和桌面
-发布链已经移除。认证后的根入口与 `/web` 都只加载同一个 WebApp；旧根 App
-源码尚未裁剪，但不再进入生产构建。
+4732/4733 daemon Gateway、原始浏览器 RPC/SSE 和桌面发布链已经移除。认证后的
+根入口与 `/web` 都只加载同一个 WebApp；旧根 App/Bridge 源码不进入生产构建，
+清理工作按当前范围暂缓。
 
 本文只记录当前有效状态和下一步。完成项必须有代码、测试或可重现运行证据。
 
@@ -83,28 +83,35 @@
 - [x] Provider 服务执行受控配置写入、Provider-scoped refresh/cache、选择与模型
   更新；凭据 AES-256-GCM 加密，只注入 Profile 子进程环境。
 - [x] app-server 审批先持久化并脱敏投影，再由版本 CAS 决策和审计。
+- [x] 每个 app-server 进程实例拥有独立 UUID；审批响应同时校验实例和 request
+  id，重启会取消旧实例请求，`delivery_unknown` 只允许相同决策重试。
+- [x] Profile Host 在活跃 Turn 或未解决 Server Request 存在时拒绝凭据触发的
+  重启，并覆盖 Turn 启动响应与 started 事件之间的竞态窗口。
 - [x] Git Runtime 创建私有 mirror 和每 Run 独立 workspace，拒绝危险 source/ref，
   支持 lock、status、选择性 Commit 和 cleanup。
 - [x] Run Orchestrator 支持 idempotency、`SKIP LOCKED` lease、heartbeat、恢复、
   cancellation/interrupt 和明确终态。
 - [x] Task event 先持久化，按单 Task 单调 sequence REST replay，再组织隔离地
-  WebSocket fan-out。
+  WebSocket fan-out；订阅在 ready 前建立，首次连接与重连均执行有序 durable replay。
+- [x] Thread/Turn 历史直接读取 Codex `thread/read` 与分页
+  `thread/turns/list(itemsView=full)`；RunEvent 仅用于实时/可重建投影，不再拼装历史。
 
 ## C. 浏览器与传输收敛
 
 - [x] 浏览器只使用 `/api` 类型化资源；原始 `/api/rpc` 不存在。
 - [x] 实时通道为 `/api/events/ws`，Token 在首帧认证而非 URL；跨租户事件
   过滤测试通过。
-- [x] 1421 `WebApp.tsx`、其组件和全部 CSS 恢复为 `main` 产品，不改变页面
-  布局、字体、交互或功能分支。
+- [x] 1421 WebApp 保持既有页面布局、字体、交互和功能分支；Thread 上下文接线
+  不引入视觉或产品行为重设计。
 - [x] `npm run check:main-ui-parity` 对 `apps/web/src` 执行 `main` 逐字节等价
-  门禁，只允许 `webClient.ts` 及其测试作为 Server 接口 seam。
+  门禁；除 `webClient.ts` 及其测试外，三个必要接线文件以完整 SHA-256 固定内容。
 - [x] WebApp 的 workspace、Thread/Turn、消息、durable replay/live、
   approval/user input、Provider/model、MCP/rate limit、文件预览和 Git status
-  已切到类型化 Server 资源；真实 Codex/DeepSeek/MCP 纵向用例与核心浏览器
+  已切到类型化 Server 资源；Project/Task/Run/Thread 使用单次 joined context
+  查询，文件、Git 与 MCP 始终跟随当前 Thread。真实 Codex/DeepSeek/MCP 纵向用例与核心浏览器
   Thread 切换、历史恢复、运行态和文件预览回归通过。
-- [x] 认证后的根入口和 1421 `/web` 都只加载 WebApp；旧 Bridge 已删除，生产包
-  不再生成旧 App/Bridge 分块，也不包含 `/api/rpc` 或 EventSource Gateway 调用。
+- [x] 认证后的根入口和 1421 `/web` 都只加载 WebApp；旧 App/Bridge 源码仍保留
+  但不进入生产构建，生产包不包含 `/api/rpc` 或 EventSource Gateway 调用。
 - [x] 平台服务同源提供生产 browser build；Vite 仅在开发时代理 HTTP/WS。
 - [x] 前端类型检查、单测与生产构建通过。
 
@@ -131,7 +138,7 @@
 ## E. 本分支最终验证矩阵
 
 - [x] `bash -n scripts/*.sh` 和本地启动脚本 help/status 路径。
-- [x] 1,123 个浏览器测试、typecheck、build、no-desktop、main-ui-parity、
+- [x] 1,124 个浏览器测试、typecheck、build、no-desktop、main-ui-parity、
   Codex contracts，以及真实 Codex/DeepSeek Provider 的 10 项平台 E2E 通过。
 - [x] `cargo fmt --all --check`、`cargo test --workspace --locked`。
 - [x] PostgreSQL migration/restart、两组织安全、Git Runtime 与 Run Orchestrator
@@ -168,7 +175,8 @@
 
 1. [ ] 将 Server 的单配置 Profile 组合改为按授权用户动态路由持久 Profile。
 2. [ ] 完成 HttpOnly Cookie、CSRF、logout/revocation、登录限速和会话轮换。
-3. [ ] 审批 expiry、Profile 重启后的投递恢复和 operator repair workflow。
+3. [ ] 审批 expiry 和 operator repair workflow；进程实例隔离、重启取消和不确定
+   投递重试已完成。
 4. [ ] rootless Runner、出网策略、资源 quota、进程/文件系统强隔离。
 5. [ ] Push 凭据、保护分支策略、显式 Push 和审计。
 6. [ ] 两用户并发的 Profile/Thread/Workspace/Event/Approval/Secret 系统性隔离矩阵。

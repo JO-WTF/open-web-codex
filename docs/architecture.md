@@ -156,12 +156,17 @@ card markers or artifact references through existing message/event surfaces.
 
 ### Approval or structured input
 
-1. Profile Host receives a Codex Server Request and persists an internal mapping
-   to Profile/Task/Run/Thread before notification.
+1. Each app-server process receives a fresh Runtime instance UUID. Profile Host
+   receives a Codex Server Request and persists an internal mapping to
+   Profile/Task/Run/Thread plus that instance before notification.
 2. Platform filters recipients by resource permission and approval policy.
 3. The first valid decision wins through compare-and-swap semantics.
-4. Host responds to the still-live Codex request; restart, expiry or Run
-   termination produces an explicit cancelled/expired state instead of reuse.
+4. Host responds only when both the process instance and request id still match.
+   Active Turns and unresolved Server Requests block credential-triggered
+   restart; after an actual restart, old-instance requests become cancelled and
+   a reused numeric request id cannot receive the stale response.
+5. An uncertain transport delivery remains retryable only with the same stored
+   decision; expiry or Run termination produces an explicit terminal state.
 
 ### Commit and push
 

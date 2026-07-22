@@ -220,6 +220,59 @@ pub struct Run {
     pub updated_at: DateTime<Utc>,
 }
 
+/// One authorized Project/Task/Run/Thread mapping for browser navigation.
+/// The browser never needs to infer a Run by scanning Tasks independently.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectThreadContext {
+    pub project: Project,
+    pub task: Task,
+    pub run: Run,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadHistoryStatus {
+    pub r#type: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub active_flags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadHistoryError {
+    pub message: String,
+    pub additional_details: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadHistoryTurn {
+    pub id: String,
+    pub status: String,
+    pub items: Vec<serde_json::Value>,
+    pub error: Option<ThreadHistoryError>,
+    pub started_at: Option<i64>,
+    pub completed_at: Option<i64>,
+    pub duration_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadHistory {
+    pub id: String,
+    pub name: Option<String>,
+    pub preview: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub status: ThreadHistoryStatus,
+    pub turns: Vec<ThreadHistoryTurn>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreadHistoryResponse {
+    pub thread: ThreadHistory,
+}
+
 /// Request to start a run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartRunRequest {

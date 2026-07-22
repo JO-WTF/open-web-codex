@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
 use thiserror::Error;
+use uuid::Uuid;
 
 /// Errors from the Codex adapter layer.
 #[derive(Debug, Error)]
@@ -171,6 +172,10 @@ pub trait CodexAdapter: Send + Sync {
     /// Quick health probe.
     async fn health(&self) -> Result<HealthStatus, AdapterError>;
 
+    /// Unique identity of the currently running app-server process. Runtime
+    /// Server Request ids are valid only inside this instance.
+    async fn runtime_instance_id(&self) -> Uuid;
+
     /// Transitional internal RPC call. Product routes should replace this
     /// with typed Thread/Turn operations; it is never a public browser
     /// contract.
@@ -188,6 +193,20 @@ pub trait CodexAdapter: Send + Sync {
         target_workspace: &AuthorizedWorkspace,
         thread_id: &str,
     ) -> Result<StartedThread, AdapterError>;
+
+    /// Read the authoritative persisted Thread from Codex.
+    async fn read_thread(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+    ) -> Result<Value, AdapterError>;
+
+    /// Read all persisted Turns with full items from Codex pagination.
+    async fn list_thread_turns(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+    ) -> Result<Vec<Value>, AdapterError>;
 
     /// Start a user turn in the authorized workspace bound to the Thread.
     async fn send_user_message(
@@ -221,6 +240,7 @@ pub trait CodexAdapter: Send + Sync {
     /// must resolve a platform-owned durable request before calling this.
     async fn respond_to_server_request(
         &self,
+        runtime_instance_id: Uuid,
         request_id: Value,
         result: Value,
     ) -> Result<(), AdapterError>;

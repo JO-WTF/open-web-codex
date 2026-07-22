@@ -337,6 +337,10 @@ impl CodexAdapter for RealCodexAdapter {
         })
     }
 
+    async fn runtime_instance_id(&self) -> uuid::Uuid {
+        self.host.runtime_instance_id().await
+    }
+
     async fn rpc(&self, method: &str, params: Value) -> Result<Value, AdapterError> {
         match method {
             "list_workspaces" => Ok(json!([{
@@ -418,6 +422,67 @@ impl CodexAdapter for RealCodexAdapter {
         })
     }
 
+    async fn read_thread(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+    ) -> Result<Value, AdapterError> {
+        self.ensure_thread_bound(workspace, thread_id).await?;
+        self.host
+            .request(
+                "thread/read",
+                // Turns are fetched through the paginated thread/turns/list
+                // method below. Keeping this metadata read unpaginated avoids
+                // thread/read rejecting long histories.
+                json!({ "threadId": thread_id, "includeTurns": false }),
+            )
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn list_thread_turns(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+    ) -> Result<Vec<Value>, AdapterError> {
+        self.ensure_thread_bound(workspace, thread_id).await?;
+        let mut turns = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let response = self
+                .host
+                .request(
+                    "thread/turns/list",
+                    json!({
+                        "threadId": thread_id,
+                        "cursor": cursor,
+                        "limit": 100,
+                        "sortDirection": "asc",
+                        "itemsView": "full",
+                    }),
+                )
+                .await?;
+            let page = response
+                .get("data")
+                .and_then(Value::as_array)
+                .ok_or_else(|| AdapterError::Rpc("thread/turns/list omitted data".to_string()))?;
+            turns.extend(page.iter().cloned());
+            let next_cursor = response
+                .get("nextCursor")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            if next_cursor.is_none() {
+                return Ok(turns);
+            }
+            if next_cursor == cursor {
+                return Err(AdapterError::Rpc(
+                    "thread/turns/list returned a non-advancing cursor".to_string(),
+                ));
+            }
+            cursor = next_cursor;
+        }
+    }
+
     async fn send_user_message(
         &self,
         workspace: &AuthorizedWorkspace,
@@ -453,10 +518,13 @@ impl CodexAdapter for RealCodexAdapter {
 
     async fn respond_to_server_request(
         &self,
+        runtime_instance_id: uuid::Uuid,
         request_id: Value,
         result: Value,
     ) -> Result<(), AdapterError> {
-        self.host.respond(request_id, Ok(result)).await?;
+        self.host
+            .respond(runtime_instance_id, request_id, Ok(result))
+            .await?;
         Ok(())
     }
 
@@ -773,6 +841,7 @@ impl CodexAdapter for RealCodexAdapter {
                             "background generation stream closed: {error}"
                         ))
                     })?;
+                    let event = event.message;
                     if message_thread_id(&event) != Some(thread_id.as_str()) {
                         continue;
                     }
@@ -972,11 +1041,14 @@ impl CodexAdapter for RealCodexAdapter {
         let mut local_receiver = self.local_events.subscribe();
         loop {
             let received = tokio::select! {
-                message = receiver.recv() => message,
-                message = local_receiver.recv() => message,
+                message = receiver.recv() => message.map(|event| (event.runtime_instance_id, event.message)),
+                message = local_receiver.recv() => match message {
+                    Ok(message) => Ok((self.host.runtime_instance_id().await, message)),
+                    Err(error) => Err(error),
+                },
             };
             match received {
-                Ok(message) => {
+                Ok((runtime_instance_id, message)) => {
                     if let Some((login_id, success, error)) = login_completion(&message) {
                         self.login_statuses.write().await.insert(
                             login_id.clone(),
@@ -1019,7 +1091,8 @@ impl CodexAdapter for RealCodexAdapter {
                             None => self.workspace_id.clone(),
                         }
                     };
-                    let frame = app_server_event_frame(&workspace_id, message)?;
+                    let frame =
+                        app_server_event_frame(&workspace_id, runtime_instance_id, message)?;
                     if sender.send(frame).is_err() {
                         return Ok(());
                     }
@@ -1027,6 +1100,7 @@ impl CodexAdapter for RealCodexAdapter {
                 Err(broadcast::error::RecvError::Lagged(count)) => {
                     let frame = app_server_event_frame(
                         &self.workspace_id,
+                        self.host.runtime_instance_id().await,
                         json!({
                             "method": "codex/eventLagged",
                             "params": { "dropped": count },
@@ -1110,11 +1184,16 @@ fn turn_matches(message: &Value, expected: Option<&str>) -> bool {
     })
 }
 
-fn app_server_event_frame(workspace_id: &str, message: Value) -> Result<Vec<u8>, AdapterError> {
+fn app_server_event_frame(
+    workspace_id: &str,
+    runtime_instance_id: uuid::Uuid,
+    message: Value,
+) -> Result<Vec<u8>, AdapterError> {
     let envelope = json!({
         "method": "app-server-event",
         "params": {
             "workspace_id": workspace_id,
+            "runtime_instance_id": runtime_instance_id,
             "message": message,
         },
     });
@@ -1134,6 +1213,7 @@ mod tests {
     fn wraps_native_notifications_in_the_existing_internal_event_envelope() {
         let frame = app_server_event_frame(
             "workspace-1",
+            uuid::Uuid::nil(),
             json!({
                 "method": "thread/started",
                 "params": { "thread": { "id": "thread-1" } },

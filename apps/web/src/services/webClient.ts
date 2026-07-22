@@ -51,43 +51,6 @@ function rawItem(event: RunEvent): JsonRecord | null {
   return { id: event.item_id, type: event.payload.itemType, ...data };
 }
 
-function eventsToTurns(events: RunEvent[]) {
-  const turns = new Map<string, {
-    id: string;
-    status: string;
-    items: JsonRecord[];
-    startedAt?: number;
-  }>();
-  for (const event of [...events].sort((left, right) => left.sequence - right.sequence)) {
-    const turnId = event.turn_id ?? "history";
-    const turn = turns.get(turnId) ?? {
-      id: turnId,
-      status: "completed",
-      items: [],
-      startedAt: undefined,
-    };
-    if (event.event_type === "codex.turn.started") {
-      turn.status = "inProgress";
-      const startedAt = Date.parse(event.created_at);
-      turn.startedAt = Number.isFinite(startedAt) ? startedAt : undefined;
-    } else if (event.event_type === "codex.turn.completed") {
-      turn.status = "completed";
-    } else if (
-      event.event_type === "codex.item.started"
-      || event.event_type === "codex.item.completed"
-    ) {
-      const item = rawItem(event);
-      if (item) {
-        const index = turn.items.findIndex((entry) => entry.id === item.id);
-        if (index >= 0) turn.items[index] = item;
-        else turn.items.push(item);
-      }
-    }
-    turns.set(turnId, turn);
-  }
-  return [...turns.values()];
-}
-
 function runtimeMessage(event: RunEvent): JsonRecord | null {
   const data = isRecord(event.payload.data) ? event.payload.data : {};
   const base = {
@@ -217,20 +180,15 @@ export class CodexMonitorWebClient {
   }
 
   private async indexProjectThreads(projectId: string) {
-    const project = await this.platform.getProject(projectId);
-    const tasks = await this.platform.listTasks(projectId);
-    const rows = await Promise.all(tasks.map(async (task) => ({
-      task,
-      runs: await this.platform.listRuns(task.id),
-    })));
-    return rows.flatMap(({ task, runs }) => runs.flatMap((run) => {
+    const rows = await this.platform.listProjectThreadContexts(projectId);
+    return rows.flatMap(({ project, task, run }) => {
       if (run.workspace_kind !== "main" || !run.codex_thread_id || task.status === "archived") {
         return [];
       }
       const context = { projectId, taskId: task.id, runId: run.id };
       this.threadContexts.set(run.codex_thread_id, context);
       return [{ project, task, run, threadId: run.codex_thread_id, context }];
-    }));
+    });
   }
 
   private async findThreadContext(threadId: string): Promise<ThreadContext> {
@@ -259,7 +217,18 @@ export class CodexMonitorWebClient {
     throw new Error("Timed out waiting for the Codex Thread to become ready");
   }
 
-  private async readyRunForWorkspace(workspaceId: string): Promise<Run | null> {
+  private async readyRunForWorkspace(
+    workspaceId: string,
+    threadId?: string | null,
+  ): Promise<Run | null> {
+    if (threadId) {
+      const context = await this.findThreadContext(threadId);
+      if (context.projectId !== workspaceId) {
+        throw new Error("Thread is not part of the selected project");
+      }
+      this.selectedRunByProject.set(workspaceId, context.runId);
+      return await this.platform.getRun(context.runId);
+    }
     const indexed = await this.indexProjectThreads(workspaceId);
     const available = indexed
       .map((entry) => entry.run)
@@ -282,29 +251,23 @@ export class CodexMonitorWebClient {
   private async threadRecord(threadId: string) {
     const context = await this.findThreadContext(threadId);
     this.selectedRunByProject.set(context.projectId, context.runId);
-    const [task, project, run, events] = await Promise.all([
+    const [task, project, run, history] = await Promise.all([
       this.platform.getTask(context.taskId),
       this.platform.getProject(context.projectId),
       this.platform.getRun(context.runId),
-      this.platform.listAllEvents(context.taskId),
+      this.platform.readRunThread(context.runId),
     ]);
-    const lastSequence = events[events.length - 1]?.sequence;
-    if (typeof lastSequence === "number") {
-      this.taskEventSequences.set(
-        context.taskId,
-        Math.max(this.taskEventSequences.get(context.taskId) ?? 0, lastSequence),
-      );
-    }
+    const thread = history.thread;
     return {
       id: threadId,
-      name: task.title,
-      preview: task.title,
+      name: thread.name ?? task.title,
+      preview: thread.preview || task.title,
       cwd: project.git_url,
-      createdAt: task.created_at,
-      updatedAt: run.updated_at,
+      createdAt: thread.createdAt || task.created_at,
+      updatedAt: thread.updatedAt || run.updated_at,
       activeTurnId: run.active_turn_id,
-      status: runtimeThreadStatus(run),
-      turns: eventsToTurns(events.filter((event) => event.run_id === run.id)),
+      status: thread.status,
+      turns: thread.turns,
     };
   }
 
@@ -402,8 +365,8 @@ export class CodexMonitorWebClient {
     };
   }
 
-  async listMcpServerStatus(workspaceId: string) {
-    const run = await this.readyRunForWorkspace(workspaceId);
+  async listMcpServerStatus(workspaceId: string, threadId?: string | null) {
+    const run = await this.readyRunForWorkspace(workspaceId, threadId);
     return run ? await this.platform.profileMcpServers(run.id, null, 100) : { data: [] };
   }
 
@@ -420,21 +383,26 @@ export class CodexMonitorWebClient {
   }
 
   async listThreadTurns(_workspaceId: string, threadId: string) {
-    return (await this.threadRecord(threadId)).turns;
+    const context = await this.findThreadContext(threadId);
+    this.selectedRunByProject.set(context.projectId, context.runId);
+    return await this.platform.listRunThreadTurns(context.runId);
   }
 
-  async listWorkspaceFiles(workspaceId: string) {
-    const run = await this.readyRunForWorkspace(workspaceId);
+  async listWorkspaceFiles(workspaceId: string, threadId?: string | null) {
+    const run = await this.readyRunForWorkspace(workspaceId, threadId);
     return run ? await this.platform.listWorkspaceFiles(run.id) : [];
   }
 
-  async readWorkspaceFile(workspaceId: string, path: string) {
-    const run = await this.requireRunForWorkspace(workspaceId);
+  async readWorkspaceFile(workspaceId: string, path: string, threadId?: string | null) {
+    const run = threadId
+      ? await this.readyRunForWorkspace(workspaceId, threadId)
+      : await this.requireRunForWorkspace(workspaceId);
+    if (!run) throw new Error("This project does not have a ready Run workspace yet");
     return await this.platform.readWorkspaceFile(run.id, path);
   }
 
-  async getGitStatus(workspaceId: string) {
-    const run = await this.readyRunForWorkspace(workspaceId);
+  async getGitStatus(workspaceId: string, threadId?: string | null) {
+    const run = await this.readyRunForWorkspace(workspaceId, threadId);
     if (!run) return { files: [] as GitFileStatus[] };
     const status = await this.platform.workspaceStatus(run.id);
     return {
@@ -514,11 +482,16 @@ export class CodexMonitorWebClient {
       (state) => {
         if (state === "online") {
           status.onOpen?.();
-          if (hasBeenOnline) enqueue(replayDurableEvents);
-          else {
-            hasBeenOnline = true;
-            void this.replayPendingApprovals(onEvent).catch(() => undefined);
-          }
+          enqueue(async () => {
+            if (!hasBeenOnline) {
+              hasBeenOnline = true;
+              for (const project of await this.platform.listProjects()) {
+                await this.indexProjectThreads(project.id);
+              }
+            }
+            await replayDurableEvents();
+            await this.replayPendingApprovals(onEvent);
+          });
         }
         if (state === "resync") enqueue(replayDurableEvents);
         if (state === "offline") status.onError?.();
@@ -529,7 +502,7 @@ export class CodexMonitorWebClient {
   private async replayPendingApprovals(onEvent: (event: AppServerEvent) => void) {
     const pending = new Set(
       (await this.platform.listApprovals())
-        .filter((approval) => approval.state === "pending")
+        .filter((approval) => approval.state === "pending" || approval.state === "delivery_unknown")
         .map((approval) => approval.id),
     );
     if (pending.size === 0) return;
@@ -539,6 +512,7 @@ export class CodexMonitorWebClient {
       for (const [taskId, context] of tasks) {
         for (const event of await this.platform.listAllEvents(taskId)) {
           if (event.event_type !== "platform.approval.requested") continue;
+          if (event.sequence <= (this.taskEventSequences.get(context.taskId) ?? 0)) continue;
           const data = isRecord(event.payload.data) ? event.payload.data : {};
           if (typeof data.approvalId !== "string" || !pending.has(data.approvalId)) continue;
           const message = runtimeMessage(event);
@@ -555,7 +529,8 @@ export class CodexMonitorWebClient {
 
   async resolveApproval(workspaceId: string, threadId: string, decision: string) {
     const approval = (await this.platform.listApprovals())
-      .find((entry) => entry.threadId === threadId && entry.state === "pending");
+      .find((entry) => entry.threadId === threadId
+        && (entry.state === "pending" || entry.state === "delivery_unknown"));
     if (!approval) throw new Error("Approval is no longer pending");
     await this.platform.decideApproval(
       approval.id,
@@ -589,7 +564,8 @@ export class CodexMonitorWebClient {
 
   private async pendingApproval(id: string): Promise<Approval> {
     const approval = (await this.platform.listApprovals())
-      .find((entry) => entry.id === id && entry.state === "pending");
+      .find((entry) => entry.id === id
+        && (entry.state === "pending" || entry.state === "delivery_unknown"));
     if (!approval) throw new Error("Approval is no longer pending");
     return approval;
   }

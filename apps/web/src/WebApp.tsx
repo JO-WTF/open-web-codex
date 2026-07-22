@@ -272,7 +272,7 @@ export default function WebApp() {
       if (cancelled) return;
 
       const [mcpResult, rateLimitResult] = await Promise.allSettled([
-        client.listMcpServerStatus(activeWorkspaceId),
+        client.listMcpServerStatus(activeWorkspaceId, activeThreadId),
         client.getAccountRateLimits(activeWorkspaceId),
       ]);
       if (cancelled) return;
@@ -290,12 +290,12 @@ export default function WebApp() {
     return () => {
       cancelled = true;
     };
-  }, [activeWorkspaceId, client]);
+  }, [activeThreadId, activeWorkspaceId, client]);
 
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
-  const listWorkspaceFiles = useCallback((workspaceId: string) => client.listWorkspaceFiles(workspaceId), [client]);
-  const readWorkspaceFile = useCallback((workspaceId: string, path: string) => client.readWorkspaceFile(workspaceId, path), [client]);
-  const loadWorkspaceGitStatus = useCallback((workspaceId: string) => client.getGitStatus(workspaceId), [client]);
+  const listWorkspaceFiles = useCallback((workspaceId: string) => client.listWorkspaceFiles(workspaceId, activeThreadId), [activeThreadId, client]);
+  const readWorkspaceFile = useCallback((workspaceId: string, path: string) => client.readWorkspaceFile(workspaceId, path, activeThreadId), [activeThreadId, client]);
+  const loadWorkspaceGitStatus = useCallback((workspaceId: string) => client.getGitStatus(workspaceId, activeThreadId), [activeThreadId, client]);
   const openFile = useCallback((path: string) => {
     const workspacePath = activeWorkspace?.path?.replace(/\/$/, "");
     const normalized = workspacePath && path.startsWith(`${workspacePath}/`) ? path.slice(workspacePath.length + 1) : path.replace(/^\//, "");
@@ -320,6 +320,8 @@ export default function WebApp() {
   const refreshThreadsRef = useRef<((workspaceId?: string) => Promise<void>) | null>(null);
   const activeThreadIdRef = useRef(activeThreadId);
   activeThreadIdRef.current = activeThreadId;
+  const activeWorkspaceIdRef = useRef(activeWorkspaceId);
+  activeWorkspaceIdRef.current = activeWorkspaceId;
   const appendLog = useCallback(
     (level: LogEntry["level"], text: string, extra?: Partial<Omit<LogEntry, "id" | "level" | "text">>) => {
       setMessages((prev) => appendWebLogEntry(prev, {
@@ -1240,7 +1242,7 @@ export default function WebApp() {
       (event) => {
         if (!rememberAppServerEvent(recentAppServerEvents.current, event)) return;
         // Accept events for any workspace; caller filters
-        const wsId = activeWorkspaceId;
+        const wsId = activeWorkspaceIdRef.current;
         if (wsId && event.workspace_id !== wsId) return;
         const tid = extractThreadIdFromEvent(event);
         if (tid && !activeThreadIdRef.current) setActiveThreadId(tid);

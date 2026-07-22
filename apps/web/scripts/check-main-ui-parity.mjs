@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +13,14 @@ const uiOverlayRef = process.env.UI_OVERLAY_REF?.trim()
 const interfaceSeams = new Set([
   "apps/web/src/services/webClient.ts",
   "apps/web/src/services/webClient.test.ts",
+]);
+// These UI-owned files contain only the reviewed Server-context wiring needed
+// to refresh MCP/files/Git when a Thread changes. Pin their complete contents
+// so the parity exception cannot silently grow into presentation drift.
+const exactIntegrationSeams = new Map([
+  ["apps/web/src/WebApp.tsx", "24938796eeda797494e9a11767f970c795e5aa3f146030ae7bdf4bff1869f083"],
+  ["apps/web/src/components/FileManager/index.tsx", "03a6572d5d777670cc24af634e83a6abb7701f6d093a51d94bf406ed9a28bcda"],
+  ["apps/web/src/components/FileManager/index.test.tsx", "769f6fa9c75cf8665e94df325ea067861a45e24c0f3f4ccb1697018445269a52"],
 ]);
 const uiOverlayFiles = new Set([
   "apps/web/src/WebApp.test.tsx",
@@ -76,6 +85,14 @@ for (const [path, mode] of baselineFiles) {
     continue;
   }
   const absolutePath = join(repoRoot, path);
+  const expectedIntegrationHash = exactIntegrationSeams.get(path);
+  if (expectedIntegrationHash) {
+    const actualHash = createHash("sha256").update(readFileSync(absolutePath)).digest("hex");
+    if (actualHash !== expectedIntegrationHash) {
+      failures.push(`${path}: differs from its reviewed Server integration seam`);
+    }
+    continue;
+  }
   const stat = lstatSync(absolutePath);
   const worktreeMode = stat.isSymbolicLink() ? "120000" : stat.mode & 0o111 ? "100755" : "100644";
   if (worktreeMode !== mode) {
@@ -94,7 +111,7 @@ for (const [path, mode] of baselineFiles) {
 }
 
 for (const path of worktreeFiles) {
-  if (interfaceSeams.has(path)) continue;
+  if (interfaceSeams.has(path) || exactIntegrationSeams.has(path)) continue;
   if (!baselineFiles.has(path)) {
     failures.push(`${path}: extra file is not present in ${baseline}`);
   }
@@ -108,5 +125,5 @@ if (failures.length > 0) {
 
 console.log(
   `apps/web/src UI matches ${baseline} plus ${uiOverlayFiles.size} files from ${uiOverlayRef}; `
-    + `only ${interfaceSeams.size} declared Server interface files differ.`,
+    + `${interfaceSeams.size} adapter files and ${exactIntegrationSeams.size} exact Server integration seams differ.`,
 );

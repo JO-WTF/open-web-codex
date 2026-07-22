@@ -44,15 +44,32 @@ function json(value: unknown) {
   });
 }
 
-function resourceFetch(events: unknown[] = []) {
+function resourceFetch(events: unknown[] = [], turns: unknown[] = []) {
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = new URL(String(input));
     if (url.pathname === "/api/projects") return json([project]);
     if (url.pathname === `/api/projects/${project.id}`) return json(project);
+    if (url.pathname === `/api/projects/${project.id}/thread-contexts`) {
+      return json([{ project, task, run }]);
+    }
     if (url.pathname === "/api/tasks") return json([task]);
     if (url.pathname === `/api/tasks/${task.id}`) return json(task);
     if (url.pathname === "/api/runs") return json([run]);
     if (url.pathname === `/api/runs/${run.id}`) return json(run);
+    if (url.pathname === `/api/runs/${run.id}/thread`) {
+      return json({
+        thread: {
+          id: "thread-1",
+          name: task.title,
+          preview: task.title,
+          createdAt: 1,
+          updatedAt: 2,
+          status: runtimeStatus(run),
+          turns,
+        },
+      });
+    }
+    if (url.pathname === `/api/runs/${run.id}/thread/turns`) return json(turns);
     if (url.pathname === `/api/runs/${run.id}/thread/archive`) {
       return json({ status: "archived" });
     }
@@ -66,38 +83,26 @@ function resourceFetch(events: unknown[] = []) {
   });
 }
 
+function runtimeStatus(value: typeof run) {
+  return value.active_turn_id
+    ? { type: "active", activeFlags: [] }
+    : { type: "idle", activeFlags: [] };
+}
+
 describe("WebApp direct Server client", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it("restores chronological Turn history from durable Server events", async () => {
-    const fetchMock = resourceFetch([
-      {
-        id: "event-1",
-        sequence: 1,
-        run_id: run.id,
-        event_type: "codex.turn.started",
-        projection_version: 1,
-        thread_id: "thread-1",
-        turn_id: "turn-1",
-        item_id: null,
-        payload: {},
-        created_at: "2026-07-22T00:00:01Z",
-      },
-      {
-        id: "event-2",
-        sequence: 2,
-        run_id: run.id,
-        event_type: "codex.turn.completed",
-        projection_version: 1,
-        thread_id: "thread-1",
-        turn_id: "turn-1",
-        item_id: null,
-        payload: {},
-        created_at: "2026-07-22T00:00:02Z",
-      },
-    ]);
+  it("restores authoritative chronological Turn history from Codex", async () => {
+    const fetchMock = resourceFetch([], [{
+      id: "turn-1",
+      status: "completed",
+      items: [{ id: "message-1", type: "agentMessage", text: "persisted" }],
+      startedAt: 1,
+      completedAt: 2,
+      durationMs: 1000,
+    }]);
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
@@ -105,7 +110,8 @@ describe("WebApp direct Server client", () => {
       expect.objectContaining({
         id: "turn-1",
         status: "completed",
-        startedAt: Date.parse("2026-07-22T00:00:01Z"),
+        startedAt: 1,
+        items: [expect.objectContaining({ text: "persisted" })],
       }),
     ]);
     expect(fetchMock.mock.calls.every((call) => !String(call[0]).includes("/api/rpc"))).toBe(true);
@@ -116,8 +122,22 @@ describe("WebApp direct Server client", () => {
     const baseFetch = resourceFetch();
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input));
+      if (url.pathname === `/api/projects/${project.id}/thread-contexts`) {
+        return json([{ project, task, run: activeRun }]);
+      }
       if (url.pathname === "/api/runs") return json([activeRun]);
       if (url.pathname === `/api/runs/${run.id}`) return json(activeRun);
+      if (url.pathname === `/api/runs/${run.id}/thread`) {
+        return json({ thread: {
+          id: "thread-1",
+          name: task.title,
+          preview: task.title,
+          createdAt: 1,
+          updatedAt: 2,
+          status: runtimeStatus(activeRun),
+          turns: [],
+        } });
+      }
       return baseFetch(input, init);
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -191,6 +211,12 @@ describe("WebApp direct Server client", () => {
       const url = new URL(String(input));
       if (url.pathname === "/api/projects") return json([project]);
       if (url.pathname === `/api/projects/${project.id}`) return json(project);
+      if (url.pathname === `/api/projects/${project.id}/thread-contexts`) {
+        return json([
+          { project, task, run },
+          { project, task: otherTask, run: otherRun },
+        ]);
+      }
       if (url.pathname === "/api/tasks") return json([task, otherTask]);
       if (url.pathname === `/api/tasks/${task.id}`) return json(task);
       if (url.pathname === `/api/tasks/${otherTask.id}`) return json(otherTask);
@@ -198,6 +224,17 @@ describe("WebApp direct Server client", () => {
         return json(url.searchParams.get("task_id") === otherTask.id ? [otherRun] : [run]);
       }
       if (url.pathname === `/api/runs/${otherRun.id}`) return json(otherRun);
+      if (url.pathname === `/api/runs/${otherRun.id}/thread`) {
+        return json({ thread: {
+          id: "thread-2",
+          name: otherTask.title,
+          preview: otherTask.title,
+          createdAt: 1,
+          updatedAt: 2,
+          status: runtimeStatus(otherRun),
+          turns: [],
+        } });
+      }
       if (url.pathname === `/api/tasks/${otherTask.id}/events`) return json([]);
       if (url.pathname === `/api/runs/${otherRun.id}/workspace/files`) return json(["selected.txt"]);
       if (url.pathname === `/api/runs/${otherRun.id}/workspace/status`) {
@@ -209,10 +246,9 @@ describe("WebApp direct Server client", () => {
     vi.stubGlobal("fetch", fetchMock);
     const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
 
-    await client.resumeThread(project.id, "thread-2");
-    await expect(client.listWorkspaceFiles(project.id)).resolves.toEqual(["selected.txt"]);
-    await client.getGitStatus(project.id);
-    await client.listMcpServerStatus(project.id);
+    await expect(client.listWorkspaceFiles(project.id, "thread-2")).resolves.toEqual(["selected.txt"]);
+    await client.getGitStatus(project.id, "thread-2");
+    await client.listMcpServerStatus(project.id, "thread-2");
 
     const urls = fetchMock.mock.calls.map((call) => String(call[0]));
     expect(urls).toContain(`http://server.test/api/runs/${otherRun.id}/workspace/files`);
@@ -431,7 +467,7 @@ describe("WebApp direct Server client", () => {
     ]);
   });
 
-  it("replays durable Task events from the last sequence before accepting newer live events", async () => {
+  it("replays durable Task events on first connect before accepting newer live events", async () => {
     const replayEvent = {
       id: "event-replay",
       sequence: 2,
@@ -493,11 +529,10 @@ describe("WebApp direct Server client", () => {
 
     socket?.onmessage?.({ data: JSON.stringify({ type: "ready", version: 1 }) });
     sendLive(1, "thread/status/changed");
-    await vi.waitFor(() => expect(methods).toEqual(["thread/status/changed"]));
+    await vi.waitFor(() => expect(methods).toEqual(["thread/tokenUsage/updated"]));
     socket?.onmessage?.({ data: JSON.stringify({ type: "resyncRequired", version: 1 }) });
     sendLive(3, "thread/settings/updated");
     await vi.waitFor(() => expect(methods).toEqual([
-      "thread/status/changed",
       "thread/tokenUsage/updated",
       "thread/settings/updated",
     ]));
@@ -505,7 +540,7 @@ describe("WebApp direct Server client", () => {
     expect(fetchMock.mock.calls.some((call) => {
       const url = new URL(String(call[0]));
       return url.pathname === `/api/tasks/${task.id}/events`
-        && url.searchParams.get("after_sequence") === "1";
+        && url.searchParams.get("after_sequence") === "0";
     })).toBe(true);
 
     socket?.onmessage?.({ data: JSON.stringify({ type: "ready", version: 1 }) });
@@ -516,17 +551,17 @@ describe("WebApp direct Server client", () => {
     })).toBe(true));
   });
 
-  it("resolves approvals through the durable typed Server resource", async () => {
+  it("retries delivery-unknown approvals through the durable typed Server resource", async () => {
     const approval = {
       id: "018f854d-2d2c-7363-99a9-804e6cc4a99a",
       runId: run.id,
       threadId: "thread-1",
       requestType: "command",
-      state: "pending",
+      state: "delivery_unknown",
       version: 4,
       createdAt: "2026-07-22T00:00:00Z",
     };
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input));
       if (url.pathname === "/api/approvals") return json([approval]);
       if (url.pathname === `/api/approvals/${approval.id}/decision`) {

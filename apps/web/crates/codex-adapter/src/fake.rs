@@ -44,6 +44,7 @@ pub struct FakeCodexAdapter {
     login_statuses: Arc<Mutex<HashMap<String, ProfileLoginStatus>>>,
     notify: Arc<tokio::sync::Notify>,
     counter: Arc<AtomicU64>,
+    runtime_instance_id: Uuid,
 }
 
 impl Default for FakeCodexAdapter {
@@ -64,6 +65,7 @@ impl FakeCodexAdapter {
             login_statuses: Arc::new(Mutex::new(HashMap::new())),
             notify: Arc::new(tokio::sync::Notify::new()),
             counter: Arc::new(AtomicU64::new(1)),
+            runtime_instance_id: Uuid::now_v7(),
         }
     }
 
@@ -128,6 +130,10 @@ impl CodexAdapter for FakeCodexAdapter {
             version: "0.1.0-mock".into(),
             name: "open-web-codex-mock".into(),
         })
+    }
+
+    async fn runtime_instance_id(&self) -> Uuid {
+        self.runtime_instance_id
     }
 
     async fn rpc(&self, method: &str, params: Value) -> Result<Value, AdapterError> {
@@ -291,6 +297,39 @@ impl CodexAdapter for FakeCodexAdapter {
         self.start_thread(target_workspace).await
     }
 
+    async fn read_thread(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+    ) -> Result<Value, AdapterError> {
+        let state = self.state.lock().await;
+        let thread = state
+            .threads
+            .iter()
+            .find(|thread| thread.id == thread_id && thread.ws_id == workspace.id)
+            .ok_or_else(|| AdapterError::Rpc("fake Thread was not found".to_string()))?;
+        Ok(json!({
+            "thread": {
+                "id": thread.id,
+                "name": format!("Fake Thread ({})", thread.id),
+                "preview": "",
+                "createdAt": Utc::now().timestamp(),
+                "updatedAt": thread.updated_at / 1000,
+                "status": { "type": if thread.status == "active" { "active" } else { "idle" } },
+                "turns": [],
+            }
+        }))
+    }
+
+    async fn list_thread_turns(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+    ) -> Result<Vec<Value>, AdapterError> {
+        self.read_thread(workspace, thread_id).await?;
+        Ok(Vec::new())
+    }
+
     async fn send_user_message(
         &self,
         workspace: &AuthorizedWorkspace,
@@ -355,9 +394,15 @@ impl CodexAdapter for FakeCodexAdapter {
 
     async fn respond_to_server_request(
         &self,
+        runtime_instance_id: Uuid,
         _request_id: Value,
         _result: Value,
     ) -> Result<(), AdapterError> {
+        if runtime_instance_id != self.runtime_instance_id {
+            return Err(AdapterError::Rpc(
+                "Server Request belongs to a previous Runtime instance".to_string(),
+            ));
+        }
         Ok(())
     }
 
@@ -602,6 +647,7 @@ impl CodexAdapter for FakeCodexAdapter {
         let state = self.state.clone();
         let notify = self.notify.clone();
         let counter = self.counter.clone();
+        let runtime_instance_id = self.runtime_instance_id;
 
         tokio::spawn(async move {
             let mut heartbeat = tokio::time::interval(tokio::time::Duration::from_secs(10));
@@ -610,7 +656,13 @@ impl CodexAdapter for FakeCodexAdapter {
             let mut thread_ticks: HashMap<String, u32> = HashMap::new();
 
             // Helper: send an SSE frame
-            let send = |data: Value| {
+            let send = |mut data: Value| {
+                if let Some(params) = data.get_mut("params").and_then(Value::as_object_mut) {
+                    params.insert(
+                        "runtime_instance_id".to_string(),
+                        Value::String(runtime_instance_id.to_string()),
+                    );
+                }
                 let frame = format!("data: {}\n\n", data.to_string());
                 let _ = sender.send(frame.into_bytes());
             };

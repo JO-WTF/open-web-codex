@@ -7,7 +7,10 @@ use axum::{
 };
 use open_web_codex_adapter::{AuthorizedWorkspace, CodexAdapter};
 use open_web_codex_platform_contracts::error::PlatformError;
-use open_web_codex_platform_contracts::SetThreadNameRequest;
+use open_web_codex_platform_contracts::{
+    SetThreadNameRequest, ThreadHistory, ThreadHistoryError, ThreadHistoryResponse,
+    ThreadHistoryStatus, ThreadHistoryTurn,
+};
 use open_web_codex_platform_store::AppState;
 use serde_json::json;
 use sqlx::Row;
@@ -17,6 +20,43 @@ use crate::middleware::auth::AuthenticatedUser;
 
 type ApiError = (StatusCode, Json<PlatformError>);
 type ApiResult<T> = Result<Json<T>, ApiError>;
+
+pub async fn read(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(run_id): Path<Uuid>,
+    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
+) -> ApiResult<ThreadHistoryResponse> {
+    let context = authorized_thread(&state, &auth, run_id).await?;
+    let value = adapter
+        .read_thread(&context.workspace, &context.thread_id)
+        .await
+        .map_err(runtime_error)?;
+    let thread = value
+        .get("thread")
+        .ok_or_else(|| bad_gateway("Runtime thread/read omitted thread"))?;
+    Ok(Json(ThreadHistoryResponse {
+        thread: project_thread(thread, &context.thread_id)?,
+    }))
+}
+
+pub async fn list_turns(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(run_id): Path<Uuid>,
+    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
+) -> ApiResult<Vec<ThreadHistoryTurn>> {
+    let context = authorized_thread(&state, &auth, run_id).await?;
+    let turns = adapter
+        .list_thread_turns(&context.workspace, &context.thread_id)
+        .await
+        .map_err(runtime_error)?;
+    turns
+        .iter()
+        .map(project_turn)
+        .collect::<Result<Vec<_>, _>>()
+        .map(Json)
+}
 
 pub async fn archive(
     State(state): State<AppState>,
@@ -132,6 +172,132 @@ async fn authorized_thread(
     })
 }
 
+fn project_thread(value: &serde_json::Value, expected_id: &str) -> Result<ThreadHistory, ApiError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| bad_gateway("Runtime Thread was invalid"))?;
+    let id = object
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|id| *id == expected_id)
+        .ok_or_else(|| bad_gateway("Runtime returned the wrong Thread"))?;
+    let turns = object
+        .get("turns")
+        .and_then(serde_json::Value::as_array)
+        .map(|turns| {
+            turns
+                .iter()
+                .map(project_turn)
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
+    Ok(ThreadHistory {
+        id: id.to_string(),
+        name: object
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        preview: object
+            .get("preview")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        created_at: object
+            .get("createdAt")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or_default(),
+        updated_at: object
+            .get("updatedAt")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or_default(),
+        status: project_thread_status(object.get("status")),
+        turns,
+    })
+}
+
+fn project_thread_status(value: Option<&serde_json::Value>) -> ThreadHistoryStatus {
+    let object = value.and_then(serde_json::Value::as_object);
+    ThreadHistoryStatus {
+        r#type: object
+            .and_then(|value| value.get("type"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("notLoaded")
+            .to_string(),
+        active_flags: object
+            .and_then(|value| value.get("activeFlags"))
+            .and_then(serde_json::Value::as_array)
+            .map(|flags| {
+                flags
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
+    }
+}
+
+fn project_turn(value: &serde_json::Value) -> Result<ThreadHistoryTurn, ApiError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| bad_gateway("Runtime Turn was invalid"))?;
+    let id = object
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| bad_gateway("Runtime Turn omitted id"))?;
+    let items = object
+        .get("items")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let source = item.as_object()?;
+                    let mut projected = crate::event_projection::project_item(source);
+                    if let (Some(id), Some(target)) = (
+                        source.get("id").and_then(serde_json::Value::as_str),
+                        projected.as_object_mut(),
+                    ) {
+                        target.insert("id".to_string(), serde_json::Value::String(id.to_string()));
+                    }
+                    Some(projected)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let error = object
+        .get("error")
+        .and_then(serde_json::Value::as_object)
+        .map(|error| ThreadHistoryError {
+            message: error
+                .get("message")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("Turn failed")
+                .to_string(),
+            additional_details: error
+                .get("additionalDetails")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+        });
+    Ok(ThreadHistoryTurn {
+        id: id.to_string(),
+        status: object
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("completed")
+            .to_string(),
+        items,
+        error,
+        started_at: object.get("startedAt").and_then(serde_json::Value::as_i64),
+        completed_at: object
+            .get("completedAt")
+            .and_then(serde_json::Value::as_i64),
+        duration_ms: object.get("durationMs").and_then(serde_json::Value::as_i64),
+    })
+}
+
 async fn audit(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     auth: &AuthenticatedUser,
@@ -162,6 +328,13 @@ fn bad_request(message: &str) -> ApiError {
     )
 }
 
+fn bad_gateway(message: &str) -> ApiError {
+    (
+        StatusCode::BAD_GATEWAY,
+        Json(PlatformError::internal(message)),
+    )
+}
+
 fn not_found() -> ApiError {
     (
         StatusCode::NOT_FOUND,
@@ -181,4 +354,52 @@ fn database_error(_: sqlx::Error) -> ApiError {
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(PlatformError::internal("Database operation failed")),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{project_thread, project_turn};
+    use serde_json::json;
+
+    #[test]
+    fn projects_authoritative_history_without_runtime_only_fields() {
+        let projected = project_thread(
+            &json!({
+                "id": "thread-1",
+                "name": "Example",
+                "preview": "hello",
+                "createdAt": 10,
+                "updatedAt": 20,
+                "status": { "type": "active", "activeFlags": ["waitingOnApproval"] },
+                "cwd": "/private/server/workspace",
+                "providerApiKey": "secret",
+                "turns": [{
+                    "id": "turn-1",
+                    "status": "completed",
+                    "items": [{
+                        "id": "item-1",
+                        "type": "agentMessage",
+                        "text": "done",
+                        "cwd": "/private/server/workspace",
+                        "apiKey": "secret"
+                    }]
+                }]
+            }),
+            "thread-1",
+        )
+        .expect("valid Thread projection");
+        let value = serde_json::to_value(projected).expect("serializable projection");
+
+        assert_eq!(value["status"]["type"], "active");
+        assert_eq!(value["turns"][0]["items"][0]["id"], "item-1");
+        assert_eq!(value["turns"][0]["items"][0]["text"], "done");
+        let encoded = value.to_string();
+        assert!(!encoded.contains("/private/server/workspace"));
+        assert!(!encoded.contains("secret"));
+    }
+
+    #[test]
+    fn rejects_turns_without_stable_identity() {
+        assert!(project_turn(&json!({ "status": "completed", "items": [] })).is_err());
+    }
 }

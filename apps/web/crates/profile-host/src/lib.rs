@@ -4,7 +4,7 @@
 //! `CODEX_HOME`. Product authorization, workspace provisioning and browser
 //! projections remain platform responsibilities.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Seek, SeekFrom, Write};
@@ -23,6 +23,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{broadcast, oneshot, Mutex, RwLock};
 use tokio::time::timeout;
+use uuid::Uuid;
 
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -187,6 +188,16 @@ pub struct ProfileHostSnapshot {
     pub last_error: Option<String>,
 }
 
+/// One notification emitted by a specific app-server process instance.
+///
+/// Runtime request ids are only unique inside this instance, so callers must
+/// retain the instance id whenever they persist or answer a Server Request.
+#[derive(Debug, Clone)]
+pub struct ProfileHostEvent {
+    pub runtime_instance_id: Uuid,
+    pub message: Value,
+}
+
 #[derive(Debug, Error)]
 pub enum ProfileHostError {
     #[error("invalid Profile configuration: {0}")]
@@ -199,6 +210,10 @@ pub enum ProfileHostError {
     Spawn(#[source] io::Error),
     #[error("Codex app-server transport closed")]
     TransportClosed,
+    #[error("Codex app-server request belongs to a previous process instance")]
+    StaleRuntimeRequest,
+    #[error("Codex app-server cannot restart while Turns or Server Requests are active")]
+    RuntimeBusy,
     #[error("Codex app-server request timed out: {method}")]
     RequestTimeout { method: String },
     #[error("Codex app-server rejected {method}: {message}")]
@@ -299,12 +314,15 @@ struct ProfileHostInner {
     child: Mutex<Child>,
     pending: Mutex<HashMap<u64, PendingSender>>,
     next_id: AtomicU64,
-    events: broadcast::Sender<Value>,
+    events: broadcast::Sender<ProfileHostEvent>,
     snapshot: RwLock<ProfileHostSnapshot>,
     manifest: RwLock<Option<CapabilityManifest>>,
     negotiation: RwLock<Option<NegotiationResult>>,
     lifecycle: RwLock<()>,
     process_generation: AtomicU64,
+    runtime_instance_id: RwLock<Uuid>,
+    active_turns: RwLock<HashSet<String>>,
+    pending_server_requests: RwLock<HashSet<String>>,
     _profile_lock: ProfileLock,
 }
 
@@ -358,6 +376,9 @@ impl ProfileHost {
             negotiation: RwLock::new(None),
             lifecycle: RwLock::new(()),
             process_generation: AtomicU64::new(1),
+            runtime_instance_id: RwLock::new(Uuid::now_v7()),
+            active_turns: RwLock::new(HashSet::new()),
+            pending_server_requests: RwLock::new(HashSet::new()),
             _profile_lock: profile_lock,
         });
         spawn_stdout_reader(Arc::downgrade(&inner), 1, spawned.stdout);
@@ -444,7 +465,20 @@ impl ProfileHost {
 
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, ProfileHostError> {
         let _lifecycle = self.inner.lifecycle.read().await;
-        self.request_unlocked(method, params).await
+        let result = self.request_unlocked(method, params).await?;
+        // The turn/start response can be observed just before its corresponding
+        // turn/started notification. Record it while the lifecycle read lock is
+        // still held so a credential-triggered restart cannot enter that gap.
+        if method == "turn/start" {
+            if let Some(turn_id) = result.pointer("/turn/id").and_then(Value::as_str) {
+                self.inner
+                    .active_turns
+                    .write()
+                    .await
+                    .insert(turn_id.to_string());
+            }
+        }
+        Ok(result)
     }
 
     /// Send a request whose response is expected only when a long-running
@@ -540,10 +574,14 @@ impl ProfileHost {
 
     pub async fn respond(
         &self,
+        runtime_instance_id: Uuid,
         request_id: Value,
         result: Result<Value, Value>,
     ) -> Result<(), ProfileHostError> {
         let _lifecycle = self.inner.lifecycle.read().await;
+        if *self.inner.runtime_instance_id.read().await != runtime_instance_id {
+            return Err(ProfileHostError::StaleRuntimeRequest);
+        }
         let message = match result {
             Ok(result) => json!({ "id": request_id, "result": result }),
             Err(error) => json!({ "id": request_id, "error": error }),
@@ -568,8 +606,12 @@ impl ProfileHost {
             .map_err(|_| ProfileHostError::TransportClosed)
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<Value> {
+    pub fn subscribe(&self) -> broadcast::Receiver<ProfileHostEvent> {
         self.inner.events.subscribe()
+    }
+
+    pub async fn runtime_instance_id(&self) -> Uuid {
+        *self.inner.runtime_instance_id.read().await
     }
 
     pub async fn snapshot(&self) -> ProfileHostSnapshot {
@@ -603,6 +645,7 @@ impl ProfileHost {
         }
         self.terminate_child().await;
         drain_pending(&self.inner, "app-server stopped").await;
+        clear_runtime_work(&self.inner).await;
         Ok(())
     }
 
@@ -638,8 +681,14 @@ impl ProfileHost {
         }
 
         let _lifecycle = self.inner.lifecycle.write().await;
+        if !self.inner.active_turns.read().await.is_empty()
+            || !self.inner.pending_server_requests.read().await.is_empty()
+        {
+            return Err(ProfileHostError::RuntimeBusy);
+        }
         self.inner.process_generation.fetch_add(1, Ordering::SeqCst);
         self.shutdown_unlocked().await?;
+        *self.inner.runtime_instance_id.write().await = Uuid::now_v7();
         let generation = self.inner.process_generation.load(Ordering::SeqCst);
         let spawned = spawn_app_server(&config, &self.inner.home, &workspace_root)?;
         let process_id = spawned.child.id();
@@ -794,12 +843,16 @@ fn spawn_stdout_reader(
                 return;
             }
             match serde_json::from_str::<Value>(&line) {
-                Ok(message) => dispatch_incoming(&inner, message).await,
+                Ok(message) => dispatch_incoming(&inner, generation, message).await,
                 Err(_) => {
-                    let _ = inner.events.send(json!({
-                        "method": "codex/parseError",
-                        "params": { "message": "app-server emitted invalid JSON" },
-                    }));
+                    let runtime_instance_id = *inner.runtime_instance_id.read().await;
+                    let _ = inner.events.send(ProfileHostEvent {
+                        runtime_instance_id,
+                        message: json!({
+                            "method": "codex/parseError",
+                            "params": { "message": "app-server emitted invalid JSON" },
+                        }),
+                    });
                 }
             }
         }
@@ -816,6 +869,10 @@ fn spawn_stdout_reader(
                 }
             }
             drain_pending(&inner, "app-server stdout closed").await;
+            // Runtime work belongs to the process generation that just died.
+            // Keeping these identities would permanently block a safe restart
+            // even though no process remains to complete them.
+            clear_runtime_work(&inner).await;
         }
     });
 }
@@ -847,7 +904,7 @@ fn spawn_stderr_monitor(
     });
 }
 
-async fn dispatch_incoming(inner: &ProfileHostInner, message: Value) {
+async fn dispatch_incoming(inner: &ProfileHostInner, generation: u64, message: Value) {
     let response_id = message.get("id").and_then(Value::as_u64);
     let is_response = message.get("result").is_some() || message.get("error").is_some();
     if is_response {
@@ -860,7 +917,64 @@ async fn dispatch_incoming(inner: &ProfileHostInner, message: Value) {
     }
 
     if message.get("method").and_then(Value::as_str).is_some() {
-        let _ = inner.events.send(message);
+        update_runtime_work(inner, &message).await;
+        if inner.process_generation.load(Ordering::SeqCst) == generation {
+            let runtime_instance_id = *inner.runtime_instance_id.read().await;
+            let _ = inner.events.send(ProfileHostEvent {
+                runtime_instance_id,
+                message,
+            });
+        }
+    }
+}
+
+async fn update_runtime_work(inner: &ProfileHostInner, message: &Value) {
+    let method = message
+        .get("method")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let turn_id = message
+        .pointer("/params/turn/id")
+        .or_else(|| message.pointer("/params/turnId"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    match method {
+        "turn/started" => {
+            if let Some(turn_id) = turn_id {
+                inner.active_turns.write().await.insert(turn_id);
+            }
+        }
+        "turn/completed" => {
+            if let Some(turn_id) = turn_id {
+                inner.active_turns.write().await.remove(&turn_id);
+            }
+        }
+        "item/commandExecution/requestApproval"
+        | "item/fileChange/requestApproval"
+        | "item/permissions/requestApproval"
+        | "item/tool/requestUserInput" => {
+            if let Some(request_id) = message.get("id") {
+                if let Ok(request_id) = serde_json::to_string(request_id) {
+                    inner
+                        .pending_server_requests
+                        .write()
+                        .await
+                        .insert(request_id);
+                }
+            }
+        }
+        "serverRequest/resolved" => {
+            if let Some(request_id) = message.pointer("/params/requestId") {
+                if let Ok(request_id) = serde_json::to_string(request_id) {
+                    inner
+                        .pending_server_requests
+                        .write()
+                        .await
+                        .remove(&request_id);
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -869,6 +983,11 @@ async fn drain_pending(inner: &ProfileHostInner, message: &str) {
     for (_, sender) in pending {
         let _ = sender.send(Err(message.to_string()));
     }
+}
+
+async fn clear_runtime_work(inner: &ProfileHostInner) {
+    inner.active_turns.write().await.clear();
+    inner.pending_server_requests.write().await.clear();
 }
 
 fn rpc_error_message(error: &Value) -> String {
@@ -899,17 +1018,19 @@ fn parse_rpc_result(method: &str, response: Value) -> Result<Value, ProfileHostE
 #[cfg(test)]
 mod tests {
     use super::{
-        dispatch_incoming, ensure_profile_home, ensure_profile_layout, ProfileHostConfig,
-        ProfileHostError, ProfileHostInner, ProfileHostSnapshot, ProfileHostState, ProfileLock,
+        clear_runtime_work, dispatch_incoming, ensure_profile_home, ensure_profile_layout,
+        ProfileHost, ProfileHostConfig, ProfileHostError, ProfileHostInner, ProfileHostSnapshot,
+        ProfileHostState, ProfileLock,
     };
     use serde_json::json;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use tokio::sync::{broadcast, oneshot, Mutex, RwLock};
+    use uuid::Uuid;
 
     fn temporary_path(name: &str) -> PathBuf {
         static NEXT_PATH_ID: AtomicU64 = AtomicU64::new(1);
@@ -1027,6 +1148,9 @@ mod tests {
             negotiation: RwLock::new(None),
             lifecycle: RwLock::new(()),
             process_generation: AtomicU64::new(1),
+            runtime_instance_id: RwLock::new(Uuid::now_v7()),
+            active_turns: RwLock::new(HashSet::new()),
+            pending_server_requests: RwLock::new(HashSet::new()),
             _profile_lock: lock,
         });
         (inner, path)
@@ -1040,13 +1164,24 @@ mod tests {
         inner.pending.lock().await.insert(1, first_tx);
         inner.pending.lock().await.insert(2, second_tx);
 
-        dispatch_incoming(&inner, json!({ "id": 2, "result": { "value": "second" } })).await;
         dispatch_incoming(
             &inner,
+            1,
+            json!({ "id": 2, "result": { "value": "second" } }),
+        )
+        .await;
+        dispatch_incoming(
+            &inner,
+            1,
             json!({ "id": 2, "result": { "value": "duplicate" } }),
         )
         .await;
-        dispatch_incoming(&inner, json!({ "id": 1, "result": { "value": "first" } })).await;
+        dispatch_incoming(
+            &inner,
+            1,
+            json!({ "id": 1, "result": { "value": "first" } }),
+        )
+        .await;
 
         assert_eq!(
             second_rx.await.unwrap().unwrap()["result"]["value"],
@@ -1069,6 +1204,7 @@ mod tests {
         for sequence in 0..4 {
             dispatch_incoming(
                 &inner,
+                1,
                 json!({ "method": "item/updated", "params": { "sequence": sequence } }),
             )
             .await;
@@ -1078,12 +1214,116 @@ mod tests {
             receiver.recv().await,
             Err(broadcast::error::RecvError::Lagged(2))
         ));
-        assert_eq!(receiver.recv().await.unwrap()["params"]["sequence"], 2);
-        assert_eq!(receiver.recv().await.unwrap()["params"]["sequence"], 3);
+        assert_eq!(
+            receiver.recv().await.unwrap().message["params"]["sequence"],
+            2
+        );
+        assert_eq!(
+            receiver.recv().await.unwrap().message["params"]["sequence"],
+            3
+        );
 
         let mut child = inner.child.lock().await;
         let _ = child.kill().await;
         drop(child);
+        drop(inner);
+        fs::remove_dir_all(path).expect("remove profile home");
+    }
+
+    #[tokio::test]
+    async fn runtime_instance_guards_responses_and_tracks_restart_blockers() {
+        let (inner, path) = test_inner(8).await;
+        let host = ProfileHost {
+            inner: inner.clone(),
+        };
+        let runtime_instance_id = host.runtime_instance_id().await;
+        let stale = Uuid::nil();
+
+        let error = host
+            .respond(stale, json!(7), Ok(json!({ "decision": "accept" })))
+            .await
+            .expect_err("stale Runtime request must not be written");
+        assert!(matches!(error, ProfileHostError::StaleRuntimeRequest));
+
+        let mut events = inner.events.subscribe();
+        dispatch_incoming(
+            &inner,
+            1,
+            json!({
+                "method": "turn/started",
+                "params": { "turn": { "id": "turn-1" }, "threadId": "thread-1" }
+            }),
+        )
+        .await;
+        dispatch_incoming(
+            &inner,
+            1,
+            json!({
+                "id": "approval-1",
+                "method": "item/commandExecution/requestApproval",
+                "params": { "threadId": "thread-1", "turnId": "turn-1" }
+            }),
+        )
+        .await;
+
+        assert!(inner.active_turns.read().await.contains("turn-1"));
+        assert!(inner
+            .pending_server_requests
+            .read()
+            .await
+            .contains("\"approval-1\""));
+        assert_eq!(
+            events.recv().await.expect("turn event").runtime_instance_id,
+            runtime_instance_id
+        );
+        assert_eq!(
+            events
+                .recv()
+                .await
+                .expect("approval event")
+                .runtime_instance_id,
+            runtime_instance_id
+        );
+
+        dispatch_incoming(
+            &inner,
+            1,
+            json!({
+                "method": "turn/completed",
+                "params": { "turn": { "id": "turn-1" }, "threadId": "thread-1" }
+            }),
+        )
+        .await;
+        dispatch_incoming(
+            &inner,
+            1,
+            json!({
+                "method": "serverRequest/resolved",
+                "params": { "threadId": "thread-1", "requestId": "approval-1" }
+            }),
+        )
+        .await;
+        assert!(inner.active_turns.read().await.is_empty());
+        assert!(inner.pending_server_requests.read().await.is_empty());
+
+        inner
+            .active_turns
+            .write()
+            .await
+            .insert("orphaned-turn".into());
+        inner
+            .pending_server_requests
+            .write()
+            .await
+            .insert("\"orphaned-request\"".into());
+        clear_runtime_work(&inner).await;
+        assert!(inner.active_turns.read().await.is_empty());
+        assert!(inner.pending_server_requests.read().await.is_empty());
+
+        let mut child = inner.child.lock().await;
+        let _ = child.kill().await;
+        drop(child);
+        drop(host);
         drop(inner);
         fs::remove_dir_all(path).expect("remove profile home");
     }

@@ -30,6 +30,7 @@ pub struct AppState {
     pub db: PgPool,
     pub event_bus: broadcast::Sender<LiveEvent>,
     pub started_at: std::time::Instant,
+    pub started_at_utc: chrono::DateTime<chrono::Utc>,
 }
 
 impl AppState {
@@ -39,6 +40,7 @@ impl AppState {
             db,
             event_bus,
             started_at: std::time::Instant::now(),
+            started_at_utc: chrono::Utc::now(),
         }
     }
 }
