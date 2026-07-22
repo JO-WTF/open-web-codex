@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use url::Url;
+use uuid::Uuid;
 
 use crate::GitRuntimeError;
 
@@ -76,6 +77,16 @@ impl ValidatedGitSource {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    pub(crate) fn managed(project_id: Uuid) -> Self {
+        Self(format!("managed://{project_id}"))
+    }
+
+    pub(crate) fn managed_project_id(&self) -> Option<Uuid> {
+        self.0
+            .strip_prefix("managed://")
+            .and_then(|value| Uuid::parse_str(value).ok())
     }
 }
 

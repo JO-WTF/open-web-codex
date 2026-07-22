@@ -29,15 +29,16 @@ skills, plugins, MCP, and multi-agent execution.
 
 ## Local development
 
-From the repository root:
+From the repository root, start the 1421 WebApp and the 4800 Server together:
 
 ```bash
-./scripts/run-local.sh --fake
+./scripts/start-all.sh --fake
 ```
 
-The script builds the browser and server, applies PostgreSQL migrations, and
-serves everything at `http://127.0.0.1:4800/`. Real Runtime mode is the default;
-see [`../../docs/mvp-runbook.md`](../../docs/mvp-runbook.md) for configuration.
+Open `http://127.0.0.1:1421/web`. The WebApp calls the authenticated Server
+directly; no daemon or Gateway process is started. Real Runtime mode is the
+default when `--fake` is omitted; see
+[`../../docs/mvp-runbook.md`](../../docs/mvp-runbook.md) for configuration.
 
 To run the two development processes separately:
 
@@ -55,6 +56,7 @@ Vite proxies `/api` and WebSocket upgrades to `127.0.0.1:4800`.
 
 ```bash
 npm run check:no-desktop
+npm run check:main-ui-parity
 npm run lint
 npm run typecheck
 npm run test
@@ -67,10 +69,27 @@ npm run check:codex-contracts
 PostgreSQL integration tests use `TEST_DATABASE_URL` and are ignored by default.
 The real app-server smoke additionally requires a built Codex binary.
 
+With an isolated real Server already running and the Codex/MCP test binaries
+built, run the reproducible third-party Provider journey with a key file:
+
+```bash
+E2E_BASE_URL=http://127.0.0.1:4810 \
+DEEPSEEK_API_KEY_FILE=/absolute/path/to/deepseek-key \
+npm run test:e2e:real-platform
+```
+
+The harness creates its own managed Project and two Threads, then checks live
+event timing, code execution, file preview, Provider add/switch/context updates,
+real stdio MCP invocation, approval resolution, delayed Turn state, history
+restoration and durable/live event ordering. It never prints the Provider key.
+
 ## Layout
 
 ```text
-src/platform/              browser application and typed platform client
+src/WebApp.tsx             restored 1421 WebApp UI
+src/services/webClient.ts  narrow WebApp-to-Server compatibility seam
+browser/client.ts          authenticated typed REST/WebSocket transport
+browser/browser-entry.ts   authentication and WebApp entry
 server/                    Axum composition root and authenticated routes
 crates/auth/               sessions, password hashing, and RBAC
 crates/profile-host/       persistent CODEX_HOME and app-server lifecycle

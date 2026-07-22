@@ -3,8 +3,8 @@ import {
   isGlassSupported,
   setLiquidGlassEffect,
   GlassMaterialVariant,
-} from "@/platform/browser/liquidGlass";
-import { Effect, EffectState, getCurrentWindow } from "@/platform/browser/window";
+} from "tauri-plugin-liquid-glass-api";
+import { Effect, EffectState, getCurrentWindow } from "@tauri-apps/api/window";
 import type { DebugEntry } from "../../../types";
 
 type Params = {

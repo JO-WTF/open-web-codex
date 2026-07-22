@@ -23,21 +23,21 @@ vi.mock("../../../services/tauri", () => ({
   openWorkspaceIn: vi.fn(),
 }));
 
-vi.mock("@/platform/browser/opener", () => ({
+vi.mock("@tauri-apps/plugin-opener", () => ({
   revealItemInDir: vi.fn(),
 }));
 
-vi.mock("@/platform/browser/menu", () => ({
+vi.mock("@tauri-apps/api/menu", () => ({
   Menu: { new: menuNewMock },
   MenuItem: { new: menuItemNewMock },
   PredefinedMenuItem: { new: predefinedMenuItemNewMock },
 }));
 
-vi.mock("@/platform/browser/dpi", () => ({
+vi.mock("@tauri-apps/api/dpi", () => ({
   LogicalPosition: logicalPositionMock,
 }));
 
-vi.mock("@/platform/browser/window", () => ({
+vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: getCurrentWindowMock,
 }));
 

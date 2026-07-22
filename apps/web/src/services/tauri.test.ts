@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { invoke } from "@/platform/browser/core";
-import { open, save } from "@/platform/browser/dialog";
-import * as notification from "@/platform/browser/notification";
+import { invoke } from "@tauri-apps/api/core";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import * as notification from "@tauri-apps/plugin-notification";
 import {
   exportMarkdownFile,
   addWorkspace,
@@ -55,16 +55,16 @@ import {
   writeAgentMd,
 } from "./tauri";
 
-vi.mock("@/platform/browser/core", () => ({
+vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
 }));
 
-vi.mock("@/platform/browser/dialog", () => ({
+vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(),
   save: vi.fn(),
 }));
 
-vi.mock("@/platform/browser/notification", () => ({
+vi.mock("@tauri-apps/plugin-notification", () => ({
   isPermissionGranted: vi.fn(),
   requestPermission: vi.fn(),
   sendNotification: vi.fn(),

@@ -19,6 +19,7 @@ pub use validation::{GitSourcePolicy, ValidatedGitRef, ValidatedGitSource};
 const LARGE_FILE_BYTES: u64 = 1024 * 1024;
 const MAX_WORKSPACE_FILES: usize = 20_000;
 const MAX_FILE_READ_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_IMAGE_ASSET_BYTES: u64 = 50 * 1024 * 1024;
 const MAX_DIFF_BYTES: usize = 2 * 1024 * 1024;
 const MAX_APPLY_PATCH_BYTES: usize = 16 * 1024 * 1024;
 
@@ -32,6 +33,10 @@ pub enum GitRuntimeError {
     UnsafePath(String),
     #[error("workspace conflict: {0}")]
     Conflict(String),
+    #[error("unsupported workspace image: {0}")]
+    UnsupportedImage(String),
+    #[error("workspace image exceeds the maximum supported size")]
+    ImageTooLarge,
     #[error("Git {operation} failed: {message}")]
     Git {
         operation: &'static str,
@@ -104,6 +109,12 @@ pub struct WorkspaceStatus {
 pub struct WorkspaceFileContent {
     pub content: String,
     pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceImageAsset {
+    pub bytes: Vec<u8>,
+    pub media_type: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -187,6 +198,21 @@ impl GitRuntime {
     }
 
     pub fn validate_source(&self, source: &str) -> Result<ValidatedGitSource, GitRuntimeError> {
+        if let Some(value) = source.trim().strip_prefix("managed://") {
+            let project_id = Uuid::parse_str(value).map_err(|_| {
+                GitRuntimeError::InvalidSource("invalid managed project id".to_string())
+            })?;
+            return Ok(ValidatedGitSource::managed(project_id));
+        }
+        ValidatedGitSource::parse(source, self.config.source_policy)
+    }
+
+    /// Validate a source supplied by an API client. Server-owned managed
+    /// sources are deliberately excluded from this boundary.
+    pub fn validate_external_source(
+        &self,
+        source: &str,
+    ) -> Result<ValidatedGitSource, GitRuntimeError> {
         ValidatedGitSource::parse(source, self.config.source_policy)
     }
 
@@ -548,6 +574,68 @@ impl GitRuntime {
             GitRuntimeError::Conflict("workspace file is not UTF-8 text".to_string())
         })?;
         Ok(WorkspaceFileContent { content, truncated })
+    }
+
+    /// Read a bounded image from a Run workspace. The caller supplies only a
+    /// validated workspace-relative path; the registered workspace remains
+    /// the authority for the filesystem root.
+    pub async fn read_image_asset(
+        &self,
+        workspace_id: Uuid,
+        relative: &str,
+    ) -> Result<WorkspaceImageAsset, GitRuntimeError> {
+        validate_relative_path(relative)?;
+        let media_type = image_media_type(relative)?;
+        let _lock = self.acquire_workspace_lock(workspace_id).await;
+        let workspace = self.require_workspace(workspace_id)?;
+        let path = workspace.join(relative);
+        let metadata =
+            tokio::fs::symlink_metadata(&path)
+                .await
+                .map_err(|source| GitRuntimeError::Io {
+                    operation: "inspect workspace image",
+                    source,
+                })?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(GitRuntimeError::UnsafePath(
+                "workspace image is not a regular file".to_string(),
+            ));
+        }
+        if metadata.len() > MAX_IMAGE_ASSET_BYTES {
+            return Err(GitRuntimeError::ImageTooLarge);
+        }
+        let canonical =
+            tokio::fs::canonicalize(&path)
+                .await
+                .map_err(|source| GitRuntimeError::Io {
+                    operation: "resolve workspace image",
+                    source,
+                })?;
+        if !canonical.starts_with(&workspace) {
+            return Err(GitRuntimeError::UnsafePath(
+                "workspace image escaped through a symlink".to_string(),
+            ));
+        }
+        let file =
+            tokio::fs::File::open(&canonical)
+                .await
+                .map_err(|source| GitRuntimeError::Io {
+                    operation: "open workspace image",
+                    source,
+                })?;
+        let mut bytes = Vec::with_capacity(metadata.len() as usize);
+        file.take(MAX_IMAGE_ASSET_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .await
+            .map_err(|source| GitRuntimeError::Io {
+                operation: "read workspace image",
+                source,
+            })?;
+        if bytes.len() as u64 > MAX_IMAGE_ASSET_BYTES {
+            return Err(GitRuntimeError::ImageTooLarge);
+        }
+        validate_image_bytes(media_type, &bytes)?;
+        Ok(WorkspaceImageAsset { bytes, media_type })
     }
 
     /// Return bounded unified diffs for the exact paths reported by Git
@@ -1526,6 +1614,19 @@ impl GitRuntime {
     ) -> Result<PathBuf, GitRuntimeError> {
         let mirror = self.mirrors.join(format!("{project_id}.git"));
         reject_symlink(&mirror, "repository mirror")?;
+        if let Some(managed_project_id) = source.managed_project_id() {
+            if managed_project_id != project_id {
+                return Err(GitRuntimeError::InvalidSource(
+                    "managed source does not match its project".to_string(),
+                ));
+            }
+            if !mirror.exists() {
+                self.initialize_managed_mirror(project_id, workspace_id, &mirror)
+                    .await?;
+            }
+            ensure_owned_workspace(&self.mirrors, &mirror)?;
+            return Ok(mirror);
+        }
         if !mirror.exists() {
             let temporary = self
                 .mirrors
@@ -1583,6 +1684,77 @@ impl GitRuntime {
         )
         .await?;
         Ok(mirror)
+    }
+
+    async fn initialize_managed_mirror(
+        &self,
+        project_id: Uuid,
+        workspace_id: Uuid,
+        mirror: &Path,
+    ) -> Result<(), GitRuntimeError> {
+        let seed = self
+            .mirrors
+            .join(format!(".{project_id}-{workspace_id}.seed"));
+        let temporary = self
+            .mirrors
+            .join(format!(".{project_id}-{workspace_id}.managed.tmp"));
+        remove_internal_dir(&self.mirrors, &seed, "stale managed seed cleanup")?;
+        remove_internal_dir(&self.mirrors, &temporary, "stale managed mirror cleanup")?;
+
+        let result = async {
+            self.git(
+                "managed source init",
+                None,
+                [
+                    OsString::from("init"),
+                    OsString::from("--initial-branch=main"),
+                    seed.as_os_str().to_owned(),
+                ],
+            )
+            .await?;
+            self.git(
+                "managed source initial commit",
+                Some(&seed),
+                [
+                    OsString::from("-c"),
+                    OsString::from("user.name=Open Web Codex"),
+                    OsString::from("-c"),
+                    OsString::from("user.email=codex@localhost"),
+                    OsString::from("commit"),
+                    OsString::from("--allow-empty"),
+                    OsString::from("-m"),
+                    OsString::from("Initial commit"),
+                ],
+            )
+            .await?;
+            self.git(
+                "managed mirror clone",
+                None,
+                [
+                    OsString::from("clone"),
+                    OsString::from("--mirror"),
+                    OsString::from("--no-tags"),
+                    OsString::from("--"),
+                    seed.as_os_str().to_owned(),
+                    temporary.as_os_str().to_owned(),
+                ],
+            )
+            .await?;
+            std::fs::rename(&temporary, mirror).map_err(|source| GitRuntimeError::Io {
+                operation: "publish managed mirror",
+                source,
+            })?;
+            Ok(())
+        }
+        .await;
+
+        let seed_cleanup = remove_internal_dir(&self.mirrors, &seed, "managed seed cleanup");
+        if result.is_err() {
+            let _ = remove_internal_dir(&self.mirrors, &temporary, "failed managed mirror cleanup");
+        }
+        result?;
+        seed_cleanup?;
+        Ok(())
     }
 
     async fn resolve_commit(
@@ -2030,6 +2202,90 @@ fn validate_relative_path(value: &str) -> Result<(), GitRuntimeError> {
         ));
     }
     Ok(())
+}
+
+fn image_media_type(relative: &str) -> Result<&'static str, GitRuntimeError> {
+    let extension = Path::new(relative)
+        .extension()
+        .and_then(OsStr::to_str)
+        .map(str::to_ascii_lowercase);
+    match extension.as_deref() {
+        Some("png") => Ok("image/png"),
+        Some("jpg" | "jpeg") => Ok("image/jpeg"),
+        Some("gif") => Ok("image/gif"),
+        Some("webp") => Ok("image/webp"),
+        Some("avif") => Ok("image/avif"),
+        Some("bmp") => Ok("image/bmp"),
+        Some("tif" | "tiff") => Ok("image/tiff"),
+        Some("heic") => Ok("image/heic"),
+        Some("heif") => Ok("image/heif"),
+        Some("svg") => Ok("image/svg+xml"),
+        _ => Err(GitRuntimeError::UnsupportedImage(
+            "file extension is not an allowed image type".to_string(),
+        )),
+    }
+}
+
+fn validate_image_bytes(media_type: &str, bytes: &[u8]) -> Result<(), GitRuntimeError> {
+    let valid = match media_type {
+        "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "image/jpeg" => bytes.starts_with(&[0xff, 0xd8, 0xff]),
+        "image/gif" => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
+        "image/webp" => bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP".as_slice()),
+        "image/avif" => is_iso_base_media_image(bytes, &[b"avif", b"avis"]),
+        "image/heic" => is_iso_base_media_image(
+            bytes,
+            &[b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis"],
+        ),
+        "image/heif" => is_iso_base_media_image(bytes, &[b"mif1", b"msf1", b"heif"]),
+        "image/bmp" => bytes.starts_with(b"BM"),
+        "image/tiff" => {
+            bytes.starts_with(b"II*\0")
+                || bytes.starts_with(b"MM\0*")
+                || bytes.starts_with(b"II+\0")
+                || bytes.starts_with(b"MM\0+")
+        }
+        "image/svg+xml" => is_svg_document(bytes),
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(GitRuntimeError::UnsupportedImage(
+            "file contents do not match the declared image type".to_string(),
+        ))
+    }
+}
+
+fn is_iso_base_media_image(bytes: &[u8], brands: &[&[u8; 4]]) -> bool {
+    if bytes.get(4..8) != Some(b"ftyp".as_slice()) {
+        return false;
+    }
+    bytes.get(8..bytes.len().min(64)).is_some_and(|header| {
+        brands
+            .iter()
+            .any(|brand| header.windows(4).any(|item| item == *brand))
+    })
+}
+
+fn is_svg_document(bytes: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    let prefix = text
+        .trim_start_matches('\u{feff}')
+        .trim_start()
+        .get(..text.len().min(4096))
+        .unwrap_or(text)
+        .to_ascii_lowercase();
+    let Some(svg_index) = prefix.find("<svg") else {
+        return false;
+    };
+    let preamble = prefix[..svg_index].trim();
+    preamble.is_empty()
+        || preamble.starts_with("<?xml")
+        || preamble.starts_with("<!--")
+        || preamble.starts_with("<!doctype svg")
 }
 
 fn git_marker_is_safe(repository: &Path) -> bool {

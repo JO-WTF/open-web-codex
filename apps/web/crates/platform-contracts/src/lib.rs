@@ -59,6 +59,12 @@ pub struct CreateProjectRequest {
     pub default_branch: Option<String>,
 }
 
+/// Request body to create a server-managed empty project.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateManagedProjectRequest {
+    pub name: String,
+}
+
 // ── Task ──────────────────────────────────────────────────────────────
 
 /// Database/API task representation.
@@ -757,6 +763,7 @@ pub struct SendMessageRequest {
 pub struct SendMessageResponse {
     pub status: String,
     pub thread_id: String,
+    pub turn_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

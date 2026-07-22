@@ -76,7 +76,7 @@ export function SettingsEnvironmentsSection({
             className="ghost settings-button-compact"
             onClick={async () => {
               try {
-                const { open } = await import("@/platform/browser/dialog");
+                const { open } = await import("@tauri-apps/plugin-dialog");
                 const selected = await open({
                   directory: true,
                   multiple: false,
@@ -237,7 +237,7 @@ export function SettingsEnvironmentsSection({
                 className="ghost settings-button-compact"
                 onClick={async () => {
                   try {
-                    const { open } = await import("@/platform/browser/dialog");
+                    const { open } = await import("@tauri-apps/plugin-dialog");
                     const selected = await open({
                       directory: true,
                       multiple: false,

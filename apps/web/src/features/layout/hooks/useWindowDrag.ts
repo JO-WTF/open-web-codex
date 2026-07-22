@@ -1,6 +1,6 @@
 import { useEffect } from "react";
-import { isTauri } from "@/platform/browser/core";
-import { getCurrentWindow } from "@/platform/browser/window";
+import { isTauri } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const NEVER_DRAG_TARGET_SELECTOR = [
   "button",

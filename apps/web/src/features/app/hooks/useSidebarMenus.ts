@@ -1,7 +1,7 @@
 import { useCallback, type MouseEvent } from "react";
-import { Menu, MenuItem } from "@/platform/browser/menu";
-import { LogicalPosition } from "@/platform/browser/dpi";
-import { getCurrentWindow } from "@/platform/browser/window";
+import { Menu, MenuItem } from "@tauri-apps/api/menu";
+import { LogicalPosition } from "@tauri-apps/api/dpi";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import type { WorkspaceInfo } from "../../../types";
 import { pushErrorToast } from "../../../services/toasts";
@@ -130,7 +130,7 @@ export function useSidebarMenus({
           }
           try {
             const { revealItemInDir } = await import(
-              "@/platform/browser/opener"
+              "@tauri-apps/plugin-opener"
             );
             await revealItemInDir(worktree.path);
           } catch (error) {
@@ -176,7 +176,7 @@ export function useSidebarMenus({
           }
           try {
             const { revealItemInDir } = await import(
-              "@/platform/browser/opener"
+              "@tauri-apps/plugin-opener"
             );
             await revealItemInDir(clone.path);
           } catch (error) {

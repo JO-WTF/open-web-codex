@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { Dispatch, SetStateAction } from "react";
-import { getCurrentWebview } from "@/platform/browser/webview";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { AppSettings } from "../../../types";
 import { clampUiScale, UI_SCALE_STEP } from "../../../utils/uiScale";
 import { isMacPlatform } from "../../../utils/shortcuts";

@@ -1,4 +1,4 @@
-import { convertFileSrc } from "@/platform/browser/core";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import type { ConversationItem } from "../../../types";
 
 export type ToolSummary = {

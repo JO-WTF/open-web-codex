@@ -2,7 +2,7 @@
 import { renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@/platform/browser/window", () => ({
+vi.mock("@tauri-apps/api/window", () => ({
 	getCurrentWindow: vi.fn(() => {
 		throw new Error("no tauri window");
 	}),

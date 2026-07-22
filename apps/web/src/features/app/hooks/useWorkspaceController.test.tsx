@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ask, message } from "@/platform/browser/dialog";
+import { ask, message } from "@tauri-apps/plugin-dialog";
 import type { AppSettings, WorkspaceInfo } from "../../../types";
 import {
   addWorkspace,
@@ -13,7 +13,7 @@ import {
 import { isMobilePlatform } from "../../../utils/platformPaths";
 import { useWorkspaceController } from "./useWorkspaceController";
 
-vi.mock("@/platform/browser/dialog", () => ({
+vi.mock("@tauri-apps/plugin-dialog", () => ({
   ask: vi.fn(),
   message: vi.fn(),
 }));

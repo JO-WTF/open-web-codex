@@ -1,9 +1,9 @@
 import { useCallback } from "react";
 import type { MouseEvent } from "react";
-import { Menu, MenuItem, PredefinedMenuItem } from "@/platform/browser/menu";
-import { LogicalPosition } from "@/platform/browser/dpi";
-import { getCurrentWindow } from "@/platform/browser/window";
-import { revealItemInDir } from "@/platform/browser/opener";
+import { Menu, MenuItem, PredefinedMenuItem } from "@tauri-apps/api/menu";
+import { LogicalPosition } from "@tauri-apps/api/dpi";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import * as Sentry from "@sentry/react";
 import { openWorkspaceIn } from "../../../services/tauri";
 import { pushErrorToast } from "../../../services/toasts";

@@ -59,4 +59,21 @@ describe("PlatformClient", () => {
     });
     unsubscribe();
   });
+
+  it("paginates the complete durable Task event history by sequence", async () => {
+    const firstPage = Array.from({ length: 200 }, (_, index) => ({ sequence: index + 1 }));
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(firstPage), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify([{ sequence: 201 }]), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PlatformClient({ baseUrl: "https://platform.test", token: "session-token" });
+
+    await expect(client.listAllEvents("task/one")).resolves.toHaveLength(201);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://platform.test/api/tasks/task%2Fone/events?limit=200&after_sequence=0",
+    );
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      "https://platform.test/api/tasks/task%2Fone/events?limit=200&after_sequence=200",
+    );
+  });
 });

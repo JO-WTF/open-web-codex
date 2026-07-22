@@ -1,102 +1,653 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CodexMonitorWebClient } from "./webClient";
-import { registerBrowserCommand } from "@/platform/browser/core";
 
-const unregisterCommands: Array<() => void> = [];
+const project = {
+  id: "workspace-1",
+  name: "Workspace",
+  git_url: "managed://018f854d-2d2c-7363-99a9-804e6cc4a99e",
+  default_branch: "main",
+  created_at: "2026-07-22T00:00:00Z",
+  updated_at: "2026-07-22T00:00:00Z",
+};
 
-function mockCommand(
-  name: string,
-  handler: (payload: Record<string, unknown>) => unknown | Promise<unknown>,
-) {
-  const mock = vi.fn(handler);
-  unregisterCommands.push(registerBrowserCommand(name, async (payload) => await mock(payload)));
-  return mock;
+const task = {
+  id: "task-1",
+  project_id: project.id,
+  title: "Thread",
+  status: "pending",
+  created_at: "2026-07-22T00:00:00Z",
+  updated_at: "2026-07-22T00:00:00Z",
+};
+
+const run = {
+  id: "run-1",
+  task_id: task.id,
+  status: "running",
+  codex_thread_id: "thread-1",
+  active_turn_id: null,
+  workspace_id: "workspace-checkout-1",
+  source_ref: "main",
+  workspace_kind: "main",
+  workspace_name: null,
+  workspace_parent_run_id: null,
+  workspace_group_run_id: null,
+  attempt: 1,
+  created_at: "2026-07-22T00:00:00Z",
+  updated_at: "2026-07-22T00:00:00Z",
+};
+
+function json(value: unknown) {
+  return new Response(JSON.stringify(value), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
 }
 
-afterEach(() => {
-  unregisterCommands.splice(0).forEach((unregister) => unregister());
-  vi.unstubAllGlobals();
-});
+function resourceFetch(events: unknown[] = []) {
+  return vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/api/projects") return json([project]);
+    if (url.pathname === `/api/projects/${project.id}`) return json(project);
+    if (url.pathname === "/api/tasks") return json([task]);
+    if (url.pathname === `/api/tasks/${task.id}`) return json(task);
+    if (url.pathname === "/api/runs") return json([run]);
+    if (url.pathname === `/api/runs/${run.id}`) return json(run);
+    if (url.pathname === `/api/runs/${run.id}/thread/archive`) {
+      return json({ status: "archived" });
+    }
+    if (url.pathname === `/api/tasks/${task.id}/events`) return json(events);
+    if (url.pathname === "/api/approvals") return json([]);
+    if (url.pathname === "/api/profile/mcp-servers") {
+      return json({ data: { data: [{ name: "filesystem" }] } });
+    }
+    if (url.pathname === "/api/profile/rate-limits") return json({ data: { rateLimits: { primary: {} } } });
+    throw new Error(`Unexpected Server request: ${url.pathname}`);
+  });
+}
 
-describe("CodexMonitorWebClient threads", () => {
-  it("loads every historical thread page", async () => {
-    const command = mockCommand("list_threads", (payload) => payload.cursor
-      ? { data: [{ id: "thread-1" }], nextCursor: null }
-      : { data: [{ id: "thread-2" }], nextCursor: "older" });
-
-    const client = new CodexMonitorWebClient({ baseUrl: "http://gateway.test" });
-    await expect(client.listThreads("workspace-1")).resolves.toEqual({
-      data: [{ id: "thread-2" }, { id: "thread-1" }],
-    });
-    expect(command).toHaveBeenCalledTimes(2);
+describe("WebApp direct Server client", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
-  it("passes the selected model on every message turn and archives deleted threads", async () => {
-    const send = mockCommand("send_user_message", () => ({}));
-    const archive = mockCommand("archive_thread", () => ({}));
-    const client = new CodexMonitorWebClient({ baseUrl: "http://gateway.test" });
-
-    await client.sendUserMessage("workspace-1", "thread-1", "hello", "gpt-next");
-    await client.archiveThread("workspace-1", "thread-1");
-
-    expect(send).toHaveBeenCalledWith(expect.objectContaining({
-      workspaceId: "workspace-1",
-      threadId: "thread-1",
-      model: "gpt-next",
-      text: "hello",
-      accessMode: "current",
-    }));
-    expect(archive).toHaveBeenCalledWith({ workspaceId: "workspace-1", threadId: "thread-1" });
-  });
-});
-
-describe("CodexMonitorWebClient.listThreadTurns", () => {
-  it("loads every full history page and returns chronological turns", async () => {
-    const command = mockCommand("list_thread_turns", (payload) => payload.cursor
-      ? { data: [{ id: "turn-1" }], nextCursor: null }
-      : { data: [{ id: "turn-3" }, { id: "turn-2" }], nextCursor: "older" });
-
-    const client = new CodexMonitorWebClient({ baseUrl: "http://gateway.test" });
-    await expect(client.listThreadTurns("workspace-1", "thread-1"))
-      .resolves.toEqual([{ id: "turn-1" }, { id: "turn-2" }, { id: "turn-3" }]);
-
-    expect(command.mock.calls[0]?.[0]).toMatchObject({
-      workspaceId: "workspace-1",
-      threadId: "thread-1",
-    });
-    expect(command.mock.calls[1]?.[0]?.cursor).toBe("older");
-  });
-});
-
-describe("CodexMonitorWebClient workspace status snapshots", () => {
-  it("requests MCP and account usage snapshots for the active workspace", async () => {
-    const mcp = mockCommand("list_mcp_server_status", () => ({}));
-    const rateLimits = mockCommand("account_rate_limits", () => ({}));
-
-    const client = new CodexMonitorWebClient({ baseUrl: "http://gateway.test" });
-    await Promise.all([
-      client.listMcpServerStatus("workspace-1"),
-      client.getAccountRateLimits("workspace-1"),
+  it("restores chronological Turn history from durable Server events", async () => {
+    const fetchMock = resourceFetch([
+      {
+        id: "event-1",
+        sequence: 1,
+        run_id: run.id,
+        event_type: "codex.turn.started",
+        projection_version: 1,
+        thread_id: "thread-1",
+        turn_id: "turn-1",
+        item_id: null,
+        payload: {},
+        created_at: "2026-07-22T00:00:01Z",
+      },
+      {
+        id: "event-2",
+        sequence: 2,
+        run_id: run.id,
+        event_type: "codex.turn.completed",
+        projection_version: 1,
+        thread_id: "thread-1",
+        turn_id: "turn-1",
+        item_id: null,
+        payload: {},
+        created_at: "2026-07-22T00:00:02Z",
+      },
     ]);
-
-    expect(mcp).toHaveBeenCalledWith({ workspaceId: "workspace-1", limit: 100 });
-    expect(rateLimits).toHaveBeenCalledWith({ workspaceId: "workspace-1" });
-  });
-});
-
-describe("CodexMonitorWebClient.listTaskEvents", () => {
-  it("requests monotonic replay after the last persisted sequence", async () => {
-    const fetchMock = vi.fn(async () =>
-      new Response(JSON.stringify([]), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const client = new CodexMonitorWebClient({ baseUrl: "http://platform.test" });
-    await client.listTaskEvents("task/one", 42, 100);
+    const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
+    await expect(client.listThreadTurns(project.id, "thread-1")).resolves.toEqual([
+      expect.objectContaining({
+        id: "turn-1",
+        status: "completed",
+        startedAt: Date.parse("2026-07-22T00:00:01Z"),
+      }),
+    ]);
+    expect(fetchMock.mock.calls.every((call) => !String(call[0]).includes("/api/rpc"))).toBe(true);
+  });
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://platform.test/api/tasks/task%2Fone/events?limit=100&after_sequence=42",
-      expect.objectContaining({ headers: {} }),
+  it("returns the object-shaped Thread status consumed by WebApp", async () => {
+    const activeRun = { ...run, active_turn_id: "turn-active" };
+    const baseFetch = resourceFetch();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/api/runs") return json([activeRun]);
+      if (url.pathname === `/api/runs/${run.id}`) return json(activeRun);
+      return baseFetch(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
+    await expect(client.resumeThread(project.id, "thread-1")).resolves.toEqual({
+      thread: expect.objectContaining({
+        status: { type: "active", activeFlags: [] },
+      }),
+    });
+  });
+
+  it("reports a reusable Run without an active Turn as idle in the sidebar", async () => {
+    const fetchMock = resourceFetch();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
+    await expect(client.listThreads(project.id)).resolves.toEqual({
+      data: [expect.objectContaining({
+        id: "thread-1",
+        activeTurnId: null,
+        status: "idle",
+      })],
+      nextCursor: null,
+    });
+  });
+
+  it("archives the selected Thread through the typed Server Run route", async () => {
+    const fetchMock = resourceFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
+
+    await expect(client.archiveThread(project.id, "thread-1")).resolves.toEqual({
+      status: "archived",
+    });
+
+    const archiveRequest = fetchMock.mock.calls.find((call) =>
+      String(call[0]).endsWith(`/api/runs/${run.id}/thread/archive`));
+    expect(archiveRequest?.[1]?.method).toBe("POST");
+    expect(fetchMock.mock.calls.every((call) => !String(call[0]).includes("/api/rpc"))).toBe(true);
+  });
+
+  it("loads MCP and rate-limit snapshots from typed Server resources", async () => {
+    const fetchMock = resourceFetch();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
+    await expect(client.listMcpServerStatus(project.id)).resolves.toEqual({
+      data: [{ name: "filesystem" }],
+    });
+    await expect(client.getAccountRateLimits(project.id)).resolves.toEqual({
+      rateLimits: { primary: {} },
+    });
+
+    const urls = fetchMock.mock.calls.map((call) => String(call[0]));
+    expect(urls.some((url) => url.includes(`/api/profile/mcp-servers?runId=${run.id}`))).toBe(true);
+    expect(urls.some((url) => url.endsWith("/api/profile/rate-limits"))).toBe(true);
+    expect(urls.every((url) => !url.includes("/api/rpc"))).toBe(true);
+  });
+
+  it("uses the selected Thread Run for files, Git, and MCP resources", async () => {
+    const otherTask = { ...task, id: "task-2", title: "Other Thread" };
+    const otherRun = {
+      ...run,
+      id: "run-2",
+      task_id: otherTask.id,
+      codex_thread_id: "thread-2",
+      workspace_id: "workspace-checkout-2",
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/api/projects") return json([project]);
+      if (url.pathname === `/api/projects/${project.id}`) return json(project);
+      if (url.pathname === "/api/tasks") return json([task, otherTask]);
+      if (url.pathname === `/api/tasks/${task.id}`) return json(task);
+      if (url.pathname === `/api/tasks/${otherTask.id}`) return json(otherTask);
+      if (url.pathname === "/api/runs") {
+        return json(url.searchParams.get("task_id") === otherTask.id ? [otherRun] : [run]);
+      }
+      if (url.pathname === `/api/runs/${otherRun.id}`) return json(otherRun);
+      if (url.pathname === `/api/tasks/${otherTask.id}/events`) return json([]);
+      if (url.pathname === `/api/runs/${otherRun.id}/workspace/files`) return json(["selected.txt"]);
+      if (url.pathname === `/api/runs/${otherRun.id}/workspace/status`) {
+        return json({ branch: "main", ahead: 0, behind: 0, changes: [] });
+      }
+      if (url.pathname === "/api/profile/mcp-servers") return json({ data: { data: [] } });
+      throw new Error(`Unexpected Server request: ${url.pathname}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
+
+    await client.resumeThread(project.id, "thread-2");
+    await expect(client.listWorkspaceFiles(project.id)).resolves.toEqual(["selected.txt"]);
+    await client.getGitStatus(project.id);
+    await client.listMcpServerStatus(project.id);
+
+    const urls = fetchMock.mock.calls.map((call) => String(call[0]));
+    expect(urls).toContain(`http://server.test/api/runs/${otherRun.id}/workspace/files`);
+    expect(urls).toContain(`http://server.test/api/runs/${otherRun.id}/workspace/status`);
+    expect(urls.some((url) => url.includes(`/api/profile/mcp-servers?runId=${otherRun.id}`)))
+      .toBe(true);
+  });
+
+  it("uses the configured visible Provider model as the WebApp default", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/api/providers") {
+        return json({
+          currentProviderId: "provider-1",
+          data: [{
+            id: "provider-1",
+            name: "Provider",
+            wireApi: "responses",
+            kind: "custom",
+            isCurrent: true,
+            modelCount: 3,
+            models: [
+              { modelId: "first", showInPicker: true },
+              { modelId: "hidden", showInPicker: false },
+              { modelId: "configured", modelName: "Configured", showInPicker: true },
+            ],
+          }],
+        });
+      }
+      if (url.pathname === "/api/profile/config/model") return json({ model: "configured" });
+      throw new Error(`Unexpected Server request: ${url.pathname}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
+
+    await expect(client.listModels(project.id)).resolves.toEqual({
+      data: [
+        expect.objectContaining({ model: "configured", displayName: "Configured", isDefault: true }),
+        expect.objectContaining({ model: "first", isDefault: false }),
+      ],
+    });
+  });
+
+  it("projects authenticated Server WebSocket events into the unchanged WebApp contract", async () => {
+    const sockets: FakeSocket[] = [];
+    class FakeSocket {
+      onopen: (() => void) | null = null;
+      onmessage: ((message: { data: string }) => void) | null = null;
+      onclose: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      sent: string[] = [];
+      constructor(readonly url: string | URL) { sockets.push(this); }
+      send(value: string) { this.sent.push(value); }
+      close() {}
+    }
+    vi.stubGlobal("fetch", resourceFetch());
+    vi.stubGlobal("WebSocket", FakeSocket);
+    const client = new CodexMonitorWebClient({
+      baseUrl: "https://server.test",
+      token: "session-token",
+    });
+    const events: unknown[] = [];
+    const onOpen = vi.fn();
+    const unsubscribe = client.subscribeAppServerEvents((event) => events.push(event), { onOpen });
+    const socket = sockets[0];
+    socket?.onopen?.();
+    socket?.onmessage?.({ data: JSON.stringify({ type: "ready", version: 1 }) });
+    socket?.onmessage?.({
+      data: JSON.stringify({
+        type: "run.event",
+        version: 1,
+        event: {
+          id: "event-live",
+          sequence: 1,
+          run_id: run.id,
+          event_type: "codex.unknown",
+          projection_version: 1,
+          thread_id: "thread-1",
+          turn_id: "turn-1",
+          item_id: null,
+          payload: {
+            data: {
+              sourceType: "thread/status/changed",
+              status: { type: "active", activeFlags: [] },
+            },
+          },
+          created_at: "2026-07-22T00:00:03Z",
+        },
+      }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(String(socket?.url)).toBe("wss://server.test/api/events/ws");
+    expect(JSON.parse(socket?.sent[0] ?? "{}")).toEqual({
+      type: "authenticate",
+      token: "session-token",
+    });
+    expect(onOpen).toHaveBeenCalledOnce();
+    expect(events).toContainEqual({
+      workspace_id: project.id,
+      message: {
+        method: "thread/status/changed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          sourceType: "thread/status/changed",
+          status: { type: "active", activeFlags: [] },
+        },
+      },
+    });
+    unsubscribe();
+  });
+
+  it("preserves source event fields required by token, terminal, and reasoning handlers", async () => {
+    const sockets: FakeSocket[] = [];
+    class FakeSocket {
+      onopen: (() => void) | null = null;
+      onmessage: ((message: { data: string }) => void) | null = null;
+      onclose: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor(readonly url: string | URL) { sockets.push(this); }
+      send() {}
+      close() {}
+    }
+    vi.stubGlobal("fetch", resourceFetch());
+    vi.stubGlobal("WebSocket", FakeSocket);
+    const client = new CodexMonitorWebClient({
+      baseUrl: "http://server.test",
+      token: "session-token",
+    });
+    const events: Array<{ message?: unknown }> = [];
+    client.subscribeAppServerEvents((event) => events.push(event));
+    const socket = sockets[0];
+    const liveEvent = (
+      sequence: number,
+      eventType: string,
+      itemId: string | null,
+      data: Record<string, unknown>,
+    ) => socket?.onmessage?.({
+      data: JSON.stringify({
+        type: "run.event",
+        version: 1,
+        event: {
+          id: `event-${sequence}`,
+          sequence,
+          run_id: run.id,
+          event_type: eventType,
+          projection_version: 1,
+          thread_id: "thread-1",
+          turn_id: "turn-1",
+          item_id: itemId,
+          payload: { data },
+          created_at: `2026-07-22T00:00:0${sequence}Z`,
+        },
+      }),
+    });
+
+    liveEvent(1, "codex.thread.token_usage.updated", null, {
+      sourceType: "thread/tokenUsage/updated",
+      tokenUsage: { totalTokens: 42 },
+    });
+    liveEvent(2, "codex.unknown", "command-1", {
+      sourceType: "item/commandExecution/terminalInteraction",
+      stdin: "yes\n",
+    });
+    liveEvent(3, "codex.unknown", "reasoning-1", {
+      sourceType: "item/reasoning/summaryPartAdded",
+    });
+    liveEvent(4, "platform.approval.requested", "change-1", {
+      approvalId: "approval-file-1",
+      requestMethod: "item/fileChange/requestApproval",
+      requestParams: { reason: "Apply the generated patch" },
+    });
+    await vi.waitFor(() => expect(events).toHaveLength(4));
+
+    expect(events.map((event) => event.message)).toEqual([
+      {
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          sourceType: "thread/tokenUsage/updated",
+          tokenUsage: { totalTokens: 42 },
+        },
+      },
+      {
+        method: "item/commandExecution/terminalInteraction",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "command-1",
+          sourceType: "item/commandExecution/terminalInteraction",
+          stdin: "yes\n",
+        },
+      },
+      {
+        method: "item/reasoning/summaryPartAdded",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "reasoning-1",
+          sourceType: "item/reasoning/summaryPartAdded",
+        },
+      },
+      {
+        method: "item/commandExecution/requestApproval",
+        id: "approval-file-1",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "change-1",
+          reason: "Apply the generated patch",
+          command: "Apply the generated patch",
+        },
+      },
+    ]);
+  });
+
+  it("replays durable Task events from the last sequence before accepting newer live events", async () => {
+    const replayEvent = {
+      id: "event-replay",
+      sequence: 2,
+      run_id: run.id,
+      event_type: "codex.thread.token_usage.updated",
+      projection_version: 1,
+      thread_id: "thread-1",
+      turn_id: "turn-1",
+      item_id: null,
+      payload: {
+        data: {
+          sourceType: "thread/tokenUsage/updated",
+          tokenUsage: { totalTokens: 2 },
+        },
+      },
+      created_at: "2026-07-22T00:00:02Z",
+    };
+    const fetchMock = resourceFetch([replayEvent]);
+    const sockets: FakeSocket[] = [];
+    class FakeSocket {
+      onopen: (() => void) | null = null;
+      onmessage: ((message: { data: string }) => void) | null = null;
+      onclose: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor(readonly url: string | URL) { sockets.push(this); }
+      send() {}
+      close() {}
+    }
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("WebSocket", FakeSocket);
+    const client = new CodexMonitorWebClient({
+      baseUrl: "http://server.test",
+      token: "session-token",
+    });
+    const methods: string[] = [];
+    client.subscribeAppServerEvents((event) => {
+      const message = event.message as { method?: string };
+      if (message.method) methods.push(message.method);
+    });
+    const socket = sockets[0];
+    const sendLive = (sequence: number, sourceType: string) => socket?.onmessage?.({
+      data: JSON.stringify({
+        type: "run.event",
+        version: 1,
+        event: {
+          id: `event-live-${sequence}`,
+          sequence,
+          run_id: run.id,
+          event_type: "codex.unknown",
+          projection_version: 1,
+          thread_id: "thread-1",
+          turn_id: "turn-1",
+          item_id: null,
+          payload: { data: { sourceType } },
+          created_at: `2026-07-22T00:00:0${sequence}Z`,
+        },
+      }),
+    });
+
+    socket?.onmessage?.({ data: JSON.stringify({ type: "ready", version: 1 }) });
+    sendLive(1, "thread/status/changed");
+    await vi.waitFor(() => expect(methods).toEqual(["thread/status/changed"]));
+    socket?.onmessage?.({ data: JSON.stringify({ type: "resyncRequired", version: 1 }) });
+    sendLive(3, "thread/settings/updated");
+    await vi.waitFor(() => expect(methods).toEqual([
+      "thread/status/changed",
+      "thread/tokenUsage/updated",
+      "thread/settings/updated",
+    ]));
+
+    expect(fetchMock.mock.calls.some((call) => {
+      const url = new URL(String(call[0]));
+      return url.pathname === `/api/tasks/${task.id}/events`
+        && url.searchParams.get("after_sequence") === "1";
+    })).toBe(true);
+
+    socket?.onmessage?.({ data: JSON.stringify({ type: "ready", version: 1 }) });
+    await vi.waitFor(() => expect(fetchMock.mock.calls.some((call) => {
+      const url = new URL(String(call[0]));
+      return url.pathname === `/api/tasks/${task.id}/events`
+        && url.searchParams.get("after_sequence") === "3";
+    })).toBe(true));
+  });
+
+  it("resolves approvals through the durable typed Server resource", async () => {
+    const approval = {
+      id: "018f854d-2d2c-7363-99a9-804e6cc4a99a",
+      runId: run.id,
+      threadId: "thread-1",
+      requestType: "command",
+      state: "pending",
+      version: 4,
+      createdAt: "2026-07-22T00:00:00Z",
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/api/approvals") return json([approval]);
+      if (url.pathname === `/api/approvals/${approval.id}/decision`) {
+        return new Response(null, { status: 204 });
+      }
+      throw new Error(`Unexpected Server request: ${url.pathname}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
+
+    await client.respondToServerRequest(project.id, approval.id, { decision: "accept" });
+
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      `http://server.test/api/approvals/${approval.id}/decision`,
     );
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({
+      decision: "accept",
+      version: 4,
+    });
+  });
+
+  it("replays pending approval requests when the authenticated event stream becomes ready", async () => {
+    const approval = {
+      id: "018f854d-2d2c-7363-99a9-804e6cc4a99a",
+      runId: run.id,
+      threadId: "thread-1",
+      requestType: "command",
+      state: "pending",
+      version: 1,
+      createdAt: "2026-07-22T00:00:00Z",
+    };
+    const approvalEvent = {
+      id: "event-approval",
+      sequence: 7,
+      run_id: run.id,
+      event_type: "platform.approval.requested",
+      projection_version: 1,
+      thread_id: "thread-1",
+      turn_id: "turn-1",
+      item_id: null,
+      payload: {
+        data: {
+          approvalId: approval.id,
+          requestMethod: "item/commandExecution/requestApproval",
+          requestParams: { command: "git status" },
+        },
+      },
+      created_at: "2026-07-22T00:00:03Z",
+    };
+    const baseFetch = resourceFetch([approvalEvent]);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/api/approvals") return json([approval]);
+      return baseFetch(input, init);
+    });
+    const sockets: FakeSocket[] = [];
+    class FakeSocket {
+      onopen: (() => void) | null = null;
+      onmessage: ((message: { data: string }) => void) | null = null;
+      onclose: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor(readonly url: string | URL) { sockets.push(this); }
+      send() {}
+      close() {}
+    }
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("WebSocket", FakeSocket);
+    const client = new CodexMonitorWebClient({
+      baseUrl: "http://server.test",
+      token: "session-token",
+    });
+    const events: unknown[] = [];
+    client.subscribeAppServerEvents((event) => events.push(event));
+
+    sockets[0]?.onmessage?.({ data: JSON.stringify({ type: "ready", version: 1 }) });
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+
+    expect(events[0]).toEqual({
+      workspace_id: project.id,
+      message: {
+        method: "item/commandExecution/requestApproval",
+        id: approval.id,
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          command: "git status",
+        },
+      },
+    });
+  });
+
+  it("answers structured user input through the typed approval resource", async () => {
+    const approval = {
+      id: "018f854d-2d2c-7363-99a9-804e6cc4a99b",
+      runId: run.id,
+      threadId: "thread-1",
+      requestType: "user_input",
+      state: "pending",
+      version: 3,
+      createdAt: "2026-07-22T00:00:00Z",
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/api/approvals") return json([approval]);
+      if (url.pathname === `/api/approvals/${approval.id}/user-input`) {
+        return new Response(null, { status: 204 });
+      }
+      throw new Error(`Unexpected Server request: ${url.pathname}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
+    const answers = { environment: { answers: ["staging"] } };
+
+    await client.respondToServerRequest(project.id, approval.id, { answers });
+
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      `http://server.test/api/approvals/${approval.id}/user-input`,
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({
+      answers,
+      version: 3,
+    });
   });
 });

@@ -1,6 +1,6 @@
-import { invoke } from "@/platform/browser/core";
-import { open, save } from "@/platform/browser/dialog";
-import type { Options as NotificationOptions } from "@/platform/browser/notification";
+import { invoke } from "@tauri-apps/api/core";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import type { Options as NotificationOptions } from "@tauri-apps/plugin-notification";
 import type {
   AppSettings,
   CodexUpdateResult,
@@ -1170,7 +1170,7 @@ export async function sendNotification(
   }
 
   try {
-    const notification = await import("@/platform/browser/notification");
+    const notification = await import("@tauri-apps/plugin-notification");
     let permissionGranted = await notification.isPermissionGranted();
     if (!permissionGranted) {
       const permission = await notification.requestPermission();

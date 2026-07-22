@@ -2,10 +2,10 @@
 import { renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { useLiquidGlassEffect } from "./useLiquidGlassEffect";
-import { isGlassSupported, setLiquidGlassEffect } from "@/platform/browser/liquidGlass";
-import { Effect, EffectState, getCurrentWindow } from "@/platform/browser/window";
+import { isGlassSupported, setLiquidGlassEffect } from "tauri-plugin-liquid-glass-api";
+import { Effect, EffectState, getCurrentWindow } from "@tauri-apps/api/window";
 
-vi.mock("@/platform/browser/liquidGlass", () => ({
+vi.mock("tauri-plugin-liquid-glass-api", () => ({
   isGlassSupported: vi.fn(),
   setLiquidGlassEffect: vi.fn(),
   GlassMaterialVariant: {
@@ -13,7 +13,7 @@ vi.mock("@/platform/browser/liquidGlass", () => ({
   },
 }));
 
-vi.mock("@/platform/browser/window", () => ({
+vi.mock("@tauri-apps/api/window", () => ({
   Effect: {
     Acrylic: "acrylic",
     HudWindow: "hud-window",

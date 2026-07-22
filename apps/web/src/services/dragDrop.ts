@@ -1,4 +1,4 @@
-import { getCurrentWindow } from "@/platform/browser/window";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export type DragDropPayload = {
   type: "enter" | "over" | "leave" | "drop";

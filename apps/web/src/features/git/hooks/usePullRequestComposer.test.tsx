@@ -191,14 +191,14 @@ describe("usePullRequestComposer", () => {
     const { result } = renderHook(() => usePullRequestComposer(options));
 
     await act(async () => {
-      await result.current.handleComposerSend("/source/something", []);
+      await result.current.handleComposerSend("/src-tauri/something", []);
     });
 
     expect(options.handleSend).not.toHaveBeenCalled();
     expect(options.runPullRequestReview).toHaveBeenCalledWith(
       expect.objectContaining({
         intent: "question",
-        question: "/source/something",
+        question: "/src-tauri/something",
         activateThread: true,
       }),
     );

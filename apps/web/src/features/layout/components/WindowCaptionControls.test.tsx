@@ -6,11 +6,11 @@ const isTauriMock = vi.hoisted(() => vi.fn());
 const getCurrentWindowMock = vi.hoisted(() => vi.fn());
 const isWindowsPlatformMock = vi.hoisted(() => vi.fn());
 
-vi.mock("@/platform/browser/core", () => ({
+vi.mock("@tauri-apps/api/core", () => ({
   isTauri: isTauriMock,
 }));
 
-vi.mock("@/platform/browser/window", () => ({
+vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: getCurrentWindowMock,
 }));
 

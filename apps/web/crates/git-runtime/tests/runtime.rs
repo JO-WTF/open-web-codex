@@ -60,6 +60,13 @@ fn validates_remote_sources_and_branch_names() {
         .validate_source("https://token@github.com/openai/codex.git")
         .is_err());
     assert!(runtime.validate_source("file:///private/repo").is_err());
+    let managed_id = Uuid::now_v7();
+    assert!(runtime
+        .validate_source(&format!("managed://{managed_id}"))
+        .is_ok());
+    assert!(runtime
+        .validate_external_source(&format!("managed://{managed_id}"))
+        .is_err());
     assert!(runtime.validate_ref("feature/safe-name").is_ok());
     for value in [
         "--upload-pack=x",
@@ -70,6 +77,31 @@ fn validates_remote_sources_and_branch_names() {
     ] {
         assert!(runtime.validate_ref(value).is_err(), "accepted {value}");
     }
+}
+
+#[tokio::test]
+async fn provisions_a_server_managed_empty_project() {
+    let root = TempDir::new().unwrap();
+    let runtime = GitRuntime::new(GitRuntimeConfig::new(root.path().join("runner"))).unwrap();
+    let project_id = Uuid::now_v7();
+    let workspace_id = Uuid::now_v7();
+    let source = runtime
+        .validate_source(&format!("managed://{project_id}"))
+        .unwrap();
+    let branch = runtime.validate_ref("main").unwrap();
+
+    let checkout = runtime
+        .provision(project_id, workspace_id, &source, &branch)
+        .await
+        .unwrap();
+
+    assert_eq!(checkout.branch, format!("codex-runs/{workspace_id}"));
+    assert!(runtime
+        .status(workspace_id)
+        .await
+        .unwrap()
+        .changes
+        .is_empty());
 }
 
 #[tokio::test]
@@ -244,6 +276,60 @@ async fn rejects_workspace_file_traversal_and_symlinks() {
     assert!(matches!(
         runtime.read_file(workspace_id, "linked.txt").await,
         Err(GitRuntimeError::UnsafePath(_))
+    ));
+
+    symlink(&outside, checkout.root.join("linked.png")).unwrap();
+    assert!(matches!(
+        runtime
+            .read_image_asset(workspace_id, "../outside.png")
+            .await,
+        Err(GitRuntimeError::UnsafePath(_))
+    ));
+    assert!(matches!(
+        runtime.read_image_asset(workspace_id, "linked.png").await,
+        Err(GitRuntimeError::UnsafePath(_))
+    ));
+}
+
+#[tokio::test]
+async fn reads_only_bounded_images_from_workspace() {
+    let (_root, runtime, source) = fixture();
+    let source = runtime.validate_source(&source).unwrap();
+    let branch = runtime.validate_ref("main").unwrap();
+    let workspace_id = Uuid::now_v7();
+    let checkout = runtime
+        .provision(Uuid::now_v7(), workspace_id, &source, &branch)
+        .await
+        .unwrap();
+
+    let png = b"\x89PNG\r\n\x1a\nworkspace-image";
+    std::fs::write(checkout.root.join("preview.png"), png).unwrap();
+    let asset = runtime
+        .read_image_asset(workspace_id, "preview.png")
+        .await
+        .unwrap();
+    assert_eq!(asset.media_type, "image/png");
+    assert_eq!(asset.bytes, png);
+
+    std::fs::write(checkout.root.join("not-image.png"), b"<html>unsafe</html>").unwrap();
+    assert!(matches!(
+        runtime
+            .read_image_asset(workspace_id, "not-image.png")
+            .await,
+        Err(GitRuntimeError::UnsupportedImage(_))
+    ));
+    assert!(matches!(
+        runtime.read_image_asset(workspace_id, "README.md").await,
+        Err(GitRuntimeError::UnsupportedImage(_))
+    ));
+
+    let oversized = std::fs::File::create(checkout.root.join("oversized.png")).unwrap();
+    oversized.set_len(50 * 1024 * 1024 + 1).unwrap();
+    assert!(matches!(
+        runtime
+            .read_image_asset(workspace_id, "oversized.png")
+            .await,
+        Err(GitRuntimeError::ImageTooLarge)
     ));
 }
 

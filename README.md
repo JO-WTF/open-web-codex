@@ -27,15 +27,18 @@ scripts/                  Monorepo and upstream-sync tooling
 
 ## Get started
 
-Run the current local Web MVP:
+Run the restored standalone WebApp with the deterministic test Runtime:
 
 ```bash
-make mvp
+./scripts/start-all.sh --fake
 ```
 
-Then open `http://127.0.0.1:1420/web`. The launcher builds/starts the loopback
-gateway and Web client together. See [the MVP runbook](docs/mvp-runbook.md) for
-the browser flow, binary override and known limitations.
+Then open `http://127.0.0.1:1421/web`. The WebApp calls the authenticated
+platform Server on port `4800` directly through typed REST resources and
+`/api/events/ws`; there is no separate Gateway process. Use
+`./scripts/start-all.sh` for the repository Codex Runtime. See
+[the MVP runbook](docs/mvp-runbook.md) for the browser flow, binary override and
+known limitations.
 
 Web application:
 

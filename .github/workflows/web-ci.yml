@@ -34,6 +34,7 @@ jobs:
           cache-dependency-path: apps/web/package-lock.json
       - run: npm ci
       - run: npm run check:no-desktop
+      - run: npm run check:main-ui-parity
       - run: npm run typecheck
       - run: npm run test
       - run: npm run build

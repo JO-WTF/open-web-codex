@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Event, EventCallback, UnlistenFn } from "@/platform/browser/event";
-import { listen } from "@/platform/browser/event";
+import type { Event, EventCallback, UnlistenFn } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
 import type { AppServerEvent } from "../types";
 import {
   subscribeAppServerEvents,
@@ -10,7 +10,7 @@ import {
   subscribeTerminalOutput,
 } from "./events";
 
-vi.mock("@/platform/browser/event", () => ({
+vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(),
 }));
 

@@ -165,14 +165,17 @@ impl RealCodexAdapter {
         text: &str,
         options: &TurnOptions,
     ) -> Result<Value, AdapterError> {
-        if thread_id.trim().is_empty() || text.trim().is_empty() {
+        if thread_id.trim().is_empty() || (text.trim().is_empty() && options.images.is_empty()) {
             return Err(AdapterError::Internal(
-                "Thread id and message text are required".to_string(),
+                "Thread id and message text or image input are required".to_string(),
             ));
         }
         let workspace_root = self.ensure_thread_bound(workspace, thread_id).await?;
 
-        let mut input = vec![json!({ "type": "text", "text": text.trim() })];
+        let mut input = Vec::new();
+        if !text.trim().is_empty() {
+            input.push(json!({ "type": "text", "text": text.trim() }));
+        }
         for image in &options.images {
             if !(image.starts_with("data:")
                 || image.starts_with("https://")

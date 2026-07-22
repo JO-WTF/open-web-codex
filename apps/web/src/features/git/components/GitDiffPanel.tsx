@@ -1,10 +1,10 @@
 import type { GitHubIssue, GitHubPullRequest, GitLogEntry } from "../../../types";
 import type { MouseEvent as ReactMouseEvent } from "react";
-import { Menu, MenuItem } from "@/platform/browser/menu";
-import { LogicalPosition } from "@/platform/browser/dpi";
-import { getCurrentWindow } from "@/platform/browser/window";
-import { ask } from "@/platform/browser/dialog";
-import { openUrl } from "@/platform/browser/opener";
+import { Menu, MenuItem } from "@tauri-apps/api/menu";
+import { LogicalPosition } from "@tauri-apps/api/dpi";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { ask } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import FileText from "lucide-react/dist/esm/icons/file-text";
 import GitBranch from "lucide-react/dist/esm/icons/git-branch";
 import ScrollText from "lucide-react/dist/esm/icons/scroll-text";
@@ -459,7 +459,7 @@ export function GitDiffPanel({
                   });
                   return;
                 }
-                const { revealItemInDir } = await import("@/platform/browser/opener");
+                const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
                 await revealItemInDir(absolutePath);
               } catch (menuError) {
                 const message = menuError instanceof Error ? menuError.message : String(menuError);

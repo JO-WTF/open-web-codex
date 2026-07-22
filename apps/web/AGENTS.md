@@ -5,8 +5,11 @@ This file adds implementation rules for `apps/web/**`.
 
 ## Ownership
 
-- `src/platform/**` owns browser presentation and calls only typed platform
-  resources.
+- `src/WebApp.tsx` and its component tree own the restored 1421 browser
+  presentation. `src/services/webClient.ts` is its narrow compatibility seam.
+- `browser/client.ts` owns the authenticated typed REST/WebSocket transport.
+  Browser adapters may translate existing UI method shapes, but may not create
+  a second Gateway protocol or expose raw Runtime payloads.
 - `server/**` owns HTTP/WebSocket composition, authentication, authorization,
   browser DTO mapping, Profile/Runner wiring, and static asset delivery.
 - `crates/profile-host` owns persistent Profile process lifecycle and the

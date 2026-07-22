@@ -4,18 +4,20 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 更新日期 | 2026-07-22 |
+| 更新日期 | 2026-07-23 |
 | 当前分支 | `codex/sync-upstream-6e5a2d6b8d14` |
 | Codex 基线 | `openai/codex` `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9` |
-| 上游待同步 | 0；已与观测到的 official main 同步 |
-| 当前工作 | 完成既有 Web UI/功能的类型化平台适配，并验证同步后的 Runtime 合同 |
+| 上游待同步 | 26；观测到的 official main 为 `10cc57c95c2c8f1d01c8deaa75efb29b099d9c28` |
+| 当前工作 | 以 `main` 的 1421 WebApp 为唯一前端基线，补齐其 Server 适配并移除旧根 App/Bridge |
 
-当前 Codex 树与官方 main 之间有 126 个已分类的 local-only 差异，无
-upstream-only、diverged 或 missing 路径。既有 `main` React
-组件树、CSS、页面布局和交互分支已经恢复，差异仅限 Tauri import 的浏览器适配、
-认证 Session 壳和类型化平台接口。平台具备原生 Profile Host、Provider 服务、
+当前 Codex 基线上的定制仍按 patch map 分类；official main 已前进 26 个提交，
+下一轮必须通过专用 `codex/sync-upstream-*` 分支同步。既有 `main` 1421 WebApp 的 React
+组件树、CSS、页面布局和交互已经逐字节恢复；差异只允许出现在认证入口和
+`src/services/webClient.ts` Server 适配层。平台具备原生 Profile Host、Provider 服务、
 加密 Secret、持久审批、Git workspace 与租约式 Run 编排。桌面运行时、sidecar、
-本地 Gateway、原始浏览器 RPC/SSE 和桌面发布链已经移除。
+4732/4733 daemon Gateway、原始浏览器 RPC/SSE、旧根 App 浏览器 Bridge 和桌面
+发布链已经移除。认证后的根入口与 `/web` 都只加载同一个 WebApp；旧根 App
+源码尚未裁剪，但不再进入生产构建。
 
 本文只记录当前有效状态和下一步。完成项必须有代码、测试或可重现运行证据。
 
@@ -37,7 +39,8 @@ upstream-only、diverged 或 missing 路径。既有 `main` React
 | 层 | 目录 | 当前职责 |
 | --- | --- | --- |
 | Official Runtime | `codex/**` | Thread/Turn、工具、记忆、多 Agent、Skills、Plugins、MCP、Provider/TUI retained seams |
-| Browser | `apps/web/src/platform/**` | 类型化平台资源、认证状态、Task/Run、审批、Provider、Git 投影 |
+| Browser UI | `apps/web/src/WebApp.tsx`、相关组件/CSS | `main` 1421 WebApp 的既有页面、布局、交互和 UI 状态 |
+| Browser transport | `apps/web/src/services/webClient.ts`、`apps/web/browser/client.ts` | WebApp 兼容方法到类型化 REST/WebSocket 的窄适配 |
 | Platform server | `apps/web/server/**` | HTTP/WS、授权、DTO、服务组合、静态资源 |
 | Profile | `apps/web/crates/profile-*` | 私有 `CODEX_HOME`、单主进程、app-server JSONL 生命周期 |
 | Workflow | `apps/web/crates/run-orchestrator` | 幂等 Run、DB lease、heartbeat、恢复、取消 |
@@ -92,22 +95,23 @@ upstream-only、diverged 或 missing 路径。既有 `main` React
 - [x] 浏览器只使用 `/api` 类型化资源；原始 `/api/rpc` 不存在。
 - [x] 实时通道为 `/api/events/ws`，Token 在首帧认证而非 URL；跨租户事件
   过滤测试通过。
-- [x] `App.tsx`、`WebApp.tsx`、全部 CSS 和既有页面 JSX/业务分支恢复为 `main`
-  产品；现有 36 个差异文件仅替换桌面 import，入口只增加认证 Session 壳。
-- [x] 浏览器支持 workspace/worktree/clone、Thread/Turn/fork/review/compact、消息、
-  durable replay/live、approval/user input、Provider/model、Profile account/login、
-  MCP/Skills/Apps/config/agents/prompts 和本地 usage 投影。
-- [x] 原有 terminal、文件树/预览、嵌套 Git root、status/diff/stage/revert/commit、
-  branch/log/remote、GitHub issue/PR/diff/comment/checkout/create repo 均接入服务端。
-- [x] 图片附件、Markdown 导出、浏览器通知、Web Speech dictation、右键菜单和
-  对话框保留既有 UI，由浏览器能力实现。
+- [x] 1421 `WebApp.tsx`、其组件和全部 CSS 恢复为 `main` 产品，不改变页面
+  布局、字体、交互或功能分支。
+- [x] `npm run check:main-ui-parity` 对 `apps/web/src` 执行 `main` 逐字节等价
+  门禁，只允许 `webClient.ts` 及其测试作为 Server 接口 seam。
+- [x] WebApp 的 workspace、Thread/Turn、消息、durable replay/live、
+  approval/user input、Provider/model、MCP/rate limit、文件预览和 Git status
+  已切到类型化 Server 资源；真实 Codex/DeepSeek/MCP 纵向用例与核心浏览器
+  Thread 切换、历史恢复、运行态和文件预览回归通过。
+- [x] 认证后的根入口和 1421 `/web` 都只加载 WebApp；旧 Bridge 已删除，生产包
+  不再生成旧 App/Bridge 分块，也不包含 `/api/rpc` 或 EventSource Gateway 调用。
 - [x] 平台服务同源提供生产 browser build；Vite 仅在开发时代理 HTTP/WS。
 - [x] 前端类型检查、单测与生产构建通过。
 
 ## D. 桌面运行时淘汰
 
-- [x] 删除桌面 Rust crate、IPC wrapper、窗口/托盘/通知/更新器、远程 sidecar、
-  本地 Gateway、移动端生成物与平台专用逻辑。
+- [x] 删除桌面 Rust crate、独立 daemon/sidecar、4732/4733 Gateway、原始
+  RPC/SSE 与桌面发布入口。
 - [x] 保留既有 React 状态树、文件、终端、语音、Git 和设置 UI；删除其 Tauri
   运行时依赖并通过 `src/platform/browser` 提供 Web 语义。
 - [x] 删除桌面/iOS/Windows/macOS release workflows、脚本、图标、截图、网站和
@@ -117,7 +121,9 @@ upstream-only、diverged 或 missing 路径。既有 `main` React
   Fake/Real 和外部数据库配置。
 - [x] CI 增加禁止桌面代码回流的静态门禁，并构建浏览器、平台 Rust 与
   PostgreSQL 集成测试。
-- [x] 清理 lockfile、文档与残留引用，完成全量回归和提交。
+- [-] 旧根 App/Bridge 已退出运行与生产构建；仅为旧 App 保留的未引用源码、
+  tests 和 browser shims 待 WebApp 等价回归完成后裁剪。当前不会改动 1421
+  WebApp UI。
 
 桌面删除完成标准：源码、依赖、构建产物、CI、运行手册和发布入口均不存在；
 `npm run check:no-desktop` 与仓库级搜索同时通过。
@@ -125,14 +131,15 @@ upstream-only、diverged 或 missing 路径。既有 `main` React
 ## E. 本分支最终验证矩阵
 
 - [x] `bash -n scripts/*.sh` 和本地启动脚本 help/status 路径。
-- [x] `npm ci`、boundary、lint、typecheck、test、build。
+- [x] 1,123 个浏览器测试、typecheck、build、no-desktop、main-ui-parity、
+  Codex contracts，以及真实 Codex/DeepSeek Provider 的 10 项平台 E2E 通过。
 - [x] `cargo fmt --all --check`、`cargo test --workspace --locked`。
 - [x] PostgreSQL migration/restart、两组织安全、Git Runtime 与 Run Orchestrator
   ignored integration tests。
 - [x] `npm run check:codex-generated`、`npm run check:codex-contracts`、fixtures、
   Feature Policy 和真实 `--require-manifest` smoke。
-- [x] 状态脚本已复核；官方 `6e5a2d6b8d14` 已在专用
-  `codex/sync-upstream-*` 分支无冲突集成，126 个本地差异保持已分类状态。
+- [x] 状态脚本已复核；当前集成基线为 `6e5a2d6b8d14`，观测到的 official
+  main 已前进到 `10cc57c95c2c`，26 个待同步提交留给下一专用同步分支处理。
 - [x] Fake Server HTTP/static/WebSocket 端到端启动验证。
 - [x] Git status/diff 审查，确认没有未分类 Codex 差异或意外用户文件。
 

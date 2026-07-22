@@ -182,10 +182,12 @@ pub async fn send_message(
     Extension(profile): Extension<RuntimeProfileBinding>,
     Json(req): Json<SendMessageRequest>,
 ) -> ApiResult<SendMessageResponse> {
-    if req.text.trim().is_empty() {
+    if req.text.trim().is_empty() && req.images.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(PlatformError::bad_request("message text must not be empty")),
+            Json(PlatformError::bad_request(
+                "message text or at least one image is required",
+            )),
         ));
     }
     require_runtime_profile(&state.db, &auth, &profile.runtime_key).await?;
@@ -196,7 +198,7 @@ pub async fn send_message(
          FROM runs r LEFT JOIN workspaces w ON w.id = r.workspace_id \
          WHERE r.task_id = $1 AND r.organization_id = $2 \
            AND r.requested_by = $3 AND r.status = 'running' \
-         ORDER BY created_at DESC LIMIT 1",
+         ORDER BY r.created_at DESC LIMIT 1",
     )
     .bind(task_id)
     .bind(auth.organization_id)
@@ -268,19 +270,30 @@ pub async fn send_message(
             )
         })?;
 
-    if let Some(turn_id) = result.get("turnId").and_then(serde_json::Value::as_str) {
-        if let Err(error) = sqlx::query(
-            "UPDATE runs SET active_turn_id = $1, updated_at = now() \
-             WHERE id = $2 AND organization_id = $3 AND status = 'running'",
-        )
-        .bind(turn_id)
-        .bind(active_run.get::<Uuid, _>("id"))
-        .bind(auth.organization_id)
-        .execute(&state.db)
-        .await
-        {
-            tracing::warn!(%error, "active Turn delivery succeeded but projection update failed");
-        }
+    let turn_id = result
+        .get("turnId")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(PlatformError::internal(
+                    "Codex Runtime started a Turn without returning its id",
+                )),
+            )
+        })?
+        .to_string();
+    if let Err(error) = sqlx::query(
+        "UPDATE runs SET active_turn_id = $1, updated_at = now() \
+         WHERE id = $2 AND organization_id = $3 AND status = 'running'",
+    )
+    .bind(&turn_id)
+    .bind(active_run.get::<Uuid, _>("id"))
+    .bind(auth.organization_id)
+    .execute(&state.db)
+    .await
+    {
+        tracing::warn!(%error, "active Turn delivery succeeded but projection update failed");
     }
 
     let status = result
@@ -289,7 +302,11 @@ pub async fn send_message(
         .unwrap_or("sent")
         .to_string();
 
-    Ok(Json(SendMessageResponse { status, thread_id }))
+    Ok(Json(SendMessageResponse {
+        status,
+        thread_id,
+        turn_id,
+    }))
 }
 
 /// GET /api/tasks/:id

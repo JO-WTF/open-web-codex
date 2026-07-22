@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { getVersion } from "@/platform/browser/app";
-import { openUrl } from "@/platform/browser/opener";
+import { getVersion } from "@tauri-apps/api/app";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 const GITHUB_URL = "https://github.com/Dimillian/CodexMonitor";
 const TWITTER_URL = "https://x.com/dimillian";

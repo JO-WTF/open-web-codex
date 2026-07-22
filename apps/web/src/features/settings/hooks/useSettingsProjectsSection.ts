@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
-import { ask, open } from "@/platform/browser/dialog";
+import { ask, open } from "@tauri-apps/plugin-dialog";
 import type { AppSettings, WorkspaceGroup, WorkspaceInfo } from "@/types";
 import type { GroupedWorkspaces } from "./settingsSectionTypes";
 

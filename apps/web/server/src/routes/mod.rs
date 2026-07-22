@@ -72,6 +72,10 @@ pub fn router(
         .route("/bootstrap", axum::routing::post(bootstrap::bootstrap))
         .route("/sessions", axum::routing::post(sessions::create_session))
         .route(
+            "/sessions/current",
+            axum::routing::delete(sessions::delete_session),
+        )
+        .route(
             "/sessions/organization",
             axum::routing::put(sessions::select_organization),
         )
@@ -223,6 +227,10 @@ pub fn router(
             axum::routing::get(workspaces::read_file),
         )
         .route(
+            "/runs/{id}/workspace/assets",
+            axum::routing::get(workspaces::read_image_asset),
+        )
+        .route(
             "/runs/{id}/workspace/agents",
             axum::routing::put(workspaces::write_agents_file),
         )
@@ -357,6 +365,10 @@ pub fn router(
         .route(
             "/projects",
             axum::routing::get(projects::list_projects).post(projects::create_project),
+        )
+        .route(
+            "/projects/managed",
+            axum::routing::post(projects::create_managed_project),
         )
         .route(
             "/projects/{id}",

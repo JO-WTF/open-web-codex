@@ -1,7 +1,9 @@
+use std::path::Path;
+use std::process::Command;
 use std::sync::Arc;
 
 use axum::body::{to_bytes, Body};
-use axum::http::{Request, StatusCode};
+use axum::http::{HeaderMap, Request, StatusCode};
 use axum::Router;
 use futures_util::{SinkExt, StreamExt};
 use open_web_codex_adapter::fake::FakeCodexAdapter;
@@ -18,6 +20,7 @@ use sqlx::Row;
 use tower::ServiceExt;
 use uuid::Uuid;
 
+use crate::ensure_transitional_profile_binding;
 use crate::routes::{self, RuntimeProfileBinding};
 
 #[tokio::test]
@@ -65,14 +68,14 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
                 adapter,
                 Arc::new(InMemoryAuthorizedProviderService::default()),
                 approval_service.clone(),
-                git,
+                git.clone(),
                 orchestrator,
                 profile,
             ),
         )
         .with_state(state.clone());
 
-    let bootstrap = call(
+    let bootstrap = call_with_headers(
         &app,
         Request::post("/api/bootstrap")
             .header("content-type", "application/json")
@@ -88,13 +91,35 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     )
     .await;
     assert_eq!(bootstrap.0, StatusCode::OK);
-    let first_token = bootstrap.1["session_token"]
+    assert!(bootstrap
+        .1
+        .get("set-cookie")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value.contains("session_token=")
+                && value.contains("HttpOnly")
+                && value.contains("SameSite=Strict")
+                && value.contains("Path=/api/")
+        }));
+    let first_token = bootstrap.2["session_token"]
         .as_str()
         .expect("bootstrap session token")
         .to_string();
-    let first_user_id = Uuid::parse_str(bootstrap.1["user"]["id"].as_str().unwrap()).unwrap();
+    let first_user_id = Uuid::parse_str(bootstrap.2["user"]["id"].as_str().unwrap()).unwrap();
     let first_organization_id =
-        Uuid::parse_str(bootstrap.1["organization"]["id"].as_str().unwrap()).unwrap();
+        Uuid::parse_str(bootstrap.2["organization"]["id"].as_str().unwrap()).unwrap();
+
+    ensure_transitional_profile_binding(&pool, "legacy-profile", "Legacy Profile")
+        .await
+        .expect("repair legacy Profile binding");
+    let repaired_owner: (Uuid, Uuid) = sqlx::query_as(
+        "SELECT organization_id, owner_user_id FROM profiles WHERE runtime_key = $1",
+    )
+    .bind("legacy-profile")
+    .fetch_one(&pool)
+    .await
+    .expect("load repaired Profile binding");
+    assert_eq!(repaired_owner, (first_organization_id, first_user_id));
 
     let first_project = call(
         &app,
@@ -131,6 +156,110 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     .execute(&pool)
     .await
     .unwrap();
+
+    let source = runner_root.path().join("image-source");
+    std::fs::create_dir(&source).unwrap();
+    fixture_git(&source, &["init", "-b", "main"]);
+    let image_bytes = b"\x89PNG\r\n\x1a\nroute-integration";
+    std::fs::write(source.join("icon.png"), image_bytes).unwrap();
+    fixture_git(&source, &["add", "icon.png"]);
+    fixture_git(
+        &source,
+        &[
+            "-c",
+            "user.name=Asset Test",
+            "-c",
+            "user.email=asset@example.invalid",
+            "commit",
+            "-m",
+            "image fixture",
+        ],
+    );
+    let workspace_id = Uuid::now_v7();
+    let checkout = git
+        .provision(
+            Uuid::parse_str(&first_project_id).unwrap(),
+            workspace_id,
+            &git.validate_source(source.to_string_lossy().as_ref())
+                .unwrap(),
+            &git.validate_ref("main").unwrap(),
+        )
+        .await
+        .unwrap();
+    let profile_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM profiles WHERE runtime_key = 'security-test-profile'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    sqlx::query(
+        "INSERT INTO workspaces \
+         (id, organization_id, project_id, profile_id, run_id, root_path, state, source_ref, head_commit, branch_name) \
+         VALUES ($1, $2, $3, $4, $5, $6, 'ready', 'main', $7, 'main')",
+    )
+    .bind(workspace_id)
+    .bind(first_organization_id)
+    .bind(Uuid::parse_str(&first_project_id).unwrap())
+    .bind(profile_id)
+    .bind(first_run_id)
+    .bind(checkout.root.to_string_lossy().as_ref())
+    .bind(&checkout.head_commit)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE runs SET workspace_id = $1 WHERE id = $2")
+        .bind(workspace_id)
+        .bind(first_run_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let image_response = app
+        .clone()
+        .oneshot(
+            Request::get(format!(
+                "/api/runs/{first_run_id}/workspace/assets?path=icon.png"
+            ))
+            .header("cookie", format!("session_token={first_token}"))
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(image_response.status(), StatusCode::OK);
+    assert_eq!(image_response.headers()["content-type"], "image/png");
+    assert_eq!(
+        image_response.headers()["cache-control"],
+        "private, no-store"
+    );
+    assert_eq!(
+        image_response.headers()["x-content-type-options"],
+        "nosniff"
+    );
+    assert_eq!(
+        image_response.headers()["cross-origin-resource-policy"],
+        "same-origin"
+    );
+    assert!(image_response.headers()["content-security-policy"]
+        .to_str()
+        .unwrap()
+        .contains("sandbox"));
+    assert_eq!(
+        to_bytes(image_response.into_body(), 1024).await.unwrap(),
+        image_bytes.as_slice()
+    );
+
+    let missing_auth = app
+        .clone()
+        .oneshot(
+            Request::get(format!(
+                "/api/runs/{first_run_id}/workspace/assets?path=icon.png"
+            ))
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_auth.status(), StatusCode::UNAUTHORIZED);
     let approval_id = approval_service
         .capture_message(&json!({
             "id": 77,
@@ -248,6 +377,17 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     .await;
     assert_eq!(cross_tenant.0, StatusCode::NOT_FOUND);
 
+    let cross_tenant_asset = call(
+        &app,
+        authenticated(
+            "GET",
+            &format!("/api/runs/{first_run_id}/workspace/assets?path=icon.png"),
+            second_token,
+        ),
+    )
+    .await;
+    assert_eq!(cross_tenant_asset.0, StatusCode::NOT_FOUND);
+
     let legacy_runtime = call(
         &app,
         authenticated_json(
@@ -284,6 +424,24 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     )
     .await;
     assert_eq!(member_create.0, StatusCode::FORBIDDEN);
+
+    let logout = app
+        .clone()
+        .oneshot(authenticated(
+            "DELETE",
+            "/api/sessions/current",
+            &first_token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(logout.status(), StatusCode::NO_CONTENT);
+    assert!(logout
+        .headers()
+        .get("set-cookie")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.contains("session_token=;") && value.contains("Max-Age=0")));
+    let revoked_session = call(&app, authenticated("GET", "/api/me", &first_token)).await;
+    assert_eq!(revoked_session.0, StatusCode::UNAUTHORIZED);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -358,6 +516,37 @@ async fn call(app: &Router, request: Request<Body>) -> (StatusCode, Value) {
         serde_json::from_slice(&body).expect("JSON response")
     };
     (status, value)
+}
+
+async fn call_with_headers(app: &Router, request: Request<Body>) -> (StatusCode, HeaderMap, Value) {
+    let response = app.clone().oneshot(request).await.expect("HTTP response");
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("response body");
+    let value = if body.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&body).expect("JSON response")
+    };
+    (status, headers, value)
+}
+
+fn fixture_git(cwd: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .args(["-c", "core.hooksPath=/dev/null"])
+        .args(args)
+        .current_dir(cwd)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .expect("run Git fixture command");
+    assert!(
+        output.status.success(),
+        "Git fixture failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn authenticated(method: &str, uri: &str, token: &str) -> Request<Body> {

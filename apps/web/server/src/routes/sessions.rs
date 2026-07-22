@@ -1,4 +1,9 @@
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{
+    extract::State,
+    http::{header, HeaderName, StatusCode},
+    response::AppendHeaders,
+    Json,
+};
 use open_web_codex_auth::{hash_password, needs_rehash, verify_password_or_dummy};
 use open_web_codex_platform_contracts::error::PlatformError;
 use open_web_codex_platform_contracts::{
@@ -13,12 +18,14 @@ use uuid::Uuid;
 use crate::middleware::auth::AuthenticatedUser;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
+type CookieApiResult<T> =
+    Result<(AppendHeaders<[(HeaderName, String); 1]>, Json<T>), (StatusCode, Json<PlatformError>)>;
 
 /// POST /api/sessions — Login with email + password into one Organization.
 pub async fn create_session(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
-) -> ApiResult<LoginResponse> {
+) -> CookieApiResult<LoginResponse> {
     let user = sqlx::query(
         "SELECT id, name, email, role, password_hash, created_at, updated_at \
          FROM users WHERE email = $1",
@@ -99,19 +106,71 @@ pub async fn create_session(
     .await
     .map_err(internal_database_error)?;
 
-    Ok(Json(LoginResponse {
-        user: User {
-            id: user_id,
-            name: user.get("name"),
-            email: user.get("email"),
-            role: user.get("role"),
-            created_at: user.get("created_at"),
-            updated_at: user.get("updated_at"),
-        },
-        organization: organization_from_row(&organization),
-        membership_role: organization.get("membership_role"),
-        session_token,
-    }))
+    Ok((
+        AppendHeaders([(header::SET_COOKIE, session_cookie(&session_token))]),
+        Json(LoginResponse {
+            user: User {
+                id: user_id,
+                name: user.get("name"),
+                email: user.get("email"),
+                role: user.get("role"),
+                created_at: user.get("created_at"),
+                updated_at: user.get("updated_at"),
+            },
+            organization: organization_from_row(&organization),
+            membership_role: organization.get("membership_role"),
+            session_token,
+        }),
+    ))
+}
+
+/// DELETE /api/sessions/current — revoke the authenticated session and clear
+/// the HttpOnly browser cookie used by same-origin resource requests.
+pub async fn delete_session(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+) -> Result<(AppendHeaders<[(HeaderName, String); 1]>, StatusCode), (StatusCode, Json<PlatformError>)>
+{
+    sqlx::query(
+        "UPDATE sessions SET revoked_at = now() WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL",
+    )
+    .bind(auth.session_id)
+    .bind(auth.user_id)
+    .execute(&state.db)
+    .await
+    .map_err(internal_database_error)?;
+    Ok((
+        AppendHeaders([(header::SET_COOKIE, clear_session_cookie())]),
+        StatusCode::NO_CONTENT,
+    ))
+}
+
+pub(super) fn session_cookie(token: &str) -> String {
+    format!(
+        "session_token={token}; Path=/api/; HttpOnly; SameSite=Strict; Max-Age=604800{}",
+        secure_cookie_attribute(),
+    )
+}
+
+fn clear_session_cookie() -> String {
+    format!(
+        "session_token=; Path=/api/; HttpOnly; SameSite=Strict; Max-Age=0{}",
+        secure_cookie_attribute(),
+    )
+}
+
+fn secure_cookie_attribute() -> &'static str {
+    match std::env::var("OPEN_WEB_CODEX_SECURE_COOKIES") {
+        Ok(value)
+            if matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes"
+            ) =>
+        {
+            "; Secure"
+        }
+        _ => "",
+    }
 }
 
 /// PUT /api/sessions/organization — change only the current session's
@@ -183,4 +242,23 @@ fn internal_password_error() -> (StatusCode, Json<PlatformError>) {
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(PlatformError::internal("password verification failed")),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{clear_session_cookie, session_cookie};
+
+    #[test]
+    fn browser_session_cookies_are_http_only_and_api_scoped() {
+        let cookie = session_cookie("test-token");
+        assert!(cookie.starts_with("session_token=test-token;"));
+        assert!(cookie.contains("Path=/api/"));
+        assert!(cookie.contains("HttpOnly"));
+        assert!(cookie.contains("SameSite=Strict"));
+        assert!(!cookie.contains("Domain="));
+
+        let cleared = clear_session_cookie();
+        assert!(cleared.starts_with("session_token=;"));
+        assert!(cleared.contains("Max-Age=0"));
+    }
 }

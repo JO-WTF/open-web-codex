@@ -33,6 +33,14 @@ pub struct ApprovalDispatch {
     decision: &'static str,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedApproval {
+    pub approval_id: Uuid,
+    pub thread_id: String,
+    pub turn_id: Option<String>,
+    pub item_id: Option<String>,
+}
+
 #[derive(Debug, Error)]
 pub enum ApprovalServiceError {
     #[error("Approval was not found")]
@@ -116,7 +124,8 @@ impl ApprovalService {
                ON r.organization_id = p.organization_id AND r.codex_thread_id = $3 \
              WHERE p.runtime_key = $5 AND p.status = 'active' \
              ORDER BY r.created_at DESC LIMIT 1 \
-             ON CONFLICT (profile_id, runtime_request_id) WHERE runtime_request_id IS NOT NULL \
+             ON CONFLICT (profile_id, thread_id, runtime_request_id) \
+             WHERE runtime_request_id IS NOT NULL AND thread_id IS NOT NULL \
              DO NOTHING RETURNING id",
         )
         .bind(method)
@@ -131,9 +140,10 @@ impl ApprovalService {
         }
         let existing = sqlx::query(
             "SELECT a.id FROM approvals a JOIN profiles p ON p.id = a.profile_id \
-             WHERE p.runtime_key = $1 AND a.runtime_request_id = $2",
+             WHERE p.runtime_key = $1 AND a.thread_id = $2 AND a.runtime_request_id = $3",
         )
         .bind(&self.runtime_key)
+        .bind(&thread_id)
         .bind(runtime_request_id)
         .fetch_optional(&self.db)
         .await?;
@@ -160,6 +170,85 @@ impl ApprovalService {
         .fetch_all(&self.db)
         .await?;
         Ok(rows.iter().map(summary_from_row).collect())
+    }
+
+    /// Resolve a Runtime request id to its browser-safe platform identity.
+    ///
+    /// Runtime resolution can race the HTTP response path or can happen
+    /// without a browser decision (for example after interruption or Runtime
+    /// auto-resolution). In either case, no active approval may remain visible
+    /// after the Runtime says the request is resolved. Existing decisions are
+    /// retained and determine the terminal state; an undecided request becomes
+    /// cancelled.
+    pub async fn resolve_runtime_request(
+        &self,
+        thread_id: &str,
+        runtime_request_id: &Value,
+    ) -> Result<Option<ResolvedApproval>, ApprovalServiceError> {
+        if thread_id.trim().is_empty() {
+            return Err(ApprovalServiceError::Invalid);
+        }
+        if !(runtime_request_id.is_u64()
+            || runtime_request_id.is_i64()
+            || runtime_request_id.is_string())
+        {
+            return Err(ApprovalServiceError::Invalid);
+        }
+        let runtime_request_id =
+            serde_json::to_string(runtime_request_id).map_err(|_| ApprovalServiceError::Invalid)?;
+        let mut transaction = self.db.begin().await?;
+        let row = sqlx::query(
+            "SELECT a.id, a.thread_id, a.request_payload, a.state, a.decision \
+             FROM approvals a JOIN profiles p ON p.id = a.profile_id \
+             WHERE p.runtime_key = $1 AND a.thread_id = $2 AND a.runtime_request_id = $3 \
+             FOR UPDATE OF a",
+        )
+        .bind(&self.runtime_key)
+        .bind(thread_id)
+        .bind(&runtime_request_id)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        let Some(row) = row else {
+            transaction.commit().await?;
+            return Ok(None);
+        };
+
+        let approval_id: Uuid = row.get("id");
+        let thread_id: Option<String> = row.get("thread_id");
+        let thread_id = thread_id
+            .filter(|value| !value.is_empty())
+            .ok_or(ApprovalServiceError::Invalid)?;
+        let request_payload: Value = row.get("request_payload");
+        let turn_id = request_payload
+            .get("turnId")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let item_id = request_payload
+            .get("itemId")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let state: String = row.get("state");
+        let decision: Option<String> = row.get("decision");
+        if let Some(terminal_state) = resolved_terminal_state(&state, decision.as_deref()) {
+            sqlx::query(
+                "UPDATE approvals SET state = $1, decided_at = COALESCE(decided_at, now()), \
+                 version = version + 1 WHERE id = $2",
+            )
+            .bind(terminal_state)
+            .bind(approval_id)
+            .execute(&mut *transaction)
+            .await?;
+        }
+        transaction.commit().await?;
+
+        Ok(Some(ResolvedApproval {
+            approval_id,
+            thread_id,
+            turn_id,
+            item_id,
+        }))
     }
 
     pub async fn begin_decision(
@@ -287,7 +376,19 @@ impl ApprovalService {
         .execute(&mut *transaction)
         .await?;
         if updated.rows_affected() != 1 {
-            return Err(ApprovalServiceError::Conflict);
+            let already_completed: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM approvals WHERE id = $1 \
+                 AND organization_id = $2 AND state = $3 AND decision = $4)",
+            )
+            .bind(dispatch.approval_id)
+            .bind(actor.organization_id)
+            .bind(dispatch.terminal_state)
+            .bind(dispatch.decision)
+            .fetch_one(&mut *transaction)
+            .await?;
+            if !already_completed {
+                return Err(ApprovalServiceError::Conflict);
+            }
         }
         insert_audit(&mut transaction, actor, dispatch, "success").await?;
         transaction.commit().await?;
@@ -313,6 +414,17 @@ impl ApprovalService {
         transaction.commit().await?;
         Ok(())
     }
+}
+
+fn resolved_terminal_state(state: &str, decision: Option<&str>) -> Option<&'static str> {
+    if !matches!(state, "pending" | "dispatching" | "delivery_unknown") {
+        return None;
+    }
+    Some(match decision {
+        Some("rejected") => "rejected",
+        Some(_) => "approved",
+        None => "cancelled",
+    })
 }
 
 fn approval_payload(request_type: &str, params: &Value) -> Value {
@@ -467,7 +579,8 @@ fn approval_response(
 #[cfg(test)]
 mod tests {
     use super::{
-        approval_response, validate_user_input_answers, COMMAND_APPROVAL, PERMISSIONS_APPROVAL,
+        approval_response, resolved_terminal_state, validate_user_input_answers, COMMAND_APPROVAL,
+        PERMISSIONS_APPROVAL,
     };
     use open_web_codex_platform_contracts::{
         ApprovalDecision, RespondUserInputRequest, UserInputAnswer,
@@ -534,5 +647,24 @@ mod tests {
             version: 0,
         };
         assert!(validate_user_input_answers(&payload, &missing).is_err());
+    }
+
+    #[test]
+    fn runtime_resolution_settles_only_active_approvals_and_preserves_decisions() {
+        assert_eq!(resolved_terminal_state("pending", None), Some("cancelled"));
+        assert_eq!(
+            resolved_terminal_state("dispatching", Some("approved")),
+            Some("approved")
+        );
+        assert_eq!(
+            resolved_terminal_state("delivery_unknown", Some("rejected")),
+            Some("rejected")
+        );
+        assert_eq!(
+            resolved_terminal_state("dispatching", Some("answered")),
+            Some("approved")
+        );
+        assert_eq!(resolved_terminal_state("approved", Some("approved")), None);
+        assert_eq!(resolved_terminal_state("rejected", Some("rejected")), None);
     }
 }

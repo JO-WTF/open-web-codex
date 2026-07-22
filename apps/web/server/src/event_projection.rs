@@ -406,6 +406,7 @@ fn internal_message(data: &[u8]) -> Result<Option<Map<String, Value>>, String> {
 fn classify_method(method: &str) -> (&'static str, &'static str) {
     match method {
         "platform/approvalRequested" => ("platform.approval.requested", "requested"),
+        "serverRequest/resolved" => ("platform.approval.resolved", "resolved"),
         "item/started" => ("codex.item.started", "started"),
         "item/completed" => ("codex.item.completed", "completed"),
         "turn/started" => ("codex.turn.started", "started"),
@@ -430,17 +431,52 @@ fn classify_method(method: &str) -> (&'static str, &'static str) {
 fn project_event_data(method: &str, params: &Map<String, Value>) -> Value {
     let mut data = Map::new();
     data.insert("sourceType".to_string(), Value::String(method.to_string()));
+    if method == "serverRequest/resolved" {
+        if let Some(request_id) = params
+            .get("requestId")
+            .and_then(Value::as_str)
+            .filter(|value| Uuid::parse_str(value).is_ok())
+        {
+            data.insert(
+                "requestId".to_string(),
+                Value::String(request_id.to_string()),
+            );
+        }
+    }
     for key in [
         "approvalId",
         "requestMethod",
         "requestParams",
+        "error",
+        "message",
+        "additionalDetails",
+        "codexErrorInfo",
+        "failureReason",
+        "name",
+        "status",
+        "thread",
+        "turn",
         "delta",
         "summaryIndex",
         "contentIndex",
         "startedAtMs",
         "completedAtMs",
+        "startedAt",
+        "started_at",
+        "explanation",
+        "plan",
+        "steps",
+        "diff",
         "threadName",
         "tokenUsage",
+        "model",
+        "reasoningEffort",
+        "sandbox",
+        "approvalPolicy",
+        "goal",
+        "rateLimits",
+        "command",
+        "stdin",
     ] {
         if let Some(value) = params.get(key) {
             data.insert(key.to_string(), sanitize_value(value, key));
@@ -627,14 +663,61 @@ mod tests {
     }
 
     #[test]
+    fn keeps_webapp_runtime_state_and_error_details_with_secret_redaction() {
+        let status = br#"data: {"method":"app-server-event","params":{"message":{"method":"thread/status/changed","params":{"threadId":"thread-1","status":{"type":"active","activeFlags":["waiting"]}}}}}
+
+"#;
+        let status = project_frame(status).unwrap().unwrap();
+        assert_eq!(status.event_type, "codex.unknown");
+        assert_eq!(
+            status.payload["data"]["sourceType"],
+            "thread/status/changed"
+        );
+        assert_eq!(status.payload["data"]["status"]["type"], "active");
+
+        let error = br#"data: {"method":"app-server-event","params":{"message":{"method":"error","params":{"threadId":"thread-1","error":{"message":"stream disconnected","additionalDetails":"retrying sampling request 1/3","apiKey":"must-not-leak"}}}}}
+
+"#;
+        let error = project_frame(error).unwrap().unwrap();
+        assert_eq!(error.payload["data"]["sourceType"], "error");
+        assert_eq!(
+            error.payload["data"]["error"]["message"],
+            "stream disconnected"
+        );
+        assert_eq!(error.payload["data"]["error"]["apiKey"], "[redacted]");
+        assert!(!error.payload.to_string().contains("must-not-leak"));
+    }
+
+    #[test]
     fn projects_platform_approvals_without_runtime_request_ids() {
-        let frame = br#"data: {"method":"app-server-event","params":{"message":{"method":"platform/approvalRequested","params":{"approvalId":"018f-id","threadId":"thread-1"}}}}
+        let frame = br#"data: {"method":"app-server-event","params":{"message":{"method":"platform/approvalRequested","params":{"approvalId":"018f-id","threadId":"thread-1","turnId":"turn-1","itemId":"item-1"}}}}
 
 "#;
         let event = project_frame(frame).unwrap().unwrap();
         assert_eq!(event.event_type, "platform.approval.requested");
+        assert_eq!(event.turn_id.as_deref(), Some("turn-1"));
+        assert_eq!(event.item_id.as_deref(), Some("item-1"));
         assert_eq!(event.payload["data"]["approvalId"], "018f-id");
         assert!(!event.payload.to_string().contains("requestId"));
+    }
+
+    #[test]
+    fn projects_only_platform_ids_for_resolved_approvals() {
+        let approval_id = Uuid::now_v7();
+        let safe = format!(
+            "data: {{\"method\":\"app-server-event\",\"params\":{{\"message\":{{\"method\":\"serverRequest/resolved\",\"params\":{{\"threadId\":\"thread-1\",\"turnId\":\"turn-1\",\"itemId\":\"item-1\",\"requestId\":\"{approval_id}\"}}}}}}}}\n\n"
+        );
+        let event = project_frame(safe.as_bytes()).unwrap().unwrap();
+        assert_eq!(event.event_type, "platform.approval.resolved");
+        assert_eq!(event.turn_id.as_deref(), Some("turn-1"));
+        assert_eq!(event.item_id.as_deref(), Some("item-1"));
+        assert_eq!(event.payload["data"]["requestId"], approval_id.to_string());
+
+        let unsafe_frame = br#"data: {"method":"app-server-event","params":{"message":{"method":"serverRequest/resolved","params":{"threadId":"thread-1","requestId":77}}}}
+
+"#;
+        let event = project_frame(unsafe_frame).unwrap().unwrap();
+        assert!(event.payload["data"].get("requestId").is_none());
     }
 
     #[test]

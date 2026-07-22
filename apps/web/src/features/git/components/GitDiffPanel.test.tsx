@@ -11,16 +11,16 @@ const menuNew = vi.hoisted(() =>
 const menuItemNew = vi.hoisted(() => vi.fn(async (options) => options));
 const clipboardWriteText = vi.hoisted(() => vi.fn());
 
-vi.mock("@/platform/browser/menu", () => ({
+vi.mock("@tauri-apps/api/menu", () => ({
   Menu: { new: menuNew },
   MenuItem: { new: menuItemNew },
 }));
 
-vi.mock("@/platform/browser/window", () => ({
+vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ scaleFactor: () => 1 }),
 }));
 
-vi.mock("@/platform/browser/dpi", () => ({
+vi.mock("@tauri-apps/api/dpi", () => ({
   LogicalPosition: class LogicalPosition {
     x: number;
     y: number;
@@ -33,12 +33,12 @@ vi.mock("@/platform/browser/dpi", () => ({
 
 const revealItemInDir = vi.hoisted(() => vi.fn());
 
-vi.mock("@/platform/browser/opener", () => ({
+vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: vi.fn(),
   revealItemInDir: (...args: unknown[]) => revealItemInDir(...args),
 }));
 
-vi.mock("@/platform/browser/dialog", () => ({
+vi.mock("@tauri-apps/plugin-dialog", () => ({
   ask: vi.fn(async () => true),
 }));
 

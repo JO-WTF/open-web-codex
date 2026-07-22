@@ -1,4 +1,4 @@
-import { listen } from "@/platform/browser/event";
+import { listen } from "@tauri-apps/api/event";
 import type {
   AppServerEvent,
   DictationEvent,

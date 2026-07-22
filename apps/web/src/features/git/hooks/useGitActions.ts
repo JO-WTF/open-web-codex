@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ask } from "@/platform/browser/dialog";
+import { ask } from "@tauri-apps/plugin-dialog";
 import {
   applyWorktreeChanges as applyWorktreeChangesService,
   createGitHubRepo as createGitHubRepoService,

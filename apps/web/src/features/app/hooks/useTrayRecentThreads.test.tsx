@@ -10,7 +10,7 @@ import {
 const isTauriMock = vi.hoisted(() => vi.fn(() => true));
 const setTrayRecentThreadsMock = vi.fn();
 
-vi.mock("@/platform/browser/core", () => ({
+vi.mock("@tauri-apps/api/core", () => ({
   isTauri: isTauriMock,
 }));
 

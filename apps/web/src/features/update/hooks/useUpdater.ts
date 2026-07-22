@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { isTauri } from "@/platform/browser/core";
-import { check } from "@/platform/browser/updater";
-import { relaunch } from "@/platform/browser/process";
-import type { DownloadEvent, Update } from "@/platform/browser/updater";
+import { isTauri } from "@tauri-apps/api/core";
+import { check } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
+import type { DownloadEvent, Update } from "@tauri-apps/plugin-updater";
 import type { DebugEntry } from "../../../types";
 import {
   buildReleaseTagUrl,

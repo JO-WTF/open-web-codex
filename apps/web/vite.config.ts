@@ -44,6 +44,19 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
+      "@tauri-apps/api/app": fileURLToPath(new URL("./browser/browser/app.ts", import.meta.url)),
+      "@tauri-apps/api/core": fileURLToPath(new URL("./browser/browser/core.ts", import.meta.url)),
+      "@tauri-apps/api/dpi": fileURLToPath(new URL("./browser/browser/dpi.ts", import.meta.url)),
+      "@tauri-apps/api/event": fileURLToPath(new URL("./browser/browser/event.ts", import.meta.url)),
+      "@tauri-apps/api/menu": fileURLToPath(new URL("./browser/browser/menu.ts", import.meta.url)),
+      "@tauri-apps/api/webview": fileURLToPath(new URL("./browser/browser/webview.ts", import.meta.url)),
+      "@tauri-apps/api/window": fileURLToPath(new URL("./browser/browser/window.ts", import.meta.url)),
+      "@tauri-apps/plugin-dialog": fileURLToPath(new URL("./browser/browser/dialog.ts", import.meta.url)),
+      "@tauri-apps/plugin-notification": fileURLToPath(new URL("./browser/browser/notification.ts", import.meta.url)),
+      "@tauri-apps/plugin-opener": fileURLToPath(new URL("./browser/browser/opener.ts", import.meta.url)),
+      "@tauri-apps/plugin-process": fileURLToPath(new URL("./browser/browser/process.ts", import.meta.url)),
+      "@tauri-apps/plugin-updater": fileURLToPath(new URL("./browser/browser/updater.ts", import.meta.url)),
+      "tauri-plugin-liquid-glass-api": fileURLToPath(new URL("./browser/browser/liquidGlass.ts", import.meta.url)),
       "@": fileURLToPath(new URL("./src", import.meta.url)),
       "@app": fileURLToPath(new URL("./src/features/app", import.meta.url)),
       "@settings": fileURLToPath(new URL("./src/features/settings", import.meta.url)),
@@ -62,8 +75,9 @@ export default defineConfig({
     __APP_GIT_BRANCH__: JSON.stringify(gitBranch()),
   },
   server: {
-    host: "127.0.0.1",
-    port: 5173,
+    host: process.env.OPEN_WEB_CODEX_FRONTEND_HOST ?? "127.0.0.1",
+    port: Number(process.env.OPEN_WEB_CODEX_FRONTEND_PORT ?? 1420),
+    strictPort: true,
     proxy: {
       "/api": {
         target: process.env.OPEN_WEB_CODEX_DEV_SERVER ?? "http://127.0.0.1:4800",
@@ -73,7 +87,7 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx", "browser/**/*.test.ts", "browser/**/*.test.tsx"],
     setupFiles: ["src/test/vitest.setup.ts"],
   },
 });

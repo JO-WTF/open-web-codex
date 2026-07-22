@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use axum::{
+    body::Body,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{header, HeaderName, HeaderValue, Response, StatusCode},
     Extension, Json,
 };
 use open_web_codex_git_runtime::{CommitAuthor, GitRuntime, GitRuntimeError};
@@ -25,6 +26,7 @@ use uuid::Uuid;
 use crate::middleware::auth::AuthenticatedUser;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
+type AssetResult = Result<Response<Body>, (StatusCode, Json<PlatformError>)>;
 
 pub async fn list_git_roots(
     State(state): State<AppState>,
@@ -81,6 +83,58 @@ pub async fn read_file(
         content: content.content,
         truncated: content.truncated,
     }))
+}
+
+pub async fn read_image_asset(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(run_id): Path<Uuid>,
+    Query(query): Query<WorkspacePathQuery>,
+    Extension(git): Extension<Arc<GitRuntime>>,
+) -> AssetResult {
+    let workspace_id = authorized_workspace(&state, &auth, run_id, false).await?;
+    let asset = git
+        .read_image_asset(workspace_id, &query.path)
+        .await
+        .map_err(git_error)?;
+    let content_length = HeaderValue::from_str(&asset.bytes.len().to_string()).map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PlatformError::internal(
+                "workspace image response could not be created",
+            )),
+        )
+    })?;
+    let mut response = Response::new(Body::from(asset.bytes));
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(asset.media_type),
+    );
+    headers.insert(header::CONTENT_LENGTH, content_length);
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        HeaderName::from_static("cross-origin-resource-policy"),
+        HeaderValue::from_static("same-origin"),
+    );
+    headers.insert(
+        HeaderName::from_static("referrer-policy"),
+        HeaderValue::from_static("no-referrer"),
+    );
+    headers.insert(
+        HeaderName::from_static("content-security-policy"),
+        HeaderValue::from_static(
+            "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:",
+        ),
+    );
+    Ok(response)
 }
 
 pub async fn write_agents_file(
@@ -814,6 +868,18 @@ fn git_error(error: GitRuntimeError) -> (StatusCode, Json<PlatformError>) {
             StatusCode::CONFLICT,
             Json(PlatformError::bad_request(
                 "Git workspace request was rejected",
+            )),
+        ),
+        GitRuntimeError::UnsupportedImage(_) => (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Json(PlatformError::bad_request(
+                "Workspace image type was rejected",
+            )),
+        ),
+        GitRuntimeError::ImageTooLarge => (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(PlatformError::bad_request(
+                "Workspace image exceeds the maximum supported size",
             )),
         ),
         GitRuntimeError::Git { .. } | GitRuntimeError::Io { .. } => (

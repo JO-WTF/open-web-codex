@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ask } from "@/platform/browser/dialog";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { SelectedLineRange } from "@pierre/diffs";
 import { WorkerPoolContextProvider } from "@pierre/diffs/react";

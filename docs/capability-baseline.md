@@ -6,13 +6,13 @@ requirements belong in `product-design.md`; planned work belongs in
 
 ## Snapshot
 
-Observed on 2026-07-22 from the current synchronization branch:
+Observed on 2026-07-23 from the current synchronization branch:
 
 | Component | State |
 | --- | --- |
 | Codex subtree | integrated through `openai/codex` `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9` |
-| Observed official main | `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9`; no commits await integration |
-| Local Codex seams vs official main | 126 local-only paths; no upstream-only, diverged or missing local paths |
+| Observed official main | `10cc57c95c2c8f1d01c8deaa75efb29b099d9c28`; 26 commits await the next dedicated sync branch |
+| Local Codex seams | retained changes remain classified by `docs/custom-codex-patch-map.md`; compare them against `codex-upstream/main`, never this repository's `main` |
 | Local customization footprint | six retained Runtime/TUI seams, derived artifacts and focused tests; `ToolName` uses the official implementation |
 | Web platform | Restored browser UI, Axum/PostgreSQL platform, native Profile Registry/Host, encrypted Provider Secret injection, durable approvals, isolated Git workspaces, lease-based Run orchestration, typed REST resources and authenticated WebSocket |
 
@@ -63,17 +63,22 @@ Observed on 2026-07-22 from the current synchronization branch:
   `/api/events/ws` stream. Durable events are replayed by Task sequence; live
   delivery is filtered by Organization. The former local gateway, raw RPC,
   query-token event stream and desktop application are absent.
-- The checked-in React component tree and CSS match the established `main`
-  browser product. Existing components retain their layout and behavior while
-  Tauri imports are replaced by browser adapters. The production build, lint,
-  typecheck, no-desktop gate and all 1,119 browser tests pass.
-- The browser adapter covers projects, worktrees/clones, Threads/Turns, durable
-  events, approvals and structured input, Provider/model selection, Profile
-  account/login/rate limits, MCP/Skills/Apps/config/agents/prompts, terminal
-  streaming, files, nested Git roots, status/diff/stage/revert/commit/branches,
-  remotes, GitHub issues/pull requests/review data, local usage and dictation.
-  Official login completion is reduced to a typed Profile status before being
-  projected to the existing account-switching UI.
+- The checked-in 1421 WebApp React component tree and CSS match the established
+  `main` WebApp byte-for-byte. `src/services/webClient.ts` is the only product
+  source seam: it preserves the existing UI method contract while calling typed
+  Server resources. Typecheck, production build, no-desktop and UI-parity gates
+  pass; all 1,123 browser tests pass. Direct-Server tests cover history,
+  reconnect/resync replay, status recovery, current-Thread checkout selection,
+  Provider/model defaults, approvals, structured input, MCP and rate limits.
+- The 1421 WebApp adapter currently covers managed Projects, Threads/Turns,
+  durable events, approvals and structured input, Provider/model selection,
+  Profile rate limits, MCP status, workspace files, Git status, message send,
+  interrupt and steer. A real Codex/DeepSeek journey verifies Provider add and
+  switch, code execution, real stdio MCP invocation, approval resolution,
+  delayed Turn state, cross-Thread history restore, file preview and durable/live
+  event ordering. Browser smoke additionally verifies Running-to-Idle sidebar
+  convergence while switching Threads. The old root App Bridge has been deleted; both root and
+  `/web` now load only WebApp, while unused old App source awaits later pruning.
 - The latest official managed-config exact-value enforcement, missing sandbox
   path handling, and skill-name metrics sanitization changes are integrated.
   Their config, MCP, Core Skills, protocol and app-server regressions pass on
@@ -131,15 +136,15 @@ security, Push delivery, or every Studio capability.
 | Authorization | Project/Task/Run and runtime calls enforce session Organization; Provider/approval calls additionally enforce Profile ownership; a two-Organization denial regression passes | centralized policy abstraction, Project-specific roles and the full concurrent multi-user matrix remain missing |
 | Codex bridge | Fake/Real adapter and event projection exist; Real uses the native Profile Registry/Host JSONL connection. Provider Secrets are encrypted and injected only into the owned child environment. Runtime-facing operations remain internal and browser routes are typed | composition is still one configured Profile process per server; per-user dynamic process routing remains incomplete |
 | Task/Run | CRUD/start/cancel/message/steer/compact/review, idempotent scheduling, DB leases/heartbeats/recovery, isolated Git workspaces, safe Item/Delta and approval projection, monotonic replay, terminal execution, workspace files, nested Git roots, full local Git operations and explicit remote operations exist | artifact storage, approval expiry/restart delivery, protected-branch policy and full multi-Profile routing remain incomplete |
-| Browser | established `main` UI and CSS run through typed resources for workspace/thread/message, Profile, approvals, Provider/model, terminal, file/diff, Git/GitHub, usage, settings, prompts, agents and dictation workflows | deployment-managed update/Tailscale actions, server-path desktop reveal/open behavior, live application of arbitrary Codex CLI args, usage model/agent-time attribution, cookie-only sessions and production accessibility remain incomplete |
+| Browser | established `main` 1421 WebApp UI and CSS run through typed resources for workspace/thread/message, approvals, Provider/model, MCP/rate-limit snapshots, files and Git status; the real core journey and Thread-switch browser smoke pass; no standalone Gateway or old root Bridge is loaded or built | broader visual/accessibility regression, unused old App source pruning, cookie-only sessions and production accessibility remain incomplete |
 
 ## Immediate capability gates
 
 1. Derive the remaining Manifest method sets and experimental state from
    generated Codex protocol/build facts.
 2. Keep the digest-addressed contract bundle and Web feature policy in sync.
-3. Keep the passing real Thread restart/resume/read smoke and add multi-cwd,
-   Provider, approval, multi-agent and MCP smoke suites before promoting the
-   corresponding declarations to product support.
+3. Keep the passing real Thread restart/resume/read and Provider/approval/MCP
+   journey as a release gate; add multi-cwd and multi-agent isolation coverage
+   before promoting the corresponding declarations to product support.
 4. Replace the single configured Profile composition root with authorized
    per-user Profile routing before multi-user Beta.

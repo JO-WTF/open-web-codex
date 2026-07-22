@@ -1,4 +1,4 @@
-import { isTauri } from "@/platform/browser/core";
+import { isTauri } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useRef } from "react";
 import { setTrayRecentThreads } from "@services/tauri";
 import type { ThreadSummary, TrayRecentThreadEntry, WorkspaceInfo } from "../../../types";

@@ -3,7 +3,7 @@ import { cancelCodexLogin, runCodexLogin } from "../../../services/tauri";
 import { subscribeAppServerEvents } from "../../../services/events";
 import type { AccountSnapshot } from "../../../types";
 import { getAppServerParams, getAppServerRawMethod } from "../../../utils/appServerEvents";
-import { openUrl } from "@/platform/browser/opener";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 type UseAccountSwitchingArgs = {
   activeWorkspaceId: string | null;

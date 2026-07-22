@@ -234,9 +234,9 @@ impl CodexAdapter for FakeCodexAdapter {
                     }
                 }
 
-                // Schedule a mock turn after a brief delay (handled by subscribe_events)
-                // For now just acknowledge
-                Ok(json!({ "status": "sent" }))
+                // Schedule a mock turn after a brief delay (handled by subscribe_events).
+                let turn_id = format!("turn-{}", Uuid::now_v7());
+                Ok(json!({ "status": "sent", "turnId": turn_id }))
             }
 
             other => Err(AdapterError::NotImplemented(format!(

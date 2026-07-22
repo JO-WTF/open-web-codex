@@ -1,4 +1,9 @@
-use axum::{extract::State, http::StatusCode, Extension, Json};
+use axum::{
+    extract::State,
+    http::{header, HeaderName, StatusCode},
+    response::AppendHeaders,
+    Extension, Json,
+};
 use open_web_codex_auth::hash_password;
 use open_web_codex_platform_contracts::error::PlatformError;
 use open_web_codex_platform_contracts::{BootstrapRequest, BootstrapResponse, User};
@@ -8,9 +13,10 @@ use sha2::{Digest, Sha256};
 use sqlx::Row;
 use uuid::Uuid;
 
-use super::RuntimeProfileBinding;
+use super::{sessions::session_cookie, RuntimeProfileBinding};
 
-type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
+type ApiResult<T> =
+    Result<(AppendHeaders<[(HeaderName, String); 1]>, Json<T>), (StatusCode, Json<PlatformError>)>;
 
 /// POST /api/bootstrap
 ///
@@ -160,11 +166,14 @@ pub async fn bootstrap(
         updated_at: org.get("updated_at"),
     };
 
-    Ok(Json(BootstrapResponse {
-        user: user_data,
-        session_token,
-        organization: org_data,
-    }))
+    Ok((
+        AppendHeaders([(header::SET_COOKIE, session_cookie(&session_token))]),
+        Json(BootstrapResponse {
+            user: user_data,
+            session_token,
+            organization: org_data,
+        }),
+    ))
 }
 
 fn internal_database_error(_error: sqlx::Error) -> (StatusCode, Json<PlatformError>) {

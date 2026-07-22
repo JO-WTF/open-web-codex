@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
-import { open } from "@/platform/browser/dialog";
+import { open } from "@tauri-apps/plugin-dialog";
 import type {
   AppSettings,
   CodexDoctorResult,

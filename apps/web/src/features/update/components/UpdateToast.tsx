@@ -1,6 +1,6 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { openUrl } from "@/platform/browser/opener";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import type { PostUpdateNoticeState, UpdateState } from "../hooks/useUpdater";
 import {
   ToastActions,

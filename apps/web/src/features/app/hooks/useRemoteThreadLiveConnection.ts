@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getCurrentWindow } from "@/platform/browser/window";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { subscribeAppServerEvents } from "@services/events";
 import { threadLiveSubscribe, threadLiveUnsubscribe } from "@services/tauri";
 import {

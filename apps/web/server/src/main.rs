@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use axum::Router;
 use clap::Parser;
-use open_web_codex_approval_service::ApprovalService;
+use open_web_codex_approval_service::{ApprovalService, ResolvedApproval};
 use open_web_codex_git_runtime::{GitRuntime, GitRuntimeConfig};
 use open_web_codex_profile_host::{ProfileHost, ProfileHostConfig};
 use open_web_codex_profile_registry::ProfileRegistry;
@@ -119,6 +119,12 @@ async fn main() -> anyhow::Result<()> {
         codex_home: cli.codex_home.clone().map(Arc::new),
         capabilities: routes::RuntimeCapabilityState::default(),
     };
+    ensure_transitional_profile_binding(
+        &state.db,
+        &profile_binding.runtime_key,
+        &profile_binding.name,
+    )
+    .await?;
     let (adapter, providers): (Arc<dyn CodexAdapter>, Arc<dyn AuthorizedProviderOperations>) =
         match cli.codex_mode.as_str() {
             "fake" => {
@@ -139,12 +145,6 @@ async fn main() -> anyhow::Result<()> {
                     workspace_root = %workspace_root.display(),
                     "starting native Codex Profile Host"
                 );
-                ensure_transitional_profile_binding(
-                    &state.db,
-                    &profile_binding.runtime_key,
-                    &profile_binding.name,
-                )
-                .await?;
                 let master_key = std::env::var("OPEN_WEB_CODEX_MASTER_KEY").map_err(|_| {
                     anyhow::anyhow!("OPEN_WEB_CODEX_MASTER_KEY is required in real Codex mode")
                 })?;
@@ -219,6 +219,40 @@ async fn main() -> anyhow::Result<()> {
             // to connected browsers. The database cursor is therefore always
             // available when a client reconnects after seeing an event.
             while let Some(data) = rx.recv().await {
+                let runtime_resolution = match runtime_resolved_request(&data) {
+                    Ok(runtime_resolution) => runtime_resolution,
+                    Err(error) => {
+                        tracing::warn!("invalid server-request resolution frame: {error}");
+                        continue;
+                    }
+                };
+                if let Some((thread_id, runtime_request_id)) = runtime_resolution {
+                    let resolved = match approvals
+                        .resolve_runtime_request(&thread_id, &runtime_request_id)
+                        .await
+                    {
+                        Ok(Some(resolved)) => resolved,
+                        Ok(None) => {
+                            tracing::warn!(
+                                "server-request resolution had no persisted platform approval"
+                            );
+                            continue;
+                        }
+                        Err(error) => {
+                            tracing::warn!("server-request resolution failed: {error}");
+                            continue;
+                        }
+                    };
+                    let public_data = match public_resolved_approval_frame(&data, &resolved) {
+                        Ok(frame) => frame,
+                        Err(error) => {
+                            tracing::warn!("approval resolution projection failed: {error}");
+                            continue;
+                        }
+                    };
+                    persist_and_broadcast(&public_data, &projection_db, &event_bus).await;
+                    continue;
+                }
                 let captured = match approvals.capture_event_frame(&data).await {
                     Ok(captured) => captured,
                     Err(error) => {
@@ -236,19 +270,7 @@ async fn main() -> anyhow::Result<()> {
                     },
                     None => data,
                 };
-                match event_projection::persist_frame(&public_data, &projection_db).await {
-                    Ok(Some(projected)) => {
-                        let live = open_web_codex_platform_store::LiveEvent {
-                            organization_id: projected.organization_id,
-                            payload: projected.payload,
-                        };
-                        if event_bus.send(live).is_err() {
-                            tracing::debug!("event bus: no active receivers, dropping event");
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(error) => tracing::warn!("event projection failed: {error}"),
-                }
+                persist_and_broadcast(&public_data, &projection_db, &event_bus).await;
             }
 
             let _ = sub.await;
@@ -285,6 +307,107 @@ async fn main() -> anyhow::Result<()> {
     serve_result?;
 
     Ok(())
+}
+
+async fn persist_and_broadcast(
+    data: &[u8],
+    projection_db: &sqlx::PgPool,
+    event_bus: &tokio::sync::broadcast::Sender<open_web_codex_platform_store::LiveEvent>,
+) {
+    match event_projection::persist_frame(data, projection_db).await {
+        Ok(Some(projected)) => {
+            let live = open_web_codex_platform_store::LiveEvent {
+                organization_id: projected.organization_id,
+                payload: projected.payload,
+            };
+            if event_bus.send(live).is_err() {
+                tracing::debug!("event bus: no active receivers, dropping event");
+            }
+        }
+        Ok(None) => {}
+        Err(error) => tracing::warn!("event projection failed: {error}"),
+    }
+}
+
+fn runtime_resolved_request(frame: &[u8]) -> anyhow::Result<Option<(String, serde_json::Value)>> {
+    let payload = frame
+        .strip_prefix(b"data: ")
+        .and_then(|value| value.strip_suffix(b"\n\n"))
+        .ok_or_else(|| anyhow::anyhow!("invalid app-server event frame"))?;
+    let envelope: serde_json::Value = serde_json::from_slice(payload)?;
+    let Some(message) = envelope
+        .pointer("/params/message")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return Ok(None);
+    };
+    if message.get("method").and_then(serde_json::Value::as_str) != Some("serverRequest/resolved") {
+        return Ok(None);
+    }
+    let params = message
+        .get("params")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| anyhow::anyhow!("server-request resolution omitted params"))?;
+    let thread_id = params
+        .get("threadId")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("server-request resolution omitted threadId"))?
+        .to_string();
+    let request_id = params
+        .get("requestId")
+        .filter(|value| value.is_u64() || value.is_i64() || value.is_string())
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("server-request resolution omitted a valid requestId"))?;
+    Ok(Some((thread_id, request_id)))
+}
+
+fn public_resolved_approval_frame(
+    frame: &[u8],
+    resolved: &ResolvedApproval,
+) -> anyhow::Result<Vec<u8>> {
+    let payload = frame
+        .strip_prefix(b"data: ")
+        .and_then(|value| value.strip_suffix(b"\n\n"))
+        .ok_or_else(|| anyhow::anyhow!("invalid app-server event frame"))?;
+    let envelope: serde_json::Value = serde_json::from_slice(payload)?;
+    let workspace_id = envelope.pointer("/params/workspace_id").cloned();
+    let mut public_params = serde_json::Map::from_iter([
+        (
+            "threadId".to_string(),
+            serde_json::Value::String(resolved.thread_id.clone()),
+        ),
+        (
+            "requestId".to_string(),
+            serde_json::Value::String(resolved.approval_id.to_string()),
+        ),
+    ]);
+    if let Some(turn_id) = &resolved.turn_id {
+        public_params.insert(
+            "turnId".to_string(),
+            serde_json::Value::String(turn_id.clone()),
+        );
+    }
+    if let Some(item_id) = &resolved.item_id {
+        public_params.insert(
+            "itemId".to_string(),
+            serde_json::Value::String(item_id.clone()),
+        );
+    }
+    let public = serde_json::json!({
+        "method": "app-server-event",
+        "params": {
+            "workspace_id": workspace_id,
+            "message": {
+                "method": "serverRequest/resolved",
+                "params": public_params,
+            }
+        }
+    });
+    let mut projected = b"data: ".to_vec();
+    serde_json::to_writer(&mut projected, &public)?;
+    projected.extend_from_slice(b"\n\n");
+    Ok(projected)
 }
 
 fn public_approval_frame(frame: &[u8], approval_id: uuid::Uuid) -> anyhow::Result<Vec<u8>> {
@@ -329,6 +452,8 @@ fn public_approval_frame(frame: &[u8], approval_id: uuid::Uuid) -> anyhow::Resul
             request_params.insert("autoResolutionMs".to_string(), timeout.clone());
         }
     }
+    let turn_id = request_params.get("turnId").cloned();
+    let item_id = request_params.get("itemId").cloned();
     let public = serde_json::json!({
         "method": "app-server-event",
         "params": {
@@ -338,6 +463,8 @@ fn public_approval_frame(frame: &[u8], approval_id: uuid::Uuid) -> anyhow::Resul
                 "params": {
                     "approvalId": approval_id,
                     "threadId": thread_id,
+                    "turnId": turn_id,
+                    "itemId": item_id,
                     "requestMethod": request_method,
                     "requestParams": request_params,
                 }
@@ -438,7 +565,8 @@ async fn ensure_transitional_profile_binding(
 
 #[cfg(test)]
 mod tests {
-    use super::public_approval_frame;
+    use super::{public_approval_frame, public_resolved_approval_frame, runtime_resolved_request};
+    use open_web_codex_approval_service::ResolvedApproval;
     use serde_json::Value;
     use uuid::Uuid;
 
@@ -476,6 +604,60 @@ mod tests {
                 .pointer("/params/message/params/requestParams/command")
                 .unwrap(),
             "git status"
+        );
+    }
+
+    #[test]
+    fn public_resolution_uses_platform_identity_and_omits_runtime_request_id() {
+        let mut raw = br#"data: {"method":"app-server-event","params":{"workspace_id":"workspace-1","message":{"method":"serverRequest/resolved","params":{"threadId":"runtime-thread","requestId":"runtime-secret-77"}}}}"#.to_vec();
+        raw.extend_from_slice(b"\n\n");
+        assert_eq!(
+            runtime_resolved_request(&raw).unwrap(),
+            Some((
+                "runtime-thread".to_string(),
+                Value::String("runtime-secret-77".to_string())
+            ))
+        );
+
+        let approval_id = Uuid::now_v7();
+        let projected = public_resolved_approval_frame(
+            &raw,
+            &ResolvedApproval {
+                approval_id,
+                thread_id: "platform-thread".to_string(),
+                turn_id: Some("platform-turn".to_string()),
+                item_id: Some("platform-item".to_string()),
+            },
+        )
+        .expect("approval resolution projection");
+        let text = String::from_utf8(projected.clone()).unwrap();
+        assert!(!text.contains("runtime-secret-77"));
+        assert!(!text.contains("runtime-thread"));
+
+        let payload = projected
+            .strip_prefix(b"data: ")
+            .and_then(|value| value.strip_suffix(b"\n\n"))
+            .unwrap();
+        let value: Value = serde_json::from_slice(payload).unwrap();
+        assert_eq!(
+            value.pointer("/params/message/method").unwrap(),
+            "serverRequest/resolved"
+        );
+        assert_eq!(
+            value.pointer("/params/message/params/requestId").unwrap(),
+            &Value::String(approval_id.to_string())
+        );
+        assert_eq!(
+            value.pointer("/params/message/params/threadId").unwrap(),
+            "platform-thread"
+        );
+        assert_eq!(
+            value.pointer("/params/message/params/turnId").unwrap(),
+            "platform-turn"
+        );
+        assert_eq!(
+            value.pointer("/params/message/params/itemId").unwrap(),
+            "platform-item"
         );
     }
 }

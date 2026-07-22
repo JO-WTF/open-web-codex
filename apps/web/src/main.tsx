@@ -3,7 +3,6 @@ import ReactDOM from "react-dom/client";
 import * as Sentry from "@sentry/react";
 import App from "./App";
 import WebApp from "./WebApp";
-import PlatformSessionGate from "./platform/PlatformSessionGate";
 import { isMobilePlatform } from "./utils/platformPaths";
 
 const sentryDsn =
@@ -97,8 +96,6 @@ const isWebMode =
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <PlatformSessionGate>
-      {isWebMode ? <WebApp /> : <App />}
-    </PlatformSessionGate>
+    {isWebMode ? <WebApp /> : <App />}
   </React.StrictMode>,
 );

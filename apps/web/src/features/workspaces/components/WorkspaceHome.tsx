@@ -6,7 +6,7 @@ import {
   type KeyboardEvent,
   type RefObject,
 } from "react";
-import { convertFileSrc } from "@/platform/browser/core";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import type {
   AppOption,
   CustomPromptOption,

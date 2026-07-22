@@ -1,7 +1,7 @@
 .PHONY: mvp web-install web-check web-test contracts-check codex-upstream-status codex-upstream-sync
 
 mvp:
-	./scripts/run-local.sh
+	./scripts/start-all.sh
 
 web-install:
 	cd apps/web && npm ci

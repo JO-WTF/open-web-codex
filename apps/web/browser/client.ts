@@ -157,6 +157,13 @@ export class PlatformClient {
     });
   }
 
+  createManagedProject(name: string) {
+    return this.request<Project>("/api/projects/managed", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
+  }
+
   listTasks(projectId: string) {
     return this.request<Task[]>(`/api/tasks?project_id=${encodeURIComponent(projectId)}`);
   }
@@ -241,7 +248,7 @@ export class PlatformClient {
       collaborationMode?: Record<string, unknown> | null;
     } = {},
   ) {
-    return this.request<{ status: string; thread_id: string }>(
+    return this.request<{ status: string; thread_id: string; turn_id: string }>(
       `/api/tasks/${encodeURIComponent(taskId)}/messages`,
       {
         method: "POST",
@@ -292,12 +299,27 @@ export class PlatformClient {
     );
   }
 
-  listEvents(taskId: string, afterSequence?: number) {
-    const query = new URLSearchParams({ limit: "200" });
+  listEvents(taskId: string, afterSequence?: number, limit = 200) {
+    const query = new URLSearchParams({ limit: String(Math.min(200, Math.max(1, limit))) });
     if (afterSequence != null) query.set("after_sequence", String(afterSequence));
     return this.request<RunEvent[]>(
       `/api/tasks/${encodeURIComponent(taskId)}/events?${query.toString()}`,
     );
+  }
+
+  async listAllEvents(taskId: string, afterSequence = 0) {
+    const events: RunEvent[] = [];
+    let cursor = afterSequence;
+    while (true) {
+      const page = await this.listEvents(taskId, cursor, 200);
+      events.push(...page);
+      if (page.length < 200) return events;
+      const next = page[page.length - 1]?.sequence;
+      if (typeof next !== "number" || next <= cursor) {
+        throw new Error("Task event replay did not advance its sequence cursor");
+      }
+      cursor = next;
+    }
   }
 
   listApprovals() {

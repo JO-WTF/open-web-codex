@@ -25,20 +25,22 @@ postgresql://$USER@127.0.0.1:5432/open_web_codex
 
 ## 启动
 
-用 Fake Runtime 验证平台与浏览器：
+用 Fake Runtime 验证 1421 WebApp 与 Server：
 
 ```bash
-./scripts/run-local.sh --fake
+./scripts/start-all.sh --fake
 ```
 
 用真实 Codex 启动：
 
 ```bash
-./scripts/run-local.sh
+./scripts/start-all.sh
 ```
 
-脚本会构建浏览器、平台服务和缺失的仓库 Codex Binary，执行数据库迁移，
-创建私有 Profile/Runner 目录，并在 `http://127.0.0.1:4800/` 提供整个应用。
+脚本在 `4800` 启动平台 Server，并在 `http://127.0.0.1:1421/web`
+启动 main 基线的独立 WebApp。WebApp 同源调用类型化 REST 和认证 WebSocket；
+不启动 4732/4733 daemon，也没有独立 Gateway 进程。真实模式要求仓库 Codex
+Binary 已构建；Fake 模式只用于 Server/WebApp 联调。
 本地 Secret Store 主密钥首次运行时生成在
 `.local/open-web-codex/master-key`，权限为仅当前用户可读；生产部署必须从外部
 Secret Manager 注入 `OPEN_WEB_CODEX_MASTER_KEY`。
@@ -46,7 +48,7 @@ Secret Manager 注入 `OPEN_WEB_CODEX_MASTER_KEY`。
 已有兼容 Binary 时可以显式指定：
 
 ```bash
-CODEX_BIN=/absolute/path/to/codex ./scripts/run-local.sh
+CODEX_BIN=/absolute/path/to/codex ./scripts/start-all.sh
 ```
 
 含密码的数据库 URL 推荐放在仅当前用户可读的文件中：
@@ -54,23 +56,39 @@ CODEX_BIN=/absolute/path/to/codex ./scripts/run-local.sh
 ```bash
 printf '%s\n' 'postgresql://user:password@host:5432/open_web_codex' > .local/database-url
 chmod 600 .local/database-url
-./scripts/run-local.sh --database-url-file .local/database-url
+DATABASE_URL="$(<.local/database-url)" ./scripts/start-all.sh
 ```
 
 后台管理：
 
 ```bash
-./scripts/run-local.sh --background
+./scripts/start-all.sh
 ./scripts/run-local.sh --status
-./scripts/run-local.sh --stop
+./scripts/start-all.sh --stop
 ```
 
 确认已有构建输出为最新时可使用 `--no-build`。日志位于
 `.local/open-web-codex/logs/server.log`。
 
+## 真实平台端到端验证
+
+先用独立数据库和数据目录启动真实 Server，再从 `apps/web` 运行：
+
+```bash
+E2E_BASE_URL=http://127.0.0.1:4810 \
+DEEPSEEK_API_KEY_FILE=/absolute/path/to/deepseek-key \
+npm run test:e2e:real-platform
+```
+
+该用例使用真实 Codex Binary 和第三方 Chat Provider，创建独立 managed
+Project、主 Thread 与延时 Thread，并验证消息流事件顺序、代码执行、文件树和
+文件预览、Provider 新增/切换/上下文更新、真实 stdio MCP 调用、审批请求和
+决策、Thread 运行态收敛、跨 Thread 历史恢复，以及实时事件与持久重放一致性。
+密钥只从环境变量或权限受限的文件读取，不写入源码、日志或测试结果。
+
 ## 浏览器纵向流程
 
-1. 打开 `http://127.0.0.1:4800/`。
+1. 打开 `http://127.0.0.1:1421/web`。
 2. 首次运行选择初始化，创建首位 Owner；以后使用登录入口。
 3. 创建 Git Project，平台只接受受控 Git URL，不接受浏览器本地路径。
 4. 创建 Task 和 Run。Runner 创建私有 mirror 与该 Run 独占的可写 workspace。

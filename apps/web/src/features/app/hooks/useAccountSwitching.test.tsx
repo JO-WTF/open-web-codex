@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppServerEvent, AccountSnapshot } from "../../../types";
 import { cancelCodexLogin, runCodexLogin } from "../../../services/tauri";
 import { subscribeAppServerEvents } from "../../../services/events";
-import { openUrl } from "@/platform/browser/opener";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useAccountSwitching } from "./useAccountSwitching";
 
 vi.mock("../../../services/tauri", () => ({
@@ -17,7 +17,7 @@ vi.mock("../../../services/events", () => ({
   subscribeAppServerEvents: vi.fn(),
 }));
 
-vi.mock("@/platform/browser/opener", () => ({
+vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: vi.fn(),
 }));
 

@@ -24,7 +24,7 @@ import {
 import { DEFAULT_COMMIT_MESSAGE_PROMPT } from "@utils/commitMessagePrompt";
 import { SettingsView } from "./SettingsView";
 
-vi.mock("@/platform/browser/dialog", () => ({
+vi.mock("@tauri-apps/plugin-dialog", () => ({
   ask: vi.fn(),
   open: vi.fn(),
 }));

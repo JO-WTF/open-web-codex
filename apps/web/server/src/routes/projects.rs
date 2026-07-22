@@ -5,7 +5,9 @@ use axum::{
 };
 use open_web_codex_git_runtime::GitRuntime;
 use open_web_codex_platform_contracts::error::PlatformError;
-use open_web_codex_platform_contracts::{CreateProjectRequest, Project};
+use open_web_codex_platform_contracts::{
+    CreateManagedProjectRequest, CreateProjectRequest, Project,
+};
 use open_web_codex_platform_store::AppState;
 use sqlx::Row;
 use std::sync::Arc;
@@ -66,7 +68,7 @@ pub async fn create_project(
         ));
     }
     let branch = req.default_branch.unwrap_or_else(|| "main".to_string());
-    git.validate_source(&req.git_url).map_err(|_| {
+    git.validate_external_source(&req.git_url).map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
             Json(PlatformError::bad_request(
@@ -91,6 +93,53 @@ pub async fn create_project(
     .bind(&req.name)
     .bind(&req.git_url)
     .bind(&branch)
+    .fetch_one(&state.db)
+    .await
+    .map_err(internal_database_error)?;
+
+    Ok(Json(Project {
+        id: row.get("id"),
+        name: row.get("name"),
+        git_url: row.get("git_url"),
+        default_branch: row.get("default_branch"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    }))
+}
+
+/// POST /api/projects/managed — creates an empty server-owned Git project.
+pub async fn create_managed_project(
+    auth: AuthenticatedUser,
+    State(state): State<AppState>,
+    Json(req): Json<CreateManagedProjectRequest>,
+) -> ApiResult<Project> {
+    let name = req.name.trim();
+    if name.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(PlatformError::bad_request("name must not be empty")),
+        ));
+    }
+    if auth.organization_role != "owner" && auth.organization_role != "admin" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(PlatformError::forbidden(
+                "only Organization owners and admins can create projects",
+            )),
+        ));
+    }
+
+    let id = Uuid::now_v7();
+    let git_url = format!("managed://{id}");
+    let row = sqlx::query(
+        "INSERT INTO projects (id, organization_id, created_by, name, git_url, default_branch) VALUES ($1, $2, $3, $4, $5, 'main') \
+         RETURNING id, name, git_url, default_branch, created_at, updated_at",
+    )
+    .bind(id)
+    .bind(auth.organization_id)
+    .bind(auth.user_id)
+    .bind(name)
+    .bind(&git_url)
     .fetch_one(&state.db)
     .await
     .map_err(internal_database_error)?;

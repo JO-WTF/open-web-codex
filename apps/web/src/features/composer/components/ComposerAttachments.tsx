@@ -1,4 +1,4 @@
-import { convertFileSrc } from "@/platform/browser/core";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import Image from "lucide-react/dist/esm/icons/image";
 import X from "lucide-react/dist/esm/icons/x";
 

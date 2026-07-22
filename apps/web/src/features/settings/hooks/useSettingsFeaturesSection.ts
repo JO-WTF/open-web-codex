@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { revealItemInDir } from "@/platform/browser/opener";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { AppSettings, CodexFeature, CodexFeatureStage } from "@/types";
 import {
   getCodexConfigPath,

@@ -22,6 +22,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "check:no-desktop": "node scripts/check-no-desktop.mjs",
+    "check:main-ui-parity": "node scripts/check-main-ui-parity.mjs",
     "check:codex-contracts": "node scripts/check-codex-contracts.mjs",
     "check:codex-generated": "node scripts/check-codex-generated.mjs",
     "generate:codex-contracts": "node scripts/generate-codex-contract-bundle.mjs",
@@ -31,7 +32,8 @@
     "test:codex-capabilities": "node scripts/test-codex-capability-manifest.mjs",
     "test:feature-policy": "node scripts/test-feature-policy.mjs",
     "test:codex-fixtures": "node scripts/replay-codex-fixtures.mjs --self-test && node scripts/replay-codex-fixtures.mjs",
-    "test:codex-harness": "node scripts/test-codex-app-server-harness.mjs"
+    "test:codex-harness": "node scripts/test-codex-app-server-harness.mjs",
+    "test:e2e:real-platform": "node scripts/real-platform-e2e.mjs"
   },
   "dependencies": {
     "@pierre/diffs": "^1.0.6",

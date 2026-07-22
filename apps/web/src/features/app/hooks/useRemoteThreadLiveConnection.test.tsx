@@ -34,7 +34,7 @@ vi.mock("@utils/appServerEvents", () => ({
   getAppServerParams: (event: any) => event.params ?? {},
 }));
 
-vi.mock("@/platform/browser/window", () => ({
+vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({
     listen: vi.fn().mockResolvedValue(() => {}),
   }),

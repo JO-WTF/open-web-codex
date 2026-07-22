@@ -15,7 +15,7 @@ vi.mock("../../../services/dragDrop", () => ({
   subscribeWindowDragDrop: vi.fn(() => () => {}),
 }));
 
-vi.mock("@/platform/browser/core", () => ({
+vi.mock("@tauri-apps/api/core", () => ({
   convertFileSrc: (path: string) => `tauri://${path}`,
 }));
 
