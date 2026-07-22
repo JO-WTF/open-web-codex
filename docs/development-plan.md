@@ -5,12 +5,12 @@
 | 字段 | 内容 |
 | --- | --- |
 | 更新日期 | 2026-07-22 |
-| 当前分支 | `codex/sync-upstream-bdd3118c71a2` |
-| Codex 基线 | `openai/codex` `bdd3118c71a29f26b9df3a47f91efea38a0d58bd` |
+| 当前分支 | `codex/sync-upstream-661339bb0941` |
+| Codex 基线 | `openai/codex` `661339bb0941c055602688a83bcc8f72be21b54d` |
 | 上游待同步 | 0 |
 | 当前工作 | Codex 定制收敛、平台迁移与桌面运行时淘汰的最终回归 |
 
-当前 Codex 树与官方 main 之间有 125 个已分类的本地差异：28 个新增、97
+当前 Codex 树与官方 main 之间有 126 个已分类的本地差异：32 个新增、94
 个修改；无 upstream-only、diverged 或 missing 路径。浏览器已切到类型化 REST
 和认证 WebSocket；平台具备原生 Profile Host、Provider 服务、加密 Secret、
 持久审批、Git workspace 与租约式 Run 编排。桌面源码、sidecar、本地 Gateway、
@@ -46,7 +46,7 @@
 
 ## A. Codex 上游同步与定制收敛
 
-- [x] 同步官方 main 到 `bdd3118c71a2`，确认无待集成提交。
+- [x] 同步官方 main 到 `661339bb0941`，确认无待集成提交。
 - [x] 将全部非生成差异分类为 `retain-core`、`upstreamed`、`move-out` 或
   `drop`，机器清单与 patch map 一致。
 - [x] Chat DTO、Responses-to-Chat 转换、工具名反向映射和 SSE 翻译集中到
@@ -54,12 +54,15 @@
 - [x] Provider metadata、模型目录/缓存、app-server Provider API 与 TUI Provider
   workflow 按 owning layer 集中并有 scoped tests/snapshots。
 - [x] 将 TUI Provider 配置与 onboarding 实现从高冲突 dispatcher/auth 文件拆入
-  三个专用模块；上游父模块只保留窄挂接点，完整 TUI 3,233 用例通过。
+  Provider 专用模块；上游父模块只保留窄挂接点，完整 TUI 3,233 用例通过。
+- [x] 恢复官方 `ToolName` 实现，将 Chat namespace flattening 仅保留在
+  `codex-api` transport 边界，避免污染官方协议语义。
 - [x] Profile Home 创建、授权、Secret、Provider CRUD 和浏览器 DTO 移出
   `codex/`，由 Web 平台承担。
 - [x] Schema、TypeScript、Manifest、fixtures 与真实 app-server smoke 对齐。
 - [x] 当前 Runtime 验证矩阵通过：format、Provider、config、MCP、protocol、
-  app-server、TUI focused tests 和真实 initialize smoke。
+  app-server、TUI focused tests 和真实 initialize smoke；最新 auth routing、
+  thread fork、Turn diff、apply-patch 与 `PathUri` 回归均通过。
 
 同步门禁：`scripts/codex-upstream-status.sh`、
 `scripts/codex-customization-status.sh`、patch map、生成物 drift、Web contract、

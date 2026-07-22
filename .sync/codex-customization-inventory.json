@@ -3,15 +3,15 @@
   "purpose": "Tracks the current official-tree comparison and convergence classification progress for codex/.",
   "comparison": {
     "upstreamRef": "codex-upstream/main",
-    "upstreamCommit": "bdd3118c71a29f26b9df3a47f91efea38a0d58bd",
+    "upstreamCommit": "661339bb0941c055602688a83bcc8f72be21b54d",
     "localTree": "HEAD:codex",
-    "observedAt": "2026-07-21T23:53:27Z",
-    "differenceCount": 125,
-    "addedLocally": 28,
-    "modified": 97,
+    "observedAt": "2026-07-22T03:10:35Z",
+    "differenceCount": 126,
+    "addedLocally": 32,
+    "modified": 94,
     "missingLocally": 0,
     "upstreamOnly": 0,
-    "localOnly": 125,
+    "localOnly": 126,
     "diverged": 0
   },
   "progress": {
@@ -26,37 +26,39 @@
       "capability-manifest"
     ],
     "classification": {
-      "classifiedLocalOnlyPaths": 125,
+      "classifiedLocalOnlyPaths": 126,
       "unclassifiedSourcePaths": 0,
-      "temporaryUpstreamedFixes": 1
+      "temporaryUpstreamedFixes": 0
     },
     "completed": [
       "The Codex subtree is synchronized through the current official commit with only the six documented retained seams.",
-      "All 125 local-only paths are classified; generated artifacts and tests follow their owning source seam.",
+      "All 126 local-only paths are classified; generated artifacts and tests follow their owning source seam.",
       "Profile lifecycle, encrypted credentials, authorization, durable approvals, Git workspaces, Run leases, browser DTOs, and event delivery are owned by apps/web.",
       "The browser uses typed REST and authenticated WebSocket transport; Tauri, desktop sidecars, raw browser RPC, desktop release chains, and desktop build dependencies are absent.",
-      "Provider configuration and onboarding implementation live in three dedicated TUI modules; high-churn upstream dispatcher and auth files retain only narrow attachments.",
+      "Provider configuration, event payloads, model context and onboarding implementation live in dedicated TUI Provider modules; high-churn upstream parent files retain only narrow attachments.",
+      "The protocol ToolName implementation matches official Codex; Chat namespace flattening is isolated in codex-api.",
       "Generated contracts reproduce without drift and the current binary passes the real app-server Capability Manifest smoke."
     ],
     "validation": {
       "format": "passed",
-      "clippyFix": "passed for codex-tui; one non-blocking vec_init_then_push warning remains",
+      "clippyFix": "passed for retained Rust seams",
       "appServerSchema": "passed; no generated drift",
       "protocolTests": "288 passed",
-      "chatTransportTests": "174 codex-api tests and 17 focused Core Chat tests passed",
+      "chatTransportTests": "175 codex-api tests and 17 focused Core Chat tests passed",
       "providerTests": "26 Provider metadata, 57 Provider transport, 41 model-manager, 27 focused Core Provider, and 5 app-server model-list tests passed",
       "configTests": "221 passed",
       "mcpTests": "110 passed",
       "coreSkillsTests": "124 passed",
-      "appServerTests": "focused model-list suite passed; the real initialize smoke passed against the locally built CLI",
+      "appServerTests": "981 app-server assertions passed across the full matrix and auxiliary-binary reruns; 19 latest thread-fork tests passed",
       "tuiTests": "3233 passed; 4 skipped",
       "networkProxyTests": "all 207 network-proxy tests passed across local-port and network-isolated runs; the new CLI sandbox cases are Linux-only and not applicable on the macOS validation host",
-      "realAppServerSmoke": "passed; 18 capability declarations",
+      "latestUpstreamTests": "159 login, 60 PathUri, 86 apply-patch, 24 Core turn-diff and 19 app-server thread-fork tests passed",
+      "realAppServerSmoke": "passed against the current locally built CLI; 18 capability declarations",
       "webContractCheck": "passed",
       "platformTests": "frontend, Rust workspace, PostgreSQL integration, Profile restart, Provider isolation, Git Runtime, Run lease, two-organization security, and fake-server HTTP/WebSocket checks passed"
     },
-    "validatedAgainstUpstream": "bdd3118c71a29f26b9df3a47f91efea38a0d58bd",
-    "validatedAtCommit": "d8fd9ff46faff1c9df1d444a178cc85585583248",
+    "validatedAgainstUpstream": "661339bb0941c055602688a83bcc8f72be21b54d",
+    "validatedAtCommit": "2060d3ab564013f859820dedb99fc993e8ff50f9",
     "nextAction": "Keep the six retained seams replayable at the next official sync; product work continues with authorized per-user dynamic Profile routing and the remaining M2 session and Runner hardening gates."
   }
 }
