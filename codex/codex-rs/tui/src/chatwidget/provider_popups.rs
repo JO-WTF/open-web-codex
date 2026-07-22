@@ -153,7 +153,7 @@ impl ProviderFormView {
                             }
                         }
                         ProviderFormMode::Edit => crate::app_event::ProviderConfigAction::Upsert {
-                            id: draft.id.clone(),
+                            id: draft.id,
                             provider,
                         },
                     },

@@ -40,7 +40,7 @@
     ],
     "validation": {
       "format": "passed",
-      "clippyFix": "not available: the repository toolchain does not provide an applicable cargo-clippy component; no fix was applied",
+      "clippyFix": "passed for codex-tui; one non-blocking vec_init_then_push warning remains",
       "appServerSchema": "passed; no generated drift",
       "protocolTests": "288 passed",
       "chatTransportTests": "174 codex-api tests and 17 focused Core Chat tests passed",
