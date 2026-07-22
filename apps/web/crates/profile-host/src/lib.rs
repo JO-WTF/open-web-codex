@@ -447,21 +447,37 @@ impl ProfileHost {
         self.request_unlocked(method, params).await
     }
 
+    /// Send a request whose response is expected only when a long-running
+    /// operation exits. The lifecycle read lock is held only while publishing
+    /// the request, so Profile shutdown can still drain the pending response.
+    pub async fn request_long_running(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, ProfileHostError> {
+        let (_id, receiver) = {
+            let _lifecycle = self.inner.lifecycle.read().await;
+            self.begin_request(method, params).await?
+        };
+        let response = match receiver.await {
+            Ok(Ok(response)) => response,
+            Ok(Err(message)) => {
+                return Err(ProfileHostError::Rpc {
+                    method: method.to_string(),
+                    message,
+                })
+            }
+            Err(_) => return Err(ProfileHostError::TransportClosed),
+        };
+        parse_rpc_result(method, response)
+    }
+
     async fn request_unlocked(
         &self,
         method: &str,
         params: Value,
     ) -> Result<Value, ProfileHostError> {
-        let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
-        let (sender, receiver) = oneshot::channel();
-        self.inner.pending.lock().await.insert(id, sender);
-        if let Err(error) = self
-            .write_message(json!({ "id": id, "method": method, "params": params }))
-            .await
-        {
-            self.inner.pending.lock().await.remove(&id);
-            return Err(error);
-        }
+        let (id, receiver) = self.begin_request(method, params).await?;
 
         let response = match timeout(self.inner.request_timeout, receiver).await {
             Ok(Ok(Ok(response))) => response,
@@ -480,19 +496,25 @@ impl ProfileHost {
             }
         };
 
-        if let Some(error) = response.get("error") {
-            return Err(ProfileHostError::Rpc {
-                method: method.to_string(),
-                message: rpc_error_message(error),
-            });
+        parse_rpc_result(method, response)
+    }
+
+    async fn begin_request(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> Result<(u64, oneshot::Receiver<Result<Value, String>>), ProfileHostError> {
+        let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
+        let (sender, receiver) = oneshot::channel();
+        self.inner.pending.lock().await.insert(id, sender);
+        if let Err(error) = self
+            .write_message(json!({ "id": id, "method": method, "params": params }))
+            .await
+        {
+            self.inner.pending.lock().await.remove(&id);
+            return Err(error);
         }
-        response
-            .get("result")
-            .cloned()
-            .ok_or_else(|| ProfileHostError::Rpc {
-                method: method.to_string(),
-                message: "response contained neither result nor error".to_string(),
-            })
+        Ok((id, receiver))
     }
 
     pub async fn notify(
@@ -856,6 +878,22 @@ fn rpc_error_message(error: &Value) -> String {
         .or_else(|| error.as_str())
         .unwrap_or("unknown app-server error")
         .to_string()
+}
+
+fn parse_rpc_result(method: &str, response: Value) -> Result<Value, ProfileHostError> {
+    if let Some(error) = response.get("error") {
+        return Err(ProfileHostError::Rpc {
+            method: method.to_string(),
+            message: rpc_error_message(error),
+        });
+    }
+    response
+        .get("result")
+        .cloned()
+        .ok_or_else(|| ProfileHostError::Rpc {
+            method: method.to_string(),
+            message: "response contained neither result nor error".to_string(),
+        })
 }
 
 #[cfg(test)]

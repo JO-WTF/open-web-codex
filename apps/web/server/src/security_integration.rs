@@ -36,6 +36,7 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     let profile = RuntimeProfileBinding {
         runtime_key: "security-test-profile".to_string(),
         name: "Security Test Profile".to_string(),
+        codex_home: None,
         capabilities: routes::RuntimeCapabilityState::default(),
     };
     let state = AppState::new(pool.clone());

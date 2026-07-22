@@ -22,10 +22,44 @@ impl RunOrchestrator {
         let source = self.git.validate_source(&lease.git_url)?;
         let git_ref = self.git.validate_ref(&lease.source_ref)?;
         let workspace_id = Uuid::now_v7();
-        let checkout = self
+        let mut checkout = self
             .git
             .provision(lease.project_id, workspace_id, &source, &git_ref)
             .await?;
+        if lease.workspace_kind == "worktree" {
+            if let Err(error) = self
+                .git
+                .switch_or_create_branch(workspace_id, &lease.source_ref)
+                .await
+            {
+                self.git.remove_workspace(workspace_id).await?;
+                return Err(error.into());
+            }
+            checkout.branch = lease.source_ref.clone();
+        }
+        if lease.copy_agents_md {
+            if let Some(parent_run_id) = lease.workspace_parent_run_id {
+                let parent_workspace_id = sqlx::query_scalar::<_, Uuid>(
+                    "SELECT parent.workspace_id FROM runs parent \
+                     JOIN workspaces workspace ON workspace.id = parent.workspace_id \
+                     WHERE parent.id = $1 AND parent.organization_id = $2 \
+                       AND workspace.state <> 'retired'",
+                )
+                .bind(parent_run_id)
+                .bind(lease.organization_id)
+                .fetch_optional(&self.db)
+                .await?;
+                if let Some(parent_workspace_id) = parent_workspace_id {
+                    if let Err(error) = self
+                        .git
+                        .copy_agents_md(parent_workspace_id, workspace_id)
+                        .await
+                    {
+                        tracing::warn!(%error, run_id = %lease.run_id, "optional AGENTS.md copy failed");
+                    }
+                }
+            }
+        }
         self.heartbeat(lease).await?;
 
         if let Err(error) = self.record_workspace(lease, workspace_id, &checkout).await {
@@ -37,7 +71,30 @@ impl RunOrchestrator {
             id: workspace_id.to_string(),
             root: checkout.root.clone(),
         };
-        let started = self.adapter.start_thread(&workspace).await;
+        let started = if let Some(source_thread_id) = lease.fork_thread_id.as_deref() {
+            let source = sqlx::query(
+                "SELECT parent.workspace_id, parent_workspace.root_path \
+                 FROM runs parent JOIN workspaces parent_workspace \
+                   ON parent_workspace.id = parent.workspace_id \
+                 WHERE parent.id = $1 AND parent.organization_id = $2 \
+                   AND parent.codex_thread_id = $3 AND parent_workspace.state <> 'retired'",
+            )
+            .bind(lease.fork_source_run_id)
+            .bind(lease.organization_id)
+            .bind(source_thread_id)
+            .fetch_optional(&self.db)
+            .await?
+            .ok_or(RunOrchestratorError::NotFound)?;
+            let source_workspace = AuthorizedWorkspace {
+                id: source.get::<Uuid, _>("workspace_id").to_string(),
+                root: source.get::<String, _>("root_path").into(),
+            };
+            self.adapter
+                .fork_thread(&source_workspace, &workspace, source_thread_id)
+                .await
+        } else {
+            self.adapter.start_thread(&workspace).await
+        };
         let started = match started {
             Ok(started) => started,
             Err(error) => {

@@ -137,6 +137,35 @@ pub async fn get_project(
     }))
 }
 
+/// DELETE /api/projects/:id
+pub async fn delete_project(
+    auth: AuthenticatedUser,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<serde_json::Value> {
+    if auth.organization_role != "owner" && auth.organization_role != "admin" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(PlatformError::forbidden(
+                "only Organization owners and admins can delete projects",
+            )),
+        ));
+    }
+    let deleted = sqlx::query("DELETE FROM projects WHERE id = $1 AND organization_id = $2")
+        .bind(id)
+        .bind(auth.organization_id)
+        .execute(&state.db)
+        .await
+        .map_err(internal_database_error)?;
+    if deleted.rows_affected() == 0 {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(PlatformError::not_found(format!("project {id} not found"))),
+        ));
+    }
+    Ok(Json(serde_json::json!({ "deleted": true, "id": id })))
+}
+
 fn internal_database_error(_error: sqlx::Error) -> (StatusCode, Json<PlatformError>) {
     (
         StatusCode::INTERNAL_SERVER_ERROR,

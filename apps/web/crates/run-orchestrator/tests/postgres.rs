@@ -155,6 +155,13 @@ async fn idempotent_enqueue_single_lease_and_workspace_provisioning() {
         task_id,
         idempotency_key: "runner-idempotency-0001".to_string(),
         git_ref: None,
+        workspace_kind: "main".to_string(),
+        workspace_name: None,
+        workspace_parent_run_id: None,
+        workspace_group_run_id: None,
+        copy_agents_md: false,
+        fork_thread_id: None,
+        fork_source_run_id: None,
     };
     let enqueued = first.enqueue_run(request.clone()).await.unwrap();
     let replayed = first.enqueue_run(request).await.unwrap();
@@ -166,6 +173,13 @@ async fn idempotent_enqueue_single_lease_and_workspace_provisioning() {
             task_id,
             idempotency_key: "runner-idempotency-0002".to_string(),
             git_ref: None,
+            workspace_kind: "main".to_string(),
+            workspace_name: None,
+            workspace_parent_run_id: None,
+            workspace_group_run_id: None,
+            copy_agents_md: false,
+            fork_thread_id: None,
+            fork_source_run_id: None,
         })
         .await
         .unwrap_err();
@@ -225,6 +239,13 @@ async fn idempotent_enqueue_single_lease_and_workspace_provisioning() {
             task_id,
             idempotency_key: "runner-idempotency-0003".to_string(),
             git_ref: None,
+            workspace_kind: "main".to_string(),
+            workspace_name: None,
+            workspace_parent_run_id: None,
+            workspace_group_run_id: None,
+            copy_agents_md: false,
+            fork_thread_id: None,
+            fork_source_run_id: None,
         })
         .await
         .unwrap();

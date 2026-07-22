@@ -20,6 +20,13 @@ describe("PlatformClient", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
       idempotency_key: "018f-idempotency-key",
       git_ref: "feature/safe",
+      workspace_kind: "main",
+      workspace_name: null,
+      workspace_parent_run_id: null,
+      workspace_group_run_id: null,
+      copy_agents_md: false,
+      fork_thread_id: null,
+      fork_source_run_id: null,
     });
     expect(fetchMock.mock.calls[1]?.[0]).toBe("https://platform.test/api/tasks/task%2Fone/messages");
     expect(fetchMock.mock.calls.every((call) => !String(call[0]).includes("/api/rpc"))).toBe(true);

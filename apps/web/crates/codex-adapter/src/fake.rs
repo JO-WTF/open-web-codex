@@ -4,13 +4,19 @@ use std::sync::Arc;
 use std::collections::HashMap;
 
 use async_trait::async_trait;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
 use chrono::Utc;
 use serde_json::{json, Value};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::{AdapterError, AuthorizedWorkspace, CodexAdapter, HealthStatus, StartedThread};
+use crate::{
+    AdapterError, AuthorizedWorkspace, CanceledProfileLogin, CodexAdapter, HealthStatus,
+    ProfileLoginStatus, ProfileMutation, ProfileQuery, ReviewTarget, StartedProfileLogin,
+    StartedThread, TurnOptions,
+};
 
 /// A tracked mock thread for list/show responses.
 #[derive(Clone)]
@@ -34,6 +40,8 @@ struct FakeState {
 /// In-memory Codex adapter that simulates workspace, thread and event flows.
 pub struct FakeCodexAdapter {
     state: Arc<Mutex<FakeState>>,
+    active_login_id: Arc<Mutex<Option<String>>>,
+    login_statuses: Arc<Mutex<HashMap<String, ProfileLoginStatus>>>,
     notify: Arc<tokio::sync::Notify>,
     counter: Arc<AtomicU64>,
 }
@@ -52,6 +60,8 @@ impl FakeCodexAdapter {
                 threads: vec![],
                 pending_events: vec![],
             })),
+            active_login_id: Arc::new(Mutex::new(None)),
+            login_statuses: Arc::new(Mutex::new(HashMap::new())),
             notify: Arc::new(tokio::sync::Notify::new()),
             counter: Arc::new(AtomicU64::new(1)),
         }
@@ -267,11 +277,26 @@ impl CodexAdapter for FakeCodexAdapter {
         })
     }
 
+    async fn fork_thread(
+        &self,
+        _source_workspace: &AuthorizedWorkspace,
+        target_workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+    ) -> Result<StartedThread, AdapterError> {
+        if thread_id.trim().is_empty() {
+            return Err(AdapterError::Internal(
+                "fork source Thread is required".to_string(),
+            ));
+        }
+        self.start_thread(target_workspace).await
+    }
+
     async fn send_user_message(
         &self,
         workspace: &AuthorizedWorkspace,
         thread_id: &str,
         text: &str,
+        _options: &TurnOptions,
     ) -> Result<Value, AdapterError> {
         self.rpc(
             "send_user_message",
@@ -282,6 +307,26 @@ impl CodexAdapter for FakeCodexAdapter {
             }),
         )
         .await
+    }
+
+    async fn steer_turn(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+        turn_id: &str,
+        text: &str,
+        _images: &[String],
+    ) -> Result<Value, AdapterError> {
+        if workspace.id.trim().is_empty()
+            || thread_id.trim().is_empty()
+            || turn_id.trim().is_empty()
+            || text.trim().is_empty()
+        {
+            return Err(AdapterError::Internal(
+                "workspace, Thread, Turn, and text are required".to_string(),
+            ));
+        }
+        Ok(json!({ "status": "steered", "turnId": turn_id }))
     }
 
     async fn interrupt_turn(
@@ -313,6 +358,243 @@ impl CodexAdapter for FakeCodexAdapter {
         _request_id: Value,
         _result: Value,
     ) -> Result<(), AdapterError> {
+        Ok(())
+    }
+
+    async fn query_profile(&self, query: ProfileQuery) -> Result<Value, AdapterError> {
+        Ok(match query {
+            ProfileQuery::Account => {
+                json!({ "account": null, "requiresOpenaiAuth": false })
+            }
+            ProfileQuery::RateLimits => json!({}),
+            ProfileQuery::Usage => json!({
+                "summary": { "lifetimeTokens": 0, "peakDailyTokens": 0 },
+                "dailyUsageBuckets": []
+            }),
+            ProfileQuery::CollaborationModes => json!({ "data": [] }),
+            ProfileQuery::Apps { .. }
+            | ProfileQuery::McpServers { .. }
+            | ProfileQuery::ExperimentalFeatures { .. } => {
+                json!({ "data": [], "nextCursor": null })
+            }
+            ProfileQuery::Skills { .. } => json!({ "data": [] }),
+            ProfileQuery::Config => json!({
+                "config": {
+                    "features": { "multi_agent": true },
+                    "agents": { "max_threads": 6, "max_depth": 1 }
+                }
+            }),
+        })
+    }
+
+    async fn mutate_profile(&self, _mutation: ProfileMutation) -> Result<Value, AdapterError> {
+        Ok(json!({ "status": "ok" }))
+    }
+
+    async fn start_profile_login(&self) -> Result<StartedProfileLogin, AdapterError> {
+        let login_id = Uuid::now_v7().to_string();
+        *self.active_login_id.lock().await = Some(login_id.clone());
+        self.login_statuses.lock().await.insert(
+            login_id.clone(),
+            ProfileLoginStatus {
+                completed: true,
+                success: Some(true),
+                error: None,
+            },
+        );
+        Ok(StartedProfileLogin {
+            login_id,
+            auth_url: "https://example.invalid/codex-login".to_string(),
+        })
+    }
+
+    async fn cancel_profile_login(&self) -> Result<CanceledProfileLogin, AdapterError> {
+        let login_id = self.active_login_id.lock().await.take();
+        let canceled = login_id.is_some();
+        if let Some(login_id) = login_id {
+            self.login_statuses.lock().await.remove(&login_id);
+        }
+        Ok(CanceledProfileLogin {
+            canceled,
+            status: if canceled { "canceled" } else { "notFound" }.to_string(),
+        })
+    }
+
+    async fn profile_login_status(
+        &self,
+        login_id: &str,
+    ) -> Result<ProfileLoginStatus, AdapterError> {
+        let mut statuses = self.login_statuses.lock().await;
+        let status = statuses
+            .get(login_id)
+            .cloned()
+            .ok_or_else(|| AdapterError::Rpc("fake Profile login was not found".to_string()))?;
+        if status.completed {
+            statuses.remove(login_id);
+        }
+        Ok(status)
+    }
+
+    async fn archive_thread(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+    ) -> Result<(), AdapterError> {
+        let mut state = self.state.lock().await;
+        let thread = state
+            .threads
+            .iter_mut()
+            .find(|thread| thread.id == thread_id && thread.ws_id == workspace.id)
+            .ok_or_else(|| AdapterError::Rpc("fake Thread was not found".to_string()))?;
+        thread.status = "archived".to_string();
+        Ok(())
+    }
+
+    async fn set_thread_name(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+        _name: &str,
+    ) -> Result<(), AdapterError> {
+        let state = self.state.lock().await;
+        if state
+            .threads
+            .iter()
+            .any(|thread| thread.id == thread_id && thread.ws_id == workspace.id)
+        {
+            Ok(())
+        } else {
+            Err(AdapterError::Rpc("fake Thread was not found".to_string()))
+        }
+    }
+
+    async fn generate_text(
+        &self,
+        _workspace: &AuthorizedWorkspace,
+        prompt: &str,
+        _model: Option<&str>,
+    ) -> Result<String, AdapterError> {
+        if prompt.contains("worktreeName") {
+            Ok(r#"{"title":"New Agent","worktreeName":"feat/new-agent"}"#.to_string())
+        } else if prompt.contains("developerInstructions") {
+            Ok(r#"{"description":"Specialized agent","developerInstructions":"Complete the requested specialty carefully and report concrete results."}"#.to_string())
+        } else {
+            Ok("Update workspace changes".to_string())
+        }
+    }
+
+    async fn compact_thread(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+    ) -> Result<Value, AdapterError> {
+        if workspace.id.is_empty() || thread_id.is_empty() {
+            return Err(AdapterError::Internal(
+                "workspace and Thread are required".to_string(),
+            ));
+        }
+        Ok(json!({ "status": "compacting" }))
+    }
+
+    async fn start_review(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+        _target: ReviewTarget,
+    ) -> Result<Value, AdapterError> {
+        if workspace.id.is_empty() || thread_id.is_empty() {
+            return Err(AdapterError::Internal(
+                "workspace and Thread are required".to_string(),
+            ));
+        }
+        Ok(json!({
+            "turn": { "id": format!("review-{}", Uuid::now_v7()), "status": "inProgress" },
+            "reviewThreadId": thread_id,
+        }))
+    }
+
+    async fn open_terminal(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        process_id: &str,
+        _cols: u16,
+        _rows: u16,
+    ) -> Result<(), AdapterError> {
+        self.emit(json!({
+            "method": "app-server-event",
+            "params": {
+                "workspace_id": workspace.id,
+                "message": {
+                    "method": "command/exec/outputDelta",
+                    "params": {
+                        "processId": process_id,
+                        "stream": "stdout",
+                        "deltaBase64": BASE64.encode(b"fake-shell$ "),
+                        "capReached": false,
+                    },
+                },
+            },
+        }))
+        .await;
+        Ok(())
+    }
+
+    async fn write_terminal(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        process_id: &str,
+        data: &str,
+    ) -> Result<(), AdapterError> {
+        self.emit(json!({
+            "method": "app-server-event",
+            "params": {
+                "workspace_id": workspace.id,
+                "message": {
+                    "method": "command/exec/outputDelta",
+                    "params": {
+                        "processId": process_id,
+                        "stream": "stdout",
+                        "deltaBase64": BASE64.encode(data.as_bytes()),
+                        "capReached": false,
+                    },
+                },
+            },
+        }))
+        .await;
+        Ok(())
+    }
+
+    async fn resize_terminal(
+        &self,
+        _workspace: &AuthorizedWorkspace,
+        _process_id: &str,
+        _cols: u16,
+        _rows: u16,
+    ) -> Result<(), AdapterError> {
+        Ok(())
+    }
+
+    async fn close_terminal(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        process_id: &str,
+    ) -> Result<(), AdapterError> {
+        self.emit(json!({
+            "method": "app-server-event",
+            "params": {
+                "workspace_id": workspace.id,
+                "message": {
+                    "method": "platform/terminalExited",
+                    "params": {
+                        "processId": process_id,
+                        "workspaceId": workspace.id,
+                        "exitCode": 0,
+                        "failed": false,
+                    },
+                },
+            },
+        }))
+        .await;
         Ok(())
     }
 

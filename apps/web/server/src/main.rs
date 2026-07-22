@@ -116,6 +116,7 @@ async fn main() -> anyhow::Result<()> {
     let profile_binding = routes::RuntimeProfileBinding {
         runtime_key: cli.profile_id.clone(),
         name: cli.profile_id.clone(),
+        codex_home: cli.codex_home.clone().map(Arc::new),
         capabilities: routes::RuntimeCapabilityState::default(),
     };
     let (adapter, providers): (Arc<dyn CodexAdapter>, Arc<dyn AuthorizedProviderOperations>) =
@@ -293,10 +294,41 @@ fn public_approval_frame(frame: &[u8], approval_id: uuid::Uuid) -> anyhow::Resul
         .ok_or_else(|| anyhow::anyhow!("invalid app-server event frame"))?;
     let envelope: serde_json::Value = serde_json::from_slice(payload)?;
     let workspace_id = envelope.pointer("/params/workspace_id").cloned();
-    let thread_id = envelope
-        .pointer("/params/message/params/threadId")
+    let message = envelope
+        .pointer("/params/message")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| anyhow::anyhow!("approval omitted message"))?;
+    let request_method = message
+        .get("method")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("approval omitted method"))?;
+    let params = message
+        .get("params")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| anyhow::anyhow!("approval omitted params"))?;
+    let thread_id = params
+        .get("threadId")
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("approval omitted threadId"))?;
+    let mut request_params = serde_json::Map::new();
+    for key in ["threadId", "turnId", "itemId", "reason", "startedAtMs"] {
+        if let Some(value) = params.get(key) {
+            request_params.insert(key.to_string(), value.clone());
+        }
+    }
+    if request_method == "item/commandExecution/requestApproval" {
+        if let Some(command) = params.get("command") {
+            request_params.insert("command".to_string(), command.clone());
+        }
+    }
+    if request_method == "item/tool/requestUserInput" {
+        if let Some(questions) = params.get("questions") {
+            request_params.insert("questions".to_string(), questions.clone());
+        }
+        if let Some(timeout) = params.get("autoResolutionMs") {
+            request_params.insert("autoResolutionMs".to_string(), timeout.clone());
+        }
+    }
     let public = serde_json::json!({
         "method": "app-server-event",
         "params": {
@@ -306,6 +338,8 @@ fn public_approval_frame(frame: &[u8], approval_id: uuid::Uuid) -> anyhow::Resul
                 "params": {
                     "approvalId": approval_id,
                     "threadId": thread_id,
+                    "requestMethod": request_method,
+                    "requestParams": request_params,
                 }
             }
         }
@@ -430,6 +464,18 @@ mod tests {
         assert_eq!(
             value.pointer("/params/message/params/approvalId").unwrap(),
             &Value::String(approval_id.to_string())
+        );
+        assert_eq!(
+            value
+                .pointer("/params/message/params/requestMethod")
+                .unwrap(),
+            "item/commandExecution/requestApproval"
+        );
+        assert_eq!(
+            value
+                .pointer("/params/message/params/requestParams/command")
+                .unwrap(),
+            "git status"
         );
     }
 }

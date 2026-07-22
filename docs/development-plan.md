@@ -5,16 +5,17 @@
 | 字段 | 内容 |
 | --- | --- |
 | 更新日期 | 2026-07-22 |
-| 当前分支 | `codex/sync-upstream-4f3852107e5e` |
+| 当前分支 | `codex/restore-web-ui` |
 | Codex 基线 | `openai/codex` `4f3852107e5eedeb4cb89b57a6d4a35b49f8a59a` |
-| 上游待同步 | 0 |
-| 当前工作 | Codex 定制收敛、平台迁移与桌面运行时淘汰的最终回归 |
+| 上游待同步 | 3 个提交，目标 `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9` |
+| 当前工作 | 保持既有 Web UI/功能不变的类型化平台适配，以及随后一次官方同步 |
 
-当前 Codex 树与官方 main 之间有 126 个已分类的本地差异：32 个新增、94
-个修改；无 upstream-only、diverged 或 missing 路径。浏览器已切到类型化 REST
-和认证 WebSocket；平台具备原生 Profile Host、Provider 服务、加密 Secret、
-持久审批、Git workspace 与租约式 Run 编排。桌面源码、sidecar、本地 Gateway、
-原始浏览器 RPC/SSE 和桌面发布链已经移除。
+当前 Codex 树与官方 main 之间有 136 个差异：126 个已分类的 local-only、10
+个待集成的 upstream-only；无 diverged 或 missing 路径。既有 `main` React
+组件树、CSS、页面布局和交互分支已经恢复，差异仅限 Tauri import 的浏览器适配、
+认证 Session 壳和类型化平台接口。平台具备原生 Profile Host、Provider 服务、
+加密 Secret、持久审批、Git workspace 与租约式 Run 编排。桌面运行时、sidecar、
+本地 Gateway、原始浏览器 RPC/SSE 和桌面发布链已经移除。
 
 本文只记录当前有效状态和下一步。完成项必须有代码、测试或可重现运行证据。
 
@@ -91,8 +92,15 @@
 - [x] 浏览器只使用 `/api` 类型化资源；原始 `/api/rpc` 不存在。
 - [x] 实时通道为 `/api/events/ws`，Token 在首帧认证而非 URL；跨租户事件
   过滤测试通过。
-- [x] 浏览器支持 bootstrap/login、Project/Task/Run、消息、事件 replay/live、
-  approvals、Provider selection、workspace status 和 selected-path Commit。
+- [x] `App.tsx`、`WebApp.tsx`、全部 CSS 和既有页面 JSX/业务分支恢复为 `main`
+  产品；现有 36 个差异文件仅替换桌面 import，入口只增加认证 Session 壳。
+- [x] 浏览器支持 workspace/worktree/clone、Thread/Turn/fork/review/compact、消息、
+  durable replay/live、approval/user input、Provider/model、Profile account/login、
+  MCP/Skills/Apps/config/agents/prompts 和本地 usage 投影。
+- [x] 原有 terminal、文件树/预览、嵌套 Git root、status/diff/stage/revert/commit、
+  branch/log/remote、GitHub issue/PR/diff/comment/checkout/create repo 均接入服务端。
+- [x] 图片附件、Markdown 导出、浏览器通知、Web Speech dictation、右键菜单和
+  对话框保留既有 UI，由浏览器能力实现。
 - [x] 平台服务同源提供生产 browser build；Vite 仅在开发时代理 HTTP/WS。
 - [x] 前端类型检查、单测与生产构建通过。
 
@@ -100,7 +108,8 @@
 
 - [x] 删除桌面 Rust crate、IPC wrapper、窗口/托盘/通知/更新器、远程 sidecar、
   本地 Gateway、移动端生成物与平台专用逻辑。
-- [x] 删除旧桌面 React 状态树和仅服务本地操作系统的文件、终端、语音、发布 UI。
+- [x] 保留既有 React 状态树、文件、终端、语音、Git 和设置 UI；删除其 Tauri
+  运行时依赖并通过 `src/platform/browser` 提供 Web 语义。
 - [x] 删除桌面/iOS/Windows/macOS release workflows、脚本、图标、截图、网站和
   失效的项目 Skill。
 - [x] 根 Cargo/NPM/Nix 构建改为 browser + platform server。
@@ -122,8 +131,8 @@
   ignored integration tests。
 - [x] `npm run check:codex-generated`、`npm run check:codex-contracts`、fixtures、
   Feature Policy 和真实 `--require-manifest` smoke。
-- [x] `scripts/codex-upstream-status.sh` 与
-  `scripts/codex-customization-status.sh` 最终一致。
+- [-] 状态脚本已复核；当前检测到 3 个新上游提交，待 Web 恢复提交落地后在
+  专用 `codex/sync-upstream-*` 分支集成。
 - [x] Fake Server HTTP/static/WebSocket 端到端启动验证。
 - [x] Git status/diff 审查，确认没有未分类 Codex 差异或意外用户文件。
 
@@ -131,6 +140,22 @@
 
 本分支完成的是可持续同步的 Codex 定制、浏览器纵向平台边界和桌面运行时
 淘汰，不等于 V1 GA。以下是当前仍真实存在的产品门禁：
+
+### 浏览器等价语义复审清单
+
+以下入口保留了原页面和调用行为，但受浏览器/服务端边界限制，适配完成后再决定
+是否调整前端表达：
+
+1. `Open in app` 对 HTTP/GitHub remote 可打开网页；服务器本地路径不能启动用户
+   桌面应用，Reveal 当前复制服务器路径。
+2. Codex 自更新与 Tailscale daemon 生命周期由部署管理，页面调用返回明确的
+   deployment-managed 状态。
+3. 任意 workspace Codex CLI args 可以持久化，但共享 Profile Host 不会按单
+   workspace respawn；需先定义 Profile/Run 级安全策略。
+4. local usage 可按 Run/Project 汇总 token 与 Turn 数；官方事件尚不提供可靠的
+   model share 和 agent time，因此对应值不伪造。
+5. 目录选择输入服务器路径；图片选择、拖放和导出使用浏览器 blob/download；
+   浏览器不获得任意服务器文件系统访问权。
 
 ### M2 多用户 Beta
 

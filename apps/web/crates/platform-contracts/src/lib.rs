@@ -205,6 +205,10 @@ pub struct Run {
     pub active_turn_id: Option<String>,
     pub workspace_id: Option<Uuid>,
     pub source_ref: Option<String>,
+    pub workspace_kind: String,
+    pub workspace_name: Option<String>,
+    pub workspace_parent_run_id: Option<Uuid>,
+    pub workspace_group_run_id: Option<Uuid>,
     pub attempt: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -215,6 +219,20 @@ pub struct Run {
 pub struct StartRunRequest {
     pub idempotency_key: String,
     pub git_ref: Option<String>,
+    #[serde(default)]
+    pub workspace_kind: Option<String>,
+    #[serde(default)]
+    pub workspace_name: Option<String>,
+    #[serde(default)]
+    pub workspace_parent_run_id: Option<Uuid>,
+    #[serde(default)]
+    pub workspace_group_run_id: Option<Uuid>,
+    #[serde(default)]
+    pub copy_agents_md: bool,
+    #[serde(default)]
+    pub fork_thread_id: Option<String>,
+    #[serde(default)]
+    pub fork_source_run_id: Option<Uuid>,
 }
 
 /// Response from starting a run.
@@ -255,12 +273,483 @@ pub struct CommitWorkspaceResponse {
     pub commit: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceFileContent {
+    pub content: String,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceFileDiff {
+    pub path: String,
+    pub diff: String,
+    pub is_binary: bool,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspacePathQuery {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspacePathsRequest {
+    pub paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceBranchRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenameWorkspaceUpstreamRequest {
+    pub old_branch: String,
+    pub new_branch: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenTerminalRequest {
+    pub terminal_id: String,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WriteTerminalRequest {
+    pub data: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResizeTerminalRequest {
+    pub cols: u16,
+    pub rows: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceBranch {
+    pub name: String,
+    pub last_commit: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceLogEntry {
+    pub sha: String,
+    pub summary: String,
+    pub author: String,
+    pub timestamp: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceLog {
+    pub total: u64,
+    pub entries: Vec<WorkspaceLogEntry>,
+    pub ahead: u64,
+    pub behind: u64,
+    pub ahead_entries: Vec<WorkspaceLogEntry>,
+    pub behind_entries: Vec<WorkspaceLogEntry>,
+    pub upstream: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceCommitDiff {
+    pub path: String,
+    pub status: String,
+    pub diff: String,
+    pub is_binary: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubIssue {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubIssues {
+    pub total: usize,
+    pub issues: Vec<GitHubIssue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitHubUser {
+    pub login: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubPullRequest {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub updated_at: String,
+    pub created_at: String,
+    pub body: String,
+    pub head_ref_name: String,
+    pub base_ref_name: String,
+    pub is_draft: bool,
+    pub author: Option<GitHubUser>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubPullRequests {
+    pub total: usize,
+    pub pull_requests: Vec<GitHubPullRequest>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitHubPullRequestDiff {
+    pub path: String,
+    pub status: String,
+    pub diff: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubPullRequestComment {
+    pub id: u64,
+    pub body: String,
+    pub created_at: String,
+    pub url: String,
+    pub author: Option<GitHubUser>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateGitHubRepositoryRequest {
+    pub repo: String,
+    pub visibility: String,
+    pub branch: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateGitHubRepositoryResponse {
+    pub status: String,
+    pub repo: String,
+    pub remote_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub push_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_branch_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceLogQuery {
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileListQuery {
+    pub run_id: Option<Uuid>,
+    pub cursor: Option<String>,
+    pub limit: Option<u32>,
+    pub force_reload: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProfileProjection {
+    pub data: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileLoginStartResponse {
+    pub login_id: String,
+    pub auth_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileLoginCancelResponse {
+    pub canceled: bool,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileLoginStatusResponse {
+    pub completed: bool,
+    pub success: Option<bool>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserWorkspacePreference {
+    pub workspace_id: Uuid,
+    pub settings: serde_json::Value,
+    pub runtime_codex_args: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateBrowserWorkspaceSettingsRequest {
+    pub settings: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetWorkspaceRuntimeCodexArgsRequest {
+    pub codex_args: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetWorkspaceRuntimeCodexArgsResponse {
+    pub applied_codex_args: Option<String>,
+    pub respawned: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeSetupStatus {
+    pub should_run: bool,
+    pub script: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetWorkspaceGitRootRequest {
+    pub git_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetThreadNameRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceGitRootsQuery {
+    pub depth: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalUsageQuery {
+    pub days: Option<u32>,
+    pub workspace_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalUsageDay {
+    pub day: String,
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub output_tokens: u64,
+    pub total_tokens: u64,
+    pub agent_time_ms: u64,
+    pub agent_runs: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalUsageTotals {
+    pub last7_days_tokens: u64,
+    pub last30_days_tokens: u64,
+    pub average_daily_tokens: u64,
+    pub cache_hit_rate_percent: f64,
+    pub peak_day: Option<String>,
+    pub peak_day_tokens: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalUsageModel {
+    pub model: String,
+    pub tokens: u64,
+    pub share_percent: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalUsageSnapshot {
+    pub updated_at: i64,
+    pub days: Vec<LocalUsageDay>,
+    pub totals: LocalUsageTotals,
+    pub top_models: Vec<LocalUsageModel>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetExperimentalFeatureRequest {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileTextFile {
+    pub exists: bool,
+    pub content: String,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WriteProfileTextFileRequest {
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSummary {
+    pub name: String,
+    pub description: Option<String>,
+    pub developer_instructions: Option<String>,
+    pub config_file: String,
+    pub resolved_path: String,
+    pub managed_by_app: bool,
+    pub file_exists: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentsSettings {
+    pub config_path: String,
+    pub multi_agent_enabled: bool,
+    pub max_threads: u32,
+    pub max_depth: u32,
+    pub agents: Vec<AgentSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetAgentsCoreRequest {
+    pub multi_agent_enabled: bool,
+    pub max_threads: u32,
+    pub max_depth: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateAgentRequest {
+    pub name: String,
+    pub description: Option<String>,
+    pub developer_instructions: Option<String>,
+    pub template: Option<String>,
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAgentRequest {
+    pub name: String,
+    pub description: Option<String>,
+    pub developer_instructions: Option<String>,
+    pub rename_managed_file: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteAgentQuery {
+    pub delete_managed_file: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptEntry {
+    pub name: String,
+    pub path: String,
+    pub description: Option<String>,
+    pub argument_hint: Option<String>,
+    pub content: String,
+    pub scope: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptListQuery {
+    pub run_id: Uuid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatePromptRequest {
+    pub run_id: Uuid,
+    pub scope: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub argument_hint: Option<String>,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdatePromptRequest {
+    pub run_id: Uuid,
+    pub path: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub argument_hint: Option<String>,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletePromptRequest {
+    pub run_id: Uuid,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MovePromptRequest {
+    pub run_id: Uuid,
+    pub path: String,
+    pub scope: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateTextRequest {
+    pub kind: String,
+    pub input: String,
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateTextResponse {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RememberApprovalRuleRequest {
+    pub run_id: Uuid,
+    pub command: Vec<String>,
+}
+
 // ── Messages ──────────────────────────────────────────────────────
 
 /// Request to send a user message to a task's active thread.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendMessageRequest {
     pub text: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
+    #[serde(default)]
+    pub service_tier: Option<String>,
+    #[serde(default)]
+    pub access_mode: Option<String>,
+    #[serde(default)]
+    pub images: Vec<String>,
+    #[serde(default)]
+    pub collaboration_mode: Option<serde_json::Value>,
 }
 
 /// Response from sending a message.
@@ -268,6 +757,35 @@ pub struct SendMessageRequest {
 pub struct SendMessageResponse {
     pub status: String,
     pub thread_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InterruptRunRequest {
+    pub turn_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SteerRunRequest {
+    pub turn_id: String,
+    pub text: String,
+    #[serde(default)]
+    pub images: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ReviewTarget {
+    UncommittedChanges,
+    BaseBranch { branch: String },
+    Commit { sha: String, title: Option<String> },
+    Custom { instructions: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartReviewRequest {
+    pub target: ReviewTarget,
+    pub delivery: Option<String>,
 }
 
 // ── Approvals ─────────────────────────────────────────────────────
@@ -285,6 +803,17 @@ pub enum ApprovalDecision {
 #[serde(rename_all = "camelCase")]
 pub struct DecideApprovalRequest {
     pub decision: ApprovalDecision,
+    pub version: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserInputAnswer {
+    pub answers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RespondUserInputRequest {
+    pub answers: std::collections::BTreeMap<String, UserInputAnswer>,
     pub version: i64,
 }
 

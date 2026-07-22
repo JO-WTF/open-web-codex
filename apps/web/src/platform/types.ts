@@ -49,6 +49,10 @@ export type Run = {
   active_turn_id: string | null;
   workspace_id: string | null;
   source_ref: string | null;
+  workspace_kind: "main" | "worktree" | "clone";
+  workspace_name: string | null;
+  workspace_parent_run_id: string | null;
+  workspace_group_run_id: string | null;
   attempt: number;
   created_at: string;
   updated_at: string;
@@ -103,6 +107,47 @@ export type WorkspaceStatus = {
   changes: WorkspaceChange[];
 };
 
+export type WorkspaceFileContent = {
+  content: string;
+  truncated: boolean;
+};
+
+export type WorkspaceFileDiff = {
+  path: string;
+  diff: string;
+  isBinary: boolean;
+  truncated: boolean;
+};
+
+export type WorkspaceBranch = {
+  name: string;
+  lastCommit: number;
+};
+
+export type WorkspaceLogEntry = {
+  sha: string;
+  summary: string;
+  author: string;
+  timestamp: number;
+};
+
+export type WorkspaceLog = {
+  total: number;
+  entries: WorkspaceLogEntry[];
+  ahead: number;
+  behind: number;
+  aheadEntries: WorkspaceLogEntry[];
+  behindEntries: WorkspaceLogEntry[];
+  upstream: string | null;
+};
+
+export type WorkspaceCommitDiff = {
+  path: string;
+  status: string;
+  diff: string;
+  isBinary: boolean;
+};
+
 export type ProviderModel = {
   modelId: string;
   modelName?: string | null;
@@ -123,4 +168,92 @@ export type Provider = {
 export type ProviderCatalog = {
   data: Provider[];
   currentProviderId: string;
+};
+
+export type ProfileTextFile = {
+  exists: boolean;
+  content: string;
+  truncated: boolean;
+};
+
+export type ProfileLoginStart = { loginId: string; authUrl: string };
+export type ProfileLoginCancel = { canceled: boolean; status: string };
+export type ProfileLoginStatus = {
+  completed: boolean;
+  success: boolean | null;
+  error: string | null;
+};
+
+export type BrowserWorkspacePreference = {
+  workspaceId: string;
+  settings: Record<string, unknown>;
+  runtimeCodexArgs: string | null;
+};
+
+export type AgentSummary = {
+  name: string;
+  description: string | null;
+  developerInstructions: string | null;
+  configFile: string;
+  resolvedPath: string;
+  managedByApp: boolean;
+  fileExists: boolean;
+};
+
+export type AgentsSettings = {
+  configPath: string;
+  multiAgentEnabled: boolean;
+  maxThreads: number;
+  maxDepth: number;
+  agents: AgentSummary[];
+};
+
+export type PromptEntry = {
+  name: string;
+  path: string;
+  description: string | null;
+  argumentHint: string | null;
+  content: string;
+  scope: "workspace" | "global";
+};
+
+export type GitHubIssue = {
+  number: number;
+  title: string;
+  url: string;
+  updatedAt: string;
+};
+
+export type GitHubIssues = { total: number; issues: GitHubIssue[] };
+export type GitHubUser = { login: string };
+
+export type GitHubPullRequest = {
+  number: number;
+  title: string;
+  url: string;
+  updatedAt: string;
+  createdAt: string;
+  body: string;
+  headRefName: string;
+  baseRefName: string;
+  isDraft: boolean;
+  author: GitHubUser | null;
+};
+
+export type GitHubPullRequests = { total: number; pullRequests: GitHubPullRequest[] };
+export type GitHubPullRequestDiff = { path: string; status: string; diff: string };
+export type GitHubPullRequestComment = {
+  id: number;
+  body: string;
+  createdAt: string;
+  url: string;
+  author: GitHubUser | null;
+};
+
+export type CreateGitHubRepositoryResponse = {
+  status: "ok" | "partial";
+  repo: string;
+  remoteUrl: string | null;
+  pushError?: string | null;
+  defaultBranchError?: string | null;
 };

@@ -41,6 +41,13 @@ WebSocket whose first frame carries the session token. `apps/web/server`,
 local sidecar, raw browser JSON-RPC route, query-token event stream, or trusted
 browser-supplied filesystem path.
 
+The established React component tree and styles remain the browser product.
+Desktop imports are replaced at their original call sites by browser adapters,
+so UI components do not own platform authorization or transport details. Native
+window, tray, updater, daemon and desktop file-manager actions either map to a
+safe browser capability or return an explicit deployment-managed/unavailable
+result; they never cause a Tauri runtime to reappear.
+
 ## Facts and ownership
 
 | Fact | Authoritative owner | Web may persist |

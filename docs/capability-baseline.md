@@ -11,16 +11,16 @@ Observed on 2026-07-22 from the current synchronization branch:
 | Component | State |
 | --- | --- |
 | Codex subtree | integrated through `openai/codex` `4f3852107e5eedeb4cb89b57a6d4a35b49f8a59a` |
-| Observed official main | `4f3852107e5eedeb4cb89b57a6d4a35b49f8a59a`; no commit awaits integration |
-| Local Codex seams vs official main | 126 local-only paths: 32 added and 94 modified; no upstream-only, diverged, or missing local paths |
+| Observed official main | `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9`; three commits await integration |
+| Local Codex seams vs official main | 136 paths: 126 local-only and 10 upstream-only; no diverged or missing local paths |
 | Local customization footprint | six retained Runtime/TUI seams, derived artifacts and focused tests; `ToolName` uses the official implementation |
-| Web platform | Axum/PostgreSQL platform, native Profile Registry/Host, encrypted Provider Secret injection, durable approvals, isolated Git workspaces, lease-based Run orchestration, typed REST resources and authenticated WebSocket |
+| Web platform | Restored browser UI, Axum/PostgreSQL platform, native Profile Registry/Host, encrypted Provider Secret injection, durable approvals, isolated Git workspaces, lease-based Run orchestration, typed REST resources and authenticated WebSocket |
 
 ## Reproduced evidence
 
-- `scripts/codex-upstream-status.sh` reports `Status: synchronized`; the
-  customization status script reports 126 local-only differences and zero
-  upstream-only or diverged paths.
+- `scripts/codex-upstream-status.sh` reports three official commits pending;
+  the customization status script reports 126 local-only and 10 upstream-only
+  differences with zero diverged paths.
 - The current upstream structure and all six documented seams are integrated;
   regenerated app-server Schema and TypeScript fixtures have no drift.
 - The locally built `codex app-server` completes `initialize` and returns
@@ -63,6 +63,17 @@ Observed on 2026-07-22 from the current synchronization branch:
   `/api/events/ws` stream. Durable events are replayed by Task sequence; live
   delivery is filtered by Organization. The former local gateway, raw RPC,
   query-token event stream and desktop application are absent.
+- The checked-in React component tree and CSS match the established `main`
+  browser product. Existing components retain their layout and behavior while
+  Tauri imports are replaced by browser adapters. The production build, lint,
+  typecheck, no-desktop gate and all 1,119 browser tests pass.
+- The browser adapter covers projects, worktrees/clones, Threads/Turns, durable
+  events, approvals and structured input, Provider/model selection, Profile
+  account/login/rate limits, MCP/Skills/Apps/config/agents/prompts, terminal
+  streaming, files, nested Git roots, status/diff/stage/revert/commit/branches,
+  remotes, GitHub issues/pull requests/review data, local usage and dictation.
+  Official login completion is reduced to a typed Profile status before being
+  projected to the existing account-switching UI.
 - The latest official managed-config exact-value enforcement, missing sandbox
   path handling, and skill-name metrics sanitization changes are integrated.
   Their config, MCP, Core Skills, protocol and app-server regressions pass on
@@ -114,16 +125,18 @@ security, Push delivery, or every Studio capability.
 | Authentication | bootstrap and login use Argon2id, sessions bind an Organization, and legacy hashes upgrade after successful verification | HttpOnly-only session flow, CSRF, logout/revocation, rate limiting and complete browser flows are missing |
 | Authorization | Project/Task/Run and runtime calls enforce session Organization; Provider/approval calls additionally enforce Profile ownership; a two-Organization denial regression passes | centralized policy abstraction, Project-specific roles and the full concurrent multi-user matrix remain missing |
 | Codex bridge | Fake/Real adapter and event projection exist; Real uses the native Profile Registry/Host JSONL connection. Provider Secrets are encrypted and injected only into the owned child environment. Runtime-facing operations remain internal and browser routes are typed | composition is still one configured Profile process per server; per-user dynamic process routing remains incomplete |
-| Task/Run | CRUD/start/cancel/message, idempotent scheduling, DB leases/heartbeats/recovery, isolated Git workspaces, safe Item/Delta and approval projection, monotonic replay, workspace status and selected-path Commit exist | Push, artifact storage, approval expiry/restart delivery and full multi-Profile routing remain incomplete |
-| Browser | authenticated bootstrap/login, Project/Task/Run, messages, durable event replay/live updates, approvals, Provider selection, workspace status and Commit use typed platform resources | full Studio, Push, rich Diff/file inspection, cookie-only sessions and production accessibility remain incomplete |
+| Task/Run | CRUD/start/cancel/message/steer/compact/review, idempotent scheduling, DB leases/heartbeats/recovery, isolated Git workspaces, safe Item/Delta and approval projection, monotonic replay, terminal execution, workspace files, nested Git roots, full local Git operations and explicit remote operations exist | artifact storage, approval expiry/restart delivery, protected-branch policy and full multi-Profile routing remain incomplete |
+| Browser | established `main` UI and CSS run through typed resources for workspace/thread/message, Profile, approvals, Provider/model, terminal, file/diff, Git/GitHub, usage, settings, prompts, agents and dictation workflows | deployment-managed update/Tailscale actions, server-path desktop reveal/open behavior, live application of arbitrary Codex CLI args, usage model/agent-time attribution, cookie-only sessions and production accessibility remain incomplete |
 
 ## Immediate capability gates
 
-1. Derive the remaining Manifest method sets and experimental state from
+1. Integrate the three pending official commits and reapply only the documented
+   retained seams.
+2. Derive the remaining Manifest method sets and experimental state from
    generated Codex protocol/build facts.
-2. Keep the digest-addressed contract bundle and Web feature policy in sync.
-3. Keep the passing real Thread restart/resume/read smoke and add multi-cwd,
+3. Keep the digest-addressed contract bundle and Web feature policy in sync.
+4. Keep the passing real Thread restart/resume/read smoke and add multi-cwd,
    Provider, approval, multi-agent and MCP smoke suites before promoting the
    corresponding declarations to product support.
-4. Replace the single configured Profile composition root with authorized
+5. Replace the single configured Profile composition root with authorized
    per-user Profile routing before multi-user Beta.

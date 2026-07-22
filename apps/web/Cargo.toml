@@ -51,3 +51,4 @@ rand_core = { version = "0.6", features = ["getrandom"] }
 subtle = "2.6"
 zeroize = "1"
 tempfile = "3"
+toml_edit = "0.23"

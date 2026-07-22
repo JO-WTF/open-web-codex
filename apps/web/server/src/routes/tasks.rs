@@ -3,7 +3,7 @@ use axum::{
     http::StatusCode,
     Extension, Json,
 };
-use open_web_codex_adapter::{AuthorizedWorkspace, CodexAdapter};
+use open_web_codex_adapter::{AuthorizedWorkspace, CodexAdapter, TurnOptions};
 use open_web_codex_platform_contracts::error::PlatformError;
 use open_web_codex_platform_contracts::{
     CreateTaskRequest, ListTaskEventsParams, RunEvent, SendMessageRequest, SendMessageResponse,
@@ -245,7 +245,19 @@ pub async fn send_message(
     };
 
     let result = adapter
-        .send_user_message(&workspace, &thread_id, &req.text)
+        .send_user_message(
+            &workspace,
+            &thread_id,
+            &req.text,
+            &TurnOptions {
+                model: req.model,
+                effort: req.effort,
+                service_tier: req.service_tier,
+                access_mode: req.access_mode,
+                images: req.images,
+                collaboration_mode: req.collaboration_mode,
+            },
+        )
         .await
         .map_err(|_| {
             (

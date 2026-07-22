@@ -3,8 +3,8 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use crate::{
-    chrono_ttl, validate_idempotency_key, CancelRunRequest, EnqueueRunRequest, RunLease,
-    RunOrchestrator, RunOrchestratorError, RunRecord,
+    chrono_ttl, validate_idempotency_key, CancelRunRequest, EnqueueRunRequest,
+    RetireWorkspaceRequest, RunLease, RunOrchestrator, RunOrchestratorError, RunRecord,
 };
 
 impl RunOrchestrator {
@@ -13,8 +13,30 @@ impl RunOrchestrator {
         request: EnqueueRunRequest,
     ) -> Result<RunRecord, RunOrchestratorError> {
         validate_idempotency_key(&request.idempotency_key)?;
+        if !matches!(
+            request.workspace_kind.as_str(),
+            "main" | "worktree" | "clone"
+        ) {
+            return Err(RunOrchestratorError::Invalid(
+                "workspace kind is invalid".to_string(),
+            ));
+        }
+        let workspace_name = request
+            .workspace_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        if workspace_name
+            .as_ref()
+            .is_some_and(|value| value.len() > 128)
+        {
+            return Err(RunOrchestratorError::Invalid(
+                "workspace name is too long".to_string(),
+            ));
+        }
         let row = sqlx::query(
-            "SELECT t.id AS task_id, project.git_url, project.default_branch, profile.id AS profile_id \
+            "SELECT t.id AS task_id, t.project_id, project.git_url, project.default_branch, profile.id AS profile_id \
              FROM tasks t \
              JOIN projects project ON project.id = t.project_id AND project.organization_id = t.organization_id \
              JOIN profiles profile ON profile.organization_id = t.organization_id \
@@ -35,16 +57,109 @@ impl RunOrchestrator {
             .unwrap_or_else(|| row.get::<String, _>("default_branch"));
         self.git.validate_ref(&source_ref)?;
         let profile_id: Uuid = row.get("profile_id");
+        if request.workspace_kind == "main" && request.workspace_parent_run_id.is_some() {
+            return Err(RunOrchestratorError::Invalid(
+                "main workspaces cannot have a parent Run".to_string(),
+            ));
+        }
+        if request.workspace_kind == "main" && request.workspace_group_run_id.is_some() {
+            return Err(RunOrchestratorError::Invalid(
+                "main workspaces cannot have a derived workspace group".to_string(),
+            ));
+        }
+        if request.workspace_kind == "worktree" && request.workspace_parent_run_id.is_none() {
+            return Err(RunOrchestratorError::Invalid(
+                "worktree workspaces require a parent Run".to_string(),
+            ));
+        }
+        if let Some(parent_run_id) = request.workspace_parent_run_id {
+            let parent_is_authorized: bool = sqlx::query_scalar(
+                "SELECT EXISTS( \
+                   SELECT 1 FROM runs parent \
+                   JOIN tasks parent_task ON parent_task.id = parent.task_id \
+                   JOIN workspaces parent_workspace ON parent_workspace.id = parent.workspace_id \
+                   WHERE parent.id = $1 AND parent.organization_id = $2 \
+                     AND parent_task.project_id = $3 AND parent.requested_by = $4 \
+                     AND parent_workspace.state <> 'retired' \
+                 )",
+            )
+            .bind(parent_run_id)
+            .bind(request.organization_id)
+            .bind(row.get::<Uuid, _>("project_id"))
+            .bind(request.actor_id)
+            .fetch_one(&self.db)
+            .await?;
+            if !parent_is_authorized {
+                return Err(RunOrchestratorError::NotFound);
+            }
+        }
+        if let Some(group_run_id) = request.workspace_group_run_id {
+            let group_is_authorized: bool = sqlx::query_scalar(
+                "SELECT EXISTS( \
+                   SELECT 1 FROM runs root \
+                   JOIN tasks root_task ON root_task.id = root.task_id \
+                   JOIN workspaces root_workspace ON root_workspace.id = root.workspace_id \
+                   WHERE root.id = $1 AND root.organization_id = $2 \
+                     AND root_task.project_id = $3 AND root.requested_by = $4 \
+                     AND root.workspace_kind = $5 AND root.workspace_kind <> 'main' \
+                     AND root.workspace_group_run_id IS NULL \
+                     AND root_workspace.state <> 'retired' \
+                 )",
+            )
+            .bind(group_run_id)
+            .bind(request.organization_id)
+            .bind(row.get::<Uuid, _>("project_id"))
+            .bind(request.actor_id)
+            .bind(&request.workspace_kind)
+            .fetch_one(&self.db)
+            .await?;
+            if !group_is_authorized {
+                return Err(RunOrchestratorError::NotFound);
+            }
+        }
+        if let Some(fork_thread_id) = request.fork_thread_id.as_deref() {
+            if fork_thread_id.trim().is_empty() || fork_thread_id.len() > 256 {
+                return Err(RunOrchestratorError::Invalid(
+                    "fork source Thread id is invalid".to_string(),
+                ));
+            }
+            let Some(source_run_id) = request.fork_source_run_id else {
+                return Err(RunOrchestratorError::Invalid(
+                    "forked Runs require their source parent Run".to_string(),
+                ));
+            };
+            let source_matches: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM runs source \
+                 WHERE source.id = $1 AND source.organization_id = $2 \
+                   AND source.requested_by = $3 AND source.codex_thread_id = $4)",
+            )
+            .bind(source_run_id)
+            .bind(request.organization_id)
+            .bind(request.actor_id)
+            .bind(fork_thread_id)
+            .fetch_one(&self.db)
+            .await?;
+            if !source_matches {
+                return Err(RunOrchestratorError::NotFound);
+            }
+        } else if request.fork_source_run_id.is_some() {
+            return Err(RunOrchestratorError::Invalid(
+                "fork source Run requires a source Thread id".to_string(),
+            ));
+        }
 
         let inserted = sqlx::query(
             "INSERT INTO runs (organization_id, task_id, requested_by, requested_profile_id, \
-                               source_ref, idempotency_key, status) \
-             VALUES ($1, $2, $3, $4, $5, $6, 'pending') \
+                               source_ref, idempotency_key, workspace_kind, workspace_name, \
+                               workspace_parent_run_id, workspace_group_run_id, \
+                               workspace_copy_agents_md, fork_thread_id, fork_source_run_id, status) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'pending') \
              ON CONFLICT (organization_id, requested_by, idempotency_key) \
                WHERE requested_by IS NOT NULL AND idempotency_key IS NOT NULL \
              DO NOTHING \
              RETURNING id, task_id, status, codex_thread_id, active_turn_id, workspace_id, source_ref, \
-                       attempt, created_at, updated_at",
+                       workspace_kind, workspace_name, workspace_parent_run_id, \
+                       workspace_group_run_id, attempt, created_at, updated_at",
         )
         .bind(request.organization_id)
         .bind(request.task_id)
@@ -52,6 +167,13 @@ impl RunOrchestrator {
         .bind(profile_id)
         .bind(&source_ref)
         .bind(&request.idempotency_key)
+        .bind(&request.workspace_kind)
+        .bind(&workspace_name)
+        .bind(request.workspace_parent_run_id)
+        .bind(request.workspace_group_run_id)
+        .bind(request.copy_agents_md)
+        .bind(&request.fork_thread_id)
+        .bind(request.fork_source_run_id)
         .fetch_optional(&self.db)
         .await;
 
@@ -60,7 +182,8 @@ impl RunOrchestrator {
             Ok(None) => {
                 let existing = sqlx::query(
                     "SELECT id, task_id, status, codex_thread_id, active_turn_id, workspace_id, source_ref, \
-                            attempt, created_at, updated_at \
+                            workspace_kind, workspace_name, workspace_parent_run_id, \
+                            workspace_group_run_id, attempt, created_at, updated_at \
                      FROM runs WHERE organization_id = $1 AND requested_by = $2 \
                        AND idempotency_key = $3",
                 )
@@ -93,7 +216,9 @@ impl RunOrchestrator {
         let mut transaction = self.db.begin().await?;
         let row = sqlx::query(
             "SELECT r.id, r.task_id, r.status, r.codex_thread_id, r.active_turn_id, \
-                    r.workspace_id, r.source_ref, r.attempt, r.created_at, r.updated_at, \
+                    r.workspace_id, r.source_ref, r.workspace_kind, r.workspace_name, \
+                    r.workspace_parent_run_id, r.workspace_group_run_id, \
+                    r.attempt, r.created_at, r.updated_at, \
                     r.requested_by, w.root_path \
              FROM runs r LEFT JOIN workspaces w ON w.id = r.workspace_id \
              WHERE r.id = $1 AND r.organization_id = $2 FOR UPDATE OF r",
@@ -165,6 +290,106 @@ impl RunOrchestrator {
         self.get_run(request.organization_id, request.run_id).await
     }
 
+    pub async fn retire_workspace(
+        &self,
+        request: RetireWorkspaceRequest,
+    ) -> Result<RunRecord, RunOrchestratorError> {
+        let row = sqlx::query(
+            "SELECT r.requested_by, r.workspace_kind, r.workspace_id, r.codex_thread_id, \
+                    r.active_turn_id, w.root_path, w.state \
+             FROM runs r JOIN workspaces w ON w.id = r.workspace_id \
+             WHERE r.id = $1 AND r.organization_id = $2",
+        )
+        .bind(request.run_id)
+        .bind(request.organization_id)
+        .fetch_optional(&self.db)
+        .await?
+        .ok_or(RunOrchestratorError::NotFound)?;
+        let requested_by: Option<Uuid> = row.get("requested_by");
+        if requested_by != Some(request.actor_id) && !request.allow_organization_admin {
+            return Err(RunOrchestratorError::NotFound);
+        }
+        if row.get::<String, _>("workspace_kind") == "main" {
+            return Err(RunOrchestratorError::Conflict(
+                "the main Run workspace cannot be removed".to_string(),
+            ));
+        }
+        if row.get::<String, _>("state") == "retired" {
+            return self.get_run(request.organization_id, request.run_id).await;
+        }
+        let workspace_id: Uuid = row.get("workspace_id");
+        if let (Some(thread_id), Some(turn_id)) = (
+            row.get::<Option<String>, _>("codex_thread_id"),
+            row.get::<Option<String>, _>("active_turn_id"),
+        ) {
+            let workspace = open_web_codex_adapter::AuthorizedWorkspace {
+                id: workspace_id.to_string(),
+                root: row.get::<String, _>("root_path").into(),
+            };
+            self.adapter
+                .interrupt_turn(&workspace, &thread_id, &turn_id)
+                .await?;
+        }
+
+        let mut transaction = self.db.begin().await?;
+        let locked = sqlx::query(
+            "SELECT r.task_id, r.requested_by, r.workspace_kind, w.state \
+             FROM runs r JOIN workspaces w ON w.id = r.workspace_id \
+             WHERE r.id = $1 AND r.organization_id = $2 AND w.id = $3 \
+             FOR UPDATE OF r, w",
+        )
+        .bind(request.run_id)
+        .bind(request.organization_id)
+        .bind(workspace_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(RunOrchestratorError::NotFound)?;
+        if locked.get::<Option<Uuid>, _>("requested_by") != Some(request.actor_id)
+            && !request.allow_organization_admin
+        {
+            return Err(RunOrchestratorError::NotFound);
+        }
+        if locked.get::<String, _>("workspace_kind") == "main" {
+            return Err(RunOrchestratorError::Conflict(
+                "the main Run workspace cannot be removed".to_string(),
+            ));
+        }
+        if locked.get::<String, _>("state") != "retired" {
+            sqlx::query(
+                "UPDATE runs SET status = 'cancelled', active_turn_id = NULL, failure_code = NULL, \
+                                 lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, \
+                                 updated_at = now() WHERE id = $1",
+            )
+            .bind(request.run_id)
+            .execute(&mut *transaction)
+            .await?;
+            sqlx::query("UPDATE tasks SET status = 'archived', updated_at = now() WHERE id = $1")
+                .bind(locked.get::<Uuid, _>("task_id"))
+                .execute(&mut *transaction)
+                .await?;
+            sqlx::query(
+                "UPDATE workspaces SET state = 'cleanup_pending', updated_at = now() WHERE id = $1",
+            )
+            .bind(workspace_id)
+            .execute(&mut *transaction)
+            .await?;
+            sqlx::query(
+                "INSERT INTO runner_jobs (organization_id, run_id, workspace_id, kind) \
+                 VALUES ($1, $2, $3, 'workspace_cleanup') \
+                 ON CONFLICT (workspace_id, kind) DO UPDATE SET state = 'pending', \
+                   run_after = now(), lease_owner = NULL, lease_token = NULL, \
+                   lease_expires_at = NULL, updated_at = now()",
+            )
+            .bind(request.organization_id)
+            .bind(request.run_id)
+            .bind(workspace_id)
+            .execute(&mut *transaction)
+            .await?;
+        }
+        transaction.commit().await?;
+        self.get_run(request.organization_id, request.run_id).await
+    }
+
     pub async fn get_run(
         &self,
         organization_id: Uuid,
@@ -172,6 +397,7 @@ impl RunOrchestrator {
     ) -> Result<RunRecord, RunOrchestratorError> {
         let row = sqlx::query(
             "SELECT id, task_id, status, codex_thread_id, active_turn_id, workspace_id, source_ref, \
+                    workspace_kind, workspace_name, workspace_parent_run_id, workspace_group_run_id, \
                     attempt, created_at, updated_at FROM runs \
              WHERE id = $1 AND organization_id = $2",
         )
@@ -187,6 +413,8 @@ impl RunOrchestrator {
         let mut transaction = self.db.begin().await?;
         let candidate = sqlx::query(
             "SELECT r.id, r.task_id, r.organization_id, r.requested_profile_id, r.source_ref, \
+                    r.workspace_kind, r.workspace_parent_run_id, r.workspace_copy_agents_md, \
+                    r.fork_thread_id, r.fork_source_run_id, \
                     t.project_id, p.git_url \
              FROM runs r \
              JOIN tasks t ON t.id = r.task_id AND t.organization_id = r.organization_id \
@@ -228,6 +456,11 @@ impl RunOrchestrator {
             profile_id: candidate.get("requested_profile_id"),
             git_url: candidate.get("git_url"),
             source_ref: candidate.get("source_ref"),
+            workspace_kind: candidate.get("workspace_kind"),
+            workspace_parent_run_id: candidate.get("workspace_parent_run_id"),
+            fork_thread_id: candidate.get("fork_thread_id"),
+            fork_source_run_id: candidate.get("fork_source_run_id"),
+            copy_agents_md: candidate.get("workspace_copy_agents_md"),
             token,
             expires_at,
             attempt,
@@ -316,6 +549,10 @@ pub(crate) fn run_record(row: &sqlx::postgres::PgRow) -> RunRecord {
         active_turn_id: row.get("active_turn_id"),
         workspace_id: row.get("workspace_id"),
         source_ref: row.get("source_ref"),
+        workspace_kind: row.get("workspace_kind"),
+        workspace_name: row.get("workspace_name"),
+        workspace_parent_run_id: row.get("workspace_parent_run_id"),
+        workspace_group_run_id: row.get("workspace_group_run_id"),
         attempt: row.get("attempt"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),

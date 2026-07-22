@@ -4,7 +4,9 @@ use axum::{extract::Path, http::StatusCode, Extension, Json};
 use open_web_codex_adapter::CodexAdapter;
 use open_web_codex_approval_service::{ApprovalActor, ApprovalService, ApprovalServiceError};
 use open_web_codex_platform_contracts::error::PlatformError;
-use open_web_codex_platform_contracts::{ApprovalSummary, DecideApprovalRequest};
+use open_web_codex_platform_contracts::{
+    ApprovalSummary, DecideApprovalRequest, RespondUserInputRequest,
+};
 use uuid::Uuid;
 
 use crate::middleware::auth::AuthenticatedUser;
@@ -50,6 +52,44 @@ pub async fn decide(
             StatusCode::BAD_GATEWAY,
             Json(PlatformError::internal(
                 "Approval delivery status is unknown; inspect before retrying",
+            )),
+        ));
+    }
+    approvals
+        .complete_decision(actor, &dispatch)
+        .await
+        .map_err(approval_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn respond_user_input(
+    auth: AuthenticatedUser,
+    Path(id): Path<Uuid>,
+    Extension(approvals): Extension<Arc<ApprovalService>>,
+    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
+    Json(request): Json<RespondUserInputRequest>,
+) -> Result<StatusCode, ApiError> {
+    let actor = actor(&auth);
+    let dispatch = approvals
+        .begin_user_input_response(actor, id, request)
+        .await
+        .map_err(approval_error)?;
+    if adapter
+        .respond_to_server_request(
+            dispatch.runtime_request_id.clone(),
+            dispatch.response.clone(),
+        )
+        .await
+        .is_err()
+    {
+        approvals
+            .mark_delivery_unknown(actor, &dispatch)
+            .await
+            .map_err(approval_error)?;
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            Json(PlatformError::internal(
+                "User input delivery status is unknown; inspect before retrying",
             )),
         ));
     }

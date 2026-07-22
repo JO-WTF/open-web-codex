@@ -36,6 +36,13 @@ pub struct EnqueueRunRequest {
     pub task_id: Uuid,
     pub idempotency_key: String,
     pub git_ref: Option<String>,
+    pub workspace_kind: String,
+    pub workspace_name: Option<String>,
+    pub workspace_parent_run_id: Option<Uuid>,
+    pub workspace_group_run_id: Option<Uuid>,
+    pub copy_agents_md: bool,
+    pub fork_thread_id: Option<String>,
+    pub fork_source_run_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +54,10 @@ pub struct RunRecord {
     pub active_turn_id: Option<String>,
     pub workspace_id: Option<Uuid>,
     pub source_ref: Option<String>,
+    pub workspace_kind: String,
+    pub workspace_name: Option<String>,
+    pub workspace_parent_run_id: Option<Uuid>,
+    pub workspace_group_run_id: Option<Uuid>,
     pub attempt: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -54,6 +65,14 @@ pub struct RunRecord {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CancelRunRequest {
+    pub organization_id: Uuid,
+    pub actor_id: Uuid,
+    pub allow_organization_admin: bool,
+    pub run_id: Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetireWorkspaceRequest {
     pub organization_id: Uuid,
     pub actor_id: Uuid,
     pub allow_organization_admin: bool,
@@ -69,6 +88,11 @@ pub struct RunLease {
     pub profile_id: Uuid,
     pub git_url: String,
     pub source_ref: String,
+    pub workspace_kind: String,
+    pub workspace_parent_run_id: Option<Uuid>,
+    pub fork_thread_id: Option<String>,
+    pub fork_source_run_id: Option<Uuid>,
+    pub copy_agents_md: bool,
     pub token: String,
     pub expires_at: DateTime<Utc>,
     pub attempt: i32,
