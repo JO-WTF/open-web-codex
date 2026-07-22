@@ -117,10 +117,7 @@ fn timestamp_now() -> String {
         .unwrap_or_default();
     let secs = duration.as_secs();
     let (year, month, day, hour, min, sec) = rfc3339_parts(secs as i64);
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        year, month, day, hour, min, sec
-    )
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{min:02}:{sec:02}Z")
 }
 
 fn rfc3339_parts(unix_secs: i64) -> (i64, u32, u32, u32, u32, u32) {

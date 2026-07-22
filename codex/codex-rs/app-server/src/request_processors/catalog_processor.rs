@@ -213,7 +213,7 @@ impl CatalogRequestProcessor {
         Ok(Some(
             ModelProviderListResponse {
                 data: providers,
-                current_provider_id: config.model_provider_id.clone(),
+                current_provider_id: config.model_provider_id,
             }
             .into(),
         ))

@@ -95,9 +95,8 @@ impl ModelClientSession {
                 service_tier.clone(),
                 responses_metadata,
             )?;
-            let store = responses_request.store;
             self.client
-                .prepare_response_items_for_request(&mut responses_request.input, store);
+                .prepare_response_items_for_request(&mut responses_request.input);
             let request = responses_request_to_chat_completions_request(responses_request);
             let request_session_telemetry =
                 session_telemetry_for_chat_request(session_telemetry, &request);

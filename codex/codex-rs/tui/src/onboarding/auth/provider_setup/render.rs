@@ -3,31 +3,32 @@
 use super::*;
 
 pub(super) fn provider_setup_form_lines(state: &ProviderSetupState) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    lines.push(provider_setup_form_row(
-        state.field == ProviderSetupField::Id,
-        "id",
-        &state.id,
-        "provider-id",
-    ));
-    lines.push(provider_setup_form_row(
-        state.field == ProviderSetupField::Name,
-        "name",
-        &state.name,
-        "My Provider",
-    ));
-    lines.push(provider_setup_form_row(
-        state.field == ProviderSetupField::BaseUrl,
-        "url",
-        &state.base_url,
-        "https://api.example.com/v1",
-    ));
-    lines.push(provider_setup_form_row(
-        state.field == ProviderSetupField::EnvKey,
-        "apikey env",
-        &state.env_key,
-        "ENV_VAR_NAME or -",
-    ));
+    let mut lines = vec![
+        provider_setup_form_row(
+            state.field == ProviderSetupField::Id,
+            "id",
+            &state.id,
+            "provider-id",
+        ),
+        provider_setup_form_row(
+            state.field == ProviderSetupField::Name,
+            "name",
+            &state.name,
+            "My Provider",
+        ),
+        provider_setup_form_row(
+            state.field == ProviderSetupField::BaseUrl,
+            "url",
+            &state.base_url,
+            "https://api.example.com/v1",
+        ),
+        provider_setup_form_row(
+            state.field == ProviderSetupField::EnvKey,
+            "apikey env",
+            &state.env_key,
+            "ENV_VAR_NAME or -",
+        ),
+    ];
 
     let marker = if state.field == ProviderSetupField::WireApi {
         "  › ".cyan()

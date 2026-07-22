@@ -151,6 +151,7 @@ pub struct ChatStreamOptions {
     pub include_usage: bool,
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn skip_false(value: &bool) -> bool {
     !value
 }
