@@ -10,8 +10,8 @@ Observed on 2026-07-22 from the current synchronization branch:
 
 | Component | State |
 | --- | --- |
-| Codex subtree | integrated through `openai/codex` `661339bb0941c055602688a83bcc8f72be21b54d` |
-| Observed official main | `661339bb0941c055602688a83bcc8f72be21b54d`; no commit awaits integration |
+| Codex subtree | integrated through `openai/codex` `4f3852107e5eedeb4cb89b57a6d4a35b49f8a59a` |
+| Observed official main | `4f3852107e5eedeb4cb89b57a6d4a35b49f8a59a`; no commit awaits integration |
 | Local Codex seams vs official main | 126 local-only paths: 32 added and 94 modified; no upstream-only, diverged, or missing local paths |
 | Local customization footprint | six retained Runtime/TUI seams, derived artifacts and focused tests; `ToolName` uses the official implementation |
 | Web platform | Axum/PostgreSQL platform, native Profile Registry/Host, encrypted Provider Secret injection, durable approvals, isolated Git workspaces, lease-based Run orchestration, typed REST resources and authenticated WebSocket |

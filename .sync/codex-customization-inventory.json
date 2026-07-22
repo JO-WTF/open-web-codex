@@ -3,9 +3,9 @@
   "purpose": "Tracks the current official-tree comparison and convergence classification progress for codex/.",
   "comparison": {
     "upstreamRef": "codex-upstream/main",
-    "upstreamCommit": "661339bb0941c055602688a83bcc8f72be21b54d",
+    "upstreamCommit": "4f3852107e5eedeb4cb89b57a6d4a35b49f8a59a",
     "localTree": "HEAD:codex",
-    "observedAt": "2026-07-22T03:10:35Z",
+    "observedAt": "2026-07-22T03:19:39Z",
     "differenceCount": 126,
     "addedLocally": 32,
     "modified": 94,
@@ -57,8 +57,8 @@
       "webContractCheck": "passed",
       "platformTests": "frontend, Rust workspace, PostgreSQL integration, Profile restart, Provider isolation, Git Runtime, Run lease, two-organization security, and fake-server HTTP/WebSocket checks passed"
     },
-    "validatedAgainstUpstream": "661339bb0941c055602688a83bcc8f72be21b54d",
-    "validatedAtCommit": "2060d3ab564013f859820dedb99fc993e8ff50f9",
+    "validatedAgainstUpstream": "4f3852107e5eedeb4cb89b57a6d4a35b49f8a59a",
+    "validatedAtCommit": "89839d66d978e392d6768761b71db67f962ba560",
     "nextAction": "Keep the six retained seams replayable at the next official sync; product work continues with authorized per-user dynamic Profile routing and the remaining M2 session and Runner hardening gates."
   }
 }

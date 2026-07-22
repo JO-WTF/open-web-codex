@@ -6,7 +6,7 @@ after an official subtree update. Generated schemas, TypeScript definitions,
 fixtures, and snapshots are derivatives of the source seams and are not
 independent custom behavior.
 
-The integrated official base is `661339bb0941c055602688a83bcc8f72be21b54d`.
+The integrated official base is `4f3852107e5eedeb4cb89b57a6d4a35b49f8a59a`.
 The target is a small, explicit set of Provider Runtime and TUI seams; it is
 not a zero-diff Codex subtree.
 
@@ -26,7 +26,7 @@ not a zero-diff Codex subtree.
 ## Current state
 
 The integrated base and current official main are both
-`661339bb0941c055602688a83bcc8f72be21b54d`; no official commit is pending.
+`4f3852107e5eedeb4cb89b57a6d4a35b49f8a59a`; no official commit is pending.
 The current comparison contains 126 local differences: 32 files added locally
 and 94 modified. All 126 are `local-only`; `upstream-only` and `diverged` are
 both zero.
