@@ -1,4 +1,5 @@
 import type { LogEntry } from "../WebApp";
+import { stripLeadingProviderSentinel } from "./providerText";
 
 export function unwrapWebRpcResult(value: unknown): unknown {
   let current = value;
@@ -178,7 +179,10 @@ export function webLogEntryFromThreadItem(
   }
   const text = messageText(item);
   if (type === "userMessage") return text ? { id, level: "user", text } : null;
-  if (type === "agentMessage") return text ? { id, level: "assistant", text } : null;
+  if (type === "agentMessage") {
+    const cleanText = stripLeadingProviderSentinel(text);
+    return cleanText ? { id, level: "assistant", text: cleanText } : null;
+  }
   if (type === "hookPrompt") {
     const fragments = Array.isArray(item.fragments)
       ? item.fragments.map((entry) => asText((entry as Record<string, unknown>).text)).filter(Boolean).join("\n")

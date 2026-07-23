@@ -111,6 +111,18 @@ describe("buildWebThreadHistory", () => {
     expect(entry.reasoningSummary).toBeUndefined();
   });
 
+  it("strips provider sentinels from restored assistant history", () => {
+    const result = buildWebThreadHistory({
+      turns: [{
+        items: [
+          { id: "assistant", type: "agentMessage", text: "<｜begin▁of▁sentence｜># Route unavailable" },
+        ],
+      }],
+    }, () => "fallback-id");
+
+    expect(result).toMatchObject([{ level: "assistant", text: "# Route unavailable" }]);
+  });
+
   it("restores persisted dynamic tools as commands, diffs, and expandable tool cards", () => {
     let id = 0;
     const result = buildWebThreadHistory({

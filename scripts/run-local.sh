@@ -51,6 +51,10 @@ Environment:
   CODEX_MODE                         real (default) or fake
   CODEX_BIN                          Codex CLI binary used in real mode
   CODEX_HOME                         Persistent Profile home
+  OPEN_WEB_CODEX_IMPORT_CODEX_AUTH_FROM
+                                     Single-Profile transition: import
+                                     file-backed auth.json from this Codex home
+                                     when CODEX_HOME has no auth.json
   OPEN_WEB_CODEX_MASTER_KEY          Base64-encoded 32-byte key; a local key is
                                      generated under the data directory if absent
   OPEN_WEB_CODEX_RUNNER_ROOT         Private mirror/workspace root
@@ -59,6 +63,9 @@ Environment:
   OPEN_WEB_CODEX_SERVER_PORT         HTTP/WebSocket port
   OPEN_WEB_CODEX_SKIP_BUILD          1 to reuse build outputs
   OPEN_WEB_CODEX_BUILD_PROFILE       debug (default) or release
+  OPEN_WEB_CODEX_DISABLE_CODEX_SANDBOX
+                                     1 to trust the surrounding container and
+                                     avoid nested Codex bubblewrap sandboxing
   DATABASE_URL                       PostgreSQL connection URL
   DATABASE_MAX_CONNECTIONS           PostgreSQL pool size
 EOF
@@ -199,7 +206,6 @@ fi
 case "$database_url" in postgres://*|postgresql://*) ;; *) error "database URL must use postgres:// or postgresql://"; exit 2 ;; esac
 
 mkdir -p "$run_dir" "$log_dir" "$profile_home" "$runner_root"
-
 if [[ "$codex_mode" == "real" && -z "${OPEN_WEB_CODEX_MASTER_KEY:-}" ]]; then
   if [[ ! -f "$master_key_file" ]]; then
     command -v openssl >/dev/null 2>&1 || { error "openssl is required to create the local Secret Store key"; exit 1; }

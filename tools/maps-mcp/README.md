@@ -7,6 +7,7 @@ Python MCP server that exposes paid Google Maps and Mapbox operations without mo
 - `batch_reverse_geocode`
 - `get_route`
 - `distance_matrix`
+- `create_map_card`
 
 Every tool accepts `provider="google"` or `provider="mapbox"`. Provider request limits are
 handled inside the server. Batch geocoding is capped at 500 inputs and distance matrices at 2,500
@@ -34,7 +35,9 @@ this server is for local workspace use until those platform gates are complete.
 
 ## Install
 
-From this directory:
+No pre-created `.venv` is required for Codex plugin discovery. The checked-in
+`bin/maps-mcp-launcher` creates `.venv` on first start and installs this package in editable mode
+when dependencies are missing. For manual development from this directory you can still run:
 
 ```bash
 python3 -m venv .venv
@@ -44,22 +47,22 @@ python3 -m venv .venv
 Google projects must enable Geocoding API v4 and Routes API. Mapbox requires an access token with
 Geocoding, Directions, and Matrix access.
 
-## Register with Codex
+## Codex discovery
 
-Add a workspace-specific server entry to the Profile's `config.toml`, replacing both absolute
-paths:
+This directory is also a Codex plugin root. The checked-in `.codex-plugin/plugin.json` points to
+`./.mcp.json` and `./skills/`, so Codex can discover the `workspace_maps` MCP server and route/map
+Skill guidance from the selected workspace's capability roots instead of relying on `run-local.sh`
+or hand-edited Profile `config.toml` entries. In the Web platform, the native Profile Host adapter
+selects local plugin roots discovered under the source tree or workspace `tools/` directories when it starts
+a new Thread; deployments may add extra absolute roots with `OPEN_WEB_CODEX_CAPABILITY_ROOTS`.
 
-```toml
-[mcp_servers.workspace_maps]
-command = "/ABSOLUTE/REPO/tools/maps-mcp/.venv/bin/maps-mcp"
-args = ["--workspace-root", "/ABSOLUTE/WORKSPACE"]
-startup_timeout_sec = 20
-tool_timeout_sec = 180
-default_tools_approval_mode = "prompt"
-```
-
-The MCP client must advertise URL elicitation support. If the current browser surface cannot render
-the key request, the tool fails safely instead of requesting the key in a model-visible form.
+The plugin MCP config starts `./bin/maps-mcp-launcher` with `cwd="."`; the launcher resolves the
+plugin root, creates `.venv` when necessary, verifies `maps_mcp`/`mcp` imports, installs this package
+in editable mode when dependencies are missing, and then execs `python -m maps_mcp.server`. This
+avoids the `No such file or directory` startup failure seen when a selected plugin root has not been
+prepared manually. The MCP client must advertise URL elicitation support. If the current browser
+surface cannot render the key request, the tool fails safely instead of requesting the key in a
+model-visible form.
 
 ## Tests
 
@@ -68,6 +71,13 @@ Tests use fake HTTP responses and never call a paid provider:
 ```bash
 PYTHONPATH=. python3 -m unittest discover -s tests -v
 ```
+
+Map-card output:
+
+`create_map_card` returns an `open-web-card map.v1` fenced marker. Put the returned `marker`
+verbatim in the assistant final answer where the Web UI should render the map card. Use small
+inline points/lines/polygons for previews, and prefer `input_ref` or `artifact_id` for large
+GeoJSON.
 
 Provider endpoints implemented:
 

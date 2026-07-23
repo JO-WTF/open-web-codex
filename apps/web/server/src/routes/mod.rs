@@ -117,6 +117,10 @@ pub fn router(
         )
         .route("/profile/apps", axum::routing::get(profile::apps))
         .route(
+            "/profile/runtime-status",
+            axum::routing::get(profile::runtime_status),
+        )
+        .route(
             "/profile/mcp-servers",
             axum::routing::get(profile::mcp_servers),
         )

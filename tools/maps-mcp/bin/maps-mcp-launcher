@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+venv_dir="${MAPS_MCP_VENV:-$root_dir/.venv}"
+python_bin="$venv_dir/bin/python"
+
+ensure_venv() {
+  if [[ ! -x "$python_bin" ]]; then
+    command -v python3 >/dev/null 2>&1 || {
+      printf 'maps-mcp: python3 is required to create %s\n' "$venv_dir" >&2
+      exit 127
+    }
+    python3 -m venv "$venv_dir"
+  fi
+}
+
+ensure_dependencies() {
+  if "$python_bin" - <<'PY' >/dev/null 2>&1
+import maps_mcp.server  # noqa: F401
+import mcp  # noqa: F401
+PY
+  then
+    return 0
+  fi
+  "$python_bin" -m pip install --disable-pip-version-check -e "$root_dir" >&2
+}
+
+ensure_venv
+ensure_dependencies
+exec "$python_bin" -m maps_mcp.server "$@"
