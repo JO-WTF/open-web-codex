@@ -45,22 +45,16 @@ python3 -m venv .venv
 Google projects must enable Geocoding API v4 and Routes API. Mapbox requires an access token with
 Geocoding, Directions, and Matrix access.
 
-## Register with Codex
+## Codex discovery
 
-Add a workspace-specific server entry to the Profile's `config.toml`, replacing both absolute
-paths:
+This directory is also a Codex plugin root. The checked-in `.codex-plugin/plugin.json` points to
+`./.mcp.json`, so Codex can discover the `workspace_maps` MCP server from the selected workspace's
+capability roots instead of relying on `run-local.sh` or hand-edited Profile `config.toml` entries.
 
-```toml
-[mcp_servers.workspace_maps]
-command = "/ABSOLUTE/REPO/tools/maps-mcp/.venv/bin/maps-mcp"
-args = ["--workspace-root", "/ABSOLUTE/WORKSPACE"]
-startup_timeout_sec = 20
-tool_timeout_sec = 180
-default_tools_approval_mode = "prompt"
-```
-
-The MCP client must advertise URL elicitation support. If the current browser surface cannot render
-the key request, the tool fails safely instead of requesting the key in a model-visible form.
+The plugin MCP config starts `.venv/bin/python -m maps_mcp.server` with `cwd="."`; run the install
+steps above before asking Codex to load the plugin. The MCP client must advertise URL elicitation
+support. If the current browser surface cannot render the key request, the tool fails safely instead
+of requesting the key in a model-visible form.
 
 ## Tests
 

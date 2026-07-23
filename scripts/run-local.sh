@@ -17,7 +17,6 @@ data_dir="${OPEN_WEB_CODEX_DATA_DIR:-$repo_root/.local/open-web-codex}"
 database_url="${DATABASE_URL:-}"
 database_url_file=""
 database_max_connections="${DATABASE_MAX_CONNECTIONS:-10}"
-local_maps_mcp="${OPEN_WEB_CODEX_ENABLE_LOCAL_MAPS_MCP:-1}"
 
 run_dir="$data_dir/run"
 log_dir="$data_dir/logs"
@@ -63,9 +62,6 @@ Environment:
   OPEN_WEB_CODEX_DISABLE_CODEX_SANDBOX
                                      1 to trust the surrounding container and
                                      avoid nested Codex bubblewrap sandboxing
-  OPEN_WEB_CODEX_ENABLE_LOCAL_MAPS_MCP
-                                     1 (default) to register the repository
-                                     maps MCP server in the local Profile
   DATABASE_URL                       PostgreSQL connection URL
   DATABASE_MAX_CONNECTIONS           PostgreSQL pool size
 EOF
@@ -124,7 +120,6 @@ done
 case "$skip_build" in 0|1) ;; *) error "OPEN_WEB_CODEX_SKIP_BUILD must be 0 or 1"; exit 2 ;; esac
 case "$codex_mode" in real|fake) ;; *) error "CODEX_MODE must be real or fake"; exit 2 ;; esac
 case "$build_profile" in debug|release) ;; *) error "OPEN_WEB_CODEX_BUILD_PROFILE must be debug or release"; exit 2 ;; esac
-case "$local_maps_mcp" in 0|1) ;; *) error "OPEN_WEB_CODEX_ENABLE_LOCAL_MAPS_MCP must be 0 or 1"; exit 2 ;; esac
 [[ "$server_port" =~ ^[1-9][0-9]*$ ]] || { error "port must be a positive integer"; exit 2; }
 [[ "$database_max_connections" =~ ^[1-9][0-9]*$ ]] || { error "database pool size must be a positive integer"; exit 2; }
 
@@ -207,37 +202,6 @@ fi
 case "$database_url" in postgres://*|postgresql://*) ;; *) error "database URL must use postgres:// or postgresql://"; exit 2 ;; esac
 
 mkdir -p "$run_dir" "$log_dir" "$profile_home" "$runner_root"
-ensure_local_maps_mcp_profile_config() {
-  [[ "$codex_mode" == "real" && "$local_maps_mcp" == "1" ]] || return 0
-  local config_file="$profile_home/config.toml"
-  local maps_root="$repo_root/tools/maps-mcp"
-  local maps_command="$maps_root/.venv/bin/maps-mcp"
-  [[ -d "$maps_root" ]] || return 0
-
-  if [[ ! -x "$maps_command" ]]; then
-    command -v python3 >/dev/null 2>&1 || { error "python3 is required to prepare maps MCP"; exit 1; }
-    python3 -m venv "$maps_root/.venv"
-    "$maps_root/.venv/bin/pip" install -e "$maps_root"
-  fi
-
-  mkdir -p "$(dirname "$config_file")"
-  touch "$config_file"
-  if grep -Eq '^\[mcp_servers\.workspace_maps\]' "$config_file"; then
-    return 0
-  fi
-  cat >>"$config_file" <<EOF_MAPS_MCP
-
-[mcp_servers.workspace_maps]
-command = "$maps_command"
-args = ["--workspace-root", "$repo_root"]
-startup_timeout_sec = 20
-tool_timeout_sec = 180
-default_tools_approval_mode = "prompt"
-EOF_MAPS_MCP
-}
-
-ensure_local_maps_mcp_profile_config
-
 if [[ "$codex_mode" == "real" && -z "${OPEN_WEB_CODEX_MASTER_KEY:-}" ]]; then
   if [[ ! -f "$master_key_file" ]]; then
     command -v openssl >/dev/null 2>&1 || { error "openssl is required to create the local Secret Store key"; exit 1; }
