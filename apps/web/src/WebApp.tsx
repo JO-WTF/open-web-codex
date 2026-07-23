@@ -16,6 +16,7 @@ import { parseWebTurnDiff } from "./utils/webTurnDiff";
 import { isWebAppServerRecoveryEvent, parseCodexStderr, parseWebAppServerError } from "./utils/webAppServerError";
 import { parseWebUserInputRequest } from "./utils/webUserInput";
 import { summarizeWebAppServerEvent } from "./utils/webAppServerEventSummary";
+import { stripLeadingProviderSentinel } from "./utils/providerText";
 import { mergeRateLimits, parseInitialMcpServers, parseInitialRateLimits } from "./utils/webInitialStatus";
 import { appendWebLogEntry } from "./utils/webApprovalLog";
 import { loadWebApprovalHistory, resolveStoredWebApproval, saveWebApproval } from "./utils/webApprovalHistory";
@@ -570,7 +571,7 @@ export default function WebApp() {
           if (streamingTexts.current.has(`reason_${itemId}`)) return null;
 
           const current = streamingTexts.current.get(itemId) ?? "";
-          const updated = current + delta;
+          const updated = current + stripLeadingProviderSentinel(delta);
           streamingTexts.current.set(itemId, updated);
 
           const existingLogId = streamingLogIds.current.get(itemId);
@@ -620,7 +621,7 @@ export default function WebApp() {
             }
             return {
               level: "assistant",
-              text: (typeof item.text === "string" ? item.text : "") || "(no response)",
+              text: stripLeadingProviderSentinel(typeof item.text === "string" ? item.text : "") || "(no response)",
             };
           }
 

@@ -48,8 +48,9 @@ Geocoding, Directions, and Matrix access.
 ## Codex discovery
 
 This directory is also a Codex plugin root. The checked-in `.codex-plugin/plugin.json` points to
-`./.mcp.json`, so Codex can discover the `workspace_maps` MCP server from the selected workspace's
-capability roots instead of relying on `run-local.sh` or hand-edited Profile `config.toml` entries.
+`./.mcp.json` and `./skills/`, so Codex can discover the `workspace_maps` MCP server and route/map
+Skill guidance from the selected workspace's capability roots instead of relying on `run-local.sh`
+or hand-edited Profile `config.toml` entries.
 
 The plugin MCP config starts `.venv/bin/python -m maps_mcp.server` with `cwd="."`; run the install
 steps above before asking Codex to load the plugin. The MCP client must advertise URL elicitation

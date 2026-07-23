@@ -12,6 +12,22 @@ import {
 } from "./threadItems";
 
 describe("threadItems", () => {
+  it("strips provider sentinels while normalizing assistant messages", () => {
+    const item: ConversationItem = {
+      id: "msg-1",
+      kind: "message",
+      role: "assistant",
+      text: "<｜begin▁of▁sentence｜># Route unavailable",
+    };
+
+    const normalized = normalizeItem(item);
+
+    expect(normalized.kind).toBe("message");
+    if (normalized.kind === "message") {
+      expect(normalized.text).toBe("# Route unavailable");
+    }
+  });
+
   it("truncates long message text in normalizeItem", () => {
     const text = "a".repeat(21000);
     const item: ConversationItem = {
@@ -795,6 +811,21 @@ describe("threadItems", () => {
       expect(item.role).toBe("user");
       expect(item.text).toBe("");
       expect(item.images).toEqual(["https://example.com/only.png"]);
+    }
+  });
+
+
+  it("strips provider sentinels from restored assistant thread items", () => {
+    const item = buildConversationItemFromThreadItem({
+      type: "agentMessage",
+      id: "assistant-1",
+      text: "<｜begin▁of▁sentence｜># Route unavailable",
+    });
+
+    expect(item).not.toBeNull();
+    if (item && item.kind === "message") {
+      expect(item.role).toBe("assistant");
+      expect(item.text).toBe("# Route unavailable");
     }
   });
 

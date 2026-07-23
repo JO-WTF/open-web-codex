@@ -6,7 +6,13 @@
     "name": "Open Web Codex"
   },
   "license": "MIT",
-  "keywords": ["maps", "mcp", "geocoding", "routing", "map-card"],
+  "keywords": [
+    "maps",
+    "mcp",
+    "geocoding",
+    "routing",
+    "map-card"
+  ],
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Workspace Maps",
@@ -14,10 +20,15 @@
     "longDescription": "Adds workspace-scoped Google Maps and Mapbox MCP tools for geocoding, reverse geocoding, routes, distance matrices, and provider-neutral open-web map-card output.",
     "developerName": "Open Web Codex",
     "category": "Productivity",
-    "capabilities": ["MCP", "Maps", "Map cards"],
+    "capabilities": [
+      "MCP",
+      "Maps",
+      "Map cards"
+    ],
     "defaultPrompt": [
       "Geocode these addresses and show a map card.",
       "Find a route and create a map card."
     ]
-  }
+  },
+  "skills": "./skills/"
 }
