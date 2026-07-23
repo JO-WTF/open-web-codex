@@ -128,7 +128,7 @@ security, Push delivery, or every Studio capability.
 | Plugins | declared unsupported | do not enable Studio lifecycle or permissions UI |
 | MCP | config degraded; OAuth/elicitation unsupported | status listing is declared; Web-safe CRUD, reload and lifecycle validation are pending |
 | Tools discovery | declared unsupported | do not expose a platform fallback catalog |
-| Structured reply cards / map cards | declared unsupported | no generated card contract, card Artifact store, renderer gate or real app-server smoke exists |
+| Structured reply cards / map cards | degraded/preview | Provider-neutral map-card prompt injection, assistant marker parsing, legacy widget marker parsing and inline map preview rendering exist; generated card contract, Artifact store, renderer gate and real app-server smoke remain missing |
 | Provider/model management | declared supported by the checked-in Runtime | `models.providers`, `modelProvider/list`, controlled Profile config writes, provider-scoped refresh, model selection and context-window persistence are wired; scoped Runtime/TUI tests, two-Provider cache-isolation smoke, encrypted platform Secret injection/deletion smoke, and live existing-Thread Provider transport rebinding pass |
 
 ## Web platform assessment

@@ -17,6 +17,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::middleware::auth::{require_runtime_profile, AuthenticatedUser};
+use crate::reply_cards::prepare_message_text_for_reply_cards;
 use crate::routes::RuntimeProfileBinding;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
@@ -262,11 +263,17 @@ pub async fn send_message(
             .map_err(super::runs::orchestrator_error)?;
     }
 
+    let message_text = if req.text.trim().is_empty() {
+        req.text.clone()
+    } else {
+        prepare_message_text_for_reply_cards(&req.text)
+    };
+
     let result = adapter
         .send_user_message(
             &workspace,
             &thread_id,
-            &req.text,
+            &message_text,
             &TurnOptions {
                 model: req.model,
                 model_provider: req.model_provider,

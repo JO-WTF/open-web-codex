@@ -1,5 +1,6 @@
 mod event_projection;
 mod middleware;
+mod reply_cards;
 mod routes;
 #[cfg(test)]
 mod security_integration;
