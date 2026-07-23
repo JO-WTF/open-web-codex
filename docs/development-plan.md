@@ -8,7 +8,7 @@
 | 当前分支 | `codex/sync-upstream-6e5a2d6b8d14` |
 | Codex 基线 | `openai/codex` `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9` |
 | 上游待同步 | 48；观测到的 official main 为 `9d823343026e600dab694e41865ed60613da31b6` |
-| 当前工作 | 以 1421 WebApp 为唯一前端，收紧其 Server 适配、恢复与运行时重启语义；当前部署按单用户 Profile 验证 |
+| 当前工作 | 以 1421 WebApp 为唯一前端，先收口单用户、单 Profile、单主 Profile Host 的真实 Runtime 闭环；多 Profile Router 暂缓到单 Profile smoke 稳定后 |
 
 当前 Codex 基线上的定制仍按 patch map 分类；official main 已前进 48 个提交，
 下一轮必须通过专用 `codex/sync-upstream-*` 分支同步。1421 WebApp 的 CSS、页面布局
@@ -72,6 +72,41 @@
 5. [ ] Capability Manifest 仍有手工 Alpha 子集；必须继续收敛到由 Codex 生成事实驱动，
    Web feature policy 只能消费这些事实，不能自行声明 Runtime 支持。
 6. [ ] 旧根 App/Bridge 未引用源码和 browser shims 仍待裁剪，避免未来功能误接回旧桥。
+
+## 单 Profile 收口目标
+
+近期目标是先让一个真实用户使用一个持久 Profile 可靠跑通，再扩展多 Profile。
+该目标是部署范围收窄，不改变所有权边界：WebApp 不发现、不启动、不模拟
+MCP/Skills/Plugins；Server/Profile Host 只负责单 Profile 生命周期、授权 workspace
+和安全诊断；Codex Runtime 继续拥有 Thread/Turn、Provider、Skills、Plugins 和 MCP。
+
+单 Profile 运行合同：
+
+1. [ ] 启动期必须显式确定唯一 `profile_id`、`CODEX_HOME`、默认
+   `workspace_id`、Runner workspace root 和 source root；Real mode 缺少
+   `CODEX_HOME` 或 root 不一致时失败并给出可诊断错误。
+2. [ ] Server health/profile status 返回安全摘要，能确认当前 Profile Home
+   identity、Profile Host state、Codex build/protocol/capability digest、Provider
+   登录/模型目录状态和 MCP startup diagnostics；浏览器仍不得接收本地路径、凭据或
+   raw JSON-RPC。
+3. [ ] `tools/maps-mcp` 只通过 plugin/MCP 声明进入 `selectedCapabilityRoots`；
+   不写入 Profile `config.toml`，不由 `run-local.sh` 注入，不由 WebApp 读取或拦截。
+4. [ ] MCP startup failure 归类并投影为安全诊断：capability root 未选择、`.mcp.json`
+   缺失、`cwd` 解析错误、command 不存在、权限不足、Python/venv/pip 失败、
+   package import 失败、MCP initialize 失败或 timeout。
+5. [ ] 新建 Thread 的单 Profile smoke 验证 `selectedCapabilityRoots` 包含
+   `local-maps-mcp`，Runtime 能发现 `workspace_maps`，启动
+   `./bin/maps-mcp-launcher`，并调用 `create_map_card` 返回
+   `open-web-card map.v1` marker。
+6. [ ] 第三方 Provider smoke 使用真实 Codex Runtime 工具调用链验证：模型可见
+   `workspace_maps` tool schema，Provider 返回标准 tool call，Runtime 执行 MCP tool，
+   assistant 输出 map-card marker，浏览器只渲染 marker。
+7. [ ] 官方 OpenAI Provider smoke 验证 `codex login` 与 Web 使用同一个
+   `CODEX_HOME`，模型列表按当前 Profile/Provider 刷新且错误状态可诊断。
+8. [ ] 单 Profile 可以串行或按实测限制运行多个 Thread/Run；每个 Run 仍使用独立
+   writable workspace，Thread resume/fork 只能使用已授权 workspace 映射。
+
+完成以上 smoke 后，再进入 M2 的按授权用户动态路由持久 Profile 和跨用户隔离矩阵。
 
 ## A. Codex 上游同步与定制收敛
 

@@ -126,6 +126,31 @@ session -> user -> organization membership -> project permission
 - Cache, subscription, model and secret keys include their user/Profile scope.
   Cross-user and guessed-ID denial tests are release gates.
 
+### Single-Profile convergence mode
+
+The current near-term runtime target is a deliberately narrowed deployment mode:
+one authenticated human user, one persistent Profile Home, one primary Profile
+Host process and one selected workspace context per active Run. This is a
+deployment constraint, not a boundary exception. The same ownership table above
+continues to apply:
+
+- The platform starts and monitors the single Profile Host, injects only
+  authorized environment and secret references, and records safe diagnostics.
+- The selected `CODEX_HOME`, Profile identity, workspace root, source root and
+  capability roots are fixed at startup or by typed platform lifecycle state;
+  browser input never changes server-local paths.
+- Skills, Plugins and MCP are still discovered and executed by Codex Runtime.
+  The WebApp does not scan `.mcp.json`, run plugin launchers, answer MCP
+  inventory questions locally or write hidden Profile configuration.
+- Local capability packages such as `tools/maps-mcp` are made available as
+  selected capability roots. Their launchers own package bootstrap, dependency
+  checks and MCP server startup; Profile Host only reports safe startup status
+  and categorized failures.
+- This mode must pass single Profile smoke tests for Provider login/model
+  discovery, Runtime MCP discovery, MCP startup, third-party Provider tool calls,
+  map-card rendering and Thread resume before multi-Profile routing work
+  resumes.
+
 ## Runtime bridge
 
 Codex produces a build-specific contract bundle containing:
