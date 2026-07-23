@@ -31,6 +31,9 @@
 - 平台不得复制 Thread/Turn、Memory、multi-agent、Skills、Plugins 或 MCP Runtime。
 - 浏览器不得接收 raw JSON-RPC、app-server request ID、凭据、Profile/Workspace
   路径或不受限 Runtime payload。
+- 每个功能实现前必须写明 owning layer、输入输出、Capability gate 和验证方式；
+  若实现需要跨 WebApp、Platform app-server、Profile Host 和 Codex Runtime，必须拆成
+  独立 owner 的小变更，禁止用 WebApp 拦截或启动脚本写配置绕过 Runtime 发现链路。
 - 数据库、授权、协议或恢复变化必须覆盖拒绝、重试、并发或重启路径。
 - Canonical 文档只描述现态；历史决策只保留在 ADR/Git 历史中。
 
@@ -47,6 +50,26 @@
 | Git | `apps/web/crates/git-runtime` | 私有 mirror、每 Run workspace、status、选择性 Commit |
 | Security | `apps/web/crates/auth`、`approval-service`、`secret-store` | Session/RBAC、持久审批、加密凭据 |
 | Contract | `apps/web/crates/*contracts`、`apps/web/contracts` | 浏览器 DTO、生成协议、Manifest、fixtures |
+| Capability packages | `tools/**`、plugin/skill/MCP 包 | Runtime 可发现的工具、Skill、Plugin、MCP 声明；不得修改 Profile `config.toml` 或由 WebApp 伪造发现结果 |
+
+## 当前边界债务 TODO
+
+这些是当前实现中仍需按边界复审或迁移的项；在完成前不得把它们宣传为完整能力：
+
+1. [ ] `tools/maps-mcp` 已改为 plugin/MCP 声明，但仍需要真实 Codex app-server
+   discovery smoke，验证 selected capability roots 能发现 `workspace_maps`、模型能看到
+   `create_map_card`，且第三方 Provider 能通过标准工具调用链使用它。
+2. [ ] map-card 仍是浏览器解析小型 marker 的 preview。Artifact-backed GeoJSON、生成
+   card schema、平台 Artifact 权限、Mapbox/tiles renderer gate 和真实端到端 smoke 未完成。
+3. [ ] `apps/web/src/features/threads/hooks/useThreadMessaging.ts` 中 `/apps`、`/status`、
+   `/fast` 等本地命令需要逐项边界复审：纯 UI 状态命令可保留；凡是查询 Runtime
+   capability、工具、MCP、Skills、Plugins 或模型上下文的命令必须改为 Runtime/typed
+   app-server 合同，不能由 WebApp 生成模型式回答。
+4. [ ] `apps/web/src/services/tauri.ts` 仍是浏览器适配兼容层命名，需在不改变 1421 UI
+   行为的前提下拆名或迁移，避免继续暗示桌面/Tauri 边界存在。
+5. [ ] Capability Manifest 仍有手工 Alpha 子集；必须继续收敛到由 Codex 生成事实驱动，
+   Web feature policy 只能消费这些事实，不能自行声明 Runtime 支持。
+6. [ ] 旧根 App/Bridge 未引用源码和 browser shims 仍待裁剪，避免未来功能误接回旧桥。
 
 ## A. Codex 上游同步与定制收敛
 
