@@ -45,6 +45,11 @@ function projectWorkspace(project: Project): WorkspaceInfo {
   };
 }
 
+function threadDisplayName(value: unknown): string {
+  const name = typeof value === "string" ? value.trim() : "";
+  return !name || name === "New Agent" ? "Thread" : name;
+}
+
 function rawItem(event: RunEvent): JsonRecord | null {
   if (!event.item_id || !event.payload.itemType) return null;
   const data = isRecord(event.payload.data) ? event.payload.data : {};
@@ -64,18 +69,27 @@ function runtimeMessage(event: RunEvent): JsonRecord | null {
     const approvalId = typeof data.approvalId === "string" ? data.approvalId : null;
     if (!requestMethod || !requestParams || !approvalId) return null;
     const needsGenericApprovalCard = requestMethod === "item/fileChange/requestApproval"
-      || requestMethod === "item/permissions/requestApproval";
+      || requestMethod === "item/permissions/requestApproval"
+      || requestMethod === "mcpServer/elicitation/request";
     const method = needsGenericApprovalCard
       ? "item/commandExecution/requestApproval"
       : requestMethod;
     const params = needsGenericApprovalCard
       ? {
           ...requestParams,
-          command: typeof requestParams.reason === "string" && requestParams.reason.trim()
+          command: requestMethod === "mcpServer/elicitation/request"
+            && typeof requestParams.message === "string"
+            && requestParams.message.trim()
+            ? requestParams.message
+            : typeof requestParams.reason === "string" && requestParams.reason.trim()
             ? requestParams.reason
             : requestMethod === "item/fileChange/requestApproval"
               ? "Approve the requested file changes"
-              : "Approve the requested permissions",
+              : requestMethod === "item/permissions/requestApproval"
+                ? "Approve the requested permissions"
+                : typeof requestParams.serverName === "string" && requestParams.serverName.trim()
+                  ? `Allow the ${requestParams.serverName} MCP server request?`
+                  : "Allow the MCP server request?",
         }
       : requestParams;
     return {
@@ -260,19 +274,21 @@ export class CodexMonitorWebClient {
     const thread = history.thread;
     return {
       id: threadId,
-      name: thread.name ?? task.title,
-      preview: thread.preview || task.title,
+      name: threadDisplayName(thread.name ?? task.title),
+      preview: thread.preview || threadDisplayName(task.title),
       cwd: project.git_url,
       createdAt: thread.createdAt || task.created_at,
       updatedAt: thread.updatedAt || run.updated_at,
       activeTurnId: run.active_turn_id,
+      modelProvider: task.model_provider,
+      model: task.model,
       status: thread.status,
       turns: thread.turns,
     };
   }
 
   async startThread(workspaceId: string) {
-    const task = await this.platform.createTask(workspaceId, "New Agent");
+    const task = await this.platform.createTask(workspaceId, "Thread");
     const { run } = await this.platform.startRun(task.id);
     const ready = await this.waitForThread(workspaceId, task.id, run.id);
     return { thread: await this.threadRecord(ready.codex_thread_id as string) };
@@ -283,12 +299,14 @@ export class CodexMonitorWebClient {
     return {
       data: entries.map(({ project, task, run, threadId }) => ({
         id: threadId,
-        name: task.title,
-        preview: task.title,
+        name: threadDisplayName(task.title),
+        preview: threadDisplayName(task.title),
         cwd: project.git_url,
         createdAt: task.created_at,
         updatedAt: run.updated_at,
         activeTurnId: run.active_turn_id,
+        modelProvider: task.model_provider,
+        model: task.model,
         status: runtimeThreadStatus(run).type,
       })),
       nextCursor: null,
@@ -312,6 +330,30 @@ export class CodexMonitorWebClient {
     if (action === "select") return await this.platform.selectProvider(id);
     if (action === "delete") return await this.platform.deleteProvider(id);
     if (action === "fetch") return await this.platform.refreshProviderModels(id);
+    if (action === "contexts") {
+      const contexts = Array.isArray(input.contexts)
+        ? input.contexts.flatMap((value) => {
+            if (!isRecord(value)) return [];
+            const modelId = typeof value.modelId === "string" ? value.modelId.trim() : "";
+            const contextWindow = Number(value.contextWindow);
+            return modelId && Number.isSafeInteger(contextWindow) && contextWindow >= 1_024
+              ? [{ modelId, contextWindow }]
+              : [];
+          })
+        : [];
+      if (contexts.length === 0) throw new Error("At least one valid model context is required");
+      let response: unknown = null;
+      // Keep updates sequential: each Runtime write reads and replaces the
+      // Provider model catalog, so parallel writes could discard a sibling edit.
+      for (const context of contexts) {
+        response = await this.platform.updateProviderModel(
+          id,
+          context.modelId,
+          context.contextWindow,
+        );
+      }
+      return response;
+    }
     if (action === "context") {
       return await this.platform.updateProviderModel(
         id,
@@ -338,6 +380,28 @@ export class CodexMonitorWebClient {
     });
   }
 
+  async selectProviderModel(
+    _workspaceId: string,
+    providerId: string,
+    modelId: string,
+  ) {
+    return await this.platform.selectProviderModel(providerId, modelId);
+  }
+
+  async updateThreadModelSelection(
+    _workspaceId: string,
+    threadId: string,
+    providerId: string,
+    modelId: string,
+  ) {
+    const context = await this.findThreadContext(threadId);
+    return await this.platform.updateTaskModelSelection(
+      context.taskId,
+      providerId,
+      modelId,
+    );
+  }
+
   async listModels(_workspaceId: string) {
     const [catalog, config] = await Promise.all([
       this.platform.listProviders(),
@@ -345,7 +409,7 @@ export class CodexMonitorWebClient {
     ]);
     const provider = catalog.data.find((entry) => entry.id === catalog.currentProviderId);
     const visibleModels = (provider?.models ?? []).filter((model) => model.showInPicker !== false);
-    const configuredModel = config.model?.trim() || null;
+    const configuredModel = catalog.currentModelId?.trim() || config.model?.trim() || null;
     if (configuredModel) {
       const selectedIndex = visibleModels.findIndex((model) => model.modelId === configuredModel);
       if (selectedIndex > 0) {
@@ -431,6 +495,7 @@ export class CodexMonitorWebClient {
     return {
       status: response.status,
       threadId: response.thread_id,
+      threadName: response.thread_name ?? null,
       turn: { id: response.turn_id, status: "inProgress" },
     };
   }

@@ -16,6 +16,8 @@ const task = {
   project_id: project.id,
   title: "Thread",
   status: "pending",
+  model_provider: "deepseek",
+  model: "deepseek-v4-flash",
   created_at: "2026-07-22T00:00:00Z",
   updated_at: "2026-07-22T00:00:00Z",
 };
@@ -159,6 +161,8 @@ describe("WebApp direct Server client", () => {
       data: [expect.objectContaining({
         id: "thread-1",
         activeTurnId: null,
+        modelProvider: "deepseek",
+        model: "deepseek-v4-flash",
         status: "idle",
       })],
       nextCursor: null,
@@ -166,6 +170,118 @@ describe("WebApp direct Server client", () => {
     const threadListRequest = fetchMock.mock.calls.find((call) =>
       String(call[0]).endsWith(`/api/projects/${project.id}/thread-contexts`));
     expect(threadListRequest?.[1]?.cache).toBe("no-store");
+  });
+
+  it("projects the legacy New Agent placeholder as Thread", async () => {
+    const legacyTask = { ...task, title: "New Agent" };
+    const baseFetch = resourceFetch();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === `/api/projects/${project.id}/thread-contexts`) {
+        return json([{ project, task: legacyTask, run }]);
+      }
+      return baseFetch(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
+
+    await expect(client.listThreads(project.id)).resolves.toEqual({
+      data: [expect.objectContaining({ name: "Thread", preview: "Thread" })],
+      nextCursor: null,
+    });
+  });
+
+  it("persists a Thread-specific Provider and model through the task route", async () => {
+    const baseFetch = resourceFetch();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === `/api/tasks/${task.id}/model-selection`) {
+        expect(init?.method).toBe("PUT");
+        expect(JSON.parse(String(init?.body))).toEqual({
+          providerId: "openai",
+          modelId: "gpt-5.1-codex",
+        });
+        return json({ providerId: "openai", modelId: "gpt-5.1-codex" });
+      }
+      return baseFetch(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
+
+    await expect(client.updateThreadModelSelection(
+      project.id,
+      "thread-1",
+      "openai",
+      "gpt-5.1-codex",
+    )).resolves.toEqual({
+      providerId: "openai",
+      modelId: "gpt-5.1-codex",
+    });
+  });
+
+  it("returns the Server-persisted Thread name with the started Turn", async () => {
+    const baseFetch = resourceFetch();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === `/api/tasks/${task.id}/messages`) {
+        expect(init?.method).toBe("POST");
+        return json({
+          status: "sent",
+          thread_id: "thread-1",
+          turn_id: "turn-1",
+          thread_name: "Show Shanghai on a map",
+        });
+      }
+      return baseFetch(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
+
+    await client.listThreads(project.id);
+    await expect(client.sendUserMessage(
+      project.id,
+      "thread-1",
+      "Show Shanghai on a map",
+    )).resolves.toEqual({
+      status: "sent",
+      threadId: "thread-1",
+      threadName: "Show Shanghai on a map",
+      turn: { id: "turn-1", status: "inProgress" },
+    });
+  });
+
+  it("persists multiple model contexts sequentially from one UI action", async () => {
+    const requests: Array<{ path: string; contextWindow: number }> = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (init?.method !== "PATCH") throw new Error(`Unexpected method for ${url.pathname}`);
+      const body = JSON.parse(String(init.body)) as { contextWindow: number };
+      requests.push({ path: url.pathname, contextWindow: body.contextWindow });
+      return json({ data: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
+
+    await client.writeModelProvider(project.id, {
+      action: "contexts",
+      id: "deepseek",
+      contexts: [
+        { modelId: "deepseek-flash", contextWindow: 96_000 },
+        { modelId: "deepseek-pro", contextWindow: 192_000 },
+      ],
+    });
+
+    expect(requests).toEqual([
+      {
+        path: "/api/providers/deepseek/models/deepseek-flash",
+        contextWindow: 96_000,
+      },
+      {
+        path: "/api/providers/deepseek/models/deepseek-pro",
+        contextWindow: 192_000,
+      },
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("archives the selected Thread through the typed Server Run route", async () => {
@@ -425,7 +541,30 @@ describe("WebApp direct Server client", () => {
       requestMethod: "item/fileChange/requestApproval",
       requestParams: { reason: "Apply the generated patch" },
     });
-    await vi.waitFor(() => expect(events).toHaveLength(4));
+    liveEvent(5, "platform.approval.requested", null, {
+      approvalId: "approval-mcp-1",
+      requestMethod: "mcpServer/elicitation/request",
+      requestParams: {
+        serverName: "workspace_maps",
+        mode: "form",
+        message: "Allow the workspace_maps MCP server to run tool \"batch_geocode\"?",
+        requestedSchema: {
+          type: "object",
+          properties: {},
+        },
+      },
+    });
+    liveEvent(6, "platform.approval.requested", null, {
+      approvalId: "approval-mcp-url-1",
+      requestMethod: "mcpServer/elicitation/request",
+      requestParams: {
+        serverName: "workspace_maps",
+        mode: "url",
+        message: "No google maps API key is stored for this workspace.",
+        url: "http://127.0.0.1:43123/one-time-token",
+      },
+    });
+    await vi.waitFor(() => expect(events).toHaveLength(6));
 
     expect(events.map((event) => event.message)).toEqual([
       {
@@ -465,6 +604,35 @@ describe("WebApp direct Server client", () => {
           itemId: "change-1",
           reason: "Apply the generated patch",
           command: "Apply the generated patch",
+        },
+      },
+      {
+        method: "item/commandExecution/requestApproval",
+        id: "approval-mcp-1",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          serverName: "workspace_maps",
+          mode: "form",
+          message: "Allow the workspace_maps MCP server to run tool \"batch_geocode\"?",
+          requestedSchema: {
+            type: "object",
+            properties: {},
+          },
+          command: "Allow the workspace_maps MCP server to run tool \"batch_geocode\"?",
+        },
+      },
+      {
+        method: "item/commandExecution/requestApproval",
+        id: "approval-mcp-url-1",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          serverName: "workspace_maps",
+          mode: "url",
+          message: "No google maps API key is stored for this workspace.",
+          url: "http://127.0.0.1:43123/one-time-token",
+          command: "No google maps API key is stored for this workspace.",
         },
       },
     ]);

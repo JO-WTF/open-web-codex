@@ -23,6 +23,7 @@ const STATUS_CLASS: Record<string, string> = {
   done: "web-tool-status-done",
   error: "web-tool-status-error",
   failed: "web-tool-status-error",
+  interrupted: "web-tool-status-error",
 };
 
 function ToolIcon({ type }: { type: string }) {

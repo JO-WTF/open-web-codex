@@ -26,6 +26,15 @@ describe("mergeWebThreadHistory", () => {
       [{ id: "optimistic", level: "user", text: "New request" }],
     )).toHaveLength(1);
   });
+
+  it("merges a live assistant projection with persisted history by runtime item id", () => {
+    expect(mergeWebThreadHistory(
+      [{ id: "item-8", level: "assistant", text: "Inspecting Shanghai boundaries" }],
+      [{ id: "item-8", level: "assistant", text: "Inspecting Shanghai boundaries", streaming: true }],
+    )).toEqual([
+      { id: "item-8", level: "assistant", text: "Inspecting Shanghai boundaries", streaming: true },
+    ]);
+  });
 });
 
 describe("appendTerminalInteractionOutput", () => {

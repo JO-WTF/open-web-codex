@@ -74,6 +74,9 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
               workspaceId={workspaceId}
               requestId={entry.approvalRequestId}
               status={entry.approvalStatus}
+              mode={entry.approvalMode}
+              url={entry.approvalUrl}
+              serverName={entry.approvalServerName}
               onResolve={onResolveApproval}
             />
           );
@@ -160,6 +163,27 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
       || item.toolStatus === "inProgress"
       || item.toolStatus === "running"
     );
+    const pendingApproval = turnItems.find((item) => {
+      if (item.kind !== "approval") return false;
+      if (item.approvalStatus === "pending") return true;
+      const mapsCredentialWasDelivered = item.approvalMode === "url"
+        && (
+          item.approvalServerName === "map_utils"
+          || item.approvalServerName === "workspace_maps"
+        )
+        && (
+          /maps provider and api key/i.test(item.text)
+          || /(?:google maps|mapbox(?: maps)?)\s+(?:api key|access token)/i.test(item.text)
+        );
+      return item.approvalMode === "url"
+        && item.approvalStatus === "accepted"
+        && !mapsCredentialWasDelivered;
+    });
+    const activityLabel = pendingApproval?.approvalMode === "url"
+      ? "Waiting for API key…"
+      : pendingApproval
+        ? "Waiting for approval…"
+        : "Working…";
     const isActiveTurn = end === items.length && (thinking || hasLiveItem);
     let finalIndex = -1;
     if (!isActiveTurn) {
@@ -189,6 +213,7 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
           startedAt={turnStartedAt}
           timelineItemCount={executionItems.length}
           activeItem={activeItem ? renderEntry(activeItem) : null}
+          activityLabel={activityLabel}
         >
           {executionItems.map(renderEntry)}
         </ExecutionGroup>,

@@ -12,14 +12,14 @@ describe("threadReducer", () => {
     });
     const threads = next.threadsByWorkspace["ws-1"] ?? [];
     expect(threads).toHaveLength(1);
-    expect(threads[0].name).toBe("New Agent");
+    expect(threads[0].name).toBe("Thread");
     expect(next.activeThreadIdByWorkspace["ws-1"]).toBe("thread-1");
     expect(next.threadStatusById["thread-1"]?.isProcessing).toBe(false);
   });
 
   it("renames auto-generated thread on first user message", () => {
     const threads: ThreadSummary[] = [
-      { id: "thread-1", name: "New Agent", updatedAt: 1 },
+      { id: "thread-1", name: "Thread", updatedAt: 1 },
     ];
     const next = threadReducer(
       {
@@ -76,7 +76,7 @@ describe("threadReducer", () => {
 
   it("renames auto-generated thread from assistant output when no user message", () => {
     const threads: ThreadSummary[] = [
-      { id: "thread-1", name: "New Agent", updatedAt: 1 },
+      { id: "thread-1", name: "Thread", updatedAt: 1 },
     ];
     const next = threadReducer(
       {

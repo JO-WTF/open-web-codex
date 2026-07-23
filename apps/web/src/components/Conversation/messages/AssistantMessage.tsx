@@ -35,17 +35,22 @@ function MarkdownText({ text, onOpenFile }: { text: string; onOpenFile?: Props["
   );
 }
 
-export default function AssistantMessage({ text, streaming, onOpenFile }: Props) {
+export default function AssistantMessage({ text, onOpenFile }: Props) {
   const parts = parseReplyCards(text);
+  const hasMapCard = parts.some((part) => part.type === "card");
   return (
     <div className="web-msg-assistant">
-      <div className="web-msg-assistant-body">
+      <div
+        className={[
+          "web-msg-assistant-body",
+          hasMapCard ? "web-msg-assistant-body-map" : "",
+        ].filter(Boolean).join(" ")}
+      >
         {parts.map((part, index) => part.type === "text" ? (
           <MarkdownText key={`text-${index}`} text={part.content} onOpenFile={onOpenFile} />
         ) : (
           <MapReplyCard key={part.id || `map-${index}`} card={part} />
         ))}
-        {streaming && <span className="web-streaming-cursor" />}
       </div>
     </div>
   );

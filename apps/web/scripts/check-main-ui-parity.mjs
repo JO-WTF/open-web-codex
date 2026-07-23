@@ -18,7 +18,7 @@ const interfaceSeams = new Set([
 // to refresh MCP/files/Git when a Thread changes. Pin their complete contents
 // so the parity exception cannot silently grow into presentation drift.
 const exactIntegrationSeams = new Map([
-  ["apps/web/src/WebApp.tsx", "24938796eeda797494e9a11767f970c795e5aa3f146030ae7bdf4bff1869f083"],
+  ["apps/web/src/WebApp.tsx", "b4d709325aa998d0eab11fd9918a279115d910532636f260cf5ff8c02e0dfe80"],
   ["apps/web/src/components/FileManager/index.tsx", "03a6572d5d777670cc24af634e83a6abb7701f6d093a51d94bf406ed9a28bcda"],
   ["apps/web/src/components/FileManager/index.test.tsx", "769f6fa9c75cf8665e94df325ea067861a45e24c0f3f4ccb1697018445269a52"],
 ]);
