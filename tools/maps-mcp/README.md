@@ -7,6 +7,7 @@ Python MCP server that exposes paid Google Maps and Mapbox operations without mo
 - `batch_reverse_geocode`
 - `get_route`
 - `distance_matrix`
+- `create_map_card`
 
 Every tool accepts `provider="google"` or `provider="mapbox"`. Provider request limits are
 handled inside the server. Batch geocoding is capped at 500 inputs and distance matrices at 2,500
@@ -68,6 +69,13 @@ Tests use fake HTTP responses and never call a paid provider:
 ```bash
 PYTHONPATH=. python3 -m unittest discover -s tests -v
 ```
+
+Map-card output:
+
+`create_map_card` returns an `open-web-card map.v1` fenced marker. Put the returned `marker`
+verbatim in the assistant final answer where the Web UI should render the map card. Use small
+inline points/lines/polygons for previews, and prefer `input_ref` or `artifact_id` for large
+GeoJSON.
 
 Provider endpoints implemented:
 
