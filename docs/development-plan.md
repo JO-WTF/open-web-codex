@@ -111,7 +111,7 @@
 - [x] WebApp 的 workspace、Thread/Turn、消息、durable replay/live、
   approval/user input、Provider/model、MCP/rate limit、文件预览和 Git status
   已切到类型化 Server 资源；Project/Task/Run/Thread 使用单次 joined context
-  查询，文件、Git 与 MCP 始终跟随当前 Thread。消息渲染已恢复 provider-neutral
+  查询，文件、Git 与 MCP 始终跟随当前 Thread。消息渲染已恢复 Runtime/Skills/MCP 输出的
   `open-web-card map.v1` 与旧 `widget_type=map` 标记识别，可渲染小型内联地图预览；真实 Codex/DeepSeek/MCP
   纵向用例与核心浏览器 Thread 切换、历史恢复、运行态和文件预览回归通过。
 - [x] 认证后的根入口和 1421 `/web` 都只加载 WebApp；旧 App/Bridge 源码仍保留
@@ -191,7 +191,7 @@
 
 ### M3 Capability-gated Studio
 
-当前 map-card 只恢复轻量提示、标记解析和小型内联预览；Artifact-backed GeoJSON、生成合同、真实 smoke、Mapbox/瓦片渲染和权限下载仍属于后续门禁。
+当前 map-card 只恢复对 Runtime/Skills/MCP 已输出标记的解析和小型内联预览；不再由 Web/Server 注入提示。Artifact-backed GeoJSON、生成合同、真实 smoke、Mapbox/瓦片渲染和权限下载仍属于后续门禁。
 
 1. [ ] MCP inventory/config/OAuth/elicitation。
 2. [ ] Plugins install/update/disable/uninstall 与来源策略。
