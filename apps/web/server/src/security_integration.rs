@@ -14,6 +14,7 @@ use open_web_codex_platform_contracts::{ApprovalDecision, DecideApprovalRequest}
 use open_web_codex_platform_store::AppState;
 use open_web_codex_provider_service::secured::InMemoryAuthorizedProviderService;
 use open_web_codex_run_orchestrator::RunOrchestrator;
+use open_web_codex_secret_store::{PostgresSecretStore, SecretCipher};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
@@ -71,6 +72,10 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
                 approval_service.clone(),
                 git.clone(),
                 orchestrator,
+                Arc::new(PostgresSecretStore::new(
+                    pool.clone(),
+                    SecretCipher::generate("security-test-v1").expect("test Secret cipher"),
+                )),
                 profile,
             ),
         )
@@ -83,6 +88,7 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
             .body(Body::from(
                 json!({
                     "name": "First Owner",
+                    "username": "first-owner",
                     "email": "first@example.invalid",
                     "password": "first-password"
                 })
@@ -400,8 +406,8 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     let second_organization_id = Uuid::now_v7();
     let second_token = "second-session-token";
     sqlx::query(
-        "INSERT INTO users (id, name, email, password_hash, role) \
-         VALUES ($1, 'Second Owner', 'second@example.invalid', $2, 'owner')",
+        "INSERT INTO users (id, username, name, email, password_hash, role) \
+         VALUES ($1, 'second-owner', 'Second Owner', 'second@example.invalid', $2, 'owner')",
     )
     .bind(second_user_id)
     .bind(hash_password("second-password").unwrap())

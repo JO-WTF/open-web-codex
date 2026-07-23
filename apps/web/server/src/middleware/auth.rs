@@ -16,6 +16,7 @@ pub struct AuthenticatedUser {
     pub session_id: Uuid,
     pub user_id: Uuid,
     pub name: String,
+    pub username: String,
     pub email: String,
     pub role: String,
     pub organization_id: Uuid,
@@ -74,7 +75,7 @@ pub async fn authenticate_token(
     let token_hash = hex::encode(hasher.finalize());
 
     let row = sqlx::query(
-        "SELECT s.id AS session_id, u.id, u.name, u.email, u.role, \
+        "SELECT s.id AS session_id, u.id, u.name, u.username, u.email, u.role, \
                     m.organization_id, m.role AS organization_role \
              FROM sessions s \
              JOIN users u ON u.id = s.user_id \
@@ -104,6 +105,7 @@ pub async fn authenticate_token(
         session_id: row.get("session_id"),
         user_id: row.get("id"),
         name: row.get("name"),
+        username: row.get("username"),
         email: row.get("email"),
         role: row.get("role"),
         organization_id: row.get("organization_id"),

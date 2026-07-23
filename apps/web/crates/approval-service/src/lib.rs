@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 const COMMAND_APPROVAL: &str = "item/commandExecution/requestApproval";
 const FILE_APPROVAL: &str = "item/fileChange/requestApproval";
+const MCP_ELICITATION_REQUEST: &str = "mcpServer/elicitation/request";
 const PERMISSIONS_APPROVAL: &str = "item/permissions/requestApproval";
 const USER_INPUT_REQUEST: &str = "item/tool/requestUserInput";
 
@@ -100,7 +101,11 @@ impl ApprovalService {
         };
         if !matches!(
             method,
-            COMMAND_APPROVAL | FILE_APPROVAL | PERMISSIONS_APPROVAL | USER_INPUT_REQUEST
+            COMMAND_APPROVAL
+                | FILE_APPROVAL
+                | MCP_ELICITATION_REQUEST
+                | PERMISSIONS_APPROVAL
+                | USER_INPUT_REQUEST
         ) {
             return Ok(None);
         }
@@ -499,6 +504,13 @@ fn approval_payload(request_type: &str, params: &Value) -> Value {
             payload.insert("permissions".to_string(), permissions.clone());
         }
     }
+    if request_type == MCP_ELICITATION_REQUEST {
+        for key in ["serverName", "mode", "message", "requestedSchema", "url"] {
+            if let Some(value) = params.get(key) {
+                payload.insert(key.to_string(), value.clone());
+            }
+        }
+    }
     if request_type == USER_INPUT_REQUEST {
         for key in ["questions", "autoResolutionMs"] {
             if let Some(value) = params.get(key) {
@@ -595,6 +607,56 @@ fn summary_from_row(row: &sqlx::postgres::PgRow) -> ApprovalSummary {
     }
 }
 
+fn mcp_elicitation_accept_content(payload: &Value) -> Result<Value, ApprovalServiceError> {
+    let mode = payload
+        .get("mode")
+        .and_then(Value::as_str)
+        .ok_or(ApprovalServiceError::Invalid)?;
+    if mode == "url" {
+        return Ok(Value::Null);
+    }
+    if mode != "form" {
+        return Err(ApprovalServiceError::Invalid);
+    }
+    let schema = payload
+        .get("requestedSchema")
+        .and_then(Value::as_object)
+        .ok_or(ApprovalServiceError::Invalid)?;
+    let properties = schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .ok_or(ApprovalServiceError::Invalid)?;
+    let required = schema
+        .get("required")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let mut content = serde_json::Map::new();
+    for field in required {
+        let field = field.as_str().ok_or(ApprovalServiceError::Invalid)?;
+        let property = properties
+            .get(field)
+            .and_then(Value::as_object)
+            .ok_or(ApprovalServiceError::Invalid)?;
+        let value = if let Some(value) = property.get("const") {
+            value.clone()
+        } else if let Some(value) = property.get("default") {
+            value.clone()
+        } else if property.get("type").and_then(Value::as_str) == Some("boolean") {
+            Value::Bool(true)
+        } else if let Some(values) = property.get("enum").and_then(Value::as_array) {
+            if values.len() != 1 {
+                return Err(ApprovalServiceError::Invalid);
+            }
+            values[0].clone()
+        } else {
+            return Err(ApprovalServiceError::Invalid);
+        };
+        content.insert(field.to_string(), value);
+    }
+    Ok(Value::Object(content))
+}
+
 fn approval_response(
     request_type: &str,
     payload: &Value,
@@ -626,6 +688,21 @@ fn approval_response(
                 json!({ "permissions": {}, "scope": "turn" })
             }
         },
+        MCP_ELICITATION_REQUEST => match decision {
+            ApprovalDecision::Accept | ApprovalDecision::AcceptForSession => {
+                json!({
+                    "action": "accept",
+                    "content": mcp_elicitation_accept_content(payload)?,
+                    "_meta": null
+                })
+            }
+            ApprovalDecision::Decline => {
+                json!({ "action": "decline", "content": null, "_meta": null })
+            }
+            ApprovalDecision::Cancel => {
+                json!({ "action": "cancel", "content": null, "_meta": null })
+            }
+        },
         _ => return Err(ApprovalServiceError::Invalid),
     };
     Ok((response, terminal_state, stored_decision))
@@ -635,7 +712,7 @@ fn approval_response(
 mod tests {
     use super::{
         approval_response, resolved_terminal_state, validate_user_input_answers, COMMAND_APPROVAL,
-        PERMISSIONS_APPROVAL,
+        MCP_ELICITATION_REQUEST, PERMISSIONS_APPROVAL,
     };
     use open_web_codex_platform_contracts::{
         ApprovalDecision, RespondUserInputRequest, UserInputAnswer,
@@ -663,6 +740,92 @@ mod tests {
         assert_eq!(permissions["scope"], "turn");
         assert_eq!(permissions["permissions"]["network"]["enabled"], true);
         assert_eq!(state, "approved");
+    }
+
+    #[test]
+    fn maps_mcp_confirmation_elicitations_to_typed_runtime_responses() {
+        let confirmation = json!({
+            "mode": "form",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "confirmed": { "type": "boolean" }
+                },
+                "required": ["confirmed"]
+            }
+        });
+        let (accepted, state, _) = approval_response(
+            MCP_ELICITATION_REQUEST,
+            &confirmation,
+            ApprovalDecision::Accept,
+        )
+        .unwrap();
+        assert_eq!(
+            accepted,
+            json!({
+                "action": "accept",
+                "content": { "confirmed": true },
+                "_meta": null
+            })
+        );
+        assert_eq!(state, "approved");
+
+        let empty = json!({
+            "mode": "form",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {}
+            }
+        });
+        let (accepted, _, _) =
+            approval_response(MCP_ELICITATION_REQUEST, &empty, ApprovalDecision::Accept).unwrap();
+        assert_eq!(accepted["content"], json!({}));
+
+        let (declined, state, _) = approval_response(
+            MCP_ELICITATION_REQUEST,
+            &confirmation,
+            ApprovalDecision::Decline,
+        )
+        .unwrap();
+        assert_eq!(
+            declined,
+            json!({ "action": "decline", "content": null, "_meta": null })
+        );
+        assert_eq!(state, "rejected");
+
+        let url_request = json!({
+            "mode": "url",
+            "url": "http://127.0.0.1:43123/one-time-token"
+        });
+        let (accepted, state, _) = approval_response(
+            MCP_ELICITATION_REQUEST,
+            &url_request,
+            ApprovalDecision::Accept,
+        )
+        .unwrap();
+        assert_eq!(
+            accepted,
+            json!({ "action": "accept", "content": null, "_meta": null })
+        );
+        assert_eq!(state, "approved");
+    }
+
+    #[test]
+    fn rejects_mcp_form_acceptance_when_the_card_cannot_supply_required_input() {
+        let payload = json!({
+            "mode": "form",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" }
+                },
+                "required": ["name"]
+            }
+        });
+        assert!(
+            approval_response(MCP_ELICITATION_REQUEST, &payload, ApprovalDecision::Accept,)
+                .is_err()
+        );
     }
 
     #[test]

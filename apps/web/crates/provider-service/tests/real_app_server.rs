@@ -208,10 +208,11 @@ async fn secured_provider_credentials_never_enter_codex_config() {
         .await
         .unwrap();
     sqlx::query(
-        "INSERT INTO users (id, name, email, password_hash, role) \
-         VALUES ($1, 'Test', $2, 'test-only', 'owner')",
+        "INSERT INTO users (id, username, name, email, password_hash, role) \
+         VALUES ($1, $2, 'Test', $3, 'test-only', 'owner')",
     )
     .bind(user_id)
+    .bind(format!("test-{user_id}"))
     .bind(format!("{user_id}@example.invalid"))
     .execute(&db)
     .await

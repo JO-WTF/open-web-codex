@@ -8,15 +8,24 @@ describe("PlatformClient", () => {
   it("uses typed Run and message routes without a generic RPC surface", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ run: { id: "run-1" } }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ status: "sent", thread_id: "thread-1" }), { status: 200 }));
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        status: "sent",
+        thread_id: "thread-1",
+        turn_id: "turn-1",
+        thread_name: "hello",
+      }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     vi.stubGlobal("crypto", { randomUUID: () => "018f-idempotency-key" });
     const client = new PlatformClient({ baseUrl: "https://platform.test", token: "session-token" });
 
     await client.startRun("task/one", "feature/safe");
-    await client.sendMessage("task/one", "hello", {
+    await expect(client.sendMessage("task/one", "hello", {
       model: "deepseek-v4-flash",
       modelProvider: "deepseek",
+    })).resolves.toMatchObject({
+      thread_id: "thread-1",
+      turn_id: "turn-1",
+      thread_name: "hello",
     });
 
     expect(fetchMock.mock.calls[0]?.[0]).toBe("https://platform.test/api/tasks/task%2Fone/runs");
@@ -110,5 +119,100 @@ describe("PlatformClient", () => {
       "Server returned a non-JSON response for /api/health (HTTP 200",
     );
     expect(fetchMock.mock.calls[0]?.[1]?.cache).toBe("no-store");
+  });
+
+  it("uses username rather than email as the login identifier", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(JSON.stringify({ session_token: "session-token" }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PlatformClient({ baseUrl: "https://platform.test" });
+
+    await client.login("test", "test");
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://platform.test/api/sessions");
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      username: "test",
+      password: "test",
+    });
+  });
+
+  it("reads, replaces, and reuses the unified maps configuration", async () => {
+    const configuration = {
+      configured: true,
+      provider: "mapbox",
+      mapboxAccessToken: "pk.public-token",
+      canConfigure: true,
+      updatedAt: "2026-07-23T00:00:00Z",
+    };
+    const fetchMock = vi.fn()
+      .mockImplementation(() => Promise.resolve(
+        new Response(JSON.stringify(configuration), { status: 200 }),
+      ));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PlatformClient({
+      baseUrl: "https://platform.test",
+      token: "session-token",
+    });
+
+    await expect(client.getMapsConfiguration()).resolves.toEqual(configuration);
+    await expect(
+      client.updateMapsConfiguration("mapbox", "pk.public-token"),
+    ).resolves.toEqual(configuration);
+    await expect(
+      client.useMapsConfiguration(
+        "http://127.0.0.1:43123/one-time-token",
+      ),
+    ).resolves.toEqual(configuration);
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://platform.test/api/configuration/maps",
+    );
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      "https://platform.test/api/configuration/maps",
+    );
+    expect(fetchMock.mock.calls[1]?.[1]?.method).toBe("PUT");
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({
+      provider: "mapbox",
+      apiKey: "pk.public-token",
+    });
+    expect(fetchMock.mock.calls[2]?.[0]).toBe(
+      "https://platform.test/api/configuration/maps/use",
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body))).toEqual({
+      elicitationUrl: "http://127.0.0.1:43123/one-time-token",
+    });
+  });
+
+  it("never returns an active Google Maps key from the unified resource", async () => {
+    const configuration = {
+      configured: true,
+      provider: "google",
+      mapboxAccessToken: null,
+      canConfigure: true,
+      updatedAt: "2026-07-23T00:00:00Z",
+    };
+    const fetchMock = vi.fn()
+      .mockImplementation(() => Promise.resolve(
+        new Response(JSON.stringify(configuration), { status: 200 }),
+      ));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PlatformClient({
+      baseUrl: "https://platform.test",
+      token: "session-token",
+    });
+
+    await expect(client.getMapsConfiguration()).resolves.toEqual(configuration);
+    await client.updateMapsConfiguration(
+      "google",
+      "google-secret",
+      "http://127.0.0.1:43123/one-time-token",
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({
+      provider: "google",
+      apiKey: "google-secret",
+      elicitationUrl: "http://127.0.0.1:43123/one-time-token",
+    });
+    expect(configuration).not.toHaveProperty("apiKey");
   });
 });

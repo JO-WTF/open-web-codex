@@ -1,6 +1,7 @@
 export type User = {
   id: string;
   name: string;
+  username: string;
   email: string;
   role: string;
 };
@@ -37,6 +38,8 @@ export type Task = {
   project_id: string;
   title: string;
   status: string;
+  model_provider: string | null;
+  model: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -196,6 +199,12 @@ export type Provider = {
 export type ProviderCatalog = {
   data: Provider[];
   currentProviderId: string;
+  currentModelId?: string | null;
+};
+
+export type ModelSelection = {
+  providerId: string;
+  modelId: string;
 };
 
 export type ProfileTextFile = {
@@ -216,6 +225,16 @@ export type BrowserWorkspacePreference = {
   workspaceId: string;
   settings: Record<string, unknown>;
   runtimeCodexArgs: string | null;
+};
+
+export type MapsProvider = "mapbox" | "google";
+
+export type MapsConfiguration = {
+  configured: boolean;
+  provider: MapsProvider | null;
+  mapboxAccessToken: string | null;
+  canConfigure: boolean;
+  updatedAt: string | null;
 };
 
 export type AgentSummary = {

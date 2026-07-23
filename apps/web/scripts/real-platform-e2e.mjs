@@ -13,6 +13,7 @@ const apiBase = `${baseUrl}/api`;
 const providerId = process.env.E2E_PROVIDER_ID ?? "deepseek-e2e";
 const providerBaseUrl = process.env.E2E_PROVIDER_BASE_URL ?? "https://api.deepseek.com";
 const model = process.env.E2E_MODEL ?? "deepseek-v4-flash";
+const username = process.env.E2E_ADMIN_USERNAME ?? "real-e2e";
 const email = process.env.E2E_ADMIN_EMAIL ?? "real-e2e@open-web-codex.local";
 const password = process.env.E2E_ADMIN_PASSWORD ?? "open-web-codex-real-e2e";
 const mcpBinary = process.env.E2E_MCP_BIN ?? path.join(
@@ -247,18 +248,18 @@ await runCase("health and authenticated bootstrap", async () => {
   try {
     auth = await api("/bootstrap", {
       method: "POST",
-      body: { name: "Real E2E Owner", email, password },
+      body: { name: "Real E2E Owner", username, email, password },
     });
   } catch (error) {
     if (!error.message.includes("409")) throw error;
     auth = await api("/sessions", {
       method: "POST",
-      body: { email, password, organization_id: null },
+      body: { username, password, organization_id: null },
     });
   }
   state.token = auth.session_token;
   const me = await api("/me");
-  assert.equal(me.email, email);
+  assert.equal(me.username, username);
   return `server ${health.version}`;
 });
 

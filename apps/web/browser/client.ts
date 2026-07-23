@@ -28,6 +28,8 @@ import type {
   ThreadHistoryTurn,
   BrowserWorkspacePreference,
   CreateGitHubRepositoryResponse,
+  MapsConfiguration,
+  MapsProvider,
 } from "./types";
 
 type ClientOptions = {
@@ -107,17 +109,17 @@ export class PlatformClient {
     return this.request<{ ok: boolean; version: string }>("/api/health");
   }
 
-  bootstrap(name: string, email: string, password: string) {
+  bootstrap(name: string, username: string, email: string, password: string) {
     return this.request<Session>("/api/bootstrap", {
       method: "POST",
-      body: JSON.stringify({ name, email, password }),
+      body: JSON.stringify({ name, username, email, password }),
     });
   }
 
-  login(email: string, password: string) {
+  login(username: string, password: string) {
     return this.request<Session>("/api/sessions", {
       method: "POST",
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ username, password }),
     });
   }
 
@@ -154,6 +156,28 @@ export class PlatformClient {
       `/api/browser-workspace-preferences/${encodeURIComponent(workspaceId)}/worktree-setup`,
       { method: "POST" },
     );
+  }
+
+  getMapsConfiguration() {
+    return this.request<MapsConfiguration>("/api/configuration/maps");
+  }
+
+  updateMapsConfiguration(
+    provider: MapsProvider,
+    apiKey: string,
+    elicitationUrl?: string,
+  ) {
+    return this.request<MapsConfiguration>("/api/configuration/maps", {
+      method: "PUT",
+      body: JSON.stringify({ provider, apiKey, elicitationUrl }),
+    });
+  }
+
+  useMapsConfiguration(elicitationUrl: string) {
+    return this.request<MapsConfiguration>("/api/configuration/maps/use", {
+      method: "POST",
+      body: JSON.stringify({ elicitationUrl }),
+    });
   }
 
   listProjects() {
@@ -195,11 +219,30 @@ export class PlatformClient {
     return this.request<Task[]>(`/api/tasks?project_id=${encodeURIComponent(projectId)}`);
   }
 
-  createTask(projectId: string, title: string) {
+  createTask(
+    projectId: string,
+    title: string,
+    selection?: { providerId: string; modelId: string } | null,
+  ) {
     return this.request<Task>("/api/tasks", {
       method: "POST",
-      body: JSON.stringify({ project_id: projectId, title }),
+      body: JSON.stringify({
+        project_id: projectId,
+        title,
+        model_provider: selection?.providerId ?? null,
+        model: selection?.modelId ?? null,
+      }),
     });
+  }
+
+  updateTaskModelSelection(taskId: string, providerId: string, modelId: string) {
+    return this.request<{ providerId: string; modelId: string }>(
+      `/api/tasks/${encodeURIComponent(taskId)}/model-selection`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ providerId, modelId }),
+      },
+    );
   }
 
   getTask(taskId: string) {
@@ -286,7 +329,12 @@ export class PlatformClient {
       collaborationMode?: Record<string, unknown> | null;
     } = {},
   ) {
-    return this.request<{ status: string; thread_id: string; turn_id: string }>(
+    return this.request<{
+      status: string;
+      thread_id: string;
+      turn_id: string;
+      thread_name?: string | null;
+    }>(
       `/api/tasks/${encodeURIComponent(taskId)}/messages`,
       {
         method: "POST",
@@ -830,6 +878,13 @@ export class PlatformClient {
     return this.request<ProviderCatalog>(`/api/providers/${encodeURIComponent(id)}/select`, {
       method: "POST",
     });
+  }
+
+  selectProviderModel(providerId: string, modelId: string) {
+    return this.request<ProviderCatalog>(
+      `/api/providers/${encodeURIComponent(providerId)}/models/${encodeURIComponent(modelId)}/select`,
+      { method: "POST" },
+    );
   }
 
   upsertProvider(id: string, input: Record<string, unknown>) {

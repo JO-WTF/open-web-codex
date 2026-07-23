@@ -27,10 +27,11 @@ async fn blank_migrations_are_idempotent_and_provider_secrets_are_encrypted() {
         .await
         .expect("insert organization");
     sqlx::query(
-        "INSERT INTO users (id, name, email, password_hash, role) \
-         VALUES ($1, 'Test', $2, 'not-a-real-password-hash', 'owner')",
+        "INSERT INTO users (id, username, name, email, password_hash, role) \
+         VALUES ($1, $2, 'Test', $3, 'not-a-real-password-hash', 'owner')",
     )
     .bind(user_id)
+    .bind(format!("test-{user_id}"))
     .bind(format!("{user_id}@example.invalid"))
     .execute(&pool)
     .await

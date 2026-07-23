@@ -74,6 +74,8 @@ pub struct Task {
     pub project_id: Uuid,
     pub title: String,
     pub status: String,
+    pub model_provider: Option<String>,
+    pub model: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -83,6 +85,24 @@ pub struct Task {
 pub struct CreateTaskRequest {
     pub project_id: Uuid,
     pub title: String,
+    #[serde(default)]
+    pub model_provider: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelSelection {
+    pub provider_id: String,
+    pub model_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateTaskModelSelectionRequest {
+    pub provider_id: String,
+    pub model_id: String,
 }
 
 // ── Auth ────────────────────────────────────────────────────────────
@@ -92,6 +112,7 @@ pub struct CreateTaskRequest {
 pub struct User {
     pub id: Uuid,
     pub name: String,
+    pub username: String,
     pub email: String,
     pub role: String,
     pub created_at: DateTime<Utc>,
@@ -102,6 +123,7 @@ pub struct User {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BootstrapRequest {
     pub name: String,
+    pub username: String,
     pub email: String,
     pub password: String,
 }
@@ -117,7 +139,7 @@ pub struct BootstrapResponse {
 /// Request body for login.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoginRequest {
-    pub email: String,
+    pub username: String,
     pub password: String,
     #[serde(default)]
     pub organization_id: Option<Uuid>,
@@ -137,6 +159,7 @@ pub struct LoginResponse {
 pub struct MeResponse {
     pub id: Uuid,
     pub name: String,
+    pub username: String,
     pub email: String,
     pub role: String,
     pub organization_id: Uuid,
@@ -553,6 +576,42 @@ pub struct BrowserWorkspacePreference {
     pub runtime_codex_args: Option<String>,
 }
 
+// ── Platform configuration ─────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MapsProvider {
+    Mapbox,
+    Google,
+}
+
+/// Browser-visible status for the single selected maps provider. A Mapbox
+/// public token is returned only while Mapbox is active because Mapbox GL must
+/// use it in the browser. Google credentials are never returned.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MapsConfiguration {
+    pub configured: bool,
+    pub provider: Option<MapsProvider>,
+    pub mapbox_access_token: Option<String>,
+    pub can_configure: bool,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateMapsConfigurationRequest {
+    pub provider: MapsProvider,
+    pub api_key: String,
+    pub elicitation_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UseMapsConfigurationRequest {
+    pub elicitation_url: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateBrowserWorkspaceSettingsRequest {
     pub settings: serde_json::Value,
@@ -819,6 +878,8 @@ pub struct SendMessageResponse {
     pub status: String,
     pub thread_id: String,
     pub turn_id: String,
+    #[serde(default)]
+    pub thread_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -941,6 +1002,8 @@ pub struct ProviderSummary {
 pub struct ProviderCatalog {
     pub data: Vec<ProviderSummary>,
     pub current_provider_id: String,
+    #[serde(default)]
+    pub current_model_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

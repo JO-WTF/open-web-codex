@@ -77,10 +77,11 @@ async fn idempotent_enqueue_single_lease_and_workspace_provisioning() {
         .await
         .unwrap();
     sqlx::query(
-        "INSERT INTO users (id, name, email, password_hash, role) \
-         VALUES ($1, 'Runner', $2, 'not-a-password', 'owner')",
+        "INSERT INTO users (id, username, name, email, password_hash, role) \
+         VALUES ($1, $2, 'Runner', $3, 'not-a-password', 'owner')",
     )
     .bind(user_id)
+    .bind(format!("runner-{user_id}"))
     .bind(format!("{user_id}@example.invalid"))
     .execute(&pool)
     .await

@@ -27,11 +27,23 @@ pub async fn bootstrap(
     Extension(profile): Extension<RuntimeProfileBinding>,
     Json(req): Json<BootstrapRequest>,
 ) -> ApiResult<BootstrapResponse> {
-    if req.name.trim().is_empty() || req.email.trim().is_empty() || req.password.is_empty() {
+    if req.name.trim().is_empty()
+        || req.username.trim().is_empty()
+        || req.email.trim().is_empty()
+        || req.password.is_empty()
+    {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(PlatformError::bad_request(
-                "name, email, and password are required",
+                "name, username, email, and password are required",
+            )),
+        ));
+    }
+    if !valid_username(&req.username) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(PlatformError::bad_request(
+                "username must be 1-64 characters using letters, numbers, dot, underscore, or hyphen",
             )),
         ));
     }
@@ -63,10 +75,12 @@ pub async fn bootstrap(
 
     // Create owner user
     let user = sqlx::query(
-        "INSERT INTO users (name, email, password_hash, role) VALUES ($1, $2, $3, 'owner') 
-         RETURNING id, name, email, role, created_at, updated_at",
+        "INSERT INTO users (name, username, email, password_hash, role) \
+         VALUES ($1, $2, $3, $4, 'owner')
+         RETURNING id, name, username, email, role, created_at, updated_at",
     )
     .bind(&req.name)
+    .bind(req.username.trim())
     .bind(&req.email)
     .bind(&password_hash)
     .fetch_one(&mut *transaction)
@@ -152,6 +166,7 @@ pub async fn bootstrap(
     let user_data = User {
         id: user.get("id"),
         name: user.get("name"),
+        username: user.get("username"),
         email: user.get("email"),
         role: user.get("role"),
         created_at: user.get("created_at"),
@@ -174,6 +189,30 @@ pub async fn bootstrap(
             organization: org_data,
         }),
     ))
+}
+
+fn valid_username(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::valid_username;
+
+    #[test]
+    fn username_validation_accepts_login_safe_identifiers() {
+        assert!(valid_username("test"));
+        assert!(valid_username("team.owner-1"));
+        assert!(!valid_username(""));
+        assert!(!valid_username("has space"));
+        assert!(!valid_username("用户"));
+        assert!(!valid_username(&"a".repeat(65)));
+    }
 }
 
 fn internal_database_error(_error: sqlx::Error) -> (StatusCode, Json<PlatformError>) {

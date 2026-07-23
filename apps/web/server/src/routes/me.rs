@@ -7,6 +7,7 @@ pub async fn me(auth: AuthenticatedUser) -> Json<MeResponse> {
     Json(MeResponse {
         id: auth.user_id,
         name: auth.name,
+        username: auth.username,
         email: auth.email,
         role: auth.role,
         organization_id: auth.organization_id,

@@ -49,6 +49,11 @@ pub trait ProviderOperations: Send + Sync {
         request: UpsertProviderRequest,
     ) -> Result<ProviderCatalog, ProviderServiceError>;
     async fn select(&self, id: &str) -> Result<ProviderCatalog, ProviderServiceError>;
+    async fn select_model(
+        &self,
+        provider_id: &str,
+        model_id: &str,
+    ) -> Result<ProviderCatalog, ProviderServiceError>;
     async fn delete(&self, id: &str) -> Result<ProviderCatalog, ProviderServiceError>;
     async fn refresh_models(&self, id: &str) -> Result<ProviderCatalog, ProviderServiceError>;
     async fn update_model(
@@ -148,6 +153,38 @@ impl ProviderService {
                 .await?;
         }
         self.list().await
+    }
+
+    pub async fn select_model(
+        &self,
+        provider_id: &str,
+        model_id: &str,
+    ) -> Result<ProviderCatalog, ProviderServiceError> {
+        let model_id = required_trimmed(model_id, "model id")?;
+        let catalog = self.require_provider(provider_id).await?;
+        let provider = catalog
+            .data
+            .iter()
+            .find(|provider| provider.id == provider_id)
+            .expect("required Provider exists");
+        if !provider.models.is_empty()
+            && !provider
+                .models
+                .iter()
+                .any(|model| model.model_id == model_id && model.show_in_picker)
+        {
+            return Err(ProviderServiceError::NotFound(format!(
+                "{provider_id}/{model_id}"
+            )));
+        }
+        self.write_config(vec![
+            config_edit("model_provider".to_string(), json!(provider_id)),
+            config_edit("model".to_string(), json!(model_id)),
+        ])
+        .await?;
+        let mut catalog = self.list().await?;
+        catalog.current_model_id = Some(model_id.to_string());
+        Ok(catalog)
     }
 
     pub async fn delete(&self, id: &str) -> Result<ProviderCatalog, ProviderServiceError> {
@@ -295,6 +332,14 @@ impl ProviderOperations for ProviderService {
         ProviderService::select(self, id).await
     }
 
+    async fn select_model(
+        &self,
+        provider_id: &str,
+        model_id: &str,
+    ) -> Result<ProviderCatalog, ProviderServiceError> {
+        ProviderService::select_model(self, provider_id, model_id).await
+    }
+
     async fn delete(&self, id: &str) -> Result<ProviderCatalog, ProviderServiceError> {
         ProviderService::delete(self, id).await
     }
@@ -342,6 +387,7 @@ impl Default for InMemoryProviderService {
         Self {
             catalog: Arc::new(RwLock::new(ProviderCatalog {
                 current_provider_id: "mock".to_string(),
+                current_model_id: Some("mock-codex".to_string()),
                 data: vec![
                     ProviderSummary {
                         id: "openai".to_string(),
@@ -445,6 +491,36 @@ impl ProviderOperations for InMemoryProviderService {
         let mut catalog = self.catalog.write().await;
         require_catalog_provider(&catalog, id)?;
         select_catalog_provider(&mut catalog, id);
+        catalog.current_model_id = catalog
+            .data
+            .iter()
+            .find(|provider| provider.id == id)
+            .and_then(|provider| provider.models.iter().find(|model| model.show_in_picker))
+            .map(|model| model.model_id.clone());
+        Ok(catalog.clone())
+    }
+
+    async fn select_model(
+        &self,
+        provider_id: &str,
+        model_id: &str,
+    ) -> Result<ProviderCatalog, ProviderServiceError> {
+        let model_id = required_trimmed(model_id, "model id")?;
+        let mut catalog = self.catalog.write().await;
+        let index = require_catalog_provider(&catalog, provider_id)?;
+        let provider = &catalog.data[index];
+        if !provider.models.is_empty()
+            && !provider
+                .models
+                .iter()
+                .any(|model| model.model_id == model_id && model.show_in_picker)
+        {
+            return Err(ProviderServiceError::NotFound(format!(
+                "{provider_id}/{model_id}"
+            )));
+        }
+        select_catalog_provider(&mut catalog, provider_id);
+        catalog.current_model_id = Some(model_id.to_string());
         Ok(catalog.clone())
     }
 
@@ -544,6 +620,7 @@ fn require_catalog_provider(
 
 fn select_catalog_provider(catalog: &mut ProviderCatalog, id: &str) {
     catalog.current_provider_id = id.to_string();
+    catalog.current_model_id = None;
     for provider in &mut catalog.data {
         provider.is_current = provider.id == id;
     }
@@ -1027,5 +1104,41 @@ mod tests {
             calls[3].1["edits"][0]["keyPath"],
             "model_providers.\"provider-b\".models"
         );
+    }
+
+    #[tokio::test]
+    async fn model_selection_persists_provider_and_model_together() {
+        let models = json!([{
+            "modelId": "deepseek-v4-flash",
+            "modelName": "DeepSeek V4 Flash",
+            "maxTokenLen": 128_000,
+            "maxOutputTokens": null,
+            "showInPicker": true,
+            "contextWindow": 128_000,
+        }]);
+        let initial = catalog(
+            "provider-a",
+            json!([provider("deepseek", false, models.clone())]),
+        );
+        let selected = catalog("deepseek", json!([provider("deepseek", true, models)]));
+        let transport = MockTransport::new(vec![initial, json!({ "status": "ok" }), selected]);
+        let service = ProviderService::new(transport.clone());
+
+        let result = service
+            .select_model("deepseek", "deepseek-v4-flash")
+            .await
+            .expect("select Provider model");
+
+        assert_eq!(result.current_provider_id, "deepseek");
+        assert_eq!(
+            result.current_model_id.as_deref(),
+            Some("deepseek-v4-flash")
+        );
+        let calls = transport.calls.lock().await;
+        assert_eq!(calls[1].0, "config/batchWrite");
+        assert_eq!(calls[1].1["edits"][0]["keyPath"], "model_provider");
+        assert_eq!(calls[1].1["edits"][0]["value"], "deepseek");
+        assert_eq!(calls[1].1["edits"][1]["keyPath"], "model");
+        assert_eq!(calls[1].1["edits"][1]["value"], "deepseek-v4-flash");
     }
 }

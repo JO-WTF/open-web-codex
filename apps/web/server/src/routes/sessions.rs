@@ -21,16 +21,16 @@ type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
 type CookieApiResult<T> =
     Result<(AppendHeaders<[(HeaderName, String); 1]>, Json<T>), (StatusCode, Json<PlatformError>)>;
 
-/// POST /api/sessions — Login with email + password into one Organization.
+/// POST /api/sessions — Login with username + password into one Organization.
 pub async fn create_session(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> CookieApiResult<LoginResponse> {
     let user = sqlx::query(
-        "SELECT id, name, email, role, password_hash, created_at, updated_at \
-         FROM users WHERE email = $1",
+        "SELECT id, name, username, email, role, password_hash, created_at, updated_at \
+         FROM users WHERE lower(username) = lower($1)",
     )
-    .bind(&req.email)
+    .bind(req.username.trim())
     .fetch_optional(&state.db)
     .await
     .map_err(internal_database_error)?;
@@ -47,7 +47,7 @@ pub async fn create_session(
     if !valid {
         return Err((
             StatusCode::UNAUTHORIZED,
-            Json(PlatformError::unauthorized("invalid email or password")),
+            Json(PlatformError::unauthorized("invalid username or password")),
         ));
     }
     let user = user.expect("password verification requires an existing user");
@@ -112,6 +112,7 @@ pub async fn create_session(
             user: User {
                 id: user_id,
                 name: user.get("name"),
+                username: user.get("username"),
                 email: user.get("email"),
                 role: user.get("role"),
                 created_at: user.get("created_at"),

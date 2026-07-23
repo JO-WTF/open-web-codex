@@ -129,6 +129,21 @@ async fn main() -> anyhow::Result<()> {
         &profile_binding.name,
     )
     .await?;
+    let master_key = match std::env::var("OPEN_WEB_CODEX_MASTER_KEY") {
+        Ok(value) => MasterKey::from_base64(&value)?,
+        Err(_) if cli.codex_mode == "real" => {
+            return Err(anyhow::anyhow!(
+                "OPEN_WEB_CODEX_MASTER_KEY is required in real Codex mode"
+            ));
+        }
+        Err(_) => MasterKey::generate()?,
+    };
+    let key_version =
+        std::env::var("OPEN_WEB_CODEX_MASTER_KEY_VERSION").unwrap_or_else(|_| "v1".to_string());
+    let configuration_secrets = Arc::new(PostgresSecretStore::new(
+        state.db.clone(),
+        SecretCipher::new(master_key, key_version)?,
+    ));
     let (adapter, providers): (Arc<dyn CodexAdapter>, Arc<dyn AuthorizedProviderOperations>) =
         match cli.codex_mode.as_str() {
             "fake" => {
@@ -153,19 +168,12 @@ async fn main() -> anyhow::Result<()> {
                     workspace_root = %workspace_root.display(),
                     "starting native Codex Profile Host"
                 );
-                let master_key = std::env::var("OPEN_WEB_CODEX_MASTER_KEY").map_err(|_| {
-                    anyhow::anyhow!("OPEN_WEB_CODEX_MASTER_KEY is required in real Codex mode")
-                })?;
-                let key_version = std::env::var("OPEN_WEB_CODEX_MASTER_KEY_VERSION")
-                    .unwrap_or_else(|_| "v1".to_string());
-                let cipher = SecretCipher::new(MasterKey::from_base64(&master_key)?, key_version)?;
-                let secret_store = PostgresSecretStore::new(state.db.clone(), cipher);
                 let registry = ProfileRegistry::new();
                 let providers = SecuredProviderService::new(
                     state.db.clone(),
                     profile_binding.runtime_key.clone(),
                     registry.clone(),
-                    secret_store,
+                    configuration_secrets.as_ref().clone(),
                 );
                 let secret_environment = providers.startup_secret_environment().await?;
                 let host_config =
@@ -316,6 +324,7 @@ async fn main() -> anyhow::Result<()> {
             approvals,
             git,
             orchestrator,
+            configuration_secrets,
             profile_binding,
         ),
     );
@@ -485,6 +494,23 @@ fn public_approval_frame(frame: &[u8], approval_id: uuid::Uuid) -> anyhow::Resul
     if request_method == "item/commandExecution/requestApproval" {
         if let Some(command) = params.get("command") {
             request_params.insert("command".to_string(), command.clone());
+        }
+    }
+    if request_method == "mcpServer/elicitation/request" {
+        for key in ["serverName", "mode", "message", "requestedSchema"] {
+            if let Some(value) = params.get(key) {
+                request_params.insert(key.to_string(), value.clone());
+            }
+        }
+        if let Some(url) = params
+            .get("url")
+            .and_then(serde_json::Value::as_str)
+            .and_then(routes::configuration::safe_maps_credential_url)
+        {
+            request_params.insert(
+                "url".to_string(),
+                serde_json::Value::String(url.to_string()),
+            );
         }
     }
     if request_method == "item/tool/requestUserInput" {
@@ -707,6 +733,7 @@ mod tests {
         import_file_backed_codex_auth_if_missing, public_approval_frame,
         public_resolved_approval_frame, runtime_resolved_request,
     };
+    use crate::routes::configuration::safe_maps_credential_url;
     use open_web_codex_approval_service::ResolvedApproval;
     use serde_json::Value;
     use std::fs;
@@ -788,6 +815,66 @@ mod tests {
                 .unwrap(),
             "git status"
         );
+    }
+
+    #[test]
+    fn public_mcp_elicitation_events_are_safe_approval_projections() {
+        let mut raw = br#"data: {"method":"app-server-event","params":{"workspace_id":"workspace-1","message":{"id":88,"method":"mcpServer/elicitation/request","params":{"threadId":"thread-1","turnId":"turn-1","serverName":"map_utils","mode":"url","_meta":{"secret":"do-not-project","path":"/private/server/path"},"message":"A maps provider and API key are required. Configure Mapbox or Google in this app; the selected provider will be saved globally and reused.","url":"http://127.0.0.1:43123/one-time-token","elicitationId":"runtime-secret-id"}}}}"#.to_vec();
+        raw.extend_from_slice(b"\n\n");
+        let approval_id = Uuid::now_v7();
+        let projected = public_approval_frame(&raw, approval_id).expect("approval projection");
+        let text = String::from_utf8(projected.clone()).unwrap();
+        assert!(!text.contains("do-not-project"));
+        assert!(!text.contains("/private/server/path"));
+        assert!(!text.contains("\"id\":88"));
+
+        let payload = projected
+            .strip_prefix(b"data: ")
+            .and_then(|value| value.strip_suffix(b"\n\n"))
+            .unwrap();
+        let value: Value = serde_json::from_slice(payload).unwrap();
+        assert_eq!(
+            value
+                .pointer("/params/message/params/requestMethod")
+                .unwrap(),
+            "mcpServer/elicitation/request"
+        );
+        assert_eq!(
+            value
+                .pointer("/params/message/params/requestParams/serverName")
+                .unwrap(),
+            "map_utils"
+        );
+        assert_eq!(
+            value
+                .pointer("/params/message/params/requestParams/message")
+                .unwrap(),
+            "A maps provider and API key are required. Configure Mapbox or Google in this app; the selected provider will be saved globally and reused."
+        );
+        assert_eq!(
+            value
+                .pointer("/params/message/params/requestParams/url")
+                .unwrap(),
+            "http://127.0.0.1:43123/one-time-token"
+        );
+        assert!(!text.contains("runtime-secret-id"));
+    }
+
+    #[test]
+    fn public_mcp_elicitation_rejects_non_loopback_configuration_urls() {
+        assert_eq!(
+            safe_maps_credential_url("http://127.0.0.1:43123/one-time-token"),
+            Some("http://127.0.0.1:43123/one-time-token")
+        );
+        assert_eq!(
+            safe_maps_credential_url("https://example.com/steal-token"),
+            None
+        );
+        assert_eq!(
+            safe_maps_credential_url("http://localhost:43123/one-time-token"),
+            None
+        );
+        assert_eq!(safe_maps_credential_url("http://127.0.0.1/"), None);
     }
 
     #[test]

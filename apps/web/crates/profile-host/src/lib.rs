@@ -951,6 +951,7 @@ async fn update_runtime_work(inner: &ProfileHostInner, message: &Value) {
         }
         "item/commandExecution/requestApproval"
         | "item/fileChange/requestApproval"
+        | "mcpServer/elicitation/request"
         | "item/permissions/requestApproval"
         | "item/tool/requestUserInput" => {
             if let Some(request_id) = message.get("id") {

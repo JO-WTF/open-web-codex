@@ -116,20 +116,31 @@ function renderAuthentication(initialError: string | null = null) {
       name.required = true;
       form.append(name);
     }
-    const email = document.createElement("input");
-    email.name = "email";
-    email.type = "email";
-    email.placeholder = "Email";
-    email.required = true;
+    const username = document.createElement("input");
+    username.name = "username";
+    username.autocomplete = "username";
+    username.placeholder = "Username";
+    username.required = true;
+    form.append(username);
+    if (mode === "bootstrap") {
+      const email = document.createElement("input");
+      email.name = "email";
+      email.type = "email";
+      email.autocomplete = "email";
+      email.placeholder = "Email";
+      email.required = true;
+      form.append(email);
+    }
     const password = document.createElement("input");
     password.name = "password";
     password.type = "password";
+    password.autocomplete = mode === "login" ? "current-password" : "new-password";
     password.placeholder = "Password";
     password.required = true;
     const submit = document.createElement("button");
     submit.type = "submit";
     submit.textContent = mode === "login" ? "Sign in" : "Initialize instance";
-    form.append(email, password, submit);
+    form.append(password, submit);
     form.addEventListener("submit", (event) => {
       event.preventDefault();
       const fields = new FormData(form);
@@ -137,11 +148,12 @@ function renderAuthentication(initialError: string | null = null) {
       const request = mode === "bootstrap"
         ? platformClient.bootstrap(
             String(fields.get("name") ?? ""),
+            String(fields.get("username") ?? ""),
             String(fields.get("email") ?? ""),
             String(fields.get("password") ?? ""),
           )
         : platformClient.login(
-            String(fields.get("email") ?? ""),
+            String(fields.get("username") ?? ""),
             String(fields.get("password") ?? ""),
           );
       void request.then((session) => {

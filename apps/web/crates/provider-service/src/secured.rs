@@ -46,6 +46,12 @@ pub trait AuthorizedProviderOperations: Send + Sync {
         actor: ProviderActor,
         id: &str,
     ) -> Result<ProviderCatalog, AuthorizedProviderError>;
+    async fn select_model(
+        &self,
+        actor: ProviderActor,
+        provider_id: &str,
+        model_id: &str,
+    ) -> Result<ProviderCatalog, AuthorizedProviderError>;
     async fn delete(
         &self,
         actor: ProviderActor,
@@ -308,6 +314,16 @@ impl AuthorizedProviderOperations for SecuredProviderService {
         Ok(self.runtime.select(id).await?)
     }
 
+    async fn select_model(
+        &self,
+        actor: ProviderActor,
+        provider_id: &str,
+        model_id: &str,
+    ) -> Result<ProviderCatalog, AuthorizedProviderError> {
+        self.authorize(actor).await?;
+        Ok(self.runtime.select_model(provider_id, model_id).await?)
+    }
+
     async fn delete(
         &self,
         actor: ProviderActor,
@@ -395,6 +411,15 @@ impl AuthorizedProviderOperations for InMemoryAuthorizedProviderService {
         id: &str,
     ) -> Result<ProviderCatalog, AuthorizedProviderError> {
         Ok(self.inner.select(id).await?)
+    }
+
+    async fn select_model(
+        &self,
+        _actor: ProviderActor,
+        provider_id: &str,
+        model_id: &str,
+    ) -> Result<ProviderCatalog, AuthorizedProviderError> {
+        Ok(self.inner.select_model(provider_id, model_id).await?)
     }
 
     async fn delete(

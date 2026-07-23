@@ -1,3 +1,4 @@
+pub mod configuration;
 pub mod migrate;
 
 use sqlx::postgres::PgPoolOptions;

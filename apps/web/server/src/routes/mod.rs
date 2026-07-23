@@ -1,6 +1,7 @@
 pub mod approvals;
 pub mod bootstrap;
 pub mod browser_workspaces;
+pub mod configuration;
 pub mod events;
 pub mod generation;
 pub mod github;
@@ -27,6 +28,7 @@ use open_web_codex_git_runtime::GitRuntime;
 use open_web_codex_platform_store::AppState;
 use open_web_codex_provider_service::secured::AuthorizedProviderOperations;
 use open_web_codex_run_orchestrator::RunOrchestrator;
+use open_web_codex_secret_store::PostgresSecretStore;
 use tokio::sync::RwLock;
 
 #[derive(Clone)]
@@ -66,6 +68,7 @@ pub fn router(
     approvals: Arc<ApprovalService>,
     git: Arc<GitRuntime>,
     orchestrator: Arc<RunOrchestrator>,
+    configuration_secrets: Arc<PostgresSecretStore>,
     profile: RuntimeProfileBinding,
 ) -> Router<AppState> {
     Router::new()
@@ -96,6 +99,14 @@ pub fn router(
             "/browser-workspace-preferences/{id}/worktree-setup",
             axum::routing::get(browser_workspaces::worktree_setup_status)
                 .post(browser_workspaces::mark_worktree_setup_ran),
+        )
+        .route(
+            "/configuration/maps",
+            axum::routing::get(configuration::get_maps).put(configuration::update_maps),
+        )
+        .route(
+            "/configuration/maps/use",
+            axum::routing::post(configuration::use_maps),
         )
         .route("/profile/account", axum::routing::get(profile::account))
         .route(
@@ -393,6 +404,10 @@ pub fn router(
         )
         .route("/tasks/{id}", axum::routing::get(tasks::get_task))
         .route(
+            "/tasks/{id}/model-selection",
+            axum::routing::put(tasks::update_model_selection),
+        )
+        .route(
             "/tasks/{id}/messages",
             axum::routing::post(tasks::send_message),
         )
@@ -417,10 +432,15 @@ pub fn router(
             "/providers/{provider_id}/models/{model_id}",
             axum::routing::patch(providers::update_provider_model),
         )
+        .route(
+            "/providers/{provider_id}/models/{model_id}/select",
+            axum::routing::post(providers::select_provider_model),
+        )
         .layer(Extension(adapter))
         .layer(Extension(providers))
         .layer(Extension(approvals))
         .layer(Extension(git))
         .layer(Extension(orchestrator))
+        .layer(Extension(configuration_secrets))
         .layer(Extension(profile))
 }

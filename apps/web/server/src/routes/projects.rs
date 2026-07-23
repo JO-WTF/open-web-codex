@@ -27,6 +27,7 @@ pub async fn list_thread_contexts(
         "SELECT p.id AS project_id, p.name AS project_name, p.git_url, p.default_branch, \
                 p.created_at AS project_created_at, p.updated_at AS project_updated_at, \
                 t.id AS task_id, t.title, t.status AS task_status, \
+                t.model_provider, t.model, \
                 t.created_at AS task_created_at, t.updated_at AS task_updated_at, \
                 r.id AS run_id, r.status AS run_status, r.codex_thread_id, r.active_turn_id, \
                 r.workspace_id, r.source_ref, r.workspace_kind, r.workspace_name, \
@@ -59,6 +60,8 @@ pub async fn list_thread_contexts(
                     project_id,
                     title: row.get("title"),
                     status: row.get("task_status"),
+                    model_provider: row.get("model_provider"),
+                    model: row.get("model"),
                     created_at: row.get("task_created_at"),
                     updated_at: row.get("task_updated_at"),
                 },

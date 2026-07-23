@@ -19,6 +19,7 @@ use zeroize::Zeroize;
 const KEY_LENGTH: usize = 32;
 const NONCE_LENGTH: usize = 12;
 const PROVIDER_SECRET_PURPOSE: &str = "provider_api_key";
+const CONFIGURATION_SECRET_PURPOSE: &str = "platform_configuration";
 
 #[derive(Debug, Error)]
 pub enum SecretStoreError {
@@ -197,6 +198,12 @@ pub struct ProviderEnvironmentSecret {
     pub value: SecretValue,
 }
 
+#[derive(Debug)]
+pub struct StoredConfigurationSecret {
+    pub value: SecretValue,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
 #[derive(Clone)]
 pub struct PostgresSecretStore {
     db: PgPool,
@@ -313,6 +320,61 @@ impl PostgresSecretStore {
             })
             .collect()
     }
+
+    /// Store a server-only setting in the centralized configuration namespace.
+    /// The plaintext is never serialized into `platform_configuration`.
+    pub async fn put_global_configuration_secret(
+        &self,
+        config_key: &str,
+        value: &SecretValue,
+        updated_by: Uuid,
+    ) -> Result<chrono::DateTime<chrono::Utc>, SecretStoreError> {
+        validate_configuration_key(config_key)?;
+        let context = configuration_context("global", "global", config_key);
+        let encrypted = self.cipher.seal(context.as_bytes(), value)?;
+        let row = sqlx::query(
+            "INSERT INTO platform_configuration_secrets \
+             (scope_kind, scope_id, config_key, key_version, nonce, ciphertext, updated_by) \
+             VALUES ('global', 'global', $1, $2, $3, $4, $5) \
+             ON CONFLICT (scope_kind, scope_id, config_key) DO UPDATE SET \
+             key_version = EXCLUDED.key_version, nonce = EXCLUDED.nonce, \
+             ciphertext = EXCLUDED.ciphertext, updated_by = EXCLUDED.updated_by, \
+             updated_at = now() \
+             RETURNING updated_at",
+        )
+        .bind(config_key)
+        .bind(encrypted.key_version)
+        .bind(encrypted.nonce.as_slice())
+        .bind(encrypted.ciphertext)
+        .bind(updated_by)
+        .fetch_one(&self.db)
+        .await?;
+        Ok(row.get("updated_at"))
+    }
+
+    pub async fn get_global_configuration_secret(
+        &self,
+        config_key: &str,
+    ) -> Result<Option<StoredConfigurationSecret>, SecretStoreError> {
+        validate_configuration_key(config_key)?;
+        let row = sqlx::query(
+            "SELECT key_version, nonce, ciphertext, updated_at \
+             FROM platform_configuration_secrets \
+             WHERE scope_kind = 'global' AND scope_id = 'global' AND config_key = $1",
+        )
+        .bind(config_key)
+        .fetch_optional(&self.db)
+        .await?;
+        row.map(|row| {
+            let encrypted = encrypted_from_row(&row)?;
+            let context = configuration_context("global", "global", config_key);
+            Ok(StoredConfigurationSecret {
+                value: self.cipher.open(context.as_bytes(), encrypted)?,
+                updated_at: row.get("updated_at"),
+            })
+        })
+        .transpose()
+    }
 }
 
 fn encrypted_from_row(row: &sqlx::postgres::PgRow) -> Result<EncryptedSecret, SecretStoreError> {
@@ -327,6 +389,10 @@ fn encrypted_from_row(row: &sqlx::postgres::PgRow) -> Result<EncryptedSecret, Se
 
 fn provider_context(organization_id: Uuid, profile_id: Uuid, provider_id: &str) -> String {
     format!("open-web-codex:{organization_id}:{profile_id}:{PROVIDER_SECRET_PURPOSE}:{provider_id}")
+}
+
+fn configuration_context(scope_kind: &str, scope_id: &str, config_key: &str) -> String {
+    format!("open-web-codex:{CONFIGURATION_SECRET_PURPOSE}:{scope_kind}:{scope_id}:{config_key}")
 }
 
 pub fn provider_environment_key(
@@ -354,10 +420,23 @@ fn validate_provider_id(provider_id: &str) -> Result<(), SecretStoreError> {
     Ok(())
 }
 
+fn validate_configuration_key(config_key: &str) -> Result<(), SecretStoreError> {
+    if config_key.trim().is_empty()
+        || config_key.len() > 160
+        || !config_key.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
+        })
+    {
+        return Err(SecretStoreError::InvalidIdentity);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        provider_environment_key, EncryptedSecret, SecretCipher, SecretStoreError, SecretValue,
+        configuration_context, provider_environment_key, validate_configuration_key,
+        EncryptedSecret, SecretCipher, SecretStoreError, SecretValue,
     };
     use uuid::Uuid;
 
@@ -393,6 +472,16 @@ mod tests {
             cipher.open(b"org:profile:provider-b", copied),
             Err(SecretStoreError::Decrypt)
         ));
+    }
+
+    #[test]
+    fn configuration_secrets_use_a_distinct_validated_encryption_context() {
+        assert!(validate_configuration_key("maps.google_api_key").is_ok());
+        assert!(validate_configuration_key("../secret").is_err());
+        assert_ne!(
+            configuration_context("global", "global", "maps.google_api_key"),
+            configuration_context("user", "user-1", "maps.google_api_key")
+        );
     }
 
     #[test]

@@ -520,7 +520,7 @@ impl CodexAdapter for FakeCodexAdapter {
         _model: Option<&str>,
     ) -> Result<String, AdapterError> {
         if prompt.contains("worktreeName") {
-            Ok(r#"{"title":"New Agent","worktreeName":"feat/new-agent"}"#.to_string())
+            Ok(r#"{"title":"Thread","worktreeName":"feat/thread"}"#.to_string())
         } else if prompt.contains("developerInstructions") {
             Ok(r#"{"description":"Specialized agent","developerInstructions":"Complete the requested specialty carefully and report concrete results."}"#.to_string())
         } else {
