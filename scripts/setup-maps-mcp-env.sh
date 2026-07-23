@@ -21,6 +21,18 @@ run_logged() {
   "$@" >>"$log_file" 2>&1
 }
 
+check_imports() {
+  "$venv_dir/bin/python" - <<'PY' >>"$log_file" 2>&1
+try:
+    import maps_mcp.server  # noqa: F401
+    import mcp  # noqa: F401
+except Exception as exc:
+    print(f"maps-mcp import check failed: {type(exc).__name__}: {exc}")
+    raise SystemExit(1)
+print("maps-mcp imports ok")
+PY
+}
+
 proxy_state() {
   local names=(HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy)
   local name value states=()
@@ -57,21 +69,14 @@ else
 fi
 
 run_logged "$venv_dir/bin/python" -m pip --version
-if [[ "${OPEN_WEB_CODEX_REFRESH_MAPS_MCP_ENV:-0}" == "1" ]] || ! "$venv_dir/bin/python" - <<'PY' >>"$log_file" 2>&1
-import maps_mcp.server  # noqa: F401
-import mcp  # noqa: F401
-print("maps-mcp imports ok")
-PY
+if [[ "${OPEN_WEB_CODEX_REFRESH_MAPS_MCP_ENV:-0}" == "1" ]] || ! check_imports
 then
   log "installing or refreshing maps MCP dependencies"
   run_logged "$venv_dir/bin/python" -m pip install --disable-pip-version-check -e "$tools_root"
 else
   log "maps MCP dependencies already import successfully"
 fi
-run_logged "$venv_dir/bin/python" - <<'PY'
-import maps_mcp.server  # noqa: F401
-import mcp  # noqa: F401
-print("maps-mcp imports ok")
-PY
+log "verifying maps MCP imports after setup"
+check_imports
 log "maps-mcp environment setup complete"
 printf '%s\n' "$venv_dir"
