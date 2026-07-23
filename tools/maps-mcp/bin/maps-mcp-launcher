@@ -2,9 +2,10 @@
 set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-venv_dir="${OPEN_WEB_CODEX_MAPS_MCP_VENV:-${MAPS_MCP_VENV:-$root_dir/.venv}}"
+repo_root="$(cd "$root_dir/../.." && pwd)"
+data_dir="${OPEN_WEB_CODEX_DATA_DIR:-$repo_root/.local/open-web-codex}"
+venv_dir="${OPEN_WEB_CODEX_MAPS_MCP_VENV:-${MAPS_MCP_VENV:-$data_dir/tool-envs/maps-mcp}}"
 python_bin="$venv_dir/bin/python"
-data_dir="${OPEN_WEB_CODEX_DATA_DIR:-$root_dir/.local/open-web-codex}"
 log_dir="${OPEN_WEB_CODEX_LOG_DIR:-$data_dir/logs}"
 log_file="${OPEN_WEB_CODEX_MAPS_MCP_LAUNCHER_LOG:-$log_dir/maps-mcp-launcher.log}"
 
@@ -30,6 +31,7 @@ proxy_state() {
 
 log "maps-mcp launcher starting"
 log "root_dir=$root_dir"
+log "repo_root=$repo_root"
 log "cwd=$(pwd)"
 log "args=$*"
 log "venv_dir=$venv_dir"
@@ -56,20 +58,28 @@ EOF
 }
 
 ensure_dependencies() {
-  if "$python_bin" - <<'PY' >/dev/null 2>&1
-import maps_mcp.server  # noqa: F401
-import mcp  # noqa: F401
+  local import_output import_summary
+  if import_output=$("$python_bin" - <<'PY' 2>&1
+try:
+    import maps_mcp.server  # noqa: F401
+    import mcp  # noqa: F401
+except Exception as exc:
+    print(f"{type(exc).__name__}: {exc}")
+    raise SystemExit(1)
+print("ok")
 PY
+  )
   then
     log "dependency import check passed"
     return 0
   fi
+  import_summary=$(printf '%s' "$import_output" | tr '\n' ' ' | cut -c1-1000)
+  log "dependency import check failed: ${import_summary:-no import output}"
   if [[ "${MAPS_MCP_AUTO_INSTALL:-0}" != "1" ]]; then
     cat >&2 <<EOF
 maps-mcp: shared Python environment is not ready: $venv_dir
 maps-mcp: run scripts/setup-maps-mcp-env.sh during platform startup, or set MAPS_MCP_AUTO_INSTALL=1 for manual development.
 EOF
-    log "dependency import check failed"
     exit 70
   fi
   # MCP stdio uses stdout for JSON-RPC frames. Keep first-start dependency

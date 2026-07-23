@@ -39,8 +39,10 @@ The platform startup path prepares one shared maps MCP Python environment before
 By default `scripts/run-local.sh` creates or refreshes it under
 `$OPEN_WEB_CODEX_DATA_DIR/tool-envs/maps-mcp` by calling `scripts/setup-maps-mcp-env.sh`, and then
 exports `OPEN_WEB_CODEX_MAPS_MCP_VENV`/`MAPS_MCP_VENV` so every user conversation, workspace, and
-Thread started by that local platform process reuses the same environment. This keeps virtualenv
-creation and dependency downloads out of the user-visible MCP handshake.
+Thread started by that local platform process reuses the same environment. The launcher uses the
+same repo-level shared path as its fallback even when the MCP child receives a sanitized
+environment. This keeps virtualenv creation and dependency downloads out of the user-visible MCP
+handshake and avoids accidentally falling back to a stale plugin-local `.venv`.
 
 For manual development from this directory you can still run:
 
@@ -61,14 +63,15 @@ or hand-edited Profile `config.toml` entries. In the Web platform, the native Pr
 selects local plugin roots discovered under the source tree or workspace `tools/` directories when it starts
 a new Thread; deployments may add extra absolute roots with `OPEN_WEB_CODEX_CAPABILITY_ROOTS`.
 
-The plugin MCP config starts `./bin/maps-mcp-launcher` with `cwd="."`; the launcher resolves the
-plugin root, verifies that the shared environment can import `maps_mcp` and `mcp`, keeps startup
-logs on stderr so MCP stdio stdout remains JSON-RPC-only, and then execs
-`python -m maps_mcp.server`. If the shared environment is missing or incomplete, the launcher fails
-fast with instructions to run `scripts/setup-maps-mcp-env.sh` instead of doing dependency downloads
-during a user conversation. Set `MAPS_MCP_AUTO_INSTALL=1` only for ad-hoc manual development. The
-MCP client must advertise URL elicitation support. If the current browser surface cannot render the
-key request, the tool fails safely instead of requesting the key in a model-visible form.
+The plugin MCP config starts `./bin/maps-mcp-launcher` with `cwd="."` and requests the shared maps
+environment/logging variables via `env_vars`. The launcher resolves the plugin root and repository
+root, verifies that the shared environment can import `maps_mcp` and `mcp`, keeps startup logs on
+stderr so MCP stdio stdout remains JSON-RPC-only, and then execs `python -m maps_mcp.server`. If the
+shared environment is missing or incomplete, the launcher fails fast with instructions to run
+`scripts/setup-maps-mcp-env.sh` instead of doing dependency downloads during a user conversation.
+Set `MAPS_MCP_AUTO_INSTALL=1` only for ad-hoc manual development. The MCP client must advertise URL
+elicitation support. If the current browser surface cannot render the key request, the tool fails
+safely instead of requesting the key in a model-visible form.
 
 `scripts/setup-maps-mcp-env.sh` writes detailed setup logs to
 `$OPEN_WEB_CODEX_LOG_DIR/maps-mcp-env.log` by default. The log records timestamps, Python/pip
@@ -78,10 +81,11 @@ dependency, Python version, or platform startup failures.
 
 `bin/maps-mcp-launcher` writes per-start handshake diagnostics to
 `$OPEN_WEB_CODEX_LOG_DIR/maps-mcp-launcher.log` by default. It records cwd, launcher args, selected
-venv, Python version, proxy-variable presence, import-check status, and the MCP server stderr stream.
-When Codex reports `connection closed: initialize response`, inspect this launcher log together with
-`maps-mcp-env.log` to distinguish missing shared env, import errors, Python runtime errors, and
-FastMCP startup exceptions.
+repo root, selected venv, Python version, proxy-variable presence, import-check status including the
+first import error summary, and the MCP server stderr stream. When Codex reports
+`connection closed: initialize response`, inspect this launcher log together with `maps-mcp-env.log`
+to distinguish missing shared env, import errors, Python runtime errors, and FastMCP startup
+exceptions.
 
 ## Tests
 
