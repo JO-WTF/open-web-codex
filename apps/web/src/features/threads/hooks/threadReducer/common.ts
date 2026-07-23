@@ -85,29 +85,54 @@ export function maybeRenameThreadFromAgent({
     : threadsByWorkspace;
 }
 
+const LEADING_PROVIDER_SENTINELS = [
+  "<｜begin▁of▁sentence｜>",
+  "<|begin_of_sentence|>",
+  "<｜begin_of_sentence｜>",
+];
+
+export function stripLeadingProviderSentinel(text: string) {
+  let next = text;
+  let didStrip = true;
+  while (didStrip) {
+    didStrip = false;
+    const leadingWhitespace = next.match(/^\s*/)?.[0] ?? "";
+    const body = next.slice(leadingWhitespace.length);
+    for (const sentinel of LEADING_PROVIDER_SENTINELS) {
+      if (body.startsWith(sentinel)) {
+        next = `${leadingWhitespace}${body.slice(sentinel.length)}`;
+        didStrip = true;
+        break;
+      }
+    }
+  }
+  return next;
+}
+
 export function mergeStreamingText(existing: string, delta: string) {
-  if (!delta) {
+  const cleanDelta = stripLeadingProviderSentinel(delta);
+  if (!cleanDelta) {
     return existing;
   }
   if (!existing) {
-    return delta;
+    return cleanDelta;
   }
-  if (delta === existing) {
+  if (cleanDelta === existing) {
     return existing;
   }
-  if (delta.startsWith(existing)) {
-    return delta;
+  if (cleanDelta.startsWith(existing)) {
+    return cleanDelta;
   }
-  if (existing.startsWith(delta)) {
+  if (existing.startsWith(cleanDelta)) {
     return existing;
   }
-  const maxOverlap = Math.min(existing.length, delta.length);
+  const maxOverlap = Math.min(existing.length, cleanDelta.length);
   for (let length = maxOverlap; length > 0; length -= 1) {
-    if (existing.endsWith(delta.slice(0, length))) {
-      return `${existing}${delta.slice(length)}`;
+    if (existing.endsWith(cleanDelta.slice(0, length))) {
+      return `${existing}${cleanDelta.slice(length)}`;
     }
   }
-  return `${existing}${delta}`;
+  return `${existing}${cleanDelta}`;
 }
 
 export function addSummaryBoundary(existing: string) {
