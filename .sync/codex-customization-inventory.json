@@ -3,19 +3,19 @@
   "purpose": "Tracks the current official-tree comparison and convergence classification progress for codex/.",
   "comparison": {
     "upstreamRef": "codex-upstream/main",
-    "upstreamCommit": "4f3852107e5eedeb4cb89b57a6d4a35b49f8a59a",
+    "upstreamCommit": "9d823343026e600dab694e41865ed60613da31b6",
     "localTree": "HEAD:codex",
-    "observedAt": "2026-07-22T03:19:39Z",
-    "differenceCount": 126,
-    "addedLocally": 32,
-    "modified": 94,
-    "missingLocally": 0,
-    "upstreamOnly": 0,
-    "localOnly": 126,
-    "diverged": 0
+    "observedAt": "2026-07-23T00:44:26Z",
+    "differenceCount": 514,
+    "addedLocally": 45,
+    "modified": 445,
+    "missingLocally": 24,
+    "upstreamOnly": 385,
+    "localOnly": 79,
+    "diverged": 50
   },
   "progress": {
-    "state": "synchronized-validated-web-cutover-complete",
+    "state": "integrated-base-validated-upstream-update-available",
     "classificationSource": "docs/custom-codex-patch-map.md",
     "classifiedRetainCore": [
       "provider-chat-transport",
@@ -26,13 +26,13 @@
       "capability-manifest"
     ],
     "classification": {
-      "classifiedLocalOnlyPaths": 126,
+      "classifiedLocalOnlyPaths": 79,
       "unclassifiedSourcePaths": 0,
       "temporaryUpstreamedFixes": 0
     },
     "completed": [
-      "The Codex subtree is synchronized through the current official commit with only the six documented retained seams.",
-      "All 126 local-only paths are classified; generated artifacts and tests follow their owning source seam.",
+      "The Codex subtree is integrated through 6e5a2d6b8d14 with the six documented retained seams; 48 later official commits await a dedicated sync branch.",
+      "All 79 currently local-only paths follow the classified seams; the 50 diverged paths require upstream-first replay during the next sync.",
       "Profile lifecycle, encrypted credentials, authorization, durable approvals, Git workspaces, Run leases, browser DTOs, and event delivery are owned by apps/web.",
       "The browser uses typed REST and authenticated WebSocket transport; Tauri, desktop sidecars, raw browser RPC, desktop release chains, and desktop build dependencies are absent.",
       "Provider configuration, event payloads, model context and onboarding implementation live in dedicated TUI Provider modules; high-churn upstream parent files retain only narrow attachments.",
@@ -45,7 +45,7 @@
       "appServerSchema": "passed; no generated drift",
       "protocolTests": "288 passed",
       "chatTransportTests": "175 codex-api tests and 17 focused Core Chat tests passed",
-      "providerTests": "26 Provider metadata, 57 Provider transport, 41 model-manager, 27 focused Core Provider, and 5 app-server model-list tests passed",
+      "providerTests": "26 Provider metadata, 57 Provider transport, 41 model-manager, 27 focused Core Provider, 5 app-server model-list tests, and the existing-Thread Provider hot-switch regression passed",
       "configTests": "221 passed",
       "mcpTests": "110 passed",
       "coreSkillsTests": "124 passed",
@@ -57,8 +57,8 @@
       "webContractCheck": "passed",
       "platformTests": "frontend, Rust workspace, PostgreSQL integration, Profile restart, Provider isolation, Git Runtime, Run lease, two-organization security, and fake-server HTTP/WebSocket checks passed"
     },
-    "validatedAgainstUpstream": "4f3852107e5eedeb4cb89b57a6d4a35b49f8a59a",
-    "validatedAtCommit": "89839d66d978e392d6768761b71db67f962ba560",
-    "nextAction": "Keep the six retained seams replayable at the next official sync; product work continues with authorized per-user dynamic Profile routing and the remaining M2 session and Runner hardening gates."
+    "validatedAgainstUpstream": "6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9",
+    "validatedAtCommit": "a9bae7be4fba81c242308cf6d824e487da85c593",
+    "nextAction": "Create a dedicated codex/sync-upstream-* branch for the 48 pending official commits, accept upstream structure first, then replay only the six retained seams and rerun the contract/provider matrix."
   }
 }

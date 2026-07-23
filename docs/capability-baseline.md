@@ -11,16 +11,17 @@ Observed on 2026-07-23 from the current synchronization branch:
 | Component | State |
 | --- | --- |
 | Codex subtree | integrated through `openai/codex` `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9` |
-| Observed official main | `10cc57c95c2c8f1d01c8deaa75efb29b099d9c28`; 26 commits await the next dedicated sync branch |
+| Observed official main | `9d823343026e600dab694e41865ed60613da31b6`; 48 commits await the next dedicated sync branch |
 | Local Codex seams | retained changes remain classified by `docs/custom-codex-patch-map.md`; compare them against `codex-upstream/main`, never this repository's `main` |
 | Local customization footprint | six retained Runtime/TUI seams, derived artifacts and focused tests; `ToolName` uses the official implementation |
 | Web platform | Restored browser UI, Axum/PostgreSQL platform, native Profile Registry/Host, encrypted Provider Secret injection, durable approvals, isolated Git workspaces, lease-based Run orchestration, typed REST resources and authenticated WebSocket |
 
 ## Reproduced evidence
 
-- `scripts/codex-upstream-status.sh` reports the subtree synchronized with
-  official main; the customization status script reports 126 local-only
-  differences with zero upstream-only or diverged paths.
+- `scripts/codex-upstream-status.sh` reports the subtree integrated through
+  `6e5a2d6b8d14` with 48 official commits awaiting a dedicated sync. The
+  customization status script reports 514 raw path differences: 385
+  upstream-only, 79 local-only and 50 diverged.
 - The current upstream structure and all six documented seams are integrated;
   regenerated app-server Schema and TypeScript fixtures have no drift.
 - The locally built `codex app-server` completes `initialize` and returns
@@ -128,7 +129,7 @@ security, Push delivery, or every Studio capability.
 | MCP | config degraded; OAuth/elicitation unsupported | status listing is declared; Web-safe CRUD, reload and lifecycle validation are pending |
 | Tools discovery | declared unsupported | do not expose a platform fallback catalog |
 | Structured reply cards / map cards | declared unsupported | no generated card contract, card Artifact store, renderer gate or real app-server smoke exists |
-| Provider/model management | declared supported by the checked-in Runtime | `models.providers`, `modelProvider/list`, controlled Profile config writes, provider-scoped refresh, model selection and context-window persistence are wired; scoped Runtime/TUI tests, two-Provider cache-isolation smoke and encrypted platform Secret injection/deletion smoke pass. Turn-level Provider propagation remains a release gate |
+| Provider/model management | declared supported by the checked-in Runtime | `models.providers`, `modelProvider/list`, controlled Profile config writes, provider-scoped refresh, model selection and context-window persistence are wired; scoped Runtime/TUI tests, two-Provider cache-isolation smoke, encrypted platform Secret injection/deletion smoke, and live existing-Thread Provider transport rebinding pass |
 
 ## Web platform assessment
 

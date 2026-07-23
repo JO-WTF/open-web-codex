@@ -7,10 +7,10 @@
 | 更新日期 | 2026-07-23 |
 | 当前分支 | `codex/sync-upstream-6e5a2d6b8d14` |
 | Codex 基线 | `openai/codex` `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9` |
-| 上游待同步 | 26；观测到的 official main 为 `10cc57c95c2c8f1d01c8deaa75efb29b099d9c28` |
+| 上游待同步 | 48；观测到的 official main 为 `9d823343026e600dab694e41865ed60613da31b6` |
 | 当前工作 | 以 1421 WebApp 为唯一前端，收紧其 Server 适配、恢复与运行时重启语义；当前部署按单用户 Profile 验证 |
 
-当前 Codex 基线上的定制仍按 patch map 分类；official main 已前进 26 个提交，
+当前 Codex 基线上的定制仍按 patch map 分类；official main 已前进 48 个提交，
 下一轮必须通过专用 `codex/sync-upstream-*` 分支同步。1421 WebApp 的 CSS、页面布局
 和交互保持既有产品形态；差异集中在认证入口、`src/services/webClient.ts` Server
 适配层，以及三个由完整文件哈希锁定的非视觉 Thread 上下文接线文件。平台具备原生 Profile Host、Provider 服务、
@@ -50,7 +50,8 @@
 
 ## A. Codex 上游同步与定制收敛
 
-- [x] 同步官方 main 到 `6e5a2d6b8d14`，确认无待集成提交。
+- [x] 当前分支集成官方 main 到 `6e5a2d6b8d14`。
+- [ ] 通过新的 `codex/sync-upstream-*` 分支集成已观测到的后续 48 个官方提交。
 - [x] 将全部非生成差异分类为 `retain-core`、`upstreamed`、`move-out` 或
   `drop`，机器清单与 patch map 一致。
 - [x] Chat DTO、Responses-to-Chat 转换、工具名反向映射和 SSE 翻译集中到
@@ -82,6 +83,8 @@
   有界事件、原位重启、Thread resume/read 和 Capability Manifest。
 - [x] Provider 服务执行受控配置写入、Provider-scoped refresh/cache、选择与模型
   更新；凭据 AES-256-GCM 加密，只注入 Profile 子进程环境。
+- [x] 已有 Thread 在 Turn 级切换 Provider 时会重建对应模型客户端；真实旧
+  OpenAI Thread 切换 DeepSeek 后不再沿用 OpenAI transport。
 - [x] app-server 审批先持久化并脱敏投影，再由版本 CAS 决策和审计。
 - [x] 每个 app-server 进程实例拥有独立 UUID；审批响应同时校验实例和 request
   id，重启会取消旧实例请求，`delivery_unknown` 只允许相同决策重试。
@@ -146,7 +149,7 @@
 - [x] `npm run check:codex-generated`、`npm run check:codex-contracts`、fixtures、
   Feature Policy 和真实 `--require-manifest` smoke。
 - [x] 状态脚本已复核；当前集成基线为 `6e5a2d6b8d14`，观测到的 official
-  main 已前进到 `10cc57c95c2c`，26 个待同步提交留给下一专用同步分支处理。
+  main 已前进到 `9d823343026e`，48 个待同步提交留给下一专用同步分支处理。
 - [x] Fake Server HTTP/static/WebSocket 端到端启动验证。
 - [x] Git status/diff 审查，确认没有未分类 Codex 差异或意外用户文件。
 
