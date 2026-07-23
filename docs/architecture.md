@@ -53,10 +53,10 @@ result; they never cause a Tauri runtime to reappear.
 | Fact | Authoritative owner | Web may persist |
 | --- | --- | --- |
 | User, organization, membership and session | Web platform database | complete platform record |
-| Project, Task, Run, lease, approval and audit | Web platform database | complete platform record |
+| Project, Task, Run, Thread model selection, lease, approval and audit | Web platform database | complete platform record |
 | Profile ownership and process health | Web database + Profile Host | mapping, health, build and capability snapshot |
 | Thread, Turn, items, compaction and model-visible context | Codex Profile/app-server | opaque IDs, event projection and search index |
-| Provider config and runtime model catalog | Codex Profile/app-server | secret references, policy and display cache scoped to Profile |
+| Provider config and runtime model catalog | Codex Profile/app-server | secret references, global default Provider/model selection, policy and display cache scoped to Profile |
 | Agent scheduling and parent/child execution | Codex runtime | observable trajectory and status projection |
 | Skills, plugins, MCP and memory state | Codex Profile/app-server | permissions, audit and capability-gated projection |
 | Repository objects and worktree contents | Git/Runner | metadata, status, diff summary and artifact references |
@@ -192,11 +192,26 @@ Current map-card support follows this checked-in preview flow:
 1. Runtime/Skills/MCP may emit a small `open-web-card map.v1` marker or legacy
    map widget marker in assistant text.
 2. The browser parser recognizes the marker, hides the raw fenced block and
-   renders a safe inline preview from bounded inline data.
-3. The platform may later add an Artifact-backed DTO and generated card schema;
-   until that exists, large GeoJSON, Mapbox/tiles, permissioned downloads and
-   server-side card storage remain disabled gates.
-4. Oversized or invalid data produces safe fallback rendering; raw local paths,
+   renders bounded inline point, line, polygon or GeoJSON data with Mapbox GL.
+   The browser reads the restricted public `pk.` token through the typed
+   authenticated `/api/configuration/maps` resource. Without a token the map
+   card remains visible and opens an in-card configuration dialog; authorized
+   owners/admins save through the same resource and all visible cards update.
+   The shared dialog selects the one active Mapbox or Google Maps provider for
+   server-side `map_utils` tools; saving replaces the prior provider and key.
+   `VITE_MAPBOX_ACCESS_TOKEN` remains a build-time fallback.
+3. The selected provider/key pair is one encrypted global entry in
+   `platform_configuration_secrets`; the next save atomically replaces its
+   value. The browser receives provider/configured status and, only while
+   Mapbox is active, the restricted public `pk.` token required by Mapbox GL.
+   The Server delivers the selected provider and key directly to a strictly
+   validated local MCP elicitation URL without opening that one-time page.
+   The global scope is temporary and reserves a later per-user move.
+4. The platform may later add an Artifact-backed DTO and generated card schema;
+   until that exists, large GeoJSON, production token distribution, renderer
+   capability policy, permissioned downloads and server-side card storage
+   remain disabled gates.
+5. Oversized or invalid data produces safe fallback rendering; raw local paths,
    credentials, app-server request IDs and unbounded protocol payloads never
    reach the browser.
 

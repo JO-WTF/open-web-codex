@@ -113,5 +113,9 @@ non-trivial sync conflict.
 - [Development plan](docs/development-plan.md)
 - [Architecture](docs/architecture.md)
 
+## Extension guides
+
+- [Skills, MCP, and custom UI extensions](docs/custom-skills-mcp-ui-guide.md)
+
 The original component licenses remain in `apps/web/LICENSE` and `codex/LICENSE`.
 See [LICENSES.md](LICENSES.md) for the repository licensing map.

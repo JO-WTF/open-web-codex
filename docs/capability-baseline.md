@@ -42,7 +42,8 @@ Observed on 2026-07-23 from the current synchronization branch:
   the real app-server initialize Smoke with 18 Capability Manifest declarations.
 - The platform source contains PostgreSQL migrations and API handlers for
   bootstrap/session, organization membership, project, Task, Run and persisted
-  Run events.
+  Run events. Local sessions authenticate with a case-insensitive username and
+  password; email remains an account and Organization-invitation attribute.
 - The native Profile Host real-binary smoke covers an offline Turn, paginated
   full-item history, process-instance rotation, restart and Thread resume/read.
   A second real-binary Provider smoke covers two custom
@@ -70,8 +71,10 @@ Observed on 2026-07-23 from the current synchronization branch:
   `src/services/webClient.ts` is the primary compatibility seam; three complete
   source-file hashes pin the reviewed non-visual Thread-context wiring in
   `WebApp.tsx` and FileManager so the exception cannot expand into UI drift.
-  Typecheck, production build, no-desktop and UI-parity gates pass; all 1,124
-  browser tests pass. Direct-Server tests cover authoritative history,
+  Typecheck, production build and no-desktop gates pass; all 1,172 browser
+  tests pass. The UI-parity report still records the deliberate browser UI
+  extensions that have not yet been folded into its reference baseline.
+  Direct-Server tests cover authoritative history,
   reconnect/resync replay, status recovery, current-Thread checkout selection,
   Provider/model defaults, approvals, structured input, MCP and rate limits.
 - The 1421 WebApp adapter currently covers managed Projects, Threads/Turns,
@@ -124,12 +127,12 @@ security, Push delivery, or every Studio capability.
 | Memory lifecycle | declared unsupported | Codex contains compaction/memory surfaces, but the Web-safe status/export/reset bridge is absent |
 | Native Agent CRUD | declared unsupported | no stable Web-safe CRUD/validation contract |
 | Multi-agent trajectory | declared experimental | Codex parent/child and collab events exist; fixture and real trajectory smoke are pending |
-| Skills | degraded/unsupported by operation | listing is declared; safe write, validation and isolated testing are not enabled |
+| Skills | degraded/unsupported by operation | listing is declared; a real new Thread proves the selected `local-maps-mcp` capability root injects the `map-utils` Skill into Runtime context. Profile-wide listing does not enumerate Thread-selected roots; safe write, validation and isolated testing are not enabled |
 | Plugins | declared unsupported | do not enable Studio lifecycle or permissions UI |
-| MCP | config degraded; OAuth/elicitation unsupported | status listing is declared; Web-safe CRUD, reload and lifecycle validation are pending |
+| MCP | config degraded; OAuth/full-form elicitation unsupported | status listing is declared. Confirmation-form elicitations used for tool approval and local loopback URL elicitations used for map credentials are persisted before broadcast, projected without Runtime request IDs or metadata, and resolved through typed app-server responses. `map_utils` uses one globally selected Mapbox or Google credential; the in-app dialog replaces the active provider/key and the Server delivers it only to a tokenized `http://127.0.0.1:<port>/<path>` request, so the browser never opens the one-time page. A real Web/Profile Host new Thread discovers all five `map_utils` tools and completes `create_map_card` through DeepSeek. Provider, key, delivery, API, timeout and network failures terminate or remain explicitly retryable instead of accepting a blocked request. Arbitrary form entry, remote URL mode, Web-safe CRUD, reload and lifecycle validation remain pending |
 | Tools discovery | declared unsupported | do not expose a platform fallback catalog |
-| Structured reply cards / map cards | degraded/preview | assistant marker parsing, legacy widget marker parsing and inline map preview rendering exist for markers produced by Runtime/Skills/MCP; Provider-neutral prompt injection, generated card contract, Artifact store, renderer gate and real app-server smoke remain missing |
-| Provider/model management | declared supported by the checked-in Runtime | `models.providers`, `modelProvider/list`, controlled Profile config writes, provider-scoped refresh, model selection and context-window persistence are wired; scoped Runtime/TUI tests, two-Provider cache-isolation smoke, encrypted platform Secret injection/deletion smoke, and live existing-Thread Provider transport rebinding pass |
+| Structured reply cards / map cards | degraded/preview | assistant marker parsing, legacy widget marker parsing and interactive Mapbox GL point/line/polygon rendering exist for markers produced by Runtime/Skills/MCP. The shared in-app configuration selects one encrypted Mapbox or Google credential; only an active restricted Mapbox public token is returned for browser rendering. Missing Mapbox-token cards remain visible over a decorative simulated-map SVG. The real Web/Profile Host/DeepSeek chain emits a `map.v1` marker; generated card contract, Artifact store, renderer capability gate, per-user configuration scoping and a repeatable automated real-browser smoke remain missing |
+| Provider/model management | declared supported by the checked-in Runtime | `models.providers`, `modelProvider/list`, controlled Profile config writes, provider-scoped refresh and context-window persistence are wired. The browser groups built-in, local and custom Providers from Runtime-supplied kinds, defaults the built-in and local groups closed, distinguishes the LM Studio and Ollama `gpt-oss` entries, and switches by clicking the Provider row. Editable model context windows use one save action that persists every changed model sequentially so catalog replacements cannot race. The current Provider and model use a shared high-contrast selected treatment in both themes. The platform stores the last Provider/model pair as a global default and copies it into every new Task; each existing Thread keeps its own database-backed pair. Scoped Runtime/TUI tests, two-Provider cache-isolation smoke, encrypted platform Secret injection/deletion smoke, and live existing-Thread Provider transport rebinding pass |
 
 ## Web platform assessment
 
@@ -141,7 +144,7 @@ security, Push delivery, or every Studio capability.
 | Authorization | Project/Task/Run and runtime calls enforce session Organization; Provider/approval calls additionally enforce Profile ownership; a two-Organization denial regression passes | centralized policy abstraction, Project-specific roles and the full concurrent multi-user matrix remain missing |
 | Codex bridge | Fake/Real adapter and event projection exist; Real uses the native Profile Registry/Host JSONL connection. Provider Secrets are encrypted and injected only into the owned child environment. Runtime-facing operations remain internal and browser routes are typed | composition is still one configured Profile process per server; per-user dynamic process routing remains incomplete |
 | Task/Run | CRUD/start/cancel/message/steer/compact/review, idempotent scheduling, DB leases/heartbeats/recovery, isolated Git workspaces, authoritative Codex history, safe Item/Delta and approval projection, monotonic initial/reconnect replay, terminal execution, workspace files, nested Git roots, full local Git operations and explicit remote operations exist | artifact storage, approval expiry, protected-branch policy and full multi-Profile routing remain incomplete |
-| Browser | established 1421 WebApp presentation runs through typed resources for workspace/thread/message, approvals, Provider/model, MCP/rate-limit snapshots, files and Git status; files, Git and MCP resolve the selected Thread's Run; the real core journey and Thread-switch browser smoke pass; no standalone Gateway or old root Bridge is loaded or built | broader visual/accessibility regression, deferred unused-source pruning, cookie-only sessions and production accessibility remain incomplete |
+| Browser | established 1421 WebApp presentation runs through typed resources for workspace/thread/message, approvals, Provider/model, MCP/rate-limit snapshots, files and Git status; files, Git and MCP resolve the selected Thread's Run. Thread creation opens an immediate client-ID-bound temporary window named `Thread`, supports concurrent out-of-order responses and retryable failure with disabled input, and replaces the sidebar and conversation-header label together when the Server returns a name. The first successful text message derives a bounded Server-persisted title for placeholder Threads and returns it with the Turn-start response, while a data migration repairs existing placeholder titles from their earliest durable user-message event. Thread switching hides history behind a loading state until hydration has rendered. The shell fills the full viewport and progressively expands its sidebar and conversation column on 2K/4K displays. The real core journey and Thread-switch browser smoke pass; no standalone Gateway or old root Bridge is loaded or built | broader visual/accessibility regression, deferred unused-source pruning, cookie-only sessions and production accessibility remain incomplete |
 
 ## Immediate capability gates
 
