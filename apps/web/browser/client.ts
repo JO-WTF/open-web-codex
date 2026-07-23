@@ -65,6 +65,7 @@ export class PlatformClient {
   private async request<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(`${this.baseUrl}${path}`, {
       ...init,
+      cache: "no-store",
       headers: {
         ...(init?.body ? { "content-type": "application/json" } : {}),
         ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
@@ -72,7 +73,16 @@ export class PlatformClient {
       },
     });
     const text = await response.text();
-    const payload = text ? JSON.parse(text) as unknown : null;
+    let payload: unknown = null;
+    if (text) {
+      try {
+        payload = JSON.parse(text) as unknown;
+      } catch {
+        throw new Error(
+          `Server returned a non-JSON response for ${path} (HTTP ${response.status}, ${response.url}).`,
+        );
+      }
+    }
     if (!response.ok) {
       const record = payload && typeof payload === "object"
         ? payload as Record<string, unknown>
@@ -260,6 +270,7 @@ export class PlatformClient {
     text: string,
     options: {
       model?: string | null;
+      modelProvider?: string | null;
       effort?: string | null;
       serviceTier?: string | null;
       accessMode?: string | null;
@@ -274,6 +285,7 @@ export class PlatformClient {
         body: JSON.stringify({
           text,
           model: options.model ?? null,
+          model_provider: options.modelProvider ?? null,
           effort: options.effort ?? null,
           service_tier: options.serviceTier ?? null,
           access_mode: options.accessMode ?? null,

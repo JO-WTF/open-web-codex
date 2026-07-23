@@ -14,7 +14,10 @@ describe("PlatformClient", () => {
     const client = new PlatformClient({ baseUrl: "https://platform.test", token: "session-token" });
 
     await client.startRun("task/one", "feature/safe");
-    await client.sendMessage("task/one", "hello");
+    await client.sendMessage("task/one", "hello", {
+      model: "deepseek-v4-flash",
+      modelProvider: "deepseek",
+    });
 
     expect(fetchMock.mock.calls[0]?.[0]).toBe("https://platform.test/api/tasks/task%2Fone/runs");
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
@@ -29,6 +32,11 @@ describe("PlatformClient", () => {
       fork_source_run_id: null,
     });
     expect(fetchMock.mock.calls[1]?.[0]).toBe("https://platform.test/api/tasks/task%2Fone/messages");
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({
+      text: "hello",
+      model: "deepseek-v4-flash",
+      model_provider: "deepseek",
+    });
     expect(fetchMock.mock.calls.every((call) => !String(call[0]).includes("/api/rpc"))).toBe(true);
   });
 
@@ -75,5 +83,19 @@ describe("PlatformClient", () => {
     expect(fetchMock.mock.calls[1]?.[0]).toBe(
       "https://platform.test/api/tasks/task%2Fone/events?limit=200&after_sequence=200",
     );
+  });
+
+  it("rejects cached HTML instead of treating it as an API payload", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response("<!doctype html>", {
+      status: 200,
+      headers: { "content-type": "text/html" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PlatformClient({ baseUrl: "https://platform.test" });
+
+    await expect(client.health()).rejects.toThrow(
+      "Server returned a non-JSON response for /api/health (HTTP 200",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.cache).toBe("no-store");
   });
 });

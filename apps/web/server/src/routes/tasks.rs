@@ -10,6 +10,7 @@ use open_web_codex_platform_contracts::{
     Task,
 };
 use open_web_codex_platform_store::AppState;
+use open_web_codex_run_orchestrator::{RecoverRunRequest, RunOrchestrator};
 use serde::Deserialize;
 use sqlx::Row;
 use std::sync::Arc;
@@ -179,6 +180,7 @@ pub async fn send_message(
     auth: AuthenticatedUser,
     Path(task_id): Path<Uuid>,
     Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
+    Extension(orchestrator): Extension<Arc<RunOrchestrator>>,
     Extension(profile): Extension<RuntimeProfileBinding>,
     Json(req): Json<SendMessageRequest>,
 ) -> ApiResult<SendMessageResponse> {
@@ -194,10 +196,10 @@ pub async fn send_message(
 
     // Resolve the server-owned workspace; the browser never supplies a path.
     let active_run = sqlx::query(
-        "SELECT r.id, r.codex_thread_id, r.workspace_id, w.root_path \
+        "SELECT r.id, r.status, r.codex_thread_id, r.workspace_id, w.root_path \
          FROM runs r LEFT JOIN workspaces w ON w.id = r.workspace_id \
          WHERE r.task_id = $1 AND r.organization_id = $2 \
-           AND r.requested_by = $3 AND r.status = 'running' \
+           AND r.requested_by = $3 AND r.status IN ('running', 'recovery_pending') \
          ORDER BY r.created_at DESC LIMIT 1",
     )
     .bind(task_id)
@@ -245,6 +247,20 @@ pub async fn send_message(
             ));
         }
     };
+    if active_run.get::<String, _>("status") == "recovery_pending" {
+        orchestrator
+            .recover_run(RecoverRunRequest {
+                organization_id: auth.organization_id,
+                actor_id: auth.user_id,
+                allow_organization_admin: matches!(
+                    auth.organization_role.as_str(),
+                    "owner" | "admin"
+                ),
+                run_id: active_run.get("id"),
+            })
+            .await
+            .map_err(super::runs::orchestrator_error)?;
+    }
 
     let result = adapter
         .send_user_message(
@@ -253,6 +269,7 @@ pub async fn send_message(
             &req.text,
             &TurnOptions {
                 model: req.model,
+                model_provider: req.model_provider,
                 effort: req.effort,
                 service_tier: req.service_tier,
                 access_mode: req.access_mode,

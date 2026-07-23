@@ -800,6 +800,8 @@ pub struct SendMessageRequest {
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
+    pub model_provider: Option<String>,
+    #[serde(default)]
     pub effort: Option<String>,
     #[serde(default)]
     pub service_tier: Option<String>,

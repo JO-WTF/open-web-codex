@@ -8,7 +8,7 @@ use open_web_codex_adapter::CodexAdapter;
 use open_web_codex_git_runtime::{GitRuntime, GitRuntimeConfig};
 use open_web_codex_platform_store::migrate;
 use open_web_codex_run_orchestrator::{
-    CancelRunRequest, EnqueueRunRequest, RunOrchestrator, RunOrchestratorError,
+    CancelRunRequest, EnqueueRunRequest, RecoverRunRequest, RunOrchestrator, RunOrchestratorError,
 };
 use sqlx::postgres::PgPoolOptions;
 use sqlx::Row;
@@ -272,6 +272,23 @@ async fn idempotent_enqueue_single_lease_and_workspace_provisioning() {
         .unwrap();
     assert_eq!(status, "recovery_pending");
     assert!(Path::new(&recovery_root).exists());
+    let recovered = owner
+        .recover_run(RecoverRunRequest {
+            organization_id,
+            actor_id: user_id,
+            allow_organization_admin: false,
+            run_id: recovery_run.id,
+        })
+        .await
+        .unwrap();
+    assert_eq!(recovered.status, "running");
+    let recovery_owner: Option<String> =
+        sqlx::query_scalar("SELECT lease_owner FROM runs WHERE id = $1")
+            .bind(recovery_run.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(recovery_owner.as_deref(), Some("worker-a"));
     let cleanup_jobs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runner_jobs")
         .fetch_one(&pool)
         .await

@@ -24,6 +24,7 @@
 //! fails, normal stream retry/fallback logic handles recovery on the same turn.
 
 mod chat;
+mod provider;
 
 use std::collections::HashMap;
 use std::sync::Arc;

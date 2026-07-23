@@ -2,6 +2,8 @@ use anyhow::Result;
 use codex_config::types::Personality;
 use codex_features::Feature;
 use codex_login::CodexAuth;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
@@ -178,6 +180,75 @@ async fn model_change_appends_model_instructions_developer_message() -> Result<(
         model_switch_text.contains("The user was previously using a different model."),
         "expected model switch preamble, got: {model_switch_text:?}"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn provider_change_routes_the_next_turn_to_the_selected_provider() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let initial_server = MockServer::start().await;
+    let selected_server = MockServer::start().await;
+    let initial_mock = mount_sse_once(&initial_server, sse_completed("initial-response")).await;
+    let selected_mock = mount_sse_once(&selected_server, sse_completed("selected-response")).await;
+    let selected_provider_id = "selected-provider";
+    let selected_provider = ModelProviderInfo {
+        name: "Selected Provider".to_string(),
+        base_url: Some(format!("{}/v1", selected_server.uri())),
+        env_key: Some("PATH".to_string()),
+        wire_api: WireApi::Responses,
+        supports_websockets: false,
+        ..Default::default()
+    };
+
+    let test = test_codex()
+        .with_config(move |config| {
+            config
+                .model_providers
+                .insert(selected_provider_id.to_string(), selected_provider);
+        })
+        .build(&initial_server)
+        .await?;
+
+    test.codex
+        .submit(read_only_user_turn(
+            &test,
+            vec![UserInput::Text {
+                text: "use the initial provider".into(),
+                text_elements: Vec::new(),
+            }],
+            test.session_configured.model.clone(),
+        ))
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let mut switched_turn = read_only_user_turn(
+        &test,
+        vec![UserInput::Text {
+            text: "use the selected provider".into(),
+            text_elements: Vec::new(),
+        }],
+        test.session_configured.model.clone(),
+    );
+    let Op::UserInput {
+        thread_settings, ..
+    } = &mut switched_turn
+    else {
+        unreachable!("read_only_user_turn always returns user input");
+    };
+    thread_settings.model_provider_id = Some(selected_provider_id.to_string());
+    test.codex.submit(switched_turn).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert_eq!(initial_mock.requests().len(), 1);
+    assert_eq!(selected_mock.requests().len(), 1);
 
     Ok(())
 }

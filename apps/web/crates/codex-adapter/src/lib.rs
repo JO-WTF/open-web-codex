@@ -80,6 +80,7 @@ pub struct ProfileLoginStatus {
 #[derive(Debug, Clone, Default)]
 pub struct TurnOptions {
     pub model: Option<String>,
+    pub model_provider: Option<String>,
     pub effort: Option<String>,
     pub service_tier: Option<String>,
     pub access_mode: Option<String>,

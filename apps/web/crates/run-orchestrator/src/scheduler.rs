@@ -3,7 +3,7 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use crate::{
-    chrono_ttl, validate_idempotency_key, CancelRunRequest, EnqueueRunRequest,
+    chrono_ttl, validate_idempotency_key, CancelRunRequest, EnqueueRunRequest, RecoverRunRequest,
     RetireWorkspaceRequest, RunLease, RunOrchestrator, RunOrchestratorError, RunRecord,
 };
 
@@ -407,6 +407,75 @@ impl RunOrchestrator {
         .await?
         .ok_or(RunOrchestratorError::NotFound)?;
         Ok(run_record(&row))
+    }
+
+    pub async fn recover_run(
+        &self,
+        request: RecoverRunRequest,
+    ) -> Result<RunRecord, RunOrchestratorError> {
+        let mut transaction = self.db.begin().await?;
+        let row = sqlx::query(
+            "SELECT r.status, r.requested_by, r.workspace_id, r.codex_thread_id, w.state, \
+                    profile.runtime_key \
+             FROM runs r JOIN workspaces w ON w.id = r.workspace_id \
+             JOIN profiles profile ON profile.id = r.requested_profile_id \
+             WHERE r.id = $1 AND r.organization_id = $2 AND w.organization_id = $2 \
+             FOR UPDATE OF r",
+        )
+        .bind(request.run_id)
+        .bind(request.organization_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(RunOrchestratorError::NotFound)?;
+        let requested_by: Option<Uuid> = row.get("requested_by");
+        if requested_by != Some(request.actor_id) && !request.allow_organization_admin {
+            return Err(RunOrchestratorError::NotFound);
+        }
+        if row.get::<String, _>("runtime_key") != self.runtime_key
+            || row.get::<String, _>("state") == "retired"
+            || row.get::<Option<Uuid>, _>("workspace_id").is_none()
+            || row.get::<Option<String>, _>("codex_thread_id").is_none()
+        {
+            return Err(RunOrchestratorError::NotFound);
+        }
+        let status: String = row.get("status");
+        if status == "running" {
+            transaction.commit().await?;
+            return self.get_run(request.organization_id, request.run_id).await;
+        }
+        if status != "recovery_pending" {
+            return Err(RunOrchestratorError::Conflict(format!(
+                "Run cannot recover from status '{status}'"
+            )));
+        }
+
+        let token = Uuid::now_v7().to_string();
+        let expires_at = Utc::now() + chrono_ttl(self.lease_ttl)?;
+        let task_id: Uuid = sqlx::query_scalar(
+            "UPDATE runs SET status = 'running', active_turn_id = NULL, failure_code = NULL, \
+                             lease_owner = $1, lease_token = $2, lease_expires_at = $3, \
+                             heartbeat_at = now(), updated_at = now() \
+             WHERE id = $4 AND status = 'recovery_pending' RETURNING task_id",
+        )
+        .bind(&self.worker_id)
+        .bind(&token)
+        .bind(expires_at)
+        .bind(request.run_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        sqlx::query(
+            "UPDATE workspaces SET state = 'busy', updated_at = now() \
+             WHERE id = $1 AND state <> 'retired'",
+        )
+        .bind(row.get::<Uuid, _>("workspace_id"))
+        .execute(&mut *transaction)
+        .await?;
+        sqlx::query("UPDATE tasks SET status = 'running', updated_at = now() WHERE id = $1")
+            .bind(task_id)
+            .execute(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+        self.get_run(request.organization_id, request.run_id).await
     }
 
     pub async fn claim_next(&self) -> Result<Option<RunLease>, RunOrchestratorError> {

@@ -163,6 +163,9 @@ describe("WebApp direct Server client", () => {
       })],
       nextCursor: null,
     });
+    const threadListRequest = fetchMock.mock.calls.find((call) =>
+      String(call[0]).endsWith(`/api/projects/${project.id}/thread-contexts`));
+    expect(threadListRequest?.[1]?.cache).toBe("no-store");
   });
 
   it("archives the selected Thread through the typed Server Run route", async () => {

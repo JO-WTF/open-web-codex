@@ -1220,8 +1220,10 @@ export default function WebApp() {
           return { ...prev, [wid]: [...pending, ...received] };
         });
       }
-    } catch { /* not fatal */ }
-  }, [activeWorkspaceId, client, workspaces]);
+    } catch (error) {
+      appendLog("error", error instanceof Error ? error.message : String(error));
+    }
+  }, [activeWorkspaceId, appendLog, client, workspaces]);
   refreshThreadsRef.current = refreshThreads;
 
   const connectWorkspace = useCallback(async (id: string) => {
@@ -1396,7 +1398,13 @@ export default function WebApp() {
     setBusy(true);
     try {
       const selectedModel = providerModels.find((model) => model.id === selectedProviderModelId);
-      const response = await client.sendUserMessage(targetWorkspaceId, targetThreadId, text, selectedModel?.model ?? selectedProviderModelId);
+      const response = await client.sendUserMessage(
+        targetWorkspaceId,
+        targetThreadId,
+        text,
+        selectedModel?.model ?? selectedProviderModelId,
+        currentProviderId,
+      );
       const payload = unwrapWebRpcResult(response);
       const record = payload && typeof payload === "object"
         ? payload as Record<string, unknown>
@@ -1417,7 +1425,7 @@ export default function WebApp() {
     } finally {
       setBusy(false);
     }
-  }, [activeThreadId, activeWorkspaceId, appendLog, client, providerModels, selectedProviderModelId]);
+  }, [activeThreadId, activeWorkspaceId, appendLog, client, currentProviderId, providerModels, selectedProviderModelId]);
 
   const sendMessage = useCallback(async () => {
     const text = draft.trim();

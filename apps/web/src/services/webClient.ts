@@ -420,10 +420,14 @@ export class CodexMonitorWebClient {
     threadId: string,
     text: string,
     model?: string | null,
+    modelProvider?: string | null,
   ) {
     const context = await this.findThreadContext(threadId);
     this.selectedRunByProject.set(context.projectId, context.runId);
-    const response = await this.platform.sendMessage(context.taskId, text, { model });
+    const response = await this.platform.sendMessage(context.taskId, text, {
+      model,
+      modelProvider,
+    });
     return {
       status: response.status,
       threadId: response.thread_id,

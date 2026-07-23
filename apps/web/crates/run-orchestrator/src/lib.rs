@@ -72,6 +72,14 @@ pub struct CancelRunRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoverRunRequest {
+    pub organization_id: Uuid,
+    pub actor_id: Uuid,
+    pub allow_organization_admin: bool,
+    pub run_id: Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RetireWorkspaceRequest {
     pub organization_id: Uuid,
     pub actor_id: Uuid,

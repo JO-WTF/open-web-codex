@@ -4,7 +4,7 @@ use base64::Engine;
 use open_web_codex_profile_host::{ProfileHost, ProfileHostConfig, ProfileHostState};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc::UnboundedSender;
@@ -85,7 +85,7 @@ impl RealCodexAdapter {
         let root = workspace.root.canonicalize().map_err(|error| {
             AdapterError::Internal(format!("failed to resolve authorized workspace: {error}"))
         })?;
-        if root != self.workspace_root && root.parent() != Some(self.workspace_root.as_path()) {
+        if !is_authorized_workspace_root(&self.workspace_root, &root) {
             return Err(AdapterError::Rpc(
                 "workspace is outside the Profile Host Runner root".to_string(),
             ));
@@ -213,6 +213,13 @@ impl RealCodexAdapter {
         {
             object.insert("model".to_string(), json!(model));
         }
+        if let Some(model_provider) = options
+            .model_provider
+            .as_ref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            object.insert("modelProvider".to_string(), json!(model_provider));
+        }
         if let Some(effort) = options
             .effort
             .as_ref()
@@ -296,6 +303,10 @@ impl RealCodexAdapter {
             .await?;
         Ok(())
     }
+}
+
+fn is_authorized_workspace_root(runner_root: &Path, workspace_root: &Path) -> bool {
+    workspace_root.starts_with(runner_root)
 }
 
 fn login_completion(message: &Value) -> Option<(String, bool, Option<String>)> {
@@ -1206,8 +1217,30 @@ fn app_server_event_frame(
 
 #[cfg(test)]
 mod tests {
-    use super::{app_server_event_frame, login_completion, message_thread_id};
+    use super::{
+        app_server_event_frame, is_authorized_workspace_root, login_completion, message_thread_id,
+    };
     use serde_json::{json, Value};
+    use std::path::Path;
+
+    #[test]
+    fn accepts_nested_runner_workspaces_without_prefix_confusion() {
+        let runner_root = Path::new("/runner");
+
+        assert!(is_authorized_workspace_root(runner_root, runner_root));
+        assert!(is_authorized_workspace_root(
+            runner_root,
+            Path::new("/runner/workspaces/workspace-1")
+        ));
+        assert!(!is_authorized_workspace_root(
+            runner_root,
+            Path::new("/runner-other/workspace-1")
+        ));
+        assert!(!is_authorized_workspace_root(
+            runner_root,
+            Path::new("/outside/workspace-1")
+        ));
+    }
 
     #[test]
     fn wraps_native_notifications_in_the_existing_internal_event_envelope() {
