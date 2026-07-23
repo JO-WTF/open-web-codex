@@ -1,4 +1,4 @@
-# Workspace Maps MCP
+# Map Utils MCP
 
 Python MCP server that exposes paid Google Maps and Mapbox operations without modifying
 `codex-rs`:
@@ -9,29 +9,37 @@ Python MCP server that exposes paid Google Maps and Mapbox operations without mo
 - `distance_matrix`
 - `create_map_card`
 
-Every tool accepts `provider="google"` or `provider="mapbox"`. Provider request limits are
-handled inside the server. Batch geocoding is capped at 500 inputs and distance matrices at 2,500
-billable origin/destination elements per tool call.
+The geocoding and routing tools use one active provider/key pair selected in
+configuration; provider and credentials are never model-visible tool arguments.
+A later configuration replaces the previous provider and key. Provider request
+limits are handled inside the server. Batch geocoding is capped at 500 inputs
+and distance matrices at 2,500 billable origin/destination elements per call.
 
-## Credential memory
+## Credential configuration and local memory
 
-The server deliberately does not read provider keys from environment variables. It reads the key
-from this ignored workspace-local file:
+The Web platform stores one active provider/key pair as an encrypted global configuration. A later
+save replaces the previous provider and key. Google credentials remain server-only; an active
+Mapbox public browser token is returned only because Mapbox GL needs it to render cards.
+
+The MCP server deliberately does not read provider keys from environment variables. It can read a
+locally delivered credential from this ignored owner-only file:
 
 ```text
 <workspace>/.codex/maps-tool-memory.json
 ```
 
-If the selected provider has no stored key, the tool sends an MCP URL elicitation request. It opens
-a single-use page bound to `127.0.0.1` with a random 256-bit path token and a password input. The
-key travels directly from the browser to the local MCP process; it does not pass through the MCP
-client or model context. Selecting **Remember in this workspace** writes the key with file mode
-`0600` and directory mode `0700`. Keys are never included in tool results or error URLs.
+If no provider/key is configured, the tool sends an MCP URL elicitation request.
+The fallback form selects Mapbox or Google and accepts one key. It is served on a single-use
+`127.0.0.1` URL with a random 256-bit path token. The browser does not navigate to that page:
+the platform presents its own in-app dialog, validates and encrypts the configuration, then posts
+the selected provider/key from the Server directly to the local MCP process. Only after successful
+delivery does the platform accept the Runtime elicitation.
 
-This is a local credential memory owned by this MCP server, not Codex semantic memory. Do not put
-API keys in `MEMORY.md`, instructions, prompts, or model-visible Tool arguments. The current Web
-platform does not yet provide the production Secret Provider or durable elicitation boundary, so
-this server is for local workspace use until those platform gates are complete.
+The MCP writes the delivered active credential with file mode `0600` and directory mode `0700`.
+This file is local MCP credential memory, not Codex semantic memory and not the future per-user
+storage boundary. The platform's current global encrypted configuration remains the reusable
+browser-facing source; future multi-user work will move it to user/Profile scope. Do not put API
+keys in `MEMORY.md`, instructions, prompts, model-visible tool arguments, results, or logs.
 
 ## Install
 
@@ -57,7 +65,7 @@ Geocoding, Directions, and Matrix access.
 ## Codex discovery
 
 This directory is also a Codex plugin root. The checked-in `.codex-plugin/plugin.json` points to
-`./.mcp.json` and `./skills/`, so Codex can discover the `workspace_maps` MCP server and route/map
+`./.mcp.json` and `./skills/`, so Codex can discover the `map_utils` MCP server and route/map
 Skill guidance from the selected workspace's capability roots instead of relying on `run-local.sh`
 or hand-edited Profile `config.toml` entries. In the Web platform, the native Profile Host adapter
 selects local plugin roots discovered under the source tree or workspace `tools/` directories when it starts

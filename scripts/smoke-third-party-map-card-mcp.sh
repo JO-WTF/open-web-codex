@@ -39,24 +39,24 @@ request_max_retries = 0
 stream_max_retries = 0
 models = [{ model_id = "$model", model_name = "$model", context_window = 64000, show_in_picker = true }]
 
-[mcp_servers.workspace_maps]
+[mcp_servers.map_utils]
 command = "$repo_root/tools/maps-mcp/bin/maps-mcp-launcher"
 args = ["--workspace-root", "$repo_root"]
 cwd = "$repo_root/tools/maps-mcp"
 startup_timeout_sec = 120
 tool_timeout_sec = 180
 
-[mcp_servers.workspace_maps.tools.create_map_card]
+[mcp_servers.map_utils.tools.create_map_card]
 approval_mode = "approve"
 TOML
 
 output_file="${THIRD_PARTY_SMOKE_OUTPUT:-$tmp_home/third-party-map-card-smoke.jsonl}"
 OPEN_WEB_CODEX_MAPS_MCP_VENV="$maps_mcp_venv" MAPS_MCP_VENV="$maps_mcp_venv" CODEX_HOME="$tmp_home" timeout "$timeout_sec" "$codex_bin" exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --ignore-rules -C "$repo_root" \
-  '用地图卡片展示印尼。必须调用 workspace_maps 的 create_map_card MCP 工具生成 open-web-card map.v1 marker，最终答案只输出该 marker。' \
+  '用地图卡片展示印尼。必须调用 map_utils 的 create_map_card MCP 工具生成 open-web-card map.v1 marker，最终答案只输出该 marker。' \
   | tee "$output_file"
 
-if ! rg -q '"type":"mcp_tool_call".*"server":"workspace_maps".*"tool":"create_map_card"|open-web-card map.v1' "$output_file"; then
-  echo "third-party map-card MCP smoke did not observe workspace_maps.create_map_card and marker output" >&2
+if ! rg -q '"type":"mcp_tool_call".*"server":"map_utils".*"tool":"create_map_card"|open-web-card map.v1' "$output_file"; then
+  echo "third-party map-card MCP smoke did not observe map_utils.create_map_card and marker output" >&2
   exit 3
 fi
 

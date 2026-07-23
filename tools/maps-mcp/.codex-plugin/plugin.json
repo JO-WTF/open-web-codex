@@ -1,7 +1,7 @@
 {
-  "name": "workspace-maps",
+  "name": "map-utils",
   "version": "0.1.0",
-  "description": "Workspace-scoped Google Maps and Mapbox geocoding, routing, and map-card MCP tools.",
+  "description": "Provider-neutral Google Maps and Mapbox geocoding, routing, and map-card MCP tools.",
   "author": {
     "name": "Open Web Codex"
   },
@@ -15,9 +15,9 @@
   ],
   "mcpServers": "./.mcp.json",
   "interface": {
-    "displayName": "Workspace Maps",
+    "displayName": "Map Utils",
     "shortDescription": "Geocode, route, matrix, and create map cards.",
-    "longDescription": "Adds workspace-scoped Google Maps and Mapbox MCP tools for geocoding, reverse geocoding, routes, distance matrices, and provider-neutral open-web map-card output.",
+    "longDescription": "Adds provider-neutral map_utils tools backed by one active Google Maps or Mapbox credential for geocoding, reverse geocoding, routes, distance matrices, and open-web map-card output.",
     "developerName": "Open Web Codex",
     "category": "Productivity",
     "capabilities": [

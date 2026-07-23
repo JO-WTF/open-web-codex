@@ -1,4 +1,4 @@
-"""FastMCP entry point for Google Maps and Mapbox tools."""
+"""FastMCP entry point for provider-neutral Google Maps and Mapbox tools."""
 
 from __future__ import annotations
 
@@ -51,44 +51,49 @@ class MapCardPolygon(BaseModel):
 
 
 mcp = FastMCP(
-    "Workspace Maps",
+    "Map Utils",
     instructions=(
         "Paid geocoding and routing tools for Google Maps and Mapbox. "
-        "API keys are requested through elicitation and remembered per workspace."
+        "One selected provider and API key are shared by every maps tool. "
+        "Missing configuration is requested through elicitation; a later configuration "
+        "replaces the previous provider and key."
     ),
     json_response=True,
 )
 _credential_store = WorkspaceCredentialStore(Path.cwd())
 
 
-async def _client(provider: Provider, ctx: Context[ServerSession, None]):
-    api_key = _credential_store.get_api_key(provider)
-    if api_key is None:
-        prompt = LoopbackCredentialPrompt(provider)
+async def _client(ctx: Context[ServerSession, None]):
+    credential = _credential_store.get_credential()
+    if credential is None:
+        prompt = LoopbackCredentialPrompt()
         prompt.start()
         try:
             result = await ctx.elicit_url(
                 message=(
-                    f"No {provider} maps API key is stored for this workspace. "
-                    "Open the local one-time page to provide it securely."
+                    "A maps provider and API key are required. Configure Mapbox or Google "
+                    "in this app; the selected provider will be saved globally and reused."
                 ),
                 url=prompt.url,
                 elicitation_id=prompt.elicitation_id,
             )
             action = getattr(result.action, "value", result.action)
             if action != "accept":
-                raise RuntimeError(f"{provider} API key request was declined or cancelled")
+                raise RuntimeError("Maps provider configuration was declined or cancelled")
             submission = await prompt.wait()
-            api_key = submission.api_key
+            credential = submission
             if submission.remember:
-                _credential_store.set_api_key(provider, api_key)
-                await ctx.info(f"Stored {provider} API key in workspace credential memory")
+                _credential_store.set_credential(submission.provider, submission.api_key)
+                await ctx.info(
+                    f"Stored {submission.provider} as the active maps provider "
+                    "in workspace credential memory"
+                )
             await ctx.session.send_elicit_complete(prompt.elicitation_id)
         finally:
             await prompt.close()
-    if provider == "google":
-        return GoogleMapsClient(api_key)
-    return MapboxMapsClient(api_key)
+    if credential.provider == "google":
+        return GoogleMapsClient(credential.api_key)
+    return MapboxMapsClient(credential.api_key)
 
 
 
@@ -206,7 +211,6 @@ def _point(point: Point) -> dict[str, float]:
 
 @mcp.tool()
 async def batch_geocode(
-    provider: Provider,
     addresses: list[str],
     ctx: Context[ServerSession, None],
     language: str | None = None,
@@ -218,13 +222,12 @@ async def batch_geocode(
     At most 500 addresses are accepted per call; provider-specific request limits are chunked
     automatically.
     """
-    client = await _client(provider, ctx)
+    client = await _client(ctx)
     return await client.batch_geocode(addresses, language=language, region=region)
 
 
 @mcp.tool()
 async def batch_reverse_geocode(
-    provider: Provider,
     points: list[Point],
     ctx: Context[ServerSession, None],
     language: str | None = None,
@@ -235,7 +238,7 @@ async def batch_reverse_geocode(
     Each input point is billable according to the selected provider. Results preserve input order.
     At most 500 coordinates are accepted per call.
     """
-    client = await _client(provider, ctx)
+    client = await _client(ctx)
     return await client.batch_reverse_geocode(
         [_point(point) for point in points], language=language, region=region
     )
@@ -243,7 +246,6 @@ async def batch_reverse_geocode(
 
 @mcp.tool()
 async def get_route(
-    provider: Provider,
     origin: Point,
     destination: Point,
     ctx: Context[ServerSession, None],
@@ -259,7 +261,7 @@ async def get_route(
     travel modes differ: Mapbox supports driving, driving_traffic, walking, and bicycling; Google
     additionally supports transit and two_wheeler.
     """
-    client = await _client(provider, ctx)
+    client = await _client(ctx)
     return await client.get_route(
         _point(origin),
         _point(destination),
@@ -273,7 +275,6 @@ async def get_route(
 
 @mcp.tool()
 async def distance_matrix(
-    provider: Provider,
     origins: list[Point],
     destinations: list[Point],
     ctx: Context[ServerSession, None],
@@ -284,7 +285,7 @@ async def distance_matrix(
     Matrix elements are billable as origins multiplied by destinations. Calls are split to respect
     provider request limits. A single tool call is capped at 2,500 elements to bound cost.
     """
-    client = await _client(provider, ctx)
+    client = await _client(ctx)
     return await client.distance_matrix(
         [_point(point) for point in origins],
         [_point(point) for point in destinations],

@@ -13,7 +13,16 @@ fi
 
 OPEN_WEB_CODEX_MAPS_MCP_VENV="$venv_dir" "$repo_root/scripts/setup-maps-mcp-env.sh" >/tmp/open-web-codex-maps-mcp-setup.out
 
-OPEN_WEB_CODEX_MAPS_MCP_VENV="$venv_dir" timeout "${MAPS_MCP_HELP_TIMEOUT_SEC:-30}" "$launcher" --help >/tmp/open-web-codex-maps-mcp-help.out
+LAUNCHER="$launcher" OPEN_WEB_CODEX_MAPS_MCP_VENV="$venv_dir" python3 - <<'PY' >/tmp/open-web-codex-maps-mcp-help.out
+import os
+import subprocess
+
+subprocess.run(
+    [os.environ["LAUNCHER"], "--help"],
+    check=True,
+    timeout=int(os.environ.get("MAPS_MCP_HELP_TIMEOUT_SEC", "30")),
+)
+PY
 
 REPO_ROOT="$repo_root" LAUNCHER="$launcher" OPEN_WEB_CODEX_MAPS_MCP_VENV="$venv_dir" python3 - <<'PY'
 import json

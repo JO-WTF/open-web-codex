@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "workspace_maps": {
+    "map_utils": {
       "command": "./bin/maps-mcp-launcher",
       "args": [
         "--workspace-root",
@@ -8,7 +8,7 @@
       ],
       "cwd": ".",
       "startup_timeout_sec": 60,
-      "tool_timeout_sec": 180,
+      "tool_timeout_sec": 90,
       "tools": {
         "create_map_card": {
           "approval_mode": "approve"

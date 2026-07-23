@@ -1,9 +1,8 @@
-"""One-time loopback page for collecting sensitive provider credentials out of band."""
+"""One-time loopback page for selecting and configuring a maps provider."""
 
 from __future__ import annotations
 
 import asyncio
-import html
 import queue
 import secrets
 import threading
@@ -14,9 +13,12 @@ from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 from urllib.parse import parse_qs
 
+from .credentials import SUPPORTED_PROVIDERS
+
 
 @dataclass(frozen=True)
 class CredentialSubmission:
+    provider: str
     api_key: str
     remember: bool
 
@@ -24,8 +26,7 @@ class CredentialSubmission:
 class LoopbackCredentialPrompt:
     """Serve a single-use password form on a randomized 127.0.0.1 URL."""
 
-    def __init__(self, provider: str) -> None:
-        self.provider = provider
+    def __init__(self) -> None:
         self.elicitation_id = str(uuid.uuid4())
         self._path_token = secrets.token_urlsafe(32)
         self._submissions: queue.Queue[CredentialSubmission] = queue.Queue(maxsize=1)
@@ -34,7 +35,7 @@ class LoopbackCredentialPrompt:
         self._server.daemon_threads = True
         self._thread = threading.Thread(
             target=self._server.serve_forever,
-            name=f"maps-{provider}-credential-prompt",
+            name="map-utils-credential-prompt",
             daemon=True,
         )
 
@@ -58,7 +59,6 @@ class LoopbackCredentialPrompt:
         await asyncio.to_thread(self._thread.join, 2)
 
     def _handler(self):
-        provider = self.provider
         expected_path = f"/{self._path_token}"
         submissions = self._submissions
 
@@ -69,25 +69,29 @@ class LoopbackCredentialPrompt:
                 if self.path != expected_path:
                     self.send_error(HTTPStatus.NOT_FOUND)
                     return
-                provider_name = html.escape(provider.title())
                 body = f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Configure {provider_name} maps key</title>
+  <title>Configure maps provider</title>
   <style>
     body {{ font: 16px system-ui; max-width: 42rem; margin: 4rem auto; padding: 0 1rem; }}
     label {{ display: block; margin: 1rem 0 .4rem; }}
-    input[type=password] {{ box-sizing: border-box; width: 100%; padding: .7rem; }}
+    input[type=password], select {{ box-sizing: border-box; width: 100%; padding: .7rem; }}
     button {{ margin-top: 1rem; padding: .7rem 1.1rem; }}
     .note {{ color: #555; }}
   </style>
 </head>
 <body>
-  <h1>Configure {provider_name}</h1>
+  <h1>Configure maps provider</h1>
   <p class="note">The key is sent only to the local MCP server on 127.0.0.1. It does not pass through the model.</p>
   <form method="post" action="{expected_path}">
+    <label for="provider">Provider</label>
+    <select id="provider" name="provider" required>
+      <option value="mapbox">Mapbox</option>
+      <option value="google">Google Maps</option>
+    </select>
     <label for="api_key">API key / access token</label>
     <input id="api_key" name="api_key" type="password" required autofocus autocomplete="off">
     <label><input name="remember" type="checkbox" value="yes" checked> Remember in this workspace</label>
@@ -109,13 +113,21 @@ class LoopbackCredentialPrompt:
                     self.send_error(HTTPStatus.BAD_REQUEST)
                     return
                 form = parse_qs(self.rfile.read(length).decode("utf-8", errors="strict"))
+                provider = form.get("provider", [""])[0].strip().lower()
                 api_key = form.get("api_key", [""])[0].strip()
+                if provider not in SUPPORTED_PROVIDERS:
+                    self.send_error(HTTPStatus.BAD_REQUEST, "A supported provider is required")
+                    return
                 if not api_key:
                     self.send_error(HTTPStatus.BAD_REQUEST, "API key is required")
                     return
                 try:
                     submissions.put_nowait(
-                        CredentialSubmission(api_key=api_key, remember=form.get("remember") == ["yes"])
+                        CredentialSubmission(
+                            provider=provider,
+                            api_key=api_key,
+                            remember=form.get("remember") == ["yes"],
+                        )
                     )
                 except queue.Full:
                     self.send_error(HTTPStatus.GONE, "This credential request is already complete")

@@ -18,7 +18,7 @@ class MapsApiError(RuntimeError):
 
 
 class JsonHttpClient:
-    def __init__(self, *, timeout_seconds: float = 30, max_attempts: int = 3) -> None:
+    def __init__(self, *, timeout_seconds: float = 15, max_attempts: int = 2) -> None:
         self.timeout_seconds = timeout_seconds
         self.max_attempts = max_attempts
 

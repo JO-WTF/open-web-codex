@@ -9,7 +9,7 @@ from urllib.request import Request
 from urllib.request import urlopen
 
 import maps_mcp.server as server
-from maps_mcp.clients import GoogleMapsClient
+from maps_mcp.clients import MapboxMapsClient
 from maps_mcp.credentials import WorkspaceCredentialStore
 
 
@@ -32,7 +32,9 @@ class FakeContext:
 
     async def elicit_url(self, *, message: str, url: str, elicitation_id: str):
         self.messages.append(message)
-        body = urlencode({"api_key": "workspace-secret", "remember": "yes"}).encode()
+        body = urlencode(
+            {"provider": "mapbox", "api_key": "workspace-secret", "remember": "yes"}
+        ).encode()
         request = Request(url, data=body, method="POST")
         await asyncio.to_thread(lambda: urlopen(request).read())
         return AcceptedResult()
@@ -49,14 +51,23 @@ class ServerCredentialTests(unittest.IsolatedAsyncioTestCase):
             server._credential_store = store
             context = FakeContext()
             try:
-                client = await server._client("google", context)
+                client = await server._client(context)
             finally:
                 server._credential_store = original_store
 
-            self.assertIsInstance(client, GoogleMapsClient)
-            self.assertEqual(store.get_api_key("google"), "workspace-secret")
+            self.assertIsInstance(client, MapboxMapsClient)
+            credential = store.get_credential()
+            self.assertEqual(credential.provider, "mapbox")
+            self.assertEqual(credential.api_key, "workspace-secret")
             self.assertEqual(len(context.session.completed), 1)
-            self.assertTrue(any("Stored google API key" in message for message in context.messages))
+            self.assertIn(
+                "A maps provider and API key are required. Configure Mapbox or Google "
+                "in this app; the selected provider will be saved globally and reused.",
+                context.messages,
+            )
+            self.assertTrue(
+                any("Stored mapbox as the active maps provider" in message for message in context.messages)
+            )
 
 
 if __name__ == "__main__":
