@@ -10,6 +10,7 @@ runtime_root="$repo_root/codex/codex-rs"
 action="foreground"
 skip_build="${OPEN_WEB_CODEX_SKIP_BUILD:-0}"
 codex_mode="${CODEX_MODE:-real}"
+build_profile="${OPEN_WEB_CODEX_BUILD_PROFILE:-debug}"
 bind_host="${OPEN_WEB_CODEX_BIND_HOST:-127.0.0.1}"
 server_port="${OPEN_WEB_CODEX_SERVER_PORT:-4800}"
 data_dir="${OPEN_WEB_CODEX_DATA_DIR:-$repo_root/.local/open-web-codex}"
@@ -25,7 +26,7 @@ master_key_file="$data_dir/master-key"
 profile_home="${CODEX_HOME:-$data_dir/profiles/default}"
 runner_root="${OPEN_WEB_CODEX_RUNNER_ROOT:-$data_dir/runner}"
 web_dist="$web_root/dist"
-server_bin="$web_root/target/debug/open-web-codex-server"
+server_bin=""
 
 usage() {
   cat <<'EOF'
@@ -36,6 +37,7 @@ Options:
   --stop                    Stop the platform recorded for the data directory.
   --status                  Show process and health status.
   --no-build                Reuse existing browser and Rust build outputs.
+  --release                 Build and run optimized release binaries.
   --fake                    Use the deterministic in-memory Codex adapter.
   --bind HOST               Bind host (default: 127.0.0.1).
   --port PORT               HTTP/WebSocket port (default: 4800).
@@ -56,6 +58,7 @@ Environment:
   OPEN_WEB_CODEX_BIND_HOST           Bind host
   OPEN_WEB_CODEX_SERVER_PORT         HTTP/WebSocket port
   OPEN_WEB_CODEX_SKIP_BUILD          1 to reuse build outputs
+  OPEN_WEB_CODEX_BUILD_PROFILE       debug (default) or release
   DATABASE_URL                       PostgreSQL connection URL
   DATABASE_MAX_CONNECTIONS           PostgreSQL pool size
 EOF
@@ -71,6 +74,7 @@ while (($# > 0)); do
     --stop) action="stop" ;;
     --status) action="status" ;;
     --no-build) skip_build="1" ;;
+    --release) build_profile="release" ;;
     --fake) codex_mode="fake" ;;
     --bind)
       (($# >= 2)) || { error "$1 requires a value"; exit 2; }
@@ -112,8 +116,13 @@ done
 
 case "$skip_build" in 0|1) ;; *) error "OPEN_WEB_CODEX_SKIP_BUILD must be 0 or 1"; exit 2 ;; esac
 case "$codex_mode" in real|fake) ;; *) error "CODEX_MODE must be real or fake"; exit 2 ;; esac
+case "$build_profile" in debug|release) ;; *) error "OPEN_WEB_CODEX_BUILD_PROFILE must be debug or release"; exit 2 ;; esac
 [[ "$server_port" =~ ^[1-9][0-9]*$ ]] || { error "port must be a positive integer"; exit 2; }
 [[ "$database_max_connections" =~ ^[1-9][0-9]*$ ]] || { error "database pool size must be a positive integer"; exit 2; }
+
+server_bin="$web_root/target/$build_profile/open-web-codex-server"
+debug_server_bin="$web_root/target/debug/open-web-codex-server"
+release_server_bin="$web_root/target/release/open-web-codex-server"
 
 read_pid() {
   [[ -f "$pid_file" ]] && tr -d '[:space:]' <"$pid_file"
@@ -128,7 +137,8 @@ is_server_running() {
   local pid="${1:-}" command
   is_running "$pid" || return 1
   command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
-  [[ "$command" == "$server_bin" || "$command" == "$server_bin "* ]]
+  [[ "$command" == "$debug_server_bin" || "$command" == "$debug_server_bin "* \
+    || "$command" == "$release_server_bin" || "$command" == "$release_server_bin "* ]]
 }
 
 health_ok() {
@@ -203,21 +213,25 @@ fi
 codex_bin="${CODEX_BIN:-}"
 using_repository_codex="0"
 if [[ "$codex_mode" == "real" && -z "$codex_bin" ]]; then
-  codex_bin="$runtime_root/target/debug/codex"
+  codex_bin="$runtime_root/target/$build_profile/codex"
   using_repository_codex="1"
 fi
-code_mode_host_bin="$runtime_root/target/debug/codex-code-mode-host"
+code_mode_host_bin="$runtime_root/target/$build_profile/codex-code-mode-host"
 
 build_all() {
+  local -a cargo_profile_args=()
   command -v npm >/dev/null 2>&1 || { error "npm is required"; exit 1; }
   command -v cargo >/dev/null 2>&1 || { error "cargo is required"; exit 1; }
+  if [[ "$build_profile" == "release" ]]; then
+    cargo_profile_args+=(--release)
+  fi
   if [[ ! -d "$web_root/node_modules" ]]; then
     (cd "$web_root" && npm ci)
   fi
   (cd "$web_root" && npm run build)
-  (cd "$web_root" && cargo build --locked -p open-web-codex-server)
+  (cd "$web_root" && CARGO_INCREMENTAL=0 cargo build --locked "${cargo_profile_args[@]}" -p open-web-codex-server)
   if [[ "$codex_mode" == "real" && "$using_repository_codex" == "1" && ( ! -x "$codex_bin" || ! -x "$code_mode_host_bin" ) ]]; then
-    (cd "$runtime_root" && CARGO_INCREMENTAL=0 cargo build -p codex-cli --bin codex -p codex-code-mode-host --bin codex-code-mode-host)
+    (cd "$runtime_root" && CARGO_INCREMENTAL=0 cargo build --locked "${cargo_profile_args[@]}" -p codex-cli --bin codex -p codex-code-mode-host --bin codex-code-mode-host)
   fi
 }
 
@@ -237,7 +251,6 @@ fi
 server_command=(
   "$server_bin"
   --bind "$bind_host:$server_port"
-  --database-url "$database_url"
   --database-max-connections "$database_max_connections"
   --codex-mode "$codex_mode"
   --runner-root "$runner_root"

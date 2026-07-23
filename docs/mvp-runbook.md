@@ -14,16 +14,54 @@ Gateway、原始 JSON-RPC 路由或桌面应用。
 ## 前置条件
 
 - Node.js 20+、npm、稳定 Rust、Git。
-- PostgreSQL 已运行并存在 `open_web_codex` 数据库。
+- PostgreSQL Server 已运行；Release 部署器可以创建或连接固定名称的
+  `open_web_codex` 数据库，开发脚本要求该数据库已存在。
 - 真实模式需要当前仓库构建的 Codex，或通过 `CODEX_BIN` 指定兼容 Binary。
 
-默认数据库连接为：
+开发脚本的默认数据库连接为：
 
 ```text
 postgresql://$USER@127.0.0.1:5432/open_web_codex
 ```
 
 ## 启动
+
+单机 Release 部署使用统一入口：
+
+```bash
+./scripts/deploy.sh
+```
+
+它按锁文件安装依赖，构建优化后的 Web、平台 Server 和仓库 Codex，停止开发
+Vite，后台启动 Server，并在健康检查通过后展示 Web/API 地址、运行模式、PID 和
+日志位置。安装与编译详情写入固定的
+`.local/open-web-codex/logs/deploy.log`，终端只展示阶段进度；失败时才显示日志
+尾部。生产页面由 Server 同源托管在 `http://127.0.0.1:4800/web`。
+
+没有 `DATABASE_URL`、`--database-url-file` 或已保存配置时，交互部署会询问：
+
+1. 使用已有 PostgreSQL：输入主机、端口、用户名和密码并先验证连接。
+2. 创建数据库：输入管理员凭据、应用用户名和应用密码；只在角色或数据库缺失
+   时创建，不覆盖已有角色密码或数据库所有权。
+
+数据库名固定为 `open_web_codex`，不能通过环境变量或参数改成其他名称。密码输入
+不回显，也不会出现在 Server 进程参数或部署日志中。生成的连接配置保存在
+`.local/open-web-codex/database-url`，权限为 `600`；之后重复部署自动复用。
+非交互环境缺少配置时会在编译前失败，必须显式提供受保护的 URL 文件或
+`DATABASE_URL`。
+
+```bash
+./scripts/deploy.sh --check
+./scripts/deploy.sh --status
+./scripts/deploy.sh --stop
+```
+
+外部管理的含密码连接建议使用 `--database-url-file`。生产主机必须从 Secret Manager
+提供稳定的 `OPEN_WEB_CODEX_MASTER_KEY`，并在 `127.0.0.1:4800` 前配置 HTTPS
+反向代理。脚本是当前单机 Release 部署入口；OS 服务守护、备份恢复和滚动升级
+仍属于 GA 门禁。
+
+1421/4800 双进程仅用于开发和 UI 联调：
 
 用 Fake Runtime 验证 1421 WebApp 与 Server：
 

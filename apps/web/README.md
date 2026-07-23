@@ -52,6 +52,41 @@ cargo run -p open-web-codex-server -- --codex-mode fake
 
 Vite proxies `/api` and WebSocket upgrades to `127.0.0.1:4800`.
 
+## Single-host release deployment
+
+From the repository root:
+
+```bash
+./scripts/deploy.sh
+```
+
+This uses optimized Release binaries and lets the platform Server serve the
+built WebApp directly at `http://127.0.0.1:4800/web`; Vite is not part of the
+deployed topology. Dependency and compiler output is kept in
+`.local/open-web-codex/logs/deploy.log`, while the terminal displays stage
+progress and the final health/address panel.
+
+Without `DATABASE_URL` or a saved credential file, an interactive deployment
+offers to connect to an existing PostgreSQL server or create an application
+role and database. The database name cannot be changed from `open_web_codex`.
+Passwords are not echoed or included in process arguments; the generated URL
+is kept at `.local/open-web-codex/database-url` with mode `600`. A
+non-interactive deployment fails before compilation when database configuration
+is absent.
+
+```bash
+./scripts/deploy.sh --check
+./scripts/deploy.sh --status
+./scripts/deploy.sh --stop
+```
+
+The deployer reuses the same persistent Profile, Secret Store, Runner, PID and
+server-log directories as `run-local.sh`. It prunes only Cargo incremental
+caches, and only after the combined targets exceed the configurable
+`OPEN_WEB_CODEX_TARGET_LIMIT_GB` high-water mark. A public deployment still
+requires an HTTPS reverse proxy, external Secret Store key management,
+PostgreSQL backup/restore and an OS-level service supervisor.
+
 ## Validation
 
 ```bash

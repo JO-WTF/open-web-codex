@@ -129,6 +129,10 @@
 - [x] 根 Cargo/NPM/Nix 构建改为 browser + platform server。
 - [x] `scripts/run-local.sh` 改为单平台进程并保留前台、后台、状态、停止、
   Fake/Real 和外部数据库配置。
+- [x] `scripts/deploy.sh` 提供单机 Release 部署入口：锁定依赖、隐藏详细构建
+  日志、阶段进度、健康检查、持久部署状态、服务信息框和 Cargo target
+  高水位增量缓存控制；缺少数据库配置时安全引导使用或创建固定的
+  `open_web_codex`，凭据不回显且不进入进程参数；1421 Vite 继续仅用于开发。
 - [x] CI 增加禁止桌面代码回流的静态门禁，并构建浏览器、平台 Rust 与
   PostgreSQL 集成测试。
 - [-] 旧根 App/Bridge 已退出运行与生产构建；仅为旧 App 保留的未引用源码、

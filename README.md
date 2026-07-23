@@ -27,7 +27,40 @@ scripts/                  Monorepo and upstream-sync tooling
 
 ## Get started
 
-Run the restored standalone WebApp with the deterministic test Runtime:
+For a single-host release deployment, make sure a PostgreSQL server is running,
+then run:
+
+```bash
+./scripts/deploy.sh
+```
+
+The deployer installs exact Web dependencies, builds optimized browser,
+platform Server and repository Codex artifacts, starts the Server in the
+background, and verifies its health. Verbose build output stays in
+`.local/open-web-codex/logs/deploy.log`; the terminal shows stage progress and a
+service summary. Open `http://127.0.0.1:4800/web` after it succeeds.
+
+When no database configuration exists, an interactive deploy asks whether to
+use an existing PostgreSQL database or create the database and an application
+user. The database name is always `open_web_codex`; passwords are read without
+echo and the resulting URL is stored in
+`.local/open-web-codex/database-url` with mode `600`. Non-interactive hosts must
+provide `DATABASE_URL` or `--database-url-file` explicitly.
+
+```bash
+./scripts/deploy.sh --status
+./scripts/deploy.sh --stop
+```
+
+Use `--database-url-file` for an externally managed PostgreSQL credential file and set
+`OPEN_WEB_CODEX_MASTER_KEY` from a Secret Manager for a production host. Bind
+to loopback behind an HTTPS reverse proxy instead of exposing port 4800
+directly. This is the production-shaped single-host launcher; the remaining GA
+security, backup and supervised-service gates are tracked in the development
+plan.
+
+For development, run the restored standalone WebApp with the deterministic
+test Runtime:
 
 ```bash
 ./scripts/start-all.sh --fake
