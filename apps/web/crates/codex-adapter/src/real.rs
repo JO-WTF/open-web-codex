@@ -1190,7 +1190,7 @@ fn message_workspace_id(message: &Value) -> Option<&str> {
 }
 
 const CAPABILITY_ROOTS_ENV: &str = "OPEN_WEB_CODEX_CAPABILITY_ROOTS";
-const WORKSPACE_ENVIRONMENT_ID: &str = "workspace";
+const WORKSPACE_ENVIRONMENT_ID: &str = "local";
 
 fn add_selected_capability_roots(params: &mut Value, workspace_root: &Path) {
     let Ok(process_cwd) = std::env::current_dir() else {
@@ -1527,7 +1527,7 @@ mod tests {
             selected[0]["location"],
             json!({
                 "type": "environment",
-                "environmentId": "workspace",
+                "environmentId": "local",
                 "path": plugin.canonicalize().unwrap().to_string_lossy(),
             })
         );

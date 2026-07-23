@@ -2,11 +2,20 @@
   "mcpServers": {
     "workspace_maps": {
       "command": ".venv/bin/python",
-      "args": ["-m", "maps_mcp.server", "--workspace-root", "."],
+      "args": [
+        "-m",
+        "maps_mcp.server",
+        "--workspace-root",
+        "."
+      ],
       "cwd": ".",
       "startup_timeout_sec": 20,
       "tool_timeout_sec": 180,
-      "default_tools_approval_mode": "prompt"
+      "tools": {
+        "create_map_card": {
+          "approval_mode": "approve"
+        }
+      }
     }
   }
 }
