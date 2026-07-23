@@ -101,8 +101,11 @@ MCP/Skills/Plugins；Server/Profile Host 只负责单 Profile 生命周期、授
 6. [ ] 第三方 Provider smoke 使用真实 Codex Runtime 工具调用链验证：模型可见
    `workspace_maps` tool schema，Provider 返回标准 tool call，Runtime 执行 MCP tool，
    assistant 输出 map-card marker，浏览器只渲染 marker。
-7. [ ] 官方 OpenAI Provider smoke 验证 `codex login` 与 Web 使用同一个
-   `CODEX_HOME`，模型列表按当前 Profile/Provider 刷新且错误状态可诊断。
+7. [-] 官方 OpenAI Provider smoke 验证 `codex login` 与 Web 使用同一个
+   `CODEX_HOME`，模型列表按当前 Profile/Provider 刷新且错误状态可诊断。单
+   Profile 过渡期允许在 Profile 缺少 `auth.json` 时，从
+   `OPEN_WEB_CODEX_IMPORT_CODEX_AUTH_FROM` 或默认 `~/.codex` 导入 file-backed
+   登录态；多用户阶段必须替换为 Profile-scoped auth 设计。
 8. [ ] 单 Profile 可以串行或按实测限制运行多个 Thread/Run；每个 Run 仍使用独立
    writable workspace，Thread resume/fork 只能使用已授权 workspace 映射。
 

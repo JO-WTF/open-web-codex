@@ -139,6 +139,10 @@ continues to apply:
 - The selected `CODEX_HOME`, Profile identity, workspace root, source root and
   capability roots are fixed at startup or by typed platform lifecycle state;
   browser input never changes server-local paths.
+- To unblock the single Profile smoke, the platform may copy a file-backed
+  `auth.json` from an already logged-in local Codex home into an empty Profile
+  home before starting the Profile Host. This is a transitional single-user
+  import path only; it must not become the multi-user credential model.
 - Skills, Plugins and MCP are still discovered and executed by Codex Runtime.
   The WebApp does not scan `.mcp.json`, run plugin launchers, answer MCP
   inventory questions locally or write hidden Profile configuration.

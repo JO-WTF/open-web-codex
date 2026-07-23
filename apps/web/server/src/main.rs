@@ -4,8 +4,9 @@ mod routes;
 #[cfg(test)]
 mod security_integration;
 
+use std::fs;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::Router;
@@ -54,6 +55,9 @@ struct Cli {
     /// Persistent Profile home used by the native Codex app-server.
     #[arg(long, env = "CODEX_HOME")]
     codex_home: Option<PathBuf>,
+    /// Single-Profile transition: import file-backed Codex login from this home when the Profile has no auth.json.
+    #[arg(long, env = "OPEN_WEB_CODEX_IMPORT_CODEX_AUTH_FROM")]
+    import_codex_auth_from: Option<PathBuf>,
     /// Codex executable used by the native Profile Host.
     #[arg(long, env = "CODEX_BIN", default_value = "codex")]
     codex_bin: PathBuf,
@@ -138,6 +142,10 @@ async fn main() -> anyhow::Result<()> {
                 let codex_home = cli.codex_home.clone().ok_or_else(|| {
                     anyhow::anyhow!("--codex-home / CODEX_HOME is required in real Codex mode")
                 })?;
+                prepare_single_profile_auth_import(
+                    cli.import_codex_auth_from.as_deref(),
+                    &codex_home,
+                )?;
                 let workspace_root = git.workspace_root().to_path_buf();
                 tracing::info!(
                     profile_id = %cli.profile_id,
@@ -555,8 +563,103 @@ async fn persist_profile_capabilities(
     Ok(())
 }
 
-/// Upgrade the previous single-user deployment without guessing ownership in
-/// a multi-owner database. New installations create this row in bootstrap.
+fn prepare_single_profile_auth_import(
+    explicit_source_home: Option<&Path>,
+    profile_home: &Path,
+) -> anyhow::Result<()> {
+    let Some(source_home) = explicit_source_home
+        .map(Path::to_path_buf)
+        .or_else(default_cli_codex_home)
+    else {
+        return Ok(());
+    };
+
+    import_file_backed_codex_auth_if_missing(&source_home, profile_home)
+}
+
+fn default_cli_codex_home() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from)
+        .map(|home| home.join(".codex"))
+}
+
+fn import_file_backed_codex_auth_if_missing(
+    source_home: &Path,
+    profile_home: &Path,
+) -> anyhow::Result<()> {
+    let source_auth = source_home.join("auth.json");
+    if !source_auth.is_file() {
+        tracing::debug!(
+            source_home = %source_home.display(),
+            "single Profile auth import skipped because source auth.json is absent"
+        );
+        return Ok(());
+    }
+
+    let target_auth = profile_home.join("auth.json");
+    if target_auth.exists() {
+        tracing::debug!(
+            profile_home = %profile_home.display(),
+            "single Profile auth import skipped because Profile auth.json already exists"
+        );
+        return Ok(());
+    }
+
+    let source_home = source_home
+        .canonicalize()
+        .unwrap_or_else(|_| source_home.to_path_buf());
+    let profile_home = profile_home
+        .canonicalize()
+        .unwrap_or_else(|_| profile_home.to_path_buf());
+    if source_home == profile_home {
+        return Ok(());
+    }
+
+    let bytes = fs::read(&source_auth).map_err(|error| {
+        anyhow::anyhow!(
+            "failed to read single Profile Codex auth from {}: {error}",
+            source_auth.display()
+        )
+    })?;
+    if let Some(parent) = target_auth.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            anyhow::anyhow!(
+                "failed to prepare Profile auth directory {}: {error}",
+                parent.display()
+            )
+        })?;
+    }
+
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    std::io::Write::write_all(
+        &mut options.open(&target_auth).map_err(|error| {
+            anyhow::anyhow!(
+                "failed to create Profile auth file {}: {error}",
+                target_auth.display()
+            )
+        })?,
+        &bytes,
+    )
+    .map_err(|error| {
+        anyhow::anyhow!(
+            "failed to write Profile auth file {}: {error}",
+            target_auth.display()
+        )
+    })?;
+
+    tracing::info!(
+        "imported file-backed Codex auth into the single Profile home for transitional login sharing"
+    );
+    Ok(())
+}
+
 async fn ensure_transitional_profile_binding(
     db: &sqlx::PgPool,
     runtime_key: &str,
@@ -600,10 +703,55 @@ async fn ensure_transitional_profile_binding(
 
 #[cfg(test)]
 mod tests {
-    use super::{public_approval_frame, public_resolved_approval_frame, runtime_resolved_request};
+    use super::{
+        import_file_backed_codex_auth_if_missing, public_approval_frame,
+        public_resolved_approval_frame, runtime_resolved_request,
+    };
     use open_web_codex_approval_service::ResolvedApproval;
     use serde_json::Value;
+    use std::fs;
+    use tempfile::TempDir;
     use uuid::Uuid;
+
+    #[test]
+    fn single_profile_auth_import_copies_missing_file_backed_login() {
+        let source = TempDir::new().expect("source home");
+        let profile = TempDir::new().expect("profile home");
+        let auth = r#"{"auth_mode":"chatgpt","tokens":{"id_token":"id","access_token":"access","refresh_token":"refresh","account_id":"acct"}}"#;
+        fs::write(source.path().join("auth.json"), auth).expect("write source auth");
+
+        import_file_backed_codex_auth_if_missing(source.path(), profile.path())
+            .expect("import auth");
+
+        assert_eq!(
+            fs::read_to_string(profile.path().join("auth.json")).expect("read profile auth"),
+            auth
+        );
+    }
+
+    #[test]
+    fn single_profile_auth_import_preserves_existing_profile_auth() {
+        let source = TempDir::new().expect("source home");
+        let profile = TempDir::new().expect("profile home");
+        fs::write(
+            source.path().join("auth.json"),
+            r#"{"auth_mode":"chatgpt"}"#,
+        )
+        .expect("write source auth");
+        fs::write(
+            profile.path().join("auth.json"),
+            r#"{"auth_mode":"apikey"}"#,
+        )
+        .expect("write profile auth");
+
+        import_file_backed_codex_auth_if_missing(source.path(), profile.path())
+            .expect("import auth");
+
+        assert_eq!(
+            fs::read_to_string(profile.path().join("auth.json")).expect("read profile auth"),
+            r#"{"auth_mode":"apikey"}"#
+        );
+    }
 
     #[test]
     fn public_approval_events_omit_runtime_request_ids_and_server_paths() {

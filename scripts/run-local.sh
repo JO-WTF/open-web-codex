@@ -51,6 +51,10 @@ Environment:
   CODEX_MODE                         real (default) or fake
   CODEX_BIN                          Codex CLI binary used in real mode
   CODEX_HOME                         Persistent Profile home
+  OPEN_WEB_CODEX_IMPORT_CODEX_AUTH_FROM
+                                     Single-Profile transition: import
+                                     file-backed auth.json from this Codex home
+                                     when CODEX_HOME has no auth.json
   OPEN_WEB_CODEX_MASTER_KEY          Base64-encoded 32-byte key; a local key is
                                      generated under the data directory if absent
   OPEN_WEB_CODEX_RUNNER_ROOT         Private mirror/workspace root
