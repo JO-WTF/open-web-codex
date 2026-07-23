@@ -40,6 +40,19 @@ describe("PlatformClient", () => {
     expect(fetchMock.mock.calls.every((call) => !String(call[0]).includes("/api/rpc"))).toBe(true);
   });
 
+  it("falls back when crypto.randomUUID is unavailable", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ run: { id: "run-1" } }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("crypto", {});
+    const client = new PlatformClient({ baseUrl: "https://platform.test", token: "session-token" });
+
+    await client.startRun("task-one");
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body.idempotency_key).toMatch(/^idempotency-/);
+  });
+
   it("authenticates WebSocket in the first frame instead of putting the token in its URL", () => {
     const instances: FakeSocket[] = [];
     class FakeSocket {

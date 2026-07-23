@@ -45,6 +45,14 @@ function defaultBaseUrl() {
   return (import.meta.env.VITE_PLATFORM_API_URL ?? "").replace(/\/$/, "");
 }
 
+const createIdempotencyKey = () => {
+  const randomUUID = globalThis.crypto?.randomUUID;
+  if (typeof randomUUID === "function") {
+    return randomUUID.call(globalThis.crypto);
+  }
+  return `idempotency-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+};
+
 export class PlatformClient {
   private baseUrl: string;
   private token: string;
@@ -246,7 +254,7 @@ export class PlatformClient {
     return this.request<{ run: Run }>(`/api/tasks/${encodeURIComponent(taskId)}/runs`, {
       method: "POST",
       body: JSON.stringify({
-        idempotency_key: crypto.randomUUID(),
+        idempotency_key: createIdempotencyKey(),
         git_ref: gitRef?.trim() || null,
         workspace_kind: workspace?.kind ?? "main",
         workspace_name: workspace?.name?.trim() || null,

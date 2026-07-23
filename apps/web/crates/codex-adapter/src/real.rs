@@ -5,7 +5,8 @@ use open_web_codex_profile_host::{ProfileHost, ProfileHostConfig, ProfileHostSta
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::process::Command;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::broadcast;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::RwLock;
@@ -193,15 +194,7 @@ impl RealCodexAdapter {
             "input": input,
             "cwd": &workspace_root,
             "approvalPolicy": "on-request",
-            "sandboxPolicy": if read_only {
-                json!({ "type": "readOnly" })
-            } else {
-                json!({
-                    "type": "workspaceWrite",
-                    "writableRoots": [&workspace_root],
-                    "networkAccess": true,
-                })
-            },
+            "sandboxPolicy": turn_sandbox_policy(Path::new(&workspace_root), read_only),
         });
         let object = params
             .as_object_mut()
@@ -1195,6 +1188,52 @@ fn turn_matches(message: &Value, expected: Option<&str>) -> bool {
     })
 }
 
+fn turn_sandbox_policy(workspace_root: &Path, read_only: bool) -> Value {
+    if read_only {
+        json!({ "type": "readOnly" })
+    } else if codex_sandbox_disabled_by_environment() || codex_bubblewrap_is_unavailable() {
+        json!({ "type": "externalSandbox", "networkAccess": "enabled" })
+    } else {
+        json!({
+            "type": "workspaceWrite",
+            "writableRoots": [workspace_root],
+            "networkAccess": true,
+        })
+    }
+}
+
+fn codex_sandbox_disabled_by_environment() -> bool {
+    std::env::var("OPEN_WEB_CODEX_DISABLE_CODEX_SANDBOX")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false)
+}
+
+fn codex_bubblewrap_is_unavailable() -> bool {
+    static UNAVAILABLE: OnceLock<bool> = OnceLock::new();
+    *UNAVAILABLE.get_or_init(|| {
+        if !cfg!(target_os = "linux") {
+            return false;
+        }
+        match Command::new("bwrap")
+            .args([
+                "--unshare-user",
+                "--uid",
+                "0",
+                "--gid",
+                "0",
+                "--ro-bind",
+                "/",
+                "/",
+                "true",
+            ])
+            .output()
+        {
+            Ok(output) => !output.status.success(),
+            Err(_) => false,
+        }
+    })
+}
+
 fn app_server_event_frame(
     workspace_id: &str,
     runtime_instance_id: uuid::Uuid,
@@ -1219,6 +1258,7 @@ fn app_server_event_frame(
 mod tests {
     use super::{
         app_server_event_frame, is_authorized_workspace_root, login_completion, message_thread_id,
+        turn_sandbox_policy,
     };
     use serde_json::{json, Value};
     use std::path::Path;
@@ -1273,6 +1313,22 @@ mod tests {
             message_thread_id(&json!({"params": {"thread": {"id": "thread-2"}}})),
             Some("thread-2")
         );
+    }
+
+    #[test]
+    fn builds_workspace_write_turn_sandbox_by_default() {
+        let policy = turn_sandbox_policy(Path::new("/runner/workspace"), false);
+
+        assert_eq!(policy["type"], "workspaceWrite");
+        assert_eq!(policy["writableRoots"], json!(["/runner/workspace"]));
+        assert_eq!(policy["networkAccess"], true);
+    }
+
+    #[test]
+    fn read_only_turn_sandbox_ignores_external_sandbox_escape_hatch() {
+        let policy = turn_sandbox_policy(Path::new("/runner/workspace"), true);
+
+        assert_eq!(policy, json!({ "type": "readOnly" }));
     }
 
     #[test]

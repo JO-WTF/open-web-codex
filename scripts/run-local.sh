@@ -59,6 +59,9 @@ Environment:
   OPEN_WEB_CODEX_SERVER_PORT         HTTP/WebSocket port
   OPEN_WEB_CODEX_SKIP_BUILD          1 to reuse build outputs
   OPEN_WEB_CODEX_BUILD_PROFILE       debug (default) or release
+  OPEN_WEB_CODEX_DISABLE_CODEX_SANDBOX
+                                     1 to trust the surrounding container and
+                                     avoid nested Codex bubblewrap sandboxing
   DATABASE_URL                       PostgreSQL connection URL
   DATABASE_MAX_CONNECTIONS           PostgreSQL pool size
 EOF
