@@ -16,7 +16,7 @@ import { parseWebTurnDiff } from "./utils/webTurnDiff";
 import { isWebAppServerRecoveryEvent, parseCodexStderr, parseWebAppServerError } from "./utils/webAppServerError";
 import { parseWebUserInputRequest } from "./utils/webUserInput";
 import { summarizeWebAppServerEvent } from "./utils/webAppServerEventSummary";
-import { mergeRateLimits, parseInitialMcpServers, parseInitialRateLimits } from "./utils/webInitialStatus";
+import { formatMcpStatusLines, mergeRateLimits, parseInitialMcpServers, parseInitialRateLimits } from "./utils/webInitialStatus";
 import { appendWebLogEntry } from "./utils/webApprovalLog";
 import { loadWebApprovalHistory, resolveStoredWebApproval, saveWebApproval } from "./utils/webApprovalHistory";
 import { rememberAppServerEvent } from "./utils/webAppServerEventDedup";
@@ -1384,12 +1384,32 @@ export default function WebApp() {
     }
   }, [activeThreadId, appendLog, client, threadsByWorkspace]);
 
+  const showMcpStatus = useCallback(async (text: string, targetWorkspaceId = activeWorkspaceId, targetThreadId = activeThreadId) => {
+    if (!targetWorkspaceId) return false;
+    appendLog("user", text);
+    setBusy(true);
+    try {
+      const response = await client.listMcpServerStatus(targetWorkspaceId, targetThreadId);
+      const lines = formatMcpStatusLines(response);
+      appendLog("assistant", lines.join("\n"));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      appendLog("assistant", `可用 MCP：\n- 查询失败：${message}`);
+    } finally {
+      setBusy(false);
+    }
+    return true;
+  }, [activeThreadId, activeWorkspaceId, appendLog, client]);
+
   const sendText = useCallback(async (
     text: string,
     targetWorkspaceId = activeWorkspaceId,
     targetThreadId = activeThreadId,
   ) => {
     if (!targetWorkspaceId || !targetThreadId || !text.trim()) return false;
+    if (/^\/mcp\b/i.test(text.trim())) {
+      return await showMcpStatus(text, targetWorkspaceId, targetThreadId);
+    }
     appendLog("user", text);
     setThinking(true);
     setTurnStartedAt(Date.now());
@@ -1425,7 +1445,7 @@ export default function WebApp() {
     } finally {
       setBusy(false);
     }
-  }, [activeThreadId, activeWorkspaceId, appendLog, client, currentProviderId, providerModels, selectedProviderModelId]);
+  }, [activeThreadId, activeWorkspaceId, appendLog, client, currentProviderId, providerModels, selectedProviderModelId, showMcpStatus]);
 
   const sendMessage = useCallback(async () => {
     const text = draft.trim();

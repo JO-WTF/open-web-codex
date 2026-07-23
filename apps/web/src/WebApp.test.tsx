@@ -92,4 +92,28 @@ describe("WebApp workspace-first messaging", () => {
     await waitFor(() => expect(screen.getAllByText("Generated title").length).toBeGreaterThan(0));
     expect(screen.queryByText("thread-n…")).toBeNull();
   });
+
+  it("handles /mcp locally with the typed MCP status resource", async () => {
+    client.listMcpServerStatus.mockResolvedValue({
+      data: [{
+        name: "maps",
+        status: "ready",
+        tools: { mcp__maps__get_route: {}, mcp__maps__batch_geocode: {} },
+      }],
+    });
+    render(<WebApp />);
+
+    const composer = await screen.findByPlaceholderText("Ask Codex to do something...");
+    await waitFor(() => expect((composer as HTMLTextAreaElement).disabled).toBe(false));
+    fireEvent.change(composer, { target: { value: "/mcp" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(client.startThread).toHaveBeenCalledWith("workspace-1"));
+    await waitFor(() => expect(client.listMcpServerStatus).toHaveBeenCalledWith("workspace-1", "thread-new"));
+    expect(client.sendUserMessage).not.toHaveBeenCalled();
+    expect(await screen.findByText("可用 MCP：")).toBeTruthy();
+    expect(document.body.textContent).toContain("maps（ready）");
+    expect(document.body.textContent).toContain("工具：batch_geocode、get_route");
+  });
+
 });

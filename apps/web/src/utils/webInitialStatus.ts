@@ -15,9 +15,51 @@ function unwrapResult(value: unknown): Record<string, unknown> {
   return isRecord(current) ? current : {};
 }
 
-export function parseInitialMcpServers(value: unknown): Record<string, WebMcpServer> {
+function unwrapDataArray(value: unknown): Array<Record<string, unknown>> {
   const payload = unwrapResult(value);
-  const data = Array.isArray(payload.data) ? payload.data : [];
+  return Array.isArray(payload.data)
+    ? payload.data.filter(isRecord)
+    : [];
+}
+
+export function formatMcpStatusLines(value: unknown): string[] {
+  const data = unwrapDataArray(value);
+  if (data.length === 0) return ["可用 MCP：", "- 暂无已配置的 MCP 服务。"];
+
+  const lines = ["可用 MCP："];
+  for (const server of [...data].sort((a, b) => String(a.name ?? "").localeCompare(String(b.name ?? "")))) {
+    const name = typeof server.name === "string" && server.name.trim()
+      ? server.name.trim()
+      : "unknown";
+    const status = typeof server.status === "string" && server.status.trim()
+      ? server.status.trim()
+      : isRecord(server.serverInfo) || (isRecord(server.tools) && Object.keys(server.tools).length > 0)
+        ? "ready"
+        : "unavailable";
+    lines.push(`- ${name}（${status}）`);
+
+    const tools = isRecord(server.tools) ? Object.keys(server.tools) : [];
+    const prefix = `mcp__${name}__`;
+    const toolNames = tools
+      .map((tool) => tool.startsWith(prefix) ? tool.slice(prefix.length) : tool)
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b));
+    if (toolNames.length > 0) {
+      lines.push(`  工具：${toolNames.join("、")}`);
+    }
+
+    const failure = typeof server.failureReason === "string" && server.failureReason.trim()
+      ? server.failureReason.trim()
+      : typeof server.error === "string" && server.error.trim()
+        ? server.error.trim()
+        : "";
+    if (failure) lines.push(`  状态说明：${failure}`);
+  }
+  return lines;
+}
+
+export function parseInitialMcpServers(value: unknown): Record<string, WebMcpServer> {
+  const data = unwrapDataArray(value);
   const servers: Record<string, WebMcpServer> = {};
 
   for (const candidate of data) {
