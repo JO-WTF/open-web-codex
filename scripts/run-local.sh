@@ -292,6 +292,7 @@ if [[ "$codex_mode" == "real" ]]; then
   export CODEX_BIN="$codex_bin"
   export OPEN_WEB_CODEX_MAPS_MCP_VENV="$maps_mcp_venv"
   export MAPS_MCP_VENV="$maps_mcp_venv"
+  export OPEN_WEB_CODEX_LOG_DIR="$log_dir"
 else
   unset CODEX_HOME CODEX_BIN
 fi

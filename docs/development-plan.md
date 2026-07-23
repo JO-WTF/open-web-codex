@@ -98,7 +98,8 @@ MCP/Skills/Plugins；Server/Profile Host 只负责单 Profile 生命周期、授
    缺失、`cwd` 解析错误、command 不存在、权限不足、Python/venv/pip 失败、
    package import 失败、MCP initialize 失败或 timeout。当前 runtime status 已投影
    Runtime 的 MCP server status；`workspace_maps` 依赖准备已移到平台启动期的共享
-   maps MCP venv，launcher 在对话期只做快速 import 校验并失败快返；launcher smoke
+   maps MCP venv，launcher 在对话期只做快速 import 校验并失败快返，且将 cwd、args、
+   venv、Python 版本、import check 和 server stderr 写入 launcher log；launcher smoke
    覆盖 initialize、tools/list 和 `create_map_card` 调用；下一步要把 Runtime
    failureReason 归一到上述分类。
 5. [ ] 新建 Thread 的单 Profile smoke 验证 `selectedCapabilityRoots` 包含

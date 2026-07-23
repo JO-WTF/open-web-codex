@@ -76,6 +76,13 @@ versions, OS information, venv path, command exit context, and whether proxy var
 without printing proxy values or credentials. Use that file first when debugging server proxy,
 dependency, Python version, or platform startup failures.
 
+`bin/maps-mcp-launcher` writes per-start handshake diagnostics to
+`$OPEN_WEB_CODEX_LOG_DIR/maps-mcp-launcher.log` by default. It records cwd, launcher args, selected
+venv, Python version, proxy-variable presence, import-check status, and the MCP server stderr stream.
+When Codex reports `connection closed: initialize response`, inspect this launcher log together with
+`maps-mcp-env.log` to distinguish missing shared env, import errors, Python runtime errors, and
+FastMCP startup exceptions.
+
 ## Tests
 
 Tests use fake HTTP responses and never call a paid provider:
