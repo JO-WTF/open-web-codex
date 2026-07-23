@@ -1,5 +1,7 @@
+use open_web_codex_platform_contracts::RunEvent;
 use serde_json::{json, Map, Value};
 use sqlx::PgPool;
+use sqlx::Row;
 use uuid::Uuid;
 
 const PROJECTION_VERSION: i16 = 1;
@@ -13,31 +15,43 @@ struct ProjectedEvent {
     payload: Value,
 }
 
-pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<(), String> {
+pub struct LiveProjection {
+    pub organization_id: Uuid,
+    pub payload: Vec<u8>,
+}
+
+pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjection>, String> {
+    if let Some(projection) = persist_terminal_frame(data, db).await? {
+        return Ok(Some(projection));
+    }
     let Some(event) = project_frame(data)? else {
-        return Ok(());
+        return Ok(None);
     };
 
     let mut transaction = db
         .begin()
         .await
         .map_err(|error| format!("event transaction error: {error}"))?;
-    let run_id = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM runs WHERE codex_thread_id = $1 ORDER BY created_at DESC LIMIT 1",
+    let run = sqlx::query(
+        "SELECT id, organization_id FROM runs \
+         WHERE codex_thread_id = $1 ORDER BY created_at DESC LIMIT 1",
     )
     .bind(&event.thread_id)
     .fetch_optional(&mut *transaction)
     .await
     .map_err(|error| format!("event run lookup error: {error}"))?;
 
-    let Some(run_id) = run_id else {
-        return Ok(());
+    let Some(run) = run else {
+        return Ok(None);
     };
+    let run_id: Uuid = run.get("id");
+    let organization_id: Uuid = run.get("organization_id");
 
-    sqlx::query(
+    let persisted = sqlx::query(
         "INSERT INTO run_events (
             run_id, event_type, projection_version, thread_id, turn_id, item_id, payload
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id, sequence, created_at",
     )
     .bind(run_id)
     .bind(&event.event_type)
@@ -46,9 +60,74 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<(), String> {
     .bind(&event.turn_id)
     .bind(&event.item_id)
     .bind(&event.payload)
-    .execute(&mut *transaction)
+    .fetch_one(&mut *transaction)
     .await
     .map_err(|error| format!("event insert error: {error}"))?;
+
+    match event.event_type.as_str() {
+        "codex.turn.started" => {
+            sqlx::query(
+                "UPDATE runs SET active_turn_id = $1, updated_at = now() \
+                 WHERE id = $2 AND status = 'running'",
+            )
+            .bind(&event.turn_id)
+            .bind(run_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| format!("active Turn projection error: {error}"))?;
+        }
+        "codex.turn.completed" => {
+            sqlx::query(
+                "UPDATE runs SET active_turn_id = NULL, updated_at = now() \
+                 WHERE id = $1 AND active_turn_id = $2",
+            )
+            .bind(run_id)
+            .bind(&event.turn_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| format!("completed Turn projection error: {error}"))?;
+        }
+        "codex.thread.archived" => {
+            sqlx::query(
+                "UPDATE tasks SET status = 'archived', updated_at = now() \
+                 WHERE id = (SELECT task_id FROM runs WHERE id = $1)",
+            )
+            .bind(run_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| format!("archived Thread projection error: {error}"))?;
+        }
+        "codex.thread.unarchived" => {
+            sqlx::query(
+                "UPDATE tasks SET status = 'pending', updated_at = now() \
+                 WHERE id = (SELECT task_id FROM runs WHERE id = $1) AND status = 'archived'",
+            )
+            .bind(run_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| format!("unarchived Thread projection error: {error}"))?;
+        }
+        "codex.thread.name.updated" => {
+            if let Some(name) = event
+                .payload
+                .pointer("/data/threadName")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty() && name.len() <= 200)
+            {
+                sqlx::query(
+                    "UPDATE tasks SET title = $1, updated_at = now() \
+                     WHERE id = (SELECT task_id FROM runs WHERE id = $2)",
+                )
+                .bind(name)
+                .bind(run_id)
+                .execute(&mut *transaction)
+                .await
+                .map_err(|error| format!("Thread name projection error: {error}"))?;
+            }
+        }
+        _ => {}
+    }
 
     let terminal_status = match event.event_type.as_str() {
         "codex.thread.completed" => Some("completed"),
@@ -63,9 +142,13 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<(), String> {
         };
         sqlx::query(
             "WITH updated_run AS (
-                UPDATE runs SET status = $1, updated_at = now()
+                UPDATE runs SET status = $1, active_turn_id = NULL, lease_owner = NULL,
+                                lease_token = NULL, lease_expires_at = NULL, updated_at = now()
                 WHERE id = $2 AND status = 'running'
-                RETURNING task_id
+                RETURNING task_id, workspace_id
+             ), updated_workspace AS (
+                UPDATE workspaces SET state = 'ready', updated_at = now()
+                WHERE id IN (SELECT workspace_id FROM updated_run)
              )
              UPDATE tasks SET status = $3, updated_at = now()
              WHERE id IN (SELECT task_id FROM updated_run)
@@ -82,38 +165,162 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<(), String> {
     transaction
         .commit()
         .await
-        .map_err(|error| format!("event transaction commit error: {error}"))
+        .map_err(|error| format!("event transaction commit error: {error}"))?;
+
+    let public = RunEvent {
+        id: persisted.get("id"),
+        sequence: persisted.get("sequence"),
+        run_id,
+        event_type: event.event_type,
+        projection_version: PROJECTION_VERSION,
+        thread_id: Some(event.thread_id),
+        turn_id: event.turn_id,
+        item_id: event.item_id,
+        payload: event.payload,
+        created_at: persisted.get("created_at"),
+    };
+    let payload = serde_json::to_vec(&json!({
+        "type": "run.event",
+        "version": 1,
+        "event": public,
+    }))
+    .map_err(|error| format!("live projection encoding error: {error}"))?;
+    Ok(Some(LiveProjection {
+        organization_id,
+        payload,
+    }))
+}
+
+async fn persist_terminal_frame(
+    data: &[u8],
+    db: &PgPool,
+) -> Result<Option<LiveProjection>, String> {
+    let Some(message) = internal_message(data)? else {
+        return Ok(None);
+    };
+    let method = message
+        .get("method")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !matches!(
+        method,
+        "command/exec/outputDelta" | "platform/terminalExited"
+    ) {
+        return Ok(None);
+    }
+    let params = message
+        .get("params")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let Some(process_id) = string_field(&params, "processId") else {
+        return Ok(None);
+    };
+    let mut transaction = db
+        .begin()
+        .await
+        .map_err(|error| format!("terminal event transaction error: {error}"))?;
+    let session = sqlx::query(
+        "SELECT session.terminal_id, session.browser_workspace_id, session.run_id, \
+                session.organization_id, run.codex_thread_id \
+         FROM terminal_sessions session JOIN runs run ON run.id = session.run_id \
+         WHERE session.process_id = $1",
+    )
+    .bind(&process_id)
+    .fetch_optional(&mut *transaction)
+    .await
+    .map_err(|error| format!("terminal session lookup error: {error}"))?;
+    let Some(session) = session else {
+        return Ok(None);
+    };
+    let terminal_id: String = session.get("terminal_id");
+    let browser_workspace_id: Uuid = session.get("browser_workspace_id");
+    let run_id: Uuid = session.get("run_id");
+    let organization_id: Uuid = session.get("organization_id");
+    let thread_id: Option<String> = session.get("codex_thread_id");
+    let (event_type, payload) =
+        if method == "command/exec/outputDelta" {
+            let encoded = params
+                .get("deltaBase64")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let mut decoded = BASE64
+                .decode(encoded)
+                .map_err(|_| "terminal output was not valid base64".to_string())?;
+            decoded.truncate(256 * 1024);
+            (
+                "terminal.output",
+                json!({
+                    "schemaVersion": PROJECTION_VERSION,
+                    "workspaceId": browser_workspace_id,
+                    "terminalId": terminal_id,
+                    "data": String::from_utf8_lossy(&decoded),
+                }),
+            )
+        } else {
+            sqlx::query(
+            "UPDATE terminal_sessions SET state = CASE WHEN $2 THEN 'failed' ELSE 'closed' END, \
+                                          updated_at = now() WHERE process_id = $1",
+        )
+        .bind(&process_id)
+        .bind(params.get("failed").and_then(Value::as_bool).unwrap_or(false))
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| format!("terminal exit update error: {error}"))?;
+            (
+                "terminal.exit",
+                json!({
+                    "schemaVersion": PROJECTION_VERSION,
+                    "workspaceId": browser_workspace_id,
+                    "terminalId": terminal_id,
+                    "exitCode": params.get("exitCode").cloned().unwrap_or(Value::Null),
+                }),
+            )
+        };
+    let persisted = sqlx::query(
+        "INSERT INTO run_events \
+         (run_id, event_type, projection_version, thread_id, payload) \
+         VALUES ($1, $2, $3, $4, $5) RETURNING id, sequence, created_at",
+    )
+    .bind(run_id)
+    .bind(event_type)
+    .bind(PROJECTION_VERSION)
+    .bind(&thread_id)
+    .bind(&payload)
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(|error| format!("terminal event insert error: {error}"))?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| format!("terminal event commit error: {error}"))?;
+    let public = RunEvent {
+        id: persisted.get("id"),
+        sequence: persisted.get("sequence"),
+        run_id,
+        event_type: event_type.to_string(),
+        projection_version: PROJECTION_VERSION,
+        thread_id,
+        turn_id: None,
+        item_id: None,
+        payload,
+        created_at: persisted.get("created_at"),
+    };
+    let payload = serde_json::to_vec(&json!({
+        "type": "run.event",
+        "version": 1,
+        "event": public,
+    }))
+    .map_err(|error| format!("terminal live projection encoding error: {error}"))?;
+    Ok(Some(LiveProjection {
+        organization_id,
+        payload,
+    }))
 }
 
 fn project_frame(data: &[u8]) -> Result<Option<ProjectedEvent>, String> {
-    let text = std::str::from_utf8(data).map_err(|error| format!("invalid utf8: {error}"))?;
-    let json_text = text
-        .lines()
-        .filter_map(|line| line.strip_prefix("data:"))
-        .map(str::trim_start)
-        .collect::<Vec<_>>()
-        .join("\n");
-    let json_text = if json_text.is_empty() {
-        let raw = text.trim();
-        if !raw.starts_with('{') && !raw.starts_with('[') {
-            return Ok(None);
-        }
-        raw
-    } else {
-        json_text.trim()
-    };
-    if json_text.is_empty() {
+    let Some(message) = internal_message(data)? else {
         return Ok(None);
-    }
-
-    let value: Value =
-        serde_json::from_str(json_text).map_err(|error| format!("invalid json: {error}"))?;
-    if value.get("method").and_then(Value::as_str) != Some("app-server-event") {
-        return Ok(None);
-    }
-    let message = match value.pointer("/params/message").and_then(Value::as_object) {
-        Some(message) => message,
-        None => return Ok(None),
     };
     let runtime_method = message
         .get("method")
@@ -163,13 +370,52 @@ fn project_frame(data: &[u8]) -> Result<Option<ProjectedEvent>, String> {
     }))
 }
 
+fn internal_message(data: &[u8]) -> Result<Option<Map<String, Value>>, String> {
+    let text = std::str::from_utf8(data).map_err(|error| format!("invalid utf8: {error}"))?;
+    let json_text = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .map(str::trim_start)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let json_text = if json_text.is_empty() {
+        let raw = text.trim();
+        if !raw.starts_with('{') && !raw.starts_with('[') {
+            return Ok(None);
+        }
+        raw
+    } else {
+        json_text.trim()
+    };
+    if json_text.is_empty() {
+        return Ok(None);
+    }
+
+    let value: Value =
+        serde_json::from_str(json_text).map_err(|error| format!("invalid json: {error}"))?;
+    if value.get("method").and_then(Value::as_str) != Some("app-server-event") {
+        return Ok(None);
+    }
+    let message = match value.pointer("/params/message").and_then(Value::as_object) {
+        Some(message) => message.clone(),
+        None => return Ok(None),
+    };
+    Ok(Some(message))
+}
+
 fn classify_method(method: &str) -> (&'static str, &'static str) {
     match method {
+        "platform/approvalRequested" => ("platform.approval.requested", "requested"),
+        "serverRequest/resolved" => ("platform.approval.resolved", "resolved"),
         "item/started" => ("codex.item.started", "started"),
         "item/completed" => ("codex.item.completed", "completed"),
         "turn/started" => ("codex.turn.started", "started"),
         "turn/completed" => ("codex.turn.completed", "completed"),
         "thread/started" => ("codex.thread.started", "started"),
+        "thread/archived" => ("codex.thread.archived", "archived"),
+        "thread/unarchived" => ("codex.thread.unarchived", "unarchived"),
+        "thread/name/updated" => ("codex.thread.name.updated", "updated"),
+        "thread/tokenUsage/updated" => ("codex.thread.token_usage.updated", "updated"),
         "thread/completed" => ("codex.thread.completed", "completed"),
         "thread/failed" => ("codex.thread.failed", "failed"),
         method
@@ -185,12 +431,52 @@ fn classify_method(method: &str) -> (&'static str, &'static str) {
 fn project_event_data(method: &str, params: &Map<String, Value>) -> Value {
     let mut data = Map::new();
     data.insert("sourceType".to_string(), Value::String(method.to_string()));
+    if method == "serverRequest/resolved" {
+        if let Some(request_id) = params
+            .get("requestId")
+            .and_then(Value::as_str)
+            .filter(|value| Uuid::parse_str(value).is_ok())
+        {
+            data.insert(
+                "requestId".to_string(),
+                Value::String(request_id.to_string()),
+            );
+        }
+    }
     for key in [
+        "approvalId",
+        "requestMethod",
+        "requestParams",
+        "error",
+        "message",
+        "additionalDetails",
+        "codexErrorInfo",
+        "failureReason",
+        "name",
+        "status",
+        "thread",
+        "turn",
         "delta",
         "summaryIndex",
         "contentIndex",
         "startedAtMs",
         "completedAtMs",
+        "startedAt",
+        "started_at",
+        "explanation",
+        "plan",
+        "steps",
+        "diff",
+        "threadName",
+        "tokenUsage",
+        "model",
+        "reasoningEffort",
+        "sandbox",
+        "approvalPolicy",
+        "goal",
+        "rateLimits",
+        "command",
+        "stdin",
     ] {
         if let Some(value) = params.get(key) {
             data.insert(key.to_string(), sanitize_value(value, key));
@@ -199,7 +485,7 @@ fn project_event_data(method: &str, params: &Map<String, Value>) -> Value {
     Value::Object(data)
 }
 
-fn project_item(item: &Map<String, Value>) -> Value {
+pub(crate) fn project_item(item: &Map<String, Value>) -> Value {
     let item_type = string_field(item, "type").unwrap_or_else(|| "unknown".to_string());
     let mut projected = Map::new();
     projected.insert("type".to_string(), Value::String(item_type.clone()));
@@ -280,6 +566,19 @@ fn sanitize_value(value: &Value, key: &str) -> Value {
 
 fn is_sensitive_key(key: &str) -> bool {
     let normalized = key.to_ascii_lowercase().replace(['_', '-'], "");
+    if matches!(
+        normalized.as_str(),
+        "tokenusage"
+            | "inputtokens"
+            | "cachedinputtokens"
+            | "cachewriteinputtokens"
+            | "outputtokens"
+            | "reasoningoutputtokens"
+            | "totaltokens"
+            | "modelcontextwindow"
+    ) {
+        return false;
+    }
     [
         "authorization",
         "cookie",
@@ -364,6 +663,64 @@ mod tests {
     }
 
     #[test]
+    fn keeps_webapp_runtime_state_and_error_details_with_secret_redaction() {
+        let status = br#"data: {"method":"app-server-event","params":{"message":{"method":"thread/status/changed","params":{"threadId":"thread-1","status":{"type":"active","activeFlags":["waiting"]}}}}}
+
+"#;
+        let status = project_frame(status).unwrap().unwrap();
+        assert_eq!(status.event_type, "codex.unknown");
+        assert_eq!(
+            status.payload["data"]["sourceType"],
+            "thread/status/changed"
+        );
+        assert_eq!(status.payload["data"]["status"]["type"], "active");
+
+        let error = br#"data: {"method":"app-server-event","params":{"message":{"method":"error","params":{"threadId":"thread-1","error":{"message":"stream disconnected","additionalDetails":"retrying sampling request 1/3","apiKey":"must-not-leak"}}}}}
+
+"#;
+        let error = project_frame(error).unwrap().unwrap();
+        assert_eq!(error.payload["data"]["sourceType"], "error");
+        assert_eq!(
+            error.payload["data"]["error"]["message"],
+            "stream disconnected"
+        );
+        assert_eq!(error.payload["data"]["error"]["apiKey"], "[redacted]");
+        assert!(!error.payload.to_string().contains("must-not-leak"));
+    }
+
+    #[test]
+    fn projects_platform_approvals_without_runtime_request_ids() {
+        let frame = br#"data: {"method":"app-server-event","params":{"message":{"method":"platform/approvalRequested","params":{"approvalId":"018f-id","threadId":"thread-1","turnId":"turn-1","itemId":"item-1"}}}}
+
+"#;
+        let event = project_frame(frame).unwrap().unwrap();
+        assert_eq!(event.event_type, "platform.approval.requested");
+        assert_eq!(event.turn_id.as_deref(), Some("turn-1"));
+        assert_eq!(event.item_id.as_deref(), Some("item-1"));
+        assert_eq!(event.payload["data"]["approvalId"], "018f-id");
+        assert!(!event.payload.to_string().contains("requestId"));
+    }
+
+    #[test]
+    fn projects_only_platform_ids_for_resolved_approvals() {
+        let approval_id = Uuid::now_v7();
+        let safe = format!(
+            "data: {{\"method\":\"app-server-event\",\"params\":{{\"message\":{{\"method\":\"serverRequest/resolved\",\"params\":{{\"threadId\":\"thread-1\",\"turnId\":\"turn-1\",\"itemId\":\"item-1\",\"requestId\":\"{approval_id}\"}}}}}}}}\n\n"
+        );
+        let event = project_frame(safe.as_bytes()).unwrap().unwrap();
+        assert_eq!(event.event_type, "platform.approval.resolved");
+        assert_eq!(event.turn_id.as_deref(), Some("turn-1"));
+        assert_eq!(event.item_id.as_deref(), Some("item-1"));
+        assert_eq!(event.payload["data"]["requestId"], approval_id.to_string());
+
+        let unsafe_frame = br#"data: {"method":"app-server-event","params":{"message":{"method":"serverRequest/resolved","params":{"threadId":"thread-1","requestId":77}}}}
+
+"#;
+        let event = project_frame(unsafe_frame).unwrap().unwrap();
+        assert!(event.payload["data"].get("requestId").is_none());
+    }
+
+    #[test]
     fn hides_absolute_server_paths_but_keeps_relative_workspace_paths() {
         assert_eq!(
             safe_path("/srv/workspaces/project/src/lib.rs"),
@@ -376,4 +733,36 @@ mod tests {
     fn ignores_sse_keepalive_frames() {
         assert_eq!(project_frame(b": keepalive\n\n").unwrap(), None);
     }
+
+    #[test]
+    fn projects_thread_archive_and_name_notifications() {
+        let archived = br#"data: {"method":"app-server-event","params":{"message":{"method":"thread/archived","params":{"threadId":"thread-1"}}}}
+
+"#;
+        let archived = project_frame(archived).unwrap().unwrap();
+        assert_eq!(archived.event_type, "codex.thread.archived");
+
+        let renamed = br#"data: {"method":"app-server-event","params":{"message":{"method":"thread/name/updated","params":{"threadId":"thread-1","threadName":"Durable name"}}}}
+
+"#;
+        let renamed = project_frame(renamed).unwrap().unwrap();
+        assert_eq!(renamed.event_type, "codex.thread.name.updated");
+        assert_eq!(renamed.payload["data"]["threadName"], "Durable name");
+    }
+
+    #[test]
+    fn projects_token_usage_without_treating_counts_as_credentials() {
+        let frame = br#"data: {"method":"app-server-event","params":{"message":{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-1","turnId":"turn-1","tokenUsage":{"total":{"totalTokens":150,"inputTokens":100,"cachedInputTokens":25,"outputTokens":50,"reasoningOutputTokens":0},"last":{"totalTokens":150,"inputTokens":100,"cachedInputTokens":25,"outputTokens":50,"reasoningOutputTokens":0},"modelContextWindow":200000}}}}}
+
+"#;
+        let event = project_frame(frame).unwrap().unwrap();
+        assert_eq!(event.event_type, "codex.thread.token_usage.updated");
+        assert_eq!(
+            event.payload["data"]["tokenUsage"]["total"]["totalTokens"],
+            150
+        );
+        assert!(!event.payload.to_string().contains("[redacted]"));
+    }
 }
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;

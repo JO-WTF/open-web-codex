@@ -26,6 +26,15 @@ describe("mergeWebThreadHistory", () => {
       [{ id: "optimistic", level: "user", text: "New request" }],
     )).toHaveLength(1);
   });
+
+  it("merges a live assistant projection with persisted history by runtime item id", () => {
+    expect(mergeWebThreadHistory(
+      [{ id: "item-8", level: "assistant", text: "Inspecting Shanghai boundaries" }],
+      [{ id: "item-8", level: "assistant", text: "Inspecting Shanghai boundaries", streaming: true }],
+    )).toEqual([
+      { id: "item-8", level: "assistant", text: "Inspecting Shanghai boundaries", streaming: true },
+    ]);
+  });
 });
 
 describe("appendTerminalInteractionOutput", () => {
@@ -109,6 +118,18 @@ describe("buildWebThreadHistory", () => {
       text: "Comparing the current layout with the target screenshot.",
     });
     expect(entry.reasoningSummary).toBeUndefined();
+  });
+
+  it("strips provider sentinels from restored assistant history", () => {
+    const result = buildWebThreadHistory({
+      turns: [{
+        items: [
+          { id: "assistant", type: "agentMessage", text: "<｜begin▁of▁sentence｜># Route unavailable" },
+        ],
+      }],
+    }, () => "fallback-id");
+
+    expect(result).toMatchObject([{ level: "assistant", text: "# Route unavailable" }]);
   });
 
   it("restores persisted dynamic tools as commands, diffs, and expandable tool cards", () => {
