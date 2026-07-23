@@ -1200,6 +1200,7 @@ fn add_selected_capability_roots(params: &mut Value, workspace_root: &Path) {
     let selected = selected_capability_roots_json(
         workspace_root,
         &process_cwd,
+        source_repo_root(),
         env_value.as_ref().map(std::ffi::OsString::as_os_str),
     );
     if !selected.is_empty() {
@@ -1210,9 +1211,10 @@ fn add_selected_capability_roots(params: &mut Value, workspace_root: &Path) {
 fn selected_capability_roots_json(
     workspace_root: &Path,
     process_cwd: &Path,
+    source_root: Option<&Path>,
     env_value: Option<&std::ffi::OsStr>,
 ) -> Vec<Value> {
-    discover_selected_capability_root_paths(workspace_root, process_cwd, env_value)
+    discover_selected_capability_root_paths(workspace_root, process_cwd, source_root, env_value)
         .into_iter()
         .map(|root| selected_capability_root_json(&root))
         .collect()
@@ -1221,6 +1223,7 @@ fn selected_capability_roots_json(
 fn discover_selected_capability_root_paths(
     workspace_root: &Path,
     process_cwd: &Path,
+    source_root: Option<&Path>,
     env_value: Option<&std::ffi::OsStr>,
 ) -> Vec<std::path::PathBuf> {
     let mut candidates = Vec::new();
@@ -1230,6 +1233,14 @@ fn discover_selected_capability_root_paths(
     candidates.extend(plugin_roots_below_tools(process_cwd));
     if workspace_root != process_cwd {
         candidates.extend(plugin_roots_below_tools(workspace_root));
+    }
+    if let Some(source_root) = source_root
+        .filter(|source_root| *source_root != process_cwd && *source_root != workspace_root)
+    {
+        candidates.extend(plugin_roots_below_tools(source_root));
+        if is_plugin_root(source_root) {
+            candidates.push(source_root.to_path_buf());
+        }
     }
     if is_plugin_root(process_cwd) {
         candidates.push(process_cwd.to_path_buf());
@@ -1246,6 +1257,12 @@ fn discover_selected_capability_root_paths(
     roots.sort();
     roots.dedup();
     roots
+}
+
+fn source_repo_root() -> Option<&'static Path> {
+    option_env!("CARGO_MANIFEST_DIR")
+        .map(Path::new)
+        .and_then(|manifest_dir| manifest_dir.ancestors().nth(4))
 }
 
 fn plugin_roots_below_tools(root: &Path) -> Vec<std::path::PathBuf> {
@@ -1462,6 +1479,7 @@ mod tests {
         let roots = discover_selected_capability_root_paths(
             &workspace,
             &process,
+            None,
             Some(explicit_plugin.as_os_str()),
         );
 
@@ -1477,6 +1495,23 @@ mod tests {
     }
 
     #[test]
+    fn discovers_source_tree_capability_roots_when_process_cwd_is_elsewhere() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let process = temp.path().join("other-cwd");
+        let workspace = temp.path().join("workspace");
+        let source = temp.path().join("source");
+        std::fs::create_dir_all(&process).expect("process root");
+        std::fs::create_dir_all(&workspace).expect("workspace root");
+        std::fs::create_dir_all(source.join("tools")).expect("source tools");
+        let source_plugin = create_plugin_root(&source.join("tools"), "maps-mcp");
+
+        let roots =
+            discover_selected_capability_root_paths(&workspace, &process, Some(&source), None);
+
+        assert_eq!(roots, vec![source_plugin.canonicalize().unwrap()]);
+    }
+
+    #[test]
     fn builds_selected_capability_root_payload_for_thread_start() {
         let temp = tempfile::tempdir().expect("tempdir");
         let process = temp.path().join("repo");
@@ -1485,7 +1520,7 @@ mod tests {
         std::fs::create_dir_all(workspace.join("tools")).expect("workspace tools");
         let plugin = create_plugin_root(&workspace.join("tools"), "maps-mcp");
 
-        let selected = selected_capability_roots_json(&workspace, &process, None);
+        let selected = selected_capability_roots_json(&workspace, &process, None, None);
 
         assert_eq!(selected[0]["id"], "local-maps-mcp");
         assert_eq!(
