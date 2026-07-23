@@ -35,7 +35,9 @@ this server is for local workspace use until those platform gates are complete.
 
 ## Install
 
-From this directory:
+No pre-created `.venv` is required for Codex plugin discovery. The checked-in
+`bin/maps-mcp-launcher` creates `.venv` on first start and installs this package in editable mode
+when dependencies are missing. For manual development from this directory you can still run:
 
 ```bash
 python3 -m venv .venv
@@ -54,10 +56,13 @@ or hand-edited Profile `config.toml` entries. In the Web platform, the native Pr
 selects local plugin roots discovered under the source tree or workspace `tools/` directories when it starts
 a new Thread; deployments may add extra absolute roots with `OPEN_WEB_CODEX_CAPABILITY_ROOTS`.
 
-The plugin MCP config starts `.venv/bin/python -m maps_mcp.server` with `cwd="."`; run the install
-steps above before asking Codex to load the plugin. The MCP client must advertise URL elicitation
-support. If the current browser surface cannot render the key request, the tool fails safely instead
-of requesting the key in a model-visible form.
+The plugin MCP config starts `./bin/maps-mcp-launcher` with `cwd="."`; the launcher resolves the
+plugin root, creates `.venv` when necessary, verifies `maps_mcp`/`mcp` imports, installs this package
+in editable mode when dependencies are missing, and then execs `python -m maps_mcp.server`. This
+avoids the `No such file or directory` startup failure seen when a selected plugin root has not been
+prepared manually. The MCP client must advertise URL elicitation support. If the current browser
+surface cannot render the key request, the tool fails safely instead of requesting the key in a
+model-visible form.
 
 ## Tests
 
