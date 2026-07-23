@@ -56,9 +56,10 @@
 
 这些是当前实现中仍需按边界复审或迁移的项；在完成前不得把它们宣传为完整能力：
 
-1. [ ] `tools/maps-mcp` 已改为 plugin/MCP 声明，但仍需要真实 Codex app-server
-   discovery smoke，验证 selected capability roots 能发现 `workspace_maps`、模型能看到
-   `create_map_card`，且第三方 Provider 能通过标准工具调用链使用它。
+1. [ ] `tools/maps-mcp` 已改为 plugin/MCP 声明，Profile Host adapter 会在新建
+   Thread 时把发现到的本地 plugin roots 作为 `selectedCapabilityRoots` 交给 Codex
+   Runtime；仍需要真实 Codex app-server discovery smoke，验证 `workspace_maps`、
+   `create_map_card` 和第三方 Provider 标准工具调用链端到端可用。
 2. [ ] map-card 仍是浏览器解析小型 marker 的 preview。Artifact-backed GeoJSON、生成
    card schema、平台 Artifact 权限、Mapbox/tiles renderer gate 和真实端到端 smoke 未完成。
 3. [ ] `apps/web/src/features/threads/hooks/useThreadMessaging.ts` 中 `/apps`、`/status`、

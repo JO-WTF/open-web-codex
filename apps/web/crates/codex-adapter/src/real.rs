@@ -94,6 +94,31 @@ impl RealCodexAdapter {
         Ok(root.to_string_lossy().to_string())
     }
 
+    fn thread_start_params(&self, workspace_root: &str) -> Value {
+        let mut params = json!({
+            "cwd": workspace_root,
+            "approvalPolicy": "on-request",
+        });
+        add_selected_capability_roots(&mut params, Path::new(workspace_root));
+        params
+    }
+
+    fn thread_resume_params(&self, thread_id: &str, workspace_root: &str) -> Value {
+        json!({
+            "threadId": thread_id,
+            "cwd": workspace_root,
+            "approvalPolicy": "on-request",
+        })
+    }
+
+    fn thread_fork_params(&self, thread_id: &str, target_root: &str) -> Value {
+        json!({
+            "threadId": thread_id,
+            "cwd": target_root,
+            "approvalPolicy": "on-request",
+        })
+    }
+
     async fn start_thread_in_workspace(
         &self,
         workspace: &AuthorizedWorkspace,
@@ -101,13 +126,7 @@ impl RealCodexAdapter {
         let workspace_root = self.authorized_root(workspace)?;
         let result = self
             .host
-            .request(
-                "thread/start",
-                json!({
-                    "cwd": &workspace_root,
-                    "approvalPolicy": "on-request",
-                }),
-            )
+            .request("thread/start", self.thread_start_params(&workspace_root))
             .await?;
         let thread_id = result
             .pointer("/thread/id")
@@ -145,11 +164,7 @@ impl RealCodexAdapter {
         self.host
             .request(
                 "thread/resume",
-                json!({
-                    "threadId": thread_id,
-                    "cwd": &workspace_root,
-                    "approvalPolicy": "on-request",
-                }),
+                self.thread_resume_params(thread_id, &workspace_root),
             )
             .await?;
         self.thread_workspaces
@@ -405,11 +420,7 @@ impl CodexAdapter for RealCodexAdapter {
             .host
             .request(
                 "thread/fork",
-                json!({
-                    "threadId": thread_id,
-                    "cwd": target_root,
-                    "approvalPolicy": "on-request",
-                }),
+                self.thread_fork_params(thread_id, &target_root),
             )
             .await?;
         let forked_thread_id = result
@@ -1178,6 +1189,116 @@ fn message_workspace_id(message: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
+const CAPABILITY_ROOTS_ENV: &str = "OPEN_WEB_CODEX_CAPABILITY_ROOTS";
+const WORKSPACE_ENVIRONMENT_ID: &str = "workspace";
+
+fn add_selected_capability_roots(params: &mut Value, workspace_root: &Path) {
+    let Ok(process_cwd) = std::env::current_dir() else {
+        return;
+    };
+    let env_value = std::env::var_os(CAPABILITY_ROOTS_ENV);
+    let selected = selected_capability_roots_json(
+        workspace_root,
+        &process_cwd,
+        env_value.as_ref().map(std::ffi::OsString::as_os_str),
+    );
+    if !selected.is_empty() {
+        params["selectedCapabilityRoots"] = Value::Array(selected);
+    }
+}
+
+fn selected_capability_roots_json(
+    workspace_root: &Path,
+    process_cwd: &Path,
+    env_value: Option<&std::ffi::OsStr>,
+) -> Vec<Value> {
+    discover_selected_capability_root_paths(workspace_root, process_cwd, env_value)
+        .into_iter()
+        .map(|root| selected_capability_root_json(&root))
+        .collect()
+}
+
+fn discover_selected_capability_root_paths(
+    workspace_root: &Path,
+    process_cwd: &Path,
+    env_value: Option<&std::ffi::OsStr>,
+) -> Vec<std::path::PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(value) = env_value {
+        candidates.extend(std::env::split_paths(value));
+    }
+    candidates.extend(plugin_roots_below_tools(process_cwd));
+    if workspace_root != process_cwd {
+        candidates.extend(plugin_roots_below_tools(workspace_root));
+    }
+    if is_plugin_root(process_cwd) {
+        candidates.push(process_cwd.to_path_buf());
+    }
+    if workspace_root != process_cwd && is_plugin_root(workspace_root) {
+        candidates.push(workspace_root.to_path_buf());
+    }
+
+    let mut roots = candidates
+        .into_iter()
+        .filter(|path| is_plugin_root(path))
+        .filter_map(|path| path.canonicalize().ok())
+        .collect::<Vec<_>>();
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+fn plugin_roots_below_tools(root: &Path) -> Vec<std::path::PathBuf> {
+    let tools = root.join("tools");
+    let Ok(entries) = std::fs::read_dir(tools) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| is_plugin_root(path))
+        .collect()
+}
+
+fn is_plugin_root(path: &Path) -> bool {
+    path.join(".codex-plugin").join("plugin.json").is_file()
+}
+
+fn selected_capability_root_json(root: &Path) -> Value {
+    json!({
+        "id": selected_capability_root_id(root),
+        "location": {
+            "type": "environment",
+            "environmentId": WORKSPACE_ENVIRONMENT_ID,
+            "path": root.to_string_lossy(),
+        },
+    })
+}
+
+fn selected_capability_root_id(root: &Path) -> String {
+    let slug = root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("capability")
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    format!(
+        "local-{}",
+        if slug.is_empty() { "capability" } else { &slug }
+    )
+}
+
 fn turn_matches(message: &Value, expected: Option<&str>) -> bool {
     expected.is_none_or(|expected| {
         message
@@ -1257,11 +1378,23 @@ fn app_server_event_frame(
 #[cfg(test)]
 mod tests {
     use super::{
-        app_server_event_frame, is_authorized_workspace_root, login_completion, message_thread_id,
-        turn_sandbox_policy,
+        app_server_event_frame, discover_selected_capability_root_paths,
+        is_authorized_workspace_root, login_completion, message_thread_id,
+        selected_capability_root_id, selected_capability_roots_json, turn_sandbox_policy,
     };
     use serde_json::{json, Value};
     use std::path::Path;
+
+    fn create_plugin_root(root: &Path, name: &str) -> std::path::PathBuf {
+        let plugin = root.join(name);
+        std::fs::create_dir_all(plugin.join(".codex-plugin")).expect("create plugin dir");
+        std::fs::write(
+            plugin.join(".codex-plugin").join("plugin.json"),
+            r#"{"name":"test-plugin","version":"0.1.0"}"#,
+        )
+        .expect("write plugin manifest");
+        plugin
+    }
 
     #[test]
     fn accepts_nested_runner_workspaces_without_prefix_confusion() {
@@ -1315,6 +1448,63 @@ mod tests {
         );
     }
 
+    #[test]
+    fn discovers_checked_in_and_workspace_capability_roots() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let process = temp.path().join("repo");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir_all(process.join("tools")).expect("process tools");
+        std::fs::create_dir_all(workspace.join("tools")).expect("workspace tools");
+        let repo_plugin = create_plugin_root(&process.join("tools"), "maps-mcp");
+        let workspace_plugin = create_plugin_root(&workspace.join("tools"), "custom-mcp");
+        let explicit_plugin = create_plugin_root(temp.path(), "explicit-mcp");
+
+        let roots = discover_selected_capability_root_paths(
+            &workspace,
+            &process,
+            Some(explicit_plugin.as_os_str()),
+        );
+
+        assert_eq!(roots, {
+            let mut expected = vec![
+                explicit_plugin.canonicalize().unwrap(),
+                repo_plugin.canonicalize().unwrap(),
+                workspace_plugin.canonicalize().unwrap(),
+            ];
+            expected.sort();
+            expected
+        });
+    }
+
+    #[test]
+    fn builds_selected_capability_root_payload_for_thread_start() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let process = temp.path().join("repo");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir_all(&process).expect("process root");
+        std::fs::create_dir_all(workspace.join("tools")).expect("workspace tools");
+        let plugin = create_plugin_root(&workspace.join("tools"), "maps-mcp");
+
+        let selected = selected_capability_roots_json(&workspace, &process, None);
+
+        assert_eq!(selected[0]["id"], "local-maps-mcp");
+        assert_eq!(
+            selected[0]["location"],
+            json!({
+                "type": "environment",
+                "environmentId": "workspace",
+                "path": plugin.canonicalize().unwrap().to_string_lossy(),
+            })
+        );
+    }
+
+    #[test]
+    fn selected_capability_root_ids_are_stable_slugs() {
+        assert_eq!(
+            selected_capability_root_id(Path::new("/tmp/Workspace Maps MCP")),
+            "local-workspace-maps-mcp"
+        );
+    }
     #[test]
     fn builds_workspace_write_turn_sandbox_by_default() {
         let policy = turn_sandbox_policy(Path::new("/runner/workspace"), false);

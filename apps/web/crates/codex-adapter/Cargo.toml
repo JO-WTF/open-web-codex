@@ -15,3 +15,6 @@ tokio = { workspace = true, features = ["sync"] }
 async-trait = "0.1"
 tracing = { workspace = true }
 base64 = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
