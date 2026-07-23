@@ -1,4 +1,5 @@
 import type { ConversationItem } from "../types";
+import { stripLeadingProviderSentinel } from "./providerText";
 import { parseCollabToolCallItem } from "./threadItems.collab";
 import { asNumber, asString } from "./threadItems.shared";
 
@@ -230,7 +231,7 @@ export function buildConversationItemFromThreadItem(
       id,
       kind: "message",
       role: "assistant",
-      text: asString(item.text),
+      text: stripLeadingProviderSentinel(asString(item.text)),
     };
   }
   if (type === "reasoning") {

@@ -1146,6 +1146,7 @@ dependencies = [
  "open-web-codex-profile-host",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
  "tokio",
  "tracing",

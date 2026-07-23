@@ -51,14 +51,24 @@ Environment:
   CODEX_MODE                         real (default) or fake
   CODEX_BIN                          Codex CLI binary used in real mode
   CODEX_HOME                         Persistent Profile home
+  OPEN_WEB_CODEX_IMPORT_CODEX_AUTH_FROM
+                                     Single-Profile transition: import
+                                     file-backed auth.json from this Codex home
+                                     when CODEX_HOME has no auth.json
   OPEN_WEB_CODEX_MASTER_KEY          Base64-encoded 32-byte key; a local key is
                                      generated under the data directory if absent
   OPEN_WEB_CODEX_RUNNER_ROOT         Private mirror/workspace root
   OPEN_WEB_CODEX_DATA_DIR            Runtime data and logs directory
+  OPEN_WEB_CODEX_MAPS_MCP_VENV       Shared maps MCP Python environment
+                                     (default: $OPEN_WEB_CODEX_DATA_DIR/tool-envs/maps-mcp)
+  OPEN_WEB_CODEX_SKIP_MAPS_MCP_SETUP 1 to skip startup preparation of maps MCP
   OPEN_WEB_CODEX_BIND_HOST           Bind host
   OPEN_WEB_CODEX_SERVER_PORT         HTTP/WebSocket port
   OPEN_WEB_CODEX_SKIP_BUILD          1 to reuse build outputs
   OPEN_WEB_CODEX_BUILD_PROFILE       debug (default) or release
+  OPEN_WEB_CODEX_DISABLE_CODEX_SANDBOX
+                                     1 to trust the surrounding container and
+                                     avoid nested Codex bubblewrap sandboxing
   DATABASE_URL                       PostgreSQL connection URL
   DATABASE_MAX_CONNECTIONS           PostgreSQL pool size
 EOF
@@ -199,7 +209,7 @@ fi
 case "$database_url" in postgres://*|postgresql://*) ;; *) error "database URL must use postgres:// or postgresql://"; exit 2 ;; esac
 
 mkdir -p "$run_dir" "$log_dir" "$profile_home" "$runner_root"
-
+maps_mcp_venv="${OPEN_WEB_CODEX_MAPS_MCP_VENV:-$data_dir/tool-envs/maps-mcp}"
 if [[ "$codex_mode" == "real" && -z "${OPEN_WEB_CODEX_MASTER_KEY:-}" ]]; then
   if [[ ! -f "$master_key_file" ]]; then
     command -v openssl >/dev/null 2>&1 || { error "openssl is required to create the local Secret Store key"; exit 1; }
@@ -246,6 +256,11 @@ if [[ "$codex_mode" == "real" ]]; then
     [[ -x "$code_mode_host_bin" ]] || { error "Codex code-mode host is missing: $code_mode_host_bin"; exit 1; }
     export CODEX_CODE_MODE_HOST_PATH="$code_mode_host_bin"
   fi
+  if [[ "${OPEN_WEB_CODEX_SKIP_MAPS_MCP_SETUP:-0}" != "1" ]]; then
+    OPEN_WEB_CODEX_MAPS_MCP_VENV="$maps_mcp_venv" \
+      OPEN_WEB_CODEX_LOG_DIR="$log_dir" \
+      "$script_dir/setup-maps-mcp-env.sh" >/dev/null
+  fi
 fi
 
 server_command=(
@@ -275,6 +290,8 @@ export OPEN_WEB_CODEX_WEB_DIST="$web_dist"
 if [[ "$codex_mode" == "real" ]]; then
   export CODEX_HOME="$profile_home"
   export CODEX_BIN="$codex_bin"
+  export OPEN_WEB_CODEX_MAPS_MCP_VENV="$maps_mcp_venv"
+  export MAPS_MCP_VENV="$maps_mcp_venv"
 else
   unset CODEX_HOME CODEX_BIN
 fi

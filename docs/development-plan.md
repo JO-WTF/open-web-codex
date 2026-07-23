@@ -5,10 +5,10 @@
 | 字段 | 内容 |
 | --- | --- |
 | 更新日期 | 2026-07-23 |
-| 当前分支 | `codex/sync-upstream-6e5a2d6b8d14` |
+| 当前分支 | `work` |
 | Codex 基线 | `openai/codex` `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9` |
 | 上游待同步 | 48；观测到的 official main 为 `9d823343026e600dab694e41865ed60613da31b6` |
-| 当前工作 | 以 1421 WebApp 为唯一前端，收紧其 Server 适配、恢复与运行时重启语义；当前部署按单用户 Profile 验证 |
+| 当前工作 | 以 1421 WebApp 为唯一前端，先收口单用户、单 Profile、单主 Profile Host 的真实 Runtime 闭环；多 Profile Router 暂缓到单 Profile smoke 稳定后 |
 
 当前 Codex 基线上的定制仍按 patch map 分类；official main 已前进 48 个提交，
 下一轮必须通过专用 `codex/sync-upstream-*` 分支同步。1421 WebApp 的 CSS、页面布局
@@ -31,6 +31,9 @@
 - 平台不得复制 Thread/Turn、Memory、multi-agent、Skills、Plugins 或 MCP Runtime。
 - 浏览器不得接收 raw JSON-RPC、app-server request ID、凭据、Profile/Workspace
   路径或不受限 Runtime payload。
+- 每个功能实现前必须写明 owning layer、输入输出、Capability gate 和验证方式；
+  若实现需要跨 WebApp、Platform app-server、Profile Host 和 Codex Runtime，必须拆成
+  独立 owner 的小变更，禁止用 WebApp 拦截或启动脚本写配置绕过 Runtime 发现链路。
 - 数据库、授权、协议或恢复变化必须覆盖拒绝、重试、并发或重启路径。
 - Canonical 文档只描述现态；历史决策只保留在 ADR/Git 历史中。
 
@@ -47,6 +50,88 @@
 | Git | `apps/web/crates/git-runtime` | 私有 mirror、每 Run workspace、status、选择性 Commit |
 | Security | `apps/web/crates/auth`、`approval-service`、`secret-store` | Session/RBAC、持久审批、加密凭据 |
 | Contract | `apps/web/crates/*contracts`、`apps/web/contracts` | 浏览器 DTO、生成协议、Manifest、fixtures |
+| Capability packages | `tools/**`、plugin/skill/MCP 包 | Runtime 可发现的工具、Skill、Plugin、MCP 声明；不得修改 Profile `config.toml` 或由 WebApp 伪造发现结果 |
+
+## 当前边界债务 TODO
+
+这些是当前实现中仍需按边界复审或迁移的项；在完成前不得把它们宣传为完整能力：
+
+1. [ ] `tools/maps-mcp` 已改为 plugin/MCP 声明，Profile Host adapter 会在新建
+   Thread 时把源码树或 workspace `tools/` 中发现到的本地 plugin roots 作为
+   `selectedCapabilityRoots` 交给 Codex Runtime；当前已有临时 `CODEX_HOME` 的
+   Codex CLI 第三方 Provider + MCP tool smoke；仍需要真实 Web/Profile Host
+   新建 Thread discovery smoke，验证 `workspace_maps`、`create_map_card` 和
+   selected capability roots 端到端可用。
+2. [ ] map-card 仍是浏览器解析小型 marker 的 preview。Artifact-backed GeoJSON、生成
+   card schema、平台 Artifact 权限、Mapbox/tiles renderer gate 和真实端到端 smoke 未完成。
+3. [ ] `apps/web/src/features/threads/hooks/useThreadMessaging.ts` 中 `/apps`、`/status`、
+   `/fast` 等本地命令需要逐项边界复审：纯 UI 状态命令可保留；凡是查询 Runtime
+   capability、工具、MCP、Skills、Plugins 或模型上下文的命令必须改为 Runtime/typed
+   app-server 合同，不能由 WebApp 生成模型式回答。
+4. [ ] `apps/web/src/services/tauri.ts` 仍是浏览器适配兼容层命名，需在不改变 1421 UI
+   行为的前提下拆名或迁移，避免继续暗示桌面/Tauri 边界存在。
+5. [ ] Capability Manifest 仍有手工 Alpha 子集；必须继续收敛到由 Codex 生成事实驱动，
+   Web feature policy 只能消费这些事实，不能自行声明 Runtime 支持。
+6. [ ] 旧根 App/Bridge 未引用源码和 browser shims 仍待裁剪，避免未来功能误接回旧桥。
+
+## 单 Profile 收口目标
+
+近期目标是先让一个真实用户使用一个持久 Profile 可靠跑通，再扩展多 Profile。
+该目标是部署范围收窄，不改变所有权边界：WebApp 不发现、不启动、不模拟
+MCP/Skills/Plugins；Server/Profile Host 只负责单 Profile 生命周期、授权 workspace
+和安全诊断；Codex Runtime 继续拥有 Thread/Turn、Provider、Skills、Plugins 和 MCP。
+
+单 Profile 运行合同：
+
+1. [ ] 启动期必须显式确定唯一 `profile_id`、`CODEX_HOME`、默认
+   `workspace_id`、Runner workspace root 和 source root；Real mode 缺少
+   `CODEX_HOME` 或 root 不一致时失败并给出可诊断错误。
+2. [-] Server health/profile status 返回安全摘要，能确认当前 Profile Home
+   identity、Profile Host state、Codex build/protocol/capability digest、Provider
+   登录/模型目录状态和 MCP startup diagnostics；浏览器仍不得接收本地路径、凭据或
+   raw JSON-RPC。当前已新增 Profile runtime status 安全摘要，包含 Profile Home
+   fingerprint、Runtime health、capability 计数和 MCP server status 投影；Provider
+   模型目录诊断已接入安全摘要，仍需用官方 OpenAI smoke 覆盖 file-backed auth 与远端刷新错误。
+3. [ ] `tools/maps-mcp` 只通过 plugin/MCP 声明进入 `selectedCapabilityRoots`；
+   不写入 Profile `config.toml`，不由 `run-local.sh` 注入，不由 WebApp 读取或拦截。
+4. [-] MCP startup failure 归类并投影为安全诊断：capability root 未选择、`.mcp.json`
+   缺失、`cwd` 解析错误、command 不存在、权限不足、Python/venv/pip 失败、
+   package import 失败、MCP initialize 失败或 timeout。当前 runtime status 已投影
+   Runtime 的 MCP server status；`workspace_maps` 依赖准备已移到平台启动期的共享
+   maps MCP venv，launcher 在对话期只做快速 import 校验并失败快返；launcher smoke
+   覆盖 initialize、tools/list 和 `create_map_card` 调用；下一步要把 Runtime
+   failureReason 归一到上述分类。
+5. [ ] 新建 Thread 的单 Profile smoke 验证 `selectedCapabilityRoots` 包含
+   `local-maps-mcp`，Runtime 能发现 `workspace_maps`，启动
+   `./bin/maps-mcp-launcher`，并调用 `create_map_card` 返回
+   `open-web-card map.v1` marker。
+6. [-] 第三方 Provider smoke 使用真实 Codex Runtime 工具调用链验证：模型可见
+   `workspace_maps` tool schema，Provider 返回标准 tool call，Runtime 执行 MCP tool，
+   assistant 输出 map-card marker，浏览器只渲染 marker。当前新增
+   `scripts/smoke-third-party-map-card-mcp.sh` 覆盖 Codex Runtime + Chat provider +
+   `workspace_maps.create_map_card`，浏览器渲染由 `scripts/smoke-map-card-rendering.sh`
+   覆盖。
+7. [-] 官方 OpenAI Provider smoke 验证 `codex login` 与 Web 使用同一个
+   `CODEX_HOME`，模型列表按当前 Profile/Provider 刷新且错误状态可诊断。当前新增
+   `scripts/smoke-openai-provider-models.sh` 验证 file-backed auth 和 `model/list` 非空。单
+   Profile 过渡期允许在 Profile 缺少 `auth.json` 时，从
+   `OPEN_WEB_CODEX_IMPORT_CODEX_AUTH_FROM` 或默认 `~/.codex` 导入 file-backed
+   登录态；多用户阶段必须替换为 Profile-scoped auth 设计。
+8. [ ] 单 Profile 可以串行或按实测限制运行多个 Thread/Run；每个 Run 仍使用独立
+   writable workspace，Thread resume/fork 只能使用已授权 workspace 映射。
+
+短期 smoke 命令：
+
+- `scripts/smoke-maps-mcp-launcher.sh`：验证 maps MCP launcher 可启动并能直接生成 `map.v1` marker。
+- `scripts/smoke-third-party-map-card-mcp.sh`：使用 `THIRD_PARTY_PROVIDER_*`/`DEEPSEEK_API_KEY`
+  等环境变量临时创建 `CODEX_HOME`，验证第三方 Chat provider 通过 Codex Runtime 调用
+  `workspace_maps.create_map_card`。
+- `scripts/smoke-openai-provider-models.sh`：导入 file-backed `auth.json` 到临时 Profile，
+  通过 app-server `modelProvider/list` 和 `model/list` 验证官方 Provider 模型目录非空。
+- `scripts/smoke-map-card-rendering.sh`：运行 reply-card parser、AssistantMessage 和 MapReplyCard
+  相关前端测试，验证浏览器隐藏 marker 并渲染 map-card。
+
+完成以上 smoke 后，再进入 M2 的按授权用户动态路由持久 Profile 和跨用户隔离矩阵。
 
 ## A. Codex 上游同步与定制收敛
 
@@ -111,8 +196,9 @@
 - [x] WebApp 的 workspace、Thread/Turn、消息、durable replay/live、
   approval/user input、Provider/model、MCP/rate limit、文件预览和 Git status
   已切到类型化 Server 资源；Project/Task/Run/Thread 使用单次 joined context
-  查询，文件、Git 与 MCP 始终跟随当前 Thread。真实 Codex/DeepSeek/MCP 纵向用例与核心浏览器
-  Thread 切换、历史恢复、运行态和文件预览回归通过。
+  查询，文件、Git 与 MCP 始终跟随当前 Thread。消息渲染已恢复 Runtime/Skills/MCP 输出的
+  `open-web-card map.v1` 与旧 `widget_type=map` 标记识别，可渲染小型内联地图预览；真实 Codex/DeepSeek/MCP
+  纵向用例与核心浏览器 Thread 切换、历史恢复、运行态和文件预览回归通过。
 - [x] 认证后的根入口和 1421 `/web` 都只加载 WebApp；旧 App/Bridge 源码仍保留
   但不进入生产构建，生产包不包含 `/api/rpc` 或 EventSource Gateway 调用。
 - [x] 平台服务同源提供生产 browser build；Vite 仅在开发时代理 HTTP/WS。
@@ -189,6 +275,8 @@
 6. [ ] 两用户并发的 Profile/Thread/Workspace/Event/Approval/Secret 系统性隔离矩阵。
 
 ### M3 Capability-gated Studio
+
+当前 map-card 只恢复对 Runtime/Skills/MCP 已输出标记的解析和小型内联预览；不再由 Web/Server 注入提示。Artifact-backed GeoJSON、生成合同、真实 smoke、Mapbox/瓦片渲染和权限下载仍属于后续门禁。
 
 1. [ ] MCP inventory/config/OAuth/elicitation。
 2. [ ] Plugins install/update/disable/uninstall 与来源策略。

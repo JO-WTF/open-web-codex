@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 from typing import Literal
 
@@ -26,6 +27,27 @@ TravelMode = Literal[
 class Point(BaseModel):
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
+
+
+class MapCardPoint(Point):
+    id: str | None = None
+    label: str | None = None
+    description: str | None = None
+    color: str | None = None
+
+
+class MapCardLine(BaseModel):
+    id: str | None = None
+    label: str | None = None
+    color: str | None = None
+    coordinates: list[Point] = Field(min_length=2, max_length=500)
+
+
+class MapCardPolygon(BaseModel):
+    id: str | None = None
+    label: str | None = None
+    color: str | None = None
+    coordinates: list[list[Point]] = Field(min_length=1, max_length=32)
 
 
 mcp = FastMCP(
@@ -67,6 +89,115 @@ async def _client(provider: Provider, ctx: Context[ServerSession, None]):
     if provider == "google":
         return GoogleMapsClient(api_key)
     return MapboxMapsClient(api_key)
+
+
+
+def _compact_json(value: dict[str, object]) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _map_card_marker(payload: dict[str, object]) -> str:
+    body = _compact_json(payload)
+    marker = f"```open-web-card map.v1\n{body}\n```"
+    if len(marker.encode("utf-8")) > 16 * 1024:
+        raise ValueError("map-card marker is too large; store large GeoJSON as an artifact/input_ref")
+    return marker
+
+
+def _point_payload(point: MapCardPoint | Point) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "latitude": point.latitude,
+        "longitude": point.longitude,
+    }
+    if isinstance(point, MapCardPoint):
+        for key in ("id", "label", "description", "color"):
+            value = getattr(point, key)
+            if value:
+                payload[key] = value
+    return payload
+
+
+@mcp.tool()
+async def create_map_card(
+    title: str,
+    intent: str = "visualization",
+    fallback_text: str | None = None,
+    summary: str | None = None,
+    input_ref: str | None = None,
+    artifact_id: str | None = None,
+    points: list[MapCardPoint] | None = None,
+    lines: list[MapCardLine] | None = None,
+    polygons: list[MapCardPolygon] | None = None,
+    geojson: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Create a compact open-web map-card marker for the final assistant answer.
+
+    Use this after geocoding, route, or distance tools when a map visualization helps.
+    Return `marker` verbatim in the final answer where the card should appear. Keep inline
+    geometry small; use `input_ref` or `artifact_id` for large GeoJSON.
+    """
+    clean_title = title.strip()
+    if not clean_title:
+        raise ValueError("title is required")
+
+    payload: dict[str, object] = {
+        "title": clean_title,
+        "intent": intent.strip() or "visualization",
+        "status": "ready" if any([points, lines, polygons, geojson]) else "loading",
+    }
+    if fallback_text and fallback_text.strip():
+        payload["fallback_text"] = fallback_text.strip()
+    if summary and summary.strip():
+        payload["summary"] = summary.strip()
+    if input_ref and input_ref.strip():
+        payload["input_ref"] = input_ref.strip()
+    if artifact_id and artifact_id.strip():
+        payload["artifact_id"] = artifact_id.strip()
+    if points:
+        payload["points"] = [_point_payload(point) for point in points]
+    if lines:
+        payload["lines"] = [
+            {
+                key: value
+                for key, value in {
+                    "id": line.id,
+                    "label": line.label,
+                    "color": line.color,
+                    "coordinates": [
+                        [point.longitude, point.latitude] for point in line.coordinates
+                    ],
+                }.items()
+                if value is not None
+            }
+            for line in lines
+        ]
+    if polygons:
+        payload["polygons"] = [
+            {
+                key: value
+                for key, value in {
+                    "id": polygon.id,
+                    "label": polygon.label,
+                    "color": polygon.color,
+                    "coordinates": [
+                        [[point.longitude, point.latitude] for point in ring]
+                        for ring in polygon.coordinates
+                    ],
+                }.items()
+                if value is not None
+            }
+            for polygon in polygons
+        ]
+    if geojson:
+        payload["geojson"] = geojson
+
+    marker = _map_card_marker(payload)
+    return {
+        "type": "open-web-card",
+        "kind": "map.v1",
+        "marker": marker,
+        "card": payload,
+    }
 
 
 def _point(point: Point) -> dict[str, float]:

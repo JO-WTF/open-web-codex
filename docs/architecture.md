@@ -65,6 +65,42 @@ The platform must recover model-visible history from Codex. Event projections
 are rebuildable UI/read models and never become a second Thread store, memory
 engine or agent scheduler.
 
+## Web / app-server / Codex server boundary contract
+
+All feature work must start by selecting the owning layer below. A change that
+cannot be placed in exactly one owner must be split until each part has a clear
+owner and contract.
+
+| Layer | Owns | Must not own |
+| --- | --- | --- |
+| WebApp / browser | Presentation state, input controls, optimistic UI, safe rendering of platform DTOs, accessibility, and browser-only fallbacks | MCP/Skills/Plugins discovery, tool catalogs, model-visible prompt injection, Thread/Turn semantics, filesystem authority, credentials, raw app-server JSON-RPC, or local Profile paths |
+| Platform app-server | Authentication, authorization, Profile/Runner lifecycle, Task/Run/Approval/Git persistence, Secret injection, audit, durable event projection, typed browser DTOs and capability gating | Model reasoning, context compaction, memory, tool execution policy, MCP/Skills/Plugins lifecycle, Provider transport internals, or untyped protocol passthrough to the browser |
+| Profile Host / adapter | Narrow, typed bridge from platform resources to Codex app-server requests and notifications; process-instance isolation; request-id mapping; safe event normalization | Product UI behavior, broad protocol rewriting, model/tool discovery emulation, or persistent state that belongs to Codex Profile or platform tables |
+| Codex app-server / Runtime | Thread/Turn lifecycle, model context, tools, MCP, Skills, Plugins, memory, multi-agent coordination, Provider model/transport behavior and generated protocol facts | Web sessions, organizations, browser DTOs, platform authorization, Git workspace provisioning, deployment scripts, or Profile ownership policy |
+| Plugin / Skill / MCP package | Model-visible capability instructions and tool/server declarations consumed by Codex discovery | Web-side command interception, platform config mutation, or hidden Profile `config.toml` edits |
+
+Planning and code review must reject these anti-patterns:
+
+1. A browser command or composer shortcut that answers a Runtime capability
+   question without sending the user's intent through Codex.
+2. A server route or startup script that injects MCP/Skill/Plugin configuration
+   directly into a Profile as a substitute for Codex discovery or a typed
+   platform lifecycle API.
+3. A Web/server prompt injection workaround for provider-neutral capabilities
+   when the capability can be expressed by Runtime tools, Skills, Plugins, MCP
+   or a generated app-server contract.
+4. Browser exposure of raw request ids, raw JSON-RPC, local paths, credentials,
+   unbounded protocol payloads or unvetted tool catalogs.
+5. Product-specific changes spread through high-churn Codex files when the same
+   behavior can live in `apps/web`, a plugin, a skill, an MCP server or a narrow
+   generated protocol seam.
+
+Every feature proposal must include a short boundary note naming the owner,
+inputs, outputs, capability gate and tests. If the owner is Codex, follow the
+upstream customization workflow before editing. If the owner is Web/platform,
+prove that the implementation consumes typed contracts rather than recreating
+Runtime behavior.
+
 ## Multi-user isolation model
 
 The authorization chain is:
@@ -90,6 +126,35 @@ session -> user -> organization membership -> project permission
 - Cache, subscription, model and secret keys include their user/Profile scope.
   Cross-user and guessed-ID denial tests are release gates.
 
+### Single-Profile convergence mode
+
+The current near-term runtime target is a deliberately narrowed deployment mode:
+one authenticated human user, one persistent Profile Home, one primary Profile
+Host process and one selected workspace context per active Run. This is a
+deployment constraint, not a boundary exception. The same ownership table above
+continues to apply:
+
+- The platform starts and monitors the single Profile Host, injects only
+  authorized environment and secret references, and records safe diagnostics.
+- The selected `CODEX_HOME`, Profile identity, workspace root, source root and
+  capability roots are fixed at startup or by typed platform lifecycle state;
+  browser input never changes server-local paths.
+- To unblock the single Profile smoke, the platform may copy a file-backed
+  `auth.json` from an already logged-in local Codex home into an empty Profile
+  home before starting the Profile Host. This is a transitional single-user
+  import path only; it must not become the multi-user credential model.
+- Skills, Plugins and MCP are still discovered and executed by Codex Runtime.
+  The WebApp does not scan `.mcp.json`, run plugin launchers, answer MCP
+  inventory questions locally or write hidden Profile configuration.
+- Local capability packages such as `tools/maps-mcp` are made available as
+  selected capability roots. Their launchers own package bootstrap, dependency
+  checks and MCP server startup; Profile Host only reports safe startup status
+  and categorized failures.
+- This mode must pass single Profile smoke tests for Provider login/model
+  discovery, Runtime MCP discovery, MCP startup, third-party Provider tool calls,
+  map-card rendering and Thread resume before multi-Profile routing work
+  resumes.
+
 ## Runtime bridge
 
 Codex produces a build-specific contract bundle containing:
@@ -114,31 +179,31 @@ API or crash the event stream.
 
 ### Rich reply cards and map visualization
 
-Structured reply cards are a Web-platform projection layered on top of Codex
-messages. Codex remains responsible for natural-language reasoning and tool use;
-the platform owns card storage, authorization, artifact retrieval, rendering
-policy and browser DTOs. A model-visible answer may contain a small, stable card
-marker such as a fenced block or typed placeholder, but large visualization data
-travels as a platform Artifact reference rather than as inline model text.
+Structured reply cards are browser projections of Codex message content and
+platform artifacts. Codex remains responsible for deciding when to use tools and
+what to say. Skills, Plugins and MCP servers may provide model-visible
+instructions or tools that emit a compact, stable marker such as
+`open-web-card map.v1`; the Web platform may parse and render that marker, but
+it must not make the model "discover" a capability by intercepting composer
+text or injecting ad-hoc prompts.
 
-Map cards follow this flow:
+Current map-card support follows this checked-in preview flow:
 
-1. Prompt guidance and platform post-processing identify geographic intents such
-   as coordinates, locations, routes, distances, boundaries and geospatial data
-   visualization.
-2. A server-side card builder validates or creates GeoJSON with style metadata,
-   stores the payload as an authorized Artifact and emits a compact card DTO in
-   the Task event stream.
-3. The browser renderer resolves only authorized platform Artifact URLs, parses
-   the card schema, renders points/lines/polygons with Mapbox GL and offers
-   inline and full-screen views.
-4. Oversized or invalid GeoJSON produces a safe error card; raw local paths,
+1. Runtime/Skills/MCP may emit a small `open-web-card map.v1` marker or legacy
+   map widget marker in assistant text.
+2. The browser parser recognizes the marker, hides the raw fenced block and
+   renders a safe inline preview from bounded inline data.
+3. The platform may later add an Artifact-backed DTO and generated card schema;
+   until that exists, large GeoJSON, Mapbox/tiles, permissioned downloads and
+   server-side card storage remain disabled gates.
+4. Oversized or invalid data produces safe fallback rendering; raw local paths,
    credentials, app-server request IDs and unbounded protocol payloads never
    reach the browser.
 
-This feature should not broaden the Codex subtree. Runtime changes are limited
-to a narrow generated protocol seam only if the official app-server cannot carry
-card markers or artifact references through existing message/event surfaces.
+This feature must not broaden the Codex subtree or the Web platform into a tool
+runtime. Runtime changes are limited to a narrow generated protocol seam only if
+the official app-server cannot carry card markers or artifact references through
+existing message/event surfaces.
 
 ## Primary runtime flows
 

@@ -14,7 +14,9 @@ use open_web_codex_platform_contracts::{
     ProfileProjection,
 };
 use open_web_codex_platform_store::AppState;
-use serde_json::{Map, Value};
+use open_web_codex_provider_service::secured::{AuthorizedProviderOperations, ProviderActor};
+use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -357,6 +359,129 @@ pub async fn apps(
     .await
 }
 
+pub async fn runtime_status(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
+    Extension(providers): Extension<Arc<dyn AuthorizedProviderOperations>>,
+    Extension(profile): Extension<RuntimeProfileBinding>,
+) -> ApiResult<ProfileProjection> {
+    authorize_profile(&state, &auth, &profile).await?;
+
+    let runtime = match adapter.health().await {
+        Ok(status) => json!({
+            "ok": status.ok,
+            "name": status.name,
+            "version": status.version,
+        }),
+        Err(_) => json!({
+            "ok": false,
+            "error": "runtime_health_unavailable",
+        }),
+    };
+    let capabilities = profile.capabilities.get().await.map(|record| {
+        json!({
+            "serverBuild": record.server_build,
+            "protocolVersion": record.protocol_version,
+            "capabilityCount": record
+                .manifest
+                .get("capabilities")
+                .and_then(Value::as_array)
+                .map_or(0, Vec::len),
+        })
+    });
+    let mcp_servers = match adapter
+        .query_profile(ProfileQuery::McpServers {
+            cursor: None,
+            limit: Some(100),
+            thread_id: None,
+        })
+        .await
+    {
+        Ok(value) => json!({
+            "ok": true,
+            "data": sanitize_projection(value, None),
+        }),
+        Err(_) => json!({
+            "ok": false,
+            "error": "mcp_status_unavailable",
+        }),
+    };
+    let provider_models = provider_model_diagnostics(&auth, providers).await;
+
+    Ok(Json(ProfileProjection {
+        data: json!({
+            "profile": single_profile_summary(&profile),
+            "runtime": runtime,
+            "capabilities": capabilities,
+            "mcpServers": mcp_servers,
+            "providerModels": provider_models,
+        }),
+    }))
+}
+
+async fn provider_model_diagnostics(
+    auth: &AuthenticatedUser,
+    providers: Arc<dyn AuthorizedProviderOperations>,
+) -> Value {
+    match providers
+        .list(ProviderActor {
+            user_id: auth.user_id,
+            organization_id: auth.organization_id,
+        })
+        .await
+    {
+        Ok(catalog) => {
+            let current = catalog
+                .data
+                .iter()
+                .find(|provider| provider.id == catalog.current_provider_id);
+            json!({
+                "ok": true,
+                "currentProviderId": catalog.current_provider_id,
+                "providerCount": catalog.data.len(),
+                "current": current.map(|provider| json!({
+                    "id": provider.id,
+                    "name": provider.name,
+                    "wireApi": provider.wire_api,
+                    "kind": provider.kind,
+                    "modelCount": provider.model_count,
+                    "visibleModelCount": provider
+                        .models
+                        .iter()
+                        .filter(|model| model.show_in_picker)
+                        .count(),
+                    "canFetchModels": provider.can_fetch_models,
+                    "hasEnvKey": provider.env_key.is_some(),
+                })),
+                "providers": catalog
+                    .data
+                    .iter()
+                    .map(|provider| json!({
+                        "id": provider.id,
+                        "name": provider.name,
+                        "wireApi": provider.wire_api,
+                        "kind": provider.kind,
+                        "isCurrent": provider.is_current,
+                        "modelCount": provider.model_count,
+                        "visibleModelCount": provider
+                            .models
+                            .iter()
+                            .filter(|model| model.show_in_picker)
+                            .count(),
+                        "canFetchModels": provider.can_fetch_models,
+                        "hasEnvKey": provider.env_key.is_some(),
+                    }))
+                    .collect::<Vec<_>>(),
+            })
+        }
+        Err(_) => json!({
+            "ok": false,
+            "error": "provider_model_status_unavailable",
+        }),
+    }
+}
+
 pub async fn mcp_servers(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
@@ -377,6 +502,21 @@ pub async fn mcp_servers(
         },
     )
     .await
+}
+
+fn single_profile_summary(profile: &RuntimeProfileBinding) -> Value {
+    let codex_home_fingerprint = profile.codex_home.as_deref().map(|path| {
+        let mut hasher = Sha256::new();
+        hasher.update(path.to_string_lossy().as_bytes());
+        let digest = hasher.finalize();
+        format!("{digest:x}")[..16].to_string()
+    });
+    json!({
+        "runtimeKey": profile.runtime_key,
+        "name": profile.name,
+        "hasCodexHome": profile.codex_home.is_some(),
+        "codexHomeFingerprint": codex_home_fingerprint,
+    })
 }
 
 pub async fn experimental_features(
@@ -568,9 +708,14 @@ fn database_error(_error: sqlx::Error) -> (StatusCode, Json<PlatformError>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_usage_snapshot, sanitize_projection, UsageBreakdown};
+    use super::{
+        build_usage_snapshot, sanitize_projection, single_profile_summary, UsageBreakdown,
+    };
+    use crate::routes::{RuntimeCapabilityState, RuntimeProfileBinding};
     use serde_json::json;
     use std::collections::BTreeMap;
+    use std::path::PathBuf;
+    use std::sync::Arc;
 
     #[test]
     fn profile_projection_removes_secrets_and_server_paths() {
@@ -589,6 +734,24 @@ mod tests {
         assert!(!text.contains("/srv/profiles"));
         assert!(!text.contains("secret"));
         assert_eq!(safe["data"][0]["path"], "profile://review");
+    }
+
+    #[test]
+    fn single_profile_summary_fingerprints_without_exposing_home_path() {
+        let profile = RuntimeProfileBinding {
+            runtime_key: "default-profile".to_string(),
+            name: "Default".to_string(),
+            codex_home: Some(Arc::new(PathBuf::from("/srv/private/codex-home"))),
+            capabilities: RuntimeCapabilityState::default(),
+        };
+
+        let summary = single_profile_summary(&profile);
+        let text = serde_json::to_string(&summary).unwrap();
+
+        assert_eq!(summary["runtimeKey"], "default-profile");
+        assert_eq!(summary["hasCodexHome"], true);
+        assert!(summary["codexHomeFingerprint"].as_str().is_some());
+        assert!(!text.contains("/srv/private/codex-home"));
     }
 
     #[test]
