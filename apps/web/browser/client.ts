@@ -668,6 +668,11 @@ export class PlatformClient {
     return this.profileList("apps", runId, cursor, limit);
   }
 
+  profileRuntimeStatus() {
+    return this.request<{ data: Record<string, unknown> }>("/api/profile/runtime-status")
+      .then((response) => response.data);
+  }
+
   profileMcpServers(runId: string, cursor?: string | null, limit?: number | null) {
     return this.profileList("mcp-servers", runId, cursor, limit);
   }

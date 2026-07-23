@@ -85,10 +85,12 @@ MCP/Skills/Plugins；Server/Profile Host 只负责单 Profile 生命周期、授
 1. [ ] 启动期必须显式确定唯一 `profile_id`、`CODEX_HOME`、默认
    `workspace_id`、Runner workspace root 和 source root；Real mode 缺少
    `CODEX_HOME` 或 root 不一致时失败并给出可诊断错误。
-2. [ ] Server health/profile status 返回安全摘要，能确认当前 Profile Home
+2. [-] Server health/profile status 返回安全摘要，能确认当前 Profile Home
    identity、Profile Host state、Codex build/protocol/capability digest、Provider
    登录/模型目录状态和 MCP startup diagnostics；浏览器仍不得接收本地路径、凭据或
-   raw JSON-RPC。
+   raw JSON-RPC。当前已新增 Profile runtime status 安全摘要，包含 Profile Home
+   fingerprint、Runtime health、capability 计数和 MCP server status 投影；Provider
+   模型目录诊断仍需接入。
 3. [ ] `tools/maps-mcp` 只通过 plugin/MCP 声明进入 `selectedCapabilityRoots`；
    不写入 Profile `config.toml`，不由 `run-local.sh` 注入，不由 WebApp 读取或拦截。
 4. [ ] MCP startup failure 归类并投影为安全诊断：capability root 未选择、`.mcp.json`
