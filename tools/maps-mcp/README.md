@@ -37,7 +37,10 @@ this server is for local workspace use until those platform gates are complete.
 
 No pre-created `.venv` is required for Codex plugin discovery. The checked-in
 `bin/maps-mcp-launcher` creates `.venv` on first start and installs this package in editable mode
-when dependencies are missing. For manual development from this directory you can still run:
+when dependencies are missing. The plugin config gives the first MCP handshake a longer startup
+window because a cold environment may need to create the virtualenv and download `mcp`/`pydantic`
+dependencies before the server can send its first JSON-RPC frame. For manual development from this
+directory you can still run:
 
 ```bash
 python3 -m venv .venv
@@ -58,11 +61,12 @@ a new Thread; deployments may add extra absolute roots with `OPEN_WEB_CODEX_CAPA
 
 The plugin MCP config starts `./bin/maps-mcp-launcher` with `cwd="."`; the launcher resolves the
 plugin root, creates `.venv` when necessary, verifies `maps_mcp`/`mcp` imports, installs this package
-in editable mode when dependencies are missing, and then execs `python -m maps_mcp.server`. This
-avoids the `No such file or directory` startup failure seen when a selected plugin root has not been
-prepared manually. The MCP client must advertise URL elicitation support. If the current browser
-surface cannot render the key request, the tool fails safely instead of requesting the key in a
-model-visible form.
+in editable mode when dependencies are missing, keeps dependency installation logs on stderr so MCP
+stdio stdout remains JSON-RPC-only, and then execs `python -m maps_mcp.server`. This avoids the
+`No such file or directory` startup failure seen when a selected plugin root has not been prepared
+manually and avoids handshake timeouts caused by non-protocol stdout during first-start setup. The
+MCP client must advertise URL elicitation support. If the current browser surface cannot render the
+key request, the tool fails safely instead of requesting the key in a model-visible form.
 
 ## Tests
 

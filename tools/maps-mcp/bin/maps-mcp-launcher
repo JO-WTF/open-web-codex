@@ -23,6 +23,9 @@ PY
   then
     return 0
   fi
+  # MCP stdio uses stdout for JSON-RPC frames. Keep first-start dependency
+  # installation logs off stdout; otherwise the MCP client can wait for a
+  # handshake until timeout after seeing non-protocol output.
   "$python_bin" -m pip install --disable-pip-version-check -e "$root_dir" >&2
 }
 

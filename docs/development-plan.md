@@ -97,7 +97,9 @@ MCP/Skills/Plugins；Server/Profile Host 只负责单 Profile 生命周期、授
 4. [-] MCP startup failure 归类并投影为安全诊断：capability root 未选择、`.mcp.json`
    缺失、`cwd` 解析错误、command 不存在、权限不足、Python/venv/pip 失败、
    package import 失败、MCP initialize 失败或 timeout。当前 runtime status 已投影
-   Runtime 的 MCP server status；下一步要把 Runtime failureReason 归一到上述分类。
+   Runtime 的 MCP server status；`workspace_maps` plugin config 已把 cold-start
+   handshake timeout 调整为 300 秒，并用 launcher smoke 覆盖 initialize、tools/list
+   和 `create_map_card` 调用；下一步要把 Runtime failureReason 归一到上述分类。
 5. [ ] 新建 Thread 的单 Profile smoke 验证 `selectedCapabilityRoots` 包含
    `local-maps-mcp`，Runtime 能发现 `workspace_maps`，启动
    `./bin/maps-mcp-launcher`，并调用 `create_map_card` 返回
