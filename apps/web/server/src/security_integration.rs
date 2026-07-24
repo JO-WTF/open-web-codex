@@ -261,6 +261,53 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     .await
     .unwrap();
 
+    sqlx::query(
+        "INSERT INTO run_events (
+            run_id, event_type, projection_version, thread_id, turn_id, item_id, payload
+         ) VALUES (
+            $1, 'codex.item.completed', 1, 'approval-thread',
+            'turn-map-producer', 'item-inline-map', '{}'::jsonb
+         )",
+    )
+    .bind(first_run_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO inline_visualization_artifacts (
+            organization_id, run_id, thread_id, producer_turn_id, producer_item_id,
+            artifact_ref, renderer_kind, renderer_payload
+         ) VALUES (
+            $1, $2, 'approval-thread', 'turn-map-producer', 'item-inline-map',
+            'map-cross-turn', 'map.v2', $3
+         )",
+    )
+    .bind(first_organization_id)
+    .bind(first_run_id)
+    .bind(json!({
+        "type": "card",
+        "kind": "map.v2",
+        "id": "map-cross-turn",
+        "title": "Cross-turn map",
+        "intent": "test",
+        "status": "ready",
+        "viewport": {"mode": "fit"},
+        "sources": [],
+        "layers": []
+    }))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let cross_turn_artifacts = crate::event_projection::resolve_inline_artifacts(
+        &pool,
+        first_run_id,
+        "Before\n\n::codex-inline-vis{artifact=\"map-cross-turn\"}\n\nAfter",
+    )
+    .await
+    .unwrap();
+    assert_eq!(cross_turn_artifacts.len(), 1);
+    assert_eq!(cross_turn_artifacts[0]["ref"], "map-cross-turn");
+
     let artifact = call(
         &app,
         authenticated(

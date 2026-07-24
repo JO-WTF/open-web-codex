@@ -5,7 +5,6 @@ use sqlx::Row;
 use uuid::Uuid;
 
 const PROJECTION_VERSION: i16 = 1;
-const MAPS_MCP_SERVER: &str = "map_utils";
 
 #[derive(Debug, PartialEq)]
 struct ProjectedEvent {
@@ -15,6 +14,7 @@ struct ProjectedEvent {
     item_id: Option<String>,
     payload: Value,
     reply_artifacts: Vec<ReplyArtifactCandidate>,
+    inline_artifact: Option<InlineVisualizationArtifactCandidate>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -22,6 +22,13 @@ struct ReplyArtifactCandidate {
     uri: String,
     mime_type: Option<String>,
     expected_size: Option<i64>,
+}
+
+#[derive(Debug, PartialEq)]
+struct InlineVisualizationArtifactCandidate {
+    artifact_ref: String,
+    renderer_kind: String,
+    renderer_payload: Value,
 }
 
 pub struct LiveProjection {
@@ -56,48 +63,47 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
     let run_id: Uuid = run.get("id");
     let organization_id: Uuid = run.get("organization_id");
 
-    sqlx::query("SAVEPOINT reply_card_projection")
+    sqlx::query("SAVEPOINT artifact_projection")
         .execute(&mut *transaction)
         .await
-        .map_err(|error| format!("reply card projection savepoint error: {error}"))?;
-    let reply_card_result =
-        match register_reply_artifacts(&mut transaction, &event, run_id, organization_id).await {
-            Ok(()) => {
-                resolve_reply_card_refs_in_transaction(&mut transaction, run_id, &mut event.payload)
-                    .await
-            }
-            Err(error) => Err(error),
-        };
-    match reply_card_result {
+        .map_err(|error| format!("Artifact projection savepoint error: {error}"))?;
+    let artifact_result = async {
+        register_reply_artifacts(&mut transaction, &event, run_id, organization_id).await?;
+        register_inline_visualization_artifact(&mut transaction, &event, run_id, organization_id)
+            .await?;
+        resolve_inline_artifacts_in_transaction(&mut transaction, run_id, &mut event.payload).await
+    }
+    .await;
+    match artifact_result {
         Ok(()) => {
-            sqlx::query("RELEASE SAVEPOINT reply_card_projection")
+            sqlx::query("RELEASE SAVEPOINT artifact_projection")
                 .execute(&mut *transaction)
                 .await
-                .map_err(|error| format!("reply card projection release error: {error}"))?;
+                .map_err(|error| format!("Artifact projection release error: {error}"))?;
         }
         Err(error) => {
-            sqlx::query("ROLLBACK TO SAVEPOINT reply_card_projection")
+            sqlx::query("ROLLBACK TO SAVEPOINT artifact_projection")
                 .execute(&mut *transaction)
                 .await
                 .map_err(|rollback_error| {
-                    format!("reply card projection rollback error: {rollback_error}")
+                    format!("Artifact projection rollback error: {rollback_error}")
                 })?;
-            sqlx::query("RELEASE SAVEPOINT reply_card_projection")
+            sqlx::query("RELEASE SAVEPOINT artifact_projection")
                 .execute(&mut *transaction)
                 .await
                 .map_err(|release_error| {
-                    format!("reply card projection release error: {release_error}")
+                    format!("Artifact projection release error: {release_error}")
                 })?;
             event
                 .payload
                 .pointer_mut("/data")
                 .and_then(Value::as_object_mut)
-                .map(|data| data.remove("replyCard"));
+                .map(|data| data.remove("inlineArtifacts"));
             tracing::warn!(
                 error = %error,
                 run_id = %run_id,
                 item_id = event.item_id.as_deref().unwrap_or_default(),
-                "reply card projection failed; preserving the Runtime item lifecycle"
+                "Artifact projection failed; preserving the Runtime item lifecycle"
             );
         }
     }
@@ -405,6 +411,7 @@ fn project_frame(data: &[u8]) -> Result<Option<ProjectedEvent>, String> {
         .into_iter()
         .flat_map(reply_artifact_candidates)
         .collect();
+    let inline_artifact = item.and_then(project_inline_visualization_artifact);
     let data = if let Some(item) = item {
         project_item(item)
     } else {
@@ -427,6 +434,7 @@ fn project_frame(data: &[u8]) -> Result<Option<ProjectedEvent>, String> {
         item_id,
         payload,
         reply_artifacts,
+        inline_artifact,
     }))
 }
 
@@ -505,6 +513,7 @@ fn project_event_data(method: &str, params: &Map<String, Value>) -> Value {
     }
     for key in [
         "approvalId",
+        "approvalStatus",
         "requestMethod",
         "requestParams",
         "error",
@@ -607,36 +616,69 @@ pub(crate) fn project_item(item: &Map<String, Value>) -> Value {
         if let Some(result) = projected.get_mut("result") {
             redact_mcp_resource_metadata(result);
         }
-        if let Some(reply_card) = project_mcp_reply_card(item) {
-            projected.insert("replyCard".to_string(), reply_card);
-        }
     }
     Value::Object(projected)
 }
 
-fn project_mcp_reply_card(item: &Map<String, Value>) -> Option<Value> {
+fn project_inline_visualization_artifact(
+    item: &Map<String, Value>,
+) -> Option<InlineVisualizationArtifactCandidate> {
     let structured = item
         .get("result")?
         .as_object()?
         .get("structuredContent")?
         .as_object()?;
-    if structured.get("type")?.as_str()? != "open-web-card"
-        || structured.get("kind")?.as_str()? != "map.v2"
+    if structured.get("type")?.as_str()? != "open-web-artifact"
+        || structured.get("kind")?.as_str()? != "inline-visualization.v1"
+        || structured
+            .keys()
+            .any(|key| !matches!(key.as_str(), "type" | "kind" | "artifact" | "embed"))
     {
         return None;
     }
-    if structured
+    let artifact = structured.get("artifact")?.as_object()?;
+    if artifact
         .keys()
-        .any(|key| !matches!(key.as_str(), "type" | "kind" | "card"))
+        .any(|key| !matches!(key.as_str(), "ref" | "renderer"))
     {
         return None;
     }
-    let card = structured.get("card")?.as_object()?;
-    Some(json!({
-        "type": "open-web-card",
-        "kind": "map.v2",
-        "card": project_map_card(card)?,
-    }))
+    let artifact_ref = artifact.get("ref")?.as_str()?.trim();
+    if !valid_card_identifier(artifact_ref) {
+        return None;
+    }
+    let renderer = artifact.get("renderer")?.as_object()?;
+    if renderer
+        .keys()
+        .any(|key| !matches!(key.as_str(), "kind" | "payload"))
+    {
+        return None;
+    }
+    let renderer_kind = renderer.get("kind")?.as_str()?.trim();
+    let renderer_payload =
+        project_inline_renderer(renderer_kind, renderer.get("payload")?.as_object()?)?;
+    let embed = structured.get("embed")?.as_object()?;
+    if embed
+        .keys()
+        .any(|key| !matches!(key.as_str(), "syntax" | "code"))
+        || embed.get("syntax")?.as_str()? != "codex-inline-vis.artifact.v1"
+        || embed.get("code")?.as_str()?
+            != format!("::codex-inline-vis{{artifact=\"{artifact_ref}\"}}")
+    {
+        return None;
+    }
+    Some(InlineVisualizationArtifactCandidate {
+        artifact_ref: artifact_ref.to_string(),
+        renderer_kind: renderer_kind.to_string(),
+        renderer_payload,
+    })
+}
+
+fn project_inline_renderer(kind: &str, payload: &Map<String, Value>) -> Option<Value> {
+    match kind {
+        "map.v2" => project_map_card(payload),
+        _ => None,
+    }
 }
 
 fn project_map_card(card: &Map<String, Value>) -> Option<Value> {
@@ -807,7 +849,7 @@ fn project_map_sources(value: &Value) -> Option<Vec<Value>> {
                         return None;
                     }
                     let server = nonempty_string(data, "server")?;
-                    if server != MAPS_MCP_SERVER {
+                    if !valid_card_identifier(&server) || server.starts_with("mcp__") {
                         return None;
                     }
                     let uri = nonempty_string(data, "uri")?;
@@ -855,7 +897,14 @@ fn project_map_layers(value: &Value) -> Option<Vec<Value>> {
         .iter()
         .map(|layer| {
             let layer = layer.as_object()?;
-            const FIELDS: &[&str] = &["id", "source", "geometry", "label_property", "style"];
+            const FIELDS: &[&str] = &[
+                "id",
+                "source",
+                "geometry",
+                "label_property",
+                "hover",
+                "style",
+            ];
             if layer.keys().any(|key| !FIELDS.contains(&key.as_str())) {
                 return None;
             }
@@ -877,7 +926,13 @@ fn project_map_layers(value: &Value) -> Option<Vec<Value>> {
                 ("geometry".to_string(), Value::String(geometry.clone())),
             ]);
             if let Some(value) = optional_string(layer, "label_property")? {
+                if !valid_map_property_name(&value) {
+                    return None;
+                }
                 projected.insert("label_property".to_string(), Value::String(value));
+            }
+            if let Some(hover) = layer.get("hover") {
+                projected.insert("hover".to_string(), project_layer_hover(hover)?);
             }
             projected.insert(
                 "style".to_string(),
@@ -895,6 +950,9 @@ fn project_layer_style(geometry: &str, value: &Value) -> Option<Value> {
             "color",
             "opacity",
             "radius",
+            "size",
+            "shape",
+            "icon",
             "stroke_color",
             "stroke_width",
             "stroke_opacity",
@@ -913,6 +971,34 @@ fn project_layer_style(geometry: &str, value: &Value) -> Option<Value> {
     if style.keys().any(|key| !allowed.contains(&key.as_str())) {
         return None;
     }
+    if geometry == "point" {
+        let has_icon = style.get("icon").is_some();
+        let has_builtin_style = [
+            "color",
+            "radius",
+            "size",
+            "shape",
+            "stroke_color",
+            "stroke_width",
+            "stroke_opacity",
+        ]
+        .iter()
+        .any(|key| style.get(*key).is_some());
+        if has_icon && has_builtin_style {
+            return None;
+        }
+        if style.get("radius").is_some() && style.get("size").is_some() {
+            return None;
+        }
+        if style.get("radius").is_some()
+            && !matches!(
+                style.get("shape").and_then(Value::as_str),
+                None | Some("circle")
+            )
+        {
+            return None;
+        }
+    }
     let mut projected = Map::new();
     for key in ["color", "stroke_color", "fill_color"] {
         if let Some(value) = optional_string(style, key)? {
@@ -927,6 +1013,7 @@ fn project_layer_style(geometry: &str, value: &Value) -> Option<Value> {
         ("stroke_opacity", 0.0, 1.0),
         ("fill_opacity", 0.0, 1.0),
         ("radius", 1.0, 64.0),
+        ("size", 4.0, 128.0),
         ("width", 0.5, 32.0),
         ("stroke_width", 0.0, 32.0),
     ] {
@@ -945,6 +1032,10 @@ fn project_layer_style(geometry: &str, value: &Value) -> Option<Value> {
     for (key, allowed) in [
         ("cap", &["butt", "round", "square"][..]),
         ("join", &["bevel", "round", "miter"][..]),
+        (
+            "shape",
+            &["circle", "square", "diamond", "triangle", "pin"][..],
+        ),
     ] {
         if let Some(value) = style.get(key) {
             let value = value.as_str()?;
@@ -953,6 +1044,116 @@ fn project_layer_style(geometry: &str, value: &Value) -> Option<Value> {
             }
             projected.insert(key.to_string(), Value::String(value.to_string()));
         }
+    }
+    if let Some(icon) = style.get("icon") {
+        projected.insert("icon".to_string(), project_point_icon(icon)?);
+    }
+    Some(Value::Object(projected))
+}
+
+fn project_point_icon(value: &Value) -> Option<Value> {
+    let icon = value.as_object()?;
+    const FIELDS: &[&str] = &["url", "scale", "anchor", "rotation", "allow_overlap"];
+    if icon.keys().any(|key| !FIELDS.contains(&key.as_str())) {
+        return None;
+    }
+    let url = nonempty_string(icon, "url")?;
+    if !valid_map_icon_url(&url) {
+        return None;
+    }
+    let mut projected = Map::from_iter([("url".to_string(), Value::String(url))]);
+    if let Some(scale) = icon.get("scale") {
+        projected.insert(
+            "scale".to_string(),
+            json!(bounded_number(scale, 0.05, 8.0)?),
+        );
+    }
+    if let Some(anchor) = icon.get("anchor") {
+        let anchor = anchor.as_str()?;
+        if !matches!(
+            anchor,
+            "center"
+                | "top"
+                | "bottom"
+                | "left"
+                | "right"
+                | "top-left"
+                | "top-right"
+                | "bottom-left"
+                | "bottom-right"
+        ) {
+            return None;
+        }
+        projected.insert("anchor".to_string(), Value::String(anchor.to_string()));
+    }
+    if let Some(rotation) = icon.get("rotation") {
+        projected.insert(
+            "rotation".to_string(),
+            json!(bounded_number(rotation, -360.0, 360.0)?),
+        );
+    }
+    if let Some(allow_overlap) = icon.get("allow_overlap") {
+        projected.insert(
+            "allow_overlap".to_string(),
+            Value::Bool(allow_overlap.as_bool()?),
+        );
+    }
+    Some(Value::Object(projected))
+}
+
+fn project_layer_hover(value: &Value) -> Option<Value> {
+    let hover = value.as_object()?;
+    const FIELDS: &[&str] = &["title_property", "fields"];
+    if hover.keys().any(|key| !FIELDS.contains(&key.as_str())) {
+        return None;
+    }
+    let title_property = optional_string(hover, "title_property")?;
+    if title_property
+        .as_deref()
+        .is_some_and(|property| !valid_map_property_name(property))
+    {
+        return None;
+    }
+    let fields = match hover.get("fields") {
+        Some(fields) => Some(fields.as_array()?),
+        None => None,
+    };
+    let mut seen = std::collections::HashSet::new();
+    let projected_fields = match fields {
+        Some(fields) if fields.len() <= 16 => fields
+            .iter()
+            .map(|field| {
+                let field = field.as_object()?;
+                if field
+                    .keys()
+                    .any(|key| !matches!(key.as_str(), "property" | "label"))
+                {
+                    return None;
+                }
+                let property = nonempty_string(field, "property")?;
+                if !valid_map_property_name(&property) || !seen.insert(property.clone()) {
+                    return None;
+                }
+                let mut projected =
+                    Map::from_iter([("property".to_string(), Value::String(property))]);
+                if let Some(label) = optional_string(field, "label")? {
+                    if !valid_map_property_name(&label) {
+                        return None;
+                    }
+                    projected.insert("label".to_string(), Value::String(label));
+                }
+                Some(Value::Object(projected))
+            })
+            .collect::<Option<Vec<_>>>()?,
+        Some(_) => return None,
+        None => Vec::new(),
+    };
+    if title_property.is_none() && projected_fields.is_empty() {
+        return None;
+    }
+    let mut projected = Map::from_iter([("fields".to_string(), Value::Array(projected_fields))]);
+    if let Some(title_property) = title_property {
+        projected.insert("title_property".to_string(), Value::String(title_property));
     }
     Some(Value::Object(projected))
 }
@@ -1028,6 +1229,30 @@ fn valid_css_color(value: &str) -> bool {
                 | "black"
                 | "white"
         )
+}
+
+fn valid_map_property_name(value: &str) -> bool {
+    !value.is_empty() && value.chars().count() <= 128 && !value.chars().any(char::is_control)
+}
+
+fn valid_map_icon_url(value: &str) -> bool {
+    if value.len() > 2048
+        || !value.starts_with("https://")
+        || value.chars().any(char::is_whitespace)
+    {
+        return false;
+    }
+    let remainder = &value["https://".len()..];
+    let authority = remainder.split('/').next().unwrap_or_default();
+    let path = value
+        .split(|character| character == '?' || character == '#')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    !authority.is_empty()
+        && [".png", ".jpg", ".jpeg", ".webp"]
+            .iter()
+            .any(|extension| path.ends_with(extension))
 }
 
 fn valid_geojson_root(value: &Value) -> bool {
@@ -1114,6 +1339,43 @@ fn redact_mcp_resource_metadata(result: &mut Value) {
         .get_mut("structuredContent")
         .and_then(Value::as_object_mut)
     {
+        if structured.get("type").and_then(Value::as_str) == Some("open-web-artifact")
+            && structured.get("kind").and_then(Value::as_str) == Some("inline-visualization.v1")
+        {
+            let artifact_ref = structured
+                .get("artifact")
+                .and_then(Value::as_object)
+                .and_then(|artifact| artifact.get("ref"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let renderer_kind = structured
+                .get("artifact")
+                .and_then(Value::as_object)
+                .and_then(|artifact| artifact.get("renderer"))
+                .and_then(Value::as_object)
+                .and_then(|renderer| renderer.get("kind"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let embed = structured.get("embed").cloned();
+            *structured = Map::from_iter([
+                (
+                    "type".to_string(),
+                    Value::String("open-web-artifact".to_string()),
+                ),
+                (
+                    "kind".to_string(),
+                    Value::String("inline-visualization.v1".to_string()),
+                ),
+                (
+                    "artifact".to_string(),
+                    json!({
+                        "ref": artifact_ref,
+                        "renderer": { "kind": renderer_kind },
+                    }),
+                ),
+                ("embed".to_string(), embed.unwrap_or(Value::Null)),
+            ]);
+        }
         if structured
             .get("data_ref")
             .and_then(Value::as_object)
@@ -1198,26 +1460,118 @@ async fn register_reply_artifacts(
     Ok(())
 }
 
-async fn resolve_reply_card_refs_in_transaction(
+async fn register_inline_visualization_artifact(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    event: &ProjectedEvent,
+    run_id: Uuid,
+    organization_id: Uuid,
+) -> Result<(), String> {
+    if event.event_type != "codex.item.completed"
+        || event.payload.pointer("/itemType").and_then(Value::as_str) != Some("mcpToolCall")
+    {
+        return Ok(());
+    }
+    let Some(candidate) = event.inline_artifact.as_ref() else {
+        return Ok(());
+    };
+    let Some(turn_id) = event.turn_id.as_deref() else {
+        return Ok(());
+    };
+    let Some(item_id) = event.item_id.as_deref() else {
+        return Ok(());
+    };
+    let mut renderer_payload = candidate.renderer_payload.clone();
+    resolve_inline_renderer_resources(
+        transaction,
+        run_id,
+        &event.thread_id,
+        item_id,
+        &candidate.renderer_kind,
+        &mut renderer_payload,
+    )
+    .await?;
+
+    let inserted = sqlx::query(
+        "INSERT INTO inline_visualization_artifacts (
+            organization_id, run_id, thread_id, producer_turn_id, producer_item_id,
+            artifact_ref, renderer_kind, renderer_payload
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (run_id, artifact_ref) DO NOTHING",
+    )
+    .bind(organization_id)
+    .bind(run_id)
+    .bind(&event.thread_id)
+    .bind(turn_id)
+    .bind(item_id)
+    .bind(&candidate.artifact_ref)
+    .bind(&candidate.renderer_kind)
+    .bind(&renderer_payload)
+    .execute(&mut **transaction)
+    .await
+    .map_err(|error| format!("inline visualization Artifact registration error: {error}"))?;
+    if inserted.rows_affected() == 1 {
+        return Ok(());
+    }
+
+    let existing = sqlx::query(
+        "SELECT producer_item_id, renderer_kind, renderer_payload
+         FROM inline_visualization_artifacts
+         WHERE run_id = $1 AND artifact_ref = $2",
+    )
+    .bind(run_id)
+    .bind(&candidate.artifact_ref)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(|error| format!("inline visualization Artifact conflict lookup error: {error}"))?;
+    let Some(existing) = existing else {
+        return Err("inline visualization Artifact conflict could not be resolved".to_string());
+    };
+    let identical = existing.get::<String, _>("producer_item_id") == item_id
+        && existing.get::<String, _>("renderer_kind") == candidate.renderer_kind
+        && existing.get::<Value, _>("renderer_payload") == renderer_payload;
+    if identical {
+        Ok(())
+    } else {
+        Err(format!(
+            "inline visualization Artifact ref {} was already registered",
+            candidate.artifact_ref
+        ))
+    }
+}
+
+async fn resolve_inline_renderer_resources(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     run_id: Uuid,
-    payload: &mut Value,
+    thread_id: &str,
+    producer_item_id: &str,
+    renderer_kind: &str,
+    renderer_payload: &mut Value,
 ) -> Result<(), String> {
-    let Some(thread_id) = payload
-        .get("threadId")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-    else {
-        return Ok(());
-    };
-    let Some(item_id) = payload
-        .get("itemId")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-    else {
-        return Ok(());
-    };
-    let Some(resource_refs) = reply_card_resource_refs(payload.pointer("/data/replyCard")) else {
+    match renderer_kind {
+        "map.v2" => {
+            resolve_map_resource_refs_in_transaction(
+                transaction,
+                run_id,
+                thread_id,
+                producer_item_id,
+                renderer_payload,
+            )
+            .await
+        }
+        unsupported => Err(format!(
+            "inline visualization renderer {unsupported} is unsupported"
+        )),
+    }
+}
+
+async fn resolve_map_resource_refs_in_transaction(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    run_id: Uuid,
+    thread_id: &str,
+    producer_item_id: &str,
+    renderer_payload: &mut Value,
+) -> Result<(), String> {
+    let Some(resource_refs) = map_payload_resource_refs(renderer_payload) else {
         return Ok(());
     };
     let mut resolved = std::collections::HashMap::new();
@@ -1228,19 +1582,17 @@ async fn resolve_reply_card_refs_in_transaction(
                AND producer_item_id <> $5 AND state IN ('pending', 'ready')",
         )
         .bind(run_id)
-        .bind(&thread_id)
+        .bind(thread_id)
         .bind(&server)
         .bind(&uri)
-        .bind(&item_id)
+        .bind(producer_item_id)
         .fetch_optional(&mut **transaction)
         .await
-        .map_err(|error| format!("reply Artifact resolution error: {error}"))?;
+        .map_err(|error| format!("map Resource Artifact resolution error: {error}"))?;
         let Some(row) = row else {
-            payload
-                .pointer_mut("/data")
-                .and_then(Value::as_object_mut)
-                .map(|data| data.remove("replyCard"));
-            return Ok(());
+            return Err(format!(
+                "map renderer references unavailable Resource {server} {uri}"
+            ));
         };
         resolved.insert(
             (server, uri),
@@ -1250,70 +1602,150 @@ async fn resolve_reply_card_refs_in_transaction(
             ),
         );
     }
-    if let Some(card) = payload.pointer_mut("/data/replyCard") {
-        replace_reply_card_refs(card, run_id, &resolved);
+    replace_map_payload_resource_refs(renderer_payload, run_id, &resolved);
+    Ok(())
+}
+
+async fn resolve_inline_artifacts_in_transaction(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    run_id: Uuid,
+    payload: &mut Value,
+) -> Result<(), String> {
+    if payload.pointer("/itemType").and_then(Value::as_str) != Some("agentMessage") {
+        return Ok(());
+    }
+    let Some(thread_id) = payload.get("threadId").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    let Some(text) = payload.pointer("/data/text").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    let refs = inline_artifact_refs(text);
+    if refs.is_empty() {
+        return Ok(());
+    }
+    let mut artifacts = Vec::new();
+    for artifact_ref in refs {
+        let row = sqlx::query(
+            "SELECT renderer_kind, renderer_payload
+             FROM inline_visualization_artifacts
+             WHERE run_id = $1
+               AND thread_id = $2
+               AND artifact_ref = $3
+               AND state = 'ready'",
+        )
+        .bind(run_id)
+        .bind(thread_id)
+        .bind(&artifact_ref)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(|error| format!("inline visualization Artifact resolution error: {error}"))?;
+        if let Some(row) = row {
+            artifacts.push(json!({
+                "ref": artifact_ref,
+                "renderer": {
+                    "kind": row.get::<String, _>("renderer_kind"),
+                    "payload": row.get::<Value, _>("renderer_payload"),
+                }
+            }));
+        }
+    }
+    if !artifacts.is_empty() {
+        payload
+            .pointer_mut("/data")
+            .and_then(Value::as_object_mut)
+            .expect("projected Agent Message data must be an object")
+            .insert("inlineArtifacts".to_string(), Value::Array(artifacts));
     }
     Ok(())
 }
 
-pub(crate) async fn resolve_reply_card_refs(
+pub(crate) async fn resolve_inline_artifacts(
     db: &PgPool,
     run_id: Uuid,
-    item_id: &str,
-    reply_card: &mut Value,
-) -> Result<bool, sqlx::Error> {
-    let Some(resource_refs) = reply_card_resource_refs(Some(reply_card)) else {
-        return Ok(true);
-    };
-    let mut resolved = std::collections::HashMap::new();
-    for (server, uri) in resource_refs {
+    text: &str,
+) -> Result<Vec<Value>, sqlx::Error> {
+    let refs = inline_artifact_refs(text);
+    let mut artifacts = Vec::new();
+    for artifact_ref in refs {
         let row = sqlx::query(
-            "SELECT artifact.id, artifact.mime_type
-             FROM reply_artifacts artifact
+            "SELECT artifact.renderer_kind, artifact.renderer_payload
+             FROM inline_visualization_artifacts artifact
              JOIN run_events producer
                ON producer.run_id = artifact.run_id
               AND producer.item_id = artifact.producer_item_id
               AND producer.event_type = 'codex.item.completed'
-             JOIN run_events consumer
-               ON consumer.run_id = artifact.run_id
-              AND consumer.item_id = $4
-              AND consumer.event_type = 'codex.item.completed'
              WHERE artifact.run_id = $1
                AND artifact.thread_id = (
                    SELECT codex_thread_id FROM runs WHERE id = $1
                )
-               AND artifact.source_server = $2
-               AND artifact.source_uri = $3
-               AND artifact.producer_item_id <> $4
-               AND artifact.state IN ('pending', 'ready')
+               AND artifact.artifact_ref = $2
+               AND artifact.state = 'ready'
                AND producer.thread_id = artifact.thread_id
-               AND consumer.thread_id = artifact.thread_id
-               AND producer.sequence < consumer.sequence",
+               AND producer.turn_id = artifact.producer_turn_id",
         )
         .bind(run_id)
-        .bind(&server)
-        .bind(&uri)
-        .bind(item_id)
+        .bind(&artifact_ref)
         .fetch_optional(db)
         .await?;
-        let Some(row) = row else {
-            return Ok(false);
-        };
-        resolved.insert(
-            (server, uri),
-            (
-                row.get::<Uuid, _>("id"),
-                row.get::<Option<String>, _>("mime_type"),
-            ),
-        );
+        if let Some(row) = row {
+            artifacts.push(json!({
+                "ref": artifact_ref,
+                "renderer": {
+                    "kind": row.get::<String, _>("renderer_kind"),
+                    "payload": row.get::<Value, _>("renderer_payload"),
+                }
+            }));
+        }
     }
-    replace_reply_card_refs(reply_card, run_id, &resolved);
-    Ok(true)
+    Ok(artifacts)
 }
 
-fn reply_card_resource_refs(reply_card: Option<&Value>) -> Option<Vec<(String, String)>> {
-    let reply_card = reply_card?;
-    let sources = reply_card.pointer("/card/sources")?.as_array()?;
+fn inline_artifact_refs(markdown: &str) -> Vec<String> {
+    const PREFIX: &str = "::codex-inline-vis{artifact=\"";
+    let mut refs = Vec::new();
+    let mut fence: Option<(char, usize)> = None;
+    for source_line in markdown.lines() {
+        let line = source_line.trim_end_matches('\r');
+        let leading_spaces = line.bytes().take_while(|byte| *byte == b' ').count();
+        let trimmed_start = &line[leading_spaces.min(line.len())..];
+        let fence_char = trimmed_start.as_bytes().first().copied();
+        if leading_spaces <= 3 && matches!(fence_char, Some(b'`' | b'~')) {
+            let marker = fence_char.unwrap() as char;
+            let marker_len = trimmed_start
+                .chars()
+                .take_while(|value| *value == marker)
+                .count();
+            if marker_len >= 3 {
+                match fence {
+                    Some((active, minimum)) if active == marker && marker_len >= minimum => {
+                        fence = None;
+                    }
+                    None => fence = Some((marker, marker_len)),
+                    _ => {}
+                }
+                continue;
+            }
+        }
+        if fence.is_some() || leading_spaces >= 4 || line.starts_with('\t') {
+            continue;
+        }
+        let directive = line.trim();
+        let Some(value) = directive
+            .strip_prefix(PREFIX)
+            .and_then(|value| value.strip_suffix("\"}"))
+        else {
+            continue;
+        };
+        if valid_card_identifier(value) && !refs.iter().any(|item| item == value) {
+            refs.push(value.to_string());
+        }
+    }
+    refs
+}
+
+fn map_payload_resource_refs(map_payload: &Value) -> Option<Vec<(String, String)>> {
+    let sources = map_payload.get("sources")?.as_array()?;
     let resource_refs = sources
         .iter()
         .filter_map(|source| {
@@ -1331,15 +1763,12 @@ fn reply_card_resource_refs(reply_card: Option<&Value>) -> Option<Vec<(String, S
     (!resource_refs.is_empty()).then_some(resource_refs)
 }
 
-fn replace_reply_card_refs(
-    reply_card: &mut Value,
+fn replace_map_payload_resource_refs(
+    map_payload: &mut Value,
     run_id: Uuid,
     resolved: &std::collections::HashMap<(String, String), (Uuid, Option<String>)>,
 ) {
-    let Some(sources) = reply_card
-        .pointer_mut("/card/sources")
-        .and_then(Value::as_array_mut)
-    else {
+    let Some(sources) = map_payload.get_mut("sources").and_then(Value::as_array_mut) else {
         return;
     };
     for source in sources {
@@ -1530,162 +1959,265 @@ mod tests {
     }
 
     #[test]
-    fn projects_only_valid_mcp_structured_map_cards() {
+    fn projects_only_valid_typed_inline_visualization_artifacts() {
         let item = json!({
             "type": "mcpToolCall",
-            "server": "map_utils",
-            "tool": "create_map_card",
             "status": "completed",
             "result": {
                 "content": [{
                     "type": "text",
-                    "text": "Map card ready: Locations"
+                    "text": "Visualization ready"
                 }],
                 "structuredContent": {
-                    "type": "open-web-card",
-                    "kind": "map.v2",
-                    "card": {
-                        "title": "Locations",
-                        "intent": "visualization",
-                        "status": "ready",
-                        "summary": "Two locations",
-                        "viewport": {
-                            "mode": "camera",
-                            "center": [-122.08, 37.42],
-                            "zoom": 10
-                        },
-                        "sources": [{
-                            "id": "locations",
-                            "data": {
-                                "type": "inline",
-                                "format": "geojson",
-                                "geojson": {
-                                    "type": "FeatureCollection",
-                                    "features": []
-                                }
+                    "type": "open-web-artifact",
+                    "kind": "inline-visualization.v1",
+                    "artifact": {
+                        "ref": "map-7d67b30d",
+                        "renderer": {
+                            "kind": "map.v2",
+                            "payload": {
+                                "title": "Locations",
+                                "intent": "visualization",
+                                "status": "ready",
+                                "summary": "Two locations",
+                                "viewport": {
+                                    "mode": "camera",
+                                    "center": [-122.08, 37.42],
+                                    "zoom": 10
+                                },
+                                "sources": [{
+                                    "id": "locations",
+                                    "data": {
+                                        "type": "inline",
+                                        "format": "geojson",
+                                        "geojson": {
+                                            "type": "FeatureCollection",
+                                            "features": []
+                                        }
+                                    }
+                                }],
+                                "layers": [{
+                                    "id": "points",
+                                    "source": "locations",
+                                    "geometry": "point",
+                                    "label_property": "label",
+                                    "hover": {
+                                        "title_property": "label",
+                                        "fields": [{
+                                            "property": "population",
+                                            "label": "Population"
+                                        }]
+                                    },
+                                    "style": {
+                                        "color": "#ef4444",
+                                        "opacity": 0.8,
+                                        "shape": "pin",
+                                        "size": 24,
+                                        "stroke_color": "#ffffff",
+                                        "stroke_width": 2
+                                    }
+                                }]
                             }
-                        }],
-                        "layers": [{
-                            "id": "points",
-                            "source": "locations",
-                            "geometry": "point",
-                            "label_property": "label",
-                            "style": {
-                                "color": "#ef4444",
-                                "opacity": 0.8,
-                                "radius": 9
-                            }
-                        }]
+                        }
+                    },
+                    "embed": {
+                        "syntax": "codex-inline-vis.artifact.v1",
+                        "code": "::codex-inline-vis{artifact=\"map-7d67b30d\"}"
                     }
                 }
             }
         });
 
-        let projected = project_item(item.as_object().unwrap());
-
-        assert_eq!(projected["replyCard"]["type"], "open-web-card");
-        assert_eq!(projected["replyCard"]["kind"], "map.v2");
-        assert_eq!(projected["replyCard"]["card"]["title"], "Locations");
+        let artifact = project_inline_visualization_artifact(item.as_object().unwrap()).unwrap();
+        assert_eq!(artifact.artifact_ref, "map-7d67b30d");
+        assert_eq!(artifact.renderer_kind, "map.v2");
+        assert_eq!(artifact.renderer_payload["title"], "Locations");
         assert_eq!(
-            projected["replyCard"]["card"]["viewport"]["zoom"].as_f64(),
+            artifact.renderer_payload["viewport"]["zoom"].as_f64(),
             Some(10.0)
         );
         assert_eq!(
-            projected["replyCard"]["card"]["layers"][0]["style"]["opacity"],
-            0.8
+            artifact.renderer_payload["layers"][0]["style"]["shape"],
+            "pin"
+        );
+        assert_eq!(
+            artifact.renderer_payload["layers"][0]["hover"]["fields"][0]["property"],
+            "population"
+        );
+
+        let projected = project_item(item.as_object().unwrap());
+        assert!(projected.get("replyCard").is_none());
+        assert!(
+            projected["result"]["structuredContent"]["artifact"]["renderer"]
+                .get("payload")
+                .is_none()
+        );
+        assert_eq!(
+            projected["result"]["structuredContent"]["embed"]["code"],
+            "::codex-inline-vis{artifact=\"map-7d67b30d\"}"
         );
     }
 
     #[test]
-    fn does_not_promote_text_or_invalid_structured_content_to_a_card() {
+    fn projects_only_safe_map_point_icons_and_hover_content() {
+        let icon = json!({
+            "url": "https://cdn.example.com/marker.webp?version=2",
+            "scale": 0.75,
+            "anchor": "bottom",
+            "rotation": 15,
+            "allow_overlap": true
+        });
+        assert_eq!(
+            project_point_icon(&icon).unwrap()["url"],
+            "https://cdn.example.com/marker.webp?version=2"
+        );
+        assert!(project_point_icon(&json!({
+            "url": "http://cdn.example.com/marker.png"
+        }))
+        .is_none());
+        assert!(project_point_icon(&json!({
+            "url": "https://cdn.example.com/marker.svg"
+        }))
+        .is_none());
+
+        let hover = project_layer_hover(&json!({
+            "title_property": "label",
+            "fields": [{
+                "property": "population",
+                "label": "Population"
+            }]
+        }))
+        .unwrap();
+        assert_eq!(hover["title_property"], "label");
+        assert_eq!(hover["fields"][0]["property"], "population");
+        assert!(project_layer_hover(&json!({
+            "fields": [{
+                "property": "population"
+            }, {
+                "property": "population"
+            }]
+        }))
+        .is_none());
+    }
+
+    #[test]
+    fn rejects_text_legacy_cards_and_mismatched_embed_codes() {
         let text_only = json!({
             "type": "mcpToolCall",
             "result": {
                 "content": [{
                     "type": "text",
-                    "text": "{\"type\":\"open-web-card\",\"kind\":\"map.v2\",\"card\":{\"title\":\"Unsafe\"}}"
+                    "text": "{\"type\":\"open-web-artifact\"}"
                 }]
             }
         });
-        let unsupported_card = json!({
+        let legacy_card = json!({
             "type": "mcpToolCall",
             "result": {
                 "structuredContent": {
                     "type": "open-web-card",
-                    "kind": "chart.v1",
+                    "kind": "map.v2",
                     "card": {}
                 }
             }
         });
-        let unknown_field = json!({
+        let mismatched_embed = json!({
             "type": "mcpToolCall",
             "result": {
                 "structuredContent": {
-                    "type": "open-web-card",
-                    "kind": "map.v2",
-                    "unexpected": true,
-                    "card": {
-                        "title": "Unknown field",
-                        "intent": "visualization",
-                        "status": "ready",
-                        "viewport": { "mode": "fit" },
-                        "sources": [],
-                        "layers": []
+                    "type": "open-web-artifact",
+                    "kind": "inline-visualization.v1",
+                    "artifact": {
+                        "ref": "map-one",
+                        "renderer": {
+                            "kind": "map.v2",
+                            "payload": {
+                                "title": "Map",
+                                "intent": "visualization",
+                                "status": "ready",
+                                "viewport": { "mode": "fit" },
+                                "sources": [{
+                                    "id": "data",
+                                    "data": {
+                                        "type": "inline",
+                                        "format": "geojson",
+                                        "geojson": {
+                                            "type": "FeatureCollection",
+                                            "features": []
+                                        }
+                                    }
+                                }],
+                                "layers": [{
+                                    "id": "points",
+                                    "source": "data",
+                                    "geometry": "point",
+                                    "style": {}
+                                }]
+                            }
+                        }
+                    },
+                    "embed": {
+                        "syntax": "codex-inline-vis.artifact.v1",
+                        "code": "::codex-inline-vis{artifact=\"map-two\"}"
                     }
                 }
             }
         });
 
-        assert!(project_item(text_only.as_object().unwrap())
-            .get("replyCard")
-            .is_none());
-        assert!(project_item(unsupported_card.as_object().unwrap())
-            .get("replyCard")
-            .is_none());
-        assert!(project_item(unknown_field.as_object().unwrap())
-            .get("replyCard")
-            .is_none());
+        assert!(project_inline_visualization_artifact(text_only.as_object().unwrap()).is_none());
+        assert!(project_inline_visualization_artifact(legacy_card.as_object().unwrap()).is_none());
+        assert!(
+            project_inline_visualization_artifact(mismatched_embed.as_object().unwrap()).is_none()
+        );
     }
 
     #[test]
-    fn does_not_apply_a_card_specific_inline_byte_limit() {
+    fn does_not_apply_a_map_specific_inline_byte_limit() {
         let item = json!({
             "type": "mcpToolCall",
             "result": {
                 "structuredContent": {
-                    "type": "open-web-card",
-                    "kind": "map.v2",
-                    "card": {
-                        "title": "Large inline source",
-                        "intent": "visualization",
-                        "status": "ready",
-                        "summary": "x".repeat(32 * 1024),
-                        "viewport": { "mode": "fit" },
-                        "sources": [{
-                            "id": "data",
-                            "data": {
-                                "type": "inline",
-                                "format": "geojson",
-                                "geojson": {
-                                    "type": "FeatureCollection",
-                                    "features": []
-                                }
+                    "type": "open-web-artifact",
+                    "kind": "inline-visualization.v1",
+                    "artifact": {
+                        "ref": "map-large",
+                        "renderer": {
+                            "kind": "map.v2",
+                            "payload": {
+                                "title": "Large inline source",
+                                "intent": "visualization",
+                                "status": "ready",
+                                "summary": "x".repeat(32 * 1024),
+                                "viewport": { "mode": "fit" },
+                                "sources": [{
+                                    "id": "data",
+                                    "data": {
+                                        "type": "inline",
+                                        "format": "geojson",
+                                        "geojson": {
+                                            "type": "FeatureCollection",
+                                            "features": []
+                                        }
+                                    }
+                                }],
+                                "layers": [{
+                                    "id": "points",
+                                    "source": "data",
+                                    "geometry": "point",
+                                    "style": {}
+                                }]
                             }
-                        }],
-                        "layers": [{
-                            "id": "points",
-                            "source": "data",
-                            "geometry": "point",
-                            "style": {}
-                        }]
+                        }
+                    },
+                    "embed": {
+                        "syntax": "codex-inline-vis.artifact.v1",
+                        "code": "::codex-inline-vis{artifact=\"map-large\"}"
                     }
                 }
             }
         });
 
-        assert!(project_item(item.as_object().unwrap())
-            .get("replyCard")
-            .is_some());
+        assert!(project_inline_visualization_artifact(item.as_object().unwrap()).is_some());
     }
 
     #[test]
@@ -1693,30 +2225,26 @@ mod tests {
         let run_id = Uuid::parse_str("975f1f1c-4b58-47ad-a12c-c32aeae566e7").unwrap();
         let artifact_id = Uuid::parse_str("8e98ff2f-82ee-4cc9-a3e6-2974debf8666").unwrap();
         let resource_uri = "maps-data://geojson/map-data-one";
-        let mut reply_card = json!({
-            "type": "open-web-card",
-            "kind": "map.v2",
-            "card": {
-                "sources": [{
-                    "id": "locations",
-                    "data": {
-                        "type": "mcp_resource",
-                        "server": "map_utils",
-                        "uri": resource_uri,
-                        "format": "geojson"
-                    }
-                }]
-            }
+        let mut map_payload = json!({
+            "sources": [{
+                "id": "locations",
+                "data": {
+                    "type": "mcp_resource",
+                    "server": "map_utils",
+                    "uri": resource_uri,
+                    "format": "geojson"
+                }
+            }]
         });
         let resolved = std::collections::HashMap::from([(
             ("map_utils".to_string(), resource_uri.to_string()),
             (artifact_id, Some("application/geo+json".to_string())),
         )]);
 
-        replace_reply_card_refs(&mut reply_card, run_id, &resolved);
+        replace_map_payload_resource_refs(&mut map_payload, run_id, &resolved);
 
         assert_eq!(
-            reply_card["card"]["sources"][0]["data"],
+            map_payload["sources"][0]["data"],
             json!({
                 "type": "artifact",
                 "format": "geojson",
@@ -1725,7 +2253,25 @@ mod tests {
                 "url": format!("/api/runs/{run_id}/artifacts/{artifact_id}")
             })
         );
-        assert!(!reply_card.to_string().contains(resource_uri));
+        assert!(!map_payload.to_string().contains(resource_uri));
+    }
+
+    #[test]
+    fn extracts_only_standalone_artifact_directives_outside_code_blocks() {
+        let markdown = r#"Before
+::codex-inline-vis{artifact="map-one"}
+```text
+::codex-inline-vis{artifact="map-code"}
+```
+    ::codex-inline-vis{artifact="map-indented"}
+::codex-inline-vis{file="chart.html"}
+::codex-inline-vis{artifact="map-one"}
+::codex-inline-vis{artifact="map-two"}
+After"#;
+        assert_eq!(
+            inline_artifact_refs(markdown),
+            vec!["map-one".to_string(), "map-two".to_string()]
+        );
     }
 
     #[test]

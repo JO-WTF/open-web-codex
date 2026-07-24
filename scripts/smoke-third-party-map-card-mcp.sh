@@ -52,7 +52,7 @@ TOML
 
 output_file="${THIRD_PARTY_SMOKE_OUTPUT:-$tmp_home/third-party-map-card-smoke.jsonl}"
 OPEN_WEB_CODEX_MAPS_MCP_VENV="$maps_mcp_venv" MAPS_MCP_VENV="$maps_mcp_venv" CODEX_HOME="$tmp_home" timeout "$timeout_sec" "$codex_bin" exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --ignore-rules -C "$repo_root" \
-  '用地图卡片展示雅加达坐标 106.827168,-6.1754049。必须调用 map_utils 的 create_map_card，使用 inline GeoJSON source、point layer 和 camera zoom 10，并简要说明已经生成地图，不要复制 JSON。' \
+  '在同一段回复的两段文字之间展示雅加达坐标 106.827168,-6.1754049 的地图。必须调用 map_utils 的 create_map_card，使用 inline GeoJSON source、point layer 和 camera zoom 10；把工具返回的 embed.code 原样独占一行放在两段文字之间，不要复制 JSON。' \
   | tee "$output_file"
 
 if ! jq -e '
@@ -63,17 +63,30 @@ if ! jq -e '
     and .item.tool == "create_map_card"
   )
   | .item.result.structured_content
-  | .type == "open-web-card"
-    and .kind == "map.v2"
-    and (.card | type == "object")
-    and (.card.title | type == "string")
-    and (.card.viewport.mode == "camera")
-    and (.card.viewport.zoom == 10)
-    and (.card.sources | length == 1)
-    and (.card.layers[0].geometry == "point")
+  | .type == "open-web-artifact"
+    and .kind == "inline-visualization.v1"
+    and (.artifact.ref | startswith("map-"))
+    and (.artifact.renderer.kind == "map.v2")
+    and (.artifact.renderer.payload.title | type == "string")
+    and (.artifact.renderer.payload.viewport.mode == "camera")
+    and (.artifact.renderer.payload.viewport.zoom == 10)
+    and (.artifact.renderer.payload.sources | length == 1)
+    and (.artifact.renderer.payload.layers[0].geometry == "point")
+    and (.embed.code == ("::codex-inline-vis{artifact=\"" + .artifact.ref + "\"}"))
 ' "$output_file" >/dev/null; then
-  echo "third-party map-card MCP smoke did not observe valid structuredContent" >&2
+  echo "third-party map-card MCP smoke did not observe a valid Artifact envelope" >&2
   exit 3
 fi
 
-echo "third-party map-card MCP smoke passed: $output_file"
+if ! jq -e '
+  select(
+    .type == "item.completed"
+    and .item.type == "agent_message"
+    and (.item.text | test("::codex-inline-vis\\\\{artifact=\\\"map-[A-Za-z0-9_.-]+\\\"\\\\}"))
+  )
+' "$output_file" >/dev/null; then
+  echo "third-party map-card MCP smoke did not observe an Assistant Artifact reference" >&2
+  exit 4
+fi
+
+echo "third-party inline map Artifact smoke passed: $output_file"

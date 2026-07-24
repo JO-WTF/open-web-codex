@@ -69,8 +69,110 @@ describe("MessageList", () => {
       />,
     );
 
-    expect(screen.getByText("Accepted")).toBeTruthy();
+    expect(screen.getByLabelText("Approved: The user approved this action.")).toBeTruthy();
     expect(screen.queryByText("Approval resolved")).toBeNull();
+  });
+
+  it("folds a resolved approval into the MCP call that it authorized", () => {
+    const view = render(
+      <MessageList
+        items={[
+          { id: "user-1", level: "user", text: "Geocode these cities" },
+          {
+            id: "mcp-unrelated",
+            level: "info",
+            kind: "tool",
+            text: "read resource",
+            toolType: "MCP",
+            toolTitle: "map_utils / read_mcp_resource",
+            toolStatus: "completed",
+          },
+          {
+            id: "approval-1",
+            level: "info",
+            kind: "approval",
+            text: "Allow the map_utils MCP server to run tool \"batch_geocode\"?",
+            approvalStatus: "accepted",
+            approvalServerName: "map_utils",
+            approvalTool: "batch_geocode",
+          },
+          {
+            id: "mcp-1",
+            level: "info",
+            kind: "tool",
+            text: "batch geocode",
+            toolType: "MCP",
+            toolTitle: "map_utils / batch_geocode",
+            toolStatus: "completed",
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "2 tool calls, 0 messages" }));
+    expect(view.container.querySelector(".web-approval-card")).toBeNull();
+    const approvalIcon = screen.getByLabelText(
+      'Approved: Allow the map_utils MCP server to run tool "batch_geocode"?',
+    );
+    expect(approvalIcon.closest(".web-tool-card")?.textContent).toContain(
+      "map_utils / batch_geocode",
+    );
+    expect(
+      screen.getByText("map_utils / read_mcp_resource")
+        .closest(".web-tool-card")
+        ?.querySelector(".web-approval-status-icon"),
+    ).toBeNull();
+  });
+
+  it.each([
+    ["accepted", "Approved"],
+    ["declined", "Denied"],
+    ["answered", "Other response"],
+  ] as const)("shows the %s outcome on a running MCP call as soon as the user responds", (
+    approvalStatus,
+    label,
+  ) => {
+    const items = [
+      { id: "user-live", level: "user" as const, text: "Geocode Shanghai" },
+      {
+        id: "mcp-live",
+        level: "info" as const,
+        kind: "tool" as const,
+        text: "batch geocode",
+        toolType: "MCP",
+        toolTitle: "map_utils / batch_geocode",
+        toolStatus: "running",
+        streaming: true,
+      },
+      {
+        id: "approval-live",
+        level: "info" as const,
+        kind: "approval" as const,
+        text: "Allow the map_utils MCP server to run tool \"batch_geocode\"?",
+        approvalStatus: "pending" as const,
+        approvalServerName: "map_utils",
+        approvalTool: "batch_geocode",
+      },
+    ];
+    const view = render(<MessageList items={items} thinking />);
+
+    expect(screen.queryByLabelText(new RegExp(`^${label}:`))).toBeNull();
+    view.rerender(
+      <MessageList
+        thinking
+        items={items.map((item) => item.id === "approval-live"
+          ? { ...item, approvalStatus }
+          : item)}
+      />,
+    );
+
+    const icon = screen.getByLabelText(
+      `${label}: Allow the map_utils MCP server to run tool "batch_geocode"?`,
+    );
+    expect(icon.closest(".web-tool-card")?.textContent).toContain(
+      "map_utils / batch_geocode",
+    );
+    expect(view.container.querySelector(".web-approval-card")).toBeNull();
   });
 
   it("renders a recoverable connection error as an active status", () => {
@@ -122,15 +224,16 @@ describe("MessageList", () => {
     expect(timeline?.textContent).not.toContain("The project is ready.");
   });
 
-  it("uses message phase instead of the last assistant position to identify replies", () => {
+  it("uses message phase instead of message position to identify replies", () => {
     const view = render(
       <MessageList
         items={[
           { id: "user-1", level: "user", text: "Inspect the project" },
           {
-            id: "legacy-reply",
+            id: "first-reply",
             level: "assistant",
-            text: "Legacy provider reply.",
+            text: "First provider reply.",
+            messagePhase: "final_answer",
           },
           {
             id: "commentary-1",
@@ -155,7 +258,7 @@ describe("MessageList", () => {
       />,
     );
 
-    expect(screen.getByText("Legacy provider reply.")).toBeTruthy();
+    expect(screen.getByText("First provider reply.")).toBeTruthy();
     expect(screen.getByText("Typed final reply.")).toBeTruthy();
     expect(screen.queryByText("I am checking one more file.")).toBeNull();
     const summary = screen.getByRole("button", { name: "1 tool call, 1 message" });
@@ -163,7 +266,7 @@ describe("MessageList", () => {
     expect(screen.getByText("I am checking one more file.")).toBeTruthy();
 
     const text = view.container.textContent ?? "";
-    expect(text.indexOf("Legacy provider reply.")).toBeLessThan(text.indexOf("Typed final reply."));
+    expect(text.indexOf("First provider reply.")).toBeLessThan(text.indexOf("Typed final reply."));
   });
 
   it("renders tool calls as timeline siblings and drops empty reasoning wrappers", () => {
@@ -173,7 +276,12 @@ describe("MessageList", () => {
           { id: "user-1", level: "user", text: "Check the weather" },
           { id: "reasoning-empty", level: "system", kind: "reasoning", text: "Reasoning completed" },
           { id: "search-1", level: "info", kind: "tool", text: "Web search", toolType: "Search", toolTitle: "weather Shenzhen", toolStatus: "completed" },
-          { id: "final-1", level: "assistant", text: "It is sunny." },
+          {
+            id: "final-1",
+            level: "assistant",
+            text: "It is sunny.",
+            messagePhase: "final_answer",
+          },
         ]}
       />,
     );
@@ -252,7 +360,7 @@ describe("MessageList", () => {
     expect(view.container.querySelector(".web-execution-current .web-msg-commentary")).toBeTruthy();
   });
 
-  it("keeps an unclassified streaming assistant message in process presentation until completion", () => {
+  it("does not guess a process phase for an unclassified streaming assistant message", () => {
     const items = [
       { id: "user-1", level: "user" as const, text: "Write the script" },
       {
@@ -264,7 +372,9 @@ describe("MessageList", () => {
     ];
     const view = render(<MessageList items={items} thinking />);
 
-    expect(view.container.querySelector(".web-execution-current .web-msg-commentary-body")).toBeTruthy();
+    expect(view.container.querySelector(".web-execution-current")).toBeNull();
+    expect(view.container.querySelector(".web-msg-commentary-body")).toBeNull();
+    expect(screen.getByText("Preparing the Python script")).toBeTruthy();
 
     view.rerender(
       <MessageList
@@ -419,7 +529,7 @@ describe("MessageList", () => {
     expect(view.container.querySelector(".web-approval-deny")).toBeNull();
   });
 
-  it("renders multiple structured reply cards at their positions in reply order", async () => {
+  it("renders typed Artifacts only where one Assistant message references them", async () => {
     const view = render(
       <MessageList
         items={[
@@ -429,12 +539,6 @@ describe("MessageList", () => {
             text: "Show the locations.",
           },
           {
-            id: "assistant-commentary",
-            level: "assistant",
-            text: "正在准备地图数据。",
-            messagePhase: "commentary",
-          },
-          {
             id: "map-card",
             level: "info",
             kind: "tool",
@@ -442,74 +546,81 @@ describe("MessageList", () => {
             toolType: "MCP",
             toolTitle: "map_utils / create_map_card",
             toolStatus: "completed",
-            replyCard: {
-              type: "card",
-              kind: "map.v2",
-              id: "map-card-data",
-              title: "Batch geocode",
-              intent: "visualization",
-              status: "ready",
-              viewport: { mode: "fit" },
-              sources: [{
-                id: "locations",
-                data: {
-                  type: "inline",
-                  format: "geojson",
-                  geojson: {
-                    type: "FeatureCollection",
-                    features: [],
-                  },
-                },
-              }],
-              layers: [{
-                id: "points",
-                source: "locations",
-                geometry: "point",
-                style: {},
-              }],
-            },
           },
           {
             id: "assistant-final",
             level: "assistant",
-            text: "已完成地址解析。",
+            text: [
+              "第一张地图之前。",
+              '::codex-inline-vis{artifact="map-card-data"}',
+              "两张地图之间。",
+              '::codex-inline-vis{artifact="map-card-route"}',
+              "第二张地图之后。",
+            ].join("\n"),
             messagePhase: "final_answer",
-          },
-          {
-            id: "map-card-2",
-            level: "info",
-            kind: "tool",
-            text: "create_route_map",
-            toolType: "MCP",
-            toolTitle: "map_utils / create_route_map",
-            toolStatus: "completed",
-            replyCard: {
-              type: "card",
-              kind: "map.v2",
-              id: "map-card-route",
-              title: "Route overview",
-              intent: "route",
-              status: "ready",
-              viewport: {
-                mode: "camera",
-                center: [116.44, 39.92],
-                zoom: 9,
-              },
-              sources: [{
-                id: "route",
-                data: {
-                  type: "inline",
-                  format: "geojson",
-                  geojson: { type: "FeatureCollection", features: [] },
+            inlineArtifacts: [
+              {
+                ref: "map-card-data",
+                rendererKind: "map.v2",
+                card: {
+                  type: "card",
+                  kind: "map.v2",
+                  id: "map-card-data",
+                  title: "Batch geocode",
+                  intent: "visualization",
+                  status: "ready",
+                  viewport: { mode: "fit" },
+                  sources: [{
+                    id: "locations",
+                    data: {
+                      type: "inline",
+                      format: "geojson",
+                      geojson: {
+                        type: "FeatureCollection",
+                        features: [],
+                      },
+                    },
+                  }],
+                  layers: [{
+                    id: "points",
+                    source: "locations",
+                    geometry: "point",
+                    style: {},
+                  }],
                 },
-              }],
-              layers: [{
-                id: "route-line",
-                source: "route",
-                geometry: "line",
-                style: { width: 4, dash: [2, 1] },
-              }],
-            },
+              },
+              {
+                ref: "map-card-route",
+                rendererKind: "map.v2",
+                card: {
+                  type: "card",
+                  kind: "map.v2",
+                  id: "map-card-route",
+                  title: "Route overview",
+                  intent: "route",
+                  status: "ready",
+                  viewport: {
+                    mode: "camera",
+                    center: [116.44, 39.92],
+                    zoom: 9,
+                  },
+                  sources: [{
+                    id: "route",
+                    data: {
+                      type: "inline",
+                      format: "geojson",
+                      geojson: { type: "FeatureCollection", features: [] },
+                    },
+                  }],
+                  layers: [{
+                    id: "route-line",
+                    source: "route",
+                    geometry: "line",
+                    style: { width: 4, dash: [2, 1] },
+                  }],
+                },
+              },
+            ],
           },
         ]}
       />,
@@ -517,18 +628,15 @@ describe("MessageList", () => {
 
     expect(screen.getByText("Batch geocode")).toBeTruthy();
     expect(screen.getByText("Route overview")).toBeTruthy();
-    expect(screen.getByText("已完成地址解析。")).toBeTruthy();
-    expect(screen.queryByText("正在准备地图数据。")).toBeNull();
-    const firstExecutionSummary = screen.getByRole("button", { name: "1 tool call, 1 message" });
-    const secondExecutionSummary = screen.getByRole("button", { name: "1 tool call, 0 messages" });
-    fireEvent.click(firstExecutionSummary);
-    fireEvent.click(secondExecutionSummary);
-    expect(screen.getByText("正在准备地图数据。")).toBeTruthy();
+    expect(screen.getByText("两张地图之间。")).toBeTruthy();
+    const executionSummary = screen.getByRole("button", { name: "1 tool call, 0 messages" });
+    fireEvent.click(executionSummary);
     expect(screen.getByText("map_utils / create_map_card")).toBeTruthy();
-    expect(screen.getByText("map_utils / create_route_map")).toBeTruthy();
     const text = view.container.textContent ?? "";
-    expect(text.indexOf("Batch geocode")).toBeLessThan(text.indexOf("已完成地址解析。"));
-    expect(text.indexOf("已完成地址解析。")).toBeLessThan(text.indexOf("Route overview"));
+    expect(text.indexOf("第一张地图之前。")).toBeLessThan(text.indexOf("Batch geocode"));
+    expect(text.indexOf("Batch geocode")).toBeLessThan(text.indexOf("两张地图之间。"));
+    expect(text.indexOf("两张地图之间。")).toBeLessThan(text.indexOf("Route overview"));
+    expect(text.indexOf("Route overview")).toBeLessThan(text.indexOf("第二张地图之后。"));
     expect(screen.getAllByRole("button", { name: "Open map card fullscreen" })).toHaveLength(2);
     const configureButtons = await screen.findAllByRole("button", { name: "配置 Mapbox Key" });
     fireEvent.click(configureButtons[0]);
@@ -540,5 +648,27 @@ describe("MessageList", () => {
     fireEvent.change(input, { target: { value: "sk.not-a-mapbox-public-token" } });
     fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
     expect(screen.getByText(/请输入以 pk\. 开头/)).toBeTruthy();
+  });
+
+  it("does not render a visualization when only the producer Tool completed", () => {
+    const view = render(
+      <MessageList
+        items={[
+          { id: "user", level: "user", text: "Prepare a map." },
+          {
+            id: "tool",
+            level: "info",
+            kind: "tool",
+            text: "create_map_card",
+            toolType: "MCP",
+            toolTitle: "map_utils / create_map_card",
+            toolStatus: "completed",
+            toolOutput: '::codex-inline-vis{artifact="map-unreferenced"}',
+          },
+        ]}
+      />,
+    );
+
+    expect(view.container.querySelector(".web-map-card")).toBeNull();
   });
 });

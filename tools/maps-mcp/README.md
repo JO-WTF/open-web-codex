@@ -114,11 +114,15 @@ schema-validated output contains the raw MCP server ID and Resource URI in `data
 complete object unchanged into a later `create_map_card` source in the same Run and Thread. When
 downstream work needs the GeoJSON contents, pass `data_ref.server` and `data_ref.uri` unchanged to MCP
 `resources/read`; `mcp__map_utils` is a model-visible Tool namespace, not the Resource server ID.
-`create_map_card` returns an `open-web-card` / `map.v2` object in MCP `structuredContent`; its
-`content` is only concise model-visible prose. The host validates and renders the structured
-result directly, and assistant messages should not reproduce card JSON or GeoJSON. `map.v2`
-supports fit or camera viewports and styled point, line, and polygon layers. Inline GeoJSON is
-supported for small data; large data is read lazily from the referenced MCP Resource.
+`create_map_card` returns an `open-web-artifact` / `inline-visualization.v1` envelope with a
+typed `map.v2` renderer in MCP `structuredContent`. The host validates and registers the
+Artifact without displaying it. Assistant messages copy only `structuredContent.embed.code`
+onto its own line at the desired position and must not reproduce renderer JSON or GeoJSON.
+`map.v2` supports fit or camera viewports, Mercator rendering, and styled point, line, and
+polygon layers. Point layers support built-in shapes or HTTPS raster icons; line and polygon
+borders support solid or dash arrays. Every geometry can declare a safe, text-only hover view
+over selected GeoJSON properties. Inline GeoJSON is supported for small data; large data is
+read lazily from the referenced MCP Resource.
 
 Provider endpoints implemented:
 

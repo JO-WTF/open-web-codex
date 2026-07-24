@@ -8,7 +8,6 @@ import ApprovalCard from "./messages/ApprovalCard";
 import CommandExecutionCard from "./messages/CommandExecutionCard";
 import SystemNotice from "./messages/SystemNotice";
 import ExecutionGroup from "./messages/ExecutionGroup";
-import ReplyCard from "./messages/ReplyCard";
 
 type DiffLine = {
   type: "add" | "del" | "ctx";
@@ -30,6 +29,7 @@ export type MessageEntry = LogEntry & {
   diffLines?: DiffLine[];
   meta?: string;
   streaming?: boolean;
+  approvalDetail?: string;
 };
 
 type Props = {
@@ -42,11 +42,103 @@ type Props = {
 };
 
 function isAssistantProcessEntry(entry: MessageEntry) {
-  return entry.level === "assistant"
-    && (
-      entry.messagePhase === "commentary"
-      || (entry.streaming && entry.messagePhase === undefined)
-    );
+  return entry.level === "assistant" && entry.messagePhase === "commentary";
+}
+
+function parsedApprovalTool(entry: MessageEntry) {
+  return entry.approvalTool?.trim()
+    || entry.text.match(/\btool\s+["“']([^"”']+)["”']/i)?.[1]?.trim()
+    || "";
+}
+
+function parsedMcpIdentity(entry: MessageEntry) {
+  if (entry.kind !== "tool" || !entry.toolType?.toLowerCase().includes("mcp")) {
+    return null;
+  }
+  const parts = (entry.toolTitle ?? "")
+    .split(/\s*\/\s*/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length < 2) return null;
+  return {
+    server: parts[0],
+    tool: parts[parts.length - 1],
+  };
+}
+
+function isTerminalApproval(entry: MessageEntry) {
+  return entry.kind === "approval"
+    && entry.approvalMode !== "url"
+    && entry.approvalStatus !== undefined
+    && entry.approvalStatus !== "pending";
+}
+
+export function foldTerminalApprovals(items: MessageEntry[]) {
+  const folded = items.map((item) => ({ ...item }));
+  const consumedApprovals = new Set<number>();
+  const claimedTargets = new Set<number>();
+
+  folded.forEach((approval, approvalIndex) => {
+    if (!isTerminalApproval(approval)) return;
+
+    const approvalTool = parsedApprovalTool(approval);
+    const approvalServer = approval.approvalServerName?.trim() ?? "";
+    const exactCandidates: number[] = [];
+    const mcpCandidates: number[] = [];
+
+    folded.forEach((candidate, candidateIndex) => {
+      if (candidateIndex === approvalIndex || claimedTargets.has(candidateIndex)) return;
+      if (
+        approval.approvalId
+        && candidate.approvalId === approval.approvalId
+        && (candidate.kind === "tool" || candidate.kind === "command_exec")
+      ) {
+        exactCandidates.push(candidateIndex);
+        return;
+      }
+      if (!approvalTool) return;
+      const identity = parsedMcpIdentity(candidate);
+      if (
+        identity
+        && identity.tool === approvalTool
+        && (!approvalServer || identity.server === approvalServer)
+      ) {
+        mcpCandidates.push(candidateIndex);
+      }
+    });
+
+    const matchingCandidates = exactCandidates.length > 0 ? exactCandidates : mcpCandidates;
+    let targetIndex = matchingCandidates
+      .sort((left, right) => {
+        const distance = Math.abs(left - approvalIndex) - Math.abs(right - approvalIndex);
+        if (distance !== 0) return distance;
+        return left < approvalIndex ? -1 : 1;
+      })[0] ?? -1;
+
+    if (targetIndex < 0 && !approvalTool) {
+      for (let cursor = approvalIndex - 1; cursor >= 0; cursor -= 1) {
+        const candidate = folded[cursor];
+        if (
+          !claimedTargets.has(cursor)
+          && (candidate.kind === "tool" || candidate.kind === "command_exec")
+        ) {
+          targetIndex = cursor;
+          break;
+        }
+      }
+    }
+
+    if (targetIndex < 0) return;
+    folded[targetIndex] = {
+      ...folded[targetIndex],
+      approvalStatus: approval.approvalStatus,
+      approvalDetail: approval.text,
+    };
+    claimedTargets.add(targetIndex);
+    consumedApprovals.add(approvalIndex);
+  });
+
+  return folded.filter((_, index) => !consumedApprovals.has(index));
 }
 
 export default function MessageList({ items, thinking = false, turnStartedAt, onOpenFile, workspaceId, onResolveApproval }: Props) {
@@ -102,7 +194,8 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
               durationMs={entry.cmdDurationMs}
               cwd={entry.cmdCwd}
               commandActions={entry.cmdActions}
-              approvalStatus={entry.approvalStatus}
+              approvalStatus={entry.approvalStatus === "pending" ? undefined : entry.approvalStatus}
+              approvalDetail={entry.approvalDetail}
             />
           );
         }
@@ -128,6 +221,8 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
               filePath={entry.filePath}
               detail={entry.toolDetail}
               output={entry.toolOutput}
+              approvalStatus={entry.approvalStatus === "pending" ? undefined : entry.approvalStatus}
+              approvalDetail={entry.approvalDetail}
             />
           );
         }
@@ -152,6 +247,7 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
                 streaming={entry.streaming}
                 onOpenFile={onOpenFile}
                 variant={isAssistantProcessEntry(entry) ? "commentary" : "reply"}
+                inlineArtifacts={entry.inlineArtifacts}
               />
             );
           case "system":
@@ -170,17 +266,10 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
     || entry.toolStatus === "running";
   const isAssistantReply = (entry: MessageEntry) =>
     entry.level === "assistant" && !isAssistantProcessEntry(entry);
-  const appendReplyCard = (entry: MessageEntry) => {
-    if (entry.replyCard) {
-      rendered.push(<ReplyCard key={`${entry.id}-reply-card`} card={entry.replyCard} />);
-    }
-  };
-
   for (let index = 0; index < items.length;) {
     const entry = items[index];
     if (entry.level !== "user") {
       rendered.push(renderEntry(entry));
-      appendReplyCard(entry);
       index += 1;
       continue;
     }
@@ -216,24 +305,25 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
     let executionSegmentIndex = 0;
     const flushExecutionSegment = (active: boolean) => {
       if (executionSegment.length === 0 && !active) return;
+      const displaySegment = foldTerminalApprovals(executionSegment);
       let activeIndex = -1;
       if (active) {
-        for (let cursor = executionSegment.length - 1; cursor >= 0; cursor -= 1) {
-          if (isLiveEntry(executionSegment[cursor])) {
+        for (let cursor = displaySegment.length - 1; cursor >= 0; cursor -= 1) {
+          if (isLiveEntry(displaySegment[cursor])) {
             activeIndex = cursor;
             break;
           }
         }
-        if (activeIndex < 0 && executionSegment.length > 0) {
-          activeIndex = executionSegment.length - 1;
+        if (activeIndex < 0 && displaySegment.length > 0) {
+          activeIndex = displaySegment.length - 1;
         }
       }
-      const timelineItems = executionSegment.filter((_, cursor) => cursor !== activeIndex);
-      const activeItem = activeIndex >= 0 ? executionSegment[activeIndex] : null;
+      const timelineItems = displaySegment.filter((_, cursor) => cursor !== activeIndex);
+      const activeItem = activeIndex >= 0 ? displaySegment[activeIndex] : null;
       rendered.push(
         <ExecutionGroup
           key={`execution-${entry.id}-${executionSegmentIndex}`}
-          items={executionSegment}
+          items={displaySegment}
           active={active}
           startedAt={turnStartedAt}
           timelineItemCount={timelineItems.length}
@@ -251,14 +341,9 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
       if (isAssistantReply(item)) {
         flushExecutionSegment(false);
         rendered.push(renderEntry(item));
-        appendReplyCard(item);
         continue;
       }
       executionSegment.push(item);
-      if (item.replyCard) {
-        flushExecutionSegment(false);
-        appendReplyCard(item);
-      }
     }
 
     if (executionSegment.length > 0) {

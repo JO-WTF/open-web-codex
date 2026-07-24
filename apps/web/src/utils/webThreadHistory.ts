@@ -1,6 +1,7 @@
 import type { AgentMessagePhase, LogEntry } from "../WebApp";
 import { stripLeadingProviderSentinel } from "./providerText";
-import { parseStructuredMapReplyCard } from "./replyCards";
+import { parseInlineVisualizationArtifact } from "./replyCards";
+import { parseApprovalStatus } from "./approvalStatus";
 
 export function unwrapWebRpcResult(value: unknown): unknown {
   let current = value;
@@ -149,6 +150,7 @@ export function mergeWebThreadHistory(history: LogEntry[], live: LogEntry[]): Lo
         ...entry,
         id: historical.id,
         messagePhase: entry.messagePhase ?? historical.messagePhase,
+        inlineArtifacts: entry.inlineArtifacts ?? historical.inlineArtifacts,
         approvalStatus: historicalApprovalIsTerminal && entry.approvalStatus === "pending"
           ? historical.approvalStatus
           : entry.approvalStatus ?? historical.approvalStatus,
@@ -212,30 +214,33 @@ export function webLogEntryFromThreadItem(
   if (type === "userMessage") return text ? { id, level: "user", text } : null;
   if (type === "agentMessage") {
     const cleanText = stripLeadingProviderSentinel(text);
+    const inlineArtifacts = Array.isArray(item.inlineArtifacts)
+      ? item.inlineArtifacts.flatMap((value) => {
+          const artifact = parseInlineVisualizationArtifact(value);
+          return artifact ? [artifact] : [];
+        })
+      : [];
     return cleanText.trim() ? {
       id,
       level: "assistant",
       text: cleanText,
       messagePhase: agentMessagePhase(item.phase),
+      inlineArtifacts: inlineArtifacts.length ? inlineArtifacts : undefined,
     } : null;
   }
   if (type === "platformApproval") {
-    const approvalStatus = asText(item.approvalStatus);
+    const approvalStatus = parseApprovalStatus(item.approvalStatus);
     return {
       id,
       level: "info",
       text: asText(item.text) || "Approval requested",
       kind: "approval",
       approvalRequestId: asText(item.approvalRequestId) || undefined,
-      approvalStatus: approvalStatus === "pending"
-        || approvalStatus === "accepted"
-        || approvalStatus === "declined"
-        || approvalStatus === "resolved"
-        ? approvalStatus
-        : "resolved",
+      approvalStatus: approvalStatus ?? "resolved",
       approvalMode: asText(item.approvalMode) || undefined,
       approvalUrl: asText(item.approvalUrl) || undefined,
       approvalServerName: asText(item.approvalServerName) || undefined,
+      approvalTool: asText(item.approvalTool) || undefined,
     };
   }
   if (type === "hookPrompt") {
@@ -270,7 +275,6 @@ export function webLogEntryFromThreadItem(
   if (type === "mcpToolCall") {
     const server = asText(item.server);
     const tool = asText(item.tool);
-    const replyCard = parseStructuredMapReplyCard(item.replyCard);
     return {
       id,
       level: "info",
@@ -281,7 +285,6 @@ export function webLogEntryFromThreadItem(
       toolStatus,
       toolDetail: jsonText(redactSensitive(item.arguments)),
       toolOutput: jsonText(item.result ?? item.error),
-      replyCard: replyCard ?? undefined,
     };
   }
   if (type === "webSearch") return { id, level: "info", text: "Web search", kind: "tool", toolType: "Search", toolTitle: asText(item.query) || "Web search", toolStatus };

@@ -1024,6 +1024,34 @@ body:has(.web-app-shell) {
   line-height: 1.55;
 }
 
+.web-msg-assistant.has-inline-visualization {
+  width: 100%;
+}
+
+.web-msg-assistant.has-inline-visualization > .web-msg-assistant-body {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.web-msg-assistant.has-inline-visualization > .web-msg-assistant-body > .web-map-card {
+  width: auto;
+  max-width: none;
+  margin: 12px -6px;
+  border-radius: 12px;
+}
+
+.web-inline-visualization-unavailable {
+  width: min(100%, 680px);
+  padding: 14px 16px;
+  border: 1px dashed var(--web-border-strong);
+  border-radius: 12px;
+  color: var(--web-muted);
+  background: var(--web-surface);
+  font-size: 12px;
+}
+
 .web-msg-assistant-body code {
   color: #c5a6ff;
   background: rgb(9 12 18 / 75%);
@@ -1244,14 +1272,14 @@ body:has(.web-app-shell) {
   text-align: left;
 }
 
-.web-tool-card-header:not(:disabled) { cursor: pointer; }
-.web-tool-card-header:not(:disabled):hover { background: rgb(255 255 255 / 4%); }
-.web-tool-card-header:disabled { cursor: default; }
+.web-tool-card-header:not([aria-disabled="true"]) { cursor: pointer; }
+.web-tool-card-header:hover { background: rgb(255 255 255 / 4%); }
+.web-tool-card-header[aria-disabled="true"] { cursor: default; }
 .web-tool-card-header > svg { flex: 0 0 auto; color: #73d9be; }
 .web-tool-card-header > svg:first-child { color: var(--web-faint); transition: transform 140ms ease; }
 .web-tool-card-header > svg:first-child.is-open { transform: rotate(90deg); }
 .web-tool-chevron-spacer { width: 13px; flex: 0 0 13px; }
-.web-tool-card-header > span:not(.web-tool-name, .web-tool-status, .web-tool-chevron-spacer) {
+.web-tool-card-header > span:not(.web-tool-name, .web-tool-status, .web-tool-chevron-spacer, .web-approval-status-icon) {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1270,6 +1298,75 @@ body:has(.web-app-shell) {
   font: 10px/1.55 var(--font-code);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* Terminal approvals use the same three-state marker for commands and MCP
+   calls. The tooltip is portaled to the page root so card overflow cannot
+   clip it. */
+.web-approval-status-icon {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgb(100 224 187 / 34%);
+  border-radius: 999px;
+  color: #73d9be;
+  background: rgb(54 182 142 / 12%);
+  cursor: help;
+}
+
+.web-approval-status-icon.is-declined {
+  border-color: rgb(243 123 131 / 34%);
+  color: #f37b83;
+  background: rgb(214 81 91 / 12%);
+}
+
+.web-approval-status-icon.is-answered {
+  border-color: rgb(123 161 246 / 38%);
+  color: #9cb9ff;
+  background: rgb(104 142 231 / 13%);
+}
+
+.web-approval-status-icon svg { stroke-width: 2.25; }
+
+.web-approval-status-tooltip {
+  position: fixed;
+  z-index: 10000;
+  display: flex;
+  width: max-content;
+  max-width: min(340px, calc(100vw - 24px));
+  flex-direction: column;
+  gap: 3px;
+  padding: 7px 9px;
+  border: 1px solid #394557;
+  border-radius: 8px;
+  color: #cbd3df;
+  background: #111722;
+  box-shadow: 0 12px 30px rgb(0 0 0 / 34%);
+  font-size: 11px;
+  line-height: 1.35;
+  pointer-events: none;
+  overflow-wrap: anywhere;
+}
+
+.web-approval-status-tooltip[data-placement="top"] {
+  transform: translate(-50%, -100%);
+}
+
+.web-approval-status-tooltip[data-placement="bottom"] {
+  transform: translateX(-50%);
+}
+
+.web-approval-status-tooltip strong {
+  color: #f0f4f9;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.web-approval-status-tooltip > span {
+  color: #aab5c5;
 }
 
 .web-diff-block {
@@ -2709,7 +2806,7 @@ body:has(.web-app-shell[data-theme="light"]) {
   color: #3e4c60;
 }
 
-.web-app-shell[data-theme="light"] :is(.web-cmdex-header:hover, .web-tool-card-header:not(:disabled):hover, .web-diff-header:hover) {
+.web-app-shell[data-theme="light"] :is(.web-cmdex-header:hover, .web-tool-card-header:hover, .web-diff-header:hover) {
   background: rgb(63 111 174 / 7%);
 }
 
@@ -2835,6 +2932,36 @@ body:has(.web-app-shell[data-theme="light"]) {
 .web-app-shell[data-theme="light"] .web-cmdex-ok { color: #177a57; }
 .web-app-shell[data-theme="light"] .web-cmdex-err { color: #b43f49; }
 .web-app-shell[data-theme="light"] .web-cmdex-spinner { border-color: #e6d6c2; border-top-color: var(--web-orange); }
+.web-app-shell[data-theme="light"] .web-approval-status-icon {
+  border-color: #a7dec9;
+  color: #177a57;
+  background: #eaf8f1;
+}
+.web-app-shell[data-theme="light"] .web-approval-status-icon.is-declined {
+  border-color: #efb8be;
+  color: #b43f49;
+  background: #fff0f1;
+}
+.web-app-shell[data-theme="light"] .web-approval-status-icon.is-answered {
+  border-color: #bdcef4;
+  color: #3f68b8;
+  background: #eff4ff;
+}
+
+.web-app-shell[data-theme="light"] .web-approval-status-tooltip {
+  border-color: #cbd5e1;
+  color: #334155;
+  background: #ffffff;
+  box-shadow: 0 12px 30px rgb(30 41 59 / 18%);
+}
+
+.web-app-shell[data-theme="light"] .web-approval-status-tooltip strong {
+  color: #172033;
+}
+
+.web-app-shell[data-theme="light"] .web-approval-status-tooltip > span {
+  color: #526075;
+}
 
 .web-app-shell[data-theme="light"] .web-approval-card {
   border-color: #d9c4a6;

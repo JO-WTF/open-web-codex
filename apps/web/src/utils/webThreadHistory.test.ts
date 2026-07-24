@@ -21,10 +21,20 @@ describe("agentMessagePhase", () => {
 describe("mergeWebThreadHistory", () => {
   it("preserves messages sent while historical turns are loading", () => {
     expect(mergeWebThreadHistory(
-      [{ id: "old", level: "assistant", text: "Earlier response" }],
+      [{
+        id: "old",
+        level: "assistant",
+        text: "Earlier response",
+        messagePhase: "final_answer",
+      }],
       [{ id: "optimistic", level: "user", text: "New request" }],
     )).toEqual([
-      { id: "old", level: "assistant", text: "Earlier response" },
+      {
+        id: "old",
+        level: "assistant",
+        text: "Earlier response",
+        messagePhase: "final_answer",
+      },
       { id: "optimistic", level: "user", text: "New request" },
     ]);
   });
@@ -155,6 +165,7 @@ describe("buildWebThreadHistory", () => {
             approvalRequestId: "request-1",
             approvalStatus: "resolved",
             approvalServerName: "map_utils",
+            approvalTool: "batch_geocode",
           },
           {
             id: "reply-1",
@@ -175,7 +186,27 @@ describe("buildWebThreadHistory", () => {
       kind: "approval",
       approvalRequestId: "request-1",
       approvalStatus: "resolved",
+      approvalTool: "batch_geocode",
     });
+  });
+
+  it.each([
+    ["accepted", "accepted"],
+    ["declined", "declined"],
+    ["answered", "answered"],
+  ] as const)("restores the %s approval outcome without collapsing it to resolved", (status, expected) => {
+    const [entry] = buildWebThreadHistory({
+      turns: [{
+        items: [{
+          id: `approval-${status}`,
+          type: "platformApproval",
+          text: "Approval response",
+          approvalStatus: status,
+        }],
+      }],
+    }, () => "unused");
+
+    expect(entry.approvalStatus).toBe(expected);
   });
 
   it("unwraps nested gateway and app-server result envelopes", () => {
@@ -307,7 +338,7 @@ describe("buildWebThreadHistory", () => {
             status: "completed",
             contentItems: [{ type: "inputText", text: "Nested tool result" }],
           },
-          { id: "final", type: "agentMessage", text: "完成。" },
+          { id: "final", type: "agentMessage", text: "完成。", phase: "final_answer" },
         ],
       }],
     }, () => `log-${++id}`);
@@ -318,7 +349,7 @@ describe("buildWebThreadHistory", () => {
       { kind: "diff", diffTitle: "File changes" },
       { kind: "tool", toolTitle: "update_goal", toolOutput: "Goal updated" },
       { kind: "tool", toolTitle: "exec", toolOutput: "Nested tool result" },
-      { level: "assistant", text: "完成。" },
+      { level: "assistant", text: "完成。", messagePhase: "final_answer" },
     ]);
   });
 
@@ -342,19 +373,21 @@ describe("buildWebThreadHistory", () => {
     expect(result.every((entry) => entry.kind === "tool")).toBe(true);
   });
 
-  it("restores a Server-projected MCP structured map card", () => {
+  it("restores authorized typed Artifacts on their Agent Message", () => {
     const [entry] = buildWebThreadHistory({
       turns: [{ items: [{
-        id: "map-card",
-        type: "mcpToolCall",
-        server: "map_utils",
-        tool: "create_map_card",
-        status: "completed",
-        result: { content: [] },
-        replyCard: {
-          type: "open-web-card",
-          kind: "map.v2",
-          card: {
+        id: "assistant-map",
+        type: "agentMessage",
+        text: [
+          "Before.",
+          '::codex-inline-vis{artifact="map-locations"}',
+          "After.",
+        ].join("\n"),
+        inlineArtifacts: [{
+          ref: "map-locations",
+          renderer: {
+            kind: "map.v2",
+            payload: {
             title: "Locations",
             intent: "visualization",
             status: "ready",
@@ -374,29 +407,31 @@ describe("buildWebThreadHistory", () => {
               geometry: "point",
               style: { color: "#ef4444" },
             }],
+            },
           },
-        },
+        }],
       }] }],
     }, () => "generated");
 
     expect(entry).toMatchObject({
-      id: "map-card",
-      level: "info",
-      kind: "tool",
-      text: "create_map_card",
-      toolType: "MCP",
-      toolTitle: "map_utils / create_map_card",
-      replyCard: {
-        kind: "map.v2",
-        title: "Locations",
-        sources: [{
-          id: "locations",
-          data: {
-            type: "artifact",
-            artifactId: "8e98ff2f-82ee-4cc9-a3e6-2974debf8666",
-          },
-        }],
-      },
+      id: "assistant-map",
+      level: "assistant",
+      text: 'Before.\n::codex-inline-vis{artifact="map-locations"}\nAfter.',
+      inlineArtifacts: [{
+        ref: "map-locations",
+        rendererKind: "map.v2",
+        card: {
+          kind: "map.v2",
+          title: "Locations",
+          sources: [{
+            id: "locations",
+            data: {
+              type: "artifact",
+              artifactId: "8e98ff2f-82ee-4cc9-a3e6-2974debf8666",
+            },
+          }],
+        },
+      }],
     });
   });
 

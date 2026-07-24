@@ -1,16 +1,20 @@
-import CircleCheck from "lucide-react/dist/esm/icons/circle-check";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   applySavedMapsConfiguration,
   useMapsConfiguration,
 } from "../../../services/mapsConfiguration";
 import MapsConfigurationModal from "./MapsConfigurationModal";
+import ApprovalStatusIcon from "./ApprovalStatusIcon";
+import {
+  isApprovalOutcome,
+  type ApprovalStatus,
+} from "../../../utils/approvalStatus";
 
 type Props = {
   command: string;
   workspaceId?: string;
   requestId?: number | string;
-  status?: "pending" | "accepted" | "declined" | "resolved";
+  status?: ApprovalStatus;
   mode?: string;
   url?: string;
   serverName?: string;
@@ -69,7 +73,11 @@ export default function ApprovalCard({
     ? (mapsCredentialRequest ? "Configured" : credentialRequest ? "Configuration opened" : "Accepted")
     : status === "declined"
       ? "Denied"
-      : "Resolved";
+      : status === "answered"
+        ? "Other response provided"
+        : status === "cancelled"
+          ? "Cancelled"
+          : "Resolved";
 
   const handleAccept = useCallback(() => {
     if (workspaceId && requestId !== undefined && onResolve) {
@@ -134,8 +142,10 @@ export default function ApprovalCard({
       <div className="web-approval-header">
         {pending ? (
           <span className="web-approval-icon">&#9888;</span>
+        ) : isApprovalOutcome(status) ? (
+          <ApprovalStatusIcon status={status} detail={shortCmd} />
         ) : (
-          <CircleCheck className="web-approval-resolved-icon" size={14} aria-hidden="true" />
+          <span className="web-approval-resolved-icon" aria-hidden="true">&#10003;</span>
         )}
         <span className="web-approval-label">
           {pending

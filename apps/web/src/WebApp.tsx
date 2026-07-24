@@ -22,7 +22,15 @@ import { appendWebLogEntry } from "./utils/webApprovalLog";
 import { rememberAppServerEvent } from "./utils/webAppServerEventDedup";
 import { getAppServerThreadId } from "./utils/appServerEvents";
 import { finalizeInterruptedTurnEntries } from "./utils/webInterruptedTurn";
-import type { ReplyCard } from "./utils/replyCards";
+import {
+  parseInlineVisualizationArtifact,
+  type InlineVisualizationArtifact,
+} from "./utils/replyCards";
+import {
+  isApprovalOutcome,
+  parseApprovalStatus,
+  type ApprovalStatus,
+} from "./utils/approvalStatus";
 import "./styles/web.css";
 import "./styles/web-refactor.css";
 
@@ -37,17 +45,18 @@ export type LogEntry = {
   messagePhase?: AgentMessagePhase;
   approvalId?: string;
   approvalRequestId?: number | string;
-  approvalStatus?: "pending" | "accepted" | "declined" | "resolved";
+  approvalStatus?: ApprovalStatus;
   approvalMode?: string;
   approvalUrl?: string;
   approvalServerName?: string;
+  approvalTool?: string;
   kind?: "reasoning" | "tool" | "diff" | "approval" | "command_exec" | "connection";
   toolType?: string;
   toolTitle?: string;
   toolStatus?: string;
   toolDetail?: string;
   toolOutput?: string;
-  replyCard?: ReplyCard;
+  inlineArtifacts?: InlineVisualizationArtifact[];
   reasoningSummary?: string;
   filePath?: string;
   diffTitle?: string;
@@ -786,6 +795,12 @@ export default function WebApp() {
           const completedItemId = itemId ?? itemIdFromItem;
           const completedMessagePhase = agentMessagePhase(item.phase)
             ?? (completedItemId ? agentMessagePhases.current.get(completedItemId) : undefined);
+          const completedInlineArtifacts = Array.isArray(item.inlineArtifacts)
+            ? item.inlineArtifacts.flatMap((value) => {
+                const artifact = parseInlineVisualizationArtifact(value);
+                return artifact ? [artifact] : [];
+              })
+            : [];
           const completedReasoningSummary = (Array.isArray(item.summary) && item.summary.length > 0)
             ? item.summary.map((part) => String(part)).join("\n\n").trim()
             : typeof item.summary === "string" ? item.summary.trim() : "";
@@ -805,6 +820,9 @@ export default function WebApp() {
                       ...e,
                       text: acc,
                       messagePhase: completedMessagePhase ?? e.messagePhase,
+                      inlineArtifacts: completedInlineArtifacts.length
+                        ? completedInlineArtifacts
+                        : e.inlineArtifacts,
                       streaming: false,
                     } : e))
                   : prev.filter((e) => e.id !== eid));
@@ -824,6 +842,9 @@ export default function WebApp() {
               level: "assistant",
               text: completedText,
               messagePhase: completedMessagePhase,
+              inlineArtifacts: completedInlineArtifacts.length
+                ? completedInlineArtifacts
+                : undefined,
             };
           }
 
@@ -1311,6 +1332,11 @@ export default function WebApp() {
           const approvalServerName = typeof params.serverName === "string"
             ? params.serverName
             : undefined;
+          const approvalTool = typeof params.tool === "string"
+            ? params.tool
+            : typeof params.toolName === "string"
+              ? params.toolName
+              : cmd.match(/\btool\s+["“']([^"”']+)["”']/i)?.[1];
           const approvalThreadId = typeof params.threadId === "string"
             ? params.threadId
             : typeof params.thread_id === "string" ? params.thread_id : null;
@@ -1326,6 +1352,7 @@ export default function WebApp() {
               approvalMode,
               approvalUrl,
               approvalServerName,
+              approvalTool,
             };
             const current = pendingApprovalsByThread.current.get(approvalThreadId) ?? [];
             pendingApprovalsByThread.current.set(
@@ -1353,6 +1380,7 @@ export default function WebApp() {
             approvalMode,
             approvalUrl,
             approvalServerName,
+            approvalTool,
           };
         }
 
@@ -1380,16 +1408,10 @@ export default function WebApp() {
           setMessages((previous) => {
             const approval = previous.find((entry) =>
               entry.kind === "approval" && entry.approvalRequestId === requestId);
-            const status: LogEntry["approvalStatus"] = approval?.approvalStatus === "accepted"
-              || approval?.approvalStatus === "declined"
+            const status: LogEntry["approvalStatus"] = isApprovalOutcome(approval?.approvalStatus)
               ? approval.approvalStatus
-              : "resolved";
+              : parseApprovalStatus(params.approvalStatus) ?? "resolved";
             return previous
-              .filter((entry) => !(
-                entry.kind === "approval"
-                && entry.approvalRequestId === requestId
-                && entry.approvalMode !== "url"
-              ))
               .map((entry) => entry.kind === "approval"
                 && entry.approvalRequestId === requestId
                 ? { ...entry, approvalStatus: status }

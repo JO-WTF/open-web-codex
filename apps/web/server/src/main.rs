@@ -433,6 +433,10 @@ fn public_resolved_approval_frame(
             serde_json::Value::String(resolved.thread_id.clone()),
         ),
         (
+            "approvalStatus".to_string(),
+            serde_json::Value::String(resolved.outcome.as_str().to_string()),
+        ),
+        (
             "requestId".to_string(),
             serde_json::Value::String(resolved.approval_id.to_string()),
         ),
@@ -957,6 +961,7 @@ mod tests {
                 thread_id: "platform-thread".to_string(),
                 turn_id: Some("platform-turn".to_string()),
                 item_id: Some("platform-item".to_string()),
+                outcome: open_web_codex_approval_service::ApprovalOutcome::Accepted,
             },
         )
         .expect("approval resolution projection");
@@ -988,6 +993,12 @@ mod tests {
         assert_eq!(
             value.pointer("/params/message/params/itemId").unwrap(),
             "platform-item"
+        );
+        assert_eq!(
+            value
+                .pointer("/params/message/params/approvalStatus")
+                .unwrap(),
+            "accepted"
         );
     }
 }

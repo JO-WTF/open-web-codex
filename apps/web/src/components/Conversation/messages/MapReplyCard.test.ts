@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { MapReplyCard as MapReplyCardData } from "../../../utils/replyCards";
 import {
   dataBoundsForSources,
+  MAP_CARD_PROJECTION,
   mapStyleForToken,
   sameMapReplyCard,
 } from "./MapReplyCard";
@@ -99,6 +100,10 @@ describe("Mapbox map.v2 rendering data", () => {
       "mapbox://styles/mapbox/streets-v12",
     );
     expect(mapStyleForToken("")).toBeNull();
+  });
+
+  it("always uses a flat Mercator projection", () => {
+    expect(MAP_CARD_PROJECTION).toBe("mercator");
   });
 
   it("preserves an explicit camera zoom in the parsed card", () => {

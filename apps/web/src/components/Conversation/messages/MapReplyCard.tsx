@@ -24,6 +24,9 @@ type LoadedSource = {
 };
 
 type MapLoadState = "loading" | "ready" | "error";
+type MapboxModule = typeof import("mapbox-gl");
+
+export const MAP_CARD_PROJECTION = "mercator" as const;
 
 export function sameMapReplyCard(
   left: MapReplyCardData,
@@ -127,27 +130,128 @@ function geometryFilter(geometry: MapLayer["geometry"]) {
   return ["in", ["geometry-type"], ["literal", ["Polygon", "MultiPolygon"]]];
 }
 
-function addLayer(map: MapboxMap, layer: MapLayer) {
+function shapeImage(
+  shape: "square" | "diamond" | "triangle" | "pin",
+  fill: string,
+  stroke: string,
+  strokeWidth: number,
+): ImageData {
+  const pixelRatio = 2;
+  const logicalSize = 32;
+  const canvas = document.createElement("canvas");
+  canvas.width = logicalSize * pixelRatio;
+  canvas.height = logicalSize * pixelRatio;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Canvas is unavailable for map point shapes.");
+  context.scale(pixelRatio, pixelRatio);
+  context.fillStyle = fill;
+  context.strokeStyle = stroke;
+  context.lineWidth = Math.min(strokeWidth, 6);
+  context.lineJoin = "round";
+  context.beginPath();
+  if (shape === "square") {
+    context.rect(5, 5, 22, 22);
+  } else if (shape === "diamond") {
+    context.moveTo(16, 3);
+    context.lineTo(29, 16);
+    context.lineTo(16, 29);
+    context.lineTo(3, 16);
+    context.closePath();
+  } else if (shape === "triangle") {
+    context.moveTo(16, 3);
+    context.lineTo(29, 28);
+    context.lineTo(3, 28);
+    context.closePath();
+  } else {
+    context.moveTo(16, 30);
+    context.bezierCurveTo(13, 24, 6, 18, 6, 12);
+    context.bezierCurveTo(6, 6, 10.5, 2, 16, 2);
+    context.bezierCurveTo(21.5, 2, 26, 6, 26, 12);
+    context.bezierCurveTo(26, 18, 19, 24, 16, 30);
+    context.closePath();
+  }
+  context.fill();
+  if (strokeWidth > 0) context.stroke();
+  return context.getImageData(0, 0, canvas.width, canvas.height);
+}
+
+function loadMapImage(
+  map: MapboxMap,
+  url: string,
+): Promise<ImageBitmap | HTMLImageElement | ImageData> {
+  return new Promise((resolve, reject) => {
+    map.loadImage(url, (error, image) => {
+      if (error || !image) {
+        reject(error ?? new Error(`Map icon could not be loaded: ${url}`));
+        return;
+      }
+      resolve(image);
+    });
+  });
+}
+
+async function addLayer(map: MapboxMap, layer: MapLayer): Promise<string> {
   const source = `reply-source-${layer.source}`;
   const filter = geometryFilter(layer.geometry);
+  const primaryLayerId = `reply-layer-${layer.id}`;
   if (layer.geometry === "point") {
-    map.addLayer({
-      id: `reply-layer-${layer.id}`,
-      type: "circle",
-      source,
-      filter,
-      paint: {
-        "circle-color": layer.style.color ?? "#f97316",
-        "circle-opacity": layer.style.opacity ?? 1,
-        "circle-radius": layer.style.radius ?? 7,
-        "circle-stroke-color": layer.style.strokeColor ?? "#ffffff",
-        "circle-stroke-width": layer.style.strokeWidth ?? 2,
-        "circle-stroke-opacity": layer.style.strokeOpacity ?? 1,
-      },
-    } as never);
+    const shape = layer.style.shape ?? "circle";
+    if (!layer.style.icon && shape === "circle") {
+      map.addLayer({
+        id: primaryLayerId,
+        type: "circle",
+        source,
+        filter,
+        paint: {
+          "circle-color": layer.style.color ?? "#f97316",
+          "circle-opacity": layer.style.opacity ?? 1,
+          "circle-radius": layer.style.size != null
+            ? layer.style.size / 2
+            : layer.style.radius ?? 7,
+          "circle-stroke-color": layer.style.strokeColor ?? "#ffffff",
+          "circle-stroke-width": layer.style.strokeWidth ?? 2,
+          "circle-stroke-opacity": layer.style.strokeOpacity ?? 1,
+        },
+      } as never);
+    } else {
+      const imageId = `reply-image-${layer.id}`;
+      if (layer.style.icon) {
+        const image = await loadMapImage(map, layer.style.icon.url);
+        if (!map.hasImage(imageId)) map.addImage(imageId, image);
+      } else if (!map.hasImage(imageId)) {
+        map.addImage(
+          imageId,
+          shapeImage(
+            shape as "square" | "diamond" | "triangle" | "pin",
+            layer.style.color ?? "#f97316",
+            layer.style.strokeColor ?? "#ffffff",
+            layer.style.strokeWidth ?? 2,
+          ),
+          { pixelRatio: 2 },
+        );
+      }
+      map.addLayer({
+        id: primaryLayerId,
+        type: "symbol",
+        source,
+        filter,
+        layout: {
+          "icon-image": imageId,
+          "icon-size": layer.style.icon
+            ? layer.style.icon.scale ?? 1
+            : (layer.style.size ?? 16) / 32,
+          "icon-anchor": layer.style.icon?.anchor ?? (shape === "pin" ? "bottom" : "center"),
+          "icon-rotate": layer.style.icon?.rotation ?? 0,
+          "icon-allow-overlap": layer.style.icon?.allowOverlap ?? false,
+        },
+        paint: {
+          "icon-opacity": layer.style.opacity ?? 1,
+        },
+      } as never);
+    }
   } else if (layer.geometry === "line") {
     map.addLayer({
-      id: `reply-layer-${layer.id}`,
+      id: primaryLayerId,
       type: "line",
       source,
       filter,
@@ -164,7 +268,7 @@ function addLayer(map: MapboxMap, layer: MapLayer) {
     } as never);
   } else {
     map.addLayer({
-      id: `reply-layer-${layer.id}`,
+      id: primaryLayerId,
       type: "fill",
       source,
       filter,
@@ -209,6 +313,80 @@ function addLayer(map: MapboxMap, layer: MapLayer) {
       },
     } as never);
   }
+  return primaryLayerId;
+}
+
+function hoverValue(value: unknown): string {
+  if (value == null || value === "") return "—";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function hoverContent(
+  layer: MapLayer,
+  properties: Record<string, unknown>,
+): HTMLElement | null {
+  if (!layer.hover) return null;
+  const root = document.createElement("div");
+  root.className = "web-map-card-hover-content";
+  if (layer.hover.titleProperty) {
+    const title = document.createElement("strong");
+    title.textContent = hoverValue(properties[layer.hover.titleProperty]);
+    root.append(title);
+  }
+  if (layer.hover.fields.length) {
+    const details = document.createElement("dl");
+    for (const field of layer.hover.fields) {
+      const label = document.createElement("dt");
+      label.textContent = field.label ?? field.property;
+      const value = document.createElement("dd");
+      value.textContent = hoverValue(properties[field.property]);
+      details.append(label, value);
+    }
+    root.append(details);
+  }
+  return root;
+}
+
+function attachHover(
+  map: MapboxMap,
+  mapboxgl: MapboxModule["default"],
+  layer: MapLayer,
+  layerId: string,
+): () => void {
+  if (!layer.hover) return () => {};
+  const popup = new mapboxgl.Popup({
+    closeButton: false,
+    closeOnClick: false,
+    offset: 12,
+    className: "web-map-card-hover",
+  });
+  const canvas = map.getCanvas();
+  const onMove = (event: {
+    features?: Array<{ properties?: Record<string, unknown> | null }>;
+    lngLat: import("mapbox-gl").LngLatLike;
+  }) => {
+    const content = hoverContent(layer, event.features?.[0]?.properties ?? {});
+    if (!content) return;
+    canvas.style.cursor = "pointer";
+    popup.setLngLat(event.lngLat).setDOMContent(content).addTo(map);
+  };
+  const onLeave = () => {
+    canvas.style.cursor = "";
+    popup.remove();
+  };
+  map.on("mousemove", layerId, onMove as never);
+  map.on("mouseleave", layerId, onLeave);
+  return () => {
+    map.off("mousemove", layerId, onMove as never);
+    map.off("mouseleave", layerId, onLeave);
+    onLeave();
+  };
 }
 
 function useLoadedSources(card: MapReplyCardData) {
@@ -282,6 +460,9 @@ function MapCanvas({
     let disposed = false;
     let resizeObserver: ResizeObserver | null = null;
     let fittedAfterLayout = false;
+    const hoverCleanups: Array<() => void> = [];
+    setLoadState("loading");
+    setLoadError("");
     const applyViewport = (map: MapboxMap) => {
       map.resize();
       if (card.viewport.mode === "camera") {
@@ -318,22 +499,37 @@ function MapCanvas({
         const map = new mapboxgl.Map({
           container: mapElement.current,
           style: mapStyle,
+          projection: MAP_CARD_PROJECTION,
           ...camera,
           attributionControl: true,
         });
         mapInstance.current = map;
         map.addControl(new mapboxgl.NavigationControl(), "top-right");
         map.once("load", () => {
-          if (disposed) return;
-          for (const source of loaded.sources) {
-            map.addSource(`reply-source-${source.id}`, {
-              type: "geojson",
-              data: source.data as never,
-            });
-          }
-          for (const layer of card.layers) addLayer(map, layer);
-          applyViewport(map);
-          setLoadState("ready");
+          void (async () => {
+            if (disposed) return;
+            for (const source of loaded.sources) {
+              map.addSource(`reply-source-${source.id}`, {
+                type: "geojson",
+                data: source.data as never,
+              });
+            }
+            for (const layer of card.layers) {
+              const layerId = await addLayer(map, layer);
+              if (disposed) return;
+              hoverCleanups.push(attachHover(map, mapboxgl, layer, layerId));
+            }
+            applyViewport(map);
+            setLoadState("ready");
+          })().catch((reason: unknown) => {
+            if (disposed) return;
+            setLoadState("error");
+            setLoadError(
+              reason instanceof Error
+                ? reason.message
+                : "Map layers failed to load.",
+            );
+          });
         });
         map.on("error", (event) => {
           if (disposed) return;
@@ -359,6 +555,7 @@ function MapCanvas({
 
     return () => {
       disposed = true;
+      for (const cleanup of hoverCleanups) cleanup();
       resizeObserver?.disconnect();
       mapInstance.current?.remove();
       mapInstance.current = null;
@@ -464,14 +661,6 @@ const MapReplyCard = memo(function MapReplyCard({ card }: Props) {
       />
       <div className="web-map-card-body">
         <p>{detail}</p>
-        <dl>
-          <dt>Sources</dt>
-          <dd>{card.sources.length}</dd>
-          <dt>Layers</dt>
-          <dd>{card.layers.length}</dd>
-          <dt>Viewport</dt>
-          <dd>{card.viewport.mode === "fit" ? "Fit data" : `Zoom ${card.viewport.zoom}`}</dd>
-        </dl>
         {card.legend ? (
           <div className="web-map-card-legend" aria-label={card.legend.title ?? "Map legend"}>
             {card.legend.title ? <strong>{card.legend.title}</strong> : null}

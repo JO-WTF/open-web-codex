@@ -2654,26 +2654,7 @@ body {
 }
 
 .web-map-card-body p {
-  margin: 0 0 10px;
-}
-
-.web-map-card-body dl {
-  display: grid;
   margin: 0;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: 6px 10px;
-  font-size: 12px;
-}
-
-.web-map-card-body dt {
-  color: var(--text-fainter);
-}
-
-.web-map-card-body dd {
-  min-width: 0;
-  margin: 0;
-  overflow-wrap: anywhere;
-  color: var(--text-stronger);
 }
 
 .web-map-card-legend {
@@ -2700,6 +2681,50 @@ body {
   height: 10px;
   border: 1px solid rgba(15, 23, 42, 0.18);
   border-radius: 999px;
+}
+
+.web-map-card-hover .mapboxgl-popup-tip {
+  display: none;
+}
+
+.web-map-card-hover .mapboxgl-popup-content {
+  min-width: 180px;
+  max-width: min(320px, 72vw);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  background: var(--bg-elevated);
+  box-shadow: 0 12px 28px rgb(15 23 42 / 20%);
+  color: var(--text-primary);
+}
+
+.web-map-card-hover-content {
+  display: grid;
+  gap: 8px;
+  font: 12px/1.45 var(--font-ui);
+}
+
+.web-map-card-hover-content strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.web-map-card-hover-content dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 5px 10px;
+  margin: 0;
+}
+
+.web-map-card-hover-content dt {
+  color: var(--text-tertiary);
+}
+
+.web-map-card-hover-content dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
 }
 
 .web-map-card-modal {

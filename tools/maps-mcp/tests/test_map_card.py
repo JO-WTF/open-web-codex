@@ -43,10 +43,20 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
                     id="points",
                     source="locations",
                     label_property="label",
+                    hover=server.LayerHover(
+                        title_property="label",
+                        fields=[
+                            server.HoverField(
+                                property="category",
+                                label="Category",
+                            )
+                        ],
+                    ),
                     style=server.PointStyle(
                         color="#ef4444",
                         opacity=0.8,
-                        radius=9,
+                        shape="pin",
+                        size=24,
                         stroke_color="#ffffff",
                         stroke_width=2,
                     ),
@@ -60,12 +70,26 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(result.structuredContent)
         structured_content = result.structuredContent
         assert structured_content is not None
-        self.assertEqual(structured_content["type"], "open-web-card")
-        self.assertEqual(structured_content["kind"], "map.v2")
-        payload = structured_content["card"]
+        self.assertEqual(structured_content["type"], "open-web-artifact")
+        self.assertEqual(structured_content["kind"], "inline-visualization.v1")
+        artifact = structured_content["artifact"]
+        self.assertTrue(artifact["ref"].startswith("map-"))
+        self.assertEqual(artifact["renderer"]["kind"], "map.v2")
+        payload = artifact["renderer"]["payload"]
         self.assertEqual(payload["viewport"]["zoom"], 11)
         self.assertEqual(payload["layers"][0]["style"]["opacity"], 0.8)
-        self.assertEqual(result.content[0].text, "Map card ready: 上海点位")
+        self.assertEqual(payload["layers"][0]["style"]["shape"], "pin")
+        self.assertEqual(
+            payload["layers"][0]["hover"]["fields"][0],
+            {"property": "category", "label": "Category"},
+        )
+        embed = structured_content["embed"]
+        self.assertEqual(embed["syntax"], "codex-inline-vis.artifact.v1")
+        self.assertEqual(
+            embed["code"],
+            f'::codex-inline-vis{{artifact="{artifact["ref"]}"}}',
+        )
+        self.assertIn(embed["code"], result.content[0].text)
 
     async def test_create_map_card_references_prior_mcp_resource_uri(self) -> None:
         resource_uri = "maps-data://geojson/map-data-1234"
@@ -98,7 +122,7 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
         )
 
         assert result.structuredContent is not None
-        payload = result.structuredContent["card"]
+        payload = result.structuredContent["artifact"]["renderer"]["payload"]
         self.assertEqual(payload["sources"][0]["data"]["server"], "map_utils")
         self.assertEqual(payload["sources"][0]["data"]["uri"], resource_uri)
         self.assertEqual(payload["viewport"]["mode"], "fit")
@@ -110,7 +134,10 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNotNone(tool.outputSchema)
         assert tool.outputSchema is not None
-        self.assertEqual(set(tool.outputSchema["required"]), {"type", "kind", "card"})
+        self.assertEqual(
+            set(tool.outputSchema["required"]),
+            {"type", "kind", "artifact", "embed"},
+        )
         assert tool.inputSchema is not None
         card_resource_schema = tool.inputSchema["$defs"]["McpResourceMapData"]
         self.assertIn("server", card_resource_schema["required"])
@@ -154,6 +181,48 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsInstance(result, CallToolResult)
         self.assertIsNotNone(result.structuredContent)
+
+    async def test_create_map_card_accepts_custom_raster_icons(self) -> None:
+        result = await server.create_map_card(
+            title="Custom icons",
+            sources=[inline_source()],
+            layers=[
+                server.PointLayer(
+                    id="icons",
+                    source="locations",
+                    hover=server.LayerHover(title_property="label"),
+                    style=server.PointStyle(
+                        opacity=0.9,
+                        icon=server.PointIcon(
+                            url="https://cdn.example.com/marker.webp?version=2",
+                            scale=0.75,
+                            anchor="bottom",
+                            rotation=15,
+                            allow_overlap=True,
+                        ),
+                    ),
+                )
+            ],
+        )
+
+        assert result.structuredContent is not None
+        style = result.structuredContent["artifact"]["renderer"]["payload"]["layers"][0][
+            "style"
+        ]
+        self.assertEqual(style["icon"]["url"], "https://cdn.example.com/marker.webp?version=2")
+        self.assertEqual(style["icon"]["anchor"], "bottom")
+        self.assertTrue(style["icon"]["allow_overlap"])
+
+    def test_point_style_rejects_ambiguous_or_unsafe_icons(self) -> None:
+        with self.assertRaisesRegex(ValueError, "mutually exclusive"):
+            server.PointStyle(radius=8, size=16)
+        with self.assertRaisesRegex(ValueError, "built-in shape styles"):
+            server.PointStyle(
+                color="#ef4444",
+                icon=server.PointIcon(url="https://cdn.example.com/marker.png"),
+            )
+        with self.assertRaisesRegex(ValueError, "HTTPS PNG, JPEG, or WebP"):
+            server.PointIcon(url="http://cdn.example.com/marker.svg")
 
     async def test_geojson_tool_result_includes_resource_server_and_uri(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

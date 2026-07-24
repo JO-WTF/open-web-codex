@@ -162,7 +162,7 @@ try:
             f"{map_card_resource_schema}"
         )
     output_schema = map_card_tool.get("outputSchema")
-    required_output_fields = {"type", "kind", "card"}
+    required_output_fields = {"type", "kind", "artifact", "embed"}
     if not isinstance(output_schema, dict) or not required_output_fields.issubset(
         set(output_schema.get("required", []))
     ):
@@ -222,14 +222,24 @@ try:
     structured_content = call.get("result", {}).get("structuredContent")
     if not isinstance(structured_content, dict):
         raise SystemExit(f"create_map_card did not return structuredContent: {call}")
-    if structured_content.get("type") != "open-web-card":
+    if structured_content.get("type") != "open-web-artifact":
         raise SystemExit(f"create_map_card returned an invalid type: {structured_content!r}")
-    if structured_content.get("kind") != "map.v2":
+    if structured_content.get("kind") != "inline-visualization.v1":
         raise SystemExit(f"create_map_card returned an invalid kind: {structured_content!r}")
-    card = structured_content.get("card")
+    artifact = structured_content.get("artifact")
+    if not isinstance(artifact, dict) or not artifact.get("ref", "").startswith("map-"):
+        raise SystemExit(f"create_map_card returned an invalid Artifact: {artifact!r}")
+    renderer = artifact.get("renderer")
+    if not isinstance(renderer, dict) or renderer.get("kind") != "map.v2":
+        raise SystemExit(f"create_map_card returned an invalid renderer: {renderer!r}")
+    card = renderer.get("payload")
     if not isinstance(card, dict) or card.get("title") != "Jakarta":
         raise SystemExit(f"create_map_card returned an invalid card: {card!r}")
-    if text != "Map card ready: Jakarta":
+    embed = structured_content.get("embed")
+    expected_embed = f'::codex-inline-vis{{artifact="{artifact["ref"]}"}}'
+    if not isinstance(embed, dict) or embed.get("code") != expected_embed:
+        raise SystemExit(f"create_map_card returned an invalid embed code: {embed!r}")
+    if expected_embed not in text:
         raise SystemExit(f"create_map_card returned unexpected text content: {text[:500]}")
     print(json.dumps({
         "ok": True,

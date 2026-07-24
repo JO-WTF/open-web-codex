@@ -34,6 +34,24 @@ export type PointLayerStyle = {
   color?: string;
   opacity?: number;
   radius?: number;
+  size?: number;
+  shape?: "circle" | "square" | "diamond" | "triangle" | "pin";
+  icon?: {
+    url: string;
+    scale?: number;
+    anchor?:
+      | "center"
+      | "top"
+      | "bottom"
+      | "left"
+      | "right"
+      | "top-left"
+      | "top-right"
+      | "bottom-left"
+      | "bottom-right";
+    rotation?: number;
+    allowOverlap?: boolean;
+  };
   strokeColor?: string;
   strokeWidth?: number;
   strokeOpacity?: number;
@@ -61,6 +79,10 @@ type MapLayerBase = {
   id: string;
   source: string;
   labelProperty?: string;
+  hover?: {
+    titleProperty?: string;
+    fields: Array<{ property: string; label?: string }>;
+  };
 };
 
 export type MapLayer =
@@ -87,6 +109,11 @@ export type MapReplyCard = {
 };
 
 export type ReplyCard = MapReplyCard;
+export type InlineVisualizationArtifact = {
+  ref: string;
+  rendererKind: "map.v2";
+  card: MapReplyCard;
+};
 
 export type GeoJson = Record<string, unknown> & { type: string };
 
@@ -177,6 +204,7 @@ function commonLayer(value: Record<string, unknown>) {
     id,
     source: sourceId,
     labelProperty: nonemptyString(value.label_property),
+    hover: layerHover(value.hover),
   };
 }
 
@@ -185,12 +213,71 @@ function numberList(value: unknown): number[] | undefined {
   return value as number[];
 }
 
+function supportedMapIconUrl(value: unknown): string | undefined {
+  const url = nonemptyString(value);
+  if (!url || url.length > 2048) return undefined;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:"
+      && /\.(?:png|jpe?g|webp)$/i.test(parsed.pathname)
+      ? url
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function pointIcon(value: unknown): PointLayerStyle["icon"] {
+  if (!isRecord(value)) return undefined;
+  const url = supportedMapIconUrl(value.url);
+  if (!url) return undefined;
+  const anchor = value.anchor;
+  const supportedAnchors = new Set([
+    "center",
+    "top",
+    "bottom",
+    "left",
+    "right",
+    "top-left",
+    "top-right",
+    "bottom-left",
+    "bottom-right",
+  ]);
+  return {
+    url,
+    scale: finiteNumber(value.scale),
+    anchor: typeof anchor === "string" && supportedAnchors.has(anchor)
+      ? anchor as NonNullable<PointLayerStyle["icon"]>["anchor"]
+      : undefined,
+    rotation: finiteNumber(value.rotation),
+    allowOverlap: typeof value.allow_overlap === "boolean"
+      ? value.allow_overlap
+      : undefined,
+  };
+}
+
+function layerHover(value: unknown): MapLayerBase["hover"] {
+  if (!isRecord(value)) return undefined;
+  const titleProperty = nonemptyString(value.title_property);
+  if (!Array.isArray(value.fields)) {
+    return titleProperty ? { titleProperty, fields: [] } : undefined;
+  }
+  const fields = value.fields.flatMap((field) => {
+    if (!isRecord(field)) return [];
+    const property = nonemptyString(field.property);
+    if (!property) return [];
+    return [{ property, label: nonemptyString(field.label) }];
+  });
+  return titleProperty || fields.length ? { titleProperty, fields } : undefined;
+}
+
 function layer(value: unknown): MapLayer | undefined {
   if (!isRecord(value)) return undefined;
   const common = commonLayer(value);
   if (!common) return undefined;
   const style = value.style as Record<string, unknown>;
   if (value.geometry === "point") {
+    const shape = style.shape;
     return {
       ...common,
       geometry: "point",
@@ -198,6 +285,15 @@ function layer(value: unknown): MapLayer | undefined {
         color: nonemptyString(style.color),
         opacity: finiteNumber(style.opacity),
         radius: finiteNumber(style.radius),
+        size: finiteNumber(style.size),
+        shape: shape === "circle"
+          || shape === "square"
+          || shape === "diamond"
+          || shape === "triangle"
+          || shape === "pin"
+          ? shape
+          : undefined,
+        icon: pointIcon(style.icon),
         strokeColor: nonemptyString(style.stroke_color),
         strokeWidth: finiteNumber(style.stroke_width),
         strokeOpacity: finiteNumber(style.stroke_opacity),
@@ -247,46 +343,62 @@ function legend(value: unknown): MapReplyCard["legend"] {
   return { title: nonemptyString(value.title), items };
 }
 
-export function parseStructuredMapReplyCard(value: unknown, index = 0): MapReplyCard | null {
+function parseMapRendererPayload(
+  value: unknown,
+  artifactRef: string,
+): MapReplyCard | null {
   if (
     !isRecord(value)
-    || value.type !== "open-web-card"
-    || value.kind !== "map.v2"
-    || !isRecord(value.card)
   ) {
     return null;
   }
-  const title = nonemptyString(value.card.title);
-  const intent = nonemptyString(value.card.intent);
-  const status = value.card.status;
-  const normalizedViewport = viewport(value.card.viewport);
+  const title = nonemptyString(value.title);
+  const intent = nonemptyString(value.intent);
+  const status = value.status;
+  const normalizedViewport = viewport(value.viewport);
   if (
     !title
     || !intent
     || !normalizedViewport
-    || !Array.isArray(value.card.sources)
-    || !Array.isArray(value.card.layers)
+    || !Array.isArray(value.sources)
+    || !Array.isArray(value.layers)
     || !["loading", "ready", "error"].includes(String(status))
   ) {
     return null;
   }
-  const sources = value.card.sources.map(source);
-  const layers = value.card.layers.map(layer);
+  const sources = value.sources.map(source);
+  const layers = value.layers.map(layer);
   if (sources.some((entry) => !entry) || layers.some((entry) => !entry)) return null;
   const sourceIds = new Set((sources as MapSource[]).map((entry) => entry.id));
   if ((layers as MapLayer[]).some((entry) => !sourceIds.has(entry.source))) return null;
   return {
     type: "card",
     kind: "map.v2",
-    id: `map-card-${index}`,
+    id: artifactRef,
     title,
     intent,
-    fallbackText: nonemptyString(value.card.fallback_text),
-    summary: nonemptyString(value.card.summary),
+    fallbackText: nonemptyString(value.fallback_text),
+    summary: nonemptyString(value.summary),
     status: status as MapReplyCard["status"],
     viewport: normalizedViewport,
     sources: sources as MapSource[],
     layers: layers as MapLayer[],
-    legend: legend(value.card.legend),
+    legend: legend(value.legend),
   };
+}
+
+export function parseInlineVisualizationArtifact(
+  value: unknown,
+): InlineVisualizationArtifact | null {
+  if (!isRecord(value) || !isRecord(value.renderer)) return null;
+  const ref = nonemptyString(value.ref);
+  if (
+    !ref
+    || !/^[A-Za-z0-9_.-]{1,128}$/.test(ref)
+    || value.renderer.kind !== "map.v2"
+  ) {
+    return null;
+  }
+  const card = parseMapRendererPayload(value.renderer.payload, ref);
+  return card ? { ref, rendererKind: "map.v2", card } : null;
 }
