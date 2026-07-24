@@ -2192,6 +2192,7 @@ export default function WebApp() {
     <Layout
       theme={theme}
       sidebarCollapsed={sidebarCollapsed}
+      onDismissSidebar={() => setSidebarCollapsed(true)}
       rightPanelOpen={filePanelOpen}
       rightPanelWidth={filePanelWidth}
       rightPanel={

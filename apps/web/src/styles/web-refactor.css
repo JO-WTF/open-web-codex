@@ -58,6 +58,8 @@ body:has(.web-app-shell) {
 
 .web-sidebar { transition: opacity 140ms ease, transform 180ms ease; }
 
+.web-sidebar-scrim { display: none; }
+
 .web-sidebar-collapsed .web-sidebar {
   overflow: hidden;
   opacity: 0;
@@ -2566,6 +2568,18 @@ body:has(.web-app-shell) {
   }
 
   .web-app-shell { position: relative; }
+
+  .web-sidebar-scrim {
+    position: absolute;
+    inset: 0;
+    z-index: 39;
+    display: block;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: rgb(5 8 14 / 42%);
+    cursor: default;
+  }
 
   .web-app-shell .web-sidebar {
     position: absolute;
