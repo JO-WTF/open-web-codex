@@ -180,6 +180,17 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
         wait_for_turn_context_window(&mut events, &started.thread_id, first_turn_id).await,
         24_320
     );
+    let persisted_turns = adapter
+        .list_thread_turns(&workspace, &started.thread_id)
+        .await
+        .expect("read paginated Thread history");
+    assert_eq!(persisted_turns.len(), 1);
+    assert!(
+        persisted_turns[0]["items"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty()),
+        "paginated Turn items should be joined into the full browser projection"
+    );
 
     host.request(
         "config/batchWrite",

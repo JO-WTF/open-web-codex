@@ -134,24 +134,7 @@ describe("WebApp workspace-first messaging", () => {
         },
       ],
     });
-    client.listModels
-      .mockResolvedValueOnce({
-        data: [{
-          id: "deepseek-v4-flash",
-          model: "deepseek-v4-flash",
-          displayName: "DeepSeek V4 Flash",
-          isDefault: true,
-        }],
-      })
-      .mockResolvedValueOnce({ data: [] })
-      .mockResolvedValue({
-        data: [{
-          id: "deepseek-v4-flash",
-          model: "deepseek-v4-flash",
-          displayName: "DeepSeek V4 Flash",
-          isDefault: true,
-        }],
-      });
+    client.listModels.mockResolvedValueOnce({ data: [] });
 
     render(<WebApp />);
 
@@ -299,7 +282,7 @@ describe("WebApp workspace-first messaging", () => {
   });
 
   it("keeps history hidden behind a loader until Thread hydration is complete", async () => {
-    let resolveResume!: (value: Record<string, unknown>) => void;
+    let resolveTurns!: (value: Record<string, unknown>[]) => void;
     client.listThreads.mockResolvedValue({
       data: [{
         id: "thread-first",
@@ -308,18 +291,9 @@ describe("WebApp workspace-first messaging", () => {
         updatedAt: Date.now(),
       }],
     });
-    client.resumeThread.mockReturnValue(new Promise((resolve) => {
-      resolveResume = resolve;
+    client.listThreadTurns.mockReturnValue(new Promise((resolve) => {
+      resolveTurns = resolve;
     }));
-    client.listThreadTurns.mockResolvedValue([{
-      id: "turn-1",
-      status: "completed",
-      items: [{
-        id: "assistant-1",
-        type: "agentMessage",
-        text: "Hydrated history",
-      }],
-    }]);
     render(<WebApp />);
 
     fireEvent.click(await screen.findByText("First thread"));
@@ -331,20 +305,123 @@ describe("WebApp workspace-first messaging", () => {
     ).toBe(true);
 
     act(() => {
-      resolveResume({
-        thread: {
-          id: "thread-first",
-          status: { type: "idle" },
-          turns: [],
-        },
-      });
+      resolveTurns([{
+        id: "turn-1",
+        status: "completed",
+        items: [{
+          id: "assistant-1",
+          type: "agentMessage",
+          text: "Hydrated history",
+        }],
+      }]);
     });
 
     await screen.findByText("Hydrated history");
     await waitFor(() => expect(screen.queryByText("正在加载 Thread…")).toBeNull());
+    expect(client.resumeThread).not.toHaveBeenCalled();
+    expect(client.readThread).not.toHaveBeenCalled();
+    expect(client.writeModelProvider).not.toHaveBeenCalled();
     expect(
       (screen.getByPlaceholderText("Ask Codex to do something...") as HTMLTextAreaElement).disabled,
     ).toBe(false);
+  });
+
+  it("does not block Thread history on a model catalog cache miss", async () => {
+    let resolveModels!: (value: Record<string, unknown>) => void;
+    client.listThreads.mockResolvedValue({
+      data: [{
+        id: "thread-first",
+        name: "First thread",
+        cwd: "/tmp/demo",
+        updatedAt: Date.now(),
+        modelProvider: "deepseek",
+        model: "deepseek-v4-flash",
+      }],
+    });
+    client.listThreadTurns.mockResolvedValue([{
+      id: "turn-1",
+      status: "completed",
+      items: [{
+        id: "assistant-1",
+        type: "agentMessage",
+        text: "History without catalog wait",
+      }],
+    }]);
+    client.listModels.mockReturnValue(new Promise((resolve) => {
+      resolveModels = resolve;
+    }));
+    render(<WebApp />);
+
+    fireEvent.click(await screen.findByText("First thread"));
+
+    await screen.findByText("History without catalog wait");
+    await waitFor(() => expect(screen.queryByText("正在加载 Thread…")).toBeNull());
+    expect(client.listModels).toHaveBeenCalledWith(
+      "workspace-1",
+      "deepseek",
+      "deepseek-v4-flash",
+    );
+    expect(client.writeModelProvider).not.toHaveBeenCalled();
+    expect(
+      (screen.getByPlaceholderText("Ask Codex to do something...") as HTMLTextAreaElement).disabled,
+    ).toBe(false);
+
+    await act(async () => {
+      resolveModels({
+        data: [{
+          id: "deepseek-v4-flash",
+          model: "deepseek-v4-flash",
+          displayName: "DeepSeek V4 Flash",
+          isDefault: true,
+        }],
+      });
+      await Promise.resolve();
+    });
+  });
+
+  it("reuses a completed Thread transcript when switching back to an unchanged Thread", async () => {
+    client.listThreads.mockResolvedValue({
+      data: [
+        {
+          id: "thread-first",
+          name: "First thread",
+          cwd: "/tmp/demo",
+          updatedAt: 100,
+          status: "idle",
+        },
+        {
+          id: "thread-second",
+          name: "Second thread",
+          cwd: "/tmp/demo",
+          updatedAt: 200,
+          status: "idle",
+        },
+      ],
+    });
+    client.listThreadTurns.mockImplementation((_workspaceId: string, threadId: string) =>
+      Promise.resolve([{
+        id: `turn-${threadId}`,
+        status: "completed",
+        items: [{
+          id: `assistant-${threadId}`,
+          type: "agentMessage",
+          text: threadId === "thread-first" ? "First history" : "Second history",
+        }],
+      }]));
+    render(<WebApp />);
+
+    fireEvent.click(await screen.findByText("First thread"));
+    await screen.findByText("First history");
+    await waitFor(() => expect(screen.queryByText("正在加载 Thread…")).toBeNull());
+
+    fireEvent.click(screen.getByText("Second thread"));
+    await screen.findByText("Second history");
+    await waitFor(() => expect(screen.queryByText("正在加载 Thread…")).toBeNull());
+
+    fireEvent.click(screen.getByText("First thread"));
+    expect(screen.getByText("First history")).toBeTruthy();
+    expect(screen.queryByText("正在加载 Thread…")).toBeNull();
+    expect(client.listThreadTurns).toHaveBeenCalledTimes(2);
   });
 
   it("does not activate or render a replayed thread until the user selects it", async () => {

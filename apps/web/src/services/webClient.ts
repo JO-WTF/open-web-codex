@@ -402,14 +402,24 @@ export class CodexMonitorWebClient {
     );
   }
 
-  async listModels(_workspaceId: string) {
-    const [catalog, config] = await Promise.all([
-      this.platform.listProviders(),
-      this.platform.getConfigModel(),
-    ]);
-    const provider = catalog.data.find((entry) => entry.id === catalog.currentProviderId);
+  async listModels(
+    _workspaceId: string,
+    providerId?: string | null,
+    preferredModelId?: string | null,
+  ) {
+    const [catalog, config] = providerId
+      ? [await this.platform.listProviders(), null]
+      : await Promise.all([
+        this.platform.listProviders(),
+        this.platform.getConfigModel(),
+      ]);
+    const selectedProviderId = providerId ?? catalog.currentProviderId;
+    const provider = catalog.data.find((entry) => entry.id === selectedProviderId);
     const visibleModels = (provider?.models ?? []).filter((model) => model.showInPicker !== false);
-    const configuredModel = catalog.currentModelId?.trim() || config.model?.trim() || null;
+    const configuredModel = preferredModelId?.trim()
+      || (selectedProviderId === catalog.currentProviderId ? catalog.currentModelId?.trim() : null)
+      || config?.model?.trim()
+      || null;
     if (configuredModel) {
       const selectedIndex = visibleModels.findIndex((model) => model.modelId === configuredModel);
       if (selectedIndex > 0) {

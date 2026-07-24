@@ -411,6 +411,57 @@ describe("WebApp direct Server client", () => {
     });
   });
 
+  it("reads a Thread Provider catalog without reading or changing the global model selection", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/api/providers") {
+        return json({
+          currentProviderId: "openai",
+          currentModelId: "gpt-5",
+          data: [
+            {
+              id: "openai",
+              name: "OpenAI",
+              wireApi: "responses",
+              kind: "builtIn",
+              isCurrent: true,
+              modelCount: 1,
+              models: [{ modelId: "gpt-5", showInPicker: true }],
+            },
+            {
+              id: "deepseek",
+              name: "DeepSeek",
+              wireApi: "chat",
+              kind: "custom",
+              isCurrent: false,
+              modelCount: 2,
+              models: [
+                { modelId: "deepseek-v3", showInPicker: true },
+                { modelId: "deepseek-v4-flash", showInPicker: true },
+              ],
+            },
+          ],
+        });
+      }
+      throw new Error(`Unexpected Server request: ${url.pathname}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
+
+    await expect(client.listModels(
+      project.id,
+      "deepseek",
+      "deepseek-v4-flash",
+    )).resolves.toEqual({
+      data: [
+        expect.objectContaining({ model: "deepseek-v4-flash", isDefault: true }),
+        expect.objectContaining({ model: "deepseek-v3", isDefault: false }),
+      ],
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0][0])).toBe("http://server.test/api/providers");
+  });
+
   it("projects authenticated Server WebSocket events into the unchanged WebApp contract", async () => {
     const sockets: FakeSocket[] = [];
     class FakeSocket {

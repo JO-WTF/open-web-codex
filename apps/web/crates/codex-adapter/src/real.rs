@@ -26,6 +26,7 @@ pub struct RealCodexAdapter {
     workspace_id: String,
     workspace_root: PathBuf,
     thread_workspaces: Arc<RwLock<HashMap<String, AuthorizedWorkspace>>>,
+    thread_history_modes: Arc<RwLock<HashMap<String, bool>>>,
     suppressed_threads: Arc<RwLock<HashSet<String>>>,
     active_login_id: Arc<RwLock<Option<String>>>,
     login_statuses: Arc<RwLock<HashMap<String, ProfileLoginStatus>>>,
@@ -58,6 +59,7 @@ impl RealCodexAdapter {
             workspace_id: workspace_id.into(),
             workspace_root,
             thread_workspaces: Arc::new(RwLock::new(HashMap::new())),
+            thread_history_modes: Arc::new(RwLock::new(HashMap::new())),
             suppressed_threads: Arc::new(RwLock::new(HashSet::new())),
             active_login_id: Arc::new(RwLock::new(None)),
             login_statuses: Arc::new(RwLock::new(HashMap::new())),
@@ -102,6 +104,7 @@ impl RealCodexAdapter {
         let mut params = json!({
             "cwd": workspace_root,
             "approvalPolicy": "on-request",
+            "historyMode": "paginated",
         });
         add_selected_capability_roots(&mut params, Path::new(workspace_root));
         params
@@ -112,6 +115,7 @@ impl RealCodexAdapter {
             "threadId": thread_id,
             "cwd": workspace_root,
             "approvalPolicy": "on-request",
+            "excludeTurns": true,
         })
     }
 
@@ -155,6 +159,10 @@ impl RealCodexAdapter {
             .write()
             .await
             .insert(thread_id.to_string(), workspace.clone());
+        self.thread_history_modes
+            .write()
+            .await
+            .insert(thread_id.to_string(), true);
         Ok(StartedThread {
             thread_id: thread_id.to_string(),
         })
@@ -179,17 +187,148 @@ impl RealCodexAdapter {
             ));
         }
 
-        self.host
+        let resumed = self
+            .host
             .request(
                 "thread/resume",
                 self.thread_resume_params(thread_id, &workspace_root),
             )
             .await?;
+        let paginated = resumed
+            .pointer("/thread/historyMode")
+            .and_then(Value::as_str)
+            .is_some_and(|mode| mode == "paginated");
         self.thread_workspaces
             .write()
             .await
             .insert(thread_id.to_string(), workspace.clone());
+        self.thread_history_modes
+            .write()
+            .await
+            .insert(thread_id.to_string(), paginated);
         Ok((workspace_root, runtime))
+    }
+
+    async fn list_paginated_turn_shells(
+        &self,
+        thread_id: &str,
+    ) -> Result<Vec<Value>, AdapterError> {
+        let mut turns = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let response = self
+                .host
+                .request(
+                    "thread/turns/list",
+                    json!({
+                        "threadId": thread_id,
+                        "cursor": cursor,
+                        "limit": 100,
+                        "sortDirection": "asc",
+                        "itemsView": "notLoaded",
+                    }),
+                )
+                .await?;
+            let page = response
+                .get("data")
+                .and_then(Value::as_array)
+                .ok_or_else(|| AdapterError::Rpc("thread/turns/list omitted data".to_string()))?;
+            turns.extend(page.iter().cloned());
+            let next_cursor = response
+                .get("nextCursor")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            if next_cursor.is_none() {
+                return Ok(turns);
+            }
+            if next_cursor == cursor {
+                return Err(AdapterError::Rpc(
+                    "thread/turns/list returned a non-advancing cursor".to_string(),
+                ));
+            }
+            cursor = next_cursor;
+        }
+    }
+
+    async fn list_paginated_thread_items(
+        &self,
+        thread_id: &str,
+    ) -> Result<HashMap<String, Vec<Value>>, AdapterError> {
+        let mut items_by_turn = HashMap::<String, Vec<Value>>::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let response = self
+                .host
+                .request(
+                    "thread/items/list",
+                    json!({
+                        "threadId": thread_id,
+                        "cursor": cursor,
+                        "limit": 100,
+                        "sortDirection": "asc",
+                    }),
+                )
+                .await?;
+            let page = response
+                .get("data")
+                .and_then(Value::as_array)
+                .ok_or_else(|| AdapterError::Rpc("thread/items/list omitted data".to_string()))?;
+            for entry in page {
+                let turn_id = entry.get("turnId").and_then(Value::as_str).ok_or_else(|| {
+                    AdapterError::Rpc("thread/items/list entry omitted turnId".to_string())
+                })?;
+                let item = entry.get("item").cloned().ok_or_else(|| {
+                    AdapterError::Rpc("thread/items/list entry omitted item".to_string())
+                })?;
+                items_by_turn
+                    .entry(turn_id.to_string())
+                    .or_default()
+                    .push(item);
+            }
+            let next_cursor = response
+                .get("nextCursor")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            if next_cursor.is_none() {
+                return Ok(items_by_turn);
+            }
+            if next_cursor == cursor {
+                return Err(AdapterError::Rpc(
+                    "thread/items/list returned a non-advancing cursor".to_string(),
+                ));
+            }
+            cursor = next_cursor;
+        }
+    }
+
+    async fn list_paginated_thread_turns(
+        &self,
+        thread_id: &str,
+    ) -> Result<Vec<Value>, AdapterError> {
+        // The official app-server marks `itemsView: full` as a compatibility
+        // path and hydrates every Turn serially. Read the two indexed streams
+        // concurrently and join them by the protocol's stable turnId instead.
+        let (mut turns, mut items_by_turn) = tokio::try_join!(
+            self.list_paginated_turn_shells(thread_id),
+            self.list_paginated_thread_items(thread_id),
+        )?;
+        for turn in &mut turns {
+            let Some(turn_id) = turn.get("id").and_then(Value::as_str).map(str::to_string) else {
+                return Err(AdapterError::Rpc(
+                    "thread/turns/list entry omitted id".to_string(),
+                ));
+            };
+            let Some(turn) = turn.as_object_mut() else {
+                return Err(AdapterError::Rpc(
+                    "thread/turns/list entry was not an object".to_string(),
+                ));
+            };
+            turn.insert(
+                "items".to_string(),
+                Value::Array(items_by_turn.remove(&turn_id).unwrap_or_default()),
+            );
+        }
+        Ok(turns)
     }
 
     async fn send_user_message_in_workspace(
@@ -451,6 +590,14 @@ impl CodexAdapter for RealCodexAdapter {
             .write()
             .await
             .insert(forked_thread_id.clone(), target_workspace.clone());
+        let paginated = result
+            .pointer("/thread/historyMode")
+            .and_then(Value::as_str)
+            .is_some_and(|mode| mode == "paginated");
+        self.thread_history_modes
+            .write()
+            .await
+            .insert(forked_thread_id.clone(), paginated);
         Ok(StartedThread {
             thread_id: forked_thread_id,
         })
@@ -480,6 +627,21 @@ impl CodexAdapter for RealCodexAdapter {
         thread_id: &str,
     ) -> Result<Vec<Value>, AdapterError> {
         let (_workspace_root, _runtime) = self.ensure_thread_bound(workspace, thread_id).await?;
+        if self
+            .thread_history_modes
+            .read()
+            .await
+            .get(thread_id)
+            .copied()
+            .unwrap_or(false)
+        {
+            return self.list_paginated_thread_turns(thread_id).await;
+        }
+
+        // Existing Profile histories created before the platform opted into
+        // official paginated storage remain on the Runtime's legacy rollout
+        // contract. Keep that compatibility isolated here until those Profile
+        // histories are retired.
         let mut turns = Vec::new();
         let mut cursor: Option<String> = None;
         loop {

@@ -87,6 +87,15 @@ type ThreadInfo = {
   creationError?: string;
 };
 
+type ThreadTranscriptCacheEntry = {
+  messages: LogEntry[];
+  updatedAt: number;
+  status: string;
+  thinking: boolean;
+  activeTurnId: string | null;
+  turnStartedAt: number | null;
+};
+
 function parseThreadStatus(value: unknown): string {
   if (typeof value === "string") return value;
   if (value && typeof value === "object") {
@@ -156,6 +165,64 @@ function parseThreadUpdatedAt(value: unknown): number {
   return 0;
 }
 
+function parseModelProviderCatalog(value: unknown): {
+  providers: ModelProviderSummary[];
+  currentProviderId: string | null;
+  currentModelId: string | null;
+} {
+  const payload = unwrapWebRpcResult(value);
+  const record = payload && typeof payload === "object"
+    ? payload as Record<string, unknown>
+    : {};
+  const currentProviderId = typeof record.currentProviderId === "string"
+    ? record.currentProviderId
+    : null;
+  const currentModelId = typeof record.currentModelId === "string"
+    ? record.currentModelId
+    : null;
+  const rawProviders = Array.isArray(record.data) ? record.data : [];
+  const providers = rawProviders.flatMap((value): ModelProviderSummary[] => {
+    if (!value || typeof value !== "object") return [];
+    const provider = value as Record<string, unknown>;
+    if (typeof provider.id !== "string" || typeof provider.name !== "string") return [];
+    const models = Array.isArray(provider.models) ? provider.models.flatMap((value) => {
+      if (!value || typeof value !== "object") return [];
+      const model = value as Record<string, unknown>;
+      if (typeof model.modelId !== "string" || model.showInPicker === false) return [];
+      return [{
+        modelId: model.modelId,
+        modelName: typeof model.modelName === "string" ? model.modelName : null,
+        contextWindow: typeof model.contextWindow === "number" ? model.contextWindow : null,
+      }];
+    }) : [];
+    return [{
+      id: provider.id,
+      name: provider.name,
+      kind: provider.kind === "local" || provider.kind === "custom" ? provider.kind : "builtIn",
+      isCurrent: provider.id === currentProviderId,
+      modelCount: models.length,
+      baseUrl: typeof provider.baseUrl === "string" ? provider.baseUrl : null,
+      envKey: typeof provider.envKey === "string" ? provider.envKey : null,
+      wireApi: typeof provider.wireApi === "string" ? provider.wireApi : "responses",
+      canEdit: provider.canEdit === true,
+      canDelete: provider.canDelete === true,
+      canFetchModels: provider.canFetchModels === true,
+      models,
+    }];
+  });
+  return { providers, currentProviderId, currentModelId };
+}
+
+function modelSummariesForProvider(
+  provider: ModelProviderSummary | undefined,
+): ModelSummary[] {
+  return (provider?.models ?? []).map((model) => ({
+    id: model.modelId,
+    model: model.modelId,
+    displayName: model.modelName ?? model.modelId,
+  }));
+}
+
 /* ─────────── Component ─────────── */
 
 export default function WebApp() {
@@ -204,6 +271,11 @@ export default function WebApp() {
   const [selectedProviderModelId, setSelectedProviderModelId] = useState<string | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
+  const activeThreadModelSelectionRef = useRef<{
+    threadId: string;
+    providerId: string;
+    modelId: string;
+  } | null>(null);
   const [theme, setTheme] = useState<"light" | "dark">(() =>
     localStorage.getItem("open-web-codex:theme") === "light" ? "light" : "dark",
   );
@@ -241,50 +313,26 @@ export default function WebApp() {
     setCatalogLoading(true);
     setCatalogError(null);
     try {
-      const [providerResponse, modelResponse] = await Promise.all([
-        client.listModelProviders(activeWorkspaceId),
-        client.listModels(activeWorkspaceId),
-      ]);
-      const providerPayload = unwrapWebRpcResult(providerResponse);
-      const providerRecord = providerPayload && typeof providerPayload === "object"
-        ? providerPayload as Record<string, unknown>
-        : {};
-      const rawProviders = Array.isArray(providerRecord.data) ? providerRecord.data : [];
-      const nextModels = parseModelListResponse(modelResponse);
-      setModelProviders(rawProviders.flatMap((value): ModelProviderSummary[] => {
-        if (!value || typeof value !== "object") return [];
-        const provider = value as Record<string, unknown>;
-        if (typeof provider.id !== "string" || typeof provider.name !== "string") return [];
-        return [{
-          id: provider.id,
-          name: provider.name,
-          kind: provider.kind === "local" || provider.kind === "custom" ? provider.kind : "builtIn",
-          isCurrent: provider.isCurrent === true,
-          modelCount: provider.isCurrent === true
-            ? nextModels.length
-            : typeof provider.modelCount === "number" ? provider.modelCount : 0,
-          baseUrl: typeof provider.baseUrl === "string" ? provider.baseUrl : null,
-          envKey: typeof provider.envKey === "string" ? provider.envKey : null,
-          wireApi: typeof provider.wireApi === "string" ? provider.wireApi : "responses",
-          canEdit: provider.canEdit === true,
-          canDelete: provider.canDelete === true,
-          canFetchModels: provider.canFetchModels === true,
-          models: Array.isArray(provider.models) ? provider.models.flatMap((value) => {
-            if (!value || typeof value !== "object") return [];
-            const model = value as Record<string, unknown>;
-            if (typeof model.modelId !== "string") return [];
-            return [{ modelId: model.modelId, modelName: typeof model.modelName === "string" ? model.modelName : null, contextWindow: typeof model.contextWindow === "number" ? model.contextWindow : null }];
-          }) : [],
-        }];
-      }));
-      setCurrentProviderId(typeof providerRecord.currentProviderId === "string" ? providerRecord.currentProviderId : null);
+      const providerResponse = await client.listModelProviders(activeWorkspaceId);
+      const catalog = parseModelProviderCatalog(providerResponse);
+      const threadSelection = activeThreadModelSelectionRef.current;
+      const selectedProviderId = threadSelection?.threadId === activeThreadIdRef.current
+        ? threadSelection.providerId
+        : catalog.currentProviderId;
+      const selectedModelId = threadSelection?.threadId === activeThreadIdRef.current
+        ? threadSelection.modelId
+        : catalog.currentModelId;
+      const selectedProvider = catalog.providers.find((provider) => provider.id === selectedProviderId);
+      const nextModels = modelSummariesForProvider(selectedProvider);
+      setModelProviders(catalog.providers.map((provider) => ({
+        ...provider,
+        isCurrent: provider.id === selectedProviderId,
+      })));
+      setCurrentProviderId(selectedProviderId);
       setProviderModels(nextModels);
-      const persistedModelId = typeof providerRecord.currentModelId === "string"
-        ? providerRecord.currentModelId
-        : nextModels.find((model) => model.isDefault)?.id ?? null;
       setSelectedProviderModelId(
-        persistedModelId && nextModels.some((model) => model.id === persistedModelId)
-          ? persistedModelId
+        selectedModelId && nextModels.some((model) => model.id === selectedModelId)
+          ? selectedModelId
           : nextModels[0]?.id ?? null,
       );
     } catch (error) {
@@ -309,6 +357,9 @@ export default function WebApp() {
           ? { ...thread, modelProvider: providerId, model: modelId }
           : thread),
     }));
+    if (activeThreadIdRef.current === threadId) {
+      activeThreadModelSelectionRef.current = { threadId, providerId, modelId };
+    }
   }, [client]);
 
   const selectProviderAndDefaultModel = useCallback(async (providerId: string) => {
@@ -387,6 +438,7 @@ export default function WebApp() {
     setSelectedProviderModelId(null);
     setCurrentProviderId(null);
     setCatalogError(null);
+    activeThreadModelSelectionRef.current = null;
     if (activeWorkspaceId) void refreshModelCatalog();
   }, [activeWorkspaceId, refreshModelCatalog]);
 
@@ -451,6 +503,7 @@ export default function WebApp() {
   const threadHydrationSequence = useRef(0);
   const recentAppServerEvents = useRef<Map<string, number>>(new Map());
   const pendingApprovalsByThread = useRef<Map<string, LogEntry[]>>(new Map());
+  const threadTranscriptCache = useRef<Map<string, ThreadTranscriptCacheEntry>>(new Map());
   const refreshThreadsRef = useRef<((workspaceId?: string) => Promise<void>) | null>(null);
   const activeThreadIdRef = useRef(activeThreadId);
   activeThreadIdRef.current = activeThreadId;
@@ -463,6 +516,7 @@ export default function WebApp() {
     // per-Thread runtime state may survive a workspace change.
     activeThreadIdRef.current = null;
     threadHydrationSequence.current += 1;
+    threadTranscriptCache.current.clear();
     setActiveThreadId(null);
     setThreadLoading(false);
     setMessages([]);
@@ -478,6 +532,30 @@ export default function WebApp() {
     setStopping(false);
     interruptRequestTurnId.current = null;
   }, [activeWorkspaceId]);
+
+  useEffect(() => {
+    if (!activeWorkspaceId || !activeThreadId || threadLoading) return;
+    const selected = (threadsByWorkspace[activeWorkspaceId] ?? [])
+      .find((thread) => thread.id === activeThreadId);
+    threadTranscriptCache.current.set(activeThreadId, {
+      messages,
+      updatedAt: selected?.updatedAt ?? 0,
+      status: threadStatus,
+      thinking,
+      activeTurnId,
+      turnStartedAt,
+    });
+  }, [
+    activeThreadId,
+    activeTurnId,
+    activeWorkspaceId,
+    messages,
+    thinking,
+    threadLoading,
+    threadStatus,
+    threadsByWorkspace,
+    turnStartedAt,
+  ]);
 
   const appendLog = useCallback(
     (
@@ -549,6 +627,9 @@ export default function WebApp() {
         eventThreadId
         && eventThreadId !== activeThreadIdRef.current,
       );
+      if (belongsToBackgroundThread && eventThreadId) {
+        threadTranscriptCache.current.delete(eventThreadId);
+      }
       if (
         belongsToBackgroundThread
         && method !== "item/commandExecution/requestApproval"
@@ -1958,6 +2039,11 @@ export default function WebApp() {
     const selected = activeWorkspaceId
       ? (threadsByWorkspace[activeWorkspaceId] ?? []).find((thread) => thread.id === id)
       : undefined;
+    const threadProvider = selected?.modelProvider ?? null;
+    const threadModel = selected?.model ?? null;
+    activeThreadModelSelectionRef.current = threadProvider && threadModel
+      ? { threadId: id, providerId: threadProvider, modelId: threadModel }
+      : null;
     if (selected?.creationStatus) {
       setThreadLoading(false);
       setMessages([]);
@@ -1980,6 +2066,58 @@ export default function WebApp() {
       setThreadLoading(false);
       return;
     }
+    if (threadProvider && threadModel) {
+      const cachedProvider = modelProviders.find((provider) => provider.id === threadProvider);
+      const cachedModels = modelSummariesForProvider(cachedProvider);
+      const immediateModels = cachedModels.length > 0
+        ? cachedModels
+        : [{ id: threadModel, model: threadModel, displayName: threadModel }];
+      setModelProviders((providers) => providers.map((provider) => ({
+        ...provider,
+        isCurrent: provider.id === threadProvider,
+      })));
+      setCurrentProviderId(threadProvider);
+      setProviderModels(immediateModels);
+      setSelectedProviderModelId(
+        immediateModels.find((model) => model.model === threadModel)?.id
+          ?? immediateModels[0]?.id
+          ?? null,
+      );
+      if (cachedModels.length === 0) {
+        // A catalog miss must not delay transcript hydration. This read-only
+        // lookup fills the picker after the Thread has already become usable.
+        void client.listModels(wid, threadProvider, threadModel).then((response) => {
+          if (threadHydrationSequence.current !== hydrationSequence) return;
+          const nextModels = parseModelListResponse(response);
+          if (nextModels.length === 0) return;
+          setProviderModels(nextModels);
+          setSelectedProviderModelId(
+            nextModels.find((model) => model.model === threadModel)?.id
+              ?? nextModels[0]?.id
+              ?? null,
+          );
+        }).catch((error) => {
+          if (threadHydrationSequence.current !== hydrationSequence) return;
+          setCatalogError(error instanceof Error ? error.message : String(error));
+        });
+      }
+    }
+    const cachedTranscript = threadTranscriptCache.current.get(id);
+    const selectedIsActive = ["active", "running", "inProgress", "reconnecting"]
+      .includes(parseThreadStatus(selected?.status));
+    if (
+      cachedTranscript
+      && !selectedIsActive
+      && cachedTranscript.updatedAt >= (selected?.updatedAt ?? 0)
+    ) {
+      setMessages(cachedTranscript.messages);
+      setThreadStatus(cachedTranscript.status);
+      setThinking(cachedTranscript.thinking);
+      setActiveTurnId(cachedTranscript.activeTurnId);
+      setTurnStartedAt(cachedTranscript.turnStartedAt);
+      setThreadLoading(false);
+      return;
+    }
     const revealHydratedThread = () => {
       const reveal = () => {
         if (threadHydrationSequence.current === hydrationSequence) {
@@ -1993,74 +2131,14 @@ export default function WebApp() {
       }
     };
     try {
-      let resumed: Record<string, unknown> | null = null;
-      // Resuming an already-active thread may be rejected; history remains readable.
-      try {
-        resumed = await client.resumeThread(wid, id);
-      } catch {
-        // Best effort: `thread/read` below is the source for the browser projection.
-      }
-      // A resumed thread is the source for live status, but its embedded turns
-      // may be a summary projection. Request persisted turns explicitly with
-      // `itemsView: full` so history restores commands, reasoning, diffs, MCP
-      // calls, and other non-message items. Older runtimes fall back to read.
-      let persistedTurns: Record<string, unknown>[] | null = null;
-      try {
-        persistedTurns = await client.listThreadTurns(wid, id);
-      } catch {
-        // The paginated history API is experimental and may be absent on an
-        // older app-server; retain compatibility with thread/read.
-      }
-      const raw = resumed ?? await client.readThread(wid, id);
-      const payload = unwrapWebRpcResult(raw);
-      const obj = payload && typeof payload === "object"
-        ? payload as Record<string, unknown>
-        : {};
-      const thread = obj.thread && typeof obj.thread === "object"
-        ? obj.thread as Record<string, unknown>
-        : undefined;
-      const threadProvider = typeof thread?.modelProvider === "string"
-        ? thread.modelProvider
-        : typeof thread?.model_provider === "string"
-          ? thread.model_provider
-          : selected?.modelProvider ?? null;
-      const threadModel = typeof thread?.model === "string"
-        ? thread.model
-        : selected?.model ?? null;
-      if (threadProvider && threadModel) {
-        await client.writeModelProvider(wid, { action: "select", id: threadProvider });
-        const modelResponse = await client.listModels(wid);
-        const nextModels = parseModelListResponse(modelResponse);
-        if (threadHydrationSequence.current !== hydrationSequence) return;
-        setModelProviders((providers) => providers.map((provider) => ({
-          ...provider,
-          isCurrent: provider.id === threadProvider,
-        })));
-        setCurrentProviderId(threadProvider);
-        setProviderModels(nextModels);
-        setSelectedProviderModelId(
-          nextModels.find((model) => model.model === threadModel)?.id
-            ?? nextModels[0]?.id
-            ?? null,
-        );
-      }
-      const embeddedTurns = Array.isArray(thread?.turns)
-        ? thread.turns as Record<string, unknown>[]
-        : Array.isArray(obj.turns)
-          ? obj.turns as Record<string, unknown>[]
-          : [];
-      const turns = persistedTurns && persistedTurns.length > 0
-        ? persistedTurns
-        : embeddedTurns;
+      // `thread/turns/list` is the authoritative full-fidelity history source.
+      // The adapter resumes an unbound Runtime Thread internally, so an
+      // additional thread/read or explicit resume only duplicates work.
+      const turns = await client.listThreadTurns(wid, id);
       if (threadHydrationSequence.current !== hydrationSequence) return;
-      const status = thread?.status;
-      if (status && typeof status === "object") {
-        const statusType = (status as Record<string, unknown>).type;
-        if (typeof statusType === "string") {
-          setThreadStatus(statusType);
-          setThinking(statusType === "active");
-        }
-      }
+      const statusType = parseThreadStatus(selected?.status);
+      setThreadStatus(statusType);
+      setThinking(["active", "running", "inProgress"].includes(statusType));
       const activeTurn = [...turns].reverse().find((turn) => {
         const turnStatus = turn.status;
         return turnStatus === "inProgress"
@@ -2070,16 +2148,18 @@ export default function WebApp() {
       });
       setActiveTurnId(typeof activeTurn?.id === "string" ? activeTurn.id : null);
       if (activeTurn) {
-        const rawStartedAt = activeTurn.startedAt ?? activeTurn.started_at;
+        const rawStartedAt = activeTurn.startedAt;
         setTurnStartedAt(typeof rawStartedAt === "number" && Number.isFinite(rawStartedAt)
           ? rawStartedAt < 10_000_000_000 ? rawStartedAt * 1000 : rawStartedAt
           : Date.now());
       } else {
         setTurnStartedAt(null);
       }
-      const historyThread = thread
-        ? { ...thread, turns }
-        : { turns, status: obj.status };
+      const historyThread = {
+        id,
+        turns,
+        status: { type: statusType },
+      };
       const loaded = buildWebThreadHistory(historyThread, newLogId);
       setMessages((current) => mergeWebThreadHistory(loaded, current));
       revealHydratedThread();
@@ -2092,7 +2172,7 @@ export default function WebApp() {
       }));
       revealHydratedThread();
     }
-  }, [activeWorkspaceId, client, threadsByWorkspace]);
+  }, [activeWorkspaceId, client, modelProviders, threadsByWorkspace]);
 
   /* ─── Render ─── */
 
