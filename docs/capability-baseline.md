@@ -6,7 +6,7 @@ requirements belong in `product-design.md`; planned work belongs in
 
 ## Snapshot
 
-Observed on 2026-07-23 from the current synchronization branch:
+Observed on 2026-07-24 from the current working branch:
 
 | Component | State |
 | --- | --- |
@@ -42,8 +42,11 @@ Observed on 2026-07-23 from the current synchronization branch:
   the real app-server initialize Smoke with 18 Capability Manifest declarations.
 - The platform source contains PostgreSQL migrations and API handlers for
   bootstrap/session, organization membership, project, Task, Run and persisted
-  Run events. Local sessions authenticate with a case-insensitive username and
-  password; email remains an account and Organization-invitation attribute.
+  Run events. The current single-user Server ensures an implicit local Owner;
+  the browser obtains a local Session and enters the WebApp without login or
+  registration. Username/password login and its Argon2id implementation remain
+  in the Server for later multi-user restoration but are not exposed by the
+  current browser entry.
 - The native Profile Host real-binary smoke covers an offline Turn, paginated
   full-item history, process-instance rotation, restart and Thread resume/read.
   A second real-binary Provider smoke covers two custom
@@ -140,7 +143,7 @@ security, Push delivery, or every Studio capability.
 | --- | --- | --- |
 | Independent server | Axum server serves the browser, REST API, authenticated WebSocket, Profile Host and Runner from one deployable; the single-host deployer builds locked Release artifacts, securely provisions or verifies the fixed `open_web_codex` database, keeps verbose output in bounded logs, health-checks rollout and persists non-secret status metadata | HTTPS reverse proxy, OS supervision, rollback, backup/restore and remaining config hardening are still external GA gates |
 | Persistence | PostgreSQL migrations cover users/sessions, organizations/memberships, Profiles/capabilities/encrypted Secrets, projects, tasks, Runs, leases, Workspaces, durable approvals/audit and versioned Run-event projections | artifacts, retention, legacy-row repair and complete constraints remain missing |
-| Authentication | bootstrap and login use Argon2id, sessions bind an Organization, and legacy hashes upgrade after successful verification | HttpOnly-only session flow, CSRF, logout/revocation, rate limiting and complete browser flows are missing |
+| Authentication | current single-user startup creates an implicit local Owner and the browser obtains a local Session without credentials; sessions still bind an Organization and all resource authorization remains active; retained bootstrap/login use Argon2id | interactive login/registration is intentionally absent; public or multi-user deployment requires restoring authentication, HttpOnly-only sessions, CSRF, rate limiting and complete logout/revocation flows |
 | Authorization | Project/Task/Run and runtime calls enforce session Organization; Provider/approval calls additionally enforce Profile ownership; a two-Organization denial regression passes | centralized policy abstraction, Project-specific roles and the full concurrent multi-user matrix remain missing |
 | Codex bridge | Fake/Real adapter and event projection exist; Real uses the native Profile Registry/Host JSONL connection. Provider Secrets are encrypted and injected only into the owned child environment. Runtime-facing operations remain internal and browser routes are typed | composition is still one configured Profile process per server; per-user dynamic process routing remains incomplete |
 | Task/Run | CRUD/start/cancel/message/steer/compact/review, idempotent scheduling, DB leases/heartbeats/recovery, isolated Git workspaces, authoritative Codex history, safe Item/Delta and approval projection, monotonic initial/reconnect replay, terminal execution, workspace files, nested Git roots, full local Git operations and explicit remote operations exist | artifact storage, approval expiry, protected-branch policy and full multi-Profile routing remain incomplete |

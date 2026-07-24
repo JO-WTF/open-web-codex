@@ -75,6 +75,10 @@ pub fn router(
         .route("/bootstrap", axum::routing::post(bootstrap::bootstrap))
         .route("/sessions", axum::routing::post(sessions::create_session))
         .route(
+            "/sessions/local",
+            axum::routing::post(sessions::create_local_session),
+        )
+        .route(
             "/sessions/current",
             axum::routing::delete(sessions::delete_session),
         )

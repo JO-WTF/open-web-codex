@@ -4,15 +4,16 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 更新日期 | 2026-07-23 |
-| 当前分支 | `work` |
+| 更新日期 | 2026-07-24 |
+| 当前分支 | `codex/agent-architecture-features` |
 | Codex 基线 | `openai/codex` `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9` |
 | 上游待同步 | 48；观测到的 official main 为 `9d823343026e600dab694e41865ed60613da31b6` |
 | 当前工作 | 以 1421 WebApp 为唯一前端，先收口单用户、单 Profile、单主 Profile Host 的真实 Runtime 闭环；多 Profile Router 暂缓到单 Profile smoke 稳定后 |
 
 当前 Codex 基线上的定制仍按 patch map 分类；official main 已前进 48 个提交，
 下一轮必须通过专用 `codex/sync-upstream-*` 分支同步。1421 WebApp 的 CSS、页面布局
-和交互保持既有产品形态；差异集中在认证入口、`src/services/webClient.ts` Server
+和交互保持既有产品形态；当前单用户入口不显示登录或注册，浏览器自动取得本地
+Session；差异集中在该入口、`src/services/webClient.ts` Server
 适配层，以及三个由完整文件哈希锁定的非视觉 Thread 上下文接线文件。平台具备原生 Profile Host、Provider 服务、
 加密 Secret、持久审批、Git workspace 与租约式 Run 编排。桌面运行时、sidecar、
 4732/4733 daemon Gateway、原始浏览器 RPC/SSE 和桌面发布链已经移除。认证后的
@@ -165,8 +166,10 @@ MCP/Skills/Plugins；Server/Profile Host 只负责单 Profile 生命周期、授
 
 - [x] PostgreSQL schema 覆盖 User/Session、Organization/Membership、Profile、
   Secret、Project/Task/Run、Lease、Workspace、Approval/Audit 和 RunEvent。
-- [x] 本地会话使用大小写不敏感的用户名和密码登录；邮箱保留为账户资料与组织邀请标识。
-- [x] 密码使用 Argon2id；旧 SHA-256 仅在成功登录后升级。
+- [x] 当前单用户 Server 自动确保本地 Owner，浏览器通过免密本地 Session 直接进入
+  WebApp；登录和注册界面不进入当前产品流程。
+- [x] Session、Organization、Profile 归属和资源授权仍在服务端执行。保留的用户名/
+  密码登录使用 Argon2id，旧 SHA-256 仅在成功登录后升级，供后续多用户入口恢复。
 - [x] 资源查询带 Organization/User/Profile 归属；双组织越权负向测试通过。
 - [x] 原生 Profile Host 直接管理 `codex app-server`，覆盖私有 Home、单主锁、
   有界事件、原位重启、Thread resume/read 和 Capability Manifest。
@@ -219,7 +222,7 @@ MCP/Skills/Plugins；Server/Profile Host 只负责单 Profile 生命周期、授
   时先显示加载动画，历史水合并完成一次隐藏渲染后再整体展示，避免空白与闪烁。
 - [x] WebApp 外壳铺满整个视口；侧栏和对话内容宽度在 2K/4K 等大屏上渐进扩展，
   小屏断点仍保持单栏与抽屉式侧栏，不再受 1840×1120 固定画布限制。
-- [x] 认证后的根入口和 1421 `/web` 都只加载 WebApp；旧 App/Bridge 源码仍保留
+- [x] 根入口和 1421 `/web` 自动建立本地 Session 后只加载 WebApp；旧 App/Bridge 源码仍保留
   但不进入生产构建，生产包不包含 `/api/rpc` 或 EventSource Gateway 调用。
 - [x] 平台服务同源提供生产 browser build；Vite 仅在开发时代理 HTTP/WS。
 - [x] 前端类型检查、单测与生产构建通过。

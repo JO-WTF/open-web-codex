@@ -123,6 +123,12 @@ export class PlatformClient {
     });
   }
 
+  createLocalSession() {
+    return this.request<Session>("/api/sessions/local", {
+      method: "POST",
+    });
+  }
+
   me() {
     return this.request<Me>("/api/me");
   }

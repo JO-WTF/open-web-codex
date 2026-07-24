@@ -16,7 +16,7 @@ The product keeps the responsibilities deliberately separate:
 ## Repository layout
 
 ```text
-apps/web/                 Browser client and authenticated platform server
+apps/web/                 Browser client and session-backed platform server
 codex/                    Customized Codex runtime subtree
 docs/product-design.md    Canonical product requirements and release scope
 docs/capability-baseline.md
@@ -66,9 +66,10 @@ test Runtime:
 ./scripts/start-all.sh --fake
 ```
 
-Then open `http://127.0.0.1:1421/web`. The WebApp calls the authenticated
-platform Server on port `4800` directly through typed REST resources and
-`/api/events/ws`; there is no separate Gateway process. Use
+Then open `http://127.0.0.1:1421/web`. The current single-user WebApp creates an
+implicit local Session and enters directly, without a login or registration
+screen. It calls the platform Server on port `4800` through typed REST resources
+and `/api/events/ws`; there is no separate Gateway process. Use
 `./scripts/start-all.sh` for the repository Codex Runtime. See
 [the MVP runbook](docs/mvp-runbook.md) for the browser flow, binary override and
 known limitations.
@@ -115,6 +116,7 @@ non-trivial sync conflict.
 
 ## Extension guides
 
+- [Domain Agent extension architecture](docs/domain-agent-extension-architecture.md)
 - [Skills, MCP, and custom UI extensions](docs/custom-skills-mcp-ui-guide.md)
 
 The original component licenses remain in `apps/web/LICENSE` and `codex/LICENSE`.

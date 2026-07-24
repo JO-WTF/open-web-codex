@@ -1,7 +1,4 @@
 import { platformClient, getPlatformSessionToken, setPlatformSessionToken } from "./session";
-import "./session-gate.css";
-
-type AuthenticationMode = "login" | "bootstrap";
 
 function installMobileBrowserBehavior(isMobilePlatform: () => boolean) {
   if (!isMobilePlatform()) {
@@ -79,122 +76,36 @@ async function renderOriginalApplication(sessionToken: string) {
   );
 }
 
-function renderAuthentication(initialError: string | null = null) {
+function renderStartupError(reason: unknown) {
   const root = document.getElementById("root");
   if (!root) throw new Error("Missing application root");
-
-  let mode: AuthenticationMode = "login";
-  const render = (error: string | null = initialError) => {
-    root.replaceChildren();
-    const main = document.createElement("main");
-    main.className = "platform-session-gate";
-    const card = document.createElement("section");
-    card.className = "platform-session-card";
-
-    const eyebrow = document.createElement("p");
-    eyebrow.className = "platform-session-eyebrow";
-    eyebrow.textContent = "OPEN WEB CODEX";
-    const title = document.createElement("h1");
-    title.textContent = "Self-hosted Codex workbench";
-    const description = document.createElement("p");
-    description.textContent = "Sign in to your isolated Profile and authorized Git workspaces.";
-    card.append(eyebrow, title, description);
-
-    if (error) {
-      const errorBox = document.createElement("div");
-      errorBox.className = "platform-session-error";
-      errorBox.setAttribute("role", "alert");
-      errorBox.textContent = error;
-      card.append(errorBox);
-    }
-
-    const form = document.createElement("form");
-    if (mode === "bootstrap") {
-      const name = document.createElement("input");
-      name.name = "name";
-      name.placeholder = "Your name";
-      name.required = true;
-      form.append(name);
-    }
-    const username = document.createElement("input");
-    username.name = "username";
-    username.autocomplete = "username";
-    username.placeholder = "Username";
-    username.required = true;
-    form.append(username);
-    if (mode === "bootstrap") {
-      const email = document.createElement("input");
-      email.name = "email";
-      email.type = "email";
-      email.autocomplete = "email";
-      email.placeholder = "Email";
-      email.required = true;
-      form.append(email);
-    }
-    const password = document.createElement("input");
-    password.name = "password";
-    password.type = "password";
-    password.autocomplete = mode === "login" ? "current-password" : "new-password";
-    password.placeholder = "Password";
-    password.required = true;
-    const submit = document.createElement("button");
-    submit.type = "submit";
-    submit.textContent = mode === "login" ? "Sign in" : "Initialize instance";
-    form.append(password, submit);
-    form.addEventListener("submit", (event) => {
-      event.preventDefault();
-      const fields = new FormData(form);
-      submit.disabled = true;
-      const request = mode === "bootstrap"
-        ? platformClient.bootstrap(
-            String(fields.get("name") ?? ""),
-            String(fields.get("username") ?? ""),
-            String(fields.get("email") ?? ""),
-            String(fields.get("password") ?? ""),
-          )
-        : platformClient.login(
-            String(fields.get("username") ?? ""),
-            String(fields.get("password") ?? ""),
-          );
-      void request.then((session) => {
-        setPlatformSessionToken(session.session_token);
-        window.location.reload();
-      }).catch((reason) => {
-        render(reason instanceof Error ? reason.message : String(reason));
-      });
-    });
-    card.append(form);
-
-    const toggle = document.createElement("button");
-    toggle.className = "platform-session-switch";
-    toggle.type = "button";
-    toggle.textContent = mode === "login"
-      ? "First run? Initialize the instance"
-      : "Already initialized? Sign in";
-    toggle.addEventListener("click", () => {
-      mode = mode === "login" ? "bootstrap" : "login";
-      render(null);
-    });
-    card.append(toggle);
-    main.append(card);
-    root.append(main);
-  };
-
-  render(initialError);
+  const message = reason instanceof Error ? reason.message : String(reason);
+  root.replaceChildren();
+  const main = document.createElement("main");
+  main.setAttribute("role", "alert");
+  main.style.cssText = "min-height:100vh;display:grid;place-items:center;padding:24px;background:#0b0d12;color:#e8edf5;font:16px system-ui";
+  main.textContent = `Unable to start the local Codex workspace: ${message}`;
+  root.append(main);
 }
 
 async function start() {
   const token = getPlatformSessionToken();
-  if (!token) {
-    renderAuthentication();
-    return;
+  if (token) {
+    try {
+      await platformClient.me();
+      await renderOriginalApplication(token);
+      return;
+    } catch {
+      setPlatformSessionToken("");
+    }
   }
+
   try {
-    await platformClient.me();
-    await renderOriginalApplication(token);
+    const session = await platformClient.createLocalSession();
+    setPlatformSessionToken(session.session_token);
+    await renderOriginalApplication(session.session_token);
   } catch (reason) {
-    setPlatformSessionToken("");
-    renderAuthentication(reason instanceof Error ? reason.message : String(reason));
+    renderStartupError(reason);
   }
 }
 

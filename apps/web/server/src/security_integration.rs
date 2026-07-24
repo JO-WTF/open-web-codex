@@ -116,6 +116,28 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     let first_organization_id =
         Uuid::parse_str(bootstrap.2["organization"]["id"].as_str().unwrap()).unwrap();
 
+    let local_session = call_with_headers(
+        &app,
+        Request::post("/api/sessions/local")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(local_session.0, StatusCode::OK);
+    assert_eq!(
+        local_session.2["user"]["id"].as_str(),
+        bootstrap.2["user"]["id"].as_str()
+    );
+    assert_eq!(
+        local_session.2["organization"]["id"].as_str(),
+        bootstrap.2["organization"]["id"].as_str()
+    );
+    let local_token = local_session.2["session_token"]
+        .as_str()
+        .expect("implicit local session token");
+    let local_me = call(&app, authenticated("GET", "/api/me", local_token)).await;
+    assert_eq!(local_me.0, StatusCode::OK);
+
     ensure_transitional_profile_binding(&pool, "legacy-profile", "Legacy Profile")
         .await
         .expect("repair legacy Profile binding");

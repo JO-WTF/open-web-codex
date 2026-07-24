@@ -8,6 +8,9 @@ MCP Server、Secret 配置、审批适配或专用 Web 面板。`tools/maps-mcp`
 `docs/capability-baseline.md` 为准，交付顺序以 `docs/development-plan.md`
 为准。
 
+如需先理解 Agent Profile、领域知识、Skill 与 MCP 的职责拆分和组合方式，参见
+[`domain-agent-extension-architecture.md`](domain-agent-extension-architecture.md)。
+
 ## 目录
 
 1. [先确定扩展属于哪一层](#1-先确定扩展属于哪一层)

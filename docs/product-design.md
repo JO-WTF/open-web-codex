@@ -164,7 +164,7 @@ authenticated user
 
 | 路由 | 页面 | 权限 | 主要操作 |
 | --- | --- | --- | --- |
-| `/login` | 登录/邀请 | 未登录 | 登录、接受邀请、恢复会话 |
+| `/login` | 当前不暴露 | — | 单用户阶段由根入口自动建立本地 Session；多用户登录与邀请暂不进入当前界面 |
 | `/onboarding` | 初始化向导 | 首位 Owner | 组织、Profile、Git、首个项目 |
 | `/dashboard` | 工作台 | 已登录 | 发现待办、恢复 Task、创建 Task |
 | `/projects` | 项目列表 | 已登录 | 搜索、筛选、创建项目 |
@@ -208,9 +208,12 @@ authenticated user
 ### WF-02 邀请加入
 
 - 前置：邀请有效且用户未被禁用。
-- 正常：用户验证身份、接受角色、创建个人 Profile 或进入 Profile 初始化，再进入工作台。
-- 异常：邀请过期、邮箱不匹配、已使用、成员被禁用时不得自动登录。
-- 终态：Membership active、Session 可吊销、产生 `member.joined` 审计。
+- 当前正常流程：Server 确保隐式本地 Owner、Organization 与 Profile 绑定，浏览器自动
+  获取本地 Session 并进入工作台，不显示登录或注册界面。
+- 当前异常流程：本地 Owner、Membership、Profile 或 Session 无法建立时显示启动错误，
+  不回退到登录或注册表单。
+- 当前终态：本地 Session 绑定 Organization；服务端仍按 Session、Profile 和资源归属
+  执行授权。邀请、多成员登录和成员禁用流程暂不进入当前单用户界面。
 
 ### WF-03 创建项目
 

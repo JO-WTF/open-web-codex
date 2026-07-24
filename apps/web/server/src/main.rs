@@ -20,12 +20,14 @@ use open_web_codex_provider_service::secured::{
 };
 use open_web_codex_run_orchestrator::RunOrchestrator;
 use open_web_codex_secret_store::{MasterKey, PostgresSecretStore, SecretCipher};
+use rand::{distributions::Alphanumeric, Rng};
 use sqlx::Row;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
 use open_web_codex_adapter::{fake::FakeCodexAdapter, real::RealCodexAdapter, CodexAdapter};
+use open_web_codex_auth::hash_password;
 use open_web_codex_platform_store::AppState;
 
 #[derive(Parser, Debug)]
@@ -123,6 +125,7 @@ async fn main() -> anyhow::Result<()> {
         codex_home: cli.codex_home.clone().map(Arc::new),
         capabilities: routes::RuntimeCapabilityState::default(),
     };
+    ensure_local_owner(&state.db).await?;
     ensure_transitional_profile_binding(
         &state.db,
         &profile_binding.runtime_key,
@@ -725,6 +728,63 @@ async fn ensure_transitional_profile_binding(
             "Profile '{runtime_key}' has no ownership binding and multiple owner memberships exist"
         ),
     }
+}
+
+async fn ensure_local_owner(db: &sqlx::PgPool) -> anyhow::Result<()> {
+    let user_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users)")
+        .fetch_one(db)
+        .await?;
+    if user_exists {
+        return Ok(());
+    }
+
+    let password: String = rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(64)
+        .map(char::from)
+        .collect();
+    let password_hash = tokio::task::spawn_blocking(move || hash_password(&password))
+        .await
+        .map_err(|error| anyhow::anyhow!("local owner password task failed: {error}"))?
+        .map_err(|error| anyhow::anyhow!("local owner password hashing failed: {error}"))?;
+
+    let mut transaction = db.begin().await?;
+    sqlx::query("LOCK TABLE users IN EXCLUSIVE MODE")
+        .execute(&mut *transaction)
+        .await?;
+    let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(&mut *transaction)
+        .await?;
+    if user_count > 0 {
+        transaction.commit().await?;
+        return Ok(());
+    }
+
+    let user_id: uuid::Uuid = sqlx::query_scalar(
+        "INSERT INTO users (name, username, email, password_hash, role) \
+         VALUES ('Local User', 'local', 'local@localhost.invalid', $1, 'owner') \
+         RETURNING id",
+    )
+    .bind(password_hash)
+    .fetch_one(&mut *transaction)
+    .await?;
+    let organization_id: uuid::Uuid = sqlx::query_scalar(
+        "INSERT INTO organizations (name, slug) VALUES ('Local Workspace', 'local-workspace') \
+         ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name \
+         RETURNING id",
+    )
+    .fetch_one(&mut *transaction)
+    .await?;
+    sqlx::query(
+        "INSERT INTO memberships (organization_id, user_id, role) VALUES ($1, $2, 'owner')",
+    )
+    .bind(organization_id)
+    .bind(user_id)
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    tracing::info!("created the implicit local owner for authentication-free startup");
+    Ok(())
 }
 
 #[cfg(test)]

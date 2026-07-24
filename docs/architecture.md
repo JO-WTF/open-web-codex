@@ -129,7 +129,7 @@ session -> user -> organization membership -> project permission
 ### Single-Profile convergence mode
 
 The current near-term runtime target is a deliberately narrowed deployment mode:
-one authenticated human user, one persistent Profile Home, one primary Profile
+one implicit local Owner, one persistent Profile Home, one primary Profile
 Host process and one selected workspace context per active Run. This is a
 deployment constraint, not a boundary exception. The same ownership table above
 continues to apply:
@@ -146,6 +146,11 @@ continues to apply:
 - Skills, Plugins and MCP are still discovered and executed by Codex Runtime.
   The WebApp does not scan `.mcp.json`, run plugin launchers, answer MCP
   inventory questions locally or write hidden Profile configuration.
+- The Server ensures the implicit local Owner on startup, and the browser
+  obtains a local Session without rendering login or registration. Session,
+  Organization, Profile and resource authorization remain the internal request
+  context; this transition mode is not a public or multi-user authentication
+  design.
 - Local capability packages such as `tools/maps-mcp` are made available as
   selected capability roots. Their launchers own package bootstrap, dependency
   checks and MCP server startup; Profile Host only reports safe startup status

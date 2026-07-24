@@ -1,6 +1,6 @@
 # open-web-codex Web platform
 
-This directory contains the browser client and the authenticated platform that
+This directory contains the browser client and the session-backed platform that
 hosts the official Codex runtime. It has no desktop application, local daemon,
 or browser-to-Codex protocol bridge.
 
@@ -35,9 +35,11 @@ From the repository root, start the 1421 WebApp and the 4800 Server together:
 ./scripts/start-all.sh --fake
 ```
 
-Open `http://127.0.0.1:1421/web`. The WebApp calls the authenticated Server
-directly; no daemon or Gateway process is started. Real Runtime mode is the
-default when `--fake` is omitted; see
+Open `http://127.0.0.1:1421/web`. The current single-user flow creates an
+implicit local Owner and Session, skips login and registration screens, and
+opens the WebApp directly. Server-side Session, Organization, Profile and
+resource authorization remain in use. No daemon or Gateway process is started.
+Real Runtime mode is the default when `--fake` is omitted; see
 [`../../docs/mvp-runbook.md`](../../docs/mvp-runbook.md) for configuration.
 
 To run the two development processes separately:
@@ -124,9 +126,9 @@ restoration and durable/live event ordering. It never prints the Provider key.
 src/WebApp.tsx             restored 1421 WebApp UI
 src/services/webClient.ts  narrow WebApp-to-Server compatibility seam
 browser/client.ts          authenticated typed REST/WebSocket transport
-browser/browser-entry.ts   authentication and WebApp entry
-server/                    Axum composition root and authenticated routes
-crates/auth/               sessions, password hashing, and RBAC
+browser/browser-entry.ts   implicit local Session and WebApp entry
+server/                    Axum composition root and session-backed routes
+crates/auth/               retained sessions, password hashing, and RBAC
 crates/profile-host/       persistent CODEX_HOME and app-server lifecycle
 crates/profile-registry/   single-owner Profile process registry
 crates/provider-service/   authorized Provider orchestration
