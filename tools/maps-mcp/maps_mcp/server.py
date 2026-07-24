@@ -5,13 +5,18 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import Annotated
 from typing import Literal
 
 from mcp.server.fastmcp import Context
 from mcp.server.fastmcp import FastMCP
 from mcp.server.session import ServerSession
+from mcp.types import CallToolResult
+from mcp.types import TextContent
 from pydantic import BaseModel
+from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import model_validator
 
 from .clients import GoogleMapsClient
 from .clients import MapboxMapsClient
@@ -50,9 +55,51 @@ class MapCardPolygon(BaseModel):
     coordinates: list[list[Point]] = Field(min_length=1, max_length=32)
 
 
+class MapCardLinePayload(BaseModel):
+    """A line in the browser-facing map-card contract."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str | None = None
+    label: str | None = None
+    color: str | None = None
+    coordinates: list[tuple[float, float]] = Field(min_length=2, max_length=500)
+
+
+class MapCardPolygonPayload(BaseModel):
+    """A polygon in the browser-facing map-card contract."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str | None = None
+    label: str | None = None
+    color: str | None = None
+    coordinates: list[list[tuple[float, float]]] = Field(min_length=1, max_length=32)
+
+
+class MapCardPayload(BaseModel):
+    """The bounded inline payload encoded by an ``open-web-card map.v1`` marker."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1)
+    intent: str = Field(min_length=1)
+    status: Literal["loading", "ready", "error"]
+    fallback_text: str | None = None
+    summary: str | None = None
+    input_ref: str | None = None
+    artifact_id: str | None = None
+    points: list[MapCardPoint] | None = None
+    lines: list[MapCardLinePayload] | None = None
+    polygons: list[MapCardPolygonPayload] | None = None
+    geojson: dict[str, object] | None = None
+
+
 mcp = FastMCP(
     "Map Utils",
     instructions=(
+        "Map-card output contract: after create_map_card succeeds, copy its returned marker "
+        "verbatim into the final assistant answer; do not translate, reformat, or omit it. "
         "Paid geocoding and routing tools for Google Maps and Mapbox. "
         "One selected provider and API key are shared by every maps tool. "
         "Missing configuration is requested through elicitation; a later configuration "
@@ -109,6 +156,30 @@ def _map_card_marker(payload: dict[str, object]) -> str:
     return marker
 
 
+class MapCardToolResult(BaseModel):
+    """Structured MCP result for ``create_map_card``.
+
+    FastMCP exports this model as the tool's ``outputSchema`` and validates the
+    ``structuredContent`` field before sending it to the client.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["open-web-card"]
+    kind: Literal["map.v1"]
+    marker: str = Field(min_length=1)
+    card: MapCardPayload
+
+    @model_validator(mode="after")
+    def marker_must_encode_card(self) -> MapCardToolResult:
+        expected = _map_card_marker(
+            self.card.model_dump(mode="json", exclude_none=True)
+        )
+        if self.marker != expected:
+            raise ValueError("marker must be the exact fenced encoding of card")
+        return self
+
+
 def _point_payload(point: MapCardPoint | Point) -> dict[str, object]:
     payload: dict[str, object] = {
         "latitude": point.latitude,
@@ -122,7 +193,7 @@ def _point_payload(point: MapCardPoint | Point) -> dict[str, object]:
     return payload
 
 
-@mcp.tool()
+@mcp.tool(structured_output=True)
 async def create_map_card(
     title: str,
     intent: str = "visualization",
@@ -134,7 +205,7 @@ async def create_map_card(
     lines: list[MapCardLine] | None = None,
     polygons: list[MapCardPolygon] | None = None,
     geojson: dict[str, object] | None = None,
-) -> dict[str, object]:
+) -> Annotated[CallToolResult, MapCardToolResult]:
     """Create a compact open-web map-card marker for the final assistant answer.
 
     Use this after geocoding, route, or distance tools when a map visualization helps.
@@ -196,13 +267,18 @@ async def create_map_card(
     if geojson:
         payload["geojson"] = geojson
 
-    marker = _map_card_marker(payload)
-    return {
-        "type": "open-web-card",
-        "kind": "map.v1",
-        "marker": marker,
-        "card": payload,
-    }
+    card = MapCardPayload.model_validate(payload)
+    result = MapCardToolResult(
+        type="open-web-card",
+        kind="map.v1",
+        marker=_map_card_marker(card.model_dump(mode="json", exclude_none=True)),
+        card=card,
+    )
+    structured_content = result.model_dump(mode="json", exclude_none=True)
+    return CallToolResult(
+        content=[TextContent(type="text", text=_compact_json(structured_content))],
+        structuredContent=structured_content,
+    )
 
 
 def _point(point: Point) -> dict[str, float]:

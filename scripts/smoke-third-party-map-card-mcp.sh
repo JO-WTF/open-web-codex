@@ -55,8 +55,26 @@ OPEN_WEB_CODEX_MAPS_MCP_VENV="$maps_mcp_venv" MAPS_MCP_VENV="$maps_mcp_venv" COD
   '用地图卡片展示印尼。必须调用 map_utils 的 create_map_card MCP 工具生成 open-web-card map.v1 marker，最终答案只输出该 marker。' \
   | tee "$output_file"
 
-if ! rg -q '"type":"mcp_tool_call".*"server":"map_utils".*"tool":"create_map_card"|open-web-card map.v1' "$output_file"; then
-  echo "third-party map-card MCP smoke did not observe map_utils.create_map_card and marker output" >&2
+map_marker="$(jq -r '
+  select(
+    .type == "item.completed"
+    and .item.type == "mcp_tool_call"
+    and .item.server == "map_utils"
+    and .item.tool == "create_map_card"
+  )
+  | .item.result.structured_content.marker // empty
+' "$output_file")"
+
+if [[ -z "$map_marker" ]]; then
+  echo "third-party map-card MCP smoke did not observe a map_utils.create_map_card marker" >&2
+  exit 3
+fi
+
+if ! jq -e --arg marker "$map_marker" '
+  select(.type == "item.completed" and .item.type == "agent_message")
+  | .item.text | contains($marker)
+' "$output_file" >/dev/null; then
+  echo "third-party map-card MCP smoke did not observe the returned marker in an assistant final message" >&2
   exit 3
 fi
 

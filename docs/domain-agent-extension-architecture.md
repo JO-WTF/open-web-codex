@@ -444,6 +444,80 @@ MCP Tool 不应隐藏完整业务流程。
 
 ---
 
+### 6.4 MCP 工具输出合同（`outputSchema`）
+
+每个 MCP Tool 都以 `inputSchema` 描述可接受的参数；对需要被后续 Skill、平台或
+确定性 UI 使用的稳定结果，还应声明 `outputSchema`。前者是工具调用合同，后者是
+工具结果合同，二者都不应依赖模型从自然语言中猜测字段含义。
+
+| 字段或通道 | 负责的内容 | 使用边界 |
+| --- | --- | --- |
+| `inputSchema` | 参数名、类型、必填项、范围和数组上限 | MCP Tool 的调用输入；MCP 工具定义必须提供。 |
+| `outputSchema` | 稳定结果的字段、类型和约束 | MCP Tool 的结构化结果；MCP 允许省略，但稳定的机器可读结果应提供。 |
+| `structuredContent` | 实际返回的、受 `outputSchema` 约束的数据 | Runtime、其他受控服务或具备协议能力的 MCP Client 使用。 |
+| `content` | 与结构化结果一致的可读文本或序列化 JSON | 兼容只读取文本的 Client 和模型上下文；不应成为浏览器的协议入口。 |
+
+输入和输出样例可以帮助人和模型理解工具，但它们不是校验机制。校验来自 Schema、
+服务端模型验证以及对实际 MCP 响应的测试。
+
+以下是声明稳定结构化结果的最小 FastMCP 模式。类型标注使 FastMCP 在 `tools/list`
+中生成 `outputSchema`；实现仍显式构造 `structuredContent`，并提供等价的 JSON
+文本内容以兼容不同 MCP Client：
+
+```python
+import json
+from typing import Annotated, Literal
+
+from mcp.server.fastmcp import FastMCP
+from mcp.types import CallToolResult, TextContent
+from pydantic import BaseModel, ConfigDict, Field
+
+
+mcp = FastMCP("Routing")
+
+
+class RouteResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    route_id: str = Field(min_length=1)
+    status: Literal["ready"]
+    distance_meters: int = Field(ge=0)
+
+
+@mcp.tool(structured_output=True)
+async def calculate_route(origin: str, destination: str) -> Annotated[
+    CallToolResult, RouteResult
+]:
+    result = RouteResult(
+        route_id="route-123",
+        status="ready",
+        distance_meters=1_240,
+    )
+    structured = result.model_dump(mode="json")
+    return CallToolResult(
+        content=[TextContent(type="text", text=json.dumps(structured))],
+        structuredContent=structured,
+    )
+```
+
+实际 Tool 应让输出模型拥有与输入同等严格的约束：禁止未知字段、限制集合大小，
+并为字段间的不变量增加服务端验证。`map_utils.create_map_card` 就同时返回
+`marker` 和 `card`，并验证 `marker` 必须是 `card` 的精确 fenced 编码；因此任何
+不一致的工具结果都会在 MCP Server 中失败，而不是由浏览器猜测或修复。
+
+`outputSchema` 只约束 MCP Tool 的结果，不能约束模型随后生成的 assistant 最终回复。
+两者是不同的协议消息。需要在最终回复中放入某个工具结果时，应同时：
+
+1. 在 Tool 描述、Server `instructions` 或 Skill 工作流中声明该复制/引用合同。
+2. 对 Tool 结果使用 `outputSchema` 和服务端不变量验证。
+3. 在端到端测试中验证 `mcp_tool_call` 的结构化字段与最终 `agent_message` 的实际内容。
+
+地图卡片采用这一分层：Server 指示模型将返回的 marker 原样放入最终回复；真实
+Smoke 比较 Tool `structuredContent.marker` 与最终 assistant 消息；浏览器只解析
+assistant 消息中的 marker，绝不把 raw MCP Tool Result 当作浏览器渲染兜底。
+
+---
+
 ## 7. 供应链网络规划师参考架构
 
 ![供应链网络规划师参考架构](images/domain-agent/network-planner-reference.svg)

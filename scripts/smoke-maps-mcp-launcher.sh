@@ -95,13 +95,24 @@ try:
     initialize = read_response(request_id, startup_timeout)
     if "error" in initialize:
         raise SystemExit(initialize["error"])
+    instructions = initialize.get("result", {}).get("instructions", "")
+    if "Map-card output contract" not in instructions:
+        raise SystemExit(f"maps MCP did not advertise its map-card output contract: {instructions!r}")
     send("notifications/initialized", request=False)
 
     request_id = send("tools/list", {})
     tools = read_response(request_id, 30)
-    tool_names = [tool.get("name") for tool in tools.get("result", {}).get("tools", [])]
+    listed_tools = tools.get("result", {}).get("tools", [])
+    tool_names = [tool.get("name") for tool in listed_tools]
     if "create_map_card" not in tool_names:
         raise SystemExit(f"create_map_card missing from MCP tools: {tool_names}")
+    map_card_tool = next(tool for tool in listed_tools if tool.get("name") == "create_map_card")
+    output_schema = map_card_tool.get("outputSchema")
+    required_output_fields = {"type", "kind", "marker", "card"}
+    if not isinstance(output_schema, dict) or not required_output_fields.issubset(
+        set(output_schema.get("required", []))
+    ):
+        raise SystemExit(f"create_map_card missing required outputSchema: {output_schema}")
 
     request_id = send(
         "tools/call",
@@ -119,9 +130,19 @@ try:
         raise SystemExit(call["error"])
     content = call.get("result", {}).get("content", [])
     text = "\n".join(item.get("text", "") for item in content if item.get("type") == "text")
-    if "open-web-card map.v1" not in text:
-        raise SystemExit(f"create_map_card did not return a map marker: {text[:500]}")
-    print(json.dumps({"ok": True, "tools": tool_names, "markerBytes": len(text.encode())}))
+    structured_content = call.get("result", {}).get("structuredContent")
+    if not isinstance(structured_content, dict):
+        raise SystemExit(f"create_map_card did not return structuredContent: {call}")
+    marker = structured_content.get("marker")
+    if not isinstance(marker, str) or not marker.startswith("```open-web-card map.v1\n"):
+        raise SystemExit(f"create_map_card returned an invalid marker: {marker!r}")
+    try:
+        text_content = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"create_map_card returned non-JSON text content: {text[:500]}") from exc
+    if text_content.get("marker") != marker:
+        raise SystemExit("create_map_card text content does not match structuredContent.marker")
+    print(json.dumps({"ok": True, "tools": tool_names, "markerBytes": len(marker.encode())}))
 finally:
     try:
         proc.terminate()
