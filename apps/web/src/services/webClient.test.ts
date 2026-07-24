@@ -506,6 +506,7 @@ describe("WebApp direct Server client", () => {
       eventType: string,
       itemId: string | null,
       data: Record<string, unknown>,
+      itemType?: string,
     ) => socket?.onmessage?.({
       data: JSON.stringify({
         type: "run.event",
@@ -519,7 +520,7 @@ describe("WebApp direct Server client", () => {
           thread_id: "thread-1",
           turn_id: "turn-1",
           item_id: itemId,
-          payload: { data },
+          payload: { data, ...(itemType ? { itemType } : {}) },
           created_at: `2026-07-22T00:00:0${sequence}Z`,
         },
       }),
@@ -564,7 +565,11 @@ describe("WebApp direct Server client", () => {
         url: "http://127.0.0.1:43123/one-time-token",
       },
     });
-    await vi.waitFor(() => expect(events).toHaveLength(6));
+    liveEvent(7, "codex.item.completed", "assistant-1", {
+      text: "Done.",
+      phase: "final_answer",
+    }, "agentMessage");
+    await vi.waitFor(() => expect(events).toHaveLength(7));
 
     expect(events.map((event) => event.message)).toEqual([
       {
@@ -633,6 +638,20 @@ describe("WebApp direct Server client", () => {
           message: "No google maps API key is stored for this workspace.",
           url: "http://127.0.0.1:43123/one-time-token",
           command: "No google maps API key is stored for this workspace.",
+        },
+      },
+      {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "assistant-1",
+          item: {
+            id: "assistant-1",
+            type: "agentMessage",
+            text: "Done.",
+            phase: "final_answer",
+          },
         },
       },
     ]);

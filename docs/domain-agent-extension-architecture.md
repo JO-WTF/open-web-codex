@@ -501,20 +501,28 @@ async def calculate_route(origin: str, destination: str) -> Annotated[
 ```
 
 实际 Tool 应让输出模型拥有与输入同等严格的约束：禁止未知字段、限制集合大小，
-并为字段间的不变量增加服务端验证。`map_utils.create_map_card` 就同时返回
-`marker` 和 `card`，并验证 `marker` 必须是 `card` 的精确 fenced 编码；因此任何
-不一致的工具结果都会在 MCP Server 中失败，而不是由浏览器猜测或修复。
+并为字段间的不变量增加服务端验证。`map_utils.create_map_card` 同时返回
+`type`、`kind` 和 `card`，并验证 viewport 判别联合、source/layer 引用关系、
+样式范围及集合大小；因此任何不一致的工具结果都会在 MCP Server 中失败，而不是
+由浏览器猜测或修复。大型结果使用 MCP `resource_link`；数据 Tool 在结构化
+`data_ref` 中返回原始 MCP server ID 与 `resource_link.uri` 对应的 URI。完整引用可
+直接传给卡片，其 server/URI 也可供 MCP `resources/read` 使用；模型可见的
+`mcp__server` Tool 命名空间不是原始 server ID。不设置卡片专用的任意字节上限。
 
 `outputSchema` 只约束 MCP Tool 的结果，不能约束模型随后生成的 assistant 最终回复。
-两者是不同的协议消息。需要在最终回复中放入某个工具结果时，应同时：
+两者是不同的协议消息。可交互结果不应依赖模型重新抄写 Tool 结果，而应同时：
 
-1. 在 Tool 描述、Server `instructions` 或 Skill 工作流中声明该复制/引用合同。
-2. 对 Tool 结果使用 `outputSchema` 和服务端不变量验证。
-3. 在端到端测试中验证 `mcp_tool_call` 的结构化字段与最终 `agent_message` 的实际内容。
+1. 对 Tool 结果使用 `outputSchema` 和 MCP Server 不变量验证。
+2. 在 Platform Server 只识别受支持的 `structuredContent.type/kind`，重新验证并
+   投影成浏览器安全 DTO；不得透传任意 raw Tool Result。
+3. 浏览器只消费该 DTO，assistant 最终回复只负责自然语言说明。
+4. 在端到端测试中同时验证实时事件、Thread 历史恢复和无效合同拒绝。
 
-地图卡片采用这一分层：Server 指示模型将返回的 marker 原样放入最终回复；真实
-Smoke 比较 Tool `structuredContent.marker` 与最终 assistant 消息；浏览器只解析
-assistant 消息中的 marker，绝不把 raw MCP Tool Result 当作浏览器渲染兜底。
+地图卡片采用这一分层：数据 Tool 返回标准 `resource_link` 和包含原始 server/URI 的
+`data_ref`；后续 Tool 把 `data_ref` 原样放入 `structuredContent.card` 的 source；
+Platform Server 验证同一 Run、同一 Thread 中较早完成的 Tool 引用并生成
+`replyCard`；浏览器直接渲染该类型化投影。`content` 只包含模型可读摘要和
+ResourceLink，既不复制卡片 JSON，也不参与渲染。
 
 ---
 

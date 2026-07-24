@@ -26,14 +26,14 @@ not a zero-diff Codex subtree.
 ## Current state
 
 The integrated base is `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9`.
-The observed official main is `9d823343026e600dab694e41865ed60613da31b6`;
-48 official commits await the next dedicated synchronization branch. The raw
-comparison contains 514 paths: 45 added locally, 445 modified, and 24 missing
-locally, classified by the status script as 385 `upstream-only`, 79
-`local-only`, and 50 `diverged`.
+The observed official main is `81da9deb065d7adb283816b19b40f89bcc484276`;
+101 official commits await the next dedicated synchronization branch. The raw
+comparison contains 839 paths: 46 added locally, 730 modified, and 63 missing
+locally, classified by the status script as 710 `upstream-only`, 70
+`local-only`, and 59 `diverged`.
 
 All product-specific differences on the integrated base are classified under
-the retained seams and decisions below. The 50 diverged paths require the next
+the retained seams and decisions below. The 59 diverged paths require the next
 sync to accept official structure first and replay only those classified seams.
 Generated app-server artifacts have no drift on the integrated base, and the
 Runtime/TUI scoped validation matrix passes there. Machine-readable evidence is in
@@ -59,7 +59,7 @@ The script separates the raw tree difference into:
 
 | ID | Seam and source paths | Reason to retain | Replay order | Required validation | Removal condition |
 | --- | --- | --- | --- | --- | --- |
-| `provider-chat-transport` | `codex-api/src/chat_translate.rs`, `chat_translate_tests.rs`, `endpoint/chat.rs`, `sse/chat.rs`; isolated Core transport in `core/src/client/chat.rs` with minimal dispatch in `core/src/client.rs` | Translates third-party Chat Completions requests, streams, and mixed/interrupted tool calls into Codex semantics. Responses namespaces, including MCP plugin tools, are flattened to Chat functions with request-scoped reverse mapping; Responses-only tools without complete Chat semantics remain hidden. | 1 | `just test -p codex-api`; focused Core Chat endpoint, interrupted, namespace/MCP, unsupported-tool-policy, and tool-call translation tests | Upstream provides equivalent supported third-party wire translation, including the same stream, namespace/MCP, and tool behavior. |
+| `provider-chat-transport` | `codex-api/src/chat_translate.rs`, `chat_translate_tests.rs`, `endpoint/chat.rs`, `sse/chat.rs`; isolated Core transport in `core/src/client/chat.rs` with minimal dispatch in `core/src/client.rs` | Translates third-party Chat Completions requests, streams, mixed/interrupted tool calls and assistant message phases into Codex semantics. Text accompanying Tool calls is `commentary`; text-only completion is `final_answer`. Responses namespaces, including MCP plugin tools, are flattened to Chat functions with request-scoped reverse mapping; Responses-only tools without complete Chat semantics remain hidden. | 1 | `just test -p codex-api`; focused Core Chat endpoint, interrupted, namespace/MCP, unsupported-tool-policy, Tool/message-phase and tool-call translation tests | Upstream provides equivalent supported third-party wire translation, including the same stream, namespace/MCP, phase and tool behavior. |
 | `provider-metadata-models` | `model-provider-info/src/lib.rs`, `PROVIDER_MODELS.md`, `model-provider/src/provider.rs`, `models_endpoint.rs`, `models-manager/src/manager.rs`, `config/src/thread_config/**`; Provider turn-client selection in `core/src/client/provider.rs` and `core/src/session/turn.rs`; minimal capability consumption in `core/src/tools/spec_plan.rs` | Defines `WireApi::Chat`, Provider-scoped model and tool-capability metadata, model discovery, selection, normalization, cache isolation, and correct transport rebinding when an existing Thread switches Provider. | 2 | `just test -p codex-model-provider-info`; `just test -p codex-model-provider`; `just test -p codex-config`; focused Core tool-plan and Provider hot-switch tests; regenerated config Schema; Provider switch/cache-isolation smoke | Upstream exposes equivalent Provider metadata, scoped catalog, capability gates, cache semantics, and live Thread Provider transport rebinding. |
 | `provider-app-server-api` | `app-server-protocol/src/protocol/v2/model.rs`, `app-server/src/request_processors/catalog_processor.rs`, `app-server/src/models.rs`, request registration, generated capability declarations | Provides versioned Provider listing, Provider-scoped model listing, controlled selection/configuration, and forced refresh for both TUI and Platform Host. | 3 | `just test -p codex-app-server-protocol`; `just test -p codex-app-server model_list`; generated Schema/TypeScript; real app-server Provider smoke | Upstream provides the required stable API and generated contract. |
 | `provider-tui-workflows` | Dedicated modules under `tui/src/app/event_dispatch/provider_config.rs`, `app_event/provider.rs`, `app_server_session/provider_models.rs`, `chatwidget/provider_{model_context,popups,sections}.rs` and `onboarding/auth/provider_setup{,/render}.rs`; narrow attachments in upstream-owned parents | TUI Provider selection, model selection, onboarding, refresh, configuration, and error UX are product-critical client behavior. | 4 | `just test -p codex-tui`; Provider workflow snapshots | Upstream TUI provides equivalent Provider and model workflows, or the product explicitly retires TUI parity. |
@@ -68,9 +68,9 @@ The script separates the raw tree difference into:
 
 ## Current inventory classification
 
-The current comparison against `codex-upstream/main` contains 514 paths: 385
-`upstream-only`, 79 `local-only`, and 50 `diverged`. The integrated base remains
-the validation baseline until the 48 pending official commits are accepted on a
+The current comparison against `codex-upstream/main` contains 839 paths: 710
+`upstream-only`, 70 `local-only`, and 59 `diverged`. The integrated base remains
+the validation baseline until the 101 pending official commits are accepted on a
 new sync branch. Generated artifacts, tests, and snapshots follow their owning
 source seam.
 
@@ -90,7 +90,7 @@ source seam.
 ## Current convergence analysis
 
 The integrated `6e5a2d6b8d14` structure has no unresolved tree conflicts. The
-observed official main is 48 commits ahead, so its 50 diverged paths must be
+observed official main is 101 commits ahead, so its 59 diverged paths must be
 resolved on the next dedicated sync branch. On the integrated base,
 `codex-api/src/common.rs` matches the official object exactly. Chat request
 DTOs and owned Responses-to-Chat conversion live in `chat_translate.rs`; the
@@ -131,7 +131,7 @@ request preparation and Provider auth/retry/telemetry hooks are isolated in
 `core/src/client/chat.rs`; `core/src/client.rs` retains only the narrow
 `WireApi::Chat` dispatch. The Core branch is covered by a real mock
 `/v1/chat/completions` integration test in addition to interrupted-stream,
-tool-call and namespace/MCP tests.
+tool-call, message-phase and namespace/MCP tests.
 
 The Capability Manifest derives method names from typed protocol request and
 notification enums. The legacy response-tool history adapter is isolated in

@@ -60,23 +60,8 @@ async fn start_mock_responses_server(body: String) -> (String, tokio::task::Join
     (format!("http://{address}"), task)
 }
 
-/// Exercises the actual Profile Host implementation against the checked-out
-/// Codex app-server binary. Run with:
-///
-/// `CODEX_BIN=/absolute/path/to/codex cargo test -p open-web-codex-profile-host --test real_app_server -- --ignored`
-#[tokio::test]
-#[ignore = "requires a real Codex CLI binary"]
-async fn restarts_with_the_same_profile_and_recovers_a_thread() {
-    let codex_bin = PathBuf::from(std::env::var_os("CODEX_BIN").expect("CODEX_BIN is set"));
-    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("apps/web workspace root")
-        .canonicalize()
-        .expect("canonical workspace");
-    let home = temporary_profile_home();
-    std::fs::create_dir_all(&home).expect("create Profile home");
-    let response_body = [
+fn completed_response_body() -> String {
+    [
         json!({
             "type": "response.created",
             "response": { "id": "response-1" },
@@ -109,7 +94,57 @@ async fn restarts_with_the_same_profile_and_recovers_a_thread() {
         let kind = event["type"].as_str().expect("response event type");
         format!("event: {kind}\ndata: {event}\n\n")
     })
-    .collect::<String>();
+    .collect()
+}
+
+async fn wait_for_turn_context_window(
+    events: &mut tokio::sync::broadcast::Receiver<open_web_codex_profile_host::ProfileHostEvent>,
+    thread_id: &str,
+    turn_id: &str,
+) -> i64 {
+    timeout(Duration::from_secs(10), async {
+        let mut context_window = None;
+        let mut completed = false;
+        loop {
+            let event = events.recv().await.expect("Profile Host event").message;
+            if event["params"]["threadId"] != thread_id {
+                continue;
+            }
+            if event["method"] == "thread/tokenUsage/updated"
+                && event["params"]["turnId"] == turn_id
+            {
+                context_window = event["params"]["tokenUsage"]["modelContextWindow"].as_i64();
+            } else if event["method"] == "turn/completed"
+                && event["params"]["turn"]["id"] == turn_id
+            {
+                completed = true;
+            }
+            if let (true, Some(context_window)) = (completed, context_window) {
+                return context_window;
+            }
+        }
+    })
+    .await
+    .expect("turn completion and context window")
+}
+
+/// Exercises the actual Profile Host implementation against the checked-out
+/// Codex app-server binary. Run with:
+///
+/// `CODEX_BIN=/absolute/path/to/codex cargo test -p open-web-codex-profile-host --test real_app_server -- --ignored`
+#[tokio::test]
+#[ignore = "requires a real Codex CLI binary"]
+async fn restarts_with_the_same_profile_and_recovers_a_thread() {
+    let codex_bin = PathBuf::from(std::env::var_os("CODEX_BIN").expect("CODEX_BIN is set"));
+    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("apps/web workspace root")
+        .canonicalize()
+        .expect("canonical workspace");
+    let home = temporary_profile_home();
+    std::fs::create_dir_all(&home).expect("create Profile home");
+    let response_body = completed_response_body();
     let (model_server_uri, model_server) = start_mock_responses_server(response_body).await;
     std::fs::write(
         home.join("config.toml"),
@@ -246,6 +281,129 @@ stream_max_retries = 0
 
     second.shutdown().await.expect("shutdown second host");
     drop(second);
+    model_server.abort();
+    std::fs::remove_dir_all(home).expect("remove smoke Profile home");
+}
+
+#[tokio::test]
+#[ignore = "requires a real Codex CLI binary"]
+async fn scheduled_restart_applies_updated_model_context_to_next_turn() {
+    let codex_bin = PathBuf::from(std::env::var_os("CODEX_BIN").expect("CODEX_BIN is set"));
+    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("apps/web workspace root")
+        .canonicalize()
+        .expect("canonical workspace");
+    let home = temporary_profile_home();
+    std::fs::create_dir_all(&home).expect("create Profile home");
+    let (model_server_uri, model_server) =
+        start_mock_responses_server(completed_response_body()).await;
+    std::fs::write(
+        home.join("config.toml"),
+        format!(
+            r#"
+model = "mock-model"
+model_provider = "mock_provider"
+sandbox_mode = "read-only"
+
+[model_providers.mock_provider]
+name = "Profile Host context refresh provider"
+base_url = "{}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+models = [{{ model_id = "mock-model", context_window = 25600 }}]
+"#,
+            model_server_uri
+        ),
+    )
+    .expect("write smoke config");
+
+    let host = spawn_host(&codex_bin, &home, &workspace).await;
+    let started = host
+        .request(
+            "thread/start",
+            json!({
+                "cwd": workspace,
+                "approvalPolicy": "never",
+                "sandbox": "read-only",
+            }),
+        )
+        .await
+        .expect("start thread");
+    let expected_thread_id = thread_id(&started).to_string();
+    let mut events = host.subscribe();
+    let first_turn = host
+        .request(
+            "turn/start",
+            json!({
+                "threadId": expected_thread_id,
+                "input": [{ "type": "text", "text": "Use the initial context window" }],
+            }),
+        )
+        .await
+        .expect("start first turn");
+    let first_turn_id = first_turn["turn"]["id"].as_str().expect("first turn id");
+    assert_eq!(
+        wait_for_turn_context_window(&mut events, &expected_thread_id, first_turn_id).await,
+        24_320
+    );
+
+    host.request(
+        "config/batchWrite",
+        json!({
+            "edits": [{
+                "keyPath": "model_providers.\"mock_provider\".models",
+                "value": [{
+                    "model_id": "mock-model",
+                    "context_window": 256000
+                }],
+                "mergeStrategy": "replace"
+            }],
+            "reloadUserConfig": true
+        }),
+    )
+    .await
+    .expect("persist updated model context");
+    host.schedule_restart(
+        ProfileHostConfig::new("real-smoke-profile", &home, &workspace).with_codex_bin(&codex_bin),
+    )
+    .await
+    .expect("schedule model catalog refresh");
+    assert!(host
+        .apply_scheduled_restart()
+        .await
+        .expect("apply model catalog refresh"));
+    host.request(
+        "thread/resume",
+        json!({
+            "threadId": expected_thread_id,
+            "cwd": workspace,
+            "approvalPolicy": "never",
+        }),
+    )
+    .await
+    .expect("resume thread after model catalog refresh");
+
+    let second_turn = host
+        .request(
+            "turn/start",
+            json!({
+                "threadId": expected_thread_id,
+                "input": [{ "type": "text", "text": "Use the updated context window" }],
+            }),
+        )
+        .await
+        .expect("start second turn");
+    let second_turn_id = second_turn["turn"]["id"].as_str().expect("second turn id");
+    assert_eq!(
+        wait_for_turn_context_window(&mut events, &expected_thread_id, second_turn_id).await,
+        243_200
+    );
+
+    host.shutdown().await.expect("shutdown Profile Host");
+    drop(host);
     model_server.abort();
     std::fs::remove_dir_all(home).expect("remove smoke Profile home");
 }

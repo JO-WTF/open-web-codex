@@ -472,6 +472,50 @@ describe("WebApp workspace-first messaging", () => {
     expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
   });
 
+  it("keeps phase from an empty agentMessage started item on later deltas", async () => {
+    render(<WebApp />);
+
+    const composer = await screen.findByPlaceholderText("Ask Codex to do something...");
+    await waitFor(() => expect((composer as HTMLTextAreaElement).disabled).toBe(false));
+    fireEvent.change(composer, { target: { value: "Write a Python script" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(client.sendUserMessage).toHaveBeenCalled());
+
+    act(() => {
+      appServerEventHandler?.({
+        workspace_id: "workspace-1",
+        message: {
+          method: "item/started",
+          params: {
+            threadId: "thread-new",
+            turnId: "turn-1",
+            item: {
+              id: "agent-message-1",
+              type: "agentMessage",
+              text: "",
+              phase: "commentary",
+            },
+          },
+        },
+      });
+      appServerEventHandler?.({
+        workspace_id: "workspace-1",
+        message: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-new",
+            turnId: "turn-1",
+            itemId: "agent-message-1",
+            delta: "Preparing the Python script.",
+          },
+        },
+      });
+    });
+
+    expect(document.querySelector(".web-execution-current .web-msg-commentary-body")).toBeTruthy();
+    expect(screen.getAllByText("Preparing the Python script.")).toHaveLength(1);
+  });
+
   it("merges an agentMessage started event into its existing streamed message", async () => {
     render(<WebApp />);
 
@@ -507,6 +551,7 @@ describe("WebApp workspace-first messaging", () => {
               id: "agent-message-1",
               type: "agentMessage",
               text: "I will find the boundary data.",
+              phase: "commentary",
             },
           },
         },
@@ -524,6 +569,7 @@ describe("WebApp workspace-first messaging", () => {
               id: "agent-message-1",
               type: "agentMessage",
               text: "I will find the boundary data.",
+              phase: "commentary",
             },
           },
         },
@@ -531,5 +577,22 @@ describe("WebApp workspace-first messaging", () => {
     });
 
     expect(screen.getAllByText("I will find the boundary data.")).toHaveLength(1);
+
+    act(() => {
+      appServerEventHandler?.({
+        workspace_id: "workspace-1",
+        message: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-new",
+            turn: { id: "turn-1", status: "completed" },
+          },
+        },
+      });
+    });
+
+    expect(screen.queryByText("I will find the boundary data.")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "0 tool calls, 1 message" }));
+    expect(screen.getByText("I will find the boundary data.")).toBeTruthy();
   });
 });

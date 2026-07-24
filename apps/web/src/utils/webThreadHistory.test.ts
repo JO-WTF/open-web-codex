@@ -1,11 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { appendTerminalInteractionOutput, buildWebThreadHistory, isUserThreadItem, mergeWebThreadHistory, unwrapWebRpcResult } from "./webThreadHistory";
+import { agentMessagePhase, appendTerminalInteractionOutput, buildWebThreadHistory, isUserThreadItem, mergeWebThreadHistory, unwrapWebRpcResult } from "./webThreadHistory";
 
 describe("isUserThreadItem", () => {
   it("recognizes both live and persisted user message shapes", () => {
     expect(isUserThreadItem({ type: "userMessage" })).toBe(true);
     expect(isUserThreadItem({ type: "message", role: "user" })).toBe(true);
     expect(isUserThreadItem({ type: "agentMessage" })).toBe(false);
+  });
+});
+
+describe("agentMessagePhase", () => {
+  it("accepts only phases from the generated Codex contract", () => {
+    expect(agentMessagePhase("commentary")).toBe("commentary");
+    expect(agentMessagePhase("final_answer")).toBe("final_answer");
+    expect(agentMessagePhase("analysis")).toBeUndefined();
+    expect(agentMessagePhase(null)).toBeUndefined();
   });
 });
 
@@ -29,11 +38,76 @@ describe("mergeWebThreadHistory", () => {
 
   it("merges a live assistant projection with persisted history by runtime item id", () => {
     expect(mergeWebThreadHistory(
-      [{ id: "item-8", level: "assistant", text: "Inspecting Shanghai boundaries" }],
+      [{
+        id: "item-8",
+        level: "assistant",
+        text: "Inspecting Shanghai boundaries",
+        messagePhase: "commentary",
+      }],
       [{ id: "item-8", level: "assistant", text: "Inspecting Shanghai boundaries", streaming: true }],
     )).toEqual([
-      { id: "item-8", level: "assistant", text: "Inspecting Shanghai boundaries", streaming: true },
+      {
+        id: "item-8",
+        level: "assistant",
+        text: "Inspecting Shanghai boundaries",
+        messagePhase: "commentary",
+        streaming: true,
+      },
     ]);
+  });
+
+  it("does not let a stale started Tool event overwrite authoritative completed history", () => {
+    expect(mergeWebThreadHistory(
+      [{
+        id: "call-map",
+        level: "info",
+        text: "create_map_card",
+        kind: "tool",
+        toolStatus: "completed",
+      }],
+      [{
+        id: "call-map",
+        level: "info",
+        text: "create_map_card",
+        kind: "tool",
+        toolStatus: "inProgress",
+        streaming: true,
+      }],
+    )).toEqual([{
+      id: "call-map",
+      level: "info",
+      text: "create_map_card",
+      kind: "tool",
+      toolStatus: "completed",
+    }]);
+  });
+
+  it("merges a live approval with its Server-projected historical approval", () => {
+    expect(mergeWebThreadHistory(
+      [{
+        id: "approval-history",
+        level: "info",
+        text: "Allow map tool?",
+        kind: "approval",
+        approvalRequestId: "approval-1",
+        approvalStatus: "resolved",
+      }],
+      [{
+        id: "approval-live",
+        level: "info",
+        text: "Allow map tool?",
+        kind: "approval",
+        approvalRequestId: "approval-1",
+        approvalStatus: "pending",
+      }],
+    )).toEqual([{
+      id: "approval-history",
+      level: "info",
+      text: "Allow map tool?",
+      kind: "approval",
+      approvalRequestId: "approval-1",
+      approvalStatus: "resolved",
+    }]);
   });
 });
 
@@ -50,6 +124,60 @@ describe("appendTerminalInteractionOutput", () => {
 });
 
 describe("buildWebThreadHistory", () => {
+  it("drops whitespace-only restored agent messages", () => {
+    expect(buildWebThreadHistory({
+      turns: [{
+        items: [{
+          id: "blank-commentary",
+          type: "agentMessage",
+          text: "\n\n  ",
+          phase: "commentary",
+        }],
+      }],
+    }, () => "unused")).toEqual([]);
+  });
+
+  it("restores Server-projected approvals in Turn item order", () => {
+    const result = buildWebThreadHistory({
+      turns: [{
+        items: [
+          {
+            id: "tool-1",
+            type: "mcpToolCall",
+            server: "map_utils",
+            tool: "batch_geocode",
+            status: "completed",
+          },
+          {
+            id: "approval-1",
+            type: "platformApproval",
+            text: "Allow batch_geocode?",
+            approvalRequestId: "request-1",
+            approvalStatus: "resolved",
+            approvalServerName: "map_utils",
+          },
+          {
+            id: "reply-1",
+            type: "agentMessage",
+            text: "Coordinates loaded.",
+            phase: "commentary",
+          },
+        ],
+      }],
+    }, () => "unused");
+
+    expect(result.map((entry) => entry.id)).toEqual([
+      "tool-1",
+      "approval-1",
+      "reply-1",
+    ]);
+    expect(result[1]).toMatchObject({
+      kind: "approval",
+      approvalRequestId: "request-1",
+      approvalStatus: "resolved",
+    });
+  });
+
   it("unwraps nested gateway and app-server result envelopes", () => {
     const thread = {
       id: "019f5b75-2266-7910-bc60-b4470041c4e7",
@@ -124,12 +252,21 @@ describe("buildWebThreadHistory", () => {
     const result = buildWebThreadHistory({
       turns: [{
         items: [
-          { id: "assistant", type: "agentMessage", text: "<｜begin▁of▁sentence｜># Route unavailable" },
+          {
+            id: "assistant",
+            type: "agentMessage",
+            text: "<｜begin▁of▁sentence｜># Route unavailable",
+            phase: "final_answer",
+          },
         ],
       }],
     }, () => "fallback-id");
 
-    expect(result).toMatchObject([{ level: "assistant", text: "# Route unavailable" }]);
+    expect(result).toMatchObject([{
+      level: "assistant",
+      text: "# Route unavailable",
+      messagePhase: "final_answer",
+    }]);
   });
 
   it("restores persisted dynamic tools as commands, diffs, and expandable tool cards", () => {
@@ -203,6 +340,64 @@ describe("buildWebThreadHistory", () => {
 
     expect(result).toHaveLength(9);
     expect(result.every((entry) => entry.kind === "tool")).toBe(true);
+  });
+
+  it("restores a Server-projected MCP structured map card", () => {
+    const [entry] = buildWebThreadHistory({
+      turns: [{ items: [{
+        id: "map-card",
+        type: "mcpToolCall",
+        server: "map_utils",
+        tool: "create_map_card",
+        status: "completed",
+        result: { content: [] },
+        replyCard: {
+          type: "open-web-card",
+          kind: "map.v2",
+          card: {
+            title: "Locations",
+            intent: "visualization",
+            status: "ready",
+            viewport: { mode: "fit", padding: 40 },
+            sources: [{
+              id: "locations",
+              data: {
+                type: "artifact",
+                format: "geojson",
+                artifact_id: "8e98ff2f-82ee-4cc9-a3e6-2974debf8666",
+                url: "/api/runs/975f1f1c-4b58-47ad-a12c-c32aeae566e7/artifacts/8e98ff2f-82ee-4cc9-a3e6-2974debf8666",
+              },
+            }],
+            layers: [{
+              id: "points",
+              source: "locations",
+              geometry: "point",
+              style: { color: "#ef4444" },
+            }],
+          },
+        },
+      }] }],
+    }, () => "generated");
+
+    expect(entry).toMatchObject({
+      id: "map-card",
+      level: "info",
+      kind: "tool",
+      text: "create_map_card",
+      toolType: "MCP",
+      toolTitle: "map_utils / create_map_card",
+      replyCard: {
+        kind: "map.v2",
+        title: "Locations",
+        sources: [{
+          id: "locations",
+          data: {
+            type: "artifact",
+            artifactId: "8e98ff2f-82ee-4cc9-a3e6-2974debf8666",
+          },
+        }],
+      },
+    });
   });
 
   it("redacts sensitive dynamic tool arguments", () => {

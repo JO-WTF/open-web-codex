@@ -1,34 +1,73 @@
 import { describe, expect, it } from "vitest";
-import { parseReplyCards } from "./replyCards";
+import { parseStructuredMapReplyCard } from "./replyCards";
 
-describe("parseReplyCards", () => {
-  it("extracts open-web map card markers and preserves surrounding text", () => {
-    const parts = parseReplyCards('Intro\n```open-web-card map.v1\n{"title":"Route","intent":"route","input_ref":"ref-1","points":[{"lat":31.2,"lng":121.5,"label":"上海"}]}\n```\nDone');
-
-    expect(parts[0]).toEqual({ type: "text", content: "Intro" });
-    expect(parts[1]).toMatchObject({
-      type: "card",
-      kind: "map.v1",
-      title: "Route",
-      intent: "route",
-      inputRef: "ref-1",
-      status: "ready",
-      points: [{ latitude: 31.2, longitude: 121.5, label: "上海" }],
+describe("parseStructuredMapReplyCard", () => {
+  it("normalizes the Server-projected MCP structuredContent contract", () => {
+    const card = parseStructuredMapReplyCard({
+      type: "open-web-card",
+      kind: "map.v2",
+      card: {
+        title: "Batch geocode",
+        intent: "visualization",
+        status: "ready",
+        fallback_text: "Three locations",
+        viewport: { mode: "camera", center: [-122.08, 37.42], zoom: 10 },
+        sources: [{
+          id: "locations",
+          data: {
+            type: "inline",
+            format: "geojson",
+            geojson: { type: "FeatureCollection", features: [] },
+          },
+        }],
+        layers: [{
+          id: "points",
+          source: "locations",
+          geometry: "point",
+          label_property: "label",
+          style: {
+            color: "#ef4444",
+            opacity: 0.8,
+            radius: 9,
+            stroke_color: "#ffffff",
+            stroke_width: 2,
+          },
+        }],
+      },
     });
-    expect(parts[2]).toEqual({ type: "text", content: "\nDone" });
+
+    expect(card).toMatchObject({
+      type: "card",
+      kind: "map.v2",
+      title: "Batch geocode",
+      fallbackText: "Three locations",
+      status: "ready",
+      viewport: { mode: "camera", center: [-122.08, 37.42], zoom: 10 },
+      layers: [{
+        geometry: "point",
+        labelProperty: "label",
+        style: {
+          color: "#ef4444",
+          opacity: 0.8,
+          radius: 9,
+          strokeColor: "#ffffff",
+          strokeWidth: 2,
+        },
+      }],
+    });
   });
 
-  it("supports legacy widget map markers emitted by older map-card skills", () => {
-    const parts = parseReplyCards('```widget\n{"id":"map-legacy","widget_type":"map","props":{"title":"Stored","input_ref":"artifact-1","use_stored_card":true}}\n```');
-
-    expect(parts).toHaveLength(1);
-    expect(parts[0]).toMatchObject({
-      type: "card",
-      id: "map-legacy",
-      title: "Stored",
-      inputRef: "artifact-1",
-      status: "loading",
-      summary: "地图数据已存储在服务端，等待平台 Artifact hydration。",
-    });
+  it("does not interpret MCP text or another card kind as structured map.v2", () => {
+    expect(parseStructuredMapReplyCard({
+      content: [{
+        type: "text",
+        text: "{\"type\":\"open-web-card\",\"kind\":\"map.v2\",\"card\":{}}",
+      }],
+    })).toBeNull();
+    expect(parseStructuredMapReplyCard({
+      type: "open-web-card",
+      kind: "chart.v1",
+      card: {},
+    })).toBeNull();
   });
 });

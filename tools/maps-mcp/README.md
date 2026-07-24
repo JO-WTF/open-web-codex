@@ -72,14 +72,18 @@ selects local plugin roots discovered under the source tree or workspace `tools/
 a new Thread; deployments may add extra absolute roots with `OPEN_WEB_CODEX_CAPABILITY_ROOTS`.
 
 The plugin MCP config starts `./bin/maps-mcp-launcher` with `cwd="."` and requests the shared maps
-environment/logging variables via `env_vars`. The launcher resolves the plugin root and repository
-root, verifies that the shared environment can import `maps_mcp` and `mcp`, keeps startup logs on
-stderr so MCP stdio stdout remains JSON-RPC-only, and then execs `python -m maps_mcp.server`. If the
-shared environment is missing or incomplete, the launcher fails fast with instructions to run
-`scripts/setup-maps-mcp-env.sh` instead of doing dependency downloads during a user conversation.
-Set `MAPS_MCP_AUTO_INSTALL=1` only for ad-hoc manual development. The MCP client must advertise URL
-elicitation support. If the current browser surface cannot render the key request, the tool fails
-safely instead of requesting the key in a model-visible form.
+environment/logging variables and standard uppercase/lowercase proxy variables via `env_vars`. The
+launcher resolves the plugin root and repository root, verifies that the shared environment can
+import `maps_mcp` and `mcp`, keeps startup logs on stderr so MCP stdio stdout remains JSON-RPC-only,
+and then execs `python -m maps_mcp.server`. Remote Google and Mapbox calls use the inherited
+`HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` settings; `ALL_PROXY` is the fallback for HTTP and HTTPS
+when protocol-specific settings are absent. TLS certificate and hostname validation use the system
+defaults. If the shared environment is missing or incomplete,
+the launcher fails fast with instructions to run `scripts/setup-maps-mcp-env.sh` instead of doing
+dependency downloads during a user conversation. Set `MAPS_MCP_AUTO_INSTALL=1` only for ad-hoc manual
+development. The MCP client must advertise URL elicitation support. If the current browser surface
+cannot render the key request, the tool fails safely instead of requesting the key in a model-visible
+form.
 
 `scripts/setup-maps-mcp-env.sh` writes detailed setup logs to
 `$OPEN_WEB_CODEX_LOG_DIR/maps-mcp-env.log` by default. The log records timestamps, Python/pip
@@ -105,10 +109,16 @@ PYTHONPATH=. python3 -m unittest discover -s tests -v
 
 Map-card output:
 
-`create_map_card` returns an `open-web-card map.v1` fenced marker. Put the returned `marker`
-verbatim in the assistant final answer where the Web UI should render the map card. Use small
-inline points/lines/polygons for previews, and prefer `input_ref` or `artifact_id` for large
-GeoJSON.
+Geocoding and routing tools publish GeoJSON through a standard MCP `resource_link`. Their
+schema-validated output contains the raw MCP server ID and Resource URI in `data_ref`. Copy the
+complete object unchanged into a later `create_map_card` source in the same Run and Thread. When
+downstream work needs the GeoJSON contents, pass `data_ref.server` and `data_ref.uri` unchanged to MCP
+`resources/read`; `mcp__map_utils` is a model-visible Tool namespace, not the Resource server ID.
+`create_map_card` returns an `open-web-card` / `map.v2` object in MCP `structuredContent`; its
+`content` is only concise model-visible prose. The host validates and renders the structured
+result directly, and assistant messages should not reproduce card JSON or GeoJSON. `map.v2`
+supports fit or camera viewports and styled point, line, and polygon layers. Inline GeoJSON is
+supported for small data; large data is read lazily from the referenced MCP Resource.
 
 Provider endpoints implemented:
 

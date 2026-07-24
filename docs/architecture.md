@@ -23,9 +23,12 @@ Browser
   -> Codex app-server                   -> Thread / Turn / memory / agents
   -> event normalizer and durable projection
 
-Run orchestrator
+Thread workspace service
   -> repository mirror (read-only to Agent)
-  -> per-Run worktree (authorized writable workspace)
+  -> Thread/Chat workspace (authorized writable checkout)
+
+Run orchestrator
+  -> resolves the Thread workspace
   -> Runner sandbox / Git delivery
 
 Codex build
@@ -107,7 +110,7 @@ The authorization chain is:
 
 ```text
 session -> user -> organization membership -> project permission
-        -> task/run -> profile/thread -> workspace/event/approval/artifact
+        -> task/thread -> profile/workspace -> run/event/approval/artifact
 ```
 
 - One member has one persistent personal Profile by default.
@@ -117,12 +120,16 @@ session -> user -> organization membership -> project permission
   and a process registry enforce the invariant.
 - A Profile may execute multiple authorized Tasks only within measured Runtime
   concurrency limits. It never shares a Home with another user.
-- Every Run uses a distinct writable Git worktree. Repository mirrors are not
-  Agent-writable, and a successor Run may continue a Thread without reusing an
-  unrelated writable directory.
+- A managed writable Git worktree is associated with a Thread/Chat and remains
+  stable across its Turns and platform Runs. Repository mirrors are not
+  Agent-writable. A Run resolves this association and never provisions or owns
+  a separate checkout.
+- A local or permanent Workspace may host multiple Threads only through an
+  explicit platform selection and authorization flow. The default managed
+  worktree remains Thread-scoped.
 - Profile Host validates Profile/User/Thread/Workspace relationships. Runner
-  validates Project/Run/Workspace relationships. Normal browser users never
-  submit trusted filesystem paths.
+  validates Project/Thread/Workspace and Run/Thread relationships. Normal
+  browser users never submit trusted filesystem paths.
 - Cache, subscription, model and secret keys include their user/Profile scope.
   Cross-user and guessed-ID denial tests are release gates.
 
@@ -130,9 +137,9 @@ session -> user -> organization membership -> project permission
 
 The current near-term runtime target is a deliberately narrowed deployment mode:
 one implicit local Owner, one persistent Profile Home, one primary Profile
-Host process and one selected workspace context per active Run. This is a
-deployment constraint, not a boundary exception. The same ownership table above
-continues to apply:
+Host process and an authorized workspace context associated with each selected
+Thread. This is a deployment constraint, not a boundary exception. The same
+ownership table above continues to apply:
 
 - The platform starts and monitors the single Profile Host, injects only
   authorized environment and secret references, and records safe diagnostics.
@@ -187,43 +194,75 @@ API or crash the event stream.
 Structured reply cards are browser projections of Codex message content and
 platform artifacts. Codex remains responsible for deciding when to use tools and
 what to say. Skills, Plugins and MCP servers may provide model-visible
-instructions or tools that emit a compact, stable marker such as
-`open-web-card map.v1`; the Web platform may parse and render that marker, but
-it must not make the model "discover" a capability by intercepting composer
-text or injecting ad-hoc prompts.
+instructions or tools that return versioned `structuredContent`; the Web
+platform may validate and render a supported contract, but it must not make the
+model "discover" a capability by intercepting composer text or injecting ad-hoc
+prompts.
 
-Current map-card support follows this checked-in preview flow:
+Current map-card support follows this checked-in flow:
 
-1. Runtime/Skills/MCP may emit a small `open-web-card map.v1` marker or legacy
-   map widget marker in assistant text.
-2. The browser parser recognizes the marker, hides the raw fenced block and
-   renders bounded inline point, line, polygon or GeoJSON data with Mapbox GL.
-   The browser reads the restricted public `pk.` token through the typed
+1. Geocoding and routing tools publish GeoJSON as standard MCP Resources. Their
+   `outputSchema`-validated `data_ref` contains the raw MCP server ID and the same
+   URI exposed by `resource_link.uri`. The complete reference is card-compatible;
+   its server and URI are directly reusable by MCP `resources/read`. The raw
+   server ID is distinct from the model-visible `mcp__server` Tool namespace.
+   `map_utils.create_map_card` advertises an MCP `outputSchema` and returns an
+   `open-web-card` / `map.v2` object in `structuredContent`; Resource sources copy a
+   complete `data_ref` from an earlier completed Tool item in the same Run and Thread. Its `content`
+   is concise model-visible prose, never a rendering input.
+2. The Server accepts only the supported type/kind, validates viewport,
+   source/layer references and style ranges, strips unknown fields and projects
+   a typed `replyCard` through both live events and authoritative Thread
+   history. It never scans Tool result text or assistant Markdown. ResourceLink
+   server/URI pairs are registered as organization/Run/Thread-owned Artifacts and resolved
+   through the official `mcpServer/resource/read` API. Artifact projection is
+   isolated in a database savepoint so a card failure cannot suppress the
+   underlying MCP Tool completed event.
+3. The browser normalizes the typed projection, reads referenced GeoJSON from
+   an authenticated Artifact URL and renders point, line and polygon layers
+   with Mapbox GL. The browser consumes the official `AgentMessage.phase`
+   contract: `commentary` stays in the execution presentation, while
+   `final_answer` and completed phase-less legacy messages remain assistant
+   replies. A phase-less message that is still streaming remains in the
+   execution presentation until its completed item supplies the contract.
+   The retained Chat Completions transport classifies text accompanying Tool
+   calls as `commentary` and text-only completion as `final_answer`. Reasoning,
+   tools, approvals and commands retain their typed presentations; no
+   last-assistant positional heuristic is used. An MCP item remains a Tool even
+   when it carries a reply card. Cards and assistant replies retain Codex Turn
+   item order, so one reply can contain multiple cards without changing
+   Tool/message counts. Fit viewports run
+   after map load and after the container receives its first real size; camera
+   viewports preserve explicit center and zoom. The browser reads the
+   restricted public `pk.` token through the typed
    authenticated `/api/configuration/maps` resource. Without a token the map
    card remains visible and opens an in-card configuration dialog; authorized
    owners/admins save through the same resource and all visible cards update.
    The shared dialog selects the one active Mapbox or Google Maps provider for
    server-side `map_utils` tools; saving replaces the prior provider and key.
    `VITE_MAPBOX_ACCESS_TOKEN` remains a build-time fallback.
-3. The selected provider/key pair is one encrypted global entry in
+4. The selected provider/key pair is one encrypted global entry in
    `platform_configuration_secrets`; the next save atomically replaces its
    value. The browser receives provider/configured status and, only while
    Mapbox is active, the restricted public `pk.` token required by Mapbox GL.
    The Server delivers the selected provider and key directly to a strictly
    validated local MCP elicitation URL without opening that one-time page.
    The global scope is temporary and reserves a later per-user move.
-4. The platform may later add an Artifact-backed DTO and generated card schema;
-   until that exists, large GeoJSON, production token distribution, renderer
-   capability policy, permissioned downloads and server-side card storage
-   remain disabled gates.
-5. Oversized or invalid data produces safe fallback rendering; raw local paths,
+5. `map.v2` has no card-specific 16 KiB limit. Small GeoJSON can be inline;
+   large GeoJSON stays outside the model/card payload and is loaded lazily from
+   the Artifact cache. A general 128 MiB per-Resource memory-safety boundary is
+   enforced by the Server; future larger formats require a streamed PMTiles or
+   MVT source contract.
+6. Invalid or unresolved data is not promoted into a browser card. Public
+   ResourceLink projections remove source URIs and private metadata, while
+   Artifact responses expose only authorized opaque URLs. Local paths,
    credentials, app-server request IDs and unbounded protocol payloads never
-   reach the browser.
+   reach the browser; ordinary Tool events may still show logical MCP
+   server/tool names.
 
 This feature must not broaden the Codex subtree or the Web platform into a tool
-runtime. Runtime changes are limited to a narrow generated protocol seam only if
-the official app-server cannot carry card markers or artifact references through
-existing message/event surfaces.
+runtime. The official app-server already carries MCP `structuredContent`; the
+typed Server projection and renderer remain Web-platform responsibilities.
 
 ## Primary runtime flows
 
@@ -231,9 +270,12 @@ existing message/event surfaces.
 
 1. Platform authenticates the session and authorizes project/task creation.
 2. A transaction creates the Task and queued Run using an idempotency key.
-3. Scheduler leases the Run; Runner prepares mirror and isolated worktree.
+3. New Thread creation prepares or explicitly associates an authorized
+   Workspace once. Scheduler leases the Run and resolves that Thread/Workspace
+   association without creating another checkout.
 4. Profile Host locks/starts the user's Profile, verifies contract compatibility
-   and starts or resumes the mapped Codex Thread in the authorized workspace.
+   and starts or resumes the mapped Codex Thread in the same authorized
+   Workspace.
 5. Runtime events are normalized, assigned a per-Task monotonic sequence and
    persisted before browser fan-out.
 6. Terminal state is reconciled across database, Codex Profile and Git. No Run
@@ -252,6 +294,20 @@ existing message/event surfaces.
    a reused numeric request id cannot receive the stale response.
 5. An uncertain transport delivery remains retryable only with the same stored
    decision; expiry or Run termination produces an explicit terminal state.
+
+### Provider model catalog refresh
+
+1. The typed Provider service authorizes and persists a Provider-scoped model
+   refresh or context-window edit through the app-server config contract.
+2. Profile Registry marks the owned app-server process for replacement. An
+   active Turn or unresolved Server Request continues on the current process
+   and blocks replacement.
+3. At the next safe Turn boundary, the adapter replaces the process under one
+   serialized Runtime operation, invalidates process-local Thread bindings and
+   resumes the same persisted Codex Thread before starting its next Turn.
+4. The replacement Runtime rebuilds its startup-scoped model catalog from the
+   Profile configuration. Context accounting and compaction remain Runtime
+   behavior; the Server only owns the safe process lifecycle transition.
 
 ### Commit and push
 

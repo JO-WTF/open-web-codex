@@ -52,29 +52,27 @@ TOML
 
 output_file="${THIRD_PARTY_SMOKE_OUTPUT:-$tmp_home/third-party-map-card-smoke.jsonl}"
 OPEN_WEB_CODEX_MAPS_MCP_VENV="$maps_mcp_venv" MAPS_MCP_VENV="$maps_mcp_venv" CODEX_HOME="$tmp_home" timeout "$timeout_sec" "$codex_bin" exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --ignore-rules -C "$repo_root" \
-  '用地图卡片展示印尼。必须调用 map_utils 的 create_map_card MCP 工具生成 open-web-card map.v1 marker，最终答案只输出该 marker。' \
+  '用地图卡片展示雅加达坐标 106.827168,-6.1754049。必须调用 map_utils 的 create_map_card，使用 inline GeoJSON source、point layer 和 camera zoom 10，并简要说明已经生成地图，不要复制 JSON。' \
   | tee "$output_file"
 
-map_marker="$(jq -r '
+if ! jq -e '
   select(
     .type == "item.completed"
     and .item.type == "mcp_tool_call"
     and .item.server == "map_utils"
     and .item.tool == "create_map_card"
   )
-  | .item.result.structured_content.marker // empty
-' "$output_file")"
-
-if [[ -z "$map_marker" ]]; then
-  echo "third-party map-card MCP smoke did not observe a map_utils.create_map_card marker" >&2
-  exit 3
-fi
-
-if ! jq -e --arg marker "$map_marker" '
-  select(.type == "item.completed" and .item.type == "agent_message")
-  | .item.text | contains($marker)
+  | .item.result.structured_content
+  | .type == "open-web-card"
+    and .kind == "map.v2"
+    and (.card | type == "object")
+    and (.card.title | type == "string")
+    and (.card.viewport.mode == "camera")
+    and (.card.viewport.zoom == 10)
+    and (.card.sources | length == 1)
+    and (.card.layers[0].geometry == "point")
 ' "$output_file" >/dev/null; then
-  echo "third-party map-card MCP smoke did not observe the returned marker in an assistant final message" >&2
+  echo "third-party map-card MCP smoke did not observe valid structuredContent" >&2
   exit 3
 fi
 

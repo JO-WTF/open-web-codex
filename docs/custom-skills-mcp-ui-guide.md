@@ -501,32 +501,86 @@ Accept 再尝试投递，否则 MCP 会继续等待、前端显示 Invalid，工
 
 ### 6.2 map-card 当前实现
 
-`map_utils.create_map_card` 返回一个小型 fenced marker：
+地图数据工具先返回标准 MCP `resource_link`，并在 `outputSchema` 约束的
+`data_ref.server` 与 `data_ref.uri` 中返回 Resource 路由身份。该 `data_ref` 既可原样
+放入卡片 source，也可在下游工具确实需要 GeoJSON 时把 `server`、`uri` 原样传给 MCP
+`resources/read`。`map_utils` 是原始 server ID，`mcp__map_utils` 只是模型可见 Tool
+命名空间。同一 Run、同一 Thread 中后续的 `map_utils.create_map_card` 通过 MCP `outputSchema` 返回
+`structuredContent`：
 
-````markdown
-```open-web-card map.v1
-{"title":"Jakarta","status":"ready","points":[{"latitude":-6.1754,"longitude":106.8272}]}
+```json
+{
+  "type": "open-web-card",
+  "kind": "map.v2",
+  "card": {
+    "title": "Jakarta locations",
+    "intent": "visualization",
+    "status": "ready",
+    "viewport": {
+      "mode": "fit",
+      "padding": 48,
+      "max_zoom": 14
+    },
+    "sources": [
+      {
+        "id": "locations",
+        "data": {
+          "type": "mcp_resource",
+          "server": "map_utils",
+          "uri": "maps-data://geojson/map-data-8a4c...",
+          "format": "geojson"
+        }
+      }
+    ],
+    "layers": [
+      {
+        "id": "points",
+        "source": "locations",
+        "geometry": "point",
+        "label_property": "label",
+        "style": {
+          "color": "#ef4444",
+          "opacity": 0.9,
+          "radius": 8,
+          "stroke_color": "#ffffff",
+          "stroke_width": 2
+        }
+      }
+    ]
+  }
+}
 ```
-````
 
 浏览器链路：
 
-1. `replyCards.ts` 识别、限制大小并规范化 marker。
-2. `AssistantMessage.tsx` 把文字和卡片拆开渲染。
-3. `MapReplyCard.tsx` 将点、线、面或 GeoJSON 转成 Mapbox GL 图层。
-4. 没有 Mapbox Token 时仍保留卡片，并显示模拟地图 SVG 和配置按钮。
-5. Mapbox 失败时显示错误和更新 Key 操作。
-6. 卡片使用稳定内容比较，输入草稿或其他消息变化不会重建地图实例。
+1. Server `project_item` 只接受 `structuredContent.type=open-web-card` 和
+   `kind=map.v2`，验证 viewport、source/layer 图和样式并投影 `replyCard`；它不扫描
+   `content.text`。
+2. Server 从较早完成的 MCP Tool 的标准 `resource_link.uri` 注册 Resource，
+   并在同一 Run、同一 Thread 内解析卡片中的同一 server/URI。跨 Run、跨 Thread、
+   后向引用、缺失、冲突和自引用不会提升为卡片。
+3. 授权 Artifact API 通过官方 `mcpServer/resource/read` 延迟加载并缓存 GeoJSON；
+   公开 ResourceLink 会移除内部 URI 和 `_meta`，Artifact 响应只暴露授权不透明 URL；
+   普通 Tool 事件仍可显示逻辑 MCP server/tool 名。
+4. `webThreadHistory.ts` 对实时事件和历史恢复使用同一 DTO 转换。
+5. `MessageList.tsx` 保留原有执行组：Reasoning、Tool、审批、命令和中间 assistant
+   消息继续专用渲染并折叠；带卡片的 MCP item 仍计为 Tool，卡片与最终 assistant
+   按 item 顺序展示。
+6. `MapReplyCard.tsx` 为每个 source 创建 Mapbox GL source，再按 point、line、
+   polygon layer 应用颜色、透明度、尺寸、描边和 dash。
+7. `fit` viewport 在 map load 和容器首次获得非零尺寸后执行；`camera` viewport
+   精确使用 center、zoom、bearing 和 pitch。
+8. 没有 Mapbox Token 时仍保留卡片和配置按钮；Mapbox 或 Artifact 失败时显示明确错误。
 
-当前 `open-web-card map.v1` 是小型内联预览协议，单个 marker 上限为 16 KiB。
-大 GeoJSON 应使用 `input_ref` 或 `artifact_id`。平台 Artifact 的完整权限和 hydration
-仍是待完成能力，因此不要把当前文字 marker 复制成通用的大型生产数据通道。
+`map.v2` 没有卡片专用的 16 KiB 上限。小数据可以 inline，大 GeoJSON 必须通过
+MCP Resource URI 和授权 Artifact 传输。Server 的通用 Resource 内存安全边界不属于
+卡片合同；需要更大数据时应新增流式 PMTiles/MVT source，而不是复制 GeoJSON 到文本。
 
 ### 6.3 新增一种专用卡片
 
 至少完成：
 
-1. 定义版本化 payload，例如 `chart.v1`，并限制字节、数组长度和嵌套深度。
+1. 定义版本化 payload，例如 `chart.v1`，并限制字段、数组长度、嵌套深度和跨字段不变量。
 2. 在 MCP 侧生成结构化 payload，不让模型手写复杂数据。
 3. 在 Platform 边界决定使用内联预览还是 Artifact。
 4. 在浏览器定义独立类型、严格 parser/normalizer 和 fallback text。
@@ -688,7 +742,7 @@ DEEPSEEK_API_KEY="<test-only-key>" \
 - 依靠英文提示文案决定使用哪个业务弹窗。
 - 只处理成功状态，没有拒绝、权限、网络、重连和刷新恢复。
 - 卡片组件跟随每次流式消息或输入草稿重新挂载。
-- 用内联 marker 承载大型数据，而不是 Artifact 引用。
+- 用内联 `structuredContent` 承载大型数据，而不是 Artifact 引用。
 - 只适配暗色主题，或把原生 `alert/confirm` 当作正式交互。
 
 ## 9. 完成定义

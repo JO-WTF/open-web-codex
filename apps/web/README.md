@@ -12,7 +12,8 @@ Browser
   -> open-web-codex-server
        -> PostgreSQL authorization and durable workflow state
        -> Profile Host -> codex app-server
-       -> Run orchestrator -> private Git mirror + per-Run workspace
+       -> Thread workspace -> private Git mirror + authorized checkout
+       -> Run orchestrator -> resolve Thread workspace + execute/audit
 ```
 
 The browser never receives local paths, credentials, app-server request IDs, or

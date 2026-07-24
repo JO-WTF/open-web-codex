@@ -273,6 +273,13 @@ export class PlatformClient {
     );
   }
 
+  readReplyArtifact(path: string) {
+    if (!/^\/api\/runs\/[0-9a-f-]+\/artifacts\/[0-9a-f-]+$/i.test(path)) {
+      return Promise.reject(new Error("Reply Artifact path is invalid."));
+    }
+    return this.request<Record<string, unknown>>(path);
+  }
+
   archiveRunThread(runId: string) {
     return this.request<{ status: string }>(
       `/api/runs/${encodeURIComponent(runId)}/thread/archive`,

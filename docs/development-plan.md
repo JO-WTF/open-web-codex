@@ -48,7 +48,7 @@ Session；差异集中在该入口、`src/services/webClient.ts` Server
 | Platform server | `apps/web/server/**` | HTTP/WS、授权、DTO、服务组合、静态资源 |
 | Profile | `apps/web/crates/profile-*` | 私有 `CODEX_HOME`、单主进程、app-server JSONL 生命周期 |
 | Workflow | `apps/web/crates/run-orchestrator` | 幂等 Run、DB lease、heartbeat、恢复、取消 |
-| Git | `apps/web/crates/git-runtime` | 私有 mirror、每 Run workspace、status、选择性 Commit |
+| Git | `apps/web/crates/git-runtime` | 私有 mirror、授权 workspace、status、选择性 Commit；当前 per-Run 绑定待迁移到 Thread |
 | Security | `apps/web/crates/auth`、`approval-service`、`secret-store` | Session/RBAC、持久审批、加密凭据 |
 | Contract | `apps/web/crates/*contracts`、`apps/web/contracts` | 浏览器 DTO、生成协议、Manifest、fixtures |
 | Capability packages | `tools/**`、plugin/skill/MCP 包 | Runtime 可发现的工具、Skill、Plugin、MCP 声明；不得修改 Profile `config.toml` 或由 WebApp 伪造发现结果 |
@@ -57,8 +57,9 @@ Session；差异集中在该入口、`src/services/webClient.ts` Server
 
 这些是当前实现中仍需按边界复审或迁移的项；在完成前不得把它们宣传为完整能力：
 
-1. [ ] map-card 仍是浏览器解析小型 marker 的 preview；小型点、线、面和 GeoJSON
-   已由 Mapbox GL 交互渲染。受限公开 Token 通过认证后的统一地图配置资源读取；
+1. [ ] map-card 仍是小型内联 `structuredContent` preview；MCP `outputSchema`、
+   Server 安全 `replyCard` 投影以及实时/历史统一恢复已接通，小型点、线、面和
+   GeoJSON 已由 Mapbox GL 交互渲染。受限公开 Token 通过认证后的统一地图配置资源读取；
    配置以一个加密的 provider/key 全局条目保存，后一次配置覆盖前一次（预留按用户作用域）；
    无 Token 时卡片继续
    显示并提供配置弹窗。Artifact-backed GeoJSON、生成 card schema、平台 Artifact
@@ -107,11 +108,12 @@ MCP/Skills/Plugins；Server/Profile Host 只负责单 Profile 生命周期、授
 5. [x] 新建 Thread 的单 Profile 真实链路已验证 `selectedCapabilityRoots` 包含
    `local-maps-mcp`，Runtime 能发现 `map_utils` 的五个工具，启动
    `./bin/maps-mcp-launcher`，并调用 `create_map_card` 返回
-   `open-web-card map.v1` marker。
+   通过 `outputSchema` 验证的 `open-web-card` / `map.v2` `structuredContent`。
 6. [x] 第三方 Provider smoke 使用真实 Codex Runtime 工具调用链验证：模型可见
    `map_utils` tool schema，Provider 返回标准 tool call，Runtime 执行 MCP tool，
-   assistant 输出 map-card marker，浏览器只渲染 marker。真实 Web/Profile Host
-   的 DeepSeek 新 Thread 与独立 CLI smoke 均已通过；
+   Server 从 Tool `structuredContent` 生成类型化 `replyCard`，浏览器不依赖
+   assistant 复制 Tool 结果。真实 Web/Profile Host 的 DeepSeek 新 Thread 与独立
+   CLI smoke 均已通过；
    `scripts/smoke-third-party-map-card-mcp.sh` 覆盖 Codex Runtime + Chat provider +
    `map_utils.create_map_card`，浏览器渲染由 `scripts/smoke-map-card-rendering.sh`
    覆盖。
@@ -121,19 +123,23 @@ MCP/Skills/Plugins；Server/Profile Host 只负责单 Profile 生命周期、授
    Profile 过渡期允许在 Profile 缺少 `auth.json` 时，从
    `OPEN_WEB_CODEX_IMPORT_CODEX_AUTH_FROM` 或默认 `~/.codex` 导入 file-backed
    登录态；多用户阶段必须替换为 Profile-scoped auth 设计。
-8. [ ] 单 Profile 可以串行或按实测限制运行多个 Thread/Run；每个 Run 仍使用独立
-   writable workspace，Thread resume/fork 只能使用已授权 workspace 映射。
+8. [ ] 将当前每 Run 创建 writable workspace 的实现迁移为 Thread/Chat 关联：
+   新 Thread 创建或显式选择一次授权 Workspace，后续 Turn/Run 和 Thread resume
+   复用该关联；Run 只持有引用，不拥有 checkout。显式永久 Workspace 可按授权承载
+   多个 Thread。
 
 短期 smoke 命令：
 
-- `scripts/smoke-maps-mcp-launcher.sh`：验证 maps MCP launcher 可启动并能直接生成 `map.v1` marker。
+- `scripts/smoke-maps-mcp-launcher.sh`：验证 maps MCP launcher 可启动、声明
+  `outputSchema`、声明 GeoJSON Resource template 并生成 `map.v2` `structuredContent`。
 - `scripts/smoke-third-party-map-card-mcp.sh`：使用 `THIRD_PARTY_PROVIDER_*`/`DEEPSEEK_API_KEY`
   等环境变量临时创建 `CODEX_HOME`，验证第三方 Chat provider 通过 Codex Runtime 调用
   `map_utils.create_map_card`。
 - `scripts/smoke-openai-provider-models.sh`：导入 file-backed `auth.json` 到临时 Profile，
   通过 app-server `modelProvider/list` 和 `model/list` 验证官方 Provider 模型目录非空。
-- `scripts/smoke-map-card-rendering.sh`：运行 reply-card parser、AssistantMessage 和 MapReplyCard
-  相关前端测试，验证浏览器隐藏 marker、生成 Mapbox GL 容器并转换点线面 GeoJSON。
+- `scripts/smoke-map-card-rendering.sh`：运行 Server 投影后的 reply-card 转换、
+  MessageList、AssistantMessage 和 MapReplyCard 相关前端测试，验证多张结构化卡片
+  保持回复顺序、授权 Artifact GeoJSON 可加载、camera/fit viewport 和点线面样式生效。
 
 完成以上 smoke 后，再进入 M2 的按授权用户动态路由持久 Profile 和跨用户隔离矩阵。
 
@@ -181,7 +187,9 @@ MCP/Skills/Plugins；Server/Profile Host 只负责单 Profile 生命周期、授
   的选中边框、色条和徽标。模型上下文通过一个保存操作串行持久化全部改动，避免
   Provider 模型目录替换写入竞态。平台全局保存最后一次 Provider/Model 选择，新
   Workspace/Thread 自动继承，Task 表保存每个 Thread 自己的选择；模型上下文和
-  自定义 Provider 目录仍由服务端 Profile 持久化。
+  自定义 Provider 目录仍由服务端 Profile 持久化。模型目录刷新或上下文窗口更新
+  后，Server 在下一个安全 Turn 边界替换 app-server：不中断当前 Turn，清除旧进程
+  的 Thread 绑定并恢复同一持久化 Thread，使其下一个 Turn 使用重建后的模型目录。
 - [x] 已有 Thread 在 Turn 级切换 Provider 时会重建对应模型客户端；真实旧
   OpenAI Thread 切换 DeepSeek 后不再沿用 OpenAI transport。
 - [x] app-server 审批先持久化并脱敏投影，再由版本 CAS 决策和审计。
@@ -191,12 +199,17 @@ MCP/Skills/Plugins；Server/Profile Host 只负责单 Profile 生命周期、授
   重启，并覆盖 Turn 启动响应与 started 事件之间的竞态窗口。
 - [x] Git Runtime 创建私有 mirror 和每 Run 独立 workspace，拒绝危险 source/ref，
   支持 lock、status、选择性 Commit 和 cleanup。
+- [ ] 按官方 Workspace 路线把上述 per-Run checkout 收敛为 Thread/Chat 关联，
+  迁移数据库归属、Runner 解析、恢复/清理策略和授权测试；完成前不得把当前实现描述
+  为目标架构。
 - [x] Run Orchestrator 支持 idempotency、`SKIP LOCKED` lease、heartbeat、恢复、
   cancellation/interrupt 和明确终态。
 - [x] Task event 先持久化，按单 Task 单调 sequence REST replay，再组织隔离地
   WebSocket fan-out；订阅在 ready 前建立，首次连接与重连均执行有序 durable replay。
 - [x] Thread/Turn 历史直接读取 Codex `thread/read` 与分页
-  `thread/turns/list(itemsView=full)`；RunEvent 仅用于实时/可重建投影，不再拼装历史。
+  `thread/turns/list(itemsView=full)`；Server 保持 Runtime item 为事实来源，只按
+  持久化 sequence 将平台拥有的审批投影插回对应 Turn，并解析已授权回复卡片引用。
+  浏览器不再通过 localStorage 或旧实时事件自行拼装历史。
 
 ## C. 浏览器与传输收敛
 
@@ -211,8 +224,11 @@ MCP/Skills/Plugins；Server/Profile Host 只负责单 Profile 生命周期、授
   approval/user input、Provider/model、MCP/rate limit、文件预览和 Git status
   已切到类型化 Server 资源；Project/Task/Run/Thread 使用单次 joined context
   查询，文件、Git 与 MCP 始终跟随当前 Thread。消息渲染已恢复 Runtime/Skills/MCP 输出的
-  `open-web-card map.v1` 与旧 `widget_type=map` 标记识别，可渲染小型内联地图预览；真实 Codex/DeepSeek/MCP
-  纵向用例与核心浏览器 Thread 切换、历史恢复、运行态和文件预览回归通过。
+  `open-web-card` / `map.v2` `structuredContent` 类型化投影，卡片不再通过
+  assistant 文本或 Tool 文本传输。大型 GeoJSON 通过 MCP Resource URI、
+  官方 Resource read 和授权 Artifact 延迟加载；回复中的多张卡片保持 Turn item
+  顺序。真实 Codex/DeepSeek/MCP 纵向用例与核心浏览器 Thread 切换、历史恢复、
+  运行态和文件预览回归通过。
 - [x] 创建 Thread 时浏览器先用独立临时 ID 打开名为 `Thread` 的窗口，再按对应请求
   绑定服务端 Thread；若创建响应包含正式名称，则侧边栏与对话区标题同步替换，
   且不被紧随其后的旧占位列表覆盖。并发乱序返回不会串绑，失败窗口禁用输入并提供
@@ -282,7 +298,7 @@ MCP/Skills/Plugins；Server/Profile Host 只负责单 Profile 生命周期、授
 2. Codex 自更新与 Tailscale daemon 生命周期由部署管理，页面调用返回明确的
    deployment-managed 状态。
 3. 任意 workspace Codex CLI args 可以持久化，但共享 Profile Host 不会按单
-   workspace respawn；需先定义 Profile/Run 级安全策略。
+   workspace respawn；需先定义 Profile/Thread/Workspace 级安全策略。
 4. local usage 可按 Run/Project 汇总 token 与 Turn 数；官方事件尚不提供可靠的
    model share 和 agent time，因此对应值不伪造。
 5. 目录选择输入服务器路径；图片选择、拖放和导出使用浏览器 blob/download；

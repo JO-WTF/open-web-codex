@@ -96,9 +96,19 @@ describe("MessageList", () => {
         items={[
           { id: "user-1", level: "user", text: "Inspect the project" },
           { id: "reasoning-1", level: "system", kind: "reasoning", text: "Reviewing project files" },
-          { id: "commentary-1", level: "assistant", text: "I am checking the relevant files." },
+          {
+            id: "commentary-1",
+            level: "assistant",
+            text: "I am checking the relevant files.",
+            messagePhase: "commentary",
+          },
           { id: "command-1", level: "info", kind: "command_exec", text: "rg --files", cmdExitCode: 0 },
-          { id: "final-1", level: "assistant", text: "The project is ready." },
+          {
+            id: "final-1",
+            level: "assistant",
+            text: "The project is ready.",
+            messagePhase: "final_answer",
+          },
         ]}
       />,
     );
@@ -110,6 +120,50 @@ describe("MessageList", () => {
     const timeline = view.container.querySelector(".web-execution-timeline");
     expect(timeline?.textContent).toContain("I am checking the relevant files.");
     expect(timeline?.textContent).not.toContain("The project is ready.");
+  });
+
+  it("uses message phase instead of the last assistant position to identify replies", () => {
+    const view = render(
+      <MessageList
+        items={[
+          { id: "user-1", level: "user", text: "Inspect the project" },
+          {
+            id: "legacy-reply",
+            level: "assistant",
+            text: "Legacy provider reply.",
+          },
+          {
+            id: "commentary-1",
+            level: "assistant",
+            text: "I am checking one more file.",
+            messagePhase: "commentary",
+          },
+          {
+            id: "command-1",
+            level: "info",
+            kind: "command_exec",
+            text: "git status",
+            cmdExitCode: 0,
+          },
+          {
+            id: "typed-reply",
+            level: "assistant",
+            text: "Typed final reply.",
+            messagePhase: "final_answer",
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("Legacy provider reply.")).toBeTruthy();
+    expect(screen.getByText("Typed final reply.")).toBeTruthy();
+    expect(screen.queryByText("I am checking one more file.")).toBeNull();
+    const summary = screen.getByRole("button", { name: "1 tool call, 1 message" });
+    fireEvent.click(summary);
+    expect(screen.getByText("I am checking one more file.")).toBeTruthy();
+
+    const text = view.container.textContent ?? "";
+    expect(text.indexOf("Legacy provider reply.")).toBeLessThan(text.indexOf("Typed final reply."));
   });
 
   it("renders tool calls as timeline siblings and drops empty reasoning wrappers", () => {
@@ -131,21 +185,33 @@ describe("MessageList", () => {
     expect(view.container.querySelector(".web-reasoning")).toBeNull();
   });
 
-  it("renders live turn activity at the top level, then collapses it when the final answer completes", () => {
+  it("keeps a streamed final answer outside the process timeline", () => {
     const liveItems = [
       { id: "user-1", level: "user" as const, text: "Inspect the project" },
       { id: "reasoning-1", level: "system" as const, kind: "reasoning" as const, text: "Reviewing project files" },
-      { id: "commentary-1", level: "assistant" as const, text: "I am checking the relevant files." },
+      {
+        id: "commentary-1",
+        level: "assistant" as const,
+        text: "I am checking the relevant files.",
+        messagePhase: "commentary" as const,
+      },
       { id: "command-1", level: "info" as const, kind: "command_exec" as const, text: "rg --files", toolStatus: "running" },
-      { id: "final-1", level: "assistant" as const, text: "The project is rea", streaming: true },
+      {
+        id: "final-1",
+        level: "assistant" as const,
+        text: "The project is rea",
+        messagePhase: "final_answer" as const,
+        streaming: true,
+      },
     ];
     const view = render(<MessageList items={liveItems} thinking />);
 
-    expect(within(view.container).queryByText("1 tool call, 2 messages")).toBeNull();
-    expect(view.container.querySelector(".web-execution-timeline")?.textContent).not.toContain("The project is rea");
-    expect(view.container.querySelector(".web-execution-current")?.textContent).toContain("The project is rea");
-    expect(within(view.container).getByRole("button", { name: "1 tool call, 3 messages" }).getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getByText("Working…")).toBeTruthy();
+    const liveSummary = within(view.container).getByRole("button", { name: "1 tool call, 2 messages" });
+    expect(liveSummary.getAttribute("aria-expanded")).toBe("false");
+    expect(view.container.querySelector(".web-execution-timeline")).toBeNull();
+    expect(view.container.querySelector(".web-execution-current")).toBeNull();
+    expect(within(view.container).getByText("The project is rea")).toBeTruthy();
+    expect(within(view.container).queryByText("Working…")).toBeNull();
 
     view.rerender(
       <MessageList
@@ -163,6 +229,59 @@ describe("MessageList", () => {
     expect(view.container.querySelector(".web-execution-timeline")).toBeNull();
     expect(within(view.container).getByText("The project is ready.")).toBeTruthy();
     expect(within(view.container).queryByText("Working…")).toBeNull();
+  });
+
+  it("renders active commentary with process styling", () => {
+    const view = render(
+      <MessageList
+        items={[
+          { id: "user-1", level: "user", text: "Inspect the project" },
+          {
+            id: "commentary-1",
+            level: "assistant",
+            text: "I am checking the relevant files.",
+            messagePhase: "commentary",
+            streaming: true,
+          },
+        ]}
+        thinking
+      />,
+    );
+
+    expect(view.container.querySelector(".web-execution-current .web-msg-commentary-body")).toBeTruthy();
+    expect(view.container.querySelector(".web-execution-current .web-msg-commentary")).toBeTruthy();
+  });
+
+  it("keeps an unclassified streaming assistant message in process presentation until completion", () => {
+    const items = [
+      { id: "user-1", level: "user" as const, text: "Write the script" },
+      {
+        id: "assistant-1",
+        level: "assistant" as const,
+        text: "Preparing the Python script",
+        streaming: true,
+      },
+    ];
+    const view = render(<MessageList items={items} thinking />);
+
+    expect(view.container.querySelector(".web-execution-current .web-msg-commentary-body")).toBeTruthy();
+
+    view.rerender(
+      <MessageList
+        items={items.map((item) => item.id === "assistant-1"
+          ? {
+              ...item,
+              text: "Script complete",
+              streaming: false,
+              messagePhase: "final_answer" as const,
+            }
+          : item)}
+      />,
+    );
+
+    expect(view.container.querySelector(".web-execution-current")).toBeNull();
+    expect(view.container.querySelector(".web-msg-commentary-body")).toBeNull();
+    expect(screen.getByText("Script complete")).toBeTruthy();
   });
 
   it("passes the live reasoning state through to its collapsible block", () => {
@@ -298,5 +417,128 @@ describe("MessageList", () => {
     expect(screen.getByText("Resolved")).toBeTruthy();
     expect(view.container.querySelector(".web-approval-accept")).toBeNull();
     expect(view.container.querySelector(".web-approval-deny")).toBeNull();
+  });
+
+  it("renders multiple structured reply cards at their positions in reply order", async () => {
+    const view = render(
+      <MessageList
+        items={[
+          {
+            id: "user-map",
+            level: "user",
+            text: "Show the locations.",
+          },
+          {
+            id: "assistant-commentary",
+            level: "assistant",
+            text: "正在准备地图数据。",
+            messagePhase: "commentary",
+          },
+          {
+            id: "map-card",
+            level: "info",
+            kind: "tool",
+            text: "create_map_card",
+            toolType: "MCP",
+            toolTitle: "map_utils / create_map_card",
+            toolStatus: "completed",
+            replyCard: {
+              type: "card",
+              kind: "map.v2",
+              id: "map-card-data",
+              title: "Batch geocode",
+              intent: "visualization",
+              status: "ready",
+              viewport: { mode: "fit" },
+              sources: [{
+                id: "locations",
+                data: {
+                  type: "inline",
+                  format: "geojson",
+                  geojson: {
+                    type: "FeatureCollection",
+                    features: [],
+                  },
+                },
+              }],
+              layers: [{
+                id: "points",
+                source: "locations",
+                geometry: "point",
+                style: {},
+              }],
+            },
+          },
+          {
+            id: "assistant-final",
+            level: "assistant",
+            text: "已完成地址解析。",
+            messagePhase: "final_answer",
+          },
+          {
+            id: "map-card-2",
+            level: "info",
+            kind: "tool",
+            text: "create_route_map",
+            toolType: "MCP",
+            toolTitle: "map_utils / create_route_map",
+            toolStatus: "completed",
+            replyCard: {
+              type: "card",
+              kind: "map.v2",
+              id: "map-card-route",
+              title: "Route overview",
+              intent: "route",
+              status: "ready",
+              viewport: {
+                mode: "camera",
+                center: [116.44, 39.92],
+                zoom: 9,
+              },
+              sources: [{
+                id: "route",
+                data: {
+                  type: "inline",
+                  format: "geojson",
+                  geojson: { type: "FeatureCollection", features: [] },
+                },
+              }],
+              layers: [{
+                id: "route-line",
+                source: "route",
+                geometry: "line",
+                style: { width: 4, dash: [2, 1] },
+              }],
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("Batch geocode")).toBeTruthy();
+    expect(screen.getByText("Route overview")).toBeTruthy();
+    expect(screen.getByText("已完成地址解析。")).toBeTruthy();
+    expect(screen.queryByText("正在准备地图数据。")).toBeNull();
+    const firstExecutionSummary = screen.getByRole("button", { name: "1 tool call, 1 message" });
+    const secondExecutionSummary = screen.getByRole("button", { name: "1 tool call, 0 messages" });
+    fireEvent.click(firstExecutionSummary);
+    fireEvent.click(secondExecutionSummary);
+    expect(screen.getByText("正在准备地图数据。")).toBeTruthy();
+    expect(screen.getByText("map_utils / create_map_card")).toBeTruthy();
+    expect(screen.getByText("map_utils / create_route_map")).toBeTruthy();
+    const text = view.container.textContent ?? "";
+    expect(text.indexOf("Batch geocode")).toBeLessThan(text.indexOf("已完成地址解析。"));
+    expect(text.indexOf("已完成地址解析。")).toBeLessThan(text.indexOf("Route overview"));
+    expect(screen.getAllByRole("button", { name: "Open map card fullscreen" })).toHaveLength(2);
+    const configureButtons = await screen.findAllByRole("button", { name: "配置 Mapbox Key" });
+    fireEvent.click(configureButtons[0]);
+    expect(screen.getByRole("dialog", { name: "配置地图服务 Key" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Mapbox" }).getAttribute("aria-pressed"))
+      .toBe("true");
+    expect(screen.getByRole("button", { name: "Google" })).toBeTruthy();
+    const input = screen.getByLabelText("Mapbox public token");
+    fireEvent.change(input, { target: { value: "sk.not-a-mapbox-public-token" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
+    expect(screen.getByText(/请输入以 pk\. 开头/)).toBeTruthy();
   });
 });

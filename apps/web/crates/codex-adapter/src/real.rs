@@ -9,6 +9,8 @@ use std::process::Command;
 use std::sync::{Arc, OnceLock};
 use tokio::sync::broadcast;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::Mutex;
+use tokio::sync::OwnedMutexGuard;
 use tokio::sync::RwLock;
 
 use crate::{
@@ -28,6 +30,7 @@ pub struct RealCodexAdapter {
     active_login_id: Arc<RwLock<Option<String>>>,
     login_statuses: Arc<RwLock<HashMap<String, ProfileLoginStatus>>>,
     terminal_workspaces: Arc<RwLock<HashMap<String, AuthorizedWorkspace>>>,
+    runtime_instance: Arc<Mutex<Option<uuid::Uuid>>>,
     local_events: broadcast::Sender<Value>,
 }
 
@@ -59,6 +62,7 @@ impl RealCodexAdapter {
             active_login_id: Arc::new(RwLock::new(None)),
             login_statuses: Arc::new(RwLock::new(HashMap::new())),
             terminal_workspaces: Arc::new(RwLock::new(HashMap::new())),
+            runtime_instance: Arc::new(Mutex::new(None)),
             local_events,
         })
     }
@@ -119,10 +123,23 @@ impl RealCodexAdapter {
         })
     }
 
+    async fn prepare_runtime(&self) -> Result<OwnedMutexGuard<Option<uuid::Uuid>>, AdapterError> {
+        let mut runtime_instance = self.runtime_instance.clone().lock_owned().await;
+        self.host.apply_scheduled_restart().await?;
+        let current = self.host.runtime_instance_id().await;
+        if runtime_instance.as_ref() != Some(&current) {
+            self.thread_workspaces.write().await.clear();
+            self.terminal_workspaces.write().await.clear();
+            *runtime_instance = Some(current);
+        }
+        Ok(runtime_instance)
+    }
+
     async fn start_thread_in_workspace(
         &self,
         workspace: &AuthorizedWorkspace,
     ) -> Result<StartedThread, AdapterError> {
+        let _runtime = self.prepare_runtime().await?;
         let workspace_root = self.authorized_root(workspace)?;
         let result = self
             .host
@@ -147,14 +164,15 @@ impl RealCodexAdapter {
         &self,
         workspace: &AuthorizedWorkspace,
         thread_id: &str,
-    ) -> Result<String, AdapterError> {
+    ) -> Result<(String, OwnedMutexGuard<Option<uuid::Uuid>>), AdapterError> {
         if thread_id.trim().is_empty() {
             return Err(AdapterError::Internal("Thread id is required".to_string()));
         }
+        let runtime = self.prepare_runtime().await?;
         let workspace_root = self.authorized_root(workspace)?;
         if let Some(bound) = self.thread_workspaces.read().await.get(thread_id).cloned() {
             if bound == *workspace {
-                return Ok(workspace_root);
+                return Ok((workspace_root, runtime));
             }
             return Err(AdapterError::Rpc(
                 "Thread is not bound to the authorized workspace".to_string(),
@@ -171,7 +189,7 @@ impl RealCodexAdapter {
             .write()
             .await
             .insert(thread_id.to_string(), workspace.clone());
-        Ok(workspace_root)
+        Ok((workspace_root, runtime))
     }
 
     async fn send_user_message_in_workspace(
@@ -186,7 +204,7 @@ impl RealCodexAdapter {
                 "Thread id and message text or image input are required".to_string(),
             ));
         }
-        let workspace_root = self.ensure_thread_bound(workspace, thread_id).await?;
+        let (workspace_root, _runtime) = self.ensure_thread_bound(workspace, thread_id).await?;
 
         let mut input = Vec::new();
         if !text.trim().is_empty() {
@@ -265,7 +283,7 @@ impl RealCodexAdapter {
                 "Thread id, Turn id and message text are required".to_string(),
             ));
         }
-        self.ensure_thread_bound(workspace, thread_id).await?;
+        let (_workspace_root, _runtime) = self.ensure_thread_bound(workspace, thread_id).await?;
         let mut input = vec![json!({ "type": "text", "text": text.trim() })];
         for image in images {
             if !(image.starts_with("data:")
@@ -302,7 +320,7 @@ impl RealCodexAdapter {
                 "Thread id and Turn id are required".to_string(),
             ));
         }
-        self.ensure_thread_bound(workspace, thread_id).await?;
+        let (_workspace_root, _runtime) = self.ensure_thread_bound(workspace, thread_id).await?;
         self.host
             .request(
                 "turn/interrupt",
@@ -413,7 +431,8 @@ impl CodexAdapter for RealCodexAdapter {
         target_workspace: &AuthorizedWorkspace,
         thread_id: &str,
     ) -> Result<StartedThread, AdapterError> {
-        self.ensure_thread_bound(source_workspace, thread_id)
+        let (_source_root, _runtime) = self
+            .ensure_thread_bound(source_workspace, thread_id)
             .await?;
         let target_root = self.authorized_root(target_workspace)?;
         let result = self
@@ -442,7 +461,7 @@ impl CodexAdapter for RealCodexAdapter {
         workspace: &AuthorizedWorkspace,
         thread_id: &str,
     ) -> Result<Value, AdapterError> {
-        self.ensure_thread_bound(workspace, thread_id).await?;
+        let (_workspace_root, _runtime) = self.ensure_thread_bound(workspace, thread_id).await?;
         self.host
             .request(
                 "thread/read",
@@ -460,7 +479,7 @@ impl CodexAdapter for RealCodexAdapter {
         workspace: &AuthorizedWorkspace,
         thread_id: &str,
     ) -> Result<Vec<Value>, AdapterError> {
-        self.ensure_thread_bound(workspace, thread_id).await?;
+        let (_workspace_root, _runtime) = self.ensure_thread_bound(workspace, thread_id).await?;
         let mut turns = Vec::new();
         let mut cursor: Option<String> = None;
         loop {
@@ -496,6 +515,32 @@ impl CodexAdapter for RealCodexAdapter {
             }
             cursor = next_cursor;
         }
+    }
+
+    async fn read_mcp_resource(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+        server: &str,
+        uri: &str,
+    ) -> Result<Value, AdapterError> {
+        let (_workspace_root, _runtime) = self.ensure_thread_bound(workspace, thread_id).await?;
+        if server.trim().is_empty() || uri.trim().is_empty() {
+            return Err(AdapterError::Internal(
+                "MCP Resource server and URI are required".to_string(),
+            ));
+        }
+        self.host
+            .request(
+                "mcpServer/resource/read",
+                json!({
+                    "threadId": thread_id,
+                    "server": server,
+                    "uri": uri,
+                }),
+            )
+            .await
+            .map_err(Into::into)
     }
 
     async fn send_user_message(
@@ -786,7 +831,7 @@ impl CodexAdapter for RealCodexAdapter {
         workspace: &AuthorizedWorkspace,
         thread_id: &str,
     ) -> Result<(), AdapterError> {
-        self.ensure_thread_bound(workspace, thread_id).await?;
+        let (_workspace_root, _runtime) = self.ensure_thread_bound(workspace, thread_id).await?;
         self.host
             .request("thread/archive", json!({ "threadId": thread_id }))
             .await?;
@@ -800,7 +845,7 @@ impl CodexAdapter for RealCodexAdapter {
         thread_id: &str,
         name: &str,
     ) -> Result<(), AdapterError> {
-        self.ensure_thread_bound(workspace, thread_id).await?;
+        let (_workspace_root, _runtime) = self.ensure_thread_bound(workspace, thread_id).await?;
         self.host
             .request(
                 "thread/name/set",
@@ -905,7 +950,7 @@ impl CodexAdapter for RealCodexAdapter {
         workspace: &AuthorizedWorkspace,
         thread_id: &str,
     ) -> Result<Value, AdapterError> {
-        self.ensure_thread_bound(workspace, thread_id).await?;
+        let (_workspace_root, _runtime) = self.ensure_thread_bound(workspace, thread_id).await?;
         self.host
             .request("thread/compact/start", json!({ "threadId": thread_id }))
             .await
@@ -918,7 +963,7 @@ impl CodexAdapter for RealCodexAdapter {
         thread_id: &str,
         target: ReviewTarget,
     ) -> Result<Value, AdapterError> {
-        self.ensure_thread_bound(workspace, thread_id).await?;
+        let (_workspace_root, _runtime) = self.ensure_thread_bound(workspace, thread_id).await?;
         let target = match target {
             ReviewTarget::UncommittedChanges => json!({ "type": "uncommittedChanges" }),
             ReviewTarget::BaseBranch { branch } => {

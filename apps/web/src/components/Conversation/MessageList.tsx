@@ -8,6 +8,7 @@ import ApprovalCard from "./messages/ApprovalCard";
 import CommandExecutionCard from "./messages/CommandExecutionCard";
 import SystemNotice from "./messages/SystemNotice";
 import ExecutionGroup from "./messages/ExecutionGroup";
+import ReplyCard from "./messages/ReplyCard";
 
 type DiffLine = {
   type: "add" | "del" | "ctx";
@@ -39,6 +40,14 @@ type Props = {
   workspaceId?: string;
   onResolveApproval?: (workspaceId: string, requestId: number | string, decision: "accept" | "decline") => void;
 };
+
+function isAssistantProcessEntry(entry: MessageEntry) {
+  return entry.level === "assistant"
+    && (
+      entry.messagePhase === "commentary"
+      || (entry.streaming && entry.messagePhase === undefined)
+    );
+}
 
 export default function MessageList({ items, thinking = false, turnStartedAt, onOpenFile, workspaceId, onResolveApproval }: Props) {
   if (items.length === 0) {
@@ -136,7 +145,15 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
           case "user":
             return <UserMessage key={entry.id} text={entry.text} />;
           case "assistant":
-            return <AssistantMessage key={entry.id} text={entry.text} streaming={entry.streaming} onOpenFile={onOpenFile} />;
+            return (
+              <AssistantMessage
+                key={entry.id}
+                text={entry.text}
+                streaming={entry.streaming}
+                onOpenFile={onOpenFile}
+                variant={isAssistantProcessEntry(entry) ? "commentary" : "reply"}
+              />
+            );
           case "system":
             return <SystemNotice key={entry.id} text={entry.text} variant="default" />;
           case "error":
@@ -147,10 +164,23 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
   };
 
   const rendered: React.ReactNode[] = [];
+  const isLiveEntry = (entry: MessageEntry) =>
+    entry.streaming
+    || entry.toolStatus === "inProgress"
+    || entry.toolStatus === "running";
+  const isAssistantReply = (entry: MessageEntry) =>
+    entry.level === "assistant" && !isAssistantProcessEntry(entry);
+  const appendReplyCard = (entry: MessageEntry) => {
+    if (entry.replyCard) {
+      rendered.push(<ReplyCard key={`${entry.id}-reply-card`} card={entry.replyCard} />);
+    }
+  };
+
   for (let index = 0; index < items.length;) {
     const entry = items[index];
     if (entry.level !== "user") {
       rendered.push(renderEntry(entry));
+      appendReplyCard(entry);
       index += 1;
       continue;
     }
@@ -158,11 +188,7 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
     let end = index + 1;
     while (end < items.length && items[end].level !== "user") end += 1;
     const turnItems = items.slice(index + 1, end);
-    const hasLiveItem = turnItems.some((item) =>
-      item.streaming
-      || item.toolStatus === "inProgress"
-      || item.toolStatus === "running"
-    );
+    const hasLiveItem = turnItems.some(isLiveEntry);
     const pendingApproval = turnItems.find((item) => {
       if (item.kind !== "approval") return false;
       if (item.approvalStatus === "pending") return true;
@@ -185,41 +211,64 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
         ? "Waiting for approval…"
         : "Working…";
     const isActiveTurn = end === items.length && (thinking || hasLiveItem);
-    let finalIndex = -1;
-    if (!isActiveTurn) {
-      for (let cursor = turnItems.length - 1; cursor >= 0; cursor -= 1) {
-        if (turnItems[cursor].level === "assistant") { finalIndex = cursor; break; }
-      }
-    }
-    let liveIndex = -1;
-    if (isActiveTurn) {
-      for (let cursor = turnItems.length - 1; cursor >= 0; cursor -= 1) {
-        const item = turnItems[cursor];
-        if (item.streaming || item.toolStatus === "inProgress" || item.toolStatus === "running") {
-          liveIndex = cursor;
-          break;
+
+    let executionSegment: MessageEntry[] = [];
+    let executionSegmentIndex = 0;
+    const flushExecutionSegment = (active: boolean) => {
+      if (executionSegment.length === 0 && !active) return;
+      let activeIndex = -1;
+      if (active) {
+        for (let cursor = executionSegment.length - 1; cursor >= 0; cursor -= 1) {
+          if (isLiveEntry(executionSegment[cursor])) {
+            activeIndex = cursor;
+            break;
+          }
+        }
+        if (activeIndex < 0 && executionSegment.length > 0) {
+          activeIndex = executionSegment.length - 1;
         }
       }
-      if (liveIndex < 0 && turnItems.length > 0) liveIndex = turnItems.length - 1;
-    }
-    const executionItems = turnItems.filter((_, cursor) => cursor !== finalIndex && cursor !== liveIndex);
-    const activeItem = liveIndex >= 0 ? turnItems[liveIndex] : null;
-    if (executionItems.length > 0 || isActiveTurn) {
+      const timelineItems = executionSegment.filter((_, cursor) => cursor !== activeIndex);
+      const activeItem = activeIndex >= 0 ? executionSegment[activeIndex] : null;
       rendered.push(
         <ExecutionGroup
-          key={`execution-${entry.id}`}
-          items={turnItems.filter((_, cursor) => cursor !== finalIndex)}
-          active={isActiveTurn}
+          key={`execution-${entry.id}-${executionSegmentIndex}`}
+          items={executionSegment}
+          active={active}
           startedAt={turnStartedAt}
-          timelineItemCount={executionItems.length}
+          timelineItemCount={timelineItems.length}
           activeItem={activeItem ? renderEntry(activeItem) : null}
           activityLabel={activityLabel}
         >
-          {executionItems.map(renderEntry)}
+          {timelineItems.map(renderEntry)}
         </ExecutionGroup>,
       );
+      executionSegment = [];
+      executionSegmentIndex += 1;
+    };
+
+    for (const item of turnItems) {
+      if (isAssistantReply(item)) {
+        flushExecutionSegment(false);
+        rendered.push(renderEntry(item));
+        appendReplyCard(item);
+        continue;
+      }
+      executionSegment.push(item);
+      if (item.replyCard) {
+        flushExecutionSegment(false);
+        appendReplyCard(item);
+      }
     }
-    if (finalIndex >= 0) rendered.push(renderEntry(turnItems[finalIndex]));
+
+    if (executionSegment.length > 0) {
+      flushExecutionSegment(isActiveTurn);
+    } else {
+      const lastItem = turnItems[turnItems.length - 1];
+      if (isActiveTurn && (!lastItem || !isAssistantReply(lastItem))) {
+        flushExecutionSegment(true);
+      }
+    }
     index = end;
   }
   return <>{rendered}</>;

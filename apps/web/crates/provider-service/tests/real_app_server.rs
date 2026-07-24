@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use open_web_codex_platform_contracts::{ProviderCredentialInput, UpsertProviderRequest};
+use open_web_codex_platform_contracts::{
+    ProviderCredentialInput, UpdateProviderModelRequest, UpsertProviderRequest,
+};
 use open_web_codex_profile_host::{ProfileHost, ProfileHostConfig};
 use open_web_codex_profile_registry::ProfileRegistry;
 use open_web_codex_provider_service::secured::{
@@ -312,6 +314,30 @@ async fn secured_provider_credentials_never_enter_codex_config() {
             .unwrap(),
         vec![environment_key.to_string()]
     );
+
+    service
+        .refresh_models(actor, "secured-provider")
+        .await
+        .expect("refresh secured Provider models");
+    assert!(host
+        .apply_scheduled_restart()
+        .await
+        .expect("apply refreshed Provider catalog"));
+    service
+        .update_model(
+            actor,
+            "secured-provider",
+            "provider-one-model",
+            UpdateProviderModelRequest {
+                context_window: 256_000,
+            },
+        )
+        .await
+        .expect("update secured Provider model context");
+    assert!(host
+        .apply_scheduled_restart()
+        .await
+        .expect("apply updated Provider model context"));
 
     let row = sqlx::query(
         "SELECT ciphertext FROM profile_secrets WHERE profile_id = $1 AND provider_id = $2",

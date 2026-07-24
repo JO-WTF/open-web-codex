@@ -1,282 +1,292 @@
-export type ReplyCardTextPart = {
-  type: "text";
-  content: string;
-};
-
-export type MapPoint = {
-  id?: string;
-  latitude: number;
-  longitude: number;
-  label?: string;
-  description?: string;
-  color?: string;
-};
-
-export type MapLine = {
-  id?: string;
-  label?: string;
-  color?: string;
-  coordinates: [number, number][];
-};
-
-export type MapPolygon = {
-  id?: string;
-  label?: string;
-  color?: string;
-  coordinates: [number, number][][];
-};
-
 export type MapBounds = [number, number, number, number];
+
+export type MapViewport =
+  | {
+    mode: "fit";
+    padding?: number | { top: number; right: number; bottom: number; left: number };
+    maxZoom?: number;
+    minZoom?: number;
+  }
+  | {
+    mode: "camera";
+    center: [number, number];
+    zoom: number;
+    bearing?: number;
+    pitch?: number;
+  };
+
+export type MapSourceData =
+  | { type: "inline"; format: "geojson"; geojson: GeoJson }
+  | {
+    type: "artifact";
+    format: "geojson";
+    artifactId: string;
+    mimeType?: string;
+    url: string;
+  };
+
+export type MapSource = {
+  id: string;
+  data: MapSourceData;
+};
+
+export type PointLayerStyle = {
+  color?: string;
+  opacity?: number;
+  radius?: number;
+  strokeColor?: string;
+  strokeWidth?: number;
+  strokeOpacity?: number;
+};
+
+export type LineLayerStyle = {
+  color?: string;
+  opacity?: number;
+  width?: number;
+  dash?: number[];
+  cap?: "butt" | "round" | "square";
+  join?: "bevel" | "round" | "miter";
+};
+
+export type PolygonLayerStyle = {
+  fillColor?: string;
+  fillOpacity?: number;
+  strokeColor?: string;
+  strokeWidth?: number;
+  strokeOpacity?: number;
+  strokeDash?: number[];
+};
+
+type MapLayerBase = {
+  id: string;
+  source: string;
+  labelProperty?: string;
+};
+
+export type MapLayer =
+  | (MapLayerBase & { geometry: "point"; style: PointLayerStyle })
+  | (MapLayerBase & { geometry: "line"; style: LineLayerStyle })
+  | (MapLayerBase & { geometry: "polygon"; style: PolygonLayerStyle });
 
 export type MapReplyCard = {
   type: "card";
-  kind: "map.v1";
+  kind: "map.v2";
   id: string;
   title: string;
-  intent?: string;
-  inputRef?: string;
-  artifactId?: string;
+  intent: string;
   fallbackText?: string;
   summary?: string;
-  status?: "loading" | "ready" | "error";
-  center?: { latitude: number; longitude: number };
-  zoom?: number;
-  bbox?: MapBounds;
-  points?: MapPoint[];
-  lines?: MapLine[];
-  polygons?: MapPolygon[];
-  geojson?: unknown;
+  status: "loading" | "ready" | "error";
+  viewport: MapViewport;
+  sources: MapSource[];
+  layers: MapLayer[];
+  legend?: {
+    title?: string;
+    items: Array<{ label: string; color: string }>;
+  };
 };
 
-export type ReplyCardPart = ReplyCardTextPart | MapReplyCard;
+export type ReplyCard = MapReplyCard;
 
-type RawCardPayload = {
-  title?: unknown;
-  intent?: unknown;
-  input_ref?: unknown;
-  inputRef?: unknown;
-  artifact_id?: unknown;
-  artifactId?: unknown;
-  fallback_text?: unknown;
-  fallbackText?: unknown;
-  summary?: unknown;
-  status?: unknown;
-  center?: unknown;
-  zoom?: unknown;
-  bbox?: unknown;
-  bounds?: unknown;
-  points?: unknown;
-  lines?: unknown;
-  polygons?: unknown;
-  geojson?: unknown;
-};
-
-const CARD_FENCE_RE = /(^|\n)(?<fence>`{3,}|~{3,})[ \t]*(?<tag>open-web-card\s+map\.v1|widget)[ \t]*\r?\n(?<body>[\s\S]*?)\r?\n?[ \t]*\k<fence>[ \t]*(?=\n|$)/g;
-const MAX_CARD_MARKER_BYTES = 16 * 1024;
-
-function asString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function asNumber(value: unknown): number | undefined {
-  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
+export type GeoJson = Record<string, unknown> & { type: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
-function stableCardId(payload: RawCardPayload, index: number): string {
-  const explicit = asString(payload.artifact_id) ?? asString(payload.artifactId) ?? asString(payload.input_ref) ?? asString(payload.inputRef);
-  return explicit ? `map-${explicit.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 64)}` : `map-card-${index}`;
+function nonemptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function normalizeStatus(value: unknown, hasInlineData: boolean): MapReplyCard["status"] {
-  if (value === "loading" || value === "ready" || value === "error") return value;
-  return hasInlineData ? "ready" : "loading";
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function normalizeCenter(value: unknown): MapReplyCard["center"] {
+function geoJson(value: unknown): GeoJson | undefined {
+  if (!isRecord(value) || !nonemptyString(value.type)) return undefined;
+  return value as GeoJson;
+}
+
+function viewport(value: unknown): MapViewport | undefined {
   if (!isRecord(value)) return undefined;
-  const latitude = asNumber(value.latitude ?? value.lat);
-  const longitude = asNumber(value.longitude ?? value.lng ?? value.lon);
-  if (latitude == null || longitude == null || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return undefined;
-  return { latitude, longitude };
-}
-
-function normalizeBounds(value: unknown): MapBounds | undefined {
-  if (!Array.isArray(value) || value.length < 4) return undefined;
-  const west = asNumber(value[0]);
-  const south = asNumber(value[1]);
-  const east = asNumber(value[2]);
-  const north = asNumber(value[3]);
-  if (west == null || south == null || east == null || north == null) return undefined;
-  if (west < -180 || west > 180 || east < -180 || east > 180 || south < -90 || south > 90 || north < -90 || north > 90) return undefined;
-  if (west > east || south > north) return undefined;
-  return [west, south, east, north];
-}
-
-function normalizeCoordinate(value: unknown): [number, number] | undefined {
-  if (Array.isArray(value) && value.length >= 2) {
-    const longitude = asNumber(value[0]);
-    const latitude = asNumber(value[1]);
-    if (latitude != null && longitude != null && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180) return [longitude, latitude];
+  if (value.mode === "camera") {
+    if (!Array.isArray(value.center) || value.center.length !== 2) return undefined;
+    const longitude = finiteNumber(value.center[0]);
+    const latitude = finiteNumber(value.center[1]);
+    const zoom = finiteNumber(value.zoom);
+    if (longitude == null || latitude == null || zoom == null) return undefined;
+    return {
+      mode: "camera",
+      center: [longitude, latitude],
+      zoom,
+      bearing: finiteNumber(value.bearing),
+      pitch: finiteNumber(value.pitch),
+    };
   }
-  if (isRecord(value)) {
-    const latitude = asNumber(value.latitude ?? value.lat);
-    const longitude = asNumber(value.longitude ?? value.lng ?? value.lon);
-    if (latitude != null && longitude != null && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180) return [longitude, latitude];
+  if (value.mode !== "fit") return undefined;
+  let padding: Extract<MapViewport, { mode: "fit" }>["padding"];
+  if (finiteNumber(value.padding) != null) {
+    padding = finiteNumber(value.padding);
+  } else if (isRecord(value.padding)) {
+    const top = finiteNumber(value.padding.top);
+    const right = finiteNumber(value.padding.right);
+    const bottom = finiteNumber(value.padding.bottom);
+    const left = finiteNumber(value.padding.left);
+    if (top == null || right == null || bottom == null || left == null) return undefined;
+    padding = { top, right, bottom, left };
   }
-  return undefined;
+  return {
+    mode: "fit",
+    padding,
+    maxZoom: finiteNumber(value.max_zoom),
+    minZoom: finiteNumber(value.min_zoom),
+  };
 }
 
-function normalizePoints(value: unknown): MapPoint[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const points = value.flatMap((entry, index): MapPoint[] => {
-    if (!isRecord(entry)) return [];
-    const latitude = asNumber(entry.latitude ?? entry.lat);
-    const longitude = asNumber(entry.longitude ?? entry.lng ?? entry.lon);
-    if (latitude == null || longitude == null || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return [];
-    return [{
-      id: asString(entry.id) ?? `point-${index + 1}`,
-      latitude,
-      longitude,
-      label: asString(entry.label ?? entry.name),
-      description: asString(entry.description ?? entry.address),
-      color: asString(entry.color),
-    }];
+function source(value: unknown): MapSource | undefined {
+  if (!isRecord(value) || !isRecord(value.data)) return undefined;
+  const id = nonemptyString(value.id);
+  if (!id || value.data.format !== "geojson") return undefined;
+  if (value.data.type === "inline") {
+    const data = geoJson(value.data.geojson);
+    return data
+      ? { id, data: { type: "inline", format: "geojson", geojson: data } }
+      : undefined;
+  }
+  if (value.data.type !== "artifact") return undefined;
+  const artifactId = nonemptyString(value.data.artifact_id);
+  const url = nonemptyString(value.data.url);
+  if (!artifactId || !url || !url.startsWith("/api/runs/")) return undefined;
+  return {
+    id,
+    data: {
+      type: "artifact",
+      format: "geojson",
+      artifactId,
+      mimeType: nonemptyString(value.data.mime_type),
+      url,
+    },
+  };
+}
+
+function commonLayer(value: Record<string, unknown>) {
+  const id = nonemptyString(value.id);
+  const sourceId = nonemptyString(value.source);
+  if (!id || !sourceId || !isRecord(value.style)) return undefined;
+  return {
+    id,
+    source: sourceId,
+    labelProperty: nonemptyString(value.label_property),
+  };
+}
+
+function numberList(value: unknown): number[] | undefined {
+  if (!Array.isArray(value) || value.some((entry) => finiteNumber(entry) == null)) return undefined;
+  return value as number[];
+}
+
+function layer(value: unknown): MapLayer | undefined {
+  if (!isRecord(value)) return undefined;
+  const common = commonLayer(value);
+  if (!common) return undefined;
+  const style = value.style as Record<string, unknown>;
+  if (value.geometry === "point") {
+    return {
+      ...common,
+      geometry: "point",
+      style: {
+        color: nonemptyString(style.color),
+        opacity: finiteNumber(style.opacity),
+        radius: finiteNumber(style.radius),
+        strokeColor: nonemptyString(style.stroke_color),
+        strokeWidth: finiteNumber(style.stroke_width),
+        strokeOpacity: finiteNumber(style.stroke_opacity),
+      },
+    };
+  }
+  if (value.geometry === "line") {
+    const cap = style.cap;
+    const join = style.join;
+    return {
+      ...common,
+      geometry: "line",
+      style: {
+        color: nonemptyString(style.color),
+        opacity: finiteNumber(style.opacity),
+        width: finiteNumber(style.width),
+        dash: numberList(style.dash),
+        cap: cap === "butt" || cap === "round" || cap === "square" ? cap : undefined,
+        join: join === "bevel" || join === "round" || join === "miter" ? join : undefined,
+      },
+    };
+  }
+  if (value.geometry !== "polygon") return undefined;
+  return {
+    ...common,
+    geometry: "polygon",
+    style: {
+      fillColor: nonemptyString(style.fill_color),
+      fillOpacity: finiteNumber(style.fill_opacity),
+      strokeColor: nonemptyString(style.stroke_color),
+      strokeWidth: finiteNumber(style.stroke_width),
+      strokeOpacity: finiteNumber(style.stroke_opacity),
+      strokeDash: numberList(style.stroke_dash),
+    },
+  };
+}
+
+function legend(value: unknown): MapReplyCard["legend"] {
+  if (!isRecord(value) || !Array.isArray(value.items)) return undefined;
+  const items = value.items.flatMap((item) => {
+    if (!isRecord(item)) return [];
+    const label = nonemptyString(item.label);
+    const color = nonemptyString(item.color);
+    return label && color ? [{ label, color }] : [];
   });
-  return points.length ? points : undefined;
+  if (!items.length) return undefined;
+  return { title: nonemptyString(value.title), items };
 }
 
-function normalizeLines(value: unknown): MapLine[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const lines = value.flatMap((entry, index): MapLine[] => {
-    if (!isRecord(entry)) return [];
-    const rawCoordinates = entry.coordinates ?? entry.path;
-    if (!Array.isArray(rawCoordinates)) return [];
-    const coordinates = rawCoordinates.flatMap((coord) => {
-      const normalized = normalizeCoordinate(coord);
-      return normalized ? [normalized] : [];
-    });
-    if (coordinates.length < 2) return [];
-    return [{
-      id: asString(entry.id) ?? `line-${index + 1}`,
-      label: asString(entry.label ?? entry.name),
-      color: asString(entry.color),
-      coordinates,
-    }];
-  });
-  return lines.length ? lines : undefined;
-}
-
-function normalizePolygons(value: unknown): MapPolygon[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const polygons = value.flatMap((entry, index): MapPolygon[] => {
-    if (!isRecord(entry) || !Array.isArray(entry.coordinates)) return [];
-    const rings = entry.coordinates.flatMap((ring) => {
-      if (!Array.isArray(ring)) return [];
-      const coordinates = ring.flatMap((coord) => {
-        const normalized = normalizeCoordinate(coord);
-        return normalized ? [normalized] : [];
-      });
-      return coordinates.length >= 4 ? [coordinates] : [];
-    });
-    if (!rings.length) return [];
-    return [{
-      id: asString(entry.id) ?? `polygon-${index + 1}`,
-      label: asString(entry.label ?? entry.name),
-      color: asString(entry.color),
-      coordinates: rings,
-    }];
-  });
-  return polygons.length ? polygons : undefined;
-}
-
-function normalizePayload(payload: RawCardPayload, index: number): MapReplyCard {
-  const points = normalizePoints(payload.points);
-  const lines = normalizeLines(payload.lines);
-  const polygons = normalizePolygons(payload.polygons);
-  const hasInlineData = Boolean(payload.geojson || points?.length || lines?.length || polygons?.length);
+export function parseStructuredMapReplyCard(value: unknown, index = 0): MapReplyCard | null {
+  if (
+    !isRecord(value)
+    || value.type !== "open-web-card"
+    || value.kind !== "map.v2"
+    || !isRecord(value.card)
+  ) {
+    return null;
+  }
+  const title = nonemptyString(value.card.title);
+  const intent = nonemptyString(value.card.intent);
+  const status = value.card.status;
+  const normalizedViewport = viewport(value.card.viewport);
+  if (
+    !title
+    || !intent
+    || !normalizedViewport
+    || !Array.isArray(value.card.sources)
+    || !Array.isArray(value.card.layers)
+    || !["loading", "ready", "error"].includes(String(status))
+  ) {
+    return null;
+  }
+  const sources = value.card.sources.map(source);
+  const layers = value.card.layers.map(layer);
+  if (sources.some((entry) => !entry) || layers.some((entry) => !entry)) return null;
+  const sourceIds = new Set((sources as MapSource[]).map((entry) => entry.id));
+  if ((layers as MapLayer[]).some((entry) => !sourceIds.has(entry.source))) return null;
   return {
     type: "card",
-    kind: "map.v1",
-    id: stableCardId(payload, index),
-    title: asString(payload.title) ?? "地图卡片",
-    intent: asString(payload.intent),
-    inputRef: asString(payload.input_ref) ?? asString(payload.inputRef),
-    artifactId: asString(payload.artifact_id) ?? asString(payload.artifactId),
-    fallbackText: asString(payload.fallback_text) ?? asString(payload.fallbackText),
-    summary: asString(payload.summary),
-    status: normalizeStatus(payload.status, hasInlineData),
-    center: normalizeCenter(payload.center),
-    zoom: asNumber(payload.zoom),
-    bbox: normalizeBounds(payload.bbox ?? payload.bounds),
-    points,
-    lines,
-    polygons,
-    geojson: payload.geojson,
+    kind: "map.v2",
+    id: `map-card-${index}`,
+    title,
+    intent,
+    fallbackText: nonemptyString(value.card.fallback_text),
+    summary: nonemptyString(value.card.summary),
+    status: status as MapReplyCard["status"],
+    viewport: normalizedViewport,
+    sources: sources as MapSource[],
+    layers: layers as MapLayer[],
+    legend: legend(value.card.legend),
   };
-}
-
-function parseOpenWebMapCard(body: string, index: number): MapReplyCard | null {
-  if (new TextEncoder().encode(body).length > MAX_CARD_MARKER_BYTES) return null;
-  try {
-    const parsed = JSON.parse(body) as unknown;
-    if (!isRecord(parsed)) return null;
-    return normalizePayload(parsed as RawCardPayload, index);
-  } catch {
-    return null;
-  }
-}
-
-function parseLegacyWidgetMapCard(body: string, index: number): MapReplyCard | null {
-  if (new TextEncoder().encode(body).length > MAX_CARD_MARKER_BYTES) return null;
-  try {
-    const parsed = JSON.parse(body) as unknown;
-    if (!isRecord(parsed) || parsed.widget_type !== "map") return null;
-    const props = isRecord(parsed.props) ? propsWithLegacyAliases(parsed.props) : {};
-    const card = normalizePayload(props, index);
-    card.id = asString(parsed.id) ?? `legacy-map-card-${index}`;
-    if (props.use_stored_card === true && !card.summary) card.summary = "地图数据已存储在服务端，等待平台 Artifact hydration。";
-    if (!card.points && !card.lines && !card.polygons && !card.geojson) card.status = "loading";
-    return card;
-  } catch {
-    return null;
-  }
-}
-
-function propsWithLegacyAliases(props: Record<string, unknown>): RawCardPayload & { use_stored_card?: unknown } {
-  return {
-    ...props,
-    title: props.title,
-    input_ref: props.input_ref,
-    artifact_id: props.artifact_id,
-  };
-}
-
-export function parseReplyCards(markdown: string): ReplyCardPart[] {
-  const parts: ReplyCardPart[] = [];
-  let cursor = 0;
-  let cardIndex = 0;
-  for (const match of markdown.matchAll(CARD_FENCE_RE)) {
-    const groups = match.groups;
-    if (!groups) continue;
-    const matchStart = match.index ?? 0;
-    const leadingNewline = groups[1] ?? "";
-    const fenceStart = matchStart + leadingNewline.length;
-    const textBefore = markdown.slice(cursor, fenceStart);
-    const card = groups.tag.startsWith("open-web-card")
-      ? parseOpenWebMapCard(groups.body, cardIndex)
-      : parseLegacyWidgetMapCard(groups.body, cardIndex);
-    if (!card) continue;
-    if (textBefore.trim()) parts.push({ type: "text", content: textBefore });
-    parts.push(card);
-    cursor = matchStart + match[0].length;
-    cardIndex += 1;
-  }
-  const trailing = markdown.slice(cursor);
-  if (trailing.trim()) parts.push({ type: "text", content: trailing });
-  return parts.length ? parts : [{ type: "text", content: markdown }];
 }

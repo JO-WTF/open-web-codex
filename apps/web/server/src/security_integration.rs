@@ -241,6 +241,37 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
         .execute(&pool)
         .await
         .unwrap();
+    let artifact_id = Uuid::now_v7();
+    let artifact_bytes = br#"{"type":"FeatureCollection","features":[]}"#;
+    sqlx::query(
+        "INSERT INTO reply_artifacts (
+            id, organization_id, run_id, thread_id, turn_id, producer_item_id,
+            source_server, source_uri, mime_type, content, state
+         ) VALUES (
+            $1, $2, $3, 'approval-thread', 'turn-map', 'item-data',
+            'map_utils', 'maps-data://geojson/map-data-security',
+            'application/geo+json', $4, 'ready'
+         )",
+    )
+    .bind(artifact_id)
+    .bind(first_organization_id)
+    .bind(first_run_id)
+    .bind(artifact_bytes.as_slice())
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let artifact = call(
+        &app,
+        authenticated(
+            "GET",
+            &format!("/api/runs/{first_run_id}/artifacts/{artifact_id}"),
+            &first_token,
+        ),
+    )
+    .await;
+    assert_eq!(artifact.0, StatusCode::OK);
+    assert_eq!(artifact.1["type"], "FeatureCollection");
 
     let image_response = app
         .clone()
@@ -507,6 +538,16 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     )
     .await;
     assert_eq!(cross_tenant_asset.0, StatusCode::NOT_FOUND);
+    let cross_tenant_artifact = call(
+        &app,
+        authenticated(
+            "GET",
+            &format!("/api/runs/{first_run_id}/artifacts/{artifact_id}"),
+            second_token,
+        ),
+    )
+    .await;
+    assert_eq!(cross_tenant_artifact.0, StatusCode::NOT_FOUND);
 
     let legacy_runtime = call(
         &app,

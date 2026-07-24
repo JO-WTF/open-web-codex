@@ -9,7 +9,7 @@ import type { GoalInfo } from "./components/Conversation/GoalBanner";
 import type { QueuedFollowUp } from "./components/Conversation/FollowUpQueue";
 import type { ModelProviderSummary, ModelSummary } from "./components/Conversation/Composer";
 import { parseModelListResponse } from "./features/models/utils/modelListResponse";
-import { appendTerminalInteractionOutput, buildWebThreadHistory, commandText, isUserThreadItem, mergeWebThreadHistory, unwrapWebRpcResult, webLogEntryFromThreadItem } from "./utils/webThreadHistory";
+import { agentMessagePhase, appendTerminalInteractionOutput, buildWebThreadHistory, commandText, isUserThreadItem, mergeWebThreadHistory, unwrapWebRpcResult, webLogEntryFromThreadItem } from "./utils/webThreadHistory";
 import { normalizeTokenUsage } from "./features/threads/utils/threadNormalize";
 import { normalizePlanUpdate } from "./features/threads/utils/threadNormalize";
 import { parseWebTurnDiff } from "./utils/webTurnDiff";
@@ -19,19 +19,22 @@ import { summarizeWebAppServerEvent } from "./utils/webAppServerEventSummary";
 import { stripLeadingProviderSentinel } from "./utils/providerText";
 import { mergeRateLimits, parseInitialMcpServers, parseInitialRateLimits } from "./utils/webInitialStatus";
 import { appendWebLogEntry } from "./utils/webApprovalLog";
-import { loadWebApprovalHistory, resolveStoredWebApproval, saveWebApproval } from "./utils/webApprovalHistory";
 import { rememberAppServerEvent } from "./utils/webAppServerEventDedup";
 import { getAppServerThreadId } from "./utils/appServerEvents";
 import { finalizeInterruptedTurnEntries } from "./utils/webInterruptedTurn";
+import type { ReplyCard } from "./utils/replyCards";
 import "./styles/web.css";
 import "./styles/web-refactor.css";
 
 /* ─────────── Types ─────────── */
 
+export type AgentMessagePhase = "commentary" | "final_answer";
+
 export type LogEntry = {
   id: string;
   level: "event" | "error" | "info" | "user" | "assistant" | "system";
   text: string;
+  messagePhase?: AgentMessagePhase;
   approvalId?: string;
   approvalRequestId?: number | string;
   approvalStatus?: "pending" | "accepted" | "declined" | "resolved";
@@ -44,6 +47,7 @@ export type LogEntry = {
   toolStatus?: string;
   toolDetail?: string;
   toolOutput?: string;
+  replyCard?: ReplyCard;
   reasoningSummary?: string;
   filePath?: string;
   diffTitle?: string;
@@ -425,6 +429,7 @@ export default function WebApp() {
 
   // Streaming accumulators
   const streamingTexts = useRef<Map<string, string>>(new Map());
+  const agentMessagePhases = useRef<Map<string, AgentMessagePhase>>(new Map());
   const reasoningSummaries = useRef<Map<string, string>>(new Map());
   const streamingLogIds = useRef<Map<string, string>>(new Map());
   const turnDiffLogIds = useRef<Map<string, string>>(new Map());
@@ -742,11 +747,17 @@ export default function WebApp() {
           const current = streamingTexts.current.get(itemId) ?? "";
           const updated = current + stripLeadingProviderSentinel(delta);
           streamingTexts.current.set(itemId, updated);
+          const streamingMessagePhase = agentMessagePhases.current.get(itemId);
 
           const existingLogId = streamingLogIds.current.get(itemId);
           if (existingLogId) {
             setMessages((prev) =>
-              prev.map((e) => (e.id === existingLogId ? { ...e, text: updated, streaming: true } : e)),
+              prev.map((e) => (e.id === existingLogId ? {
+                ...e,
+                text: updated,
+                messagePhase: e.messagePhase ?? streamingMessagePhase,
+                streaming: true,
+              } : e)),
             );
             return null;
           }
@@ -754,7 +765,13 @@ export default function WebApp() {
           streamingLogIds.current.set(itemId, id);
           setMessages((prev) => [
             ...prev.slice(-199),
-            { id, level: "assistant", text: updated, streaming: true },
+            {
+              id,
+              level: "assistant",
+              text: updated,
+              messagePhase: streamingMessagePhase,
+              streaming: true,
+            },
           ]);
           return null;
         }
@@ -767,6 +784,8 @@ export default function WebApp() {
           const itemIdFromItem = typeof item?.id === "string" ? item.id : null;
           const itemType2 = typeof item.type === "string" ? item.type : null;
           const completedItemId = itemId ?? itemIdFromItem;
+          const completedMessagePhase = agentMessagePhase(item.phase)
+            ?? (completedItemId ? agentMessagePhases.current.get(completedItemId) : undefined);
           const completedReasoningSummary = (Array.isArray(item.summary) && item.summary.length > 0)
             ? item.summary.map((part) => String(part)).join("\n\n").trim()
             : typeof item.summary === "string" ? item.summary.trim() : "";
@@ -780,18 +799,31 @@ export default function WebApp() {
             if (completedItemId && streamingTexts.current.has(completedItemId)) {
               const acc = streamingTexts.current.get(completedItemId)!;
               const eid = streamingLogIds.current.get(completedItemId);
-              if (eid)
-                setMessages((prev) =>
-                  prev.map((e) => (e.id === eid ? { ...e, text: acc, streaming: false } : e)),
-                );
+              if (eid) {
+                setMessages((prev) => acc.trim()
+                  ? prev.map((e) => (e.id === eid ? {
+                      ...e,
+                      text: acc,
+                      messagePhase: completedMessagePhase ?? e.messagePhase,
+                      streaming: false,
+                    } : e))
+                  : prev.filter((e) => e.id !== eid));
+              }
               streamingTexts.current.delete(completedItemId);
               streamingLogIds.current.delete(completedItemId);
+              agentMessagePhases.current.delete(completedItemId);
               return null;
             }
+            if (completedItemId) agentMessagePhases.current.delete(completedItemId);
+            const completedText = stripLeadingProviderSentinel(
+              typeof item.text === "string" ? item.text : "",
+            );
+            if (!completedText.trim()) return null;
             return {
               id: completedItemId || undefined,
               level: "assistant",
-              text: stripLeadingProviderSentinel(typeof item.text === "string" ? item.text : "") || "(no response)",
+              text: completedText,
+              messagePhase: completedMessagePhase,
             };
           }
 
@@ -1018,11 +1050,11 @@ export default function WebApp() {
             ]);
             return null;
           }
-          if (
-            itemType === "agentMessage"
-            && startedItemId
-            && streamingLogIds.current.has(startedItemId)
-          ) {
+          if (itemType === "agentMessage" && startedItemId) {
+            const startedMessagePhase = agentMessagePhase(item?.phase);
+            if (startedMessagePhase) {
+              agentMessagePhases.current.set(startedItemId, startedMessagePhase);
+            }
             const streamedText = streamingTexts.current.get(startedItemId) ?? "";
             const completedText = stripLeadingProviderSentinel(
               typeof item?.text === "string" ? item.text : "",
@@ -1032,8 +1064,27 @@ export default function WebApp() {
             if (existingId) {
               setMessages((previous) => previous.map((entry) =>
                 entry.id === existingId
-                  ? { ...entry, text, streaming: true }
+                  ? {
+                    ...entry,
+                    text,
+                    messagePhase: startedMessagePhase ?? entry.messagePhase,
+                    streaming: true,
+                  }
                   : entry));
+            } else if (text) {
+              const id = startedItemId;
+              streamingTexts.current.set(startedItemId, text);
+              streamingLogIds.current.set(startedItemId, id);
+              setMessages((previous) => [
+                ...previous.slice(-199),
+                {
+                  id,
+                  level: "assistant",
+                  text,
+                  messagePhase: startedMessagePhase,
+                  streaming: true,
+                },
+              ]);
             }
             return null;
           }
@@ -1281,7 +1332,6 @@ export default function WebApp() {
               approvalThreadId,
               appendWebLogEntry(current, cachedApproval),
             );
-            saveWebApproval(event.workspace_id, approvalThreadId, cachedApproval);
           }
           if (belongsToBackgroundThread) return null;
           if (approvalId && (typeof requestId === "number" || typeof requestId === "string")) {
@@ -1321,7 +1371,6 @@ export default function WebApp() {
         case "serverRequest/resolved": {
           const requestId = params.requestId ?? params.request_id;
           if (typeof requestId !== "number" && typeof requestId !== "string") return null;
-          resolveStoredWebApproval(event.workspace_id, requestId, "resolved");
           for (const [threadId, approvals] of pendingApprovalsByThread.current) {
             const remaining = approvals.filter((entry) => entry.approvalRequestId !== requestId);
             if (remaining.length > 0) pendingApprovalsByThread.current.set(threadId, remaining);
@@ -1856,11 +1905,6 @@ export default function WebApp() {
   ) => {
     try {
       await client.respondToServerRequest(workspaceId, requestId, { decision });
-      resolveStoredWebApproval(
-        workspaceId,
-        requestId,
-        decision === "accept" ? "accepted" : "declined",
-      );
       for (const [threadId, approvals] of pendingApprovalsByThread.current) {
         pendingApprovalsByThread.current.set(threadId, approvals.map((entry) =>
           entry.approvalRequestId === requestId
@@ -1903,13 +1947,7 @@ export default function WebApp() {
       return;
     }
     setThreadLoading(true);
-    const restoredApprovals = activeWorkspaceId
-      ? loadWebApprovalHistory(activeWorkspaceId, id)
-      : [];
-    setMessages(mergeWebThreadHistory(
-      restoredApprovals,
-      pendingApprovalsByThread.current.get(id) ?? [],
-    ));
+    setMessages(pendingApprovalsByThread.current.get(id) ?? []);
     setTokenUsage(null);
     setGoal(null);
     setActiveTurnId(null);

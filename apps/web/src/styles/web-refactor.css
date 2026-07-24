@@ -1024,17 +1024,6 @@ body:has(.web-app-shell) {
   line-height: 1.55;
 }
 
-.web-msg-assistant-body.web-msg-assistant-body-map {
-  width: min(100%, 1100px);
-  max-width: min(100%, 1100px);
-}
-
-.web-msg-assistant-body-map .web-map-card {
-  width: 100%;
-  max-width: none;
-  box-sizing: border-box;
-}
-
 .web-msg-assistant-body code {
   color: #c5a6ff;
   background: rgb(9 12 18 / 75%);
@@ -1121,7 +1110,11 @@ body:has(.web-app-shell) {
 .web-execution-timeline .web-reasoning-body { padding-left: 22px; }
 .web-reasoning-icon { flex: 0 0 auto; color: var(--web-mint); }
 
-.web-execution-timeline .web-msg-assistant-body {
+.web-msg-commentary {
+  width: 100%;
+}
+
+.web-msg-assistant-body.web-msg-commentary-body {
   width: 100%;
   max-width: 100%;
   padding: 0;
@@ -2784,8 +2777,15 @@ body:has(.web-app-shell[data-theme="light"]) {
 }
 
 .web-app-shell[data-theme="light"] :is(.web-execution-summary, .web-reasoning-label) { color: #415067; }
-.web-app-shell[data-theme="light"] :is(.web-reasoning-body, .web-reasoning-meta, .web-execution-timeline .web-msg-assistant-body) {
+.web-app-shell[data-theme="light"] :is(.web-reasoning-body, .web-reasoning-meta) {
   color: #657286;
+}
+
+.web-app-shell[data-theme="light"] .web-msg-assistant-body.web-msg-commentary-body {
+  border: 0;
+  color: #657286;
+  background: transparent;
+  box-shadow: none;
 }
 
 .web-app-shell[data-theme="light"] :is(.web-reasoning-working, .web-thinking-spinner, .web-diff-spinner) {

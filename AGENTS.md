@@ -9,8 +9,11 @@ Build a self-hosted, browser-first, multi-user Codex workbench that reuses the
 official Codex runtime instead of reimplementing it. Each user must have an
 isolated persistent Profile, including identity, `CODEX_HOME`, configuration,
 Threads, memory, skills, plugins, MCP state and model/provider selection. Each
-Run must have an authorized, isolated Git workspace. The browser reaches Codex
-only through the authenticated Web platform and a versioned app-server bridge.
+Thread/Chat must execute in an authorized Workspace that remains associated with
+it across Turns and platform Runs. A Run is a scheduling and audit attempt: it
+references the Thread Workspace and does not own or recreate a checkout. The
+browser reaches Codex only through the authenticated Web platform and a
+versioned app-server bridge.
 
 Codex remains the owner of Thread/Turn semantics, context compaction, memory,
 multi-agent coordination, tools, skills, plugins and MCP. The Web platform owns
@@ -18,6 +21,12 @@ users, authorization, durable workflow state, Profile/Runner lifecycle, Git,
 approvals, audit and browser projections. Preserve this boundary so `codex/`
 can continue to synchronize with `openai/codex` using the smallest possible
 product-specific seam.
+
+Follow official Codex workspace semantics unless an explicit, tested platform
+security requirement demands a narrower policy. Managed worktrees are normally
+Thread/Chat-scoped; a local or permanent Workspace may host multiple Threads
+only through explicit platform selection and authorization. Do not reintroduce
+per-Run Workspace provisioning or ownership.
 
 ## Codex customization convergence
 

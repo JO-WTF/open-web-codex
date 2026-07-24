@@ -1,12 +1,11 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import MapReplyCard from "./MapReplyCard";
-import { parseReplyCards } from "../../../utils/replyCards";
 
 type Props = {
   text: string;
   streaming?: boolean;
   onOpenFile?: (path: string) => void;
+  variant?: "reply" | "commentary";
 };
 
 function MarkdownText({ text, onOpenFile }: { text: string; onOpenFile?: Props["onOpenFile"] }) {
@@ -35,22 +34,12 @@ function MarkdownText({ text, onOpenFile }: { text: string; onOpenFile?: Props["
   );
 }
 
-export default function AssistantMessage({ text, onOpenFile }: Props) {
-  const parts = parseReplyCards(text);
-  const hasMapCard = parts.some((part) => part.type === "card");
+export default function AssistantMessage({ text, onOpenFile, variant = "reply" }: Props) {
+  const commentary = variant === "commentary";
   return (
-    <div className="web-msg-assistant">
-      <div
-        className={[
-          "web-msg-assistant-body",
-          hasMapCard ? "web-msg-assistant-body-map" : "",
-        ].filter(Boolean).join(" ")}
-      >
-        {parts.map((part, index) => part.type === "text" ? (
-          <MarkdownText key={`text-${index}`} text={part.content} onOpenFile={onOpenFile} />
-        ) : (
-          <MapReplyCard key={part.id || `map-${index}`} card={part} />
-        ))}
+    <div className={`web-msg-assistant${commentary ? " web-msg-commentary" : ""}`}>
+      <div className={`web-msg-assistant-body${commentary ? " web-msg-commentary-body" : ""}`}>
+        <MarkdownText text={text} onOpenFile={onOpenFile} />
       </div>
     </div>
   );

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import AssistantMessage from "./AssistantMessage";
 
@@ -34,42 +34,10 @@ describe("AssistantMessage", () => {
     expect(view.container.querySelector(".web-streaming-cursor")).toBeNull();
   });
 
-  it("renders map card markers without showing the raw fenced block", () => {
-    const view = render(<AssistantMessage text={'Intro\n```open-web-card map.v1\n{"title":"Route","intent":"route","input_ref":"ref-1","points":[{"lat":31.2,"lng":121.5,"label":"上海"}]}\n```\nDone'} />);
+  it("marks commentary as process content instead of a reply bubble", () => {
+    const view = render(<AssistantMessage text="Checking the files" variant="commentary" />);
 
-    expect(screen.getByText("Intro")).toBeTruthy();
-    expect(screen.getByText("Route")).toBeTruthy();
-    expect(screen.getByText("Intent")).toBeTruthy();
-    expect(screen.getByText("route")).toBeTruthy();
-    expect(screen.getByText("Input ref")).toBeTruthy();
-    expect(screen.getByText("ref-1")).toBeTruthy();
-    const map = screen.getByLabelText("Interactive Mapbox map");
-    expect(map.getAttribute("data-map-engine")).toBe("mapbox-gl");
-    expect(screen.getByTestId("map-placeholder-background")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Open map card fullscreen" }).textContent).toContain("全屏");
-    expect(screen.getByText("Done")).toBeTruthy();
-    expect(screen.queryByText(/open-web-card/)).toBeNull();
-    expect(
-      view.container.querySelector(".web-msg-assistant-body-map"),
-    ).toBeTruthy();
-  });
-
-  it("opens Mapbox configuration from a card that has no token", () => {
-    const view = render(<AssistantMessage text={'```open-web-card map.v1\n{"title":"Map setup","points":[{"lat":31.2,"lng":121.5}]}\n```'} />);
-    const rendered = within(view.container);
-
-    fireEvent.click(rendered.getByRole("button", { name: "配置 Mapbox Key" }));
-    expect(
-      rendered.getByRole("dialog", { name: "配置地图服务 Key" }),
-    ).toBeTruthy();
-    expect(rendered.getByRole("button", { name: "Mapbox" }).getAttribute("aria-pressed"))
-      .toBe("true");
-    expect(rendered.getByRole("button", { name: "Google" })).toBeTruthy();
-    const input = rendered.getByLabelText("Mapbox public token");
-    fireEvent.change(input, { target: { value: "sk.not-a-mapbox-public-token" } });
-    fireEvent.click(rendered.getByRole("button", { name: "保存配置" }));
-    expect(
-      rendered.getByText(/请输入以 pk\. 开头/),
-    ).toBeTruthy();
+    expect(view.container.querySelector(".web-msg-commentary")).toBeTruthy();
+    expect(view.container.querySelector(".web-msg-commentary-body")).toBeTruthy();
   });
 });

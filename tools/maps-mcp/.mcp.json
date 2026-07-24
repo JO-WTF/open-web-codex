@@ -19,7 +19,15 @@
         "MAPS_MCP_VENV",
         "OPEN_WEB_CODEX_DATA_DIR",
         "OPEN_WEB_CODEX_LOG_DIR",
-        "OPEN_WEB_CODEX_MAPS_MCP_LAUNCHER_LOG"
+        "OPEN_WEB_CODEX_MAPS_MCP_LAUNCHER_LOG",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "no_proxy"
       ]
     }
   }
