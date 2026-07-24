@@ -228,7 +228,9 @@ MCP/Skills/Plugins；Server/Profile Host 只负责单 Profile 生命周期、授
 - [x] Run Orchestrator 支持 idempotency、`SKIP LOCKED` lease、heartbeat、恢复、
   cancellation/interrupt 和明确终态。
 - [x] Task event 先持久化，按单 Task 单调 sequence REST replay，再组织隔离地
-  WebSocket fan-out；订阅在 ready 前建立，首次连接与重连均执行有序 durable replay。
+  WebSocket fan-out；订阅先建立，首次加载以权威导航/Thread 历史作为快照并把每个
+  Task 游标推进到最新持久序号，重连只补游标后的有序 durable gap，避免刷新页面时
+  把全部历史 delta 再送入 React。未决审批独立恢复，不依赖完整事件重放。
 - [x] Thread/Turn 历史直接读取 Codex `thread/read` 与分页
   `thread/turns/list(itemsView=full)`；Server 保持 Runtime item 为事实来源，只按
   持久化 sequence 将平台拥有的审批投影插回对应 Turn，并按稳定 Turn 身份解析已授权
@@ -254,6 +256,8 @@ MCP/Skills/Plugins；Server/Profile Host 只负责单 Profile 生命周期、授
   Artifact 延迟加载；一条回复可按文字顺序放置多张卡片。真实
   Codex/DeepSeek/MCP 纵向用例与核心浏览器 Thread 切换、历史恢复、运行态和文件
   预览回归通过。旧 `replyCard` 投影、双读和旧历史兼容路径不存在。
+  MCP 侧栏状态直接读取 Runtime 启动通知形成的持久化轻量投影，不在 Thread
+  水合时调用会枚举全部 tools/resources 的 `mcpServerStatus/list`。
 - [x] 创建 Thread 时浏览器先用独立临时 ID 打开名为 `Thread` 的窗口，再按对应请求
   绑定服务端 Thread；若创建响应包含正式名称，则侧边栏与对话区标题同步替换，
   且不被紧随其后的旧占位列表覆盖。并发乱序返回不会串绑，失败窗口禁用输入并提供

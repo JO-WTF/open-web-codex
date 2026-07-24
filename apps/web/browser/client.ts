@@ -407,6 +407,11 @@ export class PlatformClient {
     );
   }
 
+  async latestEventSequence(taskId: string) {
+    const events = await this.listEvents(taskId, undefined, 1);
+    return events[events.length - 1]?.sequence ?? 0;
+  }
+
   async listAllEvents(taskId: string, afterSequence = 0) {
     const events: RunEvent[] = [];
     let cursor = afterSequence;

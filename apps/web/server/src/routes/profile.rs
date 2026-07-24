@@ -486,22 +486,55 @@ pub async fn mcp_servers(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
     Query(params): Query<ProfileListQuery>,
-    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
     Extension(profile): Extension<RuntimeProfileBinding>,
 ) -> ApiResult<ProfileProjection> {
     authorize_profile(&state, &auth, &profile).await?;
-    let thread_id = optional_run_context(&state, &auth, params.run_id)
-        .await?
-        .and_then(|context| context.thread_id);
-    query(
-        adapter,
-        ProfileQuery::McpServers {
-            cursor: params.cursor,
-            limit: params.limit,
-            thread_id,
-        },
+    let Some(run_id) = params.run_id else {
+        return Ok(Json(ProfileProjection {
+            data: json!({ "data": [], "nextCursor": null }),
+        }));
+    };
+    // Runtime startup notifications are already persisted as the durable,
+    // tenant-filtered MCP status projection. Reading the latest status per
+    // server avoids invoking `mcpServerStatus/list` during page hydration;
+    // that inventory call also enumerates every tool/resource and can take
+    // several seconds even though the sidebar only consumes startup state.
+    let _context = run_context(&state, &auth, run_id).await?;
+    let limit = i64::from(params.limit.unwrap_or(100).clamp(1, 100));
+    let rows = sqlx::query(
+        "SELECT latest.name, latest.status, latest.error, latest.failure_reason \
+         FROM ( \
+             SELECT DISTINCT ON (e.payload #>> '{data,name}') \
+                    e.payload #>> '{data,name}' AS name, \
+                    e.payload #>> '{data,status}' AS status, \
+                    NULLIF(e.payload #>> '{data,error}', '') AS error, \
+                    NULLIF(e.payload #>> '{data,failureReason}', '') AS failure_reason \
+             FROM run_events e \
+             WHERE e.run_id = $1 \
+               AND e.payload #>> '{data,sourceType}' = 'mcpServer/startupStatus/updated' \
+               AND COALESCE(e.payload #>> '{data,name}', '') <> '' \
+             ORDER BY e.payload #>> '{data,name}', e.sequence DESC \
+         ) latest ORDER BY latest.name LIMIT $2",
     )
+    .bind(run_id)
+    .bind(limit)
+    .fetch_all(&state.db)
     .await
+    .map_err(database_error)?;
+    let data = rows
+        .iter()
+        .map(|row| {
+            json!({
+                "name": row.get::<String, _>("name"),
+                "status": row.get::<String, _>("status"),
+                "error": row.get::<Option<String>, _>("error"),
+                "failureReason": row.get::<Option<String>, _>("failure_reason"),
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(ProfileProjection {
+        data: json!({ "data": data, "nextCursor": null }),
+    }))
 }
 
 fn single_profile_summary(profile: &RuntimeProfileBinding) -> Value {

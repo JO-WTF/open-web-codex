@@ -379,6 +379,40 @@ describe("WebApp workspace-first messaging", () => {
     });
   });
 
+  it("does not gate Thread hydration on slow Profile status reads", async () => {
+    client.listThreads.mockResolvedValue({
+      data: [{
+        id: "thread-first",
+        name: "First thread",
+        cwd: "/tmp/demo",
+        updatedAt: Date.now(),
+        status: "idle",
+      }],
+    });
+    client.listThreadTurns.mockResolvedValue([{
+      id: "turn-1",
+      status: "completed",
+      items: [{
+        id: "assistant-1",
+        type: "agentMessage",
+        text: "History before Profile status",
+      }],
+    }]);
+    client.listMcpServerStatus.mockReturnValue(new Promise(() => undefined));
+    client.getAccountRateLimits.mockReturnValue(new Promise(() => undefined));
+    render(<WebApp />);
+
+    fireEvent.click(await screen.findByText("First thread"));
+
+    await screen.findByText("History before Profile status");
+    await waitFor(() => expect(screen.queryByText("正在加载 Thread…")).toBeNull());
+    expect(client.listMcpServerStatus).toHaveBeenCalledWith("workspace-1", "thread-first");
+    expect(client.getAccountRateLimits).toHaveBeenCalledWith("workspace-1");
+    expect(
+      (screen.getByPlaceholderText("Ask Codex to do something...") as HTMLTextAreaElement).disabled,
+    ).toBe(false);
+  });
+
   it("reuses a completed Thread transcript when switching back to an unchanged Thread", async () => {
     client.listThreads.mockResolvedValue({
       data: [

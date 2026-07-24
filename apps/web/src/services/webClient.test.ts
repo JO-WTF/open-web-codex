@@ -708,7 +708,7 @@ describe("WebApp direct Server client", () => {
     ]);
   });
 
-  it("replays durable Task events on first connect before accepting newer live events", async () => {
+  it("baselines durable Task history on first connect and replays only reconnect gaps", async () => {
     const replayEvent = {
       id: "event-replay",
       sequence: 2,
@@ -770,19 +770,22 @@ describe("WebApp direct Server client", () => {
 
     socket?.onmessage?.({ data: JSON.stringify({ type: "ready", version: 1 }) });
     sendLive(1, "thread/status/changed");
-    await vi.waitFor(() => expect(methods).toEqual(["thread/tokenUsage/updated"]));
-    socket?.onmessage?.({ data: JSON.stringify({ type: "resyncRequired", version: 1 }) });
-    sendLive(3, "thread/settings/updated");
-    await vi.waitFor(() => expect(methods).toEqual([
-      "thread/tokenUsage/updated",
-      "thread/settings/updated",
-    ]));
-
-    expect(fetchMock.mock.calls.some((call) => {
+    await vi.waitFor(() => expect(fetchMock.mock.calls.some((call) => {
       const url = new URL(String(call[0]));
       return url.pathname === `/api/tasks/${task.id}/events`
-        && url.searchParams.get("after_sequence") === "0";
-    })).toBe(true);
+        && url.searchParams.get("limit") === "1"
+        && !url.searchParams.has("after_sequence");
+    })).toBe(true));
+    expect(methods).toEqual([]);
+    sendLive(3, "thread/settings/updated");
+    await vi.waitFor(() => expect(methods).toEqual(["thread/settings/updated"]));
+
+    socket?.onmessage?.({ data: JSON.stringify({ type: "resyncRequired", version: 1 }) });
+    await vi.waitFor(() => expect(fetchMock.mock.calls.some((call) => {
+      const url = new URL(String(call[0]));
+      return url.pathname === `/api/tasks/${task.id}/events`
+        && url.searchParams.get("after_sequence") === "3";
+    })).toBe(true));
 
     socket?.onmessage?.({ data: JSON.stringify({ type: "ready", version: 1 }) });
     await vi.waitFor(() => expect(fetchMock.mock.calls.some((call) => {

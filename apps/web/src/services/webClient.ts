@@ -554,6 +554,23 @@ export class CodexMonitorWebClient {
         }
       }
     };
+    const establishInitialEventBaseline = async () => {
+      const taskIds = [...new Set(
+        [...this.threadContexts.values()].map((context) => context.taskId),
+      )];
+      const sequences = await Promise.all(
+        taskIds.map(async (taskId) => ({
+          taskId,
+          sequence: await this.platform.latestEventSequence(taskId),
+        })),
+      );
+      for (const { taskId, sequence } of sequences) {
+        this.taskEventSequences.set(
+          taskId,
+          Math.max(this.taskEventSequences.get(taskId) ?? 0, sequence),
+        );
+      }
+    };
     return this.platform.subscribe(
       (event) => {
         enqueue(() => deliver(event));
@@ -567,6 +584,14 @@ export class CodexMonitorWebClient {
               for (const project of await this.platform.listProjects()) {
                 await this.indexProjectThreads(project.id);
               }
+              // The project/thread context and authoritative Codex history are
+              // the initial UI snapshot. Establish a durable cursor at that
+              // snapshot instead of replaying every historical delta through
+              // React on each page refresh. The WebSocket is already connected,
+              // so newer events remain queued behind this baseline.
+              await establishInitialEventBaseline();
+              await this.replayPendingApprovals(onEvent);
+              return;
             }
             await replayDurableEvents();
             await this.replayPendingApprovals(onEvent);
@@ -591,7 +616,6 @@ export class CodexMonitorWebClient {
       for (const [taskId, context] of tasks) {
         for (const event of await this.platform.listAllEvents(taskId)) {
           if (event.event_type !== "platform.approval.requested") continue;
-          if (event.sequence <= (this.taskEventSequences.get(context.taskId) ?? 0)) continue;
           const data = isRecord(event.payload.data) ? event.payload.data : {};
           if (typeof data.approvalId !== "string" || !pending.has(data.approvalId)) continue;
           const message = runtimeMessage(event);

@@ -153,6 +153,10 @@ ownership table above continues to apply:
 - Skills, Plugins and MCP are still discovered and executed by Codex Runtime.
   The WebApp does not scan `.mcp.json`, run plugin launchers, answer MCP
   inventory questions locally or write hidden Profile configuration.
+- MCP startup notifications are persisted as the browser's lightweight status
+  projection. Thread hydration reads that projection and never calls the full
+  Runtime MCP inventory path, whose tools and resources are unrelated to the
+  sidebar status surface.
 - The Server ensures the implicit local Owner on startup, and the browser
   obtains a local Session without rendering login or registration. Session,
   Organization, Profile and resource authorization remain the internal request
@@ -305,7 +309,11 @@ remaining Chat translation stages are defined in `docs/adr/005-map-reply-cards.m
    and starts or resumes the mapped Codex Thread in the same authorized
    Workspace.
 5. Runtime events are normalized, assigned a per-Task monotonic sequence and
-   persisted before browser fan-out.
+   persisted before browser fan-out. After the WebSocket is subscribed, the
+   initial browser snapshot establishes each Task cursor at its latest durable
+   sequence; only reconnect gaps are replayed. Authoritative Codex history
+   hydrates the selected Thread, so a page refresh does not replay every old
+   Item delta through the presentation tree.
 6. Terminal state is reconciled across database, Codex Profile and Git. No Run
    remains `running` without a valid lease/heartbeat and recoverable owner.
 

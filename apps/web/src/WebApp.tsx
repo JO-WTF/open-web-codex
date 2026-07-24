@@ -444,38 +444,39 @@ export default function WebApp() {
 
   useEffect(() => {
     setMcpServers({});
-    setRateLimits(null);
-    if (!activeWorkspaceId) return;
+    if (!activeWorkspaceId || !activeThreadId) return;
 
     let cancelled = false;
-    const initializeWorkspaceStatus = async () => {
-      try {
-        await client.connectWorkspace(activeWorkspaceId);
-      } catch {
-        return;
-      }
+    void client.listMcpServerStatus(activeWorkspaceId, activeThreadId).then((value) => {
       if (cancelled) return;
+      const snapshot = parseInitialMcpServers(value);
+      setMcpServers((current) => ({ ...snapshot, ...current }));
+    }).catch(() => {
+      // Runtime startup notifications continue to update this projection.
+    });
 
-      const [mcpResult, rateLimitResult] = await Promise.allSettled([
-        client.listMcpServerStatus(activeWorkspaceId, activeThreadId),
-        client.getAccountRateLimits(activeWorkspaceId),
-      ]);
-      if (cancelled) return;
-      if (mcpResult.status === "fulfilled") {
-        const snapshot = parseInitialMcpServers(mcpResult.value);
-        setMcpServers((current) => ({ ...snapshot, ...current }));
-      }
-      if (rateLimitResult.status === "fulfilled") {
-        const snapshot = parseInitialRateLimits(rateLimitResult.value);
-        setRateLimits((current) => mergeRateLimits(snapshot, current));
-      }
-    };
-
-    void initializeWorkspaceStatus();
     return () => {
       cancelled = true;
     };
   }, [activeThreadId, activeWorkspaceId, client]);
+
+  useEffect(() => {
+    setRateLimits(null);
+    if (!activeWorkspaceId) return;
+
+    let cancelled = false;
+    void client.getAccountRateLimits(activeWorkspaceId).then((value) => {
+      if (cancelled) return;
+      const snapshot = parseInitialRateLimits(value);
+      setRateLimits((current) => mergeRateLimits(snapshot, current));
+    }).catch(() => {
+      // Rate limits are supplementary Profile state and never gate a Thread.
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkspaceId, client]);
 
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
   const listWorkspaceFiles = useCallback((workspaceId: string) => client.listWorkspaceFiles(workspaceId, activeThreadId), [activeThreadId, client]);
