@@ -206,34 +206,46 @@ Current map-card support follows this checked-in flow:
    URI exposed by `resource_link.uri`. The complete reference is card-compatible;
    its server and URI are directly reusable by MCP `resources/read`. The raw
    server ID is distinct from the model-visible `mcp__server` Tool namespace.
-   `map_utils.create_map_card` advertises an MCP `outputSchema` and returns an
-   `open-web-card` / `map.v2` object in `structuredContent`; Resource sources copy a
-   complete `data_ref` from an earlier completed Tool item in the same Run and Thread. Its `content`
-   is concise model-visible prose, never a rendering input.
-2. The Server accepts only the supported type/kind, validates viewport,
-   source/layer references and style ranges, strips unknown fields and projects
-   a typed `replyCard` through both live events and authoritative Thread
-   history. It never scans Tool result text or assistant Markdown. ResourceLink
-   server/URI pairs are registered as organization/Run/Thread-owned Artifacts and resolved
-   through the official `mcpServer/resource/read` API. Artifact projection is
-   isolated in a database savepoint so a card failure cannot suppress the
-   underlying MCP Tool completed event.
-3. The browser normalizes the typed projection, reads referenced GeoJSON from
-   an authenticated Artifact URL and renders point, line and polygon layers
-   with Mapbox GL. The browser consumes the official `AgentMessage.phase`
-   contract: `commentary` stays in the execution presentation, while
-   `final_answer` and completed phase-less legacy messages remain assistant
-   replies. A phase-less message that is still streaming remains in the
-   execution presentation until its completed item supplies the contract.
-   The retained Chat Completions transport classifies text accompanying Tool
-   calls as `commentary` and text-only completion as `final_answer`. Reasoning,
-   tools, approvals and commands retain their typed presentations; no
-   last-assistant positional heuristic is used. An MCP item remains a Tool even
-   when it carries a reply card. Cards and assistant replies retain Codex Turn
-   item order, so one reply can contain multiple cards without changing
-   Tool/message counts. Fit viewports run
-   after map load and after the container receives its first real size; camera
-   viewports preserve explicit center and zoom. The browser reads the
+   `map_utils.create_map_card` advertises an MCP `outputSchema` and returns a
+   generic `open-web-artifact` / `inline-visualization.v1` envelope. Its first
+   renderer kind is `map.v2`; the Tool also generates the complete
+   `::codex-inline-vis{artifact="..."}` line. Resource sources copy a complete
+   `data_ref` from an earlier completed Tool item in the same Run and Thread.
+   Tool `content` only tells the model to copy the embed line and is never a
+   rendering input.
+2. The Server recognizes the generic envelope without branching on MCP server
+   or Tool names, dispatches `renderer.kind` through a renderer registry and
+   validates viewport, source/layer references and style ranges. It registers
+   the Inline Visualization Artifact under organization/Run/Thread ownership.
+   The producing Turn and Tool Item are retained as provenance, not as an
+   authorization boundary. Resource server/URI pairs resolve only to earlier completed Tool
+   items, are loaded through official `mcpServer/resource/read`, and are replaced
+   by authorized Artifact URLs before renderer payload persistence. Public Tool
+   projection strips the payload and MCP URI. Registration runs in a savepoint,
+   so a projection failure cannot suppress the underlying Tool terminal event.
+3. Tool completion never displays a map. An Agent Message places the Tool-generated
+   embed line between arbitrary Markdown segments. The Web parser accepts only
+   standalone directives in Agent Messages, excludes fenced and indented code,
+   and buffers incomplete streaming directives. `file="*.html"` retains the
+   official local-HTML meaning; `artifact="..."` resolves an authorized typed
+   renderer. The parser does not inspect Tool, Reasoning, Command or user text.
+4. Live Agent Message completion receives the same safe renderer DTO used by
+   authoritative history. Resolution uses the owning Run/Thread plus the
+   Artifact ref, so a later Turn in the same Thread may reuse a completed
+   Artifact. Producer Turn/Item identity only verifies provenance because
+   `thread/turns/list` may synthesize `item-N` identities. The old Tool-attached `replyCard`, dual-write, old-history
+   reconstruction, Assistant JSON scan and position fallback paths are absent.
+5. The browser reads referenced GeoJSON from authenticated Artifact URLs and
+   renders point, line and polygon layers with Mapbox GL in an explicit Mercator
+   projection. Point layers support circle, square, diamond, triangle and pin
+   shapes plus CORS-enabled HTTPS PNG/JPEG/WebP icons. Line and polygon borders
+   support opacity, width, cap/join and dash arrays. Any geometry may declare a
+   bounded list of GeoJSON properties for a text-only hover popup; the renderer
+   creates DOM text nodes rather than accepting Tool-supplied HTML. Fit
+   viewports run after map load and after the container receives its first real
+   size; camera viewports preserve explicit center and zoom. Card chrome shows
+   the user-authored summary and legend, not internal source/layer counts or
+   viewport diagnostics. The browser reads the
    restricted public `pk.` token through the typed
    authenticated `/api/configuration/maps` resource. Without a token the map
    card remains visible and opens an in-card configuration dialog; authorized
@@ -241,28 +253,44 @@ Current map-card support follows this checked-in flow:
    The shared dialog selects the one active Mapbox or Google Maps provider for
    server-side `map_utils` tools; saving replaces the prior provider and key.
    `VITE_MAPBOX_ACCESS_TOKEN` remains a build-time fallback.
-4. The selected provider/key pair is one encrypted global entry in
+   The retained Chat Completions transport still classifies text accompanying
+   Tool calls as `commentary` and text-only completion as `final_answer`. This
+   phase classification is compatibility behavior, not a
+   Chat Completions wire guarantee. A Chat response does not identify ordinary
+   `content` as reasoning, commentary, or final answer merely because it also
+   contains Tool calls. This known gap can misclassify user-visible preambles;
+   the proposed replacement preserves standard Chat text with unspecified phase,
+   keeps Reasoning as a separate Item, and preserves first-appearance Item order.
+   The target contract and staged work are defined in
+   `docs/chat-responses-translation-spec.md` and
+   `docs/chat-responses-translation-plan.md`.
+6. The selected provider/key pair is one encrypted global entry in
    `platform_configuration_secrets`; the next save atomically replaces its
    value. The browser receives provider/configured status and, only while
    Mapbox is active, the restricted public `pk.` token required by Mapbox GL.
    The Server delivers the selected provider and key directly to a strictly
    validated local MCP elicitation URL without opening that one-time page.
    The global scope is temporary and reserves a later per-user move.
-5. `map.v2` has no card-specific 16 KiB limit. Small GeoJSON can be inline;
+7. `map.v2` has no card-specific 16 KiB limit. Small GeoJSON can be inline;
    large GeoJSON stays outside the model/card payload and is loaded lazily from
    the Artifact cache. A general 128 MiB per-Resource memory-safety boundary is
    enforced by the Server; future larger formats require a streamed PMTiles or
    MVT source contract.
-6. Invalid or unresolved data is not promoted into a browser card. Public
+8. Invalid or unresolved data is not promoted into a browser card. Public
    ResourceLink projections remove source URIs and private metadata, while
    Artifact responses expose only authorized opaque URLs. Local paths,
    credentials, app-server request IDs and unbounded protocol payloads never
    reach the browser; ordinary Tool events may still show logical MCP
    server/tool names.
 
-This feature must not broaden the Codex subtree or the Web platform into a tool
-runtime. The official app-server already carries MCP `structuredContent`; the
-typed Server projection and renderer remain Web-platform responsibilities.
+This design follows the official Codex inline-visualization directive already
+implemented in the upstream TUI and the Apps SDK separation between data tools
+and render tools. It does not broaden the Codex subtree: Chat translation
+preserves text, official app-server Items remain unchanged, and Artifact
+authorization/rendering stay in the Web platform. The implemented contract and
+remaining Chat translation stages are defined in `docs/adr/005-map-reply-cards.md`,
+`docs/chat-responses-translation-spec.md` and
+`docs/chat-responses-translation-plan.md`.
 
 ## Primary runtime flows
 
@@ -308,6 +336,19 @@ typed Server projection and renderer remain Web-platform responsibilities.
 4. The replacement Runtime rebuilds its startup-scoped model catalog from the
    Profile configuration. Context accounting and compaction remain Runtime
    behavior; the Server only owns the safe process lifecycle transition.
+5. Opening an existing Thread is not a configuration boundary. The browser
+   projects the Task's persisted Provider/model pair from the already loaded
+   Profile catalog. New Threads opt into the official paginated history mode;
+   Profile Host resumes an unloaded Thread with `excludeTurns`, then the adapter
+   joins indexed `thread/turns/list(itemsView=notLoaded)` and
+   `thread/items/list` streams by stable Turn id instead of invoking the
+   app-server's serial full-item compatibility hydrator. Existing legacy
+   rollout histories stay in one isolated compatibility branch until those
+   Profile histories are retired. The browser reuses an unchanged completed
+   Thread projection already loaded in the current session and invalidates it
+   on background Runtime events. A Provider catalog cache miss may trigger a
+   read-only background lookup, but Thread hydration never writes the global
+   Profile selection, refreshes the Runtime catalog or waits for that lookup.
 
 ### Commit and push
 

@@ -510,19 +510,25 @@ async def calculate_route(origin: str, destination: str) -> Annotated[
 `mcp__server` Tool 命名空间不是原始 server ID。不设置卡片专用的任意字节上限。
 
 `outputSchema` 只约束 MCP Tool 的结果，不能约束模型随后生成的 assistant 最终回复。
-两者是不同的协议消息。可交互结果不应依赖模型重新抄写 Tool 结果，而应同时：
+两者是不同的协议消息。可交互结果不应依赖模型重新抄写 Tool payload；若需要在
+回复内编排组件，模型只复制 Tool 生成的官方 Inline Visualization 短引用。完整
+数据和 renderer payload 仍通过结构化合同传输：
 
 1. 对 Tool 结果使用 `outputSchema` 和 MCP Server 不变量验证。
 2. 在 Platform Server 只识别受支持的 `structuredContent.type/kind`，重新验证并
    投影成浏览器安全 DTO；不得透传任意 raw Tool Result。
-3. 浏览器只消费该 DTO，assistant 最终回复只负责自然语言说明。
-4. 在端到端测试中同时验证实时事件、Thread 历史恢复和无效合同拒绝。
+3. Tool 完成只登记 Artifact，不自动展示。Assistant 最终回复可以在任意位置写入
+   Tool 生成的 `::codex-inline-vis{artifact="..."}`，但不得复制 payload。
+4. 浏览器只消费授权 DTO，并在同一 Agent Message 内把 Markdown 与 Artifact
+   renderer 按指令位置组合。
+5. 在端到端测试中同时验证实时事件、Thread 历史恢复和无效合同拒绝。
 
-地图卡片采用这一分层：数据 Tool 返回标准 `resource_link` 和包含原始 server/URI 的
-`data_ref`；后续 Tool 把 `data_ref` 原样放入 `structuredContent.card` 的 source；
-Platform Server 验证同一 Run、同一 Thread 中较早完成的 Tool 引用并生成
-`replyCard`；浏览器直接渲染该类型化投影。`content` 只包含模型可读摘要和
-ResourceLink，既不复制卡片 JSON，也不参与渲染。
+地图卡片当前已经使用通用 Inline Visualization Artifact envelope 和短引用。
+Platform 验证同一 Run、同一 Thread 中较早完成的 Resource 并登记 Artifact；Tool
+完成不展示地图，当前或后续 Turn 的 Assistant Message 只有显式引用时才在目标文字
+位置渲染。Artifact 的授权边界是 Run/Thread，producer Turn/Item 只保留为来源信息。
+实时与历史恢复使用同一 renderer DTO 和指令 parser。旧 `replyCard` 投影、双写和
+旧历史恢复分支均不存在。
 
 ---
 

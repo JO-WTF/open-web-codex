@@ -495,7 +495,7 @@ Accept 再尝试投递，否则 MCP 会继续等待、前端显示 Invalid，工
 | 一次确认 | Runtime approval / elicitation 卡片 |
 | Secret 或结构化表单 | 类型化 Platform 资源 + modal |
 | 工具执行详情 | 对话时间线中的 tool card |
-| 可交互结果 | 稳定 DTO +专用 card renderer |
+| 可交互结果 | Inline Visualization Artifact + 稳定 DTO +专用 renderer |
 | 大型数据、文件、GeoJSON | Artifact 引用和按权限加载 |
 | 跨消息持续操作 | 独立侧栏或页面级 panel，并由服务端持久状态驱动 |
 
@@ -510,85 +510,119 @@ Accept 再尝试投递，否则 MCP 会继续等待、前端显示 Invalid，工
 
 ```json
 {
-  "type": "open-web-card",
-  "kind": "map.v2",
-  "card": {
-    "title": "Jakarta locations",
-    "intent": "visualization",
-    "status": "ready",
-    "viewport": {
-      "mode": "fit",
-      "padding": 48,
-      "max_zoom": 14
-    },
-    "sources": [
-      {
-        "id": "locations",
-        "data": {
-          "type": "mcp_resource",
-          "server": "map_utils",
-          "uri": "maps-data://geojson/map-data-8a4c...",
-          "format": "geojson"
-        }
+  "type": "open-web-artifact",
+  "kind": "inline-visualization.v1",
+  "artifact": {
+    "ref": "map-7d67b30d",
+    "renderer": {
+      "kind": "map.v2",
+      "payload": {
+        "title": "Jakarta locations",
+        "intent": "visualization",
+        "status": "ready",
+        "viewport": {
+          "mode": "fit",
+          "padding": 48,
+          "max_zoom": 14
+        },
+        "sources": [
+          {
+            "id": "locations",
+            "data": {
+              "type": "mcp_resource",
+              "server": "map_utils",
+              "uri": "maps-data://geojson/map-data-8a4c...",
+              "format": "geojson"
+            }
+          }
+        ],
+        "layers": [
+          {
+            "id": "points",
+            "source": "locations",
+            "geometry": "point",
+            "label_property": "label",
+            "style": {
+              "color": "#ef4444",
+              "opacity": 0.9,
+              "radius": 8,
+              "stroke_color": "#ffffff",
+              "stroke_width": 2
+            }
+          }
+        ]
       }
-    ],
-    "layers": [
-      {
-        "id": "points",
-        "source": "locations",
-        "geometry": "point",
-        "label_property": "label",
-        "style": {
-          "color": "#ef4444",
-          "opacity": 0.9,
-          "radius": 8,
-          "stroke_color": "#ffffff",
-          "stroke_width": 2
-        }
-      }
-    ]
+    }
+  },
+  "embed": {
+    "syntax": "codex-inline-vis.artifact.v1",
+    "code": "::codex-inline-vis{artifact=\"map-7d67b30d\"}"
   }
 }
 ```
 
 浏览器链路：
 
-1. Server `project_item` 只接受 `structuredContent.type=open-web-card` 和
-   `kind=map.v2`，验证 viewport、source/layer 图和样式并投影 `replyCard`；它不扫描
-   `content.text`。
+1. Server 通过通用 `inline-visualization.v1` envelope 和 renderer registry 识别
+   Artifact，不根据 `map_utils` 或 `create_map_card` 名称分支。`map.v2` validator
+   校验 viewport、source/layer 图和样式；公开 Tool projection 只保留 ref、renderer
+   kind 和 embed code，不暴露 renderer payload。
 2. Server 从较早完成的 MCP Tool 的标准 `resource_link.uri` 注册 Resource，
-   并在同一 Run、同一 Thread 内解析卡片中的同一 server/URI。跨 Run、跨 Thread、
-   后向引用、缺失、冲突和自引用不会提升为卡片。
+   并在同一 Run、同一 Thread 内解析 renderer 中的同一 server/URI。跨 Run、
+   跨 Thread、后向引用、缺失、冲突和自引用不会登记为可用 Artifact。
 3. 授权 Artifact API 通过官方 `mcpServer/resource/read` 延迟加载并缓存 GeoJSON；
-   公开 ResourceLink 会移除内部 URI 和 `_meta`，Artifact 响应只暴露授权不透明 URL；
-   普通 Tool 事件仍可显示逻辑 MCP server/tool 名。
-4. `webThreadHistory.ts` 对实时事件和历史恢复使用同一 DTO 转换。
-5. `MessageList.tsx` 保留原有执行组：Reasoning、Tool、审批、命令和中间 assistant
-   消息继续专用渲染并折叠；带卡片的 MCP item 仍计为 Tool，卡片与最终 assistant
-   按 item 顺序展示。
-6. `MapReplyCard.tsx` 为每个 source 创建 Mapbox GL source，再按 point、line、
+   Inline Artifact 保存把 Resource 引用替换为授权 URL 后的 renderer payload。
+4. Tool completed 只登记 Artifact，不渲染地图。Assistant 把 Tool 生成的
+   `embed.code` 独占一行放入目标回复位置。
+5. `AssistantMessage.tsx` 对实时事件和历史恢复使用同一指令 parser、Artifact DTO
+   和 renderer registry；一条消息按顺序组合 Markdown/Artifact segment。
+6. fenced/indented code 中的指令不解析；不完整的流式指令先缓冲；无权访问或无效
+   引用在 Message 完成后显示明确 unavailable 状态。
+7. `MapReplyCard.tsx` 为每个 source 创建 Mapbox GL source，再按 point、line、
    polygon layer 应用颜色、透明度、尺寸、描边和 dash。
-7. `fit` viewport 在 map load 和容器首次获得非零尺寸后执行；`camera` viewport
+8. `fit` viewport 在 map load 和容器首次获得非零尺寸后执行；`camera` viewport
    精确使用 center、zoom、bearing 和 pitch。
-8. 没有 Mapbox Token 时仍保留卡片和配置按钮；Mapbox 或 Artifact 失败时显示明确错误。
+9. 没有 Mapbox Token 时仍保留卡片和配置按钮；Mapbox 或 Artifact 失败时显示明确错误。
 
 `map.v2` 没有卡片专用的 16 KiB 上限。小数据可以 inline，大 GeoJSON 必须通过
 MCP Resource URI 和授权 Artifact 传输。Server 的通用 Resource 内存安全边界不属于
 卡片合同；需要更大数据时应新增流式 PMTiles/MVT source，而不是复制 GeoJSON 到文本。
 
-### 6.3 新增一种专用卡片
+当前可运行流程是：
+
+```text
+data tool -> MCP Resource
+render tool -> Inline Visualization Artifact + Tool-generated embed code
+assistant -> Markdown + ::codex-inline-vis{artifact="..."} + Markdown
+web -> one Agent Message with ordered Markdown/Artifact segments
+```
+
+约束：
+
+- render Tool 完成只登记 Artifact，不自动显示；
+- Assistant 只复制 Tool 生成的短代码，不复制 payload；
+- Platform 通过通用 Artifact envelope 和 renderer registry 分派，不按 MCP
+  server/tool 名称硬编码；
+- 指令必须使用官方独立行语法，代码块中的字面量不解析；
+- live/history 使用同一 parser 和 Artifact resolver；
+- 旧 `replyCard` 投影已删除，不双写、不兼容恢复旧地图历史。
+
+### 6.3 新增一种 Inline Visualization renderer
 
 至少完成：
 
 1. 定义版本化 payload，例如 `chart.v1`，并限制字段、数组长度、嵌套深度和跨字段不变量。
 2. 在 MCP 侧生成结构化 payload，不让模型手写复杂数据。
-3. 在 Platform 边界决定使用内联预览还是 Artifact。
-4. 在浏览器定义独立类型、严格 parser/normalizer 和 fallback text。
-5. 为卡片创建独立组件，处理 loading、ready、empty、error、retry。
-6. 使用稳定 ID 和 memoization；不要因流式 delta、输入草稿或无关消息重新挂载。
-7. 支持主题、响应式、全屏/关闭、键盘和屏幕阅读器。
-8. 不渲染 payload 中的任意 HTML、脚本或未经允许的 URL。
-9. 增加 parser、组件、消息组合、历史恢复和流式稳定性测试。
+3. 用通用 `inline-visualization.v1` envelope 包裹 renderer payload，并由 Tool
+   生成安全、不可预测、无路径语义的 Artifact ref 与完整 embed code。真实 HTML
+   文件才使用官方 `file="*.html"`。
+4. Platform 注册授权 Artifact；Tool 完成时不得直接挂载 renderer。
+5. 在浏览器定义独立类型、严格 parser/normalizer 和 fallback text。
+6. 为 Artifact 创建独立组件，处理 loading、ready、empty、error、retry。
+7. 使用稳定 ID 和 memoization；不要因流式 delta、输入草稿或无关消息重新挂载。
+8. 支持主题、响应式、全屏/关闭、键盘和屏幕阅读器。
+9. 不渲染 payload 中的任意 HTML、脚本或未经允许的 URL。
+10. 增加指令 parser、组件、消息组合、未引用不显示、历史恢复和流式稳定性测试。
 
 如果卡片需要访问新的浏览器 SDK 或公开 Token，还要增加：
 
@@ -678,6 +712,10 @@ npm --prefix apps/web run check:no-desktop
 ```bash
 ./scripts/smoke-map-card-rendering.sh
 ```
+
+Inline Visualization 迁移完成后，该 smoke 必须验证 Tool 完成不显示、Assistant
+引用才显示、同一消息内“文字—组件—文字”、跨 delta 指令、代码块排除和历史恢复；
+不得保留旧 `replyCard` 断言作为兼容路径。
 
 Platform DTO、路由、Secret、审批或持久化变化：
 
