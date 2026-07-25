@@ -1,4 +1,5 @@
 pub mod approvals;
+pub mod artifacts;
 pub mod bootstrap;
 pub mod browser_workspaces;
 pub mod configuration;
@@ -74,6 +75,10 @@ pub fn router(
     Router::new()
         .route("/bootstrap", axum::routing::post(bootstrap::bootstrap))
         .route("/sessions", axum::routing::post(sessions::create_session))
+        .route(
+            "/sessions/local",
+            axum::routing::post(sessions::create_local_session),
+        )
         .route(
             "/sessions/current",
             axum::routing::delete(sessions::delete_session),
@@ -198,6 +203,10 @@ pub fn router(
         .route("/tasks/{id}/runs", axum::routing::post(runs::start_run))
         .route("/runs", axum::routing::get(runs::list_runs))
         .route("/runs/{id}", axum::routing::get(runs::get_run))
+        .route(
+            "/runs/{run_id}/artifacts/{artifact_id}",
+            axum::routing::get(artifacts::read),
+        )
         .route("/runs/{id}/thread", axum::routing::get(threads::read))
         .route(
             "/runs/{id}/thread/turns",

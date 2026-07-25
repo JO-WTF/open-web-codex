@@ -1,7 +1,30 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import type { InlineVisualizationArtifact } from "../../../utils/replyCards";
 import AssistantMessage from "./AssistantMessage";
+
+vi.mock("./ReplyCard", () => ({
+  default: ({ card }: { card: { title: string } }) => (
+    <div className="web-map-card" data-testid="inline-reply-card">{card.title}</div>
+  ),
+}));
+
+const mapArtifact: InlineVisualizationArtifact = {
+  ref: "map-one",
+  rendererKind: "map.v2",
+  card: {
+    type: "card",
+    kind: "map.v2",
+    id: "map-one",
+    title: "上海地图",
+    intent: "show Shanghai",
+    status: "ready",
+    viewport: { mode: "fit" },
+    sources: [],
+    layers: [],
+  },
+};
 
 describe("AssistantMessage", () => {
   it("renders GitHub-flavored Markdown without rendering raw HTML", () => {
@@ -34,42 +57,60 @@ describe("AssistantMessage", () => {
     expect(view.container.querySelector(".web-streaming-cursor")).toBeNull();
   });
 
-  it("renders map card markers without showing the raw fenced block", () => {
-    const view = render(<AssistantMessage text={'Intro\n```open-web-card map.v1\n{"title":"Route","intent":"route","input_ref":"ref-1","points":[{"lat":31.2,"lng":121.5,"label":"上海"}]}\n```\nDone'} />);
+  it("does not flash an incomplete or unresolved Artifact directive while streaming", () => {
+    const view = render(
+      <AssistantMessage
+        text={'Before\n::codex-inline-vis{artifact="map'}
+        streaming
+      />,
+    );
 
-    expect(screen.getByText("Intro")).toBeTruthy();
-    expect(screen.getByText("Route")).toBeTruthy();
-    expect(screen.getByText("Intent")).toBeTruthy();
-    expect(screen.getByText("route")).toBeTruthy();
-    expect(screen.getByText("Input ref")).toBeTruthy();
-    expect(screen.getByText("ref-1")).toBeTruthy();
-    const map = screen.getByLabelText("Interactive Mapbox map");
-    expect(map.getAttribute("data-map-engine")).toBe("mapbox-gl");
-    expect(screen.getByTestId("map-placeholder-background")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Open map card fullscreen" }).textContent).toContain("全屏");
-    expect(screen.getByText("Done")).toBeTruthy();
-    expect(screen.queryByText(/open-web-card/)).toBeNull();
-    expect(
-      view.container.querySelector(".web-msg-assistant-body-map"),
-    ).toBeTruthy();
+    expect(view.container.textContent).toBe("Before");
+    expect(screen.queryByText("Visualization unavailable")).toBeNull();
   });
 
-  it("opens Mapbox configuration from a card that has no token", () => {
-    const view = render(<AssistantMessage text={'```open-web-card map.v1\n{"title":"Map setup","points":[{"lat":31.2,"lng":121.5}]}\n```'} />);
-    const rendered = within(view.container);
+  it("marks commentary as process content instead of a reply bubble", () => {
+    const view = render(<AssistantMessage text="Checking the files" variant="commentary" />);
 
-    fireEvent.click(rendered.getByRole("button", { name: "配置 Mapbox Key" }));
-    expect(
-      rendered.getByRole("dialog", { name: "配置地图服务 Key" }),
-    ).toBeTruthy();
-    expect(rendered.getByRole("button", { name: "Mapbox" }).getAttribute("aria-pressed"))
-      .toBe("true");
-    expect(rendered.getByRole("button", { name: "Google" })).toBeTruthy();
-    const input = rendered.getByLabelText("Mapbox public token");
-    fireEvent.change(input, { target: { value: "sk.not-a-mapbox-public-token" } });
-    fireEvent.click(rendered.getByRole("button", { name: "保存配置" }));
-    expect(
-      rendered.getByText(/请输入以 pk\. 开头/),
-    ).toBeTruthy();
+    expect(view.container.querySelector(".web-msg-commentary")).toBeTruthy();
+    expect(view.container.querySelector(".web-msg-commentary-body")).toBeTruthy();
+  });
+
+  it("composes Markdown and an Artifact as ordered children of one reply container", () => {
+    const view = render(
+      <AssistantMessage
+        text={'地图之前\n\n::codex-inline-vis{artifact="map-one"}\n\n地图之后'}
+        inlineArtifacts={[mapArtifact]}
+      />,
+    );
+
+    const body = view.container.querySelector(".web-msg-assistant-body");
+    expect(body).toBeTruthy();
+    expect(view.container.querySelectorAll(".web-msg-assistant-body")).toHaveLength(1);
+    expect(Array.from(body!.children).map((child) => child.textContent)).toEqual([
+      "地图之前",
+      "上海地图",
+      "地图之后",
+    ]);
+    expect(body!.querySelector(":scope > .web-map-card")).toBeTruthy();
+    expect(view.container.querySelector(".web-msg-markdown-segment")).toBeNull();
+  });
+
+  it("keeps a standalone Artifact inside the rounded reply container", () => {
+    const view = render(
+      <AssistantMessage
+        text={'::codex-inline-vis{artifact="map-one"}'}
+        inlineArtifacts={[mapArtifact]}
+      />,
+    );
+
+    const body = view.container.querySelector(".web-msg-assistant-body");
+    expect(body?.children).toHaveLength(1);
+    expect(body?.firstElementChild).toBe(
+      view.container.querySelector("[data-testid='inline-reply-card']"),
+    );
+    expect(view.container.querySelector(".web-msg-assistant")?.classList).toContain(
+      "has-inline-visualization",
+    );
   });
 });

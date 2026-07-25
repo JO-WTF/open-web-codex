@@ -363,8 +363,13 @@ impl AuthorizedProviderOperations for SecuredProviderService {
         actor: ProviderActor,
         id: &str,
     ) -> Result<ProviderCatalog, AuthorizedProviderError> {
+        let _operation = self.operation.lock().await;
         self.authorize(actor).await?;
-        Ok(self.runtime.refresh_models(id).await?)
+        let catalog = self.runtime.refresh_models(id).await?;
+        self.registry
+            .schedule_runtime_refresh(&self.runtime_key)
+            .await?;
+        Ok(catalog)
     }
 
     async fn update_model(
@@ -374,11 +379,16 @@ impl AuthorizedProviderOperations for SecuredProviderService {
         model_id: &str,
         request: UpdateProviderModelRequest,
     ) -> Result<ProviderCatalog, AuthorizedProviderError> {
+        let _operation = self.operation.lock().await;
         self.authorize(actor).await?;
-        Ok(self
+        let catalog = self
             .runtime
             .update_model(provider_id, model_id, request)
-            .await?)
+            .await?;
+        self.registry
+            .schedule_runtime_refresh(&self.runtime_key)
+            .await?;
+        Ok(catalog)
     }
 }
 

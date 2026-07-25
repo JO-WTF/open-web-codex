@@ -3,16 +3,16 @@
   "purpose": "Tracks the current official-tree comparison and convergence classification progress for codex/.",
   "comparison": {
     "upstreamRef": "codex-upstream/main",
-    "upstreamCommit": "9d823343026e600dab694e41865ed60613da31b6",
+    "upstreamCommit": "cba0e2701c9e3e67a877a16dbbd7a577d477a630",
     "localTree": "HEAD:codex",
-    "observedAt": "2026-07-23T00:44:26Z",
-    "differenceCount": 514,
-    "addedLocally": 45,
-    "modified": 445,
-    "missingLocally": 24,
-    "upstreamOnly": 385,
-    "localOnly": 79,
-    "diverged": 50
+    "observedAt": "2026-07-25T00:10:19Z",
+    "differenceCount": 919,
+    "addedLocally": 46,
+    "modified": 803,
+    "missingLocally": 70,
+    "upstreamOnly": 790,
+    "localOnly": 70,
+    "diverged": 59
   },
   "progress": {
     "state": "integrated-base-validated-upstream-update-available",
@@ -26,13 +26,13 @@
       "capability-manifest"
     ],
     "classification": {
-      "classifiedLocalOnlyPaths": 79,
+      "classifiedLocalOnlyPaths": 70,
       "unclassifiedSourcePaths": 0,
       "temporaryUpstreamedFixes": 0
     },
     "completed": [
-      "The Codex subtree is integrated through 6e5a2d6b8d14 with the six documented retained seams; 48 later official commits await a dedicated sync branch.",
-      "All 79 currently local-only paths follow the classified seams; the 50 diverged paths require upstream-first replay during the next sync.",
+      "The Codex subtree is integrated through 6e5a2d6b8d14 with the six documented retained seams; 126 later official commits await a dedicated sync branch.",
+      "All 70 currently local-only paths follow the classified seams; the 59 diverged paths require upstream-first replay during the next sync.",
       "Profile lifecycle, encrypted credentials, authorization, durable approvals, Git workspaces, Run leases, browser DTOs, and event delivery are owned by apps/web.",
       "The browser uses typed REST and authenticated WebSocket transport; Tauri, desktop sidecars, raw browser RPC, desktop release chains, and desktop build dependencies are absent.",
       "Provider configuration, event payloads, model context and onboarding implementation live in dedicated TUI Provider modules; high-churn upstream parent files retain only narrow attachments.",
@@ -59,6 +59,6 @@
     },
     "validatedAgainstUpstream": "6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9",
     "validatedAtCommit": "a9bae7be4fba81c242308cf6d824e487da85c593",
-    "nextAction": "Create a dedicated codex/sync-upstream-* branch for the 48 pending official commits, accept upstream structure first, then replay only the six retained seams and rerun the contract/provider matrix."
+    "nextAction": "Create a dedicated codex/sync-upstream-* branch for the 126 pending official commits, accept upstream structure first, then replay only the six retained seams and rerun the contract/provider matrix."
   }
 }

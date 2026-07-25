@@ -229,19 +229,23 @@ fi
 code_mode_host_bin="$runtime_root/target/$build_profile/codex-code-mode-host"
 
 build_all() {
-  local -a cargo_profile_args=()
   command -v npm >/dev/null 2>&1 || { error "npm is required"; exit 1; }
   command -v cargo >/dev/null 2>&1 || { error "cargo is required"; exit 1; }
-  if [[ "$build_profile" == "release" ]]; then
-    cargo_profile_args+=(--release)
-  fi
   if [[ ! -d "$web_root/node_modules" ]]; then
     (cd "$web_root" && npm ci)
   fi
   (cd "$web_root" && npm run build)
-  (cd "$web_root" && CARGO_INCREMENTAL=0 cargo build --locked "${cargo_profile_args[@]}" -p open-web-codex-server)
-  if [[ "$codex_mode" == "real" && "$using_repository_codex" == "1" && ( ! -x "$codex_bin" || ! -x "$code_mode_host_bin" ) ]]; then
-    (cd "$runtime_root" && CARGO_INCREMENTAL=0 cargo build --locked "${cargo_profile_args[@]}" -p codex-cli --bin codex -p codex-code-mode-host --bin codex-code-mode-host)
+  if [[ "$build_profile" == "release" ]]; then
+    (cd "$web_root" && CARGO_INCREMENTAL=0 cargo build --locked --release -p open-web-codex-server)
+  else
+    (cd "$web_root" && CARGO_INCREMENTAL=0 cargo build --locked -p open-web-codex-server)
+  fi
+  if [[ "$codex_mode" == "real" && "$using_repository_codex" == "1" ]]; then
+    if [[ "$build_profile" == "release" ]]; then
+      (cd "$runtime_root" && CARGO_INCREMENTAL=0 cargo build --locked --release -p codex-cli --bin codex -p codex-code-mode-host --bin codex-code-mode-host)
+    else
+      (cd "$runtime_root" && CARGO_INCREMENTAL=0 cargo build --locked -p codex-cli --bin codex -p codex-code-mode-host --bin codex-code-mode-host)
+    fi
   fi
 }
 

@@ -323,6 +323,7 @@ struct ProfileHostInner {
     runtime_instance_id: RwLock<Uuid>,
     active_turns: RwLock<HashSet<String>>,
     pending_server_requests: RwLock<HashSet<String>>,
+    scheduled_restart: Mutex<Option<ProfileHostConfig>>,
     _profile_lock: ProfileLock,
 }
 
@@ -379,6 +380,7 @@ impl ProfileHost {
             runtime_instance_id: RwLock::new(Uuid::now_v7()),
             active_turns: RwLock::new(HashSet::new()),
             pending_server_requests: RwLock::new(HashSet::new()),
+            scheduled_restart: Mutex::new(None),
             _profile_lock: profile_lock,
         });
         spawn_stdout_reader(Arc::downgrade(&inner), 1, spawned.stdout);
@@ -628,6 +630,7 @@ impl ProfileHost {
 
     pub async fn shutdown(&self) -> Result<(), ProfileHostError> {
         let _lifecycle = self.inner.lifecycle.write().await;
+        *self.inner.scheduled_restart.lock().await = None;
         self.shutdown_unlocked().await
     }
 
@@ -653,7 +656,61 @@ impl ProfileHost {
     /// request identity sequence and event subscription channel. This is used
     /// when server-owned secret environment values change.
     pub async fn restart(&self, config: ProfileHostConfig) -> Result<(), ProfileHostError> {
-        validate_config(&config)?;
+        let workspace_root = self.validate_restart_config(&config).await?;
+        let _lifecycle = self.inner.lifecycle.write().await;
+        if self.runtime_is_busy().await {
+            return Err(ProfileHostError::RuntimeBusy);
+        }
+        *self.inner.scheduled_restart.lock().await = None;
+        self.restart_unlocked(&config, workspace_root).await
+    }
+
+    /// Schedule an app-server restart at the next server-controlled Turn
+    /// boundary. The current process keeps serving an in-flight Turn; callers
+    /// must invoke [`Self::apply_scheduled_restart`] before starting or
+    /// resuming the next Thread operation.
+    pub async fn schedule_restart(
+        &self,
+        config: ProfileHostConfig,
+    ) -> Result<(), ProfileHostError> {
+        self.validate_restart_config(&config).await?;
+        *self.inner.scheduled_restart.lock().await = Some(config);
+        Ok(())
+    }
+
+    /// Apply a scheduled restart once the current Runtime has no active Turn
+    /// or unresolved Server Request. Returns whether a new process instance
+    /// was started.
+    pub async fn apply_scheduled_restart(&self) -> Result<bool, ProfileHostError> {
+        let _lifecycle = self.inner.lifecycle.write().await;
+        let Some(config) = self.inner.scheduled_restart.lock().await.take() else {
+            return Ok(false);
+        };
+        if self.runtime_is_busy().await {
+            *self.inner.scheduled_restart.lock().await = Some(config);
+            return Err(ProfileHostError::RuntimeBusy);
+        }
+        let workspace_root = match self.validate_restart_config(&config).await {
+            Ok(workspace_root) => workspace_root,
+            Err(error) => {
+                *self.inner.scheduled_restart.lock().await = Some(config);
+                return Err(error);
+            }
+        };
+        match self.restart_unlocked(&config, workspace_root).await {
+            Ok(()) => Ok(true),
+            Err(error) => {
+                *self.inner.scheduled_restart.lock().await = Some(config);
+                Err(error)
+            }
+        }
+    }
+
+    async fn validate_restart_config(
+        &self,
+        config: &ProfileHostConfig,
+    ) -> Result<PathBuf, ProfileHostError> {
+        validate_config(config)?;
         let expected_profile = self.snapshot().await.profile_id;
         if config.profile_id != expected_profile {
             return Err(ProfileHostError::InvalidConfig(
@@ -679,18 +736,24 @@ impl ProfileHost {
                 workspace_root.display()
             )));
         }
+        Ok(workspace_root)
+    }
 
-        let _lifecycle = self.inner.lifecycle.write().await;
-        if !self.inner.active_turns.read().await.is_empty()
+    async fn runtime_is_busy(&self) -> bool {
+        !self.inner.active_turns.read().await.is_empty()
             || !self.inner.pending_server_requests.read().await.is_empty()
-        {
-            return Err(ProfileHostError::RuntimeBusy);
-        }
+    }
+
+    async fn restart_unlocked(
+        &self,
+        config: &ProfileHostConfig,
+        workspace_root: PathBuf,
+    ) -> Result<(), ProfileHostError> {
         self.inner.process_generation.fetch_add(1, Ordering::SeqCst);
         self.shutdown_unlocked().await?;
         *self.inner.runtime_instance_id.write().await = Uuid::now_v7();
         let generation = self.inner.process_generation.load(Ordering::SeqCst);
-        let spawned = spawn_app_server(&config, &self.inner.home, &workspace_root)?;
+        let spawned = spawn_app_server(config, &self.inner.home, &workspace_root)?;
         let process_id = spawned.child.id();
         *self.inner.stdin.lock().await = spawned.stdin;
         *self.inner.child.lock().await = spawned.child;
@@ -1152,6 +1215,7 @@ mod tests {
             runtime_instance_id: RwLock::new(Uuid::now_v7()),
             active_turns: RwLock::new(HashSet::new()),
             pending_server_requests: RwLock::new(HashSet::new()),
+            scheduled_restart: Mutex::new(None),
             _profile_lock: lock,
         });
         (inner, path)
@@ -1320,6 +1384,37 @@ mod tests {
         clear_runtime_work(&inner).await;
         assert!(inner.active_turns.read().await.is_empty());
         assert!(inner.pending_server_requests.read().await.is_empty());
+
+        let mut child = inner.child.lock().await;
+        let _ = child.kill().await;
+        drop(child);
+        drop(host);
+        drop(inner);
+        fs::remove_dir_all(path).expect("remove profile home");
+    }
+
+    #[tokio::test]
+    async fn scheduled_restart_waits_for_the_active_turn_boundary() {
+        let (inner, path) = test_inner(8).await;
+        let host = ProfileHost {
+            inner: inner.clone(),
+        };
+        inner
+            .active_turns
+            .write()
+            .await
+            .insert("active-turn".to_string());
+        host.schedule_restart(ProfileHostConfig::new("test-profile", &path, &path))
+            .await
+            .expect("schedule restart");
+
+        let error = host
+            .apply_scheduled_restart()
+            .await
+            .expect_err("active Turn must defer the restart");
+
+        assert!(matches!(error, ProfileHostError::RuntimeBusy));
+        assert!(inner.scheduled_restart.lock().await.is_some());
 
         let mut child = inner.child.lock().await;
         let _ = child.kill().await;

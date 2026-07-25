@@ -123,6 +123,12 @@ export class PlatformClient {
     });
   }
 
+  createLocalSession() {
+    return this.request<Session>("/api/sessions/local", {
+      method: "POST",
+    });
+  }
+
   me() {
     return this.request<Me>("/api/me");
   }
@@ -267,6 +273,13 @@ export class PlatformClient {
     );
   }
 
+  readReplyArtifact(path: string) {
+    if (!/^\/api\/runs\/[0-9a-f-]+\/artifacts\/[0-9a-f-]+$/i.test(path)) {
+      return Promise.reject(new Error("Reply Artifact path is invalid."));
+    }
+    return this.request<Record<string, unknown>>(path);
+  }
+
   archiveRunThread(runId: string) {
     return this.request<{ status: string }>(
       `/api/runs/${encodeURIComponent(runId)}/thread/archive`,
@@ -392,6 +405,11 @@ export class PlatformClient {
     return this.request<RunEvent[]>(
       `/api/tasks/${encodeURIComponent(taskId)}/events?${query.toString()}`,
     );
+  }
+
+  async latestEventSequence(taskId: string) {
+    const events = await this.listEvents(taskId, undefined, 1);
+    return events[events.length - 1]?.sequence ?? 0;
   }
 
   async listAllEvents(taskId: string, afterSequence = 0) {

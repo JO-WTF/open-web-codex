@@ -411,6 +411,57 @@ describe("WebApp direct Server client", () => {
     });
   });
 
+  it("reads a Thread Provider catalog without reading or changing the global model selection", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/api/providers") {
+        return json({
+          currentProviderId: "openai",
+          currentModelId: "gpt-5",
+          data: [
+            {
+              id: "openai",
+              name: "OpenAI",
+              wireApi: "responses",
+              kind: "builtIn",
+              isCurrent: true,
+              modelCount: 1,
+              models: [{ modelId: "gpt-5", showInPicker: true }],
+            },
+            {
+              id: "deepseek",
+              name: "DeepSeek",
+              wireApi: "chat",
+              kind: "custom",
+              isCurrent: false,
+              modelCount: 2,
+              models: [
+                { modelId: "deepseek-v3", showInPicker: true },
+                { modelId: "deepseek-v4-flash", showInPicker: true },
+              ],
+            },
+          ],
+        });
+      }
+      throw new Error(`Unexpected Server request: ${url.pathname}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
+
+    await expect(client.listModels(
+      project.id,
+      "deepseek",
+      "deepseek-v4-flash",
+    )).resolves.toEqual({
+      data: [
+        expect.objectContaining({ model: "deepseek-v4-flash", isDefault: true }),
+        expect.objectContaining({ model: "deepseek-v3", isDefault: false }),
+      ],
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0][0])).toBe("http://server.test/api/providers");
+  });
+
   it("projects authenticated Server WebSocket events into the unchanged WebApp contract", async () => {
     const sockets: FakeSocket[] = [];
     class FakeSocket {
@@ -506,6 +557,7 @@ describe("WebApp direct Server client", () => {
       eventType: string,
       itemId: string | null,
       data: Record<string, unknown>,
+      itemType?: string,
     ) => socket?.onmessage?.({
       data: JSON.stringify({
         type: "run.event",
@@ -519,7 +571,7 @@ describe("WebApp direct Server client", () => {
           thread_id: "thread-1",
           turn_id: "turn-1",
           item_id: itemId,
-          payload: { data },
+          payload: { data, ...(itemType ? { itemType } : {}) },
           created_at: `2026-07-22T00:00:0${sequence}Z`,
         },
       }),
@@ -564,7 +616,11 @@ describe("WebApp direct Server client", () => {
         url: "http://127.0.0.1:43123/one-time-token",
       },
     });
-    await vi.waitFor(() => expect(events).toHaveLength(6));
+    liveEvent(7, "codex.item.completed", "assistant-1", {
+      text: "Done.",
+      phase: "final_answer",
+    }, "agentMessage");
+    await vi.waitFor(() => expect(events).toHaveLength(7));
 
     expect(events.map((event) => event.message)).toEqual([
       {
@@ -635,10 +691,24 @@ describe("WebApp direct Server client", () => {
           command: "No google maps API key is stored for this workspace.",
         },
       },
+      {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "assistant-1",
+          item: {
+            id: "assistant-1",
+            type: "agentMessage",
+            text: "Done.",
+            phase: "final_answer",
+          },
+        },
+      },
     ]);
   });
 
-  it("replays durable Task events on first connect before accepting newer live events", async () => {
+  it("baselines durable Task history on first connect and replays only reconnect gaps", async () => {
     const replayEvent = {
       id: "event-replay",
       sequence: 2,
@@ -700,19 +770,22 @@ describe("WebApp direct Server client", () => {
 
     socket?.onmessage?.({ data: JSON.stringify({ type: "ready", version: 1 }) });
     sendLive(1, "thread/status/changed");
-    await vi.waitFor(() => expect(methods).toEqual(["thread/tokenUsage/updated"]));
-    socket?.onmessage?.({ data: JSON.stringify({ type: "resyncRequired", version: 1 }) });
-    sendLive(3, "thread/settings/updated");
-    await vi.waitFor(() => expect(methods).toEqual([
-      "thread/tokenUsage/updated",
-      "thread/settings/updated",
-    ]));
-
-    expect(fetchMock.mock.calls.some((call) => {
+    await vi.waitFor(() => expect(fetchMock.mock.calls.some((call) => {
       const url = new URL(String(call[0]));
       return url.pathname === `/api/tasks/${task.id}/events`
-        && url.searchParams.get("after_sequence") === "0";
-    })).toBe(true);
+        && url.searchParams.get("limit") === "1"
+        && !url.searchParams.has("after_sequence");
+    })).toBe(true));
+    expect(methods).toEqual([]);
+    sendLive(3, "thread/settings/updated");
+    await vi.waitFor(() => expect(methods).toEqual(["thread/settings/updated"]));
+
+    socket?.onmessage?.({ data: JSON.stringify({ type: "resyncRequired", version: 1 }) });
+    await vi.waitFor(() => expect(fetchMock.mock.calls.some((call) => {
+      const url = new URL(String(call[0]));
+      return url.pathname === `/api/tasks/${task.id}/events`
+        && url.searchParams.get("after_sequence") === "3";
+    })).toBe(true));
 
     socket?.onmessage?.({ data: JSON.stringify({ type: "ready", version: 1 }) });
     await vi.waitFor(() => expect(fetchMock.mock.calls.some((call) => {

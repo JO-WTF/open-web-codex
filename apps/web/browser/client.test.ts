@@ -137,6 +137,23 @@ describe("PlatformClient", () => {
     });
   });
 
+  it("creates an implicit local session without login credentials", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(JSON.stringify({ session_token: "local-session" }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PlatformClient({ baseUrl: "https://platform.test" });
+
+    await expect(client.createLocalSession()).resolves.toMatchObject({
+      session_token: "local-session",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://platform.test/api/sessions/local",
+      expect.objectContaining({ method: "POST", cache: "no-store" }),
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBeUndefined();
+  });
+
   it("reads, replaces, and reuses the unified maps configuration", async () => {
     const configuration = {
       configured: true,

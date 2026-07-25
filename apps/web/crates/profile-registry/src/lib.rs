@@ -197,6 +197,27 @@ impl ProfileRegistry {
         Ok(keys)
     }
 
+    /// Mark the owned app-server for replacement at the next safe
+    /// server-controlled Turn boundary. Provider configuration is already
+    /// persisted in the Profile home when this is called; the replacement
+    /// process will rebuild its startup-scoped model catalog from that state.
+    pub async fn schedule_runtime_refresh(
+        &self,
+        profile_id: &str,
+    ) -> Result<ProfileHost, ProfileRegistryError> {
+        let managed = self.managed(profile_id).await?;
+        let _operation = managed.operation.lock().await;
+        let host = managed
+            .host
+            .read()
+            .await
+            .clone()
+            .ok_or_else(|| ProfileRegistryError::NotFound(profile_id.to_string()))?;
+        host.schedule_restart(managed.effective_config().await)
+            .await?;
+        Ok(host)
+    }
+
     pub async fn shutdown(&self, profile_id: &str) -> Result<(), ProfileRegistryError> {
         let managed = self.managed(profile_id).await?;
         let _operation = managed.operation.lock().await;

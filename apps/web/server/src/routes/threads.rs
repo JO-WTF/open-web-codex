@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use axum::{
@@ -36,7 +37,7 @@ pub async fn read(
         .get("thread")
         .ok_or_else(|| bad_gateway("Runtime thread/read omitted thread"))?;
     Ok(Json(ThreadHistoryResponse {
-        thread: project_thread(thread, &context.thread_id)?,
+        thread: project_thread(thread, &context.thread_id, &state, run_id).await?,
     }))
 }
 
@@ -51,11 +52,14 @@ pub async fn list_turns(
         .list_thread_turns(&context.workspace, &context.thread_id)
         .await
         .map_err(runtime_error)?;
-    turns
-        .iter()
-        .map(project_turn)
-        .collect::<Result<Vec<_>, _>>()
-        .map(Json)
+    let overlay = load_history_overlay(&state, run_id).await?;
+    let mut projected = Vec::with_capacity(turns.len());
+    for turn in &turns {
+        let mut turn = project_turn_with_refs(turn, &state, run_id).await?;
+        overlay.apply(&mut turn);
+        projected.push(turn);
+    }
+    Ok(Json(projected))
 }
 
 pub async fn archive(
@@ -172,7 +176,12 @@ async fn authorized_thread(
     })
 }
 
-fn project_thread(value: &serde_json::Value, expected_id: &str) -> Result<ThreadHistory, ApiError> {
+async fn project_thread(
+    value: &serde_json::Value,
+    expected_id: &str,
+    state: &AppState,
+    run_id: Uuid,
+) -> Result<ThreadHistory, ApiError> {
     let object = value
         .as_object()
         .ok_or_else(|| bad_gateway("Runtime Thread was invalid"))?;
@@ -181,17 +190,13 @@ fn project_thread(value: &serde_json::Value, expected_id: &str) -> Result<Thread
         .and_then(serde_json::Value::as_str)
         .filter(|id| *id == expected_id)
         .ok_or_else(|| bad_gateway("Runtime returned the wrong Thread"))?;
-    let turns = object
-        .get("turns")
-        .and_then(serde_json::Value::as_array)
-        .map(|turns| {
-            turns
-                .iter()
-                .map(project_turn)
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .transpose()?
-        .unwrap_or_default();
+    let mut turns = Vec::new();
+    if let Some(source_turns) = object.get("turns").and_then(serde_json::Value::as_array) {
+        turns.reserve(source_turns.len());
+        for turn in source_turns {
+            turns.push(project_turn_with_refs(turn, state, run_id).await?);
+        }
+    }
     Ok(ThreadHistory {
         id: id.to_string(),
         name: object
@@ -298,6 +303,271 @@ fn project_turn(value: &serde_json::Value) -> Result<ThreadHistoryTurn, ApiError
     })
 }
 
+async fn project_turn_with_refs(
+    value: &serde_json::Value,
+    state: &AppState,
+    run_id: Uuid,
+) -> Result<ThreadHistoryTurn, ApiError> {
+    let mut turn = project_turn(value)?;
+    for item in &mut turn.items {
+        if item.get("type").and_then(serde_json::Value::as_str) != Some("agentMessage") {
+            continue;
+        }
+        let Some(text) = item
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        let artifacts = crate::event_projection::resolve_inline_artifacts(&state.db, run_id, &text)
+            .await
+            .map_err(database_error)?;
+        if !artifacts.is_empty() {
+            item.as_object_mut()
+                .expect("projected item must be an object")
+                .insert(
+                    "inlineArtifacts".to_string(),
+                    serde_json::Value::Array(artifacts),
+                );
+        }
+    }
+    Ok(turn)
+}
+
+#[derive(Default)]
+struct ThreadHistoryOverlay {
+    item_sequences: HashMap<String, i64>,
+    approvals_by_turn: HashMap<String, Vec<ApprovalOverlay>>,
+}
+
+struct ApprovalOverlay {
+    sequence: i64,
+    tool: Option<String>,
+    item: serde_json::Value,
+}
+
+impl ThreadHistoryOverlay {
+    fn apply(&self, turn: &mut ThreadHistoryTurn) {
+        if let Some(approvals) = self.approvals_by_turn.get(&turn.id) {
+            for approval in approvals {
+                let insert_at = approval
+                    .tool
+                    .as_deref()
+                    .and_then(|tool| {
+                        turn.items
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, item)| {
+                                item.get("type").and_then(serde_json::Value::as_str)
+                                    == Some("mcpToolCall")
+                                    && item.get("tool").and_then(serde_json::Value::as_str)
+                                        == Some(tool)
+                                    && item
+                                        .get("id")
+                                        .and_then(serde_json::Value::as_str)
+                                        .and_then(|id| self.item_sequences.get(id))
+                                        .is_some_and(|item_sequence| {
+                                            *item_sequence <= approval.sequence
+                                        })
+                            })
+                            .map(|(index, _)| index)
+                            .last()
+                            .map(|tool_index| {
+                                let mut insert_at = tool_index + 1;
+                                while turn.items.get(insert_at).is_some_and(|item| {
+                                    item.get("type").and_then(serde_json::Value::as_str)
+                                        == Some("platformApproval")
+                                        && item
+                                            .get("approvalTool")
+                                            .and_then(serde_json::Value::as_str)
+                                            == Some(tool)
+                                }) {
+                                    insert_at += 1;
+                                }
+                                insert_at
+                            })
+                    })
+                    .unwrap_or_else(|| {
+                        turn.items
+                            .iter()
+                            .position(|item| {
+                                item.get("id")
+                                    .and_then(serde_json::Value::as_str)
+                                    .and_then(|id| self.item_sequences.get(id))
+                                    .is_some_and(|item_sequence| *item_sequence > approval.sequence)
+                            })
+                            .unwrap_or(turn.items.len())
+                    });
+                turn.items.insert(insert_at, approval.item.clone());
+            }
+        }
+    }
+}
+
+async fn load_history_overlay(
+    state: &AppState,
+    run_id: Uuid,
+) -> Result<ThreadHistoryOverlay, ApiError> {
+    let rows = sqlx::query(
+        "SELECT events.sequence, events.event_type, events.turn_id, \
+                events.item_id, events.payload, approvals.state AS approval_state \
+         FROM run_events events \
+         LEFT JOIN approvals ON approvals.run_id = events.run_id \
+           AND approvals.id::text = events.payload #>> '{data,approvalId}' \
+         WHERE events.run_id = $1 AND events.event_type IN ( \
+           'codex.item.started', 'codex.item.completed', \
+           'platform.approval.requested', 'platform.approval.resolved' \
+         ) ORDER BY events.sequence",
+    )
+    .bind(run_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(database_error)?;
+
+    let resolved: HashSet<String> = rows
+        .iter()
+        .filter(|row| row.get::<String, _>("event_type") == "platform.approval.resolved")
+        .filter_map(|row| {
+            row.get::<serde_json::Value, _>("payload")
+                .pointer("/data/requestId")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .collect();
+    let mut overlay = ThreadHistoryOverlay::default();
+    for row in rows {
+        let sequence: i64 = row.get("sequence");
+        let event_type: String = row.get("event_type");
+        if matches!(
+            event_type.as_str(),
+            "codex.item.started" | "codex.item.completed"
+        ) {
+            if let Some(item_id) = row.get::<Option<String>, _>("item_id") {
+                overlay.item_sequences.entry(item_id).or_insert(sequence);
+            }
+            continue;
+        }
+        if event_type != "platform.approval.requested" {
+            continue;
+        }
+        let Some(turn_id) = row.get::<Option<String>, _>("turn_id") else {
+            continue;
+        };
+        let payload: serde_json::Value = row.get("payload");
+        let Some(approval_id) = payload
+            .pointer("/data/approvalId")
+            .and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        let request = payload
+            .pointer("/data/requestParams")
+            .and_then(serde_json::Value::as_object);
+        let text = request
+            .and_then(|request| request.get("message").or_else(|| request.get("reason")))
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("Approval requested");
+        let requested_tool = requested_tool_name(request);
+        let approval_status = row
+            .get::<Option<String>, _>("approval_state")
+            .as_deref()
+            .and_then(public_approval_status)
+            .unwrap_or_else(|| {
+                if resolved.contains(approval_id) {
+                    "resolved"
+                } else {
+                    "pending"
+                }
+            });
+        let mut approval = serde_json::Map::from_iter([
+            (
+                "id".to_string(),
+                serde_json::Value::String(format!("approval-{approval_id}")),
+            ),
+            (
+                "type".to_string(),
+                serde_json::Value::String("platformApproval".to_string()),
+            ),
+            (
+                "text".to_string(),
+                serde_json::Value::String(text.to_string()),
+            ),
+            (
+                "approvalRequestId".to_string(),
+                serde_json::Value::String(approval_id.to_string()),
+            ),
+            (
+                "approvalStatus".to_string(),
+                serde_json::Value::String(approval_status.to_string()),
+            ),
+        ]);
+        if let Some(tool) = &requested_tool {
+            approval.insert(
+                "approvalTool".to_string(),
+                serde_json::Value::String(tool.clone()),
+            );
+        }
+        for (source, target) in [
+            ("mode", "approvalMode"),
+            ("serverName", "approvalServerName"),
+        ] {
+            if let Some(value) = request.and_then(|request| request.get(source)) {
+                approval.insert(target.to_string(), value.clone());
+            }
+        }
+        if approval_status == "pending" {
+            if let Some(value) = request.and_then(|request| request.get("url")) {
+                approval.insert("approvalUrl".to_string(), value.clone());
+            }
+        }
+        overlay
+            .approvals_by_turn
+            .entry(turn_id)
+            .or_default()
+            .push(ApprovalOverlay {
+                sequence,
+                tool: requested_tool,
+                item: serde_json::Value::Object(approval),
+            });
+    }
+    for approvals in overlay.approvals_by_turn.values_mut() {
+        approvals.sort_by_key(|approval| approval.sequence);
+    }
+    Ok(overlay)
+}
+
+fn public_approval_status(state: &str) -> Option<&'static str> {
+    match state {
+        "pending" | "dispatching" | "delivery_unknown" => Some("pending"),
+        "approved" => Some("accepted"),
+        "rejected" => Some("declined"),
+        "answered" => Some("answered"),
+        "cancelled" => Some("cancelled"),
+        _ => None,
+    }
+}
+
+fn requested_tool_name(
+    request: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Option<String> {
+    let request = request?;
+    for field in ["tool", "toolName"] {
+        if let Some(value) = request.get(field).and_then(serde_json::Value::as_str) {
+            let value = value.trim();
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    let message = request.get("message").and_then(serde_json::Value::as_str)?;
+    let marker = "tool \\\"";
+    let start = message.find(marker)? + marker.len();
+    let tool = message[start..].split('"').next()?.trim();
+    (!tool.is_empty()).then(|| tool.to_string())
+}
+
 async fn audit(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     auth: &AuthenticatedUser,
@@ -358,41 +628,31 @@ fn database_error(_: sqlx::Error) -> ApiError {
 
 #[cfg(test)]
 mod tests {
-    use super::{project_thread, project_turn};
+    use super::{project_turn, public_approval_status, ApprovalOverlay, ThreadHistoryOverlay};
+    use open_web_codex_platform_contracts::ThreadHistoryTurn;
     use serde_json::json;
+    use std::collections::HashMap;
 
     #[test]
     fn projects_authoritative_history_without_runtime_only_fields() {
-        let projected = project_thread(
-            &json!({
-                "id": "thread-1",
-                "name": "Example",
-                "preview": "hello",
-                "createdAt": 10,
-                "updatedAt": 20,
-                "status": { "type": "active", "activeFlags": ["waitingOnApproval"] },
+        let projected = project_turn(&json!({
+            "id": "turn-1",
+            "status": "completed",
+            "items": [{
+                "id": "item-1",
+                "type": "agentMessage",
+                "text": "done",
+                "phase": "final_answer",
                 "cwd": "/private/server/workspace",
-                "providerApiKey": "secret",
-                "turns": [{
-                    "id": "turn-1",
-                    "status": "completed",
-                    "items": [{
-                        "id": "item-1",
-                        "type": "agentMessage",
-                        "text": "done",
-                        "cwd": "/private/server/workspace",
-                        "apiKey": "secret"
-                    }]
-                }]
-            }),
-            "thread-1",
-        )
-        .expect("valid Thread projection");
+                "apiKey": "secret"
+            }]
+        }))
+        .expect("valid Turn projection");
         let value = serde_json::to_value(projected).expect("serializable projection");
 
-        assert_eq!(value["status"]["type"], "active");
-        assert_eq!(value["turns"][0]["items"][0]["id"], "item-1");
-        assert_eq!(value["turns"][0]["items"][0]["text"], "done");
+        assert_eq!(value["items"][0]["id"], "item-1");
+        assert_eq!(value["items"][0]["text"], "done");
+        assert_eq!(value["items"][0]["phase"], "final_answer");
         let encoded = value.to_string();
         assert!(!encoded.contains("/private/server/workspace"));
         assert!(!encoded.contains("secret"));
@@ -401,5 +661,74 @@ mod tests {
     #[test]
     fn rejects_turns_without_stable_identity() {
         assert!(project_turn(&json!({ "status": "completed", "items": [] })).is_err());
+    }
+
+    #[test]
+    fn maps_durable_approval_states_to_browser_outcomes() {
+        assert_eq!(public_approval_status("approved"), Some("accepted"));
+        assert_eq!(public_approval_status("rejected"), Some("declined"));
+        assert_eq!(public_approval_status("answered"), Some("answered"));
+        assert_eq!(public_approval_status("cancelled"), Some("cancelled"));
+        assert_eq!(public_approval_status("dispatching"), Some("pending"));
+    }
+
+    #[test]
+    fn inserts_platform_approvals_at_their_runtime_sequence() {
+        let mut turn = ThreadHistoryTurn {
+            id: "turn-1".to_string(),
+            status: "completed".to_string(),
+            items: vec![
+                json!({ "id": "user", "type": "userMessage" }),
+                json!({ "id": "tool-1", "type": "mcpToolCall", "tool": "batch_geocode" }),
+                json!({ "id": "message", "type": "agentMessage" }),
+                json!({ "id": "tool-2", "type": "mcpToolCall", "tool": "distance_matrix" }),
+            ],
+            error: None,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
+        };
+        let overlay = ThreadHistoryOverlay {
+            item_sequences: HashMap::from([
+                ("user".to_string(), 10),
+                ("tool-1".to_string(), 20),
+                ("message".to_string(), 40),
+                ("tool-2".to_string(), 50),
+            ]),
+            approvals_by_turn: HashMap::from([(
+                "turn-1".to_string(),
+                vec![
+                    ApprovalOverlay {
+                        sequence: 30,
+                        tool: Some("batch_geocode".to_string()),
+                        item: json!({ "id": "approval-1", "type": "platformApproval", "approvalTool": "batch_geocode" }),
+                    },
+                    ApprovalOverlay {
+                        sequence: 60,
+                        tool: Some("distance_matrix".to_string()),
+                        item: json!({ "id": "approval-2", "type": "platformApproval", "approvalTool": "distance_matrix" }),
+                    },
+                ],
+            )]),
+        };
+
+        overlay.apply(&mut turn);
+
+        let ids: Vec<_> = turn
+            .items
+            .iter()
+            .filter_map(|item| item.get("id").and_then(serde_json::Value::as_str))
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                "user",
+                "tool-1",
+                "approval-1",
+                "message",
+                "tool-2",
+                "approval-2"
+            ]
+        );
     }
 }

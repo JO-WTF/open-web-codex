@@ -330,6 +330,24 @@ impl CodexAdapter for FakeCodexAdapter {
         Ok(Vec::new())
     }
 
+    async fn read_mcp_resource(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+        server: &str,
+        uri: &str,
+    ) -> Result<Value, AdapterError> {
+        self.read_thread(workspace, thread_id).await?;
+        if server.trim().is_empty() || uri.trim().is_empty() {
+            return Err(AdapterError::Internal(
+                "MCP Resource server and URI are required".to_string(),
+            ));
+        }
+        Err(AdapterError::NotImplemented(
+            "fake adapter does not provide MCP Resources".to_string(),
+        ))
+    }
+
     async fn send_user_message(
         &self,
         workspace: &AuthorizedWorkspace,

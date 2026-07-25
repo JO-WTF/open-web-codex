@@ -6,22 +6,22 @@ requirements belong in `product-design.md`; planned work belongs in
 
 ## Snapshot
 
-Observed on 2026-07-23 from the current synchronization branch:
+Observed on 2026-07-25 from the current working branch:
 
 | Component | State |
 | --- | --- |
 | Codex subtree | integrated through `openai/codex` `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9` |
-| Observed official main | `9d823343026e600dab694e41865ed60613da31b6`; 48 commits await the next dedicated sync branch |
+| Observed official main | `cba0e2701c9e3e67a877a16dbbd7a577d477a630`; 126 commits await the next dedicated sync branch |
 | Local Codex seams | retained changes remain classified by `docs/custom-codex-patch-map.md`; compare them against `codex-upstream/main`, never this repository's `main` |
 | Local customization footprint | six retained Runtime/TUI seams, derived artifacts and focused tests; `ToolName` uses the official implementation |
-| Web platform | Restored browser UI, Axum/PostgreSQL platform, native Profile Registry/Host, encrypted Provider Secret injection, durable approvals, isolated Git workspaces, lease-based Run orchestration, typed REST resources and authenticated WebSocket |
+| Web platform | Restored browser UI, Axum/PostgreSQL platform, native Profile Registry/Host, encrypted Provider Secret injection, durable approvals, current per-Run Git workspaces, lease-based Run orchestration, typed REST resources and authenticated WebSocket |
 
 ## Reproduced evidence
 
 - `scripts/codex-upstream-status.sh` reports the subtree integrated through
-  `6e5a2d6b8d14` with 48 official commits awaiting a dedicated sync. The
-  customization status script reports 514 raw path differences: 385
-  upstream-only, 79 local-only and 50 diverged.
+  `6e5a2d6b8d14` with 126 official commits awaiting a dedicated sync. The
+  customization status script reports 919 raw path differences: 790
+  upstream-only, 70 local-only and 59 diverged.
 - The current upstream structure and all six documented seams are integrated;
   regenerated app-server Schema and TypeScript fixtures have no drift.
 - The locally built `codex app-server` completes `initialize` and returns
@@ -42,8 +42,11 @@ Observed on 2026-07-23 from the current synchronization branch:
   the real app-server initialize Smoke with 18 Capability Manifest declarations.
 - The platform source contains PostgreSQL migrations and API handlers for
   bootstrap/session, organization membership, project, Task, Run and persisted
-  Run events. Local sessions authenticate with a case-insensitive username and
-  password; email remains an account and Organization-invitation attribute.
+  Run events. The current single-user Server ensures an implicit local Owner;
+  the browser obtains a local Session and enters the WebApp without login or
+  registration. Username/password login and its Argon2id implementation remain
+  in the Server for later multi-user restoration but are not exposed by the
+  current browser entry.
 - The native Profile Host real-binary smoke covers an offline Turn, paginated
   full-item history, process-instance rotation, restart and Thread resume/read.
   A second real-binary Provider smoke covers two custom
@@ -62,20 +65,26 @@ Observed on 2026-07-23 from the current synchronization branch:
 - Git Runtime validation covers source/ref rejection, private mirror creation,
   one clone per Run, locking, selected-path commit, status projection and
   cleanup. Run orchestration covers idempotent creation, `SKIP LOCKED` leasing,
-  heartbeats, cancellation, recovery and authorized workspace binding.
+  heartbeats, cancellation, recovery and authorized workspace binding. This is
+  the checked-in implementation, not the target ownership model: it must
+  converge to independent authorized Workspace resources and official Codex
+  Thread `cwd` semantics. Neither a Thread nor a Run should implicitly own a
+  checkout.
 - The browser uses only typed platform REST resources and an authenticated
-  `/api/events/ws` stream. Durable events are replayed by Task sequence; live
-  delivery is filtered by Organization. The former local gateway, raw RPC,
+  `/api/events/ws` stream. Initial navigation snapshots establish the latest
+  durable Task cursor after subscription; reconnects replay only later
+  sequences, and live delivery is filtered by Organization. The former local gateway, raw RPC,
   query-token event stream and desktop application are absent.
 - The checked-in 1421 WebApp presentation and CSS match the established WebApp.
   `src/services/webClient.ts` is the primary compatibility seam; three complete
   source-file hashes pin the reviewed non-visual Thread-context wiring in
   `WebApp.tsx` and FileManager so the exception cannot expand into UI drift.
-  Typecheck, production build and no-desktop gates pass; all 1,172 browser
+  Typecheck, production build and no-desktop gates pass; all 1,210 browser
   tests pass. The UI-parity report still records the deliberate browser UI
   extensions that have not yet been folded into its reference baseline.
   Direct-Server tests cover authoritative history,
-  reconnect/resync replay, status recovery, current-Thread checkout selection,
+  reconnect/resync replay, status recovery, current selected Thread's
+  Run-backed checkout projection,
   Provider/model defaults, approvals, structured input, MCP and rate limits.
 - The 1421 WebApp adapter currently covers managed Projects, Threads/Turns,
   durable events, approvals and structured input, Provider/model selection,
@@ -120,7 +129,7 @@ security, Push delivery, or every Studio capability.
 | --- | --- | --- |
 | Protocol Schema | available | generated JSON/TypeScript artifacts exist |
 | Capability negotiation | available, provisional | `initialize` emits schema version, build identity, protocol range, status, limits and reasons; method registries validate Manifest wire-name refs, experimental consistency, and product attribution policy; capability declarations remain hand-assembled Alpha subset rather than full generated policy |
-| Thread lifecycle | declared supported | real start, persisted full-history pagination, process restart, resume and read smoke passed; multi-cwd remains a gate |
+| Thread lifecycle | declared supported | real start, persisted full-history pagination, process restart, resume and read smoke passed. New platform Threads select official paginated history. Unloaded Threads resume with `excludeTurns`; the adapter concurrently reads indexed `thread/turns/list(itemsView=notLoaded)` and `thread/items/list` pages and joins Items by stable Turn id. Existing legacy rollout histories retain one isolated `thread/turns/list(itemsView=full)` compatibility branch until those Profile histories are retired. The Server inserts durable platform approval projections into their original Turn/sequence positions. Inline Visualization references currently use Run/Thread ownership while retaining producer Turn/Item provenance; this scope is a platform limitation rather than a Codex Thread fact and must be replaced by durable Artifact authorization that survives later Runs. The browser does not restore approvals from local storage, and whitespace-only Agent messages are omitted. Multi-cwd and official `cwd` authorization remain gates |
 | Turn lifecycle | declared supported | real offline Turn start/completion and post-restart recovery passed |
 | Approval lifecycle | declared supported | command, file and permission requests are persisted before a request-id-free browser projection; decisions use optimistic versioning and audit; process-instance identity prevents stale response delivery and supports request-id reuse; uncertain delivery retry and restart cancellation regressions pass. Expiry remains a gate |
 | Profile multi-workspace | declared supported | manifest limits are present; ownership and concurrency behavior remain unverified |
@@ -131,8 +140,8 @@ security, Push delivery, or every Studio capability.
 | Plugins | declared unsupported | do not enable Studio lifecycle or permissions UI |
 | MCP | config degraded; OAuth/full-form elicitation unsupported | status listing is declared. Confirmation-form elicitations used for tool approval and local loopback URL elicitations used for map credentials are persisted before broadcast, projected without Runtime request IDs or metadata, and resolved through typed app-server responses. `map_utils` uses one globally selected Mapbox or Google credential; the in-app dialog replaces the active provider/key and the Server delivers it only to a tokenized `http://127.0.0.1:<port>/<path>` request, so the browser never opens the one-time page. A real Web/Profile Host new Thread discovers all five `map_utils` tools and completes `create_map_card` through DeepSeek. Provider, key, delivery, API, timeout and network failures terminate or remain explicitly retryable instead of accepting a blocked request. Arbitrary form entry, remote URL mode, Web-safe CRUD, reload and lifecycle validation remain pending |
 | Tools discovery | declared unsupported | do not expose a platform fallback catalog |
-| Structured reply cards / map cards | degraded/preview | assistant marker parsing, legacy widget marker parsing and interactive Mapbox GL point/line/polygon rendering exist for markers produced by Runtime/Skills/MCP. The shared in-app configuration selects one encrypted Mapbox or Google credential; only an active restricted Mapbox public token is returned for browser rendering. Missing Mapbox-token cards remain visible over a decorative simulated-map SVG. The real Web/Profile Host/DeepSeek chain emits a `map.v1` marker; generated card contract, Artifact store, renderer capability gate, per-user configuration scoping and a repeatable automated real-browser smoke remain missing |
-| Provider/model management | declared supported by the checked-in Runtime | `models.providers`, `modelProvider/list`, controlled Profile config writes, provider-scoped refresh and context-window persistence are wired. The browser groups built-in, local and custom Providers from Runtime-supplied kinds, defaults the built-in and local groups closed, distinguishes the LM Studio and Ollama `gpt-oss` entries, and switches by clicking the Provider row. Editable model context windows use one save action that persists every changed model sequentially so catalog replacements cannot race. The current Provider and model use a shared high-contrast selected treatment in both themes. The platform stores the last Provider/model pair as a global default and copies it into every new Task; each existing Thread keeps its own database-backed pair. Scoped Runtime/TUI tests, two-Provider cache-isolation smoke, encrypted platform Secret injection/deletion smoke, and live existing-Thread Provider transport rebinding pass |
+| Structured reply cards / map cards | available | `map_utils` data tools publish GeoJSON through standard MCP `resource_link` blocks and return an `outputSchema`-validated `data_ref` containing the raw MCP server ID and matching Resource URI. `create_map_card` returns an `open-web-artifact` / `inline-visualization.v1` envelope whose first registered renderer is `map.v2`, plus a Tool-generated `::codex-inline-vis{artifact="..."}` line. Tool completion only registers the currently organization/Run/Thread-scoped Artifact and its producer Turn/Item provenance; it does not render a card. The Server validates the generic envelope through a renderer registry, resolves Resource refs only to earlier completed Tool items, replaces them with authorized Artifact URLs and strips renderer payload/MCP URIs from the public Tool result. The browser parses standalone directives only in Agent Messages, excludes code blocks, buffers incomplete streaming directives, and composes Markdown and one or more renderers as direct children of one assistant message container. Live rendering and authoritative history use the same typed DTO; later Turns in the same Run/Thread may reuse a completed Artifact, while cross-Run and cross-Thread references remain unavailable. That Run/Thread storage scope is not part of the official Codex model and remains a migration gap: durable Artifact identity and authorization must outlive the producing Run while producer Turn/Item stays provenance only. The old Tool-attached `replyCard`, dual-write and historical fallback paths are absent. A real DeepSeek/Mapbox browser run verifies `Markdown -> map -> Markdown`, no Tool-side auto-render, Thread reload and refresh recovery. The current renderer loads authorized GeoJSON, re-fits after real layout, forces Mercator projection and supports fit/camera viewports; point layers include built-in shapes and CORS-enabled HTTPS raster icons, line/polygon styles include opacity, width and dash arrays, and every geometry can expose a bounded text-only hover view over selected feature properties. Internal source/layer counts and viewport diagnostics are not shown in card chrome. Shared in-app configuration stores one encrypted Mapbox or Google credential; only an active restricted Mapbox public token is returned for browser rendering. The retained Chat transport phase heuristic remains a separate known gap documented in `docs/chat-responses-translation-spec.md`; Responses-provider browser coverage, generated platform Artifact schema, renderer capability negotiation, durable Artifact authorization, per-user configuration scoping and streamed PMTiles/MVT remain pending |
+| Provider/model management | declared supported by the checked-in Runtime | `models.providers`, `modelProvider/list`, controlled Profile config writes, provider-scoped refresh and context-window persistence are wired. A model refresh or context-window edit schedules Server-owned app-server replacement at the next safe Turn boundary: an in-flight Turn is preserved, the adapter invalidates process-local bindings, resumes the same persisted Thread and starts its next Turn against the rebuilt model catalog. The browser groups built-in, local and custom Providers from Runtime-supplied kinds, defaults the built-in and local groups closed, distinguishes the LM Studio and Ollama `gpt-oss` entries, and switches by clicking the Provider row. Editable model context windows use one save action that persists every changed model sequentially so catalog replacements cannot race. The current Provider and model use a shared high-contrast selected treatment in both themes. The platform stores the last Provider/model pair as a global default and copies it into every new Task; each existing Thread keeps its own database-backed pair. Scoped Runtime/TUI tests, two-Provider cache-isolation smoke, encrypted platform Secret injection/deletion smoke, live existing-Thread Provider transport rebinding and real same-Thread next-Turn context refresh pass |
 
 ## Web platform assessment
 
@@ -140,11 +149,11 @@ security, Push delivery, or every Studio capability.
 | --- | --- | --- |
 | Independent server | Axum server serves the browser, REST API, authenticated WebSocket, Profile Host and Runner from one deployable; the single-host deployer builds locked Release artifacts, securely provisions or verifies the fixed `open_web_codex` database, keeps verbose output in bounded logs, health-checks rollout and persists non-secret status metadata | HTTPS reverse proxy, OS supervision, rollback, backup/restore and remaining config hardening are still external GA gates |
 | Persistence | PostgreSQL migrations cover users/sessions, organizations/memberships, Profiles/capabilities/encrypted Secrets, projects, tasks, Runs, leases, Workspaces, durable approvals/audit and versioned Run-event projections | artifacts, retention, legacy-row repair and complete constraints remain missing |
-| Authentication | bootstrap and login use Argon2id, sessions bind an Organization, and legacy hashes upgrade after successful verification | HttpOnly-only session flow, CSRF, logout/revocation, rate limiting and complete browser flows are missing |
+| Authentication | current single-user startup creates an implicit local Owner and the browser obtains a local Session without credentials; sessions still bind an Organization and all resource authorization remains active; retained bootstrap/login use Argon2id | interactive login/registration is intentionally absent; public or multi-user deployment requires restoring authentication, HttpOnly-only sessions, CSRF, rate limiting and complete logout/revocation flows |
 | Authorization | Project/Task/Run and runtime calls enforce session Organization; Provider/approval calls additionally enforce Profile ownership; a two-Organization denial regression passes | centralized policy abstraction, Project-specific roles and the full concurrent multi-user matrix remain missing |
 | Codex bridge | Fake/Real adapter and event projection exist; Real uses the native Profile Registry/Host JSONL connection. Provider Secrets are encrypted and injected only into the owned child environment. Runtime-facing operations remain internal and browser routes are typed | composition is still one configured Profile process per server; per-user dynamic process routing remains incomplete |
-| Task/Run | CRUD/start/cancel/message/steer/compact/review, idempotent scheduling, DB leases/heartbeats/recovery, isolated Git workspaces, authoritative Codex history, safe Item/Delta and approval projection, monotonic initial/reconnect replay, terminal execution, workspace files, nested Git roots, full local Git operations and explicit remote operations exist | artifact storage, approval expiry, protected-branch policy and full multi-Profile routing remain incomplete |
-| Browser | established 1421 WebApp presentation runs through typed resources for workspace/thread/message, approvals, Provider/model, MCP/rate-limit snapshots, files and Git status; files, Git and MCP resolve the selected Thread's Run. Thread creation opens an immediate client-ID-bound temporary window named `Thread`, supports concurrent out-of-order responses and retryable failure with disabled input, and replaces the sidebar and conversation-header label together when the Server returns a name. The first successful text message derives a bounded Server-persisted title for placeholder Threads and returns it with the Turn-start response, while a data migration repairs existing placeholder titles from their earliest durable user-message event. Thread switching hides history behind a loading state until hydration has rendered. The shell fills the full viewport and progressively expands its sidebar and conversation column on 2K/4K displays. The real core journey and Thread-switch browser smoke pass; no standalone Gateway or old root Bridge is loaded or built | broader visual/accessibility regression, deferred unused-source pruning, cookie-only sessions and production accessibility remain incomplete |
+| Task/Run | CRUD/start/cancel/message/steer/compact/review, idempotent scheduling, DB leases/heartbeats/recovery, per-Run Git workspaces, authoritative Codex history, safe Item/Delta and approval projection, snapshot-cursor initialization plus monotonic reconnect replay, terminal execution, workspace files, nested Git roots, full local Git operations and explicit remote operations exist | replace per-Run checkout ownership with independent authorized Workspace resources; pass and validate official Codex Thread `cwd` without creating a Thread-owned checkout. Artifact storage, approval expiry, protected-branch policy and full multi-Profile routing remain incomplete |
+| Browser | established 1421 WebApp presentation runs through typed resources for workspace/thread/message, approvals, Provider/model, MCP/rate-limit snapshots, files and Git status; files, Git and MCP currently resolve the selected Thread's Run-owned Workspace. Thread creation opens an immediate client-ID-bound temporary window named `Thread`, supports concurrent out-of-order responses and retryable failure with disabled input, and replaces the sidebar and conversation-header label together when the Server returns a name. The first successful text message derives a bounded Server-persisted title for placeholder Threads and returns it with the Turn-start response, while a data migration repairs existing placeholder titles from their earliest durable user-message event. Thread switching hides uncached history behind a loading state until its authoritative projection has rendered; an unchanged completed Thread already loaded in the current session renders directly from its event-invalidated cache. A cold page refresh establishes lightweight Task event cursors rather than replaying the entire durable delta history, and MCP sidebar state comes from the latest persisted startup-status projection instead of the full Runtime tools/resources inventory. It projects the Task Provider/model from the cached catalog, performs a catalog cache-miss lookup in the background and never writes the global Profile selection merely because a Thread was opened. The shell fills the full viewport and progressively expands its sidebar and conversation column on 2K/4K displays. The real core journey and Thread-switch browser smoke pass; no standalone Gateway or old root Bridge is loaded or built | resolve files, Git and MCP through an authorized Workspace selected independently of Thread/Run storage; validate the Codex Thread `cwd` at every operation. Broader visual/accessibility regression, deferred unused-source pruning, cookie-only sessions and production accessibility remain incomplete |
 
 ## Immediate capability gates
 
@@ -156,3 +165,10 @@ security, Push delivery, or every Studio capability.
    before promoting the corresponding declarations to product support.
 4. Replace the single configured Profile composition root with authorized
    per-user Profile routing before multi-user Beta.
+5. Replace per-Run checkout provisioning with independent authorized Workspace
+   resources and official Codex Thread `cwd` handling. Cover shared-Workspace
+   concurrency, authorization, resume, explicit lifecycle and Git-operation
+   containment.
+6. Replace Run/Thread-owned Artifact storage with durable Artifact identity and
+   authorization so embedded content survives later Runs; keep Turn/Item only
+   as provenance.

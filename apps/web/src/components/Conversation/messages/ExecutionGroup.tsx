@@ -29,7 +29,10 @@ export default function ExecutionGroup({
   // state during that same render so historical details never remain expanded
   // for one paint while an effect catches up.
   const open = active || manuallyOpen;
-  const toolCount = useMemo(() => items.filter((item) => item.kind && item.kind !== "reasoning").length, [items]);
+  const toolCount = useMemo(() => items.filter((item) =>
+    item.kind === "tool"
+    || item.kind === "command_exec"
+    || item.kind === "diff").length, [items]);
   const messageCount = useMemo(() => items.filter((item) => item.level === "assistant"
     || (item.kind === "reasoning"
       && (!/^(reasoning completed|reasoning in progress|reasoning)$/i.test(item.text.trim())

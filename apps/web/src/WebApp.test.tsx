@@ -134,24 +134,7 @@ describe("WebApp workspace-first messaging", () => {
         },
       ],
     });
-    client.listModels
-      .mockResolvedValueOnce({
-        data: [{
-          id: "deepseek-v4-flash",
-          model: "deepseek-v4-flash",
-          displayName: "DeepSeek V4 Flash",
-          isDefault: true,
-        }],
-      })
-      .mockResolvedValueOnce({ data: [] })
-      .mockResolvedValue({
-        data: [{
-          id: "deepseek-v4-flash",
-          model: "deepseek-v4-flash",
-          displayName: "DeepSeek V4 Flash",
-          isDefault: true,
-        }],
-      });
+    client.listModels.mockResolvedValueOnce({ data: [] });
 
     render(<WebApp />);
 
@@ -299,7 +282,7 @@ describe("WebApp workspace-first messaging", () => {
   });
 
   it("keeps history hidden behind a loader until Thread hydration is complete", async () => {
-    let resolveResume!: (value: Record<string, unknown>) => void;
+    let resolveTurns!: (value: Record<string, unknown>[]) => void;
     client.listThreads.mockResolvedValue({
       data: [{
         id: "thread-first",
@@ -308,18 +291,9 @@ describe("WebApp workspace-first messaging", () => {
         updatedAt: Date.now(),
       }],
     });
-    client.resumeThread.mockReturnValue(new Promise((resolve) => {
-      resolveResume = resolve;
+    client.listThreadTurns.mockReturnValue(new Promise((resolve) => {
+      resolveTurns = resolve;
     }));
-    client.listThreadTurns.mockResolvedValue([{
-      id: "turn-1",
-      status: "completed",
-      items: [{
-        id: "assistant-1",
-        type: "agentMessage",
-        text: "Hydrated history",
-      }],
-    }]);
     render(<WebApp />);
 
     fireEvent.click(await screen.findByText("First thread"));
@@ -331,20 +305,157 @@ describe("WebApp workspace-first messaging", () => {
     ).toBe(true);
 
     act(() => {
-      resolveResume({
-        thread: {
-          id: "thread-first",
-          status: { type: "idle" },
-          turns: [],
-        },
-      });
+      resolveTurns([{
+        id: "turn-1",
+        status: "completed",
+        items: [{
+          id: "assistant-1",
+          type: "agentMessage",
+          text: "Hydrated history",
+        }],
+      }]);
     });
 
     await screen.findByText("Hydrated history");
     await waitFor(() => expect(screen.queryByText("正在加载 Thread…")).toBeNull());
+    expect(client.resumeThread).not.toHaveBeenCalled();
+    expect(client.readThread).not.toHaveBeenCalled();
+    expect(client.writeModelProvider).not.toHaveBeenCalled();
     expect(
       (screen.getByPlaceholderText("Ask Codex to do something...") as HTMLTextAreaElement).disabled,
     ).toBe(false);
+  });
+
+  it("does not block Thread history on a model catalog cache miss", async () => {
+    let resolveModels!: (value: Record<string, unknown>) => void;
+    client.listThreads.mockResolvedValue({
+      data: [{
+        id: "thread-first",
+        name: "First thread",
+        cwd: "/tmp/demo",
+        updatedAt: Date.now(),
+        modelProvider: "deepseek",
+        model: "deepseek-v4-flash",
+      }],
+    });
+    client.listThreadTurns.mockResolvedValue([{
+      id: "turn-1",
+      status: "completed",
+      items: [{
+        id: "assistant-1",
+        type: "agentMessage",
+        text: "History without catalog wait",
+      }],
+    }]);
+    client.listModels.mockReturnValue(new Promise((resolve) => {
+      resolveModels = resolve;
+    }));
+    render(<WebApp />);
+
+    fireEvent.click(await screen.findByText("First thread"));
+
+    await screen.findByText("History without catalog wait");
+    await waitFor(() => expect(screen.queryByText("正在加载 Thread…")).toBeNull());
+    expect(client.listModels).toHaveBeenCalledWith(
+      "workspace-1",
+      "deepseek",
+      "deepseek-v4-flash",
+    );
+    expect(client.writeModelProvider).not.toHaveBeenCalled();
+    expect(
+      (screen.getByPlaceholderText("Ask Codex to do something...") as HTMLTextAreaElement).disabled,
+    ).toBe(false);
+
+    await act(async () => {
+      resolveModels({
+        data: [{
+          id: "deepseek-v4-flash",
+          model: "deepseek-v4-flash",
+          displayName: "DeepSeek V4 Flash",
+          isDefault: true,
+        }],
+      });
+      await Promise.resolve();
+    });
+  });
+
+  it("does not gate Thread hydration on slow Profile status reads", async () => {
+    client.listThreads.mockResolvedValue({
+      data: [{
+        id: "thread-first",
+        name: "First thread",
+        cwd: "/tmp/demo",
+        updatedAt: Date.now(),
+        status: "idle",
+      }],
+    });
+    client.listThreadTurns.mockResolvedValue([{
+      id: "turn-1",
+      status: "completed",
+      items: [{
+        id: "assistant-1",
+        type: "agentMessage",
+        text: "History before Profile status",
+      }],
+    }]);
+    client.listMcpServerStatus.mockReturnValue(new Promise(() => undefined));
+    client.getAccountRateLimits.mockReturnValue(new Promise(() => undefined));
+    render(<WebApp />);
+
+    fireEvent.click(await screen.findByText("First thread"));
+
+    await screen.findByText("History before Profile status");
+    await waitFor(() => expect(screen.queryByText("正在加载 Thread…")).toBeNull());
+    expect(client.listMcpServerStatus).toHaveBeenCalledWith("workspace-1", "thread-first");
+    expect(client.getAccountRateLimits).toHaveBeenCalledWith("workspace-1");
+    expect(
+      (screen.getByPlaceholderText("Ask Codex to do something...") as HTMLTextAreaElement).disabled,
+    ).toBe(false);
+  });
+
+  it("reuses a completed Thread transcript when switching back to an unchanged Thread", async () => {
+    client.listThreads.mockResolvedValue({
+      data: [
+        {
+          id: "thread-first",
+          name: "First thread",
+          cwd: "/tmp/demo",
+          updatedAt: 100,
+          status: "idle",
+        },
+        {
+          id: "thread-second",
+          name: "Second thread",
+          cwd: "/tmp/demo",
+          updatedAt: 200,
+          status: "idle",
+        },
+      ],
+    });
+    client.listThreadTurns.mockImplementation((_workspaceId: string, threadId: string) =>
+      Promise.resolve([{
+        id: `turn-${threadId}`,
+        status: "completed",
+        items: [{
+          id: `assistant-${threadId}`,
+          type: "agentMessage",
+          text: threadId === "thread-first" ? "First history" : "Second history",
+        }],
+      }]));
+    render(<WebApp />);
+
+    fireEvent.click(await screen.findByText("First thread"));
+    await screen.findByText("First history");
+    await waitFor(() => expect(screen.queryByText("正在加载 Thread…")).toBeNull());
+
+    fireEvent.click(screen.getByText("Second thread"));
+    await screen.findByText("Second history");
+    await waitFor(() => expect(screen.queryByText("正在加载 Thread…")).toBeNull());
+
+    fireEvent.click(screen.getByText("First thread"));
+    expect(screen.getByText("First history")).toBeTruthy();
+    expect(screen.queryByText("正在加载 Thread…")).toBeNull();
+    expect(client.listThreadTurns).toHaveBeenCalledTimes(2);
   });
 
   it("does not activate or render a replayed thread until the user selects it", async () => {
@@ -472,6 +583,50 @@ describe("WebApp workspace-first messaging", () => {
     expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
   });
 
+  it("keeps phase from an empty agentMessage started item on later deltas", async () => {
+    render(<WebApp />);
+
+    const composer = await screen.findByPlaceholderText("Ask Codex to do something...");
+    await waitFor(() => expect((composer as HTMLTextAreaElement).disabled).toBe(false));
+    fireEvent.change(composer, { target: { value: "Write a Python script" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(client.sendUserMessage).toHaveBeenCalled());
+
+    act(() => {
+      appServerEventHandler?.({
+        workspace_id: "workspace-1",
+        message: {
+          method: "item/started",
+          params: {
+            threadId: "thread-new",
+            turnId: "turn-1",
+            item: {
+              id: "agent-message-1",
+              type: "agentMessage",
+              text: "",
+              phase: "commentary",
+            },
+          },
+        },
+      });
+      appServerEventHandler?.({
+        workspace_id: "workspace-1",
+        message: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-new",
+            turnId: "turn-1",
+            itemId: "agent-message-1",
+            delta: "Preparing the Python script.",
+          },
+        },
+      });
+    });
+
+    expect(document.querySelector(".web-execution-current .web-msg-commentary-body")).toBeTruthy();
+    expect(screen.getAllByText("Preparing the Python script.")).toHaveLength(1);
+  });
+
   it("merges an agentMessage started event into its existing streamed message", async () => {
     render(<WebApp />);
 
@@ -507,6 +662,7 @@ describe("WebApp workspace-first messaging", () => {
               id: "agent-message-1",
               type: "agentMessage",
               text: "I will find the boundary data.",
+              phase: "commentary",
             },
           },
         },
@@ -524,6 +680,7 @@ describe("WebApp workspace-first messaging", () => {
               id: "agent-message-1",
               type: "agentMessage",
               text: "I will find the boundary data.",
+              phase: "commentary",
             },
           },
         },
@@ -531,5 +688,22 @@ describe("WebApp workspace-first messaging", () => {
     });
 
     expect(screen.getAllByText("I will find the boundary data.")).toHaveLength(1);
+
+    act(() => {
+      appServerEventHandler?.({
+        workspace_id: "workspace-1",
+        message: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-new",
+            turn: { id: "turn-1", status: "completed" },
+          },
+        },
+      });
+    });
+
+    expect(screen.queryByText("I will find the boundary data.")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "0 tool calls, 1 message" }));
+    expect(screen.getByText("I will find the boundary data.")).toBeTruthy();
   });
 });

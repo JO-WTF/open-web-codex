@@ -47,4 +47,32 @@ describe("ExecutionGroup", () => {
     fireEvent.click(screen.getByRole("button", { name: "1 tool call, 0 messages" }));
     expect(screen.getByText("Historical tool details")).toBeTruthy();
   });
+
+  it("does not count approval cards as tool calls", () => {
+    render(
+      <ExecutionGroup
+        items={[
+          {
+            id: "tool-1",
+            level: "info",
+            kind: "tool",
+            text: "batch_geocode",
+          },
+          {
+            id: "approval-1",
+            level: "info",
+            kind: "approval",
+            text: "Allow batch_geocode?",
+            approvalStatus: "resolved",
+          },
+        ]}
+        active={false}
+        timelineItemCount={2}
+      >
+        <div>Timeline</div>
+      </ExecutionGroup>,
+    );
+
+    expect(screen.getByRole("button", { name: "1 tool call, 0 messages" })).toBeTruthy();
+  });
 });

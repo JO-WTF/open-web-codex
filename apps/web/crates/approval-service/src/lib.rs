@@ -41,6 +41,26 @@ pub struct ResolvedApproval {
     pub thread_id: String,
     pub turn_id: Option<String>,
     pub item_id: Option<String>,
+    pub outcome: ApprovalOutcome,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ApprovalOutcome {
+    Accepted,
+    Declined,
+    Answered,
+    Cancelled,
+}
+
+impl ApprovalOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Accepted => "accepted",
+            Self::Declined => "declined",
+            Self::Answered => "answered",
+            Self::Cancelled => "cancelled",
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -253,16 +273,21 @@ impl ApprovalService {
             .map(str::to_string);
         let state: String = row.get("state");
         let decision: Option<String> = row.get("decision");
-        if let Some(terminal_state) = resolved_terminal_state(&state, decision.as_deref()) {
-            sqlx::query(
-                "UPDATE approvals SET state = $1, decided_at = COALESCE(decided_at, now()), \
+        let resolved_state =
+            if let Some(terminal_state) = resolved_terminal_state(&state, decision.as_deref()) {
+                sqlx::query(
+                    "UPDATE approvals SET state = $1, decided_at = COALESCE(decided_at, now()), \
                  version = version + 1 WHERE id = $2",
-            )
-            .bind(terminal_state)
-            .bind(approval_id)
-            .execute(&mut *transaction)
-            .await?;
-        }
+                )
+                .bind(terminal_state)
+                .bind(approval_id)
+                .execute(&mut *transaction)
+                .await?;
+                terminal_state
+            } else {
+                state.as_str()
+            };
+        let outcome = approval_outcome(resolved_state).ok_or(ApprovalServiceError::Invalid)?;
         transaction.commit().await?;
 
         Ok(Some(ResolvedApproval {
@@ -270,6 +295,7 @@ impl ApprovalService {
             thread_id,
             turn_id,
             item_id,
+            outcome,
         }))
     }
 
@@ -396,7 +422,7 @@ impl ApprovalService {
                 .map_err(|_| ApprovalServiceError::Invalid)?,
             response: json!({ "answers": request.answers }),
             dispatch_version,
-            terminal_state: "approved",
+            terminal_state: "answered",
             decision: "answered",
         })
     }
@@ -482,9 +508,20 @@ fn resolved_terminal_state(state: &str, decision: Option<&str>) -> Option<&'stat
     }
     Some(match decision {
         Some("rejected") => "rejected",
+        Some("answered") => "answered",
         Some(_) => "approved",
         None => "cancelled",
     })
+}
+
+fn approval_outcome(state: &str) -> Option<ApprovalOutcome> {
+    match state {
+        "approved" => Some(ApprovalOutcome::Accepted),
+        "rejected" => Some(ApprovalOutcome::Declined),
+        "answered" => Some(ApprovalOutcome::Answered),
+        "cancelled" => Some(ApprovalOutcome::Cancelled),
+        _ => None,
+    }
 }
 
 fn approval_payload(request_type: &str, params: &Value) -> Value {
@@ -711,8 +748,8 @@ fn approval_response(
 #[cfg(test)]
 mod tests {
     use super::{
-        approval_response, resolved_terminal_state, validate_user_input_answers, COMMAND_APPROVAL,
-        MCP_ELICITATION_REQUEST, PERMISSIONS_APPROVAL,
+        approval_outcome, approval_response, resolved_terminal_state, validate_user_input_answers,
+        ApprovalOutcome, COMMAND_APPROVAL, MCP_ELICITATION_REQUEST, PERMISSIONS_APPROVAL,
     };
     use open_web_codex_platform_contracts::{
         ApprovalDecision, RespondUserInputRequest, UserInputAnswer,
@@ -880,9 +917,25 @@ mod tests {
         );
         assert_eq!(
             resolved_terminal_state("dispatching", Some("answered")),
-            Some("approved")
+            Some("answered")
         );
         assert_eq!(resolved_terminal_state("approved", Some("approved")), None);
         assert_eq!(resolved_terminal_state("rejected", Some("rejected")), None);
+        assert_eq!(
+            approval_outcome("approved"),
+            Some(ApprovalOutcome::Accepted)
+        );
+        assert_eq!(
+            approval_outcome("rejected"),
+            Some(ApprovalOutcome::Declined)
+        );
+        assert_eq!(
+            approval_outcome("answered"),
+            Some(ApprovalOutcome::Answered)
+        );
+        assert_eq!(
+            approval_outcome("cancelled"),
+            Some(ApprovalOutcome::Cancelled)
+        );
     }
 }

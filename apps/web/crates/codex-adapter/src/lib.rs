@@ -209,6 +209,17 @@ pub trait CodexAdapter: Send + Sync {
         thread_id: &str,
     ) -> Result<Vec<Value>, AdapterError>;
 
+    /// Read an MCP Resource through the official app-server API after the
+    /// platform has authorized the owning Thread and hidden the source URI
+    /// from the browser.
+    async fn read_mcp_resource(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+        server: &str,
+        uri: &str,
+    ) -> Result<Value, AdapterError>;
+
     /// Start a user turn in the authorized workspace bound to the Thread.
     async fn send_user_message(
         &self,

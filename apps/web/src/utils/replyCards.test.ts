@@ -1,34 +1,147 @@
 import { describe, expect, it } from "vitest";
-import { parseReplyCards } from "./replyCards";
+import { parseInlineVisualizationArtifact } from "./replyCards";
 
-describe("parseReplyCards", () => {
-  it("extracts open-web map card markers and preserves surrounding text", () => {
-    const parts = parseReplyCards('Intro\n```open-web-card map.v1\n{"title":"Route","intent":"route","input_ref":"ref-1","points":[{"lat":31.2,"lng":121.5,"label":"上海"}]}\n```\nDone');
-
-    expect(parts[0]).toEqual({ type: "text", content: "Intro" });
-    expect(parts[1]).toMatchObject({
-      type: "card",
-      kind: "map.v1",
-      title: "Route",
-      intent: "route",
-      inputRef: "ref-1",
-      status: "ready",
-      points: [{ latitude: 31.2, longitude: 121.5, label: "上海" }],
+describe("parseInlineVisualizationArtifact", () => {
+  it("normalizes the Server-projected typed renderer contract", () => {
+    const artifact = parseInlineVisualizationArtifact({
+      ref: "map-batch",
+      renderer: {
+        kind: "map.v2",
+        payload: {
+        title: "Batch geocode",
+        intent: "visualization",
+        status: "ready",
+        fallback_text: "Three locations",
+        viewport: { mode: "camera", center: [-122.08, 37.42], zoom: 10 },
+        sources: [{
+          id: "locations",
+          data: {
+            type: "inline",
+            format: "geojson",
+            geojson: { type: "FeatureCollection", features: [] },
+          },
+        }],
+        layers: [{
+          id: "points",
+          source: "locations",
+          geometry: "point",
+          label_property: "label",
+          hover: {
+            title_property: "label",
+            fields: [{
+              property: "population",
+              label: "Population",
+            }],
+          },
+          style: {
+            color: "#ef4444",
+            opacity: 0.8,
+            shape: "diamond",
+            size: 22,
+            stroke_color: "#ffffff",
+            stroke_width: 2,
+          },
+        }],
+        },
+      },
     });
-    expect(parts[2]).toEqual({ type: "text", content: "\nDone" });
+
+    expect(artifact).toMatchObject({
+      ref: "map-batch",
+      rendererKind: "map.v2",
+      card: {
+        type: "card",
+        kind: "map.v2",
+        id: "map-batch",
+        title: "Batch geocode",
+        fallbackText: "Three locations",
+        status: "ready",
+        viewport: { mode: "camera", center: [-122.08, 37.42], zoom: 10 },
+        layers: [{
+          geometry: "point",
+          labelProperty: "label",
+          hover: {
+            titleProperty: "label",
+            fields: [{
+              property: "population",
+              label: "Population",
+            }],
+          },
+          style: {
+            color: "#ef4444",
+            opacity: 0.8,
+            shape: "diamond",
+            size: 22,
+            strokeColor: "#ffffff",
+            strokeWidth: 2,
+          },
+        }],
+      },
+    });
   });
 
-  it("supports legacy widget map markers emitted by older map-card skills", () => {
-    const parts = parseReplyCards('```widget\n{"id":"map-legacy","widget_type":"map","props":{"title":"Stored","input_ref":"artifact-1","use_stored_card":true}}\n```');
-
-    expect(parts).toHaveLength(1);
-    expect(parts[0]).toMatchObject({
-      type: "card",
-      id: "map-legacy",
-      title: "Stored",
-      inputRef: "artifact-1",
-      status: "loading",
-      summary: "地图数据已存储在服务端，等待平台 Artifact hydration。",
+  it("normalizes custom icon presentation fields", () => {
+    const artifact = parseInlineVisualizationArtifact({
+      ref: "map-icons",
+      renderer: {
+        kind: "map.v2",
+        payload: {
+          title: "Icons",
+          intent: "visualization",
+          status: "ready",
+          viewport: { mode: "fit" },
+          sources: [{
+            id: "locations",
+            data: {
+              type: "inline",
+              format: "geojson",
+              geojson: { type: "FeatureCollection", features: [] },
+            },
+          }],
+          layers: [{
+            id: "icons",
+            source: "locations",
+            geometry: "point",
+            style: {
+              opacity: 0.9,
+              icon: {
+                url: "https://cdn.example.com/marker.png",
+                scale: 0.75,
+                anchor: "bottom",
+                rotation: 15,
+                allow_overlap: true,
+              },
+            },
+          }],
+        },
+      },
     });
+
+    expect(artifact?.card.layers[0]).toMatchObject({
+      geometry: "point",
+      style: {
+        opacity: 0.9,
+        icon: {
+          url: "https://cdn.example.com/marker.png",
+          scale: 0.75,
+          anchor: "bottom",
+          rotation: 15,
+          allowOverlap: true,
+        },
+      },
+    });
+  });
+
+  it("does not interpret Tool text or an unsupported renderer", () => {
+    expect(parseInlineVisualizationArtifact({
+      content: [{
+        type: "text",
+        text: "{\"renderer\":{\"kind\":\"map.v2\"}}",
+      }],
+    })).toBeNull();
+    expect(parseInlineVisualizationArtifact({
+      ref: "chart-one",
+      renderer: { kind: "chart.v1", payload: {} },
+    })).toBeNull();
   });
 });

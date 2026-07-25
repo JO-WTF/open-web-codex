@@ -116,6 +116,28 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     let first_organization_id =
         Uuid::parse_str(bootstrap.2["organization"]["id"].as_str().unwrap()).unwrap();
 
+    let local_session = call_with_headers(
+        &app,
+        Request::post("/api/sessions/local")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(local_session.0, StatusCode::OK);
+    assert_eq!(
+        local_session.2["user"]["id"].as_str(),
+        bootstrap.2["user"]["id"].as_str()
+    );
+    assert_eq!(
+        local_session.2["organization"]["id"].as_str(),
+        bootstrap.2["organization"]["id"].as_str()
+    );
+    let local_token = local_session.2["session_token"]
+        .as_str()
+        .expect("implicit local session token");
+    let local_me = call(&app, authenticated("GET", "/api/me", local_token)).await;
+    assert_eq!(local_me.0, StatusCode::OK);
+
     ensure_transitional_profile_binding(&pool, "legacy-profile", "Legacy Profile")
         .await
         .expect("repair legacy Profile binding");
@@ -219,6 +241,84 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
         .execute(&pool)
         .await
         .unwrap();
+    let artifact_id = Uuid::now_v7();
+    let artifact_bytes = br#"{"type":"FeatureCollection","features":[]}"#;
+    sqlx::query(
+        "INSERT INTO reply_artifacts (
+            id, organization_id, run_id, thread_id, turn_id, producer_item_id,
+            source_server, source_uri, mime_type, content, state
+         ) VALUES (
+            $1, $2, $3, 'approval-thread', 'turn-map', 'item-data',
+            'map_utils', 'maps-data://geojson/map-data-security',
+            'application/geo+json', $4, 'ready'
+         )",
+    )
+    .bind(artifact_id)
+    .bind(first_organization_id)
+    .bind(first_run_id)
+    .bind(artifact_bytes.as_slice())
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "INSERT INTO run_events (
+            run_id, event_type, projection_version, thread_id, turn_id, item_id, payload
+         ) VALUES (
+            $1, 'codex.item.completed', 1, 'approval-thread',
+            'turn-map-producer', 'item-inline-map', '{}'::jsonb
+         )",
+    )
+    .bind(first_run_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO inline_visualization_artifacts (
+            organization_id, run_id, thread_id, producer_turn_id, producer_item_id,
+            artifact_ref, renderer_kind, renderer_payload
+         ) VALUES (
+            $1, $2, 'approval-thread', 'turn-map-producer', 'item-inline-map',
+            'map-cross-turn', 'map.v2', $3
+         )",
+    )
+    .bind(first_organization_id)
+    .bind(first_run_id)
+    .bind(json!({
+        "type": "card",
+        "kind": "map.v2",
+        "id": "map-cross-turn",
+        "title": "Cross-turn map",
+        "intent": "test",
+        "status": "ready",
+        "viewport": {"mode": "fit"},
+        "sources": [],
+        "layers": []
+    }))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let cross_turn_artifacts = crate::event_projection::resolve_inline_artifacts(
+        &pool,
+        first_run_id,
+        "Before\n\n::codex-inline-vis{artifact=\"map-cross-turn\"}\n\nAfter",
+    )
+    .await
+    .unwrap();
+    assert_eq!(cross_turn_artifacts.len(), 1);
+    assert_eq!(cross_turn_artifacts[0]["ref"], "map-cross-turn");
+
+    let artifact = call(
+        &app,
+        authenticated(
+            "GET",
+            &format!("/api/runs/{first_run_id}/artifacts/{artifact_id}"),
+            &first_token,
+        ),
+    )
+    .await;
+    assert_eq!(artifact.0, StatusCode::OK);
+    assert_eq!(artifact.1["type"], "FeatureCollection");
 
     let image_response = app
         .clone()
@@ -485,6 +585,16 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     )
     .await;
     assert_eq!(cross_tenant_asset.0, StatusCode::NOT_FOUND);
+    let cross_tenant_artifact = call(
+        &app,
+        authenticated(
+            "GET",
+            &format!("/api/runs/{first_run_id}/artifacts/{artifact_id}"),
+            second_token,
+        ),
+    )
+    .await;
+    assert_eq!(cross_tenant_artifact.0, StatusCode::NOT_FOUND);
 
     let legacy_runtime = call(
         &app,

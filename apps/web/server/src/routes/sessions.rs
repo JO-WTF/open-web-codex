@@ -21,6 +21,78 @@ type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
 type CookieApiResult<T> =
     Result<(AppendHeaders<[(HeaderName, String); 1]>, Json<T>), (StatusCode, Json<PlatformError>)>;
 
+/// POST /api/sessions/local — issue a session for the first local owner.
+///
+/// The current single-Profile product bypasses interactive authentication while
+/// retaining the same Session, Organization, Profile and authorization model
+/// used by the rest of the platform.
+pub async fn create_local_session(State(state): State<AppState>) -> CookieApiResult<LoginResponse> {
+    let row = sqlx::query(
+        "SELECT u.id, u.name, u.username, u.email, u.role, u.created_at, u.updated_at, \
+                o.id AS organization_id, o.name AS organization_name, o.slug AS organization_slug, \
+                o.created_at AS organization_created_at, o.updated_at AS organization_updated_at, \
+                m.role AS membership_role \
+         FROM users u \
+         JOIN memberships m ON m.user_id = u.id \
+         JOIN organizations o ON o.id = m.organization_id \
+         ORDER BY CASE WHEN m.role = 'owner' THEN 0 ELSE 1 END, m.created_at, m.id \
+         LIMIT 1",
+    )
+    .fetch_optional(&state.db)
+    .await
+    .map_err(internal_database_error)?
+    .ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(PlatformError::internal("local owner is not initialized")),
+        )
+    })?;
+
+    let session_token: String = rand::thread_rng()
+        .sample_iter(&rand::distributions::Alphanumeric)
+        .take(64)
+        .map(char::from)
+        .collect();
+    let token_hash = hex::encode(Sha256::digest(session_token.as_bytes()));
+    let user_id: Uuid = row.get("id");
+    let organization_id: Uuid = row.get("organization_id");
+
+    sqlx::query(
+        "INSERT INTO sessions (user_id, organization_id, token_hash, expires_at) \
+         VALUES ($1, $2, $3, now() + interval '7 days')",
+    )
+    .bind(user_id)
+    .bind(organization_id)
+    .bind(&token_hash)
+    .execute(&state.db)
+    .await
+    .map_err(internal_database_error)?;
+
+    Ok((
+        AppendHeaders([(header::SET_COOKIE, session_cookie(&session_token))]),
+        Json(LoginResponse {
+            user: User {
+                id: user_id,
+                name: row.get("name"),
+                username: row.get("username"),
+                email: row.get("email"),
+                role: row.get("role"),
+                created_at: row.get("created_at"),
+                updated_at: row.get("updated_at"),
+            },
+            organization: Organization {
+                id: organization_id,
+                name: row.get("organization_name"),
+                slug: row.get("organization_slug"),
+                created_at: row.get("organization_created_at"),
+                updated_at: row.get("organization_updated_at"),
+            },
+            membership_role: row.get("membership_role"),
+            session_token,
+        }),
+    ))
+}
+
 /// POST /api/sessions — Login with username + password into one Organization.
 pub async fn create_session(
     State(state): State<AppState>,

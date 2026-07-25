@@ -9,7 +9,7 @@ import type { GoalInfo } from "./components/Conversation/GoalBanner";
 import type { QueuedFollowUp } from "./components/Conversation/FollowUpQueue";
 import type { ModelProviderSummary, ModelSummary } from "./components/Conversation/Composer";
 import { parseModelListResponse } from "./features/models/utils/modelListResponse";
-import { appendTerminalInteractionOutput, buildWebThreadHistory, commandText, isUserThreadItem, mergeWebThreadHistory, unwrapWebRpcResult, webLogEntryFromThreadItem } from "./utils/webThreadHistory";
+import { agentMessagePhase, appendTerminalInteractionOutput, buildWebThreadHistory, commandText, isUserThreadItem, mergeWebThreadHistory, unwrapWebRpcResult, webLogEntryFromThreadItem } from "./utils/webThreadHistory";
 import { normalizeTokenUsage } from "./features/threads/utils/threadNormalize";
 import { normalizePlanUpdate } from "./features/threads/utils/threadNormalize";
 import { parseWebTurnDiff } from "./utils/webTurnDiff";
@@ -19,31 +19,44 @@ import { summarizeWebAppServerEvent } from "./utils/webAppServerEventSummary";
 import { stripLeadingProviderSentinel } from "./utils/providerText";
 import { mergeRateLimits, parseInitialMcpServers, parseInitialRateLimits } from "./utils/webInitialStatus";
 import { appendWebLogEntry } from "./utils/webApprovalLog";
-import { loadWebApprovalHistory, resolveStoredWebApproval, saveWebApproval } from "./utils/webApprovalHistory";
 import { rememberAppServerEvent } from "./utils/webAppServerEventDedup";
 import { getAppServerThreadId } from "./utils/appServerEvents";
 import { finalizeInterruptedTurnEntries } from "./utils/webInterruptedTurn";
+import {
+  parseInlineVisualizationArtifact,
+  type InlineVisualizationArtifact,
+} from "./utils/replyCards";
+import {
+  isApprovalOutcome,
+  parseApprovalStatus,
+  type ApprovalStatus,
+} from "./utils/approvalStatus";
 import "./styles/web.css";
 import "./styles/web-refactor.css";
 
 /* ─────────── Types ─────────── */
 
+export type AgentMessagePhase = "commentary" | "final_answer";
+
 export type LogEntry = {
   id: string;
   level: "event" | "error" | "info" | "user" | "assistant" | "system";
   text: string;
+  messagePhase?: AgentMessagePhase;
   approvalId?: string;
   approvalRequestId?: number | string;
-  approvalStatus?: "pending" | "accepted" | "declined" | "resolved";
+  approvalStatus?: ApprovalStatus;
   approvalMode?: string;
   approvalUrl?: string;
   approvalServerName?: string;
+  approvalTool?: string;
   kind?: "reasoning" | "tool" | "diff" | "approval" | "command_exec" | "connection";
   toolType?: string;
   toolTitle?: string;
   toolStatus?: string;
   toolDetail?: string;
   toolOutput?: string;
+  inlineArtifacts?: InlineVisualizationArtifact[];
   reasoningSummary?: string;
   filePath?: string;
   diffTitle?: string;
@@ -72,6 +85,15 @@ type ThreadInfo = {
   optimistic?: boolean;
   creationStatus?: "creating" | "failed";
   creationError?: string;
+};
+
+type ThreadTranscriptCacheEntry = {
+  messages: LogEntry[];
+  updatedAt: number;
+  status: string;
+  thinking: boolean;
+  activeTurnId: string | null;
+  turnStartedAt: number | null;
 };
 
 function parseThreadStatus(value: unknown): string {
@@ -143,6 +165,64 @@ function parseThreadUpdatedAt(value: unknown): number {
   return 0;
 }
 
+function parseModelProviderCatalog(value: unknown): {
+  providers: ModelProviderSummary[];
+  currentProviderId: string | null;
+  currentModelId: string | null;
+} {
+  const payload = unwrapWebRpcResult(value);
+  const record = payload && typeof payload === "object"
+    ? payload as Record<string, unknown>
+    : {};
+  const currentProviderId = typeof record.currentProviderId === "string"
+    ? record.currentProviderId
+    : null;
+  const currentModelId = typeof record.currentModelId === "string"
+    ? record.currentModelId
+    : null;
+  const rawProviders = Array.isArray(record.data) ? record.data : [];
+  const providers = rawProviders.flatMap((value): ModelProviderSummary[] => {
+    if (!value || typeof value !== "object") return [];
+    const provider = value as Record<string, unknown>;
+    if (typeof provider.id !== "string" || typeof provider.name !== "string") return [];
+    const models = Array.isArray(provider.models) ? provider.models.flatMap((value) => {
+      if (!value || typeof value !== "object") return [];
+      const model = value as Record<string, unknown>;
+      if (typeof model.modelId !== "string" || model.showInPicker === false) return [];
+      return [{
+        modelId: model.modelId,
+        modelName: typeof model.modelName === "string" ? model.modelName : null,
+        contextWindow: typeof model.contextWindow === "number" ? model.contextWindow : null,
+      }];
+    }) : [];
+    return [{
+      id: provider.id,
+      name: provider.name,
+      kind: provider.kind === "local" || provider.kind === "custom" ? provider.kind : "builtIn",
+      isCurrent: provider.id === currentProviderId,
+      modelCount: models.length,
+      baseUrl: typeof provider.baseUrl === "string" ? provider.baseUrl : null,
+      envKey: typeof provider.envKey === "string" ? provider.envKey : null,
+      wireApi: typeof provider.wireApi === "string" ? provider.wireApi : "responses",
+      canEdit: provider.canEdit === true,
+      canDelete: provider.canDelete === true,
+      canFetchModels: provider.canFetchModels === true,
+      models,
+    }];
+  });
+  return { providers, currentProviderId, currentModelId };
+}
+
+function modelSummariesForProvider(
+  provider: ModelProviderSummary | undefined,
+): ModelSummary[] {
+  return (provider?.models ?? []).map((model) => ({
+    id: model.modelId,
+    model: model.modelId,
+    displayName: model.modelName ?? model.modelId,
+  }));
+}
+
 /* ─────────── Component ─────────── */
 
 export default function WebApp() {
@@ -191,6 +271,11 @@ export default function WebApp() {
   const [selectedProviderModelId, setSelectedProviderModelId] = useState<string | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
+  const activeThreadModelSelectionRef = useRef<{
+    threadId: string;
+    providerId: string;
+    modelId: string;
+  } | null>(null);
   const [theme, setTheme] = useState<"light" | "dark">(() =>
     localStorage.getItem("open-web-codex:theme") === "light" ? "light" : "dark",
   );
@@ -228,50 +313,26 @@ export default function WebApp() {
     setCatalogLoading(true);
     setCatalogError(null);
     try {
-      const [providerResponse, modelResponse] = await Promise.all([
-        client.listModelProviders(activeWorkspaceId),
-        client.listModels(activeWorkspaceId),
-      ]);
-      const providerPayload = unwrapWebRpcResult(providerResponse);
-      const providerRecord = providerPayload && typeof providerPayload === "object"
-        ? providerPayload as Record<string, unknown>
-        : {};
-      const rawProviders = Array.isArray(providerRecord.data) ? providerRecord.data : [];
-      const nextModels = parseModelListResponse(modelResponse);
-      setModelProviders(rawProviders.flatMap((value): ModelProviderSummary[] => {
-        if (!value || typeof value !== "object") return [];
-        const provider = value as Record<string, unknown>;
-        if (typeof provider.id !== "string" || typeof provider.name !== "string") return [];
-        return [{
-          id: provider.id,
-          name: provider.name,
-          kind: provider.kind === "local" || provider.kind === "custom" ? provider.kind : "builtIn",
-          isCurrent: provider.isCurrent === true,
-          modelCount: provider.isCurrent === true
-            ? nextModels.length
-            : typeof provider.modelCount === "number" ? provider.modelCount : 0,
-          baseUrl: typeof provider.baseUrl === "string" ? provider.baseUrl : null,
-          envKey: typeof provider.envKey === "string" ? provider.envKey : null,
-          wireApi: typeof provider.wireApi === "string" ? provider.wireApi : "responses",
-          canEdit: provider.canEdit === true,
-          canDelete: provider.canDelete === true,
-          canFetchModels: provider.canFetchModels === true,
-          models: Array.isArray(provider.models) ? provider.models.flatMap((value) => {
-            if (!value || typeof value !== "object") return [];
-            const model = value as Record<string, unknown>;
-            if (typeof model.modelId !== "string") return [];
-            return [{ modelId: model.modelId, modelName: typeof model.modelName === "string" ? model.modelName : null, contextWindow: typeof model.contextWindow === "number" ? model.contextWindow : null }];
-          }) : [],
-        }];
-      }));
-      setCurrentProviderId(typeof providerRecord.currentProviderId === "string" ? providerRecord.currentProviderId : null);
+      const providerResponse = await client.listModelProviders(activeWorkspaceId);
+      const catalog = parseModelProviderCatalog(providerResponse);
+      const threadSelection = activeThreadModelSelectionRef.current;
+      const selectedProviderId = threadSelection?.threadId === activeThreadIdRef.current
+        ? threadSelection.providerId
+        : catalog.currentProviderId;
+      const selectedModelId = threadSelection?.threadId === activeThreadIdRef.current
+        ? threadSelection.modelId
+        : catalog.currentModelId;
+      const selectedProvider = catalog.providers.find((provider) => provider.id === selectedProviderId);
+      const nextModels = modelSummariesForProvider(selectedProvider);
+      setModelProviders(catalog.providers.map((provider) => ({
+        ...provider,
+        isCurrent: provider.id === selectedProviderId,
+      })));
+      setCurrentProviderId(selectedProviderId);
       setProviderModels(nextModels);
-      const persistedModelId = typeof providerRecord.currentModelId === "string"
-        ? providerRecord.currentModelId
-        : nextModels.find((model) => model.isDefault)?.id ?? null;
       setSelectedProviderModelId(
-        persistedModelId && nextModels.some((model) => model.id === persistedModelId)
-          ? persistedModelId
+        selectedModelId && nextModels.some((model) => model.id === selectedModelId)
+          ? selectedModelId
           : nextModels[0]?.id ?? null,
       );
     } catch (error) {
@@ -296,6 +357,9 @@ export default function WebApp() {
           ? { ...thread, modelProvider: providerId, model: modelId }
           : thread),
     }));
+    if (activeThreadIdRef.current === threadId) {
+      activeThreadModelSelectionRef.current = { threadId, providerId, modelId };
+    }
   }, [client]);
 
   const selectProviderAndDefaultModel = useCallback(async (providerId: string) => {
@@ -374,43 +438,45 @@ export default function WebApp() {
     setSelectedProviderModelId(null);
     setCurrentProviderId(null);
     setCatalogError(null);
+    activeThreadModelSelectionRef.current = null;
     if (activeWorkspaceId) void refreshModelCatalog();
   }, [activeWorkspaceId, refreshModelCatalog]);
 
   useEffect(() => {
     setMcpServers({});
-    setRateLimits(null);
-    if (!activeWorkspaceId) return;
+    if (!activeWorkspaceId || !activeThreadId) return;
 
     let cancelled = false;
-    const initializeWorkspaceStatus = async () => {
-      try {
-        await client.connectWorkspace(activeWorkspaceId);
-      } catch {
-        return;
-      }
+    void client.listMcpServerStatus(activeWorkspaceId, activeThreadId).then((value) => {
       if (cancelled) return;
+      const snapshot = parseInitialMcpServers(value);
+      setMcpServers((current) => ({ ...snapshot, ...current }));
+    }).catch(() => {
+      // Runtime startup notifications continue to update this projection.
+    });
 
-      const [mcpResult, rateLimitResult] = await Promise.allSettled([
-        client.listMcpServerStatus(activeWorkspaceId, activeThreadId),
-        client.getAccountRateLimits(activeWorkspaceId),
-      ]);
-      if (cancelled) return;
-      if (mcpResult.status === "fulfilled") {
-        const snapshot = parseInitialMcpServers(mcpResult.value);
-        setMcpServers((current) => ({ ...snapshot, ...current }));
-      }
-      if (rateLimitResult.status === "fulfilled") {
-        const snapshot = parseInitialRateLimits(rateLimitResult.value);
-        setRateLimits((current) => mergeRateLimits(snapshot, current));
-      }
-    };
-
-    void initializeWorkspaceStatus();
     return () => {
       cancelled = true;
     };
   }, [activeThreadId, activeWorkspaceId, client]);
+
+  useEffect(() => {
+    setRateLimits(null);
+    if (!activeWorkspaceId) return;
+
+    let cancelled = false;
+    void client.getAccountRateLimits(activeWorkspaceId).then((value) => {
+      if (cancelled) return;
+      const snapshot = parseInitialRateLimits(value);
+      setRateLimits((current) => mergeRateLimits(snapshot, current));
+    }).catch(() => {
+      // Rate limits are supplementary Profile state and never gate a Thread.
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkspaceId, client]);
 
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
   const listWorkspaceFiles = useCallback((workspaceId: string) => client.listWorkspaceFiles(workspaceId, activeThreadId), [activeThreadId, client]);
@@ -425,6 +491,7 @@ export default function WebApp() {
 
   // Streaming accumulators
   const streamingTexts = useRef<Map<string, string>>(new Map());
+  const agentMessagePhases = useRef<Map<string, AgentMessagePhase>>(new Map());
   const reasoningSummaries = useRef<Map<string, string>>(new Map());
   const streamingLogIds = useRef<Map<string, string>>(new Map());
   const turnDiffLogIds = useRef<Map<string, string>>(new Map());
@@ -437,6 +504,7 @@ export default function WebApp() {
   const threadHydrationSequence = useRef(0);
   const recentAppServerEvents = useRef<Map<string, number>>(new Map());
   const pendingApprovalsByThread = useRef<Map<string, LogEntry[]>>(new Map());
+  const threadTranscriptCache = useRef<Map<string, ThreadTranscriptCacheEntry>>(new Map());
   const refreshThreadsRef = useRef<((workspaceId?: string) => Promise<void>) | null>(null);
   const activeThreadIdRef = useRef(activeThreadId);
   activeThreadIdRef.current = activeThreadId;
@@ -449,6 +517,7 @@ export default function WebApp() {
     // per-Thread runtime state may survive a workspace change.
     activeThreadIdRef.current = null;
     threadHydrationSequence.current += 1;
+    threadTranscriptCache.current.clear();
     setActiveThreadId(null);
     setThreadLoading(false);
     setMessages([]);
@@ -464,6 +533,30 @@ export default function WebApp() {
     setStopping(false);
     interruptRequestTurnId.current = null;
   }, [activeWorkspaceId]);
+
+  useEffect(() => {
+    if (!activeWorkspaceId || !activeThreadId || threadLoading) return;
+    const selected = (threadsByWorkspace[activeWorkspaceId] ?? [])
+      .find((thread) => thread.id === activeThreadId);
+    threadTranscriptCache.current.set(activeThreadId, {
+      messages,
+      updatedAt: selected?.updatedAt ?? 0,
+      status: threadStatus,
+      thinking,
+      activeTurnId,
+      turnStartedAt,
+    });
+  }, [
+    activeThreadId,
+    activeTurnId,
+    activeWorkspaceId,
+    messages,
+    thinking,
+    threadLoading,
+    threadStatus,
+    threadsByWorkspace,
+    turnStartedAt,
+  ]);
 
   const appendLog = useCallback(
     (
@@ -535,6 +628,9 @@ export default function WebApp() {
         eventThreadId
         && eventThreadId !== activeThreadIdRef.current,
       );
+      if (belongsToBackgroundThread && eventThreadId) {
+        threadTranscriptCache.current.delete(eventThreadId);
+      }
       if (
         belongsToBackgroundThread
         && method !== "item/commandExecution/requestApproval"
@@ -742,11 +838,17 @@ export default function WebApp() {
           const current = streamingTexts.current.get(itemId) ?? "";
           const updated = current + stripLeadingProviderSentinel(delta);
           streamingTexts.current.set(itemId, updated);
+          const streamingMessagePhase = agentMessagePhases.current.get(itemId);
 
           const existingLogId = streamingLogIds.current.get(itemId);
           if (existingLogId) {
             setMessages((prev) =>
-              prev.map((e) => (e.id === existingLogId ? { ...e, text: updated, streaming: true } : e)),
+              prev.map((e) => (e.id === existingLogId ? {
+                ...e,
+                text: updated,
+                messagePhase: e.messagePhase ?? streamingMessagePhase,
+                streaming: true,
+              } : e)),
             );
             return null;
           }
@@ -754,7 +856,13 @@ export default function WebApp() {
           streamingLogIds.current.set(itemId, id);
           setMessages((prev) => [
             ...prev.slice(-199),
-            { id, level: "assistant", text: updated, streaming: true },
+            {
+              id,
+              level: "assistant",
+              text: updated,
+              messagePhase: streamingMessagePhase,
+              streaming: true,
+            },
           ]);
           return null;
         }
@@ -767,6 +875,14 @@ export default function WebApp() {
           const itemIdFromItem = typeof item?.id === "string" ? item.id : null;
           const itemType2 = typeof item.type === "string" ? item.type : null;
           const completedItemId = itemId ?? itemIdFromItem;
+          const completedMessagePhase = agentMessagePhase(item.phase)
+            ?? (completedItemId ? agentMessagePhases.current.get(completedItemId) : undefined);
+          const completedInlineArtifacts = Array.isArray(item.inlineArtifacts)
+            ? item.inlineArtifacts.flatMap((value) => {
+                const artifact = parseInlineVisualizationArtifact(value);
+                return artifact ? [artifact] : [];
+              })
+            : [];
           const completedReasoningSummary = (Array.isArray(item.summary) && item.summary.length > 0)
             ? item.summary.map((part) => String(part)).join("\n\n").trim()
             : typeof item.summary === "string" ? item.summary.trim() : "";
@@ -780,18 +896,37 @@ export default function WebApp() {
             if (completedItemId && streamingTexts.current.has(completedItemId)) {
               const acc = streamingTexts.current.get(completedItemId)!;
               const eid = streamingLogIds.current.get(completedItemId);
-              if (eid)
-                setMessages((prev) =>
-                  prev.map((e) => (e.id === eid ? { ...e, text: acc, streaming: false } : e)),
-                );
+              if (eid) {
+                setMessages((prev) => acc.trim()
+                  ? prev.map((e) => (e.id === eid ? {
+                      ...e,
+                      text: acc,
+                      messagePhase: completedMessagePhase ?? e.messagePhase,
+                      inlineArtifacts: completedInlineArtifacts.length
+                        ? completedInlineArtifacts
+                        : e.inlineArtifacts,
+                      streaming: false,
+                    } : e))
+                  : prev.filter((e) => e.id !== eid));
+              }
               streamingTexts.current.delete(completedItemId);
               streamingLogIds.current.delete(completedItemId);
+              agentMessagePhases.current.delete(completedItemId);
               return null;
             }
+            if (completedItemId) agentMessagePhases.current.delete(completedItemId);
+            const completedText = stripLeadingProviderSentinel(
+              typeof item.text === "string" ? item.text : "",
+            );
+            if (!completedText.trim()) return null;
             return {
               id: completedItemId || undefined,
               level: "assistant",
-              text: stripLeadingProviderSentinel(typeof item.text === "string" ? item.text : "") || "(no response)",
+              text: completedText,
+              messagePhase: completedMessagePhase,
+              inlineArtifacts: completedInlineArtifacts.length
+                ? completedInlineArtifacts
+                : undefined,
             };
           }
 
@@ -1018,11 +1153,11 @@ export default function WebApp() {
             ]);
             return null;
           }
-          if (
-            itemType === "agentMessage"
-            && startedItemId
-            && streamingLogIds.current.has(startedItemId)
-          ) {
+          if (itemType === "agentMessage" && startedItemId) {
+            const startedMessagePhase = agentMessagePhase(item?.phase);
+            if (startedMessagePhase) {
+              agentMessagePhases.current.set(startedItemId, startedMessagePhase);
+            }
             const streamedText = streamingTexts.current.get(startedItemId) ?? "";
             const completedText = stripLeadingProviderSentinel(
               typeof item?.text === "string" ? item.text : "",
@@ -1032,8 +1167,27 @@ export default function WebApp() {
             if (existingId) {
               setMessages((previous) => previous.map((entry) =>
                 entry.id === existingId
-                  ? { ...entry, text, streaming: true }
+                  ? {
+                    ...entry,
+                    text,
+                    messagePhase: startedMessagePhase ?? entry.messagePhase,
+                    streaming: true,
+                  }
                   : entry));
+            } else if (text) {
+              const id = startedItemId;
+              streamingTexts.current.set(startedItemId, text);
+              streamingLogIds.current.set(startedItemId, id);
+              setMessages((previous) => [
+                ...previous.slice(-199),
+                {
+                  id,
+                  level: "assistant",
+                  text,
+                  messagePhase: startedMessagePhase,
+                  streaming: true,
+                },
+              ]);
             }
             return null;
           }
@@ -1260,6 +1414,11 @@ export default function WebApp() {
           const approvalServerName = typeof params.serverName === "string"
             ? params.serverName
             : undefined;
+          const approvalTool = typeof params.tool === "string"
+            ? params.tool
+            : typeof params.toolName === "string"
+              ? params.toolName
+              : cmd.match(/\btool\s+["“']([^"”']+)["”']/i)?.[1];
           const approvalThreadId = typeof params.threadId === "string"
             ? params.threadId
             : typeof params.thread_id === "string" ? params.thread_id : null;
@@ -1275,13 +1434,13 @@ export default function WebApp() {
               approvalMode,
               approvalUrl,
               approvalServerName,
+              approvalTool,
             };
             const current = pendingApprovalsByThread.current.get(approvalThreadId) ?? [];
             pendingApprovalsByThread.current.set(
               approvalThreadId,
               appendWebLogEntry(current, cachedApproval),
             );
-            saveWebApproval(event.workspace_id, approvalThreadId, cachedApproval);
           }
           if (belongsToBackgroundThread) return null;
           if (approvalId && (typeof requestId === "number" || typeof requestId === "string")) {
@@ -1303,6 +1462,7 @@ export default function WebApp() {
             approvalMode,
             approvalUrl,
             approvalServerName,
+            approvalTool,
           };
         }
 
@@ -1321,7 +1481,6 @@ export default function WebApp() {
         case "serverRequest/resolved": {
           const requestId = params.requestId ?? params.request_id;
           if (typeof requestId !== "number" && typeof requestId !== "string") return null;
-          resolveStoredWebApproval(event.workspace_id, requestId, "resolved");
           for (const [threadId, approvals] of pendingApprovalsByThread.current) {
             const remaining = approvals.filter((entry) => entry.approvalRequestId !== requestId);
             if (remaining.length > 0) pendingApprovalsByThread.current.set(threadId, remaining);
@@ -1331,16 +1490,10 @@ export default function WebApp() {
           setMessages((previous) => {
             const approval = previous.find((entry) =>
               entry.kind === "approval" && entry.approvalRequestId === requestId);
-            const status: LogEntry["approvalStatus"] = approval?.approvalStatus === "accepted"
-              || approval?.approvalStatus === "declined"
+            const status: LogEntry["approvalStatus"] = isApprovalOutcome(approval?.approvalStatus)
               ? approval.approvalStatus
-              : "resolved";
+              : parseApprovalStatus(params.approvalStatus) ?? "resolved";
             return previous
-              .filter((entry) => !(
-                entry.kind === "approval"
-                && entry.approvalRequestId === requestId
-                && entry.approvalMode !== "url"
-              ))
               .map((entry) => entry.kind === "approval"
                 && entry.approvalRequestId === requestId
                 ? { ...entry, approvalStatus: status }
@@ -1856,11 +2009,6 @@ export default function WebApp() {
   ) => {
     try {
       await client.respondToServerRequest(workspaceId, requestId, { decision });
-      resolveStoredWebApproval(
-        workspaceId,
-        requestId,
-        decision === "accept" ? "accepted" : "declined",
-      );
       for (const [threadId, approvals] of pendingApprovalsByThread.current) {
         pendingApprovalsByThread.current.set(threadId, approvals.map((entry) =>
           entry.approvalRequestId === requestId
@@ -1892,6 +2040,11 @@ export default function WebApp() {
     const selected = activeWorkspaceId
       ? (threadsByWorkspace[activeWorkspaceId] ?? []).find((thread) => thread.id === id)
       : undefined;
+    const threadProvider = selected?.modelProvider ?? null;
+    const threadModel = selected?.model ?? null;
+    activeThreadModelSelectionRef.current = threadProvider && threadModel
+      ? { threadId: id, providerId: threadProvider, modelId: threadModel }
+      : null;
     if (selected?.creationStatus) {
       setThreadLoading(false);
       setMessages([]);
@@ -1903,13 +2056,7 @@ export default function WebApp() {
       return;
     }
     setThreadLoading(true);
-    const restoredApprovals = activeWorkspaceId
-      ? loadWebApprovalHistory(activeWorkspaceId, id)
-      : [];
-    setMessages(mergeWebThreadHistory(
-      restoredApprovals,
-      pendingApprovalsByThread.current.get(id) ?? [],
-    ));
+    setMessages(pendingApprovalsByThread.current.get(id) ?? []);
     setTokenUsage(null);
     setGoal(null);
     setActiveTurnId(null);
@@ -1917,6 +2064,58 @@ export default function WebApp() {
     interruptRequestTurnId.current = null;
     const wid = activeWorkspaceId;
     if (!wid) {
+      setThreadLoading(false);
+      return;
+    }
+    if (threadProvider && threadModel) {
+      const cachedProvider = modelProviders.find((provider) => provider.id === threadProvider);
+      const cachedModels = modelSummariesForProvider(cachedProvider);
+      const immediateModels = cachedModels.length > 0
+        ? cachedModels
+        : [{ id: threadModel, model: threadModel, displayName: threadModel }];
+      setModelProviders((providers) => providers.map((provider) => ({
+        ...provider,
+        isCurrent: provider.id === threadProvider,
+      })));
+      setCurrentProviderId(threadProvider);
+      setProviderModels(immediateModels);
+      setSelectedProviderModelId(
+        immediateModels.find((model) => model.model === threadModel)?.id
+          ?? immediateModels[0]?.id
+          ?? null,
+      );
+      if (cachedModels.length === 0) {
+        // A catalog miss must not delay transcript hydration. This read-only
+        // lookup fills the picker after the Thread has already become usable.
+        void client.listModels(wid, threadProvider, threadModel).then((response) => {
+          if (threadHydrationSequence.current !== hydrationSequence) return;
+          const nextModels = parseModelListResponse(response);
+          if (nextModels.length === 0) return;
+          setProviderModels(nextModels);
+          setSelectedProviderModelId(
+            nextModels.find((model) => model.model === threadModel)?.id
+              ?? nextModels[0]?.id
+              ?? null,
+          );
+        }).catch((error) => {
+          if (threadHydrationSequence.current !== hydrationSequence) return;
+          setCatalogError(error instanceof Error ? error.message : String(error));
+        });
+      }
+    }
+    const cachedTranscript = threadTranscriptCache.current.get(id);
+    const selectedIsActive = ["active", "running", "inProgress", "reconnecting"]
+      .includes(parseThreadStatus(selected?.status));
+    if (
+      cachedTranscript
+      && !selectedIsActive
+      && cachedTranscript.updatedAt >= (selected?.updatedAt ?? 0)
+    ) {
+      setMessages(cachedTranscript.messages);
+      setThreadStatus(cachedTranscript.status);
+      setThinking(cachedTranscript.thinking);
+      setActiveTurnId(cachedTranscript.activeTurnId);
+      setTurnStartedAt(cachedTranscript.turnStartedAt);
       setThreadLoading(false);
       return;
     }
@@ -1933,74 +2132,14 @@ export default function WebApp() {
       }
     };
     try {
-      let resumed: Record<string, unknown> | null = null;
-      // Resuming an already-active thread may be rejected; history remains readable.
-      try {
-        resumed = await client.resumeThread(wid, id);
-      } catch {
-        // Best effort: `thread/read` below is the source for the browser projection.
-      }
-      // A resumed thread is the source for live status, but its embedded turns
-      // may be a summary projection. Request persisted turns explicitly with
-      // `itemsView: full` so history restores commands, reasoning, diffs, MCP
-      // calls, and other non-message items. Older runtimes fall back to read.
-      let persistedTurns: Record<string, unknown>[] | null = null;
-      try {
-        persistedTurns = await client.listThreadTurns(wid, id);
-      } catch {
-        // The paginated history API is experimental and may be absent on an
-        // older app-server; retain compatibility with thread/read.
-      }
-      const raw = resumed ?? await client.readThread(wid, id);
-      const payload = unwrapWebRpcResult(raw);
-      const obj = payload && typeof payload === "object"
-        ? payload as Record<string, unknown>
-        : {};
-      const thread = obj.thread && typeof obj.thread === "object"
-        ? obj.thread as Record<string, unknown>
-        : undefined;
-      const threadProvider = typeof thread?.modelProvider === "string"
-        ? thread.modelProvider
-        : typeof thread?.model_provider === "string"
-          ? thread.model_provider
-          : selected?.modelProvider ?? null;
-      const threadModel = typeof thread?.model === "string"
-        ? thread.model
-        : selected?.model ?? null;
-      if (threadProvider && threadModel) {
-        await client.writeModelProvider(wid, { action: "select", id: threadProvider });
-        const modelResponse = await client.listModels(wid);
-        const nextModels = parseModelListResponse(modelResponse);
-        if (threadHydrationSequence.current !== hydrationSequence) return;
-        setModelProviders((providers) => providers.map((provider) => ({
-          ...provider,
-          isCurrent: provider.id === threadProvider,
-        })));
-        setCurrentProviderId(threadProvider);
-        setProviderModels(nextModels);
-        setSelectedProviderModelId(
-          nextModels.find((model) => model.model === threadModel)?.id
-            ?? nextModels[0]?.id
-            ?? null,
-        );
-      }
-      const embeddedTurns = Array.isArray(thread?.turns)
-        ? thread.turns as Record<string, unknown>[]
-        : Array.isArray(obj.turns)
-          ? obj.turns as Record<string, unknown>[]
-          : [];
-      const turns = persistedTurns && persistedTurns.length > 0
-        ? persistedTurns
-        : embeddedTurns;
+      // `thread/turns/list` is the authoritative full-fidelity history source.
+      // The adapter resumes an unbound Runtime Thread internally, so an
+      // additional thread/read or explicit resume only duplicates work.
+      const turns = await client.listThreadTurns(wid, id);
       if (threadHydrationSequence.current !== hydrationSequence) return;
-      const status = thread?.status;
-      if (status && typeof status === "object") {
-        const statusType = (status as Record<string, unknown>).type;
-        if (typeof statusType === "string") {
-          setThreadStatus(statusType);
-          setThinking(statusType === "active");
-        }
-      }
+      const statusType = parseThreadStatus(selected?.status);
+      setThreadStatus(statusType);
+      setThinking(["active", "running", "inProgress"].includes(statusType));
       const activeTurn = [...turns].reverse().find((turn) => {
         const turnStatus = turn.status;
         return turnStatus === "inProgress"
@@ -2010,16 +2149,18 @@ export default function WebApp() {
       });
       setActiveTurnId(typeof activeTurn?.id === "string" ? activeTurn.id : null);
       if (activeTurn) {
-        const rawStartedAt = activeTurn.startedAt ?? activeTurn.started_at;
+        const rawStartedAt = activeTurn.startedAt;
         setTurnStartedAt(typeof rawStartedAt === "number" && Number.isFinite(rawStartedAt)
           ? rawStartedAt < 10_000_000_000 ? rawStartedAt * 1000 : rawStartedAt
           : Date.now());
       } else {
         setTurnStartedAt(null);
       }
-      const historyThread = thread
-        ? { ...thread, turns }
-        : { turns, status: obj.status };
+      const historyThread = {
+        id,
+        turns,
+        status: { type: statusType },
+      };
       const loaded = buildWebThreadHistory(historyThread, newLogId);
       setMessages((current) => mergeWebThreadHistory(loaded, current));
       revealHydratedThread();
@@ -2032,7 +2173,7 @@ export default function WebApp() {
       }));
       revealHydratedThread();
     }
-  }, [activeWorkspaceId, client, threadsByWorkspace]);
+  }, [activeWorkspaceId, client, modelProviders, threadsByWorkspace]);
 
   /* ─── Render ─── */
 
@@ -2052,6 +2193,7 @@ export default function WebApp() {
     <Layout
       theme={theme}
       sidebarCollapsed={sidebarCollapsed}
+      onDismissSidebar={() => setSidebarCollapsed(true)}
       rightPanelOpen={filePanelOpen}
       rightPanelWidth={filePanelWidth}
       rightPanel={

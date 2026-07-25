@@ -6,6 +6,7 @@ use crate::telemetry::SseTelemetry;
 use codex_client::ByteStream;
 use codex_client::StreamResponse;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
 use eventsource_stream::Eventsource;
@@ -164,6 +165,11 @@ async fn finish_chat_stream(
         ..
     } = state;
 
+    let assistant_phase = if tool_calls.is_empty() {
+        MessagePhase::FinalAnswer
+    } else {
+        MessagePhase::Commentary
+    };
     for tool_call in tool_calls {
         let wire_name = tool_call.function.name;
         let target = tool_targets.get(&wire_name);
@@ -195,7 +201,11 @@ async fn finish_chat_stream(
         }
     }
     if !assistant_text.is_empty() {
-        let item = assistant_message_item(response_id.as_deref(), assistant_text);
+        let item = assistant_message_item(
+            response_id.as_deref(),
+            assistant_text,
+            Some(assistant_phase),
+        );
         if tx_event
             .send(Ok(ResponseEvent::OutputItemDone(item)))
             .await
@@ -213,7 +223,11 @@ async fn finish_chat_stream(
         .await;
 }
 
-fn assistant_message_item(response_id: Option<&str>, text: String) -> ResponseItem {
+fn assistant_message_item(
+    response_id: Option<&str>,
+    text: String,
+    phase: Option<MessagePhase>,
+) -> ResponseItem {
     let id = response_id.unwrap_or("chatcmpl").to_string() + "-message";
     ResponseItem::Message {
         id: Some(codex_protocol::ResponseItemId::from_server(id)),
@@ -223,7 +237,7 @@ fn assistant_message_item(response_id: Option<&str>, text: String) -> ResponseIt
         } else {
             vec![ContentItem::OutputText { text }]
         },
-        phase: None,
+        phase,
         internal_chat_message_metadata_passthrough: None,
     }
 }
@@ -239,7 +253,7 @@ struct ChatStreamState {
 
 impl ChatStreamState {
     fn assistant_message_item(&self, text: String) -> ResponseItem {
-        assistant_message_item(self.response_id.as_deref(), text)
+        assistant_message_item(self.response_id.as_deref(), text, None)
     }
 
     fn merge_tool_call(&mut self, delta: ChatToolCallDelta) {
@@ -435,7 +449,8 @@ mod tests {
             (name.as_str(), arguments.as_str(), call_id.as_str()),
             ("shell", "{\"cmd\":\"pwd\"}", "call_1")
         );
-        let ResponseEvent::OutputItemDone(ResponseItem::Message { content, .. }) = &events[6]
+        let ResponseEvent::OutputItemDone(ResponseItem::Message { content, phase, .. }) =
+            &events[6]
         else {
             panic!("expected assistant message, got {:?}", events[6]);
         };
@@ -445,6 +460,7 @@ mod tests {
                 text: "hello".to_string()
             }]
         );
+        assert_eq!(phase, &Some(MessagePhase::Commentary));
         let ResponseEvent::Completed {
             response_id,
             token_usage,
@@ -497,5 +513,30 @@ mod tests {
         assert_eq!(namespace.as_deref(), Some("mcp__map_cards"));
         assert_eq!(arguments, "{}");
         assert_eq!(call_id, "call_1");
+    }
+
+    #[tokio::test]
+    async fn chat_sse_marks_text_only_completion_as_final_answer() {
+        let body = concat!(
+            "data: {\"id\":\"chatcmpl-1\",\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+
+        let events = collect_events(body).await;
+
+        let ResponseEvent::OutputItemDone(ResponseItem::Message { content, phase, .. }) =
+            &events[2]
+        else {
+            panic!("expected assistant message, got {:?}", events[2]);
+        };
+        assert_eq!(
+            (content, phase),
+            (
+                &vec![ContentItem::OutputText {
+                    text: "done".to_string(),
+                }],
+                &Some(MessagePhase::FinalAnswer),
+            )
+        );
     }
 }

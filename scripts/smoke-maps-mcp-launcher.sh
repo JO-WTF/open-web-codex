@@ -95,13 +95,78 @@ try:
     initialize = read_response(request_id, startup_timeout)
     if "error" in initialize:
         raise SystemExit(initialize["error"])
+    instructions = initialize.get("result", {}).get("instructions", "")
+    if (
+        "structuredContent.data_ref" not in instructions
+        or "data_ref unchanged into create_map_card" not in instructions
+        or "data_ref.server as server" not in instructions
+        or "data_ref.uri as uri" not in instructions
+        or "mcp__map_utils" not in instructions
+    ):
+        raise SystemExit(f"maps MCP did not advertise its map-card output contract: {instructions!r}")
     send("notifications/initialized", request=False)
+
+    request_id = send("resources/templates/list", {})
+    templates = read_response(request_id, 30)
+    resource_templates = templates.get("result", {}).get("resourceTemplates", [])
+    if not any(
+        template.get("uriTemplate") == "maps-data://geojson/{resource_id}"
+        and template.get("name") == "maps_geojson"
+        and template.get("title") == "Maps GeoJSON"
+        and template.get("mimeType") == "application/geo+json"
+        for template in resource_templates
+    ):
+        raise SystemExit(f"GeoJSON Resource template missing: {resource_templates!r}")
 
     request_id = send("tools/list", {})
     tools = read_response(request_id, 30)
-    tool_names = [tool.get("name") for tool in tools.get("result", {}).get("tools", [])]
+    listed_tools = tools.get("result", {}).get("tools", [])
+    tool_names = [tool.get("name") for tool in listed_tools]
     if "create_map_card" not in tool_names:
         raise SystemExit(f"create_map_card missing from MCP tools: {tool_names}")
+    geocode_tool = next(tool for tool in listed_tools if tool.get("name") == "batch_geocode")
+    geocode_output_schema = geocode_tool.get("outputSchema")
+    required_geocode_fields = {
+        "provider",
+        "summary",
+        "feature_count",
+        "data_ref",
+    }
+    if not isinstance(geocode_output_schema, dict) or not required_geocode_fields.issubset(
+        set(geocode_output_schema.get("required", []))
+    ):
+        raise SystemExit(
+            f"batch_geocode did not advertise its canonical data_ref: {geocode_output_schema}"
+        )
+    geocode_resource_schema = geocode_output_schema.get("$defs", {}).get("McpResourceMapData", {})
+    if (
+        "server" not in geocode_resource_schema.get("required", [])
+        or geocode_resource_schema.get("properties", {}).get("server", {}).get("const")
+        != "map_utils"
+    ):
+        raise SystemExit(
+            "batch_geocode data_ref did not require the raw map_utils server ID: "
+            f"{geocode_resource_schema}"
+        )
+    map_card_tool = next(tool for tool in listed_tools if tool.get("name") == "create_map_card")
+    map_card_resource_schema = (
+        map_card_tool.get("inputSchema", {}).get("$defs", {}).get("McpResourceMapData", {})
+    )
+    if (
+        "server" not in map_card_resource_schema.get("required", [])
+        or map_card_resource_schema.get("properties", {}).get("server", {}).get("const")
+        != "map_utils"
+    ):
+        raise SystemExit(
+            "create_map_card did not require the raw map_utils server ID: "
+            f"{map_card_resource_schema}"
+        )
+    output_schema = map_card_tool.get("outputSchema")
+    required_output_fields = {"type", "kind", "artifact", "embed"}
+    if not isinstance(output_schema, dict) or not required_output_fields.issubset(
+        set(output_schema.get("required", []))
+    ):
+        raise SystemExit(f"create_map_card missing required outputSchema: {output_schema}")
 
     request_id = send(
         "tools/call",
@@ -110,7 +175,42 @@ try:
             "arguments": {
                 "title": "Jakarta",
                 "summary": "Maps MCP handshake smoke",
-                "points": [{"latitude": -6.1754049, "longitude": 106.827168, "label": "Jakarta"}],
+                "viewport": {
+                    "mode": "camera",
+                    "center": [106.827168, -6.1754049],
+                    "zoom": 10,
+                },
+                "sources": [{
+                    "id": "locations",
+                    "data": {
+                        "type": "inline",
+                        "format": "geojson",
+                        "geojson": {
+                            "type": "FeatureCollection",
+                            "features": [{
+                                "type": "Feature",
+                                "properties": {"label": "Jakarta"},
+                                "geometry": {
+                                    "type": "Point",
+                                    "coordinates": [106.827168, -6.1754049],
+                                },
+                            }],
+                        },
+                    },
+                }],
+                "layers": [{
+                    "id": "points",
+                    "source": "locations",
+                    "geometry": "point",
+                    "label_property": "label",
+                    "style": {
+                        "color": "#ef4444",
+                        "opacity": 0.9,
+                        "radius": 8,
+                        "stroke_color": "#ffffff",
+                        "stroke_width": 2,
+                    },
+                }],
             },
         },
     )
@@ -119,9 +219,33 @@ try:
         raise SystemExit(call["error"])
     content = call.get("result", {}).get("content", [])
     text = "\n".join(item.get("text", "") for item in content if item.get("type") == "text")
-    if "open-web-card map.v1" not in text:
-        raise SystemExit(f"create_map_card did not return a map marker: {text[:500]}")
-    print(json.dumps({"ok": True, "tools": tool_names, "markerBytes": len(text.encode())}))
+    structured_content = call.get("result", {}).get("structuredContent")
+    if not isinstance(structured_content, dict):
+        raise SystemExit(f"create_map_card did not return structuredContent: {call}")
+    if structured_content.get("type") != "open-web-artifact":
+        raise SystemExit(f"create_map_card returned an invalid type: {structured_content!r}")
+    if structured_content.get("kind") != "inline-visualization.v1":
+        raise SystemExit(f"create_map_card returned an invalid kind: {structured_content!r}")
+    artifact = structured_content.get("artifact")
+    if not isinstance(artifact, dict) or not artifact.get("ref", "").startswith("map-"):
+        raise SystemExit(f"create_map_card returned an invalid Artifact: {artifact!r}")
+    renderer = artifact.get("renderer")
+    if not isinstance(renderer, dict) or renderer.get("kind") != "map.v2":
+        raise SystemExit(f"create_map_card returned an invalid renderer: {renderer!r}")
+    card = renderer.get("payload")
+    if not isinstance(card, dict) or card.get("title") != "Jakarta":
+        raise SystemExit(f"create_map_card returned an invalid card: {card!r}")
+    embed = structured_content.get("embed")
+    expected_embed = f'::codex-inline-vis{{artifact="{artifact["ref"]}"}}'
+    if not isinstance(embed, dict) or embed.get("code") != expected_embed:
+        raise SystemExit(f"create_map_card returned an invalid embed code: {embed!r}")
+    if expected_embed not in text:
+        raise SystemExit(f"create_map_card returned unexpected text content: {text[:500]}")
+    print(json.dumps({
+        "ok": True,
+        "tools": tool_names,
+        "structuredContentBytes": len(json.dumps(structured_content).encode()),
+    }))
 finally:
     try:
         proc.terminate()

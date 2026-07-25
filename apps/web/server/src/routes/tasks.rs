@@ -388,7 +388,13 @@ pub async fn send_message(
             },
         )
         .await
-        .map_err(|_| {
+        .map_err(|error| {
+            tracing::warn!(
+                task_id = %task_id,
+                thread_id = %thread_id,
+                error = %error,
+                "Codex Runtime rejected turn start"
+            );
             (
                 StatusCode::BAD_GATEWAY,
                 Json(PlatformError::internal(
