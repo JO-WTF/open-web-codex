@@ -45,14 +45,12 @@ args = ["--workspace-root", "$repo_root"]
 cwd = "$repo_root/tools/maps-mcp"
 startup_timeout_sec = 120
 tool_timeout_sec = 180
-
-[mcp_servers.map_utils.tools.create_map_card]
-approval_mode = "approve"
+default_tools_approval_mode = "approve"
 TOML
 
 output_file="${THIRD_PARTY_SMOKE_OUTPUT:-$tmp_home/third-party-map-card-smoke.jsonl}"
 OPEN_WEB_CODEX_MAPS_MCP_VENV="$maps_mcp_venv" MAPS_MCP_VENV="$maps_mcp_venv" CODEX_HOME="$tmp_home" timeout "$timeout_sec" "$codex_bin" exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --ignore-rules -C "$repo_root" \
-  '在同一段回复的两段文字之间展示雅加达坐标 106.827168,-6.1754049 的地图。必须调用 map_utils 的 create_map_card，使用 inline GeoJSON source、point layer 和 camera zoom 10；把工具返回的 embed.code 原样独占一行放在两段文字之间，不要复制 JSON。' \
+  '在同一段回复的两段文字之间展示雅加达坐标 106.827168,-6.1754049 的地图。必须调用 map_utils 的 create_map_card，使用类 Mapbox 输入：GeoJSON source、circle layer、circle paint 和 camera view zoom 10；把工具返回的 embed.code 原样独占一行放在两段文字之间，不要复制 JSON。' \
   | tee "$output_file"
 
 if ! jq -e '
@@ -66,12 +64,11 @@ if ! jq -e '
   | .type == "open-web-artifact"
     and .kind == "inline-visualization.v1"
     and (.artifact.ref | startswith("map-"))
-    and (.artifact.renderer.kind == "map.v2")
+    and (.artifact.renderer.kind == "map.v3")
     and (.artifact.renderer.payload.title | type == "string")
-    and (.artifact.renderer.payload.viewport.mode == "camera")
-    and (.artifact.renderer.payload.viewport.zoom == 10)
+    and (.artifact.renderer.payload.zoom == 10)
     and (.artifact.renderer.payload.sources | length == 1)
-    and (.artifact.renderer.payload.layers[0].geometry == "point")
+    and (.artifact.renderer.payload.layers[0].type == "circle")
     and (.embed.code == ("::codex-inline-vis{artifact=\"" + .artifact.ref + "\"}"))
 ' "$output_file" >/dev/null; then
   echo "third-party map-card MCP smoke did not observe a valid Artifact envelope" >&2

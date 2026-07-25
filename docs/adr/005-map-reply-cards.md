@@ -70,7 +70,7 @@ Codex 官方 Inline Visualization 指令承担 Assistant 编排；两者不是�
 | --- | --- |
 | Codex Runtime | Thread/Turn、Tool 生命周期、Agent Message 文本与顺序 |
 | `codex-api` | Chat/Responses 的文本、Tool、Reasoning、phase 和流生命周期转译 |
-| `map_utils` | 地理数据、`map.v2` 验证、Artifact 描述和内嵌短代码生成 |
+| `map_utils` | 地理数据、`map.v3` 验证、Artifact 描述和内嵌短代码生成 |
 | Platform Server | Artifact 注册、Thread/Run/组织授权、MCP Resource 解析和浏览器安全 DTO |
 | Web presentation | 官方指令语法解析、消息内分段、Artifact renderer 分派 |
 
@@ -107,6 +107,14 @@ Artifact 不展示。
 原始 MCP server ID 和 `resource_link.uri`，不把 GeoJSON 复制进 Assistant 文本或
 地图描述。
 
+`create_map_card` 只定义一个 `map.v3` 合同。`sources` 是平台管理的 GeoJSON
+source：内联数据使用标准 `source.data`，Resource 使用互斥的 Open Web
+`source.data_ref`，其他标准 GeoJSON source option 保留。`layers` 直接使用官方
+Mapbox Style Specification Layer JSON，并由官方 validator 校验；Tool、Platform 和
+Web 不再各自维护 layer type、paint/layout、filter 或 expression 白名单。官方未知
+属性诊断作为 warning 返回，已知语法错误仍然失败。标准 camera 字段位于顶层；
+文本 hover 和 legend 都是 `extensions` 下的可选 Open Web 行为。
+
 `create_map_card` 的目标输出是通用 Artifact envelope，而不是 Tool 附带的
 `replyCard`：
 
@@ -117,19 +125,14 @@ Artifact 不展示。
   "artifact": {
     "ref": "map-7d67b30d",
     "renderer": {
-      "kind": "map.v2",
+      "kind": "map.v3",
       "payload": {
         "title": "北京到上海路线",
         "intent": "route",
         "status": "ready",
-        "viewport": {
-          "mode": "fit",
-          "padding": 48,
-          "max_zoom": 14
-        },
-        "sources": [
-          {
-            "id": "route-data",
+        "sources": {
+          "route-data": {
+            "type": "geojson",
             "data": {
               "type": "mcp_resource",
               "server": "map_utils",
@@ -137,16 +140,16 @@ Artifact 不展示。
               "format": "geojson"
             }
           }
-        ],
+        },
         "layers": [
           {
             "id": "route",
+            "type": "line",
             "source": "route-data",
-            "geometry": "line",
-            "style": {
-              "color": "#2563eb",
-              "opacity": 0.9,
-              "width": 5
+            "paint": {
+              "line-color": "#2563eb",
+              "line-opacity": 0.9,
+              "line-width": 5
             }
           }
         ]
@@ -162,25 +165,24 @@ Artifact 不展示。
 
 合同规则：
 
-- Tool 必须声明 `outputSchema`，并在返回前验证 envelope、`map.v2` 和字段间不变量。
+- Tool 必须声明 `outputSchema`，并在返回前验证 envelope、`map.v3` 和字段间不变量。
 - `artifact.ref` 必须由 Tool 生成、不可预测且不具有路径语义；只允许有界的
   ASCII 字母、数字、点、下划线和连字符，不允许引号或路径分隔符。
 - `embed.code` 必须由 Tool 根据 `artifact.ref` 生成；模型只复制，不自行拼接。
 - Platform 通过 envelope 类型和 renderer registry 识别 Artifact，不根据
   `serverName == map_utils` 或 `toolName == create_map_card` 硬编码分支。
-- `renderer.kind` 是版本化 renderer 能力 ID。`map.v2` 只是第一个实现；图表、
+- `renderer.kind` 是版本化 renderer 能力 ID。`map.v3` 只是第一个实现；图表、
   表单等类型化组件使用同一 envelope 和 `artifact` 指令。真实 HTML 文件仍使用
   官方 `file` 指令，不包装成类型化 Artifact。
 - `content` 只向模型说明 Artifact 已准备好，并要求把 `embed.code` 原样放到目标
   回复位置。它不是渲染输入。
-- `map.v2` 的可选样式字段直接投影到 Mapbox GL 的 circle、symbol、line 和 fill
-  能力：点可使用常用内建形状或 CORS-enabled HTTPS PNG/JPEG/WebP 图标；线和面边框
-  使用 width/opacity/dash array；所有几何类型可声明 hover title 和有序属性字段。
+- `map.v3.layers` 是标准 Mapbox Layer JSON。Web 只替换本地 layer/source ID，
+  其余字段原样交给 `map.addLayer`。
 - hover 只引用 GeoJSON property，Web 使用 `textContent` 构造弹层，不接受
   Tool 提供的 HTML。远程图标只允许 HTTPS 栅格格式，合同拒绝 SVG、非 HTTPS URL、
   未知字段和互相冲突的内建/自定义样式。
-- Web renderer 固定使用 Mercator 投影。卡片正文只呈现 summary/fallback 和 legend，
-  不呈现 source/layer 计数或 viewport 调试值。
+- Web renderer 固定使用 Mercator 投影。卡片正文只呈现 summary/fallback 和可选
+  `extensions.legend`，不呈现 source/layer 计数或 camera 调试值。
 
 ## Artifact 注册与授权
 
@@ -274,7 +276,7 @@ Assistant Message 编排语义，地图不会成为 Chat transport 的特例。
 ## 非目标
 
 - 不把完整卡片 JSON放进 Assistant Markdown。
-- 不让 Chat/Responses 转译器理解 `map.v2`。
+- 不让 Chat/Responses 转译器理解 `map.v3`。
 - 不由 Platform 自动决定卡片位置。
 - 不把 MCP Tool Item 伪装成 Assistant Message。
 - 不在浏览器中信任或直接执行 Tool 返回的任意 HTML/JavaScript。

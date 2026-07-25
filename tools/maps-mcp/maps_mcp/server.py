@@ -5,88 +5,40 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 from typing import Annotated, Literal
-from urllib.parse import urlparse
 from uuid import uuid4
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.session import ServerSession
 from mcp.types import CallToolResult, ResourceLink, TextContent
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from .clients import GoogleMapsClient, MapboxMapsClient
 from .credential_prompt import LoopbackCredentialPrompt
 from .credentials import WorkspaceCredentialStore
 from .data_refs import GeoJsonResourceStore, PublishedGeoJson
+from .map_card import (
+    Artifact as CurrentMapArtifact,
+    Embed as CurrentMapEmbed,
+    GeoJsonSource as CurrentGeoJsonSource,
+    MapExtensions as CurrentMapExtensions,
+    MapPayload as CurrentMapPayload,
+    Renderer as CurrentMapRenderer,
+    ToolResult as CurrentMapToolResult,
+    extension_warnings,
+    renderer_sources,
+    sanitized_extensions,
+    validate_extension_graph,
+    validate_style,
+)
 
 Provider = Literal["google", "mapbox"]
-TravelMode = Literal[
-    "driving", "driving_traffic", "walking", "bicycling", "transit", "two_wheeler"
-]
-GeometryKind = Literal["point", "line", "polygon"]
+TravelMode = Literal["driving", "driving_traffic", "walking", "bicycling", "transit", "two_wheeler"]
 MCP_SERVER_NAME = "map_utils"
-CssColor = Annotated[
-    str,
-    Field(
-        pattern=(
-            r"^(#[0-9A-Fa-f]{6}|red|orange|yellow|green|blue|purple|pink|"
-            r"gray|black|white)$"
-        )
-    ),
-]
-DashValue = Annotated[float, Field(ge=0.1, le=64)]
 
 
 class Point(BaseModel):
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
-
-
-class FitPadding(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    top: float = Field(ge=0, le=256)
-    right: float = Field(ge=0, le=256)
-    bottom: float = Field(ge=0, le=256)
-    left: float = Field(ge=0, le=256)
-
-
-class FitViewport(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    mode: Literal["fit"] = "fit"
-    padding: float | FitPadding | None = Field(default=None)
-    max_zoom: float | None = Field(default=None, ge=0, le=24)
-    min_zoom: float | None = Field(default=None, ge=0, le=24)
-
-    @model_validator(mode="after")
-    def validate_zoom_range(self) -> FitViewport:
-        if (
-            self.min_zoom is not None
-            and self.max_zoom is not None
-            and self.min_zoom > self.max_zoom
-        ):
-            raise ValueError("min_zoom must not exceed max_zoom")
-        return self
-
-
-class CameraViewport(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    mode: Literal["camera"] = "camera"
-    center: tuple[float, float]
-    zoom: float = Field(ge=0, le=24)
-    bearing: float | None = Field(default=None, ge=-180, le=180)
-    pitch: float | None = Field(default=None, ge=0, le=85)
-
-    @model_validator(mode="after")
-    def validate_center(self) -> CameraViewport:
-        longitude, latitude = self.center
-        if not -180 <= longitude <= 180 or not -90 <= latitude <= 90:
-            raise ValueError("camera center must be [longitude, latitude]")
-        return self
-
-
-MapViewport = Annotated[FitViewport | CameraViewport, Field(discriminator="mode")]
 
 
 class McpResourceMapData(BaseModel):
@@ -109,436 +61,6 @@ class McpResourceMapData(BaseModel):
     format: Literal["geojson"] = "geojson"
 
 
-class InlineMapData(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["inline"] = "inline"
-    format: Literal["geojson"] = "geojson"
-    geojson: dict[str, object]
-
-    @model_validator(mode="after")
-    def validate_geojson_root(self) -> InlineMapData:
-        allowed = {
-            "FeatureCollection",
-            "Feature",
-            "GeometryCollection",
-            "Point",
-            "MultiPoint",
-            "LineString",
-            "MultiLineString",
-            "Polygon",
-            "MultiPolygon",
-        }
-        if self.geojson.get("type") not in allowed:
-            raise ValueError("inline data must contain a GeoJSON root object")
-        return self
-
-
-MapData = Annotated[McpResourceMapData | InlineMapData, Field(discriminator="type")]
-
-
-class MapSource(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    id: str = Field(pattern=r"^[A-Za-z0-9_.-]{1,128}$")
-    data: MapData
-
-
-class PointIcon(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    url: str = Field(
-        min_length=1,
-        max_length=2048,
-        description=(
-            "HTTPS URL for a CORS-enabled PNG, JPEG, or WebP image. Mapbox GL does not "
-            "load SVG images through loadImage."
-        ),
-    )
-    scale: float | None = Field(
-        default=None,
-        ge=0.05,
-        le=8,
-        description="Multiplier applied to the image's intrinsic dimensions.",
-    )
-    anchor: Literal[
-        "center",
-        "top",
-        "bottom",
-        "left",
-        "right",
-        "top-left",
-        "top-right",
-        "bottom-left",
-        "bottom-right",
-    ] | None = Field(
-        default=None,
-        description="Part of the icon placed on the feature coordinate.",
-    )
-    rotation: float | None = Field(
-        default=None,
-        ge=-360,
-        le=360,
-        description="Clockwise icon rotation in degrees.",
-    )
-    allow_overlap: bool | None = Field(
-        default=None,
-        description="Whether this icon may overlap other symbols.",
-    )
-
-    @model_validator(mode="after")
-    def validate_url(self) -> PointIcon:
-        parsed = urlparse(self.url)
-        if (
-            parsed.scheme != "https"
-            or not parsed.netloc
-            or not parsed.path.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
-        ):
-            raise ValueError(
-                "point icon url must be an HTTPS PNG, JPEG, or WebP resource"
-            )
-        return self
-
-
-class PointStyle(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    color: CssColor | None = Field(
-        default=None,
-        description="Fill color for a built-in point shape.",
-    )
-    opacity: float | None = Field(
-        default=None,
-        ge=0,
-        le=1,
-        description="Fill or custom-icon opacity from 0 (transparent) to 1 (opaque).",
-    )
-    radius: float | None = Field(
-        default=None,
-        ge=1,
-        le=64,
-        description=(
-            "Circle radius in pixels. Use size instead when a built-in non-circle "
-            "shape is selected."
-        ),
-    )
-    size: float | None = Field(
-        default=None,
-        ge=4,
-        le=128,
-        description=(
-            "Rendered width and height in pixels for a built-in shape. For circles, "
-            "size is the diameter and cannot be combined with radius."
-        ),
-    )
-    shape: Literal["circle", "square", "diamond", "triangle", "pin"] | None = Field(
-        default=None,
-        description="Built-in point shape. Defaults to circle when icon is absent.",
-    )
-    icon: PointIcon | None = Field(
-        default=None,
-        description=(
-            "Custom raster icon. Do not combine it with built-in shape, size, radius, "
-            "fill color, or stroke fields."
-        ),
-    )
-    stroke_color: CssColor | None = Field(
-        default=None,
-        description="Outline color for a built-in point shape.",
-    )
-    stroke_width: float | None = Field(
-        default=None,
-        ge=0,
-        le=32,
-        description="Outline width in pixels for a built-in point shape.",
-    )
-    stroke_opacity: float | None = Field(
-        default=None,
-        ge=0,
-        le=1,
-        description="Outline opacity for a built-in point shape.",
-    )
-
-    @model_validator(mode="after")
-    def validate_point_presentation(self) -> PointStyle:
-        if self.radius is not None and self.size is not None:
-            raise ValueError("point radius and size are mutually exclusive")
-        if self.radius is not None and self.shape not in (None, "circle"):
-            raise ValueError("point radius is only valid for circle shapes")
-        if self.icon is not None:
-            conflicting = (
-                self.color,
-                self.radius,
-                self.size,
-                self.shape,
-                self.stroke_color,
-                self.stroke_width,
-                self.stroke_opacity,
-            )
-            if any(value is not None for value in conflicting):
-                raise ValueError(
-                    "custom point icons cannot be combined with built-in shape styles"
-                )
-        return self
-
-
-class LineStyle(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    color: CssColor | None = Field(default=None, description="Line color.")
-    opacity: float | None = Field(
-        default=None,
-        ge=0,
-        le=1,
-        description="Line opacity from 0 (transparent) to 1 (opaque).",
-    )
-    width: float | None = Field(
-        default=None,
-        ge=0.5,
-        le=32,
-        description="Line width in pixels.",
-    )
-    dash: list[DashValue] | None = Field(
-        default=None,
-        min_length=1,
-        max_length=8,
-        description=(
-            "Alternating dash and gap lengths measured in line-width units. Omit for "
-            "a solid line; use [2, 2] for dashed or [0.5, 1.5] for dotted."
-        ),
-    )
-    cap: Literal["butt", "round", "square"] | None = Field(
-        default=None,
-        description="Shape of the line ends.",
-    )
-    join: Literal["bevel", "round", "miter"] | None = Field(
-        default=None,
-        description="Shape used where line segments meet.",
-    )
-
-
-class PolygonStyle(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    fill_color: CssColor | None = Field(default=None, description="Polygon fill color.")
-    fill_opacity: float | None = Field(
-        default=None,
-        ge=0,
-        le=1,
-        description="Polygon fill opacity from 0 (transparent) to 1 (opaque).",
-    )
-    stroke_color: CssColor | None = Field(
-        default=None,
-        description="Polygon border color.",
-    )
-    stroke_width: float | None = Field(
-        default=None,
-        ge=0,
-        le=32,
-        description="Polygon border width in pixels. Use 0 to hide the border.",
-    )
-    stroke_opacity: float | None = Field(
-        default=None,
-        ge=0,
-        le=1,
-        description="Polygon border opacity.",
-    )
-    stroke_dash: list[DashValue] | None = Field(
-        default=None,
-        min_length=1,
-        max_length=8,
-        description=(
-            "Alternating border dash and gap lengths measured in border-width units. "
-            "Omit for a solid border."
-        ),
-    )
-
-
-class HoverField(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    property: str = Field(
-        min_length=1,
-        max_length=128,
-        description="GeoJSON feature property to display.",
-    )
-    label: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=128,
-        description="Human-readable label. Defaults to the property name.",
-    )
-
-
-class LayerHover(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    title_property: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=128,
-        description="GeoJSON feature property used as the hover-card title.",
-    )
-    fields: list[HoverField] = Field(
-        default_factory=list,
-        max_length=16,
-        description="Ordered feature properties shown beneath the title.",
-    )
-
-    @model_validator(mode="after")
-    def validate_content(self) -> LayerHover:
-        if self.title_property is None and not self.fields:
-            raise ValueError("hover requires title_property or at least one field")
-        properties = [field.property for field in self.fields]
-        if len(properties) != len(set(properties)):
-            raise ValueError("hover field properties must be unique")
-        return self
-
-
-class PointLayer(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    id: str = Field(pattern=r"^[A-Za-z0-9_.-]{1,128}$")
-    source: str = Field(pattern=r"^[A-Za-z0-9_.-]{1,128}$")
-    geometry: Literal["point"] = "point"
-    label_property: str | None = Field(
-        default=None,
-        description="Optional GeoJSON property rendered as a persistent map label.",
-    )
-    hover: LayerHover | None = Field(
-        default=None,
-        description="Feature properties shown in a safe text-only hover popup.",
-    )
-    style: PointStyle = Field(default_factory=PointStyle)
-
-
-class LineLayer(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    id: str = Field(pattern=r"^[A-Za-z0-9_.-]{1,128}$")
-    source: str = Field(pattern=r"^[A-Za-z0-9_.-]{1,128}$")
-    geometry: Literal["line"] = "line"
-    label_property: str | None = Field(
-        default=None,
-        description="Optional GeoJSON property rendered as a persistent map label.",
-    )
-    hover: LayerHover | None = Field(
-        default=None,
-        description="Feature properties shown in a safe text-only hover popup.",
-    )
-    style: LineStyle = Field(default_factory=LineStyle)
-
-
-class PolygonLayer(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    id: str = Field(pattern=r"^[A-Za-z0-9_.-]{1,128}$")
-    source: str = Field(pattern=r"^[A-Za-z0-9_.-]{1,128}$")
-    geometry: Literal["polygon"] = "polygon"
-    label_property: str | None = Field(
-        default=None,
-        description="Optional GeoJSON property rendered as a persistent map label.",
-    )
-    hover: LayerHover | None = Field(
-        default=None,
-        description="Feature properties shown in a safe text-only hover popup.",
-    )
-    style: PolygonStyle = Field(default_factory=PolygonStyle)
-
-
-MapLayer = Annotated[PointLayer | LineLayer | PolygonLayer, Field(discriminator="geometry")]
-
-
-class LegendItem(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    label: str = Field(min_length=1)
-    color: CssColor
-
-
-class MapLegend(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    title: str | None = None
-    items: list[LegendItem] = Field(min_length=1, max_length=32)
-
-
-class MapCardPayload(BaseModel):
-    """Browser-facing map.v2 contract."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    title: str = Field(min_length=1)
-    intent: str = Field(min_length=1)
-    status: Literal["loading", "ready", "error"]
-    fallback_text: str | None = None
-    summary: str | None = None
-    viewport: MapViewport
-    sources: list[MapSource] = Field(min_length=1, max_length=64)
-    layers: list[MapLayer] = Field(min_length=1, max_length=128)
-    legend: MapLegend | None = None
-
-    @model_validator(mode="after")
-    def validate_graph(self) -> MapCardPayload:
-        source_ids = [source.id for source in self.sources]
-        layer_ids = [layer.id for layer in self.layers]
-        if len(source_ids) != len(set(source_ids)):
-            raise ValueError("map source ids must be unique")
-        if len(layer_ids) != len(set(layer_ids)):
-            raise ValueError("map layer ids must be unique")
-        unknown = {layer.source for layer in self.layers}.difference(source_ids)
-        if unknown:
-            raise ValueError(f"map layers reference unknown sources: {sorted(unknown)}")
-        return self
-
-
-class InlineVisualizationRenderer(BaseModel):
-    """Versioned renderer payload stored by the authorized host."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    kind: Literal["map.v2"]
-    payload: MapCardPayload
-
-
-class InlineVisualizationArtifact(BaseModel):
-    """Opaque, Thread-scoped reference plus its typed renderer."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    ref: str = Field(pattern=r"^[A-Za-z0-9_.-]{1,128}$")
-    renderer: InlineVisualizationRenderer
-
-
-class InlineVisualizationEmbed(BaseModel):
-    """Assistant-copyable composition directive."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    syntax: Literal["codex-inline-vis.artifact.v1"]
-    code: str = Field(
-        pattern=r'^::codex-inline-vis\{artifact="[A-Za-z0-9_.-]{1,128}"\}$'
-    )
-
-
-class MapCardToolResult(BaseModel):
-    """Schema-validated typed Artifact output for ``create_map_card``."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["open-web-artifact"]
-    kind: Literal["inline-visualization.v1"]
-    artifact: InlineVisualizationArtifact
-    embed: InlineVisualizationEmbed
-
-    @model_validator(mode="after")
-    def validate_embed_reference(self) -> MapCardToolResult:
-        expected = f'::codex-inline-vis{{artifact="{self.artifact.ref}"}}'
-        if self.embed.code != expected:
-            raise ValueError("embed code must reference artifact.ref exactly")
-        return self
-
-
 class GeoJsonToolResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -547,7 +69,7 @@ class GeoJsonToolResult(BaseModel):
     feature_count: int = Field(ge=0)
     data_ref: McpResourceMapData = Field(
         description=(
-            "Copy this object unchanged into create_map_card sources[].data. "
+            "Copy this object unchanged into create_map_card sources.<source-id>.data_ref. "
             "Its server and uri are the canonical MCP Resource routing identity."
         ),
     )
@@ -557,12 +79,17 @@ mcp = FastMCP(
     "Map Utils",
     instructions=(
         "Geocoding and routing tools publish GeoJSON as MCP Resources. Copy structuredContent."
-        "data_ref unchanged into create_map_card sources[].data. For read_mcp_resource, pass "
+        "data_ref unchanged into create_map_card sources.<source-id>.data_ref. For "
+        "read_mcp_resource, pass "
         "data_ref.server as server and data_ref.uri as uri unchanged; the server is map_utils, "
         "never the model-visible mcp__map_utils namespace. Never copy Resource JSON into the "
         "assistant reply. "
-        "create_map_card returns a schema-validated typed visualization Artifact and an exact "
-        "assistant embed directive. Copy structuredContent.embed.code verbatim onto its own line "
+        "create_map_card accepts standard Mapbox Style Specification layer JSON. Open Web "
+        "manages GeoJSON source data and adds optional extensions.hover and "
+        "extensions.legend. The official Mapbox validator reports unknown style properties "
+        "as warnings and rejects invalid known syntax. The Tool returns a schema-validated "
+        "typed visualization Artifact and an exact assistant embed directive. Copy "
+        "structuredContent.embed.code verbatim onto its own line "
         "where the map should appear; Tool completion alone does not display it. One selected "
         "provider and API key are shared by every maps tool."
     ),
@@ -664,9 +191,7 @@ def _geocode_geojson(result: dict[str, object]) -> dict[str, object]:
                 continue
             longitude = location.get("longitude")
             latitude = location.get("latitude")
-            if not isinstance(longitude, (int, float)) or not isinstance(
-                latitude, (int, float)
-            ):
+            if not isinstance(longitude, (int, float)) or not isinstance(latitude, (int, float)):
                 continue
             properties = {
                 "index": entry.get("index"),
@@ -725,11 +250,7 @@ def _route_geojson(
             geometry = route.get("geometry")
             if not isinstance(geometry, dict):
                 polyline = route.get("polyline")
-                encoded = (
-                    polyline.get("encodedPolyline")
-                    if isinstance(polyline, dict)
-                    else None
-                )
+                encoded = polyline.get("encodedPolyline") if isinstance(polyline, dict) else None
                 if isinstance(encoded, str):
                     geometry = {
                         "type": "LineString",
@@ -738,9 +259,7 @@ def _route_geojson(
             if not isinstance(geometry, dict):
                 geometry = {
                     "type": "LineString",
-                    "coordinates": [
-                        [point.longitude, point.latitude] for point in fallback
-                    ],
+                    "coordinates": [[point.longitude, point.latitude] for point in fallback],
                 }
             features.append(
                 {
@@ -748,8 +267,7 @@ def _route_geojson(
                     "properties": {
                         "index": index,
                         "label": f"Route {index + 1}",
-                        "distance_meters": route.get("distanceMeters")
-                        or route.get("distance"),
+                        "distance_meters": route.get("distanceMeters") or route.get("distance"),
                         "duration": route.get("duration"),
                     },
                     "geometry": geometry,
@@ -761,55 +279,105 @@ def _route_geojson(
 @mcp.tool(structured_output=True)
 async def create_map_card(
     title: str,
-    sources: list[MapSource],
-    layers: list[MapLayer],
-    viewport: MapViewport | None = None,
+    sources: dict[str, CurrentGeoJsonSource],
+    layers: list[dict[str, object]],
     intent: str = "visualization",
     fallback_text: str | None = None,
     summary: str | None = None,
-    legend: MapLegend | None = None,
-) -> Annotated[CallToolResult, MapCardToolResult]:
-    """Create a typed map.v2 Artifact from GeoJSON sources and styled layers.
+    center: tuple[float, float] | None = None,
+    zoom: float | None = None,
+    bearing: float | None = None,
+    pitch: float | None = None,
+    extensions: CurrentMapExtensions | None = None,
+) -> Annotated[CallToolResult, CurrentMapToolResult]:
+    """Create the current typed Map Artifact from Mapbox Style layer JSON.
 
-    An MCP Resource source must be copied unchanged from an earlier data tool result in the
-    same Run and Thread. Use a camera viewport for an explicit center/zoom, otherwise fit all source
-    data. Copy structuredContent.embed.code verbatim onto its own Assistant line at the desired
-    position. Do not reproduce the renderer payload in reply text.
+    An MCP Resource data_ref must be copied unchanged from an earlier data tool result in the
+    same Run and Thread. ``sources`` is an object keyed by source ID; every source is
+    {type:"geojson", data:<direct GeoJSON>} or {type:"geojson", data_ref:<complete data_ref>},
+    with exactly one data field. ``layers`` uses the official Mapbox Style Specification and
+    is passed to ``map.addLayer`` unchanged except that each authorized source ID is replaced
+    by its browser-local source ID. Standard Mapbox layer types, paint/layout properties,
+    filters, expressions, minzoom/maxzoom, metadata, and source-layer are not redefined here.
 
-    This Tool accepts the typed Artifact schema, not raw Mapbox Style Specification JSON. Wrap
-    inline GeoJSON under source.data; use point, line, or polygon geometry; and put the simplified
-    color, opacity, size, stroke, dash, shape, icon, and hover fields in layer.style/layer.hover.
-    Never use native Mapbox paint keys or circle/fill geometry names.
+    ``center`` and ``zoom`` are standard Mapbox camera fields and must be supplied together;
+    omit both to fit all loaded GeoJSON. ``bearing`` and ``pitch`` are also standard camera
+    fields. ``extensions.hover`` and ``extensions.legend`` are optional Open Web additions,
+    not Mapbox Style fields. Omit either extension when it is not needed. Unknown Mapbox
+    properties are returned as official validator warnings; invalid known Mapbox syntax
+    fails validation. Unknown Open Web extension fields are ignored with warnings.
+
+    Do not use ``style`` as a wrapper, put hover/legend inside a Mapbox layer, use source
+    URLs, or put MCP Resource objects in ``source.data``. Copy structuredContent.embed.code
+    verbatim onto its own Assistant line; do not reproduce renderer JSON.
     """
     clean_title = title.strip()
     if not clean_title:
         raise ValueError("title is required")
-    card = MapCardPayload(
+    if not sources:
+        raise ValueError("sources must not be empty")
+    if not layers:
+        raise ValueError("layers must not be empty")
+    if (center is None) != (zoom is None):
+        raise ValueError("center and zoom must be provided together")
+    if center is not None:
+        longitude, latitude = center
+        if not -180 <= longitude <= 180 or not -90 <= latitude <= 90:
+            raise ValueError("center must be [longitude, latitude]")
+    if zoom is not None and not 0 <= zoom <= 24:
+        raise ValueError("zoom must be between 0 and 24")
+    if bearing is not None and not -180 <= bearing <= 180:
+        raise ValueError("bearing must be between -180 and 180")
+    if pitch is not None and not 0 <= pitch <= 85:
+        raise ValueError("pitch must be between 0 and 85")
+    if extensions is not None and not isinstance(extensions, CurrentMapExtensions):
+        extensions = CurrentMapExtensions.model_validate(extensions)
+    validate_extension_graph(extensions, layers)
+    warnings = validate_style(
+        sources,
+        layers,
+        center=center,
+        zoom=zoom,
+        bearing=bearing,
+        pitch=pitch,
+    )
+    warnings.extend(extension_warnings(extensions))
+    card = CurrentMapPayload(
         title=clean_title,
         intent=intent.strip() or "visualization",
         status="ready",
         fallback_text=fallback_text.strip() if fallback_text else None,
         summary=summary.strip() if summary else None,
-        viewport=viewport or FitViewport(),
-        sources=sources,
+        sources=renderer_sources(sources),
         layers=layers,
-        legend=legend,
+        center=center,
+        zoom=zoom,
+        bearing=bearing,
+        pitch=pitch,
+        extensions=sanitized_extensions(extensions),
     )
     artifact_ref = f"map-{uuid4()}"
     embed_code = f'::codex-inline-vis{{artifact="{artifact_ref}"}}'
-    result = MapCardToolResult(
+    result = CurrentMapToolResult(
         type="open-web-artifact",
         kind="inline-visualization.v1",
-        artifact=InlineVisualizationArtifact(
+        artifact=CurrentMapArtifact(
             ref=artifact_ref,
-            renderer=InlineVisualizationRenderer(kind="map.v2", payload=card),
+            renderer=CurrentMapRenderer(kind="map.v3", payload=card),
         ),
-        embed=InlineVisualizationEmbed(
+        embed=CurrentMapEmbed(
             syntax="codex-inline-vis.artifact.v1",
             code=embed_code,
         ),
+        warnings=warnings or None,
     )
     structured_content = result.model_dump(mode="json", exclude_none=True)
+    warning_text = ""
+    if warnings:
+        shown_paths = ", ".join(warning.path for warning in warnings[:10])
+        remaining = len(warnings) - min(len(warnings), 10)
+        suffix = f" and {remaining} more" if remaining else ""
+        warning_text = f"\nWarning: Map input diagnostics: {shown_paths}{suffix}."
     return CallToolResult(
         content=[
             TextContent(
@@ -817,6 +385,7 @@ async def create_map_card(
                 text=(
                     f"Map visualization ready: {clean_title}. Insert this exact line in the "
                     f"assistant reply where the map should appear:\n{embed_code}"
+                    f"{warning_text}"
                 ),
             )
         ],

@@ -98,10 +98,12 @@ try:
     instructions = initialize.get("result", {}).get("instructions", "")
     if (
         "structuredContent.data_ref" not in instructions
-        or "data_ref unchanged into create_map_card" not in instructions
+        or "data_ref unchanged into create_map_card sources.<source-id>.data_ref"
+        not in instructions
         or "data_ref.server as server" not in instructions
         or "data_ref.uri as uri" not in instructions
         or "mcp__map_utils" not in instructions
+        or "standard Mapbox Style Specification layer JSON" not in instructions
     ):
         raise SystemExit(f"maps MCP did not advertise its map-card output contract: {instructions!r}")
     send("notifications/initialized", request=False)
@@ -150,7 +152,7 @@ try:
         )
     map_card_tool = next(tool for tool in listed_tools if tool.get("name") == "create_map_card")
     map_card_resource_schema = (
-        map_card_tool.get("inputSchema", {}).get("$defs", {}).get("McpResourceMapData", {})
+        map_card_tool.get("inputSchema", {}).get("$defs", {}).get("MapResourceRef", {})
     )
     if (
         "server" not in map_card_resource_schema.get("required", [])
@@ -161,12 +163,49 @@ try:
             "create_map_card did not require the raw map_utils server ID: "
             f"{map_card_resource_schema}"
         )
+    map_card_input_schema = map_card_tool.get("inputSchema", {})
+    source_schema = map_card_input_schema.get("properties", {}).get("sources", {})
+    if source_schema.get("type") != "object":
+        raise SystemExit(f"create_map_card sources are not Mapbox-like: {source_schema}")
+    geojson_source = map_card_input_schema.get("$defs", {}).get("GeoJsonSource", {})
+    source_variants = {
+        tuple(entry.get("required", []))
+        for entry in geojson_source.get("oneOf", [])
+    }
+    if (
+        geojson_source.get("properties", {}).get("type", {}).get("const") != "geojson"
+        or source_variants != {("data",), ("data_ref",)}
+    ):
+        raise SystemExit(
+            "create_map_card does not advertise explicit mutually exclusive data/data_ref "
+            f"GeoJSON sources: {geojson_source}"
+        )
+    layer_schema = map_card_input_schema.get("properties", {}).get("layers", {}).get("items", {})
+    if layer_schema.get("type") != "object":
+        raise SystemExit(f"create_map_card layers are not raw Mapbox Layer JSON: {layer_schema}")
+    if "view" in map_card_input_schema.get("properties", {}) or "legend" in map_card_input_schema.get("properties", {}):
+        raise SystemExit(f"create_map_card still exposes removed compatibility fields: {map_card_input_schema}")
+    if not {"center", "zoom", "extensions"}.issubset(map_card_input_schema.get("properties", {})):
+        raise SystemExit(f"create_map_card is missing camera/extensions: {map_card_input_schema}")
+    legend_item = map_card_input_schema.get("$defs", {}).get("LegendItem", {})
+    legend_type_variants = (
+        legend_item.get("properties", {}).get("type", {}).get("anyOf", [])
+    )
+    if not any(
+        set(entry.get("enum", [])) == {"circle", "line", "fill"}
+        for entry in legend_type_variants
+    ):
+        raise SystemExit(
+            f"create_map_card is missing typed legend items: {legend_item}"
+        )
     output_schema = map_card_tool.get("outputSchema")
     required_output_fields = {"type", "kind", "artifact", "embed"}
     if not isinstance(output_schema, dict) or not required_output_fields.issubset(
         set(output_schema.get("required", []))
     ):
         raise SystemExit(f"create_map_card missing required outputSchema: {output_schema}")
+    if "warnings" not in output_schema.get("properties", {}):
+        raise SystemExit(f"create_map_card outputSchema is missing warnings: {output_schema}")
 
     request_id = send(
         "tools/call",
@@ -175,42 +214,64 @@ try:
             "arguments": {
                 "title": "Jakarta",
                 "summary": "Maps MCP handshake smoke",
-                "viewport": {
-                    "mode": "camera",
-                    "center": [106.827168, -6.1754049],
-                    "zoom": 10,
-                },
-                "sources": [{
-                    "id": "locations",
-                    "data": {
-                        "type": "inline",
-                        "format": "geojson",
-                        "geojson": {
-                            "type": "FeatureCollection",
-                            "features": [{
-                                "type": "Feature",
-                                "properties": {"label": "Jakarta"},
-                                "geometry": {
-                                    "type": "Point",
-                                    "coordinates": [106.827168, -6.1754049],
-                                },
-                            }],
+                "center": [106.827168, -6.1754049],
+                "zoom": 10,
+                "sources": {
+                    "locations": {
+                        "type": "geojson",
+                        "data_ref": {
+                            "type": "mcp_resource",
+                            "server": "map_utils",
+                            "uri": "maps-data://geojson/map-data-smoke",
+                            "format": "geojson",
                         },
                     },
-                }],
+                },
                 "layers": [{
                     "id": "points",
+                    "type": "circle",
                     "source": "locations",
-                    "geometry": "point",
-                    "label_property": "label",
-                    "style": {
-                        "color": "#ef4444",
-                        "opacity": 0.9,
-                        "radius": 8,
-                        "stroke_color": "#ffffff",
-                        "stroke_width": 2,
+                    "filter": ["!=", ["get", "query"], "深圳"],
+                    "paint": {
+                        "circle-color": [
+                            "case",
+                            ["==", ["get", "query"], "深圳"],
+                            "#e11d48",
+                            "#2563eb",
+                        ],
+                        "circle-opacity": 0.9,
+                        "circle-radius": 8,
+                        "circle-stroke-color": "#ffffff",
+                        "circle-stroke-width": 2,
+                        "unknown-paint-property": 0.5,
+                    },
+                }, {
+                    "id": "labels",
+                    "type": "symbol",
+                    "source": "locations",
+                    "layout": {
+                        "text-field": ["get", "label"],
+                        "text-size": 12,
+                        "text-offset": [0, 1],
+                        "text-anchor": "top",
+                    },
+                    "paint": {
+                        "text-color": "#1f2937",
+                        "text-halo-color": "#ffffff",
+                        "text-halo-width": 2,
                     },
                 }],
+                "extensions": {
+                    "legend": {
+                        "title": "Legend",
+                        "items": [{
+                            "label": "Locations",
+                            "color": "#2563eb",
+                            "type": "circle",
+                            "size": 10,
+                        }],
+                    },
+                },
             },
         },
     )
@@ -226,15 +287,41 @@ try:
         raise SystemExit(f"create_map_card returned an invalid type: {structured_content!r}")
     if structured_content.get("kind") != "inline-visualization.v1":
         raise SystemExit(f"create_map_card returned an invalid kind: {structured_content!r}")
+    if structured_content.get("warnings") != [
+        {
+            "code": "mapbox_style_warning",
+            "path": "layers[0].paint.unknown-paint-property",
+            "message": 'layers[0].paint.unknown-paint-property: unknown property "unknown-paint-property"',
+        },
+        {
+            "code": "ignored_extra_input",
+            "path": "extensions.legend.items[0].size",
+        },
+    ]:
+        raise SystemExit(
+            f"create_map_card did not return the ignored extra-input warning: "
+            f"{structured_content.get('warnings')!r}"
+        )
     artifact = structured_content.get("artifact")
     if not isinstance(artifact, dict) or not artifact.get("ref", "").startswith("map-"):
         raise SystemExit(f"create_map_card returned an invalid Artifact: {artifact!r}")
     renderer = artifact.get("renderer")
-    if not isinstance(renderer, dict) or renderer.get("kind") != "map.v2":
+    if not isinstance(renderer, dict) or renderer.get("kind") != "map.v3":
         raise SystemExit(f"create_map_card returned an invalid renderer: {renderer!r}")
     card = renderer.get("payload")
     if not isinstance(card, dict) or card.get("title") != "Jakarta":
         raise SystemExit(f"create_map_card returned an invalid card: {card!r}")
+    layers = card.get("layers", [])
+    if (
+        len(layers) != 2
+        or layers[0].get("filter", [None])[0] != "!="
+        or layers[0].get("paint", {}).get("circle-color", [None])[0] != "case"
+        or layers[1].get("layout", {}).get("text-field", [None])[0] != "get"
+        or layers[1].get("layout", {}).get("text-anchor") != "top"
+    ):
+        raise SystemExit(f"create_map_card did not normalize filter/text layers: {layers!r}")
+    if card.get("extensions", {}).get("legend", {}).get("items", [{}])[0].get("type") != "circle":
+        raise SystemExit(f"create_map_card did not retain typed legend items: {card!r}")
     embed = structured_content.get("embed")
     expected_embed = f'::codex-inline-vis{{artifact="{artifact["ref"]}"}}'
     if not isinstance(embed, dict) or embed.get("code") != expected_embed:

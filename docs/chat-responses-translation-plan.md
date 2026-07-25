@@ -302,7 +302,7 @@ Assistant 独立行编排语法中实现 `::codex-inline-vis{artifact="..."}` �
 - `open-web-artifact` / `inline-visualization.v1` envelope；
 - 安全、不可预测、Thread 作用域且无路径语义的 Artifact ref；
 - `embed.syntax = codex-inline-vis.artifact.v1` 与由 Tool 生成的完整 `embed.code`；
-- renderer registry；第一个 renderer 是 `map.v2`；
+- renderer registry；第一个 renderer 是 `map.v3`；
 - 官方语法边界：独立行、代码块不解析、不完整 delta 缓冲。
 
 合同不得包含 `map_utils` 或 `create_map_card` 名称判断。Tool 身份只用于审计；
@@ -311,7 +311,7 @@ Artifact 类型、renderer capability 和授权记录决定处理方式。
 #### 6.2 改造 `create_map_card`
 
 - 保留现有 viewport、source/layer、样式和 MCP Resource 验证。
-- 返回通用 Artifact envelope、`map.v2` renderer payload 和可复制 embed code。
+- 返回通用 Artifact envelope、`map.v3` renderer payload 和可复制 embed code。
 - `content` 明确要求模型把 embed code 原样放入目标 Assistant 回复位置。
 - Tool 完成不再意味着“显示卡片”。
 - 不双写旧 `open-web-card` Tool 附件和新 envelope。

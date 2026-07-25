@@ -2683,6 +2683,17 @@ body {
   border-radius: 999px;
 }
 
+.web-map-card-legend i[data-type="line"] {
+  width: 16px;
+  height: 3px;
+  border: 0;
+  border-radius: 999px;
+}
+
+.web-map-card-legend i[data-type="fill"] {
+  border-radius: 2px;
+}
+
 .web-map-card-hover .mapboxgl-popup-tip {
   display: none;
 }

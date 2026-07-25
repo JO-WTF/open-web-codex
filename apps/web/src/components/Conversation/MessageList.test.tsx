@@ -561,10 +561,10 @@ describe("MessageList", () => {
             inlineArtifacts: [
               {
                 ref: "map-card-data",
-                rendererKind: "map.v2",
+                rendererKind: "map.v3",
                 card: {
                   type: "card",
-                  kind: "map.v2",
+                  kind: "map.v3",
                   id: "map-card-data",
                   title: "Batch geocode",
                   intent: "visualization",
@@ -584,17 +584,17 @@ describe("MessageList", () => {
                   layers: [{
                     id: "points",
                     source: "locations",
-                    geometry: "point",
-                    style: {},
+                    type: "circle",
+                    paint: {},
                   }],
                 },
               },
               {
                 ref: "map-card-route",
-                rendererKind: "map.v2",
+                rendererKind: "map.v3",
                 card: {
                   type: "card",
-                  kind: "map.v2",
+                  kind: "map.v3",
                   id: "map-card-route",
                   title: "Route overview",
                   intent: "route",
@@ -615,8 +615,8 @@ describe("MessageList", () => {
                   layers: [{
                     id: "route-line",
                     source: "route",
-                    geometry: "line",
-                    style: { width: 4, dash: [2, 1] },
+                    type: "line",
+                    paint: { "line-width": 4, "line-dasharray": [2, 1] },
                   }],
                 },
               },

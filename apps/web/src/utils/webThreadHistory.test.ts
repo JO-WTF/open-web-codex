@@ -386,26 +386,27 @@ describe("buildWebThreadHistory", () => {
         inlineArtifacts: [{
           ref: "map-locations",
           renderer: {
-            kind: "map.v2",
+            kind: "map.v3",
             payload: {
             title: "Locations",
             intent: "visualization",
             status: "ready",
-            viewport: { mode: "fit", padding: 40 },
-            sources: [{
-              id: "locations",
-              data: {
+            sources: {
+              locations: {
+                type: "geojson",
+                data: {
                 type: "artifact",
                 format: "geojson",
                 artifact_id: "8e98ff2f-82ee-4cc9-a3e6-2974debf8666",
                 url: "/api/runs/975f1f1c-4b58-47ad-a12c-c32aeae566e7/artifacts/8e98ff2f-82ee-4cc9-a3e6-2974debf8666",
               },
-            }],
+              },
+            },
             layers: [{
               id: "points",
               source: "locations",
-              geometry: "point",
-              style: { color: "#ef4444" },
+              type: "circle",
+              paint: { "circle-color": "#ef4444" },
             }],
             },
           },
@@ -419,9 +420,9 @@ describe("buildWebThreadHistory", () => {
       text: 'Before.\n::codex-inline-vis{artifact="map-locations"}\nAfter.',
       inlineArtifacts: [{
         ref: "map-locations",
-        rendererKind: "map.v2",
+        rendererKind: "map.v3",
         card: {
-          kind: "map.v2",
+          kind: "map.v3",
           title: "Locations",
           sources: [{
             id: "locations",

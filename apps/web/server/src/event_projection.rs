@@ -630,11 +630,17 @@ fn project_inline_visualization_artifact(
         .as_object()?;
     if structured.get("type")?.as_str()? != "open-web-artifact"
         || structured.get("kind")?.as_str()? != "inline-visualization.v1"
-        || structured
-            .keys()
-            .any(|key| !matches!(key.as_str(), "type" | "kind" | "artifact" | "embed"))
+        || structured.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "type" | "kind" | "artifact" | "embed" | "warnings"
+            )
+        })
     {
         return None;
+    }
+    if let Some(warnings) = structured.get("warnings") {
+        validate_inline_visualization_warnings(warnings)?;
     }
     let artifact = structured.get("artifact")?.as_object()?;
     if artifact
@@ -674,24 +680,62 @@ fn project_inline_visualization_artifact(
     })
 }
 
+fn validate_inline_visualization_warnings(value: &Value) -> Option<()> {
+    let warnings = value.as_array()?;
+    for warning in warnings {
+        let warning = warning.as_object()?;
+        if warning
+            .keys()
+            .any(|key| !matches!(key.as_str(), "code" | "path" | "message"))
+            || warning.len() < 2
+            || warning.len() > 3
+        {
+            return None;
+        }
+        if !matches!(
+            warning.get("code")?.as_str()?,
+            "ignored_extra_input" | "mapbox_style_warning"
+        ) {
+            return None;
+        }
+        let path = warning.get("path")?.as_str()?;
+        if path.is_empty() || path.chars().count() > 512 || path.chars().any(char::is_control) {
+            return None;
+        }
+        if let Some(message) = warning.get("message") {
+            let message = message.as_str()?;
+            if message.is_empty()
+                || message.chars().count() > 1024
+                || message.chars().any(char::is_control)
+            {
+                return None;
+            }
+        }
+    }
+    Some(())
+}
+
 fn project_inline_renderer(kind: &str, payload: &Map<String, Value>) -> Option<Value> {
     match kind {
-        "map.v2" => project_map_card(payload),
+        "map.v3" => project_map_card_v3(payload),
         _ => None,
     }
 }
 
-fn project_map_card(card: &Map<String, Value>) -> Option<Value> {
+fn project_map_card_v3(card: &Map<String, Value>) -> Option<Value> {
     const CARD_FIELDS: &[&str] = &[
         "title",
         "intent",
         "status",
         "fallback_text",
         "summary",
-        "viewport",
         "sources",
         "layers",
-        "legend",
+        "center",
+        "zoom",
+        "bearing",
+        "pitch",
+        "extensions",
     ];
     if card.keys().any(|key| !CARD_FIELDS.contains(&key.as_str())) {
         return None;
@@ -703,157 +747,123 @@ fn project_map_card(card: &Map<String, Value>) -> Option<Value> {
         return None;
     }
 
-    let mut projected = Map::new();
-    projected.insert("title".to_string(), Value::String(title));
-    projected.insert("intent".to_string(), Value::String(intent));
-    projected.insert("status".to_string(), Value::String(status));
+    let mut projected = Map::from_iter([
+        ("title".to_string(), Value::String(title)),
+        ("intent".to_string(), Value::String(intent)),
+        ("status".to_string(), Value::String(status)),
+    ]);
     for key in ["fallback_text", "summary"] {
         if let Some(value) = optional_string(card, key)? {
             projected.insert(key.to_string(), Value::String(value));
         }
     }
-    projected.insert(
-        "viewport".to_string(),
-        project_map_viewport(card.get("viewport")?)?,
-    );
-    let sources = project_map_sources(card.get("sources")?)?;
+
+    let sources = project_map_v3_sources(card.get("sources")?)?;
     let source_ids = sources
-        .iter()
-        .filter_map(|source| source.get("id").and_then(Value::as_str))
+        .keys()
+        .map(String::as_str)
         .collect::<std::collections::HashSet<_>>();
-    let layers = project_map_layers(card.get("layers")?)?;
-    if layers
-        .iter()
-        .any(|layer| match layer.get("source").and_then(Value::as_str) {
-            Some(source) => !source_ids.contains(source),
-            None => true,
-        })
-    {
+    let layers = card.get("layers")?.as_array()?;
+    if layers.is_empty() {
         return None;
     }
-    projected.insert("sources".to_string(), Value::Array(sources));
-    projected.insert("layers".to_string(), Value::Array(layers));
-    if let Some(legend) = card.get("legend") {
-        projected.insert("legend".to_string(), project_map_legend(legend)?);
+    let mut layer_ids = std::collections::HashSet::new();
+    let mut source_backed_layer_ids = std::collections::HashSet::new();
+    for layer in layers {
+        let layer = layer.as_object()?;
+        if sanitize_value(&Value::Object(layer.clone()), "layer") != Value::Object(layer.clone()) {
+            return None;
+        }
+        let id = nonempty_string(layer, "id")?;
+        if !valid_mapbox_identifier(&id) || !layer_ids.insert(id.clone()) {
+            return None;
+        }
+        nonempty_string(layer, "type")?;
+        if let Some(source) = layer.get("source") {
+            let source = source.as_str()?;
+            if !source_ids.contains(source) {
+                return None;
+            }
+            source_backed_layer_ids.insert(id);
+        }
+    }
+    projected.insert("sources".to_string(), Value::Object(sources));
+    projected.insert("layers".to_string(), Value::Array(layers.clone()));
+
+    let center = card.get("center");
+    let zoom = card.get("zoom");
+    if center.is_some() != zoom.is_some() {
+        return None;
+    }
+    if let (Some(center), Some(zoom)) = (center, zoom) {
+        let center = center.as_array()?;
+        if center.len() != 2 {
+            return None;
+        }
+        projected.insert(
+            "center".to_string(),
+            json!([
+                bounded_number(&center[0], -180.0, 180.0)?,
+                bounded_number(&center[1], -90.0, 90.0)?
+            ]),
+        );
+        projected.insert("zoom".to_string(), json!(bounded_number(zoom, 0.0, 24.0)?));
+    }
+    for (key, minimum, maximum) in [("bearing", -180.0, 180.0), ("pitch", 0.0, 85.0)] {
+        if let Some(value) = card.get(key) {
+            projected.insert(
+                key.to_string(),
+                json!(bounded_number(value, minimum, maximum)?),
+            );
+        }
+    }
+    if let Some(extensions) = card.get("extensions") {
+        projected.insert(
+            "extensions".to_string(),
+            project_map_v3_extensions(extensions, &layer_ids, &source_backed_layer_ids)?,
+        );
     }
     Some(Value::Object(projected))
 }
 
-fn project_map_viewport(value: &Value) -> Option<Value> {
-    let viewport = value.as_object()?;
-    let mode = viewport.get("mode")?.as_str()?;
-    match mode {
-        "fit" => {
-            const FIELDS: &[&str] = &["mode", "padding", "max_zoom", "min_zoom"];
-            if viewport.keys().any(|key| !FIELDS.contains(&key.as_str())) {
-                return None;
-            }
-            let mut projected =
-                Map::from_iter([("mode".to_string(), Value::String("fit".to_string()))]);
-            if let Some(padding) = viewport.get("padding") {
-                projected.insert("padding".to_string(), project_padding(padding)?);
-            }
-            for key in ["max_zoom", "min_zoom"] {
-                if let Some(zoom) = viewport.get(key) {
-                    projected.insert(key.to_string(), json!(bounded_number(zoom, 0.0, 24.0)?));
-                }
-            }
-            Some(Value::Object(projected))
-        }
-        "camera" => {
-            const FIELDS: &[&str] = &["mode", "center", "zoom", "bearing", "pitch"];
-            if viewport.keys().any(|key| !FIELDS.contains(&key.as_str())) {
-                return None;
-            }
-            let center = viewport.get("center")?.as_array()?;
-            if center.len() != 2 {
-                return None;
-            }
-            let longitude = bounded_number(&center[0], -180.0, 180.0)?;
-            let latitude = bounded_number(&center[1], -90.0, 90.0)?;
-            let mut projected = Map::from_iter([
-                ("mode".to_string(), Value::String("camera".to_string())),
-                ("center".to_string(), json!([longitude, latitude])),
-                (
-                    "zoom".to_string(),
-                    json!(bounded_number(viewport.get("zoom")?, 0.0, 24.0)?),
-                ),
-            ]);
-            if let Some(bearing) = viewport.get("bearing") {
-                projected.insert(
-                    "bearing".to_string(),
-                    json!(bounded_number(bearing, -180.0, 180.0)?),
-                );
-            }
-            if let Some(pitch) = viewport.get("pitch") {
-                projected.insert(
-                    "pitch".to_string(),
-                    json!(bounded_number(pitch, 0.0, 85.0)?),
-                );
-            }
-            Some(Value::Object(projected))
-        }
-        _ => None,
-    }
-}
-
-fn project_padding(value: &Value) -> Option<Value> {
-    if let Some(number) = value.as_f64() {
-        return (0.0..=256.0).contains(&number).then(|| json!(number));
-    }
-    let padding = value.as_object()?;
-    const FIELDS: &[&str] = &["top", "right", "bottom", "left"];
-    if padding.len() != FIELDS.len() || padding.keys().any(|key| !FIELDS.contains(&key.as_str())) {
+fn project_map_v3_sources(value: &Value) -> Option<Map<String, Value>> {
+    let sources = value.as_object()?;
+    if sources.is_empty() {
         return None;
     }
-    Some(json!({
-        "top": bounded_number(padding.get("top")?, 0.0, 256.0)?,
-        "right": bounded_number(padding.get("right")?, 0.0, 256.0)?,
-        "bottom": bounded_number(padding.get("bottom")?, 0.0, 256.0)?,
-        "left": bounded_number(padding.get("left")?, 0.0, 256.0)?,
-    }))
-}
-
-fn project_map_sources(value: &Value) -> Option<Vec<Value>> {
-    let sources = value.as_array()?;
-    if sources.is_empty() || sources.len() > 64 {
-        return None;
-    }
-    let mut ids = std::collections::HashSet::new();
     sources
         .iter()
-        .map(|source| {
+        .map(|(id, source)| {
+            if !valid_mapbox_identifier(id) {
+                return None;
+            }
             let source = source.as_object()?;
-            if source
-                .keys()
-                .any(|key| !matches!(key.as_str(), "id" | "data"))
+            if source.get("type")?.as_str()? != "geojson" {
+                return None;
+            }
+            let mut source_options = source.clone();
+            source_options.remove("data");
+            if sanitize_value(&Value::Object(source_options.clone()), "source")
+                != Value::Object(source_options)
             {
                 return None;
             }
-            let id = nonempty_string(source, "id")?;
-            if !valid_card_identifier(&id) || !ids.insert(id.clone()) {
-                return None;
-            }
             let data = source.get("data")?.as_object()?;
-            let data_type = data.get("type")?.as_str()?;
-            let format = data.get("format")?.as_str()?;
-            if format != "geojson" {
-                return None;
-            }
-            let data = match data_type {
+            let data = match data.get("type")?.as_str()? {
                 "mcp_resource" => {
                     if data
                         .keys()
                         .any(|key| !matches!(key.as_str(), "type" | "server" | "uri" | "format"))
+                        || data.get("format")?.as_str()? != "geojson"
                     {
                         return None;
                     }
                     let server = nonempty_string(data, "server")?;
-                    if !valid_card_identifier(&server) || server.starts_with("mcp__") {
-                        return None;
-                    }
                     let uri = nonempty_string(data, "uri")?;
-                    if !valid_geojson_resource_uri(&uri) {
+                    if !valid_card_identifier(&server)
+                        || server.starts_with("mcp__")
+                        || !valid_geojson_resource_uri(&uri)
+                    {
                         return None;
                     }
                     json!({
@@ -866,7 +876,8 @@ fn project_map_sources(value: &Value) -> Option<Vec<Value>> {
                 "inline" => {
                     if data
                         .keys()
-                        .any(|key| !matches!(key.as_str(), "type" | "geojson" | "format"))
+                        .any(|key| !matches!(key.as_str(), "type" | "format" | "geojson"))
+                        || data.get("format")?.as_str()? != "geojson"
                     {
                         return None;
                     }
@@ -882,327 +893,89 @@ fn project_map_sources(value: &Value) -> Option<Vec<Value>> {
                 }
                 _ => return None,
             };
-            Some(json!({ "id": id, "data": data }))
+            let mut projected = source.clone();
+            projected.insert("data".to_string(), data);
+            Some((id.clone(), Value::Object(projected)))
         })
         .collect()
 }
 
-fn project_map_layers(value: &Value) -> Option<Vec<Value>> {
-    let layers = value.as_array()?;
-    if layers.is_empty() || layers.len() > 128 {
-        return None;
-    }
-    let mut ids = std::collections::HashSet::new();
-    layers
-        .iter()
-        .map(|layer| {
-            let layer = layer.as_object()?;
-            const FIELDS: &[&str] = &[
-                "id",
-                "source",
-                "geometry",
-                "label_property",
-                "hover",
-                "style",
-            ];
-            if layer.keys().any(|key| !FIELDS.contains(&key.as_str())) {
-                return None;
-            }
-            let id = nonempty_string(layer, "id")?;
-            if !valid_card_identifier(&id) || !ids.insert(id.clone()) {
-                return None;
-            }
-            let source = nonempty_string(layer, "source")?;
-            if !valid_card_identifier(&source) {
-                return None;
-            }
-            let geometry = nonempty_string(layer, "geometry")?;
-            if !matches!(geometry.as_str(), "point" | "line" | "polygon") {
-                return None;
-            }
-            let mut projected = Map::from_iter([
-                ("id".to_string(), Value::String(id)),
-                ("source".to_string(), Value::String(source)),
-                ("geometry".to_string(), Value::String(geometry.clone())),
-            ]);
-            if let Some(value) = optional_string(layer, "label_property")? {
-                if !valid_map_property_name(&value) {
-                    return None;
-                }
-                projected.insert("label_property".to_string(), Value::String(value));
-            }
-            if let Some(hover) = layer.get("hover") {
-                projected.insert("hover".to_string(), project_layer_hover(hover)?);
-            }
-            projected.insert(
-                "style".to_string(),
-                project_layer_style(&geometry, layer.get("style")?)?,
-            );
-            Some(Value::Object(projected))
-        })
-        .collect()
-}
-
-fn project_layer_style(geometry: &str, value: &Value) -> Option<Value> {
-    let style = value.as_object()?;
-    let allowed = match geometry {
-        "point" => &[
-            "color",
-            "opacity",
-            "radius",
-            "size",
-            "shape",
-            "icon",
-            "stroke_color",
-            "stroke_width",
-            "stroke_opacity",
-        ][..],
-        "line" => &["color", "opacity", "width", "dash", "cap", "join"][..],
-        "polygon" => &[
-            "fill_color",
-            "fill_opacity",
-            "stroke_color",
-            "stroke_width",
-            "stroke_opacity",
-            "stroke_dash",
-        ][..],
-        _ => return None,
-    };
-    if style.keys().any(|key| !allowed.contains(&key.as_str())) {
-        return None;
-    }
-    if geometry == "point" {
-        let has_icon = style.get("icon").is_some();
-        let has_builtin_style = [
-            "color",
-            "radius",
-            "size",
-            "shape",
-            "stroke_color",
-            "stroke_width",
-            "stroke_opacity",
-        ]
-        .iter()
-        .any(|key| style.get(*key).is_some());
-        if has_icon && has_builtin_style {
-            return None;
-        }
-        if style.get("radius").is_some() && style.get("size").is_some() {
-            return None;
-        }
-        if style.get("radius").is_some()
-            && !matches!(
-                style.get("shape").and_then(Value::as_str),
-                None | Some("circle")
-            )
-        {
-            return None;
-        }
-    }
-    let mut projected = Map::new();
-    for key in ["color", "stroke_color", "fill_color"] {
-        if let Some(value) = optional_string(style, key)? {
-            if !valid_css_color(&value) {
-                return None;
-            }
-            projected.insert(key.to_string(), Value::String(value));
-        }
-    }
-    for (key, minimum, maximum) in [
-        ("opacity", 0.0, 1.0),
-        ("stroke_opacity", 0.0, 1.0),
-        ("fill_opacity", 0.0, 1.0),
-        ("radius", 1.0, 64.0),
-        ("size", 4.0, 128.0),
-        ("width", 0.5, 32.0),
-        ("stroke_width", 0.0, 32.0),
-    ] {
-        if let Some(value) = style.get(key) {
-            projected.insert(
-                key.to_string(),
-                json!(bounded_number(value, minimum, maximum)?),
-            );
-        }
-    }
-    for key in ["dash", "stroke_dash"] {
-        if let Some(value) = style.get(key) {
-            projected.insert(key.to_string(), project_dash(value)?);
-        }
-    }
-    for (key, allowed) in [
-        ("cap", &["butt", "round", "square"][..]),
-        ("join", &["bevel", "round", "miter"][..]),
-        (
-            "shape",
-            &["circle", "square", "diamond", "triangle", "pin"][..],
-        ),
-    ] {
-        if let Some(value) = style.get(key) {
-            let value = value.as_str()?;
-            if !allowed.contains(&value) {
-                return None;
-            }
-            projected.insert(key.to_string(), Value::String(value.to_string()));
-        }
-    }
-    if let Some(icon) = style.get("icon") {
-        projected.insert("icon".to_string(), project_point_icon(icon)?);
-    }
-    Some(Value::Object(projected))
-}
-
-fn project_point_icon(value: &Value) -> Option<Value> {
-    let icon = value.as_object()?;
-    const FIELDS: &[&str] = &["url", "scale", "anchor", "rotation", "allow_overlap"];
-    if icon.keys().any(|key| !FIELDS.contains(&key.as_str())) {
-        return None;
-    }
-    let url = nonempty_string(icon, "url")?;
-    if !valid_map_icon_url(&url) {
-        return None;
-    }
-    let mut projected = Map::from_iter([("url".to_string(), Value::String(url))]);
-    if let Some(scale) = icon.get("scale") {
-        projected.insert(
-            "scale".to_string(),
-            json!(bounded_number(scale, 0.05, 8.0)?),
-        );
-    }
-    if let Some(anchor) = icon.get("anchor") {
-        let anchor = anchor.as_str()?;
-        if !matches!(
-            anchor,
-            "center"
-                | "top"
-                | "bottom"
-                | "left"
-                | "right"
-                | "top-left"
-                | "top-right"
-                | "bottom-left"
-                | "bottom-right"
-        ) {
-            return None;
-        }
-        projected.insert("anchor".to_string(), Value::String(anchor.to_string()));
-    }
-    if let Some(rotation) = icon.get("rotation") {
-        projected.insert(
-            "rotation".to_string(),
-            json!(bounded_number(rotation, -360.0, 360.0)?),
-        );
-    }
-    if let Some(allow_overlap) = icon.get("allow_overlap") {
-        projected.insert(
-            "allow_overlap".to_string(),
-            Value::Bool(allow_overlap.as_bool()?),
-        );
-    }
-    Some(Value::Object(projected))
-}
-
-fn project_layer_hover(value: &Value) -> Option<Value> {
-    let hover = value.as_object()?;
-    const FIELDS: &[&str] = &["title_property", "fields"];
-    if hover.keys().any(|key| !FIELDS.contains(&key.as_str())) {
-        return None;
-    }
-    let title_property = optional_string(hover, "title_property")?;
-    if title_property
-        .as_deref()
-        .is_some_and(|property| !valid_map_property_name(property))
-    {
-        return None;
-    }
-    let fields = match hover.get("fields") {
-        Some(fields) => Some(fields.as_array()?),
-        None => None,
-    };
-    let mut seen = std::collections::HashSet::new();
-    let projected_fields = match fields {
-        Some(fields) if fields.len() <= 16 => fields
-            .iter()
-            .map(|field| {
-                let field = field.as_object()?;
-                if field
-                    .keys()
-                    .any(|key| !matches!(key.as_str(), "property" | "label"))
-                {
-                    return None;
-                }
-                let property = nonempty_string(field, "property")?;
-                if !valid_map_property_name(&property) || !seen.insert(property.clone()) {
-                    return None;
-                }
-                let mut projected =
-                    Map::from_iter([("property".to_string(), Value::String(property))]);
-                if let Some(label) = optional_string(field, "label")? {
-                    if !valid_map_property_name(&label) {
-                        return None;
-                    }
-                    projected.insert("label".to_string(), Value::String(label));
-                }
-                Some(Value::Object(projected))
-            })
-            .collect::<Option<Vec<_>>>()?,
-        Some(_) => return None,
-        None => Vec::new(),
-    };
-    if title_property.is_none() && projected_fields.is_empty() {
-        return None;
-    }
-    let mut projected = Map::from_iter([("fields".to_string(), Value::Array(projected_fields))]);
-    if let Some(title_property) = title_property {
-        projected.insert("title_property".to_string(), Value::String(title_property));
-    }
-    Some(Value::Object(projected))
-}
-
-fn project_dash(value: &Value) -> Option<Value> {
-    let values = value.as_array()?;
-    if values.is_empty() || values.len() > 8 {
-        return None;
-    }
-    Some(Value::Array(
-        values
-            .iter()
-            .map(|value| bounded_number(value, 0.1, 64.0).map(Value::from))
-            .collect::<Option<Vec<_>>>()?,
-    ))
-}
-
-fn project_map_legend(value: &Value) -> Option<Value> {
-    let legend = value.as_object()?;
-    if legend
+fn project_map_v3_extensions(
+    value: &Value,
+    layer_ids: &std::collections::HashSet<String>,
+    source_backed_layer_ids: &std::collections::HashSet<String>,
+) -> Option<Value> {
+    let extensions = value.as_object()?;
+    if extensions
         .keys()
-        .any(|key| !matches!(key.as_str(), "title" | "items"))
+        .any(|key| !matches!(key.as_str(), "hover" | "legend"))
     {
         return None;
     }
-    let items = legend.get("items")?.as_array()?;
-    if items.is_empty() || items.len() > 32 {
-        return None;
-    }
-    let items = items
-        .iter()
-        .map(|item| {
-            let item = item.as_object()?;
-            if item
+    if let Some(hover) = extensions.get("hover") {
+        let layers = hover.get("layers")?.as_array()?;
+        for layer in layers {
+            let layer = layer.as_object()?;
+            if layer
                 .keys()
-                .any(|key| !matches!(key.as_str(), "label" | "color"))
+                .any(|key| !matches!(key.as_str(), "layer" | "title_property" | "fields"))
             {
                 return None;
             }
-            let label = nonempty_string(item, "label")?;
-            let color = nonempty_string(item, "color")?;
-            valid_css_color(&color).then(|| json!({ "label": label, "color": color }))
-        })
-        .collect::<Option<Vec<_>>>()?;
-    let mut projected = Map::from_iter([("items".to_string(), Value::Array(items))]);
-    if let Some(title) = optional_string(legend, "title")? {
-        projected.insert("title".to_string(), Value::String(title));
+            let layer_id = nonempty_string(layer, "layer")?;
+            if !layer_ids.contains(&layer_id) || !source_backed_layer_ids.contains(&layer_id) {
+                return None;
+            }
+            if let Some(title) = layer.get("title_property") {
+                if title.as_str()?.trim().is_empty() {
+                    return None;
+                }
+            }
+            let fields = layer.get("fields")?.as_array()?;
+            for field in fields {
+                if let Some(property) = field.as_str() {
+                    if property.trim().is_empty() {
+                        return None;
+                    }
+                } else {
+                    let field = field.as_object()?;
+                    if field
+                        .keys()
+                        .any(|key| !matches!(key.as_str(), "property" | "label"))
+                        || nonempty_string(field, "property").is_none()
+                    {
+                        return None;
+                    }
+                    if field.get("label").is_some() && optional_string(field, "label")?.is_none() {
+                        return None;
+                    }
+                }
+            }
+        }
     }
-    Some(Value::Object(projected))
+    if let Some(legend) = extensions.get("legend") {
+        let items = legend.get("items")?.as_array()?;
+        if items.is_empty() {
+            return None;
+        }
+        for item in items {
+            let item = item.as_object()?;
+            if item
+                .keys()
+                .any(|key| !matches!(key.as_str(), "label" | "color" | "type"))
+                || nonempty_string(item, "label").is_none()
+                || nonempty_string(item, "color").is_none()
+            {
+                return None;
+            }
+            if let Some(kind) = item.get("type") {
+                if !matches!(kind.as_str()?, "circle" | "line" | "fill") {
+                    return None;
+                }
+            }
+        }
+    }
+    Some(value.clone())
 }
 
 fn bounded_number(value: &Value, minimum: f64, maximum: f64) -> Option<f64> {
@@ -1211,48 +984,6 @@ fn bounded_number(value: &Value, minimum: f64, maximum: f64) -> Option<f64> {
         .is_finite()
         .then_some(value)
         .filter(|value| (minimum..=maximum).contains(value))
-}
-
-fn valid_css_color(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    (bytes.len() == 7 && bytes[0] == b'#' && bytes[1..].iter().all(u8::is_ascii_hexdigit))
-        || matches!(
-            value,
-            "red"
-                | "orange"
-                | "yellow"
-                | "green"
-                | "blue"
-                | "purple"
-                | "pink"
-                | "gray"
-                | "black"
-                | "white"
-        )
-}
-
-fn valid_map_property_name(value: &str) -> bool {
-    !value.is_empty() && value.chars().count() <= 128 && !value.chars().any(char::is_control)
-}
-
-fn valid_map_icon_url(value: &str) -> bool {
-    if value.len() > 2048
-        || !value.starts_with("https://")
-        || value.chars().any(char::is_whitespace)
-    {
-        return false;
-    }
-    let remainder = &value["https://".len()..];
-    let authority = remainder.split('/').next().unwrap_or_default();
-    let path = value
-        .split(|character| character == '?' || character == '#')
-        .next()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    !authority.is_empty()
-        && [".png", ".jpg", ".jpeg", ".webp"]
-            .iter()
-            .any(|extension| path.ends_with(extension))
 }
 
 fn valid_geojson_root(value: &Value) -> bool {
@@ -1281,6 +1012,10 @@ fn valid_card_identifier(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+fn valid_mapbox_identifier(value: &str) -> bool {
+    !value.trim().is_empty() && !value.chars().any(char::is_control)
 }
 
 fn valid_geojson_resource_uri(value: &str) -> bool {
@@ -1548,7 +1283,7 @@ async fn resolve_inline_renderer_resources(
     renderer_payload: &mut Value,
 ) -> Result<(), String> {
     match renderer_kind {
-        "map.v2" => {
+        "map.v3" => {
             resolve_map_resource_refs_in_transaction(
                 transaction,
                 run_id,
@@ -1745,9 +1480,9 @@ fn inline_artifact_refs(markdown: &str) -> Vec<String> {
 }
 
 fn map_payload_resource_refs(map_payload: &Value) -> Option<Vec<(String, String)>> {
-    let sources = map_payload.get("sources")?.as_array()?;
+    let sources = map_payload.get("sources")?.as_object()?;
     let resource_refs = sources
-        .iter()
+        .values()
         .filter_map(|source| {
             let data = source.get("data")?;
             (data.get("type").and_then(Value::as_str) == Some("mcp_resource"))
@@ -1768,10 +1503,13 @@ fn replace_map_payload_resource_refs(
     run_id: Uuid,
     resolved: &std::collections::HashMap<(String, String), (Uuid, Option<String>)>,
 ) {
-    let Some(sources) = map_payload.get_mut("sources").and_then(Value::as_array_mut) else {
+    let Some(sources) = map_payload
+        .get_mut("sources")
+        .and_then(Value::as_object_mut)
+    else {
         return;
     };
-    for source in sources {
+    for source in sources.values_mut() {
         let Some(data) = source.get_mut("data") else {
             continue;
         };
@@ -1974,19 +1712,17 @@ mod tests {
                     "artifact": {
                         "ref": "map-7d67b30d",
                         "renderer": {
-                            "kind": "map.v2",
+                            "kind": "map.v3",
                             "payload": {
                                 "title": "Locations",
                                 "intent": "visualization",
                                 "status": "ready",
                                 "summary": "Two locations",
-                                "viewport": {
-                                    "mode": "camera",
-                                    "center": [-122.08, 37.42],
-                                    "zoom": 10
-                                },
-                                "sources": [{
-                                    "id": "locations",
+                                "center": [-122.08, 37.42],
+                                "zoom": 10,
+                                "sources": {
+                                    "locations": {
+                                    "type": "geojson",
                                     "data": {
                                         "type": "inline",
                                         "format": "geojson",
@@ -1995,53 +1731,56 @@ mod tests {
                                             "features": []
                                         }
                                     }
-                                }],
+                                    }
+                                },
                                 "layers": [{
                                     "id": "points",
                                     "source": "locations",
-                                    "geometry": "point",
-                                    "label_property": "label",
-                                    "hover": {
-                                        "title_property": "label",
-                                        "fields": [{
-                                            "property": "population",
-                                            "label": "Population"
-                                        }]
-                                    },
-                                    "style": {
-                                        "color": "#ef4444",
-                                        "opacity": 0.8,
-                                        "shape": "pin",
-                                        "size": 24,
-                                        "stroke_color": "#ffffff",
-                                        "stroke_width": 2
+                                    "type": "circle",
+                                    "filter": ["==", ["get", "index"], 0],
+                                    "paint": {
+                                        "circle-color": "#ef4444",
+                                        "circle-opacity": 0.8
                                     }
-                                }]
+                                }],
+                                "extensions": {
+                                    "hover": {
+                                        "layers": [{
+                                            "layer": "points",
+                                            "title_property": "label",
+                                            "fields": [{
+                                                "property": "population",
+                                                "label": "Population"
+                                            }]
+                                        }]
+                                    }
+                                }
                             }
                         }
                     },
                     "embed": {
                         "syntax": "codex-inline-vis.artifact.v1",
                         "code": "::codex-inline-vis{artifact=\"map-7d67b30d\"}"
-                    }
+                    },
+                    "warnings": [{
+                        "code": "ignored_extra_input",
+                        "path": "layers[0].paint.circle-blur"
+                    }]
                 }
             }
         });
 
         let artifact = project_inline_visualization_artifact(item.as_object().unwrap()).unwrap();
         assert_eq!(artifact.artifact_ref, "map-7d67b30d");
-        assert_eq!(artifact.renderer_kind, "map.v2");
+        assert_eq!(artifact.renderer_kind, "map.v3");
         assert_eq!(artifact.renderer_payload["title"], "Locations");
+        assert_eq!(artifact.renderer_payload["zoom"].as_f64(), Some(10.0));
         assert_eq!(
-            artifact.renderer_payload["viewport"]["zoom"].as_f64(),
-            Some(10.0)
+            artifact.renderer_payload["layers"][0]["paint"]["circle-color"],
+            "#ef4444"
         );
         assert_eq!(
-            artifact.renderer_payload["layers"][0]["style"]["shape"],
-            "pin"
-        );
-        assert_eq!(
-            artifact.renderer_payload["layers"][0]["hover"]["fields"][0]["property"],
+            artifact.renderer_payload["extensions"]["hover"]["layers"][0]["fields"][0]["property"],
             "population"
         );
 
@@ -2059,49 +1798,64 @@ mod tests {
     }
 
     #[test]
-    fn projects_only_safe_map_point_icons_and_hover_content() {
-        let icon = json!({
-            "url": "https://cdn.example.com/marker.webp?version=2",
-            "scale": 0.75,
-            "anchor": "bottom",
-            "rotation": 15,
-            "allow_overlap": true
+    fn projects_raw_mapbox_layers_and_open_web_extensions() {
+        let color = json!([
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            4,
+            "#e11d48",
+            12,
+            "#2563eb"
+        ]);
+        let card = json!({
+            "title": "Map",
+            "intent": "visualization",
+            "status": "ready",
+            "sources": {
+                "data": {
+                    "type": "geojson",
+                    "lineMetrics": true,
+                    "data": {
+                        "type": "inline",
+                        "format": "geojson",
+                        "geojson": {"type": "FeatureCollection", "features": []}
+                    }
+                }
+            },
+            "layers": [{
+                "id": "route",
+                "type": "line",
+                "source": "data",
+                "minzoom": 3,
+                "layout": {"line-cap": "round"},
+                "paint": {"line-color": color, "line-width": 4}
+            }],
+            "extensions": {
+                "hover": {
+                    "layers": [{
+                        "layer": "route",
+                        "title_property": "name",
+                        "fields": ["distance"]
+                    }]
+                },
+                "legend": {
+                    "items": [{"label": "路线", "color": "#2563eb", "type": "line"}]
+                }
+            }
         });
+        let projected = project_map_card_v3(card.as_object().unwrap()).unwrap();
+        assert_eq!(projected["layers"][0]["paint"]["line-color"], color);
+        assert_eq!(projected["layers"][0]["minzoom"], 3);
+        assert_eq!(projected["sources"]["data"]["lineMetrics"], true);
         assert_eq!(
-            project_point_icon(&icon).unwrap()["url"],
-            "https://cdn.example.com/marker.webp?version=2"
+            projected["extensions"]["hover"]["layers"][0]["fields"][0],
+            "distance"
         );
-        assert!(project_point_icon(&json!({
-            "url": "http://cdn.example.com/marker.png"
-        }))
-        .is_none());
-        assert!(project_point_icon(&json!({
-            "url": "https://cdn.example.com/marker.svg"
-        }))
-        .is_none());
-
-        let hover = project_layer_hover(&json!({
-            "title_property": "label",
-            "fields": [{
-                "property": "population",
-                "label": "Population"
-            }]
-        }))
-        .unwrap();
-        assert_eq!(hover["title_property"], "label");
-        assert_eq!(hover["fields"][0]["property"], "population");
-        assert!(project_layer_hover(&json!({
-            "fields": [{
-                "property": "population"
-            }, {
-                "property": "population"
-            }]
-        }))
-        .is_none());
     }
 
     #[test]
-    fn rejects_text_legacy_cards_and_mismatched_embed_codes() {
+    fn rejects_untyped_cards_removed_renderer_versions_and_mismatched_embeds() {
         let text_only = json!({
             "type": "mcpToolCall",
             "result": {
@@ -2116,7 +1870,7 @@ mod tests {
             "result": {
                 "structuredContent": {
                     "type": "open-web-card",
-                    "kind": "map.v2",
+                    "kind": "map.removed",
                     "card": {}
                 }
             }
@@ -2130,14 +1884,14 @@ mod tests {
                     "artifact": {
                         "ref": "map-one",
                         "renderer": {
-                            "kind": "map.v2",
+                            "kind": "map.v3",
                             "payload": {
                                 "title": "Map",
                                 "intent": "visualization",
                                 "status": "ready",
-                                "viewport": { "mode": "fit" },
-                                "sources": [{
-                                    "id": "data",
+                                "sources": {
+                                    "data": {
+                                    "type": "geojson",
                                     "data": {
                                         "type": "inline",
                                         "format": "geojson",
@@ -2146,12 +1900,13 @@ mod tests {
                                             "features": []
                                         }
                                     }
-                                }],
+                                    }
+                                },
                                 "layers": [{
                                     "id": "points",
                                     "source": "data",
-                                    "geometry": "point",
-                                    "style": {}
+                                    "type": "circle",
+                                    "paint": {}
                                 }]
                             }
                         }
@@ -2182,15 +1937,15 @@ mod tests {
                     "artifact": {
                         "ref": "map-large",
                         "renderer": {
-                            "kind": "map.v2",
+                            "kind": "map.v3",
                             "payload": {
                                 "title": "Large inline source",
                                 "intent": "visualization",
                                 "status": "ready",
                                 "summary": "x".repeat(32 * 1024),
-                                "viewport": { "mode": "fit" },
-                                "sources": [{
-                                    "id": "data",
+                                "sources": {
+                                    "data": {
+                                    "type": "geojson",
                                     "data": {
                                         "type": "inline",
                                         "format": "geojson",
@@ -2199,12 +1954,13 @@ mod tests {
                                             "features": []
                                         }
                                     }
-                                }],
+                                    }
+                                },
                                 "layers": [{
                                     "id": "points",
                                     "source": "data",
-                                    "geometry": "point",
-                                    "style": {}
+                                    "type": "circle",
+                                    "paint": {}
                                 }]
                             }
                         }
@@ -2226,15 +1982,17 @@ mod tests {
         let artifact_id = Uuid::parse_str("8e98ff2f-82ee-4cc9-a3e6-2974debf8666").unwrap();
         let resource_uri = "maps-data://geojson/map-data-one";
         let mut map_payload = json!({
-            "sources": [{
-                "id": "locations",
+            "sources": {
+                "locations": {
+                "type": "geojson",
                 "data": {
                     "type": "mcp_resource",
                     "server": "map_utils",
                     "uri": resource_uri,
                     "format": "geojson"
                 }
-            }]
+                }
+            }
         });
         let resolved = std::collections::HashMap::from([(
             ("map_utils".to_string(), resource_uri.to_string()),
@@ -2244,7 +2002,7 @@ mod tests {
         replace_map_payload_resource_refs(&mut map_payload, run_id, &resolved);
 
         assert_eq!(
-            map_payload["sources"][0]["data"],
+            map_payload["sources"]["locations"]["data"],
             json!({
                 "type": "artifact",
                 "format": "geojson",
@@ -2329,16 +2087,18 @@ After"#;
             .pointer("/result/structuredContent/data_ref")
             .is_none());
 
-        let model_visible_namespace = json!([{
-            "id": "locations",
-            "data": {
+        let model_visible_namespace = json!({
+            "locations": {
+                "type": "geojson",
+                "data": {
                 "type": "mcp_resource",
                 "server": "mcp__map_utils",
                 "uri": "maps-data://geojson/map-data-one",
                 "format": "geojson"
             }
-        }]);
-        assert!(project_map_sources(&model_visible_namespace).is_none());
+            }
+        });
+        assert!(project_map_v3_sources(&model_visible_namespace).is_none());
     }
 
     #[test]

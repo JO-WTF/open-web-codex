@@ -60,6 +60,29 @@ command -v "$python_cmd" >/dev/null 2>&1 || {
   exit 127
 }
 run_logged "$python_cmd" --version
+command -v node >/dev/null 2>&1 || {
+  log "node is required for official Mapbox Style Spec validation"
+  exit 127
+}
+command -v npm >/dev/null 2>&1 || {
+  log "npm is required for official Mapbox Style Spec validation"
+  exit 127
+}
+run_logged node --version
+run_logged npm --version
+if [[ "${OPEN_WEB_CODEX_REFRESH_MAPS_MCP_ENV:-0}" == "1" ]] \
+  || ! node -e '
+    const root = process.argv[1];
+    const expected = require(`${root}/package.json`).dependencies["@mapbox/mapbox-gl-style-spec"];
+    const installed = require(`${root}/node_modules/@mapbox/mapbox-gl-style-spec/package.json`).version;
+    if (expected !== installed) process.exit(1);
+  ' "$tools_root" >/dev/null 2>&1
+then
+  log "installing official Mapbox Style Spec validator"
+  run_logged npm --prefix "$tools_root" ci --ignore-scripts
+else
+  log "Mapbox Style Spec validator already installed"
+fi
 
 if [[ ! -x "$venv_dir/bin/python" ]]; then
   log "creating shared maps MCP virtualenv"
