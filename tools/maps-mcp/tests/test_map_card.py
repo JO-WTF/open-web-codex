@@ -1,272 +1,211 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
-import tempfile
 import unittest
 
-from mcp.types import CallToolResult, ResourceLink
+from mcp.types import CallToolResult
+from mcp.server.fastmcp.exceptions import ToolError
 
 import maps_mcp.server as server
-from maps_mcp.data_refs import GeoJsonResourceStore
+from maps_mcp.map_card import GeoJsonSource
 
 
-def inline_source() -> server.MapSource:
-    return server.MapSource(
-        id="locations",
-        data=server.InlineMapData(
-            geojson={
-                "type": "FeatureCollection",
-                "features": [
-                    {
-                        "type": "Feature",
-                        "properties": {"label": "上海"},
-                        "geometry": {
-                            "type": "Point",
-                            "coordinates": [121.4737, 31.2304],
-                        },
-                    }
-                ],
-            }
-        ),
-    )
+def geojson() -> dict[str, object]:
+    return {"type": "FeatureCollection", "features": []}
 
 
 class MapCardTests(unittest.IsolatedAsyncioTestCase):
-    async def test_create_map_card_returns_map_v2_contract(self) -> None:
+    async def test_preserves_standard_mapbox_layers(self) -> None:
+        layer = {
+            "id": "routes",
+            "type": "line",
+            "source": "routes",
+            "minzoom": 3,
+            "layout": {"line-cap": "round"},
+            "paint": {
+                "line-color": [
+                    "interpolate",
+                    ["linear"],
+                    ["zoom"],
+                    4,
+                    "#2563eb",
+                    12,
+                    "#ef4444",
+                ],
+                "line-width": 4,
+            },
+        }
         result = await server.create_map_card(
-            title="上海点位",
-            intent="location",
-            sources=[inline_source()],
-            layers=[
-                server.PointLayer(
-                    id="points",
-                    source="locations",
-                    label_property="label",
-                    hover=server.LayerHover(
-                        title_property="label",
-                        fields=[
-                            server.HoverField(
-                                property="category",
-                                label="Category",
-                            )
-                        ],
-                    ),
-                    style=server.PointStyle(
-                        color="#ef4444",
-                        opacity=0.8,
-                        shape="pin",
-                        size=24,
-                        stroke_color="#ffffff",
-                        stroke_width=2,
-                    ),
+            title="路线",
+            sources={
+                "routes": GeoJsonSource(
+                    type="geojson",
+                    data=geojson(),
+                    lineMetrics=True,
                 )
-            ],
-            viewport=server.CameraViewport(center=(121.4737, 31.2304), zoom=11),
-            summary="一个可渲染点位",
+            },
+            layers=[layer],
+            center=(114.0579, 22.5431),
+            zoom=8,
+            extensions={
+                "hover": {
+                    "layers": [
+                        {
+                            "layer": "routes",
+                            "title_property": "name",
+                            "fields": ["distance"],
+                        }
+                    ]
+                },
+                "legend": {
+                    "items": [
+                        {"label": "路线", "color": "#2563eb", "type": "line"}
+                    ]
+                },
+            },
         )
 
         self.assertIsInstance(result, CallToolResult)
-        self.assertIsNotNone(result.structuredContent)
-        structured_content = result.structuredContent
-        assert structured_content is not None
-        self.assertEqual(structured_content["type"], "open-web-artifact")
-        self.assertEqual(structured_content["kind"], "inline-visualization.v1")
-        artifact = structured_content["artifact"]
-        self.assertTrue(artifact["ref"].startswith("map-"))
-        self.assertEqual(artifact["renderer"]["kind"], "map.v2")
-        payload = artifact["renderer"]["payload"]
-        self.assertEqual(payload["viewport"]["zoom"], 11)
-        self.assertEqual(payload["layers"][0]["style"]["opacity"], 0.8)
-        self.assertEqual(payload["layers"][0]["style"]["shape"], "pin")
-        self.assertEqual(
-            payload["layers"][0]["hover"]["fields"][0],
-            {"property": "category", "label": "Category"},
-        )
-        embed = structured_content["embed"]
-        self.assertEqual(embed["syntax"], "codex-inline-vis.artifact.v1")
-        self.assertEqual(
-            embed["code"],
-            f'::codex-inline-vis{{artifact="{artifact["ref"]}"}}',
-        )
-        self.assertIn(embed["code"], result.content[0].text)
-
-    async def test_create_map_card_references_prior_mcp_resource_uri(self) -> None:
-        resource_uri = "maps-data://geojson/map-data-1234"
-        result = await server.create_map_card(
-            title="路线地图",
-            intent="route",
-            sources=[
-                server.MapSource(
-                    id="route",
-                    data=server.McpResourceMapData(
-                        server="map_utils",
-                        uri=resource_uri,
-                    ),
-                )
-            ],
-            layers=[
-                server.LineLayer(
-                    id="route-line",
-                    source="route",
-                    style=server.LineStyle(
-                        color="#2563eb",
-                        width=5,
-                        opacity=0.9,
-                        dash=[2, 1],
-                    ),
-                )
-            ],
-            viewport=server.FitViewport(padding=48, max_zoom=14),
-            fallback_text="已生成路线地图。",
-        )
-
         assert result.structuredContent is not None
-        payload = result.structuredContent["artifact"]["renderer"]["payload"]
-        self.assertEqual(payload["sources"][0]["data"]["server"], "map_utils")
-        self.assertEqual(payload["sources"][0]["data"]["uri"], resource_uri)
-        self.assertEqual(payload["viewport"]["mode"], "fit")
-
-    async def test_create_map_card_advertises_and_validates_output_schema(self) -> None:
-        tools = await server.mcp.list_tools()
-        tool = next(tool for tool in tools if tool.name == "create_map_card")
-        geocode_tool = next(tool for tool in tools if tool.name == "batch_geocode")
-
-        self.assertIsNotNone(tool.outputSchema)
-        assert tool.outputSchema is not None
+        renderer = result.structuredContent["artifact"]["renderer"]
+        self.assertEqual(renderer["kind"], "map.v3")
+        payload = renderer["payload"]
+        self.assertEqual(payload["layers"], [layer])
+        self.assertTrue(payload["sources"]["routes"]["lineMetrics"])
+        self.assertEqual(payload["center"], [114.0579, 22.5431])
         self.assertEqual(
-            set(tool.outputSchema["required"]),
-            {"type", "kind", "artifact", "embed"},
-        )
-        assert tool.inputSchema is not None
-        card_resource_schema = tool.inputSchema["$defs"]["McpResourceMapData"]
-        self.assertIn("server", card_resource_schema["required"])
-        self.assertEqual(
-            card_resource_schema["properties"]["server"]["const"],
-            "map_utils",
-        )
-        assert geocode_tool.outputSchema is not None
-        output_resource_schema = geocode_tool.outputSchema["$defs"][
-            "McpResourceMapData"
-        ]
-        self.assertIn("server", output_resource_schema["required"])
-        self.assertEqual(
-            output_resource_schema["properties"]["server"]["const"],
-            "map_utils",
+            payload["extensions"]["hover"]["layers"][0]["fields"],
+            ["distance"],
         )
 
+    async def test_resource_data_ref_is_managed_without_copying_geojson(self) -> None:
+        uri = "maps-data://geojson/map-data-1234"
         result = await server.mcp.call_tool(
             "create_map_card",
             {
-                "title": "上海点位",
-                "sources": [
-                    {
-                        "id": "locations",
-                        "data": {
-                            "type": "inline",
+                "title": "路线",
+                "sources": {
+                    "route": {
+                        "type": "geojson",
+                        "data_ref": {
+                            "type": "mcp_resource",
+                            "server": "map_utils",
+                            "uri": uri,
                             "format": "geojson",
-                            "geojson": {"type": "FeatureCollection", "features": []},
                         },
                     }
-                ],
+                },
                 "layers": [
                     {
-                        "id": "points",
-                        "source": "locations",
-                        "geometry": "point",
-                        "style": {"color": "#ef4444"},
+                        "id": "route",
+                        "type": "line",
+                        "source": "route",
+                        "paint": {"line-color": "#2563eb"},
                     }
                 ],
             },
         )
-        self.assertIsInstance(result, CallToolResult)
-        self.assertIsNotNone(result.structuredContent)
+        assert result.structuredContent is not None
+        source = result.structuredContent["artifact"]["renderer"]["payload"]["sources"][
+            "route"
+        ]
+        self.assertEqual(source["data"]["uri"], uri)
 
-    async def test_create_map_card_accepts_custom_raster_icons(self) -> None:
+    async def test_result_requires_standalone_assistant_embed_paragraph(self) -> None:
         result = await server.create_map_card(
-            title="Custom icons",
-            sources=[inline_source()],
-            layers=[
-                server.PointLayer(
-                    id="icons",
-                    source="locations",
-                    hover=server.LayerHover(title_property="label"),
-                    style=server.PointStyle(
-                        opacity=0.9,
-                        icon=server.PointIcon(
-                            url="https://cdn.example.com/marker.webp?version=2",
-                            scale=0.75,
-                            anchor="bottom",
-                            rotation=15,
-                            allow_overlap=True,
-                        ),
-                    ),
+            title="路线",
+            sources={
+                "routes": GeoJsonSource(
+                    type="geojson",
+                    data=geojson(),
                 )
+            },
+            layers=[
+                {
+                    "id": "routes",
+                    "type": "line",
+                    "source": "routes",
+                    "paint": {"line-color": "#2563eb"},
+                }
             ],
         )
 
         assert result.structuredContent is not None
-        style = result.structuredContent["artifact"]["renderer"]["payload"]["layers"][0][
-            "style"
-        ]
-        self.assertEqual(style["icon"]["url"], "https://cdn.example.com/marker.webp?version=2")
-        self.assertEqual(style["icon"]["anchor"], "bottom")
-        self.assertTrue(style["icon"]["allow_overlap"])
+        embed_code = result.structuredContent["embed"]["code"]
+        self.assertEqual(len(result.content), 1)
+        message = result.content[0]
+        self.assertEqual(message.type, "text")
+        assert message.text is not None
+        self.assertIn("not displayed until", message.text)
+        self.assertIn("standalone paragraph", message.text)
+        self.assertIn("may appear anywhere", message.text)
+        self.assertIn(f"\n\n{embed_code}\n\n", message.text)
 
-    def test_point_style_rejects_ambiguous_or_unsafe_icons(self) -> None:
-        with self.assertRaisesRegex(ValueError, "mutually exclusive"):
-            server.PointStyle(radius=8, size=16)
-        with self.assertRaisesRegex(ValueError, "built-in shape styles"):
-            server.PointStyle(
-                color="#ef4444",
-                icon=server.PointIcon(url="https://cdn.example.com/marker.png"),
+    async def test_official_validator_warns_unknown_and_rejects_invalid_known_syntax(
+        self,
+    ) -> None:
+        warning = await server.mcp.call_tool(
+            "create_map_card",
+            {
+                "title": "Warning",
+                "sources": {
+                    "data": {"type": "geojson", "data": geojson()},
+                },
+                "layers": [
+                    {
+                        "id": "points",
+                        "type": "circle",
+                        "source": "data",
+                        "paint": {
+                            "circle-color": "#ef4444",
+                            "unknown-property": 1,
+                        },
+                    }
+                ],
+            },
+        )
+        assert warning.structuredContent is not None
+        self.assertEqual(
+            warning.structuredContent["warnings"][0]["code"],
+            "mapbox_style_warning",
+        )
+
+        with self.assertRaisesRegex(ToolError, "number expected"):
+            await server.mcp.call_tool(
+                "create_map_card",
+                {
+                    "title": "Invalid",
+                    "sources": {
+                        "data": {"type": "geojson", "data": geojson()},
+                    },
+                    "layers": [
+                        {
+                            "id": "points",
+                            "type": "circle",
+                            "source": "data",
+                            "paint": {"circle-radius": "large"},
+                        }
+                    ],
+                },
             )
-        with self.assertRaisesRegex(ValueError, "HTTPS PNG, JPEG, or WebP"):
-            server.PointIcon(url="http://cdn.example.com/marker.svg")
 
-    async def test_geojson_tool_result_includes_resource_server_and_uri(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            store = GeoJsonResourceStore(Path(directory))
-            geojson = {
-                "type": "FeatureCollection",
-                "features": [],
-            }
-            original_store = server._resource_store
-            server._resource_store = store
-            self.addCleanup(setattr, server, "_resource_store", original_store)
-
-            result = server._resource_result("mapbox", "Geocoded 0 addresses.", geojson)
-            structured = result.structuredContent
-            assert structured is not None
-            data_ref = structured["data_ref"]
-            source = server.MapSource(id="locations", data=data_ref)
-
-            self.assertEqual(source.data.type, "mcp_resource")
-            self.assertEqual(data_ref["server"], "map_utils")
-            resource_uri = data_ref["uri"]
-            self.assertTrue(resource_uri.startswith("maps-data://geojson/"))
-
-            contents = list(await server.mcp.read_resource(resource_uri))
-            self.assertEqual(len(contents), 1)
-            self.assertEqual(json.loads(contents[0].content), geojson)
-
-    def test_geojson_resource_store_publishes_opaque_resource_link_data(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            store = GeoJsonResourceStore(Path(directory))
-            geojson = {
-                "type": "FeatureCollection",
-                "features": [],
-            }
-            published = store.publish(geojson)
-            link = server._resource_link(published, "test data")
-
-            self.assertIsInstance(link, ResourceLink)
-            self.assertEqual(link.name, published.resource_id)
-            self.assertEqual(link.title, "Maps GeoJSON")
-            self.assertEqual(str(link.uri), published.uri)
-            self.assertEqual(link.mimeType, "application/geo+json")
-            self.assertIsNone(link.meta)
-            self.assertEqual(json.loads(store.read(published.resource_id)), geojson)
+    async def test_schema_exposes_raw_layers_sources_and_optional_extensions(self) -> None:
+        tool = next(
+            tool
+            for tool in await server.mcp.list_tools()
+            if tool.name == "create_map_card"
+        )
+        assert tool.inputSchema is not None
+        self.assertEqual(tool.inputSchema["properties"]["layers"]["items"]["type"], "object")
+        self.assertEqual(tool.inputSchema["properties"]["sources"]["type"], "object")
+        self.assertIn("extensions", tool.inputSchema["properties"])
+        self.assertIn("center", tool.inputSchema["properties"])
+        self.assertNotIn("view", tool.inputSchema["properties"])
+        self.assertNotIn("legend", tool.inputSchema["properties"])
+        assert tool.outputSchema is not None
+        self.assertEqual(
+            tool.outputSchema["$defs"]["Renderer"]["properties"]["kind"]["const"],
+            "map.v3",
+        )
 
 
 if __name__ == "__main__":

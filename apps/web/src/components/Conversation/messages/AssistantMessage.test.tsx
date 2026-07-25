@@ -12,10 +12,10 @@ vi.mock("./ReplyCard", () => ({
 
 const mapArtifact: InlineVisualizationArtifact = {
   ref: "map-one",
-  rendererKind: "map.v2",
+  rendererKind: "map.v3",
   card: {
     type: "card",
-    kind: "map.v2",
+    kind: "map.v3",
     id: "map-one",
     title: "上海地图",
     intent: "show Shanghai",

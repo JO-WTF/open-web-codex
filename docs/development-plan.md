@@ -100,7 +100,9 @@ Skills、Plugins 和 MCP。
    模型目录诊断已接入安全摘要，仍需用官方 OpenAI smoke 覆盖 file-backed auth 与远端刷新错误。
 3. [x] `tools/maps-mcp` 只通过 plugin/MCP 声明进入 `selectedCapabilityRoots`；
    不写入 Profile `config.toml`，不由 `run-local.sh` 注入，不由 WebApp 读取或拦截。
-   真实新 Thread rollout 已记录 `local-maps-mcp` environment root。
+   真实新 Thread rollout 已记录 `local-maps-mcp` environment root；plugin 对整个
+   `map_utils` server 设置 `default_tools_approval_mode = approve`，普通地图 Tool
+   调用不逐次审批，缺少 Provider 凭据时仍走独立的类型化 elicitation。
 4. [-] MCP startup failure 归类并投影为安全诊断：capability root 未选择、`.mcp.json`
    缺失、`cwd` 解析错误、command 不存在、权限不足、Python/venv/pip 失败、
    package import 失败、MCP initialize 失败或 timeout。当前 runtime status 已投影
@@ -108,18 +110,23 @@ Skills、Plugins 和 MCP。
    maps MCP venv，launcher 在对话期只做快速 import 校验并失败快返；即使 MCP 子进程未继承平台环境变量，
    也会回退到仓库级共享 venv，并将 repo root、cwd、args、venv、Python 版本、import check 失败摘要
    和 server stderr 写入 launcher log；launcher smoke
-   覆盖 initialize、tools/list 和 `create_map_card` 调用；下一步要把 Runtime
+   覆盖 initialize、tools/list、`create_map_card` 的 `map.v3` 输入 schema
+   （平台管理的 GeoJSON sources、官方 Mapbox layer JSON、标准 camera 字段和
+   可选 hover/legend extensions）以及官方 Style Spec warning/error 行为；
+   下一步要把 Runtime
    failureReason 归一到上述分类。
 5. [x] 新建 Thread 的单 Profile 真实链路已验证 `selectedCapabilityRoots` 包含
    `local-maps-mcp`，Runtime 能发现 `map_utils` 的五个工具，启动
    `./bin/maps-mcp-launcher`，并调用 `create_map_card` 返回
    通过 `outputSchema` 验证的 `open-web-artifact` /
    `inline-visualization.v1` `structuredContent` 和 Tool 生成的 embed code。
-6. [x] 第三方 Provider smoke 使用真实 Codex Runtime 工具调用链验证：模型可见
+6. [-] 第三方 Provider smoke 使用真实 Codex Runtime 工具调用链验证：模型可见
    `map_utils` tool schema，Provider 返回标准 tool call，Runtime 执行 MCP tool，
    Server 从 Tool `structuredContent` 注册类型化 Artifact，Assistant 只复制
    Tool 生成的短代码决定展示位置。真实 Web/Profile Host 的 DeepSeek 新 Thread
-   与独立 CLI smoke 均已通过；
+   与独立 CLI smoke 已通过迁移前合同；严格类 Mapbox authoring schema 已通过
+   单元测试和真实 launcher MCP smoke，CLI prompt 已更新，仍需在可用第三方
+   Provider 凭据下重跑模型调用；
    `scripts/smoke-third-party-map-card-mcp.sh` 覆盖 Codex Runtime + Chat provider +
    `map_utils.create_map_card`，浏览器渲染由 `scripts/smoke-map-card-rendering.sh`
    覆盖。
@@ -144,7 +151,7 @@ Skills、Plugins 和 MCP。
 短期 smoke 命令：
 
 - `scripts/smoke-maps-mcp-launcher.sh`：验证 maps MCP launcher 可启动、声明
-  `outputSchema`、声明 GeoJSON Resource template，并生成带 `map.v2` renderer 和
+  `outputSchema`、声明 GeoJSON Resource template，并生成带 `map.v3` renderer 和
   embed code 的 Inline Visualization Artifact。
 - `scripts/smoke-third-party-map-card-mcp.sh`：使用 `THIRD_PARTY_PROVIDER_*`/`DEEPSEEK_API_KEY`
   等环境变量临时创建 `CODEX_HOME`，验证第三方 Chat provider 通过 Codex Runtime 调用
@@ -356,9 +363,11 @@ Skills、Plugins 和 MCP。
 envelope 与 embed code，Assistant Message 用
 `::codex-inline-vis{artifact="..."}` 编排位置，Platform 使用通用 renderer registry，
 Web 在同一消息中组合 Markdown 与 Mapbox GL renderer；旧 `replyCard` 路径已删除。
-`map.v2` 使用固定 Mercator 投影，点支持常用内建形状和 HTTPS 栅格图标，线与面边框
-支持透明度、宽度和 dash array，所有几何类型都可声明受限 GeoJSON 属性组成的
-文本 hover 弹层。卡片不展示 source/layer 数量或 viewport 调试信息。
+`map.v3` 使用固定 Mercator 基图。平台管理 GeoJSON source 授权，标准 Mapbox Layer
+JSON 经官方 Style Spec 校验后除本地 layer/source ID 外原样交给 `map.addLayer`；
+不再维护 layer type、paint/layout、filter 或 expression 白名单。文本 hover 与
+circle/line/fill legend 都是 `extensions` 下的可选 Open Web 行为。卡片不展示
+source/layer 数量或 camera 调试信息。
 Mapbox Streets 依赖受限公开浏览器 Token；无 Token 时卡片继续显示。共享地图配置弹窗可选择
 Mapbox 或 Google；平台只保存一个加密的活动 provider/key，后一次配置覆盖前一次。
 浏览器只在 Mapbox 活动时读取受限公开 Token，Google Key 始终留在服务端。

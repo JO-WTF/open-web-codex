@@ -218,9 +218,20 @@ the target architecture:
    URI exposed by `resource_link.uri`. The complete reference is card-compatible;
    its server and URI are directly reusable by MCP `resources/read`. The raw
    server ID is distinct from the model-visible `mcp__server` Tool namespace.
-   `map_utils.create_map_card` advertises an MCP `outputSchema` and returns a
+   `map_utils.create_map_card` exposes one `map.v3` contract. GeoJSON `sources`
+   are keyed by source ID; inline GeoJSON uses standard `source.data`, while a
+   complete Resource reference uses the mutually exclusive Open Web
+   `source.data_ref`. Standard GeoJSON source options are preserved. `layers`
+   is official Mapbox Style Specification Layer JSON and is validated with the
+   official validator rather than a second paint/layout/filter/expression
+   whitelist. Official unknown-property diagnostics are warnings and invalid
+   known syntax is rejected. Standard camera fields remain top-level. Optional
+   Open Web behavior is isolated under `extensions.hover` and
+   `extensions.legend`; neither is represented as a Mapbox layer field.
+   `create_map_card`
+   advertises an MCP `outputSchema` and returns a
    generic `open-web-artifact` / `inline-visualization.v1` envelope. Its first
-   renderer kind is `map.v2`; the Tool also generates the complete
+   renderer kind is `map.v3`; the Tool also generates the complete
    `::codex-inline-vis{artifact="..."}` line. Resource sources copy a complete
    `data_ref` from an earlier completed Tool item available to the producing
    Runtime context.
@@ -228,7 +239,8 @@ the target architecture:
    rendering input.
 2. The Server recognizes the generic envelope without branching on MCP server
    or Tool names, dispatches `renderer.kind` through a renderer registry and
-   validates viewport, source/layer references and style ranges. It registers
+   validates the stable card envelope, source authorization graph, camera, and
+   extension references without reimplementing Mapbox style semantics. It registers
    the Inline Visualization Artifact with a durable identity and an explicit
    organization/user or project authorization grant independent of the
    producing Run and Thread. The producing Turn and Tool Item are retained as
@@ -287,7 +299,7 @@ the target architecture:
    The Server delivers the selected provider and key directly to a strictly
    validated local MCP elicitation URL without opening that one-time page.
    The global scope is temporary and reserves a later per-user move.
-7. `map.v2` has no card-specific 16 KiB limit. Small GeoJSON can be inline;
+7. `map.v3` has no card-specific 16 KiB limit. Small GeoJSON can be inline;
    large GeoJSON stays outside the model/card payload and is loaded lazily from
    the Artifact cache. A general 128 MiB per-Resource memory-safety boundary is
    enforced by the Server; future larger formats require a streamed PMTiles or

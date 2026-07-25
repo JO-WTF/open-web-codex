@@ -503,10 +503,20 @@ Accept 再尝试投递，否则 MCP 会继续等待、前端显示 Invalid，工
 
 地图数据工具先返回标准 MCP `resource_link`，并在 `outputSchema` 约束的
 `data_ref.server` 与 `data_ref.uri` 中返回 Resource 路由身份。该 `data_ref` 既可原样
-放入卡片 source，也可在下游工具确实需要 GeoJSON 时把 `server`、`uri` 原样传给 MCP
+放入 `create_map_card.sources.<source-id>.data_ref`，也可在下游工具确实需要 GeoJSON
+时把 `server`、`uri` 原样传给 MCP
 `resources/read`。`map_utils` 是原始 server ID，`mcp__map_utils` 只是模型可见 Tool
-命名空间。同一 Run、同一 Thread 中后续的 `map_utils.create_map_card` 通过 MCP `outputSchema` 返回
-`structuredContent`：
+命名空间。
+
+`create_map_card` 使用单一 `map.v3` 合同。`sources` 是由 source ID 索引的平台管理
+GeoJSON：内联数据使用标准 `data`，Resource 使用互斥的 `data_ref`，其他官方
+GeoJSON source option 保留。`layers` 是官方 Mapbox Style Specification Layer JSON，
+由官方 validator 校验；Open Web 不再维护第二套 layer type、paint/layout、filter
+或 expression 白名单。官方未知属性诊断是 warning，已知语法错误失败。标准 camera
+字段位于顶层；文本 hover 和 legend 都是 `extensions` 下的可选 Open Web 行为。
+
+同一 Run、同一 Thread 中后续的 `map_utils.create_map_card` 通过 MCP `outputSchema`
+返回 `structuredContent`：
 
 ```json
 {
@@ -515,19 +525,14 @@ Accept 再尝试投递，否则 MCP 会继续等待、前端显示 Invalid，工
   "artifact": {
     "ref": "map-7d67b30d",
     "renderer": {
-      "kind": "map.v2",
+      "kind": "map.v3",
       "payload": {
         "title": "Jakarta locations",
         "intent": "visualization",
         "status": "ready",
-        "viewport": {
-          "mode": "fit",
-          "padding": 48,
-          "max_zoom": 14
-        },
-        "sources": [
-          {
-            "id": "locations",
+        "sources": {
+          "locations": {
+            "type": "geojson",
             "data": {
               "type": "mcp_resource",
               "server": "map_utils",
@@ -535,19 +540,18 @@ Accept 再尝试投递，否则 MCP 会继续等待、前端显示 Invalid，工
               "format": "geojson"
             }
           }
-        ],
+        },
         "layers": [
           {
             "id": "points",
+            "type": "circle",
             "source": "locations",
-            "geometry": "point",
-            "label_property": "label",
-            "style": {
-              "color": "#ef4444",
-              "opacity": 0.9,
-              "radius": 8,
-              "stroke_color": "#ffffff",
-              "stroke_width": 2
+            "paint": {
+              "circle-color": "#ef4444",
+              "circle-opacity": 0.9,
+              "circle-radius": 8,
+              "circle-stroke-color": "#ffffff",
+              "circle-stroke-width": 2
             }
           }
         ]
@@ -564,8 +568,9 @@ Accept 再尝试投递，否则 MCP 会继续等待、前端显示 Invalid，工
 浏览器链路：
 
 1. Server 通过通用 `inline-visualization.v1` envelope 和 renderer registry 识别
-   Artifact，不根据 `map_utils` 或 `create_map_card` 名称分支。`map.v2` validator
-   校验 viewport、source/layer 图和样式；公开 Tool projection 只保留 ref、renderer
+   Artifact，不根据 `map_utils` 或 `create_map_card` 名称分支。`map.v3` validator
+   校验安全 envelope、source 授权图、camera 和 extension 引用，不重复实现 Mapbox
+   样式语义；公开 Tool projection 只保留 ref、renderer
    kind 和 embed code，不暴露 renderer payload。
 2. Server 从较早完成的 MCP Tool 的标准 `resource_link.uri` 注册 Resource，
    并在同一 Run、同一 Thread 内解析 renderer 中的同一 server/URI。跨 Run、
@@ -578,13 +583,13 @@ Accept 再尝试投递，否则 MCP 会继续等待、前端显示 Invalid，工
    和 renderer registry；一条消息按顺序组合 Markdown/Artifact segment。
 6. fenced/indented code 中的指令不解析；不完整的流式指令先缓冲；无权访问或无效
    引用在 Message 完成后显示明确 unavailable 状态。
-7. `MapReplyCard.tsx` 为每个 source 创建 Mapbox GL source，再按 point、line、
-   polygon layer 应用颜色、透明度、尺寸、描边和 dash。
-8. `fit` viewport 在 map load 和容器首次获得非零尺寸后执行；`camera` viewport
-   精确使用 center、zoom、bearing 和 pitch。
+7. `MapReplyCard.tsx` 为每个 source 创建 Mapbox GL source，再将标准 layer JSON
+   除本地 layer/source ID 外原样交给 `map.addLayer`。
+8. 未提供 `center`/`zoom` 时在 map load 和容器首次获得非零尺寸后 fit；显式
+   camera 精确使用 center、zoom、bearing 和 pitch。
 9. 没有 Mapbox Token 时仍保留卡片和配置按钮；Mapbox 或 Artifact 失败时显示明确错误。
 
-`map.v2` 没有卡片专用的 16 KiB 上限。小数据可以 inline，大 GeoJSON 必须通过
+`map.v3` 没有卡片专用的 16 KiB 上限。小数据可以 inline，大 GeoJSON 必须通过
 MCP Resource URI 和授权 Artifact 传输。Server 的通用 Resource 内存安全边界不属于
 卡片合同；需要更大数据时应新增流式 PMTiles/MVT source，而不是复制 GeoJSON 到文本。
 

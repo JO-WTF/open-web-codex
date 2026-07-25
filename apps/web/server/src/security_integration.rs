@@ -279,20 +279,19 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
             artifact_ref, renderer_kind, renderer_payload
          ) VALUES (
             $1, $2, 'approval-thread', 'turn-map-producer', 'item-inline-map',
-            'map-cross-turn', 'map.v2', $3
+            'map-cross-turn', 'map.v3', $3
          )",
     )
     .bind(first_organization_id)
     .bind(first_run_id)
     .bind(json!({
         "type": "card",
-        "kind": "map.v2",
+        "kind": "map.v3",
         "id": "map-cross-turn",
         "title": "Cross-turn map",
         "intent": "test",
         "status": "ready",
-        "viewport": {"mode": "fit"},
-        "sources": [],
+        "sources": {},
         "layers": []
     }))
     .execute(&pool)

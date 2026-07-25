@@ -139,7 +139,7 @@ and local HTML link fallback. The Web platform preserves that meaning and adds
 the narrow `artifact="..."` attribute for authorized typed renderers; this
 extension stays outside `codex/`. Chat and Responses transports preserve both
 forms as ordinary Agent Message text; neither `codex-api` nor Core may interpret
-`map.v2`, register Platform Artifacts or create card Items. If official
+`map.v3`, register Platform Artifacts or create card Items. If official
 app-server later exposes a typed equivalent, the Web extension must converge to
 that official contract and be deleted.
 

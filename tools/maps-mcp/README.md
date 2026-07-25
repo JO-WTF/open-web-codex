@@ -43,7 +43,9 @@ keys in `MEMORY.md`, instructions, prompts, model-visible tool arguments, result
 
 ## Install
 
-The platform startup path prepares one shared maps MCP Python environment before user Threads run.
+The platform startup path prepares one shared maps MCP Python environment and installs the pinned
+official Mapbox Style Specification validator before user Threads run. Python 3, Node.js, and npm
+are required.
 By default `scripts/run-local.sh` creates or refreshes it under
 `$OPEN_WEB_CODEX_DATA_DIR/tool-envs/maps-mcp` by calling `scripts/setup-maps-mcp-env.sh`, and then
 exports `OPEN_WEB_CODEX_MAPS_MCP_VENV`/`MAPS_MCP_VENV` so every user conversation, workspace, and
@@ -57,6 +59,7 @@ For manual development from this directory you can still run:
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e .
+npm ci --ignore-scripts
 ```
 
 Google projects must enable Geocoding API v4 and Routes API. Mapbox requires an access token with
@@ -85,6 +88,11 @@ development. The MCP client must advertise URL elicitation support. If the curre
 cannot render the key request, the tool fails safely instead of requesting the key in a model-visible
 form.
 
+The plugin sets `default_tools_approval_mode` to `approve`, so all `map_utils` Tool calls run
+without a per-call approval prompt. This setting does not bypass the separate maps-provider
+credential elicitation: missing credentials still require the user to select a provider and save a
+key through the typed in-app flow.
+
 `scripts/setup-maps-mcp-env.sh` writes detailed setup logs to
 `$OPEN_WEB_CODEX_LOG_DIR/maps-mcp-env.log` by default. The log records timestamps, Python/pip
 versions, OS information, venv path, command exit context, and whether proxy variables are set
@@ -111,18 +119,31 @@ Map-card output:
 
 Geocoding and routing tools publish GeoJSON through a standard MCP `resource_link`. Their
 schema-validated output contains the raw MCP server ID and Resource URI in `data_ref`. Copy the
-complete object unchanged into a later `create_map_card` source in the same Run and Thread. When
-downstream work needs the GeoJSON contents, pass `data_ref.server` and `data_ref.uri` unchanged to MCP
-`resources/read`; `mcp__map_utils` is a model-visible Tool namespace, not the Resource server ID.
-`create_map_card` returns an `open-web-artifact` / `inline-visualization.v1` envelope with a
-typed `map.v2` renderer in MCP `structuredContent`. The host validates and registers the
-Artifact without displaying it. Assistant messages copy only `structuredContent.embed.code`
-onto its own line at the desired position and must not reproduce renderer JSON or GeoJSON.
-`map.v2` supports fit or camera viewports, Mercator rendering, and styled point, line, and
-polygon layers. Point layers support built-in shapes or HTTPS raster icons; line and polygon
-borders support solid or dash arrays. Every geometry can declare a safe, text-only hover view
-over selected GeoJSON properties. Inline GeoJSON is supported for small data; large data is
-read lazily from the referenced MCP Resource.
+complete object unchanged into `create_map_card.sources.<source-id>.data_ref` in the same Run and
+Thread. When downstream work needs the GeoJSON contents, pass `data_ref.server` and `data_ref.uri`
+unchanged to MCP `resources/read`; `mcp__map_utils` is a model-visible Tool namespace, not the
+Resource server ID.
+
+`create_map_card` accepts one Mapbox-style `map.v3` contract. `sources` contains
+platform-managed GeoJSON: inline data uses standard `source.data`, while Tool-produced data uses
+the mutually exclusive Open Web `source.data_ref`. Standard GeoJSON source options are preserved.
+`layers` is official Mapbox Style Specification Layer JSON and is validated by
+`@mapbox/mapbox-gl-style-spec`; there is no separate layer, paint, layout, filter, or expression
+whitelist. Official unknown-property diagnostics are warnings, while invalid known syntax fails.
+
+Camera fields are the standard top-level `center`, `zoom`, `bearing`, and `pitch`; omitting
+`center` and `zoom` fits all GeoJSON. Optional Open Web behavior lives under
+`extensions.hover` and `extensions.legend`. There is no `style` wrapper, old `view` object,
+layer-local hover, or top-level legend.
+
+The Tool returns an `open-web-artifact` / `inline-visualization.v1` envelope with a typed
+`map.v3` renderer. The host independently validates the browser DTO, resolves authorized
+`data_ref` values to opaque Artifact URLs, and strips MCP Resource identity from public events.
+The browser passes every layer to `map.addLayer` unchanged except for browser-local layer/source
+IDs. Tool completion only creates the Artifact; it does not display the map. To display it,
+Assistant messages copy only `structuredContent.embed.code` verbatim as a standalone paragraph
+with a blank line before and after it. That paragraph may appear anywhere in the response where
+the map should be shown and must not be wrapped in a code fence, blockquote, or list.
 
 Provider endpoints implemented:
 
