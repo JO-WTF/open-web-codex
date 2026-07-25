@@ -110,6 +110,36 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertEqual(source["data"]["uri"], uri)
 
+    async def test_result_requires_standalone_assistant_embed_paragraph(self) -> None:
+        result = await server.create_map_card(
+            title="路线",
+            sources={
+                "routes": GeoJsonSource(
+                    type="geojson",
+                    data=geojson(),
+                )
+            },
+            layers=[
+                {
+                    "id": "routes",
+                    "type": "line",
+                    "source": "routes",
+                    "paint": {"line-color": "#2563eb"},
+                }
+            ],
+        )
+
+        assert result.structuredContent is not None
+        embed_code = result.structuredContent["embed"]["code"]
+        self.assertEqual(len(result.content), 1)
+        message = result.content[0]
+        self.assertEqual(message.type, "text")
+        assert message.text is not None
+        self.assertIn("not displayed until", message.text)
+        self.assertIn("standalone paragraph", message.text)
+        self.assertIn("may appear anywhere", message.text)
+        self.assertIn(f"\n\n{embed_code}\n\n", message.text)
+
     async def test_official_validator_warns_unknown_and_rejects_invalid_known_syntax(
         self,
     ) -> None:

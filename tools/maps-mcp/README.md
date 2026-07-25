@@ -140,7 +140,10 @@ The Tool returns an `open-web-artifact` / `inline-visualization.v1` envelope wit
 `map.v3` renderer. The host independently validates the browser DTO, resolves authorized
 `data_ref` values to opaque Artifact URLs, and strips MCP Resource identity from public events.
 The browser passes every layer to `map.addLayer` unchanged except for browser-local layer/source
-IDs. Assistant messages copy only `structuredContent.embed.code` onto its own line.
+IDs. Tool completion only creates the Artifact; it does not display the map. To display it,
+Assistant messages copy only `structuredContent.embed.code` verbatim as a standalone paragraph
+with a blank line before and after it. That paragraph may appear anywhere in the response where
+the map should be shown and must not be wrapped in a code fence, blockquote, or list.
 
 Provider endpoints implemented:
 

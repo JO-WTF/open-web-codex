@@ -88,10 +88,12 @@ mcp = FastMCP(
         "manages GeoJSON source data and adds optional extensions.hover and "
         "extensions.legend. The official Mapbox validator reports unknown style properties "
         "as warnings and rejects invalid known syntax. The Tool returns a schema-validated "
-        "typed visualization Artifact and an exact assistant embed directive. Copy "
-        "structuredContent.embed.code verbatim onto its own line "
-        "where the map should appear; Tool completion alone does not display it. One selected "
-        "provider and API key are shared by every maps tool."
+        "typed visualization Artifact and an exact assistant embed directive. A successful Tool "
+        "call only creates the Artifact and does not display the map. To display it, copy "
+        "structuredContent.embed.code verbatim into the Assistant response as a standalone "
+        "paragraph, with a blank line before and after it. The paragraph may appear anywhere in "
+        "the response where the map should be shown. Do not wrap it in a code fence, blockquote, "
+        "or list. One selected provider and API key are shared by every maps tool."
     ),
     json_response=True,
 )
@@ -308,8 +310,11 @@ async def create_map_card(
     fails validation. Unknown Open Web extension fields are ignored with warnings.
 
     Do not use ``style`` as a wrapper, put hover/legend inside a Mapbox layer, use source
-    URLs, or put MCP Resource objects in ``source.data``. Copy structuredContent.embed.code
-    verbatim onto its own Assistant line; do not reproduce renderer JSON.
+    URLs, or put MCP Resource objects in ``source.data``. A successful call only creates the
+    Artifact and does not display the map. To display it, copy structuredContent.embed.code
+    verbatim into the Assistant response as a standalone paragraph, with a blank line before and
+    after it. The paragraph may appear anywhere in the response where the map should be shown. Do
+    not wrap it in a code fence, blockquote, or list, and do not reproduce renderer JSON.
     """
     clean_title = title.strip()
     if not clean_title:
@@ -377,14 +382,18 @@ async def create_map_card(
         shown_paths = ", ".join(warning.path for warning in warnings[:10])
         remaining = len(warnings) - min(len(warnings), 10)
         suffix = f" and {remaining} more" if remaining else ""
-        warning_text = f"\nWarning: Map input diagnostics: {shown_paths}{suffix}."
+        warning_text = f"Warning: Map input diagnostics: {shown_paths}{suffix}."
     return CallToolResult(
         content=[
             TextContent(
                 type="text",
                 text=(
-                    f"Map visualization ready: {clean_title}. Insert this exact line in the "
-                    f"assistant reply where the map should appear:\n{embed_code}"
+                    f"Map visualization ready: {clean_title}. The map is not displayed until "
+                    "the Assistant response includes the embed code. Copy this exact code "
+                    "verbatim as a standalone paragraph, with a blank line before and after it. "
+                    "It may appear anywhere in the response where the map should be shown; do "
+                    "not wrap it in a code fence, blockquote, or list:\n\n"
+                    f"{embed_code}\n\n"
                     f"{warning_text}"
                 ),
             )

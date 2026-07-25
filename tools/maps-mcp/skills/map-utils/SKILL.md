@@ -21,8 +21,12 @@ pass a provider key in chat; the MCP server owns configuration.
    GeoJSON merely to build the card.
 4. The Resource server is exactly `map_utils`, never the model-visible Tool namespace
    `mcp__map_utils`.
-5. After `create_map_card` succeeds, copy `structuredContent.embed.code` verbatim onto its own
-   Assistant line. Tool completion alone does not display the map.
+5. A successful `create_map_card` call only creates the Artifact; it does not display the map.
+   To display it, copy `structuredContent.embed.code` verbatim into the Assistant response as a
+   standalone paragraph, with a blank line before and after it. The paragraph may appear anywhere
+   in the response where the map should be shown.
+6. Do not wrap the embed code in a code fence, blockquote, or list, and do not merely describe the
+   map. The map is not displayed until the standalone embed paragraph is present.
 
 ## Map card protocol
 
