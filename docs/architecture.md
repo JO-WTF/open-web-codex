@@ -23,12 +23,12 @@ Browser
   -> Codex app-server                   -> Thread / Turn / memory / agents
   -> event normalizer and durable projection
 
-Thread workspace service
-  -> repository mirror (read-only to Agent)
-  -> Thread/Chat workspace (authorized writable checkout)
+Workspace authorization service
+  -> authorized existing execution roots
+  -> explicit managed clone/worktree resources
 
 Run orchestrator
-  -> resolves the Thread workspace
+  -> validates the Thread's Codex cwd against authorized Workspace roots
   -> Runner sandbox / Git delivery
 
 Codex build
@@ -62,7 +62,10 @@ result; they never cause a Tauri runtime to reappear.
 | Provider config and runtime model catalog | Codex Profile/app-server | secret references, global default Provider/model selection, policy and display cache scoped to Profile |
 | Agent scheduling and parent/child execution | Codex runtime | observable trajectory and status projection |
 | Skills, plugins, MCP and memory state | Codex Profile/app-server | permissions, audit and capability-gated projection |
-| Repository objects and worktree contents | Git/Runner | metadata, status, diff summary and artifact references |
+| Thread current working directory | Codex Profile/app-server | authorized Workspace ID and safe display metadata |
+| Workspace authorization and managed checkout lifecycle | Web platform + filesystem/Git | complete authorization record and safe lifecycle metadata |
+| Repository objects and checkout contents | Filesystem/Git | status, diff summary and artifact references |
+| Durable Artifact identity, authorization and retention | Web platform Artifact store | producer Run/Thread/Turn/Item provenance and safe references |
 
 The platform must recover model-visible history from Codex. Event projections
 are rebuildable UI/read models and never become a second Thread store, memory
@@ -110,7 +113,9 @@ The authorization chain is:
 
 ```text
 session -> user -> organization membership -> project permission
-        -> task/thread -> profile/workspace -> run/event/approval/artifact
+        -> profile/workspace grant
+        -> task/thread -> run/event/approval
+        -> durable artifact grant + producer provenance
 ```
 
 - One member has one persistent personal Profile by default.
@@ -120,16 +125,16 @@ session -> user -> organization membership -> project permission
   and a process registry enforce the invariant.
 - A Profile may execute multiple authorized Tasks only within measured Runtime
   concurrency limits. It never shares a Home with another user.
-- A managed writable Git worktree is associated with a Thread/Chat and remains
-  stable across its Turns and platform Runs. Repository mirrors are not
-  Agent-writable. A Run resolves this association and never provisions or owns
-  a separate checkout.
-- A local or permanent Workspace may host multiple Threads only through an
-  explicit platform selection and authorization flow. The default managed
-  worktree remains Thread-scoped.
-- Profile Host validates Profile/User/Thread/Workspace relationships. Runner
-  validates Project/Thread/Workspace and Run/Thread relationships. Normal
-  browser users never submit trusted filesystem paths.
+- A Workspace is an independently authorized execution root. It may be an
+  operator-registered existing directory or an explicitly created managed
+  clone/worktree. It is never implicitly owned by a Thread, Task or Run.
+- Codex owns each Thread's current `cwd` and supports changing it through its
+  official Thread/Turn contracts. Multiple Threads may use the same authorized
+  Workspace; starting, resuming or running a Thread does not create a checkout.
+- Profile Host validates that every Runtime `cwd` is contained by a Workspace
+  authorized for the Profile/user. Runner revalidates the Workspace grant for
+  Git and delivery operations. Normal browser users never submit trusted
+  filesystem paths.
 - Cache, subscription, model and secret keys include their user/Profile scope.
   Cross-user and guessed-ID denial tests are release gates.
 
@@ -137,15 +142,15 @@ session -> user -> organization membership -> project permission
 
 The current near-term runtime target is a deliberately narrowed deployment mode:
 one implicit local Owner, one persistent Profile Home, one primary Profile
-Host process and an authorized workspace context associated with each selected
-Thread. This is a deployment constraint, not a boundary exception. The same
-ownership table above continues to apply:
+Host process and a fixed set of authorized Workspace roots from which each
+Thread's Codex `cwd` is selected. This is a deployment constraint, not a
+boundary exception. The same ownership table above continues to apply:
 
 - The platform starts and monitors the single Profile Host, injects only
   authorized environment and secret references, and records safe diagnostics.
-- The selected `CODEX_HOME`, Profile identity, workspace root, source root and
-  capability roots are fixed at startup or by typed platform lifecycle state;
-  browser input never changes server-local paths.
+- The selected `CODEX_HOME`, Profile identity, authorized Workspace roots,
+  Runner/source roots and capability roots are fixed at startup or by typed
+  platform lifecycle state; browser input never changes server-local paths.
 - To unblock the single Profile smoke, the platform may copy a file-backed
   `auth.json` from an already logged-in local Codex home into an empty Profile
   home before starting the Profile Host. This is a transitional single-user
@@ -203,7 +208,10 @@ platform may validate and render a supported contract, but it must not make the
 model "discover" a capability by intercepting composer text or injecting ad-hoc
 prompts.
 
-Current map-card support follows this checked-in flow:
+The target map-card contract follows this flow. The checked-in Run/Thread
+Artifact ownership is recorded as a migration gap in
+`docs/capability-baseline.md` and `docs/development-plan.md`; it is not part of
+the target architecture:
 
 1. Geocoding and routing tools publish GeoJSON as standard MCP Resources. Their
    `outputSchema`-validated `data_ref` contains the raw MCP server ID and the same
@@ -214,15 +222,18 @@ Current map-card support follows this checked-in flow:
    generic `open-web-artifact` / `inline-visualization.v1` envelope. Its first
    renderer kind is `map.v2`; the Tool also generates the complete
    `::codex-inline-vis{artifact="..."}` line. Resource sources copy a complete
-   `data_ref` from an earlier completed Tool item in the same Run and Thread.
+   `data_ref` from an earlier completed Tool item available to the producing
+   Runtime context.
    Tool `content` only tells the model to copy the embed line and is never a
    rendering input.
 2. The Server recognizes the generic envelope without branching on MCP server
    or Tool names, dispatches `renderer.kind` through a renderer registry and
    validates viewport, source/layer references and style ranges. It registers
-   the Inline Visualization Artifact under organization/Run/Thread ownership.
-   The producing Turn and Tool Item are retained as provenance, not as an
-   authorization boundary. Resource server/URI pairs resolve only to earlier completed Tool
+   the Inline Visualization Artifact with a durable identity and an explicit
+   organization/user or project authorization grant independent of the
+   producing Run and Thread. The producing Turn and Tool Item are retained as
+   provenance, not as an authorization or lifecycle boundary. Resource
+   server/URI pairs resolve only to earlier completed Tool
    items, are loaded through official `mcpServer/resource/read`, and are replaced
    by authorized Artifact URLs before renderer payload persistence. Public Tool
    projection strips the payload and MCP URI. Registration runs in a savepoint,
@@ -234,9 +245,10 @@ Current map-card support follows this checked-in flow:
    official local-HTML meaning; `artifact="..."` resolves an authorized typed
    renderer. The parser does not inspect Tool, Reasoning, Command or user text.
 4. Live Agent Message completion receives the same safe renderer DTO used by
-   authoritative history. Resolution uses the owning Run/Thread plus the
-   Artifact ref, so a later Turn in the same Thread may reuse a completed
-   Artifact. Producer Turn/Item identity only verifies provenance because
+   authoritative history. Resolution uses the durable Artifact ref and current
+   caller authorization, so later Runs and authorized Threads may reuse a
+   completed Artifact without inheriting its producer's lifecycle. Producer
+   Turn/Item identity only verifies provenance because
    `thread/turns/list` may synthesize `item-N` identities. The old Tool-attached `replyCard`, dual-write, old-history
    reconstruction, Assistant JSON scan and position fallback paths are absent.
 5. The browser reads referenced GeoJSON from authenticated Artifact URLs and
@@ -302,12 +314,13 @@ remaining Chat translation stages are defined in `docs/adr/005-map-reply-cards.m
 
 1. Platform authenticates the session and authorizes project/task creation.
 2. A transaction creates the Task and queued Run using an idempotency key.
-3. New Thread creation prepares or explicitly associates an authorized
-   Workspace once. Scheduler leases the Run and resolves that Thread/Workspace
-   association without creating another checkout.
-4. Profile Host locks/starts the user's Profile, verifies contract compatibility
-   and starts or resumes the mapped Codex Thread in the same authorized
-   Workspace.
+3. The user selects an authorized Workspace. A new managed clone/worktree, when
+   needed, is created explicitly as an independent resource before the Thread.
+   Scheduler leases the Run and validates that Workspace grant without creating
+   a checkout.
+4. Profile Host locks/starts the user's Profile, verifies contract
+   compatibility and starts, resumes or updates the mapped Codex Thread with a
+   `cwd` contained by the authorized Workspace.
 5. Runtime events are normalized, assigned a per-Task monotonic sequence and
    persisted before browser fan-out. After the WebSocket is subscribed, the
    initial browser snapshot establishes each Task cursor at its latest durable
@@ -360,10 +373,10 @@ remaining Chat translation stages are defined in `docs/adr/005-map-reply-cards.m
 
 ### Commit and push
 
-Runner revalidates workspace ownership and Git status immediately before the
-operation. Commit and Push are explicit user actions with audit records. Force
-Push, implicit Merge and automatic remote branch deletion are outside the
-product contract.
+Runner revalidates Workspace authorization, containment of the Thread's current
+`cwd` and Git status immediately before the operation. Commit and Push are
+explicit user actions with audit records. Force Push, implicit Merge and
+automatic remote branch deletion are outside the product contract.
 
 ## Upstream synchronization boundary
 

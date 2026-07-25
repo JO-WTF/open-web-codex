@@ -15,8 +15,9 @@ This file adds implementation rules for `apps/web/**`.
 - `crates/profile-host` owns persistent Profile process lifecycle and the
   native app-server JSONL connection.
 - `crates/run-orchestrator` and `crates/git-runtime` own Run leases, recovery,
-  private mirrors, and authorized Thread/Chat workspaces. Runs resolve the
-  Thread workspace and must not provision or own separate checkouts.
+  private mirrors, explicit managed Workspace lifecycle and Git operations.
+  Workspaces are independent authorized execution roots; Threads select a
+  `cwd`, and neither Threads nor Runs implicitly own checkouts.
 - `crates/provider-service` owns Provider CRUD orchestration through typed
   app-server methods; secrets remain in `crates/secret-store`.
 - `crates/platform-contracts` contains stable browser-facing DTOs. Generated
@@ -30,9 +31,10 @@ This file adds implementation rules for `apps/web/**`.
   credentials, or configuration key paths to the browser.
 - Browser subscriptions use `/api/events/ws`, authenticate in the first frame,
   and deliver tenant-filtered, durable platform projections.
-- Browser requests never select a server-local workspace path. Resolve every
-  workspace through authorized Project/Task/Thread records and validate each
-  Run against that association.
+- Browser requests never supply a trusted server-local path. Resolve Workspace
+  IDs through authorized platform records, validate each Codex `cwd` against
+  the resulting roots, and allow multiple Threads to use the same authorized
+  Workspace.
 - Do not duplicate Thread/Turn history, compaction, memory, skills, plugins,
   MCP, or multi-agent scheduling in the platform.
 - Do not hand-edit generated Codex schemas or TypeScript. Regenerate them from

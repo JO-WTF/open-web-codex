@@ -26,10 +26,10 @@ not a zero-diff Codex subtree.
 ## Current state
 
 The integrated base is `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9`.
-The observed official main is `81da9deb065d7adb283816b19b40f89bcc484276`;
-101 official commits await the next dedicated synchronization branch. The raw
-comparison contains 839 paths: 46 added locally, 730 modified, and 63 missing
-locally, classified by the status script as 710 `upstream-only`, 70
+The observed official main is `cba0e2701c9e3e67a877a16dbbd7a577d477a630`;
+126 official commits await the next dedicated synchronization branch. The raw
+comparison contains 919 paths: 46 added locally, 803 modified, and 70 missing
+locally, classified by the status script as 790 `upstream-only`, 70
 `local-only`, and 59 `diverged`.
 
 All product-specific differences on the integrated base are classified under
@@ -68,9 +68,9 @@ The script separates the raw tree difference into:
 
 ## Current inventory classification
 
-The current comparison against `codex-upstream/main` contains 839 paths: 710
+The current comparison against `codex-upstream/main` contains 919 paths: 790
 `upstream-only`, 70 `local-only`, and 59 `diverged`. The integrated base remains
-the validation baseline until the 101 pending official commits are accepted on a
+the validation baseline until the 126 pending official commits are accepted on a
 new sync branch. Generated artifacts, tests, and snapshots follow their owning
 source seam.
 
@@ -90,7 +90,7 @@ source seam.
 ## Current convergence analysis
 
 The integrated `6e5a2d6b8d14` structure has no unresolved tree conflicts. The
-observed official main is 101 commits ahead, so its 59 diverged paths must be
+observed official main is 126 commits ahead, so its 59 diverged paths must be
 resolved on the next dedicated sync branch. On the integrated base,
 `codex-api/src/common.rs` matches the official object exactly. Chat request
 DTOs and owned Responses-to-Chat conversion live in `chat_translate.rs`; the
