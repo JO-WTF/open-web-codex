@@ -44,6 +44,10 @@
 
 - [领域 Agent 扩展架构](domain-agent-extension-architecture.md)
 - [Skills、MCP 与自定义 UI 扩展](custom-skills-mcp-ui-guide.md)
+- [零基础多 Agent 开发教程](multi-agent-development-tutorial.md)
+  - [第 1 步：Hello Agent](tutorials/hello-agent-quickstart.md)
+  - [第 2 步：Hello Team](tutorials/hello-agent-team.md)
+  - [第 3 步：仓网规划 Agent](tutorials/supply-chain-agent-tutorial.md)
 
 扩展指南可以提供模式和示例，但不能重新定义 Profile、Workspace、Artifact、
 Agent Definition、Runtime Role 等核心术语。

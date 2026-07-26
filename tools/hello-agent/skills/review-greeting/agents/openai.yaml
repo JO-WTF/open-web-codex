@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review Greeting"
+  short_description: "Validate a structured greeting."
+  default_prompt: "Use $review-greeting to validate a greeting."
