@@ -172,6 +172,10 @@ Google Cloud 的 [Agentic AI design patterns](https://docs.cloud.google.com/arch
 
 因此，它们并不是互斥选项。
 
+![多 Agent 架构模式：不是单选题，而是多维组合](images/enterprise-agent-platform/collaboration-patterns-report.png)
+
+同一个系统可以同时采用多种模式：Supervisor 决定全局责任，Parallel 或 Sequential 决定子任务顺序，Artifact 决定成果如何交接，局部问题再按需要使用 Handoff、Critic 或受限的 Peer 协作。
+
 | 维度 | 常见模式 | 核心特点 | 主要代价 |
 | --- | --- | --- | --- |
 | 执行顺序 | Sequential | 按固定顺序把上一步输出交给下一步 | 灵活性低 |
@@ -495,6 +499,10 @@ Supervisor 可以根据新证据判断“是否值得重新分析”；任务是
 | Tool/Skill/MCP Registry | 不在业务平台复制 | 由 Agent Runtime 发现，平台只做授权与安全投影 |
 | Decision Memory | 分层 | Runtime Memory 与平台业务决策记录分别拥有 |
 | Peer Agent Network | 默认不建设 | 有明确必要性时才作为受限模式 |
+
+![从理想平台到可实现架构：能力保留，所有权收敛](images/enterprise-agent-platform/architecture-convergence-report.png)
+
+这次变化不是削减多 Agent 能力，而是把“需要什么能力”和“谁拥有相应事实”分开回答：协调、专业执行和动态规划继续存在，重复的 Runtime、Memory 和万能状态机不再进入目标架构。
 
 这次收敛也重新回答了第一章的三个问题：
 
@@ -907,6 +915,10 @@ Root Supervisor
 
 “控制”和“状态”在多 Agent 平台中很容易被笼统使用。实际上，谁可以执行、下一步做什么、某项能力能否使用，是三个不同问题；模型对话和业务成果也是两类不同数据。它们需要彼此协作，但不能由同一个中心状态机统一接管。
 
+![三个控制域与两个数据域：协作，但不混合](images/enterprise-agent-platform/control-data-domains-report.png)
+
+三个控制域通过合同形成执行边界，两个数据域通过 provenance 和授权读取互相连接。连接的目的，是让一次任务能够闭环，而不是把它们合并成一张万能状态表。
+
 ## 12.1 三个控制域回答不同问题
 
 | 控制域 | 回答的问题 | 权威事实 | 不负责什么 |
@@ -1176,6 +1188,10 @@ Data Analysis Agent v3
 
 > **根 Thread 已经具备 Supervisor 的运行机制，但默认只是一名能够使用多 Agent Tools 的主 Agent。要让它稳定承担企业 Supervisor 责任，仍然需要一套版本化的行为策略；不需要的是另一套 Supervisor Runtime。**
 
+Supervisor 的完整设计由运行载体、稳定行为策略、可复用方法和本次业务目标共同构成；授权、审批、恢复和持久化等硬约束则继续留在确定性系统合同中。
+
+![Supervisor 不是一个 Prompt：根 Thread 中的完整认知责任](images/enterprise-agent-platform/supervisor-design-report.png)
+
 ## 15.1 根 Thread 已经提供执行机制，但没有完整的业务职责
 
 Codex 已经处理了多 Agent 执行中最难复刻的一组机制：
@@ -1296,6 +1312,10 @@ Planner 不应因为“进入第二阶段”就自动出现，而应由可测量
 
 # 16. 从 Artifact 协作到可选 Task Knowledge Ledger
 
+共享知识不应从一套完整 Blackboard 起步。第一步先让 Agent 之间能够通过持久、可授权、可追溯的 Artifact 可靠交接成果；只有生产任务持续暴露出更细粒度的冲突、替代和恢复需求，才增加结构化 Ledger。
+
+![协作知识的演进：先交接成果，再结构化知识](images/enterprise-agent-platform/artifact-ledger-evolution-report.png)
+
 ## 16.1 Artifact First：先让成果成为协作接口
 
 多 Agent 协作最先遇到的问题，通常不是缺少一张知识表，而是大结果无法可靠交接。Data Agent 产生十万行订单分析，Network Agent 不应该从聊天消息中重新复制一遍 CSV；它需要读取一份有类型、有版本、有来源、经过授权的结果。
@@ -1382,6 +1402,10 @@ Runtime 只能通过正式的类型化 Tool 或 MCP Resource 搜索、读取、�
 # 17. 收敛后的目标架构全景
 
 到这里，Supervisor、Agent 治理、Artifact 协作和所有权边界都已经完成了必要推导，目标架构才具备完整含义。它由三个控制域、两个数据域和一条明确的 Runtime 边界组成。下图描述的是**目标结构**，不是当前部署现状；其中既包括已有骨架，也包括需要完成的迁移，以及只有在真实证据出现后才引入的能力。
+
+![企业多 Agent 平台：收敛后的目标架构](images/enterprise-agent-platform/target-architecture-report.png)
+
+平台控制面、Codex Runtime 与企业系统之间的责任分界构成了目标架构的主骨架。为了进一步说明组件之间的调用、投影和授权关系，下面把同一结构展开为精确关系图。
 
 ```mermaid
 flowchart TB
@@ -1479,6 +1503,10 @@ flowchart TB
 # 18. 用完整任务路径检验目标架构
 
 架构图中的每条边界最终都要在一条真实任务中同时成立。下面继续使用华东仓决策，但这里描述的是**目标验收流程**，不是对当前产品界面的截图式说明。
+
+![一次企业决策任务如何穿过目标架构](images/enterprise-agent-platform/warehouse-task-flow-report.png)
+
+这条路径把授权、认知协作、企业能力调用、Artifact 交接和异常收口放在同一次任务中检验。任何一段只能在正常演示中工作，都不足以证明目标架构成立。
 
 ## 18.1 平台先建立合法的执行环境
 
@@ -1586,6 +1614,10 @@ Supervisor 最终生成：
 # 19. 从所有权结论走向可执行合同
 
 上一章沿正常路径展示了目标架构如何完成一次任务；本部分转向最容易破坏这条路径的异常情况。第四部分已经回答了“谁应该负责什么”，但所有权表本身不会让系统自动正确。真正开始实现时，一次任务会连续穿过平台、Profile Host、Codex Runtime、企业 Tool/MCP 边界和 Artifact Store；只要其中一个边界没有稳定合同，前面建立的单一事实源就会在异常路径中失效。
+
+![从所有权到可执行合同：四类生命周期、四个边界](images/enterprise-agent-platform/lifecycles-contracts-report.png)
+
+因此，实现不能只列出对象，还要同时规定每类对象的稳定身份、终态或版本变化，以及它穿过所有权边界时使用的合同。生命周期保持独立，合同负责连接，异常恢复才不会重新制造第二份事实。
 
 仍以华东新增仓任务为例。正常演示很容易完成：根 Agent 创建 Data Agent，Data Agent 查询数据，Network Agent 做仿真，Supervisor 汇总结果。真正决定架构是否成立的是下面这些时刻：
 
@@ -2036,6 +2068,10 @@ Phase 2 在同一用例上增加第二个组织和第二个 Profile 并发运行
 前面的分析改变了建设顺序。Profile Host、Run Orchestrator、Codex Adapter、事件投影和 Inline Artifact 已经存在；下一步集中在几条尚未穿透真实边界的产品链路。
 
 第 24、25 章已经给出完整风险和验证矩阵。路线图据此先处理 Runtime 执行轨迹、Supervisor Policy 绑定和 Artifact 交接，再处理执行授权、多 Profile 路由与 Agent Catalog；Task Knowledge Ledger 始终留在生产数据证明必要之后。组件只有在消除这些风险时才进入路线图。
+
+![演进路线：每一层复杂度都由已验证问题支付](images/enterprise-agent-platform/evolution-roadmap-report.png)
+
+五个阶段不是按名称自动解锁的功能包。每一阶段都要以真实退出证据证明当前风险已经被控制；Task Knowledge Ledger 和 Agent Decision OS 还需要额外的业务触发条件。
 
 ```mermaid
 flowchart LR
