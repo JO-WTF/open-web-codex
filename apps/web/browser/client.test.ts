@@ -34,6 +34,7 @@ describe("PlatformClient", () => {
       workspace_id: "workspace-one",
       fork_thread_id: null,
       fork_source_run_id: null,
+      supervisor_policy: null,
     });
     expect(fetchMock.mock.calls[1]?.[0]).toBe("https://platform.test/api/tasks/task%2Fone/messages");
     expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({
@@ -42,6 +43,98 @@ describe("PlatformClient", () => {
       model_provider: "deepseek",
     });
     expect(fetchMock.mock.calls.every((call) => !String(call[0]).includes("/api/rpc"))).toBe(true);
+  });
+
+  it("sends only a published Supervisor Policy reference when starting an enterprise Run", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ run: { id: "run-1" } }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("crypto", { randomUUID: () => "018f-idempotency-key" });
+    const client = new PlatformClient({ baseUrl: "https://platform.test", token: "session-token" });
+
+    await client.startRun("task-one", "workspace-one", {
+      supervisorPolicy: {
+        policy_id: "enterprise-supervisor-copilot",
+        version: "1.0.0",
+      },
+    });
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      idempotency_key: "018f-idempotency-key",
+      workspace_id: "workspace-one",
+      fork_thread_id: null,
+      fork_source_run_id: null,
+      supervisor_policy: {
+        policy_id: "enterprise-supervisor-copilot",
+        version: "1.0.0",
+      },
+    });
+  });
+
+  it("loads the read-only Runtime Agent projection for a Run", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(JSON.stringify([{ thread_id: "thread-1", is_root: true }]), {
+        status: 200,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PlatformClient({
+      baseUrl: "https://platform.test",
+      token: "session-token",
+    });
+
+    await expect(client.listRunAgents("run/one")).resolves.toEqual([
+      { thread_id: "thread-1", is_root: true },
+    ]);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://platform.test/api/runs/run%2Fone/agents",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBeUndefined();
+  });
+
+  it("loads independently authorized Artifacts for a Task", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(JSON.stringify([{
+        id: "artifact-1",
+        task_id: "task/one",
+        artifact_schema: "planning-dataset.v1",
+        state: "ready",
+      }]), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PlatformClient({
+      baseUrl: "https://platform.test",
+      token: "session-token",
+    });
+
+    await expect(client.listTaskArtifacts("task/one")).resolves.toEqual([
+      expect.objectContaining({
+        id: "artifact-1",
+        artifact_schema: "planning-dataset.v1",
+      }),
+    ]);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://platform.test/api/tasks/task%2Fone/artifacts",
+    );
+  });
+
+  it("treats an absent Supervisor binding as a standard Run", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response("null", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PlatformClient({
+      baseUrl: "https://platform.test",
+      token: "session-token",
+    });
+
+    await expect(client.getRunSupervisorPolicy("run-1")).resolves.toBeNull();
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://platform.test/api/runs/run-1/supervisor-policy",
+    );
   });
 
   it("falls back when crypto.randomUUID is unavailable", async () => {

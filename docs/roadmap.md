@@ -3,21 +3,24 @@
 | 字段 | 内容 |
 | --- | --- |
 | 状态 | 当前接受的阶段顺序 |
-| 更新时间 | 2026-07-26 |
+| 更新时间 | 2026-07-27 |
 | 时间表达 | 以能力门和结果为阶段，不承诺未经评估的日期 |
 | 产品方向 | [产品愿景](product-vision.md) |
 | 架构依据 | [企业多 Agent 平台架构](enterprise-agent-platform-architecture.md) |
 | 当前能力 | [能力基线](capability-baseline.md) |
 | 近期任务 | [开发计划](development-plan.md) |
+| M2 详细实施 | [Enterprise Supervisor Copilot 短期实施计划](enterprise-supervisor-copilot-plan.md) |
 
-路线图描述中期交付顺序，不保存逐文件任务和完成日志。阶段只有在入口条件满足后
-才能开始，只有在真实边界上的退出证据成立后才能结束。
+路线图描述中期交付顺序，不保存逐文件任务和完成日志。实现切片可以在所有权和依赖
+明确时并行，但阶段只有在真实边界上的退出证据成立后才能结束。当前采用功能优先：
+M2 的功能切片可以与 Gate 0 剩余可信工作并行，但未通过相关 Gate 0 门禁时，不能把
+功能演示声明为可信发布能力。
 
 ## 顺序总览
 
 ```text
-当前证据恢复
-  -> Enterprise Supervisor Copilot
+Enterprise Supervisor Copilot 功能主线
+  + Gate 0 可信门禁并行收口
   -> 受治理的多用户执行
   -> Capability-gated Studio
   -> 生产 GA
@@ -26,8 +29,8 @@
 
 | 阶段 | 核心结果 | 当前位置 |
 | --- | --- | --- |
-| Gate 0 | 当前 Workbench 的数据库、Workspace 与 Runtime 证据可信 | 当前 |
-| M2 | 单 Profile 上完成可治理的 Supervisor + Domain Agents 闭环 | 下一阶段 |
+| Gate 0 | 当前 Workbench 的数据库、Workspace 与 Runtime 证据可信 | 并行可信门禁 |
+| M2 | 单 Profile 上完成可治理的 Supervisor + Domain Agents 闭环 | 受限 happy path 已验证；阶段退出门禁待补 |
 | M3 | 多用户、多 Profile 与企业能力治理成立 | 后续 |
 | M4 | 只开放经过合同和真实验证的 Studio 能力 | 后续 |
 | M5 | 满足安全、运维、恢复和可用性门禁 | 后续 |
@@ -38,7 +41,8 @@
 ### 目标
 
 让当前 Codex Web Workbench 的实现、迁移、文档和验证重新指向同一事实，为后续
-多 Agent 工作提供可信底座。
+多 Agent 工作提供可信底座。Gate 0 不再阻塞所有 M2 功能编码；与当前切片直接相关
+的授权和语义问题必须随功能解决，其余验证债务保留为 M2 发布门禁。
 
 ### 重点结果
 
@@ -54,7 +58,8 @@
 ### 退出条件
 
 能力基线可以明确区分已验证能力与剩余缺口，开发计划中的数据库和 Workspace
-门禁有可复现证据，且没有 Thread/Run 隐式拥有 checkout 的路径。
+门禁有可复现证据，且没有 Thread/Run 隐式拥有 checkout 的路径。退出条件未满足
+时，可以演示受限单 Profile 功能，但不能宣称 M2 已可信完成。
 
 ## M2：Enterprise Supervisor Copilot
 
@@ -70,7 +75,7 @@ Agents + 受限企业 Tool + 持久 Artifact”的最小协作闭环。
 | 多 Agent Runtime | 真实 spawn、follow-up、wait、interrupt、完成后继续执行和父子 Thread 轨迹可观察、可恢复 |
 | Supervisor | 版本化 Supervisor Policy 作为不可变快照绑定根 Thread |
 | Domain Agent | 两个可评审 Agent Definition 映射到真实可发现 Runtime Role |
-| 企业能力 | 只读数据 MCP 与有界仿真 MCP，使用明确的 Task/Profile 资源范围 |
+| 企业能力 | 只读数据 MCP 与有界规划 MCP，使用明确的 Task/Profile 资源范围 |
 | Artifact | 独立身份、Schema、provenance 和同 Task 跨子 Thread 授权读取 |
 | 结果责任 | Supervisor 处理冲突、缺口和部分失败，最终报告引用关键 Artifact |
 
@@ -86,7 +91,16 @@ Agents + 受限企业 Tool + 持久 Artifact”的最小协作闭环。
 真实用例在刷新、失败和 Profile 重启后仍指向同一 Agent 轨迹、Policy 版本和
 Artifact；关键结论可追溯，一个 Agent 失败时能够形成明确的部分结果或终态。
 
-M2 的活动任务拆解保留在 [开发计划](development-plan.md)。
+当前“华东新增仓”受限 happy path 已在全新 PostgreSQL、全新 Profile 和真实 Codex
+Runtime 上通过：根 Thread 创建两个精确 Role 子 Thread，完成跨 Agent Resource
+交接、有界企业 MCP 计算、Task Artifact 持久化、最终报告与刷新/重启恢复。由于
+follow-up、interrupt、审批拒绝、Agent 失败、Artifact 完整生命周期和一般故障恢复
+尚未完成，M2 仍未满足上述阶段退出条件。
+
+M2 的里程碑状态保留在 [开发计划](development-plan.md)，逐切片工作、真实案例和
+活动可信风险由
+[Enterprise Supervisor Copilot 短期实施计划](enterprise-supervisor-copilot-plan.md)
+维护。
 
 ## M3：受治理的多用户执行
 

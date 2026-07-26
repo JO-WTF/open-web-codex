@@ -148,7 +148,11 @@ function v3Source(id: string, value: unknown): MapSource | undefined {
     return undefined;
   const artifactId = nonemptyString(value.data.artifact_id);
   const url = nonemptyString(value.data.url);
-  if (!artifactId || !url || !url.startsWith("/api/runs/")) return undefined;
+  if (
+    !artifactId
+    || !url
+    || url !== `/api/artifacts/${encodeURIComponent(artifactId)}/content`
+  ) return undefined;
   return {
     ...base,
     data: {

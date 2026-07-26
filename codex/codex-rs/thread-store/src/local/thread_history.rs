@@ -28,30 +28,63 @@ pub(super) struct ProjectedRolloutLine {
     pub changes: ThreadHistoryChangeSet,
 }
 
-pub(super) async fn next_rollout_byte_offset(
+pub(super) async fn next_rollout_position(
     store: &LocalThreadStore,
     thread_id: ThreadId,
-) -> ThreadStoreResult<u64> {
+) -> ThreadStoreResult<(u64, u64)> {
     let db_path = codex_state::thread_history_db_path(store.config.sqlite_home.as_path());
     if !tokio::fs::try_exists(db_path.as_path())
         .await
         .map_err(thread_history_error)?
     {
-        return Ok(0);
+        return Ok((0, 0));
     }
 
     let pool = store.thread_history_db().await?;
-    let offset = sqlx::query_scalar::<_, i64>(
-        "SELECT next_rollout_byte_offset FROM thread_history_projection_state WHERE thread_id = ?",
+    let position = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT next_rollout_byte_offset, next_rollout_ordinal \
+         FROM thread_history_projection_state WHERE thread_id = ?",
     )
     .bind(thread_id.to_string())
     .fetch_optional(pool)
     .await
     .map_err(thread_history_error)?
-    .unwrap_or(0);
-    u64::try_from(offset).map_err(|_| ThreadStoreError::Internal {
+    .unwrap_or((0, 0));
+    let offset = u64::try_from(position.0).map_err(|_| ThreadStoreError::Internal {
         message: format!("thread history projection for {thread_id} has a negative byte offset"),
-    })
+    })?;
+    let ordinal = u64::try_from(position.1).map_err(|_| ThreadStoreError::Internal {
+        message: format!("thread history projection for {thread_id} has a negative ordinal"),
+    })?;
+    Ok((offset, ordinal))
+}
+
+pub(super) async fn reset_projection(
+    store: &LocalThreadStore,
+    thread_id: ThreadId,
+) -> ThreadStoreResult<()> {
+    let pool = store.thread_history_db().await?;
+    let mut transaction = pool
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(thread_history_error)?;
+    let thread_id = thread_id.to_string();
+    sqlx::query("DELETE FROM thread_items WHERE thread_id = ?")
+        .bind(thread_id.as_str())
+        .execute(&mut *transaction)
+        .await
+        .map_err(thread_history_error)?;
+    sqlx::query("DELETE FROM thread_turns WHERE thread_id = ?")
+        .bind(thread_id.as_str())
+        .execute(&mut *transaction)
+        .await
+        .map_err(thread_history_error)?;
+    sqlx::query("DELETE FROM thread_history_projection_state WHERE thread_id = ?")
+        .bind(thread_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(thread_history_error)?;
+    transaction.commit().await.map_err(thread_history_error)
 }
 
 pub(super) async fn apply_projection(

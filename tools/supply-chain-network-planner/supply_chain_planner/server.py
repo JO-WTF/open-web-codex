@@ -178,6 +178,7 @@ def prepare_network_snapshot(
     )
     structured = ResourceToolResult(
         summary=summary,
+        resource_name=published.resource_id,
         data_ref=data_ref(published),
     ).model_dump(mode="json")
     return _resource_call_result(published, summary=summary, structured=structured)
@@ -235,6 +236,7 @@ def register_route_matrix(
     )
     structured = ResourceToolResult(
         summary=summary,
+        resource_name=published.resource_id,
         data_ref=data_ref(published),
     ).model_dump(mode="json")
     return _resource_call_result(published, summary=summary, structured=structured)
@@ -289,6 +291,7 @@ def evaluate_current_coverage(
     structured = CurrentCoverageToolResult(
         **aggregate.model_dump(),
         summary=summary,
+        resource_name=aggregate_published.resource_id,
         data_ref=data_ref(aggregate_published),
     ).model_dump(mode="json")
     return _resource_call_result(
@@ -324,6 +327,7 @@ def evaluate_network_scenario(
     )
     structured = ResourceToolResult(
         summary=summary,
+        resource_name=published.resource_id,
         data_ref=data_ref(published),
     ).model_dump(mode="json")
     return _resource_call_result(published, summary=summary, structured=structured)
@@ -348,6 +352,7 @@ def compare_network_scenarios(
     structured = ComparisonToolResult(
         **comparison.model_dump(),
         summary=summary,
+        resource_name=published.resource_id,
         data_ref=data_ref(published),
     ).model_dump(mode="json")
     return _resource_call_result(published, summary=summary, structured=structured)
@@ -405,6 +410,7 @@ def solve_facility_location(
     structured = FacilityLocationToolResult(
         **solution.model_dump(),
         summary=summary,
+        resource_name=solution_published.resource_id,
         solution_ref=data_ref(solution_published),
     ).model_dump(mode="json")
     return _resource_call_result(

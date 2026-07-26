@@ -310,8 +310,10 @@ body:has(.web-app-shell) {
 }
 
 .web-ws-row:hover .web-ws-new-thread-btn,
+.web-ws-row:hover .web-ws-new-supervisor-btn,
 .web-ws-row:hover .web-ws-remove-btn,
 .web-ws-row-active:hover .web-ws-new-thread-btn,
+.web-ws-row-active:hover .web-ws-new-supervisor-btn,
 .web-ws-row-active:hover .web-ws-remove-btn {
   color: #c8cfdb;
 }
@@ -916,6 +918,255 @@ body:has(.web-app-shell) {
 
 .web-thread-content > * {
   width: 100%;
+}
+
+.web-supervisor-overview {
+  overflow: hidden;
+  border: 1px solid rgb(126 92 197 / 34%);
+  border-radius: 14px;
+  background:
+    linear-gradient(135deg, rgb(126 92 197 / 13%), rgb(37 99 235 / 6%)),
+    rgb(13 17 25 / 82%);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 14%);
+}
+
+.web-supervisor-overview-heading {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgb(126 92 197 / 22%);
+}
+
+.web-supervisor-overview-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 10px;
+  color: #c4a8f3;
+  background: rgb(126 92 197 / 20%);
+}
+
+.web-supervisor-overview-heading div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.web-supervisor-overview-heading strong {
+  overflow: hidden;
+  color: #f1edf8;
+  font-size: 12px;
+  font-weight: 680;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.web-supervisor-overview-heading div > span {
+  overflow: hidden;
+  color: #938ba3;
+  font: 10px/1.4 var(--font-code);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.web-supervisor-binding,
+.web-supervisor-agent-status {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--web-border);
+  border-radius: 999px;
+  color: #aeb5c2;
+  background: rgb(255 255 255 / 4%);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  line-height: 20px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.web-supervisor-binding {
+  padding: 0 8px;
+}
+
+.web-supervisor-binding.is-bound {
+  border-color: rgb(83 190 128 / 28%);
+  color: #71d89c;
+  background: rgb(83 190 128 / 9%);
+}
+
+.web-supervisor-agent-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 8px;
+  padding: 10px;
+}
+
+.web-supervisor-agent {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid rgb(255 255 255 / 7%);
+  border-radius: 10px;
+  background: rgb(255 255 255 / 2.5%);
+}
+
+.web-supervisor-agent-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 8px;
+  color: #9dbbf0;
+  background: rgb(59 130 246 / 11%);
+}
+
+.web-supervisor-agent-copy {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.web-supervisor-agent-copy strong,
+.web-supervisor-agent-copy > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.web-supervisor-agent-copy strong {
+  color: #dfe4ec;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.web-supervisor-agent-copy > span {
+  color: #7f8999;
+  font-size: 9px;
+}
+
+.web-supervisor-agent-status {
+  gap: 5px;
+  padding: 0 7px;
+}
+
+.web-supervisor-agent-status > span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #7f8999;
+}
+
+.web-supervisor-agent-status.is-active > span {
+  background: #5cda91;
+  box-shadow: 0 0 5px rgb(92 218 145 / 60%);
+}
+
+.web-supervisor-agent-status.is-waiting > span {
+  background: #e4b457;
+}
+
+.web-supervisor-agent-status.is-terminal > span {
+  background: #79a7e8;
+}
+
+.web-supervisor-agent-status.is-error > span {
+  background: #ed8b92;
+}
+
+.web-supervisor-artifacts {
+  padding: 0 10px 10px;
+}
+
+.web-supervisor-section-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 2px;
+  color: #aeb5c2;
+  font-size: 10px;
+}
+
+.web-supervisor-section-heading > span {
+  min-width: 18px;
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: #a89ac1;
+  background: rgb(126 92 197 / 12%);
+  text-align: center;
+}
+
+.web-supervisor-artifact-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 8px;
+}
+
+.web-supervisor-artifact {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgb(255 255 255 / 7%);
+  border-radius: 9px;
+  background: rgb(255 255 255 / 2.5%);
+}
+
+.web-supervisor-artifact-copy {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 1px;
+}
+
+.web-supervisor-artifact-copy > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.web-supervisor-artifact-copy strong {
+  color: #dfe4ec;
+  font: 600 10px/1.4 var(--font-code);
+}
+
+.web-supervisor-artifact-copy span {
+  color: #7f8999;
+  font-size: 9px;
+}
+
+.web-supervisor-artifact-state {
+  color: #aeb5c2;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.web-supervisor-artifact-state.is-ready {
+  color: #71d89c;
+}
+
+.web-supervisor-artifact-state.is-failed {
+  color: #ed8b92;
+}
+
+.web-supervisor-overview-empty,
+.web-supervisor-overview-error {
+  padding: 12px 14px;
+  color: #8d96a5;
+  font-size: 10px;
+}
+
+.web-supervisor-overview-error {
+  color: #ed8b92;
 }
 
 .web-thread-content.is-hidden {
@@ -2745,6 +2996,45 @@ body:has(.web-app-shell[data-theme="light"]) {
 
 .web-app-shell[data-theme="light"] .web-chat-header {
   background: rgb(249 251 254 / 88%);
+}
+
+.web-app-shell[data-theme="light"] .web-supervisor-overview {
+  border-color: rgb(109 78 170 / 24%);
+  background:
+    linear-gradient(135deg, rgb(126 92 197 / 9%), rgb(37 99 235 / 4%)),
+    #fff;
+  box-shadow: 0 8px 24px rgb(55 39 88 / 8%);
+}
+
+.web-app-shell[data-theme="light"] .web-supervisor-overview-heading {
+  border-bottom-color: rgb(109 78 170 / 14%);
+}
+
+.web-app-shell[data-theme="light"] .web-supervisor-overview-heading strong {
+  color: #31283f;
+}
+
+.web-app-shell[data-theme="light"] .web-supervisor-overview-heading div > span,
+.web-app-shell[data-theme="light"] .web-supervisor-agent-copy > span,
+.web-app-shell[data-theme="light"] .web-supervisor-artifact-copy > span {
+  color: #7d748b;
+}
+
+.web-app-shell[data-theme="light"] .web-supervisor-agent {
+  border-color: rgb(45 55 72 / 9%);
+  background: rgb(45 55 72 / 2%);
+}
+
+.web-app-shell[data-theme="light"] :is(
+  .web-supervisor-agent-copy strong,
+  .web-supervisor-artifact-copy strong
+) {
+  color: #313844;
+}
+
+.web-app-shell[data-theme="light"] .web-supervisor-artifact {
+  border-color: rgb(45 55 72 / 9%);
+  background: rgb(45 55 72 / 2%);
 }
 
 .web-app-shell[data-theme="light"] :is(.web-chat-title, .web-msg-assistant-body, .web-reasoning-label) {

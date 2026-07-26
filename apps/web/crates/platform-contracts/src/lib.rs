@@ -300,12 +300,95 @@ pub struct StartRunRequest {
     pub fork_thread_id: Option<String>,
     #[serde(default)]
     pub fork_source_run_id: Option<Uuid>,
+    #[serde(default)]
+    pub supervisor_policy: Option<SupervisorPolicySelection>,
 }
 
 /// Response from starting a run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartRunResponse {
     pub run: Run,
+}
+
+/// Browser-selectable reference to a server-published Supervisor Policy.
+/// Policy content is always resolved by the platform.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SupervisorPolicySelection {
+    pub policy_id: String,
+    pub version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SupervisorPolicySummary {
+    pub policy_id: String,
+    pub version: String,
+    pub display_name: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SupervisorPolicyBinding {
+    pub run_id: Uuid,
+    pub task_id: Uuid,
+    pub thread_id: Option<String>,
+    pub policy_id: String,
+    pub version: String,
+    pub display_name: String,
+    pub content_sha256: String,
+    pub state: String,
+    pub created_at: DateTime<Utc>,
+    pub bound_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentDefinitionSummary {
+    pub definition_id: String,
+    pub version: String,
+    pub display_name: String,
+    pub description: String,
+    pub runtime_role: String,
+}
+
+/// Rebuildable, browser-safe view of one Runtime-owned Thread in a root Run's
+/// collaboration tree. This resource cannot create, message or stop an Agent.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeAgentProjection {
+    pub run_id: Uuid,
+    pub thread_id: String,
+    pub parent_thread_id: Option<String>,
+    pub source_kind: String,
+    pub agent_path: Option<String>,
+    pub agent_nickname: Option<String>,
+    pub agent_role: Option<String>,
+    pub status_type: Option<String>,
+    pub active_flags: Vec<String>,
+    pub is_root: bool,
+    pub first_observed_at: DateTime<Utc>,
+    pub last_observed_at: DateTime<Utc>,
+}
+
+/// Browser-safe view of one independently authorized, durable Artifact.
+///
+/// Runtime MCP server names and Resource URIs remain internal. Producer
+/// identifiers are provenance only and do not control Artifact lifetime.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ArtifactSummary {
+    pub id: Uuid,
+    pub task_id: Uuid,
+    pub artifact_schema: String,
+    pub display_name: String,
+    pub mime_type: String,
+    pub expected_size: Option<i64>,
+    pub byte_size: Option<i64>,
+    pub content_sha256: Option<String>,
+    pub state: String,
+    pub producer_run_id: Uuid,
+    pub producer_thread_id: String,
+    pub producer_turn_id: String,
+    pub producer_item_id: String,
+    pub producer_agent_role: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 /// An independently authorized execution root. Runtime-local paths remain

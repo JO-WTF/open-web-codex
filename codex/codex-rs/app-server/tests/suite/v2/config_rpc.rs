@@ -1091,6 +1091,57 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_batch_write_resolves_relative_agent_config_file() -> Result<()> {
+    let tmp_dir = TempDir::new()?;
+    let codex_home = tmp_dir.path().canonicalize()?;
+    write_config(&tmp_dir, "")?;
+    std::fs::create_dir(codex_home.join("agents"))?;
+    std::fs::write(
+        codex_home.join("agents/researcher.toml"),
+        r#"developer_instructions = "Research carefully""#,
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(&codex_home)
+        .without_auto_env()
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let batch_id = mcp
+        .send_config_batch_write_request(ConfigBatchWriteParams {
+            file_path: None,
+            edits: vec![ConfigEdit {
+                key_path: "agents.researcher".to_string(),
+                value: json!({
+                    "description": "Research role",
+                    "config_file": "agents/researcher.toml",
+                }),
+                merge_strategy: MergeStrategy::Replace,
+            }],
+            expected_version: None,
+            reload_user_config: true,
+        })
+        .await?;
+    let batch_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(batch_id)),
+    )
+    .await??;
+    let batch_write: ConfigWriteResponse = to_response(batch_resp)?;
+    assert_eq!(batch_write.status, WriteStatus::Ok);
+
+    let config: toml::Value =
+        toml::from_str(&std::fs::read_to_string(codex_home.join("config.toml"))?)?;
+    assert_eq!(
+        config["agents"]["researcher"]["config_file"].as_str(),
+        Some("agents/researcher.toml")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_batch_write_rejects_legacy_profile_tables() -> Result<()> {
     let tmp_dir = TempDir::new()?;
     let codex_home = tmp_dir.path().canonicalize()?;

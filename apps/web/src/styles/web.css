@@ -2052,6 +2052,11 @@ body {
   color: var(--accent) !important;
 }
 
+.web-ws-new-supervisor-btn:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent) !important;
+}
+
 .web-ws-row-action:disabled {
   opacity: 0 !important;
   cursor: not-allowed;

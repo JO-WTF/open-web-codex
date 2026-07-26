@@ -1,6 +1,6 @@
 # Supply-chain planning contract
 
-## Resource lifecycle
+## Resource and Artifact lifecycle
 
 Every calculation starts from immutable MCP Resources:
 
@@ -22,6 +22,39 @@ opaque `supply-chain://resources/...` URI. Data Agent handoffs use server
 content-addressed; changing source facts or assumptions creates a new Resource.
 Resource files default to the owning Profile's `CODEX_HOME`; they are not shared
 application or repository state.
+
+Every Resource-producing Tool also returns `resource_name` in its structured result.
+Use that exact stable name when citing evidence; never expose or relabel the opaque
+Resource URI as a human-readable name. `data_ref` is the Runtime handoff identity,
+whereas `resource_name` is the report citation identity.
+
+The Resource is the Runtime handoff. When a completed MCP Tool result contains a
+supported Resource link, the Platform registers the same content as a Task-owned
+Artifact:
+
+1. the Artifact receives an independent ID and Task read grant;
+2. Run, Thread, Turn and Item IDs are recorded only as producer provenance;
+3. content is materialized through the official MCP Resource read path;
+4. JSON syntax, MIME type, immutable source metadata and size are checked, while the
+   enterprise E2E also asserts that content `schema_version` matches the Artifact
+   schema;
+5. browser DTOs expose the Artifact identity and authorized content URL, not the
+   internal MCP Resource URI.
+
+Artifact registration does not change the calculation contract. A child Agent still
+passes the original `data_ref` unchanged inside Runtime; the Platform Artifact provides
+durable product identity, authorization and recovery. Deleting a producing Run must not
+delete the Artifact, its Task grant or provenance identity.
+
+Current lifecycle states are:
+
+```text
+pending -> materializing -> ready
+pending -> materializing -> failed
+```
+
+Replacement, invalidation, deletion, retention policy and authorized cross-Run reuse
+remain separate Platform lifecycle work.
 
 ## Service time
 

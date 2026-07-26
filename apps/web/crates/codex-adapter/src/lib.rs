@@ -55,6 +55,17 @@ pub struct StartedThread {
     pub thread_id: String,
 }
 
+/// Model-visible instructions applied when the Runtime creates a root Thread.
+///
+/// The platform resolves enterprise policy content before calling the
+/// adapter. Browser payloads and mutable Profile configuration must never be
+/// forwarded through this type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ThreadStartMode {
+    Standard,
+    EnterpriseSupervisor { developer_instructions: String },
+}
+
 /// Browser-login handoff returned by the official app-server. The platform
 /// exposes only the opaque login id and the URL the browser must open.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -186,6 +197,7 @@ pub trait CodexAdapter: Send + Sync {
     async fn start_thread(
         &self,
         workspace: &AuthorizedWorkspace,
+        mode: &ThreadStartMode,
     ) -> Result<StartedThread, AdapterError>;
 
     async fn fork_thread(

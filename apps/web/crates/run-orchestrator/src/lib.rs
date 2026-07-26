@@ -1,12 +1,13 @@
 mod execution;
 mod scheduler;
+mod supervisor_policy;
 mod workspace;
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use open_web_codex_adapter::{AdapterError, CodexAdapter};
+use open_web_codex_adapter::{AdapterError, CodexAdapter, ThreadStartMode};
 use open_web_codex_git_runtime::{GitRuntime, GitRuntimeError};
 use sqlx::PgPool;
 use std::path::PathBuf;
@@ -40,6 +41,21 @@ pub struct EnqueueRunRequest {
     pub workspace_id: Uuid,
     pub fork_thread_id: Option<String>,
     pub fork_source_run_id: Option<Uuid>,
+    pub supervisor_policy: Option<SupervisorPolicySnapshotInput>,
+}
+
+/// A server-resolved, repository-published Supervisor Policy version.
+///
+/// The orchestrator persists the exact content before a worker delivers it to
+/// Codex. Callers may select an id/version, but must never supply untrusted
+/// policy content from a browser request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SupervisorPolicySnapshotInput {
+    pub policy_id: String,
+    pub version: String,
+    pub display_name: String,
+    pub developer_instructions: String,
+    pub content_sha256: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,10 +130,13 @@ pub struct RunLease {
     pub run_id: Uuid,
     pub organization_id: Uuid,
     pub actor_id: Uuid,
+    pub profile_id: Uuid,
     pub workspace_id: Uuid,
     pub workspace_root: PathBuf,
     pub fork_thread_id: Option<String>,
     pub fork_source_run_id: Option<Uuid>,
+    pub supervisor_policy_binding_id: Option<Uuid>,
+    pub thread_start_mode: ThreadStartMode,
     pub token: String,
 }
 

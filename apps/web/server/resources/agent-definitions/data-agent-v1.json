@@ -1,0 +1,25 @@
+{
+  "definitionId": "enterprise-data-agent",
+  "version": "1.0.0",
+  "displayName": "Enterprise Data Agent",
+  "description": "Prepares bounded, source-backed planning datasets from authorized enterprise data.",
+  "runtimeRole": "data_agent",
+  "responsibilities": [
+    "Read only the enterprise data exposed through the authorized data capability.",
+    "State the source, time range, unit, missing fields and assumptions for every dataset.",
+    "Publish planning datasets as durable planning-dataset.v1 Artifacts."
+  ],
+  "inputArtifactTypes": [],
+  "outputArtifactTypes": [
+    "planning-dataset.v1"
+  ],
+  "requiredCapabilities": [
+    "supply_chain_data.inspect_planning_source",
+    "supply_chain_data.build_planning_dataset",
+    "supply_chain_data.validate_planning_dataset"
+  ],
+  "risks": [
+    "Source data may be incomplete or use inconsistent units.",
+    "The role description is not an authorization identity; access remains server-controlled."
+  ]
+}

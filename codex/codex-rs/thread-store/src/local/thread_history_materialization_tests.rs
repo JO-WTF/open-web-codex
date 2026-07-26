@@ -35,6 +35,19 @@ use crate::StoredTurnItemsView;
 use crate::ThreadPersistenceMetadata;
 use crate::ThreadStore;
 
+#[test]
+fn flattened_token_count_rollout_line_parses_for_materialization() {
+    let line = br#"{"timestamp":"2026-07-26T15:31:02.718Z","ordinal":16,"type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"limit_id":"codex","limit_name":null,"primary":{"used_percent":17.0,"window_minutes":10080,"resets_at":1785622815},"secondary":null,"credits":{"has_credits":false,"unlimited":false,"balance":"0"},"individual_limit":null,"spend_control_reached":null,"plan_type":"pro","rate_limit_reached_type":null}}}"#;
+
+    let parsed = super::parse_rollout_line(line).expect("parse canonical token count");
+
+    assert_eq!(parsed.ordinal, Some(16));
+    assert!(matches!(
+        parsed.item,
+        RolloutItem::EventMsg(EventMsg::TokenCount(_))
+    ));
+}
+
 #[tokio::test]
 async fn paginated_live_append_materializes_turn_items_and_state() {
     let home = TempDir::new().expect("temp dir");

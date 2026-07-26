@@ -52,34 +52,76 @@ impl RunOrchestrator {
                 .fork_thread(&source_workspace, &workspace, source_thread_id)
                 .await?
         } else {
-            self.adapter.start_thread(&workspace).await?
+            self.adapter
+                .start_thread(&workspace, &lease.thread_start_mode)
+                .await?
         };
 
-        let updated = sqlx::query(
-            "WITH updated_run AS ( \
-                 UPDATE runs SET status = 'running', codex_thread_id = $1, heartbeat_at = now(), \
-                                 lease_expires_at = $2, updated_at = now() \
-                 WHERE id = $3 AND workspace_id = $4 \
-                   AND lease_owner = $5 AND lease_token = $6 AND status = 'provisioning' \
-                 RETURNING task_id \
-             ) \
-             UPDATE tasks SET status = 'running', updated_at = now() \
-             WHERE id IN (SELECT task_id FROM updated_run)",
+        match self
+            .persist_thread_delivery(lease, &started.thread_id)
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.record_delivery_uncertainty(lease, &started.thread_id)
+                    .await?;
+                Err(error)
+            }
+        }
+    }
+
+    async fn persist_thread_delivery(
+        &self,
+        lease: &RunLease,
+        thread_id: &str,
+    ) -> Result<(), RunOrchestratorError> {
+        let mut transaction = self.db.begin().await?;
+        let task_id = sqlx::query_scalar::<_, Uuid>(
+            "UPDATE runs SET status = 'running', codex_thread_id = $1, heartbeat_at = now(), \
+                             lease_expires_at = $2, updated_at = now() \
+             WHERE id = $3 AND workspace_id = $4 \
+               AND lease_owner = $5 AND lease_token = $6 AND status = 'provisioning' \
+             RETURNING task_id",
         )
-        .bind(&started.thread_id)
+        .bind(thread_id)
         .bind(Utc::now() + crate::chrono_ttl(self.lease_ttl)?)
         .bind(lease.run_id)
         .bind(lease.workspace_id)
         .bind(&self.worker_id)
         .bind(&lease.token)
-        .execute(&self.db)
-        .await?
-        .rows_affected();
-        if updated != 1 {
-            self.record_delivery_uncertainty(lease, &started.thread_id)
-                .await?;
+        .fetch_optional(&mut *transaction)
+        .await?;
+        let Some(task_id) = task_id else {
+            transaction.rollback().await?;
             return Err(RunOrchestratorError::LeaseLost);
+        };
+
+        if let Some(binding_id) = lease.supervisor_policy_binding_id {
+            let updated = sqlx::query(
+                "UPDATE supervisor_policy_bindings \
+                 SET thread_id = $1, state = 'bound', failure_code = NULL, \
+                     bound_at = now(), updated_at = now() \
+                 WHERE id = $2 AND run_id = $3 AND state = 'prepared'",
+            )
+            .bind(thread_id)
+            .bind(binding_id)
+            .bind(lease.run_id)
+            .execute(&mut *transaction)
+            .await?
+            .rows_affected();
+            if updated != 1 {
+                transaction.rollback().await?;
+                return Err(RunOrchestratorError::Conflict(
+                    "Supervisor Policy binding changed before Thread delivery".to_string(),
+                ));
+            }
         }
+        insert_root_agent_projection(&mut transaction, lease, thread_id).await?;
+        sqlx::query("UPDATE tasks SET status = 'running', updated_at = now() WHERE id = $1")
+            .bind(task_id)
+            .execute(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -88,7 +130,8 @@ impl RunOrchestrator {
         lease: &RunLease,
         thread_id: &str,
     ) -> Result<(), RunOrchestratorError> {
-        sqlx::query(
+        let mut transaction = self.db.begin().await?;
+        let updated_run = sqlx::query(
             "UPDATE runs SET codex_thread_id = COALESCE(codex_thread_id, $1), \
                              status = CASE WHEN status = 'cancelled' THEN 'cancelled' \
                                            ELSE 'recovery_pending' END, \
@@ -101,8 +144,36 @@ impl RunOrchestrator {
         .bind(thread_id)
         .bind(lease.run_id)
         .bind(lease.workspace_id)
-        .execute(&self.db)
-        .await?;
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected();
+        if updated_run != 1 {
+            transaction.rollback().await?;
+            return Err(RunOrchestratorError::LeaseLost);
+        }
+        if let Some(binding_id) = lease.supervisor_policy_binding_id {
+            let updated = sqlx::query(
+                "UPDATE supervisor_policy_bindings \
+                 SET thread_id = COALESCE(thread_id, $1), state = 'bound', failure_code = NULL, \
+                     bound_at = COALESCE(bound_at, now()), updated_at = now() \
+                 WHERE id = $2 AND run_id = $3 \
+                   AND state IN ('prepared', 'bound', 'cancelled')",
+            )
+            .bind(thread_id)
+            .bind(binding_id)
+            .bind(lease.run_id)
+            .execute(&mut *transaction)
+            .await?
+            .rows_affected();
+            if updated != 1 {
+                transaction.rollback().await?;
+                return Err(RunOrchestratorError::Conflict(
+                    "Supervisor Policy delivery could not be recorded".to_string(),
+                ));
+            }
+        }
+        insert_root_agent_projection(&mut transaction, lease, thread_id).await?;
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -111,7 +182,8 @@ impl RunOrchestrator {
         lease: &RunLease,
         code: &'static str,
     ) -> Result<(), RunOrchestratorError> {
-        sqlx::query(
+        let mut transaction = self.db.begin().await?;
+        let updated = sqlx::query(
             "UPDATE runs SET status = 'failed', failure_code = $1, lease_owner = NULL, \
                              lease_token = NULL, lease_expires_at = NULL, updated_at = now() \
              WHERE id = $2 AND lease_owner = $3 AND lease_token = $4 \
@@ -121,8 +193,24 @@ impl RunOrchestrator {
         .bind(lease.run_id)
         .bind(&self.worker_id)
         .bind(&lease.token)
-        .execute(&self.db)
-        .await?;
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected();
+        if updated == 1 {
+            if let Some(binding_id) = lease.supervisor_policy_binding_id {
+                sqlx::query(
+                    "UPDATE supervisor_policy_bindings \
+                     SET state = 'failed', failure_code = $1, updated_at = now() \
+                     WHERE id = $2 AND run_id = $3 AND state = 'prepared'",
+                )
+                .bind(code)
+                .bind(binding_id)
+                .bind(lease.run_id)
+                .execute(&mut *transaction)
+                .await?;
+            }
+        }
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -201,6 +289,36 @@ impl RunOrchestrator {
         transaction.commit().await?;
         Ok(true)
     }
+}
+
+async fn insert_root_agent_projection(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    lease: &RunLease,
+    thread_id: &str,
+) -> Result<(), RunOrchestratorError> {
+    let inserted = sqlx::query(
+        "INSERT INTO runtime_agent_projections (
+            organization_id, profile_id, workspace_id, root_run_id, thread_id, source_kind
+         ) VALUES ($1, $2, $3, $4, $5, 'root')
+         ON CONFLICT (profile_id, thread_id) DO UPDATE
+           SET last_observed_at = now()
+           WHERE runtime_agent_projections.root_run_id = EXCLUDED.root_run_id
+             AND runtime_agent_projections.workspace_id = EXCLUDED.workspace_id
+         RETURNING root_run_id",
+    )
+    .bind(lease.organization_id)
+    .bind(lease.profile_id)
+    .bind(lease.workspace_id)
+    .bind(lease.run_id)
+    .bind(thread_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    if inserted.is_none() {
+        return Err(RunOrchestratorError::Conflict(
+            "Runtime Thread is already projected under another Run or Workspace".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn failure_code(error: &RunOrchestratorError) -> &'static str {

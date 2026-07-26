@@ -87,12 +87,23 @@ Hello Agent stdio smoke passed
 
 ## 3. 在新 Thread 中验证 Agent 调用
 
-Plugin 能力是在 Thread 启动时交给 Codex 的。因此必须新建 Thread，旧 Thread 不会
-自动获得刚加入的 Plugin。
+当前平台在 Thread 启动时通过正式 `selectedCapabilityRoots` 合同把选中的能力包
+交给 Codex。Thread 启动后，这组 capability roots 会进入 Runtime history；后来由
+Codex 创建的子 Thread 也会继承它们。
 
-当前 Web 适配层会在新 Thread 启动时选择源码仓库和 Workspace 的
-`tools/*/.codex-plugin/plugin.json`。这是一条现阶段的本地能力发现路径，不代表
-Plugin Studio 的安装、权限和发布体验已经完整。
+因此，新增或修改 Plugin 后应新建 Thread。旧 Thread 不会因为目录发生变化就被
+平台偷偷改写。
+
+当前本地开发适配会从以下位置选择
+`tools/*/.codex-plugin/plugin.json`：
+
+- 当前源码仓库；
+- 当前授权 Workspace；
+- 运维显式配置的 capability roots。
+
+这是一条受控的本地开发发现路径，不代表 Plugin Studio 的安装、权限、审批和发布
+体验已经完成。Workspace 只是授权执行根，不拥有 Plugin；Thread 也不把 Plugin
+复制进自己的目录。
 
 1. 按[本地运行手册](../mvp-runbook.md)启动平台；
 2. 使用当前仓库创建或选择 Workspace；
@@ -120,6 +131,7 @@ Plugin Studio 的安装、权限和发布体验已经完整。
 
 ```text
 tools/hello-agent/
+├── README.md
 ├── .codex-plugin/plugin.json
 ├── .mcp.json
 ├── pyproject.toml
@@ -134,6 +146,9 @@ tools/hello-agent/
 ├── skills/
 │   ├── say-hello/
 │   └── review-greeting/
+├── examples/
+│   ├── hello-team-request.md
+│   └── runtime-roles/
 └── tests/
     ├── test_core.py
     ├── test_plugin_config.py
@@ -145,6 +160,7 @@ tools/hello-agent/
 | 文件 | 角色 |
 | --- | --- |
 | `plugin.json` | 声明这是一个可被 Codex 发现的 Plugin，以及它包含哪些能力 |
+| `README.md` | 面向能力包维护者说明本地运行与当前边界 |
 | `pyproject.toml` | 声明 Python 版本、运行依赖和测试依赖 |
 | `__init__.py` | 把 `hello_agent` 标记为可导入的 Python 包 |
 | `core.py` | 数据合同和纯业务规则 |
@@ -153,6 +169,7 @@ tools/hello-agent/
 | `.mcp.json` | 告诉 Codex 怎样启动 MCP Server |
 | `setup-env` | 在对话开始前准备隔离的 Python 环境 |
 | `hello-agent-launcher` | 找到隔离环境并启动 Python |
+| `examples/` | 下一篇教程使用的 Runtime Role 和根 Supervisor 请求示例；不会自动写入 Profile |
 | `test_core.py` | 验证普通业务规则 |
 | `test_plugin_config.py` | 验证 Manifest 与两个 MCP Server 没有接错 |
 | `stdio_smoke.py` | 验证真实 MCP 消息链 |
@@ -184,6 +201,8 @@ MCP Server 不重新实现业务规则
 | `mcpServers` | MCP 配置入口 | 让 Codex 发现可执行的 Tool |
 
 Manifest 只是“能力包目录”，不会自动创建一个 Agent，也不负责保存 Thread 状态。
+真正的运行实例由 Codex Runtime 创建为 Thread；企业角色发布和治理则由后续教程中
+的 Agent Definition 与 Supervisor Policy 负责。
 
 ---
 
@@ -500,8 +519,9 @@ core.py：真正的确定性规则
 | `default_tools_approval_mode` | 这个无副作用教学 Tool 默认不逐次弹出确认 |
 | `env_vars` | 只传明确允许的配置名 |
 
-`approve` 只是这个本地教学 Tool 的默认调用确认策略，不是权限身份，也不会绕过
-Workspace、Profile 或平台授权。
+`approve` 只是这个无外部副作用教学 Tool 的默认 MCP 调用策略，不是权限身份，也
+不会绕过 Workspace、Profile 或平台授权。真实企业 Tool 需要按读写影响、成本和
+外部后果设计审批，而不是照搬这个示例。
 
 launcher 负责：
 
@@ -551,7 +571,7 @@ chmod +x tools/hello-agent/bin/hello-agent-launcher
 | 单元测试失败 | `core.py` 的合同和业务规则 |
 | stdio smoke 失败 | launcher、MCP import、stdout 污染 |
 | Plugin 校验失败 | Manifest、Skill 或 `.mcp.json` |
-| 新 Thread 看不到 Skill | 是否在 Plugin 加入后新建 Thread |
+| 新 Thread 看不到 Skill | capability root 是否被选择、Plugin 是否有效、是否在能力变更后新建 Thread |
 | Agent 不调用 Tool | Skill 触发描述和 MCP Server 状态 |
 | Tool 一直运行 | 超时、Server 崩溃或 stdout 普通日志 |
 
@@ -581,4 +601,4 @@ python3 \
 
 下一篇：
 
-[Hello Team：从一个 Agent 扩展到两个 Agent](hello-agent-team.md)
+[Hello Team：用两个真实子 Agent 完成协作](hello-agent-team.md)

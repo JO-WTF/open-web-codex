@@ -42,11 +42,11 @@ pub async fn list_workspaces(
                 workspace.parent_workspace_id, workspace.group_workspace_id, workspace.managed, \
                 workspace.created_at, workspace.updated_at \
          FROM workspaces workspace \
-         LEFT JOIN workspace_grants grant ON grant.workspace_id = workspace.id \
-           AND grant.organization_id = workspace.organization_id \
-           AND grant.user_id = $2 AND grant.profile_id = workspace.profile_id \
+         LEFT JOIN workspace_grants workspace_grant ON workspace_grant.workspace_id = workspace.id \
+           AND workspace_grant.organization_id = workspace.organization_id \
+           AND workspace_grant.user_id = $2 AND workspace_grant.profile_id = workspace.profile_id \
          WHERE workspace.organization_id = $1 \
-           AND workspace.state <> 'removed' AND ($3 OR grant.workspace_id IS NOT NULL) \
+           AND workspace.state <> 'removed' AND ($3 OR workspace_grant.workspace_id IS NOT NULL) \
          ORDER BY workspace.created_at, workspace.id",
     )
     .bind(auth.organization_id)
@@ -806,11 +806,11 @@ pub(super) async fn authorized_workspace(
     require_owner: bool,
 ) -> Result<Uuid, (StatusCode, Json<PlatformError>)> {
     let row = sqlx::query(
-        "SELECT workspace.id, workspace.state, grant.role \
+        "SELECT workspace.id, workspace.state, workspace_grant.role \
          FROM workspaces workspace \
-         LEFT JOIN workspace_grants grant ON grant.workspace_id = workspace.id \
-           AND grant.organization_id = workspace.organization_id \
-           AND grant.user_id = $3 AND grant.profile_id = workspace.profile_id \
+         LEFT JOIN workspace_grants workspace_grant ON workspace_grant.workspace_id = workspace.id \
+           AND workspace_grant.organization_id = workspace.organization_id \
+           AND workspace_grant.user_id = $3 AND workspace_grant.profile_id = workspace.profile_id \
          WHERE workspace.id = $1 AND workspace.organization_id = $2",
     )
     .bind(workspace_id)

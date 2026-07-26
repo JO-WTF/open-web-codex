@@ -20,6 +20,7 @@ const client = {
   updateThreadModelSelection: vi.fn(),
   listMcpServerStatus: vi.fn(),
   getAccountRateLimits: vi.fn(),
+  getEnterpriseSupervisorOverview: vi.fn(),
   startThread: vi.fn(),
   resumeThread: vi.fn(),
   listThreadTurns: vi.fn(),
@@ -67,6 +68,7 @@ describe("WebApp workspace-first messaging", () => {
     client.updateThreadModelSelection.mockResolvedValue({});
     client.listMcpServerStatus.mockResolvedValue({ data: [] });
     client.getAccountRateLimits.mockResolvedValue({});
+    client.getEnterpriseSupervisorOverview.mockResolvedValue(null);
     client.startThread.mockResolvedValue({ thread: { id: "thread-new" } });
     client.resumeThread.mockResolvedValue({ thread: { id: "thread-new", turns: [] } });
     client.listThreadTurns.mockResolvedValue([]);
@@ -109,6 +111,60 @@ describe("WebApp workspace-first messaging", () => {
 
     await waitFor(() => expect(screen.getAllByText("Generated title").length).toBeGreaterThan(0));
     expect(screen.queryByText("thread-n…")).toBeNull();
+  });
+
+  it("starts and identifies an explicitly selected Enterprise Supervisor Copilot", async () => {
+    client.getEnterpriseSupervisorOverview.mockResolvedValue({
+      policy: {
+        run_id: "run-enterprise",
+        task_id: "task-enterprise",
+        thread_id: "thread-new",
+        policy_id: "enterprise-supervisor-copilot",
+        version: "1.0.0",
+        display_name: "Enterprise Supervisor Copilot",
+        content_sha256: "a".repeat(64),
+        state: "bound",
+        created_at: "2026-07-26T00:00:00Z",
+        bound_at: "2026-07-26T00:00:01Z",
+      },
+      agents: [{
+        run_id: "run-enterprise",
+        thread_id: "thread-new",
+        parent_thread_id: null,
+        source_kind: "root",
+        agent_path: null,
+        agent_nickname: null,
+        agent_role: null,
+        status_type: "idle",
+        active_flags: [],
+        is_root: true,
+        first_observed_at: "2026-07-26T00:00:01Z",
+        last_observed_at: "2026-07-26T00:00:01Z",
+      }],
+      artifacts: [],
+    });
+    render(<WebApp />);
+
+    fireEvent.click(await screen.findByRole("button", {
+      name: "New enterprise copilot in Demo",
+    }));
+
+    await waitFor(() => expect(client.startThread).toHaveBeenCalledWith(
+      "workspace-1",
+      {
+        supervisorPolicy: {
+          policy_id: "enterprise-supervisor-copilot",
+          version: "1.0.0",
+        },
+      },
+    ));
+    await waitFor(() => expect(client.getEnterpriseSupervisorOverview)
+      .toHaveBeenCalledWith("thread-new"));
+    await waitFor(() => {
+      expect(screen.getByText("Policy enterprise-supervisor-copilot · 1.0.0"))
+        .toBeTruthy();
+      expect(screen.getByText("Root Supervisor")).toBeTruthy();
+    });
   });
 
   it("rolls back a Provider switch when its model catalog is empty", async () => {

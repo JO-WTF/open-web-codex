@@ -16,8 +16,52 @@ use tokio::sync::RwLock;
 use crate::{
     AdapterError, AuthorizedWorkspace, CanceledProfileLogin, CodexAdapter, HealthStatus,
     ProfileLoginStatus, ProfileMutation, ProfileQuery, ReviewTarget, StartedProfileLogin,
-    StartedThread, TurnOptions,
+    StartedThread, ThreadStartMode, TurnOptions,
 };
+
+const MAX_DEVELOPER_INSTRUCTIONS_BYTES: usize = 16 * 1024;
+
+fn thread_start_params(
+    workspace_root: &str,
+    mode: &ThreadStartMode,
+) -> Result<Value, AdapterError> {
+    let mut params = json!({
+        "cwd": workspace_root,
+        "approvalPolicy": "on-request",
+        "historyMode": "paginated",
+    });
+    if let ThreadStartMode::EnterpriseSupervisor {
+        developer_instructions,
+    } = mode
+    {
+        let instructions = developer_instructions.trim();
+        if instructions.is_empty() || instructions.len() > MAX_DEVELOPER_INSTRUCTIONS_BYTES {
+            return Err(AdapterError::Internal(
+                "Supervisor developer instructions must contain 1 to 16384 bytes".to_string(),
+            ));
+        }
+        params["developerInstructions"] = Value::String(instructions.to_string());
+    }
+    add_selected_capability_roots(&mut params, Path::new(workspace_root));
+    Ok(params)
+}
+
+fn agent_core_batch_write_params(
+    multi_agent_enabled: bool,
+    max_threads: u32,
+    max_depth: u32,
+) -> Value {
+    json!({
+        "edits": [
+            { "keyPath": "features.multi_agent", "value": multi_agent_enabled, "mergeStrategy": "replace" },
+            { "keyPath": "agents.max_concurrent_threads_per_session", "value": max_threads, "mergeStrategy": "replace" },
+            { "keyPath": "agents.max_depth", "value": max_depth, "mergeStrategy": "replace" }
+        ],
+        "filePath": null,
+        "expectedVersion": null,
+        "reloadUserConfig": true
+    })
+}
 
 /// Adapter backed directly by a native Profile Host and Codex app-server
 /// JSONL connection without an intermediate local gateway.
@@ -100,16 +144,6 @@ impl RealCodexAdapter {
         Ok(root.to_string_lossy().to_string())
     }
 
-    fn thread_start_params(&self, workspace_root: &str) -> Value {
-        let mut params = json!({
-            "cwd": workspace_root,
-            "approvalPolicy": "on-request",
-            "historyMode": "paginated",
-        });
-        add_selected_capability_roots(&mut params, Path::new(workspace_root));
-        params
-    }
-
     fn thread_resume_params(&self, thread_id: &str, workspace_root: &str) -> Value {
         json!({
             "threadId": thread_id,
@@ -142,13 +176,12 @@ impl RealCodexAdapter {
     async fn start_thread_in_workspace(
         &self,
         workspace: &AuthorizedWorkspace,
+        mode: &ThreadStartMode,
     ) -> Result<StartedThread, AdapterError> {
         let _runtime = self.prepare_runtime().await?;
         let workspace_root = self.authorized_root(workspace)?;
-        let result = self
-            .host
-            .request("thread/start", self.thread_start_params(&workspace_root))
-            .await?;
+        let params = thread_start_params(&workspace_root, mode)?;
+        let result = self.host.request("thread/start", params).await?;
         let thread_id = result
             .pointer("/thread/id")
             .and_then(Value::as_str)
@@ -532,7 +565,9 @@ impl CodexAdapter for RealCodexAdapter {
                     id: self.workspace_id.clone(),
                     root: self.workspace_root.clone(),
                 };
-                let started = self.start_thread_in_workspace(&workspace).await?;
+                let started = self
+                    .start_thread_in_workspace(&workspace, &ThreadStartMode::Standard)
+                    .await?;
                 Ok(json!({ "threadId": started.thread_id }))
             }
             "send_user_message" => {
@@ -560,8 +595,9 @@ impl CodexAdapter for RealCodexAdapter {
     async fn start_thread(
         &self,
         workspace: &AuthorizedWorkspace,
+        mode: &ThreadStartMode,
     ) -> Result<StartedThread, AdapterError> {
-        self.start_thread_in_workspace(workspace).await
+        self.start_thread_in_workspace(workspace, mode).await
     }
 
     async fn fork_thread(
@@ -819,16 +855,11 @@ impl CodexAdapter for RealCodexAdapter {
                 self.host
                     .request(
                         "config/batchWrite",
-                        json!({
-                            "edits": [
-                                { "keyPath": "features.multi_agent", "value": multi_agent_enabled, "mergeStrategy": "replace" },
-                                { "keyPath": "agents.max_threads", "value": max_threads, "mergeStrategy": "replace" },
-                                { "keyPath": "agents.max_depth", "value": max_depth, "mergeStrategy": "replace" }
-                            ],
-                            "filePath": null,
-                            "expectedVersion": null,
-                            "reloadUserConfig": true
-                        }),
+                        agent_core_batch_write_params(
+                            multi_agent_enabled,
+                            max_threads,
+                            max_depth,
+                        ),
                     )
                     .await
                     .map_err(Into::into)
@@ -1029,7 +1060,9 @@ impl CodexAdapter for RealCodexAdapter {
             ));
         }
         let mut events = self.host.subscribe();
-        let started = self.start_thread_in_workspace(workspace).await?;
+        let started = self
+            .start_thread_in_workspace(workspace, &ThreadStartMode::Standard)
+            .await?;
         self.suppressed_threads
             .write()
             .await
@@ -1285,6 +1318,7 @@ impl CodexAdapter for RealCodexAdapter {
                             *active = None;
                         }
                     }
+                    self.inherit_child_thread_workspace(&message).await?;
                     if let Some(thread_id) = message_thread_id(&message) {
                         if self.suppressed_threads.read().await.contains(thread_id) {
                             continue;
@@ -1343,6 +1377,40 @@ impl CodexAdapter for RealCodexAdapter {
 }
 
 impl RealCodexAdapter {
+    async fn inherit_child_thread_workspace(&self, message: &Value) -> Result<(), AdapterError> {
+        let Some(child_thread_id) = message_thread_id(message) else {
+            return Ok(());
+        };
+        let Some(parent_thread_id) = message_parent_thread_id(message) else {
+            return Ok(());
+        };
+        if child_thread_id == parent_thread_id {
+            return Err(AdapterError::Rpc(
+                "Runtime child Thread referenced itself as parent".to_string(),
+            ));
+        }
+        let parent_workspace = self
+            .thread_workspaces
+            .read()
+            .await
+            .get(parent_thread_id)
+            .cloned();
+        let Some(parent_workspace) = parent_workspace else {
+            return Ok(());
+        };
+        let mut thread_workspaces = self.thread_workspaces.write().await;
+        match thread_workspaces.get(child_thread_id) {
+            Some(existing) if existing != &parent_workspace => Err(AdapterError::Rpc(
+                "Runtime child Thread changed its authorized Workspace".to_string(),
+            )),
+            Some(_) => Ok(()),
+            None => {
+                thread_workspaces.insert(child_thread_id.to_string(), parent_workspace);
+                Ok(())
+            }
+        }
+    }
+
     async fn require_terminal(
         &self,
         workspace: &AuthorizedWorkspace,
@@ -1383,6 +1451,15 @@ fn message_thread_id(message: &Value) -> Option<&str> {
         .pointer("/params/threadId")
         .or_else(|| message.pointer("/params/thread_id"))
         .or_else(|| message.pointer("/params/thread/id"))
+        .and_then(Value::as_str)
+}
+
+fn message_parent_thread_id(message: &Value) -> Option<&str> {
+    message
+        .pointer("/params/thread/parentThreadId")
+        .or_else(|| message.pointer("/params/thread/parent_thread_id"))
+        .or_else(|| message.pointer("/params/thread/source/subAgent/thread_spawn/parent_thread_id"))
+        .or_else(|| message.pointer("/params/thread/source/subAgent/threadSpawn/parentThreadId"))
         .and_then(Value::as_str)
 }
 
@@ -1602,10 +1679,12 @@ fn app_server_event_frame(
 #[cfg(test)]
 mod tests {
     use super::{
-        app_server_event_frame, discover_selected_capability_root_paths,
-        is_authorized_workspace_root, login_completion, message_thread_id,
-        selected_capability_root_id, selected_capability_roots_json, turn_sandbox_policy,
+        agent_core_batch_write_params, app_server_event_frame,
+        discover_selected_capability_root_paths, is_authorized_workspace_root, login_completion,
+        message_parent_thread_id, message_thread_id, selected_capability_root_id,
+        selected_capability_roots_json, thread_start_params, turn_sandbox_policy,
     };
+    use crate::ThreadStartMode;
     use serde_json::{json, Value};
     use std::path::Path;
 
@@ -1669,6 +1748,33 @@ mod tests {
         assert_eq!(
             message_thread_id(&json!({"params": {"thread": {"id": "thread-2"}}})),
             Some("thread-2")
+        );
+        assert_eq!(
+            message_parent_thread_id(&json!({
+                "params": {
+                    "thread": {
+                        "id": "thread-2",
+                        "parentThreadId": "thread-1"
+                    }
+                }
+            })),
+            Some("thread-1")
+        );
+        assert_eq!(
+            message_parent_thread_id(&json!({
+                "params": {
+                    "thread": {
+                        "source": {
+                            "subAgent": {
+                                "thread_spawn": {
+                                    "parent_thread_id": "thread-1"
+                                }
+                            }
+                        }
+                    }
+                }
+            })),
+            Some("thread-1")
         );
     }
 
@@ -1747,6 +1853,56 @@ mod tests {
             "local-workspace-maps-mcp"
         );
     }
+
+    #[test]
+    fn binds_enterprise_supervisor_instructions_only_to_explicit_thread_starts() {
+        let standard =
+            thread_start_params("/runner/workspace", &ThreadStartMode::Standard).unwrap();
+        let enterprise = thread_start_params(
+            "/runner/workspace",
+            &ThreadStartMode::EnterpriseSupervisor {
+                developer_instructions: "  Coordinate the approved agents.  ".to_string(),
+            },
+        )
+        .unwrap();
+
+        assert!(standard.get("developerInstructions").is_none());
+        assert_eq!(
+            enterprise["developerInstructions"],
+            "Coordinate the approved agents."
+        );
+    }
+
+    #[test]
+    fn rejects_empty_enterprise_supervisor_instructions() {
+        let error = thread_start_params(
+            "/runner/workspace",
+            &ThreadStartMode::EnterpriseSupervisor {
+                developer_instructions: "   ".to_string(),
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "Internal error: Supervisor developer instructions must contain 1 to 16384 bytes"
+        );
+    }
+
+    #[test]
+    fn writes_the_canonical_runtime_agent_concurrency_key() {
+        let params = agent_core_batch_write_params(true, 2, 1);
+
+        assert_eq!(
+            params["edits"][1]["keyPath"],
+            "agents.max_concurrent_threads_per_session"
+        );
+        assert!(params
+            .to_string()
+            .contains("agents.max_concurrent_threads_per_session"));
+        assert!(!params.to_string().contains("agents.max_threads"));
+    }
+
     #[test]
     fn builds_workspace_write_turn_sandbox_by_default() {
         let policy = turn_sandbox_policy(Path::new("/runner/workspace"), false);

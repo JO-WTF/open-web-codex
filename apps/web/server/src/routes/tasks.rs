@@ -294,10 +294,10 @@ pub async fn send_message(
          JOIN workspaces w ON w.id = r.workspace_id \
            AND w.organization_id = r.organization_id \
            AND w.state IN ('ready', 'retained') \
-         JOIN workspace_grants grant ON grant.workspace_id = w.id \
-           AND grant.organization_id = w.organization_id \
-           AND grant.user_id = r.requested_by AND grant.profile_id = w.profile_id \
-           AND grant.role IN ('owner', 'write') \
+         JOIN workspace_grants workspace_grant ON workspace_grant.workspace_id = w.id \
+           AND workspace_grant.organization_id = w.organization_id \
+           AND workspace_grant.user_id = r.requested_by AND workspace_grant.profile_id = w.profile_id \
+           AND workspace_grant.role IN ('owner', 'write') \
          WHERE r.task_id = $1 AND r.organization_id = $2 \
            AND r.requested_by = $3 AND r.status IN ('running', 'recovery_pending') \
          ORDER BY r.created_at DESC LIMIT 1",

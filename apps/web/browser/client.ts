@@ -1,5 +1,6 @@
 import type {
   Approval,
+  AgentDefinitionSummary,
   Me,
   Project,
   ProviderCatalog,
@@ -31,6 +32,11 @@ import type {
   CreateGitHubRepositoryResponse,
   MapsConfiguration,
   MapsProvider,
+  SupervisorPolicyBinding,
+  SupervisorPolicySelection,
+  SupervisorPolicySummary,
+  RuntimeAgentProjection,
+  ArtifactSummary,
 } from "./types";
 
 type ClientOptions = {
@@ -335,9 +341,10 @@ export class PlatformClient {
   startRun(
     taskId: string,
     workspaceId: string,
-    fork?: {
+    options?: {
       forkThreadId?: string | null;
       forkSourceRunId?: string | null;
+      supervisorPolicy?: SupervisorPolicySelection | null;
     },
   ) {
     return this.request<{ run: Run }>(`/api/tasks/${encodeURIComponent(taskId)}/runs`, {
@@ -345,10 +352,43 @@ export class PlatformClient {
       body: JSON.stringify({
         idempotency_key: createIdempotencyKey(),
         workspace_id: workspaceId,
-        fork_thread_id: fork?.forkThreadId ?? null,
-        fork_source_run_id: fork?.forkSourceRunId ?? null,
+        fork_thread_id: options?.forkThreadId ?? null,
+        fork_source_run_id: options?.forkSourceRunId ?? null,
+        supervisor_policy: options?.supervisorPolicy ?? null,
       }),
     });
+  }
+
+  listSupervisorPolicies() {
+    return this.request<SupervisorPolicySummary[]>("/api/supervisor-policies");
+  }
+
+  listAgentDefinitions() {
+    return this.request<AgentDefinitionSummary[]>("/api/agent-definitions");
+  }
+
+  getRunSupervisorPolicy(runId: string) {
+    return this.request<SupervisorPolicyBinding | null>(
+      `/api/runs/${encodeURIComponent(runId)}/supervisor-policy`,
+    );
+  }
+
+  listRunAgents(runId: string) {
+    return this.request<RuntimeAgentProjection[]>(
+      `/api/runs/${encodeURIComponent(runId)}/agents`,
+    );
+  }
+
+  listTaskArtifacts(taskId: string) {
+    return this.request<ArtifactSummary[]>(
+      `/api/tasks/${encodeURIComponent(taskId)}/artifacts`,
+    );
+  }
+
+  getArtifact(artifactId: string) {
+    return this.request<ArtifactSummary>(
+      `/api/artifacts/${encodeURIComponent(artifactId)}`,
+    );
   }
 
   cancelRun(runId: string) {

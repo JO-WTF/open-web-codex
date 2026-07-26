@@ -1446,6 +1446,7 @@ dependencies = [
  "open-web-codex-adapter",
  "open-web-codex-approval-service",
  "open-web-codex-auth",
+ "open-web-codex-codex-contracts",
  "open-web-codex-git-runtime",
  "open-web-codex-platform-contracts",
  "open-web-codex-platform-store",

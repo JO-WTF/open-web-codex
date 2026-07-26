@@ -5,6 +5,7 @@ import ChevronRight from "lucide-react/dist/esm/icons/chevron-right";
 import Folder from "lucide-react/dist/esm/icons/folder";
 import LoaderCircle from "lucide-react/dist/esm/icons/loader-circle";
 import MessageSquare from "lucide-react/dist/esm/icons/message-square";
+import Sparkles from "lucide-react/dist/esm/icons/sparkles";
 import Trash2 from "lucide-react/dist/esm/icons/trash-2";
 import type { WorkspaceInfo } from "../../types";
 
@@ -29,6 +30,7 @@ type Props = {
   activeThreadId: string | null;
   onSelectThread: (id: string) => void;
   onNewThread: (workspaceId: string) => void;
+  onNewSupervisor?: (workspaceId: string) => void;
   onArchiveThread: (workspaceId: string, threadId: string) => void;
   onRemoveWorkspace: (workspaceId: string) => void;
 };
@@ -44,6 +46,7 @@ export default function Workspaces({
   activeThreadId,
   onSelectThread,
   onNewThread,
+  onNewSupervisor,
   onArchiveThread,
   onRemoveWorkspace,
 }: Props) {
@@ -137,6 +140,22 @@ export default function Workspaces({
                 {threads.length > 0 && (
                   <span className="web-ws-thread-count">{threads.length}</span>
                 )}
+                {onNewSupervisor ? (
+                  <button
+                    type="button"
+                    className="web-ws-row-action web-ws-new-supervisor-btn"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setExpandedId(ws.id);
+                      onNewSupervisor(ws.id);
+                    }}
+                    disabled={busy}
+                    aria-label={`New enterprise copilot in ${ws.name}`}
+                    title="New enterprise supervisor copilot"
+                  >
+                    <Sparkles size={13} aria-hidden="true" />
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="web-ws-row-action web-ws-remove-btn"

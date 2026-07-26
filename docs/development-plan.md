@@ -4,12 +4,13 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 更新日期 | 2026-07-26 |
+| 更新日期 | 2026-07-27 |
 | 当前分支 | `codex/agent-architecture-features` |
 | Codex 基线 | `openai/codex` `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9` |
 | 上游待同步 | 126；观测到的 official main 为 `cba0e2701c9e3e67a877a16dbbd7a577d477a630` |
-| 当前工作 | 以 1421 WebApp 为唯一前端，先收口单用户、单 Profile、单主 Profile Host 的真实 Runtime 闭环；多 Profile Router 暂缓到单 Profile smoke 稳定后 |
+| 当前工作 | 单 Profile Enterprise Supervisor Copilot 的“华东新增仓”受限 happy path 已真实跑通；下一步补齐失败、恢复、Artifact 生命周期与可信门禁 |
 | 中期顺序 | `docs/roadmap.md` |
+| M2 详细实施 | `docs/enterprise-supervisor-copilot-plan.md` |
 | 能力事实 | `docs/capability-baseline.md` |
 
 当前 Codex 基线上的定制仍按 patch map 分类；official main 已前进 126 个提交，
@@ -26,7 +27,9 @@ Session；差异集中在该入口、`src/services/webClient.ts` Server
 测试或可重现运行证据；更长期的阶段只在路线图中维护。
 企业多 Agent 平台是当前工作台之上的演进方向：
 `docs/enterprise-agent-platform-architecture.md` 负责解释目标、取舍和收敛过程，
-本文只接收已经进入交付顺序的工作包，并继续用能力基线区分实现与验证。
+本文只汇总已经进入交付顺序的工作包，并继续用能力基线区分实现与验证。当前 M2
+逐切片任务、真实企业案例和活动可信风险统一维护在
+`docs/enterprise-supervisor-copilot-plan.md`，不在本文复制第二份详细看板。
 
 ## 执行规则
 
@@ -45,12 +48,49 @@ Session；差异集中在该入口、`src/services/webClient.ts` Server
 - 文档必须遵守 `docs/README.md` 的时间视角和权威边界；被替代的实现过程留在
   Git，仍会约束未来的决定进入 ADR。
 
-## 当前里程碑：Gate 0 平台证据恢复
+## 当前功能主线：M2 Enterprise Supervisor Copilot
 
-当前里程碑不是继续增加产品表面，而是让独立 Workspace、单 Profile Runtime、
-PostgreSQL 迁移、安全拒绝和真实 Provider/MCP 链路重新获得同一组可复现证据。
-组件所有权以 [系统架构](architecture.md) 为准，安全门禁以
-[安全模型](security-model.md) 为准。
+当前优先跑通一个单 Profile 真实企业案例：根 Supervisor 使用 Codex 原生多 Agent
+能力创建 Data Agent 与 Network Planning Agent，通过只读数据 MCP、有界规划 MCP
+和持久 Artifact 完成协作，最终报告引用关键证据。详细实施顺序、功能完成标准和
+可信风险台账以
+[Enterprise Supervisor Copilot 短期实施计划](enterprise-supervisor-copilot-plan.md)
+为准。
+
+M2 功能切片可以与 Gate 0 并行，不等待全部可信矩阵完成；但不得绕过 Runtime、
+Workspace、授权、Artifact 和 Tool 边界。未完成的可信项限制能力声明，并在短期计划
+风险台账中保留触发条件。
+
+当前切片顺序：
+
+1. 固定“华东新增仓”案例、数据与 Artifact Schema；
+2. 打通真实多 Agent Runtime 轨迹；
+3. 建立持久 Artifact 和跨子 Thread 交接；
+4. 绑定版本化 Supervisor Policy 与两个 Agent Definition；
+5. 接入只读数据 MCP 和有界规划 MCP；
+6. 完成浏览器体验与真实企业案例 E2E。
+
+受限 happy path 已经越过“平台骨架”阶段。全新 PostgreSQL 与 Profile 上的真实
+Codex Runtime 运行证明：绑定 `enterprise-supervisor-copilot@1.0.0` 的根 Thread
+按顺序创建了 `data_agent` 与 `network_planning_agent` 两个真实子 Thread；前者
+通过只读数据 MCP 产生并验证 `planning-dataset.v1`，后者读取同一 Resource 后再
+调用有界规划 MCP；最新重跑形成十二个 ready Task Artifact 和六段式决策报告。浏览器
+重新读取时恢复同一个 Policy、三节点 Agent 树、Artifact 摘要和完整报告，持久事件
+不暴露内部 Resource URI 或宿主机路径。自动化证据共九项，见能力基线和
+Enterprise Supervisor E2E。精确调用与 Artifact 数量取决于有效调查步骤，门禁固定
+的是必需 Schema 的最小集合以及所有已注册 Artifact 必须 ready。
+
+这不等于 M2 已全部完成。当前主线转向 happy path 没有覆盖的行为：Completed Agent
+follow-up、interrupt、部分失败和审批拒绝后的综合；多层 Agent 历史导航；Artifact
+打开、替代、失效、删除与保留；更完整的重启/乱序、共享 Workspace、multi-`cwd`
+和多用户隔离矩阵。它们继续限制“可恢复企业能力”和生产发布声明。
+
+## 并行可信工作：Gate 0 平台证据恢复
+
+Gate 0 让独立 Workspace、单 Profile Runtime、PostgreSQL 迁移、安全拒绝和真实
+Provider/MCP 链路获得同一组可复现证据。它现在是 M2 的并行可信与发布门禁，而非
+全部功能编码的前置阶段。组件所有权以 [系统架构](architecture.md) 为准，安全门禁
+以 [安全模型](security-model.md) 为准。
 
 ## 当前边界债务 TODO
 
@@ -118,6 +158,9 @@ Skills、Plugins 和 MCP。
    登录态；多用户阶段必须替换为 Profile-scoped auth 设计。
 短期 smoke 命令：
 
+- `scripts/smoke-enterprise-supervisor-copilot.sh`：构建当前 Server，在一次性
+  PostgreSQL、Profile 与 managed Workspace 上运行真实“华东新增仓”九项 E2E，
+  并输出不含凭据和宿主机路径的证据文件。
 - `scripts/smoke-maps-mcp-launcher.sh`：验证 maps MCP launcher 可启动、声明
   `outputSchema`、声明 GeoJSON Resource template，并生成带 `map.v3` renderer 和
   embed code 的 Inline Visualization Artifact。
@@ -131,8 +174,9 @@ Skills、Plugins 和 MCP。
   未引用不显示、live/history 一致性、MapReplyCard 和授权 GeoJSON 相关前端测试，
   并验证 camera/fit viewport 与点线面样式。
 
-完成以上 smoke，并补齐空白 PostgreSQL migration/security/Workspace 证据后，
-再进入 M2 的 Enterprise Supervisor Copilot 闭环。
+以上 smoke 和空白 PostgreSQL migration/security/Workspace 证据与 M2 功能切片
+并行推进。它们不阻塞早期 Copilot 编码和受限案例演示，但在完成前不能把 M2 声明为
+可信发布能力。
 
 ## Codex 上游同步与定制收敛
 
@@ -148,13 +192,12 @@ Skills、Plugins 和 MCP。
 
 ## 平台纵向闭环
 
-- [-] 资源查询带 Organization/User/Profile 归属，双组织越权负向测试源码已经
-  覆盖主要路径；基础迁移改写后尚未在空白 PostgreSQL 数据库重跑，因此当前不把
-  旧结果记为通过。
-- [-] 数据库模型为独立 Workspace/grant/lifecycle，Runner 只租赁 Run 并使用其
+- [x] 资源查询带 Organization/User/Profile 归属；双组织越权、Artifact ID 猜测和
+  Profile 访问拒绝已在当前空白 PostgreSQL schema 上通过。
+- [x] 数据库模型为独立 Workspace/grant/lifecycle，Runner 只租赁 Run 并使用其
   选择的授权根；Run 取消、失败、恢复和 lease 过期不触发 Workspace 清理，浏览器
-  文件/Git API 也直接按 Workspace 授权。代码与非 PostgreSQL 测试已就绪，当前
-  fresh-schema 数据库证据待补。
+  文件/Git API 也直接按 Workspace 授权。当前 fresh-schema 测试已证明同一
+  Workspace 可跨 Run 生命周期复用。
 - [ ] 增加登记现有执行根与真实 worktree lifecycle，并完成共享 Workspace 并发、
   越权、恢复和删除阻断矩阵。Thread 和 Run 始终只引用 Workspace，不拥有
   checkout。
@@ -162,13 +205,15 @@ Skills、Plugins 和 MCP。
 ## Gate 0 验证矩阵
 
 - [x] `bash -n scripts/*.sh` 和本地启动脚本 help/status 路径。
-- [-] 1,210 个浏览器测试、typecheck、build、no-desktop、Codex contracts，
-  以及真实 Codex/DeepSeek Provider 的 10 项平台 E2E 通过；main-ui-parity
-  仍会报告尚未并入参考基线的有意浏览器 UI 扩展。
+- [-] 1,221 个浏览器测试、typecheck、build、no-desktop、Codex contracts 和真实
+  Codex app-server 的 18 项 Capability Manifest smoke 通过；Enterprise Supervisor
+  在内置 OpenAI Provider 上的真实案例 9/9 通过。main-ui-parity 仍会报告尚未
+  并入参考基线的有意浏览器 UI 扩展。
 - [x] `cargo fmt --all --check`、`cargo test --workspace --locked`。
-- [ ] 在空白 PostgreSQL 数据库上重跑 migration/restart、两组织安全、Workspace
-  授权、Git Runtime 与 Run Orchestrator ignored integration tests。基础迁移已经
-  随独立 Workspace 模型改写，改写前的通过结果不再作为当前证据。
+- [x] 当前空白 PostgreSQL schema 上的迁移幂等/Secret 加密、两组织安全、
+  Artifact 拒绝、子 Agent/根 Run 生命周期隔离和独立 Workspace 跨 Run 复用
+  ignored integration tests 通过；Git Runtime 的 17 项文件与 Workspace 边界测试
+  同时通过。
 - [x] `npm run check:codex-generated`、`npm run check:codex-contracts`、fixtures、
   Feature Policy 和真实 `--require-manifest` smoke。
 - [x] 状态脚本已复核；当前集成基线为 `6e5a2d6b8d14`，观测到的 official
@@ -176,7 +221,7 @@ Skills、Plugins 和 MCP。
 - [x] Fake Server HTTP/static/WebSocket 端到端启动验证。
 - [x] Git status/diff 审查，确认没有未分类 Codex 差异或意外用户文件。
 
-## 当前发布边界与下一里程碑
+## 当前发布边界
 
 本分支完成的是可持续同步的 Codex 定制、浏览器纵向平台边界和桌面运行时
 淘汰，不等于 V1 GA。以下是当前仍真实存在的产品门禁：
@@ -198,33 +243,7 @@ Skills、Plugins 和 MCP。
 5. 目录选择输入服务器路径；图片选择、拖放和导出使用浏览器 blob/download；
    浏览器不获得任意服务器文件系统访问权。
 
-### M2 Enterprise Supervisor Copilot
-
-这一里程碑在单 Profile 上验证企业多 Agent 最小闭环，不建设第二套 Agent
-Runtime，也不提前开放完整 Agent Studio。开始功能实现前，必须先补齐本分支的空白
-PostgreSQL migration/security/Workspace 证据。
-
-1. [ ] 用真实 Codex Profile、app-server 和 Web 投影验证
-   spawn、message/follow-up、wait、interrupt、完成后继续执行以及父子 Thread
-   轨迹恢复；失败、乱序、刷新和 Profile 重启必须收敛到同一投影。
-2. [ ] 建立版本化 Supervisor Policy 的发布与不可变快照，将授权版本通过正式
-   `thread/start.developerInstructions` 绑定根 Thread；恢复沿用原版本，升级必须
-   显式迁移并审计。
-3. [ ] 以代码管理两个可评审的 Agent Definition Manifest，分别映射到真实可发现
-   的 Runtime Role。第一版只使用有限清单；未发现或未授权时明确失败。
-4. [ ] 提供只读企业数据 MCP 与有界仿真 MCP。Phase 1 只承诺经过验证的
-   Task/Profile 级资源范围，不把 Prompt 或模型提交的身份当作授权。
-5. [ ] 将 Inline Visualization 的 Run/Thread 作用域升级为持久 Artifact 身份、
-   Schema、provenance 和授权，使不同子 Thread 可以安全交接成果，刷新与 Profile
-   重启后仍能解析同一 Artifact。
-6. [ ] 以一个真实企业用例验证根 Supervisor、两个 Domain Agents、审批、取消、
-   部分失败、Artifact 交接和最终报告引用；关键结论必须可追溯到 Artifact。
-
-完成定义与专题架构第 26.2 节一致：这一步证明 Codex 原生多 Agent 能力可以被平台
-治理和观察，不宣称已经具备多组织 Agent Catalog、Runtime Role 级动态权限或长期
-Blackboard。
-
-M2 之后的多用户治理、Capability-gated Studio、生产 GA，以及有条件的 Task
-Knowledge Ledger 不在本文件展开。阶段顺序、进入条件和退出条件统一由
-[产品与工程路线图](roadmap.md) 管理。进入下一阶段时，再把该阶段的近期任务和
-验证矩阵移入本开发计划。
+M2 功能完成与可信发布采用两级判断：短期计划的真实案例完成定义决定功能闭环是否
+成立；Gate 0 和能力基线决定能否扩大试用或声称恢复、安全与兼容性已经可信。M2
+之后的多用户治理、Capability-gated Studio、生产 GA，以及有条件的 Task Knowledge
+Ledger 不在本文展开，统一由 [产品与工程路线图](roadmap.md) 管理。

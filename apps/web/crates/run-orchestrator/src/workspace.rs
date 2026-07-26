@@ -97,17 +97,18 @@ impl RunOrchestrator {
         }
 
         let mut transaction = self.db.begin().await?;
-        let (parent_workspace_id, group_workspace_id) =
-            if let Some(parent_workspace_id) = request.parent_workspace_id {
-                let parent = sqlx::query(
+        let (parent_workspace_id, group_workspace_id) = if let Some(parent_workspace_id) =
+            request.parent_workspace_id
+        {
+            let parent = sqlx::query(
                     "SELECT workspace.id, workspace.group_workspace_id \
                      FROM workspaces workspace \
-                     JOIN workspace_grants grant ON grant.workspace_id = workspace.id \
-                       AND grant.organization_id = workspace.organization_id \
+                     JOIN workspace_grants workspace_grant ON workspace_grant.workspace_id = workspace.id \
+                       AND workspace_grant.organization_id = workspace.organization_id \
                      WHERE workspace.id = $1 AND workspace.organization_id = $2 \
                        AND workspace.project_id = $3 AND workspace.profile_id = $4 \
-                       AND grant.user_id = $5 AND grant.profile_id = $4 \
-                       AND grant.role IN ('owner', 'write') \
+                       AND workspace_grant.user_id = $5 AND workspace_grant.profile_id = $4 \
+                       AND workspace_grant.role IN ('owner', 'write') \
                        AND workspace.state IN ('ready', 'retained') \
                      FOR KEY SHARE OF workspace",
                 )
@@ -119,17 +120,17 @@ impl RunOrchestrator {
                 .fetch_optional(&mut *transaction)
                 .await?
                 .ok_or(RunOrchestratorError::NotFound)?;
-                (
-                    Some(parent_workspace_id),
-                    Some(
-                        parent
-                            .get::<Option<Uuid>, _>("group_workspace_id")
-                            .unwrap_or(parent_workspace_id),
-                    ),
-                )
-            } else {
-                (None, None)
-            };
+            (
+                Some(parent_workspace_id),
+                Some(
+                    parent
+                        .get::<Option<Uuid>, _>("group_workspace_id")
+                        .unwrap_or(parent_workspace_id),
+                ),
+            )
+        } else {
+            (None, None)
+        };
 
         let workspace_id = Uuid::now_v7();
         let workspace_name = name.unwrap_or_else(|| {
@@ -261,10 +262,10 @@ impl RunOrchestrator {
                     workspace.kind, workspace.state, workspace.source_ref, workspace.branch_name, \
                     workspace.parent_workspace_id, workspace.group_workspace_id, workspace.managed, \
                     workspace.created_at, workspace.updated_at, workspace.created_by, \
-                    EXISTS(SELECT 1 FROM workspace_grants grant \
-                           WHERE grant.workspace_id = workspace.id AND grant.user_id = $3 \
-                             AND grant.profile_id = workspace.profile_id \
-                             AND grant.role = 'owner') AS owns_workspace \
+                    EXISTS(SELECT 1 FROM workspace_grants workspace_grant \
+                           WHERE workspace_grant.workspace_id = workspace.id AND workspace_grant.user_id = $3 \
+                             AND workspace_grant.profile_id = workspace.profile_id \
+                             AND workspace_grant.role = 'owner') AS owns_workspace \
              FROM workspaces workspace \
              WHERE workspace.id = $1 AND workspace.organization_id = $2 \
              FOR UPDATE OF workspace",

@@ -154,6 +154,7 @@ def build_planning_dataset(
     )
     structured = DataAgentResourceToolResult(
         summary=summary,
+        resource_name=published.resource_id,
         data_ref=_data_ref(published),
     ).model_dump(mode="json")
     return CallToolResult(

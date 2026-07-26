@@ -170,15 +170,15 @@ async fn authorized_workspace_context(
     workspace_id: Uuid,
 ) -> Result<TerminalContext, (StatusCode, Json<PlatformError>)> {
     let row = sqlx::query(
-        "SELECT workspace.id AS workspace_id, workspace.root_path, workspace.state, grant.role, \
+        "SELECT workspace.id AS workspace_id, workspace.root_path, workspace.state, workspace_grant.role, \
                 (SELECT run.id FROM runs run \
                  WHERE run.workspace_id = workspace.id AND run.requested_by = $3 \
                    AND run.codex_thread_id IS NOT NULL \
                  ORDER BY run.updated_at DESC, run.id DESC LIMIT 1) AS run_id \
          FROM workspaces workspace \
-         LEFT JOIN workspace_grants grant ON grant.workspace_id = workspace.id \
-           AND grant.organization_id = workspace.organization_id \
-           AND grant.user_id = $3 AND grant.profile_id = workspace.profile_id \
+         LEFT JOIN workspace_grants workspace_grant ON workspace_grant.workspace_id = workspace.id \
+           AND workspace_grant.organization_id = workspace.organization_id \
+           AND workspace_grant.user_id = $3 AND workspace_grant.profile_id = workspace.profile_id \
          WHERE workspace.id = $1 AND workspace.organization_id = $2 \
          FOR KEY SHARE OF workspace",
     )
@@ -228,13 +228,13 @@ async fn authorized_terminal(
 ) -> Result<(AuthorizedWorkspace, String), (StatusCode, Json<PlatformError>)> {
     let row = sqlx::query(
         "SELECT session.process_id, workspace.id AS workspace_id, workspace.root_path, \
-                workspace.state, grant.role \
+                workspace.state, workspace_grant.role \
          FROM terminal_sessions session \
          JOIN workspaces workspace ON workspace.id = session.workspace_id \
            AND workspace.organization_id = session.organization_id \
-         LEFT JOIN workspace_grants grant ON grant.workspace_id = workspace.id \
-           AND grant.organization_id = workspace.organization_id \
-           AND grant.user_id = $4 AND grant.profile_id = workspace.profile_id \
+         LEFT JOIN workspace_grants workspace_grant ON workspace_grant.workspace_id = workspace.id \
+           AND workspace_grant.organization_id = workspace.organization_id \
+           AND workspace_grant.user_id = $4 AND workspace_grant.profile_id = workspace.profile_id \
          WHERE session.organization_id = $1 AND session.workspace_id = $2 \
            AND session.terminal_id = $3 AND session.state IN ('starting', 'running')",
     )

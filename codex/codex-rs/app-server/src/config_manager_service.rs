@@ -380,7 +380,7 @@ impl ConfigManager {
             parsed_segments.push(segments);
         }
 
-        validate_config(&user_config).map_err(|err| {
+        validate_config(&user_config, self.codex_home()).map_err(|err| {
             ConfigManagerError::write(
                 ConfigWriteErrorCode::ConfigValidationError,
                 format!("Invalid configuration: {err}"),
@@ -414,7 +414,7 @@ impl ConfigManager {
                 )
             })?;
         let effective = updated_layers.effective_config();
-        validate_config(&effective).map_err(|err| {
+        validate_config(&effective, self.codex_home()).map_err(|err| {
             ConfigManagerError::write(
                 ConfigWriteErrorCode::ConfigValidationError,
                 format!("Invalid configuration: {err}"),
@@ -710,9 +710,8 @@ fn toml_value_to_value(value: &TomlValue) -> anyhow::Result<toml_edit::Value> {
     }
 }
 
-fn validate_config(value: &TomlValue) -> Result<(), toml::de::Error> {
-    let _: ConfigToml = value.clone().try_into()?;
-    Ok(())
+fn validate_config(value: &TomlValue, config_base_dir: &Path) -> std::io::Result<()> {
+    deserialize_config_toml_with_base(value.clone(), config_base_dir).map(|_| ())
 }
 
 fn paths_match(expected: impl AsRef<Path>, provided: impl AsRef<Path>) -> bool {

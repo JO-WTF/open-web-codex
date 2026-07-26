@@ -149,10 +149,10 @@ async fn authorized_thread(
          FROM runs run \
          JOIN workspaces workspace ON workspace.id = run.workspace_id \
            AND workspace.organization_id = run.organization_id \
-         JOIN workspace_grants grant ON grant.workspace_id = workspace.id \
-           AND grant.organization_id = workspace.organization_id \
-           AND grant.user_id = run.requested_by \
-           AND grant.profile_id = workspace.profile_id \
+         JOIN workspace_grants workspace_grant ON workspace_grant.workspace_id = workspace.id \
+           AND workspace_grant.organization_id = workspace.organization_id \
+           AND workspace_grant.user_id = run.requested_by \
+           AND workspace_grant.profile_id = workspace.profile_id \
          WHERE run.id = $1 AND run.organization_id = $2",
     )
     .bind(run_id)
@@ -618,7 +618,8 @@ fn not_found() -> ApiError {
     )
 }
 
-fn runtime_error(_: open_web_codex_adapter::AdapterError) -> ApiError {
+fn runtime_error(error: open_web_codex_adapter::AdapterError) -> ApiError {
+    tracing::warn!(%error, "Codex Runtime Thread operation failed");
     (
         StatusCode::BAD_GATEWAY,
         Json(PlatformError::internal("Codex Thread operation failed")),

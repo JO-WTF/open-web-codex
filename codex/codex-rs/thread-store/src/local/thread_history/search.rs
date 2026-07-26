@@ -66,6 +66,7 @@ pub(in crate::local) async fn search_thread_occurrences(
         "thread/searchOccurrences",
     )
     .await?;
+    store.materialize_rollout_lineage(params.thread_id).await?;
     let cursor = parse_cursor(
         params.cursor.as_deref(),
         params.thread_id,

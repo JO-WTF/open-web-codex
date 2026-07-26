@@ -62,6 +62,9 @@ async def smoke_data_server(environment: dict[str, str]) -> None:
             )
             assert build.isError is not True
             assert build.structuredContent is not None
+            assert build.structuredContent["resource_name"].startswith(
+                "planning-dataset.v1-"
+            )
             resource_ref = build.structuredContent["data_ref"]
 
             validation = await session.call_tool(
@@ -102,6 +105,9 @@ async def smoke_planning_server(environment: dict[str, str]) -> None:
             )
             assert snapshot.isError is not True
             assert snapshot.structuredContent is not None
+            assert snapshot.structuredContent["resource_name"].startswith(
+                "network_snapshot.v1-"
+            )
             resource_ref = snapshot.structuredContent["data_ref"]
 
             validation = await session.call_tool(

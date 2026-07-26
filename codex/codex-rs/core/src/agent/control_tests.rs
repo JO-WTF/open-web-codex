@@ -465,6 +465,69 @@ async fn spawn_agent_errors_when_manager_dropped() {
 }
 
 #[tokio::test]
+async fn spawn_agent_inherits_parent_selected_capability_roots() {
+    let harness = AgentControlHarness::new().await;
+    let selected_capability_roots = vec![SelectedCapabilityRoot {
+        id: "enterprise-planning@1".to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: "local".to_string(),
+            path: PathUri::parse("file:///plugins/enterprise-planning").expect("plugin root URI"),
+        },
+    }];
+    let mut thread_extension_init = ExtensionDataInit::new();
+    thread_extension_init.insert(selected_capability_roots.clone());
+    let parent = harness
+        .manager
+        .start_thread_with_options(StartThreadOptions {
+            config: harness.config.clone(),
+            allow_provider_model_fallback: false,
+            initial_history: InitialHistory::New,
+            history_mode: None,
+            session_source: None,
+            thread_source: None,
+            dynamic_tools: Vec::new(),
+            metrics_service_name: None,
+            parent_trace: None,
+            environments: Vec::new(),
+            thread_extension_init,
+            supports_openai_form_elicitation: false,
+        })
+        .await
+        .expect("start parent thread");
+
+    let child_thread_id = harness
+        .control
+        .spawn_agent_with_metadata(
+            harness.config.clone(),
+            text_input("prepare the planning dataset"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: parent.thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            })),
+            SpawnAgentOptions {
+                parent_thread_id: Some(parent.thread_id),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("spawn child thread")
+        .thread_id;
+    let child_thread = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should be registered");
+
+    assert_eq!(
+        child_thread.session.services.selected_capability_roots,
+        selected_capability_roots
+    );
+}
+
+#[tokio::test]
 async fn resume_agent_errors_when_manager_dropped() {
     let control = AgentControl::default();
     let (_home, config) = test_config().await;

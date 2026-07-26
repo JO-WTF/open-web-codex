@@ -18,6 +18,7 @@ use crate::session_prefix::format_subagent_notification_message;
 use crate::thread_manager::ResumeThreadWithHistoryOptions;
 use crate::thread_manager::ThreadManagerState;
 use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
+use codex_extension_api::ExtensionDataInit;
 use codex_protocol::AgentPath;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
@@ -622,6 +623,32 @@ impl AgentControl {
         }
 
         Some(Arc::clone(&parent_thread.session.services.exec_policy))
+    }
+
+    async fn inherited_thread_extension_init_for_source(
+        &self,
+        state: &Arc<ThreadManagerState>,
+        session_source: Option<&SessionSource>,
+    ) -> ExtensionDataInit {
+        let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        })) = session_source
+        else {
+            return ExtensionDataInit::default();
+        };
+        let Ok(parent_thread) = state.get_thread(*parent_thread_id).await else {
+            return ExtensionDataInit::default();
+        };
+
+        let mut thread_extension_init = ExtensionDataInit::new();
+        thread_extension_init.insert(
+            parent_thread
+                .session
+                .services
+                .selected_capability_roots
+                .clone(),
+        );
+        thread_extension_init
     }
 
     async fn open_thread_spawn_children(

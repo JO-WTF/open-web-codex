@@ -178,13 +178,9 @@ pub async fn create_agent(
         description: normalized(request.description),
         config_file: managed_agent_config_file(&name),
     };
-    if adapter.mutate_profile(mutation).await.is_err() {
+    if let Err(error) = adapter.mutate_profile(mutation).await {
         let _ = tokio::fs::remove_file(&path).await;
-        return Err(runtime_write_error(
-            open_web_codex_adapter::AdapterError::Rpc(
-                "Agent configuration update failed".to_string(),
-            ),
-        ));
+        return Err(runtime_write_error(error));
     }
     agents_settings(adapter.as_ref(), root).await.map(Json)
 }
@@ -208,16 +204,16 @@ pub async fn update_agent(
         .find(|agent| agent.name == original_name)
         .cloned()
         .ok_or_else(|| not_found("Agent was not found"))?;
+    if !existing.managed_by_app {
+        return Err(bad_request(
+            "External Agent configuration cannot be edited through the browser",
+        ));
+    }
     if name != original_name && current.agents.iter().any(|agent| agent.name == name) {
         return Err(conflict("Agent already exists"));
     }
 
     let original_path = managed_agent_path_from_config(root, &existing.config_file);
-    if request.developer_instructions.is_some() && original_path.is_none() {
-        return Err(bad_request(
-            "External Agent configuration cannot be edited through the browser",
-        ));
-    }
     let rename_file = request.rename_managed_file.unwrap_or(true)
         && name != original_name
         && original_path.is_some();
@@ -251,7 +247,7 @@ pub async fn update_agent(
         description: normalized(request.description),
         config_file,
     };
-    if adapter.mutate_profile(mutation).await.is_err() {
+    if let Err(error) = adapter.mutate_profile(mutation).await {
         if let Some(next_path) = next_path.as_ref() {
             if original_path.as_ref() != Some(next_path) {
                 let _ = tokio::fs::remove_file(next_path).await;
@@ -259,11 +255,7 @@ pub async fn update_agent(
                 let _ = atomic_write(next_path, &previous).await;
             }
         }
-        return Err(runtime_write_error(
-            open_web_codex_adapter::AdapterError::Rpc(
-                "Agent configuration update failed".to_string(),
-            ),
-        ));
+        return Err(runtime_write_error(error));
     }
     if rename_file {
         if let Some(original_path) = original_path {
@@ -547,9 +539,7 @@ async fn agents_settings(
     let mut summaries = Vec::new();
     if let Some(agents) = agents {
         for (name, definition) in agents {
-            if matches!(name.as_str(), "max_threads" | "max_depth")
-                || validate_identifier(name, "agent").is_err()
-            {
+            if is_reserved_agent_name(name) || validate_identifier(name, "agent").is_err() {
                 continue;
             }
             let definition = definition.as_object();
@@ -563,6 +553,11 @@ async fn agents_settings(
                 .unwrap_or_default()
                 .to_string();
             let managed_path = managed_agent_path_from_config(root, &config_file);
+            let browser_config_file = if managed_path.is_some() {
+                managed_agent_config_file(name)
+            } else {
+                "profile://external-agent-config".to_string()
+            };
             let content = match managed_path.as_ref() {
                 Some(path) => tokio::fs::read_to_string(path).await.ok(),
                 None => None,
@@ -580,7 +575,7 @@ async fn agents_settings(
                 name: name.clone(),
                 description,
                 developer_instructions,
-                config_file,
+                config_file: browser_config_file,
                 resolved_path: if managed_path.is_some() {
                     format!("profile://agents/{name}.toml")
                 } else {
@@ -599,7 +594,7 @@ async fn agents_settings(
             .and_then(Value::as_bool)
             .unwrap_or(false),
         max_threads: agents
-            .and_then(|value| value.get("max_threads"))
+            .and_then(|value| value.get("max_concurrent_threads_per_session"))
             .and_then(Value::as_u64)
             .and_then(|value| u32::try_from(value).ok())
             .unwrap_or(DEFAULT_MAX_THREADS),
@@ -669,7 +664,12 @@ fn managed_agent_config_file(name: &str) -> String {
 
 fn managed_agent_path_from_config(root: &Path, config_file: &str) -> Option<PathBuf> {
     let path = Path::new(config_file);
-    let mut components = path.components();
+    let relative = if path.is_absolute() {
+        path.strip_prefix(root).ok()?
+    } else {
+        path
+    };
+    let mut components = relative.components();
     let directory = components.next()?.as_os_str().to_str()?;
     let file = components.next()?.as_os_str().to_str()?;
     if directory != "agents" || components.next().is_some() || !file.ends_with(".toml") {
@@ -679,7 +679,7 @@ fn managed_agent_path_from_config(root: &Path, config_file: &str) -> Option<Path
     if validate_identifier(name, "agent").is_err() {
         return None;
     }
-    Some(root.join(path))
+    Some(root.join(relative))
 }
 
 fn new_agent_document(request: &CreateAgentRequest) -> Result<String, ApiError> {
@@ -884,10 +884,23 @@ fn validate_identifier(value: &str, label: &str) -> Result<String, ApiError> {
     {
         return Err(bad_request(&format!("Invalid {label} name")));
     }
-    if label == "agent" && matches!(value, "max_threads" | "max_depth") {
+    if label == "agent" && is_reserved_agent_name(value) {
         return Err(bad_request("Agent name is reserved"));
     }
     Ok(value.to_string())
+}
+
+fn is_reserved_agent_name(value: &str) -> bool {
+    matches!(
+        value,
+        "enabled"
+            | "max_concurrent_threads_per_session"
+            | "max_depth"
+            | "default_subagent_model"
+            | "default_subagent_reasoning_effort"
+            | "job_max_runtime_seconds"
+            | "interrupt_message"
+    )
 }
 
 fn normalized(value: Option<String>) -> Option<String> {
@@ -940,7 +953,8 @@ fn runtime_read_error() -> ApiError {
     )
 }
 
-fn runtime_write_error(_error: open_web_codex_adapter::AdapterError) -> ApiError {
+fn runtime_write_error(error: open_web_codex_adapter::AdapterError) -> ApiError {
+    tracing::error!(error = %error, "Codex Profile configuration update failed");
     (
         StatusCode::BAD_GATEWAY,
         Json(PlatformError::internal(

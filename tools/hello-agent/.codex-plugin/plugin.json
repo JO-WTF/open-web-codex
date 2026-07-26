@@ -1,7 +1,7 @@
 {
   "name": "hello-agent",
   "version": "0.1.0",
-  "description": "A minimal Writer and Reviewer Agent capability example for Codex",
+  "description": "A minimal greeting capability package for one-Agent and two-Agent Codex tutorials",
   "author": {
     "name": "Open Web Codex"
   },
@@ -9,7 +9,7 @@
   "interface": {
     "displayName": "Hello Agent",
     "shortDescription": "Learn one-Agent and two-Agent tool workflows.",
-    "longDescription": "Adds a deterministic greeting Writer, an independent Reviewer, two concise Skills, and two MCP servers as the smallest inspectable Agent capability example.",
+    "longDescription": "Adds deterministic greeting generation and review, two concise Skills, and two MCP servers. Runtime Roles and child Threads turn these capabilities into the two-Agent tutorial.",
     "developerName": "Open Web Codex",
     "category": "Productivity",
     "capabilities": [

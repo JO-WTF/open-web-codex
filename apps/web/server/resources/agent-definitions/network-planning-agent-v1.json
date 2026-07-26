@@ -1,0 +1,37 @@
+{
+  "definitionId": "enterprise-network-planning-agent",
+  "version": "1.0.0",
+  "displayName": "Enterprise Network Planning Agent",
+  "description": "Compares bounded supply-chain network scenarios using approved planning datasets and deterministic planning tools.",
+  "runtimeRole": "network_planning_agent",
+  "responsibilities": [
+    "Read authorized planning-dataset.v1 Artifacts without copying source data from chat history.",
+    "Compare bounded network scenarios through the approved planning capability.",
+    "Publish the exact versioned snapshot, route, current-coverage, scenario, comparison and facility-location contracts returned by the approved planning tools."
+  ],
+  "inputArtifactTypes": [
+    "planning-dataset.v1"
+  ],
+  "outputArtifactTypes": [
+    "network_snapshot.v1",
+    "route_matrix.v1",
+    "current_coverage_result.v1",
+    "network_scenario_result.v1",
+    "scenario_comparison.v1",
+    "facility_location_solution.v1"
+  ],
+  "requiredCapabilities": [
+    "mcpServer/resource/read",
+    "supply_chain_planner.prepare_network_snapshot",
+    "supply_chain_planner.register_route_matrix",
+    "supply_chain_planner.evaluate_current_coverage",
+    "supply_chain_planner.evaluate_network_scenario",
+    "supply_chain_planner.compare_network_scenarios",
+    "supply_chain_planner.solve_facility_location",
+    "supply_chain_planner.validate_network_resource"
+  ],
+  "risks": [
+    "Scenario results depend on the supplied assumptions and constraints.",
+    "Expensive or out-of-bound planning calls require a server-side refusal or approval."
+  ]
+}

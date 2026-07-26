@@ -120,6 +120,135 @@ describe("WebApp direct Server client", () => {
     })]);
   });
 
+  it("starts an enterprise Supervisor with an exact published Policy reference", async () => {
+    const baseFetch = resourceFetch();
+    const enterpriseTask = {
+      ...task,
+      title: "Enterprise Supervisor Copilot · 1.0.0",
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/api/tasks" && init?.method === "POST") {
+        expect(JSON.parse(String(init.body))).toMatchObject({
+          project_id: project.id,
+          title: "Enterprise Supervisor Copilot · 1.0.0",
+        });
+        return json(enterpriseTask);
+      }
+      if (
+        url.pathname === `/api/tasks/${enterpriseTask.id}/runs`
+        && init?.method === "POST"
+      ) {
+        expect(JSON.parse(String(init.body))).toMatchObject({
+          workspace_id: workspace.id,
+          supervisor_policy: {
+            policy_id: "enterprise-supervisor-copilot",
+            version: "1.0.0",
+          },
+        });
+        return json({ run });
+      }
+      if (url.pathname === `/api/tasks/${enterpriseTask.id}`) {
+        return json(enterpriseTask);
+      }
+      if (url.pathname === `/api/runs/${run.id}/thread`) {
+        return json({
+          thread: {
+            id: "thread-1",
+            name: enterpriseTask.title,
+            preview: enterpriseTask.title,
+            createdAt: 1,
+            updatedAt: 2,
+            status: runtimeStatus(run),
+            turns: [],
+          },
+        });
+      }
+      return baseFetch(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("crypto", { randomUUID: () => "018f-idempotency-key" });
+    const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
+
+    await expect(
+      client.startThread(workspace.id, {
+        supervisorPolicy: {
+          policy_id: "enterprise-supervisor-copilot",
+          version: "1.0.0",
+        },
+      }),
+    ).resolves.toEqual({
+      thread: expect.objectContaining({
+        id: "thread-1",
+        name: "Enterprise Supervisor Copilot · 1.0.0",
+      }),
+    });
+  });
+
+  it("restores the bound Policy and Runtime Agent projection for an enterprise Thread", async () => {
+    const baseFetch = resourceFetch();
+    const policy = {
+      run_id: run.id,
+      task_id: task.id,
+      thread_id: run.codex_thread_id,
+      policy_id: "enterprise-supervisor-copilot",
+      version: "1.0.0",
+      display_name: "Enterprise Supervisor Copilot",
+      content_sha256: "a".repeat(64),
+      state: "bound",
+      created_at: "2026-07-26T00:00:00Z",
+      bound_at: "2026-07-26T00:00:01Z",
+    };
+    const agents = [{
+      run_id: run.id,
+      thread_id: run.codex_thread_id,
+      parent_thread_id: null,
+      source_kind: "root",
+      agent_path: null,
+      agent_nickname: null,
+      agent_role: null,
+      status_type: "active",
+      active_flags: [],
+      is_root: true,
+      first_observed_at: "2026-07-26T00:00:01Z",
+      last_observed_at: "2026-07-26T00:00:02Z",
+    }];
+    const artifacts = [{
+      id: "artifact-1",
+      task_id: task.id,
+      artifact_schema: "planning-dataset.v1",
+      display_name: "planning-dataset.v1",
+      mime_type: "application/json",
+      expected_size: 100,
+      byte_size: 100,
+      content_sha256: "b".repeat(64),
+      state: "ready",
+      producer_run_id: run.id,
+      producer_thread_id: "data-thread",
+      producer_turn_id: "data-turn",
+      producer_item_id: "data-item",
+      producer_agent_role: "data_agent",
+      created_at: "2026-07-26T00:00:03Z",
+      updated_at: "2026-07-26T00:00:04Z",
+    }];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === `/api/runs/${run.id}/supervisor-policy`) return json(policy);
+      if (url.pathname === `/api/runs/${run.id}/agents`) return json(agents);
+      if (url.pathname === `/api/tasks/${task.id}/artifacts`) return json(artifacts);
+      return baseFetch(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
+
+    await client.listThreads(workspace.id);
+    await expect(client.getEnterpriseSupervisorOverview("thread-1")).resolves.toEqual({
+      policy,
+      agents,
+      artifacts,
+    });
+  });
+
   it("restores authoritative chronological Turn history from Codex", async () => {
     const fetchMock = resourceFetch([], [{
       id: "turn-1",
@@ -556,6 +685,86 @@ describe("WebApp direct Server client", () => {
       },
     });
     unsubscribe();
+  });
+
+  it("delivers child Agent events through their authorized root Run context", async () => {
+    const sockets: FakeSocket[] = [];
+    class FakeSocket {
+      onopen: (() => void) | null = null;
+      onmessage: ((message: { data: string }) => void) | null = null;
+      onclose: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor(readonly url: string | URL) { sockets.push(this); }
+      send() {}
+      close() {}
+    }
+    vi.stubGlobal("fetch", resourceFetch());
+    vi.stubGlobal("WebSocket", FakeSocket);
+    const client = new CodexMonitorWebClient({
+      baseUrl: "https://server.test",
+      token: "session-token",
+    });
+    const events: unknown[] = [];
+    client.subscribeAppServerEvents((event) => events.push(event));
+    const socket = sockets[0];
+    socket?.onopen?.();
+    socket?.onmessage?.({ data: JSON.stringify({ type: "ready", version: 1 }) });
+    await vi.waitFor(() =>
+      expect(
+        events.length,
+      ).toBe(0),
+    );
+    socket?.onmessage?.({
+      data: JSON.stringify({
+        type: "run.event",
+        version: 1,
+        event: {
+          id: "child-event-live",
+          sequence: 1,
+          run_id: run.id,
+          event_type: "codex.thread.started",
+          projection_version: 1,
+          thread_id: "child-thread",
+          turn_id: null,
+          item_id: null,
+          payload: {
+            data: {
+              sourceType: "thread/started",
+              thread: {
+                id: "child-thread",
+                parentThreadId: "thread-1",
+                source: {
+                  subAgent: {
+                    thread_spawn: {
+                      parent_thread_id: "thread-1",
+                      agent_nickname: "Network",
+                      agent_role: "network_planning_agent",
+                    },
+                  },
+                },
+              },
+            },
+          },
+          created_at: "2026-07-22T00:00:03Z",
+        },
+      }),
+    });
+
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(events[0]).toEqual({
+      workspace_id: project.id,
+      message: {
+        method: "thread/started",
+        params: {
+          threadId: "child-thread",
+          sourceType: "thread/started",
+          thread: expect.objectContaining({
+            id: "child-thread",
+            parentThreadId: "thread-1",
+          }),
+        },
+      },
+    });
   });
 
   it("preserves source event fields required by token, terminal, and reasoning handlers", async () => {

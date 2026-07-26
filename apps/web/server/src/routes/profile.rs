@@ -66,9 +66,9 @@ pub async fn usage(
         let exists: bool = sqlx::query_scalar(
             "SELECT EXISTS( \
                SELECT 1 FROM workspaces workspace \
-               JOIN workspace_grants grant ON grant.workspace_id = workspace.id \
-                 AND grant.organization_id = workspace.organization_id \
-                 AND grant.user_id = $3 AND grant.profile_id = workspace.profile_id \
+               JOIN workspace_grants workspace_grant ON workspace_grant.workspace_id = workspace.id \
+                 AND workspace_grant.organization_id = workspace.organization_id \
+                 AND workspace_grant.user_id = $3 AND workspace_grant.profile_id = workspace.profile_id \
                WHERE workspace.id = $1 AND workspace.organization_id = $2 \
                  AND workspace.state IN ('ready', 'retained') \
              )",
@@ -627,11 +627,11 @@ async fn run_context(
 ) -> Result<RunContext, (StatusCode, Json<PlatformError>)> {
     let row = sqlx::query(
         "SELECT r.codex_thread_id, r.workspace_id, r.requested_by, w.root_path, w.state, \
-                grant.role AS workspace_role \
+                workspace_grant.role AS workspace_role \
          FROM runs r JOIN workspaces w ON w.id = r.workspace_id \
-         LEFT JOIN workspace_grants grant ON grant.workspace_id = w.id \
-           AND grant.organization_id = w.organization_id \
-           AND grant.user_id = $3 AND grant.profile_id = w.profile_id \
+         LEFT JOIN workspace_grants workspace_grant ON workspace_grant.workspace_id = w.id \
+           AND workspace_grant.organization_id = w.organization_id \
+           AND workspace_grant.user_id = $3 AND workspace_grant.profile_id = w.profile_id \
          WHERE r.id = $1 AND r.organization_id = $2 AND w.organization_id = $2",
     )
     .bind(run_id)

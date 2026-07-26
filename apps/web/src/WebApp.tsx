@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AppServerEvent, RequestUserInputRequest, RequestUserInputResponse, ThreadTokenUsage, WorkspaceInfo } from "./types";
-import { CodexMonitorWebClient } from "./services/webClient";
+import {
+  CodexMonitorWebClient,
+  type EnterpriseSupervisorOverview,
+} from "./services/webClient";
 import Layout from "./components/Layout";
 import Sidebar from "./components/Sidebar";
 import Conversation from "./components/Conversation";
@@ -85,7 +88,16 @@ type ThreadInfo = {
   optimistic?: boolean;
   creationStatus?: "creating" | "failed";
   creationError?: string;
+  supervisorPolicy?: {
+    policy_id: string;
+    version: string;
+  };
 };
+
+const ENTERPRISE_SUPERVISOR_POLICY = {
+  policy_id: "enterprise-supervisor-copilot",
+  version: "1.0.0",
+} as const;
 
 type ThreadTranscriptCacheEntry = {
   messages: LogEntry[];
@@ -252,6 +264,10 @@ export default function WebApp() {
   const [threadStatus, setThreadStatus] = useState<string>("idle");
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const [threadSettings, setThreadSettings] = useState<Record<string, unknown> | null>(null);
+  const [supervisorOverview, setSupervisorOverview] =
+    useState<EnterpriseSupervisorOverview | null>(null);
+  const [supervisorOverviewLoading, setSupervisorOverviewLoading] = useState(false);
+  const [supervisorOverviewError, setSupervisorOverviewError] = useState<string | null>(null);
   const [rateLimits, setRateLimits] = useState<Record<string, unknown> | null>(null);
   const [goal, setGoal] = useState<GoalInfo | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() =>
@@ -506,10 +522,66 @@ export default function WebApp() {
   const pendingApprovalsByThread = useRef<Map<string, LogEntry[]>>(new Map());
   const threadTranscriptCache = useRef<Map<string, ThreadTranscriptCacheEntry>>(new Map());
   const refreshThreadsRef = useRef<((workspaceId?: string) => Promise<void>) | null>(null);
+  const refreshSupervisorOverviewRef =
+    useRef<((threadId?: string | null) => Promise<void>) | null>(null);
+  const supervisorOverviewSequence = useRef(0);
+  const supervisorOverviewRef = useRef(supervisorOverview);
+  supervisorOverviewRef.current = supervisorOverview;
   const activeThreadIdRef = useRef(activeThreadId);
   activeThreadIdRef.current = activeThreadId;
   const activeWorkspaceIdRef = useRef(activeWorkspaceId);
   activeWorkspaceIdRef.current = activeWorkspaceId;
+
+  const refreshSupervisorOverview = useCallback(async (
+    threadId: string | null = activeThreadIdRef.current,
+  ) => {
+    const sequence = ++supervisorOverviewSequence.current;
+    if (!threadId || threadId.startsWith("pending-thread:")) {
+      setSupervisorOverview(null);
+      setSupervisorOverviewLoading(false);
+      setSupervisorOverviewError(null);
+      return;
+    }
+    if (supervisorOverviewRef.current?.policy.thread_id !== threadId) {
+      setSupervisorOverview(null);
+    }
+    setSupervisorOverviewLoading(true);
+    setSupervisorOverviewError(null);
+    try {
+      const overview = await client.getEnterpriseSupervisorOverview(threadId);
+      if (
+        sequence !== supervisorOverviewSequence.current
+        || activeThreadIdRef.current !== threadId
+      ) {
+        return;
+      }
+      setSupervisorOverview(overview);
+    } catch {
+      if (
+        sequence !== supervisorOverviewSequence.current
+        || activeThreadIdRef.current !== threadId
+      ) {
+        return;
+      }
+      if (supervisorOverviewRef.current) {
+        setSupervisorOverviewError("The latest collaboration state could not be loaded.");
+      } else {
+        setSupervisorOverview(null);
+      }
+    } finally {
+      if (
+        sequence === supervisorOverviewSequence.current
+        && activeThreadIdRef.current === threadId
+      ) {
+        setSupervisorOverviewLoading(false);
+      }
+    }
+  }, [client]);
+  refreshSupervisorOverviewRef.current = refreshSupervisorOverview;
+
+  useEffect(() => {
+    void refreshSupervisorOverview(activeThreadId);
+  }, [activeThreadId, refreshSupervisorOverview]);
 
   useEffect(() => {
     // Workspace selection is intentionally workspace-first. A Thread becomes
@@ -531,6 +603,9 @@ export default function WebApp() {
     setThreadStatus("idle");
     setActiveTurnId(null);
     setStopping(false);
+    setSupervisorOverview(null);
+    setSupervisorOverviewLoading(false);
+    setSupervisorOverviewError(null);
     interruptRequestTurnId.current = null;
   }, [activeWorkspaceId]);
 
@@ -601,6 +676,12 @@ export default function WebApp() {
       );
 
       const eventThreadId = getAppServerThreadId(event);
+      if (
+        ["thread/started", "thread/status/changed", "thread/completed", "thread/failed"]
+          .includes(method)
+      ) {
+        void refreshSupervisorOverviewRef.current?.(activeThreadIdRef.current);
+      }
       if (eventThreadId && event.workspace_id) {
         if (method === "thread/name/updated") {
           const rawName = params.threadName ?? params.thread_name;
@@ -1703,6 +1784,7 @@ export default function WebApp() {
  const startThread = useCallback(async (
    workspaceId?: string,
    retryTemporaryId?: string,
+   supervisorPolicy?: ThreadInfo["supervisorPolicy"],
  ): Promise<string | null> => {
    const wid = workspaceId ?? activeWorkspaceId;
    if (!wid) return null;
@@ -1724,7 +1806,9 @@ export default function WebApp() {
      const existing = previous[wid] ?? [];
      const pending: ThreadInfo = {
        id: temporaryId,
-       label: "Thread",
+       label: supervisorPolicy
+         ? `Enterprise Supervisor Copilot · ${supervisorPolicy.version}`
+         : "Thread",
        updatedAt: startedAt,
        modelProvider: currentProviderId,
        model: providerModels.find((model) => model.id === selectedProviderModelId)?.model
@@ -1732,6 +1816,7 @@ export default function WebApp() {
        status: "creating",
        optimistic: true,
        creationStatus: "creating",
+       supervisorPolicy,
      };
      return {
        ...previous,
@@ -1742,7 +1827,9 @@ export default function WebApp() {
    });
    try {
      await client.connectWorkspace(wid);
-     const result = await client.startThread(wid);
+     const result = supervisorPolicy
+       ? await client.startThread(wid, { supervisorPolicy })
+       : await client.startThread(wid);
      // Handle Codex CLI JSON-RPC error embedded in result
      if (result && typeof result === "object" && "error" in result) {
        const err = (result as Record<string,unknown>).error as Record<string,unknown> | undefined;
@@ -1766,7 +1853,10 @@ export default function WebApp() {
        ? createdThread.model
        : providerModels.find((model) => model.id === selectedProviderModelId)?.model
          ?? selectedProviderModelId;
-     const createdName = extractThreadName(resultRecord) ?? "Thread";
+     const createdName = extractThreadName(resultRecord)
+       ?? (supervisorPolicy
+         ? `Enterprise Supervisor Copilot · ${supervisorPolicy.version}`
+         : "Thread");
      setThreadsByWorkspace((previous) => {
        const existing = previous[wid] ?? [];
        const replaced = existing.map((thread) => thread.id === temporaryId
@@ -2186,7 +2276,11 @@ export default function WebApp() {
   const activeThreadTitle = activeThread?.label ?? (activeThreadId ? "Thread" : null);
   const retryActiveThreadCreation = () => {
     if (!activeWorkspaceId || activeThread?.creationStatus !== "failed") return;
-    void startThread(activeWorkspaceId, activeThread.id);
+    void startThread(
+      activeWorkspaceId,
+      activeThread.id,
+      activeThread.supervisorPolicy,
+    );
   };
 
   return (
@@ -2222,6 +2316,13 @@ export default function WebApp() {
 
           onSelectThread={selectThread}
           onNewThread={startThread}
+          onNewSupervisor={(workspaceId) => {
+            void startThread(
+              workspaceId,
+              undefined,
+              ENTERPRISE_SUPERVISOR_POLICY,
+            );
+          }}
           onArchiveThread={archiveThread}
           onRemoveWorkspace={removeWorkspace}
           baseUrl={baseUrl}
@@ -2250,6 +2351,11 @@ export default function WebApp() {
         threadCreationStatus={activeThread?.creationStatus ?? null}
         threadCreationError={activeThread?.creationError ?? null}
         onRetryThreadCreation={retryActiveThreadCreation}
+        supervisorPolicy={supervisorOverview?.policy ?? null}
+        supervisorAgents={supervisorOverview?.agents ?? []}
+        supervisorArtifacts={supervisorOverview?.artifacts ?? []}
+        supervisorLoading={Boolean(activeThread?.supervisorPolicy) && supervisorOverviewLoading}
+        supervisorError={supervisorOverviewError}
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={() => setSidebarCollapsed((collapsed) => !collapsed)}
         filePanelOpen={filePanelOpen}

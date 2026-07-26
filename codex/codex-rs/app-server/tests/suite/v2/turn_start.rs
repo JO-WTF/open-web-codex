@@ -40,6 +40,7 @@ use codex_app_server_protocol::RawResponseCompletedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
+use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::SubAgentActivityKind;
 use codex_app_server_protocol::TextElement;
 use codex_app_server_protocol::ThreadDeleteParams;
@@ -52,6 +53,7 @@ use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::TokenUsageBreakdown;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnEnvironmentParams;
@@ -3921,7 +3923,7 @@ async fn direct_input_to_multi_agent_v2_subagent_is_rejected() -> Result<()> {
 
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id,
+            thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: PARENT_PROMPT.to_string(),
                 text_elements: Vec::new(),
@@ -3956,6 +3958,28 @@ async fn direct_input_to_multi_agent_v2_subagent_is_rejected() -> Result<()> {
         }
     })
     .await??;
+
+    let child_started = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let started_notif = mcp
+                .read_stream_until_notification_message("thread/started")
+                .await?;
+            let started: ThreadStartedNotification =
+                serde_json::from_value(started_notif.params.expect("thread/started params"))?;
+            if started.thread.id == child_thread_id {
+                return Ok::<ThreadStartedNotification, anyhow::Error>(started);
+            }
+        }
+    })
+    .await??;
+    assert_eq!(
+        child_started.thread.parent_thread_id.as_deref(),
+        Some(thread.id.as_str())
+    );
+    assert!(matches!(
+        child_started.thread.source,
+        SessionSource::SubAgent(_)
+    ));
 
     let direct_turn_req = mcp
         .send_turn_start_request(TurnStartParams {

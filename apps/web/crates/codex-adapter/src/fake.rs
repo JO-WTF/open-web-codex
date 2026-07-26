@@ -15,7 +15,7 @@ use uuid::Uuid;
 use crate::{
     AdapterError, AuthorizedWorkspace, CanceledProfileLogin, CodexAdapter, HealthStatus,
     ProfileLoginStatus, ProfileMutation, ProfileQuery, ReviewTarget, StartedProfileLogin,
-    StartedThread, TurnOptions,
+    StartedThread, ThreadStartMode, TurnOptions,
 };
 
 /// A tracked mock thread for list/show responses.
@@ -23,6 +23,7 @@ use crate::{
 struct MockThread {
     id: String,
     ws_id: String,
+    developer_instructions: Option<String>,
     created_at: String,
     status: String,
     msg_count: u64,
@@ -195,6 +196,10 @@ impl CodexAdapter for FakeCodexAdapter {
                     s.threads.push(MockThread {
                         id: thread_id.clone(),
                         ws_id: ws_id.to_string(),
+                        developer_instructions: params
+                            .get("developerInstructions")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
                         created_at: created.clone(),
                         status: "active".into(),
                         msg_count: 0,
@@ -254,6 +259,7 @@ impl CodexAdapter for FakeCodexAdapter {
     async fn start_thread(
         &self,
         workspace: &AuthorizedWorkspace,
+        mode: &ThreadStartMode,
     ) -> Result<StartedThread, AdapterError> {
         {
             let mut state = self.state.lock().await;
@@ -271,9 +277,14 @@ impl CodexAdapter for FakeCodexAdapter {
                 }));
             }
         }
-        let result = self
-            .rpc("start_thread", json!({ "workspaceId": workspace.id }))
-            .await?;
+        let mut params = json!({ "workspaceId": workspace.id });
+        if let ThreadStartMode::EnterpriseSupervisor {
+            developer_instructions,
+        } = mode
+        {
+            params["developerInstructions"] = Value::String(developer_instructions.clone());
+        }
+        let result = self.rpc("start_thread", params).await?;
         let thread_id = result
             .get("threadId")
             .and_then(Value::as_str)
@@ -294,7 +305,8 @@ impl CodexAdapter for FakeCodexAdapter {
                 "fork source Thread is required".to_string(),
             ));
         }
-        self.start_thread(target_workspace).await
+        self.start_thread(target_workspace, &ThreadStartMode::Standard)
+            .await
     }
 
     async fn read_thread(
@@ -316,6 +328,7 @@ impl CodexAdapter for FakeCodexAdapter {
                 "createdAt": Utc::now().timestamp(),
                 "updatedAt": thread.updated_at / 1000,
                 "status": { "type": if thread.status == "active" { "active" } else { "idle" } },
+                "developerInstructions": thread.developer_instructions,
                 "turns": [],
             }
         }))
@@ -444,7 +457,10 @@ impl CodexAdapter for FakeCodexAdapter {
             ProfileQuery::Config => json!({
                 "config": {
                     "features": { "multi_agent": true },
-                    "agents": { "max_threads": 6, "max_depth": 1 }
+                    "agents": {
+                        "max_concurrent_threads_per_session": 6,
+                        "max_depth": 1
+                    }
                 }
             }),
         })

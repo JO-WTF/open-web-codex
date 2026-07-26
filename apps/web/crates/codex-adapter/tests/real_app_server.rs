@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use open_web_codex_adapter::real::RealCodexAdapter;
-use open_web_codex_adapter::{AuthorizedWorkspace, CodexAdapter, TurnOptions};
+use open_web_codex_adapter::{AuthorizedWorkspace, CodexAdapter, ThreadStartMode, TurnOptions};
 use open_web_codex_profile_host::{ProfileHost, ProfileHostConfig, ProfileHostEvent};
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -158,7 +158,7 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
     };
     let mut events = host.subscribe();
     let started = adapter
-        .start_thread(&workspace)
+        .start_thread(&workspace, &ThreadStartMode::Standard)
         .await
         .expect("start Thread");
     let first_runtime_instance = host.runtime_instance_id().await;

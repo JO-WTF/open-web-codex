@@ -56,6 +56,69 @@ export type Run = {
   updated_at: string;
 };
 
+export type SupervisorPolicySelection = {
+  policy_id: string;
+  version: string;
+};
+
+export type SupervisorPolicySummary = SupervisorPolicySelection & {
+  display_name: string;
+  description: string;
+};
+
+export type SupervisorPolicyBinding = SupervisorPolicySelection & {
+  run_id: string;
+  task_id: string;
+  thread_id: string | null;
+  display_name: string;
+  content_sha256: string;
+  state: "prepared" | "bound" | "failed" | "cancelled";
+  created_at: string;
+  bound_at: string | null;
+};
+
+export type AgentDefinitionSummary = {
+  definition_id: string;
+  version: string;
+  display_name: string;
+  description: string;
+  runtime_role: string;
+};
+
+export type RuntimeAgentProjection = {
+  run_id: string;
+  thread_id: string;
+  parent_thread_id: string | null;
+  source_kind: string;
+  agent_path: string | null;
+  agent_nickname: string | null;
+  agent_role: string | null;
+  status_type: string | null;
+  active_flags: string[];
+  is_root: boolean;
+  first_observed_at: string;
+  last_observed_at: string;
+};
+
+export type ArtifactSummary = {
+  id: string;
+  task_id: string;
+  artifact_schema: string;
+  display_name: string;
+  mime_type: string;
+  expected_size: number | null;
+  byte_size: number | null;
+  content_sha256: string | null;
+  state: "pending" | "materializing" | "ready" | "failed";
+  producer_run_id: string;
+  producer_thread_id: string;
+  producer_turn_id: string;
+  producer_item_id: string;
+  producer_agent_role: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type Workspace = {
   id: string;
   project_id: string;

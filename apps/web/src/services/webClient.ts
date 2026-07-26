@@ -1,5 +1,14 @@
 import { PlatformClient } from "../../browser/client";
-import type { Approval, Run, RunEvent, Workspace } from "../../browser/types";
+import type {
+  Approval,
+  ArtifactSummary,
+  Run,
+  RunEvent,
+  RuntimeAgentProjection,
+  SupervisorPolicyBinding,
+  SupervisorPolicySelection,
+  Workspace,
+} from "../../browser/types";
 import type { AppServerEvent, GitFileStatus, WorkspaceInfo } from "../types";
 
 type WebClientOptions = {
@@ -11,6 +20,12 @@ export type GatewayHealth = {
   ok: boolean;
   name: string;
   version: string;
+};
+
+export type EnterpriseSupervisorOverview = {
+  policy: SupervisorPolicyBinding;
+  agents: RuntimeAgentProjection[];
+  artifacts: ArtifactSummary[];
 };
 
 type EventSubscriptionStatus = {
@@ -244,6 +259,18 @@ export class CodexMonitorWebClient {
     throw new Error("Thread is not available in an authorized project");
   }
 
+  private async findRunEventContext(runId: string): Promise<ThreadContext> {
+    const cached = [...this.threadContexts.values()]
+      .find((context) => context.runId === runId);
+    if (cached) return cached;
+    for (const workspace of await this.platform.listWorkspaces()) {
+      const found = (await this.indexWorkspaceThreads(workspace))
+        .find((entry) => entry.run.id === runId);
+      if (found) return found.context;
+    }
+    throw new Error("Run event is not available in an authorized project");
+  }
+
   private async waitForThread(
     workspaceId: string,
     projectId: string,
@@ -320,12 +347,33 @@ export class CodexMonitorWebClient {
     };
   }
 
-  async startThread(workspaceId: string) {
+  async startThread(
+    workspaceId: string,
+    options?: { supervisorPolicy?: SupervisorPolicySelection | null },
+  ) {
     const workspace = await this.platform.getWorkspace(workspaceId);
-    const task = await this.platform.createTask(workspace.project_id, "Thread");
-    const { run } = await this.platform.startRun(task.id, workspaceId);
+    const taskTitle = options?.supervisorPolicy
+      ? `Enterprise Supervisor Copilot · ${options.supervisorPolicy.version}`
+      : "Thread";
+    const task = await this.platform.createTask(workspace.project_id, taskTitle);
+    const { run } = await this.platform.startRun(task.id, workspaceId, {
+      supervisorPolicy: options?.supervisorPolicy ?? null,
+    });
     const ready = await this.waitForThread(workspaceId, workspace.project_id, task.id, run.id);
     return { thread: await this.threadRecord(ready.codex_thread_id as string) };
+  }
+
+  async getEnterpriseSupervisorOverview(
+    threadId: string,
+  ): Promise<EnterpriseSupervisorOverview | null> {
+    const context = await this.findThreadContext(threadId);
+    const policy = await this.platform.getRunSupervisorPolicy(context.runId);
+    if (!policy) return null;
+    const [agents, artifacts] = await Promise.all([
+      this.platform.listRunAgents(context.runId),
+      this.platform.listTaskArtifacts(context.taskId),
+    ]);
+    return { policy, agents, artifacts };
   }
 
   async listThreads(workspaceId: string) {
@@ -568,7 +616,7 @@ export class CodexMonitorWebClient {
       if (!event.thread_id) return;
       const message = runtimeMessage(event);
       if (!message) return;
-      const context = await this.findThreadContext(event.thread_id);
+      const context = await this.findRunEventContext(event.run_id);
       const previous = this.taskEventSequences.get(context.taskId) ?? 0;
       if (event.sequence <= previous) return;
       this.taskEventSequences.set(context.taskId, event.sequence);

@@ -33,7 +33,8 @@
     "test:feature-policy": "node scripts/test-feature-policy.mjs",
     "test:codex-fixtures": "node scripts/replay-codex-fixtures.mjs --self-test && node scripts/replay-codex-fixtures.mjs",
     "test:codex-harness": "node scripts/test-codex-app-server-harness.mjs",
-    "test:e2e:real-platform": "node scripts/real-platform-e2e.mjs"
+    "test:e2e:real-platform": "node scripts/real-platform-e2e.mjs",
+    "test:e2e:enterprise-supervisor": "node scripts/enterprise-supervisor-e2e.mjs"
   },
   "dependencies": {
     "@pierre/diffs": "^1.0.6",

@@ -308,6 +308,7 @@ class PlanningSourceInspection(StrictModel):
 
 class DataAgentResourceToolResult(StrictModel):
     summary: str
+    resource_name: str
     data_ref: DataAgentRef
 
 
@@ -437,19 +438,23 @@ class ValidationResult(StrictModel):
 
 class ResourceToolResult(StrictModel):
     summary: str
+    resource_name: str
     data_ref: DataRef
 
 
 class CurrentCoverageToolResult(CurrentCoverageResult):
     summary: str
+    resource_name: str
     data_ref: DataRef
 
 
 class ComparisonToolResult(ScenarioComparison):
     summary: str
+    resource_name: str
     data_ref: DataRef
 
 
 class FacilityLocationToolResult(FacilityLocationSolution):
     summary: str
+    resource_name: str
     solution_ref: DataRef

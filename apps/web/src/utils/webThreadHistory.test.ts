@@ -398,7 +398,7 @@ describe("buildWebThreadHistory", () => {
                 type: "artifact",
                 format: "geojson",
                 artifact_id: "8e98ff2f-82ee-4cc9-a3e6-2974debf8666",
-                url: "/api/runs/975f1f1c-4b58-47ad-a12c-c32aeae566e7/artifacts/8e98ff2f-82ee-4cc9-a3e6-2974debf8666",
+                url: "/api/artifacts/8e98ff2f-82ee-4cc9-a3e6-2974debf8666/content",
               },
               },
             },

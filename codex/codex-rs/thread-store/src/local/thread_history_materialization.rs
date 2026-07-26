@@ -6,6 +6,8 @@ use codex_app_server_protocol::ThreadHistoryChangeSet;
 use codex_app_server_protocol::project_rollout_line;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::RolloutLine;
+use serde::Deserialize;
+use serde_json::Value;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncSeekExt;
 use tracing::warn;
@@ -26,7 +28,8 @@ pub(super) async fn materialize_to_sqlite(
     thread_id: ThreadId,
     rollout_path: &Path,
 ) -> ThreadStoreResult<()> {
-    let start_offset = super::thread_history::next_rollout_byte_offset(store, thread_id).await?;
+    let (start_offset, expected_ordinal) =
+        super::thread_history::next_rollout_position(store, thread_id).await?;
     let (lines, next_offset) = read_complete_rollout_lines(rollout_path, start_offset).await?;
     // Empty valid records can still consume bytes through blank or rejected complete lines.
     if lines.is_empty() && start_offset == next_offset {
@@ -37,8 +40,45 @@ pub(super) async fn materialize_to_sqlite(
         .map_err(thread_store_io_error)?
         .meta
         .subagent_history_start_ordinal;
+    let projections = project_records(thread_id, &lines, subagent_history_start_ordinal)?;
 
-    let projections = lines
+    if !ordinals_are_contiguous(&projections, expected_ordinal) && start_offset > 0 {
+        // JSONL is canonical and SQLite is disposable. Before replacing a
+        // lagging checkpoint, prove that the complete canonical rollout now
+        // projects without ordinal gaps. Invalid suffixes must leave the last
+        // known-good projection untouched.
+        let (all_lines, all_next_offset) = read_complete_rollout_lines(rollout_path, 0).await?;
+        let all_projections =
+            project_records(thread_id, &all_lines, subagent_history_start_ordinal)?;
+        if ordinals_are_contiguous(&all_projections, 0) {
+            super::thread_history::reset_projection(store, thread_id).await?;
+            return super::thread_history::apply_projection(
+                store,
+                thread_id,
+                0,
+                all_next_offset,
+                all_projections,
+            )
+            .await;
+        }
+    }
+
+    super::thread_history::apply_projection(
+        store,
+        thread_id,
+        start_offset,
+        next_offset,
+        projections,
+    )
+    .await
+}
+
+fn project_records(
+    thread_id: ThreadId,
+    records: &[CompleteRolloutLine],
+    subagent_history_start_ordinal: Option<u64>,
+) -> ThreadStoreResult<Vec<ProjectedRolloutLine>> {
+    records
         .iter()
         .map(|record| {
             let line = &record.line;
@@ -61,15 +101,16 @@ pub(super) async fn materialize_to_sqlite(
                 changes,
             })
         })
-        .collect::<ThreadStoreResult<Vec<_>>>()?;
-    super::thread_history::apply_projection(
-        store,
-        thread_id,
-        start_offset,
-        next_offset,
-        projections,
-    )
-    .await
+        .collect()
+}
+
+fn ordinals_are_contiguous(projections: &[ProjectedRolloutLine], expected: u64) -> bool {
+    projections.iter().enumerate().all(|(index, projection)| {
+        u64::try_from(index)
+            .ok()
+            .and_then(|index| expected.checked_add(index))
+            == Some(projection.ordinal)
+    })
 }
 
 async fn read_complete_rollout_lines(
@@ -133,7 +174,7 @@ async fn read_complete_rollout_lines(
             })?;
         // Blank physical lines consume bytes but are not rollout records.
         if !line_bytes.iter().all(u8::is_ascii_whitespace) {
-            match serde_json::from_slice(line_bytes) {
+            match parse_rollout_line(line_bytes) {
                 Ok(line) => lines.push(CompleteRolloutLine {
                     line,
                     start_byte_offset: line_start_offset,
@@ -152,6 +193,34 @@ async fn read_complete_rollout_lines(
         line_start_offset = line_end_offset;
     }
     Ok((lines, next_offset))
+}
+
+fn parse_rollout_line(line_bytes: &[u8]) -> Result<RolloutLine, serde_json::Error> {
+    #[derive(Deserialize)]
+    struct RolloutLineEnvelope {
+        timestamp: String,
+        #[serde(default)]
+        ordinal: Option<u64>,
+    }
+
+    // `RolloutLine` flattens an internally tagged `RolloutItem`. Deserializing
+    // that shape directly through serde's flattened map buffer can reject
+    // otherwise valid nested numeric values (for example rate-limit
+    // `used_percent`). Decode the stable envelope and tagged item separately,
+    // exactly as they are represented on the wire.
+    let mut value = serde_json::from_slice::<Value>(line_bytes)?;
+    let envelope = serde_json::from_value::<RolloutLineEnvelope>(value.clone())?;
+    let object = value.as_object_mut().ok_or_else(|| {
+        <serde_json::Error as serde::de::Error>::custom("rollout line is not an object")
+    })?;
+    object.remove("timestamp");
+    object.remove("ordinal");
+    let item = serde_json::from_value(value)?;
+    Ok(RolloutLine {
+        timestamp: envelope.timestamp,
+        ordinal: envelope.ordinal,
+        item,
+    })
 }
 
 fn thread_history_error(err: impl std::fmt::Display) -> ThreadStoreError {

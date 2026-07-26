@@ -1,7 +1,9 @@
 use chrono::Utc;
+use open_web_codex_adapter::ThreadStartMode;
 use sqlx::Row;
 use uuid::Uuid;
 
+use crate::supervisor_policy::ensure_run_policy_binding;
 use crate::{
     chrono_ttl, validate_idempotency_key, CancelRunRequest, EnqueueRunRequest, RecoverRunRequest,
     RunLease, RunOrchestrator, RunOrchestratorError, RunRecord,
@@ -25,10 +27,10 @@ impl RunOrchestrator {
                AND workspace.project_id = task.project_id \
                AND workspace.profile_id = profile.id \
                AND workspace.state IN ('ready', 'retained') \
-             JOIN workspace_grants grant ON grant.workspace_id = workspace.id \
-               AND grant.organization_id = workspace.organization_id \
-               AND grant.user_id = $2 AND grant.profile_id = profile.id \
-               AND grant.role IN ('owner', 'write') \
+             JOIN workspace_grants workspace_grant ON workspace_grant.workspace_id = workspace.id \
+               AND workspace_grant.organization_id = workspace.organization_id \
+               AND workspace_grant.user_id = $2 AND workspace_grant.profile_id = profile.id \
+               AND workspace_grant.role IN ('owner', 'write') \
              WHERE task.id = $1 AND task.organization_id = $3 \
              FOR KEY SHARE OF workspace",
         )
@@ -42,7 +44,8 @@ impl RunOrchestrator {
         .ok_or(RunOrchestratorError::NotFound)?;
         let profile_id: Uuid = row.get("profile_id");
 
-        if let Some(fork_thread_id) = request.fork_thread_id.as_deref() {
+        let inherited_snapshot_id = if let Some(fork_thread_id) = request.fork_thread_id.as_deref()
+        {
             if fork_thread_id.trim().is_empty() || fork_thread_id.len() > 256 {
                 return Err(RunOrchestratorError::Invalid(
                     "fork source Thread id is invalid".to_string(),
@@ -53,32 +56,39 @@ impl RunOrchestrator {
                     "forked Runs require their source parent Run".to_string(),
                 ));
             };
-            let source_matches: bool = sqlx::query_scalar(
-                "SELECT EXISTS( \
-                   SELECT 1 FROM runs source \
+            if request.supervisor_policy.is_some() {
+                return Err(RunOrchestratorError::Invalid(
+                    "forked Runs inherit their source Supervisor Policy".to_string(),
+                ));
+            }
+            let source = sqlx::query(
+                "SELECT binding.snapshot_id \
+                   FROM runs source \
                    JOIN workspaces workspace ON workspace.id = source.workspace_id \
-                   JOIN workspace_grants grant ON grant.workspace_id = workspace.id \
-                     AND grant.organization_id = workspace.organization_id \
-                     AND grant.user_id = $3 AND grant.profile_id = workspace.profile_id \
+                   JOIN workspace_grants workspace_grant ON workspace_grant.workspace_id = workspace.id \
+                     AND workspace_grant.organization_id = workspace.organization_id \
+                     AND workspace_grant.user_id = $3 AND workspace_grant.profile_id = workspace.profile_id \
+                   LEFT JOIN supervisor_policy_bindings binding ON binding.run_id = source.id \
                    WHERE source.id = $1 AND source.organization_id = $2 \
                      AND source.requested_by = $3 AND source.codex_thread_id = $4 \
                      AND workspace.state IN ('ready', 'retained') \
-                 )",
+                 ",
             )
             .bind(source_run_id)
             .bind(request.organization_id)
             .bind(request.actor_id)
             .bind(fork_thread_id)
-            .fetch_one(&mut *transaction)
+            .fetch_optional(&mut *transaction)
             .await?;
-            if !source_matches {
-                return Err(RunOrchestratorError::NotFound);
-            }
+            let source = source.ok_or(RunOrchestratorError::NotFound)?;
+            source.get("snapshot_id")
         } else if request.fork_source_run_id.is_some() {
             return Err(RunOrchestratorError::Invalid(
                 "fork source Run requires a source Thread id".to_string(),
             ));
-        }
+        } else {
+            None
+        };
 
         let inserted = sqlx::query(
             "INSERT INTO runs \
@@ -134,6 +144,16 @@ impl RunOrchestrator {
             Err(error) => return Err(error.into()),
         };
         let run = run_record(&row);
+        ensure_run_policy_binding(
+            &mut transaction,
+            request.organization_id,
+            profile_id,
+            request.task_id,
+            run.id,
+            request.supervisor_policy.as_ref(),
+            inherited_snapshot_id,
+        )
+        .await?;
         transaction.commit().await?;
         Ok(run)
     }
@@ -170,6 +190,14 @@ impl RunOrchestrator {
             "UPDATE runs SET status = 'cancelled', active_turn_id = NULL, failure_code = NULL, \
                              lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, \
                              updated_at = now() WHERE id = $1",
+        )
+        .bind(request.run_id)
+        .execute(&mut *transaction)
+        .await?;
+        sqlx::query(
+            "UPDATE supervisor_policy_bindings \
+             SET state = 'cancelled', failure_code = 'run_cancelled', updated_at = now() \
+             WHERE run_id = $1 AND state = 'prepared'",
         )
         .bind(request.run_id)
         .execute(&mut *transaction)
@@ -240,10 +268,10 @@ impl RunOrchestrator {
                AND workspace.organization_id = run.organization_id \
              JOIN profiles profile ON profile.id = run.requested_profile_id \
                AND profile.id = workspace.profile_id \
-             JOIN workspace_grants grant ON grant.workspace_id = workspace.id \
-               AND grant.organization_id = workspace.organization_id \
-               AND grant.user_id = run.requested_by AND grant.profile_id = profile.id \
-               AND grant.role IN ('owner', 'write') \
+             JOIN workspace_grants workspace_grant ON workspace_grant.workspace_id = workspace.id \
+               AND workspace_grant.organization_id = workspace.organization_id \
+               AND workspace_grant.user_id = run.requested_by AND workspace_grant.profile_id = profile.id \
+               AND workspace_grant.role IN ('owner', 'write') \
              WHERE run.id = $1 AND run.organization_id = $2 \
              FOR UPDATE OF run",
         )
@@ -299,8 +327,11 @@ impl RunOrchestrator {
     pub async fn claim_next(&self) -> Result<Option<RunLease>, RunOrchestratorError> {
         let mut transaction = self.db.begin().await?;
         let candidate = sqlx::query(
-            "SELECT run.id, run.organization_id, run.requested_by, run.workspace_id, \
-                    run.fork_thread_id, run.fork_source_run_id, workspace.root_path \
+            "SELECT run.id, run.organization_id, run.requested_by, profile.id AS profile_id, \
+                    run.workspace_id, \
+                    run.fork_thread_id, run.fork_source_run_id, workspace.root_path, \
+                    binding.id AS supervisor_policy_binding_id, \
+                    snapshot.developer_instructions \
              FROM runs run \
              JOIN tasks task ON task.id = run.task_id \
                AND task.organization_id = run.organization_id \
@@ -311,12 +342,15 @@ impl RunOrchestrator {
                AND workspace.project_id = task.project_id \
                AND workspace.profile_id = profile.id \
                AND workspace.state IN ('ready', 'retained') \
-             JOIN workspace_grants grant ON grant.workspace_id = workspace.id \
-               AND grant.organization_id = workspace.organization_id \
-               AND grant.user_id = run.requested_by AND grant.profile_id = profile.id \
-               AND grant.role IN ('owner', 'write') \
+             JOIN workspace_grants workspace_grant ON workspace_grant.workspace_id = workspace.id \
+               AND workspace_grant.organization_id = workspace.organization_id \
+               AND workspace_grant.user_id = run.requested_by AND workspace_grant.profile_id = profile.id \
+               AND workspace_grant.role IN ('owner', 'write') \
+             LEFT JOIN supervisor_policy_bindings binding ON binding.run_id = run.id \
+             LEFT JOIN supervisor_policy_snapshots snapshot ON snapshot.id = binding.snapshot_id \
              WHERE run.status = 'pending' \
                AND (run.lease_expires_at IS NULL OR run.lease_expires_at < now()) \
+               AND (binding.id IS NULL OR binding.state = 'prepared') \
              ORDER BY run.created_at, run.id \
              FOR UPDATE OF run SKIP LOCKED LIMIT 1",
         )
@@ -343,14 +377,24 @@ impl RunOrchestrator {
         .execute(&mut *transaction)
         .await?;
         transaction.commit().await?;
+        let developer_instructions: Option<String> = candidate.get("developer_instructions");
+        let thread_start_mode = match developer_instructions {
+            Some(developer_instructions) => ThreadStartMode::EnterpriseSupervisor {
+                developer_instructions,
+            },
+            None => ThreadStartMode::Standard,
+        };
         Ok(Some(RunLease {
             run_id,
             organization_id: candidate.get("organization_id"),
             actor_id: candidate.get("requested_by"),
+            profile_id: candidate.get("profile_id"),
             workspace_id: candidate.get("workspace_id"),
             workspace_root: candidate.get::<String, _>("root_path").into(),
             fork_thread_id: candidate.get("fork_thread_id"),
             fork_source_run_id: candidate.get("fork_source_run_id"),
+            supervisor_policy_binding_id: candidate.get("supervisor_policy_binding_id"),
+            thread_start_mode,
             token,
         }))
     }

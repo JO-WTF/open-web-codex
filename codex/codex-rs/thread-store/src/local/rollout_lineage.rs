@@ -29,6 +29,30 @@ pub(super) struct RolloutLineage {
 }
 
 impl LocalThreadStore {
+    /// Bring every physical rollout in a logical paginated history up to date
+    /// before querying the rebuildable SQLite projection.
+    ///
+    /// Canonical rollout writes and the projection are intentionally separate:
+    /// a process interruption may leave SQLite behind durable JSONL. Paginated
+    /// readers must therefore repair that lag at their ownership boundary
+    /// instead of returning a silently truncated history.
+    pub(super) async fn materialize_rollout_lineage(
+        &self,
+        requested_thread_id: ThreadId,
+    ) -> ThreadStoreResult<RolloutLineage> {
+        let lineage = self.resolve_rollout_lineage(requested_thread_id).await?;
+        for segment in lineage.segments() {
+            let _live_writer_guard = self.live_writer_locks.lock(segment.thread_id).await;
+            super::thread_history_materialization::materialize_to_sqlite(
+                self,
+                segment.thread_id,
+                segment.rollout_path.as_path(),
+            )
+            .await?;
+        }
+        Ok(lineage)
+    }
+
     pub(super) async fn resolve_rollout_lineage(
         &self,
         requested_thread_id: ThreadId,

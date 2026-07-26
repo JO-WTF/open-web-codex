@@ -9,6 +9,7 @@ const AGENT_NAMES: &str = include_str!("../agent_names.txt");
 struct SpawnAgentThreadInheritance {
     environments: Option<TurnEnvironmentSnapshot>,
     exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+    thread_extension_init: ExtensionDataInit,
 }
 
 /// Initial input delivered after a spawned agent acquires execution capacity.
@@ -408,6 +409,9 @@ impl AgentControl {
             exec_policy: self
                 .inherited_exec_policy_for_source(&state, session_source.as_ref(), &config)
                 .await,
+            thread_extension_init: self
+                .inherited_thread_extension_init_for_source(&state, session_source.as_ref())
+                .await,
         };
         let (session_source, mut agent_metadata) = match session_source {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
@@ -446,6 +450,11 @@ impl AgentControl {
                 .await?
             }
             (Some(session_source), None, inheritance) => {
+                let SpawnAgentThreadInheritance {
+                    environments: inherited_environments,
+                    exec_policy: inherited_exec_policy,
+                    thread_extension_init,
+                } = inheritance;
                 let history_mode = if let Some(parent_thread_id) = options.parent_thread_id
                     && let Ok(parent_thread) = state.get_thread(parent_thread_id).await
                 {
@@ -466,9 +475,10 @@ impl AgentControl {
                     /*forked_from_thread_id*/ None,
                     /*thread_source*/ Some(ThreadSource::Subagent),
                     /*metrics_service_name*/ None,
-                    inheritance.environments,
-                    inheritance.exec_policy,
+                    inherited_environments,
+                    inherited_exec_policy,
                     options.environments.clone(),
+                    thread_extension_init,
                 ))
                 .await?
             }
@@ -573,6 +583,7 @@ impl AgentControl {
         let SpawnAgentThreadInheritance {
             environments: inherited_environments,
             exec_policy: inherited_exec_policy,
+            thread_extension_init: _,
         } = inheritance;
         if options.fork_parent_spawn_call_id.is_none() {
             return Err(CodexErr::Fatal(

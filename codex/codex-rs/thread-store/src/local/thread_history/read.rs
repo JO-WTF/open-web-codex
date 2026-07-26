@@ -76,7 +76,7 @@ pub(in crate::local) async fn list_turns(
     )
     .await?;
     validate_page_size(params.page_size)?;
-    let lineage = store.resolve_rollout_lineage(params.thread_id).await?;
+    let lineage = store.materialize_rollout_lineage(params.thread_id).await?;
     let pool = store.thread_history_db().await?;
     let page = page_turn_rows(
         pool,
@@ -124,7 +124,7 @@ pub(in crate::local) async fn list_items(
     )
     .await?;
     validate_page_size(params.page_size)?;
-    let lineage = store.resolve_rollout_lineage(params.thread_id).await?;
+    let lineage = store.materialize_rollout_lineage(params.thread_id).await?;
     let pool = store.thread_history_db().await?;
     let page = page_item_rows(
         pool,

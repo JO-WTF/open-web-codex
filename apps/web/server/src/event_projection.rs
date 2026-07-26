@@ -9,19 +9,52 @@ const PROJECTION_VERSION: i16 = 1;
 #[derive(Debug, PartialEq)]
 struct ProjectedEvent {
     event_type: String,
+    workspace_id: Option<Uuid>,
     thread_id: String,
     turn_id: Option<String>,
     item_id: Option<String>,
     payload: Value,
-    reply_artifacts: Vec<ReplyArtifactCandidate>,
+    thread_metadata: Option<ProjectedThreadMetadata>,
+    artifacts: Vec<ArtifactCandidate>,
     inline_artifact: Option<InlineVisualizationArtifactCandidate>,
 }
 
 #[derive(Debug, PartialEq)]
-struct ReplyArtifactCandidate {
+struct ProjectedThreadMetadata {
+    parent_thread_id: Option<String>,
+    source_kind: Option<String>,
+    agent_path: Option<String>,
+    agent_nickname: Option<String>,
+    agent_role: Option<String>,
+    status_type: Option<String>,
+    active_flags: Vec<String>,
+}
+
+struct EventRunContext {
+    run_id: Uuid,
+    task_id: Uuid,
+    organization_id: Uuid,
+    profile_id: Uuid,
+    workspace_id: Uuid,
+    root_thread_id: String,
+}
+
+#[derive(Debug, PartialEq)]
+struct ArtifactCandidate {
+    artifact_schema: String,
+    display_name: String,
     uri: String,
-    mime_type: Option<String>,
+    mime_type: String,
     expected_size: Option<i64>,
+}
+
+struct RegisteredArtifact {
+    id: Uuid,
+    artifact_schema: String,
+    display_name: String,
+    mime_type: String,
+    expected_size: Option<i64>,
+    state: String,
 }
 
 #[derive(Debug, PartialEq)]
@@ -34,6 +67,7 @@ struct InlineVisualizationArtifactCandidate {
 pub struct LiveProjection {
     pub organization_id: Uuid,
     pub payload: Vec<u8>,
+    pub pending_artifact_ids: Vec<Uuid>,
 }
 
 pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjection>, String> {
@@ -48,34 +82,38 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
         .begin()
         .await
         .map_err(|error| format!("event transaction error: {error}"))?;
-    let run = sqlx::query(
-        "SELECT id, organization_id FROM runs \
-         WHERE codex_thread_id = $1 ORDER BY created_at DESC LIMIT 1",
-    )
-    .bind(&event.thread_id)
-    .fetch_optional(&mut *transaction)
-    .await
-    .map_err(|error| format!("event run lookup error: {error}"))?;
-
-    let Some(run) = run else {
+    let Some(context) = resolve_event_run_context(&mut transaction, &event).await? else {
         return Ok(None);
     };
-    let run_id: Uuid = run.get("id");
-    let organization_id: Uuid = run.get("organization_id");
+    let run_id = context.run_id;
+    let organization_id = context.organization_id;
+    let is_root_thread = event.thread_id == context.root_thread_id;
+    update_runtime_agent_projection(&mut transaction, &context, &event).await?;
 
     sqlx::query("SAVEPOINT artifact_projection")
         .execute(&mut *transaction)
         .await
         .map_err(|error| format!("Artifact projection savepoint error: {error}"))?;
+    let mut pending_artifact_ids = Vec::new();
     let artifact_result = async {
-        register_reply_artifacts(&mut transaction, &event, run_id, organization_id).await?;
+        let registered = register_artifacts(&mut transaction, &context, &event).await?;
+        project_registered_artifacts(&mut event.payload, &registered);
         register_inline_visualization_artifact(&mut transaction, &event, run_id, organization_id)
             .await?;
-        resolve_inline_artifacts_in_transaction(&mut transaction, run_id, &mut event.payload).await
+        resolve_inline_artifacts_in_transaction(&mut transaction, run_id, &mut event.payload)
+            .await?;
+        Ok::<Vec<Uuid>, String>(
+            registered
+                .into_iter()
+                .filter(|artifact| artifact.state == "pending")
+                .map(|artifact| artifact.id)
+                .collect(),
+        )
     }
     .await;
     match artifact_result {
-        Ok(()) => {
+        Ok(ids) => {
+            pending_artifact_ids = ids;
             sqlx::query("RELEASE SAVEPOINT artifact_projection")
                 .execute(&mut *transaction)
                 .await
@@ -98,7 +136,10 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
                 .payload
                 .pointer_mut("/data")
                 .and_then(Value::as_object_mut)
-                .map(|data| data.remove("inlineArtifacts"));
+                .map(|data| {
+                    data.remove("artifacts");
+                    data.remove("inlineArtifacts");
+                });
             tracing::warn!(
                 error = %error,
                 run_id = %run_id,
@@ -125,74 +166,76 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
     .await
     .map_err(|error| format!("event insert error: {error}"))?;
 
-    match event.event_type.as_str() {
-        "codex.turn.started" => {
-            sqlx::query(
-                "UPDATE runs SET active_turn_id = $1, updated_at = now() \
-                 WHERE id = $2 AND status = 'running'",
-            )
-            .bind(&event.turn_id)
-            .bind(run_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(|error| format!("active Turn projection error: {error}"))?;
-        }
-        "codex.turn.completed" => {
-            sqlx::query(
-                "UPDATE runs SET active_turn_id = NULL, updated_at = now() \
-                 WHERE id = $1 AND active_turn_id = $2",
-            )
-            .bind(run_id)
-            .bind(&event.turn_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(|error| format!("completed Turn projection error: {error}"))?;
-        }
-        "codex.thread.archived" => {
-            sqlx::query(
-                "UPDATE tasks SET status = 'archived', updated_at = now() \
-                 WHERE id = (SELECT task_id FROM runs WHERE id = $1)",
-            )
-            .bind(run_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(|error| format!("archived Thread projection error: {error}"))?;
-        }
-        "codex.thread.unarchived" => {
-            sqlx::query(
-                "UPDATE tasks SET status = 'pending', updated_at = now() \
-                 WHERE id = (SELECT task_id FROM runs WHERE id = $1) AND status = 'archived'",
-            )
-            .bind(run_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(|error| format!("unarchived Thread projection error: {error}"))?;
-        }
-        "codex.thread.name.updated" => {
-            if let Some(name) = event
-                .payload
-                .pointer("/data/threadName")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|name| !name.is_empty() && name.len() <= 200)
-            {
+    if is_root_thread {
+        match event.event_type.as_str() {
+            "codex.turn.started" => {
                 sqlx::query(
-                    "UPDATE tasks SET title = $1, updated_at = now() \
-                     WHERE id = (SELECT task_id FROM runs WHERE id = $2)",
+                    "UPDATE runs SET active_turn_id = $1, updated_at = now() \
+                 WHERE id = $2 AND status = 'running'",
                 )
-                .bind(name)
+                .bind(&event.turn_id)
                 .bind(run_id)
                 .execute(&mut *transaction)
                 .await
-                .map_err(|error| format!("Thread name projection error: {error}"))?;
+                .map_err(|error| format!("active Turn projection error: {error}"))?;
             }
+            "codex.turn.completed" => {
+                sqlx::query(
+                    "UPDATE runs SET active_turn_id = NULL, updated_at = now() \
+                 WHERE id = $1 AND active_turn_id = $2",
+                )
+                .bind(run_id)
+                .bind(&event.turn_id)
+                .execute(&mut *transaction)
+                .await
+                .map_err(|error| format!("completed Turn projection error: {error}"))?;
+            }
+            "codex.thread.archived" => {
+                sqlx::query(
+                    "UPDATE tasks SET status = 'archived', updated_at = now() \
+                 WHERE id = (SELECT task_id FROM runs WHERE id = $1)",
+                )
+                .bind(run_id)
+                .execute(&mut *transaction)
+                .await
+                .map_err(|error| format!("archived Thread projection error: {error}"))?;
+            }
+            "codex.thread.unarchived" => {
+                sqlx::query(
+                    "UPDATE tasks SET status = 'pending', updated_at = now() \
+                 WHERE id = (SELECT task_id FROM runs WHERE id = $1) AND status = 'archived'",
+                )
+                .bind(run_id)
+                .execute(&mut *transaction)
+                .await
+                .map_err(|error| format!("unarchived Thread projection error: {error}"))?;
+            }
+            "codex.thread.name.updated" => {
+                if let Some(name) = event
+                    .payload
+                    .pointer("/data/threadName")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty() && name.len() <= 200)
+                {
+                    sqlx::query(
+                        "UPDATE tasks SET title = $1, updated_at = now() \
+                     WHERE id = (SELECT task_id FROM runs WHERE id = $2)",
+                    )
+                    .bind(name)
+                    .bind(run_id)
+                    .execute(&mut *transaction)
+                    .await
+                    .map_err(|error| format!("Thread name projection error: {error}"))?;
+                }
+            }
+            _ => {}
         }
-        _ => {}
     }
 
-    let terminal_status = match event.event_type.as_str() {
-        "codex.thread.completed" => Some("completed"),
-        "codex.thread.failed" => Some("failed"),
+    let terminal_status = match (is_root_thread, event.event_type.as_str()) {
+        (true, "codex.thread.completed") => Some("completed"),
+        (true, "codex.thread.failed") => Some("failed"),
         _ => None,
     };
     if let Some(status) = terminal_status {
@@ -246,6 +289,7 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
     Ok(Some(LiveProjection {
         organization_id,
         payload,
+        pending_artifact_ids,
     }))
 }
 
@@ -373,13 +417,15 @@ async fn persist_terminal_frame(
     Ok(Some(LiveProjection {
         organization_id,
         payload,
+        pending_artifact_ids: Vec::new(),
     }))
 }
 
 fn project_frame(data: &[u8]) -> Result<Option<ProjectedEvent>, String> {
-    let Some(message) = internal_message(data)? else {
+    let Some(frame) = internal_frame(data)? else {
         return Ok(None);
     };
+    let message = frame.message;
     let runtime_method = message
         .get("method")
         .and_then(Value::as_str)
@@ -389,11 +435,15 @@ fn project_frame(data: &[u8]) -> Result<Option<ProjectedEvent>, String> {
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    let thread_id =
-        string_field(&params, "threadId").or_else(|| string_field(&params, "thread_id"));
+    let thread_id = string_field(&params, "threadId")
+        .or_else(|| string_field(&params, "thread_id"))
+        .or_else(|| nested_string_field(&params, "thread", "id"));
     let Some(thread_id) = thread_id else {
         return Ok(None);
     };
+    if thread_id.is_empty() || thread_id.len() > 256 {
+        return Ok(None);
+    }
     let turn_id = string_field(&params, "turnId")
         .or_else(|| string_field(&params, "turn_id"))
         .or_else(|| nested_string_field(&params, "turn", "id"));
@@ -404,11 +454,9 @@ fn project_frame(data: &[u8]) -> Result<Option<ProjectedEvent>, String> {
 
     let (event_type, lifecycle) = classify_method(runtime_method);
     let item_type = item.and_then(|item| string_field(item, "type"));
-    let reply_artifacts = item
-        .into_iter()
-        .flat_map(reply_artifact_candidates)
-        .collect();
+    let artifacts = item.into_iter().flat_map(artifact_candidates).collect();
     let inline_artifact = item.and_then(project_inline_visualization_artifact);
+    let thread_metadata = project_thread_metadata(runtime_method, &params);
     let data = if let Some(item) = item {
         project_item(item)
     } else {
@@ -426,16 +474,23 @@ fn project_frame(data: &[u8]) -> Result<Option<ProjectedEvent>, String> {
 
     Ok(Some(ProjectedEvent {
         event_type: event_type.to_string(),
+        workspace_id: frame.workspace_id,
         thread_id,
         turn_id,
         item_id,
         payload,
-        reply_artifacts,
+        thread_metadata,
+        artifacts,
         inline_artifact,
     }))
 }
 
-fn internal_message(data: &[u8]) -> Result<Option<Map<String, Value>>, String> {
+struct InternalFrame {
+    workspace_id: Option<Uuid>,
+    message: Map<String, Value>,
+}
+
+fn internal_frame(data: &[u8]) -> Result<Option<InternalFrame>, String> {
     let text = std::str::from_utf8(data).map_err(|error| format!("invalid utf8: {error}"))?;
     let json_text = text
         .lines()
@@ -461,11 +516,23 @@ fn internal_message(data: &[u8]) -> Result<Option<Map<String, Value>>, String> {
     if value.get("method").and_then(Value::as_str) != Some("app-server-event") {
         return Ok(None);
     }
+    let workspace_id = value
+        .pointer("/params/workspace_id")
+        .or_else(|| value.pointer("/params/workspaceId"))
+        .and_then(Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok());
     let message = match value.pointer("/params/message").and_then(Value::as_object) {
         Some(message) => message.clone(),
         None => return Ok(None),
     };
-    Ok(Some(message))
+    Ok(Some(InternalFrame {
+        workspace_id,
+        message,
+    }))
+}
+
+fn internal_message(data: &[u8]) -> Result<Option<Map<String, Value>>, String> {
+    Ok(internal_frame(data)?.map(|frame| frame.message))
 }
 
 fn classify_method(method: &str) -> (&'static str, &'static str) {
@@ -477,6 +544,7 @@ fn classify_method(method: &str) -> (&'static str, &'static str) {
         "turn/started" => ("codex.turn.started", "started"),
         "turn/completed" => ("codex.turn.completed", "completed"),
         "thread/started" => ("codex.thread.started", "started"),
+        "thread/status/changed" => ("codex.thread.status.changed", "updated"),
         "thread/archived" => ("codex.thread.archived", "archived"),
         "thread/unarchived" => ("codex.thread.unarchived", "unarchived"),
         "thread/name/updated" => ("codex.thread.name.updated", "updated"),
@@ -491,6 +559,332 @@ fn classify_method(method: &str) -> (&'static str, &'static str) {
         }
         _ => ("codex.unknown", "unknown"),
     }
+}
+
+fn project_thread_metadata(
+    method: &str,
+    params: &Map<String, Value>,
+) -> Option<ProjectedThreadMetadata> {
+    let thread = params.get("thread").and_then(Value::as_object);
+    let source = thread.and_then(|thread| thread.get("source"));
+    let subagent = source.and_then(Value::as_object).and_then(|source| {
+        source
+            .get("subAgent")
+            .or_else(|| source.get("sub_agent"))
+            .or_else(|| source.get("subagent"))
+    });
+    let thread_spawn = subagent
+        .and_then(Value::as_object)
+        .and_then(|subagent| {
+            subagent
+                .get("thread_spawn")
+                .or_else(|| subagent.get("threadSpawn"))
+        })
+        .and_then(Value::as_object);
+    let parent_thread_id = thread
+        .and_then(|thread| {
+            bounded_object_string(thread, "parentThreadId", 256)
+                .or_else(|| bounded_object_string(thread, "parent_thread_id", 256))
+        })
+        .or_else(|| {
+            thread_spawn.and_then(|spawn| {
+                bounded_object_string(spawn, "parentThreadId", 256)
+                    .or_else(|| bounded_object_string(spawn, "parent_thread_id", 256))
+            })
+        });
+    let source_kind = if thread_spawn.is_some() {
+        Some("thread_spawn".to_string())
+    } else {
+        subagent
+            .and_then(Value::as_str)
+            .and_then(|value| bounded_text(value, 64))
+            .or_else(|| parent_thread_id.as_ref().map(|_| "subagent".to_string()))
+    };
+    let agent_path = thread_spawn.and_then(|spawn| {
+        bounded_object_string(spawn, "agentPath", 512)
+            .or_else(|| bounded_object_string(spawn, "agent_path", 512))
+    });
+    let agent_nickname = thread_spawn.and_then(|spawn| {
+        bounded_object_string(spawn, "agentNickname", 128)
+            .or_else(|| bounded_object_string(spawn, "agent_nickname", 128))
+    });
+    let agent_role = thread_spawn.and_then(|spawn| {
+        bounded_object_string(spawn, "agentRole", 128)
+            .or_else(|| bounded_object_string(spawn, "agent_role", 128))
+            .or_else(|| bounded_object_string(spawn, "agentType", 128))
+            .or_else(|| bounded_object_string(spawn, "agent_type", 128))
+    });
+    let status = params.get("status").and_then(Value::as_object).or_else(|| {
+        thread
+            .and_then(|thread| thread.get("status"))
+            .and_then(Value::as_object)
+    });
+    let status_type = status.and_then(|status| bounded_object_string(status, "type", 64));
+    let active_flags = status
+        .and_then(|status| {
+            status
+                .get("activeFlags")
+                .or_else(|| status.get("active_flags"))
+        })
+        .and_then(Value::as_array)
+        .map(|flags| {
+            flags
+                .iter()
+                .filter_map(Value::as_str)
+                .filter_map(|flag| bounded_text(flag, 64))
+                .take(32)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if thread.is_none()
+        && method != "thread/status/changed"
+        && status_type.is_none()
+        && parent_thread_id.is_none()
+    {
+        return None;
+    }
+    Some(ProjectedThreadMetadata {
+        parent_thread_id,
+        source_kind,
+        agent_path,
+        agent_nickname,
+        agent_role,
+        status_type,
+        active_flags,
+    })
+}
+
+fn bounded_object_string(values: &Map<String, Value>, key: &str, max_len: usize) -> Option<String> {
+    values
+        .get(key)
+        .and_then(Value::as_str)
+        .and_then(|value| bounded_text(value, max_len))
+}
+
+fn bounded_text(value: &str, max_len: usize) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty() && value.len() <= max_len).then(|| value.to_string())
+}
+
+async fn resolve_event_run_context(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    event: &ProjectedEvent,
+) -> Result<Option<EventRunContext>, String> {
+    if let Some(context) =
+        lookup_known_thread_context(transaction, &event.thread_id, event.workspace_id).await?
+    {
+        if event.thread_id == context.root_thread_id {
+            ensure_root_agent_projection(transaction, &context).await?;
+        }
+        return Ok(Some(context));
+    }
+    let Some(metadata) = event.thread_metadata.as_ref() else {
+        return Ok(None);
+    };
+    let Some(parent_thread_id) = metadata.parent_thread_id.as_deref() else {
+        return Ok(None);
+    };
+    let Some(parent) =
+        lookup_known_thread_context(transaction, parent_thread_id, event.workspace_id).await?
+    else {
+        return Ok(None);
+    };
+    let source_kind = metadata
+        .source_kind
+        .as_deref()
+        .filter(|source| *source != "root")
+        .unwrap_or("subagent");
+    let row = sqlx::query(
+        "INSERT INTO runtime_agent_projections (
+            organization_id, profile_id, workspace_id, root_run_id, thread_id,
+            parent_thread_id, source_kind, agent_path, agent_nickname, agent_role,
+            status_type, active_flags
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         ON CONFLICT (profile_id, thread_id) DO UPDATE SET
+            parent_thread_id = COALESCE(runtime_agent_projections.parent_thread_id,
+                                        EXCLUDED.parent_thread_id),
+            source_kind = CASE
+                WHEN runtime_agent_projections.source_kind = 'root'
+                    THEN runtime_agent_projections.source_kind
+                ELSE EXCLUDED.source_kind
+            END,
+            agent_path = COALESCE(EXCLUDED.agent_path,
+                                  runtime_agent_projections.agent_path),
+            agent_nickname = COALESCE(EXCLUDED.agent_nickname,
+                                      runtime_agent_projections.agent_nickname),
+            agent_role = COALESCE(EXCLUDED.agent_role,
+                                  runtime_agent_projections.agent_role),
+            status_type = COALESCE(EXCLUDED.status_type,
+                                   runtime_agent_projections.status_type),
+            active_flags = CASE
+                WHEN EXCLUDED.status_type IS NULL
+                    THEN runtime_agent_projections.active_flags
+                ELSE EXCLUDED.active_flags
+            END,
+            last_observed_at = now()
+         WHERE runtime_agent_projections.root_run_id = EXCLUDED.root_run_id
+           AND runtime_agent_projections.workspace_id = EXCLUDED.workspace_id
+           AND runtime_agent_projections.parent_thread_id IS NOT DISTINCT FROM
+               EXCLUDED.parent_thread_id
+         RETURNING root_run_id",
+    )
+    .bind(parent.organization_id)
+    .bind(parent.profile_id)
+    .bind(parent.workspace_id)
+    .bind(parent.run_id)
+    .bind(&event.thread_id)
+    .bind(parent_thread_id)
+    .bind(source_kind)
+    .bind(&metadata.agent_path)
+    .bind(&metadata.agent_nickname)
+    .bind(&metadata.agent_role)
+    .bind(&metadata.status_type)
+    .bind(&metadata.active_flags)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(|error| format!("child Thread projection error: {error}"))?;
+    if row.is_none() {
+        return Err("child Thread is already associated with another Runtime tree".to_string());
+    }
+    Ok(Some(parent))
+}
+
+async fn ensure_root_agent_projection(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    context: &EventRunContext,
+) -> Result<(), String> {
+    let row = sqlx::query(
+        "INSERT INTO runtime_agent_projections (
+            organization_id, profile_id, workspace_id, root_run_id, thread_id, source_kind
+         ) VALUES ($1, $2, $3, $4, $5, 'root')
+         ON CONFLICT (profile_id, thread_id) DO UPDATE
+           SET last_observed_at = now()
+           WHERE runtime_agent_projections.root_run_id = EXCLUDED.root_run_id
+             AND runtime_agent_projections.workspace_id = EXCLUDED.workspace_id
+             AND runtime_agent_projections.source_kind = 'root'
+         RETURNING root_run_id",
+    )
+    .bind(context.organization_id)
+    .bind(context.profile_id)
+    .bind(context.workspace_id)
+    .bind(context.run_id)
+    .bind(&context.root_thread_id)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(|error| format!("root Thread projection error: {error}"))?;
+    if row.is_none() {
+        return Err("root Thread is already associated with another Runtime tree".to_string());
+    }
+    Ok(())
+}
+
+async fn lookup_known_thread_context(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    thread_id: &str,
+    workspace_id: Option<Uuid>,
+) -> Result<Option<EventRunContext>, String> {
+    let root = sqlx::query(
+        "SELECT run.id AS run_id, run.task_id, run.organization_id,
+                run.requested_profile_id AS profile_id,
+                run.workspace_id, run.codex_thread_id AS root_thread_id
+         FROM runs run
+         WHERE run.codex_thread_id = $1
+           AND run.requested_profile_id IS NOT NULL
+           AND run.workspace_id IS NOT NULL
+           AND ($2::uuid IS NULL OR run.workspace_id = $2)
+         ORDER BY run.created_at DESC
+         LIMIT 1",
+    )
+    .bind(thread_id)
+    .bind(workspace_id)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(|error| format!("root Thread run lookup error: {error}"))?;
+    if let Some(root) = root {
+        return Ok(Some(event_run_context(&root)));
+    }
+
+    let projected = sqlx::query(
+        "SELECT projection.root_run_id AS run_id, run.task_id, projection.organization_id,
+                projection.profile_id, projection.workspace_id,
+                run.codex_thread_id AS root_thread_id
+         FROM runtime_agent_projections projection
+         JOIN runs run ON run.id = projection.root_run_id
+           AND run.organization_id = projection.organization_id
+         WHERE projection.thread_id = $1
+           AND ($2::uuid IS NULL OR projection.workspace_id = $2)
+         ORDER BY projection.first_observed_at DESC
+         LIMIT 1",
+    )
+    .bind(thread_id)
+    .bind(workspace_id)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(|error| format!("projected Thread run lookup error: {error}"))?;
+    Ok(projected.as_ref().map(event_run_context))
+}
+
+fn event_run_context(row: &sqlx::postgres::PgRow) -> EventRunContext {
+    EventRunContext {
+        run_id: row.get("run_id"),
+        task_id: row.get("task_id"),
+        organization_id: row.get("organization_id"),
+        profile_id: row.get("profile_id"),
+        workspace_id: row.get("workspace_id"),
+        root_thread_id: row.get("root_thread_id"),
+    }
+}
+
+async fn update_runtime_agent_projection(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    context: &EventRunContext,
+    event: &ProjectedEvent,
+) -> Result<(), String> {
+    let metadata = event.thread_metadata.as_ref();
+    let status_type = match event.event_type.as_str() {
+        "codex.thread.completed" => Some("completed"),
+        "codex.thread.failed" => Some("failed"),
+        _ => metadata.and_then(|metadata| metadata.status_type.as_deref()),
+    };
+    let active_flags = metadata
+        .map(|metadata| metadata.active_flags.as_slice())
+        .unwrap_or_default();
+    let updated = sqlx::query(
+        "UPDATE runtime_agent_projections SET
+            parent_thread_id = COALESCE(parent_thread_id, $1),
+            source_kind = CASE
+                WHEN source_kind = 'root' THEN source_kind
+                ELSE COALESCE($2, source_kind)
+            END,
+            agent_path = COALESCE($3, agent_path),
+            agent_nickname = COALESCE($4, agent_nickname),
+            agent_role = COALESCE($5, agent_role),
+            status_type = COALESCE($6, status_type),
+            active_flags = CASE WHEN $6::text IS NULL THEN active_flags ELSE $7 END,
+            last_observed_at = now()
+         WHERE profile_id = $8 AND thread_id = $9 AND root_run_id = $10
+           AND workspace_id = $11",
+    )
+    .bind(metadata.and_then(|metadata| metadata.parent_thread_id.as_deref()))
+    .bind(metadata.and_then(|metadata| metadata.source_kind.as_deref()))
+    .bind(metadata.and_then(|metadata| metadata.agent_path.as_deref()))
+    .bind(metadata.and_then(|metadata| metadata.agent_nickname.as_deref()))
+    .bind(metadata.and_then(|metadata| metadata.agent_role.as_deref()))
+    .bind(status_type)
+    .bind(active_flags)
+    .bind(context.profile_id)
+    .bind(&event.thread_id)
+    .bind(context.run_id)
+    .bind(context.workspace_id)
+    .execute(&mut **transaction)
+    .await
+    .map_err(|error| format!("Runtime agent projection update error: {error}"))?
+    .rows_affected();
+    if updated != 1 {
+        return Err("Runtime agent projection changed during event delivery".to_string());
+    }
+    Ok(())
 }
 
 fn project_event_data(method: &str, params: &Map<String, Value>) -> Value {
@@ -1015,19 +1409,48 @@ fn valid_mapbox_identifier(value: &str) -> bool {
     !value.trim().is_empty() && !value.chars().any(char::is_control)
 }
 
+fn valid_artifact_resource_uri(value: &str) -> bool {
+    if value.is_empty() || value.len() > 2048 || value.chars().any(char::is_control) {
+        return false;
+    }
+    let Some((scheme, resource)) = value.split_once("://") else {
+        return false;
+    };
+    !resource.is_empty()
+        && !matches!(scheme, "http" | "https" | "file")
+        && scheme.bytes().enumerate().all(|(index, byte)| {
+            byte.is_ascii_lowercase()
+                || (index > 0 && (byte.is_ascii_digit() || matches!(byte, b'+' | b'-' | b'.')))
+        })
+}
+
 fn valid_geojson_resource_uri(value: &str) -> bool {
     value
         .strip_prefix("maps-data://geojson/")
         .is_some_and(valid_card_identifier)
 }
 
-fn reply_artifact_link(content: &Value) -> Option<(String, Option<String>, Option<i64>)> {
+fn artifact_schema(title: Option<&str>, mime_type: &str) -> String {
+    title
+        .map(str::trim)
+        .filter(|value| valid_card_identifier(value) && value.contains('.'))
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            if mime_type == "application/geo+json" {
+                "geojson.v1".to_string()
+            } else {
+                "mcp-resource.v1".to_string()
+            }
+        })
+}
+
+fn artifact_link(content: &Value) -> Option<ArtifactCandidate> {
     let content = content.as_object()?;
     if content.get("type")?.as_str()? != "resource_link" {
         return None;
     }
     let uri = content.get("uri")?.as_str()?.trim();
-    if !valid_geojson_resource_uri(uri) {
+    if !valid_artifact_resource_uri(uri) {
         return None;
     }
     let mime_type = content
@@ -1038,32 +1461,33 @@ fn reply_artifact_link(content: &Value) -> Option<(String, Option<String>, Optio
     if !matches!(mime_type, Some("application/geo+json" | "application/json")) {
         return None;
     }
+    let mime_type = mime_type.expect("supported MIME type").to_string();
+    let title = content.get("title").and_then(Value::as_str);
+    let display_name = title
+        .or_else(|| content.get("name").and_then(Value::as_str))
+        .and_then(|value| bounded_text(value, 160))
+        .unwrap_or_else(|| "MCP Resource".to_string());
     let expected_size = content
         .get("size")
         .and_then(Value::as_u64)
         .and_then(|value| i64::try_from(value).ok());
-    Some((
-        uri.to_string(),
-        mime_type.map(str::to_string),
+    Some(ArtifactCandidate {
+        artifact_schema: artifact_schema(title, &mime_type),
+        display_name,
+        uri: uri.to_string(),
+        mime_type,
         expected_size,
-    ))
+    })
 }
 
-fn reply_artifact_candidates(
-    item: &Map<String, Value>,
-) -> impl Iterator<Item = ReplyArtifactCandidate> + '_ {
+fn artifact_candidates(item: &Map<String, Value>) -> impl Iterator<Item = ArtifactCandidate> + '_ {
     item.get("result")
         .and_then(Value::as_object)
         .and_then(|result| result.get("content"))
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(reply_artifact_link)
-        .map(|(uri, mime_type, expected_size)| ReplyArtifactCandidate {
-            uri,
-            mime_type,
-            expected_size,
-        })
+        .filter_map(artifact_link)
 }
 
 fn redact_mcp_resource_metadata(result: &mut Value) {
@@ -1136,22 +1560,21 @@ fn redact_mcp_resource_metadata(result: &mut Value) {
     }
 }
 
-async fn register_reply_artifacts(
+async fn register_artifacts(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    context: &EventRunContext,
     event: &ProjectedEvent,
-    run_id: Uuid,
-    organization_id: Uuid,
-) -> Result<(), String> {
+) -> Result<Vec<RegisteredArtifact>, String> {
     if event.event_type != "codex.item.completed"
         || event.payload.pointer("/itemType").and_then(Value::as_str) != Some("mcpToolCall")
     {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let Some(turn_id) = event.turn_id.as_deref() else {
-        return Ok(());
+        return Ok(Vec::new());
     };
     let Some(item_id) = event.item_id.as_deref() else {
-        return Ok(());
+        return Ok(Vec::new());
     };
     let Some(server) = event
         .payload
@@ -1160,36 +1583,136 @@ async fn register_reply_artifacts(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
-        return Ok(());
+        return Ok(Vec::new());
     };
-    for artifact in &event.reply_artifacts {
-        sqlx::query(
-            "INSERT INTO reply_artifacts (
-                organization_id, run_id, thread_id, turn_id, producer_item_id,
-                source_server, source_uri, mime_type, expected_size
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-             ON CONFLICT (run_id, thread_id, source_server, source_uri) DO UPDATE SET
-                state = CASE
-                    WHEN reply_artifacts.producer_item_id = EXCLUDED.producer_item_id
-                    THEN reply_artifacts.state
-                    ELSE 'failed'
-                END,
-                updated_at = now()",
+    if bounded_text(server, 256).is_none() {
+        return Err("MCP server identity is invalid".to_string());
+    }
+
+    let mut registered = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for artifact in &event.artifacts {
+        if !seen.insert(artifact.uri.as_str()) {
+            continue;
+        }
+        let inserted = sqlx::query(
+            "INSERT INTO artifacts (
+                organization_id, profile_id, artifact_schema, display_name, mime_type,
+                expected_size, source_server, source_uri
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             ON CONFLICT (organization_id, profile_id, source_server, source_uri)
+             DO NOTHING
+             RETURNING id, state",
         )
-        .bind(organization_id)
-        .bind(run_id)
+        .bind(context.organization_id)
+        .bind(context.profile_id)
+        .bind(&artifact.artifact_schema)
+        .bind(&artifact.display_name)
+        .bind(&artifact.mime_type)
+        .bind(artifact.expected_size)
+        .bind(server)
+        .bind(&artifact.uri)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(|error| format!("Artifact registration error: {error}"))?;
+        let (artifact_id, state) = if let Some(inserted) = inserted {
+            (
+                inserted.get::<Uuid, _>("id"),
+                inserted.get::<String, _>("state"),
+            )
+        } else {
+            let existing = sqlx::query(
+                "SELECT id, artifact_schema, display_name, mime_type, expected_size, state
+                 FROM artifacts
+                 WHERE organization_id = $1 AND profile_id = $2
+                   AND source_server = $3 AND source_uri = $4",
+            )
+            .bind(context.organization_id)
+            .bind(context.profile_id)
+            .bind(server)
+            .bind(&artifact.uri)
+            .fetch_optional(&mut **transaction)
+            .await
+            .map_err(|error| format!("Artifact conflict lookup error: {error}"))?
+            .ok_or_else(|| "Artifact conflict could not be resolved".to_string())?;
+            if existing.get::<String, _>("artifact_schema") != artifact.artifact_schema
+                || existing.get::<String, _>("display_name") != artifact.display_name
+                || existing.get::<String, _>("mime_type") != artifact.mime_type
+                || existing.get::<Option<i64>, _>("expected_size") != artifact.expected_size
+            {
+                return Err(
+                    "MCP Resource identity was reused with different immutable metadata"
+                        .to_string(),
+                );
+            }
+            (
+                existing.get::<Uuid, _>("id"),
+                existing.get::<String, _>("state"),
+            )
+        };
+
+        sqlx::query(
+            "INSERT INTO artifact_task_grants (
+                artifact_id, organization_id, task_id, permission
+             ) VALUES ($1, $2, $3, 'read')
+             ON CONFLICT (artifact_id, task_id) DO NOTHING",
+        )
+        .bind(artifact_id)
+        .bind(context.organization_id)
+        .bind(context.task_id)
+        .execute(&mut **transaction)
+        .await
+        .map_err(|error| format!("Artifact Task grant error: {error}"))?;
+        sqlx::query(
+            "INSERT INTO artifact_provenance (
+                artifact_id, organization_id, producer_run_id, producer_thread_id,
+                producer_turn_id, producer_item_id
+             ) VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(artifact_id)
+        .bind(context.organization_id)
+        .bind(context.run_id)
         .bind(&event.thread_id)
         .bind(turn_id)
         .bind(item_id)
-        .bind(server)
-        .bind(&artifact.uri)
-        .bind(&artifact.mime_type)
-        .bind(artifact.expected_size)
         .execute(&mut **transaction)
         .await
-        .map_err(|error| format!("reply Artifact registration error: {error}"))?;
+        .map_err(|error| format!("Artifact provenance error: {error}"))?;
+
+        registered.push(RegisteredArtifact {
+            id: artifact_id,
+            artifact_schema: artifact.artifact_schema.clone(),
+            display_name: artifact.display_name.clone(),
+            mime_type: artifact.mime_type.clone(),
+            expected_size: artifact.expected_size,
+            state,
+        });
     }
-    Ok(())
+    Ok(registered)
+}
+
+fn project_registered_artifacts(payload: &mut Value, artifacts: &[RegisteredArtifact]) {
+    if artifacts.is_empty() {
+        return;
+    }
+    let projected = artifacts
+        .iter()
+        .map(|artifact| {
+            json!({
+                "artifactId": artifact.id,
+                "schema": artifact.artifact_schema,
+                "displayName": artifact.display_name,
+                "mimeType": artifact.mime_type,
+                "expectedSize": artifact.expected_size,
+                "state": artifact.state,
+                "url": format!("/api/artifacts/{}/content", artifact.id),
+            })
+        })
+        .collect();
+    if let Some(data) = payload.pointer_mut("/data").and_then(Value::as_object_mut) {
+        data.insert("artifacts".to_string(), Value::Array(projected));
+    }
 }
 
 async fn register_inline_visualization_artifact(
@@ -1309,9 +1832,18 @@ async fn resolve_map_resource_refs_in_transaction(
     let mut resolved = std::collections::HashMap::new();
     for (server, uri) in resource_refs {
         let row = sqlx::query(
-            "SELECT id, mime_type FROM reply_artifacts
-             WHERE run_id = $1 AND thread_id = $2 AND source_server = $3 AND source_uri = $4
-               AND producer_item_id <> $5 AND state IN ('pending', 'ready')",
+            "SELECT artifact.id, artifact.mime_type
+             FROM artifacts artifact
+             JOIN artifact_provenance provenance
+               ON provenance.artifact_id = artifact.id
+              AND provenance.organization_id = artifact.organization_id
+             WHERE provenance.producer_run_id = $1
+               AND provenance.producer_thread_id = $2
+               AND artifact.source_server = $3
+               AND artifact.source_uri = $4
+               AND provenance.producer_item_id <> $5
+               AND artifact.state IN ('pending', 'materializing', 'ready')
+               AND artifact.retention_state = 'active'",
         )
         .bind(run_id)
         .bind(thread_id)
@@ -1330,11 +1862,11 @@ async fn resolve_map_resource_refs_in_transaction(
             (server, uri),
             (
                 row.get::<Uuid, _>("id"),
-                row.get::<Option<String>, _>("mime_type"),
+                Some(row.get::<String, _>("mime_type")),
             ),
         );
     }
-    replace_map_payload_resource_refs(renderer_payload, run_id, &resolved);
+    replace_map_payload_resource_refs(renderer_payload, &resolved);
     Ok(())
 }
 
@@ -1497,7 +2029,6 @@ fn map_payload_resource_refs(map_payload: &Value) -> Option<Vec<(String, String)
 
 fn replace_map_payload_resource_refs(
     map_payload: &mut Value,
-    run_id: Uuid,
     resolved: &std::collections::HashMap<(String, String), (Uuid, Option<String>)>,
 ) {
     let Some(sources) = map_payload
@@ -1528,7 +2059,7 @@ fn replace_map_payload_resource_refs(
             "format": "geojson",
             "artifact_id": artifact_id,
             "mime_type": mime_type,
-            "url": format!("/api/runs/{run_id}/artifacts/{artifact_id}"),
+            "url": format!("/api/artifacts/{artifact_id}/content"),
         });
     }
 }
@@ -1570,12 +2101,150 @@ fn sanitize_value(value: &Value, key: &str) -> Value {
                 .map(|(entry_key, value)| (entry_key.clone(), sanitize_value(value, entry_key)))
                 .collect(),
         ),
-        Value::String(value) if is_path_key(key) => Value::String(safe_path(value)),
+        Value::String(value) if is_path_key(key) => {
+            Value::String(redact_browser_text(&safe_path(value)))
+        }
         Value::String(value) if value.starts_with("data:") => {
             Value::String("[embedded-data]".to_string())
         }
+        Value::String(value) => Value::String(redact_browser_text(value)),
         _ => value.clone(),
     }
+}
+
+fn redact_browser_text(value: &str) -> String {
+    redact_local_paths(&redact_internal_resource_uris(value))
+}
+
+/// Remove model-visible, Profile-local MCP Resource identities from browser
+/// projections without changing the Runtime history that Agents use for
+/// handoff. Public HTTP(S) links remain visible; non-public URI schemes are
+/// replaced wherever they occur in prose, JSON snippets, or Tool arguments.
+fn redact_internal_resource_uris(value: &str) -> String {
+    const REDACTED: &str = "[internal-resource-uri]";
+
+    let bytes = value.as_bytes();
+    let mut output = String::with_capacity(value.len());
+    let mut copied_until = 0;
+    let mut cursor = 0;
+
+    while cursor < bytes.len() {
+        if !bytes[cursor].is_ascii_alphabetic()
+            || (cursor > 0 && is_uri_scheme_byte(bytes[cursor - 1]))
+        {
+            cursor += 1;
+            continue;
+        }
+
+        let mut scheme_end = cursor + 1;
+        while scheme_end < bytes.len() && is_uri_scheme_byte(bytes[scheme_end]) {
+            scheme_end += 1;
+        }
+        if bytes.get(scheme_end..scheme_end + 3) != Some(b"://") {
+            cursor += 1;
+            continue;
+        }
+
+        let scheme = value[cursor..scheme_end].to_ascii_lowercase();
+        if matches!(scheme.as_str(), "http" | "https") {
+            cursor = scheme_end + 3;
+            continue;
+        }
+
+        let resource_start = scheme_end + 3;
+        if resource_start >= bytes.len() || is_uri_terminator(bytes[resource_start]) {
+            cursor += 1;
+            continue;
+        }
+        let mut resource_end = resource_start + 1;
+        while resource_end < bytes.len() && !is_uri_terminator(bytes[resource_end]) {
+            resource_end += 1;
+        }
+
+        output.push_str(&value[copied_until..cursor]);
+        output.push_str(REDACTED);
+        copied_until = resource_end;
+        cursor = resource_end;
+    }
+
+    if copied_until == 0 {
+        return value.to_string();
+    }
+    output.push_str(&value[copied_until..]);
+    output
+}
+
+/// Runtime command lines, Tool arguments and textual output can contain local
+/// paths even when the field itself is not named `path`. Browser projections
+/// must retain useful command/output context without disclosing the host's
+/// directory layout. Public URLs are not matched because their path segments
+/// do not begin at a shell/path boundary.
+fn redact_local_paths(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut output = String::with_capacity(value.len());
+    let mut copied_until = 0;
+    let mut cursor = 0;
+
+    while cursor < bytes.len() {
+        let unix_path = bytes[cursor] == b'/'
+            && (cursor == 0 || is_local_path_boundary(bytes[cursor - 1]))
+            && bytes.get(cursor + 1).is_some_and(|byte| {
+                !byte.is_ascii_whitespace() && !matches!(byte, b'/' | b'>' | b')' | b']' | b'}')
+            });
+        let windows_path = bytes.get(cursor..cursor + 3).is_some_and(|candidate| {
+            candidate[0].is_ascii_alphabetic()
+                && candidate[1] == b':'
+                && matches!(candidate[2], b'/' | b'\\')
+        }) && (cursor == 0 || is_local_path_boundary(bytes[cursor - 1]));
+        if !unix_path && !windows_path {
+            cursor += 1;
+            continue;
+        }
+
+        let mut path_end = cursor + if windows_path { 3 } else { 1 };
+        while path_end < bytes.len() && !is_local_path_terminator(bytes[path_end]) {
+            path_end += 1;
+        }
+        let path = &value[cursor..path_end];
+        output.push_str(&value[copied_until..cursor]);
+        output.push_str(&safe_path(path));
+        copied_until = path_end;
+        cursor = path_end;
+    }
+
+    if copied_until == 0 {
+        return value.to_string();
+    }
+    output.push_str(&value[copied_until..]);
+    output
+}
+
+fn is_local_path_boundary(byte: u8) -> bool {
+    byte.is_ascii_whitespace()
+        || matches!(
+            byte,
+            b'"' | b'\'' | b'`' | b'=' | b'(' | b'[' | b'{' | b',' | b';'
+        )
+}
+
+fn is_local_path_terminator(byte: u8) -> bool {
+    byte.is_ascii_whitespace()
+        || matches!(
+            byte,
+            b'"' | b'\'' | b'`' | b'<' | b'>' | b')' | b']' | b'}' | b',' | b';'
+        )
+}
+
+fn is_uri_scheme_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.')
+}
+
+fn is_uri_terminator(byte: u8) -> bool {
+    byte.is_ascii_whitespace()
+        || matches!(
+            byte,
+            b'"' | b'\'' | b'`' | b'<' | b'>' | b'(' | b')' | b'[' | b']' | b'{' | b'}' | b','
+        )
 }
 
 fn is_sensitive_key(key: &str) -> bool {
@@ -1975,7 +2644,6 @@ mod tests {
 
     #[test]
     fn replaces_mcp_resource_refs_with_opaque_authorized_artifact_urls() {
-        let run_id = Uuid::parse_str("975f1f1c-4b58-47ad-a12c-c32aeae566e7").unwrap();
         let artifact_id = Uuid::parse_str("8e98ff2f-82ee-4cc9-a3e6-2974debf8666").unwrap();
         let resource_uri = "maps-data://geojson/map-data-one";
         let mut map_payload = json!({
@@ -1996,7 +2664,7 @@ mod tests {
             (artifact_id, Some("application/geo+json".to_string())),
         )]);
 
-        replace_map_payload_resource_refs(&mut map_payload, run_id, &resolved);
+        replace_map_payload_resource_refs(&mut map_payload, &resolved);
 
         assert_eq!(
             map_payload["sources"]["locations"]["data"],
@@ -2005,7 +2673,7 @@ mod tests {
                 "format": "geojson",
                 "artifact_id": artifact_id,
                 "mime_type": "application/geo+json",
-                "url": format!("/api/runs/{run_id}/artifacts/{artifact_id}")
+                "url": format!("/api/artifacts/{artifact_id}/content")
             })
         );
         assert!(!map_payload.to_string().contains(resource_uri));
@@ -2030,7 +2698,7 @@ After"#;
     }
 
     #[test]
-    fn accepts_only_valid_geojson_resource_links() {
+    fn accepts_only_typed_local_mcp_resource_links() {
         let link = json!({
             "type": "resource_link",
             "name": "map-data-one",
@@ -2039,10 +2707,22 @@ After"#;
             "mimeType": "application/geo+json",
             "size": 128
         });
-        let projected = reply_artifact_link(&link).expect("valid link");
-        assert_eq!(projected.0, "maps-data://geojson/map-data-one");
-        assert_eq!(projected.1.as_deref(), Some("application/geo+json"));
-        assert_eq!(projected.2, Some(128));
+        let projected = artifact_link(&link).expect("valid link");
+        assert_eq!(projected.uri, "maps-data://geojson/map-data-one");
+        assert_eq!(projected.artifact_schema, "geojson.v1");
+        assert_eq!(projected.mime_type, "application/geo+json");
+        assert_eq!(projected.expected_size, Some(128));
+
+        let planning = artifact_link(&json!({
+            "type": "resource_link",
+            "name": "planning-dataset.v1-digest",
+            "title": "planning-dataset.v1",
+            "uri": "supply-chain-data://resources/planning-dataset.v1-digest",
+            "mimeType": "application/json",
+            "size": 512
+        }))
+        .expect("planning Resource");
+        assert_eq!(planning.artifact_schema, "planning-dataset.v1");
 
         let invalid_uri = json!({
             "type": "resource_link",
@@ -2050,7 +2730,7 @@ After"#;
             "uri": "https://example.com/map-data-one",
             "mimeType": "application/geo+json"
         });
-        assert!(reply_artifact_link(&invalid_uri).is_none());
+        assert!(artifact_link(&invalid_uri).is_none());
 
         let item = json!({
             "type": "mcpToolCall",
@@ -2072,7 +2752,7 @@ After"#;
             }
         });
         let item = item.as_object().unwrap();
-        let artifacts = reply_artifact_candidates(item).collect::<Vec<_>>();
+        let artifacts = artifact_candidates(item).collect::<Vec<_>>();
         assert_eq!(artifacts.len(), 1);
         assert_eq!(artifacts[0].uri, "maps-data://geojson/map-data-one");
 
@@ -2099,6 +2779,54 @@ After"#;
     }
 
     #[test]
+    fn removes_internal_resource_uris_from_browser_text_and_arguments() {
+        let item = json!({
+            "type": "agentMessage",
+            "text": "Use supply-chain-data://resources/dataset-one, then see https://example.com/run."
+        });
+        let projected = project_item(item.as_object().unwrap());
+        assert_eq!(
+            projected["text"],
+            "Use [internal-resource-uri], then see https://example.com/run."
+        );
+
+        let arguments = sanitize_value(
+            &json!({
+                "server": "supply_chain_data",
+                "uri": "supply-chain-data://resources/dataset-one"
+            }),
+            "arguments",
+        );
+        assert_eq!(arguments["server"], "supply_chain_data");
+        assert_eq!(arguments["uri"], "[internal-resource-uri]");
+    }
+
+    #[test]
+    fn removes_local_paths_embedded_in_browser_text_and_commands() {
+        let projected = project_item(
+            json!({
+                "type": "commandExecution",
+                "command": "/bin/zsh -lc \"sed -n '1,20p' /Users/example/project/skills/demo/SKILL.md\"",
+                "aggregatedOutput": "loaded cwd=/private/tmp/profile/resources and https://example.com/run/1",
+                "commandActions": [{
+                    "type": "read",
+                    "path": "/Users/example/project/skills/demo/SKILL.md",
+                    "command": "sed -n '1,20p' /Users/example/project/skills/demo/SKILL.md"
+                }]
+            })
+            .as_object()
+            .unwrap(),
+        );
+
+        let encoded = projected.to_string();
+        assert!(!encoded.contains("/Users/example"));
+        assert!(!encoded.contains("/private/tmp/profile"));
+        assert!(encoded.contains("[workspace-path]/SKILL.md"));
+        assert!(encoded.contains("[workspace-path]/resources"));
+        assert!(encoded.contains("https://example.com/run/1"));
+    }
+
+    #[test]
     fn keeps_unknown_notifications_without_exposing_arbitrary_params() {
         let frame = br#"data: {"method":"app-server-event","params":{"message":{"method":"item/futureEvent","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","credential":"secret","payload":{"local":"value"}}}}}
 
@@ -2118,12 +2846,19 @@ After"#;
 
 "#;
         let status = project_frame(status).unwrap().unwrap();
-        assert_eq!(status.event_type, "codex.unknown");
+        assert_eq!(status.event_type, "codex.thread.status.changed");
         assert_eq!(
             status.payload["data"]["sourceType"],
             "thread/status/changed"
         );
         assert_eq!(status.payload["data"]["status"]["type"], "active");
+        assert_eq!(
+            status
+                .thread_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.status_type.as_deref()),
+            Some("active")
+        );
 
         let error = br#"data: {"method":"app-server-event","params":{"message":{"method":"error","params":{"threadId":"thread-1","error":{"message":"stream disconnected","additionalDetails":"retrying sampling request 1/3","apiKey":"must-not-leak"}}}}}
 
@@ -2198,6 +2933,250 @@ After"#;
         let renamed = project_frame(renamed).unwrap().unwrap();
         assert_eq!(renamed.event_type, "codex.thread.name.updated");
         assert_eq!(renamed.payload["data"]["threadName"], "Durable name");
+    }
+
+    #[test]
+    fn projects_runtime_child_thread_identity_from_the_official_thread_shape() {
+        let workspace_id = Uuid::now_v7();
+        let frame = format!(
+            r#"data: {{"method":"app-server-event","params":{{"workspace_id":"{workspace_id}","message":{{"method":"thread/started","params":{{"thread":{{"id":"child-thread","parentThreadId":"root-thread","source":{{"subAgent":{{"thread_spawn":{{"parent_thread_id":"root-thread","depth":1,"agent_path":"/root/network","agent_nickname":"Network","agent_role":"network_planning_agent"}}}}}},"status":{{"type":"idle","activeFlags":[]}}}}}}}}}}}}
+
+"#
+        );
+        let event = project_frame(frame.as_bytes()).unwrap().unwrap();
+
+        assert_eq!(event.event_type, "codex.thread.started");
+        assert_eq!(event.workspace_id, Some(workspace_id));
+        assert_eq!(event.thread_id, "child-thread");
+        let metadata = event.thread_metadata.unwrap();
+        assert_eq!(metadata.parent_thread_id.as_deref(), Some("root-thread"));
+        assert_eq!(metadata.source_kind.as_deref(), Some("thread_spawn"));
+        assert_eq!(metadata.agent_path.as_deref(), Some("/root/network"));
+        assert_eq!(metadata.agent_nickname.as_deref(), Some("Network"));
+        assert_eq!(
+            metadata.agent_role.as_deref(),
+            Some("network_planning_agent")
+        );
+        assert_eq!(metadata.status_type.as_deref(), Some("idle"));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL pointing at a disposable PostgreSQL database"]
+    async fn child_thread_events_remain_under_the_root_run_without_owning_its_lifecycle() {
+        let database_url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL");
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(4)
+            .connect(&database_url)
+            .await
+            .expect("connect disposable PostgreSQL database");
+        open_web_codex_platform_store::migrate::run(&pool)
+            .await
+            .expect("migrate database");
+
+        let organization_id = Uuid::now_v7();
+        let user_id = Uuid::now_v7();
+        let profile_id = Uuid::now_v7();
+        let project_id = Uuid::now_v7();
+        let task_id = Uuid::now_v7();
+        let workspace_id = Uuid::now_v7();
+        let run_id = Uuid::now_v7();
+        sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, 'Projection', $2)")
+            .bind(organization_id)
+            .bind(format!("projection-{organization_id}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO users (id, username, name, email, password_hash, role)
+             VALUES ($1, $2, 'Projection', $3, 'test-only', 'owner')",
+        )
+        .bind(user_id)
+        .bind(format!("projection-{user_id}"))
+        .bind(format!("{user_id}@example.invalid"))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO profiles (id, organization_id, owner_user_id, runtime_key, name)
+             VALUES ($1, $2, $3, $4, 'Projection Profile')",
+        )
+        .bind(profile_id)
+        .bind(organization_id)
+        .bind(user_id)
+        .bind(format!("projection-{profile_id}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO projects (
+                id, organization_id, created_by, name, git_url, default_branch
+             ) VALUES ($1, $2, $3, 'Projection Project', '/tmp/projection.git', 'main')",
+        )
+        .bind(project_id)
+        .bind(organization_id)
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO tasks (
+                id, organization_id, project_id, created_by, title, status
+             ) VALUES ($1, $2, $3, $4, 'Projection Task', 'running')",
+        )
+        .bind(task_id)
+        .bind(organization_id)
+        .bind(project_id)
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO workspaces (
+                id, organization_id, project_id, profile_id, created_by, kind, name,
+                root_path, source_ref, state
+             ) VALUES ($1, $2, $3, $4, $5, 'main', 'Projection Workspace',
+                       $6, 'main', 'ready')",
+        )
+        .bind(workspace_id)
+        .bind(organization_id)
+        .bind(project_id)
+        .bind(profile_id)
+        .bind(user_id)
+        .bind(format!("/tmp/projection-{workspace_id}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO runs (
+                id, organization_id, task_id, requested_by, requested_profile_id,
+                workspace_id, status, codex_thread_id
+             ) VALUES ($1, $2, $3, $4, $5, $6, 'running', 'root-thread')",
+        )
+        .bind(run_id)
+        .bind(organization_id)
+        .bind(task_id)
+        .bind(user_id)
+        .bind(profile_id)
+        .bind(workspace_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO runtime_agent_projections (
+                organization_id, profile_id, workspace_id, root_run_id, thread_id,
+                source_kind
+             ) VALUES ($1, $2, $3, $4, 'root-thread', 'root')",
+        )
+        .bind(organization_id)
+        .bind(profile_id)
+        .bind(workspace_id)
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let started = format!(
+            r#"data: {{"method":"app-server-event","params":{{"workspace_id":"{workspace_id}","message":{{"method":"thread/started","params":{{"thread":{{"id":"child-thread","parentThreadId":"root-thread","source":{{"subAgent":{{"thread_spawn":{{"parent_thread_id":"root-thread","depth":1,"agent_path":"/root/network","agent_nickname":"Network","agent_role":"network_planning_agent"}}}}}},"status":{{"type":"idle","activeFlags":[]}}}}}}}}}}}}
+
+"#
+        );
+        let child_turn = format!(
+            r#"data: {{"method":"app-server-event","params":{{"workspace_id":"{workspace_id}","message":{{"method":"turn/started","params":{{"threadId":"child-thread","turnId":"child-turn","turn":{{"id":"child-turn","status":"inProgress"}}}}}}}}}}
+
+"#
+        );
+        let child_artifact = format!(
+            r#"data: {{"method":"app-server-event","params":{{"workspace_id":"{workspace_id}","message":{{"method":"item/completed","params":{{"threadId":"child-thread","turnId":"child-turn","item":{{"id":"data-item","type":"mcpToolCall","server":"supply_chain_data","tool":"build_planning_dataset","result":{{"content":[{{"type":"resource_link","name":"planning-dataset.v1-digest","title":"planning-dataset.v1","uri":"supply-chain-data://resources/planning-dataset.v1-digest","mimeType":"application/json","size":512}}],"structuredContent":{{"summary":"ready","data_ref":{{"server":"supply_chain_data","uri":"supply-chain-data://resources/planning-dataset.v1-digest","resource_schema":"planning-dataset.v1"}}}}}}}}}}}}}}}}
+
+"#
+        );
+        let completed = format!(
+            r#"data: {{"method":"app-server-event","params":{{"workspace_id":"{workspace_id}","message":{{"method":"thread/completed","params":{{"threadId":"child-thread"}}}}}}}}
+
+"#
+        );
+        assert!(persist_frame(started.as_bytes(), &pool)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(persist_frame(child_turn.as_bytes(), &pool)
+            .await
+            .unwrap()
+            .is_some());
+        let artifact_projection = persist_frame(child_artifact.as_bytes(), &pool)
+            .await
+            .unwrap()
+            .expect("Artifact projection");
+        assert_eq!(artifact_projection.pending_artifact_ids.len(), 1);
+        assert!(persist_frame(completed.as_bytes(), &pool)
+            .await
+            .unwrap()
+            .is_some());
+
+        let run = sqlx::query("SELECT status, active_turn_id FROM runs WHERE id = $1")
+            .bind(run_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(run.get::<String, _>("status"), "running");
+        assert!(run.get::<Option<String>, _>("active_turn_id").is_none());
+        let child = sqlx::query(
+            "SELECT root_run_id, parent_thread_id, agent_role, status_type
+             FROM runtime_agent_projections
+             WHERE profile_id = $1 AND thread_id = 'child-thread'",
+        )
+        .bind(profile_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(child.get::<Uuid, _>("root_run_id"), run_id);
+        assert_eq!(
+            child
+                .get::<Option<String>, _>("parent_thread_id")
+                .as_deref(),
+            Some("root-thread")
+        );
+        assert_eq!(
+            child.get::<Option<String>, _>("agent_role").as_deref(),
+            Some("network_planning_agent")
+        );
+        assert_eq!(
+            child.get::<Option<String>, _>("status_type").as_deref(),
+            Some("completed")
+        );
+        let event_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM run_events
+             WHERE run_id = $1 AND thread_id = 'child-thread'",
+        )
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(event_count, 4);
+        let artifact = sqlx::query(
+            "SELECT artifact.id, artifact.artifact_schema, artifact.state,
+                    artifact_grant.task_id, provenance.producer_thread_id
+             FROM artifacts artifact
+             JOIN artifact_task_grants artifact_grant
+               ON artifact_grant.artifact_id = artifact.id
+             JOIN artifact_provenance provenance
+               ON provenance.artifact_id = artifact.id
+             WHERE artifact.organization_id = $1",
+        )
+        .bind(organization_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            artifact.get::<String, _>("artifact_schema"),
+            "planning-dataset.v1"
+        );
+        assert_eq!(artifact.get::<String, _>("state"), "pending");
+        assert_eq!(artifact.get::<Uuid, _>("task_id"), task_id);
+        assert_eq!(
+            artifact.get::<String, _>("producer_thread_id"),
+            "child-thread"
+        );
     }
 
     #[test]

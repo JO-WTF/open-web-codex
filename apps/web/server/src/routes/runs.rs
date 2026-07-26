@@ -22,6 +22,7 @@ use uuid::Uuid;
 
 use crate::middleware::auth::{require_runtime_profile, AuthenticatedUser};
 use crate::routes::RuntimeProfileBinding;
+use crate::supervisor_policy;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
 
@@ -31,11 +32,33 @@ pub async fn start_run(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
     Path(task_id): Path<Uuid>,
+    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
     Extension(orchestrator): Extension<Arc<RunOrchestrator>>,
     Extension(profile): Extension<RuntimeProfileBinding>,
     Json(req): Json<StartRunRequest>,
 ) -> ApiResult<StartRunResponse> {
     require_runtime_profile(&state.db, &auth, &profile.runtime_key).await?;
+    let resolved_supervisor_policy = req
+        .supervisor_policy
+        .as_ref()
+        .map(supervisor_policy::resolve)
+        .transpose()
+        .map_err(supervisor_policy_error)?;
+    if let Some(policy) = resolved_supervisor_policy.as_ref() {
+        let capabilities = profile.capabilities.get().await.ok_or_else(|| {
+            supervisor_policy_error(supervisor_policy::SupervisorPolicyError::Capability(
+                "Codex Capability Manifest is unavailable".to_string(),
+            ))
+        })?;
+        supervisor_policy::require_runtime_capabilities(
+            adapter.as_ref(),
+            &capabilities.manifest,
+            &policy.required_runtime_roles,
+        )
+        .await
+        .map_err(supervisor_policy_error)?;
+    }
+    let supervisor_policy = resolved_supervisor_policy.map(|policy| policy.snapshot);
     let run = orchestrator
         .enqueue_run(EnqueueRunRequest {
             organization_id: auth.organization_id,
@@ -45,6 +68,7 @@ pub async fn start_run(
             workspace_id: req.workspace_id,
             fork_thread_id: req.fork_thread_id,
             fork_source_run_id: req.fork_source_run_id,
+            supervisor_policy,
         })
         .await
         .map_err(orchestrator_error)?;
@@ -302,11 +326,11 @@ async fn authorized_thread_context(
          FROM runs run \
          JOIN workspaces workspace ON workspace.id = run.workspace_id \
            AND workspace.organization_id = run.organization_id \
-         JOIN workspace_grants grant ON grant.workspace_id = workspace.id \
-           AND grant.organization_id = workspace.organization_id \
-           AND grant.user_id = run.requested_by \
-           AND grant.profile_id = workspace.profile_id \
-           AND grant.role IN ('owner', 'write') \
+         JOIN workspace_grants workspace_grant ON workspace_grant.workspace_id = workspace.id \
+           AND workspace_grant.organization_id = workspace.organization_id \
+           AND workspace_grant.user_id = run.requested_by \
+           AND workspace_grant.profile_id = workspace.profile_id \
+           AND workspace_grant.role IN ('owner', 'write') \
          WHERE run.id = $1 AND run.organization_id = $2 \
            AND run.status = 'running' AND workspace.state IN ('ready', 'retained')",
     )
@@ -473,4 +497,27 @@ fn database_error(_error: sqlx::Error) -> (StatusCode, Json<PlatformError>) {
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(PlatformError::internal("database operation failed")),
     )
+}
+
+fn supervisor_policy_error(
+    error: supervisor_policy::SupervisorPolicyError,
+) -> (StatusCode, Json<PlatformError>) {
+    match error {
+        supervisor_policy::SupervisorPolicyError::NotFound => (
+            StatusCode::BAD_REQUEST,
+            Json(PlatformError::bad_request(
+                "Selected Supervisor Policy is not published",
+            )),
+        ),
+        supervisor_policy::SupervisorPolicyError::Invalid(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PlatformError::internal(
+                "Published Supervisor Policy is invalid",
+            )),
+        ),
+        supervisor_policy::SupervisorPolicyError::Capability(message) => (
+            StatusCode::CONFLICT,
+            Json(PlatformError::bad_request(message)),
+        ),
+    }
 }

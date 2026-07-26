@@ -39,6 +39,41 @@ describe("Web workspace actions", () => {
     expect(onRemoveWorkspace).toHaveBeenCalledWith("ws-1");
   });
 
+  it("starts an explicitly selected enterprise Supervisor Copilot", () => {
+    const onNewSupervisor = vi.fn();
+    render(
+      <Workspaces
+        workspaces={[{
+          id: "ws-1",
+          name: "Demo",
+          path: "/tmp/demo",
+          connected: true,
+          settings: { sidebarCollapsed: false },
+        }]}
+        activeId="ws-1"
+        onSelect={vi.fn()}
+        onCreate={vi.fn()}
+        onConnect={vi.fn()}
+        onLoad={vi.fn()}
+        busy={false}
+        threadsByWorkspace={{ "ws-1": [] }}
+        activeThreadId={null}
+        onSelectThread={vi.fn()}
+        onNewThread={vi.fn()}
+        onNewSupervisor={onNewSupervisor}
+        onArchiveThread={vi.fn()}
+        onRemoveWorkspace={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "New enterprise copilot in Demo",
+      }),
+    );
+    expect(onNewSupervisor).toHaveBeenCalledWith("ws-1");
+  });
+
   it("shows running state and confirms before archiving a thread", () => {
     const onArchiveThread = vi.fn();
     render(

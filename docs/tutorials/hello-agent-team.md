@@ -1,14 +1,14 @@
-# Hello Team：从一个 Agent 扩展到两个 Agent
+# Hello Team：用两个真实子 Agent 完成协作
 
 ## 1. 本篇目标
 
 先完成[Hello Agent 快速入门](hello-agent-quickstart.md)。
 
-本篇增加两个职责：
+本篇增加三个职责：
 
 - Writer：生成结构化问候；
 - Reviewer：审核问候，不能改写；
-- Supervisor：安排生成、审核和最终交付。
+- Root Supervisor：安排生成、审核和最终交付。
 
 用户问题：
 
@@ -19,14 +19,16 @@
 ```mermaid
 sequenceDiagram
     actor U as 用户
-    participant S as Supervisor
-    participant W as Greeting Writer
-    participant R as Greeting Reviewer
+    participant S as Root Supervisor
+    participant W as greeting_writer
+    participant R as greeting_reviewer
 
     U->>S: 生成并审核问候
     S->>W: 生成结构化问候
+    W->>W: hello_writer.say_hello
     W-->>S: Greeting
-    S->>R: 审核同一 Greeting
+    S->>R: 原样传递 Greeting
+    R->>R: hello_reviewer.review_greeting
     R-->>S: GreetingReview
     S-->>U: 只发送审核通过的消息
 ```
@@ -35,27 +37,40 @@ sequenceDiagram
 
 ---
 
-## 2. 当前可运行部分与未来目标
+## 2. 先区分两种完全不同的“两个”
 
-当前可以真实运行：
+`hello-agent` 包含两个 MCP Server：
 
-- `hello_writer` MCP Server；
-- `hello_reviewer` MCP Server；
-- `$say-hello` 和 `$review-greeting`；
-- 一个 Thread 中 Writer → Reviewer 的完整 Tool 链；
-- 双 Server 的 initialize、tools/list 和 tools/call smoke。
+```text
+hello_writer
+hello_reviewer
+```
 
-当前仍在继续建设和验证：
+这只证明 Runtime 有两套可调用能力。一个 Thread 也可以依次调用它们：
 
-- Supervisor 创建两个指定 Runtime Role 的真实子 Thread；
-- 按 Agent 独立选择能力；
-- Web 中完整投影父子 Agent 轨迹。
+```text
+一个 Thread
+  ├── hello_writer.say_hello
+  └── hello_reviewer.review_greeting
+```
 
-所以本篇先验证两套能力的交接，再解释真实双 Agent 的目标。两个 Skill 或两个 MCP
-Server 本身不能冒充两个 Runtime Agent。
+真正的两个 Agent 必须是两个由 Codex Runtime 创建的子 Thread：
 
-未来平台能力补齐后，创建两个 Agent 和选择能力会更直接；这里的 Tool、Skill 和
-共享合同仍然复用。
+```text
+Root Thread
+├── Child Thread · greeting_writer
+└── Child Thread · greeting_reviewer
+```
+
+两种验证都要保留，因为它们定位不同问题：
+
+| 验证 | 证明什么 | 失败时先查哪里 |
+| --- | --- | --- |
+| 两个 MCP Server 的 stdio smoke | Tool Schema、进程和数据交接正确 | Python、launcher、MCP |
+| 两个真实子 Thread | Runtime Role、spawn、消息和等待正确 | Profile Role、Runtime、多 Agent |
+
+如果底层 Tool 还不稳定就直接引入子 Agent，错误会同时出现在数据、协议、模型选择和
+Thread 生命周期中，很难定位。正确顺序仍然是先验证能力，再验证协作。
 
 ---
 
@@ -76,14 +91,15 @@ Reviewer 只做明确的确定性检查：
 | 产生结果 | 独立检查 |
 | --- | --- |
 | 代码生成 Agent | Code Review Agent |
-| 数据分析 Agent | Data Validation Agent |
-| Network Planning Agent | 结果验证流程 |
+| 数据准备 Agent | Data Validation 流程 |
+| 方案分析 Agent | 风险或约束检查 Agent |
 
-独立 Reviewer 有意义的前提是它检查明确合同，而不是再生成一个自己的答案。
+独立 Reviewer 有意义的前提是它检查明确合同，而不是再生成一份自己的答案。把同一
+个宽泛问题交给两个模型再“投票”，既不说明谁的事实正确，也不解决结论冲突。
 
 ---
 
-## 4. 一个目录中的共享核心
+## 4. 一个能力包中的共享核心
 
 当前结构：
 
@@ -96,6 +112,9 @@ tools/hello-agent/
 ├── skills/
 │   ├── say-hello/
 │   └── review-greeting/
+├── examples/
+│   ├── hello-team-request.md
+│   └── runtime-roles/
 └── .mcp.json
 ```
 
@@ -118,8 +137,8 @@ evaluate_greeting
 姓名上限和问候格式没有在两个 Server 中各写一遍。这样规则变更时，只修改一个权威
 位置。
 
-这也是两个能力暂时放在同一个 Plugin 的第一个原因：它们属于同一领域并共享同一
-合同。
+这也是两个能力放在同一个 Plugin 的第一个原因：它们属于同一领域、共享合同、使用
+同一依赖，并由同一团队一起发布。
 
 ---
 
@@ -162,18 +181,14 @@ def evaluate_greeting(greeting: Greeting) -> GreetingReview:
 | --- | --- | --- |
 | 输入 `Greeting` | 接收完整 Writer 合同 | 不用两个松散参数猜对应关系 |
 | 输出 `GreetingReview` | 承诺稳定审核结构 | Supervisor 可以可靠读取 |
-| `reasons = []` | 累计全部问题 | 一次审核报告所有可见错误 |
-| `expected = None` | 表示还没有有效预期结果 | 姓名无效时不继续错误比较 |
+| `reasons = []` | 累计全部问题 | 一次报告所有可见错误 |
 | `normalize_name` | 复用唯一姓名规则 | Reviewer 不定义第二套上限 |
-| `build_greeting` | 复用唯一消息格式 | Reviewer 不复制 f-string |
-| 首尾空格检查 | 要求交接内容已经规范化 | 防止 Writer 与 Reviewer 粒度不同 |
-| `except ValueError` | 把业务失败转为审核原因 | Reviewer 返回拒绝，而不是崩溃 |
-| 消息长度判断 | 使用共享消息上限 | 避免无界审核输入 |
-| `expected is not None` | 仅在姓名有效时比较消息 | 避免无意义的后续错误 |
-| `approved=not reasons` | 没有任何原因才通过 | 结论由规则确定，不由模型自由判断 |
-| `greeting=greeting` | 原样返回被审核内容 | 证明审核对象没有被替换 |
+| `build_greeting` | 复用唯一消息格式 | Reviewer 不复制生成公式 |
+| `except ValueError` | 把非法输入转成拒绝原因 | 审核失败不等于 Server 崩溃 |
+| `approved=not reasons` | 没有任何问题才通过 | 结论由规则确定 |
+| `greeting=greeting` | 原样返回审核对象 | 证明 Reviewer 没有偷偷替换内容 |
 
-如果消息是：
+例如：
 
 ```json
 {
@@ -182,7 +197,7 @@ def evaluate_greeting(greeting: Greeting) -> GreetingReview:
 }
 ```
 
-Reviewer 返回：
+会得到：
 
 ```json
 {
@@ -197,11 +212,12 @@ Reviewer 返回：
 }
 ```
 
-它不会返回一条改写后的正确消息。
+Reviewer 不会返回一条改写后的“正确消息”。这样 Root Supervisor 能清楚地区分
+“原结果被拒绝”和“另一个 Agent 又生成了一份结果”。
 
 ---
 
-## 6. 逐行理解 Reviewer MCP Tool
+## 6. Reviewer MCP 为什么仍然很薄
 
 打开：
 
@@ -234,120 +250,79 @@ def review_greeting(greeting: Greeting) -> GreetingReview:
 | 代码 | 角色 |
 | --- | --- |
 | `FastMCP` | 创建独立 Reviewer MCP Server |
-| 导入 `Greeting` | 复用 Writer 与 Reviewer 的共同输入合同 |
-| 导入 `GreetingReview` | 声明结构化输出 |
-| 导入 `evaluate_greeting` | 复用唯一审核规则 |
-| `"Hello Reviewer"` | 可读 Server 名称，不是权限身份 |
-| `instructions` | 告诉 Agent 审核而不改写 |
-| `@mcp.tool()` | 注册外部 Tool |
-| `review_greeting` | 形成自然的 Tool 名称 |
-| 输入类型 | FastMCP 生成嵌套 Greeting Schema |
-| 返回类型 | FastMCP 保留结构化审核结果 |
-| 一行 `return` | MCP 边界不实现第二套业务规则 |
+| `Greeting` | 复用 Writer 与 Reviewer 的共同输入合同 |
+| `GreetingReview` | 声明结构化输出 |
+| `evaluate_greeting` | 调用唯一审核规则 |
+| `instructions` | 说明 Tool 的使用语义，不形成权限 |
+| `@mcp.tool()` | 注册 Runtime 可发现的外部 Tool |
 
-Tool 名称因此是：
+Tool 名称是：
 
 ```text
 hello_reviewer.review_greeting
 ```
 
-内部业务函数叫 `evaluate_greeting`，外部 Tool 叫 `review_greeting`。两个名称分别
-表达“普通业务判断”和“可供 Agent 调用的能力”，读代码时更容易分清边界。
+MCP 边界只做协议适配。姓名规则、消息格式和审核判断仍然只在 `core.py` 中存在。
 
 ---
 
-## 7. 两个 MCP Server 怎样启动
+## 7. Runtime Role 解决什么问题
 
-`.mcp.json` 声明：
+到这里，Writer 和 Reviewer 只是两套能力。Root Supervisor 若要创建指定职责的子
+Thread，Codex Profile 还需要两个可发现的 Runtime Role：
 
-```text
-hello_writer
-    command: ./bin/hello-agent-launcher
-    args: []
-
-hello_reviewer
-    command: ./bin/hello-agent-launcher
-    args: [--reviewer-server]
-```
-
-launcher 默认启动：
-
-```text
-hello_agent.writer_server
-```
-
-看到 `--reviewer-server` 时启动：
-
-```text
-hello_agent.reviewer_server
-```
-
-这样两个 Server：
-
-- 共用一个已准备的 Python 环境；
-- 使用不同 MCP Server ID；
-- 暴露不同 Tool；
-- 拥有不同 instructions；
-- 可以独立启动和失败。
-
----
-
-## 8. 为什么两个 Agent 能力放在一个目录
-
-这是当前版本的短期组织方式，也符合当前两个能力的发布关系。
-
-```text
-Plugin 目录
-    = 代码、依赖、Skill、MCP 的发布边界
-
-Runtime Agent Thread
-    = 某一次运行中的 Agent 身份
-```
-
-两名员工可以共用一个部门工具柜，但各自仍有工号和工作记录。同样，两个 Agent 能力
-可以放在一个 Plugin，运行时仍由两个独立 Thread 表示两个 Agent。
-
-当前放在一起，因为：
-
-1. 属于同一个“结构化问候”领域；
-2. 共享 `Greeting` 和 `GreetingReview`；
-3. 共享姓名、消息和格式规则；
-4. 使用同一 Python 依赖；
-5. 由同一团队一起发布和升级。
-
-逻辑边界仍然分开：
-
-| 边界 | Writer | Reviewer |
+| Runtime Role | 职责 | 示例指令 |
 | --- | --- | --- |
-| Skill | `say-hello` | `review-greeting` |
-| MCP Server | `hello_writer` | `hello_reviewer` |
-| Tool | `say_hello` | `review_greeting` |
-| 未来 Runtime Role | `greeting_writer` | `greeting_reviewer` |
-| 未来执行身份 | Writer 子 Thread | Reviewer 子 Thread |
+| `greeting_writer` | 只生成并返回 `Greeting` | [`greeting-writer.md`](../../tools/hello-agent/examples/runtime-roles/greeting-writer.md) |
+| `greeting_reviewer` | 只审核并返回 `GreetingReview` | [`greeting-reviewer.md`](../../tools/hello-agent/examples/runtime-roles/greeting-reviewer.md) |
 
-必须注意：
+Runtime Role 是子 Thread 启动时采用的执行配置。它不是：
 
-> 拆成两个 MCP Server 是职责边界，不自动构成安全授权边界。
+- 一个正在运行的 Agent；
+- 一个 Plugin；
+- 一个企业 Agent Definition；
+- 一个数据授权身份。
 
-当前平台尚未完整按 Agent 为子 Thread 选择能力，因此不能声称 Reviewer 在权限上
-绝对看不到 Writer Tool。Role instructions 也不是权限控制。
+只有 Root 真正调用 `spawn_agent`，Runtime 创建出新的 Thread 后，运行实例才存在。
 
-只有出现以下情况时才拆成两个 Plugin：
-
-- 不同团队独立发布；
-- 依赖或版本周期明显不同；
-- 需要独立安装或部署；
-- 平台已支持并且业务确实需要独立 capability root；
-- 需要不同的正式授权边界。
-
-未来平台体验补齐后，Agent 创建和能力选择会更直接，不需要开发者从目录关系推断
-Agent 关系。
+示例指令放在 `examples/runtime-roles/`，而不是 `.codex-plugin/plugin.json`，是因为
+Plugin 能力发现和 Profile Role 配置属于不同生命周期。能力包不应在安装或启动时
+悄悄修改用户的 `CODEX_HOME`。
 
 ---
 
-## 9. 先验证一个 Thread 中的两步链
+## 8. 通过正式 Profile 设置创建两个 Role
 
-运行自动 smoke：
+先启动平台并打开 **Settings → Agents**：
+
+1. 开启 multi-agent；
+2. 将最大并发 Thread 设置为至少 `4`；
+3. 将最大深度设置为 `1`；
+4. 创建 `greeting_writer`；
+5. 将
+   [`greeting-writer.md`](../../tools/hello-agent/examples/runtime-roles/greeting-writer.md)
+   的正文作为 developer instructions；
+6. 创建 `greeting_reviewer`；
+7. 将
+   [`greeting-reviewer.md`](../../tools/hello-agent/examples/runtime-roles/greeting-reviewer.md)
+   的正文作为 developer instructions。
+
+平台会通过类型化 Profile API 保存 Role 配置并让 Codex 正式读取。不要为了图快而
+用教程脚本写隐藏 `config.toml` 或 `agents/*.toml`；那会绕过当前 Profile 所有权和
+错误处理。
+
+Role 配置完成后新建 Root Thread。这样新的 Thread 同时获得：
+
+- 当前 Profile 的 multi-agent 配置；
+- `greeting_writer` 与 `greeting_reviewer` 两个 Role；
+- `hello-agent` 这个 selected capability root；
+- Codex 原生协作 Tool。
+
+---
+
+## 9. 先验证两个 MCP Server
+
+运行：
 
 ```bash
 .local/open-web-codex/tool-envs/hello-agent/bin/python \
@@ -364,91 +339,148 @@ Agent 关系。
 6. 把 Writer 的原结果交给 Reviewer；
 7. 断言审核通过。
 
-然后新建 Thread，发送：
+到这里证明的是“两套 MCP 能力能够交接”，不是 Runtime 已创建两个 Agent。
+
+你也可以先在一个普通 Thread 中依次调用两个 Tool，以确认模型发现链路：
 
 ```text
 先使用 $say-hello 生成给小林的问候，再使用 $review-greeting 审核。
 只有 approved 为 true 时才返回问候。
 ```
 
-应该看到两个 Tool 调用：
-
-```text
-hello_writer.say_hello
-→ hello_reviewer.review_greeting
-```
-
-到这里证明的是“一名 Agent 使用两套能力完成业务链”，还不是两个真实 Agent。
+这仍然是一名 Agent 使用两套能力。
 
 ---
 
-## 10. 再理解两个真实 Agent
+## 10. 再运行两个真实子 Agent
 
-真实目标：
+在已配置 Role 的新 Root Thread 中，发送
+[`hello-team-request.md`](../../tools/hello-agent/examples/hello-team-request.md)
+中的请求。
 
-```text
-Root Supervisor Thread
-├── Greeting Writer Thread
-└── Greeting Reviewer Thread
-```
+正确轨迹是：
 
-运行时应发生：
+1. Root 创建 `greeting_writer` 子 Thread；
+2. Writer 子 Thread 调用 `hello_writer.say_hello`；
+3. Root 等待 Writer 完成并取得结构化 `Greeting`；
+4. Root 创建 `greeting_reviewer` 子 Thread，并原样传入 Greeting；
+5. Reviewer 子 Thread 调用 `hello_reviewer.review_greeting`；
+6. Root 等待 Reviewer 完成；
+7. Root 只在 `approved=true` 时交付问候。
 
-1. Supervisor 创建 Writer 子 Thread；
-2. Writer 调用 `hello_writer.say_hello`；
-3. Writer 返回小型结构化 Greeting；
-4. Supervisor 创建 Reviewer 子 Thread；
-5. Reviewer 调用 `hello_reviewer.review_greeting`；
-6. Reviewer 返回审核结论；
-7. Supervisor 只交付通过的消息。
-
-每个子 Agent 必须有：
+每个子 Agent 应留下：
 
 - 独立 Thread ID；
-- 父 Thread 关系；
-- Runtime Role；
-- 自己的消息和 Tool 调用；
-- completed、failed、interrupted 等真实状态。
+- 指向 Root 的父 Thread 关系；
+- `greeting_writer` 或 `greeting_reviewer` Runtime Role；
+- 自己的消息和 MCP Tool 调用；
+- Runtime 报告的状态。
 
-当前完整 multi-agent trajectory 仍是 experimental。本节是后续 Runtime 验收目标，
-不要现在随意创建 TOML 文件或在平台数据库中插入模拟 Agent 状态。
+以下结果都不能算通过：
+
+| 观察到的结果 | 为什么不通过 |
+| --- | --- |
+| Root 自己调用了两个 Tool | 没有创建子 Agent |
+| 创建两个默认 Agent，没有指定 Role | 没验证可发现的职责配置 |
+| Writer 和 Reviewer 是两条平台数据库记录 | 数据库记录不能替代 Runtime Thread |
+| Reviewer 收到的是 Root 改写后的问候 | 交接合同被破坏 |
+| Tool 不可用时子 Agent自己生成结果 | 伪造了确定性证据 |
+
+当前企业 Supervisor 面板只显示绑定了企业 Policy 的协作；Hello Team 是 Runtime
+教学练习，不应为了展示它而伪造一块平台 Agent 树。发布级父子轨迹和浏览器恢复证据
+将在下一篇供应链案例中验证。
 
 ---
 
-## 11. 为什么这里不用 Artifact
+## 11. 为什么子 Agent 能看到同一 Plugin
 
-Greeting 只有两个短字段：
+Root Thread 启动时记录 selected capability roots。当前 Codex Runtime 在创建子
+Thread 时继承这组 roots，所以 Writer 与 Reviewer 都能发现 `hello-agent` 中的
+Skills 和 MCP Servers。
+
+这解释了两个看似矛盾的事实：
+
+1. 两个子 Thread 是两个真实 Agent；
+2. 两个 Agent 当前仍共享同一个能力包。
+
+共享能力包不等于共享上下文：它们有独立 Thread 和执行历史。共享能力包也不等于
+已经完成最小权限：两个 Role 在技术上都能发现 Writer 与 Reviewer Tool。
+
+当前安全边界来自：
+
+- Tool 只暴露有限操作；
+- 输入由 Pydantic 合同校验；
+- MCP Server 不提供任意命令或文件能力；
+- 平台控制 Profile、Workspace 与 capability roots；
+- 企业场景中的数据范围由服务端绑定。
+
+Role instructions 是职责约束，不是授权。未来若确实需要每个 Agent 获得不同能力，
+必须增加可验证的 Role/capability 授权合同，不能靠 Prompt 声称隔离。
+
+---
+
+## 12. 为什么这里不需要 Policy、Definition 和 Artifact
+
+Hello Team 的目标是学习 Runtime 协作，不是模拟一整套企业平台。
+
+| 暂不引入 | 原因 |
+| --- | --- |
+| Supervisor Policy | 一次教学请求足以表达固定顺序，不需要企业版本绑定 |
+| Agent Definition | 两个本地 Role 尚不需要发布状态、所有者和治理目录 |
+| Artifact | Greeting 只有两个短字段，普通消息足够交接 |
+
+这不是说这些概念不重要，而是它们还没有解决本例中的真实问题。下一篇仓网案例会
+出现大型数据、长期成果、角色发布和协调规则，届时再引入它们。
+
+---
+
+## 13. 做两次失败验证
+
+### Role 缺失
+
+暂时删除或改名 `greeting_reviewer`，再发送相同请求。
+
+正确行为：
+
+- Root 明确报告 Role 不存在；
+- 不换成 `default`；
+- 不由 Root 自己完成审核；
+- 不声称已经有两个 Agent。
+
+恢复 Role 后新建 Thread 再测。
+
+### Reviewer 拒绝
+
+让 Reviewer 审核：
 
 ```json
 {
   "name": "小林",
-  "message": "你好，小林！"
+  "message": "你好，小周！"
 }
 ```
 
-普通消息足够传递。
+正确行为：
 
-| 内容 | 交接方式 |
-| --- | --- |
-| 短问题、短结论、小型 JSON | 普通消息 |
-| MCP 内需要重复读取的较大内容 | MCP Resource |
-| 跨 Agent、需要授权和长期保留的成果 | Artifact |
-
-不要为了使用新概念，就把每条短消息都持久化为 Artifact。
+- `approved=false`；
+- 原问候不被改写；
+- Root 返回拒绝原因；
+- Root 不把另一个新问候伪装成“审核通过的原结果”。
 
 ---
 
-## 12. 完成标志
+## 14. 完成标志
 
-- [ ] 能解释 Writer 与 Reviewer 的职责差异；
-- [ ] 能解释共享 `core.py` 为什么是一处事实来源；
+- [ ] 能解释两个 MCP Server 与两个 Agent 的区别；
 - [ ] Writer 和 Reviewer Tool 都能通过 stdio 调用；
 - [ ] 错误问候返回明确原因且没有被改写；
-- [ ] 能解释两个 MCP Server 为什么仍不是两个 Agent；
-- [ ] 能解释两个能力为什么暂时放在一个 Plugin；
-- [ ] 能解释 MCP 分离为什么不自动等于权限隔离；
-- [ ] 能描述两个真实 Runtime 子 Thread 的验收证据。
+- [ ] 通过正式 Profile 设置创建两个精确 Runtime Role；
+- [ ] Root 创建两个拥有独立 Thread ID 的子 Agent；
+- [ ] Writer 和 Reviewer 分别调用正确 MCP Tool；
+- [ ] 能解释 capability root 继承为什么不等于按 Role 授权；
+- [ ] 能解释为什么 Hello Team 不需要 Artifact；
+- [ ] Role 缺失时明确失败，且不改用默认 Role 或由 Root 兜底。
 
 下一篇：
 
-[仓网规划：从领域能力走向真实多 Agent](supply-chain-agent-tutorial.md)
+[仓网规划：接入企业 Supervisor、治理合同与 Artifact](supply-chain-agent-tutorial.md)

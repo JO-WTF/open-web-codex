@@ -126,6 +126,8 @@ seams.
 - Verified Runtime/platform capability: `docs/capability-baseline.md`
 - Accepted stage order: `docs/roadmap.md`
 - Current and next milestone execution: `docs/development-plan.md`
+- Active single-Profile Supervisor Copilot slices and trust-risk register:
+  `docs/enterprise-supervisor-copilot-plan.md`
 - Codex synchronization: `docs/codex-upstream-sync.md`
 - Retained Codex seams: `docs/custom-codex-patch-map.md`
 

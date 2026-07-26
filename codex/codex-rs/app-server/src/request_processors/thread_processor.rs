@@ -2976,6 +2976,7 @@ impl ThreadRequestProcessor {
         connection_ids: Vec<ConnectionId>,
     ) {
         let mut raw_events_enabled = false;
+        let mut thread_started = None;
         if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
             let config_snapshot = thread.config_snapshot().await;
             self.thread_watch_manager
@@ -2990,6 +2991,36 @@ impl ThreadRequestProcessor {
                     .await
                     .experimental_raw_events;
             }
+            if !connection_ids.is_empty()
+                && matches!(
+                    config_snapshot.session_source,
+                    codex_protocol::protocol::SessionSource::SubAgent(
+                        codex_protocol::protocol::SubAgentSource::ThreadSpawn { .. }
+                    )
+                )
+            {
+                let session_configured = thread.session_configured();
+                let mut summary = build_thread_from_snapshot(
+                    thread_id,
+                    session_configured.session_id.to_string(),
+                    thread.multi_agent_version(),
+                    &config_snapshot,
+                    session_configured.rollout_path,
+                );
+                summary.status = resolve_thread_status(
+                    self.thread_watch_manager
+                        .loaded_status_for_thread(&summary.id)
+                        .await,
+                    matches!(thread.agent_status().await, AgentStatus::Running),
+                );
+                thread_started = Some(thread_started_notification(summary));
+            }
+        }
+
+        if let Some(notification) = thread_started {
+            self.outgoing
+                .send_server_notification(ServerNotification::ThreadStarted(notification))
+                .await;
         }
 
         for connection_id in connection_ids {

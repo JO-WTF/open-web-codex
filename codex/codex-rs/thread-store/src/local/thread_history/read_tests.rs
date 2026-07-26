@@ -3,14 +3,19 @@ use std::fs;
 use chrono::Utc;
 use codex_app_server_protocol::CodexErrorInfo;
 use codex_protocol::ThreadId;
+use codex_protocol::items::TurnItem;
+use codex_protocol::items::UserMessageItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HistoryPosition;
+use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnStartedEvent;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
@@ -220,6 +225,82 @@ async fn list_items_pages_whole_thread_and_per_turn_rows() {
         .await
         .expect("next turn item page");
     assert_eq!(item_ids(&next_turn_page), vec!["item-3"]);
+}
+
+#[tokio::test]
+async fn paginated_read_repairs_projection_lag_from_durable_rollout() {
+    let (_home, store, thread_id) = store_with_mode(ThreadHistoryMode::Paginated).await;
+    let rollout_path = store
+        .resolve_rollout_lineage(thread_id)
+        .await
+        .expect("resolve rollout")
+        .segments()
+        .last()
+        .expect("rollout segment")
+        .rollout_path
+        .clone();
+    let records = [
+        RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-recovered".to_string(),
+            trace_id: None,
+            started_at: Some(10),
+            model_context_window: None,
+            collaboration_mode_kind: Default::default(),
+        })),
+        RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id,
+            turn_id: "turn-recovered".to_string(),
+            item: TurnItem::UserMessage(UserMessageItem {
+                id: "user-recovered".to_string(),
+                client_id: None,
+                content: Vec::new(),
+            }),
+            completed_at_ms: 11,
+        })),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-recovered".to_string(),
+            last_agent_message: None,
+            error: None,
+            started_at: Some(10),
+            completed_at: Some(20),
+            duration_ms: Some(10_000),
+            time_to_first_token_ms: None,
+        })),
+    ];
+    let suffix = records
+        .into_iter()
+        .enumerate()
+        .map(|(index, item)| {
+            serde_json::to_string(&RolloutLine {
+                timestamp: "2026-07-16T00:00:01.000Z".to_string(),
+                ordinal: Some(u64::try_from(index + 1).expect("ordinal")),
+                item,
+            })
+            .expect("serialize rollout record")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(
+        &rollout_path,
+        format!(
+            "{}{suffix}\n",
+            fs::read_to_string(&rollout_path).expect("read rollout")
+        ),
+    )
+    .expect("append durable records without updating SQLite");
+
+    let page = store
+        .list_items(item_params(
+            thread_id,
+            Some("turn-recovered"),
+            /*cursor*/ None,
+            /*page_size*/ 10,
+            SortDirection::Asc,
+        ))
+        .await
+        .expect("read catches up projection");
+
+    assert_eq!(item_ids(&page), vec!["user-recovered"]);
 }
 
 #[tokio::test]

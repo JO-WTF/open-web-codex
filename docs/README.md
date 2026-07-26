@@ -18,6 +18,7 @@
 | 能力证据 | [能力基线](capability-baseline.md) | 当前构建中什么已实现、验证到什么程度、还缺什么 | 描述产品愿景或未来任务 |
 | 中期顺序 | [产品与工程路线图](roadmap.md) | 各阶段交付什么结果、进入和退出条件是什么 | 保存逐文件任务和完成历史 |
 | 近期执行 | [开发计划](development-plan.md) | 当前与下一个里程碑的任务、阻塞和验收 | 重复全部长期路线图 |
+| M2 专项执行 | [Enterprise Supervisor Copilot 短期实施计划](enterprise-supervisor-copilot-plan.md) | 单 Profile 多 Agent 功能闭环怎样分片实现、如何验收、哪些可信风险暂缓但必须登记 | 改写中期阶段顺序或宣称能力已经成立 |
 | 运行操作 | [本地运行手册](mvp-runbook.md) | 如何启动、配置、验证和排错 | 定义产品或架构 |
 | 开发约束 | [项目 Agent Guide](../AGENTS.md) | 修改代码时必须遵守的所有权、流程和验证规则 | 代替面向读者的产品文档 |
 
@@ -46,11 +47,17 @@
 - [Skills、MCP 与自定义 UI 扩展](custom-skills-mcp-ui-guide.md)
 - [零基础多 Agent 开发教程](multi-agent-development-tutorial.md)
   - [第 1 步：Hello Agent](tutorials/hello-agent-quickstart.md)
-  - [第 2 步：Hello Team](tutorials/hello-agent-team.md)
-  - [第 3 步：仓网规划 Agent](tutorials/supply-chain-agent-tutorial.md)
+  - [第 2 步：Hello Team 真实子 Agent](tutorials/hello-agent-team.md)
+  - [第 3 步：企业仓网 Supervisor](tutorials/supply-chain-agent-tutorial.md)
 
 扩展指南可以提供模式和示例，但不能重新定义 Profile、Workspace、Artifact、
 Agent Definition、Runtime Role 等核心术语。
+
+### 当前纵向切片
+
+- [Enterprise Supervisor Copilot 短期实施计划](enterprise-supervisor-copilot-plan.md)：
+  当前单 Profile 多 Agent Copilot 的详细工作包、真实企业案例、功能完成标准和活动
+  可信风险。功能完成后，其事实进入能力基线；已经解决的过程不长期保留在计划中。
 
 ### 架构决策
 
@@ -66,7 +73,8 @@ Agent Definition、Runtime Role 等核心术语。
 2. “V1 要交付什么”以产品设计为准。
 3. “当前代码由谁拥有、如何连接”以系统架构和代码为准。
 4. “当前能力能否对外声称可用”以能力基线及其验证证据为准。
-5. “接下来先做什么”以路线图和开发计划为准，其中开发计划只细化当前阶段。
+5. “接下来先做什么”以路线图和开发计划为准；当前 M2 的逐切片实现和风险登记以
+   Enterprise Supervisor Copilot 短期实施计划为准。
 6. “为什么接受某个长期技术决定”以 ADR 为准。
 
 代码、生成合同和可复现测试是实现事实的最终证据。文档与代码冲突时，不能默默把
@@ -79,6 +87,7 @@ Agent Definition、Runtime Role 等核心术语。
 | 目标用户、产品边界或长期价值变化 | 产品愿景、产品设计、路线图 |
 | 所有权、组件关系或持久化边界变化 | 系统架构、安全模型、相关 ADR |
 | Runtime、Web 或平台能力新增或降级 | 能力基线、开发计划 |
+| M2 工作切片、功能验收或可信风险变化 | Enterprise Supervisor Copilot 短期实施计划；形成证据后再更新能力基线 |
 | 阶段顺序或进入条件变化 | 路线图、开发计划 |
 | 启动参数、部署拓扑或故障处理变化 | 运行手册 |
 | `codex/` 非生成差异变化 | Patch Map、相关测试、必要 ADR |

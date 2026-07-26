@@ -4,12 +4,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use open_web_codex_adapter::fake::FakeCodexAdapter;
-use open_web_codex_adapter::CodexAdapter;
+use open_web_codex_adapter::{CodexAdapter, ThreadStartMode};
 use open_web_codex_git_runtime::{GitRuntime, GitRuntimeConfig};
 use open_web_codex_platform_store::migrate;
 use open_web_codex_run_orchestrator::{
     CancelRunRequest, CreateWorkspaceRequest, EnqueueRunRequest, RecoverRunRequest,
-    RemoveWorkspaceRequest, RunOrchestrator, RunOrchestratorError,
+    RemoveWorkspaceRequest, RunOrchestrator, RunOrchestratorError, SupervisorPolicySnapshotInput,
 };
 use sqlx::postgres::PgPoolOptions;
 use sqlx::Row;
@@ -174,6 +174,14 @@ async fn independent_workspace_is_reused_across_run_lifecycles() {
         workspace_id: workspace.id,
         fork_thread_id: None,
         fork_source_run_id: None,
+        supervisor_policy: Some(SupervisorPolicySnapshotInput {
+            policy_id: "enterprise-supervisor-copilot".to_string(),
+            version: "1.0.0".to_string(),
+            display_name: "Enterprise Supervisor Copilot".to_string(),
+            developer_instructions: "Coordinate the approved agents.".to_string(),
+            content_sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                .to_string(),
+        }),
     };
     let enqueued = first.enqueue_run(request.clone()).await.unwrap();
     let replayed = first.enqueue_run(request).await.unwrap();
@@ -187,6 +195,7 @@ async fn independent_workspace_is_reused_across_run_lifecycles() {
             workspace_id: workspace.id,
             fork_thread_id: None,
             fork_source_run_id: None,
+            supervisor_policy: None,
         })
         .await
         .unwrap_err();
@@ -201,6 +210,12 @@ async fn independent_workspace_is_reused_across_run_lifecycles() {
     } else {
         (&second, claimed_second.unwrap())
     };
+    assert_eq!(
+        lease.thread_start_mode,
+        ThreadStartMode::EnterpriseSupervisor {
+            developer_instructions: "Coordinate the approved agents.".to_string(),
+        }
+    );
     owner.execute_lease(&lease).await.unwrap();
 
     let row = sqlx::query(
@@ -222,6 +237,43 @@ async fn independent_workspace_is_reused_across_run_lifecycles() {
         git_runtime.workspace_path(workspace_id)
     );
     assert!(Path::new(&root_path).is_dir());
+    let policy_binding = sqlx::query(
+        "SELECT binding.state, binding.thread_id, snapshot.policy_id, snapshot.version \
+         FROM supervisor_policy_bindings binding \
+         JOIN supervisor_policy_snapshots snapshot ON snapshot.id = binding.snapshot_id \
+         WHERE binding.run_id = $1",
+    )
+    .bind(enqueued.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(policy_binding.get::<String, _>("state"), "bound");
+    assert_eq!(
+        policy_binding.get::<Option<String>, _>("thread_id"),
+        row.get::<Option<String>, _>("codex_thread_id")
+    );
+    assert_eq!(
+        policy_binding.get::<String, _>("policy_id"),
+        "enterprise-supervisor-copilot"
+    );
+    assert_eq!(policy_binding.get::<String, _>("version"), "1.0.0");
+    let root_projection = sqlx::query(
+        "SELECT root_run_id, thread_id, source_kind, parent_thread_id \
+         FROM runtime_agent_projections WHERE root_run_id = $1",
+    )
+    .bind(enqueued.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(root_projection.get::<Uuid, _>("root_run_id"), enqueued.id);
+    assert_eq!(
+        root_projection.get::<String, _>("thread_id"),
+        row.get::<String, _>("codex_thread_id")
+    );
+    assert_eq!(root_projection.get::<String, _>("source_kind"), "root");
+    assert!(root_projection
+        .get::<Option<String>, _>("parent_thread_id")
+        .is_none());
 
     sqlx::query("UPDATE runs SET active_turn_id = 'turn-to-cancel' WHERE id = $1")
         .bind(enqueued.id)
@@ -249,6 +301,7 @@ async fn independent_workspace_is_reused_across_run_lifecycles() {
             workspace_id: workspace.id,
             fork_thread_id: None,
             fork_source_run_id: None,
+            supervisor_policy: None,
         })
         .await
         .unwrap();

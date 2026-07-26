@@ -252,22 +252,63 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     .execute(&pool)
     .await
     .unwrap();
+    let standard_run_policy = call(
+        &app,
+        authenticated(
+            "GET",
+            &format!("/api/runs/{first_run_id}/supervisor-policy"),
+            &first_token,
+        ),
+    )
+    .await;
+    assert_eq!(standard_run_policy.0, StatusCode::OK);
+    assert!(standard_run_policy.1.is_null());
+
     let artifact_id = Uuid::now_v7();
     let artifact_bytes = br#"{"type":"FeatureCollection","features":[]}"#;
+    let artifact_digest = hex::encode(Sha256::digest(artifact_bytes));
     sqlx::query(
-        "INSERT INTO reply_artifacts (
-            id, organization_id, run_id, thread_id, turn_id, producer_item_id,
-            source_server, source_uri, mime_type, content, state
+        "INSERT INTO artifacts (
+            id, organization_id, profile_id, artifact_schema, display_name,
+            source_server, source_uri, mime_type, expected_size, byte_size,
+            content, content_sha256, state
          ) VALUES (
-            $1, $2, $3, 'approval-thread', 'turn-map', 'item-data',
+            $1, $2, $3, 'geojson.v1', 'Security map',
             'map_utils', 'maps-data://geojson/map-data-security',
-            'application/geo+json', $4, 'ready'
+            'application/geo+json', $4, $4, $5, $6, 'ready'
+         )",
+    )
+    .bind(artifact_id)
+    .bind(first_organization_id)
+    .bind(profile_id)
+    .bind(i64::try_from(artifact_bytes.len()).unwrap())
+    .bind(artifact_bytes.as_slice())
+    .bind(artifact_digest)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO artifact_task_grants (
+            artifact_id, organization_id, task_id, permission
+         ) VALUES ($1, $2, $3, 'read')",
+    )
+    .bind(artifact_id)
+    .bind(first_organization_id)
+    .bind(first_task_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO artifact_provenance (
+            artifact_id, organization_id, producer_run_id, producer_thread_id,
+            producer_turn_id, producer_item_id
+         ) VALUES (
+            $1, $2, $3, 'approval-thread', 'turn-map', 'item-data'
          )",
     )
     .bind(artifact_id)
     .bind(first_organization_id)
     .bind(first_run_id)
-    .bind(artifact_bytes.as_slice())
     .execute(&pool)
     .await
     .unwrap();
@@ -322,7 +363,7 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
         &app,
         authenticated(
             "GET",
-            &format!("/api/runs/{first_run_id}/artifacts/{artifact_id}"),
+            &format!("/api/artifacts/{artifact_id}/content"),
             &first_token,
         ),
     )
@@ -424,6 +465,75 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     .await
     .unwrap();
     assert_eq!(audit_count, 1);
+
+    sqlx::query(
+        "INSERT INTO runtime_agent_projections (
+            organization_id, profile_id, workspace_id, root_run_id, thread_id,
+            parent_thread_id, source_kind, agent_path, agent_role
+         ) VALUES ($1, $2, $3, $4, 'approval-child-thread', 'approval-thread',
+                   'thread_spawn', '/root/data', 'data_agent')",
+    )
+    .bind(first_organization_id)
+    .bind(profile_id)
+    .bind(workspace_id)
+    .bind(first_run_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let child_approval_id = approval_service
+        .capture_message(
+            runtime_instance_id,
+            &json!({
+                "id": 770,
+                "method": "mcpServer/elicitation/request",
+                "params": {
+                    "threadId": "approval-child-thread",
+                    "turnId": "child-turn-1",
+                    "mode": "form",
+                    "requestedSchema": {
+                        "type": "object",
+                        "properties": {
+                            "confirmed": { "type": "boolean" }
+                        },
+                        "required": ["confirmed"]
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap()
+        .expect("captured child Thread approval");
+    let child_run_id: Uuid = sqlx::query_scalar("SELECT run_id FROM approvals WHERE id = $1")
+        .bind(child_approval_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(child_run_id, first_run_id);
+    let child_dispatch = approval_service
+        .begin_decision(
+            ApprovalActor {
+                user_id: first_user_id,
+                organization_id: first_organization_id,
+            },
+            child_approval_id,
+            runtime_instance_id,
+            DecideApprovalRequest {
+                decision: ApprovalDecision::Accept,
+                version: 0,
+            },
+        )
+        .await
+        .expect("begin child Thread approval delivery");
+    approval_service
+        .complete_decision(
+            ApprovalActor {
+                user_id: first_user_id,
+                organization_id: first_organization_id,
+            },
+            &child_dispatch,
+        )
+        .await
+        .expect("complete child Thread approval");
 
     let retry_approval_id = approval_service
         .capture_message(
@@ -599,12 +709,22 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
         &app,
         authenticated(
             "GET",
-            &format!("/api/runs/{first_run_id}/artifacts/{artifact_id}"),
+            &format!("/api/artifacts/{artifact_id}/content"),
             second_token,
         ),
     )
     .await;
     assert_eq!(cross_tenant_artifact.0, StatusCode::NOT_FOUND);
+    let cross_tenant_supervisor_policy = call(
+        &app,
+        authenticated(
+            "GET",
+            &format!("/api/runs/{first_run_id}/supervisor-policy"),
+            second_token,
+        ),
+    )
+    .await;
+    assert_eq!(cross_tenant_supervisor_policy.0, StatusCode::NOT_FOUND);
 
     let legacy_runtime = call(
         &app,
@@ -720,6 +840,30 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     .unwrap()
     .get("password_hash");
     assert!(password_hash.starts_with("$argon2id$"));
+
+    sqlx::query("DELETE FROM runs WHERE id = $1")
+        .bind(first_run_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let retained_artifact_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)
+         FROM artifacts artifact
+         JOIN artifact_task_grants artifact_grant
+           ON artifact_grant.artifact_id = artifact.id
+         JOIN artifact_provenance provenance
+           ON provenance.artifact_id = artifact.id
+         WHERE artifact.id = $1
+           AND artifact_grant.task_id = $2
+           AND provenance.producer_run_id = $3",
+    )
+    .bind(artifact_id)
+    .bind(first_task_id)
+    .bind(first_run_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(retained_artifact_count, 1);
 }
 
 async fn call(app: &Router, request: Request<Body>) -> (StatusCode, Value) {

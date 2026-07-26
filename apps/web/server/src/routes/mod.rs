@@ -1,3 +1,4 @@
+pub mod agent_definitions;
 pub mod approvals;
 pub mod artifacts;
 pub mod bootstrap;
@@ -14,7 +15,9 @@ pub mod profile_content;
 pub mod projects;
 pub mod providers;
 pub mod runs;
+pub mod runtime_agents;
 pub mod sessions;
+pub mod supervisor_policies;
 pub mod tasks;
 pub mod terminals;
 pub mod threads;
@@ -73,6 +76,10 @@ pub fn router(
     profile: RuntimeProfileBinding,
 ) -> Router<AppState> {
     Router::new()
+        .route(
+            "/agent-definitions",
+            axum::routing::get(agent_definitions::list_published),
+        )
         .route("/bootstrap", axum::routing::post(bootstrap::bootstrap))
         .route("/sessions", axum::routing::post(sessions::create_session))
         .route(
@@ -201,11 +208,24 @@ pub fn router(
             axum::routing::post(approvals::respond_user_input),
         )
         .route("/tasks/{id}/runs", axum::routing::post(runs::start_run))
+        .route(
+            "/supervisor-policies",
+            axum::routing::get(supervisor_policies::list_published),
+        )
         .route("/runs", axum::routing::get(runs::list_runs))
         .route("/runs/{id}", axum::routing::get(runs::get_run))
         .route(
-            "/runs/{run_id}/artifacts/{artifact_id}",
-            axum::routing::get(artifacts::read),
+            "/runs/{id}/agents",
+            axum::routing::get(runtime_agents::list_for_run),
+        )
+        .route(
+            "/runs/{id}/supervisor-policy",
+            axum::routing::get(supervisor_policies::get_run_binding),
+        )
+        .route("/artifacts/{id}", axum::routing::get(artifacts::get))
+        .route(
+            "/artifacts/{id}/content",
+            axum::routing::get(artifacts::read_content),
         )
         .route("/runs/{id}/thread", axum::routing::get(threads::read))
         .route(
@@ -427,6 +447,10 @@ pub fn router(
         .route(
             "/tasks/{id}/events",
             axum::routing::get(tasks::list_task_events),
+        )
+        .route(
+            "/tasks/{id}/artifacts",
+            axum::routing::get(artifacts::list_for_task),
         )
         .route("/providers", axum::routing::get(providers::list_providers))
         .route(

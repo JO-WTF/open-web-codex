@@ -13,8 +13,13 @@ Runtime.
 - `map_utils` remains the owner of address geocoding and provider navigation calls.
 - `supply_chain_planner` owns typed planning Resources and deterministic coverage, cost,
   allocation, comparison, and finite-candidate location calculations.
-- MCP Resources are immutable handoffs. A later platform Artifact layer can persist and
-  authorize the same versioned contracts without changing the calculation semantics.
+- MCP Resources are immutable Runtime handoffs. The current Platform observes completed
+  Resource links, assigns an independent Task-owned Artifact identity and grant, records
+  producer provenance, and materializes the same versioned content for authorized browser
+  and history reads.
+- Resource-producing Tools return both an unchanged `data_ref` for Runtime handoff and
+  a stable `resource_name` for evidence citation. Reports must not expose or relabel the
+  internal Resource URI.
 
 ## MCP tools
 
@@ -41,6 +46,23 @@ are represented by:
 2. Evaluate like-for-like baseline and added-warehouse scenarios, then compare them.
 3. Prepare all candidates and routes, then call `solve_facility_location`.
 
+## Runtime and governance integration
+
+This Plugin publishes capabilities; it does not create an Agent or mutate a Profile.
+
+- `examples/runtime-roles/data-agent.md` contains the reviewed developer instructions
+  used to create the `data_agent` Runtime Role through the typed Profile Agent API.
+- `examples/runtime-roles/network-planning-agent.md` does the same for
+  `network_planning_agent`.
+- The Platform publishes the enterprise Agent Definitions and
+  `enterprise-supervisor-copilot@1.0.0` separately under
+  `apps/web/server/resources/`.
+- Codex Runtime creates the actual child Threads. Both child Threads currently inherit
+  the root Thread's selected capability roots; Role instructions separate
+  responsibilities but are not an authorization boundary.
+- The real end-to-end path is
+  `scripts/smoke-enterprise-supervisor-copilot.sh`.
+
 ## Local setup
 
 The platform normally provisions shared tool environments. For manual development:
@@ -66,7 +88,8 @@ inside the existing maps capability.
 
 `examples/data-sources/warehouse-network-fixture.json` is the read-only Data Agent
 source. `examples/network-input.json` and `examples/route-matrix-input.json` form a
-complete small network scenario. After installing the package:
+complete small network scenario. The `examples/runtime-roles/` files are Profile Role
+inputs, not automatically discovered Plugin content. After installing the package:
 
 ```bash
 python -m pytest -q

@@ -223,10 +223,10 @@ platform may validate and render a supported contract, but it must not make the
 model "discover" a capability by intercepting composer text or injecting ad-hoc
 prompts.
 
-The target map-card contract follows this flow. The checked-in Run/Thread
-Artifact ownership is recorded as a migration gap in
-`docs/capability-baseline.md` and `docs/development-plan.md`; it is not part of
-the target architecture:
+The target map-card contract follows this flow. The current Artifact store uses
+an independent identity, Task grant and producer provenance rather than
+Run/Thread ownership. Its implemented scope and remaining lifecycle gaps are
+recorded in `docs/capability-baseline.md` and `docs/development-plan.md`:
 
 1. Geocoding and routing tools publish GeoJSON as standard MCP Resources. Their
    `outputSchema`-validated `data_ref` contains the raw MCP server ID and the same

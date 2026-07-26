@@ -1,8 +1,10 @@
+mod agent_definition;
 mod event_projection;
 mod middleware;
 mod routes;
 #[cfg(test)]
 mod security_integration;
+mod supervisor_policy;
 
 use std::fs;
 use std::net::SocketAddr;
@@ -291,7 +293,7 @@ async fn main() -> anyhow::Result<()> {
                             continue;
                         }
                     };
-                    persist_and_broadcast(&public_data, &projection_db, &event_bus).await;
+                    persist_and_broadcast(&public_data, &projection_db, &event_bus, &adapter).await;
                     continue;
                 }
                 let captured = match approvals.capture_event_frame(&data).await {
@@ -311,13 +313,18 @@ async fn main() -> anyhow::Result<()> {
                     },
                     None => data,
                 };
-                persist_and_broadcast(&public_data, &projection_db, &event_bus).await;
+                persist_and_broadcast(&public_data, &projection_db, &event_bus, &adapter).await;
             }
 
             let _ = sub.await;
             tracing::info!("event bridge task exiting");
         });
     }
+
+    tokio::spawn(routes::artifacts::recover_and_materialize_pending(
+        state.db.clone(),
+        adapter.clone(),
+    ));
 
     let mut app = Router::new().nest(
         "/api",
@@ -355,9 +362,17 @@ async fn persist_and_broadcast(
     data: &[u8],
     projection_db: &sqlx::PgPool,
     event_bus: &tokio::sync::broadcast::Sender<open_web_codex_platform_store::LiveEvent>,
+    adapter: &Arc<dyn CodexAdapter>,
 ) {
     match event_projection::persist_frame(data, projection_db).await {
         Ok(Some(projected)) => {
+            if !projected.pending_artifact_ids.is_empty() {
+                tokio::spawn(routes::artifacts::materialize_artifacts(
+                    projection_db.clone(),
+                    adapter.clone(),
+                    projected.pending_artifact_ids,
+                ));
+            }
             let live = open_web_codex_platform_store::LiveEvent {
                 organization_id: projected.organization_id,
                 payload: projected.payload,
