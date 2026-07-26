@@ -1,6 +1,6 @@
 # 从企业 Copilot 到 Agent Decision OS
 
-## 企业多 Agent 协同平台的架构推演与落地路径
+_企业多 Agent 协同平台的架构推演与落地路径_
 
 > 文档性质：架构推演与演进设计报告
 >
@@ -10,9 +10,9 @@
 
 ---
 
-# 第一部分：先把问题想完整
+## 第一部分：先把问题想完整
 
-# 引言：从一个具体的企业决策开始
+### 引言：从一个具体的企业决策开始
 
 假设一家零售企业的经营负责人提出一个问题：
 
@@ -47,7 +47,7 @@
 
 ---
 
-# 1. 从专业分工到真正协作
+### 1. 从专业分工到真正协作
 
 针对新增华东仓的问题，我们可以先按照专业领域拆分：
 
@@ -84,7 +84,7 @@
 
 ---
 
-# 2. 几种常见协作方式及其适用边界
+### 2. 几种常见协作方式及其适用边界
 
 第一章留下了三个评价标准：谁负责协调，关键成果怎样协作，执行过程如何受控。常见架构并不是简单的先进与落后之分，它们往往只是优先解决了其中一部分问题。
 
@@ -94,7 +94,7 @@
 > - **成果协作**：能否让关键成果被复用、复核和追踪；
 > - **运行控制**：能否可靠处理状态、审批、取消、失败与恢复。
 
-## 2.1 单 Agent + 很多工具
+#### 2.1 单 Agent + 很多工具
 
 > **适合：** 能力数量有限、任务边界清楚，而且一个上下文足以承载主要信息的场景。
 
@@ -109,7 +109,7 @@
 
 因此，单 Agent 是合理的基线，但不是所有企业决策问题的终点。
 
-## 2.2 固定 Workflow
+#### 2.2 固定 Workflow
 
 > **适合：** 路径已知、步骤稳定，并且对状态、审批和恢复有强确定性要求的工作。
 
@@ -128,7 +128,7 @@ Anthropic 在 [Building effective agents](https://www.anthropic.com/engineering/
 
 > **适用边界：** Workflow 适合承载可预定义的执行路径和确定性生命周期；遇到尚不知道应该调查什么、选择哪个专家或何时证据已经足够的问题，就需要模型参与判断。二者不是互斥方案。
 
-## 2.3 Router + 专家 Agent
+#### 2.3 Router + 专家 Agent
 
 > **适合：** 请求可以被清晰分类，并且一次通常只需要一个专业能力的场景。
 
@@ -146,7 +146,7 @@ Router 很好地回答了“这次请求交给谁”，但当一个决策需要�
 
 因此，Router 可以成为系统入口，却不能单独承担复杂任务的完整协调责任。
 
-## 2.4 Peer-to-Peer Agent Network
+#### 2.4 Peer-to-Peer Agent Network
 
 > **适合：** 专家边界开放、协作路径难以预先确定，并且确实需要多方协商和迭代的局部问题。
 
@@ -161,7 +161,7 @@ P2P 网络没有持续负责全局协调的中心 Agent。每个 Agent 都可以
 
 Google Cloud 的 [Agentic AI design patterns](https://docs.cloud.google.com/architecture/choose-design-pattern-agentic-ai-system) 也把类似的 swarm 视为高复杂度、高通信成本并且需要显式退出条件的模式。因此，企业平台可以允许受限的 Peer 协作，但不适合把完全开放的 P2P 网络作为默认架构。
 
-## 2.5 多 Agent 架构其实不是一张单选题
+#### 2.5 多 Agent 架构其实不是一张单选题
 
 最近出现了许多多 Agent 架构名称，但它们经常描述的是不同维度：
 
@@ -201,13 +201,13 @@ Google Cloud 的模式目录同时列出 Sequential、Parallel、Coordinator、H
 
 ---
 
-# 3. 理想中的企业多 Agent 协作平台
+### 3. 理想中的企业多 Agent 协作平台
 
 现在先暂时忽略现有代码和工作量。
 
 如果从零设计一个最理想的企业多 Agent 平台，它不应只是一条调用链，而应包含多个相互正交的平面。
 
-## 3.1 理想架构全景
+#### 3.1 理想架构全景
 
 从上至下，理想平台由体验与治理、持久任务控制、认知协调、专家协作、知识与成果、Agent Runtime 与执行、企业集成七个平面组成；身份授权以及安全、可观测性和预算形成贯穿全部平面的纵向约束。
 
@@ -226,13 +226,13 @@ Google Cloud 的模式目录同时列出 Sequential、Parallel、Coordinator、H
 
 这套结构背后有七个重要判断。
 
-### 第一，用户体验与 Agent 执行不是同一层
+##### 第一，用户体验与 Agent 执行不是同一层
 
 浏览器负责呈现和交互，但只能接收经过平台鉴权、裁剪和脱敏的产品数据。Agent 的真实上下文、工具发现、文件系统权限、Runtime 凭据和原始执行协议仍然属于服务端执行边界。
 
 例如，用户需要看到“Data Agent 正在分析订单分布”以及已经生成的图表，却不需要获得执行机器的本地路径、工具凭据或完整模型上下文。把这些内部信息直接透传给浏览器，不仅扩大攻击面，也会让界面开始依赖 Runtime 内部协议，使两层难以独立演进。
 
-### 第二，任务控制与认知决策不是同一层
+##### 第二，任务控制与认知决策不是同一层
 
 复杂任务同时包含两种性质完全不同的不确定性。
 
@@ -251,7 +251,7 @@ Google Cloud 的模式目录同时列出 Sequential、Parallel、Coordinator、H
 
 因此，Supervisor 负责理解、推理、规划和综合；Task/Run 系统负责身份、状态、权限、审批、恢复和审计。认知路径可以动态变化，承载它的运行事实必须始终确定。
 
-### 第三，Domain Agent 是受约束的专业执行者
+##### 第三，Domain Agent 是受约束的专业执行者
 
 理想的 Domain Agent 不只是一个 Prompt，而是一项可治理的专业能力。它至少要说明五组信息：
 
@@ -263,7 +263,7 @@ Google Cloud 的模式目录同时列出 Sequential、Parallel、Coordinator、H
 
 只有这些边界可以被识别、授权和评价时，“Finance Agent”才代表一项稳定的专业能力，而不只是一个容易随 Prompt 漂移的角色名称。
 
-### 第四，知识交换不应等于复制聊天记录
+##### 第四，知识交换不应等于复制聊天记录
 
 Agent 之间真正需要共享的不是全部聊天内容，而是对协作有明确意义的事实、假设、证据、计算结果、Artifact、未决问题以及带有置信度的结论。这些信息需要稳定身份、来源和版本，才能被其他 Agent 复用和复核。
 
@@ -271,7 +271,7 @@ Agent 之间真正需要共享的不是全部聊天内容，而是对协作有�
 
 这里所谓的 **Task Knowledge Blackboard**，就是围绕一个任务组织这些显式协作信息的共享空间。它不是把所有聊天复制到公共 Memory，也不是另一套隐式驱动流程的 Workflow 引擎；它的价值是让关键认知成果能够被发现、引用、质疑和追踪。
 
-### 第五，Agent 的上下文与执行状态由 Runtime 统一管理
+##### 第五，Agent 的上下文与执行状态由 Runtime 统一管理
 
 Agent 不会在每一步都从零开始。此前的对话、工具结果、子 Agent 回复和记忆共同构成当前上下文，决定了它下一步如何判断和行动；Runtime 必须按照正确顺序持续维护这些信息。
 
@@ -279,7 +279,7 @@ Agent 不会在每一步都从零开始。此前的对话、工具结果、子 A
 
 因此，Agent 的上下文和真实执行状态由 Runtime 统一管理。平台只保存用于界面展示、审计和检索的事件记录，并且这些记录应当能够从 Runtime 重新构建。
 
-### 第六，Workspace 是执行授权边界
+##### 第六，Workspace 是执行授权边界
 
 Workspace 不是某个聊天的临时附件，也不是每个 Run 都必须新建的目录。
 
@@ -287,7 +287,7 @@ Workspace 不是某个聊天的临时附件，也不是每个 Run 都必须新�
 
 例如，围绕同一仓网项目的分析任务、复核任务和报告修订可以复用同一个 Workspace，而不必各自复制一套项目数据。Workspace 的创建、共享和回收也不应由一次聊天或一次 Run 隐式决定；具体资源生命周期如何实现，留到现有系统和落地架构分析时再讨论。
 
-### 第七，安全与可观测性横跨所有平面
+##### 第七，安全与可观测性横跨所有平面
 
 企业安全不能依赖“Agent 会自觉遵守 Prompt”。
 
@@ -302,7 +302,7 @@ OWASP 的 [AI Agent Security Cheat Sheet](https://cheatsheetseries.owasp.org/che
 
 ---
 
-# 4. 理想 Supervisor：不是“大号 Router”
+### 4. 理想 Supervisor：不是“大号 Router”
 
 把问题交给几个专家并不难，难的是第一轮结果回来以后怎么办。
 
@@ -310,7 +310,7 @@ Data Agent 发现订单增长主要来自促销，Network Agent 认为改造干�
 
 这才是 Supervisor 与 Router 的真正区别。Router 完成一次转交，Supervisor 则从问题提出开始，一直跟到结论形成，并随着新证据不断调整中间路径。
 
-## 4.1 先让所有人回答同一个问题
+#### 4.1 先让所有人回答同一个问题
 
 “是否应该在华东新增区域仓”看起来目标明确，实际上还缺少很多判断条件：企业更看重时效还是成本？只评估新建仓，还是也比较干线改造和前置仓？看未来一年还是三年？能够接受多大的需求风险？
 
@@ -318,13 +318,13 @@ Data Agent 发现订单增长主要来自促销，Network Agent 认为改造干�
 
 Supervisor 首先要做的，就是把模糊的业务问题整理成共同的问题框架：比较哪些方案、使用哪些评价标准、遵守哪些约束、最终需要什么证据。这一步通常称为 Goal Framing。它不是提前给出答案，而是让后面的专家知道怎样才算真正回答了问题。
 
-## 4.2 计划要跟着证据变化
+#### 4.2 计划要跟着证据变化
 
 问题明确以后，可以先并行分析订单和现有仓网，再根据需求情景设计候选方案，最后进行财务测算。这里拆分的不是几个部门，而是结论之间的依赖关系：哪些工作可以同时开始，哪些必须等待上一步，哪些只在特定条件成立时才有必要继续。
 
 但第一版计划不会永远正确。如果 Data Agent 发现促销活动扭曲了历史增长，Supervisor 就要增加保守、基准和激进三种情景，并让使用旧预测的网络和财务分析重新计算。所谓 Dynamic Decomposition，并不是一开始把任务拆得足够细，而是在证据变化时知道计划的哪一部分也必须随之改变。
 
-## 4.3 不是每个子问题都需要一个 Agent
+#### 4.3 不是每个子问题都需要一个 Agent
 
 有了任务分解，并不意味着要为每一步都创建 Agent。确定的数据查询和计算可以直接交给工具或受控流程；只有在需要专业判断、独立上下文或明确责任边界时，引入 Domain Agent 才真正有价值。
 
@@ -332,7 +332,7 @@ Supervisor 首先要做的，就是把模糊的业务问题整理成共同的问
 
 因此，华东仓任务的第一轮也许只需要 Data、Network 和 Finance 三个 Agent；等到出现具体选址和高风险假设后，再引入 Risk Agent。好的协作不是尽可能多地调用 Agent，而是找到当前真正需要的那几个。
 
-## 4.4 真正的协调发生在结论不一致时
+#### 4.4 真正的协调发生在结论不一致时
 
 如果 Supervisor 只是把任务发出去，再把返回结果收集起来，它仍然只是一个并行调用器。协调真正开始于不同结果无法直接放在一起的时候。
 
@@ -342,7 +342,7 @@ Supervisor 首先要做的，就是把模糊的业务问题整理成共同的问
 
 动态调整的意义也正在这里：不是频繁改写计划，而是让新证据真正改变下一步工作和已有结论。
 
-## 4.5 最后必须有人把答案收拢起来
+#### 4.5 最后必须有人把答案收拢起来
 
 多份专业报告不会自动变成一个企业决策。Supervisor 需要说明推荐什么、为什么不选择其他方案、结论依赖哪些条件、还有哪些风险没有解决，而不是简单拼接报告或采用多数意见。
 
@@ -356,7 +356,7 @@ Supervisor 对这种答案的完整性负责：不能隐藏冲突，也不能把
 
 ---
 
-# 5. 理想 Blackboard：为什么诱人
+### 5. 理想 Blackboard：为什么诱人
 
 第四章中，Supervisor 要求 Network Agent 和 Finance Agent 使用同一组需求情景重新计算。这个动作看起来简单，却马上产生一个实际问题：这组情景应该怎样交给它们？
 
@@ -395,9 +395,9 @@ Supervisor 对这种答案的完整性负责：不能隐藏冲突，也不能把
 
 ---
 
-# 第二部分：为什么不能直接照搬理想架构
+## 第二部分：为什么不能直接照搬理想架构
 
-# 6. 理想图的隐藏成本
+### 6. 理想图的隐藏成本
 
 理想架构回答了“企业最终需要哪些能力”，却还没有回答“这些能力应该由谁实现”。如果把图中的每个方框都直接建设成一个新服务，最容易被低估的成本不是代码量，而是同一个事实开始出现多个所有者。
 
@@ -405,7 +405,7 @@ Supervisor 对这种答案的完整性负责：不能隐藏冲突，也不能把
 >
 > 一个组件可以读取、投影和使用其他组件的状态，但不能因此成为同一事实的第二个权威来源。
 
-## 6.1 第二套 Agent Runtime
+#### 6.1 第二套 Agent Runtime
 
 为了在平台界面中展示多 Agent 进度，一个很自然的设计是增加 Agent Instance Manager，保存父子关系、消息、状态、取消和恢复。但这些信息彼此关联，共同构成 Agent 的真实执行生命周期。
 
@@ -419,7 +419,7 @@ Supervisor 对这种答案的完整性负责：不能隐藏冲突，也不能把
 
 增加同步频率、缓存失效或重试只能缩短不一致持续的时间，不能消除两个系统都认为自己可以驱动状态的问题。平台可以保存用于界面和审计的 Agent 执行轨迹，但真实的 Agent 创建、通信和终止必须只有一个 Runtime 所有者。
 
-## 6.2 第二套 Thread Memory
+#### 6.2 第二套 Thread Memory
 
 Blackboard 需要保存“需求增长假设是什么”“财务结论引用了哪份预测”，但这不等于它应该保存模型实际看过的全部内容。
 
@@ -433,7 +433,7 @@ Blackboard 需要保存“需求增长假设是什么”“财务结论引用了
 
 > **边界：** Blackboard 记录可共享的业务认知；模型可见上下文、压缩和 Memory 仍由 Runtime 管理。
 
-## 6.3 第二套 Workflow Engine
+#### 6.3 第二套 Workflow Engine
 
 理想 Blackboard 中，“新证据出现后自动重新分析”很有吸引力。但只要一条记录能够直接驱动执行，系统就必须继续回答整条生命周期：
 
@@ -452,7 +452,7 @@ Temporal 的 [Workflow 文档](https://docs.temporal.io/workflows) 说明了 dur
 
 Supervisor 可以根据新证据判断“是否值得重新分析”；任务是否已经排队、能否重试以及失败后如何恢复，仍应由确定性执行控制负责。
 
-## 6.4 第二套能力发现
+#### 6.4 第二套能力发现
 
 企业需要知道“允许使用哪些 Agent 和工具”，但治理目录中的允许不等于 Runtime 此刻真的能够执行。
 
@@ -464,7 +464,7 @@ Supervisor 可以根据新证据判断“是否值得重新分析”；任务是
 
 如果浏览器或平台根据自己的扫描结果直接告诉模型“你具备这些能力”，就会产生能力幻觉。治理目录可以拥有业务名称、维护者、风险等级、权限和评价信息；当前可执行能力则必须来自 Runtime 的正式发现和类型化协议。
 
-## 6.5 第二套 Workspace 语义
+#### 6.5 第二套 Workspace 语义
 
 “Task Workspace”听起来像一个方便的统一容器，却可能同时表示执行目录、共享文件和 Agent 的认知状态。三者一旦共用名称，就很容易被错误地赋予同一个生命周期，例如任务结束时同时删除代码目录、分析成果和决策记录。
 
@@ -480,7 +480,7 @@ Supervisor 可以根据新证据判断“是否值得重新分析”；任务是
 
 ---
 
-# 7. 第一轮收敛：理想能力保留，重复所有权删除
+### 7. 第一轮收敛：理想能力保留，重复所有权删除
 
 发现隐藏成本并不意味着理想架构应该被推翻。Supervisor、专业 Agent、运行控制和知识沉淀仍然是企业需要的产品能力；需要删除的是对同一生命周期的重复实现。
 
@@ -518,7 +518,7 @@ Supervisor 可以根据新证据判断“是否值得重新分析”；任务是
 
 ---
 
-# 第三部分：寻找可以复用的工程基础
+## 第三部分：寻找可以复用的工程基础
 
 前两部分已经确定了理想能力和责任边界，接下来需要把它们放回当前工程中检验。本部分依次回答三个问题：
 
@@ -532,11 +532,11 @@ Supervisor 可以根据新证据判断“是否值得重新分析”；任务是
 >
 > 知识图谱基于 `main@107f3f187905`；分支上新增的 Artifact、Agent 设置等能力，以 `codex/agent-architecture-features@8b8bb27712ed` 的源码和项目权威文档重新核实。下文会把 **main 基线**、**分支已验证能力**、**目标设计** 和 **待验证缺口** 分开描述。Codex 的公开行为同时参考官方 [Subagents 文档](https://learn.chatgpt.com/docs/agent-configuration/subagents.md)；当前产品能力及缺口以 [`architecture.md`](architecture.md)、[`capability-baseline.md`](capability-baseline.md) 和 [`development-plan.md`](development-plan.md) 为准。源码中存在某个类型或方法，只能证明机制存在，不能自动证明产品链路已经完成。
 
-# 8. 多 Agent Runtime 的能力要求与复用判断
+### 8. 多 Agent Runtime 的能力要求与复用判断
 
 对候选 Runtime 的判断不能从“现有代码里有什么”出发，而要先明确理想架构要求它承担哪些责任，再用同一组标准检查现有实现。
 
-## 8.1 Agent Runtime 的能力边界与复用标准
+#### 8.1 Agent Runtime 的能力边界与复用标准
 
 Supervisor 可以理解目标、拆分任务和选择专家，但它作出的决定仍需要一个执行环境来落实。这个执行环境必须让 Agent 在多轮交互中持续存在，能够调用工具、创建子 Agent、交换消息，并在上下文增长或进程重启后继续工作。
 
@@ -558,7 +558,7 @@ Supervisor 可以理解目标、拆分任务和选择专家，但它作出的决
 
 Open Web Codex 已经集成了 Codex Runtime，因此它是最直接的候选，但“项目中已经包含 Codex”本身不是复用理由。下面分别检查它的会话连续性、Agent 执行树、协作协议和角色配置。
 
-## 8.2 执行上下文与会话连续性
+#### 8.2 执行上下文与会话连续性
 
 多 Agent 协作首先要求每个 Agent 都有连续的执行上下文。否则所谓子 Agent 只是一次临时模型请求：它无法可靠记住已经使用过哪些资料、调用过哪些工具，也无法在收到追加任务时从原来的位置继续。
 
@@ -580,7 +580,7 @@ Codex 将这组连续状态组织为 Thread、Turn 和 Item：
 
 Codex 官方文档同样将子 Agent 定义为拥有独立 Agent Thread 的真实执行单元。接下来需要验证的是，这些独立 Thread 如何形成一组可控制的协作关系。
 
-## 8.3 Agent 执行树与运行状态
+#### 8.3 Agent 执行树与运行状态
 
 假设主 Agent 同时委派三个专家，Runtime 不仅要创建三个 Thread，还必须知道它们属于哪次协作、由谁派生、消息应该送给谁，以及当前是否还能继续运行。这些关系不能只存在于 Supervisor 的自然语言计划中。
 
@@ -603,7 +603,7 @@ Codex 使用 [`AgentControl`](../codex/codex-rs/core/src/agent/control.rs) 和
 
 由此可以确定，Agent Thread 的身份、父子关系和运行状态已经由 Runtime 统一维护。Supervisor 负责决定“是否需要增加专家”，Runtime 则负责真实创建、约束和管理这些 Agent Thread。
 
-## 8.4 多 Agent 协作协议
+#### 8.4 多 Agent 协作协议
 
 Agent 执行树解决了“谁在参与”，还需要解决“它们如何协作”。对模型而言，创建专家、补充信息、等待结果和中断工作不能只是自然语言约定，而应当是输入输出明确的 Runtime 操作。
 
@@ -631,7 +631,7 @@ Agent 执行树解决了“谁在参与”，还需要解决“它们如何协�
 
 因此，子 Agent 必须通过 Codex Runtime 的正式 spawn 机制创建。只有这条路径才能同时建立独立 Thread、父子关系、运行配置和后续协作语义。
 
-## 8.5 Runtime Role 与调度职责分离
+#### 8.5 Runtime Role 与调度职责分离
 
 不同专家需要不同模型、指令、Skill、MCP 或 sandbox 配置，但“专家怎样执行”与“现在应该选择哪个专家”是两个问题。
 
@@ -651,7 +651,7 @@ Runtime Role 只是执行配置的一种来源；一个 Tool、Skill、Plugin �
 | Runtime Role | spawn 时使用的模型、指令、Skill、MCP 和 sandbox 等配置 | 随项目或 Profile 配置进行版本演进 |
 | Agent Thread 实例 | 本次协作中实际创建的 Thread、`AgentPath`、父子关系和运行状态 | 随一次具体协作创建、运行和结束 |
 
-## 8.6 Codex Runtime 的适配性结论
+#### 8.6 Codex Runtime 的适配性结论
 
 经过上述对照，Codex 与理想架构所需 Runtime 的匹配关系可以归纳如下：
 
@@ -676,13 +676,13 @@ Runtime Role 只是执行配置的一种来源；一个 Tool、Skill、Plugin �
 
 ---
 
-# 9. 平台控制面的现有基础与所有权缺口
+### 9. 平台控制面的现有基础与所有权缺口
 
 复用 Codex 解决了 Agent 如何执行，却没有解决谁可以使用 Runtime、一次任务如何可靠启动、浏览器如何安全观察过程，以及成果如何长期保存。
 
 这些是企业平台必须承担的责任，但它们应该围绕 Runtime 建设，而不是进入 Runtime 内部重新实现一遍。当前 Open Web Codex 已经形成了几块可以继续演进的控制面骨架，接下来需要判断它们分别解决了什么，以及还欠缺哪些所有权迁移。
 
-## 9.1 Profile 生命周期与 Runtime 宿主
+#### 9.1 Profile 生命周期与 Runtime 宿主
 
 Codex 的持久 Thread 历史、用户配置、Memory，以及 Profile 级的 Skill、Plugin、MCP 和 Provider 状态，都以 `CODEX_HOME` 为持久范围。如果每次 Run 都临时创建一份，这些状态就无法稳定延续；如果多个用户共享同一份，又会产生严重的隔离问题。
 
@@ -698,7 +698,7 @@ Codex 的持久 Thread 历史、用户配置、Memory，以及 Profile 级的 Sk
 
 因此，“每个用户拥有独立 Profile”是正确的目标所有权；但不能把它写成当前已经完成的多用户能力。[`capability-baseline.md`](capability-baseline.md) 仍明确记录：动态多 Profile 进程路由尚未完成。
 
-## 9.2 Task/Run 的可靠执行控制
+#### 9.2 Task/Run 的可靠执行控制
 
 Agent 可以用概率性的方式思考，但平台不能用概率性的方式判断一个任务是否已经启动两次、是否已经取消，或某个 worker 是否仍拥有执行权。
 
@@ -717,7 +717,7 @@ Agent 可以用概率性的方式思考，但平台不能用概率性的方式�
 
 当前实现还暴露出一项重要的架构债务。[`execution.rs`](../apps/web/crates/run-orchestrator/src/execution.rs) 会在执行 Run 时创建 Workspace，并把它记录到 Run 上。这是已经工作的现状，但不是目标所有权。目标态应当让 Workspace 成为可独立授权和复用的执行根，Thread 只记录当前 `cwd`，Run 也只引用 Workspace，而不拥有 checkout。
 
-## 9.3 Runtime 适配与 Workspace 授权边界
+#### 9.3 Runtime 适配与 Workspace 授权边界
 
 平台与 Codex 使用不同语言：平台认识用户、组织和已授权 Workspace；Codex app-server 认识 Thread、Turn、协议请求和 `cwd`。两边需要一个翻译层，但这个翻译层越宽，越容易逐渐变成第二个 Runtime。
 
@@ -733,7 +733,7 @@ Agent 可以用概率性的方式思考，但平台不能用概率性的方式�
 
 这里的证据边界是：当前代码已经有路径包含检查和 Thread 绑定，但 `Profile multi-workspace` 的所有权与并发行为仍未完成真实验证。因此这些保护是正确方向，还不足以证明多 Workspace 能力已经达到发布标准。
 
-## 9.4 Runtime 事件投影与浏览器读模型
+#### 9.4 Runtime 事件投影与浏览器读模型
 
 Runtime 事件通常细、快，而且包含浏览器不应该看到的内部字段。浏览器需要的是经过授权、可以重连恢复、结构稳定的消息和状态。平台因此需要一份 **projection**：它是从权威事件整理出的读取视图，而不是另一份原始历史。
 
@@ -743,7 +743,7 @@ Runtime 事件通常细、快，而且包含浏览器不应该看到的内部字
 
 而不能倒过来让数据库投影冒充 Codex Thread。平台可以根据 Runtime 历史重建展示，但不能根据一条简化后的 UI 事件恢复模型上下文；被投影省略的 Tool 输入、上下文边界或压缩语义，只有 Codex 才完整理解。
 
-## 9.5 Artifact 交付链路与持久化边界
+#### 9.5 Artifact 交付链路与持久化边界
 
 Agent 最终交付的不只是文字，也可能是地图、报告、数据集或其他可交互成果。它们需要独立的身份、授权和保留策略，不能只作为某条消息里的一段临时 JSON。
 
@@ -772,7 +772,7 @@ Agent 最终交付的不只是文字，也可能是地图、报告、数据集�
 
 ---
 
-# 10. 能力基线与阶段性建设边界
+### 10. 能力基线与阶段性建设边界
 
 第 8 章证明了 Codex Runtime 可以复用，第 9 章证明了平台控制面已有骨架；但不同能力的成熟度并不一致。能力基线要回答的不是“代码里有没有”，而是“现在能够对产品承诺到什么程度”。
 
@@ -829,13 +829,13 @@ Agent 最终交付的不只是文字，也可能是地图、报告、数据集�
 
 ---
 
-# 第四部分：从现实约束收敛到目标架构
+## 第四部分：从现实约束收敛到目标架构
 
-# 11. 收敛的关键不是删组件，而是重新分配所有权
+### 11. 收敛的关键不是删组件，而是重新分配所有权
 
 理想架构帮助我们把需要的能力想完整，代码探索则告诉我们哪些能力已经有可靠的承载者。两者结合后，收敛并不是简单地从图中删掉几个方框，而是回答：**每一项理想能力最终由谁负责，是否需要新建系统。**
 
-## 11.1 六个理想构件如何落位
+#### 11.1 六个理想构件如何落位
 
 | 理想模型中的构件 | 收敛后的承载方式 | 这样处理的原因 |
 | --- | --- | --- |
@@ -853,7 +853,7 @@ Agent 最终交付的不只是文字，也可能是地图、报告、数据集�
 
 两者都会谈“任务”，但前者管理可靠执行，后者进行认知判断。如果用一个组件同时承担，就会很快遇到一个问题：数据库中的固定计划和模型根据新证据调整后的计划，哪一份才是当前计划？
 
-## 11.2 一个事实只能有一个权威所有者
+#### 11.2 一个事实只能有一个权威所有者
 
 “平台需要可观测”不等于“平台要接管 Runtime 状态”。平台可以根据 Codex 事件重建 Agent 执行投影，用于展示执行轨迹、断线补发和审计；但投影不能反过来恢复模型上下文或命令 Runtime。
 
@@ -869,7 +869,7 @@ Agent 最终交付的不只是文字，也可能是地图、报告、数据集�
 
 这个原则也直接解释了为什么当前代码中的事件投影是正确方向。[`event_projection.rs`](../apps/web/server/src/event_projection.rs) 负责把 Runtime Frame 转换成安全的浏览器事件，并做持久化和脱敏；它没有尝试重新实现 Thread。
 
-## 11.3 概率性判断和确定性控制必须分开
+#### 11.3 概率性判断和确定性控制必须分开
 
 新增华东仓的任务里，模型可以判断：
 
@@ -893,7 +893,7 @@ Agent 最终交付的不只是文字，也可能是地图、报告、数据集�
 
 这不是为了限制 Agent 的自主性，而是为了让自主行为具备清楚的责任边界。模型负责“下一步做什么更合理”，平台和 Runtime 合同负责“这一步能否安全、可靠地发生”。
 
-## 11.4 复杂度只在证据出现后增加
+#### 11.4 复杂度只在证据出现后增加
 
 收敛后的默认协作拓扑仍然是层级式：
 
@@ -911,7 +911,7 @@ Root Supervisor
 
 ---
 
-# 12. 所有权模型：三个控制域与两个数据域
+### 12. 所有权模型：三个控制域与两个数据域
 
 “控制”和“状态”在多 Agent 平台中很容易被笼统使用。实际上，谁可以执行、下一步做什么、某项能力能否使用，是三个不同问题；模型对话和业务成果也是两类不同数据。它们需要彼此协作，但不能由同一个中心状态机统一接管。
 
@@ -919,7 +919,7 @@ Root Supervisor
 
 三个控制域通过合同形成执行边界，两个数据域通过 provenance 和授权读取互相连接。连接的目的，是让一次任务能够闭环，而不是把它们合并成一张万能状态表。
 
-## 12.1 三个控制域回答不同问题
+#### 12.1 三个控制域回答不同问题
 
 | 控制域 | 回答的问题 | 权威事实 | 不负责什么 |
 | --- | --- | --- | --- |
@@ -927,7 +927,7 @@ Root Supervisor
 | Runtime 认知控制 | 当前上下文中下一步做什么 | Thread、Turn、Agent 执行树、Tool Call、上下文 | 用户和组织授权 |
 | 企业策略控制 | 哪些能力在什么条件下可用 | Agent 发布状态、Capability Binding、数据和成本策略 | 替 Supervisor 推理 |
 
-### 平台任务控制
+##### 平台任务控制
 
 这个控制域由 Task、Run、Approval、Lease、Runner 和 Audit 组成。当前项目的 [`run-orchestrator`](../apps/web/crates/run-orchestrator/src/lib.rs) 已经实现幂等创建、lease、heartbeat、取消和恢复等骨架，它要保证的是“这次执行能否可靠地发生”：
 
@@ -940,7 +940,7 @@ Root Supervisor
 
 它不解释“华东是否应该建仓”，也不维护模型当前的调查计划。例如，Run 被取消是一个持久化事实；取消后 Supervisor 是否还想继续分析，不会改变这个事实。
 
-### Runtime 认知控制
+##### Runtime 认知控制
 
 这个控制域由根 Thread、[`AgentControl`](../codex/codex-rs/core/src/agent/control.rs)、Runtime `AgentRegistry` 和原生多 Agent Tools 组成。它负责根据当前证据决定下一步：
 
@@ -952,7 +952,7 @@ Root Supervisor
 
 当 Data Agent 发现历史增长主要来自促销时，是根 Agent 判断应该让 Finance Agent 重算情景，而不是 Run 状态机增加一条硬编码分支。Supervisor 因此是 Runtime 中的认知角色，不是另一个平台微服务。
 
-### 企业策略控制
+##### 企业策略控制
 
 这个控制域由 Agent Catalog、授权策略、Capability Binding、Secret 和 MCP Gateway 组成。它负责“哪些能力可以被谁以什么条件使用”：
 
@@ -966,9 +966,9 @@ Root Supervisor
 
 三个控制域通过显式合同连接，而不是共享一张万能状态表：平台先确认 Run 可以执行，授权策略给出本次可用的能力边界，Runtime 在边界内动态工作，随后 Runtime 事件回到平台形成审计和产品视图。
 
-## 12.2 两个数据域保存不同类型的事实
+#### 12.2 两个数据域保存不同类型的事实
 
-### Runtime Conversation Domain
+##### Runtime Conversation Domain
 
 Thread、Turn、Item、子 Agent Thread、Context、Compaction、Runtime Memory、Tool Call 和 Agent Communication 都属于 Runtime Conversation Domain。
 
@@ -976,7 +976,7 @@ Thread、Turn、Item、子 Agent Thread、Context、Compaction、Runtime Memory�
 
 这条边界意味着：即使平台数据库中已经保存了一条“Data Agent completed”事件，也不能仅凭这条事件恢复 Data Agent 的上下文，更不能自行伪造下一轮 Agent 消息。
 
-### Enterprise Decision Domain
+##### Enterprise Decision Domain
 
 报告、数据集、图表、仿真结果以及被明确发布的 Fact、Assumption、Evidence、Finding、Decision 和 Scenario，属于 Enterprise Decision Domain。这里保存的是需要被人复核、授权和复用的业务成果，而不是模型的隐式思考过程。
 
@@ -1001,11 +1001,11 @@ Artifact
 
 ---
 
-# 13. 用对象关系澄清平台术语
+### 13. 用对象关系澄清平台术语
 
 这些名词不是为了增加一套抽象，而是为了避免在实现时把不同生命周期的对象绑在一起。与其逐个记定义，不如先看它们分别回答什么问题。
 
-## 13.1 目标与执行对象
+#### 13.1 目标与执行对象
 
 | 对象 | 回答的问题 | 所有者与生命周期 |
 | --- | --- | --- |
@@ -1016,7 +1016,7 @@ Artifact
 
 在目标产品中，一个 Task 组织长期目标并关联其 Codex Thread；Run 是用户可追踪的一次调度与审计尝试。Worker lease 恢复可以在同一 Run 内增加内部 Attempt，用户重新执行才创建新的 Run。两者都不会因此获得新的业务目标，也不会因为调度恢复就创建一份新的 Workspace 所有权。
 
-## 13.2 Agent 的四个不同含义
+#### 13.2 Agent 的四个不同含义
 
 | 对象 | 它是什么 | 它不是什么 |
 | --- | --- | --- |
@@ -1027,7 +1027,7 @@ Artifact
 
 三个相近名词在后文各有固定含义：**Agent 执行树**只描述 Runtime 中的父子关系，**Agent 执行轨迹**描述按时间发生的 spawn、消息、Tool、等待和中断过程，**Agent 执行投影**则是平台根据 Runtime 事件重建的可丢弃视图。企业需要用投影展示和审计轨迹，但不会因此接管 Agent 生命周期；投影可以回答“页面最后观察到什么”，不能回答“Runtime 下一步必须做什么”。
 
-## 13.3 持久资源与能力对象
+#### 13.3 持久资源与能力对象
 
 | 对象 | 定义 | 关键边界 |
 | --- | --- | --- |
@@ -1064,7 +1064,7 @@ Artifact / optional Task Knowledge Ledger
 
 箭头表示授权和关联，不表示生命周期所有权。Workspace 不因为 Thread 关闭而消失，Artifact 也不因为 Run 完成而失效。
 
-## 13.4 理想概念如何演进为实施对象
+#### 13.4 理想概念如何演进为实施对象
 
 前文为了先把问题想完整，使用了 Blackboard、Agent Registry 和 Shared Workspace 等理想能力名称。收敛后，这些名称不能直接变成同名服务：
 
@@ -1080,7 +1080,7 @@ Artifact / optional Task Knowledge Ledger
 
 ---
 
-# 14. 受治理的 Agent 能力模型
+### 14. 受治理的 Agent 能力模型
 
 一个专业 Agent 当然需要明确的角色说明，但只写 Prompt 无法回答它能够访问什么、以什么权限执行、应该输出什么结构、失败后怎样处理以及如何评价。企业所谓“Data Agent”，实际上要由 **Agent Definition、Capability、Skill/Tool、授权策略、Supervisor Policy 和 Evaluation** 共同成立。
 
@@ -1138,7 +1138,7 @@ flowchart LR
 
 这条交集非常重要。它阻止平台把“目录里登记过”误写成“Runtime 现在能执行”，也阻止 Runtime 中偶然可见的 Tool 绕过企业发布和授权策略。
 
-## 14.1 Agent Catalog 管治理，不管运行实例
+#### 14.1 Agent Catalog 管治理，不管运行实例
 
 没有 Catalog，就无法回答某个专业 Agent 由谁维护、使用了什么评价集、是否已经发布、能访问哪些数据；但 Catalog 只管理企业治理事实，不能扩张成第二个 Agent Runtime。
 
@@ -1153,7 +1153,7 @@ flowchart LR
 
 Catalog 中一条记录只能说明“企业愿意提供这个 Agent”。它引用的 Runtime Role 还必须在当前 Profile 中可发现，所需依赖必须健康，本次用户和 Task 也必须通过策略检查，才能成为 Supervisor 的候选。
 
-## 14.2 Supervisor 看到的是候选集合，不是整张目录
+#### 14.2 Supervisor 看到的是候选集合，不是整张目录
 
 Supervisor 不应直接读取 Catalog 数据库，也不应由平台把所有 Agent 描述拼进每个 Prompt。目标流程分为四步：
 
@@ -1180,7 +1180,7 @@ Data Analysis Agent v3
 
 ---
 
-# 15. Supervisor：根 Thread 中的认知责任
+### 15. Supervisor：根 Thread 中的认知责任
 
 “Supervisor Agent”仍然是合适的架构名称，因为复杂任务确实需要一个角色持续维护总目标、调整分工并对最后答案负责。但这里容易产生一个新的误解：既然 Codex 已经有根 Thread，是不是不需要任何额外设计，直接复用就够了？
 
@@ -1192,7 +1192,7 @@ Supervisor 的完整设计由运行载体、稳定行为策略、可复用方法
 
 ![Supervisor 不是一个 Prompt：根 Thread 中的完整认知责任](images/enterprise-agent-platform/supervisor-design-report.png)
 
-## 15.1 根 Thread 已经提供执行机制，但没有完整的业务职责
+#### 15.1 根 Thread 已经提供执行机制，但没有完整的业务职责
 
 Codex 已经处理了多 Agent 执行中最难复刻的一组机制：
 
@@ -1216,7 +1216,7 @@ Codex 已经处理了多 Agent 执行中最难复刻的一组机制：
 
 而且 [`effective_multi_agent_mode`](../codex/codex-rs/core/src/session/multi_agents.rs) 表明，除特定的主动委派模式外，多 Agent 默认策略是 `ExplicitRequestOnly`，也就是需要明确指令才会委派。这进一步说明：**根 Thread 是 Supervisor 的载体，不是开箱即用的企业 Supervisor。**
 
-## 15.2 Supervisor 应该由四层设计共同构成
+#### 15.2 Supervisor 应该由四层设计共同构成
 
 只在一次用户消息里写“你是 Supervisor”可以做演示，却不足以成为可治理的产品能力。更稳定的设计是：
 
@@ -1235,7 +1235,7 @@ Codex 的 `thread/start` 协议已经提供 `developerInstructions` 字段，可
 
 Supervisor Policy 的 ID 和版本应该与 Thread 建立明确关联。恢复 Thread 时继续使用原版本；升级既有 Thread 时要进行显式迁移，而不是在后台隐式替换其行为规则。
 
-## 15.3 Supervisor Policy 需要规定什么
+#### 15.3 Supervisor Policy 需要规定什么
 
 这份策略不需要把所有业务流程写成固定 Workflow，但必须把责任和判断标准说清楚。
 
@@ -1262,7 +1262,7 @@ Supervisor Policy 还必须明确自身边界：它可以建议访问数据、�
 
 换句话说，Prompt 负责让 Supervisor 作出更好的判断，系统合同负责让错误判断也不能突破安全边界。
 
-## 15.4 第一阶段需要改什么，不需要改什么
+#### 15.4 第一阶段需要改什么，不需要改什么
 
 第一阶段可以采用很小的实现范围：
 
@@ -1277,7 +1277,7 @@ Supervisor Policy 还必须明确自身边界：它可以建议访问数据、�
 
 这也意味着不能把 Supervisor Prompt 直接硬编码在 WebApp，由浏览器随请求发送；它应当是服务端解析的、经过发布和版本控制的模型可见策略。否则用户可以绕过治理规则，恢复后的 Thread 也无法确定自己使用的是哪一版 Supervisor。
 
-## 15.5 第一阶段为什么不拆出 Planner
+#### 15.5 第一阶段为什么不拆出 Planner
 
 独立 Planner 只有在下列条件出现时才有价值：
 
@@ -1298,7 +1298,7 @@ Supervisor Policy 还必须明确自身边界：它可以建议访问数据、�
 
 因此第一阶段让根 Supervisor 同时负责动态规划和结果综合。需要展示计划时，可以投影其结构化输出；但不能让这个投影隐式变成另一份权威计划。
 
-## 15.6 什么时候再拆 Planner
+#### 15.6 什么时候再拆 Planner
 
 Planner 不应因为“进入第二阶段”就自动出现，而应由可测量结果触发：
 
@@ -1310,13 +1310,13 @@ Planner 不应因为“进入第二阶段”就自动出现，而应由可测量
 
 ---
 
-# 16. 从 Artifact 协作到可选 Task Knowledge Ledger
+### 16. 从 Artifact 协作到可选 Task Knowledge Ledger
 
 共享知识不应从一套完整 Blackboard 起步。第一步先让 Agent 之间能够通过持久、可授权、可追溯的 Artifact 可靠交接成果；只有生产任务持续暴露出更细粒度的冲突、替代和恢复需求，才增加结构化 Ledger。
 
 ![协作知识的演进：先交接成果，再结构化知识](images/enterprise-agent-platform/artifact-ledger-evolution-report.png)
 
-## 16.1 Artifact First：先让成果成为协作接口
+#### 16.1 Artifact First：先让成果成为协作接口
 
 多 Agent 协作最先遇到的问题，通常不是缺少一张知识表，而是大结果无法可靠交接。Data Agent 产生十万行订单分析，Network Agent 不应该从聊天消息中重新复制一遍 CSV；它需要读取一份有类型、有版本、有来源、经过授权的结果。
 
@@ -1359,7 +1359,7 @@ sequenceDiagram
 
 所以本章说的“跨 Run 复用”是目标能力，不是当前代码事实。迁移时应保留现有生产和渲染链路，只改变 Artifact 的身份与授权所有权。
 
-## 16.2 当 Artifact 不再足够
+#### 16.2 当 Artifact 不再足够
 
 Artifact 能很好地交接“结果”，但不一定适合维护一项长期决策里不断变化的细粒度知识。假设多个 Agent 反复使用“未来三年华东订单增长 18%”这个假设，后来 Data Agent 发现促销因素并把它修正为 11%。如果这个数字只埋在三份报告里，系统很难知道哪些分析受影响、哪一版已经被替代。
 
@@ -1387,7 +1387,7 @@ Task Knowledge Ledger 建议只允许 `Fact`、`Assumption`、`Evidence`、`Find
 
 这些记录可以采用 `proposed / verified / disputed / superseded / rejected` 等状态。例如两个 Agent 分别给出 18% 和 9% 的增长率时，Ledger 保存各自证据、提出者、采用关系和替代原因，不让最后一次写入静默覆盖前一条记录。这里描述的是满足上述触发条件后的设计方向，不是第一阶段需要提前建设的第五类生命周期。
 
-## 16.3 Task Knowledge Ledger 不能变成第二份 Runtime Memory
+#### 16.3 Task Knowledge Ledger 不能变成第二份 Runtime Memory
 
 Ledger 不保存 Chain-of-thought、完整 Prompt、Thread 消息副本、Codex compaction 摘要、Tool 凭据或 Agent 的权威运行状态，也不声明“下一轮必须把哪些内容注入模型”。
 
@@ -1399,7 +1399,7 @@ Runtime 只能通过正式的类型化 Tool 或 MCP Resource 搜索、读取、�
 
 ---
 
-# 17. 收敛后的目标架构全景
+### 17. 收敛后的目标架构全景
 
 到这里，Supervisor、Agent 治理、Artifact 协作和所有权边界都已经完成了必要推导，目标架构才具备完整含义。它由三个控制域、两个数据域和一条明确的 Runtime 边界组成。下图描述的是**目标结构**，不是当前部署现状；其中既包括已有骨架，也包括需要完成的迁移，以及只有在真实证据出现后才引入的能力。
 
@@ -1500,7 +1500,7 @@ flowchart TB
 
 ---
 
-# 18. 用完整任务路径检验目标架构
+### 18. 用完整任务路径检验目标架构
 
 架构图中的每条边界最终都要在一条真实任务中同时成立。下面继续使用华东仓决策，但这里描述的是**目标验收流程**，不是对当前产品界面的截图式说明。
 
@@ -1508,7 +1508,7 @@ flowchart TB
 
 这条路径把授权、认知协作、企业能力调用、Artifact 交接和异常收口放在同一次任务中检验。任何一段只能在正常演示中工作，都不足以证明目标架构成立。
 
-## 18.1 平台先建立合法的执行环境
+#### 18.1 平台先建立合法的执行环境
 
 用户提交：
 
@@ -1525,7 +1525,7 @@ flowchart TB
 
 这一步不需要理解建仓问题，只负责保证后续执行有清楚的身份、目录、租约和恢复位置。当前 Task/Run、Profile Host 和 Adapter 骨架已经存在；独立 Workspace 和按用户 Profile 路由仍是目标迁移，不能把当前 per-Run checkout、单 Profile 组合描述成这一步已经完整实现。
 
-## 18.2 Supervisor 建立问题框架
+#### 18.2 Supervisor 建立问题框架
 
 根 Thread 中的 Supervisor：
 
@@ -1537,19 +1537,19 @@ flowchart TB
 
 第一阶段的候选来自经过验证的有限 Runtime Role 清单；Agent Catalog 和候选查询能力完成后，再由策略筛选后的目录结果替代。两种阶段都不能让 Supervisor 选择 Runtime 实际不存在的 Runtime Role。
 
-## 18.3 Runtime 创建并管理子 Agent
+#### 18.3 Runtime 创建并管理子 Agent
 
 Supervisor 使用 Codex 原生 `spawn_agent`。当前 [`spawn_agent` 实现](../codex/codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs) 会解析 Runtime Role 和父子来源，通过共享的 `AgentControl` 创建子 Thread，并发出 Agent 活动事件。
 
 这时平台根据 Runtime 事件形成 Agent 执行投影，用于页面和审计。投影中的状态来自真实子 Thread；仅新增一条平台数据库“实例记录”并不能证明 Agent 已经被 Runtime 创建。
 
-## 18.4 企业能力通过受治理的 Tool 边界使用
+#### 18.4 企业能力通过受治理的 Tool 边界使用
 
 Data Agent 通过受限的企业 Tool/MCP 边界查询数据。目标授权链依次验证用户与组织成员关系、Task/Profile/Workspace 授权、Agent Definition 与 Runtime Role、Capability 与 Tool，以及 Dataset/Row Policy。
 
 模型提出调用后，Runtime 执行正式 Tool；平台或 MCP Gateway 根据确定性授权策略决定是否允许、是否裁剪数据以及是否要求审批。目标验收需要证明：即使 Prompt 诱导 Data Agent 执行写操作，只读身份也会在企业 Tool/MCP 边界拒绝它。这个安全属性由权限配置和负向测试证明，不能只写在 Agent Prompt 中。
 
-## 18.5 Artifact 交接和动态调整
+#### 18.5 Artifact 交接和动态调整
 
 Data Agent 输出：
 
@@ -1574,11 +1574,11 @@ Supervisor 因此追加任务：
 
 这一步正是固定 Router 无法表达，而动态 Supervisor 有价值的地方。
 
-## 18.6 审批、取消和恢复仍由确定性系统收口
+#### 18.6 审批、取消和恢复仍由确定性系统收口
 
 这条目标路径只需要在此确认责任归属：Supervisor 可以提出高成本或高风险动作，审批、取消、lease、恢复和终态仍由 Task/Run Control 与正式 Runtime 合同完成。它们在拒绝、重启、部分成功和迟到事件下的具体行为，留到第五部分按异常路径逐项检验。
 
-## 18.7 综合、发布与后续复用
+#### 18.7 综合、发布与后续复用
 
 Supervisor 最终生成：
 
@@ -1609,9 +1609,9 @@ Supervisor 最终生成：
 
 ---
 
-# 第五部分：让架构可以实现，而不仅可以解释
+## 第五部分：让架构可以实现，而不仅可以解释
 
-# 19. 从所有权结论走向可执行合同
+### 19. 从所有权结论走向可执行合同
 
 上一章沿正常路径展示了目标架构如何完成一次任务；本部分转向最容易破坏这条路径的异常情况。第四部分已经回答了“谁应该负责什么”，但所有权表本身不会让系统自动正确。真正开始实现时，一次任务会连续穿过平台、Profile Host、Codex Runtime、企业 Tool/MCP 边界和 Artifact Store；只要其中一个边界没有稳定合同，前面建立的单一事实源就会在异常路径中失效。
 
@@ -1638,11 +1638,11 @@ Supervisor 最终生成：
 
 ---
 
-# 20. 四类生命周期必须分开
+### 20. 四类生命周期必须分开
 
 多 Agent 系统的复杂度主要出现在中断、恢复、追加任务和部分成功。要处理这些情况，首先必须区分四种容易被混在一起的对象：Run、Runtime Agent Thread、Artifact 和 Supervisor Policy。
 
-## 20.1 Run 与 Attempt：企业执行事实
+#### 20.1 Run 与 Attempt：企业执行事实
 
 Run 回答的是：**平台是否已经受理并执行了这一次任务请求，最终结果是什么。** 它属于平台，因为幂等、lease、heartbeat、取消和审计需要数据库事务和确定性终态。
 
@@ -1672,7 +1672,7 @@ provisioning / running / cancelling
 
 这些是目标结果语义，不要求与当前数据库状态逐字一一对应。例如，审批被拒绝可以形成 `rejected` 结果，deadline 超时可以形成 `timed_out` 结果，而底层存储在迁移前仍可能使用 `failed + failure_code`。文档和 API 必须明确当前映射，不能把目标枚举写成已经存在的数据库事实。
 
-## 20.2 Agent Thread 与当前 Turn：模型执行事实
+#### 20.2 Agent Thread 与当前 Turn：模型执行事实
 
 Runtime Agent 回答的是：**某个子 Agent Thread 是否存在，当前是否在执行一轮任务，以及还能否继续收到工作。** 这些事实属于 Codex Runtime。
 
@@ -1697,7 +1697,7 @@ Runtime Agent 回答的是：**某个子 Agent Thread 是否存在，当前是�
 
 投影保存 `agent_thread_id`、`AgentPath`、父子关系、Runtime Role 和最近观察位置，用于展示、审计和检索；它不能成为 spawn、follow-up、interrupt 或恢复的命令来源。
 
-## 20.3 Artifact：跨 Agent 的成果事实
+#### 20.3 Artifact：跨 Agent 的成果事实
 
 Artifact 回答的是：**某份企业成果是什么、由什么产生、谁可以读取，以及生产者结束后是否继续存在。**
 
@@ -1719,7 +1719,7 @@ Artifact 回答的是：**某份企业成果是什么、由什么产生、谁可
 
 Tool 调用成功只说明 Tool 返回了结果，不说明 Artifact 已经通过校验并可被其他 Agent 使用。
 
-## 20.4 Supervisor Policy：认知责任也有版本
+#### 20.4 Supervisor Policy：认知责任也有版本
 
 Supervisor Policy 回答的是：**这条根 Thread 被要求以什么原则委派、处理冲突、控制停止并综合结果。**
 
@@ -1741,11 +1741,11 @@ Supervisor Policy 回答的是：**这条根 Thread 被要求以什么原则委�
 
 ---
 
-# 21. 四个合同把所有权连接起来
+### 21. 四个合同把所有权连接起来
 
 生命周期解决“事实属于谁”，合同解决“事实怎样安全地穿过边界”。每个合同都必须说明输入从哪里来、输出由谁解释、失败如何表达，以及哪些身份绝不能由浏览器或模型自报。
 
-## 21.1 Supervisor 策略绑定（Supervisor Policy Binding）
+#### 21.1 Supervisor 策略绑定（Supervisor Policy Binding）
 
 这个合同发生在根 Thread 启动之前：平台从已认证的 Task 请求解析已发布策略，生成不可变 Policy Snapshot，将它绑定到 Task 与根 Thread，再由 Adapter 通过 `thread/start.developerInstructions` 送入 Runtime。
 
@@ -1761,7 +1761,7 @@ Supervisor Policy 回答的是：**这条根 Thread 被要求以什么原则委�
 
 这样，Supervisor 的行为变化才可以被审计和复现。
 
-## 21.2 Agent 候选解析（Agent Candidate Resolution）
+#### 21.2 Agent 候选解析（Agent Candidate Resolution）
 
 Supervisor 不应该看到整张企业 Agent 目录，也不应该自行拼接 Runtime Role 文件。它需要的是一个已经经过组织授权、Capability 筛选和 Runtime 可用性验证的候选集合。
 
@@ -1788,7 +1788,7 @@ Supervisor 不应该看到整张企业 Agent 目录，也不应该自行拼接 R
 
 当前 Web 已经存在 Profile Agent 创建、编辑和删除入口，它直接维护平台托管的 Agent 配置文件。这是一条可用的 Profile 管理路径，但不是企业 Catalog 的发布合同。后续设计必须决定它是受控管理员入口、只读配置视图，还是被正式发布流程替代；不能让“Catalog 已发布”和“某个 Profile 文件刚被编辑”同时成为 Agent 可用性的权威事实。
 
-## 21.3 执行授权上下文（Execution Authorization Context）
+#### 21.3 执行授权上下文（Execution Authorization Context）
 
 这是当前架构中最重要、也最需要明确证据边界的合同。本文首次定义为**执行授权上下文（Execution Authorization Context）**，后文统一使用中文名称。
 
@@ -1811,7 +1811,7 @@ Supervisor 不应该看到整张企业 Agent 目录，也不应该自行拼接 R
 
 在这条合同被真实验证以前，Phase 1 只能承诺 Profile/Task 级隔离、只读 Tool 身份和明确的资源范围，不能提前承诺按每个 Runtime Role 动态裁剪企业数据。
 
-## 21.4 Artifact 发布与访问（Artifact Publication and Access）
+#### 21.4 Artifact 发布与访问（Artifact Publication and Access）
 
 平台可以告诉 Runtime“本次任务允许使用哪些资源”，但不应把所有平台状态拼进模型上下文。为此，本合同接收一份有界的**任务资源清单**，它只是 Artifact 发布与访问的输入，不是另一种模型上下文或新的架构对象。
 
@@ -1845,11 +1845,11 @@ Artifact Envelope 只负责描述类型、内容引用、摘要、输入依赖�
 
 ---
 
-# 22. 用失败场景检验安全、恢复与一致性
+### 22. 用失败场景检验安全、恢复与一致性
 
 安全和恢复彼此耦合：一次恢复如果无法确认调用者，就可能越权；一次授权如果没有稳定身份，也无法在重启后继续。比起先列出几十条安全功能，更有效的设计方法是逐个检查真实失败场景。
 
-## 22.1 Data Agent 被诱导写入生产库
+#### 22.1 Data Agent 被诱导写入生产库
 
 假设用户或数据源中的 Prompt Injection 要求 Data Agent 修改生产表。即使 Supervisor 转发了这项要求，系统也必须在企业 Tool/MCP 边界拒绝。
 
@@ -1859,7 +1859,7 @@ Prompt 中的“不要写生产库”只是行为引导；真正的安全属性�
 
 这一场景也暴露了 21.3 的验证门：如果 Gateway 无法证明调用来自哪个 Task 或受限 Runtime Role，就不能声称已经实现 Agent 级最小权限。
 
-## 22.2 Artifact 或 Tool 输出包含恶意指令
+#### 22.2 Artifact 或 Tool 输出包含恶意指令
 
 企业数据、网页、Artifact 和 Tool 输出都属于不可信内容。Runtime 可以把它们用于分析，但不能把其中的文字解释为新的授权或平台政策。
 
@@ -1874,7 +1874,7 @@ Prompt 中的“不要写生产库”只是行为引导；真正的安全属性�
 
 多 Agent 不会自动消除 Prompt Injection。相反，一个被污染的 Agent 可能把错误摘要传给其他 Agent，因此 Agent 间交接必须携带来源和 Artifact 引用，而不是只传“我已经确认”。
 
-## 22.3 Profile 重启并收到旧进程事件
+#### 22.3 Profile 重启并收到旧进程事件
 
 恢复路径必须从权威所有者重建，而不是从最后一张页面截图继续。
 
@@ -1900,7 +1900,7 @@ Prompt 中的“不要写生产库”只是行为引导；真正的安全属性�
 
 浏览器重连只需要快照、cursor 和缺失事件 replay。浏览器缓存可以随时丢弃，也不能用来恢复模型上下文。
 
-## 22.4 一个 Agent 成功，另一个 Agent 失败
+#### 22.4 一个 Agent 成功，另一个 Agent 失败
 
 部分成功不是异常边角，而是多 Agent 任务的常态。
 
@@ -1925,7 +1925,7 @@ Tool 是否自动重试取决于语义：
 
 “网络错误就重试三次”不能成为平台通用恢复策略。
 
-## 22.5 子 Agent 不断继续派生
+#### 22.5 子 Agent 不断继续派生
 
 控制 swarm 风险需要多层限制，而不是在 Supervisor Prompt 中写一句“不要创建太多 Agent”。
 
@@ -1942,11 +1942,11 @@ Supervisor Policy 仍应定义停止条件和委派原则，但系统必须确�
 
 ---
 
-# 23. 可观测性、评价与发布门槛
+### 23. 可观测性、评价与发布门槛
 
 到这里，架构已经从方框图变成了可以测试的责任链。最后还需要回答：用户、运维和评审者分别应该看到什么，以及什么证据足以证明这一阶段可以发布。
 
-## 23.1 同一执行过程有三种观察视角
+#### 23.1 同一执行过程有三种观察视角
 
 | 视角 | 应该看到 | 不应该看到 |
 | --- | --- | --- |
@@ -1956,7 +1956,7 @@ Supervisor Policy 仍应定义停止条件和委派原则，但系统必须确�
 
 “展示得更多”不等于“更可观测”。正确的目标是让每个角色能够判断系统发生了什么，同时不泄露不属于它的事实。
 
-## 23.2 分别评价 Agent、Supervisor 和系统
+#### 23.2 分别评价 Agent、Supervisor 和系统
 
 单个 Domain Agent 的专业正确性不能证明 Supervisor 会合理委派；一次高质量的最终报告也不能证明系统能够恢复。因此评价至少分三层：
 
@@ -1979,9 +1979,9 @@ Supervisor Policy 仍应定义停止条件和委派原则，但系统必须确�
 
 ---
 
-# 第六部分：风险与验证
+## 第六部分：风险与验证
 
-# 24. 风险与反例决定路线图
+### 24. 风险与反例决定路线图
 
 正常演示只能说明系统在理想条件下可以工作；反例才会暴露所有权、授权和恢复边界是否真实成立。
 
@@ -2021,7 +2021,7 @@ Supervisor Policy 仍应定义停止条件和委派原则，但系统必须确�
 
 ---
 
-# 25. 用验证矩阵证明完整责任链
+### 25. 用验证矩阵证明完整责任链
 
 阶段退出不以“页面已经出现”或“数据库表已经创建”为准，而以行为是否穿过真实所有者并在异常条件下保持一致为准。
 
@@ -2061,9 +2061,9 @@ Phase 2 在同一用例上增加第二个组织和第二个 Profile 并发运行
 
 ---
 
-# 第七部分：阶段化演进
+## 第七部分：阶段化演进
 
-# 26. 路线图按风险收敛
+### 26. 路线图按风险收敛
 
 前面的分析改变了建设顺序。Profile Host、Run Orchestrator、Codex Adapter、事件投影和 Inline Artifact 已经存在；下一步集中在几条尚未穿透真实边界的产品链路。
 
@@ -2086,9 +2086,9 @@ flowchart LR
     P3 -- "权限、恢复、评价与责任成熟" --> P4
 ```
 
-## 26.1 Phase 0：先证明 Runtime 事实
+#### 26.1 Phase 0：先证明 Runtime 事实
 
-### 目标
+##### 目标
 
 第一步先证明 Codex 原生多 Agent 能力在真实 Profile、真实 app-server、真实 Adapter 和真实 Web 投影中保持同一套语义，Agent Studio 暂不进入范围。
 
@@ -2105,11 +2105,11 @@ flowchart LR
 
 同时完成 Workspace `cwd` 授权的真实链路验证、审批与中断、协议生成门和 Capability Manifest 验证。当前单 Profile 部署仍要覆盖已有组织、Profile、Workspace 和 Artifact 路由的拒绝测试，但真正的“两用户同时路由到两个 Profile 进程”属于 Phase 2，不能在这里提前宣称完成。
 
-### 本阶段不建设
+##### 本阶段不建设
 
 Phase 0 不建设 Agent Catalog CRUD、通用 Blackboard、独立 Planner、Peer Agent Network、平台 Agent Scheduler 或 Tool Catalog fallback。
 
-### 退出条件
+##### 退出条件
 
 - 一条真实 Agent 执行轨迹覆盖 spawn、message/follow-up、wait、interrupt 和 shutdown；
 - Completed Agent 再次获得 Turn 的状态投影正确；
@@ -2121,15 +2121,15 @@ Phase 0 不建设 Agent Catalog CRUD、通用 Blackboard、独立 Planner、Peer
 
 ---
 
-## 26.2 Phase 1：Enterprise Supervisor Copilot
+#### 26.2 Phase 1：Enterprise Supervisor Copilot
 
-### 目标
+##### 目标
 
 在一个授权 Profile 和一个真实企业用例中，完成“根 Supervisor + 少量 Domain Agents + 企业 Tool + 持久 Artifact”的最小闭环。
 
 推荐从 Data Agent 和 Network Planning Agent 开始。它们存在清楚的前后依赖：前者产生订单与时效数据，后者基于同一份数据比较仓网方案。只有用例确实需要时，才增加 Finance Agent。
 
-### 需要同时交付的能力
+##### 需要同时交付的能力
 
 | 能力 | 第一阶段的最小范围 |
 | --- | --- |
@@ -2143,7 +2143,7 @@ Phase 0 不建设 Agent Catalog CRUD、通用 Blackboard、独立 Planner、Peer
 
 本方案把 Artifact 迁移前置到 Phase 1。否则 Data Agent 与 Network Agent 仍然只能复制文本，Artifact First 会在第一次真实协作中失效。
 
-### Agent Catalog 只做到“可验证候选”
+##### Agent Catalog 只做到“可验证候选”
 
 第一阶段的 Catalog 可以由版本化 Manifest 与只读候选查询组成。平台检查组织授权策略，Runtime 验证 `runtime_role_ref` 是否真的可发现，然后才把候选交给 Supervisor。
 
@@ -2151,7 +2151,7 @@ Phase 0 不建设 Agent Catalog CRUD、通用 Blackboard、独立 Planner、Peer
 
 第一阶段也不开放任意用户在线编辑 Agent Prompt、自动安装 Plugin、Agent Marketplace、长期 Task Knowledge Ledger、复杂触发器或跨组织 Agent 共享。
 
-### 退出条件
+##### 退出条件
 
 - 华东新增仓用例从数据读取、跨 Agent Artifact 交接到最终报告完整运行；
 - 每个关键结论引用至少一个可授权 Artifact；
@@ -2164,9 +2164,9 @@ Phase 0 不建设 Agent Catalog CRUD、通用 Blackboard、独立 Planner、Peer
 
 ---
 
-## 26.3 Phase 2：Governed Multi-Agent Execution
+#### 26.3 Phase 2：Governed Multi-Agent Execution
 
-### 目标
+##### 目标
 
 Phase 1 证明一个用例能够可信运行；Phase 2 才把它扩展为多个团队、多个 Profile 可以长期复用的平台能力。
 
@@ -2185,7 +2185,7 @@ Phase 1 证明一个用例能够可信运行；Phase 2 才把它扩展为多个�
 
 如果采用 MCP 2025-11-25 中仍属实验性的 MCP Tasks 处理长时间 Tool 请求，也要保持边界：MCP Task 只跟踪一个被延迟执行的 MCP 请求，不替代平台 Task/Run 的用户授权、调度、Run Attempt、审计和交付语义。
 
-### Agent Studio 的开放条件
+##### Agent Studio 的开放条件
 
 当前已经存在 Web Profile Agent 编辑功能，因此问题不再是“有没有编辑页面”，而是它何时有资格升级为企业 Studio。
 
@@ -2199,7 +2199,7 @@ Phase 1 证明一个用例能够可信运行；Phase 2 才把它扩展为多个�
 
 在此之前，Studio 可以展示版本、评价、Supervisor Policy、授权策略和 Runtime 可用性，也可以发起受控发布流程，但不能把“直接写 Profile 文件”展示成全局安装成功。
 
-### 退出条件
+##### 退出条件
 
 - 两个用户可以同时路由到各自 Profile，事件、Secret、Thread 和配置不串流；
 - Agent Definition 的发布状态与 Runtime 可用性不会混淆；
@@ -2212,9 +2212,9 @@ Phase 1 证明一个用例能够可信运行；Phase 2 才把它扩展为多个�
 
 ---
 
-## 26.4 Phase 3：Task Knowledge Ledger
+#### 26.4 Phase 3：Task Knowledge Ledger
 
-### 只有证据出现才启动
+##### 只有证据出现才启动
 
 Phase 3 只在 Phase 2 的真实数据反复表明下列问题造成明显损失时启动：
 
@@ -2224,7 +2224,7 @@ Phase 3 只在 Phase 2 的真实数据反复表明下列问题造成明显损失
 - 中断恢复需要结构化的任务认知；
 - 这些问题的业务损失高于新增状态、权限和评价成本。
 
-### 有限能力与清晰边界
+##### 有限能力与清晰边界
 
 第一版只支持有限 Record Type、来源、状态、替代关系、Evidence/Artifact Link、冲突检测和 Task 范围授权。Runtime 通过类型化 MCP Tool/Resource 执行 `search`、`get`、`propose` 和 `supersede`，检索结果始终有界。
 
@@ -2234,9 +2234,9 @@ Phase 3 只在 Phase 2 的真实数据反复表明下列问题造成明显损失
 
 ---
 
-## 26.5 Phase 4：Agent Decision OS
+#### 26.5 Phase 4：Agent Decision OS
 
-### 目标与前置条件
+##### 目标与前置条件
 
 只有身份、权限、Artifact、恢复、评价和 Task Knowledge Ledger 已经稳定，平台才从“一次分析”演进为“持续维护决策、情景和证据”。
 
@@ -2244,13 +2244,13 @@ Phase 3 只在 Phase 2 的真实数据反复表明下列问题造成明显损失
 
 它要求组织愿意承担持续运行成本，并为每项决策指定责任人。Agent 可以提供证据和建议，不能吸收人的决策责任。
 
-### 仍然不等于无界自治
+##### 仍然不等于无界自治
 
 Agent Decision OS 不等于自动执行所有企业决策，不等于用模型替代权限或 Workflow，也不等于保存无限量模型记忆。它只是把 Agent 推理、企业能力、确定性控制和可审计决策组织成一套长期系统。
 
 ---
 
-## 26.6 阶段投入与价值
+#### 26.6 阶段投入与价值
 
 以下不是精确人日估算，而是相对投入和风险排序。
 
@@ -2266,9 +2266,9 @@ Agent Decision OS 不等于自动执行所有企业决策，不等于用模型�
 
 ---
 
-# 第八部分：我们最终得到的架构
+## 第八部分：我们最终得到的架构
 
-# 27. 最终架构与建设顺序都来自责任收敛
+### 27. 最终架构与建设顺序都来自责任收敛
 
 最终方案从理想架构出发，为每项责任确定唯一所有者。Codex 根 Thread 承载 Supervisor；平台发布并绑定 Supervisor Policy；Domain Agents 以受治理的 Agent Definition 和 Runtime Role 进入候选；Task/Run Control 与 Codex Runtime 分别拥有确定性执行事实和认知执行；平台从 Runtime 事件重建 Agent 执行投影；Workspace、Artifact 和可选 Task Knowledge Ledger 分别承载执行环境、持久成果和结构化业务认知；企业 Tool/MCP 边界执行授权决定。
 
@@ -2280,7 +2280,7 @@ Agent Decision OS 不等于自动执行所有企业决策，不等于用模型�
 
 ---
 
-# 28. 结论
+### 28. 结论
 
 企业多 Agent 平台不是更多 Agent 的集合。只有多个专业能力能够围绕同一目标、同一组可追踪依据和一个可控的执行过程，最终形成一份有人负责的答案，专业分工才真正成为协作。
 
@@ -2301,15 +2301,15 @@ Agent Decision OS 不等于自动执行所有企业决策，不等于用模型�
 
 > 正文到此结束。以下附录用于架构决策追踪、实施映射、证据索引和设计评审；不影响按正文主线阅读。
 
-# 附录 A：关键架构决策
+## 附录 A：关键架构决策
 
-## A.1 ADR-01：不重新建设 Agent Runtime
+### A.1 ADR-01：不重新建设 Agent Runtime
 
-### 决策
+#### 决策
 
 复用 Codex Runtime 的 Thread、AgentControl、AgentRegistry、Agent Tools、Context、Memory、Skills、Plugins 和 MCP。
 
-### 原因
+#### 原因
 
 - 当前代码已经拥有这些语义；
 - 运行时状态高度耦合；
@@ -2317,13 +2317,13 @@ Agent Decision OS 不等于自动执行所有企业决策，不等于用模型�
 - 产品关键价值在企业治理和 Web 平台；
 - 保持 Codex 子树可持续同步。
 
-### 代价
+#### 代价
 
 - 平台受 Codex 正式能力和协议演进约束；
 - 某些 Web 功能必须等待类型化 Runtime Contract；
 - 需要维护少量、集中、可重放的 Codex 定制。
 
-### 被拒绝方案
+#### 被拒绝方案
 
 - 平台自建 Agent Instance Service；
 - 浏览器直接管理子 Agent；
@@ -2331,26 +2331,26 @@ Agent Decision OS 不等于自动执行所有企业决策，不等于用模型�
 
 ---
 
-## A.2 ADR-02：默认使用 Supervisor + Domain Agents
+### A.2 ADR-02：默认使用 Supervisor + Domain Agents
 
-### 决策
+#### 决策
 
 由 Codex 根 Thread 承载 Supervisor，使用原生 Agent Tools 创建专业子 Agent。
 
-### 原因
+#### 原因
 
 - 任务分解具有动态性；
 - 企业需要统一责任和最终综合；
 - 比 Peer Network 更容易限制成本和权限；
 - 与 Codex 当前根 Session Tree 模型一致。
 
-### 代价
+#### 代价
 
 - 根 Supervisor 可能成为上下文和决策瓶颈；
 - 需要评价其委派质量；
 - 大任务需要 Artifact 和有界摘要减轻上下文负担。
 
-### 被拒绝方案
+#### 被拒绝方案
 
 - 只用 Router；
 - 所有 Agent 对等全连接；
@@ -2358,20 +2358,20 @@ Agent Decision OS 不等于自动执行所有企业决策，不等于用模型�
 
 ---
 
-## A.3 ADR-03：第一阶段不引入独立 Planner Agent
+### A.3 ADR-03：第一阶段不引入独立 Planner Agent
 
-### 决策
+#### 决策
 
 由 Supervisor 同时承担动态规划、调整和综合。
 
-### 原因
+#### 原因
 
 - 当前职责规模可控；
 - 避免两份计划状态；
 - 减少一次模型调用和恢复协议；
 - 先用评价证明问题存在。
 
-### 重新评估条件
+#### 重新评估条件
 
 - 计划需要独立审批或复用；
 - 规划和执行需要不同权限；
@@ -2380,19 +2380,19 @@ Agent Decision OS 不等于自动执行所有企业决策，不等于用模型�
 
 ---
 
-## A.4 ADR-04：Task/Run Control 是确定性控制面
+### A.4 ADR-04：Task/Run Control 是确定性控制面
 
-### 决策
+#### 决策
 
 平台 Run Orchestrator 只拥有 Task、Run、Lease、Recovery 和 Approval 等确定性生命周期。
 
-### 原因
+#### 原因
 
 - 这些状态需要数据库事务、幂等和恢复；
 - LLM 不适合成为权限和终态所有者；
 - Agent 生命周期已经由 Codex 持有。
 
-### 被拒绝方案
+#### 被拒绝方案
 
 - 让 Supervisor 保存 Run 状态；
 - 让 Run Orchestrator 管理 Agent 计划和 Agent Instance；
@@ -2400,20 +2400,20 @@ Agent Decision OS 不等于自动执行所有企业决策，不等于用模型�
 
 ---
 
-## A.5 ADR-05：Workspace 独立于 Task、Run 和 Thread
+### A.5 ADR-05：Workspace 独立于 Task、Run 和 Thread
 
-### 决策
+#### 决策
 
 Workspace 是独立授权执行根；Thread 持有当前 `cwd`；平台验证其位于授权 Workspace 中。
 
-### 原因
+#### 原因
 
 - 多个 Thread 可以共享同一仓库；
 - Run 是尝试，不应拥有 checkout；
 - Thread 恢复必须保持 Codex 的 `cwd` 语义；
 - Managed Clone/Worktree 有独立生命周期。
 
-### 被拒绝方案
+#### 被拒绝方案
 
 - 每个 Run 自动创建并拥有 checkout；
 - 把 Workspace 当作聊天附件；
@@ -2421,20 +2421,20 @@ Workspace 是独立授权执行根；Thread 持有当前 `cwd`；平台验证其
 
 ---
 
-## A.6 ADR-06：Artifact 拥有独立持久身份
+### A.6 ADR-06：Artifact 拥有独立持久身份
 
-### 决策
+#### 决策
 
 Artifact 由 Artifact Store 持有独立身份、授权和保留策略；Run/Thread/Turn/Item 仅为 provenance。
 
-### 原因
+#### 原因
 
 - 企业成果需要跨 Run 和 Thread 复用；
 - 浏览器刷新和历史恢复需要稳定引用；
 - 生产者生命周期不应决定成果生命周期；
 - Task Knowledge Ledger 需要引用持久对象。
 
-### 被拒绝方案
+#### 被拒绝方案
 
 - 以 Run/Thread 为 Artifact 主键范围；
 - 把大结果直接写入 Agent 消息；
@@ -2442,20 +2442,20 @@ Artifact 由 Artifact Store 持有独立身份、授权和保留策略；Run/Thr
 
 ---
 
-## A.7 ADR-07：Artifact First，Blackboard 分阶段
+### A.7 ADR-07：Artifact First，Blackboard 分阶段
 
-### 决策
+#### 决策
 
 Phase 1–2 使用 Artifact 和有界摘要协作；Phase 3 在数据证明需要后建设 Task Knowledge Ledger。
 
-### 原因
+#### 原因
 
 - Artifact 已有代码基础；
 - 更容易定义 Schema、授权和 provenance；
 - 避免提前复制 Memory 和 Workflow；
 - 可以用真实指标验证 Blackboard 价值。
 
-### 被拒绝方案
+#### 被拒绝方案
 
 - 第一天建设通用 Task Knowledge Ledger；
 - 保存完整 Agent 思考；
@@ -2463,21 +2463,21 @@ Phase 1–2 使用 Artifact 和有界摘要协作；Phase 3 在数据证明需�
 
 ---
 
-## A.8 ADR-08：Agent Definition 不是 Runtime Agent
+### A.8 ADR-08：Agent Definition 不是 Runtime Agent
 
-### 决策
+#### 决策
 
 平台 Agent Definition 负责治理；Codex Runtime Role 和子 Thread 负责执行。
 
 二者通过版本化 `runtime_role_ref` 和可用性验证关联。
 
-### 原因
+#### 原因
 
 - 业务目录需要所有者、评价和合规；
 - Runtime 需要真实配置和发现；
 - 混为一谈会造成 Catalog 与执行状态双真相。
 
-### 被拒绝方案
+#### 被拒绝方案
 
 - 一个 `agents` 表同时保存 Prompt、运行状态和子 Thread；
 - 平台通过隐藏修改 Profile 文件“发布” Agent；
@@ -2485,20 +2485,20 @@ Phase 1–2 使用 Artifact 和有界摘要协作；Phase 3 在数据证明需�
 
 ---
 
-## A.9 ADR-09：权限由系统边界强制执行
+### A.9 ADR-09：权限由系统边界强制执行
 
-### 决策
+#### 决策
 
 Agent/Prompt 声明用于行为引导，真正授权由平台、Workspace、MCP Gateway 和企业系统执行。
 
-### 原因
+#### 原因
 
 - Prompt 不是安全边界；
 - 多 Agent 委派可能放大权限；
 - 企业数据需要资源级策略；
 - 高风险动作需要审计和审批。
 
-### 被拒绝方案
+#### 被拒绝方案
 
 - “告诉 Agent 不要访问”；
 - Supervisor 一次授权后所有子 Agent共享；
@@ -2506,20 +2506,20 @@ Agent/Prompt 声明用于行为引导，真正授权由平台、Workspace、MCP 
 
 ---
 
-## A.10 ADR-10：Context Assembler 不是 Prompt 注入服务
+### A.10 ADR-10：Context Assembler 不是 Prompt 注入服务
 
-### 决策
+#### 决策
 
 平台只提供有界任务资源清单、Artifact Reference 和 Knowledge Tool；Runtime 决定模型上下文的检索和压缩。
 
-### 原因
+#### 原因
 
 - Codex 拥有 Context 和 compaction；
 - 静默 Prompt 拼接不可审计；
 - 平台不了解 Runtime 当前上下文预算；
 - 统一通过 Tool/Resource 更容易授权和测试。
 
-### 被拒绝方案
+#### 被拒绝方案
 
 - 每轮把数据库中全部 Task 状态拼入 System Prompt；
 - 平台保存“模型下一轮上下文”；
@@ -2527,20 +2527,20 @@ Agent/Prompt 声明用于行为引导，真正授权由平台、Workspace、MCP 
 
 ---
 
-## A.11 ADR-11：Supervisor Policy 使用不可变版本绑定根 Thread
+### A.11 ADR-11：Supervisor Policy 使用不可变版本绑定根 Thread
 
-### 决策
+#### 决策
 
 企业 Supervisor 的长期责任由平台发布和解析为不可变 Policy Snapshot，通过正式 `thread/start.developerInstructions` 进入 Codex 根 Thread。Task 与根 Thread 记录所用版本；恢复沿用原快照，升级需要显式迁移。
 
-### 原因
+#### 原因
 
 - 根 Thread 已经拥有多 Agent 执行机制，但默认指令不包含企业业务责任；
 - 临时 Prompt 无法稳定复现、审计或评价；
 - 浏览器传入的协作模式不能成为企业政策事实源；
 - Policy 变化不应在后台改变活动 Thread。
 
-### 被拒绝方案
+#### 被拒绝方案
 
 - 在 WebApp 中硬编码 Supervisor Prompt；
 - 每轮由浏览器提交完整 `developerInstructions`；
@@ -2549,24 +2549,24 @@ Agent/Prompt 声明用于行为引导，真正授权由平台、Workspace、MCP 
 
 ---
 
-## A.12 ADR-12：企业 Tool 权限依赖服务端执行授权上下文
+### A.12 ADR-12：企业 Tool 权限依赖服务端执行授权上下文
 
-### 决策
+#### 决策
 
 用户、组织、Profile、Task 和 Agent 执行身份必须由系统边界绑定，模型只提交业务参数。只有当 Runtime 到企业 Tool/MCP 边界的正式路径能够携带或推导不可伪造的执行身份时，平台才承诺 Runtime Role 级 Capability 与 Resource 裁剪。
 
-### 原因
+#### 原因
 
 - Prompt 和 Tool 参数都不是可信身份来源；
 - 子 Agent 的 Runtime sandbox 继承不等于企业数据权限继承；
 - 重启、并发和 follow-up 后仍需解析到同一授权主体；
 - 当前尚未验证 MCP Gateway 可以稳定取得 V2 AgentPath/Runtime Role。
 
-### 当前阶段边界
+#### 当前阶段边界
 
 Phase 1 使用 Task/Profile 级受限连接、只读凭据和明确资源范围；Phase 2 在完成协议验证后引入 Runtime Role 级授权。若上游合同不足，只允许增加集中、类型化、可测试并进入 Codex patch map 的最小 seam。
 
-### 被拒绝方案
+#### 被拒绝方案
 
 - 让模型提交 `organization_id`、`profile_id` 或任意 Runtime Role；
 - Supervisor 获得一次授权后，所有子 Agent 自动共享全部权限；
@@ -2574,9 +2574,9 @@ Phase 1 使用 Task/Profile 级受限连接、只读凭据和明确资源范围�
 
 ---
 
-# 附录 B：实施映射、边界与合同草案
+## 附录 B：实施映射、边界与合同草案
 
-## B.1 架构概念到当前代码的映射
+### B.1 架构概念到当前代码的映射
 
 架构概念不直接等同于代码对象。映射的目的不是为每个架构名词新建一个同名服务，而是寻找已经拥有相应生命周期和语义的代码边界；只有不存在合适所有者时，才增加新组件。
 
@@ -2610,11 +2610,11 @@ Phase 1 使用 Task/Profile 级受限连接、只读凭据和明确资源范围�
 
 ---
 
-## B.2 哪些变化应该进入 Codex，哪些不应该
+### B.2 哪些变化应该进入 Codex，哪些不应该
 
 项目目标不是零 Codex Diff，而是小而明确的保留缝隙。
 
-### B.2.1 适合进入 Codex
+#### B.2.1 适合进入 Codex
 
 - Runtime 通用的 Agent 协调能力；
 - Runtime Role 解析和配置层；
@@ -2626,7 +2626,7 @@ Phase 1 使用 Task/Profile 级受限连接、只读凭据和明确资源范围�
 
 如果 V2 深度硬限制或 Tool 调用者 provenance 无法通过现有正式合同实现，它们也只能以通用 Runtime 能力或最小 app-server seam 进入 Codex；不能把同一语义分别散落到 Web 路由和 Prompt 中。
 
-### B.2.2 适合留在 Platform
+#### B.2.2 适合留在 Platform
 
 - 用户与组织；
 - Agent Definition 的企业治理元数据；
@@ -2642,7 +2642,7 @@ Phase 1 使用 Task/Profile 级受限连接、只读凭据和明确资源范围�
 - Git orchestration；
 - 多用户 Profile routing。
 
-### B.2.3 适合做成 Skill/Plugin/MCP
+#### B.2.3 适合做成 Skill/Plugin/MCP
 
 - Data Agent 的工作方法；
 - Network Planning Agent 的能力说明；
@@ -2652,7 +2652,7 @@ Phase 1 使用 Task/Profile 级受限连接、只读凭据和明确资源范围�
 - Task Knowledge Ledger 的类型化 tools/resources；
 - 企业系统连接器。
 
-### B.2.4 变更前检查
+#### B.2.4 变更前检查
 
 如果必须修改高变动 Codex 代码：
 
@@ -2666,27 +2666,27 @@ Phase 1 使用 Task/Profile 级受限连接、只读凭据和明确资源范围�
 
 ---
 
-## B.3 每个功能提案必须回答的七个问题
+### B.3 每个功能提案必须回答的七个问题
 
 以后无论建设 Agent Studio、Task Knowledge Ledger 还是新 Domain Agent，都先写一页边界说明。
 
-### B.3.1 Owner
+#### B.3.1 Owner
 
 哪个层拥有这个事实和生命周期？
 
-### B.3.2 Typed Input
+#### B.3.2 Typed Input
 
 输入是否有稳定 Schema？是否包含浏览器不应知道的字段？
 
-### B.3.3 Typed Output
+#### B.3.3 Typed Output
 
 输出是否有界、可校验、可版本化？
 
-### B.3.4 Capability Gate
+#### B.3.4 Capability Gate
 
 Runtime、Profile 和平台如何证明该能力存在？
 
-### B.3.5 Persistence Scope
+#### B.3.5 Persistence Scope
 
 数据属于：
 
@@ -2700,7 +2700,7 @@ Runtime、Profile 和平台如何证明该能力存在？
 
 中的哪一个？
 
-### B.3.6 Failure Lifecycle
+#### B.3.6 Failure Lifecycle
 
 是否覆盖：
 
@@ -2714,7 +2714,7 @@ Runtime、Profile 和平台如何证明该能力存在？
 - concurrency；
 - out-of-order delivery？
 
-### B.3.7 Validation Path
+#### B.3.7 Validation Path
 
 测试是否穿过真正的所有权边界？
 
@@ -2722,11 +2722,11 @@ Runtime、Profile 和平台如何证明该能力存在？
 
 ---
 
-## B.4 目标数据与合同草案
+### B.4 目标数据与合同草案
 
 本节保留实现评审所需的字段级草案。它描述目标边界，不表示当前数据库已经存在这些表，也不要求最终实现逐字采用这些名称。进入开发前仍需与正式平台 Contract、生成的 Codex Protocol 和迁移计划对齐。
 
-### B.4.1 Supervisor Policy
+#### B.4.1 Supervisor Policy
 
 `supervisor_policy_versions` 保存不可变发布版本：
 
@@ -2777,7 +2777,7 @@ migrated_from_binding_id
 
 浏览器可以请求一个有权使用的 Policy Key，但不能提交这份 Snapshot 的组织身份、发布状态或指令正文。
 
-### B.4.2 Agent Governance
+#### B.4.2 Agent Governance
 
 `agent_definitions` 保存企业治理事实：
 
@@ -2833,7 +2833,7 @@ deprecated_at
 
 失败至少区分 `not_authorized`、`role_not_discoverable`、`dependency_unavailable` 和 `capability_not_supported`，不能全部折叠成空数组。
 
-### B.4.3 Runtime Agent Projection
+#### B.4.3 Runtime Agent Projection
 
 `agent_execution_projections` 可以保存：
 
@@ -2864,7 +2864,7 @@ observed_at
 - `Completed`、`Errored` 和 `Interrupted` 可以被新的 follow-up 更新；
 - 投影可以删除并重建，不能驱动 spawn 或恢复。
 
-### B.4.4 Artifact
+#### B.4.4 Artifact
 
 `artifacts` 保存成果自身：
 
@@ -2923,7 +2923,7 @@ created_at
 
 `resourceRef` 只存在于 Runtime 到平台服务端的内部合同中。平台服务端完成 Schema、授权、大小、来源和内容校验后，返回独立 Artifact ID 和浏览器安全 URL。
 
-### B.4.5 执行授权上下文（Execution Authorization Context）
+#### B.4.5 执行授权上下文（Execution Authorization Context）
 
 这是服务端内部安全上下文，不是模型可见 Tool 参数：
 
@@ -2946,7 +2946,7 @@ created_at
 
 当前未验证的部分是 `runtimeBinding` 如何通过正式 Runtime/MCP 路径不可伪造地建立。实现可以改变字段或载体，但不能把这些值退回给模型填写。
 
-### B.4.6 可选 Task Knowledge Ledger
+#### B.4.6 可选 Task Knowledge Ledger
 
 只有 Phase 3 触发条件成立后，才增加：
 
@@ -2972,9 +2972,9 @@ Runtime Tool 对 Task Knowledge Ledger 只能提出结构化 Proposal；平台�
 
 ---
 
-# 附录 C：本地代码与架构依据
+## 附录 C：本地代码与架构依据
 
-## C.1 项目权威文档
+### C.1 项目权威文档
 
 - [`AGENTS.md`](../AGENTS.md)
 - [`docs/product-design.md`](product-design.md)
@@ -2985,7 +2985,7 @@ Runtime Tool 对 Task Knowledge Ledger 只能提出结构化 Proposal；平台�
 - [`docs/codex-upstream-sync.md`](codex-upstream-sync.md)
 - [`docs/custom-codex-patch-map.md`](custom-codex-patch-map.md)
 
-## C.2 Codex Runtime
+### C.2 Codex Runtime
 
 - [`codex/codex-rs/core/src/agent/control.rs`](../codex/codex-rs/core/src/agent/control.rs)
 - [`codex/codex-rs/core/src/agent/registry.rs`](../codex/codex-rs/core/src/agent/registry.rs)
@@ -2996,7 +2996,7 @@ Runtime Tool 对 Task Knowledge Ledger 只能提出结构化 Proposal；平台�
 - [`codex/codex-rs/core/src/tools/handlers/multi_agents_spec.rs`](../codex/codex-rs/core/src/tools/handlers/multi_agents_spec.rs)
 - [`codex/codex-rs/core/src/tools/handlers/multi_agents_v2`](../codex/codex-rs/core/src/tools/handlers/multi_agents_v2)
 
-## C.3 Open Web Codex Platform
+### C.3 Open Web Codex Platform
 
 - [`apps/web/crates/profile-host/src/lib.rs`](../apps/web/crates/profile-host/src/lib.rs)
 - [`apps/web/crates/codex-adapter/src/real.rs`](../apps/web/crates/codex-adapter/src/real.rs)
@@ -3010,20 +3010,20 @@ Runtime Tool 对 Task Knowledge Ledger 只能提出结构化 Proposal；平台�
 
 ---
 
-# 附录 D：外部资料
+## 附录 D：外部资料
 
-## D.1 Agent 与 Workflow
+### D.1 Agent 与 Workflow
 
 - Anthropic, [Building effective agents](https://www.anthropic.com/engineering/building-effective-agents)
 - Anthropic, [How we built our multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system)
 - Google Cloud, [Choose a design pattern for your agentic AI system](https://docs.cloud.google.com/architecture/choose-design-pattern-agentic-ai-system)
 - OpenAI Agents SDK, [Agent orchestration](https://openai.github.io/openai-agents-python/multi_agent/)
 
-## D.2 Codex 多 Agent
+### D.2 Codex 多 Agent
 
 - OpenAI, [Multi-agent — Codex](https://learn.chatgpt.com/docs/agent-configuration/subagents.md)
 
-## D.3 MCP
+### D.3 MCP
 
 - Model Context Protocol, [Versioning](https://modelcontextprotocol.io/docs/learn/versioning)
 - Model Context Protocol, [Specification 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25)
@@ -3031,23 +3031,23 @@ Runtime Tool 对 Task Knowledge Ledger 只能提出结构化 Proposal；平台�
 
 MCP 2025-11-25 是当前正式协议版本，其中 Tasks 仍属于实验性能力。MCP Task 用于包装一次延迟执行的 MCP 请求并支持轮询或稍后取回结果；它不拥有企业平台 Task/Run 的用户授权、调度、Attempt、审计和交付生命周期。
 
-## D.4 Durable Workflow
+### D.4 Durable Workflow
 
 - Temporal, [Workflow](https://docs.temporal.io/workflows)
 - Temporal, [Event History](https://docs.temporal.io/encyclopedia/event-history)
 
-## D.5 Blackboard
+### D.5 Blackboard
 
 - Lee D. Erman et al., [The Hearsay-II Speech-Understanding System](https://www.ijcai.org/Proceedings/77-2/Papers/055.pdf)
 - Penny Nii, [The Blackboard Architecture: Example Systems](https://wrap.warwick.ac.uk/id/eprint/60797/12/WRAP_cs-rr-101.pdf)
 
-## D.6 Agent Security
+### D.6 Agent Security
 
 - OWASP, [AI Agent Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/AI_Agent_Security_Cheat_Sheet.html)
 
 ---
 
-# 附录 E：后续设计评审检查表
+## 附录 E：后续设计评审检查表
 
 每次新增多 Agent 功能时，逐项回答：
 
@@ -3080,7 +3080,7 @@ MCP 2025-11-25 是当前正式协议版本，其中 Tasks 仍属于实验性能�
 
 ---
 
-# 附录 F：理想架构组件关系
+## 附录 F：理想架构组件关系
 
 下面的逻辑图展开第三章“先把理想能力想完整”时的七个能力平面，帮助读者回看最初需求如何覆盖体验、控制、认知、专家、成果、执行和企业集成。它是**所有权收敛之前的能力视图**，不是第 17 章目标架构的同义图。
 
