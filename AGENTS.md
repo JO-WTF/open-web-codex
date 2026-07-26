@@ -9,6 +9,10 @@ details, but must preserve the ownership and contracts defined here.
 Build a self-hosted, browser-first, multi-user Codex workbench by reusing the
 official Codex Runtime rather than reimplementing it.
 
+The human-readable long-term product direction and staged enterprise evolution
+live in `docs/product-vision.md`. The rules below are the engineering
+constraints that preserve that direction while the product evolves.
+
 Each user owns an isolated, persistent Profile containing identity,
 `CODEX_HOME`, configuration, Threads, memory, Skills, Plugins, MCP state and
 Provider/model selection. A Workspace is an independently authorized execution
@@ -113,16 +117,24 @@ seams.
 
 ## Project sources of truth
 
-- Product: `docs/product-design.md`
-- Architecture and ownership: `docs/architecture.md`
-- Verified Runtime capability: `docs/capability-baseline.md`
-- Current delivery state and order: `docs/development-plan.md`
+- Documentation authority and routing: `docs/README.md`
+- Long-term product vision: `docs/product-vision.md`
+- V1 product requirements: `docs/product-design.md`
+- Long-term enterprise multi-agent rationale: `docs/enterprise-agent-platform-architecture.md`
+- Current architecture and ownership: `docs/architecture.md`
+- Normative security boundaries: `docs/security-model.md`
+- Verified Runtime/platform capability: `docs/capability-baseline.md`
+- Accepted stage order: `docs/roadmap.md`
+- Current and next milestone execution: `docs/development-plan.md`
 - Codex synchronization: `docs/codex-upstream-sync.md`
 - Retained Codex seams: `docs/custom-codex-patch-map.md`
 
 Read the documents relevant to the owning layer before changing behavior.
-Canonical documents describe current live state only. Component documents may
-add detail but cannot redefine product scope, capability status or ownership.
+Keep every document inside the role defined by `docs/README.md`: target
+documents must not be presented as current capability, current-state documents
+must not accumulate replaced history, and plans must not claim implementation
+without capability evidence. Component documents may add detail but cannot
+redefine product scope, capability status, security invariants or ownership.
 
 ## Minimum delivery gates
 

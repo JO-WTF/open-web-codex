@@ -1,12 +1,20 @@
 # Capability baseline
 
-This document records checked-in, directly observed capability state. Product
-requirements belong in `product-design.md`; planned work belongs in
-`development-plan.md`.
+This document is the current capability evidence ledger. It answers which
+Runtime and platform behaviors exist in the checked-in branch, how far they
+were validated, and which claims are still unsafe to make. Product
+requirements belong in `product-design.md`; stage order belongs in
+`roadmap.md`; active work belongs in `development-plan.md`.
+
+It is not a changelog or test manual. A source file, route, manifest
+declaration, passing unit test and passing real end-to-end journey are different
+evidence levels and must remain distinguishable. When a migration, protocol,
+ownership boundary or Runtime revision changes, earlier integration results do
+not remain valid automatically.
 
 ## Snapshot
 
-Observed on 2026-07-25 from the current working branch:
+Observed on 2026-07-26 from the current working branch:
 
 | Component | State |
 | --- | --- |
@@ -14,7 +22,7 @@ Observed on 2026-07-25 from the current working branch:
 | Observed official main | `cba0e2701c9e3e67a877a16dbbd7a577d477a630`; 126 commits await the next dedicated sync branch |
 | Local Codex seams | retained changes remain classified by `docs/custom-codex-patch-map.md`; compare them against `codex-upstream/main`, never this repository's `main` |
 | Local customization footprint | six retained Runtime/TUI seams, derived artifacts and focused tests; `ToolName` uses the official implementation |
-| Web platform | Restored browser UI, Axum/PostgreSQL platform, native Profile Registry/Host, encrypted Provider Secret injection, durable approvals, current per-Run Git workspaces, lease-based Run orchestration, typed REST resources and authenticated WebSocket |
+| Web platform | Restored browser UI, Axum/PostgreSQL platform, native Profile Registry/Host, encrypted Provider Secret injection, durable approvals, independent authorized managed Workspaces, lease-based Run orchestration, typed REST resources and authenticated WebSocket |
 
 ## Reproduced evidence
 
@@ -52,24 +60,29 @@ Observed on 2026-07-25 from the current working branch:
   A second real-binary Provider smoke covers two custom
   Providers, forced model refresh, switching, cache isolation and omission of
   direct credentials from returned catalogs.
-- Blank PostgreSQL migration and restart tests pass. AES-256-GCM Provider Secret
-  storage is identity-bound, and the real app-server secured-Provider smoke
-  proves that Codex config receives only a generated environment key while
-  ciphertext and private child environment are removed together on deletion.
-- The authenticated HTTP security regression uses two Organizations and proves
-  resource-ID isolation, Profile-owner enforcement, session Organization
-  switching, role-gated writes, durable approval decision delivery, uncertain
-  delivery retry, Runtime request-id reuse isolation across process instances,
-  stale-request cancellation and an audit record. Passwords use Argon2id;
-  accepted legacy SHA-256 hashes are upgraded on successful login.
+- The source contains ignored PostgreSQL migration/restart and two-Organization
+  security integration suites, but the base migrations changed with the
+  independent Workspace schema and those suites have not been rerun against a
+  fresh database in the current environment. Their earlier results are not
+  current evidence. Focused non-PostgreSQL Rust tests pass; fresh migration,
+  restart, cross-Organization denial and recovery remain required gates.
+- AES-256-GCM Provider Secret storage is identity-bound, and the real
+  app-server secured-Provider smoke proves that Codex config receives only a
+  generated environment key while ciphertext and private child environment are
+  removed together on deletion. The security integration source additionally
+  covers Profile-owner enforcement, session Organization switching,
+  role-gated writes, durable approval delivery, uncertain-delivery retry,
+  Runtime request-id reuse, stale-request cancellation and audit, but its
+  database-backed result is pending the fresh-schema rerun. Passwords use
+  Argon2id; accepted legacy SHA-256 hashes are upgraded on successful login.
 - Git Runtime validation covers source/ref rejection, private mirror creation,
-  one clone per Run, locking, selected-path commit, status projection and
-  cleanup. Run orchestration covers idempotent creation, `SKIP LOCKED` leasing,
-  heartbeats, cancellation, recovery and authorized workspace binding. This is
-  the checked-in implementation, not the target ownership model: it must
-  converge to independent authorized Workspace resources and official Codex
-  Thread `cwd` semantics. Neither a Thread nor a Run should implicitly own a
-  checkout.
+  explicit managed Workspace provisioning, locking, selected-path commit,
+  status projection and explicit cleanup. A Workspace now has its own identity,
+  grant and lifecycle; a Run selects `workspace_id`, and Run execution,
+  cancellation, lease expiry and recovery neither create nor remove its
+  checkout. The adapter passes the authorized root through the official Codex
+  `cwd` fields. Registration of existing roots, shared-Workspace concurrency
+  and multi-`cwd` behavior still require database and real-Runtime validation.
 - The browser uses only typed platform REST resources and an authenticated
   `/api/events/ws` stream. Initial navigation snapshots establish the latest
   durable Task cursor after subscription; reconnects replay only later
@@ -83,8 +96,8 @@ Observed on 2026-07-25 from the current working branch:
   tests pass. The UI-parity report still records the deliberate browser UI
   extensions that have not yet been folded into its reference baseline.
   Direct-Server tests cover authoritative history,
-  reconnect/resync replay, status recovery, current selected Thread's
-  Run-backed checkout projection,
+  reconnect/resync replay, status recovery, direct authorized Workspace file
+  and Git projection,
   Provider/model defaults, approvals, structured input, MCP and rate limits.
 - The 1421 WebApp adapter currently covers managed Projects, Threads/Turns,
   durable events, approvals and structured input, Provider/model selection,
@@ -150,10 +163,10 @@ security, Push delivery, or every Studio capability.
 | Independent server | Axum server serves the browser, REST API, authenticated WebSocket, Profile Host and Runner from one deployable; the single-host deployer builds locked Release artifacts, securely provisions or verifies the fixed `open_web_codex` database, keeps verbose output in bounded logs, health-checks rollout and persists non-secret status metadata | HTTPS reverse proxy, OS supervision, rollback, backup/restore and remaining config hardening are still external GA gates |
 | Persistence | PostgreSQL migrations cover users/sessions, organizations/memberships, Profiles/capabilities/encrypted Secrets, projects, tasks, Runs, leases, Workspaces, durable approvals/audit and versioned Run-event projections | artifacts, retention, legacy-row repair and complete constraints remain missing |
 | Authentication | current single-user startup creates an implicit local Owner and the browser obtains a local Session without credentials; sessions still bind an Organization and all resource authorization remains active; retained bootstrap/login use Argon2id | interactive login/registration is intentionally absent; public or multi-user deployment requires restoring authentication, HttpOnly-only sessions, CSRF, rate limiting and complete logout/revocation flows |
-| Authorization | Project/Task/Run and runtime calls enforce session Organization; Provider/approval calls additionally enforce Profile ownership; a two-Organization denial regression passes | centralized policy abstraction, Project-specific roles and the full concurrent multi-user matrix remain missing |
+| Authorization | Project/Task/Run and runtime routes contain session-Organization checks; Provider/approval routes additionally check Profile ownership. A two-Organization denial suite exists, but its result is pending rerun against the current fresh schema | fresh-schema denial evidence, centralized policy abstraction, Project-specific roles and the full concurrent multi-user matrix remain missing |
 | Codex bridge | Fake/Real adapter and event projection exist; Real uses the native Profile Registry/Host JSONL connection. Provider Secrets are encrypted and injected only into the owned child environment. Runtime-facing operations remain internal and browser routes are typed | composition is still one configured Profile process per server; per-user dynamic process routing remains incomplete |
-| Task/Run | CRUD/start/cancel/message/steer/compact/review, idempotent scheduling, DB leases/heartbeats/recovery, per-Run Git workspaces, authoritative Codex history, safe Item/Delta and approval projection, snapshot-cursor initialization plus monotonic reconnect replay, terminal execution, workspace files, nested Git roots, full local Git operations and explicit remote operations exist | replace per-Run checkout ownership with independent authorized Workspace resources; pass and validate official Codex Thread `cwd` without creating a Thread-owned checkout. Artifact storage, approval expiry, protected-branch policy and full multi-Profile routing remain incomplete |
-| Browser | established 1421 WebApp presentation runs through typed resources for workspace/thread/message, approvals, Provider/model, MCP/rate-limit snapshots, files and Git status; files, Git and MCP currently resolve the selected Thread's Run-owned Workspace. Thread creation opens an immediate client-ID-bound temporary window named `Thread`, supports concurrent out-of-order responses and retryable failure with disabled input, and replaces the sidebar and conversation-header label together when the Server returns a name. The first successful text message derives a bounded Server-persisted title for placeholder Threads and returns it with the Turn-start response, while a data migration repairs existing placeholder titles from their earliest durable user-message event. Thread switching hides uncached history behind a loading state until its authoritative projection has rendered; an unchanged completed Thread already loaded in the current session renders directly from its event-invalidated cache. A cold page refresh establishes lightweight Task event cursors rather than replaying the entire durable delta history, and MCP sidebar state comes from the latest persisted startup-status projection instead of the full Runtime tools/resources inventory. It projects the Task Provider/model from the cached catalog, performs a catalog cache-miss lookup in the background and never writes the global Profile selection merely because a Thread was opened. The shell fills the full viewport and progressively expands its sidebar and conversation column on 2K/4K displays. The real core journey and Thread-switch browser smoke pass; no standalone Gateway or old root Bridge is loaded or built | resolve files, Git and MCP through an authorized Workspace selected independently of Thread/Run storage; validate the Codex Thread `cwd` at every operation. Broader visual/accessibility regression, deferred unused-source pruning, cookie-only sessions and production accessibility remain incomplete |
+| Task/Run | Source, contracts and non-PostgreSQL tests implement CRUD/start/cancel/message/steer/compact/review, idempotent scheduling, DB leases/heartbeats/recovery, independent managed Workspace creation/grants/removal, authoritative Codex history, safe Item/Delta and approval projection, terminal execution, workspace files and Git operations. Runs only reference an authorized Workspace | rerun fresh PostgreSQL migration/security/recovery tests; add existing-root registration, shared-Workspace concurrency and real multi-`cwd` validation. Artifact storage, approval expiry, protected-branch policy and full multi-Profile routing also remain incomplete |
+| Browser | established 1421 WebApp presentation runs through typed resources for workspace/thread/message, approvals, Provider/model, MCP/rate-limit snapshots, files and Git status. Workspace listing and file/Git/terminal/GitHub operations use Workspace IDs directly; Thread/Turn and MCP operations retain Run provenance where the Runtime Thread is required. Thread creation selects an existing Workspace and creates only Task/Run records. The remaining Thread hydration, event replay, title, model and responsive-layout behavior is unchanged | add existing-root registration UX and validate multiple concurrent Threads sharing one Workspace, reconnect and cross-user denial. Broader visual/accessibility regression, deferred unused-source pruning, cookie-only sessions and production accessibility remain incomplete |
 
 ## Immediate capability gates
 
@@ -165,10 +178,11 @@ security, Push delivery, or every Studio capability.
    before promoting the corresponding declarations to product support.
 4. Replace the single configured Profile composition root with authorized
    per-user Profile routing before multi-user Beta.
-5. Replace per-Run checkout provisioning with independent authorized Workspace
-   resources and official Codex Thread `cwd` handling. Cover shared-Workspace
-   concurrency, authorization, resume, explicit lifecycle and Git-operation
-   containment.
+5. Complete independent Workspace validation: cover shared-Workspace
+   concurrency, cross-user denial, resume, explicit lifecycle, existing-root
+   registration, multi-`cwd` behavior and Git-operation containment. Start with
+   a blank PostgreSQL database so the rewritten base migrations and denial
+   suites become current evidence.
 6. Replace Run/Thread-owned Artifact storage with durable Artifact identity and
    authorization so embedded content survives later Runs; keep Turn/Item only
    as provenance.

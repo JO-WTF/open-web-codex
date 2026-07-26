@@ -5,12 +5,16 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档状态 | V1 产品与研发评审基线 |
-| 更新时间 | 2026-07-25 |
+| 更新时间 | 2026-07-26 |
 | 产品形态 | 单组织、多用户、自托管 Codex Web Harness |
 | 用户客户端 | 标准浏览器 |
 | Agent Runtime | 服务端定制 Codex `app-server` |
+| 产品北极星 | `docs/product-vision.md` |
 | 关联架构 | `docs/architecture.md` |
+| 安全模型 | `docs/security-model.md` |
+| 多 Agent 演进设计 | `docs/enterprise-agent-platform-architecture.md` |
 | 能力事实 | `docs/capability-baseline.md` |
+| 中期路线 | `docs/roadmap.md` |
 | 研发计划 | `docs/development-plan.md` |
 
 本文档定义产品目标、用户、业务对象、页面、流程、功能需求、权限、状态机、非功能指标和版本验收。运行时能力是否已经存在，以能力基线和实际构建生成的 Capability Manifest 为准；本文档描述产品需要什么，不宣称服务器已经支持什么。
@@ -25,6 +29,12 @@
 - Codex Runtime 负责模型调用、Thread/Turn、上下文、多 Agent、记忆、Skills、Plugins、MCP 和工具协议。
 
 平台不得创建第二套 Agent 调度器、Thread 历史或 Memory Engine。平台可以保存 Codex ID、事件投影和检索索引，但恢复模型可见上下文必须以 Codex Profile 为事实来源。
+
+企业多 Agent 协作是这套工作台之上的演进方向，而不是另一套产品边界。目标架构会在
+Codex 原生根 Thread、子 Agent 和 Runtime Role 之上增加 Supervisor Policy、
+Agent Definition 治理、持久 Artifact 与企业能力授权；这些目标能力只有进入研发
+计划并通过能力基线验证后，才属于可交付产品。V1 仍以可信研发团队的浏览器 Codex
+闭环为发布范围。
 
 ### 1.1 核心价值
 
@@ -246,9 +256,9 @@ authenticated user
 ### WF-05 创建 Task
 
 - 前置：Project ready、Profile 可用、用户拥有 `task.create`。
-- 正常：输入目标，选择基线分支、Provider/模型、推理等级、Agent、附件和审批策略；通过幂等键创建 Task 与 queued Run。
+- 正常：输入目标，选择基线分支、Provider/模型、推理等级、Agent、附件和审批策略；通过幂等键创建 Task 与 `pending` Run。
 - 异常：分支消失、附件失败、能力不兼容、配额不足时保留草稿并给出修复入口。
-- 终态：Task active，Run queued；创建者获得初始 Control Lease。
+- 终态：Task active，Run `pending`；创建者获得初始 Control Lease。
 
 ### WF-06 排队、Workspace 选择与 Runtime 准备
 
@@ -257,8 +267,10 @@ authenticated user
   复用 app-server，并通过官方 `thread/start`、`thread/resume` 或
   `thread/settings/update` 合同传递 `cwd`。创建或恢复 Thread 不创建 checkout。
 - 异常：Workspace 未授权、`cwd` 越界或目录不可用时拒绝启动；容量不足保持
-  queued；凭据失败进入 blocked/failed；取消 provisioning 必须停止后续步骤。
-- 终态：Run running/cancelled/failed，不允许永久停在 provisioning。
+  `pending`；凭据失败进入 `failed` 并记录 `failure_code`；取消
+  `provisioning` 必须进入可解释的取消流程。
+- 终态：Run `running`、`cancelled` 或 `failed`，不允许永久停在
+  `provisioning`。
 
 ### WF-07 运行中交互
 
@@ -284,7 +296,9 @@ authenticated user
   核对状态；用户可创建后继 Run，Codex 恢复原 Thread 及其当前 `cwd`，平台重新
   验证对应 Workspace 权限。
 - 异常：Thread 缺失、Workspace 损坏、版本不兼容分别进入 blocked，并给出只读诊断或新建 Thread 选择。
-- 终态：Run 恢复 running/waiting，或进入 interrupted/failed/blocked，不保持伪 running。
+- 终态：Run 恢复 `running`，或进入 `recovery_pending`、`failed`、
+  `cancelled`；等待审批/输入属于独立 Approval 或 Runtime 投影，
+  `interrupted` 属于 Turn 结果，均不伪装成新的 Run 状态。
 
 ### WF-11 Diff、Commit 与 Push
 
@@ -366,7 +380,7 @@ authenticated user
 | TASK-001 | P0 | Task 具有稳定 ID、标题、目标、Project、Owner 与 Thread 映射 |
 | TASK-002 | P0 | 创建 Task 使用幂等键，重复提交只产生一个 Task/Run |
 | TASK-003 | P0 | 支持归档、恢复、筛选、搜索和 Run 历史 |
-| RUN-001 | P0 | Run 完整实现 queued→provisioning→running→终态状态机 |
+| RUN-001 | P0 | Run 完整实现 `pending → provisioning → running → 终态`，并覆盖 `cancelling` 与 `recovery_pending` |
 | RUN-002 | P0 | Scheduler 使用领取租约、心跳和超时回收避免重复执行 |
 | RUN-003 | P0 | 每个 Run 必须验证 Thread 当前 `cwd` 位于经授权 Workspace 内，不能创建、拥有或隐式切换 checkout |
 | RUN-004 | P0 | 支持取消、继续、失败诊断和清理重试 |
@@ -455,27 +469,35 @@ creating -> auth_required -> starting -> ready
 ### 8.2 Run
 
 ```text
-queued -> provisioning -> running -> completed
-  |            |             |  \-> waiting_approval -> running
-  |            |             |  \-> waiting_input -> running
-  |            |             |  \-> interrupted -> queued(continue)
-  |            |             \----> failed
-  |            \------------------> failed/cancelled
-  \-------------------------------> cancelled
+pending -> provisioning -> running -> completed
+   |            |             \----> failed
+   |            |             \----> cancelling -> cancelled
+   |            \------------------> failed/cancelling
+   \-------------------------------> cancelled
+
+provisioning/running/cancelling --租约或恢复不确定--> recovery_pending
+recovery_pending -------------------------------> running/failed/cancelled
 ```
 
-终态：`completed`、`failed`、`cancelled`。`interrupted` 是可继续状态，不伪装为 running。
+这套产品状态词汇与当前数据库枚举一致；各条转换是否已经完成，以能力基线为准。
+它不把所有界面提示都塞进 Run：`waiting_approval` 和 `waiting_input` 由独立
+Approval/Runtime 投影表达，Run 仍保持活动；`interrupted` 是 Turn 结果。Run
+终态只有 `completed`、`failed`、`cancelled`，失败原因由 `failure_code` 补充。
 
 ### 8.3 Workspace
 
 ```text
-creating -> ready -> in_use -> retained -> removing -> removed
-    |          |        |          |           |
-    \----------+--------+----------+----------> cleanup_failed
+creating -> ready ---------> removing -> removed
+    |          |                 |
+    |          \-> retained -----+
+    \---------------------------> cleanup_failed
+cleanup_failed ----------------> removing
 ```
 
-Workspace 状态独立于 Thread 和 Run。`in_use` 表示存在活动使用者，不表示被某个
-Thread 独占；删除是单独的授权操作，不由 Thread/Task 归档隐式触发。
+Workspace 状态独立于 Thread 和 Run。`ready` 与 `retained` 都可以表示可授权使用
+的执行根；“当前是否有人使用”由活动 Run、Thread `cwd`、Terminal 等关系查询得到，
+不是 Workspace 的 `in_use` 状态。删除是单独授权操作，不由 Thread/Task 归档隐式
+触发。
 
 ### 8.4 Approval
 
@@ -536,9 +558,9 @@ Lease 使用数据库时间与版本号；客户端时间不能决定有效性�
 | 普通 API P95 | < 500ms | < 300ms（不含外部 Git/Codex） |
 | WebSocket 事件到 UI P95 | < 1s | < 500ms |
 | 断线补发 1,000 事件 | < 10s | < 5s |
-| Task 创建到 queued | < 2s | < 1s |
-| warm Profile queued→running P95 | < 20s | < 10s |
-| cold Profile queued→running P95 | < 60s | < 30s |
+| Task 创建到 `pending` | < 2s | < 1s |
+| warm Profile `pending→running` P95 | < 20s | < 10s |
+| cold Profile `pending→running` P95 | < 60s | < 30s |
 | 单 Task 可浏览事件 | 10,000 | 100,000，分页/归档 |
 | 单组织并发 Run | 5 | 初始目标 20，压测后固定 |
 | 单 Profile 并发 Thread | 以 Manifest/实测为准，不硬编码 |
@@ -547,11 +569,15 @@ Lease 使用数据库时间与版本号；客户端时间不能决定有效性�
 
 - Beta 月度可用性目标 99.5%，GA 目标 99.9%（计划维护除外）。
 - Web Server RPO ≤ 5 分钟，RTO ≤ 30 分钟。
-- Runner/Host 心跳丢失后 60 秒内将 Run 标记为 suspect，租约到期后进入 interrupted/failed。
+- Runner/Host 心跳丢失后 60 秒内识别异常；租约到期后进入
+  `recovery_pending`，再根据核对结果恢复为 `running` 或收敛到明确终态。
 - 任何 Run 不得在无心跳、无事件、无租约时永久显示 running。
 - Profile Home、数据库和仓库镜像恢复必须有定期演练证据。
 
 ### 11.3 安全
+
+以下是产品要求；完整信任边界、资源授权链和发布门禁由
+[安全模型](security-model.md) 统一定义。
 
 - 生产只允许 HTTPS/WSS；禁止共享 Token、查询参数 Token 和 `Access-Control-Allow-Origin: *`。
 - Session Cookie 使用 HttpOnly、Secure、SameSite；写请求具备 CSRF 防护。

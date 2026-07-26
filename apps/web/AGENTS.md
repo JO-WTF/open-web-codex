@@ -42,8 +42,9 @@ This file adds implementation rules for `apps/web/**`.
 
 ## Changes
 
-1. Read `docs/capability-baseline.md` and `docs/development-plan.md` before
-   changing behavior.
+1. Read `docs/architecture.md`, `docs/security-model.md`,
+   `docs/capability-baseline.md` and `docs/development-plan.md` before changing
+   behavior in the affected boundary.
 2. Put behavior in the owning crate and keep routes thin.
 3. Add cross-tenant denial coverage for authorization-sensitive resources.
 4. Persist a safe event/approval projection before broadcasting it.

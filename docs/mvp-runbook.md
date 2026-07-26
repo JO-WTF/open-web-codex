@@ -1,11 +1,16 @@
 # Web 平台本地运行手册
 
+本文只说明当前单机环境的启动、配置、纵向验证和排错操作。它不定义产品范围，也不
+把本地启动成功视为生产或安全门禁通过；当前能力与发布缺口分别见
+[能力基线](capability-baseline.md) 和 [开发计划](development-plan.md)。
+
 当前本地链路与生产边界一致：
 
 ```text
 Browser -> open-web-codex-server -> PostgreSQL
                               \-> Profile Host -> codex app-server
-                              \-> Run Orchestrator -> Git workspace
+                              \-> Workspace/Git -> authorized execution roots
+                              \-> Run Orchestrator -> schedule and audit Runs
 ```
 
 浏览器只访问同源 REST 和认证 WebSocket。仓库中没有本地 sidecar、无认证
@@ -127,9 +132,10 @@ Project、主 Thread 与延时 Thread，并验证消息流事件顺序、代码�
 ## 浏览器纵向流程
 
 1. 打开 `http://127.0.0.1:1421/web`。
-2. 首次运行选择初始化，创建首位 Owner；以后使用登录入口。
+2. 当前单用户入口自动建立本地 Owner 与 Session，不显示登录或注册页面。
 3. 创建 Git Project，平台只接受受控 Git URL，不接受浏览器本地路径。
-4. 创建 Task 和 Run。Runner 创建私有 mirror 与该 Run 独占的可写 workspace。
+4. 显式创建或选择一个已授权 Workspace，再创建 Task 和 Run；Run 只引用
+   `workspace_id`，不会创建或独占 checkout。
 5. 向运行中的 Task 发送消息，事件先持久化再通过 WebSocket 投影。
 6. 处理待审批请求；浏览器不会看到 app-server request ID 或服务器路径。
 7. 在 Changes 中选择文件并显式 Commit。
@@ -164,7 +170,8 @@ curl --fail http://127.0.0.1:4800/api/health
 
 - 当前 Server 组合入口一次启动一个 Profile Host；多用户 Beta 仍需按授权用户
   动态路由多个持久 Profile。
-- 已支持隔离 workspace、状态、选择性 Commit；Push 与高级 Diff 尚未作为浏览器
-  资源开放。
+- 已支持独立托管 Workspace、授权、状态和选择性 Commit；现有执行根登记、共享
+  Workspace 并发与真实 multi-`cwd` 验证仍未完成，Push 与高级 Diff 尚未作为
+  浏览器资源开放。
 - Session 当前使用 Bearer token；生产发布前仍需完成 HttpOnly Cookie、CSRF、
   限速、备份恢复和 Runner 强隔离门禁。

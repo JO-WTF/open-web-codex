@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
   <title id="title">供应链网络规划师参考架构</title>
-  <desc id="desc">供应链网络规划师由 Agent Profile、Domain Knowledge 与 Skills 构成，Skills 通过 MCP Layer 连接规划数据、地理路由、优化、模拟和交付能力。</desc>
+  <desc id="desc">供应链网络规划师由 Agent Definition、Runtime Role、Domain Knowledge 与 Skills 构成，Skills 通过 MCP Layer 连接规划数据、地理路由、优化、模拟和交付能力。</desc>
   <defs>
     <style>
       text { font-family: Inter, "Noto Sans SC", "Microsoft YaHei", sans-serif; fill: #172033; }
@@ -21,7 +21,7 @@
   <text x="600" y="118" text-anchor="middle" class="label">Supply Chain Network Planner</text>
 
   <rect x="130" y="150" width="940" height="100" class="box" fill="#ffffff" stroke="#9383d2"/>
-  <text x="600" y="187" text-anchor="middle" class="label">Agent Profile</text>
+  <text x="600" y="187" text-anchor="middle" class="label">Agent Definition / Runtime Role</text>
   <text x="600" y="222" text-anchor="middle" class="body">Identity · Responsibilities · Scope · Principles · Output Contract</text>
 
   <rect x="130" y="290" width="430" height="235" class="box" fill="#ffffff" stroke="#9383d2"/>

@@ -2,7 +2,13 @@
 
 ## 1. 文档概述
 
-领域 Agent 扩展架构由 **Agent Profile、Domain Knowledge、Skills 与 MCP Servers** 组成，适合为 Codex 增加供应链、系统架构、数据分析等专业能力。
+领域 Agent 扩展架构由 **Agent Definition、Runtime Role、Domain Knowledge、
+Skills 与 MCP Servers** 组成，适合为 Codex 增加供应链、系统架构、数据分析等
+专业能力。
+
+这里刻意不使用 “Agent Profile”。在 Open Web Codex 中，**Profile** 专指用户级
+持久 Runtime 身份及其 `CODEX_HOME`；专业 Agent 的治理定义称为 **Agent
+Definition**，Codex 真正用于创建子 Agent 的执行配置称为 **Runtime Role**。
 
 典型应用包括：
 
@@ -16,16 +22,19 @@
 
 领域 Agent 通常不需要独立的基础模型。Codex Runtime 加载角色说明、领域知识、任务流程和外部工具后，即可按相应专业角色完成工作。
 
-领域 Agent 包含四个部分：
+领域 Agent 包含五个部分：
 
 | 组成 | 作用 |
 | --- | --- |
-| Agent Profile | 定义角色、职责、边界和工作原则 |
+| Agent Definition | 记录角色、职责、版本、边界、所有者和发布状态 |
+| Runtime Role | 把已发布定义映射为 Codex 可发现、可用于 spawn 的执行配置 |
 | Domain Knowledge | 提供标准、规范、业务事实和项目资料 |
 | Skills | 定义专业任务的执行方法 |
 | MCP Servers / Tools | 连接外部系统、数据和计算工具 |
 
-其中，Codex Runtime 负责通用任务理解、规划、调度和执行；领域 Agent 负责提供专业角色、专业知识、专业方法和工具能力。
+其中，Agent Definition 回答企业“允许提供什么专业 Agent”，Runtime Role 回答
+Codex“本次执行如何创建它”。Codex Runtime 继续负责通用任务理解、多 Agent
+协调和执行；领域扩展提供专业角色、知识、方法与工具。
 
 ---
 
@@ -39,13 +48,14 @@
 
 ```mermaid
 flowchart LR
-    A[User Task] --> B[Codex Runtime]
-    B --> C[Agent Profile]
-    C --> D[Skill]
-    D --> E[读取 Knowledge]
-    D --> F[调用 MCP Tools]
-    E --> G[Result]
-    F --> G
+    A["Agent Definition<br/>治理与发布"] --> B["Runtime Role<br/>Codex 可发现配置"]
+    C[User Task] --> D[Codex Runtime]
+    B --> D
+    D --> E[Skill]
+    E --> F[读取 Knowledge]
+    E --> G[调用 MCP Tools]
+    F --> H[Result]
+    G --> H
 ```
 
 ---
@@ -55,7 +65,8 @@ flowchart LR
 | 组件 | 核心职责 |
 | --- | --- |
 | Codex Runtime | 理解任务、规划步骤、组织执行并汇总结果 |
-| Agent Profile | 定义角色、职责、边界和工作约束 |
+| Agent Definition | 定义角色、职责、治理边界、版本与发布状态 |
+| Runtime Role | 提供 Codex 可解析的角色描述、执行指令和配置引用 |
 | Domain Knowledge | 提供领域事实、标准、规范和项目资料 |
 | Skill | 定义专业任务的执行方法 |
 | MCP Server | 提供外部系统、数据和工具能力 |
@@ -64,7 +75,8 @@ flowchart LR
 
 | 概念 | 说明 |
 | --- | --- |
-| Agent Profile | 以什么专业角色工作 |
+| Agent Definition | 企业允许提供什么专业角色 |
+| Runtime Role | Codex 本次以什么执行配置创建该角色 |
 | Knowledge | 依据什么进行判断 |
 | Skill | 如何完成某类专业任务 |
 | MCP | 通过什么外部能力执行 |
@@ -72,41 +84,58 @@ flowchart LR
 
 ---
 
-## 3. Agent Profile
+## 3. Agent Definition 与 Runtime Role
 
 ### 3.1 定义
 
-Agent Profile 是对领域 Agent 的总体说明，可以写在 `AGENTS.md` 或领域配置中。
+Agent Definition 是领域 Agent 的治理记录。它可以先以版本化 Manifest
+随代码管理，未来再进入 Agent Catalog；无论采用哪种存储形式，都不等于一个正在
+运行的 Agent。
 
 它用于描述：
 
 - Agent 的专业身份；
 - Agent 的任务范围；
 - Agent 的职责边界；
+- Agent 的所有者、版本和发布状态；
 - Agent 的工作原则；
 - Agent 可以使用的 Skills；
 - Agent 对知识和工具的使用要求；
 - Agent 的输出格式和完成标准。
 
-Agent Profile 规定 Agent 在不同任务中都要遵循的角色、职责和工作原则。具体任务的执行步骤由 Skill 定义。
+Runtime Role 则是 Codex 能够发现和解析的执行配置，包含角色描述、开发者指令以及
+必要的模型、sandbox 或能力配置。平台发布 Agent Definition 时，需要验证它引用的
+Runtime Role 在目标 Profile 中确实可用；Runtime 真正 spawn 后产生的子 Agent
+Thread，才是运行实例。
 
-Agent Profile 通常包含：
+Agent Definition 通常包含：
 
 | 字段 | 内容 |
 | --- | --- |
+| ID / Version / Owner | 稳定身份、版本和责任人 |
 | Identity / Description | 角色名称和专业说明 |
 | Responsibilities / Scope | 职责、适用范围和排除范围 |
 | Constraints / Operating Principles | 工作约束和执行原则 |
+| Runtime Role Reference | 已验证的 Codex Runtime Role 引用 |
 | Available Skills | 可用的专业流程 |
 | Knowledge References | 使用的领域资料 |
 | Output Requirements | 输出格式和完成标准 |
+| Release State | draft、published、deprecated 等治理状态 |
 
 ---
 
-### 3.2 供应链网络规划师 Profile 示例
+### 3.2 供应链网络规划师 Agent Definition 示例
+
+下面是治理 Manifest 的概念示例，用于说明字段责任，不表示当前平台已经提供同名
+API 或会直接解析这份 YAML。
 
 ```yaml
+id: supply-chain-network-planner
+version: 1.0.0
 name: supply-chain-network-planner
+owner: supply-chain-center
+release_state: published
+runtime_role_ref: supply-chain-network-planner
 
 description: >
   面向供应链设施布局、仓网规划、运输网络与服务能力设计的网络规划专家。
@@ -152,19 +181,20 @@ output_requirements:
 
 ---
 
-### 3.3 Profile 的边界
+### 3.3 Agent Definition 的边界
 
-Agent Profile 应保持稳定，不应承载大量变化频繁的实现细节。
+Agent Definition 应保持稳定，不应承载大量变化频繁的实现细节。
 
-| 适合放入 Profile | 不适合放入 Profile |
+| 适合放入 Agent Definition | 不适合放入 Agent Definition |
 | --- | --- |
+| 所有者、版本和发布状态 | 当前子 Agent 的运行状态 |
 | 角色职责 | 完整 API 参数 |
 | 工作原则 | 大量执行步骤 |
 | 任务边界 | 厂商命令手册 |
 | 输出标准 | 大量领域文档正文 |
-| 工具使用原则 | 具体脚本实现 |
+| Runtime Role 引用和能力要求 | 具体脚本实现 |
 
-例如，Profile 可以规定：
+例如，Agent Definition 可以规定：
 
 ```text
 设施规划必须查询权威的需求、产能和地理数据源。
@@ -530,6 +560,10 @@ Platform 验证同一 Run、同一 Thread 中较早完成的 Resource 并登记 
 实时与历史恢复使用同一 renderer DTO 和指令 parser。旧 `replyCard` 投影、双写和
 旧历史恢复分支均不存在。
 
+这是当前实现限制，不是目标所有权。企业多 Agent 协作需要把 Artifact 升级为具有
+独立身份、授权和保留周期的资源，使另一个获授权子 Thread 或后继 Run 能继续读取；
+生产它的 Run/Thread/Turn/Item 只保留为 provenance。
+
 ---
 
 ## 7. 供应链网络规划师参考架构
@@ -547,7 +581,7 @@ Platform 验证同一 Run、同一 Thread 中较早完成的 Resource 并登记 
 ```mermaid
 flowchart TD
     A["用户任务：规划华东五年期仓网与运输网络"] --> B["Codex Runtime：解析目标并制定计划"]
-    B --> C[加载供应链网络规划师 Profile]
+    B --> C["使用已验证的供应链网络规划师 Runtime Role"]
     C --> D[选择并编排 Skills]
     D --> E[读取服务、库存、运输、产能等 Knowledge]
     E --> F[调用 Planning Data、Geo、Optimization、Simulation 等 MCP]
@@ -573,7 +607,10 @@ supply-chain-network-planner-agent/
 │
 ├── AGENTS.md
 │
-├── profiles/
+├── agent-definitions/
+│   └── supply-chain-network-planner.yaml
+│
+├── runtime-roles/
 │   └── supply-chain-network-planner.md
 │
 ├── knowledge/
@@ -649,10 +686,11 @@ supply-chain-network-planner-agent/
 
 ```mermaid
 flowchart LR
-    A[AGENTS.md] --> B[profiles/supply-chain-network-planner.md]
-    B --> C[knowledge/*]
-    B --> D[skills/*]
-    B --> E[mcp/*]
+    A[agent-definitions/*] --> B[runtime-roles/*]
+    B --> C[Codex Runtime discovery]
+    A --> D[knowledge/*]
+    A --> E[skills/*]
+    A --> F[mcp/*]
 ```
 
 ---
@@ -782,7 +820,7 @@ flowchart LR
 flowchart LR
     A["Skill Unit Tests<br/>验证单个 Skill"] --> B["MCP Contract Tests<br/>验证参数、返回结构、错误和超时"]
     B --> C["Integration Tests<br/>验证多个 Skill 与 MCP 协作"]
-    C --> D["Regression Tests<br/>验证 Profile、Skill、Knowledge 变更影响"]
+    C --> D["Regression Tests<br/>验证 Agent Definition、Runtime Role、Skill 与 Knowledge 变更影响"]
 ```
 
 例如仓网规划测试：
@@ -796,18 +834,19 @@ flowchart LR
 
 ## 12. 常见设计问题与核心原则
 
-### 12.1 将全部内容写入 Profile
+### 12.1 将全部内容写入 Agent Definition
 
-| 不建议全部放入 Profile | 应放置的位置 |
+| 不建议全部放入 Agent Definition | 应放置的位置 |
 | --- | --- |
 | 领域知识 | Knowledge |
 | 任务流程和校验规则 | Skills |
 | API 定义和外部调用 | MCP |
 | 输出模板 | Skill 资源或模板目录 |
 
-这种结构会让 Profile 文件过大，难以维护和复用。
+这种结构会让 Agent Definition 过大，难以维护和复用。
 
-Profile 只保留角色、范围和原则；Knowledge 保存领域事实；Skills 组织专业流程；MCP 连接外部工具。
+Agent Definition 只保留治理元数据、角色、范围和原则；Runtime Role 提供 Codex
+执行配置；Knowledge 保存领域事实；Skills 组织专业流程；MCP 连接外部工具。
 
 ---
 
@@ -851,12 +890,14 @@ flowchart LR
 
 | 稳定性 | 组成 | 变化方式 |
 | --- | --- | --- |
-| 高 | Agent Profile | 角色、职责和工作原则保持相对稳定 |
+| 高 | Agent Definition | 角色、职责、所有者和工作原则保持相对稳定 |
+| 较高 | Runtime Role | 随 Runtime 能力和执行策略进行版本化调整 |
 | 较高 | Skills | 随专业方法逐步完善 |
 | 中 | Knowledge | 随标准和业务资料持续更新 |
 | 较低 | MCP Adapter | 随外部系统和接口变化进行替换 |
 
-例如，将仓储数据源从 Legacy WMS 更换为 New WMS 时，只需要替换 MCP Adapter；`simulate-warehouse-network` 的专业流程和 Agent Profile 不需要同步重写。
+例如，将仓储数据源从 Legacy WMS 更换为 New WMS 时，只需要替换 MCP Adapter；
+`simulate-warehouse-network` 的专业流程和 Agent Definition 不需要同步重写。
 
 ---
 
@@ -864,7 +905,7 @@ flowchart LR
 
 | 原则 | 要求 |
 | --- | --- |
-| 职责分离 | Profile 负责角色，Knowledge 负责知识，Skill 负责流程，MCP 负责工具 |
+| 职责分离 | Agent Definition 负责治理，Runtime Role 负责执行配置，Knowledge 负责知识，Skill 负责流程，MCP 负责工具 |
 | 低耦合 | 更换工具不影响角色，更新规范不重写流程，Skill 可以跨项目复用 |
 | 可验证 | 使用结构化输入输出、明确校验规则和自动化测试 |
 | 可扩展 | 可以独立增加 Skill、Knowledge、MCP Server，并组合新的领域 Agent |
@@ -875,4 +916,7 @@ flowchart LR
 
 这套架构通过明确的职责分工、专业流程、工具接口和验证机制，为 Codex 提供可维护的领域能力。
 
-Codex Runtime 负责理解、规划和执行；Agent Profile 定义角色；Domain Knowledge 提供专业依据；Skills 组织工作方法；MCP Servers 连接外部系统。各层可以独立更新，使领域 Agent 更容易维护、测试和复用。
+Codex Runtime 负责理解、规划和执行；Agent Definition 定义并治理专业角色；
+Runtime Role 提供 Codex 可发现的执行配置；Domain Knowledge 提供专业依据；
+Skills 组织工作方法；MCP Servers 连接外部系统。各层可以独立更新，使领域 Agent
+更容易维护、测试和复用。

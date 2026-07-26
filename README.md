@@ -6,8 +6,8 @@ Codex runtime in one repository.
 
 The product keeps the responsibilities deliberately separate:
 
-- `apps/web` owns users, projects, tasks, runs, permissions, worktrees, approvals,
-  audit data, and the browser experience.
+- `apps/web` owns users, projects, tasks, runs, permissions, independently
+  authorized Workspaces, approvals, audit data, and the browser experience.
 - `codex` owns model execution, Thread/Turn semantics, multi-agent behavior,
   memory, skills, plugins, MCP, and the app-server protocol.
 - generated protocol artifacts are the integration boundary. The Web application
@@ -18,9 +18,13 @@ The product keeps the responsibilities deliberately separate:
 ```text
 apps/web/                 Browser client and session-backed platform server
 codex/                    Customized Codex runtime subtree
-docs/product-design.md    Canonical product requirements and release scope
-docs/capability-baseline.md
-docs/development-plan.md  Executable milestone plan
+docs/README.md            Documentation authority and reading paths
+docs/product-vision.md    Long-term product north star
+docs/product-design.md    V1 product requirements and release scope
+docs/architecture.md      Current technical architecture and ownership
+docs/capability-baseline.md  Current verified capability evidence
+docs/roadmap.md           Accepted medium-term stage order
+docs/development-plan.md  Current and next milestone plan
 docs/codex-upstream-sync.md
 scripts/                  Monorepo and upstream-sync tooling
 ```
@@ -109,10 +113,15 @@ non-trivial sync conflict.
 
 ## Canonical documents
 
+- [Documentation map](docs/README.md)
+- [Product vision](docs/product-vision.md)
 - [Product design](docs/product-design.md)
+- [Enterprise multi-Agent architecture](docs/enterprise-agent-platform-architecture.md)
+- [Current architecture](docs/architecture.md)
+- [Security model](docs/security-model.md)
 - [Capability baseline](docs/capability-baseline.md)
+- [Roadmap](docs/roadmap.md)
 - [Development plan](docs/development-plan.md)
-- [Architecture](docs/architecture.md)
 
 ## Extension guides
 

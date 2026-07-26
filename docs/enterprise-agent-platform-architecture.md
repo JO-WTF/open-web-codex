@@ -7,6 +7,10 @@ _企业多 Agent 协同平台的架构推演与落地路径_
 > 适用范围：企业级、多用户、可治理的多 Agent 协同平台
 >
 > 阅读方式：先从业务问题推导理想能力，不预设技术选型；再引入现有系统、实现成本和演进约束，逐步收敛到可落地架构
+>
+> 文档边界：本文负责长期架构推演；产品北极星、当前代码事实、能力证据和已接受的
+> 阶段顺序分别以 [产品愿景](product-vision.md)、[系统架构](architecture.md)、
+> [能力基线](capability-baseline.md) 和 [路线图](roadmap.md) 为准
 
 ---
 
@@ -680,7 +684,7 @@ Runtime Role 只是执行配置的一种来源；一个 Tool、Skill、Plugin �
 
 复用 Codex 解决了 Agent 如何执行，却没有解决谁可以使用 Runtime、一次任务如何可靠启动、浏览器如何安全观察过程，以及成果如何长期保存。
 
-这些是企业平台必须承担的责任，但它们应该围绕 Runtime 建设，而不是进入 Runtime 内部重新实现一遍。当前 Open Web Codex 已经形成了几块可以继续演进的控制面骨架，接下来需要判断它们分别解决了什么，以及还欠缺哪些所有权迁移。
+这些是企业平台必须承担的责任，但它们应该围绕 Runtime 建设，而不是进入 Runtime 内部重新实现一遍。当前 Open Web Codex 已经形成了几块可以继续演进的控制面骨架，接下来需要判断它们分别解决了什么，哪些所有权边界已经成立，以及哪些能力仍然存在缺口。
 
 #### 9.1 Profile 生命周期与 Runtime 宿主
 
@@ -715,7 +719,9 @@ Agent 可以用概率性的方式思考，但平台不能用概率性的方式�
 
 这也说明，原先容易被称作 `Task Runtime Service` 的组件，更准确的定位是 **Task/Run Control**：它保证一次执行尝试可靠发生，却不负责替 Agent 思考。
 
-当前实现还暴露出一项重要的架构债务。[`execution.rs`](../apps/web/crates/run-orchestrator/src/execution.rs) 会在执行 Run 时创建 Workspace，并把它记录到 Run 上。这是已经工作的现状，但不是目标所有权。目标态应当让 Workspace 成为可独立授权和复用的执行根，Thread 只记录当前 `cwd`，Run 也只引用 Workspace，而不拥有 checkout。
+Workspace 在这里是经过授权的独立执行根。它先由明确的 Workspace 操作创建和授权，Run 入队时只选择 `workspace_id`；Workspace 的保留和删除由自身生命周期管理，不由某次 Run 的取消、失败、租约过期或恢复决定。这样，同一 Workspace 可以承载多个前后相继的 Thread/Run，而不会因为一次调度失败就丢失工作目录。
+
+这里仍需保留证据边界：独立所有权和接口已经落地，但共享 Workspace 的并发冲突策略、进程崩溃后的创建恢复，以及真实 Codex multi-`cwd` 行为还没有完成发布级验证。它们属于 Workspace 并发、恢复和 Runtime 集成问题，不能交给 Run 生命周期代为处理。
 
 #### 9.3 Runtime 适配与 Workspace 授权边界
 
@@ -768,7 +774,7 @@ Agent 最终交付的不只是文字，也可能是地图、报告、数据集�
 
 换句话说，生产者是来源证明，不是成果的所有者。未来一个有权限的任务能否读取 Artifact，应由 Artifact 自身的授权决定，而不是由生产它的 Run 是否仍然存在决定。
 
-综合来看，当前平台不需要从零建设新的控制面：Profile 宿主、Run 调度、Runtime 适配、事件投影和 Artifact 纵向链路都已经存在。真正的工作集中在几项明确迁移上：从单 Profile 组合走向授权路由，从 per-Run Workspace 走向独立执行根，从 Run/Thread 作用域 Artifact 走向持久身份，并补齐多 Agent 执行轨迹的真实验证。
+综合来看，当前平台不需要从零建设新的控制面：Profile 宿主、独立 Workspace、Run 调度、Runtime 适配、事件投影和 Artifact 纵向链路都已经存在。真正的工作集中在几项明确演进上：从单 Profile 组合走向授权路由，补齐现有执行根登记与共享 Workspace 的并发验证，从 Run/Thread 作用域 Artifact 走向持久身份，并验证真实的多 Agent 执行轨迹。
 
 ---
 
@@ -797,10 +803,10 @@ Agent 最终交付的不只是文字，也可能是地图、报告、数据集�
 | Skills | **部分可用**：已验证选定能力根能够注入新 Thread | Profile 级发现、写入、验证和隔离测试已经完整可用 | 通过 Codex 正式机制演进，不在 Web 端复制发现逻辑 |
 | Plugins | **未支持**：平台合同尚未建立 | 安装、升级、权限和卸载生命周期已经可用 | 暂不开放完整 Plugin Studio |
 | Tools discovery | **未支持**：平台没有稳定的发现合同 | 平台已经拥有权威 Tool Catalog | 不建设 fallback 目录，不从显示文本猜能力 |
-| Profile multi-workspace | **声明存在、行为未验证**：Manifest 已有相关限制 | 所有权、并发和隔离行为已经通过验证 | Workspace 迁移必须覆盖共享、越权、恢复和并发 |
+| Profile multi-workspace | **声明存在、行为未验证**：Manifest 已有相关限制 | 所有权、并发和隔离行为已经通过验证 | 发布验证必须覆盖共享、越权、恢复和并发 |
 | Profile 多用户路由 | **目标缺口**：当前仍为单 Profile 组合 | 每个认证用户已经动态路由到独立进程 | 多用户 Beta 前完成进程路由与隔离矩阵 |
 | Inline Artifact | **真实链路已验证**：登记、授权 URL、展示和刷新恢复可用 | 已有独立身份、跨 Run 授权和保留策略 | 保留现有纵向链路，迁移所有权而非推倒重写 |
-| Task/Run Control | **代码已确认且已有可用链路**：幂等、lease、heartbeat、恢复和审计路径存在 | Workspace 所有权已经正确 | 保留调度骨架，移除 per-Run checkout 所有权 |
+| Task/Run Control | **代码已确认且已有可用链路**：幂等、lease、heartbeat、恢复和审计路径存在；Run 只选择独立 Workspace | 共享 Workspace 的并发、越权和 multi-`cwd` 已经完成真实验证 | 保持 Run 与 Workspace 的所有权边界，补齐真实链路验证 |
 
 这张表揭示了第三部分最重要的判断：
 
@@ -1421,7 +1427,7 @@ flowchart TB
         EVT["Durable Event & Audit Projection<br/>已有骨架"]
         ASTORE["Artifact Store<br/>需要迁移"]
         KLEDGER["Task Knowledge Ledger<br/>按证据引入"]
-        WSGIT["Independent Workspace / Runner / Git<br/>需要迁移"]
+        WSGIT["Independent Workspace / Runner / Git<br/>已有骨架，待完整验证"]
         PH["Per-user Profile Host Routing<br/>需要扩展"]
         ADAPTER["Typed Codex Adapter<br/>已有骨架"]
     end
@@ -1496,7 +1502,7 @@ flowchart TB
 
 > **当前实现与目标图的距离**
 >
-> [`run-orchestrator`](../apps/web/crates/run-orchestrator/src/lib.rs)、[`profile-host`](../apps/web/crates/profile-host/src/lib.rs)、[`codex-adapter`](../apps/web/crates/codex-adapter/src/real.rs) 和事件投影已经形成平台骨架；但当前仍是单 Profile 组合、per-Run Workspace，以及 Run/Thread 作用域的 Inline Artifact。图中的独立 Workspace、按用户 Profile 路由和持久 Artifact Store 都是明确迁移目标，不能被写成已经完成。
+> [`run-orchestrator`](../apps/web/crates/run-orchestrator/src/lib.rs)、[`profile-host`](../apps/web/crates/profile-host/src/lib.rs)、[`codex-adapter`](../apps/web/crates/codex-adapter/src/real.rs) 和事件投影已经形成平台骨架。Workspace 具有独立身份、授权和托管生命周期，Run 只保存所选 Workspace 的引用。当前仍是单 Profile 组合，现有执行根登记、共享 Workspace 并发验证和持久 Artifact Store 尚未完成，不能把这些目标写成现有能力。
 
 ---
 
@@ -1523,7 +1529,7 @@ flowchart TB
 5. worker 获取 lease；
 6. 通过 Adapter 启动或恢复 Codex Thread，并发起 Turn。
 
-这一步不需要理解建仓问题，只负责保证后续执行有清楚的身份、目录、租约和恢复位置。当前 Task/Run、Profile Host 和 Adapter 骨架已经存在；独立 Workspace 和按用户 Profile 路由仍是目标迁移，不能把当前 per-Run checkout、单 Profile 组合描述成这一步已经完整实现。
+这一步不需要理解建仓问题，只负责保证后续执行有清楚的身份、目录、租约和恢复位置。当前 Task/Run、独立托管 Workspace、Profile Host 和 Adapter 骨架已经存在；按用户 Profile 路由、现有执行根登记和共享 Workspace 的真实并发验证仍有缺口，不能据此把这一层描述成已经完整实现。
 
 #### 18.2 Supervisor 建立问题框架
 
@@ -2065,6 +2071,9 @@ Phase 2 在同一用例上增加第二个组织和第二个 Profile 并发运行
 
 ### 26. 路线图按风险收敛
 
+本章保留从风险推导建设顺序的理由和阶段原型；项目当前接受的阶段名称、位置与
+进入/退出条件由 [产品与工程路线图](roadmap.md) 统一维护。
+
 前面的分析改变了建设顺序。Profile Host、Run Orchestrator、Codex Adapter、事件投影和 Inline Artifact 已经存在；下一步集中在几条尚未穿透真实边界的产品链路。
 
 第 24、25 章已经给出完整风险和验证矩阵。路线图据此先处理 Runtime 执行轨迹、Supervisor Policy 绑定和 Artifact 交接，再处理执行授权、多 Profile 路由与 Agent Catalog；Task Knowledge Ledger 始终留在生产数据证明必要之后。组件只有在消除这些风险时才进入路线图。
@@ -2177,7 +2186,7 @@ Phase 1 证明一个用例能够可信运行；Phase 2 才把它扩展为多个�
 - Supervisor Policy 生命周期、升级和迁移；
 - 已验证的执行授权上下文，使 Runtime Role 权限可以被系统裁剪；
 - 多用户动态 Profile 路由和并发隔离；
-- 独立 Workspace 资源及官方 `cwd` 授权；
+- Workspace 的多用户授权、共享并发与官方 `cwd` 链路验证；
 - Agent 执行投影的重建和历史查询；
 - Artifact 跨 Run 复用、保留策略、替代关系和依赖失效；
 - recovery、cancel、timeout、approval 的系统级验证；
@@ -2204,7 +2213,7 @@ Phase 1 证明一个用例能够可信运行；Phase 2 才把它扩展为多个�
 - 两个用户可以同时路由到各自 Profile，事件、Secret、Thread 和配置不串流；
 - Agent Definition 的发布状态与 Runtime 可用性不会混淆；
 - 执行授权上下文在重启和并发调用后仍不可伪造；
-- Workspace 不再由 Run 隐式拥有；
+- Workspace 拥有独立身份、授权与生命周期，Run 只引用执行所用的 Workspace；
 - Artifact 脱离生产 Run 后仍可按授权读取；
 - Agent 执行投影删除后可以从权威历史重建；
 - 高风险 Capability 必须经过系统审批；
@@ -2594,7 +2603,7 @@ Phase 1 使用 Task/Profile 级受限连接、只读凭据和明确资源范围�
 | Event Projection | `apps/web/server/src/event_projection.rs` | 已有，增加 Agent 执行轨迹 |
 | Browser Agent UI | `apps/web/src` | 局部事件 UI 已有，需稳定 DTO |
 | Profile Agent 设置 | `profile_content.rs` + `SettingsAgentsSection.tsx` | 分支已有托管配置文件 CRUD；是 Profile 管理路径，不是企业 Catalog 发布合同 |
-| Workspace | Platform/Git/Adapter | 正在从 per-Run ownership 迁移 |
+| Workspace | Platform/Git/Adapter | 已具备独立身份、授权和显式托管生命周期；Run 只保存引用；现有执行根登记、真实 worktree 和共享并发验证待补 |
 | Artifact Store | Artifact routes/contracts/event projection | 有同 Run/Thread 垂直切片；Phase 1 需独立 ID 和跨子 Thread 读取 |
 | 执行授权上下文 | 平台 + Runtime/MCP 边界 | 目标合同；AgentPath/Runtime Role 的不可伪造传递尚未验证 |
 | Agent Catalog | 平台新增能力 | 未建设 |
@@ -2977,9 +2986,13 @@ Runtime Tool 对 Task Knowledge Ledger 只能提出结构化 Proposal；平台�
 ### C.1 项目权威文档
 
 - [`AGENTS.md`](../AGENTS.md)
+- [`docs/README.md`](README.md)
+- [`docs/product-vision.md`](product-vision.md)
 - [`docs/product-design.md`](product-design.md)
 - [`docs/architecture.md`](architecture.md)
+- [`docs/security-model.md`](security-model.md)
 - [`docs/capability-baseline.md`](capability-baseline.md)
+- [`docs/roadmap.md`](roadmap.md)
 - [`docs/development-plan.md`](development-plan.md)
 - [`docs/domain-agent-extension-architecture.md`](domain-agent-extension-architecture.md)
 - [`docs/codex-upstream-sync.md`](codex-upstream-sync.md)

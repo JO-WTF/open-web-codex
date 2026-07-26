@@ -1,5 +1,11 @@
 # Architecture
 
+This document records the current technical architecture and authoritative
+ownership boundaries. It does not prove a capability is release-ready or
+replace the long-term product and multi-agent design. Current validation lives
+in `capability-baseline.md`; normative trust boundaries live in
+`security-model.md`.
+
 ## Architectural objective
 
 `open-web-codex` is a multi-user Web control plane around the official Codex
@@ -12,6 +18,15 @@ The initial deployable is a modular monolith with PostgreSQL and colocated
 Profile Host/Runner processes. Boundaries are interfaces and ownership rules,
 not a requirement to create network microservices. Components separate only
 when measured capacity or isolation needs justify it.
+
+The enterprise multi-agent design in
+`docs/enterprise-agent-platform-architecture.md` is an evolutionary target
+above this control plane. It reuses Codex root Threads and native child-agent
+execution, then adds governed Supervisor Policies, Agent Definitions,
+enterprise capability authorization and durable Artifacts in the platform.
+Those target objects are not part of the live architecture until the capability
+baseline records verified implementation; the roadmap and development plan
+only control when that work is attempted.
 
 ## System shape
 
@@ -325,7 +340,7 @@ remaining Chat translation stages are defined in `docs/adr/005-map-reply-cards.m
 ### Create and run a Task
 
 1. Platform authenticates the session and authorizes project/task creation.
-2. A transaction creates the Task and queued Run using an idempotency key.
+2. A transaction creates the Task and `pending` Run using an idempotency key.
 3. The user selects an authorized Workspace. A new managed clone/worktree, when
    needed, is created explicitly as an independent resource before the Thread.
    Scheduler leases the Run and validates that Workspace grant without creating
@@ -411,6 +426,6 @@ Plugins or MCP into the Web platform for short-term convenience.
 
 The live capability and delivery status are intentionally not duplicated here.
 Use `docs/capability-baseline.md` for verified Runtime/platform facts and
-`docs/development-plan.md` for completed and next work. ADRs under `docs/adr/`
-record accepted implementation choices without redefining these ownership
-rules.
+`docs/roadmap.md` for accepted stage order, and `docs/development-plan.md` for
+current and next work. ADRs under `docs/adr/` record accepted implementation
+choices without redefining these ownership rules.

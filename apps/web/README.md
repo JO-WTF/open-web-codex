@@ -12,13 +12,17 @@ Browser
   -> open-web-codex-server
        -> PostgreSQL authorization and durable workflow state
        -> Profile Host -> codex app-server
-       -> Thread workspace -> private Git mirror + authorized checkout
-       -> Run orchestrator -> resolve Thread workspace + execute/audit
+       -> Workspace service -> authorized roots + managed Git resources
+       -> Run orchestrator -> validate selected Workspace + execute/audit
 ```
 
 The browser never receives local paths, credentials, app-server request IDs, or
 raw JSON-RPC. Codex remains the owner of Thread/Turn, context, memory, tools,
 skills, plugins, MCP, and multi-agent execution.
+
+Workspaces are independent authorized execution roots. A Thread keeps its
+current `cwd` in Codex; a Run references the Workspace selected for that
+attempt. Neither object implicitly creates or owns a checkout.
 
 ## Requirements
 
@@ -134,7 +138,7 @@ crates/profile-host/       persistent CODEX_HOME and app-server lifecycle
 crates/profile-registry/   single-owner Profile process registry
 crates/provider-service/   authorized Provider orchestration
 crates/secret-store/       encrypted credential persistence
-crates/git-runtime/        mirrors and isolated Run workspaces
+crates/git-runtime/        mirrors and independent managed Workspaces
 crates/run-orchestrator/   leases, recovery, cancellation, and execution
 crates/approval-service/   durable app-server approvals
 crates/platform-store/     PostgreSQL state and event bus
@@ -143,5 +147,6 @@ migrations/                platform schema
 scripts/                   contracts, smoke tests, and boundary checks
 ```
 
-Canonical product, architecture, capability, and delivery status live under
-the repository-level `docs/` directory.
+Canonical product, architecture, security, capability, roadmap and delivery
+documents are routed by the repository-level
+[`docs/README.md`](../../docs/README.md).
