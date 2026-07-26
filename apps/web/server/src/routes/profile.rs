@@ -63,62 +63,44 @@ pub async fn usage(
     authorize_profile(&state, &auth, &profile).await?;
     let day_count = params.days.unwrap_or(30).clamp(1, 90);
     let mut rows = if let Some(workspace_id) = params.workspace_id {
-        let is_project = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM projects WHERE id = $1 AND organization_id = $2)",
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS( \
+               SELECT 1 FROM workspaces workspace \
+               JOIN workspace_grants grant ON grant.workspace_id = workspace.id \
+                 AND grant.organization_id = workspace.organization_id \
+                 AND grant.user_id = $3 AND grant.profile_id = workspace.profile_id \
+               WHERE workspace.id = $1 AND workspace.organization_id = $2 \
+                 AND workspace.state IN ('ready', 'retained') \
+             )",
         )
         .bind(workspace_id)
         .bind(auth.organization_id)
+        .bind(auth.user_id)
         .fetch_one(&state.db)
         .await
         .map_err(database_error)?;
-        if is_project {
-            sqlx::query(
-                "SELECT event.run_id, event.event_type, event.created_at, event.payload \
-                 FROM run_events event JOIN runs run ON run.id = event.run_id \
-                 JOIN tasks task ON task.id = run.task_id \
-                 WHERE run.organization_id = $1 AND run.requested_by = $2 \
-                   AND task.project_id = $3 \
-                   AND event.event_type IN ('codex.thread.token_usage.updated', 'codex.turn.completed') \
-                 ORDER BY event.run_id, event.created_at LIMIT 100000",
-            )
-            .bind(auth.organization_id)
-            .bind(auth.user_id)
-            .bind(workspace_id)
-            .fetch_all(&state.db)
-            .await
-            .map_err(database_error)?
-        } else {
-            let exists = sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS(SELECT 1 FROM runs WHERE id = $1 AND organization_id = $2 \
-                 AND requested_by = $3 AND workspace_kind <> 'main')",
-            )
-            .bind(workspace_id)
-            .bind(auth.organization_id)
-            .bind(auth.user_id)
-            .fetch_one(&state.db)
-            .await
-            .map_err(database_error)?;
-            if !exists {
-                return Err((
-                    StatusCode::NOT_FOUND,
-                    Json(PlatformError::not_found("Usage workspace was not found")),
-                ));
-            }
-            sqlx::query(
-                "SELECT event.run_id, event.event_type, event.created_at, event.payload \
-                 FROM run_events event JOIN runs run ON run.id = event.run_id \
-                 WHERE run.organization_id = $1 AND run.requested_by = $2 \
-                   AND (run.id = $3 OR run.workspace_group_run_id = $3) \
-                   AND event.event_type IN ('codex.thread.token_usage.updated', 'codex.turn.completed') \
-                 ORDER BY event.run_id, event.created_at LIMIT 100000",
-            )
-            .bind(auth.organization_id)
-            .bind(auth.user_id)
-            .bind(workspace_id)
-            .fetch_all(&state.db)
-            .await
-            .map_err(database_error)?
+        if !exists {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(PlatformError::not_found("Usage workspace was not found")),
+            ));
         }
+        sqlx::query(
+            "SELECT event.run_id, event.event_type, event.created_at, event.payload \
+             FROM run_events event \
+             JOIN runs run ON run.id = event.run_id \
+             JOIN workspaces workspace ON workspace.id = run.workspace_id \
+             WHERE run.organization_id = $1 AND run.requested_by = $2 \
+               AND (workspace.id = $3 OR workspace.group_workspace_id = $3) \
+               AND event.event_type IN ('codex.thread.token_usage.updated', 'codex.turn.completed') \
+             ORDER BY event.run_id, event.created_at LIMIT 100000",
+        )
+        .bind(auth.organization_id)
+        .bind(auth.user_id)
+        .bind(workspace_id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(database_error)?
     } else {
         sqlx::query(
             "SELECT event.run_id, event.event_type, event.created_at, event.payload \
@@ -644,34 +626,39 @@ async fn run_context(
     run_id: Uuid,
 ) -> Result<RunContext, (StatusCode, Json<PlatformError>)> {
     let row = sqlx::query(
-        "SELECT r.codex_thread_id, r.workspace_id, r.requested_by, w.root_path, w.state \
+        "SELECT r.codex_thread_id, r.workspace_id, r.requested_by, w.root_path, w.state, \
+                grant.role AS workspace_role \
          FROM runs r JOIN workspaces w ON w.id = r.workspace_id \
+         LEFT JOIN workspace_grants grant ON grant.workspace_id = w.id \
+           AND grant.organization_id = w.organization_id \
+           AND grant.user_id = $3 AND grant.profile_id = w.profile_id \
          WHERE r.id = $1 AND r.organization_id = $2 AND w.organization_id = $2",
     )
     .bind(run_id)
     .bind(auth.organization_id)
+    .bind(auth.user_id)
     .fetch_optional(&state.db)
     .await
     .map_err(database_error)?
     .ok_or_else(|| {
         (
             StatusCode::NOT_FOUND,
-            Json(PlatformError::not_found("Run workspace was not found")),
+            Json(PlatformError::not_found("Run context was not found")),
         )
     })?;
     let requested_by: Option<Uuid> = row.get("requested_by");
-    if requested_by != Some(auth.user_id)
-        && !matches!(auth.organization_role.as_str(), "owner" | "admin")
-    {
+    let workspace_role: Option<String> = row.get("workspace_role");
+    let is_admin = matches!(auth.organization_role.as_str(), "owner" | "admin");
+    if (requested_by != Some(auth.user_id) || workspace_role.is_none()) && !is_admin {
         return Err((
             StatusCode::NOT_FOUND,
-            Json(PlatformError::not_found("Run workspace was not found")),
+            Json(PlatformError::not_found("Run context was not found")),
         ));
     }
-    if row.get::<String, _>("state") == "retired" {
+    if !matches!(row.get::<String, _>("state").as_str(), "ready" | "retained") {
         return Err((
             StatusCode::CONFLICT,
-            Json(PlatformError::bad_request("Run workspace has been retired")),
+            Json(PlatformError::bad_request("Workspace is not ready")),
         ));
     }
     let workspace_id: Uuid = row.get("workspace_id");

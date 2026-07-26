@@ -206,10 +206,7 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
                 UPDATE runs SET status = $1, active_turn_id = NULL, lease_owner = NULL,
                                 lease_token = NULL, lease_expires_at = NULL, updated_at = now()
                 WHERE id = $2 AND status = 'running'
-                RETURNING task_id, workspace_id
-             ), updated_workspace AS (
-                UPDATE workspaces SET state = 'ready', updated_at = now()
-                WHERE id IN (SELECT workspace_id FROM updated_run)
+                RETURNING task_id
              )
              UPDATE tasks SET status = $3, updated_at = now()
              WHERE id IN (SELECT task_id FROM updated_run)
@@ -282,7 +279,7 @@ async fn persist_terminal_frame(
         .await
         .map_err(|error| format!("terminal event transaction error: {error}"))?;
     let session = sqlx::query(
-        "SELECT session.terminal_id, session.browser_workspace_id, session.run_id, \
+        "SELECT session.terminal_id, session.workspace_id, session.run_id, \
                 session.organization_id, run.codex_thread_id \
          FROM terminal_sessions session JOIN runs run ON run.id = session.run_id \
          WHERE session.process_id = $1",
@@ -295,7 +292,7 @@ async fn persist_terminal_frame(
         return Ok(None);
     };
     let terminal_id: String = session.get("terminal_id");
-    let browser_workspace_id: Uuid = session.get("browser_workspace_id");
+    let workspace_id: Uuid = session.get("workspace_id");
     let run_id: Uuid = session.get("run_id");
     let organization_id: Uuid = session.get("organization_id");
     let thread_id: Option<String> = session.get("codex_thread_id");
@@ -313,7 +310,7 @@ async fn persist_terminal_frame(
                 "terminal.output",
                 json!({
                     "schemaVersion": PROJECTION_VERSION,
-                    "workspaceId": browser_workspace_id,
+                    "workspaceId": workspace_id,
                     "terminalId": terminal_id,
                     "data": String::from_utf8_lossy(&decoded),
                 }),
@@ -332,7 +329,7 @@ async fn persist_terminal_frame(
                 "terminal.exit",
                 json!({
                     "schemaVersion": PROJECTION_VERSION,
-                    "workspaceId": browser_workspace_id,
+                    "workspaceId": workspace_id,
                     "terminalId": terminal_id,
                     "exitCode": params.get("exitCode").cloned().unwrap_or(Value::Null),
                 }),

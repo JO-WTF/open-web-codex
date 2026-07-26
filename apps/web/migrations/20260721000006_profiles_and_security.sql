@@ -70,20 +70,60 @@ CREATE TABLE IF NOT EXISTS profile_secrets (
 CREATE INDEX IF NOT EXISTS idx_profile_secrets_profile ON profile_secrets(profile_id);
 
 CREATE TABLE IF NOT EXISTS workspaces (
-    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    organization_id   UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-    project_id        UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    profile_id        UUID NOT NULL REFERENCES profiles(id) ON DELETE RESTRICT,
-    run_id            UUID REFERENCES runs(id) ON DELETE SET NULL,
-    root_path         TEXT NOT NULL,
-    state             TEXT NOT NULL DEFAULT 'ready'
-                          CHECK (state IN ('provisioning', 'ready', 'busy', 'failed', 'retired')),
-    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id     UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    project_id          UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    profile_id          UUID NOT NULL REFERENCES profiles(id) ON DELETE RESTRICT,
+    created_by          UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    kind                TEXT NOT NULL DEFAULT 'main'
+                            CHECK (kind IN ('main', 'worktree', 'clone')),
+    name                TEXT NOT NULL,
+    parent_workspace_id UUID REFERENCES workspaces(id) ON DELETE RESTRICT,
+    group_workspace_id  UUID REFERENCES workspaces(id) ON DELETE SET NULL,
+    managed             BOOLEAN NOT NULL DEFAULT TRUE,
+    root_path           TEXT NOT NULL,
+    source_ref          TEXT NOT NULL,
+    head_commit         TEXT,
+    branch_name         TEXT,
+    state               TEXT NOT NULL DEFAULT 'creating'
+                            CHECK (state IN (
+                                'creating', 'ready', 'retained',
+                                'removing', 'removed', 'cleanup_failed'
+                            )),
+    idempotency_key     TEXT,
+    removed_at          TIMESTAMPTZ,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (
+        parent_workspace_id IS DISTINCT FROM id
+        AND (
+            (kind = 'main' AND parent_workspace_id IS NULL)
+            OR (kind = 'worktree' AND parent_workspace_id IS NOT NULL)
+            OR kind = 'clone'
+        )
+    ),
     UNIQUE (profile_id, root_path)
 );
 CREATE INDEX IF NOT EXISTS idx_workspaces_project ON workspaces(project_id);
-CREATE INDEX IF NOT EXISTS idx_workspaces_run ON workspaces(run_id);
+CREATE INDEX IF NOT EXISTS idx_workspaces_authorized
+    ON workspaces(organization_id, project_id, profile_id, state, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_workspaces_idempotency
+    ON workspaces(organization_id, created_by, idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS workspace_grants (
+    workspace_id     UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    organization_id  UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    user_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    profile_id       UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    role             TEXT NOT NULL DEFAULT 'owner'
+                         CHECK (role IN ('owner', 'write', 'read')),
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (workspace_id, user_id, profile_id)
+);
+CREATE INDEX IF NOT EXISTS idx_workspace_grants_user
+    ON workspace_grants(organization_id, user_id, profile_id, workspace_id);
 
 ALTER TABLE approvals ADD COLUMN IF NOT EXISTS organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE approvals ADD COLUMN IF NOT EXISTS profile_id UUID REFERENCES profiles(id) ON DELETE CASCADE;

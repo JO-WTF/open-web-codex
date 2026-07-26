@@ -233,11 +233,6 @@ pub struct Run {
     pub codex_thread_id: Option<String>,
     pub active_turn_id: Option<String>,
     pub workspace_id: Option<Uuid>,
-    pub source_ref: Option<String>,
-    pub workspace_kind: String,
-    pub workspace_name: Option<String>,
-    pub workspace_parent_run_id: Option<Uuid>,
-    pub workspace_group_run_id: Option<Uuid>,
     pub attempt: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -300,17 +295,7 @@ pub struct ThreadHistoryResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartRunRequest {
     pub idempotency_key: String,
-    pub git_ref: Option<String>,
-    #[serde(default)]
-    pub workspace_kind: Option<String>,
-    #[serde(default)]
-    pub workspace_name: Option<String>,
-    #[serde(default)]
-    pub workspace_parent_run_id: Option<Uuid>,
-    #[serde(default)]
-    pub workspace_group_run_id: Option<Uuid>,
-    #[serde(default)]
-    pub copy_agents_md: bool,
+    pub workspace_id: Uuid,
     #[serde(default)]
     pub fork_thread_id: Option<String>,
     #[serde(default)]
@@ -321,6 +306,36 @@ pub struct StartRunRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartRunResponse {
     pub run: Run,
+}
+
+/// An independently authorized execution root. Runtime-local paths remain
+/// server-side and are never serialized into this browser-facing projection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Workspace {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub name: String,
+    pub kind: String,
+    pub state: String,
+    pub source_ref: String,
+    pub branch_name: Option<String>,
+    pub parent_workspace_id: Option<Uuid>,
+    pub group_workspace_id: Option<Uuid>,
+    pub managed: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateWorkspaceRequest {
+    pub project_id: Uuid,
+    pub idempotency_key: String,
+    pub kind: String,
+    pub name: Option<String>,
+    pub source_ref: Option<String>,
+    pub parent_workspace_id: Option<Uuid>,
+    #[serde(default)]
+    pub copy_agents_md: bool,
 }
 
 /// A safe Git change projection. Paths are always workspace-relative.
@@ -336,7 +351,7 @@ pub struct WorkspaceFileChange {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RunWorkspaceStatus {
+pub struct WorkspaceStatus {
     pub workspace_id: Uuid,
     pub branch: String,
     pub head_commit: String,

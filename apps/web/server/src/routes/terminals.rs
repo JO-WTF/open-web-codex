@@ -21,31 +21,32 @@ type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
 
 struct TerminalContext {
     workspace: AuthorizedWorkspace,
-    browser_workspace_id: Uuid,
+    run_id: Uuid,
 }
 
 pub async fn open(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(run_id): Path<Uuid>,
+    Path(workspace_id): Path<Uuid>,
     Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
     Json(request): Json<OpenTerminalRequest>,
 ) -> ApiResult<serde_json::Value> {
     let terminal_id = validate_terminal_id(&request.terminal_id)?;
     validate_size(request.cols, request.rows)?;
-    let context = authorized_run_workspace(&state, &auth, run_id).await?;
+    let mut transaction = state.db.begin().await.map_err(database_error)?;
+    let context = authorized_workspace_context(&mut transaction, &auth, workspace_id).await?;
     let process_id = Uuid::now_v7().to_string();
     sqlx::query(
         "INSERT INTO terminal_sessions \
-         (organization_id, run_id, browser_workspace_id, terminal_id, process_id, state) \
+         (organization_id, run_id, workspace_id, terminal_id, process_id, state) \
          VALUES ($1, $2, $3, $4, $5, 'starting')",
     )
     .bind(auth.organization_id)
-    .bind(run_id)
-    .bind(context.browser_workspace_id)
+    .bind(context.run_id)
+    .bind(workspace_id)
     .bind(&terminal_id)
     .bind(&process_id)
-    .execute(&state.db)
+    .execute(&mut *transaction)
     .await
     .map_err(|error| {
         if error
@@ -62,16 +63,17 @@ pub async fn open(
             database_error(error)
         }
     })?;
+    transaction.commit().await.map_err(database_error)?;
     if let Err(error) = adapter
         .open_terminal(&context.workspace, &process_id, request.cols, request.rows)
         .await
     {
         sqlx::query(
             "UPDATE terminal_sessions SET state = 'failed', updated_at = now() \
-             WHERE organization_id = $1 AND run_id = $2 AND terminal_id = $3",
+             WHERE organization_id = $1 AND workspace_id = $2 AND terminal_id = $3",
         )
         .bind(auth.organization_id)
-        .bind(run_id)
+        .bind(workspace_id)
         .bind(&terminal_id)
         .execute(&state.db)
         .await
@@ -80,22 +82,22 @@ pub async fn open(
     }
     sqlx::query(
         "UPDATE terminal_sessions SET state = 'running', updated_at = now() \
-         WHERE organization_id = $1 AND run_id = $2 AND terminal_id = $3 AND state = 'starting'",
+         WHERE organization_id = $1 AND workspace_id = $2 AND terminal_id = $3 AND state = 'starting'",
     )
     .bind(auth.organization_id)
-    .bind(run_id)
+    .bind(workspace_id)
     .bind(&terminal_id)
     .execute(&state.db)
     .await
     .map_err(database_error)?;
-    audit(&state, &auth, run_id, "terminal.open", &terminal_id).await?;
+    audit(&state, &auth, workspace_id, "terminal.open", &terminal_id).await?;
     Ok(Json(json!({ "id": terminal_id })))
 }
 
 pub async fn write(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path((run_id, terminal_id)): Path<(Uuid, String)>,
+    Path((workspace_id, terminal_id)): Path<(Uuid, String)>,
     Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
     Json(request): Json<WriteTerminalRequest>,
 ) -> ApiResult<serde_json::Value> {
@@ -107,130 +109,152 @@ pub async fn write(
             )),
         ));
     }
-    let (workspace, process_id) = authorized_terminal(&state, &auth, run_id, &terminal_id).await?;
+    let (workspace, process_id) =
+        authorized_terminal(&state, &auth, workspace_id, &terminal_id).await?;
     adapter
         .write_terminal(&workspace, &process_id, &request.data)
         .await
         .map_err(adapter_error)?;
-    touch(&state, auth.organization_id, run_id, &terminal_id).await?;
+    touch(&state, auth.organization_id, workspace_id, &terminal_id).await?;
     Ok(Json(json!({ "status": "written" })))
 }
 
 pub async fn resize(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path((run_id, terminal_id)): Path<(Uuid, String)>,
+    Path((workspace_id, terminal_id)): Path<(Uuid, String)>,
     Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
     Json(request): Json<ResizeTerminalRequest>,
 ) -> ApiResult<serde_json::Value> {
     validate_size(request.cols, request.rows)?;
-    let (workspace, process_id) = authorized_terminal(&state, &auth, run_id, &terminal_id).await?;
+    let (workspace, process_id) =
+        authorized_terminal(&state, &auth, workspace_id, &terminal_id).await?;
     adapter
         .resize_terminal(&workspace, &process_id, request.cols, request.rows)
         .await
         .map_err(adapter_error)?;
-    touch(&state, auth.organization_id, run_id, &terminal_id).await?;
+    touch(&state, auth.organization_id, workspace_id, &terminal_id).await?;
     Ok(Json(json!({ "status": "resized" })))
 }
 
 pub async fn close(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path((run_id, terminal_id)): Path<(Uuid, String)>,
+    Path((workspace_id, terminal_id)): Path<(Uuid, String)>,
     Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
 ) -> ApiResult<serde_json::Value> {
-    let (workspace, process_id) = authorized_terminal(&state, &auth, run_id, &terminal_id).await?;
+    let (workspace, process_id) =
+        authorized_terminal(&state, &auth, workspace_id, &terminal_id).await?;
     adapter
         .close_terminal(&workspace, &process_id)
         .await
         .map_err(adapter_error)?;
     sqlx::query(
         "UPDATE terminal_sessions SET state = 'closing', updated_at = now() \
-         WHERE organization_id = $1 AND run_id = $2 AND terminal_id = $3 \
+         WHERE organization_id = $1 AND workspace_id = $2 AND terminal_id = $3 \
            AND state IN ('starting', 'running')",
     )
     .bind(auth.organization_id)
-    .bind(run_id)
+    .bind(workspace_id)
     .bind(&terminal_id)
     .execute(&state.db)
     .await
     .map_err(database_error)?;
-    audit(&state, &auth, run_id, "terminal.close", &terminal_id).await?;
+    audit(&state, &auth, workspace_id, "terminal.close", &terminal_id).await?;
     Ok(Json(json!({ "status": "closing" })))
 }
 
-async fn authorized_run_workspace(
-    state: &AppState,
+async fn authorized_workspace_context(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     auth: &AuthenticatedUser,
-    run_id: Uuid,
+    workspace_id: Uuid,
 ) -> Result<TerminalContext, (StatusCode, Json<PlatformError>)> {
     let row = sqlx::query(
-        "SELECT r.workspace_id, r.requested_by, r.workspace_kind, w.root_path, w.state, \
-                task.project_id \
-         FROM runs r JOIN workspaces w ON w.id = r.workspace_id \
-         JOIN tasks task ON task.id = r.task_id AND task.organization_id = r.organization_id \
-         WHERE r.id = $1 AND r.organization_id = $2 AND w.organization_id = $2",
+        "SELECT workspace.id AS workspace_id, workspace.root_path, workspace.state, grant.role, \
+                (SELECT run.id FROM runs run \
+                 WHERE run.workspace_id = workspace.id AND run.requested_by = $3 \
+                   AND run.codex_thread_id IS NOT NULL \
+                 ORDER BY run.updated_at DESC, run.id DESC LIMIT 1) AS run_id \
+         FROM workspaces workspace \
+         LEFT JOIN workspace_grants grant ON grant.workspace_id = workspace.id \
+           AND grant.organization_id = workspace.organization_id \
+           AND grant.user_id = $3 AND grant.profile_id = workspace.profile_id \
+         WHERE workspace.id = $1 AND workspace.organization_id = $2 \
+         FOR KEY SHARE OF workspace",
     )
-    .bind(run_id)
+    .bind(workspace_id)
     .bind(auth.organization_id)
-    .fetch_optional(&state.db)
+    .bind(auth.user_id)
+    .fetch_optional(&mut **transaction)
     .await
     .map_err(database_error)?
     .ok_or_else(not_found)?;
-    let requested_by: Option<Uuid> = row.get("requested_by");
-    if requested_by != Some(auth.user_id)
+    if !row
+        .get::<Option<String>, _>("role")
+        .as_deref()
+        .is_some_and(|role| matches!(role, "owner" | "write"))
         && !matches!(auth.organization_role.as_str(), "owner" | "admin")
     {
         return Err(not_found());
     }
-    if row.get::<String, _>("state") == "retired" {
+    if !matches!(row.get::<String, _>("state").as_str(), "ready" | "retained") {
         return Err((
             StatusCode::CONFLICT,
-            Json(PlatformError::bad_request("Run workspace has been retired")),
+            Json(PlatformError::bad_request("Workspace is not ready")),
         ));
     }
     let workspace_id: Uuid = row.get("workspace_id");
-    let browser_workspace_id = if row.get::<String, _>("workspace_kind") == "main" {
-        row.get("project_id")
-    } else {
-        run_id
-    };
     Ok(TerminalContext {
         workspace: AuthorizedWorkspace {
             id: workspace_id.to_string(),
             root: row.get::<String, _>("root_path").into(),
         },
-        browser_workspace_id,
+        run_id: row.get::<Option<Uuid>, _>("run_id").ok_or_else(|| {
+            (
+                StatusCode::CONFLICT,
+                Json(PlatformError::bad_request(
+                    "start a Thread in this Workspace before opening a terminal",
+                )),
+            )
+        })?,
     })
 }
 
 async fn authorized_terminal(
     state: &AppState,
     auth: &AuthenticatedUser,
-    run_id: Uuid,
+    workspace_id: Uuid,
     terminal_id: &str,
 ) -> Result<(AuthorizedWorkspace, String), (StatusCode, Json<PlatformError>)> {
     let row = sqlx::query(
-        "SELECT session.process_id, r.workspace_id, r.requested_by, w.root_path, w.state \
+        "SELECT session.process_id, workspace.id AS workspace_id, workspace.root_path, \
+                workspace.state, grant.role \
          FROM terminal_sessions session \
-         JOIN runs r ON r.id = session.run_id AND r.organization_id = session.organization_id \
-         JOIN workspaces w ON w.id = r.workspace_id AND w.organization_id = r.organization_id \
-         WHERE session.organization_id = $1 AND session.run_id = $2 \
+         JOIN workspaces workspace ON workspace.id = session.workspace_id \
+           AND workspace.organization_id = session.organization_id \
+         LEFT JOIN workspace_grants grant ON grant.workspace_id = workspace.id \
+           AND grant.organization_id = workspace.organization_id \
+           AND grant.user_id = $4 AND grant.profile_id = workspace.profile_id \
+         WHERE session.organization_id = $1 AND session.workspace_id = $2 \
            AND session.terminal_id = $3 AND session.state IN ('starting', 'running')",
     )
     .bind(auth.organization_id)
-    .bind(run_id)
+    .bind(workspace_id)
     .bind(terminal_id)
+    .bind(auth.user_id)
     .fetch_optional(&state.db)
     .await
     .map_err(database_error)?
     .ok_or_else(not_found)?;
-    if row.get::<Option<Uuid>, _>("requested_by") != Some(auth.user_id)
+    if !row
+        .get::<Option<String>, _>("role")
+        .as_deref()
+        .is_some_and(|role| matches!(role, "owner" | "write"))
         && !matches!(auth.organization_role.as_str(), "owner" | "admin")
     {
         return Err(not_found());
     }
-    if row.get::<String, _>("state") == "retired" {
+    if !matches!(row.get::<String, _>("state").as_str(), "ready" | "retained") {
         return Err(not_found());
     }
     Ok((
@@ -268,15 +292,15 @@ fn validate_size(cols: u16, rows: u16) -> Result<(), (StatusCode, Json<PlatformE
 async fn touch(
     state: &AppState,
     organization_id: Uuid,
-    run_id: Uuid,
+    workspace_id: Uuid,
     terminal_id: &str,
 ) -> Result<(), (StatusCode, Json<PlatformError>)> {
     sqlx::query(
         "UPDATE terminal_sessions SET updated_at = now() \
-         WHERE organization_id = $1 AND run_id = $2 AND terminal_id = $3",
+         WHERE organization_id = $1 AND workspace_id = $2 AND terminal_id = $3",
     )
     .bind(organization_id)
-    .bind(run_id)
+    .bind(workspace_id)
     .bind(terminal_id)
     .execute(&state.db)
     .await
@@ -287,19 +311,19 @@ async fn touch(
 async fn audit(
     state: &AppState,
     auth: &AuthenticatedUser,
-    run_id: Uuid,
+    workspace_id: Uuid,
     action: &str,
     terminal_id: &str,
 ) -> Result<(), (StatusCode, Json<PlatformError>)> {
     sqlx::query(
         "INSERT INTO audit_log \
          (organization_id, actor_id, action, target_type, target_id, metadata, outcome) \
-         VALUES ($1, $2, $3, 'run', $4, $5, 'success')",
+         VALUES ($1, $2, $3, 'workspace', $4, $5, 'success')",
     )
     .bind(auth.organization_id)
     .bind(auth.user_id)
     .bind(action)
-    .bind(run_id)
+    .bind(workspace_id)
     .bind(json!({ "terminalId": terminal_id }))
     .execute(&state.db)
     .await

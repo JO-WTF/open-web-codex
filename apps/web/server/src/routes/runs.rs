@@ -25,8 +25,8 @@ use crate::routes::RuntimeProfileBinding;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
 
-/// Queue a Run. A worker owns all Git and Runtime side effects after this
-/// transaction, so retries are safe when the caller reuses its idempotency key.
+/// Queue a Run against an existing authorized Workspace. The worker owns only
+/// Run scheduling and Runtime delivery; Workspace provisioning is independent.
 pub async fn start_run(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
@@ -42,12 +42,7 @@ pub async fn start_run(
             actor_id: auth.user_id,
             task_id,
             idempotency_key: req.idempotency_key,
-            git_ref: req.git_ref,
-            workspace_kind: req.workspace_kind.unwrap_or_else(|| "main".to_string()),
-            workspace_name: req.workspace_name,
-            workspace_parent_run_id: req.workspace_parent_run_id,
-            workspace_group_run_id: req.workspace_group_run_id,
-            copy_agents_md: req.copy_agents_md,
+            workspace_id: req.workspace_id,
             fork_thread_id: req.fork_thread_id,
             fork_source_run_id: req.fork_source_run_id,
         })
@@ -68,8 +63,6 @@ pub async fn list_runs(
     let rows = if let Some(task_id) = task_id {
         sqlx::query(
             "SELECT id, task_id, status, codex_thread_id, active_turn_id, workspace_id, \
-                    source_ref, workspace_kind, workspace_name, workspace_parent_run_id, \
-                    workspace_group_run_id, \
                     attempt, created_at, updated_at FROM runs \
              WHERE task_id = $1 AND organization_id = $2 ORDER BY created_at DESC",
         )
@@ -81,8 +74,6 @@ pub async fn list_runs(
     } else {
         sqlx::query(
             "SELECT id, task_id, status, codex_thread_id, active_turn_id, workspace_id, \
-                    source_ref, workspace_kind, workspace_name, workspace_parent_run_id, \
-                    workspace_group_run_id, \
                     attempt, created_at, updated_at FROM runs \
              WHERE organization_id = $1 ORDER BY created_at DESC",
         )
@@ -306,10 +297,18 @@ async fn authorized_thread_context(
     run_id: Uuid,
 ) -> Result<AuthorizedThreadContext, (StatusCode, Json<PlatformError>)> {
     let row = sqlx::query(
-        "SELECT r.codex_thread_id, r.active_turn_id, r.workspace_id, r.requested_by, w.root_path \
-         FROM runs r JOIN workspaces w ON w.id = r.workspace_id \
-         WHERE r.id = $1 AND r.organization_id = $2 AND w.organization_id = $2 \
-           AND r.status = 'running' AND w.state <> 'retired'",
+        "SELECT run.codex_thread_id, run.active_turn_id, run.workspace_id, \
+                run.requested_by, workspace.root_path \
+         FROM runs run \
+         JOIN workspaces workspace ON workspace.id = run.workspace_id \
+           AND workspace.organization_id = run.organization_id \
+         JOIN workspace_grants grant ON grant.workspace_id = workspace.id \
+           AND grant.organization_id = workspace.organization_id \
+           AND grant.user_id = run.requested_by \
+           AND grant.profile_id = workspace.profile_id \
+           AND grant.role IN ('owner', 'write') \
+         WHERE run.id = $1 AND run.organization_id = $2 \
+           AND run.status = 'running' AND workspace.state IN ('ready', 'retained')",
     )
     .bind(run_id)
     .bind(auth.organization_id)
@@ -341,7 +340,9 @@ async fn authorized_thread_context(
                 .ok_or_else(|| {
                     (
                         StatusCode::CONFLICT,
-                        Json(PlatformError::bad_request("Run workspace is not ready")),
+                        Json(PlatformError::bad_request(
+                            "the selected Workspace is not ready",
+                        )),
                     )
                 })?
                 .to_string(),
@@ -419,11 +420,6 @@ fn run_from_record(run: RunRecord) -> Run {
         codex_thread_id: run.codex_thread_id,
         active_turn_id: run.active_turn_id,
         workspace_id: run.workspace_id,
-        source_ref: run.source_ref,
-        workspace_kind: run.workspace_kind,
-        workspace_name: run.workspace_name,
-        workspace_parent_run_id: run.workspace_parent_run_id,
-        workspace_group_run_id: run.workspace_group_run_id,
         attempt: run.attempt,
         created_at: run.created_at,
         updated_at: run.updated_at,
@@ -438,11 +434,6 @@ fn run_from_row(row: &sqlx::postgres::PgRow) -> Run {
         codex_thread_id: row.get("codex_thread_id"),
         active_turn_id: row.get("active_turn_id"),
         workspace_id: row.get("workspace_id"),
-        source_ref: row.get("source_ref"),
-        workspace_kind: row.get("workspace_kind"),
-        workspace_name: row.get("workspace_name"),
-        workspace_parent_run_id: row.get("workspace_parent_run_id"),
-        workspace_group_run_id: row.get("workspace_group_run_id"),
         attempt: row.get("attempt"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),

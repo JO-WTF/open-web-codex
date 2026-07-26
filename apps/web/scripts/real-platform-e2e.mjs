@@ -130,12 +130,7 @@ async function createTaskAndRun(title) {
     method: "POST",
     body: {
       idempotency_key: `real-e2e-${crypto.randomUUID()}`,
-      git_ref: null,
-      workspace_kind: "main",
-      workspace_name: null,
-      workspace_parent_run_id: null,
-      workspace_group_run_id: null,
-      copy_agents_md: false,
+      workspace_id: state.workspace.id,
       fork_thread_id: null,
       fork_source_run_id: null,
     },
@@ -319,6 +314,18 @@ await runCase("managed workspace and first Codex thread", async () => {
     method: "POST",
     body: { name: `Real E2E ${stamp}` },
   });
+  state.workspace = await api("/workspaces", {
+    method: "POST",
+    body: {
+      project_id: state.project.id,
+      idempotency_key: `real-e2e-workspace-${crypto.randomUUID()}`,
+      kind: "main",
+      name: state.project.name,
+      source_ref: null,
+      parent_workspace_id: null,
+      copy_agents_md: false,
+    },
+  });
   const created = await createTaskAndRun(`Primary ${stamp}`);
   state.firstTask = created.task;
   state.firstRun = created.run;
@@ -330,7 +337,7 @@ await runCase("managed workspace and first Codex thread", async () => {
     return JSON.stringify(projection).includes("e2e_tools") ? projection : undefined;
   }, "MCP server discovery", 30_000, 500);
   assert(JSON.stringify(mcp).includes("e2e_tools"));
-  return `project=${state.project.id}; thread ready`;
+  return `workspace=${state.workspace.id}; thread ready`;
 });
 
 await runCase("message streaming, reasoning projection, and code execution", async () => {
@@ -365,10 +372,10 @@ await runCase("message streaming, reasoning projection, and code execution", asy
 });
 
 await runCase("workspace file tree and file preview", async () => {
-  const files = await api(`/runs/${state.firstRun.id}/workspace/files`);
+  const files = await api(`/workspaces/${state.workspace.id}/files`);
   assert(files.includes("e2e/fibonacci.py"), "generated source file is absent from file tree");
   const preview = await api(
-    `/runs/${state.firstRun.id}/workspace/files/content?path=${encodeURIComponent("e2e/fibonacci.py")}`,
+    `/workspaces/${state.workspace.id}/files/content?path=${encodeURIComponent("e2e/fibonacci.py")}`,
   );
   assert.equal(preview.truncated, false);
   assert(preview.content.includes("FIB_OK"));
@@ -445,7 +452,7 @@ await runCase("thread running state and conversation history restoration", async
   assert.equal(finishedRun.active_turn_id, null);
   assert(completed.some((event) => event.turn_id === response.turn_id && itemType(event) === "commandExecution"));
   const delayedFile = await api(
-    `/runs/${state.secondRun.id}/workspace/files/content?path=${encodeURIComponent("e2e/delay-done.txt")}`,
+    `/workspaces/${state.workspace.id}/files/content?path=${encodeURIComponent("e2e/delay-done.txt")}`,
   );
   assert.equal(delayedFile.content, "DELAY_DONE");
   return `history=${restored.length} events; delayed Turn stayed active and completed`;

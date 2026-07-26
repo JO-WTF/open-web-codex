@@ -9,33 +9,102 @@ use axum::{
 use open_web_codex_git_runtime::{CommitAuthor, GitRuntime, GitRuntimeError};
 use open_web_codex_platform_contracts::error::PlatformError;
 use open_web_codex_platform_contracts::{
-    CommitWorkspaceRequest, CommitWorkspaceResponse, RenameWorkspaceUpstreamRequest,
-    RunWorkspaceStatus, SetWorkspaceGitRootRequest, WorkspaceBranch, WorkspaceBranchRequest,
+    CommitWorkspaceRequest, CommitWorkspaceResponse,
+    CreateWorkspaceRequest as PlatformCreateWorkspaceRequest, RenameWorkspaceUpstreamRequest,
+    SetWorkspaceGitRootRequest, Workspace, WorkspaceBranch, WorkspaceBranchRequest,
     WorkspaceCommitDiff, WorkspaceFileChange, WorkspaceFileContent, WorkspaceFileDiff,
     WorkspaceGitRootsQuery, WorkspaceLog, WorkspaceLogEntry, WorkspaceLogQuery, WorkspacePathQuery,
-    WorkspacePathsRequest, WriteProfileTextFileRequest,
+    WorkspacePathsRequest, WorkspaceStatus, WriteProfileTextFileRequest,
 };
 use open_web_codex_platform_store::AppState;
 use open_web_codex_run_orchestrator::{
-    RetireWorkspaceRequest, RunOrchestrator, RunOrchestratorError,
+    CreateWorkspaceRequest, RemoveWorkspaceRequest, RunOrchestrator, RunOrchestratorError,
+    WorkspaceRecord,
 };
 use serde_json::json;
 use sqlx::Row;
 use uuid::Uuid;
 
-use crate::middleware::auth::AuthenticatedUser;
+use crate::middleware::auth::{require_runtime_profile, AuthenticatedUser};
+use crate::routes::RuntimeProfileBinding;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
 type AssetResult = Result<Response<Body>, (StatusCode, Json<PlatformError>)>;
 
+pub async fn list_workspaces(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+) -> ApiResult<Vec<Workspace>> {
+    let is_admin = matches!(auth.organization_role.as_str(), "owner" | "admin");
+    let rows = sqlx::query(
+        "SELECT DISTINCT workspace.id, workspace.project_id, workspace.name, workspace.kind, \
+                workspace.state, workspace.source_ref, workspace.branch_name, \
+                workspace.parent_workspace_id, workspace.group_workspace_id, workspace.managed, \
+                workspace.created_at, workspace.updated_at \
+         FROM workspaces workspace \
+         LEFT JOIN workspace_grants grant ON grant.workspace_id = workspace.id \
+           AND grant.organization_id = workspace.organization_id \
+           AND grant.user_id = $2 AND grant.profile_id = workspace.profile_id \
+         WHERE workspace.organization_id = $1 \
+           AND workspace.state <> 'removed' AND ($3 OR grant.workspace_id IS NOT NULL) \
+         ORDER BY workspace.created_at, workspace.id",
+    )
+    .bind(auth.organization_id)
+    .bind(auth.user_id)
+    .bind(is_admin)
+    .fetch_all(&state.db)
+    .await
+    .map_err(database_error)?;
+    Ok(Json(rows.iter().map(workspace_from_row).collect()))
+}
+
+pub async fn create_workspace(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Extension(orchestrator): Extension<Arc<RunOrchestrator>>,
+    Extension(profile): Extension<RuntimeProfileBinding>,
+    Json(request): Json<PlatformCreateWorkspaceRequest>,
+) -> ApiResult<Workspace> {
+    require_runtime_profile(&state.db, &auth, &profile.runtime_key).await?;
+    let workspace = orchestrator
+        .create_workspace(CreateWorkspaceRequest {
+            organization_id: auth.organization_id,
+            actor_id: auth.user_id,
+            project_id: request.project_id,
+            idempotency_key: request.idempotency_key,
+            kind: request.kind,
+            name: request.name,
+            source_ref: request.source_ref,
+            parent_workspace_id: request.parent_workspace_id,
+            copy_agents_md: request.copy_agents_md,
+        })
+        .await
+        .map_err(orchestrator_error)?;
+    Ok(Json(workspace_from_record(workspace)))
+}
+
+pub async fn get_workspace(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(workspace_id): Path<Uuid>,
+    Extension(orchestrator): Extension<Arc<RunOrchestrator>>,
+) -> ApiResult<Workspace> {
+    authorized_workspace(&state, &auth, workspace_id, false).await?;
+    let workspace = orchestrator
+        .get_workspace(auth.organization_id, workspace_id)
+        .await
+        .map_err(orchestrator_error)?;
+    Ok(Json(workspace_from_record(workspace)))
+}
+
 pub async fn list_git_roots(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(run_id): Path<Uuid>,
+    Path(workspace_id): Path<Uuid>,
     Query(query): Query<WorkspaceGitRootsQuery>,
     Extension(git): Extension<Arc<GitRuntime>>,
 ) -> ApiResult<Vec<String>> {
-    let workspace_id = authorized_workspace(&state, &auth, run_id, false).await?;
+    let workspace_id = authorized_workspace(&state, &auth, workspace_id, false).await?;
     Ok(Json(
         git.list_git_roots(workspace_id, query.depth.unwrap_or(2))
             .await
@@ -46,11 +115,11 @@ pub async fn list_git_roots(
 pub async fn set_git_root(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(run_id): Path<Uuid>,
+    Path(workspace_id): Path<Uuid>,
     Extension(git): Extension<Arc<GitRuntime>>,
     Json(request): Json<SetWorkspaceGitRootRequest>,
 ) -> ApiResult<serde_json::Value> {
-    let workspace_id = authorized_workspace(&state, &auth, run_id, true).await?;
+    let workspace_id = authorized_workspace(&state, &auth, workspace_id, true).await?;
     git.set_workspace_git_root(workspace_id, request.git_root.as_deref())
         .await
         .map_err(git_error)?;
@@ -60,21 +129,21 @@ pub async fn set_git_root(
 pub async fn list_files(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(run_id): Path<Uuid>,
+    Path(workspace_id): Path<Uuid>,
     Extension(git): Extension<Arc<GitRuntime>>,
 ) -> ApiResult<Vec<String>> {
-    let workspace_id = authorized_workspace(&state, &auth, run_id, false).await?;
+    let workspace_id = authorized_workspace(&state, &auth, workspace_id, false).await?;
     Ok(Json(git.list_files(workspace_id).await.map_err(git_error)?))
 }
 
 pub async fn read_file(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(run_id): Path<Uuid>,
+    Path(workspace_id): Path<Uuid>,
     Query(query): Query<WorkspacePathQuery>,
     Extension(git): Extension<Arc<GitRuntime>>,
 ) -> ApiResult<WorkspaceFileContent> {
-    let workspace_id = authorized_workspace(&state, &auth, run_id, false).await?;
+    let workspace_id = authorized_workspace(&state, &auth, workspace_id, false).await?;
     let content = git
         .read_file(workspace_id, &query.path)
         .await
@@ -88,11 +157,11 @@ pub async fn read_file(
 pub async fn read_image_asset(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(run_id): Path<Uuid>,
+    Path(workspace_id): Path<Uuid>,
     Query(query): Query<WorkspacePathQuery>,
     Extension(git): Extension<Arc<GitRuntime>>,
 ) -> AssetResult {
-    let workspace_id = authorized_workspace(&state, &auth, run_id, false).await?;
+    let workspace_id = authorized_workspace(&state, &auth, workspace_id, false).await?;
     let asset = git
         .read_image_asset(workspace_id, &query.path)
         .await
@@ -140,18 +209,18 @@ pub async fn read_image_asset(
 pub async fn write_agents_file(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(run_id): Path<Uuid>,
+    Path(workspace_id): Path<Uuid>,
     Extension(git): Extension<Arc<GitRuntime>>,
     Json(request): Json<WriteProfileTextFileRequest>,
 ) -> ApiResult<serde_json::Value> {
-    let workspace_id = authorized_workspace(&state, &auth, run_id, true).await?;
+    let workspace_id = authorized_workspace(&state, &auth, workspace_id, true).await?;
     git.write_agents_md(workspace_id, &request.content)
         .await
         .map_err(git_error)?;
     audit_workspace_mutation(
         &state,
         &auth,
-        run_id,
+        workspace_id,
         workspace_id,
         "workspace.agents_write",
         &["AGENTS.md".to_string()],
@@ -163,10 +232,10 @@ pub async fn write_agents_file(
 pub async fn diffs(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(run_id): Path<Uuid>,
+    Path(workspace_id): Path<Uuid>,
     Extension(git): Extension<Arc<GitRuntime>>,
 ) -> ApiResult<Vec<WorkspaceFileDiff>> {
-    let workspace_id = authorized_workspace(&state, &auth, run_id, false).await?;
+    let workspace_id = authorized_workspace(&state, &auth, workspace_id, false).await?;
     Ok(Json(
         git.diffs(workspace_id)
             .await
@@ -185,18 +254,18 @@ pub async fn diffs(
 pub async fn stage(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(run_id): Path<Uuid>,
+    Path(workspace_id): Path<Uuid>,
     Extension(git): Extension<Arc<GitRuntime>>,
     Json(request): Json<WorkspacePathsRequest>,
 ) -> ApiResult<serde_json::Value> {
-    let workspace_id = authorized_workspace(&state, &auth, run_id, true).await?;
+    let workspace_id = authorized_workspace(&state, &auth, workspace_id, true).await?;
     git.stage_paths(workspace_id, &request.paths)
         .await
         .map_err(git_error)?;
     audit_workspace_mutation(
         &state,
         &auth,
-        run_id,
+        workspace_id,
         workspace_id,
         "workspace.stage",
         &request.paths,
@@ -208,15 +277,15 @@ pub async fn stage(
 pub async fn stage_all(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(run_id): Path<Uuid>,
+    Path(workspace_id): Path<Uuid>,
     Extension(git): Extension<Arc<GitRuntime>>,
 ) -> ApiResult<serde_json::Value> {
-    let workspace_id = authorized_workspace(&state, &auth, run_id, true).await?;
+    let workspace_id = authorized_workspace(&state, &auth, workspace_id, true).await?;
     git.stage_all(workspace_id).await.map_err(git_error)?;
     audit_workspace_mutation(
         &state,
         &auth,
-        run_id,
+        workspace_id,
         workspace_id,
         "workspace.stage_all",
         &[],
@@ -228,18 +297,18 @@ pub async fn stage_all(
 pub async fn unstage(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(run_id): Path<Uuid>,
+    Path(workspace_id): Path<Uuid>,
     Extension(git): Extension<Arc<GitRuntime>>,
     Json(request): Json<WorkspacePathsRequest>,
 ) -> ApiResult<serde_json::Value> {
-    let workspace_id = authorized_workspace(&state, &auth, run_id, true).await?;
+    let workspace_id = authorized_workspace(&state, &auth, workspace_id, true).await?;
     git.unstage_paths(workspace_id, &request.paths)
         .await
         .map_err(git_error)?;
     audit_workspace_mutation(
         &state,
         &auth,
-        run_id,
+        workspace_id,
         workspace_id,
         "workspace.unstage",
         &request.paths,
@@ -251,18 +320,18 @@ pub async fn unstage(
 pub async fn revert(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(run_id): Path<Uuid>,
+    Path(workspace_id): Path<Uuid>,
     Extension(git): Extension<Arc<GitRuntime>>,
     Json(request): Json<WorkspacePathsRequest>,
 ) -> ApiResult<serde_json::Value> {
-    let workspace_id = authorized_workspace(&state, &auth, run_id, true).await?;
+    let workspace_id = authorized_workspace(&state, &auth, workspace_id, true).await?;
     git.revert_paths(workspace_id, &request.paths)
         .await
         .map_err(git_error)?;
     audit_workspace_mutation(
         &state,
         &auth,
-        run_id,
+        workspace_id,
         workspace_id,
         "workspace.revert",
         &request.paths,
@@ -274,15 +343,15 @@ pub async fn revert(
 pub async fn revert_all(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(run_id): Path<Uuid>,
+    Path(workspace_id): Path<Uuid>,
     Extension(git): Extension<Arc<GitRuntime>>,
 ) -> ApiResult<serde_json::Value> {
-    let workspace_id = authorized_workspace(&state, &auth, run_id, true).await?;
+    let workspace_id = authorized_workspace(&state, &auth, workspace_id, true).await?;
     git.revert_all(workspace_id).await.map_err(git_error)?;
     audit_workspace_mutation(
         &state,
         &auth,
-        run_id,
+        workspace_id,
         workspace_id,
         "workspace.revert_all",
         &[],
@@ -294,10 +363,10 @@ pub async fn revert_all(
 pub async fn list_branches(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(run_id): Path<Uuid>,
+    Path(workspace_id): Path<Uuid>,
     Extension(git): Extension<Arc<GitRuntime>>,
 ) -> ApiResult<Vec<WorkspaceBranch>> {
-    let workspace_id = authorized_workspace(&state, &auth, run_id, false).await?;
+    let workspace_id = authorized_workspace(&state, &auth, workspace_id, false).await?;
     Ok(Json(
         git.list_branches(workspace_id)
             .await
@@ -314,18 +383,18 @@ pub async fn list_branches(
 pub async fn checkout_branch(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(run_id): Path<Uuid>,
+    Path(workspace_id): Path<Uuid>,
     Extension(git): Extension<Arc<GitRuntime>>,
     Json(request): Json<WorkspaceBranchRequest>,
 ) -> ApiResult<serde_json::Value> {
-    let workspace_id = authorized_workspace(&state, &auth, run_id, true).await?;
+    let workspace_id = authorized_workspace(&state, &auth, workspace_id, true).await?;
     git.checkout_branch(workspace_id, &request.name)
         .await
         .map_err(git_error)?;
     audit_workspace_mutation(
         &state,
         &auth,
-        run_id,
+        workspace_id,
         workspace_id,
         "workspace.branch_checkout",
         &[],
@@ -337,18 +406,18 @@ pub async fn checkout_branch(
 pub async fn create_branch(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(run_id): Path<Uuid>,
+    Path(workspace_id): Path<Uuid>,
     Extension(git): Extension<Arc<GitRuntime>>,
     Json(request): Json<WorkspaceBranchRequest>,
 ) -> ApiResult<serde_json::Value> {
-    let workspace_id = authorized_workspace(&state, &auth, run_id, true).await?;
+    let workspace_id = authorized_workspace(&state, &auth, workspace_id, true).await?;
     git.create_branch(workspace_id, &request.name)
         .await
         .map_err(git_error)?;
     audit_workspace_mutation(
         &state,
         &auth,
-        run_id,
+        workspace_id,
         workspace_id,
         "workspace.branch_create",
         &[],
@@ -360,25 +429,25 @@ pub async fn create_branch(
 pub async fn rename_branch(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(run_id): Path<Uuid>,
+    Path(workspace_id): Path<Uuid>,
     Extension(git): Extension<Arc<GitRuntime>>,
     Json(request): Json<WorkspaceBranchRequest>,
 ) -> ApiResult<serde_json::Value> {
-    let workspace_id = authorized_workspace(&state, &auth, run_id, true).await?;
-    let run_metadata = sqlx::query(
-        "SELECT workspace_kind, source_ref, workspace_name FROM runs \
+    let workspace_id = authorized_workspace(&state, &auth, workspace_id, true).await?;
+    let workspace_metadata = sqlx::query(
+        "SELECT kind, source_ref, name FROM workspaces \
          WHERE id = $1 AND organization_id = $2",
     )
-    .bind(run_id)
+    .bind(workspace_id)
     .bind(auth.organization_id)
     .fetch_one(&state.db)
     .await
     .map_err(database_error)?;
-    if run_metadata.get::<String, _>("workspace_kind") == "main" {
+    if workspace_metadata.get::<String, _>("kind") == "main" {
         return Err((
             StatusCode::CONFLICT,
             Json(PlatformError::bad_request(
-                "the main Run workspace cannot be renamed",
+                "the main Workspace branch cannot be renamed",
             )),
         ));
     }
@@ -388,108 +457,80 @@ pub async fn rename_branch(
         .map_err(git_error)?;
     let name = final_name.as_str();
     let mut transaction = state.db.begin().await.map_err(database_error)?;
-    let workspace_name: Option<String> = sqlx::query_scalar(
-        "UPDATE runs SET workspace_name = CASE \
-             WHEN workspace_name IS NULL OR btrim(workspace_name) = source_ref THEN $1 \
-             ELSE workspace_name END, \
-             source_ref = $1, updated_at = now() \
-         WHERE id = $2 AND organization_id = $3 AND workspace_kind <> 'main' \
-         RETURNING workspace_name",
-    )
-    .bind(name)
-    .bind(run_id)
-    .bind(auth.organization_id)
-    .fetch_one(&mut *transaction)
-    .await
-    .map_err(database_error)?;
-    sqlx::query(
-        "UPDATE workspaces SET branch_name = $1, updated_at = now() \
-         WHERE id = $2 AND organization_id = $3",
+    let workspace_name: String = sqlx::query_scalar(
+        "UPDATE workspaces \
+         SET name = CASE WHEN btrim(name) = source_ref THEN $1 ELSE name END, \
+             source_ref = $1, branch_name = $1, updated_at = now() \
+         WHERE id = $2 AND organization_id = $3 AND kind <> 'main' \
+         RETURNING name",
     )
     .bind(name)
     .bind(workspace_id)
     .bind(auth.organization_id)
-    .execute(&mut *transaction)
+    .fetch_one(&mut *transaction)
     .await
     .map_err(database_error)?;
     transaction.commit().await.map_err(database_error)?;
     audit_workspace_mutation(
         &state,
         &auth,
-        run_id,
+        workspace_id,
         workspace_id,
         "workspace.branch_rename",
         &[],
     )
     .await?;
-    Ok(Json(
-        json!({ "status": "renamed", "name": workspace_name.unwrap_or_else(|| name.to_string()) }),
-    ))
+    Ok(Json(json!({ "status": "renamed", "name": workspace_name })))
 }
 
-pub async fn remove_derived_workspace(
+pub async fn remove_workspace(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(run_id): Path<Uuid>,
+    Path(workspace_id): Path<Uuid>,
     Extension(orchestrator): Extension<Arc<RunOrchestrator>>,
 ) -> ApiResult<serde_json::Value> {
-    let child_run_ids = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM runs WHERE organization_id = $1 AND workspace_group_run_id = $2",
-    )
-    .bind(auth.organization_id)
-    .bind(run_id)
-    .fetch_all(&state.db)
-    .await
-    .map_err(database_error)?;
-    for child_run_id in child_run_ids {
-        orchestrator
-            .retire_workspace(RetireWorkspaceRequest {
-                organization_id: auth.organization_id,
-                actor_id: auth.user_id,
-                allow_organization_admin: matches!(
-                    auth.organization_role.as_str(),
-                    "owner" | "admin"
-                ),
-                run_id: child_run_id,
-            })
-            .await
-            .map_err(orchestrator_error)?;
-    }
-    let run = orchestrator
-        .retire_workspace(RetireWorkspaceRequest {
+    let workspace = orchestrator
+        .remove_workspace(RemoveWorkspaceRequest {
             organization_id: auth.organization_id,
             actor_id: auth.user_id,
             allow_organization_admin: matches!(auth.organization_role.as_str(), "owner" | "admin"),
-            run_id,
+            workspace_id,
         })
         .await
         .map_err(orchestrator_error)?;
-    if let Some(workspace_id) = run.workspace_id {
-        audit_workspace_mutation(&state, &auth, run_id, workspace_id, "workspace.remove", &[])
-            .await?;
-    }
-    Ok(Json(json!({ "status": "cleanupQueued" })))
+    audit_workspace_mutation(
+        &state,
+        &auth,
+        workspace_id,
+        workspace_id,
+        "workspace.remove",
+        &[],
+    )
+    .await?;
+    Ok(Json(json!({ "status": workspace.state })))
 }
 
-pub async fn apply_derived_workspace(
+pub async fn apply_workspace(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(run_id): Path<Uuid>,
+    Path(workspace_id): Path<Uuid>,
     Extension(git): Extension<Arc<GitRuntime>>,
 ) -> ApiResult<serde_json::Value> {
-    let source_workspace_id = authorized_workspace(&state, &auth, run_id, true).await?;
+    let source_workspace_id = authorized_workspace(&state, &auth, workspace_id, true).await?;
     let row = sqlx::query(
-        "SELECT source.workspace_kind, parent.workspace_id AS parent_workspace_id, \
-                parent.requested_by AS parent_requested_by, parent_workspace.state AS parent_state \
-         FROM runs source \
-         JOIN runs parent ON parent.id = source.workspace_parent_run_id \
+        "SELECT source.kind, source.parent_workspace_id, parent.state AS parent_state, \
+                parent_grant.role AS parent_role \
+         FROM workspaces source \
+         JOIN workspaces parent ON parent.id = source.parent_workspace_id \
            AND parent.organization_id = source.organization_id \
-         JOIN workspaces parent_workspace ON parent_workspace.id = parent.workspace_id \
-           AND parent_workspace.organization_id = source.organization_id \
+         LEFT JOIN workspace_grants parent_grant ON parent_grant.workspace_id = parent.id \
+           AND parent_grant.organization_id = parent.organization_id \
+           AND parent_grant.user_id = $3 AND parent_grant.profile_id = parent.profile_id \
          WHERE source.id = $1 AND source.organization_id = $2",
     )
-    .bind(run_id)
+    .bind(workspace_id)
     .bind(auth.organization_id)
+    .bind(auth.user_id)
     .fetch_optional(&state.db)
     .await
     .map_err(database_error)?
@@ -497,35 +538,38 @@ pub async fn apply_derived_workspace(
         (
             StatusCode::CONFLICT,
             Json(PlatformError::bad_request(
-                "worktree parent Run is no longer available",
+                "the parent Workspace is no longer available",
             )),
         )
     })?;
-    if row.get::<String, _>("workspace_kind") != "worktree" {
+    if row.get::<String, _>("kind") != "worktree" {
         return Err((
             StatusCode::CONFLICT,
             Json(PlatformError::bad_request(
-                "only worktree changes can be applied to a parent Run",
+                "only worktree changes can be applied to a parent Workspace",
             )),
         ));
     }
-    if row.get::<String, _>("parent_state") == "retired" {
+    if !matches!(
+        row.get::<String, _>("parent_state").as_str(),
+        "ready" | "retained"
+    ) {
         return Err((
             StatusCode::CONFLICT,
             Json(PlatformError::bad_request(
-                "parent Run workspace has been retired",
+                "the parent Workspace is not ready",
             )),
         ));
     }
-    let parent_requested_by: Option<Uuid> = row.get("parent_requested_by");
-    if parent_requested_by != Some(auth.user_id)
+    let parent_role: Option<String> = row.get("parent_role");
+    if !parent_role
+        .as_deref()
+        .is_some_and(|role| matches!(role, "owner" | "write"))
         && !matches!(auth.organization_role.as_str(), "owner" | "admin")
     {
         return Err((
             StatusCode::NOT_FOUND,
-            Json(PlatformError::not_found(
-                "parent Run workspace was not found",
-            )),
+            Json(PlatformError::not_found("parent Workspace was not found")),
         ));
     }
     let parent_workspace_id: Uuid = row.get("parent_workspace_id");
@@ -535,7 +579,7 @@ pub async fn apply_derived_workspace(
     audit_workspace_mutation(
         &state,
         &auth,
-        run_id,
+        workspace_id,
         source_workspace_id,
         "workspace.apply_to_parent",
         &[],
@@ -547,19 +591,18 @@ pub async fn apply_derived_workspace(
 pub async fn rename_upstream_branch(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(run_id): Path<Uuid>,
+    Path(workspace_id): Path<Uuid>,
     Extension(git): Extension<Arc<GitRuntime>>,
     Json(request): Json<RenameWorkspaceUpstreamRequest>,
 ) -> ApiResult<serde_json::Value> {
-    let workspace_id = authorized_workspace(&state, &auth, run_id, true).await?;
-    let workspace_kind: String = sqlx::query_scalar(
-        "SELECT workspace_kind FROM runs WHERE id = $1 AND organization_id = $2",
-    )
-    .bind(run_id)
-    .bind(auth.organization_id)
-    .fetch_one(&state.db)
-    .await
-    .map_err(database_error)?;
+    let workspace_id = authorized_workspace(&state, &auth, workspace_id, true).await?;
+    let workspace_kind: String =
+        sqlx::query_scalar("SELECT kind FROM workspaces WHERE id = $1 AND organization_id = $2")
+            .bind(workspace_id)
+            .bind(auth.organization_id)
+            .fetch_one(&state.db)
+            .await
+            .map_err(database_error)?;
     if workspace_kind != "worktree" {
         return Err((
             StatusCode::CONFLICT,
@@ -574,7 +617,7 @@ pub async fn rename_upstream_branch(
     audit_workspace_mutation(
         &state,
         &auth,
-        run_id,
+        workspace_id,
         workspace_id,
         "workspace.upstream_rename",
         &[],
@@ -586,11 +629,11 @@ pub async fn rename_upstream_branch(
 pub async fn log(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(run_id): Path<Uuid>,
+    Path(workspace_id): Path<Uuid>,
     Query(query): Query<WorkspaceLogQuery>,
     Extension(git): Extension<Arc<GitRuntime>>,
 ) -> ApiResult<WorkspaceLog> {
-    let workspace_id = authorized_workspace(&state, &auth, run_id, false).await?;
+    let workspace_id = authorized_workspace(&state, &auth, workspace_id, false).await?;
     let log = git
         .log(workspace_id, query.limit.unwrap_or(40))
         .await
@@ -609,10 +652,10 @@ pub async fn log(
 pub async fn commit_diffs(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path((run_id, sha)): Path<(Uuid, String)>,
+    Path((workspace_id, sha)): Path<(Uuid, String)>,
     Extension(git): Extension<Arc<GitRuntime>>,
 ) -> ApiResult<Vec<WorkspaceCommitDiff>> {
-    let workspace_id = authorized_workspace(&state, &auth, run_id, false).await?;
+    let workspace_id = authorized_workspace(&state, &auth, workspace_id, false).await?;
     Ok(Json(
         git.commit_diffs(workspace_id, &sha)
             .await
@@ -631,58 +674,58 @@ pub async fn commit_diffs(
 pub async fn remote(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(run_id): Path<Uuid>,
+    Path(workspace_id): Path<Uuid>,
     Extension(git): Extension<Arc<GitRuntime>>,
 ) -> ApiResult<Option<String>> {
-    let workspace_id = authorized_workspace(&state, &auth, run_id, false).await?;
+    let workspace_id = authorized_workspace(&state, &auth, workspace_id, false).await?;
     Ok(Json(git.remote(workspace_id).await.map_err(git_error)?))
 }
 
 pub async fn fetch(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(run_id): Path<Uuid>,
+    Path(workspace_id): Path<Uuid>,
     Extension(git): Extension<Arc<GitRuntime>>,
 ) -> ApiResult<serde_json::Value> {
-    mutate_remote(&state, &auth, run_id, &git, "fetch").await
+    mutate_remote(&state, &auth, workspace_id, &git, "fetch").await
 }
 
 pub async fn pull(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(run_id): Path<Uuid>,
+    Path(workspace_id): Path<Uuid>,
     Extension(git): Extension<Arc<GitRuntime>>,
 ) -> ApiResult<serde_json::Value> {
-    mutate_remote(&state, &auth, run_id, &git, "pull").await
+    mutate_remote(&state, &auth, workspace_id, &git, "pull").await
 }
 
 pub async fn push(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(run_id): Path<Uuid>,
+    Path(workspace_id): Path<Uuid>,
     Extension(git): Extension<Arc<GitRuntime>>,
 ) -> ApiResult<serde_json::Value> {
-    mutate_remote(&state, &auth, run_id, &git, "push").await
+    mutate_remote(&state, &auth, workspace_id, &git, "push").await
 }
 
 pub async fn sync(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(run_id): Path<Uuid>,
+    Path(workspace_id): Path<Uuid>,
     Extension(git): Extension<Arc<GitRuntime>>,
 ) -> ApiResult<serde_json::Value> {
-    mutate_remote(&state, &auth, run_id, &git, "sync").await
+    mutate_remote(&state, &auth, workspace_id, &git, "sync").await
 }
 
 pub async fn status(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(run_id): Path<Uuid>,
+    Path(workspace_id): Path<Uuid>,
     Extension(git): Extension<Arc<GitRuntime>>,
-) -> ApiResult<RunWorkspaceStatus> {
-    let workspace_id = authorized_workspace(&state, &auth, run_id, false).await?;
+) -> ApiResult<WorkspaceStatus> {
+    let workspace_id = authorized_workspace(&state, &auth, workspace_id, false).await?;
     let status = git.status(workspace_id).await.map_err(git_error)?;
-    Ok(Json(RunWorkspaceStatus {
+    Ok(Json(WorkspaceStatus {
         workspace_id,
         branch: status.branch,
         head_commit: status.head_commit,
@@ -705,11 +748,11 @@ pub async fn status(
 pub async fn commit(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    Path(run_id): Path<Uuid>,
+    Path(workspace_id): Path<Uuid>,
     Extension(git): Extension<Arc<GitRuntime>>,
     Json(request): Json<CommitWorkspaceRequest>,
 ) -> ApiResult<CommitWorkspaceResponse> {
-    let workspace_id = authorized_workspace(&state, &auth, run_id, true).await?;
+    let workspace_id = authorized_workspace(&state, &auth, workspace_id, true).await?;
     let author = CommitAuthor {
         name: auth.name.clone(),
         email: auth.email.clone(),
@@ -743,7 +786,6 @@ pub async fn commit(
     .bind(auth.user_id)
     .bind(workspace_id)
     .bind(json!({
-        "runId": run_id,
         "commit": commit,
         "selectedPathCount": request.selected_paths.len(),
     }))
@@ -760,47 +802,54 @@ pub async fn commit(
 pub(super) async fn authorized_workspace(
     state: &AppState,
     auth: &AuthenticatedUser,
-    run_id: Uuid,
+    workspace_id: Uuid,
     require_owner: bool,
 ) -> Result<Uuid, (StatusCode, Json<PlatformError>)> {
     let row = sqlx::query(
-        "SELECT r.workspace_id, r.requested_by, w.state \
-         FROM runs r JOIN workspaces w ON w.id = r.workspace_id \
-         WHERE r.id = $1 AND r.organization_id = $2 AND w.organization_id = $2",
+        "SELECT workspace.id, workspace.state, grant.role \
+         FROM workspaces workspace \
+         LEFT JOIN workspace_grants grant ON grant.workspace_id = workspace.id \
+           AND grant.organization_id = workspace.organization_id \
+           AND grant.user_id = $3 AND grant.profile_id = workspace.profile_id \
+         WHERE workspace.id = $1 AND workspace.organization_id = $2",
     )
-    .bind(run_id)
+    .bind(workspace_id)
     .bind(auth.organization_id)
+    .bind(auth.user_id)
     .fetch_optional(&state.db)
     .await
     .map_err(database_error)?
     .ok_or_else(|| {
         (
             StatusCode::NOT_FOUND,
-            Json(PlatformError::not_found("Run workspace was not found")),
+            Json(PlatformError::not_found("Workspace was not found")),
         )
     })?;
-    if row.get::<String, _>("state") == "retired" {
+    if !matches!(row.get::<String, _>("state").as_str(), "ready" | "retained") {
         return Err((
             StatusCode::CONFLICT,
-            Json(PlatformError::bad_request("Run workspace has been retired")),
+            Json(PlatformError::bad_request("Workspace is not ready")),
         ));
     }
-    let requested_by: Option<Uuid> = row.get("requested_by");
-    let can_manage = requested_by == Some(auth.user_id)
+    let role: Option<String> = row.get("role");
+    let can_read = role.is_some() || matches!(auth.organization_role.as_str(), "owner" | "admin");
+    let can_manage = role
+        .as_deref()
+        .is_some_and(|role| matches!(role, "owner" | "write"))
         || matches!(auth.organization_role.as_str(), "owner" | "admin");
-    if require_owner && !can_manage {
+    if !can_read || (require_owner && !can_manage) {
         return Err((
             StatusCode::NOT_FOUND,
-            Json(PlatformError::not_found("Run workspace was not found")),
+            Json(PlatformError::not_found("Workspace was not found")),
         ));
     }
-    Ok(row.get("workspace_id"))
+    Ok(row.get("id"))
 }
 
 async fn audit_workspace_mutation(
     state: &AppState,
     auth: &AuthenticatedUser,
-    run_id: Uuid,
+    _requested_workspace_id: Uuid,
     workspace_id: Uuid,
     action: &str,
     paths: &[String],
@@ -814,21 +863,55 @@ async fn audit_workspace_mutation(
     .bind(auth.user_id)
     .bind(action)
     .bind(workspace_id)
-    .bind(json!({ "runId": run_id, "paths": paths }))
+    .bind(json!({ "paths": paths }))
     .execute(&state.db)
     .await
     .map_err(database_error)?;
     Ok(())
 }
 
+fn workspace_from_record(workspace: WorkspaceRecord) -> Workspace {
+    Workspace {
+        id: workspace.id,
+        project_id: workspace.project_id,
+        name: workspace.name,
+        kind: workspace.kind,
+        state: workspace.state,
+        source_ref: workspace.source_ref,
+        branch_name: workspace.branch_name,
+        parent_workspace_id: workspace.parent_workspace_id,
+        group_workspace_id: workspace.group_workspace_id,
+        managed: workspace.managed,
+        created_at: workspace.created_at,
+        updated_at: workspace.updated_at,
+    }
+}
+
+fn workspace_from_row(row: &sqlx::postgres::PgRow) -> Workspace {
+    Workspace {
+        id: row.get("id"),
+        project_id: row.get("project_id"),
+        name: row.get("name"),
+        kind: row.get("kind"),
+        state: row.get("state"),
+        source_ref: row.get("source_ref"),
+        branch_name: row.get("branch_name"),
+        parent_workspace_id: row.get("parent_workspace_id"),
+        group_workspace_id: row.get("group_workspace_id"),
+        managed: row.get("managed"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    }
+}
+
 async fn mutate_remote(
     state: &AppState,
     auth: &AuthenticatedUser,
-    run_id: Uuid,
+    workspace_id: Uuid,
     git: &GitRuntime,
     operation: &str,
 ) -> ApiResult<serde_json::Value> {
-    let workspace_id = authorized_workspace(state, auth, run_id, true).await?;
+    let workspace_id = authorized_workspace(state, auth, workspace_id, true).await?;
     match operation {
         "fetch" => git.fetch(workspace_id).await,
         "pull" => git.pull(workspace_id).await,
@@ -840,7 +923,7 @@ async fn mutate_remote(
     audit_workspace_mutation(
         state,
         auth,
-        run_id,
+        workspace_id,
         workspace_id,
         &format!("workspace.{operation}"),
         &[],
@@ -903,7 +986,7 @@ fn orchestrator_error(error: RunOrchestratorError) -> (StatusCode, Json<Platform
         }
         RunOrchestratorError::NotFound => (
             StatusCode::NOT_FOUND,
-            PlatformError::not_found("Run workspace was not found"),
+            PlatformError::not_found("Workspace was not found"),
         ),
         RunOrchestratorError::Conflict(message) => {
             (StatusCode::CONFLICT, PlatformError::bad_request(message))
@@ -918,7 +1001,7 @@ fn orchestrator_error(error: RunOrchestratorError) -> (StatusCode, Json<Platform
         ),
         RunOrchestratorError::Database(_) | RunOrchestratorError::Git(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            PlatformError::internal("Run workspace operation failed"),
+            PlatformError::internal("Workspace operation failed"),
         ),
     };
     (status, Json(platform))

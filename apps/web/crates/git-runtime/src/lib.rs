@@ -228,7 +228,7 @@ impl GitRuntime {
         &self.workspaces
     }
 
-    /// Bind Git operations for a Run workspace to a nested repository. The
+    /// Bind Git operations for a Workspace to a nested repository. The
     /// selection is always a validated relative path within the checkout.
     pub async fn set_workspace_git_root(
         &self,
@@ -519,7 +519,7 @@ impl GitRuntime {
         Ok(files)
     }
 
-    /// Read a regular UTF-8 file from a Run workspace without following a
+    /// Read a regular UTF-8 file from a Workspace without following a
     /// symlink outside the authorized checkout.
     pub async fn read_file(
         &self,
@@ -576,7 +576,7 @@ impl GitRuntime {
         Ok(WorkspaceFileContent { content, truncated })
     }
 
-    /// Read a bounded image from a Run workspace. The caller supplies only a
+    /// Read a bounded image from a Workspace. The caller supplies only a
     /// validated workspace-relative path; the registered workspace remains
     /// the authority for the filesystem root.
     pub async fn read_image_asset(

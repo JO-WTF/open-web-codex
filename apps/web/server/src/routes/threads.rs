@@ -144,10 +144,16 @@ async fn authorized_thread(
     run_id: Uuid,
 ) -> Result<ThreadContext, ApiError> {
     let row = sqlx::query(
-        "SELECT r.task_id, r.workspace_id, r.codex_thread_id, r.requested_by, \
-                w.root_path, w.state \
-         FROM runs r JOIN workspaces w ON w.id = r.workspace_id \
-         WHERE r.id = $1 AND r.organization_id = $2 AND w.organization_id = $2",
+        "SELECT run.task_id, run.workspace_id, run.codex_thread_id, run.requested_by, \
+                workspace.root_path, workspace.state \
+         FROM runs run \
+         JOIN workspaces workspace ON workspace.id = run.workspace_id \
+           AND workspace.organization_id = run.organization_id \
+         JOIN workspace_grants grant ON grant.workspace_id = workspace.id \
+           AND grant.organization_id = workspace.organization_id \
+           AND grant.user_id = run.requested_by \
+           AND grant.profile_id = workspace.profile_id \
+         WHERE run.id = $1 AND run.organization_id = $2",
     )
     .bind(run_id)
     .bind(auth.organization_id)
@@ -156,7 +162,7 @@ async fn authorized_thread(
     .map_err(database_error)?
     .ok_or_else(not_found)?;
     let requested_by: Option<Uuid> = row.get("requested_by");
-    if row.get::<String, _>("state") == "retired"
+    if !matches!(row.get::<String, _>("state").as_str(), "ready" | "retained")
         || (requested_by != Some(auth.user_id)
             && !matches!(auth.organization_role.as_str(), "owner" | "admin"))
     {

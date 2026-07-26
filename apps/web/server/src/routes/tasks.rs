@@ -291,7 +291,13 @@ pub async fn send_message(
         "SELECT r.id, r.status, r.codex_thread_id, r.workspace_id, w.root_path, \
                 t.title, t.model_provider, t.model \
          FROM runs r JOIN tasks t ON t.id = r.task_id \
-         LEFT JOIN workspaces w ON w.id = r.workspace_id \
+         JOIN workspaces w ON w.id = r.workspace_id \
+           AND w.organization_id = r.organization_id \
+           AND w.state IN ('ready', 'retained') \
+         JOIN workspace_grants grant ON grant.workspace_id = w.id \
+           AND grant.organization_id = w.organization_id \
+           AND grant.user_id = r.requested_by AND grant.profile_id = w.profile_id \
+           AND grant.role IN ('owner', 'write') \
          WHERE r.task_id = $1 AND r.organization_id = $2 \
            AND r.requested_by = $3 AND r.status IN ('running', 'recovery_pending') \
          ORDER BY r.created_at DESC LIMIT 1",
@@ -336,7 +342,7 @@ pub async fn send_message(
             return Err((
                 StatusCode::CONFLICT,
                 Json(PlatformError::bad_request(
-                    "active Run workspace is not ready",
+                    "the active Run's selected Workspace is not ready",
                 )),
             ));
         }

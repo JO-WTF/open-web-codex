@@ -7,6 +7,7 @@ import type {
   RunEvent,
   Session,
   Task,
+  Workspace,
   WorkspaceStatus,
   WorkspaceFileContent,
   WorkspaceFileDiff,
@@ -221,6 +222,43 @@ export class PlatformClient {
     });
   }
 
+  listWorkspaces() {
+    return this.request<Workspace[]>("/api/workspaces");
+  }
+
+  getWorkspace(workspaceId: string) {
+    return this.request<Workspace>(`/api/workspaces/${encodeURIComponent(workspaceId)}`);
+  }
+
+  createWorkspace(input: {
+    projectId: string;
+    kind: Workspace["kind"];
+    name?: string | null;
+    sourceRef?: string | null;
+    parentWorkspaceId?: string | null;
+    copyAgentsMd?: boolean;
+  }) {
+    return this.request<Workspace>("/api/workspaces", {
+      method: "POST",
+      body: JSON.stringify({
+        project_id: input.projectId,
+        idempotency_key: createIdempotencyKey(),
+        kind: input.kind,
+        name: input.name?.trim() || null,
+        source_ref: input.sourceRef?.trim() || null,
+        parent_workspace_id: input.parentWorkspaceId ?? null,
+        copy_agents_md: input.copyAgentsMd ?? false,
+      }),
+    });
+  }
+
+  removeWorkspace(workspaceId: string) {
+    return this.request<{ status: string }>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}`,
+      { method: "DELETE" },
+    );
+  }
+
   listTasks(projectId: string) {
     return this.request<Task[]>(`/api/tasks?project_id=${encodeURIComponent(projectId)}`);
   }
@@ -296,13 +334,8 @@ export class PlatformClient {
 
   startRun(
     taskId: string,
-    gitRef?: string,
-    workspace?: {
-      kind: "main" | "worktree" | "clone";
-      name?: string | null;
-      parentRunId?: string | null;
-      groupRunId?: string | null;
-      copyAgentsMd?: boolean;
+    workspaceId: string,
+    fork?: {
       forkThreadId?: string | null;
       forkSourceRunId?: string | null;
     },
@@ -311,14 +344,9 @@ export class PlatformClient {
       method: "POST",
       body: JSON.stringify({
         idempotency_key: createIdempotencyKey(),
-        git_ref: gitRef?.trim() || null,
-        workspace_kind: workspace?.kind ?? "main",
-        workspace_name: workspace?.name?.trim() || null,
-        workspace_parent_run_id: workspace?.parentRunId ?? null,
-        workspace_group_run_id: workspace?.groupRunId ?? null,
-        copy_agents_md: workspace?.copyAgentsMd ?? false,
-        fork_thread_id: workspace?.forkThreadId ?? null,
-        fork_source_run_id: workspace?.forkSourceRunId ?? null,
+        workspace_id: workspaceId,
+        fork_thread_id: fork?.forkThreadId ?? null,
+        fork_source_run_id: fork?.forkSourceRunId ?? null,
       }),
     });
   }
@@ -452,129 +480,122 @@ export class PlatformClient {
     });
   }
 
-  workspaceStatus(runId: string) {
+  workspaceStatus(workspaceId: string) {
     return this.request<WorkspaceStatus>(
-      `/api/runs/${encodeURIComponent(runId)}/workspace/status`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/status`,
     );
   }
 
-  listWorkspaceGitRoots(runId: string, depth: number) {
+  listWorkspaceGitRoots(workspaceId: string, depth: number) {
     const query = new URLSearchParams({ depth: String(depth) });
     return this.request<string[]>(
-      `/api/runs/${encodeURIComponent(runId)}/workspace/git-roots?${query.toString()}`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/git-roots?${query.toString()}`,
     );
   }
 
-  setWorkspaceGitRoot(runId: string, gitRoot: string | null) {
+  setWorkspaceGitRoot(workspaceId: string, gitRoot: string | null) {
     return this.request<{ status: string }>(
-      `/api/runs/${encodeURIComponent(runId)}/workspace/git-roots`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/git-roots`,
       { method: "PUT", body: JSON.stringify({ gitRoot }) },
     );
   }
 
-  listWorkspaceFiles(runId: string) {
-    return this.request<string[]>(`/api/runs/${encodeURIComponent(runId)}/workspace/files`);
+  listWorkspaceFiles(workspaceId: string) {
+    return this.request<string[]>(`/api/workspaces/${encodeURIComponent(workspaceId)}/files`);
   }
 
-  readWorkspaceFile(runId: string, path: string) {
+  readWorkspaceFile(workspaceId: string, path: string) {
     const query = new URLSearchParams({ path });
     return this.request<WorkspaceFileContent>(
-      `/api/runs/${encodeURIComponent(runId)}/workspace/files/content?${query.toString()}`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/files/content?${query.toString()}`,
     );
   }
 
-  writeWorkspaceAgents(runId: string, content: string) {
+  writeWorkspaceAgents(workspaceId: string, content: string) {
     return this.request<{ status: string }>(
-      `/api/runs/${encodeURIComponent(runId)}/workspace/agents`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/agents`,
       { method: "PUT", body: JSON.stringify({ content }) },
     );
   }
 
-  workspaceDiffs(runId: string) {
+  workspaceDiffs(workspaceId: string) {
     return this.request<WorkspaceFileDiff[]>(
-      `/api/runs/${encodeURIComponent(runId)}/workspace/diffs`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/diffs`,
     );
   }
 
-  stageWorkspacePaths(runId: string, paths: string[]) {
+  stageWorkspacePaths(workspaceId: string, paths: string[]) {
     return this.request<{ status: string }>(
-      `/api/runs/${encodeURIComponent(runId)}/workspace/stage`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/stage`,
       { method: "POST", body: JSON.stringify({ paths }) },
     );
   }
 
-  stageAllWorkspacePaths(runId: string) {
+  stageAllWorkspacePaths(workspaceId: string) {
     return this.request<{ status: string }>(
-      `/api/runs/${encodeURIComponent(runId)}/workspace/stage-all`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/stage-all`,
       { method: "POST" },
     );
   }
 
-  unstageWorkspacePaths(runId: string, paths: string[]) {
+  unstageWorkspacePaths(workspaceId: string, paths: string[]) {
     return this.request<{ status: string }>(
-      `/api/runs/${encodeURIComponent(runId)}/workspace/unstage`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/unstage`,
       { method: "POST", body: JSON.stringify({ paths }) },
     );
   }
 
-  revertWorkspacePaths(runId: string, paths: string[]) {
+  revertWorkspacePaths(workspaceId: string, paths: string[]) {
     return this.request<{ status: string }>(
-      `/api/runs/${encodeURIComponent(runId)}/workspace/revert`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/revert`,
       { method: "POST", body: JSON.stringify({ paths }) },
     );
   }
 
-  revertAllWorkspacePaths(runId: string) {
+  revertAllWorkspacePaths(workspaceId: string) {
     return this.request<{ status: string }>(
-      `/api/runs/${encodeURIComponent(runId)}/workspace/revert-all`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/revert-all`,
       { method: "POST" },
     );
   }
 
-  listWorkspaceBranches(runId: string) {
+  listWorkspaceBranches(workspaceId: string) {
     return this.request<WorkspaceBranch[]>(
-      `/api/runs/${encodeURIComponent(runId)}/workspace/branches`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/branches`,
     );
   }
 
-  checkoutWorkspaceBranch(runId: string, name: string) {
+  checkoutWorkspaceBranch(workspaceId: string, name: string) {
     return this.request<{ status: string }>(
-      `/api/runs/${encodeURIComponent(runId)}/workspace/branches/checkout`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/branches/checkout`,
       { method: "POST", body: JSON.stringify({ name }) },
     );
   }
 
-  createWorkspaceBranch(runId: string, name: string) {
+  createWorkspaceBranch(workspaceId: string, name: string) {
     return this.request<{ status: string }>(
-      `/api/runs/${encodeURIComponent(runId)}/workspace/branches`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/branches`,
       { method: "POST", body: JSON.stringify({ name }) },
     );
   }
 
-  renameWorkspaceBranch(runId: string, name: string) {
+  renameWorkspaceBranch(workspaceId: string, name: string) {
     return this.request<{ status: string; name: string }>(
-      `/api/runs/${encodeURIComponent(runId)}/workspace/branch/rename`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/branch/rename`,
       { method: "POST", body: JSON.stringify({ name }) },
     );
   }
 
-  removeDerivedWorkspace(runId: string) {
+  applyWorkspaceChanges(workspaceId: string) {
     return this.request<{ status: string }>(
-      `/api/runs/${encodeURIComponent(runId)}/workspace`,
-      { method: "DELETE" },
-    );
-  }
-
-  applyDerivedWorkspace(runId: string) {
-    return this.request<{ status: string }>(
-      `/api/runs/${encodeURIComponent(runId)}/workspace/apply`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/apply`,
       { method: "POST" },
     );
   }
 
-  renameWorkspaceUpstream(runId: string, oldBranch: string, newBranch: string) {
+  renameWorkspaceUpstream(workspaceId: string, oldBranch: string, newBranch: string) {
     return this.request<{ status: string }>(
-      `/api/runs/${encodeURIComponent(runId)}/workspace/upstream/rename`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/upstream/rename`,
       {
         method: "POST",
         body: JSON.stringify({ old_branch: oldBranch, new_branch: newBranch }),
@@ -582,9 +603,9 @@ export class PlatformClient {
     );
   }
 
-  openTerminal(runId: string, terminalId: string, cols: number, rows: number) {
+  openTerminal(workspaceId: string, terminalId: string, cols: number, rows: number) {
     return this.request<{ id: string }>(
-      `/api/runs/${encodeURIComponent(runId)}/terminals`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/terminals`,
       {
         method: "POST",
         body: JSON.stringify({ terminal_id: terminalId, cols, rows }),
@@ -592,52 +613,52 @@ export class PlatformClient {
     );
   }
 
-  writeTerminal(runId: string, terminalId: string, data: string) {
+  writeTerminal(workspaceId: string, terminalId: string, data: string) {
     return this.request<{ status: string }>(
-      `/api/runs/${encodeURIComponent(runId)}/terminals/${encodeURIComponent(terminalId)}/write`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/terminals/${encodeURIComponent(terminalId)}/write`,
       { method: "POST", body: JSON.stringify({ data }) },
     );
   }
 
-  resizeTerminal(runId: string, terminalId: string, cols: number, rows: number) {
+  resizeTerminal(workspaceId: string, terminalId: string, cols: number, rows: number) {
     return this.request<{ status: string }>(
-      `/api/runs/${encodeURIComponent(runId)}/terminals/${encodeURIComponent(terminalId)}/resize`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/terminals/${encodeURIComponent(terminalId)}/resize`,
       { method: "POST", body: JSON.stringify({ cols, rows }) },
     );
   }
 
-  closeTerminal(runId: string, terminalId: string) {
+  closeTerminal(workspaceId: string, terminalId: string) {
     return this.request<{ status: string }>(
-      `/api/runs/${encodeURIComponent(runId)}/terminals/${encodeURIComponent(terminalId)}`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/terminals/${encodeURIComponent(terminalId)}`,
       { method: "DELETE" },
     );
   }
 
-  workspaceLog(runId: string, limit = 40) {
+  workspaceLog(workspaceId: string, limit = 40) {
     const query = new URLSearchParams({ limit: String(limit) });
     return this.request<WorkspaceLog>(
-      `/api/runs/${encodeURIComponent(runId)}/workspace/log?${query.toString()}`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/log?${query.toString()}`,
     );
   }
 
-  workspaceCommitDiffs(runId: string, sha: string) {
+  workspaceCommitDiffs(workspaceId: string, sha: string) {
     return this.request<WorkspaceCommitDiff[]>(
-      `/api/runs/${encodeURIComponent(runId)}/workspace/commits/${encodeURIComponent(sha)}/diff`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/commits/${encodeURIComponent(sha)}/diff`,
     );
   }
 
-  githubIssues(runId: string) {
-    return this.request<GitHubIssues>(`/api/runs/${encodeURIComponent(runId)}/github/issues`);
+  githubIssues(workspaceId: string) {
+    return this.request<GitHubIssues>(`/api/workspaces/${encodeURIComponent(workspaceId)}/github/issues`);
   }
 
   createGithubRepository(
-    runId: string,
+    workspaceId: string,
     repo: string,
     visibility: "private" | "public",
     branch?: string | null,
   ) {
     return this.request<CreateGitHubRepositoryResponse>(
-      `/api/runs/${encodeURIComponent(runId)}/github/repository`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/github/repository`,
       {
         method: "POST",
         body: JSON.stringify({ repo, visibility, branch: branch ?? null }),
@@ -645,40 +666,40 @@ export class PlatformClient {
     );
   }
 
-  githubPullRequests(runId: string) {
+  githubPullRequests(workspaceId: string) {
     return this.request<GitHubPullRequests>(
-      `/api/runs/${encodeURIComponent(runId)}/github/pull-requests`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/github/pull-requests`,
     );
   }
 
-  githubPullRequestDiff(runId: string, number: number) {
+  githubPullRequestDiff(workspaceId: string, number: number) {
     return this.request<GitHubPullRequestDiff[]>(
-      `/api/runs/${encodeURIComponent(runId)}/github/pull-requests/${number}/diff`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/github/pull-requests/${number}/diff`,
     );
   }
 
-  githubPullRequestComments(runId: string, number: number) {
+  githubPullRequestComments(workspaceId: string, number: number) {
     return this.request<GitHubPullRequestComment[]>(
-      `/api/runs/${encodeURIComponent(runId)}/github/pull-requests/${number}/comments`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/github/pull-requests/${number}/comments`,
     );
   }
 
-  checkoutGithubPullRequest(runId: string, number: number) {
+  checkoutGithubPullRequest(workspaceId: string, number: number) {
     return this.request<{ status: string }>(
-      `/api/runs/${encodeURIComponent(runId)}/github/pull-requests/${number}/checkout`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/github/pull-requests/${number}/checkout`,
       { method: "POST" },
     );
   }
 
-  workspaceRemote(runId: string) {
+  workspaceRemote(workspaceId: string) {
     return this.request<string | null>(
-      `/api/runs/${encodeURIComponent(runId)}/workspace/remote`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/remote`,
     );
   }
 
-  workspaceRemoteOperation(runId: string, operation: "fetch" | "pull" | "push" | "sync") {
+  workspaceRemoteOperation(workspaceId: string, operation: "fetch" | "pull" | "push" | "sync") {
     return this.request<{ status: string }>(
-      `/api/runs/${encodeURIComponent(runId)}/workspace/${operation}`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/${operation}`,
       { method: "POST" },
     );
   }
@@ -878,9 +899,9 @@ export class PlatformClient {
     ).then((response) => response.data);
   }
 
-  commitWorkspace(runId: string, selectedPaths: string[], message: string) {
+  commitWorkspace(workspaceId: string, selectedPaths: string[], message: string) {
     return this.request<{ workspace_id: string; commit: string }>(
-      `/api/runs/${encodeURIComponent(runId)}/workspace/commit`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/commit`,
       {
         method: "POST",
         body: JSON.stringify({ selected_paths: selectedPaths, message }),

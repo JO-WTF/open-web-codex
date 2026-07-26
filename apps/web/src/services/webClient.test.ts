@@ -22,18 +22,28 @@ const task = {
   updated_at: "2026-07-22T00:00:00Z",
 };
 
+const workspace = {
+  id: project.id,
+  project_id: project.id,
+  name: project.name,
+  kind: "main",
+  state: "ready",
+  source_ref: "main",
+  branch_name: "main",
+  parent_workspace_id: null,
+  group_workspace_id: null,
+  managed: true,
+  created_at: project.created_at,
+  updated_at: project.updated_at,
+};
+
 const run = {
   id: "run-1",
   task_id: task.id,
   status: "running",
   codex_thread_id: "thread-1",
   active_turn_id: null,
-  workspace_id: "workspace-checkout-1",
-  source_ref: "main",
-  workspace_kind: "main",
-  workspace_name: null,
-  workspace_parent_run_id: null,
-  workspace_group_run_id: null,
+  workspace_id: workspace.id,
   attempt: 1,
   created_at: "2026-07-22T00:00:00Z",
   updated_at: "2026-07-22T00:00:00Z",
@@ -49,6 +59,8 @@ function json(value: unknown) {
 function resourceFetch(events: unknown[] = [], turns: unknown[] = []) {
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = new URL(String(input));
+    if (url.pathname === "/api/workspaces") return json([workspace]);
+    if (url.pathname === `/api/workspaces/${workspace.id}`) return json(workspace);
     if (url.pathname === "/api/projects") return json([project]);
     if (url.pathname === `/api/projects/${project.id}`) return json(project);
     if (url.pathname === `/api/projects/${project.id}/thread-contexts`) {
@@ -94,6 +106,18 @@ function runtimeStatus(value: typeof run) {
 describe("WebApp direct Server client", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("projects real Workspace ids without exposing a server-local root", async () => {
+    vi.stubGlobal("fetch", resourceFetch());
+    const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
+
+    await expect(client.listWorkspaces()).resolves.toEqual([expect.objectContaining({
+      id: workspace.id,
+      name: workspace.name,
+      path: workspace.name,
+      connected: true,
+    })]);
   });
 
   it("restores authoritative chronological Turn history from Codex", async () => {
@@ -317,17 +341,19 @@ describe("WebApp direct Server client", () => {
     expect(urls.every((url) => !url.includes("/api/rpc"))).toBe(true);
   });
 
-  it("uses the selected Thread Run for files, Git, and MCP resources", async () => {
+  it("uses the Workspace directly for files and Git while MCP stays Run-scoped", async () => {
     const otherTask = { ...task, id: "task-2", title: "Other Thread" };
     const otherRun = {
       ...run,
       id: "run-2",
       task_id: otherTask.id,
       codex_thread_id: "thread-2",
-      workspace_id: "workspace-checkout-2",
+      workspace_id: workspace.id,
     };
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input));
+      if (url.pathname === "/api/workspaces") return json([workspace]);
+      if (url.pathname === `/api/workspaces/${workspace.id}`) return json(workspace);
       if (url.pathname === "/api/projects") return json([project]);
       if (url.pathname === `/api/projects/${project.id}`) return json(project);
       if (url.pathname === `/api/projects/${project.id}/thread-contexts`) {
@@ -355,8 +381,8 @@ describe("WebApp direct Server client", () => {
         } });
       }
       if (url.pathname === `/api/tasks/${otherTask.id}/events`) return json([]);
-      if (url.pathname === `/api/runs/${otherRun.id}/workspace/files`) return json(["selected.txt"]);
-      if (url.pathname === `/api/runs/${otherRun.id}/workspace/status`) {
+      if (url.pathname === `/api/workspaces/${workspace.id}/files`) return json(["selected.txt"]);
+      if (url.pathname === `/api/workspaces/${workspace.id}/status`) {
         return json({ branch: "main", ahead: 0, behind: 0, changes: [] });
       }
       if (url.pathname === "/api/profile/mcp-servers") return json({ data: { data: [] } });
@@ -370,8 +396,8 @@ describe("WebApp direct Server client", () => {
     await client.listMcpServerStatus(project.id, "thread-2");
 
     const urls = fetchMock.mock.calls.map((call) => String(call[0]));
-    expect(urls).toContain(`http://server.test/api/runs/${otherRun.id}/workspace/files`);
-    expect(urls).toContain(`http://server.test/api/runs/${otherRun.id}/workspace/status`);
+    expect(urls).toContain(`http://server.test/api/workspaces/${workspace.id}/files`);
+    expect(urls).toContain(`http://server.test/api/workspaces/${workspace.id}/status`);
     expect(urls.some((url) => url.includes(`/api/profile/mcp-servers?runId=${otherRun.id}`)))
       .toBe(true);
   });

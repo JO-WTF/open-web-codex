@@ -23,32 +23,32 @@ function normalizeRelativeResourcePath(path: string): string {
   return normalized;
 }
 
-function validateRunId(runId: string): string {
-  const normalized = runId.trim();
+function validateWorkspaceId(workspaceId: string): string {
+  const normalized = workspaceId.trim();
   if (!UUID_PATTERN.test(normalized)) {
-    throw new Error("Browser workspace resource Run id is invalid");
+    throw new Error("Browser workspace resource id is invalid");
   }
   return normalized;
 }
 
-function workspaceAssetUrl(runId: string, relativePath: string): string {
+function workspaceAssetUrl(workspaceId: string, relativePath: string): string {
   const query = new URLSearchParams({ path: normalizeRelativeResourcePath(relativePath) });
-  return `/api/runs/${encodeURIComponent(validateRunId(runId))}/workspace/assets?${query.toString()}`;
+  return `/api/workspaces/${encodeURIComponent(validateWorkspaceId(workspaceId))}/assets?${query.toString()}`;
 }
 
 function registeredWorkspaceResource(path: string): string | null {
   const normalized = path.trim().replace(/\\/g, "/");
   const roots = Array.from(workspaceResourceRoots.entries())
     .sort(([left], [right]) => right.length - left.length);
-  for (const [root, runId] of roots) {
+  for (const [root, workspaceId] of roots) {
     if (!normalized.startsWith(`${root}/`)) continue;
-    return workspaceAssetUrl(runId, normalized.slice(root.length + 1));
+    return workspaceAssetUrl(workspaceId, normalized.slice(root.length + 1));
   }
   return null;
 }
 
 function encodedWorkspaceResource(path: string): string | null {
-  const matched = /^owc-run:\/\/([^/]+)\/(.+)$/i.exec(path.trim());
+  const matched = /^owc-workspace:\/\/([^/]+)\/(.+)$/i.exec(path.trim());
   if (!matched) return null;
   let relativePath: string;
   try {
@@ -74,15 +74,15 @@ export function convertFileSrc(path: string): string {
   throw new Error("Browser workspace resource is not registered");
 }
 
-export function registerWorkspaceResourceRoot(root: string, runId: string): () => void {
+export function registerWorkspaceResourceRoot(root: string, workspaceId: string): () => void {
   const normalizedRoot = normalizeWorkspaceRoot(root);
   if (!normalizedRoot) {
     throw new Error("Browser workspace resource root is required");
   }
-  const normalizedRunId = validateRunId(runId);
-  workspaceResourceRoots.set(normalizedRoot, normalizedRunId);
+  const normalizedWorkspaceId = validateWorkspaceId(workspaceId);
+  workspaceResourceRoots.set(normalizedRoot, normalizedWorkspaceId);
   return () => {
-    if (workspaceResourceRoots.get(normalizedRoot) === normalizedRunId) {
+    if (workspaceResourceRoots.get(normalizedRoot) === normalizedWorkspaceId) {
       workspaceResourceRoots.delete(normalizedRoot);
     }
   };
@@ -92,10 +92,10 @@ export function clearWorkspaceResourceRoots(): void {
   workspaceResourceRoots.clear();
 }
 
-export function workspaceResourceRef(runId: string, relativePath: string): string {
-  const normalizedRunId = validateRunId(runId);
+export function workspaceResourceRef(workspaceId: string, relativePath: string): string {
+  const normalizedWorkspaceId = validateWorkspaceId(workspaceId);
   const normalizedPath = normalizeRelativeResourcePath(relativePath);
-  return `owc-run://${normalizedRunId}/${encodeURIComponent(normalizedPath)}`;
+  return `owc-workspace://${normalizedWorkspaceId}/${encodeURIComponent(normalizedPath)}`;
 }
 
 export function registerBrowserCommand(

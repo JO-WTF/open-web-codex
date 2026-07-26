@@ -32,10 +32,14 @@ pub async fn read(
     let row = sqlx::query(
         "SELECT a.thread_id, a.source_server, a.source_uri, a.mime_type,
                 a.expected_size, a.content,
-                r.requested_by, w.id AS workspace_id, w.root_path, w.state AS workspace_state
+                r.requested_by, w.id AS workspace_id, w.root_path, w.state AS workspace_state,
+                grant.role AS workspace_role
          FROM reply_artifacts a
          JOIN runs r ON r.id = a.run_id
          JOIN workspaces w ON w.id = r.workspace_id
+         LEFT JOIN workspace_grants grant ON grant.workspace_id = w.id
+           AND grant.organization_id = w.organization_id
+           AND grant.user_id = $4 AND grant.profile_id = w.profile_id
          WHERE a.id = $1 AND a.run_id = $2
            AND a.organization_id = $3 AND r.organization_id = $3
            AND w.organization_id = $3 AND a.state IN ('pending', 'ready')",
@@ -43,15 +47,19 @@ pub async fn read(
     .bind(artifact_id)
     .bind(run_id)
     .bind(auth.organization_id)
+    .bind(auth.user_id)
     .fetch_optional(&state.db)
     .await
     .map_err(database_error)?
     .ok_or_else(not_found)?;
 
     let requested_by: Option<Uuid> = row.get("requested_by");
-    if row.get::<String, _>("workspace_state") == "retired"
-        || (requested_by != Some(auth.user_id)
-            && !matches!(auth.organization_role.as_str(), "owner" | "admin"))
+    let workspace_role: Option<String> = row.get("workspace_role");
+    let is_admin = matches!(auth.organization_role.as_str(), "owner" | "admin");
+    if !matches!(
+        row.get::<String, _>("workspace_state").as_str(),
+        "ready" | "retained"
+    ) || ((requested_by != Some(auth.user_id) || workspace_role.is_none()) && !is_admin)
     {
         return Err(not_found());
     }

@@ -25,11 +25,11 @@ const MAX_GITHUB_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 pub async fn create_repository(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    AxumPath(run_id): AxumPath<Uuid>,
+    AxumPath(workspace_id): AxumPath<Uuid>,
     Extension(git): Extension<Arc<GitRuntime>>,
     Json(request): Json<CreateGitHubRepositoryRequest>,
 ) -> ApiResult<CreateGitHubRepositoryResponse> {
-    let workspace_id = authorized_workspace(&state, &auth, run_id, true).await?;
+    let workspace_id = authorized_workspace(&state, &auth, workspace_id, true).await?;
     let workspace = git.workspace_path(workspace_id);
     let mut repository = validate_requested_repository(&request.repo)?;
     if !repository.contains('/') {
@@ -147,7 +147,7 @@ pub async fn create_repository(
     .bind(auth.organization_id)
     .bind(auth.user_id)
     .bind(workspace_id)
-    .bind(serde_json::json!({ "runId": run_id, "repository": repository, "visibility": request.visibility }))
+    .bind(serde_json::json!({ "repository": repository, "visibility": request.visibility }))
     .bind(if status == "ok" { "success" } else { "partial" })
     .execute(&state.db)
     .await
@@ -164,10 +164,10 @@ pub async fn create_repository(
 pub async fn issues(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    AxumPath(run_id): AxumPath<Uuid>,
+    AxumPath(workspace_id): AxumPath<Uuid>,
     Extension(git): Extension<Arc<GitRuntime>>,
 ) -> ApiResult<GitHubIssues> {
-    let (workspace, repository) = context(&state, &auth, run_id, &git, false).await?;
+    let (workspace, repository) = context(&state, &auth, workspace_id, &git, false).await?;
     let output = run_gh(
         &workspace,
         [
@@ -193,10 +193,10 @@ pub async fn issues(
 pub async fn pull_requests(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    AxumPath(run_id): AxumPath<Uuid>,
+    AxumPath(workspace_id): AxumPath<Uuid>,
     Extension(git): Extension<Arc<GitRuntime>>,
 ) -> ApiResult<GitHubPullRequests> {
-    let (workspace, repository) = context(&state, &auth, run_id, &git, false).await?;
+    let (workspace, repository) = context(&state, &auth, workspace_id, &git, false).await?;
     let output = run_gh(
         &workspace,
         [
@@ -224,11 +224,11 @@ pub async fn pull_requests(
 pub async fn pull_request_diff(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    AxumPath((run_id, number)): AxumPath<(Uuid, u64)>,
+    AxumPath((workspace_id, number)): AxumPath<(Uuid, u64)>,
     Extension(git): Extension<Arc<GitRuntime>>,
 ) -> ApiResult<Vec<GitHubPullRequestDiff>> {
     validate_pr_number(number)?;
-    let (workspace, repository) = context(&state, &auth, run_id, &git, false).await?;
+    let (workspace, repository) = context(&state, &auth, workspace_id, &git, false).await?;
     let number = number.to_string();
     let output = run_gh(
         &workspace,
@@ -251,11 +251,11 @@ pub async fn pull_request_diff(
 pub async fn pull_request_comments(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    AxumPath((run_id, number)): AxumPath<(Uuid, u64)>,
+    AxumPath((workspace_id, number)): AxumPath<(Uuid, u64)>,
     Extension(git): Extension<Arc<GitRuntime>>,
 ) -> ApiResult<Vec<GitHubPullRequestComment>> {
     validate_pr_number(number)?;
-    let (workspace, repository) = context(&state, &auth, run_id, &git, false).await?;
+    let (workspace, repository) = context(&state, &auth, workspace_id, &git, false).await?;
     let endpoint = format!("/repos/{repository}/issues/{number}/comments?per_page=30");
     let filter = "[.[] | {id, body, createdAt: .created_at, url: .html_url, author: (if .user then {login: .user.login} else null end)}]";
     let output = run_gh(&workspace, ["api", endpoint.as_str(), "--jq", filter]).await?;
@@ -267,11 +267,11 @@ pub async fn pull_request_comments(
 pub async fn checkout_pull_request(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
-    AxumPath((run_id, number)): AxumPath<(Uuid, u64)>,
+    AxumPath((workspace_id, number)): AxumPath<(Uuid, u64)>,
     Extension(git): Extension<Arc<GitRuntime>>,
 ) -> ApiResult<serde_json::Value> {
     validate_pr_number(number)?;
-    let (workspace, _) = context(&state, &auth, run_id, &git, true).await?;
+    let (workspace, _) = context(&state, &auth, workspace_id, &git, true).await?;
     let number = number.to_string();
     run_gh(&workspace, ["pr", "checkout", number.as_str()]).await?;
     Ok(Json(serde_json::json!({ "status": "checkedOut" })))
@@ -280,11 +280,11 @@ pub async fn checkout_pull_request(
 async fn context(
     state: &AppState,
     auth: &AuthenticatedUser,
-    run_id: Uuid,
+    workspace_id: Uuid,
     git: &GitRuntime,
     require_owner: bool,
 ) -> Result<(std::path::PathBuf, String), ApiError> {
-    let workspace_id = authorized_workspace(state, auth, run_id, require_owner).await?;
+    let workspace_id = authorized_workspace(state, auth, workspace_id, require_owner).await?;
     let remote = git
         .remote(workspace_id)
         .await

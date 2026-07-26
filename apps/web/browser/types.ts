@@ -51,12 +51,22 @@ export type Run = {
   codex_thread_id: string | null;
   active_turn_id: string | null;
   workspace_id: string | null;
-  source_ref: string | null;
-  workspace_kind: "main" | "worktree" | "clone";
-  workspace_name: string | null;
-  workspace_parent_run_id: string | null;
-  workspace_group_run_id: string | null;
   attempt: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Workspace = {
+  id: string;
+  project_id: string;
+  name: string;
+  kind: "main" | "worktree" | "clone";
+  state: "creating" | "ready" | "retained" | "removing" | "removed" | "cleanup_failed";
+  source_ref: string;
+  branch_name: string | null;
+  parent_workspace_id: string | null;
+  group_workspace_id: string | null;
+  managed: boolean;
   created_at: string;
   updated_at: string;
 };

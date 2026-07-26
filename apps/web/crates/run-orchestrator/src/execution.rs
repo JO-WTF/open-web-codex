@@ -19,69 +19,28 @@ impl RunOrchestrator {
 
     pub async fn execute_lease(&self, lease: &RunLease) -> Result<(), RunOrchestratorError> {
         self.heartbeat(lease).await?;
-        let source = self.git.validate_source(&lease.git_url)?;
-        let git_ref = self.git.validate_ref(&lease.source_ref)?;
-        let workspace_id = Uuid::now_v7();
-        let mut checkout = self
-            .git
-            .provision(lease.project_id, workspace_id, &source, &git_ref)
-            .await?;
-        if lease.workspace_kind == "worktree" {
-            if let Err(error) = self
-                .git
-                .switch_or_create_branch(workspace_id, &lease.source_ref)
-                .await
-            {
-                self.git.remove_workspace(workspace_id).await?;
-                return Err(error.into());
-            }
-            checkout.branch = lease.source_ref.clone();
-        }
-        if lease.copy_agents_md {
-            if let Some(parent_run_id) = lease.workspace_parent_run_id {
-                let parent_workspace_id = sqlx::query_scalar::<_, Uuid>(
-                    "SELECT parent.workspace_id FROM runs parent \
-                     JOIN workspaces workspace ON workspace.id = parent.workspace_id \
-                     WHERE parent.id = $1 AND parent.organization_id = $2 \
-                       AND workspace.state <> 'retired'",
-                )
-                .bind(parent_run_id)
-                .bind(lease.organization_id)
-                .fetch_optional(&self.db)
-                .await?;
-                if let Some(parent_workspace_id) = parent_workspace_id {
-                    if let Err(error) = self
-                        .git
-                        .copy_agents_md(parent_workspace_id, workspace_id)
-                        .await
-                    {
-                        tracing::warn!(%error, run_id = %lease.run_id, "optional AGENTS.md copy failed");
-                    }
-                }
-            }
-        }
-        self.heartbeat(lease).await?;
-
-        if let Err(error) = self.record_workspace(lease, workspace_id, &checkout).await {
-            self.git.remove_workspace(workspace_id).await?;
-            return Err(error);
-        }
-
         let workspace = AuthorizedWorkspace {
-            id: workspace_id.to_string(),
-            root: checkout.root.clone(),
+            id: lease.workspace_id.to_string(),
+            root: lease.workspace_root.clone(),
         };
         let started = if let Some(source_thread_id) = lease.fork_thread_id.as_deref() {
             let source = sqlx::query(
-                "SELECT parent.workspace_id, parent_workspace.root_path \
-                 FROM runs parent JOIN workspaces parent_workspace \
-                   ON parent_workspace.id = parent.workspace_id \
-                 WHERE parent.id = $1 AND parent.organization_id = $2 \
-                   AND parent.codex_thread_id = $3 AND parent_workspace.state <> 'retired'",
+                "SELECT source_workspace.id AS workspace_id, source_workspace.root_path \
+                 FROM runs source_run \
+                 JOIN workspaces source_workspace ON source_workspace.id = source_run.workspace_id \
+                 JOIN workspace_grants source_grant \
+                   ON source_grant.workspace_id = source_workspace.id \
+                  AND source_grant.organization_id = source_workspace.organization_id \
+                  AND source_grant.user_id = $4 \
+                  AND source_grant.profile_id = source_workspace.profile_id \
+                 WHERE source_run.id = $1 AND source_run.organization_id = $2 \
+                   AND source_run.codex_thread_id = $3 \
+                   AND source_workspace.state IN ('ready', 'retained')",
             )
             .bind(lease.fork_source_run_id)
             .bind(lease.organization_id)
             .bind(source_thread_id)
+            .bind(lease.actor_id)
             .fetch_optional(&self.db)
             .await?
             .ok_or(RunOrchestratorError::NotFound)?;
@@ -91,27 +50,18 @@ impl RunOrchestrator {
             };
             self.adapter
                 .fork_thread(&source_workspace, &workspace, source_thread_id)
-                .await
+                .await?
         } else {
-            self.adapter.start_thread(&workspace).await
+            self.adapter.start_thread(&workspace).await?
         };
-        let started = match started {
-            Ok(started) => started,
-            Err(error) => {
-                self.queue_cleanup(lease, workspace_id, "thread_start_failed")
-                    .await?;
-                return Err(error.into());
-            }
-        };
+
         let updated = sqlx::query(
             "WITH updated_run AS ( \
                  UPDATE runs SET status = 'running', codex_thread_id = $1, heartbeat_at = now(), \
                                  lease_expires_at = $2, updated_at = now() \
-                 WHERE id = $3 AND lease_owner = $4 AND lease_token = $5 AND status = 'provisioning' \
-                 RETURNING task_id, workspace_id \
-             ), updated_workspace AS ( \
-                 UPDATE workspaces SET state = 'busy', updated_at = now() \
-                 WHERE id IN (SELECT workspace_id FROM updated_run) \
+                 WHERE id = $3 AND workspace_id = $4 \
+                   AND lease_owner = $5 AND lease_token = $6 AND status = 'provisioning' \
+                 RETURNING task_id \
              ) \
              UPDATE tasks SET status = 'running', updated_at = now() \
              WHERE id IN (SELECT task_id FROM updated_run)",
@@ -119,13 +69,14 @@ impl RunOrchestrator {
         .bind(&started.thread_id)
         .bind(Utc::now() + crate::chrono_ttl(self.lease_ttl)?)
         .bind(lease.run_id)
+        .bind(lease.workspace_id)
         .bind(&self.worker_id)
         .bind(&lease.token)
         .execute(&self.db)
         .await?
         .rows_affected();
         if updated != 1 {
-            self.record_delivery_uncertainty(lease, workspace_id, &started.thread_id)
+            self.record_delivery_uncertainty(lease, &started.thread_id)
                 .await?;
             return Err(RunOrchestratorError::LeaseLost);
         }
@@ -135,10 +86,8 @@ impl RunOrchestrator {
     async fn record_delivery_uncertainty(
         &self,
         lease: &RunLease,
-        workspace_id: Uuid,
         thread_id: &str,
     ) -> Result<(), RunOrchestratorError> {
-        let mut transaction = self.db.begin().await?;
         sqlx::query(
             "UPDATE runs SET codex_thread_id = COALESCE(codex_thread_id, $1), \
                              status = CASE WHEN status = 'cancelled' THEN 'cancelled' \
@@ -151,58 +100,9 @@ impl RunOrchestrator {
         )
         .bind(thread_id)
         .bind(lease.run_id)
-        .bind(workspace_id)
-        .execute(&mut *transaction)
+        .bind(lease.workspace_id)
+        .execute(&self.db)
         .await?;
-        sqlx::query("UPDATE workspaces SET state = 'ready', updated_at = now() WHERE id = $1")
-            .bind(workspace_id)
-            .execute(&mut *transaction)
-            .await?;
-        transaction.commit().await?;
-        Ok(())
-    }
-
-    async fn record_workspace(
-        &self,
-        lease: &RunLease,
-        workspace_id: Uuid,
-        checkout: &open_web_codex_git_runtime::WorkspaceCheckout,
-    ) -> Result<(), RunOrchestratorError> {
-        let mut transaction = self.db.begin().await?;
-        let owned: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM runs WHERE id = $1 AND lease_owner = $2 \
-             AND lease_token = $3 AND status = 'provisioning')",
-        )
-        .bind(lease.run_id)
-        .bind(&self.worker_id)
-        .bind(&lease.token)
-        .fetch_one(&mut *transaction)
-        .await?;
-        if !owned {
-            return Err(RunOrchestratorError::LeaseLost);
-        }
-        sqlx::query(
-            "INSERT INTO workspaces (id, organization_id, project_id, profile_id, run_id, root_path, \
-                                     state, source_ref, head_commit, branch_name) \
-             VALUES ($1, $2, $3, $4, $5, $6, 'ready', $7, $8, $9)",
-        )
-        .bind(workspace_id)
-        .bind(lease.organization_id)
-        .bind(lease.project_id)
-        .bind(lease.profile_id)
-        .bind(lease.run_id)
-        .bind(checkout.root.to_string_lossy().as_ref())
-        .bind(&lease.source_ref)
-        .bind(&checkout.head_commit)
-        .bind(&checkout.branch)
-        .execute(&mut *transaction)
-        .await?;
-        sqlx::query("UPDATE runs SET workspace_id = $1, updated_at = now() WHERE id = $2")
-            .bind(workspace_id)
-            .bind(lease.run_id)
-            .execute(&mut *transaction)
-            .await?;
-        transaction.commit().await?;
         Ok(())
     }
 
@@ -223,35 +123,6 @@ impl RunOrchestrator {
         .bind(&lease.token)
         .execute(&self.db)
         .await?;
-        Ok(())
-    }
-
-    async fn queue_cleanup(
-        &self,
-        lease: &RunLease,
-        workspace_id: Uuid,
-        code: &'static str,
-    ) -> Result<(), RunOrchestratorError> {
-        let mut transaction = self.db.begin().await?;
-        sqlx::query(
-            "UPDATE workspaces SET state = 'cleanup_pending', updated_at = now() WHERE id = $1",
-        )
-        .bind(workspace_id)
-        .execute(&mut *transaction)
-        .await?;
-        sqlx::query(
-            "INSERT INTO runner_jobs (organization_id, run_id, workspace_id, kind, last_error_code) \
-             VALUES ($1, $2, $3, 'workspace_cleanup', $4) \
-             ON CONFLICT (workspace_id, kind) DO UPDATE SET state = 'pending', run_after = now(), \
-                 last_error_code = EXCLUDED.last_error_code, updated_at = now()",
-        )
-        .bind(lease.organization_id)
-        .bind(lease.run_id)
-        .bind(workspace_id)
-        .bind(code)
-        .execute(&mut *transaction)
-        .await?;
-        transaction.commit().await?;
         Ok(())
     }
 
@@ -287,22 +158,33 @@ impl RunOrchestrator {
         transaction.commit().await?;
 
         if let Err(error) = self.git.remove_workspace(workspace_id).await {
-            sqlx::query(
-                "UPDATE runner_jobs SET state = CASE WHEN attempt >= 5 THEN 'failed' ELSE 'pending' END, \
-                                        run_after = now() + interval '30 seconds', lease_owner = NULL, \
-                                        lease_token = NULL, lease_expires_at = NULL, \
-                                        last_error_code = 'workspace_cleanup_failed', updated_at = now() \
-                 WHERE id = $1 AND lease_token = $2",
+            let state: String = sqlx::query_scalar(
+                "UPDATE runner_jobs \
+                 SET state = CASE WHEN attempt >= 5 THEN 'failed' ELSE 'pending' END, \
+                     run_after = now() + interval '30 seconds', lease_owner = NULL, \
+                     lease_token = NULL, lease_expires_at = NULL, \
+                     last_error_code = 'workspace_cleanup_failed', updated_at = now() \
+                 WHERE id = $1 AND lease_token = $2 RETURNING state",
             )
             .bind(job_id)
             .bind(&token)
-            .execute(&self.db)
+            .fetch_one(&self.db)
             .await?;
+            if state == "failed" {
+                sqlx::query(
+                    "UPDATE workspaces SET state = 'cleanup_failed', updated_at = now() \
+                     WHERE id = $1 AND state = 'removing'",
+                )
+                .bind(workspace_id)
+                .execute(&self.db)
+                .await?;
+            }
             return Err(error.into());
         }
         let mut transaction = self.db.begin().await?;
         sqlx::query(
-            "UPDATE workspaces SET state = 'retired', retired_at = now(), updated_at = now() WHERE id = $1",
+            "UPDATE workspaces \
+             SET state = 'removed', removed_at = now(), updated_at = now() WHERE id = $1",
         )
         .bind(workspace_id)
         .execute(&mut *transaction)

@@ -8,7 +8,8 @@ use open_web_codex_adapter::CodexAdapter;
 use open_web_codex_git_runtime::{GitRuntime, GitRuntimeConfig};
 use open_web_codex_platform_store::migrate;
 use open_web_codex_run_orchestrator::{
-    CancelRunRequest, EnqueueRunRequest, RecoverRunRequest, RunOrchestrator, RunOrchestratorError,
+    CancelRunRequest, CreateWorkspaceRequest, EnqueueRunRequest, RecoverRunRequest,
+    RemoveWorkspaceRequest, RunOrchestrator, RunOrchestratorError,
 };
 use sqlx::postgres::PgPoolOptions;
 use sqlx::Row;
@@ -54,7 +55,7 @@ fn source_repository(root: &TempDir) -> String {
 
 #[tokio::test]
 #[ignore = "requires TEST_DATABASE_URL pointing at a disposable PostgreSQL database"]
-async fn idempotent_enqueue_single_lease_and_workspace_provisioning() {
+async fn independent_workspace_is_reused_across_run_lifecycles() {
     let database_url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL");
     let pool = PgPoolOptions::new()
         .max_connections(8)
@@ -150,17 +151,27 @@ async fn idempotent_enqueue_single_lease_and_workspace_provisioning() {
         Duration::from_secs(30),
     )
     .unwrap();
+    let workspace = first
+        .create_workspace(CreateWorkspaceRequest {
+            organization_id,
+            actor_id: user_id,
+            project_id,
+            idempotency_key: "workspace-idempotency-0001".to_string(),
+            kind: "main".to_string(),
+            name: Some("Project workspace".to_string()),
+            source_ref: None,
+            parent_workspace_id: None,
+            copy_agents_md: false,
+        })
+        .await
+        .unwrap();
+    assert_eq!(workspace.state, "ready");
     let request = EnqueueRunRequest {
         organization_id,
         actor_id: user_id,
         task_id,
         idempotency_key: "runner-idempotency-0001".to_string(),
-        git_ref: None,
-        workspace_kind: "main".to_string(),
-        workspace_name: None,
-        workspace_parent_run_id: None,
-        workspace_group_run_id: None,
-        copy_agents_md: false,
+        workspace_id: workspace.id,
         fork_thread_id: None,
         fork_source_run_id: None,
     };
@@ -173,12 +184,7 @@ async fn idempotent_enqueue_single_lease_and_workspace_provisioning() {
             actor_id: user_id,
             task_id,
             idempotency_key: "runner-idempotency-0002".to_string(),
-            git_ref: None,
-            workspace_kind: "main".to_string(),
-            workspace_name: None,
-            workspace_parent_run_id: None,
-            workspace_group_run_id: None,
-            copy_agents_md: false,
+            workspace_id: workspace.id,
             fork_thread_id: None,
             fork_source_run_id: None,
         })
@@ -207,8 +213,9 @@ async fn idempotent_enqueue_single_lease_and_workspace_provisioning() {
     .unwrap();
     assert_eq!(row.get::<String, _>("status"), "running");
     assert!(row.get::<Option<String>, _>("codex_thread_id").is_some());
-    assert_eq!(row.get::<String, _>("state"), "busy");
+    assert_eq!(row.get::<String, _>("state"), "ready");
     let workspace_id: Uuid = row.get("workspace_id");
+    assert_eq!(workspace_id, workspace.id);
     let root_path: String = row.get("root_path");
     assert_eq!(
         Path::new(&root_path),
@@ -239,12 +246,7 @@ async fn idempotent_enqueue_single_lease_and_workspace_provisioning() {
             actor_id: user_id,
             task_id,
             idempotency_key: "runner-idempotency-0003".to_string(),
-            git_ref: None,
-            workspace_kind: "main".to_string(),
-            workspace_name: None,
-            workspace_parent_run_id: None,
-            workspace_group_run_id: None,
-            copy_agents_md: false,
+            workspace_id: workspace.id,
             fork_thread_id: None,
             fork_source_run_id: None,
         })
@@ -259,6 +261,7 @@ async fn idempotent_enqueue_single_lease_and_workspace_provisioning() {
     .fetch_one(&pool)
     .await
     .unwrap();
+    assert_eq!(recovery_run.workspace_id, Some(workspace.id));
 
     sqlx::query("UPDATE runs SET lease_expires_at = now() - interval '1 second' WHERE id = $1")
         .bind(recovery_run.id)
@@ -296,6 +299,41 @@ async fn idempotent_enqueue_single_lease_and_workspace_provisioning() {
         .unwrap();
     assert_eq!(
         cleanup_jobs, 0,
-        "running workspaces are not deleted on lease expiry"
+        "Run lease expiry must not schedule Workspace deletion"
     );
+    let workspace_state: String = sqlx::query_scalar("SELECT state FROM workspaces WHERE id = $1")
+        .bind(workspace.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(workspace_state, "ready");
+
+    owner
+        .cancel_run(CancelRunRequest {
+            organization_id,
+            actor_id: user_id,
+            allow_organization_admin: false,
+            run_id: recovery_run.id,
+        })
+        .await
+        .unwrap();
+    let removing = owner
+        .remove_workspace(RemoveWorkspaceRequest {
+            organization_id,
+            actor_id: user_id,
+            allow_organization_admin: false,
+            workspace_id: workspace.id,
+        })
+        .await
+        .unwrap();
+    assert_eq!(removing.state, "removing");
+    assert!(Path::new(&recovery_root).exists());
+    assert!(owner.run_cleanup_once().await.unwrap());
+    let removed_state: String = sqlx::query_scalar("SELECT state FROM workspaces WHERE id = $1")
+        .bind(workspace.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(removed_state, "removed");
+    assert!(!Path::new(&recovery_root).exists());
 }

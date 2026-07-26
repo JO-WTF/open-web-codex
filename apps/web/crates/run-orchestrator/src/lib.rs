@@ -1,5 +1,6 @@
 mod execution;
 mod scheduler;
+mod workspace;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,6 +9,7 @@ use chrono::{DateTime, Utc};
 use open_web_codex_adapter::{AdapterError, CodexAdapter};
 use open_web_codex_git_runtime::{GitRuntime, GitRuntimeError};
 use sqlx::PgPool;
+use std::path::PathBuf;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -35,12 +37,7 @@ pub struct EnqueueRunRequest {
     pub actor_id: Uuid,
     pub task_id: Uuid,
     pub idempotency_key: String,
-    pub git_ref: Option<String>,
-    pub workspace_kind: String,
-    pub workspace_name: Option<String>,
-    pub workspace_parent_run_id: Option<Uuid>,
-    pub workspace_group_run_id: Option<Uuid>,
-    pub copy_agents_md: bool,
+    pub workspace_id: Uuid,
     pub fork_thread_id: Option<String>,
     pub fork_source_run_id: Option<Uuid>,
 }
@@ -53,11 +50,6 @@ pub struct RunRecord {
     pub codex_thread_id: Option<String>,
     pub active_turn_id: Option<String>,
     pub workspace_id: Option<Uuid>,
-    pub source_ref: Option<String>,
-    pub workspace_kind: String,
-    pub workspace_name: Option<String>,
-    pub workspace_parent_run_id: Option<Uuid>,
-    pub workspace_group_run_id: Option<Uuid>,
     pub attempt: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -80,30 +72,53 @@ pub struct RecoverRunRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RetireWorkspaceRequest {
+pub struct CreateWorkspaceRequest {
+    pub organization_id: Uuid,
+    pub actor_id: Uuid,
+    pub project_id: Uuid,
+    pub idempotency_key: String,
+    pub kind: String,
+    pub name: Option<String>,
+    pub source_ref: Option<String>,
+    pub parent_workspace_id: Option<Uuid>,
+    pub copy_agents_md: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoveWorkspaceRequest {
     pub organization_id: Uuid,
     pub actor_id: Uuid,
     pub allow_organization_admin: bool,
-    pub run_id: Uuid,
+    pub workspace_id: Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceRecord {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub profile_id: Uuid,
+    pub name: String,
+    pub kind: String,
+    pub state: String,
+    pub source_ref: String,
+    pub branch_name: Option<String>,
+    pub parent_workspace_id: Option<Uuid>,
+    pub group_workspace_id: Option<Uuid>,
+    pub managed: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
 pub struct RunLease {
     pub run_id: Uuid,
-    pub task_id: Uuid,
-    pub project_id: Uuid,
     pub organization_id: Uuid,
-    pub profile_id: Uuid,
-    pub git_url: String,
-    pub source_ref: String,
-    pub workspace_kind: String,
-    pub workspace_parent_run_id: Option<Uuid>,
+    pub actor_id: Uuid,
+    pub workspace_id: Uuid,
+    pub workspace_root: PathBuf,
     pub fork_thread_id: Option<String>,
     pub fork_source_run_id: Option<Uuid>,
-    pub copy_agents_md: bool,
     pub token: String,
-    pub expires_at: DateTime<Utc>,
-    pub attempt: i32,
 }
 
 #[derive(Clone)]

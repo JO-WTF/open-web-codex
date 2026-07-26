@@ -63,7 +63,7 @@ struct Cli {
     /// Codex executable used by the native Profile Host.
     #[arg(long, env = "CODEX_BIN", default_value = "codex")]
     codex_bin: PathBuf,
-    /// Private root for server-owned repository mirrors and Run workspaces.
+    /// Private root for server-owned repository mirrors and managed Workspaces.
     #[arg(
         long,
         env = "OPEN_WEB_CODEX_RUNNER_ROOT",

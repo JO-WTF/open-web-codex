@@ -175,17 +175,6 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     .execute(&pool)
     .await
     .unwrap();
-    sqlx::query(
-        "INSERT INTO runs (id, organization_id, task_id, status, codex_thread_id) \
-         VALUES ($1, $2, $3, 'running', 'approval-thread')",
-    )
-    .bind(first_run_id)
-    .bind(first_organization_id)
-    .bind(first_task_id)
-    .execute(&pool)
-    .await
-    .unwrap();
-
     let source = runner_root.path().join("image-source");
     std::fs::create_dir(&source).unwrap();
     fixture_git(&source, &["init", "-b", "main"]);
@@ -222,25 +211,47 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
             .unwrap();
     sqlx::query(
         "INSERT INTO workspaces \
-         (id, organization_id, project_id, profile_id, run_id, root_path, state, source_ref, head_commit, branch_name) \
-         VALUES ($1, $2, $3, $4, $5, $6, 'ready', 'main', $7, 'main')",
+         (id, organization_id, project_id, profile_id, created_by, root_path, state, \
+          source_ref, head_commit, branch_name, kind, name) \
+         VALUES ($1, $2, $3, $4, $5, $6, 'ready', 'main', $7, 'main', 'main', 'First Workspace')",
     )
     .bind(workspace_id)
     .bind(first_organization_id)
     .bind(Uuid::parse_str(&first_project_id).unwrap())
     .bind(profile_id)
-    .bind(first_run_id)
+    .bind(first_user_id)
     .bind(checkout.root.to_string_lossy().as_ref())
     .bind(&checkout.head_commit)
     .execute(&pool)
     .await
     .unwrap();
-    sqlx::query("UPDATE runs SET workspace_id = $1 WHERE id = $2")
-        .bind(workspace_id)
-        .bind(first_run_id)
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO workspace_grants \
+         (workspace_id, organization_id, user_id, profile_id, role) \
+         VALUES ($1, $2, $3, $4, 'owner')",
+    )
+    .bind(workspace_id)
+    .bind(first_organization_id)
+    .bind(first_user_id)
+    .bind(profile_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO runs \
+         (id, organization_id, task_id, requested_by, requested_profile_id, workspace_id, \
+          status, codex_thread_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, 'running', 'approval-thread')",
+    )
+    .bind(first_run_id)
+    .bind(first_organization_id)
+    .bind(first_task_id)
+    .bind(first_user_id)
+    .bind(profile_id)
+    .bind(workspace_id)
+    .execute(&pool)
+    .await
+    .unwrap();
     let artifact_id = Uuid::now_v7();
     let artifact_bytes = br#"{"type":"FeatureCollection","features":[]}"#;
     sqlx::query(
@@ -323,7 +334,7 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
         .clone()
         .oneshot(
             Request::get(format!(
-                "/api/runs/{first_run_id}/workspace/assets?path=icon.png"
+                "/api/workspaces/{workspace_id}/assets?path=icon.png"
             ))
             .header("cookie", format!("session_token={first_token}"))
             .body(Body::empty())
@@ -358,7 +369,7 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
         .clone()
         .oneshot(
             Request::get(format!(
-                "/api/runs/{first_run_id}/workspace/assets?path=icon.png"
+                "/api/workspaces/{workspace_id}/assets?path=icon.png"
             ))
             .body(Body::empty())
             .unwrap(),
@@ -578,7 +589,7 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
         &app,
         authenticated(
             "GET",
-            &format!("/api/runs/{first_run_id}/workspace/assets?path=icon.png"),
+            &format!("/api/workspaces/{workspace_id}/assets?path=icon.png"),
             second_token,
         ),
     )

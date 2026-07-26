@@ -1,5 +1,5 @@
 import { PlatformClient } from "../../browser/client";
-import type { Approval, Project, Run, RunEvent } from "../../browser/types";
+import type { Approval, Run, RunEvent, Workspace } from "../../browser/types";
 import type { AppServerEvent, GitFileStatus, WorkspaceInfo } from "../types";
 
 type WebClientOptions = {
@@ -19,6 +19,7 @@ type EventSubscriptionStatus = {
 };
 
 type ThreadContext = {
+  workspaceId: string;
   projectId: string;
   taskId: string;
   runId: string;
@@ -34,14 +35,26 @@ function sameOriginBaseUrl() {
   return typeof window === "undefined" ? "" : window.location.origin;
 }
 
-function projectWorkspace(project: Project): WorkspaceInfo {
+function platformWorkspace(workspace: Workspace): WorkspaceInfo {
   return {
-    id: project.id,
-    name: project.name,
-    path: project.git_url,
-    connected: true,
-    kind: "main",
-    settings: { sidebarCollapsed: false },
+    id: workspace.id,
+    name: workspace.name,
+    // WorkspaceInfo is shared with the original desktop UI, where `path` is a
+    // local directory. The browser must receive only safe display metadata;
+    // the server-side root remains authoritative and private.
+    path: workspace.name,
+    connected: workspace.state === "ready" || workspace.state === "retained",
+    kind: workspace.kind === "worktree" ? "worktree" : "main",
+    parentId: workspace.parent_workspace_id,
+    worktree: workspace.kind === "worktree"
+      ? { branch: workspace.branch_name ?? workspace.source_ref }
+      : null,
+    settings: {
+      sidebarCollapsed: false,
+      cloneSourceWorkspaceId: workspace.kind === "clone"
+        ? workspace.parent_workspace_id
+        : null,
+    },
   };
 }
 
@@ -150,7 +163,7 @@ export class CodexMonitorWebClient {
   private readonly platform: PlatformClient;
   private readonly threadContexts = new Map<string, ThreadContext>();
   private readonly taskEventSequences = new Map<string, number>();
-  private readonly selectedRunByProject = new Map<string, string>();
+  private readonly selectedRunByWorkspace = new Map<string, string>();
 
   constructor(options: WebClientOptions = {}) {
     this.platform = new PlatformClient({
@@ -173,33 +186,48 @@ export class CodexMonitorWebClient {
   }
 
   async listWorkspaces() {
-    return (await this.platform.listProjects()).map(projectWorkspace);
+    return (await this.platform.listWorkspaces()).map(platformWorkspace);
   }
 
   async addWorkspace(path: string) {
     const name = path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "Workspace";
-    return projectWorkspace(await this.platform.createProject(name, path, "main"));
+    const project = await this.platform.createProject(name, path, "main");
+    return platformWorkspace(await this.platform.createWorkspace({
+      projectId: project.id,
+      kind: "main",
+      name,
+    }));
   }
 
   async createWorkspace(name: string, _parentDir?: string) {
-    return projectWorkspace(await this.platform.createManagedProject(name));
+    const project = await this.platform.createManagedProject(name);
+    return platformWorkspace(await this.platform.createWorkspace({
+      projectId: project.id,
+      kind: "main",
+      name,
+    }));
   }
 
   async removeWorkspace(id: string) {
-    await this.platform.deleteProject(id);
+    await this.platform.removeWorkspace(id);
   }
 
   async connectWorkspace(_workspaceId: string) {
     return undefined;
   }
 
-  private async indexProjectThreads(projectId: string) {
-    const rows = await this.platform.listProjectThreadContexts(projectId);
+  private async indexWorkspaceThreads(workspace: Workspace) {
+    const rows = await this.platform.listProjectThreadContexts(workspace.project_id);
     return rows.flatMap(({ project, task, run }) => {
-      if (run.workspace_kind !== "main" || !run.codex_thread_id || task.status === "archived") {
+      if (run.workspace_id !== workspace.id || !run.codex_thread_id || task.status === "archived") {
         return [];
       }
-      const context = { projectId, taskId: task.id, runId: run.id };
+      const context = {
+        workspaceId: workspace.id,
+        projectId: workspace.project_id,
+        taskId: task.id,
+        runId: run.id,
+      };
       this.threadContexts.set(run.codex_thread_id, context);
       return [{ project, task, run, threadId: run.codex_thread_id, context }];
     });
@@ -208,19 +236,29 @@ export class CodexMonitorWebClient {
   private async findThreadContext(threadId: string): Promise<ThreadContext> {
     const cached = this.threadContexts.get(threadId);
     if (cached) return cached;
-    for (const project of await this.platform.listProjects()) {
-      const found = (await this.indexProjectThreads(project.id))
+    for (const workspace of await this.platform.listWorkspaces()) {
+      const found = (await this.indexWorkspaceThreads(workspace))
         .find((entry) => entry.threadId === threadId);
       if (found) return found.context;
     }
     throw new Error("Thread is not available in an authorized project");
   }
 
-  private async waitForThread(projectId: string, taskId: string, runId: string) {
+  private async waitForThread(
+    workspaceId: string,
+    projectId: string,
+    taskId: string,
+    runId: string,
+  ) {
     for (let attempt = 0; attempt < 600; attempt += 1) {
       const run = await this.platform.getRun(runId);
       if (run.codex_thread_id && run.workspace_id) {
-        this.threadContexts.set(run.codex_thread_id, { projectId, taskId, runId });
+        this.threadContexts.set(run.codex_thread_id, {
+          workspaceId,
+          projectId,
+          taskId,
+          runId,
+        });
         return run;
       }
       if (["failed", "cancelled"].includes(run.status)) {
@@ -237,37 +275,32 @@ export class CodexMonitorWebClient {
   ): Promise<Run | null> {
     if (threadId) {
       const context = await this.findThreadContext(threadId);
-      if (context.projectId !== workspaceId) {
-        throw new Error("Thread is not part of the selected project");
+      if (context.workspaceId !== workspaceId) {
+        throw new Error("Thread is not part of the selected Workspace");
       }
-      this.selectedRunByProject.set(workspaceId, context.runId);
+      this.selectedRunByWorkspace.set(workspaceId, context.runId);
       return await this.platform.getRun(context.runId);
     }
-    const indexed = await this.indexProjectThreads(workspaceId);
+    const workspace = await this.platform.getWorkspace(workspaceId);
+    const indexed = await this.indexWorkspaceThreads(workspace);
     const available = indexed
       .map((entry) => entry.run)
       .filter((run) => Boolean(run.workspace_id) && !["failed", "cancelled"].includes(run.status));
-    const selectedRunId = this.selectedRunByProject.get(workspaceId);
+    const selectedRunId = this.selectedRunByWorkspace.get(workspaceId);
     const run = (selectedRunId ? available.find((candidate) => candidate.id === selectedRunId) : null)
       ?? available.find((candidate) => candidate.active_turn_id || candidate.status === "running")
       ?? available[0]
       ?? null;
-    if (run) this.selectedRunByProject.set(workspaceId, run.id);
-    return run;
-  }
-
-  private async requireRunForWorkspace(workspaceId: string) {
-    const run = await this.readyRunForWorkspace(workspaceId);
-    if (!run) throw new Error("This project does not have a ready Run workspace yet");
+    if (run) this.selectedRunByWorkspace.set(workspaceId, run.id);
     return run;
   }
 
   private async threadRecord(threadId: string) {
     const context = await this.findThreadContext(threadId);
-    this.selectedRunByProject.set(context.projectId, context.runId);
-    const [task, project, run, history] = await Promise.all([
+    this.selectedRunByWorkspace.set(context.workspaceId, context.runId);
+    const [task, workspace, run, history] = await Promise.all([
       this.platform.getTask(context.taskId),
-      this.platform.getProject(context.projectId),
+      this.platform.getWorkspace(context.workspaceId),
       this.platform.getRun(context.runId),
       this.platform.readRunThread(context.runId),
     ]);
@@ -276,7 +309,7 @@ export class CodexMonitorWebClient {
       id: threadId,
       name: threadDisplayName(thread.name ?? task.title),
       preview: thread.preview || threadDisplayName(task.title),
-      cwd: project.git_url,
+      cwd: workspace.name,
       createdAt: thread.createdAt || task.created_at,
       updatedAt: thread.updatedAt || run.updated_at,
       activeTurnId: run.active_turn_id,
@@ -288,20 +321,22 @@ export class CodexMonitorWebClient {
   }
 
   async startThread(workspaceId: string) {
-    const task = await this.platform.createTask(workspaceId, "Thread");
-    const { run } = await this.platform.startRun(task.id);
-    const ready = await this.waitForThread(workspaceId, task.id, run.id);
+    const workspace = await this.platform.getWorkspace(workspaceId);
+    const task = await this.platform.createTask(workspace.project_id, "Thread");
+    const { run } = await this.platform.startRun(task.id, workspaceId);
+    const ready = await this.waitForThread(workspaceId, workspace.project_id, task.id, run.id);
     return { thread: await this.threadRecord(ready.codex_thread_id as string) };
   }
 
   async listThreads(workspaceId: string) {
-    const entries = await this.indexProjectThreads(workspaceId);
+    const workspace = await this.platform.getWorkspace(workspaceId);
+    const entries = await this.indexWorkspaceThreads(workspace);
     return {
-      data: entries.map(({ project, task, run, threadId }) => ({
+      data: entries.map(({ task, run, threadId }) => ({
         id: threadId,
         name: threadDisplayName(task.title),
         preview: threadDisplayName(task.title),
-        cwd: project.git_url,
+        cwd: workspace.name,
         createdAt: task.created_at,
         updatedAt: run.updated_at,
         activeTurnId: run.active_turn_id,
@@ -315,7 +350,7 @@ export class CodexMonitorWebClient {
 
   async archiveThread(_workspaceId: string, threadId: string) {
     const context = await this.findThreadContext(threadId);
-    this.selectedRunByProject.set(context.projectId, context.runId);
+    this.selectedRunByWorkspace.set(context.workspaceId, context.runId);
     return await this.platform.archiveRunThread(context.runId);
   }
 
@@ -458,27 +493,23 @@ export class CodexMonitorWebClient {
 
   async listThreadTurns(_workspaceId: string, threadId: string) {
     const context = await this.findThreadContext(threadId);
-    this.selectedRunByProject.set(context.projectId, context.runId);
+    this.selectedRunByWorkspace.set(context.workspaceId, context.runId);
     return await this.platform.listRunThreadTurns(context.runId);
   }
 
   async listWorkspaceFiles(workspaceId: string, threadId?: string | null) {
-    const run = await this.readyRunForWorkspace(workspaceId, threadId);
-    return run ? await this.platform.listWorkspaceFiles(run.id) : [];
+    if (threadId) await this.readyRunForWorkspace(workspaceId, threadId);
+    return await this.platform.listWorkspaceFiles(workspaceId);
   }
 
   async readWorkspaceFile(workspaceId: string, path: string, threadId?: string | null) {
-    const run = threadId
-      ? await this.readyRunForWorkspace(workspaceId, threadId)
-      : await this.requireRunForWorkspace(workspaceId);
-    if (!run) throw new Error("This project does not have a ready Run workspace yet");
-    return await this.platform.readWorkspaceFile(run.id, path);
+    if (threadId) await this.readyRunForWorkspace(workspaceId, threadId);
+    return await this.platform.readWorkspaceFile(workspaceId, path);
   }
 
   async getGitStatus(workspaceId: string, threadId?: string | null) {
-    const run = await this.readyRunForWorkspace(workspaceId, threadId);
-    if (!run) return { files: [] as GitFileStatus[] };
-    const status = await this.platform.workspaceStatus(run.id);
+    if (threadId) await this.readyRunForWorkspace(workspaceId, threadId);
+    const status = await this.platform.workspaceStatus(workspaceId);
     return {
       files: status.changes.map((change) => ({
         path: change.path,
@@ -497,7 +528,7 @@ export class CodexMonitorWebClient {
     modelProvider?: string | null,
   ) {
     const context = await this.findThreadContext(threadId);
-    this.selectedRunByProject.set(context.projectId, context.runId);
+    this.selectedRunByWorkspace.set(context.workspaceId, context.runId);
     const response = await this.platform.sendMessage(context.taskId, text, {
       model,
       modelProvider,
@@ -512,13 +543,13 @@ export class CodexMonitorWebClient {
 
   async interruptTurn(_workspaceId: string, threadId: string, turnId: string) {
     const context = await this.findThreadContext(threadId);
-    this.selectedRunByProject.set(context.projectId, context.runId);
+    this.selectedRunByWorkspace.set(context.workspaceId, context.runId);
     return await this.platform.interruptRun(context.runId, turnId);
   }
 
   async steerTurn(_workspaceId: string, threadId: string, turnId: string, text: string) {
     const context = await this.findThreadContext(threadId);
-    this.selectedRunByProject.set(context.projectId, context.runId);
+    this.selectedRunByWorkspace.set(context.workspaceId, context.runId);
     return await this.platform.steerRun(context.runId, turnId, text);
   }
 
@@ -541,7 +572,7 @@ export class CodexMonitorWebClient {
       const previous = this.taskEventSequences.get(context.taskId) ?? 0;
       if (event.sequence <= previous) return;
       this.taskEventSequences.set(context.taskId, event.sequence);
-      onEvent({ workspace_id: context.projectId, message });
+      onEvent({ workspace_id: context.workspaceId, message });
     };
     const replayDurableEvents = async () => {
       const contexts = new Map(
@@ -581,8 +612,8 @@ export class CodexMonitorWebClient {
           enqueue(async () => {
             if (!hasBeenOnline) {
               hasBeenOnline = true;
-              for (const project of await this.platform.listProjects()) {
-                await this.indexProjectThreads(project.id);
+              for (const workspace of await this.platform.listWorkspaces()) {
+                await this.indexWorkspaceThreads(workspace);
               }
               // The project/thread context and authoritative Codex history are
               // the initial UI snapshot. Establish a durable cursor at that
@@ -610,8 +641,8 @@ export class CodexMonitorWebClient {
         .map((approval) => approval.id),
     );
     if (pending.size === 0) return;
-    for (const project of await this.platform.listProjects()) {
-      const contexts = await this.indexProjectThreads(project.id);
+    for (const workspace of await this.platform.listWorkspaces()) {
+      const contexts = await this.indexWorkspaceThreads(workspace);
       const tasks = new Map(contexts.map((entry) => [entry.task.id, entry.context]));
       for (const [taskId, context] of tasks) {
         for (const event of await this.platform.listAllEvents(taskId)) {
@@ -624,7 +655,7 @@ export class CodexMonitorWebClient {
             context.taskId,
             Math.max(this.taskEventSequences.get(context.taskId) ?? 0, event.sequence),
           );
-          onEvent({ workspace_id: context.projectId, message });
+          onEvent({ workspace_id: context.workspaceId, message });
         }
       }
     }

@@ -36,7 +36,7 @@ pub async fn generate(
         "agentDescription" => agent_description_prompt(require_input(&request.input)?),
         "commitMessage" => {
             let workspace_id = Uuid::parse_str(&workspace.id)
-                .map_err(|_| internal("Run workspace identity is invalid"))?;
+                .map_err(|_| internal("Workspace identity is invalid"))?;
             let diffs = git
                 .diffs(workspace_id)
                 .await
@@ -80,24 +80,31 @@ async fn authorized_workspace(
     run_id: Uuid,
 ) -> Result<AuthorizedWorkspace, ApiError> {
     let row = sqlx::query(
-        "SELECT r.workspace_id, r.requested_by, w.root_path, w.state \
-         FROM runs r JOIN workspaces w ON w.id = r.workspace_id \
-         WHERE r.id = $1 AND r.organization_id = $2 AND w.organization_id = $2",
+        "SELECT run.workspace_id, run.requested_by, workspace.root_path, workspace.state \
+         FROM runs run \
+         JOIN workspaces workspace ON workspace.id = run.workspace_id \
+           AND workspace.organization_id = run.organization_id \
+         JOIN workspace_grants grant ON grant.workspace_id = workspace.id \
+           AND grant.organization_id = workspace.organization_id \
+           AND grant.user_id = run.requested_by \
+           AND grant.profile_id = workspace.profile_id \
+           AND grant.role IN ('owner', 'write') \
+         WHERE run.id = $1 AND run.organization_id = $2",
     )
     .bind(run_id)
     .bind(auth.organization_id)
     .fetch_optional(&state.db)
     .await
     .map_err(|_| internal("database operation failed"))?
-    .ok_or_else(|| not_found("Run workspace was not found"))?;
+    .ok_or_else(|| not_found("Run or selected Workspace was not found"))?;
     let requested_by: Option<Uuid> = row.get("requested_by");
     if requested_by != Some(auth.user_id)
         && !matches!(auth.organization_role.as_str(), "owner" | "admin")
     {
-        return Err(not_found("Run workspace was not found"));
+        return Err(not_found("Run or selected Workspace was not found"));
     }
-    if row.get::<String, _>("state") == "retired" {
-        return Err(bad_request("Run workspace has been retired"));
+    if !matches!(row.get::<String, _>("state").as_str(), "ready" | "retained") {
+        return Err(bad_request("the selected Workspace is not ready"));
     }
     Ok(AuthorizedWorkspace {
         id: row.get::<Uuid, _>("workspace_id").to_string(),

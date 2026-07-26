@@ -28,7 +28,7 @@ pub async fn list(
     auth: AuthenticatedUser,
 ) -> ApiResult<Vec<BrowserWorkspacePreference>> {
     let rows = sqlx::query(
-        "SELECT browser_workspace_id, settings, runtime_codex_args \
+        "SELECT workspace_id, settings, runtime_codex_args \
          FROM browser_workspace_preferences \
          WHERE organization_id = $1 AND user_id = $2",
     )
@@ -40,7 +40,7 @@ pub async fn list(
     Ok(Json(
         rows.into_iter()
             .map(|row| BrowserWorkspacePreference {
-                workspace_id: row.get("browser_workspace_id"),
+                workspace_id: row.get("workspace_id"),
                 settings: row.get("settings"),
                 runtime_codex_args: row.get("runtime_codex_args"),
             })
@@ -67,9 +67,9 @@ pub async fn update_settings(
     }
     let row = sqlx::query(
         "INSERT INTO browser_workspace_preferences \
-         (organization_id, user_id, browser_workspace_id, settings) \
+         (organization_id, user_id, workspace_id, settings) \
          VALUES ($1, $2, $3, $4) \
-         ON CONFLICT (organization_id, user_id, browser_workspace_id) DO UPDATE \
+         ON CONFLICT (organization_id, user_id, workspace_id) DO UPDATE \
          SET settings = EXCLUDED.settings, updated_at = now() \
          RETURNING settings, runtime_codex_args",
     )
@@ -105,9 +105,9 @@ pub async fn set_runtime_codex_args(
     }
     sqlx::query(
         "INSERT INTO browser_workspace_preferences \
-         (organization_id, user_id, browser_workspace_id, runtime_codex_args) \
+         (organization_id, user_id, workspace_id, runtime_codex_args) \
          VALUES ($1, $2, $3, $4) \
-         ON CONFLICT (organization_id, user_id, browser_workspace_id) DO UPDATE \
+         ON CONFLICT (organization_id, user_id, workspace_id) DO UPDATE \
          SET runtime_codex_args = EXCLUDED.runtime_codex_args, updated_at = now()",
     )
     .bind(auth.organization_id)
@@ -140,7 +140,7 @@ pub async fn worktree_setup_status(
     }
     let row = sqlx::query(
         "SELECT settings, setup_completed_script FROM browser_workspace_preferences \
-         WHERE organization_id = $1 AND user_id = $2 AND browser_workspace_id = $3",
+         WHERE organization_id = $1 AND user_id = $2 AND workspace_id = $3",
     )
     .bind(auth.organization_id)
     .bind(auth.user_id)
@@ -188,7 +188,7 @@ pub async fn mark_worktree_setup_ran(
         "UPDATE browser_workspace_preferences \
          SET setup_completed_script = NULLIF(btrim(settings->>'worktreeSetupScript'), ''), \
              updated_at = now() \
-         WHERE organization_id = $1 AND user_id = $2 AND browser_workspace_id = $3",
+         WHERE organization_id = $1 AND user_id = $2 AND workspace_id = $3",
     )
     .bind(auth.organization_id)
     .bind(auth.user_id)
@@ -205,41 +205,36 @@ async fn authorize_browser_workspace(
     workspace_id: Uuid,
     require_owner: bool,
 ) -> Result<String, ApiError> {
-    if let Some(created_by) = sqlx::query_scalar::<_, Option<Uuid>>(
-        "SELECT created_by FROM projects WHERE id = $1 AND organization_id = $2",
-    )
-    .bind(workspace_id)
-    .bind(auth.organization_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(database_error)?
-    {
-        if require_owner
-            && created_by != Some(auth.user_id)
-            && !matches!(auth.organization_role.as_str(), "owner" | "admin")
-        {
-            return Err(not_found());
-        }
-        return Ok("main".to_string());
-    }
     let row = sqlx::query(
-        "SELECT workspace_kind, requested_by FROM runs \
-         WHERE id = $1 AND organization_id = $2 AND workspace_kind <> 'main'",
+        "SELECT workspace.kind, grant.role \
+         FROM workspaces workspace \
+         LEFT JOIN workspace_grants grant ON grant.workspace_id = workspace.id \
+           AND grant.organization_id = workspace.organization_id \
+           AND grant.user_id = $3 AND grant.profile_id = workspace.profile_id \
+         WHERE workspace.id = $1 AND workspace.organization_id = $2 \
+           AND workspace.state IN ('ready', 'retained')",
     )
     .bind(workspace_id)
     .bind(auth.organization_id)
+    .bind(auth.user_id)
     .fetch_optional(&state.db)
     .await
     .map_err(database_error)?
     .ok_or_else(not_found)?;
-    let requested_by: Option<Uuid> = row.get("requested_by");
+    let role: Option<String> = row.get("role");
+    let is_admin = matches!(auth.organization_role.as_str(), "owner" | "admin");
+    if role.is_none() && !is_admin {
+        return Err(not_found());
+    }
     if require_owner
-        && requested_by != Some(auth.user_id)
-        && !matches!(auth.organization_role.as_str(), "owner" | "admin")
+        && !role
+            .as_deref()
+            .is_some_and(|role| matches!(role, "owner" | "write"))
+        && !is_admin
     {
         return Err(not_found());
     }
-    Ok(row.get("workspace_kind"))
+    Ok(row.get("kind"))
 }
 
 fn bad_request(message: &str) -> ApiError {

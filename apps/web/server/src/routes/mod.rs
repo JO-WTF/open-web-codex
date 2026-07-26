@@ -236,144 +236,148 @@ pub fn router(
         )
         .route("/runs/{id}/review", axum::routing::post(runs::start_review))
         .route(
-            "/runs/{id}/workspace",
-            axum::routing::delete(workspaces::remove_derived_workspace),
+            "/workspaces",
+            axum::routing::get(workspaces::list_workspaces).post(workspaces::create_workspace),
         )
         .route(
-            "/runs/{id}/workspace/status",
+            "/workspaces/{id}",
+            axum::routing::get(workspaces::get_workspace).delete(workspaces::remove_workspace),
+        )
+        .route(
+            "/workspaces/{id}/status",
             axum::routing::get(workspaces::status),
         )
         .route(
-            "/runs/{id}/workspace/files",
+            "/workspaces/{id}/files",
             axum::routing::get(workspaces::list_files),
         )
         .route(
-            "/runs/{id}/workspace/git-roots",
+            "/workspaces/{id}/git-roots",
             axum::routing::get(workspaces::list_git_roots).put(workspaces::set_git_root),
         )
         .route(
-            "/runs/{id}/workspace/files/content",
+            "/workspaces/{id}/files/content",
             axum::routing::get(workspaces::read_file),
         )
         .route(
-            "/runs/{id}/workspace/assets",
+            "/workspaces/{id}/assets",
             axum::routing::get(workspaces::read_image_asset),
         )
         .route(
-            "/runs/{id}/workspace/agents",
+            "/workspaces/{id}/agents",
             axum::routing::put(workspaces::write_agents_file),
         )
         .route(
-            "/runs/{id}/workspace/diffs",
+            "/workspaces/{id}/diffs",
             axum::routing::get(workspaces::diffs),
         )
         .route(
-            "/runs/{id}/workspace/stage",
+            "/workspaces/{id}/stage",
             axum::routing::post(workspaces::stage),
         )
         .route(
-            "/runs/{id}/workspace/stage-all",
+            "/workspaces/{id}/stage-all",
             axum::routing::post(workspaces::stage_all),
         )
         .route(
-            "/runs/{id}/workspace/unstage",
+            "/workspaces/{id}/unstage",
             axum::routing::post(workspaces::unstage),
         )
         .route(
-            "/runs/{id}/workspace/revert",
+            "/workspaces/{id}/revert",
             axum::routing::post(workspaces::revert),
         )
         .route(
-            "/runs/{id}/workspace/revert-all",
+            "/workspaces/{id}/revert-all",
             axum::routing::post(workspaces::revert_all),
         )
         .route(
-            "/runs/{id}/workspace/branches",
+            "/workspaces/{id}/branches",
             axum::routing::get(workspaces::list_branches).post(workspaces::create_branch),
         )
         .route(
-            "/runs/{id}/workspace/branches/checkout",
+            "/workspaces/{id}/branches/checkout",
             axum::routing::post(workspaces::checkout_branch),
         )
         .route(
-            "/runs/{id}/workspace/branch/rename",
+            "/workspaces/{id}/branch/rename",
             axum::routing::post(workspaces::rename_branch),
         )
         .route(
-            "/runs/{id}/workspace/upstream/rename",
+            "/workspaces/{id}/upstream/rename",
             axum::routing::post(workspaces::rename_upstream_branch),
         )
         .route(
-            "/runs/{id}/workspace/apply",
-            axum::routing::post(workspaces::apply_derived_workspace),
+            "/workspaces/{id}/apply",
+            axum::routing::post(workspaces::apply_workspace),
         )
-        .route("/runs/{id}/terminals", axum::routing::post(terminals::open))
         .route(
-            "/runs/{id}/terminals/{terminal_id}/write",
+            "/workspaces/{id}/terminals",
+            axum::routing::post(terminals::open),
+        )
+        .route(
+            "/workspaces/{id}/terminals/{terminal_id}/write",
             axum::routing::post(terminals::write),
         )
         .route(
-            "/runs/{id}/terminals/{terminal_id}/resize",
+            "/workspaces/{id}/terminals/{terminal_id}/resize",
             axum::routing::post(terminals::resize),
         )
         .route(
-            "/runs/{id}/terminals/{terminal_id}",
+            "/workspaces/{id}/terminals/{terminal_id}",
             axum::routing::delete(terminals::close),
         )
+        .route("/workspaces/{id}/log", axum::routing::get(workspaces::log))
         .route(
-            "/runs/{id}/workspace/log",
-            axum::routing::get(workspaces::log),
-        )
-        .route(
-            "/runs/{id}/workspace/commits/{sha}/diff",
+            "/workspaces/{id}/commits/{sha}/diff",
             axum::routing::get(workspaces::commit_diffs),
         )
         .route(
-            "/runs/{id}/github/issues",
+            "/workspaces/{id}/github/issues",
             axum::routing::get(github::issues),
         )
         .route(
-            "/runs/{id}/github/repository",
+            "/workspaces/{id}/github/repository",
             axum::routing::post(github::create_repository),
         )
         .route(
-            "/runs/{id}/github/pull-requests",
+            "/workspaces/{id}/github/pull-requests",
             axum::routing::get(github::pull_requests),
         )
         .route(
-            "/runs/{id}/github/pull-requests/{number}/diff",
+            "/workspaces/{id}/github/pull-requests/{number}/diff",
             axum::routing::get(github::pull_request_diff),
         )
         .route(
-            "/runs/{id}/github/pull-requests/{number}/comments",
+            "/workspaces/{id}/github/pull-requests/{number}/comments",
             axum::routing::get(github::pull_request_comments),
         )
         .route(
-            "/runs/{id}/github/pull-requests/{number}/checkout",
+            "/workspaces/{id}/github/pull-requests/{number}/checkout",
             axum::routing::post(github::checkout_pull_request),
         )
         .route(
-            "/runs/{id}/workspace/remote",
+            "/workspaces/{id}/remote",
             axum::routing::get(workspaces::remote),
         )
         .route(
-            "/runs/{id}/workspace/fetch",
+            "/workspaces/{id}/fetch",
             axum::routing::post(workspaces::fetch),
         )
         .route(
-            "/runs/{id}/workspace/pull",
+            "/workspaces/{id}/pull",
             axum::routing::post(workspaces::pull),
         )
         .route(
-            "/runs/{id}/workspace/push",
+            "/workspaces/{id}/push",
             axum::routing::post(workspaces::push),
         )
         .route(
-            "/runs/{id}/workspace/sync",
+            "/workspaces/{id}/sync",
             axum::routing::post(workspaces::sync),
         )
         .route(
-            "/runs/{id}/workspace/commit",
+            "/workspaces/{id}/commit",
             axum::routing::post(workspaces::commit),
         )
         .route(

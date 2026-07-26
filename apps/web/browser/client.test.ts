@@ -18,7 +18,7 @@ describe("PlatformClient", () => {
     vi.stubGlobal("crypto", { randomUUID: () => "018f-idempotency-key" });
     const client = new PlatformClient({ baseUrl: "https://platform.test", token: "session-token" });
 
-    await client.startRun("task/one", "feature/safe");
+    await client.startRun("task/one", "workspace-one");
     await expect(client.sendMessage("task/one", "hello", {
       model: "deepseek-v4-flash",
       modelProvider: "deepseek",
@@ -31,12 +31,7 @@ describe("PlatformClient", () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe("https://platform.test/api/tasks/task%2Fone/runs");
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
       idempotency_key: "018f-idempotency-key",
-      git_ref: "feature/safe",
-      workspace_kind: "main",
-      workspace_name: null,
-      workspace_parent_run_id: null,
-      workspace_group_run_id: null,
-      copy_agents_md: false,
+      workspace_id: "workspace-one",
       fork_thread_id: null,
       fork_source_run_id: null,
     });
@@ -56,7 +51,7 @@ describe("PlatformClient", () => {
     vi.stubGlobal("crypto", {});
     const client = new PlatformClient({ baseUrl: "https://platform.test", token: "session-token" });
 
-    await client.startRun("task-one");
+    await client.startRun("task-one", "workspace-one");
 
     const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
     expect(body.idempotency_key).toMatch(/^idempotency-/);

@@ -30,8 +30,7 @@ pub async fn list_thread_contexts(
                 t.model_provider, t.model, \
                 t.created_at AS task_created_at, t.updated_at AS task_updated_at, \
                 r.id AS run_id, r.status AS run_status, r.codex_thread_id, r.active_turn_id, \
-                r.workspace_id, r.source_ref, r.workspace_kind, r.workspace_name, \
-                r.workspace_parent_run_id, r.workspace_group_run_id, r.attempt, \
+                r.workspace_id, r.attempt, \
                 r.created_at AS run_created_at, r.updated_at AS run_updated_at \
          FROM projects p JOIN tasks t ON t.project_id = p.id \
          JOIN runs r ON r.task_id = t.id \
@@ -72,11 +71,6 @@ pub async fn list_thread_contexts(
                     codex_thread_id: row.get("codex_thread_id"),
                     active_turn_id: row.get("active_turn_id"),
                     workspace_id: row.get("workspace_id"),
-                    source_ref: row.get("source_ref"),
-                    workspace_kind: row.get("workspace_kind"),
-                    workspace_name: row.get("workspace_name"),
-                    workspace_parent_run_id: row.get("workspace_parent_run_id"),
-                    workspace_group_run_id: row.get("workspace_group_run_id"),
                     attempt: row.get("attempt"),
                     created_at: row.get("run_created_at"),
                     updated_at: row.get("run_updated_at"),
