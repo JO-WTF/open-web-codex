@@ -223,6 +223,10 @@ pub fn router(
             axum::routing::get(runtime_agents::list_activities_for_run),
         )
         .route(
+            "/runs/{id}/agent-executions",
+            axum::routing::get(runtime_agents::list_executions_for_run),
+        )
+        .route(
             "/runs/{id}/supervisor-policy",
             axum::routing::get(supervisor_policies::get_run_binding),
         )

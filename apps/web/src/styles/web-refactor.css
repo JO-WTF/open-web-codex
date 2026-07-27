@@ -1341,20 +1341,32 @@ body:has(.web-app-shell) {
 .web-supervisor-agent.is-execution {
   width: 100%;
   box-sizing: border-box;
+  border-left: 2px solid rgb(121 167 232 / 48%);
+  background:
+    linear-gradient(90deg, rgb(59 130 246 / 5%), transparent 44%),
+    rgb(255 255 255 / 2.5%);
+}
+
+.web-supervisor-agent.is-execution .web-supervisor-agent-icon {
+  color: #82a9df;
+  background: rgb(59 130 246 / 9%);
 }
 
 .web-supervisor-agent.is-execution.is-completed,
 .web-supervisor-agent.is-execution.is-interrupted {
-  background: rgb(121 167 232 / 4%);
+  border-left-color: rgb(121 167 232 / 25%);
+  background: rgb(121 167 232 / 3%);
 }
 
 .web-supervisor-agent.is-execution.is-running {
   border-color: rgb(92 218 145 / 19%);
+  border-left-color: rgb(92 218 145 / 48%);
   background: rgb(92 218 145 / 3.5%);
 }
 
 .web-supervisor-agent.is-execution.is-failed {
   border-color: rgb(237 139 146 / 22%);
+  border-left-color: rgb(237 139 146 / 50%);
 }
 
 .web-supervisor-activity {

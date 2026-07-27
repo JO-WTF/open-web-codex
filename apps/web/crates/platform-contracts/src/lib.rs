@@ -413,6 +413,29 @@ pub struct RuntimeAgentActivity {
     pub created_at: DateTime<Utc>,
 }
 
+/// Browser-safe, durable read model of one child Agent task execution.
+///
+/// The row is derived from Runtime collaboration and Turn events. It is not an
+/// Agent scheduler and never owns model-visible Thread state.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeAgentExecution {
+    pub id: Uuid,
+    pub run_id: Uuid,
+    pub thread_id: String,
+    pub turn_id: Option<String>,
+    pub ordinal: i32,
+    pub task: Option<String>,
+    pub status: String,
+    pub current_behavior: String,
+    pub latest_progress: Option<String>,
+    pub first_observed_sequence: i64,
+    pub last_observed_sequence: i64,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// Browser-safe view of one independently authorized, durable Artifact.
 ///
 /// Runtime MCP server names and Resource URIs remain internal. Producer

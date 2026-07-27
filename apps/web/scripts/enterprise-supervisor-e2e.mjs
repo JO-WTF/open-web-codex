@@ -399,8 +399,9 @@ ${JSON.stringify(routeFixture.entries)}
 
 if (observationOnly) {
   await runCase("capture Runtime collaboration evidence", async () => {
-    const [agents, events, artifacts, binding] = await Promise.all([
+    const [agents, executions, events, artifacts, binding] = await Promise.all([
       api(`/runs/${state.run.id}/agents`),
+      api(`/runs/${state.run.id}/agent-executions`),
       allTaskEvents(state.task.id),
       api(`/tasks/${state.task.id}/artifacts`),
       api(`/runs/${state.run.id}/supervisor-policy`),
@@ -424,6 +425,7 @@ if (observationOnly) {
           workspaceId: state.workspace.id,
         },
         agents,
+        executions,
         toolCalls: calls.map((event) => ({
           sequence: event.sequence,
           threadId: event.thread_id,
@@ -440,7 +442,7 @@ if (observationOnly) {
       log(`\nEvidence: ${evidenceFile}`);
     }
 
-    return `${agents.length} Runtime Threads; ${calls.length} MCP calls; ${artifacts.length} Artifacts`;
+    return `${agents.length} Runtime Threads; ${executions.length} Agent tasks; ${calls.length} MCP calls; ${artifacts.length} Artifacts`;
   });
 
   log("\nEnterprise Supervisor observation summary");
@@ -489,6 +491,30 @@ await runCase("Runtime Agent tree, cross-child handoff, and deterministic tools"
   assert.notEqual(dataAgent.thread_id, networkAgent.thread_id);
   assert(!["failed", "interrupted"].includes(dataAgent.status_type));
   assert(!["failed", "interrupted"].includes(networkAgent.status_type));
+
+  const executions = await eventually(async () => {
+    const current = await api(`/runs/${state.run.id}/agent-executions`);
+    return current.length >= 2 &&
+      current.every((execution) =>
+        ["completed", "failed", "interrupted"].includes(execution.status)
+      )
+      ? current
+      : undefined;
+  }, "persisted child Agent task executions");
+  const dataExecutions = executions.filter(
+    (execution) => execution.thread_id === dataAgent.thread_id,
+  );
+  const networkExecutions = executions.filter(
+    (execution) => execution.thread_id === networkAgent.thread_id,
+  );
+  assert.equal(dataExecutions.length, 1);
+  assert.equal(networkExecutions.length, 1);
+  assert.equal(dataExecutions[0].ordinal, 1);
+  assert.equal(networkExecutions[0].ordinal, 1);
+  assert(dataExecutions[0].task?.trim());
+  assert(networkExecutions[0].task?.trim());
+  assert.equal(dataExecutions[0].status, "completed");
+  assert.equal(networkExecutions[0].status, "completed");
 
   const events = await allTaskEvents(state.task.id);
   const calls = completedMcpCalls(events);
@@ -555,8 +581,8 @@ await runCase("Runtime Agent tree, cross-child handoff, and deterministic tools"
     "Network Agent did not compare both candidates",
   );
 
-  finalEvidence = { agents, events, calls, dataAgent, networkAgent };
-  return `root + ${agents.length - 1} child Threads; ${calls.length} MCP calls`;
+  finalEvidence = { agents, executions, events, calls, dataAgent, networkAgent };
+  return `root + ${agents.length - 1} child Threads; ${executions.length} persisted Agent tasks; ${calls.length} MCP calls`;
 });
 
 await runCase("durable typed Artifacts and browser-safe trace", async () => {
@@ -614,6 +640,7 @@ await runCase("durable typed Artifacts and browser-safe trace", async () => {
   const safeTrace = JSON.stringify({
     binding,
     agents: finalEvidence.agents,
+    executions: finalEvidence.executions,
     artifacts,
     events: finalEvidence.events,
   });
@@ -688,20 +715,22 @@ await runCase("browser history and evidence overview recovery", async () => {
   assert(restoredReports.length > 0, "Browser history did not restore the final report");
   assert.equal(restoredReports.at(-1), finalEvidence.report);
 
-  const [policy, agents, artifacts] = await Promise.all([
+  const [policy, agents, executions, artifacts] = await Promise.all([
     api(`/runs/${state.run.id}/supervisor-policy`),
     api(`/runs/${state.run.id}/agents`),
+    api(`/runs/${state.run.id}/agent-executions`),
     api(`/tasks/${state.task.id}/artifacts`),
   ]);
-  const overview = { policy, agents, artifacts };
+  const overview = { policy, agents, executions, artifacts };
   assert.equal(policy.version, "1.0.0");
   assert.equal(agents.length, 3);
+  assert.deepEqual(executions, finalEvidence.executions);
   assert.equal(artifacts.length, finalEvidence.artifacts.length);
   assert(artifacts.every((artifact) => artifact.state === "ready"));
   assert(!JSON.stringify(overview).includes("supply-chain://"));
   assert(!JSON.stringify(overview).includes("supply-chain-data://"));
 
-  return `${turns.length} restored Turn; ${agents.length} Agents; ${artifacts.length} Artifacts`;
+  return `${turns.length} restored Turn; ${agents.length} Agents; ${executions.length} Agent tasks; ${artifacts.length} Artifacts`;
 });
 
 if (evidenceFile) {
@@ -718,6 +747,7 @@ if (evidenceFile) {
       workspaceId: state.workspace.id,
     },
     agents: finalEvidence.agents,
+    executions: finalEvidence.executions,
     toolCalls: finalEvidence.calls.map((event) => ({
       sequence: event.sequence,
       threadId: event.thread_id,

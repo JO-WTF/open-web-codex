@@ -13,6 +13,8 @@
 | 产品北极星 | [产品愿景](product-vision.md) | 最终服务谁、解决什么问题、形成什么产品 | V1 功能清单、当前代码状态 |
 | 产品要求 | [产品设计](product-design.md) | 当前 V1 的用户流程、功能、状态和验收标准 | 证明能力已经实现 |
 | 目标架构推演 | [企业多 Agent 平台架构](enterprise-agent-platform-architecture.md) | 为什么需要这些能力，方案如何比较并收敛 | 充当当前代码说明或任务清单 |
+| 多 Agent 专项演进 | [协同演进](multi-agent-collaboration-evolution.md) 与 [信息交换演进](agent-information-exchange-evolution.md) | 两条核心能力怎样分阶段演进、当前处于哪里、每阶段怎样验收 | 改写全项目路线图或提前声明条件能力 |
+| Agent 能力分层 | [Supervisor、Agent、Skill 与 Tool](supervisor-agent-skill-tool-architecture.md) | Agent 能力栈与 Profile、Workspace、Thread、Agent Catalog 怎样连接 | 把治理目录、Runtime 实例和企业权限混为一体 |
 | 当前架构 | [系统架构](architecture.md) | 当前系统组成、事实所有者和运行边界 | 保存长期设想和实现历史 |
 | 安全边界 | [安全模型](security-model.md) | 资产、信任边界、授权链和不可削弱的安全属性 | 宣称某项门禁已经通过 |
 | 能力证据 | [能力基线](capability-baseline.md) | 当前构建中什么已实现、验证到什么程度、还缺什么 | 描述产品愿景或未来任务 |
@@ -62,6 +64,22 @@ Agent Definition、Runtime Role 等核心术语。
   从当前 V2-only 企业案例过渡到 Runtime 原生 Agent、Skill、MCP Studio 的跨里程碑
   整改顺序、所有权、合同和退出条件。
 
+### 多 Agent 核心设计
+
+- [多 Agent 协同：从单一执行到可治理协作](multi-agent-collaboration-evolution.md)：
+  以目标责任、动态分工、异常恢复和最终综合为主线，给出从单 Agent 基础到条件性
+  Agent Decision OS 的里程碑、细致目标和当前位置。
+- [Agent 信息交换：从消息传递到可追溯的协作事实](agent-information-exchange-evolution.md)：
+  区分 Runtime 消息、Thread Context、Artifact 和可选 Task Knowledge Ledger，说明
+  为什么先采用 Artifact First，以及完整成果生命周期怎样演进。
+- [Supervisor、Agent、Skill 与 Tool 的分层架构](supervisor-agent-skill-tool-architecture.md)：
+  解释认知协调、专业角色、方法说明和确定性工具的分层，并把它们与 Profile、
+  Workspace、Thread、Task/Run、Artifact 和 Agent Catalog 放在同一张架构图中。
+
+这三篇文档细化企业架构报告中的两条核心能力和实现分层。它们可以记录当前阶段标记，
+但“是否已经实现”的最终判断仍以能力基线和代码验证为准；全项目阶段顺序仍由路线图
+负责。
+
 ### 架构决策
 
 [ADR 索引](adr/README.md) 保存已经接受且会长期约束实现的决策。目标架构报告中的
@@ -91,6 +109,9 @@ Agent Definition、Runtime Role 等核心术语。
 | 所有权、组件关系或持久化边界变化 | 系统架构、安全模型、相关 ADR |
 | Runtime、Web 或平台能力新增或降级 | 能力基线、开发计划 |
 | M2 工作切片、功能验收或可信风险变化 | Enterprise Supervisor Copilot 短期实施计划；形成证据后再更新能力基线 |
+| 多 Agent 协同方式、Agent 责任或异常收敛规则变化 | 多 Agent 协同演进、能力基线、相关计划 |
+| Agent 交换合同、Artifact 或 Ledger 边界变化 | Agent 信息交换演进、系统架构、能力基线 |
+| Supervisor、Agent、Skill、MCP 或核心对象关系变化 | Agent 能力分层、系统架构、相关 ADR |
 | 阶段顺序或进入条件变化 | 路线图、开发计划 |
 | 启动参数、部署拓扑或故障处理变化 | 运行手册 |
 | `codex/` 非生成差异变化 | Patch Map、相关测试、必要 ADR |

@@ -90,7 +90,7 @@ result; they never cause a Tauri runtime to reappear.
 | Provider config and runtime model catalog | Codex Profile/app-server | secret references, global default Provider/model selection, policy and display cache scoped to Profile |
 | Agent scheduling and parent/child execution | Codex runtime | observable trajectory and status projection |
 | Governed Runtime Role execution config | Codex request config; transitional file materialization by Profile Host | no PostgreSQL configuration copy; only immutable governance metadata and rebuildable execution observations |
-| Runtime Agent tree and status projection | Codex events are authoritative | bounded `runtime_agent_projections` rows that can be deleted and rebuilt |
+| Runtime Agent tree, task execution and status projections | Codex events are authoritative | bounded `runtime_agent_projections` plus durable `runtime_agent_execution_projections` rows that can be deleted and rebuilt |
 | Skills, plugins, MCP and memory state | Codex Profile/app-server | permissions, audit and capability-gated projection |
 | Thread current working directory | Codex Profile/app-server | authorized Workspace ID and safe display metadata |
 | Workspace authorization and managed checkout lifecycle | Web platform + filesystem/Git | complete authorization record and safe lifecycle metadata |
@@ -123,10 +123,14 @@ V2 overrides.
 
 Codex Runtime remains authoritative for spawn, wait, follow-up, interrupt,
 parent/child identity and model-visible Agent state. The platform persists only
-the Policy/Definition governance facts, Task-owned Artifacts and a bounded
-`runtime_agent_projections` read model rebuilt from official Runtime events.
-The temporary file materializer must be removed after a typed app-server V2
-Agent lifecycle owns write, validation, discovery and reload.
+the Policy/Definition governance facts, Task-owned Artifacts and rebuildable
+read models from official Runtime events: `runtime_agent_projections` records
+the observed Thread tree, while `runtime_agent_execution_projections` gives
+each observed child Turn a stable Web task node. A completed execution row is
+terminal; another Turn on the same child Thread creates the next ordinal
+instead of rewriting it. These rows cannot create or drive an Agent. The
+temporary file materializer must be removed after a typed app-server V2 Agent
+lifecycle owns write, validation, discovery and reload.
 
 ## Web / app-server / Codex server boundary contract
 

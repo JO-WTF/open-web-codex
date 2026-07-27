@@ -11,6 +11,10 @@ _企业多 Agent 协同平台的架构推演与落地路径_
 > 文档边界：本文负责长期架构推演；产品北极星、当前代码事实、能力证据和已接受的
 > 阶段顺序分别以 [产品愿景](product-vision.md)、[系统架构](architecture.md)、
 > [能力基线](capability-baseline.md) 和 [路线图](roadmap.md) 为准
+>
+> 专题展开：[多 Agent 协同演进](multi-agent-collaboration-evolution.md)、
+> [Agent 信息交换演进](agent-information-exchange-evolution.md) 与
+> [Supervisor、Agent、Skill、Tool 分层架构](supervisor-agent-skill-tool-architecture.md)
 
 ---
 

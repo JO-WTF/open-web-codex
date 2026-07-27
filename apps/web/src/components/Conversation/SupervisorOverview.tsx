@@ -5,6 +5,7 @@ import ShieldCheck from "lucide-react/dist/esm/icons/shield-check";
 import type {
   ArtifactSummary,
   RuntimeAgentActivity,
+  RuntimeAgentExecution,
   RuntimeAgentProjection,
   SupervisorPolicyBinding,
 } from "../../../browser/types";
@@ -14,6 +15,7 @@ type Props = {
   policy: SupervisorPolicyBinding | null;
   agents: RuntimeAgentProjection[];
   activities?: RuntimeAgentActivity[];
+  executions?: RuntimeAgentExecution[];
   artifacts: ArtifactSummary[];
   loading?: boolean;
   error?: string | null;
@@ -21,26 +23,7 @@ type Props = {
 
 type StatusTone = "idle" | "active" | "waiting" | "terminal" | "error";
 
-type AgentExecutionStatus =
-  | "pending"
-  | "running"
-  | "waiting"
-  | "completed"
-  | "failed"
-  | "interrupted";
-
-type AgentExecutionNode = {
-  id: string;
-  agent: RuntimeAgentProjection;
-  ordinal: number;
-  task: string;
-  status: AgentExecutionStatus;
-  turnId: string | null;
-  currentBehavior: string;
-  latestProgress: string | null;
-  assignmentSequence: number;
-  hasObservedTask: boolean;
-};
+type AgentExecutionStatus = RuntimeAgentExecution["status"];
 
 function agentLabel(agent: RuntimeAgentProjection): string {
   if (agent.is_root) return "Root Supervisor";
@@ -97,167 +80,6 @@ function executionStatusPresentation(status: AgentExecutionStatus): {
   }
 }
 
-function activityTurnKey(threadId: string, turnId: string): string {
-  return `${threadId}\u0000${turnId}`;
-}
-
-/**
- * Build presentation-only task executions from the safe event projection.
- *
- * A spawn assignment creates the first pending node. Later instructions are
- * promoted to a new node only when the receiver actually starts another
- * Runtime Turn; a queued message by itself never invents an execution. Only
- * activities from the bound Turn can update that node, so reusing the same
- * Agent Thread cannot rewrite a completed task.
- */
-export function buildAgentExecutionNodes(
-  agents: RuntimeAgentProjection[],
-  activities: RuntimeAgentActivity[],
-): AgentExecutionNode[] {
-  const childAgents = new Map(
-    agents.filter((agent) => !agent.is_root).map((agent) => [agent.thread_id, agent]),
-  );
-  const nodes: AgentExecutionNode[] = [];
-  const nodesByThread = new Map<string, AgentExecutionNode[]>();
-  const nodesByTurn = new Map<string, AgentExecutionNode>();
-  const pendingInstructions = new Map<string, RuntimeAgentActivity[]>();
-  const ordinals = new Map<string, number>();
-
-  const currentNode = (threadId: string) => {
-    const threadNodes = nodesByThread.get(threadId) ?? [];
-    return [...threadNodes].reverse().find((node) =>
-      node.status === "running" || node.status === "waiting")
-      ?? threadNodes[threadNodes.length - 1];
-  };
-
-  const createNode = (
-    agent: RuntimeAgentProjection,
-    input: {
-      task: string;
-      status: AgentExecutionStatus;
-      turnId: string | null;
-      currentBehavior: string;
-      sourceSequence: number;
-      hasObservedTask: boolean;
-    },
-  ) => {
-    const ordinal = (ordinals.get(agent.thread_id) ?? 0) + 1;
-    ordinals.set(agent.thread_id, ordinal);
-    const node: AgentExecutionNode = {
-      id: `${agent.run_id}:${agent.thread_id}:${input.sourceSequence}`,
-      agent,
-      ordinal,
-      task: input.task,
-      status: input.status,
-      turnId: input.turnId,
-      currentBehavior: input.currentBehavior,
-      latestProgress: null,
-      assignmentSequence: input.sourceSequence,
-      hasObservedTask: input.hasObservedTask,
-    };
-    nodes.push(node);
-    const threadNodes = nodesByThread.get(agent.thread_id) ?? [];
-    threadNodes.push(node);
-    nodesByThread.set(agent.thread_id, threadNodes);
-    if (input.turnId) {
-      nodesByTurn.set(activityTurnKey(agent.thread_id, input.turnId), node);
-    }
-    return node;
-  };
-
-  for (const activity of [...activities].sort((left, right) => left.sequence - right.sequence)) {
-    const agent = childAgents.get(activity.thread_id);
-    if (!agent) continue;
-
-    if (activity.kind === "assignment") {
-      const unmatchedTurn = [...(nodesByThread.get(activity.thread_id) ?? [])]
-        .reverse()
-        .find((candidate) => !candidate.hasObservedTask && candidate.turnId !== null);
-      if (unmatchedTurn) {
-        unmatchedTurn.task = activity.detail ?? "Assigned task";
-        unmatchedTurn.hasObservedTask = true;
-        continue;
-      }
-      createNode(agent, {
-        task: activity.detail ?? "Assigned task",
-        status: "pending",
-        turnId: null,
-        currentBehavior: activity.title,
-        sourceSequence: activity.sequence,
-        hasObservedTask: true,
-      });
-      continue;
-    }
-
-    if (activity.kind === "guidance") {
-      const instructions = pendingInstructions.get(activity.thread_id) ?? [];
-      instructions.push(activity);
-      pendingInstructions.set(activity.thread_id, instructions);
-      continue;
-    }
-
-    let node: AgentExecutionNode | undefined;
-    if (activity.kind === "turn_started" && activity.turn_id) {
-      const key = activityTurnKey(activity.thread_id, activity.turn_id);
-      node = nodesByTurn.get(key);
-      if (!node) {
-        node = (nodesByThread.get(activity.thread_id) ?? [])
-          .find((candidate) => candidate.turnId === null);
-        if (node) {
-          node.turnId = activity.turn_id;
-          nodesByTurn.set(key, node);
-        } else {
-          const instructions = pendingInstructions.get(activity.thread_id) ?? [];
-          const instruction = instructions[instructions.length - 1];
-          node = createNode(agent, {
-            task: instruction?.detail ?? "Runtime task",
-            status: "running",
-            turnId: activity.turn_id,
-            currentBehavior: activity.title,
-            sourceSequence: instruction?.sequence ?? activity.sequence,
-            hasObservedTask: Boolean(instruction),
-          });
-        }
-      }
-      pendingInstructions.delete(activity.thread_id);
-    } else if (activity.turn_id) {
-      node = nodesByTurn.get(activityTurnKey(activity.thread_id, activity.turn_id));
-    } else {
-      node = currentNode(activity.thread_id);
-    }
-    if (!node) continue;
-
-    if (activity.kind === "reporting") {
-      node.latestProgress = activity.detail ?? activity.title;
-    } else {
-      node.currentBehavior = activity.detail ?? activity.title;
-    }
-
-    switch (activity.kind) {
-      case "turn_started":
-        node.status = "running";
-        break;
-      case "waiting":
-        node.status = "waiting";
-        break;
-      case "turn_completed":
-      case "completed":
-        node.status = "completed";
-        break;
-      case "failed":
-        node.status = "failed";
-        break;
-      case "interrupted":
-        node.status = "interrupted";
-        break;
-      default:
-        break;
-    }
-  }
-
-  return nodes.sort((left, right) => left.assignmentSequence - right.assignmentSequence);
-}
-
 function StatusBadge({ label, tone }: { label: string; tone: StatusTone }) {
   return (
     <span className={`web-supervisor-agent-status is-${tone}`}>
@@ -287,6 +109,7 @@ export default function SupervisorOverview({
   policy,
   agents,
   activities = [],
+  executions = [],
   artifacts,
   loading = false,
   error = null,
@@ -303,7 +126,7 @@ export default function SupervisorOverview({
   const rootProgress = [...rootActivities]
     .reverse()
     .find((activity) => activity.kind === "reporting");
-  const executions = buildAgentExecutionNodes(agents, activities);
+  const agentsByThread = new Map(agents.map((agent) => [agent.thread_id, agent]));
   const rootStatus = rootAgent
     ? agentStatusPresentation(rootAgent)
     : { label: "Starting", tone: "idle" as const };
@@ -380,6 +203,7 @@ export default function SupervisorOverview({
               <ol className="web-supervisor-task-stream">
                 {executions.map((execution) => {
                   const status = executionStatusPresentation(execution.status);
+                  const agent = agentsByThread.get(execution.thread_id);
                   return (
                     <li key={execution.id}>
                       <span className={`web-supervisor-stream-node is-${status.tone}`} aria-hidden="true" />
@@ -389,9 +213,9 @@ export default function SupervisorOverview({
                             <Network size={15} />
                           </span>
                           <span className="web-supervisor-agent-copy">
-                            <strong>{agentLabel(execution.agent)}</strong>
+                            <strong>{agent ? agentLabel(agent) : "Runtime Agent"}</strong>
                             <span>
-                              {execution.agent.agent_role ?? "Runtime Agent"}
+                              {agent?.agent_role ?? "Runtime Agent"}
                               {" · "}
                               Task {execution.ordinal}
                             </span>
@@ -399,11 +223,13 @@ export default function SupervisorOverview({
                           <StatusBadge {...status} />
                         </div>
                         <dl className="web-supervisor-agent-details">
-                          <Detail label="Current task">{execution.task}</Detail>
+                          <Detail label="Current task">
+                            {execution.task ?? "Waiting for Supervisor assignment details"}
+                          </Detail>
                           <Detail label="Task status">{status.label}</Detail>
-                          <Detail label="Current behavior">{execution.currentBehavior}</Detail>
+                          <Detail label="Current behavior">{execution.current_behavior}</Detail>
                           <Detail label="Latest progress">
-                            {execution.latestProgress ?? "No progress reported yet"}
+                            {execution.latest_progress ?? "No progress reported yet"}
                           </Detail>
                         </dl>
                       </article>

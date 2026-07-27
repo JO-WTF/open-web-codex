@@ -2,8 +2,11 @@
 
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import type { RuntimeAgentActivity } from "../../../browser/types";
-import SupervisorOverview, { buildAgentExecutionNodes } from "./SupervisorOverview";
+import type {
+  RuntimeAgentActivity,
+  RuntimeAgentExecution,
+} from "../../../browser/types";
+import SupervisorOverview from "./SupervisorOverview";
 
 afterEach(cleanup);
 
@@ -47,6 +50,13 @@ const networkAgent = {
   first_observed_at: "2026-07-26T00:00:02Z",
 };
 
+const dataAgent = {
+  ...networkAgent,
+  thread_id: "data-thread",
+  agent_nickname: "Data Analyst",
+  agent_role: "data_agent",
+};
+
 function activity(
   sequence: number,
   input: Partial<RuntimeAgentActivity>,
@@ -66,46 +76,47 @@ function activity(
   };
 }
 
-const repeatedExecutions: RuntimeAgentActivity[] = [
-  activity(2, {
-    detail: "Evaluate the current network plan.",
-  }),
-  activity(3, {
-    turn_id: "turn-network-1",
-    kind: "turn_started",
+function execution(
+  id: string,
+  input: Partial<RuntimeAgentExecution>,
+): RuntimeAgentExecution {
+  return {
+    id,
+    run_id: "run-1",
+    thread_id: "network-thread",
+    turn_id: `turn-${id}`,
+    ordinal: 1,
+    task: "Evaluate the current network plan.",
     status: "running",
-    title: "Started working",
-  }),
-  activity(4, {
+    current_behavior: "Started working",
+    latest_progress: null,
+    first_observed_sequence: 2,
+    last_observed_sequence: 3,
+    started_at: "2026-07-26T00:00:02Z",
+    completed_at: null,
+    created_at: "2026-07-26T00:00:02Z",
+    updated_at: "2026-07-26T00:00:03Z",
+    ...input,
+  };
+}
+
+const repeatedExecutions: RuntimeAgentExecution[] = [
+  execution("network-1", {
     turn_id: "turn-network-1",
-    kind: "reporting",
-    status: "running",
-    title: "Reported progress",
-    detail: "Validated capacity and demand inputs.",
-  }),
-  activity(5, {
-    turn_id: "turn-network-1",
-    kind: "turn_completed",
+    ordinal: 1,
     status: "completed",
-    title: "Finished first work cycle",
+    current_behavior: "Finished this work cycle",
+    latest_progress: "Validated capacity and demand inputs.",
+    last_observed_sequence: 5,
+    completed_at: "2026-07-26T00:00:05Z",
   }),
-  activity(6, {
-    kind: "guidance",
-    status: "running",
-    title: "Supervisor sent instructions",
-    detail: "Compare the feasible network scenarios.",
-  }),
-  activity(7, {
+  execution("network-2", {
     turn_id: "turn-network-2",
-    kind: "turn_started",
-    status: "running",
-    title: "Started working",
-  }),
-  activity(8, {
-    turn_id: "turn-network-2",
-    kind: "tool_started",
-    status: "running",
-    title: "Using network planner · compare scenarios",
+    ordinal: 2,
+    task: "Compare the feasible network scenarios.",
+    current_behavior: "Using network planner · compare scenarios",
+    first_observed_sequence: 6,
+    last_observed_sequence: 8,
   }),
 ];
 
@@ -126,44 +137,48 @@ describe("SupervisorOverview", () => {
     )).toBeTruthy();
   });
 
-  it("freezes a completed task and creates a new node when the same Agent runs again", () => {
-    const nodes = buildAgentExecutionNodes(
-      [rootAgent, networkAgent],
-      repeatedExecutions,
+  it("renders a frozen completed task and a new node when the same Agent runs again", () => {
+    render(
+      <SupervisorOverview
+        taskTitle="Network planning"
+        policy={policy}
+        agents={[rootAgent, networkAgent]}
+        executions={repeatedExecutions}
+        artifacts={[]}
+      />,
     );
 
-    expect(nodes).toHaveLength(2);
-    expect(nodes[0]).toMatchObject({
-      ordinal: 1,
-      task: "Evaluate the current network plan.",
-      status: "completed",
-      currentBehavior: "Finished first work cycle",
-      latestProgress: "Validated capacity and demand inputs.",
-    });
-    expect(nodes[1]).toMatchObject({
-      ordinal: 2,
-      task: "Compare the feasible network scenarios.",
-      status: "running",
-      currentBehavior: "Using network planner · compare scenarios",
-    });
+    expect(screen.getByText("network_planning_agent · Task 1")).toBeTruthy();
+    expect(screen.getByText("network_planning_agent · Task 2")).toBeTruthy();
+    expect(screen.getByText("Validated capacity and demand inputs.")).toBeTruthy();
+    expect(screen.getByText("Using network planner · compare scenarios")).toBeTruthy();
   });
 
-  it("does not create a new task node for instructions that never start another Turn", () => {
-    const nodes = buildAgentExecutionNodes(
-      [rootAgent, networkAgent],
-      repeatedExecutions.slice(0, 5).concat(activity(6, {
-        kind: "guidance",
-        status: "running",
-        title: "Supervisor sent instructions",
-        detail: "Clarify one assumption without starting another task.",
-      })),
+  it("renders parallel Agent executions as independent task nodes", () => {
+    render(
+      <SupervisorOverview
+        taskTitle="Network planning"
+        policy={policy}
+        agents={[rootAgent, dataAgent, networkAgent]}
+        executions={[
+          execution("data-1", {
+            thread_id: "data-thread",
+            turn_id: "turn-data-1",
+            task: "Validate the planning dataset.",
+            first_observed_sequence: 2,
+          }),
+          execution("network-1", {
+            first_observed_sequence: 3,
+          }),
+        ]}
+        artifacts={[]}
+      />,
     );
 
-    expect(nodes).toHaveLength(1);
-    expect(nodes[0]).toMatchObject({
-      task: "Evaluate the current network plan.",
-      status: "completed",
-    });
+    expect(screen.getByText("Data Analyst")).toBeTruthy();
+    expect(screen.getByText("Network Analyst")).toBeTruthy();
+    expect(screen.getByText("Validate the planning dataset.")).toBeTruthy();
+    expect(screen.getByText("Evaluate the current network plan.")).toBeTruthy();
   });
 
   it("pins the Supervisor summary above the stream of Agent task executions", () => {
@@ -181,8 +196,8 @@ describe("SupervisorOverview", () => {
             title: "Reported progress",
             detail: "Decomposed the objective and assigned the first specialist.",
           }),
-          ...repeatedExecutions,
         ]}
+        executions={repeatedExecutions}
         artifacts={[
           {
             id: "artifact-1",

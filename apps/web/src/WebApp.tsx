@@ -2387,6 +2387,7 @@ export default function WebApp() {
               policy={supervisorOverview?.policy ?? null}
               agents={supervisorOverview?.agents ?? []}
               activities={supervisorOverview?.activities ?? []}
+              executions={supervisorOverview?.executions ?? []}
               artifacts={supervisorOverview?.artifacts ?? []}
               loading={supervisorOverviewLoading}
               error={supervisorOverviewError}

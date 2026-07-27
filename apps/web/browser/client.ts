@@ -7,6 +7,7 @@ import type {
   Run,
   RunEvent,
   RuntimeAgentActivity,
+  RuntimeAgentExecution,
   Session,
   Task,
   Workspace,
@@ -383,6 +384,12 @@ export class PlatformClient {
   listRunAgentActivities(runId: string) {
     return this.request<RuntimeAgentActivity[]>(
       `/api/runs/${encodeURIComponent(runId)}/agent-activities`,
+    );
+  }
+
+  listRunAgentExecutions(runId: string) {
+    return this.request<RuntimeAgentExecution[]>(
+      `/api/runs/${encodeURIComponent(runId)}/agent-executions`,
     );
   }
 

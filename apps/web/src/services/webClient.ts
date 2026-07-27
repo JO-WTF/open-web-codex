@@ -5,6 +5,7 @@ import type {
   Run,
   RunEvent,
   RuntimeAgentActivity,
+  RuntimeAgentExecution,
   RuntimeAgentProjection,
   SupervisorPolicyBinding,
   SupervisorPolicySelection,
@@ -28,6 +29,7 @@ export type EnterpriseSupervisorOverview = {
   policy: SupervisorPolicyBinding | null;
   agents: RuntimeAgentProjection[];
   activities: RuntimeAgentActivity[];
+  executions: RuntimeAgentExecution[];
   artifacts: ArtifactSummary[];
 };
 
@@ -370,14 +372,15 @@ export class CodexMonitorWebClient {
     threadId: string,
   ): Promise<EnterpriseSupervisorOverview | null> {
     const context = await this.findThreadContext(threadId);
-    const [task, policy, agents, activities, artifacts] = await Promise.all([
+    const [task, policy, agents, activities, executions, artifacts] = await Promise.all([
       this.platform.getTask(context.taskId),
       this.platform.getRunSupervisorPolicy(context.runId),
       this.platform.listRunAgents(context.runId),
       this.platform.listRunAgentActivities(context.runId),
+      this.platform.listRunAgentExecutions(context.runId),
       this.platform.listTaskArtifacts(context.taskId),
     ]);
-    return { taskTitle: task.title, policy, agents, activities, artifacts };
+    return { taskTitle: task.title, policy, agents, activities, executions, artifacts };
   }
 
   async listThreads(workspaceId: string) {

@@ -127,6 +127,24 @@ export type RuntimeAgentActivity = {
   created_at: string;
 };
 
+export type RuntimeAgentExecution = {
+  id: string;
+  run_id: string;
+  thread_id: string;
+  turn_id: string | null;
+  ordinal: number;
+  task: string | null;
+  status: "pending" | "running" | "waiting" | "completed" | "failed" | "interrupted";
+  current_behavior: string;
+  latest_progress: string | null;
+  first_observed_sequence: number;
+  last_observed_sequence: number;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type ArtifactSummary = {
   id: string;
   task_id: string;

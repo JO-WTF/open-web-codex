@@ -45,6 +45,40 @@ describe("PlatformClient", () => {
     expect(fetchMock.mock.calls.every((call) => !String(call[0]).includes("/api/rpc"))).toBe(true);
   });
 
+  it("reads persisted Agent task executions through the typed Run resource", async () => {
+    const executions = [{
+      id: "execution-1",
+      run_id: "run-1",
+      thread_id: "child-thread",
+      turn_id: "turn-1",
+      ordinal: 1,
+      task: "Validate inputs",
+      status: "completed",
+      current_behavior: "Finished this work cycle",
+      latest_progress: "Inputs validated",
+      first_observed_sequence: 4,
+      last_observed_sequence: 9,
+      started_at: "2026-07-27T00:00:00Z",
+      completed_at: "2026-07-27T00:00:01Z",
+      created_at: "2026-07-27T00:00:00Z",
+      updated_at: "2026-07-27T00:00:01Z",
+    }];
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(executions), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PlatformClient({
+      baseUrl: "https://platform.test",
+      token: "session-token",
+    });
+
+    await expect(client.listRunAgentExecutions("run/one")).resolves.toEqual(executions);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://platform.test/api/runs/run%2Fone/agent-executions",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+  });
+
   it("sends only a published Supervisor Policy reference when starting an enterprise Run", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ run: { id: "run-1" } }), { status: 200 }));

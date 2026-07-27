@@ -183,6 +183,23 @@ describe("WebApp workspace-first messaging", () => {
         detail: "Inspect enterprise planning data.",
         created_at: "2026-07-26T00:00:02Z",
       }],
+      executions: [{
+        id: "execution-data-1",
+        run_id: "run-enterprise",
+        thread_id: "data-thread",
+        turn_id: null,
+        ordinal: 1,
+        task: "Inspect enterprise planning data.",
+        status: "pending",
+        current_behavior: "Waiting to start",
+        latest_progress: null,
+        first_observed_sequence: 4,
+        last_observed_sequence: 4,
+        started_at: null,
+        completed_at: null,
+        created_at: "2026-07-26T00:00:02Z",
+        updated_at: "2026-07-26T00:00:02Z",
+      }],
       artifacts: [],
     });
     render(<WebApp />);
@@ -207,6 +224,7 @@ describe("WebApp workspace-first messaging", () => {
       expect(screen.getByText("Policy enterprise-supervisor-copilot · 1.0.0"))
         .toBeTruthy();
       expect(screen.getByText("Root Supervisor")).toBeTruthy();
+      expect(screen.getByText("Inspect enterprise planning data.")).toBeTruthy();
     });
   });
 
@@ -253,6 +271,23 @@ describe("WebApp workspace-first messaging", () => {
       policy: null,
       agents: [rootAgent, dataAgent],
       activities: [assignment],
+      executions: [{
+        id: "execution-data-1",
+        run_id: "run-enterprise",
+        thread_id: "data-thread",
+        turn_id: null,
+        ordinal: 1,
+        task: "Inspect enterprise planning data.",
+        status: "pending",
+        current_behavior: "Waiting to start",
+        latest_progress: null,
+        first_observed_sequence: 4,
+        last_observed_sequence: 4,
+        started_at: null,
+        completed_at: null,
+        created_at: "2026-07-26T00:00:02Z",
+        updated_at: "2026-07-26T00:00:02Z",
+      }],
       artifacts: [],
     };
     client.listThreads.mockResolvedValue({
@@ -308,6 +343,15 @@ describe("WebApp workspace-first messaging", () => {
           created_at: "2026-07-26T00:00:04Z",
         },
       ],
+      executions: [{
+        ...baseOverview.executions[0],
+        turn_id: "turn-data",
+        status: "running",
+        current_behavior: "Using planning data · load network",
+        last_observed_sequence: 6,
+        started_at: "2026-07-26T00:00:03Z",
+        updated_at: "2026-07-26T00:00:04Z",
+      }],
     });
     act(() => {
       appServerEventHandler?.({

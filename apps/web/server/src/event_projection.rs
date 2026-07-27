@@ -165,6 +165,16 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
     .fetch_one(&mut *transaction)
     .await
     .map_err(|error| format!("event insert error: {error}"))?;
+    let event_sequence = persisted.get::<i64, _>("sequence");
+    let event_created_at = persisted.get::<chrono::DateTime<chrono::Utc>, _>("created_at");
+    project_runtime_agent_execution(
+        &mut transaction,
+        &context,
+        &event,
+        event_sequence,
+        event_created_at,
+    )
+    .await?;
 
     if is_root_thread {
         match event.event_type.as_str() {
@@ -270,7 +280,7 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
 
     let public = RunEvent {
         id: persisted.get("id"),
-        sequence: persisted.get("sequence"),
+        sequence: event_sequence,
         run_id,
         event_type: event.event_type,
         projection_version: PROJECTION_VERSION,
@@ -278,7 +288,7 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
         turn_id: event.turn_id,
         item_id: event.item_id,
         payload: event.payload,
-        created_at: persisted.get("created_at"),
+        created_at: event_created_at,
     };
     let payload = serde_json::to_vec(&json!({
         "type": "run.event",
@@ -885,6 +895,550 @@ async fn update_runtime_agent_projection(
         return Err("Runtime agent projection changed during event delivery".to_string());
     }
     Ok(())
+}
+
+async fn project_runtime_agent_execution(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    context: &EventRunContext,
+    event: &ProjectedEvent,
+    sequence: i64,
+    observed_at: chrono::DateTime<chrono::Utc>,
+) -> Result<(), String> {
+    if event.thread_id == context.root_thread_id {
+        return project_supervisor_assignment(transaction, context, event, sequence, observed_at)
+            .await;
+    }
+
+    let Some(turn_id) = event.turn_id.as_deref() else {
+        return project_turnless_agent_terminal(transaction, context, event, sequence, observed_at)
+            .await;
+    };
+    ensure_agent_execution(
+        transaction,
+        context,
+        &event.thread_id,
+        turn_id,
+        sequence,
+        observed_at,
+    )
+    .await?;
+    update_agent_execution(transaction, context, event, turn_id, sequence, observed_at).await
+}
+
+async fn project_supervisor_assignment(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    context: &EventRunContext,
+    event: &ProjectedEvent,
+    sequence: i64,
+    observed_at: chrono::DateTime<chrono::Utc>,
+) -> Result<(), String> {
+    if event.event_type != "codex.item.completed"
+        || !matches!(
+            event.payload.get("itemType").and_then(Value::as_str),
+            Some("collabAgentToolCall" | "collabToolCall")
+        )
+    {
+        return Ok(());
+    }
+    let data = event.payload.get("data").unwrap_or(&Value::Null);
+    let tool = data
+        .get("tool")
+        .and_then(Value::as_str)
+        .map(normalize_agent_tool)
+        .unwrap_or_default();
+    if !matches!(tool.as_str(), "spawnagent" | "sendinput") {
+        return Ok(());
+    }
+    let Some(task) = data
+        .get("prompt")
+        .and_then(Value::as_str)
+        .and_then(|value| truncated_projection_text(value, 1_000))
+    else {
+        return Ok(());
+    };
+    let mut receivers = data
+        .get("receiverThreadIds")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && value.len() <= 256)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    receivers.sort();
+    receivers.dedup();
+
+    for receiver in receivers {
+        lock_agent_execution(transaction, context.run_id, &receiver).await?;
+        let attached = sqlx::query_scalar::<_, Uuid>(
+            "UPDATE runtime_agent_execution_projections
+             SET assignment_sequence = $1, assignment_item_id = $2, task = $3,
+                 first_observed_sequence = LEAST(first_observed_sequence, $1),
+                 last_observed_sequence = GREATEST(last_observed_sequence, $1),
+                 updated_at = now()
+             WHERE id = (
+                 SELECT id
+                 FROM runtime_agent_execution_projections
+                 WHERE root_run_id = $4 AND agent_thread_id = $5
+                   AND turn_id IS NOT NULL AND assignment_sequence IS NULL
+                 ORDER BY ordinal DESC
+                 LIMIT 1
+             )
+             RETURNING id",
+        )
+        .bind(sequence)
+        .bind(&event.item_id)
+        .bind(&task)
+        .bind(context.run_id)
+        .bind(&receiver)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(|error| format!("Agent task assignment attach error: {error}"))?;
+        if attached.is_some() || tool != "spawnagent" {
+            continue;
+        }
+
+        let ordinal = next_agent_execution_ordinal(transaction, context.run_id, &receiver).await?;
+        sqlx::query(
+            "INSERT INTO runtime_agent_execution_projections (
+                organization_id, profile_id, workspace_id, root_run_id,
+                agent_thread_id, ordinal, assignment_sequence, assignment_item_id,
+                task, status, current_behavior, first_observed_sequence,
+                last_observed_sequence, created_at, updated_at
+             ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8,
+                $9, 'pending', 'Waiting to start', $7, $7, $10, $10
+             )
+             ON CONFLICT (root_run_id, agent_thread_id, assignment_item_id)
+             DO UPDATE SET
+                task = EXCLUDED.task,
+                assignment_sequence = LEAST(
+                    runtime_agent_execution_projections.assignment_sequence,
+                    EXCLUDED.assignment_sequence
+                ),
+                first_observed_sequence = LEAST(
+                    runtime_agent_execution_projections.first_observed_sequence,
+                    EXCLUDED.first_observed_sequence
+                ),
+                last_observed_sequence = GREATEST(
+                    runtime_agent_execution_projections.last_observed_sequence,
+                    EXCLUDED.last_observed_sequence
+                ),
+                updated_at = now()",
+        )
+        .bind(context.organization_id)
+        .bind(context.profile_id)
+        .bind(context.workspace_id)
+        .bind(context.run_id)
+        .bind(&receiver)
+        .bind(ordinal)
+        .bind(sequence)
+        .bind(&event.item_id)
+        .bind(&task)
+        .bind(observed_at)
+        .execute(&mut **transaction)
+        .await
+        .map_err(|error| format!("Pending Agent task projection error: {error}"))?;
+    }
+    Ok(())
+}
+
+async fn ensure_agent_execution(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    context: &EventRunContext,
+    thread_id: &str,
+    turn_id: &str,
+    sequence: i64,
+    observed_at: chrono::DateTime<chrono::Utc>,
+) -> Result<(), String> {
+    lock_agent_execution(transaction, context.run_id, thread_id).await?;
+    let existing = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM runtime_agent_execution_projections
+         WHERE root_run_id = $1 AND agent_thread_id = $2 AND turn_id = $3",
+    )
+    .bind(context.run_id)
+    .bind(thread_id)
+    .bind(turn_id)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(|error| format!("Agent task lookup error: {error}"))?;
+    if existing.is_some() {
+        return Ok(());
+    }
+
+    let bound = sqlx::query_scalar::<_, Uuid>(
+        "UPDATE runtime_agent_execution_projections
+         SET turn_id = $1, status = 'running', current_behavior = 'Started working',
+             started_at = COALESCE(started_at, $2),
+             last_observed_sequence = GREATEST(last_observed_sequence, $3),
+             updated_at = now()
+         WHERE id = (
+             SELECT id
+             FROM runtime_agent_execution_projections
+             WHERE root_run_id = $4 AND agent_thread_id = $5
+               AND turn_id IS NULL AND status = 'pending'
+             ORDER BY ordinal DESC
+             LIMIT 1
+         )
+         RETURNING id",
+    )
+    .bind(turn_id)
+    .bind(observed_at)
+    .bind(sequence)
+    .bind(context.run_id)
+    .bind(thread_id)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(|error| format!("Agent task Turn binding error: {error}"))?;
+    if bound.is_some() {
+        return Ok(());
+    }
+
+    let last_consumed = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT MAX(COALESCE(assignment_sequence, first_observed_sequence))
+         FROM runtime_agent_execution_projections
+         WHERE root_run_id = $1 AND agent_thread_id = $2",
+    )
+    .bind(context.run_id)
+    .bind(thread_id)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(|error| format!("Agent task sequence lookup error: {error}"))?
+    .unwrap_or(0);
+    let assignment = sqlx::query(
+        "SELECT sequence, item_id, payload->'data'->>'prompt' AS task
+         FROM run_events
+         WHERE run_id = $1
+           AND event_type = 'codex.item.completed'
+           AND payload->>'itemType' IN ('collabAgentToolCall', 'collabToolCall')
+           AND jsonb_typeof(payload->'data'->'receiverThreadIds') = 'array'
+           AND (payload->'data'->'receiverThreadIds') ? $2
+           AND sequence > $3
+           AND NULLIF(BTRIM(payload->'data'->>'prompt'), '') IS NOT NULL
+         ORDER BY sequence DESC
+         LIMIT 1",
+    )
+    .bind(context.run_id)
+    .bind(thread_id)
+    .bind(last_consumed)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(|error| format!("Agent task prompt lookup error: {error}"))?;
+    let assignment_sequence = assignment.as_ref().map(|row| row.get::<i64, _>("sequence"));
+    let assignment_item_id = assignment
+        .as_ref()
+        .and_then(|row| row.get::<Option<String>, _>("item_id"));
+    let task = assignment
+        .as_ref()
+        .and_then(|row| row.get::<Option<String>, _>("task"))
+        .and_then(|value| truncated_projection_text(&value, 1_000));
+    let first_observed_sequence = assignment_sequence.unwrap_or(sequence);
+    let ordinal = next_agent_execution_ordinal(transaction, context.run_id, thread_id).await?;
+
+    sqlx::query(
+        "INSERT INTO runtime_agent_execution_projections (
+            organization_id, profile_id, workspace_id, root_run_id,
+            agent_thread_id, turn_id, ordinal, assignment_sequence,
+            assignment_item_id, task, status, current_behavior,
+            first_observed_sequence, last_observed_sequence, started_at,
+            created_at, updated_at
+         ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8,
+            $9, $10, 'running', 'Started working',
+            $11, $12, $13, $13, $13
+         )
+         ON CONFLICT (root_run_id, agent_thread_id, turn_id) DO NOTHING",
+    )
+    .bind(context.organization_id)
+    .bind(context.profile_id)
+    .bind(context.workspace_id)
+    .bind(context.run_id)
+    .bind(thread_id)
+    .bind(turn_id)
+    .bind(ordinal)
+    .bind(assignment_sequence)
+    .bind(assignment_item_id)
+    .bind(task)
+    .bind(first_observed_sequence)
+    .bind(sequence)
+    .bind(observed_at)
+    .execute(&mut **transaction)
+    .await
+    .map_err(|error| format!("Agent task Turn projection error: {error}"))?;
+    Ok(())
+}
+
+async fn update_agent_execution(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    context: &EventRunContext,
+    event: &ProjectedEvent,
+    turn_id: &str,
+    sequence: i64,
+    observed_at: chrono::DateTime<chrono::Utc>,
+) -> Result<(), String> {
+    let observation = agent_execution_observation(event);
+    let Some(observation) = observation else {
+        return Ok(());
+    };
+    let terminal = matches!(
+        observation.status,
+        Some("completed" | "failed" | "interrupted")
+    );
+    sqlx::query(
+        "UPDATE runtime_agent_execution_projections
+         SET status = COALESCE($1, status),
+             current_behavior = COALESCE($2, current_behavior),
+             latest_progress = COALESCE($3, latest_progress),
+             last_observed_sequence = GREATEST(last_observed_sequence, $4),
+             completed_at = CASE WHEN $5 THEN COALESCE(completed_at, $6) ELSE completed_at END,
+             updated_at = now()
+         WHERE root_run_id = $7 AND agent_thread_id = $8 AND turn_id = $9
+           AND status NOT IN ('completed', 'failed', 'interrupted')",
+    )
+    .bind(observation.status)
+    .bind(observation.behavior)
+    .bind(observation.progress)
+    .bind(sequence)
+    .bind(terminal)
+    .bind(observed_at)
+    .bind(context.run_id)
+    .bind(&event.thread_id)
+    .bind(turn_id)
+    .execute(&mut **transaction)
+    .await
+    .map_err(|error| format!("Agent task activity projection error: {error}"))?;
+    Ok(())
+}
+
+async fn project_turnless_agent_terminal(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    context: &EventRunContext,
+    event: &ProjectedEvent,
+    sequence: i64,
+    observed_at: chrono::DateTime<chrono::Utc>,
+) -> Result<(), String> {
+    let (status, behavior) = match event.event_type.as_str() {
+        "codex.thread.completed" => ("completed", "Completed the assigned work"),
+        "codex.thread.failed" => ("failed", "Agent execution failed"),
+        _ => return Ok(()),
+    };
+    lock_agent_execution(transaction, context.run_id, &event.thread_id).await?;
+    sqlx::query(
+        "UPDATE runtime_agent_execution_projections
+         SET status = $1, current_behavior = $2,
+             last_observed_sequence = GREATEST(last_observed_sequence, $3),
+             completed_at = COALESCE(completed_at, $4), updated_at = now()
+         WHERE id = (
+             SELECT id
+             FROM runtime_agent_execution_projections
+             WHERE root_run_id = $5 AND agent_thread_id = $6
+               AND status NOT IN ('completed', 'failed', 'interrupted')
+             ORDER BY ordinal DESC
+             LIMIT 1
+         )",
+    )
+    .bind(status)
+    .bind(behavior)
+    .bind(sequence)
+    .bind(observed_at)
+    .bind(context.run_id)
+    .bind(&event.thread_id)
+    .execute(&mut **transaction)
+    .await
+    .map_err(|error| format!("Agent task terminal projection error: {error}"))?;
+    Ok(())
+}
+
+struct AgentExecutionObservation {
+    status: Option<&'static str>,
+    behavior: Option<String>,
+    progress: Option<String>,
+}
+
+fn agent_execution_observation(event: &ProjectedEvent) -> Option<AgentExecutionObservation> {
+    match event.event_type.as_str() {
+        "codex.turn.started" => Some(AgentExecutionObservation {
+            status: Some("running"),
+            behavior: Some("Started working".to_string()),
+            progress: None,
+        }),
+        "codex.turn.completed" => {
+            let status = projected_turn_terminal_status(&event.payload);
+            let behavior = match status {
+                "failed" => "Agent execution failed",
+                "interrupted" => "Agent execution interrupted",
+                _ => "Finished this work cycle",
+            };
+            Some(AgentExecutionObservation {
+                status: Some(status),
+                behavior: Some(behavior.to_string()),
+                progress: None,
+            })
+        }
+        "platform.approval.requested" => Some(AgentExecutionObservation {
+            status: Some("waiting"),
+            behavior: Some("Waiting for approval".to_string()),
+            progress: None,
+        }),
+        "platform.approval.resolved" => Some(AgentExecutionObservation {
+            status: Some("running"),
+            behavior: Some("Approval resolved; continuing work".to_string()),
+            progress: None,
+        }),
+        "codex.item.started" | "codex.item.completed" => project_agent_item_observation(event),
+        _ => None,
+    }
+}
+
+fn project_agent_item_observation(event: &ProjectedEvent) -> Option<AgentExecutionObservation> {
+    let item_type = event
+        .payload
+        .get("itemType")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let data = event.payload.get("data").unwrap_or(&Value::Null);
+    let completed = event.event_type == "codex.item.completed";
+    if item_type == "agentMessage" && completed {
+        let phase = data.get("phase").and_then(Value::as_str)?;
+        let progress = data
+            .get("text")
+            .and_then(Value::as_str)
+            .and_then(|value| truncated_projection_text(value, 1_000));
+        let behavior = match phase {
+            "commentary" => "Reported progress",
+            "final_answer" => "Returned results to the Supervisor",
+            _ => return None,
+        };
+        return Some(AgentExecutionObservation {
+            status: None,
+            behavior: Some(behavior.to_string()),
+            progress,
+        });
+    }
+
+    let failed = completed
+        && (data.get("error").is_some_and(|value| !value.is_null())
+            || data.get("success").and_then(Value::as_bool) == Some(false)
+            || matches!(
+                data.get("status").and_then(Value::as_str),
+                Some("failed" | "error")
+            ));
+    let subject = match item_type {
+        "mcpToolCall" => {
+            let server = data
+                .get("server")
+                .and_then(Value::as_str)
+                .map(display_agent_identifier);
+            let tool = data
+                .get("tool")
+                .and_then(Value::as_str)
+                .map(display_agent_identifier);
+            match (server, tool) {
+                (Some(server), Some(tool)) => format!("{server} · {tool}"),
+                (Some(server), None) => server,
+                (None, Some(tool)) => tool,
+                (None, None) => "an enterprise tool".to_string(),
+            }
+        }
+        "dynamicToolCall" => data
+            .get("tool")
+            .and_then(Value::as_str)
+            .map(display_agent_identifier)
+            .unwrap_or_else(|| "a Runtime tool".to_string()),
+        "commandExecution" => "a workspace command".to_string(),
+        "webSearch" => "web research".to_string(),
+        "imageView" => "image inspection".to_string(),
+        "imageGeneration" => "image generation".to_string(),
+        _ => return None,
+    };
+    let verb = if failed {
+        "Could not complete"
+    } else if completed {
+        "Completed"
+    } else {
+        "Using"
+    };
+    Some(AgentExecutionObservation {
+        status: None,
+        behavior: Some(format!("{verb} {subject}")),
+        progress: None,
+    })
+}
+
+fn projected_turn_terminal_status(payload: &Value) -> &'static str {
+    let status = payload
+        .pointer("/data/status")
+        .and_then(Value::as_str)
+        .or_else(|| payload.pointer("/data/status/type").and_then(Value::as_str))
+        .or_else(|| payload.pointer("/data/turn/status").and_then(Value::as_str))
+        .or_else(|| {
+            payload
+                .pointer("/data/turn/status/type")
+                .and_then(Value::as_str)
+        })
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if status.contains("fail") || status.contains("error") {
+        "failed"
+    } else if status.contains("interrupt") || status.contains("cancel") {
+        "interrupted"
+    } else {
+        "completed"
+    }
+}
+
+async fn lock_agent_execution(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    run_id: Uuid,
+    thread_id: &str,
+) -> Result<(), String> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("{run_id}:{thread_id}"))
+        .execute(&mut **transaction)
+        .await
+        .map_err(|error| format!("Agent task projection lock error: {error}"))?;
+    Ok(())
+}
+
+async fn next_agent_execution_ordinal(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    run_id: Uuid,
+    thread_id: &str,
+) -> Result<i32, String> {
+    sqlx::query_scalar::<_, i32>(
+        "SELECT COALESCE(MAX(ordinal), 0) + 1
+         FROM runtime_agent_execution_projections
+         WHERE root_run_id = $1 AND agent_thread_id = $2",
+    )
+    .bind(run_id)
+    .bind(thread_id)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(|error| format!("Agent task ordinal error: {error}"))
+}
+
+fn normalize_agent_tool(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn display_agent_identifier(value: &str) -> String {
+    value
+        .trim()
+        .trim_start_matches("mcp__")
+        .replace(['_', '-'], " ")
+}
+
+fn truncated_projection_text(value: &str, max_chars: usize) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    Some(value.chars().take(max_chars).collect())
 }
 
 fn project_event_data(method: &str, params: &Map<String, Value>) -> Value {
@@ -3075,6 +3629,11 @@ After"#;
         .await
         .unwrap();
 
+        let assignment = format!(
+            r#"data: {{"method":"app-server-event","params":{{"workspace_id":"{workspace_id}","message":{{"method":"item/completed","params":{{"threadId":"root-thread","turnId":"root-turn","item":{{"id":"spawn-network","type":"collabAgentToolCall","tool":"spawnAgent","status":"completed","prompt":"Build and validate the network plan.","senderThreadId":"root-thread","receiverThreadIds":["child-thread"],"agentsStates":{{}}}}}}}}}}}}
+
+"#
+        );
         let started = format!(
             r#"data: {{"method":"app-server-event","params":{{"workspace_id":"{workspace_id}","message":{{"method":"thread/started","params":{{"thread":{{"id":"child-thread","parentThreadId":"root-thread","source":{{"subAgent":{{"thread_spawn":{{"parent_thread_id":"root-thread","depth":1,"agent_path":"/root/network","agent_nickname":"Network","agent_role":"network_planning_agent"}}}}}},"status":{{"type":"idle","activeFlags":[]}}}}}}}}}}}}
 
@@ -3085,8 +3644,53 @@ After"#;
 
 "#
         );
+        let data_started = format!(
+            r#"data: {{"method":"app-server-event","params":{{"workspace_id":"{workspace_id}","message":{{"method":"thread/started","params":{{"thread":{{"id":"data-thread","parentThreadId":"root-thread","source":{{"subAgent":{{"thread_spawn":{{"parent_thread_id":"root-thread","depth":1,"agent_path":"/root/data","agent_nickname":"Data","agent_role":"data_agent"}}}}}},"status":{{"type":"idle","activeFlags":[]}}}}}}}}}}}}
+
+"#
+        );
+        let data_turn = format!(
+            r#"data: {{"method":"app-server-event","params":{{"workspace_id":"{workspace_id}","message":{{"method":"turn/started","params":{{"threadId":"data-thread","turnId":"data-turn","turn":{{"id":"data-turn","status":"inProgress"}}}}}}}}}}
+
+"#
+        );
+        let data_assignment = format!(
+            r#"data: {{"method":"app-server-event","params":{{"workspace_id":"{workspace_id}","message":{{"method":"item/completed","params":{{"threadId":"root-thread","turnId":"root-turn","item":{{"id":"spawn-data","type":"collabAgentToolCall","tool":"spawnAgent","status":"completed","prompt":"Validate the planning inputs.","senderThreadId":"root-thread","receiverThreadIds":["data-thread"],"agentsStates":{{}}}}}}}}}}}}
+
+"#
+        );
+        let data_turn_completed = format!(
+            r#"data: {{"method":"app-server-event","params":{{"workspace_id":"{workspace_id}","message":{{"method":"turn/completed","params":{{"threadId":"data-thread","turnId":"data-turn","turn":{{"id":"data-turn","status":"completed"}}}}}}}}}}
+
+"#
+        );
+        let data_completed = format!(
+            r#"data: {{"method":"app-server-event","params":{{"workspace_id":"{workspace_id}","message":{{"method":"thread/completed","params":{{"threadId":"data-thread"}}}}}}}}
+
+"#
+        );
         let child_artifact = format!(
             r#"data: {{"method":"app-server-event","params":{{"workspace_id":"{workspace_id}","message":{{"method":"item/completed","params":{{"threadId":"child-thread","turnId":"child-turn","item":{{"id":"data-item","type":"mcpToolCall","server":"supply_chain_data","tool":"build_planning_dataset","result":{{"content":[{{"type":"resource_link","name":"planning-dataset.v1-digest","title":"planning-dataset.v1","uri":"supply-chain-data://resources/planning-dataset.v1-digest","mimeType":"application/json","size":512}}],"structuredContent":{{"summary":"ready","data_ref":{{"server":"supply_chain_data","uri":"supply-chain-data://resources/planning-dataset.v1-digest","resource_schema":"planning-dataset.v1"}}}}}}}}}}}}}}}}
+
+"#
+        );
+        let child_turn_completed = format!(
+            r#"data: {{"method":"app-server-event","params":{{"workspace_id":"{workspace_id}","message":{{"method":"turn/completed","params":{{"threadId":"child-thread","turnId":"child-turn","turn":{{"id":"child-turn","status":"completed"}}}}}}}}}}
+
+"#
+        );
+        let followup = format!(
+            r#"data: {{"method":"app-server-event","params":{{"workspace_id":"{workspace_id}","message":{{"method":"item/completed","params":{{"threadId":"root-thread","turnId":"root-turn","item":{{"id":"followup-network","type":"collabAgentToolCall","tool":"sendInput","status":"completed","prompt":"Compare the feasible network scenarios.","senderThreadId":"root-thread","receiverThreadIds":["child-thread"],"agentsStates":{{}}}}}}}}}}}}
+
+"#
+        );
+        let second_turn = format!(
+            r#"data: {{"method":"app-server-event","params":{{"workspace_id":"{workspace_id}","message":{{"method":"turn/started","params":{{"threadId":"child-thread","turnId":"child-turn-2","turn":{{"id":"child-turn-2","status":"inProgress"}}}}}}}}}}
+
+"#
+        );
+        let second_tool = format!(
+            r#"data: {{"method":"app-server-event","params":{{"workspace_id":"{workspace_id}","message":{{"method":"item/started","params":{{"threadId":"child-thread","turnId":"child-turn-2","item":{{"id":"compare-item","type":"mcpToolCall","server":"supply_chain_planner","tool":"compare_network_scenarios","status":"inProgress"}}}}}}}}}}
 
 "#
         );
@@ -3095,6 +3699,10 @@ After"#;
 
 "#
         );
+        assert!(persist_frame(assignment.as_bytes(), &pool)
+            .await
+            .unwrap()
+            .is_some());
         assert!(persist_frame(started.as_bytes(), &pool)
             .await
             .unwrap()
@@ -3103,11 +3711,47 @@ After"#;
             .await
             .unwrap()
             .is_some());
+        assert!(persist_frame(data_started.as_bytes(), &pool)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(persist_frame(data_turn.as_bytes(), &pool)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(persist_frame(data_assignment.as_bytes(), &pool)
+            .await
+            .unwrap()
+            .is_some());
         let artifact_projection = persist_frame(child_artifact.as_bytes(), &pool)
             .await
             .unwrap()
             .expect("Artifact projection");
         assert_eq!(artifact_projection.pending_artifact_ids.len(), 1);
+        assert!(persist_frame(data_turn_completed.as_bytes(), &pool)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(persist_frame(data_completed.as_bytes(), &pool)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(persist_frame(child_turn_completed.as_bytes(), &pool)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(persist_frame(followup.as_bytes(), &pool)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(persist_frame(second_turn.as_bytes(), &pool)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(persist_frame(second_tool.as_bytes(), &pool)
+            .await
+            .unwrap()
+            .is_some());
         assert!(persist_frame(completed.as_bytes(), &pool)
             .await
             .unwrap()
@@ -3152,7 +3796,63 @@ After"#;
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(event_count, 4);
+        assert_eq!(event_count, 7);
+        let executions = sqlx::query(
+            "SELECT turn_id, ordinal, task, status, current_behavior
+             FROM runtime_agent_execution_projections
+             WHERE root_run_id = $1 AND agent_thread_id = 'child-thread'
+             ORDER BY ordinal",
+        )
+        .bind(run_id)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(executions.len(), 2);
+        assert_eq!(
+            executions[0].get::<Option<String>, _>("turn_id").as_deref(),
+            Some("child-turn")
+        );
+        assert_eq!(executions[0].get::<i32, _>("ordinal"), 1);
+        assert_eq!(
+            executions[0].get::<String, _>("task"),
+            "Build and validate the network plan."
+        );
+        assert_eq!(executions[0].get::<String, _>("status"), "completed");
+        assert_eq!(
+            executions[0].get::<String, _>("current_behavior"),
+            "Finished this work cycle"
+        );
+        assert_eq!(
+            executions[1].get::<Option<String>, _>("turn_id").as_deref(),
+            Some("child-turn-2")
+        );
+        assert_eq!(executions[1].get::<i32, _>("ordinal"), 2);
+        assert_eq!(
+            executions[1].get::<String, _>("task"),
+            "Compare the feasible network scenarios."
+        );
+        assert_eq!(executions[1].get::<String, _>("status"), "completed");
+        let data_execution = sqlx::query(
+            "SELECT turn_id, ordinal, task, status
+             FROM runtime_agent_execution_projections
+             WHERE root_run_id = $1 AND agent_thread_id = 'data-thread'",
+        )
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            data_execution
+                .get::<Option<String>, _>("turn_id")
+                .as_deref(),
+            Some("data-turn")
+        );
+        assert_eq!(data_execution.get::<i32, _>("ordinal"), 1);
+        assert_eq!(
+            data_execution.get::<String, _>("task"),
+            "Validate the planning inputs."
+        );
+        assert_eq!(data_execution.get::<String, _>("status"), "completed");
         let artifact = sqlx::query(
             "SELECT artifact.id, artifact.artifact_schema, artifact.state,
                     artifact_grant.task_id, provenance.producer_thread_id

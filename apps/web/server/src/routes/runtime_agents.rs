@@ -6,7 +6,7 @@ use axum::{
 use open_web_codex_platform_contracts::error::PlatformError;
 use open_web_codex_platform_contracts::{
     RuntimeAgentActivity, RuntimeAgentActivityKind, RuntimeAgentActivityStatus,
-    RuntimeAgentProjection,
+    RuntimeAgentExecution, RuntimeAgentProjection,
 };
 use open_web_codex_platform_store::AppState;
 use serde_json::Value;
@@ -17,6 +17,7 @@ use uuid::Uuid;
 use crate::middleware::auth::AuthenticatedUser;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
+const MAX_AGENT_EXECUTIONS: i64 = 500;
 
 /// Return the safe, rebuildable Runtime Thread tree associated with one Run.
 ///
@@ -153,6 +154,62 @@ pub async fn list_activities_for_run(
     activities.extend(assignments);
     activities.sort_by_key(|activity| activity.sequence);
     Ok(Json(activities))
+}
+
+/// Return persisted child Agent task nodes for the Web task stream.
+///
+/// Rows are a bounded, rebuildable projection of Runtime Turns. The endpoint
+/// cannot create, resume or otherwise control an Agent.
+pub async fn list_executions_for_run(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(run_id): Path<Uuid>,
+) -> ApiResult<Vec<RuntimeAgentExecution>> {
+    ensure_run_access(&state, auth.organization_id, run_id).await?;
+
+    let rows = sqlx::query(
+        "SELECT id, root_run_id, agent_thread_id, turn_id, ordinal, task, status,
+                current_behavior, latest_progress, first_observed_sequence,
+                last_observed_sequence, started_at, completed_at, created_at, updated_at
+         FROM (
+             SELECT id, root_run_id, agent_thread_id, turn_id, ordinal, task, status,
+                    current_behavior, latest_progress, first_observed_sequence,
+                    last_observed_sequence, started_at, completed_at, created_at, updated_at
+             FROM runtime_agent_execution_projections
+             WHERE root_run_id = $1 AND organization_id = $2
+             ORDER BY first_observed_sequence DESC, id DESC
+             LIMIT $3
+         ) execution
+         ORDER BY first_observed_sequence, id",
+    )
+    .bind(run_id)
+    .bind(auth.organization_id)
+    .bind(MAX_AGENT_EXECUTIONS)
+    .fetch_all(&state.db)
+    .await
+    .map_err(database_error)?;
+
+    Ok(Json(
+        rows.into_iter()
+            .map(|row| RuntimeAgentExecution {
+                id: row.get("id"),
+                run_id: row.get("root_run_id"),
+                thread_id: row.get("agent_thread_id"),
+                turn_id: row.get("turn_id"),
+                ordinal: row.get("ordinal"),
+                task: row.get("task"),
+                status: row.get("status"),
+                current_behavior: row.get("current_behavior"),
+                latest_progress: row.get("latest_progress"),
+                first_observed_sequence: row.get("first_observed_sequence"),
+                last_observed_sequence: row.get("last_observed_sequence"),
+                started_at: row.get("started_at"),
+                completed_at: row.get("completed_at"),
+                created_at: row.get("created_at"),
+                updated_at: row.get("updated_at"),
+            })
+            .collect(),
+    ))
 }
 
 struct ActivityEvent {

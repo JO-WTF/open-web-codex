@@ -243,11 +243,29 @@ describe("WebApp direct Server client", () => {
       detail: null,
       created_at: "2026-07-26T00:00:03Z",
     }];
+    const executions = [{
+      id: "execution-data-1",
+      run_id: run.id,
+      thread_id: "data-thread",
+      turn_id: "data-turn",
+      ordinal: 1,
+      task: "Load the planning network.",
+      status: "running",
+      current_behavior: "Using planning data · load network",
+      latest_progress: null,
+      first_observed_sequence: 4,
+      last_observed_sequence: 5,
+      started_at: "2026-07-26T00:00:02Z",
+      completed_at: null,
+      created_at: "2026-07-26T00:00:02Z",
+      updated_at: "2026-07-26T00:00:03Z",
+    }];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input));
       if (url.pathname === `/api/runs/${run.id}/supervisor-policy`) return json(policy);
       if (url.pathname === `/api/runs/${run.id}/agents`) return json(agents);
       if (url.pathname === `/api/runs/${run.id}/agent-activities`) return json(activities);
+      if (url.pathname === `/api/runs/${run.id}/agent-executions`) return json(executions);
       if (url.pathname === `/api/tasks/${task.id}/artifacts`) return json(artifacts);
       return baseFetch(input, init);
     });
@@ -260,6 +278,7 @@ describe("WebApp direct Server client", () => {
       policy,
       agents,
       activities,
+      executions,
       artifacts,
     });
   });
