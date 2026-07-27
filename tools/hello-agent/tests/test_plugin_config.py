@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 
-def test_plugin_manifest_and_two_mcp_servers_are_wired() -> None:
+def test_plugin_manifest_and_mcp_server_are_wired() -> None:
     root = Path(__file__).resolve().parents[1]
     manifest = json.loads((root / ".codex-plugin" / "plugin.json").read_text())
     mcp_config = json.loads((root / ".mcp.json").read_text())
@@ -13,9 +13,7 @@ def test_plugin_manifest_and_two_mcp_servers_are_wired() -> None:
     assert manifest["skills"] == "./skills/"
     assert manifest["mcpServers"] == "./.mcp.json"
 
-    writer = mcp_config["mcpServers"]["hello_writer"]
-    reviewer = mcp_config["mcpServers"]["hello_reviewer"]
-    assert writer["command"] == "./bin/hello-agent-launcher"
-    assert writer["args"] == []
-    assert reviewer["command"] == "./bin/hello-agent-launcher"
-    assert reviewer["args"] == ["--reviewer-server"]
+    assert set(mcp_config["mcpServers"]) == {"hello"}
+    server = mcp_config["mcpServers"]["hello"]
+    assert server["command"] == "./bin/hello-agent-launcher"
+    assert server["args"] == []

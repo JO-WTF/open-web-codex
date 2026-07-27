@@ -303,7 +303,7 @@ Python FastMCP 的最小结构：
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
-mcp = FastMCP("Geo Tools", json_response=True)
+mcp = FastMCP("Geo Tools")
 
 class Point(BaseModel):
     latitude: float = Field(ge=-90, le=90)

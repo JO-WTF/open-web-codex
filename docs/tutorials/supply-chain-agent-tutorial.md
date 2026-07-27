@@ -1,387 +1,44 @@
-# 仓网规划：从领域能力走向真实多 Agent
+# 第三篇：从业务问题到可复核的仓网建议
 
-## 1. 本篇目标
+## 场景与决策
 
-先完成：
+华东区有上海、南京两个现有仓。业务希望把一日达覆盖率提高到 90%，并提供杭州、
+无锡两个候选点。运营负责人需要在评审会上回答：
 
-1. [Hello Agent 快速入门](hello-agent-quickstart.md)
-2. [Hello Team 双 Agent 教程](hello-agent-team.md)
+1. 当前履约和当前仓网分别是什么水平；
+2. 不开新仓、只调整分配是否足够；
+3. 增加杭州仓会带来多少覆盖提升和建模成本变化；
+4. 在给定候选点中，达到 90% 最少新增几个仓；
+5. 这些数字是否足以直接做投资决策。
 
-本篇使用相同结构回答三个供应链问题：
+本篇的目标不是展示一长串已实现能力，而是交付一份可以复核的建议。完成后，预期
+结论是：
 
-1. 当前仓网的一日到货覆盖率是多少？
-2. 如果在杭州增加仓库，时效和成本变化多少？
-3. 如果一日覆盖率目标为 90%，至少增加几个仓？
+```text
+在演示数据和给定候选点内，杭州是达到 90% 目标的最少新增仓方案。
+现有仓严格满足容量时覆盖 70%；增加杭州仓后覆盖 95%，提升 25 个百分点。
+建模总成本从 895.10 CNY 增至 1067.10 CNY，增加 172.00 CNY。
+这只是给定候选、路线、容量和有限成本项下的规划结论，不能直接替代投资决策。
+```
 
-返回[教程总入口](../multi-agent-development-tutorial.md)。
+开始前请完成[第二篇](hello-agent-team.md)。返回
+[教程总入口](../multi-agent-development-tutorial.md)。
 
----
+## 第一步：先把业务口径写清楚
 
-## 2. 从 Hello Team 映射到仓网规划
+不要从“创建几个 Agent”开始。先固定这次决策的口径：
 
-| Hello Team | 仓网规划 |
+| 项目 | 本教程采用的定义 |
 | --- | --- |
-| Writer | Data Agent |
-| Reviewer | Network Planning Agent |
-| `Greeting` | `planning-dataset.v1` |
-| `say_hello` | 数据检查、聚合和验证 |
-| `review_greeting` | 覆盖率、场景和选址 |
-| 两个短字段 | 需求、仓库、费率、时效和路线 |
-| 普通消息 | MCP Resource，未来使用 Artifact |
-
-这个表只类比“上游产生结构化交接物、下游消费并判断”的形状，不表示 Reviewer 和
-Network Planning 的业务职责相同。仓网规划能力会计算新方案，而 Hello Reviewer
-只检查、不改写。
-
-两个专业职责：
-
-- Data Agent：读取授权只读数据，整理需求、现有仓库、运输费率和历史履约；
-- Network Planning Agent：读取同一份规划数据，加入路线和候选仓，计算覆盖率、成本
-  与选址方案。
-
-为什么不让一个 Agent 全做？
-
-因为数据事实与规划决策有不同生命周期：
-
-- 数据源变化时，不应修改选址算法；
-- 算法变化时，不应重新解释原始订单；
-- Data 结果应该可以被多个规划方案复用；
-- 任何规划结论都应追溯到同一版 Dataset。
-
----
-
-## 3. 当前阶段说明
-
-当前已经实现：
-
-- Data 与 Network Planning 两组确定性能力；
-- 两个独立 MCP Server；
-- 五个供应链 Skill；
-- 版本化 MCP Resource；
-- 覆盖率、场景比较和有限候选点精确求解；
-- 两个代码托管的企业 Agent Definition 治理清单；
-- 单元测试与 MCP 启动链。
-
-当前仍未全部完成：
-
-- Definition 对应 Runtime Role 的真实发现、能力选择与 spawn provenance 闭环；
-- 两个真实子 Thread 的 Web 端到端验收；
-- Dataset 与 Simulation 的持久 Artifact 交接。
-
-所以当前短期方案是：
-
-```text
-一个供应链 Plugin
-  + Data MCP
-  + Network Planning MCP
-  + 五个 Skill
-  + 单 Thread 完整能力链
-  + 后续接入真实子 Agent 与 Artifact
-```
-
-未来平台能力补齐后，创建 Agent 和连接交接物会更直接。当前 Tool、数据合同和算法
-不需要推倒重写。
-
----
-
-## 4. 先运行现有代码
-
-实现位于：
-
-[`tools/supply-chain-network-planner`](../../tools/supply-chain-network-planner/)
-
-准备环境：
-
-```bash
-tools/supply-chain-network-planner/bin/setup-env
-```
-
-运行测试：
-
-```bash
-.local/open-web-codex/tool-envs/supply-chain-network-planner/bin/python \
-  -m pytest tools/supply-chain-network-planner/tests -q
-```
-
-期望：
-
-```text
-15 passed
-```
-
-运行两个真实 MCP Server 的 stdio smoke：
-
-```bash
-.local/open-web-codex/tool-envs/supply-chain-network-planner/bin/python \
-  tools/supply-chain-network-planner/tests/stdio_smoke.py
-```
-
-期望：
-
-```text
-Supply-chain MCP stdio smoke passed
-```
-
-它会真实完成 initialize、tools/list 和 tools/call，并分别验证 Data MCP 的
-inspect → build → validate，以及 Network MCP 的 Snapshot 创建与验证。
-
-验证五个 Skill：
-
-```bash
-for skill in tools/supply-chain-network-planner/skills/*; do
-  python3 \
-    codex/codex-rs/skills/src/assets/samples/skill-creator/scripts/quick_validate.py \
-    "$skill"
-done
-```
-
-验证 Plugin：
-
-```bash
-python3 \
-  codex/codex-rs/skills/src/assets/samples/plugin-creator/scripts/validate_plugin.py \
-  tools/supply-chain-network-planner
-```
-
-业务测试失败时，不要先增加子 Agent。多 Agent 只会让调用链更长，不会修复底层计算。
-
----
-
-## 5. 读懂最小演示数据
-
-打开：
-
-[`warehouse-network-fixture.json`](../../tools/supply-chain-network-planner/examples/data-sources/warehouse-network-fixture.json)
-
-包含：
-
-| 数据 | 内容 |
-| --- | --- |
-| 需求点 | 上海、苏州、杭州 |
+| 规划对象 | 上海、苏州、杭州共 100 个需求单位 |
 | 现有仓 | 上海、南京 |
-| 运输报价 | 两个仓的默认费率 |
-| 订单 | 六行，共 100 个需求单位 |
-
-已知结果：
-
-| 指标 | 值 |
-| --- | ---: |
-| 总需求 | 100 |
-| 上海需求 | 40 |
-| 苏州需求 | 35 |
-| 杭州需求 | 25 |
-| 促销相关需求 | 30 |
-| 有实际履约时效的数据 | 90 |
-| 实际按时需求 | 55 |
-
-为什么先用小 fixture？
-
-- 可以人工核对；
-- 不包含姓名、电话等 PII；
-- 同一输入可以重复；
-- 错误容易定位在数据、计算或调用边界。
-
-不要从百万行生产订单开始第一次 Agent 开发。
-
----
-
-## 6. 先冻结双方共享的数据合同
-
-合同链：
-
-```text
-planning_source.v1
-    ↓ Data MCP
-planning-dataset.v1
-    └── network_input
-            ↓ Network MCP
-network_snapshot.v1
-    + route_matrix.v1
-            ↓
-network_scenario_result.v1
-scenario_comparison.v1
-facility_location_solution.v1
-```
-
-类型集中在：
-
-[`models.py`](../../tools/supply-chain-network-planner/supply_chain_planner/models.py)
-
-与 Hello Team 的共享 `core.py` 一样，Data 和 Network Planning 不应分别定义：
-
-- 什么叫需求单位；
-- 一日达的秒数；
-- 当前仓关系；
-- 费率字段；
-- 路线距离和时长；
-- 结果覆盖率。
-
-每份合同至少说明：
-
-- Schema 版本；
-- 稳定业务 ID；
-- 时间范围和规划周期；
-- 数量单位与币种；
-- 数据行数和是否截断；
-- 来源时间和内容 digest；
-- 缺失、警告和错误；
-- 上游 Resource 或 Artifact 引用。
-
----
-
-## 7. Data Agent 能力
-
-Data MCP：
-
-```text
-supply_chain_data
-```
-
-实现：
-
-[`data_server.py`](../../tools/supply-chain-network-planner/supply_chain_planner/data_server.py)
-
-只暴露：
-
-```text
-inspect_planning_source
-build_planning_dataset
-validate_planning_dataset
-```
-
-### 7.1 为什么分成三个 Tool
-
-```mermaid
-flowchart LR
-    I["inspect<br/>先看范围"] --> B["build<br/>确定性聚合"]
-    B --> V["validate<br/>交接前检查"]
-```
-
-- inspect：在读取完整内容前确认数据范围、时间和规模；
-- build：生成唯一 `planning-dataset.v1`；
-- validate：在交给规划能力前检查总量和字段一致性。
-
-分步后，失败可以定位在数据范围、构建或交接验证。
-
-### 7.2 为什么只接受 `source_id`
-
-模型传入：
-
-```text
-warehouse-network-fixture
-```
-
-而不是任意本地路径、数据库密码或 SQL。服务端在部署绑定的只读目录中解析 ID。
-
-真正只读来自：
-
-- 没有写入 Tool；
-- 不接受任意文件路径；
-- 不接受凭据和任意 SQL；
-- 输入合同拒绝额外 PII；
-- 负向测试证明违规输入失败。
-
-Prompt 中写“请保持只读”不是安全边界。
-
-### 7.3 为什么聚合写成普通 Python
-
-聚合逻辑：
-
-[`data_core.py`](../../tools/supply-chain-network-planner/supply_chain_planner/data_core.py)
-
-确定性计算：
-
-- 各需求点需求量；
-- 订单行数；
-- 促销需求量和占比；
-- 已观察与未观察履约量；
-- 历史一日达比例；
-- 数据质量问题；
-- Network Planning 所需 `network_input`。
-
-Agent 负责决定何时需要这些数据，普通代码负责可重复计算。
-
-### 7.4 Data Skill
-
-[`prepare-planning-dataset/SKILL.md`](../../tools/supply-chain-network-planner/skills/prepare-planning-dataset/SKILL.md)
-
-Skill 只规定：
-
-1. 先 inspect；
-2. 再 build；
-3. 最后 validate；
-4. 哪些质量问题必须停止；
-5. 交付哪些摘要和引用。
-
-Skill 不保存数据库密码，也不重新实现聚合公式。
-
----
-
-## 8. Network Planning Agent 能力
-
-Network MCP：
-
-```text
-supply_chain_planner
-```
-
-实现：
-
-[`server.py`](../../tools/supply-chain-network-planner/supply_chain_planner/server.py)
-
-Tool 分组：
-
-| 阶段 | Tool | 作用 |
-| --- | --- | --- |
-| 准备 | `prepare_network_snapshot` | 固化本次规划数据 |
-| 路线 | `register_route_matrix` | 保存完整仓到需求点路线 |
-| 当前 | `evaluate_current_coverage` | 计算当前关系覆盖率 |
-| 场景 | `evaluate_network_scenario` | 计算指定设施组合 |
-| 比较 | `compare_network_scenarios` | 计算两个兼容场景差值 |
-| 选址 | `solve_facility_location` | 求解目标覆盖率 |
-| 验证 | `validate_network_resource` | 对外发布前检查 |
-
-### 8.1 为什么不重新读取订单
-
-Network Planning 从 Data 产生的同一 `planning-dataset.v1` 中读取
-`network_input`。
-
-它可以增加：
-
-- 候选设施；
-- 候选设施容量；
-- 固定成本和处理成本；
-- 候选设施费率；
-- 候选设施路线。
-
-它不能静默修改：
-
-- 历史需求；
-- 当前仓关系；
-- 规划周期；
-- 币种；
-- 服务政策。
-
-数据变化时创建新的 Dataset 和 Snapshot。
-
-### 8.2 为什么路线继续使用 `map_utils`
-
-地址转坐标和导航路线已有明确能力所有者：
-
-```text
-地址
-  ↓ map_utils.batch_geocode
-坐标
-  ↓ map_utils.distance_matrix
-距离和导航时长
-  ↓ supply_chain_planner.register_route_matrix
-```
-
-Network Planner 不重复保存地图 Key，不重新实现 Provider、计费、超时和导航语义。
-
-### 8.3 一日达为什么不只看导航时长
-
-当前合同：
+| 候选仓 | 杭州、无锡 |
+| 服务目标 | 一日达覆盖率至少 90% |
+| 一日达 | 端到端时效不超过 86,400 秒 |
+| 优化优先级 | 先最少新增仓，再比较建模总成本 |
+| 币种 | CNY |
+
+这里的“一日达”不是地图导航时间小于 24 小时。演示合同使用：
 
 ```text
 端到端时效
@@ -391,359 +48,376 @@ Network Planner 不重复保存地图 Key，不重新实现 Provider、计费、
   + 末端缓冲
 ```
 
-只有总时长不超过：
+如果这个公式、需求周期或成本范围没有先固定，不同方案的覆盖率与成本就无法比较。
+
+## 第二步：准备环境
+
+如果上一章还没有准备环境，运行：
+
+```bash
+tools/supply-chain-network-planner/bin/setup-env
+```
+
+如果第二篇已经成功准备环境，不必重复运行。新建真实任务后，展开侧栏
+**MCP Servers**，确认 `supply_chain_data` 与 `supply_chain_planner` 都是 `ready`。
+如果不是，先回到第二篇末尾的排错检查。
+
+## 第三步：准备可追踪的数据基线
+
+在真实 Codex 模式下新建任务，发送：
 
 ```text
-max_delivery_seconds = 86400
+我们要评估华东一日达仓网。
+
+请使用 $prepare-planning-dataset 检查并读取
+source_id `warehouse-network-fixture`，构建并验证 planning-dataset.v1。
+
+先只回答：
+- 数据覆盖的规划周期、订单行数和需求总量；
+- 上海、苏州、杭州的需求分布；
+- 有实际时效记录的需求量和历史一日达比例；
+- 促销与缺失数据警告。
+
+不要开始推荐候选仓。
 ```
 
-才算一日达。
+Agent 应先 `inspect`，再 `build`，最后 `validate`。预期数据事实：
 
-只看地图导航时间会系统性高估覆盖率。
+| 事实 | 值 |
+| --- | ---: |
+| 订单行数 | 6 |
+| 总需求 | 100 |
+| 上海 / 苏州 / 杭州 | 40 / 35 / 25 |
+| 有实际时效记录 | 90 |
+| 历史一日达需求 | 55 |
+| 历史一日达比例 | 55 / 90 ≈ 61.1% |
+| 促销相关需求 | 30 |
+| 缺少实际时效 | 10 |
 
-### 8.4 两种“当前覆盖率”
+### 为什么数据职责不直接给选址结论
 
-| 结果 | 覆盖率 | 回答的问题 |
-| --- | ---: | --- |
-| 保持当前仓库分配关系 | 75% | 当前关系下时效怎样，同时报告超容量 |
-| 不新增仓但严格满足容量 | 70% | 现有仓网在约束下理论最优多少 |
-| 增加杭州候选仓 | 95% | 指定新增仓场景怎样 |
+数据准备知道哪些订单存在、怎样聚合、哪些字段缺失；它不拥有候选点、路线和选址
+目标。如果它在同一步里直接说“应该开杭州仓”，结论就无法区分：
 
-75% 与 70% 不矛盾。第一项允许报告当前超容量事实，第二项要求重新分配后严格满足
-容量。
+- 来源数据事实；
+- 规划模型假设；
+- 候选方案计算；
+- Agent 的解释。
 
-### 8.5 90% 目标怎样求解
+Data Tool 因此交付一个经过验证的 `planning-dataset.v1` Resource。后续步骤必须引用
+同一版数据，而不是在消息中重新概括后再凭概括计算。
 
-当前求解器：
+## 第四步：建立本次规划的快照与路线
 
-1. 保留现有仓开启；
-2. 枚举输入的有限候选仓组合；
-3. 先找达到目标的最少新增仓数量；
-4. 同样数量时选择建模总成本更低的方案；
-5. 最多支持 14 个候选点。
+仓网计算还需要候选仓与路线。教程提供两个可人工检查的文件：
 
-演示结果：
+- [`network-input.json`](../../tools/supply-chain-network-planner/examples/network-input.json)
+  包含两个现有仓、杭州和无锡候选仓、容量、费率与服务政策；
+- [`route-matrix-input.json`](../../tools/supply-chain-network-planner/examples/route-matrix-input.json)
+  包含 4 个设施到 3 个需求点的 12 条演示路线。
+
+在生产场景中，候选点是规划人员的显式输入，路线通常由 `map_utils` 的导航能力获得。
+本教程使用固定路线，避免地图密钥和实时路况影响第一次学习。
+
+继续发送：
 
 ```text
-选择 candidate-hangzhou
-新增 1 个仓
-覆盖率达到 95%
+请准备本次仓网规划基线。
+
+以刚才 planning-dataset.v1 中的 network_input 为需求、现有仓、规划周期、
+币种和服务政策的来源。再从
+`tools/supply-chain-network-planner/examples/network-input.json`
+加入杭州和无锡候选仓及其费率；不要修改已有需求和现有仓事实。
+
+使用
+`tools/supply-chain-network-planner/examples/route-matrix-input.json`
+中的 12 条演示路线。
+
+创建 network_snapshot.v1 和 route_matrix.v1，并分别验证。
+如果共享字段与 Dataset 不一致，停止而不是自动选择一个版本。
 ```
 
-它只保证给定候选点集合内的精确解，不能声称在地图任意位置找到全球最优仓网。
+这里的 **Snapshot（快照）** 是一次计算使用的完整、不可变输入状态。数据、候选、
+服务政策或路线有任何变化，都创建新快照，而不是改写旧结果的输入。
 
----
+**Route Matrix（路线矩阵）** 是每个设施到每个需求点的距离与时长表。本例有 4 个
+设施、3 个需求点，所以完整矩阵必须有 `4 × 3 = 12` 条路线。
 
-## 9. 五个 Skill 为什么不是五个 Agent
+本篇反复要求“验证后再继续”，可以把它理解为一道验证门：输入或结果没有通过检查，
+Agent 就停止，而不是带着错误继续生成建议。
 
-| Skill | 工作流 |
-| --- | --- |
-| `prepare-planning-dataset` | 准备 Data 交接物 |
-| `prepare-network-baseline` | 创建快照和路线 |
-| `evaluate-network-scenario` | 评估当前或新增仓 |
-| `optimize-network-to-target` | 求解目标覆盖率 |
-| `validate-network-result` | 发布前验证 |
-
-一个 Network Planning Agent 可以掌握多种工作方法：
+Tool 调用中应出现：
 
 ```text
-Agent = 执行工作的角色
-Skill = 这个角色掌握的一套操作流程
+supply_chain_planner.prepare_network_snapshot
+  → supply_chain_planner.register_route_matrix
+  → supply_chain_planner.validate_network_resource
 ```
 
-五个 Skill 不代表五个独立 Agent。
+路线必须覆盖每个设施—需求点组合。缺一条路线时，Agent 应报告缺口；它不能默默用
+直线距离或模型常识补一个时长。
 
----
+## 第五步：先计算“不开新仓”的基准
 
-## 10. 为什么两个仓网能力放在一个目录
+发送：
 
 ```text
-tools/supply-chain-network-planner/
-├── supply_chain_planner/data_server.py
-├── supply_chain_planner/server.py
-├── supply_chain_planner/models.py
-├── skills/
-└── .mcp.json
+使用已经验证的 Snapshot 和 Route Matrix 计算当前覆盖率。
+
+分别给出：
+1. 保持记录中的当前仓库关系时的覆盖率；
+2. 不新增仓、严格满足现有仓容量并允许重新分配时的覆盖率。
+
+验证结果，并解释两个数字为什么可能不同。
 ```
 
-这与 Hello Team 相同：
+预期：
+
+| 指标 | 覆盖需求 | 覆盖率 | 建模总成本 |
+| --- | ---: | ---: | ---: |
+| 当前记录关系 | 75 / 100 | 75% | 1038.00 CNY |
+| 现有仓优化基准 | 70 / 100 | 70% | 895.10 CNY |
+
+当前记录把全部需求都关联到上海仓，但上海容量只有 40。第一行保留关系并报告超容量；
+第二行严格遵守上海 40、南京 30 的容量，所以最多分配 70。后续评价杭州仓时，应与
+第二行的“现有仓优化基准”比较，不能把不同口径的 75% 当基准。
+
+## 第六步：评价杭州方案
+
+发送：
 
 ```text
-Plugin 目录 = 能力发布边界
-Runtime Thread = Agent 执行身份
+请使用 $evaluate-network-scenario 比较两个同口径方案：
+
+- baseline：只启用 warehouse-shanghai 和 warehouse-nanjing；
+- add-hangzhou：在相同 Snapshot、Route Matrix 和服务政策下，
+  再启用 candidate-hangzhou。
+
+验证两个方案和 comparison，报告覆盖率、覆盖需求、建模总成本及差值。
+不要把当前记录关系的 75% 当作 baseline。
 ```
 
-当前共目录的原因：
+预期比较：
 
-1. 共享 `planning-dataset.v1`、`NetworkInput` 和服务政策；
-2. 使用同一 Python 依赖；
-3. 由同一领域包一起测试和发布；
-4. 当前还没有完整按 Agent 动态选择 capability root；
-5. 提前拆目录不会自动形成权限隔离。
+| 方案 | 覆盖需求 | 覆盖率 | 建模总成本 |
+| --- | ---: | ---: | ---: |
+| 现有仓优化基准 | 70 / 100 | 70% | 895.10 CNY |
+| 增加杭州仓 | 95 / 100 | 95% | 1067.10 CNY |
+| 差值 | +25 | +25 个百分点 | +172.00 CNY |
 
-逻辑边界仍然分开：
+“建模总成本”只包含当前合同中的设施固定成本、处理成本和距离运输成本。它没有包含
+库存、建设、税费、关仓、缺货损失、碳成本等，因此不能写成“公司总成本只增加
+172 元”。
 
-| 边界 | Data | Network Planning |
-| --- | --- | --- |
-| MCP Server | `supply_chain_data` | `supply_chain_planner` |
-| Skill | 数据准备 | 基准、场景、优化、验证 |
-| Resource URI | `supply-chain-data://...` | `supply-chain://...` |
-| 未来 Runtime Role | Data Role | Network Role |
-| 未来子 Thread | Data Agent | Network Planning Agent |
+## 第七步：让目标反推候选仓数量
 
-两个 MCP Server 是职责边界，不自动等于权限边界。真正权限来自只读连接、Tool
-集合、服务端资源绑定和平台授权。
-
-未来平台能直接按 Agent 发布和选择能力后，开发体验会更符合直觉。当前合同和 Tool
-仍可复用。
-
-只有出现独立团队、依赖、发布、部署或授权需求时，才拆成多个 Plugin。
-
----
-
-## 11. 先跑通单 Thread 业务链
-
-```mermaid
-sequenceDiagram
-    participant C as 当前 Codex Thread
-    participant D as Data MCP
-    participant M as map_utils
-    participant N as Network MCP
-
-    C->>D: inspect、build、validate
-    D-->>C: planning-dataset.v1 Resource
-    C->>M: 计算导航路线
-    M-->>C: 路线矩阵
-    C->>N: 创建 Snapshot 并注册路线
-    C->>N: 计算当前、场景或选址
-    N-->>C: 结构化结果
-    C->>N: validate
-```
-
-这一阶段验证：
-
-- 两个 MCP Schema 能衔接；
-- Data Source 保持只读；
-- Dataset 总量能对账；
-- 路线完整；
-- 覆盖率和成本可重复；
-- 缺字段、缺路线和不可达明确失败；
-- Tool 失败时 Agent 不编造结果。
-
-业务链稳定前不要引入子 Agent，否则难以区分数据、Tool、Skill、消息和 Runtime
-生命周期错误。
-
----
-
-## 12. 从 Resource 演进到 Artifact
-
-当前 Data Tool 发布：
+现在不再指定杭州，改为提出业务目标：
 
 ```text
-supply-chain-data://resources/<opaque-id>
+请使用 $optimize-network-to-target，在当前 Snapshot 的杭州、无锡候选点中，
+求一日达覆盖率至少 90% 时最少需要新增几个仓。
+
+验证 solution 和 result。报告选择的候选仓、覆盖率、建模总成本、
+评估的候选组合数量，以及“最优”结论的适用范围。
 ```
 
-Resource 让后续步骤读取同一份 Dataset，而不是在消息中复制订单。
+预期：
 
-真正跨 Agent 的目标：
+```text
+状态：达到目标
+新增仓数量：1
+选择：candidate-hangzhou
+覆盖率：95%
+建模总成本：1067.10 CNY
+评估的候选组合：3
+```
+
+求解器先最小化新增仓数量，同样数量时再选择建模总成本更低的方案。这里的“最优”
+只表示：
+
+> 在输入的杭州、无锡候选点，给定路线、容量、费率和服务政策下的精确结果。
+
+它没有搜索地图上的任意位置，也没有证明杭州是现实世界的全球最优仓址。
+
+## 第八步：把结果写成决策摘要
+
+最后发送：
+
+```text
+请把已经验证的结果整理成一页决策摘要，包含：
+
+1. 建议与适用范围；
+2. 历史履约、当前关系、现有仓优化三个不同口径；
+3. 杭州方案相对同口径 baseline 的覆盖和成本差值；
+4. 90% 目标求解结果；
+5. 数据质量警告；
+6. 已计入与未计入的成本；
+7. 做投资决策前还要验证的三项事实。
+
+每个数字都注明分母、币种或规划周期。不要产生未经 Tool 验证的新数字。
+```
+
+一份合格答案应明确区分：
+
+- 历史实际表现：55 / 90，约 61.1%；
+- 当前记录关系的模型覆盖：75 / 100，且存在超容量；
+- 现有仓严格容量优化：70 / 100；
+- 杭州候选方案：95 / 100；
+- 投资建议：仍需真实租建成本、库存策略和需求预测等补充验证。
+
+## 为什么这里确实适合多 Agent
+
+做到这一步后，再回看职责会更直观：
+
+```text
+Supervisor：对“是否开杭州仓”负责
+├── Data Agent：对需求基线、历史履约和数据质量负责
+└── Network Planning Agent：对路线、容量、方案计算和求解范围负责
+```
+
+**Agent** 是在一个 Thread 中为目标采取行动的执行者；**Skill** 是 Agent 掌握的一套
+工作方法；**MCP Server** 提供 Tool 和 Resource；它们不是同一层概念。
+
+一个 Network Planning Agent 可以使用准备基线、评价方案、目标求解、结果验证等多个
+Skill。五个 Skill 不代表五个 Agent。
+
+真实协作时，Supervisor 应把经过验证的 Dataset 引用交给规划子 Thread，而不是把
+订单摘要复制成一段新的自然语言。它还应拒绝：
+
+- 未通过验证的数据；
+- 路线不完整的快照；
+- 不同周期或服务政策的方案比较；
+- 把有限候选最优夸大成全球最优；
+- 把建模成本写成完整财务成本。
+
+## 可选概念：Resource 什么时候要升级为 Artifact
+
+本教程在一个 Thread 中使用 MCP Resource 保存较大的中间结果。Resource 适合当前
+MCP 内部重复读取。
+
+当 Data Agent 与 Network Planning Agent 运行在不同子 Thread，而且结果需要长期
+身份、授权、版本和保留策略时，应使用平台 **Artifact**：
+
+> Artifact 是独立于某次消息或运行、可以被授权读取和长期管理的成果。
 
 ```text
 Data Agent
-  ↓
-planning-dataset.v1 Artifact
-  ↓ 同 Task 授权读取
-Network Planning Agent
-  ↓
-network-simulation.v1 Artifact
-  ↓
-Supervisor 最终报告
+  → planning-dataset.v1 Artifact
+  → Network Planning Agent
+  → network-simulation.v1 Artifact
+  → Supervisor
 ```
 
-Artifact 应拥有：
+不要把短结论都变成 Artifact，也不要把大型 Dataset 整份复制进 Agent 消息。
 
-- 独立 ID；
-- Schema 和版本；
-- 生产者与 provenance；
-- Task 级读取授权；
-- 保留、替代和删除生命周期。
+## 再做一次业务规则修改
 
-Run、Thread、Turn 和 Item 只是来源，不应拥有 Artifact 的长期身份。
+现在做一个贴近业务的小改动。假设投资评审规定：
 
-当前 Resource 是短期业务交接方式，不等于持久 Artifact。
+> 缺少实际履约时效的需求超过总需求 5% 时，数据集不能用于选址决策。
 
----
+当前演示数据缺失 `10 / 100 = 10%`，所以改造后 Agent 应停止，而不是继续给出杭州
+建议。按照下面的顺序修改。
 
-## 13. 升级为两个真实仓网 Agent
+先在
+[`test_data_core.py`](../../tools/supply-chain-network-planner/tests/test_data_core.py)
+的 `test_builds_planning_dataset_and_network_handoff` 中，把：
 
-目标：
+```python
+assert dataset.data_quality.valid is True
+```
+
+改为：
+
+```python
+assert dataset.data_quality.valid is False
+assert any(
+    "10/100 demand units" in item
+    for item in dataset.data_quality.errors
+)
+```
+
+只运行这一个测试文件：
+
+```bash
+.local/open-web-codex/tool-envs/supply-chain-network-planner/bin/python \
+  -m pytest tools/supply-chain-network-planner/tests/test_data_core.py -q
+```
+
+此时应该失败，因为代码仍然只产生 warning。这个失败先证明测试确实覆盖了新需求。
+
+再打开
+[`data_core.py`](../../tools/supply-chain-network-planner/supply_chain_planner/data_core.py)，
+在 `_analyze` 中把现有的 `if unobserved:` 块替换为：
+
+```python
+if unobserved:
+    missing_detail = (
+        f"{unobserved}/{total_units} demand units "
+        f"({unobserved / total_units:.2%}) have no observed delivery duration"
+    )
+    if unobserved / total_units > 0.05:
+        errors.append(missing_detail)
+    else:
+        warnings.append(missing_detail)
+```
+
+再次运行这个测试文件，确认通过；然后运行全部测试，确认其他计算没有被破坏。
+
+检查
+[`prepare-planning-dataset/SKILL.md`](../../tools/supply-chain-network-planner/skills/prepare-planning-dataset/SKILL.md)
+会发现它已经要求 Agent 不得把带验证错误的数据交付为可决策结果，所以这里不需要
+修改 Skill。最后新建任务，再请求评估 `warehouse-network-fixture`。正确结果是报告
+`10%` 缺失超过门槛并停止选址，而不是继续输出杭州方案。
+
+这个练习同时保护三层职责：
 
 ```text
-Root Supervisor Thread
-├── Data Agent Thread
-└── Network Planning Agent Thread
+普通代码计算缺失比例
+  → Tool 返回 blocking error
+  → Skill 规定停止交付
+  → Agent 向用户说明缺什么
 ```
 
-需要逐步完成：
+这里不需要修改 Tool 签名、Skill、Agent 职责，也不需要新增 MCP Server：输入输出
+结构和职责都没有变化，只是 Data Tool 内部的质量规则变了。这正是先判断“变化属于
+哪一层”的价值。
 
-1. 复用已代码发布的 Data 与 Network Agent Definition；
-2. 让 Codex Profile 真实发现两个 Runtime Role；
-3. Definition 与 Role 不匹配时明确失败；
-4. Supervisor 使用 Codex 原生协作 Tool 创建子 Thread；
-5. 平台只投影真实 Runtime 事件；
-6. Data 通过 Artifact 交给 Network；
-7. 覆盖完成、失败、拒绝、取消、中断和恢复。
+## 常见失败与判断
 
-只有真实子 Thread 存在，才能称为两个 Agent。平台数据库不能插入模拟
-“Data Agent running”记录替代 Runtime。
-
-当前完整 trajectory 仍为 experimental，这一节是后续 M2 验收目标。
-
----
-
-## 14. 推荐开发顺序
-
-### 阶段 1：合同和 fixture
-
-- 固定业务问题；
-- 定义单位、币种和一日达；
-- 准备可人工核对的数据；
-- 建立已知结果。
-
-退出条件：同一输入重复产生相同指标。
-
-### 阶段 2：Data Tool
-
-- 只读输入；
-- inspect、build、validate；
-- 总量对账；
-- 质量错误阻止决策就绪。
-
-退出条件：稳定产生 `planning-dataset.v1`。
-
-### 阶段 3：Network Tool
-
-- Snapshot；
-- 完整路线；
-- 覆盖率与成本；
-- 场景和有限候选点选址。
-
-退出条件：基准、场景和不可行目标都可重复验证。
-
-### 阶段 4：单 Thread Skill 编排
-
-- 自然语言触发正确 Skill；
-- Tool 失败不编造；
-- 完整链无需人工指定每个 Tool。
-
-退出条件：业务链稳定。
-
-### 阶段 5：真实子 Agent
-
-- 两个 Role；
-- 两个 Definition；
-- 真实父子 Thread；
-- 正确终态和恢复。
-
-退出条件：app-server 真实轨迹通过。
-
-### 阶段 6：Artifact
-
-- 独立 Artifact ID；
-- 同 Task 授权读取；
-- 其他 Task 拒绝；
-- 大内容不进入消息。
-
-退出条件：Network 在另一个 Thread 读取同一 Data Artifact。
-
----
-
-## 15. 第一次修改建议
-
-不要把第一次修改设为生产数据库接入。
-
-建议增加一个数据质量规则：
-
-> 没有实际履约时效的需求超过总需求 20% 时，必须产生警告。
-
-顺序：
-
-1. 先在 `test_data_core.py` 增加失败测试；
-2. 构造未观察需求超过 20% 的内存数据；
-3. 断言出现明确 warning；
-4. 在 `data_core.py` 实现；
-5. 运行 Data 测试和全部供应链测试；
-6. 检查 Dataset 总量仍然对账；
-7. 确认 Skill 会报告 warning。
-
-这个练习可以学习：
-
-- Tool 计算事实；
-- Skill 规定怎样报告事实；
-- 测试保护合同；
-- 不需要生产权限。
-
----
-
-## 16. 故障对照表
-
-| 现象 | 优先检查 |
+| 现象 | 先回到哪一步 |
 | --- | --- |
-| Data 总量不一致 | fixture、聚合和 `network_input` |
-| 覆盖率不符合预期 | 服务政策、路线、容量和当前关系 |
-| 缺少 Tool | Plugin 发现和 `.mcp.json` |
-| 新 Thread 看不到 Skill | 是否在能力变更后新建 Thread |
-| 地图调用失败 | `map_utils` Provider 和配置 |
-| 选址 infeasible | 候选容量、路线和目标比例 |
-| Agent 编造结果 | Skill 失败规则和 MCP 状态 |
-| 两个 Agent 状态重复 | Runtime 事件投影和恢复 |
-| 跨 Task 可读取结果 | Artifact 授权边界 |
+| 总需求不是 100 | 数据来源、聚合和 Dataset 对账 |
+| 历史履约率分母用了 100 | 检查 10 个缺失实际时效的需求 |
+| 当前 75% 与优化 70% 被说成矛盾 | 检查容量约束和指标标签 |
+| 杭州提升用 75% 作基准 | 改用同口径的现有仓优化 70% |
+| 路线缺失仍给出结果 | 停止并补齐 Route Matrix |
+| Agent 给出 Tool 中没有的数字 | 检查调用轨迹和失败规则 |
+| 90% 目标被称为全球最优 | 把结论限定在给定候选点 |
+| 成本被当成完整投资回报 | 列出合同未包含的成本项 |
 
----
+## 你在本篇实际完成了什么
 
-## 17. 完成检查表
+你真实验证的是一个任务中的完整能力链：
 
-下面分成两个阶段。不要因为长期项尚未完成，就误判当前 Tool 实现失败。
+```text
+Data MCP
+  → Dataset Resource
+  → Network Planning MCP
+  → 方案与验证结果
+```
 
-### 当前短期方案
+两个 MCP Server 形成代码职责边界，但不自动变成两个有独立上下文的 Agent。你已经
+学会怎样设计 Data Agent、Network Planning Agent 和 Supervisor 的职责；当前练习
+没有把单任务调用包装成真实多 Agent 运行。
 
-#### Data
+## 完成标志
 
-- [ ] 只读 Tool；
-- [ ] 不接受任意 SQL、密码或本地路径；
-- [ ] Dataset 总量可对账；
-- [ ] 同一输入身份稳定；
-- [ ] 质量问题明确报告。
-
-#### Network Planning
-
-- [ ] 使用同一 Dataset；
-- [ ] 路线有来源；
-- [ ] 一日达使用端到端时效；
-- [ ] 实际覆盖和优化覆盖分开；
-- [ ] 成本使用同一币种和周期；
-- [ ] 算法声明候选范围和假设。
-
-#### 验证
-
-- [ ] 15 项供应链测试通过；
-- [ ] 两个 MCP Server 的真实 stdio smoke 通过；
-- [ ] 五个 Skill 通过校验；
-- [ ] Plugin 通过校验；
-- [ ] 平台可以列出两份代码托管的 Agent Definition；
-- [ ] 新 Thread 发现两个 MCP Server 和五个 Skill；
-- [ ] 单 Thread 可完成 Data → 路线 → Network 的业务链；
-- [ ] Tool 失败时不编造结果。
-
-### 长期多 Agent 升级
-
-- [ ] 两个 Runtime Role 可发现；
-- [ ] 两个 Agent Definition 与真实 Runtime Role 正确绑定；
-- [ ] Supervisor 创建真实子 Thread；
-- [ ] Dataset 通过授权 Artifact 交接；
-- [ ] 失败、取消和恢复有明确终态；
-- [ ] 浏览器状态来自真实 Runtime 事件。
-
-#### 目标验收
-
-- [ ] 只读和跨 Task 负向测试通过；
-- [ ] 真实 app-server 多 Agent 轨迹通过。
+- [ ] 能人工解释 100、90、55 三个数据事实；
+- [ ] Dataset、Snapshot、Route Matrix 和最终结果都通过验证；
+- [ ] 能解释历史履约、当前关系和现有仓优化的差异；
+- [ ] 杭州方案只与同口径 70% baseline 比较；
+- [ ] 90% 目标返回一个杭州候选仓和 95% 覆盖率；
+- [ ] 决策摘要列出了数据警告、成本范围和下一步验证；
+- [ ] 能解释 Data Agent、Network Planning Agent 和 Supervisor 为什么分工；
+- [ ] 能说明当前单 Thread 能力链与真实多 Agent 轨迹的差别。

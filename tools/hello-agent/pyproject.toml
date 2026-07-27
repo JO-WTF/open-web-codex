@@ -5,10 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "open-web-codex-hello-agent"
 version = "0.1.0"
-description = "Minimal Writer and Reviewer MCP tools for learning Codex Agent development"
+description = "Minimal Python Tool and MCP Server for learning Codex Agent development"
 requires-python = ">=3.11"
 dependencies = [
   "mcp>=1.27,<2",
+  "pydantic>=2.11,<3",
 ]
 
 [project.optional-dependencies]

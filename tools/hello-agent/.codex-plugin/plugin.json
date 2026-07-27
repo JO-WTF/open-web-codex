@@ -1,23 +1,21 @@
 {
   "name": "hello-agent",
   "version": "0.1.0",
-  "description": "A minimal Writer and Reviewer Agent capability example for Codex",
+  "description": "A minimal Python Tool example for learning Codex Agent development",
   "author": {
     "name": "Open Web Codex"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "Hello Agent",
-    "shortDescription": "Learn one-Agent and two-Agent tool workflows.",
-    "longDescription": "Adds a deterministic greeting Writer, an independent Reviewer, two concise Skills, and two MCP servers as the smallest inspectable Agent capability example.",
+    "shortDescription": "Learn how one Python function becomes an Agent Tool.",
+    "longDescription": "Adds one deterministic greeting Tool and one concise Skill as the smallest inspectable Codex Agent capability example.",
     "developerName": "Open Web Codex",
     "category": "Productivity",
     "capabilities": [
-      "Structured greeting generation",
-      "Independent greeting review",
-      "Minimal multi-Agent teaching workflow"
+      "Structured greeting generation"
     ],
-    "defaultPrompt": "Create and review a structured greeting using the Hello Agent tools."
+    "defaultPrompt": "Use the Hello Agent Tool to create one structured greeting."
   },
   "mcpServers": "./.mcp.json"
 }

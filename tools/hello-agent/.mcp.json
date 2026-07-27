@@ -1,22 +1,8 @@
 {
   "mcpServers": {
-    "hello_writer": {
+    "hello": {
       "command": "./bin/hello-agent-launcher",
       "args": [],
-      "cwd": ".",
-      "startup_timeout_sec": 30,
-      "tool_timeout_sec": 30,
-      "default_tools_approval_mode": "approve",
-      "env_vars": [
-        "OPEN_WEB_CODEX_DATA_DIR",
-        "OPEN_WEB_CODEX_HELLO_AGENT_VENV"
-      ]
-    },
-    "hello_reviewer": {
-      "command": "./bin/hello-agent-launcher",
-      "args": [
-        "--reviewer-server"
-      ],
       "cwd": ".",
       "startup_timeout_sec": 30,
       "tool_timeout_sec": 30,

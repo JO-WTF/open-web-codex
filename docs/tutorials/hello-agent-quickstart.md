@@ -1,18 +1,142 @@
-# Hello Agent：15 分钟跑通第一个 Tool
+# 第一篇：从一个 Python 函数到第一个 Agent Tool
 
-## 1. 本篇目标
+## 这篇要解决什么
 
-完成本篇后，用户输入：
-
-> 请使用 `$say-hello` 向小林问好。
-
-Codex 会真实调用：
+假设你只写过普通 Python，现在希望 Agent 能读取业务数据、调用内部系统或执行一段
+可靠计算。你首先需要理解的不是一堆名词，而是这条开发路径：
 
 ```text
-hello_writer.say_hello
+先写清业务目标
+  → 判断哪些事让 Agent 决定，哪些事必须由代码执行
+  → 把普通 Python 能力公开成 Tool
+  → 告诉 Agent 什么时候、按什么规则使用
+  → 在真实任务中观察调用并验证结果
+  → 根据新需求修改正确的那一层
 ```
 
-并得到：
+本篇使用“向指定的人问好”作为最小练习。模型本来就会问好，所以它不是值得上线的
+业务 Tool；选择它只是为了让输入、输出和错误都能一眼看懂。学会链路后，第二、三篇
+会把同样的方法用于订单数据和仓网规划。
+
+仓库已经提供一份可以运行的最小示例。你不会从空文件开始抄代码，而是按以下顺序：
+
+1. 先运行普通 Python，知道最终要交给 Agent 的能力是什么；
+2. 再沿着调用链理解每个文件为什么存在；
+3. 让真实 Agent 调用它；
+4. 最后亲手增加“正式语气”，完成一次从需求到验证的改造。
+
+完成后，你应该能独立判断：
+
+- 改计算或业务规则时，为什么改 `core.py`；
+- 改 Agent 可传的参数或可调用的操作时，为什么改 Tool；
+- 改使用时机和工作步骤时，为什么改 Skill；
+- 为什么这些变化都不是“重新训练模型”；
+- 什么情况下才需要另一个 Agent 或子任务。
+
+返回[教程总入口](../multi-agent-development-tutorial.md)。
+
+## 开始前：确认你能完成到哪一步
+
+前半篇只需要：
+
+- Python 3.11 或更高版本；
+- 能从网络安装 Python 包；
+- 终端位于 `open-web-codex/` 仓库根目录。
+
+最终让真实 Agent 调用 Tool，还需要已经运行的 open-web-codex 平台、可用的模型
+Provider，以及真实 Codex 模式。**Provider** 是向 Codex 提供模型的服务；Fake
+Runtime 只生成用于界面联调的模拟事件，不能证明 Skill 或 MCP Tool 被真实调用。
+如果平台还没准备好，可以先完成前五步，再按
+[本地运行手册](../mvp-runbook.md)准备平台。
+
+先确认 Python 和当前目录：
+
+```bash
+python3 --version
+git rev-parse --show-toplevel
+```
+
+第一条应显示 `Python 3.11` 或更高版本；第二条路径应以 `open-web-codex` 结尾。
+
+然后准备这个示例自己的隔离环境：
+
+```bash
+tools/hello-agent/bin/setup-env
+```
+
+预期最后一行类似：
+
+```text
+Hello Agent environment is ready: .../tool-envs/hello-agent
+```
+
+这个脚本会：
+
+1. 检查 Python 版本；
+2. 在 `.local/open-web-codex/tool-envs/hello-agent` 创建虚拟环境；
+3. 安装 `mcp`、`pydantic` 和示例维护测试所需的 `pytest`；
+4. 把 `tools/hello-agent` 安装为可编辑的本地 Python 包。
+
+它不会修改系统 Python。后续命令都明确使用这个虚拟环境。
+
+## 第一步：先定义目标和边界
+
+用户目标是：
+
+> 向一个明确的人问好。
+
+先把任务拆成 Agent 的工作和代码的工作：
+
+| 谁负责 | 本例负责什么 | 真实业务中的对应例子 |
+| --- | --- | --- |
+| Agent | 理解用户是否在请求问候，缺少姓名时追问 | 理解“查订单是否超时”的意图 |
+| Python | 校验姓名并返回固定结构的结果 | 查询订单、计算费用、写入系统 |
+
+为什么不让模型直接生成结果？
+
+本例中当然可以直接生成。这里故意用一件简单的事学习连接机制。真实项目中，以下能力
+通常应该写成 Tool：
+
+- 必须读取模型不知道的实时或私有数据；
+- 必须写数据库、发消息、创建工单等产生真实副作用；
+- 必须按照固定公式、权限或合规规则执行；
+- 结果需要结构化、可测试、可审计。
+
+“总结这段文字”“提出几个方案”通常适合由 Agent 完成；“查库存”“算运费”“提交
+退款”通常需要 Tool。先划清这条边界，是开发 Agent 的第一步。
+
+## 第二步：把业务规则写成普通 Python
+
+打开 [`core.py`](../../tools/hello-agent/hello_agent/core.py)：
+
+```python
+from pydantic import BaseModel
+
+MAX_NAME_CHARACTERS = 40
+
+
+class Greeting(BaseModel):
+    name: str
+    message: str
+
+
+def build_greeting(name: str) -> Greeting:
+    clean_name = name.strip()
+    if not clean_name:
+        raise ValueError("name must not be empty")
+    if len(clean_name) > MAX_NAME_CHARACTERS:
+        raise ValueError("name must contain at most 40 characters")
+    return Greeting(name=clean_name, message=f"你好，{clean_name}！")
+```
+
+这段代码还不是 Agent，也不是 Tool，只是普通 Python。
+
+### `Greeting` 是什么
+
+`Greeting` 是本例自己定义的返回数据结构，不是 Codex 或 MCP 规定的类名。你可以按
+业务需要把它换成 `OrderStatus`、`ShippingQuote` 或其他名称。
+
+它继承 Pydantic 的 `BaseModel`，表示结果必须有两个字符串字段：
 
 ```json
 {
@@ -21,368 +145,125 @@ hello_writer.say_hello
 }
 ```
 
-本篇只学习 Agent、Skill、MCP 和 Tool。它还不是多 Agent。
+这里不用普通 `dict`，是因为明确的类型既能检查数据，也能在下一步帮助 MCP 生成
+Tool 的输出 Schema。可以先把 `BaseModel` 理解成“带数据校验能力的 dataclass”。
 
-返回[教程总入口](../multi-agent-development-tutorial.md)。
+设计自己的结果结构时，至少做到：
 
----
+- 字段名表达业务含义；
+- 字段类型明确；
+- 不返回密码、内部堆栈或无关的大对象；
+- 调用者不需要解析一段随意变化的自然语言才能使用结果。
 
-## 2. 第一步先运行，不要先抄代码
+### `build_greeting` 是什么
 
-示例代码位于：
+`build_greeting` 是实现规则的内部函数。`build_` 只是本例的命名习惯，不是框架要求。
+它负责：
 
-[`tools/hello-agent`](../../tools/hello-agent/)
+1. 删除姓名首尾空格；
+2. 拒绝空姓名；
+3. 拒绝超过 40 个字符的姓名；
+4. 返回符合 `Greeting` 结构的结果。
 
-准备隔离环境：
-
-```bash
-tools/hello-agent/bin/setup-env
-```
-
-默认环境位于：
-
-```text
-.local/open-web-codex/tool-envs/hello-agent
-```
-
-运行单元测试：
+先脱离 Agent 直接运行它：
 
 ```bash
-.local/open-web-codex/tool-envs/hello-agent/bin/python \
-  -m pytest tools/hello-agent/tests -q
+.local/open-web-codex/tool-envs/hello-agent/bin/python -c \
+  'from hello_agent.core import build_greeting; print(build_greeting(" 小林 ").model_dump())'
 ```
 
-期望：
+预期输出：
 
 ```text
-8 passed
+{'name': '小林', 'message': '你好，小林！'}
 ```
 
-运行真实 MCP stdio smoke：
+这一步不是在“验证普通代码也能运行”这么简单。它先固定了三件事：
 
-```bash
-.local/open-web-codex/tool-envs/hello-agent/bin/python \
-  tools/hello-agent/tests/stdio_smoke.py
-```
+- Agent 将来可以传什么输入：姓名；
+- 真正执行什么规则：清理、校验、生成；
+- Agent 将来会收到什么结果：`name` 和 `message`。
 
-期望：
+如果这里算错，接上 Agent 只会把错误包装得更像正确答案。因此开发顺序应当始终是：
+先让业务函数独立正确，再接协议和模型。
 
-```text
-Hello Agent stdio smoke passed
-```
+## 第三步：把允许调用的函数公开成 Tool
 
-这个 smoke 不是只调用 Python 函数，而是真实完成：
+普通 Python 环境里可能有成百上千个函数。Agent 不应该任意执行它们；开发者必须明确
+公开哪些操作、参数和结果是允许的。
 
-```text
-启动 MCP Server
-→ initialize
-→ tools/list
-→ tools/call
-→ 检查结构化结果
-```
-
-如果这里失败，先查看第 10 节故障表，不要继续多 Agent。
-
----
-
-## 3. 在新 Thread 中验证 Agent 调用
-
-Plugin 能力是在 Thread 启动时交给 Codex 的。因此必须新建 Thread，旧 Thread 不会
-自动获得刚加入的 Plugin。
-
-当前 Web 适配层会在新 Thread 启动时选择源码仓库和 Workspace 的
-`tools/*/.codex-plugin/plugin.json`。这是一条现阶段的本地能力发现路径，不代表
-Plugin Studio 的安装、权限和发布体验已经完整。
-
-1. 按[本地运行手册](../mvp-runbook.md)启动平台；
-2. 使用当前仓库创建或选择 Workspace；
-3. 新建 Thread；
-4. 发送：
-
-```text
-请使用 $say-hello 向小林问好，并返回 Tool 的结构化结果。
-```
-
-成功时应该看到：
-
-1. Codex 选择 `say-hello` Skill；
-2. Codex 调用 `hello_writer.say_hello`；
-3. Tool 参数是 `{"name": "小林"}`；
-4. Tool 返回 `name` 和 `message`；
-5. Codex 根据 Tool 结果回答。
-
-如果 Codex 没调用 Tool，只是直接说“你好，小林！”，这个练习没有通过。我们验证的
-不是模型会不会问好，而是 Agent 是否会使用确定性能力。
-
----
-
-## 4. 目录中每个部分负责什么
-
-```text
-tools/hello-agent/
-├── .codex-plugin/plugin.json
-├── .mcp.json
-├── pyproject.toml
-├── bin/
-│   ├── setup-env
-│   └── hello-agent-launcher
-├── hello_agent/
-│   ├── __init__.py
-│   ├── core.py
-│   ├── writer_server.py
-│   └── reviewer_server.py
-├── skills/
-│   ├── say-hello/
-│   └── review-greeting/
-└── tests/
-    ├── test_core.py
-    ├── test_plugin_config.py
-    └── stdio_smoke.py
-```
-
-本篇只关注 Writer：
-
-| 文件 | 角色 |
-| --- | --- |
-| `plugin.json` | 声明这是一个可被 Codex 发现的 Plugin，以及它包含哪些能力 |
-| `pyproject.toml` | 声明 Python 版本、运行依赖和测试依赖 |
-| `__init__.py` | 把 `hello_agent` 标记为可导入的 Python 包 |
-| `core.py` | 数据合同和纯业务规则 |
-| `writer_server.py` | 把业务函数发布成 MCP Tool |
-| `say-hello/SKILL.md` | 教 Codex 何时调用 Tool |
-| `.mcp.json` | 告诉 Codex 怎样启动 MCP Server |
-| `setup-env` | 在对话开始前准备隔离的 Python 环境 |
-| `hello-agent-launcher` | 找到隔离环境并启动 Python |
-| `test_core.py` | 验证普通业务规则 |
-| `test_plugin_config.py` | 验证 Manifest 与两个 MCP Server 没有接错 |
-| `stdio_smoke.py` | 验证真实 MCP 消息链 |
-
-这是一条重要原则：
-
-```text
-业务规则不放进 Skill
-Skill 不负责执行计算
-MCP Server 不重新实现业务规则
-```
-
-`plugin.json` 中与本教程最相关的是：
-
-```json
-{
-  "name": "hello-agent",
-  "version": "0.1.0",
-  "skills": "./skills/",
-  "mcpServers": "./.mcp.json"
-}
-```
-
-| 字段 | 作用 | 为什么这样写 |
-| --- | --- | --- |
-| `name` | Plugin 的稳定名称 | Runtime 和人都需要识别这个能力包 |
-| `version` | 当前发布版本 | 后续升级可以明确比较，不靠目录内容猜测 |
-| `skills` | Skill 根目录 | 让 Codex 发现模型可读的工作方法 |
-| `mcpServers` | MCP 配置入口 | 让 Codex 发现可执行的 Tool |
-
-Manifest 只是“能力包目录”，不会自动创建一个 Agent，也不负责保存 Thread 状态。
-
----
-
-## 5. 逐行理解共享业务核心
-
-打开：
-
-[`core.py`](../../tools/hello-agent/hello_agent/core.py)
-
-### 5.1 导入和常量
+打开 [`server.py`](../../tools/hello-agent/hello_agent/server.py)：
 
 ```python
-from __future__ import annotations
-
-from pydantic import BaseModel, ConfigDict, Field
-
-MAX_NAME_CHARACTERS = 40
-MAX_MESSAGE_CHARACTERS = 80
-```
-
-逐项说明：
-
-| 代码 | 作用 | 为什么需要 |
-| --- | --- | --- |
-| `from __future__ import annotations` | 推迟类型注解求值 | 类型变复杂时仍能安全引用后面定义的类型 |
-| `BaseModel` | 创建有类型的数据模型 | 输入输出不能依赖任意字典字段 |
-| `ConfigDict` | 配置数据模型行为 | 用于禁止未知字段和修改 |
-| `Field` | 给字段增加含义说明 | MCP Schema 和开发者可以看到字段用途 |
-| `MAX_NAME_CHARACTERS` | 姓名长度唯一上限 | Writer 和 Reviewer 不重复写 `40` |
-| `MAX_MESSAGE_CHARACTERS` | 消息长度唯一上限 | 所有审核规则引用同一事实 |
-
-常量放在共享核心，是因为规则只能有一个权威来源。
-
-### 5.2 `Greeting` 数据合同
-
-```python
-class Greeting(BaseModel):
-    """The complete handoff from the Writer to the Reviewer."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    name: str = Field(description="The person being greeted")
-    message: str = Field(description="The exact greeting produced for that person")
-```
-
-逐行说明：
-
-| 代码 | 作用 |
-| --- | --- |
-| `class Greeting(BaseModel)` | 声明一份问候的完整结构 |
-| docstring | 说明这是 Writer 交给 Reviewer 的合同 |
-| `extra="forbid"` | 拒绝合同没有声明的字段 |
-| `frozen=True` | 创建后不能原地修改，避免审核对象被偷偷改变 |
-| `name: str` | 姓名必须是字符串 |
-| `message: str` | 问候必须是字符串 |
-| `Field(description=...)` | 给生成的 Schema 增加可读含义 |
-
-为什么不用普通字典？
-
-下面的字典不会立即暴露拼写错误：
-
-```python
-{"naem": "小林", "message": "你好，小林！"}
-```
-
-`Greeting` 会拒绝未知的 `naem`，让错误在边界发生，而不是进入下游。
-
-### 5.3 `normalize_name`
-
-```python
-def normalize_name(name: str) -> str:
-    """Normalize and bound one user-provided name."""
-
-    normalized = name.strip()
-    if not normalized:
-        raise ValueError("name must not be empty")
-    if len(normalized) > MAX_NAME_CHARACTERS:
-        raise ValueError(
-            f"name must contain at most {MAX_NAME_CHARACTERS} characters"
-        )
-    return normalized
-```
-
-逐行说明：
-
-| 代码 | 作用 | 不这样做会怎样 |
-| --- | --- | --- |
-| 函数类型 `str -> str` | 明确输入输出都是姓名文本 | 调用者需要猜返回类型 |
-| docstring | 说明函数同时规范化和限制输入 | 规则容易被误用 |
-| `strip()` | 删除首尾空格 | `" 小林 "` 会成为不一致的姓名 |
-| `if not normalized` | 拒绝空姓名 | 可能生成“你好，！” |
-| 长度判断 | 限制无界输入 | 超长文本进入 Tool 和上下文 |
-| `ValueError` | 把非法输入变成明确失败 | 错误数据看起来像成功结果 |
-| `return normalized` | 只向下游提供规范化姓名 | 下游不必再次清洗 |
-
-### 5.4 `build_greeting`
-
-```python
-def build_greeting(name: str) -> Greeting:
-    """Build the one canonical greeting for a valid name."""
-
-    normalized = normalize_name(name)
-    return Greeting(name=normalized, message=f"你好，{normalized}！")
-```
-
-逐行说明：
-
-| 代码 | 作用 |
-| --- | --- |
-| `-> Greeting` | 承诺返回稳定数据合同 |
-| docstring | 声明这里产生唯一标准问候 |
-| `normalize_name(name)` | 复用唯一输入规则 |
-| `Greeting(...)` | 在返回前验证字段 |
-| f-string | 使用规范化姓名生成确定性消息 |
-
-这个函数不知道 MCP、Codex、Thread 或网络。它是纯业务逻辑，因此可以快速测试。
-
----
-
-## 6. 逐行理解 MCP Tool
-
-打开：
-
-[`writer_server.py`](../../tools/hello-agent/hello_agent/writer_server.py)
-
-### 6.1 导入
-
-```python
-from __future__ import annotations
-
 from mcp.server.fastmcp import FastMCP
 
 from .core import Greeting, build_greeting
-```
 
-| 代码 | 作用 |
-| --- | --- |
-| `FastMCP` | 注册 Tool 并处理 MCP 协议 |
-| `.core` | 从唯一业务核心复用合同和规则 |
-| `Greeting` | 声明 Tool 返回类型 |
-| `build_greeting` | 执行实际业务规则 |
+mcp = FastMCP("Hello")
 
-Server 不复制姓名长度或消息格式。
 
-### 6.2 创建 MCP Server
-
-```python
-mcp = FastMCP(
-    "Hello Writer",
-    instructions=(
-        "Call say_hello only when a user provides one person to greet. "
-        "Return the structured Tool result unchanged. Do not invent a successful "
-        "result when the Tool rejects the input or is unavailable."
-    ),
-    json_response=True,
-)
-```
-
-| 代码 | 作用 | 注意 |
-| --- | --- | --- |
-| `mcp = FastMCP(...)` | 创建 Server 和 Tool 注册表 | 还没有启动进程 |
-| `"Hello Writer"` | 可读 Server 名称 | 不是授权身份 |
-| `instructions` | 告诉 Agent 何时使用和怎样处理失败 | 不是安全边界 |
-| `json_response=True` | 保留结构化结果 | 下游可读取稳定字段 |
-
-安全边界仍来自：
-
-- Tool 只暴露允许的操作；
-- `core.py` 校验输入；
-- MCP Server 不提供写文件或任意命令 Tool；
-- 平台决定当前 Thread 能使用哪些能力。
-
-### 6.3 注册 `say_hello`
-
-```python
 @mcp.tool()
 def say_hello(name: str) -> Greeting:
-    """Return the canonical structured greeting for one named person."""
+    """Return one deterministic structured greeting for a named person."""
 
     return build_greeting(name)
 ```
 
-| 代码 | 作用 |
-| --- | --- |
-| `@mcp.tool()` | 把下面的函数注册为 Codex 可发现 Tool |
-| `say_hello` | 形成 Tool 名称 |
-| `name: str` | 形成输入 Schema |
-| `-> Greeting` | 形成结构化输出说明 |
-| docstring | 告诉 Agent Tool 做什么 |
-| `return build_greeting(name)` | 复用唯一业务函数 |
+这里发生了两件事：
 
-Tool 故意只有一行业务调用。协议层越薄，规则越不容易在多个入口中分叉。
+1. `FastMCP("Hello")` 创建一个 MCP Server；
+2. `@mcp.tool()` 把 `say_hello` 注册到这个 Server 的可调用 Tool 列表。
 
-### 6.4 启动 Server
+`say_hello` 本身仍然是 Python 函数。加上装饰器后，FastMCP 会读取它的函数名、说明、
+`name: str` 参数和 `Greeting` 返回类型，并生成机器可读的输入与输出 Schema。
+结构化结果来自 `Greeting` 返回类型，不需要额外的 JSON 开关。
+
+**Schema** 在这里就是“有哪些字段、每个字段是什么类型、是否必填”的正式说明。
+
+Codex 看到的调用大致是：
+
+```text
+Tool：say_hello
+输入：name，字符串，必填
+输出：Greeting，包含 name 和 message
+```
+
+所以它知道应该发送：
+
+```json
+{"name": "小林"}
+```
+
+### 为什么保留两层函数
+
+```text
+say_hello       Agent 能看到的边界
+    ↓
+build_greeting  真正实现规则的普通 Python
+```
+
+MCP 并不强制拆成两层。小型一次性 Tool 可以直接把规则写进 `say_hello`。本例拆成
+`core.py` 和 `server.py`，是为了让变化各归其位：
+
+| 变化 | 通常改哪里 | 为什么 |
+| --- | --- | --- |
+| 问候文字、姓名长度等业务规则 | `core.py` | 不需要碰 MCP |
+| Agent 可以传哪些参数 | `server.py`，通常也同步改 `core.py` | Tool Schema 发生变化 |
+| 改用别的通信框架 | `server.py` | 业务规则仍可复用 |
+| 其他 Python 程序也要生成问候 | 直接调用 `build_greeting` | 不必启动 MCP |
+
+这就是“修改问候规则时可以直接测试 Python；更换 Agent 或连接方式时不重写业务
+函数”的具体含义。
+
+## 第四步：启动 Server，并让 Codex 找到它
+
+`@mcp.tool()` 只是在 Python 程序内部登记 Tool，还没有启动进程，也没有建立连接。
+这和 Web 框架中“注册路由”与“启动 Web Server”是两件事相同。
+
+[`server.py`](../../tools/hello-agent/hello_agent/server.py) 的后半段是：
 
 ```python
 def main() -> None:
-    """Run the Writer MCP over standard input and output."""
-
     mcp.run(transport="stdio")
 
 
@@ -390,195 +271,447 @@ if __name__ == "__main__":
     main()
 ```
 
-| 代码 | 作用 |
-| --- | --- |
-| `main` | 管理进程启动 |
-| `mcp.run(...)` | 进入 MCP 消息循环 |
-| `transport="stdio"` | 通过标准输入输出与 Codex 通信 |
-| `__name__` 判断 | import 测试时不自动启动 Server |
+`mcp.run(transport="stdio")` 启动 MCP Server。
 
-进入 stdio 模式后，stdout 只能输出 MCP 协议。普通日志应写 stderr 或独立日志。
+**MCP** 是 Model Context Protocol 的缩写。对新手来说，可以先把它理解成 Agent 和
+外部能力之间共同遵守的消息格式：Agent 用统一格式询问“有哪些 Tool”、发起调用并
+接收结果，Tool 实现不需要知道模型内部怎样工作。
 
-一次真实调用经过：
-
-```mermaid
-flowchart LR
-    C["Codex"] --> F["FastMCP 解析 name"]
-    F --> T["say_hello"]
-    T --> B["build_greeting"]
-    B --> G["Greeting"]
-    G --> F
-    F --> C
-```
-
----
-
-## 7. Skill 为什么仍然需要
-
-打开：
-
-[`say-hello/SKILL.md`](../../tools/hello-agent/skills/say-hello/SKILL.md)
-
-最小结构：
-
-```markdown
----
-name: say-hello
-description: Use the hello_writer MCP server to generate one deterministic
-  structured greeting for a named person.
----
-
-# Say Hello
-
-1. Require one explicit person's name.
-2. Call `hello_writer.say_hello` exactly once with that name.
-3. Return the structured Tool result.
-4. Pass that result unchanged when another Agent reviews it.
-5. Report Tool failure instead of inventing a result.
-```
-
-| 部分 | 角色 | 为什么需要 |
-| --- | --- | --- |
-| `---` 之间的内容 | Skill 元数据 | Runtime 先读取这一小段进行发现 |
-| `name` | 稳定 Skill ID | 用户可以用 `$say-hello` 明确触发 |
-| `description` | 触发条件摘要 | 帮助 Agent 判断何时应读完整 Skill |
-| `# Say Hello` | 面向人的标题 | 方便维护者阅读 |
-| 第 1 步 | 输入前置条件 | 缺姓名时询问，不让模型猜 |
-| 第 2 步 | 指定唯一 Tool | 避免名称相似时调用错误 Server |
-| 第 3、4 步 | 交接规则 | 保持 Tool 输出可追踪且不被改写 |
-| 第 5 步 | 失败规则 | 防止 Tool 不可用时伪造成功 |
-
-它只有五步，因为 Skill 只保存模型无法稳定推断的流程：
-
-1. 必须有明确姓名；
-2. 调用 `hello_writer.say_hello`；
-3. 返回 Tool 的结构化结果；
-4. 交给 Reviewer 时不能修改；
-5. Tool 失败时不能伪造替代结果。
-
-分工是：
+本例的 `stdio` 表示：
 
 ```text
-Skill：何时调用、失败后怎么办
-Tool：接收什么参数、返回什么结构
-core.py：真正的确定性规则
+Codex 启动本地 Python 进程
+  ↔ 通过进程的标准输入、标准输出交换 MCP 消息
 ```
 
-不要把 Python 公式复制进 Skill。否则规则变更时会产生两份事实。
+它不需要开放网络端口。MCP 协议消息占用标准输出，所以 Server 不应随意向标准输出
+打印调试内容；日志应写到标准错误或专用日志。
 
----
-
-## 8. `.mcp.json` 和 launcher
-
-`.mcp.json` 中 Writer 配置：
+Codex 还需要知道用什么命令启动这个进程。下面只展示
+[`.mcp.json`](../../tools/hello-agent/.mcp.json) 的核心字段，实际文件还设置了启动
+超时、Tool 超时、审批模式和允许传入的环境变量：
 
 ```json
 {
-  "hello_writer": {
-    "command": "./bin/hello-agent-launcher",
-    "args": [],
-    "cwd": ".",
-    "startup_timeout_sec": 30,
-    "tool_timeout_sec": 30,
-    "default_tools_approval_mode": "approve",
-    "env_vars": [
-      "OPEN_WEB_CODEX_DATA_DIR",
-      "OPEN_WEB_CODEX_HELLO_AGENT_VENV"
-    ]
+  "mcpServers": {
+    "hello": {
+      "command": "./bin/hello-agent-launcher",
+      "args": [],
+      "cwd": "."
+    }
   }
 }
 ```
 
-| 字段 | 作用 |
-| --- | --- |
-| `hello_writer` | 稳定 MCP Server ID |
-| `command` | Codex 应运行哪个启动器 |
-| `args` | Writer 使用默认模式，所以为空 |
-| `cwd` | 相对路径以 Plugin 根解析 |
-| `startup_timeout_sec` | 启动卡住时明确失败 |
-| `tool_timeout_sec` | Tool 卡住时明确失败 |
-| `default_tools_approval_mode` | 这个无副作用教学 Tool 默认不逐次弹出确认 |
-| `env_vars` | 只传明确允许的配置名 |
+- `hello` 是 Codex 中使用的 MCP Server ID；
+- `command` 是启动命令；
+- `cwd` 表示从 Plugin 根目录解析相对路径。
 
-`approve` 只是这个本地教学 Tool 的默认调用确认策略，不是权限身份，也不会绕过
-Workspace、Profile 或平台授权。
-
-launcher 负责：
-
-1. 找到 Plugin 根；
-2. 找到预先安装的隔离环境；
-3. 环境缺失时快速失败；
-4. 用 `exec` 启动 `hello_agent.writer_server`。
-
-launcher 不在用户对话期间安装依赖。安装由 `setup-env` 提前完成。
-最后使用 `exec`，是为了让 MCP Server 直接接管进程，平台发送的终止信号和退出码
-不会被一层残留 Shell 模糊掉。
-
----
-
-## 9. 做一次失败测试
-
-先发一条没有姓名的请求：
+[`hello-agent-launcher`](../../tools/hello-agent/bin/hello-agent-launcher) 会检查准备好的
+虚拟环境，然后运行：
 
 ```text
-请使用 $say-hello 问好，但我没有提供姓名。
+python -m hello_agent.server
 ```
 
-Codex 应询问姓名，而不是猜测。
+因此依赖由 `setup-env` 提前安装，不会在对话过程中临时下载。
 
-再临时禁止 launcher：
+到这里，完整的代码调用路径是：
 
-```bash
-chmod -x tools/hello-agent/bin/hello-agent-launcher
+```text
+Codex
+  → 根据 .mcp.json 启动 hello Server
+  → 通过 MCP 调用 hello.say_hello
+  → say_hello 调用 build_greeting
+  → 返回 Greeting
 ```
 
-新建 Thread 后再次请求。Codex 应明确报告 Tool 不可用，不能伪造 Tool 结果。
+### 这些文件是不是都必须
 
-测试后立即恢复：
+“必须”要看运行范围：
 
-```bash
-chmod +x tools/hello-agent/bin/hello-agent-launcher
+| 文件 | 在什么范围需要 | 作用 |
+| --- | --- | --- |
+| `hello_agent/server.py` | 作为 MCP Server 运行时需要 | 创建 Server、注册并启动 Tool |
+| `.mcp.json` | 当前 Codex Plugin 接入需要 | 声明如何启动 Server |
+| `.codex-plugin/plugin.json` | 当前仓库的源码能力发现需要 | 把 MCP 和 Skill 组成可发现的能力包 |
+| `bin/hello-agent-launcher` | 本项目的隔离环境方案需要 | 用正确虚拟环境启动 Server |
+| `hello_agent/core.py` | 推荐，不是 MCP 强制 | 分离业务规则与协议边界 |
+| `skills/say-hello/SKILL.md` | 简单 Tool 可选 | 说明何时、怎样调用 |
+| `tests/` | 运行时不需要 | 修改后防止规则和配置被破坏 |
+
+如果你只写一个独立 FastMCP 程序，文件结构可以不同；如果希望它在当前
+open-web-codex 源码开发路径中被发现，就要满足这里的 Plugin 声明。
+
+## 第五步：用 Skill 说明“什么时候、怎样用”
+
+Tool 说明它“能做什么”，但复杂任务还需要工作方法。例如查订单时要先校验订单号，
+退款时要先确认权限，仓网规划时要先准备数据再计算方案。
+
+这种提供给 Agent 的可复用工作方法叫 **Skill**。
+
+本例的 [`SKILL.md`](../../tools/hello-agent/skills/say-hello/SKILL.md) 规定：
+
+```text
+用户要求向一个明确的人问好时：
+1. 必须取得姓名，缺少时先询问；
+2. 调用 hello.say_hello；
+3. 使用 Tool 返回的 name 和 message；
+4. Tool 失败时不能自己编造成功结果。
 ```
 
----
+对一步就能完成的 `say_hello`，Tool 自己的说明已经足够清楚，Skill 不是技术上的
+必需项。这里保留它，是为了演示两层职责：
 
-## 10. 故障对照表
+```text
+Tool：可以执行什么
+Skill：何时执行、按什么顺序执行、失败时怎么办
+```
 
-| 现象 | 优先检查 |
+最后，[`plugin.json`](../../tools/hello-agent/.codex-plugin/plugin.json) 指向
+`.mcp.json` 和 `skills/`。**Plugin** 只是把相关能力打包给 Codex 发现；它不是一个
+Agent。
+
+## 第六步：让真实 Agent 调用 Tool
+
+### 先分清 Task、Thread 和 Agent
+
+open-web-codex 界面把一项持续工作称为 **Task（任务）**；它底层对应 Codex 的
+**Thread**。这里可以把两者理解成同一件事：
+
+> 一次任务的持续上下文，保存用户消息、Agent 回答和 Tool 调用记录。
+
+**Agent** 是在这个上下文中理解目标、选择下一步并使用能力的执行者。你不会在本例
+中创建一个 `Agent` Python 类。这里的“开发 Agent”是为 Codex Agent 设计目标、
+Tool、Skill、输入输出和验证方式。
+
+### 准备真实运行条件
+
+如果平台尚未运行，先完成[本地运行手册](../mvp-runbook.md)。开始本步前确认：
+
+- 使用 `./scripts/start-all.sh` 启动的是真实模式，不是 `--fake`；
+- 浏览器中已经配置并选中可用的 Provider 和模型；
+- 已选择一个授权工作区；
+- `tools/hello-agent/bin/setup-env` 已成功运行。
+
+工作区首页的模型菜单如果显示 “Connect this workspace to load available models”，说明
+平台或 Provider 尚未准备好；此时先处理平台配置，不要把“没有模型”误判为 Tool
+代码错误。
+
+能力列表在新任务创建时交给 Codex，所以准备或修改 Plugin 后必须新建任务；已经打开
+的旧任务不会自动获得新能力。
+
+在工作区首页的输入框发送第一条消息，创建一个新任务。任务打开后：
+
+1. 展开侧栏的 **MCP Servers**；
+2. 确认 `hello` 状态为 `ready`；
+3. 如果是 `error`，先查看页面错误，再检查是否运行过 `setup-env`。
+
+### 发起一次明确调用
+
+发送：
+
+```text
+请使用 $say-hello 向小林问好。
+```
+
+输入 `$say-hello` 时可以从自动补全中选择 Skill。若页面请求 Tool 审批，确认本次
+调用。
+
+完成后展开对话中的 **tool calls**，应看到：
+
+```text
+hello.say_hello
+```
+
+输入应为：
+
+```json
+{"name": "小林"}
+```
+
+结果应包含：
+
+```json
+{
+  "name": "小林",
+  "message": "你好，小林！"
+}
+```
+
+如果只看到模型写出“你好，小林！”，却没有 `hello.say_hello` 调用，说明模型会问好，
+但不能证明 Python Tool 已接通。
+
+再发送：
+
+```text
+请使用 $say-hello 问好。
+```
+
+因为没有姓名，正确行为是先询问，而不是猜一个名字。这个失败路径证明 Skill 的输入
+规则确实生效。
+
+普通的“向小林问好”不一定触发 Tool，因为模型本身就能完成这件事；因此本篇用显式
+Skill 验证连接。真实业务 Tool 应用“需要实时数据、确定计算或副作用”来证明调用价值，
+而不是强迫 Agent 为任何一句话都调用工具。
+
+## 第七步：亲手把能力改成“支持正式语气”
+
+现在完成一次真正的 Agent 能力开发。新需求是：
+
+> 用户明确要求“正式欢迎”时，返回“`姓名，欢迎加入项目。`”；其他情况仍返回原来的
+> 友好问候。
+
+先判断要改哪些层：
+
+| 新需求影响 | 应改哪里 |
 | --- | --- |
-| `mcp` import 失败 | 是否执行 `tools/hello-agent/bin/setup-env` |
-| launcher 不可执行 | 是否执行 `chmod +x` |
-| 单元测试失败 | `core.py` 的合同和业务规则 |
-| stdio smoke 失败 | launcher、MCP import、stdout 污染 |
-| Plugin 校验失败 | Manifest、Skill 或 `.mcp.json` |
-| 新 Thread 看不到 Skill | 是否在 Plugin 加入后新建 Thread |
-| Agent 不调用 Tool | Skill 触发描述和 MCP Server 状态 |
-| Tool 一直运行 | 超时、Server 崩溃或 stdout 普通日志 |
+| 新增正式问候规则 | `core.py` |
+| Agent 需要传入 `tone` 参数 | `server.py` 的 Tool 接口 |
+| Agent 要知道何时选正式语气 | `SKILL.md` |
+| 旧行为不能被破坏 | 直接检查，并更新测试 |
 
-查看 Skill 和 Plugin：
+这一步会修改你的工作区。先改
+[`core.py`](../../tools/hello-agent/hello_agent/core.py)：
 
-```bash
-python3 \
-  codex/codex-rs/skills/src/assets/samples/skill-creator/scripts/quick_validate.py \
-  tools/hello-agent/skills/say-hello
+```python
+from typing import Literal
 
-python3 \
-  codex/codex-rs/skills/src/assets/samples/plugin-creator/scripts/validate_plugin.py \
-  tools/hello-agent
+from pydantic import BaseModel
+
+MAX_NAME_CHARACTERS = 40
+GreetingTone = Literal["friendly", "formal"]
+
+
+class Greeting(BaseModel):
+    name: str
+    message: str
+
+
+def build_greeting(
+    name: str,
+    tone: GreetingTone = "friendly",
+) -> Greeting:
+    clean_name = name.strip()
+    if not clean_name:
+        raise ValueError("name must not be empty")
+    if len(clean_name) > MAX_NAME_CHARACTERS:
+        raise ValueError("name must contain at most 40 characters")
+    if tone not in ("friendly", "formal"):
+        raise ValueError("tone must be friendly or formal")
+
+    message = (
+        f"{clean_name}，欢迎加入项目。"
+        if tone == "formal"
+        else f"你好，{clean_name}！"
+    )
+    return Greeting(name=clean_name, message=message)
 ```
 
----
+`Literal["friendly", "formal"]` 表示这个参数只允许两个明确值。普通 Python 函数仍
+保留显式检查；FastMCP 则用这个类型把可选值写进 Tool Schema。
 
-## 11. 完成标志
+再把 [`server.py`](../../tools/hello-agent/hello_agent/server.py) 中的导入和 Tool
+改为：
 
-- [ ] 8 项单元测试通过；
-- [ ] stdio smoke 通过；
-- [ ] 能解释 `core.py`、MCP Tool 和 Skill 的区别；
-- [ ] 能解释 `@mcp.tool()` 的作用；
-- [ ] 能解释为什么正常 stdio Server 不能随意打印；
-- [ ] 新 Thread 真实调用 `hello_writer.say_hello`；
-- [ ] Tool 不可用时 Agent 不伪造结果。
+```python
+from .core import Greeting, GreetingTone, build_greeting
 
-下一篇：
 
-[Hello Team：从一个 Agent 扩展到两个 Agent](hello-agent-team.md)
+@mcp.tool()
+def say_hello(
+    name: str,
+    tone: GreetingTone = "friendly",
+) -> Greeting:
+    """Return a friendly or formal structured greeting for one named person."""
+
+    return build_greeting(name, tone)
+```
+
+最后在 [`SKILL.md`](../../tools/hello-agent/skills/say-hello/SKILL.md) 中加入规则：
+
+```text
+用户明确要求“正式”或“商务”语气时传 tone="formal"；
+其他情况传 tone="friendly"。
+```
+
+先不启动 Agent，直接检查新规则：
+
+```bash
+.local/open-web-codex/tool-envs/hello-agent/bin/python -c \
+  'from hello_agent.core import build_greeting; print(build_greeting("小林", "formal").model_dump())'
+```
+
+预期：
+
+```text
+{'name': '小林', 'message': '小林，欢迎加入项目。'}
+```
+
+现有测试会继续保护默认的友好语气。再在
+[`test_core.py`](../../tools/hello-agent/tests/test_core.py) 中增加一个正式语气用例：
+
+```python
+def test_builds_formal_message() -> None:
+    greeting = build_greeting("小林", "formal")
+
+    assert greeting == Greeting(name="小林", message="小林，欢迎加入项目。")
+```
+
+测试不是接入 Agent 的先决条件；但当你决定保留一次改动时，它能防止以后修改破坏
+友好语气或正式语气。
+
+运行：
+
+```bash
+.local/open-web-codex/tool-envs/hello-agent/bin/python \
+  -m pytest tools/hello-agent/tests -q
+```
+
+如果测试失败，先根据失败信息更新预期，再继续。不要为了得到绿色结果删除原有规则
+检查。
+
+然后新建任务，确认侧栏 `hello` 为 `ready`，发送：
+
+```text
+请使用 $say-hello 正式欢迎小林加入项目。
+```
+
+调用记录应包含：
+
+```json
+{
+  "name": "小林",
+  "tone": "formal"
+}
+```
+
+这次改造完成了一个可复用闭环：
+
+```text
+新业务目标
+  → 修改确定性规则
+  → 修改 Tool 输入合同
+  → 修改 Agent 的使用方法
+  → 先验证 Python
+  → 新任务加载新能力
+  → 检查真实调用轨迹
+```
+
+## 以后想实现别的目标，应该改哪里
+
+| 你想改变什么 | 优先修改 | 例子 |
+| --- | --- | --- |
+| 计算、校验或数据处理规则 | `core.py` 等普通业务代码 | 运费公式、库存阈值 |
+| Agent 能执行的新操作 | 新增或修改 `@mcp.tool()` | `get_order`、`create_ticket` |
+| Tool 的输入或输出字段 | Python 类型和 Tool 签名 | 新增 `currency`、`status` |
+| 何时调用、调用顺序、失败处理 | `SKILL.md` | 退款前先查订单再验权限 |
+| 一次任务的具体目标 | 用户请求或上层任务的委派 | “只分析华东近 30 天订单” |
+| 长期可复用的专业职责 | Skill + 一组相关 Tool + 明确交付合同 | 订单查询、退款审核 |
+| 独立上下文、权限或失败重试 | 新的子任务 / 子 Thread | 数据准备与网络规划分开 |
+
+不要因为新增一个函数就创建一个 Agent，也不要因为想换一句提示词就新建 MCP Server。
+只有当一项职责需要独立目标、上下文、权限、交付物或失败状态时，才考虑拆成另一个
+Agent。第二篇会从真实仓网场景解释这个判断。
+
+## 从零开发自己的 Agent 能力
+
+把问候示例换成订单、客服或数据分析场景时，可以直接复用下面的顺序：
+
+1. 写一条真实用户请求，并写清成功结果和正确失败；
+2. 列出 Agent 负责的判断，以及代码必须执行的事实、计算或副作用；
+3. 用类型定义输入输出，先实现不依赖 MCP 的普通 Python；
+4. 直接运行正常、边界和失败输入；
+5. 用一个小的 `@mcp.tool()` 函数公开允许调用的能力；
+6. 用 `.mcp.json` 声明启动方式，并通过 Plugin 让当前项目发现；
+7. 只有存在触发条件、多步顺序或失败策略时，再写 Skill；
+8. 新建真实任务，检查 MCP 状态、Tool 参数、结果和失败行为；
+9. 为准备长期保留的规则补测试；
+10. 只有出现独立职责边界时，再设计子任务和上层协调者。
+
+一个专业 Agent 的最小职责说明可以写成：
+
+```text
+目标：它最终要交付什么
+输入：允许接收哪些数据或引用
+输出：必须返回什么结构和证据
+Tool：哪些事实或动作必须调用代码
+停止条件：缺什么、错什么时不能继续
+```
+
+这五项先写清楚，再决定文件和框架，通常比先创建一个 `agent.py` 更接近真正的 Agent
+开发。
+
+在当前仓库中新建一个同类能力包时，最小目录通常是：
+
+```text
+tools/your-capability/
+├── .codex-plugin/plugin.json   Codex 发现入口
+├── .mcp.json                   MCP Server 启动声明
+├── pyproject.toml              Python 版本和依赖
+├── bin/
+│   ├── setup-env               提前准备隔离环境
+│   └── launcher                启动 Server
+├── your_package/
+│   ├── core.py                 普通业务规则
+│   └── server.py               @mcp.tool() 与 mcp.run()
+└── skills/                     有可复用工作方法时再添加
+```
+
+目录名和 Python 包名可以按领域修改，职责关系不要颠倒。
+
+## 可选：什么时候做 MCP 协议检查
+
+如果 Python 函数正确、页面里的 `hello` 却无法 `ready`，可以运行仓库预先提供的
+协议检查：
+
+```bash
+.local/open-web-codex/tool-envs/hello-agent/bin/python \
+  tools/hello-agent/tests/stdio_smoke.py
+```
+
+预期最后一行：
+
+```text
+Hello Agent stdio smoke passed
+```
+
+[`stdio_smoke.py`](../../tools/hello-agent/tests/stdio_smoke.py) 是示例作者写的最小 MCP
+Client：它启动 Server、列出 Tool、调用 `say_hello` 并检查结果。它不是 MCP 自动
+生成的文件，也不是第一次开发 Tool 必须创建的文件。只有在排查“业务函数正常，但
+MCP 连接不通”时才需要它。
+
+| 现象 | 先检查什么 |
+| --- | --- |
+| `setup-env` 报 Python 版本错误 | 安装或选择 Python 3.11+ |
+| `setup-env` 在安装依赖时失败 | 网络、Python 包源和错误末尾 |
+| 侧栏没有 `hello` | 是否在准备环境后新建了任务 |
+| `hello` 是 `error` | 先运行 `stdio_smoke.py`，再查看页面给出的 Server 错误 |
+| 回答正确但没有 Tool 调用 | 使用显式 `$say-hello`，并检查展开后的 tool calls |
+
+## 回顾与完成标志
+
+本篇没有训练模型，也没有创建一个 `Agent` 类。你给现有 Codex Agent 增加了一项
+受控 Python 能力，并知道以后如何演进它：
+
+```text
+用户
+  → 任务中的 Agent
+  → 直接选择 Tool，或在需要时参考 Skill
+  → hello.say_hello
+  → build_greeting
+  → 结构化结果
+```
+
+- [ ] 能说明为什么先定义业务目标和 Agent/代码边界；
+- [ ] 能解释 `Greeting` 没有框架规定的特殊命名；
+- [ ] 能解释 `build_greeting`、`say_hello` 和 `@mcp.tool()` 的关系；
+- [ ] 能解释注册 Tool、启动 MCP Server、让 Codex 发现 Server 是三件事；
+- [ ] 能解释 Tool 与 Skill 的不同；
+- [ ] 真实任务中出现 `hello.say_hello` 调用，而不只是模型生成文字；
+- [ ] 能根据变化判断应该修改业务代码、Tool、Skill 还是 Agent 职责；
+- [ ] 能完成一次规则、Tool 合同、Skill 和验证同步变化的改造。
+
+下一篇进入真实业务：
+
+[第二篇：把仓网问题拆成数据与规划两项职责](hello-agent-team.md)

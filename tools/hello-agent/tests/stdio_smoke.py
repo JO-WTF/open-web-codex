@@ -1,4 +1,4 @@
-"""Run initialize, tools/list, and tools/call against both real stdio servers."""
+"""Run initialize, tools/list, and tools/call against the real stdio server."""
 
 from __future__ import annotations
 
@@ -14,13 +14,12 @@ LAUNCHER = ROOT / "bin" / "hello-agent-launcher"
 
 async def call_tool(
     *,
-    server_args: list[str],
     expected_tool: str,
     tool_args: dict[str, object],
 ) -> dict[str, object]:
     parameters = StdioServerParameters(
         command=str(LAUNCHER),
-        args=server_args,
+        args=[],
         cwd=str(ROOT),
     )
     async with stdio_client(parameters) as streams:
@@ -36,24 +35,12 @@ async def call_tool(
 
 async def smoke() -> None:
     greeting = await call_tool(
-        server_args=[],
         expected_tool="say_hello",
         tool_args={"name": "小林"},
     )
     assert greeting == {
         "name": "小林",
         "message": "你好，小林！",
-    }
-
-    review = await call_tool(
-        server_args=["--reviewer-server"],
-        expected_tool="review_greeting",
-        tool_args={"greeting": greeting},
-    )
-    assert review == {
-        "approved": True,
-        "greeting": greeting,
-        "reasons": [],
     }
 
 
