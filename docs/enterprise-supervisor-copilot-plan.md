@@ -687,7 +687,7 @@ managed Workspace 上重建；运行时证据文件由执行环境指定，不�
 - [ ] 真实 multi-`cwd` 与共享 Workspace 风险复核；
 - [-] Profile 重启后的 happy path 恢复已通过，故障注入矩阵待补；
 - [x] 选定 OpenAI Provider 的真实案例路径验证；
-- [-] Codex 上游差异与 retained seam 已复核；待在专用分支同步 126 个提交。
+- [-] Codex 上游差异与 retained seam 已复核；待在专用分支同步 142 个提交。
 
 ### 当前不启动
 

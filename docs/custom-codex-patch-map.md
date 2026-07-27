@@ -26,14 +26,14 @@ not a zero-diff Codex subtree.
 ## Current state
 
 The integrated base is `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9`.
-The observed official main is `cba0e2701c9e3e67a877a16dbbd7a577d477a630`;
-126 official commits await the next dedicated synchronization branch. The raw
-comparison contains 919 paths: 46 added locally, 803 modified, and 70 missing
-locally, classified by the status script as 790 `upstream-only`, 70
-`local-only`, and 59 `diverged`.
+The observed official main is `95637f7056835fea66bdd0044414af480fc0fd74`;
+142 official commits await the next dedicated synchronization branch. The raw
+comparison contains 951 paths: 46 added locally, 827 modified, and 78 missing
+locally, classified by the status script as 807 `upstream-only`, 69
+`local-only`, and 75 `diverged`.
 
 All product-specific differences on the integrated base are classified under
-the retained seams and decisions below. The 59 diverged paths require the next
+the retained seams and decisions below. The 75 diverged paths require the next
 sync to accept official structure first and replay only those classified seams.
 Generated app-server artifacts have no drift on the integrated base, and the
 Runtime/TUI scoped validation matrix passes there. Machine-readable evidence is in
@@ -69,9 +69,9 @@ The script separates the raw tree difference into:
 
 ## Current inventory classification
 
-The current comparison against `codex-upstream/main` contains 919 paths: 790
-`upstream-only`, 70 `local-only`, and 59 `diverged`. The integrated base remains
-the validation baseline until the 126 pending official commits are accepted on a
+The current comparison against `codex-upstream/main` contains 951 paths: 807
+`upstream-only`, 69 `local-only`, and 75 `diverged`. The integrated base remains
+the validation baseline until the 142 pending official commits are accepted on a
 new sync branch. Generated artifacts, tests, and snapshots follow their owning
 source seam.
 
@@ -92,7 +92,7 @@ source seam.
 ## Current convergence analysis
 
 The integrated `6e5a2d6b8d14` structure has no unresolved tree conflicts. The
-observed official main is 126 commits ahead, so its 59 diverged paths must be
+observed official main is 142 commits ahead, so its 75 diverged paths must be
 resolved on the next dedicated sync branch. On the integrated base,
 `codex-api/src/common.rs` matches the official object exactly. Chat request
 DTOs and owned Responses-to-Chat conversion live in `chat_translate.rs`; the

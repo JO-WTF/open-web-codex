@@ -200,7 +200,8 @@ scripts/smoke-enterprise-supervisor-copilot.sh
 3. 使用真实 Codex app-server 和 Provider；
 4. 不通过 E2E 脚本预创建任何 Runtime Role；
 5. 启动绑定精确 Policy 版本的 Root Thread；
-6. 验证 worker 根据已发布 Definition 自动生成、注册并反查两个 Runtime Role；
+6. 验证 worker 根据已发布 Definition 自动生成并安全物化两个 Runtime Role 文件，
+   启动前重验摘要，再由本次 Thread 的 request config 精确引用；
 7. 运行两个真实子 Agent、MCP、Artifact 和报告链；
 8. 重新读取浏览器依赖的历史与证据概览；
 9. 输出一份不含凭据和宿主机路径的证据文件。
@@ -211,6 +212,20 @@ scripts/smoke-enterprise-supervisor-copilot.sh
 
 > 单元测试、stdio smoke 和真实 E2E 不是重复劳动。它们分别证明业务规则、MCP
 > 协议和完整平台协作。任何一层失败，都不应由上一层的成功掩盖。
+
+脚本也提供诊断用的开放问题观察模式：
+
+```bash
+E2E_OBSERVE_ONLY=1 \
+E2E_CASE_NAME='长三角 50 单位新增仓选址' \
+E2E_PROMPT='长三角的地级市中，哪个城市最适合额外建一个 50 单位产能的仓库？' \
+scripts/smoke-enterprise-supervisor-copilot.sh
+```
+
+观察模式仍使用真实 Policy、Profile、Runtime 和 Provider，并保存 Agent 树、MCP
+调用、Artifact、最终报告以及每条受治理 Thread 的 V2 session metadata；但它不会
+要求任意问题产生固定仓网案例的十个 Artifact。它用于检查真实委派行为和证据边界，
+不能代替上面的固定 9/9 发布门禁。
 
 ---
 
@@ -409,8 +424,10 @@ Prompt 中的“请保持只读”只是工作说明，不能代替这些边界�
 
 服务端编译时校验 Definition 中声明的指令摘要，并从这份唯一受评审的指令源确定性
 生成 Runtime TOML。用户选择对应 Supervisor Policy 启动 Run 后，worker 才通过
-类型化 Profile 生命周期发布 `data_agent`。E2E 不读取这份文件调用 Agent CRUD，
-因此能真正验证 Definition → Runtime Role → Runtime Thread 这段产品链路。
+Profile Host 内部边界安全物化 `data_agent` 文件；Adapter 在 Runtime 消费前重验
+摘要，并仅由本次 Thread 的 request config 引用。它不调用 Agent CRUD，也不把 Role
+注册到 Profile 全局 Agent Catalog，因此 E2E 验证的是
+Definition → request-scoped Runtime Role → Runtime Thread 这段产品链路。
 
 ---
 
@@ -807,8 +824,8 @@ tools/supply-chain-network-planner/
 
 | 场景 | 正确行为 | 当前证据 |
 | --- | --- | --- |
-| Definition 对应 Role 发布失败 | Root Thread 创建前失败，不换默认 Role | 已有定向测试 |
-| 同名用户 Role 已存在 | 明确报告冲突，不覆盖用户配置 | 已有定向测试 |
+| Definition 对应 Role 文件物化或校验失败 | Root Thread 创建前失败，不换默认 Role | 已有定向测试 |
+| 普通 Thread 启动 | 不获得企业 Role、Policy 指令或 V2 request override | 已有定向测试 |
 | Data 字段缺失 | 保留缺口，限制结论或追问 | 待真实企业 E2E |
 | 两个 Agent 结论冲突 | 保存两份依据，继续最小调查或说明取舍 | 待真实企业 E2E |
 | 高成本操作被拒绝 | 保留已完成 Artifact，给出部分结果 | 审批链已有，拒绝综合待 E2E |

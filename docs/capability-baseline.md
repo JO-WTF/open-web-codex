@@ -19,23 +19,23 @@ Observed on 2026-07-27 from the current working branch:
 | Component | State |
 | --- | --- |
 | Codex subtree | integrated through `openai/codex` `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9` |
-| Observed official main | `cba0e2701c9e3e67a877a16dbbd7a577d477a630`; 126 commits await the next dedicated sync branch |
+| Observed official main | `95637f7056835fea66bdd0044414af480fc0fd74`; 142 commits await the next dedicated sync branch |
 | Local Codex seams | retained changes remain classified by `docs/custom-codex-patch-map.md`; compare them against `codex-upstream/main`, never this repository's `main` |
-| Local customization footprint | six retained Runtime/TUI seams, derived artifacts and focused tests; `ToolName` uses the official implementation |
+| Local customization footprint | seven retained Runtime/TUI seams, derived artifacts and focused tests; `ToolName` uses the official implementation |
 | Web platform | Restored browser UI, Axum/PostgreSQL platform, native Profile Registry/Host, encrypted Provider Secret injection, durable approvals, independent authorized managed Workspaces, lease-based Run orchestration, typed REST resources and authenticated WebSocket |
 
 ## Reproduced evidence
 
 - `scripts/codex-upstream-status.sh` reports the subtree integrated through
-  `6e5a2d6b8d14` with 126 official commits awaiting a dedicated sync. The
-  customization status script reports 919 raw path differences: 790
-  upstream-only, 70 local-only and 59 diverged.
-- The current upstream structure and all six documented seams are integrated;
+  `6e5a2d6b8d14` with 142 official commits awaiting a dedicated sync. The
+  customization status script reports 951 raw path differences: 807
+  upstream-only, 69 local-only and 75 diverged.
+- The current upstream structure and all seven documented seams are integrated;
   regenerated app-server Schema and TypeScript fixtures have no drift.
 - The locally built `codex app-server` completes `initialize` and returns
   `capabilityManifest`, `codexHome`, `platformFamily`, `platformOs` and
   `userAgent`.
-- The observed manifest contains 18 declarations, including
+- The observed manifest contains 19 declarations, including
   `models.providers`.
 - On the current Runtime lineage, `just fmt`, app-server and config Schema
   generation, 288 app-server protocol tests, 175 Chat transport tests, 26

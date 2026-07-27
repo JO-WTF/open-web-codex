@@ -52,8 +52,8 @@ This Plugin publishes capabilities; installing or starting it does not create an
 or mutate a Profile.
 
 - `examples/runtime-roles/data-agent.md` is the single reviewed instruction source
-  used to deterministically create the `data_agent` Runtime Role through the typed
-  Profile lifecycle.
+  used to deterministically create the `data_agent` Runtime Role through the internal
+  Profile Host materialization boundary.
 - `examples/runtime-roles/network-planning-agent.md` does the same for
   `network_planning_agent`.
 - The Platform publishes the enterprise Agent Definitions and
@@ -61,12 +61,13 @@ or mutate a Profile.
   `apps/web/server/resources/`.
 - When a user explicitly starts a Run with that Policy, the worker verifies the
   Definition-bound instruction digest, materializes the exact versioned Role file under
-  a platform-reserved Profile directory, registers the Roles together through the typed
-  app-server configuration contract, reloads the Profile and verifies discovery before
-  creating the root Thread. The governed request enables the current V2 multi-agent
-  engine only for that Thread; it does not change the Profile-wide choice or add a V1
-  compatibility path. A same-name user or external Role is reported as a conflict and
-  is never overwritten.
+  a platform-reserved Profile directory, and reopens and verifies that file immediately
+  before Runtime consumption. The governed `thread/start` or `thread/fork` request
+  references the exact Roles through request-scoped config and enables the current V2
+  multi-agent engine only for that Thread. It does not register the enterprise Roles in
+  the Profile Agent catalog, reload Profile configuration, change the Profile-wide
+  engine choice, or add a V1 compatibility path. Platform-reserved Role names remain
+  unavailable to generic Profile Agent CRUD.
 - Codex Runtime creates the actual child Threads. Both child Threads currently inherit
   the root Thread's selected capability roots; Role instructions separate
   responsibilities but are not an authorization boundary.
@@ -99,8 +100,9 @@ inside the existing maps capability.
 `examples/data-sources/warehouse-network-fixture.json` is the read-only Data Agent
 source. `examples/network-input.json` and `examples/route-matrix-input.json` form a
 complete small network scenario. The `examples/runtime-roles/` files are the reviewed
-Profile Role instruction sources, not automatically discovered Plugin content; the
-published enterprise Policy activates them through the explicit worker lifecycle above.
+Runtime Role instruction sources, not automatically discovered Plugin content; the
+published enterprise Policy makes them visible only to its governed Thread through the
+explicit worker lifecycle above.
 After installing the package:
 
 ```bash

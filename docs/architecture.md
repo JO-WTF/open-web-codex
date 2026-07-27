@@ -20,13 +20,15 @@ not a requirement to create network microservices. Components separate only
 when measured capacity or isolation needs justify it.
 
 The enterprise multi-agent design in
-`docs/enterprise-agent-platform-architecture.md` is an evolutionary target
-above this control plane. It reuses Codex root Threads and native child-agent
-execution, then adds governed Supervisor Policies, Agent Definitions,
-enterprise capability authorization and durable Artifacts in the platform.
-Those target objects are not part of the live architecture until the capability
-baseline records verified implementation; the roadmap and development plan
-only control when that work is attempted.
+`docs/enterprise-agent-platform-architecture.md` remains the evolutionary
+target above this control plane. The current constrained M2 slice already
+implements code-published Supervisor Policies and Agent Definitions, immutable
+Policy snapshots bound to root Threads, request-scoped Runtime Roles, native
+child-agent execution, rebuildable Agent projections and Task-owned durable
+Artifacts. Broader Catalog governance, native Agent CRUD, Role-level dynamic
+authorization and production multi-user operation remain targets rather than
+current capability. `capability-baseline.md` is authoritative for the verified
+scope; the roadmap and development plan control the remaining order.
 
 ## System shape
 
@@ -44,7 +46,16 @@ Workspace authorization service
 
 Run orchestrator
   -> validates the Thread's Codex cwd against authorized Workspace roots
+  -> resolves and seals an explicitly selected Supervisor Policy
+  -> preflights exact Agent Definitions before governed Thread creation
   -> Runner sandbox / Git delivery
+
+Governed Supervisor preflight
+  -> Profile Host atomically materializes immutable Role instruction files
+  -> adapter reopens and verifies exact content before Runtime consumption
+  -> thread/start or thread/fork carries V2 feature, limits and Roles in request config
+  -> Runtime creates root/child Threads and owns multi-agent coordination
+  -> platform projects the observable Agent tree from Runtime events
 
 Codex build
   -> generated protocol Schema + TypeScript
@@ -73,9 +84,13 @@ result; they never cause a Tauri runtime to reappear.
 | User, organization, membership and session | Web platform database | complete platform record |
 | Project, Task, Run, Thread model selection, lease, approval and audit | Web platform database | complete platform record |
 | Profile ownership and process health | Web database + Profile Host | mapping, health, build and capability snapshot |
+| Supervisor Policy publication, immutable snapshot and root-Thread binding | Web platform database + code-published governance package | complete governance record and binding; never Runtime conversation state |
+| Agent Definition identity, version, responsibilities and allowed Runtime Role reference | Web platform governance package | published metadata and immutable instruction digest; never child-Thread state |
 | Thread, Turn, items, compaction and model-visible context | Codex Profile/app-server | opaque IDs, event projection and search index |
 | Provider config and runtime model catalog | Codex Profile/app-server | secret references, global default Provider/model selection, policy and display cache scoped to Profile |
 | Agent scheduling and parent/child execution | Codex runtime | observable trajectory and status projection |
+| Governed Runtime Role execution config | Codex request config; transitional file materialization by Profile Host | no PostgreSQL configuration copy; only immutable governance metadata and rebuildable execution observations |
+| Runtime Agent tree and status projection | Codex events are authoritative | bounded `runtime_agent_projections` rows that can be deleted and rebuilt |
 | Skills, plugins, MCP and memory state | Codex Profile/app-server | permissions, audit and capability-gated projection |
 | Thread current working directory | Codex Profile/app-server | authorized Workspace ID and safe display metadata |
 | Workspace authorization and managed checkout lifecycle | Web platform + filesystem/Git | complete authorization record and safe lifecycle metadata |
@@ -85,6 +100,33 @@ result; they never cause a Tauri runtime to reappear.
 The platform must recover model-visible history from Codex. Event projections
 are rebuildable UI/read models and never become a second Thread store, memory
 engine or agent scheduler.
+
+### Current governed multi-agent slice
+
+An Enterprise Run may explicitly select one code-published Supervisor Policy
+version. The platform seals that Policy and its referenced Agent Definition
+versions into an immutable snapshot and binds it to the actual root Thread.
+Immediately before a governed root start or inherited fork, the worker
+re-resolves the published resources, rejects snapshot or instruction drift and
+requires the generated `agents.multi_agent` capability.
+
+Because the current Runtime does not expose native Agent CRUD, Profile Host
+temporarily materializes the exact versioned Role instruction files under a
+platform-reserved Profile directory. The adapter reopens those files without
+following links, verifies their hashes, and places `features.multi_agent_v2`,
+the V2 concurrency limit and the exact Role definitions only in that Thread
+request's config. This path does not call persistent Agent configuration
+write/reload APIs, does not register enterprise Roles in Profile or Project
+configuration and does not duplicate Runtime Role configuration in PostgreSQL.
+Ordinary Threads receive none of the Policy instructions, enterprise Roles or
+V2 overrides.
+
+Codex Runtime remains authoritative for spawn, wait, follow-up, interrupt,
+parent/child identity and model-visible Agent state. The platform persists only
+the Policy/Definition governance facts, Task-owned Artifacts and a bounded
+`runtime_agent_projections` read model rebuilt from official Runtime events.
+The temporary file materializer must be removed after a typed app-server V2
+Agent lifecycle owns write, validation, discovery and reload.
 
 ## Web / app-server / Codex server boundary contract
 

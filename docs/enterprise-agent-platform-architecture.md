@@ -1237,7 +1237,13 @@ Codex 已经处理了多 Agent 执行中最难复刻的一组机制：
 
 Codex 的 `thread/start` 协议已经提供 `developerInstructions` 字段，可见于 [`ThreadStartParams`](../codex/codex-rs/app-server-protocol/src/protocol/v2/thread.rs)。因此，这条路径不需要修改 Codex Core，也不需要暗中编辑 Profile 配置。
 
-当前项目尚未完成的地方在 Adapter：[`thread_start_params`](../apps/web/crates/codex-adapter/src/real.rs) 目前只传递 `cwd`、审批策略、历史模式和选定的 Capability Roots，没有传入 Supervisor Policy。目标链路是：Task 选择已发布版本，平台按用户、Profile 和 Task 授权解析，通过 `thread/start.developerInstructions` 传入根 Thread；根 Thread 获得稳定的 Supervisor 责任后，再由 Runtime 创建经过验证的 Domain Runtime Roles。
+当前受限企业链路已经实现这条注入路径：Task/Run 选择代码发布的精确 Policy
+版本，平台解析并封存不可变 Snapshot，把 `developerInstructions` 传入根 Thread；
+执行前检查同时验证 Definition 指令摘要和多 Agent Capability，物化受管 Role
+文件，并由 [`thread_start_params`](../apps/web/crates/codex-adapter/src/real.rs)
+只在本次 Thread 的 request config 中启用 V2 和精确 Domain Runtime Roles。当前
+缺口不再是 Adapter 注入，而是 Runtime 原生 Agent CRUD、更广泛的 Catalog 治理、
+Role 可用性查询和多 Profile 授权。
 
 Supervisor Policy 的 ID 和版本应该与 Thread 建立明确关联。恢复 Thread 时继续使用原版本；升级既有 Thread 时要进行显式迁移，而不是在后台隐式替换其行为规则。
 
@@ -1502,7 +1508,7 @@ flowchart TB
 
 > **当前实现与目标图的距离**
 >
-> [`run-orchestrator`](../apps/web/crates/run-orchestrator/src/lib.rs)、[`profile-host`](../apps/web/crates/profile-host/src/lib.rs)、[`codex-adapter`](../apps/web/crates/codex-adapter/src/real.rs) 和事件投影已经形成平台骨架。Workspace 具有独立身份、授权和托管生命周期，Run 只保存所选 Workspace 的引用。当前仍是单 Profile 组合，现有执行根登记、共享 Workspace 并发验证和持久 Artifact Store 尚未完成，不能把这些目标写成现有能力。
+> [`run-orchestrator`](../apps/web/crates/run-orchestrator/src/lib.rs)、[`profile-host`](../apps/web/crates/profile-host/src/lib.rs)、[`codex-adapter`](../apps/web/crates/codex-adapter/src/real.rs) 和事件投影已经形成平台骨架。Workspace 具有独立身份、授权和托管生命周期，Run 只保存所选 Workspace 的引用；Task-owned 持久 Artifact Store、同 Task 跨子 Thread 读取和生产者 provenance 也已在受限案例中验证。当前仍是单 Profile 组合，现有执行根登记、共享 Workspace 并发验证、Artifact 替代/失效/删除/保留和跨 Run 复用尚未完成，不能把这些目标写成现有能力。
 
 ---
 

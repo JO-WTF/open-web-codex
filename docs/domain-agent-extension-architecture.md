@@ -104,10 +104,17 @@ Agent Definition 是领域 Agent 的治理记录。它可以先以版本化 Mani
 - Agent 的输出格式和完成标准。
 
 Runtime Role 则是 Codex 能够发现和解析的执行配置，包含角色描述、开发者指令以及
-必要的模型、sandbox 或能力配置。平台激活已发布 Agent Definition 时，需要把其
-引用的精确版本 Runtime Role 通过 Profile 生命周期显式发布到目标 Profile，再通过
-Codex 正式配置接口注册、重载和反查；若目标 Profile 已有同名用户/外部 Role，则
-必须报告冲突而不是覆盖。Runtime 真正 spawn 后产生的子 Agent Thread，才是运行
+必要的模型、sandbox 或能力配置。当前受限企业实现中，已发布 Agent Definition
+绑定一份经评审的 Runtime 指令摘要；只有显式绑定该 Definition 的 Supervisor Policy
+通过执行前检查后，Profile Host 才物化精确版本的受管 Role 文件。Adapter 在启动前
+重新校验文件，并通过该 `thread/start` 或 `thread/fork` 的 request-scoped config
+引用 Role。它不会把企业 Role 注册到 Profile 全局 Agent Catalog，也不会 reload 或
+修改普通 Thread 的配置。平台保留名称不能由通用 Profile Agent CRUD 创建或覆盖，
+但受治理请求也不依赖读取、合并或改写用户的同名全局配置。
+
+这是 Codex 尚无原生 Agent CRUD 时的内部过渡边界。长期应由类型化 app-server V2
+Agent 生命周期接口负责 Runtime Role 的写入、校验、发现和 reload；Platform 只保存
+治理身份、发布状态和授权。Runtime 真正 spawn 后产生的子 Agent Thread，才是运行
 实例。
 
 Agent Definition 通常包含：

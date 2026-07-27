@@ -7,13 +7,13 @@
 | 更新日期 | 2026-07-27 |
 | 当前分支 | `codex/agent-architecture-features` |
 | Codex 基线 | `openai/codex` `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9` |
-| 上游待同步 | 126；观测到的 official main 为 `cba0e2701c9e3e67a877a16dbbd7a577d477a630` |
+| 上游待同步 | 142；观测到的 official main 为 `95637f7056835fea66bdd0044414af480fc0fd74` |
 | 当前工作 | 收敛 Enterprise Supervisor 为 V2-only request-scoped Runtime Role，并启动 Agent、Skill、MCP 原生生命周期整改；随后补齐失败、恢复、Artifact 生命周期与可信门禁 |
 | 中期顺序 | `docs/roadmap.md` |
 | M2 详细实施 | `docs/enterprise-supervisor-copilot-plan.md` |
 | 能力事实 | `docs/capability-baseline.md` |
 
-当前 Codex 基线上的定制仍按 patch map 分类；official main 已前进 126 个提交，
+当前 Codex 基线上的定制仍按 patch map 分类；official main 已前进 142 个提交，
 下一轮必须通过专用 `codex/sync-upstream-*` 分支同步。1421 WebApp 的 CSS、页面布局
 和交互保持既有产品形态；当前单用户入口不显示登录或注册，浏览器自动取得本地
 Session；差异集中在该入口、`src/services/webClient.ts` Server
@@ -187,7 +187,7 @@ Skills、Plugins 和 MCP。
 
 ## Codex 上游同步与定制收敛
 
-- [ ] 通过新的 `codex/sync-upstream-*` 分支集成已观测到的后续 126 个官方提交。
+- [ ] 通过新的 `codex/sync-upstream-*` 分支集成已观测到的后续 142 个官方提交。
 - [ ] 按 Chat/Responses 转译规范修正输出语义：标准 Chat 文本不再根据 Tool
   call 推断 phase，流累计器保持 Message/Tool 首次出现顺序，Provider-specific
   phase/reasoning 扩展默认关闭并按 Provider 隔离；真实第三方地图卡片 Turn 的
@@ -213,7 +213,7 @@ Skills、Plugins 和 MCP。
 
 - [x] `bash -n scripts/*.sh` 和本地启动脚本 help/status 路径。
 - [-] 1,221 个浏览器测试、typecheck、build、no-desktop、Codex contracts 和真实
-  Codex app-server 的 18 项 Capability Manifest smoke 通过；Enterprise Supervisor
+  Codex app-server 的 19 项 Capability Manifest smoke 通过；Enterprise Supervisor
   在内置 OpenAI Provider 上的真实案例 9/9 通过。main-ui-parity 仍会报告尚未
   并入参考基线的有意浏览器 UI 扩展。
 - [x] `cargo fmt --all --check`、`cargo test --workspace --locked`。
@@ -224,7 +224,7 @@ Skills、Plugins 和 MCP。
 - [x] `npm run check:codex-generated`、`npm run check:codex-contracts`、fixtures、
   Feature Policy 和真实 `--require-manifest` smoke。
 - [x] 状态脚本已复核；当前集成基线为 `6e5a2d6b8d14`，观测到的 official
-  main 已前进到 `cba0e2701c9e`，126 个待同步提交留给下一专用同步分支处理。
+  main 已前进到 `95637f705683`，142 个待同步提交留给下一专用同步分支处理。
 - [x] Fake Server HTTP/static/WebSocket 端到端启动验证。
 - [x] Git status/diff 审查，确认没有未分类 Codex 差异或意外用户文件。
 
