@@ -319,7 +319,7 @@ export class PlatformClient {
   }
 
   readReplyArtifact(path: string) {
-    if (!/^\/api\/runs\/[0-9a-f-]+\/artifacts\/[0-9a-f-]+$/i.test(path)) {
+    if (!/^\/api\/artifacts\/[0-9a-f-]{36}\/content$/i.test(path)) {
       return Promise.reject(new Error("Reply Artifact path is invalid."));
     }
     return this.request<Record<string, unknown>>(path);

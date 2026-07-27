@@ -41,7 +41,7 @@ export default function Header({
   onToggleSidebar,
   rightPanelOpen = false,
   activeRightPanelTab = "files",
-  agentPanelAvailable = false,
+  agentPanelAvailable = true,
   agentPanelUnread = false,
   onOpenAgentPanel,
   onOpenFilePanel,
@@ -94,7 +94,7 @@ export default function Header({
         <button
           type="button"
           className={`web-icon-button web-agent-panel-button${rightPanelOpen && activeRightPanelTab === "agents" ? " is-active" : ""}`}
-          title={agentPanelAvailable ? "Agent activity" : "Agent activity becomes available when a sub-agent starts"}
+          title="Agent activity"
           aria-label="Agent activity"
           aria-pressed={rightPanelOpen && activeRightPanelTab === "agents"}
           disabled={!agentPanelAvailable}

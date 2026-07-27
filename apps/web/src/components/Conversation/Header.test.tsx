@@ -6,7 +6,7 @@ import Header from "./Header";
 afterEach(cleanup);
 
 describe("Header", () => {
-  it("omits context usage and the Codex selector", () => {
+  it("omits context usage and the Codex selector while keeping the Agent entry available", () => {
     render(
       <Header
         workspaceName="workspace"
@@ -19,7 +19,7 @@ describe("Header", () => {
 
     expect(screen.queryByTitle(/Context used/)).toBeNull();
     expect(screen.queryByTitle("Active coding agent")).toBeNull();
-    expect((screen.getByLabelText("Agent activity") as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByLabelText("Agent activity") as HTMLButtonElement).disabled).toBe(false);
     expect(screen.getByLabelText("File manager")).toBeTruthy();
     const headerActions = screen.getAllByRole("button");
     expect(headerActions.indexOf(screen.getByLabelText("Agent activity")))

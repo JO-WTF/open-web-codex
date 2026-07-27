@@ -118,6 +118,37 @@ describe("PlatformClient", () => {
     );
   });
 
+  it("reads map source content through the stable authorized Artifact resource", async () => {
+    const artifactId = "8e98ff2f-82ee-4cc9-a3e6-2974debf8666";
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(JSON.stringify({ type: "FeatureCollection", features: [] }), {
+        status: 200,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PlatformClient({
+      baseUrl: "https://platform.test",
+      token: "session-token",
+    });
+
+    await expect(
+      client.readReplyArtifact(`/api/artifacts/${artifactId}/content`),
+    ).resolves.toEqual({ type: "FeatureCollection", features: [] });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      `https://platform.test/api/artifacts/${artifactId}/content`,
+    );
+  });
+
+  it("rejects an obsolete Run-scoped Artifact path", async () => {
+    const client = new PlatformClient({ baseUrl: "https://platform.test" });
+
+    await expect(
+      client.readReplyArtifact(
+        "/api/runs/8e98ff2f-82ee-4cc9-a3e6-2974debf8666/artifacts/8e98ff2f-82ee-4cc9-a3e6-2974debf8666",
+      ),
+    ).rejects.toThrow("Reply Artifact path is invalid.");
+  });
+
   it("treats an absent Supervisor binding as a standard Run", async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(
       new Response("null", {

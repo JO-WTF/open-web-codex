@@ -2342,11 +2342,8 @@ export default function WebApp() {
     ? threadsByWorkspace[activeWorkspaceId]?.find((thread) => thread.id === activeThreadId) ?? null
     : null;
   const activeThreadTitle = activeThread?.label ?? (activeThreadId ? "Thread" : null);
-  const agentPanelAvailable = Boolean(
-    supervisorOverview?.agents.some((agent) => !agent.is_root),
-  );
+  const agentPanelAvailable = true;
   const openAgentPanel = () => {
-    if (!agentPanelAvailable) return;
     const alreadyVisible = rightPanelOpen && activeRightPanelTab === "agents";
     setActiveRightPanelTab("agents");
     setRightPanelOpen(!alreadyVisible);
