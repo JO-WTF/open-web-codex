@@ -100,6 +100,33 @@ export type RuntimeAgentProjection = {
   last_observed_at: string;
 };
 
+export type RuntimeAgentActivityKind =
+  | "assignment"
+  | "guidance"
+  | "turn_started"
+  | "turn_completed"
+  | "tool_started"
+  | "tool_completed"
+  | "tool_failed"
+  | "reporting"
+  | "waiting"
+  | "completed"
+  | "failed"
+  | "interrupted";
+
+export type RuntimeAgentActivity = {
+  run_id: string;
+  sequence: number;
+  thread_id: string;
+  turn_id: string | null;
+  item_id: string | null;
+  kind: RuntimeAgentActivityKind;
+  status: "pending" | "running" | "completed" | "failed" | "waiting";
+  title: string;
+  detail: string | null;
+  created_at: string;
+};
+
 export type ArtifactSummary = {
   id: string;
   task_id: string;

@@ -6,6 +6,29 @@ import FileManager from "./index";
 afterEach(cleanup);
 
 describe("FileManager", () => {
+  it("does not load supplementary file data while its tab is inactive", () => {
+    const listFiles = vi.fn().mockResolvedValue(["README.md"]);
+    const readFile = vi.fn().mockResolvedValue({ content: "# Project", truncated: false });
+    render(
+      <FileManager
+        workspaceId="workspace-1"
+        selectedPath="README.md"
+        onSelectedPathChange={vi.fn()}
+        onClose={vi.fn()}
+        panelWidth={360}
+        onPanelWidthChange={vi.fn()}
+        listFiles={listFiles}
+        readFile={readFile}
+        loadGitStatus={vi.fn().mockResolvedValue({ files: [] })}
+        embedded
+        enabled={false}
+      />,
+    );
+
+    expect(listFiles).not.toHaveBeenCalled();
+    expect(readFile).not.toHaveBeenCalled();
+  });
+
   it("shows git states and previews a selected file", async () => {
     const readFile = vi.fn().mockResolvedValue({ content: "export const value = 1;", truncated: false });
     render(

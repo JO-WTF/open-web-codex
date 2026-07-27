@@ -6,16 +6,10 @@ import Header from "./Header";
 import MessageList from "./MessageList";
 import Composer from "./Composer";
 import GoalBanner from "./GoalBanner";
-import SupervisorOverview from "./SupervisorOverview";
 import FollowUpQueue, { type QueuedFollowUp } from "./FollowUpQueue";
 import UserInputCard from "./messages/UserInputCard";
 import type { RequestUserInputRequest, RequestUserInputResponse } from "../../types";
 import type { ModelProviderSummary, ModelSummary } from "./Composer";
-import type {
-  ArtifactSummary,
-  RuntimeAgentProjection,
-  SupervisorPolicyBinding,
-} from "../../../browser/types";
 import {
   initialConversationStart,
   previousConversationStart,
@@ -30,15 +24,14 @@ type Props = {
   threadCreationStatus?: "creating" | "failed" | null;
   threadCreationError?: string | null;
   onRetryThreadCreation?: () => void;
-  supervisorPolicy?: SupervisorPolicyBinding | null;
-  supervisorAgents?: RuntimeAgentProjection[];
-  supervisorArtifacts?: ArtifactSummary[];
-  supervisorLoading?: boolean;
-  supervisorError?: string | null;
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
-  filePanelOpen?: boolean;
-  onToggleFilePanel?: () => void;
+  rightPanelOpen?: boolean;
+  activeRightPanelTab?: "agents" | "files";
+  agentPanelAvailable?: boolean;
+  agentPanelUnread?: boolean;
+  onOpenAgentPanel?: () => void;
+  onOpenFilePanel?: () => void;
   onOpenFile?: (path: string) => void;
   tokenUsage: import("../../types").ThreadTokenUsage | null;
   threadStatus: string;
@@ -84,15 +77,14 @@ export default function Conversation({
   threadCreationStatus = null,
   threadCreationError = null,
   onRetryThreadCreation,
-  supervisorPolicy = null,
-  supervisorAgents = [],
-  supervisorArtifacts = [],
-  supervisorLoading = false,
-  supervisorError = null,
   sidebarCollapsed,
   onToggleSidebar,
-  filePanelOpen = false,
-  onToggleFilePanel,
+  rightPanelOpen = false,
+  activeRightPanelTab = "files",
+  agentPanelAvailable = false,
+  agentPanelUnread = false,
+  onOpenAgentPanel,
+  onOpenFilePanel,
   onOpenFile,
   tokenUsage,
   threadStatus,
@@ -169,7 +161,20 @@ export default function Conversation({
 
   return (
     <section className="web-chat">
-      <Header workspaceName={workspaceName} threadTitle={threadTitle} threadStatus={threadStatus} threadSettings={threadSettings} sidebarCollapsed={sidebarCollapsed} onToggleSidebar={onToggleSidebar} filePanelOpen={filePanelOpen} onToggleFilePanel={onToggleFilePanel} />
+      <Header
+        workspaceName={workspaceName}
+        threadTitle={threadTitle}
+        threadStatus={threadStatus}
+        threadSettings={threadSettings}
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleSidebar={onToggleSidebar}
+        rightPanelOpen={rightPanelOpen}
+        activeRightPanelTab={activeRightPanelTab}
+        agentPanelAvailable={agentPanelAvailable}
+        agentPanelUnread={agentPanelUnread}
+        onOpenAgentPanel={onOpenAgentPanel}
+        onOpenFilePanel={onOpenFilePanel}
+      />
       <div
         className={`web-message-area${threadLoading ? " is-thread-loading" : ""}`}
         ref={messageAreaRef}
@@ -200,13 +205,6 @@ export default function Conversation({
           className={`web-thread-content${threadLoading || threadCreationStatus ? " is-hidden" : ""}`}
           aria-hidden={threadLoading || Boolean(threadCreationStatus)}
         >
-          <SupervisorOverview
-            policy={supervisorPolicy}
-            agents={supervisorAgents}
-            artifacts={supervisorArtifacts}
-            loading={supervisorLoading}
-            error={supervisorError}
-          />
           {hasOlderMessages && (
             <button type="button" className="web-load-older" onClick={loadOlderMessages}>
               Load previous messages

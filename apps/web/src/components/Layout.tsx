@@ -12,9 +12,9 @@ type Props = {
 };
 
 export default function Layout({ sidebar, children, sidebarCollapsed = false, onDismissSidebar, rightPanel, rightPanelOpen = false, rightPanelWidth = 360, theme = "dark" }: Props) {
-  const style = { "--web-file-panel-width": `${rightPanelWidth}px` } as CSSProperties;
+  const style = { "--web-right-panel-width": `${rightPanelWidth}px` } as CSSProperties;
   return (
-    <main data-theme={theme} className={`web-app-shell${sidebarCollapsed ? " web-sidebar-collapsed" : ""}${rightPanelOpen ? " web-files-open" : ""}`} style={style}>
+    <main data-theme={theme} className={`web-app-shell${sidebarCollapsed ? " web-sidebar-collapsed" : ""}${rightPanelOpen ? " web-right-panel-open" : ""}`} style={style}>
       {sidebar}
       {!sidebarCollapsed && onDismissSidebar ? (
         <button
@@ -25,7 +25,11 @@ export default function Layout({ sidebar, children, sidebarCollapsed = false, on
         />
       ) : null}
       {children}
-      {rightPanelOpen ? rightPanel : null}
+      {rightPanel ? (
+        <div className="web-right-panel-slot" hidden={!rightPanelOpen}>
+          {rightPanel}
+        </div>
+      ) : null}
     </main>
   );
 }

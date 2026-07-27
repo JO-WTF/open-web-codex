@@ -18,6 +18,8 @@ type Props = {
   listFiles: (workspaceId: string) => Promise<string[]>;
   readFile: (workspaceId: string, path: string) => Promise<{ content: string; truncated: boolean }>;
   loadGitStatus: (workspaceId: string) => Promise<{ files: GitFileStatus[] }>;
+  embedded?: boolean;
+  enabled?: boolean;
 };
 
 type Row = { path: string; name: string; depth: number; folder: boolean };
@@ -48,7 +50,7 @@ function resolveMarkdownLink(currentPath: string, targetPath: string) {
   return resolved.join("/");
 }
 
-export default function FileManager({ workspaceId, selectedPath, onSelectedPathChange, onClose, panelWidth, onPanelWidthChange, listFiles, readFile, loadGitStatus }: Props) {
+export default function FileManager({ workspaceId, selectedPath, onSelectedPathChange, onClose, panelWidth, onPanelWidthChange, listFiles, readFile, loadGitStatus, embedded = false, enabled = true }: Props) {
   const [files, setFiles] = useState<string[]>([]);
   const [statuses, setStatuses] = useState<Map<string, string>>(new Map());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -80,16 +82,17 @@ export default function FileManager({ workspaceId, selectedPath, onSelectedPathC
   };
 
   useEffect(() => {
+    if (!enabled) return;
     void refresh();
     return () => { refreshRequest.current += 1; };
-  }, [workspaceId, listFiles, loadGitStatus]);
+  }, [enabled, workspaceId, listFiles, loadGitStatus]);
 
   useEffect(() => {
     let cancelled = false;
     setContent("");
     setTruncated(false);
     setError(null);
-    if (!workspaceId || !selectedPath) {
+    if (!enabled || !workspaceId || !selectedPath) {
       setLoading(false);
       return () => { cancelled = true; };
     }
@@ -110,7 +113,7 @@ export default function FileManager({ workspaceId, selectedPath, onSelectedPathC
       if (!cancelled) setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [readFile, selectedPath, workspaceId]);
+  }, [enabled, readFile, selectedPath, workspaceId]);
 
   useEffect(() => () => {
     resizeSession.current?.cleanup(false);
@@ -140,8 +143,8 @@ export default function FileManager({ workspaceId, selectedPath, onSelectedPathC
 
   const clampPanelWidth = (width: number) => Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, width));
   return (
-    <aside className="web-file-manager" aria-label="Workspace files">
-      <div
+    <aside className={`web-file-manager${embedded ? " is-embedded" : ""}`} aria-label="Workspace files">
+      {!embedded ? <div
         className="web-file-manager-resizer"
         role="separator"
         aria-label="Resize file manager"
@@ -192,12 +195,12 @@ export default function FileManager({ workspaceId, selectedPath, onSelectedPathC
           event.preventDefault();
           onPanelWidthChange(clampPanelWidth(panelWidth + (event.key === "ArrowLeft" ? 16 : -16)));
         }}
-      />
+      /> : null}
       <div className="web-file-manager-header">
-        <strong>Files</strong>
+        <strong>{embedded ? "Workspace" : "Files"}</strong>
         <div>
           <button type="button" onClick={() => void refresh()} aria-label="Refresh files"><RefreshCw size={14} /></button>
-          <button type="button" onClick={onClose} aria-label="Collapse file manager"><X size={15} /></button>
+          {!embedded ? <button type="button" onClick={onClose} aria-label="Collapse file manager"><X size={15} /></button> : null}
         </div>
       </div>
       <section className={`web-file-tree-section${treeOpen ? " is-open" : ""}`}>

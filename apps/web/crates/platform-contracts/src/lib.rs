@@ -367,6 +367,52 @@ pub struct RuntimeAgentProjection {
     pub last_observed_at: DateTime<Utc>,
 }
 
+/// Browser-safe description of one observable step performed by a
+/// Runtime-owned Agent Thread.
+///
+/// Activities are derived from persisted Run events. They intentionally omit
+/// model reasoning, tool arguments, tool results and host-local identifiers.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeAgentActivityKind {
+    Assignment,
+    Guidance,
+    TurnStarted,
+    TurnCompleted,
+    ToolStarted,
+    ToolCompleted,
+    ToolFailed,
+    Reporting,
+    Waiting,
+    Completed,
+    Failed,
+    Interrupted,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeAgentActivityStatus {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+    Waiting,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeAgentActivity {
+    pub run_id: Uuid,
+    pub sequence: i64,
+    pub thread_id: String,
+    pub turn_id: Option<String>,
+    pub item_id: Option<String>,
+    pub kind: RuntimeAgentActivityKind,
+    pub status: RuntimeAgentActivityStatus,
+    pub title: String,
+    pub detail: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
 /// Browser-safe view of one independently authorized, durable Artifact.
 ///
 /// Runtime MCP server names and Resource URIs remain internal. Producer

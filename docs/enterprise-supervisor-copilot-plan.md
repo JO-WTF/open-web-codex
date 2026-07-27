@@ -468,7 +468,14 @@ Prompt 中的角色说明。
 - [x] 根 Thread 页面展示当前 Supervisor Policy 名称和版本；
 - [x] 在现有 Thread 体验中展示 Runtime 投影的根 Supervisor、子 Agent、角色和
   当前可观察状态；
-- [ ] 将两层列表扩展为可进入历史的多层 Agent 树，并显示最后活动；
+- [x] 从持久 Run Event 中形成有界活动投影：Supervisor 摘要固定置顶，展示主任务、
+  运行状态、当前行为和最新进展；子 Agent 按真实 Runtime Turn 形成任务执行流，
+  完成节点保持不变，同一 Agent 后续启动新 Turn 时新增节点而不是覆盖旧任务；
+  协作 Prompt 仅作为任务摘要，工具参数、结果、内部路径和推理内容不进入浏览器
+  DTO；
+- [x] Agent 与 Files 复用同一右侧栏并以标签切换；只有真实子 Agent 出现后入口
+  才启用，Files 可见时的 Agent 更新只显示未读提示，不抢占当前页面；
+- [ ] 将两层列表扩展为可进入历史的多层 Agent 树；
 - [x] collab Tool Call 保留人类可读动作；当前案例已显示创建、等待与协作进度，
   追问、中断和继续待非 happy path 验证；
 - [ ] 子 Agent 详情可以进入真实 Thread 历史；

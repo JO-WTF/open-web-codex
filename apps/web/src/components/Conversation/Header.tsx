@@ -1,3 +1,4 @@
+import Bot from "lucide-react/dist/esm/icons/bot";
 import ChevronRight from "lucide-react/dist/esm/icons/chevron-right";
 import FolderOpen from "lucide-react/dist/esm/icons/folder-open";
 import PanelLeftClose from "lucide-react/dist/esm/icons/panel-left-close";
@@ -10,8 +11,12 @@ type Props = {
   threadSettings?: Record<string, unknown> | null;
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
-  filePanelOpen?: boolean;
-  onToggleFilePanel?: () => void;
+  rightPanelOpen?: boolean;
+  activeRightPanelTab?: "agents" | "files";
+  agentPanelAvailable?: boolean;
+  agentPanelUnread?: boolean;
+  onOpenAgentPanel?: () => void;
+  onOpenFilePanel?: () => void;
 };
 
 function statusDotClass(status: string): string {
@@ -34,8 +39,12 @@ export default function Header({
   threadSettings,
   sidebarCollapsed,
   onToggleSidebar,
-  filePanelOpen = false,
-  onToggleFilePanel,
+  rightPanelOpen = false,
+  activeRightPanelTab = "files",
+  agentPanelAvailable = false,
+  agentPanelUnread = false,
+  onOpenAgentPanel,
+  onOpenFilePanel,
 }: Props) {
   // Extract useful settings for display
   const ts = threadSettings as Record<string, unknown> | null | undefined;
@@ -82,7 +91,19 @@ export default function Header({
             {approvalPolicy}
           </span>
         )}
-        <button type="button" className={`web-icon-button${filePanelOpen ? " is-active" : ""}`} title="File manager" aria-label="File manager" aria-pressed={filePanelOpen} onClick={onToggleFilePanel}>
+        <button
+          type="button"
+          className={`web-icon-button web-agent-panel-button${rightPanelOpen && activeRightPanelTab === "agents" ? " is-active" : ""}`}
+          title={agentPanelAvailable ? "Agent activity" : "Agent activity becomes available when a sub-agent starts"}
+          aria-label="Agent activity"
+          aria-pressed={rightPanelOpen && activeRightPanelTab === "agents"}
+          disabled={!agentPanelAvailable}
+          onClick={onOpenAgentPanel}
+        >
+          <Bot size={16} />
+          {agentPanelUnread ? <span className="web-agent-unread" aria-label="New Agent activity" /> : null}
+        </button>
+        <button type="button" className={`web-icon-button${rightPanelOpen && activeRightPanelTab === "files" ? " is-active" : ""}`} title="File manager" aria-label="File manager" aria-pressed={rightPanelOpen && activeRightPanelTab === "files"} onClick={onOpenFilePanel}>
           <FolderOpen size={16} />
         </button>
       </div>

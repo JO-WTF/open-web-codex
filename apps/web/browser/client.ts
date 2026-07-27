@@ -6,6 +6,7 @@ import type {
   ProviderCatalog,
   Run,
   RunEvent,
+  RuntimeAgentActivity,
   Session,
   Task,
   Workspace,
@@ -376,6 +377,12 @@ export class PlatformClient {
   listRunAgents(runId: string) {
     return this.request<RuntimeAgentProjection[]>(
       `/api/runs/${encodeURIComponent(runId)}/agents`,
+    );
+  }
+
+  listRunAgentActivities(runId: string) {
+    return this.request<RuntimeAgentActivity[]>(
+      `/api/runs/${encodeURIComponent(runId)}/agent-activities`,
     );
   }
 

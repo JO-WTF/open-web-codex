@@ -115,6 +115,7 @@ describe("WebApp workspace-first messaging", () => {
 
   it("starts and identifies an explicitly selected Enterprise Supervisor Copilot", async () => {
     client.getEnterpriseSupervisorOverview.mockResolvedValue({
+      taskTitle: "Enterprise network planning",
       policy: {
         run_id: "run-enterprise",
         task_id: "task-enterprise",
@@ -127,19 +128,47 @@ describe("WebApp workspace-first messaging", () => {
         created_at: "2026-07-26T00:00:00Z",
         bound_at: "2026-07-26T00:00:01Z",
       },
-      agents: [{
+      agents: [
+        {
+          run_id: "run-enterprise",
+          thread_id: "thread-new",
+          parent_thread_id: null,
+          source_kind: "root",
+          agent_path: null,
+          agent_nickname: null,
+          agent_role: null,
+          status_type: "idle",
+          active_flags: [],
+          is_root: true,
+          first_observed_at: "2026-07-26T00:00:01Z",
+          last_observed_at: "2026-07-26T00:00:01Z",
+        },
+        {
+          run_id: "run-enterprise",
+          thread_id: "data-thread",
+          parent_thread_id: "thread-new",
+          source_kind: "thread_spawn",
+          agent_path: "/root/data",
+          agent_nickname: "Data Analyst",
+          agent_role: "data_agent",
+          status_type: "active",
+          active_flags: [],
+          is_root: false,
+          first_observed_at: "2026-07-26T00:00:02Z",
+          last_observed_at: "2026-07-26T00:00:02Z",
+        },
+      ],
+      activities: [{
         run_id: "run-enterprise",
-        thread_id: "thread-new",
-        parent_thread_id: null,
-        source_kind: "root",
-        agent_path: null,
-        agent_nickname: null,
-        agent_role: null,
-        status_type: "idle",
-        active_flags: [],
-        is_root: true,
-        first_observed_at: "2026-07-26T00:00:01Z",
-        last_observed_at: "2026-07-26T00:00:01Z",
+        sequence: 4,
+        thread_id: "data-thread",
+        turn_id: null,
+        item_id: "spawn-data",
+        kind: "assignment",
+        status: "pending",
+        title: "Task assigned",
+        detail: "Inspect enterprise planning data.",
+        created_at: "2026-07-26T00:00:02Z",
       }],
       artifacts: [],
     });
@@ -160,11 +189,141 @@ describe("WebApp workspace-first messaging", () => {
     ));
     await waitFor(() => expect(client.getEnterpriseSupervisorOverview)
       .toHaveBeenCalledWith("thread-new"));
+    fireEvent.click(await screen.findByRole("button", { name: "Agent activity" }));
     await waitFor(() => {
       expect(screen.getByText("Policy enterprise-supervisor-copilot · 1.0.0"))
         .toBeTruthy();
       expect(screen.getByText("Root Supervisor")).toBeTruthy();
     });
+  });
+
+  it("keeps Agent activity live while Files is selected and marks it unread", async () => {
+    const rootAgent = {
+      run_id: "run-enterprise",
+      thread_id: "thread-new",
+      parent_thread_id: null,
+      source_kind: "root",
+      agent_path: null,
+      agent_nickname: null,
+      agent_role: null,
+      status_type: "active",
+      active_flags: [],
+      is_root: true,
+      first_observed_at: "2026-07-26T00:00:01Z",
+      last_observed_at: "2026-07-26T00:00:01Z",
+    };
+    const dataAgent = {
+      ...rootAgent,
+      thread_id: "data-thread",
+      parent_thread_id: "thread-new",
+      source_kind: "thread_spawn",
+      agent_path: "/root/data",
+      agent_nickname: "Data Analyst",
+      agent_role: "data_agent",
+      is_root: false,
+      first_observed_at: "2026-07-26T00:00:02Z",
+    };
+    const assignment = {
+      run_id: "run-enterprise",
+      sequence: 4,
+      thread_id: "data-thread",
+      turn_id: null,
+      item_id: "spawn-data",
+      kind: "assignment",
+      status: "pending",
+      title: "Task assigned",
+      detail: "Inspect enterprise planning data.",
+      created_at: "2026-07-26T00:00:02Z",
+    };
+    const baseOverview = {
+      taskTitle: "Enterprise network planning",
+      policy: null,
+      agents: [rootAgent, dataAgent],
+      activities: [assignment],
+      artifacts: [],
+    };
+    client.listThreads.mockResolvedValue({
+      data: [{
+        id: "thread-new",
+        name: "Supervisor case",
+        cwd: "/tmp/demo",
+        status: "idle",
+        updatedAt: "2026-07-26T00:00:02Z",
+      }],
+    });
+    client.getEnterpriseSupervisorOverview.mockResolvedValue(baseOverview);
+    render(<WebApp />);
+
+    fireEvent.click(await screen.findByText("Supervisor case"));
+    await waitFor(() => expect(client.getEnterpriseSupervisorOverview)
+      .toHaveBeenCalledWith("thread-new"));
+    const agentButton = await screen.findByRole("button", { name: "Agent activity" });
+    await waitFor(() => expect((agentButton as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "File manager" }));
+    await waitFor(() => expect(
+      screen.getByRole("button", { name: "File manager" }).getAttribute("aria-pressed"),
+    ).toBe("true"));
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 180));
+    });
+
+    const previousRefreshes = client.getEnterpriseSupervisorOverview.mock.calls.length;
+    client.getEnterpriseSupervisorOverview.mockResolvedValue({
+      ...baseOverview,
+      activities: [
+        assignment,
+        {
+          ...assignment,
+          sequence: 5,
+          turn_id: "turn-data",
+          item_id: null,
+          kind: "turn_started",
+          status: "running",
+          title: "Started working",
+          detail: null,
+          created_at: "2026-07-26T00:00:03Z",
+        },
+        {
+          ...assignment,
+          sequence: 6,
+          turn_id: "turn-data",
+          item_id: "tool-data",
+          kind: "tool_started",
+          status: "running",
+          title: "Using planning data · load network",
+          detail: null,
+          created_at: "2026-07-26T00:00:04Z",
+        },
+      ],
+    });
+    act(() => {
+      appServerEventHandler?.({
+        workspace_id: "workspace-1",
+        message: {
+          method: "item/started",
+          params: {
+            threadId: "data-thread",
+            turnId: "turn-data",
+            item: {
+              id: "tool-data",
+              type: "mcpToolCall",
+              server: "planning_data",
+              tool: "load_network",
+              status: "inProgress",
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => expect(
+      client.getEnterpriseSupervisorOverview.mock.calls.length,
+    ).toBeGreaterThan(previousRefreshes));
+    expect(await screen.findAllByLabelText("New Agent activity")).toHaveLength(2);
+
+    fireEvent.click(agentButton);
+    expect(await screen.findAllByText("Using planning data · load network")).toHaveLength(1);
+    expect(screen.queryByLabelText("New Agent activity")).toBeNull();
   });
 
   it("rolls back a Provider switch when its model catalog is empty", async () => {

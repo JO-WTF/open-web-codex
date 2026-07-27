@@ -231,10 +231,23 @@ describe("WebApp direct Server client", () => {
       created_at: "2026-07-26T00:00:03Z",
       updated_at: "2026-07-26T00:00:04Z",
     }];
+    const activities = [{
+      run_id: run.id,
+      sequence: 5,
+      thread_id: "data-thread",
+      turn_id: "data-turn",
+      item_id: "data-item",
+      kind: "tool_started",
+      status: "running",
+      title: "Using planning data · load network",
+      detail: null,
+      created_at: "2026-07-26T00:00:03Z",
+    }];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input));
       if (url.pathname === `/api/runs/${run.id}/supervisor-policy`) return json(policy);
       if (url.pathname === `/api/runs/${run.id}/agents`) return json(agents);
+      if (url.pathname === `/api/runs/${run.id}/agent-activities`) return json(activities);
       if (url.pathname === `/api/tasks/${task.id}/artifacts`) return json(artifacts);
       return baseFetch(input, init);
     });
@@ -243,8 +256,10 @@ describe("WebApp direct Server client", () => {
 
     await client.listThreads(workspace.id);
     await expect(client.getEnterpriseSupervisorOverview("thread-1")).resolves.toEqual({
+      taskTitle: task.title,
       policy,
       agents,
+      activities,
       artifacts,
     });
   });

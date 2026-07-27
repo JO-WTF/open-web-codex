@@ -8,6 +8,8 @@ import Layout from "./components/Layout";
 import Sidebar from "./components/Sidebar";
 import Conversation from "./components/Conversation";
 import FileManager from "./components/FileManager";
+import RightSidebar, { type RightSidebarTab } from "./components/RightSidebar";
+import SupervisorOverview from "./components/Conversation/SupervisorOverview";
 import type { GoalInfo } from "./components/Conversation/GoalBanner";
 import type { QueuedFollowUp } from "./components/Conversation/FollowUpQueue";
 import type { ModelProviderSummary, ModelSummary } from "./components/Conversation/Composer";
@@ -273,11 +275,13 @@ export default function WebApp() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() =>
     typeof window !== "undefined" && window.matchMedia("(max-width: 760px)").matches,
   );
-  const [filePanelOpen, setFilePanelOpen] = useState(false);
-  const [filePanelWidth, setFilePanelWidth] = useState(() => {
+  const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  const [activeRightPanelTab, setActiveRightPanelTab] = useState<RightSidebarTab>("files");
+  const [agentPanelUnread, setAgentPanelUnread] = useState(false);
+  const [rightPanelWidth, setRightPanelWidth] = useState(() => {
     if (typeof window === "undefined") return 360;
-    const stored = Number(window.localStorage.getItem("open-web-codex:file-panel-width:v1"));
-    return Number.isFinite(stored) && stored >= 260 && stored <= 720 ? stored : 360;
+    const stored = Number(window.localStorage.getItem("open-web-codex:right-panel-width:v1"));
+    return Number.isFinite(stored) && stored >= 300 && stored <= 720 ? stored : 360;
   });
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
   const [mcpServers, setMcpServers] = useState<Record<string, {name: string; status: string; error?: string | null; failureReason?: string | null}>>({});
@@ -316,11 +320,12 @@ export default function WebApp() {
   useEffect(() => {
     setQueuedFollowUps([]);
     setSteeringFollowUpId(null);
+    setAgentPanelUnread(false);
   }, [activeThreadId]);
 
   useEffect(() => {
-    window.localStorage.setItem("open-web-codex:file-panel-width:v1", String(filePanelWidth));
-  }, [filePanelWidth]);
+    window.localStorage.setItem("open-web-codex:right-panel-width:v1", String(rightPanelWidth));
+  }, [rightPanelWidth]);
 
   const client = useMemo(() => new CodexMonitorWebClient({ baseUrl, token }), [baseUrl, token]);
 
@@ -502,7 +507,8 @@ export default function WebApp() {
     const workspacePath = activeWorkspace?.path?.replace(/\/$/, "");
     const normalized = workspacePath && path.startsWith(`${workspacePath}/`) ? path.slice(workspacePath.length + 1) : path.replace(/^\//, "");
     setSelectedFilePath(normalized);
-    setFilePanelOpen(true);
+    setActiveRightPanelTab("files");
+    setRightPanelOpen(true);
   }, [activeWorkspace?.path]);
 
   // Streaming accumulators
@@ -525,8 +531,14 @@ export default function WebApp() {
   const refreshSupervisorOverviewRef =
     useRef<((threadId?: string | null) => Promise<void>) | null>(null);
   const supervisorOverviewSequence = useRef(0);
+  const supervisorOverviewRefreshTimer = useRef<number | null>(null);
+  const agentActivitySequenceByThread = useRef<Map<string, number>>(new Map());
   const supervisorOverviewRef = useRef(supervisorOverview);
   supervisorOverviewRef.current = supervisorOverview;
+  const rightPanelOpenRef = useRef(rightPanelOpen);
+  rightPanelOpenRef.current = rightPanelOpen;
+  const activeRightPanelTabRef = useRef(activeRightPanelTab);
+  activeRightPanelTabRef.current = activeRightPanelTab;
   const activeThreadIdRef = useRef(activeThreadId);
   activeThreadIdRef.current = activeThreadId;
   const activeWorkspaceIdRef = useRef(activeWorkspaceId);
@@ -542,7 +554,10 @@ export default function WebApp() {
       setSupervisorOverviewError(null);
       return;
     }
-    if (supervisorOverviewRef.current?.policy.thread_id !== threadId) {
+    const visibleOverviewThreadId = supervisorOverviewRef.current?.agents
+      .find((agent) => agent.is_root)?.thread_id
+      ?? supervisorOverviewRef.current?.policy?.thread_id;
+    if (visibleOverviewThreadId !== threadId) {
       setSupervisorOverview(null);
     }
     setSupervisorOverviewLoading(true);
@@ -554,6 +569,19 @@ export default function WebApp() {
         || activeThreadIdRef.current !== threadId
       ) {
         return;
+      }
+      const latestActivitySequence = overview?.activities.reduce(
+        (latest, activity) => Math.max(latest, activity.sequence),
+        0,
+      ) ?? 0;
+      const previousActivitySequence = agentActivitySequenceByThread.current.get(threadId);
+      agentActivitySequenceByThread.current.set(threadId, latestActivitySequence);
+      if (
+        previousActivitySequence !== undefined
+        && latestActivitySequence > previousActivitySequence
+        && (!rightPanelOpenRef.current || activeRightPanelTabRef.current !== "agents")
+      ) {
+        setAgentPanelUnread(true);
       }
       setSupervisorOverview(overview);
     } catch {
@@ -579,9 +607,32 @@ export default function WebApp() {
   }, [client]);
   refreshSupervisorOverviewRef.current = refreshSupervisorOverview;
 
+  const scheduleSupervisorOverviewRefresh = useCallback(() => {
+    if (supervisorOverviewRefreshTimer.current !== null) {
+      window.clearTimeout(supervisorOverviewRefreshTimer.current);
+    }
+    supervisorOverviewRefreshTimer.current = window.setTimeout(() => {
+      supervisorOverviewRefreshTimer.current = null;
+      void refreshSupervisorOverviewRef.current?.(activeThreadIdRef.current);
+    }, 120);
+  }, []);
+
+  useEffect(() => () => {
+    if (supervisorOverviewRefreshTimer.current !== null) {
+      window.clearTimeout(supervisorOverviewRefreshTimer.current);
+    }
+  }, []);
+
   useEffect(() => {
     void refreshSupervisorOverview(activeThreadId);
   }, [activeThreadId, refreshSupervisorOverview]);
+
+  useEffect(() => {
+    const hasRuntimeAgent = supervisorOverview?.agents.some((agent) => !agent.is_root) ?? false;
+    if (!hasRuntimeAgent && activeRightPanelTab === "agents") {
+      setActiveRightPanelTab("files");
+    }
+  }, [activeRightPanelTab, supervisorOverview]);
 
   useEffect(() => {
     // Workspace selection is intentionally workspace-first. A Thread becomes
@@ -676,11 +727,35 @@ export default function WebApp() {
       );
 
       const eventThreadId = getAppServerThreadId(event);
+      const runtimeItem = params.item && typeof params.item === "object"
+        ? params.item as Record<string, unknown>
+        : null;
+      const runtimeItemType = typeof runtimeItem?.type === "string" ? runtimeItem.type : null;
+      const agentRelevantItem = runtimeItemType !== null && [
+        "mcpToolCall",
+        "dynamicToolCall",
+        "commandExecution",
+        "collabAgentToolCall",
+        "collabToolCall",
+        "webSearch",
+        "imageView",
+        "imageGeneration",
+        "agentMessage",
+      ].includes(runtimeItemType);
       if (
-        ["thread/started", "thread/status/changed", "thread/completed", "thread/failed"]
-          .includes(method)
+        [
+          "thread/started",
+          "thread/status/changed",
+          "thread/completed",
+          "thread/failed",
+          "turn/started",
+          "turn/completed",
+          "serverRequest/resolved",
+        ].includes(method)
+        || (["item/started", "item/completed"].includes(method) && agentRelevantItem)
+        || method.endsWith("/requestApproval")
       ) {
-        void refreshSupervisorOverviewRef.current?.(activeThreadIdRef.current);
+        scheduleSupervisorOverviewRefresh();
       }
       if (eventThreadId && event.workspace_id) {
         if (method === "thread/name/updated") {
@@ -1596,7 +1671,7 @@ export default function WebApp() {
         }
       }
     },
-    [],
+    [scheduleSupervisorOverviewRefresh],
   );
 
   /* ─── Connection ─── */
@@ -2274,6 +2349,21 @@ export default function WebApp() {
     ? threadsByWorkspace[activeWorkspaceId]?.find((thread) => thread.id === activeThreadId) ?? null
     : null;
   const activeThreadTitle = activeThread?.label ?? (activeThreadId ? "Thread" : null);
+  const agentPanelAvailable = Boolean(
+    supervisorOverview?.agents.some((agent) => !agent.is_root),
+  );
+  const openAgentPanel = () => {
+    if (!agentPanelAvailable) return;
+    const alreadyVisible = rightPanelOpen && activeRightPanelTab === "agents";
+    setActiveRightPanelTab("agents");
+    setRightPanelOpen(!alreadyVisible);
+    setAgentPanelUnread(false);
+  };
+  const openFilePanel = () => {
+    const alreadyVisible = rightPanelOpen && activeRightPanelTab === "files";
+    setActiveRightPanelTab("files");
+    setRightPanelOpen(!alreadyVisible);
+  };
   const retryActiveThreadCreation = () => {
     if (!activeWorkspaceId || activeThread?.creationStatus !== "failed") return;
     void startThread(
@@ -2288,19 +2378,47 @@ export default function WebApp() {
       theme={theme}
       sidebarCollapsed={sidebarCollapsed}
       onDismissSidebar={() => setSidebarCollapsed(true)}
-      rightPanelOpen={filePanelOpen}
-      rightPanelWidth={filePanelWidth}
+      rightPanelOpen={rightPanelOpen}
+      rightPanelWidth={rightPanelWidth}
       rightPanel={
-        <FileManager
-          workspaceId={activeWorkspaceId}
-          selectedPath={selectedFilePath}
-          onSelectedPathChange={setSelectedFilePath}
-          onClose={() => setFilePanelOpen(false)}
-          panelWidth={filePanelWidth}
-          onPanelWidthChange={setFilePanelWidth}
-          listFiles={listWorkspaceFiles}
-          readFile={readWorkspaceFile}
-          loadGitStatus={loadWorkspaceGitStatus}
+        <RightSidebar
+          activeTab={activeRightPanelTab}
+          agentsEnabled={agentPanelAvailable}
+          agentUnread={agentPanelUnread}
+          width={rightPanelWidth}
+          onWidthChange={setRightPanelWidth}
+          onTabChange={(tab) => {
+            if (tab === "agents" && !agentPanelAvailable) return;
+            setActiveRightPanelTab(tab);
+            if (tab === "agents") setAgentPanelUnread(false);
+          }}
+          onClose={() => setRightPanelOpen(false)}
+          agentPanel={
+            <SupervisorOverview
+              taskTitle={supervisorOverview?.taskTitle ?? activeThreadTitle ?? "Current task"}
+              policy={supervisorOverview?.policy ?? null}
+              agents={supervisorOverview?.agents ?? []}
+              activities={supervisorOverview?.activities ?? []}
+              artifacts={supervisorOverview?.artifacts ?? []}
+              loading={supervisorOverviewLoading}
+              error={supervisorOverviewError}
+            />
+          }
+          filePanel={
+            <FileManager
+              workspaceId={activeWorkspaceId}
+              selectedPath={selectedFilePath}
+              onSelectedPathChange={setSelectedFilePath}
+              onClose={() => setRightPanelOpen(false)}
+              panelWidth={rightPanelWidth}
+              onPanelWidthChange={setRightPanelWidth}
+              listFiles={listWorkspaceFiles}
+              readFile={readWorkspaceFile}
+              loadGitStatus={loadWorkspaceGitStatus}
+              embedded
+              enabled={rightPanelOpen && activeRightPanelTab === "files"}
+            />
+          }
         />
       }
       sidebar={
@@ -2351,15 +2469,14 @@ export default function WebApp() {
         threadCreationStatus={activeThread?.creationStatus ?? null}
         threadCreationError={activeThread?.creationError ?? null}
         onRetryThreadCreation={retryActiveThreadCreation}
-        supervisorPolicy={supervisorOverview?.policy ?? null}
-        supervisorAgents={supervisorOverview?.agents ?? []}
-        supervisorArtifacts={supervisorOverview?.artifacts ?? []}
-        supervisorLoading={Boolean(activeThread?.supervisorPolicy) && supervisorOverviewLoading}
-        supervisorError={supervisorOverviewError}
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={() => setSidebarCollapsed((collapsed) => !collapsed)}
-        filePanelOpen={filePanelOpen}
-        onToggleFilePanel={() => setFilePanelOpen((open) => !open)}
+        rightPanelOpen={rightPanelOpen}
+        activeRightPanelTab={activeRightPanelTab}
+        agentPanelAvailable={agentPanelAvailable}
+        agentPanelUnread={agentPanelUnread}
+        onOpenAgentPanel={openAgentPanel}
+        onOpenFilePanel={openFilePanel}
         onOpenFile={openFile}
           tokenUsage={tokenUsage}
           threadStatus={threadStatus}
