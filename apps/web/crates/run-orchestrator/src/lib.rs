@@ -3,6 +3,7 @@ mod scheduler;
 mod supervisor_policy;
 mod workspace;
 
+use async_trait::async_trait;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,6 +14,26 @@ use sqlx::PgPool;
 use std::path::PathBuf;
 use thiserror::Error;
 use uuid::Uuid;
+
+/// Server-owned gate evaluated immediately before a leased Run creates or
+/// forks a Runtime Thread.
+///
+/// The orchestrator deliberately has no default implementation: composition
+/// must install the policy-specific gate that turns durable Run facts into the
+/// exact Runtime start configuration for the current execution.
+#[async_trait]
+pub trait RunStartPreflight: Send + Sync {
+    async fn prepare_runtime_start(
+        &self,
+        lease: &RunLease,
+    ) -> Result<ThreadStartMode, RunStartPreflightError>;
+}
+
+#[derive(Debug, Error)]
+pub enum RunStartPreflightError {
+    #[error("Runtime start preflight rejected the Run: {0}")]
+    Rejected(String),
+}
 
 #[derive(Debug, Error)]
 pub enum RunOrchestratorError {
@@ -30,6 +51,8 @@ pub enum RunOrchestratorError {
     Git(#[from] GitRuntimeError),
     #[error("Codex Runtime operation failed: {0}")]
     Adapter(#[from] AdapterError),
+    #[error("Runtime start preflight failed: {0}")]
+    StartPreflight(#[from] RunStartPreflightError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +79,20 @@ pub struct SupervisorPolicySnapshotInput {
     pub display_name: String,
     pub developer_instructions: String,
     pub content_sha256: String,
+}
+
+/// Immutable Supervisor Policy facts leased with a Run.
+///
+/// These facts are read from the persisted binding/snapshot pair while the
+/// Run is claimed. The execution-time preflight compares them with the
+/// repository-published policy before allowing any Runtime Thread creation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SupervisorPolicyLease {
+    pub binding_id: Uuid,
+    pub policy_id: String,
+    pub version: String,
+    pub content_sha256: String,
+    pub developer_instructions: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -135,8 +172,7 @@ pub struct RunLease {
     pub workspace_root: PathBuf,
     pub fork_thread_id: Option<String>,
     pub fork_source_run_id: Option<Uuid>,
-    pub supervisor_policy_binding_id: Option<Uuid>,
-    pub thread_start_mode: ThreadStartMode,
+    pub supervisor_policy: Option<SupervisorPolicyLease>,
     pub token: String,
 }
 
@@ -145,6 +181,7 @@ pub struct RunOrchestrator {
     pub(crate) db: PgPool,
     pub(crate) git: Arc<GitRuntime>,
     pub(crate) adapter: Arc<dyn CodexAdapter>,
+    pub(crate) start_preflight: Arc<dyn RunStartPreflight>,
     pub(crate) runtime_key: String,
     pub(crate) worker_id: String,
     pub(crate) lease_ttl: Duration,
@@ -155,6 +192,7 @@ impl RunOrchestrator {
         db: PgPool,
         git: Arc<GitRuntime>,
         adapter: Arc<dyn CodexAdapter>,
+        start_preflight: Arc<dyn RunStartPreflight>,
         runtime_key: impl Into<String>,
         worker_id: impl Into<String>,
         lease_ttl: Duration,
@@ -174,6 +212,7 @@ impl RunOrchestrator {
             db,
             git,
             adapter,
+            start_preflight,
             runtime_key: runtime_key.into(),
             worker_id,
             lease_ttl,

@@ -1,12 +1,11 @@
 use chrono::Utc;
-use open_web_codex_adapter::ThreadStartMode;
 use sqlx::Row;
 use uuid::Uuid;
 
 use crate::supervisor_policy::ensure_run_policy_binding;
 use crate::{
     chrono_ttl, validate_idempotency_key, CancelRunRequest, EnqueueRunRequest, RecoverRunRequest,
-    RunLease, RunOrchestrator, RunOrchestratorError, RunRecord,
+    RunLease, RunOrchestrator, RunOrchestratorError, RunRecord, SupervisorPolicyLease,
 };
 
 impl RunOrchestrator {
@@ -331,7 +330,10 @@ impl RunOrchestrator {
                     run.workspace_id, \
                     run.fork_thread_id, run.fork_source_run_id, workspace.root_path, \
                     binding.id AS supervisor_policy_binding_id, \
-                    snapshot.developer_instructions \
+                    snapshot.policy_id AS supervisor_policy_id, \
+                    snapshot.version AS supervisor_policy_version, \
+                    snapshot.content_sha256 AS supervisor_policy_content_sha256, \
+                    snapshot.developer_instructions AS supervisor_policy_developer_instructions \
              FROM runs run \
              JOIN tasks task ON task.id = run.task_id \
                AND task.organization_id = run.organization_id \
@@ -361,6 +363,7 @@ impl RunOrchestrator {
             transaction.commit().await?;
             return Ok(None);
         };
+        let supervisor_policy = supervisor_policy_lease(&candidate)?;
         let run_id: Uuid = candidate.get("id");
         let token = Uuid::now_v7().to_string();
         let expires_at = Utc::now() + chrono_ttl(self.lease_ttl)?;
@@ -377,13 +380,6 @@ impl RunOrchestrator {
         .execute(&mut *transaction)
         .await?;
         transaction.commit().await?;
-        let developer_instructions: Option<String> = candidate.get("developer_instructions");
-        let thread_start_mode = match developer_instructions {
-            Some(developer_instructions) => ThreadStartMode::EnterpriseSupervisor {
-                developer_instructions,
-            },
-            None => ThreadStartMode::Standard,
-        };
         Ok(Some(RunLease {
             run_id,
             organization_id: candidate.get("organization_id"),
@@ -393,8 +389,7 @@ impl RunOrchestrator {
             workspace_root: candidate.get::<String, _>("root_path").into(),
             fork_thread_id: candidate.get("fork_thread_id"),
             fork_source_run_id: candidate.get("fork_source_run_id"),
-            supervisor_policy_binding_id: candidate.get("supervisor_policy_binding_id"),
-            thread_start_mode,
+            supervisor_policy,
             token,
         }))
     }
@@ -444,6 +439,36 @@ impl RunOrchestrator {
         .execute(&self.db)
         .await?
         .rows_affected())
+    }
+}
+
+fn supervisor_policy_lease(
+    candidate: &sqlx::postgres::PgRow,
+) -> Result<Option<SupervisorPolicyLease>, RunOrchestratorError> {
+    match (
+        candidate.get::<Option<Uuid>, _>("supervisor_policy_binding_id"),
+        candidate.get::<Option<String>, _>("supervisor_policy_id"),
+        candidate.get::<Option<String>, _>("supervisor_policy_version"),
+        candidate.get::<Option<String>, _>("supervisor_policy_content_sha256"),
+        candidate.get::<Option<String>, _>("supervisor_policy_developer_instructions"),
+    ) {
+        (None, None, None, None, None) => Ok(None),
+        (
+            Some(binding_id),
+            Some(policy_id),
+            Some(version),
+            Some(content_sha256),
+            Some(developer_instructions),
+        ) => Ok(Some(SupervisorPolicyLease {
+            binding_id,
+            policy_id,
+            version,
+            content_sha256,
+            developer_instructions,
+        })),
+        _ => Err(RunOrchestratorError::Conflict(
+            "Supervisor Policy binding is missing immutable snapshot fields".to_string(),
+        )),
     }
 }
 

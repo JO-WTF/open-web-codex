@@ -995,6 +995,10 @@ fn orchestrator_error(error: RunOrchestratorError) -> (StatusCode, Json<Platform
             StatusCode::BAD_GATEWAY,
             PlatformError::internal("Codex Runtime operation failed"),
         ),
+        RunOrchestratorError::StartPreflight(_) => (
+            StatusCode::CONFLICT,
+            PlatformError::bad_request("Runtime start requirements are unavailable"),
+        ),
         RunOrchestratorError::LeaseLost => (
             StatusCode::CONFLICT,
             PlatformError::bad_request("Run ownership changed; reload its current state"),

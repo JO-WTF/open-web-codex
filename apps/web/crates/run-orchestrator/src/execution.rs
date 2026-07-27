@@ -23,7 +23,7 @@ impl RunOrchestrator {
             id: lease.workspace_id.to_string(),
             root: lease.workspace_root.clone(),
         };
-        let started = if let Some(source_thread_id) = lease.fork_thread_id.as_deref() {
+        let source_workspace = if let Some(source_thread_id) = lease.fork_thread_id.as_deref() {
             let source = sqlx::query(
                 "SELECT source_workspace.id AS workspace_id, source_workspace.root_path \
                  FROM runs source_run \
@@ -48,13 +48,23 @@ impl RunOrchestrator {
                 id: source.get::<Uuid, _>("workspace_id").to_string(),
                 root: source.get::<String, _>("root_path").into(),
             };
-            self.adapter
-                .fork_thread(&source_workspace, &workspace, source_thread_id)
-                .await?
+            Some(source_workspace)
         } else {
-            self.adapter
-                .start_thread(&workspace, &lease.thread_start_mode)
-                .await?
+            None
+        };
+        let start_mode = self.start_preflight.prepare_runtime_start(lease).await?;
+        let started = match (source_workspace, lease.fork_thread_id.as_deref()) {
+            (Some(source_workspace), Some(source_thread_id)) => {
+                self.adapter
+                    .fork_thread(&source_workspace, &workspace, source_thread_id, &start_mode)
+                    .await?
+            }
+            (None, None) => self.adapter.start_thread(&workspace, &start_mode).await?,
+            _ => {
+                return Err(RunOrchestratorError::Conflict(
+                    "fork source workspace did not match the leased Run".to_string(),
+                ));
+            }
         };
 
         match self
@@ -96,7 +106,11 @@ impl RunOrchestrator {
             return Err(RunOrchestratorError::LeaseLost);
         };
 
-        if let Some(binding_id) = lease.supervisor_policy_binding_id {
+        if let Some(binding_id) = lease
+            .supervisor_policy
+            .as_ref()
+            .map(|policy| policy.binding_id)
+        {
             let updated = sqlx::query(
                 "UPDATE supervisor_policy_bindings \
                  SET thread_id = $1, state = 'bound', failure_code = NULL, \
@@ -151,7 +165,11 @@ impl RunOrchestrator {
             transaction.rollback().await?;
             return Err(RunOrchestratorError::LeaseLost);
         }
-        if let Some(binding_id) = lease.supervisor_policy_binding_id {
+        if let Some(binding_id) = lease
+            .supervisor_policy
+            .as_ref()
+            .map(|policy| policy.binding_id)
+        {
             let updated = sqlx::query(
                 "UPDATE supervisor_policy_bindings \
                  SET thread_id = COALESCE(thread_id, $1), state = 'bound', failure_code = NULL, \
@@ -197,7 +215,11 @@ impl RunOrchestrator {
         .await?
         .rows_affected();
         if updated == 1 {
-            if let Some(binding_id) = lease.supervisor_policy_binding_id {
+            if let Some(binding_id) = lease
+                .supervisor_policy
+                .as_ref()
+                .map(|policy| policy.binding_id)
+            {
                 sqlx::query(
                     "UPDATE supervisor_policy_bindings \
                      SET state = 'failed', failure_code = $1, updated_at = now() \
@@ -330,5 +352,6 @@ fn failure_code(error: &RunOrchestratorError) -> &'static str {
         RunOrchestratorError::Database(_) => "database_error",
         RunOrchestratorError::Git(_) => "git_workspace_error",
         RunOrchestratorError::Adapter(_) => "codex_unavailable",
+        RunOrchestratorError::StartPreflight(_) => "runtime_start_preflight_failed",
     }
 }

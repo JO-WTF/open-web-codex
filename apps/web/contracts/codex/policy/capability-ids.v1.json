@@ -50,6 +50,12 @@
       "description": "Native multi-agent settings, limits and collaboration events"
     },
     {
+      "id": "agents.multi_agent_v1_backend_override",
+      "owner": "codex-rust",
+      "requiredForV1": false,
+      "description": "Request-scoped V1 multi-agent backend override for governed thread start and fork"
+    },
+    {
       "id": "skills.crud",
       "owner": "codex-rust",
       "requiredForV1": true,

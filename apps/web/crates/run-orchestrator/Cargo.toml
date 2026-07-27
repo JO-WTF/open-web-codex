@@ -7,6 +7,7 @@ edition = "2021"
 open-web-codex-adapter = { path = "../codex-adapter" }
 open-web-codex-git-runtime = { path = "../git-runtime" }
 
+async-trait.workspace = true
 chrono.workspace = true
 sqlx.workspace = true
 tokio.workspace = true

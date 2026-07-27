@@ -55,26 +55,6 @@ const state = {
 const results = [];
 const approvedEnterpriseMcpRequests = new Set();
 
-const dataAgentInstructions = (
-  await readFile(
-    path.join(
-      repoRoot,
-      "tools/supply-chain-network-planner/examples/runtime-roles/data-agent.md",
-    ),
-    "utf8",
-  )
-).trim();
-
-const networkAgentInstructions = (
-  await readFile(
-    path.join(
-      repoRoot,
-      "tools/supply-chain-network-planner/examples/runtime-roles/network-planning-agent.md",
-    ),
-    "utf8",
-  )
-).trim();
-
 function sanitize(value) {
   let text = typeof value === "string" ? value : JSON.stringify(value);
   for (const secret of secrets) {
@@ -158,37 +138,6 @@ function findProvider(catalog, id) {
 
 function currentProviderId(catalog) {
   return catalog.currentProviderId ?? catalog.current_provider_id;
-}
-
-async function ensureRuntimeAgent(name, description, developerInstructions) {
-  let settings = await api("/profile/agents");
-  const existing = settings.agents.find((agent) => agent.name === name);
-  if (existing) {
-    settings = await api(`/profile/agents/${encodeURIComponent(name)}`, {
-      method: "PATCH",
-      body: {
-        name,
-        description,
-        developerInstructions,
-        renameManagedFile: false,
-      },
-    });
-  } else {
-    settings = await api("/profile/agents", {
-      method: "POST",
-      body: {
-        name,
-        description,
-        developerInstructions,
-        template: "blank",
-        model: null,
-        reasoningEffort: null,
-      },
-    });
-  }
-  const configured = settings.agents.find((agent) => agent.name === name);
-  assert(configured, `Runtime Role ${name} was not configured`);
-  assert.equal(configured.developerInstructions, developerInstructions);
 }
 
 async function allTaskEvents(taskId) {
@@ -304,7 +253,7 @@ await runCase("authenticated single-Profile bootstrap", async () => {
   return `server=${health.version}`;
 });
 
-await runCase("real Provider and exact Runtime Roles", async () => {
+await runCase("real Provider selection", async () => {
   let catalog;
   if (useBuiltInProvider) {
     catalog = await api(`/providers/${providerId}/select`, { method: "POST" });
@@ -334,29 +283,7 @@ await runCase("real Provider and exact Runtime Roles", async () => {
     );
   }
 
-  await api("/profile/agents/settings", {
-    method: "PUT",
-    body: { multiAgentEnabled: true, maxThreads: 4, maxDepth: 1 },
-  });
-  await ensureRuntimeAgent(
-    "data_agent",
-    "Prepares validated enterprise planning datasets.",
-    dataAgentInstructions,
-  );
-  await ensureRuntimeAgent(
-    "network_planning_agent",
-    "Evaluates bounded warehouse-network scenarios.",
-    networkAgentInstructions,
-  );
-  const settings = await api("/profile/agents");
-  assert.equal(settings.multiAgentEnabled, true);
-  assert.equal(settings.maxThreads, 4);
-  assert.equal(settings.maxDepth, 1);
-  assert.deepEqual(
-    settings.agents.map((agent) => agent.name).sort(),
-    ["data_agent", "network_planning_agent"],
-  );
-  return `provider=${providerId}; roles=data_agent,network_planning_agent`;
+  return `provider=${providerId}`;
 });
 
 await runCase("published enterprise governance contracts", async () => {
@@ -471,19 +398,34 @@ let finalEvidence;
 await runCase("Runtime Agent tree, cross-child handoff, and deterministic tools", async () => {
   const agents = await eventually(async () => {
     const current = await api(`/runs/${state.run.id}/agents`);
-    const roles = new Set(current.map((agent) => agent.agent_role).filter(Boolean));
+    const roleCounts = current.reduce((counts, agent) => {
+      if (agent.agent_role) {
+        counts.set(agent.agent_role, (counts.get(agent.agent_role) ?? 0) + 1);
+      }
+      return counts;
+    }, new Map());
     return current.length === 3 &&
-      roles.has("data_agent") &&
-      roles.has("network_planning_agent")
+      roleCounts.size === 2 &&
+      roleCounts.get("data_agent") === 1 &&
+      roleCounts.get("network_planning_agent") === 1
       ? current
       : undefined;
   }, "root plus two Runtime child Threads");
   const root = agents.find((agent) => agent.is_root);
-  const dataAgent = agents.find((agent) => agent.agent_role === "data_agent");
-  const networkAgent = agents.find(
+  const dataAgents = agents.filter((agent) => agent.agent_role === "data_agent");
+  const networkAgents = agents.filter(
     (agent) => agent.agent_role === "network_planning_agent",
   );
+  const [dataAgent] = dataAgents;
+  const [networkAgent] = networkAgents;
   assert(root && dataAgent && networkAgent);
+  assert.equal(root.agent_role, null);
+  assert.equal(dataAgents.length, 1, "Automatic projection created duplicate data Agents");
+  assert.equal(
+    networkAgents.length,
+    1,
+    "Automatic projection created duplicate Network Planning Agents",
+  );
   assert.equal(root.thread_id, state.run.codex_thread_id);
   assert.equal(dataAgent.parent_thread_id, root.thread_id);
   assert.equal(networkAgent.parent_thread_id, root.thread_id);

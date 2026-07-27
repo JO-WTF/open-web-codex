@@ -2,6 +2,7 @@ mod agent_definition;
 mod event_projection;
 mod middleware;
 mod routes;
+mod runtime_role_projection;
 #[cfg(test)]
 mod security_integration;
 mod supervisor_policy;
@@ -206,10 +207,18 @@ async fn main() -> anyhow::Result<()> {
         state.db.clone(),
         profile_binding.runtime_key.clone(),
     ));
+    let start_preflight = Arc::new(
+        runtime_role_projection::SupervisorRuntimeRolePreflight::new(
+            state.clone(),
+            adapter.clone(),
+            profile_binding.clone(),
+        ),
+    );
     let orchestrator = Arc::new(RunOrchestrator::new(
         state.db.clone(),
         git.clone(),
         adapter.clone(),
+        start_preflight,
         profile_binding.runtime_key.clone(),
         format!("server-{}", uuid::Uuid::now_v7()),
         std::time::Duration::from_secs(30),

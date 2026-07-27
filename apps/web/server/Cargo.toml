@@ -39,6 +39,7 @@ base64.workspace = true
 toml_edit.workspace = true
 url.workspace = true
 reqwest.workspace = true
+async-trait.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

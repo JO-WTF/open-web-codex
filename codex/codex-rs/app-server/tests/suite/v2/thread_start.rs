@@ -6,6 +6,7 @@ use app_test_support::TestAppServer;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
+use app_test_support::write_models_cache_with_models;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCError;
@@ -22,6 +23,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::TextPosition;
 use codex_app_server_protocol::TextRange;
 use codex_app_server_protocol::ThreadHistoryMode;
+use codex_app_server_protocol::ThreadMultiAgentBackend;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -40,6 +42,9 @@ use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::MultiAgentVersion;
+use codex_rollout::read_session_meta_line;
+use core_test_support::load_default_config_for_test;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -465,6 +470,71 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
     let started: ThreadStartedNotification =
         serde_json::from_value(notif.params.expect("params must be present"))?;
     assert_eq!(started.thread, thread);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_forced_v1_overrides_v2_model_metadata() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+
+    let config = load_default_config_for_test(&codex_home).await;
+    let mut model_info =
+        codex_core::test_support::construct_model_info_offline("mock-model", &config);
+    model_info.multi_agent_version = Some(MultiAgentVersion::V2);
+    write_models_cache_with_models(codex_home.path(), vec![model_info])?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_request_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            multi_agent_backend: Some(ThreadMultiAgentBackend::V1),
+            ..Default::default()
+        })
+        .await?;
+    let start_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_request_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, model, .. } = to_response(start_response)?;
+    assert_eq!(model, "mock-model");
+
+    let turn_request_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "verify forced multi-agent backend".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_request_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let thread_path = thread.path.expect("thread path should be present");
+    let session_meta = read_session_meta_line(thread_path.as_path()).await?;
+    assert_eq!(
+        session_meta.meta.multi_agent_version,
+        Some(MultiAgentVersion::V1),
+        "the typed backend must override V2 model metadata"
+    );
 
     Ok(())
 }

@@ -934,6 +934,7 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
             developer_instructions: None,
             personality: None,
             multi_agent_mode: None,
+            multi_agent_backend: None,
             ephemeral: None,
             history_mode: None,
             session_start_source: None,

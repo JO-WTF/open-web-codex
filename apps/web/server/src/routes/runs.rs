@@ -32,33 +32,21 @@ pub async fn start_run(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
     Path(task_id): Path<Uuid>,
-    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
     Extension(orchestrator): Extension<Arc<RunOrchestrator>>,
     Extension(profile): Extension<RuntimeProfileBinding>,
     Json(req): Json<StartRunRequest>,
 ) -> ApiResult<StartRunResponse> {
     require_runtime_profile(&state.db, &auth, &profile.runtime_key).await?;
-    let resolved_supervisor_policy = req
+    // Resolving a published identifier is safe at enqueue time. Capability,
+    // workspace-effective configuration and Profile Role checks deliberately
+    // run in the worker immediately before the Runtime creates the Thread.
+    let supervisor_policy = req
         .supervisor_policy
         .as_ref()
         .map(supervisor_policy::resolve)
         .transpose()
-        .map_err(supervisor_policy_error)?;
-    if let Some(policy) = resolved_supervisor_policy.as_ref() {
-        let capabilities = profile.capabilities.get().await.ok_or_else(|| {
-            supervisor_policy_error(supervisor_policy::SupervisorPolicyError::Capability(
-                "Codex Capability Manifest is unavailable".to_string(),
-            ))
-        })?;
-        supervisor_policy::require_runtime_capabilities(
-            adapter.as_ref(),
-            &capabilities.manifest,
-            &policy.required_runtime_roles,
-        )
-        .await
-        .map_err(supervisor_policy_error)?;
-    }
-    let supervisor_policy = resolved_supervisor_policy.map(|policy| policy.snapshot);
+        .map_err(supervisor_policy_error)?
+        .map(|policy| policy.snapshot);
     let run = orchestrator
         .enqueue_run(EnqueueRunRequest {
             organization_id: auth.organization_id,
@@ -480,6 +468,10 @@ pub(crate) fn orchestrator_error(error: RunOrchestratorError) -> (StatusCode, Js
             StatusCode::BAD_GATEWAY,
             PlatformError::internal("Codex Runtime operation failed"),
         ),
+        RunOrchestratorError::StartPreflight(_) => (
+            StatusCode::CONFLICT,
+            PlatformError::bad_request("Runtime start requirements are unavailable"),
+        ),
         RunOrchestratorError::LeaseLost => (
             StatusCode::CONFLICT,
             PlatformError::bad_request("Run ownership changed; reload its current state"),
@@ -498,7 +490,6 @@ fn database_error(_error: sqlx::Error) -> (StatusCode, Json<PlatformError>) {
         Json(PlatformError::internal("database operation failed")),
     )
 }
-
 fn supervisor_policy_error(
     error: supervisor_policy::SupervisorPolicyError,
 ) -> (StatusCode, Json<PlatformError>) {

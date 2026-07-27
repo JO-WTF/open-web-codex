@@ -13,11 +13,13 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::{
-    AdapterError, AuthorizedWorkspace, CanceledProfileLogin, CodexAdapter, HealthStatus,
-    ProfileLoginStatus, ProfileMutation, ProfileQuery, ReviewTarget, StartedProfileLogin,
-    StartedThread, ThreadStartMode, TurnOptions,
+    resolve_platform_runtime_role_limits, validate_effective_platform_runtime_roles,
+    validate_platform_runtime_roles, AdapterError, AuthorizedWorkspace, CanceledProfileLogin,
+    CodexAdapter, HealthStatus, PlatformRuntimeRole, ProfileLoginStatus, ProfileMutation,
+    ProfileQuery, ReviewTarget, StartedProfileLogin, StartedThread, ThreadStartMode, TurnOptions,
 };
 
+const MAX_DEVELOPER_INSTRUCTIONS_BYTES: usize = 16 * 1024;
 /// A tracked mock thread for list/show responses.
 #[derive(Clone)]
 struct MockThread {
@@ -30,12 +32,153 @@ struct MockThread {
     updated_at: i64,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::FakeCodexAdapter;
+    use crate::{
+        platform_runtime_role_config_file, AuthorizedWorkspace, CodexAdapter, PlatformRuntimeRole,
+        ProfileMutation, ProfileQuery, ThreadStartMode,
+    };
+    use sha2::{Digest, Sha256};
+
+    fn platform_runtime_role() -> PlatformRuntimeRole {
+        let config_toml = "developer_instructions = '''\nBuild and validate the dataset.\n'''\n";
+        PlatformRuntimeRole {
+            definition_id: "data-agent".to_string(),
+            version: "1.0.0".to_string(),
+            name: "data_agent".to_string(),
+            description: "Builds the governed planning dataset.".to_string(),
+            config_file: platform_runtime_role_config_file("data-agent", "1.0.0"),
+            config_toml: config_toml.to_string(),
+            content_sha256: hex::encode(Sha256::digest(config_toml.as_bytes())),
+        }
+    }
+
+    #[tokio::test]
+    async fn persists_platform_runtime_role_projection_in_profile_config() {
+        let adapter = FakeCodexAdapter::new();
+        let role = platform_runtime_role();
+
+        adapter
+            .mutate_profile(ProfileMutation::EnsurePlatformRuntimeRoles {
+                roles: vec![role.clone()],
+                max_threads: 2,
+                max_depth: 1,
+            })
+            .await
+            .expect("project platform role");
+        let config = adapter
+            .query_profile(ProfileQuery::Config)
+            .await
+            .expect("read fake config");
+
+        assert_eq!(config["config"]["features"]["multi_agent"], true);
+        assert_eq!(config["config"]["agents"]["enabled"], true);
+        // The fake Profile starts at six; a governed projection must not lower
+        // the existing higher Profile setting.
+        assert_eq!(
+            config["config"]["agents"]["max_concurrent_threads_per_session"],
+            6
+        );
+        assert_eq!(config["config"]["agents"]["max_depth"], 1);
+        assert_eq!(
+            config["config"]["agents"]["data_agent"],
+            serde_json::json!({
+                "description": role.description,
+                "config_file": role.config_file,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn revalidates_platform_role_projection_before_governed_start() {
+        let adapter = FakeCodexAdapter::new();
+        let role = platform_runtime_role();
+        let workspace = AuthorizedWorkspace {
+            id: "workspace-1".to_string(),
+            root: "/runner/workspace-1".into(),
+        };
+        adapter
+            .mutate_profile(ProfileMutation::EnsurePlatformRuntimeRoles {
+                roles: vec![role.clone()],
+                max_threads: 2,
+                max_depth: 1,
+            })
+            .await
+            .expect("project platform role");
+        let mode = ThreadStartMode::GovernedSupervisor {
+            developer_instructions: "Coordinate the verified role.".to_string(),
+            roles: vec![role.clone()],
+            min_threads: 2,
+            min_depth: 1,
+        };
+
+        adapter
+            .start_thread(&workspace, &mode)
+            .await
+            .expect("start with a verified projection");
+
+        adapter
+            .mutate_profile(ProfileMutation::SetAgentDefinition {
+                original_name: None,
+                name: role.name.clone(),
+                description: Some("Tampered Role".to_string()),
+                config_file: role.config_file.clone(),
+            })
+            .await
+            .expect("tamper fake effective config");
+        let error = adapter
+            .start_thread(&workspace, &mode)
+            .await
+            .expect_err("tampered projection must not start");
+        assert_eq!(
+            error.to_string(),
+            "Internal error: Platform Runtime Role verification failed"
+        );
+    }
+}
+
 /// In-memory state shared between RPC handlers and event generator.
 struct FakeState {
     workspaces: Vec<Value>,
     threads: Vec<MockThread>,
     /// Events queued by RPC handlers (e.g. thread/started).
     pending_events: Vec<Value>,
+    /// Effective Profile configuration returned by the typed config/read path.
+    profile_config: Value,
+    /// Fake equivalent of the Profile Host's immutable, hash-checked role files.
+    platform_runtime_roles: HashMap<String, PlatformRuntimeRole>,
+}
+
+fn default_profile_config() -> Value {
+    json!({
+        "features": { "multi_agent": true },
+        "agents": {
+            "enabled": true,
+            "max_concurrent_threads_per_session": 6,
+            "max_depth": 1,
+        },
+    })
+}
+
+fn fake_config_read(profile_config: &Value) -> Value {
+    json!({
+        "config": profile_config,
+        "origins": {},
+        "layers": [],
+    })
+}
+fn fake_profile_section_mut<'a>(
+    config: &'a mut Value,
+    section: &str,
+) -> &'a mut serde_json::Map<String, Value> {
+    config
+        .as_object_mut()
+        .expect("fake Profile config is an object")
+        .entry(section.to_string())
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .expect("fake Profile config section is an object")
 }
 
 /// In-memory Codex adapter that simulates workspace, thread and event flows.
@@ -61,6 +204,8 @@ impl FakeCodexAdapter {
                 workspaces: vec![],
                 threads: vec![],
                 pending_events: vec![],
+                profile_config: default_profile_config(),
+                platform_runtime_roles: HashMap::new(),
             })),
             active_login_id: Arc::new(Mutex::new(None)),
             login_statuses: Arc::new(Mutex::new(HashMap::new())),
@@ -278,11 +423,26 @@ impl CodexAdapter for FakeCodexAdapter {
             }
         }
         let mut params = json!({ "workspaceId": workspace.id });
-        if let ThreadStartMode::EnterpriseSupervisor {
-            developer_instructions,
-        } = mode
-        {
-            params["developerInstructions"] = Value::String(developer_instructions.clone());
+        match mode {
+            ThreadStartMode::Standard => {}
+            ThreadStartMode::GovernedSupervisor {
+                developer_instructions,
+                roles,
+                min_threads,
+                min_depth,
+            } => {
+                self.verify_platform_runtime_roles(workspace, roles, *min_threads, *min_depth)
+                    .await?;
+                let instructions = developer_instructions.trim();
+                if instructions.is_empty() || instructions.len() > MAX_DEVELOPER_INSTRUCTIONS_BYTES
+                {
+                    return Err(AdapterError::Internal(
+                        "Supervisor developer instructions must contain 1 to 16384 bytes"
+                            .to_string(),
+                    ));
+                }
+                params["developerInstructions"] = Value::String(instructions.to_string());
+            }
         }
         let result = self.rpc("start_thread", params).await?;
         let thread_id = result
@@ -299,14 +459,14 @@ impl CodexAdapter for FakeCodexAdapter {
         _source_workspace: &AuthorizedWorkspace,
         target_workspace: &AuthorizedWorkspace,
         thread_id: &str,
+        mode: &ThreadStartMode,
     ) -> Result<StartedThread, AdapterError> {
         if thread_id.trim().is_empty() {
             return Err(AdapterError::Internal(
                 "fork source Thread is required".to_string(),
             ));
         }
-        self.start_thread(target_workspace, &ThreadStartMode::Standard)
-            .await
+        self.start_thread(target_workspace, mode).await
     }
 
     async fn read_thread(
@@ -438,38 +598,125 @@ impl CodexAdapter for FakeCodexAdapter {
     }
 
     async fn query_profile(&self, query: ProfileQuery) -> Result<Value, AdapterError> {
-        Ok(match query {
-            ProfileQuery::Account => {
-                json!({ "account": null, "requiresOpenaiAuth": false })
-            }
-            ProfileQuery::RateLimits => json!({}),
-            ProfileQuery::Usage => json!({
+        match query {
+            ProfileQuery::Account => Ok(json!({ "account": null, "requiresOpenaiAuth": false })),
+            ProfileQuery::RateLimits => Ok(json!({})),
+            ProfileQuery::Usage => Ok(json!({
                 "summary": { "lifetimeTokens": 0, "peakDailyTokens": 0 },
                 "dailyUsageBuckets": []
-            }),
-            ProfileQuery::CollaborationModes => json!({ "data": [] }),
+            })),
+            ProfileQuery::CollaborationModes => Ok(json!({ "data": [] })),
             ProfileQuery::Apps { .. }
             | ProfileQuery::McpServers { .. }
             | ProfileQuery::ExperimentalFeatures { .. } => {
-                json!({ "data": [], "nextCursor": null })
+                Ok(json!({ "data": [], "nextCursor": null }))
             }
-            ProfileQuery::Skills { .. } => json!({ "data": [] }),
-            ProfileQuery::Config => json!({
-                "config": {
-                    "features": { "multi_agent": true },
-                    "agents": {
-                        "max_concurrent_threads_per_session": 6,
-                        "max_depth": 1
-                    }
-                }
-            }),
-        })
+            ProfileQuery::Skills { .. } => Ok(json!({ "data": [] })),
+            ProfileQuery::Config => {
+                let state = self.state.lock().await;
+                Ok(fake_config_read(&state.profile_config))
+            }
+        }
     }
 
-    async fn mutate_profile(&self, _mutation: ProfileMutation) -> Result<Value, AdapterError> {
+    async fn mutate_profile(&self, mutation: ProfileMutation) -> Result<Value, AdapterError> {
+        let mut state = self.state.lock().await;
+        match mutation {
+            ProfileMutation::SetExperimentalFeature { .. } => {}
+            ProfileMutation::SetAgentCore {
+                multi_agent_enabled,
+                max_threads,
+                max_depth,
+            } => {
+                fake_profile_section_mut(&mut state.profile_config, "features")
+                    .insert("multi_agent".to_string(), json!(multi_agent_enabled));
+                let agents = fake_profile_section_mut(&mut state.profile_config, "agents");
+                agents.insert(
+                    "max_concurrent_threads_per_session".to_string(),
+                    json!(max_threads),
+                );
+                agents.insert("max_depth".to_string(), json!(max_depth));
+            }
+            ProfileMutation::SetAgentDefinition {
+                original_name,
+                name,
+                description,
+                config_file,
+            } => {
+                let agents = fake_profile_section_mut(&mut state.profile_config, "agents");
+                if let Some(original_name) = original_name.filter(|original| original != &name) {
+                    agents.remove(&original_name);
+                }
+                let mut definition = serde_json::Map::new();
+                if let Some(description) = description {
+                    definition.insert("description".to_string(), json!(description));
+                }
+                definition.insert("config_file".to_string(), json!(config_file));
+                agents.insert(name, Value::Object(definition));
+            }
+            ProfileMutation::RemoveAgentDefinition { name } => {
+                fake_profile_section_mut(&mut state.profile_config, "agents").remove(&name);
+            }
+            ProfileMutation::EnsurePlatformRuntimeRoles {
+                roles,
+                max_threads,
+                max_depth,
+            } => {
+                let current = json!({ "config": state.profile_config.clone() });
+                let (effective_max_threads, effective_max_depth) =
+                    resolve_platform_runtime_role_limits(&current, &roles, max_threads, max_depth)?;
+                fake_profile_section_mut(&mut state.profile_config, "features")
+                    .insert("multi_agent".to_string(), Value::Bool(true));
+                for role in &roles {
+                    state
+                        .platform_runtime_roles
+                        .insert(role.name.clone(), role.clone());
+                }
+                let agents = fake_profile_section_mut(&mut state.profile_config, "agents");
+                agents.insert("enabled".to_string(), Value::Bool(true));
+                agents.insert(
+                    "max_concurrent_threads_per_session".to_string(),
+                    json!(effective_max_threads),
+                );
+                agents.insert("max_depth".to_string(), json!(effective_max_depth));
+                for role in roles {
+                    agents.insert(
+                        role.name,
+                        json!({
+                            "description": role.description,
+                            "config_file": role.config_file,
+                        }),
+                    );
+                }
+            }
+        }
         Ok(json!({ "status": "ok" }))
     }
 
+    async fn verify_platform_runtime_roles(
+        &self,
+        _workspace: &AuthorizedWorkspace,
+        roles: &[PlatformRuntimeRole],
+        min_threads: u32,
+        min_depth: u32,
+    ) -> Result<(), AdapterError> {
+        validate_platform_runtime_roles(roles, min_threads, min_depth)?;
+        let state = self.state.lock().await;
+        for role in roles {
+            if state.platform_runtime_roles.get(&role.name) != Some(role) {
+                return Err(AdapterError::Internal(
+                    "platform Runtime Role file failed verification".to_string(),
+                ));
+            }
+        }
+        validate_effective_platform_runtime_roles(
+            &fake_config_read(&state.profile_config),
+            roles,
+            min_threads,
+            min_depth,
+            &HashMap::new(),
+        )
+    }
     async fn start_profile_login(&self) -> Result<StartedProfileLogin, AdapterError> {
         let login_id = Uuid::now_v7().to_string();
         *self.active_login_id.lock().await = Some(login_id.clone());

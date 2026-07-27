@@ -2,18 +2,21 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use axum::body::{to_bytes, Body};
 use axum::http::{HeaderMap, Request, StatusCode};
 use axum::Router;
 use futures_util::{SinkExt, StreamExt};
-use open_web_codex_adapter::{fake::FakeCodexAdapter, CodexAdapter};
+use open_web_codex_adapter::{fake::FakeCodexAdapter, CodexAdapter, ThreadStartMode};
 use open_web_codex_approval_service::{ApprovalActor, ApprovalService};
 use open_web_codex_auth::hash_password;
 use open_web_codex_git_runtime::{GitRuntime, GitRuntimeConfig};
 use open_web_codex_platform_contracts::{ApprovalDecision, DecideApprovalRequest};
 use open_web_codex_platform_store::AppState;
 use open_web_codex_provider_service::secured::InMemoryAuthorizedProviderService;
-use open_web_codex_run_orchestrator::RunOrchestrator;
+use open_web_codex_run_orchestrator::{
+    RunLease, RunOrchestrator, RunStartPreflight, RunStartPreflightError,
+};
 use open_web_codex_secret_store::{PostgresSecretStore, SecretCipher};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -24,6 +27,20 @@ use uuid::Uuid;
 
 use crate::ensure_transitional_profile_binding;
 use crate::routes::{self, RuntimeProfileBinding};
+
+/// Test composition must opt into a preflight explicitly; production has no
+/// default/no-op path.
+struct TestStartPreflight;
+
+#[async_trait]
+impl RunStartPreflight for TestStartPreflight {
+    async fn prepare_runtime_start(
+        &self,
+        _lease: &RunLease,
+    ) -> Result<ThreadStartMode, RunStartPreflightError> {
+        Ok(ThreadStartMode::Standard)
+    }
+}
 
 #[tokio::test]
 #[ignore = "requires TEST_DATABASE_URL pointing at a disposable PostgreSQL database"]
@@ -57,6 +74,7 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
             pool.clone(),
             git.clone(),
             adapter.clone(),
+            Arc::new(TestStartPreflight),
             "security-test-profile",
             "security-test-worker",
             std::time::Duration::from_secs(30),

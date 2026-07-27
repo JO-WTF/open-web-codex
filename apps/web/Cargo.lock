@@ -1278,12 +1278,15 @@ dependencies = [
  "async-trait",
  "base64",
  "chrono",
+ "hex",
  "open-web-codex-profile-host",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror",
  "tokio",
+ "toml_edit",
  "tracing",
  "uuid",
 ]
@@ -1364,10 +1367,12 @@ dependencies = [
 name = "open-web-codex-profile-host"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "libc",
  "open-web-codex-codex-contracts",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror",
  "tokio",
  "tracing",
@@ -1405,6 +1410,7 @@ dependencies = [
 name = "open-web-codex-run-orchestrator"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "open-web-codex-adapter",
  "open-web-codex-git-runtime",
@@ -1437,6 +1443,7 @@ name = "open-web-codex-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "base64",
  "chrono",

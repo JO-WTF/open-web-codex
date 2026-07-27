@@ -18,6 +18,7 @@ use sqlx::Row;
 use toml_edit::{value, DocumentMut};
 use uuid::Uuid;
 
+use crate::agent_definition;
 use crate::middleware::auth::{require_runtime_profile, AuthenticatedUser};
 use crate::routes::RuntimeProfileBinding;
 
@@ -161,7 +162,7 @@ pub async fn create_agent(
 ) -> ApiResult<AgentsSettings> {
     authorize_profile(&state, &auth, &profile).await?;
     let root = profile_root(&profile)?;
-    let name = validate_identifier(&request.name, "agent")?;
+    let name = validate_browser_managed_agent_name(&request.name)?;
     let current = agents_settings(adapter.as_ref(), root).await?;
     if current.agents.iter().any(|agent| agent.name == name) {
         return Err(conflict("Agent already exists"));
@@ -195,8 +196,8 @@ pub async fn update_agent(
 ) -> ApiResult<AgentsSettings> {
     authorize_profile(&state, &auth, &profile).await?;
     let root = profile_root(&profile)?;
-    let original_name = validate_identifier(&original_name, "agent")?;
-    let name = validate_identifier(&request.name, "agent")?;
+    let original_name = validate_browser_managed_agent_name(&original_name)?;
+    let name = validate_browser_managed_agent_name(&request.name)?;
     let current = agents_settings(adapter.as_ref(), root).await?;
     let existing = current
         .agents
@@ -275,7 +276,7 @@ pub async fn delete_agent(
 ) -> ApiResult<AgentsSettings> {
     authorize_profile(&state, &auth, &profile).await?;
     let root = profile_root(&profile)?;
-    let name = validate_identifier(&name, "agent")?;
+    let name = validate_browser_managed_agent_name(&name)?;
     let current = agents_settings(adapter.as_ref(), root).await?;
     let existing = current
         .agents
@@ -310,7 +311,7 @@ pub async fn read_agent_config(
     Extension(profile): Extension<RuntimeProfileBinding>,
 ) -> ApiResult<String> {
     authorize_profile(&state, &auth, &profile).await?;
-    let name = validate_identifier(&name, "agent")?;
+    let name = validate_browser_managed_agent_name(&name)?;
     let path = managed_agent_path(profile_root(&profile)?, &name);
     let content = match tokio::fs::read_to_string(path).await {
         Ok(content) => content,
@@ -329,7 +330,7 @@ pub async fn write_agent_config(
 ) -> ApiResult<Value> {
     authorize_profile(&state, &auth, &profile).await?;
     validate_text_size(&request.content)?;
-    let name = validate_identifier(&name, "agent")?;
+    let name = validate_browser_managed_agent_name(&name)?;
     request
         .content
         .parse::<DocumentMut>()
@@ -539,7 +540,7 @@ async fn agents_settings(
     let mut summaries = Vec::new();
     if let Some(agents) = agents {
         for (name, definition) in agents {
-            if is_reserved_agent_name(name) || validate_identifier(name, "agent").is_err() {
+            if !is_browser_managed_agent_name(name) {
                 continue;
             }
             let definition = definition.as_object();
@@ -660,6 +661,22 @@ fn managed_agent_path(root: &Path, name: &str) -> PathBuf {
 
 fn managed_agent_config_file(name: &str) -> String {
     format!("agents/{name}.toml")
+}
+
+fn validate_browser_managed_agent_name(value: &str) -> Result<String, ApiError> {
+    let name = validate_identifier(value, "agent")?;
+    if agent_definition::is_platform_runtime_role(&name) {
+        return Err(bad_request(
+            "Platform Runtime Role cannot be managed through the browser",
+        ));
+    }
+    Ok(name)
+}
+
+fn is_browser_managed_agent_name(name: &str) -> bool {
+    !is_reserved_agent_name(name)
+        && !agent_definition::is_platform_runtime_role(name)
+        && validate_identifier(name, "agent").is_ok()
 }
 
 fn managed_agent_path_from_config(root: &Path, config_file: &str) -> Option<PathBuf> {
@@ -975,4 +992,32 @@ fn io_error(_error: std::io::Error) -> ApiError {
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(PlatformError::internal("Profile storage operation failed")),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn platform_runtime_roles_are_not_browser_managed_agent_names() {
+        for name in ["data_agent", "network_planning_agent"] {
+            assert!(validate_browser_managed_agent_name(name).is_err());
+            assert!(!is_browser_managed_agent_name(name));
+        }
+        assert_eq!(
+            validate_browser_managed_agent_name("user_defined_agent").unwrap(),
+            "user_defined_agent"
+        );
+        assert!(is_browser_managed_agent_name("user_defined_agent"));
+    }
+
+    #[test]
+    fn browser_agent_list_excludes_platform_runtime_roles() {
+        let configured_agents = ["data_agent", "network_planning_agent", "user_defined_agent"];
+        let visible = configured_agents
+            .into_iter()
+            .filter(|name| is_browser_managed_agent_name(name))
+            .collect::<Vec<_>>();
+        assert_eq!(visible, vec!["user_defined_agent"]);
+    }
 }

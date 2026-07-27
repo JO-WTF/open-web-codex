@@ -4188,6 +4188,13 @@
       ],
       "type": "object"
     },
+    "ThreadMultiAgentBackend": {
+      "description": "Selects an explicit multi-agent engine for one new or forked thread.\n\nThis request-only choice does not write Profile or Project configuration.",
+      "enum": [
+        "v1"
+      ],
+      "type": "string"
+    },
     "ThreadReadParams": {
       "properties": {
         "includeTurns": {

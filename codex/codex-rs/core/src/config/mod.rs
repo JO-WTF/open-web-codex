@@ -865,6 +865,10 @@ pub struct Config {
     /// Whether multi-agent tools are enabled through `[agents]`.
     pub agents_enabled: bool,
 
+    /// Request-only per-thread multi-agent version override. This is never loaded from config
+    /// files and takes precedence over model metadata and inherited thread history.
+    thread_multi_agent_version_override: Option<MultiAgentVersion>,
+
     /// User-configured maximum number of spawned agent threads per session.
     pub agent_max_threads: Option<usize>,
 
@@ -1433,13 +1437,23 @@ impl ConfigBuilder {
 
 impl Config {
     pub(crate) fn multi_agent_version_override(&self) -> Option<MultiAgentVersion> {
-        if self.features.enabled(Feature::MultiAgentV2) {
+        if let Some(multi_agent_version) = self.thread_multi_agent_version_override {
+            Some(multi_agent_version)
+        } else if self.features.enabled(Feature::MultiAgentV2) {
             Some(MultiAgentVersion::V2)
         } else if !self.agents_enabled {
             Some(MultiAgentVersion::Disabled)
         } else {
             None
         }
+    }
+
+    /// Force the multi-agent engine for this Config instance without modifying persistent config.
+    pub fn set_thread_multi_agent_version_override(
+        &mut self,
+        multi_agent_version: MultiAgentVersion,
+    ) {
+        self.thread_multi_agent_version_override = Some(multi_agent_version);
     }
 
     pub(crate) fn multi_agent_version_from_features(&self) -> MultiAgentVersion {
@@ -3974,6 +3988,7 @@ impl Config {
                 .collect(),
             tool_output_token_limit: cfg.tool_output_token_limit,
             agents_enabled,
+            thread_multi_agent_version_override: None,
             agent_max_threads,
             agent_default_subagent_model,
             agent_default_subagent_reasoning_effort,

@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Seek, SeekFrom, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -18,6 +18,7 @@ use open_web_codex_codex_contracts::{
     negotiate_capability_manifest, CapabilityManifest, NegotiationPolicy, NegotiationResult,
 };
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
@@ -30,6 +31,16 @@ const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(15);
 const DEFAULT_EVENT_CAPACITY: usize = 1_024;
 const RUNTIME_DIRECTORY: &str = ".open-web-codex";
 const LOCK_FILE: &str = "app-server.lock";
+const PLATFORM_AGENTS_DIRECTORY: &str = "platform-agents";
+const MAX_PLATFORM_AGENT_DEFINITION_ID_BYTES: usize = 96;
+const MAX_PLATFORM_AGENT_VERSION_BYTES: usize = 64;
+
+/// Largest accepted platform-managed Runtime Role configuration.
+///
+/// This is deliberately independent of arbitrary Profile text-file limits:
+/// platform Roles are small, reviewed configuration inputs rather than a
+/// general storage surface.
+pub const MAX_PLATFORM_AGENT_ROLE_BYTES: usize = 64 * 1024;
 
 /// Creates a missing Profile home and returns its canonical directory path.
 ///
@@ -91,6 +102,694 @@ fn restrict_directory_permissions(path: &Path) -> io::Result<()> {
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
     }
     Ok(())
+}
+
+/// Atomically writes a platform-managed Runtime Role file below `CODEX_HOME`.
+///
+/// The only accepted destination shape is
+/// `platform-agents/<definition_id>/<version>.toml`. Both path components are
+/// strict ASCII identifiers, so callers cannot select an absolute path, a
+/// parent component, or another Profile-owned file. On Unix, the write is
+/// anchored by directory file descriptors with no-follow semantics and the
+/// file is committed with a same-directory rename. The function does not
+/// update Codex configuration or contact the app-server; callers must do that
+/// separately through the typed Runtime contract after this write succeeds.
+pub fn write_platform_agent_role(
+    codex_home: &Path,
+    definition_id: &str,
+    version: &str,
+    contents: &[u8],
+) -> io::Result<PathBuf> {
+    if contents.len() > MAX_PLATFORM_AGENT_ROLE_BYTES {
+        return Err(invalid_platform_agent_role_input(format!(
+            "platform-managed Runtime Role exceeds {MAX_PLATFORM_AGENT_ROLE_BYTES} bytes"
+        )));
+    }
+    let relative_path = platform_agent_role_relative_path(definition_id, version)?;
+    let home = ensure_profile_home(codex_home)?;
+
+    #[cfg(unix)]
+    write_platform_agent_role_unix(&home, definition_id, version, contents)?;
+    #[cfg(not(unix))]
+    write_platform_agent_role_portable(&home, definition_id, version, contents)?;
+
+    Ok(home.join(relative_path))
+}
+
+/// Verify one platform-managed Runtime Role file without following a
+/// caller-controlled path.
+///
+/// This never creates missing Profile state and returns only the canonical,
+/// Host-owned absolute path for the fixed managed-file location.
+pub fn verify_platform_agent_role(
+    codex_home: &Path,
+    definition_id: &str,
+    version: &str,
+    expected_sha256: &str,
+) -> io::Result<PathBuf> {
+    validate_platform_agent_role_sha256(expected_sha256)?;
+    let relative_path = platform_agent_role_relative_path(definition_id, version)?;
+    let home = existing_profile_home(codex_home)?;
+
+    #[cfg(unix)]
+    verify_platform_agent_role_unix(&home, definition_id, version, expected_sha256)?;
+    #[cfg(not(unix))]
+    verify_platform_agent_role_portable(&home, definition_id, version, expected_sha256)?;
+
+    Ok(home.join(relative_path))
+}
+
+fn existing_profile_home(path: &Path) -> io::Result<PathBuf> {
+    let home = path.canonicalize()?;
+    if !home.is_dir() {
+        return Err(invalid_platform_agent_role_input(
+            "Profile home is not a directory".to_string(),
+        ));
+    }
+    Ok(home)
+}
+
+fn platform_agent_role_relative_path(definition_id: &str, version: &str) -> io::Result<PathBuf> {
+    validate_platform_agent_definition_id(definition_id)?;
+    validate_platform_agent_version(version)?;
+    Ok(PathBuf::from(PLATFORM_AGENTS_DIRECTORY)
+        .join(definition_id)
+        .join(format!("{version}.toml")))
+}
+
+fn validate_platform_agent_definition_id(definition_id: &str) -> io::Result<()> {
+    validate_platform_agent_component(
+        definition_id,
+        "definition_id",
+        MAX_PLATFORM_AGENT_DEFINITION_ID_BYTES,
+        false,
+    )
+}
+
+fn validate_platform_agent_version(version: &str) -> io::Result<()> {
+    validate_platform_agent_component(version, "version", MAX_PLATFORM_AGENT_VERSION_BYTES, true)
+}
+
+fn validate_platform_agent_component(
+    value: &str,
+    label: &str,
+    maximum_bytes: usize,
+    allow_period: bool,
+) -> io::Result<()> {
+    if value.is_empty() || value.len() > maximum_bytes {
+        return Err(invalid_platform_agent_role_input(format!(
+            "platform-managed Runtime Role {label} must contain 1 to {maximum_bytes} bytes"
+        )));
+    }
+    if value == "." || value == ".." || value.contains("..") {
+        return Err(invalid_platform_agent_role_input(format!(
+            "platform-managed Runtime Role {label} contains a parent path component"
+        )));
+    }
+    if !value.bytes().all(|byte| {
+        byte.is_ascii_lowercase()
+            || byte.is_ascii_digit()
+            || byte == b'-'
+            || byte == b'_'
+            || (allow_period && byte == b'.')
+    }) {
+        return Err(invalid_platform_agent_role_input(format!(
+            "platform-managed Runtime Role {label} must use lowercase ASCII letters, digits, '-' or '_'{}",
+            if allow_period { ", or '.'" } else { "" }
+        )));
+    }
+    if !value
+        .as_bytes()
+        .first()
+        .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        || !value
+            .as_bytes()
+            .last()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+    {
+        return Err(invalid_platform_agent_role_input(format!(
+            "platform-managed Runtime Role {label} must start and end with a letter or digit"
+        )));
+    }
+    Ok(())
+}
+
+fn invalid_platform_agent_role_input(message: String) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, message)
+}
+
+fn invalid_platform_agent_role_verification(message: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message.into())
+}
+
+fn unsafe_platform_agent_role_path(message: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::PermissionDenied, message.into())
+}
+
+fn validate_platform_agent_role_sha256(value: &str) -> io::Result<()> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (byte.is_ascii_lowercase() && byte <= b'f'))
+    {
+        return Err(invalid_platform_agent_role_input(
+            "platform-managed Runtime Role SHA-256 is invalid".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn verify_platform_agent_role_contents(mut file: File, expected_sha256: &str) -> io::Result<()> {
+    let mut digest = Sha256::new();
+    let mut bytes_read = 0usize;
+    let mut buffer = [0u8; 8 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        bytes_read = bytes_read
+            .checked_add(read)
+            .ok_or_else(|| invalid_platform_agent_role_verification("Runtime Role is too large"))?;
+        if bytes_read > MAX_PLATFORM_AGENT_ROLE_BYTES {
+            return Err(invalid_platform_agent_role_verification(
+                "platform-managed Runtime Role exceeds the permitted size",
+            ));
+        }
+        digest.update(&buffer[..read]);
+    }
+    if hex::encode(digest.finalize()) != expected_sha256 {
+        return Err(invalid_platform_agent_role_verification(
+            "platform-managed Runtime Role SHA-256 does not match",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn write_platform_agent_role_unix(
+    home: &Path,
+    definition_id: &str,
+    version: &str,
+    contents: &[u8],
+) -> io::Result<()> {
+    use std::ffi::CString;
+    use std::os::fd::AsRawFd;
+
+    let home = open_directory_no_follow(home)?;
+    let platform_agents = open_or_create_private_directory(&home, PLATFORM_AGENTS_DIRECTORY)?;
+    let definition = open_or_create_private_directory(&platform_agents, definition_id)?;
+    let file_name = CString::new(format!("{version}.toml"))
+        .map_err(|_| invalid_platform_agent_role_input("invalid Runtime Role filename".into()))?;
+    reject_non_regular_role_target(&definition, &file_name)?;
+
+    let (mut temporary_file, temporary_name) =
+        open_private_temporary_file(&definition, &file_name)?;
+    let write_result = (|| -> io::Result<()> {
+        temporary_file.write_all(contents)?;
+        restrict_open_file_permissions(&temporary_file)?;
+        temporary_file.sync_all()
+    })();
+    drop(temporary_file);
+    if let Err(error) = write_result {
+        unlink_at(&definition, &temporary_name);
+        return Err(error);
+    }
+
+    // The source and destination are anchored to the same opened directory,
+    // so this is an atomic replacement without resolving a caller-controlled
+    // pathname after validation.
+    let rename_result = unsafe {
+        libc::renameat(
+            definition.as_raw_fd(),
+            temporary_name.as_ptr(),
+            definition.as_raw_fd(),
+            file_name.as_ptr(),
+        )
+    };
+    if rename_result != 0 {
+        let error = io::Error::last_os_error();
+        unlink_at(&definition, &temporary_name);
+        return Err(error);
+    }
+    if unsafe { libc::fsync(definition.as_raw_fd()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn open_directory_no_follow(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
+    use std::ffi::CString;
+    use std::os::fd::FromRawFd;
+    use std::os::unix::ffi::OsStrExt;
+
+    let path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| invalid_platform_agent_role_input("invalid CODEX_HOME path".into()))?;
+    let descriptor = unsafe {
+        libc::open(
+            path.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if descriptor < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `open` returned a new owned descriptor above.
+    Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(descriptor) })
+}
+
+#[cfg(unix)]
+fn open_or_create_private_directory(
+    parent: &std::os::fd::OwnedFd,
+    name: &str,
+) -> io::Result<std::os::fd::OwnedFd> {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+    let name = CString::new(name)
+        .map_err(|_| invalid_platform_agent_role_input("invalid Runtime Role directory".into()))?;
+    let create_result = unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o700) };
+    if create_result != 0 {
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::AlreadyExists {
+            return Err(error);
+        }
+    }
+    let descriptor = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if descriptor < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `openat` returned a new owned descriptor above.
+    let directory = unsafe { OwnedFd::from_raw_fd(descriptor) };
+    restrict_open_directory_permissions(&directory)?;
+    Ok(directory)
+}
+
+#[cfg(unix)]
+fn restrict_open_directory_permissions(directory: &std::os::fd::OwnedFd) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+
+    if unsafe { libc::fchmod(directory.as_raw_fd(), 0o700) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn restrict_open_file_permissions(file: &File) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+
+    if unsafe { libc::fchmod(file.as_raw_fd(), 0o600) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn reject_non_regular_role_target(
+    directory: &std::os::fd::OwnedFd,
+    file_name: &std::ffi::CStr,
+) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+
+    let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+    let result = unsafe {
+        libc::fstatat(
+            directory.as_raw_fd(),
+            file_name.as_ptr(),
+            metadata.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if result != 0 {
+        let error = io::Error::last_os_error();
+        return if error.kind() == io::ErrorKind::NotFound {
+            Ok(())
+        } else {
+            Err(error)
+        };
+    }
+    // SAFETY: fstatat initialized `metadata` when it returned zero.
+    let metadata = unsafe { metadata.assume_init() };
+    let file_type = metadata.st_mode & libc::S_IFMT;
+    if file_type == libc::S_IFLNK {
+        return Err(unsafe_platform_agent_role_path(
+            "platform-managed Runtime Role target must not be a symlink",
+        ));
+    }
+    if file_type != libc::S_IFREG {
+        return Err(invalid_platform_agent_role_input(
+            "platform-managed Runtime Role target is not a regular file".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn open_private_temporary_file(
+    directory: &std::os::fd::OwnedFd,
+    file_name: &std::ffi::CStr,
+) -> io::Result<(File, std::ffi::CString)> {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+    let file_name = file_name
+        .to_str()
+        .map_err(|_| invalid_platform_agent_role_input("invalid Runtime Role filename".into()))?;
+    for _ in 0..8 {
+        let temporary_name =
+            CString::new(format!(".{file_name}.{}.tmp", Uuid::now_v7())).map_err(|_| {
+                invalid_platform_agent_role_input("invalid Runtime Role filename".into())
+            })?;
+        let descriptor = unsafe {
+            libc::openat(
+                directory.as_raw_fd(),
+                temporary_name.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                0o600,
+            )
+        };
+        if descriptor >= 0 {
+            // SAFETY: openat returned a new owned descriptor above.
+            let descriptor = unsafe { OwnedFd::from_raw_fd(descriptor) };
+            return Ok((File::from(descriptor), temporary_name));
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::AlreadyExists {
+            return Err(error);
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not allocate a unique temporary Runtime Role file",
+    ))
+}
+
+#[cfg(unix)]
+fn unlink_at(directory: &std::os::fd::OwnedFd, name: &std::ffi::CStr) {
+    use std::os::fd::AsRawFd;
+
+    // Best-effort cleanup only; the original write error remains authoritative.
+    unsafe {
+        libc::unlinkat(directory.as_raw_fd(), name.as_ptr(), 0);
+    }
+}
+
+#[cfg(unix)]
+fn verify_platform_agent_role_unix(
+    home: &Path,
+    definition_id: &str,
+    version: &str,
+    expected_sha256: &str,
+) -> io::Result<()> {
+    use std::ffi::CString;
+
+    let home = open_directory_no_follow(home)?;
+    let platform_agents = open_existing_private_directory(&home, PLATFORM_AGENTS_DIRECTORY)?;
+    let definition = open_existing_private_directory(&platform_agents, definition_id)?;
+    let file_name = CString::new(format!("{version}.toml"))
+        .map_err(|_| invalid_platform_agent_role_input("invalid Runtime Role filename".into()))?;
+    let file = open_existing_regular_role_file(&definition, &file_name)?;
+    verify_platform_agent_role_contents(File::from(file), expected_sha256)
+}
+
+#[cfg(unix)]
+fn open_existing_private_directory(
+    parent: &std::os::fd::OwnedFd,
+    name: &str,
+) -> io::Result<std::os::fd::OwnedFd> {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+    let name = CString::new(name)
+        .map_err(|_| invalid_platform_agent_role_input("invalid Runtime Role directory".into()))?;
+    let metadata = stat_at_no_follow(parent, &name)?;
+    let file_type = metadata.st_mode & libc::S_IFMT;
+    if file_type == libc::S_IFLNK {
+        return Err(unsafe_platform_agent_role_path(
+            "platform-managed Runtime Role directory must not be a symlink",
+        ));
+    }
+    if file_type != libc::S_IFDIR {
+        return Err(invalid_platform_agent_role_verification(
+            "platform-managed Runtime Role directory is not a directory",
+        ));
+    }
+    let descriptor = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if descriptor < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: openat returned a new owned descriptor above.
+    Ok(unsafe { OwnedFd::from_raw_fd(descriptor) })
+}
+
+#[cfg(unix)]
+fn open_existing_regular_role_file(
+    directory: &std::os::fd::OwnedFd,
+    file_name: &std::ffi::CStr,
+) -> io::Result<std::os::fd::OwnedFd> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+    let metadata = stat_at_no_follow(directory, file_name)?;
+    let file_type = metadata.st_mode & libc::S_IFMT;
+    if file_type == libc::S_IFLNK {
+        return Err(unsafe_platform_agent_role_path(
+            "platform-managed Runtime Role target must not be a symlink",
+        ));
+    }
+    if file_type != libc::S_IFREG {
+        return Err(invalid_platform_agent_role_verification(
+            "platform-managed Runtime Role target is not a regular file",
+        ));
+    }
+    if metadata.st_size < 0 || metadata.st_size as u64 > MAX_PLATFORM_AGENT_ROLE_BYTES as u64 {
+        return Err(invalid_platform_agent_role_verification(
+            "platform-managed Runtime Role exceeds the permitted size",
+        ));
+    }
+    let descriptor = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            file_name.as_ptr(),
+            libc::O_RDONLY | libc::O_NONBLOCK | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if descriptor < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: openat returned a new owned descriptor above.
+    let file = unsafe { OwnedFd::from_raw_fd(descriptor) };
+    let mut opened_metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+    if unsafe { libc::fstat(file.as_raw_fd(), opened_metadata.as_mut_ptr()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: fstat initialized metadata after returning zero.
+    let opened_metadata = unsafe { opened_metadata.assume_init() };
+    if opened_metadata.st_mode & libc::S_IFMT != libc::S_IFREG {
+        return Err(invalid_platform_agent_role_verification(
+            "platform-managed Runtime Role target is not a regular file",
+        ));
+    }
+    if opened_metadata.st_size < 0
+        || opened_metadata.st_size as u64 > MAX_PLATFORM_AGENT_ROLE_BYTES as u64
+    {
+        return Err(invalid_platform_agent_role_verification(
+            "platform-managed Runtime Role exceeds the permitted size",
+        ));
+    }
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn stat_at_no_follow(
+    directory: &std::os::fd::OwnedFd,
+    name: &std::ffi::CStr,
+) -> io::Result<libc::stat> {
+    use std::os::fd::AsRawFd;
+
+    let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+    if unsafe {
+        libc::fstatat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            metadata.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } != 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: fstatat initialized metadata after returning zero.
+    Ok(unsafe { metadata.assume_init() })
+}
+
+#[cfg(not(unix))]
+fn write_platform_agent_role_portable(
+    home: &Path,
+    definition_id: &str,
+    version: &str,
+    contents: &[u8],
+) -> io::Result<()> {
+    let platform_agents = ensure_private_child_directory(home, PLATFORM_AGENTS_DIRECTORY)?;
+    let definition = ensure_private_child_directory(&platform_agents, definition_id)?;
+    let target = definition.join(format!("{version}.toml"));
+    reject_non_regular_role_target_path(&target)?;
+
+    let temporary = definition.join(format!(".{version}.toml.{}.tmp", Uuid::now_v7()));
+    let write_result = (|| -> io::Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(contents)?;
+        file.sync_all()
+    })();
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
+    if let Err(error) = fs::rename(&temporary, target) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_private_child_directory(parent: &Path, name: &str) -> io::Result<PathBuf> {
+    let child = parent.join(name);
+    for _ in 0..2 {
+        match fs::symlink_metadata(&child) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(unsafe_platform_agent_role_path(
+                    "platform-managed Runtime Role directory must not be a symlink",
+                ));
+            }
+            Ok(metadata) if !metadata.is_dir() => {
+                return Err(invalid_platform_agent_role_input(
+                    "platform-managed Runtime Role directory is not a directory".into(),
+                ));
+            }
+            Ok(_) => {
+                let child = child.canonicalize()?;
+                if child.parent() != Some(parent) {
+                    return Err(unsafe_platform_agent_role_path(
+                        "platform-managed Runtime Role directory escaped CODEX_HOME",
+                    ));
+                }
+                restrict_directory_permissions(&child)?;
+                return Ok(child);
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => match fs::create_dir(&child) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error),
+            },
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not create platform-managed Runtime Role directory",
+    ))
+}
+
+#[cfg(not(unix))]
+fn reject_non_regular_role_target_path(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(unsafe_platform_agent_role_path(
+            "platform-managed Runtime Role target must not be a symlink",
+        )),
+        Ok(metadata) if !metadata.is_file() => Err(invalid_platform_agent_role_input(
+            "platform-managed Runtime Role target is not a regular file".into(),
+        )),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(not(unix))]
+fn verify_platform_agent_role_portable(
+    home: &Path,
+    definition_id: &str,
+    version: &str,
+    expected_sha256: &str,
+) -> io::Result<()> {
+    let platform_agents = existing_private_child_directory(home, PLATFORM_AGENTS_DIRECTORY)?;
+    let definition = existing_private_child_directory(&platform_agents, definition_id)?;
+    let target = definition.join(format!("{version}.toml"));
+    let metadata = fs::symlink_metadata(&target)?;
+    if metadata.file_type().is_symlink() {
+        return Err(unsafe_platform_agent_role_path(
+            "platform-managed Runtime Role target must not be a symlink",
+        ));
+    }
+    if !metadata.is_file() {
+        return Err(invalid_platform_agent_role_verification(
+            "platform-managed Runtime Role target is not a regular file",
+        ));
+    }
+    if metadata.len() > MAX_PLATFORM_AGENT_ROLE_BYTES as u64 {
+        return Err(invalid_platform_agent_role_verification(
+            "platform-managed Runtime Role exceeds the permitted size",
+        ));
+    }
+    let canonical_target = target.canonicalize()?;
+    if canonical_target.parent() != Some(definition.as_path()) {
+        return Err(unsafe_platform_agent_role_path(
+            "platform-managed Runtime Role target escaped CODEX_HOME",
+        ));
+    }
+    let file = OpenOptions::new().read(true).open(&target)?;
+    let opened_metadata = file.metadata()?;
+    if !opened_metadata.is_file() {
+        return Err(invalid_platform_agent_role_verification(
+            "platform-managed Runtime Role target is not a regular file",
+        ));
+    }
+    if opened_metadata.len() > MAX_PLATFORM_AGENT_ROLE_BYTES as u64 {
+        return Err(invalid_platform_agent_role_verification(
+            "platform-managed Runtime Role exceeds the permitted size",
+        ));
+    }
+    verify_platform_agent_role_contents(file, expected_sha256)
+}
+
+#[cfg(not(unix))]
+fn existing_private_child_directory(parent: &Path, name: &str) -> io::Result<PathBuf> {
+    let child = parent.join(name);
+    let metadata = fs::symlink_metadata(&child)?;
+    if metadata.file_type().is_symlink() {
+        return Err(unsafe_platform_agent_role_path(
+            "platform-managed Runtime Role directory must not be a symlink",
+        ));
+    }
+    if !metadata.is_dir() {
+        return Err(invalid_platform_agent_role_verification(
+            "platform-managed Runtime Role directory is not a directory",
+        ));
+    }
+    let child = child.canonicalize()?;
+    if child.parent() != Some(parent) {
+        return Err(unsafe_platform_agent_role_path(
+            "platform-managed Runtime Role directory escaped CODEX_HOME",
+        ));
+    }
+    Ok(child)
 }
 
 /// Configuration for one persistent Profile app-server.
@@ -395,6 +1094,33 @@ impl ProfileHost {
         Ok(host)
     }
 
+    /// Atomically writes one platform-managed Runtime Role into this Host's
+    /// already-owned, canonical `CODEX_HOME`.
+    ///
+    /// This deliberately does not mutate Runtime configuration. The caller
+    /// must register the returned fixed relative path through the typed Codex
+    /// configuration contract only after the file is safely committed.
+    pub fn write_platform_agent_role(
+        &self,
+        definition_id: &str,
+        version: &str,
+        contents: &[u8],
+    ) -> io::Result<PathBuf> {
+        crate::write_platform_agent_role(&self.inner.home, definition_id, version, contents)
+    }
+
+    /// Verify a fixed platform Runtime Role file in this Host's owned Profile.
+    ///
+    /// The returned canonical absolute path is internal-only and is suitable
+    /// solely for an official Runtime request configuration override.
+    pub fn verify_platform_agent_role(
+        &self,
+        definition_id: &str,
+        version: &str,
+        expected_sha256: &str,
+    ) -> io::Result<PathBuf> {
+        crate::verify_platform_agent_role(&self.inner.home, definition_id, version, expected_sha256)
+    }
     async fn initialize(&self, config: &ProfileHostConfig) -> Result<(), ProfileHostError> {
         let response = timeout(
             INITIALIZE_TIMEOUT,
@@ -1083,10 +1809,12 @@ fn parse_rpc_result(method: &str, response: Value) -> Result<Value, ProfileHostE
 mod tests {
     use super::{
         clear_runtime_work, dispatch_incoming, ensure_profile_home, ensure_profile_layout,
-        ProfileHost, ProfileHostConfig, ProfileHostError, ProfileHostInner, ProfileHostSnapshot,
-        ProfileHostState, ProfileLock,
+        verify_platform_agent_role, write_platform_agent_role, ProfileHost, ProfileHostConfig,
+        ProfileHostError, ProfileHostInner, ProfileHostSnapshot, ProfileHostState, ProfileLock,
+        MAX_PLATFORM_AGENT_ROLE_BYTES,
     };
     use serde_json::json;
+    use sha2::{Digest, Sha256};
     use std::collections::{HashMap, HashSet};
     use std::fs;
     use std::path::PathBuf;
@@ -1177,6 +1905,202 @@ mod tests {
 
         assert!(!debug.contains("secret-value"));
         assert!(debug.contains("[redacted]"));
+    }
+
+    #[test]
+    fn writes_platform_agent_role_to_a_fixed_private_atomic_path() {
+        let home = temporary_path("platform-role");
+        let role = write_platform_agent_role(
+            &home,
+            "enterprise-data-agent",
+            "1.2.3",
+            b"developer_instructions = \"prepare data\"\n",
+        )
+        .expect("write platform Role");
+        let expected = home
+            .canonicalize()
+            .expect("canonical home")
+            .join("platform-agents/enterprise-data-agent/1.2.3.toml");
+
+        assert_eq!(role, expected);
+        assert_eq!(
+            fs::read(&role).expect("read first Role contents"),
+            b"developer_instructions = \"prepare data\"\n"
+        );
+
+        write_platform_agent_role(
+            &home,
+            "enterprise-data-agent",
+            "1.2.3",
+            b"developer_instructions = \"prepare revised data\"\n",
+        )
+        .expect("atomically replace platform Role");
+        assert_eq!(
+            fs::read(&role).expect("read replacement Role contents"),
+            b"developer_instructions = \"prepare revised data\"\n"
+        );
+        assert!(
+            fs::read_dir(role.parent().expect("Role parent"))
+                .expect("read Role directory")
+                .all(|entry| {
+                    !entry
+                        .expect("Role directory entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with('.')
+                }),
+            "temporary Role files must not remain after an atomic write"
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            assert_eq!(
+                fs::metadata(&role)
+                    .expect("Role metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+            assert_eq!(
+                fs::metadata(role.parent().expect("Role parent"))
+                    .expect("Role directory metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700
+            );
+        }
+
+        fs::remove_dir_all(home).expect("remove profile home");
+    }
+
+    #[test]
+    fn verifies_platform_agent_role_at_its_exact_managed_path() {
+        let home = temporary_path("platform-role-verify");
+        let contents = b"role = true";
+        let role = write_platform_agent_role(&home, "enterprise-data-agent", "1.2.3", contents)
+            .expect("write platform Role");
+        let expected_sha256 = hex::encode(Sha256::digest(contents));
+
+        let verified =
+            verify_platform_agent_role(&home, "enterprise-data-agent", "1.2.3", &expected_sha256)
+                .expect("verify managed Role");
+
+        assert_eq!(verified, role);
+        assert_eq!(
+            verified,
+            home.canonicalize()
+                .expect("canonical home")
+                .join("platform-agents/enterprise-data-agent/1.2.3.toml")
+        );
+
+        fs::remove_dir_all(home).expect("remove profile home");
+    }
+
+    #[test]
+    fn rejects_platform_agent_role_when_sha256_does_not_match() {
+        let home = temporary_path("platform-role-digest-mismatch");
+        write_platform_agent_role(&home, "enterprise-data-agent", "1.2.3", b"role = true")
+            .expect("write platform Role");
+
+        let error =
+            verify_platform_agent_role(&home, "enterprise-data-agent", "1.2.3", &"0".repeat(64))
+                .expect_err("unexpected Role content must fail verification");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+
+        fs::remove_dir_all(home).expect("remove profile home");
+    }
+
+    #[test]
+    fn rejects_unsafe_or_oversized_platform_agent_role_inputs() {
+        let home = temporary_path("platform-role-invalid");
+        for (definition_id, version) in [
+            ("../outside", "1.2.3"),
+            ("/outside", "1.2.3"),
+            ("definition/path", "1.2.3"),
+            ("enterprise-data-agent", "../1.2.3"),
+            ("enterprise-data-agent", "1.2/3"),
+            ("enterprise-data-agent", "1..2"),
+            ("Enterprise-data-agent", "1.2.3"),
+        ] {
+            let error = write_platform_agent_role(&home, definition_id, version, b"role = true")
+                .expect_err("unsafe Role input must be rejected");
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        }
+        let error = write_platform_agent_role(
+            &home,
+            "enterprise-data-agent",
+            "1.2.3",
+            &vec![0; MAX_PLATFORM_AGENT_ROLE_BYTES + 1],
+        )
+        .expect_err("oversized Role must be rejected");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(!home.exists(), "invalid inputs must not create CODEX_HOME");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_platform_agent_role_symlink_escapes() {
+        use std::os::unix::fs::symlink;
+
+        let home = temporary_path("platform-role-symlink");
+        let outside = temporary_path("platform-role-outside");
+        ensure_profile_home(&home).expect("create profile home");
+        fs::create_dir(&outside).expect("create outside directory");
+        symlink(&outside, home.join("platform-agents")).expect("create escaped directory link");
+
+        let error =
+            write_platform_agent_role(&home, "enterprise-data-agent", "1.2.3", b"role = true")
+                .expect_err("symlinked Role directory must be rejected");
+
+        let expected_sha256 = hex::encode(Sha256::digest(b"role = true"));
+        let verification_error =
+            verify_platform_agent_role(&home, "enterprise-data-agent", "1.2.3", &expected_sha256)
+                .expect_err("symlinked Role directory must be rejected during verification");
+        assert_eq!(
+            verification_error.kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+
+        assert!(!outside.join("enterprise-data-agent/1.2.3.toml").exists());
+        assert_ne!(error.kind(), std::io::ErrorKind::NotFound);
+
+        fs::remove_file(home.join("platform-agents")).expect("remove escaped directory link");
+        fs::remove_dir_all(home).expect("remove profile home");
+        fs::remove_dir_all(outside).expect("remove outside directory");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_platform_agent_role_symlink_targets() {
+        use std::os::unix::fs::symlink;
+
+        let home = temporary_path("platform-role-target-link");
+        let outside = temporary_path("platform-role-target-outside");
+        let role =
+            write_platform_agent_role(&home, "enterprise-data-agent", "1.2.3", b"role = true")
+                .expect("write initial Role");
+        fs::create_dir(&outside).expect("create outside directory");
+        let outside_file = outside.join("outside.toml");
+        fs::write(&outside_file, b"do not replace").expect("write outside file");
+        fs::remove_file(&role).expect("remove initial Role");
+        symlink(&outside_file, &role).expect("create escaped target link");
+
+        let error =
+            write_platform_agent_role(&home, "enterprise-data-agent", "1.2.3", b"role = false")
+                .expect_err("symlinked Role target must be rejected");
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            fs::read(&outside_file).expect("read outside file"),
+            b"do not replace"
+        );
+
+        fs::remove_file(&role).expect("remove escaped target link");
+        fs::remove_dir_all(home).expect("remove profile home");
+        fs::remove_dir_all(outside).expect("remove outside directory");
     }
 
     async fn test_inner(event_capacity: usize) -> (Arc<ProfileHostInner>, PathBuf) {

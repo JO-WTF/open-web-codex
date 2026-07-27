@@ -1,20 +1,39 @@
 use std::path::Path;
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use open_web_codex_adapter::fake::FakeCodexAdapter;
 use open_web_codex_adapter::{CodexAdapter, ThreadStartMode};
 use open_web_codex_git_runtime::{GitRuntime, GitRuntimeConfig};
 use open_web_codex_platform_store::migrate;
 use open_web_codex_run_orchestrator::{
     CancelRunRequest, CreateWorkspaceRequest, EnqueueRunRequest, RecoverRunRequest,
-    RemoveWorkspaceRequest, RunOrchestrator, RunOrchestratorError, SupervisorPolicySnapshotInput,
+    RemoveWorkspaceRequest, RunLease, RunOrchestrator, RunOrchestratorError, RunStartPreflight,
+    RunStartPreflightError, SupervisorPolicySnapshotInput,
 };
 use sqlx::postgres::PgPoolOptions;
 use sqlx::Row;
 use tempfile::TempDir;
 use uuid::Uuid;
+
+#[derive(Default)]
+struct TestRunStartPreflight {
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl RunStartPreflight for TestRunStartPreflight {
+    async fn prepare_runtime_start(
+        &self,
+        _lease: &RunLease,
+    ) -> Result<ThreadStartMode, RunStartPreflightError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(ThreadStartMode::Standard)
+    }
+}
 
 fn git(cwd: &Path, args: &[&str]) {
     let output = Command::new("git")
@@ -133,10 +152,12 @@ async fn independent_workspace_is_reused_across_run_lifecycles() {
             .unwrap(),
     );
     let adapter: Arc<dyn CodexAdapter> = Arc::new(FakeCodexAdapter::new());
+    let preflight = Arc::new(TestRunStartPreflight::default());
     let first = RunOrchestrator::new(
         pool.clone(),
         git_runtime.clone(),
         adapter.clone(),
+        preflight.clone(),
         "runner-profile",
         "worker-a",
         Duration::from_secs(30),
@@ -146,6 +167,7 @@ async fn independent_workspace_is_reused_across_run_lifecycles() {
         pool.clone(),
         git_runtime.clone(),
         adapter,
+        preflight.clone(),
         "runner-profile",
         "worker-b",
         Duration::from_secs(30),
@@ -210,13 +232,16 @@ async fn independent_workspace_is_reused_across_run_lifecycles() {
     } else {
         (&second, claimed_second.unwrap())
     };
+    let policy = lease.supervisor_policy.as_ref().expect("leased policy");
+    assert_eq!(policy.policy_id, "enterprise-supervisor-copilot");
+    assert_eq!(policy.version, "1.0.0");
     assert_eq!(
-        lease.thread_start_mode,
-        ThreadStartMode::EnterpriseSupervisor {
-            developer_instructions: "Coordinate the approved agents.".to_string(),
-        }
+        policy.developer_instructions,
+        "Coordinate the approved agents."
     );
+    assert_eq!(policy.content_sha256, "a".repeat(64));
     owner.execute_lease(&lease).await.unwrap();
+    assert_eq!(preflight.calls.load(Ordering::SeqCst), 1);
 
     let row = sqlx::query(
         "SELECT r.status, r.codex_thread_id, r.workspace_id, w.root_path, w.state \

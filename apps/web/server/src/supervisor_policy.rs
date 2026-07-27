@@ -1,5 +1,5 @@
-use open_web_codex_adapter::{CodexAdapter, ProfileQuery};
-use open_web_codex_codex_contracts::{CapabilityManifest, CapabilityStatus};
+use open_web_codex_adapter::PlatformRuntimeRole;
+use open_web_codex_codex_contracts::{CapabilityDeclaration, CapabilityManifest, CapabilityStatus};
 use open_web_codex_platform_contracts::{SupervisorPolicySelection, SupervisorPolicySummary};
 use open_web_codex_run_orchestrator::SupervisorPolicySnapshotInput;
 use serde_json::Value;
@@ -13,8 +13,24 @@ const ENTERPRISE_COPILOT_POLICY_VERSION: &str = "1.0.0";
 const ENTERPRISE_COPILOT_POLICY_NAME: &str = "Enterprise Supervisor Copilot";
 const ENTERPRISE_COPILOT_POLICY_DESCRIPTION: &str =
     "Coordinates Data and Network Planning agents through governed Artifacts.";
+const REQUIRED_RUNTIME_CAPABILITY_VERSION: &str = "1.0.0";
+const REQUIRED_RUNTIME_CAPABILITIES: [(&str, &str); 2] = [
+    ("agents.multi_agent", "multi-agent"),
+    (
+        "agents.multi_agent_v1_backend_override",
+        "multi-agent V1 backend override",
+    ),
+];
 const ENTERPRISE_COPILOT_POLICY_INSTRUCTIONS: &str =
     include_str!("../resources/supervisor-policies/enterprise-supervisor-copilot-v1.md");
+const ENTERPRISE_COPILOT_RUNTIME_ROLE_REFS: [(&str, &str, &str); 2] = [
+    ("enterprise-data-agent", "1.0.0", "data_agent"),
+    (
+        "enterprise-network-planning-agent",
+        "1.0.0",
+        "network_planning_agent",
+    ),
+];
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub(crate) enum SupervisorPolicyError {
@@ -29,7 +45,7 @@ pub(crate) enum SupervisorPolicyError {
 #[derive(Debug)]
 pub(crate) struct ResolvedSupervisorPolicy {
     pub snapshot: SupervisorPolicySnapshotInput,
-    pub required_runtime_roles: Vec<String>,
+    pub required_runtime_roles: Vec<PlatformRuntimeRole>,
 }
 
 pub(crate) fn list_published() -> Vec<SupervisorPolicySummary> {
@@ -60,8 +76,7 @@ pub(crate) fn resolve(
             "developer instructions exceed 16384 bytes",
         ));
     }
-    let required_runtime_roles = agent_definition::enterprise_runtime_roles()
-        .map_err(|_| SupervisorPolicyError::Invalid("Agent Definitions are invalid"))?;
+    let required_runtime_roles = resolve_enterprise_runtime_roles()?;
     Ok(ResolvedSupervisorPolicy {
         snapshot: SupervisorPolicySnapshotInput {
             policy_id: selection.policy_id.clone(),
@@ -74,21 +89,28 @@ pub(crate) fn resolve(
     })
 }
 
-pub(crate) async fn require_runtime_capabilities(
-    adapter: &dyn CodexAdapter,
-    manifest: &Value,
-    required_runtime_roles: &[String],
-) -> Result<(), SupervisorPolicyError> {
-    validate_runtime_manifest(manifest)?;
-    let config = adapter
-        .query_profile(ProfileQuery::Config)
-        .await
-        .map_err(|_| {
-            SupervisorPolicyError::Capability(
-                "Codex Profile configuration could not be read".to_string(),
-            )
-        })?;
-    validate_runtime_config(&config, required_runtime_roles)
+fn resolve_enterprise_runtime_roles() -> Result<Vec<PlatformRuntimeRole>, SupervisorPolicyError> {
+    let published = agent_definition::platform_runtime_roles()
+        .map_err(|_| SupervisorPolicyError::Invalid("Agent Definitions are invalid"))?;
+    ENTERPRISE_COPILOT_RUNTIME_ROLE_REFS
+        .into_iter()
+        .map(|(definition_id, version, name)| {
+            published
+                .iter()
+                .find(|role| {
+                    role.definition_id == definition_id
+                        && role.version == version
+                        && role.name == name
+                })
+                .cloned()
+                .ok_or(SupervisorPolicyError::Invalid(
+                    "required Agent Definition is not published",
+                ))
+        })
+        .collect()
+}
+pub(crate) fn require_runtime_manifest(manifest: &Value) -> Result<(), SupervisorPolicyError> {
+    validate_runtime_manifest(manifest)
 }
 
 fn validate_runtime_manifest(value: &Value) -> Result<(), SupervisorPolicyError> {
@@ -97,22 +119,30 @@ fn validate_runtime_manifest(value: &Value) -> Result<(), SupervisorPolicyError>
             "Codex Capability Manifest could not be validated".to_string(),
         )
     })?;
-    let capability = manifest
-        .capabilities
-        .into_iter()
-        .find(|capability| capability.id == "agents.multi_agent")
-        .ok_or_else(|| {
-            SupervisorPolicyError::Capability(
-                "Codex did not declare multi-agent support".to_string(),
-            )
-        })?;
-    if capability.version != "1.0.0" {
+    for (id, label) in REQUIRED_RUNTIME_CAPABILITIES {
+        let capability = manifest
+            .capabilities
+            .iter()
+            .find(|capability| capability.id == id)
+            .ok_or_else(|| {
+                SupervisorPolicyError::Capability(format!("Codex did not declare {label} support"))
+            })?;
+        validate_required_runtime_capability(capability, label)?;
+    }
+    Ok(())
+}
+
+fn validate_required_runtime_capability(
+    capability: &CapabilityDeclaration,
+    label: &str,
+) -> Result<(), SupervisorPolicyError> {
+    if capability.version != REQUIRED_RUNTIME_CAPABILITY_VERSION {
         return Err(SupervisorPolicyError::Capability(format!(
-            "Codex multi-agent capability version '{}' is unsupported",
-            capability.version
+            "Codex {label} capability version '{}' is unsupported",
+            capability.version,
         )));
     }
-    let enabled = match capability.status {
+    let enabled = match &capability.status {
         CapabilityStatus::Supported => true,
         CapabilityStatus::Experimental => capability.experimental,
         CapabilityStatus::Unsupported
@@ -120,78 +150,8 @@ fn validate_runtime_manifest(value: &Value) -> Result<(), SupervisorPolicyError>
         | CapabilityStatus::Incompatible => false,
     };
     if !enabled {
-        return Err(SupervisorPolicyError::Capability(
-            "Codex multi-agent capability is unavailable".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-fn validate_runtime_config(
-    value: &Value,
-    required_runtime_roles: &[String],
-) -> Result<(), SupervisorPolicyError> {
-    let config = value
-        .get("config")
-        .and_then(Value::as_object)
-        .ok_or_else(|| {
-            SupervisorPolicyError::Capability(
-                "Codex Profile configuration is unavailable".to_string(),
-            )
-        })?;
-    let multi_agent_enabled = config
-        .get("features")
-        .and_then(Value::as_object)
-        .and_then(|features| features.get("multi_agent"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    if !multi_agent_enabled {
-        return Err(SupervisorPolicyError::Capability(
-            "Codex multi-agent support is disabled".to_string(),
-        ));
-    }
-    let agents = config
-        .get("agents")
-        .and_then(Value::as_object)
-        .ok_or_else(|| {
-            SupervisorPolicyError::Capability(
-                "Codex Runtime Role configuration is unavailable".to_string(),
-            )
-        })?;
-    if agents.get("enabled").and_then(Value::as_bool) == Some(false) {
-        return Err(SupervisorPolicyError::Capability(
-            "Codex multi-agent support is disabled".to_string(),
-        ));
-    }
-    let max_threads = agents
-        .get("max_concurrent_threads_per_session")
-        .and_then(Value::as_u64)
-        .unwrap_or_default();
-    let max_depth = agents
-        .get("max_depth")
-        .and_then(Value::as_u64)
-        .unwrap_or_default();
-    if max_threads < 2 || max_depth < 1 {
-        return Err(SupervisorPolicyError::Capability(
-            "Codex Agent limits do not permit the required collaboration".to_string(),
-        ));
-    }
-    let missing = required_runtime_roles
-        .iter()
-        .filter(|role| {
-            agents
-                .get(role.as_str())
-                .and_then(Value::as_object)
-                .and_then(|definition| definition.get("config_file"))
-                .and_then(Value::as_str)
-                .is_none_or(|config_file| config_file.trim().is_empty())
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    if !missing.is_empty() {
         return Err(SupervisorPolicyError::Capability(format!(
-            "required Runtime Roles are not configured: {}",
-            missing.join(", ")
+            "Codex {label} capability is unavailable"
         )));
     }
     Ok(())

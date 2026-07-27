@@ -2480,6 +2480,19 @@ Phase 1–2 使用 Artifact 和有界摘要协作；Phase 3 在数据证明需�
 
 二者通过版本化 `runtime_role_ref` 和可用性验证关联。
 
+在当前受限单 Profile 实现中，代码发布的 Definition/version 还携带不可变、可校验
+hash 的 TOML Role 模板。只有已绑定显式已发布 Supervisor Policy 的 worker 执行前检查
+才可以在 Capability Manifest 同时确认 `agents.multi_agent@1.0.0` 与
+`agents.multi_agent_v1_backend_override@1.0.0`（已支持，或显式启用的 experimental）之后，
+通过 Profile Host 的受管写入、无跟随文件/hash 重验和类型化 Runtime 配置合同物化该模板；
+随后以目标 workspace 的 `config/read` origin 和官方 per-thread config override 验证，才可
+创建根 Thread 或继承 fork。受治理的 `thread/start` 与 `thread/fork` 还必须带类型化、
+request-scoped 的 `multiAgentBackend: "v1"`：它在 Runtime 中优先于模型元数据和继承的
+V2 fork lineage，且不写入 Profile 或 Project 持久配置。缺少、版本不匹配或未显式启用的
+Capability 会在 Runtime 调用前失败，不能让旧 Runtime 静默忽略该字段。这个配置投影有独立
+的持久记录，不能与 Runtime 事件产生、可删除重建的 Agent 执行投影混淆；只有受治理
+Supervisor 的 start/fork 会携带这个选择，普通 Root 会话不触发它。
+
 #### 原因
 
 - 业务目录需要所有者、评价和合规；
@@ -2489,7 +2502,8 @@ Phase 1–2 使用 Artifact 和有界摘要协作；Phase 3 在数据证明需�
 #### 被拒绝方案
 
 - 一个 `agents` 表同时保存 Prompt、运行状态和子 Thread；
-- 平台通过隐藏修改 Profile 文件“发布” Agent；
+- 平台在通用启动、浏览器 CRUD 或未经类型化审计的隐藏 Profile 文件修改中“发布”
+  Agent；
 - Catalog 显示的能力不验证 Runtime 可用性。
 
 ---

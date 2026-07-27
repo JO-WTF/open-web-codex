@@ -14,7 +14,9 @@ use tokio::sync::OwnedMutexGuard;
 use tokio::sync::RwLock;
 
 use crate::{
-    AdapterError, AuthorizedWorkspace, CanceledProfileLogin, CodexAdapter, HealthStatus,
+    governed_runtime_role_config_overrides, resolve_platform_runtime_role_limits_with_host_paths,
+    validate_effective_platform_runtime_roles, validate_platform_runtime_roles, AdapterError,
+    AuthorizedWorkspace, CanceledProfileLogin, CodexAdapter, HealthStatus, PlatformRuntimeRole,
     ProfileLoginStatus, ProfileMutation, ProfileQuery, ReviewTarget, StartedProfileLogin,
     StartedThread, ThreadStartMode, TurnOptions,
 };
@@ -24,26 +26,84 @@ const MAX_DEVELOPER_INSTRUCTIONS_BYTES: usize = 16 * 1024;
 fn thread_start_params(
     workspace_root: &str,
     mode: &ThreadStartMode,
+    governed_config: Option<Value>,
 ) -> Result<Value, AdapterError> {
     let mut params = json!({
         "cwd": workspace_root,
         "approvalPolicy": "on-request",
         "historyMode": "paginated",
     });
-    if let ThreadStartMode::EnterpriseSupervisor {
-        developer_instructions,
-    } = mode
-    {
-        let instructions = developer_instructions.trim();
-        if instructions.is_empty() || instructions.len() > MAX_DEVELOPER_INSTRUCTIONS_BYTES {
-            return Err(AdapterError::Internal(
-                "Supervisor developer instructions must contain 1 to 16384 bytes".to_string(),
-            ));
-        }
-        params["developerInstructions"] = Value::String(instructions.to_string());
-    }
+    apply_thread_start_mode(&mut params, mode, governed_config)?;
     add_selected_capability_roots(&mut params, Path::new(workspace_root));
     Ok(params)
+}
+
+fn thread_fork_params(
+    thread_id: &str,
+    target_root: &str,
+    mode: &ThreadStartMode,
+    governed_config: Option<Value>,
+) -> Result<Value, AdapterError> {
+    let mut params = json!({
+        "threadId": thread_id,
+        "cwd": target_root,
+        "approvalPolicy": "on-request",
+    });
+    apply_thread_start_mode(&mut params, mode, governed_config)?;
+    Ok(params)
+}
+fn apply_thread_start_mode(
+    params: &mut Value,
+    mode: &ThreadStartMode,
+    governed_config: Option<Value>,
+) -> Result<(), AdapterError> {
+    let object = params
+        .as_object_mut()
+        .ok_or_else(|| AdapterError::Internal("thread parameters are invalid".to_string()))?;
+    match (mode, governed_config) {
+        (ThreadStartMode::Standard, None) => Ok(()),
+        (ThreadStartMode::Standard, Some(_)) => Err(AdapterError::Internal(
+            "standard Thread start cannot contain governed Runtime Role configuration".to_string(),
+        )),
+        (
+            ThreadStartMode::GovernedSupervisor {
+                developer_instructions,
+                roles,
+                min_threads,
+                min_depth,
+            },
+            Some(config),
+        ) => {
+            validate_platform_runtime_roles(roles, *min_threads, *min_depth)?;
+            let instructions = developer_instructions.trim();
+            if instructions.is_empty() || instructions.len() > MAX_DEVELOPER_INSTRUCTIONS_BYTES {
+                return Err(AdapterError::Internal(
+                    "Supervisor developer instructions must contain 1 to 16384 bytes".to_string(),
+                ));
+            }
+            if !config.is_object() {
+                return Err(AdapterError::Internal(
+                    "governed Runtime Role configuration is invalid".to_string(),
+                ));
+            }
+            object.insert(
+                "developerInstructions".to_string(),
+                Value::String(instructions.to_string()),
+            );
+            // `features.multi_agent_v2 = false` is only an absence of a V2
+            // override in Codex; it does not force V1 against model metadata
+            // or a fork source. The typed Runtime field does.
+            object.insert(
+                "multiAgentBackend".to_string(),
+                Value::String("v1".to_string()),
+            );
+            object.insert("config".to_string(), config);
+            Ok(())
+        }
+        (ThreadStartMode::GovernedSupervisor { .. }, None) => Err(AdapterError::Internal(
+            "governed Thread start requires verified Runtime Role configuration".to_string(),
+        )),
+    }
 }
 
 fn agent_core_batch_write_params(
@@ -61,6 +121,36 @@ fn agent_core_batch_write_params(
         "expectedVersion": null,
         "reloadUserConfig": true
     })
+}
+
+fn platform_runtime_roles_batch_write_params(
+    roles: &[PlatformRuntimeRole],
+    max_threads: u32,
+    max_depth: u32,
+) -> Result<Value, AdapterError> {
+    validate_platform_runtime_roles(roles, max_threads, max_depth)?;
+    let mut edits = vec![
+        json!({ "keyPath": "features.multi_agent", "value": true, "mergeStrategy": "replace" }),
+        json!({ "keyPath": "agents.enabled", "value": true, "mergeStrategy": "replace" }),
+        json!({ "keyPath": "agents.max_concurrent_threads_per_session", "value": max_threads, "mergeStrategy": "replace" }),
+        json!({ "keyPath": "agents.max_depth", "value": max_depth, "mergeStrategy": "replace" }),
+    ];
+    edits.extend(roles.iter().map(|role| {
+        json!({
+            "keyPath": format!("agents.{}", role.name),
+            "value": {
+                "description": role.description,
+                "config_file": role.config_file,
+            },
+            "mergeStrategy": "replace",
+        })
+    }));
+    Ok(json!({
+        "edits": edits,
+        "filePath": null,
+        "expectedVersion": null,
+        "reloadUserConfig": true,
+    }))
 }
 
 /// Adapter backed directly by a native Profile Host and Codex app-server
@@ -153,14 +243,6 @@ impl RealCodexAdapter {
         })
     }
 
-    fn thread_fork_params(&self, thread_id: &str, target_root: &str) -> Value {
-        json!({
-            "threadId": thread_id,
-            "cwd": target_root,
-            "approvalPolicy": "on-request",
-        })
-    }
-
     async fn prepare_runtime(&self) -> Result<OwnedMutexGuard<Option<uuid::Uuid>>, AdapterError> {
         let mut runtime_instance = self.runtime_instance.clone().lock_owned().await;
         self.host.apply_scheduled_restart().await?;
@@ -173,6 +255,97 @@ impl RealCodexAdapter {
         Ok(runtime_instance)
     }
 
+    fn verified_platform_runtime_role_paths(
+        &self,
+        roles: &[PlatformRuntimeRole],
+        min_threads: u32,
+        min_depth: u32,
+    ) -> Result<HashMap<String, PathBuf>, AdapterError> {
+        validate_platform_runtime_roles(roles, min_threads, min_depth)?;
+        let mut paths = HashMap::with_capacity(roles.len());
+        for role in roles {
+            let path = self
+                .host
+                .verify_platform_agent_role(
+                    &role.definition_id,
+                    &role.version,
+                    &role.content_sha256,
+                )
+                .map_err(|_error| {
+                    tracing::warn!(
+                        definition_id = %role.definition_id,
+                        version = %role.version,
+                        "platform Runtime Role file failed verification"
+                    );
+                    AdapterError::Internal(
+                        "platform Runtime Role file failed verification".to_string(),
+                    )
+                })?;
+            paths.insert(role.name.clone(), path);
+        }
+        Ok(paths)
+    }
+
+    fn verified_existing_platform_runtime_role_paths(
+        &self,
+        config_read: &Value,
+        roles: &[PlatformRuntimeRole],
+    ) -> Result<HashMap<String, PathBuf>, AdapterError> {
+        let mut paths = HashMap::new();
+        let agents = config_read
+            .pointer("/config/agents")
+            .and_then(Value::as_object);
+        for role in roles {
+            let Some(config_file) = agents
+                .and_then(|agents| agents.get(&role.name))
+                .and_then(|role| role.get("config_file"))
+                .and_then(Value::as_str)
+            else {
+                continue;
+            };
+            if !Path::new(config_file).is_absolute() {
+                continue;
+            }
+            let path = self
+                .host
+                .verify_platform_agent_role(
+                    &role.definition_id,
+                    &role.version,
+                    &role.content_sha256,
+                )
+                .map_err(|_error| {
+                    AdapterError::Internal(
+                        "platform Runtime Role file failed verification".to_string(),
+                    )
+                })?;
+            if Path::new(config_file) != path {
+                return Err(AdapterError::Internal(
+                    "Platform Runtime Role conflicts with an existing Profile role".to_string(),
+                ));
+            }
+            paths.insert(role.name.clone(), path);
+        }
+        Ok(paths)
+    }
+    fn governed_runtime_role_config(
+        &self,
+        mode: &ThreadStartMode,
+    ) -> Result<Option<Value>, AdapterError> {
+        match mode {
+            ThreadStartMode::Standard => Ok(None),
+            ThreadStartMode::GovernedSupervisor {
+                roles,
+                min_threads,
+                min_depth,
+                ..
+            } => {
+                let paths =
+                    self.verified_platform_runtime_role_paths(roles, *min_threads, *min_depth)?;
+                governed_runtime_role_config_overrides(roles, *min_threads, *min_depth, &paths)
+                    .map(Some)
+            }
+        }
+    }
     async fn start_thread_in_workspace(
         &self,
         workspace: &AuthorizedWorkspace,
@@ -180,7 +353,11 @@ impl RealCodexAdapter {
     ) -> Result<StartedThread, AdapterError> {
         let _runtime = self.prepare_runtime().await?;
         let workspace_root = self.authorized_root(workspace)?;
-        let params = thread_start_params(&workspace_root, mode)?;
+        // Re-verify the immutable Profile files immediately before the
+        // Runtime consumes them, then carry exact absolute paths in this
+        // request-scoped configuration so Project config cannot win a race.
+        let governed_config = self.governed_runtime_role_config(mode)?;
+        let params = thread_start_params(&workspace_root, mode, governed_config)?;
         let result = self.host.request("thread/start", params).await?;
         let thread_id = result
             .pointer("/thread/id")
@@ -605,18 +782,17 @@ impl CodexAdapter for RealCodexAdapter {
         source_workspace: &AuthorizedWorkspace,
         target_workspace: &AuthorizedWorkspace,
         thread_id: &str,
+        mode: &ThreadStartMode,
     ) -> Result<StartedThread, AdapterError> {
         let (_source_root, _runtime) = self
             .ensure_thread_bound(source_workspace, thread_id)
             .await?;
         let target_root = self.authorized_root(target_workspace)?;
-        let result = self
-            .host
-            .request(
-                "thread/fork",
-                self.thread_fork_params(thread_id, &target_root),
-            )
-            .await?;
+        // Fork has the same Project-layer race as start, so it receives a
+        // fresh Host verification and a request-scoped exact override too.
+        let governed_config = self.governed_runtime_role_config(mode)?;
+        let params = thread_fork_params(thread_id, &target_root, mode, governed_config)?;
+        let result = self.host.request("thread/fork", params).await?;
         let forked_thread_id = result
             .pointer("/thread/id")
             .and_then(Value::as_str)
@@ -925,9 +1101,96 @@ impl CodexAdapter for RealCodexAdapter {
                     .await
                     .map_err(Into::into)
             }
+            ProfileMutation::EnsurePlatformRuntimeRoles {
+                roles,
+                max_threads,
+                max_depth,
+            } => {
+                // Read before writing any managed file. This prevents a platform
+                // projection from replacing a user-managed role with the same
+                // name, while allowing an exact earlier platform projection to
+                // be ensured again after a Profile restart.
+                let current_config = self
+                    .host
+                    .request(
+                        "config/read",
+                        json!({ "includeLayers": false, "cwd": null }),
+                    )
+                    .await?;
+                let verified_existing_paths = self
+                    .verified_existing_platform_runtime_role_paths(&current_config, &roles)?;
+                let (effective_max_threads, effective_max_depth) =
+                    resolve_platform_runtime_role_limits_with_host_paths(
+                        &current_config,
+                        &roles,
+                        max_threads,
+                        max_depth,
+                        &verified_existing_paths,
+                    )?;
+                let params = platform_runtime_roles_batch_write_params(
+                    &roles,
+                    effective_max_threads,
+                    effective_max_depth,
+                )?;
+
+                // Profile Host owns all Profile filesystem mutation. The
+                // adapter validates the exact managed relative path but never
+                // constructs or writes a path itself.
+                for role in &roles {
+                    self.host
+                        .write_platform_agent_role(
+                            &role.definition_id,
+                            &role.version,
+                            role.config_toml.as_bytes(),
+                        )
+                        .map_err(|error| {
+                            tracing::warn!(
+                                definition_id = %role.definition_id,
+                                version = %role.version,
+                                %error,
+                                "failed to materialize platform Runtime Role configuration"
+                            );
+                            AdapterError::Internal(
+                                "failed to materialize platform Runtime Role configuration"
+                                    .to_string(),
+                            )
+                        })?;
+                }
+
+                self.host
+                    .request("config/batchWrite", params)
+                    .await
+                    .map_err(Into::into)
+            }
         }
     }
 
+    async fn verify_platform_runtime_roles(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        roles: &[PlatformRuntimeRole],
+        min_threads: u32,
+        min_depth: u32,
+    ) -> Result<(), AdapterError> {
+        let _runtime = self.prepare_runtime().await?;
+        let workspace_root = self.authorized_root(workspace)?;
+        let verified_host_paths =
+            self.verified_platform_runtime_role_paths(roles, min_threads, min_depth)?;
+        let config = self
+            .host
+            .request(
+                "config/read",
+                json!({ "includeLayers": true, "cwd": workspace_root }),
+            )
+            .await?;
+        validate_effective_platform_runtime_roles(
+            &config,
+            roles,
+            min_threads,
+            min_depth,
+            &verified_host_paths,
+        )
+    }
     async fn start_profile_login(&self) -> Result<StartedProfileLogin, AdapterError> {
         let response = self
             .host
@@ -1679,14 +1942,85 @@ fn app_server_event_frame(
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_core_batch_write_params, app_server_event_frame,
-        discover_selected_capability_root_paths, is_authorized_workspace_root, login_completion,
-        message_parent_thread_id, message_thread_id, selected_capability_root_id,
-        selected_capability_roots_json, thread_start_params, turn_sandbox_policy,
+        agent_core_batch_write_params, app_server_event_frame, codex_bubblewrap_is_unavailable,
+        codex_sandbox_disabled_by_environment, discover_selected_capability_root_paths,
+        is_authorized_workspace_root, login_completion, message_parent_thread_id,
+        message_thread_id, platform_runtime_roles_batch_write_params, selected_capability_root_id,
+        selected_capability_roots_json, thread_fork_params, thread_start_params,
+        turn_sandbox_policy,
     };
-    use crate::ThreadStartMode;
+    use crate::{
+        governed_runtime_role_config_overrides, platform_runtime_role_config_file,
+        resolve_platform_runtime_role_limits, resolve_platform_runtime_role_limits_with_host_paths,
+        validate_effective_platform_runtime_roles, validate_platform_runtime_roles,
+        PlatformRuntimeRole, ThreadStartMode,
+    };
     use serde_json::{json, Value};
-    use std::path::Path;
+    use sha2::{Digest, Sha256};
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+
+    fn platform_runtime_role() -> PlatformRuntimeRole {
+        let config_toml =
+            "developer_instructions = '''\nUse only the governed planning tools.\n'''\n";
+        PlatformRuntimeRole {
+            definition_id: "data-agent".to_string(),
+            version: "1.0.0".to_string(),
+            name: "data_agent".to_string(),
+            description: "Builds the governed planning dataset.".to_string(),
+            config_file: platform_runtime_role_config_file("data-agent", "1.0.0"),
+            config_toml: config_toml.to_string(),
+            content_sha256: hex::encode(Sha256::digest(config_toml.as_bytes())),
+        }
+    }
+
+    fn governed_supervisor_mode(
+        role: PlatformRuntimeRole,
+        developer_instructions: &str,
+    ) -> ThreadStartMode {
+        ThreadStartMode::GovernedSupervisor {
+            developer_instructions: developer_instructions.to_string(),
+            roles: vec![role],
+            min_threads: 2,
+            min_depth: 1,
+        }
+    }
+
+    fn governed_config_for_role(role: &PlatformRuntimeRole) -> Value {
+        let mut verified_host_paths = HashMap::new();
+        verified_host_paths.insert(
+            role.name.clone(),
+            PathBuf::from(format!("/profile/{}", role.config_file)),
+        );
+        governed_runtime_role_config_overrides(&[role.clone()], 2, 1, &verified_host_paths)
+            .expect("build verified governed configuration")
+    }
+
+    fn effective_runtime_role_config(role: &PlatformRuntimeRole, config_file: &str) -> Value {
+        let mut config = json!({
+            "config": {
+                "features": { "multi_agent": true },
+                "agents": {
+                    "enabled": true,
+                    "max_concurrent_threads_per_session": 2,
+                    "max_depth": 1,
+                },
+            },
+            "origins": {},
+            "layers": [],
+        });
+        config["config"]["agents"]
+            .as_object_mut()
+            .expect("agents object")
+            .insert(
+                role.name.clone(),
+                json!({
+                    "description": role.description,
+                    "config_file": config_file,
+                }),
+            );
+        config
+    }
 
     fn create_plugin_root(root: &Path, name: &str) -> std::path::PathBuf {
         let plugin = root.join(name);
@@ -1855,37 +2189,73 @@ mod tests {
     }
 
     #[test]
-    fn binds_enterprise_supervisor_instructions_only_to_explicit_thread_starts() {
-        let standard =
-            thread_start_params("/runner/workspace", &ThreadStartMode::Standard).unwrap();
-        let enterprise = thread_start_params(
-            "/runner/workspace",
-            &ThreadStartMode::EnterpriseSupervisor {
-                developer_instructions: "  Coordinate the approved agents.  ".to_string(),
-            },
-        )
-        .unwrap();
+    fn injects_verified_governed_configuration_for_thread_start_and_fork() {
+        let role = platform_runtime_role();
+        let mode =
+            governed_supervisor_mode(role.clone(), "  Coordinate the approved platform roles.  ");
+        let config = governed_config_for_role(&role);
+
+        let standard = thread_start_params("/runner/workspace", &ThreadStartMode::Standard, None)
+            .expect("standard start parameters");
+        let started = thread_start_params("/runner/workspace", &mode, Some(config.clone()))
+            .expect("governed start parameters");
+        let forked = thread_fork_params("thread-source", "/runner/fork", &mode, Some(config))
+            .expect("governed fork parameters");
 
         assert!(standard.get("developerInstructions").is_none());
-        assert_eq!(
-            enterprise["developerInstructions"],
-            "Coordinate the approved agents."
-        );
+        assert!(standard.get("config").is_none());
+        assert!(standard.get("multiAgentBackend").is_none());
+        for params in [&started, &forked] {
+            assert_eq!(
+                params["developerInstructions"],
+                "Coordinate the approved platform roles."
+            );
+            assert_eq!(params["multiAgentBackend"], "v1");
+            assert_eq!(params["config"]["features.multi_agent"], true);
+            assert!(params["config"].get("features.multi_agent_v2").is_none());
+            assert_eq!(params["config"]["agents.enabled"], true);
+            assert_eq!(
+                params["config"]["agents.data_agent"],
+                json!({
+                    "description": role.description,
+                    "config_file": "/profile/platform-agents/data-agent/1.0.0.toml",
+                    "nickname_candidates": ["data_agent"],
+                })
+            );
+        }
     }
 
     #[test]
-    fn rejects_empty_enterprise_supervisor_instructions() {
+    fn rejects_governed_starts_without_verified_configuration_or_instructions() {
+        let role = platform_runtime_role();
+        let mode = governed_supervisor_mode(role.clone(), "Coordinate the approved roles.");
+        let error = thread_start_params("/runner/workspace", &mode, None).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Internal error: governed Thread start requires verified Runtime Role configuration"
+        );
+
+        let blank_mode = governed_supervisor_mode(role.clone(), "   ");
         let error = thread_start_params(
             "/runner/workspace",
-            &ThreadStartMode::EnterpriseSupervisor {
-                developer_instructions: "   ".to_string(),
-            },
+            &blank_mode,
+            Some(governed_config_for_role(&role)),
         )
         .unwrap_err();
-
         assert_eq!(
             error.to_string(),
             "Internal error: Supervisor developer instructions must contain 1 to 16384 bytes"
+        );
+
+        let error = thread_start_params(
+            "/runner/workspace",
+            &ThreadStartMode::Standard,
+            Some(json!({ "agents.enabled": true })),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Internal error: standard Thread start cannot contain governed Runtime Role configuration"
         );
     }
 
@@ -1904,12 +2274,400 @@ mod tests {
     }
 
     #[test]
-    fn builds_workspace_write_turn_sandbox_by_default() {
+    fn projects_platform_roles_through_one_reloading_batch_write() {
+        let role = platform_runtime_role();
+        let params = platform_runtime_roles_batch_write_params(&[role.clone()], 2, 1)
+            .expect("valid platform role batch");
+
+        assert_eq!(params["reloadUserConfig"], true);
+        assert_eq!(params["filePath"], Value::Null);
+        assert_eq!(params["expectedVersion"], Value::Null);
+        assert_eq!(params["edits"].as_array().map(Vec::len), Some(5));
+        assert_eq!(params["edits"][0]["keyPath"], "features.multi_agent");
+        assert_eq!(params["edits"][0]["value"], true);
+        assert_eq!(params["edits"][1]["keyPath"], "agents.enabled");
+        assert_eq!(
+            params["edits"][2]["keyPath"],
+            "agents.max_concurrent_threads_per_session"
+        );
+        assert_eq!(params["edits"][2]["value"], 2);
+        assert_eq!(params["edits"][3]["keyPath"], "agents.max_depth");
+        assert_eq!(params["edits"][4]["keyPath"], "agents.data_agent");
+        assert_eq!(
+            params["edits"][4]["value"],
+            json!({
+                "description": role.description,
+                "config_file": role.config_file,
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_unmanaged_role_paths_and_bad_content_summaries() {
+        let mut role = platform_runtime_role();
+        role.config_file = "agents/data_agent.toml".to_string();
+        let error = validate_platform_runtime_roles(&[role], 2, 1).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Internal error: Platform Runtime Role config file is not platform-managed"
+        );
+
+        let mut role = platform_runtime_role();
+        role.content_sha256 = "0".repeat(64);
+        let error = validate_platform_runtime_roles(&[role], 2, 1).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Internal error: Platform Runtime Role SHA-256 does not match configuration content"
+        );
+
+        let mut role = platform_runtime_role();
+        role.name = "max_threads".to_string();
+        let error = validate_platform_runtime_roles(&[role], 2, 1).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Internal error: Platform Runtime Role name is invalid"
+        );
+    }
+
+    #[test]
+    fn rejects_extra_runtime_role_toml_fields() {
+        let mut role = platform_runtime_role();
+        role.config_toml.push_str("model = \"not-allowed\"\n");
+        role.content_sha256 = hex::encode(Sha256::digest(role.config_toml.as_bytes()));
+
+        let error = validate_platform_runtime_roles(&[role], 2, 1).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Internal error: Platform Runtime Role configuration may only define developer instructions"
+        );
+    }
+
+    #[test]
+    fn retains_higher_limits_and_only_allows_exact_prior_platform_roles() {
+        let role = platform_runtime_role();
+        let matching = json!({
+            "config": {
+                "agents": {
+                    "max_concurrent_threads_per_session": 6,
+                    "max_depth": 2,
+                    "data_agent": {
+                        "description": role.description.clone(),
+                        "config_file": role.config_file.clone(),
+                        "nickname_candidates": null,
+                    },
+                },
+            },
+        });
+        assert_eq!(
+            resolve_platform_runtime_role_limits(&matching, &[role.clone()], 2, 1).unwrap(),
+            (6, 2)
+        );
+
+        let conflicting = json!({
+            "config": {
+                "agents": {
+                    "data_agent": {
+                        "description": "User-defined role",
+                        "config_file": role.config_file.clone(),
+                    },
+                },
+            },
+        });
+        let error = resolve_platform_runtime_role_limits(&conflicting, &[role], 2, 1)
+            .expect_err("user role must not be overwritten");
+        assert_eq!(
+            error.to_string(),
+            "Internal error: Platform Runtime Role conflicts with an existing Profile role"
+        );
+    }
+
+    #[test]
+    fn only_accepts_an_absolute_role_path_after_host_verification() {
+        let role = platform_runtime_role();
+        let host_path = PathBuf::from("/profile/platform-agents/data-agent/1.0.0.toml");
+        let mut verified_host_paths = HashMap::new();
+        verified_host_paths.insert(role.name.clone(), host_path.clone());
+        let matching = json!({
+            "config": {
+                "agents": {
+                    "data_agent": {
+                        "description": role.description,
+                        "config_file": host_path,
+                    },
+                },
+            },
+        });
+        assert_eq!(
+            resolve_platform_runtime_role_limits_with_host_paths(
+                &matching,
+                &[role.clone()],
+                2,
+                1,
+                &verified_host_paths,
+            )
+            .expect("verified exact absolute path"),
+            (2, 1)
+        );
+
+        let wrong = json!({
+            "config": {
+                "agents": {
+                    "data_agent": {
+                        "description": role.description,
+                        "config_file": "/untrusted/platform-agents/data-agent/1.0.0.toml",
+                    },
+                },
+            },
+        });
+        assert!(resolve_platform_runtime_role_limits_with_host_paths(
+            &wrong,
+            &[role],
+            2,
+            1,
+            &verified_host_paths,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn verifies_effective_roles_and_rejects_project_origins_or_layers() {
+        let role = platform_runtime_role();
+        let relative = effective_runtime_role_config(&role, &role.config_file);
+        validate_effective_platform_runtime_roles(
+            &relative,
+            &[role.clone()],
+            2,
+            1,
+            &HashMap::new(),
+        )
+        .expect("matching non-project effective configuration");
+
+        // A user/Profile V2 setting remains valid for ordinary sessions. A
+        // governed Thread uses the typed Runtime V1 backend selection, rather
+        // than relying on a configuration boolean to suppress V2.
+        let mut user_v2 = relative.clone();
+        user_v2["config"]["features"]["multi_agent_v2"] = Value::Bool(true);
+        validate_effective_platform_runtime_roles(&user_v2, &[role.clone()], 2, 1, &HashMap::new())
+            .expect("user-level V2 does not invalidate governed request preflight");
+
+        let host_path = PathBuf::from("/profile/platform-agents/data-agent/1.0.0.toml");
+        let mut verified_host_paths = HashMap::new();
+        verified_host_paths.insert(role.name.clone(), host_path.clone());
+        let absolute =
+            effective_runtime_role_config(&role, host_path.to_str().expect("UTF-8 test path"));
+        validate_effective_platform_runtime_roles(
+            &absolute,
+            &[role.clone()],
+            2,
+            1,
+            &verified_host_paths,
+        )
+        .expect("matching Host-verified absolute configuration");
+
+        let wrong_absolute = effective_runtime_role_config(
+            &role,
+            "/untrusted/platform-agents/data-agent/1.0.0.toml",
+        );
+        assert!(validate_effective_platform_runtime_roles(
+            &wrong_absolute,
+            &[role.clone()],
+            2,
+            1,
+            &verified_host_paths,
+        )
+        .is_err());
+
+        let mut project_origin = relative.clone();
+        project_origin["origins"] = json!({
+            "agents.data_agent.config_file": {
+                "name": {
+                    "type": "project",
+                    "dotCodexFolder": "/runner/workspace/.codex",
+                },
+                "version": "1",
+            },
+        });
+        assert!(validate_effective_platform_runtime_roles(
+            &project_origin,
+            &[role.clone()],
+            2,
+            1,
+            &HashMap::new(),
+        )
+        .is_err());
+
+        let mut collab_project_origin = relative.clone();
+        collab_project_origin["origins"] = json!({
+            "features.collab": {
+                "name": {
+                    "type": "project",
+                    "dotCodexFolder": "/runner/workspace/.codex",
+                },
+                "version": "1",
+            },
+        });
+        assert!(validate_effective_platform_runtime_roles(
+            &collab_project_origin,
+            &[role.clone()],
+            2,
+            1,
+            &HashMap::new(),
+        )
+        .is_err());
+
+        let mut v2_project_origin = relative.clone();
+        v2_project_origin["origins"] = json!({
+            "features.multi_agent_v2.enabled": {
+                "name": {
+                    "type": "project",
+                    "dotCodexFolder": "/runner/workspace/.codex",
+                },
+                "version": "1",
+            },
+        });
+        assert!(validate_effective_platform_runtime_roles(
+            &v2_project_origin,
+            &[role.clone()],
+            2,
+            1,
+            &HashMap::new(),
+        )
+        .is_err());
+
+        let mut collab_project_layer = relative.clone();
+        collab_project_layer["layers"] = json!([
+            {
+                "name": {
+                    "type": "project",
+                    "dotCodexFolder": "/runner/workspace/.codex",
+                },
+                "version": "1",
+                "config": {
+                    "features": {
+                        "collab": true,
+                    },
+                },
+            },
+        ]);
+        assert!(validate_effective_platform_runtime_roles(
+            &collab_project_layer,
+            &[role.clone()],
+            2,
+            1,
+            &HashMap::new(),
+        )
+        .is_err());
+
+        let mut v2_project_layer = relative.clone();
+        v2_project_layer["layers"] = json!([
+            {
+                "name": {
+                    "type": "project",
+                    "dotCodexFolder": "/runner/workspace/.codex",
+                },
+                "version": "1",
+                "config": {
+                    "features": {
+                        "multi_agent_v2": {
+                            "enabled": true,
+                            "tool_namespace": "agents",
+                        },
+                    },
+                },
+            },
+        ]);
+        assert!(validate_effective_platform_runtime_roles(
+            &v2_project_layer,
+            &[role.clone()],
+            2,
+            1,
+            &HashMap::new(),
+        )
+        .is_err());
+
+        let mut legacy_project_origin = relative.clone();
+        legacy_project_origin["origins"] = json!({
+            "agents.max_threads": {
+                "name": {
+                    "type": "project",
+                    "dotCodexFolder": "/runner/workspace/.codex",
+                },
+                "version": "1",
+            },
+        });
+        assert!(validate_effective_platform_runtime_roles(
+            &legacy_project_origin,
+            &[role.clone()],
+            2,
+            1,
+            &HashMap::new(),
+        )
+        .is_err());
+
+        let mut legacy_project_layer = relative.clone();
+        legacy_project_layer["layers"] = json!([
+            {
+                "name": {
+                    "type": "project",
+                    "dotCodexFolder": "/runner/workspace/.codex",
+                },
+                "version": "1",
+                "config": {
+                    "agents": {
+                        "max_threads": 12,
+                    },
+                },
+            },
+        ]);
+        assert!(validate_effective_platform_runtime_roles(
+            &legacy_project_layer,
+            &[role.clone()],
+            2,
+            1,
+            &HashMap::new(),
+        )
+        .is_err());
+
+        let mut project_layer = relative;
+        project_layer["layers"] = json!([
+            {
+                "name": {
+                    "type": "project",
+                    "dotCodexFolder": "/runner/workspace/.codex",
+                },
+                "version": "1",
+                "config": {
+                    "agents": {
+                        "data_agent": {
+                            "description": role.description,
+                            "config_file": role.config_file,
+                        },
+                    },
+                },
+            },
+        ]);
+        assert!(validate_effective_platform_runtime_roles(
+            &project_layer,
+            &[role],
+            2,
+            1,
+            &HashMap::new(),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn selects_the_available_turn_sandbox_policy() {
         let policy = turn_sandbox_policy(Path::new("/runner/workspace"), false);
 
-        assert_eq!(policy["type"], "workspaceWrite");
-        assert_eq!(policy["writableRoots"], json!(["/runner/workspace"]));
-        assert_eq!(policy["networkAccess"], true);
+        if codex_sandbox_disabled_by_environment() || codex_bubblewrap_is_unavailable() {
+            assert_eq!(policy["type"], "externalSandbox");
+            assert_eq!(policy["networkAccess"], "enabled");
+        } else {
+            assert_eq!(policy["type"], "workspaceWrite");
+            assert_eq!(policy["writableRoots"], json!(["/runner/workspace"]));
+            assert_eq!(policy["networkAccess"], true);
+        }
     }
 
     #[test]
