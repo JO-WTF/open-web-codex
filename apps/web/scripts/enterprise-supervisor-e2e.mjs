@@ -16,6 +16,9 @@ const providerWireApi = process.env.E2E_PROVIDER_WIRE_API ?? "chat";
 const model = process.env.E2E_MODEL ?? "deepseek-v4-flash";
 const effort = process.env.E2E_EFFORT ?? "none";
 const useBuiltInProvider = process.env.E2E_USE_BUILT_IN_PROVIDER === "1";
+const promptOverride = process.env.E2E_PROMPT?.trim();
+const observationOnly = process.env.E2E_OBSERVE_ONLY === "1";
+const caseName = process.env.E2E_CASE_NAME?.trim() || "custom enterprise observation";
 const username = process.env.E2E_ADMIN_USERNAME ?? "enterprise-e2e";
 const email = process.env.E2E_ADMIN_EMAIL ?? "enterprise-e2e@open-web-codex.local";
 const password = process.env.E2E_ADMIN_PASSWORD ?? "open-web-codex-enterprise-e2e";
@@ -363,7 +366,7 @@ await runCase("managed Workspace and Policy-bound root Thread", async () => {
 });
 
 await runCase("real two-Agent warehouse-network collaboration", async () => {
-  const prompt = `完成“华东新增仓”企业决策案例。必须遵循已绑定的 Supervisor Policy，并使用 Codex 原生多 Agent 协作：
+  const prompt = promptOverride ?? `完成“华东新增仓”企业决策案例。必须遵循已绑定的 Supervisor Policy，并使用 Codex 原生多 Agent 协作：
 
 1. 先且只创建一个 data_agent。要求它使用只读 source_id=warehouse-network-fixture，检查、构建并验证 planning-dataset.v1，然后返回未经改写的 data_ref 和 Resource name。等待它完成。
 2. 取得该 data_ref 后，再且只创建一个 network_planning_agent。把未经改写的 data_ref 交给它；它必须先调用 read_mcp_resource 读取同一份 Artifact，再做任何网络计算。
@@ -393,6 +396,60 @@ ${JSON.stringify(routeFixture.entries)}
   const events = await waitForTurn(state.task.id, state.turnId);
   return `${events.length} durable browser events`;
 });
+
+if (observationOnly) {
+  await runCase("capture Runtime collaboration evidence", async () => {
+    const [agents, events, artifacts, binding] = await Promise.all([
+      api(`/runs/${state.run.id}/agents`),
+      allTaskEvents(state.task.id),
+      api(`/tasks/${state.task.id}/artifacts`),
+      api(`/runs/${state.run.id}/supervisor-policy`),
+    ]);
+    const calls = completedMcpCalls(events);
+    const report = lastFinalReport(events);
+    assert(report, "Root Supervisor did not produce a final report");
+
+    if (evidenceFile) {
+      const evidence = {
+        schemaVersion: "enterprise-supervisor-observation.v1",
+        verifiedAt: new Date().toISOString(),
+        case: caseName,
+        prompt: promptOverride,
+        provider: { id: providerId, model },
+        policy: binding,
+        run: {
+          id: state.run.id,
+          rootThreadId: state.run.codex_thread_id,
+          turnId: state.turnId,
+          workspaceId: state.workspace.id,
+        },
+        agents,
+        toolCalls: calls.map((event) => ({
+          sequence: event.sequence,
+          threadId: event.thread_id,
+          server: event.payload?.data?.server,
+          tool: event.payload?.data?.tool,
+        })),
+        artifacts,
+        report,
+      };
+      await mkdir(path.dirname(evidenceFile), { recursive: true });
+      await writeFile(evidenceFile, `${JSON.stringify(evidence, null, 2)}\n`, {
+        mode: 0o600,
+      });
+      log(`\nEvidence: ${evidenceFile}`);
+    }
+
+    return `${agents.length} Runtime Threads; ${calls.length} MCP calls; ${artifacts.length} Artifacts`;
+  });
+
+  log("\nEnterprise Supervisor observation summary");
+  for (const result of results) {
+    log(`- ${result.status.toUpperCase()} ${result.name} (${result.durationMs} ms)`);
+  }
+  log(`\n${results.length}/${results.length} cases passed.`);
+  process.exit(0);
+}
 
 let finalEvidence;
 await runCase("Runtime Agent tree, cross-child handoff, and deterministic tools", async () => {

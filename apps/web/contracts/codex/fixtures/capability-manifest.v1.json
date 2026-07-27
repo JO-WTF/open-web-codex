@@ -121,16 +121,6 @@
       }
     },
     {
-      "id": "agents.multi_agent_v1_backend_override",
-      "version": "1.0.0",
-      "status": "experimental",
-      "experimental": true,
-      "methods": {
-        "clientRequests": ["thread/start", "thread/fork"]
-      },
-      "limits": {}
-    },
-    {
       "id": "skills.crud",
       "version": "1.0.0",
       "status": "degraded",

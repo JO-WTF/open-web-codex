@@ -124,9 +124,9 @@ sequenceDiagram
 | Codex 多 Agent | 真实根 Thread 已按顺序 spawn/wait 两个精确 Role 子 Thread，父子身份、AgentPath、状态和 MCP 活动可观察 | follow-up、interrupt、深层树和部分失败尚未进入真实案例矩阵 | 继续复用 Runtime，只补行为证据 |
 | Thread 启动 | Adapter 使用正式 `thread/start` 传入授权 `cwd`、审批策略、历史模式和已绑定 Policy；真实企业 Thread 启动已通过 | shared Workspace、真实 multi-`cwd` 和多 Profile 路由仍缺证据 | 不新增 Supervisor Runtime |
 | 事件与 Web | Server 把根/子 Thread 事件投影为可重建 DTO；真实刷新与 Server/Profile Host 重启恢复同一 Policy、三节点 Agent 树和最终报告 | 多层历史导航、乱序/重复矩阵和完成后追加任务仍不完整 | 扩展投影与 DTO，不建立第二套 Agent 状态机 |
-| Runtime Role | 两个企业 Definition/version 提供不可变 TOML 模板和 hash；仅已绑定 Enterprise Supervisor Policy 的 worker 会在根创建或继承 fork 前确认 `agents.multi_agent@1.0.0` 与 `agents.multi_agent_v1_backend_override@1.0.0`（已支持或显式启用的 experimental），使用 Profile Host 受管写入/无跟随 hash 重验、类型化 `config/batchWrite` reload、带 workspace `cwd`/origin 的 `config/read` 和官方 per-thread config override 物化精确 Role，并在受治理的 `thread/start`/`thread/fork` 发送 request-scoped `multiAgentBackend: "v1"`；该选择优先于模型元数据和 V2 fork lineage。缺失或不匹配的 Capability 在 Runtime 调用前失败，防止旧 Runtime 静默忽略字段；`profile_runtime_role_projections` 记录此配置投影，独立于 Runtime 执行投影 | 多 Profile 的发布、治理视图和通用 Catalog 仍未完成 | 不由通用启动、浏览器 Role CRUD 或普通 Root 会话隐式安装；普通 Root 不带 V1 selector；Project 覆盖、冲突及版本/hash 漂移明确失败 |
-| Artifact | 已有 Task 级稳定身份、Schema、状态、内容、生产者 provenance 与同 Task 授权；真实案例完成跨子 Thread Resource 交接，最新重跑产生十二个 ready Artifact | 替代、失效、删除、保留、跨 Run 复用和内容打开体验未完成 | 完成生命周期，不退回 Run/Thread 所有权 |
-| MCP | 真实案例通过 Runtime discovery 使用只读 `supply_chain_data` 与有界 `supply_chain_planner`；最新重跑完成 36 次数据、读取、计算和验证调用 | 超限、超时、取消、高成本拒绝和生产数据连接仍缺系统证据 | 沿现有发现与审批路径补非 happy path |
+| Runtime Role | 两个企业 Definition/version 显式绑定经评审的 Runtime 指令 hash，并由单一指令源确定性生成 TOML；仅已绑定 Enterprise Supervisor Policy 的 worker 会在根创建或继承 fork 前确认 `agents.multi_agent@1.0.0`，使用 Profile Host 受管写入和无跟随 hash 重验物化精确 Role 文件，并只在该次 `thread/start`/`thread/fork` request config 中启用 `features.multi_agent_v2`、设置 V2 并发限制和注入 Role | Runtime 原生 Agent CRUD、通用发布、治理视图和多 Profile Catalog 仍未完成 | 新企业 Thread 直接依赖当前 V2，不引入 V1 兼容协议；普通 Root 不获得 Policy、企业 Role 或 V2 覆盖；Role 不注册进 Profile 全局配置，Platform 也不持久化 Runtime 配置投影 |
+| Artifact | 已有 Task 级稳定身份、Schema、状态、内容、生产者 provenance 与同 Task 授权；真实案例完成跨子 Thread Resource 交接，最新重跑产生十个 ready Artifact | 替代、失效、删除、保留、跨 Run 复用和内容打开体验未完成 | 完成生命周期，不退回 Run/Thread 所有权 |
+| MCP | 真实案例通过 Runtime discovery 使用只读 `supply_chain_data` 与有界 `supply_chain_planner`；最新重跑完成 33 次数据、读取、计算和验证调用 | 超限、超时、取消、高成本拒绝和生产数据连接仍缺系统证据 | 沿现有发现与审批路径补非 happy path |
 | Workspace | Workspace 已独立于 Thread/Run，Adapter 会校验 Runner root | 现有根登记、共享并发和真实 multi-`cwd` 证据不完整 | 第一版限定一个已授权 managed Workspace |
 | Profile | 单 Profile Host、Provider、Secret 和 Runtime status 已有主体实现 | 多 Profile Router 和完整重启矩阵未完成 | 明确限定单 Profile，不提前建设多用户路由 |
 
@@ -388,41 +388,42 @@ pending -> materializing -> failed
 - [x] 每个 Definition 声明职责、输入、输出、所需 Capability、风险和
   `runtime_role_ref`；
 - [x] Definition 以代码管理并经过评审，不建设 Catalog CRUD；
-- [x] 已发布的 Definition/version 同时提供不可变、带内容 hash 的 TOML Runtime
-  Role 模板；
-- [x] 只有已绑定显式已发布 Supervisor Policy 的 worker 执行前检查会触发投影：Run
-  入队只封存 Policy Snapshot；每次根 Thread 创建或继承 fork 前，worker 重新解析已发布
-  id/version、核对 Snapshot hash/指令与 `agents.multi_agent@1.0.0`、
-  `agents.multi_agent_v1_backend_override@1.0.0` Capability。后者必须已支持或显式启用为
-  experimental；否则在 Runtime 调用前失败。随后由 Profile Host 写入并安全重开受管 Role
-  文件、经类型化 `config/batchWrite` reload 和带 workspace `cwd` 的正式 `config/read`
-  （含 origin）核验。受保护字段若来自 Project 层即失败；最终以同一组官方 per-thread
-  config override 和 request-scoped `multiAgentBackend: "v1"` 创建或 fork Runtime Thread。
-  此 V1 选择优先于模型元数据和继承的 V2 fork lineage，且不持久化为 Profile/Project 配置；
-- [x] 持久 `profile_runtime_role_projections` 记录配置投影，且与仅从 Runtime 事件重建
-  的 `runtime_agent_projections` 执行观察严格分离；
+- [x] 已发布的 Definition/version 显式绑定经评审的 Runtime 指令 hash；Profile Host
+  物化的 TOML 由这一份指令源确定性生成，不维护第二份容易漂移的模板；
+- [x] 只有已绑定显式已发布 Supervisor Policy 的 worker 执行前检查会触发物化：Run
+  入队只封存 Policy Snapshot；Snapshot hash 同时覆盖 Supervisor 指令和引用的每个
+  Definition id/version/Runtime 指令 hash。每次根 Thread 创建或继承 fork 前，worker
+  重新解析已发布 id/version、核对完整 Snapshot 与 `agents.multi_agent@1.0.0`。
+  随后由 Profile Host 原子写入受管 Role 文件；Adapter 在 Runtime 消费前安全重开并
+  校验 hash，再通过官方 per-thread config 显式启用 `features.multi_agent_v2`、设置
+  V2 并发限制和精确 Role。该选择只作用于本次 Thread，不注册到 Profile/Project；
+- [x] 不持久化 Runtime Role 配置投影；PostgreSQL 只保留 Policy/Definition 业务事实
+  和由 Runtime 事件重建的 `runtime_agent_projections` 执行观察；
 - [x] 受管平台 Role 名称为保留名称，Profile Role CRUD 不能创建、修改或覆盖它们；
 - [x] 用真实 spawn 证明两个已配置 Runtime Role 均可被当前 Runtime 发现；
-- [x] Role 冲突、Definition 版本或模板 hash 漂移、未启用能力或不足的 Runtime 限制
-  明确失败，不回退到 default 或其他 Agent；
-- [x] 普通 Root 会话不触发或变更多 Agent 配置；
+- [x] Definition 版本或指令 hash 漂移、未启用多 Agent 能力、Role 文件校验失败或
+  越界 V2 并发限制明确失败，不回退到 default 或其他 Agent；
+- [x] 普通 Root 会话不触发或变更企业 Agent 配置，也不获得 Policy 指令、企业 Role
+  或 V2 覆盖；
 - [ ] 不把 Runtime nickname、AgentPath 或 Role 名称作为企业数据授权身份。
 
 现有 Profile Agent 设置可以继续服务非保留的 Runtime 配置，但不能被描述为完整企业
-Agent Catalog，也不能管理平台投影的 Role。受管投影不是启动脚本或浏览器 CRUD 对
-隐藏 Profile 文件的直接修改：它只发生在显式 Policy 前置检查内，并且必须经过
-Profile Host、类型化配置写入和读回验证。
+Agent Catalog。受管 Role 文件物化是原生 Agent CRUD 缺失期间的内部过渡边界：它只
+发生在显式 Policy 前置检查内，必须经过 Profile Host 原子写入和启动前 hash 重验，
+且不能写入 Profile 全局 Agent 配置。退出路径见
+`docs/agent-capability-lifecycle-plan.md`。
 
 #### 功能验收
 
 - 同一 Policy 版本重复启动案例时，根 Thread 获得相同协调规则；
 - Data 与 Network Definition 可以追溯到实际 spawn 使用的 Runtime Role；
-- Role 冲突、版本或模板 hash 漂移会在每次根 Thread 创建或继承 fork 的 Runtime 调用前失败；
-- 缺少、版本不匹配或未显式启用的 V1 backend Capability 会在 `thread/start`/`thread/fork`
-  之前失败，旧 Runtime 不会被允许静默忽略 `multiAgentBackend`；
-- 带 V2 模型元数据或 V2 fork 血缘时，受治理 start/fork 仍使用 V1；
-- 不带 Enterprise Supervisor Policy 的普通 Root 启动不创建或修改任何 Runtime Role，也不发送
-  `multiAgentBackend`；
+- Role 冲突、版本或 Runtime 指令 hash 漂移会在每次根 Thread 创建或继承 fork 的
+  Runtime 调用前失败；
+- 缺少、版本不匹配或未启用的多 Agent Capability 会在
+  `thread/start`/`thread/fork` 之前失败；
+- 受治理的新建与 fork Thread 均使用 V2；不为新企业功能保留 V1 兼容分支；
+- 不带 Enterprise Supervisor Policy 的普通 Root 启动不创建或修改任何 Runtime Role，
+  也不获得企业 V2 配置覆盖；
 - unknown Role 产生明确可见错误；
 - 修改已发布 Policy 源内容会产生新版本，而不是改变既有 Thread 行为；
 - 用户 Prompt 不能覆盖“只读数据、审批和 Artifact 引用”等确定性边界。
@@ -569,10 +570,11 @@ Prompt 中的角色说明。
 - [x] 浏览器关键页面已人工核对，自动化恢复检查验证页面所依赖的四类资源；
 - [x] 能力基线准确区分新增能力与未验证部分。
 
-最新一次全新环境证据为 9/9：真实协作产生一个根 Thread、两个子 Thread、36 次
-企业 MCP 调用、十二个 ready Task Artifact 和 3258 字六段式报告；恢复检查读取到
-同一个 Turn、三个 Agent 与十二个 Artifact。调用与 Artifact 精确数量不是产品不变量；
-E2E 固定必需 Schema 的最小数量，并要求所有已注册 Artifact ready。该证据通过
+最新一次全新环境证据为 9/9：真实协作产生一个根 Thread、两个子 Thread、33 次
+企业 MCP 调用、十个 ready Task Artifact 和 3762 字六段式报告；恢复检查读取到
+同一个 Turn、三个 Agent 与十个 Artifact，并验证三条受治理 Runtime Thread 均使用
+Multi-Agent V2。调用与 Artifact 精确数量不是产品不变量；E2E 固定必需 Schema 的
+最小数量，并要求所有已注册 Artifact ready。该证据通过
 `scripts/smoke-enterprise-supervisor-copilot.sh` 在一次性 Profile、PostgreSQL 和
 managed Workspace 上重建；运行时证据文件由执行环境指定，不作为仓库中的长期事实
 副本。
@@ -659,7 +661,7 @@ managed Workspace 上重建；运行时证据文件由执行环境指定，不�
 | TRUST-010 | Agent 并发、深度、预算和超时尚无完整压力基线 | Policy 和 Runtime 配置采用保守上限；案例只使用两个子 Agent | 开放通用委派、长任务或第三个以上 Agent | open |
 | TRUST-011 | Artifact 删除、替代、保留和跨 Run 生命周期未完成 | 第一版只在同 Task 内创建和读取，不开放管理 UI | Artifact 需要长期复用、合规删除或跨 Run 共享 | deferred |
 | TRUST-012 | 企业数据仍为受控案例数据，不是真实 ERP/WMS 连接 | 使用真实 MCP 协议和授权边界，但准确标注数据来源 | 接入生产数据源或对业务结果负责 | deferred |
-| TRUST-013 | 最新真实 E2E 约 427 秒、三个 Agent、36 次 MCP 调用、十二个 Artifact 与报告引用；调用和 Artifact 数量会随有效调查步骤变化，且尚无运行分布、token/成本预算、重复委派率和证据覆盖率基线 | 保留每次 E2E 的同口径证据，按必需 Schema 最小集合判断功能而不固定轨迹计数，后续聚合多次运行 | 扩大试用、设置 SLA 或预算 | open |
+| TRUST-013 | 最新真实 E2E 约 553 秒、三个 V2 Agent Thread、33 次 MCP 调用、十个 Artifact 与报告引用；调用和 Artifact 数量会随有效调查步骤变化，且尚无运行分布、token/成本预算、重复委派率和证据覆盖率基线 | 保留每次 E2E 的同口径证据，按必需 Schema 最小集合判断功能而不固定轨迹计数，后续聚合多次运行 | 扩大试用、设置 SLA 或预算 | open |
 
 ---
 

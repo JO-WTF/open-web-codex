@@ -4270,38 +4270,6 @@ fn thread_start_params_round_trip_multi_agent_mode() {
 }
 
 #[test]
-fn thread_start_and_fork_params_round_trip_multi_agent_backend() {
-    let start: ThreadStartParams = serde_json::from_value(json!({
-        "multiAgentBackend": "v1"
-    }))
-    .expect("params should deserialize");
-    assert_eq!(start.multi_agent_backend, Some(ThreadMultiAgentBackend::V1));
-    assert_eq!(
-        crate::experimental_api::ExperimentalApi::experimental_reason(&start),
-        Some("thread/start.multiAgentBackend")
-    );
-    assert_eq!(
-        serde_json::to_value(&start).expect("params should serialize")["multiAgentBackend"],
-        "v1"
-    );
-
-    let fork: ThreadForkParams = serde_json::from_value(json!({
-        "threadId": "thread_123",
-        "multiAgentBackend": "v1"
-    }))
-    .expect("params should deserialize");
-    assert_eq!(fork.multi_agent_backend, Some(ThreadMultiAgentBackend::V1));
-    assert_eq!(
-        crate::experimental_api::ExperimentalApi::experimental_reason(&fork),
-        Some("thread/fork.multiAgentBackend")
-    );
-    assert_eq!(
-        serde_json::to_value(&fork).expect("params should serialize")["multiAgentBackend"],
-        "v1"
-    );
-}
-
-#[test]
 fn thread_settings_update_params_preserve_explicit_null_service_tier() {
     let params: ThreadSettingsUpdateParams = serde_json::from_value(json!({
         "threadId": "thread_123",

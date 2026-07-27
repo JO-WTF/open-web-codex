@@ -449,7 +449,6 @@ export type { ThreadLoadedListResponse } from "./ThreadLoadedListResponse";
 export type { ThreadMetadataGitInfoUpdateParams } from "./ThreadMetadataGitInfoUpdateParams";
 export type { ThreadMetadataUpdateParams } from "./ThreadMetadataUpdateParams";
 export type { ThreadMetadataUpdateResponse } from "./ThreadMetadataUpdateResponse";
-export type { ThreadMultiAgentBackend } from "./ThreadMultiAgentBackend";
 export type { ThreadNameUpdatedNotification } from "./ThreadNameUpdatedNotification";
 export type { ThreadReadParams } from "./ThreadReadParams";
 export type { ThreadReadResponse } from "./ThreadReadResponse";

@@ -8,7 +8,7 @@
 | 当前分支 | `codex/agent-architecture-features` |
 | Codex 基线 | `openai/codex` `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9` |
 | 上游待同步 | 126；观测到的 official main 为 `cba0e2701c9e3e67a877a16dbbd7a577d477a630` |
-| 当前工作 | 单 Profile Enterprise Supervisor Copilot 的“华东新增仓”受限 happy path 已真实跑通；下一步补齐失败、恢复、Artifact 生命周期与可信门禁 |
+| 当前工作 | 收敛 Enterprise Supervisor 为 V2-only request-scoped Runtime Role，并启动 Agent、Skill、MCP 原生生命周期整改；随后补齐失败、恢复、Artifact 生命周期与可信门禁 |
 | 中期顺序 | `docs/roadmap.md` |
 | M2 详细实施 | `docs/enterprise-supervisor-copilot-plan.md` |
 | 能力事实 | `docs/capability-baseline.md` |
@@ -70,11 +70,18 @@ Workspace、授权、Artifact 和 Tool 边界。未完成的可信项限制能�
 5. 接入只读数据 MCP 和有界规划 MCP；
 6. 完成浏览器体验与真实企业案例 E2E。
 
+Agent、Skill、MCP 的长期整改顺序统一维护在
+[Agent、Skill 与 MCP 原生生命周期整改计划](agent-capability-lifecycle-plan.md)。
+当前 Phase 0 删除 V1 产品兼容、伪 V2 capability、Profile 全局企业 Role 注册和
+`profile_runtime_role_projections` 第二状态机。企业 Thread 只通过正式 request config
+启用 V2 并引用启动前校验的 Role 文件；后续阶段再以类型化 app-server V2 CRUD
+替换这一临时文件边界。
+
 受限 happy path 已经越过“平台骨架”阶段。全新 PostgreSQL 与 Profile 上的真实
 Codex Runtime 运行证明：绑定 `enterprise-supervisor-copilot@1.0.0` 的根 Thread
 按顺序创建了 `data_agent` 与 `network_planning_agent` 两个真实子 Thread；前者
 通过只读数据 MCP 产生并验证 `planning-dataset.v1`，后者读取同一 Resource 后再
-调用有界规划 MCP；最新重跑形成十二个 ready Task Artifact 和六段式决策报告。浏览器
+调用有界规划 MCP；最新重跑形成十个 ready Task Artifact 和六段式决策报告。浏览器
 重新读取时恢复同一个 Policy、三节点 Agent 树、Artifact 摘要和完整报告，持久事件
 不暴露内部 Resource URI 或宿主机路径。自动化证据共九项，见能力基线和
 Enterprise Supervisor E2E。精确调用与 Artifact 数量取决于有效调查步骤，门禁固定

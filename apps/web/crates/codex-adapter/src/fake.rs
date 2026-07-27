@@ -13,10 +13,10 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::{
-    resolve_platform_runtime_role_limits, validate_effective_platform_runtime_roles,
-    validate_platform_runtime_roles, AdapterError, AuthorizedWorkspace, CanceledProfileLogin,
-    CodexAdapter, HealthStatus, PlatformRuntimeRole, ProfileLoginStatus, ProfileMutation,
-    ProfileQuery, ReviewTarget, StartedProfileLogin, StartedThread, ThreadStartMode, TurnOptions,
+    validate_platform_runtime_role_files, validate_platform_runtime_roles, AdapterError,
+    AuthorizedWorkspace, CanceledProfileLogin, CodexAdapter, HealthStatus, PlatformRuntimeRole,
+    ProfileLoginStatus, ProfileMutation, ProfileQuery, ReviewTarget, StartedProfileLogin,
+    StartedThread, ThreadStartMode, TurnOptions,
 };
 
 const MAX_DEVELOPER_INSTRUCTIONS_BYTES: usize = 16 * 1024;
@@ -55,15 +55,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn persists_platform_runtime_role_projection_in_profile_config() {
+    async fn materializes_platform_role_without_polluting_profile_config() {
         let adapter = FakeCodexAdapter::new();
         let role = platform_runtime_role();
 
         adapter
-            .mutate_profile(ProfileMutation::EnsurePlatformRuntimeRoles {
+            .mutate_profile(ProfileMutation::MaterializePlatformRuntimeRoleFiles {
                 roles: vec![role.clone()],
-                max_threads: 2,
-                max_depth: 1,
             })
             .await
             .expect("project platform role");
@@ -72,26 +70,11 @@ mod tests {
             .await
             .expect("read fake config");
 
-        assert_eq!(config["config"]["features"]["multi_agent"], true);
-        assert_eq!(config["config"]["agents"]["enabled"], true);
-        // The fake Profile starts at six; a governed projection must not lower
-        // the existing higher Profile setting.
-        assert_eq!(
-            config["config"]["agents"]["max_concurrent_threads_per_session"],
-            6
-        );
-        assert_eq!(config["config"]["agents"]["max_depth"], 1);
-        assert_eq!(
-            config["config"]["agents"]["data_agent"],
-            serde_json::json!({
-                "description": role.description,
-                "config_file": role.config_file,
-            })
-        );
+        assert!(config["config"]["agents"].get("data_agent").is_none());
     }
 
     #[tokio::test]
-    async fn revalidates_platform_role_projection_before_governed_start() {
+    async fn revalidates_platform_role_file_before_governed_start() {
         let adapter = FakeCodexAdapter::new();
         let role = platform_runtime_role();
         let workspace = AuthorizedWorkspace {
@@ -99,18 +82,15 @@ mod tests {
             root: "/runner/workspace-1".into(),
         };
         adapter
-            .mutate_profile(ProfileMutation::EnsurePlatformRuntimeRoles {
+            .mutate_profile(ProfileMutation::MaterializePlatformRuntimeRoleFiles {
                 roles: vec![role.clone()],
-                max_threads: 2,
-                max_depth: 1,
             })
             .await
             .expect("project platform role");
         let mode = ThreadStartMode::GovernedSupervisor {
             developer_instructions: "Coordinate the verified role.".to_string(),
             roles: vec![role.clone()],
-            min_threads: 2,
-            min_depth: 1,
+            max_threads: 2,
         };
 
         adapter
@@ -119,21 +99,18 @@ mod tests {
             .expect("start with a verified projection");
 
         adapter
-            .mutate_profile(ProfileMutation::SetAgentDefinition {
-                original_name: None,
-                name: role.name.clone(),
-                description: Some("Tampered Role".to_string()),
-                config_file: role.config_file.clone(),
-            })
+            .state
+            .lock()
             .await
-            .expect("tamper fake effective config");
+            .platform_runtime_roles
+            .remove(&role.name);
         let error = adapter
             .start_thread(&workspace, &mode)
             .await
             .expect_err("tampered projection must not start");
         assert_eq!(
             error.to_string(),
-            "Internal error: Platform Runtime Role verification failed"
+            "Internal error: platform Runtime Role file failed verification"
         );
     }
 }
@@ -428,11 +405,19 @@ impl CodexAdapter for FakeCodexAdapter {
             ThreadStartMode::GovernedSupervisor {
                 developer_instructions,
                 roles,
-                min_threads,
-                min_depth,
+                max_threads,
             } => {
-                self.verify_platform_runtime_roles(workspace, roles, *min_threads, *min_depth)
-                    .await?;
+                validate_platform_runtime_roles(roles, *max_threads)?;
+                let state = self.state.lock().await;
+                if roles
+                    .iter()
+                    .any(|role| state.platform_runtime_roles.get(&role.name) != Some(role))
+                {
+                    return Err(AdapterError::Internal(
+                        "platform Runtime Role file failed verification".to_string(),
+                    ));
+                }
+                drop(state);
                 let instructions = developer_instructions.trim();
                 if instructions.is_empty() || instructions.len() > MAX_DEVELOPER_INSTRUCTIONS_BYTES
                 {
@@ -657,66 +642,18 @@ impl CodexAdapter for FakeCodexAdapter {
             ProfileMutation::RemoveAgentDefinition { name } => {
                 fake_profile_section_mut(&mut state.profile_config, "agents").remove(&name);
             }
-            ProfileMutation::EnsurePlatformRuntimeRoles {
-                roles,
-                max_threads,
-                max_depth,
-            } => {
-                let current = json!({ "config": state.profile_config.clone() });
-                let (effective_max_threads, effective_max_depth) =
-                    resolve_platform_runtime_role_limits(&current, &roles, max_threads, max_depth)?;
-                fake_profile_section_mut(&mut state.profile_config, "features")
-                    .insert("multi_agent".to_string(), Value::Bool(true));
+            ProfileMutation::MaterializePlatformRuntimeRoleFiles { roles } => {
+                validate_platform_runtime_role_files(&roles)?;
                 for role in &roles {
                     state
                         .platform_runtime_roles
                         .insert(role.name.clone(), role.clone());
-                }
-                let agents = fake_profile_section_mut(&mut state.profile_config, "agents");
-                agents.insert("enabled".to_string(), Value::Bool(true));
-                agents.insert(
-                    "max_concurrent_threads_per_session".to_string(),
-                    json!(effective_max_threads),
-                );
-                agents.insert("max_depth".to_string(), json!(effective_max_depth));
-                for role in roles {
-                    agents.insert(
-                        role.name,
-                        json!({
-                            "description": role.description,
-                            "config_file": role.config_file,
-                        }),
-                    );
                 }
             }
         }
         Ok(json!({ "status": "ok" }))
     }
 
-    async fn verify_platform_runtime_roles(
-        &self,
-        _workspace: &AuthorizedWorkspace,
-        roles: &[PlatformRuntimeRole],
-        min_threads: u32,
-        min_depth: u32,
-    ) -> Result<(), AdapterError> {
-        validate_platform_runtime_roles(roles, min_threads, min_depth)?;
-        let state = self.state.lock().await;
-        for role in roles {
-            if state.platform_runtime_roles.get(&role.name) != Some(role) {
-                return Err(AdapterError::Internal(
-                    "platform Runtime Role file failed verification".to_string(),
-                ));
-            }
-        }
-        validate_effective_platform_runtime_roles(
-            &fake_config_read(&state.profile_config),
-            roles,
-            min_threads,
-            min_depth,
-            &HashMap::new(),
-        )
-    }
     async fn start_profile_login(&self) -> Result<StartedProfileLogin, AdapterError> {
         let login_id = Uuid::now_v7().to_string();
         *self.active_login_id.lock().await = Some(login_id.clone());

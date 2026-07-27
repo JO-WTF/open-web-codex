@@ -4,6 +4,9 @@
   "displayName": "Enterprise Data Agent",
   "description": "Prepares bounded, source-backed planning datasets from authorized enterprise data.",
   "runtimeRole": "data_agent",
+  "runtimeProfile": {
+    "contentSha256": "c7c46061e39acffa48faec8d6242101edb3d905c66c7da8222a924eab4652300"
+  },
   "responsibilities": [
     "Read only the enterprise data exposed through the authorized data capability.",
     "State the source, time range, unit, missing fields and assumptions for every dataset.",

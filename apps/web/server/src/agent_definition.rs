@@ -8,9 +8,12 @@ use toml_edit::DocumentMut;
 const DATA_AGENT: &str = include_str!("../resources/agent-definitions/data-agent-v1.json");
 const NETWORK_PLANNING_AGENT: &str =
     include_str!("../resources/agent-definitions/network-planning-agent-v1.json");
-const DATA_AGENT_RUNTIME_ROLE: &str = include_str!("../resources/runtime-roles/data-agent-v1.toml");
-const NETWORK_PLANNING_AGENT_RUNTIME_ROLE: &str =
-    include_str!("../resources/runtime-roles/network-planning-agent-v1.toml");
+const DATA_AGENT_INSTRUCTIONS: &str = include_str!(
+    "../../../../tools/supply-chain-network-planner/examples/runtime-roles/data-agent.md"
+);
+const NETWORK_PLANNING_AGENT_INSTRUCTIONS: &str = include_str!(
+    "../../../../tools/supply-chain-network-planner/examples/runtime-roles/network-planning-agent.md"
+);
 
 const MAX_PLATFORM_DEFINITION_ID_BYTES: usize = 96;
 const MAX_PLATFORM_VERSION_BYTES: usize = 64;
@@ -19,19 +22,19 @@ const MAX_PLATFORM_RUNTIME_ROLE_INSTRUCTIONS_BYTES: usize = 16 * 1024;
 
 struct PublishedAgentResource {
     definition: &'static str,
-    runtime_role_template: &'static str,
+    developer_instructions: &'static str,
     runtime_role_name: &'static str,
 }
 
 const PUBLISHED_AGENT_RESOURCES: [PublishedAgentResource; 2] = [
     PublishedAgentResource {
         definition: DATA_AGENT,
-        runtime_role_template: DATA_AGENT_RUNTIME_ROLE,
+        developer_instructions: DATA_AGENT_INSTRUCTIONS,
         runtime_role_name: "data_agent",
     },
     PublishedAgentResource {
         definition: NETWORK_PLANNING_AGENT,
-        runtime_role_template: NETWORK_PLANNING_AGENT_RUNTIME_ROLE,
+        developer_instructions: NETWORK_PLANNING_AGENT_INSTRUCTIONS,
         runtime_role_name: "network_planning_agent",
     },
 ];
@@ -44,11 +47,18 @@ struct PublishedAgentDefinition {
     display_name: String,
     description: String,
     runtime_role: String,
+    runtime_profile: PublishedRuntimeProfileReference,
     responsibilities: Vec<String>,
     input_artifact_types: Vec<String>,
     output_artifact_types: Vec<String>,
     required_capabilities: Vec<String>,
     risks: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PublishedRuntimeProfileReference {
+    content_sha256: String,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -73,7 +83,10 @@ pub(crate) fn platform_runtime_roles() -> Result<Vec<PlatformRuntimeRole>, Agent
         .iter()
         .map(|resource| {
             let definition = parse_published_definition(resource)?;
-            let config_toml = parse_runtime_role_template(resource.runtime_role_template)?;
+            let config_toml = runtime_role_template(
+                resource.developer_instructions,
+                &definition.runtime_profile.content_sha256,
+            )?;
             Ok(PlatformRuntimeRole {
                 definition_id: definition.definition_id.clone(),
                 version: definition.version.clone(),
@@ -126,6 +139,12 @@ fn parse_definition(source: &str) -> Result<PublishedAgentDefinition, AgentDefin
     if !is_safe_platform_definition_id(&definition.definition_id)
         || !is_safe_platform_version(&definition.version)
         || !is_safe_platform_runtime_role_name(&definition.runtime_role)
+        || definition.runtime_profile.content_sha256.len() != 64
+        || !definition
+            .runtime_profile
+            .content_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (byte.is_ascii_lowercase() && byte <= b'f'))
     {
         return Err(AgentDefinitionError::Invalid);
     }
@@ -157,10 +176,20 @@ fn parse_definition(source: &str) -> Result<PublishedAgentDefinition, AgentDefin
     Ok(definition)
 }
 
-fn parse_runtime_role_template(source: &str) -> Result<String, AgentDefinitionError> {
-    if source.is_empty() || source.len() > MAX_PLATFORM_RUNTIME_ROLE_INSTRUCTIONS_BYTES {
+fn runtime_role_template(
+    developer_instructions: &str,
+    expected_instructions_sha256: &str,
+) -> Result<String, AgentDefinitionError> {
+    let developer_instructions = developer_instructions.trim();
+    if developer_instructions.is_empty()
+        || developer_instructions.len() > MAX_PLATFORM_RUNTIME_ROLE_INSTRUCTIONS_BYTES
+        || hex::encode(Sha256::digest(developer_instructions.as_bytes()))
+            != expected_instructions_sha256
+        || developer_instructions.contains("'''")
+    {
         return Err(AgentDefinitionError::Invalid);
     }
+    let source = format!("developer_instructions = '''\n{developer_instructions}\n'''\n");
     let document = source
         .parse::<DocumentMut>()
         .map_err(|_| AgentDefinitionError::Invalid)?;
@@ -178,7 +207,7 @@ fn parse_runtime_role_template(source: &str) -> Result<String, AgentDefinitionEr
     {
         return Err(AgentDefinitionError::Invalid);
     }
-    Ok(source.to_string())
+    Ok(source)
 }
 
 fn platform_runtime_role_config_file(definition_id: &str, version: &str) -> String {
@@ -277,11 +306,13 @@ mod tests {
             data_agent.config_file,
             "platform-agents/enterprise-data-agent/1.0.0.toml"
         );
-        assert_eq!(data_agent.config_toml, DATA_AGENT_RUNTIME_ROLE);
         assert_eq!(
             data_agent.content_sha256,
-            hex::encode(Sha256::digest(DATA_AGENT_RUNTIME_ROLE.as_bytes()))
+            hex::encode(Sha256::digest(data_agent.config_toml.as_bytes()))
         );
+        assert!(data_agent
+            .config_toml
+            .contains(DATA_AGENT_INSTRUCTIONS.trim()));
 
         let network_planning_agent = &roles[1];
         assert_eq!(
@@ -295,35 +326,50 @@ mod tests {
             "platform-agents/enterprise-network-planning-agent/1.0.0.toml"
         );
         assert_eq!(
-            network_planning_agent.config_toml,
-            NETWORK_PLANNING_AGENT_RUNTIME_ROLE
-        );
-        assert_eq!(
             network_planning_agent.content_sha256,
             hex::encode(Sha256::digest(
-                NETWORK_PLANNING_AGENT_RUNTIME_ROLE.as_bytes()
+                network_planning_agent.config_toml.as_bytes()
             ))
         );
+        assert!(network_planning_agent
+            .config_toml
+            .contains(NETWORK_PLANNING_AGENT_INSTRUCTIONS.trim()));
     }
 
     #[test]
     fn runtime_role_templates_require_non_empty_developer_instructions() {
         assert_eq!(
-            parse_runtime_role_template("model = \"gpt-5\"\n"),
+            runtime_role_template("", &hex::encode(Sha256::digest(b""))),
             Err(AgentDefinitionError::Invalid)
         );
         assert_eq!(
-            parse_runtime_role_template("developer_instructions = \"   \"\n"),
+            runtime_role_template("Prepare data.", &"0".repeat(64)),
             Err(AgentDefinitionError::Invalid)
         );
         assert_eq!(
-            parse_runtime_role_template("developer_instructions = [\"not a string\"]\n"),
+            runtime_role_template(
+                "bad ''' delimiter",
+                &hex::encode(Sha256::digest(b"bad ''' delimiter"))
+            ),
             Err(AgentDefinitionError::Invalid)
         );
-        assert_eq!(
-            parse_runtime_role_template("developer_instructions = \"valid\"\nmodel = \"gpt-5\"\n"),
-            Err(AgentDefinitionError::Invalid)
-        );
+    }
+
+    #[test]
+    fn definitions_bind_their_version_to_the_reviewed_runtime_instructions() {
+        let definitions = [
+            parse_definition(DATA_AGENT).unwrap(),
+            parse_definition(NETWORK_PLANNING_AGENT).unwrap(),
+        ];
+        for (definition, instructions) in definitions
+            .into_iter()
+            .zip([DATA_AGENT_INSTRUCTIONS, NETWORK_PLANNING_AGENT_INSTRUCTIONS])
+        {
+            assert_eq!(
+                definition.runtime_profile.content_sha256,
+                hex::encode(Sha256::digest(instructions.trim().as_bytes()))
+            );
+        }
     }
 
     #[test]

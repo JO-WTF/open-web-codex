@@ -48,15 +48,25 @@ are represented by:
 
 ## Runtime and governance integration
 
-This Plugin publishes capabilities; it does not create an Agent or mutate a Profile.
+This Plugin publishes capabilities; installing or starting it does not create an Agent
+or mutate a Profile.
 
-- `examples/runtime-roles/data-agent.md` contains the reviewed developer instructions
-  used to create the `data_agent` Runtime Role through the typed Profile Agent API.
+- `examples/runtime-roles/data-agent.md` is the single reviewed instruction source
+  used to deterministically create the `data_agent` Runtime Role through the typed
+  Profile lifecycle.
 - `examples/runtime-roles/network-planning-agent.md` does the same for
   `network_planning_agent`.
 - The Platform publishes the enterprise Agent Definitions and
   `enterprise-supervisor-copilot@1.0.0` separately under
   `apps/web/server/resources/`.
+- When a user explicitly starts a Run with that Policy, the worker verifies the
+  Definition-bound instruction digest, materializes the exact versioned Role file under
+  a platform-reserved Profile directory, registers the Roles together through the typed
+  app-server configuration contract, reloads the Profile and verifies discovery before
+  creating the root Thread. The governed request enables the current V2 multi-agent
+  engine only for that Thread; it does not change the Profile-wide choice or add a V1
+  compatibility path. A same-name user or external Role is reported as a conflict and
+  is never overwritten.
 - Codex Runtime creates the actual child Threads. Both child Threads currently inherit
   the root Thread's selected capability roots; Role instructions separate
   responsibilities but are not an authorization boundary.
@@ -88,8 +98,10 @@ inside the existing maps capability.
 
 `examples/data-sources/warehouse-network-fixture.json` is the read-only Data Agent
 source. `examples/network-input.json` and `examples/route-matrix-input.json` form a
-complete small network scenario. The `examples/runtime-roles/` files are Profile Role
-inputs, not automatically discovered Plugin content. After installing the package:
+complete small network scenario. The `examples/runtime-roles/` files are the reviewed
+Profile Role instruction sources, not automatically discovered Plugin content; the
+published enterprise Policy activates them through the explicit worker lifecycle above.
+After installing the package:
 
 ```bash
 python -m pytest -q

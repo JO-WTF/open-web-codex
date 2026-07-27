@@ -318,10 +318,7 @@ fn capability_references_experimental_method(capability: &CapabilityDeclaration)
 
 /// Capabilities that declare product-level experimental status without relying
 /// solely on protocol `#[experimental]` method annotations.
-const PRODUCT_EXPERIMENTAL_CAPABILITY_IDS: &[&str] = &[
-    "agents.multi_agent",
-    "agents.multi_agent_v1_backend_override",
-];
+const PRODUCT_EXPERIMENTAL_CAPABILITY_IDS: &[&str] = &["agents.multi_agent"];
 
 fn manifest_experimental_flags_are_consistent(
     capabilities: &[CapabilityDeclaration],
@@ -475,18 +472,6 @@ fn runtime_capabilities() -> Vec<CapabilityDeclaration> {
                 ("maxAgentThreads".into(), serde_json::json!(8)),
                 ("maxAgentDepth".into(), serde_json::json!(3)),
             ])),
-            ..Default::default()
-        },
-        CapabilityDeclaration {
-            id: "agents.multi_agent_v1_backend_override".into(),
-            status: CapabilityStatus::Experimental,
-            methods: MethodSet {
-                client_requests: client_request_methods(&[
-                    ClientRequestMethod::ThreadStart,
-                    ClientRequestMethod::ThreadFork,
-                ]),
-                ..Default::default()
-            },
             ..Default::default()
         },
         CapabilityDeclaration {

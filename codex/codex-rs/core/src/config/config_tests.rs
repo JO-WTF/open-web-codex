@@ -10585,21 +10585,6 @@ smart_approvals = true
 }
 
 #[tokio::test]
-async fn thread_multi_agent_override_beats_v2_feature_and_model_metadata() {
-    let mut config = test_config().await;
-    let _ = config.features.enable(Feature::MultiAgentV2);
-    config.set_thread_multi_agent_version_override(MultiAgentVersion::V1);
-
-    assert_eq!(
-        config.multi_agent_version_override(),
-        Some(MultiAgentVersion::V1)
-    );
-    assert_eq!(
-        config.multi_agent_version_for_model(Some(MultiAgentVersion::V2)),
-        MultiAgentVersion::V1
-    );
-}
-#[tokio::test]
 async fn multi_agent_v2_config_from_feature_table() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(

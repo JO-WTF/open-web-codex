@@ -46,16 +46,6 @@ pub enum ThreadStartSource {
     Clear,
 }
 
-/// Selects an explicit multi-agent engine for one new or forked thread.
-///
-/// This request-only choice does not write Profile or Project configuration.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase", export_to = "v2/")]
-pub enum ThreadMultiAgentBackend {
-    V1,
-}
-
 // === Threads, Turns, and Items ===
 // Thread APIs
 #[derive(
@@ -114,10 +104,6 @@ pub struct ThreadStartParams {
     #[experimental("thread/start.multiAgentMode")]
     #[ts(optional = nullable)]
     pub multi_agent_mode: Option<MultiAgentMode>,
-    /// Force the V1 multi-agent engine for this thread, overriding model metadata and fork lineage.
-    #[experimental("thread/start.multiAgentBackend")]
-    #[ts(optional = nullable)]
-    pub multi_agent_backend: Option<ThreadMultiAgentBackend>,
     #[ts(optional = nullable)]
     pub ephemeral: Option<bool>,
     /// Persisted thread history contract to use for this new thread.
@@ -587,10 +573,6 @@ pub struct ThreadForkParams {
     pub base_instructions: Option<String>,
     #[ts(optional = nullable)]
     pub developer_instructions: Option<String>,
-    /// Force the V1 multi-agent engine for this thread, overriding model metadata and fork lineage.
-    #[experimental("thread/fork.multiAgentBackend")]
-    #[ts(optional = nullable)]
-    pub multi_agent_backend: Option<ThreadMultiAgentBackend>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ephemeral: bool,
     /// Optional client-supplied analytics source classification for this forked thread.

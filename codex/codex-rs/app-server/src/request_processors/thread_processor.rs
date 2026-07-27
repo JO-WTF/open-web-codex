@@ -3,12 +3,10 @@ use super::turn_processor::can_accept_direct_input;
 use super::*;
 use crate::error_code::method_not_found;
 use codex_app_server_protocol::SelectedCapabilityRoot;
-use codex_app_server_protocol::ThreadMultiAgentBackend;
 use codex_extension_api::ExtensionDataInit;
 use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
-use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ThreadHistoryMode;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
@@ -16,12 +14,6 @@ const THREAD_LIST_MAX_LIMIT: usize = 100;
 const CODEX_TUI_CLIENT_NAME: &str = "codex-tui";
 const THREAD_ROLLBACK_DEPRECATION_SUMMARY: &str =
     "thread/rollback is deprecated and will be removed soon";
-
-fn multi_agent_version_for_backend(backend: ThreadMultiAgentBackend) -> MultiAgentVersion {
-    match backend {
-        ThreadMultiAgentBackend::V1 => MultiAgentVersion::V1,
-    }
-}
 
 struct ThreadListFilters {
     model_providers: Option<Vec<String>>,
@@ -968,7 +960,6 @@ impl ThreadRequestProcessor {
             experimental_raw_events,
             personality,
             multi_agent_mode: _multi_agent_mode,
-            multi_agent_backend,
             ephemeral,
             history_mode,
             session_start_source,
@@ -1041,7 +1032,6 @@ impl ThreadRequestProcessor {
                 environments,
                 service_name,
                 allow_provider_model_fallback,
-                multi_agent_backend,
                 experimental_raw_events,
                 request_trace,
                 initial_config_warnings,
@@ -1119,7 +1109,6 @@ impl ThreadRequestProcessor {
         environment_selections: Option<Vec<TurnEnvironmentSelection>>,
         service_name: Option<String>,
         allow_provider_model_fallback: bool,
-        multi_agent_backend: Option<ThreadMultiAgentBackend>,
         experimental_raw_events: bool,
         request_trace: Option<W3cTraceContext>,
         initial_config_warnings: Arc<Vec<ConfigWarningNotification>>,
@@ -1193,12 +1182,6 @@ impl ThreadRequestProcessor {
                 )
                 .await
                 .map_err(|err| config_load_error(&err))?;
-        }
-
-        if let Some(multi_agent_backend) = multi_agent_backend {
-            config.set_thread_multi_agent_version_override(multi_agent_version_for_backend(
-                multi_agent_backend,
-            ));
         }
 
         if let Ok(Some(err)) =
@@ -4023,7 +4006,6 @@ impl ThreadRequestProcessor {
             config: cli_overrides,
             base_instructions,
             developer_instructions,
-            multi_agent_backend,
             ephemeral,
             thread_source,
             exclude_turns,
@@ -4136,17 +4118,11 @@ impl ThreadRequestProcessor {
             &mut typesafe_overrides,
         );
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
-        let mut config = self
+        let config = self
             .config_manager
             .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
             .await
             .map_err(|err| config_load_error(&err))?;
-        if let Some(multi_agent_backend) = multi_agent_backend {
-            config.set_thread_multi_agent_version_override(multi_agent_version_for_backend(
-                multi_agent_backend,
-            ));
-        }
-
         let goals_enabled = config.features.enabled(Feature::Goals);
 
         let fallback_model_provider = config.model_provider_id.clone();

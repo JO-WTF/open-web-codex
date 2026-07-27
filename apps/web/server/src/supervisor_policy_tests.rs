@@ -1,8 +1,10 @@
 use open_web_codex_platform_contracts::SupervisorPolicySelection;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 
-use super::{list_published, resolve, validate_runtime_manifest, SupervisorPolicyError};
+use super::{
+    list_published, policy_content_sha256, resolve, validate_runtime_manifest,
+    SupervisorPolicyError,
+};
 
 #[test]
 fn resolves_only_the_exact_published_version_and_seals_its_content() {
@@ -13,13 +15,16 @@ fn resolves_only_the_exact_published_version_and_seals_its_content() {
     };
 
     let policy = resolve(&selected).unwrap();
-    let snapshot = policy.snapshot;
+    let snapshot = &policy.snapshot;
 
     assert_eq!(snapshot.policy_id, selected.policy_id);
     assert_eq!(snapshot.version, selected.version);
     assert_eq!(
         snapshot.content_sha256,
-        hex::encode(Sha256::digest(snapshot.developer_instructions.as_bytes()))
+        policy_content_sha256(
+            &snapshot.developer_instructions,
+            &policy.required_runtime_roles
+        )
     );
     assert_eq!(
         policy
@@ -28,6 +33,23 @@ fn resolves_only_the_exact_published_version_and_seals_its_content() {
             .map(|role| role.name.as_str())
             .collect::<Vec<_>>(),
         vec!["data_agent", "network_planning_agent"]
+    );
+}
+
+#[test]
+fn policy_snapshot_seals_the_referenced_runtime_role_content() {
+    let published = list_published();
+    let policy = resolve(&SupervisorPolicySelection {
+        policy_id: published[0].policy_id.clone(),
+        version: published[0].version.clone(),
+    })
+    .unwrap();
+    let mut changed_roles = policy.required_runtime_roles.clone();
+    changed_roles[0].content_sha256 = "0".repeat(64);
+
+    assert_ne!(
+        policy_content_sha256(&policy.snapshot.developer_instructions, &changed_roles),
+        policy.snapshot.content_sha256
     );
 }
 
@@ -48,7 +70,7 @@ fn capability_mut<'a>(manifest: &'a mut Value, id: &str) -> &'a mut Value {
 }
 
 #[test]
-fn requires_the_generated_multi_agent_and_v1_backend_capability_contracts() {
+fn requires_the_generated_multi_agent_capability_contract() {
     let manifest = generated_manifest();
     validate_runtime_manifest(&manifest).unwrap();
 }
@@ -65,59 +87,6 @@ fn rejects_unavailable_multi_agent_capability() {
             "Codex multi-agent capability is unavailable".to_string()
         )
     );
-}
-
-#[test]
-fn rejects_missing_wrong_version_or_unavailable_v1_backend_capability() {
-    let mut missing = generated_manifest();
-    missing["capabilities"]
-        .as_array_mut()
-        .expect("capabilities array")
-        .retain(|capability| capability["id"] != "agents.multi_agent_v1_backend_override");
-    assert_eq!(
-        validate_runtime_manifest(&missing).unwrap_err(),
-        SupervisorPolicyError::Capability(
-            "Codex did not declare multi-agent V1 backend override support".to_string()
-        )
-    );
-
-    let mut wrong_version = generated_manifest();
-    capability_mut(&mut wrong_version, "agents.multi_agent_v1_backend_override")["version"] =
-        json!("2.0.0");
-    assert_eq!(
-        validate_runtime_manifest(&wrong_version).unwrap_err(),
-        SupervisorPolicyError::Capability(
-            "Codex multi-agent V1 backend override capability version '2.0.0' is unsupported"
-                .to_string()
-        )
-    );
-
-    let mut unavailable = generated_manifest();
-    let capability = capability_mut(&mut unavailable, "agents.multi_agent_v1_backend_override");
-    capability["status"] = json!("experimental");
-    capability["experimental"] = json!(false);
-    assert_eq!(
-        validate_runtime_manifest(&unavailable).unwrap_err(),
-        SupervisorPolicyError::Capability(
-            "Codex multi-agent V1 backend override capability is unavailable".to_string()
-        )
-    );
-}
-
-#[test]
-fn accepts_supported_or_explicitly_enabled_experimental_v1_backend_capability() {
-    let mut supported = generated_manifest();
-    let capability = capability_mut(&mut supported, "agents.multi_agent_v1_backend_override");
-    capability["status"] = json!("supported");
-    capability["experimental"] = json!(false);
-    validate_runtime_manifest(&supported).expect("supported V1 backend override");
-
-    let mut experimental = generated_manifest();
-    let capability = capability_mut(&mut experimental, "agents.multi_agent_v1_backend_override");
-    capability["status"] = json!("experimental");
-    capability["experimental"] = json!(true);
-    validate_runtime_manifest(&experimental)
-        .expect("explicitly enabled experimental V1 backend override");
 }
 
 #[test]

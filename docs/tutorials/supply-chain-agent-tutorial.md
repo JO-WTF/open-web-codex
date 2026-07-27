@@ -100,7 +100,7 @@ Policy，并把不可变 Snapshot 绑定到实际 Root Thread。
 - Data Agent 使用只读 `supply_chain_data` MCP，Network Agent 使用有界
   `supply_chain_planner` MCP；
 - Platform 从真实 MCP Resource link 注册并物化 Task Artifact；
-- 最新重跑中，浏览器恢复同一 Policy、三个 Runtime Agent、十二个 ready Artifact
+- 最新重跑中，浏览器恢复同一 Policy、三个 Runtime Agent、十个 ready Artifact
   和完整报告。
 
 当前仍没有完成：
@@ -198,11 +198,12 @@ scripts/smoke-enterprise-supervisor-copilot.sh
 1. 构建当前 Web 与 Server；
 2. 创建一次性 PostgreSQL、Profile 和 managed Workspace；
 3. 使用真实 Codex app-server 和 Provider；
-4. 通过正式 Profile API 配置两个 Runtime Role；
+4. 不通过 E2E 脚本预创建任何 Runtime Role；
 5. 启动绑定精确 Policy 版本的 Root Thread；
-6. 运行两个真实子 Agent、MCP、Artifact 和报告链；
-7. 重新读取浏览器依赖的历史与证据概览；
-8. 输出一份不含凭据和宿主机路径的证据文件。
+6. 验证 worker 根据已发布 Definition 自动生成、注册并反查两个 Runtime Role；
+7. 运行两个真实子 Agent、MCP、Artifact 和报告链；
+8. 重新读取浏览器依赖的历史与证据概览；
+9. 输出一份不含凭据和宿主机路径的证据文件。
 
 它依赖本机 PostgreSQL 17、已准备的供应链 MCP 环境和可用的 Provider 登录态。运行
 时间明显长于单元测试，因为模型、Runtime、两个子 Thread、数十次 MCP 调用、数据库
@@ -398,7 +399,7 @@ Prompt 中的“请保持只读”只是工作说明，不能代替这些边界�
 
 ### Data Role 指令
 
-当前真实 E2E 使用：
+已发布 Data Agent Definition 绑定的 Role 指令是：
 
 [`data-agent.md`](../../tools/supply-chain-network-planner/examples/runtime-roles/data-agent.md)
 
@@ -406,8 +407,10 @@ Prompt 中的“请保持只读”只是工作说明，不能代替这些边界�
 结果中的准确 `resource_name`、来源范围、单位、统计和质量限制，并明确禁止它选择
 仓库、运行规划或创建下级 Agent。
 
-E2E 直接读取这份文件并通过正式 Profile Agent API 建立 `data_agent`，不再在测试
-脚本中保存第二份 Role Prompt。
+服务端编译时校验 Definition 中声明的指令摘要，并从这份唯一受评审的指令源确定性
+生成 Runtime TOML。用户选择对应 Supervisor Policy 启动 Run 后，worker 才通过
+类型化 Profile 生命周期发布 `data_agent`。E2E 不读取这份文件调用 Agent CRUD，
+因此能真正验证 Definition → Runtime Role → Runtime Thread 这段产品链路。
 
 ---
 
@@ -537,8 +540,9 @@ Definition 记录稳定 ID、版本、职责、输入/输出 Artifact 类型、�
 
 ### Runtime Role
 
-Profile 中的 `data_agent` 与 `network_planning_agent` 是 Codex 可发现的执行配置。
-Root 使用这些精确名称创建子 Thread。
+`data_agent` 与 `network_planning_agent` 是本次受治理 Thread 获得的 Codex 执行
+配置。服务端先校验发布版本，再让 Profile Host 安全准备对应指令文件；只有本次
+Thread 的启动配置会引用它们。它们不会注册成整个 Profile 的全局 Agent。
 
 三者关系是：
 
@@ -546,8 +550,8 @@ Root 使用这些精确名称创建子 Thread。
 Agent Definition
   └── 声明 runtimeRole = data_agent
 
-Profile Runtime Role
-  └── 提供 data_agent 的执行指令
+Request-scoped Runtime Role
+  └── 只为本次受治理 Thread 提供 data_agent 的执行指令
 
 Runtime spawn
   └── 创建本次 Data Child Thread
@@ -569,11 +573,14 @@ scripts/smoke-enterprise-supervisor-copilot.sh
 
 脚本会通过类型化 API：
 
-- 开启 multi-agent，并设定保守并发与深度；
-- 从脚手架读取两份 Runtime Role instructions；
+- 不预先开启 multi-agent，也不向 Profile 全局注册 Runtime Role；
 - 确认已发布 Policy 与 Agent Definitions；
 - 创建独立 managed Workspace、Task 和 Run；
 - 将精确 Policy ID/version 交给服务端；
+- 由 worker 安全准备该版本 Definition 对应的两份 Runtime Role 指令文件，
+  并只通过本次 Thread 的 V2 request config 引用；E2E 不预创建 Agent；
+- 只为这个新企业 Thread 启用 Codex 当前的 V2 多 Agent 协作引擎，不修改 Profile
+  中其他 Thread 的选择，也不为新功能增加 V1 兼容分支；
 - 等待 Root Thread 与 Policy binding；
 - 发送冻结了数据源、候选方案和路线 fixture 的案例请求；
 - 自动处理当前案例中的 MCP elicitation；
@@ -640,21 +647,21 @@ Network Agent 在读取 Data Resource 之前进行计算，或者 Root 自己代
 | 治理合同 | Policy 与两份 Agent Definition 可列出 |
 | Root binding | Run、Root Thread 和 Policy Snapshot 正确绑定 |
 | 协作 | 一个 Root、两个真实 Child Thread |
-| MCP | 36 次数据、Resource read、规划和验证调用 |
-| Artifact | 十二个 ready Task Artifact |
+| MCP | 33 次数据、Resource read、规划和验证调用 |
+| Artifact | 十个 ready Task Artifact |
 | 报告 | 六段式报告引用关键 Schema 与 Resource name |
-| 恢复 | 重读同一 Turn、三个 Agent、十二个 Artifact 和完整报告 |
+| 恢复 | 重读同一 Turn、三个 Agent、十个 Artifact 和完整报告 |
 
-该次十二个 Artifact 是：
+该次十个 Artifact 是：
 
 | 数量 | Schema | 生产者 |
 | ---: | --- | --- |
 | 1 | `planning-dataset.v1` | Data Agent |
-| 1 | `network_snapshot.v1` | Network Planning Agent |
+| 2 | `network_snapshot.v1` | Network Planning Agent |
 | 1 | `route_matrix.v1` | Network Planning Agent |
 | 1 | `current_coverage_result.v1` | Network Planning Agent |
 | 3 | `network_scenario_result.v1` | Network Planning Agent |
-| 5 | `scenario_comparison.v1` | Network Planning Agent |
+| 2 | `scenario_comparison.v1` | Network Planning Agent |
 
 该次比较流程没有调用 `solve_facility_location`，因此没有
 `facility_location_solution.v1`。Definition 仍声明这个可选输出，因为同一
@@ -800,7 +807,8 @@ tools/supply-chain-network-planner/
 
 | 场景 | 正确行为 | 当前证据 |
 | --- | --- | --- |
-| Runtime Role 不存在 | Run 启动失败，不换默认 Role | 已有定向测试 |
+| Definition 对应 Role 发布失败 | Root Thread 创建前失败，不换默认 Role | 已有定向测试 |
+| 同名用户 Role 已存在 | 明确报告冲突，不覆盖用户配置 | 已有定向测试 |
 | Data 字段缺失 | 保留缺口，限制结论或追问 | 待真实企业 E2E |
 | 两个 Agent 结论冲突 | 保存两份依据，继续最小调查或说明取舍 | 待真实企业 E2E |
 | 高成本操作被拒绝 | 保留已完成 Artifact，给出部分结果 | 审批链已有，拒绝综合待 E2E |

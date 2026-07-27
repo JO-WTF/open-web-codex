@@ -104,9 +104,11 @@ Agent Definition 是领域 Agent 的治理记录。它可以先以版本化 Mani
 - Agent 的输出格式和完成标准。
 
 Runtime Role 则是 Codex 能够发现和解析的执行配置，包含角色描述、开发者指令以及
-必要的模型、sandbox 或能力配置。平台发布 Agent Definition 时，需要验证它引用的
-Runtime Role 在目标 Profile 中确实可用；Runtime 真正 spawn 后产生的子 Agent
-Thread，才是运行实例。
+必要的模型、sandbox 或能力配置。平台激活已发布 Agent Definition 时，需要把其
+引用的精确版本 Runtime Role 通过 Profile 生命周期显式发布到目标 Profile，再通过
+Codex 正式配置接口注册、重载和反查；若目标 Profile 已有同名用户/外部 Role，则
+必须报告冲突而不是覆盖。Runtime 真正 spawn 后产生的子 Agent Thread，才是运行
+实例。
 
 Agent Definition 通常包含：
 

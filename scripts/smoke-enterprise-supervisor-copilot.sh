@@ -13,6 +13,7 @@ if [[ "${1:-}" == "--help" ]]; then
   print "disposable PostgreSQL database, Profile and managed Workspace."
   print "Optional environment: CODEX_BIN, E2E_EVIDENCE_FILE, E2E_PROVIDER_ID,"
   print "E2E_MODEL, E2E_EFFORT, E2E_USE_BUILT_IN_PROVIDER,"
+  print "E2E_PROMPT, E2E_CASE_NAME, E2E_OBSERVE_ONLY,"
   print "OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV,"
   print "OPEN_WEB_CODEX_E2E_PG_PORT and OPEN_WEB_CODEX_E2E_SERVER_PORT."
   exit 0
@@ -119,6 +120,53 @@ curl --silent --fail "http://127.0.0.1:${server_port}/api/health" >/dev/null
     E2E_USE_BUILT_IN_PROVIDER="${E2E_USE_BUILT_IN_PROVIDER:-1}" \
     npm run test:e2e:enterprise-supervisor
 )
+
+node - "${profile_root}" "${evidence_file}" <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+
+const [, , profileRoot, evidenceFile] = process.argv;
+const evidence = JSON.parse(fs.readFileSync(evidenceFile, "utf8"));
+const expectedThreadIds = new Set(
+  evidence.agents.map((agent) => agent.thread_id).filter(Boolean),
+);
+const observedVersions = new Map();
+
+function visit(directory) {
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      visit(entryPath);
+      continue;
+    }
+    if (!entry.name.endsWith(".jsonl")) {
+      continue;
+    }
+    const firstLine = fs.readFileSync(entryPath, "utf8").split("\n", 1)[0];
+    const event = JSON.parse(firstLine);
+    if (event.type !== "session_meta") {
+      continue;
+    }
+    const threadId = event.payload?.id;
+    if (expectedThreadIds.has(threadId)) {
+      observedVersions.set(threadId, event.payload?.multi_agent_version);
+    }
+  }
+}
+
+visit(path.join(profileRoot, "sessions"));
+const failures = [...expectedThreadIds].filter(
+  (threadId) => observedVersions.get(threadId) !== "v2",
+);
+if (failures.length > 0) {
+  throw new Error(
+    `Governed Agent threads did not all use Multi-Agent V2: ${failures
+      .map((threadId) => `${threadId}=${observedVersions.get(threadId) ?? "missing"}`)
+      .join(", ")}`,
+  );
+}
+console.log(`Verified Multi-Agent V2 for ${expectedThreadIds.size} governed threads.`);
+NODE
 
 print "E2E_ROOT=${e2e_root}"
 print "EVIDENCE_FILE=${evidence_file}"

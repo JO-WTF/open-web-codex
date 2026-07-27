@@ -14,13 +14,7 @@ const ENTERPRISE_COPILOT_POLICY_NAME: &str = "Enterprise Supervisor Copilot";
 const ENTERPRISE_COPILOT_POLICY_DESCRIPTION: &str =
     "Coordinates Data and Network Planning agents through governed Artifacts.";
 const REQUIRED_RUNTIME_CAPABILITY_VERSION: &str = "1.0.0";
-const REQUIRED_RUNTIME_CAPABILITIES: [(&str, &str); 2] = [
-    ("agents.multi_agent", "multi-agent"),
-    (
-        "agents.multi_agent_v1_backend_override",
-        "multi-agent V1 backend override",
-    ),
-];
+const REQUIRED_RUNTIME_CAPABILITIES: [(&str, &str); 1] = [("agents.multi_agent", "multi-agent")];
 const ENTERPRISE_COPILOT_POLICY_INSTRUCTIONS: &str =
     include_str!("../resources/supervisor-policies/enterprise-supervisor-copilot-v1.md");
 const ENTERPRISE_COPILOT_RUNTIME_ROLE_REFS: [(&str, &str, &str); 2] = [
@@ -77,16 +71,45 @@ pub(crate) fn resolve(
         ));
     }
     let required_runtime_roles = resolve_enterprise_runtime_roles()?;
+    let content_sha256 = policy_content_sha256(developer_instructions, &required_runtime_roles);
     Ok(ResolvedSupervisorPolicy {
         snapshot: SupervisorPolicySnapshotInput {
             policy_id: selection.policy_id.clone(),
             version: selection.version.clone(),
             display_name: ENTERPRISE_COPILOT_POLICY_NAME.to_string(),
             developer_instructions: developer_instructions.to_string(),
-            content_sha256: hex::encode(Sha256::digest(developer_instructions.as_bytes())),
+            content_sha256,
         },
         required_runtime_roles,
     })
+}
+
+/// Seal the complete executable Policy contract, not only the Supervisor
+/// prompt. A queued Run must fail closed if a referenced Agent Definition
+/// changes without a new Policy/Definition version.
+fn policy_content_sha256(
+    developer_instructions: &str,
+    runtime_roles: &[PlatformRuntimeRole],
+) -> String {
+    let mut digest = Sha256::new();
+    update_digest_field(&mut digest, b"enterprise-supervisor-policy.v1");
+    update_digest_field(&mut digest, developer_instructions.as_bytes());
+    for role in runtime_roles {
+        for field in [
+            role.definition_id.as_bytes(),
+            role.version.as_bytes(),
+            role.name.as_bytes(),
+            role.content_sha256.as_bytes(),
+        ] {
+            update_digest_field(&mut digest, field);
+        }
+    }
+    hex::encode(digest.finalize())
+}
+
+fn update_digest_field(digest: &mut Sha256, value: &[u8]) {
+    digest.update((value.len() as u64).to_be_bytes());
+    digest.update(value);
 }
 
 fn resolve_enterprise_runtime_roles() -> Result<Vec<PlatformRuntimeRole>, SupervisorPolicyError> {

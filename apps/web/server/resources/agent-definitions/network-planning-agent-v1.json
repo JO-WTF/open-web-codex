@@ -4,6 +4,9 @@
   "displayName": "Enterprise Network Planning Agent",
   "description": "Compares bounded supply-chain network scenarios using approved planning datasets and deterministic planning tools.",
   "runtimeRole": "network_planning_agent",
+  "runtimeProfile": {
+    "contentSha256": "f63062bfa373c1f3904880d5c9ea777e6abd95b3e3e8aa9692b9907d2269e409"
+  },
   "responsibilities": [
     "Read authorized planning-dataset.v1 Artifacts without copying source data from chat history.",
     "Compare bounded network scenarios through the approved planning capability.",

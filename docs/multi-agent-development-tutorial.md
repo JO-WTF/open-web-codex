@@ -107,7 +107,7 @@ flowchart LR
 - MCP Resource 可以从真实 Tool 结果注册为具有独立身份、Task 授权和生产者来源的
   持久 Artifact；
 - 最新一次“华东新增仓”真实案例跑通一个根 Thread、两个指定 Role 子 Thread、
-  36 次企业 MCP 调用、十二个 ready Artifact 和一份六段式报告；稳定验收要求的是
+  33 次企业 MCP 调用、十个 ready Artifact 和一份六段式报告；稳定验收要求的是
   必需 Schema 的最小集合，调用和 Artifact 精确数量允许随有效调查步骤变化；
 - 页面刷新及 Server/Profile Host 重启后，可以恢复同一 Policy、Agent 树、
   Artifact 摘要和根报告。

@@ -58,6 +58,9 @@ Agent Definition、Runtime Role 等核心术语。
 - [Enterprise Supervisor Copilot 短期实施计划](enterprise-supervisor-copilot-plan.md)：
   当前单 Profile 多 Agent Copilot 的详细工作包、真实企业案例、功能完成标准和活动
   可信风险。功能完成后，其事实进入能力基线；已经解决的过程不长期保留在计划中。
+- [Agent、Skill 与 MCP 原生生命周期整改计划](agent-capability-lifecycle-plan.md)：
+  从当前 V2-only 企业案例过渡到 Runtime 原生 Agent、Skill、MCP Studio 的跨里程碑
+  整改顺序、所有权、合同和退出条件。
 
 ### 架构决策
 

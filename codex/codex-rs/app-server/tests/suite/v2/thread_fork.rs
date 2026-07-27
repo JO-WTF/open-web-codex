@@ -20,7 +20,6 @@ use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
-use codex_app_server_protocol::ThreadMultiAgentBackend;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeParams;
@@ -125,7 +124,7 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
         original_path.display()
     );
     let mut session_meta = read_session_meta_line(&original_path).await?;
-    session_meta.meta.multi_agent_version = Some(MultiAgentVersion::V2);
+    session_meta.meta.multi_agent_version = Some(MultiAgentVersion::V1);
     append_rollout_item_to_path(&original_path, &RolloutItem::SessionMeta(session_meta)).await?;
     let original_contents = std::fs::read_to_string(&original_path)?;
 
@@ -139,7 +138,6 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
         .send_thread_fork_request(ThreadForkParams {
             thread_id: conversation_id.clone(),
             thread_source: Some(ThreadSource::User),
-            multi_agent_backend: Some(ThreadMultiAgentBackend::V1),
             ..Default::default()
         })
         .await?;
@@ -187,13 +185,6 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     let thread_path = thread.path.clone().expect("thread path");
     assert!(thread_path.as_path().is_absolute());
     assert_ne!(thread_path.as_path(), original_path);
-    let forked_session_meta = read_session_meta_line(thread_path.as_path()).await?;
-    assert_eq!(
-        forked_session_meta.meta.multi_agent_version,
-        Some(MultiAgentVersion::V1),
-        "forced V1 must override the V2 source rollout"
-    );
-
     assert!(thread.cwd.as_path().is_absolute());
     assert_eq!(thread.source, SessionSource::VsCode);
     assert_eq!(thread.thread_source, Some(ThreadSource::User));

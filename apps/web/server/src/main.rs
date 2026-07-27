@@ -2,10 +2,10 @@ mod agent_definition;
 mod event_projection;
 mod middleware;
 mod routes;
-mod runtime_role_projection;
 #[cfg(test)]
 mod security_integration;
 mod supervisor_policy;
+mod supervisor_runtime_preflight;
 
 use std::fs;
 use std::net::SocketAddr;
@@ -208,8 +208,7 @@ async fn main() -> anyhow::Result<()> {
         profile_binding.runtime_key.clone(),
     ));
     let start_preflight = Arc::new(
-        runtime_role_projection::SupervisorRuntimeRolePreflight::new(
-            state.clone(),
+        supervisor_runtime_preflight::SupervisorRuntimePreflight::new(
             adapter.clone(),
             profile_binding.clone(),
         ),
