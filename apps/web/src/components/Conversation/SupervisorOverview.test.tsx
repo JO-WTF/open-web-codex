@@ -110,8 +110,8 @@ const repeatedExecutions: RuntimeAgentActivity[] = [
 ];
 
 describe("SupervisorOverview", () => {
-  it("renders nothing for a standard Thread", () => {
-    const view = render(
+  it("renders an empty Agent activity state for a standard Thread", () => {
+    render(
       <SupervisorOverview
         taskTitle="Standard task"
         policy={null}
@@ -119,7 +119,11 @@ describe("SupervisorOverview", () => {
         artifacts={[]}
       />,
     );
-    expect(view.container.childElementCount).toBe(0);
+    expect(screen.getByText("Agent collaboration")).toBeTruthy();
+    expect(screen.getByText("No Agent activity yet")).toBeTruthy();
+    expect(screen.getByText(
+      "Runtime Agents and their task progress will appear here when collaboration starts.",
+    )).toBeTruthy();
   });
 
   it("freezes a completed task and creates a new node when the same Agent runs again", () => {

@@ -12,7 +12,6 @@ describe("RightSidebar", () => {
     const view = render(
       <RightSidebar
         activeTab="files"
-        agentsEnabled
         width={360}
         onWidthChange={vi.fn()}
         onTabChange={onTabChange}
@@ -28,7 +27,6 @@ describe("RightSidebar", () => {
     view.rerender(
       <RightSidebar
         activeTab="agents"
-        agentsEnabled
         width={360}
         onWidthChange={vi.fn()}
         onTabChange={onTabChange}
@@ -42,24 +40,23 @@ describe("RightSidebar", () => {
     expect((screen.getByLabelText("File filter state") as HTMLInputElement).value).toBe("network");
   });
 
-  it("disables Agent selection until a Runtime sub-agent exists", () => {
+  it("keeps Agent selection available when there is no Runtime Agent activity", () => {
     const onTabChange = vi.fn();
     render(
       <RightSidebar
         activeTab="files"
-        agentsEnabled={false}
         width={360}
         onWidthChange={vi.fn()}
         onTabChange={onTabChange}
         onClose={vi.fn()}
-        agentPanel={<div />}
+        agentPanel={<div>No Agent activity yet</div>}
         filePanel={<div />}
       />,
     );
 
     const agents = screen.getByRole("tab", { name: "Agents" });
-    expect((agents as HTMLButtonElement).disabled).toBe(true);
+    expect((agents as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(agents);
-    expect(onTabChange).not.toHaveBeenCalled();
+    expect(onTabChange).toHaveBeenCalledWith("agents");
   });
 });

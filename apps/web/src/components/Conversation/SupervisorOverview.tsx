@@ -291,8 +291,6 @@ export default function SupervisorOverview({
   loading = false,
   error = null,
 }: Props) {
-  if (!policy && agents.length === 0 && !loading && !error) return null;
-
   const rootAgent = agents.find((agent) => agent.is_root) ?? null;
   const rootActivities = activities
     .filter((activity) => rootAgent && activity.thread_id === rootAgent.thread_id)
@@ -337,6 +335,14 @@ export default function SupervisorOverview({
         <p className="web-supervisor-overview-empty" role="status">
           Loading collaboration activity…
         </p>
+      ) : agents.length === 0 ? (
+        <div className="web-supervisor-empty-state" role="status">
+          <span aria-hidden="true">
+            <Bot size={20} />
+          </span>
+          <strong>No Agent activity yet</strong>
+          <p>Runtime Agents and their task progress will appear here when collaboration starts.</p>
+        </div>
       ) : (
         <>
           {rootAgent ? (

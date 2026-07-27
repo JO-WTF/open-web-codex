@@ -628,13 +628,6 @@ export default function WebApp() {
   }, [activeThreadId, refreshSupervisorOverview]);
 
   useEffect(() => {
-    const hasRuntimeAgent = supervisorOverview?.agents.some((agent) => !agent.is_root) ?? false;
-    if (!hasRuntimeAgent && activeRightPanelTab === "agents") {
-      setActiveRightPanelTab("files");
-    }
-  }, [activeRightPanelTab, supervisorOverview]);
-
-  useEffect(() => {
     // Workspace selection is intentionally workspace-first. A Thread becomes
     // active only after the user selects or creates one, so no transcript or
     // per-Thread runtime state may survive a workspace change.
@@ -2383,12 +2376,10 @@ export default function WebApp() {
       rightPanel={
         <RightSidebar
           activeTab={activeRightPanelTab}
-          agentsEnabled={agentPanelAvailable}
           agentUnread={agentPanelUnread}
           width={rightPanelWidth}
           onWidthChange={setRightPanelWidth}
           onTabChange={(tab) => {
-            if (tab === "agents" && !agentPanelAvailable) return;
             setActiveRightPanelTab(tab);
             if (tab === "agents") setAgentPanelUnread(false);
           }}

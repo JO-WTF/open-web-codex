@@ -113,6 +113,19 @@ describe("WebApp workspace-first messaging", () => {
     expect(screen.queryByText("thread-n…")).toBeNull();
   });
 
+  it("keeps the Agents tab available and shows an empty state before collaboration starts", async () => {
+    render(<WebApp />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "File manager" }));
+    const agentsTab = await screen.findByRole("tab", { name: "Agents" });
+    expect((agentsTab as HTMLButtonElement).disabled).toBe(false);
+
+    fireEvent.click(agentsTab);
+
+    await waitFor(() => expect(agentsTab.getAttribute("aria-selected")).toBe("true"));
+    expect(screen.getByText("No Agent activity yet")).toBeTruthy();
+  });
+
   it("starts and identifies an explicitly selected Enterprise Supervisor Copilot", async () => {
     client.getEnterpriseSupervisorOverview.mockResolvedValue({
       taskTitle: "Enterprise network planning",

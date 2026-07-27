@@ -7,7 +7,6 @@ export type RightSidebarTab = "agents" | "files";
 
 type Props = {
   activeTab: RightSidebarTab;
-  agentsEnabled: boolean;
   agentUnread?: boolean;
   width: number;
   onWidthChange: (width: number) => void;
@@ -31,7 +30,6 @@ const MAX_PANEL_WIDTH = 720;
 
 export default function RightSidebar({
   activeTab,
-  agentsEnabled,
   agentUnread = false,
   width,
   onWidthChange,
@@ -114,7 +112,6 @@ export default function RightSidebar({
             role="tab"
             aria-selected={activeTab === "agents"}
             aria-controls="web-agent-panel"
-            disabled={!agentsEnabled}
             className={activeTab === "agents" ? "is-active" : ""}
             onClick={() => onTabChange("agents")}
           >
