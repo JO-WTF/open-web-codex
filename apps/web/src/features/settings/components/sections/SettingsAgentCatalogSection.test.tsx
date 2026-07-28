@@ -101,6 +101,26 @@ describe("SettingsAgentCatalogSection", () => {
     });
   });
 
+  it("blocks a draft when every template-provided Artifact output is removed", async () => {
+    const props = baseProps();
+    render(<SettingsAgentCatalogSection {...props} />);
+
+    expect(
+      screen.getByText(/Type IDs are fixed by the reviewed template/),
+    ).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: "Output · planning-dataset.v1",
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Create draft" }));
+
+    expect(
+      screen.getByText(/Select at least one Artifact output/),
+    ).toBeTruthy();
+    expect(props.onSaveDraft).not.toHaveBeenCalled();
+  });
+
   it("shows a built-in Agent as an immutable readable release", () => {
     const key = `${template.definition_id}@${template.version}`;
     const props: SettingsAgentCatalogSectionProps = {

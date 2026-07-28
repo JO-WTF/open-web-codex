@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import CircleHelp from "lucide-react/dist/esm/icons/circle-help";
+import Info from "lucide-react/dist/esm/icons/info";
 import Plus from "lucide-react/dist/esm/icons/plus";
 
 export function AgentStudioCreateButton({
@@ -73,4 +74,47 @@ export function AgentStudioFieldHeading({
       </AgentStudioFieldHelp>
     </span>
   );
+}
+
+export function AgentStudioDerivedNotice({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="settings-studio-derived-notice">
+      <Info size={15} strokeWidth={2} aria-hidden="true" />
+      <span>
+        <strong>{title}</strong>
+        <span>{children}</span>
+      </span>
+    </div>
+  );
+}
+
+export function isAgentStudioIdentifier(
+  value: string,
+  options: { allowPeriod?: boolean; maximumBytes: number },
+) {
+  const { allowPeriod = false, maximumBytes } = options;
+  if (
+    value.length === 0
+    || new TextEncoder().encode(value).length > maximumBytes
+    || value === "."
+    || value === ".."
+    || value.includes("..")
+    || !/^[a-z0-9]/.test(value)
+    || !/[a-z0-9]$/.test(value)
+  ) {
+    return false;
+  }
+  return allowPeriod
+    ? /^[a-z0-9._-]+$/.test(value)
+    : /^[a-z0-9_-]+$/.test(value);
+}
+
+export function agentStudioUtf8ByteLength(value: string) {
+  return new TextEncoder().encode(value).length;
 }

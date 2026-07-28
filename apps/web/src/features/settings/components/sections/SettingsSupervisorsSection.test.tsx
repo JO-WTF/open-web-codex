@@ -217,6 +217,28 @@ describe("SettingsSupervisorsSection", () => {
     });
   });
 
+  it("blocks a Supervisor draft when all derived Artifact handoffs are removed", () => {
+    const props = baseProps();
+    render(<SettingsSupervisorsSection {...props} />);
+
+    expect(
+      screen.getByText(/You do not enter type IDs or producer names manually/),
+    ).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: /Enterprise Data Agent/ }),
+    );
+    const contractLabel = screen.getByText("planning-dataset.v1").closest("label");
+    const contractCheckbox = contractLabel?.querySelector("input[type='checkbox']");
+    expect(contractCheckbox).toBeTruthy();
+    fireEvent.click(contractCheckbox!);
+    fireEvent.click(screen.getByRole("button", { name: "Create draft" }));
+
+    expect(
+      screen.getByText(/Select at least one derived Artifact handoff/),
+    ).toBeTruthy();
+    expect(props.onSaveDraft).not.toHaveBeenCalled();
+  });
+
   it("shows a built-in Supervisor as an immutable readable release", () => {
     const policy = {
       policy_id: "enterprise-supervisor-copilot",

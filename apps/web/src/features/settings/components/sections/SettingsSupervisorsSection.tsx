@@ -12,8 +12,11 @@ import {
 } from "@/features/design-system/components/settings/SettingsPrimitives";
 import type { SettingsSupervisorsSectionProps } from "@settings/hooks/useSettingsSupervisorsSection";
 import {
+  agentStudioUtf8ByteLength,
   AgentStudioCreateButton,
+  AgentStudioDerivedNotice,
   AgentStudioFieldHeading,
+  isAgentStudioIdentifier,
 } from "./AgentStudioControls";
 
 type SettingsSupervisorsSectionComponentProps =
@@ -153,6 +156,7 @@ export function SettingsSupervisorsSection({
     emptyDraft(instructionPolicies[0]),
   );
   const [responsibilitiesText, setResponsibilitiesText] = useState("");
+  const [showEditorValidation, setShowEditorValidation] = useState(false);
   const [platformPolicyDraft, setPlatformPolicyDraft] = useState({
     policy_id: "platform-supervisor-behavior",
     version: "1.1.0",
@@ -167,6 +171,102 @@ export function SettingsSupervisorsSection({
       ),
     [draft.agents],
   );
+  const availableContracts = contractsForAgents(
+    draft.agents,
+    agents,
+    draft.artifact_contracts,
+  );
+  const responsibilities = responsibilitiesText
+    .split("\n")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const artifactSelectionIssue = (() => {
+    if (draft.agents.length === 0) {
+      return "Select at least one published Agent. Artifact handoffs are derived from the selected Agents.";
+    }
+    if (availableContracts.length === 0) {
+      return "The selected Agents do not publish any Artifact outputs, so this Supervisor has no deliverable contract.";
+    }
+    if (draft.artifact_contracts.length === 0) {
+      return "Select at least one derived Artifact handoff for this Supervisor workflow.";
+    }
+    const availableByIdentity = new Map(
+      availableContracts.map((contract) => [
+        `${contract.producer_agent}:${contract.artifact_type}`,
+        contract,
+      ]),
+    );
+    const hasInvalidContract = draft.artifact_contracts.some((contract) => {
+      const available = availableByIdentity.get(
+        `${contract.producer_agent}:${contract.artifact_type}`,
+      );
+      if (!available || contract.consumer_agents.length === 0) return true;
+      const allowedConsumers = new Set(
+        compatibleConsumers(contract, draft.agents, agents),
+      );
+      return contract.consumer_agents.some(
+        (consumer) => !allowedConsumers.has(consumer),
+      );
+    });
+    return hasInvalidContract
+      ? "One or more Artifact handoffs no longer match the selected Agents. Review their producer and consumers."
+      : null;
+  })();
+  const editorIssue = (() => {
+    if (!isAgentStudioIdentifier(draft.policy_id, { maximumBytes: 96 })) {
+      return "Enter a valid Policy ID using lowercase letters, numbers, hyphens, or underscores.";
+    }
+    if (
+      !isAgentStudioIdentifier(draft.version, {
+        allowPeriod: true,
+        maximumBytes: 64,
+      })
+    ) {
+      return "Enter a valid version using lowercase letters, numbers, periods, hyphens, or underscores.";
+    }
+    if (
+      !draft.display_name.trim()
+      || agentStudioUtf8ByteLength(draft.display_name) > 160
+    ) {
+      return "Enter a display name within the 160-byte platform limit.";
+    }
+    if (
+      !draft.description.trim()
+      || agentStudioUtf8ByteLength(draft.description) > 512
+    ) {
+      return "Enter a description within the 512-byte platform limit.";
+    }
+    if (
+      responsibilities.length === 0
+      || responsibilities.length > 32
+      || responsibilities.some(
+        (value) => agentStudioUtf8ByteLength(value) > 512,
+      )
+    ) {
+      return "Enter 1–32 responsibilities, one per line and no more than 512 characters each.";
+    }
+    if (!draft.instruction_policy.policy_id || !draft.instruction_policy.version) {
+      return "Select a published platform behavior contract.";
+    }
+    if (
+      !draft.custom_instructions.trim()
+      || agentStudioUtf8ByteLength(draft.custom_instructions) > 16 * 1024
+    ) {
+      return "Enter custom Supervisor instructions within 16 KB.";
+    }
+    const totalSpawnLimit = draft.agents.reduce(
+      (total, agent) => total + agent.spawn_limit,
+      0,
+    );
+    if (
+      draft.max_active_child_agents < 1
+      || draft.max_active_child_agents > 16
+      || draft.max_active_child_agents > totalSpawnLimit
+    ) {
+      return "Maximum active child Agents must be between 1 and the selected Agents’ total spawn limit, up to 16.";
+    }
+    return artifactSelectionIssue;
+  })();
 
   useEffect(() => {
     if (!draft.instruction_policy.policy_id && instructionPolicies.length > 0) {
@@ -184,6 +284,7 @@ export function SettingsSupervisorsSection({
     setEditingDefinitionId(null);
     setDraft(emptyDraft(instructionPolicies[0]));
     setResponsibilitiesText("");
+    setShowEditorValidation(false);
     setEditorOpen(false);
   };
 
@@ -192,6 +293,7 @@ export function SettingsSupervisorsSection({
     setEditingDefinitionId(null);
     setDraft(emptyDraft(instructionPolicies[0]));
     setResponsibilitiesText("");
+    setShowEditorValidation(false);
     setEditorOpen(true);
   };
 
@@ -202,6 +304,7 @@ export function SettingsSupervisorsSection({
     setEditingDefinitionId(definitionId);
     setDraft(nextDraft);
     setResponsibilitiesText(nextDraft.responsibilities.join("\n"));
+    setShowEditorValidation(false);
     setViewingPolicyKey(null);
     setEditorOpen(true);
   };
@@ -298,10 +401,8 @@ export function SettingsSupervisorsSection({
   };
 
   const save = async () => {
-    const responsibilities = responsibilitiesText
-      .split("\n")
-      .map((value) => value.trim())
-      .filter(Boolean);
+    setShowEditorValidation(true);
+    if (editorIssue) return;
     const saved = await onSaveDraft(
       { ...draft, responsibilities },
       editingDefinitionId ?? undefined,
@@ -309,11 +410,6 @@ export function SettingsSupervisorsSection({
     if (saved) resetEditor();
   };
 
-  const availableContracts = contractsForAgents(
-    draft.agents,
-    agents,
-    draft.artifact_contracts,
-  );
   const saving = actionDefinitionId === (editingDefinitionId ?? "new");
 
   const viewPublished = (policy: (typeof publishedPolicies)[number]) => {
@@ -630,6 +726,7 @@ export function SettingsSupervisorsSection({
               }
               placeholder="network-planning-supervisor"
               disabled={editingDefinitionId != null}
+              maxLength={96}
             />
           </label>
           <label className="settings-label">
@@ -647,6 +744,7 @@ export function SettingsSupervisorsSection({
                 }))
               }
               placeholder="1.0.0"
+              maxLength={64}
             />
           </label>
         </div>
@@ -665,6 +763,7 @@ export function SettingsSupervisorsSection({
               }))
             }
             placeholder="Network Planning Supervisor"
+            maxLength={160}
           />
         </label>
         <label className="settings-label">
@@ -683,6 +782,7 @@ export function SettingsSupervisorsSection({
               }))
             }
             placeholder="What this Supervisor delivers."
+            maxLength={512}
           />
         </label>
         <label className="settings-label">
@@ -769,14 +869,20 @@ export function SettingsSupervisorsSection({
               }))
             }
             placeholder="Define authority, delegation order, approval behavior, stop conditions, and final report requirements."
+            maxLength={16 * 1024}
           />
         </label>
 
         <div className="settings-supervisor-picker-title">
-          <AgentStudioFieldHeading help="Choose exact published Agents needed by this workflow. Their reviewed definitions supply all Runtime capabilities.">
+          <AgentStudioFieldHeading help="Choose exact published Agents needed by this workflow. Their reviewed definitions supply Runtime capabilities and the Artifact contracts shown below.">
             Allowed Agents
           </AgentStudioFieldHeading>
         </div>
+        <AgentStudioDerivedNotice title="Agents are the contract source">
+          Selecting an Agent automatically provides its published Artifact
+          outputs and compatible downstream consumers. You do not enter type
+          IDs or producer names manually.
+        </AgentStudioDerivedNotice>
         {agents.map((agent) => {
           const selected = selectedAgentIds.has(agentIdentity(agent));
           const selection = draft.agents.find(
@@ -842,10 +948,15 @@ export function SettingsSupervisorsSection({
         {availableContracts.length > 0 && (
           <>
             <div className="settings-supervisor-picker-title">
-              <AgentStudioFieldHeading help="Select typed Artifacts that must be handed from their declared producer to compatible consumers.">
-                Required deliverables
+              <AgentStudioFieldHeading help="Type and producer are fixed by published Agent definitions. Choose which handoffs belong to this workflow, whether each is required, and which compatible consumers receive it.">
+                Workflow Artifact handoffs
               </AgentStudioFieldHeading>
             </div>
+            <AgentStudioDerivedNotice title="Derived from selected Agents">
+              Type and producer are read-only. You only decide whether the
+              handoff is used, whether it is required, and which compatible
+              consumers receive it.
+            </AgentStudioDerivedNotice>
             {availableContracts.map((contract) => {
               const key = `${contract.producer_agent}:${contract.artifact_type}`;
               const checked = draft.artifact_contracts.some(
@@ -935,6 +1046,11 @@ export function SettingsSupervisorsSection({
             })}
           </>
         )}
+        {showEditorValidation && artifactSelectionIssue && (
+          <div className="settings-studio-validation" role="alert">
+            {artifactSelectionIssue}
+          </div>
+        )}
 
         <label className="settings-label">
           <AgentStudioFieldHeading help="Global concurrency limit across all child Agents. Keep it as small as the workflow dependency graph permits.">
@@ -955,6 +1071,11 @@ export function SettingsSupervisorsSection({
             }
           />
         </label>
+        {showEditorValidation && editorIssue && editorIssue !== artifactSelectionIssue && (
+          <div className="settings-studio-validation" role="alert">
+            {editorIssue}
+          </div>
+        )}
         <div className="settings-agents-actions">
           <button
             type="button"
