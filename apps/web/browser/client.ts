@@ -37,6 +37,10 @@ import type {
   SupervisorPolicyBinding,
   SupervisorPolicySelection,
   SupervisorPolicySummary,
+  SupervisorDefinitionSummary,
+  SupervisorDraftRequest,
+  SupervisorReleaseSummary,
+  SupervisorValidationResult,
   RuntimeAgentProjection,
   ArtifactSummary,
 } from "./types";
@@ -367,6 +371,38 @@ export class PlatformClient {
 
   listAgentDefinitions() {
     return this.request<AgentDefinitionSummary[]>("/api/agent-definitions");
+  }
+
+  listSupervisorDefinitions() {
+    return this.request<SupervisorDefinitionSummary[]>("/api/supervisor-definitions");
+  }
+
+  createSupervisorDefinition(draft: SupervisorDraftRequest) {
+    return this.request<SupervisorDefinitionSummary>("/api/supervisor-definitions", {
+      method: "POST",
+      body: JSON.stringify(draft),
+    });
+  }
+
+  saveSupervisorDraft(definitionId: string, draft: SupervisorDraftRequest) {
+    return this.request<SupervisorDefinitionSummary>(
+      `/api/supervisor-definitions/${encodeURIComponent(definitionId)}/draft`,
+      { method: "PUT", body: JSON.stringify(draft) },
+    );
+  }
+
+  validateSupervisorDraft(definitionId: string) {
+    return this.request<SupervisorValidationResult>(
+      `/api/supervisor-definitions/${encodeURIComponent(definitionId)}/validate`,
+      { method: "POST" },
+    );
+  }
+
+  publishSupervisorDraft(definitionId: string) {
+    return this.request<SupervisorReleaseSummary>(
+      `/api/supervisor-definitions/${encodeURIComponent(definitionId)}/publish`,
+      { method: "POST" },
+    );
   }
 
   getRunSupervisorPolicy(runId: string) {

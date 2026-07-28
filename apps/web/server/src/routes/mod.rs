@@ -17,6 +17,7 @@ pub mod providers;
 pub mod runs;
 pub mod runtime_agents;
 pub mod sessions;
+pub mod supervisor_definitions;
 pub mod supervisor_policies;
 pub mod tasks;
 pub mod terminals;
@@ -211,6 +212,22 @@ pub fn router(
         .route(
             "/supervisor-policies",
             axum::routing::get(supervisor_policies::list_published),
+        )
+        .route(
+            "/supervisor-definitions",
+            axum::routing::get(supervisor_definitions::list).post(supervisor_definitions::create),
+        )
+        .route(
+            "/supervisor-definitions/{id}/draft",
+            axum::routing::put(supervisor_definitions::save_draft),
+        )
+        .route(
+            "/supervisor-definitions/{id}/validate",
+            axum::routing::post(supervisor_definitions::validate),
+        )
+        .route(
+            "/supervisor-definitions/{id}/publish",
+            axum::routing::post(supervisor_definitions::publish),
         )
         .route("/runs", axum::routing::get(runs::list_runs))
         .route("/runs/{id}", axum::routing::get(runs::get_run))

@@ -333,7 +333,9 @@ impl RunOrchestrator {
                     snapshot.policy_id AS supervisor_policy_id, \
                     snapshot.version AS supervisor_policy_version, \
                     snapshot.content_sha256 AS supervisor_policy_content_sha256, \
-                    snapshot.developer_instructions AS supervisor_policy_developer_instructions \
+                    snapshot.developer_instructions AS supervisor_policy_developer_instructions, \
+                    snapshot.source AS supervisor_policy_source, \
+                    snapshot.release_id AS supervisor_policy_release_id \
              FROM runs run \
              JOIN tasks task ON task.id = run.task_id \
                AND task.organization_id = run.organization_id \
@@ -451,21 +453,34 @@ fn supervisor_policy_lease(
         candidate.get::<Option<String>, _>("supervisor_policy_version"),
         candidate.get::<Option<String>, _>("supervisor_policy_content_sha256"),
         candidate.get::<Option<String>, _>("supervisor_policy_developer_instructions"),
+        candidate.get::<Option<String>, _>("supervisor_policy_source"),
+        candidate.get::<Option<Uuid>, _>("supervisor_policy_release_id"),
     ) {
-        (None, None, None, None, None) => Ok(None),
+        (None, None, None, None, None, None, None) => Ok(None),
         (
             Some(binding_id),
             Some(policy_id),
             Some(version),
             Some(content_sha256),
             Some(developer_instructions),
-        ) => Ok(Some(SupervisorPolicyLease {
-            binding_id,
-            policy_id,
-            version,
-            content_sha256,
-            developer_instructions,
-        })),
+            Some(source),
+            release_id,
+        ) => {
+            let source = source.parse().map_err(|_| {
+                RunOrchestratorError::Conflict(
+                    "Supervisor Policy binding has an invalid snapshot source".to_string(),
+                )
+            })?;
+            Ok(Some(SupervisorPolicyLease {
+                binding_id,
+                policy_id,
+                version,
+                content_sha256,
+                developer_instructions,
+                source,
+                release_id,
+            }))
+        }
         _ => Err(RunOrchestratorError::Conflict(
             "Supervisor Policy binding is missing immutable snapshot fields".to_string(),
         )),

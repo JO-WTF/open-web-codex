@@ -52,15 +52,15 @@ are represented by:
 This Plugin publishes capabilities; installing or starting it does not create an Agent
 or mutate a Profile.
 
-- `examples/runtime-roles/data-agent-v1.1.md` is the current reviewed instruction source
-  used to deterministically create the `data_agent` Runtime Role through the internal
-  Profile Host materialization boundary. Historical Role and Policy versions are not
-  published or resolved in this development environment.
-- `examples/runtime-roles/network-planning-agent.md` does the same for
-  `network_planning_agent`.
-- The Platform publishes the enterprise Agent Definitions and
-  `enterprise-supervisor-copilot@1.7.0` separately under
-  `apps/web/server/resources/`.
+- `capabilities/agents/enterprise-data-agent/1.6.0/` is the current reviewed
+  Definition and instruction source used to deterministically create the
+  `data_agent` Runtime Role through the internal Profile Host materialization
+  boundary.
+- `capabilities/agents/enterprise-network-planning-agent/1.5.0/` does the same
+  for `network_planning_agent`.
+- The Platform publishes `enterprise-supervisor-copilot@1.7.0` from
+  `capabilities/supervisors/`. Historical Role and Policy versions are not
+  resolved in this development environment.
 - When a user explicitly starts a Run with that Policy, the worker verifies the
   Definition-bound instruction digest, materializes the exact versioned Role file under
   a platform-reserved Profile directory, and reopens and verifies that file immediately
@@ -110,10 +110,10 @@ inside the existing maps capability.
 
 `examples/data-sources/warehouse-network-fixture.json` is the read-only Data Agent
 source. `examples/network-input.json` and `examples/route-matrix-input.json` form a
-complete small network scenario. The `examples/runtime-roles/` files are the reviewed
-Runtime Role instruction sources, not automatically discovered Plugin content; the
-published enterprise Policy makes them visible only to its governed Thread through the
-explicit worker lifecycle above.
+complete small network scenario. These files are reviewed network fixtures. Runtime
+Role instructions live in the repository capability catalog, not automatically
+discovered Plugin content; a published Supervisor Release makes them visible only to
+its governed Thread through the explicit worker lifecycle above.
 After installing the package:
 
 ```bash

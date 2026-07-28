@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "supervisor-package.v1",
+  "policyId": "enterprise-supervisor-copilot",
+  "version": "1.7.0",
+  "displayName": "Enterprise Supervisor Copilot",
+  "description": "Coordinates governed data analysis and warehouse-network planning agents.",
+  "responsibilities": [
+    "Decompose the enterprise analysis into bounded Agent assignments.",
+    "Enforce typed Artifact handoffs between selected Agents.",
+    "Resolve material conflicts and produce the final recommendation.",
+    "Report capability gaps, risks, assumptions and missing evidence explicitly."
+  ],
+  "instructionsFile": "instructions.md",
+  "artifactContractsFile": "artifact-contracts.json",
+  "agents": [
+    {
+      "definitionId": "enterprise-data-agent",
+      "version": "1.6.0",
+      "runtimeRole": "data_agent",
+      "spawnLimit": 1
+    },
+    {
+      "definitionId": "enterprise-network-planning-agent",
+      "version": "1.5.0",
+      "runtimeRole": "network_planning_agent",
+      "spawnLimit": 1
+    }
+  ],
+  "runtimeRequirements": [
+    {
+      "capabilityId": "agents.multi_agent",
+      "version": "1.0.0",
+      "requiredLimits": {
+        "exactRoleAllowlist": true,
+        "exactRoleInstanceLimits": true
+      }
+    }
+  ],
+  "execution": {
+    "maxActiveChildAgents": 2
+  }
+}

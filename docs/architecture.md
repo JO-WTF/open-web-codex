@@ -21,14 +21,17 @@ when measured capacity or isolation needs justify it.
 
 The enterprise multi-agent design in
 `docs/enterprise-agent-platform-architecture.md` remains the evolutionary
-target above this control plane. The current constrained M2 slice already
-implements code-published Supervisor Policies and Agent Definitions, immutable
-Policy snapshots bound to root Threads, request-scoped Runtime Roles, native
-child-agent execution, rebuildable Agent projections and Task-owned durable
-Artifacts. Broader Catalog governance, native Agent CRUD, Role-level dynamic
-authorization and production multi-user operation remain targets rather than
-current capability. `capability-baseline.md` is authoritative for the verified
-scope; the roadmap and development plan control the remaining order.
+target above this control plane. The current constrained M2 slice implements a
+typed Supervisor capability catalog, code-published Agent Definitions, Web
+authoring and immutable publication of Supervisor Releases, Policy snapshots
+bound to root Threads, request-scoped Runtime Roles, native child-agent
+execution, rebuildable Agent projections and Task-owned durable Artifacts.
+User-authored Releases can currently select only reviewed code-published Agent
+Definitions. User-authored Agent Definition publication, Tool/Plugin lifecycle,
+Role-level dynamic authorization and production multi-user operation remain
+targets rather than current capability. `capability-baseline.md` is
+authoritative for the verified scope; the roadmap and development plan control
+the remaining order.
 
 ## System shape
 
@@ -46,7 +49,7 @@ Workspace authorization service
 
 Run orchestrator
   -> validates the Thread's Codex cwd against authorized Workspace roots
-  -> resolves and seals an explicitly selected Supervisor Policy
+  -> resolves a built-in Package or immutable organization-scoped Release
   -> preflights exact Agent Definitions before governed Thread creation
   -> Runner sandbox / Git delivery
 
@@ -84,8 +87,8 @@ result; they never cause a Tauri runtime to reappear.
 | User, organization, membership and session | Web platform database | complete platform record |
 | Project, Task, Run, Thread model selection, lease, approval and audit | Web platform database | complete platform record |
 | Profile ownership and process health | Web database + Profile Host | mapping, health, build and capability snapshot |
-| Supervisor Policy publication, immutable snapshot and root-Thread binding | Web platform database + code-published governance package | complete governance record and binding; never Runtime conversation state |
-| Agent Definition identity, version, responsibilities and allowed Runtime Role reference | Web platform governance package | published metadata and immutable instruction digest; never child-Thread state |
+| Supervisor Definition, Revision, Release, immutable snapshot and root-Thread binding | Web platform database + code-published capability package | complete governance record and binding; never Runtime conversation state |
+| Agent Definition identity, version, responsibilities, Artifact contracts and allowed Runtime Role reference | code-published capability catalog | reviewed metadata and immutable instruction digest; never child-Thread state |
 | Thread, Turn, items, compaction and model-visible context | Codex Profile/app-server | opaque IDs, event projection and search index |
 | Provider config and runtime model catalog | Codex Profile/app-server | secret references, global default Provider/model selection, policy and display cache scoped to Profile |
 | Agent scheduling and parent/child execution | Codex runtime | observable trajectory and status projection |
@@ -103,12 +106,22 @@ engine or agent scheduler.
 
 ### Current governed multi-agent slice
 
-An Enterprise Run may explicitly select one code-published Supervisor Policy
-version. The platform seals that Policy and its referenced Agent Definition
-versions into an immutable snapshot and binds it to the actual root Thread.
-Immediately before a governed root start or inherited fork, the worker
-re-resolves the published resources, rejects snapshot or instruction drift and
-requires the generated `agents.multi_agent` capability.
+An Enterprise Run may explicitly select either one code-published Supervisor
+Package version or one immutable organization-scoped Supervisor Release. The
+platform seals the selected Policy and its referenced Agent Definition versions
+into an immutable snapshot and binds it to the actual root Thread. Immediately
+before a governed root start or inherited fork, the worker re-resolves the
+repository Package or exact persisted Release identity, rejects snapshot,
+dependency or instruction drift and checks every type-declared Runtime
+capability and required limit.
+
+Code-managed publication sources live under `capabilities/supervisors/` and
+`capabilities/agents/`. Tool, MCP, Skill and Plugin implementations remain in
+their owning packages; manifests relate them by stable capability IDs rather
+than by filesystem nesting. Web-authored drafts are organization- and
+owner-scoped PostgreSQL resources. Validation derives Runtime Role names, MCP
+inventory and Runtime capability requirements server-side. Publication locks
+the complete Release spec and content hash; a published row cannot be edited.
 
 Because the current Runtime does not expose native Agent CRUD, Profile Host
 temporarily materializes the exact versioned Role instruction files under a

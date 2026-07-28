@@ -13,13 +13,13 @@ use open_web_codex_adapter::{CodexAdapter, ProfileMutation, ThreadStartMode};
 use open_web_codex_platform_contracts::SupervisorPolicySelection;
 use open_web_codex_run_orchestrator::{
     RunLease, RunStartPreflight, RunStartPreflightError, SupervisorPolicyLease,
+    SupervisorPolicySource,
 };
+use sqlx::PgPool;
 use thiserror::Error;
 
 use crate::routes::RuntimeProfileBinding;
 use crate::supervisor_policy;
-
-const GOVERNED_MAX_AGENT_THREADS: u32 = 2;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 enum SupervisorRuntimePreflightError {
@@ -35,11 +35,20 @@ enum SupervisorRuntimePreflightError {
 pub(crate) struct SupervisorRuntimePreflight {
     adapter: Arc<dyn CodexAdapter>,
     profile: RuntimeProfileBinding,
+    db: PgPool,
 }
 
 impl SupervisorRuntimePreflight {
-    pub(crate) fn new(adapter: Arc<dyn CodexAdapter>, profile: RuntimeProfileBinding) -> Self {
-        Self { adapter, profile }
+    pub(crate) fn new(
+        adapter: Arc<dyn CodexAdapter>,
+        profile: RuntimeProfileBinding,
+        db: PgPool,
+    ) -> Self {
+        Self {
+            adapter,
+            profile,
+            db,
+        }
     }
 }
 
@@ -53,14 +62,16 @@ impl RunStartPreflight for SupervisorRuntimePreflight {
             return Ok(ThreadStartMode::Standard);
         };
 
-        let policy = resolve_bound_policy(bound_policy).map_err(|error| {
-            tracing::warn!(
-                run_id = %lease.run_id,
-                error = %error,
-                "governed Run policy preflight rejected"
-            );
-            unavailable_policy()
-        })?;
+        let policy = resolve_bound_policy(&self.db, lease.organization_id, bound_policy)
+            .await
+            .map_err(|error| {
+                tracing::warn!(
+                    run_id = %lease.run_id,
+                    error = %error,
+                    "governed Run policy preflight rejected"
+                );
+                unavailable_policy()
+            })?;
         let capabilities = self.profile.capabilities.get().await.ok_or_else(|| {
             tracing::warn!(
                 run_id = %lease.run_id,
@@ -68,7 +79,11 @@ impl RunStartPreflight for SupervisorRuntimePreflight {
             );
             unavailable_policy()
         })?;
-        supervisor_policy::require_runtime_manifest(&capabilities.manifest).map_err(|error| {
+        supervisor_policy::require_runtime_manifest(
+            &capabilities.manifest,
+            &policy.runtime_requirements,
+        )
+        .map_err(|error| {
             tracing::warn!(
                 run_id = %lease.run_id,
                 error = %error,
@@ -96,7 +111,7 @@ impl RunStartPreflight for SupervisorRuntimePreflight {
             roles: policy.required_runtime_roles,
             role_spawn_limits: policy.role_spawn_limits,
             required_mcp_servers: policy.required_mcp_servers,
-            max_threads: GOVERNED_MAX_AGENT_THREADS,
+            max_threads: policy.max_active_child_agents,
         })
     }
 }
@@ -107,13 +122,28 @@ fn unavailable_policy() -> RunStartPreflightError {
     )
 }
 
-fn resolve_bound_policy(
+async fn resolve_bound_policy(
+    db: &PgPool,
+    organization_id: uuid::Uuid,
     bound_policy: &SupervisorPolicyLease,
 ) -> Result<supervisor_policy::ResolvedSupervisorPolicy, SupervisorRuntimePreflightError> {
-    let policy = supervisor_policy::resolve(&SupervisorPolicySelection {
-        policy_id: bound_policy.policy_id.clone(),
-        version: bound_policy.version.clone(),
-    })
+    let policy = match bound_policy.source {
+        SupervisorPolicySource::Repository if bound_policy.release_id.is_none() => {
+            supervisor_policy::resolve_builtin(&SupervisorPolicySelection {
+                policy_id: bound_policy.policy_id.clone(),
+                version: bound_policy.version.clone(),
+            })
+        }
+        SupervisorPolicySource::UserRelease => {
+            let release_id = bound_policy
+                .release_id
+                .ok_or(SupervisorRuntimePreflightError::PolicySnapshotMismatch)?;
+            supervisor_policy::resolve_release(db, organization_id, release_id).await
+        }
+        _ => Err(supervisor_policy::SupervisorPolicyError::Invalid(
+            "snapshot source is invalid",
+        )),
+    }
     .map_err(|_| SupervisorRuntimePreflightError::PolicySnapshotMismatch)?;
     if policy.snapshot.content_sha256 != bound_policy.content_sha256
         || policy.snapshot.developer_instructions != bound_policy.developer_instructions

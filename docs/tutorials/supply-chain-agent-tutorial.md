@@ -416,7 +416,7 @@ Prompt 中的“请保持只读”只是工作说明，不能代替这些边界�
 
 已发布 Data Agent Definition 绑定的 Role 指令是：
 
-[`data-agent-v1.1.md`](../../tools/supply-chain-network-planner/examples/runtime-roles/data-agent-v1.1.md)
+[`instructions.md`](../../capabilities/agents/enterprise-data-agent/1.6.0/instructions.md)
 
 它要求 Data Agent 按 list → inspect → build → validate 工作，返回原 `data_ref`、结构化
 结果中的准确 `resource_name`、来源范围、单位、统计和质量限制，并明确禁止它选择
@@ -510,7 +510,7 @@ max_delivery_seconds = 86400
 
 当前真实 E2E 使用：
 
-[`network-planning-agent.md`](../../tools/supply-chain-network-planner/examples/runtime-roles/network-planning-agent.md)
+[`instructions.md`](../../capabilities/agents/enterprise-network-planning-agent/1.5.0/instructions.md)
 
 它要求 Network Agent 先读取 Data Resource，再调用有界规划 Tool，验证所有用于结论
 的 snapshot、route、scenario 和 comparison，并把最终企业建议留给 Root
@@ -524,7 +524,7 @@ Supervisor。
 
 当前发布文件：
 
-[`enterprise-supervisor-copilot-v1.7.md`](../../apps/web/server/resources/supervisor-policies/enterprise-supervisor-copilot-v1.7.md)
+[`instructions.md`](../../capabilities/supervisors/enterprise-supervisor-copilot/1.7.0/instructions.md)
 
 它规定：
 
@@ -542,8 +542,8 @@ Thread。Resume 继续使用原 Snapshot，不会因为源文件后来更新就�
 
 当前 Policy 引用两份发布文件：
 
-- [`data-agent-v1.6.json`](../../apps/web/server/resources/agent-definitions/data-agent-v1.6.json)
-- [`network-planning-agent-v1.5.json`](../../apps/web/server/resources/agent-definitions/network-planning-agent-v1.5.json)
+- [`definition.json`](../../capabilities/agents/enterprise-data-agent/1.6.0/definition.json)
+- [`definition.json`](../../capabilities/agents/enterprise-network-planning-agent/1.5.0/definition.json)
 
 开发环境不保留旧 Policy 或 Agent Definition 的代码兜底；切换发布版本前应清理旧
 Run、Task 和 Thread 记录，新 Run 只允许选择当前发布版本。
@@ -760,7 +760,7 @@ tools/supply-chain-network-planner/
 ├── supply_chain_planner/data_server.py
 ├── supply_chain_planner/server.py
 ├── supply_chain_planner/models.py
-├── examples/runtime-roles/
+├── examples/
 ├── skills/
 └── .mcp.json
 ```

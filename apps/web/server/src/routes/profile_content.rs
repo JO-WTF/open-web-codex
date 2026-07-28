@@ -18,9 +18,9 @@ use sqlx::Row;
 use toml_edit::{value, DocumentMut};
 use uuid::Uuid;
 
-use crate::agent_definition;
 use crate::middleware::auth::{require_runtime_profile, AuthenticatedUser};
 use crate::routes::RuntimeProfileBinding;
+use open_web_codex_supervisor_catalog::agent;
 
 type ApiError = (StatusCode, Json<PlatformError>);
 type ApiResult<T> = Result<Json<T>, ApiError>;
@@ -665,7 +665,7 @@ fn managed_agent_config_file(name: &str) -> String {
 
 fn validate_browser_managed_agent_name(value: &str) -> Result<String, ApiError> {
     let name = validate_identifier(value, "agent")?;
-    if agent_definition::is_platform_runtime_role(&name) {
+    if agent::is_platform_runtime_role(&name) {
         return Err(bad_request(
             "Platform Runtime Role cannot be managed through the browser",
         ));
@@ -675,7 +675,7 @@ fn validate_browser_managed_agent_name(value: &str) -> Result<String, ApiError> 
 
 fn is_browser_managed_agent_name(name: &str) -> bool {
     !is_reserved_agent_name(name)
-        && !agent_definition::is_platform_runtime_role(name)
+        && !agent::is_platform_runtime_role(name)
         && validate_identifier(name, "agent").is_ok()
 }
 

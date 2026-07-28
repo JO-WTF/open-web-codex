@@ -40,13 +40,16 @@ pub async fn start_run(
     // Resolving a published identifier is safe at enqueue time. Capability,
     // workspace-effective configuration and Profile Role checks deliberately
     // run in the worker immediately before the Runtime creates the Thread.
-    let supervisor_policy = req
-        .supervisor_policy
-        .as_ref()
-        .map(supervisor_policy::resolve_for_new_run)
-        .transpose()
-        .map_err(supervisor_policy_error)?
-        .map(|policy| policy.snapshot);
+    let supervisor_policy = if let Some(selection) = req.supervisor_policy.as_ref() {
+        Some(
+            supervisor_policy::resolve_for_new_run(&state.db, auth.organization_id, selection)
+                .await
+                .map_err(supervisor_policy_error)?
+                .snapshot,
+        )
+    } else {
+        None
+    };
     let run = orchestrator
         .enqueue_run(EnqueueRunRequest {
             organization_id: auth.organization_id,
@@ -509,6 +512,12 @@ fn supervisor_policy_error(
         supervisor_policy::SupervisorPolicyError::Capability(message) => (
             StatusCode::CONFLICT,
             Json(PlatformError::bad_request(message)),
+        ),
+        supervisor_policy::SupervisorPolicyError::Database => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PlatformError::internal(
+                "Supervisor Policy database operation failed",
+            )),
         ),
     }
 }

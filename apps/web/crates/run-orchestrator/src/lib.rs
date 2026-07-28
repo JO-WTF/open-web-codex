@@ -67,7 +67,34 @@ pub struct EnqueueRunRequest {
     pub supervisor_policy: Option<SupervisorPolicySnapshotInput>,
 }
 
-/// A server-resolved, repository-published Supervisor Policy version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SupervisorPolicySource {
+    Repository,
+    UserRelease,
+}
+
+impl SupervisorPolicySource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Repository => "repository",
+            Self::UserRelease => "user_release",
+        }
+    }
+}
+
+impl std::str::FromStr for SupervisorPolicySource {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "repository" => Ok(Self::Repository),
+            "user_release" => Ok(Self::UserRelease),
+            _ => Err(()),
+        }
+    }
+}
+
+/// A server-resolved, immutable Supervisor Policy version.
 ///
 /// The orchestrator persists the exact content before a worker delivers it to
 /// Codex. Callers may select an id/version, but must never supply untrusted
@@ -79,6 +106,8 @@ pub struct SupervisorPolicySnapshotInput {
     pub display_name: String,
     pub developer_instructions: String,
     pub content_sha256: String,
+    pub source: SupervisorPolicySource,
+    pub release_id: Option<Uuid>,
 }
 
 /// Immutable Supervisor Policy facts leased with a Run.
@@ -93,6 +122,8 @@ pub struct SupervisorPolicyLease {
     pub version: String,
     pub content_sha256: String,
     pub developer_instructions: String,
+    pub source: SupervisorPolicySource,
+    pub release_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

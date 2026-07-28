@@ -1,31 +1,16 @@
 use open_web_codex_adapter::{PlatformRuntimeRole, RequiredMcpServer};
 use open_web_codex_codex_contracts::{CapabilityDeclaration, CapabilityManifest, CapabilityStatus};
 use open_web_codex_platform_contracts::{SupervisorPolicySelection, SupervisorPolicySummary};
-use open_web_codex_run_orchestrator::SupervisorPolicySnapshotInput;
+use open_web_codex_run_orchestrator::{SupervisorPolicySnapshotInput, SupervisorPolicySource};
+use open_web_codex_supervisor_catalog::supervisor::{
+    self, ResolvedSupervisorPackage, RuntimeCapabilityRequirement, SupervisorCatalogError,
+    SupervisorReleaseSpec,
+};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
+use sqlx::{PgPool, Row};
 use std::collections::BTreeMap;
 use thiserror::Error;
-
-use crate::agent_definition;
-
-const ENTERPRISE_COPILOT_POLICY_ID: &str = "enterprise-supervisor-copilot";
-const ENTERPRISE_COPILOT_POLICY_VERSION: &str = "1.7.0";
-const ENTERPRISE_COPILOT_POLICY_NAME: &str = "Enterprise Supervisor Copilot";
-const ENTERPRISE_COPILOT_POLICY_DESCRIPTION: &str =
-    "Coordinates governed data analysis and warehouse-network planning agents.";
-const REQUIRED_RUNTIME_CAPABILITY_VERSION: &str = "1.0.0";
-const REQUIRED_RUNTIME_CAPABILITIES: [(&str, &str); 1] = [("agents.multi_agent", "multi-agent")];
-const ENTERPRISE_COPILOT_POLICY_INSTRUCTIONS: &str =
-    include_str!("../resources/supervisor-policies/enterprise-supervisor-copilot-v1.7.md");
-const ENTERPRISE_COPILOT_RUNTIME_ROLE_REFS: [(&str, &str, &str); 2] = [
-    ("enterprise-data-agent", "1.6.0", "data_agent"),
-    (
-        "enterprise-network-planning-agent",
-        "1.5.0",
-        "network_planning_agent",
-    ),
-];
+use uuid::Uuid;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub(crate) enum SupervisorPolicyError {
@@ -35,6 +20,8 @@ pub(crate) enum SupervisorPolicyError {
     Invalid(&'static str),
     #[error("required Runtime capabilities are unavailable: {0}")]
     Capability(String),
+    #[error("Supervisor Policy database operation failed")]
+    Database,
 }
 
 #[derive(Debug)]
@@ -43,170 +30,184 @@ pub(crate) struct ResolvedSupervisorPolicy {
     pub required_runtime_roles: Vec<PlatformRuntimeRole>,
     pub role_spawn_limits: BTreeMap<String, u32>,
     pub required_mcp_servers: Vec<RequiredMcpServer>,
+    pub runtime_requirements: Vec<RuntimeCapabilityRequirement>,
+    pub max_active_child_agents: u32,
 }
 
-pub(crate) fn list_published() -> Vec<SupervisorPolicySummary> {
-    vec![SupervisorPolicySummary {
-        policy_id: ENTERPRISE_COPILOT_POLICY_ID.to_string(),
-        version: ENTERPRISE_COPILOT_POLICY_VERSION.to_string(),
-        display_name: ENTERPRISE_COPILOT_POLICY_NAME.to_string(),
-        description: ENTERPRISE_COPILOT_POLICY_DESCRIPTION.to_string(),
-    }]
+pub(crate) async fn list_published(
+    db: &PgPool,
+    organization_id: Uuid,
+) -> Result<Vec<SupervisorPolicySummary>, SupervisorPolicyError> {
+    let mut published = supervisor::list_published().map_err(map_catalog_error)?;
+    let rows = sqlx::query(
+        "SELECT policy_id, version, display_name, description \
+         FROM supervisor_releases \
+         WHERE organization_id = $1 \
+         ORDER BY published_at DESC, policy_id, version",
+    )
+    .bind(organization_id)
+    .fetch_all(db)
+    .await
+    .map_err(|_| SupervisorPolicyError::Database)?;
+    published.extend(rows.into_iter().map(|row| SupervisorPolicySummary {
+        policy_id: row.get("policy_id"),
+        version: row.get("version"),
+        display_name: row.get("display_name"),
+        description: row.get("description"),
+    }));
+    Ok(published)
 }
 
-pub(crate) fn resolve(
+pub(crate) async fn resolve(
+    db: &PgPool,
+    organization_id: Uuid,
     selection: &SupervisorPolicySelection,
 ) -> Result<ResolvedSupervisorPolicy, SupervisorPolicyError> {
-    if selection.policy_id != ENTERPRISE_COPILOT_POLICY_ID
-        || selection.version != ENTERPRISE_COPILOT_POLICY_VERSION
-    {
-        return Err(SupervisorPolicyError::NotFound);
-    }
-    let developer_instructions = ENTERPRISE_COPILOT_POLICY_INSTRUCTIONS.trim();
-    if developer_instructions.is_empty() {
-        return Err(SupervisorPolicyError::Invalid(
-            "developer instructions are empty",
-        ));
-    }
-    if developer_instructions.len() > 16 * 1024 {
-        return Err(SupervisorPolicyError::Invalid(
-            "developer instructions exceed 16384 bytes",
-        ));
-    }
-    let required_runtime_roles = resolve_runtime_roles()?;
-    let role_spawn_limits = required_runtime_roles
+    let builtins = supervisor::list_published().map_err(map_catalog_error)?;
+    if builtins
         .iter()
-        .map(|role| (role.name.clone(), 1))
-        .collect::<BTreeMap<_, _>>();
-    let required_mcp_servers = agent_definition::required_mcp_servers(&required_runtime_roles)
-        .map_err(|_| SupervisorPolicyError::Invalid("Agent Definitions are invalid"))?;
-    Ok(ResolvedSupervisorPolicy {
-        snapshot: SupervisorPolicySnapshotInput {
-            policy_id: selection.policy_id.clone(),
-            version: selection.version.clone(),
-            display_name: ENTERPRISE_COPILOT_POLICY_NAME.to_string(),
-            developer_instructions: developer_instructions.to_string(),
-            content_sha256: policy_content_sha256(
-                developer_instructions,
-                &required_runtime_roles,
-                &role_spawn_limits,
-                &required_mcp_servers,
-            ),
-        },
-        required_runtime_roles,
-        role_spawn_limits,
-        required_mcp_servers,
-    })
+        .any(|policy| policy.policy_id == selection.policy_id)
+    {
+        let package = supervisor::resolve(selection).map_err(map_catalog_error)?;
+        return Ok(from_package(
+            package,
+            SupervisorPolicySource::Repository,
+            None,
+        ));
+    }
+    let row = sqlx::query(
+        "SELECT id, release_spec, content_sha256 \
+         FROM supervisor_releases \
+         WHERE organization_id = $1 AND policy_id = $2 AND version = $3",
+    )
+    .bind(organization_id)
+    .bind(&selection.policy_id)
+    .bind(&selection.version)
+    .fetch_optional(db)
+    .await
+    .map_err(|_| SupervisorPolicyError::Database)?
+    .ok_or(SupervisorPolicyError::NotFound)?;
+    resolve_release_row(&row)
 }
 
-pub(crate) fn resolve_for_new_run(
+pub(crate) fn resolve_builtin(
     selection: &SupervisorPolicySelection,
 ) -> Result<ResolvedSupervisorPolicy, SupervisorPolicyError> {
-    resolve(selection)
+    let package = supervisor::resolve(selection).map_err(map_catalog_error)?;
+    Ok(from_package(
+        package,
+        SupervisorPolicySource::Repository,
+        None,
+    ))
 }
 
-/// Seal the complete executable Policy contract, not only the Supervisor prompt.
-fn policy_content_sha256(
-    developer_instructions: &str,
-    runtime_roles: &[PlatformRuntimeRole],
-    role_spawn_limits: &BTreeMap<String, u32>,
-    required_mcp_servers: &[RequiredMcpServer],
-) -> String {
-    let mut digest = Sha256::new();
-    update_digest_field(&mut digest, b"enterprise-supervisor-policy.v9");
-    update_digest_field(&mut digest, b"selected-capability-roots-exact");
-    update_digest_field(&mut digest, b"agent-role-allowlist-exact");
-    update_digest_field(&mut digest, b"child-agent-delegation-disabled");
-    update_digest_field(
-        &mut digest,
-        b"child-agent-multi-agent-v2-disabled-explicitly",
-    );
-    update_digest_field(&mut digest, b"ordinary-apps-disabled");
-    update_digest_field(&mut digest, b"ordinary-plugins-disabled");
-    update_digest_field(&mut digest, developer_instructions.as_bytes());
-    for role in runtime_roles {
-        for field in [
-            role.definition_id.as_bytes(),
-            role.version.as_bytes(),
-            role.name.as_bytes(),
-            role.content_sha256.as_bytes(),
-        ] {
-            update_digest_field(&mut digest, field);
-        }
+pub(crate) async fn resolve_release(
+    db: &PgPool,
+    organization_id: Uuid,
+    release_id: Uuid,
+) -> Result<ResolvedSupervisorPolicy, SupervisorPolicyError> {
+    let row = sqlx::query(
+        "SELECT id, release_spec, content_sha256 \
+         FROM supervisor_releases WHERE organization_id = $1 AND id = $2",
+    )
+    .bind(organization_id)
+    .bind(release_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|_| SupervisorPolicyError::Database)?
+    .ok_or(SupervisorPolicyError::NotFound)?;
+    resolve_release_row(&row)
+}
+
+fn from_package(
+    package: ResolvedSupervisorPackage,
+    source: SupervisorPolicySource,
+    release_id: Option<Uuid>,
+) -> ResolvedSupervisorPolicy {
+    ResolvedSupervisorPolicy {
+        snapshot: SupervisorPolicySnapshotInput {
+            policy_id: package.policy_id,
+            version: package.version,
+            display_name: package.display_name,
+            developer_instructions: package.developer_instructions,
+            content_sha256: package.content_sha256,
+            source,
+            release_id,
+        },
+        required_runtime_roles: package.required_runtime_roles,
+        role_spawn_limits: package.role_spawn_limits,
+        required_mcp_servers: package.required_mcp_servers,
+        runtime_requirements: package.runtime_requirements,
+        max_active_child_agents: package.max_active_child_agents,
     }
-    for (role, limit) in role_spawn_limits {
-        update_digest_field(&mut digest, role.as_bytes());
-        update_digest_field(&mut digest, &limit.to_be_bytes());
+}
+
+fn resolve_release_row(
+    row: &sqlx::postgres::PgRow,
+) -> Result<ResolvedSupervisorPolicy, SupervisorPolicyError> {
+    let release_id: Uuid = row.get("id");
+    let spec = serde_json::from_value::<SupervisorReleaseSpec>(row.get("release_spec"))
+        .map_err(|_| SupervisorPolicyError::Invalid("Release specification is invalid"))?;
+    let package = supervisor::validate_release(spec).map_err(map_catalog_error)?;
+    if package.content_sha256 != row.get::<String, _>("content_sha256") {
+        return Err(SupervisorPolicyError::Invalid(
+            "Release content hash does not match",
+        ));
     }
-    for server in required_mcp_servers {
-        update_digest_field(&mut digest, server.name.as_bytes());
-        for capability_root_id in &server.capability_root_ids {
-            update_digest_field(&mut digest, capability_root_id.as_bytes());
-        }
-        for tool in &server.tools {
-            update_digest_field(&mut digest, tool.as_bytes());
-        }
-    }
-    hex::encode(digest.finalize())
+    Ok(from_package(
+        package,
+        SupervisorPolicySource::UserRelease,
+        Some(release_id),
+    ))
 }
 
-fn update_digest_field(digest: &mut Sha256, value: &[u8]) {
-    digest.update((value.len() as u64).to_be_bytes());
-    digest.update(value);
+pub(crate) async fn resolve_for_new_run(
+    db: &PgPool,
+    organization_id: Uuid,
+    selection: &SupervisorPolicySelection,
+) -> Result<ResolvedSupervisorPolicy, SupervisorPolicyError> {
+    resolve(db, organization_id, selection).await
 }
 
-fn resolve_runtime_roles() -> Result<Vec<PlatformRuntimeRole>, SupervisorPolicyError> {
-    let published = agent_definition::platform_runtime_roles()
-        .map_err(|_| SupervisorPolicyError::Invalid("Agent Definitions are invalid"))?;
-    ENTERPRISE_COPILOT_RUNTIME_ROLE_REFS
-        .into_iter()
-        .map(|(definition_id, version, name)| {
-            published
-                .iter()
-                .find(|role| {
-                    role.definition_id == definition_id
-                        && role.version == version
-                        && role.name == name
-                })
-                .cloned()
-                .ok_or(SupervisorPolicyError::Invalid(
-                    "required Agent Definition is not published",
-                ))
-        })
-        .collect()
+pub(crate) fn is_reserved_builtin_policy_id(policy_id: &str) -> bool {
+    supervisor::list_published()
+        .is_ok_and(|policies| policies.iter().any(|policy| policy.policy_id == policy_id))
 }
 
-pub(crate) fn require_runtime_manifest(manifest: &Value) -> Result<(), SupervisorPolicyError> {
-    validate_runtime_manifest(manifest)
-}
-
-fn validate_runtime_manifest(value: &Value) -> Result<(), SupervisorPolicyError> {
-    let manifest = serde_json::from_value::<CapabilityManifest>(value.clone()).map_err(|_| {
-        SupervisorPolicyError::Capability(
-            "Codex Capability Manifest could not be validated".to_string(),
-        )
-    })?;
-    for (id, label) in REQUIRED_RUNTIME_CAPABILITIES {
+pub(crate) fn require_runtime_manifest(
+    manifest: &Value,
+    requirements: &[RuntimeCapabilityRequirement],
+) -> Result<(), SupervisorPolicyError> {
+    let manifest =
+        serde_json::from_value::<CapabilityManifest>(manifest.clone()).map_err(|_| {
+            SupervisorPolicyError::Capability(
+                "Codex Capability Manifest could not be validated".to_string(),
+            )
+        })?;
+    for requirement in requirements {
         let capability = manifest
             .capabilities
             .iter()
-            .find(|capability| capability.id == id)
+            .find(|capability| capability.id == requirement.capability_id)
             .ok_or_else(|| {
-                SupervisorPolicyError::Capability(format!("Codex did not declare {label} support"))
+                SupervisorPolicyError::Capability(format!(
+                    "Codex did not declare '{}' support",
+                    requirement.capability_id
+                ))
             })?;
-        validate_required_runtime_capability(capability, label)?;
+        validate_runtime_capability(capability, requirement)?;
     }
     Ok(())
 }
 
-fn validate_required_runtime_capability(
+fn validate_runtime_capability(
     capability: &CapabilityDeclaration,
-    label: &str,
+    requirement: &RuntimeCapabilityRequirement,
 ) -> Result<(), SupervisorPolicyError> {
-    if capability.version != REQUIRED_RUNTIME_CAPABILITY_VERSION {
+    if capability.version != requirement.version {
         return Err(SupervisorPolicyError::Capability(format!(
-            "Codex {label} capability version '{}' is unsupported",
-            capability.version,
+            "Codex '{}' capability version '{}' is unsupported",
+            requirement.capability_id, capability.version,
         )));
     }
     let enabled = match &capability.status {
@@ -218,30 +219,26 @@ fn validate_required_runtime_capability(
     };
     if !enabled {
         return Err(SupervisorPolicyError::Capability(format!(
-            "Codex {label} capability is unavailable"
+            "Codex '{}' capability is unavailable",
+            requirement.capability_id
         )));
     }
-    let exact_role_allowlist = capability
-        .limits
-        .get("exactRoleAllowlist")
-        .and_then(Value::as_bool)
-        == Some(true);
-    if capability.id == "agents.multi_agent" && !exact_role_allowlist {
-        return Err(SupervisorPolicyError::Capability(
-            "Codex multi-agent exact role allowlist is unavailable".to_string(),
-        ));
-    }
-    let exact_role_instance_limits = capability
-        .limits
-        .get("exactRoleInstanceLimits")
-        .and_then(Value::as_bool)
-        == Some(true);
-    if capability.id == "agents.multi_agent" && !exact_role_instance_limits {
-        return Err(SupervisorPolicyError::Capability(
-            "Codex multi-agent exact role instance limits are unavailable".to_string(),
-        ));
+    for (limit, required_value) in &requirement.required_limits {
+        if capability.limits.get(limit) != Some(required_value) {
+            return Err(SupervisorPolicyError::Capability(format!(
+                "Codex '{}' capability does not satisfy required limit '{}'",
+                requirement.capability_id, limit
+            )));
+        }
     }
     Ok(())
+}
+
+fn map_catalog_error(error: SupervisorCatalogError) -> SupervisorPolicyError {
+    match error {
+        SupervisorCatalogError::NotFound => SupervisorPolicyError::NotFound,
+        SupervisorCatalogError::Invalid(message) => SupervisorPolicyError::Invalid(message),
+    }
 }
 
 #[cfg(test)]

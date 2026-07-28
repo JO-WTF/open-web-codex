@@ -327,6 +327,73 @@ pub struct SupervisorPolicySummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SupervisorAgentSelection {
+    pub definition_id: String,
+    pub version: String,
+    pub spawn_limit: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SupervisorArtifactContractInput {
+    pub artifact_type: String,
+    pub producer_agent: String,
+    pub consumer_agents: Vec<String>,
+    pub required: bool,
+}
+
+/// Browser-authored Supervisor draft. Runtime Role names, MCP inventory and
+/// Runtime capability requirements are resolved by the platform.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SupervisorDraftRequest {
+    pub policy_id: String,
+    pub version: String,
+    pub display_name: String,
+    pub description: String,
+    pub responsibilities: Vec<String>,
+    pub developer_instructions: String,
+    pub agents: Vec<SupervisorAgentSelection>,
+    pub artifact_contracts: Vec<SupervisorArtifactContractInput>,
+    pub max_active_child_agents: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SupervisorValidationIssue {
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SupervisorValidationResult {
+    pub valid: bool,
+    pub content_sha256: Option<String>,
+    pub issues: Vec<SupervisorValidationIssue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SupervisorReleaseSummary {
+    pub id: Uuid,
+    pub policy_id: String,
+    pub version: String,
+    pub display_name: String,
+    pub description: String,
+    pub content_sha256: String,
+    pub published_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SupervisorDefinitionSummary {
+    pub id: Uuid,
+    pub policy_id: String,
+    pub display_name: String,
+    pub description: String,
+    pub owner_user_id: Uuid,
+    pub draft: Option<SupervisorDraftRequest>,
+    pub releases: Vec<SupervisorReleaseSummary>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SupervisorPolicyBinding {
     pub run_id: Uuid,
     pub task_id: Uuid,
@@ -347,6 +414,10 @@ pub struct AgentDefinitionSummary {
     pub display_name: String,
     pub description: String,
     pub runtime_role: String,
+    pub responsibilities: Vec<String>,
+    pub input_artifact_types: Vec<String>,
+    pub output_artifact_types: Vec<String>,
+    pub required_capabilities: Vec<String>,
 }
 
 /// Rebuildable, browser-safe view of one Runtime-owned Thread in a root Run's

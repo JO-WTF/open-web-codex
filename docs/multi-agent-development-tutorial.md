@@ -274,9 +274,9 @@ Agent 会计算新方案，不是一个只做格式检查的 Reviewer。
 
 真实平台合同位于：
 
-- [`enterprise-supervisor-copilot-v1.7.md`](../apps/web/server/resources/supervisor-policies/enterprise-supervisor-copilot-v1.7.md)
-- [`data-agent-v1.6.json`](../apps/web/server/resources/agent-definitions/data-agent-v1.6.json)
-- [`network-planning-agent-v1.5.json`](../apps/web/server/resources/agent-definitions/network-planning-agent-v1.5.json)
+- [`manifest.json`](../capabilities/supervisors/enterprise-supervisor-copilot/1.7.0/manifest.json)
+- [`definition.json`](../capabilities/agents/enterprise-data-agent/1.6.0/definition.json)
+- [`definition.json`](../capabilities/agents/enterprise-network-planning-agent/1.5.0/definition.json)
 
 详细教程见：
 

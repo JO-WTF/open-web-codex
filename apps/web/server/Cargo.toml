@@ -14,6 +14,7 @@ open-web-codex-profile-host = { path = "../crates/profile-host" }
 open-web-codex-profile-registry = { path = "../crates/profile-registry" }
 open-web-codex-provider-service = { path = "../crates/provider-service" }
 open-web-codex-secret-store = { path = "../crates/secret-store" }
+open-web-codex-supervisor-catalog = { path = "../crates/supervisor-catalog" }
 open-web-codex-git-runtime = { path = "../crates/git-runtime" }
 open-web-codex-run-orchestrator = { path = "../crates/run-orchestrator" }
 

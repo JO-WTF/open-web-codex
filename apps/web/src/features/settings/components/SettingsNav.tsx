@@ -10,6 +10,7 @@ import ExternalLink from "lucide-react/dist/esm/icons/external-link";
 import Layers from "lucide-react/dist/esm/icons/layers";
 import ServerCog from "lucide-react/dist/esm/icons/server-cog";
 import Bot from "lucide-react/dist/esm/icons/bot";
+import Network from "lucide-react/dist/esm/icons/network";
 import Info from "lucide-react/dist/esm/icons/info";
 import { PanelNavItem, PanelNavList } from "@/features/design-system/components/panel/PanelPrimitives";
 import type { CodexSection } from "./settingsTypes";
@@ -117,6 +118,15 @@ export function SettingsNav({
           onClick={() => onSelectSection("agents")}
         >
           Agents
+        </PanelNavItem>
+        <PanelNavItem
+          className="settings-nav"
+          icon={<Network aria-hidden />}
+          active={activeSection === "supervisors"}
+          showDisclosure={showDisclosure}
+          onClick={() => onSelectSection("supervisors")}
+        >
+          Supervisors
         </PanelNavItem>
         <PanelNavItem
           className="settings-nav"

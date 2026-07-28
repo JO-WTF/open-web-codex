@@ -1,4 +1,3 @@
-mod agent_definition;
 mod event_projection;
 mod middleware;
 mod routes;
@@ -211,6 +210,7 @@ async fn main() -> anyhow::Result<()> {
         supervisor_runtime_preflight::SupervisorRuntimePreflight::new(
             adapter.clone(),
             profile_binding.clone(),
+            state.db.clone(),
         ),
     );
     let orchestrator = Arc::new(RunOrchestrator::new(

@@ -1462,6 +1462,7 @@ dependencies = [
  "open-web-codex-provider-service",
  "open-web-codex-run-orchestrator",
  "open-web-codex-secret-store",
+ "open-web-codex-supervisor-catalog",
  "rand 0.8.7",
  "reqwest",
  "serde",
@@ -1479,6 +1480,20 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "open-web-codex-supervisor-catalog"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "open-web-codex-adapter",
+ "open-web-codex-platform-contracts",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror",
+ "toml_edit",
 ]
 
 [[package]]

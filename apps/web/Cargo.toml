@@ -13,6 +13,7 @@ members = [
     "crates/provider-service",
     "crates/run-orchestrator",
     "crates/secret-store",
+    "crates/supervisor-catalog",
     "server",
 ]
 

@@ -14,8 +14,21 @@ use crate::supervisor_policy;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
 
-pub async fn list_published(_auth: AuthenticatedUser) -> ApiResult<Vec<SupervisorPolicySummary>> {
-    Ok(Json(supervisor_policy::list_published()))
+pub async fn list_published(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+) -> ApiResult<Vec<SupervisorPolicySummary>> {
+    supervisor_policy::list_published(&state.db, auth.organization_id)
+        .await
+        .map(Json)
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(PlatformError::internal(
+                    "published Supervisor Packages are invalid",
+                )),
+            )
+        })
 }
 
 pub async fn get_run_binding(

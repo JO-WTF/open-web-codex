@@ -203,6 +203,8 @@ async fn independent_workspace_is_reused_across_run_lifecycles() {
             developer_instructions: "Coordinate the approved agents.".to_string(),
             content_sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                 .to_string(),
+            source: open_web_codex_run_orchestrator::SupervisorPolicySource::Repository,
+            release_id: None,
         }),
     };
     let enqueued = first.enqueue_run(request.clone()).await.unwrap();

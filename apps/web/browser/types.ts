@@ -83,6 +83,59 @@ export type AgentDefinitionSummary = {
   display_name: string;
   description: string;
   runtime_role: string;
+  responsibilities: string[];
+  input_artifact_types: string[];
+  output_artifact_types: string[];
+  required_capabilities: string[];
+};
+
+export type SupervisorAgentSelection = {
+  definition_id: string;
+  version: string;
+  spawn_limit: number;
+};
+
+export type SupervisorArtifactContractInput = {
+  artifact_type: string;
+  producer_agent: string;
+  consumer_agents: string[];
+  required: boolean;
+};
+
+export type SupervisorDraftRequest = {
+  policy_id: string;
+  version: string;
+  display_name: string;
+  description: string;
+  responsibilities: string[];
+  developer_instructions: string;
+  agents: SupervisorAgentSelection[];
+  artifact_contracts: SupervisorArtifactContractInput[];
+  max_active_child_agents: number;
+};
+
+export type SupervisorValidationResult = {
+  valid: boolean;
+  content_sha256: string | null;
+  issues: Array<{ code: string; message: string }>;
+};
+
+export type SupervisorReleaseSummary = SupervisorPolicySummary & {
+  id: string;
+  content_sha256: string;
+  published_at: string;
+};
+
+export type SupervisorDefinitionSummary = {
+  id: string;
+  policy_id: string;
+  display_name: string;
+  description: string;
+  owner_user_id: string;
+  draft: SupervisorDraftRequest | null;
+  releases: SupervisorReleaseSummary[];
+  created_at: string;
+  updated_at: string;
 };
 
 export type RuntimeAgentProjection = {

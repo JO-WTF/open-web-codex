@@ -88,8 +88,8 @@ async fn ensure_policy_snapshot(
     let inserted = sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO supervisor_policy_snapshots \
          (organization_id, policy_id, version, display_name, developer_instructions, \
-          content_sha256) \
-         VALUES ($1, $2, $3, $4, $5, $6) \
+          content_sha256, source, release_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
          ON CONFLICT (organization_id, policy_id, version) DO NOTHING \
          RETURNING id",
     )
@@ -99,6 +99,8 @@ async fn ensure_policy_snapshot(
     .bind(&requested.display_name)
     .bind(&requested.developer_instructions)
     .bind(&requested.content_sha256)
+    .bind(requested.source.as_str())
+    .bind(requested.release_id)
     .fetch_optional(&mut **transaction)
     .await?;
     if let Some(snapshot_id) = inserted {
@@ -106,7 +108,7 @@ async fn ensure_policy_snapshot(
     }
 
     let existing = sqlx::query(
-        "SELECT id, display_name, developer_instructions, content_sha256 \
+        "SELECT id, display_name, developer_instructions, content_sha256, source, release_id \
          FROM supervisor_policy_snapshots \
          WHERE organization_id = $1 AND policy_id = $2 AND version = $3",
     )
@@ -118,6 +120,8 @@ async fn ensure_policy_snapshot(
     if existing.get::<String, _>("display_name") != requested.display_name
         || existing.get::<String, _>("developer_instructions") != requested.developer_instructions
         || existing.get::<String, _>("content_sha256") != requested.content_sha256
+        || existing.get::<String, _>("source") != requested.source.as_str()
+        || existing.get::<Option<Uuid>, _>("release_id") != requested.release_id
     {
         return Err(RunOrchestratorError::Conflict(format!(
             "Supervisor Policy '{}@{}' already has different immutable content",
@@ -163,6 +167,15 @@ fn validate_snapshot(snapshot: &SupervisorPolicySnapshotInput) -> Result<(), Run
     {
         return Err(RunOrchestratorError::Invalid(
             "Supervisor Policy digest is invalid".to_string(),
+        ));
+    }
+    if (snapshot.source == crate::SupervisorPolicySource::Repository
+        && snapshot.release_id.is_some())
+        || (snapshot.source == crate::SupervisorPolicySource::UserRelease
+            && snapshot.release_id.is_none())
+    {
+        return Err(RunOrchestratorError::Invalid(
+            "Supervisor Policy source is invalid".to_string(),
         ));
     }
     Ok(())

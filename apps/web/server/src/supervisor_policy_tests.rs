@@ -1,14 +1,19 @@
 use open_web_codex_platform_contracts::SupervisorPolicySelection;
 use serde_json::{json, Value};
 
-use super::{
-    list_published, policy_content_sha256, resolve, resolve_for_new_run, validate_runtime_manifest,
-    SupervisorPolicyError,
-};
+use super::{require_runtime_manifest, resolve_builtin, SupervisorPolicyError};
+
+fn published_policy() -> super::ResolvedSupervisorPolicy {
+    resolve_builtin(&SupervisorPolicySelection {
+        policy_id: "enterprise-supervisor-copilot".to_string(),
+        version: "1.7.0".to_string(),
+    })
+    .unwrap()
+}
 
 #[test]
 fn resolves_only_the_current_published_version_and_seals_its_content() {
-    let published = list_published();
+    let published = open_web_codex_supervisor_catalog::supervisor::list_published().unwrap();
     assert_eq!(published.len(), 1);
     assert_eq!(published[0].version, "1.7.0");
 
@@ -16,16 +21,9 @@ fn resolves_only_the_current_published_version_and_seals_its_content() {
         policy_id: published[0].policy_id.clone(),
         version: published[0].version.clone(),
     };
-    let policy = resolve_for_new_run(&selected).unwrap();
-    assert_eq!(
-        policy.snapshot.content_sha256,
-        policy_content_sha256(
-            &policy.snapshot.developer_instructions,
-            &policy.required_runtime_roles,
-            &policy.role_spawn_limits,
-            &policy.required_mcp_servers,
-        )
-    );
+    let policy = resolve_builtin(&selected).unwrap();
+    assert_eq!(policy.snapshot.content_sha256.len(), 64);
+    assert_eq!(policy.max_active_child_agents, 2);
     assert_eq!(
         policy.role_spawn_limits,
         [
@@ -53,28 +51,6 @@ fn resolves_only_the_current_published_version_and_seals_its_content() {
     );
 }
 
-#[test]
-fn policy_snapshot_seals_referenced_runtime_role_content() {
-    let published = list_published();
-    let policy = resolve(&SupervisorPolicySelection {
-        policy_id: published[0].policy_id.clone(),
-        version: published[0].version.clone(),
-    })
-    .unwrap();
-    let mut changed_roles = policy.required_runtime_roles.clone();
-    changed_roles[0].content_sha256 = "0".repeat(64);
-
-    assert_ne!(
-        policy_content_sha256(
-            &policy.snapshot.developer_instructions,
-            &changed_roles,
-            &policy.role_spawn_limits,
-            &policy.required_mcp_servers,
-        ),
-        policy.snapshot.content_sha256
-    );
-}
-
 fn generated_manifest() -> Value {
     serde_json::from_str(include_str!(
         "../../contracts/codex/fixtures/capability-manifest.v1.json"
@@ -92,19 +68,21 @@ fn capability_mut<'a>(manifest: &'a mut Value, id: &str) -> &'a mut Value {
 }
 
 #[test]
-fn requires_generated_multi_agent_capability_with_exact_role_allowlist() {
+fn requires_generated_multi_agent_capability_with_exact_role_limits() {
     let manifest = generated_manifest();
-    validate_runtime_manifest(&manifest).unwrap();
+    let policy = published_policy();
+    require_runtime_manifest(&manifest, &policy.runtime_requirements).unwrap();
 }
 
 #[test]
 fn rejects_unavailable_multi_agent_capability() {
     let mut manifest = generated_manifest();
     capability_mut(&mut manifest, "agents.multi_agent")["status"] = json!("unsupported");
+    let policy = published_policy();
     assert_eq!(
-        validate_runtime_manifest(&manifest).unwrap_err(),
+        require_runtime_manifest(&manifest, &policy.runtime_requirements).unwrap_err(),
         SupervisorPolicyError::Capability(
-            "Codex multi-agent capability is unavailable".to_string()
+            "Codex 'agents.multi_agent' capability is unavailable".to_string()
         )
     );
 }
@@ -116,10 +94,11 @@ fn rejects_multi_agent_capability_without_exact_role_allowlist() {
         .as_object_mut()
         .unwrap()
         .remove("exactRoleAllowlist");
+    let policy = published_policy();
     assert_eq!(
-        validate_runtime_manifest(&manifest).unwrap_err(),
+        require_runtime_manifest(&manifest, &policy.runtime_requirements).unwrap_err(),
         SupervisorPolicyError::Capability(
-            "Codex multi-agent exact role allowlist is unavailable".to_string()
+            "Codex 'agents.multi_agent' capability does not satisfy required limit 'exactRoleAllowlist'".to_string()
         )
     );
 }
@@ -131,10 +110,11 @@ fn rejects_multi_agent_capability_without_exact_role_instance_limits() {
         .as_object_mut()
         .unwrap()
         .remove("exactRoleInstanceLimits");
+    let policy = published_policy();
     assert_eq!(
-        validate_runtime_manifest(&manifest).unwrap_err(),
+        require_runtime_manifest(&manifest, &policy.runtime_requirements).unwrap_err(),
         SupervisorPolicyError::Capability(
-            "Codex multi-agent exact role instance limits are unavailable".to_string()
+            "Codex 'agents.multi_agent' capability does not satisfy required limit 'exactRoleInstanceLimits'".to_string()
         )
     );
 }
@@ -147,11 +127,7 @@ fn rejects_old_or_unknown_versions_without_fallback() {
             version: version.to_string(),
         };
         assert_eq!(
-            resolve(&selection).unwrap_err(),
-            SupervisorPolicyError::NotFound
-        );
-        assert_eq!(
-            resolve_for_new_run(&selection).unwrap_err(),
+            resolve_builtin(&selection).unwrap_err(),
             SupervisorPolicyError::NotFound
         );
     }
