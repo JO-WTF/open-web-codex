@@ -7,6 +7,7 @@ import Puzzle from "lucide-react/dist/esm/icons/puzzle";
 import ServerCog from "lucide-react/dist/esm/icons/server-cog";
 import X from "lucide-react/dist/esm/icons/x";
 import { SettingsAgentCatalogSection } from "@/features/settings/components/sections/SettingsAgentCatalogSection";
+import { AgentStudioCreateButton } from "@/features/settings/components/sections/AgentStudioControls";
 import { SettingsSupervisorsSection } from "@/features/settings/components/sections/SettingsSupervisorsSection";
 import { useSettingsAgentCatalogSection } from "@/features/settings/hooks/useSettingsAgentCatalogSection";
 import { useSettingsSupervisorsSection } from "@/features/settings/hooks/useSettingsSupervisorsSection";
@@ -223,14 +224,12 @@ export default function AgentStudioDialog({
                 actually enabled in the selected Thread.
               </div>
               <div className="settings-agents-actions settings-studio-page-actions">
-                <button
-                  type="button"
-                  className="primary"
+                <AgentStudioCreateButton
                   disabled
                   title="Safe MCP authoring and isolated validation are not available yet."
                 >
                   New MCP server
-                </button>
+                </AgentStudioCreateButton>
               </div>
               {capabilityCatalogLoading ? (
                 <div className="web-agent-studio-empty">Loading MCP directory…</div>
@@ -294,14 +293,12 @@ export default function AgentStudioDialog({
                 remains Thread-specific and is shown in MCP.
               </div>
               <div className="settings-agents-actions settings-studio-page-actions">
-                <button
-                  type="button"
-                  className="primary"
+                <AgentStudioCreateButton
                   disabled
                   title="Capability package creation requires safe validation and publication."
                 >
                   New capability package
-                </button>
+                </AgentStudioCreateButton>
               </div>
               {capabilityCatalogLoading ? (
                 <div className="web-agent-studio-empty">Loading capability directory…</div>

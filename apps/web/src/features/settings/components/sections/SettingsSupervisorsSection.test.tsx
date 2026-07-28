@@ -91,7 +91,13 @@ describe("SettingsSupervisorsSection", () => {
 
     expect(screen.getByText("Supervisor directory")).toBeTruthy();
     expect(screen.queryByLabelText("Policy ID")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "New Supervisor" }));
+    const newSupervisorButton = screen.getByRole("button", {
+      name: "New Supervisor",
+    });
+    expect(
+      newSupervisorButton.classList.contains("settings-studio-create-button"),
+    ).toBe(true);
+    fireEvent.click(newSupervisorButton);
     expect(screen.getByLabelText("Policy ID")).toBeTruthy();
     expect(screen.queryByText("Supervisor directory")).toBeNull();
     fireEvent.click(
@@ -178,9 +184,12 @@ describe("SettingsSupervisorsSection", () => {
     fireEvent.change(screen.getByLabelText("Responsibilities"), {
       target: { value: "Coordinate agents\nPublish a recommendation" },
     });
-    expect(screen.getByText("How to define a useful Supervisor")).toBeTruthy();
-    expect(screen.getByText("Fixed platform governance")).toBeTruthy();
-    expect(screen.getByText("Your custom orchestration")).toBeTruthy();
+    expect(screen.queryByText("How to define a useful Supervisor")).toBeNull();
+    expect(screen.getByLabelText("Help for Policy ID")).toBeTruthy();
+    expect(screen.getByLabelText("Help for Allowed Agents")).toBeTruthy();
+    expect(
+      screen.getByText(/custom instructions cannot override/),
+    ).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Custom Supervisor instructions"), {
       target: { value: "Delegate data preparation before scenario analysis." },
     });

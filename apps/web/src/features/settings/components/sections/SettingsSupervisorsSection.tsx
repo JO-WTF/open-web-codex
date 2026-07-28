@@ -11,6 +11,10 @@ import {
   SettingsSubsection,
 } from "@/features/design-system/components/settings/SettingsPrimitives";
 import type { SettingsSupervisorsSectionProps } from "@settings/hooks/useSettingsSupervisorsSection";
+import {
+  AgentStudioCreateButton,
+  AgentStudioFieldHeading,
+} from "./AgentStudioControls";
 
 type SettingsSupervisorsSectionComponentProps =
   SettingsSupervisorsSectionProps & {
@@ -356,9 +360,9 @@ export function SettingsSupervisorsSection({
             </button>
           ) : (
             <>
-              <button type="button" className="primary" onClick={createDefinition}>
+              <AgentStudioCreateButton onClick={createDefinition}>
                 New Supervisor
-              </button>
+              </AgentStudioCreateButton>
               <button type="button" className="ghost" onClick={onRefresh} disabled={isLoading}>
                 {isLoading ? "Loading…" : "Refresh"}
               </button>
@@ -608,56 +612,15 @@ export function SettingsSupervisorsSection({
         title={editingDefinitionId ? "Edit draft" : "Create Supervisor draft"}
         subtitle="A policy id is permanent. Published versions cannot be edited."
       />
-      <details className="settings-authoring-guide" open>
-        <summary>How to define a useful Supervisor</summary>
-        <div className="settings-authoring-guide-split">
-          <section>
-            <strong>Fixed platform governance</strong>
-            <span>
-              The exact Agent catalog, Runtime capabilities, authorization,
-              approvals, durable Artifact identity, and execution state remain
-              authoritative and cannot be changed by instructions.
-            </span>
-          </section>
-          <section>
-            <strong>Your custom orchestration</strong>
-            <span>
-              Define the business objective, decomposition and delegation order,
-              evidence requirements, conflict handling, stop or partial-result
-              conditions, and final report structure.
-            </span>
-          </section>
-        </div>
-        <ol>
-          <li>
-            <strong>Choose exact published Agents.</strong>
-            <span>
-              Select only the roles needed for this workflow; capabilities come
-              from them.
-            </span>
-          </li>
-          <li>
-            <strong>Review every handoff.</strong>
-            <span>
-              A deliverable should identify a real producer and a consumer that
-              accepts the same Artifact type.
-            </span>
-          </li>
-          <li>
-            <strong>Bound concurrency.</strong>
-            <span>
-              Set the smallest active-Agent limit that permits the intended
-              workflow and preserves dependency order.
-            </span>
-          </li>
-        </ol>
-      </details>
       <div className="settings-field settings-supervisor-editor">
         <div className="settings-supervisor-grid">
           <label className="settings-label">
-            Policy ID
+            <AgentStudioFieldHeading help="Use a stable lowercase identifier with hyphens. It becomes permanent after the draft is created.">
+              Policy ID
+            </AgentStudioFieldHeading>
             <input
               className="settings-input"
+              aria-label="Policy ID"
               value={draft.policy_id}
               onChange={(event) =>
                 setDraft((current) => ({
@@ -670,9 +633,12 @@ export function SettingsSupervisorsSection({
             />
           </label>
           <label className="settings-label">
-            Version
+            <AgentStudioFieldHeading help="Use the next semantic version. Published Supervisor definitions are immutable and resolved by exact version.">
+              Version
+            </AgentStudioFieldHeading>
             <input
               className="settings-input"
+              aria-label="Version"
               value={draft.version}
               onChange={(event) =>
                 setDraft((current) => ({
@@ -685,9 +651,12 @@ export function SettingsSupervisorsSection({
           </label>
         </div>
         <label className="settings-label">
-          Display name
+          <AgentStudioFieldHeading help="The concise name users see when choosing a Supervisor for a Workspace or Thread.">
+            Display name
+          </AgentStudioFieldHeading>
           <input
             className="settings-input"
+            aria-label="Display name"
             value={draft.display_name}
             onChange={(event) =>
               setDraft((current) => ({
@@ -699,9 +668,12 @@ export function SettingsSupervisorsSection({
           />
         </label>
         <label className="settings-label">
-          Description
+          <AgentStudioFieldHeading help="Describe the final business outcome this Supervisor is responsible for delivering.">
+            Description
+          </AgentStudioFieldHeading>
           <textarea
             className="settings-agents-textarea settings-agents-textarea--compact"
+            aria-label="Description"
             rows={2}
             value={draft.description}
             onChange={(event) =>
@@ -714,9 +686,12 @@ export function SettingsSupervisorsSection({
           />
         </label>
         <label className="settings-label">
-          Responsibilities
+          <AgentStudioFieldHeading help="Enter one orchestration responsibility per line, such as decomposition, evidence review, or final synthesis.">
+            Responsibilities
+          </AgentStudioFieldHeading>
           <textarea
             className="settings-agents-textarea settings-agents-textarea--compact"
+            aria-label="Responsibilities"
             rows={4}
             value={responsibilitiesText}
             onChange={(event) => setResponsibilitiesText(event.target.value)}
@@ -726,9 +701,12 @@ export function SettingsSupervisorsSection({
           />
         </label>
         <label className="settings-label">
-          Platform behavior contract
+          <AgentStudioFieldHeading help="Select the immutable platform governance contract. It defines boundaries that custom instructions cannot override.">
+            Platform behavior contract
+          </AgentStudioFieldHeading>
           <select
             className="settings-input"
+            aria-label="Platform behavior contract"
             value={`${draft.instruction_policy.policy_id}@${draft.instruction_policy.version}`}
             onChange={(event) => {
               const selected = instructionPolicies.find(
@@ -776,9 +754,12 @@ export function SettingsSupervisorsSection({
           </div>
         )}
         <label className="settings-label">
-          Custom Supervisor instructions
+          <AgentStudioFieldHeading help="Define delegation order, evidence requirements, conflict handling, stop conditions, partial-result behavior, and final report structure.">
+            Custom Supervisor instructions
+          </AgentStudioFieldHeading>
           <textarea
             className="settings-agents-textarea"
+            aria-label="Custom Supervisor instructions"
             rows={8}
             value={draft.custom_instructions}
             onChange={(event) =>
@@ -791,7 +772,11 @@ export function SettingsSupervisorsSection({
           />
         </label>
 
-        <div className="settings-supervisor-picker-title">Allowed Agents</div>
+        <div className="settings-supervisor-picker-title">
+          <AgentStudioFieldHeading help="Choose exact published Agents needed by this workflow. Their reviewed definitions supply all Runtime capabilities.">
+            Allowed Agents
+          </AgentStudioFieldHeading>
+        </div>
         {agents.map((agent) => {
           const selected = selectedAgentIds.has(agentIdentity(agent));
           const selection = draft.agents.find(
@@ -829,7 +814,9 @@ export function SettingsSupervisorsSection({
               </label>
               {selection && (
                 <label className="settings-supervisor-inline-number">
-                  Spawn limit
+                  <AgentStudioFieldHeading help="Maximum concurrent instances of this exact Agent role within one Supervisor execution.">
+                    Spawn limit
+                  </AgentStudioFieldHeading>
                   <input
                     className="settings-input settings-input--compact"
                     type="number"
@@ -855,7 +842,9 @@ export function SettingsSupervisorsSection({
         {availableContracts.length > 0 && (
           <>
             <div className="settings-supervisor-picker-title">
-              Required deliverables
+              <AgentStudioFieldHeading help="Select typed Artifacts that must be handed from their declared producer to compatible consumers.">
+                Required deliverables
+              </AgentStudioFieldHeading>
             </div>
             {availableContracts.map((contract) => {
               const key = `${contract.producer_agent}:${contract.artifact_type}`;
@@ -948,9 +937,12 @@ export function SettingsSupervisorsSection({
         )}
 
         <label className="settings-label">
-          Maximum active child Agents
+          <AgentStudioFieldHeading help="Global concurrency limit across all child Agents. Keep it as small as the workflow dependency graph permits.">
+            Maximum active child Agents
+          </AgentStudioFieldHeading>
           <input
             className="settings-input settings-input--compact"
+            aria-label="Maximum active child Agents"
             type="number"
             min={1}
             max={16}

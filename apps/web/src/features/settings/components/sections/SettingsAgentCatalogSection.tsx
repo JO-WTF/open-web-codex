@@ -8,6 +8,10 @@ import {
   SettingsSubsection,
 } from "@/features/design-system/components/settings/SettingsPrimitives";
 import type { SettingsAgentCatalogSectionProps } from "@settings/hooks/useSettingsAgentCatalogSection";
+import {
+  AgentStudioCreateButton,
+  AgentStudioFieldHeading,
+} from "./AgentStudioControls";
 
 type SettingsAgentCatalogSectionComponentProps =
   SettingsAgentCatalogSectionProps & {
@@ -178,9 +182,9 @@ export function SettingsAgentCatalogSection({
             </button>
           ) : (
             <>
-              <button type="button" className="primary" onClick={createDefinition}>
+              <AgentStudioCreateButton onClick={createDefinition}>
                 New Agent
-              </button>
+              </AgentStudioCreateButton>
               <button type="button" className="ghost" onClick={onRefresh} disabled={isLoading}>
                 {isLoading ? "Loading…" : "Refresh"}
               </button>
@@ -292,50 +296,15 @@ export function SettingsAgentCatalogSection({
         title={editingDefinitionId ? "Edit Agent draft" : "Create Agent draft"}
         subtitle="The Agent ID is permanent. Published versions cannot be edited."
       />
-      <details className="settings-authoring-guide" open>
-        <summary>How to define a useful Agent</summary>
-        <ol>
-          <li>
-            <strong>Name one bounded responsibility.</strong>
-            <span>
-              Use a stable ID and describe an observable outcome, not a department or a vague
-              persona.
-            </span>
-          </li>
-          <li>
-            <strong>Write operational instructions.</strong>
-            <span>
-              State the method, required evidence, limits, stop conditions, and exact delivery
-              format. Do not repeat Tool names as authority.
-            </span>
-          </li>
-          <li>
-            <strong>Select the reviewed capability boundary.</strong>
-            <span>
-              The template fixes the Runtime Tools and data access. Instructions cannot add hidden
-              capabilities.
-            </span>
-          </li>
-          <li>
-            <strong>Declare only real Artifact contracts.</strong>
-            <span>
-              Keep an input only when the Agent consumes it and an output only when the Agent can
-              actually publish it.
-            </span>
-          </li>
-        </ol>
-        <div className="settings-authoring-guide-note">
-          <strong>Fixed by the platform</strong>
-          Runtime discovery, Tool access, MCP configuration, authorization, approvals, and
-          execution status are not controlled by this form.
-        </div>
-      </details>
       <div className="settings-field settings-supervisor-editor">
         <div className="settings-supervisor-grid">
           <label className="settings-label">
-            Agent ID
+            <AgentStudioFieldHeading help="Use a stable lowercase identifier with hyphens. It becomes permanent after the draft is created.">
+              Agent ID
+            </AgentStudioFieldHeading>
             <input
               className="settings-input"
+              aria-label="Agent ID"
               value={draft.definition_id}
               onChange={(event) =>
                 setDraft((current) => ({ ...current, definition_id: event.target.value }))
@@ -345,9 +314,12 @@ export function SettingsAgentCatalogSection({
             />
           </label>
           <label className="settings-label">
-            Version
+            <AgentStudioFieldHeading help="Use the next semantic version for this immutable definition. Published versions are never overwritten.">
+              Version
+            </AgentStudioFieldHeading>
             <input
               className="settings-input"
+              aria-label="Version"
               value={draft.version}
               onChange={(event) =>
                 setDraft((current) => ({ ...current, version: event.target.value }))
@@ -357,9 +329,12 @@ export function SettingsAgentCatalogSection({
           </label>
         </div>
         <label className="settings-label">
-          Display name
+          <AgentStudioFieldHeading help="The concise human-readable name shown in directories and Supervisor selection.">
+            Display name
+          </AgentStudioFieldHeading>
           <input
             className="settings-input"
+            aria-label="Display name"
             value={draft.display_name}
             onChange={(event) =>
               setDraft((current) => ({ ...current, display_name: event.target.value }))
@@ -368,9 +343,12 @@ export function SettingsAgentCatalogSection({
           />
         </label>
         <label className="settings-label">
-          Description
+          <AgentStudioFieldHeading help="Describe the observable outcome this Agent owns in one or two sentences.">
+            Description
+          </AgentStudioFieldHeading>
           <textarea
             className="settings-agents-textarea settings-agents-textarea--compact"
+            aria-label="Description"
             rows={2}
             value={draft.description}
             onChange={(event) =>
@@ -380,9 +358,12 @@ export function SettingsAgentCatalogSection({
           />
         </label>
         <label className="settings-label">
-          Responsibilities
+          <AgentStudioFieldHeading help="Enter one bounded responsibility per line. Avoid broad personas or department-level ownership.">
+            Responsibilities
+          </AgentStudioFieldHeading>
           <textarea
             className="settings-agents-textarea settings-agents-textarea--compact"
+            aria-label="Responsibilities"
             rows={4}
             value={responsibilitiesText}
             onChange={(event) => setResponsibilitiesText(event.target.value)}
@@ -390,9 +371,12 @@ export function SettingsAgentCatalogSection({
           />
         </label>
         <label className="settings-label">
-          Custom Agent instructions
+          <AgentStudioFieldHeading help="Define the method, required evidence, limits, stop conditions, and delivery format. Instructions cannot grant Tools or data access.">
+            Custom Agent instructions
+          </AgentStudioFieldHeading>
           <textarea
             className="settings-agents-textarea"
+            aria-label="Custom Agent instructions"
             rows={8}
             value={draft.developer_instructions}
             onChange={(event) =>
@@ -405,9 +389,12 @@ export function SettingsAgentCatalogSection({
           />
         </label>
         <label className="settings-label">
-          Reviewed capability template
+          <AgentStudioFieldHeading help="Select the reviewed Runtime capability boundary. The template fixes available Tools and data access.">
+            Reviewed capability template
+          </AgentStudioFieldHeading>
           <select
             className="settings-select"
+            aria-label="Reviewed capability template"
             value={
               draft.capability_template.definition_id
                 ? `${draft.capability_template.definition_id}@${draft.capability_template.version}`
@@ -431,7 +418,11 @@ export function SettingsAgentCatalogSection({
                 <small>{selectedTemplate.required_capabilities.join(", ")}</small>
               </span>
             </div>
-            <div className="settings-supervisor-picker-title">Artifact contracts</div>
+            <div className="settings-supervisor-picker-title">
+              <AgentStudioFieldHeading help="Keep only Artifact types the Agent really consumes or can publish. These contracts govern Supervisor handoffs.">
+                Artifact contracts
+              </AgentStudioFieldHeading>
+            </div>
             {selectedTemplate.input_artifact_types.map((artifactType) => (
               <label className="settings-supervisor-option" key={`input:${artifactType}`}>
                 <input

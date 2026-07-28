@@ -46,7 +46,9 @@ describe("SettingsAgentCatalogSection", () => {
 
     expect(screen.getByText("Agent directory")).toBeTruthy();
     expect(screen.queryByLabelText("Agent ID")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "New Agent" }));
+    const newAgentButton = screen.getByRole("button", { name: "New Agent" });
+    expect(newAgentButton.classList.contains("settings-studio-create-button")).toBe(true);
+    fireEvent.click(newAgentButton);
     expect(screen.getByLabelText("Agent ID")).toBeTruthy();
     expect(screen.queryByText("Agent directory")).toBeNull();
     fireEvent.click(
@@ -71,8 +73,14 @@ describe("SettingsAgentCatalogSection", () => {
     fireEvent.change(screen.getByLabelText("Responsibilities"), {
       target: { value: "Review source coverage\nPublish validated data" },
     });
-    expect(screen.getByText("How to define a useful Agent")).toBeTruthy();
-    expect(screen.getByText("Fixed by the platform")).toBeTruthy();
+    expect(screen.queryByText("How to define a useful Agent")).toBeNull();
+    const agentIdHelp = screen.getByLabelText("Help for Agent ID");
+    fireEvent.click(agentIdHelp);
+    expect(document.activeElement).toBe(agentIdHelp);
+    expect(
+      screen.getByText(/It becomes permanent after the draft is created/),
+    ).toBeTruthy();
+    expect(screen.getByLabelText("Help for Custom Agent instructions")).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Custom Agent instructions"), {
       target: { value: "Use only reviewed data capabilities." },
     });

@@ -417,6 +417,117 @@
   gap: 6px;
 }
 
+.settings-studio-create-button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px 4px 5px;
+  border: 1px solid var(--border-accent-soft);
+  border-radius: 10px;
+  color: var(--text-emphasis);
+  background: color-mix(in srgb, var(--surface-active) 72%, var(--surface-card));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 5%);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.settings-studio-create-button:hover:not(:disabled) {
+  border-color: var(--border-accent);
+  background: color-mix(in srgb, var(--surface-active) 92%, var(--surface-card));
+  box-shadow: 0 8px 20px rgb(0 0 0 / 14%);
+}
+
+.settings-studio-create-button-icon {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-accent-soft);
+  border-radius: 7px;
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--surface-active) 82%, transparent);
+}
+
+.settings-studio-create-button:disabled {
+  border-style: dashed;
+  box-shadow: none;
+}
+
+.settings-field-heading {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  align-items: center;
+  gap: 5px;
+}
+
+.settings-field-help {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.settings-field-help-trigger {
+  display: inline-flex;
+  width: 17px;
+  height: 17px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--text-faint);
+  cursor: help;
+  outline: none;
+}
+
+.settings-field-help-trigger:hover,
+.settings-field-help-trigger:focus-visible {
+  color: var(--text-strong);
+  background: var(--surface-control-hover);
+  box-shadow: 0 0 0 1px var(--border-accent-soft);
+}
+
+.settings-field-help-tooltip {
+  position: absolute;
+  z-index: 80;
+  top: calc(100% + 8px);
+  left: -8px;
+  display: grid;
+  width: min(290px, calc(100vw - 56px));
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  color: var(--text-muted);
+  background: var(--surface-popover);
+  box-shadow: 0 14px 34px rgb(0 0 0 / 32%);
+  font-size: 10px;
+  font-weight: 450;
+  line-height: 1.45;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-3px);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease,
+    visibility 120ms ease;
+  visibility: hidden;
+}
+
+.settings-field-help-tooltip strong {
+  color: var(--text-strong);
+  font-size: 10px;
+  font-weight: 680;
+}
+
+.settings-field-help:hover .settings-field-help-tooltip,
+.settings-field-help:focus-within .settings-field-help-tooltip {
+  opacity: 1;
+  transform: translateY(0);
+  visibility: visible;
+}
+
 .settings-agents-builtins-help {
   margin-bottom: 8px;
 }
