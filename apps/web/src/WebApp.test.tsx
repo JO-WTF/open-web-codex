@@ -81,6 +81,7 @@ describe("WebApp workspace-first messaging", () => {
       version: "1.1.0",
       display_name: "Enterprise Supervisor Copilot",
       description: "Coordinates governed data analysis and warehouse-network planning agents.",
+      source: "repository",
     }]);
     client.getAccountRateLimits.mockResolvedValue({});
     client.getSupervisorOverview.mockResolvedValue(null);

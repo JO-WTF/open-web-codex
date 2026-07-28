@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import Settings from "lucide-react/dist/esm/icons/settings";
+import Bot from "lucide-react/dist/esm/icons/bot";
 import Moon from "lucide-react/dist/esm/icons/moon";
 import Sun from "lucide-react/dist/esm/icons/sun";
 import X from "lucide-react/dist/esm/icons/x";
@@ -10,6 +11,7 @@ import Brand from "./Brand";
 import Workspaces from "./Workspaces";
 import McpStatus from "./McpStatus";
 import RateLimitCard from "./RateLimitCard";
+import AgentStudioDialog from "./AgentStudioDialog";
 
 type ThreadInfo = {
   id: string;
@@ -50,6 +52,7 @@ type Props = {
   busy: boolean;
   theme: "light" | "dark";
   onToggleTheme: () => void;
+  onSupervisorCatalogChanged: () => void;
 };
 
 export default function Sidebar({
@@ -82,17 +85,21 @@ export default function Sidebar({
   busy,
   theme,
   onToggleTheme,
+  onSupervisorCatalogChanged,
 }: Props) {
   const [showSettings, setShowSettings] = useState(false);
+  const [showAgentStudio, setShowAgentStudio] = useState(false);
 
   useEffect(() => {
-    if (!showSettings) return;
+    if (!showSettings && !showAgentStudio) return;
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setShowSettings(false);
+      if (event.key !== "Escape") return;
+      setShowSettings(false);
+      setShowAgentStudio(false);
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [showSettings]);
+  }, [showAgentStudio, showSettings]);
 
   return (
     <aside className="web-sidebar">
@@ -127,6 +134,18 @@ export default function Sidebar({
       <div className="web-sidebar-bottom">
         {rateLimits && currentProviderId === "openai" ? <RateLimitCard rateLimits={rateLimits} /> : null}
         <div className="web-sidebar-actions">
+          <button
+            type="button"
+            className="web-agent-studio-toggle"
+            aria-label="Open Agent Studio"
+            aria-haspopup="dialog"
+            aria-expanded={showAgentStudio}
+            title="Agent Studio"
+            onClick={() => setShowAgentStudio(true)}
+          >
+            <Bot size={16} aria-hidden="true" />
+            <span>Agent Studio</span>
+          </button>
           <button
             type="button"
             className="web-theme-toggle"
@@ -202,6 +221,21 @@ export default function Sidebar({
               )}
             </div>
           </section>
+        </div>,
+        document.body,
+      )}
+      {showAgentStudio && createPortal(
+        <div
+          className="web-settings-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setShowAgentStudio(false);
+          }}
+        >
+          <AgentStudioDialog
+            mcpServers={mcpServers}
+            onClose={() => setShowAgentStudio(false)}
+            onSupervisorCatalogChanged={onSupervisorCatalogChanged}
+          />
         </div>,
         document.body,
       )}

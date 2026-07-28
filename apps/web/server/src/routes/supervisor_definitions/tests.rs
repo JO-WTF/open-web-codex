@@ -4,6 +4,7 @@ use axum::{
 };
 use open_web_codex_platform_contracts::{
     SupervisorAgentSelection, SupervisorArtifactContractInput, SupervisorDraftRequest,
+    SupervisorInstructionPolicyPublishRequest, SupervisorInstructionPolicySelection,
     SupervisorPolicySelection,
 };
 use open_web_codex_platform_store::AppState;
@@ -22,7 +23,11 @@ fn valid_draft() -> SupervisorDraftRequest {
             "Coordinate typed Agent handoffs.".to_string(),
             "Publish the final recommendation.".to_string(),
         ],
-        developer_instructions: "Delegate data preparation before network scenario analysis."
+        instruction_policy: SupervisorInstructionPolicySelection {
+            policy_id: "platform-supervisor-behavior".to_string(),
+            version: "1.0.0".to_string(),
+        },
+        custom_instructions: "Delegate data preparation before network scenario analysis."
             .to_string(),
         agents: vec![
             SupervisorAgentSelection {
@@ -141,7 +146,28 @@ async fn publishes_and_resolves_an_organization_scoped_release() {
         organization_role: "owner".to_string(),
     };
     let state = AppState::new(pool.clone());
-    let definition = create(State(state.clone()), auth.clone(), Json(valid_draft()))
+    let platform_policy = crate::routes::supervisor_instruction_policies::publish(
+        State(state.clone()),
+        auth.clone(),
+        Json(SupervisorInstructionPolicyPublishRequest {
+            policy_id: "platform-supervisor-behavior".to_string(),
+            version: "1.1.0".to_string(),
+            display_name: "Platform Supervisor behavior".to_string(),
+            description: "Updated platform behavior contract.".to_string(),
+            platform_instructions:
+                "Delegate only to authorized Runtime Roles and preserve typed Artifacts."
+                    .to_string(),
+        }),
+    )
+    .await
+    .unwrap()
+    .0;
+    let mut draft = valid_draft();
+    draft.instruction_policy = SupervisorInstructionPolicySelection {
+        policy_id: platform_policy.policy_id,
+        version: platform_policy.version,
+    };
+    let definition = create(State(state.clone()), auth.clone(), Json(draft))
         .await
         .unwrap()
         .0;

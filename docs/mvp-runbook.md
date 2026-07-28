@@ -107,11 +107,16 @@ DATABASE_URL="$(<.local/database-url)" ./scripts/start-all.sh
 ```bash
 ./scripts/start-all.sh
 ./scripts/run-local.sh --status
+./scripts/run-local.sh --restart
 ./scripts/start-all.sh --stop
 ```
 
-确认已有构建输出为最新时可使用 `--no-build`。日志位于
-`.local/open-web-codex/logs/server.log`。
+`--restart` 先用 Debug 增量编译完成变更，再停止并替换后台 Server，构建失败不会
+中断当前进程。确认已有构建输出为最新时可配合 `--no-build` 跳过浏览器、Server
+和仓库 Codex 构建。Release 构建仍关闭 Cargo 增量缓存。终端只展示阶段、耗时和
+最终服务面板；构建与环境准备详情位于
+`.local/open-web-codex/logs/run-local.log`，Server 输出位于同目录的
+`server.log`。失败时脚本直接显示相关日志尾部。
 
 ## 真实平台端到端验证
 

@@ -1,10 +1,12 @@
 import type {
   Approval,
   AgentDefinitionSummary,
+  AgentDefinitionDetail,
   AgentDefinitionDraftRequest,
   AgentDefinitionReleaseSummary,
   AgentDefinitionResourceSummary,
   AgentDefinitionValidationResult,
+  CapabilityPackageSummary,
   Me,
   Project,
   ProviderCatalog,
@@ -38,7 +40,11 @@ import type {
   CreateGitHubRepositoryResponse,
   MapsConfiguration,
   MapsProvider,
+  SupervisorInstructionPolicyDetail,
+  SupervisorInstructionPolicyPublishRequest,
+  SupervisorInstructionPolicySummary,
   SupervisorPolicyBinding,
+  SupervisorPolicyDetail,
   SupervisorPolicySelection,
   SupervisorPolicySummary,
   SupervisorDefinitionSummary,
@@ -373,8 +379,45 @@ export class PlatformClient {
     return this.request<SupervisorPolicySummary[]>("/api/supervisor-policies");
   }
 
+  getSupervisorPolicy(policyId: string, version: string) {
+    return this.request<SupervisorPolicyDetail>(
+      `/api/supervisor-policies/${encodeURIComponent(policyId)}/${encodeURIComponent(version)}`,
+    );
+  }
+
+  listSupervisorInstructionPolicies() {
+    return this.request<SupervisorInstructionPolicySummary[]>(
+      "/api/supervisor-instruction-policies",
+    );
+  }
+
+  getSupervisorInstructionPolicy(policyId: string, version: string) {
+    return this.request<SupervisorInstructionPolicyDetail>(
+      `/api/supervisor-instruction-policies/${encodeURIComponent(policyId)}/${encodeURIComponent(version)}`,
+    );
+  }
+
+  publishSupervisorInstructionPolicy(
+    request: SupervisorInstructionPolicyPublishRequest,
+  ) {
+    return this.request<SupervisorInstructionPolicyDetail>(
+      "/api/supervisor-instruction-policies",
+      { method: "POST", body: JSON.stringify(request) },
+    );
+  }
+
   listAgentDefinitions() {
     return this.request<AgentDefinitionSummary[]>("/api/agent-definitions");
+  }
+
+  listCapabilityPackages() {
+    return this.request<CapabilityPackageSummary[]>("/api/capability-packages");
+  }
+
+  getAgentDefinition(definitionId: string, version: string) {
+    return this.request<AgentDefinitionDetail>(
+      `/api/agent-definitions/${encodeURIComponent(definitionId)}/${encodeURIComponent(version)}`,
+    );
   }
 
   listAgentDefinitionResources() {

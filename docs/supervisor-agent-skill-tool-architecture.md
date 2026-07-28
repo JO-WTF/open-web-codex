@@ -121,7 +121,7 @@ Supervisor 运行在根 Thread 中。Codex 已经提供创建子 Agent、发送�
 Run；浏览器不能提交一段任意 Prompt 来替换它。Workspace 中的通用 Governed
 Supervisor 入口读取服务端发布目录并让用户选择 Policy，不绑定任何领域 Policy
 ID、版本或 Agent 顺序。当前供应链顺序只属于
-`enterprise-supervisor-copilot@1.7.0` 这一可选 Policy，服务端不发布或解析旧版本。
+`enterprise-supervisor-copilot@1.8.0` 这一可选 Policy，服务端不发布或解析旧版本。
 当前 Policy 通过 Runtime 的 exact Agent Role allowlist 和 per-Role instance limit
 约束模型可见目录、执行入口与驻留实例数，并通过 Role 配置关闭子 Agent 继续委派；
 提示词不承担授权职责。已发布显示名和执行内容保持不可变，需要改变时必须发布新版本。

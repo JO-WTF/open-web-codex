@@ -175,7 +175,7 @@ pub async fn validate(
     let row = load_draft_row(&state.db, auth.organization_id, definition_id).await?;
     require_manage(&auth, row.get("owner_user_id"))?;
     let draft = parse_draft(row.get("draft_spec"))?;
-    Ok(Json(validate_draft(&draft, definition_id)))
+    Ok(Json(validate_draft(&draft)))
 }
 
 pub async fn publish(
@@ -205,10 +205,9 @@ pub async fn publish(
         return Err(internal_error());
     }
     let spec = release_spec_from_draft(&draft);
-    let runtime_role =
-        agent::user_runtime_role_name(definition_id, &draft.version).map_err(catalog_error)?;
-    let resolved =
-        agent::validate_user_release(spec.clone(), &runtime_role).map_err(catalog_error)?;
+    let runtime_role = agent::user_runtime_role_name(&draft.definition_id, &draft.version)
+        .map_err(catalog_error)?;
+    let resolved = agent::validate_user_release(spec.clone()).map_err(catalog_error)?;
     let release_id = Uuid::now_v7();
     let revision_id: Uuid = row.get("revision_id");
     let release_spec = serde_json::to_value(spec).map_err(|_| internal_error())?;
@@ -275,22 +274,19 @@ pub async fn publish(
     }))
 }
 
-fn validate_draft(
-    draft: &AgentDefinitionDraftRequest,
-    definition_resource_id: Uuid,
-) -> AgentDefinitionValidationResult {
-    let result = agent::user_runtime_role_name(definition_resource_id, &draft.version).and_then(
-        |runtime_role| agent::validate_user_release(release_spec_from_draft(draft), &runtime_role),
-    );
+fn validate_draft(draft: &AgentDefinitionDraftRequest) -> AgentDefinitionValidationResult {
+    let result = agent::validate_user_release(release_spec_from_draft(draft));
     match result {
         Ok(resolved) => AgentDefinitionValidationResult {
             valid: true,
+            execution_semantics_sha256: Some(resolved.execution_semantics_sha256()),
             content_sha256: Some(resolved.content_sha256),
             issues: Vec::new(),
         },
         Err(_) => AgentDefinitionValidationResult {
             valid: false,
             content_sha256: None,
+            execution_semantics_sha256: None,
             issues: vec![validation_issue(
                 "invalid_agent_definition",
                 "Agent Definition does not match the selected capability template",

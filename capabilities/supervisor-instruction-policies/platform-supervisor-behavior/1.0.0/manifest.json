@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "supervisor-instruction-policy.v1",
+  "policyId": "platform-supervisor-behavior",
+  "version": "1.0.0",
+  "displayName": "Platform Supervisor behavior",
+  "description": "Read-only platform boundaries and reliable orchestration behavior.",
+  "instructionsFile": "instructions.md"
+}

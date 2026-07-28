@@ -4,6 +4,7 @@ pub mod approvals;
 pub mod artifacts;
 pub mod bootstrap;
 pub mod browser_workspaces;
+pub mod capability_packages;
 pub mod configuration;
 pub mod events;
 pub mod generation;
@@ -19,6 +20,7 @@ pub mod runs;
 pub mod runtime_agents;
 pub mod sessions;
 pub mod supervisor_definitions;
+pub mod supervisor_instruction_policies;
 pub mod supervisor_policies;
 pub mod tasks;
 pub mod terminals;
@@ -81,6 +83,14 @@ pub fn router(
         .route(
             "/agent-definitions",
             axum::routing::get(agent_definitions::list_published),
+        )
+        .route(
+            "/agent-definitions/{definition_id}/{version}",
+            axum::routing::get(agent_definitions::get_published),
+        )
+        .route(
+            "/capability-packages",
+            axum::routing::get(capability_packages::list),
         )
         .route(
             "/agent-definition-resources",
@@ -230,6 +240,19 @@ pub fn router(
         .route(
             "/supervisor-policies",
             axum::routing::get(supervisor_policies::list_published),
+        )
+        .route(
+            "/supervisor-policies/{policy_id}/{version}",
+            axum::routing::get(supervisor_policies::get_published),
+        )
+        .route(
+            "/supervisor-instruction-policies",
+            axum::routing::get(supervisor_instruction_policies::list_published)
+                .post(supervisor_instruction_policies::publish),
+        )
+        .route(
+            "/supervisor-instruction-policies/{policy_id}/{version}",
+            axum::routing::get(supervisor_instruction_policies::get_published),
         )
         .route(
             "/supervisor-definitions",

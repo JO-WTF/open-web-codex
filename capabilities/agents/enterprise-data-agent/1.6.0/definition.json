@@ -3,7 +3,7 @@
   "version": "1.6.0",
   "displayName": "Enterprise Data Agent",
   "description": "Prepares bounded, source-backed planning datasets from authorized enterprise data.",
-  "runtimeRole": "data_agent",
+  "runtimeRole": "agent_7e81fe6ff16d257b64a209abc623833c",
   "runtimeProfile": {
     "contentSha256": "5407ee548ab37d2a403949a4d8e021f961acc9696ee5557ffbc48cff9c7f738e"
   },
@@ -17,6 +17,10 @@
   "outputArtifactTypes": [
     "planning-dataset.v1"
   ],
+  "capabilityTemplate": {
+    "definitionId": "enterprise-data-agent",
+    "version": "1.6.0"
+  },
   "requiredCapabilities": [
     "supply_chain_data.list_planning_sources",
     "supply_chain_data.inspect_planning_source",

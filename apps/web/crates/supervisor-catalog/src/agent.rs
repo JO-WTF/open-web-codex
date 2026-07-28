@@ -2,7 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use open_web_codex_adapter::{PlatformRuntimeRole, RequiredMcpServer};
 use open_web_codex_platform_contracts::{
-    AgentCapabilityTemplateSelection, AgentDefinitionSource, AgentDefinitionSummary,
+    AgentCapabilityTemplateSelection, AgentDefinitionDetail, AgentDefinitionSource,
+    AgentDefinitionSummary,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -39,19 +40,16 @@ const MAX_RUNTIME_ROLE_INSTRUCTIONS_BYTES: usize = 16 * 1024;
 struct PublishedAgentResource {
     definition: &'static str,
     developer_instructions: &'static str,
-    runtime_role_name: &'static str,
 }
 
 const PUBLISHED_AGENT_RESOURCES: [PublishedAgentResource; 2] = [
     PublishedAgentResource {
         definition: DATA_AGENT,
         developer_instructions: DATA_AGENT_INSTRUCTIONS,
-        runtime_role_name: "data_agent",
     },
     PublishedAgentResource {
         definition: NETWORK_PLANNING_AGENT,
         developer_instructions: NETWORK_PLANNING_AGENT_INSTRUCTIONS,
-        runtime_role_name: "network_planning_agent",
     },
 ];
 
@@ -67,6 +65,7 @@ struct PublishedAgentDefinition {
     responsibilities: Vec<String>,
     input_artifact_types: Vec<String>,
     output_artifact_types: Vec<String>,
+    capability_template: PublishedCapabilityTemplateReference,
     required_capabilities: Vec<String>,
     #[serde(default)]
     required_mcp_resource_servers: Vec<String>,
@@ -79,6 +78,13 @@ struct PublishedAgentDefinition {
 #[serde(rename_all = "camelCase")]
 struct PublishedRuntimeProfileReference {
     content_sha256: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PublishedCapabilityTemplateReference {
+    definition_id: String,
+    version: String,
 }
 
 #[derive(Debug, Clone)]
@@ -95,10 +101,12 @@ pub struct ResolvedAgentDefinition {
     pub display_name: String,
     pub description: String,
     pub responsibilities: Vec<String>,
+    pub developer_instructions: String,
     pub input_artifact_types: Vec<String>,
     pub output_artifact_types: Vec<String>,
     pub required_capabilities: Vec<String>,
     pub capability_template: Option<AgentCapabilityTemplateSelection>,
+    pub capability_template_sha256: String,
     pub runtime_role: PlatformRuntimeRole,
     pub required_mcp_servers: Vec<RequiredMcpServer>,
     pub content_sha256: String,
@@ -181,7 +189,8 @@ pub fn merge_required_mcp_servers(
 pub fn is_platform_runtime_role(name: &str) -> bool {
     PUBLISHED_AGENT_RESOURCES
         .iter()
-        .any(|resource| resource.runtime_role_name == name)
+        .filter_map(|resource| parse_published_definition(resource).ok())
+        .any(|definition| definition.runtime_role == name)
 }
 
 impl ResolvedAgentDefinition {
@@ -194,6 +203,29 @@ impl ResolvedAgentDefinition {
         AgentContract {
             input_artifact_types: self.input_artifact_types.iter().cloned().collect(),
             output_artifact_types: self.output_artifact_types.iter().cloned().collect(),
+        }
+    }
+
+    /// Return the one authoring contract accepted by Web publication.
+    /// Repository definitions use their own exact version as the reviewed
+    /// capability template, allowing both source adapters to be compiled and
+    /// compared at the execution boundary.
+    pub fn authoring_spec(&self) -> AgentReleaseSpec {
+        AgentReleaseSpec {
+            definition_id: self.definition_id.clone(),
+            version: self.version.clone(),
+            display_name: self.display_name.clone(),
+            description: self.description.clone(),
+            responsibilities: self.responsibilities.clone(),
+            developer_instructions: self.developer_instructions.clone(),
+            input_artifact_types: self.input_artifact_types.clone(),
+            output_artifact_types: self.output_artifact_types.clone(),
+            capability_template: self.capability_template.clone().unwrap_or_else(|| {
+                AgentCapabilityTemplateSelection {
+                    definition_id: self.definition_id.clone(),
+                    version: self.version.clone(),
+                }
+            }),
         }
     }
 
@@ -212,6 +244,25 @@ impl ResolvedAgentDefinition {
             capability_template: self.capability_template.clone(),
         }
     }
+
+    pub fn detail(&self, source: AgentDefinitionSource) -> AgentDefinitionDetail {
+        AgentDefinitionDetail {
+            source,
+            release_id: self.release_id,
+            definition_id: self.definition_id.clone(),
+            version: self.version.clone(),
+            display_name: self.display_name.clone(),
+            description: self.description.clone(),
+            responsibilities: self.responsibilities.clone(),
+            developer_instructions: self.developer_instructions.clone(),
+            input_artifact_types: self.input_artifact_types.clone(),
+            output_artifact_types: self.output_artifact_types.clone(),
+            required_capabilities: self.required_capabilities.clone(),
+            capability_template: self.capability_template.clone(),
+            content_sha256: self.content_sha256.clone(),
+            execution_semantics_sha256: self.execution_semantics_sha256(),
+        }
+    }
 }
 
 fn resolved_from_resource(
@@ -220,22 +271,29 @@ fn resolved_from_resource(
     let definition = parse_published_definition(resource)?;
     let runtime_role = runtime_role_from_resource(resource)?;
     let required_mcp_servers = mcp_requirements_from_definition(&definition)?;
-    let content_sha256 = published_definition_content_sha256(&definition, &runtime_role);
-    Ok(ResolvedAgentDefinition {
+    let capability_template_sha256 =
+        published_definition_content_sha256(&definition, &runtime_role);
+    let template = ResolvedAgentDefinition {
         release_id: None,
-        definition_id: definition.definition_id,
-        version: definition.version,
-        display_name: definition.display_name,
-        description: definition.description,
-        responsibilities: definition.responsibilities,
-        input_artifact_types: definition.input_artifact_types,
-        output_artifact_types: definition.output_artifact_types,
-        required_capabilities: definition.required_capabilities,
-        capability_template: None,
-        content_sha256,
+        definition_id: definition.definition_id.clone(),
+        version: definition.version.clone(),
+        display_name: definition.display_name.clone(),
+        description: definition.description.clone(),
+        responsibilities: definition.responsibilities.clone(),
+        developer_instructions: resource.developer_instructions.trim().to_string(),
+        input_artifact_types: definition.input_artifact_types.clone(),
+        output_artifact_types: definition.output_artifact_types.clone(),
+        required_capabilities: definition.required_capabilities.clone(),
+        capability_template: Some(AgentCapabilityTemplateSelection {
+            definition_id: definition.capability_template.definition_id.clone(),
+            version: definition.capability_template.version.clone(),
+        }),
+        capability_template_sha256: capability_template_sha256.clone(),
+        content_sha256: capability_template_sha256,
         runtime_role,
         required_mcp_servers,
-    })
+    };
+    crate::agent_release::compile_agent_release(template.authoring_spec(), &template)
 }
 
 fn published_definition_content_sha256(
@@ -284,7 +342,9 @@ fn parse_published_definition(
     resource: &PublishedAgentResource,
 ) -> Result<PublishedAgentDefinition, AgentCatalogError> {
     let definition = parse_definition(resource.definition)?;
-    if definition.runtime_role != resource.runtime_role_name {
+    if definition.runtime_role
+        != user_runtime_role_name(&definition.definition_id, &definition.version)?
+    {
         return Err(AgentCatalogError::Invalid);
     }
     Ok(definition)
@@ -307,6 +367,8 @@ fn parse_definition(source: &str) -> Result<PublishedAgentDefinition, AgentCatal
     if !is_safe_definition_id(&definition.definition_id)
         || !is_safe_version(&definition.version)
         || !is_safe_runtime_role_name(&definition.runtime_role)
+        || definition.capability_template.definition_id != definition.definition_id
+        || definition.capability_template.version != definition.version
         || definition.runtime_profile.content_sha256.len() != 64
         || !definition
             .runtime_profile
@@ -483,7 +545,10 @@ impl From<PublishedAgentDefinition> for AgentDefinitionSummary {
             input_artifact_types: value.input_artifact_types,
             output_artifact_types: value.output_artifact_types,
             required_capabilities: value.required_capabilities,
-            capability_template: None,
+            capability_template: Some(AgentCapabilityTemplateSelection {
+                definition_id: value.capability_template.definition_id,
+                version: value.capability_template.version,
+            }),
         }
     }
 }

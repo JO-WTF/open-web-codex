@@ -1000,7 +1000,10 @@ mod tests {
 
     #[test]
     fn platform_runtime_roles_are_not_browser_managed_agent_names() {
-        for name in ["data_agent", "network_planning_agent"] {
+        for name in [
+            "agent_7e81fe6ff16d257b64a209abc623833c",
+            "agent_cc4182517eeeaeb65ac5b50da67da6ba",
+        ] {
             assert!(validate_browser_managed_agent_name(name).is_err());
             assert!(!is_browser_managed_agent_name(name));
         }
@@ -1013,7 +1016,11 @@ mod tests {
 
     #[test]
     fn browser_agent_list_excludes_platform_runtime_roles() {
-        let configured_agents = ["data_agent", "network_planning_agent", "user_defined_agent"];
+        let configured_agents = [
+            "agent_7e81fe6ff16d257b64a209abc623833c",
+            "agent_cc4182517eeeaeb65ac5b50da67da6ba",
+            "user_defined_agent",
+        ];
         let visible = configured_agents
             .into_iter()
             .filter(|name| is_browser_managed_agent_name(name))

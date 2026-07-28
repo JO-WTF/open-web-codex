@@ -5,7 +5,8 @@ use axum::{
 };
 use open_web_codex_platform_contracts::{
     AgentCapabilityTemplateSelection, AgentDefinitionDraftRequest, SupervisorAgentSelection,
-    SupervisorArtifactContractInput, SupervisorDraftRequest, SupervisorPolicySelection,
+    SupervisorArtifactContractInput, SupervisorDraftRequest, SupervisorInstructionPolicySelection,
+    SupervisorPolicySelection,
 };
 use open_web_codex_platform_store::AppState;
 use sqlx::Row;
@@ -37,7 +38,7 @@ fn valid_draft() -> AgentDefinitionDraftRequest {
 
 #[test]
 fn validates_a_user_agent_without_accepting_runtime_facts() {
-    let result = validate_draft(&valid_draft(), Uuid::now_v7());
+    let result = validate_draft(&valid_draft());
     assert!(result.valid);
     assert_eq!(result.content_sha256.unwrap().len(), 64);
 }
@@ -156,8 +157,12 @@ async fn publishes_agent_and_uses_it_in_an_organization_supervisor() {
             display_name: "Regional Review Supervisor".to_string(),
             description: "Coordinates one governed regional data review.".to_string(),
             responsibilities: vec!["Deliver the reviewed planning dataset.".to_string()],
-            developer_instructions:
-                "Delegate the regional data review and report the durable result.".to_string(),
+            instruction_policy: SupervisorInstructionPolicySelection {
+                policy_id: "platform-supervisor-behavior".to_string(),
+                version: "1.0.0".to_string(),
+            },
+            custom_instructions: "Delegate the regional data review and report the durable result."
+                .to_string(),
             agents: vec![SupervisorAgentSelection {
                 definition_id: release.definition_id.clone(),
                 version: release.version.clone(),

@@ -19,7 +19,11 @@ use crate::{agent_catalog, middleware::auth::AuthenticatedUser};
 mod resolution;
 mod store;
 
-use resolution::{release_spec_from_draft, validate_draft, validate_draft_storage_shape};
+#[cfg(test)]
+use resolution::release_spec_from_draft;
+use resolution::{
+    release_spec_from_draft_with_policy, validate_draft, validate_draft_storage_shape,
+};
 use store::{
     load_definition, load_definitions, load_draft_row, lock_definition, parse_draft, record_audit,
 };
@@ -214,19 +218,36 @@ pub async fn publish(
     let available_agents = agent_catalog::list_resolved(&state.db, auth.organization_id)
         .await
         .map_err(|_| internal_error())?;
-    let release_spec = release_spec_from_draft(&draft, &available_agents).map_err(|issue| {
+    let instruction_policy =
+        crate::supervisor_instruction_policy::resolve(&state.db, &draft.instruction_policy)
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(PlatformError::bad_request(
+                        "The selected platform instruction policy is unavailable",
+                    )),
+                )
+            })?;
+    let release_spec =
+        release_spec_from_draft_with_policy(&draft, &available_agents, &instruction_policy)
+            .map_err(|issue| {
+                (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(PlatformError::bad_request(issue.message)),
+                )
+            })?;
+    let package = supervisor::validate_release_with_agents_and_policy(
+        release_spec.clone(),
+        &available_agents,
+        &instruction_policy,
+    )
+    .map_err(|error| {
         (
             StatusCode::UNPROCESSABLE_ENTITY,
-            Json(PlatformError::bad_request(issue.message)),
+            Json(PlatformError::bad_request(error.to_string())),
         )
     })?;
-    let package = supervisor::validate_release_with_agents(release_spec.clone(), &available_agents)
-        .map_err(|error| {
-            (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(PlatformError::bad_request(error.to_string())),
-            )
-        })?;
     let release_id = Uuid::now_v7();
     let revision_id: Uuid = row.get("revision_id");
     let release_spec_value = serde_json::to_value(&release_spec).map_err(|_| internal_error())?;

@@ -185,7 +185,10 @@ Responsibilities：
 交付一份可执行但不越权的最终建议
 ```
 
-Supervisor instructions：
+在 **Platform behavior contract** 中选择平台管理者已经发布的精确版本。该内容只读，
+不会由这个 Supervisor 草稿复制或修改。
+
+Custom Supervisor instructions：
 
 ```text
 你是本任务的 Root Supervisor，对最终交付负责。

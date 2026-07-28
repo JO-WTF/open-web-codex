@@ -88,6 +88,7 @@ result; they never cause a Tauri runtime to reappear.
 | Project, Task, Run, Thread model selection, lease, approval and audit | Web platform database | complete platform record |
 | Profile ownership and process health | Web database + Profile Host | mapping, health, build and capability snapshot |
 | Supervisor Definition, Revision, Release, immutable snapshot and root-Thread binding | Web platform database + code-published capability package | complete governance record and binding; never Runtime conversation state |
+| Supervisor platform instruction policy | Web platform global immutable Release + code-published baseline | exact policy version/content identity and model-visible platform behavior; never authorization or Runtime capability truth |
 | Agent Definition, Revision, immutable Release, reviewed capability-template binding and Supervisor dependency | Web platform database + code-published capability catalog | governance metadata, exact release/content identity and derived instruction digest; never child-Thread state or a copied Tool catalog |
 | Thread, Turn, items, compaction and model-visible context | Codex Profile/app-server | opaque IDs, event projection and search index |
 | Provider config and runtime model catalog | Codex Profile/app-server | secret references, global default Provider/model selection, policy and display cache scoped to Profile |
@@ -251,6 +252,11 @@ boundary exception. The same ownership table above continues to apply:
   selected capability roots. Their launchers own package bootstrap, dependency
   checks and MCP server startup; Profile Host only reports safe startup status
   and categorized failures.
+- Agent Studio exposes a bounded capability-package directory compiled from
+  checked-in Plugin and MCP manifests. Directory presence means the package is
+  platform-reviewed and available for selection; it does not imply that any
+  current Thread enabled or successfully started the package. Thread-specific
+  MCP status remains a separate durable Runtime projection.
 - This mode must pass single Profile smoke tests for Provider login/model
   discovery, Runtime MCP discovery, MCP startup, third-party Provider tool calls,
   map-card rendering and Thread resume before multi-Profile routing work

@@ -4,6 +4,7 @@ mod middleware;
 mod routes;
 #[cfg(test)]
 mod security_integration;
+mod supervisor_instruction_policy;
 mod supervisor_policy;
 mod supervisor_runtime_preflight;
 

@@ -9,6 +9,11 @@ import {
 } from "@/features/design-system/components/settings/SettingsPrimitives";
 import type { SettingsAgentCatalogSectionProps } from "@settings/hooks/useSettingsAgentCatalogSection";
 
+type SettingsAgentCatalogSectionComponentProps =
+  SettingsAgentCatalogSectionProps & {
+    studioMode?: boolean;
+  };
+
 function identity(agent: Pick<AgentDefinitionSummary, "definition_id" | "version">) {
   return `${agent.definition_id}@${agent.version}`;
 }
@@ -32,17 +37,24 @@ function emptyDraft(template?: AgentDefinitionSummary): AgentDefinitionDraftRequ
 
 export function SettingsAgentCatalogSection({
   definitions,
+  publishedAgents,
   templates,
   isLoading,
   actionDefinitionId,
+  loadingAgentKey,
   error,
   validationByDefinition,
+  detailByAgent,
   onRefresh,
   onSaveDraft,
   onValidate,
   onPublish,
-}: SettingsAgentCatalogSectionProps) {
+  onLoadPublished,
+  studioMode = false,
+}: SettingsAgentCatalogSectionComponentProps) {
   const [editingDefinitionId, setEditingDefinitionId] = useState<string | null>(null);
+  const [viewingAgentKey, setViewingAgentKey] = useState<string | null>(null);
+  const [editorOpen, setEditorOpen] = useState(false);
   const [draft, setDraft] = useState<AgentDefinitionDraftRequest>(() =>
     emptyDraft(templates[0])
   );
@@ -61,6 +73,15 @@ export function SettingsAgentCatalogSection({
     setEditingDefinitionId(null);
     setDraft(emptyDraft(templates[0]));
     setResponsibilitiesText("");
+    setEditorOpen(false);
+  };
+
+  const createDefinition = () => {
+    setViewingAgentKey(null);
+    setEditingDefinitionId(null);
+    setDraft(emptyDraft(templates[0]));
+    setResponsibilitiesText("");
+    setEditorOpen(true);
   };
 
   const editDefinition = (
@@ -70,6 +91,8 @@ export function SettingsAgentCatalogSection({
     setEditingDefinitionId(definitionId);
     setDraft(nextDraft);
     setResponsibilitiesText(nextDraft.responsibilities.join("\n"));
+    setViewingAgentKey(null);
+    setEditorOpen(true);
   };
 
   const selectTemplate = (templateIdentity: string) => {
@@ -113,6 +136,22 @@ export function SettingsAgentCatalogSection({
 
   const saving = actionDefinitionId === (editingDefinitionId ?? "new");
 
+  const viewPublished = (agent: AgentDefinitionSummary) => {
+    const key = identity(agent);
+    if (!studioMode && viewingAgentKey === key) {
+      setViewingAgentKey(null);
+      return;
+    }
+    setViewingAgentKey(key);
+    setEditorOpen(false);
+    if (!detailByAgent[key]) {
+      void onLoadPublished(agent);
+    }
+  };
+  const visiblePublishedAgents = studioMode && viewingAgentKey
+    ? publishedAgents.filter((agent) => identity(agent) === viewingAgentKey)
+    : publishedAgents;
+
   return (
     <SettingsSection
       title="Agent Catalog"
@@ -123,10 +162,174 @@ export function SettingsAgentCatalogSection({
         capabilities exactly and can narrow only its Artifact inputs and outputs.
       </div>
 
+      {studioMode && (
+        <div className="settings-agents-actions settings-studio-page-actions">
+          {viewingAgentKey ? (
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => setViewingAgentKey(null)}
+            >
+              Back to Agent directory
+            </button>
+          ) : editorOpen ? (
+            <button type="button" className="ghost" onClick={resetEditor}>
+              Back to Agent directory
+            </button>
+          ) : (
+            <>
+              <button type="button" className="primary" onClick={createDefinition}>
+                New Agent
+              </button>
+              <button type="button" className="ghost" onClick={onRefresh} disabled={isLoading}>
+                {isLoading ? "Loading…" : "Refresh"}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {(!studioMode || !editorOpen) && (
+        <>
+          <SettingsSubsection
+            title={viewingAgentKey ? "Agent details" : "Agent directory"}
+            subtitle={viewingAgentKey
+              ? "Review the exact immutable Agent definition and its execution contract."
+              : "Browse built-in packages and organization releases before creating or editing a draft."}
+          />
+      {visiblePublishedAgents.map((agent) => {
+        const key = identity(agent);
+        const detail = detailByAgent[key];
+        const expanded = viewingAgentKey === key;
+        return (
+          <article className="settings-supervisor-published" key={key}>
+            <div className="settings-agent-card-header">
+              <div>
+                <strong>{agent.display_name}</strong>
+                <div className="settings-help">{key}</div>
+              </div>
+              <div className="settings-agents-actions">
+                <span className="settings-supervisor-source">
+                  {agent.source === "repository" ? "Built-in" : "Organization release"}
+                </span>
+                <button
+                  type="button"
+                  className="ghost"
+                  aria-expanded={expanded}
+                  onClick={() => viewPublished(agent)}
+                  disabled={loadingAgentKey === key}
+                >
+                  {loadingAgentKey === key ? "Loading…" : studioMode ? "View details" : expanded ? "Close" : "View"}
+                </button>
+              </div>
+            </div>
+            <p>{agent.description}</p>
+            {expanded && detail && (
+              <div className="settings-supervisor-detail">
+                <div>
+                  <strong>Responsibilities</strong>
+                  <ul>
+                    {detail.responsibilities.map((responsibility) => (
+                      <li key={responsibility}>{responsibility}</li>
+                    ))}
+                  </ul>
+                </div>
+                <div>
+                  <strong>Required capabilities</strong>
+                  <ul>
+                    {detail.required_capabilities.map((capability) => (
+                      <li key={capability}>{capability}</li>
+                    ))}
+                  </ul>
+                </div>
+                <div className="settings-agent-artifact-grid">
+                  <div>
+                    <strong>Artifact inputs</strong>
+                    {detail.input_artifact_types.length > 0 ? (
+                      <ul>
+                        {detail.input_artifact_types.map((artifact) => (
+                          <li key={artifact}>{artifact}</li>
+                        ))}
+                      </ul>
+                    ) : <div className="settings-help">None</div>}
+                  </div>
+                  <div>
+                    <strong>Artifact outputs</strong>
+                    <ul>
+                      {detail.output_artifact_types.map((artifact) => (
+                        <li key={artifact}>{artifact}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+                {detail.capability_template && (
+                  <div className="settings-help">
+                    Capability template: {identity(detail.capability_template)}
+                  </div>
+                )}
+                <div>
+                  <strong>Agent instructions</strong>
+                  <pre>{detail.developer_instructions}</pre>
+                </div>
+                <div className="settings-help">
+                  Content: {detail.content_sha256.slice(0, 12)}…
+                  {" · "}Execution: {detail.execution_semantics_sha256.slice(0, 12)}…
+                </div>
+              </div>
+            )}
+          </article>
+        );
+      })}
+      {!isLoading && publishedAgents.length === 0 && (
+        <div className="settings-help">No published Agents are available.</div>
+      )}
+        </>
+      )}
+
+      {(!studioMode || editorOpen) && (
+        <>
       <SettingsSubsection
         title={editingDefinitionId ? "Edit Agent draft" : "Create Agent draft"}
         subtitle="The Agent ID is permanent. Published versions cannot be edited."
       />
+      <details className="settings-authoring-guide" open>
+        <summary>How to define a useful Agent</summary>
+        <ol>
+          <li>
+            <strong>Name one bounded responsibility.</strong>
+            <span>
+              Use a stable ID and describe an observable outcome, not a department or a vague
+              persona.
+            </span>
+          </li>
+          <li>
+            <strong>Write operational instructions.</strong>
+            <span>
+              State the method, required evidence, limits, stop conditions, and exact delivery
+              format. Do not repeat Tool names as authority.
+            </span>
+          </li>
+          <li>
+            <strong>Select the reviewed capability boundary.</strong>
+            <span>
+              The template fixes the Runtime Tools and data access. Instructions cannot add hidden
+              capabilities.
+            </span>
+          </li>
+          <li>
+            <strong>Declare only real Artifact contracts.</strong>
+            <span>
+              Keep an input only when the Agent consumes it and an output only when the Agent can
+              actually publish it.
+            </span>
+          </li>
+        </ol>
+        <div className="settings-authoring-guide-note">
+          <strong>Fixed by the platform</strong>
+          Runtime discovery, Tool access, MCP configuration, authorization, approvals, and
+          execution status are not controlled by this form.
+        </div>
+      </details>
       <div className="settings-field settings-supervisor-editor">
         <div className="settings-supervisor-grid">
           <label className="settings-label">
@@ -187,7 +390,7 @@ export function SettingsAgentCatalogSection({
           />
         </label>
         <label className="settings-label">
-          Agent instructions
+          Custom Agent instructions
           <textarea
             className="settings-agents-textarea"
             rows={8}
@@ -266,16 +469,20 @@ export function SettingsAgentCatalogSection({
           )}
         </div>
       </div>
+        </>
+      )}
 
+      {(!studioMode || (!editorOpen && !viewingAgentKey)) && (
+        <>
       <SettingsSubsection
-        title="Definitions and releases"
-        subtitle="Validate the current draft before publishing it for Supervisor use."
+        title="Your Agent definitions"
+        subtitle="Open an editable draft, create the next version, or inspect its published releases."
       />
-      <div className="settings-agents-actions">
+      {!studioMode && <div className="settings-agents-actions">
         <button type="button" className="ghost" onClick={onRefresh} disabled={isLoading}>
           {isLoading ? "Loading…" : "Refresh"}
         </button>
-      </div>
+      </div>}
       {!isLoading && definitions.length === 0 && (
         <div className="settings-help">No user-authored Agent Definitions yet.</div>
       )}
@@ -344,7 +551,7 @@ export function SettingsAgentCatalogSection({
             {validation && (
               <div className={validation.valid ? "settings-help" : "settings-agents-error"}>
                 {validation.valid
-                  ? `Validated · ${validation.content_sha256?.slice(0, 12)}…`
+                  ? `Validated · content ${validation.content_sha256?.slice(0, 12)}… · execution ${validation.execution_semantics_sha256?.slice(0, 12)}…`
                   : validation.issues.map((issue) => issue.message).join(" ")}
               </div>
             )}
@@ -356,6 +563,8 @@ export function SettingsAgentCatalogSection({
           </div>
         );
       })}
+        </>
+      )}
       {error && <div className="settings-agents-error">{error}</div>}
     </SettingsSection>
   );

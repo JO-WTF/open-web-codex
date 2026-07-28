@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { platformClient } from "../../../../browser/session";
 import type {
   AgentDefinitionDraftRequest,
+  AgentDefinitionDetail,
   AgentDefinitionReleaseSummary,
   AgentDefinitionResourceSummary,
   AgentDefinitionSummary,
@@ -10,11 +11,14 @@ import type {
 
 export type SettingsAgentCatalogSectionProps = {
   definitions: AgentDefinitionResourceSummary[];
+  publishedAgents: AgentDefinitionSummary[];
   templates: AgentDefinitionSummary[];
   isLoading: boolean;
   actionDefinitionId: string | null;
+  loadingAgentKey: string | null;
   error: string | null;
   validationByDefinition: Record<string, AgentDefinitionValidationResult>;
+  detailByAgent: Record<string, AgentDefinitionDetail>;
   onRefresh: () => void;
   onSaveDraft: (
     draft: AgentDefinitionDraftRequest,
@@ -22,6 +26,9 @@ export type SettingsAgentCatalogSectionProps = {
   ) => Promise<AgentDefinitionResourceSummary | null>;
   onValidate: (definitionId: string) => Promise<AgentDefinitionValidationResult | null>;
   onPublish: (definitionId: string) => Promise<AgentDefinitionReleaseSummary | null>;
+  onLoadPublished: (
+    agent: AgentDefinitionSummary,
+  ) => Promise<AgentDefinitionDetail | null>;
 };
 
 function errorMessage(value: unknown, fallback: string) {
@@ -30,10 +37,13 @@ function errorMessage(value: unknown, fallback: string) {
 
 export function useSettingsAgentCatalogSection(): SettingsAgentCatalogSectionProps {
   const [definitions, setDefinitions] = useState<AgentDefinitionResourceSummary[]>([]);
+  const [publishedAgents, setPublishedAgents] = useState<AgentDefinitionSummary[]>([]);
   const [templates, setTemplates] = useState<AgentDefinitionSummary[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [actionDefinitionId, setActionDefinitionId] = useState<string | null>(null);
+  const [loadingAgentKey, setLoadingAgentKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [detailByAgent, setDetailByAgent] = useState<Record<string, AgentDefinitionDetail>>({});
   const [validationByDefinition, setValidationByDefinition] = useState<
     Record<string, AgentDefinitionValidationResult>
   >({});
@@ -47,6 +57,7 @@ export function useSettingsAgentCatalogSection(): SettingsAgentCatalogSectionPro
         platformClient.listAgentDefinitions(),
       ]);
       setDefinitions(nextDefinitions);
+      setPublishedAgents(catalog);
       setTemplates(catalog.filter((definition) => definition.source === "repository"));
     } catch (value) {
       setError(errorMessage(value, "Unable to load Agent Catalog."));
@@ -128,16 +139,39 @@ export function useSettingsAgentCatalogSection(): SettingsAgentCatalogSectionPro
     [refresh],
   );
 
+  const onLoadPublished = useCallback(async (agent: AgentDefinitionSummary) => {
+    const key = `${agent.definition_id}@${agent.version}`;
+    setLoadingAgentKey(key);
+    setError(null);
+    try {
+      const detail = await platformClient.getAgentDefinition(
+        agent.definition_id,
+        agent.version,
+      );
+      setDetailByAgent((current) => ({ ...current, [key]: detail }));
+      return detail;
+    } catch (value) {
+      setError(errorMessage(value, "Unable to load the published Agent."));
+      return null;
+    } finally {
+      setLoadingAgentKey(null);
+    }
+  }, []);
+
   return {
     definitions,
+    publishedAgents,
     templates,
     isLoading,
     actionDefinitionId,
+    loadingAgentKey,
     error,
     validationByDefinition,
+    detailByAgent,
     onRefresh: refresh,
     onSaveDraft,
     onValidate,
     onPublish,
+    onLoadPublished,
   };
 }

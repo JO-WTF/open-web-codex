@@ -1,7 +1,7 @@
 {
   "schemaVersion": "supervisor-package.v1",
   "policyId": "enterprise-supervisor-copilot",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "displayName": "Enterprise Supervisor Copilot",
   "description": "Coordinates governed data analysis and warehouse-network planning agents.",
   "responsibilities": [
@@ -10,19 +10,23 @@
     "Resolve material conflicts and produce the final recommendation.",
     "Report capability gaps, risks, assumptions and missing evidence explicitly."
   ],
-  "instructionsFile": "instructions.md",
+  "instructionPolicy": {
+    "policyId": "platform-supervisor-behavior",
+    "version": "1.0.0"
+  },
+  "customInstructionsFile": "custom-instructions.md",
   "artifactContractsFile": "artifact-contracts.json",
   "agents": [
     {
       "definitionId": "enterprise-data-agent",
       "version": "1.6.0",
-      "runtimeRole": "data_agent",
+      "runtimeRole": "agent_7e81fe6ff16d257b64a209abc623833c",
       "spawnLimit": 1
     },
     {
       "definitionId": "enterprise-network-planning-agent",
       "version": "1.5.0",
-      "runtimeRole": "network_planning_agent",
+      "runtimeRole": "agent_cc4182517eeeaeb65ac5b50da67da6ba",
       "spawnLimit": 1
     }
   ],

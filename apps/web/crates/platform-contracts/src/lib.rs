@@ -324,6 +324,80 @@ pub struct SupervisorPolicySummary {
     pub version: String,
     pub display_name: String,
     pub description: String,
+    pub source: SupervisorPolicyOrigin,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SupervisorPolicyOrigin {
+    Repository,
+    UserRelease,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SupervisorInstructionPolicySelection {
+    #[serde(alias = "policyId")]
+    pub policy_id: String,
+    pub version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SupervisorInstructionPolicySummary {
+    pub release_id: Option<Uuid>,
+    pub policy_id: String,
+    pub version: String,
+    pub display_name: String,
+    pub description: String,
+    pub source: SupervisorInstructionPolicyOrigin,
+    pub content_sha256: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SupervisorInstructionPolicyOrigin {
+    Repository,
+    PlatformRelease,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SupervisorInstructionPolicyDetail {
+    pub release_id: Option<Uuid>,
+    pub policy_id: String,
+    pub version: String,
+    pub display_name: String,
+    pub description: String,
+    pub source: SupervisorInstructionPolicyOrigin,
+    pub platform_instructions: String,
+    pub content_sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SupervisorInstructionPolicyPublishRequest {
+    pub policy_id: String,
+    pub version: String,
+    pub display_name: String,
+    pub description: String,
+    pub platform_instructions: String,
+}
+
+/// Browser-safe, bounded description of one exact published Supervisor.
+/// Runtime Role names, MCP configuration and host paths remain internal.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SupervisorPolicyDetail {
+    pub policy_id: String,
+    pub version: String,
+    pub display_name: String,
+    pub description: String,
+    pub source: SupervisorPolicyOrigin,
+    pub responsibilities: Vec<String>,
+    pub instruction_policy: SupervisorInstructionPolicySummary,
+    pub platform_instructions: String,
+    pub custom_instructions: String,
+    pub agents: Vec<SupervisorAgentSelection>,
+    pub artifact_contracts: Vec<SupervisorArtifactContractInput>,
+    pub max_active_child_agents: u32,
+    pub content_sha256: String,
+    pub execution_semantics_sha256: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -352,7 +426,8 @@ pub struct SupervisorDraftRequest {
     pub display_name: String,
     pub description: String,
     pub responsibilities: Vec<String>,
-    pub developer_instructions: String,
+    pub instruction_policy: SupervisorInstructionPolicySelection,
+    pub custom_instructions: String,
     pub agents: Vec<SupervisorAgentSelection>,
     pub artifact_contracts: Vec<SupervisorArtifactContractInput>,
     pub max_active_child_agents: u32,
@@ -368,6 +443,7 @@ pub struct SupervisorValidationIssue {
 pub struct SupervisorValidationResult {
     pub valid: bool,
     pub content_sha256: Option<String>,
+    pub execution_semantics_sha256: Option<String>,
     pub issues: Vec<SupervisorValidationIssue>,
 }
 
@@ -433,6 +509,7 @@ pub struct AgentDefinitionValidationIssue {
 pub struct AgentDefinitionValidationResult {
     pub valid: bool,
     pub content_sha256: Option<String>,
+    pub execution_semantics_sha256: Option<String>,
     pub issues: Vec<AgentDefinitionValidationIssue>,
 }
 
@@ -487,6 +564,43 @@ pub struct AgentDefinitionSummary {
     pub output_artifact_types: Vec<String>,
     pub required_capabilities: Vec<String>,
     pub capability_template: Option<AgentCapabilityTemplateSelection>,
+}
+
+/// Browser-safe, bounded description of one exact published Agent.
+/// Runtime Role names, MCP configuration and host paths remain internal.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentDefinitionDetail {
+    pub source: AgentDefinitionSource,
+    pub release_id: Option<Uuid>,
+    pub definition_id: String,
+    pub version: String,
+    pub display_name: String,
+    pub description: String,
+    pub responsibilities: Vec<String>,
+    pub developer_instructions: String,
+    pub input_artifact_types: Vec<String>,
+    pub output_artifact_types: Vec<String>,
+    pub required_capabilities: Vec<String>,
+    pub capability_template: Option<AgentCapabilityTemplateSelection>,
+    pub content_sha256: String,
+    pub execution_semantics_sha256: String,
+}
+
+/// Browser-safe catalog entry for one checked-in capability package.
+///
+/// This describes platform-reviewed package declarations. It does not claim
+/// that the package is enabled or healthy in any particular Runtime Thread.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CapabilityPackageSummary {
+    pub package_id: String,
+    pub version: String,
+    pub display_name: String,
+    pub description: String,
+    pub capability_root_id: String,
+    pub capabilities: Vec<String>,
+    pub mcp_server_names: Vec<String>,
+    pub includes_skills: bool,
+    pub source: String,
 }
 
 /// Rebuildable, browser-safe view of one Runtime-owned Thread in a root Run's

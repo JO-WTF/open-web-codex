@@ -1,4 +1,6 @@
-use open_web_codex_platform_contracts::{AgentDefinitionSource, AgentDefinitionSummary};
+use open_web_codex_platform_contracts::{
+    AgentDefinitionDetail, AgentDefinitionSource, AgentDefinitionSummary,
+};
 use open_web_codex_supervisor_catalog::agent::{self, AgentReleaseSpec, ResolvedAgentDefinition};
 use sqlx::{PgPool, Row};
 use thiserror::Error;
@@ -6,10 +8,33 @@ use uuid::Uuid;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub(crate) enum AgentCatalogError {
+    #[error("Agent Definition was not found")]
+    NotFound,
     #[error("Agent Definition content is invalid")]
     Invalid,
     #[error("Agent Definition database operation failed")]
     Database,
+}
+
+pub(crate) async fn get_published(
+    db: &PgPool,
+    organization_id: Uuid,
+    definition_id: &str,
+    version: &str,
+) -> Result<AgentDefinitionDetail, AgentCatalogError> {
+    let definition = list_resolved(db, organization_id)
+        .await?
+        .into_iter()
+        .find(|definition| {
+            definition.definition_id == definition_id && definition.version == version
+        })
+        .ok_or(AgentCatalogError::NotFound)?;
+    let source = if definition.release_id.is_some() {
+        AgentDefinitionSource::UserRelease
+    } else {
+        AgentDefinitionSource::Repository
+    };
+    Ok(definition.detail(source))
 }
 
 pub(crate) async fn list_published(
@@ -77,13 +102,12 @@ fn resolve_release_row(
     {
         return Err(AgentCatalogError::Invalid);
     }
-    let expected_runtime_role =
-        agent::user_runtime_role_name(row.get("definition_id"), &spec.version)
-            .map_err(|_| AgentCatalogError::Invalid)?;
+    let expected_runtime_role = agent::user_runtime_role_name(&spec.definition_id, &spec.version)
+        .map_err(|_| AgentCatalogError::Invalid)?;
     if expected_runtime_role != row.get::<String, _>("runtime_role") {
         return Err(AgentCatalogError::Invalid);
     }
-    let resolved = agent::validate_user_release(spec, &expected_runtime_role)
+    let resolved = agent::validate_user_release(spec)
         .map_err(|_| AgentCatalogError::Invalid)?
         .with_release_id(release_id);
     if resolved.content_sha256 != row.get::<String, _>("content_sha256") {

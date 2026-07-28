@@ -271,6 +271,7 @@ export default function WebApp() {
   const [supervisorPolicies, setSupervisorPolicies] = useState<SupervisorPolicySummary[]>([]);
   const [supervisorPoliciesLoading, setSupervisorPoliciesLoading] = useState(true);
   const [supervisorPoliciesError, setSupervisorPoliciesError] = useState<string | null>(null);
+  const [supervisorPoliciesRevision, setSupervisorPoliciesRevision] = useState(0);
   const [rateLimits, setRateLimits] = useState<Record<string, unknown> | null>(null);
   const [goal, setGoal] = useState<GoalInfo | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() =>
@@ -346,7 +347,7 @@ export default function WebApp() {
     return () => {
       cancelled = true;
     };
-  }, [client]);
+  }, [client, supervisorPoliciesRevision]);
 
   const refreshModelCatalog = useCallback(async () => {
     if (!activeWorkspaceId) return;
@@ -2525,6 +2526,9 @@ export default function WebApp() {
           currentProviderId={currentProviderId}
           theme={theme}
           onToggleTheme={() => setTheme((current) => current === "dark" ? "light" : "dark")}
+          onSupervisorCatalogChanged={() => {
+            setSupervisorPoliciesRevision((current) => current + 1);
+          }}
 
           onConnectWorkspace={connectWorkspace}
         />

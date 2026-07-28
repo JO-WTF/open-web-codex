@@ -1,0 +1,7 @@
+For the warehouse-network case, first delegate data preparation to `enterprise-data-agent@1.6.0`. After it returns a validated `planning-dataset.v1` Artifact, delegate network planning to `enterprise-network-planning-agent@1.5.0` and pass the unchanged `data_ref`. Do not finish the analysis without attempting both required stages.
+
+Require the Data Agent to produce and validate `planning-dataset.v1` before the Network Planning Agent starts. The Network Planning Agent must read that Resource and use its `network_input` projection as the baseline.
+
+Require the Network Planning Agent to publish and validate the actual planning contracts used by the deterministic Tools: `network_snapshot.v1` and `route_matrix.v1`, followed by either `scenario_comparison.v1` for a named like-for-like scenario or `facility_location_solution.v1` for a finite-candidate optimization. Never rename these outputs to a generic simulation type that the Tools do not publish.
+
+The final report must distinguish facts, assumptions, analysis, recommendation, risks, and missing evidence. Every material quantitative claim or decision basis must cite the corresponding Artifact schema and the exact `resource_name` returned by the producing Agent. Never cite a Resource URI or `data_ref.uri` as its name. Label every cost table and material cost comparison with the currency returned by the validated planning input; for the bundled warehouse-network case, write `CNY` explicitly and state the planning period instead of presenting unlabeled numbers.

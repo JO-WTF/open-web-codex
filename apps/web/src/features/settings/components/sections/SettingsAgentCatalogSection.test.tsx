@@ -21,20 +21,39 @@ const template: SettingsAgentCatalogSectionProps["templates"][number] = {
 function baseProps(): SettingsAgentCatalogSectionProps {
   return {
     definitions: [],
+    publishedAgents: [],
     templates: [template],
     isLoading: false,
     actionDefinitionId: null,
+    loadingAgentKey: null,
     error: null,
     validationByDefinition: {},
+    detailByAgent: {},
     onRefresh: vi.fn(),
     onSaveDraft: vi.fn(async () => null),
     onValidate: vi.fn(async () => null),
     onPublish: vi.fn(async () => null),
+    onLoadPublished: vi.fn(async () => null),
   };
 }
 
 describe("SettingsAgentCatalogSection", () => {
   afterEach(cleanup);
+
+  it("separates the Agent directory from the create form in Studio mode", () => {
+    const props = baseProps();
+    render(<SettingsAgentCatalogSection {...props} studioMode />);
+
+    expect(screen.getByText("Agent directory")).toBeTruthy();
+    expect(screen.queryByLabelText("Agent ID")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "New Agent" }));
+    expect(screen.getByLabelText("Agent ID")).toBeTruthy();
+    expect(screen.queryByText("Agent directory")).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Back to Agent directory" }),
+    );
+    expect(screen.getByText("Agent directory")).toBeTruthy();
+  });
 
   it("publishes only a reviewed capability template selection", async () => {
     const props = baseProps();
@@ -52,7 +71,9 @@ describe("SettingsAgentCatalogSection", () => {
     fireEvent.change(screen.getByLabelText("Responsibilities"), {
       target: { value: "Review source coverage\nPublish validated data" },
     });
-    fireEvent.change(screen.getByLabelText("Agent instructions"), {
+    expect(screen.getByText("How to define a useful Agent")).toBeTruthy();
+    expect(screen.getByText("Fixed by the platform")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Custom Agent instructions"), {
       target: { value: "Use only reviewed data capabilities." },
     });
     fireEvent.change(screen.getByLabelText("Reviewed capability template"), {
@@ -70,5 +91,33 @@ describe("SettingsAgentCatalogSection", () => {
       },
       output_artifact_types: ["planning-dataset.v1"],
     });
+  });
+
+  it("shows a built-in Agent as an immutable readable release", () => {
+    const key = `${template.definition_id}@${template.version}`;
+    const props: SettingsAgentCatalogSectionProps = {
+      ...baseProps(),
+      publishedAgents: [template],
+      detailByAgent: {
+        [key]: {
+          ...template,
+          developer_instructions: "Build and validate the bounded planning dataset.",
+          content_sha256: "b".repeat(64),
+          execution_semantics_sha256: "c".repeat(64),
+        },
+      },
+    };
+
+    render(<SettingsAgentCatalogSection {...props} />);
+
+    expect(screen.getByText("Built-in")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    expect(screen.getByText("Build data")).toBeTruthy();
+    expect(
+      screen.getAllByText("supply_chain_data.build_planning_dataset"),
+    ).toHaveLength(2);
+    expect(screen.getByText("planning-dataset.v1")).toBeTruthy();
+    expect(screen.getByText(/Build and validate the bounded planning dataset/)).toBeTruthy();
+    expect(props.onLoadPublished).not.toHaveBeenCalled();
   });
 });

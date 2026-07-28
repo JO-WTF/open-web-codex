@@ -4,7 +4,10 @@ use axum::{
     Json,
 };
 use open_web_codex_platform_contracts::error::PlatformError;
-use open_web_codex_platform_contracts::{SupervisorPolicyBinding, SupervisorPolicySummary};
+use open_web_codex_platform_contracts::{
+    SupervisorPolicyBinding, SupervisorPolicyDetail, SupervisorPolicySelection,
+    SupervisorPolicySummary,
+};
 use open_web_codex_platform_store::AppState;
 use sqlx::Row;
 use uuid::Uuid;
@@ -29,6 +32,44 @@ pub async fn list_published(
                 )),
             )
         })
+}
+
+pub async fn get_published(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path((policy_id, version)): Path<(String, String)>,
+) -> ApiResult<SupervisorPolicyDetail> {
+    supervisor_policy::resolve(
+        &state.db,
+        auth.organization_id,
+        &SupervisorPolicySelection { policy_id, version },
+    )
+    .await
+    .map(|policy| Json(policy.detail))
+    .map_err(|error| match error {
+        supervisor_policy::SupervisorPolicyError::NotFound => (
+            StatusCode::NOT_FOUND,
+            Json(PlatformError::not_found("Supervisor Policy was not found")),
+        ),
+        supervisor_policy::SupervisorPolicyError::Invalid(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PlatformError::internal(
+                "published Supervisor Policy is invalid",
+            )),
+        ),
+        supervisor_policy::SupervisorPolicyError::Capability(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PlatformError::internal(
+                "Supervisor Policy Runtime requirements are unavailable",
+            )),
+        ),
+        supervisor_policy::SupervisorPolicyError::Database => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PlatformError::internal(
+                "Supervisor Policy database operation failed",
+            )),
+        ),
+    })
 }
 
 pub async fn get_run_binding(

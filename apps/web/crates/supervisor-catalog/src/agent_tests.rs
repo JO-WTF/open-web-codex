@@ -14,7 +14,10 @@ fn publishes_exact_runtime_roles_and_seals_role_content() {
             .iter()
             .map(|role| role.name.as_str())
             .collect::<Vec<_>>(),
-        vec!["data_agent", "network_planning_agent"]
+        vec![
+            "agent_7e81fe6ff16d257b64a209abc623833c",
+            "agent_cc4182517eeeaeb65ac5b50da67da6ba"
+        ]
     );
     for (role, definition) in roles.iter().zip(resolved_definitions) {
         assert_eq!(
@@ -23,6 +26,13 @@ fn publishes_exact_runtime_roles_and_seals_role_content() {
         );
         assert_eq!(definition.content_sha256.len(), 64);
         assert_ne!(definition.content_sha256, role.content_sha256);
+        assert!(!definition.developer_instructions.is_empty());
+        let detail = definition.detail(AgentDefinitionSource::Repository);
+        assert_eq!(
+            detail.developer_instructions,
+            definition.developer_instructions
+        );
+        assert_eq!(detail.content_sha256, definition.content_sha256);
         assert!(role.config_toml.contains("[agents]\nenabled = false"));
         assert!(role.config_toml.contains("shell_tool = false"));
     }
@@ -49,8 +59,12 @@ fn definitions_bind_versions_to_reviewed_runtime_instructions() {
 
 #[test]
 fn platform_runtime_role_names_are_reserved() {
-    assert!(is_platform_runtime_role("data_agent"));
-    assert!(is_platform_runtime_role("network_planning_agent"));
+    assert!(is_platform_runtime_role(
+        "agent_7e81fe6ff16d257b64a209abc623833c"
+    ));
+    assert!(is_platform_runtime_role(
+        "agent_cc4182517eeeaeb65ac5b50da67da6ba"
+    ));
     assert!(!is_platform_runtime_role("user_defined_agent"));
 }
 
@@ -71,8 +85,7 @@ fn user_release_inherits_only_reviewed_template_capabilities() {
             version: "1.6.0".to_string(),
         },
     };
-    let resolved =
-        validate_user_release(spec.clone(), "agent_0123456789abcdef0123456789abcdef").unwrap();
+    let resolved = validate_user_release(spec.clone()).unwrap();
     assert_eq!(
         resolved.required_capabilities,
         resolve_builtin("enterprise-data-agent", "1.6.0")
@@ -87,11 +100,36 @@ fn user_release_inherits_only_reviewed_template_capabilities() {
         .runtime_role
         .config_toml
         .contains("enabled_tools = [\"build_planning_dataset\""));
+    assert_eq!(resolved.developer_instructions, spec.developer_instructions);
 
     let mut invalid = spec;
     invalid.output_artifact_types = vec!["unreviewed-output.v1".to_string()];
     assert_eq!(
-        validate_user_release(invalid, "agent_0123456789abcdef0123456789abcdef").unwrap_err(),
+        validate_user_release(invalid).unwrap_err(),
         AgentCatalogError::Invalid
     );
+}
+
+#[test]
+fn repository_and_web_agent_sources_compile_to_identical_execution_semantics() {
+    for repository in list_resolved_builtins().unwrap() {
+        let spec = repository.authoring_spec();
+        let web = validate_user_release(spec.clone()).unwrap();
+
+        assert_eq!(repository.execution_semantics(), web.execution_semantics());
+        assert_eq!(
+            repository.execution_semantics_sha256(),
+            web.execution_semantics_sha256()
+        );
+
+        let mut changed_spec = spec;
+        changed_spec
+            .developer_instructions
+            .push_str("\nRequire an additional evidence note.");
+        let changed = validate_user_release(changed_spec).unwrap();
+        assert_ne!(
+            repository.execution_semantics_sha256(),
+            changed.execution_semantics_sha256()
+        );
+    }
 }

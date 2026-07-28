@@ -85,6 +85,22 @@ Run 预检重新解析并拒绝缺失或漂移。平台现允许只有一个 Age
 跨 Organization 拒绝和精确依赖。尚未完成任意 Tool/Plugin 创作或原生 Runtime
 Agent CRUD，也尚未用真实 Runtime 重跑用户发布的 Release。
 
+代码 Package 与 Web 草稿现已收敛为同一个 Agent/Supervisor authoring contract 和
+服务端语义编译器。Agent Runtime Role 只由 `definitionId + version` 稳定派生；
+Supervisor 的 Role、Runtime requirement、Artifact handoff 与并发限制只由精确
+Agent 发布和草稿合同派生。两种来源必须产生逐字段相等的规范化执行语义和
+execution-semantics SHA-256，代码 Package 中任何派生字段漂移都会显式失败。
+Supervisor 指令进一步拆为平台 Owner 发布的不可变行为合同、作者可编辑的
+`customInstructions` 和服务端生成的结构化执行合同；编译器把三者确定性合成为官方
+`thread/start.developerInstructions`。Web 可发布和选择精确平台合同版本，普通
+Supervisor 草稿不能提交或覆盖平台指令正文，`codex/` 无新增修改。
+
+Agent Studio 已将资源目录、不可变详情和草稿创建/编辑拆成独立页面状态。
+Capability 页面从受版本控制的 Plugin/MCP 清单生成浏览器安全目录；MCP 页面把
+“平台已审查的声明”与“当前 Thread 实际启用状态”并列展示，因此 `map_utils`
+可以作为可用声明被查看，同时在未授权给当前 Thread 时明确显示为未启用。任意
+Capability/MCP 创作仍保持显式不可用，直到具备类型化校验、隔离运行与发布合同。
+
 Agent、Skill、MCP 的长期整改顺序统一维护在
 [Agent、Skill 与 MCP 原生生命周期整改计划](agent-capability-lifecycle-plan.md)。
 当前 Phase 0 删除 V1 产品兼容、伪 V2 capability、Profile 全局企业 Role 注册和

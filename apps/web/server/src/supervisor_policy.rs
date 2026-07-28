@@ -1,6 +1,9 @@
 use open_web_codex_adapter::{PlatformRuntimeRole, RequiredMcpServer};
 use open_web_codex_codex_contracts::{CapabilityDeclaration, CapabilityManifest, CapabilityStatus};
-use open_web_codex_platform_contracts::{SupervisorPolicySelection, SupervisorPolicySummary};
+use open_web_codex_platform_contracts::{
+    SupervisorAgentSelection, SupervisorArtifactContractInput, SupervisorPolicyDetail,
+    SupervisorPolicyOrigin, SupervisorPolicySelection, SupervisorPolicySummary,
+};
 use open_web_codex_run_orchestrator::{SupervisorPolicySnapshotInput, SupervisorPolicySource};
 use open_web_codex_supervisor_catalog::supervisor::{
     self, ResolvedSupervisorPackage, RuntimeCapabilityRequirement, SupervisorCatalogError,
@@ -29,6 +32,7 @@ pub(crate) enum SupervisorPolicyError {
 #[derive(Debug)]
 pub(crate) struct ResolvedSupervisorPolicy {
     pub snapshot: SupervisorPolicySnapshotInput,
+    pub detail: SupervisorPolicyDetail,
     pub required_runtime_roles: Vec<PlatformRuntimeRole>,
     pub role_spawn_limits: BTreeMap<String, u32>,
     pub required_mcp_servers: Vec<RequiredMcpServer>,
@@ -56,6 +60,7 @@ pub(crate) async fn list_published(
         version: row.get("version"),
         display_name: row.get("display_name"),
         description: row.get("description"),
+        source: SupervisorPolicyOrigin::UserRelease,
     }));
     Ok(published)
 }
@@ -126,6 +131,44 @@ fn from_package(
     source: SupervisorPolicySource,
     release_id: Option<Uuid>,
 ) -> ResolvedSupervisorPolicy {
+    let origin = match source {
+        SupervisorPolicySource::Repository => SupervisorPolicyOrigin::Repository,
+        SupervisorPolicySource::UserRelease => SupervisorPolicyOrigin::UserRelease,
+    };
+    let detail = SupervisorPolicyDetail {
+        policy_id: package.policy_id.clone(),
+        version: package.version.clone(),
+        display_name: package.display_name.clone(),
+        description: package.description.clone(),
+        source: origin,
+        responsibilities: package.responsibilities.clone(),
+        instruction_policy: package.instruction_policy.clone(),
+        platform_instructions: package.platform_instructions.clone(),
+        custom_instructions: package.custom_instructions.clone(),
+        agents: package
+            .agents
+            .iter()
+            .map(|agent| SupervisorAgentSelection {
+                definition_id: agent.definition_id.clone(),
+                version: agent.version.clone(),
+                release_id: agent.release_id,
+                spawn_limit: agent.spawn_limit,
+            })
+            .collect(),
+        artifact_contracts: package
+            .artifact_contracts
+            .iter()
+            .map(|contract| SupervisorArtifactContractInput {
+                artifact_type: contract.artifact_type.clone(),
+                producer_agent: contract.producer_agent.clone(),
+                consumer_agents: contract.consumer_agents.clone(),
+                required: contract.required,
+            })
+            .collect(),
+        max_active_child_agents: package.max_active_child_agents,
+        content_sha256: package.content_sha256.clone(),
+        execution_semantics_sha256: package.execution_semantics_sha256(),
+    };
     ResolvedSupervisorPolicy {
         snapshot: SupervisorPolicySnapshotInput {
             policy_id: package.policy_id,
@@ -136,6 +179,7 @@ fn from_package(
             source,
             release_id,
         },
+        detail,
         required_runtime_roles: package.required_runtime_roles,
         role_spawn_limits: package.role_spawn_limits,
         required_mcp_servers: package.required_mcp_servers,
@@ -155,8 +199,18 @@ async fn resolve_release_row(
     let available_agents = agent_catalog::list_resolved(db, organization_id)
         .await
         .map_err(|_| SupervisorPolicyError::Invalid("Agent catalog is invalid"))?;
-    let package = supervisor::validate_release_with_agents(spec.clone(), &available_agents)
-        .map_err(map_catalog_error)?;
+    let instruction_policy =
+        crate::supervisor_instruction_policy::resolve(db, &spec.instruction_policy)
+            .await
+            .map_err(|_| {
+                SupervisorPolicyError::Invalid("Supervisor instruction policy is invalid")
+            })?;
+    let package = supervisor::validate_release_with_agents_and_policy(
+        spec.clone(),
+        &available_agents,
+        &instruction_policy,
+    )
+    .map_err(map_catalog_error)?;
     if package.content_sha256 != row.get::<String, _>("content_sha256") {
         return Err(SupervisorPolicyError::Invalid(
             "Release content hash does not match",
@@ -303,6 +357,12 @@ fn validate_runtime_capability(
 fn map_catalog_error(error: SupervisorCatalogError) -> SupervisorPolicyError {
     match error {
         SupervisorCatalogError::NotFound => SupervisorPolicyError::NotFound,
+        SupervisorCatalogError::AgentNotPublished(_) => {
+            SupervisorPolicyError::Invalid("required Agent Definition is not published")
+        }
+        SupervisorCatalogError::InstructionPolicyNotPublished(_) => {
+            SupervisorPolicyError::Invalid("Supervisor instruction policy is not published")
+        }
         SupervisorCatalogError::Invalid(message) => SupervisorPolicyError::Invalid(message),
     }
 }

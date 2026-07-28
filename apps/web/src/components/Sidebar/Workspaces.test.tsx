@@ -46,6 +46,7 @@ describe("Web workspace actions", () => {
       version: "1.1.0",
       display_name: "Enterprise Supervisor Copilot",
       description: "Coordinates governed data and network planning.",
+      source: "repository" as const,
     };
     render(
       <Workspaces

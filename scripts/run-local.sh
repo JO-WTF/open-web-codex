@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+umask 077
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
@@ -22,6 +23,7 @@ run_dir="$data_dir/run"
 log_dir="$data_dir/logs"
 pid_file="$run_dir/server.pid"
 server_log="$log_dir/server.log"
+launcher_log="$log_dir/run-local.log"
 master_key_file="$data_dir/master-key"
 profile_home="${CODEX_HOME:-$data_dir/profiles/default}"
 runner_root="${OPEN_WEB_CODEX_RUNNER_ROOT:-$data_dir/runner}"
@@ -34,6 +36,7 @@ Usage: ./scripts/run-local.sh [options]
 
 Options:
   --background              Start the platform in the background.
+  --restart                 Build, then restart the background platform.
   --stop                    Stop the platform recorded for the data directory.
   --status                  Show process and health status.
   --no-build                Reuse existing browser and Rust build outputs.
@@ -82,9 +85,78 @@ error() {
   printf 'error: %s\n' "$*" >&2
 }
 
+is_tty="0"
+if [[ -t 1 ]]; then
+  is_tty="1"
+fi
+if [[ "$is_tty" == "1" && -z "${NO_COLOR:-}" ]]; then
+  color_green=$'\033[32m'
+  color_red=$'\033[31m'
+  color_cyan=$'\033[36m'
+  color_dim=$'\033[2m'
+  color_reset=$'\033[0m'
+else
+  color_green=""
+  color_red=""
+  color_cyan=""
+  color_dim=""
+  color_reset=""
+fi
+
+show_launch_header() {
+  printf '\n%sopen-web-codex · Local Runtime%s\n' "$color_cyan" "$color_reset"
+  printf '  Mode: %s · Profile: %s · Port: %s\n\n' \
+    "$codex_mode" "$build_profile" "$server_port"
+}
+
+show_step_skipped() {
+  printf '  %s○%s %-30s %s%s%s\n' \
+    "$color_dim" "$color_reset" "$1" "$color_dim" "$2" "$color_reset"
+}
+
+show_failure_log() {
+  printf '\n%sLast local-runner log lines (%s):%s\n' \
+    "$color_red" "$launcher_log" "$color_reset" >&2
+  tail -n 40 "$launcher_log" >&2 || true
+}
+
+run_step() {
+  local label="$1" started result elapsed
+  shift
+  started="$SECONDS"
+  if [[ "$is_tty" == "1" ]]; then
+    printf '  %s→%s %-30s' "$color_cyan" "$color_reset" "$label"
+  else
+    printf '  → %s\n' "$label"
+  fi
+  if "$@" >>"$launcher_log" 2>&1; then
+    result=0
+  else
+    result=$?
+  fi
+  elapsed=$((SECONDS - started))
+  if ((result == 0)); then
+    if [[ "$is_tty" == "1" ]]; then
+      printf '\r  %s✓%s %-30s %s%ss%s\n' \
+        "$color_green" "$color_reset" "$label" "$color_dim" "$elapsed" "$color_reset"
+    else
+      printf '  ✓ %-30s %ss\n' "$label" "$elapsed"
+    fi
+    return 0
+  fi
+  if [[ "$is_tty" == "1" ]]; then
+    printf '\r  %s✗%s %-30s failed\n' "$color_red" "$color_reset" "$label" >&2
+  else
+    printf '  ✗ %-30s failed\n' "$label" >&2
+  fi
+  show_failure_log
+  return "$result"
+}
+
 while (($# > 0)); do
   case "$1" in
     --background) action="background" ;;
+    --restart) action="restart" ;;
     --stop) action="stop" ;;
     --status) action="status" ;;
     --no-build) skip_build="1" ;;
@@ -137,6 +209,20 @@ case "$build_profile" in debug|release) ;; *) error "OPEN_WEB_CODEX_BUILD_PROFIL
 server_bin="$web_root/target/$build_profile/open-web-codex-server"
 debug_server_bin="$web_root/target/debug/open-web-codex-server"
 release_server_bin="$web_root/target/release/open-web-codex-server"
+health_host="$bind_host"
+case "$health_host" in
+  0.0.0.0|"::"|"[::]") health_host="127.0.0.1" ;;
+esac
+health_url_host="$health_host"
+if [[ "$health_url_host" == *:* && "$health_url_host" != \[*\] ]]; then
+  health_url_host="[$health_url_host]"
+fi
+bind_address="$bind_host:$server_port"
+if [[ "$bind_host" == *:* && "$bind_host" != \[*\] ]]; then
+  bind_address="[$bind_host]:$server_port"
+fi
+health_url="http://$health_url_host:$server_port/api/health"
+web_url="http://$health_url_host:$server_port/web"
 
 read_pid() {
   [[ -f "$pid_file" ]] && tr -d '[:space:]' <"$pid_file"
@@ -157,23 +243,54 @@ is_server_running() {
 
 health_ok() {
   command -v curl >/dev/null 2>&1 || return 1
-  curl --silent --fail "http://$bind_host:$server_port/api/health" 2>/dev/null \
+  curl --silent --fail --connect-timeout 1 --max-time 2 "$health_url" 2>/dev/null \
     | grep -Eq '"ok"[[:space:]]*:[[:space:]]*true'
 }
 
+box_width=76
+box_rule() {
+  local left="$1" fill="$2" right="$3" line="" i
+  for ((i = 0; i < box_width; i++)); do
+    line+="$fill"
+  done
+  printf '%s%s%s\n' "$left" "$line" "$right"
+}
+
+box_line() {
+  local value="$1" content_width=$((box_width - 2))
+  if ((${#value} > content_width)); then
+    value="${value:0:$((content_width - 3))}..."
+  fi
+  printf '│ %-*s │\n' "$content_width" "$value"
+}
+
+show_service_box() {
+  local status="$1" pid="${2:---}"
+  printf '\n'
+  box_rule '╭' '─' '╮'
+  box_line ' open-web-codex · Local Service'
+  box_rule '├' '─' '┤'
+  box_line " Status  : $status"
+  box_line " Web     : $web_url"
+  box_line " API     : $health_url"
+  box_line " Runtime : $codex_mode / $build_profile"
+  box_line " Process : $pid"
+  box_line " Logs    : $server_log"
+  box_rule '╰' '─' '╯'
+}
+
 show_status() {
-  local pid
+  local pid status
   pid="$(read_pid || true)"
-  if is_server_running "$pid"; then
-    printf 'server: running (PID %s)\n' "$pid"
+  if is_server_running "$pid" && health_ok; then
+    status="HEALTHY"
+  elif is_server_running "$pid"; then
+    status="STARTING OR UNHEALTHY"
   else
-    printf 'server: stopped\n'
+    status="STOPPED"
+    pid="--"
   fi
-  if health_ok; then
-    printf 'health: healthy\nweb:    http://%s:%s/\n' "$bind_host" "$server_port"
-  else
-    printf 'health: unavailable\n'
-  fi
+  show_service_box "$status" "$pid"
 }
 
 stop_server() {
@@ -198,9 +315,22 @@ stop_server() {
 }
 
 case "$action" in
-  stop) stop_server; exit $? ;;
+  stop)
+    stop_server >/dev/null
+    show_service_box "STOPPED" "--"
+    exit 0
+    ;;
   status) show_status; exit 0 ;;
 esac
+
+existing_pid="$(read_pid || true)"
+if [[ "$action" != "restart" ]] && is_server_running "$existing_pid"; then
+  error "open-web-codex is already running (PID $existing_pid); use --restart to rebuild and replace it"
+  exit 1
+fi
+if ! is_server_running "$existing_pid"; then
+  rm -f "$pid_file"
+fi
 
 if [[ -n "$database_url_file" ]]; then
   [[ -r "$database_url_file" ]] || { error "database URL file is not readable: $database_url_file"; exit 2; }
@@ -233,29 +363,66 @@ if [[ "$codex_mode" == "real" && -z "$codex_bin" ]]; then
 fi
 code_mode_host_bin="$runtime_root/target/$build_profile/codex-code-mode-host"
 
-build_all() {
-  command -v npm >/dev/null 2>&1 || { error "npm is required"; exit 1; }
-  command -v cargo >/dev/null 2>&1 || { error "cargo is required"; exit 1; }
-  if [[ ! -d "$web_root/node_modules" ]]; then
-    (cd "$web_root" && npm ci)
-  fi
+install_web_dependencies() {
+  (cd "$web_root" && npm ci)
+}
+
+build_browser() {
   (cd "$web_root" && npm run build)
+}
+
+build_platform_server() {
   if [[ "$build_profile" == "release" ]]; then
     (cd "$web_root" && CARGO_INCREMENTAL=0 cargo build --locked --release -p open-web-codex-server)
   else
-    (cd "$web_root" && CARGO_INCREMENTAL=0 cargo build --locked -p open-web-codex-server)
-  fi
-  if [[ "$codex_mode" == "real" && "$using_repository_codex" == "1" ]]; then
-    if [[ "$build_profile" == "release" ]]; then
-      (cd "$runtime_root" && CARGO_INCREMENTAL=0 cargo build --locked --release -p codex-cli --bin codex -p codex-code-mode-host --bin codex-code-mode-host)
-    else
-      (cd "$runtime_root" && CARGO_INCREMENTAL=0 cargo build --locked -p codex-cli --bin codex -p codex-code-mode-host --bin codex-code-mode-host)
-    fi
+    (cd "$web_root" && cargo build --locked -p open-web-codex-server)
   fi
 }
 
+build_codex_runtime() {
+  if [[ "$build_profile" == "release" ]]; then
+    (cd "$runtime_root" && CARGO_INCREMENTAL=0 cargo build --locked --release -p codex-cli --bin codex -p codex-code-mode-host --bin codex-code-mode-host)
+  else
+    (cd "$runtime_root" && cargo build --locked -p codex-cli --bin codex -p codex-code-mode-host --bin codex-code-mode-host)
+  fi
+}
+
+prepare_maps_mcp() {
+  OPEN_WEB_CODEX_MAPS_MCP_VENV="$maps_mcp_venv" \
+    OPEN_WEB_CODEX_LOG_DIR="$log_dir" \
+    "$script_dir/setup-maps-mcp-env.sh"
+}
+
+prepare_supply_chain_mcp() {
+  OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV="$supply_chain_mcp_venv" \
+    OPEN_WEB_CODEX_LOG_DIR="$log_dir" \
+    "$script_dir/setup-supply-chain-mcp-env.sh"
+}
+
+prepare_build_tools() {
+  command -v npm >/dev/null 2>&1 || { error "npm is required"; exit 1; }
+  command -v cargo >/dev/null 2>&1 || { error "cargo is required"; exit 1; }
+}
+
+show_launch_header
+: >"$launcher_log"
 if [[ "$skip_build" == "0" ]]; then
-  build_all
+  prepare_build_tools
+  if [[ ! -d "$web_root/node_modules" \
+    || ! -f "$web_root/node_modules/.package-lock.json" \
+    || "$web_root/package-lock.json" -nt "$web_root/node_modules/.package-lock.json" ]]
+  then
+    run_step "Browser dependencies" install_web_dependencies
+  else
+    show_step_skipped "Browser dependencies" "ready"
+  fi
+  run_step "Browser application" build_browser
+  run_step "Platform server" build_platform_server
+  if [[ "$codex_mode" == "real" && "$using_repository_codex" == "1" ]]; then
+    run_step "Codex Runtime" build_codex_runtime
+  fi
+else
+  show_step_skipped "Build outputs" "reused (--no-build)"
 fi
 [[ -x "$server_bin" ]] || { error "platform server is missing: $server_bin"; exit 1; }
 [[ -f "$web_dist/index.html" ]] || { error "browser build is missing: $web_dist/index.html"; exit 1; }
@@ -266,20 +433,20 @@ if [[ "$codex_mode" == "real" ]]; then
     export CODEX_CODE_MODE_HOST_PATH="$code_mode_host_bin"
   fi
   if [[ "${OPEN_WEB_CODEX_SKIP_MAPS_MCP_SETUP:-0}" != "1" ]]; then
-    OPEN_WEB_CODEX_MAPS_MCP_VENV="$maps_mcp_venv" \
-      OPEN_WEB_CODEX_LOG_DIR="$log_dir" \
-      "$script_dir/setup-maps-mcp-env.sh" >/dev/null
+    run_step "Maps MCP environment" prepare_maps_mcp
+  else
+    show_step_skipped "Maps MCP environment" "skipped"
   fi
   if [[ "${OPEN_WEB_CODEX_SKIP_SUPPLY_CHAIN_MCP_SETUP:-0}" != "1" ]]; then
-    OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV="$supply_chain_mcp_venv" \
-      OPEN_WEB_CODEX_LOG_DIR="$log_dir" \
-      "$script_dir/setup-supply-chain-mcp-env.sh" >/dev/null
+    run_step "Supply-chain MCP" prepare_supply_chain_mcp
+  else
+    show_step_skipped "Supply-chain MCP" "skipped"
   fi
 fi
 
 server_command=(
   "$server_bin"
-  --bind "$bind_host:$server_port"
+  --bind "$bind_address"
   --database-max-connections "$database_max_connections"
   --codex-mode "$codex_mode"
   --runner-root "$runner_root"
@@ -287,6 +454,11 @@ server_command=(
 )
 if [[ "$codex_mode" == "real" ]]; then
   server_command+=(--codex-home "$profile_home" --codex-bin "$codex_bin")
+fi
+
+if [[ "$action" == "restart" ]]; then
+  run_step "Stop current service" stop_server
+  action="background"
 fi
 
 existing_pid="$(read_pid || true)"
@@ -312,7 +484,8 @@ else
   unset CODEX_HOME CODEX_BIN
 fi
 
-if [[ "$action" == "background" ]]; then
+start_background_server() {
+  local server_pid healthy_samples=0
   nohup "${server_command[@]}" >"$server_log" 2>&1 </dev/null &
   server_pid=$!
   printf '%s\n' "$server_pid" >"$pid_file"
@@ -320,19 +493,34 @@ if [[ "$action" == "background" ]]; then
     if ! is_server_running "$server_pid"; then
       rm -f "$pid_file"
       error "open-web-codex exited during startup; inspect $server_log"
-      exit 1
+      printf '\nServer log tail (%s):\n' "$server_log" >>"$launcher_log"
+      tail -n 40 "$server_log" >>"$launcher_log" 2>&1 || true
+      return 1
     fi
     if health_ok; then
-      printf 'open-web-codex running in background (PID %s)\n' "$server_pid"
-      printf 'web:  http://%s:%s/\nlogs: %s\n' "$bind_host" "$server_port" "$server_log"
-      exit 0
+      healthy_samples=$((healthy_samples + 1))
+      if ((healthy_samples >= 3)); then
+        return 0
+      fi
+    else
+      healthy_samples=0
     fi
     sleep 0.2
   done
   kill -TERM "$server_pid" 2>/dev/null || true
   rm -f "$pid_file"
-  error "open-web-codex did not become healthy; inspect $server_log"
-  exit 1
+  printf '\nServer log tail (%s):\n' "$server_log" >>"$launcher_log"
+  tail -n 40 "$server_log" >>"$launcher_log" 2>&1 || true
+  return 1
+}
+
+if [[ "$action" == "background" ]]; then
+  run_step "Platform service" start_background_server
+  server_pid="$(read_pid)"
+  show_service_box "HEALTHY" "$server_pid"
+  printf '\n%sDetailed startup output: %s%s\n' \
+    "$color_dim" "$launcher_log" "$color_reset"
+  exit 0
 fi
 
 cleanup() {
@@ -344,5 +532,7 @@ cleanup() {
 }
 trap cleanup EXIT
 printf '%s\n' "$$" >"$pid_file"
-printf 'Starting open-web-codex at http://%s:%s/ (%s Codex mode)\n' "$bind_host" "$server_port" "$codex_mode"
+show_service_box "FOREGROUND" "$$"
+printf '\n%sDetailed startup output: %s%s\n\n' \
+  "$color_dim" "$launcher_log" "$color_reset"
 exec "${server_command[@]}"

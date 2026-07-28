@@ -105,6 +105,145 @@ describe("PlatformClient", () => {
     });
   });
 
+  it("loads one exact published Supervisor through the typed read-only route", async () => {
+    const detail = {
+      policy_id: "enterprise/supervisor",
+      version: "1.7.0+stable",
+      display_name: "Enterprise Supervisor",
+      description: "Coordinates governed Agents.",
+      source: "repository",
+      responsibilities: ["Delegate bounded assignments."],
+      instruction_policy: {
+        release_id: null,
+        policy_id: "platform-supervisor-behavior",
+        version: "1.0.0",
+        display_name: "Platform Supervisor behavior",
+        description: "Platform boundaries.",
+        source: "repository",
+        content_sha256: "f".repeat(64),
+      },
+      platform_instructions: "Use only authorized Runtime capabilities.",
+      custom_instructions: "Coordinate the selected Agents.",
+      agents: [],
+      artifact_contracts: [],
+      max_active_child_agents: 2,
+      content_sha256: "a".repeat(64),
+      execution_semantics_sha256: "c".repeat(64),
+    };
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(JSON.stringify(detail), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PlatformClient({
+      baseUrl: "https://platform.test",
+      token: "session-token",
+    });
+
+    await expect(
+      client.getSupervisorPolicy("enterprise/supervisor", "1.7.0+stable"),
+    ).resolves.toEqual(detail);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://platform.test/api/supervisor-policies/enterprise%2Fsupervisor/1.7.0%2Bstable",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+  });
+
+  it("publishes a platform-owned Supervisor instruction contract through its typed resource", async () => {
+    const request = {
+      policy_id: "platform-supervisor-behavior",
+      version: "1.1.0",
+      display_name: "Platform Supervisor behavior",
+      description: "Updated platform boundaries.",
+      platform_instructions: "Use only authorized Runtime capabilities.",
+    };
+    const detail = {
+      ...request,
+      release_id: "policy-release-1",
+      source: "platform_release",
+      content_sha256: "f".repeat(64),
+    };
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(JSON.stringify(detail), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PlatformClient({
+      baseUrl: "https://platform.test",
+      token: "session-token",
+    });
+
+    await expect(client.publishSupervisorInstructionPolicy(request)).resolves.toEqual(detail);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://platform.test/api/supervisor-instruction-policies",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify(request),
+      }),
+    );
+  });
+
+  it("loads one exact published Agent through the typed read-only route", async () => {
+    const detail = {
+      source: "repository",
+      release_id: null,
+      definition_id: "enterprise/data-agent",
+      version: "1.6.0+stable",
+      display_name: "Enterprise Data Agent",
+      description: "Builds bounded planning data.",
+      responsibilities: ["Build data."],
+      developer_instructions: "Validate every published dataset.",
+      input_artifact_types: [],
+      output_artifact_types: ["planning-dataset.v1"],
+      required_capabilities: ["supply_chain_data.build_planning_dataset"],
+      capability_template: null,
+      content_sha256: "b".repeat(64),
+      execution_semantics_sha256: "d".repeat(64),
+    };
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(JSON.stringify(detail), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PlatformClient({
+      baseUrl: "https://platform.test",
+      token: "session-token",
+    });
+
+    await expect(
+      client.getAgentDefinition("enterprise/data-agent", "1.6.0+stable"),
+    ).resolves.toEqual(detail);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://platform.test/api/agent-definitions/enterprise%2Fdata-agent/1.6.0%2Bstable",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+  });
+
+  it("loads the reviewed capability package directory through a typed resource", async () => {
+    const packages = [{
+      package_id: "map-utils",
+      version: "0.1.0",
+      display_name: "Map Utils",
+      description: "Geocode, route, and create map cards.",
+      capability_root_id: "local-maps-mcp",
+      capabilities: ["Maps", "Map cards"],
+      mcp_server_names: ["map_utils"],
+      includes_skills: true,
+      source: "repository",
+    }];
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(JSON.stringify(packages), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PlatformClient({
+      baseUrl: "https://platform.test",
+      token: "session-token",
+    });
+
+    await expect(client.listCapabilityPackages()).resolves.toEqual(packages);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://platform.test/api/capability-packages",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+  });
+
   it("loads the read-only Runtime Agent projection for a Run", async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(
       new Response(JSON.stringify([{ thread_id: "thread-1", is_root: true }]), {

@@ -6,7 +6,7 @@ use super::{require_runtime_manifest, resolve_builtin, SupervisorPolicyError};
 fn published_policy() -> super::ResolvedSupervisorPolicy {
     resolve_builtin(&SupervisorPolicySelection {
         policy_id: "enterprise-supervisor-copilot".to_string(),
-        version: "1.7.0".to_string(),
+        version: "1.8.0".to_string(),
     })
     .unwrap()
 }
@@ -15,7 +15,7 @@ fn published_policy() -> super::ResolvedSupervisorPolicy {
 fn resolves_only_the_current_published_version_and_seals_its_content() {
     let published = open_web_codex_supervisor_catalog::supervisor::list_published().unwrap();
     assert_eq!(published.len(), 1);
-    assert_eq!(published[0].version, "1.7.0");
+    assert_eq!(published[0].version, "1.8.0");
 
     let selected = SupervisorPolicySelection {
         policy_id: published[0].policy_id.clone(),
@@ -23,12 +23,23 @@ fn resolves_only_the_current_published_version_and_seals_its_content() {
     };
     let policy = resolve_builtin(&selected).unwrap();
     assert_eq!(policy.snapshot.content_sha256.len(), 64);
+    assert_eq!(policy.detail.responsibilities.len(), 4);
+    assert_eq!(policy.detail.agents.len(), 2);
+    assert_eq!(policy.detail.artifact_contracts.len(), 3);
+    assert!(policy
+        .detail
+        .platform_instructions
+        .contains("You are the root Supervisor"));
+    assert!(policy
+        .detail
+        .custom_instructions
+        .contains("warehouse-network case"));
     assert_eq!(policy.max_active_child_agents, 2);
     assert_eq!(
         policy.role_spawn_limits,
         [
-            ("data_agent".to_string(), 1),
-            ("network_planning_agent".to_string(), 1)
+            ("agent_7e81fe6ff16d257b64a209abc623833c".to_string(), 1),
+            ("agent_cc4182517eeeaeb65ac5b50da67da6ba".to_string(), 1)
         ]
         .into_iter()
         .collect()
@@ -39,7 +50,10 @@ fn resolves_only_the_current_published_version_and_seals_its_content() {
             .iter()
             .map(|role| (role.name.as_str(), role.version.as_str()))
             .collect::<Vec<_>>(),
-        vec![("data_agent", "1.6.0"), ("network_planning_agent", "1.5.0")]
+        vec![
+            ("agent_7e81fe6ff16d257b64a209abc623833c", "1.6.0"),
+            ("agent_cc4182517eeeaeb65ac5b50da67da6ba", "1.5.0")
+        ]
     );
     assert_eq!(
         policy

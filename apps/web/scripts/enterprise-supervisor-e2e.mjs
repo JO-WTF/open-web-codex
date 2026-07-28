@@ -24,7 +24,7 @@ const email = process.env.E2E_ADMIN_EMAIL ?? "enterprise-e2e@open-web-codex.loca
 const password = process.env.E2E_ADMIN_PASSWORD ?? "open-web-codex-enterprise-e2e";
 const policy = {
   policy_id: "enterprise-supervisor-copilot",
-  version: "1.7.0",
+  version: "1.8.0",
 };
 const providerKey = useBuiltInProvider
   ? null
@@ -763,7 +763,7 @@ await runCase("browser history and evidence overview recovery", async () => {
     api(`/tasks/${state.task.id}/artifacts`),
   ]);
   const overview = { policy, agents, executions, artifacts };
-  assert.equal(policy.version, "1.7.0");
+  assert.equal(policy.version, "1.8.0");
   assert.equal(agents.length, 3);
   assert.deepEqual(executions, finalEvidence.executions);
   assert.equal(artifacts.length, finalEvidence.artifacts.length);

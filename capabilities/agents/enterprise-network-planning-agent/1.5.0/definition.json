@@ -3,7 +3,7 @@
   "version": "1.5.0",
   "displayName": "Enterprise Network Planning Agent",
   "description": "Compares bounded supply-chain network scenarios using approved planning datasets and deterministic planning tools.",
-  "runtimeRole": "network_planning_agent",
+  "runtimeRole": "agent_cc4182517eeeaeb65ac5b50da67da6ba",
   "runtimeProfile": {
     "contentSha256": "f63062bfa373c1f3904880d5c9ea777e6abd95b3e3e8aa9692b9907d2269e409"
   },
@@ -23,6 +23,10 @@
     "scenario_comparison.v1",
     "facility_location_solution.v1"
   ],
+  "capabilityTemplate": {
+    "definitionId": "enterprise-network-planning-agent",
+    "version": "1.5.0"
+  },
   "requiredCapabilities": [
     "mcpServer/resource/read",
     "supply_chain_planner.prepare_network_snapshot",

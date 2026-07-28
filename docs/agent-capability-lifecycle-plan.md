@@ -126,6 +126,8 @@ flowchart LR
 - [ ] `AgentDefinition` 只保存治理元数据和 Runtime resource ID，不保存 Runtime 文件路径；
 - [x] 仓网两个 Agent 与用户 Release 通过同一类型化 Catalog API 解析和展示；
 - [x] 集中名称、版本、内容摘要、保留名称与 capability template 收窄校验；
+- [x] 代码 Package 与 Web 草稿通过同一规范化语义编译器生成 Runtime Role、
+  capability/MCP 要求和 execution-semantics 摘要；
 - [ ] 删除 Adapter、Server、Profile Host 中重复的 TOML 语义解析；
 - [x] 明确临时文件物化器在原生 V2 Agent CRUD 上线后的删除条件，且不向浏览器开放；
 - [x] 增加用户 Agent 与企业 seed 同名冲突、跨组织拒绝、精确 Release 依赖和版本
@@ -133,8 +135,9 @@ flowchart LR
 
 当前过渡切片已经提供 Web Agent Catalog、Definition/草稿 Revision/不可变 Release、
 组织作用域授权、审计和精确 Supervisor 依赖。浏览器只能选择代码评审的 capability
-template；服务端派生 Role、MCP/Tool allowlist 与 capability roots。Runtime resource
-ID 和原生 CRUD 尚不存在，因此 Phase 1 退出条件仍未全部满足。
+template；服务端的唯一编译器派生 Role、MCP/Tool allowlist 与 capability roots。
+Role 身份由定义 ID 和版本稳定派生，代码/Web 等价性测试比较完整执行语义而非只比较
+展示 DTO。Runtime resource ID 和原生 CRUD 尚不存在，因此 Phase 1 退出条件仍未全部满足。
 
 退出条件：前台 Agent、企业 seed、Policy 引用同一种稳定资源身份，但 Runtime 文件
 仍只是内部过渡实现。

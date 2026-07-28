@@ -4,7 +4,6 @@ use open_web_codex_adapter::PlatformRuntimeRole;
 use open_web_codex_platform_contracts::AgentCapabilityTemplateSelection;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use uuid::Uuid;
 
 use crate::agent::{
     resolve_builtin, runtime_role_template, AgentCatalogError, ResolvedAgentDefinition,
@@ -31,13 +30,25 @@ pub struct AgentReleaseSpec {
 
 pub fn validate_user_release(
     spec: AgentReleaseSpec,
-    runtime_role_name: &str,
 ) -> Result<ResolvedAgentDefinition, AgentCatalogError> {
-    validate_user_release_fields(&spec, runtime_role_name)?;
     let template = resolve_builtin(
         &spec.capability_template.definition_id,
         &spec.capability_template.version,
     )?;
+    compile_agent_release(spec, &template)
+}
+
+pub(crate) fn compile_agent_release(
+    spec: AgentReleaseSpec,
+    template: &ResolvedAgentDefinition,
+) -> Result<ResolvedAgentDefinition, AgentCatalogError> {
+    let runtime_role_name = user_runtime_role_name(&spec.definition_id, &spec.version)?;
+    validate_user_release_fields(&spec, &runtime_role_name)?;
+    if template.definition_id != spec.capability_template.definition_id
+        || template.version != spec.capability_template.version
+    {
+        return Err(AgentCatalogError::Invalid);
+    }
     let template_inputs = template
         .input_artifact_types
         .iter()
@@ -69,7 +80,7 @@ pub fn validate_user_release(
     let runtime_role = PlatformRuntimeRole {
         definition_id: spec.definition_id.clone(),
         version: spec.version.clone(),
-        name: runtime_role_name.to_string(),
+        name: runtime_role_name,
         description: spec.description.clone(),
         config_file: format!(
             "platform-agents/{}/{}.toml",
@@ -86,26 +97,29 @@ pub fn validate_user_release(
         display_name: spec.display_name,
         description: spec.description,
         responsibilities: spec.responsibilities,
+        developer_instructions: spec.developer_instructions,
         input_artifact_types: spec.input_artifact_types,
         output_artifact_types: spec.output_artifact_types,
-        required_capabilities: template.required_capabilities,
+        required_capabilities: template.required_capabilities.clone(),
         capability_template: Some(spec.capability_template),
+        capability_template_sha256: template.capability_template_sha256.clone(),
         runtime_role,
-        required_mcp_servers: template.required_mcp_servers,
+        required_mcp_servers: template.required_mcp_servers.clone(),
         content_sha256,
     })
 }
 
 pub fn user_runtime_role_name(
-    definition_resource_id: Uuid,
+    definition_id: &str,
     version: &str,
 ) -> Result<String, AgentCatalogError> {
-    if !is_safe_version(version) {
+    if !is_safe_definition_id(definition_id) || !is_safe_version(version) {
         return Err(AgentCatalogError::Invalid);
     }
     let mut digest = Sha256::new();
     digest.update(b"agent-runtime-role.v1");
-    digest.update(definition_resource_id.as_bytes());
+    digest.update((definition_id.len() as u64).to_be_bytes());
+    digest.update(definition_id.as_bytes());
     digest.update((version.len() as u64).to_be_bytes());
     digest.update(version.as_bytes());
     Ok(format!("agent_{}", &hex::encode(digest.finalize())[..32]))
@@ -118,7 +132,6 @@ fn validate_user_release_fields(
     if !is_safe_definition_id(&spec.definition_id)
         || !is_safe_version(&spec.version)
         || !is_safe_runtime_role_name(runtime_role_name)
-        || !runtime_role_name.starts_with("agent_")
         || spec.display_name.trim().is_empty()
         || spec.display_name.len() > 256
         || spec.description.trim().is_empty()
@@ -175,7 +188,7 @@ fn user_release_content_sha256(
         runtime_role.content_sha256.as_bytes(),
         template.definition_id.as_bytes(),
         template.version.as_bytes(),
-        template.content_sha256.as_bytes(),
+        template.capability_template_sha256.as_bytes(),
     ] {
         digest.update((field.len() as u64).to_be_bytes());
         digest.update(field);

@@ -64,6 +64,30 @@ export type SupervisorPolicySelection = {
 export type SupervisorPolicySummary = SupervisorPolicySelection & {
   display_name: string;
   description: string;
+  source: "repository" | "user_release";
+};
+
+export type SupervisorInstructionPolicySelection = {
+  policy_id: string;
+  version: string;
+};
+
+export type SupervisorInstructionPolicySummary = SupervisorInstructionPolicySelection & {
+  release_id: string | null;
+  display_name: string;
+  description: string;
+  source: "repository" | "platform_release";
+  content_sha256: string;
+};
+
+export type SupervisorInstructionPolicyDetail = SupervisorInstructionPolicySummary & {
+  platform_instructions: string;
+};
+
+export type SupervisorInstructionPolicyPublishRequest = SupervisorInstructionPolicySelection & {
+  display_name: string;
+  description: string;
+  platform_instructions: string;
 };
 
 export type SupervisorPolicyBinding = SupervisorPolicySelection & {
@@ -91,6 +115,24 @@ export type AgentDefinitionSummary = {
   capability_template: AgentCapabilityTemplateSelection | null;
 };
 
+export type AgentDefinitionDetail = AgentDefinitionSummary & {
+  developer_instructions: string;
+  content_sha256: string;
+  execution_semantics_sha256: string;
+};
+
+export type CapabilityPackageSummary = {
+  package_id: string;
+  version: string;
+  display_name: string;
+  description: string;
+  capability_root_id: string;
+  capabilities: string[];
+  mcp_server_names: string[];
+  includes_skills: boolean;
+  source: "repository";
+};
+
 export type AgentCapabilityTemplateSelection = {
   definition_id: string;
   version: string;
@@ -116,6 +158,7 @@ export type AgentDefinitionValidationIssue = {
 export type AgentDefinitionValidationResult = {
   valid: boolean;
   content_sha256: string | null;
+  execution_semantics_sha256: string | null;
   issues: AgentDefinitionValidationIssue[];
 };
 
@@ -155,13 +198,26 @@ export type SupervisorArtifactContractInput = {
   required: boolean;
 };
 
+export type SupervisorPolicyDetail = SupervisorPolicySummary & {
+  responsibilities: string[];
+  instruction_policy: SupervisorInstructionPolicySummary;
+  platform_instructions: string;
+  custom_instructions: string;
+  agents: SupervisorAgentSelection[];
+  artifact_contracts: SupervisorArtifactContractInput[];
+  max_active_child_agents: number;
+  content_sha256: string;
+  execution_semantics_sha256: string;
+};
+
 export type SupervisorDraftRequest = {
   policy_id: string;
   version: string;
   display_name: string;
   description: string;
   responsibilities: string[];
-  developer_instructions: string;
+  instruction_policy: SupervisorInstructionPolicySelection;
+  custom_instructions: string;
   agents: SupervisorAgentSelection[];
   artifact_contracts: SupervisorArtifactContractInput[];
   max_active_child_agents: number;
@@ -170,10 +226,11 @@ export type SupervisorDraftRequest = {
 export type SupervisorValidationResult = {
   valid: boolean;
   content_sha256: string | null;
+  execution_semantics_sha256: string | null;
   issues: Array<{ code: string; message: string }>;
 };
 
-export type SupervisorReleaseSummary = SupervisorPolicySummary & {
+export type SupervisorReleaseSummary = Omit<SupervisorPolicySummary, "source"> & {
   id: string;
   content_sha256: string;
   published_at: string;
