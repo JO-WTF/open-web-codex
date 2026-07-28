@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -8,21 +6,20 @@ use axum::{
 use open_web_codex_platform_contracts::error::PlatformError;
 use open_web_codex_platform_contracts::{
     SupervisorDefinitionSummary, SupervisorDraftRequest, SupervisorReleaseSummary,
-    SupervisorValidationIssue, SupervisorValidationResult,
+    SupervisorValidationResult,
 };
 use open_web_codex_platform_store::AppState;
-use open_web_codex_supervisor_catalog::{
-    agent,
-    supervisor::{self, ArtifactContract, SupervisorAgentReference, SupervisorReleaseSpec},
-};
+use open_web_codex_supervisor_catalog::supervisor;
 use sqlx::Row;
 use uuid::Uuid;
 
-use crate::middleware::auth::AuthenticatedUser;
 use crate::supervisor_policy;
+use crate::{agent_catalog, middleware::auth::AuthenticatedUser};
 
+mod resolution;
 mod store;
 
+use resolution::{release_spec_from_draft, validate_draft, validate_draft_storage_shape};
 use store::{
     load_definition, load_definitions, load_draft_row, lock_definition, parse_draft, record_audit,
 };
@@ -183,7 +180,9 @@ pub async fn validate(
     let row = load_draft_row(&state.db, auth.organization_id, definition_id).await?;
     require_manage(&auth, row.get("owner_user_id"))?;
     let draft = parse_draft(row.get("draft_spec"))?;
-    Ok(Json(validate_draft(&draft)))
+    Ok(Json(
+        validate_draft(&state.db, auth.organization_id, &draft).await,
+    ))
 }
 
 pub async fn publish(
@@ -212,21 +211,25 @@ pub async fn publish(
     if row.get::<String, _>("policy_id") != draft.policy_id {
         return Err(internal_error());
     }
-    let package = resolve_draft(&draft).map_err(|issue| {
+    let available_agents = agent_catalog::list_resolved(&state.db, auth.organization_id)
+        .await
+        .map_err(|_| internal_error())?;
+    let release_spec = release_spec_from_draft(&draft, &available_agents).map_err(|issue| {
         (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(PlatformError::bad_request(issue.message)),
         )
     })?;
+    let package = supervisor::validate_release_with_agents(release_spec.clone(), &available_agents)
+        .map_err(|error| {
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(PlatformError::bad_request(error.to_string())),
+            )
+        })?;
     let release_id = Uuid::now_v7();
     let revision_id: Uuid = row.get("revision_id");
-    let release_spec = release_spec_from_draft(&draft).map_err(|issue| {
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(PlatformError::bad_request(issue.message)),
-        )
-    })?;
-    let release_spec_value = serde_json::to_value(release_spec).map_err(|_| internal_error())?;
+    let release_spec_value = serde_json::to_value(&release_spec).map_err(|_| internal_error())?;
     let published_at = chrono::Utc::now();
     sqlx::query(
         "INSERT INTO supervisor_releases \
@@ -249,6 +252,30 @@ pub async fn publish(
     .execute(&mut *transaction)
     .await
     .map_err(database_conflict)?;
+    for reference in &release_spec.agents {
+        let Some(agent_release_id) = reference.release_id else {
+            continue;
+        };
+        let definition = available_agents
+            .iter()
+            .find(|definition| definition.release_id == Some(agent_release_id))
+            .ok_or_else(internal_error)?;
+        sqlx::query(
+            "INSERT INTO supervisor_release_agent_dependencies \
+             (organization_id, supervisor_release_id, agent_release_id, \
+              agent_definition_id, agent_version, agent_content_sha256) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(auth.organization_id)
+        .bind(release_id)
+        .bind(agent_release_id)
+        .bind(&reference.definition_id)
+        .bind(&reference.version)
+        .bind(&definition.content_sha256)
+        .execute(&mut *transaction)
+        .await
+        .map_err(database_conflict)?;
+    }
     sqlx::query(
         "UPDATE supervisor_revisions \
          SET state = 'published', published_at = $1, updated_at = $1 \
@@ -289,143 +316,6 @@ pub async fn publish(
     }))
 }
 
-fn validate_draft(draft: &SupervisorDraftRequest) -> SupervisorValidationResult {
-    match resolve_draft(draft) {
-        Ok(package) => SupervisorValidationResult {
-            valid: true,
-            content_sha256: Some(package.content_sha256),
-            issues: Vec::new(),
-        },
-        Err(issue) => SupervisorValidationResult {
-            valid: false,
-            content_sha256: None,
-            issues: vec![issue],
-        },
-    }
-}
-
-fn resolve_draft(
-    draft: &SupervisorDraftRequest,
-) -> Result<supervisor::ResolvedSupervisorPackage, SupervisorValidationIssue> {
-    supervisor::validate_release(release_spec_from_draft(draft)?)
-        .map_err(|error| validation_issue("invalid_release", error.to_string()))
-}
-
-fn release_spec_from_draft(
-    draft: &SupervisorDraftRequest,
-) -> Result<SupervisorReleaseSpec, SupervisorValidationIssue> {
-    let published = agent::list_published()
-        .map_err(|error| validation_issue("agent_catalog_invalid", error.to_string()))?;
-    let by_identity = published
-        .into_iter()
-        .map(|definition| {
-            (
-                format!("{}@{}", definition.definition_id, definition.version),
-                definition,
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-    let agents = draft
-        .agents
-        .iter()
-        .map(|selection| {
-            let identity = format!("{}@{}", selection.definition_id, selection.version);
-            let definition = by_identity.get(&identity).ok_or_else(|| {
-                validation_issue(
-                    "agent_not_published",
-                    format!("Agent Definition '{identity}' is not published"),
-                )
-            })?;
-            Ok(SupervisorAgentReference {
-                definition_id: selection.definition_id.clone(),
-                version: selection.version.clone(),
-                runtime_role: definition.runtime_role.clone(),
-                spawn_limit: selection.spawn_limit,
-            })
-        })
-        .collect::<Result<Vec<_>, SupervisorValidationIssue>>()?;
-    let artifact_contracts = draft
-        .artifact_contracts
-        .iter()
-        .map(|contract| ArtifactContract {
-            artifact_type: contract.artifact_type.clone(),
-            producer_agent: contract.producer_agent.clone(),
-            consumer_agents: contract.consumer_agents.clone(),
-            handoff: "durable-resource-reference".to_string(),
-            required: contract.required,
-        })
-        .collect();
-    Ok(SupervisorReleaseSpec {
-        policy_id: draft.policy_id.clone(),
-        version: draft.version.clone(),
-        display_name: draft.display_name.clone(),
-        description: draft.description.clone(),
-        responsibilities: draft.responsibilities.clone(),
-        developer_instructions: draft.developer_instructions.clone(),
-        agents,
-        runtime_requirements: supervisor::governed_runtime_requirements(),
-        artifact_contracts,
-        max_active_child_agents: draft.max_active_child_agents,
-    })
-}
-
-fn validate_draft_storage_shape(draft: &SupervisorDraftRequest) -> Result<(), ApiError> {
-    let safe_identifier = |value: &str, allow_period: bool, max: usize| {
-        value.len() >= 2
-            && value.len() <= max
-            && !value.contains("..")
-            && value
-                .as_bytes()
-                .first()
-                .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
-            && value
-                .as_bytes()
-                .last()
-                .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
-            && value.bytes().all(|byte| {
-                byte.is_ascii_lowercase()
-                    || byte.is_ascii_digit()
-                    || matches!(byte, b'-' | b'_')
-                    || (allow_period && byte == b'.')
-            })
-    };
-    if !safe_identifier(&draft.policy_id, false, 96)
-        || !safe_identifier(&draft.version, true, 64)
-        || draft.display_name.trim().is_empty()
-        || draft.display_name.len() > 160
-        || draft.description.trim().is_empty()
-        || draft.description.len() > 512
-        || draft.developer_instructions.len() > 16 * 1024
-        || draft.responsibilities.len() > 32
-        || draft
-            .responsibilities
-            .iter()
-            .any(|value| value.trim().is_empty() || value.len() > 512)
-        || draft.agents.len() > 16
-        || draft.agents.iter().any(|agent| {
-            !safe_identifier(&agent.definition_id, false, 96)
-                || !safe_identifier(&agent.version, true, 64)
-                || agent.spawn_limit > 16
-        })
-        || draft.artifact_contracts.len() > 64
-        || draft.artifact_contracts.iter().any(|contract| {
-            contract.artifact_type.trim().is_empty()
-                || contract.artifact_type.len() > 128
-                || contract.producer_agent.trim().is_empty()
-                || contract.producer_agent.len() > 192
-                || contract.consumer_agents.len() > 16
-                || contract
-                    .consumer_agents
-                    .iter()
-                    .any(|consumer| consumer.trim().is_empty() || consumer.len() > 192)
-        })
-        || draft.max_active_child_agents > 16
-    {
-        return Err(bad_request("Supervisor draft fields are invalid"));
-    }
-    Ok(())
-}
-
 fn require_manage(auth: &AuthenticatedUser, owner_user_id: Uuid) -> Result<(), ApiError> {
     if owner_user_id == auth.user_id || matches!(auth.organization_role.as_str(), "owner" | "admin")
     {
@@ -437,13 +327,6 @@ fn require_manage(auth: &AuthenticatedUser, owner_user_id: Uuid) -> Result<(), A
                 "Supervisor Definition is owned by another user",
             )),
         ))
-    }
-}
-
-fn validation_issue(code: &str, message: String) -> SupervisorValidationIssue {
-    SupervisorValidationIssue {
-        code: code.to_string(),
-        message,
     }
 }
 

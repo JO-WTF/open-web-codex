@@ -1,67 +1,38 @@
 import { useMemo, useState } from "react";
 import type {
+  AgentDefinitionDraftRequest,
   AgentDefinitionSummary,
-  SupervisorAgentSelection,
-  SupervisorArtifactContractInput,
-  SupervisorDraftRequest,
 } from "../../../../../browser/types";
 import {
   SettingsSection,
   SettingsSubsection,
 } from "@/features/design-system/components/settings/SettingsPrimitives";
-import type { SettingsSupervisorsSectionProps } from "@settings/hooks/useSettingsSupervisorsSection";
+import type { SettingsAgentCatalogSectionProps } from "@settings/hooks/useSettingsAgentCatalogSection";
 
-function agentIdentity(agent: Pick<AgentDefinitionSummary, "definition_id" | "version">) {
+function identity(agent: Pick<AgentDefinitionSummary, "definition_id" | "version">) {
   return `${agent.definition_id}@${agent.version}`;
 }
 
-function emptyDraft(): SupervisorDraftRequest {
+function emptyDraft(template?: AgentDefinitionSummary): AgentDefinitionDraftRequest {
   return {
-    policy_id: "",
+    definition_id: "",
     version: "1.0.0",
     display_name: "",
     description: "",
     responsibilities: [],
     developer_instructions: "",
-    agents: [],
-    artifact_contracts: [],
-    max_active_child_agents: 2,
+    input_artifact_types: template?.input_artifact_types ?? [],
+    output_artifact_types: template?.output_artifact_types ?? [],
+    capability_template: {
+      definition_id: template?.definition_id ?? "",
+      version: template?.version ?? "",
+    },
   };
 }
 
-function contractsForAgents(
-  selections: SupervisorAgentSelection[],
-  catalog: AgentDefinitionSummary[],
-): SupervisorArtifactContractInput[] {
-  const selected = catalog.filter((agent) =>
-    selections.some(
-      (selection) =>
-        selection.definition_id === agent.definition_id
-        && selection.version === agent.version,
-    )
-  );
-  return selected.flatMap((producer) =>
-    producer.output_artifact_types.map((artifactType) => {
-      const consumers = selected
-        .filter(
-          (candidate) =>
-            agentIdentity(candidate) !== agentIdentity(producer)
-            && candidate.input_artifact_types.includes(artifactType),
-        )
-        .map(agentIdentity);
-      return {
-        artifact_type: artifactType,
-        producer_agent: agentIdentity(producer),
-        consumer_agents: consumers.length > 0 ? consumers : ["supervisor"],
-        required: true,
-      };
-    })
-  );
-}
-
-export function SettingsSupervisorsSection({
+export function SettingsAgentCatalogSection({
   definitions,
-  agents,
+  templates,
   isLoading,
   actionDefinitionId,
   error,
@@ -70,71 +41,61 @@ export function SettingsSupervisorsSection({
   onSaveDraft,
   onValidate,
   onPublish,
-}: SettingsSupervisorsSectionProps) {
+}: SettingsAgentCatalogSectionProps) {
   const [editingDefinitionId, setEditingDefinitionId] = useState<string | null>(null);
-  const [draft, setDraft] = useState<SupervisorDraftRequest>(emptyDraft);
+  const [draft, setDraft] = useState<AgentDefinitionDraftRequest>(() =>
+    emptyDraft(templates[0])
+  );
   const [responsibilitiesText, setResponsibilitiesText] = useState("");
-  const selectedAgentIds = useMemo(
-    () => new Set(draft.agents.map((agent) => `${agent.definition_id}@${agent.version}`)),
-    [draft.agents],
+  const selectedTemplate = useMemo(
+    () =>
+      templates.find(
+        (template) =>
+          template.definition_id === draft.capability_template.definition_id
+          && template.version === draft.capability_template.version,
+      ) ?? null,
+    [draft.capability_template, templates],
   );
 
   const resetEditor = () => {
     setEditingDefinitionId(null);
-    setDraft(emptyDraft());
+    setDraft(emptyDraft(templates[0]));
     setResponsibilitiesText("");
   };
 
   const editDefinition = (
     definitionId: string,
-    nextDraft: SupervisorDraftRequest,
+    nextDraft: AgentDefinitionDraftRequest,
   ) => {
     setEditingDefinitionId(definitionId);
     setDraft(nextDraft);
     setResponsibilitiesText(nextDraft.responsibilities.join("\n"));
   };
 
-  const updateAgentSelection = (agent: AgentDefinitionSummary, selected: boolean) => {
-    setDraft((current) => {
-      const nextAgents = selected
-        ? [
-            ...current.agents,
-            {
-              definition_id: agent.definition_id,
-              version: agent.version,
-              release_id: agent.release_id,
-              spawn_limit: 1,
-            },
-          ]
-        : current.agents.filter(
-            (entry) =>
-              entry.definition_id !== agent.definition_id || entry.version !== agent.version,
-          );
-      return {
-        ...current,
-        agents: nextAgents,
-        artifact_contracts: contractsForAgents(nextAgents, agents),
-        max_active_child_agents: Math.max(
-          1,
-          Math.min(current.max_active_child_agents, nextAgents.length || 1),
-        ),
-      };
-    });
+  const selectTemplate = (templateIdentity: string) => {
+    const template = templates.find((candidate) => identity(candidate) === templateIdentity);
+    if (!template) return;
+    setDraft((current) => ({
+      ...current,
+      capability_template: {
+        definition_id: template.definition_id,
+        version: template.version,
+      },
+      input_artifact_types: template.input_artifact_types,
+      output_artifact_types: template.output_artifact_types,
+    }));
   };
 
-  const toggleDeliverable = (
-    contract: SupervisorArtifactContractInput,
+  const toggleArtifact = (
+    field: "input_artifact_types" | "output_artifact_types",
+    artifactType: string,
     checked: boolean,
   ) => {
     setDraft((current) => ({
       ...current,
-      artifact_contracts: checked
-        ? [...current.artifact_contracts, contract]
-        : current.artifact_contracts.filter(
-            (entry) =>
-              entry.artifact_type !== contract.artifact_type
-              || entry.producer_agent !== contract.producer_agent,
-          ),
+      [field]: checked
+        ? [...current[field], artifactType]
+        : current[field].filter((value) => value !== artifactType),
     }));
   };
 
@@ -150,34 +111,33 @@ export function SettingsSupervisorsSection({
     if (saved) resetEditor();
   };
 
-  const availableContracts = contractsForAgents(draft.agents, agents);
   const saving = actionDefinitionId === (editingDefinitionId ?? "new");
 
   return (
     <SettingsSection
-      title="Supervisor Studio"
-      subtitle="Define responsibilities, select governed Agents, lock delivery contracts, and publish an immutable Supervisor version."
+      title="Agent Catalog"
+      subtitle="Create a governed Agent, bind a reviewed capability template, and publish an immutable version for Supervisors."
     >
       <div className="settings-help">
-        Codex Runtime still owns Agent execution and Tool discovery. Publishing only succeeds when
-        every selected Agent and Artifact handoff is valid.
+        The template fixes the available Tools and data access. Your Agent inherits those Runtime
+        capabilities exactly and can narrow only its Artifact inputs and outputs.
       </div>
 
       <SettingsSubsection
-        title={editingDefinitionId ? "Edit draft" : "Create Supervisor draft"}
-        subtitle="A policy id is permanent. Published versions cannot be edited."
+        title={editingDefinitionId ? "Edit Agent draft" : "Create Agent draft"}
+        subtitle="The Agent ID is permanent. Published versions cannot be edited."
       />
       <div className="settings-field settings-supervisor-editor">
         <div className="settings-supervisor-grid">
           <label className="settings-label">
-            Policy ID
+            Agent ID
             <input
               className="settings-input"
-              value={draft.policy_id}
+              value={draft.definition_id}
               onChange={(event) =>
-                setDraft((current) => ({ ...current, policy_id: event.target.value }))
+                setDraft((current) => ({ ...current, definition_id: event.target.value }))
               }
-              placeholder="network-planning-supervisor"
+              placeholder="regional-data-reviewer"
               disabled={editingDefinitionId != null}
             />
           </label>
@@ -201,7 +161,7 @@ export function SettingsSupervisorsSection({
             onChange={(event) =>
               setDraft((current) => ({ ...current, display_name: event.target.value }))
             }
-            placeholder="Network Planning Supervisor"
+            placeholder="Regional Data Reviewer"
           />
         </label>
         <label className="settings-label">
@@ -213,7 +173,7 @@ export function SettingsSupervisorsSection({
             onChange={(event) =>
               setDraft((current) => ({ ...current, description: event.target.value }))
             }
-            placeholder="What this Supervisor delivers."
+            placeholder="What this Agent is responsible for delivering."
           />
         </label>
         <label className="settings-label">
@@ -223,11 +183,11 @@ export function SettingsSupervisorsSection({
             rows={4}
             value={responsibilitiesText}
             onChange={(event) => setResponsibilitiesText(event.target.value)}
-            placeholder={"One responsibility per line\nCoordinate bounded Agent assignments"}
+            placeholder={"One responsibility per line\nValidate regional planning inputs"}
           />
         </label>
         <label className="settings-label">
-          Supervisor instructions
+          Agent instructions
           <textarea
             className="settings-agents-textarea"
             rows={8}
@@ -238,78 +198,63 @@ export function SettingsSupervisorsSection({
                 developer_instructions: event.target.value,
               }))
             }
-            placeholder="Define authority, delegation order, approval behavior, stop conditions, and final report requirements."
+            placeholder="Define the method, evidence requirements, limits, stop conditions, and delivery format."
           />
         </label>
-
-        <div className="settings-supervisor-picker-title">Allowed Agents</div>
-        {agents.map((agent) => (
-          <label className="settings-supervisor-option" key={agentIdentity(agent)}>
-            <input
-              type="checkbox"
-              checked={selectedAgentIds.has(agentIdentity(agent))}
-              onChange={(event) => updateAgentSelection(agent, event.target.checked)}
-            />
-            <span>
-              <strong>{agent.display_name}</strong>
-              <small>{agent.description}</small>
-              <small>
-                {agent.source === "user_release" ? "Organization release" : "Built-in release"}
-                {" · "}{agent.version}
-              </small>
-              <small>Capabilities: {agent.required_capabilities.join(", ")}</small>
-            </span>
-          </label>
-        ))}
-        {!isLoading && agents.length === 0 && (
-          <div className="settings-help">No published Agent Definitions are available.</div>
-        )}
-
-        {availableContracts.length > 0 && (
+        <label className="settings-label">
+          Reviewed capability template
+          <select
+            className="settings-select"
+            value={
+              draft.capability_template.definition_id
+                ? `${draft.capability_template.definition_id}@${draft.capability_template.version}`
+                : ""
+            }
+            onChange={(event) => selectTemplate(event.target.value)}
+          >
+            <option value="">Select a capability template</option>
+            {templates.map((template) => (
+              <option value={identity(template)} key={identity(template)}>
+                {template.display_name} · {template.version}
+              </option>
+            ))}
+          </select>
+        </label>
+        {selectedTemplate && (
           <>
-            <div className="settings-supervisor-picker-title">Required deliverables</div>
-            {availableContracts.map((contract) => {
-              const key = `${contract.producer_agent}:${contract.artifact_type}`;
-              const checked = draft.artifact_contracts.some(
-                (entry) =>
-                  entry.producer_agent === contract.producer_agent
-                  && entry.artifact_type === contract.artifact_type,
-              );
-              return (
-                <label className="settings-supervisor-option" key={key}>
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={(event) => toggleDeliverable(contract, event.target.checked)}
-                  />
-                  <span>
-                    <strong>{contract.artifact_type}</strong>
-                    <small>
-                      {contract.producer_agent} → {contract.consumer_agents.join(", ")}
-                    </small>
-                  </span>
-                </label>
-              );
-            })}
+            <div className="settings-supervisor-option">
+              <span>
+                <strong>Available capabilities</strong>
+                <small>{selectedTemplate.required_capabilities.join(", ")}</small>
+              </span>
+            </div>
+            <div className="settings-supervisor-picker-title">Artifact contracts</div>
+            {selectedTemplate.input_artifact_types.map((artifactType) => (
+              <label className="settings-supervisor-option" key={`input:${artifactType}`}>
+                <input
+                  type="checkbox"
+                  checked={draft.input_artifact_types.includes(artifactType)}
+                  onChange={(event) =>
+                    toggleArtifact("input_artifact_types", artifactType, event.target.checked)
+                  }
+                />
+                <span><strong>Input · {artifactType}</strong></span>
+              </label>
+            ))}
+            {selectedTemplate.output_artifact_types.map((artifactType) => (
+              <label className="settings-supervisor-option" key={`output:${artifactType}`}>
+                <input
+                  type="checkbox"
+                  checked={draft.output_artifact_types.includes(artifactType)}
+                  onChange={(event) =>
+                    toggleArtifact("output_artifact_types", artifactType, event.target.checked)
+                  }
+                />
+                <span><strong>Output · {artifactType}</strong></span>
+              </label>
+            ))}
           </>
         )}
-
-        <label className="settings-label">
-          Maximum active child Agents
-          <input
-            className="settings-input settings-input--compact"
-            type="number"
-            min={1}
-            max={16}
-            value={draft.max_active_child_agents}
-            onChange={(event) =>
-              setDraft((current) => ({
-                ...current,
-                max_active_child_agents: Number(event.target.value),
-              }))
-            }
-          />
-        </label>
         <div className="settings-agents-actions">
           <button type="button" className="ghost" onClick={() => void save()} disabled={saving}>
             {saving ? "Saving…" : editingDefinitionId ? "Save draft" : "Create draft"}
@@ -324,7 +269,7 @@ export function SettingsSupervisorsSection({
 
       <SettingsSubsection
         title="Definitions and releases"
-        subtitle="Validate the current draft before publishing it to the Run catalog."
+        subtitle="Validate the current draft before publishing it for Supervisor use."
       />
       <div className="settings-agents-actions">
         <button type="button" className="ghost" onClick={onRefresh} disabled={isLoading}>
@@ -332,7 +277,7 @@ export function SettingsSupervisorsSection({
         </button>
       </div>
       {!isLoading && definitions.length === 0 && (
-        <div className="settings-help">No user-authored Supervisors yet.</div>
+        <div className="settings-help">No user-authored Agent Definitions yet.</div>
       )}
       {definitions.map((definition) => {
         const validation = validationByDefinition[definition.id];
@@ -343,12 +288,12 @@ export function SettingsSupervisorsSection({
               <div>
                 <strong>{definition.display_name}</strong>
                 <div className="settings-help">
-                  {definition.policy_id}
+                  {definition.definition_id}
                   {definition.draft ? ` · draft ${definition.draft.version}` : " · no draft"}
                 </div>
               </div>
               <div className="settings-agents-actions">
-                {definition.draft && (
+                {definition.draft ? (
                   <>
                     <button
                       type="button"
@@ -376,15 +321,14 @@ export function SettingsSupervisorsSection({
                       Publish
                     </button>
                   </>
-                )}
-                {!definition.draft && (
+                ) : (
                   <button
                     type="button"
                     className="ghost"
                     onClick={() =>
                       editDefinition(definition.id, {
-                        ...emptyDraft(),
-                        policy_id: definition.policy_id,
+                        ...emptyDraft(templates[0]),
+                        definition_id: definition.definition_id,
                         display_name: definition.display_name,
                         description: definition.description,
                       })

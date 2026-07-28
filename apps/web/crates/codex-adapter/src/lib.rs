@@ -211,7 +211,7 @@ const MAX_REQUIRED_MCP_TOOL_NAME_BYTES: usize = 128;
 const MAX_REQUIRED_MCP_SERVERS: usize = 16;
 const MAX_REQUIRED_MCP_TOOLS_PER_SERVER: usize = 64;
 const MAX_REQUIRED_MCP_CAPABILITY_ROOTS_PER_SERVER: usize = 16;
-const MIN_PLATFORM_RUNTIME_MAX_THREADS: u32 = 2;
+const MIN_PLATFORM_RUNTIME_MAX_THREADS: u32 = 1;
 const MAX_PLATFORM_RUNTIME_MAX_THREADS: u32 = 12;
 
 /// Validate the only Role documents the platform is allowed to project into a

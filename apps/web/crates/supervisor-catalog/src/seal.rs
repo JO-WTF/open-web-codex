@@ -4,6 +4,7 @@ use open_web_codex_adapter::{PlatformRuntimeRole, RequiredMcpServer};
 use sha2::{Digest, Sha256};
 
 use crate::agent;
+use crate::agent::ResolvedAgentDefinition;
 use crate::supervisor::{ArtifactContract, SupervisorCatalogError, SupervisorReleaseSpec};
 use crate::validation::is_safe_artifact_type;
 
@@ -67,6 +68,7 @@ pub(crate) fn package_content_sha256(
     runtime_roles: &[PlatformRuntimeRole],
     required_mcp_servers: &[RequiredMcpServer],
     artifact_contracts: &[ArtifactContract],
+    resolved_agents: &[ResolvedAgentDefinition],
 ) -> String {
     let mut digest = Sha256::new();
     update_digest_field(&mut digest, b"supervisor-package.v1");
@@ -85,6 +87,9 @@ pub(crate) fn package_content_sha256(
         ] {
             update_digest_field(&mut digest, field);
         }
+    }
+    for definition in resolved_agents {
+        update_digest_field(&mut digest, definition.content_sha256.as_bytes());
     }
     for server in required_mcp_servers {
         update_digest_field(&mut digest, server.name.as_bytes());

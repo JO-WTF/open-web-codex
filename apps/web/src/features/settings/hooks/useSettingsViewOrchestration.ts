@@ -16,6 +16,7 @@ import { useSettingsEnvironmentsSection } from "./useSettingsEnvironmentsSection
 import { useSettingsFeaturesSection } from "./useSettingsFeaturesSection";
 import { useSettingsGitSection } from "./useSettingsGitSection";
 import { useSettingsAgentsSection } from "./useSettingsAgentsSection";
+import { useSettingsAgentCatalogSection } from "./useSettingsAgentCatalogSection";
 import { useSettingsSupervisorsSection } from "./useSettingsSupervisorsSection";
 import { useSettingsProjectsSection } from "./useSettingsProjectsSection";
 import { useSettingsServerSection } from "./useSettingsServerSection";
@@ -214,6 +215,7 @@ export function useSettingsViewOrchestration({
   });
 
   const agentsSectionProps = useSettingsAgentsSection({ projects });
+  const agentCatalogSectionProps = useSettingsAgentCatalogSection();
   const supervisorsSectionProps = useSettingsSupervisorsSection();
 
   return {
@@ -274,6 +276,7 @@ export function useSettingsViewOrchestration({
     gitSectionProps,
     serverSectionProps,
     agentsSectionProps,
+    agentCatalogSectionProps,
     supervisorsSectionProps,
     codexSectionProps,
     featuresSectionProps,

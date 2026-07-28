@@ -10,6 +10,7 @@ export type SettingsSection =
   | "git"
   | "codex"
   | "features"
+  | "agent-catalog"
   | "supervisors";
 
 export function useSettingsModalState() {

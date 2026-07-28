@@ -5,8 +5,9 @@ use open_web_codex_platform_contracts::{SupervisorPolicySelection, SupervisorPol
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
+use uuid::Uuid;
 
-use crate::agent::{self, AgentCatalogError};
+use crate::agent::{self, AgentCatalogError, ResolvedAgentDefinition};
 use crate::seal::{package_content_sha256, validate_artifact_contracts};
 use crate::validation::{
     is_safe_capability_segment, is_safe_definition_id, is_safe_runtime_role_name, is_safe_version,
@@ -61,6 +62,8 @@ struct SupervisorPackageManifest {
 pub struct SupervisorAgentReference {
     pub definition_id: String,
     pub version: String,
+    #[serde(default)]
+    pub release_id: Option<Uuid>,
     pub runtime_role: String,
     pub spawn_limit: u32,
 }
@@ -225,41 +228,54 @@ fn parse_resource(
 pub fn validate_release(
     spec: SupervisorReleaseSpec,
 ) -> Result<ResolvedSupervisorPackage, SupervisorCatalogError> {
+    let available_agents = agent::list_resolved_builtins().map_err(map_agent_error)?;
+    validate_release_with_agents(spec, &available_agents)
+}
+
+pub fn validate_release_with_agents(
+    spec: SupervisorReleaseSpec,
+    available_agents: &[ResolvedAgentDefinition],
+) -> Result<ResolvedSupervisorPackage, SupervisorCatalogError> {
     validate_release_fields(&spec)?;
     let mut roles = Vec::with_capacity(spec.agents.len());
+    let mut resolved_agents = Vec::with_capacity(spec.agents.len());
     let mut role_spawn_limits = BTreeMap::new();
     let mut contracts = BTreeMap::new();
     for reference in &spec.agents {
-        let role = agent::resolve_runtime_role(
-            &reference.definition_id,
-            &reference.version,
-            &reference.runtime_role,
-        )
-        .map_err(map_agent_error)?;
-        let contract = agent::contract(
-            &reference.definition_id,
-            &reference.version,
-            &reference.runtime_role,
-        )
-        .map_err(map_agent_error)?;
+        let definition = available_agents
+            .iter()
+            .find(|definition| {
+                definition.definition_id == reference.definition_id
+                    && definition.version == reference.version
+                    && definition.release_id == reference.release_id
+                    && definition.runtime_role.name == reference.runtime_role
+            })
+            .ok_or(SupervisorCatalogError::Invalid(
+                "required Agent Definition is not published",
+            ))?;
+        let role = definition.runtime_role.clone();
+        let contract = definition.contract();
         role_spawn_limits.insert(reference.runtime_role.clone(), reference.spawn_limit);
         contracts.insert(
             format!("{}@{}", reference.definition_id, reference.version),
             contract,
         );
         roles.push(role);
+        resolved_agents.push(definition.clone());
     }
     let artifact_contracts = ArtifactContractSet {
         schema_version: "artifact-contract-set.v1".to_string(),
         contracts: spec.artifact_contracts.clone(),
     };
     validate_artifact_contracts(&artifact_contracts.contracts, &contracts)?;
-    let required_mcp_servers = agent::required_mcp_servers(&roles).map_err(map_agent_error)?;
+    let required_mcp_servers =
+        agent::merge_required_mcp_servers(&resolved_agents).map_err(map_agent_error)?;
     let content_sha256 = package_content_sha256(
         &spec,
         &roles,
         &required_mcp_servers,
         &artifact_contracts.contracts,
+        &resolved_agents,
     );
     Ok(ResolvedSupervisorPackage {
         policy_id: spec.policy_id,

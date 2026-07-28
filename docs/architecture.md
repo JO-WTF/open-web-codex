@@ -22,16 +22,16 @@ when measured capacity or isolation needs justify it.
 The enterprise multi-agent design in
 `docs/enterprise-agent-platform-architecture.md` remains the evolutionary
 target above this control plane. The current constrained M2 slice implements a
-typed Supervisor capability catalog, code-published Agent Definitions, Web
-authoring and immutable publication of Supervisor Releases, Policy snapshots
-bound to root Threads, request-scoped Runtime Roles, native child-agent
-execution, rebuildable Agent projections and Task-owned durable Artifacts.
-User-authored Releases can currently select only reviewed code-published Agent
-Definitions. User-authored Agent Definition publication, Tool/Plugin lifecycle,
-Role-level dynamic authorization and production multi-user operation remain
-targets rather than current capability. `capability-baseline.md` is
-authoritative for the verified scope; the roadmap and development plan control
-the remaining order.
+typed Supervisor capability catalog, Web authoring and immutable publication
+of organization-scoped Agent and Supervisor Releases, Policy snapshots bound
+to root Threads, request-scoped Runtime Roles, native child-agent execution,
+rebuildable Agent projections and Task-owned durable Artifacts. A user-authored
+Agent currently narrows one reviewed code-published capability template; it
+cannot invent Runtime capabilities, MCP servers or Tools. Arbitrary Tool/Plugin
+lifecycle, native Runtime Agent CRUD, Role-level dynamic authorization and
+production multi-user operation remain targets rather than current capability.
+`capability-baseline.md` is authoritative for the verified scope; the roadmap
+and development plan control the remaining order.
 
 ## System shape
 
@@ -88,7 +88,7 @@ result; they never cause a Tauri runtime to reappear.
 | Project, Task, Run, Thread model selection, lease, approval and audit | Web platform database | complete platform record |
 | Profile ownership and process health | Web database + Profile Host | mapping, health, build and capability snapshot |
 | Supervisor Definition, Revision, Release, immutable snapshot and root-Thread binding | Web platform database + code-published capability package | complete governance record and binding; never Runtime conversation state |
-| Agent Definition identity, version, responsibilities, Artifact contracts and allowed Runtime Role reference | code-published capability catalog | reviewed metadata and immutable instruction digest; never child-Thread state |
+| Agent Definition, Revision, immutable Release, reviewed capability-template binding and Supervisor dependency | Web platform database + code-published capability catalog | governance metadata, exact release/content identity and derived instruction digest; never child-Thread state or a copied Tool catalog |
 | Thread, Turn, items, compaction and model-visible context | Codex Profile/app-server | opaque IDs, event projection and search index |
 | Provider config and runtime model catalog | Codex Profile/app-server | secret references, global default Provider/model selection, policy and display cache scoped to Profile |
 | Agent scheduling and parent/child execution | Codex runtime | observable trajectory and status projection |
@@ -118,10 +118,16 @@ capability and required limit.
 Code-managed publication sources live under `capabilities/supervisors/` and
 `capabilities/agents/`. Tool, MCP, Skill and Plugin implementations remain in
 their owning packages; manifests relate them by stable capability IDs rather
-than by filesystem nesting. Web-authored drafts are organization- and
-owner-scoped PostgreSQL resources. Validation derives Runtime Role names, MCP
-inventory and Runtime capability requirements server-side. Publication locks
-the complete Release spec and content hash; a published row cannot be edited.
+than by filesystem nesting. Web-authored Supervisor and Agent drafts are
+organization- and owner-scoped PostgreSQL resources. A custom Agent must select
+one exact reviewed code-published Agent as its capability template and may only
+narrow that template's Artifact inputs and outputs. Validation derives its
+Runtime Role name, configuration path, MCP inventory, Tool allowlist and
+Runtime capability requirements server-side. Agent publication locks the
+complete spec, derived Role digest and template digest. Supervisor publication
+then binds the exact custom Agent Release UUID, version and content hash through
+an immutable dependency row. Published rows cannot be edited, and missing or
+drifted dependencies fail preflight without name/version fallback.
 
 Because the current Runtime does not expose native Agent CRUD, Profile Host
 temporarily materializes the exact versioned Role instruction files under a

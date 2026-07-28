@@ -25,7 +25,13 @@ Codex Runtime 仍然拥有 Thread、Agent 执行、工具发现和 MCP 生命周
   稳定能力标识和版本引用它们；
 - Supervisor Definition 是可编辑对象，Revision 是校验快照，Release 是不可变、
   可运行的发布对象；用户创建的对象保存在 PostgreSQL，不写入代码目录；
-- 发布时锁定 Agent Definition 版本、Artifact 合同、Runtime 能力要求和内容哈希；
+- Agent Definition 同样使用 Definition、草稿 Revision 和不可变 Release；当前过渡
+  阶段必须选择一个经过代码评审的 Agent capability template，只能收窄其 Artifact
+  输入输出，不能由浏览器声明 Runtime Role、MCP、Tool 或 capability；
+- Agent 发布时由服务端生成 Runtime Role 身份与配置，锁定完整 spec、模板内容哈希
+  和发布内容哈希；Supervisor 发布时再锁定精确 Agent Release UUID、版本与内容哈希，
+  不允许按名称或版本回退；
+- 发布时锁定 Artifact 合同、Runtime 能力要求和内容哈希；
 - 启动 Run 前由平台执行类型化预检，确认 Release 依赖与 Codex Runtime
   类型化能力发现一致；能力缺失显式失败；
 - Runtime Role 由 Profile Host 为本次受治理执行物化，Thread 和 Agent 执行仍由
@@ -54,11 +60,14 @@ Profile 只保存 Runtime 可消费的物化结果。
 ## 后果与验证
 
 - 内置发布资源有统一入口，但实现包仍保持各自所有权；
-- 用户 Definition/Revision/Release 需要新的持久化和类型化 Web API；
+- 用户 Agent 和 Supervisor 的 Definition/Revision/Release 使用组织作用域的
+  PostgreSQL 持久化与类型化 Web API；
 - 发布校验必须拒绝不存在或版本不匹配的 Agent、无效 Artifact 交付关系和未声明
-  的 Runtime 能力；
+  的 Runtime 能力，也必须拒绝自定义 Agent 扩大所选 capability template；
 - Release 一经发布不得原地修改；变更必须创建新版本；
 - 运行预检必须覆盖能力缺失、依赖缺失、内容哈希不一致和重启恢复；
+- 当前 Agent 发布是原生 Runtime CRUD 之前的过渡实现；模板关系是安全准入合同，
+  不是 Tool/Plugin 自定义能力或第二套 Runtime discovery；
 - 当前单用户阶段仍保留 organization、owner、profile 和 workspace 作用域，不能
   依赖全局 singleton。
 

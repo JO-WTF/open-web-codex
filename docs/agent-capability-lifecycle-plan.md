@@ -5,7 +5,7 @@
 | 字段 | 内容 |
 | --- | --- |
 | 状态 | 当前跨里程碑整改计划 |
-| 更新日期 | 2026-07-27 |
+| 更新日期 | 2026-07-28 |
 | 产品目标 | 用户在浏览器中安全地创建、验证、发布和使用 Agent、Skill、MCP，并由 Codex V2 完成多 Agent 协同 |
 | 架构依据 | `docs/product-vision.md`、`docs/enterprise-agent-platform-architecture.md`、`AGENTS.md` |
 | 当前事实 | `docs/architecture.md`、`docs/capability-baseline.md` 与代码 |
@@ -122,13 +122,19 @@ flowchart LR
 
 目标：在原生 CRUD 完成前，避免 Agent Studio 与企业 Policy 继续形成两套业务模型。
 
-- [ ] 定义一个 Platform `AgentDefinition` DTO，覆盖用户 Agent 和代码发布 seed；
+- [x] 定义一个 Platform `AgentDefinition` DTO，覆盖用户 Agent Release 和代码发布 seed；
 - [ ] `AgentDefinition` 只保存治理元数据和 Runtime resource ID，不保存 Runtime 文件路径；
-- [ ] 仓网两个 Agent 改为 seed package，通过同一发布服务注册；
-- [ ] 集中名称、版本、内容摘要和保留名称校验；
+- [x] 仓网两个 Agent 与用户 Release 通过同一类型化 Catalog API 解析和展示；
+- [x] 集中名称、版本、内容摘要、保留名称与 capability template 收窄校验；
 - [ ] 删除 Adapter、Server、Profile Host 中重复的 TOML 语义解析；
-- [ ] 明确临时文件物化器的删除条件，不向浏览器开放；
-- [ ] 增加用户 Agent 与企业 seed 同名冲突、跨组织拒绝和版本不可变测试。
+- [x] 明确临时文件物化器在原生 V2 Agent CRUD 上线后的删除条件，且不向浏览器开放；
+- [x] 增加用户 Agent 与企业 seed 同名冲突、跨组织拒绝、精确 Release 依赖和版本
+  不可变测试。
+
+当前过渡切片已经提供 Web Agent Catalog、Definition/草稿 Revision/不可变 Release、
+组织作用域授权、审计和精确 Supervisor 依赖。浏览器只能选择代码评审的 capability
+template；服务端派生 Role、MCP/Tool allowlist 与 capability roots。Runtime resource
+ID 和原生 CRUD 尚不存在，因此 Phase 1 退出条件仍未全部满足。
 
 退出条件：前台 Agent、企业 seed、Policy 引用同一种稳定资源身份，但 Runtime 文件
 仍只是内部过渡实现。

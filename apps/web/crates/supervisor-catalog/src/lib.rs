@@ -6,5 +6,6 @@
 pub mod agent;
 pub mod supervisor;
 
+mod agent_release;
 mod seal;
 mod validation;

@@ -9,7 +9,7 @@ use open_web_codex_platform_contracts::{
 use open_web_codex_platform_store::AppState;
 use uuid::Uuid;
 
-use super::{create, publish, resolve_draft};
+use super::{create, publish, release_spec_from_draft};
 use crate::middleware::auth::AuthenticatedUser;
 
 fn valid_draft() -> SupervisorDraftRequest {
@@ -28,11 +28,13 @@ fn valid_draft() -> SupervisorDraftRequest {
             SupervisorAgentSelection {
                 definition_id: "enterprise-data-agent".to_string(),
                 version: "1.6.0".to_string(),
+                release_id: None,
                 spawn_limit: 1,
             },
             SupervisorAgentSelection {
                 definition_id: "enterprise-network-planning-agent".to_string(),
                 version: "1.5.0".to_string(),
+                release_id: None,
                 spawn_limit: 1,
             },
         ],
@@ -56,7 +58,12 @@ fn valid_draft() -> SupervisorDraftRequest {
 
 #[test]
 fn resolves_browser_draft_through_server_owned_runtime_facts() {
-    let package = resolve_draft(&valid_draft()).unwrap();
+    let agents = open_web_codex_supervisor_catalog::agent::list_resolved_builtins().unwrap();
+    let package = open_web_codex_supervisor_catalog::supervisor::validate_release_with_agents(
+        release_spec_from_draft(&valid_draft(), &agents).unwrap(),
+        &agents,
+    )
+    .unwrap();
     assert_eq!(package.required_runtime_roles.len(), 2);
     assert_eq!(
         package
@@ -73,7 +80,8 @@ fn resolves_browser_draft_through_server_owned_runtime_facts() {
 fn rejects_unpublished_agent_versions_without_fallback() {
     let mut draft = valid_draft();
     draft.agents[0].version = "1.5.0".to_string();
-    let issue = resolve_draft(&draft).unwrap_err();
+    let agents = open_web_codex_supervisor_catalog::agent::list_resolved_builtins().unwrap();
+    let issue = release_spec_from_draft(&draft, &agents).unwrap_err();
     assert_eq!(issue.code, "agent_not_published");
 }
 

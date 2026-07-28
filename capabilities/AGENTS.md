@@ -15,6 +15,10 @@ resources below `capabilities/`.
 - Supervisor manifests reference exact Agent Definition versions. Runtime Role
   names, MCP inventory and capability gates are derived and validated by
   `open-web-codex-supervisor-catalog`; the browser must not supply them.
+- A Web-authored Agent Release must bind one exact code-managed capability
+  template. It may narrow that template's Artifact contract but must not add
+  Runtime capabilities, MCP servers, Tools or capability roots. A Supervisor
+  referencing it must bind the immutable Release UUID and content hash.
 - Artifact producers and consumers must agree with the referenced Agent input
   and output contracts. Handoffs use durable typed Artifact references, not
   unbounded chat payloads.

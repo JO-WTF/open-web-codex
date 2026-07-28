@@ -8,7 +8,7 @@
 | 当前分支 | `codex/agent-architecture-features` |
 | Codex 基线 | `openai/codex` `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9` |
 | 上游待同步 | 142；观测到的 official main 为 `95637f7056835fea66bdd0044414af480fc0fd74` |
-| 当前工作 | 已落地 Supervisor Capability Package 与最小 Web Studio，继续补用户 Agent Definition 发布、失败恢复、Artifact 生命周期与可信门禁 |
+| 当前工作 | 已落地受治理的 Agent/Supervisor 发布纵向切片，继续补真实 Runtime 验证、失败恢复、Artifact 生命周期与可信门禁 |
 | 中期顺序 | `docs/roadmap.md` |
 | M2 详细实施 | `docs/enterprise-supervisor-copilot-plan.md` |
 | 能力事实 | `docs/capability-baseline.md` |
@@ -75,10 +75,15 @@ Artifact 交付合同收敛到根目录 `capabilities/`；新增独立
 `supervisor-catalog` owner、Definition/Revision/Release PostgreSQL 模型和类型化
 草稿、校验、发布 API；Web Settings 提供 Supervisor Studio；发布版本通过 release
 ID、完整 spec 和内容哈希进入现有 Run Policy catalog，并在 Thread 创建前重新校验。
-浏览器只提交 Agent Definition ID/版本、职责与交付选择，Runtime Role、MCP inventory
-和 `agents.multi_agent` 限制由服务端目录推导。临时 PostgreSQL 验证已覆盖空库迁移、
-发布解析和跨 Organization 拒绝。尚未完成用户 Agent Definition 发布与自定义
-Tool/Plugin 安装，也尚未用真实 Runtime 重跑用户发布的 Release。
+随后完成了用户 Agent Definition 发布纵向切片：Agent Catalog 提供组织作用域的
+Definition、草稿 Revision、校验和不可变 Release；用户 Agent 必须选择一个代码评审
+的 capability template，只能收窄其 Artifact 合同。浏览器不提交 Runtime Role、
+MCP inventory、Tool allowlist、capability roots 或文件路径；服务端派生并锁定这些
+事实。Supervisor 可选择精确 Agent Release UUID，发布时持久化版本与内容哈希依赖，
+Run 预检重新解析并拒绝缺失或漂移。平台现允许只有一个 Agent 的 Supervisor，支持
+类似 Hello Agent 的最小发布。临时 PostgreSQL 验证覆盖空库迁移、发布解析、
+跨 Organization 拒绝和精确依赖。尚未完成任意 Tool/Plugin 创作或原生 Runtime
+Agent CRUD，也尚未用真实 Runtime 重跑用户发布的 Release。
 
 Agent、Skill、MCP 的长期整改顺序统一维护在
 [Agent、Skill 与 MCP 原生生命周期整改计划](agent-capability-lifecycle-plan.md)。

@@ -6,26 +6,30 @@ import { SettingsSupervisorsSection } from "./SettingsSupervisorsSection";
 
 const agents: SettingsSupervisorsSectionProps["agents"] = [
   {
+    source: "repository",
+    release_id: null,
     definition_id: "enterprise-data-agent",
     version: "1.6.0",
     display_name: "Enterprise Data Agent",
     description: "Builds the planning dataset.",
-    runtime_role: "data_agent",
     responsibilities: ["Build data"],
     input_artifact_types: [],
     output_artifact_types: ["planning-dataset.v1"],
     required_capabilities: ["supply_chain_data.build_planning_dataset"],
+    capability_template: null,
   },
   {
+    source: "repository",
+    release_id: null,
     definition_id: "enterprise-network-planning-agent",
     version: "1.5.0",
     display_name: "Enterprise Network Planning Agent",
     description: "Compares network scenarios.",
-    runtime_role: "network_planning_agent",
     responsibilities: ["Compare scenarios"],
     input_artifact_types: ["planning-dataset.v1"],
     output_artifact_types: ["scenario_comparison.v1"],
     required_capabilities: ["supply_chain_planner.compare_network_scenarios"],
+    capability_template: null,
   },
 ];
 

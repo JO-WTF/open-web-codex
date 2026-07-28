@@ -78,20 +78,73 @@ export type SupervisorPolicyBinding = SupervisorPolicySelection & {
 };
 
 export type AgentDefinitionSummary = {
+  source: "repository" | "user_release";
+  release_id: string | null;
   definition_id: string;
   version: string;
   display_name: string;
   description: string;
-  runtime_role: string;
   responsibilities: string[];
   input_artifact_types: string[];
   output_artifact_types: string[];
   required_capabilities: string[];
+  capability_template: AgentCapabilityTemplateSelection | null;
+};
+
+export type AgentCapabilityTemplateSelection = {
+  definition_id: string;
+  version: string;
+};
+
+export type AgentDefinitionDraftRequest = {
+  definition_id: string;
+  version: string;
+  display_name: string;
+  description: string;
+  responsibilities: string[];
+  developer_instructions: string;
+  input_artifact_types: string[];
+  output_artifact_types: string[];
+  capability_template: AgentCapabilityTemplateSelection;
+};
+
+export type AgentDefinitionValidationIssue = {
+  code: string;
+  message: string;
+};
+
+export type AgentDefinitionValidationResult = {
+  valid: boolean;
+  content_sha256: string | null;
+  issues: AgentDefinitionValidationIssue[];
+};
+
+export type AgentDefinitionReleaseSummary = {
+  id: string;
+  definition_id: string;
+  version: string;
+  display_name: string;
+  description: string;
+  content_sha256: string;
+  published_at: string;
+};
+
+export type AgentDefinitionResourceSummary = {
+  id: string;
+  definition_id: string;
+  display_name: string;
+  description: string;
+  owner_user_id: string;
+  draft: AgentDefinitionDraftRequest | null;
+  releases: AgentDefinitionReleaseSummary[];
+  created_at: string;
+  updated_at: string;
 };
 
 export type SupervisorAgentSelection = {
   definition_id: string;
   version: string;
+  release_id: string | null;
   spawn_limit: number;
 };
 

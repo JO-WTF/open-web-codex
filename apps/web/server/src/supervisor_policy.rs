@@ -12,6 +12,8 @@ use std::collections::BTreeMap;
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::agent_catalog;
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub(crate) enum SupervisorPolicyError {
     #[error("Supervisor Policy was not found")]
@@ -87,7 +89,7 @@ pub(crate) async fn resolve(
     .await
     .map_err(|_| SupervisorPolicyError::Database)?
     .ok_or(SupervisorPolicyError::NotFound)?;
-    resolve_release_row(&row)
+    resolve_release_row(db, organization_id, &row).await
 }
 
 pub(crate) fn resolve_builtin(
@@ -116,7 +118,7 @@ pub(crate) async fn resolve_release(
     .await
     .map_err(|_| SupervisorPolicyError::Database)?
     .ok_or(SupervisorPolicyError::NotFound)?;
-    resolve_release_row(&row)
+    resolve_release_row(db, organization_id, &row).await
 }
 
 fn from_package(
@@ -142,23 +144,87 @@ fn from_package(
     }
 }
 
-fn resolve_release_row(
+async fn resolve_release_row(
+    db: &PgPool,
+    organization_id: Uuid,
     row: &sqlx::postgres::PgRow,
 ) -> Result<ResolvedSupervisorPolicy, SupervisorPolicyError> {
     let release_id: Uuid = row.get("id");
     let spec = serde_json::from_value::<SupervisorReleaseSpec>(row.get("release_spec"))
         .map_err(|_| SupervisorPolicyError::Invalid("Release specification is invalid"))?;
-    let package = supervisor::validate_release(spec).map_err(map_catalog_error)?;
+    let available_agents = agent_catalog::list_resolved(db, organization_id)
+        .await
+        .map_err(|_| SupervisorPolicyError::Invalid("Agent catalog is invalid"))?;
+    let package = supervisor::validate_release_with_agents(spec.clone(), &available_agents)
+        .map_err(map_catalog_error)?;
     if package.content_sha256 != row.get::<String, _>("content_sha256") {
         return Err(SupervisorPolicyError::Invalid(
             "Release content hash does not match",
         ));
     }
+    verify_agent_dependencies(db, organization_id, release_id, &spec, &available_agents).await?;
     Ok(from_package(
         package,
         SupervisorPolicySource::UserRelease,
         Some(release_id),
     ))
+}
+
+async fn verify_agent_dependencies(
+    db: &PgPool,
+    organization_id: Uuid,
+    supervisor_release_id: Uuid,
+    spec: &SupervisorReleaseSpec,
+    available_agents: &[open_web_codex_supervisor_catalog::agent::ResolvedAgentDefinition],
+) -> Result<(), SupervisorPolicyError> {
+    let rows = sqlx::query(
+        "SELECT agent_release_id, agent_definition_id, agent_version, agent_content_sha256 \
+         FROM supervisor_release_agent_dependencies \
+         WHERE organization_id = $1 AND supervisor_release_id = $2",
+    )
+    .bind(organization_id)
+    .bind(supervisor_release_id)
+    .fetch_all(db)
+    .await
+    .map_err(|_| SupervisorPolicyError::Database)?;
+    let expected = spec
+        .agents
+        .iter()
+        .filter_map(|reference| {
+            reference.release_id.map(|release_id| {
+                let content_sha256 = available_agents
+                    .iter()
+                    .find(|definition| definition.release_id == Some(release_id))
+                    .map(|definition| definition.content_sha256.clone());
+                (
+                    release_id,
+                    reference.definition_id.clone(),
+                    reference.version.clone(),
+                    content_sha256,
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    if rows.len() != expected.len()
+        || expected
+            .iter()
+            .any(|(release_id, definition_id, version, content_sha256)| {
+                let Some(content_sha256) = content_sha256 else {
+                    return true;
+                };
+                !rows.iter().any(|row| {
+                    row.get::<Uuid, _>("agent_release_id") == *release_id
+                        && row.get::<String, _>("agent_definition_id") == *definition_id
+                        && row.get::<String, _>("agent_version") == *version
+                        && row.get::<String, _>("agent_content_sha256") == *content_sha256
+                })
+            })
+    {
+        return Err(SupervisorPolicyError::Invalid(
+            "Agent Release dependencies do not match",
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) async fn resolve_for_new_run(

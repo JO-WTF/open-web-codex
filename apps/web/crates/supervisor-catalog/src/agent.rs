@@ -1,11 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use open_web_codex_adapter::{PlatformRuntimeRole, RequiredMcpServer};
-use open_web_codex_platform_contracts::AgentDefinitionSummary;
-use serde::Deserialize;
+use open_web_codex_platform_contracts::{
+    AgentCapabilityTemplateSelection, AgentDefinitionSource, AgentDefinitionSummary,
+};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use toml_edit::DocumentMut;
+use uuid::Uuid;
+
+pub use crate::agent_release::{user_runtime_role_name, validate_user_release, AgentReleaseSpec};
 
 use crate::validation::{
     is_safe_artifact_type, is_safe_capability_segment, is_safe_definition_id,
@@ -50,7 +55,7 @@ const PUBLISHED_AGENT_RESOURCES: [PublishedAgentResource; 2] = [
     },
 ];
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PublishedAgentDefinition {
     definition_id: String,
@@ -70,16 +75,33 @@ struct PublishedAgentDefinition {
     risks: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PublishedRuntimeProfileReference {
     content_sha256: String,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct AgentContract {
+pub struct AgentContract {
     pub input_artifact_types: BTreeSet<String>,
     pub output_artifact_types: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedAgentDefinition {
+    pub release_id: Option<Uuid>,
+    pub definition_id: String,
+    pub version: String,
+    pub display_name: String,
+    pub description: String,
+    pub responsibilities: Vec<String>,
+    pub input_artifact_types: Vec<String>,
+    pub output_artifact_types: Vec<String>,
+    pub required_capabilities: Vec<String>,
+    pub capability_template: Option<AgentCapabilityTemplateSelection>,
+    pub runtime_role: PlatformRuntimeRole,
+    pub required_mcp_servers: Vec<RequiredMcpServer>,
+    pub content_sha256: String,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -98,6 +120,28 @@ pub fn list_published() -> Result<Vec<AgentDefinitionSummary>, AgentCatalogError
         .collect()
 }
 
+pub fn list_resolved_builtins() -> Result<Vec<ResolvedAgentDefinition>, AgentCatalogError> {
+    PUBLISHED_AGENT_RESOURCES
+        .iter()
+        .map(resolved_from_resource)
+        .collect()
+}
+
+pub fn resolve_builtin(
+    definition_id: &str,
+    version: &str,
+) -> Result<ResolvedAgentDefinition, AgentCatalogError> {
+    PUBLISHED_AGENT_RESOURCES
+        .iter()
+        .find(|resource| {
+            parse_published_definition(resource).is_ok_and(|definition| {
+                definition.definition_id == definition_id && definition.version == version
+            })
+        })
+        .ok_or(AgentCatalogError::NotFound)
+        .and_then(resolved_from_resource)
+}
+
 /// Exact immutable Runtime Role specifications for all code-published Agents.
 pub fn platform_runtime_roles() -> Result<Vec<PlatformRuntimeRole>, AgentCatalogError> {
     PUBLISHED_AGENT_RESOURCES
@@ -106,45 +150,18 @@ pub fn platform_runtime_roles() -> Result<Vec<PlatformRuntimeRole>, AgentCatalog
         .collect()
 }
 
-pub fn resolve_runtime_role(
-    definition_id: &str,
-    version: &str,
-    runtime_role: &str,
-) -> Result<PlatformRuntimeRole, AgentCatalogError> {
-    let resource = PUBLISHED_AGENT_RESOURCES
-        .iter()
-        .find(|resource| {
-            parse_published_definition(resource).is_ok_and(|definition| {
-                definition.definition_id == definition_id
-                    && definition.version == version
-                    && definition.runtime_role == runtime_role
-            })
-        })
-        .ok_or(AgentCatalogError::NotFound)?;
-    runtime_role_from_resource(resource)
-}
-
-/// Exact MCP inventory required by selected immutable Agent Definitions.
-pub fn required_mcp_servers(
-    roles: &[PlatformRuntimeRole],
+pub fn merge_required_mcp_servers(
+    definitions: &[ResolvedAgentDefinition],
 ) -> Result<Vec<RequiredMcpServer>, AgentCatalogError> {
     let mut required = BTreeMap::<String, (BTreeSet<String>, BTreeSet<String>)>::new();
-    for role in roles {
-        let resource = PUBLISHED_AGENT_RESOURCES
-            .iter()
-            .find(|resource| {
-                parse_published_definition(resource).is_ok_and(|definition| {
-                    definition.definition_id == role.definition_id
-                        && definition.version == role.version
-                        && definition.runtime_role == role.name
-                })
-            })
-            .ok_or(AgentCatalogError::Invalid)?;
-        let definition = parse_published_definition(resource)?;
-        for server in mcp_requirements_from_definition(&definition)? {
-            let entry = required.entry(server.name).or_default();
-            entry.0.extend(server.tools);
-            entry.1.extend(server.capability_root_ids);
+    for definition in definitions {
+        if definition.required_mcp_servers.is_empty() {
+            return Err(AgentCatalogError::Invalid);
+        }
+        for server in &definition.required_mcp_servers {
+            let entry = required.entry(server.name.clone()).or_default();
+            entry.0.extend(server.tools.iter().cloned());
+            entry.1.extend(server.capability_root_ids.iter().cloned());
         }
     }
     if required.is_empty() {
@@ -167,26 +184,76 @@ pub fn is_platform_runtime_role(name: &str) -> bool {
         .any(|resource| resource.runtime_role_name == name)
 }
 
-pub(crate) fn contract(
-    definition_id: &str,
-    version: &str,
-    runtime_role: &str,
-) -> Result<AgentContract, AgentCatalogError> {
-    let resource = PUBLISHED_AGENT_RESOURCES
-        .iter()
-        .find(|resource| {
-            parse_published_definition(resource).is_ok_and(|definition| {
-                definition.definition_id == definition_id
-                    && definition.version == version
-                    && definition.runtime_role == runtime_role
-            })
-        })
-        .ok_or(AgentCatalogError::NotFound)?;
+impl ResolvedAgentDefinition {
+    pub fn with_release_id(mut self, release_id: Uuid) -> Self {
+        self.release_id = Some(release_id);
+        self
+    }
+
+    pub fn contract(&self) -> AgentContract {
+        AgentContract {
+            input_artifact_types: self.input_artifact_types.iter().cloned().collect(),
+            output_artifact_types: self.output_artifact_types.iter().cloned().collect(),
+        }
+    }
+
+    pub fn summary(&self, source: AgentDefinitionSource) -> AgentDefinitionSummary {
+        AgentDefinitionSummary {
+            source,
+            release_id: self.release_id,
+            definition_id: self.definition_id.clone(),
+            version: self.version.clone(),
+            display_name: self.display_name.clone(),
+            description: self.description.clone(),
+            responsibilities: self.responsibilities.clone(),
+            input_artifact_types: self.input_artifact_types.clone(),
+            output_artifact_types: self.output_artifact_types.clone(),
+            required_capabilities: self.required_capabilities.clone(),
+            capability_template: self.capability_template.clone(),
+        }
+    }
+}
+
+fn resolved_from_resource(
+    resource: &PublishedAgentResource,
+) -> Result<ResolvedAgentDefinition, AgentCatalogError> {
     let definition = parse_published_definition(resource)?;
-    Ok(AgentContract {
-        input_artifact_types: definition.input_artifact_types.into_iter().collect(),
-        output_artifact_types: definition.output_artifact_types.into_iter().collect(),
+    let runtime_role = runtime_role_from_resource(resource)?;
+    let required_mcp_servers = mcp_requirements_from_definition(&definition)?;
+    let content_sha256 = published_definition_content_sha256(&definition, &runtime_role);
+    Ok(ResolvedAgentDefinition {
+        release_id: None,
+        definition_id: definition.definition_id,
+        version: definition.version,
+        display_name: definition.display_name,
+        description: definition.description,
+        responsibilities: definition.responsibilities,
+        input_artifact_types: definition.input_artifact_types,
+        output_artifact_types: definition.output_artifact_types,
+        required_capabilities: definition.required_capabilities,
+        capability_template: None,
+        content_sha256,
+        runtime_role,
+        required_mcp_servers,
     })
+}
+
+fn published_definition_content_sha256(
+    definition: &PublishedAgentDefinition,
+    runtime_role: &PlatformRuntimeRole,
+) -> String {
+    let mut digest = Sha256::new();
+    let definition_json =
+        serde_json::to_vec(definition).expect("validated Agent Definition serializes");
+    for field in [
+        b"published-agent-definition.v1".as_slice(),
+        definition_json.as_slice(),
+        runtime_role.content_sha256.as_bytes(),
+    ] {
+        digest.update((field.len() as u64).to_be_bytes());
+        digest.update(field);
+    }
+    hex::encode(digest.finalize())
 }
 
 fn runtime_role_from_resource(
@@ -342,7 +409,7 @@ fn mcp_requirements_from_definition(
         .collect())
 }
 
-fn runtime_role_template(
+pub(crate) fn runtime_role_template(
     developer_instructions: &str,
     expected_instructions_sha256: &str,
     required_mcp_servers: &[RequiredMcpServer],
@@ -406,71 +473,21 @@ fn runtime_role_template(
 impl From<PublishedAgentDefinition> for AgentDefinitionSummary {
     fn from(value: PublishedAgentDefinition) -> Self {
         Self {
+            source: AgentDefinitionSource::Repository,
+            release_id: None,
             definition_id: value.definition_id,
             version: value.version,
             display_name: value.display_name,
             description: value.description,
-            runtime_role: value.runtime_role,
             responsibilities: value.responsibilities,
             input_artifact_types: value.input_artifact_types,
             output_artifact_types: value.output_artifact_types,
             required_capabilities: value.required_capabilities,
+            capability_template: None,
         }
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn publishes_exact_runtime_roles_and_seals_role_content() {
-        let definitions = list_published().unwrap();
-        assert_eq!(definitions.len(), 2);
-        assert_eq!(definitions[0].version, "1.6.0");
-        assert_eq!(definitions[1].version, "1.5.0");
-
-        let roles = platform_runtime_roles().unwrap();
-        assert_eq!(
-            roles
-                .iter()
-                .map(|role| role.name.as_str())
-                .collect::<Vec<_>>(),
-            vec!["data_agent", "network_planning_agent"]
-        );
-        for role in &roles {
-            assert_eq!(
-                role.content_sha256,
-                hex::encode(Sha256::digest(role.config_toml.as_bytes()))
-            );
-            assert!(role.config_toml.contains("[agents]\nenabled = false"));
-            assert!(role.config_toml.contains("shell_tool = false"));
-        }
-    }
-
-    #[test]
-    fn definitions_bind_versions_to_reviewed_runtime_instructions() {
-        for (definition, instructions) in [
-            (
-                parse_definition(DATA_AGENT).unwrap(),
-                DATA_AGENT_INSTRUCTIONS,
-            ),
-            (
-                parse_definition(NETWORK_PLANNING_AGENT).unwrap(),
-                NETWORK_PLANNING_AGENT_INSTRUCTIONS,
-            ),
-        ] {
-            assert_eq!(
-                definition.runtime_profile.content_sha256,
-                hex::encode(Sha256::digest(instructions.trim().as_bytes()))
-            );
-        }
-    }
-
-    #[test]
-    fn platform_runtime_role_names_are_reserved() {
-        assert!(is_platform_runtime_role("data_agent"));
-        assert!(is_platform_runtime_role("network_planning_agent"));
-        assert!(!is_platform_runtime_role("user_defined_agent"));
-    }
-}
+#[path = "agent_tests.rs"]
+mod tests;

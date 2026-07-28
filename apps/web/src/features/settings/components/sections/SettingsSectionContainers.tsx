@@ -10,6 +10,7 @@ import { SettingsProjectsSection } from "./SettingsProjectsSection";
 import { SettingsServerSection } from "./SettingsServerSection";
 import { SettingsShortcutsSection } from "./SettingsShortcutsSection";
 import { SettingsAgentsSection } from "./SettingsAgentsSection";
+import { SettingsAgentCatalogSection } from "./SettingsAgentCatalogSection";
 import { SettingsSupervisorsSection } from "./SettingsSupervisorsSection";
 import { SettingsAboutSection } from "./SettingsAboutSection";
 import type { CodexSection } from "@settings/components/settingsTypes";
@@ -56,6 +57,9 @@ export function SettingsSectionContainers({
   }
   if (activeSection === "agents") {
     return <SettingsAgentsSection {...orchestration.agentsSectionProps} />;
+  }
+  if (activeSection === "agent-catalog") {
+    return <SettingsAgentCatalogSection {...orchestration.agentCatalogSectionProps} />;
   }
   if (activeSection === "supervisors") {
     return <SettingsSupervisorsSection {...orchestration.supervisorsSectionProps} />;

@@ -13,3 +13,4 @@ hex.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 toml_edit.workspace = true
+uuid.workspace = true

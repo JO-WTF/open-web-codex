@@ -23,6 +23,11 @@ It is a publication catalog, not a Runtime discovery directory:
 - Web-authored Supervisor Definitions, Revisions and Releases are
   organization-scoped PostgreSQL resources. They are not written here or into a
   Profile.
+- Web-authored Agent Definitions, draft Revisions and immutable Releases are
+  also organization-scoped PostgreSQL resources. During the pre-native-CRUD
+  phase, each Release selects one exact reviewed Agent entry from this directory
+  as its capability template and may narrow, but never expand, its Artifact
+  contract.
 - Profile `CODEX_HOME/agents` remains Runtime configuration and is not a
   substitute for governed Agent Definition publication.
 

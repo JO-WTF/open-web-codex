@@ -1,3 +1,4 @@
+mod agent_catalog;
 mod event_projection;
 mod middleware;
 mod routes;

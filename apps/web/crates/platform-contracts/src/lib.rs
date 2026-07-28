@@ -330,6 +330,8 @@ pub struct SupervisorPolicySummary {
 pub struct SupervisorAgentSelection {
     pub definition_id: String,
     pub version: String,
+    #[serde(default)]
+    pub release_id: Option<Uuid>,
     pub spawn_limit: u32,
 }
 
@@ -394,6 +396,71 @@ pub struct SupervisorDefinitionSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentDefinitionSource {
+    Repository,
+    UserRelease,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentCapabilityTemplateSelection {
+    pub definition_id: String,
+    pub version: String,
+}
+
+/// Browser-authored governance metadata for an Agent Definition. Executable
+/// Runtime Role and MCP facts are always derived by the platform.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentDefinitionDraftRequest {
+    pub definition_id: String,
+    pub version: String,
+    pub display_name: String,
+    pub description: String,
+    pub responsibilities: Vec<String>,
+    pub developer_instructions: String,
+    pub input_artifact_types: Vec<String>,
+    pub output_artifact_types: Vec<String>,
+    pub capability_template: AgentCapabilityTemplateSelection,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentDefinitionValidationIssue {
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentDefinitionValidationResult {
+    pub valid: bool,
+    pub content_sha256: Option<String>,
+    pub issues: Vec<AgentDefinitionValidationIssue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentDefinitionReleaseSummary {
+    pub id: Uuid,
+    pub definition_id: String,
+    pub version: String,
+    pub display_name: String,
+    pub description: String,
+    pub content_sha256: String,
+    pub published_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentDefinitionResourceSummary {
+    pub id: Uuid,
+    pub definition_id: String,
+    pub display_name: String,
+    pub description: String,
+    pub owner_user_id: Uuid,
+    pub draft: Option<AgentDefinitionDraftRequest>,
+    pub releases: Vec<AgentDefinitionReleaseSummary>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SupervisorPolicyBinding {
     pub run_id: Uuid,
     pub task_id: Uuid,
@@ -409,15 +476,17 @@ pub struct SupervisorPolicyBinding {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentDefinitionSummary {
+    pub source: AgentDefinitionSource,
+    pub release_id: Option<Uuid>,
     pub definition_id: String,
     pub version: String,
     pub display_name: String,
     pub description: String,
-    pub runtime_role: String,
     pub responsibilities: Vec<String>,
     pub input_artifact_types: Vec<String>,
     pub output_artifact_types: Vec<String>,
     pub required_capabilities: Vec<String>,
+    pub capability_template: Option<AgentCapabilityTemplateSelection>,
 }
 
 /// Rebuildable, browser-safe view of one Runtime-owned Thread in a root Run's

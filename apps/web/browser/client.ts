@@ -1,6 +1,10 @@
 import type {
   Approval,
   AgentDefinitionSummary,
+  AgentDefinitionDraftRequest,
+  AgentDefinitionReleaseSummary,
+  AgentDefinitionResourceSummary,
+  AgentDefinitionValidationResult,
   Me,
   Project,
   ProviderCatalog,
@@ -371,6 +375,38 @@ export class PlatformClient {
 
   listAgentDefinitions() {
     return this.request<AgentDefinitionSummary[]>("/api/agent-definitions");
+  }
+
+  listAgentDefinitionResources() {
+    return this.request<AgentDefinitionResourceSummary[]>("/api/agent-definition-resources");
+  }
+
+  createAgentDefinition(draft: AgentDefinitionDraftRequest) {
+    return this.request<AgentDefinitionResourceSummary>("/api/agent-definition-resources", {
+      method: "POST",
+      body: JSON.stringify(draft),
+    });
+  }
+
+  saveAgentDefinitionDraft(definitionId: string, draft: AgentDefinitionDraftRequest) {
+    return this.request<AgentDefinitionResourceSummary>(
+      `/api/agent-definition-resources/${encodeURIComponent(definitionId)}/draft`,
+      { method: "PUT", body: JSON.stringify(draft) },
+    );
+  }
+
+  validateAgentDefinitionDraft(definitionId: string) {
+    return this.request<AgentDefinitionValidationResult>(
+      `/api/agent-definition-resources/${encodeURIComponent(definitionId)}/validate`,
+      { method: "POST" },
+    );
+  }
+
+  publishAgentDefinitionDraft(definitionId: string) {
+    return this.request<AgentDefinitionReleaseSummary>(
+      `/api/agent-definition-resources/${encodeURIComponent(definitionId)}/publish`,
+      { method: "POST" },
+    );
   }
 
   listSupervisorDefinitions() {

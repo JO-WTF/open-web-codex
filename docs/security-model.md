@@ -208,7 +208,8 @@ Workspace 是独立授权执行根，不属于 Thread、Task 或 Run。
 
 | 风险 | 必须的控制 |
 | --- | --- |
-| Supervisor 选择未发布 Agent | 候选来自已授权 Agent Definition 与真实可发现 Runtime Role 的交集 |
+| Supervisor 选择未发布或漂移的 Agent | 候选来自组织可见 Agent Catalog；用户 Agent 必须绑定代码评审的 capability template，Supervisor 必须绑定精确 Release UUID、版本和内容哈希，预检重新解析且不按名称回退 |
+| 浏览器扩大 Agent 权限 | 浏览器不能提交 Runtime Role、MCP、Tool、capability root 或路径；服务端只允许收窄所选模板的 Artifact 合同并派生可执行配置 |
 | 子 Agent 继承全部权限 | 受限连接、最小凭据和 Capability/Resource 裁剪 |
 | 模型伪造 Task 或角色 | 身份由系统绑定，不接受模型提交的组织/Profile/Runtime Role |
 | Agent 之间复制敏感数据 | 通过授权 Artifact/Resource 引用交接，避免复制无界上下文 |

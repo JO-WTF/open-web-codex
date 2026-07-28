@@ -1,3 +1,4 @@
+pub mod agent_definition_resources;
 pub mod agent_definitions;
 pub mod approvals;
 pub mod artifacts;
@@ -80,6 +81,23 @@ pub fn router(
         .route(
             "/agent-definitions",
             axum::routing::get(agent_definitions::list_published),
+        )
+        .route(
+            "/agent-definition-resources",
+            axum::routing::get(agent_definition_resources::list)
+                .post(agent_definition_resources::create),
+        )
+        .route(
+            "/agent-definition-resources/{id}/draft",
+            axum::routing::put(agent_definition_resources::save_draft),
+        )
+        .route(
+            "/agent-definition-resources/{id}/validate",
+            axum::routing::post(agent_definition_resources::validate),
+        )
+        .route(
+            "/agent-definition-resources/{id}/publish",
+            axum::routing::post(agent_definition_resources::publish),
         )
         .route("/bootstrap", axum::routing::post(bootstrap::bootstrap))
         .route("/sessions", axum::routing::post(sessions::create_session))

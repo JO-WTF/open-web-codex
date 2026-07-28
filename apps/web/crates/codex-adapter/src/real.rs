@@ -2477,6 +2477,17 @@ mod tests {
     }
 
     #[test]
+    fn accepts_a_single_agent_supervisor_thread_limit() {
+        let mut role = platform_runtime_role();
+        role.definition_id = "regional-data-reviewer".to_string();
+        role.name = "agent_0123456789abcdef0123456789abcdef".to_string();
+        role.config_file = "platform-agents/regional-data-reviewer/1.0.0.toml".to_string();
+
+        validate_platform_runtime_roles(&[role], 1)
+            .expect("a Supervisor with one custom Agent should be accepted");
+    }
+
+    #[test]
     fn selects_the_available_turn_sandbox_policy() {
         let policy = turn_sandbox_policy(Path::new("/runner/workspace"), false);
 

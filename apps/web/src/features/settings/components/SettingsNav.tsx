@@ -10,6 +10,7 @@ import ExternalLink from "lucide-react/dist/esm/icons/external-link";
 import Layers from "lucide-react/dist/esm/icons/layers";
 import ServerCog from "lucide-react/dist/esm/icons/server-cog";
 import Bot from "lucide-react/dist/esm/icons/bot";
+import Library from "lucide-react/dist/esm/icons/library";
 import Network from "lucide-react/dist/esm/icons/network";
 import Info from "lucide-react/dist/esm/icons/info";
 import { PanelNavItem, PanelNavList } from "@/features/design-system/components/panel/PanelPrimitives";
@@ -118,6 +119,15 @@ export function SettingsNav({
           onClick={() => onSelectSection("agents")}
         >
           Agents
+        </PanelNavItem>
+        <PanelNavItem
+          className="settings-nav"
+          icon={<Library aria-hidden />}
+          active={activeSection === "agent-catalog"}
+          showDisclosure={showDisclosure}
+          onClick={() => onSelectSection("agent-catalog")}
+        >
+          Agent Catalog
         </PanelNavItem>
         <PanelNavItem
           className="settings-nav"
