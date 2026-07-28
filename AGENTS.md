@@ -4,6 +4,105 @@ This guide supplements the user-level engineering principles with rules that
 are specific to this repository. Component guides may add implementation
 details, but must preserve the ownership and contracts defined here.
 
+## Engineering principles
+
+1. Establish facts before changing behavior. Inspect the authoritative data,
+   the actual execution path and relevant measurements, and distinguish
+   verified facts from assumptions.
+2. Fix root causes. Do not hide defects with hard-coded substitutes, silent
+   degradation, fabricated success, swallowed errors, delays or visual masking.
+   Cold starts, restarts, failures and recovery paths must be correct.
+3. Preserve a single source of truth. Live updates, persistence, history
+   recovery and derived views must have consistent semantics and converge.
+4. Respect ownership boundaries. Behavior belongs in the layer that owns its
+   lifecycle and semantics; prefer official contracts and upstream
+   abstractions.
+5. Make extensions typed and general. Use stable types, capabilities,
+   registries and lifecycle contracts instead of heuristics based on names,
+   display text, paths or content.
+6. Give every asynchronous operation a stable identity and explicit success,
+   failure, rejection, cancellation, timeout and interruption outcomes.
+   Concurrency, reconnects, refreshes and out-of-order delivery must not create
+   duplicate or stale state.
+7. Persist state in the scope of its authoritative owner. Treat caches as
+   disposable projections. Secrets must never enter logs, browser-visible
+   payloads, documentation or source code.
+8. Keep critical paths small and observable. Load only necessary data, avoid
+   repeated full scans when an authoritative projection exists, and use
+   measurements to judge performance.
+9. Do not preserve compatibility with historical, non-official project
+   implementations. This rule never authorizes breaking official Codex
+   contracts or changing official Runtime behavior.
+10. Validate normal, failure, interruption, recovery, concurrency and
+    persistence paths as applicable. Work is complete only when the
+    implementation, boundary validation and delivery checks all succeed.
+11. Documentation describes current facts. Put historical explanation in
+    decision records or version history instead of accumulating superseded
+    behavior in current-state documents.
+12. Before starting, inspect interrupted or in-progress work. Preserve
+    unrelated user changes, keep commits single-purpose, validate the precise
+    affected scope and never claim completion before the evidence supports it.
+13. Treat compliance as a gate for every new requirement and every refactor.
+    Before implementation, identify all applicable `AGENTS.md` files and
+    authoritative project documents, then record how the proposed owner,
+    contracts, capability gate, persistence scope and validation satisfy them.
+    Recheck the same constraints against the final diff before delivery. If a
+    requirement conflicts with a governing rule, stop and resolve the conflict
+    explicitly rather than proceeding by assumption.
+
+## Development-stage contracts and recovery
+
+This repository is in active development. The latest checked-in implementation
+and its current contracts are the only supported project state.
+
+- The compatibility prohibition applies to historical, non-official project
+  APIs, schemas, configuration, events and UI adapters. Codex app-server APIs,
+  configuration, CLI behavior and Thread restoration semantics must continue to
+  follow the checked-in upstream contract. Removing project compatibility code
+  must not change official Runtime behavior.
+- Project-owned interfaces may advance directly to the latest contract. Update
+  every caller, fixture, seed, generated artifact, test and current document in
+  the same change, then delete the superseded path.
+- A clean environment must initialize completely from the current schema and
+  configuration. Do not add runtime migration branches for historical
+  non-official database schemas, configuration shapes or event formats. When
+  development data is incompatible, use an explicit documented rebuild
+  procedure outside the startup path; never guess or repair it automatically.
+- Do not maintain old and new project APIs in parallel, dual-read or dual-write
+  old and new fields, infer missing fields, or retain deprecated fields without
+  a current contract owner. Generated protocol artifacts come only from the
+  current Rust types.
+- Prohibited fallback behavior includes silent downgrade, fake success,
+  swallowed errors, guessed protocol versions, default values that hide missing
+  authoritative state, and switching to an undisclosed implementation. A
+  missing capability must produce a typed, explicit unavailable or failure
+  result.
+- Reliability recovery is allowed when it is part of the owning contract:
+  bounded retries, reconnects, idempotent recovery and durable state replay.
+  Recovery must be typed, observable and limited by attempts or time while
+  preserving the original error cause. Never automatically retry a
+  non-idempotent operation without an explicit idempotency key and contract.
+- Capability gates come only from typed Codex Runtime discovery, generated
+  contracts or an authoritative persisted platform capability record. Never
+  infer support from version strings, file presence, error text, UI state,
+  display names or hard-coded Provider names. The WebApp must not advertise a
+  Runtime capability the Runtime has not reported.
+
+## Root-cause completion criteria
+
+An error is fixed only when all applicable conditions are met:
+
+1. The authoritative state and the layer that owns the failure are identified.
+2. The correction is made in that owning layer instead of masking the error
+   earlier in the call chain.
+3. The obsolete path, hard-coded substitute or duplicate source of state that
+   caused the failure is removed.
+4. Tests reproduce the original failure and cover the correct recovery or
+   explicit terminal result.
+5. The error remains observable through structured types and safe diagnostics.
+6. Architecture, capability-baseline or operational documentation is updated
+   when its current facts or owner contracts changed.
+
 ## North star
 
 Build a self-hosted, browser-first, multi-user Codex workbench by reusing the
@@ -25,6 +124,33 @@ The browser reaches Codex only through the authenticated Web platform and a
 versioned app-server bridge. Keep product-specific Codex changes narrow,
 explicit and replayable so the `codex/` subtree can continue to synchronize
 with `openai/codex`.
+
+## Current delivery stage and evolution
+
+The current delivery stage is single-user and single-Profile. Exact runtime
+composition, authentication entry and milestone status are current-state facts
+owned by `docs/architecture.md`, `docs/capability-baseline.md` and
+`docs/development-plan.md`; do not duplicate them here.
+
+- Do not build tenant administration, invitations, member roles, interactive
+  multi-user authentication or cross-tenant UI in the current stage.
+- Keep User, Organization, Profile, Workspace and owner identities in database
+  records, authorization entry points, cache keys, process keys and event
+  scopes. A current single-process composition must not become an unscoped
+  global singleton.
+- Validate current resource ownership and authorization boundaries. A complete
+  concurrent cross-user isolation and denial matrix is a mandatory gate before
+  multi-user operation is enabled, not a reason to build multi-user product
+  flows during the single-user stage.
+- Design every change against the accepted long-term architecture and stage
+  order. A capability from a later stage may be implemented early only when a
+  current feature has a real dependency, the object or boundary already exists
+  in the long-term architecture, and the current stage has an executable
+  acceptance path.
+- Do not build an unused parallel framework for a hypothetical future need.
+  Record an ADR when an early capability creates a lasting architectural
+  constraint. Future value alone never justifies adding responsibility to
+  Codex core.
 
 ## Ownership
 
@@ -55,8 +181,9 @@ second Thread, memory or agent system.
   records. Browser input is never trusted as a server-local path, and every
   Runtime `cwd` must fall within an authorized execution root.
 - Scope processes, caches, subscriptions, model catalogs, Secrets, Workspace
-  grants and events by their authoritative identity. Cross-user access denial
-  is a release requirement.
+  grants and events by their authoritative identity even in the current
+  single-user composition. Cross-user access denial is a gate before multi-user
+  operation is enabled.
 - Persist durable platform events and approvals before browser fan-out.
   Reconnect may replay missing projections, but projections never replace
   authoritative Codex history.
@@ -66,25 +193,37 @@ second Thread, memory or agent system.
 
 ## Retained Codex customization
 
-The target is a small, deliberate Codex diff, not a zero-diff subtree. Preserve
-these product-critical seams and keep them concentrated in their owning modules:
+The target is the smallest necessary, deliberate Codex diff, not a zero-diff
+subtree. Do not customize `codex-rs` when the behavior can live in upstream
+configuration, app-server v2, a Skill, Plugin or MCP package, or the owning
+platform layer. Every retained change must be minimal, modular, typed, tested
+and replayable after an upstream synchronization.
 
-- third-party Chat Completions request, streaming and tool-call translation;
-- Provider identity, configuration and Provider-scoped model metadata;
-- Provider model discovery, refresh, caching and cross-Provider isolation;
-- versioned app-server APIs for Provider configuration, catalog access and
-  selected Provider/model propagation;
-- equivalent Provider selection, configuration, refresh and failure workflows
-  in the TUI.
+A new or expanded `codex/` customization may not begin until its Patch Map
+entry, optionally backed by a linked design record, supplies:
 
-Place transport translation in `codex-api`, Provider facts in Provider modules,
-wire types in `app-server-protocol`, request handling in app-server modules and
-presentation in dedicated TUI Provider modules. `codex-core` contains only the
-smallest necessary transport-selection seam. Web, Profile, authorization and
-browser state never move into `codex/`.
+1. Evidence that official configuration, app-server v2, Skills, Plugins, MCP
+   and the owning platform layer cannot provide the required behavior.
+2. The smallest owning crate and exact intended file scope.
+3. Typed inputs, outputs, capability gate and isolated validation.
+4. The replay sequence after accepting a new upstream structure.
+5. Its `retain-core`, `upstreamed`, `move-out` or `drop` classification.
+6. An exit condition and the upstream capability that would allow the
+   customization to be deleted.
 
-Before modifying high-churn Codex code, run
-`scripts/codex-upstream-status.sh`, inspect
+Absent that evidence, do not modify Codex. A possible future requirement is not
+evidence of necessity.
+
+Only seams currently classified as `retain-core` in
+`docs/custom-codex-patch-map.md` may remain. The Patch Map is the sole current
+inventory and owns each seam's module placement, replay sequence,
+parity/validation obligations and exit condition; do not duplicate that
+inventory in `AGENTS.md`. Web, Profile, authorization and browser state never
+move into `codex/`.
+
+Before modifying Codex Runtime source, run
+`scripts/codex-upstream-status.sh` and
+`scripts/codex-customization-status.sh`, inspect
 `docs/custom-codex-patch-map.md`, and classify every non-generated difference
 as `retain-core`, `upstreamed`, `move-out` or `drop`. Official synchronization
 must use `scripts/sync-codex-upstream.sh --apply` on its dedicated sync branch,
@@ -96,8 +235,9 @@ seams.
 - A feature proposal must identify its owning layer, typed inputs and outputs,
   capability gate, persistence scope and validation path before implementation.
   Split cross-layer work until every change has one clear owner.
-- Browser APIs are stable product resources, not app-server passthroughs.
-  Generated Runtime types stay behind the Platform Server and Profile Host.
+- Browser APIs are typed product resources with one current contract, not
+  app-server passthroughs. Generated Runtime types stay behind the Platform
+  Server and Profile Host.
 - Workspaces exist independently of Threads and Runs. Starting, resuming or
   updating a Thread passes an authorized `cwd` through the official Codex
   contract; it does not create a Thread-owned checkout. Managed clones or
@@ -112,8 +252,6 @@ seams.
   Capability packages may supply declarations and launchers, but the WebApp and
   platform startup path must not simulate discovery or edit hidden Profile
   configuration.
-- TUI parity is required for retained Provider capabilities; a Web-only
-  Provider workflow is incomplete.
 
 ## Project sources of truth
 

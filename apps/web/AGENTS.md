@@ -5,11 +5,12 @@ This file adds implementation rules for `apps/web/**`.
 
 ## Ownership
 
-- `src/WebApp.tsx` and its component tree own the restored 1421 browser
-  presentation. `src/services/webClient.ts` is its narrow compatibility seam.
+- `src/WebApp.tsx` and its component tree own browser presentation.
+  `src/services/webClient.ts` is its narrow current-contract UI adapter.
 - `browser/client.ts` owns the authenticated typed REST/WebSocket transport.
-  Browser adapters may translate existing UI method shapes, but may not create
-  a second Gateway protocol or expose raw Runtime payloads.
+  Browser adapters may translate current UI method shapes, but may not preserve
+  superseded project contracts, create a second Gateway protocol or expose raw
+  Runtime payloads.
 - `server/**` owns HTTP/WebSocket composition, authentication, authorization,
   browser DTO mapping, Profile/Runner wiring, and static asset delivery.
 - `crates/profile-host` owns persistent Profile process lifecycle and the
@@ -39,6 +40,9 @@ This file adds implementation rules for `apps/web/**`.
   MCP, or multi-agent scheduling in the platform.
 - Do not hand-edit generated Codex schemas or TypeScript. Regenerate them from
   the checked-in Runtime.
+- Render capability state only from typed Runtime discovery, generated
+  contracts or authoritative platform records. Show unsupported capabilities
+  as explicitly unavailable; do not infer or silently substitute them.
 
 ## Changes
 
@@ -46,7 +50,9 @@ This file adds implementation rules for `apps/web/**`.
    `docs/capability-baseline.md` and `docs/development-plan.md` before changing
    behavior in the affected boundary.
 2. Put behavior in the owning crate and keep routes thin.
-3. Add cross-tenant denial coverage for authorization-sensitive resources.
+3. Authorization-sensitive changes must preserve typed resource ownership and
+   authorization entry points. The complete cross-tenant denial matrix is
+   mandatory before enabling multi-user operation.
 4. Persist a safe event/approval projection before broadcasting it.
 5. For Runtime contract changes, regenerate the bundle and run the real
    app-server smoke.
