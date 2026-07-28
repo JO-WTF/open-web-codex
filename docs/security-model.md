@@ -157,7 +157,9 @@ Workspace 是独立授权执行根，不属于 Thread、Task 或 Run。
   Secret 明文；
 - Provider 模型目录和选择按 Profile/Provider 隔离，切换时不能复用其他
   Provider 的模型或凭据缓存；
-- Secret 删除、轮换和进程替换必须处理活动 Turn，不能为了立即生效破坏运行一致性。
+- Secret 删除、轮换和进程替换必须处理活动 Turn、未决 Server Request，以及尚未
+  产生首个官方 rollout 的持久 Thread；不能为了立即生效破坏运行一致性或留下无法
+  恢复的 Thread 身份。
 
 ## Approval、Lease 与异步操作
 
@@ -167,6 +169,11 @@ Workspace 是独立授权执行根，不属于 Thread、Task 或 Run。
 
 - Runtime 请求先持久化和脱敏，再通知浏览器；
 - 决策校验用户权限、资源归属、版本和 Runtime 进程实例；
+- 根 Thread 与授权 Agent 树中的子 Thread 使用同一任务级审批投影；浏览器只接收平台
+  审批 ID、安全动作摘要和 Agent 展示身份，不接收 Runtime request ID；
+- 只有全部 Tool 都是只读、有界或确定性计算的已评审 MCP Server，才可在 Plugin
+  合同中声明默认预批准，并仍受 Thread capability root 与 Agent Tool allowlist 限制；
+  混合风险 Server、凭据、外部副作用、权限扩大和非幂等写入不得使用该默认值；
 - 并发决策只有一个成功；
 - approved、rejected、expired、cancelled 等终态不可逆；
 - 旧进程 request ID 不能在重启后重新获得响应能力；

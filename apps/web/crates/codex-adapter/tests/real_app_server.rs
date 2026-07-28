@@ -235,3 +235,45 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
     host.shutdown().await.expect("shutdown Profile Host");
     model_server.abort();
 }
+
+#[tokio::test]
+#[ignore = "requires a real Codex CLI binary"]
+async fn archive_explicitly_abandons_an_unmaterialized_thread() {
+    let codex_bin = PathBuf::from(std::env::var_os("CODEX_BIN").expect("CODEX_BIN is set"));
+    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("apps/web workspace root")
+        .canonicalize()
+        .expect("canonical workspace");
+    let profile_home = tempfile::tempdir().expect("temporary Profile home");
+    let config = host_config(&codex_bin, profile_home.path(), &workspace_root);
+    let host = ProfileHost::spawn(config.clone())
+        .await
+        .expect("spawn Profile Host");
+    let adapter =
+        RealCodexAdapter::from_host(host.clone(), "workspace-one", workspace_root.clone())
+            .expect("construct real adapter");
+    let workspace = AuthorizedWorkspace {
+        id: "workspace-one".to_string(),
+        root: workspace_root,
+    };
+
+    let started = adapter
+        .start_thread(&workspace, &ThreadStartMode::Standard)
+        .await
+        .expect("start unmaterialized Thread");
+    host.schedule_restart(config)
+        .await
+        .expect("schedule Profile refresh");
+    adapter
+        .archive_thread(&workspace, &started.thread_id)
+        .await
+        .expect("explicit archive abandons the unmaterialized Thread");
+    assert!(host
+        .apply_scheduled_restart()
+        .await
+        .expect("Runtime restart is allowed after explicit abandon"));
+
+    host.shutdown().await.expect("shutdown Profile Host");
+}

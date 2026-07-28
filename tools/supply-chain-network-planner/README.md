@@ -21,6 +21,12 @@ Runtime.
   a stable `resource_name` for evidence citation. Reports must not expose or relabel the
   internal Resource URI.
 
+Both MCP servers set `default_tools_approval_mode` to `approve`. This is a
+server-level risk classification, not a global approval bypass: every exposed operation is
+bounded, deterministic or read-only, and the governed Agent Roles further narrow the exact
+Tool allowlist. Normal Codex command/file/permission approvals, credential elicitation,
+external side effects and any future higher-risk server remain subject to explicit approval.
+
 ## MCP tools
 
 Data Agent:

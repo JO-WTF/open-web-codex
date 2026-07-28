@@ -1,6 +1,14 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebApp from "./WebApp";
 import type { AppServerEvent } from "./types";
@@ -391,6 +399,88 @@ describe("WebApp workspace-first messaging", () => {
     fireEvent.click(agentButton);
     expect(await screen.findAllByText("Using planning data · load network")).toHaveLength(2);
     expect(screen.queryByLabelText("New Agent activity")).toBeNull();
+  });
+
+  it("surfaces a child Agent approval in the root task and Agent activity", async () => {
+    const rootAgent = {
+      run_id: "run-enterprise",
+      thread_id: "thread-root",
+      parent_thread_id: null,
+      source_kind: "root",
+      agent_path: null,
+      agent_nickname: null,
+      agent_role: null,
+      status_type: "active",
+      active_flags: [],
+      is_root: true,
+      first_observed_at: "2026-07-26T00:00:01Z",
+      last_observed_at: "2026-07-26T00:00:01Z",
+    };
+    const dataAgent = {
+      ...rootAgent,
+      thread_id: "thread-data",
+      parent_thread_id: "thread-root",
+      source_kind: "thread_spawn",
+      agent_nickname: "Data Analyst",
+      agent_role: "data_agent",
+      is_root: false,
+    };
+    client.listThreads.mockResolvedValue({
+      data: [{
+        id: "thread-root",
+        name: "Supervisor case",
+        cwd: "/tmp/demo",
+        status: "active",
+        updatedAt: "2026-07-26T00:00:02Z",
+      }],
+    });
+    client.getSupervisorOverview.mockResolvedValue({
+      taskTitle: "Enterprise network planning",
+      policy: null,
+      agents: [rootAgent, dataAgent],
+      activities: [],
+      executions: [],
+      artifacts: [],
+    });
+    render(<WebApp />);
+
+    fireEvent.click(await screen.findByText("Supervisor case"));
+    await waitFor(() => expect(client.getSupervisorOverview)
+      .toHaveBeenCalledWith("thread-root"));
+
+    act(() => {
+      appServerEventHandler?.({
+        workspace_id: "workspace-1",
+        message: {
+          method: "item/commandExecution/requestApproval",
+          id: "approval-child-1",
+          params: {
+            threadId: "thread-data",
+            turnId: "turn-data",
+            serverName: "supply_chain_data",
+            command: "Allow supply_chain_data to list planning sources?",
+          },
+        },
+      });
+    });
+
+    const taskQueue = await screen.findByRole("region", { name: "Task approvals" });
+    expect(taskQueue.textContent).toContain("Data Analyst");
+    expect(taskQueue.textContent).toContain("Approval required");
+    expect(await screen.findAllByLabelText("New Agent activity")).toHaveLength(2);
+
+    fireEvent.click(within(taskQueue).getByRole("button", { name: "Accept" }));
+    await waitFor(() => expect(client.respondToServerRequest).toHaveBeenCalledWith(
+      "workspace-1",
+      "approval-child-1",
+      { decision: "accept" },
+    ));
+
+    fireEvent.click(screen.getByRole("button", { name: "Agent activity" }));
+    const agentQueue = await screen.findByRole("region", { name: "Agent approvals" });
+    expect(agentQueue.textContent).toContain("Data Analyst");
+    expect(agentQueue.textContent).toContain("Approval resolved");
+    expect(within(agentQueue).queryByRole("button", { name: "Accept" })).toBeNull();
   });
 
   it("rolls back a Provider switch when its model catalog is empty", async () => {

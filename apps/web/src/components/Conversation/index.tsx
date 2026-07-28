@@ -10,6 +10,9 @@ import FollowUpQueue, { type QueuedFollowUp } from "./FollowUpQueue";
 import UserInputCard from "./messages/UserInputCard";
 import type { RequestUserInputRequest, RequestUserInputResponse } from "../../types";
 import type { ModelProviderSummary, ModelSummary } from "./Composer";
+import TaskApprovalQueue, {
+  type TaskApprovalRequest,
+} from "./TaskApprovalQueue";
 import {
   initialConversationStart,
   previousConversationStart,
@@ -47,6 +50,7 @@ type Props = {
   selectedModelId?: string | null;
   onSelectModel?: (modelId: string) => void;
   messages: MessageEntry[];
+  taskApprovals?: TaskApprovalRequest[];
   workspaceId?: string;
   thinking?: boolean;
   turnStartedAt?: number | null;
@@ -100,6 +104,7 @@ export default function Conversation({
   selectedModelId,
   onSelectModel,
   messages,
+  taskApprovals = [],
   workspaceId,
   thinking,
   turnStartedAt,
@@ -217,6 +222,11 @@ export default function Conversation({
             onOpenFile={onOpenFile}
             workspaceId={workspaceId}
             onResolveApproval={onResolveApproval}
+          />
+          <TaskApprovalQueue
+            approvals={taskApprovals}
+            ariaLabel="Task approvals"
+            onResolve={onResolveApproval}
           />
           {userInputRequest ? <UserInputCard request={userInputRequest} submitting={submittingUserInput} onSubmit={onSubmitUserInput} /> : null}
           {thinking && threadStatus !== "reconnecting" && !visibleMessages.some((entry) => entry.level === "user") && <ThinkingIndicator />}

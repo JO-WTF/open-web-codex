@@ -31,4 +31,31 @@ describe("Layout", () => {
 
     expect(screen.queryByRole("button", { name: "Hide projects panel" })).toBeNull();
   });
+
+  it("dismisses the details panel from its outside area", () => {
+    const onDismissRightPanel = vi.fn();
+    render(
+      <Layout
+        sidebar={<aside>Projects</aside>}
+        rightPanel={<aside>Details</aside>}
+        rightPanelOpen
+        onDismissRightPanel={onDismissRightPanel}
+      >
+        <div>Conversation</div>
+      </Layout>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Close details panel" }));
+    expect(onDismissRightPanel).toHaveBeenCalledOnce();
+  });
+
+  it("does not render the details outside area while the panel is closed", () => {
+    render(
+      <Layout sidebar={<aside>Projects</aside>} rightPanel={<aside>Details</aside>}>
+        <div>Conversation</div>
+      </Layout>,
+    );
+
+    expect(screen.queryByRole("button", { name: "Close details panel" })).toBeNull();
+  });
 });

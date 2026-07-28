@@ -107,6 +107,17 @@ follow-up、interrupt、部分失败和审批拒绝后的综合；多层 Agent �
 打开、替代、失效、删除与保留；更完整的重启/乱序、共享 Workspace、multi-`cwd`
 和多用户隔离矩阵。它们继续限制“可恢复企业能力”和生产发布声明。
 
+浏览器已将授权 Agent 树中的子 Thread 审批提升为任务级响应队列：根对话和
+Agent Activity 都渲染同一平台审批 ID 的批准/拒绝卡片，刷新后从持久审批事件重放，
+提交中阻止重复决定。真实审批拒绝后的 Agent 恢复、Supervisor 综合和最终 Run
+收敛仍属于上述未完成门禁。
+
+供应链插件的两个 MCP Server 现按风险合同声明默认预批准：它们的完整 Tool 集合
+仅包含只读数据访问、有界确定性计算和内部不可变 Resource 发布，并继续受精确
+Agent Tool allowlist 限制。命令、文件、权限、凭据、外部副作用和未来混合风险
+Server 不继承该设置。右侧 Agent/Files 面板同时增加外部点击关闭，面板内部交互、
+显式关闭按钮和 Escape 行为保持不变。
+
 ## 并行可信工作：Gate 0 平台证据恢复
 
 Gate 0 让独立 Workspace、单 Profile Runtime、PostgreSQL 迁移、安全拒绝和真实
@@ -169,6 +180,11 @@ Skills、Plugins 和 MCP。
    `scripts/smoke-third-party-map-card-mcp.sh` 覆盖 Codex Runtime + Chat provider +
    `map_utils.create_map_card`，浏览器渲染由 `scripts/smoke-map-card-rendering.sh`
    覆盖。
+   Profile Host 现将“已分配官方 Thread id、但首个 rollout 尚未物化”的持久 Thread
+   计入 Runtime replacement blocker；Provider Secret 更新、模型目录刷新或上下文
+   修改不得重启并丢弃该 Thread。聚焦单元测试和真实 app-server 回归分别覆盖
+   首 Turn 后解除门禁、平台显式放弃未物化 Thread 后解除门禁，以及重启失败关闭；
+   该路径不伪造 rollout，也不解析 Runtime 错误文本。
 5. [ ] 补齐 Responses Provider 的真实浏览器矩阵，验证 Inline Visualization 的
    “不引用不显示”、消息内顺序、Thread 切换、刷新恢复和 live/history 一致性；
    不为不同 Provider 增加第二套 Artifact 或 renderer 路径。
@@ -227,7 +243,7 @@ Skills、Plugins 和 MCP。
 ## Gate 0 验证矩阵
 
 - [x] `bash -n scripts/*.sh` 和本地启动脚本 help/status 路径。
-- [-] 1,221 个浏览器测试、typecheck、build、no-desktop、Codex contracts 和真实
+- [-] 1,243 个浏览器测试、typecheck、build、no-desktop、Codex contracts 和真实
   Codex app-server 的 19 项 Capability Manifest smoke 通过；Enterprise Supervisor
   在内置 OpenAI Provider 上的真实案例 9/9 通过。main-ui-parity 仍会报告尚未
   并入参考基线的有意浏览器 UI 扩展。

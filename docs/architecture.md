@@ -428,12 +428,21 @@ remaining Chat translation stages are defined in `docs/adr/005-map-reply-cards.m
    receives a Codex Server Request and persists an internal mapping to
    Profile/Task/Run/Thread plus that instance before notification.
 2. Platform filters recipients by resource permission and approval policy.
-3. The first valid decision wins through compare-and-swap semantics.
-4. Host responds only when both the process instance and request id still match.
+   A reviewed capability package may classify an entire MCP server as
+   pre-approved only when every exposed Tool is bounded, read-only or
+   deterministic and the effective Agent Role narrows the exact Tool allowlist.
+   Mixed-risk servers, credentials, external side effects and authority
+   expansion continue to require explicit approval.
+3. The browser projects pending approvals at Task scope. Root and known child
+   Agent Threads use the same typed platform approval identity, so a delegated
+   approval remains actionable from the root conversation and Agent Activity
+   after refresh without exposing a raw Runtime request id.
+4. The first valid decision wins through compare-and-swap semantics.
+5. Host responds only when both the process instance and request id still match.
    Active Turns and unresolved Server Requests block credential-triggered
    restart; after an actual restart, old-instance requests become cancelled and
    a reused numeric request id cannot receive the stale response.
-5. An uncertain transport delivery remains retryable only with the same stored
+6. An uncertain transport delivery remains retryable only with the same stored
    decision; expiry or Run termination produces an explicit terminal state.
 
 ### Provider model catalog refresh
@@ -441,8 +450,15 @@ remaining Chat translation stages are defined in `docs/adr/005-map-reply-cards.m
 1. The typed Provider service authorizes and persists a Provider-scoped model
    refresh or context-window edit through the app-server config contract.
 2. Profile Registry marks the owned app-server process for replacement. An
-   active Turn or unresolved Server Request continues on the current process
-   and blocks replacement.
+   active Turn, unresolved Server Request, or persistent Thread that has not
+   yet materialized its first official rollout continues on the current
+   process and blocks replacement. A credential change that requires immediate
+   process replacement fails closed while one of those blockers exists; it
+   does not leave the browser holding a Thread id that the replacement Runtime
+   cannot resume. Because official `thread/archive` also requires a rollout,
+   the platform's explicit archive path abandons only a Host-tracked,
+   unmaterialized identity and then permits replacement; no persisted Runtime
+   history is synthesized or deleted.
 3. At the next safe Turn boundary, the adapter replaces the process under one
    serialized Runtime operation, invalidates process-local Thread bindings and
    resumes the same persisted Codex Thread before starting its next Turn.

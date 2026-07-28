@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use open_web_codex_profile_host::{ProfileHost, ProfileHostConfig, ProfileHostState};
+use open_web_codex_profile_host::{
+    ProfileHost, ProfileHostConfig, ProfileHostError, ProfileHostState,
+};
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -282,6 +284,60 @@ stream_max_retries = 0
     second.shutdown().await.expect("shutdown second host");
     drop(second);
     model_server.abort();
+    std::fs::remove_dir_all(home).expect("remove smoke Profile home");
+}
+
+#[tokio::test]
+#[ignore = "requires a real Codex CLI binary"]
+async fn restart_refuses_to_discard_an_unmaterialized_thread() {
+    let codex_bin = PathBuf::from(std::env::var_os("CODEX_BIN").expect("CODEX_BIN is set"));
+    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("apps/web workspace root")
+        .canonicalize()
+        .expect("canonical workspace");
+    let home = temporary_profile_home();
+    std::fs::create_dir_all(&home).expect("create Profile home");
+
+    let host = spawn_host(&codex_bin, &home, &workspace).await;
+    let runtime_instance_id = host.runtime_instance_id().await;
+    let started = host
+        .request(
+            "thread/start",
+            json!({
+                "cwd": workspace,
+                "approvalPolicy": "never",
+                "sandbox": "read-only",
+            }),
+        )
+        .await
+        .expect("start unmaterialized thread");
+    let expected_thread_id = thread_id(&started).to_string();
+
+    let error = host
+        .restart(
+            ProfileHostConfig::new("real-smoke-profile", &home, &workspace)
+                .with_codex_bin(&codex_bin),
+        )
+        .await
+        .expect_err("restart must preserve a Thread without a first persisted Turn");
+    assert!(matches!(error, ProfileHostError::RuntimeBusy));
+    assert_eq!(host.runtime_instance_id().await, runtime_instance_id);
+
+    assert!(
+        host.abandon_unmaterialized_thread(&expected_thread_id)
+            .await,
+        "explicit platform abandon releases the unmaterialized Thread"
+    );
+    host.restart(
+        ProfileHostConfig::new("real-smoke-profile", &home, &workspace).with_codex_bin(&codex_bin),
+    )
+    .await
+    .expect("restart after unmaterialized Thread is archived");
+
+    host.shutdown().await.expect("shutdown Profile Host");
+    drop(host);
     std::fs::remove_dir_all(home).expect("remove smoke Profile home");
 }
 

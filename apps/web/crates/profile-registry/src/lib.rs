@@ -174,6 +174,9 @@ impl ProfileRegistry {
                     }
                 }
             }
+            if matches!(update, ProfileHostError::RuntimeBusy) {
+                return Err(ProfileRegistryError::Host(update));
+            }
             if let Err(recovery) = host.restart(managed.effective_config().await).await {
                 return Err(ProfileRegistryError::HostRecovery { update, recovery });
             }

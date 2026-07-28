@@ -59,4 +59,5 @@ describe("RightSidebar", () => {
     fireEvent.click(agents);
     expect(onTabChange).toHaveBeenCalledWith("agents");
   });
+
 });

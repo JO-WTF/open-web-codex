@@ -18,6 +18,7 @@ type Props = {
   mode?: string;
   url?: string;
   serverName?: string;
+  submitting?: boolean;
   onResolve?: (workspaceId: string, requestId: number | string, decision: "accept" | "decline") => void;
 };
 
@@ -51,6 +52,7 @@ export default function ApprovalCard({
   mode,
   url,
   serverName,
+  submitting = false,
   onResolve,
 }: Props) {
   const [configurationOpen, setConfigurationOpen] = useState(false);
@@ -80,13 +82,13 @@ export default function ApprovalCard({
           : "Resolved";
 
   const handleAccept = useCallback(() => {
-    if (workspaceId && requestId !== undefined && onResolve) {
+    if (!submitting && workspaceId && requestId !== undefined && onResolve) {
       onResolve(workspaceId, requestId, "accept");
     }
-  }, [onResolve, requestId, workspaceId]);
+  }, [onResolve, requestId, submitting, workspaceId]);
 
   const handleDeny = () => {
-    if (workspaceId && requestId !== undefined && onResolve) {
+    if (!submitting && workspaceId && requestId !== undefined && onResolve) {
       onResolve(workspaceId, requestId, "decline");
     }
   };
@@ -205,11 +207,15 @@ export default function ApprovalCard({
                   </span>
                 )
             : (
-                <button className="web-approval-accept" onClick={handleAccept}>
-                  Accept
+                <button
+                  className="web-approval-accept"
+                  onClick={handleAccept}
+                  disabled={submitting}
+                >
+                  {submitting ? "Submitting…" : "Accept"}
                 </button>
               )}
-          <button className="web-approval-deny" onClick={handleDeny}>
+          <button className="web-approval-deny" onClick={handleDeny} disabled={submitting}>
             {credentialRequest ? "Cancel" : "Deny"}
           </button>
         </div>

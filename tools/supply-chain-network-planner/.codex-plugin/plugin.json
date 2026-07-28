@@ -1,6 +1,6 @@
 {
   "name": "supply-chain-network-planner",
-  "version": "0.1.0+codex.20260726120620",
+  "version": "0.1.0+codex.20260728114402",
   "description": "Read-only supply-chain data preparation plus deterministic coverage, scenario, and facility-location planning for Codex",
   "author": {
     "name": "Open Web Codex"

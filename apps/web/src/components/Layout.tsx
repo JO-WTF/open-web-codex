@@ -7,11 +7,12 @@ type Props = {
   onDismissSidebar?: () => void;
   rightPanel?: ReactNode;
   rightPanelOpen?: boolean;
+  onDismissRightPanel?: () => void;
   rightPanelWidth?: number;
   theme?: "light" | "dark";
 };
 
-export default function Layout({ sidebar, children, sidebarCollapsed = false, onDismissSidebar, rightPanel, rightPanelOpen = false, rightPanelWidth = 360, theme = "dark" }: Props) {
+export default function Layout({ sidebar, children, sidebarCollapsed = false, onDismissSidebar, rightPanel, rightPanelOpen = false, onDismissRightPanel, rightPanelWidth = 360, theme = "dark" }: Props) {
   const style = { "--web-right-panel-width": `${rightPanelWidth}px` } as CSSProperties;
   return (
     <main data-theme={theme} className={`web-app-shell${sidebarCollapsed ? " web-sidebar-collapsed" : ""}${rightPanelOpen ? " web-right-panel-open" : ""}`} style={style}>
@@ -25,6 +26,14 @@ export default function Layout({ sidebar, children, sidebarCollapsed = false, on
         />
       ) : null}
       {children}
+      {rightPanelOpen && onDismissRightPanel ? (
+        <button
+          type="button"
+          className="web-right-panel-scrim"
+          aria-label="Close details panel"
+          onClick={onDismissRightPanel}
+        />
+      ) : null}
       {rightPanel ? (
         <div className="web-right-panel-slot" hidden={!rightPanelOpen}>
           {rightPanel}

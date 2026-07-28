@@ -11,6 +11,7 @@ import Conversation from "./components/Conversation";
 import FileManager from "./components/FileManager";
 import RightSidebar, { type RightSidebarTab } from "./components/RightSidebar";
 import SupervisorOverview from "./components/Conversation/SupervisorOverview";
+import type { TaskApprovalRequest } from "./components/Conversation/TaskApprovalQueue";
 import type { GoalInfo } from "./components/Conversation/GoalBanner";
 import type { QueuedFollowUp } from "./components/Conversation/FollowUpQueue";
 import type { ModelProviderSummary, ModelSummary } from "./components/Conversation/Composer";
@@ -250,6 +251,10 @@ export default function WebApp() {
   const [steeringFollowUpId, setSteeringFollowUpId] = useState<string | null>(null);
   const [userInputRequests, setUserInputRequests] = useState<RequestUserInputRequest[]>([]);
   const [submittingUserInputId, setSubmittingUserInputId] = useState<number | string | null>(null);
+  const [approvalProjectionRevision, setApprovalProjectionRevision] = useState(0);
+  const [submittingApprovalIds, setSubmittingApprovalIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [messages, setMessages] = useState<LogEntry[]>([]);
   const [gatewayState, setGatewayState] = useState<GatewayState>("checking");
   const [gatewayVersion, setGatewayVersion] = useState<string | null>(null);
@@ -540,6 +545,7 @@ export default function WebApp() {
   const threadHydrationSequence = useRef(0);
   const recentAppServerEvents = useRef<Map<string, number>>(new Map());
   const pendingApprovalsByThread = useRef<Map<string, LogEntry[]>>(new Map());
+  const submittingApprovalIdsRef = useRef<Set<string>>(new Set());
   const threadTranscriptCache = useRef<Map<string, ThreadTranscriptCacheEntry>>(new Map());
   const refreshThreadsRef = useRef<((workspaceId?: string) => Promise<void>) | null>(null);
   const refreshSupervisorOverviewRef =
@@ -1606,6 +1612,8 @@ export default function WebApp() {
               approvalThreadId,
               appendWebLogEntry(current, cachedApproval),
             );
+            setApprovalProjectionRevision((revision) => revision + 1);
+            if (belongsToBackgroundThread) setAgentPanelUnread(true);
           }
           if (belongsToBackgroundThread) return null;
           if (approvalId && (typeof requestId === "number" || typeof requestId === "string")) {
@@ -1651,6 +1659,7 @@ export default function WebApp() {
             if (remaining.length > 0) pendingApprovalsByThread.current.set(threadId, remaining);
             else pendingApprovalsByThread.current.delete(threadId);
           }
+          setApprovalProjectionRevision((revision) => revision + 1);
           if (belongsToBackgroundThread) return null;
           setMessages((previous) => {
             const approval = previous.find((entry) =>
@@ -2186,6 +2195,10 @@ export default function WebApp() {
     requestId: number | string,
     decision: "accept" | "decline",
   ) => {
+    const submissionId = `${workspaceId}:${String(requestId)}`;
+    if (submittingApprovalIdsRef.current.has(submissionId)) return;
+    submittingApprovalIdsRef.current.add(submissionId);
+    setSubmittingApprovalIds(new Set(submittingApprovalIdsRef.current));
     try {
       await client.respondToServerRequest(workspaceId, requestId, { decision });
       for (const [threadId, approvals] of pendingApprovalsByThread.current) {
@@ -2198,8 +2211,12 @@ export default function WebApp() {
         entry.approvalRequestId === requestId
           ? { ...entry, approvalStatus: decision === "accept" ? "accepted" : "declined" }
           : entry));
+      setApprovalProjectionRevision((revision) => revision + 1);
     } catch (error) {
       appendLog("error", error instanceof Error ? error.message : String(error));
+    } finally {
+      submittingApprovalIdsRef.current.delete(submissionId);
+      setSubmittingApprovalIds(new Set(submittingApprovalIdsRef.current));
     }
   }, [appendLog, client]);
 
@@ -2363,6 +2380,47 @@ export default function WebApp() {
     ? threadsByWorkspace[activeWorkspaceId]?.find((thread) => thread.id === activeThreadId) ?? null
     : null;
   const activeThreadTitle = activeThread?.label ?? (activeThreadId ? "Thread" : null);
+  const taskApprovals = useMemo(() => {
+    if (!activeWorkspaceId || !supervisorOverview) return [];
+    const agentByThread = new Map(
+      supervisorOverview.agents.map((agent) => [agent.thread_id, agent]),
+    );
+    const requests: TaskApprovalRequest[] = [];
+    for (const [threadId, approvals] of pendingApprovalsByThread.current) {
+      const agent = agentByThread.get(threadId);
+      if (!agent) continue;
+      const actorLabel = agent.is_root
+        ? "Root Supervisor"
+        : agent.agent_nickname?.trim()
+          || agent.agent_role?.trim()
+          || "Runtime Agent";
+      for (const approval of approvals) {
+        if (approval.approvalRequestId === undefined) continue;
+        const submissionId = `${activeWorkspaceId}:${String(approval.approvalRequestId)}`;
+        requests.push({
+          threadId,
+          actorLabel,
+          workspaceId: activeWorkspaceId,
+          requestId: approval.approvalRequestId,
+          command: approval.text,
+          status: approval.approvalStatus,
+          mode: approval.approvalMode,
+          url: approval.approvalUrl,
+          serverName: approval.approvalServerName,
+          submitting: submittingApprovalIds.has(submissionId),
+        });
+      }
+    }
+    return requests;
+  }, [
+    activeWorkspaceId,
+    approvalProjectionRevision,
+    submittingApprovalIds,
+    supervisorOverview,
+  ]);
+  const delegatedTaskApprovals = taskApprovals.filter(
+    (approval) => approval.threadId !== activeThreadId,
+  );
   const agentPanelAvailable = true;
   const openAgentPanel = () => {
     const alreadyVisible = rightPanelOpen && activeRightPanelTab === "agents";
@@ -2390,6 +2448,7 @@ export default function WebApp() {
       sidebarCollapsed={sidebarCollapsed}
       onDismissSidebar={() => setSidebarCollapsed(true)}
       rightPanelOpen={rightPanelOpen}
+      onDismissRightPanel={() => setRightPanelOpen(false)}
       rightPanelWidth={rightPanelWidth}
       rightPanel={
         <RightSidebar
@@ -2410,6 +2469,8 @@ export default function WebApp() {
               activities={supervisorOverview?.activities ?? []}
               executions={supervisorOverview?.executions ?? []}
               artifacts={supervisorOverview?.artifacts ?? []}
+              approvals={taskApprovals}
+              onResolveApproval={resolveApproval}
               loading={supervisorOverviewLoading}
               error={supervisorOverviewError}
             />
@@ -2519,6 +2580,7 @@ export default function WebApp() {
           onSelectModel={(modelId) => { void selectThreadModel(modelId); }}
 
         messages={messages}
+        taskApprovals={delegatedTaskApprovals}
         workspaceId={activeWorkspaceId ?? undefined}
         draft={draft}
         onDraftChange={setDraft}

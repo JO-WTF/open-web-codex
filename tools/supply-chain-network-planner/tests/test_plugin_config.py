@@ -16,6 +16,10 @@ def test_plugin_manifest_and_mcp_config_are_wired() -> None:
     assert data_server["command"] == "./bin/supply-chain-planner-launcher"
     assert data_server["args"][0] == "--data-server"
     assert data_server["cwd"] == "."
+    assert data_server["default_tools_approval_mode"] == "approve"
     server = mcp_config["mcpServers"]["supply_chain_planner"]
     assert server["command"] == "./bin/supply-chain-planner-launcher"
     assert server["cwd"] == "."
+    assert server["default_tools_approval_mode"] == "approve"
+    assert "tools" not in data_server
+    assert "tools" not in server

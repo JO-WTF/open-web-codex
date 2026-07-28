@@ -911,7 +911,9 @@ pub enum ProfileHostError {
     TransportClosed,
     #[error("Codex app-server request belongs to a previous process instance")]
     StaleRuntimeRequest,
-    #[error("Codex app-server cannot restart while Turns or Server Requests are active")]
+    #[error(
+        "Codex app-server cannot restart while Turns, Server Requests, or unmaterialized Threads are active"
+    )]
     RuntimeBusy,
     #[error("Codex app-server request timed out: {method}")]
     RequestTimeout { method: String },
@@ -1021,6 +1023,7 @@ struct ProfileHostInner {
     process_generation: AtomicU64,
     runtime_instance_id: RwLock<Uuid>,
     active_turns: RwLock<HashSet<String>>,
+    unmaterialized_threads: RwLock<HashSet<String>>,
     pending_server_requests: RwLock<HashSet<String>>,
     scheduled_restart: Mutex<Option<ProfileHostConfig>>,
     _profile_lock: ProfileLock,
@@ -1078,6 +1081,7 @@ impl ProfileHost {
             process_generation: AtomicU64::new(1),
             runtime_instance_id: RwLock::new(Uuid::now_v7()),
             active_turns: RwLock::new(HashSet::new()),
+            unmaterialized_threads: RwLock::new(HashSet::new()),
             pending_server_requests: RwLock::new(HashSet::new()),
             scheduled_restart: Mutex::new(None),
             _profile_lock: profile_lock,
@@ -1193,7 +1197,9 @@ impl ProfileHost {
 
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, ProfileHostError> {
         let _lifecycle = self.inner.lifecycle.read().await;
+        let lifecycle_effect = runtime_request_lifecycle_effect(method, &params);
         let result = self.request_unlocked(method, params).await?;
+        record_successful_runtime_request(&self.inner, lifecycle_effect, &result).await;
         // The turn/start response can be observed just before its corresponding
         // turn/started notification. Record it while the lifecycle read lock is
         // still held so a credential-triggered restart cannot enter that gap.
@@ -1354,6 +1360,22 @@ impl ProfileHost {
         self.inner.negotiation.read().await.clone()
     }
 
+    /// Release one process-local persistent Thread that never materialized an
+    /// official rollout.
+    ///
+    /// Codex cannot archive or resume this identity because no persisted
+    /// Thread exists yet. Callers may use this only for an explicit platform
+    /// abandon/archive operation; a later Runtime restart then discards the
+    /// process-local Thread instead of silently losing an active product
+    /// resource.
+    pub async fn abandon_unmaterialized_thread(&self, thread_id: &str) -> bool {
+        self.inner
+            .unmaterialized_threads
+            .write()
+            .await
+            .remove(thread_id)
+    }
+
     pub async fn shutdown(&self) -> Result<(), ProfileHostError> {
         let _lifecycle = self.inner.lifecycle.write().await;
         *self.inner.scheduled_restart.lock().await = None;
@@ -1467,6 +1489,7 @@ impl ProfileHost {
 
     async fn runtime_is_busy(&self) -> bool {
         !self.inner.active_turns.read().await.is_empty()
+            || !self.inner.unmaterialized_threads.read().await.is_empty()
             || !self.inner.pending_server_requests.read().await.is_empty()
     }
 
@@ -1727,15 +1750,33 @@ async fn update_runtime_work(inner: &ProfileHostInner, message: &Value) {
         .or_else(|| message.pointer("/params/turnId"))
         .and_then(Value::as_str)
         .map(str::to_string);
+    let thread_id = message
+        .pointer("/params/threadId")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     match method {
         "turn/started" => {
             if let Some(turn_id) = turn_id {
                 inner.active_turns.write().await.insert(turn_id);
             }
+            if let Some(thread_id) = thread_id {
+                inner
+                    .unmaterialized_threads
+                    .write()
+                    .await
+                    .remove(&thread_id);
+            }
         }
         "turn/completed" => {
             if let Some(turn_id) = turn_id {
                 inner.active_turns.write().await.remove(&turn_id);
+            }
+            if let Some(thread_id) = thread_id {
+                inner
+                    .unmaterialized_threads
+                    .write()
+                    .await
+                    .remove(&thread_id);
             }
         }
         "item/commandExecution/requestApproval"
@@ -1777,7 +1818,54 @@ async fn drain_pending(inner: &ProfileHostInner, message: &str) {
 
 async fn clear_runtime_work(inner: &ProfileHostInner) {
     inner.active_turns.write().await.clear();
+    inner.unmaterialized_threads.write().await.clear();
     inner.pending_server_requests.write().await.clear();
+}
+
+enum RuntimeRequestLifecycleEffect {
+    None,
+    TrackPersistentThread,
+    RemoveThread(String),
+}
+
+fn runtime_request_lifecycle_effect(method: &str, params: &Value) -> RuntimeRequestLifecycleEffect {
+    match method {
+        "thread/start" if params.get("ephemeral").and_then(Value::as_bool) != Some(true) => {
+            RuntimeRequestLifecycleEffect::TrackPersistentThread
+        }
+        "thread/archive" | "thread/delete" => params
+            .get("threadId")
+            .and_then(Value::as_str)
+            .map(|thread_id| RuntimeRequestLifecycleEffect::RemoveThread(thread_id.to_string()))
+            .unwrap_or(RuntimeRequestLifecycleEffect::None),
+        _ => RuntimeRequestLifecycleEffect::None,
+    }
+}
+
+async fn record_successful_runtime_request(
+    inner: &ProfileHostInner,
+    effect: RuntimeRequestLifecycleEffect,
+    result: &Value,
+) {
+    match effect {
+        RuntimeRequestLifecycleEffect::TrackPersistentThread => {
+            if let Some(thread_id) = result.pointer("/thread/id").and_then(Value::as_str) {
+                inner
+                    .unmaterialized_threads
+                    .write()
+                    .await
+                    .insert(thread_id.to_string());
+            }
+        }
+        RuntimeRequestLifecycleEffect::RemoveThread(thread_id) => {
+            inner
+                .unmaterialized_threads
+                .write()
+                .await
+                .remove(&thread_id);
+        }
+        RuntimeRequestLifecycleEffect::None => {}
+    }
 }
 
 fn rpc_error_message(error: &Value) -> String {
@@ -1809,6 +1897,7 @@ fn parse_rpc_result(method: &str, response: Value) -> Result<Value, ProfileHostE
 mod tests {
     use super::{
         clear_runtime_work, dispatch_incoming, ensure_profile_home, ensure_profile_layout,
+        record_successful_runtime_request, runtime_request_lifecycle_effect,
         verify_platform_agent_role, write_platform_agent_role, ProfileHost, ProfileHostConfig,
         ProfileHostError, ProfileHostInner, ProfileHostSnapshot, ProfileHostState, ProfileLock,
         MAX_PLATFORM_AGENT_ROLE_BYTES,
@@ -2138,6 +2227,7 @@ mod tests {
             process_generation: AtomicU64::new(1),
             runtime_instance_id: RwLock::new(Uuid::now_v7()),
             active_turns: RwLock::new(HashSet::new()),
+            unmaterialized_threads: RwLock::new(HashSet::new()),
             pending_server_requests: RwLock::new(HashSet::new()),
             scheduled_restart: Mutex::new(None),
             _profile_lock: lock,
@@ -2215,6 +2305,79 @@ mod tests {
         let mut child = inner.child.lock().await;
         let _ = child.kill().await;
         drop(child);
+        drop(inner);
+        fs::remove_dir_all(path).expect("remove profile home");
+    }
+
+    #[tokio::test]
+    async fn unmaterialized_threads_block_restart_until_first_turn_or_explicit_abandon() {
+        let (inner, path) = test_inner(8).await;
+        let host = ProfileHost {
+            inner: inner.clone(),
+        };
+
+        let persistent_start = runtime_request_lifecycle_effect("thread/start", &json!({}));
+        record_successful_runtime_request(
+            &inner,
+            persistent_start,
+            &json!({ "thread": { "id": "thread-1" } }),
+        )
+        .await;
+        assert!(inner
+            .unmaterialized_threads
+            .read()
+            .await
+            .contains("thread-1"));
+        assert!(host.runtime_is_busy().await);
+
+        dispatch_incoming(
+            &inner,
+            1,
+            json!({
+                "method": "turn/started",
+                "params": { "turn": { "id": "turn-1" }, "threadId": "thread-1" }
+            }),
+        )
+        .await;
+        assert!(inner.unmaterialized_threads.read().await.is_empty());
+        assert!(host.runtime_is_busy().await);
+
+        dispatch_incoming(
+            &inner,
+            1,
+            json!({
+                "method": "turn/completed",
+                "params": { "turn": { "id": "turn-1" }, "threadId": "thread-1" }
+            }),
+        )
+        .await;
+        assert!(!host.runtime_is_busy().await);
+
+        let second_start = runtime_request_lifecycle_effect("thread/start", &json!({}));
+        record_successful_runtime_request(
+            &inner,
+            second_start,
+            &json!({ "thread": { "id": "thread-2" } }),
+        )
+        .await;
+        assert!(host.abandon_unmaterialized_thread("thread-2").await);
+        assert!(!host.abandon_unmaterialized_thread("thread-2").await);
+        assert!(!host.runtime_is_busy().await);
+
+        let ephemeral_start =
+            runtime_request_lifecycle_effect("thread/start", &json!({ "ephemeral": true }));
+        record_successful_runtime_request(
+            &inner,
+            ephemeral_start,
+            &json!({ "thread": { "id": "ephemeral-thread" } }),
+        )
+        .await;
+        assert!(inner.unmaterialized_threads.read().await.is_empty());
+
+        let mut child = inner.child.lock().await;
+        let _ = child.kill().await;
+        drop(child);
+        drop(host);
         drop(inner);
         fs::remove_dir_all(path).expect("remove profile home");
     }
@@ -2339,6 +2502,42 @@ mod tests {
 
         assert!(matches!(error, ProfileHostError::RuntimeBusy));
         assert!(inner.scheduled_restart.lock().await.is_some());
+
+        let mut child = inner.child.lock().await;
+        let _ = child.kill().await;
+        drop(child);
+        drop(host);
+        drop(inner);
+        fs::remove_dir_all(path).expect("remove profile home");
+    }
+
+    #[tokio::test]
+    async fn scheduled_restart_preserves_an_unmaterialized_thread() {
+        let (inner, path) = test_inner(8).await;
+        let host = ProfileHost {
+            inner: inner.clone(),
+        };
+        inner
+            .unmaterialized_threads
+            .write()
+            .await
+            .insert("thread-without-rollout".to_string());
+        host.schedule_restart(ProfileHostConfig::new("test-profile", &path, &path))
+            .await
+            .expect("schedule restart");
+
+        let error = host
+            .apply_scheduled_restart()
+            .await
+            .expect_err("unmaterialized Thread must defer the restart");
+
+        assert!(matches!(error, ProfileHostError::RuntimeBusy));
+        assert!(inner.scheduled_restart.lock().await.is_some());
+        assert!(inner
+            .unmaterialized_threads
+            .read()
+            .await
+            .contains("thread-without-rollout"));
 
         let mut child = inner.child.lock().await;
         let _ = child.kill().await;

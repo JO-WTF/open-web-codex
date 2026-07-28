@@ -8,6 +8,7 @@
         "."
       ],
       "cwd": ".",
+      "default_tools_approval_mode": "approve",
       "env_vars": [
         "CODEX_HOME",
         "OPEN_WEB_CODEX_DATA_DIR",
@@ -33,6 +34,7 @@
         "."
       ],
       "cwd": ".",
+      "default_tools_approval_mode": "approve",
       "env_vars": [
         "CODEX_HOME",
         "OPEN_WEB_CODEX_DATA_DIR",

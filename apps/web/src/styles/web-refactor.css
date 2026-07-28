@@ -875,8 +875,20 @@ body:has(.web-app-shell) {
   display: none;
 }
 
+.web-right-panel-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: default;
+}
+
 .web-right-sidebar {
   position: relative;
+  z-index: 41;
   display: grid;
   grid-template-rows: 50px minmax(0, 1fr);
   min-width: 0;
@@ -1408,6 +1420,50 @@ body:has(.web-app-shell) {
 
 .web-supervisor-executions {
   padding: 0 10px 8px;
+}
+
+.web-task-approval-queue {
+  padding: 0 10px 10px;
+}
+
+.web-thread-content > .web-task-approval-queue {
+  padding: 0;
+}
+
+.web-task-approval-list {
+  display: grid;
+  gap: 8px;
+}
+
+.web-task-approval {
+  overflow: hidden;
+  border: 1px solid rgb(228 180 87 / 30%);
+  border-radius: 10px;
+  background: rgb(228 180 87 / 4%);
+}
+
+.web-task-approval-actor {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px 0;
+  color: #aeb5c2;
+  font-size: 9px;
+}
+
+.web-task-approval-actor strong {
+  color: #e0c98f;
+  font-size: 10px;
+}
+
+.web-task-approval-actor span {
+  color: #8d96a5;
+  text-align: right;
+}
+
+.web-task-approval .web-approval-card {
+  margin: 8px 10px 10px;
 }
 
 .web-supervisor-task-stream {

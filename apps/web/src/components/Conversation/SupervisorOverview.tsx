@@ -10,6 +10,9 @@ import type {
   RuntimeAgentProjection,
   SupervisorPolicyBinding,
 } from "../../../browser/types";
+import TaskApprovalQueue, {
+  type TaskApprovalRequest,
+} from "./TaskApprovalQueue";
 
 type Props = {
   taskTitle: string;
@@ -18,6 +21,12 @@ type Props = {
   activities?: RuntimeAgentActivity[];
   executions?: RuntimeAgentExecution[];
   artifacts: ArtifactSummary[];
+  approvals?: TaskApprovalRequest[];
+  onResolveApproval?: (
+    workspaceId: string,
+    requestId: number | string,
+    decision: "accept" | "decline",
+  ) => void;
   loading?: boolean;
   error?: string | null;
 };
@@ -171,6 +180,8 @@ export default function SupervisorOverview({
   activities = [],
   executions = [],
   artifacts,
+  approvals = [],
+  onResolveApproval,
   loading = false,
   error = null,
 }: Props) {
@@ -254,6 +265,12 @@ export default function SupervisorOverview({
               </dl>
             </article>
           ) : null}
+
+          <TaskApprovalQueue
+            approvals={approvals}
+            ariaLabel="Agent approvals"
+            onResolve={onResolveApproval}
+          />
 
           <div className="web-supervisor-executions" aria-label="Agent task stream">
             <div className="web-supervisor-section-heading">

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   RuntimeAgentActivity,
   RuntimeAgentExecution,
@@ -152,6 +152,40 @@ describe("SupervisorOverview", () => {
     expect(screen.getByText("network_planning_agent · Task 2")).toBeTruthy();
     expect(screen.getByText("Validated capacity and demand inputs.")).toBeTruthy();
     expect(screen.getByText("Using network planner · compare scenarios")).toBeTruthy();
+  });
+
+  it("renders a child Agent approval as an actionable approval card", () => {
+    const onResolveApproval = vi.fn();
+    render(
+      <SupervisorOverview
+        taskTitle="Network planning"
+        policy={policy}
+        agents={[rootAgent, dataAgent]}
+        approvals={[{
+          threadId: "data-thread",
+          actorLabel: "Data Analyst",
+          workspaceId: "workspace-1",
+          requestId: "approval-1",
+          command: "Allow supply chain data · list planning sources?",
+          status: "pending",
+          serverName: "supply_chain_data",
+        }]}
+        onResolveApproval={onResolveApproval}
+        artifacts={[]}
+      />,
+    );
+
+    const queue = screen.getByRole("region", { name: "Agent approvals" });
+    expect(queue.textContent).toContain("Data Analyst");
+    expect(queue.textContent).toContain("Approval required");
+    expect(queue.textContent).toContain("Allow supply chain data");
+
+    fireEvent.click(screen.getByRole("button", { name: "Accept" }));
+    expect(onResolveApproval).toHaveBeenCalledWith(
+      "workspace-1",
+      "approval-1",
+      "accept",
+    );
   });
 
   it("renders parallel Agent executions as independent task nodes", () => {

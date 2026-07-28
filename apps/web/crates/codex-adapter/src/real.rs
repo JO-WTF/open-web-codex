@@ -365,16 +365,18 @@ impl RealCodexAdapter {
         result: Result<(), AdapterError>,
     ) -> Result<(), AdapterError> {
         if let Err(error) = result {
-            if let Err(archive_error) = self
-                .host
-                .request("thread/archive", json!({ "threadId": thread_id }))
-                .await
-            {
-                tracing::warn!(
-                    thread_id,
-                    error = %archive_error,
-                    "failed to archive rejected governed Runtime Thread"
-                );
+            if !self.host.abandon_unmaterialized_thread(thread_id).await {
+                if let Err(archive_error) = self
+                    .host
+                    .request("thread/archive", json!({ "threadId": thread_id }))
+                    .await
+                {
+                    tracing::warn!(
+                        thread_id,
+                        error = %archive_error,
+                        "failed to archive rejected governed Runtime Thread"
+                    );
+                }
             }
             return Err(error);
         }
@@ -454,6 +456,39 @@ impl RealCodexAdapter {
             .await
             .insert(thread_id.to_string(), paginated);
         Ok((workspace_root, runtime))
+    }
+
+    async fn abandon_bound_unmaterialized_thread(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+    ) -> Result<bool, AdapterError> {
+        if thread_id.trim().is_empty() {
+            return Err(AdapterError::Internal("Thread id is required".to_string()));
+        }
+        self.authorized_root(workspace)?;
+        let mut runtime = self.runtime_instance.clone().lock_owned().await;
+        let current = self.host.runtime_instance_id().await;
+        if runtime.as_ref() != Some(&current) {
+            self.thread_workspaces.write().await.clear();
+            self.terminal_workspaces.write().await.clear();
+            *runtime = Some(current);
+            return Ok(false);
+        }
+        let Some(bound) = self.thread_workspaces.read().await.get(thread_id).cloned() else {
+            return Ok(false);
+        };
+        if bound != *workspace {
+            return Err(AdapterError::Rpc(
+                "Thread is not bound to the authorized workspace".to_string(),
+            ));
+        }
+        if !self.host.abandon_unmaterialized_thread(thread_id).await {
+            return Ok(false);
+        }
+        self.thread_workspaces.write().await.remove(thread_id);
+        self.thread_history_modes.write().await.remove(thread_id);
+        Ok(true)
     }
 
     async fn list_paginated_turn_shells(
@@ -1269,11 +1304,18 @@ impl CodexAdapter for RealCodexAdapter {
         workspace: &AuthorizedWorkspace,
         thread_id: &str,
     ) -> Result<(), AdapterError> {
+        if self
+            .abandon_bound_unmaterialized_thread(workspace, thread_id)
+            .await?
+        {
+            return Ok(());
+        }
         let (_workspace_root, _runtime) = self.ensure_thread_bound(workspace, thread_id).await?;
         self.host
             .request("thread/archive", json!({ "threadId": thread_id }))
             .await?;
         self.thread_workspaces.write().await.remove(thread_id);
+        self.thread_history_modes.write().await.remove(thread_id);
         Ok(())
     }
 
