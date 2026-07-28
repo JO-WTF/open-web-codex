@@ -7,6 +7,7 @@ use crate::init_state_db;
 use crate::local_agent_graph_store_from_state_db;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
+use crate::session::tests::make_session_and_context_with_rx;
 use crate::session::turn_context::TurnContext;
 use crate::session_prefix::format_inter_agent_completion_message;
 use crate::thread_manager::thread_store_from_config;
@@ -29,6 +30,8 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
+use codex_protocol::items::CollabAgentTool;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -1097,23 +1100,24 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
         nickname: Option<String>,
     }
 
-    let (mut session, mut turn) = make_session_and_context().await;
+    let (mut session, mut turn, rx) = make_session_and_context_with_rx().await;
     let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
         .expect("root thread should start");
-    session.services.agent_control = manager.agent_control();
-    session.thread_id = root.thread_id;
+    let session_mut = Arc::get_mut(&mut session).expect("test owns the session");
+    session_mut.services.agent_control = manager.agent_control();
+    session_mut.thread_id = root.thread_id;
     let mut config = (*turn.config).clone();
     config
         .features
         .enable(Feature::MultiAgentV2)
         .expect("test config should allow feature update");
-    set_turn_config(&mut turn, config);
-
-    let session = Arc::new(session);
-    let turn = Arc::new(turn);
+    set_turn_config(
+        Arc::get_mut(&mut turn).expect("test owns the turn context"),
+        config,
+    );
     let spawn_output = SpawnAgentHandlerV2::default()
         .handle(invocation(
             session.clone(),
@@ -1188,6 +1192,44 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
                         && !communication.trigger_turn
             )
     }));
+
+    let mut completed_calls = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        if let EventMsg::ItemCompleted(completed) = event.msg
+            && let TurnItem::CollabAgentToolCall(item) = completed.item
+        {
+            completed_calls.push((
+                item.tool,
+                item.prompt,
+                item.receiver_thread_ids,
+                item.receiver_agents,
+            ));
+        }
+    }
+    assert!(
+        completed_calls
+            .iter()
+            .any(|(tool, prompt, thread_ids, agents)| {
+                *tool == CollabAgentTool::SpawnAgent
+                    && prompt.as_deref() == Some("encrypted-spawn-message")
+                    && thread_ids == &[child_thread_id]
+                    && agents
+                        .first()
+                        .is_some_and(|agent| agent.thread_id == child_thread_id)
+            })
+    );
+    assert!(
+        completed_calls
+            .iter()
+            .any(|(tool, prompt, thread_ids, agents)| {
+                *tool == CollabAgentTool::SendInput
+                    && prompt.as_deref() == Some("encrypted-send-message")
+                    && thread_ids == &[child_thread_id]
+                    && agents
+                        .first()
+                        .is_some_and(|agent| agent.thread_id == child_thread_id)
+            })
+    );
 }
 
 #[tokio::test]

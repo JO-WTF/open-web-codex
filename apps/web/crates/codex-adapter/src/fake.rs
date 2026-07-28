@@ -13,10 +13,11 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::{
-    validate_platform_runtime_role_files, validate_platform_runtime_roles, AdapterError,
-    AuthorizedWorkspace, CanceledProfileLogin, CodexAdapter, HealthStatus, PlatformRuntimeRole,
-    ProfileLoginStatus, ProfileMutation, ProfileQuery, ReviewTarget, StartedProfileLogin,
-    StartedThread, ThreadStartMode, TurnOptions,
+    validate_platform_runtime_role_files, validate_platform_runtime_roles,
+    validate_required_mcp_servers, validate_role_spawn_limits, AdapterError, AuthorizedWorkspace,
+    CanceledProfileLogin, CodexAdapter, HealthStatus, PlatformRuntimeRole, ProfileLoginStatus,
+    ProfileMutation, ProfileQuery, ReviewTarget, StartedProfileLogin, StartedThread,
+    ThreadStartMode, TurnOptions,
 };
 
 const MAX_DEVELOPER_INSTRUCTIONS_BYTES: usize = 16 * 1024;
@@ -37,12 +38,17 @@ mod tests {
     use super::FakeCodexAdapter;
     use crate::{
         platform_runtime_role_config_file, AuthorizedWorkspace, CodexAdapter, PlatformRuntimeRole,
-        ProfileMutation, ProfileQuery, ThreadStartMode,
+        ProfileMutation, ProfileQuery, RequiredMcpServer, ThreadStartMode,
     };
     use sha2::{Digest, Sha256};
 
     fn platform_runtime_role() -> PlatformRuntimeRole {
-        let config_toml = "developer_instructions = '''\nBuild and validate the dataset.\n'''\n";
+        let config_toml = "developer_instructions = '''\nBuild and validate the dataset.\n'''\n\
+            \n[agents]\nenabled = false\n\
+            \n[features]\napps = false\nmulti_agent_v2 = false\nplugins = false\nshell_tool = false\n\
+            \n[plugins.local-supply-chain-network-planner]\nenabled = true\n\
+            \n[plugins.local-supply-chain-network-planner.mcp_servers.supply_chain_data]\n\
+            enabled = true\nenabled_tools = [\"inspect_planning_source\"]\n";
         PlatformRuntimeRole {
             definition_id: "data-agent".to_string(),
             version: "1.0.0".to_string(),
@@ -90,6 +96,12 @@ mod tests {
         let mode = ThreadStartMode::GovernedSupervisor {
             developer_instructions: "Coordinate the verified role.".to_string(),
             roles: vec![role.clone()],
+            role_spawn_limits: [("data_agent".to_string(), 1)].into_iter().collect(),
+            required_mcp_servers: vec![RequiredMcpServer {
+                name: "supply_chain_data".to_string(),
+                tools: vec!["inspect_planning_source".to_string()],
+                capability_root_ids: vec!["local-supply-chain-network-planner".to_string()],
+            }],
             max_threads: 2,
         };
 
@@ -405,9 +417,13 @@ impl CodexAdapter for FakeCodexAdapter {
             ThreadStartMode::GovernedSupervisor {
                 developer_instructions,
                 roles,
+                role_spawn_limits,
+                required_mcp_servers,
                 max_threads,
             } => {
                 validate_platform_runtime_roles(roles, *max_threads)?;
+                validate_role_spawn_limits(roles, role_spawn_limits)?;
+                validate_required_mcp_servers(required_mcp_servers)?;
                 let state = self.state.lock().await;
                 if roles
                     .iter()

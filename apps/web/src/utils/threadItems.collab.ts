@@ -290,10 +290,35 @@ function buildCollabDetail(
   return detailParts.join(" ");
 }
 
-function buildCollabOutput(prompt: string, statuses: CollabAgentStatus[]) {
+export function collabWaitCycleExplanation(tool: string, status: string) {
+  const normalizedTool = tool
+    .replace(/^collab:\s*/i, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+  if (normalizedTool !== "wait" && normalizedTool !== "waitagent") {
+    return "";
+  }
+  const normalizedStatus = status.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (normalizedStatus === "inprogress" || normalizedStatus === "running") {
+    return "Waiting for any Agent update or new input. This is a bounded wait; the Supervisor task is still active.";
+  }
+  if (normalizedStatus === "failed" || normalizedStatus === "error") {
+    return "The bounded wait ended with an error. Check the following Agent activity for recovery or failure details.";
+  }
+  return "This bounded wait cycle finished. The Supervisor is processing any available update and may start another wait cycle.";
+}
+
+function buildCollabOutput(
+  prompt: string,
+  statuses: CollabAgentStatus[],
+  tool: string,
+  status: string,
+) {
   const promptText = prompt.trim();
   const statusesText = formatCollabAgentStatuses(statuses);
-  return [promptText, statusesText].filter(Boolean).join("\n\n");
+  const explanation =
+    promptText || statusesText ? "" : collabWaitCycleExplanation(tool, status);
+  return [promptText, statusesText, explanation].filter(Boolean).join("\n\n");
 }
 
 export function parseCollabToolCallItem(
@@ -360,7 +385,7 @@ export function parseCollabToolCallItem(
     title: tool ? `Collab: ${tool}` : "Collab tool call",
     detail: buildCollabDetail(sender ?? undefined, receiverAgents),
     status,
-    output: buildCollabOutput(prompt, collabStatuses),
+    output: buildCollabOutput(prompt, collabStatuses, tool, status),
     collabSender: sender ?? undefined,
     collabReceiver: primaryReceiver ?? undefined,
     collabReceivers: receiverAgents.length > 0 ? receiverAgents : undefined,
@@ -420,7 +445,12 @@ export function enrichConversationItemsWithThreads(
 
     const prompt = extractCollabPrompt(item.output, item.collabStatuses);
     const nextDetail = buildCollabDetail(nextSender, detailReceivers);
-    const nextOutput = buildCollabOutput(prompt, nextStatuses);
+    const nextOutput = buildCollabOutput(
+      prompt,
+      nextStatuses,
+      item.title,
+      item.status ?? "",
+    );
 
     const receiversChanged = nextReceivers.some(
       (entry, index) => entry !== item.collabReceivers?.[index],

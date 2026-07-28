@@ -2,6 +2,7 @@ import type { AgentMessagePhase, LogEntry } from "../WebApp";
 import { stripLeadingProviderSentinel } from "./providerText";
 import { parseInlineVisualizationArtifact } from "./replyCards";
 import { parseApprovalStatus } from "./approvalStatus";
+import { collabWaitCycleExplanation } from "./threadItems.collab";
 
 export function unwrapWebRpcResult(value: unknown): unknown {
   let current = value;
@@ -293,7 +294,29 @@ export function webLogEntryFromThreadItem(
   if (type === "imageGeneration") return { id, level: "info", text: "Image generation", kind: "tool", toolType: "Image", toolTitle: "Generated image", toolStatus, filePath: asText(item.savedPath), toolDetail: asText(item.revisedPrompt) };
   if (type === "sleep") return { id, level: "info", text: "Wait", kind: "tool", toolType: "Wait", toolTitle: `Waited ${Number(item.durationMs ?? 0)}ms`, toolStatus };
   if (type === "contextCompaction") return { id, level: "info", text: "Context compacted", kind: "tool", toolType: "Context", toolTitle: "Context compacted", toolStatus };
-  if (type === "collabAgentToolCall") return { id, level: "info", text: "Agent collaboration", kind: "tool", toolType: "Agent", toolTitle: asText(item.tool) || "Agent collaboration", toolStatus, toolDetail: asText(item.prompt), toolOutput: jsonText(item.agentsStates) };
+  if (type === "collabAgentToolCall" || type === "collabToolCall") {
+    const tool = asText(item.tool) || "Agent collaboration";
+    const states = item.agentsStates;
+    const hasStates = Boolean(
+      states
+      && typeof states === "object"
+      && !Array.isArray(states)
+      && Object.keys(states as Record<string, unknown>).length > 0,
+    );
+    return {
+      id,
+      level: "info",
+      text: "Agent collaboration",
+      kind: "tool",
+      toolType: "Agent",
+      toolTitle: tool,
+      toolStatus,
+      toolDetail: asText(item.prompt),
+      toolOutput: hasStates
+        ? jsonText(states)
+        : collabWaitCycleExplanation(tool, toolStatus),
+    };
+  }
   if (type === "subAgentActivity") return { id, level: "info", text: "Sub-agent activity", kind: "tool", toolType: "Agent", toolTitle: asText(item.kind) || "Sub-agent activity", toolStatus, toolDetail: asText(item.agentPath) };
   if (type === "enteredReviewMode" || type === "exitedReviewMode") return { id, level: "system", text: asText(item.review) || (type === "enteredReviewMode" ? "Entered review mode" : "Exited review mode"), kind: "tool", toolType: "Review", toolTitle: type === "enteredReviewMode" ? "Review started" : "Review completed", toolStatus };
   return { id, level: "info", text: type || "Unknown item", kind: "tool", toolType: type || "Unknown", toolTitle: type || "Unknown item", toolStatus };

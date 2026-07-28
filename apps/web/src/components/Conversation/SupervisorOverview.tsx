@@ -1,5 +1,6 @@
 import Bot from "lucide-react/dist/esm/icons/bot";
 import FileCheck2 from "lucide-react/dist/esm/icons/file-check-2";
+import History from "lucide-react/dist/esm/icons/history";
 import Network from "lucide-react/dist/esm/icons/network";
 import ShieldCheck from "lucide-react/dist/esm/icons/shield-check";
 import type {
@@ -24,6 +25,13 @@ type Props = {
 type StatusTone = "idle" | "active" | "waiting" | "terminal" | "error";
 
 type AgentExecutionStatus = RuntimeAgentExecution["status"];
+type AgentActivityStatus = RuntimeAgentActivity["status"];
+
+const activityTimeFormatter = new Intl.DateTimeFormat(undefined, {
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+});
 
 function agentLabel(agent: RuntimeAgentProjection): string {
   if (agent.is_root) return "Root Supervisor";
@@ -80,6 +88,58 @@ function executionStatusPresentation(status: AgentExecutionStatus): {
   }
 }
 
+function activityStatusPresentation(status: AgentActivityStatus): {
+  label: string;
+  tone: StatusTone;
+} {
+  switch (status) {
+    case "pending":
+      return { label: "Queued", tone: "idle" };
+    case "running":
+      return { label: "Running", tone: "active" };
+    case "waiting":
+      return { label: "Waiting", tone: "waiting" };
+    case "completed":
+      return { label: "Completed", tone: "terminal" };
+    case "failed":
+      return { label: "Failed", tone: "error" };
+  }
+}
+
+function activityKindLabel(kind: RuntimeAgentActivity["kind"]): string {
+  switch (kind) {
+    case "assignment":
+      return "Assignment";
+    case "guidance":
+      return "Guidance";
+    case "turn_started":
+    case "turn_completed":
+      return "Work cycle";
+    case "tool_started":
+    case "tool_completed":
+    case "tool_failed":
+      return "Tool";
+    case "reporting":
+      return "Progress";
+    case "waiting":
+      return "Wait";
+    case "completed":
+      return "Completion";
+    case "failed":
+      return "Failure";
+    case "interrupted":
+      return "Interruption";
+  }
+}
+
+function activityTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  return activityTimeFormatter.format(date);
+}
+
 function StatusBadge({ label, tone }: { label: string; tone: StatusTone }) {
   return (
     <span className={`web-supervisor-agent-status is-${tone}`}>
@@ -127,6 +187,8 @@ export default function SupervisorOverview({
     .reverse()
     .find((activity) => activity.kind === "reporting");
   const agentsByThread = new Map(agents.map((agent) => [agent.thread_id, agent]));
+  const timelineActivities = [...activities].sort((left, right) =>
+    left.sequence - right.sequence);
   const rootStatus = rootAgent
     ? agentStatusPresentation(rootAgent)
     : { label: "Starting", tone: "idle" as const };
@@ -240,6 +302,46 @@ export default function SupervisorOverview({
             ) : (
               <p className="web-supervisor-overview-empty">
                 Waiting for the Supervisor to assign work.
+              </p>
+            )}
+          </div>
+
+          <div className="web-supervisor-activity" aria-label="Agent behavior log">
+            <div className="web-supervisor-section-heading">
+              <History size={14} aria-hidden="true" />
+              <strong>Agent behavior log</strong>
+              <span>{timelineActivities.length}</span>
+            </div>
+            {timelineActivities.length ? (
+              <ol>
+                {timelineActivities.map((activity, index) => {
+                  const status = activityStatusPresentation(activity.status);
+                  const actor = agentsByThread.get(activity.thread_id);
+                  const timestamp = activityTime(activity.created_at);
+                  return (
+                    <li
+                      key={`${activity.sequence}-${activity.thread_id}-${activity.item_id ?? activity.kind}-${index}`}
+                    >
+                      <span className={`is-${activity.status}`} aria-hidden="true" />
+                      <div className="web-supervisor-activity-copy">
+                        <div className="web-supervisor-activity-meta">
+                          <span>{actor ? agentLabel(actor) : "Runtime Agent"}</span>
+                          <span>{activityKindLabel(activity.kind)}</span>
+                          <span>{status.label}</span>
+                          {timestamp ? (
+                            <time dateTime={activity.created_at}>{timestamp}</time>
+                          ) : null}
+                        </div>
+                        <strong>{activity.title}</strong>
+                        {activity.detail ? <p>{activity.detail}</p> : null}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ol>
+            ) : (
+              <p className="web-supervisor-overview-empty">
+                No persisted Agent behavior has been observed yet.
               </p>
             )}
           </div>

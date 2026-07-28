@@ -37,6 +37,7 @@ struct EventRunContext {
     profile_id: Uuid,
     workspace_id: Uuid,
     root_thread_id: String,
+    governed_supervisor: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -190,15 +191,43 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
                 .map_err(|error| format!("active Turn projection error: {error}"))?;
             }
             "codex.turn.completed" => {
-                sqlx::query(
-                    "UPDATE runs SET active_turn_id = NULL, updated_at = now() \
-                 WHERE id = $1 AND active_turn_id = $2",
-                )
-                .bind(run_id)
-                .bind(&event.turn_id)
-                .execute(&mut *transaction)
-                .await
-                .map_err(|error| format!("completed Turn projection error: {error}"))?;
+                if context.governed_supervisor
+                    && event
+                        .payload
+                        .pointer("/data/turn/status")
+                        .and_then(Value::as_str)
+                        == Some("completed")
+                {
+                    sqlx::query(
+                        "WITH completed_run AS (
+                            UPDATE runs
+                            SET status = 'completed', active_turn_id = NULL, lease_owner = NULL,
+                                lease_token = NULL, lease_expires_at = NULL, updated_at = now()
+                            WHERE id = $1 AND status = 'running' AND active_turn_id = $2
+                            RETURNING task_id
+                         )
+                         UPDATE tasks SET status = 'completed', updated_at = now()
+                         WHERE id IN (SELECT task_id FROM completed_run)
+                           AND status NOT IN ('cancelled', 'archived')",
+                    )
+                    .bind(run_id)
+                    .bind(&event.turn_id)
+                    .execute(&mut *transaction)
+                    .await
+                    .map_err(|error| {
+                        format!("governed Supervisor completion projection error: {error}")
+                    })?;
+                } else {
+                    sqlx::query(
+                        "UPDATE runs SET active_turn_id = NULL, updated_at = now() \
+                         WHERE id = $1 AND active_turn_id = $2",
+                    )
+                    .bind(run_id)
+                    .bind(&event.turn_id)
+                    .execute(&mut *transaction)
+                    .await
+                    .map_err(|error| format!("completed Turn projection error: {error}"))?;
+                }
             }
             "codex.thread.archived" => {
                 sqlx::query(
@@ -797,7 +826,11 @@ async fn lookup_known_thread_context(
     let root = sqlx::query(
         "SELECT run.id AS run_id, run.task_id, run.organization_id,
                 run.requested_profile_id AS profile_id,
-                run.workspace_id, run.codex_thread_id AS root_thread_id
+                run.workspace_id, run.codex_thread_id AS root_thread_id,
+                EXISTS (
+                    SELECT 1 FROM supervisor_policy_bindings binding
+                    WHERE binding.run_id = run.id AND binding.state = 'bound'
+                ) AS governed_supervisor
          FROM runs run
          WHERE run.codex_thread_id = $1
            AND run.requested_profile_id IS NOT NULL
@@ -818,7 +851,11 @@ async fn lookup_known_thread_context(
     let projected = sqlx::query(
         "SELECT projection.root_run_id AS run_id, run.task_id, projection.organization_id,
                 projection.profile_id, projection.workspace_id,
-                run.codex_thread_id AS root_thread_id
+                run.codex_thread_id AS root_thread_id,
+                EXISTS (
+                    SELECT 1 FROM supervisor_policy_bindings binding
+                    WHERE binding.run_id = run.id AND binding.state = 'bound'
+                ) AS governed_supervisor
          FROM runtime_agent_projections projection
          JOIN runs run ON run.id = projection.root_run_id
            AND run.organization_id = projection.organization_id
@@ -843,6 +880,7 @@ fn event_run_context(row: &sqlx::postgres::PgRow) -> EventRunContext {
         profile_id: row.get("profile_id"),
         workspace_id: row.get("workspace_id"),
         root_thread_id: row.get("root_thread_id"),
+        governed_supervisor: row.get("governed_supervisor"),
     }
 }
 
@@ -3615,6 +3653,33 @@ After"#;
         .execute(&pool)
         .await
         .unwrap();
+        let policy_snapshot_id = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO supervisor_policy_snapshots (
+                organization_id, policy_id, version, display_name,
+                developer_instructions, content_sha256
+             ) VALUES ($1, 'projection-supervisor', '1.0.0', 'Projection Supervisor',
+                       'Coordinate the projected child agents.', $2)
+             RETURNING id",
+        )
+        .bind(organization_id)
+        .bind("0".repeat(64))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO supervisor_policy_bindings (
+                organization_id, profile_id, task_id, run_id, snapshot_id,
+                thread_id, state, bound_at
+             ) VALUES ($1, $2, $3, $4, $5, 'root-thread', 'bound', now())",
+        )
+        .bind(organization_id)
+        .bind(profile_id)
+        .bind(task_id)
+        .bind(run_id)
+        .bind(policy_snapshot_id)
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             "INSERT INTO runtime_agent_projections (
                 organization_id, profile_id, workspace_id, root_run_id, thread_id,
@@ -3696,6 +3761,11 @@ After"#;
         );
         let completed = format!(
             r#"data: {{"method":"app-server-event","params":{{"workspace_id":"{workspace_id}","message":{{"method":"thread/completed","params":{{"threadId":"child-thread"}}}}}}}}
+
+"#
+        );
+        let root_turn_completed = format!(
+            r#"data: {{"method":"app-server-event","params":{{"workspace_id":"{workspace_id}","message":{{"method":"turn/completed","params":{{"threadId":"root-thread","turnId":"root-turn","turn":{{"id":"root-turn","status":"completed"}}}}}}}}}}
 
 "#
         );
@@ -3877,6 +3947,28 @@ After"#;
             artifact.get::<String, _>("producer_thread_id"),
             "child-thread"
         );
+        sqlx::query("UPDATE runs SET active_turn_id = 'root-turn' WHERE id = $1")
+            .bind(run_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(persist_frame(root_turn_completed.as_bytes(), &pool)
+            .await
+            .unwrap()
+            .is_some());
+        let run = sqlx::query("SELECT status, active_turn_id FROM runs WHERE id = $1")
+            .bind(run_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(run.get::<String, _>("status"), "completed");
+        assert!(run.get::<Option<String>, _>("active_turn_id").is_none());
+        let task_status: String = sqlx::query_scalar("SELECT status FROM tasks WHERE id = $1")
+            .bind(task_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(task_status, "completed");
     }
 
     #[test]

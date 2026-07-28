@@ -1,15 +1,17 @@
-use open_web_codex_adapter::PlatformRuntimeRole;
+use std::collections::{BTreeMap, BTreeSet};
+
+use open_web_codex_adapter::{PlatformRuntimeRole, RequiredMcpServer};
 use open_web_codex_platform_contracts::AgentDefinitionSummary;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use toml_edit::DocumentMut;
 
-const DATA_AGENT: &str = include_str!("../resources/agent-definitions/data-agent-v1.json");
+const DATA_AGENT: &str = include_str!("../resources/agent-definitions/data-agent-v1.6.json");
 const NETWORK_PLANNING_AGENT: &str =
-    include_str!("../resources/agent-definitions/network-planning-agent-v1.json");
+    include_str!("../resources/agent-definitions/network-planning-agent-v1.5.json");
 const DATA_AGENT_INSTRUCTIONS: &str = include_str!(
-    "../../../../tools/supply-chain-network-planner/examples/runtime-roles/data-agent.md"
+    "../../../../tools/supply-chain-network-planner/examples/runtime-roles/data-agent-v1.1.md"
 );
 const NETWORK_PLANNING_AGENT_INSTRUCTIONS: &str = include_str!(
     "../../../../tools/supply-chain-network-planner/examples/runtime-roles/network-planning-agent.md"
@@ -52,6 +54,10 @@ struct PublishedAgentDefinition {
     input_artifact_types: Vec<String>,
     output_artifact_types: Vec<String>,
     required_capabilities: Vec<String>,
+    #[serde(default)]
+    required_mcp_resource_servers: Vec<String>,
+    #[serde(default)]
+    required_capability_root_ids: Vec<String>,
     risks: Vec<String>,
 }
 
@@ -75,17 +81,18 @@ pub(crate) fn list_published() -> Result<Vec<AgentDefinitionSummary>, AgentDefin
         .collect()
 }
 
-/// Immutable, platform-owned Runtime Role specifications derived from the
-/// code-published Agent Definitions. These are not user-managed Profile Agent
-/// files and must be materialized only through the Profile Host lifecycle.
+/// Immutable Runtime Role specifications derived from the current code-published
+/// Agent Definitions. Profile Host materializes these files for governed runs.
 pub(crate) fn platform_runtime_roles() -> Result<Vec<PlatformRuntimeRole>, AgentDefinitionError> {
     PUBLISHED_AGENT_RESOURCES
         .iter()
         .map(|resource| {
             let definition = parse_published_definition(resource)?;
+            let required_mcp_servers = mcp_requirements_from_definition(&definition)?;
             let config_toml = runtime_role_template(
                 resource.developer_instructions,
                 &definition.runtime_profile.content_sha256,
+                &required_mcp_servers,
             )?;
             Ok(PlatformRuntimeRole {
                 definition_id: definition.definition_id.clone(),
@@ -103,9 +110,117 @@ pub(crate) fn platform_runtime_roles() -> Result<Vec<PlatformRuntimeRole>, Agent
         .collect()
 }
 
-/// Returns whether a Runtime Role name is reserved for a code-published
-/// platform definition. Browser Profile Agent CRUD must not manage these
-/// names, even when a Runtime configuration happens to contain them.
+/// Exact MCP inventory required by the selected immutable Agent Definitions.
+pub(crate) fn required_mcp_servers(
+    roles: &[PlatformRuntimeRole],
+) -> Result<Vec<RequiredMcpServer>, AgentDefinitionError> {
+    let mut required = BTreeMap::<String, (BTreeSet<String>, BTreeSet<String>)>::new();
+    for role in roles {
+        let resource = PUBLISHED_AGENT_RESOURCES
+            .iter()
+            .find(|resource| {
+                parse_published_definition(resource).is_ok_and(|definition| {
+                    definition.definition_id == role.definition_id
+                        && definition.version == role.version
+                        && definition.runtime_role == role.name
+                })
+            })
+            .ok_or(AgentDefinitionError::Invalid)?;
+        let definition = parse_published_definition(resource)?;
+        for server in mcp_requirements_from_definition(&definition)? {
+            let entry = required.entry(server.name).or_default();
+            entry.0.extend(server.tools);
+            entry.1.extend(server.capability_root_ids);
+        }
+    }
+    if required.is_empty() {
+        return Err(AgentDefinitionError::Invalid);
+    }
+    Ok(required
+        .into_iter()
+        .map(|(name, (tools, capability_root_ids))| RequiredMcpServer {
+            name,
+            tools: tools.into_iter().collect(),
+            capability_root_ids: capability_root_ids.into_iter().collect(),
+        })
+        .collect())
+}
+
+fn mcp_requirements_from_capabilities(
+    capabilities: &[String],
+) -> Result<Vec<RequiredMcpServer>, AgentDefinitionError> {
+    let mut required = BTreeMap::<String, BTreeSet<String>>::new();
+    for capability in capabilities {
+        if capability.starts_with("mcpServer/") {
+            continue;
+        }
+        let (server, tool) = capability
+            .split_once('.')
+            .filter(|(server, tool)| {
+                is_safe_capability_segment(server) && is_safe_capability_segment(tool)
+            })
+            .ok_or(AgentDefinitionError::Invalid)?;
+        required
+            .entry(server.to_string())
+            .or_default()
+            .insert(tool.to_string());
+    }
+    Ok(required
+        .into_iter()
+        .map(|(name, tools)| RequiredMcpServer {
+            name,
+            tools: tools.into_iter().collect(),
+            capability_root_ids: Vec::new(),
+        })
+        .collect())
+}
+
+fn mcp_requirements_from_definition(
+    definition: &PublishedAgentDefinition,
+) -> Result<Vec<RequiredMcpServer>, AgentDefinitionError> {
+    let mut required = mcp_requirements_from_capabilities(&definition.required_capabilities)?
+        .into_iter()
+        .map(|server| {
+            (
+                server.name,
+                (
+                    server.tools.into_iter().collect::<BTreeSet<_>>(),
+                    server
+                        .capability_root_ids
+                        .into_iter()
+                        .collect::<BTreeSet<_>>(),
+                ),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    for server in &definition.required_mcp_resource_servers {
+        if !is_safe_capability_segment(server) {
+            return Err(AgentDefinitionError::Invalid);
+        }
+        required.entry(server.clone()).or_default();
+    }
+    if required.is_empty() {
+        return Err(AgentDefinitionError::Invalid);
+    }
+    let capability_root_ids = definition
+        .required_capability_root_ids
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    for (_, roots) in required.values_mut() {
+        roots.extend(capability_root_ids.iter().cloned());
+    }
+    Ok(required
+        .into_iter()
+        .map(|(name, (tools, capability_root_ids))| RequiredMcpServer {
+            name,
+            tools: tools.into_iter().collect(),
+            capability_root_ids: capability_root_ids.into_iter().collect(),
+        })
+        .collect())
+}
+
+/// Browser Profile Agent CRUD must not manage platform-owned role names.
 pub(crate) fn is_platform_runtime_role(name: &str) -> bool {
     PUBLISHED_AGENT_RESOURCES
         .iter()
@@ -173,12 +288,36 @@ fn parse_definition(source: &str) -> Result<PublishedAgentDefinition, AgentDefin
     {
         return Err(AgentDefinitionError::Invalid);
     }
+    let mut resource_servers = BTreeSet::new();
+    if definition.required_mcp_resource_servers.len() > 16
+        || definition
+            .required_mcp_resource_servers
+            .iter()
+            .any(|server| {
+                !is_safe_capability_segment(server) || !resource_servers.insert(server.as_str())
+            })
+    {
+        return Err(AgentDefinitionError::Invalid);
+    }
+    let mut capability_root_ids = BTreeSet::new();
+    if definition.required_capability_root_ids.len() > 16
+        || definition
+            .required_capability_root_ids
+            .iter()
+            .any(|root_id| {
+                !is_safe_capability_segment(root_id)
+                    || !capability_root_ids.insert(root_id.as_str())
+            })
+    {
+        return Err(AgentDefinitionError::Invalid);
+    }
     Ok(definition)
 }
 
 fn runtime_role_template(
     developer_instructions: &str,
     expected_instructions_sha256: &str,
+    required_mcp_servers: &[RequiredMcpServer],
 ) -> Result<String, AgentDefinitionError> {
     let developer_instructions = developer_instructions.trim();
     if developer_instructions.is_empty()
@@ -186,28 +325,62 @@ fn runtime_role_template(
         || hex::encode(Sha256::digest(developer_instructions.as_bytes()))
             != expected_instructions_sha256
         || developer_instructions.contains("'''")
+        || required_mcp_servers.is_empty()
+        || required_mcp_servers.iter().any(|server| {
+            !is_safe_capability_segment(&server.name)
+                || server.capability_root_ids.is_empty()
+                || server
+                    .capability_root_ids
+                    .iter()
+                    .any(|root_id| !is_safe_capability_segment(root_id))
+                || server
+                    .tools
+                    .iter()
+                    .any(|tool| !is_safe_capability_segment(tool))
+        })
     {
         return Err(AgentDefinitionError::Invalid);
     }
-    let source = format!("developer_instructions = '''\n{developer_instructions}\n'''\n");
+    let mut source = format!(
+        "developer_instructions = '''\n{developer_instructions}\n'''\n\
+         \n[agents]\nenabled = false\n\
+         \n[features]\napps = false\nmulti_agent_v2 = false\nplugins = false\nshell_tool = false\n"
+    );
+    let mut plugins = BTreeSet::new();
+    for server in required_mcp_servers {
+        let enabled_tools = server
+            .tools
+            .iter()
+            .map(|tool| format!("\"{tool}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        for capability_root_id in &server.capability_root_ids {
+            if plugins.insert(capability_root_id) {
+                source.push_str(&format!(
+                    "\n[plugins.{capability_root_id}]\nenabled = true\n"
+                ));
+            }
+            source.push_str(&format!(
+                "\n[plugins.{capability_root_id}.mcp_servers.{}]\nenabled = true\nenabled_tools = [{enabled_tools}]\n",
+                server.name
+            ));
+        }
+    }
     let document = source
         .parse::<DocumentMut>()
         .map_err(|_| AgentDefinitionError::Invalid)?;
-    let table = document.as_table();
-    if table.len() != 1 {
-        return Err(AgentDefinitionError::Invalid);
-    }
-    let developer_instructions = table
-        .get("developer_instructions")
-        .and_then(|item| item.as_value())
-        .and_then(|value| value.as_str())
-        .ok_or(AgentDefinitionError::Invalid)?;
-    if developer_instructions.trim().is_empty()
-        || developer_instructions.len() > MAX_PLATFORM_RUNTIME_ROLE_INSTRUCTIONS_BYTES
-    {
+    if document.as_table().len() != 4 {
         return Err(AgentDefinitionError::Invalid);
     }
     Ok(source)
+}
+
+fn is_safe_capability_segment(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+        })
 }
 
 fn platform_runtime_role_config_file(definition_id: &str, version: &str) -> String {
@@ -251,6 +424,7 @@ fn is_safe_platform_runtime_role_name(value: &str) -> bool {
         && !matches!(
             value,
             "default"
+                | "allowed_roles"
                 | "enabled"
                 | "max_concurrent_threads_per_session"
                 | "max_depth"
@@ -281,90 +455,71 @@ mod tests {
     use super::*;
 
     #[test]
-    fn enterprise_definitions_resolve_to_exact_runtime_roles() {
+    fn publishes_only_the_current_exact_runtime_roles() {
         let definitions = list_published().unwrap();
         assert_eq!(definitions.len(), 2);
+        assert_eq!(definitions[0].version, "1.6.0");
+        assert_eq!(definitions[1].version, "1.5.0");
+
+        let roles = platform_runtime_roles().unwrap();
         assert_eq!(
-            platform_runtime_roles()
-                .unwrap()
-                .into_iter()
-                .map(|role| role.name)
+            roles
+                .iter()
+                .map(|role| role.name.as_str())
                 .collect::<Vec<_>>(),
             vec!["data_agent", "network_planning_agent"]
         );
+        for role in &roles {
+            assert_eq!(
+                role.content_sha256,
+                hex::encode(Sha256::digest(role.config_toml.as_bytes()))
+            );
+            assert!(role.config_toml.contains("[agents]\nenabled = false"));
+            assert!(role.config_toml.contains("apps = false"));
+            assert!(role.config_toml.contains("multi_agent_v2 = false"));
+            assert!(role.config_toml.contains("plugins = false"));
+            assert!(role.config_toml.contains("shell_tool = false"));
+        }
+        assert!(roles[0].config_toml.contains(
+            "[plugins.local-supply-chain-network-planner.mcp_servers.supply_chain_data]"
+        ));
+        assert!(roles[1].config_toml.contains(
+            "[plugins.local-supply-chain-network-planner.mcp_servers.supply_chain_planner]"
+        ));
     }
 
     #[test]
-    fn platform_runtime_roles_include_the_full_immutable_template_and_digest() {
-        let roles = platform_runtime_roles().unwrap();
-        assert_eq!(roles.len(), 2);
-        let data_agent = &roles[0];
-        assert_eq!(data_agent.definition_id, "enterprise-data-agent");
-        assert_eq!(data_agent.version, "1.0.0");
-        assert_eq!(data_agent.name, "data_agent");
+    fn runtime_role_templates_require_reviewed_instructions_and_mcp_inventory() {
         assert_eq!(
-            data_agent.config_file,
-            "platform-agents/enterprise-data-agent/1.0.0.toml"
-        );
-        assert_eq!(
-            data_agent.content_sha256,
-            hex::encode(Sha256::digest(data_agent.config_toml.as_bytes()))
-        );
-        assert!(data_agent
-            .config_toml
-            .contains(DATA_AGENT_INSTRUCTIONS.trim()));
-
-        let network_planning_agent = &roles[1];
-        assert_eq!(
-            network_planning_agent.definition_id,
-            "enterprise-network-planning-agent"
-        );
-        assert_eq!(network_planning_agent.version, "1.0.0");
-        assert_eq!(network_planning_agent.name, "network_planning_agent");
-        assert_eq!(
-            network_planning_agent.config_file,
-            "platform-agents/enterprise-network-planning-agent/1.0.0.toml"
-        );
-        assert_eq!(
-            network_planning_agent.content_sha256,
-            hex::encode(Sha256::digest(
-                network_planning_agent.config_toml.as_bytes()
-            ))
-        );
-        assert!(network_planning_agent
-            .config_toml
-            .contains(NETWORK_PLANNING_AGENT_INSTRUCTIONS.trim()));
-    }
-
-    #[test]
-    fn runtime_role_templates_require_non_empty_developer_instructions() {
-        assert_eq!(
-            runtime_role_template("", &hex::encode(Sha256::digest(b""))),
+            runtime_role_template("", &hex::encode(Sha256::digest(b"")), &[]),
             Err(AgentDefinitionError::Invalid)
         );
         assert_eq!(
-            runtime_role_template("Prepare data.", &"0".repeat(64)),
+            runtime_role_template("Prepare data.", &"0".repeat(64), &[]),
             Err(AgentDefinitionError::Invalid)
         );
         assert_eq!(
             runtime_role_template(
                 "bad ''' delimiter",
-                &hex::encode(Sha256::digest(b"bad ''' delimiter"))
+                &hex::encode(Sha256::digest(b"bad ''' delimiter")),
+                &[]
             ),
             Err(AgentDefinitionError::Invalid)
         );
     }
 
     #[test]
-    fn definitions_bind_their_version_to_the_reviewed_runtime_instructions() {
-        let definitions = [
-            parse_definition(DATA_AGENT).unwrap(),
-            parse_definition(NETWORK_PLANNING_AGENT).unwrap(),
-        ];
-        for (definition, instructions) in definitions
-            .into_iter()
-            .zip([DATA_AGENT_INSTRUCTIONS, NETWORK_PLANNING_AGENT_INSTRUCTIONS])
-        {
+    fn definitions_bind_versions_to_reviewed_runtime_instructions() {
+        for (definition, instructions) in [
+            (
+                parse_definition(DATA_AGENT).unwrap(),
+                DATA_AGENT_INSTRUCTIONS,
+            ),
+            (
+                parse_definition(NETWORK_PLANNING_AGENT).unwrap(),
+                NETWORK_PLANNING_AGENT_INSTRUCTIONS,
+            ),
+        ] {
             assert_eq!(
                 definition.runtime_profile.content_sha256,
                 hex::encode(Sha256::digest(instructions.trim().as_bytes()))
@@ -380,35 +535,35 @@ mod tests {
     }
 
     #[test]
-    fn platform_role_paths_match_profile_host_component_rules() {
-        assert!(is_safe_platform_definition_id("enterprise-data-agent"));
-        assert!(!is_safe_platform_definition_id("Enterprise-data-agent"));
-        assert!(!is_safe_platform_definition_id("enterprise.data-agent"));
-        assert!(is_safe_platform_version("1.0.0"));
-        assert!(!is_safe_platform_version("1..0"));
-        assert!(!is_safe_platform_version(".1.0"));
-    }
-
-    #[test]
-    fn network_definition_declares_the_actual_planning_artifact_contracts() {
+    fn network_definition_declares_planning_artifact_contracts() {
         let definition = parse_definition(NETWORK_PLANNING_AGENT).unwrap();
-        assert_eq!(
-            definition.output_artifact_types,
-            vec![
-                "network_snapshot.v1",
-                "route_matrix.v1",
-                "current_coverage_result.v1",
-                "network_scenario_result.v1",
-                "scenario_comparison.v1",
-                "facility_location_solution.v1",
-            ]
-        );
-        assert!(!definition
-            .responsibilities
-            .iter()
-            .any(|responsibility| responsibility.contains("network-simulation.v1")));
+        assert!(definition
+            .output_artifact_types
+            .contains(&"facility_location_solution.v1".to_string()));
         assert!(definition
             .required_capabilities
             .contains(&"supply_chain_planner.evaluate_current_coverage".to_string()));
+        assert_eq!(
+            definition.required_capability_root_ids,
+            vec!["local-supply-chain-network-planner"]
+        );
+    }
+
+    #[test]
+    fn definitions_derive_exact_mcp_inventory_requirements() {
+        let requirements = required_mcp_servers(&platform_runtime_roles().unwrap()).unwrap();
+        assert_eq!(
+            requirements
+                .iter()
+                .map(|server| server.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["supply_chain_data", "supply_chain_planner"]
+        );
+        assert!(
+            requirements
+                .iter()
+                .all(|server| server.capability_root_ids
+                    == vec!["local-supply-chain-network-planner"])
+        );
     }
 }

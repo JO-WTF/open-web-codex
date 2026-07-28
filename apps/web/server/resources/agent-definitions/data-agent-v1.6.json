@@ -1,13 +1,14 @@
 {
   "definitionId": "enterprise-data-agent",
-  "version": "1.0.0",
+  "version": "1.6.0",
   "displayName": "Enterprise Data Agent",
   "description": "Prepares bounded, source-backed planning datasets from authorized enterprise data.",
   "runtimeRole": "data_agent",
   "runtimeProfile": {
-    "contentSha256": "c7c46061e39acffa48faec8d6242101edb3d905c66c7da8222a924eab4652300"
+    "contentSha256": "5407ee548ab37d2a403949a4d8e021f961acc9696ee5557ffbc48cff9c7f738e"
   },
   "responsibilities": [
+    "List bounded metadata for authorized planning sources without reading project directories or exposing source paths.",
     "Read only the enterprise data exposed through the authorized data capability.",
     "State the source, time range, unit, missing fields and assumptions for every dataset.",
     "Publish planning datasets as durable planning-dataset.v1 Artifacts."
@@ -17,9 +18,13 @@
     "planning-dataset.v1"
   ],
   "requiredCapabilities": [
+    "supply_chain_data.list_planning_sources",
     "supply_chain_data.inspect_planning_source",
     "supply_chain_data.build_planning_dataset",
     "supply_chain_data.validate_planning_dataset"
+  ],
+  "requiredCapabilityRootIds": [
+    "local-supply-chain-network-planner"
   ],
   "risks": [
     "Source data may be incomplete or use inconsistent units.",

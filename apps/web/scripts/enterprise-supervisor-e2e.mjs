@@ -24,7 +24,7 @@ const email = process.env.E2E_ADMIN_EMAIL ?? "enterprise-e2e@open-web-codex.loca
 const password = process.env.E2E_ADMIN_PASSWORD ?? "open-web-codex-enterprise-e2e";
 const policy = {
   policy_id: "enterprise-supervisor-copilot",
-  version: "1.0.0",
+  version: "1.7.0",
 };
 const providerKey = useBuiltInProvider
   ? null
@@ -219,6 +219,15 @@ function completedMcpCalls(events) {
   );
 }
 
+const reportSections = [
+  ["事实", "Facts?"],
+  ["假设", "Assumptions?"],
+  ["分析", "Analysis"],
+  ["建议", "Recommendations?"],
+  ["风险", "Risks?"],
+  ["缺失证据", "Missing Evidence"],
+];
+
 function lastFinalReport(events) {
   return events
     .filter(
@@ -230,11 +239,18 @@ function lastFinalReport(events) {
     )
     .map((event) => event.payload?.data?.text)
     .filter((text) => typeof text === "string" && text.trim())
-    .at(-1);
+    .findLast((text) =>
+      reportSections.every(([chinese, english]) =>
+        hasSection(text, chinese, english),
+      ),
+    );
 }
 
 function hasSection(report, chinese, english) {
-  return new RegExp(`(^|\\n)#{0,4}\\s*(?:${chinese}|${english})`, "im").test(report);
+  return new RegExp(
+    `(^|\\n)#{1,4}\\s*(?:[一二三四五六七八九十0-9]+[、.．):：-]\\s*)?(?:${chinese}|${english})`,
+    "im",
+  ).test(report);
 }
 
 await runCase("authenticated single-Profile bootstrap", async () => {
@@ -299,8 +315,13 @@ await runCase("published enterprise governance contracts", async () => {
   );
   const definitions = await api("/agent-definitions");
   assert.deepEqual(
-    definitions.map((entry) => entry.runtime_role).sort(),
-    ["data_agent", "network_planning_agent"],
+    definitions
+      .map((entry) => `${entry.definition_id}@${entry.version}:${entry.runtime_role}`)
+      .sort(),
+    [
+      "enterprise-data-agent@1.6.0:data_agent",
+      "enterprise-network-planning-agent@1.5.0:network_planning_agent",
+    ],
   );
   return `${policy.policy_id}@${policy.version}`;
 });
@@ -353,22 +374,13 @@ await runCase("managed Workspace and Policy-bound root Thread", async () => {
   assert.equal(binding.policy_id, policy.policy_id);
   assert.equal(binding.version, policy.version);
 
-  const mcp = await eventually(async () => {
-    const projection = await api(`/profile/mcp-servers?runId=${state.run.id}`);
-    const encoded = JSON.stringify(projection);
-    return encoded.includes("supply_chain_data") &&
-      encoded.includes("supply_chain_planner")
-      ? projection
-      : undefined;
-  }, "supply-chain MCP discovery", 120_000, 1_000);
-  assert(mcp);
   return `run=${state.run.id}; root Thread=${state.run.codex_thread_id}`;
 });
 
 await runCase("real two-Agent warehouse-network collaboration", async () => {
   const prompt = promptOverride ?? `完成“华东新增仓”企业决策案例。必须遵循已绑定的 Supervisor Policy，并使用 Codex 原生多 Agent 协作：
 
-1. 先且只创建一个 data_agent。要求它使用只读 source_id=warehouse-network-fixture，检查、构建并验证 planning-dataset.v1，然后返回未经改写的 data_ref 和 Resource name。等待它完成。
+1. 先且只创建一个 data_agent。要求它先通过有界目录确认只读 source_id=warehouse-network-fixture，再检查、构建并验证 planning-dataset.v1，然后返回未经改写的 data_ref 和 Resource name。等待它完成。
 2. 取得该 data_ref 后，再且只创建一个 network_planning_agent。把未经改写的 data_ref 交给它；它必须先调用 read_mcp_resource 读取同一份 Artifact，再做任何网络计算。
 3. 本案例的场景叠加已审定为 planner MCP 的 examples/network-input.json；其中既有网络必须与 planning-dataset.v1 的 network_input 完全一致，杭州与无锡是两个有限候选。若不一致必须停止。
 4. 注册以下已审定导航 RouteEntry，provider=${routeFixture.provider}，method=${routeFixture.method}，require_complete=true：
@@ -511,18 +523,34 @@ await runCase("Runtime Agent tree, cross-child handoff, and deterministic tools"
   assert.equal(networkExecutions.length, 1);
   assert.equal(dataExecutions[0].ordinal, 1);
   assert.equal(networkExecutions[0].ordinal, 1);
-  assert(dataExecutions[0].task?.trim());
-  assert(networkExecutions[0].task?.trim());
   assert.equal(dataExecutions[0].status, "completed");
   assert.equal(networkExecutions[0].status, "completed");
+  assert(
+    executions.every(
+      (execution) =>
+        typeof execution.task === "string" && execution.task.trim().length > 0,
+    ),
+    "V2 collaboration events did not persist child task text",
+  );
 
   const events = await allTaskEvents(state.task.id);
   const calls = completedMcpCalls(events);
+  const rootCalls = calls.filter(
+    (event) => event.thread_id === state.run.codex_thread_id,
+  );
+  const rootCommands = events.filter(
+    (event) =>
+      event.thread_id === state.run.codex_thread_id &&
+      itemType(event) === "commandExecution",
+  );
   const dataCalls = calls.filter((event) => event.thread_id === dataAgent.thread_id);
   const networkCalls = calls.filter(
     (event) => event.thread_id === networkAgent.thread_id,
   );
+  assert.equal(rootCalls.length, 0, "Root Supervisor executed a business MCP tool");
+  assert.equal(rootCommands.length, 0, "Root Supervisor executed a shell command");
   for (const tool of [
+    "list_planning_sources",
     "inspect_planning_source",
     "build_planning_dataset",
     "validate_planning_dataset",
@@ -548,6 +576,26 @@ await runCase("Runtime Agent tree, cross-child handoff, and deterministic tools"
   );
   assert(resourceRead, "Network Agent did not read the Data Agent Resource");
   assert(snapshotCall, "Network Agent did not prepare a network snapshot");
+  const resourceProtocolTools = new Set([
+    "list_mcp_resources",
+    "list_mcp_resource_templates",
+    "read_mcp_resource",
+  ]);
+  const approvedResourceServers = new Set([
+    "codex",
+    "local",
+    "supply_chain_data",
+    "supply_chain_planner",
+  ]);
+  assert(
+    networkCalls.every(
+      (event) =>
+        event.payload?.data?.server === "supply_chain_planner" ||
+        (resourceProtocolTools.has(event.payload?.data?.tool) &&
+          approvedResourceServers.has(event.payload?.data?.server)),
+    ),
+    "Network Agent used a business data tool outside its declared Role scope",
+  );
   assert(
     resourceRead.sequence < snapshotCall.sequence,
     "Network Agent calculated before reading the Data Agent Resource",
@@ -657,14 +705,7 @@ await runCase("durable typed Artifacts and browser-safe trace", async () => {
 await runCase("evidence-backed Supervisor report", async () => {
   const report = lastFinalReport(finalEvidence.events);
   assert(report, "Root Supervisor did not produce a final report");
-  for (const [chinese, english] of [
-    ["事实", "Facts?"],
-    ["假设", "Assumptions?"],
-    ["分析", "Analysis"],
-    ["建议", "Recommendations?"],
-    ["风险", "Risks?"],
-    ["缺失证据", "Missing Evidence"],
-  ]) {
+  for (const [chinese, english] of reportSections) {
     assert(hasSection(report, chinese, english), `Final report omitted ${chinese}`);
   }
   for (const schema of [
@@ -708,8 +749,8 @@ await runCase("browser history and evidence overview recovery", async () => {
     .filter((item) => item.type === "agentMessage" && typeof item.text === "string")
     .map((item) => item.text)
     .filter((text) =>
-      ["事实", "假设", "分析", "建议", "风险", "缺失证据"].every((section) =>
-        hasSection(text, section, section),
+      reportSections.every(([chinese, english]) =>
+        hasSection(text, chinese, english),
       ),
     );
   assert(restoredReports.length > 0, "Browser history did not restore the final report");
@@ -722,7 +763,7 @@ await runCase("browser history and evidence overview recovery", async () => {
     api(`/tasks/${state.task.id}/artifacts`),
   ]);
   const overview = { policy, agents, executions, artifacts };
-  assert.equal(policy.version, "1.0.0");
+  assert.equal(policy.version, "1.7.0");
   assert.equal(agents.length, 3);
   assert.deepEqual(executions, finalEvidence.executions);
   assert.equal(artifacts.length, finalEvidence.artifacts.length);

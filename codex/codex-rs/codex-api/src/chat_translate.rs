@@ -363,9 +363,11 @@ pub fn responses_input_to_chat_messages(
             ResponseItem::AgentMessage { content, .. } => {
                 let text = content
                     .iter()
-                    .filter_map(|c| match c {
-                        AgentMessageInputContent::InputText { text } => Some(text.as_str()),
-                        AgentMessageInputContent::EncryptedContent { .. } => None,
+                    .map(|c| match c {
+                        AgentMessageInputContent::InputText { text } => text.as_str(),
+                        AgentMessageInputContent::EncryptedContent { encrypted_content } => {
+                            encrypted_content.as_str()
+                        }
                     })
                     .collect::<Vec<_>>()
                     .join("\n");

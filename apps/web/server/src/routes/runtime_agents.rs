@@ -231,12 +231,31 @@ fn project_activities(event: ActivityEvent) -> Vec<RuntimeAgentActivity> {
         .and_then(Value::as_str)
         .unwrap_or_default();
     let completed = event.event_type == "codex.item.completed";
+    let is_collaboration_item = matches!(item_type, "collabAgentToolCall" | "collabToolCall");
+    let collaboration_tool = is_collaboration_item
+        .then(|| {
+            data.get("tool")
+                .and_then(Value::as_str)
+                .map(normalize_tool_name)
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
 
-    if matches!(item_type, "collabAgentToolCall" | "collabToolCall") && completed {
-        let tool = data.get("tool").and_then(Value::as_str).unwrap_or_default();
-        let normalized_tool = normalize_tool_name(tool);
+    if is_collaboration_item && matches!(collaboration_tool.as_str(), "wait" | "waitagent") {
+        let (status, title, detail) = project_wait_activity(data, completed);
+        return vec![activity(
+            &event,
+            event.thread_id.clone(),
+            RuntimeAgentActivityKind::Waiting,
+            status,
+            &title,
+            Some(detail),
+        )];
+    }
+
+    if is_collaboration_item && completed {
         if !matches!(
-            normalized_tool.as_str(),
+            collaboration_tool.as_str(),
             "spawnagent" | "sendinput" | "sendmessage" | "followuptask"
         ) {
             return Vec::new();
@@ -248,7 +267,7 @@ fn project_activities(event: ActivityEvent) -> Vec<RuntimeAgentActivity> {
         else {
             return Vec::new();
         };
-        let (kind, status, title) = match normalized_tool.as_str() {
+        let (kind, status, title) = match collaboration_tool.as_str() {
             "spawnagent" => (
                 RuntimeAgentActivityKind::Assignment,
                 RuntimeAgentActivityStatus::Pending,
@@ -420,6 +439,99 @@ fn project_item_activity(
         _ => return None,
     };
     Some((kind, status, format!("{verb} {subject}")))
+}
+
+fn project_wait_activity(
+    data: &Value,
+    completed: bool,
+) -> (RuntimeAgentActivityStatus, String, String) {
+    let receiver_count = string_list(data.get("receiverThreadIds")).len();
+    if !completed {
+        let title = if receiver_count == 0 {
+            "Waiting for Agent updates".to_string()
+        } else if receiver_count == 1 {
+            "Waiting for 1 Agent".to_string()
+        } else {
+            format!("Waiting for {receiver_count} Agents")
+        };
+        let detail = if receiver_count == 0 {
+            "The Supervisor is waiting for any Agent update or new input. This is a bounded wait, not a stopped task.".to_string()
+        } else {
+            format!(
+                "The Supervisor is waiting for {receiver_count} assigned {} to finish or report a terminal state.",
+                if receiver_count == 1 { "Agent" } else { "Agents" }
+            )
+        };
+        return (RuntimeAgentActivityStatus::Waiting, title, detail);
+    }
+
+    let failed = matches!(
+        data.get("status").and_then(Value::as_str),
+        Some("failed" | "error")
+    );
+    if failed {
+        return (
+            RuntimeAgentActivityStatus::Failed,
+            "Agent wait failed".to_string(),
+            "The bounded wait ended with an error. The Supervisor task is still observable through subsequent activity.".to_string(),
+        );
+    }
+
+    let summary = summarize_wait_states(data.get("agentsStates"));
+    (
+        RuntimeAgentActivityStatus::Completed,
+        "Wait cycle finished".to_string(),
+        summary.unwrap_or_else(|| {
+            "This bounded wait cycle ended. The Supervisor is processing any available update and may start another wait cycle.".to_string()
+        }),
+    )
+}
+
+fn summarize_wait_states(value: Option<&Value>) -> Option<String> {
+    let states = value?.as_object()?;
+    if states.is_empty() {
+        return None;
+    }
+
+    let mut pending = 0;
+    let mut running = 0;
+    let mut completed = 0;
+    let mut interrupted = 0;
+    let mut failed = 0;
+    let mut stopped = 0;
+    let mut unknown = 0;
+    for state in states.values() {
+        let status = state
+            .get("status")
+            .and_then(Value::as_str)
+            .map(normalize_tool_name)
+            .unwrap_or_default();
+        match status.as_str() {
+            "pendinginit" | "pending" => pending += 1,
+            "running" => running += 1,
+            "completed" => completed += 1,
+            "interrupted" => interrupted += 1,
+            "errored" | "error" | "failed" | "notfound" => failed += 1,
+            "shutdown" => stopped += 1,
+            _ => unknown += 1,
+        }
+    }
+
+    let mut parts = Vec::new();
+    for (count, label) in [
+        (completed, "completed"),
+        (running, "still running"),
+        (pending, "starting"),
+        (interrupted, "interrupted"),
+        (failed, "failed or unavailable"),
+        (stopped, "shut down"),
+        (unknown, "status unknown"),
+    ] {
+        if count > 0 {
+            parts.push(format!("{count} {label}"));
+        }
+    }
+    (!parts.is_empty()).then(|| format!("Agent status after this wait: {}.", parts.join(", ")))
 }
 
 fn activity(
@@ -629,5 +741,86 @@ mod tests {
         let serialized = serde_json::to_string(&activities).unwrap();
         assert!(!serialized.contains("warehouse_path"));
         assert!(!serialized.contains("/private/workspace"));
+    }
+
+    #[test]
+    fn explains_v2_wait_cycles_without_inventing_target_agents() {
+        let started = project_activities(event(
+            "codex.item.started",
+            "root-thread",
+            json!({
+                "itemType": "collabAgentToolCall",
+                "data": {
+                    "tool": "wait",
+                    "status": "inProgress",
+                    "receiverThreadIds": [],
+                    "agentsStates": {}
+                }
+            }),
+        ));
+        let completed = project_activities(event(
+            "codex.item.completed",
+            "root-thread",
+            json!({
+                "itemType": "collabAgentToolCall",
+                "data": {
+                    "tool": "wait",
+                    "status": "completed",
+                    "receiverThreadIds": [],
+                    "agentsStates": {}
+                }
+            }),
+        ));
+
+        assert_eq!(started.len(), 1);
+        assert_eq!(started[0].kind, RuntimeAgentActivityKind::Waiting);
+        assert_eq!(started[0].status, RuntimeAgentActivityStatus::Waiting);
+        assert_eq!(started[0].title, "Waiting for Agent updates");
+        assert!(started[0]
+            .detail
+            .as_deref()
+            .unwrap()
+            .contains("bounded wait"));
+
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].status, RuntimeAgentActivityStatus::Completed);
+        assert_eq!(completed[0].title, "Wait cycle finished");
+        assert!(completed[0]
+            .detail
+            .as_deref()
+            .unwrap()
+            .contains("may start another"));
+    }
+
+    #[test]
+    fn summarizes_wait_statuses_without_exposing_thread_ids_or_messages() {
+        let activities = project_activities(event(
+            "codex.item.completed",
+            "root-thread",
+            json!({
+                "itemType": "collabAgentToolCall",
+                "data": {
+                    "tool": "wait_agent",
+                    "status": "completed",
+                    "receiverThreadIds": ["secret-data-thread", "secret-network-thread"],
+                    "agentsStates": {
+                        "secret-data-thread": {
+                            "status": "completed",
+                            "message": "private model output"
+                        },
+                        "secret-network-thread": {"status": "running"}
+                    }
+                }
+            }),
+        ));
+
+        assert_eq!(activities.len(), 1);
+        assert_eq!(
+            activities[0].detail.as_deref(),
+            Some("Agent status after this wait: 1 completed, 1 still running.")
+        );
+        let serialized = serde_json::to_string(&activities).unwrap();
+        assert!(!serialized.contains("secret-data-thread"));
+        assert!(!serialized.contains("private model output"));
     }
 }

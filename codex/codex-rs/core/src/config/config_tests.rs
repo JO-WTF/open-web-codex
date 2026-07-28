@@ -7487,6 +7487,8 @@ async fn load_config_rejects_missing_agent_role_config_file() -> std::io::Result
             default_subagent_reasoning_effort: None,
             job_max_runtime_seconds: None,
             interrupt_message: None,
+            allowed_roles: None,
+            role_spawn_limits: None,
             roles: BTreeMap::from([(
                 "researcher".to_string(),
                 AgentRoleToml {
@@ -8464,6 +8466,73 @@ async fn load_config_resolves_agent_controls() -> std::io::Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn load_config_resolves_exact_role_spawn_limits() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[agents]
+allowed_roles = ["data_agent", "network_planning_agent"]
+
+[agents.role_spawn_limits]
+data_agent = 1
+network_planning_agent = 1
+
+[agents.data_agent]
+description = "Prepare governed data."
+
+[agents.network_planning_agent]
+description = "Plan the governed network."
+"#,
+    )
+    .expect("role limits should parse");
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.agent_role_spawn_limits,
+        BTreeMap::from([
+            ("data_agent".to_string(), 1),
+            ("network_planning_agent".to_string(), 1),
+        ])
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_rejects_role_spawn_limit_outside_allowlist() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[agents]
+allowed_roles = ["data_agent"]
+
+[agents.role_spawn_limits]
+network_planning_agent = 1
+"#,
+    )
+    .expect("role limits should parse");
+
+    let error = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await
+    .expect_err("role limit outside allowlist must fail");
+
+    assert_eq!(
+        error.to_string(),
+        "agents.role_spawn_limits must use allowed non-empty role names and positive limits"
+    );
+    Ok(())
+}
+
 #[test]
 fn agents_max_threads_alias_matches_canonical_config() {
     let canonical: ConfigToml = toml::from_str(
@@ -8497,6 +8566,8 @@ async fn load_config_normalizes_agent_role_nickname_candidates() -> std::io::Res
             default_subagent_reasoning_effort: None,
             job_max_runtime_seconds: None,
             interrupt_message: None,
+            allowed_roles: None,
+            role_spawn_limits: None,
             roles: BTreeMap::from([(
                 "researcher".to_string(),
                 AgentRoleToml {
@@ -8543,6 +8614,8 @@ async fn load_config_rejects_empty_agent_role_nickname_candidates() -> std::io::
             default_subagent_reasoning_effort: None,
             job_max_runtime_seconds: None,
             interrupt_message: None,
+            allowed_roles: None,
+            role_spawn_limits: None,
             roles: BTreeMap::from([(
                 "researcher".to_string(),
                 AgentRoleToml {
@@ -8583,6 +8656,8 @@ async fn load_config_rejects_duplicate_agent_role_nickname_candidates() -> std::
             default_subagent_reasoning_effort: None,
             job_max_runtime_seconds: None,
             interrupt_message: None,
+            allowed_roles: None,
+            role_spawn_limits: None,
             roles: BTreeMap::from([(
                 "researcher".to_string(),
                 AgentRoleToml {
@@ -8623,6 +8698,8 @@ async fn load_config_rejects_unsafe_agent_role_nickname_candidates() -> std::io:
             default_subagent_reasoning_effort: None,
             job_max_runtime_seconds: None,
             interrupt_message: None,
+            allowed_roles: None,
+            role_spawn_limits: None,
             roles: BTreeMap::from([(
                 "researcher".to_string(),
                 AgentRoleToml {

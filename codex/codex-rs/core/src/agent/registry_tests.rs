@@ -14,6 +14,14 @@ fn agent_metadata(thread_id: ThreadId) -> AgentMetadata {
     }
 }
 
+fn role_metadata(thread_id: ThreadId, role: &str) -> AgentMetadata {
+    AgentMetadata {
+        agent_id: Some(thread_id),
+        agent_role: Some(role.to_string()),
+        ..Default::default()
+    }
+}
+
 #[test]
 fn format_agent_nickname_adds_ordinals_after_reset() {
     assert_eq!(
@@ -157,6 +165,47 @@ fn release_is_idempotent_for_registered_threads() {
         .reserve_spawn_slot(Some(1))
         .expect("slot released after second thread removal");
     drop(reservation);
+}
+
+#[test]
+fn role_limit_counts_reservations_and_releases_committed_threads() {
+    let registry = Arc::new(AgentRegistry::default());
+    let first = registry
+        .reserve_spawn_slot_for_role(None, Some(("data_agent", 1)))
+        .expect("reserve first role slot");
+
+    let err = match registry.reserve_spawn_slot_for_role(None, Some(("data_agent", 1))) {
+        Ok(_) => panic!("role limit should include in-flight reservations"),
+        Err(err) => err,
+    };
+    assert_eq!(
+        err.to_string(),
+        "unsupported operation: agent role `data_agent` instance limit reached (1)"
+    );
+
+    let first_id = ThreadId::new();
+    first.commit(role_metadata(first_id, "data_agent"));
+    registry
+        .reserve_spawn_slot_for_role(None, Some(("network_planning_agent", 1)))
+        .expect("another role has an independent limit");
+
+    registry.release_spawned_thread(first_id);
+    registry
+        .reserve_spawn_slot_for_role(None, Some(("data_agent", 1)))
+        .expect("released role slot can be reused");
+}
+
+#[test]
+fn dropped_role_reservation_releases_role_and_thread_slots() {
+    let registry = Arc::new(AgentRegistry::default());
+    let reservation = registry
+        .reserve_spawn_slot_for_role(Some(1), Some(("data_agent", 1)))
+        .expect("reserve role slot");
+    drop(reservation);
+
+    registry
+        .reserve_spawn_slot_for_role(Some(1), Some(("data_agent", 1)))
+        .expect("dropped reservation releases both limits");
 }
 
 #[test]

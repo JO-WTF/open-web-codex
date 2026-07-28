@@ -7,6 +7,7 @@ use super::*;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
 use crate::tools::context::FunctionToolOutput;
+use crate::tools::handlers::multi_agents::collab_tool_call_status;
 use codex_protocol::protocol::InterAgentCommunication;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -101,18 +102,65 @@ pub(crate) async fn handle_message_string_tool(
         .get_agent_path()
         .unwrap_or_else(AgentPath::root);
     let communication =
-        communication_from_tool_message(author, receiver_agent_path.clone(), message);
+        communication_from_tool_message(author, receiver_agent_path.clone(), message.clone());
     let kind = match mode {
         MessageDeliveryMode::QueueOnly => AgentCommunicationKind::Message,
         MessageDeliveryMode::TriggerTurn => AgentCommunicationKind::Followup,
     };
     let context = AgentCommunicationContext::new(kind, session.thread_id);
+    session
+        .emit_turn_item_started(
+            &turn,
+            &TurnItem::CollabAgentToolCall(CollabAgentToolCallItem {
+                id: call_id.clone(),
+                tool: CollabAgentTool::SendInput,
+                status: CollabAgentToolCallStatus::InProgress,
+                sender_thread_id: session.thread_id,
+                receiver_thread_ids: vec![receiver_thread_id],
+                receiver_agents: Vec::new(),
+                prompt: Some(message.clone()),
+                model: None,
+                reasoning_effort: None,
+                agents_states: Default::default(),
+            }),
+        )
+        .await;
     let result = session
         .services
         .agent_control
         .send_inter_agent_communication(receiver_thread_id, mode.apply(communication), context)
         .await
         .map_err(|err| collab_agent_error(receiver_thread_id, err));
+    let status = if result.is_ok() {
+        session
+            .services
+            .agent_control
+            .get_status(receiver_thread_id)
+            .await
+    } else {
+        AgentStatus::NotFound
+    };
+    session
+        .emit_turn_item_completed(
+            &turn,
+            TurnItem::CollabAgentToolCall(CollabAgentToolCallItem {
+                id: call_id.clone(),
+                tool: CollabAgentTool::SendInput,
+                status: collab_tool_call_status(&status, Some(receiver_thread_id)),
+                sender_thread_id: session.thread_id,
+                receiver_thread_ids: vec![receiver_thread_id],
+                receiver_agents: vec![CollabAgentRef {
+                    thread_id: receiver_thread_id,
+                    agent_nickname: receiver_agent.agent_nickname,
+                    agent_role: receiver_agent.agent_role,
+                }],
+                prompt: Some(message),
+                model: None,
+                reasoning_effort: None,
+                agents_states: [(receiver_thread_id, status)].into_iter().collect(),
+            }),
+        )
+        .await;
     result?;
     emit_sub_agent_activity(
         &session,

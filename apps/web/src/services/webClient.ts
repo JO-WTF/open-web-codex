@@ -9,6 +9,7 @@ import type {
   RuntimeAgentProjection,
   SupervisorPolicyBinding,
   SupervisorPolicySelection,
+  SupervisorPolicySummary,
   Workspace,
 } from "../../browser/types";
 import type { AppServerEvent, GitFileStatus, WorkspaceInfo } from "../types";
@@ -24,7 +25,7 @@ export type GatewayHealth = {
   version: string;
 };
 
-export type EnterpriseSupervisorOverview = {
+export type SupervisorOverviewData = {
   taskTitle: string;
   policy: SupervisorPolicyBinding | null;
   agents: RuntimeAgentProjection[];
@@ -167,10 +168,27 @@ function runtimeMessage(event: RunEvent): JsonRecord | null {
 }
 
 function runtimeThreadStatus(run: Run) {
+  if (run.status === "recovery_pending") return { type: "idle", activeFlags: [] as string[] };
   if (run.active_turn_id) return { type: "active", activeFlags: [] as string[] };
   if (run.status === "failed") return { type: "error" };
   if (run.status === "running" || run.status === "completed") return { type: "idle" };
   return { type: run.status };
+}
+
+function runtimeStatusType(status: unknown): string | null {
+  if (typeof status === "string") return status;
+  if (!isRecord(status)) return null;
+  return typeof status.type === "string" ? status.type : null;
+}
+
+function activeTurnIdForThread(run: Run, status: unknown): string | null {
+  const statusType = runtimeStatusType(status);
+  if (statusType && statusType !== "active" && statusType !== "running") return null;
+  return run.status === "recovery_pending" ? null : run.active_turn_id;
+}
+
+function statusForThread(run: Run, status: unknown): unknown {
+  return run.status === "recovery_pending" ? runtimeThreadStatus(run) : status;
 }
 
 /**
@@ -337,6 +355,7 @@ export class CodexMonitorWebClient {
       this.platform.readRunThread(context.runId),
     ]);
     const thread = history.thread;
+    const status = statusForThread(run, thread.status);
     return {
       id: threadId,
       name: threadDisplayName(thread.name ?? task.title),
@@ -344,10 +363,10 @@ export class CodexMonitorWebClient {
       cwd: workspace.name,
       createdAt: thread.createdAt || task.created_at,
       updatedAt: thread.updatedAt || run.updated_at,
-      activeTurnId: run.active_turn_id,
+      activeTurnId: activeTurnIdForThread(run, status),
       modelProvider: task.model_provider,
       model: task.model,
-      status: thread.status,
+      status,
       turns: thread.turns,
     };
   }
@@ -358,7 +377,7 @@ export class CodexMonitorWebClient {
   ) {
     const workspace = await this.platform.getWorkspace(workspaceId);
     const taskTitle = options?.supervisorPolicy
-      ? `Enterprise Supervisor Copilot · ${options.supervisorPolicy.version}`
+      ? `Governed Supervisor · ${options.supervisorPolicy.policy_id}@${options.supervisorPolicy.version}`
       : "Thread";
     const task = await this.platform.createTask(workspace.project_id, taskTitle);
     const { run } = await this.platform.startRun(task.id, workspaceId, {
@@ -368,9 +387,13 @@ export class CodexMonitorWebClient {
     return { thread: await this.threadRecord(ready.codex_thread_id as string) };
   }
 
-  async getEnterpriseSupervisorOverview(
+  listSupervisorPolicies(): Promise<SupervisorPolicySummary[]> {
+    return this.platform.listSupervisorPolicies();
+  }
+
+  async getSupervisorOverview(
     threadId: string,
-  ): Promise<EnterpriseSupervisorOverview | null> {
+  ): Promise<SupervisorOverviewData | null> {
     const context = await this.findThreadContext(threadId);
     const [task, policy, agents, activities, executions, artifacts] = await Promise.all([
       this.platform.getTask(context.taskId),
@@ -394,7 +417,7 @@ export class CodexMonitorWebClient {
         cwd: workspace.name,
         createdAt: task.created_at,
         updatedAt: run.updated_at,
-        activeTurnId: run.active_turn_id,
+        activeTurnId: run.status === "recovery_pending" ? null : run.active_turn_id,
         modelProvider: task.model_provider,
         model: task.model,
         status: runtimeThreadStatus(run).type,

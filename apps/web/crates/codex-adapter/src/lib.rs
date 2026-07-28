@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use thiserror::Error;
 use toml_edit::DocumentMut;
@@ -22,6 +22,9 @@ pub enum AdapterError {
 
     #[error("Method not implemented: {0}")]
     NotImplemented(String),
+
+    #[error("Required Runtime capabilities unavailable: {0}")]
+    CapabilityUnavailable(String),
 
     #[error("Profile Host error: {0}")]
     ProfileHost(#[from] open_web_codex_profile_host::ProfileHostError),
@@ -74,6 +77,8 @@ pub enum ThreadStartMode {
     GovernedSupervisor {
         developer_instructions: String,
         roles: Vec<PlatformRuntimeRole>,
+        role_spawn_limits: BTreeMap<String, u32>,
+        required_mcp_servers: Vec<RequiredMcpServer>,
         max_threads: u32,
     },
 }
@@ -126,6 +131,17 @@ pub struct PlatformRuntimeRole {
     pub config_file: String,
     pub config_toml: String,
     pub content_sha256: String,
+}
+
+/// Exact MCP inventory required by an immutable governed policy.
+///
+/// These identifiers are derived from code-published Agent Definitions. They
+/// are never accepted from the browser or inferred from tool display text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequiredMcpServer {
+    pub name: String,
+    pub tools: Vec<String>,
+    pub capability_root_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -189,6 +205,12 @@ const MAX_PLATFORM_RUNTIME_ROLE_ID_BYTES: usize = 128;
 const MAX_PLATFORM_RUNTIME_ROLE_NAME_BYTES: usize = 64;
 const MAX_PLATFORM_RUNTIME_ROLE_DESCRIPTION_BYTES: usize = 512;
 const MAX_PLATFORM_RUNTIME_ROLE_INSTRUCTIONS_BYTES: usize = 16 * 1024;
+const MAX_PLATFORM_RUNTIME_ROLE_CONFIG_BYTES: usize = 32 * 1024;
+const MAX_REQUIRED_MCP_SERVER_NAME_BYTES: usize = 128;
+const MAX_REQUIRED_MCP_TOOL_NAME_BYTES: usize = 128;
+const MAX_REQUIRED_MCP_SERVERS: usize = 16;
+const MAX_REQUIRED_MCP_TOOLS_PER_SERVER: usize = 64;
+const MAX_REQUIRED_MCP_CAPABILITY_ROOTS_PER_SERVER: usize = 16;
 const MIN_PLATFORM_RUNTIME_MAX_THREADS: u32 = 2;
 const MAX_PLATFORM_RUNTIME_MAX_THREADS: u32 = 12;
 
@@ -204,6 +226,66 @@ pub(crate) fn validate_platform_runtime_roles(
     {
         return Err(AdapterError::Internal(
             "Platform Runtime Role limits are outside supported bounds".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_required_mcp_servers(
+    servers: &[RequiredMcpServer],
+) -> Result<(), AdapterError> {
+    if servers.is_empty() || servers.len() > MAX_REQUIRED_MCP_SERVERS {
+        return Err(AdapterError::Internal(
+            "governed Runtime MCP requirements are invalid".to_string(),
+        ));
+    }
+    let mut server_names = HashSet::new();
+    for server in servers {
+        if !is_safe_runtime_capability_name(&server.name, MAX_REQUIRED_MCP_SERVER_NAME_BYTES)
+            || server.tools.len() > MAX_REQUIRED_MCP_TOOLS_PER_SERVER
+            || server.capability_root_ids.len() > MAX_REQUIRED_MCP_CAPABILITY_ROOTS_PER_SERVER
+            || !server_names.insert(server.name.as_str())
+        {
+            return Err(AdapterError::Internal(
+                "governed Runtime MCP requirements are invalid".to_string(),
+            ));
+        }
+        let mut tool_names = HashSet::new();
+        if server.tools.iter().any(|tool| {
+            !is_safe_runtime_capability_name(tool, MAX_REQUIRED_MCP_TOOL_NAME_BYTES)
+                || !tool_names.insert(tool.as_str())
+        }) {
+            return Err(AdapterError::Internal(
+                "governed Runtime MCP requirements are invalid".to_string(),
+            ));
+        }
+        let mut capability_root_ids = HashSet::new();
+        if server.capability_root_ids.iter().any(|root_id| {
+            !is_safe_runtime_capability_name(root_id, MAX_REQUIRED_MCP_SERVER_NAME_BYTES)
+                || !capability_root_ids.insert(root_id.as_str())
+        }) {
+            return Err(AdapterError::Internal(
+                "governed Runtime MCP requirements are invalid".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_role_spawn_limits(
+    roles: &[PlatformRuntimeRole],
+    limits: &BTreeMap<String, u32>,
+) -> Result<(), AdapterError> {
+    if limits.is_empty()
+        || limits.len() > roles.len()
+        || limits.iter().any(|(role, limit)| {
+            *limit == 0
+                || *limit > MAX_PLATFORM_RUNTIME_MAX_THREADS
+                || !roles.iter().any(|candidate| candidate.name == *role)
+        })
+    {
+        return Err(AdapterError::Internal(
+            "governed Runtime Role instance limits are invalid".to_string(),
         ));
     }
     Ok(())
@@ -275,7 +357,7 @@ fn validate_platform_runtime_role(role: &PlatformRuntimeRole) -> Result<(), Adap
 }
 
 fn validate_platform_runtime_role_toml(contents: &str) -> Result<(), AdapterError> {
-    if contents.is_empty() || contents.len() > MAX_PLATFORM_RUNTIME_ROLE_INSTRUCTIONS_BYTES {
+    if contents.is_empty() || contents.len() > MAX_PLATFORM_RUNTIME_ROLE_CONFIG_BYTES {
         return Err(AdapterError::Internal(
             "Platform Runtime Role configuration is invalid".to_string(),
         ));
@@ -284,16 +366,18 @@ fn validate_platform_runtime_role_toml(contents: &str) -> Result<(), AdapterErro
         AdapterError::Internal("Platform Runtime Role configuration is invalid".to_string())
     })?;
     let table = document.as_table();
-    if table.len() != 1 {
+    if table.len() != 4
+        || ["developer_instructions", "agents", "features", "plugins"]
+            .iter()
+            .any(|field| !table.contains_key(field))
+    {
         return Err(AdapterError::Internal(
-            "Platform Runtime Role configuration may only define developer instructions"
-                .to_string(),
+            "Platform Runtime Role configuration contains unsupported fields".to_string(),
         ));
     }
     let Some(item) = table.get("developer_instructions") else {
         return Err(AdapterError::Internal(
-            "Platform Runtime Role configuration may only define developer instructions"
-                .to_string(),
+            "Platform Runtime Role configuration must define developer instructions".to_string(),
         ));
     };
     let Some(instructions) = item.as_value().and_then(|value| value.as_str()) else {
@@ -307,6 +391,139 @@ fn validate_platform_runtime_role_toml(contents: &str) -> Result<(), AdapterErro
         return Err(AdapterError::Internal(
             "Platform Runtime Role developer instructions are invalid".to_string(),
         ));
+    }
+    let agents = table
+        .get("agents")
+        .and_then(|item| item.as_table())
+        .filter(|agents| agents.len() == 1)
+        .ok_or_else(|| {
+            AdapterError::Internal(
+                "Platform Runtime Role Agent restrictions are invalid".to_string(),
+            )
+        })?;
+    if agents
+        .get("enabled")
+        .and_then(|item| item.as_value())
+        .and_then(|value| value.as_bool())
+        != Some(false)
+    {
+        return Err(AdapterError::Internal(
+            "Platform Runtime Role Agent restrictions are invalid".to_string(),
+        ));
+    }
+
+    let features = table
+        .get("features")
+        .and_then(|item| item.as_table())
+        .ok_or_else(|| {
+            AdapterError::Internal(
+                "Platform Runtime Role feature restrictions are invalid".to_string(),
+            )
+        })?;
+    if features.len() != 4
+        || ["apps", "multi_agent_v2", "plugins", "shell_tool"]
+            .iter()
+            .any(|feature| {
+                features
+                    .get(feature)
+                    .and_then(|item| item.as_value())
+                    .and_then(|value| value.as_bool())
+                    != Some(false)
+            })
+    {
+        return Err(AdapterError::Internal(
+            "Platform Runtime Role feature restrictions are invalid".to_string(),
+        ));
+    }
+
+    let plugins = table
+        .get("plugins")
+        .and_then(|item| item.as_table())
+        .filter(|plugins| {
+            !plugins.is_empty() && plugins.len() <= MAX_REQUIRED_MCP_CAPABILITY_ROOTS_PER_SERVER
+        })
+        .ok_or_else(|| {
+            AdapterError::Internal("Platform Runtime Role MCP restrictions are invalid".to_string())
+        })?;
+    for (root_id, item) in plugins {
+        if !is_safe_runtime_capability_name(root_id, MAX_REQUIRED_MCP_SERVER_NAME_BYTES) {
+            return Err(AdapterError::Internal(
+                "Platform Runtime Role MCP restrictions are invalid".to_string(),
+            ));
+        }
+        let plugin = item
+            .as_table()
+            .filter(|server| server.len() == 2)
+            .ok_or_else(|| {
+                AdapterError::Internal(
+                    "Platform Runtime Role MCP restrictions are invalid".to_string(),
+                )
+            })?;
+        if plugin
+            .get("enabled")
+            .and_then(|item| item.as_value())
+            .and_then(|value| value.as_bool())
+            != Some(true)
+        {
+            return Err(AdapterError::Internal(
+                "Platform Runtime Role MCP server must be enabled".to_string(),
+            ));
+        }
+        let mcp_servers = plugin
+            .get("mcp_servers")
+            .and_then(|item| item.as_table())
+            .filter(|servers| !servers.is_empty() && servers.len() <= MAX_REQUIRED_MCP_SERVERS)
+            .ok_or_else(|| {
+                AdapterError::Internal(
+                    "Platform Runtime Role MCP restrictions are invalid".to_string(),
+                )
+            })?;
+        for (server_name, item) in mcp_servers {
+            if !is_safe_runtime_capability_name(server_name, MAX_REQUIRED_MCP_SERVER_NAME_BYTES) {
+                return Err(AdapterError::Internal(
+                    "Platform Runtime Role MCP restrictions are invalid".to_string(),
+                ));
+            }
+            let server = item
+                .as_table()
+                .filter(|server| server.len() == 2)
+                .ok_or_else(|| {
+                    AdapterError::Internal(
+                        "Platform Runtime Role MCP restrictions are invalid".to_string(),
+                    )
+                })?;
+            if server
+                .get("enabled")
+                .and_then(|item| item.as_value())
+                .and_then(|value| value.as_bool())
+                != Some(true)
+            {
+                return Err(AdapterError::Internal(
+                    "Platform Runtime Role MCP server must be enabled".to_string(),
+                ));
+            }
+            let enabled_tools = server
+                .get("enabled_tools")
+                .and_then(|item| item.as_value())
+                .and_then(|value| value.as_array())
+                .filter(|tools| tools.len() <= MAX_REQUIRED_MCP_TOOLS_PER_SERVER)
+                .ok_or_else(|| {
+                    AdapterError::Internal(
+                        "Platform Runtime Role MCP tool restrictions are invalid".to_string(),
+                    )
+                })?;
+            let mut tool_names = HashSet::new();
+            for tool in enabled_tools {
+                let tool = tool.as_str().filter(|tool| {
+                    is_safe_runtime_capability_name(tool, MAX_REQUIRED_MCP_TOOL_NAME_BYTES)
+                });
+                if tool.is_none() || !tool_names.insert(tool.unwrap()) {
+                    return Err(AdapterError::Internal(
+                        "Platform Runtime Role MCP tool restrictions are invalid".to_string(),
+                    ));
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -324,16 +541,49 @@ pub(crate) fn platform_runtime_role_config_file(definition_id: &str, version: &s
 /// Profile or Project configuration.
 pub(crate) fn governed_runtime_role_config_overrides(
     roles: &[PlatformRuntimeRole],
+    role_spawn_limits: &BTreeMap<String, u32>,
+    required_mcp_servers: &[RequiredMcpServer],
     max_threads: u32,
     verified_host_paths: &HashMap<String, PathBuf>,
 ) -> Result<Value, AdapterError> {
     validate_platform_runtime_roles(roles, max_threads)?;
+    validate_role_spawn_limits(roles, role_spawn_limits)?;
+    validate_required_mcp_servers(required_mcp_servers)?;
     let mut overrides = serde_json::Map::new();
+    overrides.insert("features.apps".to_string(), Value::Bool(false));
     overrides.insert("features.multi_agent_v2".to_string(), Value::Bool(true));
+    overrides.insert("features.plugins".to_string(), Value::Bool(false));
+    overrides.insert("features.shell_tool".to_string(), Value::Bool(false));
+    overrides.insert(
+        "agents.allowed_roles".to_string(),
+        Value::Array(
+            roles
+                .iter()
+                .map(|role| Value::String(role.name.clone()))
+                .collect(),
+        ),
+    );
+    for (role, limit) in role_spawn_limits {
+        overrides.insert(
+            format!("agents.role_spawn_limits.{role}"),
+            Value::from(*limit),
+        );
+    }
     overrides.insert(
         "agents.max_concurrent_threads_per_session".to_string(),
         Value::from(max_threads),
     );
+    for server in required_mcp_servers {
+        for capability_root_id in &server.capability_root_ids {
+            overrides.insert(
+                format!(
+                    "plugins.{capability_root_id}.mcp_servers.{}.enabled",
+                    server.name
+                ),
+                Value::Bool(false),
+            );
+        }
+    }
     for role in roles {
         let path = verified_host_paths
             .get(&role.name)
@@ -386,9 +636,11 @@ fn is_platform_runtime_role_name(value: &str) -> bool {
         && !matches!(
             value,
             "default"
+                | "allowed_roles"
                 | "enabled"
                 | "max_concurrent_threads_per_session"
                 | "max_threads"
+                | "role_spawn_limits"
                 | "max_depth"
                 | "default_subagent_model"
                 | "default_subagent_reasoning_effort"
@@ -398,6 +650,14 @@ fn is_platform_runtime_role_name(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
+fn is_safe_runtime_capability_name(value: &str, maximum_bytes: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= maximum_bytes
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+        })
 }
 
 #[derive(Debug, Clone)]

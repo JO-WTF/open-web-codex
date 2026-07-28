@@ -117,7 +117,9 @@
       },
       "limits": {
         "maxAgentThreads": 8,
-        "maxAgentDepth": 3
+        "maxAgentDepth": 3,
+        "exactRoleAllowlist": true,
+        "exactRoleInstanceLimits": true
       }
     },
     {

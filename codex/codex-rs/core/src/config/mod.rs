@@ -43,6 +43,7 @@ use codex_config::types::MemoriesConfig;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_config::types::Notice;
 use codex_config::types::OAuthCredentialsStoreMode;
+use codex_config::types::PluginConfig;
 use codex_config::types::ResumeCwdMode;
 use codex_config::types::SessionPickerViewMode;
 use codex_config::types::ToolSuggestConfig;
@@ -121,6 +122,7 @@ use rmcp::model::UrlElicitationCapability;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::ErrorKind;
@@ -883,6 +885,12 @@ pub struct Config {
     /// User-defined role declarations keyed by role name.
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
 
+    /// Optional exact set of roles available to Agent spawn operations.
+    pub agent_allowed_roles: Option<BTreeSet<String>>,
+
+    /// Optional per-role limits for resident spawned Agent threads.
+    pub agent_role_spawn_limits: BTreeMap<String, usize>,
+
     /// Memories subsystem settings.
     pub memories: MemoriesConfig,
 
@@ -1546,6 +1554,27 @@ impl Config {
         plugin_id: &str,
         mcp_servers: &mut HashMap<String, McpServerConfig>,
     ) {
+        let effective_config = self.config_layer_stack.effective_config();
+        if let Some(plugins) = effective_config.get("plugins") {
+            match plugins.clone().try_into::<HashMap<String, PluginConfig>>() {
+                Ok(plugins) => {
+                    if let Some(plugin) = plugins.get(plugin_id) {
+                        for (server_name, policy) in &plugin.mcp_servers {
+                            if let Some(server) = mcp_servers.get_mut(server_name) {
+                                policy.apply_to(server);
+                            }
+                        }
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        plugin_id,
+                        error = %error,
+                        "failed to apply effective selected-plugin MCP policy"
+                    );
+                }
+            }
+        }
         filter_plugin_mcp_servers_by_requirements(
             plugin_id,
             mcp_servers,
@@ -3540,6 +3569,48 @@ impl Config {
         let agent_roles =
             agent_roles::load_agent_roles(fs, &cfg, &config_layer_stack, &mut startup_warnings)
                 .await?;
+        let agent_allowed_roles = cfg
+            .agents
+            .as_ref()
+            .and_then(|agents| agents.allowed_roles.as_ref())
+            .map(|roles| roles.iter().cloned().collect::<BTreeSet<_>>());
+        if agent_allowed_roles.as_ref().is_some_and(|roles| {
+            roles.is_empty()
+                || roles.len()
+                    != cfg
+                        .agents
+                        .as_ref()
+                        .and_then(|agents| agents.allowed_roles.as_ref())
+                        .map(Vec::len)
+                        .unwrap_or_default()
+                || roles
+                    .iter()
+                    .any(|role| role.trim() != role || role.is_empty() || role.len() > 64)
+        }) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "agents.allowed_roles must contain unique non-empty role names",
+            ));
+        }
+        let agent_role_spawn_limits = cfg
+            .agents
+            .as_ref()
+            .and_then(|agents| agents.role_spawn_limits.clone())
+            .unwrap_or_default();
+        if agent_role_spawn_limits.iter().any(|(role, limit)| {
+            role.trim() != role
+                || role.is_empty()
+                || role.len() > 64
+                || *limit == 0
+                || agent_allowed_roles
+                    .as_ref()
+                    .is_some_and(|allowed| !allowed.contains(role))
+        }) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "agents.role_spawn_limits must use allowed non-empty role names and positive limits",
+            ));
+        }
 
         let openai_base_url = cfg
             .openai_base_url
@@ -3979,6 +4050,8 @@ impl Config {
             agent_default_subagent_reasoning_effort,
             agent_max_depth,
             agent_roles,
+            agent_allowed_roles,
+            agent_role_spawn_limits,
             memories: memories_config,
             agent_interrupt_message_enabled,
             codex_home,

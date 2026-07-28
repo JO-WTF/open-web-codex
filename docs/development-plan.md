@@ -77,15 +77,15 @@ Agent、Skill、MCP 的长期整改顺序统一维护在
 启用 V2 并引用启动前校验的 Role 文件；后续阶段再以类型化 app-server V2 CRUD
 替换这一临时文件边界。
 
-受限 happy path 已经越过“平台骨架”阶段。全新 PostgreSQL 与 Profile 上的真实
-Codex Runtime 运行证明：绑定 `enterprise-supervisor-copilot@1.0.0` 的根 Thread
+受限 happy path 已经越过“平台骨架”阶段。真实 PostgreSQL 与 Profile 上的最新
+Codex Runtime 运行证明：绑定 `enterprise-supervisor-copilot@1.7.0` 的根 Thread
 按顺序创建了 `data_agent` 与 `network_planning_agent` 两个真实子 Thread；前者
 通过只读数据 MCP 产生并验证 `planning-dataset.v1`，后者读取同一 Resource 后再
-调用有界规划 MCP；最新重跑形成十个 ready Task Artifact 和六段式决策报告。浏览器
-重新读取时恢复同一个 Policy、三节点 Agent 树、Artifact 摘要和完整报告，持久事件
-不暴露内部 Resource URI 或宿主机路径。自动化证据共九项，见能力基线和
-Enterprise Supervisor E2E。精确调用与 Artifact 数量取决于有效调查步骤，门禁固定
-的是必需 Schema 的最小集合以及所有已注册 Artifact 必须 ready。
+调用有界规划 MCP；以“分析现有网络并给出建议。”为完整输入的最新重跑形成九个
+ready Task Artifact 和完整决策报告。运行轨迹严格只有 Root、Data、Network 三个
+Thread，37 次 MCP 调用分别归属于 Data/Network 的授权服务，Root 无业务 MCP 或命令
+调用，Run 与 Task 最终均为 completed 且无活动 Turn。精确调用与 Artifact 数量取决于
+有效调查步骤，门禁固定的是必需 Schema 的最小集合以及所有已注册 Artifact 必须 ready。
 
 这不等于 M2 已全部完成。当前主线转向 happy path 没有覆盖的行为：Completed Agent
 follow-up、interrupt、部分失败和审批拒绝后的综合；多层 Agent 历史导航；Artifact

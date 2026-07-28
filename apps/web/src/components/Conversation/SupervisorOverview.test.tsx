@@ -181,6 +181,52 @@ describe("SupervisorOverview", () => {
     expect(screen.getByText("Evaluate the current network plan.")).toBeTruthy();
   });
 
+  it("renders persisted Supervisor and child Agent behavior in sequence", () => {
+    render(
+      <SupervisorOverview
+        taskTitle="Network planning"
+        policy={policy}
+        agents={[rootAgent, dataAgent]}
+        activities={[
+          activity(11, {
+            thread_id: "root-thread",
+            kind: "waiting",
+            status: "waiting",
+            title: "Waiting for Agent updates",
+            detail: "This is a bounded wait, not a stopped task.",
+          }),
+          activity(10, {
+            thread_id: "data-thread",
+            kind: "tool_completed",
+            status: "completed",
+            title: "Completed supply chain data · validate inputs",
+            detail: null,
+          }),
+          activity(12, {
+            thread_id: "root-thread",
+            kind: "waiting",
+            status: "completed",
+            title: "Wait cycle finished",
+            detail: "The Supervisor may start another wait cycle.",
+          }),
+        ]}
+        artifacts={[]}
+      />,
+    );
+
+    const log = screen.getByLabelText("Agent behavior log").querySelector("ol");
+    expect(screen.getByText("Agent behavior log")).toBeTruthy();
+    expect(screen.getAllByText("Root Supervisor")).toHaveLength(3);
+    expect(screen.getByText("Data Analyst")).toBeTruthy();
+    expect(screen.getByText("Waiting for Agent updates")).toBeTruthy();
+    expect(screen.getByText("This is a bounded wait, not a stopped task.")).toBeTruthy();
+    expect(screen.getByText("Wait cycle finished")).toBeTruthy();
+    const logText = log?.textContent ?? "";
+    expect(logText.indexOf("Completed supply chain data")).toBeLessThan(
+      logText.indexOf("Waiting for Agent updates"),
+    );
+  });
+
   it("pins the Supervisor summary above the stream of Agent task executions", () => {
     render(
       <SupervisorOverview
@@ -225,9 +271,9 @@ describe("SupervisorOverview", () => {
     expect(screen.getByText("Policy enterprise-supervisor-copilot · 1.0.0")).toBeTruthy();
     expect(screen.getByRole("article", { name: "Supervisor status" })).toBeTruthy();
     expect(screen.getByText("Optimize the enterprise supply-chain network")).toBeTruthy();
-    expect(screen.getByText(
+    expect(screen.getAllByText(
       "Decomposed the objective and assigned the first specialist.",
-    )).toBeTruthy();
+    )).toHaveLength(2);
     expect(screen.getByText("Agent task stream")).toBeTruthy();
     expect(screen.getAllByText("Network Analyst")).toHaveLength(2);
     expect(screen.getByText("network_planning_agent · Task 1")).toBeTruthy();

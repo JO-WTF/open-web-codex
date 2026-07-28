@@ -43,10 +43,23 @@ async def smoke_data_server(environment: dict[str, str]) -> None:
             await session.initialize()
             tools = await session.list_tools()
             assert {tool.name for tool in tools.tools} == {
+                "list_planning_sources",
                 "inspect_planning_source",
                 "build_planning_dataset",
                 "validate_planning_dataset",
             }
+
+            catalog = await session.call_tool("list_planning_sources", {})
+            assert catalog.isError is not True
+            assert catalog.structuredContent is not None
+            assert catalog.structuredContent["schema_version"] == (
+                "planning_source_catalog.v1"
+            )
+            assert catalog.structuredContent["truncated"] is False
+            assert [
+                source["source_id"]
+                for source in catalog.structuredContent["sources"]
+            ] == ["warehouse-network-fixture"]
 
             inspection = await session.call_tool(
                 "inspect_planning_source",

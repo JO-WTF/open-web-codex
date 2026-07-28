@@ -36,6 +36,13 @@
         "$ref": "#/definitions/AgentRoleToml"
       },
       "properties": {
+        "allowed_roles": {
+          "description": "Optional exact set of Agent roles available to the spawn tool.\n\nWhen unset, configured and built-in roles remain available.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "default_subagent_model": {
           "description": "Default model for spawned subagents when the spawn call does not select one.",
           "type": "string"
@@ -66,6 +73,15 @@
           "description": "Maximum nesting depth for V1 agent threads. Ignored by V2.",
           "format": "int32",
           "type": "integer"
+        },
+        "role_spawn_limits": {
+          "additionalProperties": {
+            "format": "uint",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "description": "Optional maximum number of resident agents for each named role.\n\nRoles omitted from this map remain governed only by the session-wide thread limit.",
+          "type": "object"
         }
       },
       "type": "object"

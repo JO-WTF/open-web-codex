@@ -13,7 +13,7 @@
 ```text
 用户
   ↓
-绑定 enterprise-supervisor-copilot@1.0.0 的 Root Thread
+绑定 enterprise-supervisor-copilot@1.7.0 的 Root Thread
   ├── data_agent Child Thread
   │     └── supply_chain_data MCP
   └── network_planning_agent Child Thread
@@ -75,7 +75,7 @@ Policy，并把不可变 Snapshot 绑定到实际 Root Thread。
 | `greeting_writer` Role | `data_agent` Role |
 | `greeting_reviewer` Role | `network_planning_agent` Role |
 | 短 `Greeting` 消息 | `planning-dataset.v1` Resource |
-| 本地根请求 | `enterprise-supervisor-copilot@1.0.0` |
+| 本地根请求 | `enterprise-supervisor-copilot@1.7.0` |
 | 无企业治理记录 | 两份代码发布的 Agent Definition |
 | 无长期成果 | Task-owned Artifact |
 
@@ -88,10 +88,10 @@ Policy，并把不可变 Snapshot 绑定到实际 Root Thread。
 
 当前分支已经真实验证：
 
-- `enterprise-supervisor-copilot@1.0.0` 由服务端发布、生成不可变 Snapshot，并
+- `enterprise-supervisor-copilot@1.7.0` 由服务端发布、生成不可变 Snapshot，并
   通过正式 `thread/start.developerInstructions` 绑定到 Root Thread；
-- `enterprise-data-agent@1.0.0` 与
-  `enterprise-network-planning-agent@1.0.0` 映射到精确的 `data_agent` 和
+- `enterprise-data-agent@1.6.0` 与
+  `enterprise-network-planning-agent@1.5.0` 映射到精确的 `data_agent` 和
   `network_planning_agent` Runtime Role；
 - Run 启动前会检查 Capability Manifest、multi-agent 开关、并发/深度限制和两个
   Role，不存在时明确失败；
@@ -165,7 +165,7 @@ Supply-chain MCP stdio smoke passed
 
 ```text
 supply_chain_data:
-  inspect → build → validate
+  list sources → inspect → build → validate
 
 supply_chain_planner:
   prepare snapshot → validate
@@ -416,9 +416,9 @@ Prompt 中的“请保持只读”只是工作说明，不能代替这些边界�
 
 已发布 Data Agent Definition 绑定的 Role 指令是：
 
-[`data-agent.md`](../../tools/supply-chain-network-planner/examples/runtime-roles/data-agent.md)
+[`data-agent-v1.1.md`](../../tools/supply-chain-network-planner/examples/runtime-roles/data-agent-v1.1.md)
 
-它要求 Data Agent 按 inspect → build → validate 工作，返回原 `data_ref`、结构化
+它要求 Data Agent 按 list → inspect → build → validate 工作，返回原 `data_ref`、结构化
 结果中的准确 `resource_name`、来源范围、单位、统计和质量限制，并明确禁止它选择
 仓库、运行规划或创建下级 Agent。
 
@@ -524,7 +524,7 @@ Supervisor。
 
 当前发布文件：
 
-[`enterprise-supervisor-copilot-v1.md`](../../apps/web/server/resources/supervisor-policies/enterprise-supervisor-copilot-v1.md)
+[`enterprise-supervisor-copilot-v1.7.md`](../../apps/web/server/resources/supervisor-policies/enterprise-supervisor-copilot-v1.7.md)
 
 它规定：
 
@@ -540,10 +540,13 @@ Thread。Resume 继续使用原 Snapshot，不会因为源文件后来更新就�
 
 ### Agent Definition
 
-当前两份发布文件：
+当前 Policy 引用两份发布文件：
 
-- [`data-agent-v1.json`](../../apps/web/server/resources/agent-definitions/data-agent-v1.json)
-- [`network-planning-agent-v1.json`](../../apps/web/server/resources/agent-definitions/network-planning-agent-v1.json)
+- [`data-agent-v1.6.json`](../../apps/web/server/resources/agent-definitions/data-agent-v1.6.json)
+- [`network-planning-agent-v1.5.json`](../../apps/web/server/resources/agent-definitions/network-planning-agent-v1.5.json)
+
+开发环境不保留旧 Policy 或 Agent Definition 的代码兜底；切换发布版本前应清理旧
+Run、Task 和 Thread 记录，新 Run 只允许选择当前发布版本。
 
 Definition 记录稳定 ID、版本、职责、输入/输出 Artifact 类型、所需 Capability、
 风险和 Runtime Role 引用。
@@ -613,8 +616,9 @@ scripts/smoke-enterprise-supervisor-copilot.sh
 4. 创建精确的 `data_agent` 和 `network_planning_agent`，分别使用脚手架中的 Role
    instructions；
 5. 创建或选择当前仓库的授权 Workspace；
-6. 在 Workspace 菜单点击 **New enterprise supervisor copilot**；
-7. 确认页面显示 `enterprise-supervisor-copilot · 1.0.0` 为 bound；
+6. 在 Workspace 菜单点击 **Start governed supervisor**，再选择
+   **Enterprise Supervisor Copilot**；
+7. 确认页面显示 `enterprise-supervisor-copilot · 1.7.0` 为 bound；
 8. 提交“华东新增仓”请求，并明确使用固定的
    `warehouse-network-fixture`、`network-input.json` 和
    `route-matrix-input.json`。
@@ -872,7 +876,7 @@ tools/supply-chain-network-planner/
 ### Runtime 与治理
 
 - [ ] Profile 中存在精确的 `data_agent` 与 `network_planning_agent`；
-- [ ] Run 绑定 `enterprise-supervisor-copilot@1.0.0`；
+- [ ] Run 绑定 `enterprise-supervisor-copilot@1.7.0`；
 - [ ] 两份 Agent Definition 映射到真实 spawn 使用的 Role；
 - [ ] Root 创建两个拥有独立 Thread ID 的子 Agent；
 - [ ] Network 在计算前读取 Data Agent 返回的同一 Resource；

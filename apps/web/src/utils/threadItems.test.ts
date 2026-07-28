@@ -904,6 +904,34 @@ describe("threadItems", () => {
     }
   });
 
+  it("explains targetless V2 waits instead of rendering an empty output", () => {
+    const waiting = buildConversationItem({
+      type: "collabAgentToolCall",
+      id: "wait-v2-started",
+      tool: "wait",
+      status: "inProgress",
+      senderThreadId: "thread-parent",
+      receiverThreadIds: [],
+      agentsStates: {},
+    });
+    const finished = buildConversationItem({
+      type: "collabAgentToolCall",
+      id: "wait-v2-completed",
+      tool: "wait",
+      status: "completed",
+      senderThreadId: "thread-parent",
+      receiverThreadIds: [],
+      agentsStates: {},
+    });
+
+    expect(waiting?.kind === "tool" ? waiting.output : null).toBe(
+      "Waiting for any Agent update or new input. This is a bounded wait; the Supervisor task is still active.",
+    );
+    expect(finished?.kind === "tool" ? finished.output : null).toBe(
+      "This bounded wait cycle finished. The Supervisor is processing any available update and may start another wait cycle.",
+    );
+  });
+
   it("builds context compaction items", () => {
     const item = buildConversationItem({
       type: "contextCompaction",

@@ -5,7 +5,7 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档状态 | 当前短期执行基线 |
-| 更新日期 | 2026-07-27 |
+| 更新日期 | 2026-07-28 |
 | 对应阶段 | M2 Enterprise Supervisor Copilot |
 | 实施范围 | 单用户入口、单 Profile、单主 Profile Host、一个真实企业案例 |
 | 第一优先级 | 先形成可使用的多 Agent Copilot 功能闭环 |
@@ -121,12 +121,12 @@ sequenceDiagram
 
 | 领域 | 当前已有 | 当前缺口 | 短期判断 |
 | --- | --- | --- | --- |
-| Codex 多 Agent | 真实根 Thread 已按顺序 spawn/wait 两个精确 Role 子 Thread，父子身份、AgentPath、状态和 MCP 活动可观察 | follow-up、interrupt、深层树和部分失败尚未进入真实案例矩阵 | 继续复用 Runtime，只补行为证据 |
+| Codex 多 Agent | `1.7.0` 真实根 Thread 已按顺序 spawn/wait 两个白名单 Role 子 Thread；Runtime 的模型可见目录和执行入口共同拒绝白名单外角色，并原子限制每个必需 Role 仅一个驻留实例；子 Role 配置显式关闭 V2 与继续委派 | follow-up、interrupt、深层树和部分失败尚未进入真实案例矩阵 | 继续复用 Runtime，只补行为证据 |
 | Thread 启动 | Adapter 使用正式 `thread/start` 传入授权 `cwd`、审批策略、历史模式和已绑定 Policy；真实企业 Thread 启动已通过 | shared Workspace、真实 multi-`cwd` 和多 Profile 路由仍缺证据 | 不新增 Supervisor Runtime |
 | 事件与 Web | Server 把根/子 Thread 事件投影为可重建 DTO；真实刷新与 Server/Profile Host 重启恢复同一 Policy、三节点 Agent 树和最终报告 | 多层历史导航、乱序/重复矩阵和完成后追加任务仍不完整 | 扩展投影与 DTO，不建立第二套 Agent 状态机 |
-| Runtime Role | 两个企业 Definition/version 显式绑定经评审的 Runtime 指令 hash，并由单一指令源确定性生成 TOML；仅已绑定 Enterprise Supervisor Policy 的 worker 会在根创建或继承 fork 前确认 `agents.multi_agent@1.0.0`，使用 Profile Host 受管写入和无跟随 hash 重验物化精确 Role 文件，并只在该次 `thread/start`/`thread/fork` request config 中启用 `features.multi_agent_v2`、设置 V2 并发限制和注入 Role | Runtime 原生 Agent CRUD、通用发布、治理视图和多 Profile Catalog 仍未完成 | 新企业 Thread 直接依赖当前 V2，不引入 V1 兼容协议；普通 Root 不获得 Policy、企业 Role 或 V2 覆盖；Role 不注册进 Profile 全局配置，Platform 也不持久化 Runtime 配置投影 |
-| Artifact | 已有 Task 级稳定身份、Schema、状态、内容、生产者 provenance 与同 Task 授权；真实案例完成跨子 Thread Resource 交接，最新重跑产生十个 ready Artifact | 替代、失效、删除、保留、跨 Run 复用和内容打开体验未完成 | 完成生命周期，不退回 Run/Thread 所有权 |
-| MCP | 真实案例通过 Runtime discovery 使用只读 `supply_chain_data` 与有界 `supply_chain_planner`；最新重跑完成 33 次数据、读取、计算和验证调用 | 超限、超时、取消、高成本拒绝和生产数据连接仍缺系统证据 | 沿现有发现与审批路径补非 happy path |
+| Runtime Role | Data `1.6.0` 与 Network `1.5.0` 显式绑定经评审的 Runtime 指令 hash，并从类型化声明确定性生成 shell、普通扩展、V2/继续委派禁用以及精确 MCP allowlist；根 request config 只选择声明的 capability root，并提供 exact `agents.allowed_roles` 与 `agents.role_spawn_limits` | Runtime 原生 Agent CRUD、通用发布、治理视图和多 Profile Catalog 仍未完成 | 新企业 Thread 直接依赖当前 V2，不引入历史版本兜底；启动前后均失败关闭；普通 Root 不获得 Policy、企业 Role 或 V2 覆盖 |
+| Artifact | 已有 Task 级稳定身份、Schema、状态、内容、生产者 provenance 与同 Task 授权；最新真实案例完成跨子 Thread Resource 交接并产生九个 ready Artifact | 替代、失效、删除、保留、跨 Run 复用和内容打开体验未完成 | 完成生命周期，不退回 Run/Thread 所有权 |
+| MCP | 最新真实案例通过 Runtime discovery 完成受限的数据、Resource 读取、计算和验证调用；Data 不使用 planner 业务操作，Network 不使用 Data 业务操作，Root 无 MCP/命令且没有 `map_utils` 泄漏 | 超限、超时、取消、高成本拒绝和生产数据连接仍缺系统证据 | 沿现有发现与审批路径补非 happy path |
 | Workspace | Workspace 已独立于 Thread/Run，Adapter 会校验 Runner root | 现有根登记、共享并发和真实 multi-`cwd` 证据不完整 | 第一版限定一个已授权 managed Workspace |
 | Profile | 单 Profile Host、Provider、Secret 和 Runtime status 已有主体实现 | 多 Profile Router 和完整重启矩阵未完成 | 明确限定单 Profile，不提前建设多用户路由 |
 
@@ -484,22 +484,26 @@ Prompt 中的角色说明。
 
 #### 工作项
 
-- [x] 在 Workspace 菜单提供独立的 Enterprise Supervisor Copilot 入口，并提交
-  精确的 Policy ID 与版本；
+- [x] 在 Workspace 菜单提供目录驱动的 Governed Supervisor 入口，由用户从服务端
+  发布的 Policy 列表选择后提交精确 ID 与版本；供应链 Policy 只是当前可选模板，
+  浏览器不写死其 ID、版本或执行顺序；
 - [x] 根 Thread 页面展示当前 Supervisor Policy 名称和版本；
 - [x] 在现有 Thread 体验中展示 Runtime 投影的根 Supervisor、子 Agent、角色和
   当前可观察状态；
 - [x] 从持久 Runtime Event 建立可重建的 Agent 执行投影：Supervisor 摘要固定置顶，
   展示主任务、运行状态、当前行为和最新进展；每个真实子 Agent Turn 持久化为独立
   任务节点，完成后不再被后续事件改写，同一 Agent 再次启动 Turn 时按序创建新节点，
-  不同 Agent 可并行保持活动状态；协作 Prompt 仅作为任务摘要，工具参数、结果、
-  内部路径和推理内容不进入浏览器 DTO；
+  不同 Agent 可并行保持活动状态；同一持久事件源还生成按序的完整行为日志，显示
+  执行者、动作类型、状态、时间和有界公开详情；协作 Prompt 仅作为任务摘要，工具
+  参数、结果、内部路径和推理内容不进入浏览器 DTO；
 - [x] Agent 与 Files 复用同一右侧栏并以标签切换；两个标签始终可选，没有 Agent
   时显示空态；顶部 Agent 快捷入口在真实子 Agent 出现后启用，Files 可见时的
   Agent 更新只显示未读提示，不抢占当前页面；
 - [ ] 将两层列表扩展为可进入历史的多层 Agent 树；
-- [x] collab Tool Call 保留人类可读动作；当前案例已显示创建、等待与协作进度，
-  追问、中断和继续待非 happy path 验证；
+- [x] collab Tool Call 保留人类可读动作；无目标的 V2 `wait_agent` 明确显示为等待
+  任一 Agent 更新或新输入的有界等待，开始与结束都进入持久行为日志，普通 Thread
+  的实时和恢复视图不再显示空输出；当前案例已显示创建、等待与协作进度，追问、
+  中断和继续待非 happy path 验证；
 - [ ] 子 Agent 详情可以进入真实 Thread 历史；
 - [ ] 等待审批、审批拒绝、部分失败和完成状态有清楚表达；
 - [x] Artifact 摘要卡片显示类型、生产者、状态和大小；
@@ -678,7 +682,8 @@ managed Workspace 上重建；运行时证据文件由执行环境指定，不�
 - [x] Slice 2：Task 级持久 Artifact 与跨子 Thread 交接 happy path；
 - [-] Slice 3：Supervisor Policy 与两个 Agent Definition；
 - [-] Slice 4：只读数据 MCP 与有界规划 MCP happy path 已通过，失败预算待补；
-- [-] Slice 5：Policy、Agent、Artifact 摘要和最终报告可见，深层历史与内容操作待补；
+- [-] Slice 5：Policy、Agent、完整持久行为日志、Artifact 摘要和最终报告可见，
+  深层历史与内容操作待补；
 - [-] Slice 6：真实企业 happy path 9/9；至少两个业务非 happy path 待加入证据包。
 
 ### 并行可信工作

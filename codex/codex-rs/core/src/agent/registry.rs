@@ -28,6 +28,7 @@ pub(crate) struct AgentRegistry {
 #[derive(Default)]
 struct ActiveAgents {
     agent_tree: HashMap<String, AgentMetadata>,
+    role_spawn_counts: HashMap<String, usize>,
     used_agent_nicknames: HashSet<String>,
     nickname_reset_count: usize,
 }
@@ -80,6 +81,14 @@ impl AgentRegistry {
         self: &Arc<Self>,
         max_threads: Option<usize>,
     ) -> Result<SpawnReservation> {
+        self.reserve_spawn_slot_for_role(max_threads, None)
+    }
+
+    pub(crate) fn reserve_spawn_slot_for_role(
+        self: &Arc<Self>,
+        max_threads: Option<usize>,
+        role_limit: Option<(&str, usize)>,
+    ) -> Result<SpawnReservation> {
         if let Some(max_threads) = max_threads {
             if !self.try_increment_spawned(max_threads) {
                 return Err(CodexErr::AgentLimitReached { max_threads });
@@ -87,11 +96,35 @@ impl AgentRegistry {
         } else {
             self.total_count.fetch_add(1, Ordering::AcqRel);
         }
+        let reserved_agent_role = if let Some((role, max_instances)) = role_limit {
+            let mut active_agents = self
+                .active_agents
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let current = active_agents
+                .role_spawn_counts
+                .get(role)
+                .copied()
+                .unwrap_or_default();
+            if current >= max_instances {
+                self.total_count.fetch_sub(1, Ordering::AcqRel);
+                return Err(CodexErr::UnsupportedOperation(format!(
+                    "agent role `{role}` instance limit reached ({max_instances})"
+                )));
+            }
+            active_agents
+                .role_spawn_counts
+                .insert(role.to_string(), current + 1);
+            Some(role.to_string())
+        } else {
+            None
+        };
         Ok(SpawnReservation {
             state: Arc::clone(self),
             active: true,
             reserved_agent_nickname: None,
             reserved_agent_path: None,
+            reserved_agent_role,
         })
     }
 
@@ -109,6 +142,9 @@ impl AgentRegistry {
             removed_key
                 .and_then(|key| active_agents.agent_tree.remove(key.as_str()))
                 .is_some_and(|metadata| {
+                    if let Some(role) = metadata.agent_role.as_deref() {
+                        decrement_role_spawn_count(&mut active_agents.role_spawn_counts, role);
+                    }
                     !metadata.agent_path.as_ref().is_some_and(AgentPath::is_root)
                 })
         };
@@ -281,6 +317,7 @@ pub(crate) struct SpawnReservation {
     active: bool,
     reserved_agent_nickname: Option<String>,
     reserved_agent_path: Option<AgentPath>,
+    reserved_agent_role: Option<String>,
 }
 
 impl SpawnReservation {
@@ -308,6 +345,7 @@ impl SpawnReservation {
     pub(crate) fn commit(mut self, agent_metadata: AgentMetadata) {
         self.reserved_agent_nickname = None;
         self.reserved_agent_path = None;
+        self.reserved_agent_role = None;
         self.state.register_spawned_thread(agent_metadata);
         self.active = false;
     }
@@ -319,8 +357,26 @@ impl Drop for SpawnReservation {
             if let Some(agent_path) = self.reserved_agent_path.take() {
                 self.state.release_reserved_agent_path(&agent_path);
             }
+            if let Some(role) = self.reserved_agent_role.take() {
+                let mut active_agents = self
+                    .state
+                    .active_agents
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                decrement_role_spawn_count(&mut active_agents.role_spawn_counts, &role);
+            }
             self.state.total_count.fetch_sub(1, Ordering::AcqRel);
         }
+    }
+}
+
+fn decrement_role_spawn_count(counts: &mut HashMap<String, usize>, role: &str) {
+    let Some(count) = counts.get_mut(role) else {
+        return;
+    };
+    *count = count.saturating_sub(1);
+    if *count == 0 {
+        counts.remove(role);
     }
 }
 

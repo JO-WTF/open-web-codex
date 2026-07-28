@@ -62,6 +62,10 @@ Environment:
   OPEN_WEB_CODEX_MAPS_MCP_VENV       Shared maps MCP Python environment
                                      (default: $OPEN_WEB_CODEX_DATA_DIR/tool-envs/maps-mcp)
   OPEN_WEB_CODEX_SKIP_MAPS_MCP_SETUP 1 to skip startup preparation of maps MCP
+  OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV
+                                     Shared supply-chain MCP Python environment
+  OPEN_WEB_CODEX_SKIP_SUPPLY_CHAIN_MCP_SETUP
+                                     1 to skip supply-chain MCP preparation
   OPEN_WEB_CODEX_BIND_HOST           Bind host
   OPEN_WEB_CODEX_SERVER_PORT         HTTP/WebSocket port
   OPEN_WEB_CODEX_SKIP_BUILD          1 to reuse build outputs
@@ -210,6 +214,7 @@ case "$database_url" in postgres://*|postgresql://*) ;; *) error "database URL m
 
 mkdir -p "$run_dir" "$log_dir" "$profile_home" "$runner_root"
 maps_mcp_venv="${OPEN_WEB_CODEX_MAPS_MCP_VENV:-$data_dir/tool-envs/maps-mcp}"
+supply_chain_mcp_venv="${OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV:-$data_dir/tool-envs/supply-chain-network-planner}"
 if [[ "$codex_mode" == "real" && -z "${OPEN_WEB_CODEX_MASTER_KEY:-}" ]]; then
   if [[ ! -f "$master_key_file" ]]; then
     command -v openssl >/dev/null 2>&1 || { error "openssl is required to create the local Secret Store key"; exit 1; }
@@ -265,6 +270,11 @@ if [[ "$codex_mode" == "real" ]]; then
       OPEN_WEB_CODEX_LOG_DIR="$log_dir" \
       "$script_dir/setup-maps-mcp-env.sh" >/dev/null
   fi
+  if [[ "${OPEN_WEB_CODEX_SKIP_SUPPLY_CHAIN_MCP_SETUP:-0}" != "1" ]]; then
+    OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV="$supply_chain_mcp_venv" \
+      OPEN_WEB_CODEX_LOG_DIR="$log_dir" \
+      "$script_dir/setup-supply-chain-mcp-env.sh" >/dev/null
+  fi
 fi
 
 server_command=(
@@ -296,6 +306,7 @@ if [[ "$codex_mode" == "real" ]]; then
   export CODEX_BIN="$codex_bin"
   export OPEN_WEB_CODEX_MAPS_MCP_VENV="$maps_mcp_venv"
   export MAPS_MCP_VENV="$maps_mcp_venv"
+  export OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV="$supply_chain_mcp_venv"
   export OPEN_WEB_CODEX_LOG_DIR="$log_dir"
 else
   unset CODEX_HOME CODEX_BIN

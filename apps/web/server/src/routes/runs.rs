@@ -43,7 +43,7 @@ pub async fn start_run(
     let supervisor_policy = req
         .supervisor_policy
         .as_ref()
-        .map(supervisor_policy::resolve)
+        .map(supervisor_policy::resolve_for_new_run)
         .transpose()
         .map_err(supervisor_policy_error)?
         .map(|policy| policy.snapshot);

@@ -1,6 +1,7 @@
 use super::*;
 use crate::common::Reasoning;
 use crate::common::ResponsesApiRequest;
+use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
@@ -39,6 +40,23 @@ fn developer_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    }
+}
+
+fn agent_message(header: &str, payload: &str) -> ResponseItem {
+    ResponseItem::AgentMessage {
+        id: None,
+        author: "/root".to_string(),
+        recipient: "/root/worker".to_string(),
+        content: vec![
+            AgentMessageInputContent::InputText {
+                text: header.to_string(),
+            },
+            AgentMessageInputContent::EncryptedContent {
+                encrypted_content: payload.to_string(),
+            },
+        ],
         internal_chat_message_metadata_passthrough: None,
     }
 }
@@ -120,6 +138,25 @@ fn consecutive_same_role_text_messages_are_merged() {
 fn assistant_then_user_keeps_separate_messages() {
     let messages = responses_input_to_chat_messages(&[assistant_msg("hi"), user_msg("bye")], "");
     assert_eq!(messages.len(), 2);
+}
+
+#[test]
+fn agent_message_payload_is_preserved_for_chat_provider() {
+    let messages = responses_input_to_chat_messages(
+        &[agent_message(
+            "Message Type: NEW_TASK\nPayload:",
+            "analyze resource://dataset/1",
+        )],
+        "",
+    );
+
+    assert_eq!(
+        messages,
+        vec![ChatMessage::Text {
+            role: "assistant".to_string(),
+            content: "Message Type: NEW_TASK\nPayload:\nanalyze resource://dataset/1".to_string(),
+        }]
+    );
 }
 
 #[test]

@@ -94,6 +94,8 @@ impl RunStartPreflight for SupervisorRuntimePreflight {
         Ok(ThreadStartMode::GovernedSupervisor {
             developer_instructions: policy.snapshot.developer_instructions,
             roles: policy.required_runtime_roles,
+            role_spawn_limits: policy.role_spawn_limits,
+            required_mcp_servers: policy.required_mcp_servers,
             max_threads: GOVERNED_MAX_AGENT_THREADS,
         })
     }

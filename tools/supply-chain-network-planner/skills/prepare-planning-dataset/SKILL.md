@@ -10,17 +10,20 @@ Read [planning-contracts.md](../../references/planning-contracts.md) before publ
 
 ## Workflow
 
-1. Confirm the requested planning period, demand unit, service promise, and authorized
+1. If the policy has not already bound an authorized source ID, call
+   `supply_chain_data.list_planning_sources` and select only from its bounded catalog.
+   Do not inspect plugin directories, configuration files, or source-data paths.
+2. Confirm the requested planning period, demand unit, service promise, and authorized
    source ID. Never ask for organization IDs, Profile IDs, credentials, arbitrary SQL,
    filesystem paths, or write access.
-2. Call `supply_chain_data.inspect_planning_source`. Review source timestamp, date range,
+3. Call `supply_chain_data.inspect_planning_source`. Review source timestamp, date range,
    row count, demand units, node count, facility count, blocking errors, and warnings.
-3. If the source is appropriate, call `supply_chain_data.build_planning_dataset`. This
+4. If the source is appropriate, call `supply_chain_data.build_planning_dataset`. This
    reads the bound source and writes only an immutable Profile-scoped MCP Resource; it
    never modifies source data.
-4. Call `supply_chain_data.validate_planning_dataset` on the returned `data_ref`.
+5. Call `supply_chain_data.validate_planning_dataset` on the returned `data_ref`.
    Do not hand off a dataset with validation errors as decision-ready.
-5. Return the unchanged `data_ref`, bounded summary, demand distribution, promotion
+6. Return the unchanged `data_ref`, bounded summary, demand distribution, promotion
    share, observed delivery baseline, missing observations, source range, units, and
    material quality limitations.
 

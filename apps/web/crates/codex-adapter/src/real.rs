@@ -15,12 +15,14 @@ use tokio::sync::RwLock;
 
 use crate::{
     governed_runtime_role_config_overrides, validate_platform_runtime_role_files,
-    validate_platform_runtime_roles, AdapterError, AuthorizedWorkspace, CanceledProfileLogin,
-    CodexAdapter, HealthStatus, PlatformRuntimeRole, ProfileLoginStatus, ProfileMutation,
-    ProfileQuery, ReviewTarget, StartedProfileLogin, StartedThread, ThreadStartMode, TurnOptions,
+    validate_platform_runtime_roles, validate_required_mcp_servers, validate_role_spawn_limits,
+    AdapterError, AuthorizedWorkspace, CanceledProfileLogin, CodexAdapter, HealthStatus,
+    PlatformRuntimeRole, ProfileLoginStatus, ProfileMutation, ProfileQuery, RequiredMcpServer,
+    ReviewTarget, StartedProfileLogin, StartedThread, ThreadStartMode, TurnOptions,
 };
 
 const MAX_DEVELOPER_INSTRUCTIONS_BYTES: usize = 16 * 1024;
+const MAX_MCP_STATUS_PAGES: usize = 100;
 
 fn thread_start_params(
     workspace_root: &str,
@@ -33,7 +35,7 @@ fn thread_start_params(
         "historyMode": "paginated",
     });
     apply_thread_start_mode(&mut params, mode, governed_config)?;
-    add_selected_capability_roots(&mut params, Path::new(workspace_root));
+    add_selected_capability_roots(&mut params, Path::new(workspace_root), mode)?;
     Ok(params)
 }
 
@@ -49,6 +51,7 @@ fn thread_fork_params(
         "approvalPolicy": "on-request",
     });
     apply_thread_start_mode(&mut params, mode, governed_config)?;
+    add_selected_capability_roots(&mut params, Path::new(target_root), mode)?;
     Ok(params)
 }
 fn apply_thread_start_mode(
@@ -68,11 +71,15 @@ fn apply_thread_start_mode(
             ThreadStartMode::GovernedSupervisor {
                 developer_instructions,
                 roles,
+                role_spawn_limits,
+                required_mcp_servers,
                 max_threads,
             },
             Some(config),
         ) => {
             validate_platform_runtime_roles(roles, *max_threads)?;
+            validate_role_spawn_limits(roles, role_spawn_limits)?;
+            validate_required_mcp_servers(required_mcp_servers)?;
             let instructions = developer_instructions.trim();
             if instructions.is_empty() || instructions.len() > MAX_DEVELOPER_INSTRUCTIONS_BYTES {
                 return Err(AdapterError::Internal(
@@ -253,13 +260,127 @@ impl RealCodexAdapter {
         match mode {
             ThreadStartMode::Standard => Ok(None),
             ThreadStartMode::GovernedSupervisor {
-                roles, max_threads, ..
+                roles,
+                role_spawn_limits,
+                required_mcp_servers,
+                max_threads,
+                ..
             } => {
                 let paths = self.verified_platform_runtime_role_paths(roles, *max_threads)?;
-                governed_runtime_role_config_overrides(roles, *max_threads, &paths).map(Some)
+                governed_runtime_role_config_overrides(
+                    roles,
+                    role_spawn_limits,
+                    required_mcp_servers,
+                    *max_threads,
+                    &paths,
+                )
+                .map(Some)
             }
         }
     }
+
+    async fn read_mcp_inventory(
+        &self,
+        thread_id: Option<&str>,
+    ) -> Result<HashMap<String, HashSet<String>>, AdapterError> {
+        let mut inventory = HashMap::<String, HashSet<String>>::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..MAX_MCP_STATUS_PAGES {
+            let response = self
+                .host
+                .request(
+                    "mcpServerStatus/list",
+                    json!({
+                        "threadId": thread_id,
+                        "cursor": cursor,
+                        "limit": 100,
+                        "detail": "toolsAndAuthOnly",
+                    }),
+                )
+                .await
+                .map_err(|error| {
+                    tracing::warn!(
+                        thread_id = thread_id.unwrap_or("profile"),
+                        error = %error,
+                        "governed Runtime MCP inventory request failed"
+                    );
+                    governed_mcp_unavailable("Runtime MCP inventory could not be read")
+                })?;
+            let next_cursor =
+                merge_mcp_status_page(&response, &mut inventory).map_err(|error| {
+                    tracing::warn!(
+                        thread_id = thread_id.unwrap_or("profile"),
+                        error = %error,
+                        "governed Runtime MCP inventory response was invalid"
+                    );
+                    governed_mcp_unavailable("Runtime MCP inventory was invalid")
+                })?;
+            if next_cursor.is_none() {
+                return Ok(inventory);
+            }
+            if next_cursor == cursor {
+                return Err(governed_mcp_unavailable(
+                    "Runtime MCP inventory cursor did not advance",
+                ));
+            }
+            cursor = next_cursor;
+        }
+        Err(governed_mcp_unavailable(
+            "Runtime MCP inventory exceeded the bounded page limit",
+        ))
+    }
+
+    async fn require_governed_root_isolation(
+        &self,
+        thread_id: &str,
+        mode: &ThreadStartMode,
+    ) -> Result<(), AdapterError> {
+        let ThreadStartMode::GovernedSupervisor {
+            required_mcp_servers,
+            ..
+        } = mode
+        else {
+            return Ok(());
+        };
+        validate_required_mcp_servers(required_mcp_servers)?;
+        let inventory = self.read_mcp_inventory(Some(thread_id)).await?;
+        let exposed = exposed_mcp_capabilities(required_mcp_servers, &inventory);
+        if exposed.is_empty() {
+            return Ok(());
+        }
+        tracing::warn!(
+            thread_id,
+            exposed = ?exposed,
+            "governed root Runtime Thread retained business MCP capabilities"
+        );
+        Err(governed_mcp_unavailable(&format!(
+            "root Thread exposes {}",
+            exposed.join(", ")
+        )))
+    }
+
+    async fn archive_rejected_governed_thread(
+        &self,
+        thread_id: &str,
+        result: Result<(), AdapterError>,
+    ) -> Result<(), AdapterError> {
+        if let Err(error) = result {
+            if let Err(archive_error) = self
+                .host
+                .request("thread/archive", json!({ "threadId": thread_id }))
+                .await
+            {
+                tracing::warn!(
+                    thread_id,
+                    error = %archive_error,
+                    "failed to archive rejected governed Runtime Thread"
+                );
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
     async fn start_thread_in_workspace(
         &self,
         workspace: &AuthorizedWorkspace,
@@ -278,18 +399,20 @@ impl RealCodexAdapter {
             .and_then(Value::as_str)
             .ok_or_else(|| {
                 AdapterError::Rpc("thread/start response omitted thread.id".to_string())
-            })?;
+            })?
+            .to_string();
+        let isolation = self.require_governed_root_isolation(&thread_id, mode).await;
+        self.archive_rejected_governed_thread(&thread_id, isolation)
+            .await?;
         self.thread_workspaces
             .write()
             .await
-            .insert(thread_id.to_string(), workspace.clone());
+            .insert(thread_id.clone(), workspace.clone());
         self.thread_history_modes
             .write()
             .await
-            .insert(thread_id.to_string(), true);
-        Ok(StartedThread {
-            thread_id: thread_id.to_string(),
-        })
+            .insert(thread_id.clone(), true);
+        Ok(StartedThread { thread_id })
     }
 
     async fn ensure_thread_bound(
@@ -712,6 +835,11 @@ impl CodexAdapter for RealCodexAdapter {
             .and_then(Value::as_str)
             .ok_or_else(|| AdapterError::Rpc("thread/fork response omitted thread.id".to_string()))?
             .to_string();
+        let isolation = self
+            .require_governed_root_isolation(&forked_thread_id, mode)
+            .await;
+        self.archive_rejected_governed_thread(&forked_thread_id, isolation)
+            .await?;
         self.thread_workspaces
             .write()
             .await
@@ -1493,6 +1621,60 @@ impl CodexAdapter for RealCodexAdapter {
     }
 }
 
+fn governed_mcp_unavailable(reason: &str) -> AdapterError {
+    AdapterError::CapabilityUnavailable(reason.to_string())
+}
+
+fn merge_mcp_status_page(
+    response: &Value,
+    inventory: &mut HashMap<String, HashSet<String>>,
+) -> Result<Option<String>, AdapterError> {
+    let data = response
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or_else(|| AdapterError::Rpc("mcpServerStatus/list omitted data".to_string()))?;
+    for server in data {
+        let name = server.get("name").and_then(Value::as_str).ok_or_else(|| {
+            AdapterError::Rpc("mcpServerStatus/list entry omitted name".to_string())
+        })?;
+        let tools = server
+            .get("tools")
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                AdapterError::Rpc("mcpServerStatus/list entry omitted tools".to_string())
+            })?;
+        inventory
+            .entry(name.to_string())
+            .or_default()
+            .extend(tools.keys().cloned());
+    }
+    match response.get("nextCursor") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(cursor)) if !cursor.is_empty() => Ok(Some(cursor.clone())),
+        Some(_) => Err(AdapterError::Rpc(
+            "mcpServerStatus/list returned an invalid cursor".to_string(),
+        )),
+    }
+}
+
+fn exposed_mcp_capabilities(
+    restricted_servers: &[RequiredMcpServer],
+    inventory: &HashMap<String, HashSet<String>>,
+) -> Vec<String> {
+    let mut exposed = Vec::new();
+    for server in restricted_servers {
+        let Some(tools) = inventory.get(&server.name) else {
+            continue;
+        };
+        for tool in &server.tools {
+            if tools.contains(tool) {
+                exposed.push(format!("{}.{}", server.name, tool));
+            }
+        }
+    }
+    exposed
+}
+
 impl RealCodexAdapter {
     async fn inherit_child_thread_workspace(&self, message: &Value) -> Result<(), AdapterError> {
         let Some(child_thread_id) = message_thread_id(message) else {
@@ -1593,20 +1775,57 @@ fn message_workspace_id(message: &Value) -> Option<&str> {
 const CAPABILITY_ROOTS_ENV: &str = "OPEN_WEB_CODEX_CAPABILITY_ROOTS";
 const WORKSPACE_ENVIRONMENT_ID: &str = "local";
 
-fn add_selected_capability_roots(params: &mut Value, workspace_root: &Path) {
+fn add_selected_capability_roots(
+    params: &mut Value,
+    workspace_root: &Path,
+    mode: &ThreadStartMode,
+) -> Result<(), AdapterError> {
     let Ok(process_cwd) = std::env::current_dir() else {
-        return;
+        return Err(AdapterError::Internal(
+            "current process directory is unavailable".to_string(),
+        ));
     };
     let env_value = std::env::var_os(CAPABILITY_ROOTS_ENV);
-    let selected = selected_capability_roots_json(
+    let mut selected = selected_capability_roots_json(
         workspace_root,
         &process_cwd,
         source_repo_root(),
         env_value.as_ref().map(std::ffi::OsString::as_os_str),
     );
+    if let ThreadStartMode::GovernedSupervisor {
+        required_mcp_servers,
+        ..
+    } = mode
+    {
+        let required_root_ids = required_mcp_servers
+            .iter()
+            .flat_map(|server| server.capability_root_ids.iter())
+            .collect::<HashSet<_>>();
+        selected.retain(|root| {
+            root.get("id").and_then(Value::as_str).is_some_and(|id| {
+                required_root_ids
+                    .iter()
+                    .any(|required| required.as_str() == id)
+            })
+        });
+        let selected_root_ids = selected
+            .iter()
+            .filter_map(|root| root.get("id").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        if selected_root_ids.len() != required_root_ids.len()
+            || required_root_ids
+                .iter()
+                .any(|required| !selected_root_ids.contains(&required.as_str()))
+        {
+            return Err(governed_mcp_unavailable(
+                "a required capability root is unavailable or ambiguous",
+            ));
+        }
+    }
     if !selected.is_empty() {
         params["selectedCapabilityRoots"] = Value::Array(selected);
     }
+    Ok(())
 }
 
 fn selected_capability_roots_json(
@@ -1798,22 +2017,27 @@ mod tests {
     use super::{
         agent_core_batch_write_params, app_server_event_frame, codex_bubblewrap_is_unavailable,
         codex_sandbox_disabled_by_environment, discover_selected_capability_root_paths,
-        is_authorized_workspace_root, login_completion, message_parent_thread_id,
-        message_thread_id, selected_capability_root_id, selected_capability_roots_json,
-        thread_fork_params, thread_start_params, turn_sandbox_policy,
+        exposed_mcp_capabilities, is_authorized_workspace_root, login_completion,
+        merge_mcp_status_page, message_parent_thread_id, message_thread_id,
+        selected_capability_root_id, selected_capability_roots_json, thread_fork_params,
+        thread_start_params, turn_sandbox_policy,
     };
     use crate::{
         governed_runtime_role_config_overrides, platform_runtime_role_config_file,
-        validate_platform_runtime_roles, PlatformRuntimeRole, ThreadStartMode,
+        validate_platform_runtime_roles, PlatformRuntimeRole, RequiredMcpServer, ThreadStartMode,
     };
     use serde_json::{json, Value};
     use sha2::{Digest, Sha256};
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::path::{Path, PathBuf};
 
     fn platform_runtime_role() -> PlatformRuntimeRole {
-        let config_toml =
-            "developer_instructions = '''\nUse only the governed planning tools.\n'''\n";
+        let config_toml = "developer_instructions = '''\nUse only the governed planning tools.\n'''\n\
+            \n[agents]\nenabled = false\n\
+            \n[features]\napps = false\nmulti_agent_v2 = false\nplugins = false\nshell_tool = false\n\
+            \n[plugins.local-supply-chain-network-planner]\nenabled = true\n\
+            \n[plugins.local-supply-chain-network-planner.mcp_servers.supply_chain_data]\n\
+            enabled = true\nenabled_tools = [\"inspect_planning_source\"]\n";
         PlatformRuntimeRole {
             definition_id: "data-agent".to_string(),
             version: "1.0.0".to_string(),
@@ -1832,6 +2056,12 @@ mod tests {
         ThreadStartMode::GovernedSupervisor {
             developer_instructions: developer_instructions.to_string(),
             roles: vec![role],
+            role_spawn_limits: [("data_agent".to_string(), 1)].into_iter().collect(),
+            required_mcp_servers: vec![RequiredMcpServer {
+                name: "supply_chain_data".to_string(),
+                tools: vec!["inspect_planning_source".to_string()],
+                capability_root_ids: vec!["local-supply-chain-network-planner".to_string()],
+            }],
             max_threads: 2,
         }
     }
@@ -1842,8 +2072,18 @@ mod tests {
             role.name.clone(),
             PathBuf::from(format!("/profile/{}", role.config_file)),
         );
-        governed_runtime_role_config_overrides(&[role.clone()], 2, &verified_host_paths)
-            .expect("build verified governed configuration")
+        governed_runtime_role_config_overrides(
+            &[role.clone()],
+            &[("data_agent".to_string(), 1)].into_iter().collect(),
+            &[RequiredMcpServer {
+                name: "supply_chain_data".to_string(),
+                tools: vec!["inspect_planning_source".to_string()],
+                capability_root_ids: vec!["local-supply-chain-network-planner".to_string()],
+            }],
+            2,
+            &verified_host_paths,
+        )
+        .expect("build verified governed configuration")
     }
 
     fn create_plugin_root(root: &Path, name: &str) -> std::path::PathBuf {
@@ -2033,7 +2273,29 @@ mod tests {
                 params["developerInstructions"],
                 "Coordinate the approved platform roles."
             );
+            assert_eq!(params["config"]["features.apps"], false);
             assert_eq!(params["config"]["features.multi_agent_v2"], true);
+            assert_eq!(params["config"]["features.plugins"], false);
+            assert_eq!(params["config"]["features.shell_tool"], false);
+            assert_eq!(
+                params["config"]["agents.allowed_roles"],
+                json!(["data_agent"])
+            );
+            assert_eq!(params["config"]["agents.role_spawn_limits.data_agent"], 1);
+            assert_eq!(
+                params["selectedCapabilityRoots"]
+                    .as_array()
+                    .expect("governed selected capability roots")
+                    .iter()
+                    .map(|root| root["id"].as_str().expect("capability root id"))
+                    .collect::<Vec<_>>(),
+                vec!["local-supply-chain-network-planner"]
+            );
+            assert_eq!(
+                params["config"]
+                    ["plugins.local-supply-chain-network-planner.mcp_servers.supply_chain_data.enabled"],
+                false
+            );
             assert_eq!(
                 params["config"]["agents.max_concurrent_threads_per_session"],
                 2
@@ -2050,6 +2312,72 @@ mod tests {
                 })
             );
         }
+    }
+
+    #[test]
+    fn governed_thread_start_rejects_an_unavailable_capability_root() {
+        let role = platform_runtime_role();
+        let mode = ThreadStartMode::GovernedSupervisor {
+            developer_instructions: "Coordinate the approved platform roles.".to_string(),
+            roles: vec![role.clone()],
+            role_spawn_limits: [("data_agent".to_string(), 1)].into_iter().collect(),
+            required_mcp_servers: vec![RequiredMcpServer {
+                name: "supply_chain_data".to_string(),
+                tools: vec!["inspect_planning_source".to_string()],
+                capability_root_ids: vec!["missing-capability-root".to_string()],
+            }],
+            max_threads: 2,
+        };
+        let error = thread_start_params(
+            "/runner/workspace",
+            &mode,
+            Some(governed_config_for_role(&role)),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "Required Runtime capabilities unavailable: a required capability root is unavailable or ambiguous"
+        );
+    }
+
+    #[test]
+    fn validates_exact_governed_root_mcp_isolation_inventory() {
+        let mut inventory = HashMap::<String, HashSet<String>>::new();
+        let next_cursor = merge_mcp_status_page(
+            &json!({
+                "data": [{
+                    "name": "supply_chain_data",
+                    "tools": {
+                        "inspect_planning_source": {"description": "inspect"}
+                    }
+                }],
+                "nextCursor": null
+            }),
+            &mut inventory,
+        )
+        .expect("valid MCP status page");
+        let required = vec![RequiredMcpServer {
+            name: "supply_chain_data".to_string(),
+            tools: vec![
+                "inspect_planning_source".to_string(),
+                "build_planning_dataset".to_string(),
+            ],
+            capability_root_ids: vec!["local-supply-chain-network-planner".to_string()],
+        }];
+
+        assert_eq!(next_cursor, None);
+        inventory
+            .get_mut("supply_chain_data")
+            .unwrap()
+            .insert("build_planning_dataset".to_string());
+        assert_eq!(
+            exposed_mcp_capabilities(&required, &inventory),
+            vec![
+                "supply_chain_data.inspect_planning_source",
+                "supply_chain_data.build_planning_dataset",
+            ]
+        );
     }
 
     #[test]
@@ -2130,14 +2458,22 @@ mod tests {
     #[test]
     fn rejects_extra_runtime_role_toml_fields() {
         let mut role = platform_runtime_role();
-        role.config_toml.push_str("model = \"not-allowed\"\n");
+        role.config_toml = format!("model = \"not-allowed\"\n{}", role.config_toml);
         role.content_sha256 = hex::encode(Sha256::digest(role.config_toml.as_bytes()));
 
         let error = validate_platform_runtime_roles(&[role], 2).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Internal error: Platform Runtime Role configuration may only define developer instructions"
+            "Internal error: Platform Runtime Role configuration contains unsupported fields"
         );
+    }
+
+    #[test]
+    fn accepts_exact_runtime_role_tool_restrictions() {
+        let role = platform_runtime_role();
+
+        validate_platform_runtime_roles(&[role], 2)
+            .expect("exact Runtime Role tool restrictions should be accepted");
     }
 
     #[test]

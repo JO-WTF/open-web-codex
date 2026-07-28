@@ -306,6 +306,29 @@ class PlanningSourceInspection(StrictModel):
     data_quality: PlanningDataQuality
 
 
+class PlanningSourceCatalogEntry(StrictModel):
+    source_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,127}$")
+    source_updated_at: datetime
+    planning_period: str = Field(min_length=1, max_length=128)
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    service_policy_id: str = Field(min_length=1, max_length=128)
+    date_from: date
+    date_to: date
+    order_row_count: int = Field(ge=0)
+    demand_units: int = Field(ge=0)
+    demand_node_count: int = Field(ge=0)
+    facility_count: int = Field(ge=0)
+    regions: list[str]
+
+
+class PlanningSourceCatalog(StrictModel):
+    schema_version: Literal["planning_source_catalog.v1"] = (
+        "planning_source_catalog.v1"
+    )
+    sources: list[PlanningSourceCatalogEntry]
+    truncated: bool = False
+
+
 class DataAgentResourceToolResult(StrictModel):
     summary: str
     resource_name: str

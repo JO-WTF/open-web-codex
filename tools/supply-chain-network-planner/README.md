@@ -25,6 +25,7 @@ Runtime.
 
 Data Agent:
 
+- `list_planning_sources`
 - `inspect_planning_source`
 - `build_planning_dataset`
 - `validate_planning_dataset`
@@ -51,13 +52,14 @@ are represented by:
 This Plugin publishes capabilities; installing or starting it does not create an Agent
 or mutate a Profile.
 
-- `examples/runtime-roles/data-agent.md` is the single reviewed instruction source
+- `examples/runtime-roles/data-agent-v1.1.md` is the current reviewed instruction source
   used to deterministically create the `data_agent` Runtime Role through the internal
-  Profile Host materialization boundary.
+  Profile Host materialization boundary. Historical Role and Policy versions are not
+  published or resolved in this development environment.
 - `examples/runtime-roles/network-planning-agent.md` does the same for
   `network_planning_agent`.
 - The Platform publishes the enterprise Agent Definitions and
-  `enterprise-supervisor-copilot@1.0.0` separately under
+  `enterprise-supervisor-copilot@1.7.0` separately under
   `apps/web/server/resources/`.
 - When a user explicitly starts a Run with that Policy, the worker verifies the
   Definition-bound instruction digest, materializes the exact versioned Role file under
@@ -68,6 +70,11 @@ or mutate a Profile.
   the Profile Agent catalog, reload Profile configuration, change the Profile-wide
   engine choice, or add a V1 compatibility path. Platform-reserved Role names remain
   unavailable to generic Profile Agent CRUD.
+- Before the root Thread is delivered, the adapter asks Codex
+  `mcpServerStatus/list(threadId)` for the exact thread-selected inventory and rejects
+  and archives the new Thread when any Agent Definition-required server or tool is
+  missing. The model must not use a shell, launcher, direct Python import, or FastMCP
+  private state as a fallback.
 - Codex Runtime creates the actual child Threads. Both child Threads currently inherit
   the root Thread's selected capability roots; Role instructions separate
   responsibilities but are not an authorization boundary.
@@ -81,6 +88,10 @@ The platform normally provisions shared tool environments. For manual developmen
 ```bash
 ./bin/setup-env
 ```
+
+`scripts/run-local.sh` prepares this environment automatically in real mode through
+`scripts/setup-supply-chain-mcp-env.sh`; startup fails if the public server imports
+cannot be validated.
 
 The MCP launcher honors:
 

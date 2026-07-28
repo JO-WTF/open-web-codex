@@ -19,6 +19,8 @@ from .models import (
     DataAgentResourceToolResult,
     PlanningDataset,
     PlanningSource,
+    PlanningSourceCatalog,
+    PlanningSourceCatalogEntry,
     PlanningSourceInspection,
     ValidationResult,
 )
@@ -27,6 +29,7 @@ from .resource_store import PublishedResource, ResourceStore
 MCP_SERVER_NAME = "supply_chain_data"
 RESOURCE_URI_PREFIX = "supply-chain-data://resources/"
 MAX_SOURCE_BYTES = 20 * 1024 * 1024
+MAX_SOURCE_CATALOG_ENTRIES = 100
 SOURCE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,127}$")
 
 mcp = FastMCP(
@@ -35,7 +38,8 @@ mcp = FastMCP(
         "This is a read-only enterprise data boundary for the supply-chain Data Agent. "
         "Inputs are bounded source IDs resolved under a deployment-configured data root; "
         "never request or accept organization IDs, Profile IDs, credentials, arbitrary SQL, "
-        "filesystem paths, or write statements. Call inspect_planning_source before "
+        "filesystem paths, or write statements. Call list_planning_sources when no source ID "
+        "has already been authorized, then call inspect_planning_source before "
         "build_planning_dataset. The build tool publishes planning-dataset.v1 as an immutable "
         "MCP Resource with source range, units, row counts, promotion share, delivery baseline, "
         "and data-quality limitations. Copy data_ref unchanged. Validate the Resource before "
@@ -109,6 +113,32 @@ def _load_source(source_id: str) -> PlanningSource:
     return source
 
 
+def _catalog_entry(source: PlanningSource) -> PlanningSourceCatalogEntry:
+    inspection = inspect_source(source)
+    summary = inspection.source_summary
+    regions = sorted(
+        {
+            location.region
+            for location in source.demand_locations
+            if location.region is not None
+        }
+    )
+    return PlanningSourceCatalogEntry(
+        source_id=source.source_id,
+        source_updated_at=source.source_updated_at,
+        planning_period=source.planning_period,
+        currency=source.currency,
+        service_policy_id=source.service_policy.policy_id,
+        date_from=summary.date_from,
+        date_to=summary.date_to,
+        order_row_count=summary.order_row_count,
+        demand_units=summary.demand_units,
+        demand_node_count=summary.demand_node_count,
+        facility_count=summary.facility_count,
+        regions=regions,
+    )
+
+
 def _data_ref(published: PublishedResource) -> DataAgentRef:
     return DataAgentRef(
         server=MCP_SERVER_NAME,
@@ -129,6 +159,21 @@ def _resource_link(
         description=description,
         mimeType="application/json",
         size=published.size,
+    )
+
+
+@mcp.tool(structured_output=True)
+def list_planning_sources() -> PlanningSourceCatalog:
+    """List bounded metadata for authorized sources without exposing paths or rows."""
+    source_ids = sorted(
+        path.stem
+        for path in _data_root.glob("*.json")
+        if SOURCE_ID_PATTERN.fullmatch(path.stem)
+    )
+    visible_source_ids = source_ids[:MAX_SOURCE_CATALOG_ENTRIES]
+    return PlanningSourceCatalog(
+        sources=[_catalog_entry(_load_source(source_id)) for source_id in visible_source_ids],
+        truncated=len(source_ids) > len(visible_source_ids),
     )
 
 

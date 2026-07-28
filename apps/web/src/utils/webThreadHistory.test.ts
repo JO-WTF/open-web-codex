@@ -373,6 +373,35 @@ describe("buildWebThreadHistory", () => {
     expect(result.every((entry) => entry.kind === "tool")).toBe(true);
   });
 
+  it("restores targetless V2 waits with a bounded-wait explanation", () => {
+    let id = 0;
+    const result = buildWebThreadHistory({
+      turns: [{ items: [
+        {
+          id: "wait-started",
+          type: "collabAgentToolCall",
+          tool: "wait",
+          status: "inProgress",
+          receiverThreadIds: [],
+          agentsStates: {},
+        },
+        {
+          id: "wait-completed",
+          type: "collabAgentToolCall",
+          tool: "wait",
+          status: "completed",
+          receiverThreadIds: [],
+          agentsStates: {},
+        },
+      ] }],
+    }, () => `log-${++id}`);
+
+    expect(result[0]?.toolOutput).toContain("bounded wait");
+    expect(result[0]?.toolOutput).toContain("still active");
+    expect(result[1]?.toolOutput).toContain("wait cycle finished");
+    expect(result[1]?.toolOutput).toContain("may start another");
+  });
+
   it("restores authorized typed Artifacts on their Agent Message", () => {
     const [entry] = buildWebThreadHistory({
       turns: [{ items: [{

@@ -582,6 +582,137 @@ body:has(.web-app-shell) {
 .web-archive-modal-actions button.is-primary:hover { background: #3e70ae; }
 .web-archive-modal-actions button:disabled { opacity: .5; cursor: wait; }
 
+.web-supervisor-policy-modal {
+  width: min(520px, 100%);
+  padding: 20px;
+  border: 1px solid var(--web-border-strong);
+  border-radius: 16px;
+  color: var(--web-text);
+  background:
+    radial-gradient(circle at 92% 0%, rgb(64 133 179 / 16%), transparent 42%),
+    #151a25;
+  box-shadow: 0 24px 80px rgb(0 0 0 / 56%);
+}
+
+.web-supervisor-policy-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.web-supervisor-policy-heading h2 {
+  color: var(--web-text);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.web-supervisor-policy-heading p {
+  margin-top: 4px;
+  color: var(--web-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.web-supervisor-policy-icon {
+  display: inline-flex;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  color: #7cc8e8;
+  background: rgb(65 151 190 / 16%);
+  box-shadow: inset 0 0 0 1px rgb(101 190 225 / 18%);
+}
+
+.web-supervisor-policy-list {
+  display: grid;
+  gap: 9px;
+  margin-top: 18px;
+}
+
+.web-supervisor-policy-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px 12px;
+  width: 100%;
+  padding: 14px;
+  border: 1px solid var(--web-border);
+  border-radius: 11px;
+  color: var(--web-text);
+  text-align: left;
+  background: rgb(255 255 255 / 3%);
+  cursor: pointer;
+}
+
+.web-supervisor-policy-option:hover,
+.web-supervisor-policy-option:focus-visible {
+  border-color: rgb(101 190 225 / 44%);
+  background: rgb(65 151 190 / 10%);
+  outline: none;
+}
+
+.web-supervisor-policy-option:disabled {
+  opacity: .55;
+  cursor: wait;
+}
+
+.web-supervisor-policy-option-title {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.web-supervisor-policy-option-version {
+  align-self: center;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: #9dcfe4;
+  background: rgb(65 151 190 / 13%);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.web-supervisor-policy-option-description {
+  grid-column: 1 / -1;
+  color: var(--web-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.web-supervisor-policy-empty {
+  padding: 18px;
+  border: 1px dashed var(--web-border-strong);
+  border-radius: 11px;
+  color: var(--web-muted);
+  text-align: center;
+  font-size: 12px;
+}
+
+.web-supervisor-policy-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.web-supervisor-policy-actions button {
+  min-height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--web-border-strong);
+  border-radius: 8px;
+  color: var(--web-text);
+  background: var(--web-surface);
+  cursor: pointer;
+}
+
+.web-supervisor-policy-actions button:hover {
+  background: var(--web-surface-hover);
+}
+
 .web-settings-close:hover {
   border-color: rgb(148 163 184 / 58%);
   color: #fff;
@@ -1377,22 +1508,30 @@ body:has(.web-app-shell) {
   display: grid;
   gap: 0;
   margin: 0;
-  padding: 0 2px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 6%);
+  border-radius: 9px;
+  background: rgb(6 10 17 / 22%);
   list-style: none;
 }
 
 .web-supervisor-activity li {
   display: grid;
-  grid-template-columns: 7px minmax(0, 1fr);
-  gap: 9px;
-  padding: 7px 4px;
+  grid-template-columns: 8px minmax(0, 1fr);
+  gap: 10px;
+  padding: 9px 10px;
   border-top: 1px solid rgb(255 255 255 / 5%);
 }
 
+.web-supervisor-activity li:first-child {
+  border-top: 0;
+}
+
 .web-supervisor-activity li > span {
-  width: 6px;
-  height: 6px;
-  margin-top: 5px;
+  width: 7px;
+  height: 7px;
+  margin-top: 4px;
   border-radius: 50%;
   background: #7397ca;
 }
@@ -1410,25 +1549,54 @@ body:has(.web-app-shell) {
   background: #e4b457;
 }
 
-.web-supervisor-activity li div {
+.web-supervisor-activity li > span.is-completed {
+  background: #79a7e8;
+}
+
+.web-supervisor-activity li > span.is-pending {
+  background: #8993a3;
+}
+
+.web-supervisor-activity-copy {
   min-width: 0;
 }
 
-.web-supervisor-activity li strong {
-  display: block;
-  overflow: hidden;
-  color: #a7b0bf;
-  font-size: 9px;
-  font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.web-supervisor-activity-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 7px;
+  margin-bottom: 3px;
+  color: #6f7b8e;
+  font-size: 8px;
+  line-height: 1.35;
 }
 
-.web-supervisor-activity li p {
-  margin: 1px 0 0;
-  color: #7f8999;
+.web-supervisor-activity-meta span:first-child {
+  color: #91a4bf;
+  font-weight: 700;
+}
+
+.web-supervisor-activity-meta time {
+  margin-left: auto;
+  color: #687386;
+  font-variant-numeric: tabular-nums;
+}
+
+.web-supervisor-activity-copy > strong {
+  display: block;
+  color: #b8c0cc;
   font-size: 9px;
+  font-weight: 680;
   line-height: 1.4;
+}
+
+.web-supervisor-activity-copy > p {
+  margin: 3px 0 0;
+  color: #8993a3;
+  font-size: 9px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .web-supervisor-artifacts {
@@ -3436,12 +3604,29 @@ body:has(.web-app-shell[data-theme="light"]) {
   color: #3f4c60;
 }
 
+.web-app-shell[data-theme="light"] .web-supervisor-activity ol {
+  border-color: rgb(45 55 72 / 8%);
+  background: rgb(247 249 252 / 72%);
+}
+
 .web-app-shell[data-theme="light"] .web-supervisor-activity li {
   border-top-color: rgb(45 55 72 / 7%);
 }
 
-.web-app-shell[data-theme="light"] .web-supervisor-activity li p {
+.web-app-shell[data-theme="light"] .web-supervisor-activity-copy > p {
   color: #68758a;
+}
+
+.web-app-shell[data-theme="light"] .web-supervisor-activity-meta {
+  color: #7a879a;
+}
+
+.web-app-shell[data-theme="light"] .web-supervisor-activity-meta span:first-child {
+  color: #50617a;
+}
+
+.web-app-shell[data-theme="light"] .web-supervisor-activity-meta time {
+  color: #7b8798;
 }
 
 .web-app-shell[data-theme="light"] :is(
@@ -3919,6 +4104,23 @@ body:has(.web-app-shell[data-theme="light"]) .web-archive-modal {
   color: var(--web-text);
   background: #ffffff;
   box-shadow: 0 24px 72px rgb(63 76 98 / 26%);
+}
+
+body:has(.web-app-shell[data-theme="light"]) .web-supervisor-policy-modal {
+  color: var(--web-text);
+  background:
+    radial-gradient(circle at 92% 0%, rgb(65 151 190 / 10%), transparent 42%),
+    #ffffff;
+  box-shadow: 0 24px 72px rgb(63 76 98 / 26%);
+}
+
+body:has(.web-app-shell[data-theme="light"]) .web-supervisor-policy-option {
+  background: #f7fafc;
+}
+
+body:has(.web-app-shell[data-theme="light"]) .web-supervisor-policy-option:hover,
+body:has(.web-app-shell[data-theme="light"]) .web-supervisor-policy-option:focus-visible {
+  background: #eef8fb;
 }
 
 body:has(.web-app-shell[data-theme="light"]) .web-settings-close {

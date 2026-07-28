@@ -39,8 +39,14 @@ describe("Web workspace actions", () => {
     expect(onRemoveWorkspace).toHaveBeenCalledWith("ws-1");
   });
 
-  it("starts an explicitly selected enterprise Supervisor Copilot", () => {
+  it("starts the Supervisor Policy selected from the published catalog", () => {
     const onNewSupervisor = vi.fn();
+    const policy = {
+      policy_id: "enterprise-supervisor-copilot",
+      version: "1.1.0",
+      display_name: "Enterprise Supervisor Copilot",
+      description: "Coordinates governed data and network planning.",
+    };
     render(
       <Workspaces
         workspaces={[{
@@ -60,6 +66,7 @@ describe("Web workspace actions", () => {
         activeThreadId={null}
         onSelectThread={vi.fn()}
         onNewThread={vi.fn()}
+        supervisorPolicies={[policy]}
         onNewSupervisor={onNewSupervisor}
         onArchiveThread={vi.fn()}
         onRemoveWorkspace={vi.fn()}
@@ -68,10 +75,14 @@ describe("Web workspace actions", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "New enterprise copilot in Demo",
+        name: "Choose supervisor policy in Demo",
       }),
     );
-    expect(onNewSupervisor).toHaveBeenCalledWith("ws-1");
+    expect(screen.getByRole("dialog", { name: "Start governed supervisor" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", {
+      name: /Enterprise Supervisor Copilot/,
+    }));
+    expect(onNewSupervisor).toHaveBeenCalledWith("ws-1", policy);
   });
 
   it("shows running state and confirms before archiving a thread", () => {

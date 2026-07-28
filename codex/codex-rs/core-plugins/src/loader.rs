@@ -854,22 +854,7 @@ async fn load_plugin(
 }
 
 fn apply_plugin_mcp_server_policy(config: &mut McpServerConfig, policy: &PluginMcpServerConfig) {
-    config.enabled = policy.enabled;
-    if let Some(approval_mode) = policy.default_tools_approval_mode {
-        config.default_tools_approval_mode = Some(approval_mode);
-    }
-    if let Some(enabled_tools) = &policy.enabled_tools {
-        config.enabled_tools = Some(enabled_tools.clone());
-    }
-    if let Some(disabled_tools) = &policy.disabled_tools {
-        config.disabled_tools = Some(disabled_tools.clone());
-    }
-    for (tool_name, tool_policy) in &policy.tools {
-        let tool_config = config.tools.entry(tool_name.clone()).or_default();
-        if let Some(approval_mode) = tool_policy.approval_mode {
-            tool_config.approval_mode = Some(approval_mode);
-        }
-    }
+    policy.apply_to(config);
 }
 
 pub(crate) struct PluginSkillInventory {

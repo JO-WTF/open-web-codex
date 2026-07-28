@@ -471,6 +471,8 @@ fn runtime_capabilities() -> Vec<CapabilityDeclaration> {
             limits: Some(HashMap::from([
                 ("maxAgentThreads".into(), serde_json::json!(8)),
                 ("maxAgentDepth".into(), serde_json::json!(3)),
+                ("exactRoleAllowlist".into(), serde_json::json!(true)),
+                ("exactRoleInstanceLimits".into(), serde_json::json!(true)),
             ])),
             ..Default::default()
         },
@@ -662,6 +664,31 @@ mod tests {
         let json = serde_json::to_value(&manifest).expect("serialize");
         let back: CapabilityManifest = serde_json::from_value(json).expect("deserialize");
         assert_eq!(manifest, back);
+    }
+
+    #[test]
+    fn multi_agent_declares_exact_role_allowlist_support() {
+        let manifest = build_manifest();
+        let capability = manifest
+            .capabilities
+            .iter()
+            .find(|capability| capability.id == "agents.multi_agent")
+            .expect("multi-agent capability");
+
+        assert_eq!(
+            capability
+                .limits
+                .as_ref()
+                .and_then(|limits| limits.get("exactRoleAllowlist")),
+            Some(&serde_json::json!(true))
+        );
+        assert_eq!(
+            capability
+                .limits
+                .as_ref()
+                .and_then(|limits| limits.get("exactRoleInstanceLimits")),
+            Some(&serde_json::json!(true))
+        );
     }
 
     #[test]

@@ -693,6 +693,15 @@ pub struct AgentsToml {
     /// Whether to record a model-visible message when an agent turn is interrupted.
     /// Defaults to true.
     pub interrupt_message: Option<bool>,
+    /// Optional exact set of Agent roles available to the spawn tool.
+    ///
+    /// When unset, configured and built-in roles remain available.
+    pub allowed_roles: Option<Vec<String>>,
+    /// Optional maximum number of resident agents for each named role.
+    ///
+    /// Roles omitted from this map remain governed only by the session-wide
+    /// thread limit.
+    pub role_spawn_limits: Option<BTreeMap<String, usize>>,
 
     /// User-defined role declarations keyed by role name.
     ///

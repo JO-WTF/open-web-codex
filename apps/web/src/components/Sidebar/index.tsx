@@ -4,6 +4,7 @@ import Settings from "lucide-react/dist/esm/icons/settings";
 import Moon from "lucide-react/dist/esm/icons/moon";
 import Sun from "lucide-react/dist/esm/icons/sun";
 import X from "lucide-react/dist/esm/icons/x";
+import type { SupervisorPolicySummary } from "../../../browser/types";
 import type { WorkspaceInfo } from "../../types";
 import Brand from "./Brand";
 import Workspaces from "./Workspaces";
@@ -32,7 +33,10 @@ type Props = {
   activeThreadId: string | null;
   onSelectThread: (id: string) => void;
   onNewThread: (workspaceId: string) => void;
-  onNewSupervisor?: (workspaceId: string) => void;
+  supervisorPolicies?: SupervisorPolicySummary[];
+  supervisorPoliciesLoading?: boolean;
+  supervisorPoliciesError?: string | null;
+  onNewSupervisor?: (workspaceId: string, policy: SupervisorPolicySummary) => void;
   onArchiveThread: (workspaceId: string, threadId: string) => void;
   onRemoveWorkspace: (workspaceId: string) => void;
   baseUrl: string;
@@ -61,6 +65,9 @@ export default function Sidebar({
   activeThreadId,
   onSelectThread,
   onNewThread,
+  supervisorPolicies = [],
+  supervisorPoliciesLoading = false,
+  supervisorPoliciesError = null,
   onNewSupervisor,
   onArchiveThread,
   onRemoveWorkspace,
@@ -103,6 +110,9 @@ export default function Sidebar({
           activeThreadId={activeThreadId}
           onSelectThread={onSelectThread}
           onNewThread={onNewThread}
+          supervisorPolicies={supervisorPolicies}
+          supervisorPoliciesLoading={supervisorPoliciesLoading}
+          supervisorPoliciesError={supervisorPoliciesError}
           onNewSupervisor={onNewSupervisor}
           onArchiveThread={onArchiveThread}
           onRemoveWorkspace={onRemoveWorkspace}

@@ -72,6 +72,21 @@ async fn apply_role_returns_error_for_unknown_role() {
 }
 
 #[tokio::test]
+async fn apply_role_rejects_a_known_role_outside_the_configured_allowlist() {
+    let (_home, mut config) = test_config_with_cli_overrides(vec![(
+        "agents.allowed_roles".to_string(),
+        TomlValue::Array(vec![TomlValue::String("worker".to_string())]),
+    )])
+    .await;
+
+    let err = apply_role_to_config(&mut config, Some("explorer"))
+        .await
+        .expect_err("a role outside the allowlist should fail");
+
+    assert_eq!(err, "unknown agent_type 'explorer'");
+}
+
+#[tokio::test]
 async fn apply_empty_explorer_role_preserves_current_model_and_reasoning_effort() {
     let (_home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
     let before_layers = session_flags_layer_count(&config);
@@ -444,7 +459,7 @@ fn spawn_tool_spec_build_deduplicates_user_defined_built_in_roles() {
         ("researcher".to_string(), AgentRoleConfig::default()),
     ]);
 
-    let spec = spawn_tool_spec::build(&user_defined_roles);
+    let spec = spawn_tool_spec::build(&user_defined_roles, None);
 
     assert!(spec.contains("researcher: no description"));
     assert!(spec.contains("explorer: {\nuser override\n}"));
@@ -463,13 +478,47 @@ fn spawn_tool_spec_lists_user_defined_roles_before_built_ins() {
         },
     )]);
 
-    let spec = spawn_tool_spec::build(&user_defined_roles);
+    let spec = spawn_tool_spec::build(&user_defined_roles, None);
     let user_index = spec.find("aaa: {\nfirst\n}").expect("find user role");
     let built_in_index = spec
         .find("default: {\nDefault agent.\n}")
         .expect("find built-in role");
 
     assert!(user_index < built_in_index);
+}
+
+#[test]
+fn spawn_tool_spec_lists_only_allowlisted_roles() {
+    let user_defined_roles = BTreeMap::from([
+        (
+            "data_agent".to_string(),
+            AgentRoleConfig {
+                description: Some("Prepare governed data.".to_string()),
+                config_file: None,
+                nickname_candidates: None,
+            },
+        ),
+        (
+            "network_planning_agent".to_string(),
+            AgentRoleConfig {
+                description: Some("Plan the governed network.".to_string()),
+                config_file: None,
+                nickname_candidates: None,
+            },
+        ),
+    ]);
+    let allowed_roles = BTreeSet::from([
+        "data_agent".to_string(),
+        "network_planning_agent".to_string(),
+    ]);
+
+    let spec = spawn_tool_spec::build(&user_defined_roles, Some(&allowed_roles));
+
+    assert!(spec.contains("data_agent"));
+    assert!(spec.contains("network_planning_agent"));
+    assert!(!spec.contains("explorer"));
+    assert!(!spec.contains("worker"));
+    assert!(!spec.contains("default"));
 }
 
 #[test]
@@ -490,7 +539,7 @@ fn spawn_tool_spec_marks_role_locked_model_and_reasoning_effort() {
         },
     )]);
 
-    let spec = spawn_tool_spec::build(&user_defined_roles);
+    let spec = spawn_tool_spec::build(&user_defined_roles, None);
 
     assert!(spec.contains(
             "Research carefully.\n- This role's model is set to `gpt-5` and its reasoning effort is set to `high`. These settings cannot be changed."
@@ -515,7 +564,7 @@ fn spawn_tool_spec_marks_role_locked_reasoning_effort_only() {
         },
     )]);
 
-    let spec = spawn_tool_spec::build(&user_defined_roles);
+    let spec = spawn_tool_spec::build(&user_defined_roles, None);
 
     assert!(spec.contains(
             "Review carefully.\n- This role's reasoning effort is set to `medium` and cannot be changed."
@@ -540,7 +589,7 @@ fn spawn_tool_spec_marks_role_locked_service_tier() {
         },
     )]);
 
-    let spec = spawn_tool_spec::build(&user_defined_roles);
+    let spec = spawn_tool_spec::build(&user_defined_roles, None);
 
     assert!(spec.contains(
         "Stay fast.\n- This role's service tier is set to `priority`. If it is supported by the resolved model, it takes precedence over a valid spawn request service tier."

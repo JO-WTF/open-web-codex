@@ -40,6 +40,13 @@ pub(crate) async fn apply_role_to_config(
     role_name: Option<&str>,
 ) -> Result<(), String> {
     let role_name = role_name.unwrap_or(DEFAULT_ROLE_NAME);
+    if config
+        .agent_allowed_roles
+        .as_ref()
+        .is_some_and(|allowed| !allowed.contains(role_name))
+    {
+        return Err(format!("unknown agent_type '{role_name}'"));
+    }
 
     let role = resolve_role_config(config, role_name)
         .cloned()
@@ -231,24 +238,34 @@ pub(crate) mod spawn_tool_spec {
     use super::*;
 
     /// Builds the spawn-agent tool description text from built-in and configured roles.
-    pub(crate) fn build(user_defined_agent_roles: &BTreeMap<String, AgentRoleConfig>) -> String {
+    pub(crate) fn build(
+        user_defined_agent_roles: &BTreeMap<String, AgentRoleConfig>,
+        allowed_roles: Option<&BTreeSet<String>>,
+    ) -> String {
         let built_in_roles = built_in::configs();
-        build_from_configs(built_in_roles, user_defined_agent_roles)
+        build_from_configs(built_in_roles, user_defined_agent_roles, allowed_roles)
     }
 
     // This function is not inlined for testing purpose.
     fn build_from_configs(
         built_in_roles: &BTreeMap<String, AgentRoleConfig>,
         user_defined_roles: &BTreeMap<String, AgentRoleConfig>,
+        allowed_roles: Option<&BTreeSet<String>>,
     ) -> String {
         let mut seen = BTreeSet::new();
         let mut formatted_roles = Vec::new();
         for (name, declaration) in user_defined_roles {
+            if allowed_roles.is_some_and(|allowed| !allowed.contains(name)) {
+                continue;
+            }
             if seen.insert(name.as_str()) {
                 formatted_roles.push(format_role(name, declaration));
             }
         }
         for (name, declaration) in built_in_roles {
+            if allowed_roles.is_some_and(|allowed| !allowed.contains(name)) {
+                continue;
+            }
             if seen.insert(name.as_str()) {
                 formatted_roles.push(format_role(name, declaration));
             }

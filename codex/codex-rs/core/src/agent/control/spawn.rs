@@ -401,7 +401,22 @@ impl AgentControl {
         } else {
             agent_max_threads
         };
-        let mut reservation = self.state.reserve_spawn_slot(reservation_max_threads)?;
+        let role_limit = session_source
+            .as_ref()
+            .and_then(SessionSource::get_agent_role)
+            .and_then(|role| {
+                config
+                    .agent_role_spawn_limits
+                    .get(&role)
+                    .copied()
+                    .map(|limit| (role, limit))
+            });
+        let mut reservation = self.state.reserve_spawn_slot_for_role(
+            reservation_max_threads,
+            role_limit
+                .as_ref()
+                .map(|(role, limit)| (role.as_str(), *limit)),
+        )?;
         let inheritance = SpawnAgentThreadInheritance {
             environments: self
                 .inherited_environments_for_source(&state, session_source.as_ref())

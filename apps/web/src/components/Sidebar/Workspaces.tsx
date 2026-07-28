@@ -7,6 +7,7 @@ import LoaderCircle from "lucide-react/dist/esm/icons/loader-circle";
 import MessageSquare from "lucide-react/dist/esm/icons/message-square";
 import Sparkles from "lucide-react/dist/esm/icons/sparkles";
 import Trash2 from "lucide-react/dist/esm/icons/trash-2";
+import type { SupervisorPolicySummary } from "../../../browser/types";
 import type { WorkspaceInfo } from "../../types";
 
 type ThreadInfo = {
@@ -30,7 +31,10 @@ type Props = {
   activeThreadId: string | null;
   onSelectThread: (id: string) => void;
   onNewThread: (workspaceId: string) => void;
-  onNewSupervisor?: (workspaceId: string) => void;
+  supervisorPolicies?: SupervisorPolicySummary[];
+  supervisorPoliciesLoading?: boolean;
+  supervisorPoliciesError?: string | null;
+  onNewSupervisor?: (workspaceId: string, policy: SupervisorPolicySummary) => void;
   onArchiveThread: (workspaceId: string, threadId: string) => void;
   onRemoveWorkspace: (workspaceId: string) => void;
 };
@@ -46,6 +50,9 @@ export default function Workspaces({
   activeThreadId,
   onSelectThread,
   onNewThread,
+  supervisorPolicies = [],
+  supervisorPoliciesLoading = false,
+  supervisorPoliciesError = null,
   onNewSupervisor,
   onArchiveThread,
   onRemoveWorkspace,
@@ -57,15 +64,21 @@ export default function Workspaces({
     threadId: string;
     label: string;
   } | null>(null);
+  const [pendingSupervisor, setPendingSupervisor] = useState<{
+    workspaceId: string;
+    workspaceName: string;
+  } | null>(null);
 
   useEffect(() => {
-    if (!pendingArchive) return;
+    if (!pendingArchive && !pendingSupervisor) return;
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setPendingArchive(null);
+      if (event.key !== "Escape") return;
+      setPendingArchive(null);
+      setPendingSupervisor(null);
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [pendingArchive]);
+  }, [pendingArchive, pendingSupervisor]);
 
   const toggleExpand = (wsId: string) => {
     setExpandedId(prev => (prev === wsId ? null : wsId));
@@ -147,11 +160,14 @@ export default function Workspaces({
                     onClick={(event) => {
                       event.stopPropagation();
                       setExpandedId(ws.id);
-                      onNewSupervisor(ws.id);
+                      setPendingSupervisor({
+                        workspaceId: ws.id,
+                        workspaceName: ws.name,
+                      });
                     }}
                     disabled={busy}
-                    aria-label={`New enterprise copilot in ${ws.name}`}
-                    title="New enterprise supervisor copilot"
+                    aria-label={`Choose supervisor policy in ${ws.name}`}
+                    title="Start governed supervisor"
                   >
                     <Sparkles size={13} aria-hidden="true" />
                   </button>
@@ -239,6 +255,76 @@ export default function Workspaces({
           );
         })}
       </div>
+      {pendingSupervisor && createPortal(
+        <div
+          className="web-settings-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setPendingSupervisor(null);
+          }}
+        >
+          <section
+            className="web-supervisor-policy-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="web-supervisor-policy-title"
+            aria-describedby="web-supervisor-policy-description"
+          >
+            <div className="web-supervisor-policy-heading">
+              <div className="web-supervisor-policy-icon">
+                <Sparkles size={18} aria-hidden="true" />
+              </div>
+              <div>
+                <h2 id="web-supervisor-policy-title">Start governed supervisor</h2>
+                <p id="web-supervisor-policy-description">
+                  Choose a published policy for {pendingSupervisor.workspaceName}.
+                </p>
+              </div>
+            </div>
+            <div className="web-supervisor-policy-list">
+              {supervisorPoliciesLoading ? (
+                <div className="web-supervisor-policy-empty" role="status">
+                  Loading published policies...
+                </div>
+              ) : supervisorPoliciesError ? (
+                <div className="web-supervisor-policy-empty" role="alert">
+                  Supervisor Policy catalog is unavailable.
+                </div>
+              ) : supervisorPolicies.length === 0 ? (
+                <div className="web-supervisor-policy-empty">
+                  No Supervisor Policies are published for new Runs.
+                </div>
+              ) : supervisorPolicies.map((policy) => (
+                <button
+                  type="button"
+                  className="web-supervisor-policy-option"
+                  key={`${policy.policy_id}@${policy.version}`}
+                  disabled={busy}
+                  onClick={() => {
+                    onNewSupervisor?.(pendingSupervisor.workspaceId, policy);
+                    setPendingSupervisor(null);
+                  }}
+                >
+                  <span className="web-supervisor-policy-option-title">
+                    {policy.display_name}
+                  </span>
+                  <span className="web-supervisor-policy-option-version">
+                    {policy.version}
+                  </span>
+                  <span className="web-supervisor-policy-option-description">
+                    {policy.description}
+                  </span>
+                </button>
+              ))}
+            </div>
+            <div className="web-supervisor-policy-actions">
+              <button type="button" onClick={() => setPendingSupervisor(null)}>
+                Cancel
+              </button>
+            </div>
+          </section>
+        </div>,
+        document.body,
+      )}
       {pendingArchive && createPortal(
         <div
           className="web-settings-backdrop"

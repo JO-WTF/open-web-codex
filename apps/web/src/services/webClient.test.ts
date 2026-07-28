@@ -56,7 +56,11 @@ function json(value: unknown) {
   });
 }
 
-function resourceFetch(events: unknown[] = [], turns: unknown[] = []) {
+function resourceFetch(
+  events: unknown[] = [],
+  turns: unknown[] = [],
+  runValue: typeof run = run,
+) {
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = new URL(String(input));
     if (url.pathname === "/api/workspaces") return json([workspace]);
@@ -64,12 +68,12 @@ function resourceFetch(events: unknown[] = [], turns: unknown[] = []) {
     if (url.pathname === "/api/projects") return json([project]);
     if (url.pathname === `/api/projects/${project.id}`) return json(project);
     if (url.pathname === `/api/projects/${project.id}/thread-contexts`) {
-      return json([{ project, task, run }]);
+      return json([{ project, task, run: runValue }]);
     }
     if (url.pathname === "/api/tasks") return json([task]);
     if (url.pathname === `/api/tasks/${task.id}`) return json(task);
-    if (url.pathname === "/api/runs") return json([run]);
-    if (url.pathname === `/api/runs/${run.id}`) return json(run);
+    if (url.pathname === "/api/runs") return json([runValue]);
+    if (url.pathname === `/api/runs/${run.id}`) return json(runValue);
     if (url.pathname === `/api/runs/${run.id}/thread`) {
       return json({
         thread: {
@@ -78,7 +82,7 @@ function resourceFetch(events: unknown[] = [], turns: unknown[] = []) {
           preview: task.title,
           createdAt: 1,
           updatedAt: 2,
-          status: runtimeStatus(run),
+          status: runtimeStatus(runValue),
           turns,
         },
       });
@@ -120,18 +124,43 @@ describe("WebApp direct Server client", () => {
     })]);
   });
 
-  it("starts an enterprise Supervisor with an exact published Policy reference", async () => {
+  it("does not expose an interrupted pre-restart Turn as active during recovery", async () => {
+    const recoveringRun = {
+      ...run,
+      status: "recovery_pending",
+      active_turn_id: "turn-before-restart",
+    };
+    vi.stubGlobal("fetch", resourceFetch([], [], recoveringRun));
+    const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
+
+    await expect(client.listThreads(workspace.id)).resolves.toEqual({
+      data: [expect.objectContaining({
+        id: "thread-1",
+        activeTurnId: null,
+        status: "idle",
+      })],
+      nextCursor: null,
+    });
+    await expect(client.resumeThread(workspace.id, "thread-1")).resolves.toEqual({
+      thread: expect.objectContaining({
+        activeTurnId: null,
+        status: { type: "idle", activeFlags: [] },
+      }),
+    });
+  });
+
+  it("starts a governed Supervisor with an exact published Policy reference", async () => {
     const baseFetch = resourceFetch();
     const enterpriseTask = {
       ...task,
-      title: "Enterprise Supervisor Copilot · 1.0.0",
+      title: "Governed Supervisor · enterprise-supervisor-copilot@1.1.0",
     };
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input));
       if (url.pathname === "/api/tasks" && init?.method === "POST") {
         expect(JSON.parse(String(init.body))).toMatchObject({
           project_id: project.id,
-          title: "Enterprise Supervisor Copilot · 1.0.0",
+          title: "Governed Supervisor · enterprise-supervisor-copilot@1.1.0",
         });
         return json(enterpriseTask);
       }
@@ -143,7 +172,7 @@ describe("WebApp direct Server client", () => {
           workspace_id: workspace.id,
           supervisor_policy: {
             policy_id: "enterprise-supervisor-copilot",
-            version: "1.0.0",
+            version: "1.1.0",
           },
         });
         return json({ run });
@@ -174,18 +203,18 @@ describe("WebApp direct Server client", () => {
       client.startThread(workspace.id, {
         supervisorPolicy: {
           policy_id: "enterprise-supervisor-copilot",
-          version: "1.0.0",
+          version: "1.1.0",
         },
       }),
     ).resolves.toEqual({
       thread: expect.objectContaining({
         id: "thread-1",
-        name: "Enterprise Supervisor Copilot · 1.0.0",
+        name: "Governed Supervisor · enterprise-supervisor-copilot@1.1.0",
       }),
     });
   });
 
-  it("restores the bound Policy and Runtime Agent projection for an enterprise Thread", async () => {
+  it("restores the bound Policy and Runtime Agent projection for a governed Thread", async () => {
     const baseFetch = resourceFetch();
     const policy = {
       run_id: run.id,
@@ -273,7 +302,7 @@ describe("WebApp direct Server client", () => {
     const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
 
     await client.listThreads(workspace.id);
-    await expect(client.getEnterpriseSupervisorOverview("thread-1")).resolves.toEqual({
+    await expect(client.getSupervisorOverview("thread-1")).resolves.toEqual({
       taskTitle: task.title,
       policy,
       agents,

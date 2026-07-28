@@ -118,7 +118,13 @@ Supervisor 运行在根 Thread 中。Codex 已经提供创建子 Agent、发送�
 
 当前项目通过代码发布的 Supervisor Policy，将这些规则作为服务端解析的
 `developer_instructions` 进入受治理根 Thread。Policy 被保存为不可变快照并绑定到
-Run；浏览器不能提交一段任意 Prompt 来替换它。
+Run；浏览器不能提交一段任意 Prompt 来替换它。Workspace 中的通用 Governed
+Supervisor 入口读取服务端发布目录并让用户选择 Policy，不绑定任何领域 Policy
+ID、版本或 Agent 顺序。当前供应链顺序只属于
+`enterprise-supervisor-copilot@1.7.0` 这一可选 Policy，服务端不发布或解析旧版本。
+当前 Policy 通过 Runtime 的 exact Agent Role allowlist 和 per-Role instance limit
+约束模型可见目录、执行入口与驻留实例数，并通过 Role 配置关闭子 Agent 继续委派；
+提示词不承担授权职责。已发布显示名和执行内容保持不可变，需要改变时必须发布新版本。
 
 Supervisor 不负责：
 
@@ -151,8 +157,9 @@ Agent 的三个名称容易混淆：
 | Agent Thread | 本次协作中实际运行的 Agent 身份与历史 |
 
 当前代码中，两个 Agent Definition 被映射为精确 Runtime Role；根 Supervisor 通过
-Codex 原生多 Agent 工具创建子 Thread。平台不会插入一条“Agent 实例”数据库记录来
-模拟这个过程。
+Codex 原生多 Agent 工具创建子 Thread。当前受治理供应链 Policy 的根 Thread 不暴露
+shell 或业务 MCP；每个 Role 只重新启用 Definition 声明的 MCP server/tool
+allowlist。平台不会插入一条“Agent 实例”数据库记录来模拟这个过程。
 
 ### 2.3 Skill：把专业方法交给 Agent
 
@@ -196,7 +203,7 @@ Tool/MCP 必须自行执行授权和输入校验。即使 Prompt 或 Supervisor 
 
 在当前案例中：
 
-- `supply_chain_data` 提供只读数据检查、构建和验证；
+- `supply_chain_data` 提供有界数据源目录、只读数据检查、构建和验证；
 - `supply_chain_planner` 提供仓网快照、路线、方案计算、优化和验证；
 - MCP 返回类型化 `data_ref` 与 `resource_name`；
 - 平台把可交付结果登记为独立 Artifact，并向浏览器隐藏内部 Resource URI。
@@ -228,9 +235,10 @@ Supervisor 只能从已经通过这两层检查的候选中选择 Agent。目录
 
 ### 3.1 它不是每次都必须走完的固定流水线
 
-Supervisor 可以直接使用 Tool 获取一个简单事实，也可以先委派 Agent。Agent 可以
-根据任务采用一个或多个 Skill，再调用多个 Tool。Skill 只在相关时被发现和采用，
-不会成为所有调用的中转服务。
+通用 Supervisor 只有在其治理合同明确授予对应 Tool 时，才可以直接获取简单事实；
+也可以先委派 Agent。当前供应链根 Supervisor 的合同只授予协作能力，领域 Tool
+必须由 owning Domain Agent 调用。Agent 可以根据任务采用一个或多个 Skill，再调用
+多个 Tool。Skill 只在相关时被发现和采用，不会成为所有调用的中转服务。
 
 因此，更准确的关系是：
 
@@ -386,6 +394,11 @@ Runtime 事件重建的视图，不能反向驱动 Agent。
 - Policy 精确绑定其版本和 Runtime Role；
 - 它们不能由普通用户在线创建或发布；
 - 它们不拥有运行状态，也不充当子 Thread 记录。
+
+Supervisor Policy 目录已经先采用同一原则：服务端注册表是新 Run 可选版本的唯一
+来源，浏览器只消费其有界摘要；不可变历史版本仍可被已绑定 Run 恢复，但不会出现在
+新建列表，也不能通过新 Run 接口重新选择。当前目录只有一个供应链模板不代表产品
+语义被限定为供应链，增加其他领域应通过发布新的 Policy/Definition 包完成。
 
 ### 4.6 Task 与 Run：把业务目标和执行尝试分开
 

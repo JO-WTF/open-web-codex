@@ -19,8 +19,9 @@ const client = {
   selectProviderModel: vi.fn(),
   updateThreadModelSelection: vi.fn(),
   listMcpServerStatus: vi.fn(),
+  listSupervisorPolicies: vi.fn(),
   getAccountRateLimits: vi.fn(),
-  getEnterpriseSupervisorOverview: vi.fn(),
+  getSupervisorOverview: vi.fn(),
   startThread: vi.fn(),
   resumeThread: vi.fn(),
   listThreadTurns: vi.fn(),
@@ -67,8 +68,14 @@ describe("WebApp workspace-first messaging", () => {
     client.selectProviderModel.mockResolvedValue({ data: [] });
     client.updateThreadModelSelection.mockResolvedValue({});
     client.listMcpServerStatus.mockResolvedValue({ data: [] });
+    client.listSupervisorPolicies.mockResolvedValue([{
+      policy_id: "enterprise-supervisor-copilot",
+      version: "1.1.0",
+      display_name: "Enterprise Supervisor Copilot",
+      description: "Coordinates governed data analysis and warehouse-network planning agents.",
+    }]);
     client.getAccountRateLimits.mockResolvedValue({});
-    client.getEnterpriseSupervisorOverview.mockResolvedValue(null);
+    client.getSupervisorOverview.mockResolvedValue(null);
     client.startThread.mockResolvedValue({ thread: { id: "thread-new" } });
     client.resumeThread.mockResolvedValue({ thread: { id: "thread-new", turns: [] } });
     client.listThreadTurns.mockResolvedValue([]);
@@ -126,15 +133,15 @@ describe("WebApp workspace-first messaging", () => {
     expect(screen.getByText("No Agent activity yet")).toBeTruthy();
   });
 
-  it("starts and identifies an explicitly selected Enterprise Supervisor Copilot", async () => {
-    client.getEnterpriseSupervisorOverview.mockResolvedValue({
+  it("starts and identifies a Supervisor selected from the published catalog", async () => {
+    client.getSupervisorOverview.mockResolvedValue({
       taskTitle: "Enterprise network planning",
       policy: {
         run_id: "run-enterprise",
         task_id: "task-enterprise",
         thread_id: "thread-new",
         policy_id: "enterprise-supervisor-copilot",
-        version: "1.0.0",
+        version: "1.1.0",
         display_name: "Enterprise Supervisor Copilot",
         content_sha256: "a".repeat(64),
         state: "bound",
@@ -205,7 +212,10 @@ describe("WebApp workspace-first messaging", () => {
     render(<WebApp />);
 
     fireEvent.click(await screen.findByRole("button", {
-      name: "New enterprise copilot in Demo",
+      name: "Choose supervisor policy in Demo",
+    }));
+    fireEvent.click(await screen.findByRole("button", {
+      name: /Enterprise Supervisor Copilot/,
     }));
 
     await waitFor(() => expect(client.startThread).toHaveBeenCalledWith(
@@ -213,18 +223,18 @@ describe("WebApp workspace-first messaging", () => {
       {
         supervisorPolicy: {
           policy_id: "enterprise-supervisor-copilot",
-          version: "1.0.0",
+          version: "1.1.0",
         },
       },
     ));
-    await waitFor(() => expect(client.getEnterpriseSupervisorOverview)
+    await waitFor(() => expect(client.getSupervisorOverview)
       .toHaveBeenCalledWith("thread-new"));
     fireEvent.click(await screen.findByRole("button", { name: "Agent activity" }));
     await waitFor(() => {
-      expect(screen.getByText("Policy enterprise-supervisor-copilot · 1.0.0"))
+      expect(screen.getByText("Policy enterprise-supervisor-copilot · 1.1.0"))
         .toBeTruthy();
       expect(screen.getByText("Root Supervisor")).toBeTruthy();
-      expect(screen.getByText("Inspect enterprise planning data.")).toBeTruthy();
+      expect(screen.getAllByText("Inspect enterprise planning data.")).toHaveLength(2);
     });
   });
 
@@ -299,11 +309,11 @@ describe("WebApp workspace-first messaging", () => {
         updatedAt: "2026-07-26T00:00:02Z",
       }],
     });
-    client.getEnterpriseSupervisorOverview.mockResolvedValue(baseOverview);
+    client.getSupervisorOverview.mockResolvedValue(baseOverview);
     render(<WebApp />);
 
     fireEvent.click(await screen.findByText("Supervisor case"));
-    await waitFor(() => expect(client.getEnterpriseSupervisorOverview)
+    await waitFor(() => expect(client.getSupervisorOverview)
       .toHaveBeenCalledWith("thread-new"));
     const agentButton = await screen.findByRole("button", { name: "Agent activity" });
     await waitFor(() => expect((agentButton as HTMLButtonElement).disabled).toBe(false));
@@ -315,8 +325,8 @@ describe("WebApp workspace-first messaging", () => {
       await new Promise((resolve) => window.setTimeout(resolve, 180));
     });
 
-    const previousRefreshes = client.getEnterpriseSupervisorOverview.mock.calls.length;
-    client.getEnterpriseSupervisorOverview.mockResolvedValue({
+    const previousRefreshes = client.getSupervisorOverview.mock.calls.length;
+    client.getSupervisorOverview.mockResolvedValue({
       ...baseOverview,
       activities: [
         assignment,
@@ -374,12 +384,12 @@ describe("WebApp workspace-first messaging", () => {
     });
 
     await waitFor(() => expect(
-      client.getEnterpriseSupervisorOverview.mock.calls.length,
+      client.getSupervisorOverview.mock.calls.length,
     ).toBeGreaterThan(previousRefreshes));
     expect(await screen.findAllByLabelText("New Agent activity")).toHaveLength(2);
 
     fireEvent.click(agentButton);
-    expect(await screen.findAllByText("Using planning data · load network")).toHaveLength(1);
+    expect(await screen.findAllByText("Using planning data · load network")).toHaveLength(2);
     expect(screen.queryByLabelText("New Agent activity")).toBeNull();
   });
 
@@ -763,6 +773,54 @@ describe("WebApp workspace-first messaging", () => {
 
     expect(screen.queryByText("Replayed first-thread content")).toBeNull();
     expect(view.container.querySelector(".web-ws-thread-active")).toBeNull();
+  });
+
+  it("converges an interrupted replayed Turn to the Runtime Thread idle status", async () => {
+    client.listThreads.mockResolvedValue({
+      data: [{
+        id: "thread-recovery",
+        name: "Recovering thread",
+        cwd: "/tmp/demo",
+        updatedAt: Date.now(),
+        status: "idle",
+      }],
+    });
+    render(<WebApp />);
+
+    await screen.findByText("Recovering thread");
+    act(() => {
+      appServerEventHandler?.({
+        workspace_id: "workspace-1",
+        message: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-recovery",
+            turn: { id: "turn-before-restart" },
+          },
+        },
+      });
+    });
+    expect(screen.getByRole("status", { name: "Thread is running" })).toBeTruthy();
+
+    act(() => {
+      appServerEventHandler?.({
+        workspace_id: "workspace-1",
+        message: {
+          method: "thread/status/changed",
+          params: {
+            threadId: "thread-recovery",
+            status: { type: "idle" },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("status", { name: "Thread is running" })).toBeNull();
+    });
+    expect((screen.getByRole("button", {
+      name: "Archive thread Recovering thread",
+    }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("clears Working and live item state after stopping succeeds", async () => {

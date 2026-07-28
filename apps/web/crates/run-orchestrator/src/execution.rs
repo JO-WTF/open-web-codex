@@ -1,5 +1,5 @@
 use chrono::Utc;
-use open_web_codex_adapter::AuthorizedWorkspace;
+use open_web_codex_adapter::{AdapterError, AuthorizedWorkspace};
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -351,6 +351,9 @@ fn failure_code(error: &RunOrchestratorError) -> &'static str {
         RunOrchestratorError::LeaseLost => "lease_lost",
         RunOrchestratorError::Database(_) => "database_error",
         RunOrchestratorError::Git(_) => "git_workspace_error",
+        RunOrchestratorError::Adapter(AdapterError::CapabilityUnavailable(_)) => {
+            "runtime_start_preflight_failed"
+        }
         RunOrchestratorError::Adapter(_) => "codex_unavailable",
         RunOrchestratorError::StartPreflight(_) => "runtime_start_preflight_failed",
     }
