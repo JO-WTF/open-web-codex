@@ -79,8 +79,12 @@ esac
 
 stop_all
 
-if [[ ! -d "$ROOT/apps/web/node_modules" ]]; then
+if [[ ! -d "$ROOT/apps/web/node_modules" ]] \
+  || ! (cd "$ROOT/apps/web" && npm ls --depth=0 >/dev/null 2>&1); then
   (cd "$ROOT/apps/web" && npm ci)
+fi
+if [[ ! -f "$ROOT/apps/web/dist/index.html" ]]; then
+  (cd "$ROOT/apps/web" && npm run build)
 fi
 if [[ ! -x "$ROOT/apps/web/target/debug/open-web-codex-server" ]]; then
   (cd "$ROOT/apps/web" && CARGO_INCREMENTAL=0 cargo build --locked -p open-web-codex-server)

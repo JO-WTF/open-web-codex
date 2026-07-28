@@ -17,7 +17,7 @@ tmp/
 .local/
 
 # Component build output
-apps/web/node_modules/
+**/node_modules/
 apps/web/dist/
 apps/web/target/
 apps/web/src-tauri/target/
