@@ -1,12 +1,12 @@
 mod agent_catalog;
 mod event_projection;
+mod governed_runtime_preflight;
 mod middleware;
 mod routes;
 #[cfg(test)]
 mod security_integration;
 mod supervisor_instruction_policy;
 mod supervisor_policy;
-mod supervisor_runtime_preflight;
 
 use std::fs;
 use std::net::SocketAddr;
@@ -208,13 +208,12 @@ async fn main() -> anyhow::Result<()> {
         state.db.clone(),
         profile_binding.runtime_key.clone(),
     ));
-    let start_preflight = Arc::new(
-        supervisor_runtime_preflight::SupervisorRuntimePreflight::new(
-            adapter.clone(),
-            profile_binding.clone(),
-            state.db.clone(),
-        ),
-    );
+    let start_preflight = Arc::new(governed_runtime_preflight::GovernedRuntimePreflight::new(
+        adapter.clone(),
+        profile_binding.clone(),
+        state.db.clone(),
+        git.clone(),
+    ));
     let orchestrator = Arc::new(RunOrchestrator::new(
         state.db.clone(),
         git.clone(),

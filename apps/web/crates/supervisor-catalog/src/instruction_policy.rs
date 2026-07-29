@@ -10,11 +10,11 @@ use crate::validation::{is_safe_definition_id, is_safe_version};
 
 const PLATFORM_SUPERVISOR_BEHAVIOR: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/supervisor-instruction-policies/platform-supervisor-behavior/1.0.0/instructions.md"
+    "/../../../../capabilities/supervisor-instruction-policies/platform-supervisor-behavior/1.1.0/instructions.md"
 ));
 const PLATFORM_SUPERVISOR_BEHAVIOR_MANIFEST: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/supervisor-instruction-policies/platform-supervisor-behavior/1.0.0/manifest.json"
+    "/../../../../capabilities/supervisor-instruction-policies/platform-supervisor-behavior/1.1.0/manifest.json"
 ));
 
 struct PublishedInstructionPolicyResource {

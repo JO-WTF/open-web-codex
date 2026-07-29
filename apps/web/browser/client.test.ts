@@ -35,6 +35,7 @@ describe("PlatformClient", () => {
       fork_thread_id: null,
       fork_source_run_id: null,
       supervisor_policy: null,
+      agent: null,
     });
     expect(fetchMock.mock.calls[1]?.[0]).toBe("https://platform.test/api/tasks/task%2Fone/messages");
     expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({
@@ -77,6 +78,51 @@ describe("PlatformClient", () => {
       "https://platform.test/api/runs/run%2Fone/agent-executions",
       expect.objectContaining({ cache: "no-store" }),
     );
+  });
+
+  it("uploads Dataset Release files without forcing a JSON content type", async () => {
+    const release = {
+      id: "release-1",
+      workspace_id: "workspace-1",
+      dataset_id: "network",
+      version: "1.0.0",
+      state: "published",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(release), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PlatformClient({
+      baseUrl: "https://platform.test",
+      token: "session-token",
+    });
+    const file = new File(["customers"], "customers.csv", { type: "text/csv" });
+    const request = {
+      idempotency_key: "dataset-request-1",
+      dataset_id: "network",
+      version: "1.0.0",
+      display_name: "Network",
+      description: "Network inputs",
+      files: [{
+        field_id: "file-0",
+        logical_name: "customers.csv",
+        role: "customers",
+        media_type: "text/csv",
+      }],
+    };
+
+    await expect(
+      client.publishWorkspaceDatasetRelease(
+        "workspace/one",
+        request,
+        new Map([["file-0", file]]),
+      ),
+    ).resolves.toEqual(release);
+
+    const [, init] = fetchMock.mock.calls[0] ?? [];
+    expect(init?.body).toBeInstanceOf(FormData);
+    expect(new Headers(init?.headers).has("content-type")).toBe(false);
+    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer session-token");
   });
 
   it("reads only Run-scoped Agent history and authorized Artifact content", async () => {
@@ -131,6 +177,36 @@ describe("PlatformClient", () => {
       supervisor_policy: {
         policy_id: "enterprise-supervisor-copilot",
         version: "1.0.0",
+      },
+      agent: null,
+    });
+  });
+
+  it("sends only an exact published Agent reference when starting a governed Run", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ run: { id: "run-1" } }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("crypto", { randomUUID: () => "018f-idempotency-key" });
+    const client = new PlatformClient({ baseUrl: "https://platform.test", token: "session-token" });
+
+    await client.startRun("task-one", "workspace-one", {
+      agent: {
+        definition_id: "network-planning-agent",
+        version: "2.0.0",
+        release_id: "018f-agent-release",
+      },
+    });
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      idempotency_key: "018f-idempotency-key",
+      workspace_id: "workspace-one",
+      fork_thread_id: null,
+      fork_source_run_id: null,
+      supervisor_policy: null,
+      agent: {
+        definition_id: "network-planning-agent",
+        version: "2.0.0",
+        release_id: "018f-agent-release",
       },
     });
   });
@@ -276,6 +352,7 @@ describe("PlatformClient", () => {
 
   it("validates, tests, and publishes a Python capability through Workspace resources", async () => {
     const capability = {
+      idempotency_key: "capability-request-1",
       slug: "stock-history",
       version: "1.0.0",
       display_name: "Stock history",
@@ -292,6 +369,8 @@ describe("PlatformClient", () => {
         description: "Use for stock history.",
         instructions: "Call stock_data.lookup_stock.",
       },
+      input_artifact_types: [],
+      output_artifact_types: ["stock-history.report.v1"],
     };
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({
@@ -304,12 +383,14 @@ describe("PlatformClient", () => {
         result: { ticker: "DEMO" },
       }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
+        release_id: "release-1",
         package_id: "stock-history",
         version: "1.0.0",
-        capability_root_id: "local-stock-history",
+        capability_root_id: "local-stock-history-1-0-0",
         server_name: "stock_data",
         skill_name: "stock-history",
-        written_files: ["tools/stock-history/.mcp.json"],
+        content_sha256: "a".repeat(64),
+        written_files: ["tools/stock-history/1.0.0/.mcp.json"],
       }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const client = new PlatformClient({

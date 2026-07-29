@@ -40,7 +40,7 @@ mcp = FastMCP(
         "never request or accept organization IDs, Profile IDs, credentials, arbitrary SQL, "
         "filesystem paths, or write statements. Call list_planning_sources when no source ID "
         "has already been authorized, then call inspect_planning_source before "
-        "build_planning_dataset. The build tool publishes planning-dataset.v1 as an immutable "
+        "build_planning_dataset. The build tool publishes planning-dataset.v2 as an immutable "
         "MCP Resource with source range, units, row counts, promotion share, delivery baseline, "
         "and data-quality limitations. Copy data_ref unchanged. Validate the Resource before "
         "handing it to the Network Planning Agent. Do not paste unbounded source rows into "
@@ -125,6 +125,8 @@ def _catalog_entry(source: PlanningSource) -> PlanningSourceCatalogEntry:
     )
     return PlanningSourceCatalogEntry(
         source_id=source.source_id,
+        market=source.market,
+        label=source.label,
         source_updated_at=source.source_updated_at,
         planning_period=source.planning_period,
         currency=source.currency,
@@ -135,6 +137,9 @@ def _catalog_entry(source: PlanningSource) -> PlanningSourceCatalogEntry:
         demand_units=summary.demand_units,
         demand_node_count=summary.demand_node_count,
         facility_count=summary.facility_count,
+        existing_facility_count=summary.existing_facility_count,
+        candidate_facility_count=summary.candidate_facility_count,
+        route_count=summary.route_count,
         regions=regions,
     )
 
@@ -187,7 +192,7 @@ def inspect_planning_source(source_id: str) -> PlanningSourceInspection:
 def build_planning_dataset(
     source_id: str,
 ) -> Annotated[CallToolResult, DataAgentResourceToolResult]:
-    """Aggregate an authorized source into an immutable planning-dataset.v1 Resource."""
+    """Aggregate an authorized source into an immutable planning-dataset.v2 Resource."""
     dataset = build_planning_dataset_from_source_id(source_id)
     published = _store().publish(dataset.schema_version, dataset)
     quality = "valid" if dataset.data_quality.valid else "has blocking data gaps"
@@ -223,12 +228,12 @@ def validate_planning_dataset(
     """Validate planning-dataset structure, totals, handoff projection, and quality state."""
     if resource_ref.server != MCP_SERVER_NAME:
         raise ValueError(f"data_ref.server must be {MCP_SERVER_NAME}")
-    if resource_ref.resource_schema != "planning-dataset.v1":
-        raise ValueError("resource_ref must identify planning-dataset.v1")
+    if resource_ref.resource_schema != "planning-dataset.v2":
+        raise ValueError("resource_ref must identify planning-dataset.v2")
     dataset = PlanningDataset.model_validate(_store().load_uri(resource_ref.uri))
     errors: list[str] = []
     warnings = list(dataset.data_quality.warnings)
-    checks: list[str] = ["resource conforms to planning-dataset.v1"]
+    checks: list[str] = ["resource conforms to planning-dataset.v2"]
 
     distribution_units = sum(
         item.demand_units for item in dataset.demand_distribution
@@ -250,6 +255,17 @@ def validate_planning_dataset(
     projection_ids = {item.demand_id for item in dataset.network_input.demand_points}
     if distribution_ids != projection_ids:
         errors.append("distribution and network_input demand identifiers differ")
+    expected_route_pairs = {
+        (facility.facility_id, demand.demand_id)
+        for facility in dataset.network_input.facilities
+        for demand in dataset.network_input.demand_points
+    }
+    route_pairs = {
+        (route.origin_facility_id, route.destination_demand_id)
+        for route in dataset.route_entries
+    }
+    if route_pairs != expected_route_pairs:
+        errors.append("route facts do not cover the network handoff projection")
     if dataset.data_quality.errors:
         errors.extend(dataset.data_quality.errors)
     if not errors:
@@ -258,6 +274,7 @@ def validate_planning_dataset(
                 "demand totals reconcile across source, distribution, and network projection",
                 "delivery observed and unobserved units reconcile to total demand",
                 "demand identifiers match the network handoff projection",
+                "route facts cover every facility-demand pair in the network projection",
             ]
         )
     return ValidationResult(

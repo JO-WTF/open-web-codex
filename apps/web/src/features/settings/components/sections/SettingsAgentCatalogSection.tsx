@@ -1,7 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type {
+  AgentCapabilityTemplateSelection,
   AgentDefinitionDraftRequest,
   AgentDefinitionSummary,
+  CapabilityPackageSummary,
 } from "../../../../../browser/types";
 import {
   SettingsSection,
@@ -21,11 +23,90 @@ type SettingsAgentCatalogSectionComponentProps =
     studioMode?: boolean;
   };
 
-function identity(agent: Pick<AgentDefinitionSummary, "definition_id" | "version">) {
+function agentIdentity(agent: Pick<AgentDefinitionSummary, "definition_id" | "version">) {
   return `${agent.definition_id}@${agent.version}`;
 }
 
-function emptyDraft(template?: AgentDefinitionSummary): AgentDefinitionDraftRequest {
+type CapabilityTemplateOption = {
+  key: string;
+  source: "repository_agent" | "workspace_package_release";
+  definition_id: string;
+  version: string;
+  release_id: string | null;
+  display_name: string;
+  description: string;
+  required_capabilities: string[];
+  input_artifact_types: string[];
+  output_artifact_types: string[];
+  workspace_id: string | null;
+};
+
+function capabilityTemplateKey(
+  selection: AgentCapabilityTemplateSelection,
+) {
+  return selection.source === "repository_agent"
+    ? `repository:${selection.definition_id}@${selection.version}`
+    : `workspace:${selection.release_id ?? "missing"}`;
+}
+
+function capabilityTemplateLabel(
+  selection: AgentCapabilityTemplateSelection,
+) {
+  const identity = `${selection.definition_id}@${selection.version}`;
+  return selection.source === "repository_agent"
+    ? `${identity} · built-in`
+    : `${identity} · Workspace release`;
+}
+
+function repositoryTemplateOption(
+  template: AgentDefinitionSummary,
+): CapabilityTemplateOption {
+  const selection: AgentCapabilityTemplateSelection = {
+    source: "repository_agent",
+    definition_id: template.definition_id,
+    version: template.version,
+    release_id: null,
+  };
+  return {
+    key: capabilityTemplateKey(selection),
+    ...selection,
+    display_name: template.display_name,
+    description: template.description,
+    required_capabilities: template.required_capabilities,
+    input_artifact_types: template.input_artifact_types,
+    output_artifact_types: template.output_artifact_types,
+    workspace_id: null,
+  };
+}
+
+function workspaceTemplateOption(
+  capabilityPackage: CapabilityPackageSummary,
+): CapabilityTemplateOption | null {
+  if (
+    capabilityPackage.release_id == null
+    || capabilityPackage.workspace_id == null
+  ) {
+    return null;
+  }
+  const selection: AgentCapabilityTemplateSelection = {
+    source: "workspace_package_release",
+    definition_id: capabilityPackage.package_id,
+    version: capabilityPackage.version,
+    release_id: capabilityPackage.release_id,
+  };
+  return {
+    key: capabilityTemplateKey(selection),
+    ...selection,
+    display_name: capabilityPackage.display_name,
+    description: capabilityPackage.description,
+    required_capabilities: capabilityPackage.capabilities,
+    input_artifact_types: capabilityPackage.input_artifact_types,
+    output_artifact_types: capabilityPackage.output_artifact_types,
+    workspace_id: capabilityPackage.workspace_id,
+  };
+}
+
+function emptyDraft(template?: CapabilityTemplateOption): AgentDefinitionDraftRequest {
   return {
     definition_id: "",
     version: "1.0.0",
@@ -36,9 +117,12 @@ function emptyDraft(template?: AgentDefinitionSummary): AgentDefinitionDraftRequ
     input_artifact_types: template?.input_artifact_types ?? [],
     output_artifact_types: template?.output_artifact_types ?? [],
     capability_template: {
+      source: template?.source ?? "repository_agent",
       definition_id: template?.definition_id ?? "",
       version: template?.version ?? "",
+      release_id: template?.release_id ?? null,
     },
+    dataset_release_ids: [],
   };
 }
 
@@ -46,6 +130,10 @@ export function SettingsAgentCatalogSection({
   definitions,
   publishedAgents,
   templates,
+  capabilityPackages,
+  datasetReleases,
+  workspaceNames,
+  isLoadingDatasets,
   isLoading,
   actionDefinitionId,
   loadingAgentKey,
@@ -57,24 +145,54 @@ export function SettingsAgentCatalogSection({
   onValidate,
   onPublish,
   onLoadPublished,
+  onLoadDatasetReleases,
   studioMode = false,
 }: SettingsAgentCatalogSectionComponentProps) {
+  const capabilityTemplateOptions = useMemo(() => {
+    const repositoryOptions = templates.map(repositoryTemplateOption);
+    const workspaceOptions = capabilityPackages
+      .map(workspaceTemplateOption)
+      .filter((option): option is CapabilityTemplateOption => option != null);
+    return [...repositoryOptions, ...workspaceOptions];
+  }, [capabilityPackages, templates]);
   const [editingDefinitionId, setEditingDefinitionId] = useState<string | null>(null);
   const [viewingAgentKey, setViewingAgentKey] = useState<string | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [draft, setDraft] = useState<AgentDefinitionDraftRequest>(() =>
-    emptyDraft(templates[0])
+    emptyDraft(capabilityTemplateOptions[0])
   );
   const [responsibilitiesText, setResponsibilitiesText] = useState("");
   const [showEditorValidation, setShowEditorValidation] = useState(false);
   const selectedTemplate = useMemo(
     () =>
-      templates.find(
-        (template) =>
-          template.definition_id === draft.capability_template.definition_id
-          && template.version === draft.capability_template.version,
+      capabilityTemplateOptions.find(
+        (template) => template.key === capabilityTemplateKey(draft.capability_template),
       ) ?? null,
-    [draft.capability_template, templates],
+    [capabilityTemplateOptions, draft.capability_template],
+  );
+  useEffect(() => {
+    if (!selectedTemplate || (studioMode && !editorOpen)) return;
+    void onLoadDatasetReleases(selectedTemplate.workspace_id);
+  }, [
+    editorOpen,
+    onLoadDatasetReleases,
+    selectedTemplate,
+    studioMode,
+  ]);
+  const selectedDatasetWorkspaceId = draft.dataset_release_ids
+    .map((releaseId) =>
+      datasetReleases.find((release) => release.id === releaseId)?.workspace_id
+    )
+    .find((workspaceId) => workspaceId != null) ?? null;
+  const requiredDatasetWorkspaceId =
+    selectedTemplate?.workspace_id ?? selectedDatasetWorkspaceId;
+  const availableDatasetReleases = datasetReleases.filter(
+    (release) =>
+      release.state === "published"
+      && (
+        requiredDatasetWorkspaceId == null
+        || release.workspace_id === requiredDatasetWorkspaceId
+      ),
   );
   const responsibilities = responsibilitiesText
     .split("\n")
@@ -142,7 +260,7 @@ export function SettingsAgentCatalogSection({
 
   const resetEditor = () => {
     setEditingDefinitionId(null);
-    setDraft(emptyDraft(templates[0]));
+    setDraft(emptyDraft(capabilityTemplateOptions[0]));
     setResponsibilitiesText("");
     setShowEditorValidation(false);
     setEditorOpen(false);
@@ -151,7 +269,7 @@ export function SettingsAgentCatalogSection({
   const createDefinition = () => {
     setViewingAgentKey(null);
     setEditingDefinitionId(null);
-    setDraft(emptyDraft(templates[0]));
+    setDraft(emptyDraft(capabilityTemplateOptions[0]));
     setResponsibilitiesText("");
     setShowEditorValidation(false);
     setEditorOpen(true);
@@ -170,16 +288,21 @@ export function SettingsAgentCatalogSection({
   };
 
   const selectTemplate = (templateIdentity: string) => {
-    const template = templates.find((candidate) => identity(candidate) === templateIdentity);
+    const template = capabilityTemplateOptions.find(
+      (candidate) => candidate.key === templateIdentity,
+    );
     if (!template) return;
     setDraft((current) => ({
       ...current,
       capability_template: {
+        source: template.source,
         definition_id: template.definition_id,
         version: template.version,
+        release_id: template.release_id,
       },
       input_artifact_types: template.input_artifact_types,
       output_artifact_types: template.output_artifact_types,
+      dataset_release_ids: [],
     }));
   };
 
@@ -196,6 +319,15 @@ export function SettingsAgentCatalogSection({
     }));
   };
 
+  const toggleDatasetRelease = (releaseId: string, checked: boolean) => {
+    setDraft((current) => ({
+      ...current,
+      dataset_release_ids: checked
+        ? [...current.dataset_release_ids, releaseId]
+        : current.dataset_release_ids.filter((value) => value !== releaseId),
+    }));
+  };
+
   const save = async () => {
     setShowEditorValidation(true);
     if (editorIssue) return;
@@ -209,7 +341,7 @@ export function SettingsAgentCatalogSection({
   const saving = actionDefinitionId === (editingDefinitionId ?? "new");
 
   const viewPublished = (agent: AgentDefinitionSummary) => {
-    const key = identity(agent);
+    const key = agentIdentity(agent);
     if (!studioMode && viewingAgentKey === key) {
       setViewingAgentKey(null);
       return;
@@ -221,7 +353,7 @@ export function SettingsAgentCatalogSection({
     }
   };
   const visiblePublishedAgents = studioMode && viewingAgentKey
-    ? publishedAgents.filter((agent) => identity(agent) === viewingAgentKey)
+    ? publishedAgents.filter((agent) => agentIdentity(agent) === viewingAgentKey)
     : publishedAgents;
 
   return (
@@ -270,7 +402,7 @@ export function SettingsAgentCatalogSection({
               : "Browse built-in packages and organization releases before creating or editing a draft."}
           />
       {visiblePublishedAgents.map((agent) => {
-        const key = identity(agent);
+        const key = agentIdentity(agent);
         const detail = detailByAgent[key];
         const expanded = viewingAgentKey === key;
         return (
@@ -336,9 +468,21 @@ export function SettingsAgentCatalogSection({
                 </div>
                 {detail.capability_template && (
                   <div className="settings-help">
-                    Capability template: {identity(detail.capability_template)}
+                    Capability template: {capabilityTemplateLabel(detail.capability_template)}
                   </div>
                 )}
+                <div>
+                  <strong>Authorized data</strong>
+                  {detail.dataset_releases.length > 0 ? (
+                    <ul>
+                      {detail.dataset_releases.map((release) => (
+                        <li key={release.release_id}>
+                          {release.display_name} · {release.dataset_id}@{release.version}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : <div className="settings-help">No Dataset Release</div>}
+                </div>
                 <div>
                   <strong>Agent instructions</strong>
                   <pre>{detail.developer_instructions}</pre>
@@ -471,17 +615,30 @@ export function SettingsAgentCatalogSection({
             aria-label="Reviewed capability template"
             value={
               draft.capability_template.definition_id
-                ? `${draft.capability_template.definition_id}@${draft.capability_template.version}`
+                ? capabilityTemplateKey(draft.capability_template)
                 : ""
             }
             onChange={(event) => selectTemplate(event.target.value)}
           >
             <option value="">Select a capability template</option>
-            {templates.map((template) => (
-              <option value={identity(template)} key={identity(template)}>
-                {template.display_name} · {template.version}
-              </option>
-            ))}
+            <optgroup label="Built-in Agent templates">
+              {capabilityTemplateOptions
+                .filter((template) => template.source === "repository_agent")
+                .map((template) => (
+                  <option value={template.key} key={template.key}>
+                    {template.display_name} · {template.version}
+                  </option>
+                ))}
+            </optgroup>
+            <optgroup label="Workspace capability packages">
+              {capabilityTemplateOptions
+                .filter((template) => template.source === "workspace_package_release")
+                .map((template) => (
+                  <option value={template.key} key={template.key}>
+                    {template.display_name} · {template.version}
+                  </option>
+                ))}
+            </optgroup>
           </select>
         </label>
         {selectedTemplate && (
@@ -492,6 +649,43 @@ export function SettingsAgentCatalogSection({
                 <small>{selectedTemplate.required_capabilities.join(", ")}</small>
               </span>
             </div>
+            <div className="settings-supervisor-picker-title">
+              <AgentStudioFieldHeading help="Choose only immutable Dataset Releases this Agent needs. The platform passes logical release identities to the Agent; it never exposes a server path.">
+                Authorized data
+              </AgentStudioFieldHeading>
+            </div>
+            <AgentStudioDerivedNotice title="Optional, exact Dataset Releases">
+              Select data from one Workspace. This limits what the Agent is
+              instructed to use and lets the Run reject a mismatched Workspace
+              before Runtime execution.
+            </AgentStudioDerivedNotice>
+            {isLoadingDatasets && availableDatasetReleases.length === 0 && (
+              <div className="settings-help">Loading Dataset Releases…</div>
+            )}
+            {!isLoadingDatasets && availableDatasetReleases.length === 0 && (
+              <div className="settings-help">
+                No published Dataset Release is available for this capability template.
+              </div>
+            )}
+            {availableDatasetReleases.map((release) => (
+              <label className="settings-supervisor-option" key={release.id}>
+                <input
+                  type="checkbox"
+                  checked={draft.dataset_release_ids.includes(release.id)}
+                  onChange={(event) =>
+                    toggleDatasetRelease(release.id, event.target.checked)
+                  }
+                />
+                <span>
+                  <strong>{release.display_name} · {release.version}</strong>
+                  <small>
+                    {release.dataset_id}
+                    {" · "}
+                    {workspaceNames[release.workspace_id] ?? "Authorized Workspace"}
+                  </small>
+                </span>
+              </label>
+            ))}
             <div className="settings-supervisor-picker-title">
               <AgentStudioFieldHeading help="Artifact type IDs come from the reviewed template and cannot be entered manually. Keep only the inputs this Agent consumes and outputs it can actually deliver.">
                 Artifact contracts
@@ -618,7 +812,7 @@ export function SettingsAgentCatalogSection({
                     className="ghost"
                     onClick={() =>
                       editDefinition(definition.id, {
-                        ...emptyDraft(templates[0]),
+                        ...emptyDraft(capabilityTemplateOptions[0]),
                         definition_id: definition.definition_id,
                         display_name: definition.display_name,
                         description: definition.description,

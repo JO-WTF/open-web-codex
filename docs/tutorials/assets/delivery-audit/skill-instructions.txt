@@ -1,0 +1,13 @@
+Use this Skill when the user asks to audit the delivery commitment tutorial data.
+
+Call delivery_audit.audit_delivery_commitments exactly once with the platform-authorized
+Workspace ID, Dataset Release ID, Dataset ID, version, and content SHA-256 injected into
+the Agent instructions. Use only the Tool result for counts, rates, late shipment IDs,
+and province rankings. Do not search the Workspace, open CSV files directly, infer
+missing rows, or recalculate a different on-time definition.
+
+If no exact Dataset Release identity is present, stop and report that the Agent has not
+been authorized for the required data. In the final answer, state the shipment on-time
+rate, demand-weighted on-time rate, worst province, late shipment IDs, exact Dataset
+version, exact delivery_audit_report.v1 resource_name, and the checks returned by the
+Tool. Do not expose the internal data_ref URI.

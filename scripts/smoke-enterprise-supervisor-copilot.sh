@@ -76,11 +76,16 @@ fi
 
 mkdir -p "${pg_socket}" "${profile_root}" "${runner_root}" "${data_root}/logs"
 /opt/homebrew/opt/postgresql@17/bin/initdb \
-  -D "${pg_data}" -A trust -U postgres --no-locale >/dev/null
+  -D "${pg_data}" -A trust -U postgres --no-locale --encoding=UTF8 >/dev/null
 /opt/homebrew/opt/postgresql@17/bin/pg_ctl \
   -D "${pg_data}" -o "-F -p ${pg_port} -k ${pg_socket}" -w start >/dev/null
 /opt/homebrew/opt/postgresql@17/bin/createdb \
   -h "${pg_socket}" -p "${pg_port}" -U postgres enterprise_e2e
+[[ "$(
+  /opt/homebrew/opt/postgresql@17/bin/psql \
+    -h "${pg_socket}" -p "${pg_port}" -U postgres -d enterprise_e2e \
+    -Atc "SHOW server_encoding"
+)" == "UTF8" ]]
 
 export DATABASE_URL="postgresql://postgres@localhost:${pg_port}/enterprise_e2e?host=${pg_socket}"
 export CODEX_MODE="real"
@@ -121,52 +126,8 @@ curl --silent --fail "http://127.0.0.1:${server_port}/api/health" >/dev/null
     npm run test:e2e:enterprise-supervisor
 )
 
-node - "${profile_root}" "${evidence_file}" <<'NODE'
-const fs = require("node:fs");
-const path = require("node:path");
-
-const [, , profileRoot, evidenceFile] = process.argv;
-const evidence = JSON.parse(fs.readFileSync(evidenceFile, "utf8"));
-const expectedThreadIds = new Set(
-  evidence.agents.map((agent) => agent.thread_id).filter(Boolean),
-);
-const observedVersions = new Map();
-
-function visit(directory) {
-  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-    const entryPath = path.join(directory, entry.name);
-    if (entry.isDirectory()) {
-      visit(entryPath);
-      continue;
-    }
-    if (!entry.name.endsWith(".jsonl")) {
-      continue;
-    }
-    const firstLine = fs.readFileSync(entryPath, "utf8").split("\n", 1)[0];
-    const event = JSON.parse(firstLine);
-    if (event.type !== "session_meta") {
-      continue;
-    }
-    const threadId = event.payload?.id;
-    if (expectedThreadIds.has(threadId)) {
-      observedVersions.set(threadId, event.payload?.multi_agent_version);
-    }
-  }
-}
-
-visit(path.join(profileRoot, "sessions"));
-const failures = [...expectedThreadIds].filter(
-  (threadId) => observedVersions.get(threadId) !== "v2",
-);
-if (failures.length > 0) {
-  throw new Error(
-    `Governed Agent threads did not all use Multi-Agent V2: ${failures
-      .map((threadId) => `${threadId}=${observedVersions.get(threadId) ?? "missing"}`)
-      .join(", ")}`,
-  );
-}
-console.log(`Verified Multi-Agent V2 for ${expectedThreadIds.size} governed threads.`);
-NODE
+node "${web_root}/scripts/verify-enterprise-agent-modes.mjs" \
+  "${profile_root}" "${evidence_file}"
 
 print "E2E_ROOT=${e2e_root}"
 print "EVIDENCE_FILE=${evidence_file}"

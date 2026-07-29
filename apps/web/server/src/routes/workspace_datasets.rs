@@ -1,0 +1,993 @@
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Component, Path as FilePath};
+use std::sync::Arc;
+
+use axum::{
+    extract::{Multipart, Path, State},
+    http::StatusCode,
+    Extension, Json,
+};
+use chrono::{DateTime, Duration, Utc};
+use open_web_codex_git_runtime::{GitRuntime, GitRuntimeError};
+use open_web_codex_platform_contracts::error::PlatformError;
+use open_web_codex_platform_contracts::{
+    PublishWorkspaceDatasetRequest, WorkspaceDatasetReleaseFileSummary,
+    WorkspaceDatasetReleaseSummary, WorkspaceDatasetUploadFile,
+};
+use open_web_codex_platform_store::AppState;
+use serde_json::json;
+use sha2::{Digest, Sha256};
+use sqlx::{Postgres, Row, Transaction};
+use uuid::Uuid;
+
+use crate::middleware::auth::AuthenticatedUser;
+
+use super::workspaces::authorized_workspace;
+
+type ApiError = (StatusCode, Json<PlatformError>);
+type ApiResult<T> = Result<Json<T>, ApiError>;
+
+const MAX_METADATA_BYTES: usize = 64 * 1024;
+const MAX_FILES: usize = 32;
+const MAX_FILE_BYTES: usize = 32 * 1024 * 1024;
+const MAX_TOTAL_FILE_BYTES: usize = 64 * 1024 * 1024;
+const PUBLISHING_RECOVERY_AFTER_MINUTES: i64 = 5;
+
+#[derive(Debug)]
+struct UploadedPart {
+    bytes: Vec<u8>,
+}
+
+#[derive(Debug)]
+struct PreparedFile {
+    descriptor: WorkspaceDatasetUploadFile,
+    bytes: Vec<u8>,
+    content_sha256: String,
+}
+
+#[derive(Debug)]
+struct ReleaseRecord {
+    id: Uuid,
+    workspace_id: Uuid,
+    dataset_id: String,
+    version: String,
+    state: String,
+    content_sha256: String,
+    created_at: DateTime<Utc>,
+}
+
+pub async fn list(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(workspace_id): Path<Uuid>,
+) -> ApiResult<Vec<WorkspaceDatasetReleaseSummary>> {
+    let workspace_id = authorized_workspace(&state, &auth, workspace_id, false).await?;
+    let ids = sqlx::query(
+        "SELECT id FROM workspace_dataset_releases \
+         WHERE organization_id = $1 AND workspace_id = $2 \
+         ORDER BY created_at DESC, id DESC LIMIT 100",
+    )
+    .bind(auth.organization_id)
+    .bind(workspace_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(database_error)?
+    .into_iter()
+    .map(|row| row.get::<Uuid, _>("id"))
+    .collect::<Vec<_>>();
+    let mut releases = Vec::with_capacity(ids.len());
+    for release_id in ids {
+        releases.push(
+            load_release(&state, &auth, workspace_id, release_id)
+                .await?
+                .ok_or_else(|| internal("Dataset Release disappeared while listing"))?,
+        );
+    }
+    Ok(Json(releases))
+}
+
+pub async fn get(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path((workspace_id, release_id)): Path<(Uuid, Uuid)>,
+) -> ApiResult<WorkspaceDatasetReleaseSummary> {
+    let workspace_id = authorized_workspace(&state, &auth, workspace_id, false).await?;
+    let release = load_release(&state, &auth, workspace_id, release_id)
+        .await?
+        .ok_or_else(|| not_found("Dataset Release was not found"))?;
+    Ok(Json(release))
+}
+
+pub async fn publish(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(workspace_id): Path<Uuid>,
+    Extension(git): Extension<Arc<GitRuntime>>,
+    multipart: Multipart,
+) -> ApiResult<WorkspaceDatasetReleaseSummary> {
+    let workspace_id = authorized_workspace(&state, &auth, workspace_id, true).await?;
+    let (request, uploaded) = parse_multipart(multipart).await?;
+    validate_request(&request, &uploaded)?;
+    let prepared = prepare_files(&request, uploaded)?;
+    let content_sha256 = release_content_sha256(&request, &prepared);
+
+    if let Some(existing) = find_by_idempotency(
+        &state,
+        auth.organization_id,
+        workspace_id,
+        &request.idempotency_key,
+    )
+    .await?
+    {
+        if existing.content_sha256 != content_sha256
+            || existing.dataset_id != request.dataset_id
+            || existing.version != request.version
+        {
+            return Err(conflict(
+                "The idempotency key is already bound to different Dataset Release content",
+            ));
+        }
+        recover_existing_if_needed(&state, &auth, &git, &existing).await?;
+        return Ok(Json(
+            load_release(&state, &auth, workspace_id, existing.id)
+                .await?
+                .ok_or_else(|| internal("Dataset Release could not be restored"))?,
+        ));
+    }
+
+    if find_by_identity(
+        &state,
+        auth.organization_id,
+        workspace_id,
+        &request.dataset_id,
+        &request.version,
+    )
+    .await?
+    .is_some()
+    {
+        return Err(conflict(
+            "This Dataset ID and version already has an immutable Release",
+        ));
+    }
+
+    let release_id = Uuid::now_v7();
+    reserve_release(
+        &state,
+        &auth,
+        workspace_id,
+        release_id,
+        &request,
+        &content_sha256,
+        &prepared,
+    )
+    .await?;
+    let manifest = release_manifest(release_id, &request, &content_sha256, &prepared)?;
+    let file_bytes = prepared
+        .iter()
+        .map(|(logical_name, file)| (logical_name.clone(), file.bytes.clone()))
+        .collect::<BTreeMap<_, _>>();
+
+    let written_files = match git
+        .publish_dataset_release(
+            workspace_id,
+            &request.dataset_id,
+            &request.version,
+            &manifest,
+            &file_bytes,
+        )
+        .await
+    {
+        Ok(written_files) => written_files,
+        Err(error) => {
+            let failure_code = git_failure_code(&error);
+            mark_failed(&state, &auth, release_id, workspace_id, failure_code).await?;
+            return Err(git_error(error));
+        }
+    };
+
+    if let Err(error) = mark_published(
+        &state,
+        &auth,
+        release_id,
+        workspace_id,
+        &content_sha256,
+        written_files.len(),
+        "workspace.dataset_release_published",
+    )
+    .await
+    {
+        tracing::warn!(
+            release_id = %release_id,
+            "dataset files were published but database finalization was ambiguous"
+        );
+        return Err(error);
+    }
+
+    Ok(Json(
+        load_release(&state, &auth, workspace_id, release_id)
+            .await?
+            .ok_or_else(|| internal("Published Dataset Release could not be loaded"))?,
+    ))
+}
+
+async fn parse_multipart(
+    mut multipart: Multipart,
+) -> Result<
+    (
+        PublishWorkspaceDatasetRequest,
+        HashMap<String, UploadedPart>,
+    ),
+    ApiError,
+> {
+    let mut metadata = None;
+    let mut uploaded = HashMap::new();
+    let mut total_bytes = 0usize;
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|_| bad_request("Dataset upload could not be read"))?
+    {
+        let field_name = field
+            .name()
+            .map(str::to_string)
+            .ok_or_else(|| bad_request("Every Dataset upload field needs an identifier"))?;
+        if field_name == "metadata" {
+            if metadata.is_some() {
+                return Err(bad_request("Dataset upload metadata was repeated"));
+            }
+            let bytes = field
+                .bytes()
+                .await
+                .map_err(|_| bad_request("Dataset upload metadata could not be read"))?;
+            if bytes.is_empty() || bytes.len() > MAX_METADATA_BYTES {
+                return Err(payload_too_large(
+                    "Dataset upload metadata exceeds the supported size",
+                ));
+            }
+            metadata = Some(
+                serde_json::from_slice::<PublishWorkspaceDatasetRequest>(&bytes)
+                    .map_err(|_| bad_request("Dataset upload metadata is invalid"))?,
+            );
+            continue;
+        }
+        if uploaded.len() >= MAX_FILES || uploaded.contains_key(&field_name) {
+            return Err(bad_request(
+                "Dataset upload has too many or duplicate file fields",
+            ));
+        }
+        let bytes = field
+            .bytes()
+            .await
+            .map_err(|_| bad_request("A Dataset file could not be read"))?;
+        if bytes.is_empty() {
+            return Err(bad_request("Dataset files must not be empty"));
+        }
+        if bytes.len() > MAX_FILE_BYTES {
+            return Err(payload_too_large("A Dataset file exceeds the 32 MiB limit"));
+        }
+        total_bytes = total_bytes
+            .checked_add(bytes.len())
+            .ok_or_else(|| payload_too_large("Dataset upload size overflowed"))?;
+        if total_bytes > MAX_TOTAL_FILE_BYTES {
+            return Err(payload_too_large(
+                "Dataset files exceed the 64 MiB total limit",
+            ));
+        }
+        uploaded.insert(
+            field_name,
+            UploadedPart {
+                bytes: bytes.to_vec(),
+            },
+        );
+    }
+    Ok((
+        metadata.ok_or_else(|| bad_request("Dataset upload metadata is required"))?,
+        uploaded,
+    ))
+}
+
+fn validate_request(
+    request: &PublishWorkspaceDatasetRequest,
+    uploaded: &HashMap<String, UploadedPart>,
+) -> Result<(), ApiError> {
+    if request.idempotency_key.len() < 8
+        || request.idempotency_key.len() > 128
+        || request.idempotency_key.chars().any(char::is_control)
+    {
+        return Err(bad_request("Dataset idempotency key is invalid"));
+    }
+    if !valid_slug(&request.dataset_id) {
+        return Err(bad_request("Dataset ID is invalid"));
+    }
+    if !valid_version(&request.version) {
+        return Err(bad_request("Dataset version is invalid"));
+    }
+    if request.display_name.trim().is_empty() || request.display_name.len() > 160 {
+        return Err(bad_request("Dataset display name is invalid"));
+    }
+    if request.description.trim().is_empty() || request.description.len() > 1024 {
+        return Err(bad_request("Dataset description is invalid"));
+    }
+    if request.files.is_empty() || request.files.len() > MAX_FILES {
+        return Err(bad_request(
+            "A Dataset Release must contain between 1 and 32 files",
+        ));
+    }
+    let mut field_ids = HashSet::new();
+    let mut logical_names = HashSet::new();
+    for file in &request.files {
+        if !valid_field_id(&file.field_id) || !field_ids.insert(file.field_id.as_str()) {
+            return Err(bad_request("Dataset file field identifiers are invalid"));
+        }
+        if !valid_logical_name(&file.logical_name)
+            || !logical_names.insert(file.logical_name.as_str())
+        {
+            return Err(bad_request("Dataset logical file names are invalid"));
+        }
+        if !valid_role(&file.role) {
+            return Err(bad_request("Dataset file role is invalid"));
+        }
+        if !valid_media_type(&file.media_type) {
+            return Err(bad_request("Dataset file media type is invalid"));
+        }
+    }
+    let uploaded_ids = uploaded.keys().map(String::as_str).collect::<HashSet<_>>();
+    if uploaded_ids != field_ids {
+        return Err(bad_request(
+            "Dataset file fields do not match the declared metadata",
+        ));
+    }
+    Ok(())
+}
+
+fn prepare_files(
+    request: &PublishWorkspaceDatasetRequest,
+    mut uploaded: HashMap<String, UploadedPart>,
+) -> Result<BTreeMap<String, PreparedFile>, ApiError> {
+    let mut prepared = BTreeMap::new();
+    for descriptor in &request.files {
+        let part = uploaded
+            .remove(&descriptor.field_id)
+            .ok_or_else(|| bad_request("A declared Dataset file is missing"))?;
+        let content_sha256 = hex::encode(Sha256::digest(&part.bytes));
+        prepared.insert(
+            descriptor.logical_name.clone(),
+            PreparedFile {
+                descriptor: descriptor.clone(),
+                bytes: part.bytes,
+                content_sha256,
+            },
+        );
+    }
+    Ok(prepared)
+}
+
+fn release_content_sha256(
+    request: &PublishWorkspaceDatasetRequest,
+    files: &BTreeMap<String, PreparedFile>,
+) -> String {
+    let mut digest = Sha256::new();
+    update_digest(&mut digest, "workspace.dataset-release.v1");
+    update_digest(&mut digest, &request.dataset_id);
+    update_digest(&mut digest, &request.version);
+    update_digest(&mut digest, request.display_name.trim());
+    update_digest(&mut digest, request.description.trim());
+    for (logical_name, file) in files {
+        update_digest(&mut digest, logical_name);
+        update_digest(&mut digest, &file.descriptor.role);
+        update_digest(&mut digest, &file.descriptor.media_type);
+        update_digest(&mut digest, &file.bytes.len().to_string());
+        update_digest(&mut digest, &file.content_sha256);
+    }
+    hex::encode(digest.finalize())
+}
+
+fn update_digest(digest: &mut Sha256, value: &str) {
+    digest.update((value.len() as u64).to_be_bytes());
+    digest.update(value.as_bytes());
+}
+
+fn release_manifest(
+    release_id: Uuid,
+    request: &PublishWorkspaceDatasetRequest,
+    content_sha256: &str,
+    files: &BTreeMap<String, PreparedFile>,
+) -> Result<Vec<u8>, ApiError> {
+    let files = files
+        .iter()
+        .map(|(logical_name, file)| {
+            json!({
+                "logicalName": logical_name,
+                "role": file.descriptor.role,
+                "mediaType": file.descriptor.media_type,
+                "byteSize": file.bytes.len(),
+                "contentSha256": file.content_sha256,
+                "relativePath": format!("files/{logical_name}"),
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_vec_pretty(&json!({
+        "schemaVersion": "workspace.dataset-release.v1",
+        "releaseId": release_id,
+        "datasetId": request.dataset_id,
+        "version": request.version,
+        "displayName": request.display_name.trim(),
+        "description": request.description.trim(),
+        "contentSha256": content_sha256,
+        "files": files,
+    }))
+    .map(|mut manifest| {
+        manifest.push(b'\n');
+        manifest
+    })
+    .map_err(|_| internal("Dataset Release manifest could not be created"))
+}
+
+async fn reserve_release(
+    state: &AppState,
+    auth: &AuthenticatedUser,
+    workspace_id: Uuid,
+    release_id: Uuid,
+    request: &PublishWorkspaceDatasetRequest,
+    content_sha256: &str,
+    files: &BTreeMap<String, PreparedFile>,
+) -> Result<(), ApiError> {
+    let mut transaction = state.db.begin().await.map_err(database_error)?;
+    let insert = sqlx::query(
+        "INSERT INTO workspace_dataset_releases \
+         (id, organization_id, workspace_id, owner_user_id, idempotency_key, \
+          dataset_id, version, display_name, description, state, content_sha256) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'publishing', $10)",
+    )
+    .bind(release_id)
+    .bind(auth.organization_id)
+    .bind(workspace_id)
+    .bind(auth.user_id)
+    .bind(&request.idempotency_key)
+    .bind(&request.dataset_id)
+    .bind(&request.version)
+    .bind(request.display_name.trim())
+    .bind(request.description.trim())
+    .bind(content_sha256)
+    .execute(&mut *transaction)
+    .await;
+    if let Err(error) = insert {
+        transaction.rollback().await.ok();
+        if error
+            .as_database_error()
+            .is_some_and(sqlx::error::DatabaseError::is_unique_violation)
+        {
+            return Err(conflict(
+                "The Dataset Release identity or idempotency key already exists",
+            ));
+        }
+        return Err(database_error(error));
+    }
+    for (logical_name, file) in files {
+        sqlx::query(
+            "INSERT INTO workspace_dataset_release_files \
+             (organization_id, release_id, logical_name, role, media_type, byte_size, \
+              content_sha256) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(auth.organization_id)
+        .bind(release_id)
+        .bind(logical_name)
+        .bind(&file.descriptor.role)
+        .bind(&file.descriptor.media_type)
+        .bind(file.bytes.len() as i64)
+        .bind(&file.content_sha256)
+        .execute(&mut *transaction)
+        .await
+        .map_err(database_error)?;
+    }
+    audit(
+        &mut transaction,
+        auth,
+        release_id,
+        "workspace.dataset_release_started",
+        "success",
+        json!({
+            "workspaceId": workspace_id,
+            "datasetId": request.dataset_id,
+            "version": request.version,
+            "contentSha256": content_sha256,
+            "fileCount": files.len(),
+        }),
+    )
+    .await?;
+    transaction.commit().await.map_err(database_error)
+}
+
+async fn recover_existing_if_needed(
+    state: &AppState,
+    auth: &AuthenticatedUser,
+    git: &GitRuntime,
+    release: &ReleaseRecord,
+) -> Result<(), ApiError> {
+    if release.state != "publishing" {
+        return Ok(());
+    }
+    let matches = git
+        .dataset_release_matches(
+            release.workspace_id,
+            &release.dataset_id,
+            &release.version,
+            release.id,
+            &release.content_sha256,
+        )
+        .await
+        .map_err(git_error)?;
+    if matches {
+        return mark_published(
+            state,
+            auth,
+            release.id,
+            release.workspace_id,
+            &release.content_sha256,
+            0,
+            "workspace.dataset_release_recovered",
+        )
+        .await;
+    }
+    if Utc::now() - release.created_at < Duration::minutes(PUBLISHING_RECOVERY_AFTER_MINUTES) {
+        return Err(conflict("Dataset Release publication is still in progress"));
+    }
+    mark_failed(
+        state,
+        auth,
+        release.id,
+        release.workspace_id,
+        "publication_interrupted",
+    )
+    .await
+}
+
+async fn mark_published(
+    state: &AppState,
+    auth: &AuthenticatedUser,
+    release_id: Uuid,
+    workspace_id: Uuid,
+    content_sha256: &str,
+    written_file_count: usize,
+    action: &str,
+) -> Result<(), ApiError> {
+    let mut transaction = state.db.begin().await.map_err(database_error)?;
+    let result = sqlx::query(
+        "UPDATE workspace_dataset_releases \
+         SET state = 'published', published_at = now(), updated_at = now() \
+         WHERE id = $1 AND organization_id = $2 AND workspace_id = $3 \
+           AND state = 'publishing' AND content_sha256 = $4",
+    )
+    .bind(release_id)
+    .bind(auth.organization_id)
+    .bind(workspace_id)
+    .bind(content_sha256)
+    .execute(&mut *transaction)
+    .await
+    .map_err(database_error)?;
+    if result.rows_affected() != 1 {
+        transaction.rollback().await.ok();
+        return Err(conflict(
+            "Dataset Release no longer has a publishable lifecycle state",
+        ));
+    }
+    audit(
+        &mut transaction,
+        auth,
+        release_id,
+        action,
+        "success",
+        json!({
+            "workspaceId": workspace_id,
+            "contentSha256": content_sha256,
+            "writtenFileCount": written_file_count,
+        }),
+    )
+    .await?;
+    transaction.commit().await.map_err(database_error)
+}
+
+async fn mark_failed(
+    state: &AppState,
+    auth: &AuthenticatedUser,
+    release_id: Uuid,
+    workspace_id: Uuid,
+    failure_code: &str,
+) -> Result<(), ApiError> {
+    let mut transaction = state.db.begin().await.map_err(database_error)?;
+    sqlx::query(
+        "UPDATE workspace_dataset_releases \
+         SET state = 'failed', failure_code = $4, updated_at = now() \
+         WHERE id = $1 AND organization_id = $2 AND workspace_id = $3 \
+           AND state = 'publishing'",
+    )
+    .bind(release_id)
+    .bind(auth.organization_id)
+    .bind(workspace_id)
+    .bind(failure_code)
+    .execute(&mut *transaction)
+    .await
+    .map_err(database_error)?;
+    audit(
+        &mut transaction,
+        auth,
+        release_id,
+        "workspace.dataset_release_failed",
+        "failure",
+        json!({
+            "workspaceId": workspace_id,
+            "failureCode": failure_code,
+        }),
+    )
+    .await?;
+    transaction.commit().await.map_err(database_error)
+}
+
+async fn audit(
+    transaction: &mut Transaction<'_, Postgres>,
+    auth: &AuthenticatedUser,
+    release_id: Uuid,
+    action: &str,
+    outcome: &str,
+    metadata: serde_json::Value,
+) -> Result<(), ApiError> {
+    sqlx::query(
+        "INSERT INTO audit_log \
+         (organization_id, actor_id, action, target_type, target_id, metadata, outcome) \
+         VALUES ($1, $2, $3, 'workspace_dataset_release', $4, $5, $6)",
+    )
+    .bind(auth.organization_id)
+    .bind(auth.user_id)
+    .bind(action)
+    .bind(release_id)
+    .bind(metadata)
+    .bind(outcome)
+    .execute(&mut **transaction)
+    .await
+    .map_err(database_error)?;
+    Ok(())
+}
+
+async fn find_by_idempotency(
+    state: &AppState,
+    organization_id: Uuid,
+    workspace_id: Uuid,
+    idempotency_key: &str,
+) -> Result<Option<ReleaseRecord>, ApiError> {
+    let row = sqlx::query(
+        "SELECT id, workspace_id, dataset_id, version, state, content_sha256, created_at \
+         FROM workspace_dataset_releases \
+         WHERE organization_id = $1 AND workspace_id = $2 AND idempotency_key = $3",
+    )
+    .bind(organization_id)
+    .bind(workspace_id)
+    .bind(idempotency_key)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(database_error)?;
+    Ok(row.map(release_record))
+}
+
+async fn find_by_identity(
+    state: &AppState,
+    organization_id: Uuid,
+    workspace_id: Uuid,
+    dataset_id: &str,
+    version: &str,
+) -> Result<Option<Uuid>, ApiError> {
+    Ok(sqlx::query(
+        "SELECT id FROM workspace_dataset_releases \
+         WHERE organization_id = $1 AND workspace_id = $2 \
+           AND dataset_id = $3 AND version = $4",
+    )
+    .bind(organization_id)
+    .bind(workspace_id)
+    .bind(dataset_id)
+    .bind(version)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(database_error)?
+    .map(|row| row.get("id")))
+}
+
+fn release_record(row: sqlx::postgres::PgRow) -> ReleaseRecord {
+    ReleaseRecord {
+        id: row.get("id"),
+        workspace_id: row.get("workspace_id"),
+        dataset_id: row.get("dataset_id"),
+        version: row.get("version"),
+        state: row.get("state"),
+        content_sha256: row.get("content_sha256"),
+        created_at: row.get("created_at"),
+    }
+}
+
+async fn load_release(
+    state: &AppState,
+    auth: &AuthenticatedUser,
+    workspace_id: Uuid,
+    release_id: Uuid,
+) -> Result<Option<WorkspaceDatasetReleaseSummary>, ApiError> {
+    let row = sqlx::query(
+        "SELECT id, workspace_id, dataset_id, version, display_name, description, state, \
+                content_sha256, failure_code, published_at, created_at, updated_at \
+         FROM workspace_dataset_releases \
+         WHERE organization_id = $1 AND workspace_id = $2 AND id = $3",
+    )
+    .bind(auth.organization_id)
+    .bind(workspace_id)
+    .bind(release_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(database_error)?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let files = sqlx::query(
+        "SELECT logical_name, role, media_type, byte_size, content_sha256 \
+         FROM workspace_dataset_release_files \
+         WHERE organization_id = $1 AND release_id = $2 ORDER BY logical_name",
+    )
+    .bind(auth.organization_id)
+    .bind(release_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(database_error)?
+    .into_iter()
+    .map(|file| WorkspaceDatasetReleaseFileSummary {
+        logical_name: file.get("logical_name"),
+        role: file.get("role"),
+        media_type: file.get("media_type"),
+        byte_size: file.get("byte_size"),
+        content_sha256: file.get("content_sha256"),
+    })
+    .collect();
+    Ok(Some(WorkspaceDatasetReleaseSummary {
+        id: row.get("id"),
+        workspace_id: row.get("workspace_id"),
+        dataset_id: row.get("dataset_id"),
+        version: row.get("version"),
+        display_name: row.get("display_name"),
+        description: row.get("description"),
+        state: row.get("state"),
+        content_sha256: row.get("content_sha256"),
+        failure_code: row.get("failure_code"),
+        files,
+        published_at: row.get("published_at"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    }))
+}
+
+fn valid_slug(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && !value.starts_with('-')
+        && !value.ends_with('-')
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+fn valid_version(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && !value.starts_with(['.', '-'])
+        && !value.ends_with(['.', '-'])
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+}
+
+fn valid_field_id(value: &str) -> bool {
+    value.strip_prefix("file-").is_some_and(|suffix| {
+        !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+    })
+}
+
+fn valid_logical_name(value: &str) -> bool {
+    if value.is_empty()
+        || value.len() > 256
+        || value.contains(['\0', '\\'])
+        || value.starts_with("./")
+        || value.contains("//")
+        || matches!(value, "release.json" | "files")
+        || value.starts_with("files/")
+    {
+        return false;
+    }
+    !FilePath::new(value).components().any(|component| {
+        matches!(
+            component,
+            Component::CurDir | Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    })
+}
+
+fn valid_role(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 96
+        && value
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_lowercase())
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-' | b'_')
+        })
+}
+
+fn valid_media_type(value: &str) -> bool {
+    value.len() >= 3
+        && value.len() <= 160
+        && value.contains('/')
+        && !value
+            .chars()
+            .any(|ch| ch.is_control() || ch.is_whitespace())
+}
+
+fn git_failure_code(error: &GitRuntimeError) -> &'static str {
+    match error {
+        GitRuntimeError::UnsafePath(_) => "unsafe_workspace_path",
+        GitRuntimeError::Conflict(_) => "workspace_conflict",
+        GitRuntimeError::InvalidSource(_) | GitRuntimeError::InvalidRef(_) => {
+            "invalid_workspace_identity"
+        }
+        GitRuntimeError::UnsupportedImage(_) | GitRuntimeError::ImageTooLarge => {
+            "unsupported_workspace_content"
+        }
+        GitRuntimeError::Git { .. } => "workspace_git_failed",
+        GitRuntimeError::Io { .. } => "workspace_io_failed",
+        GitRuntimeError::NoChanges => "workspace_no_changes",
+    }
+}
+
+fn git_error(error: GitRuntimeError) -> ApiError {
+    match error {
+        GitRuntimeError::UnsafePath(_)
+        | GitRuntimeError::Conflict(_)
+        | GitRuntimeError::InvalidSource(_)
+        | GitRuntimeError::InvalidRef(_)
+        | GitRuntimeError::NoChanges => conflict("Dataset publication was rejected"),
+        GitRuntimeError::UnsupportedImage(_) | GitRuntimeError::ImageTooLarge => {
+            bad_request("Dataset publication content was rejected")
+        }
+        GitRuntimeError::Git { .. } | GitRuntimeError::Io { .. } => {
+            internal("Dataset publication failed")
+        }
+    }
+}
+
+fn bad_request(message: &str) -> ApiError {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(PlatformError::bad_request(message)),
+    )
+}
+
+fn payload_too_large(message: &str) -> ApiError {
+    (
+        StatusCode::PAYLOAD_TOO_LARGE,
+        Json(PlatformError::bad_request(message)),
+    )
+}
+
+fn conflict(message: &str) -> ApiError {
+    (
+        StatusCode::CONFLICT,
+        Json(PlatformError::bad_request(message)),
+    )
+}
+
+fn not_found(message: &str) -> ApiError {
+    (
+        StatusCode::NOT_FOUND,
+        Json(PlatformError::not_found(message)),
+    )
+}
+
+fn internal(message: &str) -> ApiError {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(PlatformError::internal(message)),
+    )
+}
+
+fn database_error(_error: sqlx::Error) -> ApiError {
+    internal("Database operation failed")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request() -> PublishWorkspaceDatasetRequest {
+        PublishWorkspaceDatasetRequest {
+            idempotency_key: "request-12345678".to_string(),
+            dataset_id: "indonesia-network".to_string(),
+            version: "1.0.0".to_string(),
+            display_name: "Indonesia network".to_string(),
+            description: "Synthetic tutorial dataset".to_string(),
+            files: vec![WorkspaceDatasetUploadFile {
+                field_id: "file-0".to_string(),
+                logical_name: "customers.csv.gz".to_string(),
+                role: "customer_demand".to_string(),
+                media_type: "application/gzip".to_string(),
+            }],
+        }
+    }
+
+    #[test]
+    fn validates_bounded_dataset_metadata() {
+        let uploaded = HashMap::from([(
+            "file-0".to_string(),
+            UploadedPart {
+                bytes: vec![1, 2, 3],
+            },
+        )]);
+        assert!(validate_request(&request(), &uploaded).is_ok());
+
+        let mut unsafe_request = request();
+        unsafe_request.files[0].logical_name = "../customers.csv".to_string();
+        assert!(validate_request(&unsafe_request, &uploaded).is_err());
+    }
+
+    #[test]
+    fn release_digest_is_stable_and_changes_with_file_content() {
+        let request = request();
+        let first = prepare_files(
+            &request,
+            HashMap::from([(
+                "file-0".to_string(),
+                UploadedPart {
+                    bytes: vec![1, 2, 3],
+                },
+            )]),
+        )
+        .unwrap();
+        let second = prepare_files(
+            &request,
+            HashMap::from([(
+                "file-0".to_string(),
+                UploadedPart {
+                    bytes: vec![1, 2, 4],
+                },
+            )]),
+        )
+        .unwrap();
+        assert_eq!(
+            release_content_sha256(&request, &first),
+            release_content_sha256(&request, &first)
+        );
+        assert_ne!(
+            release_content_sha256(&request, &first),
+            release_content_sha256(&request, &second)
+        );
+    }
+
+    #[test]
+    fn generated_manifest_contains_only_relative_paths_and_locked_hashes() {
+        let request = request();
+        let files = prepare_files(
+            &request,
+            HashMap::from([(
+                "file-0".to_string(),
+                UploadedPart {
+                    bytes: vec![1, 2, 3],
+                },
+            )]),
+        )
+        .unwrap();
+        let digest = release_content_sha256(&request, &files);
+        let manifest = release_manifest(Uuid::nil(), &request, &digest, &files).expect("manifest");
+        let manifest: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+        assert_eq!(manifest["contentSha256"], digest);
+        assert_eq!(
+            manifest["files"][0]["relativePath"],
+            "files/customers.csv.gz"
+        );
+        assert!(
+            !String::from_utf8_lossy(serde_json::to_string(&manifest).unwrap().as_bytes())
+                .contains("/Users/")
+        );
+    }
+}

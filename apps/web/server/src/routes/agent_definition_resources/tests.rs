@@ -4,9 +4,9 @@ use axum::{
     Json,
 };
 use open_web_codex_platform_contracts::{
-    AgentCapabilityTemplateSelection, AgentDefinitionDraftRequest, SupervisorAgentSelection,
-    SupervisorArtifactContractInput, SupervisorDraftRequest, SupervisorInstructionPolicySelection,
-    SupervisorPolicySelection,
+    AgentCapabilityTemplateSelection, AgentCapabilityTemplateSource, AgentDefinitionDraftRequest,
+    SupervisorAgentSelection, SupervisorArtifactContractInput, SupervisorDraftRequest,
+    SupervisorInstructionPolicySelection, SupervisorPolicySelection,
 };
 use open_web_codex_platform_store::AppState;
 use sqlx::Row;
@@ -25,20 +25,26 @@ fn valid_draft() -> AgentDefinitionDraftRequest {
             "Inspect authorized regional planning inputs.".to_string(),
             "Publish a validated planning dataset.".to_string(),
         ],
-        developer_instructions:
-            "Use only the authorized data capability and publish planning-dataset.v1.".to_string(),
+        developer_instructions: "Inspect only the exact authorized Indonesia Dataset Release."
+            .to_string(),
         input_artifact_types: Vec::new(),
-        output_artifact_types: vec!["planning-dataset.v1".to_string()],
+        output_artifact_types: vec!["indonesia_dataset_inspection.v1".to_string()],
         capability_template: AgentCapabilityTemplateSelection {
+            source: AgentCapabilityTemplateSource::RepositoryAgent,
             definition_id: "enterprise-data-agent".to_string(),
-            version: "1.6.0".to_string(),
+            version: "3.1.0".to_string(),
+            release_id: None,
         },
+        dataset_release_ids: Vec::new(),
     }
 }
 
 #[test]
 fn validates_a_user_agent_without_accepting_runtime_facts() {
-    let result = validate_draft(&valid_draft());
+    let template =
+        open_web_codex_supervisor_catalog::agent::resolve_builtin("enterprise-data-agent", "3.1.0")
+            .expect("built-in Agent template");
+    let result = validate_draft(&valid_draft(), &template, Vec::new());
     assert!(result.valid);
     assert_eq!(result.content_sha256.unwrap().len(), 64);
 }
@@ -159,7 +165,7 @@ async fn publishes_agent_and_uses_it_in_an_organization_supervisor() {
             responsibilities: vec!["Deliver the reviewed planning dataset.".to_string()],
             instruction_policy: SupervisorInstructionPolicySelection {
                 policy_id: "platform-supervisor-behavior".to_string(),
-                version: "1.0.0".to_string(),
+                version: "1.1.0".to_string(),
             },
             custom_instructions: "Delegate the regional data review and report the durable result."
                 .to_string(),
@@ -170,7 +176,7 @@ async fn publishes_agent_and_uses_it_in_an_organization_supervisor() {
                 spawn_limit: 1,
             }],
             artifact_contracts: vec![SupervisorArtifactContractInput {
-                artifact_type: "planning-dataset.v1".to_string(),
+                artifact_type: "indonesia_dataset_inspection.v1".to_string(),
                 producer_agent: format!("{}@{}", release.definition_id, release.version),
                 consumer_agents: vec!["supervisor".to_string()],
                 required: true,

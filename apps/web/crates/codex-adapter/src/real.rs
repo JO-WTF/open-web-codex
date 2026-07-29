@@ -14,11 +14,12 @@ use tokio::sync::OwnedMutexGuard;
 use tokio::sync::RwLock;
 
 use crate::{
-    governed_runtime_role_config_overrides, validate_platform_runtime_role_files,
-    validate_platform_runtime_roles, validate_required_mcp_servers, validate_role_spawn_limits,
-    AdapterError, AuthorizedWorkspace, CanceledProfileLogin, CodexAdapter, HealthStatus,
-    PlatformRuntimeRole, ProfileLoginStatus, ProfileMutation, ProfileQuery, RequiredMcpServer,
-    ReviewTarget, StartedProfileLogin, StartedThread, ThreadStartMode, TurnOptions,
+    governed_agent_config_overrides, governed_runtime_role_config_overrides,
+    validate_platform_runtime_role_files, validate_platform_runtime_roles,
+    validate_required_mcp_servers, validate_role_spawn_limits, AdapterError, AuthorizedWorkspace,
+    CanceledProfileLogin, CodexAdapter, HealthStatus, PlatformRuntimeRole, ProfileLoginStatus,
+    ProfileMutation, ProfileQuery, RequiredMcpServer, ReviewTarget, StartedProfileLogin,
+    StartedThread, ThreadStartMode, TurnOptions,
 };
 
 const MAX_DEVELOPER_INSTRUCTIONS_BYTES: usize = 16 * 1024;
@@ -66,6 +67,35 @@ fn apply_thread_start_mode(
         (ThreadStartMode::Standard, None) => Ok(()),
         (ThreadStartMode::Standard, Some(_)) => Err(AdapterError::Internal(
             "standard Thread start cannot contain governed Runtime Role configuration".to_string(),
+        )),
+        (
+            ThreadStartMode::GovernedAgent {
+                developer_instructions,
+                required_mcp_servers,
+            },
+            Some(config),
+        ) => {
+            validate_required_mcp_servers(required_mcp_servers)?;
+            let instructions = developer_instructions.trim();
+            if instructions.is_empty() || instructions.len() > MAX_DEVELOPER_INSTRUCTIONS_BYTES {
+                return Err(AdapterError::Internal(
+                    "Agent developer instructions must contain 1 to 16384 bytes".to_string(),
+                ));
+            }
+            if !config.is_object() {
+                return Err(AdapterError::Internal(
+                    "governed Agent configuration is invalid".to_string(),
+                ));
+            }
+            object.insert(
+                "developerInstructions".to_string(),
+                Value::String(instructions.to_string()),
+            );
+            object.insert("config".to_string(), config);
+            Ok(())
+        }
+        (ThreadStartMode::GovernedAgent { .. }, None) => Err(AdapterError::Internal(
+            "governed Agent start requires verified configuration".to_string(),
         )),
         (
             ThreadStartMode::GovernedSupervisor {
@@ -259,6 +289,10 @@ impl RealCodexAdapter {
     ) -> Result<Option<Value>, AdapterError> {
         match mode {
             ThreadStartMode::Standard => Ok(None),
+            ThreadStartMode::GovernedAgent {
+                required_mcp_servers,
+                ..
+            } => governed_agent_config_overrides(required_mcp_servers).map(Some),
             ThreadStartMode::GovernedSupervisor {
                 roles,
                 role_spawn_limits,
@@ -335,28 +369,37 @@ impl RealCodexAdapter {
         thread_id: &str,
         mode: &ThreadStartMode,
     ) -> Result<(), AdapterError> {
-        let ThreadStartMode::GovernedSupervisor {
-            required_mcp_servers,
-            ..
-        } = mode
-        else {
-            return Ok(());
-        };
-        validate_required_mcp_servers(required_mcp_servers)?;
-        let inventory = self.read_mcp_inventory(Some(thread_id)).await?;
-        let exposed = exposed_mcp_capabilities(required_mcp_servers, &inventory);
-        if exposed.is_empty() {
-            return Ok(());
+        match mode {
+            ThreadStartMode::Standard => Ok(()),
+            ThreadStartMode::GovernedSupervisor {
+                required_mcp_servers,
+                ..
+            } => {
+                validate_required_mcp_servers(required_mcp_servers)?;
+                let inventory = self.read_mcp_inventory(Some(thread_id)).await?;
+                let exposed = exposed_mcp_capabilities(&inventory);
+                if exposed.is_empty() {
+                    return Ok(());
+                }
+                tracing::warn!(
+                    thread_id,
+                    exposed = ?exposed,
+                    "governed root Runtime Thread retained business MCP capabilities"
+                );
+                Err(governed_mcp_unavailable(&format!(
+                    "root Thread exposes {}",
+                    exposed.join(", ")
+                )))
+            }
+            ThreadStartMode::GovernedAgent {
+                required_mcp_servers,
+                ..
+            } => {
+                validate_required_mcp_servers(required_mcp_servers)?;
+                let inventory = self.read_mcp_inventory(Some(thread_id)).await?;
+                require_exact_agent_mcp_inventory(required_mcp_servers, &inventory)
+            }
         }
-        tracing::warn!(
-            thread_id,
-            exposed = ?exposed,
-            "governed root Runtime Thread retained business MCP capabilities"
-        );
-        Err(governed_mcp_unavailable(&format!(
-            "root Thread exposes {}",
-            exposed.join(", ")
-        )))
     }
 
     async fn archive_rejected_governed_thread(
@@ -1685,6 +1728,12 @@ fn merge_mcp_status_page(
             .ok_or_else(|| {
                 AdapterError::Rpc("mcpServerStatus/list entry omitted tools".to_string())
             })?;
+        let initialized = server
+            .get("serverInfo")
+            .is_some_and(|server_info| !server_info.is_null());
+        if !initialized && tools.is_empty() {
+            continue;
+        }
         inventory
             .entry(name.to_string())
             .or_default()
@@ -1699,22 +1748,54 @@ fn merge_mcp_status_page(
     }
 }
 
-fn exposed_mcp_capabilities(
-    restricted_servers: &[RequiredMcpServer],
-    inventory: &HashMap<String, HashSet<String>>,
-) -> Vec<String> {
+fn exposed_mcp_capabilities(inventory: &HashMap<String, HashSet<String>>) -> Vec<String> {
     let mut exposed = Vec::new();
-    for server in restricted_servers {
-        let Some(tools) = inventory.get(&server.name) else {
+    for (server_name, tools) in inventory {
+        if tools.is_empty() {
+            exposed.push(server_name.clone());
             continue;
-        };
-        for tool in &server.tools {
-            if tools.contains(tool) {
-                exposed.push(format!("{}.{}", server.name, tool));
-            }
+        }
+        for tool in tools {
+            exposed.push(format!("{server_name}.{tool}"));
         }
     }
+    exposed.sort();
     exposed
+}
+
+fn require_exact_agent_mcp_inventory(
+    required_servers: &[RequiredMcpServer],
+    inventory: &HashMap<String, HashSet<String>>,
+) -> Result<(), AdapterError> {
+    let expected_server_names = required_servers
+        .iter()
+        .map(|server| server.name.as_str())
+        .collect::<HashSet<_>>();
+    if inventory.len() != expected_server_names.len()
+        || inventory
+            .keys()
+            .any(|server| !expected_server_names.contains(server.as_str()))
+    {
+        return Err(governed_mcp_unavailable(
+            "Runtime does not expose the exact authorized MCP server set",
+        ));
+    }
+    for server in required_servers {
+        let Some(actual_tools) = inventory.get(&server.name) else {
+            return Err(governed_mcp_unavailable(&format!(
+                "required MCP server '{}' is unavailable",
+                server.name
+            )));
+        };
+        let expected_tools = server.tools.iter().cloned().collect::<HashSet<_>>();
+        if actual_tools != &expected_tools {
+            return Err(governed_mcp_unavailable(&format!(
+                "MCP server '{}' does not expose the exact authorized Tool set",
+                server.name
+            )));
+        }
+    }
+    Ok(())
 }
 
 impl RealCodexAdapter {
@@ -1834,14 +1915,26 @@ fn add_selected_capability_roots(
         source_repo_root(),
         env_value.as_ref().map(std::ffi::OsString::as_os_str),
     );
-    if let ThreadStartMode::GovernedSupervisor {
-        required_mcp_servers,
-        ..
-    } = mode
-    {
+    let required_mcp_servers = match mode {
+        ThreadStartMode::Standard => None,
+        ThreadStartMode::GovernedAgent {
+            required_mcp_servers,
+            ..
+        }
+        | ThreadStartMode::GovernedSupervisor {
+            required_mcp_servers,
+            ..
+        } => Some(required_mcp_servers),
+    };
+    if let Some(required_mcp_servers) = required_mcp_servers {
         let required_root_ids = required_mcp_servers
             .iter()
-            .flat_map(|server| server.capability_root_ids.iter())
+            .flat_map(|server| {
+                server
+                    .capability_roots
+                    .iter()
+                    .map(|root| &root.capability_root_id)
+            })
             .collect::<HashSet<_>>();
         selected.retain(|root| {
             root.get("id").and_then(Value::as_str).is_some_and(|id| {
@@ -1932,11 +2025,35 @@ fn plugin_roots_below_tools(root: &Path) -> Vec<std::path::PathBuf> {
     let Ok(entries) = std::fs::read_dir(tools) else {
         return Vec::new();
     };
-    entries
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| is_plugin_root(path))
-        .collect()
+    let mut roots = Vec::new();
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() || !file_type.is_dir() {
+            continue;
+        }
+        if is_plugin_root(&path) {
+            roots.push(path);
+            continue;
+        }
+        let Ok(versions) = std::fs::read_dir(&path) else {
+            continue;
+        };
+        roots.extend(
+            versions
+                .filter_map(Result::ok)
+                .filter(|version| {
+                    version
+                        .file_type()
+                        .is_ok_and(|kind| kind.is_dir() && !kind.is_symlink())
+                })
+                .map(|version| version.path())
+                .filter(|version| is_plugin_root(version)),
+        );
+    }
+    roots
 }
 
 fn is_plugin_root(path: &Path) -> bool {
@@ -1955,10 +2072,40 @@ fn selected_capability_root_json(root: &Path) -> Value {
 }
 
 fn selected_capability_root_id(root: &Path) -> String {
-    let slug = root
-        .file_name()
+    let identity = if root
+        .parent()
+        .and_then(Path::file_name)
         .and_then(|name| name.to_str())
-        .unwrap_or("capability")
+        == Some("tools")
+    {
+        root.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("capability")
+            .to_string()
+    } else if root
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        == Some("tools")
+    {
+        format!(
+            "{}-{}",
+            root.parent()
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str())
+                .unwrap_or("capability"),
+            root.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("version")
+        )
+    } else {
+        root.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("capability")
+            .to_string()
+    };
+    let slug = identity
         .chars()
         .map(|ch| {
             if ch.is_ascii_alphanumeric() {
@@ -2061,12 +2208,14 @@ mod tests {
         codex_sandbox_disabled_by_environment, discover_selected_capability_root_paths,
         exposed_mcp_capabilities, is_authorized_workspace_root, login_completion,
         merge_mcp_status_page, message_parent_thread_id, message_thread_id,
-        selected_capability_root_id, selected_capability_roots_json, thread_fork_params,
-        thread_start_params, turn_sandbox_policy,
+        require_exact_agent_mcp_inventory, selected_capability_root_id,
+        selected_capability_roots_json, thread_fork_params, thread_start_params,
+        turn_sandbox_policy,
     };
     use crate::{
-        governed_runtime_role_config_overrides, platform_runtime_role_config_file,
-        validate_platform_runtime_roles, PlatformRuntimeRole, RequiredMcpServer, ThreadStartMode,
+        governed_agent_config_overrides, governed_runtime_role_config_overrides,
+        platform_runtime_role_config_file, validate_platform_runtime_roles,
+        CapabilityRootMcpInventory, PlatformRuntimeRole, RequiredMcpServer, ThreadStartMode,
     };
     use serde_json::{json, Value};
     use sha2::{Digest, Sha256};
@@ -2076,10 +2225,13 @@ mod tests {
     fn platform_runtime_role() -> PlatformRuntimeRole {
         let config_toml = "developer_instructions = '''\nUse only the governed planning tools.\n'''\n\
             \n[agents]\nenabled = false\n\
+            \n[skills]\ninclude_instructions = false\n\
             \n[features]\napps = false\nmulti_agent_v2 = false\nplugins = false\nshell_tool = false\n\
             \n[plugins.local-supply-chain-network-planner]\nenabled = true\n\
             \n[plugins.local-supply-chain-network-planner.mcp_servers.supply_chain_data]\n\
-            enabled = true\nenabled_tools = [\"inspect_planning_source\"]\n";
+            enabled = true\nenabled_tools = [\"inspect_planning_source\"]\n\
+            \n[plugins.local-supply-chain-network-planner.mcp_servers.supply_chain_planner]\n\
+            enabled = false\n";
         PlatformRuntimeRole {
             definition_id: "data-agent".to_string(),
             version: "1.0.0".to_string(),
@@ -2091,6 +2243,25 @@ mod tests {
         }
     }
 
+    fn required_server(
+        name: &str,
+        tools: &[&str],
+        capability_root_id: &str,
+        root_server_names: &[&str],
+    ) -> RequiredMcpServer {
+        RequiredMcpServer {
+            name: name.to_string(),
+            tools: tools.iter().map(|tool| (*tool).to_string()).collect(),
+            capability_roots: vec![CapabilityRootMcpInventory {
+                capability_root_id: capability_root_id.to_string(),
+                mcp_server_names: root_server_names
+                    .iter()
+                    .map(|server| (*server).to_string())
+                    .collect(),
+            }],
+        }
+    }
+
     fn governed_supervisor_mode(
         role: PlatformRuntimeRole,
         developer_instructions: &str,
@@ -2099,12 +2270,28 @@ mod tests {
             developer_instructions: developer_instructions.to_string(),
             roles: vec![role],
             role_spawn_limits: [("data_agent".to_string(), 1)].into_iter().collect(),
-            required_mcp_servers: vec![RequiredMcpServer {
-                name: "supply_chain_data".to_string(),
-                tools: vec!["inspect_planning_source".to_string()],
-                capability_root_ids: vec!["local-supply-chain-network-planner".to_string()],
-            }],
+            required_mcp_servers: vec![required_server(
+                "supply_chain_data",
+                &["inspect_planning_source"],
+                "local-supply-chain-network-planner",
+                &["supply_chain_data", "supply_chain_planner"],
+            )],
             max_threads: 2,
+        }
+    }
+
+    fn governed_agent_mode(
+        capability_root_id: &str,
+        developer_instructions: &str,
+    ) -> ThreadStartMode {
+        ThreadStartMode::GovernedAgent {
+            developer_instructions: developer_instructions.to_string(),
+            required_mcp_servers: vec![required_server(
+                "delivery_promise",
+                &["check_promises"],
+                capability_root_id,
+                &["delivery_promise", "unreviewed_delivery_admin"],
+            )],
         }
     }
 
@@ -2117,11 +2304,12 @@ mod tests {
         governed_runtime_role_config_overrides(
             &[role.clone()],
             &[("data_agent".to_string(), 1)].into_iter().collect(),
-            &[RequiredMcpServer {
-                name: "supply_chain_data".to_string(),
-                tools: vec!["inspect_planning_source".to_string()],
-                capability_root_ids: vec!["local-supply-chain-network-planner".to_string()],
-            }],
+            &[required_server(
+                "supply_chain_data",
+                &["inspect_planning_source"],
+                "local-supply-chain-network-planner",
+                &["supply_chain_data", "supply_chain_planner"],
+            )],
             2,
             &verified_host_paths,
         )
@@ -2226,7 +2414,9 @@ mod tests {
         std::fs::create_dir_all(process.join("tools")).expect("process tools");
         std::fs::create_dir_all(workspace.join("tools")).expect("workspace tools");
         let repo_plugin = create_plugin_root(&process.join("tools"), "maps-mcp");
-        let workspace_plugin = create_plugin_root(&workspace.join("tools"), "custom-mcp");
+        let workspace_package = workspace.join("tools/custom-mcp");
+        std::fs::create_dir_all(&workspace_package).expect("workspace package");
+        let workspace_plugin = create_plugin_root(&workspace_package, "1.0.0");
         let explicit_plugin = create_plugin_root(temp.path(), "explicit-mcp");
 
         let roots = discover_selected_capability_root_paths(
@@ -2271,11 +2461,13 @@ mod tests {
         let workspace = temp.path().join("workspace");
         std::fs::create_dir_all(&process).expect("process root");
         std::fs::create_dir_all(workspace.join("tools")).expect("workspace tools");
-        let plugin = create_plugin_root(&workspace.join("tools"), "maps-mcp");
+        let package = workspace.join("tools/maps-mcp");
+        std::fs::create_dir_all(&package).expect("workspace package");
+        let plugin = create_plugin_root(&package, "1.2.0");
 
         let selected = selected_capability_roots_json(&workspace, &process, None, None);
 
-        assert_eq!(selected[0]["id"], "local-maps-mcp");
+        assert_eq!(selected[0]["id"], "local-maps-mcp-1-2-0");
         assert_eq!(
             selected[0]["location"],
             json!({
@@ -2319,6 +2511,7 @@ mod tests {
             assert_eq!(params["config"]["features.multi_agent_v2"], true);
             assert_eq!(params["config"]["features.plugins"], false);
             assert_eq!(params["config"]["features.shell_tool"], false);
+            assert_eq!(params["config"]["skills.include_instructions"], false);
             assert_eq!(
                 params["config"]["agents.allowed_roles"],
                 json!(["data_agent"])
@@ -2336,6 +2529,11 @@ mod tests {
             assert_eq!(
                 params["config"]
                     ["plugins.local-supply-chain-network-planner.mcp_servers.supply_chain_data.enabled"],
+                false
+            );
+            assert_eq!(
+                params["config"]
+                    ["plugins.local-supply-chain-network-planner.mcp_servers.supply_chain_planner.enabled"],
                 false
             );
             assert_eq!(
@@ -2357,17 +2555,115 @@ mod tests {
     }
 
     #[test]
+    fn injects_only_the_exact_agent_capability_for_thread_start() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let plugin =
+            create_plugin_root(&temp.path().join("tools").join("delivery-promise"), "1.0.0");
+        let capability_root_id = selected_capability_root_id(&plugin);
+        let mode = governed_agent_mode(
+            &capability_root_id,
+            "  Check every delivery promise with the authorized Tool.  ",
+        );
+        let required_mcp_servers = match &mode {
+            ThreadStartMode::GovernedAgent {
+                required_mcp_servers,
+                ..
+            } => required_mcp_servers,
+            _ => unreachable!(),
+        };
+        let config = governed_agent_config_overrides(required_mcp_servers).expect("Agent config");
+        let params = thread_start_params(
+            temp.path().to_str().expect("workspace path"),
+            &mode,
+            Some(config),
+        )
+        .expect("governed Agent start parameters");
+
+        assert_eq!(
+            params["developerInstructions"],
+            "Check every delivery promise with the authorized Tool."
+        );
+        assert_eq!(params["config"]["features.apps"], false);
+        assert_eq!(params["config"]["features.multi_agent_v2"], false);
+        assert_eq!(params["config"]["features.plugins"], false);
+        assert_eq!(params["config"]["features.shell_tool"], false);
+        assert_eq!(params["config"]["skills.include_instructions"], false);
+        assert_eq!(
+            params["config"][format!("plugins.{capability_root_id}.enabled")],
+            true
+        );
+        assert_eq!(
+            params["config"]
+                [format!("plugins.{capability_root_id}.mcp_servers.delivery_promise.enabled")],
+            true
+        );
+        assert_eq!(
+            params["config"][format!(
+                "plugins.{capability_root_id}.mcp_servers.delivery_promise.enabled_tools"
+            )],
+            json!(["check_promises"])
+        );
+        assert_eq!(
+            params["config"][format!(
+                "plugins.{capability_root_id}.mcp_servers.unreviewed_delivery_admin.enabled"
+            )],
+            false
+        );
+        assert_eq!(
+            params["selectedCapabilityRoots"]
+                .as_array()
+                .expect("selected capability roots")
+                .iter()
+                .map(|root| root["id"].as_str().expect("capability root id"))
+                .collect::<Vec<_>>(),
+            vec![capability_root_id]
+        );
+    }
+
+    #[test]
+    fn rejects_any_agent_mcp_server_or_tool_outside_the_exact_authorized_set() {
+        let required = vec![required_server(
+            "delivery_promise",
+            &["check_promises"],
+            "local-delivery-promise-1-0-0",
+            &["delivery_promise", "unreviewed_delivery_admin"],
+        )];
+        let exact = [(
+            "delivery_promise".to_string(),
+            ["check_promises".to_string()].into_iter().collect(),
+        )]
+        .into_iter()
+        .collect();
+        assert!(require_exact_agent_mcp_inventory(&required, &exact).is_ok());
+
+        let mut extra_tool = exact.clone();
+        extra_tool
+            .get_mut("delivery_promise")
+            .unwrap()
+            .insert("unreviewed_tool".to_string());
+        assert!(require_exact_agent_mcp_inventory(&required, &extra_tool).is_err());
+
+        let mut extra_server = exact;
+        extra_server.insert(
+            "unreviewed_server".to_string(),
+            ["read_everything".to_string()].into_iter().collect(),
+        );
+        assert!(require_exact_agent_mcp_inventory(&required, &extra_server).is_err());
+    }
+
+    #[test]
     fn governed_thread_start_rejects_an_unavailable_capability_root() {
         let role = platform_runtime_role();
         let mode = ThreadStartMode::GovernedSupervisor {
             developer_instructions: "Coordinate the approved platform roles.".to_string(),
             roles: vec![role.clone()],
             role_spawn_limits: [("data_agent".to_string(), 1)].into_iter().collect(),
-            required_mcp_servers: vec![RequiredMcpServer {
-                name: "supply_chain_data".to_string(),
-                tools: vec!["inspect_planning_source".to_string()],
-                capability_root_ids: vec!["missing-capability-root".to_string()],
-            }],
+            required_mcp_servers: vec![required_server(
+                "supply_chain_data",
+                &["inspect_planning_source"],
+                "missing-capability-root",
+                &["supply_chain_data"],
+            )],
             max_threads: 2,
         };
         let error = thread_start_params(
@@ -2388,37 +2684,70 @@ mod tests {
         let mut inventory = HashMap::<String, HashSet<String>>::new();
         let next_cursor = merge_mcp_status_page(
             &json!({
-                "data": [{
-                    "name": "supply_chain_data",
-                    "tools": {
-                        "inspect_planning_source": {"description": "inspect"}
+                "data": [
+                    {
+                        "name": "supply_chain_data",
+                        "serverInfo": {"name": "supply-chain-data", "version": "1.0.0"},
+                        "tools": {
+                            "inspect_planning_source": {"description": "inspect"}
+                        }
+                    },
+                    {
+                        "name": "supply_chain_planner",
+                        "serverInfo": null,
+                        "tools": {}
                     }
-                }],
+                ],
                 "nextCursor": null
             }),
             &mut inventory,
         )
         .expect("valid MCP status page");
-        let required = vec![RequiredMcpServer {
-            name: "supply_chain_data".to_string(),
-            tools: vec![
-                "inspect_planning_source".to_string(),
-                "build_planning_dataset".to_string(),
-            ],
-            capability_root_ids: vec!["local-supply-chain-network-planner".to_string()],
-        }];
-
         assert_eq!(next_cursor, None);
         inventory
             .get_mut("supply_chain_data")
             .unwrap()
             .insert("build_planning_dataset".to_string());
         assert_eq!(
-            exposed_mcp_capabilities(&required, &inventory),
+            exposed_mcp_capabilities(&inventory),
             vec![
-                "supply_chain_data.inspect_planning_source",
                 "supply_chain_data.build_planning_dataset",
+                "supply_chain_data.inspect_planning_source",
             ]
+        );
+    }
+
+    #[test]
+    fn mcp_inventory_distinguishes_disabled_and_initialized_resource_only_servers() {
+        let mut inventory = HashMap::<String, HashSet<String>>::new();
+        merge_mcp_status_page(
+            &json!({
+                "data": [
+                    {
+                        "name": "disabled_server",
+                        "serverInfo": null,
+                        "tools": {}
+                    },
+                    {
+                        "name": "resource_server",
+                        "serverInfo": {"name": "resource-server", "version": "1.0.0"},
+                        "tools": {}
+                    }
+                ],
+                "nextCursor": null
+            }),
+            &mut inventory,
+        )
+        .expect("valid MCP status page");
+
+        assert!(!inventory.contains_key("disabled_server"));
+        assert_eq!(
+            inventory.get("resource_server"),
+            Some(&HashSet::<String>::new())
+        );
+        assert_eq!(
+            exposed_mcp_capabilities(&inventory),
+            vec!["resource_server"]
         );
     }
 

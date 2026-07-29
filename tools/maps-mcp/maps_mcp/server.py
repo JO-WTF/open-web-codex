@@ -17,13 +17,13 @@ from .credential_prompt import LoopbackCredentialPrompt
 from .credentials import WorkspaceCredentialStore
 from .data_refs import GeoJsonResourceStore, PublishedGeoJson
 from .map_card import (
-    Artifact as CurrentMapArtifact,
-    Embed as CurrentMapEmbed,
-    GeoJsonSource as CurrentGeoJsonSource,
-    MapExtensions as CurrentMapExtensions,
-    MapPayload as CurrentMapPayload,
-    Renderer as CurrentMapRenderer,
-    ToolResult as CurrentMapToolResult,
+    Artifact,
+    Embed,
+    GeoJsonSource,
+    MapExtensions,
+    MapPayload,
+    Renderer,
+    ToolResult,
     extension_warnings,
     renderer_sources,
     sanitized_extensions,
@@ -81,9 +81,10 @@ mcp = FastMCP(
         "Geocoding and routing tools publish GeoJSON as MCP Resources. Copy structuredContent."
         "data_ref unchanged into create_map_card sources.<source-id>.data_ref. For "
         "read_mcp_resource, pass "
-        "data_ref.server as server and data_ref.uri as uri unchanged; the server is map_utils, "
-        "never the model-visible mcp__map_utils namespace. Never copy Resource JSON into the "
-        "assistant reply. "
+        "data_ref.server as server and data_ref.uri as uri unchanged. References produced by "
+        "this server use map_utils; create_map_card may also consume an unchanged GeoJSON "
+        "reference from another reviewed local MCP server. Never use a model-visible mcp__ "
+        "namespace or copy Resource JSON into the assistant reply. "
         "create_map_card accepts standard Mapbox Style Specification layer JSON. Open Web "
         "manages GeoJSON source data and adds optional extensions.hover and "
         "extensions.legend. The official Mapbox validator reports unknown style properties "
@@ -281,7 +282,7 @@ def _route_geojson(
 @mcp.tool(structured_output=True)
 async def create_map_card(
     title: str,
-    sources: dict[str, CurrentGeoJsonSource],
+    sources: dict[str, GeoJsonSource],
     layers: list[dict[str, object]],
     intent: str = "visualization",
     fallback_text: str | None = None,
@@ -290,8 +291,8 @@ async def create_map_card(
     zoom: float | None = None,
     bearing: float | None = None,
     pitch: float | None = None,
-    extensions: CurrentMapExtensions | None = None,
-) -> Annotated[CallToolResult, CurrentMapToolResult]:
+    extensions: MapExtensions | None = None,
+) -> Annotated[CallToolResult, ToolResult]:
     """Create the current typed Map Artifact from Mapbox Style layer JSON.
 
     An MCP Resource data_ref must be copied unchanged from an earlier data tool result in the
@@ -335,8 +336,8 @@ async def create_map_card(
         raise ValueError("bearing must be between -180 and 180")
     if pitch is not None and not 0 <= pitch <= 85:
         raise ValueError("pitch must be between 0 and 85")
-    if extensions is not None and not isinstance(extensions, CurrentMapExtensions):
-        extensions = CurrentMapExtensions.model_validate(extensions)
+    if extensions is not None and not isinstance(extensions, MapExtensions):
+        extensions = MapExtensions.model_validate(extensions)
     validate_extension_graph(extensions, layers)
     warnings = validate_style(
         sources,
@@ -347,7 +348,7 @@ async def create_map_card(
         pitch=pitch,
     )
     warnings.extend(extension_warnings(extensions))
-    card = CurrentMapPayload(
+    card = MapPayload(
         title=clean_title,
         intent=intent.strip() or "visualization",
         status="ready",
@@ -363,14 +364,14 @@ async def create_map_card(
     )
     artifact_ref = f"map-{uuid4()}"
     embed_code = f'::codex-inline-vis{{artifact="{artifact_ref}"}}'
-    result = CurrentMapToolResult(
+    result = ToolResult(
         type="open-web-artifact",
         kind="inline-visualization.v1",
-        artifact=CurrentMapArtifact(
+        artifact=Artifact(
             ref=artifact_ref,
-            renderer=CurrentMapRenderer(kind="map.v3", payload=card),
+            renderer=Renderer(kind="map.v3", payload=card),
         ),
-        embed=CurrentMapEmbed(
+        embed=Embed(
             syntax="codex-inline-vis.artifact.v1",
             code=embed_code,
         ),

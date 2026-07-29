@@ -1,0 +1,45 @@
+{
+  "definitionId": "enterprise-finance-agent",
+  "version": "2.0.0",
+  "displayName": "Enterprise Finance Agent",
+  "description": "Evaluates bounded investment economics for compatible supply-chain network options.",
+  "runtimeRole": "agent_9040f76e7387b00fff5e63fd574e63df",
+  "runtimeProfile": {
+    "contentSha256": "60a0a6ca27a1e4aff46f55f2468fb07c7922c5026bd2d87f2f496b9fc5d6d592"
+  },
+  "responsibilities": [
+    "Read exact network snapshot and scenario Resources without copying calculation payloads through chat.",
+    "Evaluate opening investment, recurring operating savings, NPV and payback through the approved deterministic capability.",
+    "Publish financial assumptions, exclusions and lineage as a durable financial_evaluation.v1 Artifact."
+  ],
+  "inputArtifactTypes": [
+    "network_snapshot.v1",
+    "network_scenario_result.v1",
+    "scenario_comparison.v1",
+    "facility_location_solution.v1"
+  ],
+  "outputArtifactTypes": [
+    "financial_evaluation.v1"
+  ],
+  "capabilityTemplate": {
+    "definitionId": "enterprise-finance-agent",
+    "version": "2.0.0"
+  },
+  "requiredMcpServers": [
+    {
+      "name": "supply_chain_planner",
+      "tools": [
+        "evaluate_financial_case",
+        "validate_network_resource"
+      ],
+      "resourceRead": true,
+      "capabilityRootIds": [
+        "local-supply-chain-network-planner"
+      ]
+    }
+  ],
+  "risks": [
+    "Financial results are sensitive to horizon, discount rate, demand growth and excluded implementation costs.",
+    "A positive modeled NPV is decision evidence, not authorization to invest."
+  ]
+}

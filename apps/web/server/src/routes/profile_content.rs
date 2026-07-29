@@ -1001,8 +1001,11 @@ mod tests {
     #[test]
     fn platform_runtime_roles_are_not_browser_managed_agent_names() {
         for name in [
-            "agent_7e81fe6ff16d257b64a209abc623833c",
-            "agent_cc4182517eeeaeb65ac5b50da67da6ba",
+            "agent_15451ec3da17fa338bc798a21838d25d",
+            "agent_0142018b1f2f53b30aa46d9e2e35d774",
+            "agent_79bee7cd1bbdee5bc152913278077848",
+            "agent_9040f76e7387b00fff5e63fd574e63df",
+            "agent_b85d26c7975f69e43b87043fc48e08ea",
         ] {
             assert!(validate_browser_managed_agent_name(name).is_err());
             assert!(!is_browser_managed_agent_name(name));
@@ -1017,8 +1020,11 @@ mod tests {
     #[test]
     fn browser_agent_list_excludes_platform_runtime_roles() {
         let configured_agents = [
-            "agent_7e81fe6ff16d257b64a209abc623833c",
-            "agent_cc4182517eeeaeb65ac5b50da67da6ba",
+            "agent_15451ec3da17fa338bc798a21838d25d",
+            "agent_0142018b1f2f53b30aa46d9e2e35d774",
+            "agent_79bee7cd1bbdee5bc152913278077848",
+            "agent_9040f76e7387b00fff5e63fd574e63df",
+            "agent_b85d26c7975f69e43b87043fc48e08ea",
             "user_defined_agent",
         ];
         let visible = configured_agents

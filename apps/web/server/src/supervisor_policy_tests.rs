@@ -6,7 +6,7 @@ use super::{require_runtime_manifest, resolve_builtin, SupervisorPolicyError};
 fn published_policy() -> super::ResolvedSupervisorPolicy {
     resolve_builtin(&SupervisorPolicySelection {
         policy_id: "enterprise-supervisor-copilot".to_string(),
-        version: "1.9.0".to_string(),
+        version: "3.7.0".to_string(),
     })
     .unwrap()
 }
@@ -15,7 +15,7 @@ fn published_policy() -> super::ResolvedSupervisorPolicy {
 fn resolves_only_the_current_published_version_and_seals_its_content() {
     let published = open_web_codex_supervisor_catalog::supervisor::list_published().unwrap();
     assert_eq!(published.len(), 1);
-    assert_eq!(published[0].version, "1.9.0");
+    assert_eq!(published[0].version, "3.7.0");
 
     let selected = SupervisorPolicySelection {
         policy_id: published[0].policy_id.clone(),
@@ -23,9 +23,9 @@ fn resolves_only_the_current_published_version_and_seals_its_content() {
     };
     let policy = resolve_builtin(&selected).unwrap();
     assert_eq!(policy.snapshot.content_sha256.len(), 64);
-    assert_eq!(policy.detail.responsibilities.len(), 4);
-    assert_eq!(policy.detail.agents.len(), 2);
-    assert_eq!(policy.detail.artifact_contracts.len(), 3);
+    assert_eq!(policy.detail.responsibilities.len(), 5);
+    assert_eq!(policy.detail.agents.len(), 3);
+    assert_eq!(policy.detail.artifact_contracts.len(), 8);
     assert!(policy
         .detail
         .platform_instructions
@@ -33,13 +33,14 @@ fn resolves_only_the_current_published_version_and_seals_its_content() {
     assert!(policy
         .detail
         .custom_instructions
-        .contains("warehouse-network case"));
-    assert_eq!(policy.max_active_child_agents, 2);
+        .contains("evidence-driven Indonesian warehouse-network decision"));
+    assert_eq!(policy.max_active_child_agents, 3);
     assert_eq!(
         policy.role_spawn_limits,
         [
-            ("agent_7e81fe6ff16d257b64a209abc623833c".to_string(), 1),
-            ("agent_cc4182517eeeaeb65ac5b50da67da6ba".to_string(), 1)
+            ("agent_15451ec3da17fa338bc798a21838d25d".to_string(), 1),
+            ("agent_0142018b1f2f53b30aa46d9e2e35d774".to_string(), 1),
+            ("agent_79bee7cd1bbdee5bc152913278077848".to_string(), 1)
         ]
         .into_iter()
         .collect()
@@ -51,8 +52,9 @@ fn resolves_only_the_current_published_version_and_seals_its_content() {
             .map(|role| (role.name.as_str(), role.version.as_str()))
             .collect::<Vec<_>>(),
         vec![
-            ("agent_7e81fe6ff16d257b64a209abc623833c", "1.6.0"),
-            ("agent_cc4182517eeeaeb65ac5b50da67da6ba", "1.5.0")
+            ("agent_15451ec3da17fa338bc798a21838d25d", "3.1.0"),
+            ("agent_0142018b1f2f53b30aa46d9e2e35d774", "3.1.0"),
+            ("agent_79bee7cd1bbdee5bc152913278077848", "1.1.0")
         ]
     );
     assert_eq!(
@@ -61,7 +63,7 @@ fn resolves_only_the_current_published_version_and_seals_its_content() {
             .iter()
             .map(|server| server.name.as_str())
             .collect::<Vec<_>>(),
-        vec!["supply_chain_data", "supply_chain_planner"]
+        vec!["map_utils", "supply_chain_indonesia"]
     );
 }
 
@@ -135,7 +137,7 @@ fn rejects_multi_agent_capability_without_exact_role_instance_limits() {
 
 #[test]
 fn rejects_old_or_unknown_versions_without_fallback() {
-    for version in ["1.6.0", "1.0.0", "9.9.9"] {
+    for version in ["2.0.0", "1.0.0", "9.9.9"] {
         let selection = SupervisorPolicySelection {
             policy_id: "enterprise-supervisor-copilot".to_string(),
             version: version.to_string(),

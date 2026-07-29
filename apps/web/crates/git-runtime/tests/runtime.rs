@@ -5,6 +5,7 @@ use std::path::Path;
 use std::process::Command;
 
 use open_web_codex_git_runtime::{CommitAuthor, GitRuntime, GitRuntimeConfig, GitRuntimeError};
+use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -134,7 +135,7 @@ async fn publishes_an_immutable_capability_package_atomically() {
     ]);
 
     let written = runtime
-        .publish_capability_package(workspace_id, "stock-history", &files)
+        .publish_capability_package(workspace_id, "stock-history", "1.0.0", &files)
         .await
         .expect("publish capability");
 
@@ -143,13 +144,13 @@ async fn publishes_an_immutable_capability_package_atomically() {
         std::fs::read_to_string(
             checkout
                 .root
-                .join("tools/stock-history/.codex-plugin/plugin.json")
+                .join("tools/stock-history/1.0.0/.codex-plugin/plugin.json")
         )
         .unwrap(),
         files[".codex-plugin/plugin.json"]
     );
     assert_ne!(
-        std::fs::metadata(checkout.root.join("tools/stock-history/bin/launcher"))
+        std::fs::metadata(checkout.root.join("tools/stock-history/1.0.0/bin/launcher"))
             .unwrap()
             .permissions()
             .mode()
@@ -158,7 +159,270 @@ async fn publishes_an_immutable_capability_package_atomically() {
     );
     assert!(matches!(
         runtime
-            .publish_capability_package(workspace_id, "stock-history", &files)
+            .publish_capability_package(workspace_id, "stock-history", "1.0.0", &files)
+            .await,
+        Err(GitRuntimeError::Conflict(_))
+    ));
+    runtime
+        .publish_capability_package(workspace_id, "stock-history", "1.1.0", &files)
+        .await
+        .expect("publish second capability version");
+}
+
+#[tokio::test]
+async fn verifies_the_exact_capability_package_release_content() {
+    let (_root, runtime, source) = fixture();
+    let source = runtime.validate_source(&source).unwrap();
+    let branch = runtime.validate_ref("main").unwrap();
+    let workspace_id = Uuid::now_v7();
+    runtime
+        .provision(Uuid::now_v7(), workspace_id, &source, &branch)
+        .await
+        .unwrap();
+    let release_id = Uuid::now_v7();
+    let manifest = "{\"name\":\"stock-history\",\"version\":\"1.0.0\"}\n";
+    let mut digest = Sha256::new();
+    for value in [".codex-plugin/plugin.json".as_bytes(), manifest.as_bytes()] {
+        digest.update((value.len() as u64).to_be_bytes());
+        digest.update(value);
+    }
+    let content_sha256 = hex::encode(digest.finalize());
+    let files = BTreeMap::from([
+        (
+            ".codex-plugin/plugin.json".to_string(),
+            manifest.to_string(),
+        ),
+        (
+            ".open-web-release.json".to_string(),
+            format!(
+                "{{\"schemaVersion\":\"workspace.capability-package-release.v1\",\
+                 \"workspaceId\":\"{workspace_id}\",\"releaseId\":\"{release_id}\",\
+                 \"packageId\":\"stock-history\",\"version\":\"1.0.0\",\
+                 \"contentSha256\":\"{content_sha256}\"}}\n"
+            ),
+        ),
+    ]);
+    runtime
+        .publish_capability_package(workspace_id, "stock-history", "1.0.0", &files)
+        .await
+        .unwrap();
+
+    assert!(runtime
+        .capability_package_matches(
+            workspace_id,
+            "stock-history",
+            "1.0.0",
+            release_id,
+            &content_sha256,
+        )
+        .await
+        .unwrap());
+    assert!(!runtime
+        .capability_package_matches(
+            workspace_id,
+            "stock-history",
+            "1.0.0",
+            Uuid::now_v7(),
+            &content_sha256,
+        )
+        .await
+        .unwrap());
+    std::fs::write(
+        runtime
+            .workspace_path(workspace_id)
+            .join("tools/stock-history/1.0.0/.codex-plugin/plugin.json"),
+        "{\"name\":\"tampered\"}\n",
+    )
+    .unwrap();
+    assert!(!runtime
+        .capability_package_matches(
+            workspace_id,
+            "stock-history",
+            "1.0.0",
+            release_id,
+            &content_sha256,
+        )
+        .await
+        .unwrap());
+}
+
+#[tokio::test]
+async fn publishes_and_precisely_cleans_an_immutable_dataset_release() {
+    let (_root, runtime, source) = fixture();
+    let source = runtime.validate_source(&source).unwrap();
+    let branch = runtime.validate_ref("main").unwrap();
+    let workspace_id = Uuid::now_v7();
+    let checkout = runtime
+        .provision(Uuid::now_v7(), workspace_id, &source, &branch)
+        .await
+        .unwrap();
+    let release_id = Uuid::now_v7();
+    let manifest = format!(
+        "{{\n  \"schemaVersion\": \"workspace.dataset-release.v1\",\n  \"releaseId\": \"{release_id}\"\n}}\n"
+    );
+    let files = BTreeMap::from([
+        ("customers.csv.gz".to_string(), vec![1, 2, 3]),
+        (
+            "reference/provinces.geojson".to_string(),
+            br#"{"type":"FeatureCollection","features":[]}"#.to_vec(),
+        ),
+    ]);
+
+    let written = runtime
+        .publish_dataset_release(
+            workspace_id,
+            "indonesia-network",
+            "1.0.0",
+            manifest.as_bytes(),
+            &files,
+        )
+        .await
+        .expect("publish dataset");
+
+    assert_eq!(written.len(), 3);
+    let release_root = checkout.root.join("datasets/indonesia-network/1.0.0");
+    assert_eq!(
+        std::fs::read(release_root.join("files/customers.csv.gz")).unwrap(),
+        vec![1, 2, 3]
+    );
+    assert!(matches!(
+        runtime
+            .remove_dataset_release(workspace_id, "indonesia-network", "1.0.0", Uuid::now_v7(),)
+            .await,
+        Err(GitRuntimeError::Conflict(_))
+    ));
+    assert!(release_root.exists());
+    runtime
+        .remove_dataset_release(workspace_id, "indonesia-network", "1.0.0", release_id)
+        .await
+        .expect("clean exact dataset release");
+    assert!(!release_root.exists());
+}
+
+#[tokio::test]
+async fn verifies_dataset_release_files_against_the_service_manifest() {
+    let (_root, runtime, source) = fixture();
+    let source = runtime.validate_source(&source).unwrap();
+    let branch = runtime.validate_ref("main").unwrap();
+    let workspace_id = Uuid::now_v7();
+    let checkout = runtime
+        .provision(Uuid::now_v7(), workspace_id, &source, &branch)
+        .await
+        .unwrap();
+    let release_id = Uuid::now_v7();
+    let bytes = b"customer_id,demand\n1,10\n".to_vec();
+    let file_sha256 = hex::encode(Sha256::digest(&bytes));
+    let byte_size = bytes.len().to_string();
+    let mut digest = Sha256::new();
+    for value in [
+        "workspace.dataset-release.v1",
+        "indonesia-network",
+        "1.0.0",
+        "Indonesia Network",
+        "Verified fixture",
+        "customers.csv",
+        "customers",
+        "text/csv",
+        &byte_size,
+        &file_sha256,
+    ] {
+        digest.update((value.len() as u64).to_be_bytes());
+        digest.update(value.as_bytes());
+    }
+    let content_sha256 = hex::encode(digest.finalize());
+    let manifest = serde_json::to_vec_pretty(&serde_json::json!({
+        "schemaVersion": "workspace.dataset-release.v1",
+        "releaseId": release_id,
+        "datasetId": "indonesia-network",
+        "version": "1.0.0",
+        "displayName": "Indonesia Network",
+        "description": "Verified fixture",
+        "contentSha256": content_sha256,
+        "files": [{
+            "logicalName": "customers.csv",
+            "role": "customers",
+            "mediaType": "text/csv",
+            "byteSize": bytes.len(),
+            "contentSha256": file_sha256,
+            "relativePath": "files/customers.csv"
+        }]
+    }))
+    .unwrap();
+    runtime
+        .publish_dataset_release(
+            workspace_id,
+            "indonesia-network",
+            "1.0.0",
+            &manifest,
+            &BTreeMap::from([("customers.csv".to_string(), bytes)]),
+        )
+        .await
+        .unwrap();
+
+    assert!(runtime
+        .dataset_release_matches(
+            workspace_id,
+            "indonesia-network",
+            "1.0.0",
+            release_id,
+            &content_sha256,
+        )
+        .await
+        .unwrap());
+    std::fs::write(
+        checkout
+            .root
+            .join("datasets/indonesia-network/1.0.0/files/customers.csv"),
+        "tampered\n",
+    )
+    .unwrap();
+    assert!(!runtime
+        .dataset_release_matches(
+            workspace_id,
+            "indonesia-network",
+            "1.0.0",
+            release_id,
+            &content_sha256,
+        )
+        .await
+        .unwrap());
+}
+
+#[tokio::test]
+async fn rejects_unsafe_or_oversized_dataset_release_inputs() {
+    let (_root, runtime, source) = fixture();
+    let source = runtime.validate_source(&source).unwrap();
+    let branch = runtime.validate_ref("main").unwrap();
+    let workspace_id = Uuid::now_v7();
+    runtime
+        .provision(Uuid::now_v7(), workspace_id, &source, &branch)
+        .await
+        .unwrap();
+
+    let unsafe_files = BTreeMap::from([("../customers.csv".to_string(), vec![1])]);
+    assert!(matches!(
+        runtime
+            .publish_dataset_release(
+                workspace_id,
+                "indonesia-network",
+                "1.0.0",
+                b"{}",
+                &unsafe_files,
+            )
+            .await,
+        Err(GitRuntimeError::UnsafePath(_))
+    ));
+
+    let oversized = BTreeMap::from([("customers.csv".to_string(), vec![0; 32 * 1024 * 1024 + 1])]);
+    assert!(matches!(
+        runtime
+            .publish_dataset_release(
+                workspace_id,
+                "indonesia-network",
+                "1.0.0",
+                b"{}",
+                &oversized,
+            )
             .await,
         Err(GitRuntimeError::Conflict(_))
     ));

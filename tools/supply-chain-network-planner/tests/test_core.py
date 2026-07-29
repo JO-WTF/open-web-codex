@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,16 @@ from supply_chain_planner.core import (
     evaluate_optimized_network,
     solve_location_candidates,
 )
-from supply_chain_planner.models import NetworkInput, RouteEntry
+from supply_chain_planner.decision_core import (
+    build_risk_register,
+    evaluate_financial_case,
+)
+from supply_chain_planner.models import (
+    DataRef,
+    NetworkInput,
+    RiskItem,
+    RouteEntry,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -141,3 +151,73 @@ def test_network_requires_complete_rate_resolution() -> None:
 
     with pytest.raises(ValueError, match="missing transport rate"):
         NetworkInput.model_validate(payload)
+
+
+def test_financial_and_risk_resources_preserve_evidence_lineage(
+    planning_state,
+) -> None:
+    snapshot, matrix = planning_state
+    for facility in snapshot.facilities:
+        if facility.facility_id == "candidate-hangzhou":
+            facility.opening_cost = Decimal("1000")
+    baseline = evaluate_optimized_network(
+        snapshot,
+        matrix,
+        active_facility_ids=["warehouse-shanghai", "warehouse-nanjing"],
+        scenario_id="baseline",
+    )
+    candidate = evaluate_optimized_network(
+        snapshot,
+        matrix,
+        active_facility_ids=[
+            "warehouse-shanghai",
+            "warehouse-nanjing",
+            "candidate-hangzhou",
+        ],
+        scenario_id="candidate",
+    )
+    snapshot_ref = DataRef(
+        uri="supply-chain://resources/network_snapshot.v1-test",
+        resource_schema="network_snapshot.v1",
+    )
+    baseline_ref = DataRef(
+        uri="supply-chain://resources/network_scenario_result.v1-baseline",
+        resource_schema="network_scenario_result.v1",
+    )
+    candidate_ref = DataRef(
+        uri="supply-chain://resources/network_scenario_result.v1-candidate",
+        resource_schema="network_scenario_result.v1",
+    )
+
+    finance = evaluate_financial_case(
+        snapshot,
+        baseline,
+        candidate,
+        snapshot_ref=snapshot_ref,
+        baseline_result_ref=baseline_ref,
+        candidate_result_ref=candidate_ref,
+        horizon_years=5,
+        discount_rate=0.1,
+        annual_growth_rate=0.02,
+    )
+    assert finance.schema_version == "financial_evaluation.v1"
+    assert finance.opening_investment == Decimal("1000")
+    assert finance.input_refs == [snapshot_ref, baseline_ref, candidate_ref]
+
+    risk_register = build_risk_register(
+        decision_scope="Test candidate decision",
+        risks=[
+            RiskItem(
+                risk_id="demand-volatility",
+                category="demand",
+                statement="Promotion demand may not recur.",
+                likelihood=4,
+                impact=4,
+                mitigation="Use a normalized demand case before approval.",
+                trigger="Two quarters of normalized demand below plan.",
+                evidence_refs=[candidate_ref],
+            )
+        ],
+    )
+    assert risk_register.schema_version == "risk_register.v1"
+    assert risk_register.unresolved_risk_count == 1

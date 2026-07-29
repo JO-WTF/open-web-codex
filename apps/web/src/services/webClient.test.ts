@@ -214,6 +214,74 @@ describe("WebApp direct Server client", () => {
     });
   });
 
+  it("starts a governed Agent with an exact published definition reference", async () => {
+    const baseFetch = resourceFetch();
+    const agentTask = {
+      ...task,
+      title: "Governed Agent · network-planning-agent@2.0.0",
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/api/tasks" && init?.method === "POST") {
+        expect(JSON.parse(String(init.body))).toMatchObject({
+          project_id: project.id,
+          title: "Governed Agent · network-planning-agent@2.0.0",
+        });
+        return json(agentTask);
+      }
+      if (
+        url.pathname === `/api/tasks/${agentTask.id}/runs`
+        && init?.method === "POST"
+      ) {
+        expect(JSON.parse(String(init.body))).toMatchObject({
+          workspace_id: workspace.id,
+          supervisor_policy: null,
+          agent: {
+            definition_id: "network-planning-agent",
+            version: "2.0.0",
+            release_id: "018f-agent-release",
+          },
+        });
+        return json({ run });
+      }
+      if (url.pathname === `/api/tasks/${agentTask.id}`) {
+        return json(agentTask);
+      }
+      if (url.pathname === `/api/runs/${run.id}/thread`) {
+        return json({
+          thread: {
+            id: "thread-1",
+            name: agentTask.title,
+            preview: agentTask.title,
+            createdAt: 1,
+            updatedAt: 2,
+            status: runtimeStatus(run),
+            turns: [],
+          },
+        });
+      }
+      return baseFetch(input);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("crypto", { randomUUID: () => "018f-idempotency-key" });
+    const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
+
+    await expect(
+      client.startThread(workspace.id, {
+        agent: {
+          definition_id: "network-planning-agent",
+          version: "2.0.0",
+          release_id: "018f-agent-release",
+        },
+      }),
+    ).resolves.toEqual({
+      thread: expect.objectContaining({
+        id: "thread-1",
+        name: "Governed Agent · network-planning-agent@2.0.0",
+      }),
+    });
+  });
+
   it("restores the bound Policy and Runtime Agent projection for a governed Thread", async () => {
     const baseFetch = resourceFetch();
     const policy = {

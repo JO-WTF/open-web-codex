@@ -114,8 +114,61 @@ cargo_build_cache_max_size_from_stats() {
   sed -n 's/.*"max_cache_size":\([0-9][0-9]*\).*/\1/p'
 }
 
+cargo_build_cache_acquire_server_lock() {
+  local attempt lock_file
+  lock_file="$SCCACHE_DIR/server-lifecycle.lock"
+
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>"$lock_file"
+    if ! flock -w 10 9; then
+      exec 9>&-
+      printf 'error: timed out waiting for the sccache lifecycle lock\n' >&2
+      return 1
+    fi
+    export OPEN_WEB_CODEX_SCCACHE_LOCK_FILE="$lock_file"
+    export OPEN_WEB_CODEX_SCCACHE_LOCK_METHOD=flock
+    return 0
+  fi
+
+  if command -v shlock >/dev/null 2>&1; then
+    attempt=0
+    while ((attempt < 200)); do
+      if shlock -p "$$" -f "$lock_file"; then
+        export OPEN_WEB_CODEX_SCCACHE_LOCK_FILE="$lock_file"
+        export OPEN_WEB_CODEX_SCCACHE_LOCK_METHOD=shlock
+        return 0
+      fi
+      attempt=$((attempt + 1))
+      sleep 0.05
+    done
+    printf 'error: timed out waiting for the sccache lifecycle lock\n' >&2
+    return 1
+  fi
+
+  printf 'error: sccache lifecycle management requires flock or shlock\n' >&2
+  return 1
+}
+
+cargo_build_cache_release_server_lock() {
+  local owner
+  case "${OPEN_WEB_CODEX_SCCACHE_LOCK_METHOD:-}" in
+    flock)
+      flock -u 9
+      exec 9>&-
+      ;;
+    shlock)
+      owner="$(sed -n '1p' "$OPEN_WEB_CODEX_SCCACHE_LOCK_FILE" 2>/dev/null || true)"
+      if [[ "$owner" == "$$" ]]; then
+        unlink "$OPEN_WEB_CODEX_SCCACHE_LOCK_FILE"
+      fi
+      ;;
+  esac
+  unset OPEN_WEB_CODEX_SCCACHE_LOCK_FILE
+  unset OPEN_WEB_CODEX_SCCACHE_LOCK_METHOD
+}
+
 cargo_build_cache_ensure_server() {
-  local actual_size expected_size stats
+  local actual_size expected_size result stats
   if ! expected_size="$(cargo_build_cache_size_bytes "$SCCACHE_CACHE_SIZE")"; then
     printf 'error: SCCACHE_CACHE_SIZE must be a positive integer with an optional K, M, G, or T suffix\n' >&2
     return 2
@@ -134,18 +187,40 @@ cargo_build_cache_ensure_server() {
     return 1
   fi
 
+  if ! cargo_build_cache_acquire_server_lock; then
+    return 1
+  fi
+
+  # Another build may have applied the requested limit while this process
+  # waited. Recheck under the lifecycle lock before stopping the shared daemon.
+  if stats="$("$OPEN_WEB_CODEX_SCCACHE_BIN" --show-stats --stats-format json 2>/dev/null)"; then
+    actual_size="$(printf '%s\n' "$stats" | cargo_build_cache_max_size_from_stats)"
+    if [[ "$actual_size" == "$expected_size" ]]; then
+      cargo_build_cache_release_server_lock
+      return 0
+    fi
+  fi
+
   printf 'Restarting the project sccache server to apply the %s limit\n' \
     "$SCCACHE_CACHE_SIZE" >&2
   "$OPEN_WEB_CODEX_SCCACHE_BIN" --stop-server >/dev/null 2>&1 || true
   rm -f "$SCCACHE_SERVER_UDS"
-  "$OPEN_WEB_CODEX_SCCACHE_BIN" --start-server >/dev/null
-  stats="$("$OPEN_WEB_CODEX_SCCACHE_BIN" --show-stats --stats-format json)"
-  actual_size="$(printf '%s\n' "$stats" | cargo_build_cache_max_size_from_stats)"
-  if [[ "$actual_size" != "$expected_size" ]]; then
+  result=0
+  "$OPEN_WEB_CODEX_SCCACHE_BIN" --start-server >/dev/null || result=$?
+  if ((result == 0)); then
+    stats="$("$OPEN_WEB_CODEX_SCCACHE_BIN" --show-stats --stats-format json)" \
+      || result=$?
+  fi
+  if ((result == 0)); then
+    actual_size="$(printf '%s\n' "$stats" | cargo_build_cache_max_size_from_stats)"
+  fi
+  if ((result == 0)) && [[ "$actual_size" != "$expected_size" ]]; then
     printf 'error: sccache reported max_cache_size=%s; expected %s bytes\n' \
       "${actual_size:-unknown}" "$expected_size" >&2
-    return 1
+    result=1
   fi
+  cargo_build_cache_release_server_lock
+  return "$result"
 }
 
 cargo_build_cache_describe() {

@@ -130,6 +130,26 @@ impl RunOrchestrator {
                 ));
             }
         }
+        if let Some(binding_id) = lease.agent.as_ref().map(|agent| agent.binding_id) {
+            let updated = sqlx::query(
+                "UPDATE agent_run_bindings \
+                 SET thread_id = $1, state = 'bound', failure_code = NULL, \
+                     bound_at = now(), updated_at = now() \
+                 WHERE id = $2 AND run_id = $3 AND state = 'prepared'",
+            )
+            .bind(thread_id)
+            .bind(binding_id)
+            .bind(lease.run_id)
+            .execute(&mut *transaction)
+            .await?
+            .rows_affected();
+            if updated != 1 {
+                transaction.rollback().await?;
+                return Err(RunOrchestratorError::Conflict(
+                    "root Agent binding changed before Thread delivery".to_string(),
+                ));
+            }
+        }
         insert_root_agent_projection(&mut transaction, lease, thread_id).await?;
         sqlx::query("UPDATE tasks SET status = 'running', updated_at = now() WHERE id = $1")
             .bind(task_id)
@@ -190,6 +210,27 @@ impl RunOrchestrator {
                 ));
             }
         }
+        if let Some(binding_id) = lease.agent.as_ref().map(|agent| agent.binding_id) {
+            let updated = sqlx::query(
+                "UPDATE agent_run_bindings \
+                 SET thread_id = COALESCE(thread_id, $1), state = 'bound', failure_code = NULL, \
+                     bound_at = COALESCE(bound_at, now()), updated_at = now() \
+                 WHERE id = $2 AND run_id = $3 \
+                   AND state IN ('prepared', 'bound', 'cancelled')",
+            )
+            .bind(thread_id)
+            .bind(binding_id)
+            .bind(lease.run_id)
+            .execute(&mut *transaction)
+            .await?
+            .rows_affected();
+            if updated != 1 {
+                transaction.rollback().await?;
+                return Err(RunOrchestratorError::Conflict(
+                    "root Agent delivery could not be recorded".to_string(),
+                ));
+            }
+        }
         insert_root_agent_projection(&mut transaction, lease, thread_id).await?;
         transaction.commit().await?;
         Ok(())
@@ -222,6 +263,18 @@ impl RunOrchestrator {
             {
                 sqlx::query(
                     "UPDATE supervisor_policy_bindings \
+                     SET state = 'failed', failure_code = $1, updated_at = now() \
+                     WHERE id = $2 AND run_id = $3 AND state = 'prepared'",
+                )
+                .bind(code)
+                .bind(binding_id)
+                .bind(lease.run_id)
+                .execute(&mut *transaction)
+                .await?;
+            }
+            if let Some(binding_id) = lease.agent.as_ref().map(|agent| agent.binding_id) {
+                sqlx::query(
+                    "UPDATE agent_run_bindings \
                      SET state = 'failed', failure_code = $1, updated_at = now() \
                      WHERE id = $2 AND run_id = $3 AND state = 'prepared'",
                 )

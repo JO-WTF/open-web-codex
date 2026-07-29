@@ -1,130 +1,118 @@
 # Supply Chain Network Planner
 
-This tools-only Codex plugin adds read-only supply-chain data preparation and
-deterministic network planning without changing the Web app, Platform Server, or Codex
-Runtime.
+This Codex Plugin provides reviewed, read-only supply-chain MCP capabilities. Domain
+calculations and Resource publication stay in this package; Codex Runtime owns Tool,
+Skill, MCP and Agent execution.
 
-## Capability layout
+## MCP boundaries
 
-- Codex and the five Skills orchestrate data preparation, mapping, scenario analysis,
-  optimization, validation, and explanation.
-- `supply_chain_data` is a separate read-only MCP boundary. It accepts bounded source
-  IDs and publishes `planning-dataset.v1`; it exposes no SQL or source-write tool.
-- `map_utils` remains the owner of address geocoding and provider navigation calls.
-- `supply_chain_planner` owns typed planning Resources and deterministic coverage, cost,
-  allocation, comparison, and finite-candidate location calculations.
-- MCP Resources are immutable Runtime handoffs. The current Platform observes completed
-  Resource links, assigns an independent Task-owned Artifact identity and grant, records
-  producer provenance, and materializes the same versioned content for authorized browser
-  and history reads.
-- Resource-producing Tools return both an unchanged `data_ref` for Runtime handoff and
-  a stable `resource_name` for evidence citation. Reports must not expose or relabel the
-  internal Resource URI.
+The package declares three independent MCP Servers:
 
-Both MCP servers set `default_tools_approval_mode` to `approve`. This is a
-server-level risk classification, not a global approval bypass: every exposed operation is
-bounded, deterministic or read-only, and the governed Agent Roles further narrow the exact
-Tool allowlist. Normal Codex command/file/permission approvals, credential elicitation,
-external side effects and any future higher-risk server remain subject to explicit approval.
+| Server | Current owner and use |
+| --- | --- |
+| `supply_chain_data` | General bounded planning-source discovery and `planning-dataset.v2` publication |
+| `supply_chain_planner` | General snapshot, route, scenario, facility, finance and risk Resources |
+| `supply_chain_indonesia` | Exact Workspace Dataset Release access and the progressive Indonesia tutorials |
 
-## MCP tools
+The current `enterprise-supervisor-copilot@3.7.0` uses only
+`supply_chain_indonesia` plus the separate `map_utils` Plugin. The older general
+planning Servers remain independently tested capabilities; they are not hidden fallbacks for
+the Indonesia workflow.
 
-Data Agent:
+## Indonesia tools
 
-- `list_planning_sources`
-- `inspect_planning_source`
-- `build_planning_dataset`
-- `validate_planning_dataset`
+`supply_chain_indonesia` exposes:
 
-Network Planning Agent:
+- `inspect_indonesia_dataset_release`
+- `evaluate_indonesia_service_baseline`
+- `evaluate_indonesia_current_network`
+- `evaluate_indonesia_candidate`
+- `optimize_indonesia_new_warehouse`
+- `prepare_indonesia_network_map`
+- `validate_indonesia_resource`
 
-- `prepare_network_snapshot`
-- `register_route_matrix`
-- `evaluate_current_coverage`
-- `evaluate_network_scenario`
-- `compare_network_scenarios`
-- `solve_facility_location`
-- `validate_network_resource`
+The service-baseline Tool intentionally returns current forward-to-customer service and
+province metrics without linehaul, capacity or cost fields. The current-network Tool adds
+the full two-level cost and capacity view. Candidate and optimization Tools use only the
+twenty reviewed candidates.
 
-The Data Agent first produces the common planning dataset. The three network workflows
-are represented by:
+Every producer validates its typed Resource and cross-field totals before publication.
+Validation failure is a failed Tool call; correctness does not depend on the model choosing a
+second validator call. Resource-producing Tools return a stable `resource_name` and unchanged
+structured `data_ref`. Reports cite the name and must not expose the internal URI.
 
-1. Prepare snapshot and routes, then call `evaluate_current_coverage`.
-2. Evaluate like-for-like baseline and added-warehouse scenarios, then compare them.
-3. Prepare all candidates and routes, then call `solve_facility_location`.
+## Current governed roles
 
-## Runtime and governance integration
+| Release | Exact capability boundary |
+| --- | --- |
+| `enterprise-data-agent@3.1.0` | Atomic Indonesia Dataset inspection and bounded Resource reading |
+| `enterprise-network-planning-agent@3.1.0` | Indonesia service, validated province rankings, current, candidate, optimization and bounded map preparation |
+| `enterprise-visualization-agent@1.1.0` | Exact map/GeoJSON Resource reads, provenance handoff, and `map_utils.create_map_card` |
+| `enterprise-supervisor-copilot@3.7.0` | Dynamic coordination, complete evidence synthesis, and exact inline map delivery |
 
-This Plugin publishes capabilities; installing or starting it does not create an Agent
-or mutate a Profile.
+The root Supervisor receives collaboration capabilities but no business MCP or shell. Child
+roles receive only their exact MCP Server, Tool and capability-root inventory. Disabled sibling
+Servers are not treated as missing dependencies.
 
-- `capabilities/agents/enterprise-data-agent/1.6.0/` is the current reviewed
-  Definition and instruction source used to deterministically create the
-  `data_agent` Runtime Role through the internal Profile Host materialization
-  boundary.
-- `capabilities/agents/enterprise-network-planning-agent/1.5.0/` does the same
-  for `network_planning_agent`.
-- The Platform publishes `enterprise-supervisor-copilot@1.7.0` from
-  `capabilities/supervisors/`. Historical Role and Policy versions are not
-  resolved in this development environment.
-- When a user explicitly starts a Run with that Policy, the worker verifies the
-  Definition-bound instruction digest, materializes the exact versioned Role file under
-  a platform-reserved Profile directory, and reopens and verifies that file immediately
-  before Runtime consumption. The governed `thread/start` or `thread/fork` request
-  references the exact Roles through request-scoped config and enables the current V2
-  multi-agent engine only for that Thread. It does not register the enterprise Roles in
-  the Profile Agent catalog, reload Profile configuration, change the Profile-wide
-  engine choice, or add a V1 compatibility path. Platform-reserved Role names remain
-  unavailable to generic Profile Agent CRUD.
-- Before the root Thread is delivered, the adapter asks Codex
-  `mcpServerStatus/list(threadId)` for the exact thread-selected inventory and rejects
-  and archives the new Thread when any Agent Definition-required server or tool is
-  missing. The model must not use a shell, launcher, direct Python import, or FastMCP
-  private state as a fallback.
-- Codex Runtime creates the actual child Threads. Both child Threads currently inherit
-  the root Thread's selected capability roots; Role instructions separate
-  responsibilities but are not an authorization boundary.
-- The real end-to-end path is
-  `scripts/smoke-enterprise-supervisor-copilot.sh`.
+Web-authored Agent Releases inherit one reviewed template and may narrow Artifact contracts.
+They cannot add Tools through instructions. A Dataset-dependent Agent binds exact Workspace,
+Release, Dataset, version and SHA-256 identities; Runtime receives no browser-supplied host path.
 
-## Local setup
+## Indonesia data
 
-The platform normally provisions shared tool environments. For manual development:
+The reproducible release is under:
+
+```text
+examples/indonesia-tutorial/releases/1.0.0/
+```
+
+It contains 240,000 synthetic customers, 38 current provinces, three central warehouses,
+eight forward warehouses, twenty reviewed candidates and 1,148 quote rows. The source lock,
+generation policy and validation report are checked in beside the release.
+
+The authoritative synthetic-data rules are in
+[`references/indonesia-tutorial-data-contract.md`](references/indonesia-tutorial-data-contract.md).
+The Web learning path begins at
+[`docs/tutorials/README.md`](../../docs/tutorials/README.md).
+
+## Resource and approval behavior
+
+The Indonesia Server reads one exact platform-authorized Dataset Release through trusted Codex
+Turn metadata. It never accepts a host path as a Tool argument, scans a Workspace, or returns raw
+customer rows. Bounded JSON and GeoJSON Resources live in Profile-scoped MCP state.
+
+The checked-in MCP declarations classify the complete current Server toolsets as reviewed,
+read-only, deterministic and idempotent, so their default approval mode is `approve`. This is not
+a global approval bypass. Commands, file writes, credentials, external effects and future
+higher-risk Servers remain subject to their own Runtime and platform contracts.
+
+## Development setup and validation
+
+The real-mode startup scripts provision the shared MCP environment. For manual setup:
 
 ```bash
 ./bin/setup-env
 ```
 
-`scripts/run-local.sh` prepares this environment automatically in real mode through
-`scripts/setup-supply-chain-mcp-env.sh`; startup fails if the public server imports
-cannot be validated.
-
-The MCP launcher honors:
-
-- `SUPPLY_CHAIN_DATA_ROOT`: authorized root for JSON `source_path` inputs.
-- `SUPPLY_CHAIN_READONLY_DATA_ROOT`: deployment-bound Data Agent source catalog.
-- `SUPPLY_CHAIN_DATA_RESOURCE_DIR`: optional Data Agent Resource directory.
-- `SUPPLY_CHAIN_RESOURCE_DIR`: directory for immutable Resource payloads.
-- `CODEX_HOME`: Profile-scoped state root used by default for Resources.
-- `OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV`: shared Python environment.
-- `SUPPLY_CHAIN_MCP_AUTO_INSTALL=1`: allow manual first-start environment setup.
-
-No provider API key is owned or stored by this plugin. Navigation credentials remain
-inside the existing maps capability.
-
-## Example data and tests
-
-`examples/data-sources/warehouse-network-fixture.json` is the read-only Data Agent
-source. `examples/network-input.json` and `examples/route-matrix-input.json` form a
-complete small network scenario. These files are reviewed network fixtures. Runtime
-Role instructions live in the repository capability catalog, not automatically
-discovered Plugin content; a published Supervisor Release makes them visible only to
-its governed Thread through the explicit worker lifecycle above.
-After installing the package:
+Run deterministic tests with the project test Python:
 
 ```bash
-python -m pytest -q
+PYTHONPATH=tools/supply-chain-network-planner \
+  python3 -m pytest tools/supply-chain-network-planner/tests -q
 ```
 
-The exact data contract, service-level formula, objective order, and MVP exclusions are
-documented in `references/planning-contracts.md`.
+Run the real stdio protocol smoke with the MCP environment:
+
+```bash
+PYTHONPATH=tools/supply-chain-network-planner \
+  .local/open-web-codex/tool-envs/supply-chain-network-planner/bin/python \
+  tools/supply-chain-network-planner/tests/stdio_smoke.py
+```
+
+The real Web/Runtime path is covered by:
+
+```bash
+scripts/smoke-enterprise-supervisor-copilot.sh
+```
+
+No Provider or navigation API key is owned or stored by this Plugin.

@@ -23,6 +23,12 @@ Codex Runtime 仍然拥有 Thread、Agent 执行、工具发现和 MCP 生命周
   Agent Definition 和生成 Runtime Role 所需的指令；
 - 工具实现、MCP Server、Skill 和 Plugin 继续留在各自所属包中，Package 只通过
   稳定能力标识和版本引用它们；
+- Web 创建的有界 Python Capability Package 同样是不可变发布对象。版本必须同时
+  进入发布身份、内容摘要和 Workspace 目录；同一 `package-id + version` 不可
+  原地覆盖；
+- Runtime 启动只接收当前 Thread 或受治理 Agent 精确选择的 Capability Package
+  Release。普通 Thread 不再通过扫描 Workspace 的 `tools/` 目录隐式启用全部
+  Package，Agent 也不得按显示名称或目录猜测可用 MCP；
 - Supervisor Definition 是可编辑对象，Revision 是校验快照，Release 是不可变、
   可运行的发布对象；用户创建的对象保存在 PostgreSQL，不写入代码目录；
 - Agent Definition 同样使用 Definition、草稿 Revision 和不可变 Release；当前过渡
@@ -80,6 +86,9 @@ Profile 只保存 Runtime 可消费的物化结果。
   PostgreSQL 持久化与类型化 Web API；
 - 发布校验必须拒绝不存在或版本不匹配的 Agent、无效 Artifact 交付关系和未声明
   的 Runtime 能力，也必须拒绝自定义 Agent 扩大所选 capability template；
+- Workspace 发布的 Capability Package 必须持久化组织、Workspace、版本、内容
+  SHA-256、MCP/Tool/Skill 清单和发布终态；浏览器只选择稳定 Release ID，路径由
+  Platform 与 Profile Host 在服务端解析；
 - 代码与 Web 等价性测试必须比较完整规范化执行语义及其摘要；任一可执行字段变更
   都必须改变摘要。代码 Package 中手写的派生字段发生漂移时必须显式失败；
 - Release 一经发布不得原地修改；变更必须创建新版本；

@@ -37,14 +37,16 @@ struct MockThread {
 mod tests {
     use super::FakeCodexAdapter;
     use crate::{
-        platform_runtime_role_config_file, AuthorizedWorkspace, CodexAdapter, PlatformRuntimeRole,
-        ProfileMutation, ProfileQuery, RequiredMcpServer, ThreadStartMode,
+        platform_runtime_role_config_file, AuthorizedWorkspace, CapabilityRootMcpInventory,
+        CodexAdapter, PlatformRuntimeRole, ProfileMutation, ProfileQuery, RequiredMcpServer,
+        ThreadStartMode,
     };
     use sha2::{Digest, Sha256};
 
     fn platform_runtime_role() -> PlatformRuntimeRole {
         let config_toml = "developer_instructions = '''\nBuild and validate the dataset.\n'''\n\
             \n[agents]\nenabled = false\n\
+            \n[skills]\ninclude_instructions = false\n\
             \n[features]\napps = false\nmulti_agent_v2 = false\nplugins = false\nshell_tool = false\n\
             \n[plugins.local-supply-chain-network-planner]\nenabled = true\n\
             \n[plugins.local-supply-chain-network-planner.mcp_servers.supply_chain_data]\n\
@@ -100,7 +102,10 @@ mod tests {
             required_mcp_servers: vec![RequiredMcpServer {
                 name: "supply_chain_data".to_string(),
                 tools: vec!["inspect_planning_source".to_string()],
-                capability_root_ids: vec!["local-supply-chain-network-planner".to_string()],
+                capability_roots: vec![CapabilityRootMcpInventory {
+                    capability_root_id: "local-supply-chain-network-planner".to_string(),
+                    mcp_server_names: vec!["supply_chain_data".to_string()],
+                }],
             }],
             max_threads: 2,
         };
@@ -414,6 +419,20 @@ impl CodexAdapter for FakeCodexAdapter {
         let mut params = json!({ "workspaceId": workspace.id });
         match mode {
             ThreadStartMode::Standard => {}
+            ThreadStartMode::GovernedAgent {
+                developer_instructions,
+                required_mcp_servers,
+            } => {
+                validate_required_mcp_servers(required_mcp_servers)?;
+                let instructions = developer_instructions.trim();
+                if instructions.is_empty() || instructions.len() > MAX_DEVELOPER_INSTRUCTIONS_BYTES
+                {
+                    return Err(AdapterError::Internal(
+                        "Agent developer instructions must contain 1 to 16384 bytes".to_string(),
+                    ));
+                }
+                params["developerInstructions"] = Value::String(instructions.to_string());
+            }
             ThreadStartMode::GovernedSupervisor {
                 developer_instructions,
                 roles,

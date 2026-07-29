@@ -52,6 +52,32 @@
         "all_proxy",
         "no_proxy"
       ]
+    },
+    "supply_chain_indonesia": {
+      "command": "./bin/supply-chain-planner-launcher",
+      "args": [
+        "--indonesia-server",
+        "--workspace-root",
+        "."
+      ],
+      "cwd": ".",
+      "default_tools_approval_mode": "approve",
+      "env_vars": [
+        "CODEX_HOME",
+        "OPEN_WEB_CODEX_DATA_DIR",
+        "OPEN_WEB_CODEX_LOG_DIR",
+        "OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV",
+        "SUPPLY_CHAIN_INDONESIA_RESOURCE_DIR",
+        "SUPPLY_CHAIN_MCP_AUTO_INSTALL",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "no_proxy"
+      ]
     }
   }
 }

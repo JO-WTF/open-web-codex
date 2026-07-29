@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from mcp.types import CallToolResult
-from mcp.server.fastmcp.exceptions import ToolError
-
 import maps_mcp.server as server
 from maps_mcp.map_card import GeoJsonSource
+from mcp.server.fastmcp.exceptions import ToolError
+from mcp.types import CallToolResult
+from pydantic import ValidationError
 
 
 def geojson() -> dict[str, object]:
@@ -56,11 +56,7 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
                         }
                     ]
                 },
-                "legend": {
-                    "items": [
-                        {"label": "路线", "color": "#2563eb", "type": "line"}
-                    ]
-                },
+                "legend": {"items": [{"label": "路线", "color": "#2563eb", "type": "line"}]},
             },
         )
 
@@ -105,10 +101,63 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         assert result.structuredContent is not None
-        source = result.structuredContent["artifact"]["renderer"]["payload"]["sources"][
-            "route"
-        ]
+        source = result.structuredContent["artifact"]["renderer"]["payload"]["sources"]["route"]
         self.assertEqual(source["data"]["uri"], uri)
+
+    async def test_accepts_reviewed_external_local_geojson_reference(self) -> None:
+        uri = "supply-chain-indonesia://geojson/geojson.v1-digest"
+        result = await server.mcp.call_tool(
+            "create_map_card",
+            {
+                "title": "Network comparison",
+                "sources": {
+                    "network": {
+                        "type": "geojson",
+                        "data_ref": {
+                            "type": "mcp_resource",
+                            "server": "supply_chain_indonesia",
+                            "uri": uri,
+                            "format": "geojson",
+                        },
+                    }
+                },
+                "layers": [
+                    {
+                        "id": "network",
+                        "type": "circle",
+                        "source": "network",
+                        "paint": {"circle-color": "#2563eb"},
+                    }
+                ],
+            },
+        )
+
+        assert result.structuredContent is not None
+        source = result.structuredContent["artifact"]["renderer"]["payload"]["sources"]["network"]
+        self.assertEqual(source["data"]["server"], "supply_chain_indonesia")
+        self.assertEqual(source["data"]["uri"], uri)
+
+    async def test_rejects_public_host_and_model_visible_resource_identities(
+        self,
+    ) -> None:
+        for server_name, uri in [
+            ("mcp__map_utils", "maps-data://geojson/map-data-1234"),
+            ("map_utils", "file:///tmp/network.geojson"),
+            ("map_utils", "https://example.com/network.geojson"),
+        ]:
+            with self.subTest(server_name=server_name, uri=uri):
+                with self.assertRaises(ValidationError):
+                    GeoJsonSource.model_validate(
+                        {
+                            "type": "geojson",
+                            "data_ref": {
+                                "type": "mcp_resource",
+                                "server": server_name,
+                                "uri": uri,
+                                "format": "geojson",
+                            },
+                        }
+                    )
 
     async def test_result_requires_standalone_assistant_embed_paragraph(self) -> None:
         result = await server.create_map_card(
@@ -190,9 +239,7 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_schema_exposes_raw_layers_sources_and_optional_extensions(self) -> None:
         tool = next(
-            tool
-            for tool in await server.mcp.list_tools()
-            if tool.name == "create_map_card"
+            tool for tool in await server.mcp.list_tools() if tool.name == "create_map_card"
         )
         assert tool.inputSchema is not None
         self.assertEqual(tool.inputSchema["properties"]["layers"]["items"]["type"], "object")

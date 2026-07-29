@@ -1,3 +1,4 @@
+mod agent_run;
 mod execution;
 mod scheduler;
 mod supervisor_policy;
@@ -65,6 +66,54 @@ pub struct EnqueueRunRequest {
     pub fork_thread_id: Option<String>,
     pub fork_source_run_id: Option<Uuid>,
     pub supervisor_policy: Option<SupervisorPolicySnapshotInput>,
+    pub agent: Option<AgentRunSnapshotInput>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentRunSource {
+    Repository,
+    UserRelease,
+}
+
+impl AgentRunSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Repository => "repository",
+            Self::UserRelease => "user_release",
+        }
+    }
+}
+
+impl std::str::FromStr for AgentRunSource {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "repository" => Ok(Self::Repository),
+            "user_release" => Ok(Self::UserRelease),
+            _ => Err(()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentRunSnapshotInput {
+    pub definition_id: String,
+    pub version: String,
+    pub display_name: String,
+    pub content_sha256: String,
+    pub source: AgentRunSource,
+    pub release_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentRunLease {
+    pub binding_id: Uuid,
+    pub definition_id: String,
+    pub version: String,
+    pub content_sha256: String,
+    pub source: AgentRunSource,
+    pub release_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -204,6 +253,7 @@ pub struct RunLease {
     pub fork_thread_id: Option<String>,
     pub fork_source_run_id: Option<Uuid>,
     pub supervisor_policy: Option<SupervisorPolicyLease>,
+    pub agent: Option<AgentRunLease>,
     pub token: String,
 }
 

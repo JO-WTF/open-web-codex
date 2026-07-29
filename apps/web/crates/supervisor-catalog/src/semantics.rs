@@ -61,7 +61,14 @@ pub struct RuntimeRoleSemantics {
 pub struct McpRequirementSemantics {
     pub name: String,
     pub tools: Vec<String>,
-    pub capability_root_ids: Vec<String>,
+    pub capability_roots: Vec<McpCapabilityRootSemantics>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct McpCapabilityRootSemantics {
+    pub capability_root_id: String,
+    pub mcp_server_names: Vec<String>,
 }
 
 impl ResolvedAgentDefinition {
@@ -123,7 +130,14 @@ impl From<&RequiredMcpServer> for McpRequirementSemantics {
         Self {
             name: server.name.clone(),
             tools: server.tools.clone(),
-            capability_root_ids: server.capability_root_ids.clone(),
+            capability_roots: server
+                .capability_roots
+                .iter()
+                .map(|root| McpCapabilityRootSemantics {
+                    capability_root_id: root.capability_root_id.clone(),
+                    mcp_server_names: root.mcp_server_names.clone(),
+                })
+                .collect(),
         }
     }
 }

@@ -1,15 +1,15 @@
 {
   "name": "supply-chain-network-planner",
-  "version": "0.1.0+codex.20260728114402",
-  "description": "Read-only supply-chain data preparation plus deterministic coverage, scenario, and facility-location planning for Codex",
+  "version": "0.2.0+codex.20260729",
+  "description": "Governed supply-chain evidence, network planning, financial evaluation, and risk registration for Codex",
   "author": {
     "name": "Open Web Codex"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "Supply Chain Network Planner",
-    "shortDescription": "Prepare governed data and model warehouse networks.",
-    "longDescription": "Publishes read-only planning datasets, prepares immutable network snapshots, evaluates current and what-if warehouse scenarios, and solves finite-candidate facility-location plans with auditable deterministic calculations.",
+    "shortDescription": "Build governed evidence for supply-chain decisions.",
+    "longDescription": "Publishes reviewed planning datasets, prepares immutable network snapshots, evaluates current and candidate networks, calculates bounded investment economics, and publishes evidence-linked risk registers.",
     "developerName": "Open Web Codex",
     "category": "Productivity",
     "capabilities": [
@@ -18,9 +18,11 @@
       "Network data preparation",
       "Delivery coverage calculation",
       "Warehouse scenario comparison",
-      "Facility-location optimization"
+      "Facility-location optimization",
+      "Financial evaluation",
+      "Risk register publication"
     ],
-    "defaultPrompt": "Analyze my supply-chain network using an immutable input snapshot, explicit service-level assumptions, and deterministic planning tools."
+    "defaultPrompt": "Analyze the supply-chain decision using the smallest necessary set of source-backed, deterministic planning capabilities."
   },
   "mcpServers": "./.mcp.json"
 }

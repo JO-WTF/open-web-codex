@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import CheckCircle2 from "lucide-react/dist/esm/icons/check-circle-2";
 import FlaskConical from "lucide-react/dist/esm/icons/flask-conical";
 import PackageCheck from "lucide-react/dist/esm/icons/package-check";
@@ -93,6 +93,13 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "The operation failed.";
 }
 
+function artifactTypes(value: string) {
+  return value
+    .split(/[\n,]/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
 export default function PythonCapabilityEditor({
   workspaces,
   activeWorkspaceId,
@@ -120,6 +127,10 @@ export default function PythonCapabilityEditor({
   const [skillInstructions, setSkillInstructions] = useState(
     "First call stock_data.lookup_stock with the company name. Use the returned ticker to call stock_data.get_price_history for the requested date range. Report both source fields and do not invent missing records.",
   );
+  const [inputArtifactTypes, setInputArtifactTypes] = useState("");
+  const [outputArtifactTypes, setOutputArtifactTypes] = useState(
+    "stock-history.report.v1",
+  );
   const [testToolName, setTestToolName] = useState("lookup_stock");
   const [testArguments, setTestArguments] = useState('{"name":"Example Corp"}');
   const [validation, setValidation] =
@@ -131,6 +142,7 @@ export default function PythonCapabilityEditor({
   const [busyAction, setBusyAction] = useState<"validate" | "test" | "publish" | null>(
     null,
   );
+  const publishIdentityRef = useRef<{ fingerprint: string; key: string } | null>(null);
 
   const buildRequest = (): PythonCapabilityPublishRequest => {
     const parsedTools: unknown = JSON.parse(toolsSource);
@@ -138,6 +150,7 @@ export default function PythonCapabilityEditor({
       throw new Error("Tools must be a JSON array.");
     }
     return {
+      idempotency_key: "",
       slug,
       version,
       display_name: displayName,
@@ -150,6 +163,8 @@ export default function PythonCapabilityEditor({
         description: skillDescription,
         instructions: skillInstructions,
       },
+      input_artifact_types: artifactTypes(inputArtifactTypes),
+      output_artifact_types: artifactTypes(outputArtifactTypes),
     };
   };
 
@@ -165,6 +180,22 @@ export default function PythonCapabilityEditor({
     setPublished(null);
     try {
       const capability = buildRequest();
+      const fingerprint = JSON.stringify(capability);
+      if (action === "publish") {
+        if (publishIdentityRef.current?.fingerprint !== fingerprint) {
+          publishIdentityRef.current = {
+            fingerprint,
+            key:
+              globalThis.crypto?.randomUUID?.() ??
+              `capability-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          };
+        }
+        capability.idempotency_key = publishIdentityRef.current.key;
+      } else {
+        capability.idempotency_key =
+          globalThis.crypto?.randomUUID?.() ??
+          `capability-probe-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      }
       if (action === "validate") {
         const result = await platformClient.validatePythonCapability(
           workspaceId,
@@ -334,6 +365,33 @@ export default function PythonCapabilityEditor({
           onChange={(event) => setSkillInstructions(event.target.value)}
         />
       </label>
+
+      <div className="web-python-capability-grid">
+        <label className="settings-label">
+          Input Artifact types
+          <span className="web-python-capability-hint">
+            Optional stable type IDs, separated by commas or new lines.
+          </span>
+          <textarea
+            className="settings-agents-textarea settings-agents-textarea--compact"
+            value={inputArtifactTypes}
+            onChange={(event) => setInputArtifactTypes(event.target.value)}
+            placeholder="source.snapshot.v1"
+          />
+        </label>
+        <label className="settings-label">
+          Output Artifact types
+          <span className="web-python-capability-hint">
+            At least one deliverable type that an Agent may publish.
+          </span>
+          <textarea
+            className="settings-agents-textarea settings-agents-textarea--compact"
+            value={outputArtifactTypes}
+            onChange={(event) => setOutputArtifactTypes(event.target.value)}
+            placeholder="analysis.report.v1"
+          />
+        </label>
+      </div>
 
       <div className="web-python-capability-test">
         <label className="settings-label">

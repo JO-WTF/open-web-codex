@@ -1,0 +1,63 @@
+{
+  "schema_version": "indonesia_tutorial_source_lock.v1",
+  "locked_at": "2026-07-29",
+  "sources": [
+    {
+      "source_id": "world-bank-official-boundaries-idn-adm1",
+      "owner": "World Bank",
+      "role": "authoritative_generation_boundary",
+      "version": "2026-07-14",
+      "license": "CC BY 4.0",
+      "catalog_url": "https://datacatalog.worldbank.org/search/dataset/0038272/world-bank-official-boundaries",
+      "download_url": "https://services.arcgis.com/iQ1dY19aHwbSDYIF/arcgis/rest/services/World_Bank_Global_Administrative_Divisions/FeatureServer/2/query?where=ISO_A3%3D%27IDN%27&outFields=ISO_A3%2CNAM_1%2CADM1CD_c%2CGEOM_SRCE&returnGeometry=true&outSR=4326&geometryPrecision=5&maxAllowableOffset=0.002&f=geojson",
+      "bundled_path": "sources/world-bank-idn-adm1.geojson",
+      "sha256": "cdc8fa6ad93b333e9ed9df416497ed9160cf823d8b4afad3bd0661f242e92043",
+      "expected_feature_count": 38
+    },
+    {
+      "source_id": "geoboundaries-gbopen-idn-adm1",
+      "owner": "geoBoundaries",
+      "role": "independent_outer_boundary_check",
+      "version": "IDN-ADM1-65028918",
+      "license": "Open Data Commons Open Database License 1.0",
+      "catalog_url": "https://www.geoboundaries.org/api/current/gbOpen/IDN/ADM1/",
+      "download_url": "https://github.com/wmgeolab/geoBoundaries/raw/9469f09/releaseData/gbOpen/IDN/ADM1/geoBoundaries-IDN-ADM1_simplified.geojson",
+      "bundled_path": "sources/geoboundaries-idn-adm1.geojson",
+      "sha256": "5a6be3d1484166132751fe535dd164e1491e657f2d38dced177f067a7bc00d8f",
+      "expected_feature_count": 34,
+      "notes": "The 2017 boundary has 34 provinces. The four 2022 Papua splits are checked against their former Papua or West Papua parent."
+    },
+    {
+      "source_id": "bps-statistical-yearbook-2025-table-3.1.1",
+      "owner": "BPS-Statistics Indonesia",
+      "role": "population_baseline",
+      "version": "03200.25004",
+      "license": "BPS publication terms; attribution required",
+      "catalog_url": "https://www.bps.go.id/en/publication/2025/02/28/8cfe1a589ad3693396d3db9f/statistik-indonesia-2025.html",
+      "bundled_path": "population-2025.csv",
+      "source_pdf_sha256": "618ddcc9b6b3b7f1e6b616e34b956f994ef9448e000ce9d1d9c4e32aa2a47a12",
+      "source_pages": [133, 134],
+      "expected_reported_indonesia_total": 284438800,
+      "expected_sum_of_rounded_province_values": 284438600,
+      "rounding_difference": 200
+    },
+    {
+      "source_id": "indonesia-ministry-agriculture-provinces-38",
+      "owner": "Indonesia Ministry of Agriculture Geoportal",
+      "role": "independent_name_and_geometry_check",
+      "version": "ADMINISTRASI_AR_PROVINSI_38-2022",
+      "license": "Validation only; not redistributed because the service does not state a license",
+      "catalog_url": "https://geoportal.pertanian.go.id/arcgis/rest/services/Hosted/Batas_Administrasi_Provinsi/FeatureServer/0",
+      "download_url": "https://geoportal.pertanian.go.id/arcgis/rest/services/Hosted/Batas_Administrasi_Provinsi/FeatureServer/0/query?where=kdppum%3C%3E%27%20%27&outFields=kdppum%2Cwadmpr&returnGeometry=true&outSR=4326&geometryPrecision=5&maxAllowableOffset=0.005&f=geojson",
+      "bundled_path": null,
+      "observed_sha256": "bed959a2eb25d2e06375c10dafadace24d6d5927dfdc66b76355a0804336add5",
+      "expected_feature_count": 38
+    }
+  ],
+  "excluded_sources": [
+    {
+      "source_id": "gadm-4.1-idn-adm1",
+      "reason": "The downloaded ADM1 file contains 34 provinces and predates the four 2022 Papua province splits."
+    }
+  ]
+}

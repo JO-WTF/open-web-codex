@@ -8,14 +8,18 @@ const template: SettingsAgentCatalogSectionProps["templates"][number] = {
   source: "repository",
   release_id: null,
   definition_id: "enterprise-data-agent",
-  version: "1.6.0",
+  version: "3.0.0",
   display_name: "Enterprise Data Agent",
-  description: "Builds a planning dataset.",
-  responsibilities: ["Build data"],
+  description: "Inspects an exact Dataset Release.",
+  responsibilities: ["Inspect data"],
   input_artifact_types: [],
-  output_artifact_types: ["planning-dataset.v1"],
-  required_capabilities: ["supply_chain_data.build_planning_dataset"],
+  output_artifact_types: ["indonesia_dataset_inspection.v1"],
+  required_capabilities: [
+    "supply_chain_indonesia.inspect_indonesia_dataset_release",
+  ],
   capability_template: null,
+  dataset_releases: [],
+  required_workspace_id: null,
 };
 
 function baseProps(): SettingsAgentCatalogSectionProps {
@@ -23,6 +27,10 @@ function baseProps(): SettingsAgentCatalogSectionProps {
     definitions: [],
     publishedAgents: [],
     templates: [template],
+    capabilityPackages: [],
+    datasetReleases: [],
+    workspaceNames: {},
+    isLoadingDatasets: false,
     isLoading: false,
     actionDefinitionId: null,
     loadingAgentKey: null,
@@ -34,6 +42,7 @@ function baseProps(): SettingsAgentCatalogSectionProps {
     onValidate: vi.fn(async () => null),
     onPublish: vi.fn(async () => null),
     onLoadPublished: vi.fn(async () => null),
+    onLoadDatasetReleases: vi.fn(async () => undefined),
   };
 }
 
@@ -85,19 +94,109 @@ describe("SettingsAgentCatalogSection", () => {
       target: { value: "Use only reviewed data capabilities." },
     });
     fireEvent.change(screen.getByLabelText("Reviewed capability template"), {
-      target: { value: "enterprise-data-agent@1.6.0" },
+      target: { value: "repository:enterprise-data-agent@3.1.0" },
     });
-    expect(screen.getByText(/supply_chain_data\.build_planning_dataset/)).toBeTruthy();
+    expect(
+      screen.getByText(
+        /supply_chain_indonesia\.inspect_indonesia_dataset_release/,
+      ),
+    ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Create draft" }));
 
     await waitFor(() => expect(props.onSaveDraft).toHaveBeenCalledTimes(1));
     expect(vi.mocked(props.onSaveDraft).mock.calls[0][0]).toMatchObject({
       definition_id: "regional-data-reviewer",
       capability_template: {
+        source: "repository_agent",
         definition_id: "enterprise-data-agent",
-        version: "1.6.0",
+        version: "3.0.0",
+        release_id: null,
       },
-      output_artifact_types: ["planning-dataset.v1"],
+      output_artifact_types: ["indonesia_dataset_inspection.v1"],
+    });
+  });
+
+  it("binds a Workspace capability package by immutable release id", async () => {
+    const props = {
+      ...baseProps(),
+      capabilityPackages: [
+        {
+          release_id: "019ff890-8c28-7ef1-a2c4-b4562ffb7344",
+          workspace_id: "019ff890-8c28-7ef1-a2c4-b4562ffb7555",
+          package_id: "delivery-promise-tools",
+          version: "1.0.0",
+          display_name: "Delivery Promise Tools",
+          description: "Checks delivery promises.",
+          capability_root_id: "local-delivery-promise-tools-1-0-0",
+          capabilities: ["delivery_promise.check_promises"],
+          mcp_server_names: ["delivery_promise"],
+          tool_names: ["check_promises"],
+          input_artifact_types: ["delivery-requests.v1"],
+          output_artifact_types: ["delivery-promise-report.v1"],
+          includes_skills: true,
+          source: "workspace_release" as const,
+          content_sha256: "d".repeat(64),
+        },
+      ],
+      datasetReleases: [
+        {
+          id: "019ff890-8c28-7ef1-a2c4-b4562ffb7666",
+          workspace_id: "019ff890-8c28-7ef1-a2c4-b4562ffb7555",
+          dataset_id: "delivery-requests",
+          version: "1.0.0",
+          display_name: "Delivery Requests",
+          description: "Tutorial delivery requests.",
+          state: "published" as const,
+          content_sha256: "e".repeat(64),
+          failure_code: null,
+          files: [],
+          published_at: "2026-07-29T00:00:00Z",
+          created_at: "2026-07-29T00:00:00Z",
+          updated_at: "2026-07-29T00:00:00Z",
+        },
+      ],
+      workspaceNames: {
+        "019ff890-8c28-7ef1-a2c4-b4562ffb7555": "Tutorial Workspace",
+      },
+    };
+    render(<SettingsAgentCatalogSection {...props} />);
+
+    fireEvent.change(screen.getByLabelText("Agent ID"), {
+      target: { value: "delivery-promise-agent" },
+    });
+    fireEvent.change(screen.getByLabelText("Display name"), {
+      target: { value: "Delivery Promise Agent" },
+    });
+    fireEvent.change(screen.getByLabelText("Description"), {
+      target: { value: "Checks promised delivery dates." },
+    });
+    fireEvent.change(screen.getByLabelText("Responsibilities"), {
+      target: { value: "Check delivery promises" },
+    });
+    fireEvent.change(screen.getByLabelText("Custom Agent instructions"), {
+      target: { value: "Use the provided Tool and report every failed row." },
+    });
+    fireEvent.change(screen.getByLabelText("Reviewed capability template"), {
+      target: { value: "workspace:019ff890-8c28-7ef1-a2c4-b4562ffb7344" },
+    });
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: /Delivery Requests · 1\.0\.0/,
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Create draft" }));
+
+    await waitFor(() => expect(props.onSaveDraft).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(props.onSaveDraft).mock.calls[0][0]).toMatchObject({
+      capability_template: {
+        source: "workspace_package_release",
+        definition_id: "delivery-promise-tools",
+        version: "1.0.0",
+        release_id: "019ff890-8c28-7ef1-a2c4-b4562ffb7344",
+      },
+      input_artifact_types: ["delivery-requests.v1"],
+      output_artifact_types: ["delivery-promise-report.v1"],
+      dataset_release_ids: ["019ff890-8c28-7ef1-a2c4-b4562ffb7666"],
     });
   });
 
@@ -110,7 +209,7 @@ describe("SettingsAgentCatalogSection", () => {
     ).toBeTruthy();
     fireEvent.click(
       screen.getByRole("checkbox", {
-        name: "Output · planning-dataset.v1",
+        name: "Output · indonesia_dataset_inspection.v1",
       }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Create draft" }));
@@ -140,11 +239,13 @@ describe("SettingsAgentCatalogSection", () => {
 
     expect(screen.getByText("Built-in")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "View" }));
-    expect(screen.getByText("Build data")).toBeTruthy();
+    expect(screen.getByText("Inspect data")).toBeTruthy();
     expect(
-      screen.getAllByText("supply_chain_data.build_planning_dataset"),
-    ).toHaveLength(2);
-    expect(screen.getByText("planning-dataset.v1")).toBeTruthy();
+      screen.getAllByText(
+        "supply_chain_indonesia.inspect_indonesia_dataset_release",
+      ).length,
+    ).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("indonesia_dataset_inspection.v1").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/Build and validate the bounded planning dataset/)).toBeTruthy();
     expect(props.onLoadPublished).not.toHaveBeenCalled();
   });

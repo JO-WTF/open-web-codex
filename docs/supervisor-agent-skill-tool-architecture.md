@@ -121,7 +121,7 @@ Supervisor 运行在根 Thread 中。Codex 已经提供创建子 Agent、发送�
 Run；浏览器不能提交一段任意 Prompt 来替换它。Workspace 中的通用 Governed
 Supervisor 入口读取服务端发布目录并让用户选择 Policy，不绑定任何领域 Policy
 ID、版本或 Agent 顺序。当前供应链顺序只属于
-`enterprise-supervisor-copilot@1.9.0` 这一可选 Policy，服务端不发布或解析旧版本。
+`enterprise-supervisor-copilot@2.0.0` 这一可选 Policy，服务端不发布或解析旧版本。
 当前 Policy 通过 Runtime 的 exact Agent Role allowlist 和 per-Role instance limit
 约束模型可见目录、执行入口与驻留实例数，并通过 Role 配置关闭子 Agent 继续委派；
 提示词不承担授权职责。已发布显示名和执行内容保持不可变，需要改变时必须发布新版本。
@@ -140,12 +140,14 @@ Supervisor 不负责：
 Domain Agent 是在独立 Runtime Thread 中执行的专业角色。它应该有清楚的职责、
 输入、输出、可使用能力和禁止范围。
 
-以当前仓网案例为例：
+以当前印尼供应链案例为例：
 
 | Agent | 负责 | 不负责 |
 | --- | --- | --- |
-| Data Agent | 检查数据源、生成并验证规划数据 Artifact | 选择仓址或作最终建议 |
-| Network Planning Agent | 读取授权输入、调用确定性规划工具、比较方案 | 扩大数据权限或替企业作决定 |
+| Data Agent | 按 typed metadata 检查数据源、生成并验证规划数据 Artifact | 选择仓址或作最终建议 |
+| Network Planning Agent | 读取授权输入、按目标选择必要的确定性规划分析 | 扩大数据权限或替企业作决定 |
+| Finance Agent | 对兼容方案做投资评价 | 授权投资或修改网络事实 |
+| Risk Agent | 发布证据关联的风险、缓解措施和触发条件 | 伪造外部监管或运营事实 |
 | Root Supervisor | 分工、检查证据、处理冲突、综合最终报告 | 代替专业工具计算或批准操作 |
 
 Agent 的三个名称容易混淆：
@@ -156,7 +158,7 @@ Agent 的三个名称容易混淆：
 | Runtime Role | Codex 能发现并在 spawn 时应用的执行配置 |
 | Agent Thread | 本次协作中实际运行的 Agent 身份与历史 |
 
-当前代码中，两个 Agent Definition 被映射为精确 Runtime Role；根 Supervisor 通过
+当前代码中，四个可选 Agent Definition 被映射为精确 Runtime Role；根 Supervisor 通过
 Codex 原生多 Agent 工具创建子 Thread。当前受治理供应链 Policy 的根 Thread 不暴露
 shell 或业务 MCP；每个 Role 只重新启用 Definition 声明的 MCP server/tool
 allowlist。平台不会插入一条“Agent 实例”数据库记录来模拟这个过程。
@@ -180,9 +182,9 @@ Skill 不应包含：
 - 与平台数据库并行的状态机；
 - 只在某个示例里成立、却伪装成通用规则的常量。
 
-当前仓网工具包已经把数据准备、基线建立、方案评估、优化和结果验证拆为独立 Skills。
-下一阶段会把案例中过度固定的输入和规则继续下沉为明确业务事实与 Tool 合同，使
-Skill 描述通用方法，而不是背诵一个示例答案。
+当前供应链工具包已经把数据准备、基线建立、方案评估、优化、财务评价、风险登记和
+结果验证拆为独立 Skills。印尼市场、候选设施、路线和成本由
+`planning-dataset.v2` 提供，Skill 描述通用方法，不背诵某个示例答案。
 
 ### 2.4 Tool / MCP：执行确定性动作
 

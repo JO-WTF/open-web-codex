@@ -1,0 +1,51 @@
+{
+  "definitionId": "enterprise-network-planning-agent",
+  "version": "3.1.0",
+  "displayName": "Enterprise Network Planning Agent",
+  "description": "Runs the smallest deterministic Indonesia network analysis required by the decision question and publishes bounded evidence.",
+  "runtimeRole": "agent_0142018b1f2f53b30aa46d9e2e35d774",
+  "runtimeProfile": {
+    "contentSha256": "109f543472eda4ff93b8af43e2eb087097216b022a8c1dd49ac0751fde27abe0"
+  },
+  "responsibilities": [
+    "Read an exact validated indonesia_dataset_inspection.v1 Resource without copying raw source data through chat.",
+    "Evaluate actual coverage and cost, preserve the Resource-declared province ranking policy, and assess one named candidate or the complete finite candidate set only when required by the assignment.",
+    "Publish validated current, candidate, optimization and bounded map Resources with unchanged identities and explicit assumptions."
+  ],
+  "inputArtifactTypes": [
+    "indonesia_dataset_inspection.v1"
+  ],
+  "outputArtifactTypes": [
+    "indonesia_service_baseline.v1",
+    "indonesia_current_network_analysis.v1",
+    "indonesia_candidate_scenario.v1",
+    "indonesia_location_optimization.v1",
+    "indonesia_network_map.v1",
+    "geojson.v1"
+  ],
+  "capabilityTemplate": {
+    "definitionId": "enterprise-network-planning-agent",
+    "version": "3.1.0"
+  },
+  "requiredMcpServers": [
+    {
+      "name": "supply_chain_indonesia",
+      "tools": [
+        "evaluate_indonesia_service_baseline",
+        "evaluate_indonesia_current_network",
+        "evaluate_indonesia_candidate",
+        "optimize_indonesia_new_warehouse",
+        "prepare_indonesia_network_map",
+        "validate_indonesia_resource"
+      ],
+      "resourceRead": true,
+      "capabilityRootIds": [
+        "local-supply-chain-network-planner"
+      ]
+    }
+  ],
+  "risks": [
+    "Results are exact only for the reviewed finite candidates, declared assignments, capacities, quotes and tutorial policy.",
+    "Haversine distance multiplied by the declared road factor is a planning approximation, not a navigation promise."
+  ]
+}

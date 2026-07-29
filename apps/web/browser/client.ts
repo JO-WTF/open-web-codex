@@ -6,6 +6,7 @@ import type {
   AgentDefinitionReleaseSummary,
   AgentDefinitionResourceSummary,
   AgentDefinitionValidationResult,
+  AgentRunSelection,
   CapabilityPackageSummary,
   PythonCapabilityPublishRequest,
   PythonCapabilityPublishResponse,
@@ -25,6 +26,8 @@ import type {
   WorkspaceStatus,
   WorkspaceFileContent,
   WorkspaceFileDiff,
+  PublishWorkspaceDatasetRequest,
+  WorkspaceDatasetReleaseSummary,
   WorkspaceBranch,
   WorkspaceLog,
   WorkspaceCommitDiff,
@@ -101,11 +104,13 @@ export class PlatformClient {
   }
 
   private async request<T>(path: string, init?: RequestInit): Promise<T> {
+    const isFormData =
+      typeof FormData !== "undefined" && init?.body instanceof FormData;
     const response = await fetch(`${this.baseUrl}${path}`, {
       ...init,
       cache: "no-store",
       headers: {
-        ...(init?.body ? { "content-type": "application/json" } : {}),
+        ...(init?.body && !isFormData ? { "content-type": "application/json" } : {}),
         ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
         ...init?.headers,
       },
@@ -378,6 +383,7 @@ export class PlatformClient {
       forkThreadId?: string | null;
       forkSourceRunId?: string | null;
       supervisorPolicy?: SupervisorPolicySelection | null;
+      agent?: AgentRunSelection | null;
     },
   ) {
     return this.request<{ run: Run }>(`/api/tasks/${encodeURIComponent(taskId)}/runs`, {
@@ -388,6 +394,7 @@ export class PlatformClient {
         fork_thread_id: options?.forkThreadId ?? null,
         fork_source_run_id: options?.forkSourceRunId ?? null,
         supervisor_policy: options?.supervisorPolicy ?? null,
+        agent: options?.agent ?? null,
       }),
     });
   }
@@ -718,6 +725,32 @@ export class PlatformClient {
 
   listWorkspaceFiles(workspaceId: string) {
     return this.request<string[]>(`/api/workspaces/${encodeURIComponent(workspaceId)}/files`);
+  }
+
+  listWorkspaceDatasetReleases(workspaceId: string) {
+    return this.request<WorkspaceDatasetReleaseSummary[]>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/datasets`,
+    );
+  }
+
+  publishWorkspaceDatasetRelease(
+    workspaceId: string,
+    request: PublishWorkspaceDatasetRequest,
+    files: Map<string, File>,
+  ) {
+    const form = new FormData();
+    form.append("metadata", JSON.stringify(request));
+    for (const descriptor of request.files) {
+      const file = files.get(descriptor.field_id);
+      if (!file) {
+        throw new Error(`Dataset file ${descriptor.logical_name} is missing.`);
+      }
+      form.append(descriptor.field_id, file, file.name);
+    }
+    return this.request<WorkspaceDatasetReleaseSummary>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/datasets`,
+      { method: "POST", body: form },
+    );
   }
 
   readWorkspaceFile(workspaceId: string, path: string) {

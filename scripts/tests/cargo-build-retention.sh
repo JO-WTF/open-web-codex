@@ -20,6 +20,30 @@ if cargo_build_cache_size_bytes 0 >/dev/null 2>&1; then
   exit 1
 fi
 
+cache_lock_root="$temporary_root/cache-lock"
+critical_section="$cache_lock_root/critical-section"
+mkdir -p "$cache_lock_root"
+
+run_cache_lock_probe() {
+  bash -c '
+    set -euo pipefail
+    source "$1"
+    export SCCACHE_DIR="$2"
+    cargo_build_cache_acquire_server_lock
+    mkdir "$3"
+    sleep 0.1
+    rmdir "$3"
+    cargo_build_cache_release_server_lock
+  ' _ "$repo_root/scripts/cargo-build-cache.sh" "$cache_lock_root" "$critical_section"
+}
+
+run_cache_lock_probe &
+first_lock_probe=$!
+run_cache_lock_probe &
+second_lock_probe=$!
+wait "$first_lock_probe"
+wait "$second_lock_probe"
+
 create_workspace() {
   local workspace="$1" name="$2"
   mkdir -p "$workspace/src"

@@ -52,9 +52,9 @@ Session；差异集中在该入口、`src/services/webClient.ts` Server
 ## 当前功能主线：M2 Enterprise Supervisor Copilot
 
 当前优先跑通一个单 Profile 真实企业案例：根 Supervisor 使用 Codex 原生多 Agent
-能力创建 Data Agent 与 Network Planning Agent，通过只读数据 MCP、有界规划 MCP
-和持久 Artifact 完成协作，最终报告引用关键证据。详细实施顺序、功能完成标准和
-可信风险台账以
+能力，根据印尼仓网问题的证据缺口从 Data、Network 和 Visualization 三个有界角色
+中动态选择必要能力，通过只读数据访问、确定性网络计算、地图 MCP 和持久 Artifact
+完成协作，最终报告引用关键证据。详细实施顺序、功能完成标准和可信风险台账以
 [Enterprise Supervisor Copilot 短期实施计划](enterprise-supervisor-copilot-plan.md)
 为准。
 
@@ -62,91 +62,85 @@ M2 功能切片可以与 Gate 0 并行，不等待全部可信矩阵完成；但
 Workspace、授权、Artifact 和 Tool 边界。未完成的可信项限制能力声明，并在短期计划
 风险台账中保留触发条件。
 
-当前切片顺序：
+### 当前合同
 
-1. 固定“华东新增仓”案例、数据与 Artifact Schema；
-2. 打通真实多 Agent Runtime 轨迹；
-3. 建立持久 Artifact 和跨子 Thread 交接；
-4. 绑定版本化 Supervisor Policy 与两个 Agent Definition；
-5. 接入只读数据 MCP 和有界规划 MCP；
-6. 完成浏览器体验与真实企业案例 E2E。
+代码 Package 与 Web 草稿使用同一个 Agent/Supervisor 语义编译器。Agent Runtime
+Role 只由 `definitionId + version` 稳定派生；Supervisor 的 Role、Runtime
+requirement、Artifact handoff 与并发限制只由精确 Agent Release 和草稿合同派生。
+代码声明与 Web 发布必须产生逐字段相等的规范化执行语义和 SHA-256，任何漂移都显式
+失败。平台行为合同、作者指令和生成执行合同确定性合成为官方
+`thread/start.developerInstructions`，没有新增 `codex/` 修改。
 
-2026-07-28 已完成首个 Supervisor 发布纵向切片：内置 Supervisor、Agent 指令与
-Artifact 交付合同收敛到根目录 `capabilities/`；新增独立
-`supervisor-catalog` owner、Definition/Revision/Release PostgreSQL 模型和类型化
-草稿、校验、发布 API；Web Settings 提供 Supervisor Studio；发布版本通过 release
-ID、完整 spec 和内容哈希进入现有 Run Policy catalog，并在 Thread 创建前重新校验。
-随后完成了用户 Agent Definition 发布纵向切片：Agent Catalog 提供组织作用域的
-Definition、草稿 Revision、校验和不可变 Release；用户 Agent 必须选择一个代码评审
-的 capability template，只能收窄其 Artifact 合同。浏览器不提交 Runtime Role、
-MCP inventory、Tool allowlist、capability roots 或文件路径；服务端派生并锁定这些
-事实。Supervisor 可选择精确 Agent Release UUID，发布时持久化版本与内容哈希依赖，
-Run 预检重新解析并拒绝缺失或漂移。平台现允许只有一个 Agent 的 Supervisor，支持
-类似 Hello Agent 的最小发布。临时 PostgreSQL 验证覆盖空库迁移、发布解析、
-跨 Organization 拒绝和精确依赖。尚未完成任意 Plugin 创作或原生 Runtime Agent
-CRUD；用户发布的 Agent Release 已进入真实 Runtime 多 Agent 重跑，但终态子 Agent
-未释放并发槽位的问题仍需用新 Supervisor 版本完成复验。
+当前内置 Release 是：
 
-代码 Package 与 Web 草稿现已收敛为同一个 Agent/Supervisor authoring contract 和
-服务端语义编译器。Agent Runtime Role 只由 `definitionId + version` 稳定派生；
-Supervisor 的 Role、Runtime requirement、Artifact handoff 与并发限制只由精确
-Agent 发布和草稿合同派生。两种来源必须产生逐字段相等的规范化执行语义和
-execution-semantics SHA-256，代码 Package 中任何派生字段漂移都会显式失败。
-Supervisor 指令进一步拆为平台 Owner 发布的不可变行为合同、作者可编辑的
-`customInstructions` 和服务端生成的结构化执行合同；编译器把三者确定性合成为官方
-`thread/start.developerInstructions`。Web 可发布和选择精确平台合同版本，普通
-Supervisor 草稿不能提交或覆盖平台指令正文，`codex/` 无新增修改。
+- `enterprise-supervisor-copilot@3.7.0`，选择
+  `platform-supervisor-behavior@1.1.0`；
+- Data `3.1.0`，只调用原子校验并发布一个精确授权 Workspace Dataset Release 的
+  inspection Tool；
+- Network `3.1.0`，按问题只运行服务基线、现网成本、指定候选、有限候选优化或地图
+  准备中必要的最小分析；
+- Visualization `1.1.0`，只把已验证地图 manifest 与 GeoJSON 交给
+  `map_utils.create_map_card`；
+- 八类条件性 Artifact handoff，不构成固定 Workflow。
 
-Agent Studio 已将资源目录、不可变详情和草稿创建/编辑拆成独立页面状态。
-Capability 页面从受版本控制的 Plugin/MCP 清单生成浏览器安全目录；MCP 页面把
-“平台已审查的声明”与“当前 Thread 实际启用状态”并列展示，因此 `map_utils`
-可以作为可用声明被查看，同时在未授权给当前 Thread 时明确显示为未启用。
-新增的受限 Python authoring 路径允许用户在授权 Workspace 中提交 Tool JSON Schema、
-标准库函数和一个 Skill；平台固定 package/launcher，清空继承环境后完成 MCP
-initialize、Tool discovery 和可选调用测试，再原子发布不可变 package。真实
-stock-history 新 Thread 已记录两个 Tool 的顺序调用。该切片不等于任意
-Plugin/MCP CRUD，不支持 Secret、任意启动命令或 Profile 全局安装。
+Root 没有业务 MCP。每个子 Agent 只得到 Definition 声明的精确 MCP Server、Tool
+allowlist、Resource 读取范围和 capability root；受治理预检会拒绝缺失或漂移的
+Agent、package、Dataset、Runtime capability 以及不该可见的兄弟 MCP。Task 级
+Artifact 保留 Run/Thread/Turn/Item producer provenance，根 Thread 只能解析同一 Run
+中来源已验证且引用唯一的子 Agent Resource。
 
-Agent、Skill、MCP 的长期整改顺序统一维护在
-[Agent、Skill 与 MCP 原生生命周期整改计划](agent-capability-lifecycle-plan.md)。
-当前 Phase 0 删除 V1 产品兼容、伪 V2 capability、Profile 全局企业 Role 注册和
-`profile_runtime_role_projections` 第二状态机。企业 Thread 只通过正式 request config
-启用 V2 并引用启动前校验的 Role 文件；后续阶段再以类型化 app-server V2 CRUD
-替换这一临时文件边界。
+### 当前 Web 纵向链路
 
-受限 happy path 已经越过“平台骨架”阶段。真实 PostgreSQL 与 Profile 上的既有
-Codex Runtime 运行证明：绑定 `enterprise-supervisor-copilot@1.8.0` 的根 Thread
-按顺序创建了 `data_agent` 与 `network_planning_agent` 两个真实子 Thread；前者
-通过只读数据 MCP 产生并验证 `planning-dataset.v1`，后者读取同一 Resource 后再
-调用有界规划 MCP；以“分析现有网络并给出建议。”为完整输入的最新重跑形成十个
-ready Task Artifact 和完整决策报告。运行轨迹严格只有 Root、Data、Network 三个
-Thread，33 次 MCP 调用分别归属于 Data/Network 的授权服务，Root 无业务 MCP 或命令
-调用，Run 与 Task 最终均为 completed 且无活动 Turn。精确调用与 Artifact 数量取决于
-有效调查步骤，门禁固定的是必需 Schema 的最小集合以及所有已注册 Artifact 必须 ready。
-当前 `1.9.0` 在服务端生成的执行合同中补充终态子 Agent 槽位释放规则：所需 Artifact
-持久化后必须调用 `close_agent`，再在并发上限内创建下一角色。该版本完成同样的真实
-Runtime 重跑前，不继承 `1.8.0` 的验证结论。
+用户现在可以在 Web 中完成两条链路：
 
-这不等于 M2 已全部完成。当前主线转向 happy path 没有覆盖的行为：Completed Agent
-follow-up、interrupt、部分失败和审批拒绝后的综合；更深层 Agent 树导航；Artifact
-替代、失效、删除与保留；更完整的重启/乱序、共享 Workspace、multi-`cwd`
-和多用户隔离矩阵。它们继续限制“可恢复企业能力”和生产发布声明。
+1. 在 Files 中把一组文件发布为不可变 Workspace Dataset Release，并获得不含本地
+   路径的 release ID、dataset ID、版本和内容哈希。
+2. 在 Agent Studio 中编写受限标准库 Python Tool、JSON Schema 和 Skill 指令；
+   平台固定 launcher 与 package 形状，清空继承环境，完成 MCP initialize、
+   Tool discovery，并可使用精确 Dataset Release 测试一个 Tool。
+3. 发布不可变 capability-package Release，把精确 package 与 Dataset Release
+   依赖绑定到 Agent，校验并发布 Agent Release。
+4. 直接以该 Agent 作为根执行一个 Thread，或把多个精确 Agent Release 关联到
+   Supervisor，再由 Runtime 自主协调。
 
-仓库现提供 `scripts/probe-enterprise-runtime-lifecycle.sh`，在既有真实企业 E2E
-之后继续验证同一已完成子 Agent 的下一 ordinal、根 Turn 中断终态和中断后的恢复
-Turn。探针必须在可绑定本机临时端口并可访问已配置 Provider 的环境中通过后，才能把
-follow-up 或 interrupt 标为真实验证完成；脚本存在本身不构成通过证据。
+浏览器不提交 Runtime Role、MCP inventory、Tool allowlist、capability root、启动
+命令、环境变量或服务器文件路径。该 authoring 切片不是任意 Plugin/MCP CRUD，也
+不支持 Secret、任意 transport、Profile 全局安装或隐藏配置修改。
+
+### 当前验证状态
+
+- 印尼 Dataset、240,000 个合成客户、现有仓网、报价、候选点和 38 个省级边界具有
+  版本化 manifest、摘要、来源说明和生成器回归；
+- Python 分析测试、真实 stdio MCP smoke、Agent/Supervisor 编译与持久化聚焦测试
+  已通过；
+- Dataset Release、Python Tool Test、精确依赖、直接 Agent Run、三角色
+  Supervisor、跨子 Thread Artifact 和地图嵌入都有自动化覆盖；
+- 配送审计单 Agent 已在真实 Runtime 中通过一次精确 MCP 审批、一次 Tool 调用、
+  ready Artifact 和刷新恢复；
+- 当前 `3.7.0` 印尼 Supervisor 正在重跑全新 exact-hash 真实 Runtime 与浏览器恢复
+  验证：根加三个子 Agent、七个 ready Resource Artifact、一个恢复后的 `map.v3`
+  卡片和六段报告收敛，且没有 shell、原始客户行、内部 Resource URI 或宿主路径。
+
+主线现转向部分失败和审批拒绝后的综合；更深层 Agent 树；Artifact 替代、失效、
+删除与保留；重启/乱序、共享
+Workspace、multi-`cwd` 和多用户隔离矩阵。这些继续限制“可恢复企业能力”和生产
+发布声明。
+
+仓库现提供 `scripts/probe-enterprise-runtime-lifecycle.sh`。当前真实探针已验证
+同一已完成 Network Agent 的后续任务、根 Turn 的 `interrupted` 终态和中断后的恢复
+Turn，过程中 Agent 数量保持不变且未重复调用业务 MCP。部分失败、审批拒绝和
+Server/Profile Host 重启的组合恢复仍未验证。
 
 浏览器已将授权 Agent 树中的子 Thread 审批提升为任务级响应队列：根对话和
 Agent Activity 都渲染同一平台审批 ID 的批准/拒绝卡片，刷新后从持久审批事件重放，
 提交中阻止重复决定。真实审批拒绝后的 Agent 恢复、Supervisor 综合和最终 Run
 收敛仍属于上述未完成门禁。
 
-供应链插件的两个 MCP Server 现按风险合同声明默认预批准：它们的完整 Tool 集合
-仅包含只读数据访问、有界确定性计算和内部不可变 Resource 发布，并继续受精确
-Agent Tool allowlist 限制。命令、文件、权限、凭据、外部副作用和未来混合风险
-Server 不继承该设置。右侧 Agent/Files 面板同时增加外部点击关闭，面板内部交互、
-显式关闭按钮和 Escape 行为保持不变。
+供应链插件中被当前 Agent 使用的 MCP Tool 只执行只读数据访问、有界确定性计算和
+内部不可变 Resource 发布，并继续受精确 Agent Tool allowlist 限制。命令、文件、
+权限、凭据、外部副作用和未来混合风险 Server 不继承该设置。右侧 Agent/Files
+面板只在窄屏浮层状态下支持点击外部关闭；常规宽屏侧栏不因页面其他位置的点击而
+收起，显式关闭按钮和 Escape 行为保持不变。
 
 ## 并行可信工作：Gate 0 平台证据恢复
 
@@ -227,8 +221,8 @@ Skills、Plugins 和 MCP。
 短期 smoke 命令：
 
 - `scripts/smoke-enterprise-supervisor-copilot.sh`：构建当前 Server，在一次性
-  PostgreSQL、Profile 与 managed Workspace 上运行真实“华东新增仓”九项 E2E，
-  并输出不含凭据和宿主机路径的证据文件。
+  PostgreSQL、Profile 与 managed Workspace 上运行印尼供应链动态 Supervisor
+  语义 E2E，并输出不含凭据和宿主机路径的证据文件。
 - `scripts/smoke-maps-mcp-launcher.sh`：验证 maps MCP launcher 可启动、声明
   `outputSchema`、声明 GeoJSON Resource template，并生成带 `map.v3` renderer 和
   embed code 的 Inline Visualization Artifact。
@@ -273,14 +267,15 @@ Skills、Plugins 和 MCP。
 ## Gate 0 验证矩阵
 
 - [x] `bash -n scripts/*.sh` 和本地启动脚本 help/status 路径。
-- [-] 1,243 个浏览器测试、typecheck、build、no-desktop、Codex contracts 和真实
-  Codex app-server 的 19 项 Capability Manifest smoke 通过；Enterprise Supervisor
-  在内置 OpenAI Provider 上的真实案例 9/9 通过。main-ui-parity 仍会报告尚未
+- [-] 1,270 个浏览器测试、typecheck、lint、build、no-desktop、Codex contracts
+  和真实 Codex app-server 的 18 项 Capability Manifest smoke 通过；配送审计
+  单 Agent 已通过真实 Runtime/browser 验证；当前 `3.7.0` 印尼 Supervisor 的完整答案验收待重跑。
+  main-ui-parity 仍会报告尚未
   并入参考基线的有意浏览器 UI 扩展。
 - [x] `cargo fmt --all --check`、`cargo test --workspace --locked`。
 - [x] 当前空白 PostgreSQL schema 上的迁移幂等/Secret 加密、两组织安全、
   Artifact 拒绝、子 Agent/根 Run 生命周期隔离和独立 Workspace 跨 Run 复用
-  ignored integration tests 通过；Git Runtime 的 17 项文件与 Workspace 边界测试
+  ignored integration tests 通过；Git Runtime 的 22 项文件与 Workspace 边界测试
   同时通过。
 - [x] `npm run check:codex-generated`、`npm run check:codex-contracts`、fixtures、
   Feature Policy 和真实 `--require-manifest` smoke。

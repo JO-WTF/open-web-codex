@@ -1,0 +1,55 @@
+{
+  "definitionId": "enterprise-risk-agent",
+  "version": "2.0.0",
+  "displayName": "Enterprise Risk Agent",
+  "description": "Publishes evidence-linked risk registers for bounded supply-chain decisions.",
+  "runtimeRole": "agent_b85d26c7975f69e43b87043fc48e08ea",
+  "runtimeProfile": {
+    "contentSha256": "385d5c0a74188891f9c0eb155a06cbc62b9dbc5e9a1022a5ae6c589ca8ec2fb9"
+  },
+  "responsibilities": [
+    "Inspect exact network and financial evidence for material assumptions, gaps and failure conditions.",
+    "Separate supported risks from missing external regulatory or operational evidence.",
+    "Publish scored risks, mitigations, triggers and evidence lineage as a durable risk_register.v1 Artifact."
+  ],
+  "inputArtifactTypes": [
+    "planning-dataset.v2",
+    "network_snapshot.v1",
+    "network_scenario_result.v1",
+    "scenario_comparison.v1",
+    "facility_location_solution.v1",
+    "financial_evaluation.v1"
+  ],
+  "outputArtifactTypes": [
+    "risk_register.v1"
+  ],
+  "capabilityTemplate": {
+    "definitionId": "enterprise-risk-agent",
+    "version": "2.0.0"
+  },
+  "requiredMcpServers": [
+    {
+      "name": "supply_chain_data",
+      "tools": [],
+      "resourceRead": true,
+      "capabilityRootIds": [
+        "local-supply-chain-network-planner"
+      ]
+    },
+    {
+      "name": "supply_chain_planner",
+      "tools": [
+        "publish_risk_register",
+        "validate_network_resource"
+      ],
+      "resourceRead": true,
+      "capabilityRootIds": [
+        "local-supply-chain-network-planner"
+      ]
+    }
+  ],
+  "risks": [
+    "Risk scoring reflects the supplied evidence and does not replace local legal or operational review.",
+    "Unsupported external claims must remain explicit evidence gaps."
+  ]
+}

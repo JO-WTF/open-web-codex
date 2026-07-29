@@ -26,6 +26,7 @@ pub mod supervisor_policies;
 pub mod tasks;
 pub mod terminals;
 pub mod threads;
+pub mod workspace_datasets;
 pub mod workspaces;
 
 use std::sync::Arc;
@@ -353,6 +354,16 @@ pub fn router(
         .route(
             "/workspaces/{id}/files",
             axum::routing::get(workspaces::list_files),
+        )
+        .route(
+            "/workspaces/{id}/datasets",
+            axum::routing::get(workspace_datasets::list)
+                .post(workspace_datasets::publish)
+                .layer(axum::extract::DefaultBodyLimit::max(66 * 1024 * 1024)),
+        )
+        .route(
+            "/workspaces/{id}/datasets/{release_id}",
+            axum::routing::get(workspace_datasets::get),
         )
         .route(
             "/workspaces/{id}/git-roots",

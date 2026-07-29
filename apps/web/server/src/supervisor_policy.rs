@@ -1,13 +1,14 @@
 use open_web_codex_adapter::{PlatformRuntimeRole, RequiredMcpServer};
 use open_web_codex_codex_contracts::{CapabilityDeclaration, CapabilityManifest, CapabilityStatus};
 use open_web_codex_platform_contracts::{
-    SupervisorAgentSelection, SupervisorArtifactContractInput, SupervisorPolicyDetail,
-    SupervisorPolicyOrigin, SupervisorPolicySelection, SupervisorPolicySummary,
+    AgentDatasetReleaseBinding, SupervisorAgentSelection, SupervisorArtifactContractInput,
+    SupervisorPolicyDetail, SupervisorPolicyOrigin, SupervisorPolicySelection,
+    SupervisorPolicySummary,
 };
 use open_web_codex_run_orchestrator::{SupervisorPolicySnapshotInput, SupervisorPolicySource};
 use open_web_codex_supervisor_catalog::supervisor::{
     self, ResolvedSupervisorPackage, RuntimeCapabilityRequirement, SupervisorCatalogError,
-    SupervisorReleaseSpec,
+    SupervisorReleaseSpec, WorkspaceCapabilityPackageRequirement,
 };
 use serde_json::Value;
 use sqlx::{PgPool, Row};
@@ -36,6 +37,9 @@ pub(crate) struct ResolvedSupervisorPolicy {
     pub required_runtime_roles: Vec<PlatformRuntimeRole>,
     pub role_spawn_limits: BTreeMap<String, u32>,
     pub required_mcp_servers: Vec<RequiredMcpServer>,
+    pub required_workspace_id: Option<Uuid>,
+    pub workspace_capability_packages: Vec<WorkspaceCapabilityPackageRequirement>,
+    pub dataset_releases: Vec<AgentDatasetReleaseBinding>,
     pub runtime_requirements: Vec<RuntimeCapabilityRequirement>,
     pub max_active_child_agents: u32,
 }
@@ -183,6 +187,9 @@ fn from_package(
         required_runtime_roles: package.required_runtime_roles,
         role_spawn_limits: package.role_spawn_limits,
         required_mcp_servers: package.required_mcp_servers,
+        required_workspace_id: package.required_workspace_id,
+        workspace_capability_packages: package.workspace_capability_packages,
+        dataset_releases: package.dataset_releases,
         runtime_requirements: package.runtime_requirements,
         max_active_child_agents: package.max_active_child_agents,
     }

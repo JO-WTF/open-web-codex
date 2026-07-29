@@ -93,8 +93,11 @@ pub(crate) fn package_content_sha256(
     }
     for server in required_mcp_servers {
         update_digest_field(&mut digest, server.name.as_bytes());
-        for capability_root_id in &server.capability_root_ids {
-            update_digest_field(&mut digest, capability_root_id.as_bytes());
+        for capability_root in &server.capability_roots {
+            update_digest_field(&mut digest, capability_root.capability_root_id.as_bytes());
+            for server_name in &capability_root.mcp_server_names {
+                update_digest_field(&mut digest, server_name.as_bytes());
+            }
         }
         for tool in &server.tools {
             update_digest_field(&mut digest, tool.as_bytes());

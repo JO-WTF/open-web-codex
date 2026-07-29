@@ -12,6 +12,7 @@ import ChevronsUpDown from "lucide-react/dist/esm/icons/chevrons-up-down";
 import File from "lucide-react/dist/esm/icons/file";
 import Folder from "lucide-react/dist/esm/icons/folder";
 import GitBranch from "lucide-react/dist/esm/icons/git-branch";
+import Database from "lucide-react/dist/esm/icons/database";
 import Search from "lucide-react/dist/esm/icons/search";
 import type { PanelTabId } from "../../layout/components/PanelTabs";
 import { PanelShell } from "../../layout/components/PanelShell";
@@ -26,6 +27,7 @@ import { languageFromPath } from "../../../utils/syntax";
 import { joinWorkspacePath, revealInFileManagerLabel } from "../../../utils/platformPaths";
 import { getFileTypeIconUrl } from "../../../utils/fileTypeIcons";
 import { FilePreviewPopover } from "./FilePreviewPopover";
+import { DatasetReleaseDialog } from "./DatasetReleaseDialog";
 
 type FileTreeNode = {
   name: string;
@@ -48,6 +50,7 @@ type FileTreePanelProps = {
   openAppIconById: Record<string, string>;
   selectedOpenAppId: string;
   onSelectOpenAppId: (id: string) => void;
+  onFilesChanged: () => void;
 };
 
 type FileTreeBuildNode = {
@@ -174,6 +177,7 @@ export function FileTreePanel({
   openAppIconById,
   selectedOpenAppId,
   onSelectOpenAppId,
+  onFilesChanged,
 }: FileTreePanelProps) {
   const [filterMode, setFilterMode] = useState<"all" | "modified">("all");
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
@@ -194,6 +198,7 @@ export function FileTreePanel({
     end: number;
   } | null>(null);
   const [isDragSelecting, setIsDragSelecting] = useState(false);
+  const [datasetDialogOpen, setDatasetDialogOpen] = useState(false);
   const dragAnchorLineRef = useRef<number | null>(null);
   const dragMovedRef = useRef(false);
   const hasManualToggle = useRef(false);
@@ -667,6 +672,15 @@ export function FileTreePanel({
                   ? "No modified"
                   : "No files"}
           </div>
+          <button
+            type="button"
+            className="ghost icon-button file-tree-data-button"
+            onClick={() => setDatasetDialogOpen(true)}
+            aria-label="Add Workspace data"
+            title="Add data"
+          >
+            <Database size={14} aria-hidden />
+          </button>
           {hasFolders ? (
             <button
               type="button"
@@ -800,6 +814,16 @@ export function FileTreePanel({
             document.body,
           )
         : null}
+      {datasetDialogOpen ? (
+        createPortal(
+          <DatasetReleaseDialog
+            workspaceId={workspaceId}
+            onClose={() => setDatasetDialogOpen(false)}
+            onPublished={onFilesChanged}
+          />,
+          document.body,
+        )
+      ) : null}
     </PanelShell>
   );
 }

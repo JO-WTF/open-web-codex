@@ -59,7 +59,8 @@ pub async fn list_for_task(
              FROM artifact_provenance
              WHERE artifact_id = artifact.id
                AND organization_id = artifact.organization_id
-             ORDER BY created_at, producer_run_id, producer_thread_id,
+               AND producer_task_id = artifact_grant.task_id
+             ORDER BY created_at DESC, producer_run_id DESC, producer_thread_id,
                       producer_turn_id, producer_item_id
              LIMIT 1
          ) provenance ON true
@@ -334,7 +335,7 @@ async fn authorized_artifact_row(
     artifact_id: Uuid,
 ) -> Result<Option<sqlx::postgres::PgRow>, ApiError> {
     sqlx::query(
-        "SELECT artifact.id, artifact_grant.task_id, artifact.artifact_schema,
+        "SELECT artifact.id, provenance.task_id, artifact.artifact_schema,
                 artifact.display_name, artifact.mime_type, artifact.expected_size,
                 artifact.byte_size, artifact.content_sha256, artifact.state,
                 artifact.created_at, artifact.updated_at,
@@ -343,24 +344,21 @@ async fn authorized_artifact_row(
                 projection.agent_role AS producer_agent_role
          FROM artifacts artifact
          JOIN LATERAL (
-             SELECT task_id
-             FROM artifact_task_grants
-             WHERE artifact_id = artifact.id
-               AND organization_id = artifact.organization_id
-               AND permission = 'read'
-             ORDER BY created_at, task_id
-             LIMIT 1
-         ) artifact_grant ON true
-         JOIN tasks task ON task.id = artifact_grant.task_id
-           AND task.organization_id = artifact.organization_id
-         JOIN LATERAL (
-             SELECT producer_run_id, producer_thread_id, producer_turn_id,
-                    producer_item_id
-             FROM artifact_provenance
-             WHERE artifact_id = artifact.id
-               AND organization_id = artifact.organization_id
-             ORDER BY created_at, producer_run_id, producer_thread_id,
-                      producer_turn_id, producer_item_id
+             SELECT artifact_grant.task_id, provenance.producer_run_id,
+                    provenance.producer_thread_id, provenance.producer_turn_id,
+                    provenance.producer_item_id
+             FROM artifact_task_grants artifact_grant
+             JOIN artifact_provenance provenance
+               ON provenance.artifact_id = artifact_grant.artifact_id
+              AND provenance.organization_id = artifact_grant.organization_id
+              AND provenance.producer_task_id = artifact_grant.task_id
+             WHERE artifact_grant.artifact_id = artifact.id
+               AND artifact_grant.organization_id = artifact.organization_id
+               AND artifact_grant.permission = 'read'
+             ORDER BY artifact_grant.created_at DESC, artifact_grant.task_id,
+                      provenance.created_at DESC, provenance.producer_run_id DESC,
+                      provenance.producer_thread_id, provenance.producer_turn_id,
+                      provenance.producer_item_id
              LIMIT 1
          ) provenance ON true
          LEFT JOIN runtime_agent_projections projection

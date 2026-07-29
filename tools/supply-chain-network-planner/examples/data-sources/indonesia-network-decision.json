@@ -1,0 +1,203 @@
+{
+  "schema_version": "planning_source.v2",
+  "source_id": "indonesia-network-decision",
+  "market": "ID",
+  "label": "Indonesia national fulfillment network decision case",
+  "source_updated_at": "2026-07-28T16:00:00Z",
+  "planning_period": "2025-07 through 2026-06 annual demand",
+  "currency": "IDR",
+  "service_policy": {
+    "policy_id": "indonesia_two_day_delivery_v1",
+    "max_delivery_seconds": 172800,
+    "order_cutoff_wait_seconds": 21600,
+    "last_mile_buffer_seconds": 21600,
+    "label": "Two-day end-to-end delivery promise"
+  },
+  "demand_locations": [
+    {
+      "demand_id": "demand-jakarta",
+      "location": { "latitude": -6.2088, "longitude": 106.8456 },
+      "region": "java-west",
+      "current_facility_id": "warehouse-jakarta"
+    },
+    {
+      "demand_id": "demand-surabaya",
+      "location": { "latitude": -7.2575, "longitude": 112.7521 },
+      "region": "java-east",
+      "current_facility_id": "warehouse-surabaya"
+    },
+    {
+      "demand_id": "demand-medan",
+      "location": { "latitude": 3.5952, "longitude": 98.6722 },
+      "region": "sumatra",
+      "current_facility_id": "warehouse-jakarta"
+    },
+    {
+      "demand_id": "demand-makassar",
+      "location": { "latitude": -5.1477, "longitude": 119.4327 },
+      "region": "sulawesi",
+      "current_facility_id": "warehouse-surabaya"
+    },
+    {
+      "demand_id": "demand-balikpapan",
+      "location": { "latitude": -1.2379, "longitude": 116.8529 },
+      "region": "kalimantan",
+      "current_facility_id": "warehouse-surabaya"
+    },
+    {
+      "demand_id": "demand-denpasar",
+      "location": { "latitude": -8.65, "longitude": 115.2167 },
+      "region": "bali-nusa-tenggara",
+      "current_facility_id": "warehouse-surabaya"
+    }
+  ],
+  "facilities": [
+    {
+      "facility_id": "warehouse-jakarta",
+      "location": { "latitude": -6.1754, "longitude": 106.8272 },
+      "capacity_units": 3500,
+      "is_existing": true,
+      "handling_seconds": 14400,
+      "fixed_cost": "7200000000",
+      "opening_cost": "0",
+      "handling_cost_per_unit": "180000",
+      "label": "Jakarta existing national distribution center"
+    },
+    {
+      "facility_id": "warehouse-surabaya",
+      "location": { "latitude": -7.2458, "longitude": 112.7378 },
+      "capacity_units": 2200,
+      "is_existing": true,
+      "handling_seconds": 14400,
+      "fixed_cost": "4800000000",
+      "opening_cost": "0",
+      "handling_cost_per_unit": "170000",
+      "label": "Surabaya existing regional distribution center"
+    },
+    {
+      "facility_id": "candidate-semarang",
+      "location": { "latitude": -6.9667, "longitude": 110.4167 },
+      "capacity_units": 1400,
+      "is_existing": false,
+      "handling_seconds": 10800,
+      "fixed_cost": "2800000000",
+      "opening_cost": "18000000000",
+      "handling_cost_per_unit": "155000",
+      "label": "Semarang reviewed candidate distribution center"
+    },
+    {
+      "facility_id": "candidate-makassar",
+      "location": { "latitude": -5.1354, "longitude": 119.4238 },
+      "capacity_units": 1200,
+      "is_existing": false,
+      "handling_seconds": 10800,
+      "fixed_cost": "3000000000",
+      "opening_cost": "22000000000",
+      "handling_cost_per_unit": "165000",
+      "label": "Makassar reviewed candidate distribution center"
+    },
+    {
+      "facility_id": "candidate-medan",
+      "location": { "latitude": 3.5897, "longitude": 98.6738 },
+      "capacity_units": 1100,
+      "is_existing": false,
+      "handling_seconds": 10800,
+      "fixed_cost": "2700000000",
+      "opening_cost": "20000000000",
+      "handling_cost_per_unit": "160000",
+      "label": "Medan reviewed candidate distribution center"
+    }
+  ],
+  "transport_rates": [
+    {
+      "rate_id": "rate-jakarta-default",
+      "origin_facility_id": "warehouse-jakarta",
+      "base_cost_per_unit": "220000",
+      "distance_cost_per_km_per_unit": "620"
+    },
+    {
+      "rate_id": "rate-surabaya-default",
+      "origin_facility_id": "warehouse-surabaya",
+      "base_cost_per_unit": "210000",
+      "distance_cost_per_km_per_unit": "600"
+    },
+    {
+      "rate_id": "rate-semarang-default",
+      "origin_facility_id": "candidate-semarang",
+      "base_cost_per_unit": "200000",
+      "distance_cost_per_km_per_unit": "570"
+    },
+    {
+      "rate_id": "rate-makassar-default",
+      "origin_facility_id": "candidate-makassar",
+      "base_cost_per_unit": "230000",
+      "distance_cost_per_km_per_unit": "640"
+    },
+    {
+      "rate_id": "rate-medan-default",
+      "origin_facility_id": "candidate-medan",
+      "base_cost_per_unit": "225000",
+      "distance_cost_per_km_per_unit": "630"
+    }
+  ],
+  "route_provider": "reviewed-indonesia-lane-study",
+  "route_method": "quoted",
+  "route_entries": [
+    { "origin_facility_id": "warehouse-jakarta", "destination_demand_id": "demand-jakarta", "distance_meters": 28000, "travel_seconds": 3600, "status": "ready" },
+    { "origin_facility_id": "warehouse-jakarta", "destination_demand_id": "demand-surabaya", "distance_meters": 790000, "travel_seconds": 72000, "status": "ready" },
+    { "origin_facility_id": "warehouse-jakarta", "destination_demand_id": "demand-medan", "distance_meters": 1880000, "travel_seconds": 108000, "status": "ready" },
+    { "origin_facility_id": "warehouse-jakarta", "destination_demand_id": "demand-makassar", "distance_meters": 1430000, "travel_seconds": 129600, "status": "ready" },
+    { "origin_facility_id": "warehouse-jakarta", "destination_demand_id": "demand-balikpapan", "distance_meters": 1260000, "travel_seconds": 122400, "status": "ready" },
+    { "origin_facility_id": "warehouse-jakarta", "destination_demand_id": "demand-denpasar", "distance_meters": 1180000, "travel_seconds": 86400, "status": "ready" },
+    { "origin_facility_id": "warehouse-surabaya", "destination_demand_id": "demand-jakarta", "distance_meters": 790000, "travel_seconds": 72000, "status": "ready" },
+    { "origin_facility_id": "warehouse-surabaya", "destination_demand_id": "demand-surabaya", "distance_meters": 24000, "travel_seconds": 3600, "status": "ready" },
+    { "origin_facility_id": "warehouse-surabaya", "destination_demand_id": "demand-medan", "distance_meters": 2580000, "travel_seconds": 165600, "status": "ready" },
+    { "origin_facility_id": "warehouse-surabaya", "destination_demand_id": "demand-makassar", "distance_meters": 1050000, "travel_seconds": 100800, "status": "ready" },
+    { "origin_facility_id": "warehouse-surabaya", "destination_demand_id": "demand-balikpapan", "distance_meters": 930000, "travel_seconds": 108000, "status": "ready" },
+    { "origin_facility_id": "warehouse-surabaya", "destination_demand_id": "demand-denpasar", "distance_meters": 430000, "travel_seconds": 43200, "status": "ready" },
+    { "origin_facility_id": "candidate-semarang", "destination_demand_id": "demand-jakarta", "distance_meters": 450000, "travel_seconds": 28800, "status": "ready" },
+    { "origin_facility_id": "candidate-semarang", "destination_demand_id": "demand-surabaya", "distance_meters": 350000, "travel_seconds": 36000, "status": "ready" },
+    { "origin_facility_id": "candidate-semarang", "destination_demand_id": "demand-medan", "distance_meters": 2210000, "travel_seconds": 136800, "status": "ready" },
+    { "origin_facility_id": "candidate-semarang", "destination_demand_id": "demand-makassar", "distance_meters": 1270000, "travel_seconds": 115200, "status": "ready" },
+    { "origin_facility_id": "candidate-semarang", "destination_demand_id": "demand-balikpapan", "distance_meters": 1110000, "travel_seconds": 108000, "status": "ready" },
+    { "origin_facility_id": "candidate-semarang", "destination_demand_id": "demand-denpasar", "distance_meters": 760000, "travel_seconds": 64800, "status": "ready" },
+    { "origin_facility_id": "candidate-makassar", "destination_demand_id": "demand-jakarta", "distance_meters": 1430000, "travel_seconds": 136800, "status": "ready" },
+    { "origin_facility_id": "candidate-makassar", "destination_demand_id": "demand-surabaya", "distance_meters": 1050000, "travel_seconds": 100800, "status": "ready" },
+    { "origin_facility_id": "candidate-makassar", "destination_demand_id": "demand-medan", "distance_meters": 3100000, "travel_seconds": 172800, "status": "ready" },
+    { "origin_facility_id": "candidate-makassar", "destination_demand_id": "demand-makassar", "distance_meters": 22000, "travel_seconds": 3600, "status": "ready" },
+    { "origin_facility_id": "candidate-makassar", "destination_demand_id": "demand-balikpapan", "distance_meters": 510000, "travel_seconds": 36000, "status": "ready" },
+    { "origin_facility_id": "candidate-makassar", "destination_demand_id": "demand-denpasar", "distance_meters": 650000, "travel_seconds": 72000, "status": "ready" },
+    { "origin_facility_id": "candidate-medan", "destination_demand_id": "demand-jakarta", "distance_meters": 1880000, "travel_seconds": 100800, "status": "ready" },
+    { "origin_facility_id": "candidate-medan", "destination_demand_id": "demand-surabaya", "distance_meters": 2580000, "travel_seconds": 158400, "status": "ready" },
+    { "origin_facility_id": "candidate-medan", "destination_demand_id": "demand-medan", "distance_meters": 18000, "travel_seconds": 3600, "status": "ready" },
+    { "origin_facility_id": "candidate-medan", "destination_demand_id": "demand-makassar", "distance_meters": 3100000, "travel_seconds": 172800, "status": "ready" },
+    { "origin_facility_id": "candidate-medan", "destination_demand_id": "demand-balikpapan", "distance_meters": 2700000, "travel_seconds": 151200, "status": "ready" },
+    { "origin_facility_id": "candidate-medan", "destination_demand_id": "demand-denpasar", "distance_meters": 2920000, "travel_seconds": 165600, "status": "ready" }
+  ],
+  "orders": [
+    { "demand_id": "demand-jakarta", "order_date": "2025-08-15", "demand_units": 520, "promotion": false, "actual_delivery_seconds": 79200 },
+    { "demand_id": "demand-jakarta", "order_date": "2025-11-15", "demand_units": 710, "promotion": true, "actual_delivery_seconds": 100800 },
+    { "demand_id": "demand-jakarta", "order_date": "2026-02-15", "demand_units": 540, "promotion": false, "actual_delivery_seconds": 82800 },
+    { "demand_id": "demand-jakarta", "order_date": "2026-05-15", "demand_units": 630, "promotion": true, "actual_delivery_seconds": 111600 },
+    { "demand_id": "demand-surabaya", "order_date": "2025-08-15", "demand_units": 360, "promotion": false, "actual_delivery_seconds": 75600 },
+    { "demand_id": "demand-surabaya", "order_date": "2025-11-15", "demand_units": 430, "promotion": true, "actual_delivery_seconds": 97200 },
+    { "demand_id": "demand-surabaya", "order_date": "2026-02-15", "demand_units": 370, "promotion": false, "actual_delivery_seconds": 79200 },
+    { "demand_id": "demand-surabaya", "order_date": "2026-05-15", "demand_units": 440, "promotion": false, "actual_delivery_seconds": 90000 },
+    { "demand_id": "demand-medan", "order_date": "2025-08-15", "demand_units": 210, "promotion": false, "actual_delivery_seconds": 169200 },
+    { "demand_id": "demand-medan", "order_date": "2025-11-15", "demand_units": 330, "promotion": true, "actual_delivery_seconds": 187200 },
+    { "demand_id": "demand-medan", "order_date": "2026-02-15", "demand_units": 220, "promotion": false, "actual_delivery_seconds": 165600 },
+    { "demand_id": "demand-medan", "order_date": "2026-05-15", "demand_units": 240, "promotion": false },
+    { "demand_id": "demand-makassar", "order_date": "2025-08-15", "demand_units": 190, "promotion": false, "actual_delivery_seconds": 176400 },
+    { "demand_id": "demand-makassar", "order_date": "2025-11-15", "demand_units": 270, "promotion": true, "actual_delivery_seconds": 194400 },
+    { "demand_id": "demand-makassar", "order_date": "2026-02-15", "demand_units": 205, "promotion": false, "actual_delivery_seconds": 180000 },
+    { "demand_id": "demand-makassar", "order_date": "2026-05-15", "demand_units": 235, "promotion": false },
+    { "demand_id": "demand-balikpapan", "order_date": "2025-08-15", "demand_units": 150, "promotion": false, "actual_delivery_seconds": 180000 },
+    { "demand_id": "demand-balikpapan", "order_date": "2025-11-15", "demand_units": 210, "promotion": true, "actual_delivery_seconds": 201600 },
+    { "demand_id": "demand-balikpapan", "order_date": "2026-02-15", "demand_units": 160, "promotion": false, "actual_delivery_seconds": 183600 },
+    { "demand_id": "demand-balikpapan", "order_date": "2026-05-15", "demand_units": 180, "promotion": false },
+    { "demand_id": "demand-denpasar", "order_date": "2025-08-15", "demand_units": 170, "promotion": false, "actual_delivery_seconds": 122400 },
+    { "demand_id": "demand-denpasar", "order_date": "2025-11-15", "demand_units": 260, "promotion": true, "actual_delivery_seconds": 151200 },
+    { "demand_id": "demand-denpasar", "order_date": "2026-02-15", "demand_units": 175, "promotion": false, "actual_delivery_seconds": 129600 },
+    { "demand_id": "demand-denpasar", "order_date": "2026-05-15", "demand_units": 195, "promotion": false, "actual_delivery_seconds": 136800 }
+  ]
+}

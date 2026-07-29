@@ -74,8 +74,8 @@ Agents + 受限企业 Tool + 持久 Artifact”的最小协作闭环。
 | --- | --- |
 | 多 Agent Runtime | 真实 spawn、follow-up、wait、interrupt、完成后继续执行和父子 Thread 轨迹可观察、可恢复 |
 | Supervisor | 版本化 Supervisor Policy 作为不可变快照绑定根 Thread |
-| Domain Agent | 两个可评审 Agent Definition 映射到真实可发现 Runtime Role |
-| 企业能力 | 只读数据 MCP 与有界规划 MCP，使用明确的 Task/Profile 资源范围 |
+| Domain Agent | 可评审 Agent Definition 映射到 exact Runtime Role，并由 Supervisor 按证据缺口选择 |
+| 企业能力 | 只读数据、确定性网络计算与地图 MCP，使用明确的 Task/Profile 资源范围 |
 | Artifact | 独立身份、Schema、provenance 和同 Task 跨子 Thread 授权读取 |
 | 结果责任 | Supervisor 处理冲突、缺口和部分失败，最终报告引用关键 Artifact |
 
@@ -91,11 +91,14 @@ Agents + 受限企业 Tool + 持久 Artifact”的最小协作闭环。
 真实用例在刷新、失败和 Profile 重启后仍指向同一 Agent 轨迹、Policy 版本和
 Artifact；关键结论可追溯，一个 Agent 失败时能够形成明确的部分结果或终态。
 
-当前“华东新增仓”受限 happy path 已在全新 PostgreSQL、全新 Profile 和真实 Codex
-Runtime 上通过：根 Thread 创建两个精确 Role 子 Thread，完成跨 Agent Resource
-交接、有界企业 MCP 计算、Task Artifact 持久化、最终报告与刷新/重启恢复。由于
-follow-up、interrupt、审批拒绝、Agent 失败、Artifact 完整生命周期和一般故障恢复
-尚未完成，M2 仍未满足上述阶段退出条件。
+当前实现是印尼仓网动态案例：`enterprise-supervisor-copilot@3.7.0` 可从 Data
+`3.1.0`、Network `3.1.0` 和 Visualization `1.1.0` 三个有界 Role 中按证据缺口
+选择能力，八个 Artifact handoff 是条件性证据边而不是固定 Workflow。Workspace
+Dataset Release、受限 Python MCP authoring、直接 Agent Run、MCP stdio 和语义编译
+已有聚焦验证；当前 exact Release 的单 Agent 与印尼多 Agent 链路均已通过全新真实
+Runtime/browser 验证，Completed Agent follow-up、根 Turn interrupt 和后续恢复也已
+通过同一 Run 探针。审批拒绝、Agent 部分失败、Profile 重启、Artifact 完整生命周期
+和一般故障恢复仍是 M2 退出门禁。
 
 M2 的里程碑状态保留在 [开发计划](development-plan.md)，逐切片工作、真实案例和
 活动可信风险由

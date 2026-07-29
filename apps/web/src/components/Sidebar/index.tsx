@@ -5,7 +5,10 @@ import Bot from "lucide-react/dist/esm/icons/bot";
 import Moon from "lucide-react/dist/esm/icons/moon";
 import Sun from "lucide-react/dist/esm/icons/sun";
 import X from "lucide-react/dist/esm/icons/x";
-import type { SupervisorPolicySummary } from "../../../browser/types";
+import type {
+  AgentDefinitionSummary,
+  SupervisorPolicySummary,
+} from "../../../browser/types";
 import type { WorkspaceInfo } from "../../types";
 import Brand from "./Brand";
 import Workspaces from "./Workspaces";
@@ -39,6 +42,10 @@ type Props = {
   supervisorPoliciesLoading?: boolean;
   supervisorPoliciesError?: string | null;
   onNewSupervisor?: (workspaceId: string, policy: SupervisorPolicySummary) => void;
+  agents?: AgentDefinitionSummary[];
+  agentsLoading?: boolean;
+  agentsError?: string | null;
+  onNewAgent?: (workspaceId: string, agent: AgentDefinitionSummary) => void;
   onArchiveThread: (workspaceId: string, threadId: string) => void;
   onRemoveWorkspace: (workspaceId: string) => void;
   baseUrl: string;
@@ -72,6 +79,10 @@ export default function Sidebar({
   supervisorPoliciesLoading = false,
   supervisorPoliciesError = null,
   onNewSupervisor,
+  agents = [],
+  agentsLoading = false,
+  agentsError = null,
+  onNewAgent,
   onArchiveThread,
   onRemoveWorkspace,
   baseUrl,
@@ -121,6 +132,10 @@ export default function Sidebar({
           supervisorPoliciesLoading={supervisorPoliciesLoading}
           supervisorPoliciesError={supervisorPoliciesError}
           onNewSupervisor={onNewSupervisor}
+          agents={agents}
+          agentsLoading={agentsLoading}
+          agentsError={agentsError}
+          onNewAgent={onNewAgent}
           onArchiveThread={onArchiveThread}
           onRemoveWorkspace={onRemoveWorkspace}
           busy={busy}

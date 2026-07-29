@@ -15,27 +15,35 @@ const agents: SettingsSupervisorsSectionProps["agents"] = [
     source: "repository",
     release_id: null,
     definition_id: "enterprise-data-agent",
-    version: "1.6.0",
+    version: "3.1.0",
     display_name: "Enterprise Data Agent",
-    description: "Builds the planning dataset.",
-    responsibilities: ["Build data"],
+    description: "Inspects the Dataset Release.",
+    responsibilities: ["Inspect data"],
     input_artifact_types: [],
-    output_artifact_types: ["planning-dataset.v1"],
-    required_capabilities: ["supply_chain_data.build_planning_dataset"],
+    output_artifact_types: ["indonesia_dataset_inspection.v1"],
+    required_capabilities: [
+      "supply_chain_indonesia.inspect_indonesia_dataset_release",
+    ],
     capability_template: null,
+    dataset_releases: [],
+    required_workspace_id: null,
   },
   {
     source: "repository",
     release_id: null,
     definition_id: "enterprise-network-planning-agent",
-    version: "1.5.0",
+    version: "3.1.0",
     display_name: "Enterprise Network Planning Agent",
     description: "Compares network scenarios.",
     responsibilities: ["Compare scenarios"],
-    input_artifact_types: ["planning-dataset.v1"],
-    output_artifact_types: ["scenario_comparison.v1"],
-    required_capabilities: ["supply_chain_planner.compare_network_scenarios"],
+    input_artifact_types: ["indonesia_dataset_inspection.v1"],
+    output_artifact_types: ["indonesia_current_network_analysis.v1"],
+    required_capabilities: [
+      "supply_chain_indonesia.evaluate_indonesia_current_network",
+    ],
     capability_template: null,
+    dataset_releases: [],
+    required_workspace_id: null,
   },
 ];
 
@@ -47,7 +55,7 @@ const baseProps = (): SettingsSupervisorsSectionProps => ({
     {
       release_id: null,
       policy_id: "platform-supervisor-behavior",
-      version: "1.0.0",
+      version: "1.1.0",
       display_name: "Platform Supervisor behavior",
       description: "Platform boundaries.",
       source: "repository",
@@ -55,10 +63,10 @@ const baseProps = (): SettingsSupervisorsSectionProps => ({
     },
   ],
   instructionPolicyDetails: {
-    "platform-supervisor-behavior@1.0.0": {
+    "platform-supervisor-behavior@1.1.0": {
       release_id: null,
       policy_id: "platform-supervisor-behavior",
-      version: "1.0.0",
+      version: "1.1.0",
       display_name: "Platform Supervisor behavior",
       description: "Platform boundaries.",
       source: "repository",
@@ -158,16 +166,20 @@ describe("SettingsSupervisorsSection", () => {
         name: /Enterprise Network Planning Agent/,
       }),
     );
-    expect(screen.getByText("planning-dataset.v1")).toBeTruthy();
+    expect(screen.getByText("indonesia_dataset_inspection.v1")).toBeTruthy();
     fireEvent.change(
       screen.getByLabelText("Spawn limit for Enterprise Data Agent"),
       {
         target: { value: "2" },
       },
     );
-    fireEvent.click(screen.getByLabelText("Required planning-dataset.v1"));
     fireEvent.click(
-      screen.getByLabelText("Deliver planning-dataset.v1 to supervisor"),
+      screen.getByLabelText("Required indonesia_dataset_inspection.v1"),
+    );
+    fireEvent.click(
+      screen.getByLabelText(
+        "Deliver indonesia_dataset_inspection.v1 to supervisor",
+      ),
     );
 
     fireEvent.change(screen.getByLabelText("Policy ID"), {
@@ -199,7 +211,7 @@ describe("SettingsSupervisorsSection", () => {
     const request = vi.mocked(props.onSaveDraft).mock.calls[0][0];
     expect(request.instruction_policy).toEqual({
       policy_id: "platform-supervisor-behavior",
-      version: "1.0.0",
+      version: "1.1.0",
     });
     expect(request.custom_instructions).toBe(
       "Delegate data preparation before scenario analysis.",
@@ -207,10 +219,10 @@ describe("SettingsSupervisorsSection", () => {
     expect(request.agents).toHaveLength(2);
     expect(request.agents[0]).toMatchObject({ spawn_limit: 2 });
     expect(request.artifact_contracts).toContainEqual({
-      artifact_type: "planning-dataset.v1",
-      producer_agent: "enterprise-data-agent@1.6.0",
+      artifact_type: "indonesia_dataset_inspection.v1",
+      producer_agent: "enterprise-data-agent@3.1.0",
       consumer_agents: [
-        "enterprise-network-planning-agent@1.5.0",
+        "enterprise-network-planning-agent@3.1.0",
         "supervisor",
       ],
       required: false,
@@ -227,7 +239,9 @@ describe("SettingsSupervisorsSection", () => {
     fireEvent.click(
       screen.getByRole("checkbox", { name: /Enterprise Data Agent/ }),
     );
-    const contractLabel = screen.getByText("planning-dataset.v1").closest("label");
+    const contractLabel = screen
+      .getByText("indonesia_dataset_inspection.v1")
+      .closest("label");
     const contractCheckbox = contractLabel?.querySelector("input[type='checkbox']");
     expect(contractCheckbox).toBeTruthy();
     fireEvent.click(contractCheckbox!);
@@ -242,7 +256,7 @@ describe("SettingsSupervisorsSection", () => {
   it("shows a built-in Supervisor as an immutable readable release", () => {
     const policy = {
       policy_id: "enterprise-supervisor-copilot",
-      version: "1.8.0",
+      version: "3.0.0",
       display_name: "Enterprise Supervisor Copilot",
       description: "Coordinates governed planning Agents.",
       source: "repository" as const,
@@ -262,15 +276,15 @@ describe("SettingsSupervisorsSection", () => {
           agents: [
             {
               definition_id: "enterprise-data-agent",
-              version: "1.6.0",
+              version: "3.0.0",
               release_id: null,
               spawn_limit: 1,
             },
           ],
           artifact_contracts: [
             {
-              artifact_type: "planning-dataset.v1",
-              producer_agent: "enterprise-data-agent@1.6.0",
+              artifact_type: "indonesia_dataset_inspection.v1",
+              producer_agent: "enterprise-data-agent@3.1.0",
               consumer_agents: ["supervisor"],
               required: true,
             },
@@ -290,7 +304,7 @@ describe("SettingsSupervisorsSection", () => {
       screen.getByText("Decompose work into bounded assignments."),
     ).toBeTruthy();
     expect(screen.getByText(/spawn limit 1/)).toBeTruthy();
-    expect(screen.getByText(/planning-dataset.v1/)).toBeTruthy();
+    expect(screen.getByText(/indonesia_dataset_inspection.v1/)).toBeTruthy();
     expect(screen.getByText(/Coordinate the selected Agents/)).toBeTruthy();
     expect(props.onLoadPublished).not.toHaveBeenCalled();
   });

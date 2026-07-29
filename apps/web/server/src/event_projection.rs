@@ -1,10 +1,23 @@
 use open_web_codex_platform_contracts::RunEvent;
 use serde_json::{json, Map, Value};
+use sha2::Digest;
 use sqlx::PgPool;
 use sqlx::Row;
 use uuid::Uuid;
 
 const PROJECTION_VERSION: i16 = 1;
+const INLINE_ARTIFACT_LOOKUP_SQL: &str = "
+    SELECT artifact.renderer_kind, artifact.renderer_payload
+    FROM inline_visualization_artifacts artifact
+    JOIN run_events producer
+      ON producer.run_id = artifact.run_id
+     AND producer.item_id = artifact.producer_item_id
+     AND producer.event_type = 'codex.item.completed'
+    WHERE artifact.run_id = $1
+      AND artifact.artifact_ref = $2
+      AND artifact.state = 'ready'
+      AND producer.thread_id = artifact.thread_id
+      AND producer.turn_id = artifact.producer_turn_id";
 
 #[derive(Debug, PartialEq)]
 struct ProjectedEvent {
@@ -47,6 +60,7 @@ struct ArtifactCandidate {
     uri: String,
     mime_type: String,
     expected_size: Option<i64>,
+    inline_content: Option<Vec<u8>>,
 }
 
 struct RegisteredArtifact {
@@ -2017,9 +2031,7 @@ fn valid_artifact_resource_uri(value: &str) -> bool {
 }
 
 fn valid_geojson_resource_uri(value: &str) -> bool {
-    value
-        .strip_prefix("maps-data://geojson/")
-        .is_some_and(valid_card_identifier)
+    valid_artifact_resource_uri(value)
 }
 
 fn artifact_schema(title: Option<&str>, mime_type: &str) -> String {
@@ -2069,17 +2081,62 @@ fn artifact_link(content: &Value) -> Option<ArtifactCandidate> {
         uri: uri.to_string(),
         mime_type,
         expected_size,
+        inline_content: None,
     })
 }
 
-fn artifact_candidates(item: &Map<String, Value>) -> impl Iterator<Item = ArtifactCandidate> + '_ {
-    item.get("result")
+fn embedded_resource(content: &Value) -> Option<(&str, &str, Vec<u8>)> {
+    let content = content.as_object()?;
+    if content.get("type")?.as_str()? != "resource" {
+        return None;
+    }
+    let resource = content.get("resource")?.as_object()?;
+    let uri = resource.get("uri")?.as_str()?.trim();
+    let mime_type = resource.get("mimeType")?.as_str()?.trim();
+    let text = resource.get("text")?.as_str()?;
+    if !valid_artifact_resource_uri(uri)
+        || !matches!(mime_type, "application/json" | "application/geo+json")
+        || text.len() > 256 * 1024
+    {
+        return None;
+    }
+    let bytes = text.as_bytes().to_vec();
+    if serde_json::from_slice::<Value>(&bytes).is_err() {
+        return None;
+    }
+    Some((uri, mime_type, bytes))
+}
+
+fn artifact_candidates(item: &Map<String, Value>) -> std::vec::IntoIter<ArtifactCandidate> {
+    let Some(content) = item
+        .get("result")
         .and_then(Value::as_object)
         .and_then(|result| result.get("content"))
         .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(artifact_link)
+    else {
+        return Vec::new().into_iter();
+    };
+    let mut candidates = content.iter().filter_map(artifact_link).collect::<Vec<_>>();
+    for item in content {
+        let Some((uri, mime_type, bytes)) = embedded_resource(item) else {
+            continue;
+        };
+        let Some(candidate) = candidates
+            .iter_mut()
+            .find(|candidate| candidate.uri == uri && candidate.mime_type == mime_type)
+        else {
+            continue;
+        };
+        if candidate.expected_size.is_some_and(|expected| {
+            usize::try_from(expected)
+                .map(|expected| expected != bytes.len())
+                .unwrap_or(true)
+        }) {
+            continue;
+        }
+        candidate.inline_content = Some(bytes);
+    }
+    candidates.into_iter()
 }
 
 fn redact_mcp_resource_metadata(result: &mut Value) {
@@ -2141,6 +2198,7 @@ fn redact_mcp_resource_metadata(result: &mut Value) {
     else {
         return;
     };
+    content.retain(|item| item.get("type").and_then(Value::as_str) != Some("resource"));
     for item in content {
         let Some(item) = item.as_object_mut() else {
             continue;
@@ -2187,11 +2245,26 @@ async fn register_artifacts(
         if !seen.insert(artifact.uri.as_str()) {
             continue;
         }
+        let inline_size = artifact
+            .inline_content
+            .as_ref()
+            .and_then(|content| i64::try_from(content.len()).ok());
+        let expected_size = artifact.expected_size.or(inline_size);
+        let inline_sha256 = artifact
+            .inline_content
+            .as_ref()
+            .map(|content| hex::encode(sha2::Sha256::digest(content)));
+        let initial_state = if artifact.inline_content.is_some() {
+            "ready"
+        } else {
+            "pending"
+        };
         let inserted = sqlx::query(
             "INSERT INTO artifacts (
                 organization_id, profile_id, artifact_schema, display_name, mime_type,
-                expected_size, source_server, source_uri
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                expected_size, source_server, source_uri, content, byte_size,
+                content_sha256, state
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
              ON CONFLICT (organization_id, profile_id, source_server, source_uri)
              DO NOTHING
              RETURNING id, state",
@@ -2201,9 +2274,13 @@ async fn register_artifacts(
         .bind(&artifact.artifact_schema)
         .bind(&artifact.display_name)
         .bind(&artifact.mime_type)
-        .bind(artifact.expected_size)
+        .bind(expected_size)
         .bind(server)
         .bind(&artifact.uri)
+        .bind(artifact.inline_content.as_deref())
+        .bind(inline_size)
+        .bind(&inline_sha256)
+        .bind(initial_state)
         .fetch_optional(&mut **transaction)
         .await
         .map_err(|error| format!("Artifact registration error: {error}"))?;
@@ -2214,7 +2291,8 @@ async fn register_artifacts(
             )
         } else {
             let existing = sqlx::query(
-                "SELECT id, artifact_schema, display_name, mime_type, expected_size, state
+                "SELECT id, artifact_schema, display_name, mime_type, expected_size,
+                        content_sha256, state
                  FROM artifacts
                  WHERE organization_id = $1 AND profile_id = $2
                    AND source_server = $3 AND source_uri = $4",
@@ -2230,7 +2308,10 @@ async fn register_artifacts(
             if existing.get::<String, _>("artifact_schema") != artifact.artifact_schema
                 || existing.get::<String, _>("display_name") != artifact.display_name
                 || existing.get::<String, _>("mime_type") != artifact.mime_type
-                || existing.get::<Option<i64>, _>("expected_size") != artifact.expected_size
+                || existing.get::<Option<i64>, _>("expected_size") != expected_size
+                || inline_sha256.as_ref().is_some_and(|expected| {
+                    existing.get::<Option<String>, _>("content_sha256").as_ref() != Some(expected)
+                })
             {
                 return Err(
                     "MCP Resource identity was reused with different immutable metadata"
@@ -2257,13 +2338,14 @@ async fn register_artifacts(
         .map_err(|error| format!("Artifact Task grant error: {error}"))?;
         sqlx::query(
             "INSERT INTO artifact_provenance (
-                artifact_id, organization_id, producer_run_id, producer_thread_id,
-                producer_turn_id, producer_item_id
-             ) VALUES ($1, $2, $3, $4, $5, $6)
+                artifact_id, organization_id, producer_task_id, producer_run_id,
+                producer_thread_id, producer_turn_id, producer_item_id
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7)
              ON CONFLICT DO NOTHING",
         )
         .bind(artifact_id)
         .bind(context.organization_id)
+        .bind(context.task_id)
         .bind(context.run_id)
         .bind(&event.thread_id)
         .bind(turn_id)
@@ -2277,7 +2359,7 @@ async fn register_artifacts(
             artifact_schema: artifact.artifact_schema.clone(),
             display_name: artifact.display_name.clone(),
             mime_type: artifact.mime_type.clone(),
-            expected_size: artifact.expected_size,
+            expected_size,
             state,
         });
     }
@@ -2331,7 +2413,6 @@ async fn register_inline_visualization_artifact(
     resolve_inline_renderer_resources(
         transaction,
         run_id,
-        &event.thread_id,
         item_id,
         &candidate.renderer_kind,
         &mut renderer_payload,
@@ -2389,7 +2470,6 @@ async fn register_inline_visualization_artifact(
 async fn resolve_inline_renderer_resources(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     run_id: Uuid,
-    thread_id: &str,
     producer_item_id: &str,
     renderer_kind: &str,
     renderer_payload: &mut Value,
@@ -2399,7 +2479,6 @@ async fn resolve_inline_renderer_resources(
             resolve_map_resource_refs_in_transaction(
                 transaction,
                 run_id,
-                thread_id,
                 producer_item_id,
                 renderer_payload,
             )
@@ -2414,7 +2493,6 @@ async fn resolve_inline_renderer_resources(
 async fn resolve_map_resource_refs_in_transaction(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     run_id: Uuid,
-    thread_id: &str,
     producer_item_id: &str,
     renderer_payload: &mut Value,
 ) -> Result<(), String> {
@@ -2423,22 +2501,22 @@ async fn resolve_map_resource_refs_in_transaction(
     };
     let mut resolved = std::collections::HashMap::new();
     for (server, uri) in resource_refs {
+        // A visualization Agent may consume a Resource produced by another
+        // child Thread, but only within the same authoritative Run.
         let row = sqlx::query(
-            "SELECT artifact.id, artifact.mime_type
+            "SELECT DISTINCT artifact.id, artifact.mime_type
              FROM artifacts artifact
              JOIN artifact_provenance provenance
                ON provenance.artifact_id = artifact.id
               AND provenance.organization_id = artifact.organization_id
              WHERE provenance.producer_run_id = $1
-               AND provenance.producer_thread_id = $2
-               AND artifact.source_server = $3
-               AND artifact.source_uri = $4
-               AND provenance.producer_item_id <> $5
+               AND artifact.source_server = $2
+               AND artifact.source_uri = $3
+               AND provenance.producer_item_id <> $4
                AND artifact.state IN ('pending', 'materializing', 'ready')
                AND artifact.retention_state = 'active'",
         )
         .bind(run_id)
-        .bind(thread_id)
         .bind(&server)
         .bind(&uri)
         .bind(producer_item_id)
@@ -2470,9 +2548,9 @@ async fn resolve_inline_artifacts_in_transaction(
     if payload.pointer("/itemType").and_then(Value::as_str) != Some("agentMessage") {
         return Ok(());
     }
-    let Some(thread_id) = payload.get("threadId").and_then(Value::as_str) else {
+    if payload.get("threadId").and_then(Value::as_str).is_none() {
         return Ok(());
-    };
+    }
     let Some(text) = payload.pointer("/data/text").and_then(Value::as_str) else {
         return Ok(());
     };
@@ -2482,20 +2560,12 @@ async fn resolve_inline_artifacts_in_transaction(
     }
     let mut artifacts = Vec::new();
     for artifact_ref in refs {
-        let row = sqlx::query(
-            "SELECT renderer_kind, renderer_payload
-             FROM inline_visualization_artifacts
-             WHERE run_id = $1
-               AND thread_id = $2
-               AND artifact_ref = $3
-               AND state = 'ready'",
-        )
-        .bind(run_id)
-        .bind(thread_id)
-        .bind(&artifact_ref)
-        .fetch_optional(&mut **transaction)
-        .await
-        .map_err(|error| format!("inline visualization Artifact resolution error: {error}"))?;
+        let row = sqlx::query(INLINE_ARTIFACT_LOOKUP_SQL)
+            .bind(run_id)
+            .bind(&artifact_ref)
+            .fetch_optional(&mut **transaction)
+            .await
+            .map_err(|error| format!("inline visualization Artifact resolution error: {error}"))?;
         if let Some(row) = row {
             artifacts.push(json!({
                 "ref": artifact_ref,
@@ -2524,26 +2594,11 @@ pub(crate) async fn resolve_inline_artifacts(
     let refs = inline_artifact_refs(text);
     let mut artifacts = Vec::new();
     for artifact_ref in refs {
-        let row = sqlx::query(
-            "SELECT artifact.renderer_kind, artifact.renderer_payload
-             FROM inline_visualization_artifacts artifact
-             JOIN run_events producer
-               ON producer.run_id = artifact.run_id
-              AND producer.item_id = artifact.producer_item_id
-              AND producer.event_type = 'codex.item.completed'
-             WHERE artifact.run_id = $1
-               AND artifact.thread_id = (
-                   SELECT codex_thread_id FROM runs WHERE id = $1
-               )
-               AND artifact.artifact_ref = $2
-               AND artifact.state = 'ready'
-               AND producer.thread_id = artifact.thread_id
-               AND producer.turn_id = artifact.producer_turn_id",
-        )
-        .bind(run_id)
-        .bind(&artifact_ref)
-        .fetch_optional(db)
-        .await?;
+        let row = sqlx::query(INLINE_ARTIFACT_LOOKUP_SQL)
+            .bind(run_id)
+            .bind(&artifact_ref)
+            .fetch_optional(db)
+            .await?;
         if let Some(row) = row {
             artifacts.push(json!({
                 "ref": artifact_ref,
@@ -3356,6 +3411,19 @@ After"#;
             .pointer("/result/structuredContent/data_ref")
             .is_none());
 
+        let external_local_resource = json!({
+            "network": {
+                "type": "geojson",
+                "data": {
+                    "type": "mcp_resource",
+                    "server": "supply_chain_indonesia",
+                    "uri": "supply-chain-indonesia://geojson/geojson.v1-digest",
+                    "format": "geojson"
+                }
+            }
+        });
+        assert!(project_map_v3_sources(&external_local_resource).is_some());
+
         let model_visible_namespace = json!({
             "locations": {
                 "type": "geojson",
@@ -3368,6 +3436,79 @@ After"#;
             }
         });
         assert!(project_map_v3_sources(&model_visible_namespace).is_none());
+
+        let host_path = json!({
+            "locations": {
+                "type": "geojson",
+                "data": {
+                    "type": "mcp_resource",
+                    "server": "supply_chain_indonesia",
+                    "uri": "file:///tmp/network.geojson",
+                    "format": "geojson"
+                }
+            }
+        });
+        assert!(project_map_v3_sources(&host_path).is_none());
+    }
+
+    #[test]
+    fn binds_embedded_json_content_to_its_exact_resource_link() {
+        let uri = "open-web-python://resources/delivery-audit";
+        let text = r#"{"schema_version":"delivery_audit_report.v1","shipments":18}"#;
+        let item = json!({
+            "type": "mcpToolCall",
+            "server": "delivery_audit",
+            "tool": "audit_delivery_commitments",
+            "result": {
+                "content": [
+                    {
+                        "type": "resource_link",
+                        "name": "delivery_audit_report.v1-digest",
+                        "title": "delivery_audit_report.v1",
+                        "uri": uri,
+                        "mimeType": "application/json",
+                        "size": text.len()
+                    },
+                    {
+                        "type": "resource",
+                        "resource": {
+                            "uri": uri,
+                            "mimeType": "application/json",
+                            "text": text
+                        }
+                    }
+                ],
+                "structuredContent": {
+                    "schema_version": "delivery_audit_report.v1",
+                    "data_ref": {
+                        "type": "mcp_resource",
+                        "server": "delivery_audit",
+                        "uri": uri,
+                        "format": "json",
+                        "resource_schema": "delivery_audit_report.v1"
+                    }
+                }
+            }
+        });
+        let item = item.as_object().expect("MCP item");
+        let artifacts = artifact_candidates(item).collect::<Vec<_>>();
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].artifact_schema, "delivery_audit_report.v1");
+        assert_eq!(
+            artifacts[0].inline_content.as_deref(),
+            Some(text.as_bytes())
+        );
+
+        let public = project_item(item);
+        assert_eq!(
+            public
+                .pointer("/result/content")
+                .and_then(Value::as_array)
+                .expect("public MCP content")
+                .len(),
+            1
+        );
+        assert!(public.to_string().find(uri).is_none());
     }
 
     #[test]
@@ -3739,6 +3880,11 @@ After"#;
 
 "#
         );
+        let geojson_artifact = format!(
+            r#"data: {{"method":"app-server-event","params":{{"workspace_id":"{workspace_id}","message":{{"method":"item/completed","params":{{"threadId":"data-thread","turnId":"data-turn","item":{{"id":"network-geojson","type":"mcpToolCall","server":"supply_chain_indonesia","tool":"prepare_indonesia_network_map","result":{{"content":[{{"type":"resource_link","name":"geojson.v1-digest","title":"geojson.v1","uri":"supply-chain-indonesia://geojson/geojson.v1-digest","mimeType":"application/geo+json","size":1024}}],"structuredContent":{{"summary":"ready","geojson_ref":{{"server":"supply_chain_indonesia","uri":"supply-chain-indonesia://geojson/geojson.v1-digest","format":"geojson"}}}}}}}}}}}}}}}}
+
+"#
+        );
         let child_turn_completed = format!(
             r#"data: {{"method":"app-server-event","params":{{"workspace_id":"{workspace_id}","message":{{"method":"turn/completed","params":{{"threadId":"child-thread","turnId":"child-turn","turn":{{"id":"child-turn","status":"completed"}}}}}}}}}}
 
@@ -3798,6 +3944,136 @@ After"#;
             .unwrap()
             .expect("Artifact projection");
         assert_eq!(artifact_projection.pending_artifact_ids.len(), 1);
+        let geojson_projection = persist_frame(geojson_artifact.as_bytes(), &pool)
+            .await
+            .unwrap()
+            .expect("GeoJSON Artifact projection");
+        assert_eq!(geojson_projection.pending_artifact_ids.len(), 1);
+        let mut map_payload = json!({
+            "sources": {
+                "network": {
+                    "type": "geojson",
+                    "data": {
+                        "type": "mcp_resource",
+                        "server": "supply_chain_indonesia",
+                        "uri": "supply-chain-indonesia://geojson/geojson.v1-digest",
+                        "format": "geojson"
+                    }
+                }
+            }
+        });
+        let mut transaction = pool.begin().await.unwrap();
+        resolve_map_resource_refs_in_transaction(
+            &mut transaction,
+            run_id,
+            "visualization-map-item",
+            &mut map_payload,
+        )
+        .await
+        .expect("resolve a GeoJSON Artifact produced by another child Thread");
+        transaction.rollback().await.unwrap();
+        assert_eq!(
+            map_payload["sources"]["network"]["data"]["type"],
+            "artifact"
+        );
+        assert_eq!(
+            map_payload["sources"]["network"]["data"]["mime_type"],
+            "application/geo+json"
+        );
+        assert!(!map_payload
+            .to_string()
+            .contains("supply-chain-indonesia://"));
+        map_payload
+            .as_object_mut()
+            .expect("map payload object")
+            .extend(Map::from_iter([
+                ("type".to_string(), Value::String("card".to_string())),
+                ("kind".to_string(), Value::String("map.v3".to_string())),
+                (
+                    "id".to_string(),
+                    Value::String("map-from-visualization-agent".to_string()),
+                ),
+                (
+                    "title".to_string(),
+                    Value::String("Child Agent network map".to_string()),
+                ),
+                ("status".to_string(), Value::String("ready".to_string())),
+                ("layers".to_string(), Value::Array(Vec::new())),
+            ]));
+        sqlx::query(
+            "INSERT INTO run_events (
+                run_id, event_type, projection_version, thread_id, turn_id, item_id, payload
+             ) VALUES (
+                $1, 'codex.item.completed', 1, 'data-thread', 'data-turn',
+                'visualization-map-item', '{}'::jsonb
+             )",
+        )
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO inline_visualization_artifacts (
+                organization_id, run_id, thread_id, producer_turn_id, producer_item_id,
+                artifact_ref, renderer_kind, renderer_payload
+             ) VALUES (
+                $1, $2, 'data-thread', 'data-turn', 'visualization-map-item',
+                'map-from-visualization-agent', 'map.v3', $3
+             )",
+        )
+        .bind(organization_id)
+        .bind(run_id)
+        .bind(&map_payload)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let root_report = format!(
+            "data: {}\n\n",
+            json!({
+                "method": "app-server-event",
+                "params": {
+                    "workspace_id": workspace_id,
+                    "message": {
+                        "method": "item/completed",
+                        "params": {
+                            "threadId": "root-thread",
+                            "turnId": "root-turn",
+                            "item": {
+                                "id": "root-report",
+                                "type": "agentMessage",
+                                "text": concat!(
+                                    "Before\n\n",
+                                    "::codex-inline-vis{artifact=\"map-from-visualization-agent\"}",
+                                    "\n\nAfter"
+                                )
+                            }
+                        }
+                    }
+                }
+            })
+        );
+        let root_report_projection = persist_frame(root_report.as_bytes(), &pool)
+            .await
+            .unwrap()
+            .expect("root report projection");
+        let root_report_payload: Value =
+            serde_json::from_slice(&root_report_projection.payload).unwrap();
+        let inline = &root_report_payload["event"]["payload"]["data"]["inlineArtifacts"][0];
+        assert_eq!(inline["ref"], "map-from-visualization-agent");
+        assert_eq!(inline["renderer"]["kind"], "map.v3");
+        assert_eq!(
+            inline["renderer"]["payload"]["sources"]["network"]["data"]["type"],
+            "artifact"
+        );
+        let restored = resolve_inline_artifacts(
+            &pool,
+            run_id,
+            "Before\n\n::codex-inline-vis{artifact=\"map-from-visualization-agent\"}\n\nAfter",
+        )
+        .await
+        .unwrap();
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0]["ref"], "map-from-visualization-agent");
         assert!(persist_frame(data_turn_completed.as_bytes(), &pool)
             .await
             .unwrap()
@@ -3931,7 +4207,8 @@ After"#;
                ON artifact_grant.artifact_id = artifact.id
              JOIN artifact_provenance provenance
                ON provenance.artifact_id = artifact.id
-             WHERE artifact.organization_id = $1",
+             WHERE artifact.organization_id = $1
+               AND artifact.artifact_schema = 'planning-dataset.v1'",
         )
         .bind(organization_id)
         .fetch_one(&pool)

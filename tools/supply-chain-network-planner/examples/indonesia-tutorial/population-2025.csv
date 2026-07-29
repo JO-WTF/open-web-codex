@@ -1,0 +1,39 @@
+province_code,province_name,population_2025
+IDN001,Aceh,5626000
+IDN002,Sumatera Utara,15785800
+IDN003,Sumatera Barat,5914300
+IDN004,Riau,6811200
+IDN005,Jambi,3768500
+IDN006,Sumatera Selatan,8928500
+IDN007,Bengkulu,2138000
+IDN008,Lampung,9522900
+IDN009,Kepulauan Bangka Belitung,1550800
+IDN010,Kepulauan Riau,2213500
+IDN011,DKI Jakarta,10678000
+IDN012,Jawa Barat,50759000
+IDN013,Jawa Tengah,38233900
+IDN014,Daerah Istimewa Yogyakarta,3781500
+IDN015,Jawa Timur,42089300
+IDN016,Banten,12537400
+IDN017,Bali,4461300
+IDN018,Nusa Tenggara Barat,5731100
+IDN019,Nusa Tenggara Timur,5742600
+IDN020,Kalimantan Barat,5766000
+IDN021,Kalimantan Tengah,2845000
+IDN022,Kalimantan Selatan,4323300
+IDN023,Kalimantan Timur,4267600
+IDN024,Kalimantan Utara,749400
+IDN025,Sulawesi Utara,2721400
+IDN026,Sulawesi Tengah,3156100
+IDN027,Sulawesi Selatan,9563100
+IDN028,Sulawesi Tenggara,2836700
+IDN029,Gorontalo,1242200
+IDN030,Sulawesi Barat,1525300
+IDN031,Maluku,1970600
+IDN032,Maluku Utara,1373800
+IDN033,Papua,1073600
+IDN034,Papua Barat Daya,636400
+IDN035,Papua Barat,587600
+IDN036,Papua Selatan,549700
+IDN037,Papua Tengah,1492300
+IDN038,Papua Pegunungan,1484900

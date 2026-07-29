@@ -1,0 +1,14 @@
+{
+  "schema_version": "workspace_dataset_release.v1",
+  "dataset_id": "delivery-commitment-audit",
+  "version": "1.0.0",
+  "display_name": "Delivery commitment audit",
+  "description": "Synthetic shipment records for the first Web-authored Agent tutorial.",
+  "data_classification": "synthetic_tutorial_data",
+  "files": [
+    {
+      "path": "deliveries.csv",
+      "role": "delivery_records"
+    }
+  ]
+}

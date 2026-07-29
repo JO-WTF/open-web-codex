@@ -10,9 +10,9 @@ use open_web_codex_adapter::{CodexAdapter, ThreadStartMode};
 use open_web_codex_git_runtime::{GitRuntime, GitRuntimeConfig};
 use open_web_codex_platform_store::migrate;
 use open_web_codex_run_orchestrator::{
-    CancelRunRequest, CreateWorkspaceRequest, EnqueueRunRequest, RecoverRunRequest,
-    RemoveWorkspaceRequest, RunLease, RunOrchestrator, RunOrchestratorError, RunStartPreflight,
-    RunStartPreflightError, SupervisorPolicySnapshotInput,
+    AgentRunSnapshotInput, AgentRunSource, CancelRunRequest, CreateWorkspaceRequest,
+    EnqueueRunRequest, RecoverRunRequest, RemoveWorkspaceRequest, RunLease, RunOrchestrator,
+    RunOrchestratorError, RunStartPreflight, RunStartPreflightError, SupervisorPolicySnapshotInput,
 };
 use sqlx::postgres::PgPoolOptions;
 use sqlx::Row;
@@ -206,6 +206,7 @@ async fn independent_workspace_is_reused_across_run_lifecycles() {
             source: open_web_codex_run_orchestrator::SupervisorPolicySource::Repository,
             release_id: None,
         }),
+        agent: None,
     };
     let enqueued = first.enqueue_run(request.clone()).await.unwrap();
     let replayed = first.enqueue_run(request).await.unwrap();
@@ -220,6 +221,7 @@ async fn independent_workspace_is_reused_across_run_lifecycles() {
             fork_thread_id: None,
             fork_source_run_id: None,
             supervisor_policy: None,
+            agent: None,
         })
         .await
         .unwrap_err();
@@ -329,6 +331,7 @@ async fn independent_workspace_is_reused_across_run_lifecycles() {
             fork_thread_id: None,
             fork_source_run_id: None,
             supervisor_policy: None,
+            agent: None,
         })
         .await
         .unwrap();
@@ -394,6 +397,67 @@ async fn independent_workspace_is_reused_across_run_lifecycles() {
             actor_id: user_id,
             allow_organization_admin: false,
             run_id: recovery_run.id,
+        })
+        .await
+        .unwrap();
+    let agent_run = first
+        .enqueue_run(EnqueueRunRequest {
+            organization_id,
+            actor_id: user_id,
+            task_id,
+            idempotency_key: "runner-idempotency-agent-0001".to_string(),
+            workspace_id: workspace.id,
+            fork_thread_id: None,
+            fork_source_run_id: None,
+            supervisor_policy: None,
+            agent: Some(AgentRunSnapshotInput {
+                definition_id: "delivery-promise-agent".to_string(),
+                version: "1.0.0".to_string(),
+                display_name: "Delivery Promise Agent".to_string(),
+                content_sha256: "b".repeat(64),
+                source: AgentRunSource::Repository,
+                release_id: None,
+            }),
+        })
+        .await
+        .unwrap();
+    let agent_lease = first.claim_next().await.unwrap().expect("Agent Run lease");
+    assert!(agent_lease.supervisor_policy.is_none());
+    let leased_agent = agent_lease.agent.as_ref().expect("leased root Agent");
+    assert_eq!(leased_agent.definition_id, "delivery-promise-agent");
+    assert_eq!(leased_agent.version, "1.0.0");
+    assert_eq!(leased_agent.content_sha256, "b".repeat(64));
+    first.execute_lease(&agent_lease).await.unwrap();
+    let agent_binding = sqlx::query(
+        "SELECT binding.state, binding.thread_id, snapshot.definition_id, snapshot.version, \
+                snapshot.content_sha256 \
+         FROM agent_run_bindings binding \
+         JOIN agent_run_snapshots snapshot ON snapshot.id = binding.snapshot_id \
+         WHERE binding.run_id = $1",
+    )
+    .bind(agent_run.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(agent_binding.get::<String, _>("state"), "bound");
+    assert!(agent_binding
+        .get::<Option<String>, _>("thread_id")
+        .is_some());
+    assert_eq!(
+        agent_binding.get::<String, _>("definition_id"),
+        "delivery-promise-agent"
+    );
+    assert_eq!(agent_binding.get::<String, _>("version"), "1.0.0");
+    assert_eq!(
+        agent_binding.get::<String, _>("content_sha256"),
+        "b".repeat(64)
+    );
+    first
+        .cancel_run(CancelRunRequest {
+            organization_id,
+            actor_id: user_id,
+            allow_organization_admin: false,
+            run_id: agent_run.id,
         })
         .await
         .unwrap();

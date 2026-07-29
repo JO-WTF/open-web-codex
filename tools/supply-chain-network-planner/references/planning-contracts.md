@@ -4,8 +4,9 @@
 
 Every calculation starts from immutable MCP Resources:
 
-- `planning-dataset.v1`: read-only source range, demand distribution, promotion share,
-  delivery baseline, data quality, and the exact `network_input` handoff projection.
+- `planning-dataset.v2`: typed market and source scope, demand distribution, promotion
+  share, delivery baseline, data quality, reviewed candidates, exact `network_input`,
+  and complete route facts.
 - `network_snapshot.v1`: planning period, currency, service policy, demand points,
   facilities, and rate rules.
 - `route_matrix.v1`: one provider/method and typed facility-demand route rows tied to
@@ -15,6 +16,10 @@ Every calculation starts from immutable MCP Resources:
 - `scenario_comparison.v1`: deltas between compatible scenario results.
 - `facility_location_solution.v1`: target, selected candidates, exact-solver scope,
   assumptions, and its scenario-result reference.
+- `financial_evaluation.v1`: compatible network inputs, opening investment, recurring
+  savings, NPV, payback, and explicit financial assumptions.
+- `risk_register.v1`: scored material risks, mitigations, triggers, and exact planning
+  evidence references.
 
 Copy each returned `data_ref` unchanged. It uses server `supply_chain_planner` and an
 opaque `supply-chain://resources/...` URI. Data Agent handoffs use server
@@ -90,7 +95,7 @@ for arbitrary points on a map.
 
 ## Known MVP boundary
 
-The Data MCP accepts only deployment-bound, de-identified `planning_source.v1` fixture
+The Data MCP accepts only deployment-bound, de-identified `planning_source.v2` fixture
 or file-backed sources selected by a bounded source ID. It is not an arbitrary SQL
 console and does not yet connect to a governed enterprise query gateway.
 

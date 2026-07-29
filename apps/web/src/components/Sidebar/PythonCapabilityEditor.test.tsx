@@ -72,11 +72,13 @@ describe("PythonCapabilityEditor", () => {
     const onPublished = vi.fn();
     const onStartThread = vi.fn();
     publishPythonCapability.mockResolvedValue({
+      release_id: "release-1",
       package_id: "stock-history",
       version: "1.0.0",
-      capability_root_id: "local-stock-history",
+      capability_root_id: "local-stock-history-1-0-0",
       server_name: "stock_data",
       skill_name: "stock-history",
+      content_sha256: "a".repeat(64),
       written_files: [],
     });
     render(

@@ -144,6 +144,7 @@ export default function AgentStudioDialog({
     const release = await agentCatalog.onPublish(definitionId);
     if (release) {
       supervisors.onRefresh();
+      onSupervisorCatalogChanged();
     }
     return release;
   };
@@ -312,8 +313,9 @@ export default function AgentStudioDialog({
               )}
               <div className="web-agent-studio-boundary-note">
                 “Not active” means the package exists but the selected Thread did not receive it.
-                MCP editing remains unavailable until publication and isolated validation have a
-                Web-safe typed contract.
+                Web authors can publish standard-library Python MCP packages through the editor
+                above. Arbitrary launch commands, credentials, and hidden Profile changes are not
+                accepted by this flow.
               </div>
             </section>
           )}

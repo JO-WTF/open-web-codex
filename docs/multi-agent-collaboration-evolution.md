@@ -2,7 +2,7 @@
 
 > 文档性质：多 Agent 协同专项演进设计
 >
-> 更新日期：2026-07-27
+> 更新日期：2026-07-29
 >
 > 当前阶段：产品路线图位于 M2；协同专项的 C2 核心闭环已经形成，正在补齐 C3
 > 所需的追加任务、中断、并行与恢复证据
@@ -157,9 +157,9 @@ flowchart TB
 
 当前不能笼统地说“已经完成多 Agent 平台”。更准确的描述是：
 
-> 已经形成单 Profile、固定 Supervisor Policy、两个精确 Runtime Role 和一个真实
-> 仓网案例的多 Agent 功能闭环；正在从“主路径可运行”进入“协作过程可追加、可中断、
-> 可并行、可恢复”的阶段。
+> 已经形成单 Profile、版本化 Supervisor Policy、四个可选 Runtime Role 和条件性
+> Artifact handoff 的动态协作实现；当前印尼案例的精确 `2.0.0` Runtime 重跑与
+> 追加任务、中断、并行和恢复矩阵仍是 C2/C3 的退出门禁。
 
 ---
 
@@ -214,9 +214,9 @@ flowchart TB
 
 ### 细致目标
 
-- [x] 发布 `enterprise-supervisor-copilot@1.0.0`；
+- [x] 发布当前 `enterprise-supervisor-copilot@2.0.0`；
 - [x] 把不可变 Policy Snapshot 绑定到 Run 和根 Thread；
-- [x] 发布 Data Agent 与 Network Planning Agent 两个 Agent Definition；
+- [x] 发布 Data、Network Planning、Finance 与 Risk 四个可选 Agent Definition；
 - [x] 每个 Definition 映射到一个精确 Runtime Role 和指令摘要；
 - [x] 在根 Thread 启动前验证 Runtime Capability；
 - [x] 只对这次受治理的请求启用所需 Runtime Roles；
@@ -239,21 +239,23 @@ Policy、Definition 或 Runtime Capability 不匹配时明确失败；成功启�
 
 ### 阶段目标
 
-让一个真实企业问题通过根 Supervisor、两个真实子 Agent、企业 MCP 和持久 Artifact
-完成，并让用户在 Web 端看见这条协作链。
+让一个真实企业问题通过根 Supervisor、按证据选择的真实子 Agent、企业 MCP 和持久
+Artifact 完成，并让用户在 Web 端看见这条协作链。
 
 ### 第一条业务路径
 
-当前案例是华东仓网规划：
+当前案例是印尼配送网络决策：
 
-1. Supervisor 明确问题和交付标准；
-2. Data Agent 从只读数据 MCP 生成并验证 `planning-dataset.v1`；
-3. Network Planning Agent 读取同一个授权数据成果；
-4. 规划 Agent 调用确定性工具比较现状、杭州和无锡方案；
-5. Supervisor 使用一致口径综合事实、假设、建议、风险和缺失证据。
+1. Supervisor 明确 90% 两日达目标、决策周期、投资假设和交付标准；
+2. 缺少适用数据时，Data Agent 从 typed source catalog 生成并验证
+   `planning-dataset.v2`；
+3. Network Planning Agent 读取同一个授权数据成果，诊断现网并比较有限候选方案；
+4. 只有经济性会改变建议时才选择 Finance Agent；
+5. 只有材料性不确定性或实施风险会改变建议时才选择 Risk Agent；
+6. Supervisor 使用一致口径综合事实、假设、分析、建议、风险和缺失证据。
 
-这条路径当前采用顺序执行，不是因为平台只能串行，而是因为 Network Planning Agent
-确实依赖 Data Agent 产生的规划数据。只有输入相互独立的子任务才适合并行。
+Policy 不规定固定角色数量或顺序。Dataset 等确定性输入依赖会自然形成先后关系；
+输入已经满足的独立调查可以并行，新证据只触发最小必要的复算或追问。
 
 ### 用户可见功能
 
@@ -266,14 +268,15 @@ Policy、Definition 或 Runtime Capability 不匹配时明确失败；成功启�
 
 ### 细致目标
 
-- [x] 根 Thread 使用 Codex 原生多 Agent 工具创建两个精确角色子 Thread；
+- [x] 根 Thread 使用 Codex 原生多 Agent 工具创建 exact allowlist 中的角色子 Thread；
 - [x] 子 Agent 通过 Runtime 正式发现并调用 MCP；
-- [x] Data Agent 与 Network Planning Agent 通过同 Task Artifact 完成交接；
+- [x] Domain Agents 通过同 Task durable Artifact reference 完成交接；
 - [x] Runtime 事件投影为根/子 Thread 关系和安全活动摘要；
 - [x] 已完成节点不会被后续事件改写；
 - [x] Web 端用 Agent / Files 标签共享右侧栏，没有 Agent 时保持可用空态；
-- [x] 既有真实仓网旅程验证了顺序 spawn/wait、MCP、Artifact、刷新与重启恢复；
-- [~] 新增的每 Turn 持久任务节点已具备数据库和 Web 验证，完整真实旅程仍待复验；
+- [x] 既有回归旅程验证了 spawn/wait、MCP、Artifact、刷新与重启恢复；
+- [x] 当前 `2.0.0` 印尼语义 E2E 已通过真实 Runtime happy path；
+- [x] 每 Turn 持久任务节点已在当前真实企业旅程中完成复验；
 - [ ] 子节点尚不能直接进入它所对应的权威 Thread/Turn 历史；
 - [ ] Artifact 打开、比较和依赖关系体验仍需完善。
 
@@ -452,7 +455,7 @@ Catalog。C4 不应抢在 C3 动态协作证据之前。
 | --- | --- |
 | Supervisor 有稳定行为策略 | 代码发布 Policy、不可变快照、Run/根 Thread 绑定 |
 | 子 Agent 是真实 Runtime Agent | 精确 Runtime Role 通过 Codex 原生多 Agent 工具创建子 Thread |
-| 专业角色边界明确 | Data Agent 与 Network Planning Agent 有独立 Definition 和指令 |
+| 专业角色边界明确 | Data、Network、Finance 与 Risk Agent 有独立 Definition、指令和 Tool allowlist |
 | Agent 过程可观察 | Runtime Thread、Turn、Item 和协作事件形成安全投影 |
 | Agent 历史可持久化展示 | 根/子树投影和每 Turn 任务节点保存在 PostgreSQL，可在 Web 恢复 |
 | 成果可跨子 Thread 交接 | 同 Task Artifact、生产来源和授权读取已经进入真实案例 |
@@ -461,7 +464,7 @@ Catalog。C4 不应抢在 C3 动态协作证据之前。
 ### 10.2 仍不能提前声称的能力
 
 - 还没有完成通用 Agent Catalog 或在线 Agent Studio；
-- 当前企业真实案例验证的是有依赖的顺序执行，不是完整并行案例；
+- 当前 `2.0.0` 印尼 happy path 已取得真实 Runtime 通过记录，但不是失败恢复证明；
 - follow-up、interrupt、部分失败和深层 Agent 树仍缺真实端到端矩阵；
 - 每 Turn 任务节点的新持久投影尚待完整企业旅程复验；
 - 多用户、多 Profile 和跨组织生产隔离尚未完成；

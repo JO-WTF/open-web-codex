@@ -86,6 +86,63 @@ describe("Web workspace actions", () => {
     expect(onNewSupervisor).toHaveBeenCalledWith("ws-1", policy);
   });
 
+  it("starts only an Agent compatible with the selected Workspace", () => {
+    const onNewAgent = vi.fn();
+    const compatibleAgent = {
+      source: "user_release" as const,
+      release_id: "agent-release-1",
+      definition_id: "network-agent",
+      version: "2.0.0",
+      display_name: "Network Agent",
+      description: "Reviews the current network.",
+      responsibilities: ["Analyze service coverage"],
+      input_artifact_types: [],
+      output_artifact_types: ["NetworkAssessment"],
+      required_capabilities: ["network_planning.analyze"],
+      capability_template: null,
+      dataset_releases: [],
+      required_workspace_id: "ws-1",
+    };
+    const incompatibleAgent = {
+      ...compatibleAgent,
+      release_id: "agent-release-2",
+      definition_id: "other-agent",
+      display_name: "Other Workspace Agent",
+      required_workspace_id: "ws-2",
+    };
+    render(
+      <Workspaces
+        workspaces={[{
+          id: "ws-1",
+          name: "Demo",
+          path: "/tmp/demo",
+          connected: true,
+          settings: { sidebarCollapsed: false },
+        }]}
+        activeId="ws-1"
+        onSelect={vi.fn()}
+        onCreate={vi.fn()}
+        onConnect={vi.fn()}
+        onLoad={vi.fn()}
+        busy={false}
+        threadsByWorkspace={{ "ws-1": [] }}
+        activeThreadId={null}
+        onSelectThread={vi.fn()}
+        onNewThread={vi.fn()}
+        agents={[compatibleAgent, incompatibleAgent]}
+        onNewAgent={onNewAgent}
+        onArchiveThread={vi.fn()}
+        onRemoveWorkspace={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose agent in Demo" }));
+    expect(screen.getByRole("dialog", { name: "Start governed agent" })).toBeTruthy();
+    expect(screen.queryByText("Other Workspace Agent")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Network Agent/ }));
+    expect(onNewAgent).toHaveBeenCalledWith("ws-1", compatibleAgent);
+  });
+
   it("shows running state and confirms before archiving a thread", () => {
     const onArchiveThread = vi.fn();
     render(

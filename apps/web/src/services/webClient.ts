@@ -1,5 +1,6 @@
 import { PlatformClient } from "../../browser/client";
 import type {
+  AgentRunSelection,
   Approval,
   ArtifactSummary,
   Run,
@@ -374,15 +375,24 @@ export class CodexMonitorWebClient {
 
   async startThread(
     workspaceId: string,
-    options?: { supervisorPolicy?: SupervisorPolicySelection | null },
+    options?: {
+      supervisorPolicy?: SupervisorPolicySelection | null;
+      agent?: AgentRunSelection | null;
+    },
   ) {
+    if (options?.supervisorPolicy && options.agent) {
+      throw new Error("A Thread cannot start as both an Agent and a Supervisor.");
+    }
     const workspace = await this.platform.getWorkspace(workspaceId);
     const taskTitle = options?.supervisorPolicy
       ? `Governed Supervisor · ${options.supervisorPolicy.policy_id}@${options.supervisorPolicy.version}`
-      : "Thread";
+      : options?.agent
+        ? `Governed Agent · ${options.agent.definition_id}@${options.agent.version}`
+        : "Thread";
     const task = await this.platform.createTask(workspace.project_id, taskTitle);
     const { run } = await this.platform.startRun(task.id, workspaceId, {
       supervisorPolicy: options?.supervisorPolicy ?? null,
+      agent: options?.agent ?? null,
     });
     const ready = await this.waitForThread(workspaceId, workspace.project_id, task.id, run.id);
     return { thread: await this.threadRecord(ready.codex_thread_id as string) };
@@ -390,6 +400,10 @@ export class CodexMonitorWebClient {
 
   listSupervisorPolicies(): Promise<SupervisorPolicySummary[]> {
     return this.platform.listSupervisorPolicies();
+  }
+
+  listAgentDefinitions() {
+    return this.platform.listAgentDefinitions();
   }
 
   async getSupervisorOverview(

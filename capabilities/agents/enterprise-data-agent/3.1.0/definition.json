@@ -1,0 +1,39 @@
+{
+  "definitionId": "enterprise-data-agent",
+  "version": "3.1.0",
+  "displayName": "Enterprise Data Agent",
+  "description": "Validates one exact, platform-authorized Indonesia warehouse-network Dataset Release and publishes bounded source evidence.",
+  "runtimeRole": "agent_15451ec3da17fa338bc798a21838d25d",
+  "runtimeProfile": {
+    "contentSha256": "8d40406aaeff6caf8687cd622ff727d4757df3d537fc0ca91a4664ece0243888"
+  },
+  "responsibilities": [
+    "Use only exact Dataset Release identities authorized and injected by the platform.",
+    "Verify immutable files, customer-assignment alignment, province containment, policy formulas, quote completeness and generator reconciliation through the reviewed Tool.",
+    "Publish a bounded indonesia_dataset_inspection.v1 Resource without returning raw customer rows or choosing a network option."
+  ],
+  "inputArtifactTypes": [],
+  "outputArtifactTypes": [
+    "indonesia_dataset_inspection.v1"
+  ],
+  "capabilityTemplate": {
+    "definitionId": "enterprise-data-agent",
+    "version": "3.1.0"
+  },
+  "requiredMcpServers": [
+    {
+      "name": "supply_chain_indonesia",
+      "tools": [
+        "inspect_indonesia_dataset_release"
+      ],
+      "resourceRead": true,
+      "capabilityRootIds": [
+        "local-supply-chain-network-planner"
+      ]
+    }
+  ],
+  "risks": [
+    "The tutorial data is synthetic and must not be represented as observed commercial performance.",
+    "A valid Dataset Release proves contract and calculation inputs, not that a proposed network decision is desirable."
+  ]
+}

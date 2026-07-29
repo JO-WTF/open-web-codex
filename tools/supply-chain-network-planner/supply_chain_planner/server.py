@@ -20,17 +20,29 @@ from .core import (
     evaluate_optimized_network,
     solve_location_candidates,
 )
+from .decision_core import (
+    build_risk_register,
+)
+from .decision_core import (
+    evaluate_financial_case as calculate_financial_case,
+)
 from .models import (
     ComparisonToolResult,
     CurrentCoverageResult,
     CurrentCoverageToolResult,
+    DataAgentRef,
     DataRef,
     FacilityLocationSolution,
     FacilityLocationToolResult,
+    FinancialEvaluation,
+    FinancialEvaluationToolResult,
     NetworkInput,
     NetworkScenarioResult,
     NetworkSnapshot,
     ResourceToolResult,
+    RiskItem,
+    RiskRegister,
+    RiskRegisterToolResult,
     RouteEntry,
     RouteMatrix,
     ScenarioComparison,
@@ -51,7 +63,8 @@ mcp = FastMCP(
         "footprint. Scenario and location tools use integer, splittable planning units and an "
         "explicit end-to-end service policy. Location results are exact only over the candidate "
         "facilities contained in the snapshot. Call validate_network_resource before presenting "
-        "a decision."
+        "a decision. Financial evaluation and risk registration are separate optional evidence "
+        "steps; use them only when the business question requires those decisions."
     ),
     json_response=True,
 )
@@ -62,6 +75,7 @@ _profile_state_root = Path(
     os.environ.get("CODEX_HOME", _workspace_root / ".codex")
 ).resolve()
 _resource_store: ResourceStore | None = None
+_data_resource_store: ResourceStore | None = None
 
 
 def _store() -> ResourceStore:
@@ -78,6 +92,38 @@ def _store() -> ResourceStore:
         ).resolve()
         _resource_store = ResourceStore(resource_root)
     return _resource_store
+
+
+def _data_store() -> ResourceStore:
+    global _data_resource_store
+    if _data_resource_store is None:
+        resource_root = Path(
+            os.environ.get(
+                "SUPPLY_CHAIN_DATA_RESOURCE_DIR",
+                _profile_state_root / "mcp-state" / "supply-chain-data" / "resources",
+            )
+        ).resolve()
+        _data_resource_store = ResourceStore(
+            resource_root,
+            uri_prefix="supply-chain-data://resources/",
+        )
+    return _data_resource_store
+
+
+def _validate_evidence_ref(ref: DataRef | DataAgentRef) -> None:
+    stores = {
+        "supply_chain_data": _data_store,
+        "supply_chain_planner": _store,
+    }
+    store_factory = stores.get(ref.server)
+    if store_factory is None:
+        raise ValueError(f"unsupported evidence data_ref.server {ref.server!r}")
+    payload = store_factory().load_uri(ref.uri)
+    if payload.get("schema_version") != ref.resource_schema:
+        raise ValueError(
+            f"evidence data_ref schema {ref.resource_schema!r} does not match "
+            f"resource schema {payload.get('schema_version')!r}"
+        )
 
 
 @mcp.resource(
@@ -273,7 +319,9 @@ def evaluate_current_coverage(
     aggregate = CurrentCoverageResult(
         snapshot_id=snapshot.snapshot_id,
         route_matrix_id=matrix.route_matrix_id,
+        actual_result_resource_name=actual_published.resource_id,
         actual_result_ref=data_ref(actual_published),
+        optimized_result_resource_name=optimized_published.resource_id,
         optimized_result_ref=data_ref(optimized_published),
         actual_metrics=actual.metrics,
         optimized_metrics=optimized.metrics,
@@ -387,6 +435,7 @@ def solve_facility_location(
         selected_candidate_facility_ids=selected,
         active_facility_ids=result.active_facility_ids,
         evaluated_subset_count=evaluated,
+        result_resource_name=result_published.resource_id,
         result_ref=data_ref(result_published),
         metrics=result.metrics,
         assumptions=[
@@ -421,6 +470,76 @@ def solve_facility_location(
 
 
 @mcp.tool(structured_output=True)
+def evaluate_financial_case(
+    snapshot_ref: DataRef,
+    baseline_result_ref: DataRef,
+    candidate_result_ref: DataRef,
+    horizon_years: int = 5,
+    discount_rate: float = 0.1,
+    annual_growth_rate: float = 0.0,
+) -> Annotated[CallToolResult, FinancialEvaluationToolResult]:
+    """Evaluate investment economics for one compatible network option.
+
+    Opening investment comes from candidate facilities newly active in the candidate
+    result. Scenario total-cost differences are treated as annual operating savings.
+    The result is bounded to the supplied planning horizon and assumptions.
+    """
+    snapshot = _load_ref(snapshot_ref, NetworkSnapshot)
+    baseline = _load_ref(baseline_result_ref, NetworkScenarioResult)
+    candidate = _load_ref(candidate_result_ref, NetworkScenarioResult)
+    evaluation = calculate_financial_case(
+        snapshot,
+        baseline,
+        candidate,
+        snapshot_ref=snapshot_ref,
+        baseline_result_ref=baseline_result_ref,
+        candidate_result_ref=candidate_result_ref,
+        horizon_years=horizon_years,
+        discount_rate=discount_rate,
+        annual_growth_rate=annual_growth_rate,
+    )
+    published = _store().publish(evaluation.schema_version, evaluation)
+    summary = (
+        f"Financial case {evaluation.evaluation_id}: opening investment "
+        f"{evaluation.opening_investment} {snapshot.currency}, annual operating savings "
+        f"{evaluation.annual_operating_savings} {snapshot.currency}, "
+        f"{horizon_years}-year NPV {evaluation.net_present_value} "
+        f"{snapshot.currency}, viable={evaluation.financially_viable}."
+    )
+    structured = FinancialEvaluationToolResult(
+        **evaluation.model_dump(),
+        summary=summary,
+        resource_name=published.resource_id,
+        data_ref=data_ref(published),
+    ).model_dump(mode="json")
+    return _resource_call_result(published, summary=summary, structured=structured)
+
+
+@mcp.tool(structured_output=True)
+def publish_risk_register(
+    decision_scope: str,
+    risks: list[RiskItem],
+) -> Annotated[CallToolResult, RiskRegisterToolResult]:
+    """Validate and publish a bounded risk register backed by planning Resources."""
+    for risk in risks:
+        for evidence_ref in risk.evidence_refs:
+            _validate_evidence_ref(evidence_ref)
+    register = build_risk_register(decision_scope, risks)
+    published = _store().publish(register.schema_version, register)
+    summary = (
+        f"Published risk register {register.register_id} with {len(risks)} risks; "
+        f"{register.unresolved_risk_count} have likelihood-impact score at least 12."
+    )
+    structured = RiskRegisterToolResult(
+        **register.model_dump(),
+        summary=summary,
+        resource_name=published.resource_id,
+        data_ref=data_ref(published),
+    ).model_dump(mode="json")
+    return _resource_call_result(published, summary=summary, structured=structured)
+
+
+@mcp.tool(structured_output=True)
 def validate_network_resource(
     resource_ref: DataRef,
 ) -> ValidationResult:
@@ -437,6 +556,8 @@ def validate_network_resource(
         "current_coverage_result.v1": CurrentCoverageResult,
         "scenario_comparison.v1": ScenarioComparison,
         "facility_location_solution.v1": FacilityLocationSolution,
+        "financial_evaluation.v1": FinancialEvaluation,
+        "risk_register.v1": RiskRegister,
     }
     model_type = model_by_schema.get(schema)
     if model_type is None:
@@ -482,6 +603,16 @@ def validate_network_resource(
                 ):
                     errors.append("optimal solution does not reach its coverage target")
                 checks.append("facility-location status is consistent with target coverage")
+            if isinstance(value, FinancialEvaluation):
+                if len({ref.uri for ref in value.input_refs}) != 3:
+                    errors.append("financial evaluation must cite three distinct inputs")
+                checks.append("financial evaluation retains its snapshot and scenario lineage")
+            if isinstance(value, RiskRegister):
+                if value.unresolved_risk_count != sum(
+                    risk.likelihood * risk.impact >= 12 for risk in value.risks
+                ):
+                    errors.append("risk register unresolved count is inconsistent")
+                checks.append("risk register scores and evidence references are present")
         except ValidationError as error:
             errors.extend(
                 f"{'.'.join(str(part) for part in item['loc'])}: {item['msg']}"

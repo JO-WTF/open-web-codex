@@ -1,0 +1,39 @@
+[
+  {
+    "name": "audit_delivery_commitments",
+    "description": "Validate one exact delivery Dataset Release and calculate on-time performance.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "workspace_id": {
+          "type": "string",
+          "description": "Platform-authorized Workspace UUID."
+        },
+        "release_id": {
+          "type": "string",
+          "description": "Exact Dataset Release UUID."
+        },
+        "dataset_id": {
+          "type": "string",
+          "description": "Logical Dataset ID."
+        },
+        "version": {
+          "type": "string",
+          "description": "Immutable Dataset version."
+        },
+        "content_sha256": {
+          "type": "string",
+          "description": "Exact Dataset Release content SHA-256."
+        }
+      },
+      "required": [
+        "workspace_id",
+        "release_id",
+        "dataset_id",
+        "version",
+        "content_sha256"
+      ],
+      "additionalProperties": false
+    }
+  }
+]

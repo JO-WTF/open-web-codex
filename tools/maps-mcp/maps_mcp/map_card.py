@@ -7,8 +7,9 @@ camera defaults, and the optional hover/legend extensions.
 from __future__ import annotations
 
 import json
-from pathlib import Path
+import re
 import subprocess
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -35,9 +36,38 @@ class MapResourceRef(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["mcp_resource"] = "mcp_resource"
-    server: Literal["map_utils"]
-    uri: str = Field(pattern=r"^maps-data://geojson/[A-Za-z0-9_.-]{1,128}$")
+    server: str = Field(
+        pattern=r"^[a-z0-9](?:[a-z0-9_.-]{0,126}[a-z0-9])?$",
+        description=(
+            "Raw local MCP server ID that owns the GeoJSON Resource. Copy it "
+            "unchanged; do not use the model-visible mcp__ namespace."
+        ),
+    )
+    uri: str = Field(
+        min_length=1,
+        max_length=2048,
+        description=("Canonical non-public MCP Resource URI returned by the producing Tool."),
+    )
     format: Literal["geojson"] = "geojson"
+
+    @model_validator(mode="after")
+    def validate_local_resource_identity(self) -> MapResourceRef:
+        if self.server.startswith("mcp__"):
+            raise ValueError("data_ref.server must be the raw MCP server ID")
+        if any(
+            character.isspace() or ord(character) < 32 or ord(character) == 127
+            for character in self.uri
+        ):
+            raise ValueError("data_ref.uri contains invalid characters")
+        scheme, separator, resource = self.uri.partition("://")
+        if (
+            not separator
+            or not resource
+            or scheme in {"file", "http", "https"}
+            or re.fullmatch(r"[a-z][a-z0-9+.-]*", scheme) is None
+        ):
+            raise ValueError("data_ref.uri must be a non-public MCP Resource URI")
+        return self
 
 
 class GeoJsonSource(ExtensibleModel):
@@ -60,7 +90,7 @@ class GeoJsonSource(ExtensibleModel):
     )
     data_ref: MapResourceRef | None = Field(
         default=None,
-        description="Open Web extension: copy a map_utils data_ref unchanged.",
+        description=("Open Web extension: copy a reviewed local MCP GeoJSON data_ref unchanged."),
     )
 
     @model_validator(mode="after")
@@ -86,9 +116,7 @@ class HoverLayer(ExtensibleModel):
     def validate_content(self) -> HoverLayer:
         if self.title_property is None and not self.fields:
             raise ValueError("hover layer requires title_property or fields")
-        names = [
-            field if isinstance(field, str) else field.property for field in self.fields
-        ]
+        names = [field if isinstance(field, str) else field.property for field in self.fields]
         if any(not name.strip() for name in names):
             raise ValueError("hover field property names must not be empty")
         if len(names) != len(set(names)):
@@ -308,10 +336,7 @@ def extension_warnings(extensions: MapExtensions | None) -> list[Warning]:
 
     if extensions is not None:
         collect(extensions, "extensions")
-    return [
-        Warning(code="ignored_extra_input", path=path[:512])
-        for path in dict.fromkeys(paths)
-    ]
+    return [Warning(code="ignored_extra_input", path=path[:512]) for path in dict.fromkeys(paths)]
 
 
 def sanitized_extensions(extensions: MapExtensions | None) -> MapExtensions | None:
@@ -352,16 +377,10 @@ def validate_extension_graph(
 ) -> None:
     if extensions is None or extensions.hover is None:
         return
-    layer_by_id = {
-        layer.get("id"): layer
-        for layer in layers
-        if isinstance(layer.get("id"), str)
-    }
+    layer_by_id = {layer.get("id"): layer for layer in layers if isinstance(layer.get("id"), str)}
     for hover in extensions.hover.layers:
         layer = layer_by_id.get(hover.layer)
         if layer is None:
             raise ValueError(f"hover references unknown Mapbox layer: {hover.layer}")
         if not isinstance(layer.get("source"), str):
-            raise ValueError(
-                f"hover requires a source-backed Mapbox layer: {hover.layer}"
-            )
+            raise ValueError(f"hover requires a source-backed Mapbox layer: {hover.layer}")

@@ -1,0 +1,54 @@
+{
+  "schema_version": "indonesia_tutorial_generation_policy.v1",
+  "dataset_id": "indonesia-warehouse-network-tutorial",
+  "release_version": "1.0.0",
+  "seed": 20260729,
+  "customer_count": 240000,
+  "population_weight_exponent": 0.78,
+  "clustered_customer_share": 0.85,
+  "cluster_count_per_province": 4,
+  "distance_method": "haversine_factor",
+  "road_factor": 1.25,
+  "average_speed_kph": 45.0,
+  "driver_hours_per_day": 6.0,
+  "customer_service_clock": "forward_warehouse_to_customer",
+  "currency": "IDR",
+  "current_assignment_mix": {
+    "nearest_forward": 0.82,
+    "second_nearest_legacy": 0.13,
+    "province_contract_legacy": 0.05
+  },
+  "commercial_factors": {
+    "IDN004": 1.15,
+    "IDN010": 1.25,
+    "IDN011": 1.65,
+    "IDN012": 1.25,
+    "IDN013": 1.05,
+    "IDN015": 1.1,
+    "IDN016": 1.25,
+    "IDN017": 1.25,
+    "IDN019": 0.7,
+    "IDN023": 1.15,
+    "IDN027": 1.05,
+    "IDN031": 0.7,
+    "IDN032": 0.65,
+    "IDN033": 0.65,
+    "IDN034": 0.7,
+    "IDN037": 0.55,
+    "IDN038": 0.45
+  },
+  "zero_demand_provinces": {
+    "IDN024": "Tutorial company has no active customers in sparsely populated North Kalimantan.",
+    "IDN035": "Tutorial company has no active customers in sparsely populated West Papua.",
+    "IDN036": "Tutorial company has no active customers in sparsely populated South Papua."
+  },
+  "quality_gates": {
+    "minimum_population_customer_spearman": 0.85,
+    "minimum_quote_distance_pearson": 0.85,
+    "minimum_quote_distance_spearman": 0.85,
+    "minimum_nearest_assignment_share": 0.78,
+    "maximum_nearest_assignment_share": 0.86,
+    "required_current_boundary_pass_rate": 1.0,
+    "required_legacy_boundary_pass_rate": 1.0
+  }
+}

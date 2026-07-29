@@ -61,6 +61,12 @@ export type SupervisorPolicySelection = {
   version: string;
 };
 
+export type AgentRunSelection = {
+  definition_id: string;
+  version: string;
+  release_id: string | null;
+};
+
 export type SupervisorPolicySummary = SupervisorPolicySelection & {
   display_name: string;
   description: string;
@@ -113,6 +119,8 @@ export type AgentDefinitionSummary = {
   output_artifact_types: string[];
   required_capabilities: string[];
   capability_template: AgentCapabilityTemplateSelection | null;
+  dataset_releases: AgentDatasetReleaseBinding[];
+  required_workspace_id: string | null;
 };
 
 export type AgentDefinitionDetail = AgentDefinitionSummary & {
@@ -122,6 +130,8 @@ export type AgentDefinitionDetail = AgentDefinitionSummary & {
 };
 
 export type CapabilityPackageSummary = {
+  release_id: string | null;
+  workspace_id: string | null;
   package_id: string;
   version: string;
   display_name: string;
@@ -129,8 +139,12 @@ export type CapabilityPackageSummary = {
   capability_root_id: string;
   capabilities: string[];
   mcp_server_names: string[];
+  tool_names: string[];
+  input_artifact_types: string[];
+  output_artifact_types: string[];
   includes_skills: boolean;
-  source: "repository";
+  source: "repository" | "workspace_release";
+  content_sha256: string;
 };
 
 export type PythonCapabilityTool = {
@@ -146,6 +160,7 @@ export type PythonCapabilitySkill = {
 };
 
 export type PythonCapabilityPublishRequest = {
+  idempotency_key: string;
   slug: string;
   version: string;
   display_name: string;
@@ -154,6 +169,8 @@ export type PythonCapabilityPublishRequest = {
   python_source: string;
   tools: PythonCapabilityTool[];
   skill: PythonCapabilitySkill;
+  input_artifact_types: string[];
+  output_artifact_types: string[];
 };
 
 export type PythonCapabilityValidationIssue = {
@@ -179,17 +196,30 @@ export type PythonCapabilityToolTestResponse = {
 };
 
 export type PythonCapabilityPublishResponse = {
+  release_id: string;
   package_id: string;
   version: string;
   capability_root_id: string;
   server_name: string;
   skill_name: string;
+  content_sha256: string;
   written_files: string[];
 };
 
 export type AgentCapabilityTemplateSelection = {
+  source: "repository_agent" | "workspace_package_release";
   definition_id: string;
   version: string;
+  release_id: string | null;
+};
+
+export type AgentDatasetReleaseBinding = {
+  release_id: string;
+  workspace_id: string;
+  dataset_id: string;
+  version: string;
+  display_name: string;
+  content_sha256: string;
 };
 
 export type AgentDefinitionDraftRequest = {
@@ -202,6 +232,7 @@ export type AgentDefinitionDraftRequest = {
   input_artifact_types: string[];
   output_artifact_types: string[];
   capability_template: AgentCapabilityTemplateSelection;
+  dataset_release_ids: string[];
 };
 
 export type AgentDefinitionValidationIssue = {
@@ -476,6 +507,46 @@ export type WorkspaceStatus = {
 export type WorkspaceFileContent = {
   content: string;
   truncated: boolean;
+};
+
+export type WorkspaceDatasetUploadFile = {
+  field_id: string;
+  logical_name: string;
+  role: string;
+  media_type: string;
+};
+
+export type PublishWorkspaceDatasetRequest = {
+  idempotency_key: string;
+  dataset_id: string;
+  version: string;
+  display_name: string;
+  description: string;
+  files: WorkspaceDatasetUploadFile[];
+};
+
+export type WorkspaceDatasetReleaseFileSummary = {
+  logical_name: string;
+  role: string;
+  media_type: string;
+  byte_size: number;
+  content_sha256: string;
+};
+
+export type WorkspaceDatasetReleaseSummary = {
+  id: string;
+  workspace_id: string;
+  dataset_id: string;
+  version: string;
+  display_name: string;
+  description: string;
+  state: "publishing" | "published" | "failed";
+  content_sha256: string;
+  failure_code: string | null;
+  files: WorkspaceDatasetReleaseFileSummary[];
+  published_at: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 export type WorkspaceFileDiff = {

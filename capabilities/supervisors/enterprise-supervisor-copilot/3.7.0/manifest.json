@@ -1,0 +1,53 @@
+{
+  "schemaVersion": "supervisor-package.v1",
+  "policyId": "enterprise-supervisor-copilot",
+  "version": "3.7.0",
+  "displayName": "Enterprise Supervisor Copilot",
+  "description": "Dynamically coordinates governed evidence for Indonesian warehouse-network decisions and exact map delivery.",
+  "responsibilities": [
+    "Frame the user's decision and identify the smallest unresolved evidence gaps.",
+    "Choose only the Agent roles needed for the current question without prescribing a fixed sequence.",
+    "Enforce typed Artifact handoffs and resolve or disclose material conflicts.",
+    "Close every explicit requested output with an evidence-backed value or a genuine typed gap.",
+    "Produce a decision-focused report with exact evidence names, assumptions, limits and missing evidence."
+  ],
+  "instructionPolicy": {
+    "policyId": "platform-supervisor-behavior",
+    "version": "1.1.0"
+  },
+  "customInstructionsFile": "custom-instructions.md",
+  "artifactContractsFile": "artifact-contracts.json",
+  "agents": [
+    {
+      "definitionId": "enterprise-data-agent",
+      "version": "3.1.0",
+      "runtimeRole": "agent_15451ec3da17fa338bc798a21838d25d",
+      "spawnLimit": 1
+    },
+    {
+      "definitionId": "enterprise-network-planning-agent",
+      "version": "3.1.0",
+      "runtimeRole": "agent_0142018b1f2f53b30aa46d9e2e35d774",
+      "spawnLimit": 1
+    },
+    {
+      "definitionId": "enterprise-visualization-agent",
+      "version": "1.1.0",
+      "runtimeRole": "agent_79bee7cd1bbdee5bc152913278077848",
+      "spawnLimit": 1
+    }
+  ],
+  "runtimeRequirements": [
+    {
+      "capabilityId": "agents.multi_agent",
+      "version": "1.0.0",
+      "requiredLimits": {
+        "exactRoleAllowlist": true,
+        "exactRoleInstanceLimits": true
+      }
+    }
+  ],
+  "execution": {
+    "maxActiveChildAgents": 3
+  }
+}

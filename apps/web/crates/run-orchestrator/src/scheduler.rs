@@ -2,10 +2,12 @@ use chrono::Utc;
 use sqlx::Row;
 use uuid::Uuid;
 
+use crate::agent_run::ensure_run_agent_binding;
 use crate::supervisor_policy::ensure_run_policy_binding;
 use crate::{
-    chrono_ttl, validate_idempotency_key, CancelRunRequest, EnqueueRunRequest, RecoverRunRequest,
-    RunLease, RunOrchestrator, RunOrchestratorError, RunRecord, SupervisorPolicyLease,
+    chrono_ttl, validate_idempotency_key, AgentRunLease, CancelRunRequest, EnqueueRunRequest,
+    RecoverRunRequest, RunLease, RunOrchestrator, RunOrchestratorError, RunRecord,
+    SupervisorPolicyLease,
 };
 
 impl RunOrchestrator {
@@ -14,6 +16,11 @@ impl RunOrchestrator {
         request: EnqueueRunRequest,
     ) -> Result<RunRecord, RunOrchestratorError> {
         validate_idempotency_key(&request.idempotency_key)?;
+        if request.supervisor_policy.is_some() && request.agent.is_some() {
+            return Err(RunOrchestratorError::Invalid(
+                "a Run may select either one root Agent or one Supervisor Policy".to_string(),
+            ));
+        }
         let mut transaction = self.db.begin().await?;
         let row = sqlx::query(
             "SELECT task.project_id, profile.id AS profile_id \
@@ -43,7 +50,10 @@ impl RunOrchestrator {
         .ok_or(RunOrchestratorError::NotFound)?;
         let profile_id: Uuid = row.get("profile_id");
 
-        let inherited_snapshot_id = if let Some(fork_thread_id) = request.fork_thread_id.as_deref()
+        let (inherited_policy_snapshot_id, inherited_agent_snapshot_id) = if let Some(
+            fork_thread_id,
+        ) =
+            request.fork_thread_id.as_deref()
         {
             if fork_thread_id.trim().is_empty() || fork_thread_id.len() > 256 {
                 return Err(RunOrchestratorError::Invalid(
@@ -55,19 +65,22 @@ impl RunOrchestrator {
                     "forked Runs require their source parent Run".to_string(),
                 ));
             };
-            if request.supervisor_policy.is_some() {
+            if request.supervisor_policy.is_some() || request.agent.is_some() {
                 return Err(RunOrchestratorError::Invalid(
-                    "forked Runs inherit their source Supervisor Policy".to_string(),
+                    "forked Runs inherit their source execution policy".to_string(),
                 ));
             }
             let source = sqlx::query(
-                "SELECT binding.snapshot_id \
+                "SELECT policy_binding.snapshot_id AS policy_snapshot_id, \
+                        agent_binding.snapshot_id AS agent_snapshot_id \
                    FROM runs source \
                    JOIN workspaces workspace ON workspace.id = source.workspace_id \
                    JOIN workspace_grants workspace_grant ON workspace_grant.workspace_id = workspace.id \
                      AND workspace_grant.organization_id = workspace.organization_id \
                      AND workspace_grant.user_id = $3 AND workspace_grant.profile_id = workspace.profile_id \
-                   LEFT JOIN supervisor_policy_bindings binding ON binding.run_id = source.id \
+                   LEFT JOIN supervisor_policy_bindings policy_binding \
+                     ON policy_binding.run_id = source.id \
+                   LEFT JOIN agent_run_bindings agent_binding ON agent_binding.run_id = source.id \
                    WHERE source.id = $1 AND source.organization_id = $2 \
                      AND source.requested_by = $3 AND source.codex_thread_id = $4 \
                      AND workspace.state IN ('ready', 'retained') \
@@ -80,13 +93,20 @@ impl RunOrchestrator {
             .fetch_optional(&mut *transaction)
             .await?;
             let source = source.ok_or(RunOrchestratorError::NotFound)?;
-            source.get("snapshot_id")
+            let policy_snapshot_id: Option<Uuid> = source.get("policy_snapshot_id");
+            let agent_snapshot_id: Option<Uuid> = source.get("agent_snapshot_id");
+            if policy_snapshot_id.is_some() && agent_snapshot_id.is_some() {
+                return Err(RunOrchestratorError::Conflict(
+                    "source Run has conflicting execution policy bindings".to_string(),
+                ));
+            }
+            (policy_snapshot_id, agent_snapshot_id)
         } else if request.fork_source_run_id.is_some() {
             return Err(RunOrchestratorError::Invalid(
                 "fork source Run requires a source Thread id".to_string(),
             ));
         } else {
-            None
+            (None, None)
         };
 
         let inserted = sqlx::query(
@@ -150,7 +170,17 @@ impl RunOrchestrator {
             request.task_id,
             run.id,
             request.supervisor_policy.as_ref(),
-            inherited_snapshot_id,
+            inherited_policy_snapshot_id,
+        )
+        .await?;
+        ensure_run_agent_binding(
+            &mut transaction,
+            request.organization_id,
+            profile_id,
+            request.task_id,
+            run.id,
+            request.agent.as_ref(),
+            inherited_agent_snapshot_id,
         )
         .await?;
         transaction.commit().await?;
@@ -195,6 +225,14 @@ impl RunOrchestrator {
         .await?;
         sqlx::query(
             "UPDATE supervisor_policy_bindings \
+             SET state = 'cancelled', failure_code = 'run_cancelled', updated_at = now() \
+             WHERE run_id = $1 AND state = 'prepared'",
+        )
+        .bind(request.run_id)
+        .execute(&mut *transaction)
+        .await?;
+        sqlx::query(
+            "UPDATE agent_run_bindings \
              SET state = 'cancelled', failure_code = 'run_cancelled', updated_at = now() \
              WHERE run_id = $1 AND state = 'prepared'",
         )
@@ -335,7 +373,13 @@ impl RunOrchestrator {
                     snapshot.content_sha256 AS supervisor_policy_content_sha256, \
                     snapshot.developer_instructions AS supervisor_policy_developer_instructions, \
                     snapshot.source AS supervisor_policy_source, \
-                    snapshot.release_id AS supervisor_policy_release_id \
+                    snapshot.release_id AS supervisor_policy_release_id, \
+                    agent_binding.id AS agent_run_binding_id, \
+                    agent_snapshot.definition_id AS agent_definition_id, \
+                    agent_snapshot.version AS agent_version, \
+                    agent_snapshot.content_sha256 AS agent_content_sha256, \
+                    agent_snapshot.source AS agent_source, \
+                    agent_snapshot.release_id AS agent_release_id \
              FROM runs run \
              JOIN tasks task ON task.id = run.task_id \
                AND task.organization_id = run.organization_id \
@@ -352,9 +396,14 @@ impl RunOrchestrator {
                AND workspace_grant.role IN ('owner', 'write') \
              LEFT JOIN supervisor_policy_bindings binding ON binding.run_id = run.id \
              LEFT JOIN supervisor_policy_snapshots snapshot ON snapshot.id = binding.snapshot_id \
+             LEFT JOIN agent_run_bindings agent_binding ON agent_binding.run_id = run.id \
+             LEFT JOIN agent_run_snapshots agent_snapshot \
+               ON agent_snapshot.id = agent_binding.snapshot_id \
+              AND agent_snapshot.organization_id = agent_binding.organization_id \
              WHERE run.status = 'pending' \
                AND (run.lease_expires_at IS NULL OR run.lease_expires_at < now()) \
                AND (binding.id IS NULL OR binding.state = 'prepared') \
+               AND (agent_binding.id IS NULL OR agent_binding.state = 'prepared') \
              ORDER BY run.created_at, run.id \
              FOR UPDATE OF run SKIP LOCKED LIMIT 1",
         )
@@ -366,6 +415,12 @@ impl RunOrchestrator {
             return Ok(None);
         };
         let supervisor_policy = supervisor_policy_lease(&candidate)?;
+        let agent = agent_run_lease(&candidate)?;
+        if supervisor_policy.is_some() && agent.is_some() {
+            return Err(RunOrchestratorError::Conflict(
+                "Run has conflicting root execution bindings".to_string(),
+            ));
+        }
         let run_id: Uuid = candidate.get("id");
         let token = Uuid::now_v7().to_string();
         let expires_at = Utc::now() + chrono_ttl(self.lease_ttl)?;
@@ -392,6 +447,7 @@ impl RunOrchestrator {
             fork_thread_id: candidate.get("fork_thread_id"),
             fork_source_run_id: candidate.get("fork_source_run_id"),
             supervisor_policy,
+            agent,
             token,
         }))
     }
@@ -483,6 +539,46 @@ fn supervisor_policy_lease(
         }
         _ => Err(RunOrchestratorError::Conflict(
             "Supervisor Policy binding is missing immutable snapshot fields".to_string(),
+        )),
+    }
+}
+
+fn agent_run_lease(
+    candidate: &sqlx::postgres::PgRow,
+) -> Result<Option<AgentRunLease>, RunOrchestratorError> {
+    match (
+        candidate.get::<Option<Uuid>, _>("agent_run_binding_id"),
+        candidate.get::<Option<String>, _>("agent_definition_id"),
+        candidate.get::<Option<String>, _>("agent_version"),
+        candidate.get::<Option<String>, _>("agent_content_sha256"),
+        candidate.get::<Option<String>, _>("agent_source"),
+        candidate.get::<Option<Uuid>, _>("agent_release_id"),
+    ) {
+        (None, None, None, None, None, None) => Ok(None),
+        (
+            Some(binding_id),
+            Some(definition_id),
+            Some(version),
+            Some(content_sha256),
+            Some(source),
+            release_id,
+        ) => {
+            let source = source.parse().map_err(|_| {
+                RunOrchestratorError::Conflict(
+                    "root Agent binding has an invalid snapshot source".to_string(),
+                )
+            })?;
+            Ok(Some(AgentRunLease {
+                binding_id,
+                definition_id,
+                version,
+                content_sha256,
+                source,
+                release_id,
+            }))
+        }
+        _ => Err(RunOrchestratorError::Conflict(
+            "root Agent binding is missing immutable snapshot fields".to_string(),
         )),
     }
 }

@@ -5,11 +5,12 @@ use axum::{
 };
 use open_web_codex_platform_contracts::error::PlatformError;
 use open_web_codex_platform_contracts::{
-    AgentDefinitionDraftRequest, AgentDefinitionReleaseSummary, AgentDefinitionResourceSummary,
-    AgentDefinitionValidationIssue, AgentDefinitionValidationResult,
+    AgentCapabilityTemplateSource, AgentDatasetReleaseBinding, AgentDefinitionDraftRequest,
+    AgentDefinitionReleaseSummary, AgentDefinitionResourceSummary, AgentDefinitionValidationIssue,
+    AgentDefinitionValidationResult,
 };
 use open_web_codex_platform_store::AppState;
-use open_web_codex_supervisor_catalog::agent::{self, AgentReleaseSpec};
+use open_web_codex_supervisor_catalog::agent::{self, AgentReleaseSpec, ResolvedAgentDefinition};
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -40,6 +41,7 @@ pub async fn create(
     Json(draft): Json<AgentDefinitionDraftRequest>,
 ) -> ApiResult<AgentDefinitionResourceSummary> {
     validate_draft_storage_shape(&draft)?;
+    resolve_authorized_dependencies(&state.db, &auth, &draft).await?;
     if agent_catalog::is_reserved_builtin_definition_id(&draft.definition_id) {
         return Err(bad_request(
             "The definition id is reserved by a built-in Agent Definition",
@@ -97,6 +99,7 @@ pub async fn save_draft(
     Json(draft): Json<AgentDefinitionDraftRequest>,
 ) -> ApiResult<AgentDefinitionResourceSummary> {
     validate_draft_storage_shape(&draft)?;
+    resolve_authorized_dependencies(&state.db, &auth, &draft).await?;
     let draft_spec = serde_json::to_value(&draft).map_err(|_| internal_error())?;
     let mut transaction = state.db.begin().await.map_err(database_error)?;
     let definition = lock_definition(&mut transaction, auth.organization_id, definition_id).await?;
@@ -175,7 +178,12 @@ pub async fn validate(
     let row = load_draft_row(&state.db, auth.organization_id, definition_id).await?;
     require_manage(&auth, row.get("owner_user_id"))?;
     let draft = parse_draft(row.get("draft_spec"))?;
-    Ok(Json(validate_draft(&draft)))
+    let dependencies = resolve_authorized_dependencies(&state.db, &auth, &draft).await?;
+    Ok(Json(validate_draft(
+        &draft,
+        &dependencies.template,
+        dependencies.dataset_releases,
+    )))
 }
 
 pub async fn publish(
@@ -204,13 +212,16 @@ pub async fn publish(
     if row.get::<String, _>("catalog_id") != draft.definition_id {
         return Err(internal_error());
     }
-    let spec = release_spec_from_draft(&draft);
+    let dependencies = resolve_authorized_dependencies(&state.db, &auth, &draft).await?;
+    let template = dependencies.template;
+    let spec = release_spec_from_draft(&draft, dependencies.dataset_releases);
     let runtime_role = agent::user_runtime_role_name(&draft.definition_id, &draft.version)
         .map_err(catalog_error)?;
-    let resolved = agent::validate_user_release(spec.clone()).map_err(catalog_error)?;
+    let resolved = agent::compile_agent_release_against_template(spec.clone(), &template)
+        .map_err(catalog_error)?;
     let release_id = Uuid::now_v7();
     let revision_id: Uuid = row.get("revision_id");
-    let release_spec = serde_json::to_value(spec).map_err(|_| internal_error())?;
+    let release_spec = serde_json::to_value(&spec).map_err(|_| internal_error())?;
     let published_at = chrono::Utc::now();
     sqlx::query(
         "INSERT INTO agent_definition_releases \
@@ -234,6 +245,49 @@ pub async fn publish(
     .execute(&mut *transaction)
     .await
     .map_err(database_conflict)?;
+    if spec.capability_template.source == AgentCapabilityTemplateSource::WorkspacePackageRelease {
+        let package_release_id = spec
+            .capability_template
+            .release_id
+            .ok_or_else(internal_error)?;
+        let workspace_id = template
+            .capability_workspace_id
+            .ok_or_else(internal_error)?;
+        sqlx::query(
+            "INSERT INTO agent_release_capability_package_dependencies \
+             (organization_id, agent_release_id, package_release_id, workspace_id, package_id, \
+              package_version, package_content_sha256) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(auth.organization_id)
+        .bind(release_id)
+        .bind(package_release_id)
+        .bind(workspace_id)
+        .bind(&spec.capability_template.definition_id)
+        .bind(&spec.capability_template.version)
+        .bind(&template.capability_template_sha256)
+        .execute(&mut *transaction)
+        .await
+        .map_err(database_conflict)?;
+    }
+    for dataset in &spec.dataset_releases {
+        sqlx::query(
+            "INSERT INTO agent_release_dataset_dependencies \
+             (organization_id, agent_release_id, dataset_release_id, workspace_id, dataset_id, \
+              dataset_version, dataset_content_sha256) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(auth.organization_id)
+        .bind(release_id)
+        .bind(dataset.release_id)
+        .bind(dataset.workspace_id)
+        .bind(&dataset.dataset_id)
+        .bind(&dataset.version)
+        .bind(&dataset.content_sha256)
+        .execute(&mut *transaction)
+        .await
+        .map_err(database_conflict)?;
+    }
     sqlx::query(
         "UPDATE agent_definition_revisions \
          SET state = 'published', published_at = $1, updated_at = $1 \
@@ -274,8 +328,15 @@ pub async fn publish(
     }))
 }
 
-fn validate_draft(draft: &AgentDefinitionDraftRequest) -> AgentDefinitionValidationResult {
-    let result = agent::validate_user_release(release_spec_from_draft(draft));
+fn validate_draft(
+    draft: &AgentDefinitionDraftRequest,
+    template: &ResolvedAgentDefinition,
+    dataset_releases: Vec<AgentDatasetReleaseBinding>,
+) -> AgentDefinitionValidationResult {
+    let result = agent::compile_agent_release_against_template(
+        release_spec_from_draft(draft, dataset_releases),
+        template,
+    );
     match result {
         Ok(resolved) => AgentDefinitionValidationResult {
             valid: true,
@@ -295,7 +356,139 @@ fn validate_draft(draft: &AgentDefinitionDraftRequest) -> AgentDefinitionValidat
     }
 }
 
-fn release_spec_from_draft(draft: &AgentDefinitionDraftRequest) -> AgentReleaseSpec {
+struct ResolvedDraftDependencies {
+    template: ResolvedAgentDefinition,
+    dataset_releases: Vec<AgentDatasetReleaseBinding>,
+}
+
+async fn resolve_authorized_dependencies(
+    db: &sqlx::PgPool,
+    auth: &AuthenticatedUser,
+    draft: &AgentDefinitionDraftRequest,
+) -> Result<ResolvedDraftDependencies, ApiError> {
+    let template = resolve_authorized_capability_template(db, auth, draft).await?;
+    let dataset_releases =
+        resolve_authorized_dataset_releases(db, auth, &draft.dataset_release_ids).await?;
+    let mut required_workspace_id = template.capability_workspace_id;
+    for release in &dataset_releases {
+        if required_workspace_id.is_some_and(|workspace_id| workspace_id != release.workspace_id) {
+            return Err(bad_request(
+                "An Agent's capability package and Dataset Releases must belong to one Workspace",
+            ));
+        }
+        required_workspace_id = Some(release.workspace_id);
+    }
+    Ok(ResolvedDraftDependencies {
+        template,
+        dataset_releases,
+    })
+}
+
+async fn resolve_authorized_capability_template(
+    db: &sqlx::PgPool,
+    auth: &AuthenticatedUser,
+    draft: &AgentDefinitionDraftRequest,
+) -> Result<ResolvedAgentDefinition, ApiError> {
+    let template = agent_catalog::resolve_capability_template(
+        db,
+        auth.organization_id,
+        &draft.capability_template,
+    )
+    .await
+    .map_err(capability_template_error)?;
+    if let Some(workspace_id) = template.capability_workspace_id {
+        if !matches!(auth.organization_role.as_str(), "owner" | "admin") {
+            let authorized = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS ( \
+                     SELECT 1 FROM workspace_grants \
+                     WHERE organization_id = $1 AND workspace_id = $2 AND user_id = $3 \
+                 )",
+            )
+            .bind(auth.organization_id)
+            .bind(workspace_id)
+            .bind(auth.user_id)
+            .fetch_one(db)
+            .await
+            .map_err(database_error)?;
+            if !authorized {
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    Json(PlatformError::forbidden(
+                        "The selected capability package belongs to an unauthorized Workspace",
+                    )),
+                ));
+            }
+        }
+    }
+    Ok(template)
+}
+
+async fn resolve_authorized_dataset_releases(
+    db: &sqlx::PgPool,
+    auth: &AuthenticatedUser,
+    release_ids: &[Uuid],
+) -> Result<Vec<AgentDatasetReleaseBinding>, ApiError> {
+    if release_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let is_admin = matches!(auth.organization_role.as_str(), "owner" | "admin");
+    let rows = sqlx::query(
+        "SELECT release.id, release.workspace_id, release.dataset_id, release.version, \
+                release.display_name, release.content_sha256 \
+         FROM workspace_dataset_releases release \
+         WHERE release.organization_id = $1 AND release.state = 'published' \
+           AND release.id = ANY($2) \
+           AND ($4 OR EXISTS ( \
+               SELECT 1 FROM workspace_grants workspace_grant \
+               WHERE workspace_grant.organization_id = release.organization_id \
+                 AND workspace_grant.workspace_id = release.workspace_id \
+                 AND workspace_grant.user_id = $3 \
+           ))",
+    )
+    .bind(auth.organization_id)
+    .bind(release_ids)
+    .bind(auth.user_id)
+    .bind(is_admin)
+    .fetch_all(db)
+    .await
+    .map_err(database_error)?;
+    let by_id = rows
+        .into_iter()
+        .map(|row| {
+            let binding = AgentDatasetReleaseBinding {
+                release_id: row.get("id"),
+                workspace_id: row.get("workspace_id"),
+                dataset_id: row.get("dataset_id"),
+                version: row.get("version"),
+                display_name: row.get("display_name"),
+                content_sha256: row.get("content_sha256"),
+            };
+            (binding.release_id, binding)
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    if by_id.len() != release_ids.len() {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(PlatformError::bad_request(
+                "One or more selected Dataset Releases are unavailable",
+            )),
+        ));
+    }
+    release_ids
+        .iter()
+        .map(|release_id| {
+            by_id
+                .get(release_id)
+                .cloned()
+                .ok_or_else(|| internal_error())
+        })
+        .collect()
+}
+
+fn release_spec_from_draft(
+    draft: &AgentDefinitionDraftRequest,
+    dataset_releases: Vec<AgentDatasetReleaseBinding>,
+) -> AgentReleaseSpec {
     AgentReleaseSpec {
         definition_id: draft.definition_id.clone(),
         version: draft.version.clone(),
@@ -306,6 +499,7 @@ fn release_spec_from_draft(draft: &AgentDefinitionDraftRequest) -> AgentReleaseS
         input_artifact_types: draft.input_artifact_types.clone(),
         output_artifact_types: draft.output_artifact_types.clone(),
         capability_template: draft.capability_template.clone(),
+        dataset_releases,
     }
 }
 
@@ -352,6 +546,7 @@ fn validate_draft_storage_shape(draft: &AgentDefinitionDraftRequest) -> Result<(
             .any(|value| value.trim().is_empty() || value.len() > 512)
         || draft.input_artifact_types.len() > 32
         || draft.output_artifact_types.len() > 32
+        || draft.dataset_release_ids.len() > 16
         || draft
             .input_artifact_types
             .iter()
@@ -359,6 +554,17 @@ fn validate_draft_storage_shape(draft: &AgentDefinitionDraftRequest) -> Result<(
             .any(|value| !valid_artifact(value))
         || !safe_identifier(&draft.capability_template.definition_id, false, 96)
         || !safe_identifier(&draft.capability_template.version, true, 64)
+        || matches!(
+            draft.capability_template.source,
+            AgentCapabilityTemplateSource::RepositoryAgent
+        ) != draft.capability_template.release_id.is_none()
+        || {
+            let mut release_ids = std::collections::HashSet::new();
+            draft
+                .dataset_release_ids
+                .iter()
+                .any(|release_id| !release_ids.insert(*release_id))
+        }
     {
         return Err(bad_request("Agent Definition draft fields are invalid"));
     }
@@ -393,6 +599,26 @@ fn catalog_error(_error: agent::AgentCatalogError) -> ApiError {
             "Agent Definition does not match a published capability template",
         )),
     )
+}
+
+fn capability_template_error(error: agent_catalog::AgentCatalogError) -> ApiError {
+    match error {
+        agent_catalog::AgentCatalogError::Database => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PlatformError::internal(
+                "Agent capability package lookup failed",
+            )),
+        ),
+        agent_catalog::AgentCatalogError::NotFound => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(PlatformError::bad_request(
+                "The selected capability package release was not found",
+            )),
+        ),
+        agent_catalog::AgentCatalogError::Invalid => {
+            catalog_error(agent::AgentCatalogError::Invalid)
+        }
+    }
 }
 
 fn bad_request(message: &str) -> ApiError {

@@ -26,6 +26,10 @@ vi.mock("@/features/settings/hooks/useSettingsAgentCatalogSection", () => ({
     definitions: [],
     publishedAgents: [],
     templates: [],
+    capabilityPackages: [],
+    datasetReleases: [],
+    workspaceNames: {},
+    isLoadingDatasets: false,
     isLoading: false,
     actionDefinitionId: null,
     loadingAgentKey: null,
@@ -37,6 +41,7 @@ vi.mock("@/features/settings/hooks/useSettingsAgentCatalogSection", () => ({
     onValidate: vi.fn(),
     onPublish: vi.fn(),
     onLoadPublished: vi.fn(),
+    onLoadDatasetReleases: vi.fn(),
   }),
 }));
 

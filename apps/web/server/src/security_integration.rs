@@ -375,24 +375,100 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     .unwrap();
     sqlx::query(
         "INSERT INTO artifact_provenance (
-            artifact_id, organization_id, producer_run_id, producer_thread_id,
-            producer_turn_id, producer_item_id
+            artifact_id, organization_id, producer_task_id, producer_run_id,
+            producer_thread_id, producer_turn_id, producer_item_id
          ) VALUES (
-            $1, $2, $3, 'approval-thread', 'turn-map', 'item-data'
+            $1, $2, $3, $4, 'approval-thread', 'turn-map', 'item-data'
          )",
     )
     .bind(artifact_id)
     .bind(first_organization_id)
+    .bind(first_task_id)
     .bind(first_run_id)
     .execute(&pool)
     .await
     .unwrap();
+    sqlx::query(
+        "INSERT INTO artifact_task_grants (
+            artifact_id, organization_id, task_id, permission
+         ) VALUES ($1, $2, $3, 'read')",
+    )
+    .bind(artifact_id)
+    .bind(first_organization_id)
+    .bind(completed_followup_task_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO artifact_provenance (
+            artifact_id, organization_id, producer_task_id, producer_run_id,
+            producer_thread_id, producer_turn_id, producer_item_id
+         ) VALUES (
+            $1, $2, $3, $4, 'completed-followup-thread',
+            'completed-followup-turn', 'completed-followup-item'
+         )",
+    )
+    .bind(artifact_id)
+    .bind(first_organization_id)
+    .bind(completed_followup_task_id)
+    .bind(completed_followup_run_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let first_task_artifacts = call(
+        &app,
+        authenticated(
+            "GET",
+            &format!("/api/tasks/{first_task_id}/artifacts"),
+            &first_token,
+        ),
+    )
+    .await;
+    assert_eq!(first_task_artifacts.0, StatusCode::OK);
+    assert_eq!(
+        first_task_artifacts.1[0]["producer_run_id"],
+        first_run_id.to_string()
+    );
+    let reused_task_artifacts = call(
+        &app,
+        authenticated(
+            "GET",
+            &format!("/api/tasks/{completed_followup_task_id}/artifacts"),
+            &first_token,
+        ),
+    )
+    .await;
+    assert_eq!(reused_task_artifacts.0, StatusCode::OK);
+    assert_eq!(
+        reused_task_artifacts.1[0]["producer_run_id"],
+        completed_followup_run_id.to_string()
+    );
+    let artifact_detail = call(
+        &app,
+        authenticated(
+            "GET",
+            &format!("/api/artifacts/{artifact_id}"),
+            &first_token,
+        ),
+    )
+    .await;
+    assert_eq!(artifact_detail.0, StatusCode::OK);
+    assert_eq!(
+        artifact_detail.1["task_id"],
+        completed_followup_task_id.to_string()
+    );
+    assert_eq!(
+        artifact_detail.1["producer_run_id"],
+        completed_followup_run_id.to_string()
+    );
+    assert!(artifact_detail.1.get("source_server").is_none());
+    assert!(artifact_detail.1.get("source_uri").is_none());
 
     sqlx::query(
         "INSERT INTO run_events (
             run_id, event_type, projection_version, thread_id, turn_id, item_id, payload
          ) VALUES (
-            $1, 'codex.item.completed', 1, 'approval-thread',
+            $1, 'codex.item.completed', 1, 'visualization-child-thread',
             'turn-map-producer', 'item-inline-map', '{}'::jsonb
          )",
     )
@@ -405,7 +481,7 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
             organization_id, run_id, thread_id, producer_turn_id, producer_item_id,
             artifact_ref, renderer_kind, renderer_payload
          ) VALUES (
-            $1, $2, 'approval-thread', 'turn-map-producer', 'item-inline-map',
+            $1, $2, 'visualization-child-thread', 'turn-map-producer', 'item-inline-map',
             'map-cross-turn', 'map.v3', $3
          )",
     )

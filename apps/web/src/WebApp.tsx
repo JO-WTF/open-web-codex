@@ -4,7 +4,10 @@ import {
   CodexMonitorWebClient,
   type SupervisorOverviewData,
 } from "./services/webClient";
-import type { SupervisorPolicySummary } from "../browser/types";
+import type {
+  AgentDefinitionSummary,
+  SupervisorPolicySummary,
+} from "../browser/types";
 import Layout from "./components/Layout";
 import Sidebar from "./components/Sidebar";
 import Conversation from "./components/Conversation";
@@ -93,6 +96,7 @@ type ThreadInfo = {
   creationStatus?: "creating" | "failed";
   creationError?: string;
   supervisorPolicy?: SupervisorPolicySummary;
+  agent?: AgentDefinitionSummary;
 };
 
 type ThreadTranscriptCacheEntry = {
@@ -272,6 +276,9 @@ export default function WebApp() {
   const [supervisorPoliciesLoading, setSupervisorPoliciesLoading] = useState(true);
   const [supervisorPoliciesError, setSupervisorPoliciesError] = useState<string | null>(null);
   const [supervisorPoliciesRevision, setSupervisorPoliciesRevision] = useState(0);
+  const [agentDefinitions, setAgentDefinitions] = useState<AgentDefinitionSummary[]>([]);
+  const [agentDefinitionsLoading, setAgentDefinitionsLoading] = useState(true);
+  const [agentDefinitionsError, setAgentDefinitionsError] = useState<string | null>(null);
   const [rateLimits, setRateLimits] = useState<Record<string, unknown> | null>(null);
   const [goal, setGoal] = useState<GoalInfo | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() =>
@@ -343,6 +350,24 @@ export default function WebApp() {
       setSupervisorPoliciesError(error instanceof Error ? error.message : String(error));
     }).finally(() => {
       if (!cancelled) setSupervisorPoliciesLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, supervisorPoliciesRevision]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setAgentDefinitionsLoading(true);
+    setAgentDefinitionsError(null);
+    void client.listAgentDefinitions().then((definitions) => {
+      if (!cancelled) setAgentDefinitions(definitions);
+    }).catch((error) => {
+      if (cancelled) return;
+      setAgentDefinitions([]);
+      setAgentDefinitionsError(error instanceof Error ? error.message : String(error));
+    }).finally(() => {
+      if (!cancelled) setAgentDefinitionsLoading(false);
     });
     return () => {
       cancelled = true;
@@ -1879,9 +1904,13 @@ export default function WebApp() {
    workspaceId?: string,
    retryTemporaryId?: string,
    supervisorPolicy?: SupervisorPolicySummary,
+   agent?: AgentDefinitionSummary,
  ): Promise<string | null> => {
    const wid = workspaceId ?? activeWorkspaceId;
    if (!wid) return null;
+   if (supervisorPolicy && agent) {
+     throw new Error("A Thread cannot start as both an Agent and a Supervisor.");
+   }
    const temporaryId = retryTemporaryId ?? `pending-thread:${newLogId()}`;
    const startedAt = Date.now();
    setActiveWorkspaceId(wid);
@@ -1902,7 +1931,9 @@ export default function WebApp() {
        id: temporaryId,
        label: supervisorPolicy
          ? `${supervisorPolicy.display_name} · ${supervisorPolicy.version}`
-         : "Thread",
+         : agent
+           ? `${agent.display_name} · ${agent.version}`
+           : "Thread",
        updatedAt: startedAt,
        modelProvider: currentProviderId,
        model: providerModels.find((model) => model.id === selectedProviderModelId)?.model
@@ -1911,6 +1942,7 @@ export default function WebApp() {
        optimistic: true,
        creationStatus: "creating",
        supervisorPolicy,
+       agent,
      };
      return {
        ...previous,
@@ -1921,14 +1953,21 @@ export default function WebApp() {
    });
    try {
      await client.connectWorkspace(wid);
-     const result = supervisorPolicy
-       ? await client.startThread(wid, {
-           supervisorPolicy: {
+     const result = await client.startThread(wid, {
+       supervisorPolicy: supervisorPolicy
+         ? {
              policy_id: supervisorPolicy.policy_id,
              version: supervisorPolicy.version,
-           },
-         })
-       : await client.startThread(wid);
+           }
+         : null,
+       agent: agent
+         ? {
+             definition_id: agent.definition_id,
+             version: agent.version,
+             release_id: agent.release_id,
+           }
+         : null,
+     });
      // Handle Codex CLI JSON-RPC error embedded in result
      if (result && typeof result === "object" && "error" in result) {
        const err = (result as Record<string,unknown>).error as Record<string,unknown> | undefined;
@@ -1955,7 +1994,9 @@ export default function WebApp() {
      const createdName = extractThreadName(resultRecord)
        ?? (supervisorPolicy
          ? `${supervisorPolicy.display_name} · ${supervisorPolicy.version}`
-         : "Thread");
+         : agent
+           ? `${agent.display_name} · ${agent.version}`
+           : "Thread");
      setThreadsByWorkspace((previous) => {
        const existing = previous[wid] ?? [];
        const replaced = existing.map((thread) => thread.id === temporaryId
@@ -2448,8 +2489,9 @@ export default function WebApp() {
     if (!activeWorkspaceId || activeThread?.creationStatus !== "failed") return;
     void startThread(
       activeWorkspaceId,
-      activeThread.id,
-      activeThread.supervisorPolicy,
+     activeThread.id,
+     activeThread.supervisorPolicy,
+     activeThread.agent,
     );
   };
 
@@ -2523,6 +2565,12 @@ export default function WebApp() {
           supervisorPoliciesError={supervisorPoliciesError}
           onNewSupervisor={(workspaceId, policy) => {
             void startThread(workspaceId, undefined, policy);
+          }}
+          agents={agentDefinitions}
+          agentsLoading={agentDefinitionsLoading}
+          agentsError={agentDefinitionsError}
+          onNewAgent={(workspaceId, agent) => {
+            void startThread(workspaceId, undefined, undefined, agent);
           }}
           onArchiveThread={archiveThread}
           onRemoveWorkspace={removeWorkspace}

@@ -15,6 +15,7 @@ ADR 记录已经接受、会长期约束实现且不能仅从当前代码推断�
 | [ADR-004](004-codex-adapter-pattern.md) | Codex Adapter 抽象 |
 | [ADR-005](005-map-reply-cards.md) | Inline Visualization Artifact 与回复引用 |
 | [ADR-006](006-supervisor-capability-packages.md) | Supervisor Capability Package |
+| [ADR-007](007-workspace-dataset-releases.md) | Workspace Dataset Release |
 
 ## 何时创建 ADR
 

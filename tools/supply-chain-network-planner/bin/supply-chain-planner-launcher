@@ -13,6 +13,9 @@ server_module="supply_chain_planner.server"
 if [[ "${1:-}" == "--data-server" ]]; then
   server_module="supply_chain_planner.data_server"
   shift
+elif [[ "${1:-}" == "--indonesia-server" ]]; then
+  server_module="supply_chain_planner.indonesia_server"
+  shift
 fi
 
 mkdir -p "$log_dir"
@@ -38,7 +41,7 @@ fi
 
 export PYTHONPATH="$root_dir${PYTHONPATH:+:$PYTHONPATH}"
 
-if ! "$python_bin" -c 'import mcp, pydantic, supply_chain_planner.server, supply_chain_planner.data_server' >/dev/null 2>&1; then
+if ! "$python_bin" -c 'import mcp, pydantic, supply_chain_planner.server, supply_chain_planner.data_server, supply_chain_planner.indonesia_server' >/dev/null 2>&1; then
   if [[ "${SUPPLY_CHAIN_MCP_AUTO_INSTALL:-0}" != "1" ]]; then
     cat >&2 <<EOF
 supply-chain-network-planner: dependencies are not installed in $venv_dir

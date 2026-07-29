@@ -1,13 +1,17 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import Archive from "lucide-react/dist/esm/icons/archive";
+import Bot from "lucide-react/dist/esm/icons/bot";
 import ChevronRight from "lucide-react/dist/esm/icons/chevron-right";
 import Folder from "lucide-react/dist/esm/icons/folder";
 import LoaderCircle from "lucide-react/dist/esm/icons/loader-circle";
 import MessageSquare from "lucide-react/dist/esm/icons/message-square";
 import Sparkles from "lucide-react/dist/esm/icons/sparkles";
 import Trash2 from "lucide-react/dist/esm/icons/trash-2";
-import type { SupervisorPolicySummary } from "../../../browser/types";
+import type {
+  AgentDefinitionSummary,
+  SupervisorPolicySummary,
+} from "../../../browser/types";
 import type { WorkspaceInfo } from "../../types";
 
 type ThreadInfo = {
@@ -35,6 +39,10 @@ type Props = {
   supervisorPoliciesLoading?: boolean;
   supervisorPoliciesError?: string | null;
   onNewSupervisor?: (workspaceId: string, policy: SupervisorPolicySummary) => void;
+  agents?: AgentDefinitionSummary[];
+  agentsLoading?: boolean;
+  agentsError?: string | null;
+  onNewAgent?: (workspaceId: string, agent: AgentDefinitionSummary) => void;
   onArchiveThread: (workspaceId: string, threadId: string) => void;
   onRemoveWorkspace: (workspaceId: string) => void;
 };
@@ -54,6 +62,10 @@ export default function Workspaces({
   supervisorPoliciesLoading = false,
   supervisorPoliciesError = null,
   onNewSupervisor,
+  agents = [],
+  agentsLoading = false,
+  agentsError = null,
+  onNewAgent,
   onArchiveThread,
   onRemoveWorkspace,
 }: Props) {
@@ -68,17 +80,22 @@ export default function Workspaces({
     workspaceId: string;
     workspaceName: string;
   } | null>(null);
+  const [pendingAgent, setPendingAgent] = useState<{
+    workspaceId: string;
+    workspaceName: string;
+  } | null>(null);
 
   useEffect(() => {
-    if (!pendingArchive && !pendingSupervisor) return;
+    if (!pendingArchive && !pendingSupervisor && !pendingAgent) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       setPendingArchive(null);
       setPendingSupervisor(null);
+      setPendingAgent(null);
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [pendingArchive, pendingSupervisor]);
+  }, [pendingAgent, pendingArchive, pendingSupervisor]);
 
   const toggleExpand = (wsId: string) => {
     setExpandedId(prev => (prev === wsId ? null : wsId));
@@ -92,6 +109,12 @@ export default function Workspaces({
     const name = createName.trim();
     if (name) { onCreate(name); setCreateName(""); }
   };
+
+  const compatibleAgents = pendingAgent
+    ? agents.filter((agent) =>
+        agent.required_workspace_id === null
+        || agent.required_workspace_id === pendingAgent.workspaceId)
+    : [];
 
   return (
     <div className="web-ws-section">
@@ -153,6 +176,25 @@ export default function Workspaces({
                 {threads.length > 0 && (
                   <span className="web-ws-thread-count">{threads.length}</span>
                 )}
+                {onNewAgent ? (
+                  <button
+                    type="button"
+                    className="web-ws-row-action web-ws-new-agent-btn"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setExpandedId(ws.id);
+                      setPendingAgent({
+                        workspaceId: ws.id,
+                        workspaceName: ws.name,
+                      });
+                    }}
+                    disabled={busy}
+                    aria-label={`Choose agent in ${ws.name}`}
+                    title="Start governed agent"
+                  >
+                    <Bot size={13} aria-hidden="true" />
+                  </button>
+                ) : null}
                 {onNewSupervisor ? (
                   <button
                     type="button"
@@ -255,6 +297,77 @@ export default function Workspaces({
           );
         })}
       </div>
+      {pendingAgent && createPortal(
+        <div
+          className="web-settings-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setPendingAgent(null);
+          }}
+        >
+          <section
+            className="web-supervisor-policy-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="web-agent-run-title"
+            aria-describedby="web-agent-run-description"
+          >
+            <div className="web-supervisor-policy-heading">
+              <div className="web-supervisor-policy-icon">
+                <Bot size={18} aria-hidden="true" />
+              </div>
+              <div>
+                <h2 id="web-agent-run-title">Start governed agent</h2>
+                <p id="web-agent-run-description">
+                  Choose a published Agent compatible with {pendingAgent.workspaceName}.
+                </p>
+              </div>
+            </div>
+            <div className="web-supervisor-policy-list">
+              {agentsLoading ? (
+                <div className="web-supervisor-policy-empty" role="status">
+                  Loading published Agents...
+                </div>
+              ) : agentsError ? (
+                <div className="web-supervisor-policy-empty" role="alert">
+                  Agent catalog is unavailable.
+                </div>
+              ) : compatibleAgents.length === 0 ? (
+                <div className="web-supervisor-policy-empty">
+                  No published Agents are compatible with this Workspace.
+                </div>
+              ) : compatibleAgents.map((agent) => (
+                <button
+                  type="button"
+                  className="web-supervisor-policy-option"
+                  key={agent.release_id
+                    ?? `repository:${agent.definition_id}@${agent.version}`}
+                  disabled={busy}
+                  onClick={() => {
+                    onNewAgent?.(pendingAgent.workspaceId, agent);
+                    setPendingAgent(null);
+                  }}
+                >
+                  <span className="web-supervisor-policy-option-title">
+                    {agent.display_name}
+                  </span>
+                  <span className="web-supervisor-policy-option-version">
+                    {agent.version}
+                  </span>
+                  <span className="web-supervisor-policy-option-description">
+                    {agent.description}
+                  </span>
+                </button>
+              ))}
+            </div>
+            <div className="web-supervisor-policy-actions">
+              <button type="button" onClick={() => setPendingAgent(null)}>
+                Cancel
+              </button>
+            </div>
+          </section>
+        </div>,
+        document.body,
+      )}
       {pendingSupervisor && createPortal(
         <div
           className="web-settings-backdrop"

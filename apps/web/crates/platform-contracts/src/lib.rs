@@ -302,6 +302,8 @@ pub struct StartRunRequest {
     pub fork_source_run_id: Option<Uuid>,
     #[serde(default)]
     pub supervisor_policy: Option<SupervisorPolicySelection>,
+    #[serde(default)]
+    pub agent: Option<AgentRunSelection>,
 }
 
 /// Response from starting a run.
@@ -316,6 +318,16 @@ pub struct StartRunResponse {
 pub struct SupervisorPolicySelection {
     pub policy_id: String,
     pub version: String,
+}
+
+/// Browser-selectable identity of one exact published root Agent. A repository
+/// Agent has no Release UUID; an organization Agent must include one.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentRunSelection {
+    pub definition_id: String,
+    pub version: String,
+    #[serde(default)]
+    pub release_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -479,9 +491,30 @@ pub enum AgentDefinitionSource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentCapabilityTemplateSource {
+    RepositoryAgent,
+    WorkspacePackageRelease,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentCapabilityTemplateSelection {
+    pub source: AgentCapabilityTemplateSource,
     pub definition_id: String,
     pub version: String,
+    pub release_id: Option<Uuid>,
+}
+
+/// Browser-safe identity of one exact immutable Dataset Release authorized for
+/// an Agent. Runtime paths remain internal to the selected Workspace.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentDatasetReleaseBinding {
+    pub release_id: Uuid,
+    pub workspace_id: Uuid,
+    pub dataset_id: String,
+    pub version: String,
+    pub display_name: String,
+    pub content_sha256: String,
 }
 
 /// Browser-authored governance metadata for an Agent Definition. Executable
@@ -497,6 +530,7 @@ pub struct AgentDefinitionDraftRequest {
     pub input_artifact_types: Vec<String>,
     pub output_artifact_types: Vec<String>,
     pub capability_template: AgentCapabilityTemplateSelection,
+    pub dataset_release_ids: Vec<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -564,6 +598,8 @@ pub struct AgentDefinitionSummary {
     pub output_artifact_types: Vec<String>,
     pub required_capabilities: Vec<String>,
     pub capability_template: Option<AgentCapabilityTemplateSelection>,
+    pub dataset_releases: Vec<AgentDatasetReleaseBinding>,
+    pub required_workspace_id: Option<Uuid>,
 }
 
 /// Browser-safe, bounded description of one exact published Agent.
@@ -582,6 +618,8 @@ pub struct AgentDefinitionDetail {
     pub output_artifact_types: Vec<String>,
     pub required_capabilities: Vec<String>,
     pub capability_template: Option<AgentCapabilityTemplateSelection>,
+    pub dataset_releases: Vec<AgentDatasetReleaseBinding>,
+    pub required_workspace_id: Option<Uuid>,
     pub content_sha256: String,
     pub execution_semantics_sha256: String,
 }
@@ -592,6 +630,8 @@ pub struct AgentDefinitionDetail {
 /// that the package is enabled or healthy in any particular Runtime Thread.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CapabilityPackageSummary {
+    pub release_id: Option<Uuid>,
+    pub workspace_id: Option<Uuid>,
     pub package_id: String,
     pub version: String,
     pub display_name: String,
@@ -599,8 +639,12 @@ pub struct CapabilityPackageSummary {
     pub capability_root_id: String,
     pub capabilities: Vec<String>,
     pub mcp_server_names: Vec<String>,
+    pub tool_names: Vec<String>,
+    pub input_artifact_types: Vec<String>,
+    pub output_artifact_types: Vec<String>,
     pub includes_skills: bool,
     pub source: String,
+    pub content_sha256: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -623,6 +667,7 @@ pub struct PythonCapabilitySkill {
 /// Browser input never contains a command, host path or environment variable.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PythonCapabilityPublishRequest {
+    pub idempotency_key: String,
     pub slug: String,
     pub version: String,
     pub display_name: String,
@@ -631,6 +676,8 @@ pub struct PythonCapabilityPublishRequest {
     pub python_source: String,
     pub tools: Vec<PythonCapabilityTool>,
     pub skill: PythonCapabilitySkill,
+    pub input_artifact_types: Vec<String>,
+    pub output_artifact_types: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -648,11 +695,13 @@ pub struct PythonCapabilityValidationResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PythonCapabilityPublishResponse {
+    pub release_id: Uuid,
     pub package_id: String,
     pub version: String,
     pub capability_root_id: String,
     pub server_name: String,
     pub skill_name: String,
+    pub content_sha256: String,
     pub written_files: Vec<String>,
 }
 
@@ -861,6 +910,54 @@ pub struct WorkspaceFileDiff {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspacePathQuery {
     pub path: String,
+}
+
+/// Browser-declared metadata for one file in a Dataset Release. `field_id`
+/// binds a multipart field to this logical record and is not a filesystem path.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceDatasetUploadFile {
+    pub field_id: String,
+    pub logical_name: String,
+    pub role: String,
+    pub media_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PublishWorkspaceDatasetRequest {
+    pub idempotency_key: String,
+    pub dataset_id: String,
+    pub version: String,
+    pub display_name: String,
+    pub description: String,
+    pub files: Vec<WorkspaceDatasetUploadFile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceDatasetReleaseFileSummary {
+    pub logical_name: String,
+    pub role: String,
+    pub media_type: String,
+    pub byte_size: i64,
+    pub content_sha256: String,
+}
+
+/// Browser-safe projection of one immutable Dataset Release. Host paths are
+/// deliberately absent; consumers resolve the release server-side.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceDatasetReleaseSummary {
+    pub id: Uuid,
+    pub workspace_id: Uuid,
+    pub dataset_id: String,
+    pub version: String,
+    pub display_name: String,
+    pub description: String,
+    pub state: String,
+    pub content_sha256: String,
+    pub failure_code: Option<String>,
+    pub files: Vec<WorkspaceDatasetReleaseFileSummary>,
+    pub published_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

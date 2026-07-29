@@ -48,13 +48,15 @@
 - [领域 Agent 扩展架构](domain-agent-extension-architecture.md)
 - [Skills、MCP 与自定义 UI 扩展](custom-skills-mcp-ui-guide.md)
 - [零基础多 Agent 开发教程](multi-agent-development-tutorial.md)
-  - [第 1 步：Hello Agent 第一次真实 Tool 调用](tutorials/hello-agent-quickstart.md)
-  - [第 2 步：Hello Team 在 Web 发布 Supervisor](tutorials/hello-agent-team.md)
-  - [第 3 步：运行并审阅企业仓网 Supervisor](tutorials/supply-chain-agent-tutorial.md)
-  - [第 4 步：审批与故障恢复](tutorials/approvals-and-recovery.md)
-- 新手案例：
-  - [股票历史查询：创建 Python MCP 与 Skill](tutorials/stock-history-python-capability.md)
-  - [仓网建议：创建并运行多 Agent Supervisor](tutorials/web-network-supervisor.md)
+  - [教程标准与完整学习路径](tutorials/README.md)
+  - [单 Agent：在 Web 审计配送承诺](tutorials/web-single-agent-delivery-audit.md)
+  - [印尼仓网案例总览](tutorials/supply-chain-agent-tutorial.md)
+  - [印尼仓网 1：发布并核验数据](tutorials/indonesia-network-01-data.md)
+  - [印尼仓网 2：只分析单层时效](tutorials/indonesia-network-02-service-baseline.md)
+  - [印尼仓网 3：两级成本与指定候选](tutorials/indonesia-network-03-two-level-cost.md)
+  - [印尼仓网 4：有限候选优化与地图](tutorials/indonesia-network-04-optimization-map.md)
+  - [审批与故障恢复](tutorials/approvals-and-recovery.md)
+  - [开发者补充：Hello Agent MCP stdio](tutorials/hello-agent-quickstart.md)
 
 扩展指南可以提供模式和示例，但不能重新定义 Profile、Workspace、Artifact、
 Agent Definition、Runtime Role 等核心术语。

@@ -2,7 +2,7 @@
 
 > 文档性质：多 Agent 信息交换专项演进设计
 >
-> 更新日期：2026-07-27
+> 更新日期：2026-07-29
 >
 > 当前阶段：Artifact First 的 Task 内交接已经形成，正在补齐生命周期、依赖和异常路径
 >
@@ -264,7 +264,7 @@ flowchart TB
 
 ### 当前案例
 
-仓网案例已经形成一条真实交接链：
+当前印尼仓网案例采用条件性交接链：
 
 ```mermaid
 sequenceDiagram
@@ -275,12 +275,12 @@ sequenceDiagram
     participant N as Network Planning Agent
     participant PM as Planning MCP
 
-    S->>D: 准备并验证规划数据
-    D->>DM: 读取受限数据源
-    DM-->>D: planning-dataset.v1 + data_ref
+    S->>D: 缺少适用 Dataset 时准备并验证规划数据
+    D->>DM: 按 typed market/period metadata 读取受限数据源
+    DM-->>D: planning-dataset.v2 + data_ref
     D-->>S: 返回精确引用与摘要
     A-->>N: 按同 Task 授权解析同一成果
-    S->>N: 基于该 Artifact 比较方案
+    S->>N: 基于该 Artifact 回答网络决策问题
     N->>PM: 计算并验证候选方案
     PM-->>N: 类型化规划结果
     N-->>S: 返回结果 Artifact 与结论
@@ -461,9 +461,9 @@ Ledger 能够减少重复整理和依赖排查，同时没有变成第二套 Run
 ### 已实现
 
 - Runtime 原生父子 Thread 与协作事件；
-- Supervisor 到两个精确专业 Agent 的任务委派；
+- Supervisor 到四个可选 exact Runtime Role 的按需任务委派；
 - Task 级持久 Artifact、生产来源和同 Task 授权；
-- 跨子 Thread 的 `planning-dataset.v1` 与规划结果交接；
+- 跨子 Thread 的 `planning-dataset.v2`、规划、财务与风险结果条件性交接；
 - Artifact 内容物化、Schema、摘要和安全浏览器 DTO；
 - 删除生产 Run 后保留 Artifact 身份、授权和来源的数据库验证；
 - Web 恢复 Agent、Artifact 和最终 Thread 报告。

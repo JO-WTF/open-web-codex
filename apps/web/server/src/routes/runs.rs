@@ -15,14 +15,15 @@ use open_web_codex_platform_contracts::{
 };
 use open_web_codex_platform_store::AppState;
 use open_web_codex_run_orchestrator::{
-    CancelRunRequest, EnqueueRunRequest, RunOrchestrator, RunOrchestratorError, RunRecord,
+    AgentRunSnapshotInput, AgentRunSource, CancelRunRequest, EnqueueRunRequest, RunOrchestrator,
+    RunOrchestratorError, RunRecord,
 };
 use sqlx::Row;
 use uuid::Uuid;
 
 use crate::middleware::auth::{require_runtime_profile, AuthenticatedUser};
 use crate::routes::RuntimeProfileBinding;
-use crate::supervisor_policy;
+use crate::{agent_catalog, supervisor_policy};
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
 
@@ -37,6 +38,14 @@ pub async fn start_run(
     Json(req): Json<StartRunRequest>,
 ) -> ApiResult<StartRunResponse> {
     require_runtime_profile(&state.db, &auth, &profile.runtime_key).await?;
+    if req.supervisor_policy.is_some() && req.agent.is_some() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(PlatformError::bad_request(
+                "Select either one root Agent or one Supervisor Policy",
+            )),
+        ));
+    }
     // Resolving a published identifier is safe at enqueue time. Capability,
     // workspace-effective configuration and Profile Role checks deliberately
     // run in the worker immediately before the Runtime creates the Thread.
@@ -50,6 +59,26 @@ pub async fn start_run(
     } else {
         None
     };
+    let agent = if let Some(selection) = req.agent.as_ref() {
+        let resolved =
+            agent_catalog::resolve_run_selection(&state.db, auth.organization_id, selection)
+                .await
+                .map_err(agent_catalog_error)?;
+        Some(AgentRunSnapshotInput {
+            definition_id: resolved.definition_id,
+            version: resolved.version,
+            display_name: resolved.display_name,
+            content_sha256: resolved.content_sha256,
+            source: if resolved.release_id.is_some() {
+                AgentRunSource::UserRelease
+            } else {
+                AgentRunSource::Repository
+            },
+            release_id: resolved.release_id,
+        })
+    } else {
+        None
+    };
     let run = orchestrator
         .enqueue_run(EnqueueRunRequest {
             organization_id: auth.organization_id,
@@ -60,12 +89,36 @@ pub async fn start_run(
             fork_thread_id: req.fork_thread_id,
             fork_source_run_id: req.fork_source_run_id,
             supervisor_policy,
+            agent,
         })
         .await
         .map_err(orchestrator_error)?;
     Ok(Json(StartRunResponse {
         run: run_from_record(run),
     }))
+}
+
+fn agent_catalog_error(
+    error: agent_catalog::AgentCatalogError,
+) -> (StatusCode, Json<PlatformError>) {
+    match error {
+        agent_catalog::AgentCatalogError::NotFound => (
+            StatusCode::NOT_FOUND,
+            Json(PlatformError::not_found("Agent Definition was not found")),
+        ),
+        agent_catalog::AgentCatalogError::Invalid => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(PlatformError::bad_request(
+                "Agent Definition release is invalid",
+            )),
+        ),
+        agent_catalog::AgentCatalogError::Database => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PlatformError::internal(
+                "Agent Definition catalog could not be loaded",
+            )),
+        ),
+    }
 }
 
 /// GET /api/runs?task_id=... — list runs for a task.

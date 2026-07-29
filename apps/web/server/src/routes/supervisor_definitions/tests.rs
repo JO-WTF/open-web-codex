@@ -4,8 +4,7 @@ use axum::{
 };
 use open_web_codex_platform_contracts::{
     SupervisorAgentSelection, SupervisorArtifactContractInput, SupervisorDraftRequest,
-    SupervisorInstructionPolicyPublishRequest, SupervisorInstructionPolicySelection,
-    SupervisorPolicySelection,
+    SupervisorInstructionPolicySelection, SupervisorPolicySelection,
 };
 use open_web_codex_platform_store::AppState;
 use uuid::Uuid;
@@ -25,34 +24,34 @@ fn valid_draft() -> SupervisorDraftRequest {
         ],
         instruction_policy: SupervisorInstructionPolicySelection {
             policy_id: "platform-supervisor-behavior".to_string(),
-            version: "1.0.0".to_string(),
+            version: "1.1.0".to_string(),
         },
         custom_instructions: "Delegate data preparation before network scenario analysis."
             .to_string(),
         agents: vec![
             SupervisorAgentSelection {
                 definition_id: "enterprise-data-agent".to_string(),
-                version: "1.6.0".to_string(),
+                version: "3.1.0".to_string(),
                 release_id: None,
                 spawn_limit: 1,
             },
             SupervisorAgentSelection {
                 definition_id: "enterprise-network-planning-agent".to_string(),
-                version: "1.5.0".to_string(),
+                version: "3.1.0".to_string(),
                 release_id: None,
                 spawn_limit: 1,
             },
         ],
         artifact_contracts: vec![
             SupervisorArtifactContractInput {
-                artifact_type: "planning-dataset.v1".to_string(),
-                producer_agent: "enterprise-data-agent@1.6.0".to_string(),
-                consumer_agents: vec!["enterprise-network-planning-agent@1.5.0".to_string()],
+                artifact_type: "indonesia_dataset_inspection.v1".to_string(),
+                producer_agent: "enterprise-data-agent@3.1.0".to_string(),
+                consumer_agents: vec!["enterprise-network-planning-agent@3.1.0".to_string()],
                 required: true,
             },
             SupervisorArtifactContractInput {
-                artifact_type: "scenario_comparison.v1".to_string(),
-                producer_agent: "enterprise-network-planning-agent@1.5.0".to_string(),
+                artifact_type: "indonesia_current_network_analysis.v1".to_string(),
+                producer_agent: "enterprise-network-planning-agent@3.1.0".to_string(),
                 consumer_agents: vec!["supervisor".to_string()],
                 required: true,
             },
@@ -84,7 +83,7 @@ fn resolves_browser_draft_through_server_owned_runtime_facts() {
 #[test]
 fn rejects_unpublished_agent_versions_without_fallback() {
     let mut draft = valid_draft();
-    draft.agents[0].version = "1.5.0".to_string();
+    draft.agents[0].version = "1.6.0".to_string();
     let agents = open_web_codex_supervisor_catalog::agent::list_resolved_builtins().unwrap();
     let issue = release_spec_from_draft(&draft, &agents).unwrap_err();
     assert_eq!(issue.code, "agent_not_published");
@@ -146,28 +145,7 @@ async fn publishes_and_resolves_an_organization_scoped_release() {
         organization_role: "owner".to_string(),
     };
     let state = AppState::new(pool.clone());
-    let platform_policy = crate::routes::supervisor_instruction_policies::publish(
-        State(state.clone()),
-        auth.clone(),
-        Json(SupervisorInstructionPolicyPublishRequest {
-            policy_id: "platform-supervisor-behavior".to_string(),
-            version: "1.1.0".to_string(),
-            display_name: "Platform Supervisor behavior".to_string(),
-            description: "Updated platform behavior contract.".to_string(),
-            platform_instructions:
-                "Delegate only to authorized Runtime Roles and preserve typed Artifacts."
-                    .to_string(),
-        }),
-    )
-    .await
-    .unwrap()
-    .0;
-    let mut draft = valid_draft();
-    draft.instruction_policy = SupervisorInstructionPolicySelection {
-        policy_id: platform_policy.policy_id,
-        version: platform_policy.version,
-    };
-    let definition = create(State(state.clone()), auth.clone(), Json(draft))
+    let definition = create(State(state.clone()), auth.clone(), Json(valid_draft()))
         .await
         .unwrap()
         .0;

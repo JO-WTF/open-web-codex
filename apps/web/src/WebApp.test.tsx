@@ -27,6 +27,7 @@ const client = {
   selectProviderModel: vi.fn(),
   updateThreadModelSelection: vi.fn(),
   listMcpServerStatus: vi.fn(),
+  listAgentDefinitions: vi.fn(),
   listSupervisorPolicies: vi.fn(),
   getAccountRateLimits: vi.fn(),
   getSupervisorOverview: vi.fn(),
@@ -76,9 +77,10 @@ describe("WebApp workspace-first messaging", () => {
     client.selectProviderModel.mockResolvedValue({ data: [] });
     client.updateThreadModelSelection.mockResolvedValue({});
     client.listMcpServerStatus.mockResolvedValue({ data: [] });
+    client.listAgentDefinitions.mockResolvedValue([]);
     client.listSupervisorPolicies.mockResolvedValue([{
       policy_id: "enterprise-supervisor-copilot",
-      version: "1.1.0",
+      version: "3.7.0",
       display_name: "Enterprise Supervisor Copilot",
       description: "Coordinates governed data analysis and warehouse-network planning agents.",
       source: "repository",
@@ -102,7 +104,13 @@ describe("WebApp workspace-first messaging", () => {
     fireEvent.change(composer, { target: { value: "Start from this workspace" } });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
-    await waitFor(() => expect(client.startThread).toHaveBeenCalledWith("workspace-1"));
+    await waitFor(() => expect(client.startThread).toHaveBeenCalledWith(
+      "workspace-1",
+      {
+        agent: null,
+        supervisorPolicy: null,
+      },
+    ));
     await waitFor(() => expect(client.sendUserMessage).toHaveBeenCalledWith(
       "workspace-1",
       "thread-new",
@@ -150,7 +158,7 @@ describe("WebApp workspace-first messaging", () => {
         task_id: "task-enterprise",
         thread_id: "thread-new",
         policy_id: "enterprise-supervisor-copilot",
-        version: "1.1.0",
+        version: "3.7.0",
         display_name: "Enterprise Supervisor Copilot",
         content_sha256: "a".repeat(64),
         state: "bound",
@@ -230,9 +238,10 @@ describe("WebApp workspace-first messaging", () => {
     await waitFor(() => expect(client.startThread).toHaveBeenCalledWith(
       "workspace-1",
       {
+        agent: null,
         supervisorPolicy: {
           policy_id: "enterprise-supervisor-copilot",
-          version: "1.1.0",
+          version: "3.7.0",
         },
       },
     ));
@@ -240,7 +249,7 @@ describe("WebApp workspace-first messaging", () => {
       .toHaveBeenCalledWith("thread-new"));
     fireEvent.click(await screen.findByRole("button", { name: "Agent activity" }));
     await waitFor(() => {
-      expect(screen.getByText("Policy enterprise-supervisor-copilot · 1.1.0"))
+      expect(screen.getByText("Policy enterprise-supervisor-copilot · 3.7.0"))
         .toBeTruthy();
       expect(screen.getByText("Root Supervisor")).toBeTruthy();
       expect(screen.getAllByText("Inspect enterprise planning data.")).toHaveLength(2);

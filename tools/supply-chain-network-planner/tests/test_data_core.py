@@ -16,6 +16,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE_PATH = (
     ROOT / "examples" / "data-sources" / "warehouse-network-fixture.json"
 )
+INDONESIA_SOURCE_PATH = (
+    ROOT / "examples" / "data-sources" / "indonesia-network-decision.json"
+)
 
 
 @pytest.fixture
@@ -37,7 +40,7 @@ def test_inspection_is_bounded_and_reports_source_scope(source: PlanningSource) 
 def test_builds_planning_dataset_and_network_handoff(source: PlanningSource) -> None:
     dataset = build_planning_dataset(source)
 
-    assert dataset.schema_version == "planning-dataset.v1"
+    assert dataset.schema_version == "planning-dataset.v2"
     assert dataset.source_summary.demand_units == 100
     assert [item.demand_units for item in dataset.demand_distribution] == [25, 40, 35]
     assert sum(item.promotion_units for item in dataset.demand_distribution) == 30
@@ -49,6 +52,7 @@ def test_builds_planning_dataset_and_network_handoff(source: PlanningSource) -> 
         item.demand_units for item in dataset.network_input.demand_points
     ) == 100
     assert all(item.is_existing for item in dataset.network_input.facilities)
+    assert len(dataset.route_entries) == 6
     assert dataset.data_quality.valid is True
     assert any("promotion-associated" in item for item in dataset.data_quality.warnings)
 
@@ -69,9 +73,30 @@ def test_source_contract_rejects_direct_pii_fields() -> None:
         PlanningSource.model_validate(payload)
 
 
-def test_source_contract_rejects_candidate_facilities() -> None:
+def test_source_contract_rejects_candidate_as_current_assignment() -> None:
     payload = json.loads(SOURCE_PATH.read_text())
     payload["facilities"][0]["is_existing"] = False
 
-    with pytest.raises(ValidationError, match="only existing facilities"):
+    with pytest.raises(ValidationError, match="unknown existing facility"):
         PlanningSource.model_validate(payload)
+
+
+def test_indonesia_source_publishes_candidates_and_complete_routes() -> None:
+    source = PlanningSource.model_validate(
+        json.loads(INDONESIA_SOURCE_PATH.read_text())
+    )
+
+    dataset = build_planning_dataset(source)
+
+    assert dataset.source_summary.market == "ID"
+    assert dataset.source_summary.demand_units == 7400
+    assert dataset.source_summary.existing_facility_count == 2
+    assert dataset.source_summary.candidate_facility_count == 3
+    assert dataset.source_summary.route_count == 30
+    assert len(dataset.network_input.facilities) == 5
+    assert len(dataset.route_entries) == 30
+    assert dataset.network_input.currency == "IDR"
+    assert any(
+        "promotion-associated" in warning
+        for warning in dataset.data_quality.warnings
+    )

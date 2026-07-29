@@ -3,10 +3,10 @@ use std::fmt::Write as _;
 
 use open_web_codex_adapter::{PlatformRuntimeRole, RequiredMcpServer};
 use open_web_codex_platform_contracts::{
-    SupervisorAgentSelection, SupervisorArtifactContractInput, SupervisorDraftRequest,
-    SupervisorInstructionPolicyDetail, SupervisorInstructionPolicySelection,
-    SupervisorInstructionPolicySummary, SupervisorPolicyOrigin, SupervisorPolicySelection,
-    SupervisorPolicySummary,
+    AgentCapabilityTemplateSource, AgentDatasetReleaseBinding, SupervisorAgentSelection,
+    SupervisorArtifactContractInput, SupervisorDraftRequest, SupervisorInstructionPolicyDetail,
+    SupervisorInstructionPolicySelection, SupervisorInstructionPolicySummary,
+    SupervisorPolicyOrigin, SupervisorPolicySelection, SupervisorPolicySummary,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -21,15 +21,15 @@ use crate::validation::{
 
 const ENTERPRISE_COPILOT_MANIFEST: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/1.9.0/manifest.json"
+    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/3.7.0/manifest.json"
 ));
 const ENTERPRISE_COPILOT_CUSTOM_INSTRUCTIONS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/1.9.0/custom-instructions.md"
+    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/3.7.0/custom-instructions.md"
 ));
 const ENTERPRISE_COPILOT_ARTIFACT_CONTRACTS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/1.9.0/artifact-contracts.json"
+    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/3.7.0/artifact-contracts.json"
 ));
 
 const MAX_SUPERVISOR_INSTRUCTIONS_BYTES: usize = 16 * 1024;
@@ -142,9 +142,21 @@ pub struct ResolvedSupervisorPackage {
     pub required_runtime_roles: Vec<PlatformRuntimeRole>,
     pub role_spawn_limits: BTreeMap<String, u32>,
     pub required_mcp_servers: Vec<RequiredMcpServer>,
+    pub required_workspace_id: Option<Uuid>,
+    pub workspace_capability_packages: Vec<WorkspaceCapabilityPackageRequirement>,
+    pub dataset_releases: Vec<AgentDatasetReleaseBinding>,
     pub runtime_requirements: Vec<RuntimeCapabilityRequirement>,
     pub artifact_contracts: Vec<ArtifactContract>,
     pub max_active_child_agents: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceCapabilityPackageRequirement {
+    pub release_id: Uuid,
+    pub workspace_id: Uuid,
+    pub package_id: String,
+    pub version: String,
+    pub content_sha256: String,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -419,6 +431,9 @@ pub fn validate_release_with_agents_and_policy(
     let mut resolved_agents = Vec::with_capacity(spec.agents.len());
     let mut role_spawn_limits = BTreeMap::new();
     let mut contracts = BTreeMap::new();
+    let mut capability_workspace_ids = BTreeSet::new();
+    let mut workspace_capability_packages = BTreeMap::new();
+    let mut dataset_releases = BTreeMap::new();
     for reference in &spec.agents {
         let definition = available_agents
             .iter()
@@ -436,6 +451,44 @@ pub fn validate_release_with_agents_and_policy(
             })?;
         let role = definition.runtime_role.clone();
         let contract = definition.contract();
+        if let Some(workspace_id) = definition.required_workspace_id() {
+            capability_workspace_ids.insert(workspace_id);
+        }
+        if let Some(selection) = &definition.capability_template {
+            if selection.source == AgentCapabilityTemplateSource::WorkspacePackageRelease {
+                let requirement = WorkspaceCapabilityPackageRequirement {
+                    release_id: selection.release_id.ok_or(SupervisorCatalogError::Invalid(
+                        "Workspace capability package Release is missing",
+                    ))?,
+                    workspace_id: definition.capability_workspace_id.ok_or(
+                        SupervisorCatalogError::Invalid(
+                            "Workspace capability package ownership is missing",
+                        ),
+                    )?,
+                    package_id: selection.definition_id.clone(),
+                    version: selection.version.clone(),
+                    content_sha256: definition.capability_template_sha256.clone(),
+                };
+                if workspace_capability_packages
+                    .insert(requirement.release_id, requirement.clone())
+                    .is_some_and(|existing| existing != requirement)
+                {
+                    return Err(SupervisorCatalogError::Invalid(
+                        "Workspace capability package dependency is inconsistent",
+                    ));
+                }
+            }
+        }
+        for release in &definition.dataset_releases {
+            if dataset_releases
+                .insert(release.release_id, release.clone())
+                .is_some_and(|existing| existing != *release)
+            {
+                return Err(SupervisorCatalogError::Invalid(
+                    "Dataset Release dependency is inconsistent",
+                ));
+            }
+        }
         role_spawn_limits.insert(reference.runtime_role.clone(), reference.spawn_limit);
         contracts.insert(
             format!("{}@{}", reference.definition_id, reference.version),
@@ -443,6 +496,11 @@ pub fn validate_release_with_agents_and_policy(
         );
         roles.push(role);
         resolved_agents.push(definition.clone());
+    }
+    if capability_workspace_ids.len() > 1 {
+        return Err(SupervisorCatalogError::Invalid(
+            "Workspace capability packages must belong to one Workspace",
+        ));
     }
     let artifact_contracts = ArtifactContractSet {
         schema_version: "artifact-contract-set.v1".to_string(),
@@ -480,6 +538,9 @@ pub fn validate_release_with_agents_and_policy(
         required_runtime_roles: roles,
         role_spawn_limits,
         required_mcp_servers,
+        required_workspace_id: capability_workspace_ids.into_iter().next(),
+        workspace_capability_packages: workspace_capability_packages.into_values().collect(),
+        dataset_releases: dataset_releases.into_values().collect(),
         runtime_requirements: spec.runtime_requirements,
         artifact_contracts: artifact_contracts.contracts,
         max_active_child_agents: spec.max_active_child_agents,
@@ -514,14 +575,31 @@ fn compile_developer_instructions(
     }
     compiled.push_str(
         "\n## Agent slot lifecycle\n\
-         A child Agent remains active and occupies the Runtime concurrency limit after its turn \
-         reaches a terminal state until the Supervisor calls `close_agent`. After collecting the \
-         child's result and confirming every required durable Artifact is ready, close that child \
-         before spawning another Agent whenever the maximum active-child limit would otherwise be \
-         exceeded. Never close a child with an active turn or before its required Artifact handoff \
-         is durable.\n",
+         When spawning a specialized Runtime Role with an explicit `agent_type`, use \
+         `fork_turns: \"none\"` or a bounded positive turn count; a full-history fork inherits \
+         the parent Agent type and rejects the explicit specialized Role. `wait_agent` timeouts \
+         must be at least 10000 milliseconds; use 30000 milliseconds for ordinary waits.\n\n\
+         Multi-Agent V2 does not expose `close_agent`. A child Agent remains resident and occupies \
+         the configured child limit after its turn reaches a terminal state. Treat the maximum \
+         active-child value as the resident budget for the whole task. Do not call \
+         `interrupt_agent` on a terminal child to release a slot; interruption does not provide \
+         that lifecycle transition. Before spawning, reserve enough remaining slots for every \
+         additional Role that the current evidence path may require. If the resident budget cannot \
+         support the required evidence path, report the execution-budget gap explicitly.\n",
     );
-    compiled.push_str("\n## Artifact handoffs\n");
+    compiled.push_str(
+        "\n## Artifact handoffs\n\
+         A `durable-resource-reference` is one exact handoff tuple: Artifact schema, \
+         `resource_name`, and the complete structured `data_ref` object returned by the producer \
+         Tool. A schema name, business summary, copied metrics, guessed URI, or rewritten \
+         `mcp_resource://` string is not a reference.\n\
+         Before assigning a consumer Agent, verify that the producer response contains all three \
+         fields and copy the `resource_name` and `data_ref` object verbatim into the assignment. \
+         Never summarize, reformat, reconstruct, or omit them. If either field is absent, ask the \
+         producer for the exact handoff tuple before creating the consumer. A consumer that reports \
+         `MISSING_ARTIFACT_HANDOFF` must receive a follow-up with the original tuple; do not ask it \
+         to discover files, list Resources, or guess a URI.\n",
+    );
     for contract in artifact_contracts {
         writeln!(
             compiled,
@@ -700,35 +778,55 @@ mod tests {
             version: summaries[0].version.clone(),
         })
         .unwrap();
-        assert_eq!(package.required_runtime_roles.len(), 2);
-        assert_eq!(package.version, "1.9.0");
-        assert_eq!(package.agents.len(), 2);
-        assert_eq!(package.artifact_contracts.len(), 3);
-        assert_eq!(package.max_active_child_agents, 2);
+        assert_eq!(package.required_runtime_roles.len(), 3);
+        assert_eq!(package.version, "3.7.0");
+        assert_eq!(package.agents.len(), 3);
+        assert_eq!(package.artifact_contracts.len(), 8);
+        assert!(package
+            .artifact_contracts
+            .iter()
+            .any(|contract| contract.artifact_type == "indonesia_service_baseline.v1"));
+        assert_eq!(package.max_active_child_agents, 3);
         assert_eq!(package.content_sha256.len(), 64);
         assert!(package
             .platform_instructions
             .contains("You are the root Supervisor"));
         assert!(package
             .custom_instructions
-            .contains("warehouse-network case"));
+            .contains("evidence-driven Indonesian warehouse-network decision"));
         assert!(package
             .developer_instructions
             .contains("# Resolved execution contract"));
         assert!(package
             .developer_instructions
-            .contains("A child Agent remains active and occupies the Runtime concurrency limit"));
+            .contains("A child Agent remains resident and occupies the configured child limit"));
         assert!(package
             .developer_instructions
-            .contains("calls `close_agent`"));
+            .contains("Multi-Agent V2 does not expose `close_agent`"));
+        assert!(package
+            .developer_instructions
+            .contains("a full-history fork inherits the parent Agent type"));
+        assert!(package
+            .developer_instructions
+            .contains("`wait_agent` timeouts must be at least 10000 milliseconds"));
+        assert!(package
+            .developer_instructions
+            .contains("the complete structured `data_ref` object"));
+        assert!(package
+            .developer_instructions
+            .contains("must receive a follow-up with the original tuple"));
+        assert!(package
+            .developer_instructions
+            .contains("Never place the directive in fenced or indented code"));
         assert!(package
             .developer_instructions
             .contains("# Custom Supervisor instructions"));
         assert_eq!(
             package.role_spawn_limits,
             [
-                ("agent_7e81fe6ff16d257b64a209abc623833c".to_string(), 1),
-                ("agent_cc4182517eeeaeb65ac5b50da67da6ba".to_string(), 1)
+                ("agent_15451ec3da17fa338bc798a21838d25d".to_string(), 1),
+                ("agent_0142018b1f2f53b30aa46d9e2e35d774".to_string(), 1),
+                ("agent_79bee7cd1bbdee5bc152913278077848".to_string(), 1)
             ]
             .into_iter()
             .collect()
@@ -740,7 +838,7 @@ mod tests {
         assert_eq!(
             resolve(&SupervisorPolicySelection {
                 policy_id: "enterprise-supervisor-copilot".to_string(),
-                version: "1.6.0".to_string(),
+                version: "1.9.0".to_string(),
             })
             .unwrap_err(),
             SupervisorCatalogError::NotFound
@@ -751,7 +849,7 @@ mod tests {
     fn repository_and_web_supervisor_sources_compile_to_identical_execution_semantics() {
         let repository = resolve(&SupervisorPolicySelection {
             policy_id: "enterprise-supervisor-copilot".to_string(),
-            version: "1.9.0".to_string(),
+            version: "3.7.0".to_string(),
         })
         .unwrap();
         let draft = SupervisorDraftRequest {
@@ -852,7 +950,7 @@ mod tests {
     #[test]
     fn repository_derived_fields_cannot_drift_from_the_canonical_compiler() {
         let manifest = ENTERPRISE_COPILOT_MANIFEST.replacen(
-            "\"runtimeRole\": \"agent_7e81fe6ff16d257b64a209abc623833c\"",
+            "\"runtimeRole\": \"agent_15451ec3da17fa338bc798a21838d25d\"",
             "\"runtimeRole\": \"drifted_data_agent\"",
             1,
         );

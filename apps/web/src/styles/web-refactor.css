@@ -310,9 +310,11 @@ body:has(.web-app-shell) {
 }
 
 .web-ws-row:hover .web-ws-new-thread-btn,
+.web-ws-row:hover .web-ws-new-agent-btn,
 .web-ws-row:hover .web-ws-new-supervisor-btn,
 .web-ws-row:hover .web-ws-remove-btn,
 .web-ws-row-active:hover .web-ws-new-thread-btn,
+.web-ws-row-active:hover .web-ws-new-agent-btn,
 .web-ws-row-active:hover .web-ws-new-supervisor-btn,
 .web-ws-row-active:hover .web-ws-remove-btn {
   color: #c8cfdb;

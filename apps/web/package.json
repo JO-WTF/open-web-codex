@@ -34,6 +34,7 @@
     "test:codex-fixtures": "node scripts/replay-codex-fixtures.mjs --self-test && node scripts/replay-codex-fixtures.mjs",
     "test:codex-harness": "node scripts/test-codex-app-server-harness.mjs",
     "test:e2e:real-platform": "node scripts/real-platform-e2e.mjs",
+    "test:e2e:web-single-agent-tutorial": "node scripts/web-single-agent-tutorial-e2e.mjs",
     "test:e2e:enterprise-supervisor": "node scripts/enterprise-supervisor-e2e.mjs"
   },
   "dependencies": {

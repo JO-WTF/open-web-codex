@@ -69,6 +69,12 @@ pub struct StartedThread {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ThreadStartMode {
     Standard,
+    /// One exact published Agent executes as the root Thread. The platform
+    /// supplies only its sealed instructions and typed MCP requirements.
+    GovernedAgent {
+        developer_instructions: String,
+        required_mcp_servers: Vec<RequiredMcpServer>,
+    },
     /// Immutable policy material required for a governed Supervisor start.
     ///
     /// Only the Platform server constructs this mode from a published Policy
@@ -81,6 +87,53 @@ pub enum ThreadStartMode {
         required_mcp_servers: Vec<RequiredMcpServer>,
         max_threads: u32,
     },
+}
+
+pub(crate) fn governed_agent_config_overrides(
+    required_mcp_servers: &[RequiredMcpServer],
+) -> Result<Value, AdapterError> {
+    validate_required_mcp_servers(required_mcp_servers)?;
+    let capability_roots = merge_capability_root_mcp_inventories(required_mcp_servers)?;
+    let mut overrides = serde_json::Map::new();
+    overrides.insert("features.apps".to_string(), Value::Bool(false));
+    overrides.insert("features.multi_agent_v2".to_string(), Value::Bool(false));
+    overrides.insert("features.plugins".to_string(), Value::Bool(false));
+    overrides.insert("features.shell_tool".to_string(), Value::Bool(false));
+    overrides.insert(
+        "skills.include_instructions".to_string(),
+        Value::Bool(false),
+    );
+    for (capability_root_id, server_names) in &capability_roots {
+        overrides.insert(
+            format!("plugins.{capability_root_id}.enabled"),
+            Value::Bool(true),
+        );
+        for server_name in server_names {
+            overrides.insert(
+                format!("plugins.{capability_root_id}.mcp_servers.{server_name}.enabled"),
+                Value::Bool(false),
+            );
+        }
+    }
+    for server in required_mcp_servers {
+        for capability_root in &server.capability_roots {
+            overrides.insert(
+                format!(
+                    "plugins.{}.mcp_servers.{}.enabled",
+                    capability_root.capability_root_id, server.name
+                ),
+                Value::Bool(true),
+            );
+            overrides.insert(
+                format!(
+                    "plugins.{}.mcp_servers.{}.enabled_tools",
+                    capability_root.capability_root_id, server.name
+                ),
+                Value::Array(server.tools.iter().cloned().map(Value::String).collect()),
+            );
+        }
+    }
+    Ok(Value::Object(overrides))
 }
 
 /// Browser-login handoff returned by the official app-server. The platform
@@ -133,6 +186,17 @@ pub struct PlatformRuntimeRole {
     pub content_sha256: String,
 }
 
+/// Complete MCP Server inventory for one selected Runtime capability root.
+///
+/// The platform derives this from the reviewed capability package declaration.
+/// It is carried with the allowlist so Runtime configuration can explicitly
+/// disable sibling Servers that Codex would otherwise enable by default.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapabilityRootMcpInventory {
+    pub capability_root_id: String,
+    pub mcp_server_names: Vec<String>,
+}
+
 /// Exact MCP inventory required by an immutable governed policy.
 ///
 /// These identifiers are derived from code-published Agent Definitions. They
@@ -141,7 +205,7 @@ pub struct PlatformRuntimeRole {
 pub struct RequiredMcpServer {
     pub name: String,
     pub tools: Vec<String>,
-    pub capability_root_ids: Vec<String>,
+    pub capability_roots: Vec<CapabilityRootMcpInventory>,
 }
 
 #[derive(Debug, Clone)]
@@ -243,7 +307,8 @@ pub(crate) fn validate_required_mcp_servers(
     for server in servers {
         if !is_safe_runtime_capability_name(&server.name, MAX_REQUIRED_MCP_SERVER_NAME_BYTES)
             || server.tools.len() > MAX_REQUIRED_MCP_TOOLS_PER_SERVER
-            || server.capability_root_ids.len() > MAX_REQUIRED_MCP_CAPABILITY_ROOTS_PER_SERVER
+            || server.capability_roots.is_empty()
+            || server.capability_roots.len() > MAX_REQUIRED_MCP_CAPABILITY_ROOTS_PER_SERVER
             || !server_names.insert(server.name.as_str())
         {
             return Err(AdapterError::Internal(
@@ -259,17 +324,54 @@ pub(crate) fn validate_required_mcp_servers(
                 "governed Runtime MCP requirements are invalid".to_string(),
             ));
         }
-        let mut capability_root_ids = HashSet::new();
-        if server.capability_root_ids.iter().any(|root_id| {
-            !is_safe_runtime_capability_name(root_id, MAX_REQUIRED_MCP_SERVER_NAME_BYTES)
-                || !capability_root_ids.insert(root_id.as_str())
-        }) {
-            return Err(AdapterError::Internal(
-                "governed Runtime MCP requirements are invalid".to_string(),
-            ));
+    }
+    merge_capability_root_mcp_inventories(servers)?;
+    Ok(())
+}
+
+fn merge_capability_root_mcp_inventories(
+    servers: &[RequiredMcpServer],
+) -> Result<BTreeMap<String, Vec<String>>, AdapterError> {
+    let mut inventories = BTreeMap::<String, Vec<String>>::new();
+    for required in servers {
+        let mut root_ids = HashSet::new();
+        for root in &required.capability_roots {
+            let server_names = root
+                .mcp_server_names
+                .iter()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>();
+            if !is_safe_runtime_capability_name(
+                &root.capability_root_id,
+                MAX_REQUIRED_MCP_SERVER_NAME_BYTES,
+            ) || !root_ids.insert(root.capability_root_id.as_str())
+                || server_names.is_empty()
+                || server_names.len() > MAX_REQUIRED_MCP_SERVERS
+                || server_names.len() != root.mcp_server_names.len()
+                || server_names.iter().any(|server_name| {
+                    !is_safe_runtime_capability_name(
+                        server_name,
+                        MAX_REQUIRED_MCP_SERVER_NAME_BYTES,
+                    )
+                })
+                || !server_names.contains(&required.name)
+            {
+                return Err(AdapterError::Internal(
+                    "governed Runtime MCP capability root inventory is invalid".to_string(),
+                ));
+            }
+            let server_names = server_names.into_iter().collect::<Vec<_>>();
+            if inventories
+                .insert(root.capability_root_id.clone(), server_names.clone())
+                .is_some_and(|existing| existing != server_names)
+            {
+                return Err(AdapterError::Internal(
+                    "governed Runtime MCP capability root inventory is inconsistent".to_string(),
+                ));
+            }
         }
     }
-    Ok(())
+    Ok(inventories)
 }
 
 pub(crate) fn validate_role_spawn_limits(
@@ -366,10 +468,16 @@ fn validate_platform_runtime_role_toml(contents: &str) -> Result<(), AdapterErro
         AdapterError::Internal("Platform Runtime Role configuration is invalid".to_string())
     })?;
     let table = document.as_table();
-    if table.len() != 4
-        || ["developer_instructions", "agents", "features", "plugins"]
-            .iter()
-            .any(|field| !table.contains_key(field))
+    if table.len() != 5
+        || [
+            "developer_instructions",
+            "agents",
+            "features",
+            "skills",
+            "plugins",
+        ]
+        .iter()
+        .any(|field| !table.contains_key(field))
     {
         return Err(AdapterError::Internal(
             "Platform Runtime Role configuration contains unsupported fields".to_string(),
@@ -412,6 +520,26 @@ fn validate_platform_runtime_role_toml(contents: &str) -> Result<(), AdapterErro
         ));
     }
 
+    let skills = table
+        .get("skills")
+        .and_then(|item| item.as_table())
+        .filter(|skills| skills.len() == 1)
+        .ok_or_else(|| {
+            AdapterError::Internal(
+                "Platform Runtime Role Skill restrictions are invalid".to_string(),
+            )
+        })?;
+    if skills
+        .get("include_instructions")
+        .and_then(|item| item.as_value())
+        .and_then(|value| value.as_bool())
+        != Some(false)
+    {
+        return Err(AdapterError::Internal(
+            "Platform Runtime Role Skill restrictions are invalid".to_string(),
+        ));
+    }
+
     let features = table
         .get("features")
         .and_then(|item| item.as_table())
@@ -445,6 +573,7 @@ fn validate_platform_runtime_role_toml(contents: &str) -> Result<(), AdapterErro
         .ok_or_else(|| {
             AdapterError::Internal("Platform Runtime Role MCP restrictions are invalid".to_string())
         })?;
+    let mut enabled_server_count = 0_usize;
     for (root_id, item) in plugins {
         if !is_safe_runtime_capability_name(root_id, MAX_REQUIRED_MCP_SERVER_NAME_BYTES) {
             return Err(AdapterError::Internal(
@@ -484,22 +613,33 @@ fn validate_platform_runtime_role_toml(contents: &str) -> Result<(), AdapterErro
                     "Platform Runtime Role MCP restrictions are invalid".to_string(),
                 ));
             }
-            let server = item
-                .as_table()
-                .filter(|server| server.len() == 2)
+            let server = item.as_table().ok_or_else(|| {
+                AdapterError::Internal(
+                    "Platform Runtime Role MCP restrictions are invalid".to_string(),
+                )
+            })?;
+            let enabled = server
+                .get("enabled")
+                .and_then(|item| item.as_value())
+                .and_then(|value| value.as_bool())
                 .ok_or_else(|| {
                     AdapterError::Internal(
                         "Platform Runtime Role MCP restrictions are invalid".to_string(),
                     )
                 })?;
-            if server
-                .get("enabled")
-                .and_then(|item| item.as_value())
-                .and_then(|value| value.as_bool())
-                != Some(true)
-            {
+            if !enabled {
+                if server.len() != 1 {
+                    return Err(AdapterError::Internal(
+                        "disabled Platform Runtime Role MCP Server has unsupported fields"
+                            .to_string(),
+                    ));
+                }
+                continue;
+            }
+            enabled_server_count += 1;
+            if server.len() != 2 {
                 return Err(AdapterError::Internal(
-                    "Platform Runtime Role MCP server must be enabled".to_string(),
+                    "enabled Platform Runtime Role MCP Server restrictions are invalid".to_string(),
                 ));
             }
             let enabled_tools = server
@@ -525,6 +665,11 @@ fn validate_platform_runtime_role_toml(contents: &str) -> Result<(), AdapterErro
             }
         }
     }
+    if enabled_server_count == 0 {
+        return Err(AdapterError::Internal(
+            "Platform Runtime Role must enable an MCP Server".to_string(),
+        ));
+    }
     Ok(())
 }
 
@@ -549,11 +694,16 @@ pub(crate) fn governed_runtime_role_config_overrides(
     validate_platform_runtime_roles(roles, max_threads)?;
     validate_role_spawn_limits(roles, role_spawn_limits)?;
     validate_required_mcp_servers(required_mcp_servers)?;
+    let capability_roots = merge_capability_root_mcp_inventories(required_mcp_servers)?;
     let mut overrides = serde_json::Map::new();
     overrides.insert("features.apps".to_string(), Value::Bool(false));
     overrides.insert("features.multi_agent_v2".to_string(), Value::Bool(true));
     overrides.insert("features.plugins".to_string(), Value::Bool(false));
     overrides.insert("features.shell_tool".to_string(), Value::Bool(false));
+    overrides.insert(
+        "skills.include_instructions".to_string(),
+        Value::Bool(false),
+    );
     overrides.insert(
         "agents.allowed_roles".to_string(),
         Value::Array(
@@ -573,13 +723,14 @@ pub(crate) fn governed_runtime_role_config_overrides(
         "agents.max_concurrent_threads_per_session".to_string(),
         Value::from(max_threads),
     );
-    for server in required_mcp_servers {
-        for capability_root_id in &server.capability_root_ids {
+    for (capability_root_id, server_names) in capability_roots {
+        overrides.insert(
+            format!("plugins.{capability_root_id}.enabled"),
+            Value::Bool(true),
+        );
+        for server_name in server_names {
             overrides.insert(
-                format!(
-                    "plugins.{capability_root_id}.mcp_servers.{}.enabled",
-                    server.name
-                ),
+                format!("plugins.{capability_root_id}.mcp_servers.{server_name}.enabled"),
                 Value::Bool(false),
             );
         }

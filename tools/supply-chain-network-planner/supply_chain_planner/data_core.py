@@ -66,6 +66,15 @@ def build_planning_dataset(source: PlanningSource) -> PlanningDataset:
         source_digest=digest,
         source_summary=summary,
         network_input=network_input,
+        route_provider=source.route_provider,
+        route_method=source.route_method,
+        route_entries=sorted(
+            source.route_entries,
+            key=lambda item: (
+                item.origin_facility_id,
+                item.destination_demand_id,
+            ),
+        ),
         demand_distribution=distribution,
         delivery_baseline=baseline,
         data_quality=quality,
@@ -73,7 +82,9 @@ def build_planning_dataset(source: PlanningSource) -> PlanningDataset:
             "Demand is aggregated from source order rows by demand_id.",
             "Promotion share is demand-unit weighted.",
             "Delivery baseline uses the source service-policy threshold.",
-            "Only de-identified fields declared by planning_source.v1 are accepted.",
+            "Candidate facilities are reviewed source facts, not Data Agent recommendations.",
+            "Route facts are copied from the authorized source without model estimation.",
+            "Only de-identified fields declared by planning_source.v2 are accepted.",
         ],
     )
 
@@ -122,10 +133,19 @@ def _analyze(
     total_units = sum(demand_units.values())
     summary = PlanningSourceSummary(
         source_id=source.source_id,
+        market=source.market,
+        label=source.label,
         source_updated_at=source.source_updated_at,
         order_row_count=len(source.orders),
         demand_node_count=len(source.demand_locations),
         facility_count=len(source.facilities),
+        existing_facility_count=sum(
+            facility.is_existing for facility in source.facilities
+        ),
+        candidate_facility_count=sum(
+            not facility.is_existing for facility in source.facilities
+        ),
+        route_count=len(source.route_entries),
         date_from=min(dates),
         date_to=max(dates),
         demand_units=total_units,

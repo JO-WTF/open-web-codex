@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Annotated, Literal
 
@@ -15,7 +15,7 @@ NonNegativeMoney = Annotated[Decimal, Field(ge=0, decimal_places=6)]
 
 
 def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class StrictModel(BaseModel):
@@ -36,6 +36,9 @@ class DataAgentRef(StrictModel):
     uri: str = Field(pattern=r"^supply-chain-data://resources/[a-z0-9_.-]{1,160}$")
     format: Literal["json"] = "json"
     resource_schema: str
+
+
+EvidenceRef = Annotated[DataRef | DataAgentRef, Field(discriminator="server")]
 
 
 class Point(StrictModel):
@@ -66,6 +69,7 @@ class Facility(StrictModel):
     is_existing: bool
     handling_seconds: int = Field(default=0, ge=0)
     fixed_cost: NonNegativeMoney = Decimal("0")
+    opening_cost: NonNegativeMoney = Decimal("0")
     handling_cost_per_unit: NonNegativeMoney = Decimal("0")
     label: str | None = Field(default=None, max_length=256)
 
@@ -194,9 +198,28 @@ class OrderFact(StrictModel):
     actual_delivery_seconds: int | None = Field(default=None, ge=0)
 
 
+class RouteFact(StrictModel):
+    origin_facility_id: str
+    destination_demand_id: str
+    distance_meters: int | None = Field(default=None, ge=0)
+    travel_seconds: int | None = Field(default=None, ge=0)
+    status: Literal["ready", "unreachable", "error"] = "ready"
+    error_code: str | None = Field(default=None, max_length=128)
+
+    @model_validator(mode="after")
+    def ready_route_has_metrics(self) -> RouteFact:
+        if self.status == "ready" and (
+            self.distance_meters is None or self.travel_seconds is None
+        ):
+            raise ValueError("ready route entries require distance_meters and travel_seconds")
+        return self
+
+
 class PlanningSource(StrictModel):
-    schema_version: Literal["planning_source.v1"] = "planning_source.v1"
+    schema_version: Literal["planning_source.v2"] = "planning_source.v2"
     source_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,127}$")
+    market: str = Field(pattern=r"^[A-Z]{2}$")
+    label: str = Field(min_length=1, max_length=256)
     source_updated_at: datetime
     planning_period: str = Field(min_length=1, max_length=128)
     currency: str = Field(pattern=r"^[A-Z]{3}$")
@@ -204,6 +227,9 @@ class PlanningSource(StrictModel):
     demand_locations: list[DemandLocation] = Field(min_length=1)
     facilities: list[Facility] = Field(min_length=1)
     transport_rates: list[TransportRate] = Field(min_length=1)
+    route_provider: str = Field(min_length=1, max_length=128)
+    route_method: Literal["navigation", "quoted", "haversine_estimate"]
+    route_entries: list[RouteFact] = Field(min_length=1)
     orders: list[OrderFact] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -212,15 +238,18 @@ class PlanningSource(StrictModel):
         if len(demand_ids) != len(set(demand_ids)):
             raise ValueError("duplicate demand location identifier")
         facility_ids = {item.facility_id for item in self.facilities}
-        if any(not item.is_existing for item in self.facilities):
-            raise ValueError("planning source may contain only existing facilities")
+        existing_facility_ids = {
+            item.facility_id for item in self.facilities if item.is_existing
+        }
+        if not existing_facility_ids:
+            raise ValueError("planning source requires at least one existing facility")
         for location in self.demand_locations:
             if (
                 location.current_facility_id is not None
-                and location.current_facility_id not in facility_ids
+                and location.current_facility_id not in existing_facility_ids
             ):
                 raise ValueError(
-                    f"demand {location.demand_id!r} references unknown current facility "
+                    f"demand {location.demand_id!r} references unknown existing facility "
                     f"{location.current_facility_id!r}"
                 )
         demand_id_set = set(demand_ids)
@@ -247,15 +276,42 @@ class PlanningSource(StrictModel):
             facilities=self.facilities,
             transport_rates=self.transport_rates,
         )
+        route_pairs = [
+            (item.origin_facility_id, item.destination_demand_id)
+            for item in self.route_entries
+        ]
+        if len(route_pairs) != len(set(route_pairs)):
+            raise ValueError("planning source contains duplicate route pairs")
+        expected_route_pairs = {
+            (facility_id, demand_id)
+            for facility_id in facility_ids
+            for demand_id in demand_id_set
+        }
+        supplied_route_pairs = set(route_pairs)
+        unknown_route_pairs = supplied_route_pairs - expected_route_pairs
+        if unknown_route_pairs:
+            raise ValueError(
+                "planning source route references unknown facilities or demand nodes"
+            )
+        missing_route_pairs = expected_route_pairs - supplied_route_pairs
+        if missing_route_pairs:
+            raise ValueError(
+                f"planning source is missing {len(missing_route_pairs)} route pairs"
+            )
         return self
 
 
 class PlanningSourceSummary(StrictModel):
     source_id: str
+    market: str = Field(pattern=r"^[A-Z]{2}$")
+    label: str
     source_updated_at: datetime
     order_row_count: int = Field(ge=0)
     demand_node_count: int = Field(ge=0)
     facility_count: int = Field(ge=0)
+    existing_facility_count: int = Field(ge=0)
+    candidate_facility_count: int = Field(ge=0)
+    route_count: int = Field(ge=0)
     date_from: date
     date_to: date
     demand_units: int = Field(ge=0)
@@ -286,12 +342,15 @@ class PlanningDataQuality(StrictModel):
 
 
 class PlanningDataset(StrictModel):
-    schema_version: Literal["planning-dataset.v1"] = "planning-dataset.v1"
+    schema_version: Literal["planning-dataset.v2"] = "planning-dataset.v2"
     dataset_id: str
     created_at: datetime = Field(default_factory=utc_now)
     source_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
     source_summary: PlanningSourceSummary
     network_input: NetworkInput
+    route_provider: str
+    route_method: Literal["navigation", "quoted", "haversine_estimate"]
+    route_entries: list[RouteFact]
     demand_distribution: list[DemandDistributionRow]
     delivery_baseline: DeliveryBaseline
     data_quality: PlanningDataQuality
@@ -299,8 +358,8 @@ class PlanningDataset(StrictModel):
 
 
 class PlanningSourceInspection(StrictModel):
-    schema_version: Literal["planning_source_inspection.v1"] = (
-        "planning_source_inspection.v1"
+    schema_version: Literal["planning_source_inspection.v2"] = (
+        "planning_source_inspection.v2"
     )
     source_summary: PlanningSourceSummary
     data_quality: PlanningDataQuality
@@ -308,6 +367,8 @@ class PlanningSourceInspection(StrictModel):
 
 class PlanningSourceCatalogEntry(StrictModel):
     source_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,127}$")
+    market: str = Field(pattern=r"^[A-Z]{2}$")
+    label: str = Field(min_length=1, max_length=256)
     source_updated_at: datetime
     planning_period: str = Field(min_length=1, max_length=128)
     currency: str = Field(pattern=r"^[A-Z]{3}$")
@@ -318,12 +379,15 @@ class PlanningSourceCatalogEntry(StrictModel):
     demand_units: int = Field(ge=0)
     demand_node_count: int = Field(ge=0)
     facility_count: int = Field(ge=0)
+    existing_facility_count: int = Field(ge=0)
+    candidate_facility_count: int = Field(ge=0)
+    route_count: int = Field(ge=0)
     regions: list[str]
 
 
 class PlanningSourceCatalog(StrictModel):
-    schema_version: Literal["planning_source_catalog.v1"] = (
-        "planning_source_catalog.v1"
+    schema_version: Literal["planning_source_catalog.v2"] = (
+        "planning_source_catalog.v2"
     )
     sources: list[PlanningSourceCatalogEntry]
     truncated: bool = False
@@ -342,21 +406,8 @@ class NetworkSnapshot(NetworkInput):
     source_name: str | None = None
 
 
-class RouteEntry(StrictModel):
-    origin_facility_id: str
-    destination_demand_id: str
-    distance_meters: int | None = Field(default=None, ge=0)
-    travel_seconds: int | None = Field(default=None, ge=0)
-    status: Literal["ready", "unreachable", "error"] = "ready"
-    error_code: str | None = Field(default=None, max_length=128)
-
-    @model_validator(mode="after")
-    def ready_route_has_metrics(self) -> RouteEntry:
-        if self.status == "ready" and (
-            self.distance_meters is None or self.travel_seconds is None
-        ):
-            raise ValueError("ready route entries require distance_meters and travel_seconds")
-        return self
+class RouteEntry(RouteFact):
+    pass
 
 
 class RouteMatrix(StrictModel):
@@ -411,7 +462,9 @@ class CurrentCoverageResult(StrictModel):
     schema_version: Literal["current_coverage_result.v1"] = "current_coverage_result.v1"
     snapshot_id: str
     route_matrix_id: str
+    actual_result_resource_name: str
     actual_result_ref: DataRef
+    optimized_result_resource_name: str
     optimized_result_ref: DataRef
     actual_metrics: NetworkMetrics
     optimized_metrics: NetworkMetrics
@@ -442,12 +495,60 @@ class FacilityLocationSolution(StrictModel):
     selected_candidate_facility_ids: list[str]
     active_facility_ids: list[str]
     evaluated_subset_count: int = Field(ge=0)
+    result_resource_name: str
     result_ref: DataRef
     metrics: NetworkMetrics
     method: Literal["exact_subset_enumeration_with_min_cost_flow"] = (
         "exact_subset_enumeration_with_min_cost_flow"
     )
     assumptions: list[str]
+
+
+class FinancialEvaluation(StrictModel):
+    schema_version: Literal["financial_evaluation.v1"] = "financial_evaluation.v1"
+    evaluation_id: str
+    snapshot_id: str
+    baseline_result_id: str
+    candidate_result_id: str
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    planning_period: str
+    horizon_years: int = Field(ge=1, le=20)
+    discount_rate: float = Field(ge=0, le=1)
+    annual_growth_rate: float = Field(ge=-0.5, le=1)
+    opening_investment: NonNegativeMoney
+    annual_operating_savings: Decimal
+    net_present_value: Decimal
+    payback_years: float | None = Field(default=None, ge=0)
+    financially_viable: bool
+    input_refs: list[DataRef] = Field(min_length=3)
+    assumptions: list[str] = Field(min_length=1)
+
+
+class RiskItem(StrictModel):
+    risk_id: str = Field(min_length=1, max_length=128)
+    category: Literal[
+        "demand",
+        "service",
+        "financial",
+        "operational",
+        "regulatory",
+        "data",
+    ]
+    statement: str = Field(min_length=1, max_length=1024)
+    likelihood: int = Field(ge=1, le=5)
+    impact: int = Field(ge=1, le=5)
+    mitigation: str = Field(min_length=1, max_length=1024)
+    trigger: str = Field(min_length=1, max_length=1024)
+    evidence_refs: list[EvidenceRef] = Field(min_length=1)
+
+
+class RiskRegister(StrictModel):
+    schema_version: Literal["risk_register.v1"] = "risk_register.v1"
+    register_id: str
+    decision_scope: str = Field(min_length=1, max_length=1024)
+    risks: list[RiskItem] = Field(min_length=1)
+    unresolved_risk_count: int = Field(ge=0)
+    published_at: datetime = Field(default_factory=utc_now)
 
 
 class ValidationResult(StrictModel):
@@ -481,3 +582,15 @@ class FacilityLocationToolResult(FacilityLocationSolution):
     summary: str
     resource_name: str
     solution_ref: DataRef
+
+
+class FinancialEvaluationToolResult(FinancialEvaluation):
+    summary: str
+    resource_name: str
+    data_ref: DataRef
+
+
+class RiskRegisterToolResult(RiskRegister):
+    summary: str
+    resource_name: str
+    data_ref: DataRef

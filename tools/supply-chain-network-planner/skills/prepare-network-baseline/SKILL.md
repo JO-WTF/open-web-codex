@@ -1,6 +1,6 @@
 ---
 name: prepare-network-baseline
-description: Prepare an immutable, validated supply-chain network snapshot and a complete facility-to-demand route matrix. Use before calculating current 1-day coverage, comparing a new warehouse scenario, or optimizing warehouse locations when source demand, warehouse, transport-rate, address, coordinate, route, or service-policy data must be assembled or refreshed.
+description: Prepare an immutable, validated supply-chain network snapshot and route matrix from a planning-dataset.v2 Resource. Use before calculating current coverage, comparing a network option, or optimizing reviewed candidate locations.
 ---
 
 # Prepare Network Baseline
@@ -13,25 +13,20 @@ planning tools.
 
 1. Identify the planning period, currency, demand unit, service promise, and the exact
    end-to-end SLA formula. Do not infer a 1-day threshold from route duration alone.
-2. Prefer the validated `planning-dataset.v1` produced by
-   `$prepare-planning-dataset`. Read its Resource and use the exact `network_input`
-   projection. Add candidate facilities and their rates explicitly for scenario or
-   location work. When no planning dataset exists, load demand points, existing
-   facilities, candidate facilities, and transport rates from the authorized source.
-   Preserve stable business identifiers.
-3. Ensure every demand point and facility has coordinates. If only addresses are present,
-   use `map_utils.batch_geocode`, review failed or ambiguous matches, and then assemble
-   the typed `network_input.v1` payload.
+2. Require a validated `planning-dataset.v2` produced by
+   `$prepare-planning-dataset`. Read its Resource and use the exact `network_input`,
+   `route_provider`, `route_method`, and `route_entries` fields. Preserve stable
+   business identifiers; do not add candidate or route facts from local files.
+3. Confirm that every demand point and facility has coordinates and that the dataset
+   contains every required facility-demand route pair.
 4. Call `supply_chain_planner.prepare_network_snapshot`. Carry its `data_ref` unchanged.
    Never mutate a published snapshot; prepare a new one when source facts or policy
    assumptions change.
-5. Generate route distance and duration for every facility-demand pair needed by the
-   analysis. Use `map_utils.distance_matrix` in deterministic batches of at most 2,500
-   origin-destination elements, retaining input identifier order.
-6. Convert the navigation response into `RouteEntry` rows and call
-   `supply_chain_planner.register_route_matrix` with `method="navigation"`. Use
-   `haversine_estimate` only when the user explicitly accepts a rough estimate and label
-   every result accordingly.
+5. Register the dataset's exact route rows with its declared provider and method. Do
+   not regenerate reviewed routes unless the assignment explicitly requires refreshed
+   route evidence from an authorized routing capability.
+6. Require a complete matrix for decision work. Use an incomplete matrix only for
+   explicit diagnostics, keeping missing and unreachable pairs visible.
 7. Call `supply_chain_planner.validate_network_resource` for both snapshot and route
    matrix. Stop on validation errors. Report missing or unreachable route pairs rather
    than silently substituting straight-line distance.

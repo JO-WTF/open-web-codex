@@ -1,0 +1,50 @@
+{
+  "definitionId": "enterprise-visualization-agent",
+  "version": "1.1.0",
+  "displayName": "Enterprise Visualization Agent",
+  "description": "Converts a validated bounded network-map manifest and referenced GeoJSON into a browser-renderable map Artifact.",
+  "runtimeRole": "agent_79bee7cd1bbdee5bc152913278077848",
+  "runtimeProfile": {
+    "contentSha256": "91e27c8b0808163821cd731109d0531dace1ee4f5075d42d420134f843fb8378"
+  },
+  "responsibilities": [
+    "Read only the bounded indonesia_network_map.v1 manifest and verify its exact GeoJSON Resource identity.",
+    "Pass the unchanged GeoJSON reference, Mapbox layers and safe extensions to map_utils.create_map_card.",
+    "Publish and explicitly embed the returned map.v3 Artifact without recalculating or changing network evidence."
+  ],
+  "inputArtifactTypes": [
+    "indonesia_network_map.v1",
+    "geojson.v1"
+  ],
+  "outputArtifactTypes": [
+    "map.v3"
+  ],
+  "capabilityTemplate": {
+    "definitionId": "enterprise-visualization-agent",
+    "version": "1.1.0"
+  },
+  "requiredMcpServers": [
+    {
+      "name": "supply_chain_indonesia",
+      "tools": [],
+      "resourceRead": true,
+      "capabilityRootIds": [
+        "local-supply-chain-network-planner"
+      ]
+    },
+    {
+      "name": "map_utils",
+      "tools": [
+        "create_map_card"
+      ],
+      "resourceRead": false,
+      "capabilityRootIds": [
+        "local-maps-mcp"
+      ]
+    }
+  ],
+  "risks": [
+    "A valid map shows supplied evidence but does not independently validate the underlying decision.",
+    "Changing layers or source references can misrepresent the analytical comparison."
+  ]
+}

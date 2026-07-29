@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use open_web_codex_platform_contracts::CapabilityPackageSummary;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 use crate::supervisor::SupervisorCatalogError;
 use crate::validation::is_safe_definition_id;
@@ -125,6 +126,8 @@ fn resolve_resource(
         ));
     }
     Ok(CapabilityPackageSummary {
+        release_id: None,
+        workspace_id: None,
         capability_root_id: resource.capability_root_id.to_string(),
         package_id: manifest.name,
         version: manifest.version,
@@ -132,8 +135,17 @@ fn resolve_resource(
         description: manifest.description,
         capabilities: manifest.interface.capabilities,
         mcp_server_names: mcp.mcp_servers.into_keys().collect(),
+        tool_names: Vec::new(),
+        input_artifact_types: Vec::new(),
+        output_artifact_types: Vec::new(),
         includes_skills: manifest.skills.as_deref() == Some("./skills/"),
         source: "repository".to_string(),
+        content_sha256: {
+            let mut digest = Sha256::new();
+            digest.update(resource.manifest.as_bytes());
+            digest.update(resource.mcp.as_bytes());
+            hex::encode(digest.finalize())
+        },
     })
 }
 
