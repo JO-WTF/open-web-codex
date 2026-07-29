@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
-# Single-host production deployment entrypoint.
-# Builds optimized artifacts, keeps verbose output in a bounded log, performs a
-# health-checked rollout, and leaves the development-only Vite process stopped.
+# Single-host production deployment policy.
+# Database provisioning and deployment state remain here; run-local owns the
+# Release build, target retention, service replacement, and startup health gate.
 
 set -Eeuo pipefail
 umask 077
@@ -12,12 +12,6 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 web_root="$repo_root/apps/web"
 runtime_root="$repo_root/codex/codex-rs"
 run_local="$script_dir/run-local.sh"
-start_all="$script_dir/start-all.sh"
-cargo_cache_lib="$script_dir/cargo-build-cache.sh"
-target_gc="$script_dir/cargo-target-gc.sh"
-
-# shellcheck source=scripts/cargo-build-cache.sh
-source "$cargo_cache_lib"
 
 action="deploy"
 codex_mode="${CODEX_MODE:-real}"
@@ -29,8 +23,6 @@ database_name="open_web_codex"
 database_max_connections="${DATABASE_MAX_CONNECTIONS:-10}"
 data_dir="${OPEN_WEB_CODEX_DATA_DIR:-$repo_root/.local/open-web-codex}"
 public_url="${OPEN_WEB_CODEX_PUBLIC_URL:-}"
-target_limit_gb="${OPEN_WEB_CODEX_TARGET_LIMIT_GB:-24}"
-target_low_water_gb="${OPEN_WEB_CODEX_TARGET_LOW_WATER_GB:-16}"
 deploy_commit="$(git -C "$repo_root" rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown')"
 reuse_build="0"
 bind_was_set="0"
@@ -86,8 +78,10 @@ always open_web_codex. Generated credentials are stored with mode 600 under
 the deployment data directory. Non-interactive deployments must provide a URL
 or a readable URL file.
 
-Verbose install and compilation output is written to:
+Deployment policy output is written to:
   .local/open-web-codex/logs/deploy.log
+Detailed build and startup output is written to:
+  .local/open-web-codex/logs/run-local.log
 EOF
 }
 
@@ -151,16 +145,12 @@ case "$codex_mode" in real|fake) ;; *) fail "CODEX_MODE must be real or fake" ;;
 case "$reuse_build" in 0|1) ;; *) fail "reuse-build state is invalid" ;; esac
 [[ "$server_port" =~ ^[1-9][0-9]*$ ]] || fail "port must be a positive integer"
 [[ "$database_max_connections" =~ ^[1-9][0-9]*$ ]] || fail "database pool size must be a positive integer"
-[[ "$target_limit_gb" =~ ^[0-9]+$ ]] || fail "OPEN_WEB_CODEX_TARGET_LIMIT_GB must be zero or a positive integer"
-[[ "$target_low_water_gb" =~ ^[0-9]+$ ]] || fail "OPEN_WEB_CODEX_TARGET_LOW_WATER_GB must be zero or a positive integer"
-if ((target_limit_gb > 0 && target_low_water_gb >= target_limit_gb)); then
-  fail "OPEN_WEB_CODEX_TARGET_LOW_WATER_GB must be lower than OPEN_WEB_CODEX_TARGET_LIMIT_GB"
-fi
 [[ "$bind_host" != *$'\n'* && "$public_url" != *$'\n'* ]] || fail "host and URL values must be single-line"
 
 run_dir="$data_dir/run"
 log_dir="$data_dir/logs"
 deploy_log="$log_dir/deploy.log"
+run_local_log="$log_dir/run-local.log"
 server_log="$log_dir/server.log"
 pid_file="$run_dir/server.pid"
 state_file="$run_dir/deploy-state"
@@ -632,19 +622,11 @@ fi
 : >"$deploy_log"
 chmod 600 "$deploy_log"
 printf 'open-web-codex deploy started at %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >>"$deploy_log"
-cargo_build_cache_configure "$repo_root"
-cargo_build_cache_describe >>"$deploy_log"
 
 is_tty="0"
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then is_tty="1"; fi
 step_done=0
-step_total=5
-if [[ "$reuse_build" == "0" ]]; then
-  step_total=$((step_total + 4))
-  if [[ "$codex_mode" == "real" && -z "${CODEX_BIN:-}" ]]; then
-    step_total=$((step_total + 1))
-  fi
-fi
+step_total=4
 
 render_progress() {
   local label="$1" width=28 filled empty i bar='' display_step
@@ -703,49 +685,11 @@ run_step() {
   step_done=$((step_done + 1))
 }
 
-install_web_dependencies() {
-  cd "$web_root"
-  npm ci
-}
-
-build_browser() {
-  cd "$web_root"
-  npm run build
-}
-
-build_platform_server() {
-  cd "$web_root"
-  cargo build --locked --release -p open-web-codex-server
-}
-
-build_codex_runtime() {
-  cd "$runtime_root"
-  cargo build --locked --release \
-    -p codex-cli --bin codex \
-    -p codex-code-mode-host --bin codex-code-mode-host
-}
-
-enforce_target_retention() {
-  OPEN_WEB_CODEX_TARGET_LIMIT_GB="$target_limit_gb" \
-    OPEN_WEB_CODEX_TARGET_LOW_WATER_GB="$target_low_water_gb" \
-    "$target_gc" --preserve-profile release
-}
-
-enforce_target_retention_on_exit() {
-  local exit_status=$?
-  trap - EXIT
-  if ! enforce_target_retention >>"$deploy_log" 2>&1; then
-    printf 'warning: Cargo target retention also failed; inspect %s\n' \
-      "$deploy_log" >&2
-  fi
-  exit "$exit_status"
-}
-
 rollout_service() {
   local -a args
-  OPEN_WEB_CODEX_DATA_DIR="$data_dir" "$start_all" --stop || true
-  args=(--release --background --no-build --bind "$bind_host" --port "$server_port" \
+  args=(--release --restart --bind "$bind_host" --port "$server_port" \
     --database-max-connections "$database_max_connections")
+  if [[ "$reuse_build" == "1" ]]; then args+=(--no-build); fi
   if [[ "$codex_mode" == "fake" ]]; then args+=(--fake); fi
   if [[ -n "$database_url_file" ]]; then
     args+=(--database-url-file "$database_url_file")
@@ -753,7 +697,6 @@ rollout_service() {
     args+=(--database-url "$database_url")
   fi
   OPEN_WEB_CODEX_DATA_DIR="$data_dir" \
-    OPEN_WEB_CODEX_SKIP_TARGET_GC=1 \
     "$run_local" "${args[@]}"
 }
 
@@ -784,19 +727,7 @@ write_deploy_state() {
 run_step 'Validate prerequisites' validate_prerequisites
 resolve_database_configuration yes
 run_step 'Verify PostgreSQL database' verify_configured_database
-run_step 'Cargo target preflight' enforce_target_retention
-if [[ "$reuse_build" == "0" ]]; then
-  trap enforce_target_retention_on_exit EXIT
-  run_step 'Install exact Web dependencies' install_web_dependencies
-  run_step 'Build browser application' build_browser
-  run_step 'Build platform Server (release)' build_platform_server
-  if [[ "$codex_mode" == "real" && -z "${CODEX_BIN:-}" ]]; then
-    run_step 'Build Codex Runtime (release)' build_codex_runtime
-  fi
-  trap - EXIT
-  run_step 'Enforce Cargo target retention' enforce_target_retention
-fi
-run_step 'Apply health-checked rollout' rollout_service
+run_step 'Build and replace service' rollout_service
 run_step 'Verify service health' verify_deployment
 
 write_deploy_state
@@ -804,4 +735,5 @@ printf 'open-web-codex deploy completed at %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ
 
 printf '\n'
 show_service_box 'HEALTHY' "$(read_server_pid)"
-printf '\nDetailed build output: %s\n' "$deploy_log"
+printf '\nDeployment output: %s\n' "$deploy_log"
+printf 'Build and startup output: %s\n' "$run_local_log"

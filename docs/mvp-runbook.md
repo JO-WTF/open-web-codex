@@ -37,11 +37,13 @@ postgresql://$USER@127.0.0.1:5432/open_web_codex
 ./scripts/deploy.sh
 ```
 
-它按锁文件安装依赖，构建优化后的 Web、平台 Server 和仓库 Codex，停止开发
-Vite，后台启动 Server，并在健康检查通过后展示 Web/API 地址、运行模式、PID 和
-日志位置。安装与编译详情写入固定的
-`.local/open-web-codex/logs/deploy.log`，终端只展示阶段进度；失败时才显示日志
-尾部。生产页面由 Server 同源托管在 `http://127.0.0.1:4800/web`。
+它负责校验 PostgreSQL 和部署策略，再把 Release 构建、target 回收、服务替换及启动
+健康门禁委托给唯一的生命周期所有者 `run-local.sh`。平台 Server 和 Runtime 使用与
+本地启动相同的精确 Cargo 依赖指纹，未变化的 Release 二进制不会重新构建。构建成功
+后才停止并替换现有 Server，失败不会提前中断当前服务。部署策略输出写入
+`.local/open-web-codex/logs/deploy.log`，构建与启动详情写入
+`.local/open-web-codex/logs/run-local.log`。生产页面由 Server 同源托管在
+`http://127.0.0.1:4800/web`。
 
 没有 `DATABASE_URL`、`--database-url-file` 或已保存配置时，交互部署会询问：
 
@@ -66,32 +68,34 @@ Vite，后台启动 Server，并在健康检查通过后展示 Web/API 地址、
 反向代理。脚本是当前单机 Release 部署入口；OS 服务守护、备份恢复和滚动升级
 仍属于 GA 门禁。
 
-1421/4800 双进程仅用于开发和 UI 联调：
-
-用 Fake Runtime 验证 1421 WebApp 与 Server：
+用 Fake Runtime 启动同源 WebApp 与 Server：
 
 ```bash
-./scripts/start-all.sh --fake
+./scripts/run-local.sh --fake --background
 ```
 
 用真实 Codex 启动：
 
 ```bash
-./scripts/start-all.sh
+./scripts/run-local.sh --background
 ```
 
-脚本在 `4800` 启动平台 Server，并在 `http://127.0.0.1:1421/web`
-启动 main 基线的独立 WebApp。WebApp 同源调用类型化 REST 和认证 WebSocket；
-不启动 4732/4733 daemon，也没有独立 Gateway 进程。真实模式要求仓库 Codex
-Binary 已构建；Fake 模式只用于 Server/WebApp 联调。
+脚本在 `4800` 启动平台 Server，并在 `http://127.0.0.1:4800/web`
+同源提供 WebApp、类型化 REST 和认证 WebSocket；不启动独立 Vite、
+4732/4733 daemon 或 Gateway 进程。真实模式默认使用仓库 Codex Binary；
+Fake 模式只用于 Server/WebApp 联调。
 本地 Secret Store 主密钥首次运行时生成在
 `.local/open-web-codex/master-key`，权限为仅当前用户可读；生产部署必须从外部
 Secret Manager 注入 `OPEN_WEB_CODEX_MASTER_KEY`。
 
+前端需要热更新时，先保持 4800 Server 运行，再从 `apps/web` 执行
+`npm run dev`。Vite 默认监听 `http://127.0.0.1:1420`，只作为可丢弃的开发工具，
+并将 API 与 WebSocket 代理到 4800；它不属于平台服务生命周期。
+
 已有兼容 Binary 时可以显式指定：
 
 ```bash
-CODEX_BIN=/absolute/path/to/codex ./scripts/start-all.sh
+CODEX_BIN=/absolute/path/to/codex ./scripts/run-local.sh --background
 ```
 
 含密码的数据库 URL 推荐放在仅当前用户可读的文件中：
@@ -99,25 +103,38 @@ CODEX_BIN=/absolute/path/to/codex ./scripts/start-all.sh
 ```bash
 printf '%s\n' 'postgresql://user:password@host:5432/open_web_codex' > .local/database-url
 chmod 600 .local/database-url
-DATABASE_URL="$(<.local/database-url)" ./scripts/start-all.sh
+DATABASE_URL="$(<.local/database-url)" ./scripts/run-local.sh --background
 ```
 
 后台管理：
 
 ```bash
-./scripts/start-all.sh
+./scripts/run-local.sh --background
 ./scripts/run-local.sh --status
 ./scripts/run-local.sh --restart
-./scripts/start-all.sh --stop
+./scripts/run-local.sh --stop
 ```
 
 `--restart` 先用独立的 `dev-small` Profile 完成变更，再停止并替换后台
-Server，构建失败不会中断当前进程。确认已有构建输出为最新时可配合
-`--no-build` 跳过浏览器、Server 和仓库 Codex 构建。仓库构建默认关闭 Cargo
-增量编译并在已安装时使用容量上限为 8 GiB 的 sccache；Rust 测试使用独立的
-`ci-test` Profile。Web 与 Codex target 合计超过 24 GiB 时，脚本按 Profile
-清理到 16 GiB，并始终保留 Release 产物。终端只展示阶段、耗时和最终服务面板；
-构建与环境准备详情位于
+Server，构建失败不会中断当前进程。默认启动仍构建浏览器；平台 Server、
+`codex` 与 `codex-code-mode-host` 分别检查自己的精确 Cargo dep-info 指纹。
+指纹覆盖最终二进制实际使用的源文件、嵌入式迁移、build-script 目录依赖、相关 crate
+manifest、workspace lock/config、工具链、构建 Profile 和会改变产物的环境。
+Server 指纹匹配时不调用其 Cargo 构建；Runtime 两者均匹配时不调用 Runtime Cargo，
+只有一个过期时只构建该二进制，两者同时过期时合并构建。
+
+成功构建后的可丢弃 stamp 位于
+`.local/open-web-codex/build-stamps/platform-server/<profile>/` 和
+`.local/open-web-codex/build-stamps/codex-runtime/<profile>/`。stamp 只在构建成功后
+原子更新；源码内容变化、工具链或 Profile 变化、产物被替换，以及 target 高低水位
+回收导致二进制或 `.d` 文件缺失，都会使它失效并触发正确重建。文档和测试等未进入
+对应二进制 Cargo dep-info 的文件不会触发 Server 或 Runtime 构建。
+
+确认所有已有构建输出为最新时仍可配合 `--no-build` 跳过浏览器、Server 和仓库
+Codex 的全部构建检查。仓库构建默认关闭 Cargo 增量编译并在已安装时使用容量上限为
+8 GiB 的 sccache；Rust 测试使用独立的 `ci-test` Profile。Web 与 Codex target
+合计超过 24 GiB 时，脚本按 Profile 清理到 16 GiB，并始终保留 Release 产物。
+终端只展示阶段、耗时和最终服务面板；构建与环境准备详情位于
 `.local/open-web-codex/logs/run-local.log`，Server 输出位于同目录的
 `server.log`。失败时脚本直接显示相关日志尾部。
 
@@ -139,7 +156,7 @@ Project、主 Thread 与延时 Thread，并验证消息流事件顺序、代码�
 
 ## 浏览器纵向流程
 
-1. 打开 `http://127.0.0.1:1421/web`。
+1. 打开 `http://127.0.0.1:4800/web`。
 2. 当前单用户入口自动建立本地 Owner 与 Session，不显示登录或注册页面。
 3. 创建 Git Project，平台只接受受控 Git URL，不接受浏览器本地路径。
 4. 显式创建或选择一个已授权 Workspace，再创建 Task 和 Run；Run 只引用

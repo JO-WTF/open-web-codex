@@ -34,30 +34,32 @@ attempt. Neither object implicitly creates or owns a checkout.
 
 ## Local development
 
-From the repository root, start the 1421 WebApp and the 4800 Server together:
+From the repository root, start the same-origin WebApp and Server together:
 
 ```bash
-./scripts/start-all.sh --fake
+./scripts/run-local.sh --fake --background
 ```
 
-Open `http://127.0.0.1:1421/web`. The current single-user flow creates an
+Open `http://127.0.0.1:4800/web`. The current single-user flow creates an
 implicit local Owner and Session, skips login and registration screens, and
 opens the WebApp directly. Server-side Session, Organization, Profile and
 resource authorization remain in use. No daemon or Gateway process is started.
 Real Runtime mode is the default when `--fake` is omitted; see
 [`../../docs/mvp-runbook.md`](../../docs/mvp-runbook.md) for configuration.
 
-To run the two development processes separately:
+For frontend hot reload, keep the platform Server running and start Vite:
 
 ```bash
-npm ci
-npm run dev
+./scripts/run-local.sh --fake --background
 
 # another terminal
-cargo run -p open-web-codex-server -- --codex-mode fake
+cd apps/web
+npm ci
+npm run dev
 ```
 
-Vite proxies `/api` and WebSocket upgrades to `127.0.0.1:4800`.
+Vite uses port 1420 by default and proxies `/api` and WebSocket upgrades to
+`127.0.0.1:4800`.
 
 ## Single-host release deployment
 
@@ -67,11 +69,14 @@ From the repository root:
 ./scripts/deploy.sh
 ```
 
-This uses optimized Release binaries and lets the platform Server serve the
-built WebApp directly at `http://127.0.0.1:4800/web`; Vite is not part of the
-deployed topology. Dependency and compiler output is kept in
-`.local/open-web-codex/logs/deploy.log`, while the terminal displays stage
-progress and the final health/address panel.
+This validates deployment policy and delegates the optimized build and
+health-checked service replacement to `run-local.sh`, the single build and
+service-lifecycle owner. The Platform Server and Runtime components use exact
+Cargo dependency fingerprints. The platform Server serves the built WebApp
+directly at `http://127.0.0.1:4800/web`; Vite is not part of the deployed
+topology. Deployment output is kept in
+`.local/open-web-codex/logs/deploy.log`, and build or startup details are kept
+in `.local/open-web-codex/logs/run-local.log`.
 
 Without `DATABASE_URL` or a saved credential file, an interactive deployment
 offers to connect to an existing PostgreSQL server or create an application
@@ -134,7 +139,7 @@ restoration and durable/live event ordering. It never prints the Provider key.
 ## Layout
 
 ```text
-src/WebApp.tsx             restored 1421 WebApp UI
+src/WebApp.tsx             established browser WebApp UI
 src/services/webClient.ts  narrow WebApp-to-Server compatibility seam
 browser/client.ts          authenticated typed REST/WebSocket transport
 browser/browser-entry.ts   implicit local Session and WebApp entry

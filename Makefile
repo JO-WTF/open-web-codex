@@ -1,7 +1,7 @@
-.PHONY: mvp deploy deploy-status deploy-stop web-install web-check web-test web-rust-test codex-test contracts-check cargo-cache-status cargo-target-status cargo-target-gc build-cache-test codex-upstream-status codex-upstream-sync
+.PHONY: mvp deploy deploy-status deploy-stop web-install web-check web-test web-rust-test codex-test contracts-check cargo-cache-status cargo-target-status cargo-target-gc build-cache-test deploy-policy-test codex-upstream-status codex-upstream-sync
 
 mvp:
-	./scripts/start-all.sh
+	./scripts/run-local.sh --background
 
 deploy:
 	./scripts/deploy.sh
@@ -41,6 +41,9 @@ cargo-target-gc:
 
 build-cache-test:
 	./scripts/tests/cargo-build-retention.sh
+
+deploy-policy-test:
+	./scripts/tests/deploy-policy.sh
 
 codex-upstream-status:
 	./scripts/codex-upstream-status.sh

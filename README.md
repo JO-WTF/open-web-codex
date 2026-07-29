@@ -38,11 +38,14 @@ then run:
 ./scripts/deploy.sh
 ```
 
-The deployer installs exact Web dependencies, builds optimized browser,
-platform Server and repository Codex artifacts, starts the Server in the
-background, and verifies its health. Verbose build output stays in
-`.local/open-web-codex/logs/deploy.log`; the terminal shows stage progress and a
-service summary. Open `http://127.0.0.1:4800/web` after it succeeds.
+The deployer validates PostgreSQL and delegates the optimized browser, platform
+Server and repository Codex build plus health-checked replacement to the
+canonical local runner. The Platform Server and Runtime components use exact
+Cargo dependency fingerprints, so unchanged Release binaries are not rebuilt.
+Deployment policy output stays in `.local/open-web-codex/logs/deploy.log`;
+detailed build and startup output stays in
+`.local/open-web-codex/logs/run-local.log`. Open `http://127.0.0.1:4800/web`
+after it succeeds.
 
 When no database configuration exists, an interactive deploy asks whether to
 use an existing PostgreSQL database or create the database and an application
@@ -63,20 +66,23 @@ directly. This is the production-shaped single-host launcher; the remaining GA
 security, backup and supervised-service gates are tracked in the development
 plan.
 
-For development, run the restored standalone WebApp with the deterministic
-test Runtime:
+For development, start the same-origin WebApp and deterministic test Runtime:
 
 ```bash
-./scripts/start-all.sh --fake
+./scripts/run-local.sh --fake --background
 ```
 
-Then open `http://127.0.0.1:1421/web`. The current single-user WebApp creates an
+Then open `http://127.0.0.1:4800/web`. The current single-user WebApp creates an
 implicit local Session and enters directly, without a login or registration
-screen. It calls the platform Server on port `4800` through typed REST resources
-and `/api/events/ws`; there is no separate Gateway process. Use
-`./scripts/start-all.sh` for the repository Codex Runtime. See
+screen. It calls the platform Server through same-origin typed REST resources
+and `/api/events/ws`; there is no separate Gateway process. Omit `--fake` to use
+the repository Codex Runtime. See
 [the MVP runbook](docs/mvp-runbook.md) for the browser flow, binary override and
 known limitations.
+
+For frontend hot reload, keep the platform Server on port 4800 and run
+`npm run dev` from `apps/web`; Vite uses port 1420 and proxies API and WebSocket
+traffic to the platform Server.
 
 Web application:
 

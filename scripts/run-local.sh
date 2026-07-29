@@ -9,6 +9,7 @@ web_root="$repo_root/apps/web"
 runtime_root="$repo_root/codex/codex-rs"
 cargo_cache_lib="$script_dir/cargo-build-cache.sh"
 target_gc="$script_dir/cargo-target-gc.sh"
+cargo_fingerprint_tool="$script_dir/cargo-dep-fingerprint.mjs"
 
 # shellcheck source=scripts/cargo-build-cache.sh
 source "$cargo_cache_lib"
@@ -392,6 +393,36 @@ if [[ "$codex_mode" == "real" && -z "$codex_bin" ]]; then
   using_repository_codex="1"
 fi
 code_mode_host_bin="$runtime_target_dir/$cargo_profile_dir/codex-code-mode-host"
+server_dep_info="$web_target_dir/$cargo_profile_dir/open-web-codex-server.d"
+codex_dep_info="$runtime_target_dir/$cargo_profile_dir/codex.d"
+code_mode_host_dep_info="$runtime_target_dir/$cargo_profile_dir/codex-code-mode-host.d"
+server_stamp_dir="$data_dir/build-stamps/platform-server/$cargo_profile_dir"
+runtime_stamp_dir="$data_dir/build-stamps/codex-runtime/$cargo_profile_dir"
+server_stamp="$server_stamp_dir/open-web-codex-server.json"
+codex_stamp="$runtime_stamp_dir/codex.json"
+code_mode_host_stamp="$runtime_stamp_dir/codex-code-mode-host.json"
+if [[ "$build_profile" == "release" ]]; then
+  cargo_build_prefix=(cargo build --locked --release)
+else
+  cargo_build_prefix=(cargo build --locked --profile dev-small)
+fi
+server_build_args=("${cargo_build_prefix[@]}" -p open-web-codex-server)
+codex_build_args=("${cargo_build_prefix[@]}" -p codex-cli --bin codex)
+code_mode_host_build_args=(
+  "${cargo_build_prefix[@]}"
+  -p codex-code-mode-host
+  --bin codex-code-mode-host
+)
+combined_runtime_build_args=(
+  "${cargo_build_prefix[@]}"
+  -p codex-cli
+  --bin codex
+  -p codex-code-mode-host
+  --bin codex-code-mode-host
+)
+printf -v server_build_command '%q ' "${server_build_args[@]}"
+printf -v codex_build_command '%q ' "${codex_build_args[@]}"
+printf -v code_mode_host_build_command '%q ' "${code_mode_host_build_args[@]}"
 
 install_web_dependencies() {
   (cd "$web_root" && npm ci)
@@ -402,18 +433,129 @@ build_browser() {
 }
 
 build_platform_server() {
-  if [[ "$build_profile" == "release" ]]; then
-    (cd "$web_root" && cargo build --locked --release -p open-web-codex-server)
-  else
-    (cd "$web_root" && cargo build --locked --profile dev-small -p open-web-codex-server)
-  fi
+  (cd "$web_root" && "${server_build_args[@]}")
 }
 
 build_codex_runtime() {
-  if [[ "$build_profile" == "release" ]]; then
-    (cd "$runtime_root" && cargo build --locked --release -p codex-cli --bin codex -p codex-code-mode-host --bin codex-code-mode-host)
+  (cd "$runtime_root" && "${combined_runtime_build_args[@]}")
+}
+
+build_codex_cli() {
+  (cd "$runtime_root" && "${codex_build_args[@]}")
+}
+
+build_codex_code_mode_host() {
+  (cd "$runtime_root" && "${code_mode_host_build_args[@]}")
+}
+
+check_cargo_component_fingerprint() {
+  local workspace="$1" component="$2" dep_info="$3" artifact="$4" stamp="$5"
+  local build_command="$6"
+  local output status
+  if output="$(
+    node "$cargo_fingerprint_tool" check \
+      --workspace "$workspace" \
+      --dep-info "$dep_info" \
+      --artifact "$artifact" \
+      --stamp "$stamp" \
+      --component "$component" \
+      --profile "$cargo_profile" \
+      --build-command "$build_command" 2>&1
+  )"; then
+    printf '%s\n' "$output" >>"$launcher_log"
+    return 0
   else
-    (cd "$runtime_root" && cargo build --locked --profile dev-small -p codex-cli --bin codex -p codex-code-mode-host --bin codex-code-mode-host)
+    status=$?
+  fi
+  printf '%s\n' "$output" >>"$launcher_log"
+  if ((status == 1)); then
+    return 1
+  fi
+  error "Cargo fingerprint check failed for $component"
+  printf '%s\n' "$output" >&2
+  return "$status"
+}
+
+record_cargo_component_fingerprint() {
+  local workspace="$1" component="$2" dep_info="$3" artifact="$4" stamp="$5"
+  local build_command="$6"
+  node "$cargo_fingerprint_tool" record \
+    --workspace "$workspace" \
+    --dep-info "$dep_info" \
+    --artifact "$artifact" \
+    --stamp "$stamp" \
+    --component "$component" \
+    --profile "$cargo_profile" \
+    --build-command "$build_command"
+}
+
+build_platform_server_and_record() {
+  build_platform_server
+  record_cargo_component_fingerprint \
+    "$web_root" "platform-server" "$server_dep_info" "$server_bin" "$server_stamp" \
+    "$server_build_command"
+}
+
+build_stale_platform_server() {
+  if check_cargo_component_fingerprint \
+    "$web_root" "platform-server" "$server_dep_info" "$server_bin" "$server_stamp" \
+    "$server_build_command"
+  then
+    show_step_skipped "Platform server" "exact fingerprint matched"
+  else
+    run_step "Platform server" build_platform_server_and_record
+  fi
+}
+
+build_both_codex_runtime_components() {
+  build_codex_runtime
+  record_cargo_component_fingerprint \
+    "$runtime_root" "codex" "$codex_dep_info" "$codex_bin" "$codex_stamp" \
+    "$codex_build_command"
+  record_cargo_component_fingerprint \
+    "$runtime_root" "codex-code-mode-host" "$code_mode_host_dep_info" \
+    "$code_mode_host_bin" "$code_mode_host_stamp" "$code_mode_host_build_command"
+}
+
+build_codex_cli_and_record() {
+  build_codex_cli
+  record_cargo_component_fingerprint \
+    "$runtime_root" "codex" "$codex_dep_info" "$codex_bin" "$codex_stamp" \
+    "$codex_build_command"
+}
+
+build_codex_code_mode_host_and_record() {
+  build_codex_code_mode_host
+  record_cargo_component_fingerprint \
+    "$runtime_root" "codex-code-mode-host" "$code_mode_host_dep_info" \
+    "$code_mode_host_bin" "$code_mode_host_stamp" "$code_mode_host_build_command"
+}
+
+build_stale_codex_runtime_components() {
+  local codex_fresh=0 code_mode_host_fresh=0
+  if check_cargo_component_fingerprint \
+    "$runtime_root" "codex" "$codex_dep_info" "$codex_bin" "$codex_stamp" \
+    "$codex_build_command"
+  then
+    codex_fresh=1
+  fi
+  if check_cargo_component_fingerprint \
+    "$runtime_root" "codex-code-mode-host" "$code_mode_host_dep_info" \
+    "$code_mode_host_bin" "$code_mode_host_stamp" "$code_mode_host_build_command"
+  then
+    code_mode_host_fresh=1
+  fi
+
+  if ((codex_fresh == 1 && code_mode_host_fresh == 1)); then
+    show_step_skipped "Codex Runtime" "exact fingerprints matched"
+  elif ((codex_fresh == 0 && code_mode_host_fresh == 0)); then
+    run_step "Codex Runtime" build_both_codex_runtime_components
+  elif ((codex_fresh == 0)); then
+    run_step "Codex CLI Runtime" build_codex_cli_and_record
+    show_step_skipped "Codex code-mode host" "exact fingerprint matched"
+  else
+    show_step_skipped "Codex CLI Runtime" "exact fingerprint matched"
+    run_step "Codex code-mode host" build_codex_code_mode_host_and_record
   fi
 }
 
@@ -471,9 +613,9 @@ if [[ "$skip_build" == "0" ]]; then
     show_step_skipped "Browser dependencies" "ready"
   fi
   run_step "Browser application" build_browser
-  run_step "Platform server" build_platform_server
+  build_stale_platform_server
   if [[ "$codex_mode" == "real" && "$using_repository_codex" == "1" ]]; then
-    run_step "Codex Runtime" build_codex_runtime
+    build_stale_codex_runtime_components
   fi
   if [[ "$skip_target_gc" == "0" ]]; then
     trap - EXIT
