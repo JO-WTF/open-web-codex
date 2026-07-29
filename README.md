@@ -87,13 +87,34 @@ npm run typecheck
 npm test
 ```
 
-Codex runtime:
+Rust validation uses separate, bounded test profiles:
 
 ```bash
-cd codex/codex-rs
-just fmt --check
-just test -p codex-app-server-protocol
+(cd codex && just fmt-check)
+./scripts/test-web-rust.sh
+./scripts/test-codex.sh -p codex-app-server-protocol
 ```
+
+Repository launch, deploy, and Rust test workflows use `sccache` when it is
+installed. The local compiler cache defaults to an 8 GiB maximum. Cargo targets
+start profile-level cleanup above 24 GiB and clean toward 16 GiB while always
+preserving release artifacts:
+
+```bash
+# macOS; on other platforms install a prebuilt sccache binary on PATH.
+brew install sccache
+make cargo-cache-status
+make cargo-target-status
+make cargo-target-gc
+make build-cache-test
+```
+
+Set `OPEN_WEB_CODEX_SCCACHE_MODE=required` to fail when sccache is unavailable,
+`SCCACHE_CACHE_SIZE` to change its hard cache limit, and
+`OPEN_WEB_CODEX_TARGET_LIMIT_GB` /
+`OPEN_WEB_CODEX_TARGET_LOW_WATER_GB` to change the target high/low-water marks.
+The wrappers disable rustc incremental output because it cannot be cached by
+sccache.
 
 Inspect the official Codex upstream status:
 

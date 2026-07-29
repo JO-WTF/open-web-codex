@@ -88,24 +88,30 @@ is absent.
 ```
 
 The deployer reuses the same persistent Profile, Secret Store, Runner, PID and
-server-log directories as `run-local.sh`. It prunes only Cargo incremental
-caches, and only after the combined targets exceed the configurable
-`OPEN_WEB_CODEX_TARGET_LIMIT_GB` high-water mark. A public deployment still
-requires an HTTPS reverse proxy, external Secret Store key management,
-PostgreSQL backup/restore and an OS-level service supervisor.
+server-log directories as `run-local.sh`. Repository build workflows use a
+bounded sccache when available and separate `dev-small`, `ci-test` and release
+profiles. When the combined Cargo targets exceed
+`OPEN_WEB_CODEX_TARGET_LIMIT_GB` (24 GiB by default), deterministic
+`cargo clean --profile` operations remove test/development profiles until
+`OPEN_WEB_CODEX_TARGET_LOW_WATER_GB` (16 GiB by default) is reached. Release
+artifacts are never automatically removed. A public deployment still requires
+an HTTPS reverse proxy, external Secret Store key management, PostgreSQL
+backup/restore and an OS-level service supervisor.
 
 ## Validation
 
+Run these commands from the repository root:
+
 ```bash
-npm run check:no-desktop
-npm run check:main-ui-parity
-npm run lint
-npm run typecheck
-npm run test
-npm run build
-cargo fmt --all --check
-cargo test --workspace --locked
-npm run check:codex-contracts
+(cd apps/web && npm run check:no-desktop)
+(cd apps/web && npm run check:main-ui-parity)
+(cd apps/web && npm run lint)
+(cd apps/web && npm run typecheck)
+(cd apps/web && npm run test)
+(cd apps/web && npm run build)
+(cd apps/web && cargo fmt --all --check)
+./scripts/test-web-rust.sh
+(cd apps/web && npm run check:codex-contracts)
 ```
 
 PostgreSQL integration tests use `TEST_DATABASE_URL` and are ignored by default.

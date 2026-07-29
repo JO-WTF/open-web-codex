@@ -7,6 +7,11 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 web_root="$repo_root/apps/web"
 runtime_root="$repo_root/codex/codex-rs"
+cargo_cache_lib="$script_dir/cargo-build-cache.sh"
+target_gc="$script_dir/cargo-target-gc.sh"
+
+# shellcheck source=scripts/cargo-build-cache.sh
+source "$cargo_cache_lib"
 
 action="foreground"
 skip_build="${OPEN_WEB_CODEX_SKIP_BUILD:-0}"
@@ -18,6 +23,7 @@ data_dir="${OPEN_WEB_CODEX_DATA_DIR:-$repo_root/.local/open-web-codex}"
 database_url="${DATABASE_URL:-}"
 database_url_file=""
 database_max_connections="${DATABASE_MAX_CONNECTIONS:-10}"
+skip_target_gc="${OPEN_WEB_CODEX_SKIP_TARGET_GC:-0}"
 
 run_dir="$data_dir/run"
 log_dir="$data_dir/logs"
@@ -73,6 +79,11 @@ Environment:
   OPEN_WEB_CODEX_SERVER_PORT         HTTP/WebSocket port
   OPEN_WEB_CODEX_SKIP_BUILD          1 to reuse build outputs
   OPEN_WEB_CODEX_BUILD_PROFILE       debug (default) or release
+  OPEN_WEB_CODEX_SCCACHE_MODE        auto (default), required, or off
+  SCCACHE_CACHE_SIZE                 Bounded compiler cache size (default: 8G)
+  OPEN_WEB_CODEX_TARGET_LIMIT_GB     Target high-water mark (default: 24)
+  OPEN_WEB_CODEX_TARGET_LOW_WATER_GB Target low-water mark (default: 16)
+  OPEN_WEB_CODEX_SKIP_TARGET_GC      1 to skip this invocation's target check
   OPEN_WEB_CODEX_DISABLE_CODEX_SANDBOX
                                      1 to trust the surrounding container and
                                      avoid nested Codex bubblewrap sandboxing
@@ -201,14 +212,33 @@ while (($# > 0)); do
 done
 
 case "$skip_build" in 0|1) ;; *) error "OPEN_WEB_CODEX_SKIP_BUILD must be 0 or 1"; exit 2 ;; esac
+case "$skip_target_gc" in 0|1) ;; *) error "OPEN_WEB_CODEX_SKIP_TARGET_GC must be 0 or 1"; exit 2 ;; esac
 case "$codex_mode" in real|fake) ;; *) error "CODEX_MODE must be real or fake"; exit 2 ;; esac
 case "$build_profile" in debug|release) ;; *) error "OPEN_WEB_CODEX_BUILD_PROFILE must be debug or release"; exit 2 ;; esac
 [[ "$server_port" =~ ^[1-9][0-9]*$ ]] || { error "port must be a positive integer"; exit 2; }
 [[ "$database_max_connections" =~ ^[1-9][0-9]*$ ]] || { error "database pool size must be a positive integer"; exit 2; }
 
-server_bin="$web_root/target/$build_profile/open-web-codex-server"
-debug_server_bin="$web_root/target/debug/open-web-codex-server"
-release_server_bin="$web_root/target/release/open-web-codex-server"
+cargo_profile="dev-small"
+cargo_profile_dir="dev-small"
+if [[ "$build_profile" == "release" ]]; then
+  cargo_profile="release"
+  cargo_profile_dir="release"
+fi
+
+if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then
+  web_target_dir="$web_root/target"
+  runtime_target_dir="$runtime_root/target"
+elif [[ "$CARGO_TARGET_DIR" == /* ]]; then
+  web_target_dir="$CARGO_TARGET_DIR"
+  runtime_target_dir="$CARGO_TARGET_DIR"
+else
+  web_target_dir="$web_root/$CARGO_TARGET_DIR"
+  runtime_target_dir="$runtime_root/$CARGO_TARGET_DIR"
+fi
+
+server_bin="$web_target_dir/$cargo_profile_dir/open-web-codex-server"
+dev_server_bin="$web_target_dir/dev-small/open-web-codex-server"
+release_server_bin="$web_target_dir/release/open-web-codex-server"
 health_host="$bind_host"
 case "$health_host" in
   0.0.0.0|"::"|"[::]") health_host="127.0.0.1" ;;
@@ -237,7 +267,7 @@ is_server_running() {
   local pid="${1:-}" command
   is_running "$pid" || return 1
   command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
-  [[ "$command" == "$debug_server_bin" || "$command" == "$debug_server_bin "* \
+  [[ "$command" == "$dev_server_bin" || "$command" == "$dev_server_bin "* \
     || "$command" == "$release_server_bin" || "$command" == "$release_server_bin "* ]]
 }
 
@@ -358,10 +388,10 @@ fi
 codex_bin="${CODEX_BIN:-}"
 using_repository_codex="0"
 if [[ "$codex_mode" == "real" && -z "$codex_bin" ]]; then
-  codex_bin="$runtime_root/target/$build_profile/codex"
+  codex_bin="$runtime_target_dir/$cargo_profile_dir/codex"
   using_repository_codex="1"
 fi
-code_mode_host_bin="$runtime_root/target/$build_profile/codex-code-mode-host"
+code_mode_host_bin="$runtime_target_dir/$cargo_profile_dir/codex-code-mode-host"
 
 install_web_dependencies() {
   (cd "$web_root" && npm ci)
@@ -373,18 +403,32 @@ build_browser() {
 
 build_platform_server() {
   if [[ "$build_profile" == "release" ]]; then
-    (cd "$web_root" && CARGO_INCREMENTAL=0 cargo build --locked --release -p open-web-codex-server)
+    (cd "$web_root" && cargo build --locked --release -p open-web-codex-server)
   else
-    (cd "$web_root" && cargo build --locked -p open-web-codex-server)
+    (cd "$web_root" && cargo build --locked --profile dev-small -p open-web-codex-server)
   fi
 }
 
 build_codex_runtime() {
   if [[ "$build_profile" == "release" ]]; then
-    (cd "$runtime_root" && CARGO_INCREMENTAL=0 cargo build --locked --release -p codex-cli --bin codex -p codex-code-mode-host --bin codex-code-mode-host)
+    (cd "$runtime_root" && cargo build --locked --release -p codex-cli --bin codex -p codex-code-mode-host --bin codex-code-mode-host)
   else
-    (cd "$runtime_root" && cargo build --locked -p codex-cli --bin codex -p codex-code-mode-host --bin codex-code-mode-host)
+    (cd "$runtime_root" && cargo build --locked --profile dev-small -p codex-cli --bin codex -p codex-code-mode-host --bin codex-code-mode-host)
   fi
+}
+
+enforce_target_retention() {
+  "$target_gc" --preserve-profile "$cargo_profile"
+}
+
+enforce_target_retention_on_exit() {
+  local exit_status=$?
+  trap - EXIT
+  if ! enforce_target_retention >>"$launcher_log" 2>&1; then
+    printf 'warning: Cargo target retention also failed; inspect %s\n' \
+      "$launcher_log" >&2
+  fi
+  exit "$exit_status"
 }
 
 prepare_maps_mcp() {
@@ -406,7 +450,17 @@ prepare_build_tools() {
 
 show_launch_header
 : >"$launcher_log"
+cargo_build_cache_configure "$repo_root"
+cargo_build_cache_describe >>"$launcher_log"
+if [[ "$skip_target_gc" == "0" ]]; then
+  run_step "Cargo target preflight" enforce_target_retention
+else
+  show_step_skipped "Cargo target preflight" "skipped"
+fi
 if [[ "$skip_build" == "0" ]]; then
+  if [[ "$skip_target_gc" == "0" ]]; then
+    trap enforce_target_retention_on_exit EXIT
+  fi
   prepare_build_tools
   if [[ ! -d "$web_root/node_modules" \
     || ! -f "$web_root/node_modules/.package-lock.json" \
@@ -420,6 +474,10 @@ if [[ "$skip_build" == "0" ]]; then
   run_step "Platform server" build_platform_server
   if [[ "$codex_mode" == "real" && "$using_repository_codex" == "1" ]]; then
     run_step "Codex Runtime" build_codex_runtime
+  fi
+  if [[ "$skip_target_gc" == "0" ]]; then
+    trap - EXIT
+    run_step "Cargo target retention" enforce_target_retention
   fi
 else
   show_step_skipped "Build outputs" "reused (--no-build)"

@@ -111,10 +111,13 @@ DATABASE_URL="$(<.local/database-url)" ./scripts/start-all.sh
 ./scripts/start-all.sh --stop
 ```
 
-`--restart` 先用 Debug 增量编译完成变更，再停止并替换后台 Server，构建失败不会
-中断当前进程。确认已有构建输出为最新时可配合 `--no-build` 跳过浏览器、Server
-和仓库 Codex 构建。Release 构建仍关闭 Cargo 增量缓存。终端只展示阶段、耗时和
-最终服务面板；构建与环境准备详情位于
+`--restart` 先用独立的 `dev-small` Profile 完成变更，再停止并替换后台
+Server，构建失败不会中断当前进程。确认已有构建输出为最新时可配合
+`--no-build` 跳过浏览器、Server 和仓库 Codex 构建。仓库构建默认关闭 Cargo
+增量编译并在已安装时使用容量上限为 8 GiB 的 sccache；Rust 测试使用独立的
+`ci-test` Profile。Web 与 Codex target 合计超过 24 GiB 时，脚本按 Profile
+清理到 16 GiB，并始终保留 Release 产物。终端只展示阶段、耗时和最终服务面板；
+构建与环境准备详情位于
 `.local/open-web-codex/logs/run-local.log`，Server 输出位于同目录的
 `server.log`。失败时脚本直接显示相关日志尾部。
 

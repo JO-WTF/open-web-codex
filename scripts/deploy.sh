@@ -13,6 +13,11 @@ web_root="$repo_root/apps/web"
 runtime_root="$repo_root/codex/codex-rs"
 run_local="$script_dir/run-local.sh"
 start_all="$script_dir/start-all.sh"
+cargo_cache_lib="$script_dir/cargo-build-cache.sh"
+target_gc="$script_dir/cargo-target-gc.sh"
+
+# shellcheck source=scripts/cargo-build-cache.sh
+source "$cargo_cache_lib"
 
 action="deploy"
 codex_mode="${CODEX_MODE:-real}"
@@ -25,9 +30,18 @@ database_max_connections="${DATABASE_MAX_CONNECTIONS:-10}"
 data_dir="${OPEN_WEB_CODEX_DATA_DIR:-$repo_root/.local/open-web-codex}"
 public_url="${OPEN_WEB_CODEX_PUBLIC_URL:-}"
 target_limit_gb="${OPEN_WEB_CODEX_TARGET_LIMIT_GB:-24}"
+target_low_water_gb="${OPEN_WEB_CODEX_TARGET_LOW_WATER_GB:-16}"
 deploy_commit="$(git -C "$repo_root" rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown')"
 reuse_build="0"
 bind_was_set="0"
+
+if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then
+  web_target_dir="$web_root/target"
+elif [[ "$CARGO_TARGET_DIR" == /* ]]; then
+  web_target_dir="$CARGO_TARGET_DIR"
+else
+  web_target_dir="$web_root/$CARGO_TARGET_DIR"
+fi
 port_was_set="0"
 public_url_was_set="0"
 
@@ -60,6 +74,10 @@ Environment:
   OPEN_WEB_CODEX_DATA_DIR           Runtime state and log directory
   OPEN_WEB_CODEX_PUBLIC_URL         Reverse-proxy/public Web URL
   OPEN_WEB_CODEX_TARGET_LIMIT_GB    Target high-water mark (default: 24; 0 disables)
+  OPEN_WEB_CODEX_TARGET_LOW_WATER_GB
+                                    Target low-water mark (default: 16)
+  OPEN_WEB_CODEX_SCCACHE_MODE       auto (default), required, or off
+  SCCACHE_CACHE_SIZE                Bounded compiler cache size (default: 8G)
   DATABASE_URL                      PostgreSQL connection URL
 
 If no database configuration exists, an interactive deployment asks whether
@@ -134,6 +152,10 @@ case "$reuse_build" in 0|1) ;; *) fail "reuse-build state is invalid" ;; esac
 [[ "$server_port" =~ ^[1-9][0-9]*$ ]] || fail "port must be a positive integer"
 [[ "$database_max_connections" =~ ^[1-9][0-9]*$ ]] || fail "database pool size must be a positive integer"
 [[ "$target_limit_gb" =~ ^[0-9]+$ ]] || fail "OPEN_WEB_CODEX_TARGET_LIMIT_GB must be zero or a positive integer"
+[[ "$target_low_water_gb" =~ ^[0-9]+$ ]] || fail "OPEN_WEB_CODEX_TARGET_LOW_WATER_GB must be zero or a positive integer"
+if ((target_limit_gb > 0 && target_low_water_gb >= target_limit_gb)); then
+  fail "OPEN_WEB_CODEX_TARGET_LOW_WATER_GB must be lower than OPEN_WEB_CODEX_TARGET_LIMIT_GB"
+fi
 [[ "$bind_host" != *$'\n'* && "$public_url" != *$'\n'* ]] || fail "host and URL values must be single-line"
 
 run_dir="$data_dir/run"
@@ -219,7 +241,7 @@ process_running() {
 server_process_running() {
   local pid="${1:-}" command release_server
   process_running "$pid" || return 1
-  release_server="$web_root/target/release/open-web-codex-server"
+  release_server="$web_target_dir/release/open-web-codex-server"
   command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
   [[ "$command" == "$release_server" || "$command" == "$release_server "* ]]
 }
@@ -610,13 +632,15 @@ fi
 : >"$deploy_log"
 chmod 600 "$deploy_log"
 printf 'open-web-codex deploy started at %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >>"$deploy_log"
+cargo_build_cache_configure "$repo_root"
+cargo_build_cache_describe >>"$deploy_log"
 
 is_tty="0"
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then is_tty="1"; fi
 step_done=0
-step_total=4
+step_total=5
 if [[ "$reuse_build" == "0" ]]; then
-  step_total=$((step_total + 3))
+  step_total=$((step_total + 4))
   if [[ "$codex_mode" == "real" && -z "${CODEX_BIN:-}" ]]; then
     step_total=$((step_total + 1))
   fi
@@ -691,48 +715,30 @@ build_browser() {
 
 build_platform_server() {
   cd "$web_root"
-  CARGO_INCREMENTAL=0 cargo build --locked --release -p open-web-codex-server
+  cargo build --locked --release -p open-web-codex-server
 }
 
 build_codex_runtime() {
   cd "$runtime_root"
-  CARGO_INCREMENTAL=0 cargo build --locked --release \
+  cargo build --locked --release \
     -p codex-cli --bin codex \
     -p codex-code-mode-host --bin codex-code-mode-host
 }
 
-target_size_kb() {
-  local total=0 value path
-  for path in "$web_root/target" "$runtime_root/target"; do
-    if [[ -d "$path" ]]; then
-      value="$(du -sk "$path" | awk '{print $1}')"
-      total=$((total + value))
-    fi
-  done
-  printf '%s\n' "$total"
+enforce_target_retention() {
+  OPEN_WEB_CODEX_TARGET_LIMIT_GB="$target_limit_gb" \
+    OPEN_WEB_CODEX_TARGET_LOW_WATER_GB="$target_low_water_gb" \
+    "$target_gc" --preserve-profile release
 }
 
-enforce_target_high_watermark() {
-  local limit_kb before_kb after_kb
-  [[ "$target_limit_gb" != "0" ]] || return 0
-  limit_kb=$((target_limit_gb * 1024 * 1024))
-  before_kb="$(target_size_kb)"
-  if ((before_kb <= limit_kb)); then
-    printf 'Cargo targets: %s MiB (limit %s GiB)\n' "$((before_kb / 1024))" "$target_limit_gb"
-    return 0
+enforce_target_retention_on_exit() {
+  local exit_status=$?
+  trap - EXIT
+  if ! enforce_target_retention >>"$deploy_log" 2>&1; then
+    printf 'warning: Cargo target retention also failed; inspect %s\n' \
+      "$deploy_log" >&2
   fi
-
-  printf 'Cargo targets exceeded %s GiB; pruning incremental-only caches\n' "$target_limit_gb"
-  rm -rf \
-    "$web_root/target/debug/incremental" \
-    "$web_root/target/release/incremental" \
-    "$runtime_root/target/debug/incremental" \
-    "$runtime_root/target/release/incremental"
-  after_kb="$(target_size_kb)"
-  printf 'Cargo targets after incremental pruning: %s MiB\n' "$((after_kb / 1024))"
-  if ((after_kb > limit_kb)); then
-    printf 'warning: non-incremental Cargo artifacts still exceed the configured high-water mark\n'
-  fi
+  exit "$exit_status"
 }
 
 rollout_service() {
@@ -746,7 +752,9 @@ rollout_service() {
   elif [[ -n "$database_url" ]]; then
     args+=(--database-url "$database_url")
   fi
-  OPEN_WEB_CODEX_DATA_DIR="$data_dir" "$run_local" "${args[@]}"
+  OPEN_WEB_CODEX_DATA_DIR="$data_dir" \
+    OPEN_WEB_CODEX_SKIP_TARGET_GC=1 \
+    "$run_local" "${args[@]}"
 }
 
 verify_deployment() {
@@ -776,18 +784,21 @@ write_deploy_state() {
 run_step 'Validate prerequisites' validate_prerequisites
 resolve_database_configuration yes
 run_step 'Verify PostgreSQL database' verify_configured_database
+run_step 'Cargo target preflight' enforce_target_retention
 if [[ "$reuse_build" == "0" ]]; then
+  trap enforce_target_retention_on_exit EXIT
   run_step 'Install exact Web dependencies' install_web_dependencies
   run_step 'Build browser application' build_browser
   run_step 'Build platform Server (release)' build_platform_server
   if [[ "$codex_mode" == "real" && -z "${CODEX_BIN:-}" ]]; then
     run_step 'Build Codex Runtime (release)' build_codex_runtime
   fi
+  trap - EXIT
+  run_step 'Enforce Cargo target retention' enforce_target_retention
 fi
 run_step 'Apply health-checked rollout' rollout_service
 run_step 'Verify service health' verify_deployment
 
-enforce_target_high_watermark >>"$deploy_log" 2>&1
 write_deploy_state
 printf 'open-web-codex deploy completed at %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >>"$deploy_log"
 

@@ -280,6 +280,11 @@ redefine product scope, capability status, security invariants or ownership.
 
 - Follow `apps/web/AGENTS.md` for Web/platform work and `codex/AGENTS.md` for
   Runtime work.
+- Run platform Rust tests through `scripts/test-web-rust.sh` and Codex tests
+  through `scripts/test-codex.sh`. These wrappers preserve the component-owned
+  test commands while selecting the bounded `ci-test` Cargo profile, enabling
+  sccache when available and enforcing the repository target high/low-water
+  policy after success or failure.
 - Web changes require type checking and relevant tests; integration changes
   require contract coverage.
 - Codex changes require its formatting and scoped test workflow. TUI changes

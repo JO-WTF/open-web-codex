@@ -4,10 +4,16 @@ on:
   push:
     paths:
       - "codex/**"
+      - "scripts/cargo-build-cache.sh"
+      - "scripts/cargo-target-gc.sh"
+      - "scripts/test-codex.sh"
       - ".github/workflows/codex-protocol-ci.yml"
   pull_request:
     paths:
       - "codex/**"
+      - "scripts/cargo-build-cache.sh"
+      - "scripts/cargo-target-gc.sh"
+      - "scripts/test-codex.sh"
       - ".github/workflows/codex-protocol-ci.yml"
 
 permissions:
@@ -22,4 +28,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: just test -p codex-app-server-protocol schema_fixtures::
+      - run: "./scripts/test-codex.sh -p codex-app-server-protocol schema_fixtures::"
+        working-directory: .

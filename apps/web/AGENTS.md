@@ -72,9 +72,13 @@ npm run build
 For platform Rust changes:
 
 ```bash
-cargo fmt --all --check
-cargo test --workspace --locked
+(cd apps/web && cargo fmt --all --check)
+./scripts/test-web-rust.sh
 ```
+
+Run the wrapper from the repository root. It executes
+`cargo test --workspace --locked --profile ci-test`, then enforces the shared
+Cargo target retention policy even when tests fail.
 
 For security or persistence changes, also run ignored PostgreSQL integration
 tests with a disposable `TEST_DATABASE_URL`. Cross-project protocol changes

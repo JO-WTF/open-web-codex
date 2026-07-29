@@ -7,6 +7,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+BUILD_CACHE_LIB="$ROOT/scripts/cargo-build-cache.sh"
+TARGET_GC="$ROOT/scripts/cargo-target-gc.sh"
 DATA_DIR="${OPEN_WEB_CODEX_DATA_DIR:-$ROOT/.local/open-web-codex}"
 RUN_DIR="$DATA_DIR/run"
 LOG_DIR="$DATA_DIR/logs"
@@ -14,6 +16,20 @@ VITE_PID_FILE="$RUN_DIR/vite-1421.pid"
 VITE_LOG="$LOG_DIR/vite-1421.log"
 SERVER_PID_FILE="$RUN_DIR/server.pid"
 CODEX_MODE_VALUE="${CODEX_MODE:-real}"
+
+if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then
+  WEB_TARGET_DIR="$ROOT/apps/web/target"
+  RUNTIME_TARGET_DIR="$ROOT/codex/codex-rs/target"
+elif [[ "$CARGO_TARGET_DIR" == /* ]]; then
+  WEB_TARGET_DIR="$CARGO_TARGET_DIR"
+  RUNTIME_TARGET_DIR="$CARGO_TARGET_DIR"
+else
+  WEB_TARGET_DIR="$ROOT/apps/web/$CARGO_TARGET_DIR"
+  RUNTIME_TARGET_DIR="$ROOT/codex/codex-rs/$CARGO_TARGET_DIR"
+fi
+
+# shellcheck source=scripts/cargo-build-cache.sh
+source "$BUILD_CACHE_LIB"
 
 usage() {
   printf 'Usage: ./scripts/start-all.sh [--fake|--stop]\n'
@@ -79,19 +95,34 @@ esac
 
 stop_all
 
+cargo_build_cache_configure "$ROOT"
+cargo_build_cache_describe
+"$TARGET_GC" --preserve-profile dev-small
+
 if [[ ! -d "$ROOT/apps/web/node_modules" ]]; then
   (cd "$ROOT/apps/web" && npm ci)
 fi
-if [[ ! -x "$ROOT/apps/web/target/debug/open-web-codex-server" ]]; then
-  (cd "$ROOT/apps/web" && CARGO_INCREMENTAL=0 cargo build --locked -p open-web-codex-server)
+if [[ ! -x "$WEB_TARGET_DIR/dev-small/open-web-codex-server" ]]; then
+  build_status=0
+  gc_status=0
+  (cd "$ROOT/apps/web" \
+    && cargo build --locked --profile dev-small -p open-web-codex-server) \
+    || build_status=$?
+  "$TARGET_GC" --preserve-profile dev-small || gc_status=$?
+  if [[ "$build_status" != "0" ]]; then
+    exit "$build_status"
+  fi
+  if [[ "$gc_status" != "0" ]]; then
+    exit "$gc_status"
+  fi
 fi
 
 if [[ "$CODEX_MODE_VALUE" == "real" && -z "${CODEX_BIN:-}" ]]; then
-  if [[ -x "$ROOT/codex/codex-rs/target/debug/codex" ]]; then
-    export CODEX_BIN="$ROOT/codex/codex-rs/target/debug/codex"
+  if [[ -x "$RUNTIME_TARGET_DIR/dev-small/codex" ]]; then
+    export CODEX_BIN="$RUNTIME_TARGET_DIR/dev-small/codex"
   else
     printf 'error: the repository Codex binary is missing.\n' >&2
-    printf 'Build it with: cd codex/codex-rs && CARGO_INCREMENTAL=0 cargo build -p codex-cli --bin codex -p codex-code-mode-host --bin codex-code-mode-host\n' >&2
+    printf 'Build it with the managed workflow: ./scripts/run-local.sh --background\n' >&2
     printf 'For a Server/UI smoke test, use: ./scripts/start-all.sh --fake\n' >&2
     exit 1
   fi
@@ -101,7 +132,8 @@ RUN_LOCAL_ARGS=(--background --no-build)
 if [[ "$CODEX_MODE_VALUE" == "fake" ]]; then
   RUN_LOCAL_ARGS+=(--fake)
 fi
-"$ROOT/scripts/run-local.sh" "${RUN_LOCAL_ARGS[@]}"
+OPEN_WEB_CODEX_SKIP_TARGET_GC=1 \
+  "$ROOT/scripts/run-local.sh" "${RUN_LOCAL_ARGS[@]}"
 
 (
   cd "$ROOT/apps/web"
