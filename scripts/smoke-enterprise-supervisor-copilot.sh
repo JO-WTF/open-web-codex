@@ -13,7 +13,7 @@ if [[ "${1:-}" == "--help" ]]; then
   print "disposable PostgreSQL database, Profile and managed Workspace."
   print "Optional environment: CODEX_BIN, E2E_EVIDENCE_FILE, E2E_PROVIDER_ID,"
   print "E2E_MODEL, E2E_EFFORT, E2E_USE_BUILT_IN_PROVIDER,"
-  print "E2E_PROMPT, E2E_CASE_NAME, E2E_OBSERVE_ONLY,"
+  print "E2E_PROMPT, E2E_CASE_NAME, E2E_OBSERVE_ONLY, E2E_LIFECYCLE_PROBE,"
   print "OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV,"
   print "OPEN_WEB_CODEX_E2E_PG_PORT and OPEN_WEB_CODEX_E2E_SERVER_PORT."
   exit 0

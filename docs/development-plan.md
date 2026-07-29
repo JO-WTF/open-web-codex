@@ -4,17 +4,18 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 更新日期 | 2026-07-28 |
+| 更新日期 | 2026-07-29 |
 | 当前分支 | `codex/agent-architecture-features` |
 | Codex 基线 | `openai/codex` `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9` |
-| 上游待同步 | 142；观测到的 official main 为 `95637f7056835fea66bdd0044414af480fc0fd74` |
+| 上游状态快照 | 2026-07-28 观测到 official main `95637f7056835fea66bdd0044414af480fc0fd74`，当时待同步 142；本轮未刷新且暂不同步 |
 | 当前工作 | 已落地受治理的 Agent/Supervisor 发布纵向切片，继续补真实 Runtime 验证、失败恢复、Artifact 生命周期与可信门禁 |
 | 中期顺序 | `docs/roadmap.md` |
 | M2 详细实施 | `docs/enterprise-supervisor-copilot-plan.md` |
 | 能力事实 | `docs/capability-baseline.md` |
 
-当前 Codex 基线上的定制仍按 patch map 分类；official main 已前进 142 个提交，
-下一轮必须通过专用 `codex/sync-upstream-*` 分支同步。1421 WebApp 的 CSS、页面布局
+当前 Codex 基线上的定制仍按 patch map 分类；上表只保留最近一次已验证的上游状态
+快照，不把未联网刷新的提交差距描述为当前事实。本轮不执行上游同步；未来恢复同步时
+仍必须通过专用 `codex/sync-upstream-*` 分支。1421 WebApp 的 CSS、页面布局
 和交互保持既有产品形态；当前单用户入口不显示登录或注册，浏览器自动取得本地
 Session；差异集中在该入口、`src/services/webClient.ts` Server
 适配层，以及三个由完整文件哈希锁定的非视觉 Thread 上下文接线文件。平台具备原生 Profile Host、Provider 服务、
@@ -109,19 +110,24 @@ Agent、Skill、MCP 的长期整改顺序统一维护在
 替换这一临时文件边界。
 
 受限 happy path 已经越过“平台骨架”阶段。真实 PostgreSQL 与 Profile 上的最新
-Codex Runtime 运行证明：绑定 `enterprise-supervisor-copilot@1.7.0` 的根 Thread
+Codex Runtime 运行证明：绑定 `enterprise-supervisor-copilot@1.8.0` 的根 Thread
 按顺序创建了 `data_agent` 与 `network_planning_agent` 两个真实子 Thread；前者
 通过只读数据 MCP 产生并验证 `planning-dataset.v1`，后者读取同一 Resource 后再
-调用有界规划 MCP；以“分析现有网络并给出建议。”为完整输入的最新重跑形成九个
+调用有界规划 MCP；以“分析现有网络并给出建议。”为完整输入的最新重跑形成十个
 ready Task Artifact 和完整决策报告。运行轨迹严格只有 Root、Data、Network 三个
-Thread，37 次 MCP 调用分别归属于 Data/Network 的授权服务，Root 无业务 MCP 或命令
+Thread，33 次 MCP 调用分别归属于 Data/Network 的授权服务，Root 无业务 MCP 或命令
 调用，Run 与 Task 最终均为 completed 且无活动 Turn。精确调用与 Artifact 数量取决于
 有效调查步骤，门禁固定的是必需 Schema 的最小集合以及所有已注册 Artifact 必须 ready。
 
 这不等于 M2 已全部完成。当前主线转向 happy path 没有覆盖的行为：Completed Agent
-follow-up、interrupt、部分失败和审批拒绝后的综合；多层 Agent 历史导航；Artifact
-打开、替代、失效、删除与保留；更完整的重启/乱序、共享 Workspace、multi-`cwd`
+follow-up、interrupt、部分失败和审批拒绝后的综合；更深层 Agent 树导航；Artifact
+替代、失效、删除与保留；更完整的重启/乱序、共享 Workspace、multi-`cwd`
 和多用户隔离矩阵。它们继续限制“可恢复企业能力”和生产发布声明。
+
+仓库现提供 `scripts/probe-enterprise-runtime-lifecycle.sh`，在既有真实企业 E2E
+之后继续验证同一已完成子 Agent 的下一 ordinal、根 Turn 中断终态和中断后的恢复
+Turn。探针必须在可绑定本机临时端口并可访问已配置 Provider 的环境中通过后，才能把
+follow-up 或 interrupt 标为真实验证完成；脚本存在本身不构成通过证据。
 
 浏览器已将授权 Agent 树中的子 Thread 审批提升为任务级响应队列：根对话和
 Agent Activity 都渲染同一平台审批 ID 的批准/拒绝卡片，刷新后从持久审批事件重放，

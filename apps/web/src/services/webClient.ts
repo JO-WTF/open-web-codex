@@ -10,6 +10,7 @@ import type {
   SupervisorPolicyBinding,
   SupervisorPolicySelection,
   SupervisorPolicySummary,
+  ThreadHistoryTurn,
   Workspace,
 } from "../../browser/types";
 import type { AppServerEvent, GitFileStatus, WorkspaceInfo } from "../types";
@@ -404,6 +405,18 @@ export class CodexMonitorWebClient {
       this.platform.listTaskArtifacts(context.taskId),
     ]);
     return { taskTitle: task.title, policy, agents, activities, executions, artifacts };
+  }
+
+  async listAgentThreadTurns(
+    rootThreadId: string,
+    agentThreadId: string,
+  ): Promise<ThreadHistoryTurn[]> {
+    const context = await this.findThreadContext(rootThreadId);
+    return this.platform.listRunAgentThreadTurns(context.runId, agentThreadId);
+  }
+
+  readArtifactContent(artifactId: string): Promise<Record<string, unknown>> {
+    return this.platform.readArtifactContent(artifactId);
   }
 
   async listThreads(workspaceId: string) {

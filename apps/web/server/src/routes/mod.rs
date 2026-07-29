@@ -299,6 +299,10 @@ pub fn router(
             axum::routing::get(threads::list_turns),
         )
         .route(
+            "/runs/{id}/agents/{thread_id}/turns",
+            axum::routing::get(threads::list_agent_turns),
+        )
+        .route(
             "/runs/{id}/thread/archive",
             axum::routing::post(threads::archive),
         )

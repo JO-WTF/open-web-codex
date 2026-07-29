@@ -121,11 +121,11 @@ sequenceDiagram
 
 | 领域 | 当前已有 | 当前缺口 | 短期判断 |
 | --- | --- | --- | --- |
-| Codex 多 Agent | `1.7.0` 真实根 Thread 已按顺序 spawn/wait 两个白名单 Role 子 Thread；Runtime 的模型可见目录和执行入口共同拒绝白名单外角色，并原子限制每个必需 Role 仅一个驻留实例；子 Role 配置显式关闭 V2 与继续委派 | follow-up、interrupt、深层树和部分失败尚未进入真实案例矩阵 | 继续复用 Runtime，只补行为证据 |
+| Codex 多 Agent | `1.8.0` 真实根 Thread 已按顺序 spawn/wait 两个白名单 Role 子 Thread；Runtime 的模型可见目录和执行入口共同拒绝白名单外角色，并原子限制每个必需 Role 仅一个驻留实例；子 Role 配置显式关闭 V2 与继续委派 | follow-up、interrupt、深层树和部分失败尚未进入真实案例矩阵 | 继续复用 Runtime，只补行为证据 |
 | Thread 启动 | Adapter 使用正式 `thread/start` 传入授权 `cwd`、审批策略、历史模式和已绑定 Policy；真实企业 Thread 启动已通过 | shared Workspace、真实 multi-`cwd` 和多 Profile 路由仍缺证据 | 不新增 Supervisor Runtime |
 | 事件与 Web | Server 把根/子 Thread 事件投影为可重建 DTO；真实刷新与 Server/Profile Host 重启恢复同一 Policy、三节点 Agent 树和最终报告 | 多层历史导航、乱序/重复矩阵和完成后追加任务仍不完整 | 扩展投影与 DTO，不建立第二套 Agent 状态机 |
 | Runtime Role | Data `1.6.0` 与 Network `1.5.0` 显式绑定经评审的 Runtime 指令 hash，并从类型化声明确定性生成 shell、普通扩展、V2/继续委派禁用以及精确 MCP allowlist；根 request config 只选择声明的 capability root，并提供 exact `agents.allowed_roles` 与 `agents.role_spawn_limits` | Runtime 原生 Agent CRUD、通用发布、治理视图和多 Profile Catalog 仍未完成 | 新企业 Thread 直接依赖当前 V2，不引入历史版本兜底；启动前后均失败关闭；普通 Root 不获得 Policy、企业 Role 或 V2 覆盖 |
-| Artifact | 已有 Task 级稳定身份、Schema、状态、内容、生产者 provenance 与同 Task 授权；最新真实案例完成跨子 Thread Resource 交接并产生九个 ready Artifact | 替代、失效、删除、保留、跨 Run 复用和内容打开体验未完成 | 完成生命周期，不退回 Run/Thread 所有权 |
+| Artifact | 已有 Task 级稳定身份、Schema、状态、内容、生产者 provenance 与同 Task 授权；最新真实案例完成跨子 Thread Resource 交接并产生十个 ready Artifact；ready 内容可通过授权浏览器入口打开 | 替代、失效、删除、保留和跨 Run 复用未完成 | 完成生命周期，不退回 Run/Thread 所有权 |
 | MCP | 最新真实案例通过 Runtime discovery 完成受限的数据、Resource 读取、计算和验证调用；Data 不使用 planner 业务操作，Network 不使用 Data 业务操作，Root 无 MCP/命令且没有 `map_utils` 泄漏 | 超限、超时、取消、高成本拒绝和生产数据连接仍缺系统证据 | 沿现有发现与审批路径补非 happy path |
 | Workspace | Workspace 已独立于 Thread/Run，Adapter 会校验 Runner root | 现有根登记、共享并发和真实 multi-`cwd` 证据不完整 | 第一版限定一个已授权 managed Workspace |
 | Profile | 单 Profile Host、Provider、Secret 和 Runtime status 已有主体实现 | 多 Profile Router 和完整重启矩阵未完成 | 明确限定单 Profile，不提前建设多用户路由 |
@@ -547,7 +547,8 @@ Prompt 中的角色说明。
    snapshot、route、scenario 与 comparison Artifact；
 8. [x] Supervisor 比较方案并输出引用 Artifact schema 与 Resource name 的最终报告；
 9. [x] 浏览器刷新及 Server/Profile Host 重启后恢复同一 Agent 树、Artifact 摘要和
-   完整报告；子 Thread 导航和 Artifact 内容打开仍属于 Slice 5 后续体验。
+   完整报告；Agent task 节点可读取 Codex 权威子 Thread 历史，ready Artifact 可通过
+   Task grant 保护的内容接口打开。
 
 #### 必须覆盖的非 Happy path
 
@@ -678,12 +679,14 @@ managed Workspace 上重建；运行时证据文件由执行环境指定，不�
 
 - [-] Slice 0：案例、可重复数据与实际 Artifact Schema 已固定；负向样例和人工
   基准包待补；
-- [-] Slice 1：真实 spawn/wait 与恢复已通过；follow-up、interrupt 和失败轨迹待补；
+- [-] Slice 1：真实 spawn/wait 与恢复已通过；follow-up/interrupt 真实探针已落地但
+  尚无通过记录，失败轨迹待补；
 - [x] Slice 2：Task 级持久 Artifact 与跨子 Thread 交接 happy path；
 - [-] Slice 3：Supervisor Policy 与两个 Agent Definition；
 - [-] Slice 4：只读数据 MCP 与有界规划 MCP happy path 已通过，失败预算待补；
-- [-] Slice 5：Policy、Agent、完整持久行为日志、Artifact 摘要和最终报告可见，
-  深层历史与内容操作待补；
+- [-] Slice 5：Policy、Agent、完整持久行为日志、Artifact 摘要和最终报告可见；
+  一层子 Agent 权威历史与 ready Artifact 内容可打开，深层树和完整 Artifact
+  生命周期操作待补；
 - [-] Slice 6：真实企业 happy path 9/9；至少两个业务非 happy path 待加入证据包。
 
 ### 并行可信工作
@@ -693,7 +696,8 @@ managed Workspace 上重建；运行时证据文件由执行环境指定，不�
 - [ ] 真实 multi-`cwd` 与共享 Workspace 风险复核；
 - [-] Profile 重启后的 happy path 恢复已通过，故障注入矩阵待补；
 - [x] 选定 OpenAI Provider 的真实案例路径验证；
-- [-] Codex 上游差异与 retained seam 已复核；待在专用分支同步 142 个提交。
+- [-] Codex retained seam 仍按 patch map 管理；上游差异仅保留 2026-07-28 的
+  142 提交快照，本轮未刷新且暂不同步。
 
 ### 当前不启动
 

@@ -62,6 +62,31 @@ pub async fn list_turns(
     Ok(Json(projected))
 }
 
+/// Return authoritative Codex history for one projected child Agent Thread.
+///
+/// The Run remains the authorization root. The platform projection proves that
+/// the child belongs to that Run, while Codex remains the owner of Turn history.
+pub async fn list_agent_turns(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path((run_id, agent_thread_id)): Path<(Uuid, String)>,
+    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
+) -> ApiResult<Vec<ThreadHistoryTurn>> {
+    let context = authorized_agent_thread(&state, &auth, run_id, agent_thread_id.as_str()).await?;
+    let turns = adapter
+        .list_thread_turns(&context.workspace, &context.thread_id)
+        .await
+        .map_err(runtime_error)?;
+    let overlay = load_history_overlay(&state, run_id).await?;
+    let mut projected = Vec::with_capacity(turns.len());
+    for turn in &turns {
+        let mut turn = project_turn_with_refs(turn, &state, run_id).await?;
+        overlay.apply(&mut turn);
+        projected.push(turn);
+    }
+    Ok(Json(projected))
+}
+
 pub async fn archive(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
@@ -175,6 +200,58 @@ async fn authorized_thread(
         task_id: row.get("task_id"),
         workspace_id,
         thread_id,
+        workspace: AuthorizedWorkspace {
+            id: workspace_id.to_string(),
+            root: row.get::<String, _>("root_path").into(),
+        },
+    })
+}
+
+async fn authorized_agent_thread(
+    state: &AppState,
+    auth: &AuthenticatedUser,
+    run_id: Uuid,
+    agent_thread_id: &str,
+) -> Result<ThreadContext, ApiError> {
+    if agent_thread_id.trim().is_empty() {
+        return Err(not_found());
+    }
+    let row = sqlx::query(
+        "SELECT run.task_id, run.workspace_id, run.requested_by, workspace.root_path,
+                workspace.state, agent.thread_id
+         FROM runs run
+         JOIN runtime_agent_projections agent
+           ON agent.root_run_id = run.id
+          AND agent.organization_id = run.organization_id
+          AND agent.thread_id = $3
+          AND agent.parent_thread_id IS NOT NULL
+         JOIN workspaces workspace ON workspace.id = run.workspace_id
+           AND workspace.organization_id = run.organization_id
+         JOIN workspace_grants workspace_grant ON workspace_grant.workspace_id = workspace.id
+           AND workspace_grant.organization_id = workspace.organization_id
+           AND workspace_grant.user_id = run.requested_by
+           AND workspace_grant.profile_id = workspace.profile_id
+         WHERE run.id = $1 AND run.organization_id = $2",
+    )
+    .bind(run_id)
+    .bind(auth.organization_id)
+    .bind(agent_thread_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(database_error)?
+    .ok_or_else(not_found)?;
+    let requested_by: Option<Uuid> = row.get("requested_by");
+    if !matches!(row.get::<String, _>("state").as_str(), "ready" | "retained")
+        || (requested_by != Some(auth.user_id)
+            && !matches!(auth.organization_role.as_str(), "owner" | "admin"))
+    {
+        return Err(not_found());
+    }
+    let workspace_id: Uuid = row.get("workspace_id");
+    Ok(ThreadContext {
+        task_id: row.get("task_id"),
+        workspace_id,
+        thread_id: row.get("thread_id"),
         workspace: AuthorizedWorkspace {
             id: workspace_id.to_string(),
             root: row.get::<String, _>("root_path").into(),

@@ -18,6 +18,7 @@ const effort = process.env.E2E_EFFORT ?? "none";
 const useBuiltInProvider = process.env.E2E_USE_BUILT_IN_PROVIDER === "1";
 const promptOverride = process.env.E2E_PROMPT?.trim();
 const observationOnly = process.env.E2E_OBSERVE_ONLY === "1";
+const lifecycleProbe = process.env.E2E_LIFECYCLE_PROBE === "1";
 const caseName = process.env.E2E_CASE_NAME?.trim() || "custom enterprise observation";
 const username = process.env.E2E_ADMIN_USERNAME ?? "enterprise-e2e";
 const email = process.env.E2E_ADMIN_EMAIL ?? "enterprise-e2e@open-web-codex.local";
@@ -774,6 +775,120 @@ await runCase("browser history and evidence overview recovery", async () => {
   return `${turns.length} restored Turn; ${agents.length} Agents; ${executions.length} Agent tasks; ${artifacts.length} Artifacts`;
 });
 
+if (lifecycleProbe) {
+  await runCase("completed Agent follow-up preserves child Thread identity", async () => {
+    const target = finalEvidence.networkAgent;
+    const sent = await api(`/tasks/${state.task.id}/messages`, {
+      method: "POST",
+      body: {
+        text: `执行一次生命周期复核。不要创建任何新 Agent。必须通过 Runtime 协作工具向已完成的 network_planning_agent 发送一个新任务，请它基于上一轮已验证证据说明“杭州候选为何优于或不优于无锡候选”，等待同一个 Agent 完成后再用两句话汇总。不要重新运行 MCP 工具。`,
+        model,
+        model_provider: providerId,
+        effort,
+        service_tier: null,
+        access_mode: "workspace-write",
+        images: [],
+        collaboration_mode: null,
+      },
+    });
+    await waitForTurn(state.task.id, sent.turn_id);
+
+    const executions = await eventually(async () => {
+      const current = await api(`/runs/${state.run.id}/agent-executions`);
+      const targetExecutions = current
+        .filter((execution) => execution.thread_id === target.thread_id)
+        .sort((left, right) => left.ordinal - right.ordinal);
+      return targetExecutions.length === 2
+        && targetExecutions[1].ordinal === 2
+        && targetExecutions[1].status === "completed"
+        ? targetExecutions
+        : undefined;
+    }, "second execution on the completed Network Agent", 300_000, 1_000);
+    const agents = await api(`/runs/${state.run.id}/agents`);
+    assert.equal(agents.length, finalEvidence.agents.length, "Follow-up spawned a new Agent");
+    assert.equal(executions[0].ordinal, 1);
+    assert.equal(executions[1].ordinal, 2);
+    assert.notEqual(executions[0].turn_id, executions[1].turn_id);
+
+    const turns = await api(
+      `/runs/${state.run.id}/agents/${encodeURIComponent(target.thread_id)}/turns`,
+    );
+    assert(
+      turns.some((turn) => turn.id === executions[1].turn_id),
+      "Browser-safe child history omitted the follow-up Turn",
+    );
+    finalEvidence.lifecycle = {
+      followUp: {
+        rootTurnId: sent.turn_id,
+        agentThreadId: target.thread_id,
+        agentTurnId: executions[1].turn_id,
+        ordinal: executions[1].ordinal,
+      },
+    };
+    return `same child Thread=${target.thread_id}; execution ordinal=${executions[1].ordinal}`;
+  });
+
+  await runCase("Runtime interrupt reaches a terminal outcome and recovers", async () => {
+    const interrupted = await api(`/tasks/${state.task.id}/messages`, {
+      method: "POST",
+      body: {
+        text: "开始一次新的网络风险复核，在给出结论前逐项检查上一轮的假设、证据和风险。",
+        model,
+        model_provider: providerId,
+        effort,
+        service_tier: null,
+        access_mode: "workspace-write",
+        images: [],
+        collaboration_mode: null,
+      },
+    });
+    const interruptResult = await api(`/runs/${state.run.id}/interrupt`, {
+      method: "POST",
+      body: { turn_id: interrupted.turn_id },
+    });
+    assert.equal(interruptResult.status, "interrupted");
+
+    const interruptedTurn = await eventually(async () => {
+      const turns = await api(`/runs/${state.run.id}/thread/turns`);
+      const turn = turns.find((candidate) => candidate.id === interrupted.turn_id);
+      return turn?.status?.toLowerCase().includes("interrupt") ? turn : undefined;
+    }, "authoritative interrupted Turn history", 120_000, 500);
+
+    const recovered = await api(`/tasks/${state.task.id}/messages`, {
+      method: "POST",
+      body: {
+        text: "不要创建 Agent 或调用工具，只回复 LIFECYCLE_RECOVERED。",
+        model,
+        model_provider: providerId,
+        effort,
+        service_tier: null,
+        access_mode: "workspace-write",
+        images: [],
+        collaboration_mode: null,
+      },
+    });
+    await waitForTurn(state.task.id, recovered.turn_id);
+    const rootTurns = await api(`/runs/${state.run.id}/thread/turns`);
+    const recoveredTurn = rootTurns.find((turn) => turn.id === recovered.turn_id);
+    assert(recoveredTurn, "Runtime did not persist the recovery Turn");
+    assert(
+      recoveredTurn.items.some(
+        (item) =>
+          item.type === "agentMessage"
+          && typeof item.text === "string"
+          && item.text.includes("LIFECYCLE_RECOVERED"),
+      ),
+      "Recovery Turn did not complete with the expected response",
+    );
+    finalEvidence.lifecycle.interrupt = {
+      interruptedTurnId: interruptedTurn.id,
+      interruptedStatus: interruptedTurn.status,
+      recoveryTurnId: recovered.turn_id,
+    };
+    return `interrupted=${interruptedTurn.status}; recovery Turn=${recovered.turn_id}`;
+  });
+}
+
 if (evidenceFile) {
   const evidence = {
     schemaVersion: "enterprise-supervisor-e2e.v1",
@@ -797,6 +912,7 @@ if (evidenceFile) {
     })),
     artifacts: finalEvidence.artifacts,
     report: finalEvidence.report,
+    ...(finalEvidence.lifecycle ? { lifecycle: finalEvidence.lifecycle } : {}),
   };
   await mkdir(path.dirname(evidenceFile), { recursive: true });
   await writeFile(evidenceFile, `${JSON.stringify(evidence, null, 2)}\n`, {

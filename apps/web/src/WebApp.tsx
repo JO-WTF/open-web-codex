@@ -2434,6 +2434,16 @@ export default function WebApp() {
     setActiveRightPanelTab("files");
     setRightPanelOpen(!alreadyVisible);
   };
+  const loadAgentHistory = useCallback((threadId: string) => {
+    if (!activeThreadId) {
+      return Promise.reject(new Error("Select the Supervisor Thread first."));
+    }
+    return client.listAgentThreadTurns(activeThreadId, threadId);
+  }, [activeThreadId, client]);
+  const loadArtifactContent = useCallback(
+    (artifactId: string) => client.readArtifactContent(artifactId),
+    [client],
+  );
   const retryActiveThreadCreation = () => {
     if (!activeWorkspaceId || activeThread?.creationStatus !== "failed") return;
     void startThread(
@@ -2472,6 +2482,8 @@ export default function WebApp() {
               artifacts={supervisorOverview?.artifacts ?? []}
               approvals={taskApprovals}
               onResolveApproval={resolveApproval}
+              onLoadAgentHistory={loadAgentHistory}
+              onLoadArtifactContent={loadArtifactContent}
               loading={supervisorOverviewLoading}
               error={supervisorOverviewError}
             />

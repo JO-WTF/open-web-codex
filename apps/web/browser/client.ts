@@ -333,11 +333,23 @@ export class PlatformClient {
     );
   }
 
+  listRunAgentThreadTurns(runId: string, threadId: string) {
+    return this.request<ThreadHistoryTurn[]>(
+      `/api/runs/${encodeURIComponent(runId)}/agents/${encodeURIComponent(threadId)}/turns`,
+    );
+  }
+
   readReplyArtifact(path: string) {
     if (!/^\/api\/artifacts\/[0-9a-f-]{36}\/content$/i.test(path)) {
       return Promise.reject(new Error("Reply Artifact path is invalid."));
     }
     return this.request<Record<string, unknown>>(path);
+  }
+
+  readArtifactContent(artifactId: string) {
+    return this.readReplyArtifact(
+      `/api/artifacts/${encodeURIComponent(artifactId)}/content`,
+    );
   }
 
   archiveRunThread(runId: string) {

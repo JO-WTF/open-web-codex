@@ -753,6 +753,16 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     )
     .await;
     assert_eq!(cross_tenant_agent_executions.0, StatusCode::NOT_FOUND);
+    let cross_tenant_agent_history = call(
+        &app,
+        authenticated(
+            "GET",
+            &format!("/api/runs/{first_run_id}/agents/approval-child-thread/turns"),
+            second_token,
+        ),
+    )
+    .await;
+    assert_eq!(cross_tenant_agent_history.0, StatusCode::NOT_FOUND);
 
     let legacy_runtime = call(
         &app,

@@ -318,4 +318,72 @@ describe("SupervisorOverview", () => {
     expect(screen.getByText("planning-dataset.v1")).toBeTruthy();
     expect(screen.getByText("data_agent · 2,048 bytes")).toBeTruthy();
   });
+
+  it("opens authoritative child Agent history without changing the root Thread", async () => {
+    const onLoadAgentHistory = vi.fn().mockResolvedValue([{
+      id: "turn-network-2",
+      status: "completed",
+      items: [{
+        id: "message-network-2",
+        type: "agentMessage",
+        text: "The follow-up scenario remains feasible.",
+      }],
+    }]);
+    render(
+      <SupervisorOverview
+        taskTitle="Network planning"
+        policy={policy}
+        agents={[rootAgent, networkAgent]}
+        executions={repeatedExecutions}
+        artifacts={[]}
+        onLoadAgentHistory={onLoadAgentHistory}
+      />,
+    );
+
+    fireEvent.click(screen.getAllByRole("button", {
+      name: "Review Agent history",
+    })[1]);
+    expect(onLoadAgentHistory).toHaveBeenCalledWith("network-thread");
+    expect(await screen.findByText("The follow-up scenario remains feasible.")).toBeTruthy();
+    expect(screen.getByRole("dialog").textContent).toContain("Turn 1");
+  });
+
+  it("opens ready Artifact content through the authorized loader", async () => {
+    const artifactId = "8e98ff2f-82ee-4cc9-a3e6-2974debf8666";
+    const onLoadArtifactContent = vi.fn().mockResolvedValue({
+      schema_version: "planning-dataset.v1",
+      demand_nodes: 12,
+    });
+    render(
+      <SupervisorOverview
+        taskTitle="Network planning"
+        policy={policy}
+        agents={[rootAgent, dataAgent]}
+        artifacts={[{
+          id: artifactId,
+          task_id: "task-1",
+          artifact_schema: "planning-dataset.v1",
+          display_name: "Validated planning dataset",
+          mime_type: "application/json",
+          expected_size: 2048,
+          byte_size: 2048,
+          content_sha256: "b".repeat(64),
+          state: "ready",
+          producer_run_id: "run-1",
+          producer_thread_id: "data-thread",
+          producer_turn_id: "turn-data",
+          producer_item_id: "item-data",
+          producer_agent_role: "data_agent",
+          created_at: "2026-07-26T00:00:03Z",
+          updated_at: "2026-07-26T00:00:04Z",
+        }]}
+        onLoadArtifactContent={onLoadArtifactContent}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    expect(onLoadArtifactContent).toHaveBeenCalledWith(artifactId);
+    expect(await screen.findByText(/"demand_nodes": 12/)).toBeTruthy();
+    expect(screen.getByRole("dialog").textContent).toContain("Authorized Artifact");
+  });
 });

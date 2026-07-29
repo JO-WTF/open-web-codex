@@ -1,15 +1,20 @@
+import { useEffect, useState } from "react";
 import Bot from "lucide-react/dist/esm/icons/bot";
 import FileCheck2 from "lucide-react/dist/esm/icons/file-check-2";
 import History from "lucide-react/dist/esm/icons/history";
+import LoaderCircle from "lucide-react/dist/esm/icons/loader-circle";
 import Network from "lucide-react/dist/esm/icons/network";
 import ShieldCheck from "lucide-react/dist/esm/icons/shield-check";
+import X from "lucide-react/dist/esm/icons/x";
 import type {
   ArtifactSummary,
   RuntimeAgentActivity,
   RuntimeAgentExecution,
   RuntimeAgentProjection,
   SupervisorPolicyBinding,
+  ThreadHistoryTurn,
 } from "../../../browser/types";
+import { ModalShell } from "../../features/design-system/components/modal/ModalShell";
 import TaskApprovalQueue, {
   type TaskApprovalRequest,
 } from "./TaskApprovalQueue";
@@ -27,6 +32,8 @@ type Props = {
     requestId: number | string,
     decision: "accept" | "decline",
   ) => void;
+  onLoadAgentHistory?: (threadId: string) => Promise<ThreadHistoryTurn[]>;
+  onLoadArtifactContent?: (artifactId: string) => Promise<Record<string, unknown>>;
   loading?: boolean;
   error?: string | null;
 };
@@ -35,6 +42,24 @@ type StatusTone = "idle" | "active" | "waiting" | "terminal" | "error";
 
 type AgentExecutionStatus = RuntimeAgentExecution["status"];
 type AgentActivityStatus = RuntimeAgentActivity["status"];
+
+type ReviewState =
+  | {
+      kind: "agent";
+      resourceId: string;
+      title: string;
+      loading: boolean;
+      error: string | null;
+      turns: ThreadHistoryTurn[];
+    }
+  | {
+      kind: "artifact";
+      resourceId: string;
+      title: string;
+      loading: boolean;
+      error: string | null;
+      content: Record<string, unknown> | null;
+    };
 
 const activityTimeFormatter = new Intl.DateTimeFormat(undefined, {
   hour: "2-digit",
@@ -173,6 +198,19 @@ function Detail({
   );
 }
 
+function reviewItemText(item: Record<string, unknown>): string {
+  const text = typeof item.text === "string" ? item.text.trim() : "";
+  if (text) return text;
+  const type = typeof item.type === "string" ? item.type : "Runtime item";
+  const server = typeof item.server === "string" ? item.server : "";
+  const tool = typeof item.tool === "string" ? item.tool : "";
+  const command = typeof item.command === "string" ? item.command : "";
+  if (server && tool) return `${server} · ${tool}`;
+  if (tool) return tool;
+  if (command) return command;
+  return type;
+}
+
 export default function SupervisorOverview({
   taskTitle,
   policy,
@@ -182,9 +220,12 @@ export default function SupervisorOverview({
   artifacts,
   approvals = [],
   onResolveApproval,
+  onLoadAgentHistory,
+  onLoadArtifactContent,
   loading = false,
   error = null,
 }: Props) {
+  const [review, setReview] = useState<ReviewState | null>(null);
   const rootAgent = agents.find((agent) => agent.is_root) ?? null;
   const rootActivities = activities
     .filter((activity) => rootAgent && activity.thread_id === rootAgent.thread_id)
@@ -204,8 +245,83 @@ export default function SupervisorOverview({
     ? agentStatusPresentation(rootAgent)
     : { label: "Starting", tone: "idle" as const };
 
+  useEffect(() => {
+    if (!review) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setReview(null);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [review]);
+
+  const openAgentHistory = async (
+    execution: RuntimeAgentExecution,
+    agent: RuntimeAgentProjection | undefined,
+  ) => {
+    if (!onLoadAgentHistory) return;
+    const title = `${agent ? agentLabel(agent) : "Runtime Agent"} history`;
+    setReview({
+      kind: "agent",
+      resourceId: execution.thread_id,
+      title,
+      loading: true,
+      error: null,
+      turns: [],
+    });
+    try {
+      const turns = await onLoadAgentHistory(execution.thread_id);
+      setReview((current) =>
+        current?.kind === "agent" && current.resourceId === execution.thread_id
+        ? { ...current, loading: false, turns }
+        : current);
+    } catch (loadError) {
+      setReview((current) =>
+        current?.kind === "agent" && current.resourceId === execution.thread_id
+        ? {
+            ...current,
+            loading: false,
+            error: loadError instanceof Error
+              ? loadError.message
+              : "Agent history could not be loaded.",
+          }
+        : current);
+    }
+  };
+
+  const openArtifactContent = async (artifact: ArtifactSummary) => {
+    if (!onLoadArtifactContent || artifact.state !== "ready") return;
+    const title = artifact.display_name || artifact.artifact_schema;
+    setReview({
+      kind: "artifact",
+      resourceId: artifact.id,
+      title,
+      loading: true,
+      error: null,
+      content: null,
+    });
+    try {
+      const content = await onLoadArtifactContent(artifact.id);
+      setReview((current) =>
+        current?.kind === "artifact" && current.resourceId === artifact.id
+        ? { ...current, loading: false, content }
+        : current);
+    } catch (loadError) {
+      setReview((current) =>
+        current?.kind === "artifact" && current.resourceId === artifact.id
+        ? {
+            ...current,
+            loading: false,
+            error: loadError instanceof Error
+              ? loadError.message
+              : "Artifact content could not be loaded.",
+          }
+        : current);
+    }
+  };
+
   return (
-    <section className="web-supervisor-overview" aria-label="Enterprise Supervisor collaboration">
+    <>
+      <section className="web-supervisor-overview" aria-label="Enterprise Supervisor collaboration">
       <div className="web-supervisor-overview-heading">
         <span className="web-supervisor-overview-icon" aria-hidden="true">
           <ShieldCheck size={16} />
@@ -311,6 +427,15 @@ export default function SupervisorOverview({
                             {execution.latest_progress ?? "No progress reported yet"}
                           </Detail>
                         </dl>
+                        {onLoadAgentHistory ? (
+                          <button
+                            type="button"
+                            className="web-supervisor-review-action"
+                            onClick={() => void openAgentHistory(execution, agent)}
+                          >
+                            Review Agent history
+                          </button>
+                        ) : null}
                       </article>
                     </li>
                   );
@@ -385,6 +510,15 @@ export default function SupervisorOverview({
                     <span className={`web-supervisor-artifact-state is-${artifact.state}`}>
                       {artifact.state}
                     </span>
+                    {onLoadArtifactContent && artifact.state === "ready" ? (
+                      <button
+                        type="button"
+                        className="web-supervisor-review-action is-compact"
+                        onClick={() => void openArtifactContent(artifact)}
+                      >
+                        Open
+                      </button>
+                    ) : null}
                   </div>
                 ))}
               </div>
@@ -396,6 +530,70 @@ export default function SupervisorOverview({
           </div>
         </>
       )}
-    </section>
+      </section>
+      {review ? (
+        <ModalShell
+          className="web-supervisor-review-modal"
+          cardClassName="web-supervisor-review-card"
+          ariaLabelledBy="web-supervisor-review-title"
+          onBackdropClick={() => setReview(null)}
+        >
+          <header>
+            <div>
+              <span>{review.kind === "agent" ? "Runtime Thread" : "Authorized Artifact"}</span>
+              <h2 id="web-supervisor-review-title">{review.title}</h2>
+            </div>
+            <button
+              type="button"
+              onClick={() => setReview(null)}
+              aria-label="Close review"
+            >
+              <X size={16} aria-hidden="true" />
+            </button>
+          </header>
+          <div className="web-supervisor-review-body">
+            {review.loading ? (
+              <p className="web-supervisor-review-loading" role="status">
+                <LoaderCircle size={15} aria-hidden="true" />
+                Loading authoritative content...
+              </p>
+            ) : review.error ? (
+              <p className="web-supervisor-overview-error" role="alert">{review.error}</p>
+            ) : review.kind === "agent" ? (
+              review.turns.length ? (
+                <ol className="web-supervisor-review-turns">
+                  {review.turns.map((turn, index) => (
+                    <li key={turn.id}>
+                      <div>
+                        <strong>Turn {index + 1}</strong>
+                        <span>{turn.status}</span>
+                      </div>
+                      {turn.items.length ? (
+                        <ol>
+                          {turn.items.map((item, itemIndex) => (
+                            <li key={`${turn.id}-${String(item.id ?? itemIndex)}`}>
+                              <span>{typeof item.type === "string" ? item.type : "Runtime item"}</span>
+                              <p>{reviewItemText(item)}</p>
+                            </li>
+                          ))}
+                        </ol>
+                      ) : (
+                        <p>No browser-safe items were recorded for this Turn.</p>
+                      )}
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="web-supervisor-overview-empty">
+                  This Agent has no recorded Turns.
+                </p>
+              )
+            ) : (
+              <pre>{JSON.stringify(review.content, null, 2)}</pre>
+            )}
+          </div>
+        </ModalShell>
+      ) : null}
+    </>
   );
 }

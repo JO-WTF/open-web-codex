@@ -79,6 +79,36 @@ describe("PlatformClient", () => {
     );
   });
 
+  it("reads only Run-scoped Agent history and authorized Artifact content", async () => {
+    const turns = [{
+      id: "turn-2",
+      status: "completed",
+      items: [{ id: "message-2", type: "agentMessage", text: "Follow-up complete" }],
+    }];
+    const artifact = { schema_version: "planning-dataset.v1" };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(turns), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(artifact), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PlatformClient({
+      baseUrl: "https://platform.test",
+      token: "session-token",
+    });
+    const artifactId = "8e98ff2f-82ee-4cc9-a3e6-2974debf8666";
+
+    await expect(
+      client.listRunAgentThreadTurns("run/one", "agent/one"),
+    ).resolves.toEqual(turns);
+    await expect(client.readArtifactContent(artifactId)).resolves.toEqual(artifact);
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://platform.test/api/runs/run%2Fone/agents/agent%2Fone/turns",
+    );
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      `https://platform.test/api/artifacts/${artifactId}/content`,
+    );
+  });
+
   it("sends only a published Supervisor Policy reference when starting an enterprise Run", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ run: { id: "run-1" } }), { status: 200 }));
