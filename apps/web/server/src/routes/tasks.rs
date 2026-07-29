@@ -299,8 +299,11 @@ pub async fn send_message(
            AND workspace_grant.user_id = r.requested_by AND workspace_grant.profile_id = w.profile_id \
            AND workspace_grant.role IN ('owner', 'write') \
          WHERE r.task_id = $1 AND r.organization_id = $2 \
-           AND r.requested_by = $3 AND r.status IN ('running', 'recovery_pending') \
-         ORDER BY r.created_at DESC LIMIT 1",
+           AND r.requested_by = $3 \
+           AND r.codex_thread_id IS NOT NULL \
+           AND r.status IN ('running', 'recovery_pending', 'completed') \
+         ORDER BY CASE WHEN r.status IN ('running', 'recovery_pending') THEN 0 ELSE 1 END, \
+                  r.created_at DESC LIMIT 1",
     )
     .bind(task_id)
     .bind(auth.organization_id)
@@ -440,8 +443,18 @@ pub async fn send_message(
         persist_default_model_selection(&state, auth.user_id, selection).await?;
     }
     if let Err(error) = sqlx::query(
-        "UPDATE runs SET active_turn_id = $1, updated_at = now() \
-         WHERE id = $2 AND organization_id = $3 AND status = 'running'",
+        "WITH updated_run AS (
+             UPDATE runs SET status = 'running', active_turn_id = $1,
+                             lease_owner = NULL, lease_token = NULL,
+                             lease_expires_at = NULL, updated_at = now()
+             WHERE id = $2 AND organization_id = $3
+               AND status IN ('running', 'completed')
+             RETURNING task_id
+         )
+         UPDATE tasks SET status = 'running', updated_at = now()
+         WHERE id IN (SELECT task_id FROM updated_run)
+           AND organization_id = $3
+           AND status NOT IN ('cancelled', 'archived', 'failed')",
     )
     .bind(&turn_id)
     .bind(active_run.get::<Uuid, _>("id"))

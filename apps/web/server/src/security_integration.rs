@@ -255,6 +255,63 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     .execute(&pool)
     .await
     .unwrap();
+
+    let completed_followup_task_id = Uuid::now_v7();
+    let completed_followup_run_id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO tasks (id, organization_id, project_id, created_by, title, status) \
+         VALUES ($1, $2, $3, $4, 'Completed Followup Task', 'completed')",
+    )
+    .bind(completed_followup_task_id)
+    .bind(first_organization_id)
+    .bind(Uuid::parse_str(&first_project_id).unwrap())
+    .bind(first_user_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO runs \
+         (id, organization_id, task_id, requested_by, requested_profile_id, workspace_id, \
+          status, codex_thread_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, 'completed', 'completed-followup-thread')",
+    )
+    .bind(completed_followup_run_id)
+    .bind(first_organization_id)
+    .bind(completed_followup_task_id)
+    .bind(first_user_id)
+    .bind(profile_id)
+    .bind(workspace_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let followup_response = call(
+        &app,
+        authenticated_json(
+            "POST",
+            &format!("/api/tasks/{completed_followup_task_id}/messages"),
+            &first_token,
+            json!({ "text": "continue after completion", "images": [] }),
+        ),
+    )
+    .await;
+    assert_eq!(followup_response.0, StatusCode::OK);
+    assert_eq!(
+        followup_response.1["thread_id"].as_str(),
+        Some("completed-followup-thread")
+    );
+    let reopened: (String, Option<String>, String) = sqlx::query_as(
+        "SELECT run.status, run.active_turn_id, task.status \
+         FROM runs run JOIN tasks task ON task.id = run.task_id \
+         WHERE run.id = $1",
+    )
+    .bind(completed_followup_run_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(reopened.0, "running");
+    assert!(reopened.1.is_some());
+    assert_eq!(reopened.2, "running");
+
     sqlx::query(
         "INSERT INTO runs \
          (id, organization_id, task_id, requested_by, requested_profile_id, workspace_id, \
