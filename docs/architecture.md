@@ -27,9 +27,12 @@ of organization-scoped Agent and Supervisor Releases, Policy snapshots bound
 to root Threads, request-scoped Runtime Roles, native child-agent execution,
 rebuildable Agent projections and Task-owned durable Artifacts. A user-authored
 Agent currently narrows one reviewed code-published capability template; it
-cannot invent Runtime capabilities, MCP servers or Tools. Arbitrary Tool/Plugin
-lifecycle, native Runtime Agent CRUD, Role-level dynamic authorization and
-production multi-user operation remain targets rather than current capability.
+cannot invent Runtime capabilities, MCP servers or Tools. A separate bounded
+Python package path can declare standard-library Tool functions, an MCP Server
+and one Skill under an authorized Workspace, but it is not arbitrary
+Tool/Plugin lifecycle. Native Runtime Agent CRUD, Role-level dynamic
+authorization and production multi-user operation remain targets rather than
+current capability.
 `capability-baseline.md` is authoritative for the verified scope; the roadmap
 and development plan control the remaining order.
 
@@ -257,6 +260,16 @@ boundary exception. The same ownership table above continues to apply:
   platform-reviewed and available for selection; it does not imply that any
   current Thread enabled or successfully started the package. Thread-specific
   MCP status remains a separate durable Runtime projection.
+- Agent Studio also exposes one bounded Python package authoring path. The
+  browser submits Tool JSON Schemas, standard-library Python functions and one
+  Skill through a typed Workspace resource. The Platform fixes the package
+  layout and launcher, validates identifiers and size limits, probes MCP
+  initialization/discovery/calls in a cleared environment, then atomically
+  publishes an immutable package under the authorized Workspace. A new Thread
+  still relies on Codex Runtime capability-root, Skill and MCP discovery;
+  publication does not register a parallel platform Tool catalog or edit hidden
+  Profile configuration. Secret-backed servers, arbitrary launch commands and
+  general Plugin/MCP CRUD are not part of this slice.
 - This mode must pass single Profile smoke tests for Provider login/model
   discovery, Runtime MCP discovery, MCP startup, third-party Provider tool calls,
   map-card rendering and Thread resume before multi-Profile routing work

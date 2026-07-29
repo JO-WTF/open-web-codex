@@ -603,6 +603,72 @@ pub struct CapabilityPackageSummary {
     pub source: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PythonCapabilityTool {
+    pub name: String,
+    pub description: String,
+    pub input_schema: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PythonCapabilitySkill {
+    pub name: String,
+    pub description: String,
+    pub instructions: String,
+}
+
+/// Project-scoped Python MCP package authored through the browser.
+///
+/// The platform generates the Plugin manifest, MCP configuration and launcher.
+/// Browser input never contains a command, host path or environment variable.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PythonCapabilityPublishRequest {
+    pub slug: String,
+    pub version: String,
+    pub display_name: String,
+    pub description: String,
+    pub server_name: String,
+    pub python_source: String,
+    pub tools: Vec<PythonCapabilityTool>,
+    pub skill: PythonCapabilitySkill,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PythonCapabilityValidationIssue {
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PythonCapabilityValidationResult {
+    pub valid: bool,
+    pub tool_names: Vec<String>,
+    pub issues: Vec<PythonCapabilityValidationIssue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PythonCapabilityPublishResponse {
+    pub package_id: String,
+    pub version: String,
+    pub capability_root_id: String,
+    pub server_name: String,
+    pub skill_name: String,
+    pub written_files: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PythonCapabilityToolTestRequest {
+    pub capability: PythonCapabilityPublishRequest,
+    pub tool_name: String,
+    pub arguments: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PythonCapabilityToolTestResponse {
+    pub tool_name: String,
+    pub result: serde_json::Value,
+}
+
 /// Rebuildable, browser-safe view of one Runtime-owned Thread in a root Run's
 /// collaboration tree. This resource cannot create, message or stop an Agent.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

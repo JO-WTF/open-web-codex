@@ -233,7 +233,13 @@ export default function Sidebar({
         >
           <AgentStudioDialog
             mcpServers={mcpServers}
+            workspaces={workspaces}
+            activeWorkspaceId={activeWorkspaceId}
             onClose={() => setShowAgentStudio(false)}
+            onStartThread={(workspaceId) => {
+              setShowAgentStudio(false);
+              onNewThread(workspaceId);
+            }}
             onSupervisorCatalogChanged={onSupervisorCatalogChanged}
           />
         </div>,

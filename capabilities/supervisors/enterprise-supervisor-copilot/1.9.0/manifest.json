@@ -1,7 +1,7 @@
 {
   "schemaVersion": "supervisor-package.v1",
   "policyId": "enterprise-supervisor-copilot",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "displayName": "Enterprise Supervisor Copilot",
   "description": "Coordinates governed data analysis and warehouse-network planning agents.",
   "responsibilities": [

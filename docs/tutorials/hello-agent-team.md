@@ -242,9 +242,10 @@ Supervisor 发布时会绑定两个精确 Agent Release 和内容摘要。缺失
 - Supervisor 的 Agent/Artifact 依赖可以解析；
 - Release 进入新的 Run 选择目录。
 
-它还没有证明这份自定义 Release 已完成真实 Runtime、子 Thread、MCP 和 Artifact
-E2E。当前发布级运行证据使用仓库内置 Enterprise Supervisor；下一篇会用它完成真实
-多 Agent 闭环。不要把“出现在目录中”写成“已经在 Runtime 成功运行”。
+这些步骤本身还没有证明这份自定义 Release 已完成真实 Runtime、子 Thread、MCP 和
+Artifact E2E。项目探针已经证明用户发布的 Data Agent 可以真实运行，但完整的两角色
+自定义 Supervisor 重跑仍是门禁；下一篇使用已经完成闭环的内置 Enterprise
+Supervisor。不要把“出现在目录中”写成“已经在 Runtime 成功运行”。
 
 ## 7. 版本怎样继续演化
 

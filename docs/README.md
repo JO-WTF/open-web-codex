@@ -52,6 +52,9 @@
   - [第 2 步：Hello Team 在 Web 发布 Supervisor](tutorials/hello-agent-team.md)
   - [第 3 步：运行并审阅企业仓网 Supervisor](tutorials/supply-chain-agent-tutorial.md)
   - [第 4 步：审批与故障恢复](tutorials/approvals-and-recovery.md)
+- 新手案例：
+  - [股票历史查询：创建 Python MCP 与 Skill](tutorials/stock-history-python-capability.md)
+  - [仓网建议：创建并运行多 Agent Supervisor](tutorials/web-network-supervisor.md)
 
 扩展指南可以提供模式和示例，但不能重新定义 Profile、Workspace、Artifact、
 Agent Definition、Runtime Role 等核心术语。

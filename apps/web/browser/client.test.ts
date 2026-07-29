@@ -274,6 +274,65 @@ describe("PlatformClient", () => {
     );
   });
 
+  it("validates, tests, and publishes a Python capability through Workspace resources", async () => {
+    const capability = {
+      slug: "stock-history",
+      version: "1.0.0",
+      display_name: "Stock history",
+      description: "Fetch stock history.",
+      server_name: "stock_data",
+      python_source: "def lookup_stock(arguments): return arguments",
+      tools: [{
+        name: "lookup_stock",
+        description: "Look up a stock.",
+        input_schema: { type: "object" },
+      }],
+      skill: {
+        name: "stock-history",
+        description: "Use for stock history.",
+        instructions: "Call stock_data.lookup_stock.",
+      },
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        valid: true,
+        tool_names: ["lookup_stock"],
+        issues: [],
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        tool_name: "lookup_stock",
+        result: { ticker: "DEMO" },
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        package_id: "stock-history",
+        version: "1.0.0",
+        capability_root_id: "local-stock-history",
+        server_name: "stock_data",
+        skill_name: "stock-history",
+        written_files: ["tools/stock-history/.mcp.json"],
+      }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PlatformClient({
+      baseUrl: "https://platform.test",
+      token: "session-token",
+    });
+
+    await client.validatePythonCapability("workspace/one", capability);
+    await client.testPythonCapability("workspace/one", {
+      capability,
+      tool_name: "lookup_stock",
+      arguments: { name: "Example" },
+    });
+    await client.publishPythonCapability("workspace/one", capability);
+
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "https://platform.test/api/workspaces/workspace/one/python-capabilities/validate",
+      "https://platform.test/api/workspaces/workspace/one/python-capabilities/test",
+      "https://platform.test/api/workspaces/workspace/one/python-capabilities/publish",
+    ]);
+    expect(fetchMock.mock.calls.every((call) => call[1]?.method === "POST")).toBe(true);
+  });
+
   it("loads the read-only Runtime Agent projection for a Run", async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(
       new Response(JSON.stringify([{ thread_id: "thread-1", is_root: true }]), {

@@ -846,7 +846,7 @@ pub(super) async fn authorized_workspace(
     Ok(row.get("id"))
 }
 
-async fn audit_workspace_mutation(
+pub(super) async fn audit_workspace_mutation(
     state: &AppState,
     auth: &AuthenticatedUser,
     _requested_workspace_id: Uuid,
@@ -941,7 +941,7 @@ fn log_entry(entry: open_web_codex_git_runtime::GitLogEntry) -> WorkspaceLogEntr
     }
 }
 
-fn git_error(error: GitRuntimeError) -> (StatusCode, Json<PlatformError>) {
+pub(super) fn git_error(error: GitRuntimeError) -> (StatusCode, Json<PlatformError>) {
     match error {
         GitRuntimeError::InvalidSource(_)
         | GitRuntimeError::InvalidRef(_)

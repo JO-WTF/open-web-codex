@@ -115,7 +115,7 @@ warehouse-network-fixture
 当前仓库示例版本是：
 
 ```text
-enterprise-supervisor-copilot@1.8.0
+enterprise-supervisor-copilot@1.9.0
 ```
 
 它精确绑定：

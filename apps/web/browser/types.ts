@@ -133,6 +133,60 @@ export type CapabilityPackageSummary = {
   source: "repository";
 };
 
+export type PythonCapabilityTool = {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+};
+
+export type PythonCapabilitySkill = {
+  name: string;
+  description: string;
+  instructions: string;
+};
+
+export type PythonCapabilityPublishRequest = {
+  slug: string;
+  version: string;
+  display_name: string;
+  description: string;
+  server_name: string;
+  python_source: string;
+  tools: PythonCapabilityTool[];
+  skill: PythonCapabilitySkill;
+};
+
+export type PythonCapabilityValidationIssue = {
+  code: string;
+  message: string;
+};
+
+export type PythonCapabilityValidationResult = {
+  valid: boolean;
+  tool_names: string[];
+  issues: PythonCapabilityValidationIssue[];
+};
+
+export type PythonCapabilityToolTestRequest = {
+  capability: PythonCapabilityPublishRequest;
+  tool_name: string;
+  arguments: Record<string, unknown>;
+};
+
+export type PythonCapabilityToolTestResponse = {
+  tool_name: string;
+  result: unknown;
+};
+
+export type PythonCapabilityPublishResponse = {
+  package_id: string;
+  version: string;
+  capability_root_id: string;
+  server_name: string;
+  skill_name: string;
+  written_files: string[];
+};
+
 export type AgentCapabilityTemplateSelection = {
   definition_id: string;
   version: string;

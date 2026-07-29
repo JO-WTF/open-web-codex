@@ -6,7 +6,7 @@ use super::{require_runtime_manifest, resolve_builtin, SupervisorPolicyError};
 fn published_policy() -> super::ResolvedSupervisorPolicy {
     resolve_builtin(&SupervisorPolicySelection {
         policy_id: "enterprise-supervisor-copilot".to_string(),
-        version: "1.8.0".to_string(),
+        version: "1.9.0".to_string(),
     })
     .unwrap()
 }
@@ -15,7 +15,7 @@ fn published_policy() -> super::ResolvedSupervisorPolicy {
 fn resolves_only_the_current_published_version_and_seals_its_content() {
     let published = open_web_codex_supervisor_catalog::supervisor::list_published().unwrap();
     assert_eq!(published.len(), 1);
-    assert_eq!(published[0].version, "1.8.0");
+    assert_eq!(published[0].version, "1.9.0");
 
     let selected = SupervisorPolicySelection {
         policy_id: published[0].policy_id.clone(),

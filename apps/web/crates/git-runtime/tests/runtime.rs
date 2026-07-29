@@ -1,3 +1,6 @@
+use std::collections::BTreeMap;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 
@@ -102,6 +105,63 @@ async fn provisions_a_server_managed_empty_project() {
         .unwrap()
         .changes
         .is_empty());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn publishes_an_immutable_capability_package_atomically() {
+    let (_root, runtime, source) = fixture();
+    let source = runtime.validate_source(&source).unwrap();
+    let branch = runtime.validate_ref("main").unwrap();
+    let workspace_id = Uuid::now_v7();
+    let checkout = runtime
+        .provision(Uuid::now_v7(), workspace_id, &source, &branch)
+        .await
+        .unwrap();
+    let files = BTreeMap::from([
+        (
+            ".codex-plugin/plugin.json".to_string(),
+            "{\"name\":\"stock-history\"}\n".to_string(),
+        ),
+        (
+            "bin/launcher".to_string(),
+            "#!/bin/sh\nexec python3 server.py\n".to_string(),
+        ),
+        (
+            "skills/stock-history/SKILL.md".to_string(),
+            "---\nname: stock-history\n---\n".to_string(),
+        ),
+    ]);
+
+    let written = runtime
+        .publish_capability_package(workspace_id, "stock-history", &files)
+        .await
+        .expect("publish capability");
+
+    assert_eq!(written.len(), files.len());
+    assert_eq!(
+        std::fs::read_to_string(
+            checkout
+                .root
+                .join("tools/stock-history/.codex-plugin/plugin.json")
+        )
+        .unwrap(),
+        files[".codex-plugin/plugin.json"]
+    );
+    assert_ne!(
+        std::fs::metadata(checkout.root.join("tools/stock-history/bin/launcher"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o111,
+        0
+    );
+    assert!(matches!(
+        runtime
+            .publish_capability_package(workspace_id, "stock-history", &files)
+            .await,
+        Err(GitRuntimeError::Conflict(_))
+    ));
 }
 
 #[tokio::test]

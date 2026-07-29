@@ -31,6 +31,17 @@ Provider 调用可能产生费用。供应链案例会启动多个 Agent，并�
 
 不要一次读完。每篇末尾都有完成检查表；当前一篇没有通过时，不要用下一层掩盖问题。
 
+## 两个可直接照做的新手案例
+
+如果你已经理解基本对象，希望从一个具体需求开始，可以直接选择：
+
+| 案例 | 适合的需求 | 关键验证 |
+| --- | --- | --- |
+| [股票历史查询](tutorials/stock-history-python-capability.md) | 用 Python 创建两个有顺序依赖的 MCP Tool，并用 Skill 规定调用方法 | 新 Thread 先解析股票代码，再查询指定日期范围 |
+| [仓网多 Agent 建议](tutorials/web-network-supervisor.md) | 在 Web 发布两个 Agent 和 Supervisor，并完成 Artifact 交接 | Data Artifact ready 后关闭终态 Agent，再启动 Network Agent |
+
+案例教程仍遵守下文的发布、授权和证据边界，不是跳过基础门禁的快捷方式。
+
 ## 先记住六个对象
 
 ```mermaid
@@ -83,8 +94,9 @@ Supervisor draft
 - 已发布版本不可编辑；修改时创建新版本，已有 Thread 继续使用原绑定。
 
 当前发布级证据覆盖自定义 Agent/Supervisor 的创建、验证、不可变发布和运行目录解析；
-自定义 Release 的真实 Runtime 执行还不是教程门禁。因此第二篇以发布成功为闭环，
-第三篇使用已通过真实 E2E 的内置企业 Supervisor 学习 Root 与 Child Threads。
+第二篇本身仍以发布成功为闭环。项目的真实探针已经执行了用户发布的 Data Agent，
+但完整的两角色自定义 Supervisor 重跑仍是门禁；第三篇继续使用已完成真实 E2E 的
+内置企业 Supervisor 学习 Root 与 Child Threads。
 
 ## 怎样判断一次练习真的成功
 

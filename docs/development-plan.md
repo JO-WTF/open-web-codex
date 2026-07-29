@@ -15,7 +15,7 @@
 
 当前 Codex 基线上的定制仍按 patch map 分类；上表只保留最近一次已验证的上游状态
 快照，不把未联网刷新的提交差距描述为当前事实。本轮不执行上游同步；未来恢复同步时
-仍必须通过专用 `codex/sync-upstream-*` 分支。1421 WebApp 的 CSS、页面布局
+仍必须通过专用 `codex/sync-upstream-*` 分支。WebApp 的 CSS、页面布局
 和交互保持既有产品形态；当前单用户入口不显示登录或注册，浏览器自动取得本地
 Session；差异集中在该入口、`src/services/webClient.ts` Server
 适配层，以及三个由完整文件哈希锁定的非视觉 Thread 上下文接线文件。平台具备原生 Profile Host、Provider 服务、
@@ -83,8 +83,9 @@ MCP inventory、Tool allowlist、capability roots 或文件路径；服务端派
 事实。Supervisor 可选择精确 Agent Release UUID，发布时持久化版本与内容哈希依赖，
 Run 预检重新解析并拒绝缺失或漂移。平台现允许只有一个 Agent 的 Supervisor，支持
 类似 Hello Agent 的最小发布。临时 PostgreSQL 验证覆盖空库迁移、发布解析、
-跨 Organization 拒绝和精确依赖。尚未完成任意 Tool/Plugin 创作或原生 Runtime
-Agent CRUD，也尚未用真实 Runtime 重跑用户发布的 Release。
+跨 Organization 拒绝和精确依赖。尚未完成任意 Plugin 创作或原生 Runtime Agent
+CRUD；用户发布的 Agent Release 已进入真实 Runtime 多 Agent 重跑，但终态子 Agent
+未释放并发槽位的问题仍需用新 Supervisor 版本完成复验。
 
 代码 Package 与 Web 草稿现已收敛为同一个 Agent/Supervisor authoring contract 和
 服务端语义编译器。Agent Runtime Role 只由 `definitionId + version` 稳定派生；
@@ -99,8 +100,12 @@ Supervisor 草稿不能提交或覆盖平台指令正文，`codex/` 无新增修
 Agent Studio 已将资源目录、不可变详情和草稿创建/编辑拆成独立页面状态。
 Capability 页面从受版本控制的 Plugin/MCP 清单生成浏览器安全目录；MCP 页面把
 “平台已审查的声明”与“当前 Thread 实际启用状态”并列展示，因此 `map_utils`
-可以作为可用声明被查看，同时在未授权给当前 Thread 时明确显示为未启用。任意
-Capability/MCP 创作仍保持显式不可用，直到具备类型化校验、隔离运行与发布合同。
+可以作为可用声明被查看，同时在未授权给当前 Thread 时明确显示为未启用。
+新增的受限 Python authoring 路径允许用户在授权 Workspace 中提交 Tool JSON Schema、
+标准库函数和一个 Skill；平台固定 package/launcher，清空继承环境后完成 MCP
+initialize、Tool discovery 和可选调用测试，再原子发布不可变 package。真实
+stock-history 新 Thread 已记录两个 Tool 的顺序调用。该切片不等于任意
+Plugin/MCP CRUD，不支持 Secret、任意启动命令或 Profile 全局安装。
 
 Agent、Skill、MCP 的长期整改顺序统一维护在
 [Agent、Skill 与 MCP 原生生命周期整改计划](agent-capability-lifecycle-plan.md)。
@@ -109,7 +114,7 @@ Agent、Skill、MCP 的长期整改顺序统一维护在
 启用 V2 并引用启动前校验的 Role 文件；后续阶段再以类型化 app-server V2 CRUD
 替换这一临时文件边界。
 
-受限 happy path 已经越过“平台骨架”阶段。真实 PostgreSQL 与 Profile 上的最新
+受限 happy path 已经越过“平台骨架”阶段。真实 PostgreSQL 与 Profile 上的既有
 Codex Runtime 运行证明：绑定 `enterprise-supervisor-copilot@1.8.0` 的根 Thread
 按顺序创建了 `data_agent` 与 `network_planning_agent` 两个真实子 Thread；前者
 通过只读数据 MCP 产生并验证 `planning-dataset.v1`，后者读取同一 Resource 后再
@@ -118,6 +123,9 @@ ready Task Artifact 和完整决策报告。运行轨迹严格只有 Root、Data
 Thread，33 次 MCP 调用分别归属于 Data/Network 的授权服务，Root 无业务 MCP 或命令
 调用，Run 与 Task 最终均为 completed 且无活动 Turn。精确调用与 Artifact 数量取决于
 有效调查步骤，门禁固定的是必需 Schema 的最小集合以及所有已注册 Artifact 必须 ready。
+当前 `1.9.0` 在服务端生成的执行合同中补充终态子 Agent 槽位释放规则：所需 Artifact
+持久化后必须调用 `close_agent`，再在并发上限内创建下一角色。该版本完成同样的真实
+Runtime 重跑前，不继承 `1.8.0` 的验证结论。
 
 这不等于 M2 已全部完成。当前主线转向 happy path 没有覆盖的行为：Completed Agent
 follow-up、interrupt、部分失败和审批拒绝后的综合；更深层 Agent 树导航；Artifact
@@ -155,7 +163,7 @@ Provider/MCP 链路获得同一组可复现证据。它现在是 M2 的并行可
    `/fast` 等本地命令需要逐项边界复审：纯 UI 状态命令可保留；凡是查询 Runtime
    capability、工具、MCP、Skills、Plugins 或模型上下文的命令必须改为 Runtime/typed
    app-server 合同，不能由 WebApp 生成模型式回答。
-2. [ ] `apps/web/src/services/tauri.ts` 仍是浏览器适配兼容层命名，需在不改变 1421 UI
+2. [ ] `apps/web/src/services/tauri.ts` 仍是浏览器适配兼容层命名，需在不改变 WebApp
    行为的前提下拆名或迁移，避免继续暗示桌面/Tauri 边界存在。
 3. [ ] Capability Manifest 仍有手工 Alpha 子集；必须继续收敛到由 Codex 生成事实驱动，
    Web feature policy 只能消费这些事实，不能自行声明 Runtime 支持。

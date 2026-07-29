@@ -16,6 +16,7 @@ pub mod profile;
 pub mod profile_content;
 pub mod projects;
 pub mod providers;
+pub mod python_capabilities;
 pub mod runs;
 pub mod runtime_agents;
 pub mod sessions;
@@ -91,6 +92,18 @@ pub fn router(
         .route(
             "/capability-packages",
             axum::routing::get(capability_packages::list),
+        )
+        .route(
+            "/workspaces/{id}/python-capabilities/validate",
+            axum::routing::post(python_capabilities::validate),
+        )
+        .route(
+            "/workspaces/{id}/python-capabilities/test",
+            axum::routing::post(python_capabilities::test_tool),
+        )
+        .route(
+            "/workspaces/{id}/python-capabilities/publish",
+            axum::routing::post(python_capabilities::publish),
         )
         .route(
             "/agent-definition-resources",

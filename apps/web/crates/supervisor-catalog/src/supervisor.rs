@@ -21,15 +21,15 @@ use crate::validation::{
 
 const ENTERPRISE_COPILOT_MANIFEST: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/1.8.0/manifest.json"
+    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/1.9.0/manifest.json"
 ));
 const ENTERPRISE_COPILOT_CUSTOM_INSTRUCTIONS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/1.8.0/custom-instructions.md"
+    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/1.9.0/custom-instructions.md"
 ));
 const ENTERPRISE_COPILOT_ARTIFACT_CONTRACTS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/1.8.0/artifact-contracts.json"
+    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/1.9.0/artifact-contracts.json"
 ));
 
 const MAX_SUPERVISOR_INSTRUCTIONS_BYTES: usize = 16 * 1024;
@@ -512,6 +512,15 @@ fn compile_developer_instructions(
         )
         .expect("writing to String cannot fail");
     }
+    compiled.push_str(
+        "\n## Agent slot lifecycle\n\
+         A child Agent remains active and occupies the Runtime concurrency limit after its turn \
+         reaches a terminal state until the Supervisor calls `close_agent`. After collecting the \
+         child's result and confirming every required durable Artifact is ready, close that child \
+         before spawning another Agent whenever the maximum active-child limit would otherwise be \
+         exceeded. Never close a child with an active turn or before its required Artifact handoff \
+         is durable.\n",
+    );
     compiled.push_str("\n## Artifact handoffs\n");
     for contract in artifact_contracts {
         writeln!(
@@ -692,6 +701,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(package.required_runtime_roles.len(), 2);
+        assert_eq!(package.version, "1.9.0");
         assert_eq!(package.agents.len(), 2);
         assert_eq!(package.artifact_contracts.len(), 3);
         assert_eq!(package.max_active_child_agents, 2);
@@ -705,6 +715,12 @@ mod tests {
         assert!(package
             .developer_instructions
             .contains("# Resolved execution contract"));
+        assert!(package
+            .developer_instructions
+            .contains("A child Agent remains active and occupies the Runtime concurrency limit"));
+        assert!(package
+            .developer_instructions
+            .contains("calls `close_agent`"));
         assert!(package
             .developer_instructions
             .contains("# Custom Supervisor instructions"));
@@ -735,7 +751,7 @@ mod tests {
     fn repository_and_web_supervisor_sources_compile_to_identical_execution_semantics() {
         let repository = resolve(&SupervisorPolicySelection {
             policy_id: "enterprise-supervisor-copilot".to_string(),
-            version: "1.8.0".to_string(),
+            version: "1.9.0".to_string(),
         })
         .unwrap();
         let draft = SupervisorDraftRequest {

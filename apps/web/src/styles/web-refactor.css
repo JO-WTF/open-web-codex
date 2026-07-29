@@ -1388,6 +1388,116 @@ body:has(.web-app-shell) {
   background: rgb(79 121 185 / 7%);
 }
 
+.web-python-capability-editor {
+  display: grid;
+  gap: 15px;
+  margin-bottom: 18px;
+  padding: 18px;
+  border: 1px solid var(--web-border);
+  border-radius: 13px;
+  background:
+    linear-gradient(145deg, rgb(69 151 190 / 7%), transparent 36%),
+    rgb(255 255 255 / 2.5%);
+}
+
+.web-python-capability-callout,
+.web-python-capability-success,
+.web-python-capability-published {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 11px 12px;
+  border: 1px solid rgb(103 190 225 / 22%);
+  border-radius: 10px;
+  color: #b9dbe9;
+  background: rgb(65 151 190 / 8%);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.web-python-capability-callout svg,
+.web-python-capability-success svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: #74c8df;
+}
+
+.web-python-capability-grid,
+.web-python-capability-test {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.web-python-capability-wide {
+  grid-column: 1 / -1;
+}
+
+.web-python-capability-hint {
+  color: var(--web-faint);
+  font-size: 10px;
+  font-weight: 450;
+  line-height: 1.45;
+}
+
+.web-agent-studio-modal .web-python-capability-code {
+  min-height: 360px;
+}
+
+.web-python-capability-actions {
+  padding-top: 2px;
+}
+
+.web-python-capability-actions .ghost,
+.web-python-capability-actions .settings-studio-create-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.web-python-capability-success {
+  border-color: rgb(103 201 174 / 24%);
+  color: #a9dfcf;
+  background: rgb(70 164 137 / 8%);
+}
+
+.web-python-capability-success svg {
+  color: #68c9ad;
+}
+
+.web-python-capability-result {
+  max-height: 260px;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--web-border);
+  border-radius: 10px;
+  color: #cbd4e0;
+  background: #0c111a;
+  font-family: var(--web-font-mono);
+  font-size: 10px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.web-python-capability-published {
+  align-items: center;
+  justify-content: space-between;
+  border-color: rgb(103 201 174 / 24%);
+  color: var(--web-text);
+  background: rgb(70 164 137 / 8%);
+}
+
+.web-python-capability-published > div {
+  display: grid;
+  gap: 3px;
+}
+
+.web-python-capability-published span {
+  color: var(--web-muted);
+  font-size: 10px;
+}
+
 @media (max-width: 760px) {
   .web-settings-backdrop:has(.web-agent-studio-modal) {
     padding: 8px;
@@ -1462,6 +1572,20 @@ body:has(.web-app-shell) {
   }
 
   .web-agent-studio-modal .settings-agent-card-header {
+    flex-direction: column;
+  }
+
+  .web-python-capability-grid,
+  .web-python-capability-test {
+    grid-template-columns: 1fr;
+  }
+
+  .web-python-capability-wide {
+    grid-column: auto;
+  }
+
+  .web-python-capability-published {
+    align-items: stretch;
     flex-direction: column;
   }
 }
@@ -5440,6 +5564,32 @@ body:has(.web-app-shell[data-theme="light"]) .web-agent-studio-modal .settings-s
 
 body:has(.web-app-shell[data-theme="light"]) .web-agent-studio-mcp-list {
   background: #f6f8fb;
+}
+
+body:has(.web-app-shell[data-theme="light"]) .web-python-capability-editor {
+  background:
+    linear-gradient(145deg, rgb(69 151 190 / 7%), transparent 36%),
+    #f8fafc;
+}
+
+body:has(.web-app-shell[data-theme="light"]) .web-python-capability-callout {
+  color: #315f73;
+  background: #eef8fb;
+}
+
+body:has(.web-app-shell[data-theme="light"]) .web-python-capability-success {
+  color: #276b57;
+  background: #edf8f4;
+}
+
+body:has(.web-app-shell[data-theme="light"]) .web-python-capability-result {
+  color: #25334a;
+  background: #ffffff;
+}
+
+body:has(.web-app-shell[data-theme="light"]) .web-python-capability-published {
+  color: #172033;
+  background: #edf8f4;
 }
 
 body:has(.web-app-shell[data-theme="light"]) .web-archive-modal {

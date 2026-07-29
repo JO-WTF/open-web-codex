@@ -1205,6 +1205,111 @@ impl GitRuntime {
         Ok(())
     }
 
+    /// Publish one generated capability package under the selected repository's
+    /// `tools/` directory. Callers provide package-relative files only; the
+    /// browser never controls the destination path.
+    pub async fn publish_capability_package(
+        &self,
+        workspace_id: Uuid,
+        package_slug: &str,
+        files: &BTreeMap<String, String>,
+    ) -> Result<Vec<String>, GitRuntimeError> {
+        if package_slug.is_empty()
+            || package_slug.len() > 64
+            || !package_slug
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+            || package_slug.starts_with('-')
+            || package_slug.ends_with('-')
+        {
+            return Err(GitRuntimeError::UnsafePath(
+                "capability package slug is invalid".to_string(),
+            ));
+        }
+        if files.is_empty() || files.len() > 32 {
+            return Err(GitRuntimeError::Conflict(
+                "capability package must contain between 1 and 32 files".to_string(),
+            ));
+        }
+        if files.values().map(String::len).sum::<usize>() > MAX_FILE_READ_BYTES as usize {
+            return Err(GitRuntimeError::Conflict(
+                "capability package exceeds the workspace file limit".to_string(),
+            ));
+        }
+        for relative in files.keys() {
+            validate_relative_path(relative)?;
+        }
+
+        let _lock = self.acquire_workspace_lock(workspace_id).await;
+        let workspace = self.require_workspace(workspace_id)?;
+        let tools = workspace.join("tools");
+        reject_symlink(&tools, "workspace tools directory")?;
+        tokio::fs::create_dir_all(&tools)
+            .await
+            .map_err(|source| GitRuntimeError::Io {
+                operation: "create workspace tools directory",
+                source,
+            })?;
+        let target = tools.join(package_slug);
+        if tokio::fs::symlink_metadata(&target).await.is_ok() {
+            return Err(GitRuntimeError::Conflict(
+                "capability package already exists".to_string(),
+            ));
+        }
+        let temporary = tools.join(format!(".{package_slug}.{}.tmp", Uuid::now_v7()));
+        tokio::fs::create_dir(&temporary)
+            .await
+            .map_err(|source| GitRuntimeError::Io {
+                operation: "create capability package staging directory",
+                source,
+            })?;
+
+        let write_result = async {
+            for (relative, content) in files {
+                let target = temporary.join(relative);
+                if let Some(parent) = target.parent() {
+                    tokio::fs::create_dir_all(parent).await.map_err(|source| {
+                        GitRuntimeError::Io {
+                            operation: "create capability package directory",
+                            source,
+                        }
+                    })?;
+                }
+                tokio::fs::write(&target, content)
+                    .await
+                    .map_err(|source| GitRuntimeError::Io {
+                        operation: "write capability package file",
+                        source,
+                    })?;
+                #[cfg(unix)]
+                if relative == "bin/launcher" {
+                    use std::os::unix::fs::PermissionsExt;
+                    tokio::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))
+                        .await
+                        .map_err(|source| GitRuntimeError::Io {
+                            operation: "make capability launcher executable",
+                            source,
+                        })?;
+                }
+            }
+            tokio::fs::rename(&temporary, &target)
+                .await
+                .map_err(|source| GitRuntimeError::Io {
+                    operation: "publish capability package",
+                    source,
+                })
+        }
+        .await;
+        if write_result.is_err() {
+            let _ = tokio::fs::remove_dir_all(&temporary).await;
+        }
+        write_result?;
+        Ok(files
+            .keys()
+            .map(|relative| format!("tools/{package_slug}/{relative}"))
+            .collect())
+    }
+
     pub async fn apply_workspace_changes(
         &self,
         source_workspace_id: Uuid,

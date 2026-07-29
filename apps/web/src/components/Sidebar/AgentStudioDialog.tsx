@@ -13,6 +13,8 @@ import { useSettingsAgentCatalogSection } from "@/features/settings/hooks/useSet
 import { useSettingsSupervisorsSection } from "@/features/settings/hooks/useSettingsSupervisorsSection";
 import { platformClient } from "../../../browser/session";
 import type { CapabilityPackageSummary } from "../../../browser/types";
+import type { WorkspaceInfo } from "../../types";
+import PythonCapabilityEditor from "./PythonCapabilityEditor";
 
 type McpServerEntry = {
   name: string;
@@ -25,7 +27,10 @@ type AgentStudioSection = "agents" | "supervisors" | "mcp" | "capabilities";
 
 type Props = {
   mcpServers: Record<string, McpServerEntry>;
+  workspaces: WorkspaceInfo[];
+  activeWorkspaceId: string | null;
   onClose: () => void;
+  onStartThread: (workspaceId: string) => void;
   onSupervisorCatalogChanged: () => void;
 };
 
@@ -83,7 +88,10 @@ function CapabilityCard({
 
 export default function AgentStudioDialog({
   mcpServers,
+  workspaces,
+  activeWorkspaceId,
   onClose,
+  onStartThread,
   onSupervisorCatalogChanged,
 }: Props) {
   const [activeSection, setActiveSection] = useState<AgentStudioSection>("agents");
@@ -94,6 +102,7 @@ export default function AgentStudioDialog({
   >([]);
   const [capabilityCatalogLoading, setCapabilityCatalogLoading] = useState(true);
   const [capabilityCatalogError, setCapabilityCatalogError] = useState<string | null>(null);
+  const [showPythonEditor, setShowPythonEditor] = useState(false);
   const mcpDirectory = useMemo(
     () =>
       capabilityPackages.flatMap((capabilityPackage) =>
@@ -145,6 +154,22 @@ export default function AgentStudioDialog({
       onSupervisorCatalogChanged();
     }
     return release;
+  };
+
+  const refreshCapabilityPackages = () => {
+    setCapabilityCatalogLoading(true);
+    void platformClient
+      .listCapabilityPackages()
+      .then((packages) => {
+        setCapabilityPackages(packages);
+        setCapabilityCatalogError(null);
+      })
+      .catch((error: unknown) => {
+        setCapabilityCatalogError(
+          error instanceof Error ? error.message : "Unable to load capability packages.",
+        );
+      })
+      .finally(() => setCapabilityCatalogLoading(false));
   };
 
   return (
@@ -225,12 +250,19 @@ export default function AgentStudioDialog({
               </div>
               <div className="settings-agents-actions settings-studio-page-actions">
                 <AgentStudioCreateButton
-                  disabled
-                  title="Safe MCP authoring and isolated validation are not available yet."
+                  onClick={() => setShowPythonEditor((visible) => !visible)}
                 >
-                  New MCP server
+                  {showPythonEditor ? "Close Python editor" : "New Python MCP"}
                 </AgentStudioCreateButton>
               </div>
+              {showPythonEditor && (
+                <PythonCapabilityEditor
+                  workspaces={workspaces}
+                  activeWorkspaceId={activeWorkspaceId}
+                  onPublished={refreshCapabilityPackages}
+                  onStartThread={onStartThread}
+                />
+              )}
               {capabilityCatalogLoading ? (
                 <div className="web-agent-studio-empty">Loading MCP directory…</div>
               ) : capabilityCatalogError ? (
@@ -294,10 +326,12 @@ export default function AgentStudioDialog({
               </div>
               <div className="settings-agents-actions settings-studio-page-actions">
                 <AgentStudioCreateButton
-                  disabled
-                  title="Capability package creation requires safe validation and publication."
+                  onClick={() => {
+                    setActiveSection("mcp");
+                    setShowPythonEditor(true);
+                  }}
                 >
-                  New capability package
+                  New Python capability
                 </AgentStudioCreateButton>
               </div>
               {capabilityCatalogLoading ? (
@@ -328,9 +362,8 @@ export default function AgentStudioDialog({
                 </div>
               )}
               <div className="web-agent-studio-boundary-note">
-                Package editing and creation are shown as unavailable until the platform can
-                validate manifests, Skills, MCP launchers, permissions, and isolated execution
-                without editing hidden Profile state.
+                Python packages are started in a temporary validation process and published into
+                the selected Workspace. Existing package versions remain immutable.
               </div>
             </section>
           )}

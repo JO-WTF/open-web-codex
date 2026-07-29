@@ -7,6 +7,11 @@ import type {
   AgentDefinitionResourceSummary,
   AgentDefinitionValidationResult,
   CapabilityPackageSummary,
+  PythonCapabilityPublishRequest,
+  PythonCapabilityPublishResponse,
+  PythonCapabilityToolTestRequest,
+  PythonCapabilityToolTestResponse,
+  PythonCapabilityValidationResult,
   Me,
   Project,
   ProviderCatalog,
@@ -424,6 +429,36 @@ export class PlatformClient {
 
   listCapabilityPackages() {
     return this.request<CapabilityPackageSummary[]>("/api/capability-packages");
+  }
+
+  validatePythonCapability(
+    workspaceId: string,
+    request: PythonCapabilityPublishRequest,
+  ) {
+    return this.request<PythonCapabilityValidationResult>(
+      `/api/workspaces/${workspaceId}/python-capabilities/validate`,
+      { method: "POST", body: JSON.stringify(request) },
+    );
+  }
+
+  testPythonCapability(
+    workspaceId: string,
+    request: PythonCapabilityToolTestRequest,
+  ) {
+    return this.request<PythonCapabilityToolTestResponse>(
+      `/api/workspaces/${workspaceId}/python-capabilities/test`,
+      { method: "POST", body: JSON.stringify(request) },
+    );
+  }
+
+  publishPythonCapability(
+    workspaceId: string,
+    request: PythonCapabilityPublishRequest,
+  ) {
+    return this.request<PythonCapabilityPublishResponse>(
+      `/api/workspaces/${workspaceId}/python-capabilities/publish`,
+      { method: "POST", body: JSON.stringify(request) },
+    );
   }
 
   getAgentDefinition(definitionId: string, version: string) {

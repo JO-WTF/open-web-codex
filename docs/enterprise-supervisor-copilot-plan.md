@@ -121,7 +121,7 @@ sequenceDiagram
 
 | 领域 | 当前已有 | 当前缺口 | 短期判断 |
 | --- | --- | --- | --- |
-| Codex 多 Agent | `1.8.0` 真实根 Thread 已按顺序 spawn/wait 两个白名单 Role 子 Thread；Runtime 的模型可见目录和执行入口共同拒绝白名单外角色，并原子限制每个必需 Role 仅一个驻留实例；子 Role 配置显式关闭 V2 与继续委派 | follow-up、interrupt、深层树和部分失败尚未进入真实案例矩阵 | 继续复用 Runtime，只补行为证据 |
+| Codex 多 Agent | `1.9.0` 行为合同明确要求在所需 Artifact 持久化后关闭终态子 Agent，以释放 Runtime 并发槽位；既有真实根 Thread 已按顺序 spawn/wait 两个白名单 Role 子 Thread，当前版本仍需完成同样的真实重跑 | follow-up、interrupt、深层树和部分失败尚未进入真实案例矩阵 | 继续复用 Runtime，只补行为证据 |
 | Thread 启动 | Adapter 使用正式 `thread/start` 传入授权 `cwd`、审批策略、历史模式和已绑定 Policy；真实企业 Thread 启动已通过 | shared Workspace、真实 multi-`cwd` 和多 Profile 路由仍缺证据 | 不新增 Supervisor Runtime |
 | 事件与 Web | Server 把根/子 Thread 事件投影为可重建 DTO；真实刷新与 Server/Profile Host 重启恢复同一 Policy、三节点 Agent 树和最终报告 | 多层历史导航、乱序/重复矩阵和完成后追加任务仍不完整 | 扩展投影与 DTO，不建立第二套 Agent 状态机 |
 | Runtime Role | Data `1.6.0` 与 Network `1.5.0` 显式绑定经评审的 Runtime 指令 hash，并从类型化声明确定性生成 shell、普通扩展、V2/继续委派禁用以及精确 MCP allowlist；根 request config 只选择声明的 capability root，并提供 exact `agents.allowed_roles` 与 `agents.role_spawn_limits` | Runtime 原生 Agent CRUD、通用发布、治理视图和多 Profile Catalog 仍未完成 | 新企业 Thread 直接依赖当前 V2，不引入历史版本兜底；启动前后均失败关闭；普通 Root 不获得 Policy、企业 Role 或 V2 覆盖 |
