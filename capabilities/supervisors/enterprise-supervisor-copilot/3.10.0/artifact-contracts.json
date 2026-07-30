@@ -5,7 +5,7 @@
       "artifactType": "indonesia_dataset_inspection.v1",
       "producerAgent": "enterprise-data-agent@3.1.0",
       "consumerAgents": [
-        "enterprise-network-planning-agent@3.1.0",
+        "enterprise-network-planning-agent@3.4.0",
         "supervisor"
       ],
       "handoff": "durable-resource-reference",
@@ -13,7 +13,7 @@
     },
     {
       "artifactType": "indonesia_service_baseline.v1",
-      "producerAgent": "enterprise-network-planning-agent@3.1.0",
+      "producerAgent": "enterprise-network-planning-agent@3.4.0",
       "consumerAgents": [
         "supervisor"
       ],
@@ -22,7 +22,7 @@
     },
     {
       "artifactType": "indonesia_current_network_analysis.v1",
-      "producerAgent": "enterprise-network-planning-agent@3.1.0",
+      "producerAgent": "enterprise-network-planning-agent@3.4.0",
       "consumerAgents": [
         "supervisor"
       ],
@@ -31,7 +31,7 @@
     },
     {
       "artifactType": "indonesia_candidate_scenario.v1",
-      "producerAgent": "enterprise-network-planning-agent@3.1.0",
+      "producerAgent": "enterprise-network-planning-agent@3.4.0",
       "consumerAgents": [
         "supervisor"
       ],
@@ -40,7 +40,7 @@
     },
     {
       "artifactType": "indonesia_location_optimization.v1",
-      "producerAgent": "enterprise-network-planning-agent@3.1.0",
+      "producerAgent": "enterprise-network-planning-agent@3.4.0",
       "consumerAgents": [
         "supervisor"
       ],
@@ -49,9 +49,9 @@
     },
     {
       "artifactType": "indonesia_network_map.v1",
-      "producerAgent": "enterprise-network-planning-agent@3.1.0",
+      "producerAgent": "enterprise-network-planning-agent@3.4.0",
       "consumerAgents": [
-        "enterprise-visualization-agent@1.1.0",
+        "enterprise-visualization-agent@1.3.0",
         "supervisor"
       ],
       "handoff": "durable-resource-reference",
@@ -59,16 +59,25 @@
     },
     {
       "artifactType": "geojson.v1",
-      "producerAgent": "enterprise-network-planning-agent@3.1.0",
+      "producerAgent": "enterprise-network-planning-agent@3.4.0",
       "consumerAgents": [
-        "enterprise-visualization-agent@1.1.0"
+        "enterprise-visualization-agent@1.3.0"
       ],
       "handoff": "durable-resource-reference",
       "required": false
     },
     {
       "artifactType": "map.v3",
-      "producerAgent": "enterprise-visualization-agent@1.1.0",
+      "producerAgent": "enterprise-visualization-agent@1.3.0",
+      "consumerAgents": [
+        "supervisor"
+      ],
+      "handoff": "durable-resource-reference",
+      "required": false
+    },
+    {
+      "artifactType": "indonesia_decision_report.v1",
+      "producerAgent": "enterprise-network-planning-agent@3.4.0",
       "consumerAgents": [
         "supervisor"
       ],

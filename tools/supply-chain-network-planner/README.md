@@ -14,7 +14,7 @@ The package declares three independent MCP Servers:
 | `supply_chain_planner` | General snapshot, route, scenario, facility, finance and risk Resources |
 | `supply_chain_indonesia` | Exact Workspace Dataset Release access and the progressive Indonesia tutorials |
 
-The current `enterprise-supervisor-copilot@3.7.0` uses only
+The current `enterprise-supervisor-copilot@3.10.0` uses only
 `supply_chain_indonesia` plus the separate `map_utils` Plugin. The older general
 planning Servers remain independently tested capabilities; they are not hidden fallbacks for
 the Indonesia workflow.
@@ -29,6 +29,8 @@ the Indonesia workflow.
 - `evaluate_indonesia_candidate`
 - `optimize_indonesia_new_warehouse`
 - `prepare_indonesia_network_map`
+- `prepare_indonesia_map_render`
+- `prepare_indonesia_decision_report`
 - `validate_indonesia_resource`
 
 The service-baseline Tool intentionally returns current forward-to-customer service and
@@ -38,17 +40,22 @@ twenty reviewed candidates.
 
 Every producer validates its typed Resource and cross-field totals before publication.
 Validation failure is a failed Tool call; correctness does not depend on the model choosing a
-second validator call. Resource-producing Tools return a stable `resource_name` and unchanged
-structured `data_ref`. Reports cite the name and must not expose the internal URI.
+second validator call. Same-server analysis Tools consume exact `resource_name` values and let
+the server resolve its own Resource Store; models do not copy or reconstruct internal URIs.
+Resource-producing Tools still return an unchanged structured `data_ref` for durable provenance
+and bounded direct reads. The decision-report Tool cross-checks the seven Resource identities it
+owns and deterministically renders the business-report Markdown. The separate `map_utils` Tool
+owns the browser Artifact and exact embed code; the Supervisor may only append that unchanged
+code to the unchanged report.
 
 ## Current governed roles
 
 | Release | Exact capability boundary |
 | --- | --- |
 | `enterprise-data-agent@3.1.0` | Atomic Indonesia Dataset inspection and bounded Resource reading |
-| `enterprise-network-planning-agent@3.1.0` | Indonesia service, validated province rankings, current, candidate, optimization and bounded map preparation |
-| `enterprise-visualization-agent@1.1.0` | Exact map/GeoJSON Resource reads, provenance handoff, and `map_utils.create_map_card` |
-| `enterprise-supervisor-copilot@3.7.0` | Dynamic coordination, complete evidence synthesis, and exact inline map delivery |
+| `enterprise-network-planning-agent@3.4.0` | Server-resolved Indonesia service, validated province rankings, current, candidate, optimization, bounded map preparation and deterministic business-report publication |
+| `enterprise-visualization-agent@1.3.0` | Typed map-render preparation and exact matching Artifact-ID/embed-code handoff from `map_utils.create_map_card` |
+| `enterprise-supervisor-copilot@3.10.0` | Dynamic coordination and constrained composition of the unchanged business report with the independently owned inline map |
 
 The root Supervisor receives collaboration capabilities but no business MCP or shell. Child
 roles receive only their exact MCP Server, Tool and capability-root inventory. Disabled sibling

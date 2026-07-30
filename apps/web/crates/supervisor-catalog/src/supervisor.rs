@@ -21,15 +21,15 @@ use crate::validation::{
 
 const ENTERPRISE_COPILOT_MANIFEST: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/3.7.0/manifest.json"
+    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/3.10.0/manifest.json"
 ));
 const ENTERPRISE_COPILOT_CUSTOM_INSTRUCTIONS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/3.7.0/custom-instructions.md"
+    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/3.10.0/custom-instructions.md"
 ));
 const ENTERPRISE_COPILOT_ARTIFACT_CONTRACTS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/3.7.0/artifact-contracts.json"
+    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/3.10.0/artifact-contracts.json"
 ));
 
 const MAX_SUPERVISOR_INSTRUCTIONS_BYTES: usize = 16 * 1024;
@@ -779,9 +779,9 @@ mod tests {
         })
         .unwrap();
         assert_eq!(package.required_runtime_roles.len(), 3);
-        assert_eq!(package.version, "3.7.0");
+        assert_eq!(package.version, "3.10.0");
         assert_eq!(package.agents.len(), 3);
-        assert_eq!(package.artifact_contracts.len(), 8);
+        assert_eq!(package.artifact_contracts.len(), 9);
         assert!(package
             .artifact_contracts
             .iter()
@@ -825,8 +825,8 @@ mod tests {
             package.role_spawn_limits,
             [
                 ("agent_15451ec3da17fa338bc798a21838d25d".to_string(), 1),
-                ("agent_0142018b1f2f53b30aa46d9e2e35d774".to_string(), 1),
-                ("agent_79bee7cd1bbdee5bc152913278077848".to_string(), 1)
+                ("agent_3477ddaffe69a217cbf2138d475cac97".to_string(), 1),
+                ("agent_dcbc01f2127fe589f5416c75f8f447e8".to_string(), 1)
             ]
             .into_iter()
             .collect()
@@ -849,7 +849,7 @@ mod tests {
     fn repository_and_web_supervisor_sources_compile_to_identical_execution_semantics() {
         let repository = resolve(&SupervisorPolicySelection {
             policy_id: "enterprise-supervisor-copilot".to_string(),
-            version: "3.7.0".to_string(),
+            version: "3.10.0".to_string(),
         })
         .unwrap();
         let draft = SupervisorDraftRequest {

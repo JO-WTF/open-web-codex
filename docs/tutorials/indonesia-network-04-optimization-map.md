@@ -65,7 +65,9 @@ Evaluates the current network, the complete reviewed candidate set, and bounded 
 
 ```text
 开始前必须收到完整的 indonesia_dataset_inspection.v1 resource_name 和结构化 data_ref。
-缺失时停止，不列出 MCP Resources、不扫描 Workspace、不猜 URI。
+把 resource_name 原样作为 inspection_resource_name 传给 Domain Tool；data_ref 只保留
+为交付来源，不作为 Tool 输入。缺少精确 resource_name 时停止，不列出 MCP Resources、
+不读取 inspection、不扫描 Workspace、不猜 URI。
 
 按任务需要选择最小分析。需要当前两级事实时取得 current Resource；需要有限候选优化
 时，把用户给出的 target_service_days、target_demand_coverage 和
@@ -73,8 +75,9 @@ opening_amortization_years 原样传给 optimize_indonesia_new_warehouse。必�
 对完整 20 候选集的结果，不按城市偏好改选。
 
 优化 Tool 返回入选 candidate scenario 后，只有用户要求地图时才调用
-prepare_indonesia_network_map，并传入兼容的 current 和 selected scenario data_ref。
-不得调用导航、读取客户点、自己生成候选或用模型重算成本。
+prepare_indonesia_network_map，并把兼容 current 和 selected scenario 的精确
+resource_name 分别作为 baseline_resource_name 和 candidate_resource_name。不得调用
+导航、读取客户点、自己生成候选、复制内部 URI 或用模型重算成本。
 
 每个 Domain Tool 在发布前原子校验 Resource。最终回答先输出全部原样
 ARTIFACT_HANDOFFS，包括 current、optimization、selected scenario、network map 和
@@ -104,15 +107,15 @@ Save draft → Validate → Publish
 本篇不需要再创建一个自定义地图 Agent。平台已经发布：
 
 ```text
-Enterprise Visualization Agent · 1.1.0
+Enterprise Visualization Agent · 1.3.0
 ```
 
 它的权限边界是：
 
 | 能力 | 是否允许 |
 | --- | --- |
-| 读取精确 `indonesia_network_map.v1` | 是 |
-| 读取精确 `geojson.v1` | 是 |
+| 按精确 Resource 名调用 `prepare_indonesia_map_render` | 是 |
+| 直接读取 map / GeoJSON Resource | 否 |
 | 调用 `map_utils.create_map_card` | 是 |
 | 读取客户明细 | 否 |
 | 重新计算网络方案 | 否 |
@@ -120,8 +123,9 @@ Enterprise Visualization Agent · 1.1.0
 | 创建下级 Agent | 否 |
 
 Visualization Agent 的职责不是“做分析”，而是把已经验证的地图说明和 GeoJSON 交给
-浏览器渲染能力。它的 `MAP_HANDOFF` 还会原样返回两个输入 Resource 名和地图 Artifact
-ID，确保最终报告不会丢失地图来源。这样地图样式错误或来源断裂都不会静默改变网络结论。
+浏览器渲染能力。它的 `MAP_HANDOFF` 还会原样返回两个输入 Resource 名、地图 Artifact
+ID 和与之匹配的完整 embed code，确保最终报告不会丢失地图来源或靠模型重建指令。
+这样地图样式错误或来源断裂都不会静默改变网络结论。
 
 如果你的领域已有满足职责和权限的 Agent Release，应直接复用；不要为了显示自定义名称
 复制一份相同 Agent。
@@ -134,7 +138,7 @@ Allowed Agents：
 
 - `Tutorial Indonesia Data Agent · 1.0.0`；
 - `Tutorial Indonesia Network Planner · 3.0.0`；
-- `Enterprise Visualization Agent · 1.1.0`。
+- `Enterprise Visualization Agent · 1.3.0`。
 
 设置 **Maximum active child Agents = 3**。这是并发和驻留上限，不是要求每次都创建
 3 个 Agent。
@@ -163,16 +167,19 @@ Data Agent 只负责精确 Dataset inspection；Network Agent 负责当前网络
 要求地图时使用。Root 不调用业务 MCP、不读取 Workspace、不复制大数据，也不替代专业
 Agent 计算。
 
-所有跨 Agent 交接必须包含原样 schema、resource_name 和完整结构化 data_ref。缺失时向
-原生产者请求补全；不得列出 Resources、猜 URI 或按名称搜索替代 Artifact。Tool 或 Agent
-失败时保留已完成证据并报告未完成部分。
+所有跨 Agent 交接必须包含原样 schema、resource_name 和完整结构化 data_ref。消费方只把
+resource_name 作为同一 supply_chain_indonesia Server 内 Domain Tool 的输入；Server
+负责解析自己的 Resource Store，data_ref 只保留为交付来源。缺失时向原生产者请求补全；
+不得列出 Resources、猜 URI 或按名称搜索替代 Artifact。Tool 或 Agent 失败时保留已完成
+证据并报告未完成部分。
 
 最终报告分为事实、假设、分析、建议、局限、缺失证据。每个关键数字引用准确 schema 和
 resource_name，不暴露 URI。明确说明优化只覆盖 20 个候选，距离是球面距离乘系数，不是
 导航承诺。
 
-如果 Visualization Agent 返回 `MAP_HANDOFF` 和地图嵌入指令，证据索引必须复制其中的
-map manifest、GeoJSON Resource 名和地图 Artifact ID；嵌入指令必须逐字保留，并作为
+如果 Visualization Agent 返回 `MAP_HANDOFF`，必须核对其中的 map manifest、GeoJSON
+Resource 名、地图 Artifact ID 和 embed code；embed code 必须引用同一个 Artifact ID，
+并逐字保留为
 前后空行分隔的独立段落输出。不得放进代码围栏、行内代码、列表、引用、表格或 HTML。
 ```
 

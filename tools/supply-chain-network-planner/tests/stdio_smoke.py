@@ -269,8 +269,12 @@ async def smoke_indonesia_server(
                 "evaluate_indonesia_candidate",
                 "optimize_indonesia_new_warehouse",
                 "prepare_indonesia_network_map",
+                "prepare_indonesia_map_render",
+                "prepare_indonesia_decision_report",
                 "validate_indonesia_resource",
             }
+            templates = await session.list_resource_templates()
+            assert templates.resourceTemplates == []
 
             await expect_tool_error(
                 session,
@@ -293,13 +297,21 @@ async def smoke_indonesia_server(
             )
             assert_bounded_resource_result(inspection)
             inspection_ref = inspection.structuredContent["data_ref"]
+            inspection_resource_name = inspection.structuredContent["resource_name"]
             inspection_payload = await read_json_resource(session, inspection_ref)
             assert inspection_payload["customer_count"] == 240_000
             assert inspection_payload["province_count"] == 38
 
-            service = await session.call_tool(
+            await expect_tool_error(
+                session,
                 "evaluate_indonesia_service_baseline",
                 {"inspection_ref": inspection_ref},
+                meta=trusted_meta,
+                expected="Additional properties are not allowed",
+            )
+            service = await session.call_tool(
+                "evaluate_indonesia_service_baseline",
+                {"inspection_resource_name": inspection_resource_name},
                 meta=trusted_meta,
             )
             assert_bounded_resource_result(service)
@@ -312,7 +324,7 @@ async def smoke_indonesia_server(
 
             current = await session.call_tool(
                 "evaluate_indonesia_current_network",
-                {"inspection_ref": inspection_ref},
+                {"inspection_resource_name": inspection_resource_name},
                 meta=trusted_meta,
             )
             assert_bounded_resource_result(current)
@@ -324,7 +336,7 @@ async def smoke_indonesia_server(
             candidate = await session.call_tool(
                 "evaluate_indonesia_candidate",
                 {
-                    "inspection_ref": inspection_ref,
+                    "inspection_resource_name": inspection_resource_name,
                     "candidate_id": "CAN-PONTIANAK",
                     "opening_amortization_years": 5,
                 },
@@ -336,7 +348,7 @@ async def smoke_indonesia_server(
             optimization = await session.call_tool(
                 "optimize_indonesia_new_warehouse",
                 {
-                    "inspection_ref": inspection_ref,
+                    "inspection_resource_name": inspection_resource_name,
                     "target_service_days": 2,
                     "target_demand_coverage": 0.74,
                     "opening_amortization_years": 5,
@@ -359,12 +371,18 @@ async def smoke_indonesia_server(
                 optimization.structuredContent["data_ref"],
             )
             assert optimization_payload["evaluated_candidate_count"] == 20
+            selected_scenario_resource_name = optimization.structuredContent[
+                "selected_scenario_resource_name"
+            ]
+            selected_scenario_ref = optimization.structuredContent[
+                "selected_scenario_ref"
+            ]
 
             map_result = await session.call_tool(
                 "prepare_indonesia_network_map",
                 {
-                    "baseline_ref": current_ref,
-                    "candidate_ref": candidate_ref,
+                    "baseline_resource_name": current.structuredContent["resource_name"],
+                    "candidate_resource_name": selected_scenario_resource_name,
                 },
             )
             assert map_result.isError is not True, map_result.content
@@ -390,6 +408,73 @@ async def smoke_indonesia_server(
             assert len(geojson_payload["features"]) < 200
             assert not any(
                 feature["properties"].get("customer_id") for feature in geojson_payload["features"]
+            )
+
+            render = await session.call_tool(
+                "prepare_indonesia_map_render",
+                {
+                    "map_resource_name": map_result.structuredContent["resource_name"],
+                    "geojson_resource_name": map_result.structuredContent[
+                        "geojson_resource_name"
+                    ],
+                },
+            )
+            assert render.isError is not True, render.content
+            assert render.structuredContent is not None
+            assert render.structuredContent["feature_count"] == len(
+                geojson_payload["features"]
+            )
+            assert render.structuredContent["geojson_ref"] == (
+                map_result.structuredContent["geojson_ref"]
+            )
+            assert render.structuredContent["layers"] == map_payload["layers"]
+            assert render.structuredContent["extensions"] == map_payload["extensions"]
+
+            await expect_tool_error(
+                session,
+                "prepare_indonesia_map_render",
+                {
+                    "map_resource_name": map_result.structuredContent["resource_name"],
+                    "geojson_resource_name": "geojson.v1-000000000000000000000000",
+                },
+                expected="do not match",
+            )
+
+            report = await session.call_tool(
+                "prepare_indonesia_decision_report",
+                {
+                    "inspection_resource_name": inspection_resource_name,
+                    "service_resource_name": service.structuredContent["resource_name"],
+                    "current_resource_name": current.structuredContent["resource_name"],
+                    "optimization_resource_name": optimization.structuredContent[
+                        "resource_name"
+                    ],
+                    "candidate_resource_name": selected_scenario_resource_name,
+                    "map_resource_name": map_result.structuredContent["resource_name"],
+                    "geojson_resource_name": map_result.structuredContent[
+                        "geojson_resource_name"
+                    ],
+                },
+            )
+            assert report.isError is not True, report.content
+            assert report.structuredContent is not None
+            assert report.structuredContent["resource_name"].startswith(
+                "indonesia_decision_report.v1-"
+            )
+            assert report.structuredContent["report_markdown"].startswith(
+                "# 印度尼西亚仓库网络决策报告"
+            )
+            assert "57.5%" not in report.structuredContent["report_markdown"]
+            assert "1.33" not in report.structuredContent["report_markdown"]
+            report_payload = await read_json_resource(
+                session,
+                report.structuredContent["data_ref"],
+            )
+            assert report_payload["markdown"] == (
+                report.structuredContent["report_markdown"]
+            )
+            assert selected_scenario_ref["resource_schema"] == (
+                "indonesia_candidate_scenario.v1"
             )
 
             validation = await session.call_tool(
@@ -495,7 +580,7 @@ async def expect_tool_error(
     result = await session.call_tool(name, arguments, meta=meta)
     assert result.isError is True
     text = "\n".join(item.text for item in result.content if getattr(item, "type", None) == "text")
-    assert expected in text
+    assert expected in text, text
 
 
 def assert_bounded_resource_result(result: object) -> None:

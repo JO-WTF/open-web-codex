@@ -27,6 +27,7 @@ from .indonesia_models import (
     IndonesiaCandidateScenario,
     IndonesiaCurrentNetworkAnalysis,
     IndonesiaDatasetInspection,
+    IndonesiaDecisionReport,
     IndonesiaGeoJsonRef,
     IndonesiaLocationOptimization,
     IndonesiaNetworkMap,
@@ -1060,6 +1061,7 @@ def validate_indonesia_resource(payload: dict[str, Any]) -> IndonesiaValidationR
         "indonesia_candidate_scenario.v1": IndonesiaCandidateScenario,
         "indonesia_location_optimization.v1": IndonesiaLocationOptimization,
         "indonesia_network_map.v1": IndonesiaNetworkMap,
+        "indonesia_decision_report.v1": IndonesiaDecisionReport,
     }
     model_type = model_by_schema.get(schema)
     if model_type is None:
@@ -1145,6 +1147,19 @@ def validate_indonesia_resource(payload: dict[str, Any]) -> IndonesiaValidationR
         if value.feature_count > 200:
             errors.append("Map GeoJSON exceeds the bounded feature count.")
         checks.append("Map manifest references a bounded GeoJSON Resource.")
+    elif isinstance(value, IndonesiaDecisionReport):
+        expected_markdown_sha256 = hashlib.sha256(
+            value.markdown.encode("utf-8")
+        ).hexdigest()
+        if value.markdown_sha256 != expected_markdown_sha256:
+            errors.append("Decision-report Markdown digest is inconsistent.")
+        if "::codex-inline-vis{" in value.markdown:
+            errors.append(
+                "Decision report must not embed a cross-owner visualization Artifact."
+            )
+        checks.append(
+            "Decision-report Markdown digest is valid and contains no cross-owner map directive."
+        )
     elif isinstance(value, IndonesiaDatasetInspection):
         if value.customer_count != 240_000 or value.province_count != 38:
             errors.append("Inspection does not match the tutorial release scale.")

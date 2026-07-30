@@ -91,9 +91,12 @@ Agents + 受限企业 Tool + 持久 Artifact”的最小协作闭环。
 真实用例在刷新、失败和 Profile 重启后仍指向同一 Agent 轨迹、Policy 版本和
 Artifact；关键结论可追溯，一个 Agent 失败时能够形成明确的部分结果或终态。
 
-当前实现是印尼仓网动态案例：`enterprise-supervisor-copilot@3.7.0` 可从 Data
-`3.1.0`、Network `3.1.0` 和 Visualization `1.1.0` 三个有界 Role 中按证据缺口
-选择能力，八个 Artifact handoff 是条件性证据边而不是固定 Workflow。Workspace
+当前实现是印尼仓网动态案例：`enterprise-supervisor-copilot@3.10.0` 可从 Data
+`3.1.0`、Network `3.4.0` 和 Visualization `1.3.0` 三个有界 Role 中按证据缺口
+选择能力，九个 Artifact handoff 是条件性证据边而不是固定 Workflow。完整决策
+业务报告由 MCP 对七个精确来源 Resource 做交叉校验后确定性渲染；地图 Artifact
+及 embed 由 Visualization 独立交付，Supervisor 只做受约束拼接。
+Workspace
 Dataset Release、受限 Python MCP authoring、直接 Agent Run、MCP stdio 和语义编译
 已有聚焦验证；当前 exact Release 的单 Agent 与印尼多 Agent 链路均已通过全新真实
 Runtime/browser 验证，Completed Agent follow-up、根 Turn interrupt 和后续恢复也已

@@ -30,17 +30,17 @@ const email = process.env.E2E_ADMIN_EMAIL ?? "enterprise-e2e@open-web-codex.loca
 const password = process.env.E2E_ADMIN_PASSWORD ?? "open-web-codex-enterprise-e2e";
 const repositoryPolicy = {
   policy_id: "enterprise-supervisor-copilot",
-  version: "3.7.0",
+  version: "3.10.0",
 };
 const repositoryAgents = {
   data: { definition_id: "enterprise-data-agent", version: "3.1.0" },
   network: {
     definition_id: "enterprise-network-planning-agent",
-    version: "3.1.0",
+    version: "3.4.0",
   },
   visualization: {
     definition_id: "enterprise-visualization-agent",
-    version: "1.1.0",
+    version: "1.3.0",
   },
 };
 const providerKey = useBuiltInProvider
@@ -330,30 +330,6 @@ function reportHasInteger(report, value) {
 
 function escapeRegExp(value) {
   return value.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function reportHasNearbyResource(report, value, schema, maximumDistance = 320) {
-  const valuePattern = new RegExp(
-    String(value)
-      .split("")
-      .map((digit) => escapeRegExp(digit))
-      .join("[\\s,_]*"),
-    "g",
-  );
-  const resourcePattern = new RegExp(
-    `${escapeRegExp(schema)}-[a-f0-9]{24}`,
-    "gi",
-  );
-  const valuePositions = [...report.matchAll(valuePattern)].map((match) => match.index);
-  const resourcePositions = [...report.matchAll(resourcePattern)].map(
-    (match) => match.index,
-  );
-  return valuePositions.some((valuePosition) =>
-    resourcePositions.some(
-      (resourcePosition) =>
-        Math.abs(resourcePosition - valuePosition) <= maximumDistance,
-    )
-  );
 }
 
 function rankedProvincePattern(codes, provincesByCode) {
@@ -875,12 +851,39 @@ await runCase("Runtime-selected Agent tree and governed tool scope", async () =>
     "supply_chain_indonesia",
     "prepare_indonesia_network_map",
   );
+  const prepareRenderCall = findToolCall(
+    calls,
+    "supply_chain_indonesia",
+    "prepare_indonesia_map_render",
+  );
   const createMapCall = findToolCall(calls, "map_utils", "create_map_card");
+  const prepareReportCall = findToolCall(
+    calls,
+    "supply_chain_indonesia",
+    "prepare_indonesia_decision_report",
+  );
   assert(inspectCall, "Data Agent did not inspect the authorized Dataset Release");
   assert(currentCall, "Network Agent did not evaluate the current network");
   assert(optimizeCall, "Network Agent did not evaluate the finite candidate set");
   assert(prepareMapCall, "Network Agent did not prepare bounded map evidence");
+  assert(
+    prepareRenderCall,
+    "Visualization Agent did not resolve the exact map Resource names",
+  );
   assert(createMapCall, "Visualization Agent did not create a browser map");
+  assert(
+    prepareReportCall,
+    "Network Agent did not prepare the deterministic decision report",
+  );
+  assert.equal(
+    calls.filter(
+      (event) =>
+        event.payload?.data?.server === "supply_chain_indonesia" &&
+        event.payload?.data?.tool === "prepare_indonesia_decision_report",
+    ).length,
+    1,
+    "Network Agent retried or duplicated deterministic report publication",
+  );
 
   const dataAgent = agents.find((agent) => agent.thread_id === inspectCall.thread_id);
   const networkAgent = agents.find((agent) => agent.thread_id === currentCall.thread_id);
@@ -893,6 +896,8 @@ await runCase("Runtime-selected Agent tree and governed tool scope", async () =>
   assert.notEqual(dataAgent.thread_id, visualizationAgent.thread_id);
   assert.equal(optimizeCall.thread_id, networkAgent.thread_id);
   assert.equal(prepareMapCall.thread_id, networkAgent.thread_id);
+  assert.equal(prepareReportCall.thread_id, networkAgent.thread_id);
+  assert.equal(prepareRenderCall.thread_id, visualizationAgent.thread_id);
 
   const visualizationHandoff = events
     .filter(
@@ -921,6 +926,22 @@ await runCase("Runtime-selected Agent tree and governed tool scope", async () =>
     /"map_artifact_id"\s*:\s*"map-[a-f0-9-]+"/i.test(visualizationHandoff),
     "Visualization Agent omitted the map Artifact ID",
   );
+  const mapArtifactId = visualizationHandoff.match(
+    /"map_artifact_id"\s*:\s*"(map-[a-f0-9-]+)"/i,
+  )?.[1];
+  const mapEmbedArtifactId = visualizationHandoff.match(
+    /"map_embed_code"\s*:\s*"::codex-inline-vis\{artifact=\\"(map-[a-f0-9-]+)\\"\}"/i,
+  )?.[1];
+  assert(
+    mapEmbedArtifactId,
+    "Visualization Agent omitted the exact map embed code from MAP_HANDOFF",
+  );
+  assert.equal(
+    mapEmbedArtifactId,
+    mapArtifactId,
+    "Visualization Agent map Artifact ID and embed code diverged",
+  );
+  const mapEmbedCode = `::codex-inline-vis{artifact="${mapArtifactId}"}`;
 
   const executions = await eventually(async () => {
     const current = await api(`/runs/${state.run.id}/agent-executions`);
@@ -998,10 +1019,14 @@ await runCase("Runtime-selected Agent tree and governed tool scope", async () =>
         "evaluate_indonesia_candidate",
         "optimize_indonesia_new_warehouse",
         "prepare_indonesia_network_map",
+        "prepare_indonesia_decision_report",
         "validate_indonesia_resource",
       ]),
     ],
-    [visualizationAgent.thread_id, new Set(["create_map_card"])],
+    [
+      visualizationAgent.thread_id,
+      new Set(["prepare_indonesia_map_render", "create_map_card"]),
+    ],
   ]);
   for (const call of calls) {
     const tool = call.payload?.data?.tool;
@@ -1016,17 +1041,19 @@ await runCase("Runtime-selected Agent tree and governed tool scope", async () =>
     );
   }
   assert(
-    calls.some(
+    !calls.some(
       (event) =>
         event.thread_id === visualizationAgent.thread_id &&
-        event.payload?.data?.tool === "read_mcp_resource",
+        resourceProtocolTools.has(event.payload?.data?.tool),
     ),
-    "Visualization Agent did not verify the map manifest",
+    "Visualization Agent bypassed typed map preparation with direct Resource reads",
   );
   assert(inspectCall.sequence < currentCall.sequence);
   assert(currentCall.sequence < prepareMapCall.sequence);
   assert(optimizeCall.sequence < prepareMapCall.sequence);
-  assert(prepareMapCall.sequence < createMapCall.sequence);
+  assert(prepareMapCall.sequence < prepareRenderCall.sequence);
+  assert(prepareRenderCall.sequence < createMapCall.sequence);
+  assert(prepareMapCall.sequence < prepareReportCall.sequence);
 
   finalEvidence = {
     agents,
@@ -1036,6 +1063,7 @@ await runCase("Runtime-selected Agent tree and governed tool scope", async () =>
     dataAgent,
     networkAgent,
     visualizationAgent,
+    mapEmbedCode,
   };
   return `root + 3 child Threads; ${executions.length} persisted Agent tasks; ${calls.length} MCP calls`;
 });
@@ -1043,13 +1071,15 @@ await runCase("Runtime-selected Agent tree and governed tool scope", async () =>
 await runCase("durable typed Resources and cross-Agent map resolution", async () => {
   const requiredSchemas = [
     "indonesia_dataset_inspection.v1",
+    "indonesia_service_baseline.v1",
     "indonesia_current_network_analysis.v1",
     "indonesia_candidate_scenario.v1",
     "indonesia_location_optimization.v1",
     "indonesia_network_map.v1",
     "geojson.v1",
+    "indonesia_decision_report.v1",
   ];
-  const optionalSchemas = ["indonesia_service_baseline.v1"];
+  const optionalSchemas = [];
   const artifacts = await eventually(async () => {
     const current = await api(`/tasks/${state.task.id}/artifacts`);
     const failed = current.find((artifact) => artifact.state === "failed");
@@ -1142,6 +1172,21 @@ await runCase("durable typed Resources and cross-Agent map resolution", async ()
 await runCase("evidence-backed Supervisor report", async () => {
   const report = lastFinalReport(finalEvidence.events);
   assert(report, "Root Supervisor did not produce a final report");
+  const decisionReportArtifact = finalEvidence.artifacts.find(
+    (artifact) => artifact.artifact_schema === "indonesia_decision_report.v1",
+  );
+  assert(decisionReportArtifact, "Deterministic decision-report Artifact is missing");
+  const decisionReport = finalEvidence.contents[decisionReportArtifact.id];
+  const expectedReport = `${decisionReport.markdown.trim()}\n\n${finalEvidence.mapEmbedCode}`;
+  assert.equal(
+    report.trim(),
+    expectedReport,
+    "Root Supervisor rewrote the Tool-owned report or failed to append the exact map embed",
+  );
+  assert(
+    !decisionReport.markdown.includes("::codex-inline-vis{"),
+    "Decision-report Resource crossed ownership by embedding a browser Artifact",
+  );
   assert(
     hasSection(report, "证据索引", "Evidence Index"),
     "Final report omitted the evidence ownership index",
@@ -1218,51 +1263,6 @@ await runCase("evidence-backed Supervisor report", async () => {
       `Final report omitted exact ${label}: ${value}`,
     );
   }
-  for (const [label, value] of [
-    ["current linehaul cost", current.costs.linehaul_idr],
-    ["current last-mile cost", current.costs.last_mile_idr],
-    ["current transport cost", current.costs.transport_total_idr],
-  ]) {
-    assert(
-      reportHasNearbyResource(
-        report,
-        value,
-        "indonesia_current_network_analysis.v1",
-      ),
-      `Final report did not cite ${label} to its owning current-network Resource`,
-    );
-    assert(
-      !reportHasNearbyResource(
-        report,
-        value,
-        "indonesia_service_baseline.v1",
-        220,
-      ),
-      `Final report incorrectly cited ${label} to the service-only Resource`,
-    );
-  }
-  for (const [label, value] of [
-    ["selected linehaul cost", scenario.candidate_costs.linehaul_idr],
-    ["selected last-mile cost", scenario.candidate_costs.last_mile_idr],
-    ["selected transport cost", scenario.candidate_costs.transport_total_idr],
-    ["selected annual fixed cost", scenario.candidate_costs.annual_fixed_cost_idr],
-    [
-      "selected annualized opening cost",
-      scenario.candidate_costs.annualized_opening_cost_idr,
-    ],
-    ["selected annual decision cost", scenario.candidate_costs.annual_decision_cost_idr],
-  ]) {
-    assert(
-      reportHasNearbyResource(
-        report,
-        value,
-        "indonesia_candidate_scenario.v1",
-        900,
-      ),
-      `Final report did not cite ${label} to its owning candidate-scenario Resource`,
-    );
-  }
-
   const provincesByCode = new Map(
     current.provinces.map((province) => [province.province_code, province]),
   );
@@ -1360,8 +1360,12 @@ await runCase("evidence-backed Supervisor report", async () => {
     ),
     "Final report introduced an unverified monetary unit conversion",
   );
+  assert(!report.includes("57.5%"));
+  assert(!report.includes("42.5%"));
+  assert(!report.includes("1.33个百分点"));
+  assert(!report.includes("卸下"));
   assert(
-    /::codex-inline-vis\{artifact="[a-zA-Z0-9._:-]+"\}/.test(report),
+    report.trim().endsWith(finalEvidence.mapEmbedCode),
     "Final report omitted the exact map embed directive",
   );
   assert(!report.includes("[internal-resource-uri]"));

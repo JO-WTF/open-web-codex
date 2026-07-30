@@ -80,7 +80,7 @@ describe("WebApp workspace-first messaging", () => {
     client.listAgentDefinitions.mockResolvedValue([]);
     client.listSupervisorPolicies.mockResolvedValue([{
       policy_id: "enterprise-supervisor-copilot",
-      version: "3.7.0",
+      version: "3.10.0",
       display_name: "Enterprise Supervisor Copilot",
       description: "Coordinates governed data analysis and warehouse-network planning agents.",
       source: "repository",
@@ -158,7 +158,7 @@ describe("WebApp workspace-first messaging", () => {
         task_id: "task-enterprise",
         thread_id: "thread-new",
         policy_id: "enterprise-supervisor-copilot",
-        version: "3.7.0",
+        version: "3.10.0",
         display_name: "Enterprise Supervisor Copilot",
         content_sha256: "a".repeat(64),
         state: "bound",
@@ -241,7 +241,7 @@ describe("WebApp workspace-first messaging", () => {
         agent: null,
         supervisorPolicy: {
           policy_id: "enterprise-supervisor-copilot",
-          version: "3.7.0",
+          version: "3.10.0",
         },
       },
     ));
@@ -249,7 +249,7 @@ describe("WebApp workspace-first messaging", () => {
       .toHaveBeenCalledWith("thread-new"));
     fireEvent.click(await screen.findByRole("button", { name: "Agent activity" }));
     await waitFor(() => {
-      expect(screen.getByText("Policy enterprise-supervisor-copilot · 3.7.0"))
+      expect(screen.getByText("Policy enterprise-supervisor-copilot · 3.10.0"))
         .toBeTruthy();
       expect(screen.getByText("Root Supervisor")).toBeTruthy();
       expect(screen.getAllByText("Inspect enterprise planning data.")).toHaveLength(2);

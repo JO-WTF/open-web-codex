@@ -19,8 +19,10 @@ from supply_chain_planner.indonesia_analysis import (
 )
 from supply_chain_planner.indonesia_models import (
     DatasetReleaseBinding,
+    IndonesiaDecisionReportSources,
     IndonesiaGeoJsonRef,
 )
+from supply_chain_planner.indonesia_report import build_decision_report
 from supply_chain_planner.workspace_dataset import load_workspace_dataset_release
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -258,6 +260,67 @@ def test_optimization_evaluates_all_candidates_or_declines_unneeded_site(
     assert scenario.transport_cost_delta_idr == -2_835_533_800
     assert scenario.candidate_costs.annual_decision_cost_idr == 123_614_163_600
     assert scenario.annual_decision_cost_delta_idr == 13_589_466_200
+
+
+def test_decision_report_is_deterministic_and_contains_only_owned_deltas(
+    prepared_release,
+) -> None:
+    *_, inspection, data = prepared_release
+    service = evaluate_service_baseline(data)
+    current = evaluate_current_network(data)
+    optimization, scenario, _ = build_location_optimization(
+        data,
+        target_service_days=2,
+        target_demand_coverage=0.74,
+        opening_amortization_years=5,
+    )
+    assert scenario is not None
+    sources = IndonesiaDecisionReportSources(
+        inspection_resource_name="indonesia_dataset_inspection.v1-" + "1" * 24,
+        service_resource_name="indonesia_service_baseline.v1-" + "2" * 24,
+        current_resource_name="indonesia_current_network_analysis.v1-" + "3" * 24,
+        optimization_resource_name="indonesia_location_optimization.v1-" + "4" * 24,
+        candidate_resource_name="indonesia_candidate_scenario.v1-" + "5" * 24,
+        map_resource_name="indonesia_network_map.v1-" + "6" * 24,
+        geojson_resource_name="geojson.v1-" + "7" * 24,
+    )
+    optimization = optimization.model_copy(
+        update={"selected_scenario_resource_name": sources.candidate_resource_name}
+    )
+    prepared_map = prepare_network_map(
+        current,
+        scenario,
+        baseline_resource_name=sources.current_resource_name,
+        candidate_resource_name=sources.candidate_resource_name,
+    )
+    network_map = prepared_map.to_resource(
+        geojson_resource_name=sources.geojson_resource_name,
+        geojson_ref=IndonesiaGeoJsonRef(
+            uri=(
+                "supply-chain-indonesia://geojson/"
+                f"{sources.geojson_resource_name}"
+            )
+        ),
+    )
+
+    report = build_decision_report(
+        inspection=inspection,
+        service=service,
+        current=current,
+        optimization=optimization,
+        candidate=scenario,
+        network_map=network_map,
+        sources=sources,
+    )
+
+    assert validate_indonesia_resource(report.model_dump(mode="json")).valid
+    assert "57.5%" not in report.markdown
+    assert "42.5%" not in report.markdown
+    assert "1.33" not in report.markdown
+    assert "卸下" not in report.markdown
+    assert "Resource 未单列" in report.markdown
+    assert "::codex-inline-vis{" not in report.markdown
+    assert "Visualization Agent 独立交付" in report.markdown
     assert validate_indonesia_resource(optimization.model_dump(mode="json")).valid
 
     invalid_count = optimization.model_dump(mode="json")

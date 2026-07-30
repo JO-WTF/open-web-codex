@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 INDONESIA_MCP_SERVER_NAME = "supply_chain_indonesia"
 INDONESIA_RESOURCE_URI_PREFIX = "supply-chain-indonesia://resources/"
 INDONESIA_GEOJSON_URI_PREFIX = "supply-chain-indonesia://geojson/"
+INDONESIA_RESOURCE_NAME_PATTERN = r"^[a-z0-9_.-]{1,160}$"
 
 
 class StrictModel(BaseModel):
@@ -46,24 +47,59 @@ class InspectDatasetReleaseInput(StrictModel):
     release: DatasetReleaseBinding
 
 
-class InspectionRefInput(StrictModel):
-    inspection_ref: IndonesiaDataRef
+class InspectionResourceInput(StrictModel):
+    inspection_resource_name: str = Field(
+        pattern=r"^indonesia_dataset_inspection\.v1-[0-9a-f]{24}$"
+    )
 
 
-class CandidateScenarioInput(InspectionRefInput):
+class CandidateScenarioInput(InspectionResourceInput):
     candidate_id: str = Field(pattern=r"^CAN-[A-Z0-9-]{1,96}$")
     opening_amortization_years: int = Field(default=5, ge=1, le=20)
 
 
-class OptimizeWarehouseInput(InspectionRefInput):
+class OptimizeWarehouseInput(InspectionResourceInput):
     target_service_days: int = Field(ge=1, le=3)
     target_demand_coverage: float = Field(gt=0, le=1)
     opening_amortization_years: int = Field(default=5, ge=1, le=20)
 
 
 class PrepareMapInput(StrictModel):
-    baseline_ref: IndonesiaDataRef
-    candidate_ref: IndonesiaDataRef
+    baseline_resource_name: str = Field(
+        pattern=r"^indonesia_current_network_analysis\.v1-[0-9a-f]{24}$"
+    )
+    candidate_resource_name: str = Field(
+        pattern=r"^indonesia_candidate_scenario\.v1-[0-9a-f]{24}$"
+    )
+
+
+class PrepareMapRenderInput(StrictModel):
+    map_resource_name: str = Field(
+        pattern=r"^indonesia_network_map\.v1-[0-9a-f]{24}$"
+    )
+    geojson_resource_name: str = Field(pattern=r"^geojson\.v1-[0-9a-f]{24}$")
+
+
+class PrepareDecisionReportInput(StrictModel):
+    inspection_resource_name: str = Field(
+        pattern=r"^indonesia_dataset_inspection\.v1-[0-9a-f]{24}$"
+    )
+    service_resource_name: str = Field(
+        pattern=r"^indonesia_service_baseline\.v1-[0-9a-f]{24}$"
+    )
+    current_resource_name: str = Field(
+        pattern=r"^indonesia_current_network_analysis\.v1-[0-9a-f]{24}$"
+    )
+    optimization_resource_name: str = Field(
+        pattern=r"^indonesia_location_optimization\.v1-[0-9a-f]{24}$"
+    )
+    candidate_resource_name: str = Field(
+        pattern=r"^indonesia_candidate_scenario\.v1-[0-9a-f]{24}$"
+    )
+    map_resource_name: str = Field(
+        pattern=r"^indonesia_network_map\.v1-[0-9a-f]{24}$"
+    )
+    geojson_resource_name: str = Field(pattern=r"^geojson\.v1-[0-9a-f]{24}$")
 
 
 class ValidateResourceInput(StrictModel):
@@ -280,6 +316,27 @@ class IndonesiaNetworkMap(StrictModel):
     extensions: dict[str, Any]
 
 
+class IndonesiaDecisionReportSources(StrictModel):
+    inspection_resource_name: str
+    service_resource_name: str
+    current_resource_name: str
+    optimization_resource_name: str
+    candidate_resource_name: str
+    map_resource_name: str
+    geojson_resource_name: str
+
+
+class IndonesiaDecisionReport(StrictModel):
+    schema_version: Literal["indonesia_decision_report.v1"] = (
+        "indonesia_decision_report.v1"
+    )
+    release: DatasetReleaseBinding
+    sources: IndonesiaDecisionReportSources
+    markdown: str = Field(min_length=1, max_length=64_000)
+    markdown_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    checks: list[str]
+
+
 class IndonesiaValidationResult(StrictModel):
     schema_version: Literal["indonesia_resource_validation.v1"] = "indonesia_resource_validation.v1"
     resource_schema: str
@@ -307,3 +364,18 @@ class IndonesiaOptimizationToolResult(IndonesiaResourceToolResult):
 class IndonesiaMapToolResult(IndonesiaResourceToolResult):
     geojson_resource_name: str
     geojson_ref: IndonesiaGeoJsonRef
+
+
+class IndonesiaMapRenderToolResult(StrictModel):
+    summary: str
+    map_resource_name: str
+    geojson_resource_name: str
+    geojson_ref: IndonesiaGeoJsonRef
+    title: str
+    feature_count: int = Field(gt=0, le=200)
+    layers: list[dict[str, Any]]
+    extensions: dict[str, Any]
+
+
+class IndonesiaDecisionReportToolResult(IndonesiaResourceToolResult):
+    report_markdown: str = Field(min_length=1, max_length=64_000)

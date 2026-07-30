@@ -5,8 +5,8 @@ fn publishes_exact_runtime_roles_and_seals_role_content() {
     let definitions = list_published().unwrap();
     assert_eq!(definitions.len(), 5);
     assert_eq!(definitions[0].version, "3.1.0");
-    assert_eq!(definitions[1].version, "3.1.0");
-    assert_eq!(definitions[2].version, "1.1.0");
+    assert_eq!(definitions[1].version, "3.4.0");
+    assert_eq!(definitions[2].version, "1.3.0");
     assert_eq!(definitions[3].version, "2.0.0");
     assert_eq!(definitions[4].version, "2.0.0");
 
@@ -19,8 +19,8 @@ fn publishes_exact_runtime_roles_and_seals_role_content() {
             .collect::<Vec<_>>(),
         vec![
             "agent_15451ec3da17fa338bc798a21838d25d",
-            "agent_0142018b1f2f53b30aa46d9e2e35d774",
-            "agent_79bee7cd1bbdee5bc152913278077848",
+            "agent_3477ddaffe69a217cbf2138d475cac97",
+            "agent_dcbc01f2127fe589f5416c75f8f447e8",
             "agent_9040f76e7387b00fff5e63fd574e63df",
             "agent_b85d26c7975f69e43b87043fc48e08ea"
         ]
@@ -97,10 +97,10 @@ fn platform_runtime_role_names_are_reserved() {
         "agent_15451ec3da17fa338bc798a21838d25d"
     ));
     assert!(is_platform_runtime_role(
-        "agent_0142018b1f2f53b30aa46d9e2e35d774"
+        "agent_3477ddaffe69a217cbf2138d475cac97"
     ));
     assert!(is_platform_runtime_role(
-        "agent_79bee7cd1bbdee5bc152913278077848"
+        "agent_dcbc01f2127fe589f5416c75f8f447e8"
     ));
     assert!(is_platform_runtime_role(
         "agent_9040f76e7387b00fff5e63fd574e63df"
@@ -222,13 +222,13 @@ fn user_release_seals_exact_dataset_release_without_a_host_path() {
 
 #[test]
 fn visualization_agent_binds_each_server_to_its_own_capability_root() {
-    let definition = resolve_builtin("enterprise-visualization-agent", "1.1.0").unwrap();
+    let definition = resolve_builtin("enterprise-visualization-agent", "1.3.0").unwrap();
 
     assert_eq!(
         definition.required_capabilities,
         vec![
             "map_utils.create_map_card".to_string(),
-            "mcpServer/resource/read".to_string(),
+            "supply_chain_indonesia.prepare_indonesia_map_render".to_string(),
         ]
     );
     assert_eq!(definition.required_mcp_servers.len(), 2);
@@ -259,5 +259,8 @@ fn visualization_agent_binds_each_server_to_its_own_capability_root() {
             ],
         }]
     );
-    assert!(definition.required_mcp_servers[1].tools.is_empty());
+    assert_eq!(
+        definition.required_mcp_servers[1].tools,
+        vec!["prepare_indonesia_map_render"]
+    );
 }

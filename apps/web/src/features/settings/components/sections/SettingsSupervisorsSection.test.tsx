@@ -32,7 +32,7 @@ const agents: SettingsSupervisorsSectionProps["agents"] = [
     source: "repository",
     release_id: null,
     definition_id: "enterprise-network-planning-agent",
-    version: "3.1.0",
+    version: "3.4.0",
     display_name: "Enterprise Network Planning Agent",
     description: "Compares network scenarios.",
     responsibilities: ["Compare scenarios"],
@@ -222,7 +222,7 @@ describe("SettingsSupervisorsSection", () => {
       artifact_type: "indonesia_dataset_inspection.v1",
       producer_agent: "enterprise-data-agent@3.1.0",
       consumer_agents: [
-        "enterprise-network-planning-agent@3.1.0",
+        "enterprise-network-planning-agent@3.4.0",
         "supervisor",
       ],
       required: false,

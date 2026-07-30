@@ -24,7 +24,6 @@ from .indonesia_analysis import (
     load_network_data,
     prepare_network_map,
     require_valid_indonesia_resource,
-    resource_name_from_uri,
     validate_indonesia_resource,
 )
 from .indonesia_models import (
@@ -35,8 +34,12 @@ from .indonesia_models import (
     IndonesiaCurrentNetworkAnalysis,
     IndonesiaDataRef,
     IndonesiaDatasetInspection,
+    IndonesiaDecisionReport,
+    IndonesiaDecisionReportSources,
+    IndonesiaDecisionReportToolResult,
     IndonesiaGeoJsonRef,
     IndonesiaLocationOptimization,
+    IndonesiaMapRenderToolResult,
     IndonesiaMapToolResult,
     IndonesiaNetworkMap,
     IndonesiaOptimizationToolResult,
@@ -44,11 +47,14 @@ from .indonesia_models import (
     IndonesiaServiceBaseline,
     IndonesiaValidationResult,
     InspectDatasetReleaseInput,
-    InspectionRefInput,
+    InspectionResourceInput,
     OptimizeWarehouseInput,
+    PrepareDecisionReportInput,
     PrepareMapInput,
+    PrepareMapRenderInput,
     ValidateResourceInput,
 )
+from .indonesia_report import build_decision_report
 from .resource_store import PublishedResource, ResourceStore
 from .workspace_dataset import load_workspace_dataset_release
 
@@ -140,9 +146,11 @@ TOOLS = [
         description=(
             "Calculate current one-, two-, and three-day last-mile service coverage and "
             "province performance from actual forward-warehouse assignments. This "
-            "progressive tutorial result excludes linehaul, capacity, and all cost fields."
+            "progressive tutorial result excludes linehaul, capacity, and all cost fields. "
+            "Consume the exact inspection Resource name returned by the inspection Tool; "
+            "do not pass or construct a Resource URI."
         ),
-        input_model=InspectionRefInput,
+        input_model=InspectionResourceInput,
         output_model=IndonesiaResourceToolResult,
     ),
     _tool(
@@ -151,9 +159,10 @@ TOOLS = [
         description=(
             "Calculate actual one-, two-, and three-day service coverage, province "
             "performance, warehouse utilization, and two-level transport cost from a "
-            "validated Indonesia Dataset Release. Actual assignments are not optimized."
+            "validated Indonesia Dataset Release. Actual assignments are not optimized. "
+            "Consume the exact inspection Resource name returned by the inspection Tool."
         ),
-        input_model=InspectionRefInput,
+        input_model=InspectionResourceInput,
         output_model=IndonesiaResourceToolResult,
     ),
     _tool(
@@ -191,6 +200,31 @@ TOOLS = [
         output_model=IndonesiaMapToolResult,
     ),
     _tool(
+        name="prepare_indonesia_map_render",
+        title="Prepare Validated Indonesia Map Render Input",
+        description=(
+            "Resolve one exact indonesia_network_map.v1 Resource name and its exact "
+            "geojson.v1 Resource name inside this server, validate their relationship, "
+            "and return only the bounded fields required by map_utils.create_map_card."
+        ),
+        input_model=PrepareMapRenderInput,
+        output_model=IndonesiaMapRenderToolResult,
+    ),
+    _tool(
+        name="prepare_indonesia_decision_report",
+        title="Prepare Validated Indonesia Decision Report",
+        description=(
+            "Resolve and cross-check the exact inspection, service, current-network, "
+            "optimization, candidate, map and GeoJSON Resource identities, then "
+            "publish deterministic evidence-backed Markdown. The caller must copy the "
+            "returned report_markdown unchanged and must not add model-derived numbers "
+            "or operating effects. Browser visualization Artifacts are owned and "
+            "delivered separately by map_utils."
+        ),
+        input_model=PrepareDecisionReportInput,
+        output_model=IndonesiaDecisionReportToolResult,
+    ),
+    _tool(
         name="validate_indonesia_resource",
         title="Validate Indonesia Planning Resource",
         description=(
@@ -211,6 +245,11 @@ async def list_tools() -> list[types.Tool]:
 @app.list_resources()
 async def list_resources() -> list[types.Resource]:
     # Resources are content-addressed handoffs. Callers receive exact links from Tools.
+    return []
+
+
+@app.list_resource_templates()
+async def list_resource_templates() -> list[types.ResourceTemplate]:
     return []
 
 
@@ -265,9 +304,12 @@ async def call_tool(
         )
 
     if name == "evaluate_indonesia_service_baseline":
-        request = InspectionRefInput.model_validate(arguments)
+        request = InspectionResourceInput.model_validate(arguments)
         await _progress(0, "Calculating current last-mile service and province metrics.")
-        data = await asyncio.to_thread(_load_bound_data, request.inspection_ref)
+        data = await asyncio.to_thread(
+            _load_bound_data,
+            request.inspection_resource_name,
+        )
         baseline = await asyncio.to_thread(evaluate_service_baseline, data)
         await _progress(100, "Service-baseline evaluation completed.")
         return _publish_result(
@@ -282,9 +324,12 @@ async def call_tool(
         )
 
     if name == "evaluate_indonesia_current_network":
-        request = InspectionRefInput.model_validate(arguments)
+        request = InspectionResourceInput.model_validate(arguments)
         await _progress(0, "Calculating actual service, province, capacity, and cost metrics.")
-        data = await asyncio.to_thread(_load_bound_data, request.inspection_ref)
+        data = await asyncio.to_thread(
+            _load_bound_data,
+            request.inspection_resource_name,
+        )
         analysis = await asyncio.to_thread(evaluate_current_network, data)
         await _progress(100, "Current-network evaluation completed.")
         return _publish_result(
@@ -302,7 +347,10 @@ async def call_tool(
     if name == "evaluate_indonesia_candidate":
         request = CandidateScenarioInput.model_validate(arguments)
         await _progress(0, f"Evaluating candidate {request.candidate_id}.")
-        data = await asyncio.to_thread(_load_bound_data, request.inspection_ref)
+        data = await asyncio.to_thread(
+            _load_bound_data,
+            request.inspection_resource_name,
+        )
         scenario = await asyncio.to_thread(
             evaluate_candidate_scenario,
             data,
@@ -328,7 +376,10 @@ async def call_tool(
             0,
             "Evaluating the complete finite candidate set under one assignment policy.",
         )
-        data = await asyncio.to_thread(_load_bound_data, request.inspection_ref)
+        data = await asyncio.to_thread(
+            _load_bound_data,
+            request.inspection_resource_name,
+        )
         optimization, selected_scenario, _ = await asyncio.to_thread(
             build_location_optimization,
             data,
@@ -389,12 +440,12 @@ async def call_tool(
 
     if name == "prepare_indonesia_network_map":
         request = PrepareMapInput.model_validate(arguments)
-        baseline_payload = _load_validated_ref(
-            request.baseline_ref,
+        baseline_payload = _load_validated_resource_name(
+            request.baseline_resource_name,
             "indonesia_current_network_analysis.v1",
         )
-        candidate_payload = _load_validated_ref(
-            request.candidate_ref,
+        candidate_payload = _load_validated_resource_name(
+            request.candidate_resource_name,
             "indonesia_candidate_scenario.v1",
         )
         baseline = IndonesiaCurrentNetworkAnalysis.model_validate(baseline_payload)
@@ -402,8 +453,8 @@ async def call_tool(
         prepared_map = prepare_network_map(
             baseline,
             candidate,
-            baseline_resource_name=resource_name_from_uri(request.baseline_ref.uri),
-            candidate_resource_name=resource_name_from_uri(request.candidate_ref.uri),
+            baseline_resource_name=request.baseline_resource_name,
+            candidate_resource_name=request.candidate_resource_name,
         )
         geojson_published = _geojson_store().publish(
             "geojson.v1",
@@ -427,6 +478,120 @@ async def call_tool(
             summary=map_resource.summary,
             structured=structured,
         )
+
+    if name == "prepare_indonesia_map_render":
+        request = PrepareMapRenderInput.model_validate(arguments)
+        map_payload = _load_validated_resource_name(
+            request.map_resource_name,
+            "indonesia_network_map.v1",
+        )
+        network_map = IndonesiaNetworkMap.model_validate(map_payload)
+        if network_map.geojson_resource_name != request.geojson_resource_name:
+            raise ValueError("Map and GeoJSON Resource names do not match")
+        expected_geojson_uri = (
+            f"{INDONESIA_GEOJSON_URI_PREFIX}{request.geojson_resource_name}"
+        )
+        if network_map.geojson_ref.uri != expected_geojson_uri:
+            raise ValueError("Map GeoJSON reference does not match its Resource name")
+        geojson = _geojson_store().load_uri(expected_geojson_uri)
+        features = geojson.get("features")
+        if geojson.get("type") != "FeatureCollection" or not isinstance(features, list):
+            raise ValueError("GeoJSON Resource is not a FeatureCollection")
+        if len(features) != network_map.feature_count:
+            raise ValueError("Map feature count does not match its GeoJSON Resource")
+        structured = IndonesiaMapRenderToolResult(
+            summary=network_map.summary,
+            map_resource_name=request.map_resource_name,
+            geojson_resource_name=request.geojson_resource_name,
+            geojson_ref=network_map.geojson_ref,
+            title=network_map.title,
+            feature_count=network_map.feature_count,
+            layers=network_map.layers,
+            extensions=network_map.extensions,
+        ).model_dump(mode="json")
+        return types.CallToolResult(
+            content=[
+                types.TextContent(
+                    type="text",
+                    text=(
+                        f"Validated {request.map_resource_name} with "
+                        f"{request.geojson_resource_name} for map rendering."
+                    ),
+                )
+            ],
+            structuredContent=structured,
+        )
+
+    if name == "prepare_indonesia_decision_report":
+        request = PrepareDecisionReportInput.model_validate(arguments)
+        inspection = IndonesiaDatasetInspection.model_validate(
+            _load_validated_resource_name(
+                request.inspection_resource_name,
+                "indonesia_dataset_inspection.v1",
+            )
+        )
+        service = IndonesiaServiceBaseline.model_validate(
+            _load_validated_resource_name(
+                request.service_resource_name,
+                "indonesia_service_baseline.v1",
+            )
+        )
+        current = IndonesiaCurrentNetworkAnalysis.model_validate(
+            _load_validated_resource_name(
+                request.current_resource_name,
+                "indonesia_current_network_analysis.v1",
+            )
+        )
+        optimization = IndonesiaLocationOptimization.model_validate(
+            _load_validated_resource_name(
+                request.optimization_resource_name,
+                "indonesia_location_optimization.v1",
+            )
+        )
+        candidate = IndonesiaCandidateScenario.model_validate(
+            _load_validated_resource_name(
+                request.candidate_resource_name,
+                "indonesia_candidate_scenario.v1",
+            )
+        )
+        network_map = IndonesiaNetworkMap.model_validate(
+            _load_validated_resource_name(
+                request.map_resource_name,
+                "indonesia_network_map.v1",
+            )
+        )
+        expected_geojson_uri = (
+            f"{INDONESIA_GEOJSON_URI_PREFIX}{request.geojson_resource_name}"
+        )
+        geojson = _geojson_store().load_uri(expected_geojson_uri)
+        if (
+            geojson.get("type") != "FeatureCollection"
+            or len(geojson.get("features", [])) != network_map.feature_count
+        ):
+            raise ValueError("Decision-report GeoJSON does not match the map Resource")
+        report = build_decision_report(
+            inspection=inspection,
+            service=service,
+            current=current,
+            optimization=optimization,
+            candidate=candidate,
+            network_map=network_map,
+            sources=IndonesiaDecisionReportSources(
+                **request.model_dump(mode="json"),
+            ),
+        )
+        published = _publish_validated(report)
+        summary = (
+            "Published deterministic Indonesia decision-report Markdown from seven "
+            "cross-checked Resource identities."
+        )
+        structured = IndonesiaDecisionReportToolResult(
+            summary=summary,
+            resource_name=published.resource_id,
+            data_ref=_data_ref(published),
+            report_markdown=report.markdown,
+        ).model_dump(mode="json")
+        return _call_result(published, summary=summary, structured=structured)
 
     if name == "validate_indonesia_resource":
         request = ValidateResourceInput.model_validate(arguments)
@@ -461,9 +626,9 @@ def _inspect_release(
     return inspect_dataset_release(release)
 
 
-def _load_bound_data(inspection_ref: IndonesiaDataRef):
-    inspection_payload = _load_validated_ref(
-        inspection_ref,
+def _load_bound_data(inspection_resource_name: str):
+    inspection_payload = _load_validated_resource_name(
+        inspection_resource_name,
         "indonesia_dataset_inspection.v1",
     )
     inspection = IndonesiaDatasetInspection.model_validate(inspection_payload)
@@ -529,6 +694,27 @@ def _load_validated_ref(
     return payload
 
 
+def _load_resource_name(
+    resource_name: str,
+    expected_schema: str,
+) -> dict[str, Any]:
+    if not resource_name.startswith(f"{expected_schema}-"):
+        raise ValueError(f"Expected {expected_schema} Resource name")
+    payload = _store().load_uri(f"{INDONESIA_RESOURCE_URI_PREFIX}{resource_name}")
+    if payload.get("schema_version") != expected_schema:
+        raise ValueError("Resource payload schema does not match its Resource name")
+    return payload
+
+
+def _load_validated_resource_name(
+    resource_name: str,
+    expected_schema: str,
+) -> dict[str, Any]:
+    payload = _load_resource_name(resource_name, expected_schema)
+    require_valid_indonesia_resource(payload)
+    return payload
+
+
 def _data_ref(published: PublishedResource) -> IndonesiaDataRef:
     return IndonesiaDataRef(
         uri=published.uri,
@@ -548,6 +734,7 @@ def _publish_result(
         | IndonesiaCandidateScenario
         | IndonesiaLocationOptimization
         | IndonesiaNetworkMap
+        | IndonesiaDecisionReport
     ),
     *,
     summary: str,
@@ -569,6 +756,7 @@ def _publish_validated(
         | IndonesiaCandidateScenario
         | IndonesiaLocationOptimization
         | IndonesiaNetworkMap
+        | IndonesiaDecisionReport
     ),
 ) -> PublishedResource:
     require_valid_indonesia_resource(value.model_dump(mode="json"))

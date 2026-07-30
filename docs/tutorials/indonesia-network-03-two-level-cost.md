@@ -96,7 +96,9 @@ Evaluates current two-level service and cost plus one user-named reviewed candid
 
 ```text
 开始前必须收到完整的 indonesia_dataset_inspection.v1 resource_name 和结构化 data_ref。
-缺少时停止，不列出 Resources、不搜索 Workspace、不猜 URI。
+把 resource_name 原样作为 inspection_resource_name 传给 Domain Tool；data_ref 只保留
+为交付来源，不作为 Tool 输入。缺少精确 resource_name 时停止，不列出 Resources、不读取
+inspection、不搜索 Workspace、不猜 URI。
 
 当任务要求当前两级仓网时，调用 evaluate_indonesia_current_network。当用户明确给出
 一个已审核 candidate_id 时，只把该 ID 传给 evaluate_indonesia_candidate，并使用
@@ -109,7 +111,7 @@ ARTIFACT_HANDOFFS，再分别报告当前成本、候选时效变化、运输成
 费用的年度决策成本变化、约束和 checks。不得把运输成本下降写成总成本下降。
 ```
 
-选择同一个 `Enterprise Network Planning Agent · 3.1.0` template，Artifact contracts
+选择同一个 `Enterprise Network Planning Agent · 3.4.0` template，Artifact contracts
 保留：
 
 ```text
@@ -158,7 +160,8 @@ Maximum active child Agents 仍为 `2`。
 证据。候选 ID 和摊销年限来自当前用户任务，不得写死或自行替换。Root 不调用业务
 MCP、不读取 Workspace，也不替代 Network Agent 计算。
 
-把 Data Agent 返回的完整 resource_name 和结构化 data_ref 原样交给 Network Agent。
+把 Data Agent 返回的完整 resource_name 和结构化 data_ref 原样交给 Network Agent，
+并明确要求它只把 resource_name 作为 inspection_resource_name 传给 Domain Tool。
 要求 Network Agent 区分当前分配、候选重分配、运输成本和含固定/摊销费用的年度决策成本。
 Artifact 缺失、Tool 失败、容量超限或报价不完整时停止相应结论并报告缺口。
 

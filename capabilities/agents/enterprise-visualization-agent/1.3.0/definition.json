@@ -1,16 +1,16 @@
 {
   "definitionId": "enterprise-visualization-agent",
-  "version": "1.1.0",
+  "version": "1.3.0",
   "displayName": "Enterprise Visualization Agent",
   "description": "Converts a validated bounded network-map manifest and referenced GeoJSON into a browser-renderable map Artifact.",
-  "runtimeRole": "agent_79bee7cd1bbdee5bc152913278077848",
+  "runtimeRole": "agent_dcbc01f2127fe589f5416c75f8f447e8",
   "runtimeProfile": {
-    "contentSha256": "91e27c8b0808163821cd731109d0531dace1ee4f5075d42d420134f843fb8378"
+    "contentSha256": "ad03db0e05d357c0b1d7d592e6c7c5a64591a011a66cdb9530d21ed4d24d3599"
   },
   "responsibilities": [
-    "Read only the bounded indonesia_network_map.v1 manifest and verify its exact GeoJSON Resource identity.",
+    "Resolve only the exact bounded indonesia_network_map.v1 and geojson.v1 names through the server-owned render preparation Tool.",
     "Pass the unchanged GeoJSON reference, Mapbox layers and safe extensions to map_utils.create_map_card.",
-    "Publish and explicitly embed the returned map.v3 Artifact without recalculating or changing network evidence."
+    "Publish the returned map.v3 Artifact and hand off its exact matching Artifact ID and embed code without recalculating network evidence."
   ],
   "inputArtifactTypes": [
     "indonesia_network_map.v1",
@@ -21,13 +21,15 @@
   ],
   "capabilityTemplate": {
     "definitionId": "enterprise-visualization-agent",
-    "version": "1.1.0"
+    "version": "1.3.0"
   },
   "requiredMcpServers": [
     {
       "name": "supply_chain_indonesia",
-      "tools": [],
-      "resourceRead": true,
+      "tools": [
+        "prepare_indonesia_map_render"
+      ],
+      "resourceRead": false,
       "capabilityRootIds": [
         "local-supply-chain-network-planner"
       ]

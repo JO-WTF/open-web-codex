@@ -73,15 +73,15 @@ requirement、Artifact handoff 与并发限制只由精确 Agent Release 和草�
 
 当前内置 Release 是：
 
-- `enterprise-supervisor-copilot@3.7.0`，选择
+- `enterprise-supervisor-copilot@3.10.0`，选择
   `platform-supervisor-behavior@1.1.0`；
 - Data `3.1.0`，只调用原子校验并发布一个精确授权 Workspace Dataset Release 的
   inspection Tool；
-- Network `3.1.0`，按问题只运行服务基线、现网成本、指定候选、有限候选优化或地图
-  准备中必要的最小分析；
-- Visualization `1.1.0`，只把已验证地图 manifest 与 GeoJSON 交给
+- Network `3.4.0`，按问题只运行服务基线、现网成本、指定候选、有限候选优化、地图
+  准备或确定性决策报告中必要的最小分析；
+- Visualization `1.3.0`，只把已验证地图 manifest 与 GeoJSON 交给
   `map_utils.create_map_card`；
-- 八类条件性 Artifact handoff，不构成固定 Workflow。
+- 九类条件性 Artifact handoff，不构成固定 Workflow。
 
 Root 没有业务 MCP。每个子 Agent 只得到 Definition 声明的精确 MCP Server、Tool
 allowlist、Resource 读取范围和 capability root；受治理预检会拒绝缺失或漂移的
@@ -117,9 +117,9 @@ Artifact 保留 Run/Thread/Turn/Item producer provenance，根 Thread 只能解�
   Supervisor、跨子 Thread Artifact 和地图嵌入都有自动化覆盖；
 - 配送审计单 Agent 已在真实 Runtime 中通过一次精确 MCP 审批、一次 Tool 调用、
   ready Artifact 和刷新恢复；
-- 当前 `3.7.0` 印尼 Supervisor 正在重跑全新 exact-hash 真实 Runtime 与浏览器恢复
-  验证：根加三个子 Agent、七个 ready Resource Artifact、一个恢复后的 `map.v3`
-  卡片和六段报告收敛，且没有 shell、原始客户行、内部 Resource URI 或宿主路径。
+- 当前 `3.10.0` 印尼 Supervisor 的全新 exact-hash 真实 Runtime 与浏览器恢复验证待
+  重跑；新增 `indonesia_decision_report.v1` 由 MCP 交叉校验来源并确定性渲染，
+  Supervisor 不再自由改写业务报告；地图 ID 与 embed 由 Visualization 独立交付。
 
 主线现转向部分失败和审批拒绝后的综合；更深层 Agent 树；Artifact 替代、失效、
 删除与保留；重启/乱序、共享
@@ -269,7 +269,7 @@ Skills、Plugins 和 MCP。
 - [x] `bash -n scripts/*.sh` 和本地启动脚本 help/status 路径。
 - [-] 1,270 个浏览器测试、typecheck、lint、build、no-desktop、Codex contracts
   和真实 Codex app-server 的 18 项 Capability Manifest smoke 通过；配送审计
-  单 Agent 已通过真实 Runtime/browser 验证；当前 `3.7.0` 印尼 Supervisor 的完整答案验收待重跑。
+  单 Agent 已通过真实 Runtime/browser 验证；当前 `3.10.0` 印尼 Supervisor 的完整答案验收待重跑。
   main-ui-parity 仍会报告尚未
   并入参考基线的有意浏览器 UI 扩展。
 - [x] `cargo fmt --all --check`、`cargo test --workspace --locked`。

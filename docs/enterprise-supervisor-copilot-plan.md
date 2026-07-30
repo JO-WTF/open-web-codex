@@ -8,7 +8,7 @@
 | 更新日期 | 2026-07-29 |
 | 对应阶段 | M2 Enterprise Supervisor Copilot |
 | 实施范围 | 单用户、单 Profile、真实 Runtime、一个印尼仓网决策案例 |
-| 当前版本 | `enterprise-supervisor-copilot@3.7.0` |
+| 当前版本 | `enterprise-supervisor-copilot@3.10.0` |
 | 平台行为合同 | `platform-supervisor-behavior@1.1.0` |
 | 当前事实 | [能力基线](capability-baseline.md) 与代码 |
 | 架构依据 | [企业多 Agent 平台架构](enterprise-agent-platform-architecture.md) |
@@ -53,9 +53,9 @@ Artifact schema 与 `resource_name`。
 | 参与者 | 责任 | 何时需要 |
 | --- | --- | --- |
 | Root Supervisor | 解释目标、识别最小证据缺口、委派、处理冲突并综合报告 | 每次受治理多 Agent 任务 |
-| Data Agent `3.0.0` | 核验一个精确授权的 Indonesia Dataset Release，发布有界检查结果 | 缺少可信数据证据 |
-| Network Planning Agent `3.0.0` | 只运行问题所需的服务、现网、候选、优化或地图准备计算 | 需要网络计算 |
-| Visualization Agent `1.1.0` | 把已验证地图 manifest 与 GeoJSON 交给地图 Tool，并原样交付地图及输入 Resource provenance | 用户要求地图 |
+| Data Agent `3.1.0` | 核验一个精确授权的 Indonesia Dataset Release，发布有界检查结果 | 缺少可信数据证据 |
+| Network Planning Agent `3.4.0` | 只运行问题所需的服务、现网、候选、优化、地图准备或确定性报告计算 | 需要网络计算 |
+| Visualization Agent `1.3.0` | 把已验证地图 manifest 与 GeoJSON 交给地图 Tool，并原样交付匹配的 Artifact ID、embed code 和输入 Resource provenance | 用户要求地图 |
 | Platform | 发布不可变 Release、执行预检、持久化 Artifact/审计/审批和浏览器投影 | 全程 |
 
 所有 Domain Agent 都是可选能力。Policy 不要求固定 Agent 数量或顺序。已有可信
@@ -111,6 +111,7 @@ flowchart TD
 | `indonesia_network_map.v1` | Network Agent | 有界地图 manifest 与图层语义 |
 | `geojson.v1` | Network Agent | 地图使用的有界 GeoJSON Resource |
 | `map.v3` | Visualization Agent | 浏览器可渲染地图 |
+| `indonesia_decision_report.v1` | Network Agent / MCP | 交叉校验七个同 Server Resource 后确定性渲染的业务报告 Markdown，不持有地图 Artifact |
 
 Artifact 使用 Task 级稳定 ID 和 durable Resource reference 交接。Platform 记录
 producer Run/Thread/Turn/Item provenance；根只能解析同一 Run 内来源已验证且引用
@@ -119,9 +120,9 @@ producer Run/Thread/Turn/Item provenance；根只能解析同一 Run 内来源�
 
 ## 4. Policy 与能力边界
 
-`enterprise-supervisor-copilot@3.7.0` 精确绑定三个 Agent Release，每个 Role 最多
+`enterprise-supervisor-copilot@3.10.0` 精确绑定三个 Agent Release，每个 Role 最多
 一个实例，V2 驻留额度为三。当前 Multi-Agent V2 没有 `close_agent`，终态子 Agent
-仍占额度，因此这个上限覆盖全部可选角色，而不是要求三个角色都运行。八个 Artifact
+仍占额度，因此这个上限覆盖全部可选角色，而不是要求三个角色都运行。九个 Artifact
 handoff 都是条件性证据边；未选择某项分析时不得为了满足数量而伪造 Artifact。
 
 Root Supervisor：
@@ -171,12 +172,12 @@ Platform：
 
 ### Slice 2：动态 Supervisor
 
-- [x] Data `3.1.0`、Network `3.1.0`、Visualization `1.1.0` 精确声明责任、输入输出和
+- [x] Data `3.1.0`、Network `3.4.0`、Visualization `1.3.0` 精确声明责任、输入输出和
   Tool allowlist；
-- [x] Supervisor `3.7.0` 与平台行为合同 `1.1.0` 不包含固定角色数或执行顺序；
+- [x] Supervisor `3.10.0` 与平台行为合同 `1.1.0` 不包含固定角色数或执行顺序；
 - [x] 语义编译器、内容哈希、精确依赖和能力预检测试通过；
 - [x] Root 与子 Agent MCP 隔离、兄弟 package 隔离具有聚焦测试；
-- [ ] 当前 exact Release hashes 的全新真实 Runtime/browser E2E 正在重跑。
+- [ ] 当前 exact Release hashes 的全新真实 Runtime/browser E2E 待重跑。
 
 ### Slice 3：Artifact 与浏览器审查
 
@@ -198,12 +199,10 @@ E2E 只验证不变量，不验证精确轨迹或 Tool 次数：
 - Agent 行为、等待、审批、Artifact 和最终报告在刷新后收敛；
 - 证据不含凭据、内部 Resource URI、服务器路径或无界 payload。
 
-当前聚焦测试、MCP smoke 和 exact Release 真实 E2E 均已通过。观察到的轨迹为根加
-三个问题所需子 Agent、七个 ready Resource Artifact、一个恢复后的 `map.v3` 和
-六段报告；这些数量是本次问题的证据，不是 Supervisor 的固定顺序或固定调用次数。
-浏览器刷新后 Agent 行为、非空 wait、Artifact、报告和地图均收敛。Runtime 有时会在
-子 Agent 已完成后再次进入最长 120 秒的官方有界 wait；状态可见且不影响正确性，
-但仍是性能缺口，平台不得用伪完成或计时器掩盖。
+当前聚焦测试与 MCP smoke 待按最新合同重跑。`3.10.0` exact Release 的真实 E2E 待重跑；验收
+必须证明最终文本只由 `indonesia_decision_report.v1.markdown` 加精确地图 embed 组成，同时验证 Agent
+行为、非空 wait、Artifact、报告和地图在刷新后收敛。轨迹中的角色、调用和 Artifact
+数量只作为本次问题的证据，不得固化为 Supervisor 的固定顺序或数量。
 
 ## 6. 完成定义
 

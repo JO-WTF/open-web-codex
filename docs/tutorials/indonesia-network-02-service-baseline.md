@@ -65,12 +65,14 @@ Root Supervisor 根据当前证据决定怎样协调它们。
 
 ```text
 开始前必须收到完整的 indonesia_dataset_inspection.v1 handoff，其中包含原样
-resource_name 和结构化 data_ref。缺少任一字段时只报告 MISSING_ARTIFACT_HANDOFF 并停止；
-不要列出 MCP Resources、搜索 Workspace 或猜 URI。
+resource_name 和结构化 data_ref。把 resource_name 原样作为 inspection_resource_name
+传给分析 Tool；data_ref 只保留为交付来源，不作为 Tool 输入。缺少精确 resource_name
+时只报告 MISSING_ARTIFACT_HANDOFF 并停止；不要列出 MCP Resources、读取 inspection、
+搜索 Workspace 或猜 URI。
 
-读取并核对 inspection 后，只调用
-supply_chain_indonesia.evaluate_indonesia_service_baseline。不得调用完整现状成本、候选、
-优化或地图 Tool。Tool 会按当前前置仓分配计算 1/2/3 天覆盖和省份结果；不要用模型重算。
+只调用 supply_chain_indonesia.evaluate_indonesia_service_baseline。Tool 由
+supply_chain_indonesia 自己解析并校验 inspection Resource，再按当前前置仓分配计算
+1/2/3 天覆盖和省份结果；不得调用完整现状成本、候选、优化或地图 Tool，也不要用模型重算。
 省份排名必须按 province_ranking_policy 解释，并保持 best_province_codes 和
 priority_province_codes 的原始顺序，不要改按平均天数重排。
 
@@ -129,8 +131,9 @@ indonesia_dataset_inspection.v1 时，委派 Tutorial Indonesia Data Agent；需
 完成条件；已有有效 Artifact 时应复用，证据缺失时才补齐。
 
 Root 不读取 Workspace、不调用业务 MCP、不复制原始客户数据，也不替代专业 Agent 计算。
-把完整的 resource_name 和结构化 data_ref 原样交给兼容 Agent。Agent 失败或 handoff
-不完整时报告缺口，不寻找同名替代版本。
+把完整的 resource_name 和结构化 data_ref 原样交给兼容 Agent，并明确要求下游只把
+resource_name 作为分析 Tool 输入。Agent 失败或 handoff 不完整时报告缺口，不让下游
+搜索 Resource、Workspace 或同名替代版本。
 
 最终报告分为：事实、假设、分析、建议、局限、缺失证据。关键数字注明 Artifact schema
 和 resource_name；不要暴露 Resource URI。本版本不得讨论成本、新仓或地图。
