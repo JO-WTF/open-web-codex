@@ -48,6 +48,7 @@ export type Run = {
   id: string;
   task_id: string;
   status: string;
+  failure_code: RunFailureCode | null;
   codex_thread_id: string | null;
   active_turn_id: string | null;
   workspace_id: string | null;
@@ -55,6 +56,20 @@ export type Run = {
   created_at: string;
   updated_at: string;
 };
+
+export type RunFailureCode =
+  | "invalid_run"
+  | "resource_not_found"
+  | "run_conflict"
+  | "lease_lost"
+  | "database_error"
+  | "git_workspace_error"
+  | "runtime_start_preflight_failed"
+  | "codex_unavailable"
+  | "run_cancelled"
+  | "interrupt_failed"
+  | "lease_expired"
+  | "unknown_failure";
 
 export type SupervisorPolicySelection = {
   policy_id: string;

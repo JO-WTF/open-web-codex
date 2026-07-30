@@ -54,12 +54,14 @@ same repo-level shared path as its fallback even when the MCP child receives a s
 environment. This keeps virtualenv creation and dependency downloads out of the user-visible MCP
 handshake and avoids accidentally falling back to a stale plugin-local `.venv`.
 
-For manual development from this directory you can still run:
+The selected Plugin root is validated as a strictly contained tree. Do not create a `.venv`
+inside `tools/maps-mcp`: virtual environments normally contain interpreter symlinks outside the
+Plugin root, so the root would correctly be unavailable to new Threads. For manual development,
+prepare and reuse the same external environment from the repository root:
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -e .
-npm ci --ignore-scripts
+./scripts/setup-maps-mcp-env.sh
+.local/open-web-codex/tool-envs/maps-mcp/bin/python -c 'import maps_mcp.server, mcp'
 ```
 
 Google projects must enable Geocoding API v4 and Routes API. Mapbox requires an access token with

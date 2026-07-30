@@ -23,7 +23,7 @@
     "typecheck": "tsc --noEmit",
     "check:no-desktop": "node scripts/check-no-desktop.mjs",
     "check:main-ui-parity": "node scripts/check-main-ui-parity.mjs",
-    "check:tutorial-contracts": "node --test scripts/e2e-turn-contract.node-test.mjs && node scripts/check-tutorial-contracts.mjs",
+    "check:tutorial-contracts": "node --test scripts/e2e-turn-contract.node-test.mjs scripts/maps-mcp-env.node-test.mjs && node scripts/check-tutorial-contracts.mjs",
     "check:codex-contracts": "node scripts/check-codex-contracts.mjs",
     "check:codex-generated": "node scripts/check-codex-generated.mjs",
     "generate:codex-contracts": "node scripts/generate-codex-contract-bundle.mjs",

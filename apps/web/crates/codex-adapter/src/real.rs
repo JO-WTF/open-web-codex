@@ -2566,6 +2566,29 @@ mod tests {
         assert_eq!(roots, vec![explicit.canonicalize().unwrap()]);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn rejects_a_plugin_local_virtualenv_with_an_external_interpreter_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let process = temp.path().join("process");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir_all(&process).expect("process root");
+        std::fs::create_dir_all(workspace.join("tools")).expect("workspace tools");
+        let plugin = create_plugin_root(&workspace.join("tools"), "maps-mcp");
+        let external_interpreter = temp.path().join("system-python");
+        std::fs::write(&external_interpreter, b"python").expect("external interpreter");
+        let venv_bin = plugin.join(".venv/bin");
+        std::fs::create_dir_all(&venv_bin).expect("venv bin");
+        symlink(&external_interpreter, venv_bin.join("python3"))
+            .expect("external interpreter symlink");
+
+        let roots = discover_selected_capability_root_paths(&workspace, &process, None, None);
+
+        assert!(roots.is_empty());
+    }
+
     #[test]
     fn builds_selected_capability_root_payload_for_thread_start() {
         let temp = tempfile::tempdir().expect("tempdir");

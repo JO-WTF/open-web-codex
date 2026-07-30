@@ -10,7 +10,7 @@ use open_web_codex_adapter::{
 };
 use open_web_codex_platform_contracts::error::{ErrorKind, PlatformError};
 use open_web_codex_platform_contracts::{
-    InterruptRunRequest, ReviewTarget as PlatformReviewTarget, Run, RunReadiness,
+    InterruptRunRequest, ReviewTarget as PlatformReviewTarget, Run, RunFailureCode, RunReadiness,
     RunReadinessRequest, RunReadinessStatus, StartReviewRequest, StartRunRequest, StartRunResponse,
     SteerRunRequest,
 };
@@ -252,7 +252,7 @@ pub async fn list_runs(
     let task_id = params.get("task_id").copied();
     let rows = if let Some(task_id) = task_id {
         sqlx::query(
-            "SELECT id, task_id, status, codex_thread_id, active_turn_id, workspace_id, \
+            "SELECT id, task_id, status, failure_code, codex_thread_id, active_turn_id, workspace_id, \
                     attempt, created_at, updated_at FROM runs \
              WHERE task_id = $1 AND organization_id = $2 ORDER BY created_at DESC",
         )
@@ -263,7 +263,7 @@ pub async fn list_runs(
         .map_err(database_error)?
     } else {
         sqlx::query(
-            "SELECT id, task_id, status, codex_thread_id, active_turn_id, workspace_id, \
+            "SELECT id, task_id, status, failure_code, codex_thread_id, active_turn_id, workspace_id, \
                     attempt, created_at, updated_at FROM runs \
              WHERE organization_id = $1 ORDER BY created_at DESC",
         )
@@ -607,6 +607,10 @@ fn run_from_record(run: RunRecord) -> Run {
         id: run.id,
         task_id: run.task_id,
         status: run.status,
+        failure_code: run
+            .failure_code
+            .as_deref()
+            .map(RunFailureCode::from_persisted),
         codex_thread_id: run.codex_thread_id,
         active_turn_id: run.active_turn_id,
         workspace_id: run.workspace_id,
@@ -690,6 +694,10 @@ fn run_from_row(row: &sqlx::postgres::PgRow) -> Run {
         id: row.get("id"),
         task_id: row.get("task_id"),
         status: row.get("status"),
+        failure_code: row
+            .get::<Option<String>, _>("failure_code")
+            .as_deref()
+            .map(RunFailureCode::from_persisted),
         codex_thread_id: row.get("codex_thread_id"),
         active_turn_id: row.get("active_turn_id"),
         workspace_id: row.get("workspace_id"),
@@ -786,4 +794,60 @@ fn run_not_ready() -> (StatusCode, Json<PlatformError>) {
             retry_after_ms: None,
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run_from_record;
+    use chrono::Utc;
+    use open_web_codex_platform_contracts::RunFailureCode;
+    use open_web_codex_run_orchestrator::RunRecord;
+    use uuid::Uuid;
+
+    #[test]
+    fn run_projection_includes_the_safe_failure_code() {
+        let projected = run_from_record(RunRecord {
+            id: Uuid::now_v7(),
+            task_id: Uuid::now_v7(),
+            status: "failed".to_string(),
+            failure_code: Some("runtime_start_preflight_failed".to_string()),
+            codex_thread_id: None,
+            active_turn_id: None,
+            workspace_id: Some(Uuid::now_v7()),
+            attempt: 1,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        });
+
+        assert_eq!(
+            projected.failure_code,
+            Some(RunFailureCode::RuntimeStartPreflightFailed)
+        );
+        assert_eq!(
+            serde_json::to_value(projected).unwrap()["failure_code"],
+            "runtime_start_preflight_failed"
+        );
+    }
+
+    #[test]
+    fn run_projection_bounds_unknown_persisted_failure_codes() {
+        let projected = run_from_record(RunRecord {
+            id: Uuid::now_v7(),
+            task_id: Uuid::now_v7(),
+            status: "failed".to_string(),
+            failure_code: Some("raw internal failure detail".to_string()),
+            codex_thread_id: None,
+            active_turn_id: None,
+            workspace_id: Some(Uuid::now_v7()),
+            attempt: 1,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        });
+
+        assert_eq!(projected.failure_code, Some(RunFailureCode::UnknownFailure));
+        assert_eq!(
+            serde_json::to_value(projected).unwrap()["failure_code"],
+            "unknown_failure"
+        );
+    }
 }

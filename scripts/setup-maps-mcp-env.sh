@@ -7,14 +7,53 @@ tools_root="$repo_root/tools/maps-mcp"
 data_dir="${OPEN_WEB_CODEX_DATA_DIR:-$repo_root/.local/open-web-codex}"
 log_dir="${OPEN_WEB_CODEX_LOG_DIR:-$data_dir/logs}"
 venv_dir="${OPEN_WEB_CODEX_MAPS_MCP_VENV:-${MAPS_MCP_VENV:-$data_dir/tool-envs/maps-mcp}}"
+plugin_local_venv="$tools_root/.venv"
 log_file="${OPEN_WEB_CODEX_MAPS_MCP_SETUP_LOG:-$log_dir/maps-mcp-env.log}"
 python_cmd="${PYTHON:-python3}"
 
-mkdir -p "$log_dir" "$(dirname "$venv_dir")"
+mkdir -p "$log_dir"
 
 log() {
   printf '[%s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" | tee -a "$log_file" >&2
 }
+
+command -v "$python_cmd" >/dev/null 2>&1 || {
+  log "python command not found: $python_cmd"
+  exit 127
+}
+
+venv_scope="$(
+  "$python_cmd" -c '
+import os
+import sys
+
+root, candidate = sys.argv[1:]
+
+def contained(base, path):
+    try:
+        return os.path.commonpath((base, path)) == base
+    except ValueError:
+        return False
+
+root_lexical = os.path.abspath(root)
+candidate_lexical = os.path.abspath(candidate)
+root_resolved = os.path.realpath(root)
+candidate_resolved = os.path.realpath(candidate)
+inside = contained(root_lexical, candidate_lexical) or contained(root_resolved, candidate_resolved)
+print("inside" if inside else "outside")
+' "$tools_root" "$venv_dir"
+)"
+if [[ "$venv_scope" != "outside" ]]; then
+  log "unsupported maps MCP virtualenv location inside Plugin root: $venv_dir"
+  exit 2
+fi
+
+if [[ -e "$plugin_local_venv" || -L "$plugin_local_venv" ]]; then
+  log "unsupported plugin-local virtualenv: move or remove $plugin_local_venv; use $venv_dir"
+  exit 2
+fi
+
+mkdir -p "$(dirname "$venv_dir")"
 
 run_logged() {
   log "+ $*"
@@ -55,10 +94,6 @@ log "python=$python_cmd"
 log "proxy_state=$(proxy_state)"
 log "uname=$(uname -a 2>/dev/null || true)"
 
-command -v "$python_cmd" >/dev/null 2>&1 || {
-  log "python command not found: $python_cmd"
-  exit 127
-}
 run_logged "$python_cmd" --version
 command -v node >/dev/null 2>&1 || {
   log "node is required for official Mapbox Style Spec validation"

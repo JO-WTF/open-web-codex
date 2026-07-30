@@ -41,6 +41,7 @@ const run = {
   id: "run-1",
   task_id: task.id,
   status: "running",
+  failure_code: null,
   codex_thread_id: "thread-1",
   active_turn_id: null,
   workspace_id: workspace.id,
@@ -349,6 +350,67 @@ describe("WebApp direct Server client", () => {
     expect(taskCreates).toBe(1);
     expect(runStarts).toBe(1);
     expect(runReads).toBeGreaterThanOrEqual(2);
+  });
+
+  it("reports the safe failure code when an accepted Run fails before creating its Thread", async () => {
+    const baseFetch = resourceFetch();
+    const pendingRun = {
+      ...run,
+      status: "pending",
+      codex_thread_id: null,
+    };
+    const failedRun = {
+      ...pendingRun,
+      status: "failed",
+      failure_code: "runtime_start_preflight_failed" as const,
+    };
+    const onRunAccepted = vi.fn();
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input));
+        if (url.pathname === "/api/tasks" && init?.method === "POST") {
+          return json(task);
+        }
+        if (
+          url.pathname === `/api/tasks/${task.id}/runs` &&
+          init?.method === "POST"
+        ) {
+          return json({ run: pendingRun });
+        }
+        if (
+          url.pathname === `/api/runs/${run.id}` &&
+          (!init?.method || init.method === "GET")
+        ) {
+          return json(failedRun);
+        }
+        return baseFetch(input, init);
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("crypto", {
+      randomUUID: () => "018f-idempotency-key",
+    });
+    const client = new CodexMonitorWebClient({
+      baseUrl: "http://server.test",
+    });
+
+    await expect(
+      client.startThread(workspace.id, {
+        operationId: "accepted-terminal-run",
+        readinessFingerprint: "ready-standard",
+        providerId: task.model_provider,
+        modelId: task.model,
+        onRunAccepted,
+      }),
+    ).rejects.toMatchObject({
+      code: "run_terminal",
+      message:
+        "Run failed before its Codex Thread was ready. Failure code: runtime_start_preflight_failed.",
+    });
+    expect(onRunAccepted).toHaveBeenCalledWith({
+      taskId: task.id,
+      runId: run.id,
+    });
   });
 
   it("restores the bound Policy and Runtime Agent projection for a governed Thread", async () => {

@@ -124,7 +124,7 @@ impl RunOrchestrator {
         }
 
         let row = sqlx::query(
-            "SELECT run.id, run.task_id, run.status, run.codex_thread_id, \
+            "SELECT run.id, run.task_id, run.status, run.failure_code, run.codex_thread_id, \
                     run.active_turn_id, run.workspace_id, run.attempt, run.created_at, \
                     run.updated_at, run.fork_thread_id, run.fork_source_run_id, \
                     policy.policy_id, policy.version AS policy_version, \
@@ -309,7 +309,7 @@ impl RunOrchestrator {
              ON CONFLICT (organization_id, requested_by, idempotency_key) \
                WHERE requested_by IS NOT NULL AND idempotency_key IS NOT NULL \
              DO NOTHING \
-             RETURNING id, task_id, status, codex_thread_id, active_turn_id, workspace_id, \
+             RETURNING id, task_id, status, failure_code, codex_thread_id, active_turn_id, workspace_id, \
                        attempt, created_at, updated_at",
         )
         .bind(request.organization_id)
@@ -327,7 +327,7 @@ impl RunOrchestrator {
             Ok(Some(row)) => row,
             Ok(None) => {
                 let existing = sqlx::query(
-                    "SELECT id, task_id, status, codex_thread_id, active_turn_id, workspace_id, \
+                    "SELECT id, task_id, status, failure_code, codex_thread_id, active_turn_id, workspace_id, \
                             attempt, created_at, updated_at \
                      FROM runs WHERE organization_id = $1 AND requested_by = $2 \
                        AND idempotency_key = $3",
@@ -472,7 +472,7 @@ impl RunOrchestrator {
         run_id: Uuid,
     ) -> Result<RunRecord, RunOrchestratorError> {
         let row = sqlx::query(
-            "SELECT id, task_id, status, codex_thread_id, active_turn_id, workspace_id, \
+            "SELECT id, task_id, status, failure_code, codex_thread_id, active_turn_id, workspace_id, \
                     attempt, created_at, updated_at \
              FROM runs WHERE id = $1 AND organization_id = $2",
         )
@@ -780,6 +780,7 @@ pub(crate) fn run_record(row: &sqlx::postgres::PgRow) -> RunRecord {
         id: row.get("id"),
         task_id: row.get("task_id"),
         status: row.get("status"),
+        failure_code: row.get("failure_code"),
         codex_thread_id: row.get("codex_thread_id"),
         active_turn_id: row.get("active_turn_id"),
         workspace_id: row.get("workspace_id"),

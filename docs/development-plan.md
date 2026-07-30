@@ -216,14 +216,15 @@ Skills、Plugins 和 MCP。
    缺失、`cwd` 解析错误、command 不存在、权限不足、Python/venv/pip 失败、
    package import 失败、MCP initialize 失败或 timeout。当前 runtime status 已投影
    Runtime 的 MCP server status；`map_utils` 依赖准备已移到平台启动期的共享
-   maps MCP venv，launcher 在对话期只做快速 import 校验并失败快返；即使 MCP 子进程未继承平台环境变量，
+   maps MCP venv，启动准备会显式拒绝 Plugin root 内的 `.venv`，从而保留 capability
+   root 的严格整树 symlink containment；launcher 在对话期只做快速 import 校验并失败快返；即使 MCP 子进程未继承平台环境变量，
    也会回退到仓库级共享 venv，并将 repo root、cwd、args、venv、Python 版本、import check 失败摘要
    和 server stderr 写入 launcher log；launcher smoke
    覆盖 initialize、tools/list、`create_map_card` 的 `map.v3` 输入 schema
    （平台管理的 GeoJSON sources、官方 Mapbox layer JSON、标准 camera 字段和
    可选 hover/legend extensions）以及官方 Style Spec warning/error 行为；
-   下一步要把 Runtime
-   failureReason 归一到上述分类。
+   Run 在 Thread identity 建立前终止时，API 会投影有界的持久化失败分类，未知值
+   显式归一为 `unknown_failure`；下一步仍要把 Runtime failureReason 归一到上述细分类。
 4. [-] 第三方 Provider smoke 使用真实 Codex Runtime 工具调用链验证：模型可见
    `map_utils` tool schema，Provider 返回标准 tool call，Runtime 执行 MCP tool，
    Server 从 Tool `structuredContent` 注册类型化 Artifact，Assistant 只复制

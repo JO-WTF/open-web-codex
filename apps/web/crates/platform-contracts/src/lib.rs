@@ -224,12 +224,51 @@ pub struct AddMemberRequest {
 
 // ── Run ────────────────────────────────────────────────────────────
 
+/// Stable, browser-safe classification for a terminal or interrupted Run.
+/// Unknown persisted values remain observable without exposing raw diagnostics.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RunFailureCode {
+    InvalidRun,
+    ResourceNotFound,
+    RunConflict,
+    LeaseLost,
+    DatabaseError,
+    GitWorkspaceError,
+    RuntimeStartPreflightFailed,
+    CodexUnavailable,
+    RunCancelled,
+    InterruptFailed,
+    LeaseExpired,
+    UnknownFailure,
+}
+
+impl RunFailureCode {
+    pub fn from_persisted(value: &str) -> Self {
+        match value {
+            "invalid_run" => Self::InvalidRun,
+            "resource_not_found" => Self::ResourceNotFound,
+            "run_conflict" => Self::RunConflict,
+            "lease_lost" => Self::LeaseLost,
+            "database_error" => Self::DatabaseError,
+            "git_workspace_error" => Self::GitWorkspaceError,
+            "runtime_start_preflight_failed" => Self::RuntimeStartPreflightFailed,
+            "codex_unavailable" => Self::CodexUnavailable,
+            "run_cancelled" => Self::RunCancelled,
+            "interrupt_failed" => Self::InterruptFailed,
+            "lease_expired" => Self::LeaseExpired,
+            _ => Self::UnknownFailure,
+        }
+    }
+}
+
 /// Database/API run representation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Run {
     pub id: Uuid,
     pub task_id: Uuid,
     pub status: String,
+    pub failure_code: Option<RunFailureCode>,
     pub codex_thread_id: Option<String>,
     pub active_turn_id: Option<String>,
     pub workspace_id: Option<Uuid>,

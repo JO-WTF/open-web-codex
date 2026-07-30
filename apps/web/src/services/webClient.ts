@@ -360,8 +360,13 @@ export class CodexMonitorWebClient {
           return run;
         }
         if (["failed", "cancelled"].includes(run.status)) {
+          const failure = run.failure_code
+            ? ` Failure code: ${run.failure_code}.`
+            : "";
           throw Object.assign(
-            new Error(`Run ${run.status} before its Codex Thread was ready`),
+            new Error(
+              `Run ${run.status} before its Codex Thread was ready.${failure}`,
+            ),
             { code: "run_terminal" },
           );
         }

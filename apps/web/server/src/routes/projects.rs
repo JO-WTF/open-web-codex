@@ -6,7 +6,8 @@ use axum::{
 use open_web_codex_git_runtime::GitRuntime;
 use open_web_codex_platform_contracts::error::PlatformError;
 use open_web_codex_platform_contracts::{
-    CreateManagedProjectRequest, CreateProjectRequest, Project, ProjectThreadContext, Run, Task,
+    CreateManagedProjectRequest, CreateProjectRequest, Project, ProjectThreadContext, Run,
+    RunFailureCode, Task,
 };
 use open_web_codex_platform_store::AppState;
 use sqlx::Row;
@@ -29,7 +30,8 @@ pub async fn list_thread_contexts(
                 t.id AS task_id, t.title, t.status AS task_status, \
                 t.model_provider, t.model, \
                 t.created_at AS task_created_at, t.updated_at AS task_updated_at, \
-                r.id AS run_id, r.status AS run_status, r.codex_thread_id, r.active_turn_id, \
+                r.id AS run_id, r.status AS run_status, r.failure_code AS run_failure_code, \
+                r.codex_thread_id, r.active_turn_id, \
                 r.workspace_id, r.attempt, \
                 r.created_at AS run_created_at, r.updated_at AS run_updated_at \
          FROM projects p JOIN tasks t ON t.project_id = p.id \
@@ -68,6 +70,10 @@ pub async fn list_thread_contexts(
                     id: row.get("run_id"),
                     task_id: row.get("task_id"),
                     status: row.get("run_status"),
+                    failure_code: row
+                        .get::<Option<String>, _>("run_failure_code")
+                        .as_deref()
+                        .map(RunFailureCode::from_persisted),
                     codex_thread_id: row.get("codex_thread_id"),
                     active_turn_id: row.get("active_turn_id"),
                     workspace_id: row.get("workspace_id"),

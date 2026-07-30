@@ -212,6 +212,7 @@ pub struct RunRecord {
     pub id: Uuid,
     pub task_id: Uuid,
     pub status: String,
+    pub failure_code: Option<String>,
     pub codex_thread_id: Option<String>,
     pub active_turn_id: Option<String>,
     pub workspace_id: Option<Uuid>,
