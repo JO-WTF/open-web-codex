@@ -4,11 +4,11 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 更新日期 | 2026-07-29 |
+| 更新日期 | 2026-07-30 |
 | 当前分支 | `codex/agent-architecture-features` |
 | Codex 基线 | `openai/codex` `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9` |
 | 上游状态快照 | 2026-07-28 观测到 official main `95637f7056835fea66bdd0044414af480fc0fd74`，当时待同步 142；本轮未刷新且暂不同步 |
-| 当前工作 | 已落地受治理的 Agent/Supervisor 发布纵向切片，继续补真实 Runtime 验证、失败恢复、Artifact 生命周期与可信门禁 |
+| 当前工作 | 补齐 M2 的生产 Web 数据入口、类型化 readiness、统一启动器与 Tutorial Blueprint 新手闭环，再继续失败恢复和 Artifact 生命周期门禁 |
 | 中期顺序 | `docs/roadmap.md` |
 | M2 详细实施 | `docs/enterprise-supervisor-copilot-plan.md` |
 | 能力事实 | `docs/capability-baseline.md` |
@@ -62,6 +62,13 @@ M2 功能切片可以与 Gate 0 并行，不等待全部可信矩阵完成；但
 Workspace、授权、Artifact 和 Tool 边界。未完成的可信项限制能力声明，并在短期计划
 风险台账中保留触发条件。
 
+当前最高优先级是
+[M2 短期计划的 Web 可达性与新手闭环工作包](enterprise-supervisor-copilot-plan.md#5-web-可达性与新手闭环工作包)：
+先把 Dataset Release 接入唯一生产 Files，再由同一 Server evaluator 在创建 Thread
+前返回 readiness，随后接入版本化 Tutorial Blueprint、Learn 和渐进式 Agent Studio。
+这不是新的 M2 看板；逐项状态、合同和验收只在短期计划维护。当前能力基线必须继续
+区分“路由/组件存在”和“真实 `/web` 可达并通过 E2E”。
+
 ### 当前合同
 
 代码 Package 与 Web 草稿使用同一个 Agent/Supervisor 语义编译器。Agent Runtime
@@ -73,15 +80,18 @@ requirement、Artifact handoff 与并发限制只由精确 Agent Release 和草�
 
 当前内置 Release 是：
 
-- `enterprise-supervisor-copilot@3.10.0`，选择
+- `enterprise-supervisor-copilot@3.14.0`，选择
   `platform-supervisor-behavior@1.1.0`；
 - Data `3.1.0`，只调用原子校验并发布一个精确授权 Workspace Dataset Release 的
   inspection Tool；
-- Network `3.4.0`，按问题只运行服务基线、现网成本、指定候选、有限候选优化、地图
-  准备或确定性决策报告中必要的最小分析；
-- Visualization `1.3.0`，只把已验证地图 manifest 与 GeoJSON 交给
-  `map_utils.create_map_card`；
-- 九类条件性 Artifact handoff，不构成固定 Workflow。
+- Network `3.6.0`，按问题只运行服务基线、现网成本、指定候选、有限候选优化、地图
+  准备或确定性决策报告中必要的最小分析；报告 Tool 发布权威
+  `indonesia_decision_report.v1` Resource 和类型化 `report.v1` 交付；
+- Visualization `1.4.0`，只把已验证地图 manifest 与 GeoJSON 交给
+  `map_utils.create_map_card`；其 `MAP_HANDOFF` 只保留输入 Resource provenance 与
+  map Artifact ID，Tool 的 `structuredContent.embed.code` 只作为独立指令出现；
+- 十类条件性 Artifact handoff：八个 Resource 加 `report.v1`、`map.v3` 两种类型化
+  回复交付，不构成固定 Workflow。
 
 Root 没有业务 MCP。每个子 Agent 只得到 Definition 声明的精确 MCP Server、Tool
 allowlist、Resource 读取范围和 capability root；受治理预检会拒绝缺失或漂移的
@@ -91,17 +101,23 @@ Artifact 保留 Run/Thread/Turn/Item producer provenance，根 Thread 只能解�
 
 ### 当前 Web 纵向链路
 
-用户现在可以在 Web 中完成两条链路：
+当前 source 已经把分散能力收敛到生产 Web；真实 Runtime、Artifact 与纯 UI Learn
+启动路径已通过，修复后的卡片显示和恢复仍有一个真实浏览器门禁：
 
-1. 在 Files 中把一组文件发布为不可变 Workspace Dataset Release，并获得不含本地
-   路径的 release ID、dataset ID、版本和内容哈希。
+1. 生产 Files 已接入 Dataset 发布、Release history、详情、新版本和失败重试；Agent
+   Studio 缺少数据时复用同一 **Add data**。
 2. 在 Agent Studio 中编写受限标准库 Python Tool、JSON Schema 和 Skill 指令；
    平台固定 launcher 与 package 形状，清空继承环境，完成 MCP initialize、
    Tool discovery，并可使用精确 Dataset Release 测试一个 Tool。
 3. 发布不可变 capability-package Release，把精确 package 与 Dataset Release
    依赖绑定到 Agent，校验并发布 Agent Release。
 4. 直接以该 Agent 作为根执行一个 Thread，或把多个精确 Agent Release 关联到
-   Supervisor，再由 Runtime 自主协调。
+   Supervisor，再由 Runtime 自主协调；统一 launcher 与 Server readiness source 已
+   接入。当前真实 enterprise E2E 已验证 Runtime 执行和类型化 Artifact。
+5. Blueprint list/read/reconcile 与生产 **Learn** 入口已落地；全新空 Workspace 已只
+   通过 `/web` 完成创建、打开 Learn、安装示例、readiness、启动和发送。首次完成后
+   Artifact ready 但卡片 DOM 为空的问题已在 Web owning layer 修复，最后仍需真实浏览器
+   复核修复后的显示和刷新恢复。
 
 浏览器不提交 Runtime Role、MCP inventory、Tool allowlist、capability root、启动
 命令、环境变量或服务器文件路径。该 authoring 切片不是任意 Plugin/MCP CRUD，也
@@ -115,11 +131,25 @@ Artifact 保留 Run/Thread/Turn/Item producer provenance，根 Thread 只能解�
   已通过；
 - Dataset Release、Python Tool Test、精确依赖、直接 Agent Run、三角色
   Supervisor、跨子 Thread Artifact 和地图嵌入都有自动化覆盖；
+- `Learn UI E2E 20260730 0728` 已从全新空 Workspace 只通过生产 `/web` 完成 Create
+  Workspace → Open Learn → Set up example → readiness（仅 maps presentation 为
+  `degraded`）→ Start task → Send；Blueprint 精确安装，真实 DeepSeek Run completed，
+  8 类 Resource 与 `report.v1`/`map.v3` 均 ready；
 - 配送审计单 Agent 已在真实 Runtime 中通过一次精确 MCP 审批、一次 Tool 调用、
   ready Artifact 和刷新恢复；
-- 当前 `3.10.0` 印尼 Supervisor 的全新 exact-hash 真实 Runtime 与浏览器恢复验证待
-  重跑；新增 `indonesia_decision_report.v1` 由 MCP 交叉校验来源并确定性渲染，
-  Supervisor 不再自由改写业务报告；地图 ID 与 embed 由 Visualization 独立交付。
+- 当前 `3.14.0` 印尼 Supervisor 的全新 exact-hash 真实 DeepSeek Runtime/Artifact E2E
+  已通过全部 13 项验收：一个 Root 与三个 child Threads、8 个持久 Agent tasks、14 次
+  MCP 调用、8 个 ready Resource，以及恰好一个 `report.v1` 和一个 `map.v3`。报告
+  验收覆盖 Artifact schema/version、非空 payload 与重算 digest、精确 Tool 来源、
+  类型化 checks、Dataset Release 身份、producer provenance 和交付引用，不校验报告
+  措辞或模型正文；
+- 纯 UI Run 首次完成后卡片 DOM 为 0。权威状态表明两个 typed `inlineArtifacts` 位于
+  Runtime `commentary` message，而 `final_answer` 没有 embeds；Web 折叠 commentary
+  导致卡片未显示，Platform、Blueprint 和 Artifact 均正常。Web 修复保持 commentary
+  prose 折叠，只按 Turn 项目顺序独立展示已授权 typed cards，并按稳定 ref 去重，不改变
+  phase、不提升 prose。live/restored DOM 回归、58 项 focused tests、typecheck、lint、
+  parity 和 build 通过，服务已重启；浏览器控制器随后因自身 URL policy 拒绝刷新，所以
+  post-fix 真实浏览器显示/恢复仍是最终证据门禁。
 
 主线现转向部分失败和审批拒绝后的综合；更深层 Agent 树；Artifact 替代、失效、
 删除与保留；重启/乱序、共享
@@ -267,11 +297,11 @@ Skills、Plugins 和 MCP。
 ## Gate 0 验证矩阵
 
 - [x] `bash -n scripts/*.sh` 和本地启动脚本 help/status 路径。
-- [-] 1,270 个浏览器测试、typecheck、lint、build、no-desktop、Codex contracts
-  和真实 Codex app-server 的 18 项 Capability Manifest smoke 通过；配送审计
-  单 Agent 已通过真实 Runtime/browser 验证；当前 `3.10.0` 印尼 Supervisor 的完整答案验收待重跑。
-  main-ui-parity 仍会报告尚未
-  并入参考基线的有意浏览器 UI 扩展。
+- [-] typecheck、lint、main-ui-parity、build、58 项 Web owning-layer focused tests、
+  Codex contracts 和真实 Codex app-server 的 18 项 Capability Manifest smoke 通过；
+  配送审计单 Agent 和 `3.14.0` Supervisor 的真实 Runtime 验收通过；全新空 Workspace
+  的 Learn UI 安装、readiness、启动和发送已通过。服务重启后的 post-fix 报告/地图卡片
+  真实浏览器显示与刷新恢复仍待复核，因此生产 `/web` 新手闭环仍不得声明 available。
 - [x] `cargo fmt --all --check`、`cargo test --workspace --locked`。
 - [x] 当前空白 PostgreSQL schema 上的迁移幂等/Secret 加密、两组织安全、
   Artifact 拒绝、子 Agent/根 Run 生命周期隔离和独立 Workspace 跨 Run 复用

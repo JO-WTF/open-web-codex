@@ -28,7 +28,7 @@ use store::{
     load_definition, load_definitions, load_draft_row, lock_definition, parse_draft, record_audit,
 };
 
-type ApiError = (StatusCode, Json<PlatformError>);
+pub(crate) type ApiError = (StatusCode, Json<PlatformError>);
 type ApiResult<T> = Result<Json<T>, ApiError>;
 
 pub async fn list(
@@ -335,6 +335,109 @@ pub async fn publish(
         content_sha256: package.content_sha256,
         published_at,
     }))
+}
+
+/// Idempotently publish a trusted, server-authored Supervisor draft through
+/// the same semantic compiler and immutable persistence path as Web authoring.
+pub(crate) async fn publish_or_reuse_trusted(
+    state: &AppState,
+    auth: &AuthenticatedUser,
+    draft: SupervisorDraftRequest,
+) -> Result<SupervisorReleaseSummary, ApiError> {
+    validate_draft_storage_shape(&draft)?;
+    let available_agents = agent_catalog::list_resolved(&state.db, auth.organization_id)
+        .await
+        .map_err(|_| internal_error())?;
+    let instruction_policy =
+        crate::supervisor_instruction_policy::resolve(&state.db, &draft.instruction_policy)
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(PlatformError::bad_request(
+                        "The selected platform instruction policy is unavailable",
+                    )),
+                )
+            })?;
+    let release_spec =
+        release_spec_from_draft_with_policy(&draft, &available_agents, &instruction_policy)
+            .map_err(|issue| {
+                (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(PlatformError::bad_request(issue.message)),
+                )
+            })?;
+    let expected = supervisor::validate_release_with_agents_and_policy(
+        release_spec,
+        &available_agents,
+        &instruction_policy,
+    )
+    .map_err(|error| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(PlatformError::bad_request(error.to_string())),
+        )
+    })?;
+
+    if let Some(row) = sqlx::query(
+        "SELECT id, policy_id, version, display_name, description, content_sha256, published_at \
+         FROM supervisor_releases \
+         WHERE organization_id = $1 AND policy_id = $2 AND version = $3",
+    )
+    .bind(auth.organization_id)
+    .bind(&draft.policy_id)
+    .bind(&draft.version)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(database_error)?
+    {
+        let release_id: Uuid = row.get("id");
+        let resolved =
+            supervisor_policy::resolve_release(&state.db, auth.organization_id, release_id)
+                .await
+                .map_err(|_| internal_error())?;
+        if resolved.snapshot.content_sha256 != expected.content_sha256 {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(PlatformError::bad_request(
+                    "The tutorial Supervisor identity is bound to different immutable content",
+                )),
+            ));
+        }
+        return Ok(SupervisorReleaseSummary {
+            id: release_id,
+            policy_id: row.get("policy_id"),
+            version: row.get("version"),
+            display_name: row.get("display_name"),
+            description: row.get("description"),
+            content_sha256: row.get("content_sha256"),
+            published_at: row.get("published_at"),
+        });
+    }
+
+    let resources = load_definitions(&state.db, auth.organization_id).await?;
+    let resource_id = if let Some(existing) = resources
+        .into_iter()
+        .find(|resource| resource.policy_id == draft.policy_id)
+    {
+        if existing.draft.as_ref() != Some(&draft) || existing.owner_user_id != auth.user_id {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(PlatformError::bad_request(
+                    "The tutorial Supervisor Definition id is already in use",
+                )),
+            ));
+        }
+        existing.id
+    } else {
+        create(State(state.clone()), auth.clone(), Json(draft.clone()))
+            .await?
+            .0
+            .id
+    };
+    publish(State(state.clone()), auth.clone(), Path(resource_id))
+        .await
+        .map(|Json(release)| release)
 }
 
 fn require_manage(auth: &AuthenticatedUser, owner_user_id: Uuid) -> Result<(), ApiError> {

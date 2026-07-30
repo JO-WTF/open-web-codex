@@ -48,7 +48,8 @@
 - [领域 Agent 扩展架构](domain-agent-extension-architecture.md)
 - [Skills、MCP 与自定义 UI 扩展](custom-skills-mcp-ui-guide.md)
 - [零基础多 Agent 开发教程](multi-agent-development-tutorial.md)
-  - [教程标准与完整学习路径](tutorials/README.md)
+  - [教程标准与四条学习路径](tutorials/README.md)
+  - [10 分钟运行印尼仓网示例](tutorials/indonesia-network-quickstart.md)
   - [单 Agent：在 Web 审计配送承诺](tutorials/web-single-agent-delivery-audit.md)
   - [印尼仓网案例总览](tutorials/supply-chain-agent-tutorial.md)
   - [印尼仓网 1：发布并核验数据](tutorials/indonesia-network-01-data.md)
@@ -91,6 +92,9 @@ Agent Definition、Runtime Role 等核心术语。
 [ADR 索引](adr/README.md) 保存已经接受且会长期约束实现的决策。目标架构报告中的
 方案比较不自动成为 ADR；当某项选择进入代码实施时，再创建简短 ADR，引用报告中的
 论据并记录最终决定、后果与替代方案。
+
+当前与新手闭环直接相关的决定是
+[ADR-008：版本化可安装 Tutorial Blueprint](adr/008-installable-tutorial-blueprints.md)。
 
 ## 事实与冲突处理
 

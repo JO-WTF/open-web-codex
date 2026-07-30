@@ -1,4 +1,4 @@
-# 印尼仓网 4：有限候选优化与地图
+# 印尼仓网 4：有限候选优化、确定性报告与地图
 
 本篇完成完整案例：
 
@@ -8,7 +8,8 @@
 4. 要求 2 天需求覆盖率至少达到 74%；
 5. 在满足目标的候选中最小化年度决策成本；
 6. 创建当前方案与入选方案的地图卡片；
-7. 由 Root Supervisor 汇总可审查报告。
+7. 由 Network Tool 从七个精确来源 Resource 确定性生成完整报告；
+8. Root Supervisor 只交付 `report.v1` 和可选的 `map.v3` 类型化引用。
 
 比上一篇增加的是“完整有限候选优化”和独立 Visualization Agent。仍然不做连续空间
 任意点求解，也不调用导航 API。
@@ -56,9 +57,10 @@ Evaluates the current network, the complete reviewed candidate set, and bounded 
 
 ```text
 读取一个经过验证的印尼 Dataset inspection
-核算当前两级仓网事实
+核算当前服务基线和两级仓网事实
 在完整 20 候选集上执行确定性目标约束优化
 为入选方案发布兼容的 scenario、map manifest 和 GeoJSON Resources
+从七个精确来源 Resource 生成权威决策报告 Resource 和 report.v1 交付 Artifact
 ```
 
 **Custom Agent instructions**：
@@ -69,8 +71,8 @@ Evaluates the current network, the complete reviewed candidate set, and bounded 
 为交付来源，不作为 Tool 输入。缺少精确 resource_name 时停止，不列出 MCP Resources、
 不读取 inspection、不扫描 Workspace、不猜 URI。
 
-按任务需要选择最小分析。需要当前两级事实时取得 current Resource；需要有限候选优化
-时，把用户给出的 target_service_days、target_demand_coverage 和
+按任务需要选择最小分析。完整报告需要 service baseline 与 current Resource；需要有限
+候选优化时，把用户给出的 target_service_days、target_demand_coverage 和
 opening_amortization_years 原样传给 optimize_indonesia_new_warehouse。必须接受 Tool
 对完整 20 候选集的结果，不按城市偏好改选。
 
@@ -79,21 +81,28 @@ prepare_indonesia_network_map，并把兼容 current 和 selected scenario 的�
 resource_name 分别作为 baseline_resource_name 和 candidate_resource_name。不得调用
 导航、读取客户点、自己生成候选、复制内部 URI 或用模型重算成本。
 
-每个 Domain Tool 在发布前原子校验 Resource。最终回答先输出全部原样
-ARTIFACT_HANDOFFS，包括 current、optimization、selected scenario、network map 和
-geojson 的 schema、resource_name、结构化 data_ref。明确区分有限候选最优与连续地理
-最优，并报告目标状态、成本、容量、假设和限制。不要调用 create_map_card。
+每个 Domain Tool 在发布前原子校验 Resource。完整任务取得 inspection、service、
+current、optimization、selected scenario、network map 和 geojson 的精确
+resource_name 后，调用 prepare_indonesia_decision_report。只传这七个同 Server
+Resource 名；不要传地图 Artifact ID 或 embed。Tool 发布
+indonesia_decision_report.v1 Resource 和配对的 report.v1 交付 Artifact。报告 follow-up
+只返回单行 REPORT_HANDOFF，其中包含 report_resource_name 和 report_artifact_id；一个
+空行后独立复制 Tool 生成的报告 embed 一次。不要读取或复制报告 Markdown，不要增加前言
+或结论，也不要调用 create_map_card。
 ```
 
 Artifact contracts：
 
 ```text
 Input · indonesia_dataset_inspection.v1
+Output · indonesia_service_baseline.v1
 Output · indonesia_current_network_analysis.v1
 Output · indonesia_candidate_scenario.v1
 Output · indonesia_location_optimization.v1
 Output · indonesia_network_map.v1
 Output · geojson.v1
+Output · indonesia_decision_report.v1
+Output · report.v1
 ```
 
 依次点击：
@@ -107,7 +116,7 @@ Save draft → Validate → Publish
 本篇不需要再创建一个自定义地图 Agent。平台已经发布：
 
 ```text
-Enterprise Visualization Agent · 1.3.0
+Enterprise Visualization Agent · 1.4.0
 ```
 
 它的权限边界是：
@@ -123,9 +132,12 @@ Enterprise Visualization Agent · 1.3.0
 | 创建下级 Agent | 否 |
 
 Visualization Agent 的职责不是“做分析”，而是把已经验证的地图说明和 GeoJSON 交给
-浏览器渲染能力。它的 `MAP_HANDOFF` 还会原样返回两个输入 Resource 名、地图 Artifact
-ID 和与之匹配的完整 embed code，确保最终报告不会丢失地图来源或靠模型重建指令。
-这样地图样式错误或来源断裂都不会静默改变网络结论。
+浏览器渲染能力。它的单行 `MAP_HANDOFF` 只返回两个输入 Resource 名和地图 Artifact
+ID，保留输入 provenance，但不包含 Resource URI 或 embed code。Tool 的
+`structuredContent.embed.code` 在一个空行后作为独立指令出现一次，不能转义为
+`MAP_HANDOFF` JSON 字符串，也不能根据 Artifact ID 重建。平台把该指令解析为事件的
+类型化 `inlineArtifacts` 投影，浏览器只用这份投影解析同一个地图 Artifact。这样地图
+来源、模型文本与浏览器渲染不会形成相互漂移的重复状态。
 
 如果你的领域已有满足职责和权限的 Agent Release，应直接复用；不要为了显示自定义名称
 复制一份相同 Agent。
@@ -138,7 +150,7 @@ Allowed Agents：
 
 - `Tutorial Indonesia Data Agent · 1.0.0`；
 - `Tutorial Indonesia Network Planner · 3.0.0`；
-- `Enterprise Visualization Agent · 1.3.0`。
+- `Enterprise Visualization Agent · 1.4.0`。
 
 设置 **Maximum active child Agents = 3**。这是并发和驻留上限，不是要求每次都创建
 3 个 Agent。
@@ -148,11 +160,14 @@ Allowed Agents：
 | Artifact | Producer | Consumer | Required |
 | --- | --- | --- | --- |
 | `indonesia_dataset_inspection.v1` | Data | Network | 否 |
+| `indonesia_service_baseline.v1` | Network | Supervisor | 否 |
 | `indonesia_current_network_analysis.v1` | Network | Supervisor | 否 |
 | `indonesia_candidate_scenario.v1` | Network | Supervisor | 否 |
 | `indonesia_location_optimization.v1` | Network | Supervisor | 否 |
 | `indonesia_network_map.v1` | Network | Visualization | 否 |
 | `geojson.v1` | Network | Visualization | 否 |
+| `indonesia_decision_report.v1` | Network | Supervisor | 否 |
+| `report.v1` | Network | Supervisor | 否 |
 | `map.v3` | Visualization | Supervisor | 否 |
 
 **Custom Supervisor instructions**：
@@ -173,14 +188,21 @@ resource_name 作为同一 supply_chain_indonesia Server 内 Domain Tool 的输�
 不得列出 Resources、猜 URI 或按名称搜索替代 Artifact。Tool 或 Agent 失败时保留已完成
 证据并报告未完成部分。
 
-最终报告分为事实、假设、分析、建议、局限、缺失证据。每个关键数字引用准确 schema 和
-resource_name，不暴露 URI。明确说明优化只覆盖 20 个候选，距离是球面距离乘系数，不是
-导航承诺。
+完整报告必须由同一个 Network Agent 调用 prepare_indonesia_decision_report 生成。调用
+前必须具备 inspection、service、current、optimization、candidate、map 和 GeoJSON
+七个精确 Resource 名；任何一项缺失都先补证据，不得用聊天摘要或猜测名称代替。Tool
+拥有 indonesia_decision_report.v1 的内容、schema、digest、精确来源声明和类型化
+checks，并返回配对的 report.v1 交付。Root 不自行编写、压缩或润色报告；
+模型正文不是报告来源。
 
+Network Agent 的 `REPORT_HANDOFF` 只允许包含 report_resource_name 和
+report_artifact_id；其后独立出现的报告 embed 必须来自 Tool，并引用同一个 Artifact。
 如果 Visualization Agent 返回 `MAP_HANDOFF`，必须核对其中的 map manifest、GeoJSON
-Resource 名、地图 Artifact ID 和 embed code；embed code 必须引用同一个 Artifact ID，
-并逐字保留为
-前后空行分隔的独立段落输出。不得放进代码围栏、行内代码、列表、引用、表格或 HTML。
+Resource 名和地图 Artifact ID；该 JSON 不得包含 Resource URI 或 embed code。它后面
+独立出现的地图 embed 必须来自 Tool 的 `structuredContent.embed.code`，并引用同一个
+Artifact ID。最终响应只交付精确 `report.v1` embed；要求地图时再空一行交付精确
+`map.v3` embed。不得根据 ID 重建指令，不得增加模型业务正文，也不得把指令放进代码
+围栏、行内代码、列表、引用、表格或 HTML。
 ```
 
 完成：
@@ -196,7 +218,8 @@ Supervisor 没有写死“Data → Network → Visualization”，所有 handoff
 
 ## 4. 启动完整案例
 
-选择 **Tutorial Indonesia Network Supervisor · 3.0.0**，发送：
+在 Workspace 点击 **New task**。在 **Start a task** 中选择 **Supervisor** 和
+**Tutorial Indonesia Network Supervisor · 3.0.0**，发送：
 
 ```text
 分析现有印尼仓库网络并给出建议。
@@ -212,12 +235,10 @@ Supervisor 没有写死“Data → Network → Visualization”，所有 handoff
 运行终端命令、读取原始客户行、调用导航服务或自行编造候选地点。距离采用教程声明的
 球面距离乘系数方法，司机每天可行驶 6 小时。
 
-最终报告先给出“证据索引”，再使用“事实、假设、分析、建议、局限、缺失证据”六个
-部分。证据索引要说明每个原样 resource_name 负责哪些事实。每个关键数字注明拥有该
-字段的 Artifact schema 和原样 resource_name，不要用服务基线引用成本，不要用入选
-方案引用完整候选集合，也不要暴露 Resource URI。删除没有精确前后字段支撑的运营效果
-推断。优化状态必须原样保留 Tool 枚举；金额保留精确 IDR 整数，不要换算为 B、million、
-billion、万或亿，也不要自行计算新比例。如果已生成地图，必须原样嵌入地图交付指令。
+完整报告必须由 prepare_indonesia_decision_report 对七个精确来源 Resource 交叉校验后
+确定性生成；不要由模型重新组织。优化状态和金额保持 Tool 原样枚举与精确 IDR 整数，
+不要换算单位或自行计算新比例。最终先交付平台验证的 report.v1，再交付独立的 map.v3；
+不要复制或改写报告正文。
 ```
 
 ## 5. 审阅动态执行
@@ -245,21 +266,30 @@ billion、万或亿，也不要自行计算新比例。如果已生成地图，�
 
 ## 6. 审阅 Artifact 与地图
 
-完整任务至少应产生以下六个 Resource Artifact：
+本篇完整任务应产生以下八个 Resource Artifact：
 
 ```text
 indonesia_dataset_inspection.v1
+indonesia_service_baseline.v1
 indonesia_current_network_analysis.v1
 indonesia_location_optimization.v1
 indonesia_candidate_scenario.v1
 indonesia_network_map.v1
 geojson.v1
+indonesia_decision_report.v1
 ```
 
-如果 Supervisor 选择了独立服务基线 Tool，还会出现
-`indonesia_service_baseline.v1`。它是条件性证据，不是为了满足固定流程而强制执行。
-最终报告还必须嵌入 Visualization Agent 交付的一个 `map.v3` 卡片；该卡片属于回复
-交付，不要用 Agent Activity 中 Resource Artifact 的数量推断它是否存在。
+这八项是本篇 Prompt 要求完整报告和地图后的证据集合，不是所有未来 Supervisor 任务的
+固定 Workflow。只问局部问题时，未需要的条件性 Artifact 不应为了凑数量而生成。最终
+响应还必须包含 Network Tool 交付的一个 `report.v1` 卡片，以及 Visualization Agent
+交付的一个 `map.v3` 卡片；两者属于回复交付，不要用 Agent Activity 中 Resource
+Artifact 的数量推断它们是否存在。
+
+验收报告时，读取权威 `indonesia_decision_report.v1` Artifact，校验其 schema/version、
+非空 payload 与重算 digest、七个精确来源 Resource 身份、类型化 checks、Dataset
+Release 身份和 producer provenance，再确认 `report.v1` 的类型化 `inlineArtifacts`
+投影指向同一 Artifact。不要校验报告措辞或模型消息正文：模型只传递有界 handoff 和
+Tool 生成的 embed，不拥有报告内容。
 
 地图 GeoJSON 是有界证据，只包含：
 
@@ -289,8 +319,8 @@ geojson.v1
 
 - 当前 2 天需求覆盖率为 71.80%，低于 74% 目标；
 - Jambi 将其提升到 75.33%，目标成立；
-- Jambi 让运输成本每年下降约 2.84 billion IDR；
-- 加上固定费用和开仓摊销后，年度决策成本增加约 13.59 billion IDR；
+- Jambi 让运输成本每年下降 IDR 2,835,533,800；
+- 加上固定费用和开仓摊销后，年度决策成本增加 IDR 13,589,466,200；
 - 因此它是“达到本目标的最低年度决策成本候选”，不等于“节省总成本”；
 - 是否投资还需要服务改善的商业价值、实施可行性和真实路线复核。
 

@@ -8,6 +8,8 @@ import ApprovalCard from "./messages/ApprovalCard";
 import CommandExecutionCard from "./messages/CommandExecutionCard";
 import SystemNotice from "./messages/SystemNotice";
 import ExecutionGroup from "./messages/ExecutionGroup";
+import ReplyCard from "./messages/ReplyCard";
+import type { InlineVisualizationArtifact } from "../../utils/replyCards";
 
 type DiffLine = {
   type: "add" | "del" | "ctx";
@@ -30,6 +32,8 @@ export type MessageEntry = LogEntry & {
   meta?: string;
   streaming?: boolean;
   approvalDetail?: string;
+  suppressInlineArtifacts?: boolean;
+  hiddenInlineArtifactRefs?: string[];
 };
 
 type Props = {
@@ -43,6 +47,33 @@ type Props = {
 
 function isAssistantProcessEntry(entry: MessageEntry) {
   return entry.level === "assistant" && entry.messagePhase === "commentary";
+}
+
+function typedArtifactDeliveries(entry: MessageEntry) {
+  return entry.level === "assistant" && Array.isArray(entry.inlineArtifacts)
+    ? entry.inlineArtifacts
+    : [];
+}
+
+function ArtifactDeliveries({
+  artifacts,
+  entryId,
+}: {
+  artifacts: InlineVisualizationArtifact[];
+  entryId: string;
+}) {
+  return (
+    <div className="web-msg-assistant has-inline-visualization">
+      <div className="web-msg-assistant-body">
+        {artifacts.map((artifact, index) => (
+          <ReplyCard
+            key={`${entryId}-${artifact.ref}-${index}`}
+            card={artifact.card}
+          />
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function parsedApprovalTool(entry: MessageEntry) {
@@ -248,6 +279,8 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
                 onOpenFile={onOpenFile}
                 variant={isAssistantProcessEntry(entry) ? "commentary" : "reply"}
                 inlineArtifacts={entry.inlineArtifacts}
+                showInlineArtifacts={!entry.suppressInlineArtifacts}
+                hiddenInlineArtifactRefs={entry.hiddenInlineArtifactRefs}
               />
             );
           case "system":
@@ -277,6 +310,7 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
     let end = index + 1;
     while (end < items.length && items[end].level !== "user") end += 1;
     const turnItems = items.slice(index + 1, end);
+    const surfacedArtifactRefs = new Set<string>();
     const hasLiveItem = turnItems.some(isLiveEntry);
     const pendingApproval = turnItems.find((item) => {
       if (item.kind !== "approval") return false;
@@ -338,12 +372,40 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
     };
 
     for (const item of turnItems) {
+      const typedArtifacts = typedArtifactDeliveries(item);
+      const hiddenInlineArtifactRefs: string[] = [];
+      const newlySurfacedArtifacts = typedArtifacts.filter((artifact) => {
+        if (surfacedArtifactRefs.has(artifact.ref)) {
+          hiddenInlineArtifactRefs.push(artifact.ref);
+          return false;
+        }
+        surfacedArtifactRefs.add(artifact.ref);
+        return true;
+      });
       if (isAssistantReply(item)) {
         flushExecutionSegment(false);
-        rendered.push(renderEntry(item));
+        rendered.push(renderEntry(hiddenInlineArtifactRefs.length
+          ? { ...item, hiddenInlineArtifactRefs }
+          : item));
         continue;
       }
-      executionSegment.push(item);
+      if (typedArtifacts.length === 0) {
+        executionSegment.push(item);
+        continue;
+      }
+      executionSegment.push({
+        ...item,
+        suppressInlineArtifacts: true,
+      });
+      if (newlySurfacedArtifacts.length === 0) continue;
+      flushExecutionSegment(false);
+      rendered.push(
+        <ArtifactDeliveries
+          key={`artifact-deliveries-${item.id}`}
+          artifacts={newlySurfacedArtifacts}
+          entryId={item.id}
+        />,
+      );
     }
 
     if (executionSegment.length > 0) {

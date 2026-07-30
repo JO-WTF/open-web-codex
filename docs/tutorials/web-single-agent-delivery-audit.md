@@ -47,8 +47,8 @@ tutorial-delivery-auditor@1.0.0        Agent Release
 
 1. 选择左侧准备使用的 Workspace。
 2. 打开右侧 **Files**。
-3. 点击文件面板顶部的数据库图标 **Add data**。
-4. 点击 **Choose release files**，同时选择：
+3. 点击头部或空状态中的 **Add data**。
+4. 在 **Publish a data release** 中点击 **Choose release files**，同时选择：
    `dataset-manifest.json` 和 `deliveries.csv`。
 5. Manifest 会自动填入 Dataset ID `delivery-commitment-audit`、版本 `1.0.0` 和文件角色。
 6. **Name** 填 `Delivery commitment audit`。
@@ -220,8 +220,8 @@ Create draft → Validate → Publish
 
 ## 6. 启动 Agent
 
-回到主页面。在目标 Workspace 行点击机器人图标 **Start governed agent**，选择
-**Tutorial Delivery Auditor · 1.0.0**。
+回到主页面。在目标 Workspace 行点击 **New task**。在 **Start a task** 中选择
+**Agent** 和 **Tutorial Delivery Auditor · 1.0.0**。
 
 发送：
 

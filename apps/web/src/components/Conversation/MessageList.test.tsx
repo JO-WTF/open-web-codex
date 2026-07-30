@@ -224,6 +224,82 @@ describe("MessageList", () => {
     expect(timeline?.textContent).not.toContain("The project is ready.");
   });
 
+  it("surfaces typed Artifact deliveries from commentary without promoting commentary prose", async () => {
+    const view = render(
+      <MessageList
+        items={[
+          { id: "user-1", level: "user", text: "Compare the two networks." },
+          {
+            id: "tool-1",
+            level: "info",
+            kind: "tool",
+            text: "create_map_card",
+            toolType: "MCP",
+            toolTitle: "map_utils / create_map_card",
+            toolStatus: "completed",
+          },
+          {
+            id: "commentary-delivery",
+            level: "assistant",
+            text: [
+              "I collected the governed evidence.",
+              '::codex-inline-vis{artifact="map-from-commentary"}',
+            ].join("\n\n"),
+            messagePhase: "commentary",
+            inlineArtifacts: [{
+              ref: "map-from-commentary",
+              rendererKind: "map.v3",
+              card: {
+                type: "card",
+                kind: "map.v3",
+                id: "map-from-commentary",
+                title: "Current vs candidate network",
+                intent: "visualization",
+                status: "ready",
+                viewport: { mode: "fit" },
+                sources: [{
+                  id: "network",
+                  data: {
+                    type: "inline",
+                    format: "geojson",
+                    geojson: {
+                      type: "FeatureCollection",
+                      features: [],
+                    },
+                  },
+                }],
+                layers: [{
+                  id: "warehouses",
+                  source: "network",
+                  type: "circle",
+                  paint: {},
+                }],
+              },
+            }],
+          },
+          {
+            id: "final-1",
+            level: "assistant",
+            text: "The governed report and map are ready.",
+            messagePhase: "final_answer",
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("Current vs candidate network")).toBeTruthy();
+    await screen.findByRole("button", { name: "配置 Mapbox Key" });
+    expect(screen.getByText("The governed report and map are ready.")).toBeTruthy();
+    expect(screen.queryByText("I collected the governed evidence.")).toBeNull();
+    expect(screen.queryByText("Visualization unavailable")).toBeNull();
+    expect(view.container.querySelectorAll(".web-map-card")).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "1 tool call, 1 message" }));
+    expect(screen.getByText("I collected the governed evidence.")).toBeTruthy();
+    expect(screen.queryByText("Visualization unavailable")).toBeNull();
+    expect(view.container.querySelectorAll(".web-map-card")).toHaveLength(1);
+  });
+
   it("uses message phase instead of message position to identify replies", () => {
     const view = render(
       <MessageList

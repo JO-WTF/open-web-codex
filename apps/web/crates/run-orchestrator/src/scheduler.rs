@@ -6,11 +6,203 @@ use crate::agent_run::ensure_run_agent_binding;
 use crate::supervisor_policy::ensure_run_policy_binding;
 use crate::{
     chrono_ttl, validate_idempotency_key, AgentRunLease, CancelRunRequest, EnqueueRunRequest,
-    RecoverRunRequest, RunLease, RunOrchestrator, RunOrchestratorError, RunRecord,
-    SupervisorPolicyLease,
+    RecoverRunRequest, ReplayRunRequest, RunExecutionSelection, RunLease, RunOrchestrator,
+    RunOrchestratorError, RunRecord, SupervisorPolicyLease,
 };
 
 impl RunOrchestrator {
+    /// Resolve the exact immutable execution identity inherited by a fork.
+    ///
+    /// The worker still revalidates and binds the source snapshot
+    /// transactionally at enqueue time. This read-only projection lets the
+    /// readiness endpoint evaluate the same Agent/Supervisor requirements
+    /// instead of incorrectly treating every fork as a Standard Run.
+    pub async fn resolve_fork_execution(
+        &self,
+        organization_id: uuid::Uuid,
+        actor_id: uuid::Uuid,
+        source_run_id: uuid::Uuid,
+        source_thread_id: &str,
+    ) -> Result<RunExecutionSelection, RunOrchestratorError> {
+        if source_thread_id.trim().is_empty() || source_thread_id.len() > 256 {
+            return Err(RunOrchestratorError::Invalid(
+                "fork source Thread id is invalid".to_string(),
+            ));
+        }
+        let row = sqlx::query(
+            "SELECT policy.policy_id, policy.version AS policy_version, \
+                    agent.definition_id AS agent_definition_id, \
+                    agent.version AS agent_version, agent.release_id AS agent_release_id \
+             FROM runs source \
+             JOIN workspaces workspace ON workspace.id = source.workspace_id \
+             JOIN workspace_grants workspace_grant ON workspace_grant.workspace_id = workspace.id \
+               AND workspace_grant.organization_id = workspace.organization_id \
+               AND workspace_grant.user_id = $2 \
+               AND workspace_grant.profile_id = workspace.profile_id \
+             LEFT JOIN supervisor_policy_bindings policy_binding \
+               ON policy_binding.run_id = source.id \
+             LEFT JOIN supervisor_policy_snapshots policy \
+               ON policy.id = policy_binding.snapshot_id \
+             LEFT JOIN agent_run_bindings agent_binding ON agent_binding.run_id = source.id \
+             LEFT JOIN agent_run_snapshots agent ON agent.id = agent_binding.snapshot_id \
+             WHERE source.id = $1 AND source.organization_id = $3 \
+               AND source.requested_by = $2 AND source.codex_thread_id = $4 \
+               AND workspace.state IN ('ready', 'retained')",
+        )
+        .bind(source_run_id)
+        .bind(actor_id)
+        .bind(organization_id)
+        .bind(source_thread_id)
+        .fetch_optional(&self.db)
+        .await?
+        .ok_or(RunOrchestratorError::NotFound)?;
+        let policy_id = row.get::<Option<String>, _>("policy_id");
+        let agent_definition_id = row.get::<Option<String>, _>("agent_definition_id");
+        match (policy_id, agent_definition_id) {
+            (Some(_), Some(_)) => Err(RunOrchestratorError::Conflict(
+                "source Run has conflicting execution policy bindings".to_string(),
+            )),
+            (Some(policy_id), None) => Ok(RunExecutionSelection::Supervisor {
+                policy_id,
+                version: row
+                    .get::<Option<String>, _>("policy_version")
+                    .ok_or_else(|| {
+                        RunOrchestratorError::Conflict(
+                            "source Run has an incomplete Supervisor binding".to_string(),
+                        )
+                    })?,
+            }),
+            (None, Some(definition_id)) => Ok(RunExecutionSelection::Agent {
+                definition_id,
+                version: row
+                    .get::<Option<String>, _>("agent_version")
+                    .ok_or_else(|| {
+                        RunOrchestratorError::Conflict(
+                            "source Run has an incomplete Agent binding".to_string(),
+                        )
+                    })?,
+                release_id: row.get("agent_release_id"),
+            }),
+            (None, None) => Ok(RunExecutionSelection::Standard),
+        }
+    }
+
+    /// Return an already accepted Run for the same idempotent request.
+    ///
+    /// This lookup deliberately runs before volatile readiness evaluation in
+    /// the HTTP owner. Once a Run has been accepted, a lost response must be
+    /// replayable even if Provider, Runtime, or Workspace dependency health
+    /// changes afterward.
+    pub async fn replay_run(
+        &self,
+        request: ReplayRunRequest,
+    ) -> Result<Option<RunRecord>, RunOrchestratorError> {
+        validate_idempotency_key(&request.idempotency_key)?;
+        match (
+            request.fork_thread_id.as_deref(),
+            request.fork_source_run_id,
+            &request.execution,
+        ) {
+            (Some(thread_id), Some(_), RunExecutionSelection::Inherited)
+                if !thread_id.trim().is_empty() && thread_id.len() <= 256 => {}
+            (None, None, RunExecutionSelection::Inherited) => {
+                return Err(RunOrchestratorError::Invalid(
+                    "inherited execution requires an exact fork source".to_string(),
+                ));
+            }
+            (None, None, _) => {}
+            (Some(_), Some(_), _) => {
+                return Err(RunOrchestratorError::Invalid(
+                    "forked Runs inherit their source execution policy".to_string(),
+                ));
+            }
+            _ => {
+                return Err(RunOrchestratorError::Invalid(
+                    "fork source Thread and Run must be provided together".to_string(),
+                ));
+            }
+        }
+
+        let row = sqlx::query(
+            "SELECT run.id, run.task_id, run.status, run.codex_thread_id, \
+                    run.active_turn_id, run.workspace_id, run.attempt, run.created_at, \
+                    run.updated_at, run.fork_thread_id, run.fork_source_run_id, \
+                    policy.policy_id, policy.version AS policy_version, \
+                    agent.definition_id AS agent_definition_id, \
+                    agent.version AS agent_version, agent.release_id AS agent_release_id \
+             FROM runs run \
+             LEFT JOIN supervisor_policy_bindings policy_binding \
+               ON policy_binding.run_id = run.id \
+             LEFT JOIN supervisor_policy_snapshots policy \
+               ON policy.id = policy_binding.snapshot_id \
+             LEFT JOIN agent_run_bindings agent_binding ON agent_binding.run_id = run.id \
+             LEFT JOIN agent_run_snapshots agent ON agent.id = agent_binding.snapshot_id \
+             WHERE run.organization_id = $1 AND run.requested_by = $2 \
+               AND run.idempotency_key = $3",
+        )
+        .bind(request.organization_id)
+        .bind(request.actor_id)
+        .bind(&request.idempotency_key)
+        .fetch_optional(&self.db)
+        .await?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        if row.get::<Uuid, _>("task_id") != request.task_id
+            || row.get::<Option<Uuid>, _>("workspace_id") != Some(request.workspace_id)
+            || row.get::<Option<String>, _>("fork_thread_id") != request.fork_thread_id
+            || row.get::<Option<Uuid>, _>("fork_source_run_id") != request.fork_source_run_id
+        {
+            return Err(RunOrchestratorError::Conflict(
+                "idempotency key was already used for another Run request".to_string(),
+            ));
+        }
+
+        let policy_id = row.get::<Option<String>, _>("policy_id");
+        let agent_definition_id = row.get::<Option<String>, _>("agent_definition_id");
+        if policy_id.is_some() && agent_definition_id.is_some() {
+            return Err(RunOrchestratorError::Conflict(
+                "accepted Run has conflicting execution policy bindings".to_string(),
+            ));
+        }
+        if request.execution != RunExecutionSelection::Inherited {
+            let accepted = if let Some(policy_id) = policy_id {
+                RunExecutionSelection::Supervisor {
+                    policy_id,
+                    version: row
+                        .get::<Option<String>, _>("policy_version")
+                        .ok_or_else(|| {
+                            RunOrchestratorError::Conflict(
+                                "accepted Run has an incomplete Supervisor binding".to_string(),
+                            )
+                        })?,
+                }
+            } else if let Some(definition_id) = agent_definition_id {
+                RunExecutionSelection::Agent {
+                    definition_id,
+                    version: row
+                        .get::<Option<String>, _>("agent_version")
+                        .ok_or_else(|| {
+                            RunOrchestratorError::Conflict(
+                                "accepted Run has an incomplete Agent binding".to_string(),
+                            )
+                        })?,
+                    release_id: row.get("agent_release_id"),
+                }
+            } else {
+                RunExecutionSelection::Standard
+            };
+            if accepted != request.execution {
+                return Err(RunOrchestratorError::Conflict(
+                    "idempotency key was already used with a different execution selection"
+                        .to_string(),
+                ));
+            }
+        }
+        Ok(Some(run_record(&row)))
+    }
+
     pub async fn enqueue_run(
         &self,
         request: EnqueueRunRequest,

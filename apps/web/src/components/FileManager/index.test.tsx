@@ -1,9 +1,34 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import FileManager from "./index";
 
-afterEach(cleanup);
+const {
+  listWorkspaceDatasetReleases,
+  publishWorkspaceDatasetRelease,
+} = vi.hoisted(() => ({
+  listWorkspaceDatasetReleases: vi.fn(),
+  publishWorkspaceDatasetRelease: vi.fn(),
+}));
+
+vi.mock("../../../browser/session", () => ({
+  platformClient: {
+    listWorkspaceDatasetReleases,
+    publishWorkspaceDatasetRelease,
+  },
+}));
+
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
 
 describe("FileManager", () => {
   it("does not load supplementary file data while its tab is inactive", () => {
@@ -49,6 +74,110 @@ describe("FileManager", () => {
     expect(screen.getByText("A")).toBeTruthy();
     fireEvent.click(screen.getByText("src"));
     expect(await screen.findByText("config.ts")).toBeTruthy();
+  });
+
+  it("opens the single Dataset Release publisher from the production Files panel", async () => {
+    listWorkspaceDatasetReleases.mockResolvedValue([]);
+    render(
+      <FileManager
+        workspaceId="workspace-1"
+        selectedPath={null}
+        onSelectedPathChange={vi.fn()}
+        onClose={vi.fn()}
+        panelWidth={360}
+        onPanelWidthChange={vi.fn()}
+        listFiles={vi.fn().mockResolvedValue([])}
+        readFile={vi.fn().mockResolvedValue({ content: "", truncated: false })}
+        loadGitStatus={vi.fn().mockResolvedValue({ files: [] })}
+        embedded
+      />,
+    );
+
+    expect(await screen.findByText("No Workspace files yet")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("workspace-files-empty-add-data"));
+
+    expect(
+      await screen.findByRole("heading", { name: "Publish a data release" }),
+    ).toBeTruthy();
+    expect(listWorkspaceDatasetReleases).toHaveBeenCalledWith("workspace-1");
+    fireEvent.click(screen.getByRole("button", { name: "Close data release dialog" }));
+    expect(
+      screen.queryByRole("heading", { name: "Publish a data release" }),
+    ).toBeNull();
+  });
+
+  it("refreshes Workspace files after a Dataset Release is published", async () => {
+    listWorkspaceDatasetReleases.mockResolvedValue([]);
+    publishWorkspaceDatasetRelease.mockResolvedValue({
+      id: "release-1",
+      workspace_id: "workspace-1",
+      dataset_id: "network-inputs",
+      version: "1.0.0",
+      display_name: "Network inputs",
+      description: "Inputs for network planning.",
+      state: "published",
+      content_sha256: "a".repeat(64),
+      failure_code: null,
+      files: [],
+      published_at: "2026-07-30T00:00:00Z",
+      created_at: "2026-07-30T00:00:00Z",
+      updated_at: "2026-07-30T00:00:00Z",
+    });
+    const listFiles = vi.fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValue(["datasets/network-inputs/1.0.0/data.csv"]);
+    const { container } = render(
+      <FileManager
+        workspaceId="workspace-1"
+        selectedPath={null}
+        onSelectedPathChange={vi.fn()}
+        onClose={vi.fn()}
+        panelWidth={360}
+        onPanelWidthChange={vi.fn()}
+        listFiles={listFiles}
+        readFile={vi.fn().mockResolvedValue({ content: "", truncated: false })}
+        loadGitStatus={vi.fn().mockResolvedValue({ files: [] })}
+        embedded
+      />,
+    );
+
+    await screen.findByText("No Workspace files yet");
+    fireEvent.click(screen.getByTestId("workspace-files-empty-add-data"));
+    fireEvent.change(screen.getByLabelText("Dataset ID"), {
+      target: { value: "network-inputs" },
+    });
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Network inputs" },
+    });
+    fireEvent.change(screen.getByLabelText("What this data is for"), {
+      target: { value: "Inputs for network planning." },
+    });
+    const fileInput = document.body.querySelector<HTMLInputElement>(
+      '.dataset-release-file-input[type="file"]',
+    );
+    expect(fileInput).not.toBeNull();
+    fireEvent.change(fileInput!, {
+      target: {
+        files: [new File(["data"], "data.csv", { type: "text/csv" })],
+      },
+    });
+
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", {
+          name: "Publish release",
+        }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Publish release" }));
+
+    await waitFor(() => expect(listFiles).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    fireEvent.click(await screen.findByText("datasets"));
+    fireEvent.click(await screen.findByText("network-inputs"));
+    fireEvent.click(await screen.findByText("1.0.0"));
+    expect(await screen.findByText("data.csv")).toBeTruthy();
+    expect(container.querySelector(".web-file-manager")).toBeTruthy();
   });
 
   it("loads a file selected by an external message link", async () => {
@@ -230,7 +359,7 @@ describe("FileManager", () => {
       </div>,
     );
 
-    await screen.findByText("No matching files");
+    await screen.findByText("No Workspace files yet");
     const separator = screen.getByRole("separator", { name: "Resize file manager" });
 
     fireEvent.pointerDown(separator, { pointerId: 1, clientX: 500 });

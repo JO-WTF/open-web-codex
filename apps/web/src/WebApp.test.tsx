@@ -10,7 +10,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import WebApp from "./WebApp";
+import WebApp, { prepareTutorialPromptDraft } from "./WebApp";
 import type { AppServerEvent } from "./types";
 
 let appServerEventHandler: ((event: AppServerEvent) => void) | null = null;
@@ -31,6 +31,7 @@ const client = {
   listSupervisorPolicies: vi.fn(),
   getAccountRateLimits: vi.fn(),
   getSupervisorOverview: vi.fn(),
+  evaluateRunReadiness: vi.fn(),
   startThread: vi.fn(),
   resumeThread: vi.fn(),
   listThreadTurns: vi.fn(),
@@ -80,20 +81,59 @@ describe("WebApp workspace-first messaging", () => {
     client.listAgentDefinitions.mockResolvedValue([]);
     client.listSupervisorPolicies.mockResolvedValue([{
       policy_id: "enterprise-supervisor-copilot",
-      version: "3.10.0",
+      version: "3.14.0",
       display_name: "Enterprise Supervisor Copilot",
       description: "Coordinates governed data analysis and warehouse-network planning agents.",
       source: "repository",
     }]);
     client.getAccountRateLimits.mockResolvedValue({});
     client.getSupervisorOverview.mockResolvedValue(null);
-    client.startThread.mockResolvedValue({ thread: { id: "thread-new" } });
+    client.evaluateRunReadiness.mockResolvedValue({
+      status: "ready",
+      evaluation_fingerprint: "readiness-test",
+      checks: [],
+    });
+    client.startThread.mockImplementation(async (
+      _workspaceId: string,
+      options: { onRunAccepted?: (value: { taskId: string; runId: string }) => void },
+    ) => {
+      options.onRunAccepted?.({ taskId: "task-new", runId: "run-new" });
+      return { thread: { id: "thread-new" } };
+    });
     client.resumeThread.mockResolvedValue({ thread: { id: "thread-new", turns: [] } });
     client.listThreadTurns.mockResolvedValue([]);
     client.readThread.mockResolvedValue({ thread: { id: "thread-new", turns: [] } });
     client.sendUserMessage.mockResolvedValue({ turn: { id: "turn-1" } });
     client.interruptTurn.mockResolvedValue({ status: "interrupted" });
     client.respondToServerRequest.mockResolvedValue({});
+  });
+
+  it("does not overwrite an existing composer draft with a tutorial prompt", () => {
+    expect(
+      prepareTutorialPromptDraft(
+        "Keep my unfinished analysis",
+        "Run the prepared tutorial",
+      ),
+    ).toEqual({
+      draft: "Keep my unfinished analysis",
+      loaded: false,
+    });
+    expect(
+      prepareTutorialPromptDraft("   ", "Run the prepared tutorial"),
+    ).toEqual({
+      draft: "Run the prepared tutorial",
+      loaded: true,
+    });
+    expect(
+      prepareTutorialPromptDraft(
+        "Keep my unfinished analysis",
+        "Run the prepared tutorial",
+        true,
+      ),
+    ).toEqual({
+      draft: "Run the prepared tutorial",
+      loaded: true,
+    });
   });
 
   it("creates a thread before sending when only a workspace is selected", async () => {
@@ -106,10 +146,12 @@ describe("WebApp workspace-first messaging", () => {
 
     await waitFor(() => expect(client.startThread).toHaveBeenCalledWith(
       "workspace-1",
-      {
+      expect.objectContaining({
         agent: null,
         supervisorPolicy: null,
-      },
+        readinessFingerprint: "readiness-test",
+        onRunAccepted: expect.any(Function),
+      }),
     ));
     await waitFor(() => expect(client.sendUserMessage).toHaveBeenCalledWith(
       "workspace-1",
@@ -158,7 +200,7 @@ describe("WebApp workspace-first messaging", () => {
         task_id: "task-enterprise",
         thread_id: "thread-new",
         policy_id: "enterprise-supervisor-copilot",
-        version: "3.10.0",
+        version: "3.14.0",
         display_name: "Enterprise Supervisor Copilot",
         content_sha256: "a".repeat(64),
         state: "bound",
@@ -229,27 +271,32 @@ describe("WebApp workspace-first messaging", () => {
     render(<WebApp />);
 
     fireEvent.click(await screen.findByRole("button", {
-      name: "Choose supervisor policy in Demo",
+      name: "New task in Demo",
     }));
+    fireEvent.click(screen.getByRole("button", { name: "Supervisor" }));
     fireEvent.click(await screen.findByRole("button", {
       name: /Enterprise Supervisor Copilot/,
     }));
+    await screen.findByText("Ready to start");
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
 
     await waitFor(() => expect(client.startThread).toHaveBeenCalledWith(
       "workspace-1",
-      {
+      expect.objectContaining({
         agent: null,
         supervisorPolicy: {
           policy_id: "enterprise-supervisor-copilot",
-          version: "3.10.0",
+          version: "3.14.0",
         },
-      },
+        readinessFingerprint: "readiness-test",
+        onRunAccepted: expect.any(Function),
+      }),
     ));
     await waitFor(() => expect(client.getSupervisorOverview)
       .toHaveBeenCalledWith("thread-new"));
     fireEvent.click(await screen.findByRole("button", { name: "Agent activity" }));
     await waitFor(() => {
-      expect(screen.getByText("Policy enterprise-supervisor-copilot · 3.10.0"))
+      expect(screen.getByText("Policy enterprise-supervisor-copilot · 3.14.0"))
         .toBeTruthy();
       expect(screen.getByText("Root Supervisor")).toBeTruthy();
       expect(screen.getAllByText("Inspect enterprise planning data.")).toHaveLength(2);
@@ -537,58 +584,52 @@ describe("WebApp workspace-first messaging", () => {
     );
   });
 
-  it("opens a temporary Thread immediately and binds concurrent creations by temporary ID", async () => {
-    const pending: Array<{
-      resolve: (value: { thread: { id: string; name: string } }) => void;
-      promise: Promise<{ thread: { id: string; name: string } }>;
-    }> = [];
-    client.startThread.mockImplementation(() => {
-      let resolve!: (value: { thread: { id: string; name: string } }) => void;
-      const promise = new Promise<{ thread: { id: string; name: string } }>((done) => {
-        resolve = done;
+  it("shows a temporary Thread only after the platform accepts the Run", async () => {
+    let acceptRun!: () => void;
+    let resolveThread!: (
+      value: { thread: { id: string; name: string } },
+    ) => void;
+    client.startThread.mockImplementation((
+      _workspaceId: string,
+      options: {
+        onRunAccepted?: (value: { taskId: string; runId: string }) => void;
+      },
+    ) => {
+      acceptRun = () =>
+        options.onRunAccepted?.({ taskId: "task-1", runId: "run-1" });
+      return new Promise((resolve) => {
+        resolveThread = resolve;
       });
-      pending.push({ resolve, promise });
-      return promise;
     });
     render(<WebApp />);
 
-    const createButton = await screen.findByRole("button", { name: "New thread in Demo" });
-    await waitFor(() => expect((createButton as HTMLButtonElement).disabled).toBe(false));
-    fireEvent.click(createButton);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "New task in Demo" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Standard" }));
+    await screen.findByText("Ready to start");
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
 
+    await waitFor(() => expect(client.startThread).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText("正在创建 Thread…")).toBeNull();
+
+    act(() => acceptRun());
     expect(screen.getByText("正在创建 Thread…")).toBeTruthy();
     expect(
-      (screen.getByPlaceholderText("Ask Codex to do something...") as HTMLTextAreaElement).disabled,
+      (screen.getByPlaceholderText(
+        "Ask Codex to do something...",
+      ) as HTMLTextAreaElement).disabled,
     ).toBe(true);
 
-    fireEvent.click(createButton);
-    await waitFor(() => expect(client.startThread).toHaveBeenCalledTimes(2));
-
-    act(() => pending[1].resolve({
-      thread: { id: "thread-second", name: "Server second title" },
-    }));
+    act(() =>
+      resolveThread({
+        thread: { id: "thread-accepted", name: "Accepted task" },
+      }),
+    );
     await waitFor(() => expect(screen.queryByText("正在创建 Thread…")).toBeNull());
-    await waitFor(() => expect(screen.getAllByText("Server second title")).toHaveLength(2));
-    act(() => pending[0].resolve({
-      thread: { id: "thread-first", name: "Server first title" },
-    }));
-    await waitFor(() => {
-      expect(screen.getAllByText("Server second title")).toHaveLength(2);
-      expect(screen.getByText("Server first title")).toBeTruthy();
-    });
-
-    const composer = screen.getByPlaceholderText("Ask Codex to do something...");
-    await waitFor(() => expect((composer as HTMLTextAreaElement).disabled).toBe(false));
-    fireEvent.change(composer, { target: { value: "Bound to the visible Thread" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
-
-    await waitFor(() => expect(client.sendUserMessage).toHaveBeenCalledWith(
-      "workspace-1",
-      "thread-second",
-      "Bound to the visible Thread",
-      null,
-      null,
-    ));
+    await waitFor(() =>
+      expect(screen.getAllByText("Accepted task")).toHaveLength(2),
+    );
   });
 
   it("keeps the returned Thread name while the task list still has the placeholder", async () => {
@@ -603,14 +644,25 @@ describe("WebApp workspace-first messaging", () => {
           status: "idle",
         }],
       });
-    client.startThread.mockResolvedValue({
-      thread: { id: "thread-named", name: "Server generated title" },
+    client.startThread.mockImplementation(async (
+      _workspaceId: string,
+      options: {
+        onRunAccepted?: (value: { taskId: string; runId: string }) => void;
+      },
+    ) => {
+      options.onRunAccepted?.({ taskId: "task-named", runId: "run-named" });
+      return {
+        thread: { id: "thread-named", name: "Server generated title" },
+      };
     });
     render(<WebApp />);
 
-    const createButton = await screen.findByRole("button", { name: "New thread in Demo" });
-    await waitFor(() => expect((createButton as HTMLButtonElement).disabled).toBe(false));
-    fireEvent.click(createButton);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "New task in Demo" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Standard" }));
+    await screen.findByText("Ready to start");
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
 
     await waitFor(() => expect(screen.getAllByText("Server generated title")).toHaveLength(2));
     expect(screen.queryByText("正在创建 Thread…")).toBeNull();
@@ -639,24 +691,34 @@ describe("WebApp workspace-first messaging", () => {
     });
   });
 
-  it("shows a retryable creation error and keeps the composer disabled", async () => {
+  it("keeps the launcher draft retryable when formal start fails", async () => {
     client.startThread
       .mockRejectedValueOnce(new Error("Thread startup failed"))
-      .mockResolvedValueOnce({ thread: { id: "thread-retried" } });
+      .mockImplementationOnce(async (
+        _workspaceId: string,
+        options: {
+          onRunAccepted?: (value: { taskId: string; runId: string }) => void;
+        },
+      ) => {
+        options.onRunAccepted?.({ taskId: "task-retried", runId: "run-retried" });
+        return { thread: { id: "thread-retried" } };
+      });
     render(<WebApp />);
 
-    const createButton = await screen.findByRole("button", { name: "New thread in Demo" });
-    await waitFor(() => expect((createButton as HTMLButtonElement).disabled).toBe(false));
-    fireEvent.click(createButton);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "New task in Demo" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Standard" }));
+    await screen.findByText("Ready to start");
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
 
-    await screen.findByText("创建 Thread 失败");
-    expect(screen.getByText("Thread startup failed")).toBeTruthy();
-    expect(
-      (screen.getByPlaceholderText("Ask Codex to do something...") as HTMLTextAreaElement).disabled,
-    ).toBe(true);
+    await screen.findByText("Thread startup failed");
+    expect(screen.queryByText("正在创建 Thread…")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "重试" }));
-    expect(screen.getByText("正在创建 Thread…")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await screen.findByText("Ready to start");
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    await waitFor(() => expect(client.startThread).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByText("正在创建 Thread…")).toBeNull());
     expect(
       (screen.getByPlaceholderText("Ask Codex to do something...") as HTMLTextAreaElement).disabled,

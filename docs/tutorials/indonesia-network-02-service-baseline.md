@@ -51,7 +51,7 @@ Root Supervisor 根据当前证据决定怎样协调它们。
 | Version | `1.0.0` |
 | Display name | `Tutorial Indonesia Service Analyst` |
 | Description | `Evaluates current last-mile service without cost or location optimization.` |
-| Reviewed capability template | `Enterprise Network Planning Agent · 3.1.0` |
+| Reviewed capability template | `Enterprise Network Planning Agent · 3.6.0` |
 
 **Responsibilities**：
 
@@ -164,8 +164,8 @@ Artifact。只有同一 Task 的后续问题已经持有有效证据时，才可
 
 ## 3. 启动 Supervisor
 
-回到主页面，在 Workspace 行点击星光图标 **Start governed supervisor**，选择
-**Tutorial Indonesia Network Supervisor · 1.0.0**。
+回到主页面，在 Workspace 行点击 **New task**。在 **Start a task** 中选择
+**Supervisor**，再选择 **Tutorial Indonesia Network Supervisor · 1.0.0**。
 
 发送：
 

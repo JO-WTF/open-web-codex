@@ -11,8 +11,9 @@ use open_web_codex_git_runtime::{GitRuntime, GitRuntimeConfig};
 use open_web_codex_platform_store::migrate;
 use open_web_codex_run_orchestrator::{
     AgentRunSnapshotInput, AgentRunSource, CancelRunRequest, CreateWorkspaceRequest,
-    EnqueueRunRequest, RecoverRunRequest, RemoveWorkspaceRequest, RunLease, RunOrchestrator,
-    RunOrchestratorError, RunStartPreflight, RunStartPreflightError, SupervisorPolicySnapshotInput,
+    EnqueueRunRequest, RecoverRunRequest, RemoveWorkspaceRequest, ReplayRunRequest,
+    RunExecutionSelection, RunLease, RunOrchestrator, RunOrchestratorError, RunStartPreflight,
+    RunStartPreflightError, SupervisorPolicySnapshotInput,
 };
 use sqlx::postgres::PgPoolOptions;
 use sqlx::Row;
@@ -209,6 +210,38 @@ async fn independent_workspace_is_reused_across_run_lifecycles() {
         agent: None,
     };
     let enqueued = first.enqueue_run(request.clone()).await.unwrap();
+    let replayed_before_readiness = first
+        .replay_run(ReplayRunRequest {
+            organization_id,
+            actor_id: user_id,
+            task_id,
+            idempotency_key: request.idempotency_key.clone(),
+            workspace_id: workspace.id,
+            fork_thread_id: None,
+            fork_source_run_id: None,
+            execution: RunExecutionSelection::Supervisor {
+                policy_id: "enterprise-supervisor-copilot".to_string(),
+                version: "1.0.0".to_string(),
+            },
+        })
+        .await
+        .unwrap()
+        .expect("accepted idempotent Run");
+    assert_eq!(enqueued, replayed_before_readiness);
+    let replay_mismatch = first
+        .replay_run(ReplayRunRequest {
+            organization_id,
+            actor_id: user_id,
+            task_id,
+            idempotency_key: request.idempotency_key.clone(),
+            workspace_id: workspace.id,
+            fork_thread_id: None,
+            fork_source_run_id: None,
+            execution: RunExecutionSelection::Standard,
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(replay_mismatch, RunOrchestratorError::Conflict(_)));
     let replayed = first.enqueue_run(request).await.unwrap();
     assert_eq!(enqueued, replayed);
     let conflict = first
@@ -246,6 +279,26 @@ async fn independent_workspace_is_reused_across_run_lifecycles() {
     assert_eq!(policy.content_sha256, "a".repeat(64));
     owner.execute_lease(&lease).await.unwrap();
     assert_eq!(preflight.calls.load(Ordering::SeqCst), 1);
+    let running_supervisor = owner.get_run(organization_id, enqueued.id).await.unwrap();
+    let inherited = first
+        .resolve_fork_execution(
+            organization_id,
+            user_id,
+            enqueued.id,
+            running_supervisor
+                .codex_thread_id
+                .as_deref()
+                .expect("bound source Thread"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        inherited,
+        RunExecutionSelection::Supervisor {
+            policy_id: "enterprise-supervisor-copilot".to_string(),
+            version: "1.0.0".to_string(),
+        }
+    );
 
     let row = sqlx::query(
         "SELECT r.status, r.codex_thread_id, r.workspace_id, w.root_path, w.state \

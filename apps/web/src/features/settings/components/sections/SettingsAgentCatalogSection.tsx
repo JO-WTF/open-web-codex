@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type {
   AgentCapabilityTemplateSelection,
+  AgentDefinitionDetail,
   AgentDefinitionDraftRequest,
   AgentDefinitionSummary,
   CapabilityPackageSummary,
@@ -21,6 +22,10 @@ import {
 type SettingsAgentCatalogSectionComponentProps =
   SettingsAgentCatalogSectionProps & {
     studioMode?: boolean;
+    onOpenDatasetPublisher?: (
+      workspaceId: string | null,
+      trigger: HTMLElement,
+    ) => void;
   };
 
 function agentIdentity(agent: Pick<AgentDefinitionSummary, "definition_id" | "version">) {
@@ -126,6 +131,11 @@ function emptyDraft(template?: CapabilityTemplateOption): AgentDefinitionDraftRe
   };
 }
 
+function nextPatchVersion(version: string) {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(version);
+  return match ? `${match[1]}.${match[2]}.${Number(match[3]) + 1}` : "";
+}
+
 export function SettingsAgentCatalogSection({
   definitions,
   publishedAgents,
@@ -147,6 +157,7 @@ export function SettingsAgentCatalogSection({
   onLoadPublished,
   onLoadDatasetReleases,
   studioMode = false,
+  onOpenDatasetPublisher,
 }: SettingsAgentCatalogSectionComponentProps) {
   const capabilityTemplateOptions = useMemo(() => {
     const repositoryOptions = templates.map(repositoryTemplateOption);
@@ -158,9 +169,7 @@ export function SettingsAgentCatalogSection({
   const [editingDefinitionId, setEditingDefinitionId] = useState<string | null>(null);
   const [viewingAgentKey, setViewingAgentKey] = useState<string | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
-  const [draft, setDraft] = useState<AgentDefinitionDraftRequest>(() =>
-    emptyDraft(capabilityTemplateOptions[0])
-  );
+  const [draft, setDraft] = useState<AgentDefinitionDraftRequest>(() => emptyDraft());
   const [responsibilitiesText, setResponsibilitiesText] = useState("");
   const [showEditorValidation, setShowEditorValidation] = useState(false);
   const selectedTemplate = useMemo(
@@ -260,7 +269,7 @@ export function SettingsAgentCatalogSection({
 
   const resetEditor = () => {
     setEditingDefinitionId(null);
-    setDraft(emptyDraft(capabilityTemplateOptions[0]));
+    setDraft(emptyDraft());
     setResponsibilitiesText("");
     setShowEditorValidation(false);
     setEditorOpen(false);
@@ -269,14 +278,14 @@ export function SettingsAgentCatalogSection({
   const createDefinition = () => {
     setViewingAgentKey(null);
     setEditingDefinitionId(null);
-    setDraft(emptyDraft(capabilityTemplateOptions[0]));
+    setDraft(emptyDraft());
     setResponsibilitiesText("");
     setShowEditorValidation(false);
     setEditorOpen(true);
   };
 
   const editDefinition = (
-    definitionId: string,
+    definitionId: string | null,
     nextDraft: AgentDefinitionDraftRequest,
   ) => {
     setEditingDefinitionId(definitionId);
@@ -287,11 +296,75 @@ export function SettingsAgentCatalogSection({
     setEditorOpen(true);
   };
 
+  const draftFromPublished = (
+    detail: AgentDefinitionDetail,
+    definitionId: string | null,
+  ): AgentDefinitionDraftRequest | null => {
+    const capabilityTemplate = detail.source === "repository"
+      ? {
+          source: "repository_agent" as const,
+          definition_id: detail.definition_id,
+          version: detail.version,
+          release_id: null,
+        }
+      : detail.capability_template;
+    if (!capabilityTemplate) return null;
+    return {
+      definition_id: definitionId ? detail.definition_id : "",
+      version: definitionId ? nextPatchVersion(detail.version) : "1.0.0",
+      display_name: definitionId ? detail.display_name : `${detail.display_name} custom`,
+      description: detail.description,
+      responsibilities: detail.responsibilities,
+      developer_instructions: detail.developer_instructions,
+      input_artifact_types: detail.input_artifact_types,
+      output_artifact_types: detail.output_artifact_types,
+      capability_template: capabilityTemplate,
+      dataset_release_ids: detail.dataset_releases.map((release) => release.release_id),
+    };
+  };
+
+  const openPublishedAsDraft = (
+    detail: AgentDefinitionDetail,
+    definitionId: string | null,
+  ) => {
+    const nextDraft = draftFromPublished(detail, definitionId);
+    if (nextDraft) editDefinition(definitionId, nextDraft);
+  };
+
+  const openNextDefinitionVersion = async (
+    definition: (typeof definitions)[number],
+  ) => {
+    const latestRelease = definition.releases.reduce(
+      (latest, release) =>
+        !latest || release.published_at > latest.published_at ? release : latest,
+      null as (typeof definition.releases)[number] | null,
+    );
+    if (!latestRelease) return;
+    const published = publishedAgents.find(
+      (agent) =>
+        agent.definition_id === definition.definition_id
+        && agent.version === latestRelease.version,
+    );
+    if (!published) return;
+    const key = agentIdentity(published);
+    const detail = detailByAgent[key] ?? await onLoadPublished(published);
+    if (detail) openPublishedAsDraft(detail, definition.id);
+  };
+
   const selectTemplate = (templateIdentity: string) => {
     const template = capabilityTemplateOptions.find(
       (candidate) => candidate.key === templateIdentity,
     );
-    if (!template) return;
+    if (!template) {
+      setDraft((current) => ({
+        ...current,
+        capability_template: emptyDraft().capability_template,
+        input_artifact_types: [],
+        output_artifact_types: [],
+        dataset_release_ids: [],
+      }));
+      return;
+    }
     setDraft((current) => ({
       ...current,
       capability_template: {
@@ -405,6 +478,11 @@ export function SettingsAgentCatalogSection({
         const key = agentIdentity(agent);
         const detail = detailByAgent[key];
         const expanded = viewingAgentKey === key;
+        const userDefinition = agent.source === "user_release"
+          ? definitions.find(
+              (candidate) => candidate.definition_id === agent.definition_id,
+            ) ?? null
+          : null;
         return (
           <article className="settings-supervisor-published" key={key}>
             <div className="settings-agent-card-header">
@@ -435,14 +513,6 @@ export function SettingsAgentCatalogSection({
                   <ul>
                     {detail.responsibilities.map((responsibility) => (
                       <li key={responsibility}>{responsibility}</li>
-                    ))}
-                  </ul>
-                </div>
-                <div>
-                  <strong>Required capabilities</strong>
-                  <ul>
-                    {detail.required_capabilities.map((capability) => (
-                      <li key={capability}>{capability}</li>
                     ))}
                   </ul>
                 </div>
@@ -483,13 +553,43 @@ export function SettingsAgentCatalogSection({
                     </ul>
                   ) : <div className="settings-help">No Dataset Release</div>}
                 </div>
-                <div>
-                  <strong>Agent instructions</strong>
-                  <pre>{detail.developer_instructions}</pre>
-                </div>
-                <div className="settings-help">
-                  Content: {detail.content_sha256.slice(0, 12)}…
-                  {" · "}Execution: {detail.execution_semantics_sha256.slice(0, 12)}…
+                <details className="settings-technical-contract">
+                  <summary>Technical contract</summary>
+                  <div>
+                    <strong>Required capabilities</strong>
+                    <ul>
+                      {detail.required_capabilities.map((capability) => (
+                        <li key={capability}>{capability}</li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div>
+                    <strong>Agent instructions</strong>
+                    <pre>{detail.developer_instructions}</pre>
+                  </div>
+                  <div className="settings-help">
+                    Content: {detail.content_sha256.slice(0, 12)}…
+                    {" · "}Execution: {detail.execution_semantics_sha256.slice(0, 12)}…
+                  </div>
+                </details>
+                <div className="settings-agents-actions">
+                  {detail.source === "repository" ? (
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => openPublishedAsDraft(detail, null)}
+                    >
+                      Create custom Agent
+                    </button>
+                  ) : userDefinition ? (
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => openPublishedAsDraft(detail, userDefinition.id)}
+                    >
+                      Create new version
+                    </button>
+                  ) : null}
                 </div>
               </div>
             )}
@@ -663,8 +763,25 @@ export function SettingsAgentCatalogSection({
               <div className="settings-help">Loading Dataset Releases…</div>
             )}
             {!isLoadingDatasets && availableDatasetReleases.length === 0 && (
-              <div className="settings-help">
-                No published Dataset Release is available for this capability template.
+              <div className="settings-studio-empty-action">
+                <span>
+                  No published Dataset Release is available for this capability template.
+                </span>
+                {studioMode && onOpenDatasetPublisher ? (
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={(event) =>
+                      onOpenDatasetPublisher(
+                        selectedTemplate.workspace_id,
+                        event.currentTarget,
+                      )
+                    }
+                    data-testid="agent-studio-add-data"
+                  >
+                    Add data
+                  </button>
+                ) : null}
               </div>
             )}
             {availableDatasetReleases.map((release) => (
@@ -810,15 +927,8 @@ export function SettingsAgentCatalogSection({
                   <button
                     type="button"
                     className="ghost"
-                    onClick={() =>
-                      editDefinition(definition.id, {
-                        ...emptyDraft(capabilityTemplateOptions[0]),
-                        definition_id: definition.definition_id,
-                        display_name: definition.display_name,
-                        description: definition.description,
-                      })
-                    }
-                    disabled={busy}
+                    onClick={() => void openNextDefinitionVersion(definition)}
+                    disabled={busy || definition.releases.length === 0}
                   >
                     New version
                   </button>

@@ -37,7 +37,7 @@ fn valid_draft() -> SupervisorDraftRequest {
             },
             SupervisorAgentSelection {
                 definition_id: "enterprise-network-planning-agent".to_string(),
-                version: "3.4.0".to_string(),
+                version: "3.6.0".to_string(),
                 release_id: None,
                 spawn_limit: 1,
             },
@@ -46,12 +46,12 @@ fn valid_draft() -> SupervisorDraftRequest {
             SupervisorArtifactContractInput {
                 artifact_type: "indonesia_dataset_inspection.v1".to_string(),
                 producer_agent: "enterprise-data-agent@3.1.0".to_string(),
-                consumer_agents: vec!["enterprise-network-planning-agent@3.4.0".to_string()],
+                consumer_agents: vec!["enterprise-network-planning-agent@3.6.0".to_string()],
                 required: true,
             },
             SupervisorArtifactContractInput {
                 artifact_type: "indonesia_current_network_analysis.v1".to_string(),
-                producer_agent: "enterprise-network-planning-agent@3.4.0".to_string(),
+                producer_agent: "enterprise-network-planning-agent@3.6.0".to_string(),
                 consumer_agents: vec!["supervisor".to_string()],
                 required: true,
             },

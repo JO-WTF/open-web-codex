@@ -56,11 +56,12 @@ indonesia_dataset_inspection.v1              durable Resource Artifact
 
 ## 2. 在 Workspace 发布数据
 
-在 Web 中：
+本篇属于高级 Builder 路径；快速体验会通过 Tutorial Blueprint 安装同一受审数据。
+手工发布时，在 Web 中：
 
 1. 选择目标 Workspace，打开右侧 **Files**。
-2. 点击 **Add data**。
-3. 点击 **Choose release files**。
+2. 点击头部或空状态中的 **Add data**。
+3. 在 **Publish a data release** 中点击 **Choose release files**。
 4. 从 `releases/1.0.0` 同时选择上表全部 10 个文件。
 5. 确认 Manifest 自动填入 Dataset ID
    `indonesia-warehouse-network-tutorial` 和版本 `1.0.0`。
@@ -132,8 +133,8 @@ Workspace、Release ID、版本和内容哈希；Runtime 只收到逻辑身份�
 
 ## 4. 直接启动 Data Agent
 
-回到主页面，在 Workspace 行点击机器人图标 **Start governed agent**，选择
-**Tutorial Indonesia Data Agent · 1.0.0**。
+回到主页面，在 Workspace 行点击 **New task**。在 **Start a task** 中选择
+**Agent**，再选择 **Tutorial Indonesia Data Agent · 1.0.0**。
 
 发送：
 

@@ -1413,6 +1413,19 @@
   background: var(--surface-card);
 }
 
+.settings-supervisor-platform-contract summary,
+.settings-technical-contract summary {
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.settings-supervisor-platform-contract[open] summary,
+.settings-technical-contract[open] summary {
+  margin-bottom: 8px;
+}
+
 .settings-supervisor-platform-contract p {
   margin: 0;
   color: var(--text-secondary);
@@ -1667,6 +1680,30 @@
   font-size: 11px;
   line-height: 1.5;
   white-space: pre-wrap;
+}
+
+.settings-technical-contract {
+  padding: 10px 12px;
+  border: 1px solid var(--border-muted);
+  border-radius: 9px;
+  background: var(--surface-card);
+}
+
+.settings-technical-contract > div + div {
+  margin-top: 12px;
+}
+
+.settings-studio-empty-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border-muted);
+  border-radius: 9px;
+  color: var(--text-subtle);
+  background: var(--surface-card);
+  font-size: 11px;
 }
 
 .settings-agent-artifact-grid {

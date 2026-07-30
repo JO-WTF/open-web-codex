@@ -302,6 +302,9 @@ Assistant 独立行编排语法中实现 `::codex-inline-vis{artifact="..."}` �
 - `open-web-artifact` / `inline-visualization.v1` envelope；
 - 安全、不可预测、Thread 作用域且无路径语义的 Artifact ref；
 - `embed.syntax = codex-inline-vis.artifact.v1` 与由 Tool 生成的完整 `embed.code`；
+- Agent `MAP_HANDOFF` 仅含输入 Resource provenance 与 Artifact ID，embed code
+  不重复转义进模型 JSON；
+- Agent Message 事件的类型化 `inlineArtifacts` 是浏览器实时与历史恢复的权威视图；
 - renderer registry；第一个 renderer 是 `map.v3`；
 - 官方语法边界：独立行、代码块不解析、不完整 delta 缓冲。
 
@@ -312,7 +315,8 @@ Artifact 类型、renderer capability 和授权记录决定处理方式。
 
 - 保留现有 viewport、source/layer、样式和 MCP Resource 验证。
 - 返回通用 Artifact envelope、`map.v3` renderer payload 和可复制 embed code。
-- `content` 明确要求模型把 embed code 原样放入目标 Assistant 回复位置。
+- `content` 明确要求模型把 `structuredContent.embed.code` 原样作为独立指令放入目标
+  Assistant 回复位置，不放进 `MAP_HANDOFF` JSON。
 - Tool 完成不再意味着“显示卡片”。
 - 不双写旧 `open-web-card` Tool 附件和新 envelope。
 - 更新 `map-utils` Skill：调用数据 Tool → 调用 `create_map_card` → 把返回短代码
@@ -325,7 +329,8 @@ Artifact 类型、renderer capability 和授权记录决定处理方式。
 - `(Run, artifact.ref)` 唯一，并记录 Thread 归属与 producer Turn/Item；Resource
   只允许更早完成的 producer。Assistant 可在同一 Run/Thread 的后续 Turn 引用
   已完成 Artifact，拒绝前向、自引用、跨 Run/Thread、重名和未完成引用。
-- 只向浏览器返回安全 Artifact ID 和 renderer DTO。
+- 只向浏览器返回 Agent Message 事件上的类型化 `inlineArtifacts` 安全 DTO；Tool
+  payload 或模型 JSON 中的转义字符串都不是渲染入口。
 - Artifact 失败不能吞掉 Tool completed 或让 Turn 停在 InProgress。
 
 #### 6.4 Web 消息内编排

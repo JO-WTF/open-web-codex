@@ -6,7 +6,7 @@ use super::{require_runtime_manifest, resolve_builtin, SupervisorPolicyError};
 fn published_policy() -> super::ResolvedSupervisorPolicy {
     resolve_builtin(&SupervisorPolicySelection {
         policy_id: "enterprise-supervisor-copilot".to_string(),
-        version: "3.10.0".to_string(),
+        version: "3.14.0".to_string(),
     })
     .unwrap()
 }
@@ -15,7 +15,7 @@ fn published_policy() -> super::ResolvedSupervisorPolicy {
 fn resolves_only_the_current_published_version_and_seals_its_content() {
     let published = open_web_codex_supervisor_catalog::supervisor::list_published().unwrap();
     assert_eq!(published.len(), 1);
-    assert_eq!(published[0].version, "3.10.0");
+    assert_eq!(published[0].version, "3.14.0");
 
     let selected = SupervisorPolicySelection {
         policy_id: published[0].policy_id.clone(),
@@ -25,7 +25,7 @@ fn resolves_only_the_current_published_version_and_seals_its_content() {
     assert_eq!(policy.snapshot.content_sha256.len(), 64);
     assert_eq!(policy.detail.responsibilities.len(), 5);
     assert_eq!(policy.detail.agents.len(), 3);
-    assert_eq!(policy.detail.artifact_contracts.len(), 9);
+    assert_eq!(policy.detail.artifact_contracts.len(), 10);
     assert!(policy
         .detail
         .platform_instructions
@@ -39,8 +39,8 @@ fn resolves_only_the_current_published_version_and_seals_its_content() {
         policy.role_spawn_limits,
         [
             ("agent_15451ec3da17fa338bc798a21838d25d".to_string(), 1),
-            ("agent_3477ddaffe69a217cbf2138d475cac97".to_string(), 1),
-            ("agent_dcbc01f2127fe589f5416c75f8f447e8".to_string(), 1)
+            ("agent_24babb7114d53f953a4800fe73740cb8".to_string(), 1),
+            ("agent_ade76f31004f8d9f502c6e0b2398a921".to_string(), 1)
         ]
         .into_iter()
         .collect()
@@ -53,8 +53,8 @@ fn resolves_only_the_current_published_version_and_seals_its_content() {
             .collect::<Vec<_>>(),
         vec![
             ("agent_15451ec3da17fa338bc798a21838d25d", "3.1.0"),
-            ("agent_3477ddaffe69a217cbf2138d475cac97", "3.4.0"),
-            ("agent_dcbc01f2127fe589f5416c75f8f447e8", "1.3.0")
+            ("agent_24babb7114d53f953a4800fe73740cb8", "3.6.0"),
+            ("agent_ade76f31004f8d9f502c6e0b2398a921", "1.4.0")
         ]
     );
     assert_eq!(

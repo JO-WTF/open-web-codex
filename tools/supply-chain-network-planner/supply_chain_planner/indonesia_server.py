@@ -43,6 +43,10 @@ from .indonesia_models import (
     IndonesiaMapToolResult,
     IndonesiaNetworkMap,
     IndonesiaOptimizationToolResult,
+    IndonesiaReportArtifact,
+    IndonesiaReportArtifactEmbed,
+    IndonesiaReportArtifactPayload,
+    IndonesiaReportArtifactRenderer,
     IndonesiaResourceToolResult,
     IndonesiaServiceBaseline,
     IndonesiaValidationResult,
@@ -216,10 +220,11 @@ TOOLS = [
         description=(
             "Resolve and cross-check the exact inspection, service, current-network, "
             "optimization, candidate, map and GeoJSON Resource identities, then "
-            "publish deterministic evidence-backed Markdown. The caller must copy the "
-            "returned report_markdown unchanged and must not add model-derived numbers "
-            "or operating effects. Browser visualization Artifacts are owned and "
-            "delivered separately by map_utils."
+            "publish deterministic evidence-backed Markdown as one content-addressed "
+            "Resource and return a typed report.v1 Artifact that references it. The "
+            "Markdown is available only through that Resource. The caller must copy only "
+            "structuredContent.embed.code as a standalone directive and must not add "
+            "model-derived numbers or operating effects."
         ),
         input_model=PrepareDecisionReportInput,
         output_model=IndonesiaDecisionReportToolResult,
@@ -585,13 +590,34 @@ async def call_tool(
             "Published deterministic Indonesia decision-report Markdown from seven "
             "cross-checked Resource identities."
         )
+        source = _data_ref(published)
+        artifact_ref = _report_artifact_ref(published)
+        embed_code = f'::codex-inline-vis{{artifact="{artifact_ref}"}}'
         structured = IndonesiaDecisionReportToolResult(
-            summary=summary,
-            resource_name=published.resource_id,
-            data_ref=_data_ref(published),
-            report_markdown=report.markdown,
+            type="open-web-artifact",
+            kind="inline-visualization.v1",
+            artifact=IndonesiaReportArtifact(
+                ref=artifact_ref,
+                renderer=IndonesiaReportArtifactRenderer(
+                    kind="report.v1",
+                    payload=IndonesiaReportArtifactPayload(
+                        title="印度尼西亚仓库网络决策报告",
+                        status="ready",
+                        source=source,
+                    ),
+                ),
+            ),
+            embed=IndonesiaReportArtifactEmbed(
+                syntax="codex-inline-vis.artifact.v1",
+                code=embed_code,
+            ),
         ).model_dump(mode="json")
-        return _call_result(published, summary=summary, structured=structured)
+        return _report_call_result(
+            published,
+            summary=summary,
+            embed_code=embed_code,
+            structured=structured,
+        )
 
     if name == "validate_indonesia_resource":
         request = ValidateResourceInput.model_validate(arguments)
@@ -726,6 +752,15 @@ def _geojson_ref(published: PublishedResource) -> IndonesiaGeoJsonRef:
     return IndonesiaGeoJsonRef(uri=published.uri)
 
 
+def _report_artifact_ref(published: PublishedResource) -> str:
+    prefix = "indonesia_decision_report.v1-"
+    if published.schema != "indonesia_decision_report.v1" or not published.resource_id.startswith(
+        prefix
+    ):
+        raise ValueError("Report Artifact requires an indonesia_decision_report.v1 Resource")
+    return f"report-{published.resource_id.removeprefix(prefix)}"
+
+
 def _publish_result(
     value: (
         IndonesiaDatasetInspection
@@ -772,6 +807,38 @@ def _call_result(
     return types.CallToolResult(
         content=[
             types.TextContent(type="text", text=summary),
+            types.ResourceLink(
+                type="resource_link",
+                name=published.resource_id,
+                title=published.schema,
+                uri=published.uri,
+                description=summary,
+                mimeType="application/json",
+                size=published.size,
+            ),
+        ],
+        structuredContent=structured,
+    )
+
+
+def _report_call_result(
+    published: PublishedResource,
+    *,
+    summary: str,
+    embed_code: str,
+    structured: dict[str, Any],
+) -> types.CallToolResult:
+    return types.CallToolResult(
+        content=[
+            types.TextContent(
+                type="text",
+                text=(
+                    "The deterministic report Artifact is ready. Copy only "
+                    "structuredContent.embed.code verbatim as one standalone paragraph; "
+                    "do not copy, summarize, or reconstruct the report body:\n\n"
+                    f"{embed_code}"
+                ),
+            ),
             types.ResourceLink(
                 type="resource_link",
                 name=published.resource_id,

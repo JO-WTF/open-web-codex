@@ -23,7 +23,7 @@ use store::{
     load_definition, load_definitions, load_draft_row, lock_definition, parse_draft, record_audit,
 };
 
-type ApiError = (StatusCode, Json<PlatformError>);
+pub(crate) type ApiError = (StatusCode, Json<PlatformError>);
 type ApiResult<T> = Result<Json<T>, ApiError>;
 
 pub async fn list(
@@ -326,6 +326,90 @@ pub async fn publish(
         content_sha256: resolved.content_sha256,
         published_at,
     }))
+}
+
+/// Idempotently publish a trusted, server-authored Agent draft through the
+/// same validation and persistence owner used by the Web authoring routes.
+/// Exact identity/content is reused; any collision is explicit.
+pub(crate) async fn publish_or_reuse_trusted(
+    state: &AppState,
+    auth: &AuthenticatedUser,
+    draft: AgentDefinitionDraftRequest,
+) -> Result<AgentDefinitionReleaseSummary, ApiError> {
+    validate_draft_storage_shape(&draft)?;
+    let dependencies = resolve_authorized_dependencies(&state.db, auth, &draft).await?;
+    let expected = agent::compile_agent_release_against_template(
+        release_spec_from_draft(&draft, dependencies.dataset_releases),
+        &dependencies.template,
+    )
+    .map_err(catalog_error)?;
+
+    if let Some(row) = sqlx::query(
+        "SELECT id, catalog_id, version, display_name, description, content_sha256, published_at \
+         FROM agent_definition_releases \
+         WHERE organization_id = $1 AND catalog_id = $2 AND version = $3",
+    )
+    .bind(auth.organization_id)
+    .bind(&draft.definition_id)
+    .bind(&draft.version)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(database_error)?
+    {
+        let release_id: Uuid = row.get("id");
+        let resolved = agent_catalog::resolve_run_selection(
+            &state.db,
+            auth.organization_id,
+            &open_web_codex_platform_contracts::AgentRunSelection {
+                definition_id: draft.definition_id.clone(),
+                version: draft.version.clone(),
+                release_id: Some(release_id),
+            },
+        )
+        .await
+        .map_err(capability_template_error)?;
+        if resolved.content_sha256 != expected.content_sha256 {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(PlatformError::bad_request(
+                    "The tutorial Agent identity is bound to different immutable content",
+                )),
+            ));
+        }
+        return Ok(AgentDefinitionReleaseSummary {
+            id: release_id,
+            definition_id: row.get("catalog_id"),
+            version: row.get("version"),
+            display_name: row.get("display_name"),
+            description: row.get("description"),
+            content_sha256: row.get("content_sha256"),
+            published_at: row.get("published_at"),
+        });
+    }
+
+    let resources = load_definitions(&state.db, auth.organization_id).await?;
+    let resource_id = if let Some(existing) = resources
+        .into_iter()
+        .find(|resource| resource.definition_id == draft.definition_id)
+    {
+        if existing.draft.as_ref() != Some(&draft) || existing.owner_user_id != auth.user_id {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(PlatformError::bad_request(
+                    "The tutorial Agent Definition id is already in use",
+                )),
+            ));
+        }
+        existing.id
+    } else {
+        create(State(state.clone()), auth.clone(), Json(draft.clone()))
+            .await?
+            .0
+            .id
+    };
+    publish(State(state.clone()), auth.clone(), Path(resource_id))
+        .await
+        .map(|Json(release)| release)
 }
 
 fn validate_draft(

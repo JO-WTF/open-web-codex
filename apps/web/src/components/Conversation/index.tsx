@@ -49,6 +49,7 @@ type Props = {
   onSelectProvider?: (providerId: string) => void;
   selectedModelId?: string | null;
   onSelectModel?: (modelId: string) => void;
+  providerCatalogOpenRequest?: number;
   messages: MessageEntry[];
   taskApprovals?: TaskApprovalRequest[];
   workspaceId?: string;
@@ -103,6 +104,7 @@ export default function Conversation({
   onSelectProvider,
   selectedModelId,
   onSelectModel,
+  providerCatalogOpenRequest,
   messages,
   taskApprovals = [],
   workspaceId,
@@ -260,6 +262,7 @@ export default function Conversation({
         onSelectProvider={onSelectProvider}
         selectedModelId={selectedModelId}
         onSelectModel={onSelectModel}
+        providerCatalogOpenRequest={providerCatalogOpenRequest}
       />
     </section>
   );

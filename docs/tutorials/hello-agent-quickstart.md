@@ -68,13 +68,13 @@ Hello Agent stdio smoke passed
 第一条证明业务规则和能力配置通过；第二条真实执行 MCP 的初始化、Tool 发现和调用。
 如果这里失败，先修复能力包，不要让模型答案掩盖底层问题。
 
-## 2. 在 Web 中创建 Thread
+## 2. 在 Web 中启动标准 Task
 
 1. 打开 Web 页面。
 2. 在左侧选择当前仓库的 Workspace。
-3. 点击 Workspace 行右侧的 **New thread**。
-4. 确认页面底部显示你准备使用的 Provider 和模型。
-5. 发送：
+3. 点击 Workspace 行的 **New task**。
+4. 在 **Start a task** 中选择 **Standard**，确认准备使用的 Provider 和模型。
+5. 输入下列内容并点击 **Start task**：
 
 ```text
 请使用 $say-hello 向小林问好，并返回 Tool 的结构化结果。

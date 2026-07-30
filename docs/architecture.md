@@ -334,8 +334,11 @@ recorded in `docs/capability-baseline.md` and `docs/development-plan.md`:
    `::codex-inline-vis{artifact="..."}` line. Resource sources copy a complete
    `data_ref` from an earlier completed Tool item available to the producing
    Runtime context.
-   Tool `content` only tells the model to copy the embed line and is never a
-   rendering input.
+   Tool `content` only tells the model to copy
+   `structuredContent.embed.code` as one standalone line and is never a rendering
+   input. Agent-owned `MAP_HANDOFF` JSON carries only input Resource provenance
+   and the matching Artifact ID; it never duplicates the embed line as an
+   escaped string.
 2. The Server recognizes the generic envelope without branching on MCP server
    or Tool names, dispatches `renderer.kind` through a renderer registry and
    validates the stable card envelope, source authorization graph, camera, and
@@ -350,13 +353,17 @@ recorded in `docs/capability-baseline.md` and `docs/development-plan.md`:
    projection strips the payload and MCP URI. Registration runs in a savepoint,
    so a projection failure cannot suppress the underlying Tool terminal event.
 3. Tool completion never displays a map. An Agent Message places the Tool-generated
-   embed line between arbitrary Markdown segments. The Web parser accepts only
-   standalone directives in Agent Messages, excludes fenced and indented code,
-   and buffers incomplete streaming directives. `file="*.html"` retains the
-   official local-HTML meaning; `artifact="..."` resolves an authorized typed
-   renderer. The parser does not inspect Tool, Reasoning, Command or user text.
-4. Live Agent Message completion receives the same safe renderer DTO used by
-   authoritative history. Resolution uses the durable Artifact ref and current
+   embed line between arbitrary Markdown segments. The Server resolves only
+   standalone directives and attaches the matching safe renderer DTO as typed
+   `inlineArtifacts` on the projected Agent Message event. The Web parser accepts
+   only standalone directives in Agent Messages, excludes fenced and indented
+   code, and buffers incomplete streaming directives. `file="*.html"` retains
+   the official local-HTML meaning; `artifact="..."` resolves an authorized typed
+   renderer. The parser does not inspect Tool, Reasoning, Command, user text or
+   JSON inside `MAP_HANDOFF`.
+4. Live Agent Message completion and authoritative history receive the same typed
+   `inlineArtifacts` DTO, which is the browser rendering authority. Resolution
+   uses the durable Artifact ref and current
    caller authorization, so later Runs and authorized Threads may reuse a
    completed Artifact without inheriting its producer's lifecycle. Producer
    Turn/Item identity only verifies provenance because

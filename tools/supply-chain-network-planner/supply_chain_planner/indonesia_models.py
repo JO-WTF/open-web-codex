@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 INDONESIA_MCP_SERVER_NAME = "supply_chain_indonesia"
 INDONESIA_RESOURCE_URI_PREFIX = "supply-chain-indonesia://resources/"
@@ -377,5 +377,38 @@ class IndonesiaMapRenderToolResult(StrictModel):
     extensions: dict[str, Any]
 
 
-class IndonesiaDecisionReportToolResult(IndonesiaResourceToolResult):
-    report_markdown: str = Field(min_length=1, max_length=64_000)
+class IndonesiaReportArtifactPayload(StrictModel):
+    title: str = Field(min_length=1, max_length=256)
+    status: Literal["ready"]
+    source: IndonesiaDataRef
+
+
+class IndonesiaReportArtifactRenderer(StrictModel):
+    kind: Literal["report.v1"]
+    payload: IndonesiaReportArtifactPayload
+
+
+class IndonesiaReportArtifact(StrictModel):
+    ref: str = Field(pattern=r"^report-[0-9a-f]{24}$")
+    renderer: IndonesiaReportArtifactRenderer
+
+
+class IndonesiaReportArtifactEmbed(StrictModel):
+    syntax: Literal["codex-inline-vis.artifact.v1"]
+    code: str = Field(
+        pattern=r'^::codex-inline-vis\{artifact="report-[0-9a-f]{24}"\}$'
+    )
+
+
+class IndonesiaDecisionReportToolResult(StrictModel):
+    type: Literal["open-web-artifact"]
+    kind: Literal["inline-visualization.v1"]
+    artifact: IndonesiaReportArtifact
+    embed: IndonesiaReportArtifactEmbed
+
+    @model_validator(mode="after")
+    def validate_embed_reference(self) -> IndonesiaDecisionReportToolResult:
+        expected = f'::codex-inline-vis{{artifact="{self.artifact.ref}"}}'
+        if self.embed.code != expected:
+            raise ValueError("embed code must reference artifact.ref exactly")
+        return self

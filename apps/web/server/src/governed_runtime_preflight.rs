@@ -11,9 +11,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use open_web_codex_adapter::{CodexAdapter, ProfileMutation, ThreadStartMode};
 use open_web_codex_git_runtime::GitRuntime;
-use open_web_codex_platform_contracts::{
-    AgentCapabilityTemplateSource, AgentRunSelection, SupervisorPolicySelection,
-};
+use open_web_codex_platform_contracts::{AgentRunSelection, SupervisorPolicySelection};
 use open_web_codex_run_orchestrator::{
     AgentRunLease, AgentRunSource, RunLease, RunStartPreflight, RunStartPreflightError,
     SupervisorPolicyLease, SupervisorPolicySource,
@@ -22,7 +20,7 @@ use sqlx::PgPool;
 use thiserror::Error;
 
 use crate::routes::RuntimeProfileBinding;
-use crate::{agent_catalog, supervisor_policy};
+use crate::{agent_catalog, run_readiness, supervisor_policy};
 
 #[derive(Debug, Error, PartialEq, Eq)]
 enum GovernedRuntimePreflightError {
@@ -80,71 +78,15 @@ impl RunStartPreflight for GovernedRuntimePreflight {
                     );
                     unavailable_governed_runtime()
                 })?;
-            if agent
-                .required_workspace_id()
-                .is_some_and(|workspace_id| workspace_id != lease.workspace_id)
-            {
-                tracing::warn!(
-                    run_id = %lease.run_id,
-                    run_workspace_id = %lease.workspace_id,
-                    required_workspace_id = ?agent.required_workspace_id(),
-                    "root Agent Workspace does not own its selected dependencies"
-                );
-                return Err(unavailable_governed_runtime());
-            }
-            if let Some(selection) = agent.capability_template.as_ref() {
-                if selection.source == AgentCapabilityTemplateSource::WorkspacePackageRelease {
-                    let release_id = selection
-                        .release_id
-                        .ok_or_else(unavailable_governed_runtime)?;
-                    let matches = self
-                        .git
-                        .capability_package_matches(
-                            lease.workspace_id,
-                            &selection.definition_id,
-                            &selection.version,
-                            release_id,
-                            &agent.capability_template_sha256,
-                        )
-                        .await
-                        .map_err(|error| {
-                            tracing::warn!(
-                                run_id = %lease.run_id,
-                                package_release_id = %release_id,
-                                error = %error,
-                                "root Agent capability package verification failed"
-                            );
-                            unavailable_governed_runtime()
-                        })?;
-                    if !matches {
-                        return Err(unavailable_governed_runtime());
-                    }
-                }
-            }
-            for dataset in &agent.dataset_releases {
-                let matches = self
-                    .git
-                    .dataset_release_matches(
-                        lease.workspace_id,
-                        &dataset.dataset_id,
-                        &dataset.version,
-                        dataset.release_id,
-                        &dataset.content_sha256,
-                    )
-                    .await
-                    .map_err(|error| {
-                        tracing::warn!(
-                            run_id = %lease.run_id,
-                            dataset_release_id = %dataset.release_id,
-                            error = %error,
-                            "root Agent Dataset Release verification failed"
-                        );
-                        unavailable_governed_runtime()
-                    })?;
-                if !matches {
-                    return Err(unavailable_governed_runtime());
-                }
-            }
+            run_readiness::verify_agent_dependencies(&self.git, lease.workspace_id, &agent)
+                .await
+                .map_err(|()| {
+                    tracing::warn!(
+                        run_id = %lease.run_id,
+                        "root Agent immutable Workspace dependencies failed final verification"
+                    );
+                    unavailable_governed_runtime()
+                })?;
             return Ok(ThreadStartMode::GovernedAgent {
                 developer_instructions: agent.runtime_developer_instructions,
                 required_mcp_servers: agent.required_mcp_servers,
@@ -183,76 +125,15 @@ impl RunStartPreflight for GovernedRuntimePreflight {
             );
             unavailable_governed_runtime()
         })?;
-        if policy
-            .required_workspace_id
-            .is_some_and(|workspace_id| workspace_id != lease.workspace_id)
-        {
-            tracing::warn!(
-                run_id = %lease.run_id,
-                run_workspace_id = %lease.workspace_id,
-                required_workspace_id = ?policy.required_workspace_id,
-                "governed Run Workspace does not own the selected capability package"
-            );
-            return Err(unavailable_governed_runtime());
-        }
-        for package in &policy.workspace_capability_packages {
-            let matches = self
-                .git
-                .capability_package_matches(
-                    lease.workspace_id,
-                    &package.package_id,
-                    &package.version,
-                    package.release_id,
-                    &package.content_sha256,
-                )
-                .await
-                .map_err(|error| {
-                    tracing::warn!(
-                        run_id = %lease.run_id,
-                        package_release_id = %package.release_id,
-                        error = %error,
-                        "governed Run capability package verification failed"
-                    );
-                    unavailable_governed_runtime()
-                })?;
-            if !matches {
+        run_readiness::verify_supervisor_dependencies(&self.git, lease.workspace_id, &policy)
+            .await
+            .map_err(|()| {
                 tracing::warn!(
                     run_id = %lease.run_id,
-                    package_release_id = %package.release_id,
-                    "governed Run capability package content is unavailable"
+                    "governed Run immutable Workspace dependencies failed final verification"
                 );
-                return Err(unavailable_governed_runtime());
-            }
-        }
-        for dataset in &policy.dataset_releases {
-            let matches = self
-                .git
-                .dataset_release_matches(
-                    lease.workspace_id,
-                    &dataset.dataset_id,
-                    &dataset.version,
-                    dataset.release_id,
-                    &dataset.content_sha256,
-                )
-                .await
-                .map_err(|error| {
-                    tracing::warn!(
-                        run_id = %lease.run_id,
-                        dataset_release_id = %dataset.release_id,
-                        error = %error,
-                        "governed Run Dataset Release verification failed"
-                    );
-                    unavailable_governed_runtime()
-                })?;
-            if !matches {
-                tracing::warn!(
-                    run_id = %lease.run_id,
-                    dataset_release_id = %dataset.release_id,
-                    "governed Run Dataset Release content is unavailable"
-                );
-                return Err(unavailable_governed_runtime());
-            }
-        }
+                unavailable_governed_runtime()
+            })?;
 
         self.adapter
             .mutate_profile(ProfileMutation::MaterializePlatformRuntimeRoleFiles {

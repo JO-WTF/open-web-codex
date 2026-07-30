@@ -6,6 +6,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { requireCompletedTurn } from "./e2e-turn-contract.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../../..");
@@ -245,14 +246,12 @@ async function waitForTurn() {
       if (failure) {
         throw new Error(`Root Agent failed: ${sanitize(failure.payload)}`);
       }
-      return events.some(
-        (event) =>
-          event.thread_id === state.run.codex_thread_id &&
-          event.turn_id === state.turnId &&
-          event.event_type === "codex.turn.completed",
-      )
-        ? events
-        : undefined;
+      return requireCompletedTurn(events, {
+        threadId: state.run.codex_thread_id,
+        turnId: state.turnId,
+        label: "Root Agent Turn",
+        sanitize,
+      });
     },
     `Delivery audit Turn ${state.turnId}`,
     Number(process.env.E2E_TURN_TIMEOUT_MS ?? 600_000),
@@ -569,19 +568,34 @@ await runCase("Agent-bound root Thread", async () => {
       model,
     },
   });
+  const selection = {
+    definition_id: agentId,
+    version: "1.0.0",
+    release_id: state.agent.release.id,
+  };
+  const readiness = await api(
+    `/workspaces/${state.workspace.id}/run-readiness`,
+    {
+      method: "POST",
+      body: {
+        model_provider: providerId,
+        model,
+        supervisor_policy: null,
+        agent: selection,
+      },
+    },
+  );
+  assert.notEqual(readiness.status, "blocked", JSON.stringify(readiness.checks));
   const started = await api(`/tasks/${state.task.id}/runs`, {
     method: "POST",
     body: {
       idempotency_key: `delivery-run-${crypto.randomUUID()}`,
+      readiness_fingerprint: readiness.evaluation_fingerprint,
       workspace_id: state.workspace.id,
       fork_thread_id: null,
       fork_source_run_id: null,
       supervisor_policy: null,
-      agent: {
-        definition_id: agentId,
-        version: "1.0.0",
-        release_id: state.agent.release.id,
-      },
+      agent: selection,
     },
   });
   state.run = await eventually(async () => {
@@ -656,8 +670,8 @@ await runCase("real Runtime Tool approval and delivery audit", async () => {
     "The accepted Tool approval was not persisted",
   );
   state.events = events;
-  state.report = finalMessage(events);
-  assert(state.report, "The Agent did not return a final answer");
+  state.deliveryMessage = finalMessage(events);
+  assert(state.deliveryMessage, "The Agent did not return a final answer");
   return `${events.length} durable events`;
 });
 
@@ -702,33 +716,20 @@ await runCase("ready report Artifact and evidence-backed final answer", async ()
     resourceName,
     /^delivery_audit_report\.v1-[0-9a-f]{24}$/,
   );
-  assert(state.report.includes(resourceName));
-  for (const value of ["18", "11", "7", "61.11", "67.49", "Central Java"]) {
-    assert(
-      state.report.includes(value),
-      `Final answer omitted expected value ${value}`,
-    );
-  }
-  for (const shipmentId of [
-    "S002",
-    "S005",
-    "S006",
-    "S008",
-    "S011",
-    "S012",
-    "S015",
-  ]) {
-    assert(state.report.includes(shipmentId));
-  }
+  assert(
+    state.deliveryMessage.includes(resourceName),
+    "The Agent did not cite the authoritative report Artifact",
+  );
   const safeProjection = JSON.stringify({
     events: state.events,
     artifacts,
-    report: state.report,
+    deliveryMessage: state.deliveryMessage,
   });
   assert(!safeProjection.includes("open-web-python://"));
   assert(!safeProjection.includes(repoRoot));
   state.artifacts = artifacts;
   state.artifactContent = content;
+  state.resourceName = resourceName;
   return `${artifact.artifact_schema}; resource=${resourceName}`;
 });
 
@@ -736,7 +737,7 @@ await runCase("browser history and durable evidence recovery", async () => {
   const turns = await api(`/runs/${state.run.id}/thread/turns`);
   const turn = turns.find((entry) => entry.id === state.turnId);
   assert(turn, "Authoritative history omitted the delivery audit Turn");
-  const restoredReport = turn.items
+  const restoredDeliveryMessage = turn.items
     .filter(
       (item) =>
         item.type === "agentMessage" && typeof item.text === "string",
@@ -744,7 +745,10 @@ await runCase("browser history and durable evidence recovery", async () => {
     .map((item) => item.text)
     .filter((text) => text.trim())
     .at(-1);
-  assert.equal(restoredReport, state.report);
+  assert(
+    restoredDeliveryMessage?.includes(state.resourceName),
+    "Authoritative history did not restore the report Artifact citation",
+  );
   assert(
     turn.items.some(
       (item) =>
@@ -802,7 +806,9 @@ if (evidenceFile) {
     },
     artifact: state.artifacts[0],
     result: state.artifactContent,
-    report: state.report,
+    delivery: {
+      resourceName: state.resourceName,
+    },
   };
   await mkdir(path.dirname(evidenceFile), { recursive: true });
   await writeFile(

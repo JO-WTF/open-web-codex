@@ -133,6 +133,30 @@ describe("DatasetReleaseDialog", () => {
     );
 
     expect(await screen.findByText("Failure: workspace_io_failed")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry publication" }));
+    expect((screen.getByLabelText("Dataset ID") as HTMLInputElement).value).toBe("network");
+    expect((screen.getByLabelText("Version") as HTMLInputElement).value).toBe("1.0.0");
+  });
+
+  it("closes with Escape without leaking the key event to an underlying modal", async () => {
+    listWorkspaceDatasetReleases.mockResolvedValue([]);
+    const onClose = vi.fn();
+    const underlyingEscape = vi.fn();
+    window.addEventListener("keydown", underlyingEscape);
+
+    render(
+      <DatasetReleaseDialog
+        workspaceId="workspace-1"
+        onClose={onClose}
+        onPublished={vi.fn()}
+      />,
+    );
+    await screen.findByText("No data has been published in this Workspace yet.");
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(underlyingEscape).not.toHaveBeenCalled();
+    window.removeEventListener("keydown", underlyingEscape);
   });
 
   it("copies the exact safe Dataset Release identity", async () => {
@@ -182,5 +206,54 @@ describe("DatasetReleaseDialog", () => {
       content_sha256: "c".repeat(64),
     });
     expect(screen.getByText("Copied")).toBeTruthy();
+  });
+
+  it("shows release details and prepares the exact dataset metadata for a new version", async () => {
+    listWorkspaceDatasetReleases.mockResolvedValue([
+      {
+        id: "release-1",
+        workspace_id: "workspace-1",
+        dataset_id: "network",
+        version: "1.2.3",
+        display_name: "Network inputs",
+        description: "Reviewed warehouse and customer inputs.",
+        state: "published",
+        content_sha256: "d".repeat(64),
+        failure_code: null,
+        files: [
+          {
+            logical_name: "warehouses.csv",
+            role: "warehouses",
+            media_type: "text/csv",
+            byte_size: 128,
+            content_sha256: "e".repeat(64),
+          },
+        ],
+        published_at: "2026-07-29T00:00:00Z",
+        created_at: "2026-07-29T00:00:00Z",
+        updated_at: "2026-07-29T00:00:00Z",
+      },
+    ]);
+
+    render(
+      <DatasetReleaseDialog
+        workspaceId="workspace-1"
+        onClose={vi.fn()}
+        onPublished={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(await screen.findByText("View details"));
+    expect(screen.getByText("Reviewed warehouse and customer inputs.")).toBeTruthy();
+    expect(screen.getByText("warehouses.csv")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "New version" }));
+
+    expect((screen.getByLabelText("Dataset ID") as HTMLInputElement).value).toBe("network");
+    expect((screen.getByLabelText("Version") as HTMLInputElement).value).toBe("1.2.4");
+    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("Network inputs");
+    expect(
+      (screen.getByLabelText("What this data is for") as HTMLTextAreaElement).value,
+    ).toBe("Reviewed warehouse and customer inputs.");
+    expect(screen.getByText("Choose release files")).toBeTruthy();
   });
 });

@@ -31,19 +31,19 @@ const DATA_AGENT_INSTRUCTIONS: &str = include_str!(concat!(
 ));
 const NETWORK_PLANNING_AGENT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/agents/enterprise-network-planning-agent/3.4.0/definition.json"
+    "/../../../../capabilities/agents/enterprise-network-planning-agent/3.6.0/definition.json"
 ));
 const NETWORK_PLANNING_AGENT_INSTRUCTIONS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/agents/enterprise-network-planning-agent/3.4.0/instructions.md"
+    "/../../../../capabilities/agents/enterprise-network-planning-agent/3.6.0/instructions.md"
 ));
 const VISUALIZATION_AGENT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/agents/enterprise-visualization-agent/1.3.0/definition.json"
+    "/../../../../capabilities/agents/enterprise-visualization-agent/1.4.0/definition.json"
 ));
 const VISUALIZATION_AGENT_INSTRUCTIONS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/agents/enterprise-visualization-agent/1.3.0/instructions.md"
+    "/../../../../capabilities/agents/enterprise-visualization-agent/1.4.0/instructions.md"
 ));
 const FINANCE_AGENT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),

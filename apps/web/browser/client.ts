@@ -17,6 +17,8 @@ import type {
   Project,
   ProviderCatalog,
   Run,
+  RunReadiness,
+  RunReadinessRequest,
   RunEvent,
   RuntimeAgentActivity,
   RuntimeAgentExecution,
@@ -28,6 +30,9 @@ import type {
   WorkspaceFileDiff,
   PublishWorkspaceDatasetRequest,
   WorkspaceDatasetReleaseSummary,
+  TutorialBlueprint,
+  TutorialBlueprintReconcileResponse,
+  TutorialBlueprintSummary,
   WorkspaceBranch,
   WorkspaceLog,
   WorkspaceCommitDiff,
@@ -133,7 +138,16 @@ export class PlatformClient {
       const message = typeof record?.message === "string"
         ? record.message
         : `Request failed (HTTP ${response.status}).`;
-      throw new Error(message);
+      const error = new Error(message) as Error & {
+        code?: string;
+        status?: number;
+        kind?: string;
+      };
+      error.name = "PlatformRequestError";
+      error.code = message;
+      error.status = response.status;
+      error.kind = typeof record?.kind === "string" ? record.kind : undefined;
+      throw error;
     }
     return payload as T;
   }
@@ -379,7 +393,9 @@ export class PlatformClient {
   startRun(
     taskId: string,
     workspaceId: string,
-    options?: {
+    options: {
+      readinessFingerprint: string;
+      idempotencyKey?: string;
       forkThreadId?: string | null;
       forkSourceRunId?: string | null;
       supervisorPolicy?: SupervisorPolicySelection | null;
@@ -389,14 +405,47 @@ export class PlatformClient {
     return this.request<{ run: Run }>(`/api/tasks/${encodeURIComponent(taskId)}/runs`, {
       method: "POST",
       body: JSON.stringify({
-        idempotency_key: createIdempotencyKey(),
+        idempotency_key: options.idempotencyKey ?? createIdempotencyKey(),
+        readiness_fingerprint: options.readinessFingerprint,
         workspace_id: workspaceId,
-        fork_thread_id: options?.forkThreadId ?? null,
-        fork_source_run_id: options?.forkSourceRunId ?? null,
-        supervisor_policy: options?.supervisorPolicy ?? null,
-        agent: options?.agent ?? null,
+        fork_thread_id: options.forkThreadId ?? null,
+        fork_source_run_id: options.forkSourceRunId ?? null,
+        supervisor_policy: options.supervisorPolicy ?? null,
+        agent: options.agent ?? null,
       }),
     });
+  }
+
+  evaluateRunReadiness(workspaceId: string, request: RunReadinessRequest) {
+    return this.request<RunReadiness>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/run-readiness`,
+      { method: "POST", body: JSON.stringify(request) },
+    );
+  }
+
+  listTutorialBlueprints() {
+    return this.request<TutorialBlueprintSummary[]>("/api/tutorial-blueprints");
+  }
+
+  getTutorialBlueprint(blueprintId: string, revision: string) {
+    return this.request<TutorialBlueprint>(
+      `/api/tutorial-blueprints/${encodeURIComponent(blueprintId)}/${encodeURIComponent(revision)}`,
+    );
+  }
+
+  reconcileTutorialBlueprint(
+    workspaceId: string,
+    blueprintId: string,
+    revision: string,
+    idempotencyKey: string,
+  ) {
+    return this.request<TutorialBlueprintReconcileResponse>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/tutorial-blueprints/${encodeURIComponent(blueprintId)}/${encodeURIComponent(revision)}/reconcile`,
+      {
+        method: "POST",
+        body: JSON.stringify({ idempotency_key: idempotencyKey }),
+      },
+    );
   }
 
   listSupervisorPolicies() {

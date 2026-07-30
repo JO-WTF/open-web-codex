@@ -295,9 +295,13 @@ pub(crate) fn validate_platform_runtime_roles(
     Ok(())
 }
 
-pub(crate) fn validate_required_mcp_servers(
-    servers: &[RequiredMcpServer],
-) -> Result<(), AdapterError> {
+/// Validate the exact MCP inventory sealed in a platform-owned capability
+/// package or governed Release.
+///
+/// This validates only the typed declaration. It deliberately does not inspect
+/// workspace files or discover Runtime state. The real adapter performs the
+/// authoritative process and Tool inventory check after the Thread starts.
+pub fn validate_required_mcp_servers(servers: &[RequiredMcpServer]) -> Result<(), AdapterError> {
     if servers.is_empty() || servers.len() > MAX_REQUIRED_MCP_SERVERS {
         return Err(AdapterError::Internal(
             "governed Runtime MCP requirements are invalid".to_string(),
@@ -329,7 +333,7 @@ pub(crate) fn validate_required_mcp_servers(
     Ok(())
 }
 
-fn merge_capability_root_mcp_inventories(
+pub(crate) fn merge_capability_root_mcp_inventories(
     servers: &[RequiredMcpServer],
 ) -> Result<BTreeMap<String, Vec<String>>, AdapterError> {
     let mut inventories = BTreeMap::<String, Vec<String>>::new();

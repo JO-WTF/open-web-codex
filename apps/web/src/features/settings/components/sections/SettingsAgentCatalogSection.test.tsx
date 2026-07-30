@@ -59,6 +59,10 @@ describe("SettingsAgentCatalogSection", () => {
     expect(newAgentButton.classList.contains("settings-studio-create-button")).toBe(true);
     fireEvent.click(newAgentButton);
     expect(screen.getByLabelText("Agent ID")).toBeTruthy();
+    expect(
+      (screen.getByLabelText("Reviewed capability template") as HTMLSelectElement).value,
+    ).toBe("");
+    expect(screen.queryByText("Available capabilities")).toBeNull();
     expect(screen.queryByText("Agent directory")).toBeNull();
     fireEvent.click(
       screen.getByRole("button", { name: "Back to Agent directory" }),
@@ -94,7 +98,7 @@ describe("SettingsAgentCatalogSection", () => {
       target: { value: "Use only reviewed data capabilities." },
     });
     fireEvent.change(screen.getByLabelText("Reviewed capability template"), {
-      target: { value: "repository:enterprise-data-agent@3.1.0" },
+      target: { value: "repository:enterprise-data-agent@3.0.0" },
     });
     expect(
       screen.getByText(
@@ -204,6 +208,9 @@ describe("SettingsAgentCatalogSection", () => {
     const props = baseProps();
     render(<SettingsAgentCatalogSection {...props} />);
 
+    fireEvent.change(screen.getByLabelText("Reviewed capability template"), {
+      target: { value: "repository:enterprise-data-agent@3.0.0" },
+    });
     expect(
       screen.getByText(/Type IDs are fixed by the reviewed template/),
     ).toBeTruthy();
@@ -244,9 +251,127 @@ describe("SettingsAgentCatalogSection", () => {
       screen.getAllByText(
         "supply_chain_indonesia.inspect_indonesia_dataset_release",
       ).length,
-    ).toBeGreaterThanOrEqual(1);
+    ).toBe(1);
     expect(screen.getAllByText("indonesia_dataset_inspection.v1").length).toBeGreaterThanOrEqual(1);
+    const technicalContract = screen.getByText("Technical contract").closest("details");
+    expect(technicalContract?.open).toBe(false);
+    fireEvent.click(screen.getByText("Technical contract"));
+    expect(technicalContract?.open).toBe(true);
     expect(screen.getByText(/Build and validate the bounded planning dataset/)).toBeTruthy();
     expect(props.onLoadPublished).not.toHaveBeenCalled();
+  });
+
+  it("routes an empty Dataset state to the shared publisher", () => {
+    const props = baseProps();
+    const onOpenDatasetPublisher = vi.fn();
+    render(
+      <SettingsAgentCatalogSection
+        {...props}
+        studioMode
+        onOpenDatasetPublisher={onOpenDatasetPublisher}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "New Agent" }));
+    fireEvent.change(screen.getByLabelText("Reviewed capability template"), {
+      target: { value: "repository:enterprise-data-agent@3.0.0" },
+    });
+    fireEvent.click(screen.getByTestId("agent-studio-add-data"));
+
+    expect(onOpenDatasetPublisher).toHaveBeenCalledWith(
+      null,
+      expect.any(HTMLButtonElement),
+    );
+  });
+
+  it("copies a built-in exact release into a new user-owned definition", () => {
+    const key = `${template.definition_id}@${template.version}`;
+    const props: SettingsAgentCatalogSectionProps = {
+      ...baseProps(),
+      publishedAgents: [template],
+      detailByAgent: {
+        [key]: {
+          ...template,
+          developer_instructions: "Build and validate the bounded planning dataset.",
+          content_sha256: "b".repeat(64),
+          execution_semantics_sha256: "c".repeat(64),
+        },
+      },
+    };
+
+    render(<SettingsAgentCatalogSection {...props} studioMode />);
+    fireEvent.click(screen.getByRole("button", { name: "View details" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create custom Agent" }));
+
+    expect((screen.getByLabelText("Agent ID") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("Version") as HTMLInputElement).value).toBe("1.0.0");
+    expect(
+      (screen.getByLabelText("Reviewed capability template") as HTMLSelectElement).value,
+    ).toBe("repository:enterprise-data-agent@3.0.0");
+    expect(
+      (screen.getByLabelText("Custom Agent instructions") as HTMLTextAreaElement).value,
+    ).toBe("Build and validate the bounded planning dataset.");
+  });
+
+  it("creates a new version from the complete exact user release", () => {
+    const userAgent = {
+      ...template,
+      source: "user_release" as const,
+      release_id: "agent-release-1",
+      capability_template: {
+        source: "repository_agent" as const,
+        definition_id: template.definition_id,
+        version: template.version,
+        release_id: null,
+      },
+    };
+    const key = `${userAgent.definition_id}@${userAgent.version}`;
+    const props: SettingsAgentCatalogSectionProps = {
+      ...baseProps(),
+      definitions: [
+        {
+          id: "definition-1",
+          definition_id: userAgent.definition_id,
+          display_name: userAgent.display_name,
+          description: userAgent.description,
+          owner_user_id: "user-1",
+          draft: null,
+          releases: [
+            {
+              id: "agent-release-1",
+              definition_id: userAgent.definition_id,
+              version: userAgent.version,
+              display_name: userAgent.display_name,
+              description: userAgent.description,
+              content_sha256: "b".repeat(64),
+              published_at: "2026-07-29T00:00:00Z",
+            },
+          ],
+          created_at: "2026-07-29T00:00:00Z",
+          updated_at: "2026-07-29T00:00:00Z",
+        },
+      ],
+      publishedAgents: [userAgent],
+      detailByAgent: {
+        [key]: {
+          ...userAgent,
+          developer_instructions: "Preserve the complete reviewed method.",
+          content_sha256: "b".repeat(64),
+          execution_semantics_sha256: "c".repeat(64),
+        },
+      },
+    };
+
+    render(<SettingsAgentCatalogSection {...props} studioMode />);
+    fireEvent.click(screen.getByRole("button", { name: "View details" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create new version" }));
+
+    expect((screen.getByLabelText("Agent ID") as HTMLInputElement).value).toBe(
+      userAgent.definition_id,
+    );
+    expect((screen.getByLabelText("Version") as HTMLInputElement).value).toBe("3.0.1");
+    expect(
+      (screen.getByLabelText("Custom Agent instructions") as HTMLTextAreaElement).value,
+    ).toBe("Preserve the complete reviewed method.");
   });
 });

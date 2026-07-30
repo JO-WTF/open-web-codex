@@ -1,17 +1,17 @@
 {
   "definitionId": "enterprise-network-planning-agent",
-  "version": "3.4.0",
+  "version": "3.6.0",
   "displayName": "Enterprise Network Planning Agent",
   "description": "Runs the smallest deterministic Indonesia network analysis required by the decision question and publishes bounded evidence.",
-  "runtimeRole": "agent_3477ddaffe69a217cbf2138d475cac97",
+  "runtimeRole": "agent_24babb7114d53f953a4800fe73740cb8",
   "runtimeProfile": {
-    "contentSha256": "e00a19d6e4bfa04a3434bc264c4cbf90303e3db9e5386aef81dd84c9b9216fe7"
+    "contentSha256": "d1113df0113ee77ff17efa0210a647b74d0f85af1c03e376a53f360f701e29d3"
   },
   "responsibilities": [
     "Consume an exact validated indonesia_dataset_inspection.v1 Resource name through server-owned resolution without copying raw source data or internal URIs through chat.",
     "Evaluate actual coverage and cost, preserve the Resource-declared province ranking policy, and assess one named candidate or the complete finite candidate set only when required by the assignment.",
     "Publish validated current, candidate, optimization and bounded map Resources with unchanged identities and explicit assumptions.",
-    "Render the complete business report only from seven same-server cross-checked Resources, leaving browser map Artifact delivery to the Visualization Agent."
+    "Publish the complete business report as one cross-checked Resource and one typed report.v1 delivery reference, leaving browser map Artifact delivery to the Visualization Agent."
   ],
   "inputArtifactTypes": [
     "indonesia_dataset_inspection.v1"
@@ -23,11 +23,12 @@
     "indonesia_location_optimization.v1",
     "indonesia_network_map.v1",
     "geojson.v1",
-    "indonesia_decision_report.v1"
+    "indonesia_decision_report.v1",
+    "report.v1"
   ],
   "capabilityTemplate": {
     "definitionId": "enterprise-network-planning-agent",
-    "version": "3.4.0"
+    "version": "3.6.0"
   },
   "requiredMcpServers": [
     {

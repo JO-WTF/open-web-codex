@@ -2,10 +2,12 @@
 
 import assert from "node:assert/strict";
 import { Blob } from "node:buffer";
+import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { requireCompletedTurn } from "./e2e-turn-contract.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../../..");
@@ -30,17 +32,17 @@ const email = process.env.E2E_ADMIN_EMAIL ?? "enterprise-e2e@open-web-codex.loca
 const password = process.env.E2E_ADMIN_PASSWORD ?? "open-web-codex-enterprise-e2e";
 const repositoryPolicy = {
   policy_id: "enterprise-supervisor-copilot",
-  version: "3.10.0",
+  version: "3.14.0",
 };
 const repositoryAgents = {
   data: { definition_id: "enterprise-data-agent", version: "3.1.0" },
   network: {
     definition_id: "enterprise-network-planning-agent",
-    version: "3.4.0",
+    version: "3.6.0",
   },
   visualization: {
     definition_id: "enterprise-visualization-agent",
-    version: "1.3.0",
+    version: "1.4.0",
   },
 };
 const providerKey = useBuiltInProvider
@@ -69,14 +71,6 @@ const indonesiaFileContract = [
   ["transport-quotes.csv", "transport_quotes", "text/csv"],
   ["planning-policy.json", "planning_policy", "application/json"],
   ["validation-report.json", "validation_report", "application/json"],
-];
-const reportSections = [
-  ["事实", "Facts?"],
-  ["假设", "Assumptions?"],
-  ["分析", "Analysis"],
-  ["建议", "Recommendations?"],
-  ["局限", "Limitations?"],
-  ["缺失证据", "Missing Evidence"],
 ];
 const state = {
   token: undefined,
@@ -260,14 +254,12 @@ async function waitForTurn(taskId, turnId) {
       if (rootFailure) {
         throw new Error(`Root Turn failed: ${sanitize(rootFailure.payload)}`);
       }
-      return events.some(
-        (event) =>
-          event.thread_id === state.run.codex_thread_id &&
-          event.turn_id === turnId &&
-          event.event_type === "codex.turn.completed",
-      )
-        ? events
-        : undefined;
+      return requireCompletedTurn(events, {
+        threadId: state.run.codex_thread_id,
+        turnId,
+        label: "Root Turn",
+        sanitize,
+      });
     },
     `Enterprise Supervisor Turn ${turnId}`,
     Number(process.env.E2E_TURN_TIMEOUT_MS ?? 900_000),
@@ -313,39 +305,7 @@ function findToolCall(calls, server, tool) {
   );
 }
 
-function hasSection(report, chinese, english) {
-  return new RegExp(
-    `(^|\\n)#{1,4}\\s*(?:[一二三四五六七八九十0-9]+[、.．):：-]\\s*)?(?:${chinese}|${english})`,
-    "im",
-  ).test(report);
-}
-
-function percentage(value) {
-  return `${(value * 100).toFixed(2)}%`;
-}
-
-function reportHasInteger(report, value) {
-  return report.replaceAll(/[\s,_]/g, "").includes(String(value));
-}
-
-function escapeRegExp(value) {
-  return value.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function rankedProvincePattern(codes, provincesByCode) {
-  return new RegExp(
-    codes
-      .map((code) => {
-        const province = provincesByCode.get(code);
-        assert(province, `Current network Artifact omitted province ${code}`);
-        return `(?:${escapeRegExp(code)}|${escapeRegExp(province.province_name)})`;
-      })
-      .join("[\\s\\S]{0,1200}?"),
-    "i",
-  );
-}
-
-function lastFinalReport(events, turnId = state.turnId) {
+function lastRootDeliveryMessage(events, turnId = state.turnId) {
   return events
     .filter(
       (event) =>
@@ -356,21 +316,18 @@ function lastFinalReport(events, turnId = state.turnId) {
     )
     .map((event) => event.payload?.data?.text)
     .filter((text) => typeof text === "string" && text.trim())
-    .findLast((text) =>
-      reportSections.every(([chinese, english]) =>
-        hasSection(text, chinese, english),
-      ),
-    );
+    .at(-1);
 }
 
-function finalReportEvent(events) {
-  return events.findLast(
+function rootArtifactEvents(events, turnId = state.turnId) {
+  return events.filter(
     (event) =>
       event.thread_id === state.run.codex_thread_id &&
-      event.turn_id === state.turnId &&
+      event.turn_id === turnId &&
       event.event_type === "codex.item.completed" &&
       itemType(event) === "agentMessage" &&
-      Array.isArray(event.payload?.data?.inlineArtifacts),
+      Array.isArray(event.payload?.data?.inlineArtifacts) &&
+      event.payload.data.inlineArtifacts.length > 0,
   );
 }
 
@@ -694,10 +651,24 @@ await runCase("Policy-bound root Thread", async () => {
       model,
     },
   });
+  const readiness = await api(
+    `/workspaces/${state.workspace.id}/run-readiness`,
+    {
+      method: "POST",
+      body: {
+        model_provider: providerId,
+        model,
+        supervisor_policy: state.policy,
+        agent: null,
+      },
+    },
+  );
+  assert.notEqual(readiness.status, "blocked", JSON.stringify(readiness.checks));
   const started = await api(`/tasks/${state.task.id}/runs`, {
     method: "POST",
     body: {
       idempotency_key: `indonesia-run-${crypto.randomUUID()}`,
+      readiness_fingerprint: readiness.evaluation_fingerprint,
       workspace_id: state.workspace.id,
       fork_thread_id: null,
       fork_source_run_id: null,
@@ -725,7 +696,7 @@ await runCase("dynamic Indonesian network decision and map", async () => {
 
 请根据尚未解决的证据问题动态决定需要哪些 Agent，不要为了凑数量运行角色，也不要按写死的 Agent 顺序执行。只使用平台授权的数据与类型化 Artifact；不要扫描工作区、运行终端命令、读取原始客户行、调用导航服务或自行编造候选地点。距离采用教程声明的球面距离乘系数方法，司机每天可行驶 6 小时。
 
-最终报告先给出“证据索引”，再使用“事实、假设、分析、建议、局限、缺失证据”六个部分。证据索引必须列出数据检查、现网、候选优化、入选方案和地图所使用的每个原样 resource_name 及其负责的事实。每个关键数字注明拥有该字段的 Artifact schema 和原样 resource_name，不要用服务基线引用成本，不要用入选方案引用完整候选集合，也不要暴露 Resource URI。优化状态必须原样写出 Tool 返回的枚举；所有金额保留 Resource 中的精确 IDR 整数，不要换算为 B、million、billion、万或亿，也不要自行计算新的金额比例。删除任何没有精确前后字段支撑的运营效果推断。如果已生成地图，必须原样嵌入地图交付指令。`;
+确定性报告 Artifact 必须包含“证据索引”，并使用“事实、假设、分析、建议、局限、缺失证据”六个部分。证据索引必须列出数据检查、现网、候选优化、入选方案和地图所使用的每个原样 resource_name 及其负责的事实。每个关键数字注明拥有该字段的 Artifact schema 和原样 resource_name，不要用服务基线引用成本，不要用入选方案引用完整候选集合，也不要暴露 Resource URI。优化状态必须原样写出 Tool 返回的枚举；所有金额保留 Resource 中的精确 IDR 整数，不要换算为 B、million、billion、万或亿，也不要自行计算新的金额比例。删除任何没有精确前后字段支撑的运营效果推断。最终只交付平台可解析的 report.v1 与 map.v3 引用，不要让模型复制或改写报告正文。`;
 
   const sent = await api(`/tasks/${state.task.id}/messages`, {
     method: "POST",
@@ -756,8 +727,8 @@ if (observationOnly) {
       api(`/runs/${state.run.id}/supervisor-policy`),
     ]);
     const calls = completedMcpCalls(events);
-    const report = lastFinalReport(events);
-    assert(report, "Root Supervisor did not produce a final report");
+    const deliveryMessage = lastRootDeliveryMessage(events);
+    assert(deliveryMessage, "Root Supervisor did not produce a final delivery");
     if (evidenceFile) {
       const evidence = {
         schemaVersion: "indonesia-supervisor-observation.v1",
@@ -787,7 +758,7 @@ if (observationOnly) {
           tool: event.payload?.data?.tool,
         })),
         artifacts,
-        report,
+        deliveryMessage,
       };
       await mkdir(path.dirname(evidenceFile), { recursive: true });
       await writeFile(evidenceFile, `${JSON.stringify(evidence, null, 2)}\n`, {
@@ -899,16 +870,40 @@ await runCase("Runtime-selected Agent tree and governed tool scope", async () =>
   assert.equal(prepareReportCall.thread_id, networkAgent.thread_id);
   assert.equal(prepareRenderCall.thread_id, visualizationAgent.thread_id);
 
-  const visualizationHandoff = events
+  const mapToolOutput = createMapCall.payload?.data?.result?.structuredContent;
+  assert.equal(
+    mapToolOutput?.kind,
+    "inline-visualization.v1",
+    "Map Tool omitted its typed inline-visualization contract",
+  );
+  assert.equal(
+    mapToolOutput?.artifact?.renderer?.kind,
+    "map.v3",
+    "Map Tool returned an unexpected renderer contract",
+  );
+  const mapArtifactId = mapToolOutput?.artifact?.ref;
+  const mapEmbedCode = mapToolOutput?.embed?.code;
+  assert.match(
+    mapArtifactId ?? "",
+    /^map-[a-f0-9-]+$/i,
+    "Map Tool omitted its typed Artifact reference",
+  );
+  assert.equal(
+    mapEmbedCode,
+    `::codex-inline-vis{artifact="${mapArtifactId}"}`,
+    "Map Tool Artifact reference and embed directive diverged",
+  );
+
+  const visualizationHandoffEvent = events
     .filter(
       (event) =>
         event.thread_id === visualizationAgent.thread_id &&
         event.event_type === "codex.item.completed" &&
-        itemType(event) === "agentMessage",
+        itemType(event) === "agentMessage" &&
+        event.payload?.data?.text?.includes("MAP_HANDOFF"),
     )
-    .map((event) => event.payload?.data?.text)
-    .filter((text) => typeof text === "string" && text.includes("MAP_HANDOFF"))
     .at(-1);
+  const visualizationHandoff = visualizationHandoffEvent?.payload?.data?.text;
   assert(visualizationHandoff, "Visualization Agent omitted MAP_HANDOFF provenance");
   assert(
     /"map_manifest_resource_name"\s*:\s*"indonesia_network_map\.v1-[a-f0-9]{24}"/i.test(
@@ -923,25 +918,119 @@ await runCase("Runtime-selected Agent tree and governed tool scope", async () =>
     "Visualization Agent omitted the exact GeoJSON Resource name",
   );
   assert(
-    /"map_artifact_id"\s*:\s*"map-[a-f0-9-]+"/i.test(visualizationHandoff),
-    "Visualization Agent omitted the map Artifact ID",
-  );
-  const mapArtifactId = visualizationHandoff.match(
-    /"map_artifact_id"\s*:\s*"(map-[a-f0-9-]+)"/i,
-  )?.[1];
-  const mapEmbedArtifactId = visualizationHandoff.match(
-    /"map_embed_code"\s*:\s*"::codex-inline-vis\{artifact=\\"(map-[a-f0-9-]+)\\"\}"/i,
-  )?.[1];
-  assert(
-    mapEmbedArtifactId,
-    "Visualization Agent omitted the exact map embed code from MAP_HANDOFF",
+    new RegExp(
+      `"map_artifact_id"\\s*:\\s*"${mapArtifactId}"`,
+      "i",
+    ).test(visualizationHandoff),
+    "Visualization Agent handoff diverged from the Tool-owned map Artifact ID",
   );
   assert.equal(
-    mapEmbedArtifactId,
-    mapArtifactId,
-    "Visualization Agent map Artifact ID and embed code diverged",
+    visualizationHandoff.includes('"map_embed_code"'),
+    false,
+    "Visualization Agent duplicated the embed directive inside model-authored JSON",
   );
-  const mapEmbedCode = `::codex-inline-vis{artifact="${mapArtifactId}"}`;
+  assert.equal(
+    visualizationHandoff.split(/\r?\n/).filter((line) => line === mapEmbedCode)
+      .length,
+    1,
+    "Visualization Agent did not copy the Tool-owned embed directive exactly once as a standalone paragraph",
+  );
+  const projectedMapArtifacts =
+    visualizationHandoffEvent.payload?.data?.inlineArtifacts?.filter(
+      (artifact) => artifact.renderer?.kind === "map.v3",
+    ) ?? [];
+  assert.equal(
+    projectedMapArtifacts.length,
+    1,
+    "Platform did not project exactly one typed map Artifact from the child handoff",
+  );
+  assert.equal(
+    projectedMapArtifacts[0].ref,
+    mapArtifactId,
+    "Platform map projection diverged from the Tool-owned Artifact reference",
+  );
+
+  const reportToolOutput =
+    prepareReportCall.payload?.data?.result?.structuredContent;
+  const reportSourceArguments = prepareReportCall.payload?.data?.arguments;
+  assert(
+    reportSourceArguments &&
+      typeof reportSourceArguments === "object" &&
+      !Array.isArray(reportSourceArguments),
+    "Decision-report Tool call omitted its typed Resource inputs",
+  );
+  assert.equal(
+    reportToolOutput?.kind,
+    "inline-visualization.v1",
+    "Decision-report Tool omitted its typed delivery contract",
+  );
+  assert.equal(
+    reportToolOutput?.artifact?.renderer?.kind,
+    "report.v1",
+    "Decision-report Tool returned an unexpected renderer contract",
+  );
+  const reportArtifactId = reportToolOutput?.artifact?.ref;
+  const reportEmbedCode = reportToolOutput?.embed?.code;
+  assert.match(
+    reportArtifactId ?? "",
+    /^report-[a-f0-9-]+$/i,
+    "Decision-report Tool omitted its typed Artifact reference",
+  );
+  assert.equal(
+    reportEmbedCode,
+    `::codex-inline-vis{artifact="${reportArtifactId}"}`,
+    "Decision-report Tool Artifact reference and embed directive diverged",
+  );
+  assert.equal(
+    Object.hasOwn(reportToolOutput ?? {}, "report_markdown"),
+    false,
+    "Decision-report Tool copied the full report into model-visible structured output",
+  );
+
+  const reportHandoffEvent = events
+    .filter(
+      (event) =>
+        event.thread_id === networkAgent.thread_id &&
+        event.event_type === "codex.item.completed" &&
+        itemType(event) === "agentMessage" &&
+        event.payload?.data?.text?.includes("REPORT_HANDOFF"),
+    )
+    .at(-1);
+  const reportHandoff = reportHandoffEvent?.payload?.data?.text;
+  assert(reportHandoff, "Network Agent omitted REPORT_HANDOFF provenance");
+  assert(
+    /"report_resource_name"\s*:\s*"indonesia_decision_report\.v1-[a-f0-9]{24}"/i.test(
+      reportHandoff,
+    ),
+    "Network Agent omitted the exact decision-report Resource name",
+  );
+  assert(
+    new RegExp(
+      `"report_artifact_id"\\s*:\\s*"${reportArtifactId}"`,
+      "i",
+    ).test(reportHandoff),
+    "Network Agent handoff diverged from the Tool-owned report Artifact ID",
+  );
+  assert.equal(
+    reportHandoff.split(/\r?\n/).filter((line) => line === reportEmbedCode)
+      .length,
+    1,
+    "Network Agent did not copy the Tool-owned report directive exactly once as a standalone paragraph",
+  );
+  const projectedReportArtifacts =
+    reportHandoffEvent.payload?.data?.inlineArtifacts?.filter(
+      (artifact) => artifact.renderer?.kind === "report.v1",
+    ) ?? [];
+  assert.equal(
+    projectedReportArtifacts.length,
+    1,
+    "Platform did not project exactly one typed report Artifact from the child handoff",
+  );
+  assert.equal(
+    projectedReportArtifacts[0].ref,
+    reportArtifactId,
+    "Platform report projection diverged from the Tool-owned Artifact reference",
+  );
 
   const executions = await eventually(async () => {
     const current = await api(`/runs/${state.run.id}/agent-executions`);
@@ -1063,6 +1152,10 @@ await runCase("Runtime-selected Agent tree and governed tool scope", async () =>
     dataAgent,
     networkAgent,
     visualizationAgent,
+    reportArtifactId,
+    reportEmbedCode,
+    reportSourceArguments,
+    mapArtifactId,
     mapEmbedCode,
   };
   return `root + 3 child Threads; ${executions.length} persisted Agent tasks; ${calls.length} MCP calls`;
@@ -1116,8 +1209,23 @@ await runCase("durable typed Resources and cross-Agent map resolution", async ()
 
   const contents = {};
   for (const artifact of artifacts) {
+    assert.equal(artifact.task_id, state.task.id);
+    assert.equal(artifact.producer_run_id, state.run.id);
+    assert.equal(typeof artifact.producer_thread_id, "string");
+    assert(artifact.producer_thread_id.length > 0);
+    assert.equal(typeof artifact.producer_turn_id, "string");
+    assert(artifact.producer_turn_id.length > 0);
+    assert.equal(typeof artifact.producer_item_id, "string");
+    assert(artifact.producer_item_id.length > 0);
+    assert.match(artifact.content_sha256 ?? "", /^[a-f0-9]{64}$/);
     const summary = await api(`/artifacts/${artifact.id}`);
     assert.equal(summary.id, artifact.id);
+    assert.equal(summary.task_id, state.task.id);
+    assert.equal(summary.producer_run_id, state.run.id);
+    assert.equal(summary.producer_thread_id, artifact.producer_thread_id);
+    assert.equal(summary.producer_turn_id, artifact.producer_turn_id);
+    assert.equal(summary.producer_item_id, artifact.producer_item_id);
+    assert.equal(summary.content_sha256, artifact.content_sha256);
     assert(!Object.hasOwn(summary, "source_server"));
     assert(!Object.hasOwn(summary, "source_uri"));
     const content = await api(`/artifacts/${artifact.id}/content`);
@@ -1136,12 +1244,40 @@ await runCase("durable typed Resources and cross-Agent map resolution", async ()
     contents[artifact.id] = content;
   }
 
-  const mapReportEvent = finalReportEvent(finalEvidence.events);
-  assert(mapReportEvent, "Root report did not restore the Visualization Agent map");
-  const inlineMaps = mapReportEvent.payload.data.inlineArtifacts.filter(
+  const rootDeliveryEvents = rootArtifactEvents(finalEvidence.events);
+  assert(
+    rootDeliveryEvents.length > 0,
+    "Root Supervisor did not deliver typed report and map Artifacts",
+  );
+  const rootInlineArtifacts = rootDeliveryEvents.flatMap(
+    (event) => event.payload.data.inlineArtifacts,
+  );
+  const inlineReports = rootInlineArtifacts.filter(
+    (artifact) => artifact.renderer?.kind === "report.v1",
+  );
+  const inlineMaps = rootInlineArtifacts.filter(
     (artifact) => artifact.renderer?.kind === "map.v3",
   );
+  assert.equal(inlineReports.length, 1);
   assert.equal(inlineMaps.length, 1);
+  const decisionReportArtifact = artifacts.find(
+    (artifact) => artifact.artifact_schema === "indonesia_decision_report.v1",
+  );
+  assert(decisionReportArtifact, "Deterministic decision-report Artifact is missing");
+  const reportRendererPayload = inlineReports[0].renderer.payload;
+  assert.equal(reportRendererPayload.status, "ready");
+  assert.equal(reportRendererPayload.source.type, "artifact");
+  assert.equal(reportRendererPayload.source.format, "json");
+  assert.equal(
+    reportRendererPayload.source.artifact_id,
+    decisionReportArtifact.id,
+  );
+  assert.equal(
+    reportRendererPayload.source.url,
+    `/api/artifacts/${decisionReportArtifact.id}/content`,
+  );
+  assert.equal(reportRendererPayload.source.mime_type, "application/json");
+  assert(!JSON.stringify(reportRendererPayload).includes("supply-chain-indonesia://"));
   const rendererPayload = inlineMaps[0].renderer.payload;
   assert.equal(rendererPayload.status, "ready");
   assert.equal(rendererPayload.sources.network.data.type, "artifact");
@@ -1165,234 +1301,158 @@ await runCase("durable typed Resources and cross-Agent map resolution", async ()
   finalEvidence.artifacts = artifacts;
   finalEvidence.contents = contents;
   finalEvidence.binding = binding;
+  finalEvidence.inlineReport = inlineReports[0];
   finalEvidence.inlineMap = inlineMaps[0];
-  return `${artifacts.length} ready Resource Artifacts; one restored map.v3 Artifact`;
+  return `${artifacts.length} ready Resource Artifacts; one report.v1 and one map.v3 delivery`;
 });
 
-await runCase("evidence-backed Supervisor report", async () => {
-  const report = lastFinalReport(finalEvidence.events);
-  assert(report, "Root Supervisor did not produce a final report");
+await runCase("typed Supervisor report Artifact", async () => {
   const decisionReportArtifact = finalEvidence.artifacts.find(
     (artifact) => artifact.artifact_schema === "indonesia_decision_report.v1",
   );
   assert(decisionReportArtifact, "Deterministic decision-report Artifact is missing");
-  const decisionReport = finalEvidence.contents[decisionReportArtifact.id];
-  const expectedReport = `${decisionReport.markdown.trim()}\n\n${finalEvidence.mapEmbedCode}`;
+  assert.equal(decisionReportArtifact.state, "ready");
+  assert.equal(decisionReportArtifact.producer_run_id, state.run.id);
   assert.equal(
-    report.trim(),
-    expectedReport,
-    "Root Supervisor rewrote the Tool-owned report or failed to append the exact map embed",
+    decisionReportArtifact.producer_thread_id,
+    finalEvidence.networkAgent.thread_id,
   );
+  assert.equal(
+    decisionReportArtifact.producer_agent_role,
+    finalEvidence.networkAgent.agent_role,
+  );
+  const decisionReport = finalEvidence.contents[decisionReportArtifact.id];
+  assert.equal(decisionReport.schema_version, "indonesia_decision_report.v1");
+  assert.equal(typeof decisionReport.markdown, "string");
+  assert(decisionReport.markdown.trim(), "Decision-report Artifact markdown is empty");
+  assert.match(decisionReport.markdown_sha256 ?? "", /^[a-f0-9]{64}$/);
+  assert.equal(
+    createHash("sha256").update(decisionReport.markdown).digest("hex"),
+    decisionReport.markdown_sha256,
+    "Decision-report Artifact markdown does not match its declared digest",
+  );
+
+  const expectedSourceSchemas = {
+    inspection_resource_name: "indonesia_dataset_inspection.v1",
+    service_resource_name: "indonesia_service_baseline.v1",
+    current_resource_name: "indonesia_current_network_analysis.v1",
+    optimization_resource_name: "indonesia_location_optimization.v1",
+    candidate_resource_name: "indonesia_candidate_scenario.v1",
+    map_resource_name: "indonesia_network_map.v1",
+    geojson_resource_name: "geojson.v1",
+  };
+  assert(
+    decisionReport.sources &&
+      typeof decisionReport.sources === "object" &&
+      !Array.isArray(decisionReport.sources),
+    "Decision-report Artifact omitted its typed sources",
+  );
+  assert.deepEqual(
+    Object.keys(decisionReport.sources).sort(),
+    Object.keys(expectedSourceSchemas).sort(),
+  );
+  assert.deepEqual(
+    decisionReport.sources,
+    finalEvidence.reportSourceArguments,
+    "Decision-report sources diverged from the exact Tool inputs",
+  );
+  for (const [sourceKey, schema] of Object.entries(expectedSourceSchemas)) {
+    const sourceArtifact = finalEvidence.artifacts.find(
+      (artifact) => artifact.artifact_schema === schema,
+    );
+    assert(sourceArtifact, `Decision-report source Artifact ${schema} is missing`);
+    assert.equal(
+      decisionReport.sources[sourceKey],
+      `${schema}-${sourceArtifact.content_sha256.slice(0, 24)}`,
+      `Decision-report source ${sourceKey} diverged from its ready Artifact`,
+    );
+    assert.equal(sourceArtifact.producer_run_id, state.run.id);
+  }
+  assert(
+    Array.isArray(decisionReport.checks) &&
+      decisionReport.checks.length > 0 &&
+      decisionReport.checks.every(
+        (check) => typeof check === "string" && check.trim().length > 0,
+      ),
+    "Decision-report Artifact omitted its typed validation checks",
+  );
+  assert.deepEqual(decisionReport.release, {
+    workspace_id: state.workspace.id,
+    release_id: state.datasetRelease.id,
+    dataset_id: state.datasetRelease.dataset_id,
+    version: state.datasetRelease.version,
+    content_sha256: state.datasetRelease.content_sha256,
+  });
+
   assert(
     !decisionReport.markdown.includes("::codex-inline-vis{"),
     "Decision-report Resource crossed ownership by embedding a browser Artifact",
   );
-  assert(
-    hasSection(report, "证据索引", "Evidence Index"),
-    "Final report omitted the evidence ownership index",
-  );
-  for (const [chinese, english] of reportSections) {
-    assert(hasSection(report, chinese, english), `Final report omitted ${chinese}`);
-  }
-  const reportSchemas = [
-    "indonesia_dataset_inspection.v1",
-    "indonesia_current_network_analysis.v1",
-    "indonesia_location_optimization.v1",
-    "indonesia_candidate_scenario.v1",
-    "indonesia_network_map.v1",
-    "geojson.v1",
-  ];
-  if (
-    finalEvidence.artifacts.some(
-      (artifact) => artifact.artifact_schema === "indonesia_service_baseline.v1",
-    )
-  ) {
-    reportSchemas.splice(1, 0, "indonesia_service_baseline.v1");
-  }
-  for (const schema of reportSchemas) {
-    const escaped = schema.replaceAll(".", "\\.");
-    assert(
-      new RegExp(`${escaped}-[a-f0-9]{24}`, "i").test(report),
-      `Final report did not cite ${schema} by exact Resource name`,
-    );
-  }
-  assert(/%/.test(report), "Final report omitted coverage percentages");
-  assert(/IDR/i.test(report), "Final report omitted the cost currency");
-  assert(
-    /74(?:\.0+)?%/.test(report),
-    "Final report did not address the two-day coverage target",
-  );
-
-  const artifactContent = (schema) => {
-    const artifact = finalEvidence.artifacts.find(
-      (entry) => entry.artifact_schema === schema,
-    );
-    assert(artifact, `Missing verified ${schema} Artifact`);
-    return finalEvidence.contents[artifact.id];
-  };
-  const current = artifactContent("indonesia_current_network_analysis.v1");
-  const scenario = artifactContent("indonesia_candidate_scenario.v1");
-  const optimization = artifactContent("indonesia_location_optimization.v1");
-
-  for (const day of ["1_day", "2_day", "3_day"]) {
-    assert(
-      report.includes(percentage(current.coverage.demand_coverage[day])),
-      `Final report omitted exact current ${day} demand coverage`,
-    );
-    assert(
-      report.includes(percentage(scenario.candidate_coverage.demand_coverage[day])),
-      `Final report omitted exact selected-scenario ${day} demand coverage`,
-    );
-  }
-  for (const [label, value] of [
-    ["current linehaul cost", current.costs.linehaul_idr],
-    ["current last-mile cost", current.costs.last_mile_idr],
-    ["current transport cost", current.costs.transport_total_idr],
-    ["selected linehaul cost", scenario.candidate_costs.linehaul_idr],
-    ["selected last-mile cost", scenario.candidate_costs.last_mile_idr],
-    ["selected transport cost", scenario.candidate_costs.transport_total_idr],
-    ["selected annual fixed cost", scenario.candidate_costs.annual_fixed_cost_idr],
-    [
-      "selected annualized opening cost",
-      scenario.candidate_costs.annualized_opening_cost_idr,
-    ],
-    ["selected annual decision cost", scenario.candidate_costs.annual_decision_cost_idr],
-  ]) {
-    assert(
-      reportHasInteger(report, value),
-      `Final report omitted exact ${label}: ${value}`,
-    );
-  }
-  const provincesByCode = new Map(
-    current.provinces.map((province) => [province.province_code, province]),
-  );
-  for (const [kind, codes] of [
-    ["priority", current.priority_province_codes.slice(0, 3)],
-    ["best", current.best_province_codes.slice(0, 3)],
-  ]) {
-    for (const code of codes) {
-      const province = provincesByCode.get(code);
-      assert(province, `Current network Artifact omitted province ${code}`);
-      assert(
-        report.includes(code) || report.includes(province.province_name),
-        `Final report omitted ${kind} province ${province.province_name} (${code})`,
-      );
-    }
-    assert(
-      rankedProvincePattern(codes, provincesByCode).test(report),
-      `Final report did not preserve the authoritative ${kind} province order`,
-    );
-  }
-
-  const allowedOperationalIds = new Set([
-    ...current.warehouses.map((warehouse) => warehouse.warehouse_id),
-    ...scenario.warehouses.map((warehouse) => warehouse.warehouse_id),
-    scenario.candidate.candidate_id,
-    ...optimization.evaluations.map((candidate) => candidate.candidate_id),
-  ]);
-  const namedOperationalIds = new Set(
-    report.match(/\b(?:CEN|FWD|CAN)-[A-Z0-9-]+\b/g) ?? [],
-  );
-  for (const operationalId of namedOperationalIds) {
-    assert(
-      allowedOperationalIds.has(operationalId),
-      `Final report named an operational entity absent from validated Resources: ${operationalId}`,
-    );
-  }
-
-  const allowedProvinceCodes = new Set(current.provinces.map((province) => province.province_code));
-  const namedProvinceCodes = new Set(report.match(/\bIDN\d{3}\b/g) ?? []);
-  for (const provinceCode of namedProvinceCodes) {
-    assert(
-      allowedProvinceCodes.has(provinceCode),
-      `Final report named a province absent from the current-network Resource: ${provinceCode}`,
-    );
-  }
-
-  const qualifyingCandidates = optimization.evaluations.filter(
-    (candidate) => candidate.target_met,
+  assert.equal(
+    finalEvidence.inlineReport.ref,
+    finalEvidence.reportArtifactId,
+    "Root report projection diverged from the Tool-owned Artifact reference",
   );
   assert.equal(
-    optimization.target_met_candidate_count,
-    qualifyingCandidates.length,
-    "Optimization Resource qualifying count does not match its evaluations",
+    finalEvidence.inlineMap.ref,
+    finalEvidence.mapArtifactId,
+    "Root map projection diverged from the Tool-owned Artifact reference",
   );
-  assert(qualifyingCandidates.length > 1, "Fixture must retain multiple qualifying candidates");
-  assert(
-    new RegExp(
-      `(?:${optimization.target_met_candidate_count}\\s*个[^\\n]{0,24}(?:达标|候选)|` +
-        `${optimization.target_met_candidate_count}\\s+(?:qualifying|feasible|target-meeting)[^\\n]{0,12}candidates?)`,
-      "i",
-    ).test(report),
-    "Final report omitted the exact number of target-meeting candidates",
-  );
-  assert(
-    /(?:年度决策(?:总)?成本[^。\n]{0,30}(?:最低|最小)|(?:最低|最小化?)[^。\n]{0,30}年度决策(?:总)?成本|(?:minimi[sz]e|lowest)[^.\n]{0,30}annual decision cost)/i.test(
-      report,
-    ),
-    "Final report did not state the objective that selected the candidate",
-  );
-  assert(
-    report.includes(optimization.status),
-    `Final report did not preserve optimization status ${optimization.status}`,
-  );
-  if (optimization.status === "target_met") {
-    assert(
-      !/target_already_met\s*(?:=|:|：|is)?\s*(?:true|是)/i.test(report),
-      "Final report rewrote target_met as target_already_met",
-    );
-  }
-  assert(
-    !/(?:唯一[^。\n]{0,30}(?:达标|超过[^。\n]{0,8}目标|满足[^。\n]{0,8}目标)|only (?:candidate|one)[^.\n]{0,30}(?:meet|exceed)[^.\n]{0,16}target)/i.test(
-      report,
-    ),
-    "Final report falsely claimed the selected candidate was uniquely feasible",
-  );
-  assert(
-    !/(?:有望|可能|预计)[^。\n]{0,32}(?:缓解|减轻|分担|转移)[^。\n]{0,20}(?:压力|负荷|工作量)|(?:may|might|likely|expected to)[^.\n]{0,48}(?:relieve|reduce pressure|shift workload)/i.test(
-      report,
-    ),
-    "Final report retained an unsupported operational-effect inference",
-  );
-  assert(
-    !/(?:IDR[^。\n]{0,28}(?:万亿|亿元?|百万|十亿|million|billion|\b[BM]\b)|(?:成本|费用|金额|支出|节约)[^。\n]{0,36}\d[\d,.]*\s*(?:万亿|亿元?|百万|十亿|million|billion|\b[BM]\b))/i.test(
-      report,
-    ),
-    "Final report introduced an unverified monetary unit conversion",
-  );
-  assert(!report.includes("57.5%"));
-  assert(!report.includes("42.5%"));
-  assert(!report.includes("1.33个百分点"));
-  assert(!report.includes("卸下"));
-  assert(
-    report.trim().endsWith(finalEvidence.mapEmbedCode),
-    "Final report omitted the exact map embed directive",
-  );
-  assert(!report.includes("[internal-resource-uri]"));
-  assert(!report.includes("supply-chain-indonesia://"));
-  assert(!report.includes(repoRoot));
-  finalEvidence.report = report;
-  return `${report.length} characters with six decision sections and a map`;
+  const safeReport = JSON.stringify(decisionReport);
+  assert(!safeReport.includes("[internal-resource-uri]"));
+  assert(!safeReport.includes("supply-chain-indonesia://"));
+  assert(!safeReport.includes(repoRoot));
+  finalEvidence.report = {
+    artifactId: decisionReportArtifact.id,
+    contentSha256: decisionReportArtifact.content_sha256,
+    markdownSha256: decisionReport.markdown_sha256,
+  };
+  return "ready report Artifact with validated digest, sources, checks, and provenance";
 });
 
 await runCase("browser history and evidence recovery", async () => {
   const turns = await api(`/runs/${state.run.id}/thread/turns`);
-  const reportItems = turns
+  const deliveryItems = turns
     .flatMap((turn) => turn.items ?? [])
-    .filter((item) => item.type === "agentMessage" && typeof item.text === "string")
-    .filter((item) =>
-      reportSections.every(([chinese, english]) =>
-        hasSection(item.text, chinese, english),
-      ),
+    .filter(
+      (item) =>
+        item.type === "agentMessage" &&
+        Array.isArray(item.inlineArtifacts) &&
+        item.inlineArtifacts.length > 0,
     );
-  assert(reportItems.length > 0, "Browser history did not restore the final report");
-  const restoredReport = reportItems.at(-1);
-  assert.equal(restoredReport.text, finalEvidence.report);
-  assert(
-    restoredReport.inlineArtifacts?.some(
-      (artifact) => artifact.renderer?.kind === "map.v3",
-    ),
-    "Browser history did not restore the map Artifact",
+  const restoredInlineArtifacts = deliveryItems.flatMap(
+    (item) => item.inlineArtifacts,
+  );
+  const restoredReports = restoredInlineArtifacts.filter(
+    (artifact) => artifact.renderer?.kind === "report.v1",
+  );
+  const restoredMaps = restoredInlineArtifacts.filter(
+    (artifact) => artifact.renderer?.kind === "map.v3",
+  );
+  assert.equal(restoredReports.length, 1, "Browser history did not restore report.v1");
+  assert.equal(restoredMaps.length, 1, "Browser history did not restore map.v3");
+  assert.deepEqual(restoredReports[0], finalEvidence.inlineReport);
+  assert.deepEqual(restoredMaps[0], finalEvidence.inlineMap);
+  assert.equal(
+    restoredReports[0].renderer.payload.source.artifact_id,
+    finalEvidence.report.artifactId,
+  );
+  const restoredReportContent = await api(
+    `/artifacts/${restoredReports[0].renderer.payload.source.artifact_id}/content`,
+  );
+  assert.equal(
+    restoredReportContent.schema_version,
+    "indonesia_decision_report.v1",
+  );
+  assert.equal(typeof restoredReportContent.markdown, "string");
+  assert(restoredReportContent.markdown.trim());
+  assert.equal(
+    restoredReportContent.markdown_sha256,
+    finalEvidence.report.markdownSha256,
+  );
+  assert.equal(
+    createHash("sha256").update(restoredReportContent.markdown).digest("hex"),
+    restoredReportContent.markdown_sha256,
   );
 
   const [binding, agents, executions, artifacts] = await Promise.all([
@@ -1408,6 +1468,15 @@ await runCase("browser history and evidence recovery", async () => {
   assert.deepEqual(executions, finalEvidence.executions);
   assert.equal(artifacts.length, finalEvidence.artifacts.length);
   assert(artifacts.every((artifact) => artifact.state === "ready"));
+  const restoredReportArtifact = artifacts.find(
+    (artifact) => artifact.id === finalEvidence.report.artifactId,
+  );
+  assert(restoredReportArtifact, "Restored Artifact list omitted the report");
+  assert.equal(
+    restoredReportArtifact.content_sha256,
+    finalEvidence.report.contentSha256,
+  );
+  assert.equal(restoredReportArtifact.producer_run_id, state.run.id);
   assert(!JSON.stringify(overview).includes("supply-chain-indonesia://"));
   return `${turns.length} restored Turns; ${agents.length} Agents; ${artifacts.length} Resource Artifacts`;
 });
@@ -1555,8 +1624,13 @@ if (evidenceFile) {
       tool: event.payload?.data?.tool,
     })),
     artifacts: finalEvidence.artifacts,
+    inlineReport: finalEvidence.inlineReport,
     inlineMap: finalEvidence.inlineMap,
-    report: finalEvidence.report,
+    report: {
+      artifactId: finalEvidence.report.artifactId,
+      contentSha256: finalEvidence.report.contentSha256,
+      markdownSha256: finalEvidence.report.markdownSha256,
+    },
     ...(finalEvidence.lifecycle ? { lifecycle: finalEvidence.lifecycle } : {}),
   };
   await mkdir(path.dirname(evidenceFile), { recursive: true });

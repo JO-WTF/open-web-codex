@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { requireCompletedTurn } from "./e2e-turn-contract.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../../..");
@@ -124,12 +125,31 @@ function currentProviderId(catalog) {
 async function createTaskAndRun(title) {
   const task = await api("/tasks", {
     method: "POST",
-    body: { project_id: state.project.id, title },
+    body: {
+      project_id: state.project.id,
+      title,
+      model_provider: providerId,
+      model,
+    },
   });
+  const readiness = await api(
+    `/workspaces/${state.workspace.id}/run-readiness`,
+    {
+      method: "POST",
+      body: {
+        model_provider: providerId,
+        model,
+        supervisor_policy: null,
+        agent: null,
+      },
+    },
+  );
+  assert.notEqual(readiness.status, "blocked", JSON.stringify(readiness.checks));
   const response = await api(`/tasks/${task.id}/runs`, {
     method: "POST",
     body: {
       idempotency_key: `real-e2e-${crypto.randomUUID()}`,
+      readiness_fingerprint: readiness.evaluation_fingerprint,
       workspace_id: state.workspace.id,
       fork_thread_id: null,
       fork_source_run_id: null,
@@ -156,9 +176,12 @@ async function waitForTurn(taskId, turnId, timeoutMs = 180_000) {
       (event.event_type === "codex.thread.failed" || event.payload?.data?.failureReason),
     );
     if (failure) throw new Error(`Turn ${turnId} failed: ${sanitize(failure.payload)}`);
-    return events.some((event) =>
-      event.event_type === "codex.turn.completed" && event.turn_id === turnId,
-    ) ? events : undefined;
+    return requireCompletedTurn(events, {
+      threadId: undefined,
+      turnId,
+      label: `Turn ${turnId}`,
+      sanitize,
+    });
   }, `Turn ${turnId} completion`, timeoutMs, 500);
 }
 

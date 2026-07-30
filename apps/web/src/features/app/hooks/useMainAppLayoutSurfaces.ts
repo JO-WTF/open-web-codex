@@ -707,9 +707,6 @@ function buildGitSurface({
           openAppIconById,
           selectedOpenAppId: appSettings.selectedOpenAppId,
           onSelectOpenAppId: handleSelectOpenAppId,
-          onFilesChanged: () => {
-            void composerWorkspaceState.refreshFiles();
-          },
         }
       : null,
     promptPanelProps: {

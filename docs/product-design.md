@@ -180,9 +180,10 @@ authenticated user
 1. **工作台：** 我的 Task、运行中、待审批、异常和最近项目。
 2. **项目：** 仓库、Task、成员、策略和设置。
 3. **审批中心：** 当前用户有权处理的待审批、已决与过期请求。
-4. **Codex Studio：** Profiles、Providers、MCP、Plugins、Memory、Agents、Skills。
-5. **团队设置：** 成员、邀请、角色、会话和组织安全。
-6. **平台管理：** Runners、队列、容量、版本、审计和系统健康。
+4. **Learn：** 安装受审示例、检查运行依赖、启动任务并审阅可验证结果。
+5. **Codex Studio：** Profiles、Providers、MCP、Plugins、Memory、Agents、Skills。
+6. **团队设置：** 成员、邀请、角色、会话和组织安全。
+7. **平台管理：** Runners、队列、容量、版本、审计和系统健康。
 
 ### 5.2 路由
 
@@ -327,6 +328,26 @@ authenticated user
 - 异常：合同破坏、Profile 恢复失败或错误率上升时回滚 Web Feature Policy 和 Codex 构建，不改写 Profile Home。
 - 终态：兼容矩阵记录 compatible/incompatible/rolled_back。
 
+### WF-15 运行受治理的示例
+
+- 前置：本地 Session、Profile、Provider/模型和目标 Workspace 已存在；用户有权发布
+  Workspace 资源和创建 Task。
+- 正常：用户从 **Learn** 选择一个精确 Tutorial Blueprint revision，查看将创建或复用
+  的 Dataset、Agent、Supervisor 和 capability package，点击 **Set up example**。
+  Platform 通过正式发布服务幂等 reconcile 资源；随后 **Readiness** 使用类型化事实
+  检查 Profile、Provider/模型、执行定义、Workspace 依赖、Runtime capability、MCP 和
+  可选地图呈现。状态为 `ready` 或仅有非阻塞 `degraded` 时，用户在 **Learn** 点击
+  **Start task**；平台接受受治理 Supervisor 后创建 Thread，并把受审 Prompt 放入
+  输入框。用户检查 Prompt 并点击 **Send** 后任务才开始执行。任务执行后，用户处理
+  必要审批，审阅报告、地图和 Artifact，再刷新页面确认恢复。
+- 异常：Blueprint 资产或同身份内容冲突、发布部分失败、必需依赖缺失、readiness
+  fingerprint 在启动前变化、审批拒绝或 Runtime 失败时，保留已成功的不可变资源和当前
+  Task 草稿，显示类型化阻塞项与修复动作；不得创建假 Thread、自动升级版本、切换隐藏
+  实现，或要求用户/模型提供服务器路径、Runtime Role、MCP 内部标识和资源 ID。
+- 终态：示例资源由权威 Release 状态表示；Task/Run 为明确成功、失败、拒绝、取消或
+  中断终态；教程完成度从 Dataset、Release、readiness、Run 和 Artifact 推导，不单独
+  保存一份可能漂移的进度。
+
 ## 7. 功能需求
 
 优先级：P0 为对应版本门禁；P1 为版本内应完成；P2 可延期。
@@ -446,6 +467,17 @@ authenticated user
 | ADM-003 | P0 | 展示队列、磁盘、Profile 进程、版本和合同健康 |
 | ADM-004 | P1 | 审计按用户、项目、Task、动作、结果和时间检索 |
 | ADM-005 | P1 | 敏感审计导出需要额外权限并生成导出审计 |
+
+### 7.9 Learn 与受治理启动
+
+| ID | P | 需求 |
+| --- | --- | --- |
+| LRN-001 | P0 M2 | Tutorial Blueprint 是只读、版本化的平台资源，精确声明受审资产、依赖、推荐 Prompt 和验收值 |
+| LRN-002 | P0 M2 | 示例 reconcile 复用正式发布 owner service 和幂等键；相同身份不同内容显式冲突，部分成功可继续 |
+| LRN-003 | P0 M2 | Readiness 在创建 Task/Run/Thread 前返回 `ready/degraded/blocked`、稳定检查代码、fingerprint 和类型化修复动作 |
+| LRN-004 | P0 M2 | 正式启动重新验证 readiness fingerprint；漂移时保留草稿并重新检查，不重复创建 Task |
+| LRN-005 | P0 M2 | 新用户只通过 Web 完成数据准备、依赖修复、启动、审批、结果审阅和刷新恢复，不输入内部 ID 或宿主路径 |
+| LRN-006 | P1 M2 | Learn 进度只从权威资源推导；UI 可返回第一个未完成步骤，但不建立第二套教程状态 |
 
 ## 8. 状态模型
 

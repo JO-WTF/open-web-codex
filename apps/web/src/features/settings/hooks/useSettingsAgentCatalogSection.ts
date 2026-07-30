@@ -35,7 +35,10 @@ export type SettingsAgentCatalogSectionProps = {
   onLoadPublished: (
     agent: AgentDefinitionSummary,
   ) => Promise<AgentDefinitionDetail | null>;
-  onLoadDatasetReleases: (workspaceId: string | null) => Promise<void>;
+  onLoadDatasetReleases: (
+    workspaceId: string | null,
+    force?: boolean,
+  ) => Promise<void>;
 };
 
 function errorMessage(value: unknown, fallback: string) {
@@ -179,7 +182,10 @@ export function useSettingsAgentCatalogSection(): SettingsAgentCatalogSectionPro
     }
   }, []);
 
-  const onLoadDatasetReleases = useCallback(async (workspaceId: string | null) => {
+  const onLoadDatasetReleases = useCallback(async (
+    workspaceId: string | null,
+    force = false,
+  ) => {
     setIsLoadingDatasets(true);
     setError(null);
     try {
@@ -189,7 +195,8 @@ export function useSettingsAgentCatalogSection(): SettingsAgentCatalogSectionPro
           (workspace) => workspace.state !== "removed",
         );
       const pending = workspaces.filter(
-        (workspace) => !loadedDatasetWorkspaces.current.has(workspace.id),
+        (workspace) =>
+          force || !loadedDatasetWorkspaces.current.has(workspace.id),
       );
       const releases = await Promise.all(
         pending.map((workspace) =>

@@ -1981,34 +1981,23 @@ fn discover_selected_capability_root_paths(
     source_root: Option<&Path>,
     env_value: Option<&std::ffi::OsStr>,
 ) -> Vec<std::path::PathBuf> {
-    let mut candidates = Vec::new();
+    let mut roots = Vec::new();
     if let Some(value) = env_value {
-        candidates.extend(std::env::split_paths(value));
+        roots.extend(
+            std::env::split_paths(value)
+                .filter_map(|path| validated_explicit_capability_root(&path)),
+        );
     }
-    candidates.extend(plugin_roots_below_tools(process_cwd));
+    roots.extend(discover_capability_roots_below(process_cwd));
     if workspace_root != process_cwd {
-        candidates.extend(plugin_roots_below_tools(workspace_root));
+        roots.extend(discover_capability_roots_below(workspace_root));
     }
     if let Some(source_root) = source_root
         .filter(|source_root| *source_root != process_cwd && *source_root != workspace_root)
     {
-        candidates.extend(plugin_roots_below_tools(source_root));
-        if is_plugin_root(source_root) {
-            candidates.push(source_root.to_path_buf());
-        }
-    }
-    if is_plugin_root(process_cwd) {
-        candidates.push(process_cwd.to_path_buf());
-    }
-    if workspace_root != process_cwd && is_plugin_root(workspace_root) {
-        candidates.push(workspace_root.to_path_buf());
+        roots.extend(discover_capability_roots_below(source_root));
     }
 
-    let mut roots = candidates
-        .into_iter()
-        .filter(|path| is_plugin_root(path))
-        .filter_map(|path| path.canonicalize().ok())
-        .collect::<Vec<_>>();
     roots.sort();
     roots.dedup();
     roots
@@ -2020,9 +2009,25 @@ fn source_repo_root() -> Option<&'static Path> {
         .and_then(|manifest_dir| manifest_dir.ancestors().nth(4))
 }
 
-fn plugin_roots_below_tools(root: &Path) -> Vec<std::path::PathBuf> {
-    let tools = root.join("tools");
-    let Ok(entries) = std::fs::read_dir(tools) else {
+fn discover_capability_roots_below(base: &Path) -> Vec<PathBuf> {
+    let Ok(base) = base.canonicalize() else {
+        return Vec::new();
+    };
+    let mut roots = plugin_roots_below_tools(&base);
+    if let Some(root) = validated_scanned_capability_root(&base, &base) {
+        roots.push(root);
+    }
+    roots
+}
+
+fn plugin_roots_below_tools(base: &Path) -> Vec<PathBuf> {
+    let Ok(tools) = base.join("tools").canonicalize() else {
+        return Vec::new();
+    };
+    if !tools.starts_with(base) {
+        return Vec::new();
+    }
+    let Ok(entries) = std::fs::read_dir(&tools) else {
         return Vec::new();
     };
     let mut roots = Vec::new();
@@ -2031,33 +2036,84 @@ fn plugin_roots_below_tools(root: &Path) -> Vec<std::path::PathBuf> {
         let Ok(file_type) = entry.file_type() else {
             continue;
         };
-        if file_type.is_symlink() || !file_type.is_dir() {
+        if !file_type.is_dir() && !file_type.is_symlink() {
             continue;
         }
-        if is_plugin_root(&path) {
-            roots.push(path);
+        if let Some(root) = validated_scanned_capability_root(&path, base) {
+            roots.push(root);
             continue;
         }
-        let Ok(versions) = std::fs::read_dir(&path) else {
+        let Ok(package) = path.canonicalize() else {
             continue;
         };
-        roots.extend(
-            versions
-                .filter_map(Result::ok)
-                .filter(|version| {
-                    version
-                        .file_type()
-                        .is_ok_and(|kind| kind.is_dir() && !kind.is_symlink())
-                })
-                .map(|version| version.path())
-                .filter(|version| is_plugin_root(version)),
-        );
+        if !package.starts_with(base) {
+            continue;
+        }
+        let Ok(versions) = std::fs::read_dir(package) else {
+            continue;
+        };
+        for version in versions.filter_map(Result::ok) {
+            let Ok(file_type) = version.file_type() else {
+                continue;
+            };
+            if !file_type.is_dir() && !file_type.is_symlink() {
+                continue;
+            }
+            if let Some(root) = validated_scanned_capability_root(&version.path(), base) {
+                roots.push(root);
+            }
+        }
     }
     roots
 }
 
-fn is_plugin_root(path: &Path) -> bool {
-    path.join(".codex-plugin").join("plugin.json").is_file()
+fn validated_scanned_capability_root(path: &Path, authorized_base: &Path) -> Option<PathBuf> {
+    let root = path.canonicalize().ok()?;
+    if !root.starts_with(authorized_base) {
+        return None;
+    }
+    validated_capability_root(root)
+}
+
+fn validated_explicit_capability_root(path: &Path) -> Option<PathBuf> {
+    validated_capability_root(path.canonicalize().ok()?)
+}
+
+fn validated_capability_root(root: PathBuf) -> Option<PathBuf> {
+    if !root.is_dir() || !capability_root_tree_is_contained(&root) {
+        return None;
+    }
+    let manifest = root.join(".codex-plugin").join("plugin.json");
+    manifest.is_file().then_some(root)
+}
+
+fn capability_root_tree_is_contained(root: &Path) -> bool {
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            return false;
+        };
+        for entry in entries {
+            let Ok(entry) = entry else {
+                return false;
+            };
+            let path = entry.path();
+            let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+                return false;
+            };
+            if metadata.file_type().is_symlink() {
+                let Ok(target) = path.canonicalize() else {
+                    return false;
+                };
+                if !target.starts_with(root) {
+                    return false;
+                }
+            } else if metadata.is_dir() {
+                pending.push(path);
+            }
+        }
+    }
+    true
 }
 
 fn selected_capability_root_json(root: &Path) -> Value {
@@ -2452,6 +2508,62 @@ mod tests {
             discover_selected_capability_root_paths(&workspace, &process, Some(&source), None);
 
         assert_eq!(roots, vec![source_plugin.canonicalize().unwrap()]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scanned_capability_roots_cannot_escape_authorized_bases_through_tools_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let outside = temp.path().join("outside");
+        let outside_tools = outside.join("tools");
+        let _outside_plugin = create_plugin_root(&outside_tools, "outside-plugin");
+        let process = temp.path().join("process");
+        let workspace = temp.path().join("workspace");
+        let source = temp.path().join("source");
+        for base in [&process, &workspace, &source] {
+            std::fs::create_dir_all(base).expect("create scanned base");
+            symlink(&outside_tools, base.join("tools")).expect("link tools outside scanned base");
+        }
+
+        let roots =
+            discover_selected_capability_root_paths(&workspace, &process, Some(&source), None);
+
+        assert!(roots.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_internal_symlink_escape_but_accepts_an_explicitly_authorized_root_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let process = temp.path().join("process");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir_all(&process).expect("process root");
+        std::fs::create_dir_all(workspace.join("tools")).expect("workspace tools");
+        let escaped = create_plugin_root(&workspace.join("tools"), "escaped-plugin");
+        let external_declaration = temp.path().join("external-mcp.json");
+        std::fs::write(
+            &external_declaration,
+            r#"{"mcpServers":{"external":{"command":"./server"}}}"#,
+        )
+        .expect("external MCP declaration");
+        symlink(&external_declaration, escaped.join(".mcp.json"))
+            .expect("link plugin content outside root");
+
+        let explicit = create_plugin_root(temp.path(), "explicit-plugin");
+        let explicit_link = temp.path().join("explicit-link");
+        symlink(&explicit, &explicit_link).expect("link explicit capability root");
+        let roots = discover_selected_capability_root_paths(
+            &workspace,
+            &process,
+            None,
+            Some(explicit_link.as_os_str()),
+        );
+
+        assert_eq!(roots, vec![explicit.canonicalize().unwrap()]);
     }
 
     #[test]

@@ -1,12 +1,15 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Settings from "lucide-react/dist/esm/icons/settings";
 import Bot from "lucide-react/dist/esm/icons/bot";
+import BookOpen from "lucide-react/dist/esm/icons/book-open";
 import Moon from "lucide-react/dist/esm/icons/moon";
 import Sun from "lucide-react/dist/esm/icons/sun";
 import X from "lucide-react/dist/esm/icons/x";
 import type {
   AgentDefinitionSummary,
+  RunReadiness,
+  RunReadinessAction,
   SupervisorPolicySummary,
 } from "../../../browser/types";
 import type { WorkspaceInfo } from "../../types";
@@ -15,6 +18,9 @@ import Workspaces from "./Workspaces";
 import McpStatus from "./McpStatus";
 import RateLimitCard from "./RateLimitCard";
 import AgentStudioDialog from "./AgentStudioDialog";
+import type { RunLaunchSelection } from "./RunLauncherDialog";
+import MapsConfigurationModal from "../Conversation/messages/MapsConfigurationModal";
+import LearnDialog from "./LearnDialog";
 
 type ThreadInfo = {
   id: string;
@@ -41,11 +47,20 @@ type Props = {
   supervisorPolicies?: SupervisorPolicySummary[];
   supervisorPoliciesLoading?: boolean;
   supervisorPoliciesError?: string | null;
-  onNewSupervisor?: (workspaceId: string, policy: SupervisorPolicySummary) => void;
   agents?: AgentDefinitionSummary[];
   agentsLoading?: boolean;
   agentsError?: string | null;
-  onNewAgent?: (workspaceId: string, agent: AgentDefinitionSummary) => void;
+  onEvaluateReadiness: (
+    workspaceId: string,
+    selection: RunLaunchSelection,
+  ) => Promise<RunReadiness>;
+  onStartTask: (
+    workspaceId: string,
+    selection: RunLaunchSelection,
+    readiness: RunReadiness,
+    operationId: string,
+  ) => Promise<boolean>;
+  onReadinessAction: (action: RunReadinessAction, workspaceId: string) => void;
   onArchiveThread: (workspaceId: string, threadId: string) => void;
   onRemoveWorkspace: (workspaceId: string) => void;
   baseUrl: string;
@@ -60,6 +75,10 @@ type Props = {
   theme: "light" | "dark";
   onToggleTheme: () => void;
   onSupervisorCatalogChanged: () => void;
+  onTutorialPromptReady: (
+    prompt: string,
+    options?: { replaceExisting?: boolean },
+  ) => boolean;
 };
 
 export default function Sidebar({
@@ -78,11 +97,12 @@ export default function Sidebar({
   supervisorPolicies = [],
   supervisorPoliciesLoading = false,
   supervisorPoliciesError = null,
-  onNewSupervisor,
   agents = [],
   agentsLoading = false,
   agentsError = null,
-  onNewAgent,
+  onEvaluateReadiness,
+  onStartTask,
+  onReadinessAction,
   onArchiveThread,
   onRemoveWorkspace,
   baseUrl,
@@ -97,20 +117,32 @@ export default function Sidebar({
   theme,
   onToggleTheme,
   onSupervisorCatalogChanged,
+  onTutorialPromptReady,
 }: Props) {
   const [showSettings, setShowSettings] = useState(false);
   const [showAgentStudio, setShowAgentStudio] = useState(false);
+  const [showMapsSettings, setShowMapsSettings] = useState(false);
+  const [showLearn, setShowLearn] = useState(false);
+  const [mcpExpandRequest, setMcpExpandRequest] = useState(0);
+  const learnTrigger = useRef<HTMLButtonElement | null>(null);
+
+  const closeLearn = useCallback(() => {
+    setShowLearn(false);
+    window.setTimeout(() => learnTrigger.current?.focus(), 0);
+  }, []);
 
   useEffect(() => {
-    if (!showSettings && !showAgentStudio) return;
+    if (!showSettings && !showAgentStudio && !showMapsSettings && !showLearn) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       setShowSettings(false);
       setShowAgentStudio(false);
+      setShowMapsSettings(false);
+      closeLearn();
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [showAgentStudio, showSettings]);
+  }, [closeLearn, showAgentStudio, showLearn, showMapsSettings, showSettings]);
 
   return (
     <aside className="web-sidebar">
@@ -127,21 +159,35 @@ export default function Sidebar({
           threadsByWorkspace={threadsByWorkspace}
           activeThreadId={activeThreadId}
           onSelectThread={onSelectThread}
-          onNewThread={onNewThread}
           supervisorPolicies={supervisorPolicies}
           supervisorPoliciesLoading={supervisorPoliciesLoading}
           supervisorPoliciesError={supervisorPoliciesError}
-          onNewSupervisor={onNewSupervisor}
           agents={agents}
           agentsLoading={agentsLoading}
           agentsError={agentsError}
-          onNewAgent={onNewAgent}
+          onEvaluateReadiness={onEvaluateReadiness}
+          onStartTask={onStartTask}
+          onReadinessAction={(action, workspaceId) => {
+            if (action === "open_agent_studio") {
+              setShowAgentStudio(true);
+              return;
+            }
+            if (action === "open_mcp_status") {
+              setMcpExpandRequest((request) => request + 1);
+              return;
+            }
+            if (action === "open_maps_settings") {
+              setShowMapsSettings(true);
+              return;
+            }
+            onReadinessAction(action, workspaceId);
+          }}
           onArchiveThread={onArchiveThread}
           onRemoveWorkspace={onRemoveWorkspace}
           busy={busy}
         />
 
-        <McpStatus servers={mcpServers} />
+        <McpStatus servers={mcpServers} expandRequest={mcpExpandRequest} />
 
 
       </div>
@@ -149,6 +195,21 @@ export default function Sidebar({
       <div className="web-sidebar-bottom">
         {rateLimits && currentProviderId === "openai" ? <RateLimitCard rateLimits={rateLimits} /> : null}
         <div className="web-sidebar-actions">
+          <button
+            type="button"
+            className="web-learn-toggle"
+            aria-label="Open Learn"
+            aria-haspopup="dialog"
+            aria-expanded={showLearn}
+            title="Learn"
+            onClick={(event) => {
+              learnTrigger.current = event.currentTarget;
+              setShowLearn(true);
+            }}
+          >
+            <BookOpen size={16} aria-hidden="true" />
+            <span>Learn</span>
+          </button>
           <button
             type="button"
             className="web-agent-studio-toggle"
@@ -260,6 +321,52 @@ export default function Sidebar({
         </div>,
         document.body,
       )}
+      {showLearn && createPortal(
+        <div
+          className="web-settings-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeLearn();
+          }}
+        >
+          <LearnDialog
+            workspaces={workspaces}
+            activeWorkspaceId={activeWorkspaceId}
+            busy={busy}
+            onEvaluateReadiness={onEvaluateReadiness}
+            onStartTask={onStartTask}
+            onReadinessAction={(action, workspaceId) => {
+              if (action === "open_agent_studio") {
+                closeLearn();
+                setShowAgentStudio(true);
+                return;
+              }
+              if (action === "open_mcp_status") {
+                closeLearn();
+                setMcpExpandRequest((request) => request + 1);
+                return;
+              }
+              if (action === "open_maps_settings") {
+                closeLearn();
+                setShowMapsSettings(true);
+                return;
+              }
+              closeLearn();
+              onReadinessAction(action, workspaceId);
+            }}
+            onCatalogChanged={onSupervisorCatalogChanged}
+            onPromptReady={onTutorialPromptReady}
+            onClose={closeLearn}
+          />
+        </div>,
+        document.body,
+      )}
+      {showMapsSettings ? (
+        <MapsConfigurationModal
+          initialProvider="mapbox"
+          onClose={() => setShowMapsSettings(false)}
+          onSaved={() => setShowMapsSettings(false)}
+        />
+      ) : null}
     </aside>
   );
 }

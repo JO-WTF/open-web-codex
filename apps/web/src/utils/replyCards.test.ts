@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { parseInlineVisualizationArtifact } from "./replyCards";
+import {
+  parseInlineVisualizationArtifact,
+  parseReportArtifactContent,
+} from "./replyCards";
+
+const reportArtifactId = "8e98ff2f-82ee-4cc9-a3e6-2974debf8666";
 
 function artifact(overrides: Record<string, unknown> = {}) {
   return {
@@ -56,6 +61,27 @@ function artifact(overrides: Record<string, unknown> = {}) {
             title: "路线",
             items: [{ label: "驾车路线", color: "#2563eb", type: "line" }],
           },
+        },
+        ...overrides,
+      },
+    },
+  };
+}
+
+function reportArtifact(overrides: Record<string, unknown> = {}) {
+  return {
+    ref: "indonesia-decision-report",
+    renderer: {
+      kind: "report.v1",
+      payload: {
+        title: "Indonesia warehouse-network decision",
+        status: "ready",
+        source: {
+          type: "artifact",
+          format: "json",
+          artifact_id: reportArtifactId,
+          mime_type: "application/json",
+          url: `/api/artifacts/${reportArtifactId}/content`,
         },
         ...overrides,
       },
@@ -131,11 +157,14 @@ describe("parseInlineVisualizationArtifact", () => {
   });
 
   it("normalizes standard camera fields", () => {
-    expect(
-      parseInlineVisualizationArtifact(
-        artifact({ center: [114.0579, 22.5431], zoom: 8, bearing: 15, pitch: 30 }),
-      )?.card.viewport,
-    ).toEqual({
+    const parsed = parseInlineVisualizationArtifact(
+      artifact({ center: [114.0579, 22.5431], zoom: 8, bearing: 15, pitch: 30 }),
+    );
+    expect(parsed?.rendererKind).toBe("map.v3");
+    if (parsed?.rendererKind !== "map.v3") {
+      throw new Error("Expected a map.v3 Artifact");
+    }
+    expect(parsed.card.viewport).toEqual({
       mode: "camera",
       center: [114.0579, 22.5431],
       zoom: 8,
@@ -152,5 +181,104 @@ describe("parseInlineVisualizationArtifact", () => {
         }),
       ),
     ).toBeNull();
+  });
+
+  it("accepts only the typed authorized report Artifact source", () => {
+    expect(parseInlineVisualizationArtifact(reportArtifact())).toEqual({
+      ref: "indonesia-decision-report",
+      rendererKind: "report.v1",
+      card: {
+        type: "card",
+        kind: "report.v1",
+        id: "indonesia-decision-report",
+        title: "Indonesia warehouse-network decision",
+        status: "ready",
+        source: {
+          type: "artifact",
+          format: "json",
+          artifactId: reportArtifactId,
+          mimeType: "application/json",
+          url: `/api/artifacts/${reportArtifactId}/content`,
+        },
+      },
+    });
+  });
+
+  it.each([
+    ["non-ready status", { status: "loading" }],
+    [
+      "external URL",
+      {
+        source: {
+          type: "artifact",
+          format: "json",
+          artifact_id: reportArtifactId,
+          mime_type: "application/json",
+          url: "https://example.com/report.json",
+        },
+      },
+    ],
+    [
+      "mismatched Artifact URL",
+      {
+        source: {
+          type: "artifact",
+          format: "json",
+          artifact_id: reportArtifactId,
+          mime_type: "application/json",
+          url: "/api/artifacts/11111111-1111-1111-1111-111111111111/content",
+        },
+      },
+    ],
+    [
+      "non-JSON MIME type",
+      {
+        source: {
+          type: "artifact",
+          format: "json",
+          artifact_id: reportArtifactId,
+          mime_type: "text/html",
+          url: `/api/artifacts/${reportArtifactId}/content`,
+        },
+      },
+    ],
+    ["model-provided Markdown", { markdown: "# Untrusted report" }],
+  ])("rejects a report payload with %s", (_label, overrides) => {
+    expect(parseInlineVisualizationArtifact(reportArtifact(overrides))).toBeNull();
+  });
+});
+
+describe("parseReportArtifactContent", () => {
+  it("accepts the deterministic decision-report fields from authorized JSON", () => {
+    expect(parseReportArtifactContent({
+      schema_version: "indonesia_decision_report.v1",
+      markdown: "# Decision\n\n| Site | Cost |\n| --- | ---: |\n| A | 10 |",
+      markdown_sha256: "a".repeat(64),
+      checks: ["source identities match"],
+    })).toEqual({
+      schemaVersion: "indonesia_decision_report.v1",
+      markdown: "# Decision\n\n| Site | Cost |\n| --- | ---: |\n| A | 10 |",
+      markdownSha256: "a".repeat(64),
+    });
+  });
+
+  it.each([
+    ["another schema", {
+      schema_version: "delivery_audit_report.v1",
+      markdown: "# Decision",
+      markdown_sha256: "a".repeat(64),
+    }],
+    ["empty Markdown", {
+      schema_version: "indonesia_decision_report.v1",
+      markdown: " \n ",
+      markdown_sha256: "a".repeat(64),
+    }],
+    ["malformed Markdown digest", {
+      schema_version: "indonesia_decision_report.v1",
+      markdown: "# Decision",
+      markdown_sha256: "not-a-sha256",
+    }],
+  ])("rejects %s", (_label, value) => {
+    expect(parseReportArtifactContent(value)).toBeNull();
   });
 });

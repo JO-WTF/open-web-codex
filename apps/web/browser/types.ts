@@ -67,6 +67,47 @@ export type AgentRunSelection = {
   release_id: string | null;
 };
 
+export type RunReadinessRequest = {
+  model_provider: string;
+  model: string;
+  supervisor_policy: SupervisorPolicySelection | null;
+  agent: AgentRunSelection | null;
+  fork_thread_id?: string | null;
+  fork_source_run_id?: string | null;
+};
+
+export type RunReadinessStatus = "ready" | "degraded" | "blocked";
+
+export type RunReadinessCheckCode =
+  | "runtime_profile"
+  | "provider_model"
+  | "execution_definition"
+  | "workspace_dependencies"
+  | "runtime_capabilities"
+  | "mcp_servers"
+  | "map_presentation";
+
+export type RunReadinessAction =
+  | "open_workspace_data"
+  | "open_agent_studio"
+  | "open_provider_settings"
+  | "open_mcp_status"
+  | "open_maps_settings"
+  | "retry";
+
+export type RunReadinessCheck = {
+  code: RunReadinessCheckCode;
+  status: RunReadinessStatus;
+  message: string;
+  action: RunReadinessAction | null;
+};
+
+export type RunReadiness = {
+  status: RunReadinessStatus;
+  evaluation_fingerprint: string;
+  checks: RunReadinessCheck[];
+};
+
 export type SupervisorPolicySummary = SupervisorPolicySelection & {
   display_name: string;
   description: string;
@@ -547,6 +588,71 @@ export type WorkspaceDatasetReleaseSummary = {
   published_at: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type TutorialBlueprintSummary = {
+  blueprint_id: string;
+  revision: string;
+  display_name: string;
+  description: string;
+  estimated_minutes: number;
+};
+
+export type TutorialBlueprintDataset = {
+  dataset_id: string;
+  version: string;
+  display_name: string;
+  description: string;
+  file_count: number;
+  source_content_sha256: string;
+};
+
+export type TutorialBlueprintAgentTemplate = {
+  definition_id: string;
+  version: string;
+  content_sha256: string;
+};
+
+export type TutorialBlueprintSupervisorTemplate = {
+  policy_id: string;
+  version: string;
+  content_sha256: string;
+};
+
+export type TutorialBlueprintInstructionPolicyTemplate = {
+  policy_id: string;
+  version: string;
+  content_sha256: string;
+};
+
+export type TutorialBlueprint = TutorialBlueprintSummary & {
+  dataset: TutorialBlueprintDataset;
+  agent_templates: TutorialBlueprintAgentTemplate[];
+  supervisor_template: TutorialBlueprintSupervisorTemplate;
+  instruction_policy_template: TutorialBlueprintInstructionPolicyTemplate;
+  required_mcp_servers: string[];
+  expected_artifact_types: string[];
+  recommended_prompt: string;
+  content_sha256: string;
+};
+
+export type TutorialBlueprintIssue = {
+  code: string;
+  message: string;
+};
+
+export type TutorialBlueprintReconcileResponse = {
+  status: "installed" | "partial";
+  blueprint_id: string;
+  revision: string;
+  workspace_id: string;
+  dataset_release: WorkspaceDatasetReleaseSummary | null;
+  agent_releases: AgentDefinitionReleaseSummary[];
+  supervisor_release: SupervisorReleaseSummary | null;
+  supervisor_policy: SupervisorPolicySelection | null;
+  recommended_prompt: string;
+  expected_artifact_types: string[];
+  issues: TutorialBlueprintIssue[];
 };
 
 export type WorkspaceFileDiff = {

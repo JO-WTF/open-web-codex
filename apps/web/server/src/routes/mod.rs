@@ -26,6 +26,7 @@ pub mod supervisor_policies;
 pub mod tasks;
 pub mod terminals;
 pub mod threads;
+pub mod tutorial_blueprints;
 pub mod workspace_datasets;
 pub mod workspaces;
 
@@ -251,6 +252,22 @@ pub fn router(
             axum::routing::post(approvals::respond_user_input),
         )
         .route("/tasks/{id}/runs", axum::routing::post(runs::start_run))
+        .route(
+            "/workspaces/{id}/run-readiness",
+            axum::routing::post(runs::readiness),
+        )
+        .route(
+            "/tutorial-blueprints",
+            axum::routing::get(tutorial_blueprints::list),
+        )
+        .route(
+            "/tutorial-blueprints/{blueprint_id}/{revision}",
+            axum::routing::get(tutorial_blueprints::get),
+        )
+        .route(
+            "/workspaces/{workspace_id}/tutorial-blueprints/{blueprint_id}/{revision}/reconcile",
+            axum::routing::post(tutorial_blueprints::reconcile),
+        )
         .route(
             "/supervisor-policies",
             axum::routing::get(supervisor_policies::list_published),

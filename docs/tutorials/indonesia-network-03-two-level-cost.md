@@ -111,7 +111,7 @@ ARTIFACT_HANDOFFS，再分别报告当前成本、候选时效变化、运输成
 费用的年度决策成本变化、约束和 checks。不得把运输成本下降写成总成本下降。
 ```
 
-选择同一个 `Enterprise Network Planning Agent · 3.4.0` template，Artifact contracts
+选择同一个 `Enterprise Network Planning Agent · 3.6.0` template，Artifact contracts
 保留：
 
 ```text
@@ -177,7 +177,8 @@ Save draft → Validate → Publish
 
 ## 4. 启动 2.0.0 Supervisor
 
-选择 **Tutorial Indonesia Network Supervisor · 2.0.0**，发送：
+在 Workspace 点击 **New task**。在 **Start a task** 中选择 **Supervisor** 和
+**Tutorial Indonesia Network Supervisor · 2.0.0**，发送：
 
 ```text
 核算当前印尼两级仓网的 1 天、2 天、3 天需求覆盖率、中心仓到前置仓的年度干线成本、
@@ -225,9 +226,9 @@ Domain Tool 在发布前已经原子校验自己的 Resource。独立 `validate_
 正确结论不是简单说“Pontianak 好”或“不好”，而是：
 
 - 它让 2 天需求覆盖率从 71.80% 提升到 74.18%；
-- 它让年度运输成本降低约 0.98 billion IDR；
-- 它的固定费用和年化开仓费用合计 16.425 billion IDR；
-- 因此年度决策成本增加约 15.45 billion IDR；
+- 它让年度运输成本降低 IDR 976,434,900；
+- 它的固定费用和年化开仓费用合计 IDR 16,425,000,000；
+- 因此年度决策成本增加 IDR 15,448,565,100；
 - 是否接受这项成本取决于业务对时效改善的价值判断，本篇没有提供这个价值函数。
 
 建议可以是“Pontianak 能达到 74% 左右的时效目标，但仅凭运输节省不能覆盖设施费用”，

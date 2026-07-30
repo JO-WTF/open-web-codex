@@ -32,7 +32,7 @@ const agents: SettingsSupervisorsSectionProps["agents"] = [
     source: "repository",
     release_id: null,
     definition_id: "enterprise-network-planning-agent",
-    version: "3.4.0",
+    version: "3.6.0",
     display_name: "Enterprise Network Planning Agent",
     description: "Compares network scenarios.",
     responsibilities: ["Compare scenarios"],
@@ -222,7 +222,7 @@ describe("SettingsSupervisorsSection", () => {
       artifact_type: "indonesia_dataset_inspection.v1",
       producer_agent: "enterprise-data-agent@3.1.0",
       consumer_agents: [
-        "enterprise-network-planning-agent@3.4.0",
+        "enterprise-network-planning-agent@3.6.0",
         "supervisor",
       ],
       required: false,
@@ -305,7 +305,149 @@ describe("SettingsSupervisorsSection", () => {
     ).toBeTruthy();
     expect(screen.getByText(/spawn limit 1/)).toBeTruthy();
     expect(screen.getByText(/indonesia_dataset_inspection.v1/)).toBeTruthy();
+    const technicalContract = screen.getByText("Technical contract").closest("details");
+    expect(technicalContract?.open).toBe(false);
+    fireEvent.click(screen.getByText("Technical contract"));
+    expect(technicalContract?.open).toBe(true);
     expect(screen.getByText(/Coordinate the selected Agents/)).toBeTruthy();
     expect(props.onLoadPublished).not.toHaveBeenCalled();
+  });
+
+  it("copies a built-in exact Supervisor release into a new definition", () => {
+    const policy = {
+      policy_id: "enterprise-supervisor-copilot",
+      version: "3.14.0",
+      display_name: "Enterprise Supervisor Copilot",
+      description: "Coordinates governed planning Agents.",
+      source: "repository" as const,
+    };
+    const key = `${policy.policy_id}@${policy.version}`;
+    const props: SettingsSupervisorsSectionProps = {
+      ...baseProps(),
+      publishedPolicies: [policy],
+      detailByPolicy: {
+        [key]: {
+          ...policy,
+          responsibilities: ["Coordinate bounded assignments."],
+          instruction_policy: baseProps().instructionPolicies[0],
+          platform_instructions: "Use only authorized Runtime capabilities.",
+          custom_instructions: "Deliver the governed decision report.",
+          agents: [
+            {
+              definition_id: "enterprise-data-agent",
+              version: "3.1.0",
+              release_id: null,
+              spawn_limit: 1,
+            },
+          ],
+          artifact_contracts: [
+            {
+              artifact_type: "indonesia_dataset_inspection.v1",
+              producer_agent: "enterprise-data-agent@3.1.0",
+              consumer_agents: ["supervisor"],
+              required: true,
+            },
+          ],
+          max_active_child_agents: 1,
+          content_sha256: "a".repeat(64),
+          execution_semantics_sha256: "d".repeat(64),
+        },
+      },
+    };
+
+    render(<SettingsSupervisorsSection {...props} studioMode />);
+    fireEvent.click(screen.getByRole("button", { name: "View details" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Create custom Supervisor" }),
+    );
+
+    expect((screen.getByLabelText("Policy ID") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("Version") as HTMLInputElement).value).toBe("1.0.0");
+    expect(
+      (screen.getByLabelText("Custom Supervisor instructions") as HTMLTextAreaElement).value,
+    ).toBe("Deliver the governed decision report.");
+    expect(
+      (screen.getByRole("checkbox", {
+        name: /Enterprise Data Agent/,
+      }) as HTMLInputElement).checked,
+    ).toBe(true);
+  });
+
+  it("creates a new version from the complete exact user Supervisor release", () => {
+    const policy = {
+      policy_id: "network-supervisor",
+      version: "2.4.6",
+      display_name: "Network Supervisor",
+      description: "Coordinates governed planning Agents.",
+      source: "user_release" as const,
+    };
+    const key = `${policy.policy_id}@${policy.version}`;
+    const props: SettingsSupervisorsSectionProps = {
+      ...baseProps(),
+      definitions: [
+        {
+          id: "supervisor-definition-1",
+          policy_id: policy.policy_id,
+          display_name: policy.display_name,
+          description: policy.description,
+          owner_user_id: "user-1",
+          draft: null,
+          releases: [
+            {
+              id: "supervisor-release-1",
+              policy_id: policy.policy_id,
+              version: policy.version,
+              display_name: policy.display_name,
+              description: policy.description,
+              content_sha256: "a".repeat(64),
+              published_at: "2026-07-29T00:00:00Z",
+            },
+          ],
+          created_at: "2026-07-29T00:00:00Z",
+          updated_at: "2026-07-29T00:00:00Z",
+        },
+      ],
+      publishedPolicies: [policy],
+      detailByPolicy: {
+        [key]: {
+          ...policy,
+          responsibilities: ["Coordinate bounded assignments."],
+          instruction_policy: baseProps().instructionPolicies[0],
+          platform_instructions: "Use only authorized Runtime capabilities.",
+          custom_instructions: "Preserve the exact reviewed orchestration method.",
+          agents: [
+            {
+              definition_id: "enterprise-data-agent",
+              version: "3.1.0",
+              release_id: null,
+              spawn_limit: 1,
+            },
+          ],
+          artifact_contracts: [
+            {
+              artifact_type: "indonesia_dataset_inspection.v1",
+              producer_agent: "enterprise-data-agent@3.1.0",
+              consumer_agents: ["supervisor"],
+              required: true,
+            },
+          ],
+          max_active_child_agents: 1,
+          content_sha256: "a".repeat(64),
+          execution_semantics_sha256: "d".repeat(64),
+        },
+      },
+    };
+
+    render(<SettingsSupervisorsSection {...props} studioMode />);
+    fireEvent.click(screen.getByRole("button", { name: "View details" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create new version" }));
+
+    expect((screen.getByLabelText("Policy ID") as HTMLInputElement).value).toBe(
+      policy.policy_id,
+    );
+    expect((screen.getByLabelText("Version") as HTMLInputElement).value).toBe("2.4.7");
+    expect(
+      (screen.getByLabelText("Custom Supervisor instructions") as HTMLTextAreaElement).value,
+    ).toBe("Preserve the exact reviewed orchestration method.");
   });
 });

@@ -69,6 +69,38 @@ pub struct EnqueueRunRequest {
     pub agent: Option<AgentRunSnapshotInput>,
 }
 
+/// Stable client-selected execution identity used to replay an already
+/// accepted Run without re-reading mutable Provider, Runtime, or capability
+/// state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunExecutionSelection {
+    Standard,
+    Supervisor {
+        policy_id: String,
+        version: String,
+    },
+    Agent {
+        definition_id: String,
+        version: String,
+        release_id: Option<Uuid>,
+    },
+    /// Forked Runs inherit the persisted execution binding of their exact
+    /// source Run. They never accept a second direct execution selection.
+    Inherited,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplayRunRequest {
+    pub organization_id: Uuid,
+    pub actor_id: Uuid,
+    pub task_id: Uuid,
+    pub idempotency_key: String,
+    pub workspace_id: Uuid,
+    pub fork_thread_id: Option<String>,
+    pub fork_source_run_id: Option<Uuid>,
+    pub execution: RunExecutionSelection,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentRunSource {
     Repository,

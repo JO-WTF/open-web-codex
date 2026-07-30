@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useId, useState } from "react";
 
 type McpServerEntry = {
   name: string;
@@ -9,6 +9,7 @@ type McpServerEntry = {
 
 type Props = {
   servers: Record<string, McpServerEntry>;
+  expandRequest?: number;
 };
 
 function statusIcon(status: string): string {
@@ -37,8 +38,12 @@ function statusClass(status: string): string {
   }
 }
 
-export default function McpStatus({ servers }: Props) {
+export default function McpStatus({ servers, expandRequest = 0 }: Props) {
   const [collapsed, setCollapsed] = useState(true);
+  const listId = useId();
+  useEffect(() => {
+    if (expandRequest > 0) setCollapsed(false);
+  }, [expandRequest]);
   const entries = Object.values(servers);
   if (entries.length === 0) return null;
 
@@ -47,11 +52,16 @@ export default function McpStatus({ servers }: Props) {
 
   return (
     <div className="web-mcp-panel">
-      <div
+      <button
+        type="button"
         className="web-mcp-toggle"
-        onClick={() => setCollapsed(!collapsed)}
+        aria-expanded={!collapsed}
+        aria-controls={listId}
+        onClick={() => setCollapsed((current) => !current)}
       >
-        <span className="web-mcp-toggle-arrow">{collapsed ? "▶" : "▼"}</span>
+        <span className="web-mcp-toggle-arrow" aria-hidden="true">
+          {collapsed ? "▶" : "▼"}
+        </span>
         <span className="web-mcp-toggle-label">MCP Servers</span>
         {errorCount > 0 && (
           <span className="web-mcp-badge-error">{errorCount} err</span>
@@ -59,9 +69,9 @@ export default function McpStatus({ servers }: Props) {
         <span className="web-mcp-count">
           {readyCount}/{entries.length}
         </span>
-      </div>
+      </button>
       {!collapsed && (
-        <div className="web-mcp-list">
+        <div className="web-mcp-list" id={listId}>
           {entries.map((srv) => (
             <div key={srv.name} className="web-mcp-item">
               <span className={`web-mcp-dot ${statusClass(srv.status)}`}>

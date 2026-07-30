@@ -1,0 +1,71 @@
+{
+  "schemaVersion": "tutorial-blueprint.v2",
+  "blueprintId": "indonesia-warehouse-network",
+  "revision": "1.4.0",
+  "displayName": "Indonesia warehouse-network decision",
+  "description": "Installs the reviewed synthetic Dataset and exact governed Agent/Supervisor Releases needed for the Indonesia warehouse-network tutorial.",
+  "estimatedMinutes": 10,
+  "dataset": {
+    "datasetId": "indonesia-warehouse-network-tutorial",
+    "version": "1.0.0",
+    "displayName": "Indonesia Warehouse Network Tutorial",
+    "description": "Synthetic, source-locked tutorial data for governed Indonesia warehouse-network analysis.",
+    "sourceContentSha256": "d3125cf1e37b9db622a603350b01e85c138add710a99da766f966300a169b3a9",
+    "files": [
+      { "logicalName": "dataset-manifest.json", "role": "dataset_manifest", "mediaType": "application/json", "bytes": 2099, "sha256": "f2c333591ea238b17ecb15809e490f4ea02c8090a571904d8b46fc9885f5d824" },
+      { "logicalName": "province-boundaries.geojson", "role": "province_boundaries", "mediaType": "application/geo+json", "bytes": 2564659, "sha256": "8c98d1362d2642f367a38e9c796dc5c307d2d9040e6cfee00c17164aa9ad15ab" },
+      { "logicalName": "customers.csv.gz", "role": "customers", "mediaType": "application/gzip", "bytes": 3151792, "sha256": "aba0b28e4b7fa16fabcfdfc546148476e122d66af713da02c4f33520e6763092" },
+      { "logicalName": "customer-assignments.csv.gz", "role": "customer_assignments", "mediaType": "application/gzip", "bytes": 2624086, "sha256": "b308f2ac39a5d246522f06694f72e0677ec663d82e892ca05619dd75353cb4f4" },
+      { "logicalName": "warehouses.csv", "role": "warehouses", "mediaType": "text/csv", "bytes": 1521, "sha256": "e68fa3f4dd139e2848e3ee13c2ab24bc530cf6e6b16cb40809eecac5608467ce" },
+      { "logicalName": "warehouse-links.csv", "role": "warehouse_links", "mediaType": "text/csv", "bytes": 751, "sha256": "8810ba18fb5ad5ef8228af79c0fa918deb9ea27ecc8644366f3388b94b21b9f2" },
+      { "logicalName": "candidate-locations.csv", "role": "candidate_locations", "mediaType": "text/csv", "bytes": 2457, "sha256": "132779a6223c2cbc3d4db74396d694e5921e586dbe788d86d1df600411478848" },
+      { "logicalName": "transport-quotes.csv", "role": "transport_quotes", "mediaType": "text/csv", "bytes": 156962, "sha256": "58b3072cec1c0a3d53612cef0fd54a8332f2673f1da94539d56b90da35a70ba5" },
+      { "logicalName": "planning-policy.json", "role": "planning_policy", "mediaType": "application/json", "bytes": 766, "sha256": "a61ef6ccbaf0cc54a69e09a44bd0d4a3106464fb9c1cd5495b31b533d14c0691" },
+      { "logicalName": "validation-report.json", "role": "validation_report", "mediaType": "application/json", "bytes": 8540, "sha256": "becaa26ecaf63ce6a274808da2c4dbef4482d02236c48d62d0bbd2745281a036" }
+    ]
+  },
+  "agentTemplates": [
+    {
+      "definitionId": "enterprise-data-agent",
+      "version": "3.1.0",
+      "contentSha256": "151bc9040a5be5da82b57942585c3ddac3ea1075be1f1a30ba94066310f2032a",
+      "usesBlueprintDataset": true
+    },
+    {
+      "definitionId": "enterprise-network-planning-agent",
+      "version": "3.6.0",
+      "contentSha256": "7ed8584a99285660aea8120708c06c86dd0f4da496b8273fa72fce151fd9a4df",
+      "usesBlueprintDataset": false
+    },
+    {
+      "definitionId": "enterprise-visualization-agent",
+      "version": "1.4.0",
+      "contentSha256": "7ca2b17f0e2891d40298f70482c1a36a2866385f3ba07bcc5a74b4bd43f84c84",
+      "usesBlueprintDataset": false
+    }
+  ],
+  "supervisorTemplate": {
+    "policyId": "enterprise-supervisor-copilot",
+    "version": "3.14.0",
+    "contentSha256": "6c7c95afa1efc7fc1316836b6fd1309265bba5ffb91f2161db6dc606101b5d53"
+  },
+  "instructionPolicyTemplate": {
+    "policyId": "platform-supervisor-behavior",
+    "version": "1.1.0",
+    "contentSha256": "995bdeb469712d1edd6811d6027255d01c78a6e5948150b5f5db559a93d69ef1"
+  },
+  "requiredMcpServers": ["map_utils", "supply_chain_indonesia"],
+  "expectedArtifactTypes": [
+    "indonesia_dataset_inspection.v1",
+    "indonesia_service_baseline.v1",
+    "indonesia_current_network_analysis.v1",
+    "indonesia_candidate_scenario.v1",
+    "indonesia_location_optimization.v1",
+    "indonesia_network_map.v1",
+    "geojson.v1",
+    "indonesia_decision_report.v1",
+    "report.v1",
+    "map.v3"
+  ],
+  "recommendedPromptFile": "recommended-prompt.md"
+}

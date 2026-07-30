@@ -1,12 +1,11 @@
 import { useMemo } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import {
   indexInlineVisualizationArtifacts,
   segmentInlineVisualizations,
 } from "../../../utils/inlineVisualizations";
 import type { InlineVisualizationArtifact } from "../../../utils/replyCards";
 import ReplyCard from "./ReplyCard";
+import SafeMarkdown from "./SafeMarkdown";
 
 type Props = {
   text: string;
@@ -14,33 +13,9 @@ type Props = {
   onOpenFile?: (path: string) => void;
   variant?: "reply" | "commentary";
   inlineArtifacts?: InlineVisualizationArtifact[];
+  showInlineArtifacts?: boolean;
+  hiddenInlineArtifactRefs?: string[];
 };
-
-function MarkdownText({ text, onOpenFile }: { text: string; onOpenFile?: Props["onOpenFile"] }) {
-  return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
-      a: ({ href, children, ...props }) => {
-        const external = Boolean(href && /^(?:https?:|mailto:)/i.test(href));
-        const navigational = external || Boolean(href?.startsWith("#"));
-        return <a
-          href={href}
-          {...props}
-          className={external ? "web-external-link" : undefined}
-          target={external ? "_blank" : undefined}
-          rel={external ? "noopener noreferrer" : undefined}
-          onClick={(event) => {
-            if (!navigational && href && onOpenFile) {
-              event.preventDefault();
-              const decoded = decodeURIComponent(href);
-              const path = decoded.startsWith("file://") ? new URL(decoded).pathname : decoded;
-              onOpenFile(path.replace(/^\.\//, ""));
-            }
-          }}
-        >{children}</a>;
-      },
-    }}>{text}</ReactMarkdown>
-  );
-}
 
 export default function AssistantMessage({
   text,
@@ -48,6 +23,8 @@ export default function AssistantMessage({
   onOpenFile,
   variant = "reply",
   inlineArtifacts,
+  showInlineArtifacts = true,
+  hiddenInlineArtifactRefs,
 }: Props) {
   const commentary = variant === "commentary";
   const segments = useMemo(
@@ -58,7 +35,12 @@ export default function AssistantMessage({
     () => indexInlineVisualizationArtifacts(inlineArtifacts),
     [inlineArtifacts],
   );
-  const hasVisualization = segments.some((segment) => segment.kind !== "markdown");
+  const hiddenArtifactRefs = useMemo(
+    () => new Set(hiddenInlineArtifactRefs),
+    [hiddenInlineArtifactRefs],
+  );
+  const hasVisualization = showInlineArtifacts
+    && segments.some((segment) => segment.kind !== "markdown");
   return (
     <div
       className={[
@@ -71,7 +53,7 @@ export default function AssistantMessage({
         {segments.map((segment, index) => {
           if (segment.kind === "markdown") {
             return (
-              <MarkdownText
+              <SafeMarkdown
                 key={`markdown-${index}`}
                 text={segment.text}
                 onOpenFile={onOpenFile}
@@ -79,6 +61,7 @@ export default function AssistantMessage({
             );
           }
           if (segment.kind === "artifact") {
+            if (!showInlineArtifacts || hiddenArtifactRefs.has(segment.ref)) return null;
             const artifact = artifactIndex.get(segment.ref);
             if (artifact) {
               return (
@@ -99,6 +82,7 @@ export default function AssistantMessage({
               </div>
             );
           }
+          if (!showInlineArtifacts) return null;
           return (
             <div
               className="web-inline-visualization-unavailable"

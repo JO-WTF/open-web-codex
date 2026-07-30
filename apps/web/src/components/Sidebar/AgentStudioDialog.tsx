@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import Bot from "lucide-react/dist/esm/icons/bot";
 import CheckCircle2 from "lucide-react/dist/esm/icons/check-circle-2";
 import Library from "lucide-react/dist/esm/icons/library";
@@ -9,6 +10,7 @@ import X from "lucide-react/dist/esm/icons/x";
 import { SettingsAgentCatalogSection } from "@/features/settings/components/sections/SettingsAgentCatalogSection";
 import { AgentStudioCreateButton } from "@/features/settings/components/sections/AgentStudioControls";
 import { SettingsSupervisorsSection } from "@/features/settings/components/sections/SettingsSupervisorsSection";
+import { DatasetReleaseDialog } from "@/features/files/components/DatasetReleaseDialog";
 import { useSettingsAgentCatalogSection } from "@/features/settings/hooks/useSettingsAgentCatalogSection";
 import { useSettingsSupervisorsSection } from "@/features/settings/hooks/useSettingsSupervisorsSection";
 import { platformClient } from "../../../browser/session";
@@ -103,6 +105,8 @@ export default function AgentStudioDialog({
   const [capabilityCatalogLoading, setCapabilityCatalogLoading] = useState(true);
   const [capabilityCatalogError, setCapabilityCatalogError] = useState<string | null>(null);
   const [showPythonEditor, setShowPythonEditor] = useState(false);
+  const [datasetWorkspaceId, setDatasetWorkspaceId] = useState<string | null>(null);
+  const datasetDialogTrigger = useRef<HTMLElement | null>(null);
   const mcpDirectory = useMemo(
     () =>
       capabilityPackages.flatMap((capabilityPackage) =>
@@ -232,6 +236,15 @@ export default function AgentStudioDialog({
             <SettingsAgentCatalogSection
               {...agentCatalog}
               onPublish={publishAgent}
+              onOpenDatasetPublisher={(requiredWorkspaceId, trigger) => {
+                const workspaceId =
+                  requiredWorkspaceId
+                  ?? activeWorkspaceId
+                  ?? workspaces[0]?.id
+                  ?? null;
+                datasetDialogTrigger.current = trigger;
+                setDatasetWorkspaceId(workspaceId);
+              }}
               studioMode
             />
           )}
@@ -249,21 +262,6 @@ export default function AgentStudioDialog({
                 Browse platform-reviewed MCP declarations and distinguish them from the servers
                 actually enabled in the selected Thread.
               </div>
-              <div className="settings-agents-actions settings-studio-page-actions">
-                <AgentStudioCreateButton
-                  onClick={() => setShowPythonEditor((visible) => !visible)}
-                >
-                  {showPythonEditor ? "Close Python editor" : "New Python MCP"}
-                </AgentStudioCreateButton>
-              </div>
-              {showPythonEditor && (
-                <PythonCapabilityEditor
-                  workspaces={workspaces}
-                  activeWorkspaceId={activeWorkspaceId}
-                  onPublished={refreshCapabilityPackages}
-                  onStartThread={onStartThread}
-                />
-              )}
               {capabilityCatalogLoading ? (
                 <div className="web-agent-studio-empty">Loading MCP directory…</div>
               ) : capabilityCatalogError ? (
@@ -313,9 +311,8 @@ export default function AgentStudioDialog({
               )}
               <div className="web-agent-studio-boundary-note">
                 “Not active” means the package exists but the selected Thread did not receive it.
-                Web authors can publish standard-library Python MCP packages through the editor
-                above. Arbitrary launch commands, credentials, and hidden Profile changes are not
-                accepted by this flow.
+                Create reviewed capability packages from Capabilities. Arbitrary launch commands,
+                credentials, and hidden Profile changes are not accepted by that flow.
               </div>
             </section>
           )}
@@ -328,14 +325,19 @@ export default function AgentStudioDialog({
               </div>
               <div className="settings-agents-actions settings-studio-page-actions">
                 <AgentStudioCreateButton
-                  onClick={() => {
-                    setActiveSection("mcp");
-                    setShowPythonEditor(true);
-                  }}
+                  onClick={() => setShowPythonEditor((visible) => !visible)}
                 >
-                  New Python capability
+                  {showPythonEditor ? "Close Python editor" : "New Python capability"}
                 </AgentStudioCreateButton>
               </div>
+              {showPythonEditor && (
+                <PythonCapabilityEditor
+                  workspaces={workspaces}
+                  activeWorkspaceId={activeWorkspaceId}
+                  onPublished={refreshCapabilityPackages}
+                  onStartThread={onStartThread}
+                />
+              )}
               {capabilityCatalogLoading ? (
                 <div className="web-agent-studio-empty">Loading capability directory…</div>
               ) : capabilityCatalogError ? (
@@ -371,6 +373,22 @@ export default function AgentStudioDialog({
           )}
         </div>
       </div>
+      {datasetWorkspaceId
+        ? createPortal(
+            <DatasetReleaseDialog
+              workspaceId={datasetWorkspaceId}
+              onClose={() => {
+                const trigger = datasetDialogTrigger.current;
+                setDatasetWorkspaceId(null);
+                queueMicrotask(() => trigger?.isConnected && trigger.focus());
+              }}
+              onPublished={() => {
+                void agentCatalog.onLoadDatasetReleases(datasetWorkspaceId, true);
+              }}
+            />,
+            document.body,
+          )
+        : null}
     </section>
   );
 }

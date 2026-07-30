@@ -5,6 +5,7 @@ import type {
   SupervisorArtifactContractInput,
   SupervisorDraftRequest,
   SupervisorInstructionPolicySummary,
+  SupervisorPolicyDetail,
 } from "../../../../../browser/types";
 import {
   SettingsSection,
@@ -48,6 +49,11 @@ function emptyDraft(
     artifact_contracts: [],
     max_active_child_agents: 2,
   };
+}
+
+function nextPatchVersion(version: string) {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(version);
+  return match ? `${match[1]}.${match[2]}.${Number(match[3]) + 1}` : "";
 }
 
 function contractsForAgents(
@@ -298,7 +304,7 @@ export function SettingsSupervisorsSection({
   };
 
   const editDefinition = (
-    definitionId: string,
+    definitionId: string | null,
     nextDraft: SupervisorDraftRequest,
   ) => {
     setEditingDefinitionId(definitionId);
@@ -307,6 +313,52 @@ export function SettingsSupervisorsSection({
     setShowEditorValidation(false);
     setViewingPolicyKey(null);
     setEditorOpen(true);
+  };
+
+  const draftFromPublished = (
+    detail: SupervisorPolicyDetail,
+    definitionId: string | null,
+  ): SupervisorDraftRequest => ({
+    policy_id: definitionId ? detail.policy_id : "",
+    version: definitionId ? nextPatchVersion(detail.version) : "1.0.0",
+    display_name: definitionId ? detail.display_name : `${detail.display_name} custom`,
+    description: detail.description,
+    responsibilities: detail.responsibilities,
+    instruction_policy: {
+      policy_id: detail.instruction_policy.policy_id,
+      version: detail.instruction_policy.version,
+    },
+    custom_instructions: detail.custom_instructions,
+    agents: detail.agents,
+    artifact_contracts: detail.artifact_contracts,
+    max_active_child_agents: detail.max_active_child_agents,
+  });
+
+  const openPublishedAsDraft = (
+    detail: SupervisorPolicyDetail,
+    definitionId: string | null,
+  ) => {
+    editDefinition(definitionId, draftFromPublished(detail, definitionId));
+  };
+
+  const openNextDefinitionVersion = async (
+    definition: (typeof definitions)[number],
+  ) => {
+    const latestRelease = definition.releases.reduce(
+      (latest, release) =>
+        !latest || release.published_at > latest.published_at ? release : latest,
+      null as (typeof definition.releases)[number] | null,
+    );
+    if (!latestRelease) return;
+    const published = publishedPolicies.find(
+      (policy) =>
+        policy.policy_id === definition.policy_id
+        && policy.version === latestRelease.version,
+    );
+    if (!published) return;
+    const key = `${published.policy_id}@${published.version}`;
+    const detail = detailByPolicy[key] ?? await onLoadPublished(published);
+    if (detail) openPublishedAsDraft(detail, definition.id);
   };
 
   const updateAgentSelection = (
@@ -603,6 +655,11 @@ export function SettingsSupervisorsSection({
         const key = `${policy.policy_id}@${policy.version}`;
         const detail = detailByPolicy[key];
         const expanded = viewingPolicyKey === key;
+        const userDefinition = policy.source === "user_release"
+          ? definitions.find(
+              (candidate) => candidate.policy_id === policy.policy_id,
+            ) ?? null
+          : null;
         return (
           <article className="settings-supervisor-published" key={key}>
             <div className="settings-agent-card-header">
@@ -672,22 +729,44 @@ export function SettingsSupervisorsSection({
                     ))}
                   </ul>
                 </div>
-                <div>
-                  <strong>
-                    Platform behavior contract ·{" "}
-                    {detail.instruction_policy.policy_id}@
-                    {detail.instruction_policy.version}
-                  </strong>
-                  <pre>{detail.platform_instructions}</pre>
-                </div>
-                <div>
-                  <strong>Custom Supervisor instructions</strong>
-                  <pre>{detail.custom_instructions}</pre>
-                </div>
-                <div className="settings-help">
-                  Maximum active child Agents: {detail.max_active_child_agents}
-                  {" · "}Content: {detail.content_sha256.slice(0, 12)}…{" · "}
-                  Execution: {detail.execution_semantics_sha256.slice(0, 12)}…
+                <details className="settings-technical-contract">
+                  <summary>Technical contract</summary>
+                  <div>
+                    <strong>
+                      Platform behavior contract ·{" "}
+                      {detail.instruction_policy.policy_id}@
+                      {detail.instruction_policy.version}
+                    </strong>
+                    <pre>{detail.platform_instructions}</pre>
+                  </div>
+                  <div>
+                    <strong>Custom Supervisor instructions</strong>
+                    <pre>{detail.custom_instructions}</pre>
+                  </div>
+                  <div className="settings-help">
+                    Maximum active child Agents: {detail.max_active_child_agents}
+                    {" · "}Content: {detail.content_sha256.slice(0, 12)}…{" · "}
+                    Execution: {detail.execution_semantics_sha256.slice(0, 12)}…
+                  </div>
+                </details>
+                <div className="settings-agents-actions">
+                  {policy.source === "repository" ? (
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => openPublishedAsDraft(detail, null)}
+                    >
+                      Create custom Supervisor
+                    </button>
+                  ) : userDefinition ? (
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => openPublishedAsDraft(detail, userDefinition.id)}
+                    >
+                      Create new version
+                    </button>
+                  ) : null}
                 </div>
               </div>
             )}
@@ -838,8 +917,8 @@ export function SettingsSupervisorsSection({
         {instructionPolicyDetails[
           `${draft.instruction_policy.policy_id}@${draft.instruction_policy.version}`
         ] && (
-          <div className="settings-supervisor-platform-contract">
-            <strong>Read-only platform instructions</strong>
+          <details className="settings-supervisor-platform-contract">
+            <summary>View read-only platform contract</summary>
             <p>
               Platform managers publish this contract independently. Supervisor
               authors select an exact version and cannot override it here.
@@ -851,7 +930,7 @@ export function SettingsSupervisorsSection({
                 ].platform_instructions
               }
             </pre>
-          </div>
+          </details>
         )}
         <label className="settings-label">
           <AgentStudioFieldHeading help="Define delegation order, evidence requirements, conflict handling, stop conditions, partial-result behavior, and final report structure.">
@@ -1178,15 +1257,8 @@ export function SettingsSupervisorsSection({
                   <button
                     type="button"
                     className="ghost"
-                    onClick={() =>
-                      editDefinition(definition.id, {
-                        ...emptyDraft(),
-                        policy_id: definition.policy_id,
-                        display_name: definition.display_name,
-                        description: definition.description,
-                      })
-                    }
-                    disabled={busy}
+                    onClick={() => void openNextDefinitionVersion(definition)}
+                    disabled={busy || definition.releases.length === 0}
                   >
                     New version
                   </button>

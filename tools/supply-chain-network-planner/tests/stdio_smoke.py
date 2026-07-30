@@ -273,6 +273,19 @@ async def smoke_indonesia_server(
                 "prepare_indonesia_decision_report",
                 "validate_indonesia_resource",
             }
+            report_tool = next(
+                tool
+                for tool in tools.tools
+                if tool.name == "prepare_indonesia_decision_report"
+            )
+            report_output_schema = json.dumps(
+                report_tool.outputSchema,
+                sort_keys=True,
+            )
+            assert "open-web-artifact" in report_output_schema
+            assert "inline-visualization.v1" in report_output_schema
+            assert "report.v1" in report_output_schema
+            assert "report_markdown" not in report_output_schema
             templates = await session.list_resource_templates()
             assert templates.resourceTemplates == []
 
@@ -343,7 +356,6 @@ async def smoke_indonesia_server(
                 meta=trusted_meta,
             )
             assert_bounded_resource_result(candidate)
-            candidate_ref = candidate.structuredContent["data_ref"]
 
             optimization = await session.call_tool(
                 "optimize_indonesia_new_warehouse",
@@ -458,21 +470,75 @@ async def smoke_indonesia_server(
             )
             assert report.isError is not True, report.content
             assert report.structuredContent is not None
-            assert report.structuredContent["resource_name"].startswith(
-                "indonesia_decision_report.v1-"
+            assert set(report.structuredContent) == {
+                "type",
+                "kind",
+                "artifact",
+                "embed",
+            }
+            assert report.structuredContent["type"] == "open-web-artifact"
+            assert report.structuredContent["kind"] == "inline-visualization.v1"
+            artifact = report.structuredContent["artifact"]
+            assert artifact["renderer"]["kind"] == "report.v1"
+            report_renderer = artifact["renderer"]["payload"]
+            assert set(report_renderer) == {"title", "status", "source"}
+            assert report_renderer["title"] == "印度尼西亚仓库网络决策报告"
+            assert report_renderer["status"] == "ready"
+            report_ref = report_renderer["source"]
+            assert report_ref["resource_schema"] == "indonesia_decision_report.v1"
+            report_resource_name = str(report_ref["uri"]).rsplit("/", maxsplit=1)[-1]
+            assert report_resource_name.startswith("indonesia_decision_report.v1-")
+            assert artifact["ref"] == (
+                "report-"
+                + report_resource_name.removeprefix("indonesia_decision_report.v1-")
             )
-            assert report.structuredContent["report_markdown"].startswith(
-                "# 印度尼西亚仓库网络决策报告"
-            )
-            assert "57.5%" not in report.structuredContent["report_markdown"]
-            assert "1.33" not in report.structuredContent["report_markdown"]
+            assert len(artifact["ref"]) == len("report-") + 24
+            expected_embed = f'::codex-inline-vis{{artifact="{artifact["ref"]}"}}'
+            assert report.structuredContent["embed"] == {
+                "syntax": "codex-inline-vis.artifact.v1",
+                "code": expected_embed,
+            }
+            assert "report_markdown" not in json.dumps(report.structuredContent)
+
+            text_items = [
+                item.text
+                for item in report.content
+                if getattr(item, "type", None) == "text"
+            ]
+            assert len(text_items) == 1
+            assert "Copy only structuredContent.embed.code" in text_items[0]
+            assert expected_embed in text_items[0]
+            assert "# 印度尼西亚仓库网络决策报告" not in text_items[0]
+
+            resource_links = [
+                item
+                for item in report.content
+                if getattr(item, "type", None) == "resource_link"
+            ]
+            assert len(resource_links) == 1
+            assert resource_links[0].name == report_resource_name
+            assert str(resource_links[0].uri) == report_ref["uri"]
             report_payload = await read_json_resource(
                 session,
-                report.structuredContent["data_ref"],
+                report_ref,
             )
-            assert report_payload["markdown"] == (
-                report.structuredContent["report_markdown"]
-            )
+            report_markdown = str(report_payload["markdown"])
+            assert report_markdown.startswith("# 印度尼西亚仓库网络决策报告")
+            assert "57.5%" not in report_markdown
+            assert "1.33" not in report_markdown
+            for known_answer in (
+                "71.80%",
+                "75.33%",
+                "110,024,697,400",
+                "107,189,163,600",
+                "-2,835,533,800",
+                "123,614,163,600",
+                "+13,589,466,200",
+            ):
+                assert known_answer in report_markdown
+            assert report_payload["markdown_sha256"] == hashlib.sha256(
+                report_markdown.encode("utf-8")
+            ).hexdigest()
             assert selected_scenario_ref["resource_schema"] == (
                 "indonesia_candidate_scenario.v1"
             )

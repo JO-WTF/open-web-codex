@@ -36,6 +36,7 @@ type Props = {
   onSelectProvider?: (providerId: string) => void;
   selectedModelId?: string | null;
   onSelectModel?: (modelId: string) => void;
+  providerCatalogOpenRequest?: number;
 };
 
 export type ModelProviderSummary = {
@@ -103,7 +104,7 @@ function providerDescription(provider: ModelProviderSummary): string {
   return provider.kind === "builtIn" ? "Built-in catalog" : "No models fetched";
 }
 
-export default function Composer({ draft, onDraftChange, onSend, onStop, running, stopping, busy, disabled, tokenUsage, providers = [], currentProviderId = null, models = [], catalogLoading = false, catalogError = null, onRefreshCatalog, onWriteProvider, onSelectProvider, selectedModelId = null, onSelectModel }: Props) {
+export default function Composer({ draft, onDraftChange, onSend, onStop, running, stopping, busy, disabled, tokenUsage, providers = [], currentProviderId = null, models = [], catalogLoading = false, catalogError = null, onRefreshCatalog, onWriteProvider, onSelectProvider, selectedModelId = null, onSelectModel, providerCatalogOpenRequest = 0 }: Props) {
   const textRef = useRef<HTMLTextAreaElement>(null);
   const catalogRef = useRef<HTMLDivElement>(null);
   const composingRef = useRef(false);
@@ -130,6 +131,12 @@ export default function Composer({ draft, onDraftChange, onSend, onStop, running
     (providerDraft.credentialMode !== "environment" || providerDraft.envKey.trim()) &&
     (providerDraft.credentialMode !== "direct" || providerDraft.apiKey.trim()),
   );
+
+  useEffect(() => {
+    if (providerCatalogOpenRequest > 0) {
+      setCatalogOpen(true);
+    }
+  }, [providerCatalogOpenRequest]);
   const saveProviderDraft = () => {
     if (!providerDraftValid) return;
     void onWriteProvider?.({

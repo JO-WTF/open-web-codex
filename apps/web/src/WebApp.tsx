@@ -6,6 +6,8 @@ import {
 } from "./services/webClient";
 import type {
   AgentDefinitionSummary,
+  RunReadiness,
+  RunReadinessAction,
   SupervisorPolicySummary,
 } from "../browser/types";
 import Layout from "./components/Layout";
@@ -14,6 +16,7 @@ import Conversation from "./components/Conversation";
 import FileManager from "./components/FileManager";
 import RightSidebar, { type RightSidebarTab } from "./components/RightSidebar";
 import SupervisorOverview from "./components/Conversation/SupervisorOverview";
+import type { RunLaunchSelection } from "./components/Sidebar/RunLauncherDialog";
 import type { TaskApprovalRequest } from "./components/Conversation/TaskApprovalQueue";
 import type { GoalInfo } from "./components/Conversation/GoalBanner";
 import type { QueuedFollowUp } from "./components/Conversation/FollowUpQueue";
@@ -237,6 +240,16 @@ function modelSummariesForProvider(
 
 /* ─────────── Component ─────────── */
 
+export function prepareTutorialPromptDraft(
+  currentDraft: string,
+  tutorialPrompt: string,
+  replaceExisting = false,
+) {
+  return !replaceExisting && currentDraft.trim()
+    ? { draft: currentDraft, loaded: false }
+    : { draft: tutorialPrompt, loaded: true };
+}
+
 export default function WebApp() {
   console.log('[open-web-codex] build:', '2026-07-12T21:20:00Z');
   const [baseUrl, setBaseUrl] = useState(
@@ -298,6 +311,7 @@ export default function WebApp() {
   const [currentProviderId, setCurrentProviderId] = useState<string | null>(null);
   const [providerModels, setProviderModels] = useState<ModelSummary[]>([]);
   const [selectedProviderModelId, setSelectedProviderModelId] = useState<string | null>(null);
+  const [providerCatalogOpenRequest, setProviderCatalogOpenRequest] = useState(0);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const activeThreadModelSelectionRef = useRef<{
@@ -1905,55 +1919,112 @@ export default function WebApp() {
    retryTemporaryId?: string,
    supervisorPolicy?: SupervisorPolicySummary,
    agent?: AgentDefinitionSummary,
+   checkedReadiness?: RunReadiness,
+   launchOperationId?: string,
  ): Promise<string | null> => {
    const wid = workspaceId ?? activeWorkspaceId;
    if (!wid) return null;
    if (supervisorPolicy && agent) {
      throw new Error("A Thread cannot start as both an Agent and a Supervisor.");
    }
-   const temporaryId = retryTemporaryId ?? `pending-thread:${newLogId()}`;
+   const providerId = currentProviderId ?? "";
+   const modelId = providerModels.find(
+     (model) => model.id === selectedProviderModelId,
+   )?.model ?? selectedProviderModelId ?? "";
+   let readiness = checkedReadiness;
+   if (!readiness) {
+     try {
+       readiness = await client.evaluateRunReadiness(wid, {
+         providerId,
+         modelId,
+         supervisorPolicy: supervisorPolicy
+           ? {
+               policy_id: supervisorPolicy.policy_id,
+               version: supervisorPolicy.version,
+             }
+           : null,
+         agent: agent
+           ? {
+               definition_id: agent.definition_id,
+               version: agent.version,
+               release_id: agent.release_id,
+             }
+           : null,
+       });
+     } catch (error) {
+       appendLog(
+         "error",
+         error instanceof Error
+           ? error.message
+           : "Task readiness could not be checked.",
+       );
+       return null;
+     }
+   }
+   if (readiness.status === "blocked") {
+     const blockers = readiness.checks
+       .filter((check) => check.status === "blocked")
+       .map((check) => check.message);
+     appendLog(
+       "error",
+       blockers.join(" ") || "This task is not ready to start.",
+     );
+     return null;
+   }
+   const temporaryId = retryTemporaryId
+     ?? (launchOperationId
+       ? `pending-thread:${launchOperationId}`
+       : `pending-thread:${newLogId()}`);
    const startedAt = Date.now();
-   setActiveWorkspaceId(wid);
-   activeThreadIdRef.current = temporaryId;
-   setActiveThreadId(temporaryId);
-   setThreadLoading(false);
-   setMessages([]);
-   setTokenUsage(null);
-   setGoal(null);
-   setThinking(false);
-   setThreadStatus("idle");
-   setActiveTurnId(null);
-   setStopping(false);
-   interruptRequestTurnId.current = null;
-   setThreadsByWorkspace((previous) => {
-     const existing = previous[wid] ?? [];
-     const pending: ThreadInfo = {
-       id: temporaryId,
-       label: supervisorPolicy
-         ? `${supervisorPolicy.display_name} · ${supervisorPolicy.version}`
-         : agent
-           ? `${agent.display_name} · ${agent.version}`
-           : "Thread",
-       updatedAt: startedAt,
-       modelProvider: currentProviderId,
-       model: providerModels.find((model) => model.id === selectedProviderModelId)?.model
-         ?? selectedProviderModelId,
-       status: "creating",
-       optimistic: true,
-       creationStatus: "creating",
-       supervisorPolicy,
-       agent,
-     };
-     return {
-       ...previous,
-       [wid]: retryTemporaryId
-         ? existing.map((thread) => thread.id === temporaryId ? pending : thread)
-         : [pending, ...existing],
-     };
-   });
+   let runAccepted = false;
+   const showAcceptedStart = () => {
+     runAccepted = true;
+     setActiveWorkspaceId(wid);
+     activeThreadIdRef.current = temporaryId;
+     setActiveThreadId(temporaryId);
+     setThreadLoading(false);
+     setMessages([]);
+     setTokenUsage(null);
+     setGoal(null);
+     setThinking(false);
+     setThreadStatus("idle");
+     setActiveTurnId(null);
+     setStopping(false);
+     interruptRequestTurnId.current = null;
+     setThreadsByWorkspace((previous) => {
+       const existing = previous[wid] ?? [];
+       const pending: ThreadInfo = {
+         id: temporaryId,
+         label: supervisorPolicy
+           ? `${supervisorPolicy.display_name} · ${supervisorPolicy.version}`
+           : agent
+             ? `${agent.display_name} · ${agent.version}`
+             : "Thread",
+         updatedAt: startedAt,
+         modelProvider: currentProviderId,
+         model: providerModels.find((model) => model.id === selectedProviderModelId)?.model
+           ?? selectedProviderModelId,
+         status: "creating",
+         optimistic: true,
+         creationStatus: "creating",
+         supervisorPolicy,
+         agent,
+       };
+       return {
+         ...previous,
+         [wid]: retryTemporaryId
+           ? existing.map((thread) => thread.id === temporaryId ? pending : thread)
+           : [pending, ...existing],
+       };
+     });
+   };
    try {
      await client.connectWorkspace(wid);
      const result = await client.startThread(wid, {
+       operationId: launchOperationId ?? temporaryId,
+       readinessFingerprint: readiness.evaluation_fingerprint,
+       providerId,
+       modelId,
        supervisorPolicy: supervisorPolicy
          ? {
              policy_id: supervisorPolicy.policy_id,
@@ -1967,6 +2038,7 @@ export default function WebApp() {
              release_id: agent.release_id,
            }
          : null,
+       onRunAccepted: showAcceptedStart,
      });
      // Handle Codex CLI JSON-RPC error embedded in result
      if (result && typeof result === "object" && "error" in result) {
@@ -2037,6 +2109,13 @@ export default function WebApp() {
      return tid;
    } catch (error) {
      const message = error instanceof Error ? error.message : String(error);
+     if (!runAccepted) {
+       if (checkedReadiness) {
+         throw error;
+       }
+       appendLog("error", message);
+       return null;
+     }
      setThreadsByWorkspace((previous) => ({
        ...previous,
        [wid]: (previous[wid] ?? []).map((thread) => thread.id === temporaryId
@@ -2050,7 +2129,76 @@ export default function WebApp() {
      }));
      return null;
    }
-  }, [activeWorkspaceId, client, currentProviderId, providerModels, refreshThreads, selectedProviderModelId]);
+  }, [activeWorkspaceId, appendLog, client, currentProviderId, providerModels, refreshThreads, selectedProviderModelId]);
+
+  const evaluateLaunchReadiness = useCallback(
+    (workspaceId: string, selection: RunLaunchSelection) => {
+      const providerId = currentProviderId ?? "";
+      const modelId = providerModels.find(
+        (model) => model.id === selectedProviderModelId,
+      )?.model ?? selectedProviderModelId ?? "";
+      return client.evaluateRunReadiness(workspaceId, {
+        providerId,
+        modelId,
+        supervisorPolicy:
+          selection.kind === "supervisor"
+            ? {
+                policy_id: selection.policy.policy_id,
+                version: selection.policy.version,
+              }
+            : null,
+        agent:
+          selection.kind === "agent"
+            ? {
+                definition_id: selection.agent.definition_id,
+                version: selection.agent.version,
+                release_id: selection.agent.release_id,
+              }
+            : null,
+      });
+    },
+    [
+      client,
+      currentProviderId,
+      providerModels,
+      selectedProviderModelId,
+    ],
+  );
+
+  const startLaunchSelection = useCallback(
+    async (
+      workspaceId: string,
+      selection: RunLaunchSelection,
+      readiness: RunReadiness,
+      operationId: string,
+    ) =>
+      Boolean(
+        await startThread(
+          workspaceId,
+          undefined,
+          selection.kind === "supervisor" ? selection.policy : undefined,
+          selection.kind === "agent" ? selection.agent : undefined,
+          readiness,
+          operationId,
+        ),
+      ),
+    [startThread],
+  );
+
+  const handleReadinessAction = useCallback(
+    (action: RunReadinessAction, workspaceId: string) => {
+      setActiveWorkspaceId(workspaceId);
+      if (action === "open_workspace_data") {
+        setActiveRightPanelTab("files");
+        setRightPanelOpen(true);
+        return;
+      }
+      if (action === "open_provider_settings") {
+        setProviderCatalogOpenRequest((request) => request + 1);
+      }
+    },
+    [],
+  );
 
   const archiveThread = useCallback(async (workspaceId: string, threadId: string) => {
     const thread = (threadsByWorkspace[workspaceId] ?? []).find((candidate) => candidate.id === threadId);
@@ -2563,15 +2711,12 @@ export default function WebApp() {
           supervisorPolicies={supervisorPolicies}
           supervisorPoliciesLoading={supervisorPoliciesLoading}
           supervisorPoliciesError={supervisorPoliciesError}
-          onNewSupervisor={(workspaceId, policy) => {
-            void startThread(workspaceId, undefined, policy);
-          }}
           agents={agentDefinitions}
           agentsLoading={agentDefinitionsLoading}
           agentsError={agentDefinitionsError}
-          onNewAgent={(workspaceId, agent) => {
-            void startThread(workspaceId, undefined, undefined, agent);
-          }}
+          onEvaluateReadiness={evaluateLaunchReadiness}
+          onStartTask={startLaunchSelection}
+          onReadinessAction={handleReadinessAction}
           onArchiveThread={archiveThread}
           onRemoveWorkspace={removeWorkspace}
           baseUrl={baseUrl}
@@ -2588,6 +2733,17 @@ export default function WebApp() {
           onToggleTheme={() => setTheme((current) => current === "dark" ? "light" : "dark")}
           onSupervisorCatalogChanged={() => {
             setSupervisorPoliciesRevision((current) => current + 1);
+          }}
+          onTutorialPromptReady={(prompt, options) => {
+            const result = prepareTutorialPromptDraft(
+              draft,
+              prompt,
+              options?.replaceExisting,
+            );
+            if (result.loaded) {
+              setDraft(result.draft);
+            }
+            return result.loaded;
           }}
 
           onConnectWorkspace={connectWorkspace}
@@ -2642,6 +2798,7 @@ export default function WebApp() {
           onSelectProvider={(providerId) => { void selectProviderAndDefaultModel(providerId); }}
           selectedModelId={selectedProviderModelId}
           onSelectModel={(modelId) => { void selectThreadModel(modelId); }}
+          providerCatalogOpenRequest={providerCatalogOpenRequest}
 
         messages={messages}
         taskApprovals={delegatedTaskApprovals}

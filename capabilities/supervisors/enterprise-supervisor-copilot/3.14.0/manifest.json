@@ -1,7 +1,7 @@
 {
   "schemaVersion": "supervisor-package.v1",
   "policyId": "enterprise-supervisor-copilot",
-  "version": "3.10.0",
+  "version": "3.14.0",
   "displayName": "Enterprise Supervisor Copilot",
   "description": "Dynamically coordinates governed Indonesian warehouse-network evidence with independently owned report and map delivery.",
   "responsibilities": [
@@ -9,7 +9,7 @@
     "Choose only the Agent roles needed for the current question without prescribing a fixed sequence.",
     "Enforce typed Artifact handoffs and resolve or disclose material conflicts.",
     "Close every explicit requested output with an evidence-backed value or a genuine typed gap.",
-    "Deliver the exact deterministic business report and, when requested, append only the independently verified map embed."
+    "Deliver the deterministic report and map through their independently verified typed Artifact references without model-authored content copies."
   ],
   "instructionPolicy": {
     "policyId": "platform-supervisor-behavior",
@@ -26,14 +26,14 @@
     },
     {
       "definitionId": "enterprise-network-planning-agent",
-      "version": "3.4.0",
-      "runtimeRole": "agent_3477ddaffe69a217cbf2138d475cac97",
+      "version": "3.6.0",
+      "runtimeRole": "agent_24babb7114d53f953a4800fe73740cb8",
       "spawnLimit": 1
     },
     {
       "definitionId": "enterprise-visualization-agent",
-      "version": "1.3.0",
-      "runtimeRole": "agent_dcbc01f2127fe589f5416c75f8f447e8",
+      "version": "1.4.0",
+      "runtimeRole": "agent_ade76f31004f8d9f502c6e0b2398a921",
       "spawnLimit": 1
     }
   ],

@@ -14,7 +14,7 @@ The package declares three independent MCP Servers:
 | `supply_chain_planner` | General snapshot, route, scenario, facility, finance and risk Resources |
 | `supply_chain_indonesia` | Exact Workspace Dataset Release access and the progressive Indonesia tutorials |
 
-The current `enterprise-supervisor-copilot@3.10.0` uses only
+The current `enterprise-supervisor-copilot@3.13.0` uses only
 `supply_chain_indonesia` plus the separate `map_utils` Plugin. The older general
 planning Servers remain independently tested capabilities; they are not hidden fallbacks for
 the Indonesia workflow.
@@ -45,17 +45,19 @@ the server resolve its own Resource Store; models do not copy or reconstruct int
 Resource-producing Tools still return an unchanged structured `data_ref` for durable provenance
 and bounded direct reads. The decision-report Tool cross-checks the seven Resource identities it
 owns and deterministically renders the business-report Markdown. The separate `map_utils` Tool
-owns the browser Artifact and exact embed code; the Supervisor may only append that unchanged
-code to the unchanged report.
+owns the browser Artifact and exact `structuredContent.embed.code`. `MAP_HANDOFF` preserves only
+the two input Resource names and matching map Artifact ID. The embed code appears once as a
+standalone directive, and the Platform event's typed `inlineArtifacts` projection—not an escaped
+copy in model JSON—is the browser rendering authority.
 
 ## Current governed roles
 
 | Release | Exact capability boundary |
 | --- | --- |
 | `enterprise-data-agent@3.1.0` | Atomic Indonesia Dataset inspection and bounded Resource reading |
-| `enterprise-network-planning-agent@3.4.0` | Server-resolved Indonesia service, validated province rankings, current, candidate, optimization, bounded map preparation and deterministic business-report publication |
-| `enterprise-visualization-agent@1.3.0` | Typed map-render preparation and exact matching Artifact-ID/embed-code handoff from `map_utils.create_map_card` |
-| `enterprise-supervisor-copilot@3.10.0` | Dynamic coordination and constrained composition of the unchanged business report with the independently owned inline map |
+| `enterprise-network-planning-agent@3.5.0` | Server-resolved Indonesia service, validated province rankings, typed fraction targets, current, candidate, optimization, bounded map preparation and deterministic business-report publication |
+| `enterprise-visualization-agent@1.4.0` | Typed map-render preparation, provenance-only `MAP_HANDOFF` plus the exact matching Artifact ID, and one standalone Tool-owned embed directive |
+| `enterprise-supervisor-copilot@3.13.0` | Dynamic coordination and constrained composition of the unchanged business report with the independently owned inline map |
 
 The root Supervisor receives collaboration capabilities but no business MCP or shell. Child
 roles receive only their exact MCP Server, Tool and capability-root inventory. Disabled sibling

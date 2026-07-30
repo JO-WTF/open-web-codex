@@ -3,7 +3,7 @@
 | 字段 | 内容 |
 | --- | --- |
 | 状态 | 当前接受的阶段顺序 |
-| 更新时间 | 2026-07-27 |
+| 更新时间 | 2026-07-30 |
 | 时间表达 | 以能力门和结果为阶段，不承诺未经评估的日期 |
 | 产品方向 | [产品愿景](product-vision.md) |
 | 架构依据 | [企业多 Agent 平台架构](enterprise-agent-platform-architecture.md) |
@@ -81,7 +81,7 @@ Agents + 受限企业 Tool + 持久 Artifact”的最小协作闭环。
 
 ### 明确不包含
 
-- 完整 Agent Catalog 或面向所有人的 Agent Studio；
+- 完整原生 Agent/Skill/Plugin/MCP 生命周期或面向所有人的无界 Studio；
 - Runtime Role 级动态数据权限，除非不可伪造执行身份已经验证；
 - 多组织生产部署；
 - Task Knowledge Ledger 或长期 Blackboard。
@@ -89,18 +89,24 @@ Agents + 受限企业 Tool + 持久 Artifact”的最小协作闭环。
 ### 退出条件
 
 真实用例在刷新、失败和 Profile 重启后仍指向同一 Agent 轨迹、Policy 版本和
-Artifact；关键结论可追溯，一个 Agent 失败时能够形成明确的部分结果或终态。
+Artifact；关键结论可追溯，一个 Agent 失败时能够形成明确的部分结果或终态。新用户
+还必须能从空 Workspace 只通过生产 `/web` 完成数据发布或示例安装、类型化 readiness、
+受治理启动、审批、交付审阅和刷新恢复。缺少必需依赖时不得先创建 Thread，再让模型向
+用户索要内部 ID、Runtime 标识或服务器路径。
 
-当前实现是印尼仓网动态案例：`enterprise-supervisor-copilot@3.10.0` 可从 Data
-`3.1.0`、Network `3.4.0` 和 Visualization `1.3.0` 三个有界 Role 中按证据缺口
-选择能力，九个 Artifact handoff 是条件性证据边而不是固定 Workflow。完整决策
-业务报告由 MCP 对七个精确来源 Resource 做交叉校验后确定性渲染；地图 Artifact
-及 embed 由 Visualization 独立交付，Supervisor 只做受约束拼接。
+当前实现是印尼仓网动态案例：`enterprise-supervisor-copilot@3.14.0` 可从 Data
+`3.1.0`、Network `3.6.0` 和 Visualization `1.4.0` 三个有界 Role 中按证据缺口
+选择能力，十个 Artifact handoff 是条件性证据边而不是固定 Workflow。完整决策
+业务报告由 MCP 对七个精确来源 Resource 做交叉校验后确定性发布为权威
+`indonesia_decision_report.v1` Resource，并通过 `report.v1` 类型化交付；地图由
+Visualization 独立交付为 `map.v3`。模型正文不是报告来源。Tool-owned embed 只作为
+独立指令出现；平台事件的类型化 `inlineArtifacts` 是浏览器实时与恢复权威视图。
 Workspace
 Dataset Release、受限 Python MCP authoring、直接 Agent Run、MCP stdio 和语义编译
-已有聚焦验证；当前 exact Release 的单 Agent 与印尼多 Agent 链路均已通过全新真实
-Runtime/browser 验证，Completed Agent follow-up、根 Turn interrupt 和后续恢复也已
-通过同一 Run 探针。审批拒绝、Agent 部分失败、Profile 重启、Artifact 完整生命周期
+已有聚焦验证；Completed Agent follow-up、根 Turn interrupt 和后续恢复已有同一 Run
+探针证据。当前 exact Release 的完整真实 Runtime/browser 回归以及从空 Workspace
+开始的生产 `/web` 新手闭环仍待通过，因此不能把聚焦测试、组件或开发者探针声明为
+浏览器 E2E。生产入口、审批拒绝、Agent 部分失败、Profile 重启、Artifact 完整生命周期
 和一般故障恢复仍是 M2 退出门禁。
 
 M2 的里程碑状态保留在 [开发计划](development-plan.md)，逐切片工作、真实案例和

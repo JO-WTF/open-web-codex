@@ -8,7 +8,7 @@ use super::{resolve_bound_agent, resolve_bound_policy, GovernedRuntimePreflightE
 async fn rejects_a_leased_snapshot_that_no_longer_matches_the_published_policy() {
     let policy = crate::supervisor_policy::resolve_builtin(&SupervisorPolicySelection {
         policy_id: "enterprise-supervisor-copilot".to_string(),
-        version: "3.10.0".to_string(),
+        version: "3.14.0".to_string(),
     })
     .expect("published policy");
     let mut lease = SupervisorPolicyLease {

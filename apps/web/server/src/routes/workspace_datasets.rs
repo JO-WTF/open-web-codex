@@ -53,7 +53,17 @@ struct ReleaseRecord {
     version: String,
     state: String,
     content_sha256: String,
-    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExistingReleaseAction {
+    ReturnPublished,
+    FinalizePublished,
+    RetryPublication,
+    PublicationInProgress,
+    PublishedContentUnavailable,
+    InvalidLifecycle,
 }
 
 pub async fn list(
@@ -109,10 +119,50 @@ pub async fn publish(
     let (request, uploaded) = parse_multipart(multipart).await?;
     validate_request(&request, &uploaded)?;
     let prepared = prepare_files(&request, uploaded)?;
+    publish_prepared_release(&state, &auth, workspace_id, &git, request, prepared)
+        .await
+        .map(Json)
+}
+
+/// Publish a server-bundled Dataset through the same immutable owner service
+/// as browser multipart uploads. Callers provide logical descriptors and
+/// trusted checked-in bytes, never a host path.
+pub(crate) async fn publish_trusted_bundle(
+    state: &AppState,
+    auth: &AuthenticatedUser,
+    workspace_id: Uuid,
+    git: &GitRuntime,
+    request: PublishWorkspaceDatasetRequest,
+    files: Vec<(WorkspaceDatasetUploadFile, &'static [u8])>,
+) -> Result<WorkspaceDatasetReleaseSummary, ApiError> {
+    let uploaded = files
+        .into_iter()
+        .map(|(descriptor, bytes)| {
+            (
+                descriptor.field_id,
+                UploadedPart {
+                    bytes: bytes.to_vec(),
+                },
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    validate_request(&request, &uploaded)?;
+    let prepared = prepare_files(&request, uploaded)?;
+    publish_prepared_release(state, auth, workspace_id, git, request, prepared).await
+}
+
+async fn publish_prepared_release(
+    state: &AppState,
+    auth: &AuthenticatedUser,
+    workspace_id: Uuid,
+    git: &GitRuntime,
+    request: PublishWorkspaceDatasetRequest,
+    prepared: BTreeMap<String, PreparedFile>,
+) -> Result<WorkspaceDatasetReleaseSummary, ApiError> {
     let content_sha256 = release_content_sha256(&request, &prepared);
 
     if let Some(existing) = find_by_idempotency(
-        &state,
+        state,
         auth.organization_id,
         workspace_id,
         &request.idempotency_key,
@@ -127,41 +177,106 @@ pub async fn publish(
                 "The idempotency key is already bound to different Dataset Release content",
             ));
         }
-        recover_existing_if_needed(&state, &auth, &git, &existing).await?;
-        return Ok(Json(
-            load_release(&state, &auth, workspace_id, existing.id)
-                .await?
-                .ok_or_else(|| internal("Dataset Release could not be restored"))?,
-        ));
+        return recover_or_retry_existing(
+            state,
+            auth,
+            git,
+            &request,
+            &prepared,
+            &content_sha256,
+            &existing,
+        )
+        .await;
     }
 
-    if find_by_identity(
-        &state,
+    if let Some(existing) = find_by_identity(
+        state,
         auth.organization_id,
         workspace_id,
         &request.dataset_id,
         &request.version,
     )
     .await?
-    .is_some()
     {
-        return Err(conflict(
-            "This Dataset ID and version already has an immutable Release",
-        ));
+        if existing.content_sha256 != content_sha256 {
+            return Err(conflict(
+                "This Dataset ID and version is bound to different immutable content",
+            ));
+        }
+        return recover_or_retry_existing(
+            state,
+            auth,
+            git,
+            &request,
+            &prepared,
+            &content_sha256,
+            &existing,
+        )
+        .await;
     }
 
     let release_id = Uuid::now_v7();
-    reserve_release(
-        &state,
-        &auth,
+    if let Err(error) = reserve_release(
+        state,
+        auth,
         workspace_id,
         release_id,
         &request,
         &content_sha256,
         &prepared,
     )
-    .await?;
-    let manifest = release_manifest(release_id, &request, &content_sha256, &prepared)?;
+    .await
+    {
+        if error.0 == StatusCode::CONFLICT {
+            let existing = find_by_identity(
+                state,
+                auth.organization_id,
+                workspace_id,
+                &request.dataset_id,
+                &request.version,
+            )
+            .await?;
+            if let Some(existing) =
+                existing.filter(|existing| existing.content_sha256 == content_sha256)
+            {
+                return recover_or_retry_existing(
+                    state,
+                    auth,
+                    git,
+                    &request,
+                    &prepared,
+                    &content_sha256,
+                    &existing,
+                )
+                .await;
+            }
+        }
+        return Err(error);
+    }
+    publish_reserved_release(
+        state,
+        auth,
+        git,
+        workspace_id,
+        &request,
+        &prepared,
+        release_id,
+        &content_sha256,
+    )
+    .await
+}
+
+async fn publish_reserved_release(
+    state: &AppState,
+    auth: &AuthenticatedUser,
+    git: &GitRuntime,
+    workspace_id: Uuid,
+    request: &PublishWorkspaceDatasetRequest,
+    prepared: &BTreeMap<String, PreparedFile>,
+    release_id: Uuid,
+    content_sha256: &str,
+) -> Result<WorkspaceDatasetReleaseSummary, ApiError> {
+    let manifest = release_manifest(release_id, request, content_sha256, prepared)?;
     let file_bytes = prepared
         .iter()
         .map(|(logical_name, file)| (logical_name.clone(), file.bytes.clone()))
@@ -180,14 +295,14 @@ pub async fn publish(
         Ok(written_files) => written_files,
         Err(error) => {
             let failure_code = git_failure_code(&error);
-            mark_failed(&state, &auth, release_id, workspace_id, failure_code).await?;
+            mark_failed(state, auth, release_id, workspace_id, failure_code).await?;
             return Err(git_error(error));
         }
     };
 
     if let Err(error) = mark_published(
-        &state,
-        &auth,
+        state,
+        auth,
         release_id,
         workspace_id,
         &content_sha256,
@@ -203,11 +318,9 @@ pub async fn publish(
         return Err(error);
     }
 
-    Ok(Json(
-        load_release(&state, &auth, workspace_id, release_id)
-            .await?
-            .ok_or_else(|| internal("Published Dataset Release could not be loaded"))?,
-    ))
+    load_release(state, auth, workspace_id, release_id)
+        .await?
+        .ok_or_else(|| internal("Published Dataset Release could not be loaded"))
 }
 
 async fn parse_multipart(
@@ -498,15 +611,15 @@ async fn reserve_release(
     transaction.commit().await.map_err(database_error)
 }
 
-async fn recover_existing_if_needed(
+async fn recover_or_retry_existing(
     state: &AppState,
     auth: &AuthenticatedUser,
     git: &GitRuntime,
+    request: &PublishWorkspaceDatasetRequest,
+    prepared: &BTreeMap<String, PreparedFile>,
+    content_sha256: &str,
     release: &ReleaseRecord,
-) -> Result<(), ApiError> {
-    if release.state != "publishing" {
-        return Ok(());
-    }
+) -> Result<WorkspaceDatasetReleaseSummary, ApiError> {
     let matches = git
         .dataset_release_matches(
             release.workspace_id,
@@ -517,29 +630,127 @@ async fn recover_existing_if_needed(
         )
         .await
         .map_err(git_error)?;
-    if matches {
-        return mark_published(
-            state,
-            auth,
-            release.id,
-            release.workspace_id,
-            &release.content_sha256,
-            0,
-            "workspace.dataset_release_recovered",
-        )
-        .await;
+    let recovery_due =
+        Utc::now() - release.updated_at >= Duration::minutes(PUBLISHING_RECOVERY_AFTER_MINUTES);
+    match existing_release_action(&release.state, matches, recovery_due) {
+        ExistingReleaseAction::ReturnPublished => {}
+        ExistingReleaseAction::FinalizePublished => {
+            if release.state == "failed" {
+                claim_failed_for_retry(state, auth, release).await?;
+            }
+            mark_published(
+                state,
+                auth,
+                release.id,
+                release.workspace_id,
+                &release.content_sha256,
+                0,
+                "workspace.dataset_release_recovered",
+            )
+            .await?;
+        }
+        ExistingReleaseAction::RetryPublication => {
+            if release.state == "publishing" {
+                mark_failed(
+                    state,
+                    auth,
+                    release.id,
+                    release.workspace_id,
+                    "publication_interrupted",
+                )
+                .await?;
+            }
+            claim_failed_for_retry(state, auth, release).await?;
+            return publish_reserved_release(
+                state,
+                auth,
+                git,
+                release.workspace_id,
+                request,
+                prepared,
+                release.id,
+                content_sha256,
+            )
+            .await;
+        }
+        ExistingReleaseAction::PublicationInProgress => {
+            return Err(conflict("Dataset Release publication is still in progress"));
+        }
+        ExistingReleaseAction::PublishedContentUnavailable => {
+            return Err(conflict(
+                "Published Dataset Release content is missing or changed",
+            ));
+        }
+        ExistingReleaseAction::InvalidLifecycle => {
+            return Err(conflict(
+                "Dataset Release has an unsupported lifecycle state",
+            ));
+        }
     }
-    if Utc::now() - release.created_at < Duration::minutes(PUBLISHING_RECOVERY_AFTER_MINUTES) {
-        return Err(conflict("Dataset Release publication is still in progress"));
+
+    load_release(state, auth, release.workspace_id, release.id)
+        .await
+        .and_then(|release| {
+            release.ok_or_else(|| internal("Dataset Release could not be restored"))
+        })
+}
+
+fn existing_release_action(
+    state: &str,
+    content_matches: bool,
+    recovery_due: bool,
+) -> ExistingReleaseAction {
+    match (state, content_matches, recovery_due) {
+        ("published", true, _) => ExistingReleaseAction::ReturnPublished,
+        ("published", false, _) => ExistingReleaseAction::PublishedContentUnavailable,
+        ("publishing", true, _) | ("failed", true, _) => ExistingReleaseAction::FinalizePublished,
+        ("publishing", false, false) => ExistingReleaseAction::PublicationInProgress,
+        ("publishing", false, true) | ("failed", false, _) => {
+            ExistingReleaseAction::RetryPublication
+        }
+        _ => ExistingReleaseAction::InvalidLifecycle,
     }
-    mark_failed(
-        state,
+}
+
+async fn claim_failed_for_retry(
+    state: &AppState,
+    auth: &AuthenticatedUser,
+    release: &ReleaseRecord,
+) -> Result<(), ApiError> {
+    let mut transaction = state.db.begin().await.map_err(database_error)?;
+    let updated = sqlx::query(
+        "UPDATE workspace_dataset_releases \
+         SET state = 'publishing', failure_code = NULL, updated_at = now() \
+         WHERE id = $1 AND organization_id = $2 AND workspace_id = $3 \
+           AND state = 'failed' AND content_sha256 = $4",
+    )
+    .bind(release.id)
+    .bind(auth.organization_id)
+    .bind(release.workspace_id)
+    .bind(&release.content_sha256)
+    .execute(&mut *transaction)
+    .await
+    .map_err(database_error)?
+    .rows_affected();
+    if updated != 1 {
+        transaction.rollback().await.ok();
+        return Err(conflict(
+            "Dataset Release recovery was changed by another request",
+        ));
+    }
+    audit(
+        &mut transaction,
         auth,
         release.id,
-        release.workspace_id,
-        "publication_interrupted",
+        "workspace.dataset_release_retry_started",
+        "success",
+        json!({
+            "workspaceId": release.workspace_id,
+            "contentSha256": release.content_sha256,
+        }),
     )
-    .await
+    .await?;
+    transaction.commit().await.map_err(database_error)
 }
 
 async fn mark_published(
@@ -566,7 +777,23 @@ async fn mark_published(
     .await
     .map_err(database_error)?;
     if result.rows_affected() != 1 {
+        let current = sqlx::query(
+            "SELECT state, content_sha256 FROM workspace_dataset_releases \
+             WHERE id = $1 AND organization_id = $2 AND workspace_id = $3",
+        )
+        .bind(release_id)
+        .bind(auth.organization_id)
+        .bind(workspace_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(database_error)?;
         transaction.rollback().await.ok();
+        if current.is_some_and(|row| {
+            row.get::<String, _>("state") == "published"
+                && row.get::<String, _>("content_sha256") == content_sha256
+        }) {
+            return Ok(());
+        }
         return Err(conflict(
             "Dataset Release no longer has a publishable lifecycle state",
         ));
@@ -595,7 +822,7 @@ async fn mark_failed(
     failure_code: &str,
 ) -> Result<(), ApiError> {
     let mut transaction = state.db.begin().await.map_err(database_error)?;
-    sqlx::query(
+    let updated = sqlx::query(
         "UPDATE workspace_dataset_releases \
          SET state = 'failed', failure_code = $4, updated_at = now() \
          WHERE id = $1 AND organization_id = $2 AND workspace_id = $3 \
@@ -607,7 +834,27 @@ async fn mark_failed(
     .bind(failure_code)
     .execute(&mut *transaction)
     .await
-    .map_err(database_error)?;
+    .map_err(database_error)?
+    .rows_affected();
+    if updated != 1 {
+        let current = sqlx::query_scalar::<_, String>(
+            "SELECT state FROM workspace_dataset_releases \
+             WHERE id = $1 AND organization_id = $2 AND workspace_id = $3",
+        )
+        .bind(release_id)
+        .bind(auth.organization_id)
+        .bind(workspace_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(database_error)?;
+        transaction.rollback().await.ok();
+        if current.as_deref() == Some("failed") {
+            return Ok(());
+        }
+        return Err(conflict(
+            "Dataset Release no longer permits a failure transition",
+        ));
+    }
     audit(
         &mut transaction,
         auth,
@@ -655,7 +902,7 @@ async fn find_by_idempotency(
     idempotency_key: &str,
 ) -> Result<Option<ReleaseRecord>, ApiError> {
     let row = sqlx::query(
-        "SELECT id, workspace_id, dataset_id, version, state, content_sha256, created_at \
+        "SELECT id, workspace_id, dataset_id, version, state, content_sha256, updated_at \
          FROM workspace_dataset_releases \
          WHERE organization_id = $1 AND workspace_id = $2 AND idempotency_key = $3",
     )
@@ -674,9 +921,10 @@ async fn find_by_identity(
     workspace_id: Uuid,
     dataset_id: &str,
     version: &str,
-) -> Result<Option<Uuid>, ApiError> {
+) -> Result<Option<ReleaseRecord>, ApiError> {
     Ok(sqlx::query(
-        "SELECT id FROM workspace_dataset_releases \
+        "SELECT id, workspace_id, dataset_id, version, state, content_sha256, updated_at \
+         FROM workspace_dataset_releases \
          WHERE organization_id = $1 AND workspace_id = $2 \
            AND dataset_id = $3 AND version = $4",
     )
@@ -687,7 +935,7 @@ async fn find_by_identity(
     .fetch_optional(&state.db)
     .await
     .map_err(database_error)?
-    .map(|row| row.get("id")))
+    .map(release_record))
 }
 
 fn release_record(row: sqlx::postgres::PgRow) -> ReleaseRecord {
@@ -698,7 +946,7 @@ fn release_record(row: sqlx::postgres::PgRow) -> ReleaseRecord {
         version: row.get("version"),
         state: row.get("state"),
         content_sha256: row.get("content_sha256"),
-        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
     }
 }
 
@@ -961,6 +1209,46 @@ mod tests {
         assert_ne!(
             release_content_sha256(&request, &first),
             release_content_sha256(&request, &second)
+        );
+    }
+
+    #[test]
+    fn failed_release_is_retried_or_finalized_but_never_returned_as_success() {
+        assert_eq!(
+            existing_release_action("failed", false, true),
+            ExistingReleaseAction::RetryPublication
+        );
+        assert_eq!(
+            existing_release_action("failed", true, true),
+            ExistingReleaseAction::FinalizePublished
+        );
+    }
+
+    #[test]
+    fn publishing_recovery_distinguishes_active_interrupted_and_completed_work() {
+        assert_eq!(
+            existing_release_action("publishing", false, false),
+            ExistingReleaseAction::PublicationInProgress
+        );
+        assert_eq!(
+            existing_release_action("publishing", false, true),
+            ExistingReleaseAction::RetryPublication
+        );
+        assert_eq!(
+            existing_release_action("publishing", true, false),
+            ExistingReleaseAction::FinalizePublished
+        );
+    }
+
+    #[test]
+    fn published_release_requires_matching_workspace_content() {
+        assert_eq!(
+            existing_release_action("published", true, false),
+            ExistingReleaseAction::ReturnPublished
+        );
+        assert_eq!(
+            existing_release_action("published", false, false),
+            ExistingReleaseAction::PublishedContentUnavailable
         );
     }
 

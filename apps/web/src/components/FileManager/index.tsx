@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import ChevronRight from "lucide-react/dist/esm/icons/chevron-right";
+import Database from "lucide-react/dist/esm/icons/database";
 import Folder from "lucide-react/dist/esm/icons/folder";
 import RefreshCw from "lucide-react/dist/esm/icons/refresh-cw";
 import Search from "lucide-react/dist/esm/icons/search";
 import X from "lucide-react/dist/esm/icons/x";
 import type { GitFileStatus } from "../../types";
+import { DatasetReleaseDialog } from "../../features/files/components/DatasetReleaseDialog";
 import { Markdown } from "../../features/messages/components/Markdown";
 import { getFileTypeIconUrl } from "../../utils/fileTypeIcons";
 
@@ -60,6 +63,8 @@ export default function FileManager({ workspaceId, selectedPath, onSelectedPathC
   const [loading, setLoading] = useState(false);
   const [treeOpen, setTreeOpen] = useState(true);
   const [query, setQuery] = useState("");
+  const [datasetDialogOpen, setDatasetDialogOpen] = useState(false);
+  const datasetDialogTrigger = useRef<HTMLElement | null>(null);
   const resizeSession = useRef<ResizeSession | null>(null);
   const refreshRequest = useRef(0);
 
@@ -140,6 +145,15 @@ export default function FileManager({ workspaceId, selectedPath, onSelectedPathC
     }).map((path): Row => ({ path, name: path.split("/").pop() ?? path, depth: path.split("/").length - 1, folder: folders.has(path) }));
   }, [expanded, files, query]);
   const markdownPreview = Boolean(selectedPath && MARKDOWN_FILE_PATTERN.test(selectedPath));
+  const openDatasetDialog = (trigger: HTMLElement) => {
+    datasetDialogTrigger.current = trigger;
+    setDatasetDialogOpen(true);
+  };
+  const closeDatasetDialog = () => {
+    const trigger = datasetDialogTrigger.current;
+    setDatasetDialogOpen(false);
+    queueMicrotask(() => trigger?.isConnected && trigger.focus());
+  };
 
   const clampPanelWidth = (width: number) => Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, width));
   return (
@@ -199,6 +213,17 @@ export default function FileManager({ workspaceId, selectedPath, onSelectedPathC
       <div className="web-file-manager-header">
         <strong>{embedded ? "Workspace" : "Files"}</strong>
         <div>
+          <button
+            type="button"
+            className="web-file-data-button"
+            onClick={(event) => openDatasetDialog(event.currentTarget)}
+            disabled={!workspaceId}
+            aria-label="Add data"
+            data-testid="workspace-files-add-data"
+          >
+            <Database size={14} aria-hidden="true" />
+            <span>Add data</span>
+          </button>
           <button type="button" onClick={() => void refresh()} aria-label="Refresh files"><RefreshCw size={14} /></button>
           {!embedded ? <button type="button" onClick={onClose} aria-label="Collapse file manager"><X size={15} /></button> : null}
         </div>
@@ -215,7 +240,20 @@ export default function FileManager({ workspaceId, selectedPath, onSelectedPathC
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter files…" aria-label="Filter files" />
           </label>
           <div className="web-file-manager-tree">
-            {!workspaceId ? <div className="web-file-empty">Select a workspace</div> : rows.length === 0 ? <div className="web-file-empty">No matching files</div> : rows.map((row) => {
+            {!workspaceId ? <div className="web-file-empty">Select a workspace</div> : rows.length === 0 && !query.trim() ? (
+              <div className="web-file-empty web-file-empty--data">
+                <Database size={20} aria-hidden="true" />
+                <strong>No Workspace files yet</strong>
+                <span>Publish an immutable Dataset Release for governed Agents.</span>
+                <button
+                  type="button"
+                  onClick={(event) => openDatasetDialog(event.currentTarget)}
+                  data-testid="workspace-files-empty-add-data"
+                >
+                  Add data
+                </button>
+              </div>
+            ) : rows.length === 0 ? <div className="web-file-empty">No matching files</div> : rows.map((row) => {
               const status = statuses.get(row.path);
               const fileTypeIconUrl = row.folder ? null : getFileTypeIconUrl(row.path);
               return <button type="button" className={`web-file-row${selectedPath === row.path ? " is-active" : ""}`} key={row.path} style={{ paddingLeft: 8 + row.depth * 14 }} onClick={() => row.folder ? setExpanded((current) => { const next = new Set(current); next.has(row.path) ? next.delete(row.path) : next.add(row.path); return next; }) : onSelectedPathChange(row.path)}>
@@ -239,6 +277,18 @@ export default function FileManager({ workspaceId, selectedPath, onSelectedPathC
           />
         ) : <pre><code>{content}</code></pre> : <div className="web-file-empty">Select a file to preview</div>}
       </div>
+      {datasetDialogOpen && workspaceId
+        ? createPortal(
+            <DatasetReleaseDialog
+              workspaceId={workspaceId}
+              onClose={closeDatasetDialog}
+              onPublished={() => {
+                void refresh();
+              }}
+            />,
+            document.body,
+          )
+        : null}
     </aside>
   );
 }

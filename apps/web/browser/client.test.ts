@@ -18,7 +18,9 @@ describe("PlatformClient", () => {
     vi.stubGlobal("crypto", { randomUUID: () => "018f-idempotency-key" });
     const client = new PlatformClient({ baseUrl: "https://platform.test", token: "session-token" });
 
-    await client.startRun("task/one", "workspace-one");
+    await client.startRun("task/one", "workspace-one", {
+      readinessFingerprint: "readiness-1",
+    });
     await expect(client.sendMessage("task/one", "hello", {
       model: "deepseek-v4-flash",
       modelProvider: "deepseek",
@@ -31,6 +33,7 @@ describe("PlatformClient", () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe("https://platform.test/api/tasks/task%2Fone/runs");
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
       idempotency_key: "018f-idempotency-key",
+      readiness_fingerprint: "readiness-1",
       workspace_id: "workspace-one",
       fork_thread_id: null,
       fork_source_run_id: null,
@@ -163,6 +166,7 @@ describe("PlatformClient", () => {
     const client = new PlatformClient({ baseUrl: "https://platform.test", token: "session-token" });
 
     await client.startRun("task-one", "workspace-one", {
+      readinessFingerprint: "readiness-supervisor",
       supervisorPolicy: {
         policy_id: "enterprise-supervisor-copilot",
         version: "1.0.0",
@@ -171,6 +175,7 @@ describe("PlatformClient", () => {
 
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
       idempotency_key: "018f-idempotency-key",
+      readiness_fingerprint: "readiness-supervisor",
       workspace_id: "workspace-one",
       fork_thread_id: null,
       fork_source_run_id: null,
@@ -190,6 +195,7 @@ describe("PlatformClient", () => {
     const client = new PlatformClient({ baseUrl: "https://platform.test", token: "session-token" });
 
     await client.startRun("task-one", "workspace-one", {
+      readinessFingerprint: "readiness-agent",
       agent: {
         definition_id: "network-planning-agent",
         version: "2.0.0",
@@ -199,6 +205,7 @@ describe("PlatformClient", () => {
 
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
       idempotency_key: "018f-idempotency-key",
+      readiness_fingerprint: "readiness-agent",
       workspace_id: "workspace-one",
       fork_thread_id: null,
       fork_source_run_id: null,
@@ -518,7 +525,9 @@ describe("PlatformClient", () => {
     vi.stubGlobal("crypto", {});
     const client = new PlatformClient({ baseUrl: "https://platform.test", token: "session-token" });
 
-    await client.startRun("task-one", "workspace-one");
+    await client.startRun("task-one", "workspace-one", {
+      readinessFingerprint: "readiness-fallback",
+    });
 
     const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
     expect(body.idempotency_key).toMatch(/^idempotency-/);

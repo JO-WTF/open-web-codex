@@ -3,6 +3,7 @@ mod event_projection;
 mod governed_runtime_preflight;
 mod middleware;
 mod routes;
+mod run_readiness;
 #[cfg(test)]
 mod security_integration;
 mod supervisor_instruction_policy;

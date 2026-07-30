@@ -8,24 +8,77 @@ use axum::{
 use open_web_codex_adapter::{
     AuthorizedWorkspace, CodexAdapter, ReviewTarget as AdapterReviewTarget,
 };
-use open_web_codex_platform_contracts::error::PlatformError;
+use open_web_codex_platform_contracts::error::{ErrorKind, PlatformError};
 use open_web_codex_platform_contracts::{
-    InterruptRunRequest, ReviewTarget as PlatformReviewTarget, Run, StartReviewRequest,
-    StartRunRequest, StartRunResponse, SteerRunRequest,
+    InterruptRunRequest, ReviewTarget as PlatformReviewTarget, Run, RunReadiness,
+    RunReadinessRequest, RunReadinessStatus, StartReviewRequest, StartRunRequest, StartRunResponse,
+    SteerRunRequest,
 };
 use open_web_codex_platform_store::AppState;
+use open_web_codex_provider_service::secured::{AuthorizedProviderOperations, ProviderActor};
 use open_web_codex_run_orchestrator::{
-    AgentRunSnapshotInput, AgentRunSource, CancelRunRequest, EnqueueRunRequest, RunOrchestrator,
-    RunOrchestratorError, RunRecord,
+    AgentRunSnapshotInput, AgentRunSource, CancelRunRequest, EnqueueRunRequest, ReplayRunRequest,
+    RunExecutionSelection, RunOrchestrator, RunOrchestratorError, RunRecord,
 };
+use open_web_codex_secret_store::PostgresSecretStore;
 use sqlx::Row;
 use uuid::Uuid;
 
 use crate::middleware::auth::{require_runtime_profile, AuthenticatedUser};
 use crate::routes::RuntimeProfileBinding;
-use crate::{agent_catalog, supervisor_policy};
+use crate::run_readiness;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
+
+/// Evaluate the exact browser-selected execution without creating a Task,
+/// Run, or Codex Thread.
+pub async fn readiness(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(workspace_id): Path<Uuid>,
+    Extension(orchestrator): Extension<Arc<RunOrchestrator>>,
+    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
+    Extension(providers): Extension<Arc<dyn AuthorizedProviderOperations>>,
+    Extension(git): Extension<Arc<open_web_codex_git_runtime::GitRuntime>>,
+    Extension(configuration_secrets): Extension<Arc<PostgresSecretStore>>,
+    Extension(profile): Extension<RuntimeProfileBinding>,
+    Json(request): Json<RunReadinessRequest>,
+) -> ApiResult<RunReadiness> {
+    require_runtime_profile(&state.db, &auth, &profile.runtime_key).await?;
+    let workspace = readiness_workspace(&state, &auth, workspace_id).await?;
+    let workspace_id = Uuid::parse_str(&workspace.id).expect("Workspace id was created from UUID");
+    let request = resolve_readiness_execution(&orchestrator, &auth, request).await?;
+    let catalog = providers
+        .list(ProviderActor {
+            user_id: auth.user_id,
+            organization_id: auth.organization_id,
+        })
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(PlatformError::internal(
+                    "Provider catalog is temporarily unavailable",
+                )),
+            )
+        })?;
+    let runtime_healthy = adapter.health().await.is_ok_and(|health| health.ok);
+    let browser_map_configured =
+        super::configuration::browser_map_configured(&state, &configuration_secrets).await?;
+    let evaluated = run_readiness::evaluate(
+        &state.db,
+        &git,
+        &profile,
+        auth.organization_id,
+        workspace_id,
+        &request,
+        &catalog,
+        runtime_healthy,
+        browser_map_configured,
+    )
+    .await;
+    Ok(Json(evaluated.readiness))
+}
 
 /// Queue a Run against an existing authorized Workspace. The worker owns only
 /// Run scheduling and Runtime delivery; Workspace provisioning is independent.
@@ -34,6 +87,10 @@ pub async fn start_run(
     auth: AuthenticatedUser,
     Path(task_id): Path<Uuid>,
     Extension(orchestrator): Extension<Arc<RunOrchestrator>>,
+    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
+    Extension(providers): Extension<Arc<dyn AuthorizedProviderOperations>>,
+    Extension(git): Extension<Arc<open_web_codex_git_runtime::GitRuntime>>,
+    Extension(configuration_secrets): Extension<Arc<PostgresSecretStore>>,
     Extension(profile): Extension<RuntimeProfileBinding>,
     Json(req): Json<StartRunRequest>,
 ) -> ApiResult<StartRunResponse> {
@@ -46,24 +103,112 @@ pub async fn start_run(
             )),
         ));
     }
-    // Resolving a published identifier is safe at enqueue time. Capability,
-    // workspace-effective configuration and Profile Role checks deliberately
-    // run in the worker immediately before the Runtime creates the Thread.
-    let supervisor_policy = if let Some(selection) = req.supervisor_policy.as_ref() {
-        Some(
-            supervisor_policy::resolve_for_new_run(&state.db, auth.organization_id, selection)
-                .await
-                .map_err(supervisor_policy_error)?
-                .snapshot,
-        )
+    let workspace = readiness_workspace(&state, &auth, req.workspace_id).await?;
+    let workspace_id = Uuid::parse_str(&workspace.id).expect("Workspace id was created from UUID");
+    let replay_execution = if req.fork_thread_id.is_some() || req.fork_source_run_id.is_some() {
+        RunExecutionSelection::Inherited
+    } else if let Some(selection) = req.supervisor_policy.as_ref() {
+        RunExecutionSelection::Supervisor {
+            policy_id: selection.policy_id.clone(),
+            version: selection.version.clone(),
+        }
+    } else if let Some(selection) = req.agent.as_ref() {
+        RunExecutionSelection::Agent {
+            definition_id: selection.definition_id.clone(),
+            version: selection.version.clone(),
+            release_id: selection.release_id,
+        }
     } else {
-        None
+        RunExecutionSelection::Standard
     };
-    let agent = if let Some(selection) = req.agent.as_ref() {
-        let resolved =
-            agent_catalog::resolve_run_selection(&state.db, auth.organization_id, selection)
-                .await
-                .map_err(agent_catalog_error)?;
+    if let Some(run) = orchestrator
+        .replay_run(ReplayRunRequest {
+            organization_id: auth.organization_id,
+            actor_id: auth.user_id,
+            task_id,
+            idempotency_key: req.idempotency_key.clone(),
+            workspace_id,
+            fork_thread_id: req.fork_thread_id.clone(),
+            fork_source_run_id: req.fork_source_run_id,
+            execution: replay_execution,
+        })
+        .await
+        .map_err(orchestrator_error)?
+    {
+        return Ok(Json(StartRunResponse {
+            run: run_from_record(run),
+        }));
+    }
+    let task = sqlx::query(
+        "SELECT model_provider, model FROM tasks WHERE id = $1 AND organization_id = $2",
+    )
+    .bind(task_id)
+    .bind(auth.organization_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(database_error)?
+    .ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(PlatformError::not_found("Task was not found")),
+        )
+    })?;
+    let readiness_request = RunReadinessRequest {
+        model_provider: task
+            .get::<Option<String>, _>("model_provider")
+            .unwrap_or_default(),
+        model: task.get::<Option<String>, _>("model").unwrap_or_default(),
+        supervisor_policy: req.supervisor_policy.clone(),
+        agent: req.agent.clone(),
+        fork_thread_id: req.fork_thread_id.clone(),
+        fork_source_run_id: req.fork_source_run_id,
+    };
+    let readiness_request =
+        resolve_readiness_execution(&orchestrator, &auth, readiness_request).await?;
+    let catalog = providers
+        .list(ProviderActor {
+            user_id: auth.user_id,
+            organization_id: auth.organization_id,
+        })
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(PlatformError::internal(
+                    "Provider catalog is temporarily unavailable",
+                )),
+            )
+        })?;
+    let runtime_healthy = adapter.health().await.is_ok_and(|health| health.ok);
+    let browser_map_configured =
+        super::configuration::browser_map_configured(&state, &configuration_secrets).await?;
+    let evaluated = run_readiness::evaluate(
+        &state.db,
+        &git,
+        &profile,
+        auth.organization_id,
+        workspace_id,
+        &readiness_request,
+        &catalog,
+        runtime_healthy,
+        browser_map_configured,
+    )
+    .await;
+    if req.readiness_fingerprint != evaluated.readiness.evaluation_fingerprint {
+        return Err(readiness_changed());
+    }
+    if evaluated.readiness.status == RunReadinessStatus::Blocked {
+        return Err(run_not_ready());
+    }
+    let forked = req.fork_thread_id.is_some();
+    let supervisor_policy = if forked {
+        None
+    } else {
+        evaluated.supervisor_policy.map(|policy| policy.snapshot)
+    };
+    let agent = if forked {
+        None
+    } else if let Some(resolved) = evaluated.agent {
         Some(AgentRunSnapshotInput {
             definition_id: resolved.definition_id,
             version: resolved.version,
@@ -85,7 +230,7 @@ pub async fn start_run(
             actor_id: auth.user_id,
             task_id,
             idempotency_key: req.idempotency_key,
-            workspace_id: req.workspace_id,
+            workspace_id,
             fork_thread_id: req.fork_thread_id,
             fork_source_run_id: req.fork_source_run_id,
             supervisor_policy,
@@ -96,29 +241,6 @@ pub async fn start_run(
     Ok(Json(StartRunResponse {
         run: run_from_record(run),
     }))
-}
-
-fn agent_catalog_error(
-    error: agent_catalog::AgentCatalogError,
-) -> (StatusCode, Json<PlatformError>) {
-    match error {
-        agent_catalog::AgentCatalogError::NotFound => (
-            StatusCode::NOT_FOUND,
-            Json(PlatformError::not_found("Agent Definition was not found")),
-        ),
-        agent_catalog::AgentCatalogError::Invalid => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(PlatformError::bad_request(
-                "Agent Definition release is invalid",
-            )),
-        ),
-        agent_catalog::AgentCatalogError::Database => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(PlatformError::internal(
-                "Agent Definition catalog could not be loaded",
-            )),
-        ),
-    }
 }
 
 /// GET /api/runs?task_id=... — list runs for a task.
@@ -494,6 +616,75 @@ fn run_from_record(run: RunRecord) -> Run {
     }
 }
 
+async fn resolve_readiness_execution(
+    orchestrator: &RunOrchestrator,
+    auth: &AuthenticatedUser,
+    mut request: RunReadinessRequest,
+) -> Result<RunReadinessRequest, (StatusCode, Json<PlatformError>)> {
+    match (
+        request.fork_thread_id.as_deref(),
+        request.fork_source_run_id,
+    ) {
+        (None, None) => Ok(request),
+        (Some(thread_id), Some(source_run_id)) => {
+            if request.supervisor_policy.is_some() || request.agent.is_some() {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(PlatformError::bad_request(
+                        "Fork readiness inherits its source execution selection",
+                    )),
+                ));
+            }
+            match orchestrator
+                .resolve_fork_execution(
+                    auth.organization_id,
+                    auth.user_id,
+                    source_run_id,
+                    thread_id,
+                )
+                .await
+                .map_err(orchestrator_error)?
+            {
+                RunExecutionSelection::Standard => {}
+                RunExecutionSelection::Supervisor { policy_id, version } => {
+                    request.supervisor_policy = Some(
+                        open_web_codex_platform_contracts::SupervisorPolicySelection {
+                            policy_id,
+                            version,
+                        },
+                    );
+                }
+                RunExecutionSelection::Agent {
+                    definition_id,
+                    version,
+                    release_id,
+                } => {
+                    request.agent = Some(open_web_codex_platform_contracts::AgentRunSelection {
+                        definition_id,
+                        version,
+                        release_id,
+                    });
+                }
+                RunExecutionSelection::Inherited => {
+                    return Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(PlatformError::internal(
+                            "Fork execution identity could not be resolved",
+                        )),
+                    ));
+                }
+            }
+            Ok(request)
+        }
+        _ => Err((
+            StatusCode::BAD_REQUEST,
+            Json(PlatformError::bad_request(
+                "Fork source Thread and Run must be provided together",
+            )),
+        )),
+    }
+}
+
 fn run_from_row(row: &sqlx::postgres::PgRow) -> Run {
     Run {
         id: row.get("id"),
@@ -546,31 +737,53 @@ fn database_error(_error: sqlx::Error) -> (StatusCode, Json<PlatformError>) {
         Json(PlatformError::internal("database operation failed")),
     )
 }
-fn supervisor_policy_error(
-    error: supervisor_policy::SupervisorPolicyError,
-) -> (StatusCode, Json<PlatformError>) {
-    match error {
-        supervisor_policy::SupervisorPolicyError::NotFound => (
-            StatusCode::BAD_REQUEST,
-            Json(PlatformError::bad_request(
-                "Selected Supervisor Policy is not published",
-            )),
-        ),
-        supervisor_policy::SupervisorPolicyError::Invalid(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(PlatformError::internal(
-                "Published Supervisor Policy is invalid",
-            )),
-        ),
-        supervisor_policy::SupervisorPolicyError::Capability(message) => (
-            StatusCode::CONFLICT,
-            Json(PlatformError::bad_request(message)),
-        ),
-        supervisor_policy::SupervisorPolicyError::Database => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(PlatformError::internal(
-                "Supervisor Policy database operation failed",
-            )),
-        ),
-    }
+fn readiness_changed() -> (StatusCode, Json<PlatformError>) {
+    (
+        StatusCode::CONFLICT,
+        Json(PlatformError {
+            kind: ErrorKind::Conflict,
+            message: "readiness_changed".to_string(),
+            request_id: None,
+            retry_after_ms: None,
+        }),
+    )
+}
+
+async fn readiness_workspace(
+    state: &AppState,
+    auth: &AuthenticatedUser,
+    workspace_id: Uuid,
+) -> Result<AuthorizedWorkspace, (StatusCode, Json<PlatformError>)> {
+    let workspace_id =
+        super::workspaces::authorized_workspace(state, auth, workspace_id, false).await?;
+    let root = sqlx::query_scalar::<_, String>(
+        "SELECT root_path FROM workspaces WHERE id = $1 AND organization_id = $2",
+    )
+    .bind(workspace_id)
+    .bind(auth.organization_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(database_error)?
+    .ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(PlatformError::not_found("Workspace was not found")),
+        )
+    })?;
+    Ok(AuthorizedWorkspace {
+        id: workspace_id.to_string(),
+        root: root.into(),
+    })
+}
+
+fn run_not_ready() -> (StatusCode, Json<PlatformError>) {
+    (
+        StatusCode::CONFLICT,
+        Json(PlatformError {
+            kind: ErrorKind::Conflict,
+            message: "run_not_ready".to_string(),
+            request_id: None,
+            retry_after_ms: None,
+        }),
+    )
 }

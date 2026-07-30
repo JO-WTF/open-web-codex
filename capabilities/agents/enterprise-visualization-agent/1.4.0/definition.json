@@ -1,16 +1,16 @@
 {
   "definitionId": "enterprise-visualization-agent",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "displayName": "Enterprise Visualization Agent",
   "description": "Converts a validated bounded network-map manifest and referenced GeoJSON into a browser-renderable map Artifact.",
-  "runtimeRole": "agent_dcbc01f2127fe589f5416c75f8f447e8",
+  "runtimeRole": "agent_ade76f31004f8d9f502c6e0b2398a921",
   "runtimeProfile": {
-    "contentSha256": "ad03db0e05d357c0b1d7d592e6c7c5a64591a011a66cdb9530d21ed4d24d3599"
+    "contentSha256": "7fef0398e752d515d7aa3a144517bdb3c078215591b5dbf9f930440724e18188"
   },
   "responsibilities": [
     "Resolve only the exact bounded indonesia_network_map.v1 and geojson.v1 names through the server-owned render preparation Tool.",
     "Pass the unchanged GeoJSON reference, Mapbox layers and safe extensions to map_utils.create_map_card.",
-    "Publish the returned map.v3 Artifact and hand off its exact matching Artifact ID and embed code without recalculating network evidence."
+    "Publish the returned map.v3 Artifact, preserve source provenance, and emit the Tool-owned embed directive once so the platform can project its typed Artifact reference."
   ],
   "inputArtifactTypes": [
     "indonesia_network_map.v1",
@@ -21,7 +21,7 @@
   ],
   "capabilityTemplate": {
     "definitionId": "enterprise-visualization-agent",
-    "version": "1.3.0"
+    "version": "1.4.0"
   },
   "requiredMcpServers": [
     {

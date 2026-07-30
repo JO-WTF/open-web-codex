@@ -134,12 +134,21 @@ function formatBytes(value: number) {
   return `${(value / 1024 / 1024).toFixed(1)} MiB`;
 }
 
+function nextPatchVersion(version: string) {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(version);
+  if (!match) {
+    return "";
+  }
+  return `${match[1]}.${match[2]}.${Number(match[3]) + 1}`;
+}
+
 export function DatasetReleaseDialog({
   workspaceId,
   onClose,
   onPublished,
 }: DatasetReleaseDialogProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const versionInputRef = useRef<HTMLInputElement | null>(null);
   const idempotencyKeyRef = useRef<string | null>(null);
   const [datasetId, setDatasetId] = useState("");
   const [version, setVersion] = useState("1.0.0");
@@ -173,6 +182,17 @@ export function DatasetReleaseDialog({
   useEffect(() => {
     void refreshReleases();
   }, [workspaceId]);
+
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || publishing) return;
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+    };
+    document.addEventListener("keydown", closeOnEscape, true);
+    return () => document.removeEventListener("keydown", closeOnEscape, true);
+  }, [onClose, publishing]);
 
   const handleFileSelection = async (fileList: FileList | null) => {
     invalidateRequest();
@@ -275,6 +295,21 @@ export function DatasetReleaseDialog({
     }
   };
 
+  const prepareRelease = (
+    release: WorkspaceDatasetReleaseSummary,
+    version: string,
+  ) => {
+    idempotencyKeyRef.current = null;
+    setPublished(null);
+    setError(null);
+    setDatasetId(release.dataset_id);
+    setVersion(version);
+    setDisplayName(release.display_name);
+    setDescription(release.description);
+    setSelectedFiles([]);
+    versionInputRef.current?.focus();
+  };
+
   return (
     <ModalShell
       className="dataset-release-modal"
@@ -316,6 +351,7 @@ export function DatasetReleaseDialog({
               Dataset ID
               <input
                 className="ds-modal-input"
+                autoFocus
                 value={datasetId}
                 placeholder="indonesia-warehouse-network"
                 onChange={(event) => {
@@ -327,6 +363,7 @@ export function DatasetReleaseDialog({
             <label className="ds-modal-label">
               Version
               <input
+                ref={versionInputRef}
                 className="ds-modal-input"
                 value={version}
                 placeholder="1.0.0"
@@ -487,27 +524,61 @@ export function DatasetReleaseDialog({
                     <span>{release.state}</span>
                   </div>
                   {release.state === "published" ? (
-                    <div className="dataset-release-identity">
-                      <code title={release.content_sha256}>
-                        SHA-256 {release.content_sha256.slice(0, 12)}…
-                      </code>
+                    <>
+                      <details className="dataset-release-details">
+                        <summary>View details</summary>
+                        <p>{release.description}</p>
+                        <dl>
+                          {release.files.map((file) => (
+                            <div key={`${file.logical_name}:${file.content_sha256}`}>
+                              <dt>{file.logical_name}</dt>
+                              <dd>
+                                {file.role} · {formatBytes(file.byte_size)}
+                              </dd>
+                            </div>
+                          ))}
+                        </dl>
+                      </details>
+                      <div className="dataset-release-identity">
+                        <code title={release.content_sha256}>
+                          SHA-256 {release.content_sha256.slice(0, 12)}…
+                        </code>
+                        <button
+                          type="button"
+                          className="ghost dataset-release-copy"
+                          onClick={() => void copyReleaseIdentity(release)}
+                          aria-label={`Copy exact identity for ${release.display_name}`}
+                        >
+                          {copiedReleaseId === release.id ? (
+                            <CheckCircle2 size={12} aria-hidden />
+                          ) : (
+                            <Copy size={12} aria-hidden />
+                          )}
+                          {copiedReleaseId === release.id ? "Copied" : "Copy identity"}
+                        </button>
+                      </div>
                       <button
                         type="button"
-                        className="ghost dataset-release-copy"
-                        onClick={() => void copyReleaseIdentity(release)}
-                        aria-label={`Copy exact identity for ${release.display_name}`}
+                        className="ghost dataset-release-next-version"
+                        onClick={() =>
+                          prepareRelease(release, nextPatchVersion(release.version))
+                        }
                       >
-                        {copiedReleaseId === release.id ? (
-                          <CheckCircle2 size={12} aria-hidden />
-                        ) : (
-                          <Copy size={12} aria-hidden />
-                        )}
-                        {copiedReleaseId === release.id ? "Copied" : "Copy identity"}
+                        New version
                       </button>
-                    </div>
+                    </>
                   ) : null}
                   {release.failure_code ? (
-                    <small>Failure: {release.failure_code}</small>
+                    <>
+                      <small>Failure: {release.failure_code}</small>
+                      <button
+                        type="button"
+                        className="ghost dataset-release-next-version"
+                        onClick={() => prepareRelease(release, release.version)}
+                      >
+                        Retry publication
+                      </button>
+                    </>
                   ) : null}
                 </article>
               ))}

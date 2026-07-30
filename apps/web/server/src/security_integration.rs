@@ -256,6 +256,107 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     .await
     .unwrap();
 
+    let tutorial_install = call(
+        &app,
+        authenticated_json(
+            "POST",
+            &format!(
+                "/api/workspaces/{workspace_id}/tutorial-blueprints/indonesia-warehouse-network/1.4.0/reconcile"
+            ),
+            &first_token,
+            json!({"idempotency_key": "security-tutorial-install-one"}),
+        ),
+    )
+    .await;
+    assert_eq!(tutorial_install.0, StatusCode::OK);
+    assert_eq!(tutorial_install.1["status"], "installed");
+    assert_eq!(
+        tutorial_install.1["agent_releases"]
+            .as_array()
+            .map(Vec::len),
+        Some(3)
+    );
+    let tutorial_reconcile = call(
+        &app,
+        authenticated_json(
+            "POST",
+            &format!(
+                "/api/workspaces/{workspace_id}/tutorial-blueprints/indonesia-warehouse-network/1.4.0/reconcile"
+            ),
+            &first_token,
+            json!({"idempotency_key": "security-tutorial-install-two"}),
+        ),
+    )
+    .await;
+    assert_eq!(tutorial_reconcile.0, StatusCode::OK);
+    assert_eq!(tutorial_reconcile.1["status"], "installed");
+    assert_eq!(
+        tutorial_reconcile.1["dataset_release"]["id"],
+        tutorial_install.1["dataset_release"]["id"]
+    );
+    assert_eq!(
+        tutorial_reconcile.1["supervisor_release"]["id"],
+        tutorial_install.1["supervisor_release"]["id"]
+    );
+    let tutorial_dataset_release_id = Uuid::parse_str(
+        tutorial_install.1["dataset_release"]["id"]
+            .as_str()
+            .expect("Tutorial Dataset Release id"),
+    )
+    .expect("Tutorial Dataset Release UUID");
+    let tutorial_dataset_content_sha256 = tutorial_install.1["dataset_release"]["content_sha256"]
+        .as_str()
+        .expect("Tutorial Dataset Release digest")
+        .to_string();
+    sqlx::query("UPDATE workspace_dataset_releases SET content_sha256 = $1 WHERE id = $2")
+        .bind("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+        .bind(tutorial_dataset_release_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let tutorial_conflict = call(
+        &app,
+        authenticated_json(
+            "POST",
+            &format!(
+                "/api/workspaces/{workspace_id}/tutorial-blueprints/indonesia-warehouse-network/1.4.0/reconcile"
+            ),
+            &first_token,
+            json!({"idempotency_key": "security-tutorial-install-conflict"}),
+        ),
+    )
+    .await;
+    assert_eq!(tutorial_conflict.0, StatusCode::OK);
+    assert_eq!(tutorial_conflict.1["status"], "partial");
+    assert_eq!(
+        tutorial_conflict.1["issues"][0]["code"],
+        "dataset_release_conflict"
+    );
+    sqlx::query("UPDATE workspace_dataset_releases SET content_sha256 = $1 WHERE id = $2")
+        .bind(tutorial_dataset_content_sha256)
+        .bind(tutorial_dataset_release_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let tutorial_recovered = call(
+        &app,
+        authenticated_json(
+            "POST",
+            &format!(
+                "/api/workspaces/{workspace_id}/tutorial-blueprints/indonesia-warehouse-network/1.4.0/reconcile"
+            ),
+            &first_token,
+            json!({"idempotency_key": "security-tutorial-install-recovered"}),
+        ),
+    )
+    .await;
+    assert_eq!(tutorial_recovered.0, StatusCode::OK);
+    assert_eq!(tutorial_recovered.1["status"], "installed");
+    assert_eq!(
+        tutorial_recovered.1["dataset_release"]["id"],
+        tutorial_install.1["dataset_release"]["id"]
+    );
+
     let completed_followup_task_id = Uuid::now_v7();
     let completed_followup_run_id = Uuid::now_v7();
     sqlx::query(
@@ -856,6 +957,19 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     )
     .await;
     assert_eq!(cross_tenant_asset.0, StatusCode::NOT_FOUND);
+    let cross_tenant_tutorial_install = call(
+        &app,
+        authenticated_json(
+            "POST",
+            &format!(
+                "/api/workspaces/{workspace_id}/tutorial-blueprints/indonesia-warehouse-network/1.4.0/reconcile"
+            ),
+            second_token,
+            json!({"idempotency_key": "cross-tenant-tutorial-install"}),
+        ),
+    )
+    .await;
+    assert_eq!(cross_tenant_tutorial_install.0, StatusCode::NOT_FOUND);
     let cross_tenant_artifact = call(
         &app,
         authenticated(

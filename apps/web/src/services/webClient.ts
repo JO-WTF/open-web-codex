@@ -5,12 +5,14 @@ import type {
   ArtifactSummary,
   Run,
   RunEvent,
+  RunReadiness,
   RuntimeAgentActivity,
   RuntimeAgentExecution,
   RuntimeAgentProjection,
   SupervisorPolicyBinding,
   SupervisorPolicySelection,
   SupervisorPolicySummary,
+  Task,
   ThreadHistoryTurn,
   Workspace,
 } from "../../browser/types";
@@ -50,12 +52,52 @@ type ThreadContext = {
 
 type JsonRecord = Record<string, unknown>;
 
+type ThreadStartDraft = {
+  taskId: string | null;
+  taskPromise: Promise<Task> | null;
+  runIdempotencyKey: string;
+  acceptedRunId: string | null;
+  executionKey: string;
+};
+
+export type AcceptedThreadStart = {
+  taskId: string;
+  runId: string;
+};
+
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function sameOriginBaseUrl() {
   return typeof window === "undefined" ? "" : window.location.origin;
+}
+
+function newIdempotencyKey() {
+  const randomUUID = globalThis.crypto?.randomUUID;
+  return typeof randomUUID === "function"
+    ? randomUUID.call(globalThis.crypto)
+    : `thread-start-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function threadStartDraftKey(
+  workspaceId: string,
+  operationId: string,
+) {
+  return `${workspaceId}:${operationId}`;
+}
+
+function threadStartExecutionKey(
+  supervisorPolicy: SupervisorPolicySelection | null | undefined,
+  agent: AgentRunSelection | null | undefined,
+) {
+  if (supervisorPolicy) {
+    return `supervisor:${supervisorPolicy.policy_id}@${supervisorPolicy.version}`;
+  }
+  if (agent) {
+    return `agent:${agent.definition_id}@${agent.version}:${agent.release_id ?? "repository"}`;
+  }
+  return "standard";
 }
 
 function platformWorkspace(workspace: Workspace): WorkspaceInfo {
@@ -204,6 +246,7 @@ export class CodexMonitorWebClient {
   private readonly threadContexts = new Map<string, ThreadContext>();
   private readonly taskEventSequences = new Map<string, number>();
   private readonly selectedRunByWorkspace = new Map<string, string>();
+  private readonly threadStartDrafts = new Map<string, ThreadStartDraft>();
 
   constructor(options: WebClientOptions = {}) {
     this.platform = new PlatformClient({
@@ -302,23 +345,46 @@ export class CodexMonitorWebClient {
     taskId: string,
     runId: string,
   ) {
+    let lastTransientError: unknown = null;
     for (let attempt = 0; attempt < 600; attempt += 1) {
-      const run = await this.platform.getRun(runId);
-      if (run.codex_thread_id && run.workspace_id) {
-        this.threadContexts.set(run.codex_thread_id, {
-          workspaceId,
-          projectId,
-          taskId,
-          runId,
-        });
-        return run;
+      try {
+        const run = await this.platform.getRun(runId);
+        lastTransientError = null;
+        if (run.codex_thread_id && run.workspace_id) {
+          this.threadContexts.set(run.codex_thread_id, {
+            workspaceId,
+            projectId,
+            taskId,
+            runId,
+          });
+          return run;
+        }
+        if (["failed", "cancelled"].includes(run.status)) {
+          throw Object.assign(
+            new Error(`Run ${run.status} before its Codex Thread was ready`),
+            { code: "run_terminal" },
+          );
+        }
+      } catch (error) {
+        if (
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          (error as { code?: unknown }).code === "run_terminal"
+        ) {
+          throw error;
+        }
+        lastTransientError = error;
       }
-      if (["failed", "cancelled"].includes(run.status)) {
-        throw new Error(`Run ${run.status} before its Codex Thread was ready`);
-      }
-      await new Promise((resolve) => window.setTimeout(resolve, 200));
+      await new Promise((resolve) => globalThis.setTimeout(resolve, 200));
     }
-    throw new Error("Timed out waiting for the Codex Thread to become ready");
+    const detail =
+      lastTransientError instanceof Error && lastTransientError.message
+        ? ` Last platform error: ${lastTransientError.message}`
+        : "";
+    throw new Error(
+      `Timed out waiting for the accepted Run to create its Codex Thread.${detail}`,
+    );
   }
 
   private async readyRunForWorkspace(
@@ -375,13 +441,22 @@ export class CodexMonitorWebClient {
 
   async startThread(
     workspaceId: string,
-    options?: {
+    options: {
+      operationId: string;
+      readinessFingerprint: string;
+      providerId: string;
+      modelId: string;
       supervisorPolicy?: SupervisorPolicySelection | null;
       agent?: AgentRunSelection | null;
+      onRunAccepted?: (accepted: AcceptedThreadStart) => void;
     },
   ) {
     if (options?.supervisorPolicy && options.agent) {
       throw new Error("A Thread cannot start as both an Agent and a Supervisor.");
+    }
+    const operationId = options.operationId.trim();
+    if (!operationId || operationId.length > 256) {
+      throw new Error("Thread start operation identity is invalid.");
     }
     const workspace = await this.platform.getWorkspace(workspaceId);
     const taskTitle = options?.supervisorPolicy
@@ -389,13 +464,118 @@ export class CodexMonitorWebClient {
       : options?.agent
         ? `Governed Agent · ${options.agent.definition_id}@${options.agent.version}`
         : "Thread";
-    const task = await this.platform.createTask(workspace.project_id, taskTitle);
-    const { run } = await this.platform.startRun(task.id, workspaceId, {
-      supervisorPolicy: options?.supervisorPolicy ?? null,
-      agent: options?.agent ?? null,
+    const draftKey = threadStartDraftKey(workspaceId, operationId);
+    const executionKey = threadStartExecutionKey(
+      options.supervisorPolicy,
+      options.agent,
+    );
+    let draft = this.threadStartDrafts.get(draftKey);
+    if (draft && draft.executionKey !== executionKey) {
+      throw new Error(
+        "Thread start operation identity is already bound to another execution selection.",
+      );
+    }
+    if (!draft) {
+      draft = {
+        taskId: null,
+        taskPromise: null,
+        runIdempotencyKey: newIdempotencyKey(),
+        acceptedRunId: null,
+        executionKey,
+      };
+      this.threadStartDrafts.set(draftKey, draft);
+    }
+    const taskWasReused = draft.taskId !== null;
+    let task: Task;
+    if (draft.taskId) {
+      task = await this.platform.getTask(draft.taskId);
+    } else {
+      draft.taskPromise ??= this.platform.createTask(
+        workspace.project_id,
+        taskTitle,
+        {
+          providerId: options.providerId,
+          modelId: options.modelId,
+        },
+      );
+      try {
+        task = await draft.taskPromise;
+        draft.taskId = task.id;
+      } catch (error) {
+        if (this.threadStartDrafts.get(draftKey) === draft) {
+          this.threadStartDrafts.delete(draftKey);
+        }
+        throw error;
+      } finally {
+        draft.taskPromise = null;
+      }
+    }
+    if (
+      taskWasReused &&
+      !draft.acceptedRunId &&
+      (task.model_provider !== options.providerId || task.model !== options.modelId)
+    ) {
+      await this.platform.updateTaskModelSelection(
+        task.id,
+        options.providerId,
+        options.modelId,
+      );
+    }
+    const run = draft.acceptedRunId
+      ? await this.platform.getRun(draft.acceptedRunId)
+      : (
+          await this.platform.startRun(task.id, workspaceId, {
+            readinessFingerprint: options.readinessFingerprint,
+            idempotencyKey: draft.runIdempotencyKey,
+            supervisorPolicy: options?.supervisorPolicy ?? null,
+            agent: options?.agent ?? null,
+          })
+        ).run;
+    draft.acceptedRunId = run.id;
+    options.onRunAccepted?.({ taskId: task.id, runId: run.id });
+    try {
+      const ready = await this.waitForThread(
+        workspaceId,
+        workspace.project_id,
+        task.id,
+        run.id,
+      );
+      if (this.threadStartDrafts.get(draftKey) === draft) {
+        this.threadStartDrafts.delete(draftKey);
+      }
+      return { thread: await this.threadRecord(ready.codex_thread_id as string) };
+    } catch (error) {
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        (error as { code?: unknown }).code === "run_terminal" &&
+        this.threadStartDrafts.get(draftKey) === draft
+      ) {
+        this.threadStartDrafts.delete(draftKey);
+      }
+      throw error;
+    }
+  }
+
+  evaluateRunReadiness(
+    workspaceId: string,
+    options: {
+      providerId: string;
+      modelId: string;
+      supervisorPolicy?: SupervisorPolicySelection | null;
+      agent?: AgentRunSelection | null;
+    },
+  ): Promise<RunReadiness> {
+    if (options.supervisorPolicy && options.agent) {
+      throw new Error("A Thread cannot start as both an Agent and a Supervisor.");
+    }
+    return this.platform.evaluateRunReadiness(workspaceId, {
+      model_provider: options.providerId,
+      model: options.modelId,
+      supervisor_policy: options.supervisorPolicy ?? null,
+      agent: options.agent ?? null,
     });
-    const ready = await this.waitForThread(workspaceId, workspace.project_id, task.id, run.id);
-    return { thread: await this.threadRecord(ready.codex_thread_id as string) };
   }
 
   listSupervisorPolicies(): Promise<SupervisorPolicySummary[]> {

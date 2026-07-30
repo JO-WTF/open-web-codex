@@ -6,6 +6,9 @@ use sqlx::Row;
 use uuid::Uuid;
 
 const PROJECTION_VERSION: i16 = 1;
+const REPORT_RENDERER_SOURCE_SERVER: &str = "supply_chain_indonesia";
+const REPORT_RENDERER_RESOURCE_SCHEMA: &str = "indonesia_decision_report.v1";
+const REPORT_RENDERER_URI_PREFIX: &str = "supply-chain-indonesia://resources/";
 const INLINE_ARTIFACT_LOOKUP_SQL: &str = "
     SELECT artifact.renderer_kind, artifact.renderer_payload
     FROM inline_visualization_artifacts artifact
@@ -1715,8 +1718,57 @@ fn validate_inline_visualization_warnings(value: &Value) -> Option<()> {
 fn project_inline_renderer(kind: &str, payload: &Map<String, Value>) -> Option<Value> {
     match kind {
         "map.v3" => project_map_card_v3(payload),
+        "report.v1" => project_report_v1(payload),
         _ => None,
     }
+}
+
+fn project_report_v1(report: &Map<String, Value>) -> Option<Value> {
+    if report.len() != 3
+        || report
+            .keys()
+            .any(|key| !matches!(key.as_str(), "title" | "status" | "source"))
+    {
+        return None;
+    }
+    let title = nonempty_string(report, "title")?;
+    if title.len() > 160 || title.chars().any(char::is_control) {
+        return None;
+    }
+    if report.get("status")?.as_str()? != "ready" {
+        return None;
+    }
+    let source = report.get("source")?.as_object()?;
+    if source.len() != 5
+        || source.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "type" | "server" | "uri" | "format" | "resource_schema"
+            )
+        })
+        || source.get("type")?.as_str()? != "mcp_resource"
+        || source.get("server")?.as_str()? != REPORT_RENDERER_SOURCE_SERVER
+        || source.get("format")?.as_str()? != "json"
+        || source.get("resource_schema")?.as_str()? != REPORT_RENDERER_RESOURCE_SCHEMA
+    {
+        return None;
+    }
+    let uri = source.get("uri")?.as_str()?.trim();
+    let resource_id = uri.strip_prefix(REPORT_RENDERER_URI_PREFIX)?;
+    if !valid_card_identifier(resource_id) {
+        return None;
+    }
+    Some(json!({
+        "title": title,
+        "status": "ready",
+        "source": {
+            "type": "mcp_resource",
+            "server": REPORT_RENDERER_SOURCE_SERVER,
+            "uri": uri,
+            "format": "json",
+            "resource_schema": REPORT_RENDERER_RESOURCE_SCHEMA,
+        }
+    }))
 }
 
 fn project_map_card_v3(card: &Map<String, Value>) -> Option<Value> {
@@ -2484,10 +2536,66 @@ async fn resolve_inline_renderer_resources(
             )
             .await
         }
+        "report.v1" => {
+            resolve_report_resource_ref_in_transaction(
+                transaction,
+                run_id,
+                producer_item_id,
+                renderer_payload,
+            )
+            .await
+        }
         unsupported => Err(format!(
             "inline visualization renderer {unsupported} is unsupported"
         )),
     }
+}
+
+async fn resolve_report_resource_ref_in_transaction(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    run_id: Uuid,
+    producer_item_id: &str,
+    renderer_payload: &mut Value,
+) -> Result<(), String> {
+    let uri = report_payload_resource_uri(renderer_payload)
+        .ok_or_else(|| "report renderer source is invalid".to_string())?;
+    let row = sqlx::query(
+        "SELECT DISTINCT artifact.id, artifact.mime_type
+         FROM artifacts artifact
+         JOIN artifact_provenance provenance
+           ON provenance.artifact_id = artifact.id
+          AND provenance.organization_id = artifact.organization_id
+         JOIN artifact_task_grants artifact_grant
+           ON artifact_grant.artifact_id = artifact.id
+          AND artifact_grant.organization_id = artifact.organization_id
+          AND artifact_grant.task_id = provenance.producer_task_id
+          AND artifact_grant.permission = 'read'
+         WHERE provenance.producer_run_id = $1
+           AND provenance.producer_item_id = $2
+           AND artifact.source_server = $3
+           AND artifact.source_uri = $4
+           AND artifact.artifact_schema = $5
+           AND artifact.mime_type = 'application/json'
+           AND artifact.state IN ('pending', 'materializing', 'ready')
+           AND artifact.retention_state = 'active'",
+    )
+    .bind(run_id)
+    .bind(producer_item_id)
+    .bind(REPORT_RENDERER_SOURCE_SERVER)
+    .bind(uri)
+    .bind(REPORT_RENDERER_RESOURCE_SCHEMA)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(|error| format!("report Resource Artifact resolution error: {error}"))?;
+    let Some(row) = row else {
+        return Err("report renderer references an unavailable Resource".to_string());
+    };
+    replace_report_payload_resource_ref(
+        renderer_payload,
+        row.get::<Uuid, _>("id"),
+        &row.get::<String, _>("mime_type"),
+    );
+    Ok(())
 }
 
 async fn resolve_map_resource_refs_in_transaction(
@@ -2672,6 +2780,33 @@ fn map_payload_resource_refs(map_payload: &Value) -> Option<Vec<(String, String)
         })
         .collect::<Vec<_>>();
     (!resource_refs.is_empty()).then_some(resource_refs)
+}
+
+fn report_payload_resource_uri(report_payload: &Value) -> Option<&str> {
+    let source = report_payload.get("source")?.as_object()?;
+    (source.get("type")?.as_str()? == "mcp_resource"
+        && source.get("server")?.as_str()? == REPORT_RENDERER_SOURCE_SERVER
+        && source.get("format")?.as_str()? == "json"
+        && source.get("resource_schema")?.as_str()? == REPORT_RENDERER_RESOURCE_SCHEMA)
+        .then(|| source.get("uri")?.as_str())
+        .flatten()
+}
+
+fn replace_report_payload_resource_ref(
+    report_payload: &mut Value,
+    artifact_id: Uuid,
+    mime_type: &str,
+) {
+    let Some(source) = report_payload.get_mut("source") else {
+        return;
+    };
+    *source = json!({
+        "type": "artifact",
+        "format": "json",
+        "artifact_id": artifact_id,
+        "url": format!("/api/artifacts/{artifact_id}/content"),
+        "mime_type": mime_type,
+    });
 }
 
 fn replace_map_payload_resource_refs(
@@ -2960,6 +3095,88 @@ fn nested_string_field(
 mod tests {
     use super::*;
 
+    fn typed_report_tool_item(
+        item_id: &str,
+        artifact_ref: &str,
+        uri: &str,
+        include_resource_link: bool,
+    ) -> Value {
+        let content = if include_resource_link {
+            vec![json!({
+                "type": "resource_link",
+                "name": uri.strip_prefix(REPORT_RENDERER_URI_PREFIX).unwrap(),
+                "title": REPORT_RENDERER_RESOURCE_SCHEMA,
+                "uri": uri,
+                "mimeType": "application/json",
+                "size": 2048
+            })]
+        } else {
+            vec![json!({
+                "type": "text",
+                "text": "No ResourceLink was produced by this item."
+            })]
+        };
+        json!({
+            "id": item_id,
+            "type": "mcpToolCall",
+            "server": REPORT_RENDERER_SOURCE_SERVER,
+            "tool": "prepare_indonesia_decision_report",
+            "result": {
+                "content": content,
+                "structuredContent": {
+                    "type": "open-web-artifact",
+                    "kind": "inline-visualization.v1",
+                    "artifact": {
+                        "ref": artifact_ref,
+                        "renderer": {
+                            "kind": "report.v1",
+                            "payload": {
+                                "title": "Indonesia network decision",
+                                "status": "ready",
+                                "source": {
+                                    "type": "mcp_resource",
+                                    "server": REPORT_RENDERER_SOURCE_SERVER,
+                                    "uri": uri,
+                                    "format": "json",
+                                    "resource_schema": REPORT_RENDERER_RESOURCE_SCHEMA
+                                }
+                            }
+                        }
+                    },
+                    "embed": {
+                        "syntax": "codex-inline-vis.artifact.v1",
+                        "code": format!("::codex-inline-vis{{artifact=\"{artifact_ref}\"}}")
+                    }
+                }
+            }
+        })
+    }
+
+    fn completed_item_frame(
+        workspace_id: Uuid,
+        thread_id: &str,
+        turn_id: &str,
+        item: Value,
+    ) -> String {
+        format!(
+            "data: {}\n\n",
+            json!({
+                "method": "app-server-event",
+                "params": {
+                    "workspace_id": workspace_id,
+                    "message": {
+                        "method": "item/completed",
+                        "params": {
+                            "threadId": thread_id,
+                            "turnId": turn_id,
+                            "item": item
+                        }
+                    }
+                }
+            })
+        )
+    }
+
     #[test]
     fn projects_completed_items_to_a_versioned_safe_contract() {
         let frame = br#"data: {"method":"app-server-event","params":{"workspace_id":"workspace-1","message":{"method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-1","item":{"id":"item-1","type":"dynamicToolCall","tool":"write_stdin","status":"completed","arguments":{"session_id":7,"chars":"secret"},"contentItems":[{"type":"inputText","text":"done"}]}}}}}
@@ -3108,6 +3325,99 @@ mod tests {
             projected["result"]["structuredContent"]["embed"]["code"],
             "::codex-inline-vis{artifact=\"map-7d67b30d\"}"
         );
+    }
+
+    #[test]
+    fn projects_only_a_typed_supply_chain_report_renderer() {
+        let uri = concat!(
+            "supply-chain-indonesia://resources/",
+            "indonesia_decision_report.v1-abc123"
+        );
+        let item = typed_report_tool_item("report-item", "indonesia-report-abc123", uri, true);
+
+        let artifact = project_inline_visualization_artifact(item.as_object().unwrap()).unwrap();
+        assert_eq!(artifact.renderer_kind, "report.v1");
+        assert_eq!(
+            artifact.renderer_payload["source"]["server"],
+            "supply_chain_indonesia"
+        );
+        assert_eq!(artifact.renderer_payload["source"]["format"], "json");
+
+        let projected = project_item(item.as_object().unwrap());
+        assert!(!projected.to_string().contains(uri));
+        assert!(
+            projected["result"]["structuredContent"]["artifact"]["renderer"]
+                .get("payload")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn rejects_forged_report_renderers_and_arbitrary_sources() {
+        let valid_source = json!({
+            "type": "mcp_resource",
+            "server": "supply_chain_indonesia",
+            "uri": "supply-chain-indonesia://resources/indonesia_decision_report.v1-abc123",
+            "format": "json",
+            "resource_schema": "indonesia_decision_report.v1"
+        });
+        let mut extra_field = json!({
+            "title": "Report",
+            "status": "ready",
+            "source": valid_source.clone(),
+            "url": "https://example.invalid/report"
+        });
+        assert!(project_report_v1(extra_field.as_object().unwrap()).is_none());
+
+        extra_field.as_object_mut().unwrap().remove("url");
+        extra_field["source"]["server"] = json!("other_server");
+        assert!(project_report_v1(extra_field.as_object().unwrap()).is_none());
+
+        extra_field["source"] = valid_source.clone();
+        extra_field["source"]["uri"] = json!("https://example.invalid/report.json");
+        assert!(project_report_v1(extra_field.as_object().unwrap()).is_none());
+
+        extra_field["source"] = valid_source;
+        extra_field["source"]["resource_schema"] = json!("arbitrary_payload.v1");
+        assert!(project_report_v1(extra_field.as_object().unwrap()).is_none());
+        assert!(project_inline_renderer("iframe.v1", extra_field.as_object().unwrap()).is_none());
+    }
+
+    #[test]
+    fn replaces_report_internal_identity_with_an_authorized_artifact_reference() {
+        let artifact_id = Uuid::parse_str("8e98ff2f-82ee-4cc9-a3e6-2974debf8666").unwrap();
+        let internal_uri = "supply-chain-indonesia://resources/indonesia_decision_report.v1-abc123";
+        let mut report = project_report_v1(
+            json!({
+                "title": "Indonesia network decision",
+                "status": "ready",
+                "source": {
+                    "type": "mcp_resource",
+                    "server": "supply_chain_indonesia",
+                    "uri": internal_uri,
+                    "format": "json",
+                    "resource_schema": "indonesia_decision_report.v1"
+                }
+            })
+            .as_object()
+            .unwrap(),
+        )
+        .unwrap();
+
+        replace_report_payload_resource_ref(&mut report, artifact_id, "application/json");
+
+        assert_eq!(
+            report["source"],
+            json!({
+                "type": "artifact",
+                "format": "json",
+                "artifact_id": artifact_id,
+                "url": format!("/api/artifacts/{artifact_id}/content"),
+                "mime_type": "application/json"
+            })
+        );
+        assert!(!report.to_string().contains(internal_uri));
+        assert!(!report.to_string().contains("supply_chain_indonesia"));
     }
 
     #[test]
@@ -3342,6 +3652,15 @@ After"#;
             inline_artifact_refs(markdown),
             vec!["map-one".to_string(), "map-two".to_string()]
         );
+    }
+
+    #[test]
+    fn map_handoff_metadata_cannot_impersonate_the_typed_inline_artifact() {
+        let markdown = r#"MAP_HANDOFF {"map_manifest_resource_name":"indonesia_network_map.v1-digest","geojson_resource_name":"geojson.v1-digest","map_artifact_id":"map-real","map_embed_code":"::codex-inline-vis{artifact=\"map-shadow\"}"}
+
+::codex-inline-vis{artifact="map-real"}"#;
+
+        assert_eq!(inline_artifact_refs(markdown), vec!["map-real".to_string()]);
     }
 
     #[test]
@@ -3885,6 +4204,21 @@ After"#;
 
 "#
         );
+        let report_uri = concat!(
+            "supply-chain-indonesia://resources/",
+            "indonesia_decision_report.v1-digest"
+        );
+        let report_artifact = completed_item_frame(
+            workspace_id,
+            "child-thread",
+            "child-turn",
+            typed_report_tool_item(
+                "decision-report-item",
+                "report-from-network-agent",
+                report_uri,
+                true,
+            ),
+        );
         let child_turn_completed = format!(
             r#"data: {{"method":"app-server-event","params":{{"workspace_id":"{workspace_id}","message":{{"method":"turn/completed","params":{{"threadId":"child-thread","turnId":"child-turn","turn":{{"id":"child-turn","status":"completed"}}}}}}}}}}
 
@@ -3949,6 +4283,119 @@ After"#;
             .unwrap()
             .expect("GeoJSON Artifact projection");
         assert_eq!(geojson_projection.pending_artifact_ids.len(), 1);
+        let report_projection = persist_frame(report_artifact.as_bytes(), &pool)
+            .await
+            .unwrap()
+            .expect("Report Artifact projection");
+        assert_eq!(report_projection.pending_artifact_ids.len(), 1);
+        let report_projection_payload: Value =
+            serde_json::from_slice(&report_projection.payload).unwrap();
+        assert!(report_projection_payload
+            .pointer("/event/payload/data/result/structuredContent/artifact/renderer")
+            .and_then(Value::as_object)
+            .is_some_and(|renderer| !renderer.contains_key("payload")));
+        assert!(!report_projection_payload.to_string().contains(report_uri));
+        let stored_report_payload: Value = sqlx::query_scalar(
+            "SELECT renderer_payload
+             FROM inline_visualization_artifacts
+             WHERE run_id = $1 AND artifact_ref = 'report-from-network-agent'",
+        )
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let report_artifact_id = stored_report_payload["source"]["artifact_id"]
+            .as_str()
+            .expect("authorized report Artifact id");
+        assert_eq!(
+            stored_report_payload["source"]["url"],
+            format!("/api/artifacts/{report_artifact_id}/content")
+        );
+        assert_eq!(
+            stored_report_payload["source"]["mime_type"],
+            "application/json"
+        );
+        assert!(!stored_report_payload.to_string().contains(report_uri));
+        assert!(!stored_report_payload
+            .to_string()
+            .contains(REPORT_RENDERER_SOURCE_SERVER));
+        let forged_report = completed_item_frame(
+            workspace_id,
+            "child-thread",
+            "child-turn",
+            typed_report_tool_item("forged-report-item", "forged-report", report_uri, false),
+        );
+        let forged_projection = persist_frame(forged_report.as_bytes(), &pool)
+            .await
+            .unwrap()
+            .expect("forged Tool item lifecycle is still projected");
+        let forged_payload: Value = serde_json::from_slice(&forged_projection.payload).unwrap();
+        assert!(forged_payload
+            .pointer("/event/payload/data/inlineArtifacts")
+            .is_none());
+        let forged_count: i64 = sqlx::query_scalar(
+            "SELECT count(*)
+             FROM inline_visualization_artifacts
+             WHERE run_id = $1 AND artifact_ref = 'forged-report'",
+        )
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(forged_count, 0);
+        let report_reply = format!(
+            "data: {}\n\n",
+            json!({
+                "method": "app-server-event",
+                "params": {
+                    "workspace_id": workspace_id,
+                    "message": {
+                        "method": "item/completed",
+                        "params": {
+                            "threadId": "root-thread",
+                            "turnId": "root-turn",
+                            "item": {
+                                "id": "root-report-render",
+                                "type": "agentMessage",
+                                "text": concat!(
+                                    "Decision report\n\n",
+                                    "::codex-inline-vis{artifact=\"report-from-network-agent\"}"
+                                )
+                            }
+                        }
+                    }
+                }
+            })
+        );
+        let report_reply_projection = persist_frame(report_reply.as_bytes(), &pool)
+            .await
+            .unwrap()
+            .expect("Report reply projection");
+        let report_reply_payload: Value =
+            serde_json::from_slice(&report_reply_projection.payload).unwrap();
+        assert_eq!(
+            report_reply_payload["event"]["payload"]["data"]["inlineArtifacts"][0]["renderer"]
+                ["kind"],
+            "report.v1"
+        );
+        assert_eq!(
+            report_reply_payload["event"]["payload"]["data"]["inlineArtifacts"][0]["renderer"]
+                ["payload"]["source"]["artifact_id"],
+            report_artifact_id
+        );
+        let restored_report = resolve_inline_artifacts(
+            &pool,
+            run_id,
+            "::codex-inline-vis{artifact=\"report-from-network-agent\"}",
+        )
+        .await
+        .unwrap();
+        assert_eq!(restored_report.len(), 1);
+        assert_eq!(restored_report[0]["renderer"]["kind"], "report.v1");
+        assert_eq!(
+            restored_report[0]["renderer"]["payload"]["source"]["artifact_id"],
+            report_artifact_id
+        );
         let mut map_payload = json!({
             "sources": {
                 "network": {
@@ -4142,7 +4589,7 @@ After"#;
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(event_count, 7);
+        assert_eq!(event_count, 9);
         let executions = sqlx::query(
             "SELECT turn_id, ordinal, task, status, current_behavior
              FROM runtime_agent_execution_projections

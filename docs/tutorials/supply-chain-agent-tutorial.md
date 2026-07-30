@@ -1,7 +1,9 @@
-# 印尼全国仓网规划：四篇渐进式教程
+# 理解印尼全国仓网示例
 
-这组教程把一个现实但复杂的仓网问题拆成四次可以独立验证的交付。第一篇只确认数据，
-第二篇只分析当前末端时效，第三篇加入两级仓网和成本，第四篇才做有限候选选址与地图。
+本篇解释快速示例和四篇 Builder 教程共同使用的业务背景、数据来源、计算口径与执行
+边界。如果你还没有运行示例，先完成
+[10 分钟快速体验](indonesia-network-quickstart.md)；如果要从零构建，再按文末四篇顺序
+操作。
 
 返回[教程标准与学习路径](README.md)。
 
@@ -93,7 +95,7 @@ flowchart LR
 | [1. 发布并核验数据](indonesia-network-01-data.md) | 全部文件，只做完整性和质量检查 | Data | `indonesia_dataset_inspection.v1` |
 | [2. 单层时效基线](indonesia-network-02-service-baseline.md) | 当前客户到前置仓，只看末端时效 | Data + Network | `indonesia_service_baseline.v1` |
 | [3. 两级成本与指定方案](indonesia-network-03-two-level-cost.md) | 加入中心仓、干线、报价、容量和开仓费用 | Data + Network | current + candidate Resources |
-| [4. 优化与地图](indonesia-network-04-optimization-map.md) | 完整 20 候选集和有界地图数据 | Data + Network + Visualization | optimization + scenario + map |
+| [4. 优化、报告与地图](indonesia-network-04-optimization-map.md) | 完整 20 候选集和有界地图数据 | Data + Network + Visualization | service + current + optimization + scenario + map resources + deterministic decision report Resource + `report.v1` + `map.v3` |
 
 Supervisor 在第 2 篇出现，但不会写死“先 Data、再 Network”。它只知道有哪些 Agent、
 哪些 Artifact 可以交接以及最终需要什么证据。具体是否创建某个 Agent、是否复用已有
@@ -116,6 +118,6 @@ Artifact、是否追加一次分析，由 Runtime 根据当前问题和证据决
 缓存是导航结果的可重建投影，不能在 Provider 失败时伪造路线，也不能把过期值默认为
 最新事实。
 
-下一篇：
+想从零构建，下一篇：
 
 [印尼仓网 1：发布并核验大型规划数据](indonesia-network-01-data.md)

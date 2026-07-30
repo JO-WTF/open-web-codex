@@ -295,6 +295,7 @@ pub struct ThreadHistoryResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartRunRequest {
     pub idempotency_key: String,
+    pub readiness_fingerprint: String,
     pub workspace_id: Uuid,
     #[serde(default)]
     pub fork_thread_id: Option<String>,
@@ -304,6 +305,69 @@ pub struct StartRunRequest {
     pub supervisor_policy: Option<SupervisorPolicySelection>,
     #[serde(default)]
     pub agent: Option<AgentRunSelection>,
+}
+
+/// A read-only, browser-requested evaluation of the exact execution that may
+/// later be submitted to `StartRunRequest`. Provider and model are included so
+/// the resulting fingerprint can be checked against the Task at enqueue time.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RunReadinessRequest {
+    pub model_provider: String,
+    pub model: String,
+    #[serde(default)]
+    pub supervisor_policy: Option<SupervisorPolicySelection>,
+    #[serde(default)]
+    pub agent: Option<AgentRunSelection>,
+    #[serde(default)]
+    pub fork_thread_id: Option<String>,
+    #[serde(default)]
+    pub fork_source_run_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RunReadinessStatus {
+    Ready,
+    Degraded,
+    Blocked,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RunReadinessCheckCode {
+    RuntimeProfile,
+    ProviderModel,
+    ExecutionDefinition,
+    WorkspaceDependencies,
+    RuntimeCapabilities,
+    McpServers,
+    MapPresentation,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RunReadinessAction {
+    OpenWorkspaceData,
+    OpenAgentStudio,
+    OpenProviderSettings,
+    OpenMcpStatus,
+    OpenMapsSettings,
+    Retry,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RunReadinessCheck {
+    pub code: RunReadinessCheckCode,
+    pub status: RunReadinessStatus,
+    pub message: String,
+    pub action: Option<RunReadinessAction>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RunReadiness {
+    pub status: RunReadinessStatus,
+    pub evaluation_fingerprint: String,
+    pub checks: Vec<RunReadinessCheck>,
 }
 
 /// Response from starting a run.
@@ -958,6 +1022,98 @@ pub struct WorkspaceDatasetReleaseSummary {
     pub published_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+/// A checked-in, versioned tutorial recipe. It contains only logical,
+/// browser-safe identities; trusted bundle files remain server-side.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TutorialBlueprintSummary {
+    pub blueprint_id: String,
+    pub revision: String,
+    pub display_name: String,
+    pub description: String,
+    pub estimated_minutes: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TutorialBlueprintDataset {
+    pub dataset_id: String,
+    pub version: String,
+    pub display_name: String,
+    pub description: String,
+    pub file_count: u32,
+    pub source_content_sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TutorialBlueprintAgentTemplate {
+    pub definition_id: String,
+    pub version: String,
+    pub content_sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TutorialBlueprintSupervisorTemplate {
+    pub policy_id: String,
+    pub version: String,
+    pub content_sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TutorialBlueprintInstructionPolicyTemplate {
+    pub policy_id: String,
+    pub version: String,
+    pub content_sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TutorialBlueprint {
+    pub blueprint_id: String,
+    pub revision: String,
+    pub display_name: String,
+    pub description: String,
+    pub estimated_minutes: u32,
+    pub dataset: TutorialBlueprintDataset,
+    pub agent_templates: Vec<TutorialBlueprintAgentTemplate>,
+    pub supervisor_template: TutorialBlueprintSupervisorTemplate,
+    pub instruction_policy_template: TutorialBlueprintInstructionPolicyTemplate,
+    pub required_mcp_servers: Vec<String>,
+    pub expected_artifact_types: Vec<String>,
+    pub recommended_prompt: String,
+    pub content_sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReconcileTutorialBlueprintRequest {
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TutorialBlueprintReconcileStatus {
+    Installed,
+    Partial,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TutorialBlueprintIssue {
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TutorialBlueprintReconcileResponse {
+    pub status: TutorialBlueprintReconcileStatus,
+    pub blueprint_id: String,
+    pub revision: String,
+    pub workspace_id: Uuid,
+    pub dataset_release: Option<WorkspaceDatasetReleaseSummary>,
+    pub agent_releases: Vec<AgentDefinitionReleaseSummary>,
+    pub supervisor_release: Option<SupervisorReleaseSummary>,
+    pub supervisor_policy: Option<SupervisorPolicySelection>,
+    pub recommended_prompt: String,
+    pub expected_artifact_types: Vec<String>,
+    pub issues: Vec<TutorialBlueprintIssue>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

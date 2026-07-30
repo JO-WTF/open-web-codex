@@ -97,6 +97,18 @@ pub(crate) async fn resolve_run_selection(
     }
 }
 
+pub(crate) async fn resolve_new_run_selection(
+    db: &PgPool,
+    organization_id: Uuid,
+    selection: &AgentRunSelection,
+) -> Result<ResolvedAgentDefinition, AgentCatalogError> {
+    if selection.release_id.is_none() {
+        return agent::resolve_builtin(&selection.definition_id, &selection.version)
+            .map_err(|_| AgentCatalogError::NotFound);
+    }
+    resolve_run_selection(db, organization_id, selection).await
+}
+
 pub(crate) fn is_reserved_builtin_definition_id(definition_id: &str) -> bool {
     agent::list_resolved_builtins().is_ok_and(|definitions| {
         definitions

@@ -570,17 +570,19 @@ GeoJSON source option 保留。`layers` 是官方 Mapbox Style Specification Lay
 1. Server 通过通用 `inline-visualization.v1` envelope 和 renderer registry 识别
    Artifact，不根据 `map_utils` 或 `create_map_card` 名称分支。`map.v3` validator
    校验安全 envelope、source 授权图、camera 和 extension 引用，不重复实现 Mapbox
-   样式语义；公开 Tool projection 只保留 ref、renderer
-   kind 和 embed code，不暴露 renderer payload。
+   样式语义；Tool 的 `structuredContent.embed.code` 是唯一可复制的嵌入指令，公开
+   Tool projection 不向浏览器提供 renderer payload。
 2. Server 从较早完成的 MCP Tool 的标准 `resource_link.uri` 注册 Resource，
    并在同一 Run、同一 Thread 内解析 renderer 中的同一 server/URI。跨 Run、
    跨 Thread、后向引用、缺失、冲突和自引用不会登记为可用 Artifact。
 3. 授权 Artifact API 通过官方 `mcpServer/resource/read` 延迟加载并缓存 GeoJSON；
    Inline Artifact 保存把 Resource 引用替换为授权 URL 后的 renderer payload。
 4. Tool completed 只登记 Artifact，不渲染地图。Assistant 把 Tool 生成的
-   `embed.code` 独占一行放入目标回复位置。
-5. `AssistantMessage.tsx` 对实时事件和历史恢复使用同一指令 parser、Artifact DTO
-   和 renderer registry；一条消息按顺序组合 Markdown/Artifact segment。
+   `structuredContent.embed.code` 独占一行放入目标回复位置；`MAP_HANDOFF` 只保留
+   输入 Resource provenance 和 map Artifact ID，不把该指令转义进 JSON。
+5. Server 为该 Agent Message 事件解析独立指令并附加类型化 `inlineArtifacts`；
+   `AssistantMessage.tsx` 对实时事件和历史恢复使用这份浏览器权威 DTO、同一指令
+   parser 和 renderer registry；一条消息按顺序组合 Markdown/Artifact segment。
 6. fenced/indented code 中的指令不解析；不完整的流式指令先缓冲；无权访问或无效
    引用在 Message 完成后显示明确 unavailable 状态。
 7. `MapReplyCard.tsx` 为每个 source 创建 Mapbox GL source，再将标准 layer JSON
@@ -598,14 +600,17 @@ MCP Resource URI 和授权 Artifact 传输。Server 的通用 Resource 内存安
 ```text
 data tool -> MCP Resource
 render tool -> Inline Visualization Artifact + Tool-generated embed code
-assistant -> Markdown + ::codex-inline-vis{artifact="..."} + Markdown
+assistant -> MAP_HANDOFF(provenance + artifact ID) + standalone embed directive
+platform event -> typed inlineArtifacts
 web -> one Agent Message with ordered Markdown/Artifact segments
 ```
 
 约束：
 
 - render Tool 完成只登记 Artifact，不自动显示；
-- Assistant 只复制 Tool 生成的短代码，不复制 payload；
+- Assistant 只把 Tool 生成的短代码复制为独立指令，不复制 payload，也不把代码再
+  转义进 `MAP_HANDOFF` JSON；
+- 浏览器只使用平台事件的类型化 `inlineArtifacts` 解析 Artifact；
 - Platform 通过通用 Artifact envelope 和 renderer registry 分派，不按 MCP
   server/tool 名称硬编码；
 - 指令必须使用官方独立行语法，代码块中的字面量不解析；

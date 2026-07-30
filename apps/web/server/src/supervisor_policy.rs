@@ -75,16 +75,21 @@ pub(crate) async fn resolve(
     selection: &SupervisorPolicySelection,
 ) -> Result<ResolvedSupervisorPolicy, SupervisorPolicyError> {
     let builtins = supervisor::list_published().map_err(map_catalog_error)?;
-    if builtins
-        .iter()
-        .any(|policy| policy.policy_id == selection.policy_id)
-    {
+    if builtins.iter().any(|policy| {
+        policy.policy_id == selection.policy_id && policy.version == selection.version
+    }) {
         let package = supervisor::resolve(selection).map_err(map_catalog_error)?;
         return Ok(from_package(
             package,
             SupervisorPolicySource::Repository,
             None,
         ));
+    }
+    if builtins
+        .iter()
+        .any(|policy| policy.policy_id == selection.policy_id)
+    {
+        return Err(SupervisorPolicyError::NotFound);
     }
     let row = sqlx::query(
         "SELECT id, release_spec, content_sha256 \

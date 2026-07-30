@@ -85,6 +85,10 @@ describe("Sidebar settings", () => {
         activeThreadId={null}
         onSelectThread={vi.fn()}
         onNewThread={vi.fn()}
+        onEvaluateReadiness={vi.fn()}
+        onStartTask={vi.fn()}
+        onReadinessAction={vi.fn()}
+        onTutorialPromptReady={vi.fn()}
         onArchiveThread={vi.fn()}
         onRemoveWorkspace={vi.fn()}
         baseUrl="http://127.0.0.1:4733"
@@ -126,6 +130,10 @@ describe("Sidebar settings", () => {
         activeThreadId={null}
         onSelectThread={vi.fn()}
         onNewThread={vi.fn()}
+        onEvaluateReadiness={vi.fn()}
+        onStartTask={vi.fn()}
+        onReadinessAction={vi.fn()}
+        onTutorialPromptReady={vi.fn()}
         onArchiveThread={vi.fn()}
         onRemoveWorkspace={vi.fn()}
         baseUrl="http://127.0.0.1:4733"
@@ -160,6 +168,10 @@ describe("Sidebar settings", () => {
         activeThreadId={null}
         onSelectThread={vi.fn()}
         onNewThread={vi.fn()}
+        onEvaluateReadiness={vi.fn()}
+        onStartTask={vi.fn()}
+        onReadinessAction={vi.fn()}
+        onTutorialPromptReady={vi.fn()}
         onArchiveThread={vi.fn()}
         onRemoveWorkspace={vi.fn()}
         baseUrl="http://127.0.0.1:4733"
@@ -194,6 +206,10 @@ describe("Sidebar settings", () => {
         activeThreadId={null}
         onSelectThread={vi.fn()}
         onNewThread={vi.fn()}
+        onEvaluateReadiness={vi.fn()}
+        onStartTask={vi.fn()}
+        onReadinessAction={vi.fn()}
+        onTutorialPromptReady={vi.fn()}
         onArchiveThread={vi.fn()}
         onRemoveWorkspace={vi.fn()}
         baseUrl="http://127.0.0.1:4733"
@@ -217,16 +233,22 @@ describe("Sidebar settings", () => {
     expect(screen.getByRole("dialog", { name: "Agent Studio" })).toBeTruthy();
     expect(screen.getByText("Agent directory")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: /MCP/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^MCPAvailable/ }));
     expect(screen.getByText("MCP servers")).toBeTruthy();
     await waitFor(() => expect(screen.getByText("map_utils")).toBeTruthy());
     expect(screen.getByText("Map Utils")).toBeTruthy();
     expect(screen.getAllByText("ready")).toHaveLength(2);
+    expect(
+      screen.queryByRole("button", { name: "New Python capability" }),
+    ).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: /Capabilities/ }));
     expect(screen.getByText("Map Utils")).toBeTruthy();
     expect(screen.getByText(/map-utils@0.1.0/)).toBeTruthy();
     expect(screen.getByText(/Includes Skills/)).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "New Python capability" }),
+    ).toBeTruthy();
 
     const dialog = screen.getByRole("dialog", { name: "Agent Studio" });
     fireEvent.mouseDown(dialog.parentElement!);
@@ -248,6 +270,10 @@ describe("Sidebar settings", () => {
         activeThreadId={null}
         onSelectThread={vi.fn()}
         onNewThread={vi.fn()}
+        onEvaluateReadiness={vi.fn()}
+        onStartTask={vi.fn()}
+        onReadinessAction={vi.fn()}
+        onTutorialPromptReady={vi.fn()}
         onArchiveThread={vi.fn()}
         onRemoveWorkspace={vi.fn()}
         baseUrl="http://127.0.0.1:4733"
@@ -291,6 +317,10 @@ describe("Sidebar settings", () => {
         activeThreadId={null}
         onSelectThread={vi.fn()}
         onNewThread={vi.fn()}
+        onEvaluateReadiness={vi.fn()}
+        onStartTask={vi.fn()}
+        onReadinessAction={vi.fn()}
+        onTutorialPromptReady={vi.fn()}
         onArchiveThread={vi.fn()}
         onRemoveWorkspace={vi.fn()}
         baseUrl="http://127.0.0.1:4733"

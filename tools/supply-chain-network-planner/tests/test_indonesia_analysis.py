@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+
 from supply_chain_planner.indonesia_analysis import (
     build_location_optimization,
     evaluate_candidate_scenario,
@@ -19,7 +20,9 @@ from supply_chain_planner.indonesia_analysis import (
 )
 from supply_chain_planner.indonesia_models import (
     DatasetReleaseBinding,
+    IndonesiaDataRef,
     IndonesiaDecisionReportSources,
+    IndonesiaDecisionReportToolResult,
     IndonesiaGeoJsonRef,
 )
 from supply_chain_planner.indonesia_report import build_decision_report
@@ -314,6 +317,19 @@ def test_decision_report_is_deterministic_and_contains_only_owned_deltas(
     )
 
     assert validate_indonesia_resource(report.model_dump(mode="json")).valid
+    assert report.markdown_sha256 == hashlib.sha256(
+        report.markdown.encode("utf-8")
+    ).hexdigest()
+    for known_answer in (
+        "71.80%",
+        "75.33%",
+        "110,024,697,400",
+        "107,189,163,600",
+        "-2,835,533,800",
+        "123,614,163,600",
+        "+13,589,466,200",
+    ):
+        assert known_answer in report.markdown
     assert "57.5%" not in report.markdown
     assert "42.5%" not in report.markdown
     assert "1.33" not in report.markdown
@@ -339,6 +355,65 @@ def test_decision_report_is_deterministic_and_contains_only_owned_deltas(
     assert no_site.target_met_candidate_count == 0
     assert no_scenario is None
     assert no_evaluations == []
+
+
+def test_decision_report_tool_contract_is_reference_only() -> None:
+    artifact_ref = "report-" + "a" * 24
+    source = IndonesiaDataRef(
+        uri=(
+            "supply-chain-indonesia://resources/"
+            "indonesia_decision_report.v1-" + "a" * 24
+        ),
+        resource_schema="indonesia_decision_report.v1",
+    )
+    payload = {
+        "type": "open-web-artifact",
+        "kind": "inline-visualization.v1",
+        "artifact": {
+            "ref": artifact_ref,
+            "renderer": {
+                "kind": "report.v1",
+                "payload": {
+                    "title": "印度尼西亚仓库网络决策报告",
+                    "status": "ready",
+                    "source": source.model_dump(mode="json"),
+                },
+            },
+        },
+        "embed": {
+            "syntax": "codex-inline-vis.artifact.v1",
+            "code": f'::codex-inline-vis{{artifact="{artifact_ref}"}}',
+        },
+    }
+
+    result = IndonesiaDecisionReportToolResult.model_validate(payload)
+
+    assert set(result.model_dump(mode="json")) == {
+        "type",
+        "kind",
+        "artifact",
+        "embed",
+    }
+    assert set(result.artifact.renderer.payload.model_dump(mode="json")) == {
+        "title",
+        "status",
+        "source",
+    }
+    assert "report_markdown" not in json.dumps(
+        IndonesiaDecisionReportToolResult.model_json_schema()
+    )
+
+    mismatched_embed = json.loads(json.dumps(payload))
+    mismatched_embed["embed"]["code"] = (
+        '::codex-inline-vis{artifact="report-' + "b" * 24 + '"}'
+    )
+    with pytest.raises(ValueError, match="embed code must reference artifact.ref"):
+        IndonesiaDecisionReportToolResult.model_validate(mismatched_embed)
+
+    legacy_payload = json.loads(json.dumps(payload))
+    legacy_payload["report_markdown"] = "# duplicated body"
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        IndonesiaDecisionReportToolResult.model_validate(legacy_payload)
 
 
 def _update_digest(digest: hashlib._Hash, value: str) -> None:

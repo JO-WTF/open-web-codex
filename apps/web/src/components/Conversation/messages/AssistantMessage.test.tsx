@@ -26,6 +26,25 @@ const mapArtifact: InlineVisualizationArtifact = {
   },
 };
 
+const reportArtifact: InlineVisualizationArtifact = {
+  ref: "report-one",
+  rendererKind: "report.v1",
+  card: {
+    type: "card",
+    kind: "report.v1",
+    id: "report-one",
+    title: "Network decision",
+    status: "ready",
+    source: {
+      type: "artifact",
+      format: "json",
+      artifactId: "8e98ff2f-82ee-4cc9-a3e6-2974debf8666",
+      mimeType: "application/json",
+      url: "/api/artifacts/8e98ff2f-82ee-4cc9-a3e6-2974debf8666/content",
+    },
+  },
+};
+
 describe("AssistantMessage", () => {
   it("renders GitHub-flavored Markdown without rendering raw HTML", () => {
     render(<AssistantMessage text={'# Heading\n\n- **bold**\n\n`code`\n\n<script>alert(1)</script>'} />);
@@ -112,5 +131,55 @@ describe("AssistantMessage", () => {
     expect(view.container.querySelector(".web-msg-assistant")?.classList).toContain(
       "has-inline-visualization",
     );
+  });
+
+  it("places a typed report Artifact at its referenced message position", () => {
+    const view = render(
+      <AssistantMessage
+        text={[
+          "Report follows.",
+          '::codex-inline-vis{artifact="report-one"}',
+        ].join("\n")}
+        inlineArtifacts={[reportArtifact]}
+      />,
+    );
+
+    const body = view.container.querySelector(".web-msg-assistant-body");
+    expect(Array.from(body!.children).map((child) => child.textContent)).toEqual([
+      "Report follows.",
+      "Network decision",
+    ]);
+  });
+
+  it("suppresses only duplicate Artifact refs while preserving the message and new deliveries", () => {
+    const view = render(
+      <AssistantMessage
+        text={[
+          "Deliveries follow.",
+          '::codex-inline-vis{artifact="map-one"}',
+          '::codex-inline-vis{artifact="report-one"}',
+        ].join("\n")}
+        inlineArtifacts={[mapArtifact, reportArtifact]}
+        hiddenInlineArtifactRefs={["map-one"]}
+      />,
+    );
+
+    expect(view.container.textContent).toContain("Deliveries follow.");
+    expect(view.container.textContent).not.toContain("上海地图");
+    expect(view.container.textContent).toContain("Network decision");
+    expect(view.container.textContent).not.toContain("Visualization unavailable");
+  });
+
+  it("does not promote model-authored report JSON into a ReplyCard", () => {
+    const view = render(
+      <AssistantMessage
+        text={'{"schema_version":"indonesia_decision_report.v1","markdown":"# Untrusted"}'}
+      />,
+    );
+
+    expect(
+      view.container.querySelector('[data-testid="inline-reply-card"]'),
+    ).toBeNull();
+    expect(screen.getByText(/indonesia_decision_report\.v1/)).toBeTruthy();
   });
 });

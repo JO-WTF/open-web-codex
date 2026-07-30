@@ -5,8 +5,8 @@ fn publishes_exact_runtime_roles_and_seals_role_content() {
     let definitions = list_published().unwrap();
     assert_eq!(definitions.len(), 5);
     assert_eq!(definitions[0].version, "3.1.0");
-    assert_eq!(definitions[1].version, "3.4.0");
-    assert_eq!(definitions[2].version, "1.3.0");
+    assert_eq!(definitions[1].version, "3.6.0");
+    assert_eq!(definitions[2].version, "1.4.0");
     assert_eq!(definitions[3].version, "2.0.0");
     assert_eq!(definitions[4].version, "2.0.0");
 
@@ -19,8 +19,8 @@ fn publishes_exact_runtime_roles_and_seals_role_content() {
             .collect::<Vec<_>>(),
         vec![
             "agent_15451ec3da17fa338bc798a21838d25d",
-            "agent_3477ddaffe69a217cbf2138d475cac97",
-            "agent_dcbc01f2127fe589f5416c75f8f447e8",
+            "agent_24babb7114d53f953a4800fe73740cb8",
+            "agent_ade76f31004f8d9f502c6e0b2398a921",
             "agent_9040f76e7387b00fff5e63fd574e63df",
             "agent_b85d26c7975f69e43b87043fc48e08ea"
         ]
@@ -61,6 +61,23 @@ fn publishes_exact_runtime_roles_and_seals_role_content() {
 }
 
 #[test]
+fn retired_project_agent_versions_are_not_runtime_contracts() {
+    for (definition_id, version) in [
+        ("enterprise-network-planning-agent", "3.4.0"),
+        ("enterprise-network-planning-agent", "3.5.0"),
+        ("enterprise-visualization-agent", "1.3.0"),
+    ] {
+        assert_eq!(
+            resolve_builtin(definition_id, version).unwrap_err(),
+            AgentCatalogError::NotFound
+        );
+    }
+    assert!(!is_platform_runtime_role(
+        "agent_3477ddaffe69a217cbf2138d475cac97"
+    ));
+}
+
+#[test]
 fn definitions_bind_versions_to_reviewed_runtime_instructions() {
     for (definition, instructions) in [
         (
@@ -97,10 +114,10 @@ fn platform_runtime_role_names_are_reserved() {
         "agent_15451ec3da17fa338bc798a21838d25d"
     ));
     assert!(is_platform_runtime_role(
-        "agent_3477ddaffe69a217cbf2138d475cac97"
+        "agent_24babb7114d53f953a4800fe73740cb8"
     ));
     assert!(is_platform_runtime_role(
-        "agent_dcbc01f2127fe589f5416c75f8f447e8"
+        "agent_ade76f31004f8d9f502c6e0b2398a921"
     ));
     assert!(is_platform_runtime_role(
         "agent_9040f76e7387b00fff5e63fd574e63df"
@@ -222,7 +239,7 @@ fn user_release_seals_exact_dataset_release_without_a_host_path() {
 
 #[test]
 fn visualization_agent_binds_each_server_to_its_own_capability_root() {
-    let definition = resolve_builtin("enterprise-visualization-agent", "1.3.0").unwrap();
+    let definition = resolve_builtin("enterprise-visualization-agent", "1.4.0").unwrap();
 
     assert_eq!(
         definition.required_capabilities,

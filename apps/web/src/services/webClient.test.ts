@@ -201,6 +201,10 @@ describe("WebApp direct Server client", () => {
 
     await expect(
       client.startThread(workspace.id, {
+        operationId: "start-supervisor-1",
+        readinessFingerprint: "ready-supervisor",
+        providerId: "openai",
+        modelId: "gpt-5",
         supervisorPolicy: {
           policy_id: "enterprise-supervisor-copilot",
           version: "1.1.0",
@@ -268,6 +272,10 @@ describe("WebApp direct Server client", () => {
 
     await expect(
       client.startThread(workspace.id, {
+        operationId: "start-agent-1",
+        readinessFingerprint: "ready-agent",
+        providerId: "openai",
+        modelId: "gpt-5",
         agent: {
           definition_id: "network-planning-agent",
           version: "2.0.0",
@@ -280,6 +288,67 @@ describe("WebApp direct Server client", () => {
         name: "Governed Agent · network-planning-agent@2.0.0",
       }),
     });
+  });
+
+  it("keeps polling an accepted Run through a transient read failure without creating a second Task or Run", async () => {
+    const baseFetch = resourceFetch();
+    const pendingRun = {
+      ...run,
+      status: "pending",
+      codex_thread_id: null,
+    };
+    let runReads = 0;
+    let taskCreates = 0;
+    let runStarts = 0;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input));
+        if (url.pathname === "/api/tasks" && init?.method === "POST") {
+          taskCreates += 1;
+          return json(task);
+        }
+        if (
+          url.pathname === `/api/tasks/${task.id}/runs` &&
+          init?.method === "POST"
+        ) {
+          runStarts += 1;
+          return json({ run: pendingRun });
+        }
+        if (
+          url.pathname === `/api/runs/${run.id}` &&
+          (!init?.method || init.method === "GET")
+        ) {
+          runReads += 1;
+          if (runReads === 1) {
+            throw new Error("temporary network outage");
+          }
+          return json(run);
+        }
+        return baseFetch(input, init);
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("crypto", {
+      randomUUID: () => "018f-idempotency-key",
+    });
+    const client = new CodexMonitorWebClient({
+      baseUrl: "http://server.test",
+    });
+    const options = {
+      operationId: "stable-launch-operation",
+      readinessFingerprint: "ready-standard",
+      providerId: task.model_provider,
+      modelId: task.model,
+    };
+
+    await expect(
+      client.startThread(workspace.id, options),
+    ).resolves.toEqual({
+      thread: expect.objectContaining({ id: "thread-1" }),
+    });
+    expect(taskCreates).toBe(1);
+    expect(runStarts).toBe(1);
+    expect(runReads).toBeGreaterThanOrEqual(2);
   });
 
   it("restores the bound Policy and Runtime Agent projection for a governed Thread", async () => {
