@@ -4,11 +4,11 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 更新日期 | 2026-07-30 |
+| 更新日期 | 2026-07-31 |
 | 当前分支 | `codex/agent-architecture-features` |
 | Codex 基线 | `openai/codex` `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9` |
 | 上游状态快照 | 2026-07-28 观测到 official main `95637f7056835fea66bdd0044414af480fc0fd74`，当时待同步 142；本轮未刷新且暂不同步 |
-| 当前工作 | 补齐 M2 的生产 Web 数据入口、类型化 readiness、统一启动器与 Tutorial Blueprint 新手闭环，再继续失败恢复和 Artifact 生命周期门禁 |
+| 当前工作 | 落地 Thread-first Data Intake 基础合同、Workspace Draft/SourceAsset、安全上传、持久 Intake 状态与 Thread/Analysis readiness 分层；继续完成 Indonesia 领域归一化、TaskDatasetBinding owner 和真实闭环门禁 |
 | 中期顺序 | `docs/roadmap.md` |
 | M2 详细实施 | `docs/enterprise-supervisor-copilot-plan.md` |
 | 能力事实 | `docs/capability-baseline.md` |
@@ -51,6 +51,33 @@ Session；差异集中在该入口、`src/services/webClient.ts` Server
 
 ## 当前功能主线：M2 Enterprise Supervisor Copilot
 
+## Thread-first Data Intake readiness 重构
+
+本轮已在 Platform owning layer 建立以下可恢复合同：
+
+- 已有 Workspace 才能创建 Thread；Thread purpose 使用 Thread readiness，不创建新的
+  Workspace，也不把空 Dataset 依赖列表当作成功。
+- `DataRequirementContract`、`WorkspaceDataDraft`、不可变 `SourceAsset`、
+  `DataIntakeSession` 和 `TaskDatasetBinding` 已有平台 DTO、数据库 migration 和
+  授权边界。上传入口限制 `.xlsx`、`.csv`、`.json`、文件大小、行数、JSON 深度/节点和
+  XLSX 宏标记；`.xls` 明确失败。
+- Intake API 支持 Draft 上传、会话创建/恢复、候选映射确认和带单位/来源的参数提交，
+  以 input/mapping revision 做并发拒绝；`needs_*` 状态不会保持一个悬挂 Run。
+- Analysis readiness 按 Task 查询 ready Intake、published normalized Dataset Release
+  和 TaskDatasetBinding；contract/mapping/parameter fingerprint 漂移会阻止启动。
+
+仍未达到可用能力基线的门禁：
+
+1. 基于真实 Runtime/MCP 的 Excel 多 Sheet、JSON 嵌套数组和 CSV 画像与模糊映射 E2E；
+2. 印尼合同的条件性字段、单位/粒度/主外键/质量校验与 normalized Release owner；
+3. 绑定 immutable Release 的领域 normalizer、完整 Artifact provenance 和同一 Thread 的
+   真实重启/中断/重复提交 E2E；
+4. 已实现的 Browser 上传、候选映射、缺口和参数卡片仍需真实 `/web` 与 Runtime
+   验证，并补齐 Release provenance 和刷新/重启恢复证据。
+
+这些缺口必须保持显式 `blocked`/`failed`，不得通过教程默认值、空依赖成功、无限
+retry 或隐式 Workspace 创建来掩盖。
+
 当前优先跑通一个单 Profile 真实企业案例：根 Supervisor 使用 Codex 原生多 Agent
 能力，根据印尼仓网问题的证据缺口从 Data、Network 和 Visualization 三个有界角色
 中动态选择必要能力，通过只读数据访问、确定性网络计算、地图 MCP 和持久 Artifact
@@ -80,18 +107,16 @@ requirement、Artifact handoff 与并发限制只由精确 Agent Release 和草�
 
 当前内置 Release 是：
 
-- `enterprise-supervisor-copilot@3.14.0`，选择
+- `enterprise-supervisor-copilot@4.0.0`，选择
   `platform-supervisor-behavior@1.1.0`；
-- Data `3.1.0`，只调用原子校验并发布一个精确授权 Workspace Dataset Release 的
-  inspection Tool；
-- Network `3.6.0`，按问题只运行服务基线、现网成本、指定候选、有限候选优化、地图
-  准备或确定性决策报告中必要的最小分析；报告 Tool 发布权威
-  `indonesia_decision_report.v1` Resource 和类型化 `report.v1` 交付；
-- Visualization `1.4.0`，只把已验证地图 manifest 与 GeoJSON 交给
-  `map_utils.create_map_card`；其 `MAP_HANDOFF` 只保留输入 Resource provenance 与
-  map Artifact ID，Tool 的 `structuredContent.embed.code` 只作为独立指令出现；
-- 十类条件性 Artifact handoff：八个 Resource 加 `report.v1`、`map.v3` 两种类型化
-  回复交付，不构成固定 Workflow。
+- Data `4.0.0`，发现授权 Workspace 中的 Excel/CSV/JSON，发布有界 Source Profile、
+  模糊 Mapping，并在完整确认后生成严格 `planning-dataset.v2`；
+- Network `4.0.0`，按证据缺口生成 Requirement Profile、Input Gap、Readiness Review，
+  并消费严格 Planning Dataset 完成覆盖、候选仓优化、场景对比和报告；
+- Visualization `2.0.0`，只接收 Network 生成的 comparison-map/GeoJSON Resource，
+  交给 `map_utils.create_map_card` 并交付 `map.v3`；
+- 十五类条件性 Artifact handoff，覆盖 Intake 证据、网络快照、优化、报告和地图，
+  不构成固定 Workflow。
 
 Root 没有业务 MCP。每个子 Agent 只得到 Definition 声明的精确 MCP Server、Tool
 allowlist、Resource 读取范围和 capability root；受治理预检会拒绝缺失或漂移的
@@ -137,7 +162,7 @@ Artifact 保留 Run/Thread/Turn/Item producer provenance，根 Thread 只能解�
   8 类 Resource 与 `report.v1`/`map.v3` 均 ready；
 - 配送审计单 Agent 已在真实 Runtime 中通过一次精确 MCP 审批、一次 Tool 调用、
   ready Artifact 和刷新恢复；
-- 当前 `3.14.0` 印尼 Supervisor 的全新 exact-hash 真实 DeepSeek Runtime/Artifact E2E
+- 当前 `4.0.0` 印尼 Supervisor 的全新 exact-hash 真实 DeepSeek Runtime/Artifact E2E
   已通过全部 13 项验收：一个 Root 与三个 child Threads、8 个持久 Agent tasks、14 次
   MCP 调用、8 个 ready Resource，以及恰好一个 `report.v1` 和一个 `map.v3`。报告
   验收覆盖 Artifact schema/version、非空 payload 与重算 digest、精确 Tool 来源、
@@ -150,6 +175,11 @@ Artifact 保留 Run/Thread/Turn/Item producer provenance，根 Thread 只能解�
   phase、不提升 prose。live/restored DOM 回归、58 项 focused tests、typecheck、lint、
   parity 和 build 通过，服务已重启；浏览器控制器随后因自身 URL policy 拒绝刷新，所以
   post-fix 真实浏览器显示/恢复仍是最终证据门禁。
+
+上述真实 Run 证据属于旧教程/Artifact 交付纵向切片，不等同于当前 Workspace 全域
+Excel/CSV/JSON Intake 主旅程。当前主旅程的格式画像、整体确认、参数快照、严格
+`planning-dataset.v2`、原 Thread Analysis Turn、重启恢复和重复 Turn 仍保持 unavailable，
+直到 `scripts/smoke-network-planning-intake.sh` 的 real 模式获得完整证据。
 
 主线现转向部分失败和审批拒绝后的综合；更深层 Agent 树；Artifact 替代、失效、
 删除与保留；重启/乱序、共享
@@ -300,7 +330,7 @@ Skills、Plugins 和 MCP。
 - [x] `bash -n scripts/*.sh` 和本地启动脚本 help/status 路径。
 - [-] typecheck、lint、main-ui-parity、build、58 项 Web owning-layer focused tests、
   Codex contracts 和真实 Codex app-server 的 18 项 Capability Manifest smoke 通过；
-  配送审计单 Agent 和 `3.14.0` Supervisor 的真实 Runtime 验收通过；全新空 Workspace
+  配送审计单 Agent 和 `4.0.0` Supervisor 的真实 Runtime 验收通过；全新空 Workspace
   的 Learn UI 安装、readiness、启动和发送已通过。服务重启后的 post-fix 报告/地图卡片
   真实浏览器显示与刷新恢复仍待复核，因此生产 `/web` 新手闭环仍不得声明 available。
 - [x] `cargo fmt --all --check`、`cargo test --workspace --locked`。

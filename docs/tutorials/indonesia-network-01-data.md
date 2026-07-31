@@ -91,7 +91,7 @@ Published indonesia-warehouse-network-tutorial@1.0.0
 | Version | `1.0.0` |
 | Display name | `Tutorial Indonesia Data Agent` |
 | Description | `Validates one exact Indonesia warehouse-network Dataset Release.` |
-| Reviewed capability template | `Enterprise Data Agent · 3.1.0` |
+| Reviewed capability template | `Enterprise Data Agent · 4.0.0` |
 
 **Responsibilities**：
 

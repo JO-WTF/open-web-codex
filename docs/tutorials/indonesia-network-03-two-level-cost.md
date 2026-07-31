@@ -111,7 +111,7 @@ ARTIFACT_HANDOFFS，再分别报告当前成本、候选时效变化、运输成
 费用的年度决策成本变化、约束和 checks。不得把运输成本下降写成总成本下降。
 ```
 
-选择同一个 `Enterprise Network Planning Agent · 3.6.0` template，Artifact contracts
+选择同一个 `Enterprise Network Planning Agent · 4.0.0` template，Artifact contracts
 保留：
 
 ```text

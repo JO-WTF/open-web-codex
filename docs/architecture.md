@@ -103,6 +103,10 @@ result; they never cause a Tauri runtime to reappear.
 | Workspace authorization and managed checkout lifecycle | Web platform + filesystem/Git | complete authorization record and safe lifecycle metadata |
 | Repository objects and checkout contents | Filesystem/Git | status, diff summary and artifact references |
 | Durable Artifact identity, authorization and retention | Web platform Artifact store | producer Run/Thread/Turn/Item provenance and safe references |
+| DataRequirementContract | Domain capability package, versioned with a content hash | human-readable contract projection |
+| WorkspaceDataDraft and SourceAsset | Web platform, scoped to an authorized Workspace | immutable source metadata and safe status |
+| DataIntakeSession | Web platform workflow state for a Task/Thread and contract | gaps, mapping candidates, confirmations and parameters |
+| TaskDatasetBinding | Web platform binding to a published normalized Dataset Release | contract/mapping/parameter snapshot and fingerprint |
 
 The platform must recover model-visible history from Codex. Event projections
 are rebuildable UI/read models and never become a second Thread store, memory
@@ -219,6 +223,15 @@ session -> user -> organization membership -> project permission
   authorized for the Profile/user. Runner revalidates the Workspace grant for
   Git and delivery operations. Normal browser users never submit trusted
   filesystem paths.
+- Thread startup uses Thread readiness only; it does not require a Dataset
+  Release and never creates a Workspace. Analysis readiness is task-scoped and
+  requires a ready DataIntakeSession, a published normalized Release and a
+  TaskDatasetBinding with matching fingerprints.
+- Raw uploads are SourceAssets in a WorkspaceDataDraft, not Artifacts. Domain
+  capability packages own business profiling, fuzzy mapping and normalization;
+  `provide_data`, `confirm_mapping` and `answer_parameters` are durable typed
+  InputRequests while the Session itself remains `active`, rather than a
+  long-running Run or a second workflow state machine.
 - Cache, subscription, model and secret keys include their user/Profile scope.
   Cross-user and guessed-ID denial tests are release gates.
 

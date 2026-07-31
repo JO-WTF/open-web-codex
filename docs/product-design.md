@@ -133,6 +133,10 @@ Agent Definition 治理、持久 Artifact 与企业能力授权；这些目标�
 | Thread | Codex 对话与模型可见上下文 | Codex Profile |
 | Turn | Thread 中一次模型执行 | Codex Profile |
 | Workspace | 独立于 Thread/Run 的经授权执行目录；可以是管理员登记的现有目录，也可以是用户显式创建的托管 clone/worktree | Platform authorization + filesystem/Git |
+| DataRequirementContract | 领域 capability package 提供的版本化逻辑实体、字段、单位、条件关系和业务参数要求 | Platform contract projection + capability package |
+| WorkspaceDataDraft / SourceAsset | 用户上传的原始数据和不可变 revision；不要求用户知道 Dataset manifest | Platform database scoped by Workspace |
+| DataIntakeSession | Task/Thread 保存画像、模糊候选、缺口、用户确认和参数答案；生命周期为 `active | ready | failed | cancelled` | Platform evidence projection |
+| TaskDatasetBinding | 归一化 Dataset Release 与合同、映射、参数快照的不可变分析绑定 | Platform database + Dataset Release owner |
 | Provider | 模型服务、Wire API、模型目录和上下文配置 | Codex Profile |
 | Approval | Codex Server Request 的持久平台决策记录 | PostgreSQL |
 | Control Lease | 控制 Task/Run 的短期租约 | PostgreSQL |
@@ -150,6 +154,22 @@ Agent Definition 治理、持久 Artifact 与企业能力授权；这些目标�
   同一个 Workspace；Codex Runtime 负责保存和更新每个 Thread 的当前 `cwd`。
 - 托管 clone/worktree 只能由用户或平台策略显式创建、保留和删除，不能在新建
   Thread、恢复 Thread 或创建后继 Run 时隐式生成。
+
+### Thread-first 业务数据闭环
+
+普通业务用户先从已有授权 Workspace 创建 Thread，随后由 Supervisor 识别目标并
+选择版本化 `DataRequirementContract`。平台提供上传入口，接受 `.xlsx`、`.csv`、
+`.json` 并把文件保存为不可变 SourceAsset；用户不需要填写 Dataset ID、版本、文件
+角色或内部 manifest。领域 capability package 画像文件并只产生模糊映射候选，用户
+确认会影响模型结果的字段后，Supervisor 再询问规划模式、绕路系数、目标时效、覆盖
+目标、规划周期、币种和成本口径等带单位、有来源的参数。
+
+Intake 的生命周期仅为 `active | ready | failed | cancelled`；`provide_data`、映射、参数和
+确认请求由 `DataIntakeInputRequest` 投影表达，而不是把等待状态伪装成悬挂 Run。每个等待
+用户输入的 Turn 有界结束，下一次用户消息在原 Thread 恢复。只有领域能力生成严格
+`planning-dataset.v2`、建立 TaskDatasetBinding 并锁定 contract/mapping/parameter
+fingerprint，Analysis readiness 才允许 Network 或 Visualization。空 Workspace 的有效
+结果是“Thread 可创建，Input/Analysis blocked”，而不是分析成功或不断重试。
 
 ### 4.2 多用户隔离键
 
@@ -474,9 +494,9 @@ authenticated user
 | --- | --- | --- |
 | LRN-001 | P0 M2 | Tutorial Blueprint 是只读、版本化的平台资源，精确声明受审资产、依赖、推荐 Prompt 和验收值 |
 | LRN-002 | P0 M2 | 示例 reconcile 复用正式发布 owner service 和幂等键；相同身份不同内容显式冲突，部分成功可继续 |
-| LRN-003 | P0 M2 | Readiness 在创建 Task/Run/Thread 前返回 `ready/degraded/blocked`、稳定检查代码、fingerprint 和类型化修复动作 |
+| LRN-003 | P0 M2 | Thread readiness 只检查平台/Runtime/Provider 与已有授权 Workspace；Input/Analysis readiness 另外检查 Data Requirement Contract、Draft/映射/参数、normalized Release、TaskDatasetBinding 和稳定 fingerprint |
 | LRN-004 | P0 M2 | 正式启动重新验证 readiness fingerprint；漂移时保留草稿并重新检查，不重复创建 Task |
-| LRN-005 | P0 M2 | 新用户只通过 Web 完成数据准备、依赖修复、启动、审批、结果审阅和刷新恢复，不输入内部 ID 或宿主路径 |
+| LRN-005 | P0 M2 | 新用户只通过 Web 完成 Workspace 内的数据上传、画像、映射确认、参数补齐、依赖修复、启动、审批、结果审阅和刷新恢复，不输入 Dataset/Runtime 内部 ID 或宿主路径 |
 | LRN-006 | P1 M2 | Learn 进度只从权威资源推导；UI 可返回第一个未完成步骤，但不建立第二套教程状态 |
 
 ## 8. 状态模型

@@ -17,6 +17,8 @@ ADR 记录已经接受、会长期约束实现且不能仅从当前代码推断�
 | [ADR-006](006-supervisor-capability-packages.md) | Supervisor Capability Package |
 | [ADR-007](007-workspace-dataset-releases.md) | Workspace Dataset Release |
 | [ADR-008](008-installable-tutorial-blueprints.md) | 版本化可安装 Tutorial Blueprint |
+| [ADR-009](009-thread-first-data-intake.md) | Thread-first 数据接入与分阶段 Readiness |
+| [ADR-010](010-workspace-wide-intake-discovery.md) | Workspace 全域数据接入与 Task 级确认 |
 
 ## 何时创建 ADR
 

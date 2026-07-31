@@ -94,20 +94,14 @@ Artifact；关键结论可追溯，一个 Agent 失败时能够形成明确的�
 受治理启动、审批、交付审阅和刷新恢复。缺少必需依赖时不得先创建 Thread，再让模型向
 用户索要内部 ID、Runtime 标识或服务器路径。
 
-当前实现是印尼仓网动态案例：`enterprise-supervisor-copilot@3.14.0` 可从 Data
-`3.1.0`、Network `3.6.0` 和 Visualization `1.4.0` 三个有界 Role 中按证据缺口
-选择能力，十个 Artifact handoff 是条件性证据边而不是固定 Workflow。完整决策
-业务报告由 MCP 对七个精确来源 Resource 做交叉校验后确定性发布为权威
-`indonesia_decision_report.v1` Resource，并通过 `report.v1` 类型化交付；地图由
-Visualization 独立交付为 `map.v3`。模型正文不是报告来源。Tool-owned embed 只作为
-独立指令出现；平台事件的类型化 `inlineArtifacts` 是浏览器实时与恢复权威视图。
-Workspace
-Dataset Release、受限 Python MCP authoring、直接 Agent Run、MCP stdio 和语义编译
-已有聚焦验证；Completed Agent follow-up、根 Turn interrupt 和后续恢复已有同一 Run
-探针证据。当前 exact Release 的完整真实 Runtime/browser 回归以及从空 Workspace
-开始的生产 `/web` 新手闭环仍待通过，因此不能把聚焦测试、组件或开发者探针声明为
-浏览器 E2E。生产入口、审批拒绝、Agent 部分失败、Profile 重启、Artifact 完整生命周期
-和一般故障恢复仍是 M2 退出门禁。
+当前实现是印尼仓网动态案例：`enterprise-supervisor-copilot@4.0.0` 可从 Data
+`4.0.0`、Network `4.0.0` 和 Visualization `2.0.0` 三个有界 Role 中按证据缺口
+选择能力，十五个 Artifact handoff 是条件性证据边而不是固定 Workflow。Workspace
+全域 SourceAsset 发现、Excel/CSV/JSON 有界画像、模糊映射、严格
+`planning-dataset.v2` 和通用优化/报告/地图工具已有本地聚焦验证；完整真实
+Runtime/browser 回归、重启恢复和无重复 Analysis Turn 仍待通过，因此能力基线继续
+声明 unavailable。生产入口、审批拒绝、Agent 部分失败、Artifact 完整生命周期和
+一般故障恢复仍是 M2 退出门禁。
 
 M2 的里程碑状态保留在 [开发计划](development-plan.md)，逐切片工作、真实案例和
 活动可信风险由

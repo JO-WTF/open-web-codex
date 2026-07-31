@@ -8,7 +8,7 @@
 | 更新日期 | 2026-07-30 |
 | 对应阶段 | M2 Enterprise Supervisor Copilot |
 | 实施范围 | 单用户、单 Profile、真实 Runtime、一个印尼仓网决策案例 |
-| 当前版本 | `enterprise-supervisor-copilot@3.14.0` |
+| 当前版本 | `enterprise-supervisor-copilot@4.0.0` |
 | 平台行为合同 | `platform-supervisor-behavior@1.1.0` |
 | 当前事实 | [能力基线](capability-baseline.md) 与代码 |
 | 架构依据 | [企业多 Agent 平台架构](enterprise-agent-platform-architecture.md) |
@@ -25,9 +25,9 @@ Supervisor 根据证据缺口动态选择受治理的 Domain Agent，并通过�
 | 专业判断 Owner | Data、Network Planning、Visualization Domain Agent |
 | 确定性计算 Owner | `supply_chain_indonesia` 与 `map_utils` MCP |
 | 治理与持久化 Owner | Platform Server |
-| 浏览器 Owner | Dataset/Package/Agent/Supervisor 发布交互，以及有界 readiness、运行投影、Artifact 和报告呈现 |
-| Agent 输入输出 | 不可变 Agent Release、exact Runtime Role、exact package/Dataset 依赖、durable Resource reference |
-| 核心数据合同 | Workspace Dataset Release 与 `indonesia_dataset_inspection.v1` |
+| 浏览器 Owner | Workspace 数据上传、对话内 Profile/Mapping/参数/最终 checklist 确认，以及有界 readiness、Artifact 呈现 |
+| Agent 输入输出 | 4.0.0 Agent Release、exact Runtime Role、版本化 Intake Artifact、durable Resource reference |
+| 核心数据合同 | Workspace SourceAsset、`data_requirement_profile.v1`、`source_profile.v1`、`mapping_proposal.v1`、`planning-dataset.v2` |
 | 运行能力门禁 | `agents.multi_agent@1.0.0`、exact Role/Tool allowlist、per-Role limit、授权 Workspace |
 | 持久化范围 | Codex 保持 Thread/Turn/Item 权威；平台持久化 Release、Run binding、Artifact、审批、审计和可重建投影 |
 | 验证路径 | 数据生成回归、Python 单元测试、MCP stdio smoke、Catalog/Server/Web 合同测试、真实 Runtime/browser E2E |
@@ -53,9 +53,9 @@ Artifact schema 与 `resource_name`。
 | 参与者 | 责任 | 何时需要 |
 | --- | --- | --- |
 | Root Supervisor | 解释目标、识别最小证据缺口、委派、处理冲突并综合报告 | 每次受治理多 Agent 任务 |
-| Data Agent `3.1.0` | 核验一个精确授权的 Indonesia Dataset Release，发布有界检查结果 | 缺少可信数据证据 |
-| Network Planning Agent `3.6.0` | 只运行问题所需的服务、现网、候选、优化、地图准备或确定性报告计算，并在首次调用中使用 Tool 声明的 0–1 覆盖率 fraction；完整报告交付为权威 Resource 加 `report.v1` | 需要网络计算 |
-| Visualization Agent `1.4.0` | 把已验证地图 manifest 与 GeoJSON 交给地图 Tool；`MAP_HANDOFF` 只保留输入 Resource provenance 与匹配的 Artifact ID，Tool-owned embed 只作为独立指令交付 | 用户要求地图 |
+| Data Agent `4.0.0` | 扫描授权 Workspace 的 Excel/CSV/JSON，发布有界 Source Profile、模糊映射候选，并只在用户确认后归一化 | 需要文件理解或映射 |
+| Network Planning Agent `4.0.0` | 根据目标生成完整 Requirement Profile，判断数据/参数缺口，发布最终 readiness checklist，并选择最小网络分析 | 需要业务要求或网络计算 |
+| Visualization Agent `2.0.0` | 只接收 Network 生成的 `network_comparison_map.v1` 与 `geojson.v1` Resource，交给地图 Tool；`map.v3` 是唯一地图交付 | 用户要求地图 |
 | Platform | 发布不可变 Release、执行预检、持久化 Artifact/审计/审批和浏览器投影 | 全程 |
 
 所有 Domain Agent 都是可选能力。Policy 不要求固定 Agent 数量或顺序。已有可信
@@ -68,7 +68,7 @@ Artifact 可以消除一次委派；独立调查在输入满足时可以并行�
 flowchart TD
     U["用户业务目标"] --> S["Root Supervisor 识别证据缺口"]
     S --> D{"已有精确、已验证的数据证据?"}
-    D -- 否 --> DA["Data Agent 核验 Dataset Release"]
+    D -- 否 --> DA["Data Agent 画像 Workspace SourceAsset"]
     D -- 是 --> N
     DA --> N["Network Agent 运行最小必要分析"]
     N --> M{"用户需要地图?"}
@@ -131,7 +131,7 @@ Resource 名和 `map_artifact_id`，不含 Resource URI 或 embed code；Visuali
 
 ## 4. Policy 与能力边界
 
-`enterprise-supervisor-copilot@3.14.0` 精确绑定三个 Agent Release，每个 Role 最多
+`enterprise-supervisor-copilot@4.0.0` 精确绑定三个 Agent Release，每个 Role 最多
 一个实例，V2 驻留额度为三。当前 Multi-Agent V2 没有 `close_agent`，终态子 Agent
 仍占额度，因此这个上限覆盖全部可选角色，而不是要求三个角色都运行。十个 Artifact
 handoff 都是条件性证据边；未选择某项分析时不得为了满足数量而伪造 Artifact。
@@ -233,7 +233,9 @@ Role、MCP 内部标识或服务器路径来弥补平台绑定缺失。
 
 ### 5.5 WP3：版本化 Tutorial Blueprint 与 Learn
 
-首个 Blueprint 是 `indonesia-warehouse-network@1.4.0`。它声明精确 Dataset bundle、
+首个 Blueprint 是独立教程入口 `indonesia-warehouse-network@1.4.0`；正常业务路径使用
+`indonesia-warehouse-network@2.0.0` Requirement Contract，声明 Workspace 全域发现、
+用户整体确认和严格 Planning Dataset，不把教程 Dataset 作为输入。它声明精确 Dataset bundle、
 capability package、Agent/Supervisor/行为合同版本与哈希、推荐 Prompt、必需能力、
 预期 Artifact 和确定性验收值。它是通用平台资源，不把印尼业务写进 Web 或
 `codex/`。
@@ -329,9 +331,9 @@ service 创建 Dataset、Agent 和 Supervisor Release。同 ID、版本与哈希
 
 ### Slice 2：动态 Supervisor
 
-- [x] Data `3.1.0`、Network `3.6.0`、Visualization `1.4.0` 精确声明责任、输入输出和
+- [x] Data `4.0.0`、Network `4.0.0`、Visualization `2.0.0` 精确声明责任、输入输出和
   Tool allowlist；
-- [x] Supervisor `3.14.0` 与平台行为合同 `1.1.0` 不包含固定角色数或执行顺序；
+- [x] Supervisor `4.0.0` 与平台行为合同 `1.1.0` 不包含固定角色数或执行顺序；
 - [x] 语义编译器、内容哈希、精确依赖和能力预检测试通过；
 - [x] Root 与子 Agent MCP 隔离、兄弟 package 隔离具有聚焦测试；
 - [x] 当前 exact Release hashes 的真实 DeepSeek Runtime/Artifact E2E 通过：一个 Root
@@ -363,7 +365,7 @@ E2E 只验证不变量，不验证精确轨迹或 Tool 次数：
 - Agent 行为、等待、审批、Artifact 和最终报告在刷新后收敛；
 - 证据不含凭据、内部 Resource URI、服务器路径或无界 payload。
 
-2026-07-30 的 `3.14.0` exact Release 真实 DeepSeek E2E 已通过 13/13 验收。该次运行
+2026-07-30 的 `4.0.0` exact Release 真实 DeepSeek E2E 已通过 13/13 验收。该次运行
 观察到一个 Root 与三个 child Threads、8 个持久 Agent tasks、14 次 MCP 调用、8 个
 ready Resource，以及恰好一个 `report.v1` 和一个 `map.v3`。权威
 `indonesia_decision_report.v1` 按 schema/version、非空 payload 与重算 digest、精确
@@ -382,6 +384,11 @@ embeds；Web 折叠 commentary，Platform/Blueprint/Artifact 均正常。
 项目顺序独立展示并按稳定 ref 去重，不改变 phase、不提升 prose。live/restored DOM
 回归、58 项 focused tests、typecheck、lint、parity 和 build 通过，服务已重启。浏览器
 控制器随后因自身 URL policy 拒绝刷新，post-fix 真实浏览器卡片显示和恢复仍是最后门禁。
+
+以上两次 E2E 是旧教程/Artifact 交付路径的历史证据，不等同于当前
+Workspace 全域 Excel/CSV/JSON Intake 主旅程。当前主旅程的真实格式画像、整体 Profile/
+Mapping 确认、参数快照、严格 `planning-dataset.v2`、原 Thread Analysis Turn、重启恢复
+和重复 Turn 门禁仍必须通过 `scripts/smoke-network-planning-intake.sh` 才能提升能力基线。
 
 ## 7. 完成定义
 

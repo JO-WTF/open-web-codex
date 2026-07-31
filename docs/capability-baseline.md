@@ -14,7 +14,7 @@ not remain valid automatically.
 
 ## Snapshot
 
-Observed on 2026-07-30 from the current working branch:
+Observed on 2026-07-31 from the current working branch:
 
 | Component | State |
 | --- | --- |
@@ -23,6 +23,15 @@ Observed on 2026-07-30 from the current working branch:
 | Local Codex seams | retained changes remain classified by `docs/custom-codex-patch-map.md`; compare them against `codex-upstream/main`, never this repository's `main` |
 | Local customization footprint | seven retained Runtime/TUI seams, derived artifacts and focused tests; `ToolName` uses the official implementation |
 | Web platform | Restored browser UI, Axum/PostgreSQL platform, native Profile Registry/Host, encrypted Provider Secret injection, durable approvals, independent authorized managed Workspaces, lease-based Run orchestration, typed REST resources and authenticated WebSocket |
+
+Thread-first Data Intake contracts and persistence are now present in the checked-in
+platform: Thread startup can reuse an authorized existing Workspace without requiring a
+Dataset Release; Workspace-wide SourceAsset discovery, bounded Excel/CSV/JSON profiling,
+versioned Indonesia contract metadata, InputRequest projection, confirmation revisions and
+same-Thread immutable Release/Binding/Snapshot startup are typed and persisted. This is
+implementation evidence only. No claim of end-to-end Indonesia planning readiness is made
+until real Runtime/MCP profiling, domain validation, Release provenance and Browser
+restart/recovery journeys pass the validation gates below.
 
 ## Reproduced evidence
 
@@ -50,44 +59,16 @@ Observed on 2026-07-30 from the current working branch:
   Turn diff, 86 apply-patch and 60 `PathUri` passing tests.
 - The Web contract check passes, and the locally built current Codex CLI passes
   the real app-server initialize Smoke with 18 Capability Manifest declarations.
-- The current `enterprise-supervisor-copilot@3.14.0` package binds Data `3.1.0`,
-  Network `3.6.0` and Visualization `1.4.0` as optional governed Roles for an
-  Indonesian warehouse-network decision. Platform behavior contract `1.1.0`
+- The current `enterprise-supervisor-copilot@4.0.0` package binds Data `4.0.0`,
+  Network `4.0.0` and Visualization `2.0.0` as optional governed Roles for the
+  Workspace-wide Network Planning intake. Platform behavior contract `1.1.0`
   requires evidence-gap planning and exact Artifact handoffs without prescribing
-  a fixed Agent order or role count. Ten conditional contracts cover one
-  bounded Dataset inspection, service-only/current/candidate/optimization
-  analyses, map manifest, GeoJSON, `indonesia_decision_report.v1`, `report.v1`
-  and `map.v3`. The decision-report Tool cross-checks seven exact same-server
-  source identities and deterministically publishes the authoritative report
-  Resource plus its typed `report.v1` delivery; model-authored prose is not a
-  report source. The Visualization Tool separately owns the `map.v3` Artifact
-  and exact embed code. Compact report/map handoffs carry only exact Resource
-  provenance and matching Artifact IDs; each Tool-owned embed appears once as a
-  standalone directive, and the browser consumes the Platform event's typed
-  `inlineArtifacts` projection rather than an escaped copy inside model JSON.
-  Python and real stdio MCP checks pass. On 2026-07-30, the real DeepSeek
-  Provider/model enterprise Supervisor E2E passed all 13 acceptance checks. The
-  governed run produced one root plus three child Threads, eight persisted Agent
-  tasks, fourteen MCP calls, eight ready Resource Artifacts, exactly one
-  `report.v1` and exactly one `map.v3`. Report acceptance validated the
-  authoritative Artifact schema/version, non-empty payload and recomputed
-  digest, exact Tool-source identities, typed checks, Dataset Release identity,
-  producer provenance and delivery references rather than report wording or
-  model-authored prose. A separate fresh-Workspace
-  production `/web` run, `Learn UI E2E 20260730 0728`, completed Create
-  Workspace → Open Learn → Set up example → readiness (`degraded` only for map
-  presentation) → Start task → Send; the exact Blueprint installed and the real
-  DeepSeek Run completed with all eight Resource types plus ready report/map
-  Artifacts. Its first completed Turn showed zero card DOM nodes because both
-  typed `inlineArtifacts` belonged to a Runtime `commentary` message while the
-  `final_answer` carried no embeds; Platform, Blueprint and Artifact state were
-  correct. The Web owning-layer correction keeps commentary prose collapsed but
-  renders its authorized typed cards independently in Turn item order, deduped by
-  stable ref, without changing phase or promoting prose. Live/restored DOM
-  regressions, 58 focused tests, typecheck, lint, parity and build pass, and the
-  service was restarted. The browser controller then refused the post-restart
-  refresh under its own URL policy, so post-fix real-browser card display and
-  recovery remain the final onboarding evidence gate.
+  a fixed Agent order or role count. Fifteen conditional contracts cover the
+  requirement/source/mapping/gap/dataset/readiness evidence and the generic
+  network snapshot, coverage, optimization, comparison, report and map handoffs.
+  Network/Data/Visualization MCP checks pass locally, but the real browser +
+  Runtime journey for Excel, CSV, JSON, restart recovery and duplicate-Turn
+  prevention has not yet passed; this capability therefore remains unavailable.
 - Focused disposable-PostgreSQL journeys initialize the current schema from
   empty, publish immutable Workspace Dataset and capability-package Releases,
   bind exact Release IDs and content hashes to an organization Agent Release,
@@ -200,8 +181,8 @@ security, Push delivery, or every Studio capability.
 | Memory lifecycle | declared unsupported | Codex contains compaction/memory surfaces, but the Web-safe status/export/reset bridge is absent |
 | Native Agent CRUD | declared unsupported | no stable Web-safe CRUD/validation contract |
 | Multi-agent trajectory | declared experimental; constrained projection/lifecycle path verified, complete tutorial journey pending | The Server persists rebuildable root/child Thread and child-task execution projections from official collaboration, Thread, Turn, Item and approval events, associates child events with the authorized root Run, and prevents child lifecycle events from completing or otherwise mutating the root Run. Read-only `/api/runs/{run_id}/agents`, `/api/runs/{run_id}/agent-executions` and `/api/runs/{run_id}/agent-activities` resources expose bounded browser facts. The activity resource reconstructs an ordered behavior log from durable Run events and omits reasoning, tool arguments/results, internal Resource identifiers and host paths. Targetless V2 `wait_agent` cycles are represented truthfully as bounded waits for any Agent update or new input; both start and completion remain visible after refresh without inventing target Agents. The verified run also showed that Runtime may start another full bounded wait after a child has already completed, adding up to 120 seconds without changing correctness; the UI remains explicit and nonblank, but reducing that latency is still a Runtime behavior/performance gap rather than a platform fallback opportunity. Each observed child Turn has a stable task node; terminal rows are frozen, a later Turn on the same Agent Thread receives the next ordinal, and different child Threads can remain active concurrently. PostgreSQL integration covers prompt/event reordering, concurrent child activity, same-Agent reuse, terminal immutability and cross-Organization denial. Task-scoped Artifact resolution accepts an exact unique child-produced Resource only after verifying producer provenance for the same Run, so a root report can safely resolve a child map without requiring the producer and consumer to share one Thread. Same-Agent follow-up, root interruption and recovery are verified for the constrained case. Deeper trees, partial failure, approval rejection, restart composition and multi-user isolation remain required before product support can be promoted beyond it |
-| Enterprise Supervisor Policy | built-in `3.14.0` compiler/DB; exact-hash Runtime execution verified, post-fix browser card check pending | Repository Packages and Web drafts are compiled by one source-independent Supervisor semantic compiler. Supervisor instructions are separated into global immutable platform behavior contract `1.1.0`, author-owned `customInstructions`, and a generated execution-contract section. The current Supervisor supplies three optional Roles and ten conditional Artifact handoffs; no handoff is interpreted as a mandatory Workflow stage. Same-server Indonesia Tools consume exact Resource names and resolve their own Resource Store, so cross-Agent execution does not depend on a model reconstructing an internal URI; unchanged `data_ref` objects remain provenance under the platform handoff contract. The deterministic report Tool owns the complete `indonesia_decision_report.v1` Resource after cross-checking the inspection, service, current, optimization, candidate, map and GeoJSON Resources, and separately returns a typed `report.v1` delivery Artifact. The model does not copy or author report prose. The independent Visualization Tool owns the browser `map.v3` Artifact and exact `structuredContent.embed.code`. Compact report/map handoffs contain exact Resource provenance and matching Artifact IDs; the Supervisor delivers the two Tool-owned standalone embeds without reconstructing either directive. The Platform resolves those directives into the Agent Message event's typed `inlineArtifacts`, which is the browser's authoritative real-time and recovery view; no escaped embed copy is carried inside model JSON. The compiler deterministically produces the single official Runtime `developerInstructions`; no Codex protocol extension exists. The generated contract reflects the current Multi-Agent V2 lifecycle: it has no `close_agent`, terminal child Agents remain resident, and `interrupt_agent` does not release them. The built-in Release therefore reserves three resident slots for three `spawnLimit=1` optional Roles. Specialized Roles use bounded/no-history forks, and child Roles disable nested collaboration. Platform Owners can publish a new immutable behavior-contract version, while Supervisor authors only select an exact version and cannot submit its text. Policy identity/content hash is sealed into each Supervisor Release and re-resolved before execution. The same compiler derives exact Agent Runtime facts, Artifact handoffs, Runtime requirements and limits; repository-declared derived fields must equal that result. Code/Web conformance tests compare the complete normalized execution model and SHA-256, and mutation tests prove executable changes alter the digest. Browser requests do not contain Runtime Role names, MCP inventory or Runtime capability claims. |
-| Enterprise Agent Definitions | built-in Data `3.1.0`, Network `3.6.0`, Visualization `1.4.0`; exact-hash Runtime execution verified | Repository Definitions and Web drafts are compiled by one Agent semantic compiler. Runtime Role identity is a stable function of `definitionId + version`, independent of database UUID or source; code declarations are checked assertions rather than an alternate implementation. Data invokes one Tool that atomically validates an exact platform-authorized Indonesia Dataset Release and its bounded `indonesia_dataset_inspection.v1` output without exposing raw customer rows. Network chooses only the required deterministic service, current, candidate, optimization, map or decision-report operation, converts user-facing percentages to the Tool's typed 0–1 fraction before the first optimization call, and preserves Tool-owned ranking and status fields. Its report Tool publishes the authoritative `indonesia_decision_report.v1` Resource plus a typed `report.v1` delivery; the Agent emits a compact `REPORT_HANDOFF` and the Tool-owned standalone embed without reading or copying the report Markdown. Visualization consumes only typed map-render preparation, delegates rendering to `map_utils.create_map_card`, and emits a compact `MAP_HANDOFF` with both input Resource names and the exact matching map Artifact ID. It copies `structuredContent.embed.code` separately as one standalone directive and never duplicates it as escaped JSON or recalculates network evidence. Code/Web conformance tests compare the complete normalized execution model and SHA-256, including instructions, Artifact types, capability template, generated Role config and MCP requirements. A custom Agent binds one exact reviewed capability-package Release, zero or more exact Workspace Dataset Releases and narrowed Artifact contracts. Governed preflight fails closed on unavailable capability roots, missing or drifted package/data dependencies, sibling MCP visibility, or Runtime capability mismatch. Native Runtime Agent CRUD, arbitrary Agent capability expansion, partial failure recovery and deeper dynamic trees remain unsupported or pending |
+| Enterprise Supervisor Policy | built-in `4.0.0` compiler/DB; local contract/catalog checks pass; real journey unavailable | The policy binds optional Data `4.0.0`, Network `4.0.0` and Visualization `2.0.0` Roles. It declares fifteen evidence and result handoffs, but no fixed workflow. Platform projection accepts only the policy-declared producer/schema pairs and persists bounded Intake evidence. Real browser + Runtime validation for Excel, CSV, JSON, restart recovery and duplicate-Turn prevention remains a release gate. |
+| Enterprise Agent Definitions | built-in Data `4.0.0`, Network `4.0.0`, Visualization `2.0.0`; local contract/catalog checks pass; real journey unavailable | Data discovers bounded authorized Workspace Excel/CSV/JSON sources and publishes source profiles/mapping candidates without exposing raw rows or host paths. Network owns requirement profiles, gaps, readiness and generic planning results; Visualization renders only the exact comparison-map resources. Strict normalization and generic planner checks pass locally, while real multi-format Runtime/MCP recovery is still required. |
 | Skills | bounded package authoring available; Runtime listing degraded/unsupported by operation | Agent Studio lists checked-in packages and can publish one Workspace-scoped package containing a bounded Skill, declared MCP Tools and standard-library Python implementation. The Platform validates package shape and probes the generated MCP Server, while a new Thread still depends on Codex Runtime capability-root and Skill discovery. Exact package Releases can be attached to a published Agent rather than installed globally. Profile-wide Runtime listing still does not enumerate Thread-selected roots, so it cannot prove selected Skill injection; general Skill install/update/delete and Profile-scoped lifecycle remain unsupported |
 | Plugins | general lifecycle declared unsupported | The Python authoring slice emits one fixed package shape under an authorized Workspace, but does not expose arbitrary Plugin manifests, launch commands, permissions, Profile installation or Plugin CRUD |
 | MCP | reviewed declarations plus bounded Python package authoring; current tutorial Runtime execution verified | Agent Studio lists reviewed MCP declarations separately from current Thread status. Its Python editor accepts bounded Tool JSON Schemas and standard-library functions, generates a fixed stdio MCP launcher, clears inherited environment, validates startup/discovery, can test one declared Tool against an exact authorized Workspace Dataset Release, and atomically publishes an immutable Workspace package. Workspace resolution happens server-side; browser DTOs and Tool diagnostics do not expose local paths. The delivery-audit run verified one explicit MCP approval, exact Dataset identity, one Tool call and a durable Resource. Supply-chain Root has no business MCP, and governed preflight gives each child Role only its exact Server/Tool allowlist while rejecting sibling-package visibility. Secret-backed servers, OAuth/full-form elicitation, arbitrary commands/transports and general MCP config/reload/delete remain unsupported |
@@ -219,7 +200,7 @@ security, Push delivery, or every Studio capability.
 | Authorization | Project/Task/Run and runtime routes contain session-Organization checks; Provider/approval routes additionally check Profile ownership. The two-Organization denial suite passes against the current fresh schema, including Artifact ID guessing and Profile-bound operations | centralized policy abstraction, Project-specific roles and the full concurrent multi-user matrix remain missing |
 | Codex bridge | Fake/Real adapter and event projection exist; Real uses the native Profile Registry/Host JSONL connection. Provider Secrets are encrypted and injected only into the owned child environment. Runtime-facing operations remain internal and browser routes are typed | composition is still one configured Profile process per server; per-user dynamic process routing remains incomplete |
 | Task/Run | Source, contracts and tests implement CRUD/start/cancel/message/steer/compact/review, idempotent scheduling, DB leases/heartbeats/recovery, independent managed Workspace creation/grants/removal, authoritative Codex history, safe Item/Delta and approval projection, terminal execution, workspace files and Git operations. Runs only reference an authorized Workspace. A governed Run binds exactly one root mode: a direct immutable Agent Release or an immutable Supervisor Release. Supervisor Runs create a root Runtime projection in the same delivery transaction and authorize approvals from known child Threads through the Agent tree; direct Agent Runs apply the same package, Dataset, Workspace and capability preflight without manufacturing a one-Agent Supervisor | add existing-root registration, shared-Workspace concurrency and real multi-`cwd` validation. Approval expiry, protected-branch policy and full multi-Profile routing remain incomplete |
-| Browser | established WebApp presentation runs through typed platform resources for workspace/thread/message, approvals, Provider/model, MCP/rate-limit snapshots, files, Git status and Agent/Supervisor governance. The production `FileManager` owns bounded Dataset publishing and history; Agent Studio reuses that entry, technical contracts default closed, and MCP status remains separate from capability authoring. One Standard/Agent/Supervisor launcher consumes Server-owned typed readiness, while production Learn uses the `indonesia-warehouse-network@1.4.0` Blueprint contracts. `Learn UI E2E 20260730 0728` used only the production `/web` to create a fresh Workspace, open Learn, set up the example, accept readiness degraded solely for map presentation, start the task and send it. The exact Blueprint installed and the real DeepSeek Run completed with eight ready Resource types and ready `report.v1`/`map.v3`. The first completed view had no card DOM because both typed Artifacts were attached to collapsed commentary; the Web fix now projects those authorized cards independently without revealing or promoting commentary prose. Live/restored DOM tests, 58 focused tests, typecheck, lint, parity and build pass, and the service has restarted. The controller then rejected refresh under its own URL policy, so post-fix behavior lacks a real-browser confirmation. Run resources expose a nullable, bounded `RunFailureCode`; unknown persisted values become the explicit `unknown_failure` category, and startup polling shows the stored safe category when a Run becomes terminal before Thread identity exists. Such pre-Thread failures are not yet restorable as Thread contexts after refresh. The browser does not submit Runtime Role names, MCP inventory, Tool allowlists, capability roots, local paths or release content at Run start. Agent task nodes open child Thread histories through a Run-scoped authorized route; Artifact content remains protected by existing Task grants. Runtime projections omit reasoning, Tool arguments/results, internal Resource URIs and host paths | use a permitted browser session after restart to verify the fixed live view and reopen/refresh recovery, with exactly one report and one map card, before promoting the Learn onboarding loop to available. Native Agent/Skill/Plugin/MCP lifecycle, Secret-backed package authoring, Release deprecation, concurrent editing, deeper trees, Artifact lifecycle, failure/rejection recovery, shared-Workspace concurrency and broader cross-user denial remain later gaps |
+| Browser | Composer upload and inline Intake UI are implemented; local typecheck passes; real journey unavailable | Composer accepts `.xlsx`, `.csv` and `.json`, including attachment-only messages. Profile, whole-mapping, parameter, data-gap and final-checklist cards are rendered from typed Intake projections; old dedicated mapping/parameter routes are removed. Refresh/recovery and a real Web + Runtime journey remain release gates. |
 
 ## Immediate capability gates
 
@@ -229,11 +210,13 @@ security, Push delivery, or every Studio capability.
 3. Do not count the Dataset publication component as available until **Add data** is reachable from
    the production `/web` Files surface and a real browser journey publishes, reopens and reuses a
    Release.
-4. Do not create a governed Thread until Server-owned readiness has validated its exact Workspace,
-   Provider/model, Release dependencies, Runtime capabilities and MCP visibility.
-5. Keep the passing real Thread restart/resume/read and Enterprise Supervisor
-   journey as release gates; add multi-cwd, multi-agent failure and multi-user
-   isolation coverage before promoting the experimental declarations.
+4. Thread creation may proceed with an authorized existing Workspace when
+   Thread Readiness is available; Dataset, Binding and Analysis Readiness are
+   checked only at analysis start.
+5. Keep the real Excel/CSV/JSON Supervisor journey, restart/resume/read and
+   duplicate-Turn checks as release gates; add multi-cwd, multi-agent failure
+   and multi-user isolation coverage before promoting the experimental
+   declarations.
 6. Replace the single configured Profile composition root with authorized
    per-user Profile routing before multi-user Beta.
 7. Complete independent Workspace validation: cover shared-Workspace
