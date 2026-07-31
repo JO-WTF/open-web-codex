@@ -507,6 +507,37 @@ build_stale_platform_server() {
   fi
 }
 
+assert_reusable_outputs_current() {
+  local stale_server stale_browser
+  if [[ ! -x "$server_bin" || ! -f "$web_dist/index.html" ]]; then
+    printf '{"code":"stale_build_output","message":"Current source or migration is newer than the reusable build output. Restart without --no-build."}\n' >&2
+    exit 1
+  fi
+  stale_server="$(find \
+    "$web_root/server" \
+    "$web_root/crates" \
+    "$web_root/migrations" \
+    "$web_root/Cargo.toml" \
+    "$web_root/Cargo.lock" \
+    "$repo_root/capabilities/agents" \
+    "$repo_root/capabilities/supervisors" \
+    "$repo_root/capabilities/supervisor-instruction-policies" \
+    "$repo_root/capabilities/plugins" \
+    "$repo_root/tools/supply-chain-network-planner" \
+    "$repo_root/tools/maps-mcp" \
+    -type f -newer "$server_bin" -print -quit 2>/dev/null || true)"
+  stale_browser="$(find \
+    "$web_root/src" \
+    "$web_root/browser" \
+    "$web_root/package.json" \
+    "$web_root/package-lock.json" \
+    -type f -newer "$web_dist/index.html" -print -quit 2>/dev/null || true)"
+  if [[ -n "$stale_server" || -n "$stale_browser" ]]; then
+    printf '{"code":"stale_build_output","message":"Current source or migration is newer than the reusable build output. Restart without --no-build."}\n' >&2
+    exit 1
+  fi
+}
+
 build_both_codex_runtime_components() {
   build_codex_runtime
   record_cargo_component_fingerprint \
@@ -622,6 +653,7 @@ if [[ "$skip_build" == "0" ]]; then
     run_step "Cargo target retention" enforce_target_retention
   fi
 else
+  assert_reusable_outputs_current
   show_step_skipped "Build outputs" "reused (--no-build)"
 fi
 [[ -x "$server_bin" ]] || { error "platform server is missing: $server_bin"; exit 1; }

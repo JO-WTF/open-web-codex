@@ -501,6 +501,7 @@ pub async fn reconcile(
         custom_instructions,
         agents,
         artifact_contracts,
+        data_requirement_contracts: Vec::new(),
         max_active_child_agents: supervisor_template.detail.max_active_child_agents,
     };
     match supervisor_definitions::publish_or_reuse_trusted(&state, &auth, supervisor_draft).await {

@@ -3,10 +3,11 @@ use std::fmt::Write as _;
 
 use open_web_codex_adapter::{PlatformRuntimeRole, RequiredMcpServer};
 use open_web_codex_platform_contracts::{
-    AgentCapabilityTemplateSource, AgentDatasetReleaseBinding, SupervisorAgentSelection,
-    SupervisorArtifactContractInput, SupervisorDraftRequest, SupervisorInstructionPolicyDetail,
-    SupervisorInstructionPolicySelection, SupervisorInstructionPolicySummary,
-    SupervisorPolicyOrigin, SupervisorPolicySelection, SupervisorPolicySummary,
+    AgentCapabilityTemplateSource, AgentDatasetReleaseBinding, DataRequirementContractReference,
+    SupervisorAgentSelection, SupervisorArtifactContractInput, SupervisorDraftRequest,
+    SupervisorInstructionPolicyDetail, SupervisorInstructionPolicySelection,
+    SupervisorInstructionPolicySummary, SupervisorPolicyOrigin, SupervisorPolicySelection,
+    SupervisorPolicySummary,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -21,15 +22,15 @@ use crate::validation::{
 
 const ENTERPRISE_COPILOT_MANIFEST: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/3.14.0/manifest.json"
+    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/4.0.0/manifest.json"
 ));
 const ENTERPRISE_COPILOT_CUSTOM_INSTRUCTIONS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/3.14.0/custom-instructions.md"
+    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/4.0.0/custom-instructions.md"
 ));
 const ENTERPRISE_COPILOT_ARTIFACT_CONTRACTS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/3.14.0/artifact-contracts.json"
+    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/4.0.0/artifact-contracts.json"
 ));
 const MAX_SUPERVISOR_INSTRUCTIONS_BYTES: usize = 16 * 1024;
 
@@ -58,6 +59,8 @@ struct SupervisorPackageManifest {
     instruction_policy: SupervisorInstructionPolicySelection,
     custom_instructions_file: String,
     artifact_contracts_file: String,
+    #[serde(default)]
+    data_requirement_contracts: Vec<DataRequirementContractReference>,
     agents: Vec<SupervisorAgentReference>,
     runtime_requirements: Vec<RuntimeCapabilityRequirement>,
     execution: SupervisorExecutionContract,
@@ -122,6 +125,8 @@ pub struct SupervisorReleaseSpec {
     pub agents: Vec<SupervisorAgentReference>,
     pub runtime_requirements: Vec<RuntimeCapabilityRequirement>,
     pub artifact_contracts: Vec<ArtifactContract>,
+    #[serde(default)]
+    pub data_requirement_contracts: Vec<DataRequirementContractReference>,
     pub max_active_child_agents: u32,
 }
 
@@ -146,6 +151,7 @@ pub struct ResolvedSupervisorPackage {
     pub dataset_releases: Vec<AgentDatasetReleaseBinding>,
     pub runtime_requirements: Vec<RuntimeCapabilityRequirement>,
     pub artifact_contracts: Vec<ArtifactContract>,
+    pub data_requirement_contracts: Vec<DataRequirementContractReference>,
     pub max_active_child_agents: u32,
 }
 
@@ -287,6 +293,7 @@ fn parse_resource_sources(
                 required: contract.required,
             })
             .collect(),
+        data_requirement_contracts: manifest.data_requirement_contracts,
         max_active_child_agents: manifest.execution.max_active_child_agents,
     };
     let available_agents = agent::list_resolved_builtins().map_err(map_agent_error)?;
@@ -396,6 +403,7 @@ pub fn release_spec_from_authoring_with_policy(
         agents,
         runtime_requirements: governed_runtime_requirements(),
         artifact_contracts,
+        data_requirement_contracts: draft.data_requirement_contracts,
         max_active_child_agents: draft.max_active_child_agents,
     })
 }
@@ -542,6 +550,7 @@ pub fn validate_release_with_agents_and_policy(
         dataset_releases: dataset_releases.into_values().collect(),
         runtime_requirements: spec.runtime_requirements,
         artifact_contracts: artifact_contracts.contracts,
+        data_requirement_contracts: spec.data_requirement_contracts,
         max_active_child_agents: spec.max_active_child_agents,
     })
 }
@@ -729,6 +738,7 @@ fn validate_release_fields(spec: &SupervisorReleaseSpec) -> Result<(), Superviso
         instruction_policy: spec.instruction_policy.clone(),
         custom_instructions_file: "custom-instructions.md".to_string(),
         artifact_contracts_file: "artifact-contracts.json".to_string(),
+        data_requirement_contracts: spec.data_requirement_contracts.clone(),
         agents: spec.agents.clone(),
         runtime_requirements: spec.runtime_requirements.clone(),
         execution: SupervisorExecutionContract {
@@ -778,13 +788,13 @@ mod tests {
         })
         .unwrap();
         assert_eq!(package.required_runtime_roles.len(), 3);
-        assert_eq!(package.version, "3.14.0");
+        assert_eq!(package.version, "4.0.0");
         assert_eq!(package.agents.len(), 3);
-        assert_eq!(package.artifact_contracts.len(), 10);
+        assert_eq!(package.artifact_contracts.len(), 15);
         assert!(package
             .artifact_contracts
             .iter()
-            .any(|contract| contract.artifact_type == "indonesia_service_baseline.v1"));
+            .any(|contract| contract.artifact_type == "network_coverage.v1"));
         assert_eq!(package.max_active_child_agents, 3);
         assert_eq!(package.content_sha256.len(), 64);
         assert!(package
@@ -792,7 +802,7 @@ mod tests {
             .contains("You are the root Supervisor"));
         assert!(package
             .custom_instructions
-            .contains("evidence-driven Indonesian warehouse-network decision"));
+            .contains("Coordinate the Network Supervisor task dynamically"));
         assert!(package
             .developer_instructions
             .contains("# Resolved execution contract"));
@@ -823,9 +833,9 @@ mod tests {
         assert_eq!(
             package.role_spawn_limits,
             [
-                ("agent_15451ec3da17fa338bc798a21838d25d".to_string(), 1),
-                ("agent_24babb7114d53f953a4800fe73740cb8".to_string(), 1),
-                ("agent_ade76f31004f8d9f502c6e0b2398a921".to_string(), 1)
+                ("agent_bcbd895b5f976a809098ee8b3e23115f".to_string(), 1),
+                ("agent_0ce6d3576eadd88251381ad1d46cebe5".to_string(), 1),
+                ("agent_f533a88cc2fcde170744b35f4538deb9".to_string(), 1)
             ]
             .into_iter()
             .collect()
@@ -860,7 +870,7 @@ mod tests {
     fn repository_and_web_supervisor_sources_compile_to_identical_execution_semantics() {
         let repository = resolve(&SupervisorPolicySelection {
             policy_id: "enterprise-supervisor-copilot".to_string(),
-            version: "3.14.0".to_string(),
+            version: "4.0.0".to_string(),
         })
         .unwrap();
         let draft = SupervisorDraftRequest {
@@ -894,6 +904,7 @@ mod tests {
                     required: contract.required,
                 })
                 .collect(),
+            data_requirement_contracts: repository.data_requirement_contracts.clone(),
             max_active_child_agents: repository.max_active_child_agents,
         };
         let available_agents = agent::list_resolved_builtins().unwrap();
@@ -937,6 +948,7 @@ mod tests {
                         spawn_limit: agent.spawn_limit,
                     })
                     .collect(),
+                data_requirement_contracts: repository.data_requirement_contracts.clone(),
                 artifact_contracts: repository
                     .artifact_contracts
                     .iter()
@@ -961,7 +973,7 @@ mod tests {
     #[test]
     fn repository_derived_fields_cannot_drift_from_the_canonical_compiler() {
         let manifest = ENTERPRISE_COPILOT_MANIFEST.replacen(
-            "\"runtimeRole\": \"agent_15451ec3da17fa338bc798a21838d25d\"",
+            "\"runtimeRole\": \"agent_bcbd895b5f976a809098ee8b3e23115f\"",
             "\"runtimeRole\": \"drifted_data_agent\"",
             1,
         );

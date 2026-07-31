@@ -19,6 +19,7 @@ pub enum ErrorKind {
     Unauthorized,
     Forbidden,
     NotFound,
+    WorkspaceUnavailable,
     Conflict,
     Unprocessable,
     RateLimited,
@@ -40,6 +41,15 @@ impl PlatformError {
     pub fn not_found(message: impl Into<String>) -> Self {
         Self {
             kind: ErrorKind::NotFound,
+            message: message.into(),
+            request_id: None,
+            retry_after_ms: None,
+        }
+    }
+
+    pub fn workspace_unavailable(message: impl Into<String>) -> Self {
+        Self {
+            kind: ErrorKind::WorkspaceUnavailable,
             message: message.into(),
             request_id: None,
             retry_after_ms: None,
@@ -86,6 +96,7 @@ impl From<&PlatformError> for u16 {
             ErrorKind::Unauthorized => 401,
             ErrorKind::Forbidden => 403,
             ErrorKind::NotFound => 404,
+            ErrorKind::WorkspaceUnavailable => 409,
             ErrorKind::Conflict => 409,
             ErrorKind::Unprocessable => 422,
             ErrorKind::RateLimited => 429,

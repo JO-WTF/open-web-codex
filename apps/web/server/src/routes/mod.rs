@@ -1,11 +1,13 @@
 pub mod agent_definition_resources;
 pub mod agent_definitions;
+pub mod analysis_gate;
 pub mod approvals;
 pub mod artifacts;
 pub mod bootstrap;
 pub mod browser_workspaces;
 pub mod capability_packages;
 pub mod configuration;
+pub mod data_intake;
 pub mod events;
 pub mod generation;
 pub mod github;
@@ -383,6 +385,15 @@ pub fn router(
             axum::routing::get(workspace_datasets::get),
         )
         .route(
+            "/workspaces/{workspace_id}/data-drafts",
+            axum::routing::post(data_intake::create_draft)
+                .layer(axum::extract::DefaultBodyLimit::max(252 * 1024 * 1024)),
+        )
+        .route(
+            "/workspaces/{workspace_id}/source-assets",
+            axum::routing::get(data_intake::list_source_assets),
+        )
+        .route(
             "/workspaces/{id}/git-roots",
             axum::routing::get(workspaces::list_git_roots).put(workspaces::set_git_root),
         )
@@ -554,6 +565,26 @@ pub fn router(
         .route(
             "/tasks/{id}/messages",
             axum::routing::post(tasks::send_message),
+        )
+        .route(
+            "/tasks/{id}/data-intake",
+            axum::routing::get(data_intake::get),
+        )
+        .route(
+            "/tasks/{id}/data-intake/responses",
+            axum::routing::post(data_intake::respond),
+        )
+        .route(
+            "/tasks/{id}/analysis-start",
+            axum::routing::post(data_intake::analysis_start),
+        )
+        .route(
+            "/internal/analysis-gate/v1/authorize",
+            axum::routing::post(analysis_gate::authorize),
+        )
+        .route(
+            "/tasks/{id}/analysis-readiness",
+            axum::routing::post(runs::analysis_readiness),
         )
         .route(
             "/tasks/{id}/events",

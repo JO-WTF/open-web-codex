@@ -89,6 +89,12 @@ export type RunReadinessRequest = {
   agent: AgentRunSelection | null;
   fork_thread_id?: string | null;
   fork_source_run_id?: string | null;
+  purpose?: "conversation" | "analysis";
+  task_id?: string | null;
+};
+
+export type TaskAnalysisReadinessRequest = RunReadinessRequest & {
+  workspace_id: string;
 };
 
 export type RunReadinessStatus = "ready" | "degraded" | "blocked";
@@ -100,7 +106,8 @@ export type RunReadinessCheckCode =
   | "workspace_dependencies"
   | "runtime_capabilities"
   | "mcp_servers"
-  | "map_presentation";
+  | "map_presentation"
+  | "data_intake";
 
 export type RunReadinessAction =
   | "open_workspace_data"
@@ -121,6 +128,154 @@ export type RunReadiness = {
   status: RunReadinessStatus;
   evaluation_fingerprint: string;
   checks: RunReadinessCheck[];
+  scope?: "thread" | "analysis";
+  thread_status?: RunReadinessStatus;
+  input_status?: RunReadinessStatus;
+  analysis_status?: RunReadinessStatus;
+};
+
+export type DataRequirementField = {
+  name: string;
+  displayName: string;
+  dataType: string;
+  unit: string | null;
+  granularity: string | null;
+  required: boolean;
+  derivable: boolean;
+};
+
+export type DataRequirementEntity = {
+  name: string;
+  displayName: string;
+  requiredFields: DataRequirementField[];
+  conditional: string | null;
+};
+
+export type DataRequirementParameter = {
+  name: string;
+  displayName: string;
+  dataType: string;
+  unit: string | null;
+  required: boolean;
+  description: string;
+};
+
+export type DataRequirementContract = {
+  contractId: string;
+  version: string;
+  contentSha256: string;
+  displayName: string;
+  description: string;
+  requiredEntities: DataRequirementEntity[];
+  businessParameters: DataRequirementParameter[];
+};
+
+export type DataIntakeStatus =
+  | "active"
+  | "ready"
+  | "failed"
+  | "cancelled";
+
+export type DataIntakeGap = {
+  code: string;
+  path: string;
+  message: string;
+  required: boolean;
+};
+
+export type DataMappingCandidate = {
+  sourceAssetId: string | null;
+  sourceRef?: string | null;
+  sourceDisplayName?: string | null;
+  sourcePath: string;
+  sourceField: string;
+  targetEntity: string;
+  targetField: string;
+  sourceUnit?: string | null;
+  targetUnit?: string | null;
+  transformation?: string | null;
+  conflict?: string | null;
+  confidence: number;
+  reason: string;
+  requiresConfirmation: boolean;
+};
+
+export type DataIntakeParameterAnswer = {
+  name: string;
+  value: unknown;
+  unit: string | null;
+  source: string;
+};
+
+export type SourceAssetSummary = {
+  assetId: string;
+  fileName: string;
+  mediaType: string;
+  byteSize: number;
+};
+
+export type DataIntakeResponseRequest = {
+  requestId: string;
+  expectedSessionRevision: number;
+  idempotencyKey: string;
+  response: unknown;
+};
+
+export type AnalysisStartRequest = {
+  requestId: string;
+  expectedSessionRevision: number;
+  readinessFingerprint: string;
+  idempotencyKey: string;
+};
+
+export type AnalysisStartResponse = {
+  executionSnapshotId: string;
+  taskDatasetBindingId: string;
+  readinessFingerprint: string;
+  state: string;
+};
+
+export type WorkspaceDataDraftSummary = {
+  draftId: string;
+  workspaceId: string;
+  revision: number;
+  assets: SourceAssetSummary[];
+};
+
+export type DataIntakeSessionSummary = {
+  intakeId: string;
+  taskId: string;
+  workspaceId: string;
+  contract: DataRequirementContract;
+  status: DataIntakeStatus;
+  inputRevision: number;
+  mappingRevision: number;
+  gapFingerprint: string;
+  evidenceFingerprint: string;
+  gaps: DataIntakeGap[];
+  candidates: DataMappingCandidate[];
+  confirmedMapping: DataMappingCandidate[];
+  parameters: DataRequirementParameter[];
+  answers: DataIntakeParameterAnswer[];
+  attemptCount: number;
+  failureCode: string | null;
+  failureSummary: string | null;
+  inputRequests: DataIntakeInputRequest[];
+  requirementProfile: unknown | null;
+  sourceProfile: unknown | null;
+  mappingProposal: unknown | null;
+  readinessReview: unknown | null;
+};
+
+export type DataIntakeInputRequest = {
+  requestId: string;
+  taskId: string;
+  intakeId: string;
+  kind: string;
+  sessionRevision: number;
+  status: string;
+  prompt: string;
+  value: unknown;
 };
 
 export type SupervisorPolicySummary = SupervisorPolicySelection & {

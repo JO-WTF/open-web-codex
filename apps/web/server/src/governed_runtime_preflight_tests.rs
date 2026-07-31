@@ -8,7 +8,7 @@ use super::{resolve_bound_agent, resolve_bound_policy, GovernedRuntimePreflightE
 async fn rejects_a_leased_snapshot_that_no_longer_matches_the_published_policy() {
     let policy = crate::supervisor_policy::resolve_builtin(&SupervisorPolicySelection {
         policy_id: "enterprise-supervisor-copilot".to_string(),
-        version: "3.14.0".to_string(),
+        version: "4.0.0".to_string(),
     })
     .expect("published policy");
     let mut lease = SupervisorPolicyLease {
@@ -37,7 +37,7 @@ async fn rejects_a_leased_snapshot_that_no_longer_matches_the_published_policy()
 #[tokio::test]
 async fn rejects_a_root_agent_snapshot_that_no_longer_matches_the_published_agent() {
     let agent =
-        open_web_codex_supervisor_catalog::agent::resolve_builtin("enterprise-data-agent", "3.1.0")
+        open_web_codex_supervisor_catalog::agent::resolve_builtin("enterprise-data-agent", "4.0.0")
             .expect("published Agent");
     let mut lease = AgentRunLease {
         binding_id: Uuid::nil(),

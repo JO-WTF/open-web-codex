@@ -276,11 +276,11 @@ pub async fn send_message(
     Extension(profile): Extension<RuntimeProfileBinding>,
     Json(req): Json<SendMessageRequest>,
 ) -> ApiResult<SendMessageResponse> {
-    if req.text.trim().is_empty() && req.images.is_empty() {
+    if req.text.trim().is_empty() && req.images.is_empty() && req.source_asset_ids.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(PlatformError::bad_request(
-                "message text or at least one image is required",
+                "message text, image, or Workspace data attachment is required",
             )),
         ));
     }
@@ -350,6 +350,82 @@ pub async fn send_message(
             ));
         }
     };
+    if req.source_asset_ids.len() > 32 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(PlatformError::bad_request(
+                "at most 32 Workspace data attachments may be sent with one message",
+            )),
+        ));
+    }
+    let attachment_summary = if req.source_asset_ids.is_empty() {
+        String::new()
+    } else {
+        let rows = sqlx::query(
+            "SELECT id, file_name, media_type, byte_size, content_sha256 \
+             FROM workspace_data_source_assets \
+             WHERE organization_id = $1 AND workspace_id = $2 AND id = ANY($3)",
+        )
+        .bind(auth.organization_id)
+        .bind(workspace.id.parse::<Uuid>().map_err(|_| {
+            (
+                StatusCode::CONFLICT,
+                Json(PlatformError::bad_request(
+                    "active Workspace identity is invalid",
+                )),
+            )
+        })?)
+        .bind(&req.source_asset_ids)
+        .fetch_all(&state.db)
+        .await
+        .map_err(database_error)?;
+        if rows.len() != req.source_asset_ids.len() {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(PlatformError::forbidden(
+                    "one or more data attachments are not in the active Workspace",
+                )),
+            ));
+        }
+        let descriptions = rows
+            .iter()
+            .map(|row| {
+                format!(
+                    "{} [asset:{}] ({}, {} bytes)",
+                    row.get::<String, _>("file_name"),
+                    row.get::<Uuid, _>("id"),
+                    row.get::<String, _>("media_type"),
+                    row.get::<i64, _>("byte_size"),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        format!(
+            "\n\nWorkspace data attachments for this request (the Workspace is the authority; inspect them with the data capability): {descriptions}"
+        )
+    };
+    let message_text = if req.text.trim().is_empty() {
+        format!(
+            "Please inspect the attached Workspace data and continue the task.{attachment_summary}"
+        )
+    } else {
+        format!("{}{attachment_summary}", req.text)
+    };
+    crate::routes::data_intake::ensure_session_for_thread(
+        &state,
+        &auth,
+        task_id,
+        workspace.id.parse::<Uuid>().map_err(|_| {
+            (
+                StatusCode::CONFLICT,
+                Json(PlatformError::bad_request(
+                    "active Workspace identity is invalid",
+                )),
+            )
+        })?,
+        &thread_id,
+    )
+    .await?;
     if active_run.get::<String, _>("status") == "recovery_pending" {
         orchestrator
             .recover_run(RecoverRunRequest {
@@ -385,7 +461,7 @@ pub async fn send_message(
         .send_user_message(
             &workspace,
             &thread_id,
-            &req.text,
+            &message_text,
             &TurnOptions {
                 model: selection.as_ref().map(|value| value.model_id.clone()),
                 model_provider: selection.as_ref().map(|value| value.provider_id.clone()),

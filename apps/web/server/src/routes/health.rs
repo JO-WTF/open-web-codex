@@ -22,7 +22,12 @@ pub async fn health_check(
     (
         status,
         Json(HealthResponse {
-            ok: runtime_ok,
+            ok: runtime_ok && state.schema_current,
+            schema_status: if state.schema_current {
+                "current".to_string()
+            } else {
+                "not_current".to_string()
+            },
             version: env!("CARGO_PKG_VERSION").to_string(),
             started_at: state.started_at_utc,
             uptime_seconds: uptime,

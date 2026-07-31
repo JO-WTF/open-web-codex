@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::Router;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use clap::Parser;
 use open_web_codex_approval_service::{ApprovalService, ResolvedApproval};
 use open_web_codex_git_runtime::{GitRuntime, GitRuntimeConfig};
@@ -117,7 +118,21 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("database migrations complete");
     }
 
-    let state = AppState::new(pool);
+    assert_required_data_intake_schema(&pool).await?;
+
+    let master_key = match std::env::var("OPEN_WEB_CODEX_MASTER_KEY") {
+        Ok(value) => MasterKey::from_base64(&value)?,
+        Err(_) if cli.codex_mode == "real" => {
+            return Err(anyhow::anyhow!(
+                "OPEN_WEB_CODEX_MASTER_KEY is required in real Codex mode"
+            ));
+        }
+        Err(_) => MasterKey::generate()?,
+    };
+    let analysis_gate_key = master_key.derive_key(b"analysis-gate/v1").to_vec();
+    let state = AppState::new(pool)
+        .with_schema_current(true)
+        .with_analysis_gate_key(analysis_gate_key.clone());
     let mut git_config = GitRuntimeConfig::new(cli.runner_root.clone());
     if cli.allow_local_git_sources {
         tracing::warn!("local filesystem Git sources are enabled");
@@ -137,15 +152,6 @@ async fn main() -> anyhow::Result<()> {
         &profile_binding.name,
     )
     .await?;
-    let master_key = match std::env::var("OPEN_WEB_CODEX_MASTER_KEY") {
-        Ok(value) => MasterKey::from_base64(&value)?,
-        Err(_) if cli.codex_mode == "real" => {
-            return Err(anyhow::anyhow!(
-                "OPEN_WEB_CODEX_MASTER_KEY is required in real Codex mode"
-            ));
-        }
-        Err(_) => MasterKey::generate()?,
-    };
     let key_version =
         std::env::var("OPEN_WEB_CODEX_MASTER_KEY_VERSION").unwrap_or_else(|_| "v1".to_string());
     let configuration_secrets = Arc::new(PostgresSecretStore::new(
@@ -186,7 +192,18 @@ async fn main() -> anyhow::Result<()> {
                 let secret_environment = providers.startup_secret_environment().await?;
                 let host_config =
                     ProfileHostConfig::new(cli.profile_id.clone(), codex_home, workspace_root)
-                        .with_codex_bin(cli.codex_bin.clone());
+                        .with_codex_bin(cli.codex_bin.clone())
+                        .with_environment(
+                            "OPEN_WEB_CODEX_ANALYSIS_GATE_URL",
+                            format!(
+                                "http://{}/api/internal/analysis-gate/v1/authorize",
+                                cli.bind
+                            ),
+                        )
+                        .with_environment(
+                            "OPEN_WEB_CODEX_ANALYSIS_GATE_KEY",
+                            URL_SAFE_NO_PAD.encode(&analysis_gate_key),
+                        );
                 let workspace_root = host_config.workspace_root.clone();
                 let host = registry
                     .register_with_secret_environment(host_config, secret_environment)
@@ -365,6 +382,83 @@ async fn main() -> anyhow::Result<()> {
     let _ = runner_task.await;
     serve_result?;
 
+    Ok(())
+}
+
+async fn assert_required_data_intake_schema(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+    const REQUIRED_TABLES: &[&str] = &[
+        "workspace_data_source_assets",
+        "workspace_data_drafts",
+        "workspace_data_draft_assets",
+        "data_intake_sessions",
+        "data_intake_input_requests",
+        "task_dataset_bindings",
+        "task_analysis_execution_snapshots",
+        "task_intake_artifact_projections",
+        "task_policy_agent_producers",
+    ];
+    for table in REQUIRED_TABLES {
+        let present: bool = sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
+            .bind(format!("public.{table}"))
+            .fetch_one(pool)
+            .await
+            .map_err(|_| anyhow::anyhow!("database_schema_not_current"))?;
+        if !present {
+            anyhow::bail!("database_schema_not_current");
+        }
+    }
+    const REQUIRED_COLUMNS: &[(&str, &str)] = &[
+        ("workspaces", "source_revision"),
+        ("workspace_data_source_assets", "content_sha256"),
+        ("workspace_data_source_assets", "relative_path"),
+        ("data_intake_sessions", "requirement_artifact_id"),
+        ("data_intake_sessions", "current_binding_id"),
+        ("data_intake_sessions", "evidence_fingerprint"),
+        ("data_intake_input_requests", "session_revision"),
+        ("data_intake_input_requests", "evidence_fingerprint"),
+        ("data_intake_input_requests", "response_state"),
+        ("task_dataset_bindings", "fingerprint"),
+        ("task_analysis_execution_snapshots", "readiness_fingerprint"),
+        ("artifacts", "intake_envelope"),
+    ];
+    for (table, column) in REQUIRED_COLUMNS {
+        let present: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                 SELECT 1 FROM information_schema.columns
+                 WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2
+             )",
+        )
+        .bind(table)
+        .bind(column)
+        .fetch_one(pool)
+        .await
+        .map_err(|_| anyhow::anyhow!("database_schema_not_current"))?;
+        if !present {
+            anyhow::bail!("database_schema_not_current");
+        }
+    }
+    const REQUIRED_INDEXES: &[&str] = &[
+        "data_intake_input_requests_pending",
+        "data_intake_input_requests_open_evidence",
+        "data_intake_input_requests_response_key",
+        "task_dataset_bindings_current",
+        "task_policy_agent_producers_task",
+    ];
+    for index in REQUIRED_INDEXES {
+        let present: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                 SELECT 1 FROM pg_indexes
+                 WHERE schemaname = 'public' AND indexname = $1
+             )",
+        )
+        .bind(index)
+        .fetch_one(pool)
+        .await
+        .map_err(|_| anyhow::anyhow!("database_schema_not_current"))?;
+        if !present {
+            anyhow::bail!("database_schema_not_current");
+        }
+    }
     Ok(())
 }
 

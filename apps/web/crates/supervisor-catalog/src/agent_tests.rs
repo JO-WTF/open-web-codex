@@ -4,9 +4,9 @@ use super::*;
 fn publishes_exact_runtime_roles_and_seals_role_content() {
     let definitions = list_published().unwrap();
     assert_eq!(definitions.len(), 5);
-    assert_eq!(definitions[0].version, "3.1.0");
-    assert_eq!(definitions[1].version, "3.6.0");
-    assert_eq!(definitions[2].version, "1.4.0");
+    assert_eq!(definitions[0].version, "4.0.0");
+    assert_eq!(definitions[1].version, "4.0.0");
+    assert_eq!(definitions[2].version, "2.0.0");
     assert_eq!(definitions[3].version, "2.0.0");
     assert_eq!(definitions[4].version, "2.0.0");
 
@@ -18,9 +18,9 @@ fn publishes_exact_runtime_roles_and_seals_role_content() {
             .map(|role| role.name.as_str())
             .collect::<Vec<_>>(),
         vec![
-            "agent_15451ec3da17fa338bc798a21838d25d",
-            "agent_24babb7114d53f953a4800fe73740cb8",
-            "agent_ade76f31004f8d9f502c6e0b2398a921",
+            "agent_bcbd895b5f976a809098ee8b3e23115f",
+            "agent_0ce6d3576eadd88251381ad1d46cebe5",
+            "agent_f533a88cc2fcde170744b35f4538deb9",
             "agent_9040f76e7387b00fff5e63fd574e63df",
             "agent_b85d26c7975f69e43b87043fc48e08ea"
         ]
@@ -48,15 +48,11 @@ fn publishes_exact_runtime_roles_and_seals_role_content() {
     let data_role = &roles[0].config_toml;
     assert!(data_role.contains(
         "[plugins.local-supply-chain-network-planner.mcp_servers.supply_chain_data]\n\
-         enabled = false"
+         enabled = true"
     ));
     assert!(data_role.contains(
         "[plugins.local-supply-chain-network-planner.mcp_servers.supply_chain_planner]\n\
          enabled = false"
-    ));
-    assert!(data_role.contains(
-        "[plugins.local-supply-chain-network-planner.mcp_servers.supply_chain_indonesia]\n\
-         enabled = true"
     ));
 }
 
@@ -65,7 +61,7 @@ fn retired_project_agent_versions_are_not_runtime_contracts() {
     for (definition_id, version) in [
         ("enterprise-network-planning-agent", "3.4.0"),
         ("enterprise-network-planning-agent", "3.5.0"),
-        ("enterprise-visualization-agent", "1.3.0"),
+        ("enterprise-visualization-agent", "1.4.0"),
     ] {
         assert_eq!(
             resolve_builtin(definition_id, version).unwrap_err(),
@@ -111,13 +107,13 @@ fn definitions_bind_versions_to_reviewed_runtime_instructions() {
 #[test]
 fn platform_runtime_role_names_are_reserved() {
     assert!(is_platform_runtime_role(
-        "agent_15451ec3da17fa338bc798a21838d25d"
+        "agent_bcbd895b5f976a809098ee8b3e23115f"
     ));
     assert!(is_platform_runtime_role(
-        "agent_24babb7114d53f953a4800fe73740cb8"
+        "agent_0ce6d3576eadd88251381ad1d46cebe5"
     ));
     assert!(is_platform_runtime_role(
-        "agent_ade76f31004f8d9f502c6e0b2398a921"
+        "agent_f533a88cc2fcde170744b35f4538deb9"
     ));
     assert!(is_platform_runtime_role(
         "agent_9040f76e7387b00fff5e63fd574e63df"
@@ -139,11 +135,11 @@ fn user_release_inherits_only_reviewed_template_capabilities() {
         developer_instructions:
             "Inspect the authorized planning sources and publish a validated dataset.".to_string(),
         input_artifact_types: Vec::new(),
-        output_artifact_types: vec!["indonesia_dataset_inspection.v1".to_string()],
+        output_artifact_types: vec!["planning-dataset.v2".to_string()],
         capability_template: AgentCapabilityTemplateSelection {
             source: AgentCapabilityTemplateSource::RepositoryAgent,
             definition_id: "enterprise-data-agent".to_string(),
-            version: "3.1.0".to_string(),
+            version: "4.0.0".to_string(),
             release_id: None,
         },
         dataset_releases: Vec::new(),
@@ -151,7 +147,7 @@ fn user_release_inherits_only_reviewed_template_capabilities() {
     let resolved = validate_user_release(spec.clone()).unwrap();
     assert_eq!(
         resolved.required_capabilities,
-        resolve_builtin("enterprise-data-agent", "3.1.0")
+        resolve_builtin("enterprise-data-agent", "4.0.0")
             .unwrap()
             .required_capabilities
     );
@@ -162,10 +158,10 @@ fn user_release_inherits_only_reviewed_template_capabilities() {
     assert!(resolved
         .runtime_role
         .config_toml
-        .contains("enabled_tools = [\"inspect_indonesia_dataset_release\""));
+        .contains("enabled_tools = [\"discover_workspace_sources\""));
     assert!(resolved.runtime_role.config_toml.contains(
         "[plugins.local-supply-chain-network-planner.mcp_servers.supply_chain_data]\n\
-         enabled = false"
+         enabled = true"
     ));
     assert_eq!(resolved.developer_instructions, spec.developer_instructions);
 
@@ -203,7 +199,7 @@ fn repository_and_web_agent_sources_compile_to_identical_execution_semantics() {
 
 #[test]
 fn user_release_seals_exact_dataset_release_without_a_host_path() {
-    let template = resolve_builtin("enterprise-data-agent", "3.1.0").unwrap();
+    let template = resolve_builtin("enterprise-data-agent", "4.0.0").unwrap();
     let workspace_id = Uuid::now_v7();
     let release_id = Uuid::now_v7();
     let mut spec = template.authoring_spec();
@@ -239,13 +235,13 @@ fn user_release_seals_exact_dataset_release_without_a_host_path() {
 
 #[test]
 fn visualization_agent_binds_each_server_to_its_own_capability_root() {
-    let definition = resolve_builtin("enterprise-visualization-agent", "1.4.0").unwrap();
+    let definition = resolve_builtin("enterprise-visualization-agent", "2.0.0").unwrap();
 
     assert_eq!(
         definition.required_capabilities,
         vec![
             "map_utils.create_map_card".to_string(),
-            "supply_chain_indonesia.prepare_indonesia_map_render".to_string(),
+            "supply_chain_planner.prepare_network_map_render".to_string(),
         ]
     );
     assert_eq!(definition.required_mcp_servers.len(), 2);
@@ -263,7 +259,7 @@ fn visualization_agent_binds_each_server_to_its_own_capability_root() {
     );
     assert_eq!(
         definition.required_mcp_servers[1].name,
-        "supply_chain_indonesia"
+        "supply_chain_planner"
     );
     assert_eq!(
         definition.required_mcp_servers[1].capability_roots,
@@ -278,6 +274,6 @@ fn visualization_agent_binds_each_server_to_its_own_capability_root() {
     );
     assert_eq!(
         definition.required_mcp_servers[1].tools,
-        vec!["prepare_indonesia_map_render"]
+        vec!["prepare_network_map_render"]
     );
 }

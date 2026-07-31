@@ -10,6 +10,8 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HealthResponse {
     pub ok: bool,
+    #[serde(rename = "schemaStatus")]
+    pub schema_status: String,
     pub version: String,
     pub started_at: DateTime<Utc>,
     pub uptime_seconds: u64,
@@ -336,6 +338,10 @@ pub struct StartRunRequest {
     pub idempotency_key: String,
     pub readiness_fingerprint: String,
     pub workspace_id: Uuid,
+    /// Conversation runs may be created before business input is ready. An
+    /// analysis run is only accepted after the immutable input binding exists.
+    #[serde(default)]
+    pub purpose: RunStartPurpose,
     #[serde(default)]
     pub fork_thread_id: Option<String>,
     #[serde(default)]
@@ -361,6 +367,31 @@ pub struct RunReadinessRequest {
     pub fork_thread_id: Option<String>,
     #[serde(default)]
     pub fork_source_run_id: Option<Uuid>,
+    #[serde(default)]
+    pub purpose: RunStartPurpose,
+    /// Analysis readiness is task-scoped because the binding belongs to the
+    /// Task. A pre-Task conversation check intentionally leaves this unset.
+    #[serde(default)]
+    pub task_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct TaskAnalysisReadinessRequest {
+    pub workspace_id: Uuid,
+    #[serde(flatten)]
+    pub execution: RunReadinessRequest,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RunStartPurpose {
+    /// Establishes a Thread against an existing Workspace and supports the
+    /// durable data-intake conversation. It never claims analysis readiness.
+    Conversation,
+    /// Starts an analysis execution and therefore requires Input Readiness.
+    #[default]
+    Analysis,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -381,6 +412,7 @@ pub enum RunReadinessCheckCode {
     RuntimeCapabilities,
     McpServers,
     MapPresentation,
+    DataIntake,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -407,6 +439,249 @@ pub struct RunReadiness {
     pub status: RunReadinessStatus,
     pub evaluation_fingerprint: String,
     pub checks: Vec<RunReadinessCheck>,
+    /// The readiness layer represented by `status`; the three layer snapshot
+    /// is included so a Thread can be ready while its future analysis remains
+    /// blocked on data intake.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<ReadinessScope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_status: Option<RunReadinessStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_status: Option<RunReadinessStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_status: Option<RunReadinessStatus>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadinessScope {
+    Thread,
+    Analysis,
+}
+
+// ── Thread-first data intake ───────────────────────────────────────
+
+/// Versioned, capability-owned contract selected by the Supervisor. The
+/// browser receives only human-readable requirements; the semantic schema is
+/// never accepted from browser input.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DataRequirementContract {
+    pub contract_id: String,
+    pub version: String,
+    pub content_sha256: String,
+    pub display_name: String,
+    pub description: String,
+    pub required_entities: Vec<DataRequirementEntity>,
+    pub business_parameters: Vec<DataRequirementParameter>,
+}
+
+/// A capability-owned contract reference selected by an immutable Supervisor
+/// Policy.  The platform persists and authorizes this reference, but does not
+/// interpret the domain schema or provide business defaults.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DataRequirementContractReference {
+    pub contract_id: String,
+    pub version: String,
+    pub content_sha256: String,
+    pub capability_package: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DataRequirementEntity {
+    pub name: String,
+    pub display_name: String,
+    pub required_fields: Vec<DataRequirementField>,
+    pub conditional: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DataRequirementField {
+    pub name: String,
+    pub display_name: String,
+    pub data_type: String,
+    pub unit: Option<String>,
+    pub granularity: Option<String>,
+    pub required: bool,
+    pub derivable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DataRequirementParameter {
+    pub name: String,
+    pub display_name: String,
+    pub data_type: String,
+    pub unit: Option<String>,
+    pub required: bool,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DataIntakeStatus {
+    Active,
+    Ready,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DataGapKind {
+    MissingEntity,
+    MissingField,
+    AmbiguousMapping,
+    InvalidUnit,
+    InvalidGranularity,
+    MissingRelation,
+    InvalidParameter,
+    UnsupportedFormat,
+    ProfileUnavailable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DataIntakeGap {
+    pub code: DataGapKind,
+    pub path: String,
+    pub message: String,
+    pub required: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DataMappingCandidate {
+    #[serde(default)]
+    pub source_asset_id: Option<Uuid>,
+    #[serde(default)]
+    pub source_ref: Option<String>,
+    #[serde(default)]
+    pub source_display_name: Option<String>,
+    pub source_path: String,
+    pub source_field: String,
+    pub target_entity: String,
+    pub target_field: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_unit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_unit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transformation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conflict: Option<String>,
+    pub confidence: f32,
+    pub reason: String,
+    pub requires_confirmation: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DataIntakeParameterAnswer {
+    pub name: String,
+    pub value: serde_json::Value,
+    pub unit: Option<String>,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceDataDraftSummary {
+    pub draft_id: Uuid,
+    pub workspace_id: Uuid,
+    pub revision: i64,
+    pub assets: Vec<SourceAssetSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceAssetSummary {
+    pub asset_id: Uuid,
+    pub file_name: String,
+    pub media_type: String,
+    pub byte_size: i64,
+    /// Kept in the platform contract for server-side audit joins, but never
+    /// serialized to the browser. The browser only needs an opaque asset ID.
+    #[serde(skip_serializing)]
+    pub content_sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DataIntakeSessionSummary {
+    pub intake_id: Uuid,
+    pub task_id: Uuid,
+    pub workspace_id: Uuid,
+    pub contract: DataRequirementContract,
+    pub status: DataIntakeStatus,
+    pub input_revision: i64,
+    pub mapping_revision: i64,
+    pub gap_fingerprint: String,
+    pub evidence_fingerprint: String,
+    pub gaps: Vec<DataIntakeGap>,
+    pub candidates: Vec<DataMappingCandidate>,
+    pub confirmed_mapping: Vec<DataMappingCandidate>,
+    pub parameters: Vec<DataRequirementParameter>,
+    pub answers: Vec<DataIntakeParameterAnswer>,
+    pub attempt_count: i32,
+    pub failure_code: Option<String>,
+    pub failure_summary: Option<String>,
+    #[serde(default)]
+    pub input_requests: Vec<DataIntakeInputRequest>,
+    #[serde(default)]
+    pub requirement_profile: Option<serde_json::Value>,
+    #[serde(default)]
+    pub source_profile: Option<serde_json::Value>,
+    #[serde(default)]
+    pub mapping_proposal: Option<serde_json::Value>,
+    #[serde(default)]
+    pub readiness_review: Option<serde_json::Value>,
+}
+
+/// A browser-safe, task-scoped request projected from a Supervisor/Agent
+/// artifact.  The answer is persisted by the platform and resumed in a new
+/// Turn; no Runtime request handle is exposed to the browser.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DataIntakeInputRequest {
+    pub request_id: Uuid,
+    pub task_id: Uuid,
+    pub intake_id: Uuid,
+    pub kind: String,
+    pub session_revision: i64,
+    pub status: String,
+    pub prompt: String,
+    pub value: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DataIntakeResponseRequest {
+    pub request_id: Uuid,
+    pub expected_session_revision: i64,
+    pub idempotency_key: String,
+    pub response: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalysisStartRequest {
+    pub request_id: Uuid,
+    pub expected_session_revision: i64,
+    pub readiness_fingerprint: String,
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalysisStartResponse {
+    pub execution_snapshot_id: Uuid,
+    pub task_dataset_binding_id: Uuid,
+    pub readiness_fingerprint: String,
+    pub state: String,
 }
 
 /// Response from starting a run.
@@ -510,6 +785,8 @@ pub struct SupervisorPolicyDetail {
     pub custom_instructions: String,
     pub agents: Vec<SupervisorAgentSelection>,
     pub artifact_contracts: Vec<SupervisorArtifactContractInput>,
+    #[serde(default)]
+    pub data_requirement_contracts: Vec<DataRequirementContractReference>,
     pub max_active_child_agents: u32,
     pub content_sha256: String,
     pub execution_semantics_sha256: String,
@@ -545,6 +822,8 @@ pub struct SupervisorDraftRequest {
     pub custom_instructions: String,
     pub agents: Vec<SupervisorAgentSelection>,
     pub artifact_contracts: Vec<SupervisorArtifactContractInput>,
+    #[serde(default)]
+    pub data_requirement_contracts: Vec<DataRequirementContractReference>,
     pub max_active_child_agents: u32,
 }
 
@@ -1634,7 +1913,12 @@ pub struct RememberApprovalRuleRequest {
 /// Request to send a user message to a task's active thread.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendMessageRequest {
+    #[serde(default)]
     pub text: String,
+    /// Opaque Workspace SourceAsset ids attached as evidence hints. The
+    /// platform validates ownership; Runtime receives only safe descriptions.
+    #[serde(default)]
+    pub source_asset_ids: Vec<Uuid>,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]

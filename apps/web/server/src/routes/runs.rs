@@ -12,7 +12,7 @@ use open_web_codex_platform_contracts::error::{ErrorKind, PlatformError};
 use open_web_codex_platform_contracts::{
     InterruptRunRequest, ReviewTarget as PlatformReviewTarget, Run, RunFailureCode, RunReadiness,
     RunReadinessRequest, RunReadinessStatus, StartReviewRequest, StartRunRequest, StartRunResponse,
-    SteerRunRequest,
+    SteerRunRequest, TaskAnalysisReadinessRequest,
 };
 use open_web_codex_platform_store::AppState;
 use open_web_codex_provider_service::secured::{AuthorizedProviderOperations, ProviderActor};
@@ -80,6 +80,73 @@ pub async fn readiness(
     Ok(Json(evaluated.readiness))
 }
 
+/// Evaluate task-scoped Analysis Readiness. Unlike Thread readiness this
+/// endpoint can require the immutable intake/release binding for the exact
+/// Task, so a missing dataset is an explicit blocked result.
+pub async fn analysis_readiness(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(task_id): Path<Uuid>,
+    Extension(orchestrator): Extension<Arc<RunOrchestrator>>,
+    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
+    Extension(providers): Extension<Arc<dyn AuthorizedProviderOperations>>,
+    Extension(git): Extension<Arc<open_web_codex_git_runtime::GitRuntime>>,
+    Extension(configuration_secrets): Extension<Arc<PostgresSecretStore>>,
+    Extension(profile): Extension<RuntimeProfileBinding>,
+    Json(mut request): Json<TaskAnalysisReadinessRequest>,
+) -> ApiResult<RunReadiness> {
+    require_runtime_profile(&state.db, &auth, &profile.runtime_key).await?;
+    let task_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM tasks WHERE id = $1 AND organization_id = $2)",
+    )
+    .bind(task_id)
+    .bind(auth.organization_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(database_error)?;
+    if !task_exists {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(PlatformError::not_found("Task was not found")),
+        ));
+    }
+    let workspace = readiness_workspace(&state, &auth, request.workspace_id).await?;
+    let workspace_id = Uuid::parse_str(&workspace.id).expect("Workspace id was created from UUID");
+    request.execution.purpose = open_web_codex_platform_contracts::RunStartPurpose::Analysis;
+    request.execution.task_id = Some(task_id);
+    let execution = resolve_readiness_execution(&orchestrator, &auth, request.execution).await?;
+    let catalog = providers
+        .list(ProviderActor {
+            user_id: auth.user_id,
+            organization_id: auth.organization_id,
+        })
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(PlatformError::internal(
+                    "Provider catalog is temporarily unavailable",
+                )),
+            )
+        })?;
+    let runtime_healthy = adapter.health().await.is_ok_and(|health| health.ok);
+    let browser_map_configured =
+        super::configuration::browser_map_configured(&state, &configuration_secrets).await?;
+    let evaluated = run_readiness::evaluate(
+        &state.db,
+        &git,
+        &profile,
+        auth.organization_id,
+        workspace_id,
+        &execution,
+        &catalog,
+        runtime_healthy,
+        browser_map_configured,
+    )
+    .await;
+    Ok(Json(evaluated.readiness))
+}
+
 /// Queue a Run against an existing authorized Workspace. The worker owns only
 /// Run scheduling and Runtime delivery; Workspace provisioning is independent.
 pub async fn start_run(
@@ -95,6 +162,14 @@ pub async fn start_run(
     Json(req): Json<StartRunRequest>,
 ) -> ApiResult<StartRunResponse> {
     require_runtime_profile(&state.db, &auth, &profile.runtime_key).await?;
+    if req.purpose == open_web_codex_platform_contracts::RunStartPurpose::Analysis {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(PlatformError::bad_request(
+                "analysis_start_required: analysis Turns must be created through /api/tasks/:task_id/analysis-start",
+            )),
+        ));
+    }
     if req.supervisor_policy.is_some() && req.agent.is_some() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -162,6 +237,8 @@ pub async fn start_run(
         agent: req.agent.clone(),
         fork_thread_id: req.fork_thread_id.clone(),
         fork_source_run_id: req.fork_source_run_id,
+        purpose: req.purpose,
+        task_id: Some(task_id),
     };
     let readiness_request =
         resolve_readiness_execution(&orchestrator, &auth, readiness_request).await?;
@@ -763,7 +840,20 @@ async fn readiness_workspace(
     workspace_id: Uuid,
 ) -> Result<AuthorizedWorkspace, (StatusCode, Json<PlatformError>)> {
     let workspace_id =
-        super::workspaces::authorized_workspace(state, auth, workspace_id, false).await?;
+        match super::workspaces::authorized_workspace(state, auth, workspace_id, false).await {
+            Ok(workspace_id) => workspace_id,
+            Err((status, _))
+                if status == StatusCode::NOT_FOUND || status == StatusCode::CONFLICT =>
+            {
+                return Err((
+                    StatusCode::CONFLICT,
+                    Json(PlatformError::workspace_unavailable(
+                        "workspace_unavailable",
+                    )),
+                ));
+            }
+            Err(error) => return Err(error),
+        };
     let root = sqlx::query_scalar::<_, String>(
         "SELECT root_path FROM workspaces WHERE id = $1 AND organization_id = $2",
     )

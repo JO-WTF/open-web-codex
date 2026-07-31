@@ -174,6 +174,7 @@ fn from_package(
                 required: contract.required,
             })
             .collect(),
+        data_requirement_contracts: package.data_requirement_contracts.clone(),
         max_active_child_agents: package.max_active_child_agents,
         content_sha256: package.content_sha256.clone(),
         execution_semantics_sha256: package.execution_semantics_sha256(),

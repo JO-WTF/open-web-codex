@@ -19,6 +19,13 @@ import type {
   Run,
   RunReadiness,
   RunReadinessRequest,
+  TaskAnalysisReadinessRequest,
+  DataIntakeSessionSummary,
+  DataIntakeResponseRequest,
+  AnalysisStartRequest,
+  AnalysisStartResponse,
+  WorkspaceDataDraftSummary,
+  SourceAssetSummary,
   RunEvent,
   RuntimeAgentActivity,
   RuntimeAgentExecution,
@@ -153,7 +160,7 @@ export class PlatformClient {
   }
 
   health() {
-    return this.request<{ ok: boolean; version: string }>("/api/health");
+    return this.request<{ ok: boolean; schemaStatus: "current" | "not_current"; version: string }>("/api/health");
   }
 
   bootstrap(name: string, username: string, email: string, password: string) {
@@ -400,6 +407,7 @@ export class PlatformClient {
       forkSourceRunId?: string | null;
       supervisorPolicy?: SupervisorPolicySelection | null;
       agent?: AgentRunSelection | null;
+      purpose?: "conversation" | "analysis";
     },
   ) {
     return this.request<{ run: Run }>(`/api/tasks/${encodeURIComponent(taskId)}/runs`, {
@@ -412,6 +420,7 @@ export class PlatformClient {
         fork_source_run_id: options.forkSourceRunId ?? null,
         supervisor_policy: options.supervisorPolicy ?? null,
         agent: options.agent ?? null,
+        ...(options.purpose ? { purpose: options.purpose } : {}),
       }),
     });
   }
@@ -420,6 +429,110 @@ export class PlatformClient {
     return this.request<RunReadiness>(
       `/api/workspaces/${encodeURIComponent(workspaceId)}/run-readiness`,
       { method: "POST", body: JSON.stringify(request) },
+    );
+  }
+
+  evaluateAnalysisReadiness(
+    taskId: string,
+    workspaceId: string,
+    request: Omit<RunReadinessRequest, "purpose" | "task_id">,
+  ) {
+    const body: TaskAnalysisReadinessRequest = {
+      workspace_id: workspaceId,
+      ...request,
+      purpose: "analysis",
+      task_id: taskId,
+    };
+    return this.request<RunReadiness>(
+      `/api/tasks/${encodeURIComponent(taskId)}/analysis-readiness`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  }
+
+  createDataDraft(
+    workspaceId: string,
+    files: File[],
+    idempotencyKey = createIdempotencyKey(),
+  ) {
+    const body = new FormData();
+    for (const file of files) body.append("files", file, file.name);
+    return this.request<WorkspaceDataDraftSummary>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/data-drafts`,
+      {
+        method: "POST",
+        headers: {
+          "idempotency-key": idempotencyKey,
+        },
+        body,
+      },
+    );
+  }
+
+  /** Upload a Workspace data draft while exposing the browser's real byte
+   * progress.  The ordinary fetch-based method remains the small reusable
+   * API used by non-composer callers; the Composer uses this method so its
+   * progress indicator cannot pretend that an upload has finished early. */
+  uploadDataDraft(
+    workspaceId: string,
+    files: File[],
+    onProgress?: (percent: number) => void,
+    idempotencyKey = createIdempotencyKey(),
+  ): Promise<WorkspaceDataDraftSummary> {
+    if (typeof XMLHttpRequest === "undefined") {
+      return this.createDataDraft(workspaceId, files, idempotencyKey);
+    }
+    const body = new FormData();
+    for (const file of files) body.append("files", file, file.name);
+    return new Promise((resolve, reject) => {
+      const request = new XMLHttpRequest();
+      request.open(
+        "POST",
+        `${this.baseUrl}/api/workspaces/${encodeURIComponent(workspaceId)}/data-drafts`,
+      );
+      request.responseType = "text";
+      if (this.token) request.setRequestHeader("authorization", `Bearer ${this.token}`);
+      request.setRequestHeader("idempotency-key", idempotencyKey);
+      request.upload.onprogress = (event) => {
+        if (!event.lengthComputable) return;
+        onProgress?.(Math.max(0, Math.min(100, Math.round((event.loaded / event.total) * 100))));
+      };
+      request.onerror = () => reject(new Error("The data upload failed."));
+      request.onabort = () => reject(new Error("The data upload was cancelled."));
+      request.onload = () => {
+        let payload: unknown = null;
+        if (request.responseText) {
+          try {
+            payload = JSON.parse(request.responseText) as unknown;
+          } catch {
+            reject(new Error(`Server returned a non-JSON response for data upload (HTTP ${request.status}).`));
+            return;
+          }
+        }
+        if (request.status < 200 || request.status >= 300) {
+          const record = payload && typeof payload === "object"
+            ? payload as Record<string, unknown>
+            : null;
+          const error = new Error(
+            typeof record?.message === "string"
+              ? record.message
+              : `Data upload failed (HTTP ${request.status}).`,
+          ) as Error & { code?: string; status?: number };
+          error.name = "PlatformRequestError";
+          error.code = typeof record?.code === "string" ? record.code : error.message;
+          error.status = request.status;
+          reject(error);
+          return;
+        }
+        onProgress?.(100);
+        resolve(payload as WorkspaceDataDraftSummary);
+      };
+      request.send(body);
+    });
+  }
+
+  getDataIntake(taskId: string) {
+    return this.request<DataIntakeSessionSummary>(
+      `/api/tasks/${encodeURIComponent(taskId)}/data-intake`,
     );
   }
 
@@ -639,6 +752,7 @@ export class PlatformClient {
       serviceTier?: string | null;
       accessMode?: string | null;
       images?: string[];
+      sourceAssetIds?: string[];
       collaborationMode?: Record<string, unknown> | null;
     } = {},
   ) {
@@ -659,9 +773,30 @@ export class PlatformClient {
           service_tier: options.serviceTier ?? null,
           access_mode: options.accessMode ?? null,
           images: options.images ?? [],
+          source_asset_ids: options.sourceAssetIds ?? [],
           collaboration_mode: options.collaborationMode ?? null,
         }),
       },
+    );
+  }
+
+  listWorkspaceSourceAssets(workspaceId: string) {
+    return this.request<SourceAssetSummary[]>(
+      "/api/workspaces/" + encodeURIComponent(workspaceId) + "/source-assets",
+    );
+  }
+
+  respondToDataIntake(taskId: string, request: DataIntakeResponseRequest) {
+    return this.request<DataIntakeSessionSummary>(
+      "/api/tasks/" + encodeURIComponent(taskId) + "/data-intake/responses",
+      { method: "POST", body: JSON.stringify(request) },
+    );
+  }
+
+  startAnalysis(taskId: string, request: AnalysisStartRequest) {
+    return this.request<AnalysisStartResponse>(
+      "/api/tasks/" + encodeURIComponent(taskId) + "/analysis-start",
+      { method: "POST", body: JSON.stringify(request) },
     );
   }
 

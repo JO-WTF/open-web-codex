@@ -31,31 +31,32 @@ fn valid_draft() -> SupervisorDraftRequest {
         agents: vec![
             SupervisorAgentSelection {
                 definition_id: "enterprise-data-agent".to_string(),
-                version: "3.1.0".to_string(),
+                version: "4.0.0".to_string(),
                 release_id: None,
                 spawn_limit: 1,
             },
             SupervisorAgentSelection {
                 definition_id: "enterprise-network-planning-agent".to_string(),
-                version: "3.6.0".to_string(),
+                version: "4.0.0".to_string(),
                 release_id: None,
                 spawn_limit: 1,
             },
         ],
         artifact_contracts: vec![
             SupervisorArtifactContractInput {
-                artifact_type: "indonesia_dataset_inspection.v1".to_string(),
-                producer_agent: "enterprise-data-agent@3.1.0".to_string(),
-                consumer_agents: vec!["enterprise-network-planning-agent@3.6.0".to_string()],
+                artifact_type: "planning-dataset.v2".to_string(),
+                producer_agent: "enterprise-data-agent@4.0.0".to_string(),
+                consumer_agents: vec!["enterprise-network-planning-agent@4.0.0".to_string()],
                 required: true,
             },
             SupervisorArtifactContractInput {
-                artifact_type: "indonesia_current_network_analysis.v1".to_string(),
-                producer_agent: "enterprise-network-planning-agent@3.6.0".to_string(),
+                artifact_type: "network_snapshot.v1".to_string(),
+                producer_agent: "enterprise-network-planning-agent@4.0.0".to_string(),
                 consumer_agents: vec!["supervisor".to_string()],
                 required: true,
             },
         ],
+        data_requirement_contracts: Vec::new(),
         max_active_child_agents: 2,
     }
 }

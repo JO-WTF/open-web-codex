@@ -27,6 +27,7 @@ const MAX_DATASET_RELEASE_FILES: usize = 32;
 const MAX_DATASET_RELEASE_FILE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_DATASET_RELEASE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_DATASET_RELEASE_MANIFEST_BYTES: usize = 256 * 1024;
+const MAX_SOURCE_ASSET_BYTES: usize = 100 * 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum GitRuntimeError {
@@ -579,6 +580,214 @@ impl GitRuntime {
             GitRuntimeError::Conflict("workspace file is not UTF-8 text".to_string())
         })?;
         Ok(WorkspaceFileContent { content, truncated })
+    }
+
+    /// Atomically store an uploaded data SourceAsset under a service-owned,
+    /// Workspace-scoped directory. The returned path is a Workspace-relative
+    /// projection safe to persist in platform metadata; callers never receive
+    /// the host path.
+    pub async fn write_source_asset(
+        &self,
+        workspace_id: Uuid,
+        asset_id: Uuid,
+        file_name: &str,
+        bytes: &[u8],
+    ) -> Result<String, GitRuntimeError> {
+        if bytes.is_empty() || bytes.len() > MAX_SOURCE_ASSET_BYTES {
+            return Err(GitRuntimeError::Conflict(
+                "source asset exceeds the maximum supported size".to_string(),
+            ));
+        }
+        validate_relative_path(file_name)?;
+        let file_path = Path::new(file_name);
+        let mut components = file_path.components();
+        if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
+            return Err(GitRuntimeError::UnsafePath(
+                "source asset file name must be a single path component".to_string(),
+            ));
+        }
+        let _lock = self.acquire_workspace_lock(workspace_id).await;
+        let workspace = self.require_base_workspace(workspace_id)?;
+        let service_root = workspace.join(".open-web-codex");
+        let source_root = service_root.join("source-assets");
+        let asset_root = source_root.join(asset_id.to_string());
+        for (path, operation) in [
+            (&service_root, "workspace service directory"),
+            (&source_root, "workspace source asset directory"),
+            (&asset_root, "workspace source asset object directory"),
+        ] {
+            reject_symlink(path, operation)?;
+        }
+        tokio::fs::create_dir_all(&asset_root)
+            .await
+            .map_err(|source| GitRuntimeError::Io {
+                operation: "create workspace source asset directory",
+                source,
+            })?;
+        let canonical_root = tokio::fs::canonicalize(&workspace)
+            .await
+            .map_err(|source| GitRuntimeError::Io {
+                operation: "resolve workspace source asset root",
+                source,
+            })?;
+        let canonical_asset_root =
+            tokio::fs::canonicalize(&asset_root)
+                .await
+                .map_err(|source| GitRuntimeError::Io {
+                    operation: "resolve workspace source asset object",
+                    source,
+                })?;
+        if !canonical_asset_root.starts_with(&canonical_root) {
+            return Err(GitRuntimeError::UnsafePath(
+                "source asset directory escaped the workspace".to_string(),
+            ));
+        }
+        let target = asset_root.join(file_path);
+        reject_symlink(&target, "workspace source asset")?;
+        let temporary = asset_root.join(format!(".{}.{}.tmp", file_name, Uuid::now_v7()));
+        reject_symlink(&temporary, "workspace source asset staging file")?;
+        let mut staged = tokio::fs::File::create(&temporary)
+            .await
+            .map_err(|source| GitRuntimeError::Io {
+                operation: "create workspace source asset staging file",
+                source,
+            })?;
+        staged
+            .write_all(bytes)
+            .await
+            .map_err(|source| GitRuntimeError::Io {
+                operation: "write workspace source asset",
+                source,
+            })?;
+        staged
+            .sync_all()
+            .await
+            .map_err(|source| GitRuntimeError::Io {
+                operation: "sync workspace source asset",
+                source,
+            })?;
+        drop(staged);
+        if let Err(source) = tokio::fs::rename(&temporary, &target).await {
+            let _ = tokio::fs::remove_file(&temporary).await;
+            return Err(GitRuntimeError::Io {
+                operation: "publish workspace source asset",
+                source,
+            });
+        }
+        let directory = match tokio::fs::File::open(&asset_root).await {
+            Ok(directory) => directory,
+            Err(source) => {
+                let _ = tokio::fs::remove_file(&target).await;
+                return Err(GitRuntimeError::Io {
+                    operation: "open workspace source asset directory for sync",
+                    source,
+                });
+            }
+        };
+        if let Err(source) = directory.sync_all().await {
+            let _ = tokio::fs::remove_file(&target).await;
+            return Err(GitRuntimeError::Io {
+                operation: "sync workspace source asset directory",
+                source,
+            });
+        }
+        Ok(format!(
+            ".open-web-codex/source-assets/{asset_id}/{file_name}"
+        ))
+    }
+
+    /// Read a bounded SourceAsset through its service-owned relative
+    /// projection. This is used by platform-owned deterministic processing;
+    /// MCP profiling uses the trusted Turn Workspace metadata instead.
+    pub async fn read_source_asset(
+        &self,
+        workspace_id: Uuid,
+        relative: &str,
+    ) -> Result<Vec<u8>, GitRuntimeError> {
+        validate_relative_path(relative)?;
+        if !relative.starts_with(".open-web-codex/source-assets/") {
+            return Err(GitRuntimeError::UnsafePath(
+                "source asset path is outside the service-owned directory".to_string(),
+            ));
+        }
+        let _lock = self.acquire_workspace_lock(workspace_id).await;
+        let workspace = self.require_base_workspace(workspace_id)?;
+        let path = workspace.join(relative);
+        let metadata =
+            tokio::fs::symlink_metadata(&path)
+                .await
+                .map_err(|source| GitRuntimeError::Io {
+                    operation: "inspect workspace source asset",
+                    source,
+                })?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(GitRuntimeError::UnsafePath(
+                "source asset is not a regular file".to_string(),
+            ));
+        }
+        if metadata.len() > MAX_SOURCE_ASSET_BYTES as u64 {
+            return Err(GitRuntimeError::Conflict(
+                "source asset exceeds the maximum supported size".to_string(),
+            ));
+        }
+        let canonical =
+            tokio::fs::canonicalize(&path)
+                .await
+                .map_err(|source| GitRuntimeError::Io {
+                    operation: "resolve workspace source asset",
+                    source,
+                })?;
+        if !canonical.starts_with(&workspace) {
+            return Err(GitRuntimeError::UnsafePath(
+                "source asset escaped the workspace".to_string(),
+            ));
+        }
+        tokio::fs::read(canonical)
+            .await
+            .map_err(|source| GitRuntimeError::Io {
+                operation: "read workspace source asset",
+                source,
+            })
+    }
+
+    /// Remove one exact SourceAsset object after a failed database
+    /// finalization. The asset id and file name are service-owned values.
+    pub async fn remove_source_asset(
+        &self,
+        workspace_id: Uuid,
+        asset_id: Uuid,
+        file_name: &str,
+    ) -> Result<(), GitRuntimeError> {
+        validate_relative_path(file_name)?;
+        let file_path = Path::new(file_name);
+        let mut components = file_path.components();
+        if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
+            return Err(GitRuntimeError::UnsafePath(
+                "source asset file name must be a single path component".to_string(),
+            ));
+        }
+        let _lock = self.acquire_workspace_lock(workspace_id).await;
+        let workspace = self.require_base_workspace(workspace_id)?;
+        let source_root = workspace.join(".open-web-codex").join("source-assets");
+        let asset_root = source_root.join(asset_id.to_string());
+        let target = asset_root.join(file_path);
+        reject_symlink(&source_root, "workspace source asset directory")?;
+        reject_symlink(&asset_root, "workspace source asset object directory")?;
+        reject_symlink(&target, "workspace source asset")?;
+        if let Ok(metadata) = tokio::fs::symlink_metadata(&target).await {
+            if !metadata.is_file() {
+                return Err(GitRuntimeError::UnsafePath(
+                    "source asset cleanup target is not a regular file".to_string(),
+                ));
+            }
+            tokio::fs::remove_file(&target)
+                .await
+                .map_err(|source| GitRuntimeError::Io {
+                    operation: "remove failed workspace source asset",
+                    source,
+                })?;
+        }
+        Ok(())
     }
 
     /// Read a bounded image from a Workspace. The caller supplies only a

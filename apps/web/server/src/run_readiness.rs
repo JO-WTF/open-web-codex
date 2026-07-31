@@ -1,8 +1,8 @@
 use open_web_codex_adapter::validate_required_mcp_servers;
 use open_web_codex_git_runtime::GitRuntime;
 use open_web_codex_platform_contracts::{
-    ProviderCatalog, RunReadiness, RunReadinessAction, RunReadinessCheck, RunReadinessCheckCode,
-    RunReadinessRequest, RunReadinessStatus,
+    ProviderCatalog, ReadinessScope, RunReadiness, RunReadinessAction, RunReadinessCheck,
+    RunReadinessCheckCode, RunReadinessRequest, RunReadinessStatus, RunStartPurpose,
 };
 use open_web_codex_supervisor_catalog::agent::ResolvedAgentDefinition;
 use serde_json::json;
@@ -94,7 +94,11 @@ pub(crate) async fn evaluate(
         (!definition_ready).then_some(RunReadinessAction::OpenAgentStudio),
     ));
 
-    let dependencies_ready = if let Some(agent) = resolved_agent.as_ref() {
+    let dependencies_ready = if request.purpose == RunStartPurpose::Conversation {
+        // Thread creation does not own or require Dataset Releases. It only
+        // verifies the platform/runtime side of the selected execution.
+        true
+    } else if let Some(agent) = resolved_agent.as_ref() {
         verify_agent_dependencies(git, workspace_id, agent)
             .await
             .is_ok()
@@ -112,12 +116,48 @@ pub(crate) async fn evaluate(
         } else {
             RunReadinessStatus::Blocked
         },
-        if dependencies_ready {
+        if request.purpose == RunStartPurpose::Conversation {
+            "The selected Workspace is authorized; business data is collected after the Thread starts."
+        } else if dependencies_ready {
             "Workspace Dataset and capability-package dependencies match their immutable Releases."
         } else {
             "Required Workspace data or capability-package content is missing or changed."
         },
         (!dependencies_ready).then_some(RunReadinessAction::OpenWorkspaceData),
+    ));
+
+    let input_binding_fingerprint = if request.purpose == RunStartPurpose::Analysis {
+        if let Some(task_id) = request.task_id {
+            analysis_binding_fingerprint(db, organization_id, task_id, workspace_id).await
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let input_ready = if request.purpose == RunStartPurpose::Conversation {
+        true
+    } else {
+        // Analysis is never admitted without an existing Task-scoped binding.
+        // A launcher that does not yet have a Task therefore remains blocked;
+        // the user must enter the Thread first and complete data intake there.
+        input_binding_fingerprint.is_some()
+    };
+    checks.push(check(
+        RunReadinessCheckCode::DataIntake,
+        if input_ready {
+            RunReadinessStatus::Ready
+        } else {
+            RunReadinessStatus::Blocked
+        },
+        if request.purpose == RunStartPurpose::Conversation {
+            "Thread can start; business data is collected inside the Thread."
+        } else if input_ready {
+            "Data Requirement Contract, normalized Dataset Release and Task binding are ready."
+        } else {
+            "Complete data intake and create an immutable Task Dataset Binding before analysis."
+        },
+        (!input_ready).then_some(RunReadinessAction::OpenWorkspaceData),
     ));
 
     let runtime_capabilities_ready = match resolved_policy.as_ref() {
@@ -205,7 +245,35 @@ pub(crate) async fn evaluate(
             .then_some(RunReadinessAction::OpenMapsSettings),
     ));
 
-    let status = aggregate_status(&checks);
+    let thread_status = aggregate_status(
+        &checks
+            .iter()
+            .filter(|check| check.code != RunReadinessCheckCode::DataIntake)
+            .cloned()
+            .collect::<Vec<_>>(),
+    );
+    let input_status = if request.purpose == RunStartPurpose::Conversation {
+        RunReadinessStatus::Blocked
+    } else if request.task_id.is_some() {
+        if input_ready {
+            RunReadinessStatus::Ready
+        } else {
+            RunReadinessStatus::Blocked
+        }
+    } else {
+        RunReadinessStatus::Blocked
+    };
+    let analysis_status =
+        if request.purpose == RunStartPurpose::Analysis && request.task_id.is_some() {
+            aggregate_status(&checks)
+        } else {
+            RunReadinessStatus::Blocked
+        };
+    let status = if request.purpose == RunStartPurpose::Conversation {
+        thread_status
+    } else {
+        aggregate_status(&checks)
+    };
     let resolved_content_sha256 = resolved_agent
         .as_ref()
         .map(|agent| agent.content_sha256.as_str())
@@ -230,6 +298,10 @@ pub(crate) async fn evaluate(
         runtime_healthy,
         provider_ready,
         browser_map_configured,
+        input_binding_fingerprint.as_deref(),
+        thread_status,
+        input_status,
+        analysis_status,
     );
 
     EvaluatedRunReadiness {
@@ -237,10 +309,50 @@ pub(crate) async fn evaluate(
             status,
             evaluation_fingerprint: fingerprint,
             checks,
+            scope: Some(if request.purpose == RunStartPurpose::Conversation {
+                ReadinessScope::Thread
+            } else {
+                ReadinessScope::Analysis
+            }),
+            thread_status: Some(thread_status),
+            input_status: Some(input_status),
+            analysis_status: Some(analysis_status),
         },
         agent: resolved_agent,
         supervisor_policy: resolved_policy,
     }
+}
+
+async fn analysis_binding_fingerprint(
+    db: &sqlx::PgPool,
+    organization_id: Uuid,
+    task_id: Uuid,
+    workspace_id: Uuid,
+) -> Option<String> {
+    sqlx::query_scalar(
+        "SELECT binding.fingerprint FROM task_dataset_bindings binding\
+         JOIN workspace_dataset_releases release ON release.organization_id = binding.organization_id\
+           AND release.id = binding.dataset_release_id\
+         JOIN data_intake_sessions intake ON intake.organization_id = binding.organization_id\
+           AND intake.id = binding.intake_session_id\
+         WHERE binding.organization_id = $1 AND binding.task_id = $2\
+           AND binding.workspace_id = $3 AND intake.task_id = binding.task_id\
+           AND intake.workspace_id = binding.workspace_id\
+           AND binding.contract_id = intake.contract_id\
+           AND binding.contract_version = intake.contract_version\
+           AND binding.contract_sha256 = intake.contract_sha256\
+           AND intake.normalized_release_id = binding.dataset_release_id\
+           AND release.workspace_id = binding.workspace_id\
+           AND release.state = 'published' AND intake.status = 'ready'\
+         LIMIT 1",
+    )
+    .bind(organization_id)
+    .bind(task_id)
+    .bind(workspace_id)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten()
 }
 
 pub(crate) async fn verify_agent_dependencies(
@@ -400,6 +512,10 @@ fn evaluation_fingerprint(
     runtime_healthy: bool,
     provider_ready: bool,
     browser_map_configured: bool,
+    input_binding_fingerprint: Option<&str>,
+    thread_status: RunReadinessStatus,
+    input_status: RunReadinessStatus,
+    analysis_status: RunReadinessStatus,
 ) -> String {
     let value = json!({
         "schemaVersion": "platform.run-readiness.v1",
@@ -413,6 +529,10 @@ fn evaluation_fingerprint(
         "runtimeHealthy": runtime_healthy,
         "providerReady": provider_ready,
         "browserMapConfigured": browser_map_configured,
+        "inputBindingFingerprint": input_binding_fingerprint,
+        "threadStatus": thread_status,
+        "inputStatus": input_status,
+        "analysisStatus": analysis_status,
     });
     hex::encode(Sha256::digest(
         serde_json::to_vec(&value).expect("readiness fingerprint input is serializable"),
@@ -429,6 +549,7 @@ mod tests {
     use open_web_codex_platform_contracts::{
         ProviderCatalog, ProviderKind, ProviderModelSummary, ProviderSummary, RunReadinessAction,
         RunReadinessCheck, RunReadinessCheckCode, RunReadinessRequest, RunReadinessStatus,
+        RunStartPurpose,
     };
 
     #[test]
@@ -495,6 +616,8 @@ mod tests {
             agent: None,
             fork_thread_id: None,
             fork_source_run_id: None,
+            purpose: RunStartPurpose::Analysis,
+            task_id: None,
         };
         let provider = ProviderSummary {
             id: "provider-a".to_string(),

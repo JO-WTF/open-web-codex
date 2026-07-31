@@ -10,6 +10,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM};
 use ring::digest::{digest, SHA256};
+use ring::hkdf::{KeyType, Salt, HKDF_SHA256};
 use ring::rand::{SecureRandom, SystemRandom};
 use sqlx::{PgPool, Row};
 use thiserror::Error;
@@ -84,6 +85,26 @@ impl MasterKey {
             .fill(&mut bytes)
             .map_err(|_| SecretStoreError::Encrypt)?;
         Ok(Self(bytes))
+    }
+
+    /// Derive a process-scoped key without exposing the master key bytes.
+    pub fn derive_key(&self, purpose: &'static [u8]) -> [u8; KEY_LENGTH] {
+        struct OutputLength;
+        impl KeyType for OutputLength {
+            fn len(&self) -> usize {
+                KEY_LENGTH
+            }
+        }
+        let salt = Salt::new(HKDF_SHA256, b"open-web-codex");
+        let prk = salt.extract(&self.0);
+        let info = [purpose];
+        let okm = prk
+            .expand(&info, OutputLength)
+            .expect("fixed HKDF purpose is valid");
+        let mut output = [0_u8; KEY_LENGTH];
+        okm.fill(&mut output)
+            .expect("fixed HKDF output length is valid");
+        output
     }
 }
 

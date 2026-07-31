@@ -6,7 +6,7 @@ use super::{require_runtime_manifest, resolve_builtin, SupervisorPolicyError};
 fn published_policy() -> super::ResolvedSupervisorPolicy {
     resolve_builtin(&SupervisorPolicySelection {
         policy_id: "enterprise-supervisor-copilot".to_string(),
-        version: "3.14.0".to_string(),
+        version: "4.0.0".to_string(),
     })
     .unwrap()
 }
@@ -15,7 +15,7 @@ fn published_policy() -> super::ResolvedSupervisorPolicy {
 fn resolves_only_the_current_published_version_and_seals_its_content() {
     let published = open_web_codex_supervisor_catalog::supervisor::list_published().unwrap();
     assert_eq!(published.len(), 1);
-    assert_eq!(published[0].version, "3.14.0");
+    assert_eq!(published[0].version, "4.0.0");
 
     let selected = SupervisorPolicySelection {
         policy_id: published[0].policy_id.clone(),
@@ -25,7 +25,7 @@ fn resolves_only_the_current_published_version_and_seals_its_content() {
     assert_eq!(policy.snapshot.content_sha256.len(), 64);
     assert_eq!(policy.detail.responsibilities.len(), 5);
     assert_eq!(policy.detail.agents.len(), 3);
-    assert_eq!(policy.detail.artifact_contracts.len(), 10);
+    assert_eq!(policy.detail.artifact_contracts.len(), 15);
     assert!(policy
         .detail
         .platform_instructions
@@ -33,14 +33,14 @@ fn resolves_only_the_current_published_version_and_seals_its_content() {
     assert!(policy
         .detail
         .custom_instructions
-        .contains("evidence-driven Indonesian warehouse-network decision"));
+        .contains("task-specific requirement profile"));
     assert_eq!(policy.max_active_child_agents, 3);
     assert_eq!(
         policy.role_spawn_limits,
         [
-            ("agent_15451ec3da17fa338bc798a21838d25d".to_string(), 1),
-            ("agent_24babb7114d53f953a4800fe73740cb8".to_string(), 1),
-            ("agent_ade76f31004f8d9f502c6e0b2398a921".to_string(), 1)
+            ("agent_bcbd895b5f976a809098ee8b3e23115f".to_string(), 1),
+            ("agent_0ce6d3576eadd88251381ad1d46cebe5".to_string(), 1),
+            ("agent_f533a88cc2fcde170744b35f4538deb9".to_string(), 1)
         ]
         .into_iter()
         .collect()
@@ -52,9 +52,9 @@ fn resolves_only_the_current_published_version_and_seals_its_content() {
             .map(|role| (role.name.as_str(), role.version.as_str()))
             .collect::<Vec<_>>(),
         vec![
-            ("agent_15451ec3da17fa338bc798a21838d25d", "3.1.0"),
-            ("agent_24babb7114d53f953a4800fe73740cb8", "3.6.0"),
-            ("agent_ade76f31004f8d9f502c6e0b2398a921", "1.4.0")
+            ("agent_bcbd895b5f976a809098ee8b3e23115f", "4.0.0"),
+            ("agent_0ce6d3576eadd88251381ad1d46cebe5", "4.0.0"),
+            ("agent_f533a88cc2fcde170744b35f4538deb9", "2.0.0")
         ]
     );
     assert_eq!(
@@ -63,7 +63,7 @@ fn resolves_only_the_current_published_version_and_seals_its_content() {
             .iter()
             .map(|server| server.name.as_str())
             .collect::<Vec<_>>(),
-        vec!["map_utils", "supply_chain_indonesia"]
+        vec!["map_utils", "supply_chain_data", "supply_chain_planner"]
     );
 }
 

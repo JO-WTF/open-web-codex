@@ -3,6 +3,7 @@ pub mod migrate;
 
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
+use std::sync::Arc;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
@@ -32,6 +33,11 @@ pub struct AppState {
     pub event_bus: broadcast::Sender<LiveEvent>,
     pub started_at: std::time::Instant,
     pub started_at_utc: chrono::DateTime<chrono::Utc>,
+    /// Set only after the server startup schema assertion succeeds.
+    pub schema_current: bool,
+    /// Process-local secret used only by the internal analysis authorization
+    /// endpoint and inherited by the Profile Host's MCP children.
+    pub analysis_gate_key: Arc<Vec<u8>>,
 }
 
 impl AppState {
@@ -42,6 +48,18 @@ impl AppState {
             event_bus,
             started_at: std::time::Instant::now(),
             started_at_utc: chrono::Utc::now(),
+            schema_current: true,
+            analysis_gate_key: Arc::new(Vec::new()),
         }
+    }
+
+    pub fn with_schema_current(mut self, schema_current: bool) -> Self {
+        self.schema_current = schema_current;
+        self
+    }
+
+    pub fn with_analysis_gate_key(mut self, key: Vec<u8>) -> Self {
+        self.analysis_gate_key = Arc::new(key);
+        self
     }
 }

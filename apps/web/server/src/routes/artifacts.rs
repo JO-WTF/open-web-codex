@@ -14,6 +14,7 @@ use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
+use crate::event_projection::reconcile_materialized_intake_artifact;
 use crate::middleware::auth::AuthenticatedUser;
 
 type ApiError = (StatusCode, Json<PlatformError>);
@@ -284,6 +285,7 @@ async fn materialize_artifact(
     if updated.rows_affected() != 1 {
         return Err("Artifact state changed during materialization".to_string());
     }
+    reconcile_materialized_intake_artifact(db, artifact_id).await?;
     Ok(())
 }
 

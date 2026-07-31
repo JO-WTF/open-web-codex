@@ -23,27 +23,27 @@ use crate::validation::{
 
 const DATA_AGENT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/agents/enterprise-data-agent/3.1.0/definition.json"
+    "/../../../../capabilities/agents/enterprise-data-agent/4.0.0/definition.json"
 ));
 const DATA_AGENT_INSTRUCTIONS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/agents/enterprise-data-agent/3.1.0/instructions.md"
+    "/../../../../capabilities/agents/enterprise-data-agent/4.0.0/instructions.md"
 ));
 const NETWORK_PLANNING_AGENT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/agents/enterprise-network-planning-agent/3.6.0/definition.json"
+    "/../../../../capabilities/agents/enterprise-network-planning-agent/4.0.0/definition.json"
 ));
 const NETWORK_PLANNING_AGENT_INSTRUCTIONS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/agents/enterprise-network-planning-agent/3.6.0/instructions.md"
+    "/../../../../capabilities/agents/enterprise-network-planning-agent/4.0.0/instructions.md"
 ));
 const VISUALIZATION_AGENT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/agents/enterprise-visualization-agent/1.4.0/definition.json"
+    "/../../../../capabilities/agents/enterprise-visualization-agent/2.0.0/definition.json"
 ));
 const VISUALIZATION_AGENT_INSTRUCTIONS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/agents/enterprise-visualization-agent/1.4.0/instructions.md"
+    "/../../../../capabilities/agents/enterprise-visualization-agent/2.0.0/instructions.md"
 ));
 const FINANCE_AGENT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),

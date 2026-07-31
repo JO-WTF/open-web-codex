@@ -108,6 +108,43 @@ async fn provisions_a_server_managed_empty_project() {
         .is_empty());
 }
 
+#[tokio::test]
+async fn writes_reads_and_cleans_workspace_source_assets_without_host_paths() {
+    let (_root, runtime, source) = fixture();
+    let source = runtime.validate_source(&source).unwrap();
+    let branch = runtime.validate_ref("main").unwrap();
+    let workspace_id = Uuid::now_v7();
+    runtime
+        .provision(Uuid::now_v7(), workspace_id, &source, &branch)
+        .await
+        .unwrap();
+    let asset_id = Uuid::now_v7();
+    let relative = runtime
+        .write_source_asset(workspace_id, asset_id, "orders.csv", b"id,qty\n1,2\n")
+        .await
+        .unwrap();
+    assert_eq!(
+        relative,
+        format!(".open-web-codex/source-assets/{asset_id}/orders.csv")
+    );
+    assert_eq!(
+        runtime
+            .read_source_asset(workspace_id, &relative)
+            .await
+            .unwrap(),
+        b"id,qty\n1,2\n"
+    );
+    assert!(!Path::new(&relative).is_absolute());
+    runtime
+        .remove_source_asset(workspace_id, asset_id, "orders.csv")
+        .await
+        .unwrap();
+    assert!(runtime
+        .read_source_asset(workspace_id, &relative)
+        .await
+        .is_err());
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn publishes_an_immutable_capability_package_atomically() {
