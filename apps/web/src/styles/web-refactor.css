@@ -6228,3 +6228,64 @@ body:has(.web-app-shell[data-theme="light"]) :is(
 ) {
   background: #f7fafc;
 }
+
+.web-data-intake {
+  margin: 18px auto 8px;
+  width: min(760px, calc(100% - 32px));
+  border: 1px solid var(--web-line);
+  border-radius: 14px;
+  padding: 16px;
+  color: var(--web-text);
+  background: var(--web-subtle);
+}
+
+.web-data-intake-header,
+.web-data-intake-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.web-data-intake-header h3 {
+  margin: 3px 0 0;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.web-data-intake-kicker {
+  color: var(--web-faint);
+  font-size: 10px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.web-data-intake-status {
+  border: 1px solid var(--web-line);
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: var(--web-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.web-data-intake-status.is-ready { color: #70c8a6; }
+.web-data-intake-status.is-failed { color: #e28888; }
+.web-data-intake p { margin: 12px 0; color: var(--web-muted); font-size: 12px; line-height: 1.55; }
+.web-data-intake-error { color: #e28888 !important; }
+.web-data-intake-gaps { margin: 10px 0 14px; padding-left: 18px; color: #e3b568; font-size: 12px; line-height: 1.55; }
+.web-data-intake-actions { justify-content: flex-start; margin-top: 12px; }
+.web-data-intake-actions button,
+.web-data-intake > button,
+.web-data-intake-parameters > button { border-radius: 8px; padding: 7px 11px; font: inherit; font-size: 11px; cursor: pointer; }
+.web-data-intake button.primary { border: 1px solid #4e7fc3; color: #fff; background: #3e6fae; }
+.web-data-intake button.ghost { border: 1px solid var(--web-line); color: var(--web-muted); background: transparent; }
+.web-data-intake-mappings,
+.web-data-intake-parameters { display: grid; gap: 8px; margin: 12px 0; }
+.web-data-intake-mapping,
+.web-data-intake-parameter { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; align-items: start; border: 1px solid var(--web-line); border-radius: 9px; padding: 9px; background: rgb(255 255 255 / 2%); font-size: 12px; }
+.web-data-intake-mapping small,
+.web-data-intake-parameter small { display: block; margin-top: 4px; color: var(--web-faint); font-size: 10px; }
+.web-data-intake-parameter { grid-template-columns: 1fr; }
+.web-data-intake-parameter input { width: 100%; box-sizing: border-box; border: 1px solid var(--web-line); border-radius: 7px; padding: 7px 8px; color: var(--web-text); background: var(--web-bg); font: inherit; font-size: 12px; }
+.web-data-intake-parameter input:focus { border-color: #4e7fc3; outline: 2px solid rgb(78 127 195 / 18%); }

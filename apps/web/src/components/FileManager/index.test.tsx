@@ -11,17 +11,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import FileManager from "./index";
 
 const {
-  listWorkspaceDatasetReleases,
-  publishWorkspaceDatasetRelease,
+  createDataDraft,
 } = vi.hoisted(() => ({
-  listWorkspaceDatasetReleases: vi.fn(),
-  publishWorkspaceDatasetRelease: vi.fn(),
+  createDataDraft: vi.fn(),
 }));
 
 vi.mock("../../../browser/session", () => ({
   platformClient: {
-    listWorkspaceDatasetReleases,
-    publishWorkspaceDatasetRelease,
+    createDataDraft,
   },
 }));
 
@@ -76,8 +73,7 @@ describe("FileManager", () => {
     expect(await screen.findByText("config.ts")).toBeTruthy();
   });
 
-  it("opens the single Dataset Release publisher from the production Files panel", async () => {
-    listWorkspaceDatasetReleases.mockResolvedValue([]);
+  it("opens the user-facing data draft uploader from the production Files panel", async () => {
     render(
       <FileManager
         workspaceId="workspace-1"
@@ -97,35 +93,24 @@ describe("FileManager", () => {
     fireEvent.click(screen.getByTestId("workspace-files-empty-add-data"));
 
     expect(
-      await screen.findByRole("heading", { name: "Publish a data release" }),
+      await screen.findByRole("heading", { name: "Add planning data" }),
     ).toBeTruthy();
-    expect(listWorkspaceDatasetReleases).toHaveBeenCalledWith("workspace-1");
-    fireEvent.click(screen.getByRole("button", { name: "Close data release dialog" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close data upload" }));
     expect(
-      screen.queryByRole("heading", { name: "Publish a data release" }),
+      screen.queryByRole("heading", { name: "Add planning data" }),
     ).toBeNull();
   });
 
-  it("refreshes Workspace files after a Dataset Release is published", async () => {
-    listWorkspaceDatasetReleases.mockResolvedValue([]);
-    publishWorkspaceDatasetRelease.mockResolvedValue({
-      id: "release-1",
-      workspace_id: "workspace-1",
-      dataset_id: "network-inputs",
-      version: "1.0.0",
-      display_name: "Network inputs",
-      description: "Inputs for network planning.",
-      state: "published",
-      content_sha256: "a".repeat(64),
-      failure_code: null,
-      files: [],
-      published_at: "2026-07-30T00:00:00Z",
-      created_at: "2026-07-30T00:00:00Z",
-      updated_at: "2026-07-30T00:00:00Z",
+  it("refreshes Workspace files after a data draft is uploaded", async () => {
+    createDataDraft.mockResolvedValue({
+      draftId: "draft-1",
+      workspaceId: "workspace-1",
+      revision: 1,
+      assets: [],
     });
     const listFiles = vi.fn()
       .mockResolvedValueOnce([])
-      .mockResolvedValue(["datasets/network-inputs/1.0.0/data.csv"]);
+      .mockResolvedValue(["planning.csv"]);
     const { container } = render(
       <FileManager
         workspaceId="workspace-1"
@@ -143,15 +128,6 @@ describe("FileManager", () => {
 
     await screen.findByText("No Workspace files yet");
     fireEvent.click(screen.getByTestId("workspace-files-empty-add-data"));
-    fireEvent.change(screen.getByLabelText("Dataset ID"), {
-      target: { value: "network-inputs" },
-    });
-    fireEvent.change(screen.getByLabelText("Name"), {
-      target: { value: "Network inputs" },
-    });
-    fireEvent.change(screen.getByLabelText("What this data is for"), {
-      target: { value: "Inputs for network planning." },
-    });
     const fileInput = document.body.querySelector<HTMLInputElement>(
       '.dataset-release-file-input[type="file"]',
     );
@@ -165,18 +141,15 @@ describe("FileManager", () => {
     await waitFor(() =>
       expect(
         (screen.getByRole("button", {
-          name: "Publish release",
+          name: "Upload data",
         }) as HTMLButtonElement).disabled,
       ).toBe(false),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Publish release" }));
+    fireEvent.click(screen.getByRole("button", { name: "Upload data" }));
 
     await waitFor(() => expect(listFiles).toHaveBeenCalledTimes(2));
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
-    fireEvent.click(await screen.findByText("datasets"));
-    fireEvent.click(await screen.findByText("network-inputs"));
-    fireEvent.click(await screen.findByText("1.0.0"));
-    expect(await screen.findByText("data.csv")).toBeTruthy();
+    expect(await screen.findByText("planning.csv")).toBeTruthy();
     expect(container.querySelector(".web-file-manager")).toBeTruthy();
   });
 

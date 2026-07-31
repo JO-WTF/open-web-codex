@@ -1,6 +1,7 @@
 import { PlatformClient } from "../../browser/client";
 import type {
   AgentRunSelection,
+  DataIntakeSessionSummary,
   Approval,
   ArtifactSummary,
   Run,
@@ -15,6 +16,7 @@ import type {
   Task,
   ThreadHistoryTurn,
   Workspace,
+  WorkspaceDataDraftSummary,
 } from "../../browser/types";
 import type { AppServerEvent, GitFileStatus, WorkspaceInfo } from "../types";
 
@@ -327,6 +329,10 @@ export class CodexMonitorWebClient {
     throw new Error("Thread is not available in an authorized project");
   }
 
+  async taskIdForThread(threadId: string): Promise<string> {
+    return (await this.findThreadContext(threadId)).taskId;
+  }
+
   private async findRunEventContext(runId: string): Promise<ThreadContext> {
     const cached = [...this.threadContexts.values()]
       .find((context) => context.runId === runId);
@@ -534,6 +540,7 @@ export class CodexMonitorWebClient {
             idempotencyKey: draft.runIdempotencyKey,
             supervisorPolicy: options?.supervisorPolicy ?? null,
             agent: options?.agent ?? null,
+            purpose: "conversation",
           })
         ).run;
     draft.acceptedRunId = run.id;
@@ -570,6 +577,7 @@ export class CodexMonitorWebClient {
       modelId: string;
       supervisorPolicy?: SupervisorPolicySelection | null;
       agent?: AgentRunSelection | null;
+      purpose?: "conversation" | "analysis";
     },
   ): Promise<RunReadiness> {
     if (options.supervisorPolicy && options.agent) {
@@ -580,7 +588,50 @@ export class CodexMonitorWebClient {
       model: options.modelId,
       supervisor_policy: options.supervisorPolicy ?? null,
       agent: options.agent ?? null,
+      purpose: options.purpose ?? "conversation",
     });
+  }
+
+  evaluateAnalysisReadiness(
+    taskId: string,
+    workspaceId: string,
+    options: {
+      providerId: string;
+      modelId: string;
+      supervisorPolicy?: SupervisorPolicySelection | null;
+      agent?: AgentRunSelection | null;
+    },
+  ): Promise<RunReadiness> {
+    if (options.supervisorPolicy && options.agent) {
+      throw new Error("A Thread cannot start as both an Agent and a Supervisor.");
+    }
+    return this.platform.evaluateAnalysisReadiness(taskId, workspaceId, {
+      model_provider: options.providerId,
+      model: options.modelId,
+      supervisor_policy: options.supervisorPolicy ?? null,
+      agent: options.agent ?? null,
+    });
+  }
+
+  createDataDraft(
+    workspaceId: string,
+    files: File[],
+    idempotencyKey?: string,
+  ): Promise<WorkspaceDataDraftSummary> {
+    return this.platform.createDataDraft(workspaceId, files, idempotencyKey);
+  }
+
+  uploadDataDraft(
+    workspaceId: string,
+    files: File[],
+    onProgress?: (percent: number) => void,
+    idempotencyKey?: string,
+  ): Promise<WorkspaceDataDraftSummary> {
+    return this.platform.uploadDataDraft(workspaceId, files, onProgress, idempotencyKey);
+  }
+
+  getDataIntake(taskId: string): Promise<DataIntakeSessionSummary> {
+    return this.platform.getDataIntake(taskId);
   }
 
   listSupervisorPolicies(): Promise<SupervisorPolicySummary[]> {
@@ -816,12 +867,14 @@ export class CodexMonitorWebClient {
     text: string,
     model?: string | null,
     modelProvider?: string | null,
+    sourceAssetIds: string[] = [],
   ) {
     const context = await this.findThreadContext(threadId);
     this.selectedRunByWorkspace.set(context.workspaceId, context.runId);
     const response = await this.platform.sendMessage(context.taskId, text, {
       model,
       modelProvider,
+      sourceAssetIds,
     });
     return {
       status: response.status,
@@ -829,6 +882,18 @@ export class CodexMonitorWebClient {
       threadName: response.thread_name ?? null,
       turn: { id: response.turn_id, status: "inProgress" },
     };
+  }
+
+  async listWorkspaceSourceAssets(workspaceId: string) {
+    return await this.platform.listWorkspaceSourceAssets(workspaceId);
+  }
+
+  async respondToDataIntake(taskId: string, request: Parameters<typeof this.platform.respondToDataIntake>[1]) {
+    return await this.platform.respondToDataIntake(taskId, request);
+  }
+
+  async startAnalysis(taskId: string, request: Parameters<typeof this.platform.startAnalysis>[1]) {
+    return await this.platform.startAnalysis(taskId, request);
   }
 
   async interruptTurn(_workspaceId: string, threadId: string, turnId: string) {

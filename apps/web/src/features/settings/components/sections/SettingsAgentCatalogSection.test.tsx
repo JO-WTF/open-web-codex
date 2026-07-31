@@ -8,7 +8,7 @@ const template: SettingsAgentCatalogSectionProps["templates"][number] = {
   source: "repository",
   release_id: null,
   definition_id: "enterprise-data-agent",
-  version: "3.0.0",
+  version: "4.0.0",
   display_name: "Enterprise Data Agent",
   description: "Inspects an exact Dataset Release.",
   responsibilities: ["Inspect data"],
@@ -98,7 +98,7 @@ describe("SettingsAgentCatalogSection", () => {
       target: { value: "Use only reviewed data capabilities." },
     });
     fireEvent.change(screen.getByLabelText("Reviewed capability template"), {
-      target: { value: "repository:enterprise-data-agent@3.0.0" },
+      target: { value: "repository:enterprise-data-agent@4.0.0" },
     });
     expect(
       screen.getByText(
@@ -113,7 +113,7 @@ describe("SettingsAgentCatalogSection", () => {
       capability_template: {
         source: "repository_agent",
         definition_id: "enterprise-data-agent",
-        version: "3.0.0",
+        version: "4.0.0",
         release_id: null,
       },
       output_artifact_types: ["indonesia_dataset_inspection.v1"],
@@ -209,7 +209,7 @@ describe("SettingsAgentCatalogSection", () => {
     render(<SettingsAgentCatalogSection {...props} />);
 
     fireEvent.change(screen.getByLabelText("Reviewed capability template"), {
-      target: { value: "repository:enterprise-data-agent@3.0.0" },
+      target: { value: "repository:enterprise-data-agent@4.0.0" },
     });
     expect(
       screen.getByText(/Type IDs are fixed by the reviewed template/),
@@ -274,7 +274,7 @@ describe("SettingsAgentCatalogSection", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "New Agent" }));
     fireEvent.change(screen.getByLabelText("Reviewed capability template"), {
-      target: { value: "repository:enterprise-data-agent@3.0.0" },
+      target: { value: "repository:enterprise-data-agent@4.0.0" },
     });
     fireEvent.click(screen.getByTestId("agent-studio-add-data"));
 
@@ -307,7 +307,7 @@ describe("SettingsAgentCatalogSection", () => {
     expect((screen.getByLabelText("Version") as HTMLInputElement).value).toBe("1.0.0");
     expect(
       (screen.getByLabelText("Reviewed capability template") as HTMLSelectElement).value,
-    ).toBe("repository:enterprise-data-agent@3.0.0");
+    ).toBe("repository:enterprise-data-agent@4.0.0");
     expect(
       (screen.getByLabelText("Custom Agent instructions") as HTMLTextAreaElement).value,
     ).toBe("Build and validate the bounded planning dataset.");
@@ -369,7 +369,7 @@ describe("SettingsAgentCatalogSection", () => {
     expect((screen.getByLabelText("Agent ID") as HTMLInputElement).value).toBe(
       userAgent.definition_id,
     );
-    expect((screen.getByLabelText("Version") as HTMLInputElement).value).toBe("3.0.1");
+    expect((screen.getByLabelText("Version") as HTMLInputElement).value).toBe("4.0.1");
     expect(
       (screen.getByLabelText("Custom Agent instructions") as HTMLTextAreaElement).value,
     ).toBe("Preserve the complete reviewed method.");

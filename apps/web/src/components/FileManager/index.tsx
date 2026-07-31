@@ -7,7 +7,7 @@ import RefreshCw from "lucide-react/dist/esm/icons/refresh-cw";
 import Search from "lucide-react/dist/esm/icons/search";
 import X from "lucide-react/dist/esm/icons/x";
 import type { GitFileStatus } from "../../types";
-import { DatasetReleaseDialog } from "../../features/files/components/DatasetReleaseDialog";
+import { WorkspaceDataDraftDialog } from "../../features/files/components/WorkspaceDataDraftDialog";
 import { Markdown } from "../../features/messages/components/Markdown";
 import { getFileTypeIconUrl } from "../../utils/fileTypeIcons";
 
@@ -23,6 +23,7 @@ type Props = {
   loadGitStatus: (workspaceId: string) => Promise<{ files: GitFileStatus[] }>;
   embedded?: boolean;
   enabled?: boolean;
+  onDataDraftChanged?: () => void;
 };
 
 type Row = { path: string; name: string; depth: number; folder: boolean };
@@ -53,7 +54,7 @@ function resolveMarkdownLink(currentPath: string, targetPath: string) {
   return resolved.join("/");
 }
 
-export default function FileManager({ workspaceId, selectedPath, onSelectedPathChange, onClose, panelWidth, onPanelWidthChange, listFiles, readFile, loadGitStatus, embedded = false, enabled = true }: Props) {
+export default function FileManager({ workspaceId, selectedPath, onSelectedPathChange, onClose, panelWidth, onPanelWidthChange, listFiles, readFile, loadGitStatus, embedded = false, enabled = true, onDataDraftChanged }: Props) {
   const [files, setFiles] = useState<string[]>([]);
   const [statuses, setStatuses] = useState<Map<string, string>>(new Map());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -244,7 +245,7 @@ export default function FileManager({ workspaceId, selectedPath, onSelectedPathC
               <div className="web-file-empty web-file-empty--data">
                 <Database size={20} aria-hidden="true" />
                 <strong>No Workspace files yet</strong>
-                <span>Publish an immutable Dataset Release for governed Agents.</span>
+                <span>Upload planning files; the Supervisor will profile and map them before analysis.</span>
                 <button
                   type="button"
                   onClick={(event) => openDatasetDialog(event.currentTarget)}
@@ -279,11 +280,12 @@ export default function FileManager({ workspaceId, selectedPath, onSelectedPathC
       </div>
       {datasetDialogOpen && workspaceId
         ? createPortal(
-            <DatasetReleaseDialog
+            <WorkspaceDataDraftDialog
               workspaceId={workspaceId}
               onClose={closeDatasetDialog}
-              onPublished={() => {
+              onCreated={() => {
                 void refresh();
+                onDataDraftChanged?.();
               }}
             />,
             document.body,

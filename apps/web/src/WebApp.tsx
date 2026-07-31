@@ -6,6 +6,9 @@ import {
 } from "./services/webClient";
 import type {
   AgentDefinitionSummary,
+  DataIntakeParameterAnswer,
+  DataIntakeSessionSummary,
+  DataMappingCandidate,
   RunReadiness,
   RunReadinessAction,
   SupervisorPolicySummary,
@@ -259,6 +262,10 @@ export default function WebApp() {
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  const [dataIntake, setDataIntake] = useState<DataIntakeSessionSummary | null>(null);
+  const [dataIntakeLoading, setDataIntakeLoading] = useState(false);
+  const [dataIntakeError, setDataIntakeError] = useState<string | null>(null);
   const [threadsByWorkspace, setThreadsByWorkspace] = useState<Record<string, ThreadInfo[]>>({});
   const [threadLoading, setThreadLoading] = useState(false);
   const [draft, setDraft] = useState("");
@@ -299,6 +306,7 @@ export default function WebApp() {
   );
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
   const [activeRightPanelTab, setActiveRightPanelTab] = useState<RightSidebarTab>("files");
+  const [dataUploadRequest, setDataUploadRequest] = useState(0);
   const [agentPanelUnread, setAgentPanelUnread] = useState(false);
   const [rightPanelWidth, setRightPanelWidth] = useState(() => {
     if (typeof window === "undefined") return 360;
@@ -603,6 +611,175 @@ export default function WebApp() {
   activeThreadIdRef.current = activeThreadId;
   const activeWorkspaceIdRef = useRef(activeWorkspaceId);
   activeWorkspaceIdRef.current = activeWorkspaceId;
+  const dataIntakeSequence = useRef(0);
+
+  const refreshDataIntake = useCallback(async (taskId = activeTaskId) => {
+    const sequence = ++dataIntakeSequence.current;
+    if (!taskId || taskId.startsWith("pending-task:")) {
+      setDataIntake(null);
+      setDataIntakeLoading(false);
+      setDataIntakeError(null);
+      return;
+    }
+    setDataIntakeLoading(true);
+    setDataIntakeError(null);
+    try {
+      const session = await client.getDataIntake(taskId);
+      if (sequence !== dataIntakeSequence.current) return;
+      setDataIntake(session);
+    } catch (error) {
+      if (sequence !== dataIntakeSequence.current) return;
+      const status = error && typeof error === "object" && "status" in error
+        ? (error as { status?: unknown }).status
+        : undefined;
+      if (status === 404) {
+        setDataIntake(null);
+      } else {
+        setDataIntakeError(error instanceof Error ? error.message : String(error));
+      }
+    } finally {
+      if (sequence === dataIntakeSequence.current) setDataIntakeLoading(false);
+    }
+  }, [activeTaskId, client]);
+
+  const confirmDataMapping = useCallback(async (confirmed: DataMappingCandidate[]) => {
+    if (!activeTaskId || !dataIntake) return;
+    const request = dataIntake.inputRequests.find((item) => item.kind === "confirm_mapping" && item.status === "open");
+    if (!request) {
+      setDataIntakeError("The mapping confirmation request is no longer current. Refresh the Thread.");
+      return;
+    }
+    setDataIntakeLoading(true);
+    setDataIntakeError(null);
+    try {
+      const session = await client.respondToDataIntake(activeTaskId, {
+        requestId: request.requestId,
+        expectedSessionRevision: dataIntake.inputRevision,
+        idempotencyKey: crypto.randomUUID(),
+        response: { kind: "confirm_mapping", value: { confirmed: true, mappings: confirmed } },
+      });
+      setDataIntake(session);
+    } catch (error) {
+      setDataIntakeError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setDataIntakeLoading(false);
+    }
+  }, [activeTaskId, client, dataIntake]);
+
+  const submitDataParameters = useCallback(async (answers: DataIntakeParameterAnswer[]) => {
+    if (!activeTaskId || !dataIntake) return;
+    const request = dataIntake.inputRequests.find((item) => item.kind === "answer_parameters" && item.status === "open");
+    if (!request) {
+      setDataIntakeError("The parameter request is no longer current. Refresh the Thread.");
+      return;
+    }
+    setDataIntakeLoading(true);
+    setDataIntakeError(null);
+    try {
+      const session = await client.respondToDataIntake(activeTaskId, {
+        requestId: request.requestId,
+        expectedSessionRevision: dataIntake.inputRevision,
+        idempotencyKey: crypto.randomUUID(),
+        response: { kind: "answer_parameters", value: { answers } },
+      });
+      setDataIntake(session);
+    } catch (error) {
+      setDataIntakeError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setDataIntakeLoading(false);
+    }
+  }, [activeTaskId, client, dataIntake]);
+
+  const respondToDataIntake = useCallback(async (
+    requestId: string,
+    kind: string,
+    value: unknown,
+  ) => {
+    if (!activeTaskId || !dataIntake) return null;
+    setDataIntakeLoading(true);
+    setDataIntakeError(null);
+    try {
+      const session = await client.respondToDataIntake(activeTaskId, {
+        requestId,
+        expectedSessionRevision: dataIntake.inputRevision,
+        idempotencyKey: crypto.randomUUID(),
+        response: { kind, value },
+      });
+      setDataIntake(session);
+      return session;
+    } catch (error) {
+      setDataIntakeError(error instanceof Error ? error.message : String(error));
+      return null;
+    } finally {
+      setDataIntakeLoading(false);
+    }
+  }, [activeTaskId, client, dataIntake]);
+
+  const confirmDataProfile = useCallback((requestId: string) => {
+    void respondToDataIntake(requestId, "confirm_profile", { confirmed: true });
+  }, [respondToDataIntake]);
+
+  const confirmDataAnalysis = useCallback(async (requestId: string) => {
+    const session = await respondToDataIntake(requestId, "confirm_analysis", { confirmed: true });
+    if (!activeTaskId || !session || !session.evidenceFingerprint) return;
+    try {
+      await client.startAnalysis(activeTaskId, {
+        requestId,
+        expectedSessionRevision: session.inputRevision,
+        readinessFingerprint: session.evidenceFingerprint,
+        idempotencyKey: crypto.randomUUID(),
+      });
+      await refreshDataIntake(activeTaskId);
+    } catch (error) {
+      setDataIntakeError(error instanceof Error ? error.message : String(error));
+    }
+  }, [activeTaskId, client, refreshDataIntake, respondToDataIntake]);
+
+  const openDataUpload = useCallback(() => {
+    // Intake cards use the same Composer picker as ordinary attachments;
+    // users should not leave the Thread to manage Dataset metadata.
+    setDataUploadRequest((request) => request + 1);
+  }, []);
+
+  const requestDataChange = useCallback((message: string) => {
+    // A requested change is an ordinary message in the same Thread. Seed the
+    // Composer so the user can edit it before sending; this never mutates a
+    // confirmation hash or pretends that a revision was confirmed.
+    setDraft(message);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const threadId = activeThreadId;
+    dataIntakeSequence.current += 1;
+    setDataIntake(null);
+    setDataIntakeError(null);
+    if (!threadId || threadId.startsWith("pending-thread:")) {
+      setActiveTaskId(null);
+      setDataIntakeLoading(false);
+      return () => { cancelled = true; };
+    }
+    setActiveTaskId(null);
+    if (typeof client.taskIdForThread !== "function") {
+      setDataIntakeLoading(false);
+      return () => { cancelled = true; };
+    }
+    setDataIntakeLoading(true);
+    void client.taskIdForThread(threadId).then((taskId) => {
+      if (cancelled || activeThreadIdRef.current !== threadId) return;
+      setActiveTaskId(taskId);
+    }).catch((error) => {
+      if (cancelled || activeThreadIdRef.current !== threadId) return;
+      setDataIntakeLoading(false);
+      setDataIntakeError(error instanceof Error ? error.message : String(error));
+    });
+    return () => { cancelled = true; };
+  }, [activeThreadId, client]);
+
+  useEffect(() => {
+    if (!activeTaskId) return;
+    void refreshDataIntake(activeTaskId);
+  }, [activeTaskId, refreshDataIntake]);
 
   const refreshSupervisorOverview = useCallback(async (
     threadId: string | null = activeThreadIdRef.current,
@@ -1949,8 +2126,9 @@ export default function WebApp() {
                version: agent.version,
                release_id: agent.release_id,
              }
-           : null,
-       });
+         : null,
+        purpose: "conversation",
+      });
      } catch (error) {
        appendLog(
          "error",
@@ -1961,7 +2139,7 @@ export default function WebApp() {
        return null;
      }
    }
-   if (readiness.status === "blocked") {
+   if (readiness.status === "blocked" && readiness.scope === "analysis") {
      const blockers = readiness.checks
        .filter((check) => check.status === "blocked")
        .map((check) => check.message);
@@ -1977,9 +2155,10 @@ export default function WebApp() {
        : `pending-thread:${newLogId()}`);
    const startedAt = Date.now();
    let runAccepted = false;
-   const showAcceptedStart = () => {
+   const showAcceptedStart = ({ taskId }: { taskId: string }) => {
      runAccepted = true;
      setActiveWorkspaceId(wid);
+     if (typeof client.getDataIntake === "function") setActiveTaskId(taskId);
      activeThreadIdRef.current = temporaryId;
      setActiveThreadId(temporaryId);
      setThreadLoading(false);
@@ -2152,9 +2331,12 @@ export default function WebApp() {
             ? {
                 definition_id: selection.agent.definition_id,
                 version: selection.agent.version,
-                release_id: selection.agent.release_id,
-              }
-            : null,
+              release_id: selection.agent.release_id,
+            }
+          : null,
+        // Creating a Thread only requires platform/runtime readiness.  Data
+        // intake and analysis readiness are evaluated inside the Thread.
+        purpose: "conversation",
       });
     },
     [
@@ -2228,8 +2410,9 @@ export default function WebApp() {
     text: string,
     targetWorkspaceId = activeWorkspaceId,
     targetThreadId = activeThreadId,
+    sourceAssetIds: string[] = [],
   ) => {
-    if (!targetWorkspaceId || !targetThreadId || !text.trim()) return false;
+    if (!targetWorkspaceId || !targetThreadId || (!text.trim() && sourceAssetIds.length === 0)) return false;
     appendLog("user", text);
     setThinking(true);
     setTurnStartedAt(Date.now());
@@ -2244,6 +2427,7 @@ export default function WebApp() {
         text,
         selectedModel?.model ?? selectedProviderModelId,
         currentProviderId,
+        sourceAssetIds,
       );
       const payload = unwrapWebRpcResult(response);
       const record = payload && typeof payload === "object"
@@ -2279,14 +2463,24 @@ export default function WebApp() {
     }
   }, [activeThreadId, activeWorkspaceId, appendLog, client, currentProviderId, providerModels, selectedProviderModelId]);
 
-  const sendMessage = useCallback(async () => {
+  const uploadDataFiles = useCallback(async (
+    files: File[],
+    onProgress?: (percent: number) => void,
+  ) => {
+    if (!activeWorkspaceId) throw new Error("Select a Workspace before uploading data.");
+    const draft = await client.uploadDataDraft(activeWorkspaceId, files, onProgress);
+    void refreshDataIntake();
+    return draft.assets;
+  }, [activeWorkspaceId, client, refreshDataIntake]);
+
+  const sendMessage = useCallback(async (sourceAssetIds: string[] = []) => {
     const text = draft.trim();
-    if (!activeWorkspaceId || !text) return;
+    if (!activeWorkspaceId || (!text && sourceAssetIds.length === 0)) return;
     if (!activeThreadId) {
       const threadId = await startThread(activeWorkspaceId);
       if (!threadId) return;
       setDraft("");
-      await sendText(text, activeWorkspaceId, threadId);
+      await sendText(text, activeWorkspaceId, threadId, sourceAssetIds);
       return;
     }
     setDraft("");
@@ -2295,10 +2489,10 @@ export default function WebApp() {
       || threadStatus === "reconnecting"
       || threadStatus.startsWith("active");
     if (running) {
-      setQueuedFollowUps((previous) => [...previous, { id: newLogId(), text }]);
+      if (text) setQueuedFollowUps((previous) => [...previous, { id: newLogId(), text }]);
       return;
     }
-    await sendText(text);
+    await sendText(text, activeWorkspaceId, activeThreadId, sourceAssetIds);
   }, [activeThreadId, activeWorkspaceId, draft, sendText, startThread, thinking, threadStatus]);
 
   const stopTurn = useCallback(() => {
@@ -2691,6 +2885,7 @@ export default function WebApp() {
               loadGitStatus={loadWorkspaceGitStatus}
               embedded
               enabled={rightPanelOpen && activeRightPanelTab === "files"}
+              onDataDraftChanged={() => { void refreshDataIntake(); }}
             />
           }
         />
@@ -2806,6 +3001,8 @@ export default function WebApp() {
         draft={draft}
         onDraftChange={setDraft}
         onSend={sendMessage}
+        onUploadDataFiles={uploadDataFiles}
+        openDataUploadRequest={dataUploadRequest}
         onStop={stopTurn}
         stopping={stopping}
         queuedFollowUps={queuedFollowUps}
@@ -2826,6 +3023,17 @@ export default function WebApp() {
         thinking={thinking}
         turnStartedAt={turnStartedAt}
         onResolveApproval={resolveApproval}
+        dataIntakeTaskId={activeTaskId}
+        dataIntake={dataIntake}
+        dataIntakeLoading={dataIntakeLoading}
+        dataIntakeError={dataIntakeError}
+        onRefreshDataIntake={() => { void refreshDataIntake(); }}
+        onOpenDataUpload={openDataUpload}
+        onConfirmDataMapping={(confirmed) => { void confirmDataMapping(confirmed); }}
+        onSubmitDataParameters={(answers) => { void submitDataParameters(answers); }}
+        onConfirmDataProfile={(requestId) => { confirmDataProfile(requestId); }}
+        onConfirmDataAnalysis={(requestId) => { void confirmDataAnalysis(requestId); }}
+        onRequestDataChange={requestDataChange}
       />
     </Layout>
   );

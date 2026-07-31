@@ -8,6 +8,8 @@ import Composer from "./Composer";
 import GoalBanner from "./GoalBanner";
 import FollowUpQueue, { type QueuedFollowUp } from "./FollowUpQueue";
 import UserInputCard from "./messages/UserInputCard";
+import DataIntakePanel from "./DataIntakePanel";
+import type { DataIntakeParameterAnswer, DataIntakeSessionSummary, DataMappingCandidate, SourceAssetSummary } from "../../../browser/types";
 import type { RequestUserInputRequest, RequestUserInputResponse } from "../../types";
 import type { ModelProviderSummary, ModelSummary } from "./Composer";
 import TaskApprovalQueue, {
@@ -57,7 +59,9 @@ type Props = {
   turnStartedAt?: number | null;
   draft: string;
   onDraftChange: (text: string) => void;
-  onSend: () => void;
+  onSend: (sourceAssetIds?: string[]) => void;
+  onUploadDataFiles?: (files: File[]) => Promise<SourceAssetSummary[]>;
+  openDataUploadRequest?: number;
   onStop: () => void;
   stopping: boolean;
   queuedFollowUps: QueuedFollowUp[];
@@ -71,6 +75,17 @@ type Props = {
   busy: boolean;
   sendDisabled: boolean;
   onResolveApproval?: (workspaceId: string, requestId: number | string, decision: "accept" | "decline") => void;
+  dataIntakeTaskId?: string | null;
+  dataIntake?: DataIntakeSessionSummary | null;
+  dataIntakeLoading?: boolean;
+  dataIntakeError?: string | null;
+  onRefreshDataIntake?: () => void;
+  onOpenDataUpload?: () => void;
+  onConfirmDataMapping?: (confirmed: DataMappingCandidate[]) => void;
+  onSubmitDataParameters?: (answers: DataIntakeParameterAnswer[]) => void;
+  onConfirmDataProfile?: (requestId: string) => void;
+  onConfirmDataAnalysis?: (requestId: string) => void;
+  onRequestDataChange?: (message: string) => void;
 };
 
 export default function Conversation({
@@ -113,6 +128,8 @@ export default function Conversation({
   draft,
   onDraftChange,
   onSend,
+  onUploadDataFiles,
+  openDataUploadRequest = 0,
   onStop,
   stopping,
   queuedFollowUps,
@@ -126,6 +143,17 @@ export default function Conversation({
   busy,
   sendDisabled,
   onResolveApproval,
+  dataIntakeTaskId = null,
+  dataIntake = null,
+  dataIntakeLoading = false,
+  dataIntakeError = null,
+  onRefreshDataIntake,
+  onOpenDataUpload,
+  onConfirmDataMapping,
+  onSubmitDataParameters,
+  onConfirmDataProfile,
+  onConfirmDataAnalysis,
+  onRequestDataChange,
 }: Props) {
   const messageAreaRef = useRef<HTMLDivElement | null>(null);
   const isAtBottomRef = useRef(true);
@@ -225,6 +253,20 @@ export default function Conversation({
             workspaceId={workspaceId}
             onResolveApproval={onResolveApproval}
           />
+          {workspaceId && dataIntakeTaskId && (dataIntake || dataIntakeLoading || dataIntakeError) && onRefreshDataIntake && onOpenDataUpload && onConfirmDataMapping && onSubmitDataParameters && onConfirmDataProfile && onConfirmDataAnalysis && onRequestDataChange ? (
+            <DataIntakePanel
+              session={dataIntake}
+              loading={dataIntakeLoading}
+              error={dataIntakeError}
+              onRefresh={onRefreshDataIntake}
+              onOpenUpload={onOpenDataUpload}
+              onConfirmMapping={onConfirmDataMapping}
+              onSubmitParameters={onSubmitDataParameters}
+              onConfirmProfile={onConfirmDataProfile}
+              onConfirmAnalysis={onConfirmDataAnalysis}
+              onRequestChange={onRequestDataChange}
+            />
+          ) : null}
           <TaskApprovalQueue
             approvals={taskApprovals}
             ariaLabel="Task approvals"
@@ -245,7 +287,9 @@ export default function Conversation({
       <Composer
         draft={draft}
         onDraftChange={onDraftChange}
-        onSend={onSend}
+          onSend={onSend}
+          onUploadDataFiles={onUploadDataFiles}
+          openDataUploadRequest={openDataUploadRequest}
         onStop={onStop}
         running={thinking || threadStatus === "running" || threadStatus === "reconnecting" || threadStatus.startsWith("active")}
         stopping={stopping}

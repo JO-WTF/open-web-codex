@@ -15,7 +15,7 @@ const agents: SettingsSupervisorsSectionProps["agents"] = [
     source: "repository",
     release_id: null,
     definition_id: "enterprise-data-agent",
-    version: "3.1.0",
+    version: "4.0.0",
     display_name: "Enterprise Data Agent",
     description: "Inspects the Dataset Release.",
     responsibilities: ["Inspect data"],
@@ -32,7 +32,7 @@ const agents: SettingsSupervisorsSectionProps["agents"] = [
     source: "repository",
     release_id: null,
     definition_id: "enterprise-network-planning-agent",
-    version: "3.6.0",
+    version: "4.0.0",
     display_name: "Enterprise Network Planning Agent",
     description: "Compares network scenarios.",
     responsibilities: ["Compare scenarios"],
@@ -220,9 +220,9 @@ describe("SettingsSupervisorsSection", () => {
     expect(request.agents[0]).toMatchObject({ spawn_limit: 2 });
     expect(request.artifact_contracts).toContainEqual({
       artifact_type: "indonesia_dataset_inspection.v1",
-      producer_agent: "enterprise-data-agent@3.1.0",
+      producer_agent: "enterprise-data-agent@4.0.0",
       consumer_agents: [
-        "enterprise-network-planning-agent@3.6.0",
+        "enterprise-network-planning-agent@4.0.0",
         "supervisor",
       ],
       required: false,
@@ -284,7 +284,7 @@ describe("SettingsSupervisorsSection", () => {
           artifact_contracts: [
             {
               artifact_type: "indonesia_dataset_inspection.v1",
-              producer_agent: "enterprise-data-agent@3.1.0",
+              producer_agent: "enterprise-data-agent@4.0.0",
               consumer_agents: ["supervisor"],
               required: true,
             },
@@ -316,7 +316,7 @@ describe("SettingsSupervisorsSection", () => {
   it("copies a built-in exact Supervisor release into a new definition", () => {
     const policy = {
       policy_id: "enterprise-supervisor-copilot",
-      version: "3.14.0",
+      version: "4.0.0",
       display_name: "Enterprise Supervisor Copilot",
       description: "Coordinates governed planning Agents.",
       source: "repository" as const,
@@ -335,7 +335,7 @@ describe("SettingsSupervisorsSection", () => {
           agents: [
             {
               definition_id: "enterprise-data-agent",
-              version: "3.1.0",
+              version: "4.0.0",
               release_id: null,
               spawn_limit: 1,
             },
@@ -343,7 +343,7 @@ describe("SettingsSupervisorsSection", () => {
           artifact_contracts: [
             {
               artifact_type: "indonesia_dataset_inspection.v1",
-              producer_agent: "enterprise-data-agent@3.1.0",
+              producer_agent: "enterprise-data-agent@4.0.0",
               consumer_agents: ["supervisor"],
               required: true,
             },
@@ -418,7 +418,7 @@ describe("SettingsSupervisorsSection", () => {
           agents: [
             {
               definition_id: "enterprise-data-agent",
-              version: "3.1.0",
+              version: "4.0.0",
               release_id: null,
               spawn_limit: 1,
             },
@@ -426,7 +426,7 @@ describe("SettingsSupervisorsSection", () => {
           artifact_contracts: [
             {
               artifact_type: "indonesia_dataset_inspection.v1",
-              producer_agent: "enterprise-data-agent@3.1.0",
+              producer_agent: "enterprise-data-agent@4.0.0",
               consumer_agents: ["supervisor"],
               required: true,
             },

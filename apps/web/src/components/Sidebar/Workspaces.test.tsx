@@ -74,7 +74,7 @@ describe("Web workspace actions", () => {
     render(<Workspaces {...props} supervisorPolicies={[policy]} />);
 
     fireEvent.click(screen.getByRole("button", { name: "New task in Demo" }));
-    expect(screen.getByRole("dialog", { name: "Start a task" })).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Create Thread" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /Supervisor/ }));
     fireEvent.click(
       screen.getByRole("button", { name: /Enterprise Supervisor Copilot/ }),
@@ -88,11 +88,11 @@ describe("Web workspace actions", () => {
     );
     await waitFor(() =>
       expect(
-        (screen.getByRole("button", { name: "Start task" }) as HTMLButtonElement)
+        (screen.getByRole("button", { name: "Create Thread" }) as HTMLButtonElement)
           .disabled,
       ).toBe(false),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Thread" }));
     await waitFor(() =>
       expect(props.onStartTask).toHaveBeenCalledWith(
         "ws-1",

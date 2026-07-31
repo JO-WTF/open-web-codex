@@ -164,7 +164,9 @@ export default function RunLauncherDialog({
     if (
       !selection ||
       !readiness ||
-      readiness.status === "blocked" ||
+      // Conversation launches are allowed with an empty Workspace.  The
+      // server still blocks AnalysisReadiness until Intake is complete.
+      (readiness.status === "blocked" && readiness.scope === "analysis") ||
       starting ||
       busy
     ) {
@@ -236,7 +238,7 @@ export default function RunLauncherDialog({
     >
       <header className="web-run-launcher-header">
         <div>
-          <h2 id="web-run-launcher-title">Start a task</h2>
+          <h2 id="web-run-launcher-title">Create Thread</h2>
           <p id="web-run-launcher-description">
             Choose how Codex should work in {workspaceName}, then resolve any
             missing requirements before starting.
@@ -266,7 +268,7 @@ export default function RunLauncherDialog({
               <MessageSquare size={17} aria-hidden="true" />
               <span>
                 <strong>Standard</strong>
-                <small>Start a general Codex Thread.</small>
+            <small>Create a general Codex Thread.</small>
               </span>
             </button>
             <button
@@ -393,7 +395,7 @@ export default function RunLauncherDialog({
           <h3>Readiness</h3>
           {!selection ? (
             <div className="web-run-launcher-empty">
-              Choose a mode and an exact Release to check requirements.
+            Choose a mode to check Thread readiness.
             </div>
           ) : checking ? (
             <div className="web-run-readiness-summary is-checking" role="status">
@@ -411,6 +413,8 @@ export default function RunLauncherDialog({
                     ? "Ready to start"
                     : readiness.status === "degraded"
                       ? "Ready with limitations"
+                    : readiness.scope === "thread"
+                      ? "Thread setup required"
                       : "Setup required"}
                 </strong>
               </div>
@@ -476,7 +480,7 @@ export default function RunLauncherDialog({
             checking ||
             !selection ||
             !readiness ||
-            readiness.status === "blocked"
+            (readiness.status === "blocked" && readiness.scope === "analysis")
           }
           onClick={() => void start()}
         >
@@ -486,7 +490,7 @@ export default function RunLauncherDialog({
               Starting…
             </>
           ) : (
-            "Start task"
+            "Create Thread"
           )}
         </button>
       </footer>

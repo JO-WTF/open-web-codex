@@ -81,7 +81,7 @@ describe("WebApp workspace-first messaging", () => {
     client.listAgentDefinitions.mockResolvedValue([]);
     client.listSupervisorPolicies.mockResolvedValue([{
       policy_id: "enterprise-supervisor-copilot",
-      version: "3.14.0",
+      version: "4.0.0",
       display_name: "Enterprise Supervisor Copilot",
       description: "Coordinates governed data analysis and warehouse-network planning agents.",
       source: "repository",
@@ -159,6 +159,7 @@ describe("WebApp workspace-first messaging", () => {
       "Start from this workspace",
       null,
       null,
+      [],
     ));
     expect(client.startThread.mock.invocationCallOrder[0]).toBeLessThan(
       client.sendUserMessage.mock.invocationCallOrder[0],
@@ -200,7 +201,7 @@ describe("WebApp workspace-first messaging", () => {
         task_id: "task-enterprise",
         thread_id: "thread-new",
         policy_id: "enterprise-supervisor-copilot",
-        version: "3.14.0",
+        version: "4.0.0",
         display_name: "Enterprise Supervisor Copilot",
         content_sha256: "a".repeat(64),
         state: "bound",
@@ -278,7 +279,7 @@ describe("WebApp workspace-first messaging", () => {
       name: /Enterprise Supervisor Copilot/,
     }));
     await screen.findByText("Ready to start");
-    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Thread" }));
 
     await waitFor(() => expect(client.startThread).toHaveBeenCalledWith(
       "workspace-1",
@@ -286,7 +287,7 @@ describe("WebApp workspace-first messaging", () => {
         agent: null,
         supervisorPolicy: {
           policy_id: "enterprise-supervisor-copilot",
-          version: "3.14.0",
+          version: "4.0.0",
         },
         readinessFingerprint: "readiness-test",
         onRunAccepted: expect.any(Function),
@@ -296,7 +297,7 @@ describe("WebApp workspace-first messaging", () => {
       .toHaveBeenCalledWith("thread-new"));
     fireEvent.click(await screen.findByRole("button", { name: "Agent activity" }));
     await waitFor(() => {
-      expect(screen.getByText("Policy enterprise-supervisor-copilot · 3.14.0"))
+      expect(screen.getByText("Policy enterprise-supervisor-copilot · 4.0.0"))
         .toBeTruthy();
       expect(screen.getByText("Root Supervisor")).toBeTruthy();
       expect(screen.getAllByText("Inspect enterprise planning data.")).toHaveLength(2);
@@ -608,7 +609,7 @@ describe("WebApp workspace-first messaging", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Standard" }));
     await screen.findByText("Ready to start");
-    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Thread" }));
 
     await waitFor(() => expect(client.startThread).toHaveBeenCalledTimes(1));
     expect(screen.queryByText("正在创建 Thread…")).toBeNull();
@@ -662,7 +663,7 @@ describe("WebApp workspace-first messaging", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Standard" }));
     await screen.findByText("Ready to start");
-    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Thread" }));
 
     await waitFor(() => expect(screen.getAllByText("Server generated title")).toHaveLength(2));
     expect(screen.queryByText("正在创建 Thread…")).toBeNull();
@@ -710,14 +711,14 @@ describe("WebApp workspace-first messaging", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Standard" }));
     await screen.findByText("Ready to start");
-    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Thread" }));
 
     await screen.findByText("Thread startup failed");
     expect(screen.queryByText("正在创建 Thread…")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Check again" }));
     await screen.findByText("Ready to start");
-    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Thread" }));
     await waitFor(() => expect(client.startThread).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByText("正在创建 Thread…")).toBeNull());
     expect(

@@ -95,17 +95,21 @@ describe("RunLauncherDialog", () => {
     expect(screen.getByText("Ready to start")).toBeTruthy();
   });
 
-  it("keeps blocked execution disabled and exposes the typed repair action", async () => {
+  it("allows a conversation Thread while exposing the typed data repair action", async () => {
     const onAction = vi.fn();
     render(
       <RunLauncherDialog
         {...props({
           onAction,
           onEvaluate: vi.fn(async (): Promise<RunReadiness> => ({
-            status: "blocked",
-            evaluation_fingerprint: "blocked",
+            // Conversation readiness is ready even when the downstream input
+            // readiness is blocked.  Analysis uses a separate gate.
+            status: "ready",
+            scope: "thread",
+            input_status: "blocked",
+            evaluation_fingerprint: "thread-ready-input-blocked",
             checks: [{
-              code: "workspace_dependencies",
+              code: "data_intake",
               status: "blocked",
               message: "Publish the required Dataset Release.",
               action: "open_workspace_data",
@@ -116,9 +120,9 @@ describe("RunLauncherDialog", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /Standard/ }));
-    await screen.findByText("Setup required");
-    const start = screen.getByRole("button", { name: "Start task" }) as HTMLButtonElement;
-    expect(start.disabled).toBe(true);
+    await screen.findByText("Ready to start");
+    const start = screen.getByRole("button", { name: "Create Thread" }) as HTMLButtonElement;
+    expect(start.disabled).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "Add data" }));
     expect(onAction).toHaveBeenCalledWith("open_workspace_data");
   });
@@ -138,7 +142,7 @@ describe("RunLauncherDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Standard/ }));
     await screen.findByText("Ready to start");
-    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Thread" }));
 
     await waitFor(() => expect(onEvaluate).toHaveBeenCalledTimes(2));
     expect(onStart).toHaveBeenCalledTimes(1);
@@ -146,11 +150,11 @@ describe("RunLauncherDialog", () => {
     await waitFor(() =>
       expect(
         (screen.getByRole("button", {
-          name: "Start task",
+          name: "Create Thread",
         }) as HTMLButtonElement).disabled,
       ).toBe(false),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Thread" }));
     await waitFor(() => expect(onStart).toHaveBeenCalledTimes(2));
     expect(onStart.mock.calls[0][2]).toBe(onStart.mock.calls[1][2]);
   });
@@ -168,7 +172,7 @@ describe("RunLauncherDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Standard/ }));
     await screen.findByText("Ready to start");
-    const start = screen.getByRole("button", { name: "Start task" });
+    const start = screen.getByRole("button", { name: "Create Thread" });
     fireEvent.click(start);
     fireEvent.click(start);
     expect(onStart).toHaveBeenCalledTimes(1);
@@ -182,7 +186,7 @@ describe("RunLauncherDialog", () => {
     );
 
     fireEvent.keyDown(
-      screen.getByRole("dialog", { name: "Start a task" }),
+      screen.getByRole("dialog", { name: "Create Thread" }),
       { key: "Escape" },
     );
     expect(onClose).toHaveBeenCalledTimes(1);
@@ -195,7 +199,7 @@ describe("RunLauncherDialog", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Standard" }));
     await screen.findByText("Ready to start");
-    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Thread" }));
     await waitFor(() => expect(firstStart).toHaveBeenCalledTimes(1));
     const firstOperationId =
       (firstStart.mock.calls[0] as unknown as unknown[])[2];
@@ -205,7 +209,7 @@ describe("RunLauncherDialog", () => {
     render(<RunLauncherDialog {...props({ onStart: secondStart })} />);
     fireEvent.click(screen.getByRole("button", { name: "Standard" }));
     await screen.findByText("Ready to start");
-    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Thread" }));
     await waitFor(() => expect(secondStart).toHaveBeenCalledTimes(1));
 
     expect(firstOperationId).toEqual(expect.any(String));
