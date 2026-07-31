@@ -27,34 +27,34 @@
   "agentTemplates": [
     {
       "definitionId": "enterprise-data-agent",
-      "version": "3.1.0",
-      "contentSha256": "151bc9040a5be5da82b57942585c3ddac3ea1075be1f1a30ba94066310f2032a",
+      "version": "4.0.0",
+      "contentSha256": "7425b45468e63b3d76fc0a64ee90cee4a5fea20e60df9aa3c64f58ffe07cea6f",
       "usesBlueprintDataset": true
     },
     {
       "definitionId": "enterprise-network-planning-agent",
-      "version": "3.6.0",
-      "contentSha256": "7ed8584a99285660aea8120708c06c86dd0f4da496b8273fa72fce151fd9a4df",
+      "version": "4.0.0",
+      "contentSha256": "e87114e121a9f7aea27ad55cfde4501d2e5fa73096d290091c0dc2d573400fde",
       "usesBlueprintDataset": false
     },
     {
       "definitionId": "enterprise-visualization-agent",
-      "version": "1.4.0",
-      "contentSha256": "7ca2b17f0e2891d40298f70482c1a36a2866385f3ba07bcc5a74b4bd43f84c84",
+      "version": "2.0.0",
+      "contentSha256": "a0e702123ba55ea0994b69fc622fefb3e359940e6e2d17eb30cae9773417ea20",
       "usesBlueprintDataset": false
     }
   ],
   "supervisorTemplate": {
     "policyId": "enterprise-supervisor-copilot",
-    "version": "3.14.0",
-    "contentSha256": "6c7c95afa1efc7fc1316836b6fd1309265bba5ffb91f2161db6dc606101b5d53"
+    "version": "4.0.0",
+    "contentSha256": "1902139c856efb2a7fce36184a7495a323b92fc9c08d43a31f3bed21dfb3394d"
   },
   "instructionPolicyTemplate": {
     "policyId": "platform-supervisor-behavior",
     "version": "1.1.0",
     "contentSha256": "995bdeb469712d1edd6811d6027255d01c78a6e5948150b5f5db559a93d69ef1"
   },
-  "requiredMcpServers": ["map_utils", "supply_chain_indonesia"],
+  "requiredMcpServers": ["map_utils", "supply_chain_data", "supply_chain_indonesia", "supply_chain_planner"],
   "expectedArtifactTypes": [
     "indonesia_dataset_inspection.v1",
     "indonesia_service_baseline.v1",

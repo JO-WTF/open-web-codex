@@ -1,0 +1,34 @@
+{
+  "definitionId": "enterprise-visualization-agent",
+  "version": "2.0.0",
+  "displayName": "Enterprise Visualization Agent",
+  "description": "Renders an exact Network Planning comparison map without recalculating business results.",
+  "runtimeRole": "agent_f533a88cc2fcde170744b35f4538deb9",
+  "runtimeProfile": {"contentSha256": "360aa0a08f400c2301c248322e4615b53898438ff3fa8951eea304477a8cb295"},
+  "responsibilities": [
+    "Resolve only exact network_comparison_map.v1 and geojson.v1 resource names through the planner-owned render preparation tool.",
+    "Pass the returned GeoJSON reference, layers and bounded extensions unchanged to map_utils.create_map_card.",
+    "Return exactly one map.v3 artifact and preserve the planner evidence references."
+  ],
+  "inputArtifactTypes": ["network_comparison_map.v1", "geojson.v1"],
+  "outputArtifactTypes": ["map.v3"],
+  "capabilityTemplate": {"definitionId": "enterprise-visualization-agent", "version": "2.0.0"},
+  "requiredMcpServers": [
+    {
+      "name": "supply_chain_planner",
+      "tools": ["prepare_network_map_render"],
+      "resourceRead": false,
+      "capabilityRootIds": ["local-supply-chain-network-planner"]
+    },
+    {
+      "name": "map_utils",
+      "tools": ["create_map_card"],
+      "resourceRead": false,
+      "capabilityRootIds": ["local-maps-mcp"]
+    }
+  ],
+  "risks": [
+    "A rendered map reflects the supplied planner evidence and does not independently validate the optimization.",
+    "Changing a layer or source reference can misrepresent the comparison."
+  ]
+}

@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import json
 import os
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Literal
 
 from mcp.server.fastmcp import FastMCP
-from mcp.types import CallToolResult, ResourceLink, TextContent
+from mcp.types import CallToolResult, EmbeddedResource, ResourceLink, TextContent, TextResourceContents
 from pydantic import ValidationError
 
 from .core import (
@@ -37,8 +45,14 @@ from .models import (
     FinancialEvaluation,
     FinancialEvaluationToolResult,
     NetworkInput,
+    NetworkMapRenderToolResult,
+    NetworkMapToolResult,
+    NetworkPlanningReportToolResult,
+    NetworkSnapshotPreparationToolResult,
     NetworkScenarioResult,
     NetworkSnapshot,
+    MapDataRef,
+    PlanningDataset,
     ResourceToolResult,
     RiskItem,
     RiskRegister,
@@ -76,6 +90,7 @@ _profile_state_root = Path(
 ).resolve()
 _resource_store: ResourceStore | None = None
 _data_resource_store: ResourceStore | None = None
+_CONTRACT_PATH = Path(__file__).resolve().parents[1] / "contracts" / "indonesia-warehouse-network-2.0.0.json"
 
 
 def _store() -> ResourceStore:
@@ -108,6 +123,80 @@ def _data_store() -> ResourceStore:
             uri_prefix="supply-chain-data://resources/",
         )
     return _data_resource_store
+
+
+def _resource_name(value: object) -> str:
+    """Return the exact opaque Resource name carried by a DataRef."""
+    if isinstance(value, str):
+        return value.rsplit("/", maxsplit=1)[-1]
+    if isinstance(value, dict):
+        name = value.get("resource_name") or value.get("resourceName")
+        if isinstance(name, str) and name:
+            return name
+        uri = value.get("uri")
+        if isinstance(uri, str) and uri:
+            return uri.rsplit("/", maxsplit=1)[-1]
+    raise ValueError("analysis_authorization_required")
+
+
+def _require_analysis_gate(
+    tool_name: str,
+    execution_snapshot_id: str | None,
+    planning_dataset_ref: object,
+    binding_fingerprint: str | None,
+) -> None:
+    """Authorize an analysis tool against the current Platform snapshot.
+
+    The MCP process never receives database credentials.  It proves possession
+    of the short-lived Profile Host key and sends only opaque snapshot/resource
+    references to the platform gate.
+    """
+    gate_url = os.environ.get("OPEN_WEB_CODEX_ANALYSIS_GATE_URL", "").strip()
+    gate_key = os.environ.get("OPEN_WEB_CODEX_ANALYSIS_GATE_KEY", "").strip()
+    if not gate_url or not gate_key or not execution_snapshot_id or not binding_fingerprint:
+        raise ValueError("analysis_authorization_required")
+    try:
+        key = base64.urlsafe_b64decode(gate_key + "=" * (-len(gate_key) % 4))
+    except ValueError as exc:
+        raise ValueError("analysis_authorization_required") from exc
+    body = json.dumps(
+        {
+            "executionSnapshotId": execution_snapshot_id,
+            "toolName": tool_name,
+            "planningDatasetRef": _resource_name(planning_dataset_ref),
+            "bindingFingerprint": binding_fingerprint,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    timestamp = str(int(time.time()))
+    parsed = urllib.parse.urlparse(gate_url)
+    path = parsed.path or "/"
+    message = "\n".join(
+        [timestamp, "POST", path, hashlib.sha256(body).hexdigest()]
+    ).encode("utf-8")
+    import hmac
+
+    signature = base64.urlsafe_b64encode(hmac.new(key, message, hashlib.sha256).digest()).decode(
+        "ascii"
+    ).rstrip("=")
+    request = urllib.request.Request(
+        gate_url,
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "X-Open-Web-Codex-Analysis-Timestamp": timestamp,
+            "X-Open-Web-Codex-Analysis-Signature": signature,
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            payload = json.load(response)
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as exc:
+        raise ValueError("analysis_authorization_required") from exc
+    if payload.get("authorized") is not True:
+        raise ValueError("analysis_authorization_required")
 
 
 def _validate_evidence_ref(ref: DataRef | DataAgentRef) -> None:
@@ -158,11 +247,55 @@ def _resource_call_result(
     summary: str,
     structured: dict[str, object],
 ) -> CallToolResult:
+    content: list[object] = [TextContent(type="text", text=summary), _resource_link(published, summary)]
+    if published.schema in {
+        "data_requirement_profile.v1",
+        "source_profile.v1",
+        "mapping_proposal.v1",
+        "input_gap.v1",
+        "planning-dataset.v2",
+        "analysis_readiness_review.v1",
+    } and published.size > 128 * 1024:
+        payload = _store().load_uri(published.uri)
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        envelope = {
+            "schemaVersion": payload.get("schemaVersion"),
+            "contract": payload.get("contract"),
+            "taskEvidence": payload.get("taskEvidence"),
+            "envelopeSchemaVersion": "intake_evidence_envelope.v1",
+            "resourceUri": published.uri,
+            "resourceSchema": published.schema,
+            "resourceContentSha256": hashlib.sha256(encoded).hexdigest(),
+        }
+        for key in (
+            "taskGoal", "problemType", "entities", "requiredEntities", "parameters",
+            "outputs", "conditionalRequirements", "assumptions", "exclusions",
+            "inputRequest", "sources", "candidates", "gaps", "ready", "summary",
+            "checks", "plannedAnalysis", "limitations", "normalization_status",
+            "data_quality", "source_summary", "normalization_statistics", "rejections",
+        ):
+            if key in payload:
+                envelope[key] = payload[key]
+        envelope_text = json.dumps(envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        if len(envelope_text.encode()) > 128 * 1024:
+            for key in ("sources", "candidates", "entities", "requiredEntities", "checks", "limitations"):
+                if isinstance(envelope.get(key), list):
+                    envelope[key] = envelope[key][:128]
+            envelope_text = json.dumps(envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        if len(envelope_text.encode()) > 128 * 1024:
+            raise ValueError("intake_evidence_envelope_exceeds_platform_limit")
+        content.append(
+            EmbeddedResource(
+                type="resource",
+                resource=TextResourceContents(
+                    uri=published.uri,
+                    mimeType="application/json",
+                    text=envelope_text,
+                ),
+            )
+        )
     return CallToolResult(
-        content=[
-            TextContent(type="text", text=summary),
-            _resource_link(published, summary),
-        ],
+        content=content,
         structuredContent=structured,
     )
 
@@ -179,6 +312,262 @@ def _load_ref(ref: DataRef, model_type):
             f"{actual_schema!r}"
         )
     return value
+
+
+def _ref_for_resource(resource_name: str) -> DataRef:
+    """Resolve a server-owned opaque resource name without accepting a URI."""
+    if not resource_name or resource_name != Path(resource_name).name:
+        raise ValueError("resource_name must be a single opaque Resource identifier")
+    payload = _store().load_uri(f"supply-chain://resources/{resource_name}")
+    schema = payload.get("schema_version")
+    if not isinstance(schema, str) or not schema:
+        raise ValueError("Resource is missing schema_version")
+    return DataRef(resource_schema=schema, uri=f"supply-chain://resources/{resource_name}")
+
+
+def _load_planning_dataset(ref: DataAgentRef) -> PlanningDataset:
+    if ref.server != "supply_chain_data" or ref.resource_schema != "planning-dataset.v2":
+        raise ValueError("planning_dataset_ref must identify supply_chain_data planning-dataset.v2")
+    payload = _data_store().load_uri(ref.uri)
+    dataset = PlanningDataset.model_validate(payload)
+    if dataset.data_quality.errors:
+        raise ValueError(
+            "planning dataset has blocking data-quality errors: "
+            + "; ".join(dataset.data_quality.errors[:5])
+        )
+    return dataset
+
+
+def _load_contract() -> dict[str, object]:
+    """Load the versioned domain contract from this capability package.
+
+    The Platform deliberately does not embed or interpret this file.  Network
+    Agent owns the contract and publishes the task-specific projection.
+    """
+    payload = json.loads(_CONTRACT_PATH.read_text(encoding="utf-8"))
+    if payload.get("contractId") != "indonesia-warehouse-network" or payload.get("version") != "2.0.0":
+        raise ValueError("indonesia_requirement_contract_unavailable")
+    return payload
+
+
+def _intake_envelope(
+    schema: str,
+    payload: dict[str, object],
+    *,
+    profile_hash: str | None = None,
+    source_hash: str | None = None,
+    mapping_hash: str | None = None,
+    parameter_hash: str | None = None,
+) -> dict[str, object]:
+    contract = _load_contract()
+    return {
+        "schemaVersion": schema,
+        "contract": {
+            "id": contract["contractId"],
+            "version": contract["version"],
+            "contentHash": contract["contentSha256"],
+        },
+        "taskEvidence": {
+            "profileHash": profile_hash,
+            "sourceSnapshotHash": source_hash,
+            "mappingHash": mapping_hash,
+            "parameterHash": parameter_hash,
+        },
+        **payload,
+    }
+
+
+def _canonical_hash(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()
+    ).hexdigest()
+
+
+@mcp.tool(structured_output=True)
+def publish_data_requirement_profile(
+    goal: str,
+    requested_outputs: list[str] | None = None,
+    analysis_mode: Literal["candidate_warehouse_optimization"] = "candidate_warehouse_optimization",
+) -> Annotated[CallToolResult, ResourceToolResult]:
+    """Create the complete user-confirmable Profile for the network question."""
+    goal = goal.strip()
+    if not goal or len(goal) > 4000:
+        raise ValueError("goal must contain 1-4000 characters")
+    contract = _load_contract()
+    outputs = requested_outputs or ["report", "map"]
+    if not outputs or any(not isinstance(item, str) or not item.strip() for item in outputs):
+        raise ValueError("requested_outputs must contain named outputs")
+    profile_payload = _intake_envelope(
+        "data_requirement_profile.v1",
+        {
+            "taskGoal": goal,
+            "problemType": analysis_mode,
+            "entities": contract["requiredEntities"],
+            "requiredEntities": contract["requiredEntities"],
+            "parameters": contract["businessParameters"],
+            "outputs": outputs,
+            "conditionalRequirements": [
+                "Route facts are required for quoted/navigation routes; otherwise coordinates and confirmed estimation parameters are required.",
+                "Candidate warehouse optimization requires candidate facilities, capacity and fixed/opening costs.",
+            ],
+            "assumptions": [
+                "Only files and fields confirmed by the user will enter the planning dataset.",
+                "No tutorial defaults are applied.",
+            ],
+            "exclusions": ["real-time navigation", "live carrier pricing", "unbounded source reads"],
+            "inputRequest": {
+                "kind": "confirm_profile",
+                "prompt": "请确认完整数据需求 Profile；任何字段或参数修改请作为普通消息提出。",
+            },
+        },
+    )
+    published = _store().publish("data_requirement_profile.v1", profile_payload)
+    summary = "Published the complete candidate-warehouse data requirement profile for user confirmation."
+    structured = ResourceToolResult(
+        summary=summary,
+        resource_name=published.resource_id,
+        data_ref=data_ref(published),
+    ).model_dump(mode="json")
+    return _resource_call_result(published, summary=summary, structured=structured)
+
+
+def _load_planner_payload(ref: DataRef) -> dict[str, object]:
+    if ref.server != "supply_chain_planner":
+        raise ValueError("profile_ref must identify a supply_chain_planner Resource")
+    payload = _store().load(ref)
+    if payload.get("schema_version") not in {ref.resource_schema, None} and payload.get("schemaVersion") != ref.resource_schema:
+        raise ValueError("profile Resource schema does not match its reference")
+    return payload
+
+
+def _load_data_payload(ref: DataAgentRef, schema: str) -> dict[str, object]:
+    if ref.server != "supply_chain_data" or ref.resource_schema != schema:
+        raise ValueError(f"expected supply_chain_data {schema} Resource")
+    return _data_store().load(ref)
+
+
+@mcp.tool(structured_output=True)
+def publish_input_gap(
+    profile_ref: DataRef,
+    source_profile_ref: DataAgentRef | None = None,
+    mapping_proposal_ref: DataAgentRef | None = None,
+    parameter_answers: dict[str, object] | None = None,
+    profile_confirmation: dict[str, object] | None = None,
+    mapping_confirmation: dict[str, object] | None = None,
+) -> Annotated[CallToolResult, ResourceToolResult]:
+    """Publish the current minimal data/confirmation/parameter gap."""
+    profile = _load_planner_payload(profile_ref)
+    source = (
+        _load_data_payload(source_profile_ref, "source_profile.v1")
+        if source_profile_ref is not None
+        else None
+    )
+    mapping = (
+        _load_data_payload(mapping_proposal_ref, "mapping_proposal.v1")
+        if mapping_proposal_ref is not None
+        else None
+    )
+    answers = parameter_answers or {}
+    gaps: list[dict[str, object]] = []
+    if (profile_confirmation or {}).get("confirmed") is not True:
+        gaps.append({
+            "code": "confirm_profile",
+            "message": "需要用户确认完整的数据需求 Profile。",
+        })
+    if source is None or not source.get("sources"):
+        gaps.append({"code": "provide_data", "message": "需要 Workspace 中可识别的 Excel、CSV 或 JSON 数据。"})
+    if source is not None and (mapping is None or not (mapping_confirmation or {}).get("confirmed") is True):
+        gaps.append({"code": "confirm_mapping", "message": "需要 Data Agent 生成并由用户整体确认字段映射。"})
+    required_parameters = [
+        item.get("name") for item in profile.get("parameters", []) if isinstance(item, dict) and item.get("required")
+    ]
+    missing_parameters = [key for key in required_parameters if key not in answers]
+    if missing_parameters:
+        gaps.append({"code": "answer_parameters", "parameters": missing_parameters, "message": "请补充带单位、来源和范围的业务参数。"})
+    request_kind = next(
+        (kind for kind in ("confirm_profile", "provide_data", "confirm_mapping", "answer_parameters")
+         if any(item["code"] == kind for item in gaps)),
+        None,
+    )
+    payload = _intake_envelope(
+        "input_gap.v1",
+        {
+            "gaps": gaps,
+            "ready": not gaps,
+            "inputRequest": ({"kind": request_kind, "prompt": "请补齐以下最小缺口后继续。"} if request_kind else None),
+        },
+        profile_hash=_canonical_hash(profile),
+        source_hash=_canonical_hash(source) if source is not None else None,
+        mapping_hash=_canonical_hash(mapping) if mapping is not None else None,
+        parameter_hash=_canonical_hash(answers),
+    )
+    published = _store().publish("input_gap.v1", payload)
+    summary = "Input gap is clear." if gaps else "No blocking input gap remains."
+    structured = ResourceToolResult(summary=summary, resource_name=published.resource_id, data_ref=data_ref(published)).model_dump(mode="json")
+    return _resource_call_result(published, summary=summary, structured=structured)
+
+
+@mcp.tool(structured_output=True)
+def publish_analysis_readiness_review(
+    profile_ref: DataRef,
+    source_profile_ref: DataAgentRef,
+    mapping_proposal_ref: DataAgentRef,
+    planning_dataset_ref: DataAgentRef,
+    parameter_answers: dict[str, object],
+    profile_confirmation: dict[str, object] | None = None,
+    mapping_confirmation: dict[str, object] | None = None,
+) -> Annotated[CallToolResult, ResourceToolResult]:
+    """Publish the final checklist only after the strict Dataset validates."""
+    profile = _load_planner_payload(profile_ref)
+    source = _load_data_payload(source_profile_ref, "source_profile.v1")
+    mapping = _load_data_payload(mapping_proposal_ref, "mapping_proposal.v1")
+    dataset = _load_planning_dataset(planning_dataset_ref)
+    profile_is_confirmed = profile_confirmation is not None and profile_confirmation.get("confirmed") is True
+    if not profile_is_confirmed:
+        raise ValueError("profile_confirmation_required")
+    mapping_is_confirmed = mapping.get("confirmed") is True or (
+        mapping_confirmation is not None
+        and mapping_confirmation.get("confirmed") is True
+    )
+    if not mapping_is_confirmed:
+        raise ValueError("mapping_confirmation_required")
+    if not parameter_answers.get("confirmed"):
+        raise ValueError("parameter_confirmation_required")
+    if dataset.data_quality.errors:
+        raise ValueError("planning_dataset_not_ready")
+    review = _intake_envelope(
+        "analysis_readiness_review.v1",
+        {
+            "ready": True,
+            "summary": {
+                "sourceCount": len(source.get("sources", [])),
+                "demandCount": len(dataset.network_input.demand_points),
+                "facilityCount": len(dataset.network_input.facilities),
+                "routeCount": len(dataset.route_entries),
+                "planningPeriod": dataset.network_input.planning_period,
+                "currency": dataset.network_input.currency,
+            },
+            "checks": [
+                "planning-dataset.v2 schema and provenance validated",
+                "demand, facility, assignment and route relationships validated",
+                "mapping and parameters confirmed by the user",
+            ],
+            "plannedAnalysis": ["current coverage", "candidate warehouse optimization", "scenario comparison", "report", "map"],
+            "limitations": dataset.assumptions,
+            "inputRequest": {
+                "kind": "confirm_analysis",
+                "prompt": "确认后，以上数据、映射和参数将被锁定为本次分析快照。",
+            },
+        },
+        profile_hash=_canonical_hash(profile),
+        source_hash=_canonical_hash(source),
+        mapping_hash=_canonical_hash(mapping),
+        parameter_hash=_canonical_hash(parameter_answers),
+    )
+    published = _store().publish("analysis_readiness_review.v1", review)
+    summary = "Final analysis checklist is ready for explicit user confirmation."
+    structured = ResourceToolResult(summary=summary, resource_name=published.resource_id, data_ref=data_ref(published)).model_dump(mode="json")
+    return _resource_call_result(published, summary=summary, structured=structured)
 
 
 def _load_network_source(source_path: str) -> tuple[NetworkInput, str]:
@@ -231,11 +620,70 @@ def prepare_network_snapshot(
 
 
 @mcp.tool(structured_output=True)
+def prepare_network_snapshot_from_planning_dataset(
+    planning_dataset_ref: DataAgentRef,
+    execution_snapshot_id: str | None = None,
+    binding_fingerprint: str | None = None,
+) -> Annotated[CallToolResult, NetworkSnapshotPreparationToolResult]:
+    """Project one exact Data Agent planning-dataset.v2 Resource into planner Resources.
+
+    This is the only normal Network Agent entry point for user-provided data.  The
+    planner reads the immutable Data Agent Resource, validates its provenance and
+    creates a bounded snapshot plus a complete route matrix without copying rows
+    through model messages.
+    """
+    _require_analysis_gate(
+        "prepare_network_snapshot_from_planning_dataset",
+        execution_snapshot_id,
+        planning_dataset_ref.model_dump(mode="json"),
+        binding_fingerprint,
+    )
+    dataset = _load_planning_dataset(planning_dataset_ref)
+    snapshot = create_snapshot(
+        dataset.network_input,
+        source_name=dataset.dataset_id,
+    )
+    snapshot_published = _store().publish(snapshot.schema_version, snapshot)
+    entries = [
+        RouteEntry.model_validate(route.model_dump())
+        for route in dataset.route_entries
+    ]
+    matrix = create_route_matrix(
+        snapshot,
+        provider=dataset.route_provider,
+        method=dataset.route_method,
+        entries=entries,
+    )
+    matrix_published = _store().publish(matrix.schema_version, matrix)
+    summary = (
+        f"Prepared network snapshot {snapshot.snapshot_id} and route matrix "
+        f"{matrix.route_matrix_id} from {dataset.dataset_id}; "
+        f"{len(snapshot.demand_points)} demand points, {len(snapshot.facilities)} facilities, "
+        f"{len(matrix.entries)} route pairs."
+    )
+    structured = NetworkSnapshotPreparationToolResult(
+        summary=summary,
+        snapshot_resource_name=snapshot_published.resource_id,
+        snapshot_ref=data_ref(snapshot_published),
+        route_matrix_resource_name=matrix_published.resource_id,
+        route_matrix_ref=data_ref(matrix_published),
+    ).model_dump(mode="json")
+    return _resource_call_result(
+        snapshot_published,
+        summary=summary,
+        structured=structured,
+    )
+
+
+@mcp.tool(structured_output=True)
 def register_route_matrix(
     snapshot_ref: DataRef,
     provider: str,
     method: Literal["navigation", "quoted", "haversine_estimate"],
     entries: list[RouteEntry],
+    planning_dataset_ref: DataAgentRef,
+    execution_snapshot_id: str | None = None,
+    binding_fingerprint: str | None = None,
     require_complete: bool = True,
 ) -> Annotated[CallToolResult, ResourceToolResult]:
     """Validate and publish route distance/time rows for a prepared snapshot.
@@ -245,6 +693,12 @@ def register_route_matrix(
     Complete matrices are required by default; set `require_complete=false` only for
     explicit diagnostic work, where missing pairs remain visible during evaluation.
     """
+    _require_analysis_gate(
+        "register_route_matrix",
+        execution_snapshot_id,
+        planning_dataset_ref.model_dump(mode="json"),
+        binding_fingerprint,
+    )
     snapshot = _load_ref(snapshot_ref, NetworkSnapshot)
     expected_pairs = {
         (facility.facility_id, demand.demand_id)
@@ -292,12 +746,21 @@ def register_route_matrix(
 def evaluate_current_coverage(
     snapshot_ref: DataRef,
     route_matrix_ref: DataRef,
+    planning_dataset_ref: str,
+    execution_snapshot_id: str | None = None,
+    binding_fingerprint: str | None = None,
 ) -> Annotated[CallToolResult, CurrentCoverageToolResult]:
     """Calculate actual current coverage and optimized existing-footprint coverage.
 
     Actual coverage preserves each demand point's `current_facility_id`. Optimized
     coverage reallocates splittable integer demand within existing facility capacities.
     """
+    _require_analysis_gate(
+        "evaluate_current_coverage",
+        execution_snapshot_id,
+        planning_dataset_ref,
+        binding_fingerprint,
+    )
     snapshot = _load_ref(snapshot_ref, NetworkSnapshot)
     matrix = _load_ref(route_matrix_ref, RouteMatrix)
     actual = evaluate_current_assignment(snapshot, matrix)
@@ -355,8 +818,17 @@ def evaluate_network_scenario(
     route_matrix_ref: DataRef,
     scenario_id: str,
     active_facility_ids: list[str],
+    planning_dataset_ref: DataAgentRef,
+    execution_snapshot_id: str | None = None,
+    binding_fingerprint: str | None = None,
 ) -> Annotated[CallToolResult, ResourceToolResult]:
     """Optimize coverage and variable cost for an explicit set of active facilities."""
+    _require_analysis_gate(
+        "evaluate_network_scenario",
+        execution_snapshot_id,
+        planning_dataset_ref.model_dump(mode="json"),
+        binding_fingerprint,
+    )
     snapshot = _load_ref(snapshot_ref, NetworkSnapshot)
     matrix = _load_ref(route_matrix_ref, RouteMatrix)
     result = evaluate_optimized_network(
@@ -385,8 +857,17 @@ def evaluate_network_scenario(
 def compare_network_scenarios(
     baseline_result_ref: DataRef,
     candidate_result_ref: DataRef,
+    planning_dataset_ref: str,
+    execution_snapshot_id: str | None = None,
+    binding_fingerprint: str | None = None,
 ) -> Annotated[CallToolResult, ComparisonToolResult]:
     """Compare two scenario results built from the same snapshot, routes, and policy."""
+    _require_analysis_gate(
+        "compare_network_scenarios",
+        execution_snapshot_id,
+        planning_dataset_ref,
+        binding_fingerprint,
+    )
     baseline = _load_ref(baseline_result_ref, NetworkScenarioResult)
     candidate = _load_ref(candidate_result_ref, NetworkScenarioResult)
     comparison = compare_scenarios(baseline, candidate)
@@ -411,6 +892,9 @@ def solve_facility_location(
     snapshot_ref: DataRef,
     route_matrix_ref: DataRef,
     target_coverage_ratio: float,
+    planning_dataset_ref: str,
+    execution_snapshot_id: str | None = None,
+    binding_fingerprint: str | None = None,
 ) -> Annotated[CallToolResult, FacilityLocationToolResult]:
     """Find the fewest candidate warehouses that reach a target coverage ratio.
 
@@ -418,6 +902,12 @@ def solve_facility_location(
     each subset it solves capacity-constrained, splittable integer allocation by
     min-cost flow. It minimizes added facility count first, then total cost.
     """
+    _require_analysis_gate(
+        "solve_facility_location",
+        execution_snapshot_id,
+        planning_dataset_ref,
+        binding_fingerprint,
+    )
     snapshot = _load_ref(snapshot_ref, NetworkSnapshot)
     matrix = _load_ref(route_matrix_ref, RouteMatrix)
     result, selected, evaluated, feasible = solve_location_candidates(
@@ -477,6 +967,9 @@ def evaluate_financial_case(
     horizon_years: int = 5,
     discount_rate: float = 0.1,
     annual_growth_rate: float = 0.0,
+    planning_dataset_ref: str | None = None,
+    execution_snapshot_id: str | None = None,
+    binding_fingerprint: str | None = None,
 ) -> Annotated[CallToolResult, FinancialEvaluationToolResult]:
     """Evaluate investment economics for one compatible network option.
 
@@ -484,6 +977,12 @@ def evaluate_financial_case(
     result. Scenario total-cost differences are treated as annual operating savings.
     The result is bounded to the supplied planning horizon and assumptions.
     """
+    _require_analysis_gate(
+        "evaluate_financial_case",
+        execution_snapshot_id,
+        planning_dataset_ref,
+        binding_fingerprint,
+    )
     snapshot = _load_ref(snapshot_ref, NetworkSnapshot)
     baseline = _load_ref(baseline_result_ref, NetworkScenarioResult)
     candidate = _load_ref(candidate_result_ref, NetworkScenarioResult)
@@ -513,6 +1012,322 @@ def evaluate_financial_case(
         data_ref=data_ref(published),
     ).model_dump(mode="json")
     return _resource_call_result(published, summary=summary, structured=structured)
+
+
+def _scenario_from_name(resource_name: str) -> NetworkScenarioResult:
+    return _load_ref(_ref_for_resource(resource_name), NetworkScenarioResult)
+
+
+def _snapshot_from_name(resource_name: str) -> NetworkSnapshot:
+    return _load_ref(_ref_for_resource(resource_name), NetworkSnapshot)
+
+
+def _feature_point(
+    *,
+    feature_id: str,
+    longitude: float,
+    latitude: float,
+    properties: dict[str, object],
+) -> dict[str, object]:
+    return {
+        "type": "Feature",
+        "id": feature_id,
+        "properties": properties,
+        "geometry": {"type": "Point", "coordinates": [longitude, latitude]},
+    }
+
+
+def _feature_line(
+    *,
+    feature_id: str,
+    origin: tuple[float, float],
+    destination: tuple[float, float],
+    properties: dict[str, object],
+) -> dict[str, object]:
+    return {
+        "type": "Feature",
+        "id": feature_id,
+        "properties": properties,
+        "geometry": {
+            "type": "LineString",
+            "coordinates": [[origin[0], origin[1]], [destination[0], destination[1]]],
+        },
+    }
+
+
+@mcp.tool(structured_output=True)
+def prepare_network_comparison_map(
+    snapshot_resource_name: str,
+    current_result_resource_name: str,
+    candidate_result_resource_name: str,
+    comparison_resource_name: str,
+    planning_dataset_ref: str,
+    execution_snapshot_id: str | None = None,
+    binding_fingerprint: str | None = None,
+) -> Annotated[CallToolResult, NetworkMapToolResult]:
+    """Publish a bounded current-versus-candidate map manifest and GeoJSON.
+
+    The tool only joins planner-owned Resources from one snapshot. It does not
+    geocode, route, or recompute business metrics; every feature is derived from
+    the validated snapshot and scenario allocations.
+    """
+    _require_analysis_gate(
+        "prepare_network_comparison_map",
+        execution_snapshot_id,
+        planning_dataset_ref,
+        binding_fingerprint,
+    )
+    snapshot = _snapshot_from_name(snapshot_resource_name)
+    current = _scenario_from_name(current_result_resource_name)
+    candidate = _scenario_from_name(candidate_result_resource_name)
+    comparison = _load_ref(_ref_for_resource(comparison_resource_name), ScenarioComparison)
+    if current.snapshot_id != snapshot.snapshot_id or candidate.snapshot_id != snapshot.snapshot_id:
+        raise ValueError("map inputs must reference the same network snapshot")
+    if comparison.baseline_result_id != current.result_id or comparison.candidate_result_id != candidate.result_id:
+        raise ValueError("comparison Resource does not match current and candidate results")
+
+    facilities = {item.facility_id: item for item in snapshot.facilities}
+    demand_points = {item.demand_id: item for item in snapshot.demand_points}
+    features: list[dict[str, object]] = []
+    for facility in snapshot.facilities:
+        role = "existing" if facility.is_existing else "candidate"
+        selected = facility.facility_id in candidate.active_facility_ids
+        status = "existing" if facility.is_existing else ("selected" if selected else "unselected")
+        features.append(
+            _feature_point(
+                feature_id=f"facility-{facility.facility_id}",
+                longitude=facility.location.longitude,
+                latitude=facility.location.latitude,
+                properties={
+                    "kind": "facility",
+                    "facility_id": facility.facility_id,
+                    "label": facility.label or facility.facility_id,
+                    "status": status,
+                    "role": role,
+                    "capacity_units": facility.capacity_units,
+                },
+            )
+        )
+    demand_units = {item.demand_id: item.demand_units for item in snapshot.demand_points}
+    for demand in snapshot.demand_points:
+        features.append(
+            _feature_point(
+                feature_id=f"demand-{demand.demand_id}",
+                longitude=demand.location.longitude,
+                latitude=demand.location.latitude,
+                properties={
+                    "kind": "demand",
+                    "demand_id": demand.demand_id,
+                    "label": demand.demand_id,
+                    "region": demand.region,
+                    "demand_units": demand_units[demand.demand_id],
+                },
+            )
+        )
+    for scenario, prefix, label in (
+        (current, "current", "Current allocation"),
+        (candidate, "optimized", "Optimized allocation"),
+    ):
+        for allocation in scenario.allocations:
+            if not allocation.facility_id or allocation.units <= 0:
+                continue
+            facility = facilities.get(allocation.facility_id)
+            demand = demand_points.get(allocation.demand_id)
+            if facility is None or demand is None:
+                raise ValueError("scenario allocation references a missing map point")
+            features.append(
+                _feature_line(
+                    feature_id=f"{prefix}-{allocation.facility_id}-{allocation.demand_id}",
+                    origin=(facility.location.longitude, facility.location.latitude),
+                    destination=(demand.location.longitude, demand.location.latitude),
+                    properties={
+                        "kind": "assignment",
+                        "scenario": prefix,
+                        "label": label,
+                        "facility_id": allocation.facility_id,
+                        "demand_id": allocation.demand_id,
+                        "units": allocation.units,
+                        "covered": allocation.covered,
+                    },
+                )
+            )
+    geojson = {"type": "FeatureCollection", "features": features}
+    geojson_published = _store().publish("geojson.v1", geojson)
+    title = "Current and optimized warehouse network"
+    map_manifest = {
+        "schema_version": "network_comparison_map.v1",
+        "title": title,
+        "summary": (
+            f"Coverage changes from {current.metrics.coverage_ratio:.1%} to "
+            f"{candidate.metrics.coverage_ratio:.1%}; cost changes by "
+            f"{comparison.total_cost_delta} {snapshot.currency}."
+        ),
+        "snapshot_resource_name": snapshot_resource_name,
+        "current_result_resource_name": current_result_resource_name,
+        "candidate_result_resource_name": candidate_result_resource_name,
+        "comparison_resource_name": comparison_resource_name,
+        "geojson_resource_name": geojson_published.resource_id,
+        "geojson_ref": {
+            "type": "mcp_resource",
+            "server": "supply_chain_planner",
+            "uri": geojson_published.uri,
+            "format": "geojson",
+        },
+        "feature_count": len(features),
+        "layers": [
+            {"id": "network-current-assignments", "type": "line", "source": "network", "paint": {"line-color": "#64748b", "line-width": 1.5, "line-opacity": 0.45}},
+            {"id": "network-optimized-assignments", "type": "line", "source": "network", "filter": ["==", ["get", "scenario"], "optimized"], "paint": {"line-color": "#2563eb", "line-width": 2.5, "line-opacity": 0.75}},
+            {"id": "network-facilities", "type": "circle", "source": "network", "filter": ["==", ["get", "kind"], "facility"], "paint": {"circle-color": ["match", ["get", "status"], "selected", "#16a34a", "unselected", "#94a3b8", "#f97316"], "circle-radius": 7, "circle-stroke-color": "#ffffff", "circle-stroke-width": 1}},
+            {"id": "network-demand", "type": "circle", "source": "network", "filter": ["==", ["get", "kind"], "demand"], "paint": {"circle-color": "#7c3aed", "circle-radius": ["interpolate", ["linear"], ["get", "demand_units"], 0, 3, 1000, 10], "circle-opacity": 0.7}},
+        ],
+        "extensions": {
+            "legend": {"title": "Network comparison", "items": [{"label": "Existing facility", "color": "#f97316", "type": "circle"}, {"label": "Selected candidate", "color": "#16a34a", "type": "circle"}, {"label": "Current allocation", "color": "#64748b", "type": "line"}, {"label": "Optimized allocation", "color": "#2563eb", "type": "line"}]},
+            "hover": {"layers": [{"layer": "network-facilities", "title_property": "label", "fields": ["status", "capacity_units"]}, {"layer": "network-demand", "title_property": "label", "fields": ["region", "demand_units"]}]},
+        },
+    }
+    map_published = _store().publish("network_comparison_map.v1", map_manifest)
+    summary = str(map_manifest["summary"])
+    structured = NetworkMapToolResult(
+        summary=summary,
+        map_resource_name=map_published.resource_id,
+        map_ref=data_ref(map_published),
+        geojson_resource_name=geojson_published.resource_id,
+        geojson_ref=MapDataRef(uri=geojson_published.uri),
+        feature_count=len(features),
+        title=title,
+        layers=map_manifest["layers"],
+        extensions=map_manifest["extensions"],
+    ).model_dump(mode="json")
+    return _resource_call_result(map_published, summary=summary, structured=structured)
+
+
+@mcp.tool(structured_output=True)
+def prepare_network_map_render(
+    map_resource_name: str,
+    geojson_resource_name: str,
+    planning_dataset_ref: str,
+    execution_snapshot_id: str | None = None,
+    binding_fingerprint: str | None = None,
+) -> Annotated[CallToolResult, NetworkMapRenderToolResult]:
+    """Resolve exact planner map and GeoJSON names for Visualization Agent 2.0."""
+    _require_analysis_gate(
+        "prepare_network_map_render",
+        execution_snapshot_id,
+        planning_dataset_ref,
+        binding_fingerprint,
+    )
+    map_ref = _ref_for_resource(map_resource_name)
+    payload = _store().load(map_ref)
+    if payload.get("schema_version") != "network_comparison_map.v1":
+        raise ValueError("map_resource_name must identify network_comparison_map.v1")
+    if payload.get("geojson_resource_name") != geojson_resource_name:
+        raise ValueError("map and GeoJSON Resource names do not match")
+    geojson_ref = payload.get("geojson_ref")
+    if not isinstance(geojson_ref, dict) or geojson_ref.get("uri") != f"supply-chain://resources/{geojson_resource_name}":
+        raise ValueError("network map does not reference the requested GeoJSON Resource")
+    geojson = _store().load_uri(f"supply-chain://resources/{geojson_resource_name}")
+    if geojson.get("type") != "FeatureCollection" or not isinstance(geojson.get("features"), list):
+        raise ValueError("GeoJSON Resource is not a FeatureCollection")
+    result = NetworkMapRenderToolResult(
+        summary=str(payload.get("summary", "Network comparison map ready")),
+        map_manifest_resource_name=map_resource_name,
+        geojson_resource_name=geojson_resource_name,
+        geojson_ref=MapDataRef(uri=f"supply-chain://resources/{geojson_resource_name}"),
+        title=str(payload.get("title", "Network comparison")),
+        layers=payload.get("layers", []),
+        extensions=payload.get("extensions", {}),
+    )
+    return _resource_call_result(
+        _store().publish("network_map_render_input.v1", result),
+        summary=result.summary,
+        structured=result.model_dump(mode="json"),
+    )
+
+
+@mcp.tool(structured_output=True)
+def prepare_network_planning_report(
+    snapshot_resource_name: str,
+    current_result_resource_name: str,
+    solution_resource_name: str,
+    comparison_resource_name: str,
+    map_resource_name: str | None = None,
+    planning_dataset_ref: str | None = None,
+    execution_snapshot_id: str | None = None,
+    binding_fingerprint: str | None = None,
+) -> Annotated[CallToolResult, NetworkPlanningReportToolResult]:
+    """Publish a deterministic report Resource from validated planner evidence."""
+    _require_analysis_gate(
+        "prepare_network_planning_report",
+        execution_snapshot_id,
+        planning_dataset_ref,
+        binding_fingerprint,
+    )
+    snapshot = _snapshot_from_name(snapshot_resource_name)
+    current = _scenario_from_name(current_result_resource_name)
+    solution = _load_ref(_ref_for_resource(solution_resource_name), FacilityLocationSolution)
+    comparison = _load_ref(_ref_for_resource(comparison_resource_name), ScenarioComparison)
+    if solution.result_resource_name:
+        candidate = _scenario_from_name(solution.result_resource_name)
+    else:
+        raise ValueError("facility solution is missing its candidate result Resource")
+    if current.snapshot_id != snapshot.snapshot_id or candidate.snapshot_id != snapshot.snapshot_id:
+        raise ValueError("report inputs must reference one snapshot")
+    if comparison.baseline_result_id != current.result_id or comparison.candidate_result_id != candidate.result_id:
+        raise ValueError("report comparison does not match supplied scenarios")
+    map_note = map_resource_name or "not prepared"
+    title = "Warehouse network planning report"
+    markdown = "\n".join(
+        [
+            f"# {title}",
+            "",
+            "## Evidence and scope",
+            f"- Planning period: {snapshot.planning_period}",
+            f"- Currency: {snapshot.currency}",
+            f"- Demand points: {len(snapshot.demand_points)}; facilities: {len(snapshot.facilities)}",
+            f"- Current coverage: {current.metrics.coverage_ratio:.1%}; current cost: {current.metrics.total_cost} {snapshot.currency}",
+            "",
+            "## Candidate warehouse optimization",
+            f"- Status: {solution.status}",
+            f"- Selected candidates: {', '.join(solution.selected_candidate_facility_ids) or 'none'}",
+            f"- Optimized coverage: {candidate.metrics.coverage_ratio:.1%}; optimized cost: {candidate.metrics.total_cost} {snapshot.currency}",
+            f"- Coverage change: {comparison.coverage_ratio_delta:+.1%}; cost change: {comparison.total_cost_delta:+} {snapshot.currency}",
+            "",
+            "## Limitations",
+            "- Optimization is exact only over the finite candidate facilities and supplied route matrix.",
+            f"- Comparison map Resource: {map_note}.",
+            "- Route quality and assumptions are inherited from the confirmed planning dataset.",
+        ]
+    )
+    digest = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
+    payload = {
+        "schema_version": "network_planning_report.v1",
+        "title": title,
+        "status": "ready",
+        "markdown": markdown,
+        "markdown_sha256": digest,
+        "input_resources": [snapshot_resource_name, current_result_resource_name, solution_resource_name, comparison_resource_name, map_note],
+        "generated_at": datetime.now(UTC).isoformat(),
+    }
+    report_published = _store().publish("network_planning_report.v1", payload)
+    report_ref = DataRef(resource_schema="network_planning_report.v1", uri=report_published.uri)
+    artifact = {
+        "schema_version": "report.v1",
+        "title": title,
+        "status": "ready",
+        "source": report_ref.model_dump(mode="json"),
+    }
+    artifact_published = _store().publish("report.v1", artifact)
+    summary = f"Published {title} with current and optimized coverage, cost, candidate selection, and limitations."
+    structured = NetworkPlanningReportToolResult(
+        summary=summary,
+        resource_name=report_published.resource_id,
+        data_ref=report_ref,
+        title=title,
+        markdown_sha256=digest,
+        report_resource_name=artifact_published.resource_id,
+        report_ref=data_ref(artifact_published),
+    ).model_dump(mode="json")
+    return _resource_call_result(report_published, summary=summary, structured=structured)
 
 
 @mcp.tool(structured_output=True)
@@ -560,7 +1375,27 @@ def validate_network_resource(
         "risk_register.v1": RiskRegister,
     }
     model_type = model_by_schema.get(schema)
-    if model_type is None:
+    if schema in {"network_comparison_map.v1", "geojson.v1", "network_planning_report.v1", "report.v1"}:
+        if schema == "geojson.v1":
+            if payload.get("type") != "FeatureCollection" or not isinstance(payload.get("features"), list):
+                errors.append("GeoJSON resource must be a FeatureCollection")
+            elif len(payload["features"]) > 5_000:
+                errors.append("GeoJSON feature limit exceeded")
+        elif schema == "network_comparison_map.v1":
+            if not isinstance(payload.get("geojson_resource_name"), str) or not isinstance(payload.get("layers"), list):
+                errors.append("network comparison map is missing its bounded GeoJSON and layers")
+            checks.append("network comparison map retains exact GeoJSON and planner evidence names")
+        elif schema == "network_planning_report.v1":
+            if payload.get("status") != "ready" or not isinstance(payload.get("markdown_sha256"), str):
+                errors.append("network planning report is not ready or lacks its content hash")
+            checks.append("report contains a bounded immutable source")
+        elif schema == "report.v1":
+            if payload.get("status") != "ready" or not isinstance(payload.get("source"), dict):
+                errors.append("report delivery does not reference a ready source")
+            checks.append("report delivery preserves the source Resource reference")
+        if not errors:
+            checks.append(f"resource conforms to {schema}")
+    elif model_type is None:
         errors.append(f"unsupported resource schema {schema!r}")
     else:
         try:

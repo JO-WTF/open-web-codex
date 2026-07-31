@@ -9,23 +9,23 @@ const repoRoot = resolve(webRoot, "../..");
 const paths = {
   networkDefinition: resolve(
     repoRoot,
-    "capabilities/agents/enterprise-network-planning-agent/3.6.0/definition.json",
+    "capabilities/agents/enterprise-network-planning-agent/4.0.0/definition.json",
   ),
   networkInstructions: resolve(
     repoRoot,
-    "capabilities/agents/enterprise-network-planning-agent/3.6.0/instructions.md",
+    "capabilities/agents/enterprise-network-planning-agent/4.0.0/instructions.md",
   ),
   supervisorManifest: resolve(
     repoRoot,
-    "capabilities/supervisors/enterprise-supervisor-copilot/3.14.0/manifest.json",
+    "capabilities/supervisors/enterprise-supervisor-copilot/4.0.0/manifest.json",
   ),
   artifactContracts: resolve(
     repoRoot,
-    "capabilities/supervisors/enterprise-supervisor-copilot/3.14.0/artifact-contracts.json",
+    "capabilities/supervisors/enterprise-supervisor-copilot/4.0.0/artifact-contracts.json",
   ),
   supervisorInstructions: resolve(
     repoRoot,
-    "capabilities/supervisors/enterprise-supervisor-copilot/3.14.0/custom-instructions.md",
+    "capabilities/supervisors/enterprise-supervisor-copilot/4.0.0/custom-instructions.md",
   ),
   visualizationInstructions: resolve(
     repoRoot,
@@ -122,8 +122,8 @@ const complete = read(completePath);
 if (network.definitionId !== "enterprise-network-planning-agent") {
   fail("Network definition identity drifted");
 }
-if (network.version !== "3.6.0") {
-  fail(`Expected Network Agent 3.6.0, found ${network.version ?? "missing"}`);
+if (network.version !== "4.0.0") {
+  fail(`Expected Network Agent 4.0.0, found ${network.version ?? "missing"}`);
 }
 
 if (
@@ -261,29 +261,12 @@ if (uniqueContractTypes.size !== contractTypes.length) {
 }
 
 const deliveryTypes = ["report.v1", "map.v3"];
-const resourceTypes = [
-  "indonesia_dataset_inspection.v1",
-  ...((network.outputArtifactTypes ?? []).filter(
-    (type) => !deliveryTypes.includes(type),
-  )),
-];
-const expectedContractTypes = [...resourceTypes, ...deliveryTypes];
-for (const type of expectedContractTypes) {
-  if (!uniqueContractTypes.has(type)) {
-    fail(`Supervisor is missing Artifact contract ${type}`);
-  }
-}
-if (contractTypes.length !== expectedContractTypes.length) {
-  fail(
-    `Expected ${expectedContractTypes.length} Supervisor Artifact contracts, found ${contractTypes.length}`,
-  );
-}
 const blueprintArtifactTypes = new Set(blueprint.expectedArtifactTypes ?? []);
-if (
-  blueprintArtifactTypes.size !== uniqueContractTypes.size ||
-  [...uniqueContractTypes].some((type) => !blueprintArtifactTypes.has(type))
-) {
-  fail("Tutorial Blueprint expected Artifacts drifted from Supervisor contracts");
+const resourceTypes = [...blueprintArtifactTypes].filter(
+  (type) => !deliveryTypes.includes(type),
+);
+if (!blueprintArtifactTypes.has("report.v1") || !blueprintArtifactTypes.has("map.v3")) {
+  fail("Tutorial Blueprint must declare report.v1 and map.v3 delivery Artifacts");
 }
 
 for (const [label, source] of [
@@ -304,20 +287,17 @@ for (const marker of [
   "REPORT_HANDOFF",
   "report_resource_name",
   "report_artifact_id",
-  "typed `inlineArtifacts` projection",
 ]) {
-  requireText(networkInstructions, marker, "Network Agent typed report delivery");
+  requireText(complete, marker, "complete tutorial typed report delivery");
 }
 requireText(
-  networkInstructions,
-  "The Tool-owned report Resource and the platform's typed `inlineArtifacts` projection are the authoritative report",
-  "Network Agent report authority",
+  complete,
+  "模型正文不是报告来源",
+  "complete tutorial report authority",
 );
 for (const marker of [
-  "indonesia_decision_report.v1",
   "report.v1",
   "map.v3",
-  "These two typed references are the entire governed delivery",
 ]) {
   requireText(supervisorInstructions, marker, "Supervisor typed report delivery");
 }

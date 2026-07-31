@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import math
 import json
 import os
 import re
+from datetime import UTC, date, datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
-from mcp.server.fastmcp import FastMCP
-from mcp.types import CallToolResult, ResourceLink, TextContent
+from mcp.server.fastmcp import Context, FastMCP
+from mcp.types import CallToolResult, EmbeddedResource, ResourceLink, TextContent, TextResourceContents
 
 from .data_core import build_planning_dataset as aggregate_planning_dataset
 from .data_core import inspect_source
@@ -19,17 +23,33 @@ from .models import (
     DataAgentResourceToolResult,
     PlanningDataset,
     PlanningSource,
+    DemandLocation,
+    Facility,
+    TransportRate,
+    RouteFact,
+    OrderFact,
+    ServicePolicy,
+    Point,
+    PlanningSource,
     PlanningSourceCatalog,
     PlanningSourceCatalogEntry,
     PlanningSourceInspection,
     ValidationResult,
 )
 from .resource_store import PublishedResource, ResourceStore
+from .workspace_intake import (
+    discover,
+    flatten_record,
+    inspect,
+    propose_mapping,
+    read_rows,
+    trusted_workspace_root,
+)
 
 MCP_SERVER_NAME = "supply_chain_data"
 RESOURCE_URI_PREFIX = "supply-chain-data://resources/"
-MAX_SOURCE_BYTES = 20 * 1024 * 1024
-MAX_SOURCE_CATALOG_ENTRIES = 100
+MAX_SOURCE_BYTES = 100 * 1024 * 1024
+MAX_SOURCE_CATALOG_ENTRIES = 500
 SOURCE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,127}$")
 
 mcp = FastMCP(
@@ -60,6 +80,7 @@ _profile_state_root = Path(
     os.environ.get("CODEX_HOME", _workspace_root / ".codex")
 ).resolve()
 _resource_store: ResourceStore | None = None
+_CONTRACT_PATH = Path(__file__).resolve().parents[1] / "contracts" / "indonesia-warehouse-network-2.0.0.json"
 
 
 def _store() -> ResourceStore:
@@ -167,6 +188,495 @@ def _resource_link(
     )
 
 
+_INTAKE_SCHEMAS = {
+    "data_requirement_profile.v1",
+    "source_profile.v1",
+    "mapping_proposal.v1",
+    "input_gap.v1",
+    "planning-dataset.v2",
+    "analysis_readiness_review.v1",
+}
+
+
+def _bounded_intake_envelope(
+    published: PublishedResource,
+    payload: dict[str, Any],
+) -> EmbeddedResource | None:
+    """Return a bounded companion for a large intake Resource.
+
+    The full Resource remains the only dataset authority.  This companion is
+    deliberately limited to fields the Platform may project into readiness;
+    it is never used as a planning input.
+    """
+    if published.schema not in _INTAKE_SCHEMAS or published.size <= 128 * 1024:
+        return None
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    keep = {
+        "schemaVersion": payload.get("schemaVersion"),
+        "contract": payload.get("contract"),
+        "taskEvidence": payload.get("taskEvidence"),
+        "envelopeSchemaVersion": "intake_evidence_envelope.v1",
+        "resourceUri": published.uri,
+        "resourceSchema": published.schema,
+        "resourceContentSha256": hashlib.sha256(encoded).hexdigest(),
+    }
+    for key in (
+        "taskGoal", "problemType", "entities", "requiredEntities", "parameters",
+        "outputs", "conditionalRequirements", "assumptions", "exclusions",
+        "inputRequest", "sources", "candidates", "gaps", "ready", "summary",
+        "checks", "plannedAnalysis", "limitations", "normalization_status",
+        "data_quality", "source_summary", "normalization_statistics", "rejections",
+    ):
+        if key in payload:
+            keep[key] = payload[key]
+    envelope = json.dumps(keep, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    if len(envelope.encode("utf-8")) > 128 * 1024:
+        # Preserve the schema-level readiness signal even when a source profile
+        # or mapping contains more candidates than the platform projection cap.
+        for key in ("sources", "candidates", "entities", "requiredEntities", "checks", "limitations"):
+            if isinstance(keep.get(key), list):
+                keep[key] = keep[key][:128]
+        envelope = json.dumps(keep, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    if len(envelope.encode("utf-8")) > 128 * 1024:
+        raise ValueError("intake_evidence_envelope_exceeds_platform_limit")
+    return EmbeddedResource(
+        type="resource",
+        resource=TextResourceContents(
+            uri=published.uri,
+            mimeType="application/json",
+            text=envelope,
+        ),
+    )
+
+
+def _workspace(ctx: Context) -> Path:
+    return trusted_workspace_root(ctx.request_context.meta)
+
+
+def _publish_json(schema: str, payload: dict[str, Any], summary: str) -> CallToolResult:
+    published = _store().publish(schema, payload)
+    content: list[Any] = [TextContent(type="text", text=summary), _resource_link(published, summary)]
+    envelope = _bounded_intake_envelope(published, payload)
+    if envelope is not None:
+        content.append(envelope)
+    return CallToolResult(
+        content=content,
+        structuredContent={
+            "summary": summary,
+            "resource_name": published.resource_id,
+            "data_ref": _data_ref(published).model_dump(mode="json"),
+        },
+    )
+
+
+def _intake_contract_metadata() -> dict[str, str]:
+    contract = json.loads(_CONTRACT_PATH.read_text(encoding="utf-8"))
+    return {
+        "id": str(contract["contractId"]),
+        "version": str(contract["version"]),
+        "contentHash": str(contract["contentSha256"]),
+    }
+
+
+def _wrap_intake_payload(
+    schema: str,
+    payload: dict[str, Any],
+    *,
+    profile_hash: str | None = None,
+    source_hash: str | None = None,
+    mapping_hash: str | None = None,
+    parameter_hash: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "schemaVersion": schema,
+        "contract": _intake_contract_metadata(),
+        "taskEvidence": {
+            "profileHash": profile_hash,
+            "sourceSnapshotHash": source_hash,
+            "mappingHash": mapping_hash,
+            "parameterHash": parameter_hash,
+        },
+        **payload,
+    }
+
+
+@mcp.tool(structured_output=True)
+def discover_workspace_sources(ctx: Context) -> dict[str, Any]:
+    """Discover bounded Excel/CSV/JSON metadata across the trusted Workspace."""
+    sources = discover(_workspace(ctx))
+    return {
+        "schema": "workspace_source_catalog.v1",
+        "workspace_scope": "authorized_workspace",
+        "sources": sources,
+        "truncated": False,
+    }
+
+
+@mcp.tool(structured_output=True)
+def inspect_workspace_sources(
+    source_refs: list[str],
+    ctx: Context,
+) -> dict[str, Any]:
+    """Return bounded headers, sheet structures, JSON paths and sample rows."""
+    if not source_refs or len(source_refs) > MAX_SOURCE_CATALOG_ENTRIES:
+        raise ValueError("source_refs must contain 1-100 opaque source references")
+    root = _workspace(ctx)
+    return {
+        "schema": "source_profile.v1",
+        "sources": [inspect(root, source_ref) for source_ref in source_refs],
+    }
+
+
+@mcp.tool(structured_output=True)
+def publish_source_profile(
+    source_refs: list[str],
+    ctx: Context,
+) -> Annotated[CallToolResult, DataAgentResourceToolResult]:
+    """Persist an immutable bounded source_profile.v1 Resource."""
+    profile = _wrap_intake_payload(
+        "source_profile.v1",
+        inspect_workspace_sources(source_refs, ctx),
+    )
+    summary = f"Profiled {len(profile['sources'])} authorized Workspace sources."
+    result = _publish_json("source_profile.v1", profile, summary)
+    return result
+
+
+@mcp.tool(structured_output=True)
+def publish_mapping_proposal(
+    source_profile: dict[str, Any],
+    requirement_profile: dict[str, Any],
+) -> Annotated[CallToolResult, DataAgentResourceToolResult]:
+    """Publish fuzzy field candidates; confirmation is always required."""
+    if source_profile.get("schemaVersion") != "source_profile.v1" and source_profile.get("schema") != "source_profile.v1":
+        raise ValueError("source_profile must be source_profile.v1")
+    proposal = _wrap_intake_payload(
+        "mapping_proposal.v1",
+        propose_mapping(source_profile.get("sources", []), requirement_profile),
+        source_hash=hashlib.sha256(
+            json.dumps(source_profile, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+    )
+    summary = (
+        f"Generated {len(proposal['candidates'])} mapping candidates. "
+        "The complete mapping revision requires user confirmation."
+    )
+    return _publish_json("mapping_proposal.v1", proposal, summary)
+
+
+@mcp.tool(structured_output=True)
+def normalize_planning_dataset(
+    source_refs: list[str],
+    confirmed_profile: dict[str, Any],
+    confirmed_mapping: dict[str, Any],
+    confirmed_parameters: dict[str, Any],
+    ctx: Context,
+) -> Annotated[CallToolResult, DataAgentResourceToolResult]:
+    """Publish a confirmed planning-dataset.v2 from Workspace source refs.
+
+    The model supplies only opaque refs and confirmation snapshots. It cannot
+    pass raw rows or a fabricated normalized dataset through this boundary.
+    """
+    if confirmed_profile.get("confirmed") is not True:
+        raise ValueError("planning dataset normalization requires confirmed profile")
+    profile_payload = confirmed_profile.get("profile")
+    if not isinstance(profile_payload, dict) or profile_payload.get("schemaVersion") != "data_requirement_profile.v1":
+        raise ValueError("confirmed_profile must contain data_requirement_profile.v1")
+    if confirmed_mapping.get("confirmed") is not True:
+        raise ValueError("planning dataset normalization requires confirmed mapping")
+    if confirmed_parameters.get("confirmed") is not True:
+        raise ValueError("planning dataset normalization requires confirmed parameters")
+    if not source_refs or len(source_refs) > MAX_SOURCE_CATALOG_ENTRIES:
+        raise ValueError("source_refs must contain 1-100 opaque source references")
+    source_profile = inspect_workspace_sources(source_refs, ctx)
+    mapping_items = confirmed_mapping.get("mappings") or confirmed_mapping.get("candidates") or []
+    if not isinstance(mapping_items, list) or not mapping_items:
+        raise ValueError("confirmed_mapping must contain a non-empty mappings list")
+    source = _build_planning_source(
+        _workspace(ctx), source_refs, mapping_items, confirmed_parameters.get("answers") or []
+    )
+    dataset = aggregate_planning_dataset(source)
+    payload = dataset.model_dump(mode="json")
+    payload["normalization"] = {
+        "mapping": confirmed_mapping,
+        "parameters": confirmed_parameters,
+        "source_profile": source_profile,
+    }
+    payload = _wrap_intake_payload(
+        "planning-dataset.v2",
+        payload,
+        source_hash=hashlib.sha256(
+            json.dumps(source_profile, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+        mapping_hash=hashlib.sha256(
+            json.dumps(confirmed_mapping, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+        parameter_hash=hashlib.sha256(
+            json.dumps(confirmed_parameters, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+    )
+    payload["normalization"]["profile"] = profile_payload
+    payload["normalization"]["profile_confirmation"] = confirmed_profile
+    payload["normalization_status"] = "ready"
+    summary = (
+        f"Normalized {dataset.source_summary.order_row_count} demand rows, "
+        f"{dataset.source_summary.facility_count} facilities and "
+        f"{dataset.source_summary.route_count} routes into planning-dataset.v2."
+    )
+    return _publish_json("planning-dataset.v2", payload, summary)
+
+
+def _build_planning_source(
+    root: Path,
+    source_refs: list[str],
+    mapping_items: list[dict[str, Any]],
+    answers: list[dict[str, Any]],
+) -> PlanningSource:
+    params = {str(item.get("name")): item.get("value") for item in answers}
+    planning_mode = str(params.get("planning_mode") or "").strip().lower()
+    if planning_mode != "optimization":
+        raise ValueError("planning_mode_must_be_candidate_warehouse_optimization")
+    planning_period = _text(params.get("planning_period"), None)
+    if not planning_period:
+        raise ValueError("planning_period_parameter_required")
+    currency = _text(params.get("currency"), None)
+    if not currency or not re.fullmatch(r"[A-Za-z]{3}", currency):
+        raise ValueError("currency_parameter_must_be_iso_code")
+    if not _text(params.get("cost_scope"), None):
+        raise ValueError("cost_scope_parameter_required")
+    target_sla_hours = _number(params.get("target_sla_hours"))
+    coverage_target = _number(params.get("coverage_target"))
+    if target_sla_hours <= 0 or not 0 <= coverage_target <= 100:
+        raise ValueError("service_target_parameters_out_of_range")
+    route_method = str(params.get("route_source") or "").strip().lower()
+    if route_method not in {"quoted", "navigation", "estimated"}:
+        raise ValueError("route_source_parameter_required")
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for source_ref in source_refs:
+        for row_index, row in enumerate(read_rows(root, source_ref)):
+            flat = flatten_record(row)
+            for item in mapping_items:
+                if item.get("source_ref") != source_ref:
+                    continue
+                field = str(item.get("source_field", "")).strip()
+                value = flat.get(field)
+                if value in (None, ""):
+                    continue
+                entity_name = str(item.get("target_entity", "")).strip()
+                target_field = str(item.get("target_field", "")).strip()
+                key = f"{source_ref}:{row.get('__sheet_name', '')}:{row_index}:{entity_name}"
+                entity = next((candidate for candidate in grouped.setdefault(entity_name, []) if candidate.get("_key") == key), None)
+                if entity is None:
+                    entity = {"_key": key}
+                    grouped[entity_name].append(entity)
+                entity[target_field] = value
+
+    locations = []
+    for row in grouped.get("DemandLocation", []):
+        location_id = _text(row.get("demand_location_id"), None)
+        name = _text(row.get("name"), None)
+        region = _text(row.get("region"), None)
+        if not location_id or not name or not region:
+            raise ValueError("planning_dataset_demand_location_fields_incomplete")
+        locations.append(DemandLocation(
+            demand_id=location_id,
+            location=Point(latitude=_number(row.get("latitude")), longitude=_number(row.get("longitude"))),
+            region=region,
+            current_facility_id=None,
+        ))
+    if not locations:
+        raise ValueError("planning_dataset_missing_demand_locations")
+    location_ids = {item.demand_id for item in locations}
+    assignment_rows = grouped.get("Assignment", [])
+    if not assignment_rows:
+        raise ValueError("planning_dataset_current_assignments_required")
+    assignments = {}
+    for row in assignment_rows:
+        demand_id = _text(row.get("demand_location_id"), None)
+        facility_id = _text(row.get("facility_id"), None)
+        if not demand_id or not facility_id or demand_id not in location_ids:
+            raise ValueError("planning_dataset_assignment_relation_invalid")
+        assignments[demand_id] = facility_id
+    if set(assignments) != location_ids:
+        raise ValueError("planning_dataset_assignment_relation_incomplete")
+    locations = [location.model_copy(update={"current_facility_id": assignments.get(location.demand_id)}) for location in locations]
+
+    facilities = []
+    for row in grouped.get("Facility", []):
+        facility_id = _text(row.get("facility_id"), None)
+        facility_name = _text(row.get("name"), None)
+        status_value = _text(row.get("existing_or_candidate"), None)
+        if not facility_id or not facility_name or not status_value:
+            raise ValueError("planning_dataset_facility_fields_incomplete")
+        status = status_value.lower()
+        if status not in {"existing", "current", "现有", "已有", "candidate", "候选"}:
+            raise ValueError("planning_dataset_facility_status_invalid")
+        facilities.append(Facility(
+            facility_id=facility_id,
+            label=facility_name,
+            location=Point(latitude=_number(row.get("latitude")), longitude=_number(row.get("longitude"))),
+            capacity_units=_integer(row.get("capacity")),
+            is_existing=status in {"existing", "current", "现有", "已有"},
+            fixed_cost=_money(row.get("fixed_cost")),
+            opening_cost=_money(row.get("opening_cost")),
+            handling_cost_per_unit=_money(row.get("handling_cost")),
+        ))
+    if not facilities or not any(item.is_existing for item in facilities):
+        raise ValueError("planning_dataset_requires_existing_facility")
+    if not any(not item.is_existing for item in facilities):
+        raise ValueError("planning_dataset_requires_candidate_facility")
+    facility_ids = {item.facility_id for item in facilities}
+    if any(facility_id not in facility_ids for facility_id in assignments.values()):
+        raise ValueError("planning_dataset_assignment_references_unknown_facility")
+
+    orders = []
+    for row in grouped.get("Demand", []):
+        demand_id = _text(row.get("demand_location_id"), None)
+        if demand_id not in location_ids:
+            raise ValueError("planning_dataset_demand_references_unknown_location")
+        if not _text(row.get("demand_id"), None):
+            raise ValueError("planning_dataset_demand_id_required")
+        orders.append(OrderFact(
+            demand_id=demand_id,
+            order_date=_date(row.get("date")),
+            demand_units=_integer(row.get("quantity"), positive=True),
+        ))
+    if not orders:
+        raise ValueError("planning_dataset_missing_demand_rows")
+
+    rates = []
+    for index, row in enumerate(grouped.get("Rate", []), start=1):
+        origin = _text(row.get("origin_facility_id"), None)
+        destination_region = _text(row.get("destination_region"), None)
+        if not origin or not destination_region:
+            raise ValueError("planning_dataset_transport_rate_fields_incomplete")
+        rate_currency = _text(row.get("currency"), None)
+        if not rate_currency or rate_currency.upper() != currency.upper():
+            raise ValueError("planning_dataset_transport_rate_currency_mismatch")
+        rates.append(TransportRate(
+            rate_id=f"rate-{index}",
+            origin_facility_id=origin,
+            destination_region=destination_region,
+            base_cost_per_unit=_money(row.get("rate_value")),
+        ))
+    if not rates:
+        raise ValueError("planning_dataset_missing_transport_rates")
+
+    route_rows = grouped.get("Route", [])
+    if not route_rows and route_method == "estimated":
+        route_rows = _estimated_routes(locations, facilities, params)
+    routes = [RouteFact(
+        origin_facility_id=_text(row.get("origin_facility_id"), ""),
+        destination_demand_id=_text(row.get("destination_demand_id"), ""),
+        distance_meters=_integer(row.get("distance_km"), scale=1000),
+        travel_seconds=_integer(row.get("travel_time_hours"), scale=3600),
+        status="ready",
+    ) for row in route_rows]
+    if not routes:
+        raise ValueError("planning_dataset_missing_routes_or_route_estimation_parameters")
+    normalized_route_method = {
+        "estimated": "haversine_estimate",
+        "haversine_estimate": "haversine_estimate",
+        "quoted": "quoted",
+        "navigation": "navigation",
+    }.get(route_method, "quoted")
+    source = PlanningSource(
+        source_id=f"workspace-{hashlib.sha256(json.dumps(source_refs, sort_keys=True).encode()).hexdigest()[:16]}",
+        market="ID",
+        label="Workspace-confirmed Indonesia network planning dataset",
+        source_updated_at=datetime.now(UTC),
+        planning_period=planning_period,
+        currency=currency.upper(),
+        service_policy=ServicePolicy(
+            policy_id="user-confirmed-target-sla",
+            max_delivery_seconds=int(target_sla_hours * 3600),
+        ),
+        demand_locations=locations,
+        facilities=facilities,
+        transport_rates=rates,
+        route_provider=route_method or "workspace-route-facts",
+        route_method=normalized_route_method,
+        route_entries=routes,
+        orders=orders,
+    )
+    return source
+
+
+def _estimated_routes(locations: list[DemandLocation], facilities: list[Facility], params: dict[str, Any]) -> list[dict[str, Any]]:
+    factor = _number(params.get("detour_factor"))
+    speed = _number(params.get("average_speed_kmh"))
+    daily_hours = _number(params.get("daily_transport_hours"))
+    if factor <= 0 or speed <= 0 or daily_hours <= 0 or daily_hours > 24:
+        raise ValueError("route_estimation_parameters_must_be_positive")
+    rows = []
+    for facility in facilities:
+        for demand in locations:
+            lat1, lon1 = math.radians(facility.location.latitude), math.radians(facility.location.longitude)
+            lat2, lon2 = math.radians(demand.location.latitude), math.radians(demand.location.longitude)
+            haversine = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2
+            distance_km = 6371.0088 * 2 * math.asin(math.sqrt(haversine)) * factor
+            travel_time_hours = distance_km / speed
+            rows.append({"origin_facility_id": facility.facility_id, "destination_demand_id": demand.demand_id, "distance_km": distance_km, "travel_time_hours": travel_time_hours, "effective_transport_days": travel_time_hours / daily_hours})
+    return rows
+
+
+def _text(value: Any, default: str | None) -> str | None:
+    if value is None:
+        return default
+    text = str(value).strip()
+    return text or default
+
+
+def _number(value: Any, default: float | None = None) -> float:
+    if value in (None, ""):
+        if default is not None:
+            return default
+        raise ValueError("numeric_value_required")
+    try:
+        number = float(str(value).replace(",", ""))
+    except (TypeError, ValueError) as error:
+        raise ValueError("invalid_numeric_value") from error
+    if not math.isfinite(number):
+        raise ValueError("numeric_value_must_be_finite")
+    return number
+
+
+def _integer(value: Any, scale: float = 1.0, positive: bool = False) -> int:
+    number = _number(value)
+    if (positive and number <= 0) or number < 0:
+        raise ValueError("numeric_value_must_be_non_negative")
+    return int(round(number * scale))
+
+
+def _money(value: Any) -> Decimal:
+    if value in (None, ""):
+        raise ValueError("money_value_required")
+    try:
+        return Decimal(str(value).replace(",", ""))
+    except (InvalidOperation, ValueError) as error:
+        raise ValueError("invalid_money_value") from error
+
+
+def _date(value: Any) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d/%m/%Y", "%Y-%m"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    raise ValueError("invalid_date_value")
+
+
 @mcp.tool(structured_output=True)
 def list_planning_sources() -> PlanningSourceCatalog:
     """List bounded metadata for authorized sources without exposing paths or rows."""
@@ -230,10 +740,47 @@ def validate_planning_dataset(
         raise ValueError(f"data_ref.server must be {MCP_SERVER_NAME}")
     if resource_ref.resource_schema != "planning-dataset.v2":
         raise ValueError("resource_ref must identify planning-dataset.v2")
-    dataset = PlanningDataset.model_validate(_store().load_uri(resource_ref.uri))
+    raw = _store().load_uri(resource_ref.uri)
+    if raw.get("normalization_status") == "mapped_candidate":
+        records = raw.get("records", [])
+        return ValidationResult(
+            valid=False,
+            resource_schema="planning-dataset.v2",
+            errors=[
+                "mapped candidate requires Network Agent entity, unit, relationship and route validation",
+            ] if records else ["no confirmed source fields produced normalized records"],
+            warnings=["planning-dataset.v2 contains bounded mapped records, not a silently completed model"],
+            checks=["source refs and whole-profile confirmations are present", f"mapped record count: {len(records)}"],
+        )
+    if raw.get("schemaVersion") != "planning-dataset.v2":
+        return ValidationResult(
+            valid=False,
+            resource_schema="planning-dataset.v2",
+            errors=["planning-dataset.v2 is missing its bounded provenance envelope"],
+            warnings=[],
+            checks=[],
+        )
+    dataset = PlanningDataset.model_validate(raw)
     errors: list[str] = []
     warnings = list(dataset.data_quality.warnings)
     checks: list[str] = ["resource conforms to planning-dataset.v2"]
+
+    normalization = raw.get("normalization")
+    if not isinstance(normalization, dict):
+        errors.append("normalization provenance is missing")
+    else:
+        profile = normalization.get("profile")
+        profile_confirmation = normalization.get("profile_confirmation")
+        mapping_confirmation = normalization.get("mapping")
+        parameter_confirmation = normalization.get("parameters")
+        if not isinstance(profile, dict) or profile.get("schemaVersion") != "data_requirement_profile.v1":
+            errors.append("confirmed data requirement profile is missing")
+        if not isinstance(profile_confirmation, dict) or profile_confirmation.get("confirmed") is not True:
+            errors.append("data requirement profile confirmation is missing")
+        if not isinstance(mapping_confirmation, dict) or mapping_confirmation.get("confirmed") is not True:
+            errors.append("mapping confirmation is missing")
+        if not isinstance(parameter_confirmation, dict) or parameter_confirmation.get("confirmed") is not True:
+            errors.append("parameter confirmation is missing")
 
     distribution_units = sum(
         item.demand_units for item in dataset.demand_distribution

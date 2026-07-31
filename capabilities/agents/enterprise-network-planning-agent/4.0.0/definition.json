@@ -1,0 +1,79 @@
+{
+  "definitionId": "enterprise-network-planning-agent",
+  "version": "4.0.0",
+  "displayName": "Enterprise Network Planning Agent",
+  "description": "Owns the task-specific network requirement profile, input gaps, readiness checklist and smallest deterministic analysis.",
+  "runtimeRole": "agent_0ce6d3576eadd88251381ad1d46cebe5",
+  "runtimeProfile": {
+    "contentSha256": "34ef11823269fc8154afeebf895891925157271970fa2b23fb026a4cdb4581cf"
+  },
+  "responsibilities": [
+    "Translate the user's planning goal into a versioned data_requirement_profile.v1 and require whole-profile confirmation.",
+    "Inspect source_profile.v1 and mapping_proposal.v1 evidence without reading raw files; publish typed input_gap.v1 and analysis_readiness_review.v1.",
+    "Consume planning-dataset.v2 only after mapping, units, relationships and business parameters are confirmed.",
+    "Evaluate current coverage and cost, then solve the finite candidate warehouse set only when the confirmed Profile requests optimization.",
+    "Publish generic network snapshot, coverage, facility-location solution, scenario comparison, bounded map and report Resources with explicit assumptions.",
+    "Publish the complete business report as one cross-checked Resource and one typed report.v1 delivery reference, leaving browser map Artifact delivery to the Visualization Agent."
+  ],
+  "inputArtifactTypes": [
+    "data_requirement_profile.v1",
+    "source_profile.v1",
+    "mapping_proposal.v1",
+    "planning-dataset.v2"
+  ],
+  "outputArtifactTypes": [
+    "data_requirement_profile.v1",
+    "input_gap.v1",
+    "analysis_readiness_review.v1",
+    "network_snapshot.v1",
+    "network_coverage.v1",
+    "facility_location_solution.v1",
+    "network_scenario_comparison.v1",
+    "network_comparison_map.v1",
+    "geojson.v1",
+    "network_planning_report.v1",
+    "report.v1"
+  ],
+  "capabilityTemplate": {
+    "definitionId": "enterprise-network-planning-agent",
+    "version": "4.0.0"
+  },
+  "requiredMcpServers": [
+    {
+      "name": "supply_chain_data",
+      "tools": [
+        "validate_planning_dataset"
+      ],
+      "resourceRead": true,
+      "capabilityRootIds": [
+        "local-supply-chain-network-planner"
+      ]
+    },
+    {
+      "name": "supply_chain_planner",
+      "tools": [
+        "publish_data_requirement_profile",
+        "publish_input_gap",
+        "publish_analysis_readiness_review",
+        "prepare_network_snapshot_from_planning_dataset",
+        "register_route_matrix",
+        "evaluate_current_coverage",
+        "solve_facility_location",
+        "evaluate_network_scenario",
+        "compare_network_scenarios",
+        "prepare_network_comparison_map",
+        "prepare_network_map_render",
+        "prepare_network_planning_report",
+        "validate_network_resource"
+      ],
+      "resourceRead": true,
+      "capabilityRootIds": [
+        "local-supply-chain-network-planner"
+      ]
+    }
+  ],
+  "risks": [
+    "Results are exact only for the reviewed finite candidates, declared assignments, capacities, rates and route facts.",
+    "Haversine distance multiplied by the declared road factor is a planning approximation, not a navigation promise."
+  ]
+}

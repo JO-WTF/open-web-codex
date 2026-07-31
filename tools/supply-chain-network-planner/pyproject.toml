@@ -9,6 +9,9 @@ description = "Deterministic supply-chain network planning MCP tools for Codex"
 requires-python = ">=3.11"
 dependencies = [
   "mcp>=1.27,<2",
+  "openpyxl>=3.1,<4",
+  "ijson>=3.2,<4",
+  "charset-normalizer>=3.3,<4",
 ]
 
 [project.optional-dependencies]

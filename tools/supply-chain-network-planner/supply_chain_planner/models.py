@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -19,7 +19,7 @@ def utc_now() -> datetime:
 
 
 class StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
 class DataRef(StrictModel):
@@ -36,6 +36,14 @@ class DataAgentRef(StrictModel):
     uri: str = Field(pattern=r"^supply-chain-data://resources/[a-z0-9_.-]{1,160}$")
     format: Literal["json"] = "json"
     resource_schema: str
+
+
+class MapDataRef(StrictModel):
+    type: Literal["mcp_resource"] = "mcp_resource"
+    server: Literal["supply_chain_planner"] = MCP_SERVER_NAME
+    uri: str = Field(pattern=r"^supply-chain://resources/[a-z0-9_.-]{1,160}$")
+    format: Literal["geojson"] = "geojson"
+    resource_schema: Literal["geojson.v1"] = "geojson.v1"
 
 
 EvidenceRef = Annotated[DataRef | DataAgentRef, Field(discriminator="server")]
@@ -343,6 +351,12 @@ class PlanningDataQuality(StrictModel):
 
 class PlanningDataset(StrictModel):
     schema_version: Literal["planning-dataset.v2"] = "planning-dataset.v2"
+    # Bounded cross-agent provenance envelope.  The canonical planning schema
+    # remains in the fields below; these fields only make ownership and
+    # confirmation hashes explicit at the MCP boundary.
+    schema_version_envelope: str | None = Field(default=None, alias="schemaVersion")
+    contract: dict[str, Any] | None = None
+    task_evidence: dict[str, Any] | None = Field(default=None, alias="taskEvidence")
     dataset_id: str
     created_at: datetime = Field(default_factory=utc_now)
     source_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
@@ -355,6 +369,11 @@ class PlanningDataset(StrictModel):
     delivery_baseline: DeliveryBaseline
     data_quality: PlanningDataQuality
     assumptions: list[str] = Field(default_factory=list)
+    # The normalized rows remain in the MCP Resource.  This bounded envelope is
+    # intentionally opaque to the planner and carries only lineage needed for
+    # cross-agent handoff and replay.
+    normalization: dict[str, Any] = Field(default_factory=dict)
+    normalization_status: Literal["ready"] = "ready"
 
 
 class PlanningSourceInspection(StrictModel):
@@ -564,6 +583,47 @@ class ResourceToolResult(StrictModel):
     summary: str
     resource_name: str
     data_ref: DataRef
+
+
+class NetworkMapToolResult(StrictModel):
+    summary: str
+    map_resource_name: str
+    map_ref: DataRef
+    geojson_resource_name: str
+    geojson_ref: MapDataRef
+    feature_count: int = Field(ge=0)
+    title: str
+    layers: list[dict[str, Any]]
+    extensions: dict[str, Any] = Field(default_factory=dict)
+
+
+class NetworkSnapshotPreparationToolResult(StrictModel):
+    summary: str
+    snapshot_resource_name: str
+    snapshot_ref: DataRef
+    route_matrix_resource_name: str
+    route_matrix_ref: DataRef
+
+
+class NetworkMapRenderToolResult(StrictModel):
+    summary: str
+    map_manifest_resource_name: str
+    geojson_resource_name: str
+    geojson_ref: MapDataRef
+    title: str
+    layers: list[dict[str, Any]]
+    extensions: dict[str, Any] = Field(default_factory=dict)
+
+
+class NetworkPlanningReportToolResult(StrictModel):
+    summary: str
+    resource_name: str
+    data_ref: DataRef
+    artifact_type: Literal["report.v1"] = "report.v1"
+    title: str
+    markdown_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    report_resource_name: str
+    report_ref: DataRef
 
 
 class CurrentCoverageToolResult(CurrentCoverageResult):

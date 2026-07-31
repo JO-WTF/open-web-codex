@@ -1,0 +1,92 @@
+{
+  "contractId": "indonesia-warehouse-network",
+  "version": "2.0.0",
+  "contentSha256": "9692a28e09483590dc0e7c79fc07561f3c7974a4020aff93624e78971a6c8044",
+  "displayName": "Indonesia warehouse network planning",
+  "description": "Candidate warehouse optimization using demand, facilities, assignments, rates, routes and explicit business parameters.",
+  "requiredEntities": [
+    {
+      "name": "DemandLocation",
+      "displayName": "Demand location",
+      "requiredFields": [
+        {"name": "demand_location_id", "displayName": "Demand location ID", "dataType": "string", "unit": null, "granularity": "location", "required": true, "derivable": false},
+        {"name": "name", "displayName": "Location name", "dataType": "string", "unit": null, "granularity": "location", "required": true, "derivable": false},
+        {"name": "region", "displayName": "Region", "dataType": "string", "unit": null, "granularity": "location", "required": true, "derivable": false},
+        {"name": "latitude", "displayName": "Latitude", "dataType": "number", "unit": "degrees", "granularity": "location", "required": true, "derivable": false},
+        {"name": "longitude", "displayName": "Longitude", "dataType": "number", "unit": "degrees", "granularity": "location", "required": true, "derivable": false}
+      ],
+      "conditional": null
+    },
+    {
+      "name": "Demand",
+      "displayName": "Demand and orders",
+      "requiredFields": [
+        {"name": "demand_id", "displayName": "Demand ID", "dataType": "string", "unit": null, "granularity": "order", "required": true, "derivable": false},
+        {"name": "demand_location_id", "displayName": "Demand location ID", "dataType": "string", "unit": null, "granularity": "order", "required": true, "derivable": false},
+        {"name": "date", "displayName": "Order date", "dataType": "date", "unit": null, "granularity": "order", "required": true, "derivable": false},
+        {"name": "quantity", "displayName": "Quantity", "dataType": "number", "unit": "unit", "granularity": "order", "required": true, "derivable": false},
+        {"name": "weight_kg", "displayName": "Weight", "dataType": "number", "unit": "kg", "granularity": "order", "required": false, "derivable": false}
+      ],
+      "conditional": null
+    },
+    {
+      "name": "Facility",
+      "displayName": "Warehouse and candidate facility",
+      "requiredFields": [
+        {"name": "facility_id", "displayName": "Facility ID", "dataType": "string", "unit": null, "granularity": "facility", "required": true, "derivable": false},
+        {"name": "name", "displayName": "Facility name", "dataType": "string", "unit": null, "granularity": "facility", "required": true, "derivable": false},
+        {"name": "existing_or_candidate", "displayName": "Existing or candidate", "dataType": "string", "unit": null, "granularity": "facility", "required": true, "derivable": false},
+        {"name": "latitude", "displayName": "Latitude", "dataType": "number", "unit": "degrees", "granularity": "facility", "required": true, "derivable": false},
+        {"name": "longitude", "displayName": "Longitude", "dataType": "number", "unit": "degrees", "granularity": "facility", "required": true, "derivable": false},
+        {"name": "capacity", "displayName": "Capacity", "dataType": "number", "unit": "unit", "granularity": "facility", "required": true, "derivable": false},
+        {"name": "fixed_cost", "displayName": "Fixed cost", "dataType": "number", "unit": "currency", "granularity": "facility", "required": true, "derivable": false},
+        {"name": "opening_cost", "displayName": "Opening cost", "dataType": "number", "unit": "currency", "granularity": "facility", "required": true, "derivable": false},
+        {"name": "handling_cost", "displayName": "Handling cost", "dataType": "number", "unit": "currency", "granularity": "facility", "required": true, "derivable": false}
+      ],
+      "conditional": null
+    },
+    {
+      "name": "Assignment",
+      "displayName": "Current assignment",
+      "requiredFields": [
+        {"name": "demand_location_id", "displayName": "Demand location ID", "dataType": "string", "unit": null, "granularity": "assignment", "required": true, "derivable": false},
+        {"name": "facility_id", "displayName": "Facility ID", "dataType": "string", "unit": null, "granularity": "assignment", "required": true, "derivable": false}
+      ],
+      "conditional": null
+    },
+    {
+      "name": "Rate",
+      "displayName": "Transport rate",
+      "requiredFields": [
+        {"name": "origin_facility_id", "displayName": "Origin facility ID", "dataType": "string", "unit": null, "granularity": "lane", "required": true, "derivable": false},
+        {"name": "destination_region", "displayName": "Destination region", "dataType": "string", "unit": null, "granularity": "lane", "required": false, "derivable": false},
+        {"name": "rate_value", "displayName": "Rate", "dataType": "number", "unit": "currency", "granularity": "lane", "required": true, "derivable": false},
+        {"name": "currency", "displayName": "Currency", "dataType": "string", "unit": null, "granularity": "lane", "required": true, "derivable": false}
+      ],
+      "conditional": null
+    },
+    {
+      "name": "Route",
+      "displayName": "Route facts",
+      "requiredFields": [
+        {"name": "origin_facility_id", "displayName": "Origin facility ID", "dataType": "string", "unit": null, "granularity": "route", "required": false, "derivable": false},
+        {"name": "destination_demand_id", "displayName": "Destination demand ID", "dataType": "string", "unit": null, "granularity": "route", "required": false, "derivable": false},
+        {"name": "distance_km", "displayName": "Distance", "dataType": "number", "unit": "km", "granularity": "route", "required": false, "derivable": false},
+        {"name": "travel_time_hours", "displayName": "Travel time", "dataType": "number", "unit": "hours", "granularity": "route", "required": false, "derivable": false}
+      ],
+      "conditional": "Required when quoted or navigation routes are supplied; otherwise coordinates and explicit route-estimation parameters are required."
+    }
+  ],
+  "businessParameters": [
+    {"name": "planning_mode", "displayName": "Planning mode", "dataType": "string", "unit": null, "required": true, "description": "This journey requires candidate warehouse optimization."},
+    {"name": "target_sla_hours", "displayName": "Target service time", "dataType": "number", "unit": "hours", "required": true, "description": "Maximum delivery promise for covered demand."},
+    {"name": "coverage_target", "displayName": "Coverage target", "dataType": "number", "unit": "percent", "required": true, "description": "Minimum demand-unit coverage target."},
+    {"name": "planning_period", "displayName": "Planning period", "dataType": "string", "unit": null, "required": true, "description": "Date range or period used for the decision."},
+    {"name": "currency", "displayName": "Currency", "dataType": "string", "unit": null, "required": true, "description": "Currency used by fixed, opening, handling and transport costs."},
+    {"name": "cost_scope", "displayName": "Cost scope", "dataType": "string", "unit": null, "required": true, "description": "Cost components included in comparison."},
+    {"name": "route_source", "displayName": "Route source", "dataType": "string", "unit": null, "required": true, "description": "quoted, navigation or explicitly estimated."},
+    {"name": "detour_factor", "displayName": "Road detour factor", "dataType": "number", "unit": "ratio", "required": false, "description": "Required only when route_source is estimated."},
+    {"name": "average_speed_kmh", "displayName": "Average speed", "dataType": "number", "unit": "km/h", "required": false, "description": "Required only when route_source is estimated."},
+    {"name": "daily_transport_hours", "displayName": "Daily transport hours", "dataType": "number", "unit": "hours", "required": false, "description": "Required only when route_source is estimated."}
+  ]
+}

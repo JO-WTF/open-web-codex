@@ -1,50 +1,29 @@
-"""Exercise both supply-chain MCP servers over their real stdio boundary."""
+"""Bounded stdio checks for the current Workspace-wide intake contract.
+
+This smoke intentionally does not invoke the retired tutorial servers.  It
+proves source discovery/profile/mapping handoff and proves that analysis tools
+are rejected when the Platform execution gate is absent.
+"""
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
-import shutil
 import tempfile
 from pathlib import Path
 
+import pytest
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from pydantic import AnyUrl
 
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / "bin" / "supply-chain-planner-launcher"
-INDONESIA_SOURCE_RELEASE = ROOT / "examples" / "indonesia-tutorial" / "releases" / "1.0.0"
-INDONESIA_WORKSPACE_ID = "0198d5b5-7d0f-7a62-8d9a-f6472dbfab11"
-INDONESIA_RELEASE_ID = "0198d5b5-7d0f-7a62-8d9a-f6472dbfab12"
-INDONESIA_DATASET_ID = "indonesia-warehouse-network-tutorial"
-INDONESIA_VERSION = "1.0.0"
-SANDBOX_STATE_META_CAPABILITY = "codex/sandbox-state-meta"
-INDONESIA_FILE_CONTRACT = {
-    "dataset-manifest.json": ("dataset_manifest", "application/json"),
-    "province-boundaries.geojson": (
-        "province_boundaries",
-        "application/geo+json",
-    ),
-    "customers.csv.gz": ("customers", "application/gzip"),
-    "customer-assignments.csv.gz": (
-        "customer_assignments",
-        "application/gzip",
-    ),
-    "warehouses.csv": ("warehouses", "text/csv"),
-    "warehouse-links.csv": ("warehouse_links", "text/csv"),
-    "candidate-locations.csv": ("candidate_locations", "text/csv"),
-    "transport-quotes.csv": ("transport_quotes", "text/csv"),
-    "planning-policy.json": ("planning_policy", "application/json"),
-    "validation-report.json": ("validation_report", "application/json"),
-}
+SANDBOX_META = "codex/sandbox-state-meta"
 
 
 def server_environment(state_root: Path) -> dict[str, str]:
-    """Build an isolated environment while preserving the caller's normal process setup."""
-
     environment = dict(os.environ)
     environment.update(
         {
@@ -52,633 +31,128 @@ def server_environment(state_root: Path) -> dict[str, str]:
             "OPEN_WEB_CODEX_LOG_DIR": str(state_root / "logs"),
             "SUPPLY_CHAIN_DATA_RESOURCE_DIR": str(state_root / "data-resources"),
             "SUPPLY_CHAIN_RESOURCE_DIR": str(state_root / "planning-resources"),
-            "SUPPLY_CHAIN_INDONESIA_RESOURCE_DIR": str(state_root / "indonesia-resources"),
+            # Force analysis MCP calls to fail closed in this isolated smoke.
+            "OPEN_WEB_CODEX_ANALYSIS_GATE_URL": "",
+            "OPEN_WEB_CODEX_ANALYSIS_GATE_KEY": "",
         }
     )
     return environment
 
 
-async def smoke_data_server(environment: dict[str, str]) -> dict[str, object]:
-    """Inspect, build, and validate the fixture through the Data MCP."""
-
-    parameters = StdioServerParameters(
-        command=str(LAUNCHER),
-        args=["--data-server", "--workspace-root", "."],
-        cwd=str(ROOT),
-        env=environment,
-    )
-    async with stdio_client(parameters) as streams:
-        async with ClientSession(*streams) as session:
-            await session.initialize()
-            tools = await session.list_tools()
-            assert {tool.name for tool in tools.tools} == {
-                "list_planning_sources",
-                "inspect_planning_source",
-                "build_planning_dataset",
-                "validate_planning_dataset",
-            }
-
-            catalog = await session.call_tool("list_planning_sources", {})
-            assert catalog.isError is not True
-            assert catalog.structuredContent is not None
-            assert catalog.structuredContent["schema_version"] == ("planning_source_catalog.v2")
-            assert catalog.structuredContent["truncated"] is False
-            assert [source["source_id"] for source in catalog.structuredContent["sources"]] == [
-                "indonesia-network-decision",
-                "warehouse-network-fixture",
-            ]
-            indonesia = catalog.structuredContent["sources"][0]
-            assert indonesia["market"] == "ID"
-            assert indonesia["candidate_facility_count"] == 3
-            assert indonesia["route_count"] == 30
-
-            inspection = await session.call_tool(
-                "inspect_planning_source",
-                {"source_id": "warehouse-network-fixture"},
-            )
-            assert inspection.isError is not True
-            assert inspection.structuredContent is not None
-            assert inspection.structuredContent["source_summary"]["demand_units"] == 100
-
-            build = await session.call_tool(
-                "build_planning_dataset",
-                {"source_id": "warehouse-network-fixture"},
-            )
-            assert build.isError is not True
-            assert build.structuredContent is not None
-            assert build.structuredContent["resource_name"].startswith("planning-dataset.v2-")
-            resource_ref = build.structuredContent["data_ref"]
-
-            validation = await session.call_tool(
-                "validate_planning_dataset",
-                {"resource_ref": resource_ref},
-            )
-            assert validation.isError is not True
-            assert validation.structuredContent is not None
-            assert validation.structuredContent["valid"] is True
-            return resource_ref
+def workspace_meta(root: Path) -> dict[str, object]:
+    return {SANDBOX_META: {"sandboxCwd": root.as_uri()}}
 
 
-async def smoke_planning_server(
-    environment: dict[str, str],
-    planning_dataset_ref: dict[str, object],
-) -> None:
-    """Create and validate one snapshot through the Network Planning MCP."""
-
-    parameters = StdioServerParameters(
-        command=str(LAUNCHER),
-        args=["--workspace-root", "."],
-        cwd=str(ROOT),
-        env=environment,
-    )
-    async with stdio_client(parameters) as streams:
-        async with ClientSession(*streams) as session:
-            await session.initialize()
-            tools = await session.list_tools()
-            assert {tool.name for tool in tools.tools} == {
-                "prepare_network_snapshot",
-                "register_route_matrix",
-                "evaluate_current_coverage",
-                "evaluate_network_scenario",
-                "compare_network_scenarios",
-                "solve_facility_location",
-                "evaluate_financial_case",
-                "publish_risk_register",
-                "validate_network_resource",
-            }
-
-            snapshot = await session.call_tool(
-                "prepare_network_snapshot",
-                {"source_path": "examples/network-input.json"},
-            )
-            assert snapshot.isError is not True
-            assert snapshot.structuredContent is not None
-            assert snapshot.structuredContent["resource_name"].startswith("network_snapshot.v1-")
-            resource_ref = snapshot.structuredContent["data_ref"]
-
-            route_payload = json.loads((ROOT / "examples" / "route-matrix-input.json").read_text())
-            routes = await session.call_tool(
-                "register_route_matrix",
-                {
-                    "snapshot_ref": resource_ref,
-                    "provider": route_payload["provider"],
-                    "method": route_payload["method"],
-                    "entries": route_payload["entries"],
-                },
-            )
-            assert routes.isError is not True
-            assert routes.structuredContent is not None
-            route_ref = routes.structuredContent["data_ref"]
-
-            coverage = await session.call_tool(
-                "evaluate_current_coverage",
-                {
-                    "snapshot_ref": resource_ref,
-                    "route_matrix_ref": route_ref,
-                },
-            )
-            assert coverage.isError is not True
-            assert coverage.structuredContent is not None
-            assert coverage.structuredContent["actual_result_resource_name"].startswith(
-                "network_scenario_result.v1-"
-            )
-            assert coverage.structuredContent["optimized_result_resource_name"].startswith(
-                "network_scenario_result.v1-"
-            )
-
-            location = await session.call_tool(
-                "solve_facility_location",
-                {
-                    "snapshot_ref": resource_ref,
-                    "route_matrix_ref": route_ref,
-                    "target_coverage_ratio": 0.90,
-                },
-            )
-            assert location.isError is not True
-            assert location.structuredContent is not None
-            assert location.structuredContent["result_resource_name"].startswith(
-                "network_scenario_result.v1-"
-            )
-
-            risk = await session.call_tool(
-                "publish_risk_register",
-                {
-                    "decision_scope": "Cross-store evidence validation",
-                    "risks": [
-                        {
-                            "risk_id": "planning-data-quality",
-                            "category": "data",
-                            "statement": "Planning data quality may affect the decision.",
-                            "likelihood": 3,
-                            "impact": 4,
-                            "mitigation": "Revalidate the planning dataset before approval.",
-                            "trigger": "The planning dataset validation becomes invalid.",
-                            "evidence_refs": [planning_dataset_ref],
-                        }
-                    ],
-                },
-            )
-            assert risk.isError is not True, risk.content
-            assert risk.structuredContent is not None
-            assert risk.structuredContent["resource_name"].startswith("risk_register.v1-")
-
-            validation = await session.call_tool(
-                "validate_network_resource",
-                {"resource_ref": resource_ref},
-            )
-            assert validation.isError is not True
-            assert validation.structuredContent is not None
-            assert validation.structuredContent["valid"] is True
-
-
-async def smoke_indonesia_server(
-    environment: dict[str, str],
-    workspace_root: Path,
-    release_binding: dict[str, str],
-) -> None:
-    """Exercise exact Dataset Release access and bounded handoffs over stdio."""
-
-    parameters = StdioServerParameters(
-        command=str(LAUNCHER),
-        args=["--indonesia-server", "--workspace-root", "."],
-        cwd=str(ROOT),
-        env=environment,
-    )
-    trusted_meta = {
-        SANDBOX_STATE_META_CAPABILITY: {
-            "sandboxCwd": workspace_root.as_uri(),
-        }
-    }
-    wrong_workspace = workspace_root.parent / "wrong-workspace"
-    wrong_workspace.mkdir()
-    wrong_meta = {
-        SANDBOX_STATE_META_CAPABILITY: {
-            "sandboxCwd": wrong_workspace.as_uri(),
-        }
-    }
-    async with stdio_client(parameters) as streams:
-        async with ClientSession(*streams) as session:
-            initialized = await session.initialize()
-            assert initialized.capabilities.experimental is not None
-            assert SANDBOX_STATE_META_CAPABILITY in (initialized.capabilities.experimental)
-            tools = await session.list_tools()
-            assert {tool.name for tool in tools.tools} == {
-                "inspect_indonesia_dataset_release",
-                "evaluate_indonesia_service_baseline",
-                "evaluate_indonesia_current_network",
-                "evaluate_indonesia_candidate",
-                "optimize_indonesia_new_warehouse",
-                "prepare_indonesia_network_map",
-                "prepare_indonesia_map_render",
-                "prepare_indonesia_decision_report",
-                "validate_indonesia_resource",
-            }
-            report_tool = next(
-                tool
-                for tool in tools.tools
-                if tool.name == "prepare_indonesia_decision_report"
-            )
-            report_output_schema = json.dumps(
-                report_tool.outputSchema,
-                sort_keys=True,
-            )
-            assert "open-web-artifact" in report_output_schema
-            assert "inline-visualization.v1" in report_output_schema
-            assert "report.v1" in report_output_schema
-            assert "report_markdown" not in report_output_schema
-            templates = await session.list_resource_templates()
-            assert templates.resourceTemplates == []
-
-            await expect_tool_error(
-                session,
-                "inspect_indonesia_dataset_release",
-                {"release": release_binding},
-                expected="trusted Turn Workspace metadata",
-            )
-            await expect_tool_error(
-                session,
-                "inspect_indonesia_dataset_release",
-                {"release": release_binding},
-                meta=wrong_meta,
-                expected="does not match the current authorized Turn",
-            )
-
-            inspection = await session.call_tool(
-                "inspect_indonesia_dataset_release",
-                {"release": release_binding},
-                meta=trusted_meta,
-            )
-            assert_bounded_resource_result(inspection)
-            inspection_ref = inspection.structuredContent["data_ref"]
-            inspection_resource_name = inspection.structuredContent["resource_name"]
-            inspection_payload = await read_json_resource(session, inspection_ref)
-            assert inspection_payload["customer_count"] == 240_000
-            assert inspection_payload["province_count"] == 38
-
-            await expect_tool_error(
-                session,
-                "evaluate_indonesia_service_baseline",
-                {"inspection_ref": inspection_ref},
-                meta=trusted_meta,
-                expected="Additional properties are not allowed",
-            )
-            service = await session.call_tool(
-                "evaluate_indonesia_service_baseline",
-                {"inspection_resource_name": inspection_resource_name},
-                meta=trusted_meta,
-            )
-            assert_bounded_resource_result(service)
-            service_ref = service.structuredContent["data_ref"]
-            service_payload = await read_json_resource(session, service_ref)
-            assert service_payload["coverage"]["demand_coverage"]["2_day"] > 0.71
-            assert "costs" not in service_payload
-            assert "warehouses" not in service_payload
-            assert "links" not in service_payload
-
-            current = await session.call_tool(
-                "evaluate_indonesia_current_network",
-                {"inspection_resource_name": inspection_resource_name},
-                meta=trusted_meta,
-            )
-            assert_bounded_resource_result(current)
-            current_ref = current.structuredContent["data_ref"]
-            current_payload = await read_json_resource(session, current_ref)
-            assert current_payload["coverage"]["demand_coverage"]["2_day"] > 0.71
-            assert current_payload["costs"]["transport_total_idr"] == 110_024_697_400
-
-            candidate = await session.call_tool(
-                "evaluate_indonesia_candidate",
-                {
-                    "inspection_resource_name": inspection_resource_name,
-                    "candidate_id": "CAN-PONTIANAK",
-                    "opening_amortization_years": 5,
-                },
-                meta=trusted_meta,
-            )
-            assert_bounded_resource_result(candidate)
-
-            optimization = await session.call_tool(
-                "optimize_indonesia_new_warehouse",
-                {
-                    "inspection_resource_name": inspection_resource_name,
-                    "target_service_days": 2,
-                    "target_demand_coverage": 0.74,
-                    "opening_amortization_years": 5,
-                },
-                meta=trusted_meta,
-            )
-            assert optimization.isError is not True, optimization.content
-            assert optimization.structuredContent is not None
-            assert len(json.dumps(optimization.structuredContent)) < 4_000
-            assert optimization.structuredContent["selected_scenario_ref"] is not None
-            optimization_links = [
-                block for block in optimization.content if block.type == "resource_link"
-            ]
-            assert [link.name for link in optimization_links] == [
-                optimization.structuredContent["resource_name"],
-                optimization.structuredContent["selected_scenario_resource_name"],
-            ]
-            optimization_payload = await read_json_resource(
-                session,
-                optimization.structuredContent["data_ref"],
-            )
-            assert optimization_payload["evaluated_candidate_count"] == 20
-            selected_scenario_resource_name = optimization.structuredContent[
-                "selected_scenario_resource_name"
-            ]
-            selected_scenario_ref = optimization.structuredContent[
-                "selected_scenario_ref"
-            ]
-
-            map_result = await session.call_tool(
-                "prepare_indonesia_network_map",
-                {
-                    "baseline_resource_name": current.structuredContent["resource_name"],
-                    "candidate_resource_name": selected_scenario_resource_name,
-                },
-            )
-            assert map_result.isError is not True, map_result.content
-            assert map_result.structuredContent is not None
-            assert set(map_result.structuredContent) == {
-                "summary",
-                "resource_name",
-                "data_ref",
-                "geojson_resource_name",
-                "geojson_ref",
-            }
-            assert len(json.dumps(map_result.structuredContent)) < 4_000
-            map_payload = await read_json_resource(
-                session,
-                map_result.structuredContent["data_ref"],
-            )
-            geojson_payload = await read_json_resource(
-                session,
-                map_result.structuredContent["geojson_ref"],
-                expected_mime_type="application/geo+json",
-            )
-            assert map_payload["feature_count"] == len(geojson_payload["features"])
-            assert len(geojson_payload["features"]) < 200
-            assert not any(
-                feature["properties"].get("customer_id") for feature in geojson_payload["features"]
-            )
-
-            render = await session.call_tool(
-                "prepare_indonesia_map_render",
-                {
-                    "map_resource_name": map_result.structuredContent["resource_name"],
-                    "geojson_resource_name": map_result.structuredContent[
-                        "geojson_resource_name"
-                    ],
-                },
-            )
-            assert render.isError is not True, render.content
-            assert render.structuredContent is not None
-            assert render.structuredContent["feature_count"] == len(
-                geojson_payload["features"]
-            )
-            assert render.structuredContent["geojson_ref"] == (
-                map_result.structuredContent["geojson_ref"]
-            )
-            assert render.structuredContent["layers"] == map_payload["layers"]
-            assert render.structuredContent["extensions"] == map_payload["extensions"]
-
-            await expect_tool_error(
-                session,
-                "prepare_indonesia_map_render",
-                {
-                    "map_resource_name": map_result.structuredContent["resource_name"],
-                    "geojson_resource_name": "geojson.v1-000000000000000000000000",
-                },
-                expected="do not match",
-            )
-
-            report = await session.call_tool(
-                "prepare_indonesia_decision_report",
-                {
-                    "inspection_resource_name": inspection_resource_name,
-                    "service_resource_name": service.structuredContent["resource_name"],
-                    "current_resource_name": current.structuredContent["resource_name"],
-                    "optimization_resource_name": optimization.structuredContent[
-                        "resource_name"
-                    ],
-                    "candidate_resource_name": selected_scenario_resource_name,
-                    "map_resource_name": map_result.structuredContent["resource_name"],
-                    "geojson_resource_name": map_result.structuredContent[
-                        "geojson_resource_name"
-                    ],
-                },
-            )
-            assert report.isError is not True, report.content
-            assert report.structuredContent is not None
-            assert set(report.structuredContent) == {
-                "type",
-                "kind",
-                "artifact",
-                "embed",
-            }
-            assert report.structuredContent["type"] == "open-web-artifact"
-            assert report.structuredContent["kind"] == "inline-visualization.v1"
-            artifact = report.structuredContent["artifact"]
-            assert artifact["renderer"]["kind"] == "report.v1"
-            report_renderer = artifact["renderer"]["payload"]
-            assert set(report_renderer) == {"title", "status", "source"}
-            assert report_renderer["title"] == "印度尼西亚仓库网络决策报告"
-            assert report_renderer["status"] == "ready"
-            report_ref = report_renderer["source"]
-            assert report_ref["resource_schema"] == "indonesia_decision_report.v1"
-            report_resource_name = str(report_ref["uri"]).rsplit("/", maxsplit=1)[-1]
-            assert report_resource_name.startswith("indonesia_decision_report.v1-")
-            assert artifact["ref"] == (
-                "report-"
-                + report_resource_name.removeprefix("indonesia_decision_report.v1-")
-            )
-            assert len(artifact["ref"]) == len("report-") + 24
-            expected_embed = f'::codex-inline-vis{{artifact="{artifact["ref"]}"}}'
-            assert report.structuredContent["embed"] == {
-                "syntax": "codex-inline-vis.artifact.v1",
-                "code": expected_embed,
-            }
-            assert "report_markdown" not in json.dumps(report.structuredContent)
-
-            text_items = [
-                item.text
-                for item in report.content
-                if getattr(item, "type", None) == "text"
-            ]
-            assert len(text_items) == 1
-            assert "Copy only structuredContent.embed.code" in text_items[0]
-            assert expected_embed in text_items[0]
-            assert "# 印度尼西亚仓库网络决策报告" not in text_items[0]
-
-            resource_links = [
-                item
-                for item in report.content
-                if getattr(item, "type", None) == "resource_link"
-            ]
-            assert len(resource_links) == 1
-            assert resource_links[0].name == report_resource_name
-            assert str(resource_links[0].uri) == report_ref["uri"]
-            report_payload = await read_json_resource(
-                session,
-                report_ref,
-            )
-            report_markdown = str(report_payload["markdown"])
-            assert report_markdown.startswith("# 印度尼西亚仓库网络决策报告")
-            assert "57.5%" not in report_markdown
-            assert "1.33" not in report_markdown
-            for known_answer in (
-                "71.80%",
-                "75.33%",
-                "110,024,697,400",
-                "107,189,163,600",
-                "-2,835,533,800",
-                "123,614,163,600",
-                "+13,589,466,200",
-            ):
-                assert known_answer in report_markdown
-            assert report_payload["markdown_sha256"] == hashlib.sha256(
-                report_markdown.encode("utf-8")
-            ).hexdigest()
-            assert selected_scenario_ref["resource_schema"] == (
-                "indonesia_candidate_scenario.v1"
-            )
-
-            validation = await session.call_tool(
-                "validate_indonesia_resource",
-                {"resource_ref": map_result.structuredContent["data_ref"]},
-            )
-            assert validation.isError is not True, validation.content
-            assert validation.structuredContent is not None
-            assert validation.structuredContent["valid"] is True
+async def read_resource(session: ClientSession, ref: dict[str, object]) -> dict[str, object]:
+    result = await session.read_resource(AnyUrl(str(ref["uri"])))
+    assert len(result.contents) == 1
+    return json.loads(result.contents[0].text)
 
 
 async def smoke() -> None:
-    """Run all isolated server checks using one temporary state root."""
-
     with tempfile.TemporaryDirectory(prefix="supply-chain-mcp-smoke-") as directory:
         state_root = Path(directory)
+        workspace = state_root / "workspace"
+        workspace.mkdir()
+        (workspace / "network.csv").write_text(
+            "demand_location_id,name,region,latitude,longitude\n"
+            "d-1,Jakarta,Jakarta,-6.2,106.8\n",
+            encoding="utf-8",
+        )
         environment = server_environment(state_root)
-        workspace_root, release_binding = prepare_indonesia_release(state_root / "workspaces")
-        planning_dataset_ref = await smoke_data_server(environment)
-        await smoke_planning_server(environment, planning_dataset_ref)
-        await smoke_indonesia_server(
-            environment,
-            workspace_root,
-            release_binding,
+        data_parameters = StdioServerParameters(
+            command=str(LAUNCHER),
+            args=["--data-server", "--workspace-root", str(workspace)],
+            cwd=str(ROOT),
+            env=environment,
         )
-
-
-def prepare_indonesia_release(
-    workspace_parent: Path,
-) -> tuple[Path, dict[str, str]]:
-    """Build the same immutable on-disk contract written by the Web platform."""
-
-    workspace_root = workspace_parent / INDONESIA_WORKSPACE_ID
-    files_root = workspace_root / "datasets" / INDONESIA_DATASET_ID / INDONESIA_VERSION / "files"
-    files_root.mkdir(parents=True)
-    descriptors = []
-    for name, (role, media_type) in sorted(INDONESIA_FILE_CONTRACT.items()):
-        target = files_root / name
-        shutil.copy2(INDONESIA_SOURCE_RELEASE / name, target)
-        descriptors.append(
-            {
-                "logicalName": name,
-                "role": role,
-                "mediaType": media_type,
-                "byteSize": target.stat().st_size,
-                "contentSha256": hashlib.sha256(target.read_bytes()).hexdigest(),
-                "relativePath": f"files/{name}",
-            }
+        async with stdio_client(data_parameters) as streams:
+            async with ClientSession(*streams) as session:
+                await asyncio.wait_for(session.initialize(), timeout=10)
+                tools = await asyncio.wait_for(session.list_tools(), timeout=10)
+                names = {tool.name for tool in tools.tools}
+                assert {
+                    "discover_workspace_sources",
+                    "inspect_workspace_sources",
+                    "publish_source_profile",
+                    "publish_mapping_proposal",
+                    "normalize_planning_dataset",
+                    "validate_planning_dataset",
+                } <= names
+                meta = workspace_meta(workspace)
+                discovered = await asyncio.wait_for(
+                    session.call_tool("discover_workspace_sources", {}, meta=meta), timeout=10
+                )
+                assert discovered.isError is not True
+                source = discovered.structuredContent["sources"][0]
+                source_ref = source["source_ref"]
+                profiled = await asyncio.wait_for(
+                    session.call_tool(
+                        "publish_source_profile", {"source_refs": [source_ref]}, meta=meta
+                    ),
+                    timeout=10,
+                )
+                assert profiled.isError is not True
+                profile_ref = profiled.structuredContent["data_ref"]
+                source_profile = await read_resource(session, profile_ref)
+                assert source_profile["schemaVersion"] == "source_profile.v1"
+                requirement_profile = {
+                    "schemaVersion": "data_requirement_profile.v1",
+                    "entities": [
+                        {
+                            "name": "DemandLocation",
+                            "requiredFields": [
+                                {"name": "demand_location_id"},
+                                {"name": "latitude"},
+                                {"name": "longitude"},
+                            ],
+                        }
+                    ],
+                }
+                mapping = await asyncio.wait_for(
+                    session.call_tool(
+                        "publish_mapping_proposal",
+                        {
+                            "source_profile": source_profile,
+                            "requirement_profile": requirement_profile,
+                        },
+                    ),
+                    timeout=10,
+                )
+                assert mapping.isError is not True
+                assert mapping.structuredContent["data_ref"]["resource_schema"] == (
+                    "mapping_proposal.v1"
+                )
+        planning_parameters = StdioServerParameters(
+            command=str(LAUNCHER), args=["--workspace-root", str(workspace)], cwd=str(ROOT), env=environment
         )
-
-    display_name = "Indonesia Warehouse Network Tutorial"
-    description = "Deterministic synthetic tutorial data."
-    digest = hashlib.sha256()
-    for value in (
-        "workspace.dataset-release.v1",
-        INDONESIA_DATASET_ID,
-        INDONESIA_VERSION,
-        display_name,
-        description,
-    ):
-        update_digest(digest, value)
-    for descriptor in descriptors:
-        for value in (
-            descriptor["logicalName"],
-            descriptor["role"],
-            descriptor["mediaType"],
-            str(descriptor["byteSize"]),
-            descriptor["contentSha256"],
-        ):
-            update_digest(digest, value)
-    content_sha256 = digest.hexdigest()
-    release_manifest = {
-        "schemaVersion": "workspace.dataset-release.v1",
-        "releaseId": INDONESIA_RELEASE_ID,
-        "datasetId": INDONESIA_DATASET_ID,
-        "version": INDONESIA_VERSION,
-        "displayName": display_name,
-        "description": description,
-        "contentSha256": content_sha256,
-        "files": descriptors,
-    }
-    (files_root.parent / "release.json").write_text(
-        json.dumps(release_manifest, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    return workspace_root, {
-        "workspace_id": INDONESIA_WORKSPACE_ID,
-        "release_id": INDONESIA_RELEASE_ID,
-        "dataset_id": INDONESIA_DATASET_ID,
-        "version": INDONESIA_VERSION,
-        "content_sha256": content_sha256,
-    }
+        async with stdio_client(planning_parameters) as streams:
+            async with ClientSession(*streams) as session:
+                await asyncio.wait_for(session.initialize(), timeout=10)
+                blocked = await asyncio.wait_for(
+                    session.call_tool(
+                        "prepare_network_snapshot_from_planning_dataset",
+                        {
+                            "planning_dataset_ref": {
+                                "server": "supply_chain_data",
+                                "uri": "supply-chain-data://resources/planning-dataset.v2-test",
+                                "resource_schema": "planning-dataset.v2",
+                            }
+                        },
+                    ),
+                    timeout=10,
+                )
+                assert blocked.isError is True
+                assert "analysis_authorization_required" in "\n".join(
+                    item.text for item in blocked.content if getattr(item, "type", None) == "text"
+                )
 
 
-async def expect_tool_error(
-    session: ClientSession,
-    name: str,
-    arguments: dict[str, object],
-    *,
-    expected: str,
-    meta: dict[str, object] | None = None,
-) -> None:
-    result = await session.call_tool(name, arguments, meta=meta)
-    assert result.isError is True
-    text = "\n".join(item.text for item in result.content if getattr(item, "type", None) == "text")
-    assert expected in text, text
-
-
-def assert_bounded_resource_result(result: object) -> None:
-    assert result.isError is not True, result.content
-    assert result.structuredContent is not None
-    assert set(result.structuredContent) == {
-        "summary",
-        "resource_name",
-        "data_ref",
-    }
-    assert len(json.dumps(result.structuredContent)) < 4_000
-
-
-async def read_json_resource(
-    session: ClientSession,
-    resource_ref: dict[str, object],
-    *,
-    expected_mime_type: str = "application/json",
-) -> dict[str, object]:
-    result = await session.read_resource(AnyUrl(str(resource_ref["uri"])))
-    assert len(result.contents) == 1
-    content = result.contents[0]
-    assert content.mimeType == expected_mime_type
-    return json.loads(content.text)
-
-
-def update_digest(digest: hashlib._Hash, value: str) -> None:
-    encoded = value.encode("utf-8")
-    digest.update(len(encoded).to_bytes(8, "big"))
-    digest.update(encoded)
+def test_stdio_smoke() -> None:
+    if os.environ.get("RUN_REAL_STDIO_SMOKE") != "1":
+        pytest.skip("set RUN_REAL_STDIO_SMOKE=1 to launch both current MCP stdio servers")
+    asyncio.run(asyncio.wait_for(smoke(), timeout=60))
 
 
 if __name__ == "__main__":
-    asyncio.run(smoke())
-    print("Supply-chain MCP stdio smoke passed")
+    asyncio.run(asyncio.wait_for(smoke(), timeout=60))

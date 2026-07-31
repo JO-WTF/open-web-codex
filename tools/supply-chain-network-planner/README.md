@@ -14,10 +14,10 @@ The package declares three independent MCP Servers:
 | `supply_chain_planner` | General snapshot, route, scenario, facility, finance and risk Resources |
 | `supply_chain_indonesia` | Exact Workspace Dataset Release access and the progressive Indonesia tutorials |
 
-The current `enterprise-supervisor-copilot@3.13.0` uses only
-`supply_chain_indonesia` plus the separate `map_utils` Plugin. The older general
-planning Servers remain independently tested capabilities; they are not hidden fallbacks for
-the Indonesia workflow.
+The current `enterprise-supervisor-copilot@4.0.0` delegates normal Network Planning
+to the bounded `supply_chain_data` intake server, the generic `supply_chain_planner`
+server and the separate `map_utils` Plugin. `supply_chain_indonesia` remains an
+independent tutorial capability and is not part of the normal Workspace intake path.
 
 ## Indonesia tools
 
@@ -54,10 +54,10 @@ copy in model JSON—is the browser rendering authority.
 
 | Release | Exact capability boundary |
 | --- | --- |
-| `enterprise-data-agent@3.1.0` | Atomic Indonesia Dataset inspection and bounded Resource reading |
-| `enterprise-network-planning-agent@3.5.0` | Server-resolved Indonesia service, validated province rankings, typed fraction targets, current, candidate, optimization, bounded map preparation and deterministic business-report publication |
-| `enterprise-visualization-agent@1.4.0` | Typed map-render preparation, provenance-only `MAP_HANDOFF` plus the exact matching Artifact ID, and one standalone Tool-owned embed directive |
-| `enterprise-supervisor-copilot@3.13.0` | Dynamic coordination and constrained composition of the unchanged business report with the independently owned inline map |
+| `enterprise-data-agent@4.0.0` | Workspace-wide bounded Excel/CSV/JSON discovery, structural profiling, fuzzy mapping proposals and confirmed planning-dataset publication |
+| `enterprise-network-planning-agent@4.0.0` | Task-specific requirement profile, input-gap decision, readiness checklist and the smallest validated Indonesia network analysis |
+| `enterprise-visualization-agent@2.0.0` | Exact comparison-map/GeoJSON render preparation, provenance-only `MAP_HANDOFF` and one standalone Tool-owned embed directive |
+| `enterprise-supervisor-copilot@4.0.0` | Evidence-driven dynamic coordination, explicit user confirmations and same-Thread analysis handoff |
 
 The root Supervisor receives collaboration capabilities but no business MCP or shell. Child
 roles receive only their exact MCP Server, Tool and capability-root inventory. Disabled sibling
@@ -118,10 +118,14 @@ PYTHONPATH=tools/supply-chain-network-planner \
   tools/supply-chain-network-planner/tests/stdio_smoke.py
 ```
 
-The real Web/Runtime path is covered by:
+The local Workspace intake gate is:
 
 ```bash
-scripts/smoke-enterprise-supervisor-copilot.sh
+NETWORK_PLANNING_SMOKE_MODE=local scripts/smoke-network-planning-intake.sh
 ```
+
+The same script requires explicit Web, Runtime, MCP, database and Provider
+prerequisites before it will run a real journey; absent those prerequisites it
+returns `network_planning_real_e2e_unavailable` rather than claiming success.
 
 No Provider or navigation API key is owned or stored by this Plugin.
