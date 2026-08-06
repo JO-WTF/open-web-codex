@@ -391,7 +391,8 @@ pub(crate) async fn ensure_session_for_thread(
     thread_id: &str,
 ) -> Result<(), ApiError> {
     let bound_policy = sqlx::query(
-        "SELECT snapshot.policy_id, snapshot.version
+        "SELECT snapshot.policy_id, snapshot.version, snapshot.source,
+                snapshot.release_id, snapshot.draft_definition_id
          FROM supervisor_policy_bindings binding
          JOIN supervisor_policy_snapshots snapshot
            ON snapshot.organization_id = binding.organization_id
@@ -412,15 +413,36 @@ pub(crate) async fn ensure_session_for_thread(
     };
     let policy_id: String = bound_policy.get("policy_id");
     let policy_version: String = bound_policy.get("version");
-    let policy = crate::supervisor_policy::resolve(
-        &state.db,
-        auth.organization_id,
-        &open_web_codex_platform_contracts::SupervisorPolicySelection {
-            policy_id,
-            version: policy_version,
-        },
-    )
-    .await
+    let policy_source: String = bound_policy.get("source");
+    let policy = match policy_source.as_str() {
+        "repository" => crate::supervisor_policy::resolve_builtin(
+            &open_web_codex_platform_contracts::SupervisorPolicySelection {
+                policy_id,
+                version: policy_version,
+            },
+        ),
+        "user_release" => {
+            let release_id: Uuid = bound_policy
+                .get::<Option<Uuid>, _>("release_id")
+                .ok_or_else(|| conflict("The bound Supervisor Policy release is missing"))?;
+            crate::supervisor_policy::resolve_release(&state.db, auth.organization_id, release_id)
+                .await
+        }
+        "draft" => {
+            let definition_id: Uuid = bound_policy
+                .get::<Option<Uuid>, _>("draft_definition_id")
+                .ok_or_else(|| conflict("The bound Supervisor Policy Draft is missing"))?;
+            crate::supervisor_policy::resolve_draft_for_new_run(
+                &state.db,
+                auth.organization_id,
+                definition_id,
+            )
+            .await
+        }
+        _ => Err(crate::supervisor_policy::SupervisorPolicyError::Invalid(
+            "bound Supervisor Policy source is invalid",
+        )),
+    }
     .map_err(|_| conflict("The bound Supervisor Policy could not be resolved"))?;
     let supports_intake = policy.detail.artifact_contracts.iter().any(|contract| {
         contract.artifact_type == "data_requirement_profile.v1"
@@ -735,11 +757,21 @@ pub async fn respond(
         "active"
     };
     let update_sql = match request_kind.as_str() {
-        "confirm_profile" => "UPDATE data_intake_sessions SET input_revision = input_revision + 1, evidence_revision = evidence_revision + 1, status = $1, profile_confirmation_sha256 = $5, failure_code = NULL, failure_summary = NULL, updated_at = now() WHERE organization_id = $2 AND id = $3 AND input_revision = $4",
-        "confirm_mapping" => "UPDATE data_intake_sessions SET input_revision = input_revision + 1, evidence_revision = evidence_revision + 1, status = $1, mapping_confirmation_sha256 = $5, failure_code = NULL, failure_summary = NULL, updated_at = now() WHERE organization_id = $2 AND id = $3 AND input_revision = $4",
-        "answer_parameters" => "UPDATE data_intake_sessions SET input_revision = input_revision + 1, evidence_revision = evidence_revision + 1, status = $1, parameter_confirmation_sha256 = $5, failure_code = NULL, failure_summary = NULL, updated_at = now() WHERE organization_id = $2 AND id = $3 AND input_revision = $4",
-        "confirm_analysis" => "UPDATE data_intake_sessions SET input_revision = input_revision + 1, evidence_revision = evidence_revision + 1, status = $1, readiness_confirmation_sha256 = $5, gaps = '[]', blocked_reasons = '[]', failure_code = NULL, failure_summary = NULL, updated_at = now() WHERE organization_id = $2 AND id = $3 AND input_revision = $4",
-        _ => "UPDATE data_intake_sessions SET input_revision = input_revision + 1, evidence_revision = evidence_revision + 1, status = $1, failure_code = NULL, failure_summary = NULL, updated_at = now() WHERE organization_id = $2 AND id = $3 AND input_revision = $4",
+        "confirm_profile" => {
+            "UPDATE data_intake_sessions SET input_revision = input_revision + 1, evidence_revision = evidence_revision + 1, status = $1, profile_confirmation_sha256 = $5, failure_code = NULL, failure_summary = NULL, updated_at = now() WHERE organization_id = $2 AND id = $3 AND input_revision = $4"
+        }
+        "confirm_mapping" => {
+            "UPDATE data_intake_sessions SET input_revision = input_revision + 1, evidence_revision = evidence_revision + 1, status = $1, mapping_confirmation_sha256 = $5, failure_code = NULL, failure_summary = NULL, updated_at = now() WHERE organization_id = $2 AND id = $3 AND input_revision = $4"
+        }
+        "answer_parameters" => {
+            "UPDATE data_intake_sessions SET input_revision = input_revision + 1, evidence_revision = evidence_revision + 1, status = $1, parameter_confirmation_sha256 = $5, failure_code = NULL, failure_summary = NULL, updated_at = now() WHERE organization_id = $2 AND id = $3 AND input_revision = $4"
+        }
+        "confirm_analysis" => {
+            "UPDATE data_intake_sessions SET input_revision = input_revision + 1, evidence_revision = evidence_revision + 1, status = $1, readiness_confirmation_sha256 = $5, gaps = '[]', blocked_reasons = '[]', failure_code = NULL, failure_summary = NULL, updated_at = now() WHERE organization_id = $2 AND id = $3 AND input_revision = $4"
+        }
+        _ => {
+            "UPDATE data_intake_sessions SET input_revision = input_revision + 1, evidence_revision = evidence_revision + 1, status = $1, failure_code = NULL, failure_summary = NULL, updated_at = now() WHERE organization_id = $2 AND id = $3 AND input_revision = $4"
+        }
     };
     let mut update = sqlx::query(update_sql)
         .bind(status)
@@ -1192,6 +1224,22 @@ pub async fn analysis_start(
             "planning_dataset_quality_blocked: the normalized dataset contains blocking quality errors",
         ));
     }
+    let data_classification = dataset_value
+        .get("dataClassification")
+        .and_then(Value::as_str)
+        .filter(|value| matches!(*value, "workspace_data" | "synthetic_demo"))
+        .ok_or_else(|| {
+            conflict("planning_dataset_invalid: a supported dataClassification is required")
+        })?
+        .to_string();
+    let demo_template = dataset_value.get("demoTemplate").cloned();
+    if data_classification == "synthetic_demo"
+        && !demo_template.as_ref().is_some_and(Value::is_object)
+    {
+        return Err(conflict(
+            "planning_dataset_invalid: synthetic Demo provenance requires demoTemplate",
+        ));
+    }
     let dataset_sha256 = artifact
         .get::<Option<String>, _>("content_sha256")
         .unwrap_or_else(|| hex::encode(Sha256::digest(&dataset_bytes)));
@@ -1266,6 +1314,8 @@ pub async fn analysis_start(
         "mapping": mapping_sha256,
         "parameters": parameter_sha256,
         "dataset": dataset_sha256,
+        "dataClassification": data_classification,
+        "demoTemplate": demo_template,
         "readiness": request.readiness_fingerprint,
     }))?;
     let release_request = PublishWorkspaceDatasetRequest {
@@ -1327,7 +1377,13 @@ pub async fn analysis_start(
     .bind(release.id).bind(&requirement_profile_sha256).bind(&source_snapshot_sha256)
     .bind(intake.get::<String, _>("contract_id")).bind(intake.get::<String, _>("contract_version"))
     .bind(intake.get::<String, _>("contract_sha256")).bind(&mapping_sha256).bind(&parameter_sha256).bind(&dataset_sha256)
-    .bind(serde_json::json!({"datasetArtifactId": dataset_artifact_id, "readinessArtifactId": readiness_artifact_id, "sourceAssets": source_snapshot}))
+    .bind(serde_json::json!({
+        "datasetArtifactId": dataset_artifact_id,
+        "readinessArtifactId": readiness_artifact_id,
+        "sourceAssets": source_snapshot,
+        "dataClassification": data_classification,
+        "demoTemplate": demo_template,
+    }))
     .bind(&binding_fingerprint).execute(&state.db).await.map_err(database_error)?;
     let binding_id: Uuid = sqlx::query_scalar("SELECT id FROM task_dataset_bindings WHERE organization_id=$1 AND task_id=$2 AND fingerprint=$3")
         .bind(auth.organization_id).bind(task_id).bind(&binding_fingerprint).fetch_one(&state.db).await.map_err(database_error)?;
@@ -1381,7 +1437,9 @@ pub async fn analysis_start(
                 "datasetArtifactId": dataset_artifact_id,
                 "planningDatasetRef": planning_dataset_resource_name,
                 "planningDatasetUri": planning_dataset_uri,
-                "readinessArtifactId": readiness_artifact_id
+                "readinessArtifactId": readiness_artifact_id,
+                "dataClassification": data_classification,
+                "demoTemplate": demo_template
             }))
             .bind(&request.idempotency_key).execute(&mut *claim_transaction).await.map_err(database_error)?;
         snapshot_id
@@ -2383,12 +2441,8 @@ mod tests {
 
     #[test]
     fn contract_summary_keeps_only_capability_reference_without_domain_defaults() {
-        let contract = contract_summary(
-            "indonesia-warehouse-network",
-            "2.0.0",
-            &"a".repeat(64),
-            None,
-        );
+        let contract =
+            contract_summary("warehouse-network-planning", "1.0.0", &"a".repeat(64), None);
         assert_eq!(contract.content_sha256.len(), 64);
         assert!(contract.required_entities.is_empty());
         assert!(contract.business_parameters.is_empty());

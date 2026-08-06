@@ -216,15 +216,30 @@ async fn resolve_bound_policy(
                 .ok_or(GovernedRuntimePreflightError::PolicySnapshotMismatch)?;
             supervisor_policy::resolve_release(db, organization_id, release_id).await
         }
+        SupervisorPolicySource::Draft => {
+            let definition_id = bound_policy
+                .draft_definition_id
+                .ok_or(GovernedRuntimePreflightError::PolicySnapshotMismatch)?;
+            supervisor_policy::resolve_draft_for_new_run(db, organization_id, definition_id).await
+        }
         _ => Err(supervisor_policy::SupervisorPolicyError::Invalid(
             "snapshot source is invalid",
         )),
     }
     .map_err(|_| GovernedRuntimePreflightError::PolicySnapshotMismatch)?;
-    if policy.snapshot.content_sha256 != bound_policy.content_sha256
-        || policy.snapshot.developer_instructions != bound_policy.developer_instructions
-    {
-        return Err(GovernedRuntimePreflightError::PolicySnapshotMismatch);
+    match bound_policy.source {
+        SupervisorPolicySource::Draft => {
+            if policy.snapshot.draft_revision != bound_policy.draft_revision {
+                return Err(GovernedRuntimePreflightError::PolicySnapshotMismatch);
+            }
+        }
+        SupervisorPolicySource::Repository | SupervisorPolicySource::UserRelease => {
+            if policy.snapshot.content_sha256 != bound_policy.content_sha256
+                || policy.snapshot.developer_instructions != bound_policy.developer_instructions
+            {
+                return Err(GovernedRuntimePreflightError::PolicySnapshotMismatch);
+            }
+        }
     }
     Ok(policy)
 }

@@ -613,6 +613,83 @@ async fn lists_reads_diffs_stages_unstages_and_reverts_workspace_files() {
         .is_empty());
 }
 
+#[tokio::test]
+async fn downloads_and_deletes_regular_workspace_files() {
+    let (_root, runtime, source) = fixture();
+    let source = runtime.validate_source(&source).unwrap();
+    let branch = runtime.validate_ref("main").unwrap();
+    let workspace_id = Uuid::now_v7();
+    let checkout = runtime
+        .provision(Uuid::now_v7(), workspace_id, &source, &branch)
+        .await
+        .unwrap();
+    let bytes = vec![0, 159, 146, 150];
+    std::fs::write(checkout.root.join("binary.bin"), &bytes).unwrap();
+    git(&checkout.root, &["add", "binary.bin"]);
+
+    assert_eq!(
+        runtime
+            .download_file(workspace_id, "binary.bin")
+            .await
+            .unwrap()
+            .bytes,
+        bytes
+    );
+    runtime
+        .delete_file(workspace_id, "binary.bin")
+        .await
+        .unwrap();
+    assert!(!checkout.root.join("binary.bin").exists());
+    assert!(runtime
+        .status(workspace_id)
+        .await
+        .unwrap()
+        .changes
+        .iter()
+        .any(|change| change.path == "binary.bin" && change.status.contains('D')));
+    assert!(matches!(
+        runtime.delete_file(workspace_id, "binary.bin").await,
+        Err(GitRuntimeError::Conflict(_))
+    ));
+    assert!(matches!(
+        runtime.delete_file(workspace_id, ".git/config").await,
+        Err(GitRuntimeError::UnsafePath(_))
+    ));
+}
+
+#[tokio::test]
+async fn writes_uploaded_workspace_files_atomically_and_rejects_unsafe_paths() {
+    let (_root, runtime, source) = fixture();
+    let source = runtime.validate_source(&source).unwrap();
+    let branch = runtime.validate_ref("main").unwrap();
+    let workspace_id = Uuid::now_v7();
+    let checkout = runtime
+        .provision(Uuid::now_v7(), workspace_id, &source, &branch)
+        .await
+        .unwrap();
+
+    runtime
+        .write_file(
+            workspace_id,
+            "data/planning.csv",
+            b"city,demand\nJakarta,10\n",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read(checkout.root.join("data/planning.csv")).unwrap(),
+        b"city,demand\nJakarta,10\n"
+    );
+    assert!(runtime
+        .write_file(workspace_id, "../outside.txt", b"blocked")
+        .await
+        .is_err());
+    assert!(runtime
+        .write_file(workspace_id, ".git/config", b"blocked")
+        .await
+        .is_err());
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn rejects_workspace_file_traversal_and_symlinks() {

@@ -2285,7 +2285,11 @@ mod tests {
             \n[features]\napps = false\nmulti_agent_v2 = false\nplugins = false\nshell_tool = false\n\
             \n[plugins.local-supply-chain-network-planner]\nenabled = true\n\
             \n[plugins.local-supply-chain-network-planner.mcp_servers.supply_chain_data]\n\
-            enabled = true\nenabled_tools = [\"inspect_planning_source\"]\n\
+            enabled = true\nenabled_tools = [\"discover_workspace_sources\"]\n\
+            \n[plugins.local-supply-chain-network-planner.mcp_servers.supply_chain_demo]\n\
+            enabled = false\n\
+            \n[plugins.local-supply-chain-network-planner.mcp_servers.supply_chain_indonesia]\n\
+            enabled = false\n\
             \n[plugins.local-supply-chain-network-planner.mcp_servers.supply_chain_planner]\n\
             enabled = false\n";
         PlatformRuntimeRole {
@@ -2328,9 +2332,14 @@ mod tests {
             role_spawn_limits: [("data_agent".to_string(), 1)].into_iter().collect(),
             required_mcp_servers: vec![required_server(
                 "supply_chain_data",
-                &["inspect_planning_source"],
+                &["discover_workspace_sources"],
                 "local-supply-chain-network-planner",
-                &["supply_chain_data", "supply_chain_planner"],
+                &[
+                    "supply_chain_data",
+                    "supply_chain_demo",
+                    "supply_chain_indonesia",
+                    "supply_chain_planner",
+                ],
             )],
             max_threads: 2,
         }
@@ -2362,9 +2371,14 @@ mod tests {
             &[("data_agent".to_string(), 1)].into_iter().collect(),
             &[required_server(
                 "supply_chain_data",
-                &["inspect_planning_source"],
+                &["discover_workspace_sources"],
                 "local-supply-chain-network-planner",
-                &["supply_chain_data", "supply_chain_planner"],
+                &[
+                    "supply_chain_data",
+                    "supply_chain_demo",
+                    "supply_chain_indonesia",
+                    "supply_chain_planner",
+                ],
             )],
             2,
             &verified_host_paths,

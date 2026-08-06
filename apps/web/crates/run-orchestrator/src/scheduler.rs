@@ -11,6 +11,41 @@ use crate::{
 };
 
 impl RunOrchestrator {
+    /// Mark Runtime work that was active before this process started as requiring
+    /// explicit recovery. A restarted Profile Host cannot prove that an old
+    /// in-memory Turn is still executing.
+    pub async fn reconcile_runs_after_restart(
+        &self,
+        started_at: chrono::DateTime<Utc>,
+    ) -> Result<u64, RunOrchestratorError> {
+        let result = sqlx::query(
+            "WITH interrupted AS (
+                 UPDATE runs
+                    SET status = 'recovery_pending',
+                        failure_code = 'runtime_restarted',
+                        active_turn_id = NULL,
+                        lease_owner = NULL,
+                        lease_token = NULL,
+                        lease_expires_at = NULL,
+                        updated_at = now()
+                  WHERE status IN ('provisioning', 'running', 'cancelling')
+                    AND updated_at < $1
+                    AND (
+                        status IN ('provisioning', 'cancelling')
+                        OR (status = 'running' AND active_turn_id IS NOT NULL)
+                    )
+                  RETURNING task_id
+             )
+             UPDATE tasks
+                SET status = 'running', updated_at = now()
+              WHERE id IN (SELECT task_id FROM interrupted)",
+        )
+        .bind(started_at)
+        .execute(&self.db)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
     /// Resolve the exact immutable execution identity inherited by a fork.
     ///
     /// The worker still revalidates and binds the source snapshot
@@ -31,6 +66,7 @@ impl RunOrchestrator {
         }
         let row = sqlx::query(
             "SELECT policy.policy_id, policy.version AS policy_version, \
+                    policy.draft_definition_id AS policy_draft_definition_id, \
                     agent.definition_id AS agent_definition_id, \
                     agent.version AS agent_version, agent.release_id AS agent_release_id \
              FROM runs source \
@@ -57,12 +93,16 @@ impl RunOrchestrator {
         .await?
         .ok_or(RunOrchestratorError::NotFound)?;
         let policy_id = row.get::<Option<String>, _>("policy_id");
+        let draft_definition_id = row.get::<Option<Uuid>, _>("policy_draft_definition_id");
         let agent_definition_id = row.get::<Option<String>, _>("agent_definition_id");
-        match (policy_id, agent_definition_id) {
-            (Some(_), Some(_)) => Err(RunOrchestratorError::Conflict(
+        match (policy_id, draft_definition_id, agent_definition_id) {
+            (Some(_), _, Some(_)) => Err(RunOrchestratorError::Conflict(
                 "source Run has conflicting execution policy bindings".to_string(),
             )),
-            (Some(policy_id), None) => Ok(RunExecutionSelection::Supervisor {
+            (Some(_), Some(definition_id), None) => {
+                Ok(RunExecutionSelection::SupervisorDraft { definition_id })
+            }
+            (Some(policy_id), None, None) => Ok(RunExecutionSelection::Supervisor {
                 policy_id,
                 version: row
                     .get::<Option<String>, _>("policy_version")
@@ -72,7 +112,7 @@ impl RunOrchestrator {
                         )
                     })?,
             }),
-            (None, Some(definition_id)) => Ok(RunExecutionSelection::Agent {
+            (None, None, Some(definition_id)) => Ok(RunExecutionSelection::Agent {
                 definition_id,
                 version: row
                     .get::<Option<String>, _>("agent_version")
@@ -83,7 +123,10 @@ impl RunOrchestrator {
                     })?,
                 release_id: row.get("agent_release_id"),
             }),
-            (None, None) => Ok(RunExecutionSelection::Standard),
+            (None, None, None) => Ok(RunExecutionSelection::Standard),
+            (None, Some(_), _) => Err(RunOrchestratorError::Conflict(
+                "source Run has an incomplete Supervisor binding".to_string(),
+            )),
         }
     }
 
@@ -128,6 +171,7 @@ impl RunOrchestrator {
                     run.active_turn_id, run.workspace_id, run.attempt, run.created_at, \
                     run.updated_at, run.fork_thread_id, run.fork_source_run_id, \
                     policy.policy_id, policy.version AS policy_version, \
+                    policy.draft_definition_id AS policy_draft_definition_id, \
                     agent.definition_id AS agent_definition_id, \
                     agent.version AS agent_version, agent.release_id AS agent_release_id \
              FROM runs run \
@@ -160,6 +204,7 @@ impl RunOrchestrator {
         }
 
         let policy_id = row.get::<Option<String>, _>("policy_id");
+        let draft_definition_id = row.get::<Option<Uuid>, _>("policy_draft_definition_id");
         let agent_definition_id = row.get::<Option<String>, _>("agent_definition_id");
         if policy_id.is_some() && agent_definition_id.is_some() {
             return Err(RunOrchestratorError::Conflict(
@@ -167,7 +212,9 @@ impl RunOrchestrator {
             ));
         }
         if request.execution != RunExecutionSelection::Inherited {
-            let accepted = if let Some(policy_id) = policy_id {
+            let accepted = if let Some(definition_id) = draft_definition_id {
+                RunExecutionSelection::SupervisorDraft { definition_id }
+            } else if let Some(policy_id) = policy_id {
                 RunExecutionSelection::Supervisor {
                     policy_id,
                     version: row
@@ -566,6 +613,8 @@ impl RunOrchestrator {
                     snapshot.developer_instructions AS supervisor_policy_developer_instructions, \
                     snapshot.source AS supervisor_policy_source, \
                     snapshot.release_id AS supervisor_policy_release_id, \
+                    snapshot.draft_definition_id AS supervisor_policy_draft_definition_id, \
+                    snapshot.draft_revision AS supervisor_policy_draft_revision, \
                     agent_binding.id AS agent_run_binding_id, \
                     agent_snapshot.definition_id AS agent_definition_id, \
                     agent_snapshot.version AS agent_version, \
@@ -703,8 +752,10 @@ fn supervisor_policy_lease(
         candidate.get::<Option<String>, _>("supervisor_policy_developer_instructions"),
         candidate.get::<Option<String>, _>("supervisor_policy_source"),
         candidate.get::<Option<Uuid>, _>("supervisor_policy_release_id"),
+        candidate.get::<Option<Uuid>, _>("supervisor_policy_draft_definition_id"),
+        candidate.get::<Option<i64>, _>("supervisor_policy_draft_revision"),
     ) {
-        (None, None, None, None, None, None, None) => Ok(None),
+        (None, None, None, None, None, None, None, None, None) => Ok(None),
         (
             Some(binding_id),
             Some(policy_id),
@@ -713,6 +764,8 @@ fn supervisor_policy_lease(
             Some(developer_instructions),
             Some(source),
             release_id,
+            draft_definition_id,
+            draft_revision,
         ) => {
             let source = source.parse().map_err(|_| {
                 RunOrchestratorError::Conflict(
@@ -727,6 +780,8 @@ fn supervisor_policy_lease(
                 developer_instructions,
                 source,
                 release_id,
+                draft_definition_id,
+                draft_revision,
             }))
         }
         _ => Err(RunOrchestratorError::Conflict(

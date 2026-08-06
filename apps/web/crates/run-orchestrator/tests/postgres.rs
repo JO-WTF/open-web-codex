@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use chrono::Utc;
 use open_web_codex_adapter::fake::FakeCodexAdapter;
 use open_web_codex_adapter::{CodexAdapter, ThreadStartMode};
 use open_web_codex_git_runtime::{GitRuntime, GitRuntimeConfig};
@@ -91,6 +92,7 @@ async fn independent_workspace_is_reused_across_run_lifecycles() {
     let profile_id = Uuid::now_v7();
     let project_id = Uuid::now_v7();
     let task_id = Uuid::now_v7();
+    let runtime_key = format!("runner-profile-{profile_id}");
     sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, 'Runner', $2)")
         .bind(organization_id)
         .bind(format!("runner-{organization_id}"))
@@ -117,11 +119,12 @@ async fn independent_workspace_is_reused_across_run_lifecycles() {
     .unwrap();
     sqlx::query(
         "INSERT INTO profiles (id, organization_id, owner_user_id, runtime_key, name) \
-         VALUES ($1, $2, $3, 'runner-profile', 'Runner Profile')",
+         VALUES ($1, $2, $3, $4, 'Runner Profile')",
     )
     .bind(profile_id)
     .bind(organization_id)
     .bind(user_id)
+    .bind(&runtime_key)
     .execute(&pool)
     .await
     .unwrap();
@@ -159,7 +162,7 @@ async fn independent_workspace_is_reused_across_run_lifecycles() {
         git_runtime.clone(),
         adapter.clone(),
         preflight.clone(),
-        "runner-profile",
+        &runtime_key,
         "worker-a",
         Duration::from_secs(30),
     )
@@ -169,7 +172,7 @@ async fn independent_workspace_is_reused_across_run_lifecycles() {
         git_runtime.clone(),
         adapter,
         preflight.clone(),
-        "runner-profile",
+        &runtime_key,
         "worker-b",
         Duration::from_secs(30),
     )
@@ -206,6 +209,8 @@ async fn independent_workspace_is_reused_across_run_lifecycles() {
                 .to_string(),
             source: open_web_codex_run_orchestrator::SupervisorPolicySource::Repository,
             release_id: None,
+            draft_definition_id: None,
+            draft_revision: None,
         }),
         agent: None,
     };
@@ -429,10 +434,36 @@ async fn independent_workspace_is_reused_across_run_lifecycles() {
             .await
             .unwrap();
     assert_eq!(recovery_owner.as_deref(), Some("worker-a"));
-    let cleanup_jobs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runner_jobs")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE runs
+            SET active_turn_id = 'stale-turn',
+                lease_owner = NULL,
+                lease_token = NULL,
+                lease_expires_at = NULL,
+                updated_at = now() - interval '1 minute'
+          WHERE id = $1",
+    )
+    .bind(recovery_run.id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        second
+            .reconcile_runs_after_restart(Utc::now())
+            .await
+            .unwrap(),
+        1
+    );
+    let reconciled = second.get_run(organization_id, recovery_run.id).await.unwrap();
+    assert_eq!(reconciled.status, "recovery_pending");
+    assert_eq!(reconciled.failure_code.as_deref(), Some("runtime_restarted"));
+    assert!(reconciled.active_turn_id.is_none());
+    let cleanup_jobs: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM runner_jobs WHERE state IN ('pending', 'running')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert_eq!(
         cleanup_jobs, 0,
         "Run lease expiry must not schedule Workspace deletion"
@@ -514,6 +545,113 @@ async fn independent_workspace_is_reused_across_run_lifecycles() {
         })
         .await
         .unwrap();
+    let draft_definition_id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO supervisor_definitions \
+         (id, organization_id, owner_user_id, policy_id, display_name, description) \
+         VALUES ($1, $2, $3, 'draft-supervisor', 'Draft Supervisor', 'Draft test policy')",
+    )
+    .bind(draft_definition_id)
+    .bind(organization_id)
+    .bind(user_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO supervisor_revisions \
+         (organization_id, definition_id, version, draft_spec, created_by) \
+         VALUES ($1, $2, '5.0.0', '{}'::jsonb, $3)",
+    )
+    .bind(organization_id)
+    .bind(draft_definition_id)
+    .bind(user_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let draft_run_v1 = first
+        .enqueue_run(EnqueueRunRequest {
+            organization_id,
+            actor_id: user_id,
+            task_id,
+            idempotency_key: "runner-draft-revision-0001".to_string(),
+            workspace_id: workspace.id,
+            fork_thread_id: None,
+            fork_source_run_id: None,
+            supervisor_policy: Some(SupervisorPolicySnapshotInput {
+                policy_id: "draft-supervisor".to_string(),
+                version: "5.0.0".to_string(),
+                display_name: "Draft Supervisor".to_string(),
+                developer_instructions: "Draft instructions v1".to_string(),
+                content_sha256: "c".repeat(64),
+                source: open_web_codex_run_orchestrator::SupervisorPolicySource::Draft,
+                release_id: None,
+                draft_definition_id: Some(draft_definition_id),
+                draft_revision: Some(1),
+            }),
+            agent: None,
+        })
+        .await
+        .unwrap();
+    first
+        .cancel_run(CancelRunRequest {
+            organization_id,
+            actor_id: user_id,
+            allow_organization_admin: false,
+            run_id: draft_run_v1.id,
+        })
+        .await
+        .unwrap();
+    let draft_run_v2 = first
+        .enqueue_run(EnqueueRunRequest {
+            organization_id,
+            actor_id: user_id,
+            task_id,
+            idempotency_key: "runner-draft-revision-0002".to_string(),
+            workspace_id: workspace.id,
+            fork_thread_id: None,
+            fork_source_run_id: None,
+            supervisor_policy: Some(SupervisorPolicySnapshotInput {
+                policy_id: "draft-supervisor".to_string(),
+                version: "5.0.0".to_string(),
+                display_name: "Draft Supervisor".to_string(),
+                developer_instructions: "Draft instructions v2".to_string(),
+                content_sha256: "c".repeat(64),
+                source: open_web_codex_run_orchestrator::SupervisorPolicySource::Draft,
+                release_id: None,
+                draft_definition_id: Some(draft_definition_id),
+                draft_revision: Some(2),
+            }),
+            agent: None,
+        })
+        .await
+        .unwrap();
+    let draft_snapshot_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM supervisor_policy_snapshots \
+         WHERE organization_id = $1 AND policy_id = 'draft-supervisor' AND source = 'draft' \
+           AND draft_definition_id = $2",
+    )
+    .bind(organization_id)
+    .bind(draft_definition_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(draft_snapshot_count, 2);
+    first
+        .cancel_run(CancelRunRequest {
+            organization_id,
+            actor_id: user_id,
+            allow_organization_admin: false,
+            run_id: draft_run_v2.id,
+        })
+        .await
+        .unwrap();
+    std::fs::write(
+        git_runtime
+            .workspace_path(workspace.id)
+            .join("uncommitted-demo.txt"),
+        "generated demo data\n",
+    )
+    .unwrap();
     let removing = owner
         .remove_workspace(RemoveWorkspaceRequest {
             organization_id,

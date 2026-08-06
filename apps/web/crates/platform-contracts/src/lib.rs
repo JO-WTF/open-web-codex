@@ -349,6 +349,8 @@ pub struct StartRunRequest {
     #[serde(default)]
     pub supervisor_policy: Option<SupervisorPolicySelection>,
     #[serde(default)]
+    pub supervisor_draft_id: Option<Uuid>,
+    #[serde(default)]
     pub agent: Option<AgentRunSelection>,
 }
 
@@ -361,6 +363,8 @@ pub struct RunReadinessRequest {
     pub model: String,
     #[serde(default)]
     pub supervisor_policy: Option<SupervisorPolicySelection>,
+    #[serde(default)]
+    pub supervisor_draft_id: Option<Uuid>,
     #[serde(default)]
     pub agent: Option<AgentRunSelection>,
     #[serde(default)]
@@ -690,8 +694,8 @@ pub struct StartRunResponse {
     pub run: Run,
 }
 
-/// Browser-selectable reference to a server-published Supervisor Policy.
-/// Policy content is always resolved by the platform.
+/// Browser-selectable reference to a server-resolved Supervisor Policy.
+/// Published policy content or Draft content is always resolved by the platform.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SupervisorPolicySelection {
     pub policy_id: String,
@@ -715,6 +719,8 @@ pub struct SupervisorPolicySummary {
     pub display_name: String,
     pub description: String,
     pub source: SupervisorPolicyOrigin,
+    #[serde(default)]
+    pub draft_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -722,6 +728,7 @@ pub struct SupervisorPolicySummary {
 pub enum SupervisorPolicyOrigin {
     Repository,
     UserRelease,
+    Draft,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1292,6 +1299,18 @@ pub struct WorkspaceFileDiff {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspacePathQuery {
     pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspacePathRequest {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceFileUploadResponse {
+    pub status: String,
+    pub paths: Vec<String>,
 }
 
 /// Browser-declared metadata for one file in a Dataset Release. `field_id`

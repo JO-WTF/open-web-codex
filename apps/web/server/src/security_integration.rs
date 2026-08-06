@@ -261,7 +261,7 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
         authenticated_json(
             "POST",
             &format!(
-                "/api/workspaces/{workspace_id}/tutorial-blueprints/indonesia-warehouse-network/1.4.0/reconcile"
+                "/api/workspaces/{workspace_id}/tutorial-blueprints/indonesia-warehouse-network/1.5.0/reconcile"
             ),
             &first_token,
             json!({"idempotency_key": "security-tutorial-install-one"}),
@@ -281,7 +281,7 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
         authenticated_json(
             "POST",
             &format!(
-                "/api/workspaces/{workspace_id}/tutorial-blueprints/indonesia-warehouse-network/1.4.0/reconcile"
+                "/api/workspaces/{workspace_id}/tutorial-blueprints/indonesia-warehouse-network/1.5.0/reconcile"
             ),
             &first_token,
             json!({"idempotency_key": "security-tutorial-install-two"}),
@@ -319,7 +319,7 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
         authenticated_json(
             "POST",
             &format!(
-                "/api/workspaces/{workspace_id}/tutorial-blueprints/indonesia-warehouse-network/1.4.0/reconcile"
+                "/api/workspaces/{workspace_id}/tutorial-blueprints/indonesia-warehouse-network/1.5.0/reconcile"
             ),
             &first_token,
             json!({"idempotency_key": "security-tutorial-install-conflict"}),
@@ -343,7 +343,7 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
         authenticated_json(
             "POST",
             &format!(
-                "/api/workspaces/{workspace_id}/tutorial-blueprints/indonesia-warehouse-network/1.4.0/reconcile"
+                "/api/workspaces/{workspace_id}/tutorial-blueprints/indonesia-warehouse-network/1.5.0/reconcile"
             ),
             &first_token,
             json!({"idempotency_key": "security-tutorial-install-recovered"}),
@@ -962,7 +962,7 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
         authenticated_json(
             "POST",
             &format!(
-                "/api/workspaces/{workspace_id}/tutorial-blueprints/indonesia-warehouse-network/1.4.0/reconcile"
+                "/api/workspaces/{workspace_id}/tutorial-blueprints/indonesia-warehouse-network/1.5.0/reconcile"
             ),
             second_token,
             json!({"idempotency_key": "cross-tenant-tutorial-install"}),

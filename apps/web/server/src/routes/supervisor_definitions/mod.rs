@@ -22,7 +22,8 @@ mod store;
 #[cfg(test)]
 use resolution::release_spec_from_draft;
 use resolution::{
-    release_spec_from_draft_with_policy, validate_draft, validate_draft_storage_shape,
+    ensure_draft_version_is_new, release_spec_from_draft_with_policy, validate_draft,
+    validate_draft_storage_shape,
 };
 use store::{
     load_definition, load_definitions, load_draft_row, lock_definition, parse_draft, record_audit,
@@ -46,6 +47,7 @@ pub async fn create(
     Json(draft): Json<SupervisorDraftRequest>,
 ) -> ApiResult<SupervisorDefinitionSummary> {
     validate_draft_storage_shape(&draft)?;
+    ensure_draft_version_is_new(&state.db, auth.organization_id, &draft).await?;
     if supervisor_policy::is_reserved_builtin_policy_id(&draft.policy_id) {
         return Err(bad_request(
             "The policy id is reserved by a built-in Supervisor Package",
@@ -103,6 +105,7 @@ pub async fn save_draft(
     Json(draft): Json<SupervisorDraftRequest>,
 ) -> ApiResult<SupervisorDefinitionSummary> {
     validate_draft_storage_shape(&draft)?;
+    ensure_draft_version_is_new(&state.db, auth.organization_id, &draft).await?;
     let draft_spec = serde_json::to_value(&draft).map_err(|_| internal_error())?;
     let mut transaction = state.db.begin().await.map_err(database_error)?;
     let definition = lock_definition(&mut transaction, auth.organization_id, definition_id).await?;
@@ -125,7 +128,8 @@ pub async fn save_draft(
     if let Some(row) = draft_revision {
         sqlx::query(
             "UPDATE supervisor_revisions \
-             SET version = $1, draft_spec = $2, updated_at = now() \
+             SET version = $1, draft_spec = $2, revision_number = revision_number + 1, \
+                 updated_at = now() \
              WHERE id = $3 AND organization_id = $4 AND state = 'draft'",
         )
         .bind(&draft.version)
@@ -184,6 +188,7 @@ pub async fn validate(
     let row = load_draft_row(&state.db, auth.organization_id, definition_id).await?;
     require_manage(&auth, row.get("owner_user_id"))?;
     let draft = parse_draft(row.get("draft_spec"))?;
+    ensure_draft_version_is_new(&state.db, auth.organization_id, &draft).await?;
     Ok(Json(
         validate_draft(&state.db, auth.organization_id, &draft).await,
     ))

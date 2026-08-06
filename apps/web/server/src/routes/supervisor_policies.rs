@@ -24,12 +24,11 @@ pub async fn list_published(
     supervisor_policy::list_published(&state.db, auth.organization_id)
         .await
         .map(Json)
-        .map_err(|_| {
+        .map_err(|error| {
+            tracing::error!(?error, "failed to build Supervisor catalog");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(PlatformError::internal(
-                    "published Supervisor Packages are invalid",
-                )),
+                Json(PlatformError::internal("Supervisor catalog is invalid")),
             )
         })
 }

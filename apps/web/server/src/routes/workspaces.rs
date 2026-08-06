@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::{
     body::Body,
-    extract::{Path, Query, State},
+    extract::{Multipart, Path, Query, State},
     http::{header, HeaderName, HeaderValue, Response, StatusCode},
     Extension, Json,
 };
@@ -13,8 +13,9 @@ use open_web_codex_platform_contracts::{
     CreateWorkspaceRequest as PlatformCreateWorkspaceRequest, RenameWorkspaceUpstreamRequest,
     SetWorkspaceGitRootRequest, Workspace, WorkspaceBranch, WorkspaceBranchRequest,
     WorkspaceCommitDiff, WorkspaceFileChange, WorkspaceFileContent, WorkspaceFileDiff,
-    WorkspaceGitRootsQuery, WorkspaceLog, WorkspaceLogEntry, WorkspaceLogQuery, WorkspacePathQuery,
-    WorkspacePathsRequest, WorkspaceStatus, WriteProfileTextFileRequest,
+    WorkspaceFileUploadResponse, WorkspaceGitRootsQuery, WorkspaceLog, WorkspaceLogEntry,
+    WorkspaceLogQuery, WorkspacePathQuery, WorkspacePathRequest, WorkspacePathsRequest,
+    WorkspaceStatus, WriteProfileTextFileRequest,
 };
 use open_web_codex_platform_store::AppState;
 use open_web_codex_run_orchestrator::{
@@ -30,6 +31,10 @@ use crate::routes::RuntimeProfileBinding;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
 type AssetResult = Result<Response<Body>, (StatusCode, Json<PlatformError>)>;
+
+const MAX_WORKSPACE_UPLOAD_FILES: usize = 20;
+const MAX_WORKSPACE_UPLOAD_FILE_BYTES: usize = 100 * 1024 * 1024;
+const MAX_WORKSPACE_UPLOAD_TOTAL_BYTES: usize = 250 * 1024 * 1024;
 
 pub async fn list_workspaces(
     State(state): State<AppState>,
@@ -136,6 +141,79 @@ pub async fn list_files(
     Ok(Json(git.list_files(workspace_id).await.map_err(git_error)?))
 }
 
+pub async fn upload_files(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(workspace_id): Path<Uuid>,
+    Extension(git): Extension<Arc<GitRuntime>>,
+    mut multipart: Multipart,
+) -> ApiResult<WorkspaceFileUploadResponse> {
+    let workspace_id = authorized_workspace(&state, &auth, workspace_id, true).await?;
+    let mut files = Vec::new();
+    let mut total_bytes = 0usize;
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|_| bad_request("The Workspace upload could not be read"))?
+    {
+        if files.len() >= MAX_WORKSPACE_UPLOAD_FILES {
+            return Err(bad_request(
+                "A Workspace upload may contain at most 20 files",
+            ));
+        }
+        let path = field
+            .file_name()
+            .map(str::to_string)
+            .ok_or_else(|| bad_request("Every Workspace upload part needs a file name"))?;
+        validate_workspace_upload_path(&path)?;
+        let bytes = field
+            .bytes()
+            .await
+            .map_err(|_| bad_request("The Workspace upload could not be read"))?;
+        if bytes.len() > MAX_WORKSPACE_UPLOAD_FILE_BYTES {
+            return Err(bad_request(format!(
+                "{path} exceeds the 100 MiB per-file limit"
+            )));
+        }
+        total_bytes = total_bytes
+            .checked_add(bytes.len())
+            .ok_or_else(|| bad_request("The Workspace upload is too large"))?;
+        if total_bytes > MAX_WORKSPACE_UPLOAD_TOTAL_BYTES {
+            return Err(bad_request(
+                "A Workspace upload may contain at most 250 MiB",
+            ));
+        }
+        if files.iter().any(|(existing, _)| existing == &path) {
+            return Err(bad_request(
+                "A Workspace upload cannot contain duplicate file paths",
+            ));
+        }
+        files.push((path, bytes.to_vec()));
+    }
+    if files.is_empty() {
+        return Err(bad_request("Choose at least one file to upload"));
+    }
+    for (path, bytes) in &files {
+        git.write_file(workspace_id, path, bytes)
+            .await
+            .map_err(git_error)?;
+    }
+    let paths = files.into_iter().map(|(path, _)| path).collect::<Vec<_>>();
+    audit_workspace_mutation(
+        &state,
+        &auth,
+        workspace_id,
+        workspace_id,
+        "workspace.file_upload",
+        &paths,
+    )
+    .await?;
+    Ok(Json(WorkspaceFileUploadResponse {
+        status: "uploaded".to_string(),
+        paths,
+    }))
+}
+
 pub async fn read_file(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
@@ -152,6 +230,85 @@ pub async fn read_file(
         content: content.content,
         truncated: content.truncated,
     }))
+}
+
+pub async fn download_file(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(workspace_id): Path<Uuid>,
+    Query(query): Query<WorkspacePathQuery>,
+    Extension(git): Extension<Arc<GitRuntime>>,
+) -> AssetResult {
+    let workspace_id = authorized_workspace(&state, &auth, workspace_id, false).await?;
+    let file = git
+        .download_file(workspace_id, &query.path)
+        .await
+        .map_err(git_error)?;
+    let filename = query.path.rsplit('/').next().unwrap_or("download");
+    let content_length = HeaderValue::from_str(&file.bytes.len().to_string()).map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PlatformError::internal(
+                "workspace download response could not be created",
+            )),
+        )
+    })?;
+    let content_disposition = HeaderValue::from_str(&format!(
+        "attachment; filename=\"download\"; filename*=UTF-8''{}",
+        percent_encode_filename(filename),
+    ))
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PlatformError::internal(
+                "workspace download filename could not be created",
+            )),
+        )
+    })?;
+    let mut response = Response::new(Body::from(file.bytes));
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
+    headers.insert(header::CONTENT_LENGTH, content_length);
+    headers.insert(header::CONTENT_DISPOSITION, content_disposition);
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        HeaderName::from_static("cross-origin-resource-policy"),
+        HeaderValue::from_static("same-origin"),
+    );
+    Ok(response)
+}
+
+pub async fn delete_file(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(workspace_id): Path<Uuid>,
+    Extension(git): Extension<Arc<GitRuntime>>,
+    Json(request): Json<WorkspacePathRequest>,
+) -> ApiResult<serde_json::Value> {
+    let workspace_id = authorized_workspace(&state, &auth, workspace_id, true).await?;
+    git.delete_file(workspace_id, &request.path)
+        .await
+        .map_err(git_error)?;
+    audit_workspace_mutation(
+        &state,
+        &auth,
+        workspace_id,
+        workspace_id,
+        "workspace.file_delete",
+        std::slice::from_ref(&request.path),
+    )
+    .await?;
+    Ok(Json(json!({ "status": "deleted", "path": request.path })))
 }
 
 pub async fn read_image_asset(
@@ -939,6 +1096,47 @@ fn log_entry(entry: open_web_codex_git_runtime::GitLogEntry) -> WorkspaceLogEntr
         author: entry.author,
         timestamp: entry.timestamp,
     }
+}
+
+fn percent_encode_filename(value: &str) -> String {
+    value
+        .as_bytes()
+        .iter()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'~') {
+                (*byte as char).to_string()
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect()
+}
+
+fn validate_workspace_upload_path(path: &str) -> Result<(), (StatusCode, Json<PlatformError>)> {
+    if path.is_empty()
+        || path.len() > 512
+        || path.starts_with('/')
+        || path.contains('\\')
+        || path.split('/').any(|part| {
+            part.is_empty()
+                || part == "."
+                || part == ".."
+                || part == ".git"
+                || part == ".open-web-codex"
+        })
+    {
+        return Err(bad_request(
+            "Workspace upload paths must stay inside the Workspace",
+        ));
+    }
+    Ok(())
+}
+
+fn bad_request(message: impl Into<String>) -> (StatusCode, Json<PlatformError>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(PlatformError::bad_request(message)),
+    )
 }
 
 pub(super) fn git_error(error: GitRuntimeError) -> (StatusCode, Json<PlatformError>) {

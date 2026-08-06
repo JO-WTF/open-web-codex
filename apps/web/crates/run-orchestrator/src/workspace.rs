@@ -330,19 +330,6 @@ impl RunOrchestrator {
                 "Workspace still has an active terminal session".to_string(),
             ));
         }
-        if record.state != "cleanup_failed"
-            && !self
-                .git
-                .status(request.workspace_id)
-                .await?
-                .changes
-                .is_empty()
-        {
-            return Err(RunOrchestratorError::Conflict(
-                "Workspace has uncommitted changes".to_string(),
-            ));
-        }
-
         let updated = sqlx::query(
             "UPDATE workspaces SET state = 'removing', updated_at = now() \
              WHERE id = $1 AND organization_id = $2 \

@@ -372,7 +372,10 @@ pub fn router(
         )
         .route(
             "/workspaces/{id}/files",
-            axum::routing::get(workspaces::list_files),
+            axum::routing::get(workspaces::list_files)
+                .post(workspaces::upload_files)
+                .delete(workspaces::delete_file)
+                .layer(axum::extract::DefaultBodyLimit::max(252 * 1024 * 1024)),
         )
         .route(
             "/workspaces/{id}/datasets",
@@ -400,6 +403,10 @@ pub fn router(
         .route(
             "/workspaces/{id}/files/content",
             axum::routing::get(workspaces::read_file),
+        )
+        .route(
+            "/workspaces/{id}/files/download",
+            axum::routing::get(workspaces::download_file),
         )
         .route(
             "/workspaces/{id}/assets",

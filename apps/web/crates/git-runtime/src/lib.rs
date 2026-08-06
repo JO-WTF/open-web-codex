@@ -20,6 +20,8 @@ pub use validation::{GitSourcePolicy, ValidatedGitRef, ValidatedGitSource};
 const LARGE_FILE_BYTES: u64 = 1024 * 1024;
 const MAX_WORKSPACE_FILES: usize = 20_000;
 const MAX_FILE_READ_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_FILE_DOWNLOAD_BYTES: u64 = 100 * 1024 * 1024;
+const MAX_WORKSPACE_UPLOAD_FILE_BYTES: usize = 100 * 1024 * 1024;
 const MAX_IMAGE_ASSET_BYTES: u64 = 50 * 1024 * 1024;
 const MAX_DIFF_BYTES: usize = 2 * 1024 * 1024;
 const MAX_APPLY_PATCH_BYTES: usize = 16 * 1024 * 1024;
@@ -115,6 +117,11 @@ pub struct WorkspaceStatus {
 pub struct WorkspaceFileContent {
     pub content: String,
     pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceFileDownload {
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -580,6 +587,170 @@ impl GitRuntime {
             GitRuntimeError::Conflict("workspace file is not UTF-8 text".to_string())
         })?;
         Ok(WorkspaceFileContent { content, truncated })
+    }
+
+    /// Read a bounded file as bytes for an authenticated browser download.
+    /// The caller still supplies only a validated workspace-relative path.
+    pub async fn download_file(
+        &self,
+        workspace_id: Uuid,
+        relative: &str,
+    ) -> Result<WorkspaceFileDownload, GitRuntimeError> {
+        validate_workspace_file_path(relative)?;
+        let _lock = self.acquire_workspace_lock(workspace_id).await;
+        let workspace = self.require_workspace(workspace_id)?;
+        let path = workspace.join(relative);
+        let metadata =
+            tokio::fs::symlink_metadata(&path)
+                .await
+                .map_err(|source| GitRuntimeError::Io {
+                    operation: "inspect workspace download",
+                    source,
+                })?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(GitRuntimeError::UnsafePath(
+                "workspace download target is not a regular file".to_string(),
+            ));
+        }
+        if metadata.len() > MAX_FILE_DOWNLOAD_BYTES {
+            return Err(GitRuntimeError::Conflict(
+                "workspace file exceeds the download size limit".to_string(),
+            ));
+        }
+        let canonical =
+            tokio::fs::canonicalize(&path)
+                .await
+                .map_err(|source| GitRuntimeError::Io {
+                    operation: "resolve workspace download",
+                    source,
+                })?;
+        if !canonical.starts_with(&workspace) {
+            return Err(GitRuntimeError::UnsafePath(
+                "workspace download escaped the workspace".to_string(),
+            ));
+        }
+        let bytes = tokio::fs::read(canonical)
+            .await
+            .map_err(|source| GitRuntimeError::Io {
+                operation: "read workspace download",
+                source,
+            })?;
+        Ok(WorkspaceFileDownload { bytes })
+    }
+
+    /// Remove one regular file from a Workspace. Git remains the source of
+    /// truth for the resulting deletion status, so the change can still be
+    /// reviewed, reverted, or committed through the existing Git controls.
+    pub async fn delete_file(
+        &self,
+        workspace_id: Uuid,
+        relative: &str,
+    ) -> Result<(), GitRuntimeError> {
+        validate_workspace_file_path(relative)?;
+        let _lock = self.acquire_workspace_lock(workspace_id).await;
+        let workspace = self.require_workspace(workspace_id)?;
+        let path = workspace.join(relative);
+        let metadata = tokio::fs::symlink_metadata(&path).await.map_err(|source| {
+            if source.kind() == std::io::ErrorKind::NotFound {
+                GitRuntimeError::Conflict("workspace file does not exist".to_string())
+            } else {
+                GitRuntimeError::Io {
+                    operation: "inspect workspace deletion",
+                    source,
+                }
+            }
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(GitRuntimeError::UnsafePath(
+                "workspace deletion target is not a regular file".to_string(),
+            ));
+        }
+        let canonical =
+            tokio::fs::canonicalize(&path)
+                .await
+                .map_err(|source| GitRuntimeError::Io {
+                    operation: "resolve workspace deletion",
+                    source,
+                })?;
+        if !canonical.starts_with(&workspace) {
+            return Err(GitRuntimeError::UnsafePath(
+                "workspace deletion escaped the workspace".to_string(),
+            ));
+        }
+        tokio::fs::remove_file(canonical)
+            .await
+            .map_err(|source| GitRuntimeError::Io {
+                operation: "delete workspace file",
+                source,
+            })
+    }
+
+    /// Atomically write one browser-uploaded regular file into the selected
+    /// Workspace root. The path is always Workspace-relative and validated
+    /// before any parent directory is created.
+    pub async fn write_file(
+        &self,
+        workspace_id: Uuid,
+        relative: &str,
+        bytes: &[u8],
+    ) -> Result<(), GitRuntimeError> {
+        validate_workspace_file_path(relative)?;
+        if bytes.len() > MAX_WORKSPACE_UPLOAD_FILE_BYTES {
+            return Err(GitRuntimeError::Conflict(
+                "workspace upload file exceeds the 100 MiB limit".to_string(),
+            ));
+        }
+        let _lock = self.acquire_workspace_lock(workspace_id).await;
+        let workspace = self.require_workspace(workspace_id)?;
+        let parent = ensure_workspace_parent(&workspace, relative)?;
+        let path = workspace.join(relative);
+        reject_symlink(&path, "workspace upload target")?;
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) if !metadata.is_file() => {
+                return Err(GitRuntimeError::UnsafePath(
+                    "workspace upload target is not a regular file".to_string(),
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(GitRuntimeError::Io {
+                    operation: "inspect workspace upload target",
+                    source,
+                });
+            }
+        }
+        let temporary = parent.join(format!(".upload-{}.tmp", Uuid::now_v7()));
+        reject_symlink(&temporary, "workspace upload staging file")?;
+        let mut staged = tokio::fs::File::create(&temporary)
+            .await
+            .map_err(|source| GitRuntimeError::Io {
+                operation: "create workspace upload staging file",
+                source,
+            })?;
+        staged
+            .write_all(bytes)
+            .await
+            .map_err(|source| GitRuntimeError::Io {
+                operation: "write workspace upload staging file",
+                source,
+            })?;
+        staged
+            .sync_all()
+            .await
+            .map_err(|source| GitRuntimeError::Io {
+                operation: "sync workspace upload staging file",
+                source,
+            })?;
+        drop(staged);
+        if let Err(source) = tokio::fs::rename(&temporary, &path).await {
+            let _ = tokio::fs::remove_file(&temporary).await;
+            return Err(GitRuntimeError::Io {
+                operation: "publish workspace upload",
+                source,
+            });
+        }
+        Ok(())
     }
 
     /// Atomically store an uploaded data SourceAsset under a service-owned,
@@ -2761,6 +2932,13 @@ fn parse_porcelain(bytes: &[u8]) -> Result<Vec<FileChange>, GitRuntimeError> {
         let status = record[..2].to_string();
         let path = record[3..].to_string();
         validate_relative_path(&path)?;
+        if is_service_owned_path(&path) {
+            if status.contains('R') || status.contains('C') {
+                index += 1;
+            }
+            index += 1;
+            continue;
+        }
         changes.insert(
             path.clone(),
             FileChange {
@@ -2779,6 +2957,10 @@ fn parse_porcelain(bytes: &[u8]) -> Result<Vec<FileChange>, GitRuntimeError> {
         index += 1;
     }
     Ok(changes.into_values().collect())
+}
+
+fn is_service_owned_path(path: &str) -> bool {
+    path == ".open-web-codex" || path.starts_with(".open-web-codex/")
 }
 
 fn apply_numstat(changes: &mut [FileChange], bytes: &[u8]) -> Result<(), GitRuntimeError> {
@@ -2872,6 +3054,54 @@ fn validate_relative_path(value: &str) -> Result<(), GitRuntimeError> {
         ));
     }
     Ok(())
+}
+
+fn validate_workspace_file_path(value: &str) -> Result<(), GitRuntimeError> {
+    validate_relative_path(value)?;
+    if Path::new(value)
+        .components()
+        .any(|component| component.as_os_str() == OsStr::new(".git"))
+        || is_service_owned_path(value)
+    {
+        return Err(GitRuntimeError::UnsafePath(
+            "service-owned workspace paths are not user files".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_workspace_parent(workspace: &Path, relative: &str) -> Result<PathBuf, GitRuntimeError> {
+    let components = Path::new(relative).components().collect::<Vec<_>>();
+    let mut parent = workspace.to_path_buf();
+    for component in components.iter().take(components.len().saturating_sub(1)) {
+        parent.push(component.as_os_str());
+        match std::fs::symlink_metadata(&parent) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(GitRuntimeError::UnsafePath(
+                    "workspace upload parent is a symlink".to_string(),
+                ));
+            }
+            Ok(metadata) if !metadata.is_dir() => {
+                return Err(GitRuntimeError::UnsafePath(
+                    "workspace upload parent is not a directory".to_string(),
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir(&parent).map_err(|source| GitRuntimeError::Io {
+                    operation: "create workspace upload directory",
+                    source,
+                })?;
+            }
+            Err(source) => {
+                return Err(GitRuntimeError::Io {
+                    operation: "inspect workspace upload directory",
+                    source,
+                });
+            }
+        }
+    }
+    Ok(parent)
 }
 
 fn valid_release_slug(value: &str) -> bool {
@@ -3308,7 +3538,7 @@ fn safe_file_size(workspace: &Path, relative: &str) -> Result<Option<u64>, GitRu
             return Err(GitRuntimeError::Io {
                 operation: "inspect workspace file",
                 source,
-            })
+            });
         }
     };
     if metadata.file_type().is_symlink() || !metadata.is_file() {

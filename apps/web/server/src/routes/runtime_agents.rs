@@ -122,7 +122,43 @@ pub async fn list_activities_for_run(
     .await
     .map_err(database_error)?;
 
+    let execution_rows = sqlx::query(
+        "SELECT DISTINCT ON (agent_thread_id)
+                agent_thread_id, task, latest_progress, status
+         FROM runtime_agent_execution_projections
+         WHERE root_run_id = $1 AND organization_id = $2
+         ORDER BY agent_thread_id, ordinal DESC",
+    )
+    .bind(run_id)
+    .bind(auth.organization_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(database_error)?;
+    let projection_wait_context = execution_rows
+        .into_iter()
+        .map(|row| {
+            let task = row
+                .get::<Option<String>, _>("task")
+                .as_deref()
+                .and_then(wait_task_summary);
+            let latest_progress = row
+                .get::<Option<String>, _>("latest_progress")
+                .as_deref()
+                .and_then(wait_progress_summary);
+            let status = row.get::<String, _>("status");
+            (
+                row.get::<String, _>("agent_thread_id"),
+                WaitTaskContext {
+                    task,
+                    latest_progress,
+                    active: !matches!(status.as_str(), "completed" | "failed" | "interrupted"),
+                },
+            )
+        })
+        .collect::<HashMap<_, _>>();
+
     let mut assignments = HashMap::<String, RuntimeAgentActivity>::new();
+    let mut wait_context = HashMap::<String, WaitTaskContext>::new();
     let mut activities = Vec::new();
     for row in rows {
         let event = ActivityEvent {
@@ -135,8 +171,11 @@ pub async fn list_activities_for_run(
             payload: row.get("payload"),
             created_at: row.get("created_at"),
         };
-        for activity in project_activities(event) {
-            if activity.kind == RuntimeAgentActivityKind::Assignment {
+        update_wait_context(&event, &mut wait_context);
+        for activity in
+            project_activities_with_wait_context(event, &wait_context, &projection_wait_context)
+        {
+            if activity.kind == RuntimeAgentActivityKind::Assignment && activity.turn_id.is_none() {
                 assignments.insert(activity.thread_id.clone(), activity);
             } else {
                 activities.push(activity);
@@ -224,6 +263,21 @@ struct ActivityEvent {
 }
 
 fn project_activities(event: ActivityEvent) -> Vec<RuntimeAgentActivity> {
+    project_activities_with_wait_context(event, &HashMap::new(), &HashMap::new())
+}
+
+#[derive(Debug, Clone, Default)]
+struct WaitTaskContext {
+    task: Option<String>,
+    latest_progress: Option<String>,
+    active: bool,
+}
+
+fn project_activities_with_wait_context(
+    event: ActivityEvent,
+    wait_context: &HashMap<String, WaitTaskContext>,
+    projection_wait_context: &HashMap<String, WaitTaskContext>,
+) -> Vec<RuntimeAgentActivity> {
     let data = event.payload.get("data").unwrap_or(&Value::Null);
     let item_type = event
         .payload
@@ -242,7 +296,8 @@ fn project_activities(event: ActivityEvent) -> Vec<RuntimeAgentActivity> {
         .unwrap_or_default();
 
     if is_collaboration_item && matches!(collaboration_tool.as_str(), "wait" | "waitagent") {
-        let (status, title, detail) = project_wait_activity(data, completed);
+        let (status, title, detail) =
+            project_wait_activity(data, completed, wait_context, projection_wait_context);
         return vec![activity(
             &event,
             event.thread_id.clone(),
@@ -253,6 +308,38 @@ fn project_activities(event: ActivityEvent) -> Vec<RuntimeAgentActivity> {
         )];
     }
 
+    if is_collaboration_item && !completed {
+        let prompt = data.get("prompt").and_then(Value::as_str);
+        let detail = prompt.and_then(bounded_detail);
+        let title = match (
+            collaboration_tool.as_str(),
+            prompt.and_then(brief_description),
+        ) {
+            ("spawnagent", Some(summary)) => format!("Starting: {summary}"),
+            ("sendinput" | "sendmessage" | "followuptask", Some(summary)) => {
+                format!("Sending instructions: {summary}")
+            }
+            ("spawnagent", None) => "Starting Agent task".to_string(),
+            ("sendinput" | "sendmessage" | "followuptask", None) => {
+                "Sending Agent instructions".to_string()
+            }
+            _ => return Vec::new(),
+        };
+        let kind = if collaboration_tool == "spawnagent" {
+            RuntimeAgentActivityKind::Assignment
+        } else {
+            RuntimeAgentActivityKind::Guidance
+        };
+        return vec![activity(
+            &event,
+            event.thread_id.clone(),
+            kind,
+            RuntimeAgentActivityStatus::Running,
+            &title,
+            detail,
+        )];
+    }
+
     if is_collaboration_item && completed {
         if !matches!(
             collaboration_tool.as_str(),
@@ -260,23 +347,24 @@ fn project_activities(event: ActivityEvent) -> Vec<RuntimeAgentActivity> {
         ) {
             return Vec::new();
         }
-        let Some(detail) = data
-            .get("prompt")
-            .and_then(Value::as_str)
-            .and_then(bounded_detail)
-        else {
+        let Some(prompt) = data.get("prompt").and_then(Value::as_str) else {
             return Vec::new();
         };
+        let detail = bounded_detail(prompt);
         let (kind, status, title) = match collaboration_tool.as_str() {
             "spawnagent" => (
                 RuntimeAgentActivityKind::Assignment,
                 RuntimeAgentActivityStatus::Pending,
-                "Task assigned",
+                brief_description(prompt)
+                    .map(|summary| format!("Assigned: {summary}"))
+                    .unwrap_or_else(|| "Task assigned".to_string()),
             ),
             "sendinput" | "sendmessage" | "followuptask" => (
                 RuntimeAgentActivityKind::Guidance,
                 RuntimeAgentActivityStatus::Running,
-                "Supervisor sent instructions",
+                brief_description(prompt)
+                    .map(|summary| format!("Instructions: {summary}"))
+                    .unwrap_or_else(|| "Supervisor sent instructions".to_string()),
             ),
             _ => unreachable!("collaboration tool name was checked above"),
         };
@@ -288,8 +376,8 @@ fn project_activities(event: ActivityEvent) -> Vec<RuntimeAgentActivity> {
                     thread_id,
                     kind.clone(),
                     status.clone(),
-                    title,
-                    Some(detail.clone()),
+                    &title,
+                    detail.clone(),
                 );
                 // The collaboration item belongs to the sender's Turn. The
                 // receiver's task node is bound only when its own next Turn
@@ -305,23 +393,38 @@ fn project_activities(event: ActivityEvent) -> Vec<RuntimeAgentActivity> {
         let Some(phase) = data.get("phase").and_then(Value::as_str) else {
             return Vec::new();
         };
-        let (status, title) = match phase {
-            "commentary" => (RuntimeAgentActivityStatus::Running, "Reported progress"),
+        let detail = data
+            .get("text")
+            .and_then(Value::as_str)
+            .and_then(bounded_detail);
+        let (kind, status, title) = match phase {
+            "commentary" => (
+                RuntimeAgentActivityKind::Reporting,
+                RuntimeAgentActivityStatus::Running,
+                data.get("text")
+                    .and_then(Value::as_str)
+                    .and_then(brief_description)
+                    .map(|summary| format!("Progress: {summary}"))
+                    .unwrap_or_else(|| "Reported progress".to_string()),
+            ),
             "final_answer" => (
+                RuntimeAgentActivityKind::Completed,
                 RuntimeAgentActivityStatus::Completed,
-                "Returned results to the Supervisor",
+                data.get("text")
+                    .and_then(Value::as_str)
+                    .and_then(brief_description)
+                    .map(|summary| format!("Completed: {summary}"))
+                    .unwrap_or_else(|| "Agent task completed".to_string()),
             ),
             _ => return Vec::new(),
         };
         return vec![activity(
             &event,
             event.thread_id.clone(),
-            RuntimeAgentActivityKind::Reporting,
+            kind,
             status,
-            title,
-            data.get("text")
-                .and_then(Value::as_str)
-                .and_then(bounded_detail),
+            &title,
+            detail,
         )];
     }
 
@@ -329,17 +432,35 @@ fn project_activities(event: ActivityEvent) -> Vec<RuntimeAgentActivity> {
         "codex.turn.started" => Some((
             RuntimeAgentActivityKind::TurnStarted,
             RuntimeAgentActivityStatus::Running,
-            "Started working".to_string(),
+            task_event_title(
+                "Started",
+                "Started working",
+                &event.thread_id,
+                wait_context,
+                projection_wait_context,
+            ),
         )),
         "codex.turn.completed" => Some((
             RuntimeAgentActivityKind::TurnCompleted,
             RuntimeAgentActivityStatus::Completed,
-            "Finished this work cycle".to_string(),
+            task_event_title(
+                "Completed",
+                "Finished this work cycle",
+                &event.thread_id,
+                wait_context,
+                projection_wait_context,
+            ),
         )),
         "codex.thread.completed" => Some((
             RuntimeAgentActivityKind::Completed,
             RuntimeAgentActivityStatus::Completed,
-            "Completed the assigned work".to_string(),
+            task_event_title(
+                "Completed",
+                "Completed the assigned work",
+                &event.thread_id,
+                wait_context,
+                projection_wait_context,
+            ),
         )),
         "codex.thread.failed" => Some((
             RuntimeAgentActivityKind::Failed,
@@ -373,6 +494,26 @@ fn project_activities(event: ActivityEvent) -> Vec<RuntimeAgentActivity> {
             )]
         })
         .unwrap_or_default()
+}
+
+fn task_event_title(
+    prefix: &str,
+    fallback: &str,
+    thread_id: &str,
+    wait_context: &HashMap<String, WaitTaskContext>,
+    projection_wait_context: &HashMap<String, WaitTaskContext>,
+) -> String {
+    let task = wait_context
+        .get(thread_id)
+        .and_then(|entry| entry.task.as_deref())
+        .or_else(|| {
+            projection_wait_context
+                .get(thread_id)
+                .and_then(|entry| entry.task.as_deref())
+        });
+    task.and_then(brief_description)
+        .map(|summary| format!("{prefix}: {summary}"))
+        .unwrap_or_else(|| fallback.to_string())
 }
 
 fn project_item_activity(
@@ -444,8 +585,11 @@ fn project_item_activity(
 fn project_wait_activity(
     data: &Value,
     completed: bool,
+    wait_context: &HashMap<String, WaitTaskContext>,
+    projection_wait_context: &HashMap<String, WaitTaskContext>,
 ) -> (RuntimeAgentActivityStatus, String, String) {
     let receiver_count = string_list(data.get("receiverThreadIds")).len();
+    let task_detail = describe_wait_tasks(data, completed, wait_context, projection_wait_context);
     if !completed {
         let title = if receiver_count == 0 {
             "Waiting for Agent updates".to_string()
@@ -454,12 +598,18 @@ fn project_wait_activity(
         } else {
             format!("Waiting for {receiver_count} Agents")
         };
-        let detail = if receiver_count == 0 {
+        let detail = if let Some(task_detail) = task_detail {
+            task_detail
+        } else if receiver_count == 0 {
             "The Supervisor is waiting for any Agent update or new input. This is a bounded wait, not a stopped task.".to_string()
         } else {
             format!(
                 "The Supervisor is waiting for {receiver_count} assigned {} to finish or report a terminal state.",
-                if receiver_count == 1 { "Agent" } else { "Agents" }
+                if receiver_count == 1 {
+                    "Agent"
+                } else {
+                    "Agents"
+                }
             )
         };
         return (RuntimeAgentActivityStatus::Waiting, title, detail);
@@ -473,7 +623,9 @@ fn project_wait_activity(
         return (
             RuntimeAgentActivityStatus::Failed,
             "Agent wait failed".to_string(),
-            "The bounded wait ended with an error. The Supervisor task is still observable through subsequent activity.".to_string(),
+            task_detail.unwrap_or_else(|| {
+                "The bounded wait ended with an error. The Supervisor task is still observable through subsequent activity.".to_string()
+            }),
         );
     }
 
@@ -481,10 +633,165 @@ fn project_wait_activity(
     (
         RuntimeAgentActivityStatus::Completed,
         "Wait cycle finished".to_string(),
-        summary.unwrap_or_else(|| {
-            "This bounded wait cycle ended. The Supervisor is processing any available update and may start another wait cycle.".to_string()
-        }),
+        match (task_detail, summary) {
+            (Some(task_detail), Some(summary)) => format!("{task_detail} {summary}"),
+            (Some(task_detail), None) => task_detail,
+            (None, Some(summary)) => summary,
+            (None, None) => "This bounded wait cycle ended. The Supervisor is processing any available update and may start another wait cycle.".to_string(),
+        },
     )
+}
+
+fn update_wait_context(event: &ActivityEvent, wait_context: &mut HashMap<String, WaitTaskContext>) {
+    if event.event_type == "codex.item.completed"
+        && matches!(
+            event.payload.get("itemType").and_then(Value::as_str),
+            Some("collabAgentToolCall" | "collabToolCall")
+        )
+    {
+        let data = event.payload.get("data").unwrap_or(&Value::Null);
+        let tool = data
+            .get("tool")
+            .and_then(Value::as_str)
+            .map(normalize_tool_name)
+            .unwrap_or_default();
+        if matches!(
+            tool.as_str(),
+            "spawnagent" | "sendinput" | "sendmessage" | "followuptask"
+        ) {
+            let task = data
+                .get("prompt")
+                .and_then(Value::as_str)
+                .and_then(wait_task_summary);
+            for thread_id in string_list(data.get("receiverThreadIds")) {
+                let entry = wait_context.entry(thread_id).or_default();
+                if task.is_some() {
+                    entry.task = task.clone();
+                }
+                entry.active = true;
+            }
+        }
+    }
+
+    if event.event_type == "codex.item.completed"
+        && event.payload.get("itemType").and_then(Value::as_str) == Some("agentMessage")
+    {
+        let data = event.payload.get("data").unwrap_or(&Value::Null);
+        if data.get("phase").and_then(Value::as_str) == Some("commentary") {
+            if let Some(progress) = data
+                .get("text")
+                .and_then(Value::as_str)
+                .and_then(wait_progress_summary)
+            {
+                wait_context
+                    .entry(event.thread_id.clone())
+                    .or_default()
+                    .latest_progress = Some(progress);
+            }
+        }
+    }
+
+    if matches!(
+        event.event_type.as_str(),
+        "codex.thread.completed" | "codex.thread.failed"
+    ) {
+        if let Some(entry) = wait_context.get_mut(&event.thread_id) {
+            entry.active = false;
+        }
+    }
+}
+
+fn describe_wait_tasks(
+    data: &Value,
+    completed: bool,
+    wait_context: &HashMap<String, WaitTaskContext>,
+    projection_wait_context: &HashMap<String, WaitTaskContext>,
+) -> Option<String> {
+    let requested_ids = string_list(data.get("receiverThreadIds"));
+    let mut thread_ids = if requested_ids.is_empty() {
+        let mut ids = Vec::new();
+        for context in [wait_context, projection_wait_context] {
+            ids.extend(
+                context
+                    .iter()
+                    .filter(|(_, entry)| completed || entry.active)
+                    .filter(|(_, entry)| entry.task.is_some())
+                    .map(|(thread_id, _)| thread_id.clone()),
+            );
+        }
+        ids.sort();
+        ids.dedup();
+        ids
+    } else {
+        requested_ids
+    };
+    thread_ids.truncate(4);
+
+    let mut descriptions = Vec::new();
+    for thread_id in thread_ids {
+        let entry = wait_context
+            .get(&thread_id)
+            .filter(|entry| entry.task.is_some())
+            .or_else(|| {
+                projection_wait_context
+                    .get(&thread_id)
+                    .filter(|entry| entry.task.is_some())
+            });
+        let Some(entry) = entry else {
+            continue;
+        };
+        let Some(task) = entry.task.as_deref() else {
+            continue;
+        };
+        let description = match entry.latest_progress.as_deref() {
+            Some(progress) => format!("{task} (latest progress: {progress})"),
+            None => task.to_string(),
+        };
+        descriptions.push(description);
+    }
+    if descriptions.is_empty() {
+        return None;
+    }
+
+    let prefix = if descriptions.len() == 1 {
+        "Waiting for Agent update: "
+    } else {
+        "Waiting for Agent updates: "
+    };
+    bounded_detail(&format!("{prefix}{}", descriptions.join("; ")))
+}
+
+fn wait_task_summary(value: &str) -> Option<String> {
+    summarize_wait_text(value, 240)
+}
+
+fn wait_progress_summary(value: &str) -> Option<String> {
+    summarize_wait_text(value, 240)
+}
+
+fn summarize_wait_text(value: &str, max_chars: usize) -> Option<String> {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let normalized = normalized
+        .strip_prefix("Task:")
+        .or_else(|| normalized.strip_prefix("任务："))
+        .unwrap_or(&normalized)
+        .trim();
+    if normalized.is_empty() {
+        return None;
+    }
+    let sentence_end = normalized
+        .char_indices()
+        .find(|(_, character)| matches!(*character, '.' | '。' | '!' | '！' | '?' | '？'))
+        .map(|(index, character)| index + character.len_utf8());
+    let summary = sentence_end
+        .map(|end| &normalized[..end])
+        .unwrap_or(normalized);
+    let summary = summary.chars().take(max_chars).collect::<String>();
+    (!summary.is_empty()).then_some(summary)
+}
+
+fn brief_description(value: &str) -> Option<String> {
+    summarize_wait_text(value, 120)
 }
 
 fn summarize_wait_states(value: Option<&Value>) -> Option<String> {
@@ -673,6 +980,34 @@ mod tests {
     }
 
     #[test]
+    fn shows_a_brief_task_description_when_agent_start_is_projected() {
+        let activities = project_activities(event(
+            "codex.item.started",
+            "root-thread",
+            json!({
+                "itemType": "collabAgentToolCall",
+                "data": {
+                    "tool": "spawn_agent",
+                    "prompt": "Task: Prepare the Indonesia demo data. Include cities and routes.",
+                    "receiverThreadIds": []
+                }
+            }),
+        ));
+
+        assert_eq!(activities.len(), 1);
+        assert_eq!(activities[0].kind, RuntimeAgentActivityKind::Assignment);
+        assert_eq!(activities[0].status, RuntimeAgentActivityStatus::Running);
+        assert_eq!(
+            activities[0].title,
+            "Starting: Prepare the Indonesia demo data."
+        );
+        assert_eq!(
+            activities[0].detail.as_deref(),
+            Some("Task: Prepare the Indonesia demo data. Include cities and routes.")
+        );
+    }
+
+    #[test]
     fn distinguishes_queued_guidance_from_a_new_task_assignment() {
         let activities = project_activities(event(
             "codex.item.completed",
@@ -713,8 +1048,69 @@ mod tests {
         assert_eq!(activities.len(), 1);
         assert_eq!(activities[0].kind, RuntimeAgentActivityKind::Reporting);
         assert_eq!(
+            activities[0].title,
+            "Progress: Validated capacity and demand inputs."
+        );
+        assert_eq!(
             activities[0].detail.as_deref(),
             Some("Validated capacity and demand inputs.")
+        );
+    }
+
+    #[test]
+    fn projects_final_agent_report_as_a_completed_event_with_brief_title() {
+        let activities = project_activities(event(
+            "codex.item.completed",
+            "child-thread",
+            json!({
+                "itemType": "agentMessage",
+                "data": {
+                    "phase": "final_answer",
+                    "text": "Planning dataset is normalized and ready for network analysis."
+                }
+            }),
+        ));
+
+        assert_eq!(activities.len(), 1);
+        assert_eq!(activities[0].kind, RuntimeAgentActivityKind::Completed);
+        assert_eq!(activities[0].status, RuntimeAgentActivityStatus::Completed);
+        assert_eq!(
+            activities[0].title,
+            "Completed: Planning dataset is normalized and ready for network analysis."
+        );
+        assert_eq!(
+            activities[0].detail.as_deref(),
+            Some("Planning dataset is normalized and ready for network analysis.")
+        );
+    }
+
+    #[test]
+    fn gives_agent_turn_start_and_completion_brief_titles() {
+        let mut wait_context = HashMap::new();
+        wait_context.insert(
+            "child-thread".to_string(),
+            WaitTaskContext {
+                task: Some("Validate the planning dataset.".to_string()),
+                latest_progress: None,
+                active: true,
+            },
+        );
+
+        let started = project_activities_with_wait_context(
+            event("codex.turn.started", "child-thread", Value::Null),
+            &wait_context,
+            &HashMap::new(),
+        );
+        let completed = project_activities_with_wait_context(
+            event("codex.turn.completed", "child-thread", Value::Null),
+            &wait_context,
+            &HashMap::new(),
+        );
+
+        assert_eq!(started[0].title, "Started: Validate the planning dataset.");
+        assert_eq!(
+            completed[0].title,
+            "Completed: Validate the planning dataset."
         );
     }
 
@@ -790,6 +1186,103 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("may start another"));
+    }
+
+    #[test]
+    fn describes_wait_cycle_with_the_current_agent_task_and_progress() {
+        let mut wait_context = HashMap::new();
+        wait_context.insert(
+            "child-thread".to_string(),
+            WaitTaskContext {
+                task: Some("Generate the Indonesia demo data.".to_string()),
+                latest_progress: Some("Writing city and warehouse files.".to_string()),
+                active: true,
+            },
+        );
+
+        let activities = project_activities_with_wait_context(
+            event(
+                "codex.item.started",
+                "root-thread",
+                json!({
+                    "itemType": "collabAgentToolCall",
+                    "data": {
+                        "tool": "wait",
+                        "status": "inProgress",
+                        "receiverThreadIds": [],
+                        "agentsStates": {}
+                    }
+                }),
+            ),
+            &wait_context,
+            &HashMap::new(),
+        );
+
+        assert_eq!(activities.len(), 1);
+        assert_eq!(
+            activities[0].detail.as_deref(),
+            Some(
+                "Waiting for Agent update: Generate the Indonesia demo data. (latest progress: Writing city and warehouse files.)"
+            )
+        );
+    }
+
+    #[test]
+    fn derives_wait_description_from_persisted_assignment_and_progress_events() {
+        let mut wait_context = HashMap::new();
+        update_wait_context(
+            &event(
+                "codex.item.completed",
+                "root-thread",
+                json!({
+                    "itemType": "collabAgentToolCall",
+                    "data": {
+                        "tool": "spawn_agent",
+                        "prompt": "Task: Prepare the warehouse network demo. Include cities and routes.",
+                        "receiverThreadIds": ["child-thread"]
+                    }
+                }),
+            ),
+            &mut wait_context,
+        );
+        update_wait_context(
+            &event(
+                "codex.item.completed",
+                "child-thread",
+                json!({
+                    "itemType": "agentMessage",
+                    "data": {
+                        "phase": "commentary",
+                        "text": "Checking the city and warehouse inputs."
+                    }
+                }),
+            ),
+            &mut wait_context,
+        );
+
+        let activities = project_activities_with_wait_context(
+            event(
+                "codex.item.started",
+                "root-thread",
+                json!({
+                    "itemType": "collabAgentToolCall",
+                    "data": {
+                        "tool": "wait",
+                        "status": "inProgress",
+                        "receiverThreadIds": [],
+                        "agentsStates": {}
+                    }
+                }),
+            ),
+            &wait_context,
+            &HashMap::new(),
+        );
+
+        assert_eq!(activities.len(), 1);
+        let detail = activities[0].detail.as_deref().unwrap();
+        assert!(detail.contains("Prepare the warehouse network demo."));
+        assert!(detail.contains("Checking the city and warehouse inputs."));
+        assert!(detail.chars().count() <= 1_000);
     }
 
     #[test]

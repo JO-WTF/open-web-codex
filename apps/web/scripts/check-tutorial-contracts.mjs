@@ -9,27 +9,27 @@ const repoRoot = resolve(webRoot, "../..");
 const paths = {
   networkDefinition: resolve(
     repoRoot,
-    "capabilities/agents/enterprise-network-planning-agent/4.0.0/definition.json",
+    "capabilities/agents/enterprise-network-planning-agent/5.0.0/definition.json",
   ),
   networkInstructions: resolve(
     repoRoot,
-    "capabilities/agents/enterprise-network-planning-agent/4.0.0/instructions.md",
+    "capabilities/agents/enterprise-network-planning-agent/5.0.0/instructions.md",
   ),
   supervisorManifest: resolve(
     repoRoot,
-    "capabilities/supervisors/enterprise-supervisor-copilot/4.0.0/manifest.json",
+    "capabilities/supervisors/enterprise-supervisor-copilot/5.0.0/manifest.json",
   ),
   artifactContracts: resolve(
     repoRoot,
-    "capabilities/supervisors/enterprise-supervisor-copilot/4.0.0/artifact-contracts.json",
+    "capabilities/supervisors/enterprise-supervisor-copilot/5.0.0/artifact-contracts.json",
   ),
   supervisorInstructions: resolve(
     repoRoot,
-    "capabilities/supervisors/enterprise-supervisor-copilot/4.0.0/custom-instructions.md",
+    "capabilities/supervisors/enterprise-supervisor-copilot/5.0.0/custom-instructions.md",
   ),
   visualizationInstructions: resolve(
     repoRoot,
-    "capabilities/agents/enterprise-visualization-agent/1.4.0/instructions.md",
+    "capabilities/agents/enterprise-visualization-agent/2.0.0/instructions.md",
   ),
   datasetManifest: resolve(
     repoRoot,
@@ -41,11 +41,11 @@ const paths = {
   ),
   blueprintManifest: resolve(
     repoRoot,
-    "capabilities/tutorial-blueprints/indonesia-warehouse-network/1.4.0/manifest.json",
+    "capabilities/tutorial-blueprints/indonesia-warehouse-network/1.5.0/manifest.json",
   ),
   blueprintPrompt: resolve(
     repoRoot,
-    "capabilities/tutorial-blueprints/indonesia-warehouse-network/1.4.0/recommended-prompt.md",
+    "capabilities/tutorial-blueprints/indonesia-warehouse-network/1.5.0/recommended-prompt.md",
   ),
   tutorials: resolve(repoRoot, "docs/tutorials"),
 };
@@ -122,13 +122,13 @@ const complete = read(completePath);
 if (network.definitionId !== "enterprise-network-planning-agent") {
   fail("Network definition identity drifted");
 }
-if (network.version !== "4.0.0") {
-  fail(`Expected Network Agent 4.0.0, found ${network.version ?? "missing"}`);
+if (network.version !== "5.0.0") {
+  fail(`Expected Network Agent 5.0.0, found ${network.version ?? "missing"}`);
 }
 
 if (
   blueprint.blueprintId !== "indonesia-warehouse-network" ||
-  blueprint.revision !== "1.4.0"
+  blueprint.revision !== "1.5.0"
 ) {
   fail("Tutorial Blueprint identity drifted");
 }
@@ -138,7 +138,6 @@ for (const marker of [
   "geojson_resource_name",
   "map_artifact_id",
   "structuredContent.embed.code",
-  "inlineArtifacts",
 ]) {
   requireText(
     visualizationInstructions,
@@ -148,7 +147,7 @@ for (const marker of [
 }
 requireText(
   visualizationInstructions,
-  "do not include a Resource URI or an embed-code copy inside JSON",
+  "Do not reproduce renderer JSON or the GeoJSON body",
   "Visualization Agent non-duplicated embed contract",
 );
 if (
@@ -202,17 +201,17 @@ for (const template of blueprint.agentTemplates ?? []) {
 }
 const blueprintMcpServers = new Set(blueprint.requiredMcpServers ?? []);
 if (
-  requiredMcpServers.size !== blueprintMcpServers.size ||
-  [...requiredMcpServers].some((server) => !blueprintMcpServers.has(server))
+  [...requiredMcpServers].some((server) => !blueprintMcpServers.has(server)) ||
+  !blueprintMcpServers.has("supply_chain_indonesia")
 ) {
-  fail("Tutorial Blueprint MCP requirements drifted from its Agent templates");
+  fail("Tutorial Blueprint MCP requirements omit an Agent or tutorial-only server");
 }
 
 if (
   blueprint.supervisorTemplate?.policyId !== supervisor.policyId ||
   blueprint.supervisorTemplate?.version !== supervisor.version
 ) {
-  fail("Tutorial Blueprint Supervisor template drifted from the built-in Release");
+  fail("Tutorial Blueprint Supervisor template drifted from the Indonesia Network Planning Copilot Draft");
 }
 if (!isSha256(blueprint.supervisorTemplate?.contentSha256)) {
   fail("Tutorial Blueprint Supervisor template has no exact content hash");
@@ -295,12 +294,16 @@ requireText(
   "模型正文不是报告来源",
   "complete tutorial report authority",
 );
-for (const marker of [
-  "report.v1",
-  "map.v3",
-]) {
-  requireText(supervisorInstructions, marker, "Supervisor typed report delivery");
-}
+requireText(
+  supervisorInstructions,
+  "An empty Workspace is a real zero-source result",
+  "Supervisor real Workspace isolation",
+);
+requireText(
+  supervisorInstructions,
+  "synthetic_demo",
+  "Supervisor Demo provenance",
+);
 
 requireText(
   service,

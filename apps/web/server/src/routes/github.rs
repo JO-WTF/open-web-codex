@@ -48,7 +48,7 @@ pub async fn create_repository(
         _ => {
             return Err(bad_request(
                 "Repository visibility must be private or public",
-            ))
+            ));
         }
     };
     let origin_before = git_remote_url(&workspace).await?;

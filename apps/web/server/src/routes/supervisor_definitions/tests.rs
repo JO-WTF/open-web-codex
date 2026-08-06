@@ -31,13 +31,13 @@ fn valid_draft() -> SupervisorDraftRequest {
         agents: vec![
             SupervisorAgentSelection {
                 definition_id: "enterprise-data-agent".to_string(),
-                version: "4.0.0".to_string(),
+                version: "5.0.0".to_string(),
                 release_id: None,
                 spawn_limit: 1,
             },
             SupervisorAgentSelection {
                 definition_id: "enterprise-network-planning-agent".to_string(),
-                version: "4.0.0".to_string(),
+                version: "5.0.0".to_string(),
                 release_id: None,
                 spawn_limit: 1,
             },
@@ -45,13 +45,13 @@ fn valid_draft() -> SupervisorDraftRequest {
         artifact_contracts: vec![
             SupervisorArtifactContractInput {
                 artifact_type: "planning-dataset.v2".to_string(),
-                producer_agent: "enterprise-data-agent@4.0.0".to_string(),
-                consumer_agents: vec!["enterprise-network-planning-agent@4.0.0".to_string()],
+                producer_agent: "enterprise-data-agent@5.0.0".to_string(),
+                consumer_agents: vec!["enterprise-network-planning-agent@5.0.0".to_string()],
                 required: true,
             },
             SupervisorArtifactContractInput {
                 artifact_type: "network_snapshot.v1".to_string(),
-                producer_agent: "enterprise-network-planning-agent@4.0.0".to_string(),
+                producer_agent: "enterprise-network-planning-agent@5.0.0".to_string(),
                 consumer_agents: vec!["supervisor".to_string()],
                 required: true,
             },
@@ -164,7 +164,7 @@ async fn publishes_and_resolves_an_organization_scoped_release() {
         version: release.version,
     };
     let resolved =
-        crate::supervisor_policy::resolve_for_new_run(&pool, organization_id, &selection)
+        crate::supervisor_policy::resolve_for_new_run(&pool, organization_id, &selection, None)
             .await
             .unwrap();
     assert_eq!(
@@ -174,9 +174,14 @@ async fn publishes_and_resolves_an_organization_scoped_release() {
     assert_eq!(resolved.snapshot.release_id, Some(release.id));
     assert_eq!(resolved.snapshot.content_sha256, release.content_sha256);
     assert_eq!(
-        crate::supervisor_policy::resolve_for_new_run(&pool, other_organization_id, &selection)
-            .await
-            .unwrap_err(),
+        crate::supervisor_policy::resolve_for_new_run(
+            &pool,
+            other_organization_id,
+            &selection,
+            None
+        )
+        .await
+        .unwrap_err(),
         crate::supervisor_policy::SupervisorPolicyError::NotFound
     );
 }

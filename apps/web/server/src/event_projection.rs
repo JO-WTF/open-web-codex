@@ -1,5 +1,4 @@
-use open_web_codex_platform_contracts::{RunEvent, SupervisorPolicySelection};
-use open_web_codex_supervisor_catalog::supervisor as supervisor_catalog;
+use open_web_codex_platform_contracts::RunEvent;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
@@ -7,6 +6,7 @@ use sqlx::Row;
 use uuid::Uuid;
 
 const PROJECTION_VERSION: i16 = 1;
+const DATA_INTAKE_CHANGED_EVENT_TYPE: &str = "platform.data_intake.changed";
 const REPORT_RENDERER_SOURCE_SERVER: &str = "supply_chain_indonesia";
 const REPORT_RENDERER_RESOURCE_SCHEMA: &str = "indonesia_decision_report.v1";
 const REPORT_RENDERER_URI_PREFIX: &str = "supply-chain-indonesia://resources/";
@@ -108,7 +108,7 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
     let run_id = context.run_id;
     let organization_id = context.organization_id;
     let is_root_thread = event.thread_id == context.root_thread_id;
-    update_runtime_agent_projection(&mut transaction, &context, &event).await?;
+    update_runtime_agent_projection(db, &mut transaction, &context, &event).await?;
 
     sqlx::query("SAVEPOINT artifact_projection")
         .execute(&mut *transaction)
@@ -118,7 +118,8 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
     let artifact_result = async {
         let registered = register_artifacts(&mut transaction, &context, &event).await?;
         project_registered_artifacts(&mut event.payload, &registered);
-        project_data_intake_evidence(&mut transaction, &context, &event, &registered).await?;
+        let _ = project_data_intake_evidence(db, &mut transaction, &context, &event, &registered)
+            .await?;
         register_inline_visualization_artifact(&mut transaction, &event, run_id, organization_id)
             .await?;
         resolve_inline_artifacts_in_transaction(&mut transaction, run_id, &mut event.payload)
@@ -905,6 +906,7 @@ fn event_run_context(row: &sqlx::postgres::PgRow) -> EventRunContext {
 }
 
 async fn update_runtime_agent_projection(
+    db: &PgPool,
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     context: &EventRunContext,
     event: &ProjectedEvent,
@@ -953,64 +955,73 @@ async fn update_runtime_agent_projection(
         return Err("Runtime agent projection changed during event delivery".to_string());
     }
     if let Some(role_id) = metadata.and_then(|metadata| metadata.agent_role.as_deref()) {
-        register_policy_agent_producer(transaction, context, &event.thread_id, role_id).await?;
+        register_policy_agent_producer(db, transaction, context, &event.thread_id, role_id).await?;
     }
     Ok(())
 }
 
 /// Record the exact Runtime child Agent that the bound immutable policy
-/// authorized.  The role comes from a Runtime event, but it is accepted only
-/// when it matches the current catalog package and its immutable role hash.
+/// authorized. The role comes from a Runtime event, but it is accepted only
+/// when it matches the bound Draft/Release package and its immutable role hash.
 async fn register_policy_agent_producer(
+    db: &PgPool,
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     context: &EventRunContext,
     agent_thread_id: &str,
     role_id: &str,
 ) -> Result<(), String> {
-    let Some(binding) = sqlx::query(
-        "SELECT snapshot.id AS policy_snapshot_id, snapshot.policy_id, snapshot.version
+    let policy_snapshot_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT snapshot.id
          FROM supervisor_policy_bindings binding
          JOIN supervisor_policy_snapshots snapshot
            ON snapshot.organization_id = binding.organization_id
           AND snapshot.id = binding.snapshot_id
-         WHERE binding.organization_id = $1 AND binding.task_id = $2
-           AND binding.thread_id = $3 AND binding.state = 'bound'
-         ORDER BY binding.bound_at DESC NULLS LAST, binding.id DESC LIMIT 1",
+         WHERE binding.organization_id = $1
+           AND binding.task_id = $2
+           AND binding.thread_id = $3
+           AND binding.state = 'bound'
+         ORDER BY binding.bound_at DESC NULLS LAST, binding.id DESC
+         LIMIT 1",
     )
     .bind(context.organization_id)
     .bind(context.task_id)
     .bind(&context.root_thread_id)
     .fetch_optional(&mut **transaction)
     .await
-    .map_err(|error| format!("Policy producer lookup error: {error}"))?
-    else {
+    .map_err(|error| format!("Policy producer snapshot lookup error: {error}"))?;
+    let Some(policy_snapshot_id) = policy_snapshot_id else {
         return Ok(());
     };
-    let policy_id: String = binding.get("policy_id");
-    let policy_version: String = binding.get("version");
-    let Ok(package) = supervisor_catalog::resolve(&SupervisorPolicySelection {
-        policy_id,
-        version: policy_version,
-    }) else {
-        tracing::warn!(task_id = %context.task_id, role_id, "cannot verify child Agent against bound Supervisor Policy");
-        return Ok(());
+    let policy = match crate::supervisor_policy::resolve_bound_for_task(
+        db,
+        context.organization_id,
+        context.task_id,
+    )
+    .await
+    {
+        Ok(policy) => policy,
+        Err(error) => {
+            tracing::warn!(
+                task_id = %context.task_id,
+                role_id,
+                %error,
+                "cannot verify child Agent against bound Supervisor Policy"
+            );
+            return Ok(());
+        }
     };
-    let Some(agent) = package
-        .agents
+    let Some(role) = policy
+        .required_runtime_roles
         .iter()
-        .find(|agent| agent.runtime_role == role_id)
+        .find(|role| role.name == role_id)
     else {
-        tracing::warn!(task_id = %context.task_id, role_id, "Runtime Agent role is not declared by bound Supervisor Policy");
+        tracing::warn!(
+            task_id = %context.task_id,
+            role_id,
+            "Runtime Agent role is not declared by bound Supervisor Policy"
+        );
         return Ok(());
     };
-    let Ok(release_hash) = open_web_codex_supervisor_catalog::agent::resolve_builtin(
-        &agent.definition_id,
-        &agent.version,
-    ) else {
-        tracing::warn!(task_id = %context.task_id, role_id, "bound Supervisor Agent release is unavailable");
-        return Ok(());
-    };
-    let release_hash = release_hash.content_sha256;
     sqlx::query(
         "INSERT INTO task_policy_agent_producers (
             organization_id, task_id, policy_snapshot_id, agent_thread_id,
@@ -1024,11 +1035,11 @@ async fn register_policy_agent_producer(
     )
     .bind(context.organization_id)
     .bind(context.task_id)
-    .bind(binding.get::<Uuid, _>("policy_snapshot_id"))
+    .bind(policy_snapshot_id)
     .bind(agent_thread_id)
     .bind(agent_thread_id)
     .bind(role_id)
-    .bind(release_hash)
+    .bind(&role.content_sha256)
     .execute(&mut **transaction)
     .await
     .map_err(|error| format!("Policy producer projection error: {error}"))?;
@@ -1444,8 +1455,11 @@ fn project_agent_item_observation(event: &ProjectedEvent) -> Option<AgentExecuti
             .and_then(Value::as_str)
             .and_then(|value| truncated_projection_text(value, 1_000));
         let behavior = match phase {
-            "commentary" => "Reported progress",
-            "final_answer" => "Returned results to the Supervisor",
+            "commentary" => progress
+                .as_deref()
+                .and_then(|value| truncated_projection_text(value, 500))
+                .unwrap_or_else(|| "Reported progress".to_string()),
+            "final_answer" => "Returned results to the Supervisor".to_string(),
             _ => return None,
         };
         return Some(AgentExecutionObservation {
@@ -2552,11 +2566,13 @@ fn project_registered_artifacts(payload: &mut Value, artifacts: &[RegisteredArti
 }
 
 async fn project_data_intake_evidence(
+    db: &PgPool,
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     context: &EventRunContext,
     event: &ProjectedEvent,
     artifacts: &[RegisteredArtifact],
-) -> Result<(), String> {
+) -> Result<bool, String> {
+    let mut projected_any = false;
     for artifact in artifacts {
         // ResourceLink artifacts are materialized asynchronously.  Never
         // infer a user request from an unavailable body; the materializer
@@ -2566,6 +2582,7 @@ async fn project_data_intake_evidence(
             continue;
         }
         if !intake_artifact_allowed(
+            db,
             transaction,
             context,
             &event.thread_id,
@@ -2665,6 +2682,7 @@ async fn project_data_intake_evidence(
             if projected.is_none() {
                 continue;
             }
+            projected_any = true;
         }
         let automatic_evidence_column = match artifact.artifact_schema.as_str() {
             "source_profile.v1" => Some("source_artifact_id"),
@@ -2932,21 +2950,21 @@ async fn project_data_intake_evidence(
         .await
         .map_err(|error| format!("Intake input request projection error: {error}"))?;
     }
-    Ok(())
+    Ok(projected_any)
 }
 
 /// Intake is a projection of the bound policy, not a schema-name trigger.
 /// Missing producer identity is rejected: accepting an un-attributed artifact
 /// would let a model-controlled Resource enter the task's readiness state.
 async fn intake_artifact_allowed(
+    db: &PgPool,
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     context: &EventRunContext,
     producer_thread_id: &str,
     artifact_schema: &str,
 ) -> Result<bool, String> {
     let Some(binding) = sqlx::query(
-        "SELECT snapshot.policy_id, snapshot.version,
-                producer.role_id, producer.release_hash
+        "SELECT producer.role_id, producer.release_hash
          FROM supervisor_policy_bindings binding
          JOIN supervisor_policy_snapshots snapshot
            ON snapshot.organization_id = binding.organization_id
@@ -2970,14 +2988,15 @@ async fn intake_artifact_allowed(
     else {
         return Ok(false);
     };
-    let policy_id: String = binding.get("policy_id");
-    let policy_version: String = binding.get("version");
-    let policy = supervisor_catalog::resolve(&SupervisorPolicySelection {
-        policy_id,
-        version: policy_version,
-    })
+    let policy = crate::supervisor_policy::resolve_bound_for_task(
+        db,
+        context.organization_id,
+        context.task_id,
+    )
+    .await
     .map_err(|error| format!("Intake policy resolution error: {error}"))?;
     let Some(contract) = policy
+        .detail
         .artifact_contracts
         .iter()
         .find(|contract| contract.artifact_type == artifact_schema)
@@ -2986,23 +3005,18 @@ async fn intake_artifact_allowed(
     };
     let role: String = binding.get("role_id");
     let release_hash: String = binding.get("release_hash");
-    let Some(agent) = policy
-        .agents
+    let Some(runtime_role) = policy
+        .required_runtime_roles
         .iter()
-        .find(|agent| agent.runtime_role == role)
+        .find(|runtime_role| runtime_role.name == role)
     else {
         return Err("artifact_producer_unverified".to_string());
     };
-    let resolved_agent = open_web_codex_supervisor_catalog::agent::resolve_builtin(
-        &agent.definition_id,
-        &agent.version,
+    Ok(
+        format!("{}@{}", runtime_role.definition_id, runtime_role.version)
+            == contract.producer_agent
+            && runtime_role.content_sha256 == release_hash,
     )
-    .map_err(|_| "artifact_producer_unverified".to_string())?;
-    Ok(format!(
-        "{}@{}",
-        resolved_agent.definition_id, resolved_agent.version
-    ) == contract.producer_agent
-        && resolved_agent.content_sha256 == release_hash)
 }
 
 fn valid_intake_envelope(content: &Value, artifact_schema: &str) -> bool {
@@ -3101,7 +3115,7 @@ async fn intake_contract_matches_session(
 pub(crate) async fn reconcile_materialized_intake_artifact(
     db: &PgPool,
     artifact_id: Uuid,
-) -> Result<(), String> {
+) -> Result<Option<LiveProjection>, String> {
     let mut transaction = db
         .begin()
         .await
@@ -3128,10 +3142,10 @@ pub(crate) async fn reconcile_materialized_intake_artifact(
     .await
     .map_err(|error| format!("Intake reconciliation lookup error: {error}"))?
     else {
-        return Ok(());
+        return Ok(None);
     };
     if row.get::<String, _>("state") != "ready" {
-        return Ok(());
+        return Ok(None);
     }
     let producer_thread_id: String = row.get("producer_thread_id");
     let workspace_id: Option<Uuid> = row.get("workspace_id");
@@ -3143,7 +3157,7 @@ pub(crate) async fn reconcile_materialized_intake_artifact(
     let event = ProjectedEvent {
         event_type: "codex.item.completed".to_string(),
         workspace_id,
-        thread_id: producer_thread_id,
+        thread_id: producer_thread_id.clone(),
         turn_id: row.get("producer_turn_id"),
         item_id: row.get("producer_item_id"),
         payload: Value::Null,
@@ -3159,11 +3173,103 @@ pub(crate) async fn reconcile_materialized_intake_artifact(
         expected_size: None,
         state: "ready".to_string(),
     }];
-    project_data_intake_evidence(&mut transaction, &context, &event, &registered).await?;
+    if let Some(role_id) = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT agent_role
+         FROM runtime_agent_projections
+         WHERE organization_id = $1
+           AND root_run_id = $2
+           AND thread_id = $3",
+    )
+    .bind(context.organization_id)
+    .bind(context.run_id)
+    .bind(&producer_thread_id)
+    .fetch_optional(&mut *transaction)
+    .await
+    .map_err(|error| format!("Artifact producer role lookup error: {error}"))?
+    .flatten()
+    {
+        register_policy_agent_producer(
+            db,
+            &mut transaction,
+            &context,
+            &producer_thread_id,
+            &role_id,
+        )
+        .await?;
+    }
+    let intake_changed =
+        project_data_intake_evidence(db, &mut transaction, &context, &event, &registered).await?;
+    if !intake_changed {
+        transaction
+            .commit()
+            .await
+            .map_err(|error| format!("Intake reconciliation commit error: {error}"))?;
+        return Ok(None);
+    }
+
+    let input_revision: i64 = sqlx::query_scalar(
+        "SELECT input_revision FROM data_intake_sessions
+         WHERE organization_id = $1 AND task_id = $2
+         ORDER BY updated_at DESC, id DESC LIMIT 1",
+    )
+    .bind(context.organization_id)
+    .bind(context.task_id)
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(|error| format!("Intake revision lookup error: {error}"))?;
+    let payload = json!({
+        "schemaVersion": PROJECTION_VERSION,
+        "itemType": "platformDataIntakeChanged",
+        "data": {
+            "sourceType": "platform/data-intake/changed",
+            "taskId": context.task_id,
+            "inputRevision": input_revision,
+        },
+    });
+    let persisted = sqlx::query(
+        "INSERT INTO run_events (
+            run_id, event_type, projection_version, thread_id, turn_id, item_id, payload
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id, sequence, created_at",
+    )
+    .bind(context.run_id)
+    .bind(DATA_INTAKE_CHANGED_EVENT_TYPE)
+    .bind(PROJECTION_VERSION)
+    .bind(&producer_thread_id)
+    .bind(&event.turn_id)
+    .bind(&event.item_id)
+    .bind(&payload)
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(|error| format!("Intake change event insert error: {error}"))?;
     transaction
         .commit()
         .await
-        .map_err(|error| format!("Intake reconciliation commit error: {error}"))
+        .map_err(|error| format!("Intake reconciliation commit error: {error}"))?;
+
+    let public = RunEvent {
+        id: persisted.get("id"),
+        sequence: persisted.get("sequence"),
+        run_id: context.run_id,
+        event_type: DATA_INTAKE_CHANGED_EVENT_TYPE.to_string(),
+        projection_version: PROJECTION_VERSION,
+        thread_id: Some(producer_thread_id),
+        turn_id: event.turn_id,
+        item_id: event.item_id,
+        payload,
+        created_at: persisted.get("created_at"),
+    };
+    let payload = serde_json::to_vec(&json!({
+        "type": "run.event",
+        "version": 1,
+        "event": public,
+    }))
+    .map_err(|error| format!("Intake change live projection encoding error: {error}"))?;
+    Ok(Some(LiveProjection {
+        organization_id: context.organization_id,
+        payload,
+        pending_artifact_ids: Vec::new(),
+    }))
 }
 
 async fn register_inline_visualization_artifact(
@@ -3949,6 +4055,44 @@ mod tests {
         assert!(project_item(unknown.as_object().unwrap())
             .get("phase")
             .is_none());
+    }
+
+    fn agent_commentary_event(text: &str) -> ProjectedEvent {
+        ProjectedEvent {
+            event_type: "codex.item.completed".to_string(),
+            workspace_id: None,
+            thread_id: "child-thread".to_string(),
+            turn_id: Some("turn-1".to_string()),
+            item_id: Some("item-1".to_string()),
+            payload: json!({
+                "itemType": "agentMessage",
+                "data": {
+                    "phase": "commentary",
+                    "text": text
+                }
+            }),
+            thread_metadata: None,
+            artifacts: Vec::new(),
+            inline_artifact: None,
+        }
+    }
+
+    #[test]
+    fn projects_agent_commentary_as_current_behavior() {
+        let first =
+            agent_execution_observation(&agent_commentary_event("正在检查城市和仓库数据。"))
+                .unwrap();
+        let second =
+            agent_execution_observation(&agent_commentary_event("已完成线路报价完整性检查。"))
+                .unwrap();
+
+        assert_eq!(first.behavior.as_deref(), Some("正在检查城市和仓库数据。"));
+        assert_eq!(first.progress.as_deref(), Some("正在检查城市和仓库数据。"));
+        assert_eq!(
+            second.behavior.as_deref(),
+            Some("已完成线路报价完整性检查。")
+        );
+        assert_ne!(first.behavior, second.behavior);
     }
 
     #[test]

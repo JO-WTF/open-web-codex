@@ -241,6 +241,15 @@ async fn main() -> anyhow::Result<()> {
         format!("server-{}", uuid::Uuid::now_v7()),
         std::time::Duration::from_secs(30),
     )?);
+    let reconciled_runs = orchestrator
+        .reconcile_runs_after_restart(chrono::Utc::now())
+        .await?;
+    if reconciled_runs > 0 {
+        tracing::warn!(
+            count = reconciled_runs,
+            "marked Runtime Runs interrupted by the previous server instance for recovery"
+        );
+    }
     let (runner_shutdown, runner_shutdown_rx) = tokio::sync::watch::channel(false);
     let runner_task = tokio::spawn(orchestrator.clone().run_worker(runner_shutdown_rx));
 
@@ -351,6 +360,7 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(routes::artifacts::recover_and_materialize_pending(
         state.db.clone(),
         adapter.clone(),
+        state.event_bus.clone(),
     ));
 
     let mut app = Router::new().nest(
@@ -475,6 +485,7 @@ async fn persist_and_broadcast(
                     projection_db.clone(),
                     adapter.clone(),
                     projected.pending_artifact_ids,
+                    event_bus.clone(),
                 ));
             }
             let live = open_web_codex_platform_store::LiveEvent {

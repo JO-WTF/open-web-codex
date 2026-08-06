@@ -65,8 +65,11 @@ pub(crate) async fn evaluate(
 
     let mut resolved_agent = None;
     let mut resolved_policy = None;
-    let mut definition_ready = request.agent.is_none() || request.supervisor_policy.is_none();
-    if request.agent.is_some() && request.supervisor_policy.is_some() {
+    let mut definition_ready = request.agent.is_none()
+        && !(request.supervisor_policy.is_some() && request.supervisor_draft_id.is_some());
+    if request.agent.is_some()
+        && (request.supervisor_policy.is_some() || request.supervisor_draft_id.is_some())
+    {
         definition_ready = false;
     } else if let Some(selection) = request.agent.as_ref() {
         match agent_catalog::resolve_new_run_selection(db, organization_id, selection).await {
@@ -74,7 +77,20 @@ pub(crate) async fn evaluate(
             Err(_) => definition_ready = false,
         }
     } else if let Some(selection) = request.supervisor_policy.as_ref() {
-        match supervisor_policy::resolve_for_new_run(db, organization_id, selection).await {
+        match supervisor_policy::resolve_for_new_run(
+            db,
+            organization_id,
+            selection,
+            request.supervisor_draft_id,
+        )
+        .await
+        {
+            Ok(policy) => resolved_policy = Some(policy),
+            Err(_) => definition_ready = false,
+        }
+    } else if let Some(definition_id) = request.supervisor_draft_id {
+        match supervisor_policy::resolve_draft_for_new_run(db, organization_id, definition_id).await
+        {
             Ok(policy) => resolved_policy = Some(policy),
             Err(_) => definition_ready = false,
         }
@@ -274,13 +290,17 @@ pub(crate) async fn evaluate(
     } else {
         aggregate_status(&checks)
     };
-    let resolved_content_sha256 = resolved_agent
+    let resolved_execution_identity = resolved_agent
         .as_ref()
-        .map(|agent| agent.content_sha256.as_str())
+        .map(|agent| agent.content_sha256.clone())
         .or_else(|| {
-            resolved_policy
-                .as_ref()
-                .map(|policy| policy.snapshot.content_sha256.as_str())
+            resolved_policy.as_ref().map(|policy| {
+                if let Some(revision) = policy.snapshot.draft_revision {
+                    format!("draft-revision:{revision}")
+                } else {
+                    policy.snapshot.content_sha256.clone()
+                }
+            })
         });
     let runtime_manifest_sha256 = profile.capabilities.get().await.and_then(|record| {
         serde_json::to_vec(&record.manifest)
@@ -293,7 +313,7 @@ pub(crate) async fn evaluate(
         request,
         status,
         &checks,
-        resolved_content_sha256,
+        resolved_execution_identity.as_deref(),
         runtime_manifest_sha256.as_deref(),
         runtime_healthy,
         provider_ready,
@@ -507,7 +527,7 @@ fn evaluation_fingerprint(
     request: &RunReadinessRequest,
     status: RunReadinessStatus,
     checks: &[RunReadinessCheck],
-    resolved_content_sha256: Option<&str>,
+    resolved_execution_identity: Option<&str>,
     runtime_manifest_sha256: Option<&str>,
     runtime_healthy: bool,
     provider_ready: bool,
@@ -524,7 +544,7 @@ fn evaluation_fingerprint(
         "request": request,
         "status": status,
         "checks": checks,
-        "resolvedContentSha256": resolved_content_sha256,
+        "resolvedExecutionIdentity": resolved_execution_identity,
         "runtimeManifestSha256": runtime_manifest_sha256,
         "runtimeHealthy": runtime_healthy,
         "providerReady": provider_ready,
@@ -613,6 +633,7 @@ mod tests {
             model_provider: "provider-a".to_string(),
             model: "model-a".to_string(),
             supervisor_policy: None,
+            supervisor_draft_id: None,
             agent: None,
             fork_thread_id: None,
             fork_source_run_id: None,

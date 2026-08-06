@@ -20,17 +20,20 @@ use crate::validation::{
     is_safe_capability_segment, is_safe_definition_id, is_safe_runtime_role_name, is_safe_version,
 };
 
-const ENTERPRISE_COPILOT_MANIFEST: &str = include_str!(concat!(
+#[cfg(test)]
+const INDONESIA_NETWORK_PLANNING_DRAFT_MANIFEST: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/4.0.0/manifest.json"
+    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/5.0.0/manifest.json"
 ));
-const ENTERPRISE_COPILOT_CUSTOM_INSTRUCTIONS: &str = include_str!(concat!(
+#[cfg(test)]
+const INDONESIA_NETWORK_PLANNING_DRAFT_CUSTOM_INSTRUCTIONS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/4.0.0/custom-instructions.md"
+    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/5.0.0/custom-instructions.md"
 ));
-const ENTERPRISE_COPILOT_ARTIFACT_CONTRACTS: &str = include_str!(concat!(
+#[cfg(test)]
+const INDONESIA_NETWORK_PLANNING_DRAFT_ARTIFACT_CONTRACTS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/4.0.0/artifact-contracts.json"
+    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/5.0.0/artifact-contracts.json"
 ));
 const MAX_SUPERVISOR_INSTRUCTIONS_BYTES: usize = 16 * 1024;
 
@@ -40,12 +43,7 @@ struct PublishedSupervisorResource {
     artifact_contracts: &'static str,
 }
 
-const PUBLISHED_SUPERVISOR_RESOURCES: [PublishedSupervisorResource; 1] =
-    [PublishedSupervisorResource {
-        manifest: ENTERPRISE_COPILOT_MANIFEST,
-        custom_instructions: ENTERPRISE_COPILOT_CUSTOM_INSTRUCTIONS,
-        artifact_contracts: ENTERPRISE_COPILOT_ARTIFACT_CONTRACTS,
-    }];
+const PUBLISHED_SUPERVISOR_RESOURCES: [PublishedSupervisorResource; 0] = [];
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -187,6 +185,7 @@ pub fn list_published() -> Result<Vec<SupervisorPolicySummary>, SupervisorCatalo
                 display_name: package.display_name,
                 description: package.description,
                 source: SupervisorPolicyOrigin::Repository,
+                draft_id: None,
             })
         })
         .collect()
@@ -778,67 +777,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolves_complete_published_package() {
+    fn repository_catalog_has_no_published_supervisor_package() {
         let summaries = list_published().unwrap();
-        assert_eq!(summaries.len(), 1);
-        assert_eq!(summaries[0].source, SupervisorPolicyOrigin::Repository);
-        let package = resolve(&SupervisorPolicySelection {
-            policy_id: summaries[0].policy_id.clone(),
-            version: summaries[0].version.clone(),
-        })
-        .unwrap();
-        assert_eq!(package.required_runtime_roles.len(), 3);
-        assert_eq!(package.version, "4.0.0");
-        assert_eq!(package.agents.len(), 3);
-        assert_eq!(package.artifact_contracts.len(), 15);
-        assert!(package
-            .artifact_contracts
-            .iter()
-            .any(|contract| contract.artifact_type == "network_coverage.v1"));
-        assert_eq!(package.max_active_child_agents, 3);
-        assert_eq!(package.content_sha256.len(), 64);
-        assert!(package
-            .platform_instructions
-            .contains("You are the root Supervisor"));
-        assert!(package
-            .custom_instructions
-            .contains("Coordinate the Network Supervisor task dynamically"));
-        assert!(package
-            .developer_instructions
-            .contains("# Resolved execution contract"));
-        assert!(package
-            .developer_instructions
-            .contains("A child Agent remains resident and occupies the configured child limit"));
-        assert!(package
-            .developer_instructions
-            .contains("Multi-Agent V2 does not expose `close_agent`"));
-        assert!(package
-            .developer_instructions
-            .contains("a full-history fork inherits the parent Agent type"));
-        assert!(package
-            .developer_instructions
-            .contains("`wait_agent` timeouts must be at least 10000 milliseconds"));
-        assert!(package
-            .developer_instructions
-            .contains("the complete structured `data_ref` object"));
-        assert!(package
-            .developer_instructions
-            .contains("must receive a follow-up with the original tuple"));
-        assert!(package
-            .developer_instructions
-            .contains("Never place the directive in fenced or indented code"));
-        assert!(package
-            .developer_instructions
-            .contains("# Custom Supervisor instructions"));
+        assert!(summaries.is_empty());
         assert_eq!(
-            package.role_spawn_limits,
-            [
-                ("agent_bcbd895b5f976a809098ee8b3e23115f".to_string(), 1),
-                ("agent_0ce6d3576eadd88251381ad1d46cebe5".to_string(), 1),
-                ("agent_f533a88cc2fcde170744b35f4538deb9".to_string(), 1)
-            ]
-            .into_iter()
-            .collect()
+            resolve(&SupervisorPolicySelection {
+                policy_id: "enterprise-supervisor-copilot".to_string(),
+                version: "5.0.1".to_string(),
+            })
+            .unwrap_err(),
+            SupervisorCatalogError::NotFound
+        );
+    }
+
+    #[test]
+    fn the_previous_release_is_not_a_new_runtime_contract() {
+        assert_eq!(
+            resolve(&SupervisorPolicySelection {
+                policy_id: "enterprise-supervisor-copilot".to_string(),
+                version: "5.0.0".to_string(),
+            })
+            .unwrap_err(),
+            SupervisorCatalogError::NotFound
         );
     }
 
@@ -868,10 +828,11 @@ mod tests {
 
     #[test]
     fn repository_and_web_supervisor_sources_compile_to_identical_execution_semantics() {
-        let repository = resolve(&SupervisorPolicySelection {
-            policy_id: "enterprise-supervisor-copilot".to_string(),
-            version: "4.0.0".to_string(),
-        })
+        let repository = parse_resource_sources(
+            INDONESIA_NETWORK_PLANNING_DRAFT_MANIFEST,
+            INDONESIA_NETWORK_PLANNING_DRAFT_CUSTOM_INSTRUCTIONS,
+            INDONESIA_NETWORK_PLANNING_DRAFT_ARTIFACT_CONTRACTS,
+        )
         .unwrap();
         let draft = SupervisorDraftRequest {
             policy_id: repository.policy_id.clone(),
@@ -972,16 +933,16 @@ mod tests {
 
     #[test]
     fn repository_derived_fields_cannot_drift_from_the_canonical_compiler() {
-        let manifest = ENTERPRISE_COPILOT_MANIFEST.replacen(
-            "\"runtimeRole\": \"agent_bcbd895b5f976a809098ee8b3e23115f\"",
+        let manifest = INDONESIA_NETWORK_PLANNING_DRAFT_MANIFEST.replacen(
+            "\"runtimeRole\": \"agent_d63c04421e6b9a185e164b9b836b7d3f\"",
             "\"runtimeRole\": \"drifted_data_agent\"",
             1,
         );
         assert_eq!(
             parse_resource_sources(
                 &manifest,
-                ENTERPRISE_COPILOT_CUSTOM_INSTRUCTIONS,
-                ENTERPRISE_COPILOT_ARTIFACT_CONTRACTS,
+                INDONESIA_NETWORK_PLANNING_DRAFT_CUSTOM_INSTRUCTIONS,
+                INDONESIA_NETWORK_PLANNING_DRAFT_ARTIFACT_CONTRACTS,
             )
             .unwrap_err(),
             SupervisorCatalogError::Invalid(

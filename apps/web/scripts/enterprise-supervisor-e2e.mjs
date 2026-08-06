@@ -32,17 +32,17 @@ const email = process.env.E2E_ADMIN_EMAIL ?? "enterprise-e2e@open-web-codex.loca
 const password = process.env.E2E_ADMIN_PASSWORD ?? "open-web-codex-enterprise-e2e";
 const repositoryPolicy = {
   policy_id: "enterprise-supervisor-copilot",
-  version: "4.0.0",
+  version: "5.0.0",
 };
 const repositoryAgents = {
-  data: { definition_id: "enterprise-data-agent", version: "4.0.0" },
+  data: { definition_id: "enterprise-data-agent", version: "5.0.0" },
   network: {
     definition_id: "enterprise-network-planning-agent",
-    version: "4.0.0",
+    version: "5.0.0",
   },
   visualization: {
     definition_id: "enterprise-visualization-agent",
-    version: "1.4.0",
+    version: "2.0.0",
   },
 };
 const providerKey = useBuiltInProvider
@@ -433,17 +433,25 @@ await runCase("real Provider selection", async () => {
 });
 
 await runCase("current repository capability contracts", async () => {
-  const [policies, definitions, capabilityPackages, supervisor] = await Promise.all([
+  const [policies, definitions, capabilityPackages] = await Promise.all([
     api("/supervisor-policies"),
     api("/agent-definitions"),
     api("/capability-packages"),
-    api(`/supervisor-policies/${repositoryPolicy.policy_id}/${repositoryPolicy.version}`),
   ]);
+  const draftDefinition = definitions.find(
+    (entry) =>
+      entry.policy_id === repositoryPolicy.policy_id &&
+      entry.draft?.version === repositoryPolicy.version,
+  );
+  const supervisor = draftDefinition?.draft;
+  assert(supervisor, "Indonesia Network Planning Copilot Draft was not found");
   assert(
     policies.some(
       (entry) =>
         entry.policy_id === repositoryPolicy.policy_id &&
-        entry.version === repositoryPolicy.version,
+        entry.version === repositoryPolicy.version &&
+        entry.source === "draft" &&
+        entry.draft_id === draftDefinition.id,
     ),
   );
   for (const [kind, agentIdentity] of Object.entries(repositoryAgents)) {

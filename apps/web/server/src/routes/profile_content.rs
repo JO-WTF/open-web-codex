@@ -1001,8 +1001,8 @@ mod tests {
     #[test]
     fn platform_runtime_roles_are_not_browser_managed_agent_names() {
         for name in [
-            "agent_bcbd895b5f976a809098ee8b3e23115f",
-            "agent_0ce6d3576eadd88251381ad1d46cebe5",
+            "agent_d63c04421e6b9a185e164b9b836b7d3f",
+            "agent_f6c1714e7adccad14b25c797a5e30185",
             "agent_f533a88cc2fcde170744b35f4538deb9",
             "agent_9040f76e7387b00fff5e63fd574e63df",
             "agent_b85d26c7975f69e43b87043fc48e08ea",
@@ -1020,8 +1020,8 @@ mod tests {
     #[test]
     fn browser_agent_list_excludes_platform_runtime_roles() {
         let configured_agents = [
-            "agent_bcbd895b5f976a809098ee8b3e23115f",
-            "agent_0ce6d3576eadd88251381ad1d46cebe5",
+            "agent_d63c04421e6b9a185e164b9b836b7d3f",
+            "agent_f6c1714e7adccad14b25c797a5e30185",
             "agent_f533a88cc2fcde170744b35f4538deb9",
             "agent_9040f76e7387b00fff5e63fd574e63df",
             "agent_b85d26c7975f69e43b87043fc48e08ea",

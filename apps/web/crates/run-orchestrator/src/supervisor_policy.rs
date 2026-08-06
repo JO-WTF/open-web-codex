@@ -88,9 +88,9 @@ async fn ensure_policy_snapshot(
     let inserted = sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO supervisor_policy_snapshots \
          (organization_id, policy_id, version, display_name, developer_instructions, \
-          content_sha256, source, release_id) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
-         ON CONFLICT (organization_id, policy_id, version) DO NOTHING \
+          content_sha256, source, release_id, draft_definition_id, draft_revision) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+         ON CONFLICT DO NOTHING \
          RETURNING id",
     )
     .bind(organization_id)
@@ -101,6 +101,8 @@ async fn ensure_policy_snapshot(
     .bind(&requested.content_sha256)
     .bind(requested.source.as_str())
     .bind(requested.release_id)
+    .bind(requested.draft_definition_id)
+    .bind(requested.draft_revision)
     .fetch_optional(&mut **transaction)
     .await?;
     if let Some(snapshot_id) = inserted {
@@ -108,21 +110,33 @@ async fn ensure_policy_snapshot(
     }
 
     let existing = sqlx::query(
-        "SELECT id, display_name, developer_instructions, content_sha256, source, release_id \
-         FROM supervisor_policy_snapshots \
-         WHERE organization_id = $1 AND policy_id = $2 AND version = $3",
+        "SELECT id, display_name, developer_instructions, content_sha256, source, release_id, \
+                 draft_definition_id, draft_revision \
+          FROM supervisor_policy_snapshots \
+         WHERE organization_id = $1 AND policy_id = $2 AND version = $3 \
+           AND source = $4 \
+           AND release_id IS NOT DISTINCT FROM $5 \
+           AND draft_definition_id IS NOT DISTINCT FROM $6 \
+           AND draft_revision IS NOT DISTINCT FROM $7",
     )
     .bind(organization_id)
     .bind(&requested.policy_id)
     .bind(&requested.version)
+    .bind(requested.source.as_str())
+    .bind(requested.release_id)
+    .bind(requested.draft_definition_id)
+    .bind(requested.draft_revision)
     .fetch_one(&mut **transaction)
     .await?;
-    if existing.get::<String, _>("display_name") != requested.display_name
+    let metadata_mismatch = existing.get::<String, _>("display_name") != requested.display_name
         || existing.get::<String, _>("developer_instructions") != requested.developer_instructions
-        || existing.get::<String, _>("content_sha256") != requested.content_sha256
         || existing.get::<String, _>("source") != requested.source.as_str()
         || existing.get::<Option<Uuid>, _>("release_id") != requested.release_id
-    {
+        || existing.get::<Option<Uuid>, _>("draft_definition_id") != requested.draft_definition_id
+        || existing.get::<Option<i64>, _>("draft_revision") != requested.draft_revision;
+    let published_content_mismatch = requested.source != crate::SupervisorPolicySource::Draft
+        && existing.get::<String, _>("content_sha256") != requested.content_sha256;
+    if metadata_mismatch || published_content_mismatch {
         return Err(RunOrchestratorError::Conflict(format!(
             "Supervisor Policy '{}@{}' already has different immutable content",
             requested.policy_id, requested.version
@@ -170,9 +184,20 @@ fn validate_snapshot(snapshot: &SupervisorPolicySnapshotInput) -> Result<(), Run
         ));
     }
     if (snapshot.source == crate::SupervisorPolicySource::Repository
-        && snapshot.release_id.is_some())
+        && (snapshot.release_id.is_some()
+            || snapshot.draft_definition_id.is_some()
+            || snapshot.draft_revision.is_some()))
         || (snapshot.source == crate::SupervisorPolicySource::UserRelease
-            && snapshot.release_id.is_none())
+            && (snapshot.release_id.is_none()
+                || snapshot.draft_definition_id.is_some()
+                || snapshot.draft_revision.is_some()))
+        || (snapshot.source == crate::SupervisorPolicySource::Draft
+            && (snapshot.release_id.is_some()
+                || snapshot.draft_definition_id.is_none()
+                || snapshot.draft_revision.is_none()
+                || snapshot
+                    .draft_revision
+                    .is_some_and(|revision| revision <= 0)))
     {
         return Err(RunOrchestratorError::Invalid(
             "Supervisor Policy source is invalid".to_string(),

@@ -2,8 +2,8 @@ use open_web_codex_adapter::{PlatformRuntimeRole, RequiredMcpServer};
 use open_web_codex_codex_contracts::{CapabilityDeclaration, CapabilityManifest, CapabilityStatus};
 use open_web_codex_platform_contracts::{
     AgentDatasetReleaseBinding, SupervisorAgentSelection, SupervisorArtifactContractInput,
-    SupervisorPolicyDetail, SupervisorPolicyOrigin, SupervisorPolicySelection,
-    SupervisorPolicySummary,
+    SupervisorDraftRequest, SupervisorPolicyDetail, SupervisorPolicyOrigin,
+    SupervisorPolicySelection, SupervisorPolicySummary,
 };
 use open_web_codex_run_orchestrator::{SupervisorPolicySnapshotInput, SupervisorPolicySource};
 use open_web_codex_supervisor_catalog::supervisor::{
@@ -65,7 +65,31 @@ pub(crate) async fn list_published(
         display_name: row.get("display_name"),
         description: row.get("description"),
         source: SupervisorPolicyOrigin::UserRelease,
+        draft_id: None,
     }));
+    let drafts = sqlx::query(
+        "SELECT definition.id, draft.draft_spec FROM supervisor_definitions definition \
+         JOIN supervisor_revisions draft ON draft.definition_id = definition.id \
+           AND draft.organization_id = definition.organization_id AND draft.state = 'draft' \
+         WHERE definition.organization_id = $1 ORDER BY definition.updated_at DESC",
+    )
+    .bind(organization_id)
+    .fetch_all(db)
+    .await
+    .map_err(|_| SupervisorPolicyError::Database)?;
+    for row in drafts {
+        let definition_id: Uuid = row.get("id");
+        let draft = serde_json::from_value::<SupervisorDraftRequest>(row.get("draft_spec"))
+            .map_err(|_| SupervisorPolicyError::Invalid("Supervisor Draft is invalid"))?;
+        published.push(SupervisorPolicySummary {
+            policy_id: draft.policy_id,
+            version: draft.version,
+            display_name: draft.display_name,
+            description: draft.description,
+            source: SupervisorPolicyOrigin::Draft,
+            draft_id: Some(definition_id),
+        });
+    }
     Ok(published)
 }
 
@@ -82,6 +106,8 @@ pub(crate) async fn resolve(
         return Ok(from_package(
             package,
             SupervisorPolicySource::Repository,
+            None,
+            None,
             None,
         ));
     }
@@ -114,6 +140,8 @@ pub(crate) fn resolve_builtin(
         package,
         SupervisorPolicySource::Repository,
         None,
+        None,
+        None,
     ))
 }
 
@@ -139,10 +167,13 @@ fn from_package(
     package: ResolvedSupervisorPackage,
     source: SupervisorPolicySource,
     release_id: Option<Uuid>,
+    draft_definition_id: Option<Uuid>,
+    draft_revision: Option<i64>,
 ) -> ResolvedSupervisorPolicy {
     let origin = match source {
         SupervisorPolicySource::Repository => SupervisorPolicyOrigin::Repository,
         SupervisorPolicySource::UserRelease => SupervisorPolicyOrigin::UserRelease,
+        SupervisorPolicySource::Draft => SupervisorPolicyOrigin::Draft,
     };
     let detail = SupervisorPolicyDetail {
         policy_id: package.policy_id.clone(),
@@ -188,6 +219,8 @@ fn from_package(
             content_sha256: package.content_sha256,
             source,
             release_id,
+            draft_definition_id,
+            draft_revision,
         },
         detail,
         required_runtime_roles: package.required_runtime_roles,
@@ -234,6 +267,8 @@ async fn resolve_release_row(
         package,
         SupervisorPolicySource::UserRelease,
         Some(release_id),
+        None,
+        None,
     ))
 }
 
@@ -298,8 +333,142 @@ pub(crate) async fn resolve_for_new_run(
     db: &PgPool,
     organization_id: Uuid,
     selection: &SupervisorPolicySelection,
+    draft_definition_id: Option<Uuid>,
 ) -> Result<ResolvedSupervisorPolicy, SupervisorPolicyError> {
+    if let Some(definition_id) = draft_definition_id {
+        return resolve_draft_for_new_run(db, organization_id, definition_id).await;
+    }
     resolve(db, organization_id, selection).await
+}
+
+pub(crate) async fn resolve_draft_for_new_run(
+    db: &PgPool,
+    organization_id: Uuid,
+    definition_id: Uuid,
+) -> Result<ResolvedSupervisorPolicy, SupervisorPolicyError> {
+    let row = sqlx::query(
+        "SELECT revision.draft_spec, revision.revision_number \
+         FROM supervisor_revisions revision \
+         JOIN supervisor_definitions definition ON definition.id = revision.definition_id \
+           AND definition.organization_id = revision.organization_id \
+         WHERE revision.organization_id = $1 AND revision.definition_id = $2 \
+           AND revision.state = 'draft'",
+    )
+    .bind(organization_id)
+    .bind(definition_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|_| SupervisorPolicyError::Database)?
+    .ok_or(SupervisorPolicyError::NotFound)?;
+    let value: Value = row.get("draft_spec");
+    let revision_number: i64 = row.get("revision_number");
+    let draft = serde_json::from_value::<SupervisorDraftRequest>(value)
+        .map_err(|_| SupervisorPolicyError::Invalid("Supervisor Draft is invalid"))?;
+    let available_agents = agent_catalog::list_resolved(db, organization_id)
+        .await
+        .map_err(|_| SupervisorPolicyError::Invalid("Agent catalog is invalid"))?;
+    let instruction_policy =
+        crate::supervisor_instruction_policy::resolve(db, &draft.instruction_policy)
+            .await
+            .map_err(|_| {
+                SupervisorPolicyError::Invalid("Supervisor instruction policy is invalid")
+            })?;
+    let package = supervisor::resolve_authoring_spec_with_policy(
+        draft,
+        &available_agents,
+        &instruction_policy,
+    )
+    .map_err(map_catalog_error)?;
+    Ok(from_package(
+        package,
+        SupervisorPolicySource::Draft,
+        None,
+        Some(definition_id),
+        Some(revision_number),
+    ))
+}
+
+/// Resolve the exact Policy snapshot bound to a Task.
+///
+/// Event projections run after the Runtime has started, so they must use the
+/// same persisted Draft/Release identity as the Run rather than the
+/// repository catalog. In particular, a Draft is not a code-published
+/// Supervisor Package and must be resolved from its organization-owned
+/// definition.
+pub(crate) async fn resolve_bound_for_task(
+    db: &PgPool,
+    organization_id: Uuid,
+    task_id: Uuid,
+) -> Result<ResolvedSupervisorPolicy, SupervisorPolicyError> {
+    let row = sqlx::query(
+        "SELECT snapshot.policy_id, snapshot.version, snapshot.source,
+                snapshot.content_sha256, snapshot.developer_instructions,
+                snapshot.release_id, snapshot.draft_definition_id,
+                snapshot.draft_revision
+         FROM supervisor_policy_bindings binding
+         JOIN supervisor_policy_snapshots snapshot
+           ON snapshot.organization_id = binding.organization_id
+          AND snapshot.id = binding.snapshot_id
+         WHERE binding.organization_id = $1
+           AND binding.task_id = $2
+           AND binding.state = 'bound'
+         ORDER BY binding.bound_at DESC NULLS LAST, binding.id DESC
+         LIMIT 1",
+    )
+    .bind(organization_id)
+    .bind(task_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|_| SupervisorPolicyError::Database)?
+    .ok_or(SupervisorPolicyError::NotFound)?;
+
+    let policy_id: String = row.get("policy_id");
+    let version: String = row.get("version");
+    let selection = SupervisorPolicySelection { policy_id, version };
+    let source = row
+        .get::<String, _>("source")
+        .parse::<SupervisorPolicySource>()
+        .map_err(|_| SupervisorPolicyError::Invalid("Supervisor Policy source is invalid"))?;
+    let policy =
+        match source {
+            SupervisorPolicySource::Repository => resolve_builtin(&selection),
+            SupervisorPolicySource::UserRelease => {
+                let release_id = row.get::<Option<Uuid>, _>("release_id").ok_or(
+                    SupervisorPolicyError::Invalid("Supervisor Policy Release identity is missing"),
+                )?;
+                resolve_release(db, organization_id, release_id).await
+            }
+            SupervisorPolicySource::Draft => {
+                let definition_id = row.get::<Option<Uuid>, _>("draft_definition_id").ok_or(
+                    SupervisorPolicyError::Invalid("Supervisor Policy Draft identity is missing"),
+                )?;
+                resolve_draft_for_new_run(db, organization_id, definition_id).await
+            }
+        }?;
+
+    match source {
+        SupervisorPolicySource::Draft => {
+            if policy.snapshot.draft_definition_id
+                != row.get::<Option<Uuid>, _>("draft_definition_id")
+                || policy.snapshot.draft_revision != row.get::<Option<i64>, _>("draft_revision")
+            {
+                return Err(SupervisorPolicyError::Invalid(
+                    "Supervisor Policy Draft revision is stale",
+                ));
+            }
+        }
+        SupervisorPolicySource::Repository | SupervisorPolicySource::UserRelease => {
+            if policy.snapshot.content_sha256 != row.get::<String, _>("content_sha256")
+                || policy.snapshot.developer_instructions
+                    != row.get::<String, _>("developer_instructions")
+            {
+                return Err(SupervisorPolicyError::Invalid(
+                    "Supervisor Policy snapshot no longer matches",
+                ));
+            }
+        }
+    }
+    Ok(policy)
 }
 
 pub(crate) fn is_reserved_builtin_policy_id(policy_id: &str) -> bool {

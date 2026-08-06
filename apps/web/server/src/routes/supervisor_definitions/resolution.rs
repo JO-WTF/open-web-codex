@@ -14,6 +14,56 @@ use crate::supervisor_instruction_policy;
 
 use super::{bad_request, ApiError};
 
+pub(super) async fn ensure_draft_version_is_new(
+    db: &PgPool,
+    organization_id: Uuid,
+    draft: &SupervisorDraftRequest,
+) -> Result<(), ApiError> {
+    let versions = sqlx::query_scalar::<_, String>(
+        "SELECT version FROM supervisor_releases \
+         WHERE organization_id = $1 AND policy_id = $2",
+    )
+    .bind(organization_id)
+    .bind(&draft.policy_id)
+    .fetch_all(db)
+    .await
+    .map_err(|_| super::internal_error())?;
+    let draft_version = parse_version(&draft.version).ok_or_else(|| {
+        bad_request("Supervisor Draft version must use numeric major.minor.patch form")
+    })?;
+    let mut latest = None;
+    for version in &versions {
+        if version == &draft.version {
+            return Err(bad_request(
+                "Supervisor Draft version conflicts with an existing published version",
+            ));
+        }
+        let parsed = parse_version(version).ok_or_else(|| {
+            bad_request("Existing Supervisor Release has an invalid numeric version")
+        })?;
+        latest = latest.max(Some(parsed));
+    }
+    let Some(latest) = latest else {
+        return Ok(());
+    };
+    if draft_version <= latest {
+        return Err(bad_request(
+            "Supervisor Draft version must be greater than the latest published version",
+        ));
+    }
+    Ok(())
+}
+
+fn parse_version(value: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = value.split('.');
+    let version = (
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+    );
+    parts.next().is_none().then_some(version)
+}
+
 pub(super) async fn validate_draft(
     db: &PgPool,
     organization_id: Uuid,

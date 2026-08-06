@@ -38,11 +38,11 @@ type ApiResult<T> = Result<Json<T>, ApiError>;
 
 const BLUEPRINT_MANIFEST: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../capabilities/tutorial-blueprints/indonesia-warehouse-network/1.4.0/manifest.json"
+    "/../../../capabilities/tutorial-blueprints/indonesia-warehouse-network/1.5.0/manifest.json"
 ));
 const RECOMMENDED_PROMPT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../capabilities/tutorial-blueprints/indonesia-warehouse-network/1.4.0/recommended-prompt.md"
+    "/../../../capabilities/tutorial-blueprints/indonesia-warehouse-network/1.5.0/recommended-prompt.md"
 ));
 const DATASET_MANIFEST: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),

@@ -263,7 +263,7 @@ mod tests {
 
     #[test]
     fn dataset_binding_compiles_into_runtime_instructions() {
-        let template = resolve_builtin("enterprise-data-agent", "4.0.0").unwrap();
+        let template = resolve_builtin("enterprise-data-agent", "5.0.0").unwrap();
         let workspace_id = Uuid::parse_str("0198d5b5-7d0f-7a62-8d9a-f6472dbfab11").unwrap();
         let release_id = Uuid::parse_str("0198d5b5-7d0f-7a62-8d9a-f6472dbfab12").unwrap();
         let mut spec = template.authoring_spec();

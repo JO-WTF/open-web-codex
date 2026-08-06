@@ -79,6 +79,9 @@ pub enum RunExecutionSelection {
         policy_id: String,
         version: String,
     },
+    SupervisorDraft {
+        definition_id: Uuid,
+    },
     Agent {
         definition_id: String,
         version: String,
@@ -152,6 +155,7 @@ pub struct AgentRunLease {
 pub enum SupervisorPolicySource {
     Repository,
     UserRelease,
+    Draft,
 }
 
 impl SupervisorPolicySource {
@@ -159,6 +163,7 @@ impl SupervisorPolicySource {
         match self {
             Self::Repository => "repository",
             Self::UserRelease => "user_release",
+            Self::Draft => "draft",
         }
     }
 }
@@ -170,6 +175,7 @@ impl std::str::FromStr for SupervisorPolicySource {
         match value {
             "repository" => Ok(Self::Repository),
             "user_release" => Ok(Self::UserRelease),
+            "draft" => Ok(Self::Draft),
             _ => Err(()),
         }
     }
@@ -189,6 +195,8 @@ pub struct SupervisorPolicySnapshotInput {
     pub content_sha256: String,
     pub source: SupervisorPolicySource,
     pub release_id: Option<Uuid>,
+    pub draft_definition_id: Option<Uuid>,
+    pub draft_revision: Option<i64>,
 }
 
 /// Immutable Supervisor Policy facts leased with a Run.
@@ -205,6 +213,8 @@ pub struct SupervisorPolicyLease {
     pub developer_instructions: String,
     pub source: SupervisorPolicySource,
     pub release_id: Option<Uuid>,
+    pub draft_definition_id: Option<Uuid>,
+    pub draft_revision: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

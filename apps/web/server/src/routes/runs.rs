@@ -170,7 +170,16 @@ pub async fn start_run(
             )),
         ));
     }
-    if req.supervisor_policy.is_some() && req.agent.is_some() {
+    if req.supervisor_policy.is_some() && req.supervisor_draft_id.is_some() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(PlatformError::bad_request(
+                "Select either a published Supervisor Policy or a Supervisor Draft",
+            )),
+        ));
+    }
+    if (req.supervisor_policy.is_some() || req.supervisor_draft_id.is_some()) && req.agent.is_some()
+    {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(PlatformError::bad_request(
@@ -182,6 +191,10 @@ pub async fn start_run(
     let workspace_id = Uuid::parse_str(&workspace.id).expect("Workspace id was created from UUID");
     let replay_execution = if req.fork_thread_id.is_some() || req.fork_source_run_id.is_some() {
         RunExecutionSelection::Inherited
+    } else if let Some(draft_id) = req.supervisor_draft_id {
+        RunExecutionSelection::SupervisorDraft {
+            definition_id: draft_id,
+        }
     } else if let Some(selection) = req.supervisor_policy.as_ref() {
         RunExecutionSelection::Supervisor {
             policy_id: selection.policy_id.clone(),
@@ -234,11 +247,18 @@ pub async fn start_run(
             .unwrap_or_default(),
         model: task.get::<Option<String>, _>("model").unwrap_or_default(),
         supervisor_policy: req.supervisor_policy.clone(),
+        supervisor_draft_id: req.supervisor_draft_id,
         agent: req.agent.clone(),
         fork_thread_id: req.fork_thread_id.clone(),
         fork_source_run_id: req.fork_source_run_id,
         purpose: req.purpose,
-        task_id: Some(task_id),
+        // Conversation readiness is intentionally evaluated before the Task
+        // exists, so the formal start must preserve that same scope. Including
+        // the newly-created Task ID here changes an otherwise identical
+        // readiness fingerprint and makes every Thread start fail with
+        // `readiness_changed`. Analysis readiness remains Task-scoped and is
+        // admitted through the dedicated analysis-start route above.
+        task_id: readiness_task_id(req.purpose, task_id),
     };
     let readiness_request =
         resolve_readiness_execution(&orchestrator, &auth, readiness_request).await?;
@@ -697,6 +717,13 @@ fn run_from_record(run: RunRecord) -> Run {
     }
 }
 
+fn readiness_task_id(
+    purpose: open_web_codex_platform_contracts::RunStartPurpose,
+    task_id: Uuid,
+) -> Option<Uuid> {
+    (purpose == open_web_codex_platform_contracts::RunStartPurpose::Analysis).then_some(task_id)
+}
+
 async fn resolve_readiness_execution(
     orchestrator: &RunOrchestrator,
     auth: &AuthenticatedUser,
@@ -708,7 +735,10 @@ async fn resolve_readiness_execution(
     ) {
         (None, None) => Ok(request),
         (Some(thread_id), Some(source_run_id)) => {
-            if request.supervisor_policy.is_some() || request.agent.is_some() {
+            if request.supervisor_policy.is_some()
+                || request.supervisor_draft_id.is_some()
+                || request.agent.is_some()
+            {
                 return Err((
                     StatusCode::BAD_REQUEST,
                     Json(PlatformError::bad_request(
@@ -734,6 +764,14 @@ async fn resolve_readiness_execution(
                             version,
                         },
                     );
+                }
+                RunExecutionSelection::SupervisorDraft { .. } => {
+                    return Err((
+                        StatusCode::CONFLICT,
+                        Json(PlatformError::bad_request(
+                            "Draft execution cannot be inherited by a fork",
+                        )),
+                    ));
                 }
                 RunExecutionSelection::Agent {
                     definition_id,
@@ -888,9 +926,9 @@ fn run_not_ready() -> (StatusCode, Json<PlatformError>) {
 
 #[cfg(test)]
 mod tests {
-    use super::run_from_record;
+    use super::{readiness_task_id, run_from_record};
     use chrono::Utc;
-    use open_web_codex_platform_contracts::RunFailureCode;
+    use open_web_codex_platform_contracts::{RunFailureCode, RunStartPurpose};
     use open_web_codex_run_orchestrator::RunRecord;
     use uuid::Uuid;
 
@@ -938,6 +976,20 @@ mod tests {
         assert_eq!(
             serde_json::to_value(projected).unwrap()["failure_code"],
             "unknown_failure"
+        );
+    }
+
+    #[test]
+    fn formal_conversation_readiness_preserves_the_pre_task_scope() {
+        let task_id = Uuid::now_v7();
+
+        assert_eq!(
+            readiness_task_id(RunStartPurpose::Conversation, task_id),
+            None
+        );
+        assert_eq!(
+            readiness_task_id(RunStartPurpose::Analysis, task_id),
+            Some(task_id)
         );
     }
 }
