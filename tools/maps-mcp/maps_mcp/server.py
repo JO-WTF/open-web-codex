@@ -297,8 +297,9 @@ async def create_map_card(
 
     An MCP Resource data_ref must be copied unchanged from an earlier data tool result in the
     same Run and Thread. ``sources`` is an object keyed by source ID; every source is
-    {type:"geojson", data:<direct GeoJSON>} or {type:"geojson", data_ref:<complete data_ref>},
-    with exactly one data field. ``layers`` uses the official Mapbox Style Specification and
+    {type:"geojson", data_ref:<complete data_ref>}. GeoJSON contents must remain in the
+    authorized Resource and must not be passed through the model context. ``layers`` uses the
+    official Mapbox Style Specification and
     is passed to ``map.addLayer`` unchanged except that each authorized source ID is replaced
     by its browser-local source ID. Standard Mapbox layer types, paint/layout properties,
     filters, expressions, minzoom/maxzoom, metadata, and source-layer are not redefined here.
@@ -311,7 +312,7 @@ async def create_map_card(
     fails validation. Unknown Open Web extension fields are ignored with warnings.
 
     Do not use ``style`` as a wrapper, put hover/legend inside a Mapbox layer, use source
-    URLs, or put MCP Resource objects in ``source.data``. A successful call only creates the
+    URLs or put GeoJSON contents in the source object. A successful call only creates the
     Artifact and does not display the map. To display it, copy structuredContent.embed.code
     verbatim into the Assistant response as a standalone paragraph, with a blank line before and
     after it. The paragraph may appear anywhere in the response where the map should be shown. Do

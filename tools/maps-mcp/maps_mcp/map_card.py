@@ -14,17 +14,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-_GEOJSON_ROOT_TYPES = {
-    "FeatureCollection",
-    "Feature",
-    "GeometryCollection",
-    "Point",
-    "MultiPoint",
-    "LineString",
-    "MultiLineString",
-    "Polygon",
-    "MultiPolygon",
-}
 _VALIDATOR = Path(__file__).parents[1] / "scripts" / "validate-mapbox-style.mjs"
 
 
@@ -71,34 +60,25 @@ class MapResourceRef(BaseModel):
 
 
 class GeoJsonSource(ExtensibleModel):
-    """Mapbox GeoJSON source plus Open Web's mutually exclusive data_ref."""
+    """Mapbox GeoJSON source addressed by an authorized MCP Resource."""
 
     model_config = ConfigDict(
         extra="allow",
-        json_schema_extra={
-            "oneOf": [
-                {"required": ["data"], "not": {"required": ["data_ref"]}},
-                {"required": ["data_ref"], "not": {"required": ["data"]}},
-            ]
-        },
+        json_schema_extra={"not": {"required": ["data"]}},
     )
 
     type: Literal["geojson"]
-    data: dict[str, object] | None = Field(
-        default=None,
-        description="Direct standard GeoJSON. This is valid Mapbox source JSON.",
-    )
-    data_ref: MapResourceRef | None = Field(
-        default=None,
-        description=("Open Web extension: copy a reviewed local MCP GeoJSON data_ref unchanged."),
+    data_ref: MapResourceRef = Field(
+        description=(
+            "Copy the reviewed local MCP GeoJSON data_ref unchanged; GeoJSON contents "
+            "must not be passed through the model context."
+        ),
     )
 
     @model_validator(mode="after")
-    def validate_data_choice(self) -> GeoJsonSource:
-        if (self.data is None) == (self.data_ref is None):
-            raise ValueError("GeoJSON source requires exactly one of data or data_ref")
-        if self.data is not None and self.data.get("type") not in _GEOJSON_ROOT_TYPES:
-            raise ValueError("source.data must be direct GeoJSON")
+    def reject_inline_data(self) -> GeoJsonSource:
+        if self.model_extra and "data" in self.model_extra:
+            raise ValueError("source.data is not supported; use data_ref")
         return self
 
 
@@ -151,17 +131,9 @@ class MapExtensions(ExtensibleModel):
     legend: LegendExtension | None = None
 
 
-class InlineRendererData(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["inline"] = "inline"
-    format: Literal["geojson"] = "geojson"
-    geojson: dict[str, object]
-
-
 class RendererSource(ExtensibleModel):
     type: Literal["geojson"]
-    data: MapResourceRef | InlineRendererData
+    data: MapResourceRef
 
 
 class MapPayload(BaseModel):
@@ -235,15 +207,10 @@ def renderer_sources(
         options = source.model_dump(
             mode="json",
             by_alias=True,
-            exclude={"data", "data_ref"},
+            exclude={"data_ref"},
             exclude_none=True,
         )
-        data = (
-            source.data_ref
-            if source.data_ref is not None
-            else InlineRendererData(geojson=source.data or {})
-        )
-        rendered[source_id] = RendererSource(data=data, **options)
+        rendered[source_id] = RendererSource(data=source.data_ref, **options)
     return rendered
 
 

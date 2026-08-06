@@ -13,6 +13,15 @@ def geojson() -> dict[str, object]:
     return {"type": "FeatureCollection", "features": []}
 
 
+def data_ref(uri: str = "maps-data://geojson/map-data-1234") -> dict[str, str]:
+    return {
+        "type": "mcp_resource",
+        "server": "map_utils",
+        "uri": uri,
+        "format": "geojson",
+    }
+
+
 class MapCardTests(unittest.IsolatedAsyncioTestCase):
     async def test_preserves_standard_mapbox_layers(self) -> None:
         layer = {
@@ -39,7 +48,7 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
             sources={
                 "routes": GeoJsonSource(
                     type="geojson",
-                    data=geojson(),
+                    data_ref=data_ref(),
                     lineMetrics=True,
                 )
             },
@@ -104,6 +113,27 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
         source = result.structuredContent["artifact"]["renderer"]["payload"]["sources"]["route"]
         self.assertEqual(source["data"]["uri"], uri)
 
+    async def test_rejects_inline_geojson_and_requires_data_ref(self) -> None:
+        with self.assertRaises(ValidationError):
+            GeoJsonSource(type="geojson", data=geojson())
+
+        with self.assertRaisesRegex(ToolError, "data_ref"):
+            await server.mcp.call_tool(
+                "create_map_card",
+                {
+                    "title": "Inline data",
+                    "sources": {"network": {"type": "geojson", "data": geojson()}},
+                    "layers": [
+                        {
+                            "id": "network",
+                            "type": "circle",
+                            "source": "network",
+                            "paint": {"circle-color": "#2563eb"},
+                        }
+                    ],
+                },
+            )
+
     async def test_accepts_reviewed_external_local_geojson_reference(self) -> None:
         uri = "supply-chain-indonesia://geojson/geojson.v1-digest"
         result = await server.mcp.call_tool(
@@ -165,7 +195,7 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
             sources={
                 "routes": GeoJsonSource(
                     type="geojson",
-                    data=geojson(),
+                    data_ref=data_ref(),
                 )
             },
             layers=[
@@ -197,7 +227,7 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
             {
                 "title": "Warning",
                 "sources": {
-                    "data": {"type": "geojson", "data": geojson()},
+                    "data": {"type": "geojson", "data_ref": data_ref()},
                 },
                 "layers": [
                     {
@@ -224,7 +254,7 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "title": "Invalid",
                     "sources": {
-                        "data": {"type": "geojson", "data": geojson()},
+                        "data": {"type": "geojson", "data_ref": data_ref()},
                     },
                     "layers": [
                         {
@@ -248,6 +278,8 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("center", tool.inputSchema["properties"])
         self.assertNotIn("view", tool.inputSchema["properties"])
         self.assertNotIn("legend", tool.inputSchema["properties"])
+        source_schema = tool.inputSchema["properties"]["sources"]
+        self.assertIn("data_ref", str(source_schema))
         assert tool.outputSchema is not None
         self.assertEqual(
             tool.outputSchema["$defs"]["Renderer"]["properties"]["kind"]["const"],

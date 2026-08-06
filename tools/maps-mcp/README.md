@@ -127,8 +127,8 @@ unchanged to MCP `resources/read`; `mcp__map_utils` is a model-visible Tool name
 Resource server ID.
 
 `create_map_card` accepts one Mapbox-style `map.v3` contract. `sources` contains
-platform-managed GeoJSON: inline data uses standard `source.data`, while Tool-produced data uses
-the mutually exclusive Open Web `source.data_ref`. Standard GeoJSON source options are preserved.
+platform-managed GeoJSON and must use the Open Web `source.data_ref`; GeoJSON contents are never
+passed through the model context. Standard GeoJSON source options are preserved.
 `layers` is official Mapbox Style Specification Layer JSON and is validated by
 `@mapbox/mapbox-gl-style-spec`; there is no separate layer, paint, layout, filter, or expression
 whitelist. Official unknown-property diagnostics are warnings, while invalid known syntax fails.

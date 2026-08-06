@@ -42,10 +42,9 @@ does not call `map.setStyle`.
 
 ### Sources
 
-Each source is keyed by its source ID and must have `type:"geojson"`. Use exactly one:
-
-- `data`: direct standard GeoJSON for inline data. This source remains valid Mapbox JSON.
-- `data_ref`: the complete object returned by a `map_utils` data Tool.
+Each source is keyed by its source ID and must have `type:"geojson"` plus `data_ref`, the complete
+object returned by a `map_utils` data Tool. GeoJSON contents must remain in the authorized
+Resource and must not be passed through the model context.
 
 ```json
 {
@@ -70,12 +69,10 @@ buffer, and tolerance may be used when the current Mapbox Style Specification pe
 Do not:
 
 - put a Resource object in `data`;
-- wrap inline GeoJSON in `{type:"inline",geojson:...}`;
 - use source URLs, tiles, credentials, or non-GeoJSON source types;
 - invent or rewrite the returned `server` or `uri`.
 
-Even a single point should keep the Tool-returned `data_ref`. Direct coordinates supplied by the
-user may use small inline GeoJSON.
+Even a single point should keep the Tool-returned `data_ref`.
 
 ### Layers
 
