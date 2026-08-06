@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "open-web-codex-supply-chain-network-planner"
-version = "0.3.0"
+version = "0.4.0"
 description = "Deterministic supply-chain network planning MCP tools for Codex"
 requires-python = ">=3.11"
 dependencies = [

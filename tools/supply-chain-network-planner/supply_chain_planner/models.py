@@ -62,16 +62,25 @@ class ServicePolicy(StrictModel):
     label: str | None = Field(default=None, max_length=256)
 
 
+class City(StrictModel):
+    city_id: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=256)
+    region: str = Field(min_length=1, max_length=128)
+    location: Point
+
+
 class DemandPoint(StrictModel):
     demand_id: str = Field(min_length=1, max_length=128)
+    city_id: str = Field(min_length=1, max_length=128)
     location: Point
     demand_units: int = Field(ge=0)
-    region: str | None = Field(default=None, max_length=128)
+    region: str = Field(min_length=1, max_length=128)
     current_facility_id: str | None = Field(default=None, max_length=128)
 
 
 class Facility(StrictModel):
     facility_id: str = Field(min_length=1, max_length=128)
+    city_id: str = Field(min_length=1, max_length=128)
     location: Point
     capacity_units: int = Field(ge=0)
     is_existing: bool
@@ -84,19 +93,10 @@ class Facility(StrictModel):
 
 class TransportRate(StrictModel):
     rate_id: str = Field(min_length=1, max_length=128)
-    origin_facility_id: str
-    destination_demand_id: str | None = None
-    destination_region: str | None = None
+    origin_city_id: str = Field(min_length=1, max_length=128)
+    destination_city_id: str = Field(min_length=1, max_length=128)
     base_cost_per_unit: NonNegativeMoney = Decimal("0")
     distance_cost_per_km_per_unit: NonNegativeMoney = Decimal("0")
-
-    @model_validator(mode="after")
-    def one_destination_selector(self) -> TransportRate:
-        if self.destination_demand_id is not None and self.destination_region is not None:
-            raise ValueError(
-                "transport rate may select a demand point or a region, but not both"
-            )
-        return self
 
 
 class NetworkInput(StrictModel):
@@ -104,6 +104,7 @@ class NetworkInput(StrictModel):
     planning_period: str = Field(min_length=1, max_length=128)
     currency: str = Field(pattern=r"^[A-Z]{3}$")
     service_policy: ServicePolicy
+    cities: list[City] = Field(min_length=1)
     demand_points: list[DemandPoint] = Field(min_length=1)
     facilities: list[Facility] = Field(min_length=1)
     transport_rates: list[TransportRate] = Field(default_factory=list)
@@ -111,20 +112,30 @@ class NetworkInput(StrictModel):
     @model_validator(mode="after")
     def validate_references(self) -> NetworkInput:
         demand_ids = [item.demand_id for item in self.demand_points]
+        city_ids = [item.city_id for item in self.cities]
         facility_ids = [item.facility_id for item in self.facilities]
         rate_ids = [item.rate_id for item in self.transport_rates]
         for label, identifiers in (
             ("demand", demand_ids),
+            ("city", city_ids),
             ("facility", facility_ids),
             ("transport rate", rate_ids),
         ):
             if len(identifiers) != len(set(identifiers)):
                 raise ValueError(f"duplicate {label} identifier")
 
-        demand_id_set = set(demand_ids)
+        city_by_id = {item.city_id: item for item in self.cities}
         facility_id_set = set(facility_ids)
-        regions = {item.region for item in self.demand_points if item.region is not None}
         for demand in self.demand_points:
+            city = city_by_id.get(demand.city_id)
+            if city is None:
+                raise ValueError(
+                    f"demand {demand.demand_id!r} references unknown city {demand.city_id!r}"
+                )
+            if demand.location != city.location or demand.region != city.region:
+                raise ValueError(
+                    f"demand {demand.demand_id!r} city projection does not match {demand.city_id!r}"
+                )
             if (
                 demand.current_facility_id is not None
                 and demand.current_facility_id not in facility_id_set
@@ -133,82 +144,69 @@ class NetworkInput(StrictModel):
                     f"demand {demand.demand_id!r} references unknown current facility "
                     f"{demand.current_facility_id!r}"
                 )
-        selectors: set[tuple[str, str, str]] = set()
+        for facility in self.facilities:
+            if facility.city_id not in city_by_id:
+                raise ValueError(
+                    f"facility {facility.facility_id!r} references unknown city "
+                    f"{facility.city_id!r}"
+                )
+        city_ids_set = set(city_ids)
+        selectors: set[tuple[str, str]] = set()
         for rate in self.transport_rates:
-            if rate.origin_facility_id not in facility_id_set:
+            if rate.origin_city_id not in city_ids_set:
                 raise ValueError(
-                    f"rate {rate.rate_id!r} references unknown origin facility "
-                    f"{rate.origin_facility_id!r}"
+                    f"rate {rate.rate_id!r} references unknown origin city {rate.origin_city_id!r}"
                 )
-            if (
-                rate.destination_demand_id is not None
-                and rate.destination_demand_id not in demand_id_set
-            ):
+            if rate.destination_city_id not in city_by_id:
                 raise ValueError(
-                    f"rate {rate.rate_id!r} references unknown demand "
-                    f"{rate.destination_demand_id!r}"
+                    f"rate {rate.rate_id!r} references unknown destination city "
+                    f"{rate.destination_city_id!r}"
                 )
-            if rate.destination_region is not None and rate.destination_region not in regions:
-                raise ValueError(
-                    f"rate {rate.rate_id!r} references unused region "
-                    f"{rate.destination_region!r}"
-                )
-            if rate.destination_demand_id is not None:
-                selector = ("demand", rate.origin_facility_id, rate.destination_demand_id)
-            elif rate.destination_region is not None:
-                selector = ("region", rate.origin_facility_id, rate.destination_region)
-            else:
-                selector = ("default", rate.origin_facility_id, "")
+            selector = (rate.origin_city_id, rate.destination_city_id)
             if selector in selectors:
                 raise ValueError(
-                    "ambiguous transport rates: more than one rate has selector "
-                    f"{selector!r}"
+                    f"ambiguous transport rates: more than one rate has selector {selector!r}"
                 )
             selectors.add(selector)
-        for demand in self.demand_points:
-            for facility in self.facilities:
-                candidates = [
-                    rate
-                    for rate in self.transport_rates
-                    if rate.origin_facility_id == facility.facility_id
-                    and (
-                        rate.destination_demand_id == demand.demand_id
-                        or (
-                            rate.destination_demand_id is None
-                            and rate.destination_region == demand.region
-                        )
-                        or (
-                            rate.destination_demand_id is None
-                            and rate.destination_region is None
-                        )
-                    )
-                ]
-                if not candidates:
-                    raise ValueError(
-                        "missing transport rate for facility "
-                        f"{facility.facility_id!r} and demand {demand.demand_id!r}"
-                    )
+        required_selectors = {
+            (facility.city_id, demand.city_id)
+            for facility in self.facilities
+            for demand in self.demand_points
+        }
+        missing_selectors = required_selectors - selectors
+        if missing_selectors:
+            raise ValueError(
+                "missing transport rates for "
+                f"{len(missing_selectors)} origin-region to destination-city lanes"
+            )
         return self
 
 
-class DemandLocation(StrictModel):
-    demand_id: str = Field(min_length=1, max_length=128)
-    location: Point
-    region: str | None = Field(default=None, max_length=128)
-    current_facility_id: str | None = Field(default=None, max_length=128)
-
-
-class OrderFact(StrictModel):
-    demand_id: str = Field(min_length=1, max_length=128)
-    order_date: date
+class CityDemand(StrictModel):
+    city_id: str = Field(min_length=1, max_length=128)
+    demand_date: date
     demand_units: int = Field(gt=0)
-    promotion: bool = False
-    actual_delivery_seconds: int | None = Field(default=None, ge=0)
+
+
+class WarehouseCityCoverage(StrictModel):
+    facility_id: str = Field(min_length=1, max_length=128)
+    city_id: str = Field(min_length=1, max_length=128)
+    is_current: bool = True
+
+
+class CityLane(StrictModel):
+    origin_city_id: str = Field(min_length=1, max_length=128)
+    destination_city_id: str = Field(min_length=1, max_length=128)
+    distance_km: Decimal = Field(ge=0)
+    travel_time_hours: Decimal = Field(ge=0)
+    base_cost_per_unit: NonNegativeMoney = Decimal("0")
+    distance_cost_per_km_per_unit: NonNegativeMoney = Decimal("0")
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
 
 
 class RouteFact(StrictModel):
-    origin_facility_id: str
-    destination_demand_id: str
+    origin_city_id: str
+    destination_city_id: str
     distance_meters: int | None = Field(default=None, ge=0)
     travel_seconds: int | None = Field(default=None, ge=0)
     status: Literal["ready", "unreachable", "error"] = "ready"
@@ -216,9 +214,7 @@ class RouteFact(StrictModel):
 
     @model_validator(mode="after")
     def ready_route_has_metrics(self) -> RouteFact:
-        if self.status == "ready" and (
-            self.distance_meters is None or self.travel_seconds is None
-        ):
+        if self.status == "ready" and (self.distance_meters is None or self.travel_seconds is None):
             raise ValueError("ready route entries require distance_meters and travel_seconds")
         return self
 
@@ -232,80 +228,92 @@ class PlanningSource(StrictModel):
     planning_period: str = Field(min_length=1, max_length=128)
     currency: str = Field(pattern=r"^[A-Z]{3}$")
     service_policy: ServicePolicy
-    demand_locations: list[DemandLocation] = Field(min_length=1)
+    cities: list[City] = Field(min_length=1)
+    city_demands: list[CityDemand] = Field(min_length=1)
     facilities: list[Facility] = Field(min_length=1)
-    transport_rates: list[TransportRate] = Field(min_length=1)
-    route_provider: str = Field(min_length=1, max_length=128)
+    warehouse_city_coverage: list[WarehouseCityCoverage] = Field(min_length=1)
+    lanes: list[CityLane] = Field(min_length=1)
+    route_provider: str = Field(default="workspace", min_length=1, max_length=128)
     route_method: Literal["navigation", "quoted", "haversine_estimate"]
-    route_entries: list[RouteFact] = Field(min_length=1)
-    orders: list[OrderFact] = Field(min_length=1)
+    data_classification: Literal["workspace_data", "synthetic_demo"] = Field(
+        default="workspace_data", alias="dataClassification"
+    )
+    demo_template: dict[str, Any] | None = Field(default=None, alias="demoTemplate")
 
     @model_validator(mode="after")
     def validate_source_references(self) -> PlanningSource:
-        demand_ids = [item.demand_id for item in self.demand_locations]
-        if len(demand_ids) != len(set(demand_ids)):
-            raise ValueError("duplicate demand location identifier")
-        facility_ids = {item.facility_id for item in self.facilities}
-        existing_facility_ids = {
-            item.facility_id for item in self.facilities if item.is_existing
-        }
+        city_by_id = {item.city_id: item for item in self.cities}
+        if len(city_by_id) != len(self.cities):
+            raise ValueError("duplicate city identifier")
+        existing_facility_ids = {item.facility_id for item in self.facilities if item.is_existing}
         if not existing_facility_ids:
             raise ValueError("planning source requires at least one existing facility")
-        for location in self.demand_locations:
-            if (
-                location.current_facility_id is not None
-                and location.current_facility_id not in existing_facility_ids
-            ):
-                raise ValueError(
-                    f"demand {location.demand_id!r} references unknown existing facility "
-                    f"{location.current_facility_id!r}"
-                )
-        demand_id_set = set(demand_ids)
-        for order in self.orders:
-            if order.demand_id not in demand_id_set:
-                raise ValueError(
-                    f"order references unknown demand location {order.demand_id!r}"
-                )
+        demand_city_ids = [item.city_id for item in self.city_demands]
+        if len(demand_city_ids) != len(set(demand_city_ids)):
+            raise ValueError("duplicate city demand identifier")
+        if any(city_id not in city_by_id for city_id in demand_city_ids):
+            raise ValueError("city demand references unknown city")
+        facility_ids = {facility.facility_id for facility in self.facilities}
+        for coverage in self.warehouse_city_coverage:
+            if coverage.facility_id not in facility_ids or coverage.city_id not in city_by_id:
+                raise ValueError("warehouse city coverage references unknown entity")
+            if coverage.is_current and coverage.facility_id not in existing_facility_ids:
+                raise ValueError("current coverage must reference an existing facility")
+        lane_pairs = [(lane.origin_city_id, lane.destination_city_id) for lane in self.lanes]
+        if len(lane_pairs) != len(set(lane_pairs)):
+            raise ValueError("duplicate city lane")
+        if any(
+            lane.origin_city_id not in city_by_id
+            or lane.destination_city_id not in city_by_id
+            or lane.currency != self.currency.upper()
+            for lane in self.lanes
+        ):
+            raise ValueError("city lane references unknown city or has a currency mismatch")
+        expected_pairs = {
+            (facility.city_id, city_id)
+            for facility in self.facilities
+            for city_id in demand_city_ids
+        }
+        if set(lane_pairs) != expected_pairs:
+            raise ValueError("planning source city lanes are incomplete")
+        current_coverage = {
+            coverage.city_id: coverage.facility_id
+            for coverage in self.warehouse_city_coverage
+            if coverage.is_current
+        }
+        if set(current_coverage) != set(demand_city_ids):
+            raise ValueError("current warehouse city coverage is incomplete")
+        if any(facility_id not in existing_facility_ids for facility_id in current_coverage.values()):
+            raise ValueError("current coverage references a non-existing facility")
         projected_demands = [
             DemandPoint(
-                demand_id=location.demand_id,
-                location=location.location,
-                demand_units=0,
-                region=location.region,
-                current_facility_id=location.current_facility_id,
+                demand_id=f"city-demand-{item.city_id}",
+                city_id=item.city_id,
+                location=city_by_id[item.city_id].location,
+                demand_units=item.demand_units,
+                region=city_by_id[item.city_id].region,
+                current_facility_id=current_coverage.get(item.city_id),
             )
-            for location in self.demand_locations
+            for item in self.city_demands
         ]
         NetworkInput(
             planning_period=self.planning_period,
             currency=self.currency,
             service_policy=self.service_policy,
+            cities=self.cities,
             demand_points=projected_demands,
             facilities=self.facilities,
-            transport_rates=self.transport_rates,
+            transport_rates=[
+                TransportRate(
+                    rate_id=f"rate-{lane.origin_city_id}-{lane.destination_city_id}",
+                    origin_city_id=lane.origin_city_id,
+                    destination_city_id=lane.destination_city_id,
+                    base_cost_per_unit=lane.base_cost_per_unit,
+                    distance_cost_per_km_per_unit=lane.distance_cost_per_km_per_unit,
+                )
+                for lane in self.lanes
+            ],
         )
-        route_pairs = [
-            (item.origin_facility_id, item.destination_demand_id)
-            for item in self.route_entries
-        ]
-        if len(route_pairs) != len(set(route_pairs)):
-            raise ValueError("planning source contains duplicate route pairs")
-        expected_route_pairs = {
-            (facility_id, demand_id)
-            for facility_id in facility_ids
-            for demand_id in demand_id_set
-        }
-        supplied_route_pairs = set(route_pairs)
-        unknown_route_pairs = supplied_route_pairs - expected_route_pairs
-        if unknown_route_pairs:
-            raise ValueError(
-                "planning source route references unknown facilities or demand nodes"
-            )
-        missing_route_pairs = expected_route_pairs - supplied_route_pairs
-        if missing_route_pairs:
-            raise ValueError(
-                f"planning source is missing {len(missing_route_pairs)} route pairs"
-            )
         return self
 
 
@@ -314,12 +322,12 @@ class PlanningSourceSummary(StrictModel):
     market: str = Field(pattern=r"^[A-Z]{2}$")
     label: str
     source_updated_at: datetime
-    order_row_count: int = Field(ge=0)
+    city_demand_row_count: int = Field(ge=0)
     demand_node_count: int = Field(ge=0)
     facility_count: int = Field(ge=0)
     existing_facility_count: int = Field(ge=0)
     candidate_facility_count: int = Field(ge=0)
-    route_count: int = Field(ge=0)
+    lane_count: int = Field(ge=0)
     date_from: date
     date_to: date
     demand_units: int = Field(ge=0)
@@ -330,7 +338,7 @@ class DemandDistributionRow(StrictModel):
     demand_id: str
     region: str | None
     demand_units: int = Field(ge=0)
-    order_row_count: int = Field(ge=0)
+    city_demand_row_count: int = Field(ge=0)
     promotion_units: int = Field(ge=0)
     promotion_share: float = Field(ge=0, le=1)
 
@@ -374,12 +382,14 @@ class PlanningDataset(StrictModel):
     # cross-agent handoff and replay.
     normalization: dict[str, Any] = Field(default_factory=dict)
     normalization_status: Literal["ready"] = "ready"
+    data_classification: Literal["workspace_data", "synthetic_demo"] = Field(
+        default="workspace_data", alias="dataClassification"
+    )
+    demo_template: dict[str, Any] | None = Field(default=None, alias="demoTemplate")
 
 
 class PlanningSourceInspection(StrictModel):
-    schema_version: Literal["planning_source_inspection.v2"] = (
-        "planning_source_inspection.v2"
-    )
+    schema_version: Literal["planning_source_inspection.v2"] = "planning_source_inspection.v2"
     source_summary: PlanningSourceSummary
     data_quality: PlanningDataQuality
 
@@ -394,20 +404,18 @@ class PlanningSourceCatalogEntry(StrictModel):
     service_policy_id: str = Field(min_length=1, max_length=128)
     date_from: date
     date_to: date
-    order_row_count: int = Field(ge=0)
+    city_demand_row_count: int = Field(ge=0)
     demand_units: int = Field(ge=0)
     demand_node_count: int = Field(ge=0)
     facility_count: int = Field(ge=0)
     existing_facility_count: int = Field(ge=0)
     candidate_facility_count: int = Field(ge=0)
-    route_count: int = Field(ge=0)
+    lane_count: int = Field(ge=0)
     regions: list[str]
 
 
 class PlanningSourceCatalog(StrictModel):
-    schema_version: Literal["planning_source_catalog.v2"] = (
-        "planning_source_catalog.v2"
-    )
+    schema_version: Literal["planning_source_catalog.v2"] = "planning_source_catalog.v2"
     sources: list[PlanningSourceCatalogEntry]
     truncated: bool = False
 
@@ -423,6 +431,11 @@ class NetworkSnapshot(NetworkInput):
     snapshot_id: str
     created_at: datetime = Field(default_factory=utc_now)
     source_name: str | None = None
+    source_digest: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    data_classification: Literal["workspace_data", "synthetic_demo"] = Field(
+        default="workspace_data", alias="dataClassification"
+    )
+    demo_template: dict[str, Any] | None = Field(default=None, alias="demoTemplate")
 
 
 class RouteEntry(RouteFact):
@@ -503,9 +516,7 @@ class ScenarioComparison(StrictModel):
 
 
 class FacilityLocationSolution(StrictModel):
-    schema_version: Literal["facility_location_solution.v1"] = (
-        "facility_location_solution.v1"
-    )
+    schema_version: Literal["facility_location_solution.v1"] = "facility_location_solution.v1"
     solution_id: str
     snapshot_id: str
     route_matrix_id: str

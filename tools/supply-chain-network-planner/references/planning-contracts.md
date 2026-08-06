@@ -4,13 +4,14 @@
 
 Every calculation starts from immutable MCP Resources:
 
-- `planning-dataset.v2`: typed market and source scope, demand distribution, promotion
-  share, delivery baseline, data quality, reviewed candidates, exact `network_input`,
-  and complete route facts.
+- `planning-dataset.v2`: typed market and source scope, city-period demand, warehouse-to-city
+  coverage, combined city-lane facts, delivery baseline, data quality, reviewed candidates,
+  and exact `network_input`.
 - `network_snapshot.v1`: planning period, currency, service policy, demand points,
   facilities, and rate rules.
-- `route_matrix.v1`: one provider/method and typed facility-demand route rows tied to
-  exactly one snapshot.
+- `route_matrix.v1`: one provider/method and typed origin-city to destination-city
+  route rows tied to exactly one snapshot. Multiple demand points in one city reuse
+  the same lane.
 - `network_scenario_result.v1`: allocations, issues, and metrics for one explicit
   facility set and calculation mode.
 - `scenario_comparison.v1`: deltas between compatible scenario results.
@@ -27,6 +28,14 @@ opaque `supply-chain://resources/...` URI. Data Agent handoffs use server
 content-addressed; changing source facts or assumptions creates a new Resource.
 Resource files default to the owning Profile's `CODEX_HOME`; they are not shared
 application or repository state.
+
+For the Data Agent intake path, `publish_mapping_proposal` accepts only the
+unchanged `source_profile.v1` `data_ref` as `source_profile_ref`. The Data MCP
+loads and validates that Resource from its own store before proposing fields.
+The source Profile must retain each source's nested `structure`; a flattened
+copy is invalid, and an empty mapping candidate result is a failed Tool call.
+Workspace `source_ref` values are file-inspection references and must not be
+passed to the MCP Resource reader.
 
 Every Resource-producing Tool also returns `resource_name` in its structured result.
 Use that exact stable name when citing evidence; never expose or relabel the opaque
@@ -63,7 +72,7 @@ remain separate Platform lifecycle work.
 
 ## Service time
 
-For facility `f` and demand point `d`:
+For facility `f` in origin city `o` and demand point `d` in destination city `c`:
 
 `end_to_end_seconds = order_cutoff_wait_seconds + facility.handling_seconds + route.travel_seconds + last_mile_buffer_seconds`
 
@@ -75,10 +84,11 @@ policy explicitly encodes the intended one-day promise.
 
 The modeled variable unit cost is:
 
-`facility.handling_cost_per_unit + rate.base_cost_per_unit + route.distance_km * rate.distance_cost_per_km_per_unit`
+`facility.handling_cost_per_unit + lane.base_cost_per_unit + lane.distance_km * lane.distance_cost_per_km_per_unit`
 
-The scenario total is variable allocation cost plus fixed cost for every active
-facility. Rate precedence is demand-specific, region-specific, then facility default.
+The lane is selected exactly by `(o.city_id, c.city_id)`; lanes never use a demand-point
+identifier. The scenario total is variable allocation cost plus fixed cost for every active
+facility.
 All costs use the snapshot currency and planning period.
 
 ## Allocation and location
@@ -95,9 +105,16 @@ for arbitrary points on a map.
 
 ## Known MVP boundary
 
-The Data MCP accepts only deployment-bound, de-identified `planning_source.v2` fixture
-or file-backed sources selected by a bounded source ID. It is not an arbitrary SQL
-console and does not yet connect to a governed enterprise query gateway.
+The Data MCP discovers only supported files in the trusted Turn Workspace and accepts
+opaque source references from that discovery. It has no packaged source catalog, source-ID
+fallback or arbitrary SQL interface. A separate Demo MCP may create one versioned synthetic
+source set only after explicit user authorization and only in an empty Workspace; those files
+still require the normal profile, mapping, confirmation and normalization flow.
+
+The large Demo template has bounded city-grain sources: 24 city-period demand rows, six
+facilities, 24 warehouse-to-city coverage rows and 144 combined city-to-city lanes. Demand
+does not carry a duplicate coordinate or synthetic order identifier; coordinates are owned by
+the City entity.
 
 The contract does not yet model multi-echelon inventory, safety stock, SKU-specific
 capacity, facility construction schedules, closure decisions, carrier step tariffs,

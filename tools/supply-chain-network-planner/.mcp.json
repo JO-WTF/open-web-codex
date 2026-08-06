@@ -27,6 +27,23 @@
         "no_proxy"
       ]
     },
+    "supply_chain_demo": {
+      "command": "./bin/supply-chain-planner-launcher",
+      "args": [
+        "--demo-server",
+        "--workspace-root",
+        "."
+      ],
+      "cwd": ".",
+      "default_tools_approval_mode": "approve",
+      "env_vars": [
+        "CODEX_HOME",
+        "OPEN_WEB_CODEX_DATA_DIR",
+        "OPEN_WEB_CODEX_LOG_DIR",
+        "OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV",
+        "SUPPLY_CHAIN_MCP_AUTO_INSTALL"
+      ]
+    },
     "supply_chain_planner": {
       "command": "./bin/supply-chain-planner-launcher",
       "args": [

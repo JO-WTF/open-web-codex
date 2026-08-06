@@ -230,19 +230,16 @@ def test_confirmed_mapping_builds_strict_planning_source(tmp_path: Path) -> None
         [
             {"name": "market", "value": "ID"},
             {"name": "planning_mode", "value": "candidate_warehouse_optimization"},
-            {"name": "planning_period", "value": "2026-01"},
-            {"name": "currency", "value": "IDR"},
             {"name": "cost_scope", "value": "fixed, opening, handling, transport"},
             {"name": "target_sla_hours", "value": 48},
             {"name": "coverage_target", "value": 95},
-            {"name": "route_source", "value": "estimated"},
-            {"name": "detour_factor", "value": 1.2},
-            {"name": "average_speed_kmh", "value": 40},
-            {"name": "daily_transport_hours", "value": 10},
         ],
     )
 
     assert source.currency == "IDR"
+    assert source.planning_period == "2026-01"
+    assert source.route_method == "quoted"
+    assert source.route_provider == "workspace-quoted-lanes"
     assert len(source.city_demands) == 1
     assert len(source.warehouse_city_coverage) == 1
     assert len(source.lanes) == 2

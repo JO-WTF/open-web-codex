@@ -462,12 +462,6 @@ def _build_planning_source(
     planning_mode = str(params.get("planning_mode") or "").strip().lower()
     if planning_mode != "candidate_warehouse_optimization":
         raise ValueError("planning_mode_must_be_candidate_warehouse_optimization")
-    planning_period = _text(params.get("planning_period"), None)
-    if not planning_period:
-        raise ValueError("planning_period_parameter_required")
-    currency = _text(params.get("currency"), None)
-    if not currency or not re.fullmatch(r"[A-Za-z]{3}", currency):
-        raise ValueError("currency_parameter_must_be_iso_code")
     if not _text(params.get("cost_scope"), None):
         raise ValueError("cost_scope_parameter_required")
     market = _text(params.get("market"), None)
@@ -477,10 +471,6 @@ def _build_planning_source(
     coverage_target = _number(params.get("coverage_target"))
     if target_sla_hours <= 0 or not 0 <= coverage_target <= 100:
         raise ValueError("service_target_parameters_out_of_range")
-    route_method = str(params.get("route_source") or "").strip().lower()
-    if route_method not in {"quoted", "navigation", "estimated"}:
-        raise ValueError("route_source_parameter_required")
-
     grouped: dict[str, list[dict[str, Any]]] = {}
     grouped_by_key: dict[str, dict[str, dict[str, Any]]] = {}
     for source_ref in source_refs:
@@ -540,6 +530,7 @@ def _build_planning_source(
         )
     if not city_demands:
         raise ValueError("planning_dataset_missing_city_demand")
+    planning_period = _derived_planning_period(item.demand_date for item in city_demands)
 
     facilities = []
     for row in grouped.get("Facility", []):
@@ -593,14 +584,17 @@ def _build_planning_source(
         raise ValueError("planning_dataset_current_coverage_required")
 
     lanes = []
+    currencies: set[str] = set()
     for row in grouped.get("Lane", []):
         origin_city_id = _text(row.get("origin_city_id"), None)
         destination_city_id = _text(row.get("destination_city_id"), None)
         rate_currency = _text(row.get("currency"), None)
         if not origin_city_id or not destination_city_id or not rate_currency:
             raise ValueError("planning_dataset_city_lane_fields_incomplete")
-        if rate_currency.upper() != currency.upper():
-            raise ValueError("planning_dataset_city_lane_currency_mismatch")
+        normalized_currency = rate_currency.upper()
+        if not re.fullmatch(r"[A-Z]{3}", normalized_currency):
+            raise ValueError("planning_dataset_city_lane_currency_invalid")
+        currencies.add(normalized_currency)
         lanes.append(
             CityLane(
                 origin_city_id=origin_city_id,
@@ -609,17 +603,14 @@ def _build_planning_source(
                 travel_time_hours=_number(row.get("travel_time_hours")),
                 base_cost_per_unit=_money(row.get("base_cost_per_unit")),
                 distance_cost_per_km_per_unit=_money(row.get("distance_cost_per_km_per_unit")),
-                currency=rate_currency.upper(),
+                currency=normalized_currency,
             )
         )
     if not lanes:
         raise ValueError("planning_dataset_missing_city_lanes")
-    normalized_route_method = {
-        "estimated": "haversine_estimate",
-        "haversine_estimate": "haversine_estimate",
-        "quoted": "quoted",
-        "navigation": "navigation",
-    }.get(route_method, "quoted")
+    if len(currencies) != 1:
+        raise ValueError("planning_dataset_city_lane_currency_mismatch")
+    currency = currencies.pop()
     source_metadata = workspace_source_metadata(root)
     source_hash = hashlib.sha256(json.dumps(source_refs, sort_keys=True).encode()).hexdigest()[:16]
     source = PlanningSource(
@@ -638,12 +629,22 @@ def _build_planning_source(
         facilities=facilities,
         warehouse_city_coverage=coverage,
         lanes=lanes,
-        route_provider=route_method or "workspace-route-facts",
-        route_method=normalized_route_method,
+        route_provider="workspace-quoted-lanes",
+        route_method="quoted",
         dataClassification=source_metadata["dataClassification"],
         demoTemplate=source_metadata.get("demoTemplate"),
     )
     return source
+
+
+def _derived_planning_period(dates: Any) -> str:
+    values = list(dates)
+    if not values:
+        raise ValueError("planning_dataset_missing_demand_dates")
+    start, end = min(values), max(values)
+    if start.year == end.year and start.month == end.month:
+        return f"{start.year:04d}-{start.month:02d}"
+    return f"{start.isoformat()} to {end.isoformat()}"
 
 
 def _text(value: Any, default: str | None) -> str | None:

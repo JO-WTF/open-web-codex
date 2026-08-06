@@ -1,23 +1,30 @@
 # Supply Chain Network Planner
 
-This Codex Plugin provides reviewed, read-only supply-chain MCP capabilities. Domain
+This Codex Plugin provides reviewed supply-chain MCP capabilities. Domain
 calculations and Resource publication stay in this package; Codex Runtime owns Tool,
 Skill, MCP and Agent execution.
 
 ## MCP boundaries
 
-The package declares three independent MCP Servers:
+The package declares four independent MCP Servers:
 
 | Server | Current owner and use |
 | --- | --- |
 | `supply_chain_data` | General bounded planning-source discovery and `planning-dataset.v2` publication |
+| `supply_chain_demo` | One explicit, approved, deterministic write into the current empty Workspace |
 | `supply_chain_planner` | General snapshot, route, scenario, facility, finance and risk Resources |
 | `supply_chain_indonesia` | Exact Workspace Dataset Release access and the progressive Indonesia tutorials |
 
-The current `enterprise-supervisor-copilot@4.0.0` delegates normal Network Planning
+The current `enterprise-supervisor-copilot@5.0.0` Draft delegates normal Network Planning
 to the bounded `supply_chain_data` intake server, the generic `supply_chain_planner`
 server and the separate `map_utils` Plugin. `supply_chain_indonesia` remains an
 independent tutorial capability and is not part of the normal Workspace intake path.
+
+`supply_chain_demo` creates the single reviewed `warehouse-network-large@1.0.0`
+template, which generates one city-demand row for each of 24 Indonesian cities.
+Warehouses are tied to cities, current coverage is warehouse-to-city, and each
+city-to-city lane combines distance, travel time and transport quote fields. The
+template therefore contains 24 city-demand rows, 24 coverage rows and 144 lanes.
 
 ## Indonesia tools
 
@@ -54,10 +61,10 @@ copy in model JSON—is the browser rendering authority.
 
 | Release | Exact capability boundary |
 | --- | --- |
-| `enterprise-data-agent@4.0.0` | Workspace-wide bounded Excel/CSV/JSON discovery, structural profiling, fuzzy mapping proposals and confirmed planning-dataset publication |
-| `enterprise-network-planning-agent@4.0.0` | Task-specific requirement profile, input-gap decision, readiness checklist and the smallest validated Indonesia network analysis |
+| `enterprise-data-agent@5.0.0` | Workspace-only discovery plus one explicitly requested empty-Workspace Demo generation Tool, profiling, mapping and confirmed normalization |
+| `enterprise-network-planning-agent@5.0.0` | Generic warehouse-network requirement profile, input-gap decision, readiness checklist and deterministic analysis without geography defaults |
 | `enterprise-visualization-agent@2.0.0` | Exact comparison-map/GeoJSON render preparation, provenance-only `MAP_HANDOFF` and one standalone Tool-owned embed directive |
-| `enterprise-supervisor-copilot@4.0.0` | Evidence-driven dynamic coordination, explicit user confirmations and same-Thread analysis handoff |
+| `enterprise-supervisor-copilot@5.0.0` Draft | Evidence-driven coordination, explicit Demo authorization, confirmed requirement-before-Demo order, no empty-Workspace fallback and same-Thread analysis handoff |
 
 The root Supervisor receives collaboration capabilities but no business MCP or shell. Child
 roles receive only their exact MCP Server, Tool and capability-root inventory. Disabled sibling

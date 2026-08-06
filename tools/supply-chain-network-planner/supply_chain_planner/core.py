@@ -5,14 +5,13 @@ from __future__ import annotations
 import hashlib
 import heapq
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 from itertools import combinations
-from typing import Iterable
 
 from .models import (
     Allocation,
-    DemandPoint,
     Facility,
     NetworkInput,
     NetworkMetrics,
@@ -59,22 +58,27 @@ def create_route_matrix(
     method: str,
     entries: list[RouteEntry],
 ) -> RouteMatrix:
-    facility_ids = {facility.facility_id for facility in snapshot.facilities}
-    demand_ids = {demand.demand_id for demand in snapshot.demand_points}
+    city_ids = {city.city_id for city in snapshot.cities}
+    expected_pairs = {
+        (facility.city_id, demand.city_id)
+        for facility in snapshot.facilities
+        for demand in snapshot.demand_points
+    }
     pairs: set[tuple[str, str]] = set()
     for entry in entries:
-        if entry.origin_facility_id not in facility_ids:
+        if entry.origin_city_id not in city_ids:
+            raise ValueError(f"route references unknown origin city {entry.origin_city_id!r}")
+        if entry.destination_city_id not in city_ids:
             raise ValueError(
-                f"route references unknown facility {entry.origin_facility_id!r}"
+                f"route references unknown destination city {entry.destination_city_id!r}"
             )
-        if entry.destination_demand_id not in demand_ids:
-            raise ValueError(
-                f"route references unknown demand {entry.destination_demand_id!r}"
-            )
-        pair = (entry.origin_facility_id, entry.destination_demand_id)
+        pair = (entry.origin_city_id, entry.destination_city_id)
         if pair in pairs:
             raise ValueError(f"duplicate route pair {pair!r}")
         pairs.add(pair)
+    unknown_pairs = pairs - expected_pairs
+    if unknown_pairs:
+        raise ValueError("route matrix contains lanes unused by the current network")
     payload = {
         "snapshot_id": snapshot.snapshot_id,
         "provider": provider,
@@ -91,56 +95,36 @@ def create_route_matrix(
 
 
 def _route_index(matrix: RouteMatrix) -> dict[tuple[str, str], RouteEntry]:
-    return {
-        (entry.origin_facility_id, entry.destination_demand_id): entry
-        for entry in matrix.entries
-    }
+    return {(entry.origin_city_id, entry.destination_city_id): entry for entry in matrix.entries}
 
 
 def _resolve_rate(
-    snapshot: NetworkSnapshot,
-    facility_id: str,
-    demand: DemandPoint,
+    rate_index: dict[tuple[str, str], TransportRate],
+    origin_city_id: str,
+    destination_city_id: str,
 ) -> TransportRate:
-    candidates = [
-        rate
-        for rate in snapshot.transport_rates
-        if rate.origin_facility_id == facility_id
-        and (
-            rate.destination_demand_id == demand.demand_id
-            or (
-                rate.destination_demand_id is None
-                and rate.destination_region == demand.region
-            )
-            or (
-                rate.destination_demand_id is None
-                and rate.destination_region is None
-            )
-        )
-    ]
-    if not candidates:
+    rate = rate_index.get((origin_city_id, destination_city_id))
+    if rate is None:
         raise ValueError(
-            f"missing transport rate for facility {facility_id!r} and demand "
-            f"{demand.demand_id!r}"
+            f"missing transport rate for origin city {origin_city_id!r} and destination "
+            f"city {destination_city_id!r}"
         )
-    return max(
-        candidates,
-        key=lambda rate: (
-            rate.destination_demand_id is not None,
-            rate.destination_region is not None,
-        ),
-    )
+    return rate
+
+
+def _rate_index(snapshot: NetworkSnapshot) -> dict[tuple[str, str], TransportRate]:
+    return {
+        (rate.origin_city_id, rate.destination_city_id): rate for rate in snapshot.transport_rates
+    }
 
 
 def _unit_cost(
-    snapshot: NetworkSnapshot,
     facility: Facility,
-    demand: DemandPoint,
+    rate: TransportRate,
     route: RouteEntry,
 ) -> tuple[Decimal, str]:
     if route.distance_meters is None:
         raise ValueError("ready route is missing distance")
-    rate = _resolve_rate(snapshot, facility.facility_id, demand)
     distance_km = Decimal(route.distance_meters) / Decimal("1000")
     cost = (
         facility.handling_cost_per_unit
@@ -194,11 +178,11 @@ def evaluate_current_assignment(
 ) -> NetworkScenarioResult:
     _ensure_compatible(snapshot, matrix)
     facilities = {
-        facility.facility_id: facility
-        for facility in snapshot.facilities
-        if facility.is_existing
+        facility.facility_id: facility for facility in snapshot.facilities if facility.is_existing
     }
     routes = _route_index(matrix)
+    city_by_id = {city.city_id: city for city in snapshot.cities}
+    rates = _rate_index(snapshot)
     allocations: list[Allocation] = []
     issues: list[str] = []
     used_capacity = {facility_id: 0 for facility_id in facilities}
@@ -233,7 +217,7 @@ def evaluate_current_assignment(
             )
             continue
         used_capacity[facility_id] += demand.demand_units
-        route = routes.get((facility_id, demand.demand_id))
+        route = routes.get((facility.city_id, demand.city_id))
         if route is None or route.status != "ready":
             allocations.append(
                 Allocation(
@@ -249,7 +233,8 @@ def evaluate_current_assignment(
             )
             continue
         end_to_end = _end_to_end_seconds(snapshot, facility, route)
-        unit_cost, rate_id = _unit_cost(snapshot, facility, demand, route)
+        rate = _resolve_rate(rates, facility.city_id, demand.city_id)
+        unit_cost, rate_id = _unit_cost(facility, rate, route)
         covered = end_to_end <= snapshot.service_policy.max_delivery_seconds
         allocations.append(
             Allocation(
@@ -378,29 +363,28 @@ def evaluate_optimized_network(
     if len(active_facility_ids) != len(set(active_facility_ids)):
         raise ValueError("active_facility_ids contains duplicates")
 
-    facilities = [
-        all_facilities[facility_id] for facility_id in sorted(active_facility_ids)
-    ]
+    facilities = [all_facilities[facility_id] for facility_id in sorted(active_facility_ids)]
     demands = sorted(snapshot.demand_points, key=lambda item: item.demand_id)
     routes = _route_index(matrix)
+    city_by_id = {city.city_id: city for city in snapshot.cities}
+    rates = _rate_index(snapshot)
     issues: list[str] = []
     total_demand = sum(item.demand_units for item in demands)
     max_unit_cost = 0
     eligible: dict[tuple[str, str], tuple[RouteEntry, Decimal, str, int]] = {}
     for demand in demands:
         for facility in facilities:
-            route = routes.get((facility.facility_id, demand.demand_id))
+            route = routes.get((facility.city_id, demand.city_id))
             if route is None:
-                issues.append(
-                    f"missing route: {facility.facility_id} -> {demand.demand_id}"
-                )
+                issues.append(f"missing route: {facility.facility_id} -> {demand.demand_id}")
                 continue
             if route.status != "ready":
                 continue
             end_to_end = _end_to_end_seconds(snapshot, facility, route)
             if end_to_end > snapshot.service_policy.max_delivery_seconds:
                 continue
-            unit_cost, rate_id = _unit_cost(snapshot, facility, demand, route)
+            rate = _resolve_rate(rates, facility.city_id, demand.city_id)
+            unit_cost, rate_id = _unit_cost(facility, rate, route)
             cost_units = int(
                 (unit_cost * COST_SCALE).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
             )
@@ -421,8 +405,7 @@ def evaluate_optimized_network(
     demand_edges: dict[tuple[str, str], _Edge] = {}
     uncovered_edges: dict[str, _Edge] = {}
     facility_nodes = {
-        facility.facility_id: facility_offset + index
-        for index, facility in enumerate(facilities)
+        facility.facility_id: facility_offset + index for index, facility in enumerate(facilities)
     }
     uncovered_penalty = (max_unit_cost + 1) * (total_demand + 1)
     for index, demand in enumerate(demands):
@@ -533,30 +516,21 @@ def compare_scenarios(
     return ScenarioComparison(
         baseline_result_id=baseline.result_id,
         candidate_result_id=candidate.result_id,
-        coverage_ratio_delta=(
-            candidate.metrics.coverage_ratio - baseline.metrics.coverage_ratio
-        ),
+        coverage_ratio_delta=(candidate.metrics.coverage_ratio - baseline.metrics.coverage_ratio),
         covered_demand_units_delta=(
-            candidate.metrics.covered_demand_units
-            - baseline.metrics.covered_demand_units
+            candidate.metrics.covered_demand_units - baseline.metrics.covered_demand_units
         ),
         total_cost_delta=candidate.metrics.total_cost - baseline.metrics.total_cost,
         fixed_cost_delta=candidate.metrics.fixed_cost - baseline.metrics.fixed_cost,
-        variable_cost_delta=(
-            candidate.metrics.variable_cost - baseline.metrics.variable_cost
-        ),
+        variable_cost_delta=(candidate.metrics.variable_cost - baseline.metrics.variable_cost),
     )
 
 
 def candidate_subsets(
     snapshot: NetworkSnapshot,
 ) -> tuple[list[str], list[str]]:
-    existing = sorted(
-        item.facility_id for item in snapshot.facilities if item.is_existing
-    )
-    candidates = sorted(
-        item.facility_id for item in snapshot.facilities if not item.is_existing
-    )
+    existing = sorted(item.facility_id for item in snapshot.facilities if item.is_existing)
+    candidates = sorted(item.facility_id for item in snapshot.facilities if not item.is_existing)
     if len(candidates) > MAX_EXACT_CANDIDATES:
         raise ValueError(
             f"exact location solver supports at most {MAX_EXACT_CANDIDATES} candidate "
@@ -593,11 +567,9 @@ def solve_location_candidates(
             evaluated += 1
             if (
                 best_infeasible is None
-                or result.metrics.coverage_ratio
-                > best_infeasible.metrics.coverage_ratio
+                or result.metrics.coverage_ratio > best_infeasible.metrics.coverage_ratio
                 or (
-                    result.metrics.coverage_ratio
-                    == best_infeasible.metrics.coverage_ratio
+                    result.metrics.coverage_ratio == best_infeasible.metrics.coverage_ratio
                     and (
                         len(subset),
                         result.metrics.total_cost,
@@ -635,6 +607,5 @@ def solve_location_candidates(
 def _ensure_compatible(snapshot: NetworkSnapshot, matrix: RouteMatrix) -> None:
     if matrix.snapshot_id != snapshot.snapshot_id:
         raise ValueError(
-            f"route matrix snapshot {matrix.snapshot_id!r} does not match "
-            f"{snapshot.snapshot_id!r}"
+            f"route matrix snapshot {matrix.snapshot_id!r} does not match {snapshot.snapshot_id!r}"
         )

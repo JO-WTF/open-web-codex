@@ -9,41 +9,52 @@
     "last_mile_buffer_seconds": 7200,
     "label": "One-day end-to-end promise"
   },
+  "cities": [
+    {"city_id": "city-shanghai", "name": "Shanghai", "region": "shanghai", "location": {"latitude": 31.2304, "longitude": 121.4737}},
+    {"city_id": "city-suzhou", "name": "Suzhou", "region": "jiangsu", "location": {"latitude": 31.2989, "longitude": 120.5853}},
+    {"city_id": "city-hangzhou", "name": "Hangzhou", "region": "zhejiang", "location": {"latitude": 30.2741, "longitude": 120.1551}},
+    {"city_id": "city-nanjing", "name": "Nanjing", "region": "jiangsu", "location": {"latitude": 32.0603, "longitude": 118.7969}},
+    {"city_id": "city-wuxi", "name": "Wuxi", "region": "jiangsu", "location": {"latitude": 31.4912, "longitude": 120.3119}}
+  ],
   "demand_points": [
     {
       "demand_id": "demand-shanghai",
+      "city_id": "city-shanghai",
       "location": {
         "latitude": 31.2304,
         "longitude": 121.4737
       },
       "demand_units": 40,
-      "region": "east",
+      "region": "shanghai",
       "current_facility_id": "warehouse-shanghai"
     },
     {
       "demand_id": "demand-suzhou",
+      "city_id": "city-suzhou",
       "location": {
         "latitude": 31.2989,
         "longitude": 120.5853
       },
       "demand_units": 35,
-      "region": "east",
+      "region": "jiangsu",
       "current_facility_id": "warehouse-shanghai"
     },
     {
       "demand_id": "demand-hangzhou",
+      "city_id": "city-hangzhou",
       "location": {
         "latitude": 30.2741,
         "longitude": 120.1551
       },
       "demand_units": 25,
-      "region": "east",
+      "region": "zhejiang",
       "current_facility_id": "warehouse-shanghai"
     }
   ],
   "facilities": [
     {
       "facility_id": "warehouse-shanghai",
+      "city_id": "city-shanghai",
       "location": {
         "latitude": 31.18,
         "longitude": 121.43
@@ -57,6 +68,7 @@
     },
     {
       "facility_id": "warehouse-nanjing",
+      "city_id": "city-nanjing",
       "location": {
         "latitude": 32.0603,
         "longitude": 118.7969
@@ -70,6 +82,7 @@
     },
     {
       "facility_id": "candidate-hangzhou",
+      "city_id": "city-hangzhou",
       "location": {
         "latitude": 30.25,
         "longitude": 120.20
@@ -83,6 +96,7 @@
     },
     {
       "facility_id": "candidate-wuxi",
+      "city_id": "city-wuxi",
       "location": {
         "latitude": 31.4912,
         "longitude": 120.3119
@@ -96,29 +110,17 @@
     }
   ],
   "transport_rates": [
-    {
-      "rate_id": "rate-shanghai-default",
-      "origin_facility_id": "warehouse-shanghai",
-      "base_cost_per_unit": "2.00",
-      "distance_cost_per_km_per_unit": "0.020"
-    },
-    {
-      "rate_id": "rate-nanjing-default",
-      "origin_facility_id": "warehouse-nanjing",
-      "base_cost_per_unit": "2.20",
-      "distance_cost_per_km_per_unit": "0.018"
-    },
-    {
-      "rate_id": "rate-hangzhou-default",
-      "origin_facility_id": "candidate-hangzhou",
-      "base_cost_per_unit": "1.80",
-      "distance_cost_per_km_per_unit": "0.015"
-    },
-    {
-      "rate_id": "rate-wuxi-default",
-      "origin_facility_id": "candidate-wuxi",
-      "base_cost_per_unit": "2.00",
-      "distance_cost_per_km_per_unit": "0.018"
-    }
+    {"rate_id": "rate-shanghai-shanghai", "origin_city_id": "city-shanghai", "destination_city_id": "city-shanghai", "base_cost_per_unit": "1.00", "distance_cost_per_km_per_unit": "0.020"},
+    {"rate_id": "rate-shanghai-suzhou", "origin_city_id": "city-shanghai", "destination_city_id": "city-suzhou", "base_cost_per_unit": "1.10", "distance_cost_per_km_per_unit": "0.020"},
+    {"rate_id": "rate-shanghai-hangzhou", "origin_city_id": "city-shanghai", "destination_city_id": "city-hangzhou", "base_cost_per_unit": "1.20", "distance_cost_per_km_per_unit": "0.020"},
+    {"rate_id": "rate-jiangsu-shanghai", "origin_city_id": "city-nanjing", "destination_city_id": "city-shanghai", "base_cost_per_unit": "1.00", "distance_cost_per_km_per_unit": "0.018"},
+    {"rate_id": "rate-jiangsu-suzhou", "origin_city_id": "city-nanjing", "destination_city_id": "city-suzhou", "base_cost_per_unit": "1.10", "distance_cost_per_km_per_unit": "0.018"},
+    {"rate_id": "rate-jiangsu-hangzhou", "origin_city_id": "city-nanjing", "destination_city_id": "city-hangzhou", "base_cost_per_unit": "1.20", "distance_cost_per_km_per_unit": "0.018"},
+    {"rate_id": "rate-zhejiang-shanghai", "origin_city_id": "city-hangzhou", "destination_city_id": "city-shanghai", "base_cost_per_unit": "0.90", "distance_cost_per_km_per_unit": "0.015"},
+    {"rate_id": "rate-zhejiang-suzhou", "origin_city_id": "city-hangzhou", "destination_city_id": "city-suzhou", "base_cost_per_unit": "1.00", "distance_cost_per_km_per_unit": "0.015"},
+    {"rate_id": "rate-zhejiang-hangzhou", "origin_city_id": "city-hangzhou", "destination_city_id": "city-hangzhou", "base_cost_per_unit": "0.80", "distance_cost_per_km_per_unit": "0.015"},
+    {"rate_id": "rate-wuxi-shanghai", "origin_city_id": "city-wuxi", "destination_city_id": "city-shanghai", "base_cost_per_unit": "1.00", "distance_cost_per_km_per_unit": "0.017"},
+    {"rate_id": "rate-wuxi-suzhou", "origin_city_id": "city-wuxi", "destination_city_id": "city-suzhou", "base_cost_per_unit": "1.00", "distance_cost_per_km_per_unit": "0.017"},
+    {"rate_id": "rate-wuxi-hangzhou", "origin_city_id": "city-wuxi", "destination_city_id": "city-hangzhou", "base_cost_per_unit": "1.00", "distance_cost_per_km_per_unit": "0.017"}
   ]
 }

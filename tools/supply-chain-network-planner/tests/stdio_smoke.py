@@ -54,12 +54,39 @@ async def smoke() -> None:
         state_root = Path(directory)
         workspace = state_root / "workspace"
         workspace.mkdir()
+        demo_workspace = state_root / "demo-workspace"
+        demo_workspace.mkdir()
+        environment = server_environment(state_root)
+        demo_parameters = StdioServerParameters(
+            command=str(LAUNCHER),
+            args=["--demo-server", "--workspace-root", str(ROOT)],
+            cwd=str(ROOT),
+            env=environment,
+        )
+        async with stdio_client(demo_parameters) as streams:
+            async with ClientSession(*streams) as session:
+                initialized = await asyncio.wait_for(session.initialize(), timeout=10)
+                assert SANDBOX_META in (initialized.capabilities.experimental or {})
+                tools = await asyncio.wait_for(session.list_tools(), timeout=10)
+                assert [tool.name for tool in tools.tools] == ["create_demo_workspace_sources"]
+                missing_meta = await asyncio.wait_for(
+                    session.call_tool("create_demo_workspace_sources", {}), timeout=10
+                )
+                assert missing_meta.isError is True
+                meta = workspace_meta(demo_workspace)
+                created = await asyncio.wait_for(
+                    session.call_tool("create_demo_workspace_sources", {}, meta=meta), timeout=10
+                )
+                reused = await asyncio.wait_for(
+                    session.call_tool("create_demo_workspace_sources", {}, meta=meta), timeout=10
+                )
+                assert created.structuredContent["status"] == "created"
+                assert reused.structuredContent["status"] == "reused"
+                assert created.structuredContent["dataClassification"] == "synthetic_demo"
         (workspace / "network.csv").write_text(
-            "demand_location_id,name,region,latitude,longitude\n"
-            "d-1,Jakarta,Jakarta,-6.2,106.8\n",
+            "demand_location_id,name,region,latitude,longitude\nd-1,Jakarta,Jakarta,-6.2,106.8\n",
             encoding="utf-8",
         )
-        environment = server_environment(state_root)
         data_parameters = StdioServerParameters(
             command=str(LAUNCHER),
             args=["--data-server", "--workspace-root", str(workspace)],
@@ -79,6 +106,11 @@ async def smoke() -> None:
                     "normalize_planning_dataset",
                     "validate_planning_dataset",
                 } <= names
+                mapping_tool = next(
+                    tool for tool in tools.tools if tool.name == "publish_mapping_proposal"
+                )
+                assert "source_profile_ref" in mapping_tool.inputSchema["properties"]
+                assert "source_profile" not in mapping_tool.inputSchema["properties"]
                 meta = workspace_meta(workspace)
                 discovered = await asyncio.wait_for(
                     session.call_tool("discover_workspace_sources", {}, meta=meta), timeout=10
@@ -94,17 +126,14 @@ async def smoke() -> None:
                 )
                 assert profiled.isError is not True
                 profile_ref = profiled.structuredContent["data_ref"]
-                source_profile = await read_resource(session, profile_ref)
-                assert source_profile["schemaVersion"] == "source_profile.v1"
                 requirement_profile = {
                     "schemaVersion": "data_requirement_profile.v1",
                     "entities": [
                         {
-                            "name": "DemandLocation",
+                            "name": "CityDemand",
                             "requiredFields": [
-                                {"name": "demand_location_id"},
+                                {"name": "name"},
                                 {"name": "latitude"},
-                                {"name": "longitude"},
                             ],
                         }
                     ],
@@ -113,7 +142,7 @@ async def smoke() -> None:
                     session.call_tool(
                         "publish_mapping_proposal",
                         {
-                            "source_profile": source_profile,
+                            "source_profile_ref": profile_ref,
                             "requirement_profile": requirement_profile,
                         },
                     ),
@@ -123,8 +152,15 @@ async def smoke() -> None:
                 assert mapping.structuredContent["data_ref"]["resource_schema"] == (
                     "mapping_proposal.v1"
                 )
+                proposal = await read_resource(
+                    session, mapping.structuredContent["data_ref"]
+                )
+                assert proposal["candidates"]
         planning_parameters = StdioServerParameters(
-            command=str(LAUNCHER), args=["--workspace-root", str(workspace)], cwd=str(ROOT), env=environment
+            command=str(LAUNCHER),
+            args=["--workspace-root", str(workspace)],
+            cwd=str(ROOT),
+            env=environment,
         )
         async with stdio_client(planning_parameters) as streams:
             async with ClientSession(*streams) as session:

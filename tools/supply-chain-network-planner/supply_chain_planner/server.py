@@ -12,13 +12,18 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import UTC, datetime
-from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Literal
 
 from mcp.server.fastmcp import FastMCP
-from mcp.types import CallToolResult, EmbeddedResource, ResourceLink, TextContent, TextResourceContents
-from pydantic import ValidationError
+from mcp.types import (
+    CallToolResult,
+    EmbeddedResource,
+    ResourceLink,
+    TextContent,
+    TextResourceContents,
+)
+from pydantic import Field, ValidationError
 
 from .core import (
     compare_scenarios,
@@ -44,14 +49,14 @@ from .models import (
     FacilityLocationToolResult,
     FinancialEvaluation,
     FinancialEvaluationToolResult,
+    MapDataRef,
     NetworkInput,
     NetworkMapRenderToolResult,
     NetworkMapToolResult,
     NetworkPlanningReportToolResult,
-    NetworkSnapshotPreparationToolResult,
     NetworkScenarioResult,
     NetworkSnapshot,
-    MapDataRef,
+    NetworkSnapshotPreparationToolResult,
     PlanningDataset,
     ResourceToolResult,
     RiskItem,
@@ -65,6 +70,7 @@ from .models import (
 from .resource_store import PublishedResource, ResourceStore, data_ref
 
 MAX_SOURCE_BYTES = 20 * 1024 * 1024
+MAX_PROFILE_GOAL_CHARS = 8_000
 
 mcp = FastMCP(
     "Supply Chain Network Planner",
@@ -85,12 +91,12 @@ mcp = FastMCP(
 
 _workspace_root = Path.cwd().resolve()
 _data_root = Path(os.environ.get("SUPPLY_CHAIN_DATA_ROOT", _workspace_root)).resolve()
-_profile_state_root = Path(
-    os.environ.get("CODEX_HOME", _workspace_root / ".codex")
-).resolve()
+_profile_state_root = Path(os.environ.get("CODEX_HOME", _workspace_root / ".codex")).resolve()
 _resource_store: ResourceStore | None = None
 _data_resource_store: ResourceStore | None = None
-_CONTRACT_PATH = Path(__file__).resolve().parents[1] / "contracts" / "indonesia-warehouse-network-2.0.0.json"
+_CONTRACT_PATH = (
+    Path(__file__).resolve().parents[1] / "contracts" / "warehouse-network-planning-1.0.0.json"
+)
 
 
 def _store() -> ResourceStore:
@@ -99,10 +105,7 @@ def _store() -> ResourceStore:
         resource_root = Path(
             os.environ.get(
                 "SUPPLY_CHAIN_RESOURCE_DIR",
-                _profile_state_root
-                / "mcp-state"
-                / "supply-chain-network-planner"
-                / "resources",
+                _profile_state_root / "mcp-state" / "supply-chain-network-planner" / "resources",
             )
         ).resolve()
         _resource_store = ResourceStore(resource_root)
@@ -172,14 +175,14 @@ def _require_analysis_gate(
     timestamp = str(int(time.time()))
     parsed = urllib.parse.urlparse(gate_url)
     path = parsed.path or "/"
-    message = "\n".join(
-        [timestamp, "POST", path, hashlib.sha256(body).hexdigest()]
-    ).encode("utf-8")
+    message = "\n".join([timestamp, "POST", path, hashlib.sha256(body).hexdigest()]).encode("utf-8")
     import hmac
 
-    signature = base64.urlsafe_b64encode(hmac.new(key, message, hashlib.sha256).digest()).decode(
-        "ascii"
-    ).rstrip("=")
+    signature = (
+        base64.urlsafe_b64encode(hmac.new(key, message, hashlib.sha256).digest())
+        .decode("ascii")
+        .rstrip("=")
+    )
     request = urllib.request.Request(
         gate_url,
         data=body,
@@ -247,17 +250,26 @@ def _resource_call_result(
     summary: str,
     structured: dict[str, object],
 ) -> CallToolResult:
-    content: list[object] = [TextContent(type="text", text=summary), _resource_link(published, summary)]
-    if published.schema in {
-        "data_requirement_profile.v1",
-        "source_profile.v1",
-        "mapping_proposal.v1",
-        "input_gap.v1",
-        "planning-dataset.v2",
-        "analysis_readiness_review.v1",
-    } and published.size > 128 * 1024:
+    content: list[object] = [
+        TextContent(type="text", text=summary),
+        _resource_link(published, summary),
+    ]
+    if (
+        published.schema
+        in {
+            "data_requirement_profile.v1",
+            "source_profile.v1",
+            "mapping_proposal.v1",
+            "input_gap.v1",
+            "planning-dataset.v2",
+            "analysis_readiness_review.v1",
+        }
+        and published.size > 128 * 1024
+    ):
         payload = _store().load_uri(published.uri)
-        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        encoded = json.dumps(
+            payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode()
         envelope = {
             "schemaVersion": payload.get("schemaVersion"),
             "contract": payload.get("contract"),
@@ -268,20 +280,49 @@ def _resource_call_result(
             "resourceContentSha256": hashlib.sha256(encoded).hexdigest(),
         }
         for key in (
-            "taskGoal", "problemType", "entities", "requiredEntities", "parameters",
-            "outputs", "conditionalRequirements", "assumptions", "exclusions",
-            "inputRequest", "sources", "candidates", "gaps", "ready", "summary",
-            "checks", "plannedAnalysis", "limitations", "normalization_status",
-            "data_quality", "source_summary", "normalization_statistics", "rejections",
+            "taskGoal",
+            "problemType",
+            "entities",
+            "requiredEntities",
+            "parameters",
+            "outputs",
+            "conditionalRequirements",
+            "assumptions",
+            "exclusions",
+            "inputRequest",
+            "sources",
+            "candidates",
+            "gaps",
+            "ready",
+            "summary",
+            "checks",
+            "plannedAnalysis",
+            "limitations",
+            "normalization_status",
+            "data_quality",
+            "source_summary",
+            "normalization_statistics",
+            "rejections",
         ):
             if key in payload:
                 envelope[key] = payload[key]
-        envelope_text = json.dumps(envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        envelope_text = json.dumps(
+            envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
         if len(envelope_text.encode()) > 128 * 1024:
-            for key in ("sources", "candidates", "entities", "requiredEntities", "checks", "limitations"):
+            for key in (
+                "sources",
+                "candidates",
+                "entities",
+                "requiredEntities",
+                "checks",
+                "limitations",
+            ):
                 if isinstance(envelope.get(key), list):
                     envelope[key] = envelope[key][:128]
-            envelope_text = json.dumps(envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            envelope_text = json.dumps(
+                envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            )
         if len(envelope_text.encode()) > 128 * 1024:
             raise ValueError("intake_evidence_envelope_exceeds_platform_limit")
         content.append(
@@ -329,6 +370,23 @@ def _load_planning_dataset(ref: DataAgentRef) -> PlanningDataset:
     if ref.server != "supply_chain_data" or ref.resource_schema != "planning-dataset.v2":
         raise ValueError("planning_dataset_ref must identify supply_chain_data planning-dataset.v2")
     payload = _data_store().load_uri(ref.uri)
+    if payload.get("schemaVersion") != "planning-dataset.v2":
+        raise ValueError("planning dataset is missing current provenance")
+    contract = payload.get("contract")
+    if not isinstance(contract, dict) or (contract.get("contractId"), contract.get("version")) != (
+        "warehouse-network-planning",
+        "1.0.0",
+    ):
+        raise ValueError("planning dataset does not use the current requirement contract")
+    normalization = payload.get("normalization")
+    if not isinstance(normalization, dict):
+        raise ValueError("planning dataset normalization provenance is missing")
+    for key in ("profile_confirmation", "mapping", "parameters"):
+        confirmation = normalization.get(key)
+        if not isinstance(confirmation, dict) or confirmation.get("confirmed") is not True:
+            raise ValueError(f"planning dataset {key} confirmation is missing")
+    if payload.get("dataClassification") not in {"workspace_data", "synthetic_demo"}:
+        raise ValueError("planning dataset classification is missing")
     dataset = PlanningDataset.model_validate(payload)
     if dataset.data_quality.errors:
         raise ValueError(
@@ -345,8 +403,11 @@ def _load_contract() -> dict[str, object]:
     Agent owns the contract and publishes the task-specific projection.
     """
     payload = json.loads(_CONTRACT_PATH.read_text(encoding="utf-8"))
-    if payload.get("contractId") != "indonesia-warehouse-network" or payload.get("version") != "2.0.0":
-        raise ValueError("indonesia_requirement_contract_unavailable")
+    if (
+        payload.get("contractId") != "warehouse-network-planning"
+        or payload.get("version") != "1.0.0"
+    ):
+        raise ValueError("warehouse_network_requirement_contract_unavailable")
     return payload
 
 
@@ -383,16 +444,41 @@ def _canonical_hash(value: object) -> str:
     ).hexdigest()
 
 
+def _normalize_profile_goal(goal: str) -> str:
+    normalized = goal.strip()
+    if not normalized or len(normalized) > MAX_PROFILE_GOAL_CHARS:
+        raise ValueError(
+            f"goal must contain 1-{MAX_PROFILE_GOAL_CHARS} characters; "
+            "pass a concise business objective, not the complete data Profile"
+        )
+    return normalized
+
+
 @mcp.tool(structured_output=True)
 def publish_data_requirement_profile(
-    goal: str,
+    goal: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=MAX_PROFILE_GOAL_CHARS,
+            description=(
+                "Short business objective and user-specific requirements only. "
+                "Do not paste the complete Profile, entity fields, validation rules, "
+                "keys, row counts or file format; those come from the reviewed contract."
+            ),
+        ),
+    ],
     requested_outputs: list[str] | None = None,
     analysis_mode: Literal["candidate_warehouse_optimization"] = "candidate_warehouse_optimization",
 ) -> Annotated[CallToolResult, ResourceToolResult]:
-    """Create the complete user-confirmable Profile for the network question."""
-    goal = goal.strip()
-    if not goal or len(goal) > 4000:
-        raise ValueError("goal must contain 1-4000 characters")
+    """Create the complete user-confirmable Profile for the network question.
+
+    ``goal`` is only the business objective. The reviewed contract supplies the
+    complete entities, fields, validation rules, keys, row counts, parameters
+    and default output definitions. Do not duplicate those details in ``goal``.
+    Use ``requested_outputs`` and ``analysis_mode`` for their typed options.
+    """
+    goal = _normalize_profile_goal(goal)
     contract = _load_contract()
     outputs = requested_outputs or ["report", "map"]
     if not outputs or any(not isinstance(item, str) or not item.strip() for item in outputs):
@@ -407,14 +493,20 @@ def publish_data_requirement_profile(
             "parameters": contract["businessParameters"],
             "outputs": outputs,
             "conditionalRequirements": [
-                "Route facts are required for quoted/navigation routes; otherwise coordinates and confirmed estimation parameters are required.",
-                "Candidate warehouse optimization requires candidate facilities, capacity and fixed/opening costs.",
+                "Route facts are required for quoted/navigation routes; otherwise "
+                "coordinates and confirmed estimation parameters are required.",
+                "Candidate warehouse optimization requires candidate facilities, "
+                "capacity and fixed/opening costs.",
             ],
             "assumptions": [
                 "Only files and fields confirmed by the user will enter the planning dataset.",
                 "No tutorial defaults are applied.",
             ],
-            "exclusions": ["real-time navigation", "live carrier pricing", "unbounded source reads"],
+            "exclusions": [
+                "real-time navigation",
+                "live carrier pricing",
+                "unbounded source reads",
+            ],
             "inputRequest": {
                 "kind": "confirm_profile",
                 "prompt": "请确认完整数据需求 Profile；任何字段或参数修改请作为普通消息提出。",
@@ -422,7 +514,9 @@ def publish_data_requirement_profile(
         },
     )
     published = _store().publish("data_requirement_profile.v1", profile_payload)
-    summary = "Published the complete candidate-warehouse data requirement profile for user confirmation."
+    summary = (
+        "Published the complete candidate-warehouse data requirement profile for user confirmation."
+    )
     structured = ResourceToolResult(
         summary=summary,
         resource_name=published.resource_id,
@@ -435,7 +529,10 @@ def _load_planner_payload(ref: DataRef) -> dict[str, object]:
     if ref.server != "supply_chain_planner":
         raise ValueError("profile_ref must identify a supply_chain_planner Resource")
     payload = _store().load(ref)
-    if payload.get("schema_version") not in {ref.resource_schema, None} and payload.get("schemaVersion") != ref.resource_schema:
+    if (
+        payload.get("schema_version") not in {ref.resource_schema, None}
+        and payload.get("schemaVersion") != ref.resource_schema
+    ):
         raise ValueError("profile Resource schema does not match its reference")
     return payload
 
@@ -470,23 +567,45 @@ def publish_input_gap(
     answers = parameter_answers or {}
     gaps: list[dict[str, object]] = []
     if (profile_confirmation or {}).get("confirmed") is not True:
-        gaps.append({
-            "code": "confirm_profile",
-            "message": "需要用户确认完整的数据需求 Profile。",
-        })
+        gaps.append(
+            {
+                "code": "confirm_profile",
+                "message": "需要用户确认完整的数据需求 Profile。",
+            }
+        )
     if source is None or not source.get("sources"):
-        gaps.append({"code": "provide_data", "message": "需要 Workspace 中可识别的 Excel、CSV 或 JSON 数据。"})
-    if source is not None and (mapping is None or not (mapping_confirmation or {}).get("confirmed") is True):
-        gaps.append({"code": "confirm_mapping", "message": "需要 Data Agent 生成并由用户整体确认字段映射。"})
+        gaps.append(
+            {
+                "code": "provide_data",
+                "message": "需要 Workspace 中可识别的 Excel、CSV 或 JSON 数据。",
+            }
+        )
+    if source is not None and (
+        mapping is None or (mapping_confirmation or {}).get("confirmed") is not True
+    ):
+        gaps.append(
+            {"code": "confirm_mapping", "message": "需要 Data Agent 生成并由用户整体确认字段映射。"}
+        )
     required_parameters = [
-        item.get("name") for item in profile.get("parameters", []) if isinstance(item, dict) and item.get("required")
+        item.get("name")
+        for item in profile.get("parameters", [])
+        if isinstance(item, dict) and item.get("required")
     ]
     missing_parameters = [key for key in required_parameters if key not in answers]
     if missing_parameters:
-        gaps.append({"code": "answer_parameters", "parameters": missing_parameters, "message": "请补充带单位、来源和范围的业务参数。"})
+        gaps.append(
+            {
+                "code": "answer_parameters",
+                "parameters": missing_parameters,
+                "message": "请补充带单位、来源和范围的业务参数。",
+            }
+        )
     request_kind = next(
-        (kind for kind in ("confirm_profile", "provide_data", "confirm_mapping", "answer_parameters")
-         if any(item["code"] == kind for item in gaps)),
+        (
+            kind
+            for kind in ("confirm_profile", "provide_data", "confirm_mapping", "answer_parameters")
+            if any(item["code"] == kind for item in gaps)
+        ),
         None,
     )
     payload = _intake_envelope(
@@ -494,7 +613,11 @@ def publish_input_gap(
         {
             "gaps": gaps,
             "ready": not gaps,
-            "inputRequest": ({"kind": request_kind, "prompt": "请补齐以下最小缺口后继续。"} if request_kind else None),
+            "inputRequest": (
+                {"kind": request_kind, "prompt": "请补齐以下最小缺口后继续。"}
+                if request_kind
+                else None
+            ),
         },
         profile_hash=_canonical_hash(profile),
         source_hash=_canonical_hash(source) if source is not None else None,
@@ -503,7 +626,9 @@ def publish_input_gap(
     )
     published = _store().publish("input_gap.v1", payload)
     summary = "Input gap is clear." if gaps else "No blocking input gap remains."
-    structured = ResourceToolResult(summary=summary, resource_name=published.resource_id, data_ref=data_ref(published)).model_dump(mode="json")
+    structured = ResourceToolResult(
+        summary=summary, resource_name=published.resource_id, data_ref=data_ref(published)
+    ).model_dump(mode="json")
     return _resource_call_result(published, summary=summary, structured=structured)
 
 
@@ -522,12 +647,13 @@ def publish_analysis_readiness_review(
     source = _load_data_payload(source_profile_ref, "source_profile.v1")
     mapping = _load_data_payload(mapping_proposal_ref, "mapping_proposal.v1")
     dataset = _load_planning_dataset(planning_dataset_ref)
-    profile_is_confirmed = profile_confirmation is not None and profile_confirmation.get("confirmed") is True
+    profile_is_confirmed = (
+        profile_confirmation is not None and profile_confirmation.get("confirmed") is True
+    )
     if not profile_is_confirmed:
         raise ValueError("profile_confirmation_required")
     mapping_is_confirmed = mapping.get("confirmed") is True or (
-        mapping_confirmation is not None
-        and mapping_confirmation.get("confirmed") is True
+        mapping_confirmation is not None and mapping_confirmation.get("confirmed") is True
     )
     if not mapping_is_confirmed:
         raise ValueError("mapping_confirmation_required")
@@ -552,7 +678,13 @@ def publish_analysis_readiness_review(
                 "demand, facility, assignment and route relationships validated",
                 "mapping and parameters confirmed by the user",
             ],
-            "plannedAnalysis": ["current coverage", "candidate warehouse optimization", "scenario comparison", "report", "map"],
+            "plannedAnalysis": [
+                "current coverage",
+                "candidate warehouse optimization",
+                "scenario comparison",
+                "report",
+                "map",
+            ],
             "limitations": dataset.assumptions,
             "inputRequest": {
                 "kind": "confirm_analysis",
@@ -566,7 +698,9 @@ def publish_analysis_readiness_review(
     )
     published = _store().publish("analysis_readiness_review.v1", review)
     summary = "Final analysis checklist is ready for explicit user confirmation."
-    structured = ResourceToolResult(summary=summary, resource_name=published.resource_id, data_ref=data_ref(published)).model_dump(mode="json")
+    structured = ResourceToolResult(
+        summary=summary, resource_name=published.resource_id, data_ref=data_ref(published)
+    ).model_dump(mode="json")
     return _resource_call_result(published, summary=summary, structured=structured)
 
 
@@ -642,12 +776,15 @@ def prepare_network_snapshot_from_planning_dataset(
     snapshot = create_snapshot(
         dataset.network_input,
         source_name=dataset.dataset_id,
+    ).model_copy(
+        update={
+            "source_digest": dataset.source_digest,
+            "data_classification": dataset.data_classification,
+            "demo_template": dataset.demo_template,
+        }
     )
     snapshot_published = _store().publish(snapshot.schema_version, snapshot)
-    entries = [
-        RouteEntry.model_validate(route.model_dump())
-        for route in dataset.route_entries
-    ]
+    entries = [RouteEntry.model_validate(route.model_dump()) for route in dataset.route_entries]
     matrix = create_route_matrix(
         snapshot,
         provider=dataset.route_provider,
@@ -701,24 +838,17 @@ def register_route_matrix(
     )
     snapshot = _load_ref(snapshot_ref, NetworkSnapshot)
     expected_pairs = {
-        (facility.facility_id, demand.demand_id)
+        (facility.city_id, demand.city_id)
         for facility in snapshot.facilities
         for demand in snapshot.demand_points
     }
-    supplied_pairs = {
-        (entry.origin_facility_id, entry.destination_demand_id) for entry in entries
-    }
+    supplied_pairs = {(entry.origin_city_id, entry.destination_city_id) for entry in entries}
     missing_pairs = sorted(expected_pairs - supplied_pairs)
     if require_complete and missing_pairs:
-        preview = ", ".join(
-            f"{origin}->{destination}" for origin, destination in missing_pairs[:5]
-        )
-        suffix = (
-            "" if len(missing_pairs) <= 5 else f" and {len(missing_pairs) - 5} more"
-        )
+        preview = ", ".join(f"{origin}->{destination}" for origin, destination in missing_pairs[:5])
+        suffix = "" if len(missing_pairs) <= 5 else f" and {len(missing_pairs) - 5} more"
         raise ValueError(
-            f"route matrix is missing {len(missing_pairs)} required pairs: "
-            f"{preview}{suffix}"
+            f"route matrix is missing {len(missing_pairs)} required pairs: {preview}{suffix}"
         )
     matrix = create_route_matrix(
         snapshot,
@@ -731,7 +861,7 @@ def register_route_matrix(
     ready = sum(entry.status == "ready" for entry in matrix.entries)
     summary = (
         f"Registered route matrix {matrix.route_matrix_id}: {len(entries)} of {expected} "
-        f"facility-demand pairs supplied, {ready} ready, method {matrix.method}, "
+        f"city-to-city lane pairs supplied, {ready} ready, method {matrix.method}, "
         f"provider {matrix.provider}."
     )
     structured = ResourceToolResult(
@@ -1083,7 +1213,10 @@ def prepare_network_comparison_map(
     comparison = _load_ref(_ref_for_resource(comparison_resource_name), ScenarioComparison)
     if current.snapshot_id != snapshot.snapshot_id or candidate.snapshot_id != snapshot.snapshot_id:
         raise ValueError("map inputs must reference the same network snapshot")
-    if comparison.baseline_result_id != current.result_id or comparison.candidate_result_id != candidate.result_id:
+    if (
+        comparison.baseline_result_id != current.result_id
+        or comparison.candidate_result_id != candidate.result_id
+    ):
         raise ValueError("comparison Resource does not match current and candidate results")
 
     facilities = {item.facility_id: item for item in snapshot.facilities}
@@ -1175,14 +1308,83 @@ def prepare_network_comparison_map(
         },
         "feature_count": len(features),
         "layers": [
-            {"id": "network-current-assignments", "type": "line", "source": "network", "paint": {"line-color": "#64748b", "line-width": 1.5, "line-opacity": 0.45}},
-            {"id": "network-optimized-assignments", "type": "line", "source": "network", "filter": ["==", ["get", "scenario"], "optimized"], "paint": {"line-color": "#2563eb", "line-width": 2.5, "line-opacity": 0.75}},
-            {"id": "network-facilities", "type": "circle", "source": "network", "filter": ["==", ["get", "kind"], "facility"], "paint": {"circle-color": ["match", ["get", "status"], "selected", "#16a34a", "unselected", "#94a3b8", "#f97316"], "circle-radius": 7, "circle-stroke-color": "#ffffff", "circle-stroke-width": 1}},
-            {"id": "network-demand", "type": "circle", "source": "network", "filter": ["==", ["get", "kind"], "demand"], "paint": {"circle-color": "#7c3aed", "circle-radius": ["interpolate", ["linear"], ["get", "demand_units"], 0, 3, 1000, 10], "circle-opacity": 0.7}},
+            {
+                "id": "network-current-assignments",
+                "type": "line",
+                "source": "network",
+                "paint": {"line-color": "#64748b", "line-width": 1.5, "line-opacity": 0.45},
+            },
+            {
+                "id": "network-optimized-assignments",
+                "type": "line",
+                "source": "network",
+                "filter": ["==", ["get", "scenario"], "optimized"],
+                "paint": {"line-color": "#2563eb", "line-width": 2.5, "line-opacity": 0.75},
+            },
+            {
+                "id": "network-facilities",
+                "type": "circle",
+                "source": "network",
+                "filter": ["==", ["get", "kind"], "facility"],
+                "paint": {
+                    "circle-color": [
+                        "match",
+                        ["get", "status"],
+                        "selected",
+                        "#16a34a",
+                        "unselected",
+                        "#94a3b8",
+                        "#f97316",
+                    ],
+                    "circle-radius": 7,
+                    "circle-stroke-color": "#ffffff",
+                    "circle-stroke-width": 1,
+                },
+            },
+            {
+                "id": "network-demand",
+                "type": "circle",
+                "source": "network",
+                "filter": ["==", ["get", "kind"], "demand"],
+                "paint": {
+                    "circle-color": "#7c3aed",
+                    "circle-radius": [
+                        "interpolate",
+                        ["linear"],
+                        ["get", "demand_units"],
+                        0,
+                        3,
+                        1000,
+                        10,
+                    ],
+                    "circle-opacity": 0.7,
+                },
+            },
         ],
         "extensions": {
-            "legend": {"title": "Network comparison", "items": [{"label": "Existing facility", "color": "#f97316", "type": "circle"}, {"label": "Selected candidate", "color": "#16a34a", "type": "circle"}, {"label": "Current allocation", "color": "#64748b", "type": "line"}, {"label": "Optimized allocation", "color": "#2563eb", "type": "line"}]},
-            "hover": {"layers": [{"layer": "network-facilities", "title_property": "label", "fields": ["status", "capacity_units"]}, {"layer": "network-demand", "title_property": "label", "fields": ["region", "demand_units"]}]},
+            "legend": {
+                "title": "Network comparison",
+                "items": [
+                    {"label": "Existing facility", "color": "#f97316", "type": "circle"},
+                    {"label": "Selected candidate", "color": "#16a34a", "type": "circle"},
+                    {"label": "Current allocation", "color": "#64748b", "type": "line"},
+                    {"label": "Optimized allocation", "color": "#2563eb", "type": "line"},
+                ],
+            },
+            "hover": {
+                "layers": [
+                    {
+                        "layer": "network-facilities",
+                        "title_property": "label",
+                        "fields": ["status", "capacity_units"],
+                    },
+                    {
+                        "layer": "network-demand",
+                        "title_property": "label",
+                        "fields": ["region", "demand_units"],
+                    },
+                ]
+            },
         },
     }
     map_published = _store().publish("network_comparison_map.v1", map_manifest)
@@ -1223,7 +1425,10 @@ def prepare_network_map_render(
     if payload.get("geojson_resource_name") != geojson_resource_name:
         raise ValueError("map and GeoJSON Resource names do not match")
     geojson_ref = payload.get("geojson_ref")
-    if not isinstance(geojson_ref, dict) or geojson_ref.get("uri") != f"supply-chain://resources/{geojson_resource_name}":
+    if (
+        not isinstance(geojson_ref, dict)
+        or geojson_ref.get("uri") != f"supply-chain://resources/{geojson_resource_name}"
+    ):
         raise ValueError("network map does not reference the requested GeoJSON Resource")
     geojson = _store().load_uri(f"supply-chain://resources/{geojson_resource_name}")
     if geojson.get("type") != "FeatureCollection" or not isinstance(geojson.get("features"), list):
@@ -1272,10 +1477,18 @@ def prepare_network_planning_report(
         raise ValueError("facility solution is missing its candidate result Resource")
     if current.snapshot_id != snapshot.snapshot_id or candidate.snapshot_id != snapshot.snapshot_id:
         raise ValueError("report inputs must reference one snapshot")
-    if comparison.baseline_result_id != current.result_id or comparison.candidate_result_id != candidate.result_id:
+    if (
+        comparison.baseline_result_id != current.result_id
+        or comparison.candidate_result_id != candidate.result_id
+    ):
         raise ValueError("report comparison does not match supplied scenarios")
     map_note = map_resource_name or "not prepared"
     title = "Warehouse network planning report"
+    classification_line = (
+        "- Data classification: Synthetic demo (not observed business data)."
+        if snapshot.data_classification == "synthetic_demo"
+        else "- Data classification: Workspace data."
+    )
     markdown = "\n".join(
         [
             f"# {title}",
@@ -1283,17 +1496,35 @@ def prepare_network_planning_report(
             "## Evidence and scope",
             f"- Planning period: {snapshot.planning_period}",
             f"- Currency: {snapshot.currency}",
-            f"- Demand points: {len(snapshot.demand_points)}; facilities: {len(snapshot.facilities)}",
-            f"- Current coverage: {current.metrics.coverage_ratio:.1%}; current cost: {current.metrics.total_cost} {snapshot.currency}",
+            classification_line,
+            f"- Source digest: {snapshot.source_digest or 'not supplied'}",
+            (
+                f"- Demand points: {len(snapshot.demand_points)}; "
+                f"facilities: {len(snapshot.facilities)}"
+            ),
+            (
+                f"- Current coverage: {current.metrics.coverage_ratio:.1%}; "
+                f"current cost: {current.metrics.total_cost} {snapshot.currency}"
+            ),
             "",
             "## Candidate warehouse optimization",
             f"- Status: {solution.status}",
-            f"- Selected candidates: {', '.join(solution.selected_candidate_facility_ids) or 'none'}",
-            f"- Optimized coverage: {candidate.metrics.coverage_ratio:.1%}; optimized cost: {candidate.metrics.total_cost} {snapshot.currency}",
-            f"- Coverage change: {comparison.coverage_ratio_delta:+.1%}; cost change: {comparison.total_cost_delta:+} {snapshot.currency}",
+            (
+                "- Selected candidates: "
+                f"{', '.join(solution.selected_candidate_facility_ids) or 'none'}"
+            ),
+            (
+                f"- Optimized coverage: {candidate.metrics.coverage_ratio:.1%}; "
+                f"optimized cost: {candidate.metrics.total_cost} {snapshot.currency}"
+            ),
+            (
+                f"- Coverage change: {comparison.coverage_ratio_delta:+.1%}; "
+                f"cost change: {comparison.total_cost_delta:+} {snapshot.currency}"
+            ),
             "",
             "## Limitations",
-            "- Optimization is exact only over the finite candidate facilities and supplied route matrix.",
+            "- Optimization is exact only over the finite candidate facilities and "
+            "supplied route matrix.",
             f"- Comparison map Resource: {map_note}.",
             "- Route quality and assumptions are inherited from the confirmed planning dataset.",
         ]
@@ -1305,7 +1536,16 @@ def prepare_network_planning_report(
         "status": "ready",
         "markdown": markdown,
         "markdown_sha256": digest,
-        "input_resources": [snapshot_resource_name, current_result_resource_name, solution_resource_name, comparison_resource_name, map_note],
+        "dataClassification": snapshot.data_classification,
+        "demoTemplate": snapshot.demo_template,
+        "sourceDigest": snapshot.source_digest,
+        "input_resources": [
+            snapshot_resource_name,
+            current_result_resource_name,
+            solution_resource_name,
+            comparison_resource_name,
+            map_note,
+        ],
         "generated_at": datetime.now(UTC).isoformat(),
     }
     report_published = _store().publish("network_planning_report.v1", payload)
@@ -1315,9 +1555,14 @@ def prepare_network_planning_report(
         "title": title,
         "status": "ready",
         "source": report_ref.model_dump(mode="json"),
+        "dataClassification": snapshot.data_classification,
+        "demoTemplate": snapshot.demo_template,
     }
     artifact_published = _store().publish("report.v1", artifact)
-    summary = f"Published {title} with current and optimized coverage, cost, candidate selection, and limitations."
+    summary = (
+        f"Published {title} with current and optimized coverage, cost, candidate "
+        "selection, and limitations."
+    )
     structured = NetworkPlanningReportToolResult(
         summary=summary,
         resource_name=report_published.resource_id,
@@ -1375,18 +1620,29 @@ def validate_network_resource(
         "risk_register.v1": RiskRegister,
     }
     model_type = model_by_schema.get(schema)
-    if schema in {"network_comparison_map.v1", "geojson.v1", "network_planning_report.v1", "report.v1"}:
+    if schema in {
+        "network_comparison_map.v1",
+        "geojson.v1",
+        "network_planning_report.v1",
+        "report.v1",
+    }:
         if schema == "geojson.v1":
-            if payload.get("type") != "FeatureCollection" or not isinstance(payload.get("features"), list):
+            if payload.get("type") != "FeatureCollection" or not isinstance(
+                payload.get("features"), list
+            ):
                 errors.append("GeoJSON resource must be a FeatureCollection")
             elif len(payload["features"]) > 5_000:
                 errors.append("GeoJSON feature limit exceeded")
         elif schema == "network_comparison_map.v1":
-            if not isinstance(payload.get("geojson_resource_name"), str) or not isinstance(payload.get("layers"), list):
+            if not isinstance(payload.get("geojson_resource_name"), str) or not isinstance(
+                payload.get("layers"), list
+            ):
                 errors.append("network comparison map is missing its bounded GeoJSON and layers")
             checks.append("network comparison map retains exact GeoJSON and planner evidence names")
         elif schema == "network_planning_report.v1":
-            if payload.get("status") != "ready" or not isinstance(payload.get("markdown_sha256"), str):
+            if payload.get("status") != "ready" or not isinstance(
+                payload.get("markdown_sha256"), str
+            ):
                 errors.append("network planning report is not ready or lacks its content hash")
             checks.append("report contains a bounded immutable source")
         elif schema == "report.v1":
@@ -1404,12 +1660,8 @@ def validate_network_resource(
             if isinstance(value, NetworkScenarioResult):
                 allocation_total = sum(item.units for item in value.allocations)
                 if allocation_total != value.metrics.total_demand_units:
-                    errors.append(
-                        "allocation units do not equal metrics.total_demand_units"
-                    )
-                covered = sum(
-                    item.units for item in value.allocations if item.covered
-                )
+                    errors.append("allocation units do not equal metrics.total_demand_units")
+                covered = sum(item.units for item in value.allocations if item.covered)
                 if covered != value.metrics.covered_demand_units:
                     errors.append(
                         "covered allocation units do not equal metrics.covered_demand_units"
@@ -1425,16 +1677,14 @@ def validate_network_resource(
                 warnings.extend(value.issues)
             if isinstance(value, RouteMatrix):
                 pairs = {
-                    (entry.origin_facility_id, entry.destination_demand_id)
-                    for entry in value.entries
+                    (entry.origin_city_id, entry.destination_city_id) for entry in value.entries
                 }
                 if len(pairs) != len(value.entries):
                     errors.append("route matrix contains duplicate origin-destination pairs")
                 checks.append("route matrix origin-destination pairs are unique")
             if isinstance(value, FacilityLocationSolution):
                 if value.status == "optimal" and (
-                    value.metrics.coverage_ratio + 1e-12
-                    < value.target_coverage_ratio
+                    value.metrics.coverage_ratio + 1e-12 < value.target_coverage_ratio
                 ):
                     errors.append("optimal solution does not reach its coverage target")
                 checks.append("facility-location status is consistent with target coverage")
@@ -1479,19 +1729,12 @@ def main() -> None:
 
     global _workspace_root, _data_root, _profile_state_root, _resource_store
     _workspace_root = args.workspace_root.resolve()
-    _data_root = Path(
-        os.environ.get("SUPPLY_CHAIN_DATA_ROOT", _workspace_root)
-    ).resolve()
-    _profile_state_root = Path(
-        os.environ.get("CODEX_HOME", _workspace_root / ".codex")
-    ).resolve()
+    _data_root = Path(os.environ.get("SUPPLY_CHAIN_DATA_ROOT", _workspace_root)).resolve()
+    _profile_state_root = Path(os.environ.get("CODEX_HOME", _workspace_root / ".codex")).resolve()
     resource_root = Path(
         os.environ.get(
             "SUPPLY_CHAIN_RESOURCE_DIR",
-            _profile_state_root
-            / "mcp-state"
-            / "supply-chain-network-planner"
-            / "resources",
+            _profile_state_root / "mcp-state" / "supply-chain-network-planner" / "resources",
         )
     ).resolve()
     _resource_store = ResourceStore(resource_root)

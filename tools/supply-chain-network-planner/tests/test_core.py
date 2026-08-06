@@ -130,8 +130,8 @@ def test_location_solver_returns_best_plan_when_target_is_infeasible(
 def test_route_matrix_rejects_duplicate_pairs(network: NetworkInput) -> None:
     snapshot = create_snapshot(network)
     duplicate = RouteEntry(
-        origin_facility_id="warehouse-shanghai",
-        destination_demand_id="demand-shanghai",
+        origin_city_id="city-shanghai",
+        destination_city_id="city-shanghai",
         distance_meters=1,
         travel_seconds=1,
     )
@@ -151,6 +151,31 @@ def test_network_requires_complete_rate_resolution() -> None:
 
     with pytest.raises(ValueError, match="missing transport rate"):
         NetworkInput.model_validate(payload)
+
+
+def test_city_lane_is_reused_by_multiple_demand_points() -> None:
+    payload = json.loads((ROOT / "examples" / "network-input.json").read_text())
+    second_demand = dict(payload["demand_points"][0])
+    second_demand["demand_id"] = "demand-shanghai-02"
+    second_demand["demand_units"] = 1
+    payload["demand_points"].append(second_demand)
+    network = NetworkInput.model_validate(payload)
+    snapshot = create_snapshot(network)
+    route_payload = json.loads((ROOT / "examples" / "route-matrix-input.json").read_text())
+
+    matrix = create_route_matrix(
+        snapshot,
+        provider=route_payload["provider"],
+        method=route_payload["method"],
+        entries=[RouteEntry.model_validate(item) for item in route_payload["entries"]],
+    )
+
+    assert len(matrix.entries) == 12
+    assert {(entry.origin_city_id, entry.destination_city_id) for entry in matrix.entries} == {
+        (facility.city_id, demand.city_id)
+        for facility in snapshot.facilities
+        for demand in snapshot.demand_points
+    }
 
 
 def test_financial_and_risk_resources_preserve_evidence_lineage(

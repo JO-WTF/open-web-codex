@@ -17,8 +17,9 @@ planning tools.
    `$prepare-planning-dataset`. Read its Resource and use the exact `network_input`,
    `route_provider`, `route_method`, and `route_entries` fields. Preserve stable
    business identifiers; do not add candidate or route facts from local files.
-3. Confirm that every demand point and facility has coordinates and that the dataset
-   contains every required facility-demand route pair.
+3. Confirm that every demand point and facility references a known city and that each
+   city has coordinates. Require every origin-facility city to destination-demand city
+   route pair once; demand points in the same city reuse that route.
 4. Call `supply_chain_planner.prepare_network_snapshot`. Carry its `data_ref` unchanged.
    Never mutate a published snapshot; prepare a new one when source facts or policy
    assumptions change.
@@ -35,8 +36,9 @@ planning tools.
 
 - `demand_units` and `capacity_units` are nonnegative integer planning units.
 - `currency` is one ISO-style three-letter currency and all costs use it.
-- Every facility-demand pair must resolve to exactly one transport rate, using precedence:
-  demand-specific, then region-specific, then facility default.
+- Every required lane must resolve to exactly one transport rate selected by the
+  origin city's region and destination city ID. Demand IDs and facility IDs are not
+  transport-rate selectors.
 - Existing demand relationships use `current_facility_id`; missing relationships remain
   missing and are not imputed.
 - Include candidate facilities and their routes in the same snapshot when the next task

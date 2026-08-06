@@ -1,102 +1,130 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 import pytest
 from pydantic import ValidationError
 
-from supply_chain_planner.data_core import (
-    build_planning_dataset,
-    inspect_source,
-)
-from supply_chain_planner.models import PlanningSource
+from supply_chain_planner import server
+from supply_chain_planner.data_core import build_planning_dataset, inspect_source
+from supply_chain_planner.models import DataAgentRef, PlanningSource
+from supply_chain_planner.resource_store import ResourceStore
 
-ROOT = Path(__file__).resolve().parents[1]
-SOURCE_PATH = (
-    ROOT / "examples" / "data-sources" / "warehouse-network-fixture.json"
-)
-INDONESIA_SOURCE_PATH = (
-    ROOT / "examples" / "data-sources" / "indonesia-network-decision.json"
-)
+
+def _source() -> PlanningSource:
+    city_ids = ("north", "central", "south")
+    cities = [
+        {
+            "city_id": city_id,
+            "name": city_id.title(),
+            "region": city_id,
+            "location": {"latitude": 40 + index, "longitude": -87 + index},
+        }
+        for index, city_id in enumerate(city_ids)
+    ]
+    return PlanningSource.model_validate(
+        {
+            "source_id": "warehouse-network-fixture",
+            "market": "US",
+            "label": "Test-only warehouse network fixture",
+            "source_updated_at": "2026-07-25T16:00:00Z",
+            "planning_period": "2026 annual planning units",
+            "currency": "USD",
+            "service_policy": {"policy_id": "one-day", "max_delivery_seconds": 86400},
+            "cities": cities,
+            "city_demands": [
+                {"city_id": city_id, "demand_date": "2026-06-01", "demand_units": units}
+                for city_id, units in zip(city_ids, (35, 40, 25), strict=True)
+            ],
+            "facilities": [
+                {
+                    "facility_id": "facility-a",
+                    "city_id": "north",
+                    "location": cities[0]["location"],
+                    "capacity_units": 100,
+                    "is_existing": True,
+                },
+                {
+                    "facility_id": "facility-b",
+                    "city_id": "central",
+                    "location": cities[1]["location"],
+                    "capacity_units": 100,
+                    "is_existing": True,
+                },
+            ],
+            "warehouse_city_coverage": [
+                {"facility_id": "facility-a", "city_id": city_id, "is_current": True}
+                for city_id in city_ids
+            ],
+            "lanes": [
+                {
+                    "origin_city_id": origin,
+                    "destination_city_id": destination,
+                    "distance_km": 10,
+                    "travel_time_hours": 1,
+                    "base_cost_per_unit": "2.00",
+                    "distance_cost_per_km_per_unit": "0.01",
+                    "currency": "USD",
+                }
+                for origin in ("north", "central")
+                for destination in city_ids
+            ],
+            "route_provider": "workspace",
+            "route_method": "quoted",
+        }
+    )
 
 
 @pytest.fixture
 def source() -> PlanningSource:
-    return PlanningSource.model_validate(json.loads(SOURCE_PATH.read_text()))
+    return _source()
 
 
 def test_inspection_is_bounded_and_reports_source_scope(source: PlanningSource) -> None:
     inspection = inspect_source(source)
-
     assert inspection.source_summary.source_id == "warehouse-network-fixture"
-    assert inspection.source_summary.order_row_count == 6
+    assert inspection.source_summary.city_demand_row_count == 3
     assert inspection.source_summary.demand_units == 100
     assert inspection.source_summary.demand_node_count == 3
-    assert inspection.source_summary.facility_count == 2
+    assert inspection.source_summary.lane_count == 6
     assert inspection.source_summary.truncated is False
 
 
 def test_builds_planning_dataset_and_network_handoff(source: PlanningSource) -> None:
     dataset = build_planning_dataset(source)
-
     assert dataset.schema_version == "planning-dataset.v2"
     assert dataset.source_summary.demand_units == 100
-    assert [item.demand_units for item in dataset.demand_distribution] == [25, 40, 35]
-    assert sum(item.promotion_units for item in dataset.demand_distribution) == 30
-    assert dataset.delivery_baseline.observed_demand_units == 90
-    assert dataset.delivery_baseline.on_time_demand_units == 55
-    assert dataset.delivery_baseline.unobserved_demand_units == 10
-    assert dataset.delivery_baseline.on_time_ratio == pytest.approx(55 / 90)
-    assert sum(
-        item.demand_units for item in dataset.network_input.demand_points
-    ) == 100
-    assert all(item.is_existing for item in dataset.network_input.facilities)
+    assert [item.demand_units for item in dataset.demand_distribution] == [40, 35, 25]
+    assert dataset.delivery_baseline.observed_demand_units == 0
+    assert dataset.delivery_baseline.unobserved_demand_units == 100
+    assert dataset.delivery_baseline.on_time_ratio is None
+    assert sum(item.demand_units for item in dataset.network_input.demand_points) == 100
     assert len(dataset.route_entries) == 6
     assert dataset.data_quality.valid is True
-    assert any("promotion-associated" in item for item in dataset.data_quality.warnings)
+    assert any("no observed delivery" in item for item in dataset.data_quality.warnings)
 
 
 def test_dataset_identity_is_stable_for_same_source(source: PlanningSource) -> None:
-    first = build_planning_dataset(source)
-    second = build_planning_dataset(source)
-
-    assert first.dataset_id == second.dataset_id
-    assert first.source_digest == second.source_digest
+    assert build_planning_dataset(source).dataset_id == build_planning_dataset(source).dataset_id
 
 
 def test_source_contract_rejects_direct_pii_fields() -> None:
-    payload = json.loads(SOURCE_PATH.read_text())
-    payload["orders"][0]["customer_name"] = "not allowed"
-
+    payload = _source().model_dump(mode="json")
+    payload["city_demands"][0]["customer_name"] = "not allowed"
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         PlanningSource.model_validate(payload)
 
 
 def test_source_contract_rejects_candidate_as_current_assignment() -> None:
-    payload = json.loads(SOURCE_PATH.read_text())
+    payload = _source().model_dump(mode="json")
     payload["facilities"][0]["is_existing"] = False
-
-    with pytest.raises(ValidationError, match="unknown existing facility"):
+    with pytest.raises(ValidationError, match="current coverage must reference an existing facility"):
         PlanningSource.model_validate(payload)
 
 
-def test_indonesia_source_publishes_candidates_and_complete_routes() -> None:
-    source = PlanningSource.model_validate(
-        json.loads(INDONESIA_SOURCE_PATH.read_text())
-    )
-
-    dataset = build_planning_dataset(source)
-
-    assert dataset.source_summary.market == "ID"
-    assert dataset.source_summary.demand_units == 7400
-    assert dataset.source_summary.existing_facility_count == 2
-    assert dataset.source_summary.candidate_facility_count == 3
-    assert dataset.source_summary.route_count == 30
-    assert len(dataset.network_input.facilities) == 5
-    assert len(dataset.route_entries) == 30
-    assert dataset.network_input.currency == "IDR"
-    assert any(
-        "promotion-associated" in warning
-        for warning in dataset.data_quality.warnings
-    )
+def test_planner_rejects_historical_dataset_without_current_provenance(tmp_path, monkeypatch):
+    dataset = build_planning_dataset(_source())
+    store = ResourceStore(tmp_path / "resources", uri_prefix="supply-chain-data://resources/")
+    monkeypatch.setattr(server, "_data_resource_store", store)
+    published = store.publish("planning-dataset.v2", dataset)
+    ref = DataAgentRef(uri=published.uri, resource_schema="planning-dataset.v2")
+    with pytest.raises(ValueError, match="current provenance"):
+        server._load_planning_dataset(ref)
