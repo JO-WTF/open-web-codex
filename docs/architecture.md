@@ -22,8 +22,9 @@ when measured capacity or isolation needs justify it.
 The enterprise multi-agent design in
 `docs/enterprise-agent-platform-architecture.md` remains the evolutionary
 target above this control plane. The current constrained M2 slice implements a
-typed Supervisor capability catalog, Web authoring and immutable publication
-of organization-scoped Agent and Supervisor Releases, Policy snapshots bound
+typed Supervisor capability catalog, Web authoring with mutable Drafts and
+immutable publication of organization-scoped Agent and Supervisor Releases,
+Policy snapshots bound
 to root Threads, request-scoped Runtime Roles, native child-agent execution,
 rebuildable Agent projections and Task-owned durable Artifacts. A user-authored
 Agent currently narrows one reviewed code-published capability template; it
@@ -52,7 +53,7 @@ Workspace authorization service
 
 Run orchestrator
   -> validates the Thread's Codex cwd against authorized Workspace roots
-  -> resolves a built-in Package or immutable organization-scoped Release
+  -> resolves the latest organization Draft, a built-in Package or an immutable Release
   -> preflights exact Agent Definitions before governed Thread creation
   -> Runner sandbox / Git delivery
 
@@ -114,14 +115,20 @@ engine or agent scheduler.
 
 ### Current governed multi-agent slice
 
-An Enterprise Run may explicitly select either one code-published Supervisor
-Package version or one immutable organization-scoped Supervisor Release. The
-platform seals the selected Policy and its referenced Agent Definition versions
-into an immutable snapshot and binds it to the actual root Thread. Immediately
-before a governed root start or inherited fork, the worker re-resolves the
-repository Package or exact persisted Release identity, rejects snapshot,
-dependency or instruction drift and checks every type-declared Runtime
-capability and required limit.
+An Enterprise Run may explicitly select one code-published Supervisor Package,
+the latest validated organization-scoped Supervisor Draft, or one immutable
+organization-scoped Supervisor Release. A Draft is resolved server-side and
+captured into an immutable Run snapshot carrying its numeric Draft revision;
+editing the Draft increments that revision and affects only later Runs. Draft
+identity and preflight use the revision, not a content hash. An older Run whose
+Draft revision is no longer current is rejected as stale rather than being
+silently reinterpreted. Published Releases retain their content-integrity
+checks. The platform seals the selected Policy and its referenced Agent
+Definition versions into an immutable snapshot and binds it to the actual root
+Thread. Immediately before a governed root start or inherited fork, the worker
+re-resolves the repository Package, current Draft revision or exact persisted
+Release identity, rejects snapshot, dependency or instruction drift and checks
+every type-declared Runtime capability and required limit.
 
 Code-managed publication sources live under `capabilities/supervisors/` and
 `capabilities/agents/`. Tool, MCP, Skill and Plugin implementations remain in
@@ -136,6 +143,21 @@ complete spec, derived Role digest and template digest. Supervisor publication
 then binds the exact custom Agent Release UUID, version and content hash through
 an immutable dependency row. Published rows cannot be edited, and missing or
 drifted dependencies fail preflight without name/version fallback.
+
+Normal Workspace intake has no packaged source catalog. `supply_chain_data`
+uses only the trusted Turn `sandboxCwd` advertised through
+`codex/sandbox-state-meta`; an empty Workspace produces an empty catalog. The
+separate `supply_chain_demo` MCP owns one explicit, approved write operation
+that atomically creates versioned synthetic source files in the current empty
+Workspace. It cannot accept a path or create a Dataset Release. Those files
+then traverse the ordinary confirmed Intake path, with `synthetic_demo`,
+template identity and source digests preserved through Resource, Release and
+TaskDatasetBinding provenance. Learn Tutorial Blueprints remain platform-owned
+installations of locked Releases and are not discoverable by ordinary Intake.
+The generic warehouse-network contract keeps demand points as allocation facts while
+sharing transport facts at their authoritative grain: routes are city-to-city and
+rates are origin-region-to-destination-city. High-volume Demo demand therefore does
+not multiply route or quote rows by demand-point count.
 
 Because the current Runtime does not expose native Agent CRUD, Profile Host
 temporarily materializes the exact versioned Role instruction files under a
@@ -227,7 +249,9 @@ session -> user -> organization membership -> project permission
   Release and never creates a Workspace. Analysis readiness is task-scoped and
   requires a ready DataIntakeSession, a published normalized Release and a
   TaskDatasetBinding with matching fingerprints.
-- Raw uploads are SourceAssets in a WorkspaceDataDraft, not Artifacts. Domain
+- Planning-data raw uploads are SourceAssets in a WorkspaceDataDraft, while
+  ordinary Files-panel uploads are regular Workspace files, not Artifacts.
+  Domain
   capability packages own business profiling, fuzzy mapping and normalization;
   `provide_data`, `confirm_mapping` and `answer_parameters` are durable typed
   InputRequests while the Session itself remains `active`, rather than a

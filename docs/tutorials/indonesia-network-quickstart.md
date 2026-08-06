@@ -12,7 +12,7 @@
 确认生产 `/web` 同时满足：
 
 - 侧栏有 **Learn**；
-- 示例列表有 `Indonesia warehouse-network decision · 1.4.0`；
+- 示例列表有 `Indonesia warehouse-network decision · 1.5.0`；
 - Workspace 已选择；
 - Provider 和模型可用。
 
@@ -22,13 +22,13 @@
 ## 1. 设置准备好的示例
 
 1. 打开 **Learn**。
-2. 选择 **Indonesia warehouse-network decision · 1.4.0**。
+2. 选择 **Indonesia warehouse-network decision · 1.5.0**。
 3. 选择目标 Workspace。
 4. 查看将创建或复用的 Dataset、capability package、Agent 和 Supervisor Release。
 5. 点击 **Set up example**。
 
 这个操作 reconcile 的是精确 Blueprint
-`indonesia-warehouse-network@1.4.0`。相同身份和哈希会被复用；内容冲突或部分失败会
+`indonesia-warehouse-network@1.5.0`。相同身份和哈希会被复用；内容冲突或部分失败会
 明确指出阶段。系统不会自动改版本，也不会回滚已经成功发布的不可变资源。
 
 ## 2. 通过 Readiness

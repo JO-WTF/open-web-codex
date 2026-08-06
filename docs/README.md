@@ -94,7 +94,8 @@ Agent Definition、Runtime Role 等核心术语。
 论据并记录最终决定、后果与替代方案。
 
 当前与新手闭环直接相关的决定是
-[ADR-008：版本化可安装 Tutorial Blueprint](adr/008-installable-tutorial-blueprints.md)。
+[ADR-008：版本化可安装 Tutorial Blueprint](adr/008-installable-tutorial-blueprints.md)
+和 [ADR-011：显式 Demo Workspace 原始源与 Tutorial Blueprint 分离](adr/011-explicit-demo-workspace-sources.md)。
 
 ## 事实与冲突处理
 

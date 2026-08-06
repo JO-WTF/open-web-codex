@@ -116,7 +116,7 @@ Save draft → Validate → Publish
 本篇不需要再创建一个自定义地图 Agent。平台已经发布：
 
 ```text
-Enterprise Visualization Agent · 1.4.0
+Enterprise Visualization Agent · 2.0.0
 ```
 
 它的权限边界是：
@@ -150,7 +150,7 @@ Allowed Agents：
 
 - `Tutorial Indonesia Data Agent · 1.0.0`；
 - `Tutorial Indonesia Network Planner · 3.0.0`；
-- `Enterprise Visualization Agent · 1.4.0`。
+- `Enterprise Visualization Agent · 2.0.0`。
 
 设置 **Maximum active child Agents = 3**。这是并发和驻留上限，不是要求每次都创建
 3 个 Agent。

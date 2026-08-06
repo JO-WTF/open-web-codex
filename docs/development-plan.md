@@ -4,11 +4,11 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 更新日期 | 2026-07-31 |
+| 更新日期 | 2026-08-03 |
 | 当前分支 | `codex/agent-architecture-features` |
 | Codex 基线 | `openai/codex` `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9` |
 | 上游状态快照 | 2026-07-28 观测到 official main `95637f7056835fea66bdd0044414af480fc0fd74`，当时待同步 142；本轮未刷新且暂不同步 |
-| 当前工作 | 落地 Thread-first Data Intake 基础合同、Workspace Draft/SourceAsset、安全上传、持久 Intake 状态与 Thread/Analysis readiness 分层；继续完成 Indonesia 领域归一化、TaskDatasetBinding owner 和真实闭环门禁 |
+| 当前工作 | 完成真实 Workspace 与显式 Demo 生成隔离、通用仓网合同、合成数据 provenance 和 Tutorial Blueprint 新 revision；继续完成真实 Runtime/浏览器/重启闭环门禁 |
 | 中期顺序 | `docs/roadmap.md` |
 | M2 详细实施 | `docs/enterprise-supervisor-copilot-plan.md` |
 | 能力事实 | `docs/capability-baseline.md` |
@@ -69,7 +69,7 @@ Session；差异集中在该入口、`src/services/webClient.ts` Server
 仍未达到可用能力基线的门禁：
 
 1. 基于真实 Runtime/MCP 的 Excel 多 Sheet、JSON 嵌套数组和 CSV 画像与模糊映射 E2E；
-2. 印尼合同的条件性字段、单位/粒度/主外键/质量校验与 normalized Release owner；
+2. 通用仓网合同的条件性字段、单位/粒度/主外键/质量校验与 normalized Release owner；
 3. 绑定 immutable Release 的领域 normalizer、完整 Artifact provenance 和同一 Thread 的
    真实重启/中断/重复提交 E2E；
 4. 已实现的 Browser 上传、候选映射、缺口和参数卡片仍需真实 `/web` 与 Runtime
@@ -107,11 +107,14 @@ requirement、Artifact handoff 与并发限制只由精确 Agent Release 和草�
 
 当前内置 Release 是：
 
-- `enterprise-supervisor-copilot@4.0.0`，选择
+- `enterprise-supervisor-copilot@5.0.1`，选择
   `platform-supervisor-behavior@1.1.0`；
-- Data `4.0.0`，发现授权 Workspace 中的 Excel/CSV/JSON，发布有界 Source Profile、
-  模糊 Mapping，并在完整确认后生成严格 `planning-dataset.v2`；
-- Network `4.0.0`，按证据缺口生成 Requirement Profile、Input Gap、Readiness Review，
+- Data `5.0.0`，发现授权 Workspace 中的 Excel/CSV/JSON；只有用户明确要求时才通过
+  独立 Demo Tool 在空 Workspace 生成合成源，然后发布有界 Source Profile、模糊
+  Mapping，并在完整确认后生成严格 `planning-dataset.v2`；
+- 通用仓网输入把需求点映射到城市，路线按城市到城市、运价按出发区域到目的城市；
+  显式大型 Demo 可生成 120,000 个需求点，但路线与运价各保持 144 条城市级记录；
+- Network `5.0.0`，按证据缺口生成通用 Requirement Profile、Input Gap、Readiness Review，
   并消费严格 Planning Dataset 完成覆盖、候选仓优化、场景对比和报告；
 - Visualization `2.0.0`，只接收 Network 生成的 comparison-map/GeoJSON Resource，
   交给 `map_utils.create_map_card` 并交付 `map.v3`；

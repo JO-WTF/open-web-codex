@@ -19,6 +19,7 @@ ADR 记录已经接受、会长期约束实现且不能仅从当前代码推断�
 | [ADR-008](008-installable-tutorial-blueprints.md) | 版本化可安装 Tutorial Blueprint |
 | [ADR-009](009-thread-first-data-intake.md) | Thread-first 数据接入与分阶段 Readiness |
 | [ADR-010](010-workspace-wide-intake-discovery.md) | Workspace 全域数据接入与 Task 级确认 |
+| [ADR-011](011-explicit-demo-workspace-sources.md) | 显式 Demo Workspace 原始源与 Tutorial Blueprint 分离 |
 
 ## 何时创建 ADR
 

@@ -509,7 +509,7 @@ Accept 再尝试投递，否则 MCP 会继续等待、前端显示 Invalid，工
 命名空间。
 
 `create_map_card` 使用单一 `map.v3` 合同。`sources` 是由 source ID 索引的平台管理
-GeoJSON：内联数据使用标准 `data`，Resource 使用互斥的 `data_ref`，其他官方
+GeoJSON：统一使用平台管理的 `data_ref`，GeoJSON 内容不得通过模型上下文传递；其他官方
 GeoJSON source option 保留。`layers` 是官方 Mapbox Style Specification Layer JSON，
 由官方 validator 校验；Open Web 不再维护第二套 layer type、paint/layout、filter
 或 expression 白名单。官方未知属性诊断是 warning，已知语法错误失败。标准 camera
@@ -591,9 +591,9 @@ GeoJSON source option 保留。`layers` 是官方 Mapbox Style Specification Lay
    camera 精确使用 center、zoom、bearing 和 pitch。
 9. 没有 Mapbox Token 时仍保留卡片和配置按钮；Mapbox 或 Artifact 失败时显示明确错误。
 
-`map.v3` 没有卡片专用的 16 KiB 上限。小数据可以 inline，大 GeoJSON 必须通过
-MCP Resource URI 和授权 Artifact 传输。Server 的通用 Resource 内存安全边界不属于
-卡片合同；需要更大数据时应新增流式 PMTiles/MVT source，而不是复制 GeoJSON 到文本。
+`map.v3` 不接受 inline GeoJSON。所有 GeoJSON 必须通过 MCP Resource URI 和授权 Artifact
+传输。Server 的通用 Resource 内存安全边界不属于卡片合同；需要更大数据时应新增流式
+PMTiles/MVT source，而不是复制 GeoJSON 到文本。
 
 当前可运行流程是：
 

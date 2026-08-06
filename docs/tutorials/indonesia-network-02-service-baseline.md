@@ -51,7 +51,7 @@ Root Supervisor 根据当前证据决定怎样协调它们。
 | Version | `1.0.0` |
 | Display name | `Tutorial Indonesia Service Analyst` |
 | Description | `Evaluates current last-mile service without cost or location optimization.` |
-| Reviewed capability template | `Enterprise Network Planning Agent · 4.0.0` |
+| Reviewed capability template | `Enterprise Network Planning Agent · 5.0.0` |
 
 **Responsibilities**：
 

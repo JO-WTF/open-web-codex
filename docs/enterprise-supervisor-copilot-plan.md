@@ -5,10 +5,10 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档状态 | 当前短期执行基线 |
-| 更新日期 | 2026-07-30 |
+| 更新日期 | 2026-08-03 |
 | 对应阶段 | M2 Enterprise Supervisor Copilot |
-| 实施范围 | 单用户、单 Profile、真实 Runtime、一个印尼仓网决策案例 |
-| 当前版本 | `enterprise-supervisor-copilot@4.0.0` |
+| 实施范围 | 单用户、单 Profile、真实 Runtime、通用仓网接入与独立印尼教程案例 |
+| 当前版本 | `enterprise-supervisor-copilot@5.0.1` |
 | 平台行为合同 | `platform-supervisor-behavior@1.1.0` |
 | 当前事实 | [能力基线](capability-baseline.md) 与代码 |
 | 架构依据 | [企业多 Agent 平台架构](enterprise-agent-platform-architecture.md) |
@@ -26,7 +26,7 @@ Supervisor 根据证据缺口动态选择受治理的 Domain Agent，并通过�
 | 确定性计算 Owner | `supply_chain_indonesia` 与 `map_utils` MCP |
 | 治理与持久化 Owner | Platform Server |
 | 浏览器 Owner | Workspace 数据上传、对话内 Profile/Mapping/参数/最终 checklist 确认，以及有界 readiness、Artifact 呈现 |
-| Agent 输入输出 | 4.0.0 Agent Release、exact Runtime Role、版本化 Intake Artifact、durable Resource reference |
+| Agent 输入输出 | 5.0.0 Data/Network Agent Release、exact Runtime Role、版本化 Intake Artifact、durable Resource reference |
 | 核心数据合同 | Workspace SourceAsset、`data_requirement_profile.v1`、`source_profile.v1`、`mapping_proposal.v1`、`planning-dataset.v2` |
 | 运行能力门禁 | `agents.multi_agent@1.0.0`、exact Role/Tool allowlist、per-Role limit、授权 Workspace |
 | 持久化范围 | Codex 保持 Thread/Turn/Item 权威；平台持久化 Release、Run binding、Artifact、审批、审计和可重建投影 |
@@ -131,7 +131,7 @@ Resource 名和 `map_artifact_id`，不含 Resource URI 或 embed code；Visuali
 
 ## 4. Policy 与能力边界
 
-`enterprise-supervisor-copilot@4.0.0` 精确绑定三个 Agent Release，每个 Role 最多
+`enterprise-supervisor-copilot@5.0.1` 精确绑定三个 Agent Release，每个 Role 最多
 一个实例，V2 驻留额度为三。当前 Multi-Agent V2 没有 `close_agent`，终态子 Agent
 仍占额度，因此这个上限覆盖全部可选角色，而不是要求三个角色都运行。十个 Artifact
 handoff 都是条件性证据边；未选择某项分析时不得为了满足数量而伪造 Artifact。
@@ -233,8 +233,8 @@ Role、MCP 内部标识或服务器路径来弥补平台绑定缺失。
 
 ### 5.5 WP3：版本化 Tutorial Blueprint 与 Learn
 
-首个 Blueprint 是独立教程入口 `indonesia-warehouse-network@1.4.0`；正常业务路径使用
-`indonesia-warehouse-network@2.0.0` Requirement Contract，声明 Workspace 全域发现、
+当前 Blueprint 是独立教程入口 `indonesia-warehouse-network@1.5.0`；正常业务路径使用
+`warehouse-network-planning@1.0.0` Requirement Contract，声明 Workspace 全域发现、
 用户整体确认和严格 Planning Dataset，不把教程 Dataset 作为输入。它声明精确 Dataset bundle、
 capability package、Agent/Supervisor/行为合同版本与哈希、推荐 Prompt、必需能力、
 预期 Artifact 和确定性验收值。它是通用平台资源，不把印尼业务写进 Web 或

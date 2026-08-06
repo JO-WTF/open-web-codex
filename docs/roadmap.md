@@ -94,9 +94,10 @@ Artifact；关键结论可追溯，一个 Agent 失败时能够形成明确的�
 受治理启动、审批、交付审阅和刷新恢复。缺少必需依赖时不得先创建 Thread，再让模型向
 用户索要内部 ID、Runtime 标识或服务器路径。
 
-当前实现是印尼仓网动态案例：`enterprise-supervisor-copilot@4.0.0` 可从 Data
-`4.0.0`、Network `4.0.0` 和 Visualization `2.0.0` 三个有界 Role 中按证据缺口
-选择能力，十五个 Artifact handoff 是条件性证据边而不是固定 Workflow。Workspace
+当前实现是通用仓网动态案例：组织 Draft `Indonesia Network Planning Copilot`
+（`enterprise-supervisor-copilot@5.0.0`）可从 Data `5.0.0`、Network `5.0.0` 和
+Visualization `2.0.0` 三个有界 Role 中按证据缺口选择能力；当前没有仓库级
+Supervisor Release。十五个 Artifact handoff 是条件性证据边而不是固定 Workflow。Workspace
 全域 SourceAsset 发现、Excel/CSV/JSON 有界画像、模糊映射、严格
 `planning-dataset.v2` 和通用优化/报告/地图工具已有本地聚焦验证；完整真实
 Runtime/browser 回归、重启恢复和无重复 Analysis Turn 仍待通过，因此能力基线继续
