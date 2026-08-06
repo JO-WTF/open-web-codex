@@ -843,7 +843,7 @@ describe("threadItems", () => {
     });
     expect(item).not.toBeNull();
     if (item && item.kind === "tool") {
-      expect(item.title).toBe("Collab: handoff");
+      expect(item.title).toBe("Collab: handoff · Coordinate work");
       expect(item.detail).toContain("From thread-a");
       expect(item.detail).toContain("thread-b");
       expect(item.detail).toContain("thread-c");

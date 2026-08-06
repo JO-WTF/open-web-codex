@@ -253,6 +253,24 @@ export function prepareTutorialPromptDraft(
     : { draft: tutorialPrompt, loaded: true };
 }
 
+export function shouldRefreshDataIntakeForAppEvent(
+  method: string,
+  itemType: string | null,
+) {
+  if (method === "platform/data-intake/changed") return true;
+  if (method === "thread/status/changed"
+    || method === "thread/completed"
+    || method === "thread/failed"
+    || method === "turn/completed") {
+    return true;
+  }
+  return method === "item/completed"
+    && (itemType === "mcpToolCall"
+      || itemType === "agentMessage"
+      || itemType === "collabAgentToolCall"
+      || itemType === "collabToolCall");
+}
+
 export default function WebApp() {
   console.log('[open-web-codex] build:', '2026-07-12T21:20:00Z');
   const [baseUrl, setBaseUrl] = useState(
@@ -568,7 +586,10 @@ export default function WebApp() {
 
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
   const listWorkspaceFiles = useCallback((workspaceId: string) => client.listWorkspaceFiles(workspaceId, activeThreadId), [activeThreadId, client]);
+  const uploadWorkspaceFiles = useCallback((workspaceId: string, files: File[]) => client.uploadWorkspaceFiles(workspaceId, files, activeThreadId), [activeThreadId, client]);
   const readWorkspaceFile = useCallback((workspaceId: string, path: string) => client.readWorkspaceFile(workspaceId, path, activeThreadId), [activeThreadId, client]);
+  const downloadWorkspaceFile = useCallback((workspaceId: string, path: string) => client.downloadWorkspaceFile(workspaceId, path, activeThreadId), [activeThreadId, client]);
+  const deleteWorkspaceFile = useCallback((workspaceId: string, path: string) => client.deleteWorkspaceFile(workspaceId, path, activeThreadId), [activeThreadId, client]);
   const loadWorkspaceGitStatus = useCallback((workspaceId: string) => client.getGitStatus(workspaceId, activeThreadId), [activeThreadId, client]);
   const openFile = useCallback((path: string) => {
     const workspacePath = activeWorkspace?.path?.replace(/\/$/, "");
@@ -600,6 +621,9 @@ export default function WebApp() {
     useRef<((threadId?: string | null) => Promise<void>) | null>(null);
   const supervisorOverviewSequence = useRef(0);
   const supervisorOverviewRefreshTimer = useRef<number | null>(null);
+  const dataIntakeRefreshTimer = useRef<number | null>(null);
+  const refreshDataIntakeRef =
+    useRef<((taskId?: string | null) => Promise<void>) | null>(null);
   const agentActivitySequenceByThread = useRef<Map<string, number>>(new Map());
   const supervisorOverviewRef = useRef(supervisorOverview);
   supervisorOverviewRef.current = supervisorOverview;
@@ -611,6 +635,8 @@ export default function WebApp() {
   activeThreadIdRef.current = activeThreadId;
   const activeWorkspaceIdRef = useRef(activeWorkspaceId);
   activeWorkspaceIdRef.current = activeWorkspaceId;
+  const activeTaskIdRef = useRef(activeTaskId);
+  activeTaskIdRef.current = activeTaskId;
   const dataIntakeSequence = useRef(0);
 
   const refreshDataIntake = useCallback(async (taskId = activeTaskId) => {
@@ -641,6 +667,24 @@ export default function WebApp() {
       if (sequence === dataIntakeSequence.current) setDataIntakeLoading(false);
     }
   }, [activeTaskId, client]);
+  refreshDataIntakeRef.current = refreshDataIntake;
+
+  const scheduleDataIntakeRefresh = useCallback(() => {
+    if (dataIntakeRefreshTimer.current !== null) {
+      window.clearTimeout(dataIntakeRefreshTimer.current);
+    }
+    dataIntakeRefreshTimer.current = window.setTimeout(() => {
+      dataIntakeRefreshTimer.current = null;
+      const taskId = activeTaskIdRef.current;
+      if (taskId) void refreshDataIntakeRef.current?.(taskId);
+    }, 120);
+  }, []);
+
+  useEffect(() => () => {
+    if (dataIntakeRefreshTimer.current !== null) {
+      window.clearTimeout(dataIntakeRefreshTimer.current);
+    }
+  }, []);
 
   const confirmDataMapping = useCallback(async (confirmed: DataMappingCandidate[]) => {
     if (!activeTaskId || !dataIntake) return;
@@ -981,11 +1025,21 @@ export default function WebApp() {
           "turn/started",
           "turn/completed",
           "serverRequest/resolved",
+          "platform/data-intake/changed",
         ].includes(method)
         || (["item/started", "item/completed"].includes(method) && agentRelevantItem)
         || method.endsWith("/requestApproval")
       ) {
         scheduleSupervisorOverviewRefresh();
+        if (shouldRefreshDataIntakeForAppEvent(method, runtimeItemType)) {
+          const eventTaskId = method === "platform/data-intake/changed"
+            && typeof params.taskId === "string"
+            ? params.taskId
+            : null;
+          if (!eventTaskId || eventTaskId === activeTaskIdRef.current) {
+            scheduleDataIntakeRefresh();
+          }
+        }
       }
       if (eventThreadId && event.workspace_id) {
         if (method === "thread/name/updated") {
@@ -1906,7 +1960,7 @@ export default function WebApp() {
         }
       }
     },
-    [scheduleSupervisorOverviewRefresh],
+    [scheduleDataIntakeRefresh, scheduleSupervisorOverviewRefresh],
   );
 
   /* ─── Connection ─── */
@@ -2114,13 +2168,14 @@ export default function WebApp() {
        readiness = await client.evaluateRunReadiness(wid, {
          providerId,
          modelId,
-         supervisorPolicy: supervisorPolicy
+         supervisorPolicy: supervisorPolicy && supervisorPolicy.source !== "draft"
            ? {
                policy_id: supervisorPolicy.policy_id,
                version: supervisorPolicy.version,
              }
-           : null,
-         agent: agent
+         : null,
+        supervisorDraftId: supervisorPolicy?.draft_id ?? null,
+        agent: agent
            ? {
                definition_id: agent.definition_id,
                version: agent.version,
@@ -2204,12 +2259,13 @@ export default function WebApp() {
        readinessFingerprint: readiness.evaluation_fingerprint,
        providerId,
        modelId,
-       supervisorPolicy: supervisorPolicy
+       supervisorPolicy: supervisorPolicy && supervisorPolicy.source !== "draft"
          ? {
              policy_id: supervisorPolicy.policy_id,
              version: supervisorPolicy.version,
            }
          : null,
+       supervisorDraftId: supervisorPolicy?.draft_id ?? null,
        agent: agent
          ? {
              definition_id: agent.definition_id,
@@ -2320,12 +2376,14 @@ export default function WebApp() {
         providerId,
         modelId,
         supervisorPolicy:
-          selection.kind === "supervisor"
+          selection.kind === "supervisor" && selection.policy.source !== "draft"
             ? {
                 policy_id: selection.policy.policy_id,
                 version: selection.policy.version,
               }
             : null,
+        supervisorDraftId:
+          selection.kind === "supervisor" ? selection.policy.draft_id : null,
         agent:
           selection.kind === "agent"
             ? {
@@ -2881,7 +2939,10 @@ export default function WebApp() {
               panelWidth={rightPanelWidth}
               onPanelWidthChange={setRightPanelWidth}
               listFiles={listWorkspaceFiles}
+              uploadFiles={uploadWorkspaceFiles}
               readFile={readWorkspaceFile}
+              downloadFile={downloadWorkspaceFile}
+              deleteFile={deleteWorkspaceFile}
               loadGitStatus={loadWorkspaceGitStatus}
               embedded
               enabled={rightPanelOpen && activeRightPanelTab === "files"}

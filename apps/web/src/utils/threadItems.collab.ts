@@ -290,6 +290,22 @@ function buildCollabDetail(
   return detailParts.join(" ");
 }
 
+export function collabBriefDescription(value: string) {
+  const normalized = value
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/^Task:\s*/i, "")
+    .replace(/^任务：\s*/, "")
+    .trim();
+  if (!normalized) return "";
+  const sentenceEnd = normalized.search(/[.。!?！？]/);
+  const sentence = sentenceEnd >= 0
+    ? normalized.slice(0, sentenceEnd + 1)
+    : normalized;
+  if (sentence.length <= 120) return sentence;
+  return `${Array.from(sentence).slice(0, 119).join("")}…`;
+}
+
 export function collabWaitCycleExplanation(tool: string, status: string) {
   const normalizedTool = tool
     .replace(/^collab:\s*/i, "")
@@ -377,12 +393,15 @@ export function parseCollabToolCallItem(
     receiverAgents,
   );
   const prompt = asString(item.prompt ?? "");
+  const brief = collabBriefDescription(prompt);
   const primaryReceiver = receiverFromInteraction ?? receiverFromSpawn ?? receiverAgents[0];
   return {
     id: asString(item.id),
     kind: "tool",
     toolType: "collabToolCall",
-    title: tool ? `Collab: ${tool}` : "Collab tool call",
+    title: tool
+      ? `Collab: ${tool}${brief ? ` · ${brief}` : ""}`
+      : "Collab tool call",
     detail: buildCollabDetail(sender ?? undefined, receiverAgents),
     status,
     output: buildCollabOutput(prompt, collabStatuses, tool, status),

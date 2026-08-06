@@ -279,7 +279,7 @@ export function useWorkspaceDialogs() {
           : "";
 
       return ask(
-        `Are you sure you want to delete "${workspaceName}"?\n\nThis will remove the workspace from CodexMonitor.${detail}`,
+        `Are you sure you want to delete "${workspaceName}"?\n\nThis will permanently remove the workspace and all files in it, including uncommitted changes, from CodexMonitor.${detail}`,
         {
           title: "Delete Workspace",
           kind: "warning",

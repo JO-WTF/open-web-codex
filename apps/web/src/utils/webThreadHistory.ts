@@ -2,7 +2,7 @@ import type { AgentMessagePhase, LogEntry } from "../WebApp";
 import { stripLeadingProviderSentinel } from "./providerText";
 import { parseInlineVisualizationArtifact } from "./replyCards";
 import { parseApprovalStatus } from "./approvalStatus";
-import { collabWaitCycleExplanation } from "./threadItems.collab";
+import { collabBriefDescription, collabWaitCycleExplanation } from "./threadItems.collab";
 
 export function unwrapWebRpcResult(value: unknown): unknown {
   let current = value;
@@ -296,6 +296,8 @@ export function webLogEntryFromThreadItem(
   if (type === "contextCompaction") return { id, level: "info", text: "Context compacted", kind: "tool", toolType: "Context", toolTitle: "Context compacted", toolStatus };
   if (type === "collabAgentToolCall" || type === "collabToolCall") {
     const tool = asText(item.tool) || "Agent collaboration";
+    const prompt = asText(item.prompt);
+    const brief = collabBriefDescription(prompt);
     const states = item.agentsStates;
     const hasStates = Boolean(
       states
@@ -309,9 +311,9 @@ export function webLogEntryFromThreadItem(
       text: "Agent collaboration",
       kind: "tool",
       toolType: "Agent",
-      toolTitle: tool,
+      toolTitle: brief ? `${tool} · ${brief}` : tool,
       toolStatus,
-      toolDetail: asText(item.prompt),
+      toolDetail: prompt,
       toolOutput: hasStates
         ? jsonText(states)
         : collabWaitCycleExplanation(tool, toolStatus),

@@ -86,6 +86,7 @@ export type RunReadinessRequest = {
   model_provider: string;
   model: string;
   supervisor_policy: SupervisorPolicySelection | null;
+  supervisor_draft_id?: string | null;
   agent: AgentRunSelection | null;
   fork_thread_id?: string | null;
   fork_source_run_id?: string | null;
@@ -281,7 +282,8 @@ export type DataIntakeInputRequest = {
 export type SupervisorPolicySummary = SupervisorPolicySelection & {
   display_name: string;
   description: string;
-  source: "repository" | "user_release";
+  source: "repository" | "user_release" | "draft";
+  draft_id?: string | null;
 };
 
 export type SupervisorInstructionPolicySelection = {
@@ -718,6 +720,11 @@ export type WorkspaceStatus = {
 export type WorkspaceFileContent = {
   content: string;
   truncated: boolean;
+};
+
+export type WorkspaceFileUploadResponse = {
+  status: string;
+  paths: string[];
 };
 
 export type WorkspaceDatasetUploadFile = {

@@ -25,6 +25,8 @@ vi.mock("../../../browser/session", () => ({
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("FileManager", () => {
@@ -71,6 +73,84 @@ describe("FileManager", () => {
     expect(screen.getByText("A")).toBeTruthy();
     fireEvent.click(screen.getByText("src"));
     expect(await screen.findByText("config.ts")).toBeTruthy();
+  });
+
+  it("downloads and deletes a file from the workspace", async () => {
+    const listFiles = vi.fn()
+      .mockResolvedValueOnce(["README.md"])
+      .mockResolvedValue([]);
+    const downloadFile = vi.fn().mockResolvedValue({
+      blob: new Blob(["initial\n"], { type: "text/plain" }),
+      filename: "README.md",
+    });
+    const deleteFile = vi.fn().mockResolvedValue({ status: "deleted", path: "README.md" });
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn().mockReturnValue("blob:workspace-file"),
+      revokeObjectURL: vi.fn(),
+    });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(
+      <FileManager
+        workspaceId="workspace-1"
+        selectedPath="README.md"
+        onSelectedPathChange={vi.fn()}
+        onClose={vi.fn()}
+        panelWidth={360}
+        onPanelWidthChange={vi.fn()}
+        listFiles={listFiles}
+        readFile={vi.fn().mockResolvedValue({ content: "initial\n", truncated: false })}
+        downloadFile={downloadFile}
+        deleteFile={deleteFile}
+        loadGitStatus={vi.fn().mockResolvedValue({ files: [] })}
+      />,
+    );
+
+    await screen.findByText("README.md");
+    fireEvent.click(screen.getByRole("button", { name: "Download README.md" }));
+    await waitFor(() => expect(downloadFile).toHaveBeenCalledWith("workspace-1", "README.md"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete README.md" }));
+    await waitFor(() => expect(deleteFile).toHaveBeenCalledWith("workspace-1", "README.md"));
+    await waitFor(() => expect(screen.getByText("No Workspace files yet")).toBeTruthy());
+  });
+
+  it("uploads dropped files into the Workspace and refreshes the tree", async () => {
+    const listFiles = vi.fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValue(["planning.csv"]);
+    const uploadFiles = vi.fn().mockResolvedValue({
+      status: "uploaded",
+      paths: ["planning.csv"],
+    });
+    render(
+      <FileManager
+        workspaceId="workspace-1"
+        selectedPath={null}
+        onSelectedPathChange={vi.fn()}
+        onClose={vi.fn()}
+        panelWidth={360}
+        onPanelWidthChange={vi.fn()}
+        listFiles={listFiles}
+        uploadFiles={uploadFiles}
+        readFile={vi.fn().mockResolvedValue({ content: "", truncated: false })}
+        loadGitStatus={vi.fn().mockResolvedValue({ files: [] })}
+        embedded
+      />,
+    );
+
+    expect(await screen.findByText("No Workspace files yet")).toBeTruthy();
+    const file = new File(["city,demand\nJakarta,10\n"], "planning.csv", { type: "text/csv" });
+    const dropzone = screen.getByTestId("workspace-file-dropzone");
+    fireEvent.dragEnter(dropzone, { dataTransfer: { types: ["Files"] } });
+    expect(screen.getByText("Drop files to upload")).toBeTruthy();
+    fireEvent.drop(dropzone, {
+      dataTransfer: { types: ["Files"], files: [file] },
+    });
+
+    await waitFor(() => expect(uploadFiles).toHaveBeenCalledWith("workspace-1", [file]));
+    expect(await screen.findByText("planning.csv")).toBeTruthy();
+    expect(screen.queryByText("Drop files to upload")).toBeNull();
   });
 
   it("opens the user-facing data draft uploader from the production Files panel", async () => {

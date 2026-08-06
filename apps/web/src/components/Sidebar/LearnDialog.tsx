@@ -545,7 +545,14 @@ export default function LearnDialog({
                   <dl>
                     <div><dt>Dataset</dt><dd>{blueprint.dataset.display_name}</dd></div>
                     <div><dt>Agents</dt><dd>{blueprint.agent_templates.length}</dd></div>
-                    <div><dt>Expected</dt><dd>{blueprint.expected_artifact_types.join(", ")}</dd></div>
+                    <div>
+                      <dt>Expected</dt>
+                      <dd className="web-learn-artifact-types">
+                        {blueprint.expected_artifact_types.map((artifactType) => (
+                          <span key={artifactType}>{artifactType}</span>
+                        ))}
+                      </dd>
+                    </div>
                   </dl>
                 </article>
               ) : null}

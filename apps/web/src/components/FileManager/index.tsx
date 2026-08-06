@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { ChangeEvent, DragEvent } from "react";
 import { createPortal } from "react-dom";
 import ChevronRight from "lucide-react/dist/esm/icons/chevron-right";
 import Database from "lucide-react/dist/esm/icons/database";
+import Download from "lucide-react/dist/esm/icons/download";
 import Folder from "lucide-react/dist/esm/icons/folder";
 import RefreshCw from "lucide-react/dist/esm/icons/refresh-cw";
 import Search from "lucide-react/dist/esm/icons/search";
+import Trash2 from "lucide-react/dist/esm/icons/trash-2";
+import Upload from "lucide-react/dist/esm/icons/upload";
 import X from "lucide-react/dist/esm/icons/x";
 import type { GitFileStatus } from "../../types";
 import { WorkspaceDataDraftDialog } from "../../features/files/components/WorkspaceDataDraftDialog";
@@ -19,7 +23,10 @@ type Props = {
   panelWidth: number;
   onPanelWidthChange: (width: number) => void;
   listFiles: (workspaceId: string) => Promise<string[]>;
+  uploadFiles?: (workspaceId: string, files: File[]) => Promise<unknown>;
   readFile: (workspaceId: string, path: string) => Promise<{ content: string; truncated: boolean }>;
+  downloadFile?: (workspaceId: string, path: string) => Promise<{ blob: Blob; filename: string }>;
+  deleteFile?: (workspaceId: string, path: string) => Promise<unknown>;
   loadGitStatus: (workspaceId: string) => Promise<{ files: GitFileStatus[] }>;
   embedded?: boolean;
   enabled?: boolean;
@@ -54,7 +61,7 @@ function resolveMarkdownLink(currentPath: string, targetPath: string) {
   return resolved.join("/");
 }
 
-export default function FileManager({ workspaceId, selectedPath, onSelectedPathChange, onClose, panelWidth, onPanelWidthChange, listFiles, readFile, loadGitStatus, embedded = false, enabled = true, onDataDraftChanged }: Props) {
+export default function FileManager({ workspaceId, selectedPath, onSelectedPathChange, onClose, panelWidth, onPanelWidthChange, listFiles, uploadFiles, readFile, downloadFile, deleteFile, loadGitStatus, embedded = false, enabled = true, onDataDraftChanged }: Props) {
   const [files, setFiles] = useState<string[]>([]);
   const [statuses, setStatuses] = useState<Map<string, string>>(new Map());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -65,9 +72,14 @@ export default function FileManager({ workspaceId, selectedPath, onSelectedPathC
   const [treeOpen, setTreeOpen] = useState(true);
   const [query, setQuery] = useState("");
   const [datasetDialogOpen, setDatasetDialogOpen] = useState(false);
+  const [fileActionPath, setFileActionPath] = useState<string | null>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [uploadingFiles, setUploadingFiles] = useState(false);
   const datasetDialogTrigger = useRef<HTMLElement | null>(null);
+  const uploadInput = useRef<HTMLInputElement | null>(null);
   const resizeSession = useRef<ResizeSession | null>(null);
   const refreshRequest = useRef(0);
+  const dragDepth = useRef(0);
 
   const refresh = async () => {
     if (!workspaceId) return;
@@ -124,6 +136,95 @@ export default function FileManager({ workspaceId, selectedPath, onSelectedPathC
   useEffect(() => () => {
     resizeSession.current?.cleanup(false);
   }, []);
+
+  const handleDownload = async (path: string) => {
+    if (!workspaceId || !downloadFile) return;
+    setFileActionPath(path);
+    setError(null);
+    try {
+      const { blob, filename } = await downloadFile(workspaceId, path);
+      if (typeof URL.createObjectURL !== "function") {
+        throw new Error("The browser does not support file downloads.");
+      }
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = filename;
+      anchor.style.display = "none";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setFileActionPath(null);
+    }
+  };
+
+  const handleDelete = async (path: string) => {
+    if (!workspaceId || !deleteFile || !window.confirm(`Delete ${path}?`)) return;
+    setFileActionPath(path);
+    setError(null);
+    try {
+      await deleteFile(workspaceId, path);
+      if (selectedPath === path) onSelectedPathChange(null);
+      await refresh();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setFileActionPath(null);
+    }
+  };
+
+  const handleUpload = async (files: File[]) => {
+    if (!workspaceId || !uploadFiles || files.length === 0) return;
+    setUploadingFiles(true);
+    setError(null);
+    try {
+      await uploadFiles(workspaceId, files);
+      await refresh();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setUploadingFiles(false);
+    }
+  };
+
+  const hasFiles = (event: DragEvent<HTMLElement>) =>
+    Array.from(event.dataTransfer.types).some((type) =>
+      type === "Files" || type === "public.file-url" || type === "application/x-moz-file",
+    );
+  const handleDragEnter = (event: DragEvent<HTMLElement>) => {
+    if (!uploadFiles || !workspaceId || !hasFiles(event)) return;
+    event.preventDefault();
+    dragDepth.current += 1;
+    setTreeOpen(true);
+    setIsDragOver(true);
+  };
+  const handleDragOver = (event: DragEvent<HTMLElement>) => {
+    if (!uploadFiles || !workspaceId || !hasFiles(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  };
+  const handleDragLeave = (event: DragEvent<HTMLElement>) => {
+    if (!uploadFiles || !workspaceId || !hasFiles(event)) return;
+    event.preventDefault();
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setIsDragOver(false);
+  };
+  const handleDrop = (event: DragEvent<HTMLElement>) => {
+    if (!uploadFiles || !workspaceId || !hasFiles(event)) return;
+    event.preventDefault();
+    dragDepth.current = 0;
+    setIsDragOver(false);
+    void handleUpload(Array.from(event.dataTransfer.files));
+  };
+  const handleFileInputChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.currentTarget.files ?? []);
+    event.currentTarget.value = "";
+    void handleUpload(files);
+  };
 
   const rows = useMemo(() => {
     const folders = new Set<string>();
@@ -225,11 +326,36 @@ export default function FileManager({ workspaceId, selectedPath, onSelectedPathC
             <Database size={14} aria-hidden="true" />
             <span>Add data</span>
           </button>
+          {uploadFiles ? <>
+            <button
+              type="button"
+              onClick={() => uploadInput.current?.click()}
+              disabled={!workspaceId || uploadingFiles}
+              aria-label="Upload files"
+              title="Upload files"
+            ><Upload size={14} aria-hidden="true" /></button>
+            <input
+              ref={uploadInput}
+              className="web-file-upload-input"
+              type="file"
+              multiple
+              tabIndex={-1}
+              aria-hidden="true"
+              onChange={handleFileInputChange}
+            />
+          </> : null}
           <button type="button" onClick={() => void refresh()} aria-label="Refresh files"><RefreshCw size={14} /></button>
           {!embedded ? <button type="button" onClick={onClose} aria-label="Collapse file manager"><X size={15} /></button> : null}
         </div>
       </div>
-      <section className={`web-file-tree-section${treeOpen ? " is-open" : ""}`}>
+      <section
+        className={`web-file-tree-section${treeOpen ? " is-open" : ""}${isDragOver ? " is-drag-over" : ""}`}
+        data-testid="workspace-file-dropzone"
+        onDragEnter={handleDragEnter}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
         <button type="button" className="web-file-tree-heading" aria-expanded={treeOpen} onClick={() => setTreeOpen((open) => !open)}>
           <ChevronRight size={13} className={treeOpen ? "is-open" : ""} />
           <span>Workspace</span>
@@ -240,7 +366,17 @@ export default function FileManager({ workspaceId, selectedPath, onSelectedPathC
             <Search size={13} aria-hidden="true" />
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter files…" aria-label="Filter files" />
           </label>
+          {uploadFiles && workspaceId ? <div className="web-file-drop-caption">
+            <Upload size={12} aria-hidden="true" />
+            <span>Drag files here to add them to this Workspace</span>
+          </div> : null}
           <div className="web-file-manager-tree">
+            {isDragOver ? <div className="web-file-drop-overlay" role="status">
+              <Upload size={20} aria-hidden="true" />
+              <strong>Drop files to upload</strong>
+              <span>Files will be added to this Workspace.</span>
+            </div> : null}
+            {uploadingFiles ? <div className="web-file-upload-status" role="status">Uploading files…</div> : null}
             {!workspaceId ? <div className="web-file-empty">Select a workspace</div> : rows.length === 0 && !query.trim() ? (
               <div className="web-file-empty web-file-empty--data">
                 <Database size={20} aria-hidden="true" />
@@ -256,13 +392,35 @@ export default function FileManager({ workspaceId, selectedPath, onSelectedPathC
               </div>
             ) : rows.length === 0 ? <div className="web-file-empty">No matching files</div> : rows.map((row) => {
               const status = statuses.get(row.path);
+              const statusLabel = status?.includes("D") ? "D" : status?.includes("?") || status?.includes("A") ? "A" : status ? "M" : null;
               const fileTypeIconUrl = row.folder ? null : getFileTypeIconUrl(row.path);
-              return <button type="button" className={`web-file-row${selectedPath === row.path ? " is-active" : ""}`} key={row.path} style={{ paddingLeft: 8 + row.depth * 14 }} onClick={() => row.folder ? setExpanded((current) => { const next = new Set(current); next.has(row.path) ? next.delete(row.path) : next.add(row.path); return next; }) : onSelectedPathChange(row.path)}>
-                {row.folder ? <ChevronRight size={13} className={expanded.has(row.path) ? "is-open" : ""} /> : <span className="web-file-spacer" />}
-                {row.folder ? <Folder size={15} className="web-folder-icon" /> : <img className="web-file-type-icon" src={fileTypeIconUrl ?? ""} alt="" loading="lazy" decoding="async" />}
-                <span className="web-file-name">{row.name}</span>
-                {status && <span className={`web-file-status is-${status.includes("?") || status.includes("A") ? "added" : "modified"}`}>{status.includes("?") || status.includes("A") ? "A" : "M"}</span>}
-              </button>;
+              const actionPending = fileActionPath === row.path;
+              return <div className="web-file-row-wrap" key={row.path} style={{ paddingLeft: 8 + row.depth * 14 }}>
+                <button type="button" className={`web-file-row${selectedPath === row.path ? " is-active" : ""}`} onClick={() => row.folder ? setExpanded((current) => { const next = new Set(current); next.has(row.path) ? next.delete(row.path) : next.add(row.path); return next; }) : onSelectedPathChange(row.path)}>
+                  {row.folder ? <ChevronRight size={13} className={expanded.has(row.path) ? "is-open" : ""} /> : <span className="web-file-spacer" />}
+                  {row.folder ? <Folder size={15} className="web-folder-icon" /> : <img className="web-file-type-icon" src={fileTypeIconUrl ?? ""} alt="" loading="lazy" decoding="async" />}
+                  <span className="web-file-name">{row.name}</span>
+                  {statusLabel && <span className={`web-file-status is-${statusLabel === "A" ? "added" : statusLabel === "D" ? "deleted" : "modified"}`}>{statusLabel}</span>}
+                </button>
+                {!row.folder && statusLabel !== "D" && (downloadFile || deleteFile) ? <div className="web-file-actions">
+                  {downloadFile ? <button
+                    type="button"
+                    className="web-file-action"
+                    aria-label={`Download ${row.path}`}
+                    title="Download file"
+                    disabled={actionPending}
+                    onClick={(event) => { event.stopPropagation(); void handleDownload(row.path); }}
+                  ><Download size={13} aria-hidden="true" /></button> : null}
+                  {deleteFile ? <button
+                    type="button"
+                    className="web-file-action is-danger"
+                    aria-label={`Delete ${row.path}`}
+                    title="Delete file"
+                    disabled={actionPending}
+                    onClick={(event) => { event.stopPropagation(); void handleDelete(row.path); }}
+                  ><Trash2 size={13} aria-hidden="true" /></button> : null}
+                </div> : null}
+              </div>;
             })}
           </div>
         </> : null}

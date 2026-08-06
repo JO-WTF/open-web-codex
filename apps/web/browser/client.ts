@@ -34,6 +34,7 @@ import type {
   Workspace,
   WorkspaceStatus,
   WorkspaceFileContent,
+  WorkspaceFileUploadResponse,
   WorkspaceFileDiff,
   PublishWorkspaceDatasetRequest,
   WorkspaceDatasetReleaseSummary,
@@ -406,6 +407,7 @@ export class PlatformClient {
       forkThreadId?: string | null;
       forkSourceRunId?: string | null;
       supervisorPolicy?: SupervisorPolicySelection | null;
+      supervisorDraftId?: string | null;
       agent?: AgentRunSelection | null;
       purpose?: "conversation" | "analysis";
     },
@@ -419,6 +421,7 @@ export class PlatformClient {
         fork_thread_id: options.forkThreadId ?? null,
         fork_source_run_id: options.forkSourceRunId ?? null,
         supervisor_policy: options.supervisorPolicy ?? null,
+        supervisor_draft_id: options.supervisorDraftId ?? null,
         agent: options.agent ?? null,
         ...(options.purpose ? { purpose: options.purpose } : {}),
       }),
@@ -911,6 +914,21 @@ export class PlatformClient {
     return this.request<string[]>(`/api/workspaces/${encodeURIComponent(workspaceId)}/files`);
   }
 
+  uploadWorkspaceFiles(workspaceId: string, files: File[]) {
+    if (files.length === 0) {
+      throw new Error("Choose at least one file to upload.");
+    }
+    const body = new FormData();
+    for (const file of files) {
+      const relativePath = file.webkitRelativePath || file.name;
+      body.append("files", file, relativePath);
+    }
+    return this.request<WorkspaceFileUploadResponse>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/files`,
+      { method: "POST", body },
+    );
+  }
+
   listWorkspaceDatasetReleases(workspaceId: string) {
     return this.request<WorkspaceDatasetReleaseSummary[]>(
       `/api/workspaces/${encodeURIComponent(workspaceId)}/datasets`,
@@ -941,6 +959,47 @@ export class PlatformClient {
     const query = new URLSearchParams({ path });
     return this.request<WorkspaceFileContent>(
       `/api/workspaces/${encodeURIComponent(workspaceId)}/files/content?${query.toString()}`,
+    );
+  }
+
+  async downloadWorkspaceFile(workspaceId: string, path: string) {
+    const query = new URLSearchParams({ path });
+    const response = await fetch(
+      `${this.baseUrl}/api/workspaces/${encodeURIComponent(workspaceId)}/files/download?${query.toString()}`,
+      {
+        cache: "no-store",
+        headers: this.token ? { authorization: `Bearer ${this.token}` } : undefined,
+      },
+    );
+    if (!response.ok) {
+      const text = await response.text();
+      let message = `Request failed (HTTP ${response.status}).`;
+      try {
+        const payload = JSON.parse(text) as { message?: unknown };
+        if (typeof payload.message === "string") message = payload.message;
+      } catch {
+        // Keep the typed fallback for non-JSON platform errors.
+      }
+      throw new Error(message);
+    }
+    const contentDisposition = response.headers.get("content-disposition") ?? "";
+    const encodedFilename = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+    const quotedFilename = contentDisposition.match(/filename="([^"]+)"/i)?.[1];
+    let filename = quotedFilename || path.split("/").pop() || "download";
+    if (encodedFilename) {
+      try {
+        filename = decodeURIComponent(encodedFilename);
+      } catch {
+        // Use the ASCII fallback or requested path name when decoding fails.
+      }
+    }
+    return { blob: await response.blob(), filename };
+  }
+
+  deleteWorkspaceFile(workspaceId: string, path: string) {
+    return this.request<{ status: string; path: string }>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/files`,
+      { method: "DELETE", body: JSON.stringify({ path }) },
     );
   }
 

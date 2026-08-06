@@ -793,6 +793,47 @@ describe("WebApp direct Server client", () => {
       .toBe(true);
   });
 
+  it("downloads and deletes Workspace files through typed platform methods", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === `/api/workspaces/${workspace.id}/files` && init?.method === "POST") {
+        expect(init.body).toBeInstanceOf(FormData);
+        return json({ status: "uploaded", paths: ["planning.csv"] });
+      }
+      if (url.pathname === `/api/workspaces/${workspace.id}/files/download`) {
+        return new Response("workspace data", {
+          status: 200,
+          headers: {
+            "content-type": "application/octet-stream",
+            "content-disposition": "attachment; filename=\"download\"; filename*=UTF-8''report.csv",
+          },
+        });
+      }
+      if (url.pathname === `/api/workspaces/${workspace.id}/files` && init?.method === "DELETE") {
+        expect(JSON.parse(String(init.body))).toEqual({ path: "data/report.csv" });
+        return json({ status: "deleted", path: "data/report.csv" });
+      }
+      throw new Error(`Unexpected Server request: ${url.pathname}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
+
+    await expect(client.uploadWorkspaceFiles(project.id, [
+      new File(["city,demand\nJakarta,10\n"], "planning.csv", { type: "text/csv" }),
+    ])).resolves.toEqual({ status: "uploaded", paths: ["planning.csv"] });
+    const downloaded = await client.downloadWorkspaceFile(project.id, "data/report.csv");
+    expect(downloaded.filename).toBe("report.csv");
+    await expect(client.deleteWorkspaceFile(project.id, "data/report.csv")).resolves.toEqual({
+      status: "deleted",
+      path: "data/report.csv",
+    });
+
+    expect(fetchMock.mock.calls[2]).toEqual([
+      "http://server.test/api/workspaces/workspace-1/files",
+      expect.objectContaining({ method: "DELETE" }),
+    ]);
+  });
+
   it("uses the configured visible Provider model as the WebApp default", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input));
@@ -943,6 +984,44 @@ describe("WebApp direct Server client", () => {
           turnId: "turn-1",
           sourceType: "thread/status/changed",
           status: { type: "active", activeFlags: [] },
+        },
+      },
+    });
+    socket?.onmessage?.({
+      data: JSON.stringify({
+        type: "run.event",
+        version: 1,
+        event: {
+          id: "intake-event-live",
+          sequence: 2,
+          run_id: run.id,
+          event_type: "platform.data_intake.changed",
+          projection_version: 1,
+          thread_id: "thread-1",
+          turn_id: "turn-1",
+          item_id: null,
+          payload: {
+            data: {
+              sourceType: "platform/data-intake/changed",
+              taskId: task.id,
+              inputRevision: 2,
+            },
+          },
+          created_at: "2026-07-22T00:00:04Z",
+        },
+      }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(events).toContainEqual({
+      workspace_id: project.id,
+      message: {
+        method: "platform/data-intake/changed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          sourceType: "platform/data-intake/changed",
+          taskId: task.id,
+          inputRevision: 2,
         },
       },
     });

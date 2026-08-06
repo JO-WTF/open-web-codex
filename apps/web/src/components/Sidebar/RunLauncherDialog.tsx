@@ -347,7 +347,7 @@ export default function RunLauncherDialog({
 
         {mode === "supervisor" ? (
           <section className="web-run-launcher-section">
-            <h3>Supervisor Release</h3>
+            <h3>Supervisor Release or Draft</h3>
             <div className="web-run-launcher-options">
               {supervisorPoliciesLoading ? (
                 <div className="web-run-launcher-empty" role="status">
@@ -372,14 +372,14 @@ export default function RunLauncherDialog({
                         ? "is-active"
                         : undefined
                     }
-                    key={`${policy.policy_id}@${policy.version}`}
+                    key={`${policy.policy_id}@${policy.version}:${policy.draft_id ?? policy.source}`}
                     disabled={starting || busy}
                     onClick={() =>
                       void evaluate({ kind: "supervisor", policy })
                     }
                   >
                     <strong>{policy.display_name}</strong>
-                    <span>{policy.version}</span>
+                    <span>{policy.source === "draft" ? "Draft" : policy.version}</span>
                     <small>{policy.description}</small>
                   </button>
                 ))

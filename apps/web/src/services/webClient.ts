@@ -90,11 +90,11 @@ function threadStartDraftKey(
 }
 
 function threadStartExecutionKey(
-  supervisorPolicy: SupervisorPolicySelection | null | undefined,
+  supervisorPolicy: (SupervisorPolicySelection & { draft_id?: string | null }) | null | undefined,
   agent: AgentRunSelection | null | undefined,
 ) {
   if (supervisorPolicy) {
-    return `supervisor:${supervisorPolicy.policy_id}@${supervisorPolicy.version}`;
+    return `supervisor:${supervisorPolicy.policy_id}@${supervisorPolicy.version}:${supervisorPolicy.draft_id ?? "published"}`;
   }
   if (agent) {
     return `agent:${agent.definition_id}@${agent.version}:${agent.release_id ?? "repository"}`;
@@ -176,6 +176,13 @@ function runtimeMessage(event: RunEvent): JsonRecord | null {
       method,
       id: approvalId,
       params: { ...base, ...params },
+    };
+  }
+  if (event.event_type === "platform.data_intake.changed") {
+    if (data.sourceType !== "platform/data-intake/changed") return null;
+    return {
+      method: "platform/data-intake/changed",
+      params: { ...base, ...data },
     };
   }
   if (event.event_type === "codex.item.started" || event.event_type === "codex.item.completed") {
@@ -458,6 +465,7 @@ export class CodexMonitorWebClient {
       providerId: string;
       modelId: string;
       supervisorPolicy?: SupervisorPolicySelection | null;
+      supervisorDraftId?: string | null;
       agent?: AgentRunSelection | null;
       onRunAccepted?: (accepted: AcceptedThreadStart) => void;
     },
@@ -539,6 +547,7 @@ export class CodexMonitorWebClient {
             readinessFingerprint: options.readinessFingerprint,
             idempotencyKey: draft.runIdempotencyKey,
             supervisorPolicy: options?.supervisorPolicy ?? null,
+            supervisorDraftId: options?.supervisorDraftId ?? null,
             agent: options?.agent ?? null,
             purpose: "conversation",
           })
@@ -576,6 +585,7 @@ export class CodexMonitorWebClient {
       providerId: string;
       modelId: string;
       supervisorPolicy?: SupervisorPolicySelection | null;
+      supervisorDraftId?: string | null;
       agent?: AgentRunSelection | null;
       purpose?: "conversation" | "analysis";
     },
@@ -587,6 +597,7 @@ export class CodexMonitorWebClient {
       model_provider: options.providerId,
       model: options.modelId,
       supervisor_policy: options.supervisorPolicy ?? null,
+      supervisor_draft_id: options.supervisorDraftId ?? null,
       agent: options.agent ?? null,
       purpose: options.purpose ?? "conversation",
     });
@@ -843,9 +854,24 @@ export class CodexMonitorWebClient {
     return await this.platform.listWorkspaceFiles(workspaceId);
   }
 
+  async uploadWorkspaceFiles(workspaceId: string, files: File[], threadId?: string | null) {
+    if (threadId) await this.readyRunForWorkspace(workspaceId, threadId);
+    return await this.platform.uploadWorkspaceFiles(workspaceId, files);
+  }
+
   async readWorkspaceFile(workspaceId: string, path: string, threadId?: string | null) {
     if (threadId) await this.readyRunForWorkspace(workspaceId, threadId);
     return await this.platform.readWorkspaceFile(workspaceId, path);
+  }
+
+  async downloadWorkspaceFile(workspaceId: string, path: string, threadId?: string | null) {
+    if (threadId) await this.readyRunForWorkspace(workspaceId, threadId);
+    return await this.platform.downloadWorkspaceFile(workspaceId, path);
+  }
+
+  async deleteWorkspaceFile(workspaceId: string, path: string, threadId?: string | null) {
+    if (threadId) await this.readyRunForWorkspace(workspaceId, threadId);
+    return await this.platform.deleteWorkspaceFile(workspaceId, path);
   }
 
   async getGitStatus(workspaceId: string, threadId?: string | null) {

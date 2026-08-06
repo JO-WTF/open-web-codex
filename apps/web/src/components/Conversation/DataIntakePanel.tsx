@@ -29,7 +29,12 @@ function mappingKey(candidate: DataMappingCandidate) {
   ].join("|");
 }
 
-function statusLabel(status: DataIntakeSessionSummary["status"]) {
+function statusLabel(session: DataIntakeSessionSummary) {
+  if (session.status === "active" && session.inputRequests.length > 0) {
+    return session.inputRequests.some((request) => request.kind === "confirm_profile")
+      ? "Awaiting profile confirmation"
+      : "Awaiting your input";
+  }
   return {
     active: "Preparing planning inputs",
     ready: "Ready for analysis",
@@ -42,6 +47,12 @@ function answerValue(session: DataIntakeSessionSummary, name: string) {
   const answer = session.answers.find((item) => item.name === name);
   if (answer?.value === undefined || answer.value === null) return "";
   return String(answer.value);
+}
+
+function isSyntheticDemo(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const profile = value as Record<string, unknown>;
+  return profile.dataClassification === "synthetic_demo";
 }
 
 export default function DataIntakePanel({
@@ -77,6 +88,7 @@ export default function DataIntakePanel({
   const showDataGap = pendingKinds.has("provide_data") || (session?.status === "active" && session.gaps.length > 0 && !showMapping);
   const showFinalChecklist = pendingKinds.has("confirm_analysis");
   const showParameters = pendingKinds.has("answer_parameters");
+  const hasPendingRequest = pendingKinds.size > 0;
 
   if (loading) {
     return <section className="web-data-intake" aria-live="polite">Loading data readiness…</section>;
@@ -91,7 +103,10 @@ export default function DataIntakePanel({
         </div>
         {session ? (
           <div className="web-data-intake-actions">
-            <span className={`web-data-intake-status is-${session.status}`}>{statusLabel(session.status)}</span>
+            {isSyntheticDemo(session.sourceProfile) ? (
+              <span className="web-data-intake-status">Synthetic demo</span>
+            ) : null}
+            <span className={`web-data-intake-status is-${session.status}`}>{statusLabel(session)}</span>
             <button type="button" className="ghost" onClick={onRefresh}>Refresh</button>
           </div>
         ) : null}
@@ -242,7 +257,7 @@ export default function DataIntakePanel({
           <button type="submit" className="primary">Confirm parameters</button>
         </form>
       ) : null}
-      {session && session.status === "active" && !showDataGap && !showMapping && !showParameters && !showFinalChecklist ? <p>输入已提交，Network/Data Agent 正在完成下一步画像、归一化或检查。</p> : null}
+      {session && session.status === "active" && !hasPendingRequest && !showDataGap && !showMapping && !showParameters && !showFinalChecklist ? <p>输入已提交，Network/Data Agent 正在完成下一步画像、归一化或检查。</p> : null}
       {showFinalChecklist && session?.readinessReview ? (
         <div className="web-data-intake-checklist">
           <strong>Final analysis checklist</strong>

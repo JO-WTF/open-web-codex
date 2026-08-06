@@ -10,7 +10,10 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import WebApp, { prepareTutorialPromptDraft } from "./WebApp";
+import WebApp, {
+  prepareTutorialPromptDraft,
+  shouldRefreshDataIntakeForAppEvent,
+} from "./WebApp";
 import type { AppServerEvent } from "./types";
 
 let appServerEventHandler: ((event: AppServerEvent) => void) | null = null;
@@ -106,6 +109,15 @@ describe("WebApp workspace-first messaging", () => {
     client.sendUserMessage.mockResolvedValue({ turn: { id: "turn-1" } });
     client.interruptTurn.mockResolvedValue({ status: "interrupted" });
     client.respondToServerRequest.mockResolvedValue({});
+  });
+
+  it("refreshes data intake when Agent output can publish a new user request", () => {
+    expect(shouldRefreshDataIntakeForAppEvent("platform/data-intake/changed", null)).toBe(true);
+    expect(shouldRefreshDataIntakeForAppEvent("item/completed", "mcpToolCall")).toBe(true);
+    expect(shouldRefreshDataIntakeForAppEvent("item/completed", "agentMessage")).toBe(true);
+    expect(shouldRefreshDataIntakeForAppEvent("turn/completed", null)).toBe(true);
+    expect(shouldRefreshDataIntakeForAppEvent("item/started", "mcpToolCall")).toBe(false);
+    expect(shouldRefreshDataIntakeForAppEvent("item/completed", "commandExecution")).toBe(false);
   });
 
   it("does not overwrite an existing composer draft with a tutorial prompt", () => {

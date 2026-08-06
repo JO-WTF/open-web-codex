@@ -187,6 +187,46 @@ describe("LearnDialog", () => {
     ).toBe(true);
   });
 
+  it("renders every expected Artifact type as an independently wrapping item", async () => {
+    const expectedArtifactTypes = [
+      "indonesia_dataset_inspection.v1",
+      "indonesia_service_baseline.v1",
+      "indonesia_current_network_analysis.v1",
+      "indonesia_candidate_scenario.v1",
+      "indonesia_location_optimization.v1",
+      "indonesia_network_map.v1",
+      "geojson.v1",
+      "indonesia_decision_report.v1",
+      "report.v1",
+      "map.v3",
+    ];
+    getTutorialBlueprint.mockResolvedValueOnce({
+      ...blueprint,
+      expected_artifact_types: expectedArtifactTypes,
+    });
+
+    const { container } = render(
+      <LearnDialog
+        workspaces={[workspace]}
+        activeWorkspaceId="workspace-1"
+        busy={false}
+        onEvaluateReadiness={vi.fn(async () => ready)}
+        onStartTask={vi.fn()}
+        onReadinessAction={vi.fn()}
+        onCatalogChanged={vi.fn()}
+        onPromptReady={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "Prepared network case" });
+    const items = Array.from(
+      container.querySelectorAll(".web-learn-artifact-types > span"),
+      (item) => item.textContent,
+    );
+    expect(items).toEqual(expectedArtifactTypes);
+  });
+
   it("keeps a partial installation incomplete and shows every typed issue", async () => {
     reconcileTutorialBlueprint.mockResolvedValueOnce({
       status: "partial",
