@@ -40,11 +40,13 @@ EXCLUDED_DIRS = {
     "dist",
     "build",
     ".venv",
+    ".demo-staging",
     "__pycache__",
     "datasets",
 }
 SUPPORTED_SUFFIXES = {".xlsx", ".csv", ".json"}
 SANDBOX_META = "codex/sandbox-state-meta"
+DEMO_MANIFEST_SCHEMA = "demo_workspace_sources.v1"
 
 
 def trusted_workspace_root(meta: Any) -> Path:
@@ -76,6 +78,21 @@ def _iter_files(root: Path) -> list[Path]:
     return files
 
 
+def workspace_contains_supported_sources(root: Path) -> bool:
+    """Detect any supported source, including files discovery would reject by size."""
+    for path in root.rglob("*"):
+        relative = path.relative_to(root)
+        if any(part in EXCLUDED_DIRS for part in relative.parts):
+            continue
+        if path.suffix.lower() not in SUPPORTED_SUFFIXES:
+            continue
+        if path.is_symlink():
+            raise ValueError("workspace_supported_source_symlink_rejected")
+        if path.is_file():
+            return True
+    return False
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -95,7 +112,8 @@ def discover(root: Path) -> list[dict[str, Any]]:
     ]
     if legacy:
         raise ValueError(
-            "unsupported_source_format: legacy .xls/.xlsm files must be exported as .xlsx, .csv or .json"
+            "unsupported_source_format: legacy .xls/.xlsm files must be exported "
+            "as .xlsx, .csv or .json"
         )
     files = _iter_files(root)
     records: list[dict[str, Any]] = []
@@ -105,9 +123,7 @@ def discover(root: Path) -> list[dict[str, Any]]:
             continue
         digest = _sha256_file(path)
         relative = path.relative_to(root).as_posix()
-        source_ref = "source-" + hashlib.sha256(
-            f"{relative}:{size}:{digest}".encode()
-        ).hexdigest()
+        source_ref = "source-" + hashlib.sha256(f"{relative}:{size}:{digest}".encode()).hexdigest()
         record = {
             "source_ref": source_ref,
             "display_name": path.name,
@@ -130,6 +146,65 @@ def discover(root: Path) -> list[dict[str, Any]]:
     return records
 
 
+def workspace_source_metadata(root: Path) -> dict[str, Any]:
+    """Return verified source classification without trusting a filename alone."""
+    manifests = sorted(root.glob("demo-data/*/demo-manifest.json"))
+    if not manifests:
+        return {"dataClassification": "workspace_data"}
+    if len(manifests) != 1 or manifests[0].is_symlink():
+        raise ValueError("demo_manifest_conflict")
+    manifest_path = manifests[0]
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("demo_manifest_invalid") from error
+    if (
+        manifest.get("schemaVersion") != DEMO_MANIFEST_SCHEMA
+        or manifest.get("dataClassification") != "synthetic_demo"
+        or not isinstance(manifest.get("template"), dict)
+        or not isinstance(manifest.get("files"), list)
+    ):
+        raise ValueError("demo_manifest_invalid")
+    expected_names: set[str] = set()
+    for item in manifest["files"]:
+        if not isinstance(item, dict):
+            raise ValueError("demo_manifest_invalid")
+        name = item.get("displayName")
+        expected_size = item.get("bytes")
+        expected_digest = item.get("contentSha256")
+        if (
+            not isinstance(name, str)
+            or Path(name).name != name
+            or name in expected_names
+            or not isinstance(expected_size, int)
+            or not isinstance(expected_digest, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", expected_digest)
+        ):
+            raise ValueError("demo_manifest_invalid")
+        expected_names.add(name)
+        source = manifest_path.parent / name
+        if source.is_symlink() or not source.is_file():
+            raise ValueError("demo_manifest_source_missing")
+        if source.stat().st_size != expected_size or _sha256_file(source) != expected_digest:
+            raise ValueError("demo_manifest_source_mismatch")
+    actual_names = {
+        path.name
+        for path in manifest_path.parent.iterdir()
+        if path.is_file() and path.name != manifest_path.name
+    }
+    if actual_names != expected_names:
+        raise ValueError("demo_manifest_source_mismatch")
+    template = manifest["template"]
+    return {
+        "dataClassification": "synthetic_demo",
+        "demoTemplate": {
+            "id": template.get("id"),
+            "version": template.get("version"),
+            "seed": template.get("seed"),
+        },
+    }
+
+
 def _resolve_ref(root: Path, source_ref: str) -> Path:
     for path in _iter_files(root):
         size = path.stat().st_size
@@ -137,9 +212,7 @@ def _resolve_ref(root: Path, source_ref: str) -> Path:
             continue
         digest = _sha256_file(path)
         relative = path.relative_to(root).as_posix()
-        candidate = "source-" + hashlib.sha256(
-            f"{relative}:{size}:{digest}".encode()
-        ).hexdigest()
+        candidate = "source-" + hashlib.sha256(f"{relative}:{size}:{digest}".encode()).hexdigest()
         if candidate == source_ref:
             return path
     raise ValueError("source_ref is not present in the authorized Workspace")
@@ -170,7 +243,13 @@ def inspect_csv(path: Path) -> dict[str, Any]:
     text = decode_text(raw)
     sample = text.splitlines()[: MAX_SAMPLE_ROWS + 1]
     if not sample:
-        return {"kind": "table", "columns": [], "rows": []}
+        return {
+            "kind": "table",
+            "columns": [],
+            "preview": _preview_payload([]),
+            "record_count": 0,
+            "record_count_exact": True,
+        }
     try:
         dialect = csv.Sniffer().sniff("\n".join(sample[:10]), delimiters=",;\t|")
         delimiter = dialect.delimiter
@@ -178,12 +257,37 @@ def inspect_csv(path: Path) -> dict[str, Any]:
         delimiter = ","
     rows = list(csv.reader(sample, delimiter=delimiter))
     header = [cell.strip() for cell in rows[0][:MAX_XLSX_COLUMNS]]
+    preview_rows = [row[:MAX_XLSX_COLUMNS] for row in rows[1 : MAX_SAMPLE_ROWS + 1]]
     return {
         "kind": "table",
         "delimiter": delimiter,
         "columns": header,
-        "rows": [row[:MAX_XLSX_COLUMNS] for row in rows[1:MAX_SAMPLE_ROWS + 1]],
+        "preview": _preview_payload(preview_rows),
+        "record_count": _count_csv_records(path, delimiter),
+        "record_count_exact": True,
     }
+
+
+def _preview_payload(rows: list[Any]) -> dict[str, Any]:
+    return {
+        "strategy": "head",
+        "limit": MAX_SAMPLE_ROWS,
+        "returned_count": len(rows),
+        "complete": False,
+        "rows": rows,
+    }
+
+
+def _count_csv_records(path: Path, delimiter: str) -> int:
+    with path.open("rb") as binary:
+        text_stream = io.TextIOWrapper(
+            binary,
+            encoding=detect_encoding(_read_prefix(path, 64 * 1024)),
+            errors="strict",
+        )
+        reader = csv.reader(text_stream, delimiter=delimiter)
+        next(reader, None)
+        return sum(1 for row in reader if any(cell not in (None, "") for cell in row))
 
 
 def inspect_json(path: Path) -> dict[str, Any]:
@@ -210,14 +314,16 @@ def inspect_json(path: Path) -> dict[str, Any]:
                 arrays[array_key] = {
                     "path": "$" if array_key == "$" else f"$.{array_key.replace('.item', '')}",
                     "length": 0,
-                    "samples": [],
+                    "length_exact": True,
+                    "preview": _preview_payload([]),
                 }
             if event == "map_key":
                 object_keys.setdefault(prefix, set()).add(str(value)[:256])
 
-    # ijson's event stream is used above for limits and structure.  A second,
-    # bounded pass extracts at most three object samples per discovered array;
-    # the full JSON document is never loaded into memory or sent to the model.
+    # ijson's event stream is used above for limits and structure.  A second
+    # streaming pass counts every item while extracting at most three preview
+    # items per discovered array.  The full JSON document is never loaded into
+    # memory or sent to the model.
     for array_prefix, array in arrays.items():
         item_prefix = "item" if array_prefix == "$" else f"{array_prefix}.item"
         with path.open("rb") as stream:
@@ -226,32 +332,34 @@ def inspect_json(path: Path) -> dict[str, Any]:
                     array["length"] = index + 1
                     if index < 3:
                         if isinstance(item, dict):
-                            array["samples"].append({
-                                "kind": "object",
-                                "fields": {
-                                    str(key)[:256]: {
-                                        "type": type(value).__name__,
-                                        "sample": _bounded_json_sample(value),
-                                    }
-                                    for key, value in list(item.items())[:MAX_XLSX_COLUMNS]
-                                },
-                            })
+                            array["preview"]["rows"].append(
+                                {
+                                    "kind": "object",
+                                    "fields": {
+                                        str(key)[:256]: {
+                                            "type": type(value).__name__,
+                                            "sample": _bounded_json_sample(value),
+                                        }
+                                        for key, value in list(item.items())[:MAX_XLSX_COLUMNS]
+                                    },
+                                }
+                            )
                         else:
-                            array["samples"].append({
-                                "kind": "value",
-                                "type": type(item).__name__,
-                                "sample": _bounded_json_sample(item),
-                            })
-                    if index >= MAX_NORMALIZE_ROWS:
-                        break
+                            array["preview"]["rows"].append(
+                                {
+                                    "kind": "value",
+                                    "type": type(item).__name__,
+                                    "sample": _bounded_json_sample(item),
+                                }
+                            )
+                    array["preview"]["returned_count"] = len(array["preview"]["rows"])
             except (ijson.common.IncompleteJSONError, ijson.common.JSONError) as error:
                 raise ValueError("invalid_json") from error
     return {
         "kind": "json",
         "tree": {"kind": root_kind},
         "object_keys": {
-            path: sorted(keys)[:MAX_XLSX_COLUMNS]
-            for path, keys in list(object_keys.items())[:256]
+            path: sorted(keys)[:MAX_XLSX_COLUMNS] for path, keys in list(object_keys.items())[:256]
         },
         "arrays": list(arrays.values())[:256],
         "node_count": node_count,
@@ -267,8 +375,7 @@ def _bounded_json_sample(value: Any) -> Any:
         return [_bounded_json_sample(item) for item in value[:3]]
     if isinstance(value, dict):
         return {
-            str(key)[:128]: _bounded_json_sample(item)
-            for key, item in list(value.items())[:16]
+            str(key)[:128]: _bounded_json_sample(item) for key, item in list(value.items())[:16]
         }
     return str(value)[:256]
 
@@ -281,7 +388,10 @@ def inspect_xlsx(path: Path) -> dict[str, Any]:
         expanded = sum(info.file_size for info in infos)
         if expanded > 512 * 1024 * 1024:
             raise ValueError("xlsx_expanded_size_limit_exceeded")
-        if any(info.file_size and info.compress_size and info.file_size / info.compress_size > 100 for info in infos):
+        if any(
+            info.file_size and info.compress_size and info.file_size / info.compress_size > 100
+            for info in infos
+        ):
             raise ValueError("xlsx_compression_ratio_limit_exceeded")
         names = {info.filename for info in infos}
         if "xl/vbaProject.bin" in names or any(
@@ -289,7 +399,7 @@ def inspect_xlsx(path: Path) -> dict[str, Any]:
             for name in names
         ):
             raise ValueError("unsupported_source_security_feature")
-        shared = _xlsx_shared_strings(archive)
+        _xlsx_shared_strings(archive)
     try:
         workbook = load_workbook(
             path,
@@ -303,7 +413,9 @@ def inspect_xlsx(path: Path) -> dict[str, Any]:
     summaries = []
     try:
         for worksheet in list(workbook.worksheets)[:MAX_XLSX_SHEETS]:
-            rows: list[list[Any]] = []
+            header: list[Any] | None = None
+            preview_rows: list[list[Any]] = []
+            record_count = 0
             for row in worksheet.iter_rows(values_only=False):
                 values = []
                 for cell in row[:MAX_XLSX_COLUMNS]:
@@ -312,19 +424,28 @@ def inspect_xlsx(path: Path) -> dict[str, Any]:
                         value = {"formula": True, "display": value[:MAX_JSON_STRING]}
                     values.append(value)
                 if any(value not in (None, "") for value in values):
-                    rows.append(values)
-                if len(rows) >= MAX_SAMPLE_ROWS + 1:
-                    break
-            if rows:
-                summaries.append({
-                    "sheet": worksheet.title,
-                    "columns": [str(value or "").strip() for value in rows[0]],
-                    "rows": rows[1:MAX_SAMPLE_ROWS + 1],
-                    "formula_cells": sum(
-                        1 for row in rows for value in row
-                        if isinstance(value, dict) and value.get("formula") is True
-                    ),
-                })
+                    if header is None:
+                        header = values
+                    else:
+                        record_count += 1
+                        if len(preview_rows) < MAX_SAMPLE_ROWS:
+                            preview_rows.append(values)
+            if header is not None:
+                summaries.append(
+                    {
+                        "sheet": worksheet.title,
+                        "columns": [str(value or "").strip() for value in header],
+                        "preview": _preview_payload(preview_rows),
+                        "record_count": record_count,
+                        "record_count_exact": True,
+                        "preview_formula_cells": sum(
+                            1
+                            for row in [header, *preview_rows]
+                            for value in row
+                            if isinstance(value, dict) and value.get("formula") is True
+                        ),
+                    }
+                )
     finally:
         workbook.close()
     return {"kind": "workbook", "sheets": summaries}
@@ -353,7 +474,9 @@ def _xlsx_sheet(
         for cell in list(row)[:MAX_XLSX_COLUMNS]:
             if cell.tag.rsplit("}", 1)[-1] != "c":
                 continue
-            value = next((child.text or "" for child in cell if child.tag.rsplit("}", 1)[-1] == "v"), "")
+            value = next(
+                (child.text or "" for child in cell if child.tag.rsplit("}", 1)[-1] == "v"), ""
+            )
             if cell.attrib.get("t") == "s" and value.isdigit() and int(value) < len(shared):
                 value = shared[int(value)]
             values.append(value[:MAX_JSON_STRING])
@@ -375,7 +498,9 @@ def read_rows(root: Path, source_ref: str) -> list[dict[str, Any]]:
         except csv.Error:
             delimiter = ","
         with path.open("rb") as binary:
-            text_stream = io.TextIOWrapper(binary, encoding=detect_encoding(_read_prefix(path, 64 * 1024)), errors="strict")
+            text_stream = io.TextIOWrapper(
+                binary, encoding=detect_encoding(_read_prefix(path, 64 * 1024)), errors="strict"
+            )
             rows = csv.DictReader(text_stream, delimiter=delimiter)
             return [
                 {str(key).strip(): value for key, value in row.items() if key is not None}
@@ -415,8 +540,7 @@ def read_rows(root: Path, source_ref: str) -> list[dict[str, Any]]:
                     if column
                 }
                 qualified = {
-                    f"{worksheet.title}::{column}": value
-                    for column, value in record.items()
+                    f"{worksheet.title}::{column}": value for column, value in record.items()
                 }
                 records.append({**qualified, **record, "__sheet_name": worksheet.title})
                 if len(records) >= MAX_NORMALIZE_ROWS:
@@ -497,9 +621,13 @@ def _validate_json_stream(stream: BinaryIO) -> None:
         raise ValueError("invalid_json") from error
 
 
-def propose_mapping(profiles: list[dict[str, Any]], requirement_profile: dict[str, Any]) -> dict[str, Any]:
+def propose_mapping(
+    profiles: list[dict[str, Any]], requirement_profile: dict[str, Any]
+) -> dict[str, Any]:
     fields = []
-    for entity in requirement_profile.get("entities", requirement_profile.get("requiredEntities", [])):
+    for entity in requirement_profile.get(
+        "entities", requirement_profile.get("requiredEntities", [])
+    ):
         entity_name = entity.get("name", entity.get("displayName", ""))
         for field in entity.get("fields", entity.get("requiredFields", [])):
             fields.append(
@@ -522,12 +650,12 @@ def propose_mapping(profiles: list[dict[str, Any]], requirement_profile: dict[st
                     continue
                 display_name = str(profile.get("display_name", "")).lower()
                 sheet_context = " ".join(
-                    str(sheet.get("sheet", "")).lower()
-                    for sheet in structure.get("sheets", [])
+                    str(sheet.get("sheet", "")).lower() for sheet in structure.get("sheets", [])
                 )
                 context = f"{display_name} {sheet_context}"
                 entity_key = "".join(char.lower() for char in entity if char.isalnum())
                 entity_tokens = {
+                    "city": ("city", "cities", "城市"),
                     "demandlocation": ("location", "locations", "demand_location", "需求点"),
                     "demand": ("demand", "order", "orders", "需求"),
                     "facility": ("facility", "facilities", "warehouse", "仓", "设施"),
@@ -538,6 +666,7 @@ def propose_mapping(profiles: list[dict[str, Any]], requirement_profile: dict[st
                 known_entity_tokens = {
                     token
                     for values in {
+                        "city": ("city", "cities", "城市"),
                         "demandlocation": ("location", "locations", "demand_location", "需求点"),
                         "demand": ("demand", "order", "orders", "需求"),
                         "facility": ("facility", "facilities", "warehouse", "仓", "设施"),
@@ -548,7 +677,9 @@ def propose_mapping(profiles: list[dict[str, Any]], requirement_profile: dict[st
                     for token in values
                 }
                 context_has_known_entity = any(token in context for token in known_entity_tokens)
-                if context_has_known_entity and not any(token in context for token in entity_tokens):
+                if context_has_known_entity and not any(
+                    token in context for token in entity_tokens
+                ):
                     continue
                 if any(token in context for token in entity_tokens):
                     score = min(1.0, score + 0.08)
@@ -564,7 +695,10 @@ def propose_mapping(profiles: list[dict[str, Any]], requirement_profile: dict[st
                         "transformation": "identity",
                         "confidence": round(score, 3),
                         "requires_confirmation": True,
-                        "reason": "deterministic alias/type candidate; confirm the complete mapping revision",
+                        "reason": (
+                            "deterministic alias/type candidate; confirm the complete "
+                            "mapping revision"
+                        ),
                     }
                 )
 
@@ -580,13 +714,19 @@ def propose_mapping(profiles: list[dict[str, Any]], requirement_profile: dict[st
         )
         selected = options[0]
         candidates.append(selected)
-        if len(options) > 1 and float(selected["confidence"]) - float(options[1]["confidence"]) < 0.15:
+        if (
+            len(options) > 1
+            and float(selected["confidence"]) - float(options[1]["confidence"]) < 0.15
+        ):
             conflicts.append(
                 {
                     "target_entity": target[0],
                     "target_field": target[1],
                     "candidates": options[:5],
-                    "reason": "multiple source fields have indistinguishable confidence; choose one before confirming",
+                    "reason": (
+                        "multiple source fields have indistinguishable confidence; "
+                        "choose one before confirming"
+                    ),
                 }
             )
     return {
@@ -615,14 +755,12 @@ def _field_names(structure: dict[str, Any]) -> list[str]:
                 if not value:
                     continue
                 key = str(value).strip()
-                fields.append(
-                    f"{sheet_name}::{key}" if counts.get(key, 0) > 1 else key
-                )
+                fields.append(f"{sheet_name}::{key}" if counts.get(key, 0) > 1 else key)
         return fields
     names: list[str] = []
     for array in structure.get("arrays", []):
-        sample = array.get("samples", [])
-        for item in sample:
+        preview_rows = array.get("preview", {}).get("rows", [])
+        for item in preview_rows:
             if item.get("kind") == "object":
                 names.extend(item.get("fields", {}).keys())
     return names

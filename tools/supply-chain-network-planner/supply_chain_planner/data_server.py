@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hashlib
-import math
 import json
+import math
 import os
 import re
 from datetime import UTC, date, datetime
@@ -14,26 +15,28 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from mcp.server.fastmcp import Context, FastMCP
-from mcp.types import CallToolResult, EmbeddedResource, ResourceLink, TextContent, TextResourceContents
+from mcp.server.stdio import stdio_server
+from mcp.types import (
+    CallToolResult,
+    EmbeddedResource,
+    ResourceLink,
+    TextContent,
+    TextResourceContents,
+)
 
 from .data_core import build_planning_dataset as aggregate_planning_dataset
-from .data_core import inspect_source
 from .models import (
+    City,
     DataAgentRef,
     DataAgentResourceToolResult,
+    CityDemand,
+    CityLane,
+    Facility,
     PlanningDataset,
     PlanningSource,
-    DemandLocation,
-    Facility,
-    TransportRate,
-    RouteFact,
-    OrderFact,
-    ServicePolicy,
     Point,
-    PlanningSource,
-    PlanningSourceCatalog,
-    PlanningSourceCatalogEntry,
-    PlanningSourceInspection,
+    ServicePolicy,
+    WarehouseCityCoverage,
     ValidationResult,
 )
 from .resource_store import PublishedResource, ResourceStore
@@ -44,23 +47,26 @@ from .workspace_intake import (
     propose_mapping,
     read_rows,
     trusted_workspace_root,
+    workspace_source_metadata,
 )
 
 MCP_SERVER_NAME = "supply_chain_data"
 RESOURCE_URI_PREFIX = "supply-chain-data://resources/"
-MAX_SOURCE_BYTES = 100 * 1024 * 1024
 MAX_SOURCE_CATALOG_ENTRIES = 500
-SOURCE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,127}$")
+SANDBOX_STATE_META_CAPABILITY = "codex/sandbox-state-meta"
 
 mcp = FastMCP(
     "Supply Chain Data",
     instructions=(
         "This is a read-only enterprise data boundary for the supply-chain Data Agent. "
-        "Inputs are bounded source IDs resolved under a deployment-configured data root; "
+        "Inputs are opaque source references resolved under the trusted Turn Workspace; "
         "never request or accept organization IDs, Profile IDs, credentials, arbitrary SQL, "
-        "filesystem paths, or write statements. Call list_planning_sources when no source ID "
-        "has already been authorized, then call inspect_planning_source before "
-        "build_planning_dataset. The build tool publishes planning-dataset.v2 as an immutable "
+        "filesystem paths, or write statements. Discover and inspect the complete authorized "
+        "Workspace before proposing mappings. Inspection returns exact record counts plus a "
+        "head preview; preview rows are examples only and never the full source. Never use "
+        "the preview row count as the source row count. The normalization tool rereads the "
+        "complete source files and publishes "
+        "planning-dataset.v2 as an immutable "
         "MCP Resource with source range, units, row counts, promotion share, delivery baseline, "
         "and data-quality limitations. Copy data_ref unchanged. Validate the Resource before "
         "handing it to the Network Planning Agent. Do not paste unbounded source rows into "
@@ -70,17 +76,11 @@ mcp = FastMCP(
 )
 
 _workspace_root = Path.cwd().resolve()
-_data_root = Path(
-    os.environ.get(
-        "SUPPLY_CHAIN_READONLY_DATA_ROOT",
-        _workspace_root / "examples" / "data-sources",
-    )
-).resolve()
-_profile_state_root = Path(
-    os.environ.get("CODEX_HOME", _workspace_root / ".codex")
-).resolve()
+_profile_state_root = Path(os.environ.get("CODEX_HOME", _workspace_root / ".codex")).resolve()
 _resource_store: ResourceStore | None = None
-_CONTRACT_PATH = Path(__file__).resolve().parents[1] / "contracts" / "indonesia-warehouse-network-2.0.0.json"
+_CONTRACT_PATH = (
+    Path(__file__).resolve().parents[1] / "contracts" / "warehouse-network-planning-1.0.0.json"
+)
 
 
 def _store() -> ResourceStore:
@@ -89,10 +89,7 @@ def _store() -> ResourceStore:
         resource_root = Path(
             os.environ.get(
                 "SUPPLY_CHAIN_DATA_RESOURCE_DIR",
-                _profile_state_root
-                / "mcp-state"
-                / "supply-chain-data"
-                / "resources",
+                _profile_state_root / "mcp-state" / "supply-chain-data" / "resources",
             )
         ).resolve()
         _resource_store = ResourceStore(
@@ -111,58 +108,6 @@ def _store() -> ResourceStore:
 def read_planning_dataset_resource(resource_id: str) -> str:
     """Read a planning dataset previously published by the read-only data MCP."""
     return _store().read(resource_id)
-
-
-def _load_source(source_id: str) -> PlanningSource:
-    if not SOURCE_ID_PATTERN.fullmatch(source_id):
-        raise ValueError("source_id must contain only lowercase letters, digits, _ or -")
-    path = (_data_root / f"{source_id}.json").resolve()
-    if path.parent != _data_root:
-        raise ValueError("source_id escapes the configured read-only data root")
-    size = path.stat().st_size
-    if size > MAX_SOURCE_BYTES:
-        raise ValueError(
-            f"source file is {size} bytes; maximum supported size is {MAX_SOURCE_BYTES}"
-        )
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    source = PlanningSource.model_validate(payload)
-    if source.source_id != source_id:
-        raise ValueError(
-            f"requested source_id {source_id!r} does not match payload "
-            f"{source.source_id!r}"
-        )
-    return source
-
-
-def _catalog_entry(source: PlanningSource) -> PlanningSourceCatalogEntry:
-    inspection = inspect_source(source)
-    summary = inspection.source_summary
-    regions = sorted(
-        {
-            location.region
-            for location in source.demand_locations
-            if location.region is not None
-        }
-    )
-    return PlanningSourceCatalogEntry(
-        source_id=source.source_id,
-        market=source.market,
-        label=source.label,
-        source_updated_at=source.source_updated_at,
-        planning_period=source.planning_period,
-        currency=source.currency,
-        service_policy_id=source.service_policy.policy_id,
-        date_from=summary.date_from,
-        date_to=summary.date_to,
-        order_row_count=summary.order_row_count,
-        demand_units=summary.demand_units,
-        demand_node_count=summary.demand_node_count,
-        facility_count=summary.facility_count,
-        existing_facility_count=summary.existing_facility_count,
-        candidate_facility_count=summary.candidate_facility_count,
-        route_count=summary.route_count,
-        regions=regions,
-    )
 
 
 def _data_ref(published: PublishedResource) -> DataAgentRef:
@@ -226,11 +171,29 @@ def _bounded_intake_envelope(
         "resourceContentSha256": hashlib.sha256(encoded).hexdigest(),
     }
     for key in (
-        "taskGoal", "problemType", "entities", "requiredEntities", "parameters",
-        "outputs", "conditionalRequirements", "assumptions", "exclusions",
-        "inputRequest", "sources", "candidates", "gaps", "ready", "summary",
-        "checks", "plannedAnalysis", "limitations", "normalization_status",
-        "data_quality", "source_summary", "normalization_statistics", "rejections",
+        "taskGoal",
+        "problemType",
+        "entities",
+        "requiredEntities",
+        "parameters",
+        "outputs",
+        "conditionalRequirements",
+        "assumptions",
+        "exclusions",
+        "inputRequest",
+        "sources",
+        "candidates",
+        "gaps",
+        "ready",
+        "summary",
+        "checks",
+        "plannedAnalysis",
+        "limitations",
+        "normalization_status",
+        "data_quality",
+        "source_summary",
+        "normalization_statistics",
+        "rejections",
     ):
         if key in payload:
             keep[key] = payload[key]
@@ -238,7 +201,14 @@ def _bounded_intake_envelope(
     if len(envelope.encode("utf-8")) > 128 * 1024:
         # Preserve the schema-level readiness signal even when a source profile
         # or mapping contains more candidates than the platform projection cap.
-        for key in ("sources", "candidates", "entities", "requiredEntities", "checks", "limitations"):
+        for key in (
+            "sources",
+            "candidates",
+            "entities",
+            "requiredEntities",
+            "checks",
+            "limitations",
+        ):
             if isinstance(keep.get(key), list):
                 keep[key] = keep[key][:128]
         envelope = json.dumps(keep, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -260,7 +230,10 @@ def _workspace(ctx: Context) -> Path:
 
 def _publish_json(schema: str, payload: dict[str, Any], summary: str) -> CallToolResult:
     published = _store().publish(schema, payload)
-    content: list[Any] = [TextContent(type="text", text=summary), _resource_link(published, summary)]
+    content: list[Any] = [
+        TextContent(type="text", text=summary),
+        _resource_link(published, summary),
+    ]
     envelope = _bounded_intake_envelope(published, payload)
     if envelope is not None:
         content.append(envelope)
@@ -308,12 +281,14 @@ def _wrap_intake_payload(
 @mcp.tool(structured_output=True)
 def discover_workspace_sources(ctx: Context) -> dict[str, Any]:
     """Discover bounded Excel/CSV/JSON metadata across the trusted Workspace."""
-    sources = discover(_workspace(ctx))
+    root = _workspace(ctx)
+    sources = discover(root)
     return {
         "schema": "workspace_source_catalog.v1",
         "workspace_scope": "authorized_workspace",
         "sources": sources,
         "truncated": False,
+        **workspace_source_metadata(root),
     }
 
 
@@ -322,13 +297,18 @@ def inspect_workspace_sources(
     source_refs: list[str],
     ctx: Context,
 ) -> dict[str, Any]:
-    """Return bounded headers, sheet structures, JSON paths and sample rows."""
+    """Return exact source counts plus explicitly marked head previews.
+
+    Preview rows are examples for schema inspection only. They are never a
+    complete source snapshot and must not be used as the source row count.
+    """
     if not source_refs or len(source_refs) > MAX_SOURCE_CATALOG_ENTRIES:
         raise ValueError("source_refs must contain 1-100 opaque source references")
     root = _workspace(ctx)
     return {
         "schema": "source_profile.v1",
         "sources": [inspect(root, source_ref) for source_ref in source_refs],
+        **workspace_source_metadata(root),
     }
 
 
@@ -349,15 +329,23 @@ def publish_source_profile(
 
 @mcp.tool(structured_output=True)
 def publish_mapping_proposal(
-    source_profile: dict[str, Any],
+    source_profile_ref: DataAgentRef,
     requirement_profile: dict[str, Any],
 ) -> Annotated[CallToolResult, DataAgentResourceToolResult]:
-    """Publish fuzzy field candidates; confirmation is always required."""
-    if source_profile.get("schemaVersion") != "source_profile.v1" and source_profile.get("schema") != "source_profile.v1":
-        raise ValueError("source_profile must be source_profile.v1")
+    """Publish fuzzy field candidates from the canonical source Profile.
+
+    The model passes only the immutable Resource reference.  Loading the
+    Profile here keeps its bounded structures, provenance and source digest
+    authoritative instead of asking the model to copy the Profile into a new
+    tool argument.
+    """
+    source_profile = _load_source_profile(source_profile_ref)
+    proposal_body = propose_mapping(source_profile["sources"], requirement_profile)
+    if not proposal_body["candidates"]:
+        raise ValueError("mapping_candidates_empty")
     proposal = _wrap_intake_payload(
         "mapping_proposal.v1",
-        propose_mapping(source_profile.get("sources", []), requirement_profile),
+        proposal_body,
         source_hash=hashlib.sha256(
             json.dumps(source_profile, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest(),
@@ -367,6 +355,32 @@ def publish_mapping_proposal(
         "The complete mapping revision requires user confirmation."
     )
     return _publish_json("mapping_proposal.v1", proposal, summary)
+
+
+def _load_source_profile(resource_ref: DataAgentRef) -> dict[str, Any]:
+    """Load and validate the canonical source_profile.v1 Resource.
+
+    Workspace source references and MCP Resource references are different
+    contracts.  This function accepts only the latter and never attempts to
+    resolve a Workspace path from a model-provided value.
+    """
+    if resource_ref.server != MCP_SERVER_NAME:
+        raise ValueError("source_profile_ref must identify supply_chain_data")
+    if resource_ref.resource_schema != "source_profile.v1":
+        raise ValueError("source_profile_ref must identify source_profile.v1")
+    profile = _store().load_uri(resource_ref.uri)
+    if profile.get("schemaVersion") != "source_profile.v1":
+        raise ValueError("source_profile_resource_schema_mismatch")
+    sources = profile.get("sources")
+    if not isinstance(sources, list) or not sources:
+        raise ValueError("source_profile_sources_missing")
+    for index, source in enumerate(sources):
+        if not isinstance(source, dict):
+            raise ValueError(f"source_profile_source_invalid:{index}")
+        structure = source.get("structure")
+        if not isinstance(structure, dict) or not structure.get("kind"):
+            raise ValueError(f"source_profile_structure_missing:{index}")
+    return profile
 
 
 @mcp.tool(structured_output=True)
@@ -385,7 +399,10 @@ def normalize_planning_dataset(
     if confirmed_profile.get("confirmed") is not True:
         raise ValueError("planning dataset normalization requires confirmed profile")
     profile_payload = confirmed_profile.get("profile")
-    if not isinstance(profile_payload, dict) or profile_payload.get("schemaVersion") != "data_requirement_profile.v1":
+    if (
+        not isinstance(profile_payload, dict)
+        or profile_payload.get("schemaVersion") != "data_requirement_profile.v1"
+    ):
         raise ValueError("confirmed_profile must contain data_requirement_profile.v1")
     if confirmed_mapping.get("confirmed") is not True:
         raise ValueError("planning dataset normalization requires confirmed mapping")
@@ -401,7 +418,11 @@ def normalize_planning_dataset(
         _workspace(ctx), source_refs, mapping_items, confirmed_parameters.get("answers") or []
     )
     dataset = aggregate_planning_dataset(source)
-    payload = dataset.model_dump(mode="json")
+    payload = dataset.model_dump(mode="json", by_alias=True, exclude_none=True)
+    source_metadata = workspace_source_metadata(_workspace(ctx))
+    payload["dataClassification"] = source_metadata["dataClassification"]
+    if "demoTemplate" in source_metadata:
+        payload["demoTemplate"] = source_metadata["demoTemplate"]
     payload["normalization"] = {
         "mapping": confirmed_mapping,
         "parameters": confirmed_parameters,
@@ -424,9 +445,9 @@ def normalize_planning_dataset(
     payload["normalization"]["profile_confirmation"] = confirmed_profile
     payload["normalization_status"] = "ready"
     summary = (
-        f"Normalized {dataset.source_summary.order_row_count} demand rows, "
+        f"Normalized {dataset.source_summary.city_demand_row_count} city-demand rows, "
         f"{dataset.source_summary.facility_count} facilities and "
-        f"{dataset.source_summary.route_count} routes into planning-dataset.v2."
+        f"{dataset.source_summary.lane_count} city lanes into planning-dataset.v2."
     )
     return _publish_json("planning-dataset.v2", payload, summary)
 
@@ -439,7 +460,7 @@ def _build_planning_source(
 ) -> PlanningSource:
     params = {str(item.get("name")): item.get("value") for item in answers}
     planning_mode = str(params.get("planning_mode") or "").strip().lower()
-    if planning_mode != "optimization":
+    if planning_mode != "candidate_warehouse_optimization":
         raise ValueError("planning_mode_must_be_candidate_warehouse_optimization")
     planning_period = _text(params.get("planning_period"), None)
     if not planning_period:
@@ -449,6 +470,9 @@ def _build_planning_source(
         raise ValueError("currency_parameter_must_be_iso_code")
     if not _text(params.get("cost_scope"), None):
         raise ValueError("cost_scope_parameter_required")
+    market = _text(params.get("market"), None)
+    if not market or not re.fullmatch(r"[A-Za-z]{2}", market):
+        raise ValueError("market_parameter_must_be_iso_code")
     target_sla_hours = _number(params.get("target_sla_hours"))
     coverage_target = _number(params.get("coverage_target"))
     if target_sla_hours <= 0 or not 0 <= coverage_target <= 100:
@@ -458,6 +482,7 @@ def _build_planning_source(
         raise ValueError("route_source_parameter_required")
 
     grouped: dict[str, list[dict[str, Any]]] = {}
+    grouped_by_key: dict[str, dict[str, dict[str, Any]]] = {}
     for source_ref in source_refs:
         for row_index, row in enumerate(read_rows(root, source_ref)):
             flat = flatten_record(row)
@@ -471,125 +496,136 @@ def _build_planning_source(
                 entity_name = str(item.get("target_entity", "")).strip()
                 target_field = str(item.get("target_field", "")).strip()
                 key = f"{source_ref}:{row.get('__sheet_name', '')}:{row_index}:{entity_name}"
-                entity = next((candidate for candidate in grouped.setdefault(entity_name, []) if candidate.get("_key") == key), None)
+                entity_index = grouped_by_key.setdefault(entity_name, {})
+                entity = entity_index.get(key)
                 if entity is None:
                     entity = {"_key": key}
-                    grouped[entity_name].append(entity)
+                    entity_index[key] = entity
+                    grouped.setdefault(entity_name, []).append(entity)
                 entity[target_field] = value
 
-    locations = []
-    for row in grouped.get("DemandLocation", []):
-        location_id = _text(row.get("demand_location_id"), None)
-        name = _text(row.get("name"), None)
+    cities = []
+    for row in grouped.get("City", []):
+        city_id = _text(row.get("city_id"), None)
+        city_name = _text(row.get("name"), None)
         region = _text(row.get("region"), None)
-        if not location_id or not name or not region:
-            raise ValueError("planning_dataset_demand_location_fields_incomplete")
-        locations.append(DemandLocation(
-            demand_id=location_id,
-            location=Point(latitude=_number(row.get("latitude")), longitude=_number(row.get("longitude"))),
-            region=region,
-            current_facility_id=None,
-        ))
-    if not locations:
-        raise ValueError("planning_dataset_missing_demand_locations")
-    location_ids = {item.demand_id for item in locations}
-    assignment_rows = grouped.get("Assignment", [])
-    if not assignment_rows:
-        raise ValueError("planning_dataset_current_assignments_required")
-    assignments = {}
-    for row in assignment_rows:
-        demand_id = _text(row.get("demand_location_id"), None)
-        facility_id = _text(row.get("facility_id"), None)
-        if not demand_id or not facility_id or demand_id not in location_ids:
-            raise ValueError("planning_dataset_assignment_relation_invalid")
-        assignments[demand_id] = facility_id
-    if set(assignments) != location_ids:
-        raise ValueError("planning_dataset_assignment_relation_incomplete")
-    locations = [location.model_copy(update={"current_facility_id": assignments.get(location.demand_id)}) for location in locations]
+        if not city_id or not city_name or not region:
+            raise ValueError("planning_dataset_city_fields_incomplete")
+        cities.append(
+            City(
+                city_id=city_id,
+                name=city_name,
+                region=region,
+                location=Point(
+                    latitude=_number(row.get("latitude")),
+                    longitude=_number(row.get("longitude")),
+                ),
+            )
+        )
+    if not cities:
+        raise ValueError("planning_dataset_missing_cities")
+    city_by_id = {city.city_id: city for city in cities}
+
+    city_demands = []
+    for row in grouped.get("CityDemand", []):
+        city_id = _text(row.get("city_id"), None)
+        if not city_id or city_id not in city_by_id:
+            raise ValueError("planning_dataset_city_demand_fields_incomplete")
+        city_demands.append(
+            CityDemand(
+                city_id=city_id,
+                demand_date=_date(row.get("date")),
+                demand_units=_integer(row.get("quantity"), positive=True),
+            )
+        )
+    if not city_demands:
+        raise ValueError("planning_dataset_missing_city_demand")
 
     facilities = []
     for row in grouped.get("Facility", []):
         facility_id = _text(row.get("facility_id"), None)
         facility_name = _text(row.get("name"), None)
+        city_id = _text(row.get("city_id"), None)
         status_value = _text(row.get("existing_or_candidate"), None)
-        if not facility_id or not facility_name or not status_value:
+        if (
+            not facility_id
+            or not facility_name
+            or not city_id
+            or city_id not in city_by_id
+            or not status_value
+        ):
             raise ValueError("planning_dataset_facility_fields_incomplete")
         status = status_value.lower()
         if status not in {"existing", "current", "现有", "已有", "candidate", "候选"}:
             raise ValueError("planning_dataset_facility_status_invalid")
-        facilities.append(Facility(
-            facility_id=facility_id,
-            label=facility_name,
-            location=Point(latitude=_number(row.get("latitude")), longitude=_number(row.get("longitude"))),
-            capacity_units=_integer(row.get("capacity")),
-            is_existing=status in {"existing", "current", "现有", "已有"},
-            fixed_cost=_money(row.get("fixed_cost")),
-            opening_cost=_money(row.get("opening_cost")),
-            handling_cost_per_unit=_money(row.get("handling_cost")),
-        ))
+        facilities.append(
+            Facility(
+                facility_id=facility_id,
+                city_id=city_id,
+                label=facility_name,
+                location=city_by_id[city_id].location,
+                capacity_units=_integer(row.get("capacity")),
+                is_existing=status in {"existing", "current", "现有", "已有"},
+                fixed_cost=_money(row.get("fixed_cost")),
+                opening_cost=_money(row.get("opening_cost")),
+                handling_cost_per_unit=_money(row.get("handling_cost")),
+            )
+        )
     if not facilities or not any(item.is_existing for item in facilities):
         raise ValueError("planning_dataset_requires_existing_facility")
     if not any(not item.is_existing for item in facilities):
         raise ValueError("planning_dataset_requires_candidate_facility")
     facility_ids = {item.facility_id for item in facilities}
-    if any(facility_id not in facility_ids for facility_id in assignments.values()):
-        raise ValueError("planning_dataset_assignment_references_unknown_facility")
+    coverage = []
+    for row in grouped.get("Coverage", []):
+        facility_id = _text(row.get("facility_id"), None)
+        city_id = _text(row.get("city_id"), None)
+        if not facility_id or not city_id or facility_id not in facility_ids or city_id not in city_by_id:
+            raise ValueError("planning_dataset_coverage_relation_invalid")
+        coverage.append(
+            WarehouseCityCoverage(
+                facility_id=facility_id,
+                city_id=city_id,
+                is_current=str(row.get("is_current", "true")).lower() in {"true", "1", "yes"},
+            )
+        )
+    if not coverage:
+        raise ValueError("planning_dataset_current_coverage_required")
 
-    orders = []
-    for row in grouped.get("Demand", []):
-        demand_id = _text(row.get("demand_location_id"), None)
-        if demand_id not in location_ids:
-            raise ValueError("planning_dataset_demand_references_unknown_location")
-        if not _text(row.get("demand_id"), None):
-            raise ValueError("planning_dataset_demand_id_required")
-        orders.append(OrderFact(
-            demand_id=demand_id,
-            order_date=_date(row.get("date")),
-            demand_units=_integer(row.get("quantity"), positive=True),
-        ))
-    if not orders:
-        raise ValueError("planning_dataset_missing_demand_rows")
-
-    rates = []
-    for index, row in enumerate(grouped.get("Rate", []), start=1):
-        origin = _text(row.get("origin_facility_id"), None)
-        destination_region = _text(row.get("destination_region"), None)
-        if not origin or not destination_region:
-            raise ValueError("planning_dataset_transport_rate_fields_incomplete")
+    lanes = []
+    for row in grouped.get("Lane", []):
+        origin_city_id = _text(row.get("origin_city_id"), None)
+        destination_city_id = _text(row.get("destination_city_id"), None)
         rate_currency = _text(row.get("currency"), None)
-        if not rate_currency or rate_currency.upper() != currency.upper():
-            raise ValueError("planning_dataset_transport_rate_currency_mismatch")
-        rates.append(TransportRate(
-            rate_id=f"rate-{index}",
-            origin_facility_id=origin,
-            destination_region=destination_region,
-            base_cost_per_unit=_money(row.get("rate_value")),
-        ))
-    if not rates:
-        raise ValueError("planning_dataset_missing_transport_rates")
-
-    route_rows = grouped.get("Route", [])
-    if not route_rows and route_method == "estimated":
-        route_rows = _estimated_routes(locations, facilities, params)
-    routes = [RouteFact(
-        origin_facility_id=_text(row.get("origin_facility_id"), ""),
-        destination_demand_id=_text(row.get("destination_demand_id"), ""),
-        distance_meters=_integer(row.get("distance_km"), scale=1000),
-        travel_seconds=_integer(row.get("travel_time_hours"), scale=3600),
-        status="ready",
-    ) for row in route_rows]
-    if not routes:
-        raise ValueError("planning_dataset_missing_routes_or_route_estimation_parameters")
+        if not origin_city_id or not destination_city_id or not rate_currency:
+            raise ValueError("planning_dataset_city_lane_fields_incomplete")
+        if rate_currency.upper() != currency.upper():
+            raise ValueError("planning_dataset_city_lane_currency_mismatch")
+        lanes.append(
+            CityLane(
+                origin_city_id=origin_city_id,
+                destination_city_id=destination_city_id,
+                distance_km=_number(row.get("distance_km")),
+                travel_time_hours=_number(row.get("travel_time_hours")),
+                base_cost_per_unit=_money(row.get("base_cost_per_unit")),
+                distance_cost_per_km_per_unit=_money(row.get("distance_cost_per_km_per_unit")),
+                currency=rate_currency.upper(),
+            )
+        )
+    if not lanes:
+        raise ValueError("planning_dataset_missing_city_lanes")
     normalized_route_method = {
         "estimated": "haversine_estimate",
         "haversine_estimate": "haversine_estimate",
         "quoted": "quoted",
         "navigation": "navigation",
     }.get(route_method, "quoted")
+    source_metadata = workspace_source_metadata(root)
+    source_hash = hashlib.sha256(json.dumps(source_refs, sort_keys=True).encode()).hexdigest()[:16]
     source = PlanningSource(
-        source_id=f"workspace-{hashlib.sha256(json.dumps(source_refs, sort_keys=True).encode()).hexdigest()[:16]}",
-        market="ID",
-        label="Workspace-confirmed Indonesia network planning dataset",
+        source_id=f"workspace-{source_hash}",
+        market=market.upper(),
+        label="Workspace-confirmed warehouse network planning dataset",
         source_updated_at=datetime.now(UTC),
         planning_period=planning_period,
         currency=currency.upper(),
@@ -597,33 +633,17 @@ def _build_planning_source(
             policy_id="user-confirmed-target-sla",
             max_delivery_seconds=int(target_sla_hours * 3600),
         ),
-        demand_locations=locations,
+        cities=cities,
+        city_demands=city_demands,
         facilities=facilities,
-        transport_rates=rates,
+        warehouse_city_coverage=coverage,
+        lanes=lanes,
         route_provider=route_method or "workspace-route-facts",
         route_method=normalized_route_method,
-        route_entries=routes,
-        orders=orders,
+        dataClassification=source_metadata["dataClassification"],
+        demoTemplate=source_metadata.get("demoTemplate"),
     )
     return source
-
-
-def _estimated_routes(locations: list[DemandLocation], facilities: list[Facility], params: dict[str, Any]) -> list[dict[str, Any]]:
-    factor = _number(params.get("detour_factor"))
-    speed = _number(params.get("average_speed_kmh"))
-    daily_hours = _number(params.get("daily_transport_hours"))
-    if factor <= 0 or speed <= 0 or daily_hours <= 0 or daily_hours > 24:
-        raise ValueError("route_estimation_parameters_must_be_positive")
-    rows = []
-    for facility in facilities:
-        for demand in locations:
-            lat1, lon1 = math.radians(facility.location.latitude), math.radians(facility.location.longitude)
-            lat2, lon2 = math.radians(demand.location.latitude), math.radians(demand.location.longitude)
-            haversine = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2
-            distance_km = 6371.0088 * 2 * math.asin(math.sqrt(haversine)) * factor
-            travel_time_hours = distance_km / speed
-            rows.append({"origin_facility_id": facility.facility_id, "destination_demand_id": demand.demand_id, "distance_km": distance_km, "travel_time_hours": travel_time_hours, "effective_transport_days": travel_time_hours / daily_hours})
-    return rows
 
 
 def _text(value: Any, default: str | None) -> str | None:
@@ -678,60 +698,6 @@ def _date(value: Any) -> date:
 
 
 @mcp.tool(structured_output=True)
-def list_planning_sources() -> PlanningSourceCatalog:
-    """List bounded metadata for authorized sources without exposing paths or rows."""
-    source_ids = sorted(
-        path.stem
-        for path in _data_root.glob("*.json")
-        if SOURCE_ID_PATTERN.fullmatch(path.stem)
-    )
-    visible_source_ids = source_ids[:MAX_SOURCE_CATALOG_ENTRIES]
-    return PlanningSourceCatalog(
-        sources=[_catalog_entry(_load_source(source_id)) for source_id in visible_source_ids],
-        truncated=len(source_ids) > len(visible_source_ids),
-    )
-
-
-@mcp.tool(structured_output=True)
-def inspect_planning_source(source_id: str) -> PlanningSourceInspection:
-    """Inspect bounded metadata and quality signals without exposing source rows."""
-    return inspect_source(_load_source(source_id))
-
-
-@mcp.tool(structured_output=True)
-def build_planning_dataset(
-    source_id: str,
-) -> Annotated[CallToolResult, DataAgentResourceToolResult]:
-    """Aggregate an authorized source into an immutable planning-dataset.v2 Resource."""
-    dataset = build_planning_dataset_from_source_id(source_id)
-    published = _store().publish(dataset.schema_version, dataset)
-    quality = "valid" if dataset.data_quality.valid else "has blocking data gaps"
-    summary = (
-        f"Built {dataset.dataset_id} from {dataset.source_summary.order_row_count} "
-        f"source rows and {dataset.source_summary.demand_units} demand units across "
-        f"{dataset.source_summary.demand_node_count} demand nodes; data quality {quality}, "
-        f"{len(dataset.data_quality.warnings)} warnings."
-    )
-    structured = DataAgentResourceToolResult(
-        summary=summary,
-        resource_name=published.resource_id,
-        data_ref=_data_ref(published),
-    ).model_dump(mode="json")
-    return CallToolResult(
-        content=[
-            TextContent(type="text", text=summary),
-            _resource_link(published, summary),
-        ],
-        structuredContent=structured,
-    )
-
-
-def build_planning_dataset_from_source_id(source_id: str) -> PlanningDataset:
-    """Build without publishing; kept separate for deterministic tests."""
-    return aggregate_planning_dataset(_load_source(source_id))
-
-
-@mcp.tool(structured_output=True)
 def validate_planning_dataset(
     resource_ref: DataAgentRef,
 ) -> ValidationResult:
@@ -747,10 +713,19 @@ def validate_planning_dataset(
             valid=False,
             resource_schema="planning-dataset.v2",
             errors=[
-                "mapped candidate requires Network Agent entity, unit, relationship and route validation",
-            ] if records else ["no confirmed source fields produced normalized records"],
-            warnings=["planning-dataset.v2 contains bounded mapped records, not a silently completed model"],
-            checks=["source refs and whole-profile confirmations are present", f"mapped record count: {len(records)}"],
+                "mapped candidate requires Network Agent entity, unit, relationship "
+                "and route validation",
+            ]
+            if records
+            else ["no confirmed source fields produced normalized records"],
+            warnings=[
+                "planning-dataset.v2 contains bounded mapped records, not a silently "
+                "completed model"
+            ],
+            checks=[
+                "source refs and whole-profile confirmations are present",
+                f"mapped record count: {len(records)}",
+            ],
         )
     if raw.get("schemaVersion") != "planning-dataset.v2":
         return ValidationResult(
@@ -773,21 +748,29 @@ def validate_planning_dataset(
         profile_confirmation = normalization.get("profile_confirmation")
         mapping_confirmation = normalization.get("mapping")
         parameter_confirmation = normalization.get("parameters")
-        if not isinstance(profile, dict) or profile.get("schemaVersion") != "data_requirement_profile.v1":
+        if (
+            not isinstance(profile, dict)
+            or profile.get("schemaVersion") != "data_requirement_profile.v1"
+        ):
             errors.append("confirmed data requirement profile is missing")
-        if not isinstance(profile_confirmation, dict) or profile_confirmation.get("confirmed") is not True:
+        if (
+            not isinstance(profile_confirmation, dict)
+            or profile_confirmation.get("confirmed") is not True
+        ):
             errors.append("data requirement profile confirmation is missing")
-        if not isinstance(mapping_confirmation, dict) or mapping_confirmation.get("confirmed") is not True:
+        if (
+            not isinstance(mapping_confirmation, dict)
+            or mapping_confirmation.get("confirmed") is not True
+        ):
             errors.append("mapping confirmation is missing")
-        if not isinstance(parameter_confirmation, dict) or parameter_confirmation.get("confirmed") is not True:
+        if (
+            not isinstance(parameter_confirmation, dict)
+            or parameter_confirmation.get("confirmed") is not True
+        ):
             errors.append("parameter confirmation is missing")
 
-    distribution_units = sum(
-        item.demand_units for item in dataset.demand_distribution
-    )
-    projected_units = sum(
-        item.demand_units for item in dataset.network_input.demand_points
-    )
+    distribution_units = sum(item.demand_units for item in dataset.demand_distribution)
+    projected_units = sum(item.demand_units for item in dataset.network_input.demand_points)
     if distribution_units != dataset.source_summary.demand_units:
         errors.append("distribution demand units do not match source summary")
     if projected_units != dataset.source_summary.demand_units:
@@ -803,13 +786,12 @@ def validate_planning_dataset(
     if distribution_ids != projection_ids:
         errors.append("distribution and network_input demand identifiers differ")
     expected_route_pairs = {
-        (facility.facility_id, demand.demand_id)
+        (facility.city_id, demand.city_id)
         for facility in dataset.network_input.facilities
         for demand in dataset.network_input.demand_points
     }
     route_pairs = {
-        (route.origin_facility_id, route.destination_demand_id)
-        for route in dataset.route_entries
+        (route.origin_city_id, route.destination_city_id) for route in dataset.route_entries
     }
     if route_pairs != expected_route_pairs:
         errors.append("route facts do not cover the network handoff projection")
@@ -821,7 +803,7 @@ def validate_planning_dataset(
                 "demand totals reconcile across source, distribution, and network projection",
                 "delivery observed and unobserved units reconcile to total demand",
                 "demand identifiers match the network handoff projection",
-                "route facts cover every facility-demand pair in the network projection",
+                "route facts cover every unique origin-city to destination-city lane",
             ]
         )
     return ValidationResult(
@@ -841,38 +823,31 @@ def main() -> None:
         default=Path.cwd(),
         help="Plugin root used for default fixture and Profile Resource locations",
     )
-    parser.add_argument(
-        "--transport",
-        choices=("stdio", "streamable-http"),
-        default="stdio",
-    )
+    parser.add_argument("--transport", choices=("stdio",), default="stdio")
     args = parser.parse_args()
 
-    global _workspace_root, _data_root, _profile_state_root, _resource_store
+    global _workspace_root, _profile_state_root, _resource_store
     _workspace_root = args.workspace_root.resolve()
-    _data_root = Path(
-        os.environ.get(
-            "SUPPLY_CHAIN_READONLY_DATA_ROOT",
-            _workspace_root / "examples" / "data-sources",
-        )
-    ).resolve()
-    _profile_state_root = Path(
-        os.environ.get("CODEX_HOME", _workspace_root / ".codex")
-    ).resolve()
+    _profile_state_root = Path(os.environ.get("CODEX_HOME", _workspace_root / ".codex")).resolve()
     resource_root = Path(
         os.environ.get(
             "SUPPLY_CHAIN_DATA_RESOURCE_DIR",
-            _profile_state_root
-            / "mcp-state"
-            / "supply-chain-data"
-            / "resources",
+            _profile_state_root / "mcp-state" / "supply-chain-data" / "resources",
         )
     ).resolve()
     _resource_store = ResourceStore(
         resource_root,
         uri_prefix=RESOURCE_URI_PREFIX,
     )
-    mcp.run(transport=args.transport)
+    asyncio.run(run_stdio())
+
+
+async def run_stdio() -> None:
+    initialization_options = mcp._mcp_server.create_initialization_options(
+        experimental_capabilities={SANDBOX_STATE_META_CAPABILITY: {}},
+    )
+    async with stdio_server() as streams:
+        await mcp._mcp_server.run(streams[0], streams[1], initialization_options)
 
 
 if __name__ == "__main__":
