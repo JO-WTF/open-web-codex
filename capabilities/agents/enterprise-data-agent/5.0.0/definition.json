@@ -1,0 +1,41 @@
+{
+  "definitionId": "enterprise-data-agent",
+  "version": "5.0.0",
+  "displayName": "Enterprise Data Agent",
+  "description": "Profiles authorized Workspace Excel/CSV/JSON sources, explicitly generates synthetic Demo sources on request, proposes mappings and publishes confirmed normalized planning evidence.",
+  "runtimeRole": "agent_d63c04421e6b9a185e164b9b836b7d3f",
+  "runtimeProfile": {"contentSha256": "4947054dddcac8ddbb6cbe4552cbac55826993ca31b7636daa03f3e4ec596df2"},
+  "responsibilities": [
+    "Use trusted Turn Workspace metadata, inspect complete source counts, and expose only bounded Excel/CSV/JSON previews to the model.",
+    "Generate synthetic Demo sources only after an explicit user request and only in an empty authorized Workspace.",
+    "Publish source_profile.v1 and mapping_proposal.v1 candidates; mappings, units and parameters require whole-profile user confirmation.",
+    "Publish planning-dataset.v2 only from confirmed mapping and parameters without implicit defaults."
+  ],
+  "inputArtifactTypes": ["data_requirement_profile.v1"],
+  "outputArtifactTypes": ["source_profile.v1", "mapping_proposal.v1", "planning-dataset.v2"],
+  "capabilityTemplate": {"definitionId": "enterprise-data-agent", "version": "5.0.0"},
+  "requiredMcpServers": [
+    {
+      "name": "supply_chain_data",
+      "tools": ["discover_workspace_sources", "inspect_workspace_sources", "publish_source_profile", "publish_mapping_proposal", "normalize_planning_dataset", "validate_planning_dataset"],
+      "resourceRead": true,
+      "capabilityRootIds": ["local-supply-chain-network-planner"]
+    },
+    {
+      "name": "supply_chain_demo",
+      "tools": ["create_demo_workspace_sources"],
+      "resourceRead": false,
+      "capabilityRootIds": ["local-supply-chain-network-planner"]
+    },
+    {
+      "name": "supply_chain_planner",
+      "tools": [],
+      "resourceRead": true,
+      "capabilityRootIds": ["local-supply-chain-network-planner"]
+    }
+  ],
+  "risks": [
+    "Preview rows are examples only and cannot represent the full source; normalization must reread all authorized rows and report aggregate failures.",
+    "Synthetic Demo data must remain visibly classified and must never be mixed into a non-empty Workspace."
+  ]
+}
