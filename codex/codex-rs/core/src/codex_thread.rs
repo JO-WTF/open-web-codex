@@ -453,6 +453,11 @@ impl CodexThread {
         self.io.agent_status.clone()
     }
 
+    /// Wake a parent V2 wait without injecting child output into the parent history.
+    pub(crate) fn notify_agent_activity(&self) {
+        self.session.input_queue.notify_agent_activity();
+    }
+
     /// Returns the complete token usage snapshot currently cached for this thread.
     ///
     /// This accessor is intentionally narrower than direct session access: it lets

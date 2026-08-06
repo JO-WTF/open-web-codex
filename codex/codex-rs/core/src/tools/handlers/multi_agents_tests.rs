@@ -5,6 +5,7 @@ use crate::config::DEFAULT_AGENT_MAX_DEPTH;
 use crate::function_tool::FunctionCallError;
 use crate::init_state_db;
 use crate::local_agent_graph_store_from_state_db;
+use crate::session::InputQueueActivity;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::session::tests::make_session_and_context_with_rx;
@@ -32,6 +33,7 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::items::CollabAgentTool;
 use codex_protocol::items::TurnItem;
+use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -1983,8 +1985,31 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
         .await
         .expect("worker thread should exist");
     let worker_path = AgentPath::try_from("/root/worker").expect("worker path");
+    let (mut activity_rx, pending_activity) = root
+        .thread
+        .session
+        .input_queue
+        .subscribe_activity(/*turn_state*/ None)
+        .await;
+    assert_eq!(pending_activity, None);
 
     let first_turn = thread.session.new_default_turn().await;
+    thread
+        .session
+        .emit_turn_item_completed(
+            first_turn.as_ref(),
+            TurnItem::UserMessage(UserMessageItem {
+                id: "progress-item".to_string(),
+                client_id: None,
+                content: Vec::new(),
+            }),
+        )
+        .await;
+    timeout(Duration::from_secs(1), activity_rx.changed())
+        .await
+        .expect("child item completion should wake the parent wait")
+        .expect("parent activity subscription should remain open");
+    assert_eq!(*activity_rx.borrow_and_update(), InputQueueActivity::Agent);
     thread
         .session
         .send_event(
@@ -3038,6 +3063,55 @@ async fn multi_agent_v2_wait_agent_accepts_timeout_only_argument() {
         result,
         crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult {
             message: "Wait completed.".to_string(),
+            timed_out: false,
+        }
+    );
+    assert_eq!(success, None);
+}
+
+#[tokio::test]
+async fn multi_agent_v2_wait_agent_returns_on_agent_activity() {
+    let (session, mut turn) = make_session_and_context().await;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    config.multi_agent_v2.default_wait_timeout_ms = 30_000;
+    set_turn_config(&mut turn, config);
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    let wait_task = tokio::spawn({
+        let session = session.clone();
+        let turn = turn.clone();
+        async move {
+            WaitAgentHandlerV2::default()
+                .handle(invocation(
+                    session,
+                    turn,
+                    "wait_agent",
+                    function_payload(json!({})),
+                ))
+                .await
+        }
+    });
+    tokio::task::yield_now().await;
+
+    session.input_queue.notify_agent_activity();
+
+    let output = timeout(Duration::from_secs(1), wait_task)
+        .await
+        .expect("agent activity should wake wait_agent")
+        .expect("wait task should join")
+        .expect("wait_agent should succeed");
+    let (content, success) = expect_text_output(output);
+    let result: crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult =
+        serde_json::from_str(&content).expect("wait_agent result should be json");
+    assert_eq!(
+        result,
+        crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult {
+            message: "Wait completed with agent activity.".to_string(),
             timed_out: false,
         }
     );

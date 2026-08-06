@@ -140,6 +140,7 @@ impl WaitAgentResult {
     fn from_outcome(outcome: WaitOutcome) -> Self {
         let message = match outcome {
             WaitOutcome::MailboxActivity => "Wait completed.",
+            WaitOutcome::AgentActivity => "Wait completed with agent activity.",
             WaitOutcome::Steered => "Wait interrupted by new input.",
             WaitOutcome::TimedOut => "Wait timed out.",
         };
@@ -170,6 +171,7 @@ impl ToolOutput for WaitAgentResult {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WaitOutcome {
+    AgentActivity,
     MailboxActivity,
     Steered,
     TimedOut,
@@ -182,12 +184,14 @@ async fn wait_for_activity(
 ) -> WaitOutcome {
     if let Some(activity) = pending_activity {
         return match activity {
+            InputQueueActivity::Agent => WaitOutcome::AgentActivity,
             InputQueueActivity::Mailbox => WaitOutcome::MailboxActivity,
             InputQueueActivity::Steer => WaitOutcome::Steered,
         };
     }
     match timeout_at(deadline, activity_rx.changed()).await {
         Ok(Ok(())) => match *activity_rx.borrow_and_update() {
+            InputQueueActivity::Agent => WaitOutcome::AgentActivity,
             InputQueueActivity::Mailbox => WaitOutcome::MailboxActivity,
             InputQueueActivity::Steer => WaitOutcome::Steered,
         },

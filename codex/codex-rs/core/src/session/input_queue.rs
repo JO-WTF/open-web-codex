@@ -22,6 +22,7 @@ pub(crate) enum TurnInput {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum InputQueueActivity {
     Mailbox,
+    Agent,
     Steer,
 }
 
@@ -78,6 +79,11 @@ impl InputQueue {
             .await
             .push_back(communication);
         self.activity_tx.send_replace(InputQueueActivity::Mailbox);
+    }
+
+    /// Wake an active parent wait without adding child output to its model context.
+    pub(crate) fn notify_agent_activity(&self) {
+        self.activity_tx.send_replace(InputQueueActivity::Agent);
     }
 
     pub(crate) async fn has_pending_mailbox_items(&self) -> bool {
@@ -321,6 +327,19 @@ mod tests {
             *activity_rx.borrow_and_update(),
             InputQueueActivity::Mailbox
         );
+    }
+
+    #[tokio::test]
+    async fn input_queue_notifies_agent_activity_subscribers() {
+        let input_queue = InputQueue::new();
+        let (mut activity_rx, pending_activity) =
+            input_queue.subscribe_activity(/*turn_state*/ None).await;
+        assert_eq!(pending_activity, None);
+
+        input_queue.notify_agent_activity();
+
+        activity_rx.changed().await.expect("agent activity update");
+        assert_eq!(*activity_rx.borrow_and_update(), InputQueueActivity::Agent);
     }
 
     #[tokio::test]

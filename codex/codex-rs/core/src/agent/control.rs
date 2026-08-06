@@ -262,6 +262,14 @@ impl AgentControl {
         thread.agent_status().await
     }
 
+    /// Wake a live parent wait after a child reaches a bounded progress boundary.
+    pub(crate) async fn notify_agent_activity(&self, agent_id: ThreadId) -> CodexResult<()> {
+        let state = self.upgrade()?;
+        let thread = state.get_thread(agent_id).await?;
+        thread.notify_agent_activity();
+        Ok(())
+    }
+
     pub(crate) fn register_session_root(
         &self,
         current_thread_id: ThreadId,

@@ -2214,7 +2214,7 @@ fn resolve_multi_agent_version_handles_unset_and_legacy_history() {
             }),
             Some(MultiAgentVersion::V2),
         ),
-        Some(MultiAgentVersion::Disabled)
+        Some(MultiAgentVersion::V2)
     );
     assert_eq!(
         resolve_multi_agent_version(
@@ -2232,6 +2232,41 @@ fn resolve_multi_agent_version_handles_unset_and_legacy_history() {
             /*inherited_multi_agent_version*/ None
         ),
         Some(MultiAgentVersion::V1)
+    );
+}
+
+#[tokio::test]
+async fn inherited_multi_agent_version_wins_over_child_config_override() {
+    let mut config = test_config().await;
+    config.agents_enabled = false;
+
+    assert_eq!(
+        resolve_session_multi_agent_version(
+            &config,
+            &InitialHistory::New,
+            Some(MultiAgentVersion::V2),
+        ),
+        Some(MultiAgentVersion::V2)
+    );
+}
+
+#[tokio::test]
+async fn persisted_multi_agent_version_cannot_be_downgraded_by_turn_config() {
+    let session = make_session_with_config(|config| {
+        let _ = config.features.enable(Feature::MultiAgentV2);
+    })
+    .await
+    .expect("create V2 session");
+
+    let mut config = (*session.get_config().await).clone();
+    config.agents_enabled = false;
+    let model = get_model_offline_for_tests(config.model.as_deref());
+    let model_info =
+        construct_model_info_offline_for_tests(model.as_str(), &config.to_models_manager_config());
+
+    assert_eq!(
+        session.resolve_multi_agent_version_for_model(&model_info, &config),
+        MultiAgentVersion::V2
     );
 }
 

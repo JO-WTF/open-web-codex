@@ -451,18 +451,35 @@ pub(crate) fn resolve_multi_agent_version(
     conversation_history: &InitialHistory,
     inherited_multi_agent_version: Option<MultiAgentVersion>,
 ) -> Option<MultiAgentVersion> {
-    if inherited_multi_agent_version == Some(MultiAgentVersion::Disabled) {
-        return Some(MultiAgentVersion::Disabled);
+    // A spawned thread must use the protocol selected by its parent.  Its
+    // rollout metadata may be stale (or may have been written by a different
+    // per-thread config), but it cannot change the parent/child communication
+    // contract after the spawn path has selected it.
+    if let Some(inherited_multi_agent_version) = inherited_multi_agent_version {
+        return Some(inherited_multi_agent_version);
     }
 
     conversation_history
         .get_multi_agent_version()
-        .or(inherited_multi_agent_version)
         .or(match conversation_history {
             InitialHistory::New | InitialHistory::Cleared => None,
             // Threads created before runtime metadata existed keep the legacy V1 tool surface.
             InitialHistory::Resumed(_) | InitialHistory::Forked(_) => Some(MultiAgentVersion::V1),
         })
+}
+
+fn resolve_session_multi_agent_version(
+    config: &Config,
+    conversation_history: &InitialHistory,
+    inherited_multi_agent_version: Option<MultiAgentVersion>,
+) -> Option<MultiAgentVersion> {
+    if inherited_multi_agent_version.is_some() {
+        resolve_multi_agent_version(conversation_history, inherited_multi_agent_version)
+    } else {
+        config.multi_agent_version_override().or_else(|| {
+            resolve_multi_agent_version(conversation_history, inherited_multi_agent_version)
+        })
+    }
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
@@ -619,9 +636,14 @@ impl Session {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
-        let multi_agent_version = config.multi_agent_version_override().or_else(|| {
-            resolve_multi_agent_version(&conversation_history, inherited_multi_agent_version)
-        });
+        // A spawned child inherits the parent's collaboration protocol. Do not let the
+        // child config downgrade that inherited protocol before the Session records it;
+        // the spawn path already used the inherited version to choose its lifecycle.
+        let multi_agent_version = resolve_session_multi_agent_version(
+            &config,
+            &conversation_history,
+            inherited_multi_agent_version,
+        );
         let history_mode = conversation_history.get_history_mode(
             requested_history_mode.unwrap_or_else(|| thread_store.default_history_mode()),
         );
@@ -1787,6 +1809,8 @@ impl Session {
             msg,
         };
         self.send_event_raw(event).await;
+        self.maybe_notify_parent_of_activity(turn_context, &legacy_source)
+            .await;
         self.maybe_notify_parent_of_terminal_turn(turn_context, &legacy_source)
             .await;
         self.maybe_mirror_event_text_to_realtime(&legacy_source)
@@ -1804,6 +1828,32 @@ impl Session {
                 msg: legacy,
             };
             self.send_event_raw(legacy_event).await;
+        }
+    }
+
+    /// Wakes a V2 parent wait at bounded child progress boundaries without copying
+    /// the child's output into the parent's model-visible history.
+    async fn maybe_notify_parent_of_activity(&self, turn_context: &TurnContext, msg: &EventMsg) {
+        if turn_context.multi_agent_version != MultiAgentVersion::V2
+            || !matches!(msg, EventMsg::ItemCompleted(_))
+        {
+            return;
+        }
+
+        let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        }) = &turn_context.session_source
+        else {
+            return;
+        };
+
+        if let Err(error) = self
+            .services
+            .agent_control
+            .notify_agent_activity(*parent_thread_id)
+            .await
+        {
+            debug!(%error, parent_thread_id = %parent_thread_id, "failed to wake parent for child activity");
         }
     }
 
@@ -3139,7 +3189,10 @@ impl Session {
         config: &Config,
     ) -> MultiAgentVersion {
         if let Some(multi_agent_version) = self.multi_agent_version() {
-            return config.multi_agent_version_for_model(Some(multi_agent_version));
+            // The Session value is the authoritative protocol selected at creation/resume.
+            // Re-resolving it from per-turn config can downgrade a V2 child to Disabled and
+            // strand its completion notification between the V2 and legacy paths.
+            return multi_agent_version;
         }
 
         let selected = config.multi_agent_version_for_model(model_info.multi_agent_version);
