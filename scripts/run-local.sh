@@ -23,6 +23,7 @@ server_port="${OPEN_WEB_CODEX_SERVER_PORT:-4800}"
 data_dir="${OPEN_WEB_CODEX_DATA_DIR:-$repo_root/.local/open-web-codex}"
 database_url="${DATABASE_URL:-}"
 database_url_file=""
+default_database_url_file="$data_dir/database-url"
 database_max_connections="${DATABASE_MAX_CONNECTIONS:-10}"
 skip_target_gc="${OPEN_WEB_CODEX_SKIP_TARGET_GC:-0}"
 
@@ -363,6 +364,9 @@ if ! is_server_running "$existing_pid"; then
   rm -f "$pid_file"
 fi
 
+if [[ -z "$database_url" && -z "$database_url_file" && -r "$default_database_url_file" ]]; then
+  database_url_file="$default_database_url_file"
+fi
 if [[ -n "$database_url_file" ]]; then
   [[ -r "$database_url_file" ]] || { error "database URL file is not readable: $database_url_file"; exit 2; }
   IFS= read -r database_url <"$database_url_file" || true

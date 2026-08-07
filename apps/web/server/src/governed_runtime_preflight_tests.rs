@@ -20,7 +20,7 @@ fn retired_repository_supervisor_release_is_not_resolvable() {
 #[tokio::test]
 async fn rejects_a_root_agent_snapshot_that_no_longer_matches_the_published_agent() {
     let agent =
-        open_web_codex_supervisor_catalog::agent::resolve_builtin("enterprise-data-agent", "5.0.0")
+        open_web_codex_supervisor_catalog::agent::resolve_builtin("enterprise-data-agent", "5.1.0")
             .expect("published Agent");
     let mut lease = AgentRunLease {
         binding_id: Uuid::nil(),

@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "supervisor-package.v1",
+  "policyId": "enterprise-supervisor-copilot",
+  "version": "5.1.0",
+  "displayName": "Indonesia Network Planning Copilot",
+  "description": "Coordinates explicit Workspace data intake, generic warehouse-network analysis and independently owned report and map delivery without a separate requirement-profile confirmation.",
+  "responsibilities": [
+    "Frame the user's decision and identify the smallest unresolved evidence gaps.",
+    "Use only current Workspace sources unless the user explicitly requests synthetic Demo generation.",
+    "Enforce typed Artifact handoffs and preserve source classification and provenance.",
+    "Deliver deterministic report and map results without model-authored copies.",
+    "Stop with an explicit typed gap when Workspace evidence, metadata or a declared capability is unavailable."
+  ],
+  "instructionPolicy": {"policyId": "platform-supervisor-behavior", "version": "1.1.0"},
+  "customInstructionsFile": "custom-instructions.md",
+  "artifactContractsFile": "artifact-contracts.json",
+  "dataRequirementContracts": [{"contractId": "warehouse-network-planning", "version": "1.0.0", "contentSha256": "5954dcc6295f3f9f4722382ad58936e59c01e77467504ea88117ee2af1c8b544", "capabilityPackage": "supply-chain-network-planner"}],
+  "agents": [
+    {"definitionId": "enterprise-data-agent", "version": "5.1.0", "runtimeRole": "agent_da32e77f9c1f5f98184e9ef7593367be", "spawnLimit": 1},
+    {"definitionId": "enterprise-network-planning-agent", "version": "5.1.0", "runtimeRole": "agent_4e90dae277cf065190ed25bfaf799ce8", "spawnLimit": 1},
+    {"definitionId": "enterprise-visualization-agent", "version": "2.0.0", "runtimeRole": "agent_f533a88cc2fcde170744b35f4538deb9", "spawnLimit": 1}
+  ],
+  "runtimeRequirements": [{"capabilityId": "agents.multi_agent", "version": "1.0.0", "requiredLimits": {"exactRoleAllowlist": true, "exactRoleInstanceLimits": true}}],
+  "execution": {"maxActiveChildAgents": 3}
+}

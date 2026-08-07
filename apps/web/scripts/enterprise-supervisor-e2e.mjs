@@ -32,13 +32,13 @@ const email = process.env.E2E_ADMIN_EMAIL ?? "enterprise-e2e@open-web-codex.loca
 const password = process.env.E2E_ADMIN_PASSWORD ?? "open-web-codex-enterprise-e2e";
 const repositoryPolicy = {
   policy_id: "enterprise-supervisor-copilot",
-  version: "5.0.0",
+  version: "5.1.0",
 };
 const repositoryAgents = {
-  data: { definition_id: "enterprise-data-agent", version: "5.0.0" },
+  data: { definition_id: "enterprise-data-agent", version: "5.1.0" },
   network: {
     definition_id: "enterprise-network-planning-agent",
-    version: "5.0.0",
+    version: "5.1.0",
   },
   visualization: {
     definition_id: "enterprise-visualization-agent",

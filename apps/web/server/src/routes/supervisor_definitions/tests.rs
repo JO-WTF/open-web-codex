@@ -31,13 +31,13 @@ fn valid_draft() -> SupervisorDraftRequest {
         agents: vec![
             SupervisorAgentSelection {
                 definition_id: "enterprise-data-agent".to_string(),
-                version: "5.0.0".to_string(),
+                version: "5.1.0".to_string(),
                 release_id: None,
                 spawn_limit: 1,
             },
             SupervisorAgentSelection {
                 definition_id: "enterprise-network-planning-agent".to_string(),
-                version: "5.0.0".to_string(),
+                version: "5.1.0".to_string(),
                 release_id: None,
                 spawn_limit: 1,
             },
@@ -45,13 +45,13 @@ fn valid_draft() -> SupervisorDraftRequest {
         artifact_contracts: vec![
             SupervisorArtifactContractInput {
                 artifact_type: "planning-dataset.v2".to_string(),
-                producer_agent: "enterprise-data-agent@5.0.0".to_string(),
-                consumer_agents: vec!["enterprise-network-planning-agent@5.0.0".to_string()],
+                producer_agent: "enterprise-data-agent@5.1.0".to_string(),
+                consumer_agents: vec!["enterprise-network-planning-agent@5.1.0".to_string()],
                 required: true,
             },
             SupervisorArtifactContractInput {
                 artifact_type: "network_snapshot.v1".to_string(),
-                producer_agent: "enterprise-network-planning-agent@5.0.0".to_string(),
+                producer_agent: "enterprise-network-planning-agent@5.1.0".to_string(),
                 consumer_agents: vec!["supervisor".to_string()],
                 required: true,
             },

@@ -480,6 +480,26 @@ async fn persist_and_broadcast(
 ) {
     match event_projection::persist_frame(data, projection_db).await {
         Ok(Some(projected)) => {
+            if let Some(run_id) = projected.data_intake_confirmation_run_id {
+                if let Err(error) = event_projection::hold_data_intake_agents(
+                    projection_db,
+                    adapter.as_ref(),
+                    projected.organization_id,
+                    run_id,
+                )
+                .await
+                {
+                    tracing::warn!(%run_id, %error, "data-intake confirmation hold failed");
+                }
+            }
+            if let Some(run_id) = projected.supervisor_continuation_run_id {
+                tokio::spawn(event_projection::dispatch_supervisor_continuation(
+                    projection_db.clone(),
+                    adapter.clone(),
+                    projected.organization_id,
+                    run_id,
+                ));
+            }
             if !projected.pending_artifact_ids.is_empty() {
                 tokio::spawn(routes::artifacts::materialize_artifacts(
                     projection_db.clone(),

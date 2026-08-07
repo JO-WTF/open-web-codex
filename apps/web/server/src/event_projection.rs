@@ -1,8 +1,10 @@
+use open_web_codex_adapter::{AuthorizedWorkspace, CodexAdapter, TurnOptions};
 use open_web_codex_platform_contracts::RunEvent;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use sqlx::Row;
+use std::sync::Arc;
 use uuid::Uuid;
 
 const PROJECTION_VERSION: i16 = 1;
@@ -88,6 +90,369 @@ pub struct LiveProjection {
     pub organization_id: Uuid,
     pub payload: Vec<u8>,
     pub pending_artifact_ids: Vec<Uuid>,
+    pub data_intake_confirmation_run_id: Option<Uuid>,
+    pub supervisor_continuation_run_id: Option<Uuid>,
+}
+
+const SUPERVISOR_CONTINUATION_PROMPT: &str = concat!(
+    "All child Agents assigned to this Supervisor Run are now terminal. ",
+    "Continue the same task in this Thread. Reconcile the authoritative child outputs and ",
+    "return the required business-language result now. State what was completed, every ",
+    "source-to-target field mapping, the three evidence-backed multi-source conflicts when ",
+    "three exist, business parameters, readiness, and the next action. Do not report that ",
+    "you are waiting for an Agent and do not expose internal orchestration details."
+);
+
+struct SupervisorContinuationDelivery {
+    id: Uuid,
+    workspace_id: Uuid,
+    workspace_root: String,
+    root_thread_id: String,
+}
+
+async fn supervisor_has_active_children(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    run_id: Uuid,
+) -> Result<bool, String> {
+    sqlx::query_scalar(
+        "SELECT EXISTS (
+             SELECT 1
+             FROM runtime_agent_execution_projections
+             WHERE root_run_id = $1
+               AND status IN ('pending', 'running', 'waiting')
+         )",
+    )
+    .bind(run_id)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(|error| format!("active child Agent lookup failed: {error}"))
+}
+
+async fn record_supervisor_continuation(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    context: &EventRunContext,
+) -> Result<(), String> {
+    sqlx::query(
+        "INSERT INTO supervisor_run_continuations (
+             organization_id, run_id, workspace_id, root_thread_id, kind
+         ) VALUES ($1, $2, $3, $4, 'child_completion')
+         ON CONFLICT (run_id, kind) DO NOTHING",
+    )
+    .bind(context.organization_id)
+    .bind(context.run_id)
+    .bind(context.workspace_id)
+    .bind(&context.root_thread_id)
+    .execute(&mut **transaction)
+    .await
+    .map_err(|error| format!("Supervisor continuation projection error: {error}"))?;
+    Ok(())
+}
+
+async fn supervisor_continuation_is_ready(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    context: &EventRunContext,
+) -> Result<bool, String> {
+    if supervisor_has_active_children(transaction, context.run_id).await? {
+        return Ok(false);
+    }
+    sqlx::query_scalar(
+        "SELECT EXISTS (
+             SELECT 1
+             FROM supervisor_run_continuations
+             WHERE organization_id = $1 AND run_id = $2
+               AND kind = 'child_completion' AND status = 'pending'
+         )",
+    )
+    .bind(context.organization_id)
+    .bind(context.run_id)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(|error| format!("Supervisor continuation readiness lookup failed: {error}"))
+}
+
+async fn claim_supervisor_continuation(
+    db: &PgPool,
+    organization_id: Uuid,
+    run_id: Uuid,
+) -> Result<Option<SupervisorContinuationDelivery>, String> {
+    let mut transaction = db
+        .begin()
+        .await
+        .map_err(|error| format!("Supervisor continuation claim transaction error: {error}"))?;
+    let row = sqlx::query(
+        "SELECT continuation.id, continuation.workspace_id, continuation.root_thread_id,
+                workspace.root_path
+         FROM supervisor_run_continuations continuation
+         JOIN runs run ON run.id = continuation.run_id
+           AND run.organization_id = continuation.organization_id
+         JOIN workspaces workspace ON workspace.id = continuation.workspace_id
+           AND workspace.organization_id = continuation.organization_id
+           AND workspace.state IN ('ready', 'retained')
+         WHERE continuation.organization_id = $1 AND continuation.run_id = $2
+           AND continuation.kind = 'child_completion'
+           AND continuation.status = 'pending'
+           AND run.status = 'running' AND run.active_turn_id IS NULL
+           AND NOT EXISTS (
+               SELECT 1
+               FROM runtime_agent_execution_projections execution
+               WHERE execution.root_run_id = run.id
+                 AND execution.status IN ('pending', 'running', 'waiting')
+           )
+         FOR UPDATE OF continuation, run
+         LIMIT 1",
+    )
+    .bind(organization_id)
+    .bind(run_id)
+    .fetch_optional(&mut *transaction)
+    .await
+    .map_err(|error| format!("Supervisor continuation claim lookup failed: {error}"))?;
+    let Some(row) = row else {
+        transaction.commit().await.map_err(|error| {
+            format!("Supervisor continuation empty claim commit error: {error}")
+        })?;
+        return Ok(None);
+    };
+    let continuation_id: Uuid = row.get("id");
+    sqlx::query(
+        "UPDATE supervisor_run_continuations
+         SET status = 'sending', attempt = attempt + 1, updated_at = now()
+         WHERE id = $1 AND status = 'pending'",
+    )
+    .bind(continuation_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(|error| format!("Supervisor continuation claim update failed: {error}"))?;
+    let delivery = SupervisorContinuationDelivery {
+        id: continuation_id,
+        workspace_id: row.get("workspace_id"),
+        workspace_root: row.get("root_path"),
+        root_thread_id: row.get("root_thread_id"),
+    };
+    transaction
+        .commit()
+        .await
+        .map_err(|error| format!("Supervisor continuation claim commit error: {error}"))?;
+    Ok(Some(delivery))
+}
+
+async fn finish_supervisor_continuation(
+    db: &PgPool,
+    organization_id: Uuid,
+    run_id: Uuid,
+    delivery_id: Uuid,
+    outcome: Result<String, String>,
+) -> Result<(), String> {
+    let mut transaction = db
+        .begin()
+        .await
+        .map_err(|error| format!("Supervisor continuation finish transaction error: {error}"))?;
+    match outcome {
+        Ok(turn_id) => {
+            sqlx::query(
+                "UPDATE supervisor_run_continuations
+                 SET status = 'sent', turn_id = $1, failure_code = NULL, updated_at = now()
+                 WHERE id = $2 AND organization_id = $3 AND run_id = $4 AND status = 'sending'",
+            )
+            .bind(&turn_id)
+            .bind(delivery_id)
+            .bind(organization_id)
+            .bind(run_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| {
+                format!("Supervisor continuation success projection error: {error}")
+            })?;
+            sqlx::query(
+                "UPDATE runs
+                 SET active_turn_id = COALESCE(active_turn_id, $1), updated_at = now()
+                 WHERE id = $2 AND organization_id = $3 AND status = 'running'",
+            )
+            .bind(&turn_id)
+            .bind(run_id)
+            .bind(organization_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| format!("Supervisor continuation Run update error: {error}"))?;
+        }
+        Err(failure_code) => {
+            sqlx::query(
+                "UPDATE supervisor_run_continuations
+                 SET status = 'failed', failure_code = $1, updated_at = now()
+                 WHERE id = $2 AND organization_id = $3 AND run_id = $4 AND status = 'sending'",
+            )
+            .bind(&failure_code)
+            .bind(delivery_id)
+            .bind(organization_id)
+            .bind(run_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| {
+                format!("Supervisor continuation failure projection error: {error}")
+            })?;
+            sqlx::query(
+                "WITH failed_run AS (
+                    UPDATE runs
+                    SET status = 'failed', failure_code = $1, active_turn_id = NULL,
+                        lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
+                        updated_at = now()
+                    WHERE id = $2 AND organization_id = $3
+                      AND status = 'running' AND active_turn_id IS NULL
+                    RETURNING task_id
+                 )
+                 UPDATE tasks SET status = 'failed', updated_at = now()
+                 WHERE id IN (SELECT task_id FROM failed_run)
+                   AND status NOT IN ('cancelled', 'archived')",
+            )
+            .bind(&failure_code)
+            .bind(run_id)
+            .bind(organization_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| {
+                format!("Supervisor continuation Run failure update error: {error}")
+            })?;
+        }
+    }
+    transaction
+        .commit()
+        .await
+        .map_err(|error| format!("Supervisor continuation finish commit error: {error}"))?;
+    Ok(())
+}
+
+/// Continue the same governed Supervisor Thread once its child executions are
+/// terminal. The continuation is claimed durably before the Runtime call so
+/// one child event cannot start duplicate Turns.
+pub async fn dispatch_supervisor_continuation(
+    db: PgPool,
+    adapter: Arc<dyn CodexAdapter>,
+    organization_id: Uuid,
+    run_id: Uuid,
+) {
+    let delivery = match claim_supervisor_continuation(&db, organization_id, run_id).await {
+        Ok(Some(delivery)) => delivery,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::warn!(%run_id, %error, "Supervisor continuation claim failed");
+            return;
+        }
+    };
+    let workspace = AuthorizedWorkspace {
+        id: delivery.workspace_id.to_string(),
+        root: delivery.workspace_root.into(),
+    };
+    let outcome = match adapter
+        .send_user_message(
+            &workspace,
+            &delivery.root_thread_id,
+            SUPERVISOR_CONTINUATION_PROMPT,
+            &TurnOptions::default(),
+        )
+        .await
+    {
+        Ok(result) => result
+            .get("turnId")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| "runtime_turn_start_missing_id".to_string()),
+        Err(error) => {
+            tracing::warn!(%run_id, error = %error, "Supervisor continuation Turn failed to start");
+            Err("runtime_turn_start_failed".to_string())
+        }
+    };
+    if let Err(error) =
+        finish_supervisor_continuation(&db, organization_id, run_id, delivery.id, outcome).await
+    {
+        tracing::warn!(%run_id, %error, "Supervisor continuation result projection failed");
+    }
+}
+
+/// Stop every active Runtime Turn in a Run when a data-intake confirmation
+/// request becomes durable. The request itself remains the durable gate; a
+/// later user response resumes the same Thread through the data-intake route.
+pub async fn hold_data_intake_agents(
+    db: &PgPool,
+    adapter: &dyn CodexAdapter,
+    organization_id: Uuid,
+    run_id: Uuid,
+) -> Result<(), String> {
+    let rows = sqlx::query(
+        "WITH active_turns AS (
+             SELECT run.codex_thread_id AS thread_id, run.active_turn_id AS turn_id,
+                    run.workspace_id
+             FROM runs run
+             WHERE run.id = $1 AND run.organization_id = $2
+               AND run.active_turn_id IS NOT NULL
+             UNION
+             SELECT execution.agent_thread_id AS thread_id, execution.turn_id,
+                    execution.workspace_id
+             FROM runtime_agent_execution_projections execution
+             WHERE execution.root_run_id = $1
+               AND execution.organization_id = $2
+               AND execution.turn_id IS NOT NULL
+               AND execution.status IN ('pending', 'running', 'waiting')
+         )
+         SELECT active.thread_id, active.turn_id, workspace.id AS workspace_id,
+                workspace.root_path
+         FROM active_turns active
+         JOIN workspaces workspace ON workspace.id = active.workspace_id
+           AND workspace.organization_id = $2
+           AND workspace.state IN ('ready', 'retained')
+         WHERE active.thread_id IS NOT NULL
+         ORDER BY active.thread_id, active.turn_id",
+    )
+    .bind(run_id)
+    .bind(organization_id)
+    .fetch_all(db)
+    .await
+    .map_err(|error| format!("data-intake agent hold lookup failed: {error}"))?;
+
+    for row in rows {
+        let thread_id: String = row.get("thread_id");
+        let turn_id: String = row.get("turn_id");
+        let workspace = AuthorizedWorkspace {
+            id: row.get::<Uuid, _>("workspace_id").to_string(),
+            root: row.get::<String, _>("root_path").into(),
+        };
+        match adapter
+            .interrupt_turn(&workspace, &thread_id, &turn_id)
+            .await
+        {
+            Ok(()) => {
+                sqlx::query(
+                    "UPDATE runs SET active_turn_id = NULL, updated_at = now()
+                     WHERE id = $1 AND organization_id = $2 AND active_turn_id = $3",
+                )
+                .bind(run_id)
+                .bind(organization_id)
+                .bind(&turn_id)
+                .execute(db)
+                .await
+                .map_err(|error| format!("data-intake agent hold state update failed: {error}"))?;
+            }
+            Err(error) => {
+                tracing::warn!(
+                    %run_id,
+                    %thread_id,
+                    %turn_id,
+                    error = %error,
+                    "could not interrupt an Agent Turn for data-intake confirmation"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct DataIntakeProjectionResult {
+    changed: bool,
+    confirmation_opened: bool,
+}
+
+fn is_data_intake_confirmation_request(kind: &str) -> bool {
+    matches!(kind, "confirm_mapping" | "confirm_analysis")
 }
 
 pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjection>, String> {
@@ -115,27 +480,33 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
         .await
         .map_err(|error| format!("Artifact projection savepoint error: {error}"))?;
     let mut pending_artifact_ids = Vec::new();
+    let mut data_intake_confirmation_run_id = None;
     let artifact_result = async {
         let registered = register_artifacts(&mut transaction, &context, &event).await?;
         project_registered_artifacts(&mut event.payload, &registered);
-        let _ = project_data_intake_evidence(db, &mut transaction, &context, &event, &registered)
-            .await?;
+        let intake =
+            project_data_intake_evidence(db, &mut transaction, &context, &event, &registered)
+                .await?;
         register_inline_visualization_artifact(&mut transaction, &event, run_id, organization_id)
             .await?;
         resolve_inline_artifacts_in_transaction(&mut transaction, run_id, &mut event.payload)
             .await?;
-        Ok::<Vec<Uuid>, String>(
+        Ok::<(Vec<Uuid>, bool), String>((
             registered
                 .into_iter()
                 .filter(|artifact| artifact.state == "pending")
                 .map(|artifact| artifact.id)
                 .collect(),
-        )
+            intake.confirmation_opened,
+        ))
     }
     .await;
     match artifact_result {
-        Ok(ids) => {
+        Ok((ids, confirmation_opened)) => {
             pending_artifact_ids = ids;
+            if confirmation_opened {
+                data_intake_confirmation_run_id = Some(run_id);
+            }
             sqlx::query("RELEASE SAVEPOINT artifact_projection")
                 .execute(&mut *transaction)
                 .await
@@ -198,6 +569,32 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
     )
     .await?;
 
+    let mut supervisor_continuation_run_id = None;
+    let mut deferred_supervisor_completion = false;
+    let root_turn_completed = event.event_type == "codex.turn.completed"
+        && event
+            .payload
+            .pointer("/data/turn/status")
+            .and_then(Value::as_str)
+            == Some("completed");
+    if context.governed_supervisor && is_root_thread && root_turn_completed {
+        if supervisor_has_active_children(&mut transaction, run_id).await? {
+            record_supervisor_continuation(&mut transaction, &context).await?;
+            sqlx::query(
+                "UPDATE runs
+                 SET active_turn_id = NULL, lease_owner = NULL, lease_token = NULL,
+                     lease_expires_at = NULL, updated_at = now()
+                 WHERE id = $1 AND status = 'running' AND active_turn_id = $2",
+            )
+            .bind(run_id)
+            .bind(&event.turn_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| format!("deferred Supervisor completion projection error: {error}"))?;
+            deferred_supervisor_completion = true;
+        }
+    }
+
     if is_root_thread {
         match event.event_type.as_str() {
             "codex.turn.started" => {
@@ -213,11 +610,8 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
             }
             "codex.turn.completed" => {
                 if context.governed_supervisor
-                    && event
-                        .payload
-                        .pointer("/data/turn/status")
-                        .and_then(Value::as_str)
-                        == Some("completed")
+                    && root_turn_completed
+                    && !deferred_supervisor_completion
                 {
                     sqlx::query(
                         "WITH completed_run AS (
@@ -239,15 +633,17 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
                         format!("governed Supervisor completion projection error: {error}")
                     })?;
                 } else {
-                    sqlx::query(
-                        "UPDATE runs SET active_turn_id = NULL, updated_at = now() \
-                         WHERE id = $1 AND active_turn_id = $2",
-                    )
-                    .bind(run_id)
-                    .bind(&event.turn_id)
-                    .execute(&mut *transaction)
-                    .await
-                    .map_err(|error| format!("completed Turn projection error: {error}"))?;
+                    if !deferred_supervisor_completion {
+                        sqlx::query(
+                            "UPDATE runs SET active_turn_id = NULL, updated_at = now() \
+                             WHERE id = $1 AND active_turn_id = $2",
+                        )
+                        .bind(run_id)
+                        .bind(&event.turn_id)
+                        .execute(&mut *transaction)
+                        .await
+                        .map_err(|error| format!("completed Turn projection error: {error}"))?;
+                    }
                 }
             }
             "codex.thread.archived" => {
@@ -299,28 +695,56 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
         _ => None,
     };
     if let Some(status) = terminal_status {
-        let task_status = if status == "completed" {
-            "completed"
+        if context.governed_supervisor
+            && status == "completed"
+            && supervisor_has_active_children(&mut transaction, run_id).await?
+        {
+            record_supervisor_continuation(&mut transaction, &context).await?;
+            sqlx::query(
+                "UPDATE runs
+                 SET active_turn_id = NULL, lease_owner = NULL, lease_token = NULL,
+                     lease_expires_at = NULL, updated_at = now()
+                 WHERE id = $1 AND status = 'running'",
+            )
+            .bind(run_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| format!("deferred Thread completion projection error: {error}"))?;
         } else {
-            "pending"
-        };
-        sqlx::query(
-            "WITH updated_run AS (
-                UPDATE runs SET status = $1, active_turn_id = NULL, lease_owner = NULL,
-                                lease_token = NULL, lease_expires_at = NULL, updated_at = now()
-                WHERE id = $2 AND status = 'running'
-                RETURNING task_id
-             )
-             UPDATE tasks SET status = $3, updated_at = now()
-             WHERE id IN (SELECT task_id FROM updated_run)
-               AND status NOT IN ('completed', 'cancelled', 'archived')",
+            let task_status = if status == "completed" {
+                "completed"
+            } else {
+                "pending"
+            };
+            sqlx::query(
+                "WITH updated_run AS (
+                    UPDATE runs SET status = $1, active_turn_id = NULL, lease_owner = NULL,
+                                    lease_token = NULL, lease_expires_at = NULL, updated_at = now()
+                    WHERE id = $2 AND status = 'running'
+                    RETURNING task_id
+                 )
+                 UPDATE tasks SET status = $3, updated_at = now()
+                 WHERE id IN (SELECT task_id FROM updated_run)
+                   AND status NOT IN ('completed', 'cancelled', 'archived')",
+            )
+            .bind(status)
+            .bind(run_id)
+            .bind(task_status)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| format!("run lifecycle update error: {error}"))?;
+        }
+    }
+
+    if context.governed_supervisor
+        && !is_root_thread
+        && matches!(
+            event.event_type.as_str(),
+            "codex.turn.completed" | "codex.thread.completed" | "codex.thread.failed"
         )
-        .bind(status)
-        .bind(run_id)
-        .bind(task_status)
-        .execute(&mut *transaction)
-        .await
-        .map_err(|error| format!("run lifecycle update error: {error}"))?;
+        && supervisor_continuation_is_ready(&mut transaction, &context).await?
+    {
+        supervisor_continuation_run_id = Some(run_id);
     }
 
     transaction
@@ -350,6 +774,8 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
         organization_id,
         payload,
         pending_artifact_ids,
+        data_intake_confirmation_run_id,
+        supervisor_continuation_run_id,
     }))
 }
 
@@ -478,6 +904,8 @@ async fn persist_terminal_frame(
         organization_id,
         payload,
         pending_artifact_ids: Vec::new(),
+        data_intake_confirmation_run_id: None,
+        supervisor_continuation_run_id: None,
     }))
 }
 
@@ -2571,8 +2999,8 @@ async fn project_data_intake_evidence(
     context: &EventRunContext,
     event: &ProjectedEvent,
     artifacts: &[RegisteredArtifact],
-) -> Result<bool, String> {
-    let mut projected_any = false;
+) -> Result<DataIntakeProjectionResult, String> {
+    let mut result = DataIntakeProjectionResult::default();
     for artifact in artifacts {
         // ResourceLink artifacts are materialized asynchronously.  Never
         // infer a user request from an unavailable body; the materializer
@@ -2682,15 +3110,16 @@ async fn project_data_intake_evidence(
             if projected.is_none() {
                 continue;
             }
-            projected_any = true;
+            result.changed = true;
         }
         let automatic_evidence_column = match artifact.artifact_schema.as_str() {
+            "data_requirement_profile.v1" => Some("requirement_artifact_id"),
             "source_profile.v1" => Some("source_artifact_id"),
             "planning-dataset.v2" => Some("dataset_artifact_id"),
             _ => None,
         };
         let request_kind = match artifact.artifact_schema.as_str() {
-            "data_requirement_profile.v1" => Some("confirm_profile".to_string()),
+            "data_requirement_profile.v1" => None,
             "mapping_proposal.v1" => Some("confirm_mapping".to_string()),
             "input_gap.v1" => {
                 // A ready Resource without its bounded envelope is not enough
@@ -2755,6 +3184,7 @@ async fn project_data_intake_evidence(
                 ))
             });
             let query = match column {
+                "requirement_artifact_id" => sqlx::query("UPDATE data_intake_sessions SET requirement_artifact_id = $1, requirement_profile = COALESCE($2, requirement_profile), mapping_confirmation_sha256 = NULL, readiness_confirmation_sha256 = NULL, mapping_artifact_id = NULL, mapping_proposal = NULL, mapping_candidates = '[]', confirmed_mapping = '[]', dataset_artifact_id = NULL, planning_dataset = NULL, readiness_artifact_id = NULL, readiness_review = NULL, normalized_release_id = NULL, current_binding_id = NULL, input_revision = input_revision + 1, evidence_revision = evidence_revision + 1, evidence_fingerprint = $3, status = 'active', updated_at = now() WHERE id = $4 AND organization_id = $5 AND requirement_artifact_id IS DISTINCT FROM $1"),
                 "source_artifact_id" => sqlx::query("UPDATE data_intake_sessions SET source_artifact_id = $1, source_profile = COALESCE($2, source_profile), mapping_artifact_id = NULL, mapping_proposal = NULL, mapping_candidates = '[]', confirmed_mapping = '[]', mapping_confirmation_sha256 = NULL, dataset_artifact_id = NULL, planning_dataset = NULL, readiness_artifact_id = NULL, readiness_review = NULL, readiness_confirmation_sha256 = NULL, normalized_release_id = NULL, current_binding_id = NULL, input_revision = input_revision + 1, evidence_revision = evidence_revision + 1, evidence_fingerprint = $3, status = 'active', updated_at = now() WHERE id = $4 AND organization_id = $5 AND source_artifact_id IS DISTINCT FROM $1"),
                 _ => sqlx::query("UPDATE data_intake_sessions SET dataset_artifact_id = $1, planning_dataset = COALESCE($2, planning_dataset), input_revision = input_revision + 1, evidence_revision = evidence_revision + 1, evidence_fingerprint = $3, status = 'active', updated_at = now() WHERE id = $4 AND organization_id = $5 AND dataset_artifact_id IS DISTINCT FROM $1"),
             };
@@ -2767,6 +3197,22 @@ async fn project_data_intake_evidence(
                 .execute(&mut **transaction)
                 .await
                 .map_err(|error| format!("Intake automatic evidence projection error: {error}"))?;
+            if artifact.artifact_schema == "data_requirement_profile.v1" {
+                let downstream_kinds: &[&str] =
+                    &["confirm_mapping", "answer_parameters", "confirm_analysis"];
+                sqlx::query(
+                    "UPDATE data_intake_input_requests SET status = 'superseded'
+                     WHERE organization_id = $1 AND task_id = $2 AND intake_session_id = $3
+                       AND kind = ANY($4) AND status = 'open'",
+                )
+                .bind(context.organization_id)
+                .bind(context.task_id)
+                .bind(session_id)
+                .bind(downstream_kinds)
+                .execute(&mut **transaction)
+                .await
+                .map_err(|error| format!("Intake downstream request supersede error: {error}"))?;
+            }
         }
         let Some(request_kind) = request_kind else {
             continue;
@@ -2801,18 +3247,6 @@ async fn project_data_intake_evidence(
             ))
         });
         let update = match artifact.artifact_schema.as_str() {
-                "data_requirement_profile.v1" => sqlx::query(
-                    "UPDATE data_intake_sessions SET requirement_artifact_id = $1, \
-                 requirement_profile = COALESCE($2, requirement_profile), \
-                 profile_confirmation_sha256 = NULL, mapping_confirmation_sha256 = NULL, \
-                 readiness_confirmation_sha256 = NULL, mapping_artifact_id = NULL, \
-                 mapping_proposal = NULL, mapping_candidates = '[]', confirmed_mapping = '[]', \
-                 dataset_artifact_id = NULL, planning_dataset = NULL, readiness_artifact_id = NULL, \
-                 readiness_review = NULL, normalized_release_id = NULL, current_binding_id = NULL, \
-                 input_revision = input_revision + 1, evidence_revision = evidence_revision + 1, evidence_fingerprint = $3, \
-                 status = 'active', updated_at = now() WHERE id = $4 AND organization_id = $5 \
-                 AND requirement_artifact_id IS DISTINCT FROM $1",
-            ),
             "mapping_proposal.v1" => sqlx::query(
                 "UPDATE data_intake_sessions SET mapping_artifact_id = $1, \
                  mapping_proposal = COALESCE($2, mapping_proposal), \
@@ -2927,7 +3361,7 @@ async fn project_data_intake_evidence(
         .await
         .map_err(|error| format!("Intake request supersede error: {error}"))?;
         let request_id = Uuid::now_v7();
-        sqlx::query(
+        let inserted = sqlx::query(
             "INSERT INTO data_intake_input_requests (
                 id, organization_id, task_id, intake_session_id, kind,
                 artifact_id, session_revision, evidence_fingerprint, idempotency_key, status,
@@ -2949,8 +3383,11 @@ async fn project_data_intake_evidence(
         .execute(&mut **transaction)
         .await
         .map_err(|error| format!("Intake input request projection error: {error}"))?;
+        if inserted.rows_affected() == 1 && is_data_intake_confirmation_request(&request_kind) {
+            result.confirmation_opened = true;
+        }
     }
-    Ok(projected_any)
+    Ok(result)
 }
 
 /// Intake is a projection of the bound policy, not a schema-name trigger.
@@ -3197,9 +3634,9 @@ pub(crate) async fn reconcile_materialized_intake_artifact(
         )
         .await?;
     }
-    let intake_changed =
+    let intake_result =
         project_data_intake_evidence(db, &mut transaction, &context, &event, &registered).await?;
-    if !intake_changed {
+    if !intake_result.changed {
         transaction
             .commit()
             .await
@@ -3269,6 +3706,12 @@ pub(crate) async fn reconcile_materialized_intake_artifact(
         organization_id: context.organization_id,
         payload,
         pending_artifact_ids: Vec::new(),
+        data_intake_confirmation_run_id: if intake_result.confirmation_opened {
+            Some(context.run_id)
+        } else {
+            None
+        },
+        supervisor_continuation_run_id: None,
     }))
 }
 
@@ -5118,6 +5561,11 @@ After"#;
 
 "#
         );
+        let root_followup_completed = format!(
+            r#"data: {{"method":"app-server-event","params":{{"workspace_id":"{workspace_id}","message":{{"method":"turn/completed","params":{{"threadId":"root-thread","turnId":"root-followup-turn","turn":{{"id":"root-followup-turn","status":"completed"}}}}}}}}}}
+
+"#
+        );
         assert!(persist_frame(assignment.as_bytes(), &pool)
             .await
             .unwrap()
@@ -5142,6 +5590,36 @@ After"#;
             .await
             .unwrap()
             .is_some());
+        sqlx::query("UPDATE runs SET active_turn_id = 'root-turn' WHERE id = $1")
+            .bind(run_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let deferred_root = persist_frame(root_turn_completed.as_bytes(), &pool)
+            .await
+            .unwrap()
+            .expect("deferred root completion projection");
+        assert_eq!(deferred_root.supervisor_continuation_run_id, None);
+        let run = sqlx::query("SELECT status, active_turn_id FROM runs WHERE id = $1")
+            .bind(run_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(run.get::<String, _>("status"), "running");
+        assert!(run.get::<Option<String>, _>("active_turn_id").is_none());
+        let continuation = sqlx::query(
+            "SELECT kind, status, attempt
+             FROM supervisor_run_continuations
+             WHERE organization_id = $1 AND run_id = $2",
+        )
+        .bind(organization_id)
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(continuation.get::<String, _>("kind"), "child_completion");
+        assert_eq!(continuation.get::<String, _>("status"), "pending");
+        assert_eq!(continuation.get::<i32, _>("attempt"), 0);
         let artifact_projection = persist_frame(child_artifact.as_bytes(), &pool)
             .await
             .unwrap()
@@ -5414,10 +5892,49 @@ After"#;
             .await
             .unwrap()
             .is_some());
-        assert!(persist_frame(completed.as_bytes(), &pool)
+        let final_child_projection = persist_frame(completed.as_bytes(), &pool)
             .await
             .unwrap()
-            .is_some());
+            .expect("final child terminal projection");
+        assert_eq!(
+            final_child_projection.supervisor_continuation_run_id,
+            Some(run_id)
+        );
+        let delivery = claim_supervisor_continuation(&pool, organization_id, run_id)
+            .await
+            .unwrap()
+            .expect("claim the one pending Supervisor continuation");
+        assert!(
+            claim_supervisor_continuation(&pool, organization_id, run_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        finish_supervisor_continuation(
+            &pool,
+            organization_id,
+            run_id,
+            delivery.id,
+            Ok("root-followup-turn".to_string()),
+        )
+        .await
+        .unwrap();
+        let continuation = sqlx::query(
+            "SELECT status, attempt, turn_id
+             FROM supervisor_run_continuations
+             WHERE organization_id = $1 AND run_id = $2",
+        )
+        .bind(organization_id)
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(continuation.get::<String, _>("status"), "sent");
+        assert_eq!(continuation.get::<i32, _>("attempt"), 1);
+        assert_eq!(
+            continuation.get::<Option<String>, _>("turn_id").as_deref(),
+            Some("root-followup-turn")
+        );
 
         let run = sqlx::query("SELECT status, active_turn_id FROM runs WHERE id = $1")
             .bind(run_id)
@@ -5425,7 +5942,10 @@ After"#;
             .await
             .unwrap();
         assert_eq!(run.get::<String, _>("status"), "running");
-        assert!(run.get::<Option<String>, _>("active_turn_id").is_none());
+        assert_eq!(
+            run.get::<Option<String>, _>("active_turn_id").as_deref(),
+            Some("root-followup-turn")
+        );
         let child = sqlx::query(
             "SELECT root_run_id, parent_thread_id, agent_role, status_type
              FROM runtime_agent_projections
@@ -5540,12 +6060,7 @@ After"#;
             artifact.get::<String, _>("producer_thread_id"),
             "child-thread"
         );
-        sqlx::query("UPDATE runs SET active_turn_id = 'root-turn' WHERE id = $1")
-            .bind(run_id)
-            .execute(&pool)
-            .await
-            .unwrap();
-        assert!(persist_frame(root_turn_completed.as_bytes(), &pool)
+        assert!(persist_frame(root_followup_completed.as_bytes(), &pool)
             .await
             .unwrap()
             .is_some());

@@ -4,8 +4,8 @@ use super::*;
 fn publishes_exact_runtime_roles_and_seals_role_content() {
     let definitions = list_published().unwrap();
     assert_eq!(definitions.len(), 5);
-    assert_eq!(definitions[0].version, "5.0.0");
-    assert_eq!(definitions[1].version, "5.0.0");
+    assert_eq!(definitions[0].version, "5.1.0");
+    assert_eq!(definitions[1].version, "5.1.0");
     assert_eq!(definitions[2].version, "2.0.0");
     assert_eq!(definitions[3].version, "2.0.0");
     assert_eq!(definitions[4].version, "2.0.0");
@@ -18,8 +18,8 @@ fn publishes_exact_runtime_roles_and_seals_role_content() {
             .map(|role| role.name.as_str())
             .collect::<Vec<_>>(),
         vec![
-            "agent_d63c04421e6b9a185e164b9b836b7d3f",
-            "agent_f6c1714e7adccad14b25c797a5e30185",
+            "agent_da32e77f9c1f5f98184e9ef7593367be",
+            "agent_4e90dae277cf065190ed25bfaf799ce8",
             "agent_f533a88cc2fcde170744b35f4538deb9",
             "agent_9040f76e7387b00fff5e63fd574e63df",
             "agent_b85d26c7975f69e43b87043fc48e08ea"
@@ -121,10 +121,10 @@ fn definitions_bind_versions_to_reviewed_runtime_instructions() {
 #[test]
 fn platform_runtime_role_names_are_reserved() {
     assert!(is_platform_runtime_role(
-        "agent_d63c04421e6b9a185e164b9b836b7d3f"
+        "agent_da32e77f9c1f5f98184e9ef7593367be"
     ));
     assert!(is_platform_runtime_role(
-        "agent_f6c1714e7adccad14b25c797a5e30185"
+        "agent_4e90dae277cf065190ed25bfaf799ce8"
     ));
     assert!(is_platform_runtime_role(
         "agent_f533a88cc2fcde170744b35f4538deb9"
@@ -153,7 +153,7 @@ fn user_release_inherits_only_reviewed_template_capabilities() {
         capability_template: AgentCapabilityTemplateSelection {
             source: AgentCapabilityTemplateSource::RepositoryAgent,
             definition_id: "enterprise-data-agent".to_string(),
-            version: "5.0.0".to_string(),
+            version: "5.1.0".to_string(),
             release_id: None,
         },
         dataset_releases: Vec::new(),
@@ -161,7 +161,7 @@ fn user_release_inherits_only_reviewed_template_capabilities() {
     let resolved = validate_user_release(spec.clone()).unwrap();
     assert_eq!(
         resolved.required_capabilities,
-        resolve_builtin("enterprise-data-agent", "5.0.0")
+        resolve_builtin("enterprise-data-agent", "5.1.0")
             .unwrap()
             .required_capabilities
     );
@@ -213,7 +213,7 @@ fn repository_and_web_agent_sources_compile_to_identical_execution_semantics() {
 
 #[test]
 fn user_release_seals_exact_dataset_release_without_a_host_path() {
-    let template = resolve_builtin("enterprise-data-agent", "5.0.0").unwrap();
+    let template = resolve_builtin("enterprise-data-agent", "5.1.0").unwrap();
     let workspace_id = Uuid::now_v7();
     let release_id = Uuid::now_v7();
     let mut spec = template.authoring_spec();

@@ -32,7 +32,7 @@ fn valid_draft() -> AgentDefinitionDraftRequest {
         capability_template: AgentCapabilityTemplateSelection {
             source: AgentCapabilityTemplateSource::RepositoryAgent,
             definition_id: "enterprise-data-agent".to_string(),
-            version: "5.0.0".to_string(),
+            version: "5.1.0".to_string(),
             release_id: None,
         },
         dataset_release_ids: Vec::new(),
@@ -42,7 +42,7 @@ fn valid_draft() -> AgentDefinitionDraftRequest {
 #[test]
 fn validates_a_user_agent_without_accepting_runtime_facts() {
     let template =
-        open_web_codex_supervisor_catalog::agent::resolve_builtin("enterprise-data-agent", "5.0.0")
+        open_web_codex_supervisor_catalog::agent::resolve_builtin("enterprise-data-agent", "5.1.0")
             .expect("built-in Agent template");
     let result = validate_draft(&valid_draft(), &template, Vec::new());
     assert!(result.valid);

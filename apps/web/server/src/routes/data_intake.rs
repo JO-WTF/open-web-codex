@@ -500,8 +500,14 @@ pub async fn get(
     Path(task_id): Path<Uuid>,
 ) -> ApiResult<DataIntakeSessionSummary> {
     let row = sqlx::query(
+        // ensure_session_for_thread creates the projection before the Runtime
+        // Turn starts so artifact projection has an authorized owner.  That
+        // row is not a browser-visible Intake resource until evidence has
+        // actually been projected into it.
         "SELECT id, workspace_id FROM data_intake_sessions \
-         WHERE organization_id = $1 AND task_id = $2 ORDER BY updated_at DESC, id DESC LIMIT 1",
+         WHERE organization_id = $1 AND task_id = $2 \
+           AND evidence_fingerprint <> '' \
+         ORDER BY updated_at DESC, id DESC LIMIT 1",
     )
     .bind(auth.organization_id)
     .bind(task_id)
@@ -635,10 +641,7 @@ pub async fn respond(
         ));
     }
     let response_value = request.response.get("value").unwrap_or(&request.response);
-    if matches!(
-        request_kind.as_str(),
-        "confirm_profile" | "confirm_analysis"
-    ) {
+    if request_kind == "confirm_analysis" {
         let confirmed = response_value
             .get("decision")
             .and_then(Value::as_str)
@@ -743,9 +746,6 @@ pub async fn respond(
             .get::<Option<Uuid>, _>("readiness_artifact_id")
             .is_some()
         && intake
-            .get::<Option<String>, _>("profile_confirmation_sha256")
-            .is_some()
-        && intake
             .get::<Option<String>, _>("mapping_confirmation_sha256")
             .is_some()
         && intake
@@ -757,9 +757,6 @@ pub async fn respond(
         "active"
     };
     let update_sql = match request_kind.as_str() {
-        "confirm_profile" => {
-            "UPDATE data_intake_sessions SET input_revision = input_revision + 1, evidence_revision = evidence_revision + 1, status = $1, profile_confirmation_sha256 = $5, failure_code = NULL, failure_summary = NULL, updated_at = now() WHERE organization_id = $2 AND id = $3 AND input_revision = $4"
-        }
         "confirm_mapping" => {
             "UPDATE data_intake_sessions SET input_revision = input_revision + 1, evidence_revision = evidence_revision + 1, status = $1, mapping_confirmation_sha256 = $5, failure_code = NULL, failure_summary = NULL, updated_at = now() WHERE organization_id = $2 AND id = $3 AND input_revision = $4"
         }
@@ -1778,9 +1775,6 @@ async fn load_session(
             session_revision: request.get("session_revision"),
             status: request.get("status"),
             prompt: match request.get::<String, _>("kind").as_str() {
-                "confirm_profile" => {
-                    "Review and confirm the complete planning data profile.".to_string()
-                }
                 "confirm_mapping" => {
                     "Review and confirm the complete field mapping revision.".to_string()
                 }
@@ -1965,7 +1959,7 @@ async fn load_session_row<'a>(
     task_id: Uuid,
 ) -> Result<sqlx::postgres::PgRow, ApiError> {
     sqlx::query(
-        "SELECT id, workspace_id, contract_id, contract_version, contract_sha256, status, input_revision, mapping_revision, mapping_candidates, confirmed_mapping, parameter_answers, mapping_proposal, source_profile, requirement_artifact_id, dataset_artifact_id, readiness_artifact_id, evidence_fingerprint, profile_confirmation_sha256, mapping_confirmation_sha256, parameter_confirmation_sha256 \
+        "SELECT id, workspace_id, contract_id, contract_version, contract_sha256, status, input_revision, mapping_revision, mapping_candidates, confirmed_mapping, parameter_answers, mapping_proposal, source_profile, requirement_artifact_id, dataset_artifact_id, readiness_artifact_id, evidence_fingerprint, mapping_confirmation_sha256, parameter_confirmation_sha256 \
          FROM data_intake_sessions WHERE organization_id = $1 AND task_id = $2 \
          ORDER BY updated_at DESC, id DESC LIMIT 1",
     )
@@ -2007,8 +2001,8 @@ async fn recompute_intake_fingerprint(
         "SELECT contract_id, contract_version, contract_sha256,
                 requirement_artifact_id, source_artifact_id, mapping_artifact_id,
                 dataset_artifact_id, readiness_artifact_id,
-                profile_confirmation_sha256, mapping_confirmation_sha256,
-                parameter_confirmation_sha256, readiness_confirmation_sha256,
+                mapping_confirmation_sha256, parameter_confirmation_sha256,
+                readiness_confirmation_sha256,
                 parameter_answers, gaps
          FROM data_intake_sessions
          WHERE organization_id = $1 AND id = $2",
@@ -2030,7 +2024,6 @@ async fn recompute_intake_fingerprint(
     let fingerprint = fingerprint_json(&serde_json::json!({
         "contract": [row.get::<String, _>("contract_id"), row.get::<String, _>("contract_version"), row.get::<String, _>("contract_sha256")],
         "artifacts": artifact_hashes,
-        "profileConfirmation": row.get::<Option<String>, _>("profile_confirmation_sha256"),
         "mappingConfirmation": row.get::<Option<String>, _>("mapping_confirmation_sha256"),
         "parameterConfirmation": row.get::<Option<String>, _>("parameter_confirmation_sha256"),
         "readinessConfirmation": row.get::<Option<String>, _>("readiness_confirmation_sha256"),
@@ -2045,9 +2038,6 @@ async fn recompute_intake_fingerprint(
         && row.get::<Option<Uuid>, _>("dataset_artifact_id").is_some()
         && row
             .get::<Option<Uuid>, _>("readiness_artifact_id")
-            .is_some()
-        && row
-            .get::<Option<String>, _>("profile_confirmation_sha256")
             .is_some()
         && row
             .get::<Option<String>, _>("mapping_confirmation_sha256")
@@ -2149,7 +2139,7 @@ fn validate_answers(
             .iter()
             .find(|parameter| parameter.name == answer.name)
             .ok_or_else(|| {
-                bad_request("The submitted parameter is not in the confirmed Profile")
+                bad_request("The submitted parameter is not in the published requirement Profile")
             })?;
         if answer.source.trim().is_empty()
             || answer.value.is_null()

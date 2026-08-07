@@ -173,15 +173,19 @@ pub(crate) async fn recover_and_materialize_pending(
             return;
         }
     };
-    materialize_artifacts(db.clone(), adapter, ids, event_bus.clone()).await;
-    reconcile_unprojected_ready_intake_artifacts(&db, &event_bus).await;
+    materialize_artifacts(db.clone(), adapter.clone(), ids, event_bus.clone()).await;
+    reconcile_unprojected_ready_intake_artifacts(&db, adapter.as_ref(), &event_bus).await;
 }
 
 /// Rebuild the task-owned Intake projection for a ResourceLink that was
 /// materialized before its projection could be committed. This is deliberately
 /// limited to typed Intake artifacts and is safe to repeat because the
 /// projection uses the Artifact identity and envelope hash as its key.
-async fn reconcile_unprojected_ready_intake_artifacts(db: &PgPool, event_bus: &Sender<LiveEvent>) {
+async fn reconcile_unprojected_ready_intake_artifacts(
+    db: &PgPool,
+    adapter: &dyn CodexAdapter,
+    event_bus: &Sender<LiveEvent>,
+) {
     let ids = match sqlx::query_scalar::<_, Uuid>(
         "SELECT DISTINCT artifact.id
          FROM artifacts artifact
@@ -217,7 +221,9 @@ async fn reconcile_unprojected_ready_intake_artifacts(db: &PgPool, event_bus: &S
     };
     for artifact_id in ids {
         match reconcile_materialized_intake_artifact(db, artifact_id).await {
-            Ok(Some(projection)) => broadcast_live_projection(event_bus, projection),
+            Ok(Some(projection)) => {
+                broadcast_live_projection(db, adapter, event_bus, projection).await
+            }
             Ok(None) => {}
             Err(error) => {
                 tracing::warn!(%error, %artifact_id, "ready Intake Artifact reconciliation failed");
@@ -234,7 +240,9 @@ pub(crate) async fn materialize_artifacts(
 ) {
     for artifact_id in artifact_ids {
         match materialize_artifact(&db, adapter.as_ref(), artifact_id).await {
-            Ok(Some(projection)) => broadcast_live_projection(&event_bus, projection),
+            Ok(Some(projection)) => {
+                broadcast_live_projection(&db, adapter.as_ref(), &event_bus, projection).await
+            }
             Ok(None) => {}
             Err(error) => {
                 tracing::warn!(%error, %artifact_id, "Artifact materialization failed");
@@ -243,7 +251,24 @@ pub(crate) async fn materialize_artifacts(
     }
 }
 
-fn broadcast_live_projection(event_bus: &Sender<LiveEvent>, projection: LiveProjection) {
+async fn broadcast_live_projection(
+    db: &PgPool,
+    adapter: &dyn CodexAdapter,
+    event_bus: &Sender<LiveEvent>,
+    projection: LiveProjection,
+) {
+    if let Some(run_id) = projection.data_intake_confirmation_run_id {
+        if let Err(error) = crate::event_projection::hold_data_intake_agents(
+            db,
+            adapter,
+            projection.organization_id,
+            run_id,
+        )
+        .await
+        {
+            tracing::warn!(%run_id, %error, "data-intake confirmation hold failed");
+        }
+    }
     if event_bus
         .send(LiveEvent {
             organization_id: projection.organization_id,

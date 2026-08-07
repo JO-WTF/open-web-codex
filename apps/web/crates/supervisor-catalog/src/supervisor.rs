@@ -23,17 +23,17 @@ use crate::validation::{
 #[cfg(test)]
 const INDONESIA_NETWORK_PLANNING_DRAFT_MANIFEST: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/5.0.0/manifest.json"
+    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/5.2.0/manifest.json"
 ));
 #[cfg(test)]
 const INDONESIA_NETWORK_PLANNING_DRAFT_CUSTOM_INSTRUCTIONS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/5.0.0/custom-instructions.md"
+    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/5.2.0/custom-instructions.md"
 ));
 #[cfg(test)]
 const INDONESIA_NETWORK_PLANNING_DRAFT_ARTIFACT_CONTRACTS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/5.0.0/artifact-contracts.json"
+    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/5.2.0/artifact-contracts.json"
 ));
 const MAX_SUPERVISOR_INSTRUCTIONS_BYTES: usize = 16 * 1024;
 
@@ -600,12 +600,26 @@ fn compile_developer_instructions(
          `resource_name`, and the complete structured `data_ref` object returned by the producer \
          Tool. A schema name, business summary, copied metrics, guessed URI, or rewritten \
          `mcp_resource://` string is not a reference.\n\
-         Before assigning a consumer Agent, verify that the producer response contains all three \
-         fields and copy the `resource_name` and `data_ref` object verbatim into the assignment. \
-         Never summarize, reformat, reconstruct, or omit them. If either field is absent, ask the \
-         producer for the exact handoff tuple before creating the consumer. A consumer that reports \
-         `MISSING_ARTIFACT_HANDOFF` must receive a follow-up with the original tuple; do not ask it \
-         to discover files, list Resources, or guess a URI.\n",
+         Every producer Tool result is submitted as one bounded evidence batch. The producer's \
+         terminal message must end with an internal `HANDOFF_BATCH` containing the Artifact schema \
+         (the exact `data_ref.resource_schema` value), exact `resource_name`, and complete \
+         structured `data_ref`; copy those values verbatim into the next assignment. Never \
+         summarize, reformat, reconstruct, or omit them.\n\
+         Do not use `followup_task` to recover a handoff from a terminal producer. If the terminal \
+         message has no complete `HANDOFF_BATCH`, end the current batch with a typed missing-evidence \
+         result and report the business prerequisite. Do not ask the producer to rediscover files, \
+         list Resources, or guess a URI. A consumer that reports `MISSING_ARTIFACT_HANDOFF` may only \
+         receive the original tuple when that tuple is already available from the same batch.\n",
+    );
+    compiled.push_str(
+        "\n## Evidence batches\n\
+         Execute the warehouse-network journey in order: (1) Network Planning publishes the \
+         requirement profile; (2) Data Preparation reads that profile once, profiles the Workspace, \
+         and publishes the source profile and mapping proposal; (3) after the required mapping and \
+         parameter decision, Data Preparation normalizes and validates the planning dataset; (4) \
+         Network Planning publishes readiness and performs analysis. Do not profile Workspace files \
+         before Batch 1, skip a batch, run dependent batches in parallel, or repeat an unchanged \
+         batch.\n",
     );
     for contract in artifact_contracts {
         writeln!(
@@ -871,6 +885,19 @@ mod tests {
         let available_agents = agent::list_resolved_builtins().unwrap();
         let web = resolve_authoring_spec(draft.clone(), &available_agents).unwrap();
 
+        for required in [
+            "## Artifact handoffs",
+            "Every producer Tool result is submitted as one bounded evidence batch",
+            "Do not use `followup_task` to recover a handoff from a terminal producer",
+            "## Evidence batches",
+            "Network Planning publishes the requirement profile",
+        ] {
+            assert!(
+                web.developer_instructions.contains(required),
+                "missing compiled instruction: {required}"
+            );
+        }
+
         assert_eq!(repository.execution_semantics(), web.execution_semantics());
         assert_eq!(
             repository.execution_semantics_sha256(),
@@ -934,7 +961,7 @@ mod tests {
     #[test]
     fn repository_derived_fields_cannot_drift_from_the_canonical_compiler() {
         let manifest = INDONESIA_NETWORK_PLANNING_DRAFT_MANIFEST.replacen(
-            "\"runtimeRole\": \"agent_d63c04421e6b9a185e164b9b836b7d3f\"",
+            "\"runtimeRole\": \"agent_da32e77f9c1f5f98184e9ef7593367be\"",
             "\"runtimeRole\": \"drifted_data_agent\"",
             1,
         );
@@ -949,5 +976,26 @@ mod tests {
                 "repository package derived Runtime fields do not match the canonical compiler"
             )
         );
+    }
+
+    #[test]
+    fn current_supervisor_package_requires_a_business_facing_evidence_summary() {
+        let instructions = INDONESIA_NETWORK_PLANNING_DRAFT_CUSTOM_INSTRUCTIONS;
+        for required in [
+            "Field mapping",
+            "Multi-source conflicts",
+            "Business parameters",
+            "planning-dataset.v2",
+            "confirm the requirement profile again",
+            "## Sequential evidence batches",
+            "HANDOFF_BATCH",
+            "terminal child is not to be called again",
+        ] {
+            assert!(
+                instructions.contains(required),
+                "missing instruction: {required}"
+            );
+        }
+        assert!(!instructions.contains("relayed authorization"));
     }
 }

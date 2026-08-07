@@ -23,19 +23,19 @@ use crate::validation::{
 
 const DATA_AGENT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/agents/enterprise-data-agent/5.0.0/definition.json"
+    "/../../../../capabilities/agents/enterprise-data-agent/5.1.0/definition.json"
 ));
 const DATA_AGENT_INSTRUCTIONS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/agents/enterprise-data-agent/5.0.0/instructions.md"
+    "/../../../../capabilities/agents/enterprise-data-agent/5.1.0/instructions.md"
 ));
 const NETWORK_PLANNING_AGENT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/agents/enterprise-network-planning-agent/5.0.0/definition.json"
+    "/../../../../capabilities/agents/enterprise-network-planning-agent/5.1.0/definition.json"
 ));
 const NETWORK_PLANNING_AGENT_INSTRUCTIONS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/agents/enterprise-network-planning-agent/5.0.0/instructions.md"
+    "/../../../../capabilities/agents/enterprise-network-planning-agent/5.1.0/instructions.md"
 ));
 const VISUALIZATION_AGENT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -60,6 +60,22 @@ const RISK_AGENT: &str = include_str!(concat!(
 const RISK_AGENT_INSTRUCTIONS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../../../capabilities/agents/enterprise-risk-agent/2.0.0/instructions.md"
+));
+const LEGACY_DATA_AGENT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../capabilities/agents/enterprise-data-agent/5.0.0/definition.json"
+));
+const LEGACY_DATA_AGENT_INSTRUCTIONS: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../capabilities/agents/enterprise-data-agent/5.0.0/instructions.md"
+));
+const LEGACY_NETWORK_PLANNING_AGENT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../capabilities/agents/enterprise-network-planning-agent/5.0.0/definition.json"
+));
+const LEGACY_NETWORK_PLANNING_AGENT_INSTRUCTIONS: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../capabilities/agents/enterprise-network-planning-agent/5.0.0/instructions.md"
 ));
 
 const MAX_RUNTIME_ROLE_INSTRUCTIONS_BYTES: usize = 16 * 1024;
@@ -89,6 +105,17 @@ const PUBLISHED_AGENT_RESOURCES: [PublishedAgentResource; 5] = [
     PublishedAgentResource {
         definition: RISK_AGENT,
         developer_instructions: RISK_AGENT_INSTRUCTIONS,
+    },
+];
+
+const LEGACY_AGENT_RESOURCES: [PublishedAgentResource; 2] = [
+    PublishedAgentResource {
+        definition: LEGACY_DATA_AGENT,
+        developer_instructions: LEGACY_DATA_AGENT_INSTRUCTIONS,
+    },
+    PublishedAgentResource {
+        definition: LEGACY_NETWORK_PLANNING_AGENT,
+        developer_instructions: LEGACY_NETWORK_PLANNING_AGENT_INSTRUCTIONS,
     },
 ];
 
@@ -190,6 +217,7 @@ pub fn resolve_builtin(
 ) -> Result<ResolvedAgentDefinition, AgentCatalogError> {
     PUBLISHED_AGENT_RESOURCES
         .iter()
+        .chain(LEGACY_AGENT_RESOURCES.iter())
         .find(|resource| {
             parse_published_definition(resource).is_ok_and(|definition| {
                 definition.definition_id == definition_id && definition.version == version
