@@ -35,7 +35,10 @@ function session(dataClassification: "workspace_data" | "synthetic_demo") {
     failureCode: null,
     failureSummary: null,
     inputRequests: [],
-    requirementProfile: null,
+    requirementProfile: {
+      title: "本次规划的数据需求",
+      entities: [{ name: "City demand", fields: [{ name: "city_id" }] }],
+    },
     sourceProfile: { schemaVersion: "source_profile.v1", dataClassification },
     mappingProposal: null,
     readinessReview: null,
@@ -47,7 +50,6 @@ const handlers = {
   onOpenUpload: vi.fn(),
   onConfirmMapping: vi.fn(),
   onSubmitParameters: vi.fn(),
-  onConfirmProfile: vi.fn(),
   onConfirmAnalysis: vi.fn(),
   onRequestChange: vi.fn(),
 };
@@ -79,21 +81,14 @@ describe("DataIntakePanel source classification", () => {
     expect(screen.queryByText("Synthetic demo")).toBeNull();
   });
 
-  it("shows profile confirmation instead of claiming the Agent is still processing", () => {
+  it("does not show an empty intake session before an Agent produces evidence", () => {
     render(
       <DataIntakePanel
         session={{
           ...session("workspace_data"),
-          inputRequests: [{
-            requestId: "request-1",
-            taskId: "task-1",
-            intakeId: "intake-1",
-            kind: "confirm_profile",
-            sessionRevision: 1,
-            status: "open",
-            prompt: "Review and confirm the complete planning data profile.",
-            value: null,
-          }],
+          evidenceFingerprint: "",
+          sourceProfile: null,
+          requirementProfile: null,
         }}
         loading={false}
         error={null}
@@ -101,8 +96,45 @@ describe("DataIntakePanel source classification", () => {
       />,
     );
 
-    expect(screen.getByText("Awaiting profile confirmation")).not.toBeNull();
-    expect(screen.getByText("Confirm whole profile")).not.toBeNull();
-    expect(screen.queryByText("输入已提交，Network/Data Agent 正在完成下一步画像、归一化或检查。")).toBeNull();
+    expect(screen.queryByLabelText("Data preparation")).toBeNull();
   });
+
+  it("does not show source evidence before the requirement profile is published", () => {
+    render(
+      <DataIntakePanel
+        session={{
+          ...session("workspace_data"),
+          sourceProfile: { schemaVersion: "source_profile.v1", dataClassification: "workspace_data" },
+          requirementProfile: null,
+        }}
+        loading={false}
+        error={null}
+        {...handlers}
+      />,
+    );
+
+    expect(screen.queryByLabelText("Data preparation")).toBeNull();
+  });
+
+  it("shows the published profile without requiring confirmation", () => {
+    render(
+      <DataIntakePanel
+        session={{
+          ...session("workspace_data"),
+          requirementProfile: {
+            title: "本次规划的数据需求",
+            entities: [{ name: "City demand", fields: [{ name: "city_id" }] }],
+          },
+        }}
+        loading={false}
+        error={null}
+        {...handlers}
+      />,
+    );
+
+    expect(screen.getByText("Planning data requirements")).not.toBeNull();
+    expect(screen.getByText(/需求已生成，数据准备会自动继续/)).not.toBeNull();
+    expect(screen.queryByText("Confirm whole profile")).toBeNull();
+  });
+
 });

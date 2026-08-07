@@ -13,7 +13,6 @@ type Props = {
   onOpenUpload: () => void;
   onConfirmMapping: (confirmed: DataMappingCandidate[]) => void;
   onSubmitParameters: (answers: DataIntakeParameterAnswer[]) => void;
-  onConfirmProfile: (requestId: string) => void;
   onConfirmAnalysis: (requestId: string) => void;
   onRequestChange: (message: string) => void;
 };
@@ -30,10 +29,9 @@ function mappingKey(candidate: DataMappingCandidate) {
 }
 
 function statusLabel(session: DataIntakeSessionSummary) {
-  if (session.status === "active" && session.inputRequests.length > 0) {
-    return session.inputRequests.some((request) => request.kind === "confirm_profile")
-      ? "Awaiting profile confirmation"
-      : "Awaiting your input";
+  const openRequests = session.inputRequests.filter((request) => request.status === "open");
+  if (session.status === "active" && openRequests.length > 0) {
+    return "Awaiting your input";
   }
   return {
     active: "Preparing planning inputs",
@@ -55,6 +53,14 @@ function isSyntheticDemo(value: unknown): boolean {
   return profile.dataClassification === "synthetic_demo";
 }
 
+function hasDataPreparationEvidence(session: DataIntakeSessionSummary): boolean {
+  const hasOpenRequest = session.inputRequests.some((request) => request.status === "open");
+  return session.status !== "active"
+    || session.requirementProfile !== null
+    || session.gaps.length > 0
+    || hasOpenRequest;
+}
+
 export default function DataIntakePanel({
   session,
   loading,
@@ -63,7 +69,6 @@ export default function DataIntakePanel({
   onOpenUpload,
   onConfirmMapping,
   onSubmitParameters,
-  onConfirmProfile,
   onConfirmAnalysis,
   onRequestChange,
 }: Props) {
@@ -83,13 +88,15 @@ export default function DataIntakePanel({
     ));
   }, [session]);
 
-  const pendingKinds = new Set(session?.inputRequests.map((request) => request.kind) ?? []);
+  const openRequests = session?.inputRequests.filter((request) => request.status === "open") ?? [];
+  const pendingKinds = new Set(openRequests.map((request) => request.kind));
   const showMapping = pendingKinds.has("confirm_mapping");
   const showDataGap = pendingKinds.has("provide_data") || (session?.status === "active" && session.gaps.length > 0 && !showMapping);
   const showFinalChecklist = pendingKinds.has("confirm_analysis");
   const showParameters = pendingKinds.has("answer_parameters");
   const hasPendingRequest = pendingKinds.size > 0;
 
+  if (session && !error && !hasDataPreparationEvidence(session)) return null;
   if (loading) {
     return <section className="web-data-intake" aria-live="polite">Loading data readiness…</section>;
   }
@@ -112,35 +119,27 @@ export default function DataIntakePanel({
         ) : null}
       </div>
       {error ? <p className="web-data-intake-error" role="alert">{error}</p> : null}
-      {session?.inputRequests.map((request) => (
+      {session?.requirementProfile ? (
+        <div className="web-data-intake-profile">
+          <strong>Planning data requirements</strong>
+          <small>需求已生成，数据准备会自动继续；仅字段映射、业务参数和最终分析清单需要确认。</small>
+          <ProfileCard value={session.requirementProfile} />
+        </div>
+      ) : null}
+      {session ? openRequests.map((request) => (
         <div className="web-data-intake-request" role="status" key={request.requestId}>
           <strong>{request.prompt}</strong>
-          {request.kind === "confirm_profile" ? (
-            <>
-              <small>请确认下面显示的完整需求合同、字段要求、参数和输出范围。</small>
-              <div className="web-data-intake-actions">
-                <button type="button" className="primary" onClick={() => onConfirmProfile(request.requestId)}>
-                  Confirm whole profile
-                </button>
-                <button
-                  type="button"
-                  className="ghost"
-                  onClick={() => onRequestChange("我想修改上面的 Network Planning 数据需求 Profile，请说明要增加、删除或调整的字段、参数或输出。")}
-                >
-                  提出修改
-                </button>
-              </div>
-            </>
-          ) : request.kind === "confirm_analysis" ? (
+          {request.kind === "confirm_analysis" ? (
             <>
               <small>确认后，以上数据、映射和参数将被锁定为本次分析快照。</small>
               <div className="web-data-intake-actions">
-                <button type="button" className="primary" onClick={() => onConfirmAnalysis(request.requestId)}>
+                <button type="button" className="primary" disabled={loading} onClick={() => onConfirmAnalysis(request.requestId)}>
                   开始分析
                 </button>
                 <button
                   type="button"
                   className="ghost"
+                  disabled={loading}
                   onClick={() => onRequestChange("我想修改最终分析 Checklist 中的数据、映射、参数或限制，请先不要开始分析。")}
                 >
                   修改数据或参数
@@ -151,17 +150,9 @@ export default function DataIntakePanel({
             <small>等待新的对话 Turn 或对应的确认卡片。</small>
           )}
         </div>
-      ))}
+      )) : null}
       {!session ? (
-        <p>Describe the planning goal or upload Excel, CSV or JSON in the conversation. The Network/Data Agents will publish the required profile and ask for confirmation.</p>
-      ) : null}
-      {session ? (
-        <div className="web-data-intake-profile">
-          <strong>Current planning profile</strong>
-          <p>{session.contract.description}</p>
-          <small>{session.contract.requiredEntities.length} logical entities · {session.parameters.length} business parameters · whole profile confirmation required</small>
-          {session.requirementProfile ? <ProfileCard value={session.requirementProfile} /> : null}
-        </div>
+        <p>Describe the planning goal or upload Excel, CSV or JSON in the conversation. The Network/Data Agents will publish the required profile and continue data preparation; only the mapping, parameters and final analysis checklist may need confirmation.</p>
       ) : null}
       {session && showDataGap ? (
         <>

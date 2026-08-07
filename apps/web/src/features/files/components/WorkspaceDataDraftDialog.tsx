@@ -7,6 +7,7 @@ import X from "lucide-react/dist/esm/icons/x";
 import { platformClient } from "../../../../browser/session";
 import type { WorkspaceDataDraftSummary } from "../../../../browser/types";
 import { ModalShell } from "../../design-system/components/modal/ModalShell";
+import { createBrowserId } from "../../../utils/randomId";
 
 type WorkspaceDataDraftDialogProps = {
   workspaceId: string;
@@ -40,8 +41,7 @@ export function WorkspaceDataDraftDialog({
     try {
       const key =
         idempotencyKeyRef.current ??
-        globalThis.crypto?.randomUUID?.() ??
-        `data-draft-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        createBrowserId("data-draft");
       idempotencyKeyRef.current = key;
       const nextDraft = await platformClient.createDataDraft(workspaceId, files, key);
       setDraft(nextDraft);
@@ -71,7 +71,7 @@ export function WorkspaceDataDraftDialog({
           <h2 id="workspace-data-draft-title">Add planning data</h2>
           <p>
             Upload the files you have. The Supervisor will profile them, suggest field
-            mappings, and ask for confirmation before analysis.
+            mappings, and ask you to confirm mappings, parameters and the final checklist before analysis.
           </p>
         </div>
         <button type="button" className="ghost icon-button" aria-label="Close data upload" onClick={onClose} disabled={uploading}>

@@ -11,6 +11,7 @@ import type {
 } from "../../../browser/types";
 import { platformClient } from "../../../browser/session";
 import type { WorkspaceInfo } from "../../types";
+import { createBrowserId } from "../../utils/randomId";
 
 type Props = {
   workspaces: WorkspaceInfo[];
@@ -185,16 +186,12 @@ export default function PythonCapabilityEditor({
         if (publishIdentityRef.current?.fingerprint !== fingerprint) {
           publishIdentityRef.current = {
             fingerprint,
-            key:
-              globalThis.crypto?.randomUUID?.() ??
-              `capability-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            key: createBrowserId("capability"),
           };
         }
         capability.idempotency_key = publishIdentityRef.current.key;
       } else {
-        capability.idempotency_key =
-          globalThis.crypto?.randomUUID?.() ??
-          `capability-probe-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        capability.idempotency_key = createBrowserId("capability-probe");
       }
       if (action === "validate") {
         const result = await platformClient.validatePythonCapability(

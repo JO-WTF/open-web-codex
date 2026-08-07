@@ -83,7 +83,6 @@ type Props = {
   onOpenDataUpload?: () => void;
   onConfirmDataMapping?: (confirmed: DataMappingCandidate[]) => void;
   onSubmitDataParameters?: (answers: DataIntakeParameterAnswer[]) => void;
-  onConfirmDataProfile?: (requestId: string) => void;
   onConfirmDataAnalysis?: (requestId: string) => void;
   onRequestDataChange?: (message: string) => void;
 };
@@ -151,7 +150,6 @@ export default function Conversation({
   onOpenDataUpload,
   onConfirmDataMapping,
   onSubmitDataParameters,
-  onConfirmDataProfile,
   onConfirmDataAnalysis,
   onRequestDataChange,
 }: Props) {
@@ -253,7 +251,7 @@ export default function Conversation({
             workspaceId={workspaceId}
             onResolveApproval={onResolveApproval}
           />
-          {workspaceId && dataIntakeTaskId && (dataIntake || dataIntakeLoading || dataIntakeError) && onRefreshDataIntake && onOpenDataUpload && onConfirmDataMapping && onSubmitDataParameters && onConfirmDataProfile && onConfirmDataAnalysis && onRequestDataChange ? (
+          {workspaceId && dataIntakeTaskId && (dataIntake || dataIntakeError) && onRefreshDataIntake && onOpenDataUpload && onConfirmDataMapping && onSubmitDataParameters && onConfirmDataAnalysis && onRequestDataChange ? (
             <DataIntakePanel
               session={dataIntake}
               loading={dataIntakeLoading}
@@ -262,7 +260,6 @@ export default function Conversation({
               onOpenUpload={onOpenDataUpload}
               onConfirmMapping={onConfirmDataMapping}
               onSubmitParameters={onSubmitDataParameters}
-              onConfirmProfile={onConfirmDataProfile}
               onConfirmAnalysis={onConfirmDataAnalysis}
               onRequestChange={onRequestDataChange}
             />

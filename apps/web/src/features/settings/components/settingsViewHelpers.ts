@@ -5,6 +5,7 @@ import type {
 } from "@/types";
 import type { OpenAppDraft, ShortcutDrafts } from "./settingsTypes";
 import { SETTINGS_MOBILE_BREAKPOINT_PX } from "./settingsViewConstants";
+import { createBrowserId } from "@/utils/randomId";
 
 export const normalizeOverrideValue = (value: string): string | null => {
   const trimmed = value.trim();
@@ -84,10 +85,7 @@ export const normalizeOpenAppTargets = (
   }));
 
 export const createOpenAppId = () => {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return `open-app-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return createBrowserId("open-app");
 };
 
 export const buildShortcutDrafts = (appSettings: AppSettings): ShortcutDrafts => ({

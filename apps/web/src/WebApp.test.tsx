@@ -12,6 +12,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebApp, {
   prepareTutorialPromptDraft,
+  resolveTurnStartedAt,
   shouldRefreshDataIntakeForAppEvent,
 } from "./WebApp";
 import type { AppServerEvent } from "./types";
@@ -146,6 +147,12 @@ describe("WebApp workspace-first messaging", () => {
       draft: "Run the prepared tutorial",
       loaded: true,
     });
+  });
+
+  it("keeps a local send time when Runtime reports a different Turn start", () => {
+    expect(resolveTurnStartedAt(1_700_000_120_000, 1_700_000_000)).toBe(1_700_000_120_000);
+    expect(resolveTurnStartedAt(null, 1_700_000_000)).toBe(1_700_000_000_000);
+    expect(resolveTurnStartedAt(null, null, 1_700_000_120_000)).toBe(1_700_000_120_000);
   });
 
   it("creates a thread before sending when only a workspace is selected", async () => {

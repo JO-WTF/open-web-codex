@@ -38,6 +38,7 @@ import { appendWebLogEntry } from "./utils/webApprovalLog";
 import { rememberAppServerEvent } from "./utils/webAppServerEventDedup";
 import { getAppServerThreadId } from "./utils/appServerEvents";
 import { finalizeInterruptedTurnEntries } from "./utils/webInterruptedTurn";
+import { createBrowserId } from "./utils/randomId";
 import {
   parseInlineVisualizationArtifact,
   type InlineVisualizationArtifact,
@@ -171,8 +172,7 @@ function extractThreadName(result: Record<string, unknown> | null | undefined): 
     : null;
 }
 
-const newLogId = () =>
-  crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+const newLogId = () => createBrowserId("log");
 
 function parseThreadUpdatedAt(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -251,6 +251,22 @@ export function prepareTutorialPromptDraft(
   return !replaceExisting && currentDraft.trim()
     ? { draft: currentDraft, loaded: false }
     : { draft: tutorialPrompt, loaded: true };
+}
+
+export function resolveTurnStartedAt(
+  currentStartedAt: number | null,
+  runtimeStartedAt: unknown,
+  now = Date.now(),
+): number {
+  // A locally submitted Turn already has a stable start time. Runtime events
+  // can arrive later or be replayed with an older timestamp, so they must not
+  // move the visible timer backwards. A Runtime timestamp is only needed when
+  // hydrating an already-running Turn after refresh/reconnect.
+  if (currentStartedAt !== null) return currentStartedAt;
+  if (typeof runtimeStartedAt === "number" && Number.isFinite(runtimeStartedAt)) {
+    return runtimeStartedAt < 10_000_000_000 ? runtimeStartedAt * 1000 : runtimeStartedAt;
+  }
+  return now;
 }
 
 export function shouldRefreshDataIntakeForAppEvent(
@@ -699,7 +715,7 @@ export default function WebApp() {
       const session = await client.respondToDataIntake(activeTaskId, {
         requestId: request.requestId,
         expectedSessionRevision: dataIntake.inputRevision,
-        idempotencyKey: crypto.randomUUID(),
+        idempotencyKey: createBrowserId("data-intake"),
         response: { kind: "confirm_mapping", value: { confirmed: true, mappings: confirmed } },
       });
       setDataIntake(session);
@@ -723,7 +739,7 @@ export default function WebApp() {
       const session = await client.respondToDataIntake(activeTaskId, {
         requestId: request.requestId,
         expectedSessionRevision: dataIntake.inputRevision,
-        idempotencyKey: crypto.randomUUID(),
+        idempotencyKey: createBrowserId("data-intake"),
         response: { kind: "answer_parameters", value: { answers } },
       });
       setDataIntake(session);
@@ -746,7 +762,7 @@ export default function WebApp() {
       const session = await client.respondToDataIntake(activeTaskId, {
         requestId,
         expectedSessionRevision: dataIntake.inputRevision,
-        idempotencyKey: crypto.randomUUID(),
+        idempotencyKey: createBrowserId("data-intake"),
         response: { kind, value },
       });
       setDataIntake(session);
@@ -759,10 +775,6 @@ export default function WebApp() {
     }
   }, [activeTaskId, client, dataIntake]);
 
-  const confirmDataProfile = useCallback((requestId: string) => {
-    void respondToDataIntake(requestId, "confirm_profile", { confirmed: true });
-  }, [respondToDataIntake]);
-
   const confirmDataAnalysis = useCallback(async (requestId: string) => {
     const session = await respondToDataIntake(requestId, "confirm_analysis", { confirmed: true });
     if (!activeTaskId || !session || !session.evidenceFingerprint) return;
@@ -771,7 +783,7 @@ export default function WebApp() {
         requestId,
         expectedSessionRevision: session.inputRevision,
         readinessFingerprint: session.evidenceFingerprint,
-        idempotencyKey: crypto.randomUUID(),
+        idempotencyKey: createBrowserId("analysis"),
       });
       await refreshDataIntake(activeTaskId);
     } catch (error) {
@@ -1136,12 +1148,10 @@ export default function WebApp() {
           }
           interruptRequestTurnId.current = null;
           setThinking(true);
-          setTurnStartedAt(() => {
-            const raw = turn?.startedAt ?? params.startedAt ?? params.started_at;
-            return typeof raw === "number" && Number.isFinite(raw)
-              ? raw < 10_000_000_000 ? raw * 1000 : raw
-              : Date.now();
-          });
+          setTurnStartedAt((previous) => resolveTurnStartedAt(
+            previous,
+            turn?.startedAt ?? params.startedAt ?? params.started_at,
+          ));
           setThreadStatus("running");
           setActiveTurnId(
             typeof startedTurnId === "string" && startedTurnId ? startedTurnId : null,
@@ -3092,7 +3102,6 @@ export default function WebApp() {
         onOpenDataUpload={openDataUpload}
         onConfirmDataMapping={(confirmed) => { void confirmDataMapping(confirmed); }}
         onSubmitDataParameters={(answers) => { void submitDataParameters(answers); }}
-        onConfirmDataProfile={(requestId) => { confirmDataProfile(requestId); }}
         onConfirmDataAnalysis={(requestId) => { void confirmDataAnalysis(requestId); }}
         onRequestDataChange={requestDataChange}
       />

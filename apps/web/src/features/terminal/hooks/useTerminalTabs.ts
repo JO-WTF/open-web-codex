@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
+import { createBrowserId } from "../../../utils/randomId";
 
 export type TerminalTab = {
   id: string;
@@ -15,10 +16,7 @@ type UseTerminalTabsOptions = {
 };
 
 function createTerminalId() {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return crypto.randomUUID();
-  }
-  return `terminal-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return createBrowserId("terminal");
 }
 
 function renumberAutoNamedTabs(tabs: TerminalTabRecord[]): TerminalTabRecord[] {

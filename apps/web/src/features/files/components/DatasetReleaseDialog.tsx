@@ -11,6 +11,7 @@ import type {
 } from "../../../../browser/types";
 import { platformClient } from "../../../../browser/session";
 import { ModalShell } from "../../design-system/components/modal/ModalShell";
+import { createBrowserId } from "../../../utils/randomId";
 
 type DatasetReleaseDialogProps = {
   workspaceId: string;
@@ -237,8 +238,7 @@ export function DatasetReleaseDialog({
     try {
       const idempotencyKey =
         idempotencyKeyRef.current ??
-        globalThis.crypto?.randomUUID?.() ??
-        `dataset-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        createBrowserId("dataset");
       idempotencyKeyRef.current = idempotencyKey;
       const request: PublishWorkspaceDatasetRequest = {
         idempotency_key: idempotencyKey,

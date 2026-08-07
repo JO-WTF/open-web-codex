@@ -1,6 +1,6 @@
 import type { WorkspaceGroup, WorkspaceInfo } from "../../../types";
+import { createBrowserId } from "../../../utils/randomId";
 
-const GROUP_ID_RANDOM_MODULUS = 1_000_000;
 const SORT_ORDER_FALLBACK = Number.MAX_SAFE_INTEGER;
 
 export const RESERVED_GROUP_NAME = "Ungrouped";
@@ -37,10 +37,7 @@ export function isDuplicateGroupName(
 }
 
 export function createGroupId() {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return `${Date.now()}-${Math.floor(Math.random() * GROUP_ID_RANDOM_MODULUS)}`;
+  return createBrowserId("group");
 }
 
 export function sortWorkspaceGroups(groups: WorkspaceGroup[]) {
