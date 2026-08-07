@@ -107,14 +107,14 @@ requirement、Artifact handoff 与并发限制只由精确 Agent Release 和草�
 
 当前内置 Release 是：
 
-- `enterprise-supervisor-copilot@5.0.1`，选择
+- `enterprise-supervisor-copilot@5.2.0`，选择
   `platform-supervisor-behavior@1.1.0`；
-- Data `5.0.0`，发现授权 Workspace 中的 Excel/CSV/JSON；只有用户明确要求时才通过
+- Data `5.1.0`，发现授权 Workspace 中的 Excel/CSV/JSON；Requirement Profile 发布后不再要求单独确认，只有用户明确要求时才通过
   独立 Demo Tool 在空 Workspace 生成合成源，然后发布有界 Source Profile、模糊
   Mapping，并在完整确认后生成严格 `planning-dataset.v2`；
 - 通用仓网输入把需求点映射到城市，路线按城市到城市、运价按出发区域到目的城市；
   显式大型 Demo 可生成 120,000 个需求点，但路线与运价各保持 144 条城市级记录；
-- Network `5.0.0`，按证据缺口生成通用 Requirement Profile、Input Gap、Readiness Review，
+- Network `5.1.0`，按证据缺口生成通用 Requirement Profile、Input Gap、Readiness Review，发布 Profile 后继续数据准备，
   并消费严格 Planning Dataset 完成覆盖、候选仓优化、场景对比和报告；
 - Visualization `2.0.0`，只接收 Network 生成的 comparison-map/GeoJSON Resource，
   交给 `map_utils.create_map_card` 并交付 `map.v3`；
@@ -180,7 +180,7 @@ Artifact 保留 Run/Thread/Turn/Item producer provenance，根 Thread 只能解�
   post-fix 真实浏览器显示/恢复仍是最终证据门禁。
 
 上述真实 Run 证据属于旧教程/Artifact 交付纵向切片，不等同于当前 Workspace 全域
-Excel/CSV/JSON Intake 主旅程。当前主旅程的格式画像、整体确认、参数快照、严格
+Excel/CSV/JSON Intake 主旅程。当前主旅程的格式画像、映射整体确认、参数快照、严格
 `planning-dataset.v2`、原 Thread Analysis Turn、重启恢复和重复 Turn 仍保持 unavailable，
 直到 `scripts/smoke-network-planning-intake.sh` 的 real 模式获得完整证据。
 

@@ -60,7 +60,7 @@ restart/recovery journeys pass the validation gates below.
 - The Web contract check passes, and the locally built current Codex CLI passes
   the real app-server initialize Smoke with 18 Capability Manifest declarations.
 - The current organization Draft `Indonesia Network Planning Copilot`
-  (`enterprise-supervisor-copilot@5.0.0`) binds Data `5.0.0`, Network `5.0.0`
+  (`enterprise-supervisor-copilot@5.2.0`) binds Data `5.1.0`, Network `5.1.0`
   and Visualization `2.0.0` as optional governed Roles for the Workspace-wide
   Network Planning intake; no repository Supervisor Release is currently
   published. Platform behavior contract `1.1.0`
@@ -68,6 +68,10 @@ restart/recovery journeys pass the validation gates below.
   a fixed Agent order or role count. Fifteen conditional contracts cover the
   requirement/source/mapping/gap/dataset/readiness evidence and the generic
   network snapshot, coverage, optimization, comparison, report and map handoffs.
+  The 5.2.0 response contract requires a business-language status, completed-work
+  summary, every relevant field mapping, each evidence-backed multi-source conflict,
+  parameter status and next action; it does not treat an internal handoff as a
+  completed planning result.
   Normal intake has no static example-source tools or fallback. The separate
   `supply_chain_demo` Server exposes one explicit, deterministic empty-Workspace
   generator and preserves `synthetic_demo` provenance. Its generic contract uses

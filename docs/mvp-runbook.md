@@ -23,11 +23,14 @@ Gateway、原始 JSON-RPC 路由或桌面应用。
   `open_web_codex` 数据库，开发脚本要求该数据库已存在。
 - 真实模式需要当前仓库构建的 Codex，或通过 `CODEX_BIN` 指定兼容 Binary。
 
-开发脚本的默认数据库连接为：
+开发脚本默认优先读取受保护的本地连接文件：
 
 ```text
-postgresql://$USER@127.0.0.1:5432/open_web_codex
+.local/open-web-codex/database-url
 ```
+
+也可以通过 `DATABASE_URL`、`--database-url` 或 `--database-url-file` 覆盖。连接文件
+必须只允许当前用户读取（权限 `600`）。
 
 ## 启动
 

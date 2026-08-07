@@ -181,6 +181,16 @@ instead of rewriting it. These rows cannot create or drive an Agent. The
 temporary file materializer must be removed after a typed app-server V2 Agent
 lifecycle owns write, validation, discovery and reload.
 
+The Platform Run lifecycle does not treat a governed root Turn as a completed
+Run while a projected child execution is still `pending`, `running` or
+`waiting`. It persists one `child_completion` continuation, waits for the
+official Runtime child terminal events, and then uses the typed
+`send_user_message` operation to continue the same root Thread. The
+continuation is claimed and recorded transactionally, so an out-of-order or
+duplicate child event cannot create duplicate root Turns. Codex remains the
+authority for Thread/Turn semantics and child-agent coordination; the Platform
+owns only this durable Run completion gate and audit projection.
+
 ## Web / app-server / Codex server boundary contract
 
 All feature work must start by selecting the owning layer below. A change that

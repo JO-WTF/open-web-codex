@@ -95,7 +95,7 @@ Artifact；关键结论可追溯，一个 Agent 失败时能够形成明确的�
 用户索要内部 ID、Runtime 标识或服务器路径。
 
 当前实现是通用仓网动态案例：组织 Draft `Indonesia Network Planning Copilot`
-（`enterprise-supervisor-copilot@5.0.0`）可从 Data `5.0.0`、Network `5.0.0` 和
+（`enterprise-supervisor-copilot@5.2.0`）可从 Data `5.1.0`、Network `5.1.0` 和
 Visualization `2.0.0` 三个有界 Role 中按证据缺口选择能力；当前没有仓库级
 Supervisor Release。十五个 Artifact handoff 是条件性证据边而不是固定 Workflow。Workspace
 全域 SourceAsset 发现、Excel/CSV/JSON 有界画像、模糊映射、严格

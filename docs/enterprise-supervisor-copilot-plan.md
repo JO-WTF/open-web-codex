@@ -5,10 +5,10 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档状态 | 当前短期执行基线 |
-| 更新日期 | 2026-08-03 |
+| 更新日期 | 2026-08-07 |
 | 对应阶段 | M2 Enterprise Supervisor Copilot |
 | 实施范围 | 单用户、单 Profile、真实 Runtime、通用仓网接入与独立印尼教程案例 |
-| 当前版本 | `enterprise-supervisor-copilot@5.0.1` |
+| 当前版本 | `enterprise-supervisor-copilot@5.2.0` |
 | 平台行为合同 | `platform-supervisor-behavior@1.1.0` |
 | 当前事实 | [能力基线](capability-baseline.md) 与代码 |
 | 架构依据 | [企业多 Agent 平台架构](enterprise-agent-platform-architecture.md) |
@@ -25,8 +25,10 @@ Supervisor 根据证据缺口动态选择受治理的 Domain Agent，并通过�
 | 专业判断 Owner | Data、Network Planning、Visualization Domain Agent |
 | 确定性计算 Owner | `supply_chain_indonesia` 与 `map_utils` MCP |
 | 治理与持久化 Owner | Platform Server |
-| 浏览器 Owner | Workspace 数据上传、对话内 Profile/Mapping/参数/最终 checklist 确认，以及有界 readiness、Artifact 呈现 |
-| Agent 输入输出 | 5.0.0 Data/Network Agent Release、exact Runtime Role、版本化 Intake Artifact、durable Resource reference |
+| 浏览器 Owner | Workspace 数据上传、对话内 Profile 展示、Mapping/参数/最终 checklist 确认，以及有界 readiness、Artifact 呈现 |
+| Agent 输入输出 | 5.1.0 Data/Network Agent Release、exact Runtime Role、版本化 Intake Artifact、durable Resource reference；Requirement Profile 发布后不再单独确认 |
+| 数据准备批次 | 先发布 `data_requirement_profile.v1`；再画像并提交 `source_profile.v1`/`mapping_proposal.v1`；完成必要的映射与参数决策后再提交并验证 `planning-dataset.v2`；最后提交 readiness 并分析；每批只传完整 typed handoff，不向终态子 Agent 重复索取引用 |
+| Supervisor 最终回复 | 使用用户业务语言说明状态、已完成工作、逐项字段映射、多源冲突、参数状态和下一步；内部 handoff 不得当作业务完成 |
 | 核心数据合同 | Workspace SourceAsset、`data_requirement_profile.v1`、`source_profile.v1`、`mapping_proposal.v1`、`planning-dataset.v2` |
 | 运行能力门禁 | `agents.multi_agent@1.0.0`、exact Role/Tool allowlist、per-Role limit、授权 Workspace |
 | 持久化范围 | Codex 保持 Thread/Turn/Item 权威；平台持久化 Release、Run binding、Artifact、审批、审计和可重建投影 |
@@ -53,32 +55,35 @@ Artifact schema 与 `resource_name`。
 | 参与者 | 责任 | 何时需要 |
 | --- | --- | --- |
 | Root Supervisor | 解释目标、识别最小证据缺口、委派、处理冲突并综合报告 | 每次受治理多 Agent 任务 |
-| Data Agent `4.0.0` | 扫描授权 Workspace 的 Excel/CSV/JSON，发布有界 Source Profile、模糊映射候选，并只在用户确认后归一化 | 需要文件理解或映射 |
-| Network Planning Agent `4.0.0` | 根据目标生成完整 Requirement Profile，判断数据/参数缺口，发布最终 readiness checklist，并选择最小网络分析 | 需要业务要求或网络计算 |
+| Data Agent `5.1.0` | 扫描授权 Workspace 的 Excel/CSV/JSON，发布有界 Source Profile、模糊映射候选，并只在用户确认后归一化 | 需要文件理解或映射 |
+| Network Planning Agent `5.1.0` | 根据目标生成完整 Requirement Profile，判断数据/参数缺口，发布最终 readiness checklist，并选择最小网络分析 | 需要业务要求或网络计算 |
 | Visualization Agent `2.0.0` | 只接收 Network 生成的 `network_comparison_map.v1` 与 `geojson.v1` Resource，交给地图 Tool；`map.v3` 是唯一地图交付 | 用户要求地图 |
 | Platform | 发布不可变 Release、执行预检、持久化 Artifact/审计/审批和浏览器投影 | 全程 |
 
-所有 Domain Agent 都是可选能力。Policy 不要求固定 Agent 数量或顺序。已有可信
-Artifact 可以消除一次委派；独立调查在输入满足时可以并行；新证据只触发最小必要的
-复算或追问。
+所有 Domain Agent 都是可选能力；但在本仓网数据准备合同中，已有可信 Artifact 只能
+消除对应批次，不能跳过未满足的依赖。独立调查仍可在输入满足时并行；新证据只触发最小
+必要的复算或追问。终态子 Agent 的引用必须来自本批完整 handoff，不能通过重复追问补齐。
 
 ### 2.2 动态协作语义
 
 ```mermaid
 flowchart TD
     U["用户业务目标"] --> S["Root Supervisor 识别证据缺口"]
-    S --> D{"已有精确、已验证的数据证据?"}
-    D -- 否 --> DA["Data Agent 画像 Workspace SourceAsset"]
-    D -- 是 --> N
-    DA --> N["Network Agent 运行最小必要分析"]
-    N --> M{"用户需要地图?"}
-    M -- 是 --> V["Visualization Agent 生成 map.v3"]
-    M -- 否 --> O["Supervisor 综合报告"]
-    V --> O
+    S --> N["Network Agent 提交 Requirement Profile"]
+    N --> DA["Data Agent 读取 Profile 并画像 Workspace"]
+    DA --> M{"映射与参数需要用户决策?"}
+    M -- 是 --> C["等待业务决策"]
+    M -- 否 --> P["Data Agent 提交并验证 planning-dataset"]
+    C --> P
+    P --> R["Network Agent 提交 readiness 并分析"]
+    R --> V{"用户需要地图?"}
+    V -- 是 --> VA["Visualization Agent 生成 map.v3"]
+    V -- 否 --> O["Supervisor 综合报告"]
+    VA --> O
 ```
 
-该图只表达证据依赖，不是平台状态机。Runtime 可以在输入已经存在时跳过 Data，
-只回答服务基线，或在用户不要求地图时不创建 Visualization Agent。
+该图只表达证据依赖，不是平台状态机。Runtime 可以在输入已经存在时跳过对应批次，
+或在用户不要求地图时不创建 Visualization Agent，但不能用未完成的批次结果启动后续分析。
 
 ## 3. 数据与 Artifact
 
@@ -131,7 +136,7 @@ Resource 名和 `map_artifact_id`，不含 Resource URI 或 embed code；Visuali
 
 ## 4. Policy 与能力边界
 
-`enterprise-supervisor-copilot@5.0.1` 精确绑定三个 Agent Release，每个 Role 最多
+`enterprise-supervisor-copilot@5.2.0` 精确绑定三个 Agent Release，每个 Role 最多
 一个实例，V2 驻留额度为三。当前 Multi-Agent V2 没有 `close_agent`，终态子 Agent
 仍占额度，因此这个上限覆盖全部可选角色，而不是要求三个角色都运行。十个 Artifact
 handoff 都是条件性证据边；未选择某项分析时不得为了满足数量而伪造 Artifact。
@@ -235,7 +240,7 @@ Role、MCP 内部标识或服务器路径来弥补平台绑定缺失。
 
 当前 Blueprint 是独立教程入口 `indonesia-warehouse-network@1.5.0`；正常业务路径使用
 `warehouse-network-planning@1.0.0` Requirement Contract，声明 Workspace 全域发现、
-用户整体确认和严格 Planning Dataset，不把教程 Dataset 作为输入。它声明精确 Dataset bundle、
+映射整体确认和严格 Planning Dataset，不把教程 Dataset 作为输入。它声明精确 Dataset bundle、
 capability package、Agent/Supervisor/行为合同版本与哈希、推荐 Prompt、必需能力、
 预期 Artifact 和确定性验收值。它是通用平台资源，不把印尼业务写进 Web 或
 `codex/`。
@@ -331,9 +336,9 @@ service 创建 Dataset、Agent 和 Supervisor Release。同 ID、版本与哈希
 
 ### Slice 2：动态 Supervisor
 
-- [x] Data `4.0.0`、Network `4.0.0`、Visualization `2.0.0` 精确声明责任、输入输出和
+- [x] Data `5.1.0`、Network `5.1.0`、Visualization `2.0.0` 精确声明责任、输入输出和
   Tool allowlist；
-- [x] Supervisor `4.0.0` 与平台行为合同 `1.1.0` 不包含固定角色数或执行顺序；
+- [x] Supervisor `5.2.0` 与平台行为合同 `1.1.0` 保持动态角色选择，并对当前仓网数据准备声明有序证据批次；
 - [x] 语义编译器、内容哈希、精确依赖和能力预检测试通过；
 - [x] Root 与子 Agent MCP 隔离、兄弟 package 隔离具有聚焦测试；
 - [x] 当前 exact Release hashes 的真实 DeepSeek Runtime/Artifact E2E 通过：一个 Root
@@ -371,7 +376,8 @@ ready Resource，以及恰好一个 `report.v1` 和一个 `map.v3`。权威
 `indonesia_decision_report.v1` 按 schema/version、非空 payload 与重算 digest、精确
 Tool 来源、类型化 checks、Dataset Release 身份、producer provenance、交付引用和恢复
 一致性验收；不校验报告措辞或模型正文。这些数量是本次问题的观测证据，不得固化为
-Supervisor 的固定顺序、角色数、调用数或 Artifact 数量。
+Supervisor 的角色数、调用数或 Artifact 数量；当前仓网数据准备的依赖批次以现行 Policy
+合同为准。
 
 后续 `Learn UI E2E 20260730 0728` 从全新空 Workspace 只通过生产 `/web` 完成 Create
 Workspace、Open Learn、Set up example、readiness（仅 maps presentation 为
