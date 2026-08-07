@@ -128,3 +128,35 @@ def test_planner_rejects_historical_dataset_without_current_provenance(tmp_path,
     ref = DataAgentRef(uri=published.uri, resource_schema="planning-dataset.v2")
     with pytest.raises(ValueError, match="current provenance"):
         server._load_planning_dataset(ref)
+
+
+def test_planner_accepts_published_requirement_profile_without_profile_confirmation(
+    tmp_path, monkeypatch
+) -> None:
+    dataset = build_planning_dataset(_source())
+    requirement_profile = {
+        "schemaVersion": "data_requirement_profile.v1",
+        "entities": [{"name": "City", "requiredFields": [{"name": "city_id"}]}],
+    }
+    payload = dataset.model_dump(mode="json", by_alias=True, exclude_none=True)
+    payload.update(
+        {
+            "schemaVersion": "planning-dataset.v2",
+            "contract": {"contractId": "warehouse-network-planning", "version": "1.0.0"},
+            "normalization": {
+                "profile": requirement_profile,
+                "mapping": {"confirmed": True, "mappings": [{"target": "city_id"}]},
+                "parameters": {"confirmed": True, "answers": []},
+            },
+            "dataClassification": "workspace_data",
+        }
+    )
+    store = ResourceStore(tmp_path / "resources", uri_prefix="supply-chain-data://resources/")
+    monkeypatch.setattr(server, "_data_resource_store", store)
+    published = store.publish("planning-dataset.v2", payload)
+    ref = DataAgentRef(uri=published.uri, resource_schema="planning-dataset.v2")
+
+    loaded = server._load_planning_dataset(ref)
+
+    assert loaded.normalization["profile"] == requirement_profile
+    assert "profile_confirmation" not in loaded.normalization

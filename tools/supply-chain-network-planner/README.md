@@ -15,7 +15,7 @@ The package declares four independent MCP Servers:
 | `supply_chain_planner` | General snapshot, route, scenario, facility, finance and risk Resources |
 | `supply_chain_indonesia` | Exact Workspace Dataset Release access and the progressive Indonesia tutorials |
 
-The current `enterprise-supervisor-copilot@5.0.0` Draft delegates normal Network Planning
+The current `enterprise-supervisor-copilot@5.2.0` Draft delegates normal Network Planning
 to the bounded `supply_chain_data` intake server, the generic `supply_chain_planner`
 server and the separate `map_utils` Plugin. `supply_chain_indonesia` remains an
 independent tutorial capability and is not part of the normal Workspace intake path.
@@ -61,10 +61,10 @@ copy in model JSON—is the browser rendering authority.
 
 | Release | Exact capability boundary |
 | --- | --- |
-| `enterprise-data-agent@5.0.0` | Workspace-only discovery plus one explicitly requested empty-Workspace Demo generation Tool, profiling, mapping and confirmed normalization |
-| `enterprise-network-planning-agent@5.0.0` | Generic warehouse-network requirement profile, input-gap decision, readiness checklist and deterministic analysis without geography defaults |
+| `enterprise-data-agent@5.1.0` | Workspace-only discovery plus one explicitly requested empty-Workspace Demo generation Tool, profiling, mapping and normalization after mapping and parameter confirmation |
+| `enterprise-network-planning-agent@5.1.0` | Generic warehouse-network requirement profile, input-gap decision, readiness checklist and deterministic analysis without separate requirement-profile confirmation or geography defaults |
 | `enterprise-visualization-agent@2.0.0` | Exact comparison-map/GeoJSON render preparation, provenance-only `MAP_HANDOFF` and one standalone Tool-owned embed directive |
-| `enterprise-supervisor-copilot@5.0.0` Draft | Evidence-driven coordination, explicit Demo authorization, confirmed requirement-before-Demo order, no empty-Workspace fallback and same-Thread analysis handoff |
+| `enterprise-supervisor-copilot@5.2.0` Draft | Evidence-driven coordination, business-language final status with field mappings and multi-source conflicts, explicit Demo authorization, published requirement-before-Demo order, no empty-Workspace fallback and same-Thread analysis handoff |
 
 The root Supervisor receives collaboration capabilities but no business MCP or shell. Child
 roles receive only their exact MCP Server, Tool and capability-root inventory. Disabled sibling

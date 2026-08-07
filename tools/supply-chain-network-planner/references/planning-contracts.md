@@ -109,7 +109,7 @@ The Data MCP discovers only supported files in the trusted Turn Workspace and ac
 opaque source references from that discovery. It has no packaged source catalog, source-ID
 fallback or arbitrary SQL interface. A separate Demo MCP may create one versioned synthetic
 source set only after explicit user authorization and only in an empty Workspace; those files
-still require the normal profile, mapping, confirmation and normalization flow.
+still require the normal published-profile, mapping-confirmation and normalization flow.
 
 The large Demo template has bounded city-grain sources: 24 city-period demand rows, six
 facilities, 24 warehouse-to-city coverage rows and 144 combined city-to-city lanes. Demand

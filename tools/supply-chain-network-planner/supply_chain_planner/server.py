@@ -381,7 +381,11 @@ def _load_planning_dataset(ref: DataAgentRef) -> PlanningDataset:
     normalization = payload.get("normalization")
     if not isinstance(normalization, dict):
         raise ValueError("planning dataset normalization provenance is missing")
-    for key in ("profile_confirmation", "mapping", "parameters"):
+    if not isinstance(normalization.get("profile"), dict) or normalization["profile"].get(
+        "schemaVersion"
+    ) != "data_requirement_profile.v1":
+        raise ValueError("planning dataset requirement profile is missing")
+    for key in ("mapping", "parameters"):
         confirmation = normalization.get(key)
         if not isinstance(confirmation, dict) or confirmation.get("confirmed") is not True:
             raise ValueError(f"planning dataset {key} confirmation is missing")
@@ -471,7 +475,7 @@ def publish_data_requirement_profile(
     requested_outputs: list[str] | None = None,
     analysis_mode: Literal["candidate_warehouse_optimization"] = "candidate_warehouse_optimization",
 ) -> Annotated[CallToolResult, ResourceToolResult]:
-    """Create the complete user-confirmable Profile for the network question.
+    """Create the complete Profile for the network question.
 
     ``goal`` is only the business objective. The reviewed contract supplies the
     complete entities, fields, validation rules, keys, row counts, parameters
@@ -499,7 +503,7 @@ def publish_data_requirement_profile(
                 "capacity and fixed/opening costs.",
             ],
             "assumptions": [
-                "Only files and fields confirmed by the user will enter the planning dataset.",
+                "Only files and fields accepted through the confirmed mapping will enter the planning dataset.",
                 "No tutorial defaults are applied.",
             ],
             "exclusions": [
@@ -507,16 +511,10 @@ def publish_data_requirement_profile(
                 "live carrier pricing",
                 "unbounded source reads",
             ],
-            "inputRequest": {
-                "kind": "confirm_profile",
-                "prompt": "请确认完整数据需求 Profile；任何字段或参数修改请作为普通消息提出。",
-            },
         },
     )
     published = _store().publish("data_requirement_profile.v1", profile_payload)
-    summary = (
-        "Published the complete candidate-warehouse data requirement profile for user confirmation."
-    )
+    summary = "Published the complete candidate-warehouse data requirement profile; data preparation can continue automatically."
     structured = ResourceToolResult(
         summary=summary,
         resource_name=published.resource_id,
@@ -540,7 +538,7 @@ def _load_planner_payload(ref: DataRef) -> dict[str, object]:
 def _load_data_payload(ref: DataAgentRef, schema: str) -> dict[str, object]:
     if ref.server != "supply_chain_data" or ref.resource_schema != schema:
         raise ValueError(f"expected supply_chain_data {schema} Resource")
-    return _data_store().load(ref)
+    return _data_store().load_uri(ref.uri)
 
 
 @mcp.tool(structured_output=True)
@@ -549,7 +547,6 @@ def publish_input_gap(
     source_profile_ref: DataAgentRef | None = None,
     mapping_proposal_ref: DataAgentRef | None = None,
     parameter_answers: dict[str, object] | None = None,
-    profile_confirmation: dict[str, object] | None = None,
     mapping_confirmation: dict[str, object] | None = None,
 ) -> Annotated[CallToolResult, ResourceToolResult]:
     """Publish the current minimal data/confirmation/parameter gap."""
@@ -566,13 +563,6 @@ def publish_input_gap(
     )
     answers = parameter_answers or {}
     gaps: list[dict[str, object]] = []
-    if (profile_confirmation or {}).get("confirmed") is not True:
-        gaps.append(
-            {
-                "code": "confirm_profile",
-                "message": "需要用户确认完整的数据需求 Profile。",
-            }
-        )
     if source is None or not source.get("sources"):
         gaps.append(
             {
@@ -603,7 +593,7 @@ def publish_input_gap(
     request_kind = next(
         (
             kind
-            for kind in ("confirm_profile", "provide_data", "confirm_mapping", "answer_parameters")
+            for kind in ("provide_data", "confirm_mapping", "answer_parameters")
             if any(item["code"] == kind for item in gaps)
         ),
         None,
@@ -639,7 +629,6 @@ def publish_analysis_readiness_review(
     mapping_proposal_ref: DataAgentRef,
     planning_dataset_ref: DataAgentRef,
     parameter_answers: dict[str, object],
-    profile_confirmation: dict[str, object] | None = None,
     mapping_confirmation: dict[str, object] | None = None,
 ) -> Annotated[CallToolResult, ResourceToolResult]:
     """Publish the final checklist only after the strict Dataset validates."""
@@ -647,11 +636,6 @@ def publish_analysis_readiness_review(
     source = _load_data_payload(source_profile_ref, "source_profile.v1")
     mapping = _load_data_payload(mapping_proposal_ref, "mapping_proposal.v1")
     dataset = _load_planning_dataset(planning_dataset_ref)
-    profile_is_confirmed = (
-        profile_confirmation is not None and profile_confirmation.get("confirmed") is True
-    )
-    if not profile_is_confirmed:
-        raise ValueError("profile_confirmation_required")
     mapping_is_confirmed = mapping.get("confirmed") is True or (
         mapping_confirmation is not None and mapping_confirmation.get("confirmed") is True
     )

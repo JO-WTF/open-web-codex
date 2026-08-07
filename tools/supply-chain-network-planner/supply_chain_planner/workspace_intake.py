@@ -2,7 +2,7 @@
 
 This module deliberately exposes only structural samples to the model.  Full
 file reads are reserved for the deterministic normalizer after the user has
-confirmed the profile and mapping.
+confirmed the mapping after the requirement profile was published.
 """
 
 from __future__ import annotations
@@ -488,7 +488,7 @@ def _xlsx_sheet(
 
 
 def read_rows(root: Path, source_ref: str) -> list[dict[str, Any]]:
-    """Read bounded records only after the caller has supplied confirmed refs."""
+    """Read bounded records only after the caller has supplied authorized refs."""
     path = _resolve_ref(root, source_ref)
     suffix = path.suffix.lower()
     if suffix == ".csv":

@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import pytest
 
+from supply_chain_planner import data_server, server
+from supply_chain_planner.models import DataAgentRef, DataRef
+from supply_chain_planner.resource_store import ResourceStore
 from supply_chain_planner.server import MAX_PROFILE_GOAL_CHARS, _normalize_profile_goal
 
 
@@ -16,3 +19,57 @@ def test_profile_goal_has_a_bounded_business_summary_limit() -> None:
 def test_profile_goal_rejects_blank_business_summary() -> None:
     with pytest.raises(ValueError, match="1-8000"):
         _normalize_profile_goal("  \n  ")
+
+
+def test_requirement_profile_is_published_without_a_confirmation_request(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(server, "_resource_store", ResourceStore(tmp_path / "resources"))
+
+    result = server.publish_data_requirement_profile("Optimize warehouse coverage for the current demand")
+
+    assert result.structuredContent is not None
+    payload = server._store().load_uri(result.structuredContent["data_ref"]["uri"])
+    assert payload["schemaVersion"] == "data_requirement_profile.v1"
+    assert "inputRequest" not in payload
+    assert "confirmation" not in result.content[0].text.lower()
+
+
+def test_input_gap_loads_data_agent_resource_references(tmp_path, monkeypatch) -> None:
+    planner_store = ResourceStore(tmp_path / "planner-resources")
+    data_store = ResourceStore(
+        tmp_path / "data-resources", uri_prefix=data_server.RESOURCE_URI_PREFIX
+    )
+    monkeypatch.setattr(server, "_resource_store", planner_store)
+    monkeypatch.setattr(server, "_data_resource_store", data_store)
+
+    profile_result = server.publish_data_requirement_profile("Optimize warehouse coverage")
+    assert profile_result.structuredContent is not None
+    profile_ref = DataRef.model_validate(profile_result.structuredContent["data_ref"])
+
+    source = data_store.publish(
+        "source_profile.v1",
+        {"schemaVersion": "source_profile.v1", "sources": [{"display_name": "cities.csv"}]},
+    )
+    mapping = data_store.publish(
+        "mapping_proposal.v1",
+        {
+            "schemaVersion": "mapping_proposal.v1",
+            "candidates": [{"target_field": "city_id"}],
+        },
+    )
+    source_ref = DataAgentRef(uri=source.uri, resource_schema="source_profile.v1")
+    mapping_ref = DataAgentRef(uri=mapping.uri, resource_schema="mapping_proposal.v1")
+
+    result = server.publish_input_gap(
+        profile_ref,
+        source_profile_ref=source_ref,
+        mapping_proposal_ref=mapping_ref,
+    )
+
+    assert result.structuredContent is not None
+    payload = planner_store.load_uri(result.structuredContent["data_ref"]["uri"])
+    assert payload["schemaVersion"] == "input_gap.v1"
+    assert payload["inputRequest"]["kind"] == "confirm_mapping"
+    assert {gap["code"] for gap in payload["gaps"]} == {
+        "confirm_mapping",
+        "answer_parameters",
+    }

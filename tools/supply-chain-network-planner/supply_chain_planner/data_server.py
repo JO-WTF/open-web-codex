@@ -386,24 +386,23 @@ def _load_source_profile(resource_ref: DataAgentRef) -> dict[str, Any]:
 @mcp.tool(structured_output=True)
 def normalize_planning_dataset(
     source_refs: list[str],
-    confirmed_profile: dict[str, Any],
+    requirement_profile: dict[str, Any],
     confirmed_mapping: dict[str, Any],
     confirmed_parameters: dict[str, Any],
     ctx: Context,
 ) -> Annotated[CallToolResult, DataAgentResourceToolResult]:
-    """Publish a confirmed planning-dataset.v2 from Workspace source refs.
+    """Publish a planning-dataset.v2 from Workspace source refs.
 
-    The model supplies only opaque refs and confirmation snapshots. It cannot
+    The model supplies only opaque refs, the published requirement profile and
+    confirmation snapshots for the mapping and parameters. It cannot
     pass raw rows or a fabricated normalized dataset through this boundary.
     """
-    if confirmed_profile.get("confirmed") is not True:
-        raise ValueError("planning dataset normalization requires confirmed profile")
-    profile_payload = confirmed_profile.get("profile")
+    profile_payload = requirement_profile
     if (
         not isinstance(profile_payload, dict)
         or profile_payload.get("schemaVersion") != "data_requirement_profile.v1"
     ):
-        raise ValueError("confirmed_profile must contain data_requirement_profile.v1")
+        raise ValueError("requirement_profile must contain data_requirement_profile.v1")
     if confirmed_mapping.get("confirmed") is not True:
         raise ValueError("planning dataset normalization requires confirmed mapping")
     if confirmed_parameters.get("confirmed") is not True:
@@ -442,7 +441,6 @@ def normalize_planning_dataset(
         ).hexdigest(),
     )
     payload["normalization"]["profile"] = profile_payload
-    payload["normalization"]["profile_confirmation"] = confirmed_profile
     payload["normalization_status"] = "ready"
     summary = (
         f"Normalized {dataset.source_summary.city_demand_row_count} city-demand rows, "
@@ -724,7 +722,7 @@ def validate_planning_dataset(
                 "completed model"
             ],
             checks=[
-                "source refs and whole-profile confirmations are present",
+                "source refs and the published requirement profile are present",
                 f"mapped record count: {len(records)}",
             ],
         )
@@ -746,19 +744,13 @@ def validate_planning_dataset(
         errors.append("normalization provenance is missing")
     else:
         profile = normalization.get("profile")
-        profile_confirmation = normalization.get("profile_confirmation")
         mapping_confirmation = normalization.get("mapping")
         parameter_confirmation = normalization.get("parameters")
         if (
             not isinstance(profile, dict)
             or profile.get("schemaVersion") != "data_requirement_profile.v1"
         ):
-            errors.append("confirmed data requirement profile is missing")
-        if (
-            not isinstance(profile_confirmation, dict)
-            or profile_confirmation.get("confirmed") is not True
-        ):
-            errors.append("data requirement profile confirmation is missing")
+            errors.append("data requirement profile is missing")
         if (
             not isinstance(mapping_confirmation, dict)
             or mapping_confirmation.get("confirmed") is not True
