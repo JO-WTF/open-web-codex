@@ -116,7 +116,9 @@ def test_source_contract_rejects_direct_pii_fields() -> None:
 def test_source_contract_rejects_candidate_as_current_assignment() -> None:
     payload = _source().model_dump(mode="json")
     payload["facilities"][0]["is_existing"] = False
-    with pytest.raises(ValidationError, match="current coverage must reference an existing facility"):
+    with pytest.raises(
+        ValidationError, match="current coverage must reference an existing facility"
+    ):
         PlanningSource.model_validate(payload)
 
 
@@ -135,7 +137,7 @@ def test_planner_accepts_published_requirement_profile_without_profile_confirmat
 ) -> None:
     dataset = build_planning_dataset(_source())
     requirement_profile = {
-        "schemaVersion": "data_requirement_profile.v1",
+        "schemaVersion": "data_requirement_profile.v2",
         "entities": [{"name": "City", "requiredFields": [{"name": "city_id"}]}],
     }
     payload = dataset.model_dump(mode="json", by_alias=True, exclude_none=True)

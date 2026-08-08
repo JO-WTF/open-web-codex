@@ -77,6 +77,14 @@ Environment:
                                      Shared supply-chain MCP Python environment
   OPEN_WEB_CODEX_SKIP_SUPPLY_CHAIN_MCP_SETUP
                                      1 to skip supply-chain MCP preparation
+  OPEN_WEB_CODEX_COORDINATION_MCP_VENV
+                                     Shared platform coordination MCP environment
+  OPEN_WEB_CODEX_SKIP_COORDINATION_MCP_SETUP
+                                     1 to skip platform coordination MCP preparation
+  OPEN_WEB_CODEX_WORK_STATE_MCP_VENV
+                                     Shared platform Work State MCP environment
+  OPEN_WEB_CODEX_SKIP_WORK_STATE_MCP_SETUP
+                                     1 to skip platform Work State MCP preparation
   OPEN_WEB_CODEX_BIND_HOST           Bind host
   OPEN_WEB_CODEX_SERVER_PORT         HTTP/WebSocket port
   OPEN_WEB_CODEX_SKIP_BUILD          1 to reuse build outputs
@@ -134,15 +142,35 @@ show_failure_log() {
 }
 
 run_step() {
+  local stream_output="0"
+  if [[ "${1:-}" == "--stream-output" ]]; then
+    stream_output="1"
+    shift
+  fi
   local label="$1" started result elapsed
+  local -a pipeline_status
   shift
   started="$SECONDS"
-  if [[ "$is_tty" == "1" ]]; then
+  if [[ "$stream_output" == "1" && "$is_tty" == "1" ]]; then
+    printf '  %s→%s %-30s\n' "$color_cyan" "$color_reset" "$label"
+    printf '     Cargo build progress:\n'
+  elif [[ "$is_tty" == "1" ]]; then
     printf '  %s→%s %-30s' "$color_cyan" "$color_reset" "$label"
   else
     printf '  → %s\n' "$label"
   fi
-  if "$@" >>"$launcher_log" 2>&1; then
+
+  if [[ "$stream_output" == "1" && "$is_tty" == "1" ]]; then
+    if CARGO_TERM_PROGRESS_WHEN=always "$@" 2>&1 | tee -a "$launcher_log"; then
+      result=0
+    else
+      pipeline_status=("${PIPESTATUS[@]}")
+      result="${pipeline_status[0]}"
+      if ((result == 0)); then
+        result="${pipeline_status[1]}"
+      fi
+    fi
+  elif "$@" >>"$launcher_log" 2>&1; then
     result=0
   else
     result=$?
@@ -150,15 +178,25 @@ run_step() {
   elapsed=$((SECONDS - started))
   if ((result == 0)); then
     if [[ "$is_tty" == "1" ]]; then
-      printf '\r  %s✓%s %-30s %s%ss%s\n' \
-        "$color_green" "$color_reset" "$label" "$color_dim" "$elapsed" "$color_reset"
+      if [[ "$stream_output" == "1" ]]; then
+        printf '\n'
+      else
+        printf '\r'
+      fi
+      printf '  %s✓%s %-30s %s%ss%s\n' \
+          "$color_green" "$color_reset" "$label" "$color_dim" "$elapsed" "$color_reset"
     else
       printf '  ✓ %-30s %ss\n' "$label" "$elapsed"
     fi
     return 0
   fi
   if [[ "$is_tty" == "1" ]]; then
-    printf '\r  %s✗%s %-30s failed\n' "$color_red" "$color_reset" "$label" >&2
+    if [[ "$stream_output" == "1" ]]; then
+      printf '\n'
+    else
+      printf '\r'
+    fi
+    printf '  %s✗%s %-30s failed\n' "$color_red" "$color_reset" "$label" >&2
   else
     printf '  ✗ %-30s failed\n' "$label" >&2
   fi
@@ -380,6 +418,8 @@ case "$database_url" in postgres://*|postgresql://*) ;; *) error "database URL m
 mkdir -p "$run_dir" "$log_dir" "$profile_home" "$runner_root"
 maps_mcp_venv="${OPEN_WEB_CODEX_MAPS_MCP_VENV:-$data_dir/tool-envs/maps-mcp}"
 supply_chain_mcp_venv="${OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV:-$data_dir/tool-envs/supply-chain-network-planner}"
+coordination_mcp_venv="${OPEN_WEB_CODEX_COORDINATION_MCP_VENV:-$data_dir/tool-envs/platform-coordination}"
+work_state_mcp_venv="${OPEN_WEB_CODEX_WORK_STATE_MCP_VENV:-$data_dir/tool-envs/platform-work-state}"
 if [[ "$codex_mode" == "real" && -z "${OPEN_WEB_CODEX_MASTER_KEY:-}" ]]; then
   if [[ ! -f "$master_key_file" ]]; then
     command -v openssl >/dev/null 2>&1 || { error "openssl is required to create the local Secret Store key"; exit 1; }
@@ -507,7 +547,7 @@ build_stale_platform_server() {
   then
     show_step_skipped "Platform server" "exact fingerprint matched"
   else
-    run_step "Platform server" build_platform_server_and_record
+    run_step --stream-output "Platform server" build_platform_server_and_record
   fi
 }
 
@@ -584,13 +624,13 @@ build_stale_codex_runtime_components() {
   if ((codex_fresh == 1 && code_mode_host_fresh == 1)); then
     show_step_skipped "Codex Runtime" "exact fingerprints matched"
   elif ((codex_fresh == 0 && code_mode_host_fresh == 0)); then
-    run_step "Codex Runtime" build_both_codex_runtime_components
+    run_step --stream-output "Codex Runtime" build_both_codex_runtime_components
   elif ((codex_fresh == 0)); then
-    run_step "Codex CLI Runtime" build_codex_cli_and_record
+    run_step --stream-output "Codex CLI Runtime" build_codex_cli_and_record
     show_step_skipped "Codex code-mode host" "exact fingerprint matched"
   else
     show_step_skipped "Codex CLI Runtime" "exact fingerprint matched"
-    run_step "Codex code-mode host" build_codex_code_mode_host_and_record
+    run_step --stream-output "Codex code-mode host" build_codex_code_mode_host_and_record
   fi
 }
 
@@ -618,6 +658,18 @@ prepare_supply_chain_mcp() {
   OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV="$supply_chain_mcp_venv" \
     OPEN_WEB_CODEX_LOG_DIR="$log_dir" \
     "$script_dir/setup-supply-chain-mcp-env.sh"
+}
+
+prepare_coordination_mcp() {
+  OPEN_WEB_CODEX_COORDINATION_MCP_VENV="$coordination_mcp_venv" \
+    OPEN_WEB_CODEX_LOG_DIR="$log_dir" \
+    "$script_dir/setup-platform-coordination-mcp-env.sh"
+}
+
+prepare_work_state_mcp() {
+  OPEN_WEB_CODEX_WORK_STATE_MCP_VENV="$work_state_mcp_venv" \
+    OPEN_WEB_CODEX_LOG_DIR="$log_dir" \
+    "$script_dir/setup-platform-work-state-mcp-env.sh"
 }
 
 prepare_build_tools() {
@@ -678,6 +730,16 @@ if [[ "$codex_mode" == "real" ]]; then
   else
     show_step_skipped "Supply-chain MCP" "skipped"
   fi
+  if [[ "${OPEN_WEB_CODEX_SKIP_COORDINATION_MCP_SETUP:-0}" != "1" ]]; then
+    run_step "Platform coordination MCP" prepare_coordination_mcp
+  else
+    show_step_skipped "Platform coordination MCP" "skipped"
+  fi
+  if [[ "${OPEN_WEB_CODEX_SKIP_WORK_STATE_MCP_SETUP:-0}" != "1" ]]; then
+    run_step "Platform Work State MCP" prepare_work_state_mcp
+  else
+    show_step_skipped "Platform Work State MCP" "skipped"
+  fi
 fi
 
 server_command=(
@@ -715,6 +777,8 @@ if [[ "$codex_mode" == "real" ]]; then
   export OPEN_WEB_CODEX_MAPS_MCP_VENV="$maps_mcp_venv"
   export MAPS_MCP_VENV="$maps_mcp_venv"
   export OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV="$supply_chain_mcp_venv"
+  export OPEN_WEB_CODEX_COORDINATION_MCP_VENV="$coordination_mcp_venv"
+  export OPEN_WEB_CODEX_WORK_STATE_MCP_VENV="$work_state_mcp_venv"
   export OPEN_WEB_CODEX_LOG_DIR="$log_dir"
 else
   unset CODEX_HOME CODEX_BIN

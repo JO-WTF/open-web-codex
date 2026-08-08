@@ -246,13 +246,14 @@ Artifact 完成，并让用户在 Web 端看见这条协作链。
 
 当前案例是印尼配送网络决策：
 
-1. Supervisor 明确 90% 两日达目标、决策周期、投资假设和交付标准；
-2. 缺少适用数据时，Data Agent 从 typed source catalog 生成并验证
-   `planning-dataset.v2`；
-3. Network Planning Agent 读取同一个授权数据成果，诊断现网并比较有限候选方案；
-4. 只有经济性会改变建议时才选择 Finance Agent；
-5. 只有材料性不确定性或实施风险会改变建议时才选择 Risk Agent；
-6. Supervisor 使用一致口径综合事实、假设、分析、建议、风险和缺失证据。
+1. Supervisor 识别国家、目标和最终交付，并创建或绑定一个通用 Work State；
+2. Network Agent 根据当前问题发布最小数据需求和分析条件；
+3. 缺少可用 Dataset Release 时，Data Agent 通过 Platform Data Intake 检查、映射、
+   规范化和验证用户数据；
+4. Network Agent 读取同一个授权 Work State 和 Dataset Release，计算基线、场景、选址、
+   报告和地图；
+5. Root 通过只读 coordination capability 查看 Agent execution、输入 blocker、Work State
+   readiness 和 deliverable，并综合业务结果。
 
 Policy 不规定固定角色数量或顺序。Dataset 等确定性输入依赖会自然形成先后关系；
 输入已经满足的独立调查可以并行，新证据只触发最小必要的复算或追问。
@@ -362,7 +363,8 @@ C2 的主路径已经形成，当前最重要的不是再增加角色数量，�
 ### 当前判断
 
 这一阶段已经有 Runtime 原语、持久节点和 Web 展示基础，但真实动态协作矩阵尚未
-完成。它是当前最值得投入的下一阶段，而不是提前建设通用 Studio 或开放 P2P 网络。
+完成。当前阶段同时必须建设有界 Copilot Studio，因为用户创建 Tool、Skill、Agent 和
+Supervisor 已经成为纵向闭环本身；P2P 网络仍不进入范围。
 
 ---
 
@@ -370,8 +372,8 @@ C2 的主路径已经形成，当前最重要的不是再增加角色数量，�
 
 ### 阶段目标
 
-把当前代码管理的两个固定角色演进为可发现、可评价、可发布和可弃用的企业 Agent
-能力，同时保持 Agent Catalog 与 Runtime 执行状态分离。
+把当前代码管理的两个固定角色演进为用户可创建、可发现、可测试、可发布和可安装的
+Agent 能力，同时保持 Catalog Release、Profile Installation 与 Runtime 执行状态分离。
 
 ### 用户可见功能
 
@@ -384,7 +386,8 @@ C2 的主路径已经形成，当前最重要的不是再增加角色数量，�
 ### 细致目标
 
 - [ ] Agent Definition 的 draft、reviewed、published、deprecated 生命周期；
-- [ ] Runtime 原生 Agent CRUD、验证、发现与重新加载合同；
+- [ ] 优先复用现有 Runtime exact role seam 和正式 discovery；只有证据证明不足时才评审
+  最小 Agent CRUD 协议扩展；
 - [ ] Definition、Runtime Role、Skill、MCP 和 Artifact Schema 的能力绑定；
 - [ ] 按组织、Profile、Workspace、数据域和成本策略筛选候选；
 - [ ] Supervisor 使用有界候选查询，而不是读取整张目录；
@@ -402,7 +405,8 @@ Definition 的发布状态。
 ### 当前判断
 
 当前只有两个代码发布的 Definition，可视为 Registry 的受限种子，不是通用 Agent
-Catalog。C4 不应抢在 C3 动态协作证据之前。
+Catalog。C4 与动态协作按共同合同并行推进：Studio 不能伪造 Runtime 能力，动态协作也
+不能继续依赖代码常量作为长期发布方式。
 
 ---
 
@@ -455,7 +459,7 @@ Catalog。C4 不应抢在 C3 动态协作证据之前。
 | --- | --- |
 | Supervisor 有稳定行为策略 | 代码发布 Policy、不可变快照、Run/根 Thread 绑定 |
 | 子 Agent 是真实 Runtime Agent | 精确 Runtime Role 通过 Codex 原生多 Agent 工具创建子 Thread |
-| 专业角色边界明确 | Data、Network、Finance 与 Risk Agent 有独立 Definition、指令和 Tool allowlist |
+| 专业角色边界明确 | Data 与 Network Agent 有独立 Definition、中文指令和 Tool allowlist |
 | Agent 过程可观察 | Runtime Thread、Turn、Item 和协作事件形成安全投影 |
 | Agent 历史可持久化展示 | 根/子树投影和每 Turn 任务节点保存在 PostgreSQL，可在 Web 恢复 |
 | 成果可跨子 Thread 交接 | 同 Task Artifact、生产来源和授权读取已经进入真实案例 |
@@ -463,8 +467,8 @@ Catalog。C4 不应抢在 C3 动态协作证据之前。
 
 ### 10.2 仍不能提前声称的能力
 
-- 还没有完成通用 Agent Catalog 或在线 Agent Studio；
-- 当前 `2.0.0` 印尼 happy path 已取得真实 Runtime 通过记录，但不是失败恢复证明；
+- 还没有完成统一 Catalog/Installation 或在线 Agent/Supervisor/Copilot Studio；
+- 当前仓网 6.0 只有局部测试证据，完整真实 Runtime/Web E2E 尚未通过；
 - follow-up、interrupt、部分失败和深层 Agent 树仍缺真实端到端矩阵；
 - 每 Turn 任务节点的新持久投影尚待完整企业旅程复验；
 - 多用户、多 Profile 和跨组织生产隔离尚未完成；
@@ -487,9 +491,9 @@ Catalog。C4 不应抢在 C3 动态协作证据之前。
 
 - Supervisor Policy 与 Agent Definition：
   [`supervisor_policy.rs`](../apps/web/server/src/supervisor_policy.rs)、
-  [`agent_definition.rs`](../apps/web/server/src/agent_definition.rs)；
+  [`agent.rs`](../apps/web/crates/supervisor-catalog/src/agent.rs)；
 - 根 Thread 启动前的 Capability 与 Runtime Role 验证：
-  [`supervisor_runtime_preflight.rs`](../apps/web/server/src/supervisor_runtime_preflight.rs)；
+  [`governed_runtime_preflight.rs`](../apps/web/server/src/governed_runtime_preflight.rs)；
 - Agent Thread、活动和每 Turn 任务节点投影：
   [`event_projection.rs`](../apps/web/server/src/event_projection.rs)；
 - 浏览器安全合同：

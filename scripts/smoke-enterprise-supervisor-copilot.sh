@@ -32,6 +32,7 @@ pg_socket="${e2e_root}/socket"
 profile_root="${e2e_root}/profile"
 runner_root="${e2e_root}/runner"
 data_root="${e2e_root}/data"
+capability_root_dir="${e2e_root}/capability-roots"
 evidence_file="${E2E_EVIDENCE_FILE:-${e2e_root}/enterprise-supervisor-evidence.json}"
 pg_port="${OPEN_WEB_CODEX_E2E_PG_PORT:-$(
   python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
@@ -74,7 +75,12 @@ fi
   cargo build -p open-web-codex-server --locked
 )
 
-mkdir -p "${pg_socket}" "${profile_root}" "${runner_root}" "${data_root}/logs"
+mkdir -p "${pg_socket}" "${profile_root}" "${runner_root}" "${data_root}/logs" "${capability_root_dir}"
+cp -R "${repo_root}/tools/maps-mcp" "${capability_root_dir}/maps-mcp"
+cp -R "${repo_root}/tools/supply-chain-network-planner" "${capability_root_dir}/supply-chain-network-planner"
+rm -rf "${capability_root_dir}/maps-mcp/node_modules" \
+  "${capability_root_dir}/maps-mcp/.venv" \
+  "${capability_root_dir}/supply-chain-network-planner/.venv"
 /opt/homebrew/opt/postgresql@17/bin/initdb \
   -D "${pg_data}" -A trust -U postgres --no-locale --encoding=UTF8 >/dev/null
 /opt/homebrew/opt/postgresql@17/bin/pg_ctl \
@@ -95,6 +101,7 @@ export OPEN_WEB_CODEX_RUNNER_ROOT="${runner_root}"
 export OPEN_WEB_CODEX_DATA_DIR="${data_root}"
 export OPEN_WEB_CODEX_LOG_DIR="${data_root}/logs"
 export OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV="${planner_venv}"
+export OPEN_WEB_CODEX_CAPABILITY_ROOTS="${capability_root_dir}/maps-mcp:${capability_root_dir}/supply-chain-network-planner"
 export OPEN_WEB_CODEX_MASTER_KEY="$(openssl rand -base64 32)"
 export OPEN_WEB_CODEX_WEB_DIST="${web_root}/dist"
 export RUST_LOG="open_web_codex_server=info,open_web_codex_profile_host=info,warn"
@@ -120,7 +127,7 @@ curl --silent --fail "http://127.0.0.1:${server_port}/api/health" >/dev/null
   E2E_BASE_URL="http://127.0.0.1:${server_port}" \
     E2E_EVIDENCE_FILE="${evidence_file}" \
     E2E_PROVIDER_ID="${E2E_PROVIDER_ID:-openai}" \
-    E2E_MODEL="${E2E_MODEL:-gpt-5.6-sol}" \
+    E2E_MODEL="${E2E_MODEL:-gpt-5.1-codex}" \
     E2E_EFFORT="${E2E_EFFORT:-medium}" \
     E2E_USE_BUILT_IN_PROVIDER="${E2E_USE_BUILT_IN_PROVIDER:-1}" \
     npm run test:e2e:enterprise-supervisor

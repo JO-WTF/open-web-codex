@@ -43,7 +43,7 @@ const networkAgent = {
   thread_id: "network-thread",
   parent_thread_id: "root-thread",
   source_kind: "thread_spawn",
-  agent_nickname: "Network Analyst",
+  agent_nickname: "Network Agent",
   agent_role: "network_planning_agent",
   status_type: "active",
   is_root: false,
@@ -53,7 +53,7 @@ const networkAgent = {
 const dataAgent = {
   ...networkAgent,
   thread_id: "data-thread",
-  agent_nickname: "Data Analyst",
+  agent_nickname: "Data Agent",
   agent_role: "data_agent",
 };
 
@@ -90,6 +90,10 @@ function execution(
     status: "running",
     current_behavior: "Started working",
     latest_progress: null,
+    display_title: "Network Agent · Evaluate the current network plan",
+    result_summary: null,
+    waiting_approval_id: null,
+    wait_cycle_count: 0,
     first_observed_sequence: 2,
     last_observed_sequence: 3,
     started_at: "2026-07-26T00:00:02Z",
@@ -163,7 +167,7 @@ describe("SupervisorOverview", () => {
         agents={[rootAgent, dataAgent]}
         approvals={[{
           threadId: "data-thread",
-          actorLabel: "Data Analyst",
+          actorLabel: "Data Agent",
           workspaceId: "workspace-1",
           requestId: "approval-1",
           command: "Allow supply chain data · list planning sources?",
@@ -176,7 +180,7 @@ describe("SupervisorOverview", () => {
     );
 
     const queue = screen.getByRole("region", { name: "Agent approvals" });
-    expect(queue.textContent).toContain("Data Analyst");
+    expect(queue.textContent).toContain("Data Agent");
     expect(queue.textContent).toContain("Approval required");
     expect(queue.textContent).toContain("Allow supply chain data");
 
@@ -196,11 +200,12 @@ describe("SupervisorOverview", () => {
         agents={[rootAgent, dataAgent, networkAgent]}
         executions={[
           execution("data-1", {
-            thread_id: "data-thread",
-            turn_id: "turn-data-1",
-            task: "Validate the planning dataset.",
-            first_observed_sequence: 2,
-          }),
+          thread_id: "data-thread",
+          turn_id: "turn-data-1",
+          task: "Validate the planning dataset.",
+          display_title: "Data Agent · Validate the planning dataset",
+          first_observed_sequence: 2,
+        }),
           execution("network-1", {
             first_observed_sequence: 3,
           }),
@@ -209,8 +214,8 @@ describe("SupervisorOverview", () => {
       />,
     );
 
-    expect(screen.getByText("Data Analyst")).toBeTruthy();
-    expect(screen.getByText("Network Analyst")).toBeTruthy();
+    expect(screen.getByText("Data Agent · Validate the planning dataset")).toBeTruthy();
+    expect(screen.getByText("Network Agent · Evaluate the current network plan")).toBeTruthy();
     expect(screen.getByText("Validate the planning dataset.")).toBeTruthy();
     expect(screen.getByText("Evaluate the current network plan.")).toBeTruthy();
   });
@@ -251,7 +256,7 @@ describe("SupervisorOverview", () => {
     const log = screen.getByLabelText("Agent behavior log").querySelector("ol");
     expect(screen.getByText("Agent behavior log")).toBeTruthy();
     expect(screen.getAllByText("Root Supervisor")).toHaveLength(3);
-    expect(screen.getByText("Data Analyst")).toBeTruthy();
+    expect(screen.getByText("Data Agent")).toBeTruthy();
     expect(screen.getByText("Waiting for Agent updates")).toBeTruthy();
     expect(screen.getByText("This is a bounded wait, not a stopped task.")).toBeTruthy();
     expect(screen.getByText("Wait cycle finished")).toBeTruthy();
@@ -309,7 +314,7 @@ describe("SupervisorOverview", () => {
       "Decomposed the objective and assigned the first specialist.",
     )).toHaveLength(2);
     expect(screen.getByText("Agent task stream")).toBeTruthy();
-    expect(screen.getAllByText("Network Analyst")).toHaveLength(2);
+    expect(screen.getAllByText(/^Network Agent ·/)).toHaveLength(2);
     expect(screen.getByText("network_planning_agent · Task 1")).toBeTruthy();
     expect(screen.getByText("network_planning_agent · Task 2")).toBeTruthy();
     expect(screen.getByText("Validated capacity and demand inputs.")).toBeTruthy();

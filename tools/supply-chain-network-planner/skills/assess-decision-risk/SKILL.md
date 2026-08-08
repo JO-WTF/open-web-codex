@@ -1,18 +1,13 @@
 ---
 name: assess-decision-risk
-description: Publish an evidence-linked risk_register.v1 for a supply-chain decision when material uncertainty, implementation exposure, or missing external evidence could change the recommendation.
+description: 当不确定性、实施风险或外部证据缺口可能改变仓网建议时，形成有证据依据的风险清单。
 ---
 
-# Assess Decision Risk
+# 评估决策风险
 
-1. Read the exact network and financial Resources supplied by the Supervisor.
-2. Separate supported risks from unsupported external claims. Missing Indonesian legal,
-   tax, permit, carrier, or customer evidence remains an explicit gap.
-3. For each material risk, record category, likelihood, impact, mitigation, measurable
-   trigger, and at least one exact planning Resource reference.
-4. Call `supply_chain_planner.publish_risk_register`, then validate the returned
-   `risk_register.v1` Resource.
-5. Return the unchanged `data_ref` and `resource_name`, emphasizing high-scoring
-   unresolved risks and assessment limits.
+1. 只使用当前 Network Case 中已发布并通过校验的分析结果。
+2. 区分已有证据支持的风险与尚未取得外部证据的事项。法规、税务、许可、承运商和客户行为缺少资料时，必须标为缺口。
+3. 每项风险记录类别、可能性、影响、缓解措施、可观测触发条件和对应的 Case 结果。
+4. 风险清单只能引用稳定的公开交付物，不能暴露内部组件 ID、文件路径或运行时 ID。
 
-Do not alter calculation Resources or convert unsupported assumptions into facts.
+不得改写计算结果，也不得把未经支持的假设写成事实。

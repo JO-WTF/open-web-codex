@@ -107,6 +107,7 @@ mod tests {
                     mcp_server_names: vec!["supply_chain_data".to_string()],
                 }],
             }],
+            coordination_mcp_servers: Vec::new(),
             max_threads: 2,
         };
 
@@ -438,11 +439,15 @@ impl CodexAdapter for FakeCodexAdapter {
                 roles,
                 role_spawn_limits,
                 required_mcp_servers,
+                coordination_mcp_servers,
                 max_threads,
             } => {
                 validate_platform_runtime_roles(roles, *max_threads)?;
                 validate_role_spawn_limits(roles, role_spawn_limits)?;
                 validate_required_mcp_servers(required_mcp_servers)?;
+                if !coordination_mcp_servers.is_empty() {
+                    validate_required_mcp_servers(coordination_mcp_servers)?;
+                }
                 let state = self.state.lock().await;
                 if roles
                     .iter()

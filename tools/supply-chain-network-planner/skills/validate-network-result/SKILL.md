@@ -1,35 +1,17 @@
 ---
 name: validate-network-result
-description: Validate supply-chain snapshots, route matrices, coverage calculations, scenario comparisons, and facility-location solutions before they are used for a decision. Use when reviewing planning outputs, checking metric consistency, diagnosing questionable coverage or cost results, or preparing a final recommendation.
+description: 在报告仓网结论前，检查 Network Case 的输入、矩阵、覆盖、成本、场景和选址结果是否一致且完整。
 ---
 
-# Validate Network Result
+# 校验仓网结果
 
-Treat validation as a release gate, not a narrative afterthought. Read
-[planning-contracts.md](../../references/planning-contracts.md).
+校验是决策门槛，不是事后补充说明。
 
-## Workflow
+- 调用 `get_network_case_status`，确认本次分析依赖的 facet 都是 `ready`，不能使用 `stale` 结果。
+- 确认每个需求城市只有一个覆盖仓，或者存在明确的未分配原因。
+- 核对需求加权覆盖率等于目标内需求量除以总需求量。
+- 检查路线完整性、重复路线、未知 ID、负数距离、负数时长、负数成本和币种一致性。
+- 区分 `actual_current`、`optimized_existing_footprint` 和场景方案。
+- 选址结果必须检查固定仓、候选数量、时效约束、求解状态和最优性证明。
 
-1. Call `supply_chain_planner.validate_network_resource` for every resource used in the
-   conclusion: snapshot, route matrix, scenario results, comparisons, and location
-   solution.
-2. Confirm all compared results share the same snapshot, route matrix, service policy,
-   planning period, currency, and demand grain.
-3. Reconcile coverage as covered demand units divided by total demand units. Confirm
-   allocation totals equal the denominator and that no demand disappears.
-4. Review route completeness, unreachable lanes, missing current assignments, current
-   capacity overload, and data-source timestamps.
-5. Check claim labels:
-   - current means recorded assignment;
-   - optimized existing footprint means reallocation without new facilities;
-   - scenario means an explicit active-facility set;
-   - optimal means exact only over the supplied finite candidate set.
-6. Classify assumptions and exclusions separately from validation errors.
-
-## Decision gate
-
-Do not recommend action when validation has errors, source grain is unknown, route
-matrix provenance is missing, or comparison inputs are not like-for-like. Present
-warnings with their likely decision impact. A resource can be structurally valid while
-still being unsuitable for a high-stakes decision because inputs are stale, estimated,
-or incomplete.
+必需矩阵不完整、结果已经过期、求解超时却被称为最优时，不得给出行动建议。返回明确的错误或警告及其业务后果，不在模型上下文中修补数据。

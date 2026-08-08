@@ -25,10 +25,15 @@ SANDBOX_META = "codex/sandbox-state-meta"
 
 def server_environment(state_root: Path) -> dict[str, str]:
     environment = dict(os.environ)
+    repository_data_dir = ROOT.parent.parent / ".local" / "open-web-codex"
     environment.update(
         {
             "CODEX_HOME": str(state_root / "codex-home"),
-            "OPEN_WEB_CODEX_LOG_DIR": str(state_root / "logs"),
+            "OPEN_WEB_CODEX_DATA_DIR": str(repository_data_dir),
+            "OPEN_WEB_CODEX_LOG_DIR": str(repository_data_dir / "logs"),
+            "OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV": str(
+                repository_data_dir / "tool-envs" / "supply-chain-network-planner"
+            ),
             "SUPPLY_CHAIN_DATA_RESOURCE_DIR": str(state_root / "data-resources"),
             "SUPPLY_CHAIN_RESOURCE_DIR": str(state_root / "planning-resources"),
             # Force analysis MCP calls to fail closed in this isolated smoke.
@@ -98,14 +103,19 @@ async def smoke() -> None:
                 await asyncio.wait_for(session.initialize(), timeout=10)
                 tools = await asyncio.wait_for(session.list_tools(), timeout=10)
                 names = {tool.name for tool in tools.tools}
-                assert {
+                expected_tools = {
                     "discover_workspace_sources",
                     "inspect_workspace_sources",
                     "publish_source_profile",
                     "publish_mapping_proposal",
-                    "normalize_planning_dataset",
-                    "validate_planning_dataset",
-                } <= names
+                    "normalize_network_input",
+                    "validate_normalized_network_input",
+                    "load_administrative_catalog",
+                    "resolve_place_names",
+                    "build_administrative_candidates",
+                    "validate_points_within_boundaries",
+                }
+                assert expected_tools <= names, sorted(expected_tools - names)
                 mapping_tool = next(
                     tool for tool in tools.tools if tool.name == "publish_mapping_proposal"
                 )
@@ -127,7 +137,7 @@ async def smoke() -> None:
                 assert profiled.isError is not True
                 profile_ref = profiled.structuredContent["data_ref"]
                 requirement_profile = {
-                    "schemaVersion": "data_requirement_profile.v1",
+                    "schemaVersion": "data_requirement_profile.v2",
                     "entities": [
                         {
                             "name": "CityDemand",
@@ -152,9 +162,7 @@ async def smoke() -> None:
                 assert mapping.structuredContent["data_ref"]["resource_schema"] == (
                     "mapping_proposal.v1"
                 )
-                proposal = await read_resource(
-                    session, mapping.structuredContent["data_ref"]
-                )
+                proposal = await read_resource(session, mapping.structuredContent["data_ref"])
                 assert proposal["candidates"]
         planning_parameters = StdioServerParameters(
             command=str(LAUNCHER),
@@ -165,23 +173,25 @@ async def smoke() -> None:
         async with stdio_client(planning_parameters) as streams:
             async with ClientSession(*streams) as session:
                 await asyncio.wait_for(session.initialize(), timeout=10)
-                blocked = await asyncio.wait_for(
-                    session.call_tool(
-                        "prepare_network_snapshot_from_planning_dataset",
-                        {
-                            "planning_dataset_ref": {
-                                "server": "supply_chain_data",
-                                "uri": "supply-chain-data://resources/planning-dataset.v2-test",
-                                "resource_schema": "planning-dataset.v2",
-                            }
-                        },
-                    ),
-                    timeout=10,
-                )
-                assert blocked.isError is True
-                assert "analysis_authorization_required" in "\n".join(
-                    item.text for item in blocked.content if getattr(item, "type", None) == "text"
-                )
+                names = {tool.name for tool in (await session.list_tools()).tools}
+                expected_tools = {
+                    "plan_route_matrix",
+                    "build_haversine_route_matrix",
+                    "register_navigation_route_matrix",
+                    "validate_route_matrix",
+                    "plan_cost_matrix",
+                    "compute_optimal_assignment",
+                    "evaluate_network_baseline",
+                    "evaluate_service_targets",
+                    "summarize_network_cost",
+                    "evaluate_facility_scenario",
+                    "solve_p_median",
+                    "solve_service_constrained_location",
+                    "compare_network_scenarios",
+                    "render_network_comparison_map",
+                    "publish_network_planning_report",
+                }
+                assert expected_tools <= names, sorted(expected_tools - names)
 
 
 def test_stdio_smoke() -> None:

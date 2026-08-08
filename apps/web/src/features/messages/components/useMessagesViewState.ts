@@ -32,8 +32,6 @@ type UseMessagesViewStateArgs = {
   items: ConversationItem[];
   threadId: string | null;
   isThinking: boolean;
-  activeUserInputRequestId: string | number | null;
-  hasVisibleUserInputRequest: boolean;
   onPlanAccept?: () => void;
   onPlanSubmitChanges?: (changes: string) => void;
   onQuoteMessage?: (text: string) => void;
@@ -43,8 +41,6 @@ export function useMessagesViewState({
   items,
   threadId,
   isThinking,
-  activeUserInputRequestId,
-  hasVisibleUserInputRequest,
   onPlanAccept,
   onPlanSubmitChanges,
   onQuoteMessage,
@@ -63,7 +59,7 @@ export function useMessagesViewState({
   const [dismissedPlanFollowupByThread, setDismissedPlanFollowupByThread] =
     useState<Record<string, string>>({});
 
-  const scrollKey = `${scrollKeyForItems(items)}-${activeUserInputRequestId ?? "no-input"}`;
+  const scrollKey = scrollKeyForItems(items);
 
   const isNearBottom = useCallback(
     (node: HTMLDivElement) =>
@@ -256,7 +252,7 @@ export function useMessagesViewState({
       threadId,
       items,
       isThinking,
-      hasVisibleUserInputRequest,
+      hasVisibleUserInputRequest: false,
     });
 
     if (threadId && candidate.planItemId) {
@@ -268,7 +264,6 @@ export function useMessagesViewState({
     return candidate;
   }, [
     dismissedPlanFollowupByThread,
-    hasVisibleUserInputRequest,
     isThinking,
     items,
     onPlanAccept,

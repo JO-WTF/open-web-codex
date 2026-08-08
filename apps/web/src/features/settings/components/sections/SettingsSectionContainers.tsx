@@ -11,6 +11,7 @@ import { SettingsServerSection } from "./SettingsServerSection";
 import { SettingsShortcutsSection } from "./SettingsShortcutsSection";
 import { SettingsAgentsSection } from "./SettingsAgentsSection";
 import { SettingsAgentCatalogSection } from "./SettingsAgentCatalogSection";
+import { SettingsCapabilityCatalogSection } from "./SettingsCapabilityCatalogSection";
 import { SettingsSupervisorsSection } from "./SettingsSupervisorsSection";
 import { SettingsAboutSection } from "./SettingsAboutSection";
 import type { CodexSection } from "@settings/components/settingsTypes";
@@ -60,6 +61,9 @@ export function SettingsSectionContainers({
   }
   if (activeSection === "agent-catalog") {
     return <SettingsAgentCatalogSection {...orchestration.agentCatalogSectionProps} />;
+  }
+  if (activeSection === "capabilities") {
+    return <SettingsCapabilityCatalogSection />;
   }
   if (activeSection === "supervisors") {
     return <SettingsSupervisorsSection {...orchestration.supervisorsSectionProps} />;

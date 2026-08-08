@@ -17,6 +17,9 @@ open-web-codex-secret-store = { path = "../crates/secret-store" }
 open-web-codex-supervisor-catalog = { path = "../crates/supervisor-catalog" }
 open-web-codex-git-runtime = { path = "../crates/git-runtime" }
 open-web-codex-run-orchestrator = { path = "../crates/run-orchestrator" }
+open-web-codex-work-state-service = { path = "../crates/work-state-service" }
+open-web-codex-capability-catalog = { path = "../crates/capability-catalog" }
+open-web-codex-data-intake-service = { path = "../crates/data-intake-service" }
 
 serde.workspace = true
 serde_json.workspace = true

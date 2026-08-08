@@ -130,7 +130,5 @@ def build_risk_register(decision_scope: str, risks: list[RiskItem]) -> RiskRegis
         register_id=_content_identity("risks", payload),
         decision_scope=decision_scope,
         risks=risks,
-        unresolved_risk_count=sum(
-            risk.likelihood * risk.impact >= 12 for risk in risks
-        ),
+        unresolved_risk_count=sum(risk.likelihood * risk.impact >= 12 for risk in risks),
     )

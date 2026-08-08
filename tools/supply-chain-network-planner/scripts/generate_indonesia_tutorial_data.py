@@ -11,14 +11,16 @@ import io
 import json
 import math
 import random
+import re
 import shutil
 import sys
 import urllib.request
 from collections import defaultdict
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 TOOL_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOL_ROOT))
@@ -34,6 +36,65 @@ from supply_chain_planner.geo import (  # noqa: E402
 
 EXAMPLE_ROOT = TOOL_ROOT / "examples" / "indonesia-tutorial"
 DEFAULT_RELEASE_ROOT = EXAMPLE_ROOT / "releases" / "1.0.0"
+NETWORK_EXAMPLE_ROOT = TOOL_ROOT / "examples" / "indonesia-network"
+NETWORK_DATASET_ID = "indonesia-network-tutorial"
+NETWORK_DATASET_VERSION = "1.0.0"
+
+# The city snapshot is intentionally small and human-auditable. Values are
+# rounded BPS city-population figures used only to create tutorial demand;
+# the boundary snapshot remains the authoritative geometry check.
+TOP_50_CITIES = (
+    ("JAKARTA", "Jakarta", "Jakarta", 10_562_088, -6.2088, 106.8456),
+    ("SURABAYA", "Surabaya", "East Java", 2_874_314, -7.2575, 112.7521),
+    ("BEKASI", "Bekasi", "West Java", 2_543_676, -6.2383, 106.9756),
+    ("BANDUNG", "Bandung", "West Java", 2_510_103, -6.9175, 107.6191),
+    ("MEDAN", "Medan", "North Sumatra", 2_435_252, 3.5952, 98.6722),
+    ("DEPOK", "Depok", "West Java", 2_056_335, -6.4025, 106.7942),
+    ("TANGERANG", "Tangerang", "Banten", 1_930_556, -6.1783, 106.6319),
+    ("PALEMBANG", "Palembang", "South Sumatra", 1_668_848, -2.9761, 104.7754),
+    ("SEMARANG", "Semarang", "Central Java", 1_653_524, -6.9667, 110.4167),
+    ("MAKASSAR", "Makassar", "South Sulawesi", 1_423_877, -5.1477, 119.4327),
+    ("SOUTH_TANGERANG", "Tangerang Selatan", "Banten", 1_354_350, -6.2886, 106.7179),
+    ("BATAM", "Batam", "Riau Islands", 1_196_396, 1.1301, 104.0529),
+    ("BANDAR_LAMPUNG", "Bandar Lampung", "Lampung", 1_166_066, -5.4292, 105.2619),
+    ("BOGOR", "Bogor", "West Java", 1_043_070, -6.5950, 106.8167),
+    ("PEKANBARU", "Pekanbaru", "Riau", 983_356, 0.5071, 101.4478),
+    ("PADANG", "Padang", "West Sumatra", 909_040, -0.9471, 100.4172),
+    ("MALANG", "Malang", "East Java", 843_810, -7.9666, 112.6326),
+    ("SAMARINDA", "Samarinda", "East Kalimantan", 827_994, -0.5022, 117.1536),
+    ("DENPASAR", "Denpasar", "Bali", 725_314, -8.6500, 115.2167),
+    ("TASIKMALAYA", "Tasikmalaya", "West Java", 733_467, -7.3274, 108.2207),
+    ("BALIKPAPAN", "Balikpapan", "East Kalimantan", 704_110, -1.2379, 116.8529),
+    ("SERANG", "Serang", "Banten", 692_101, -6.1201, 106.1503),
+    ("PONTIANAK", "Pontianak", "West Kalimantan", 658_685, -0.0263, 109.3425),
+    ("BANJARMASIN", "Banjarmasin", "South Kalimantan", 657_663, -3.3186, 114.5944),
+    ("JAMBI", "Jambi", "Jambi", 604_736, -1.6101, 103.6131),
+    ("MANADO", "Manado", "North Sulawesi", 451_916, 1.4748, 124.8421),
+    ("KUPANG", "Kupang", "East Nusa Tenggara", 442_758, -10.1772, 123.6070),
+    ("MATARAM", "Mataram", "West Nusa Tenggara", 441_561, -8.5833, 116.1167),
+    ("CILEGON", "Cilegon", "Banten", 434_896, -6.0027, 106.0119),
+    ("YOGYAKARTA", "Yogyakarta", "Special Region of Yogyakarta", 414_704, -7.7956, 110.3695),
+    ("JAYAPURA", "Jayapura", "Papua", 398_478, -2.5916, 140.6690),
+    ("BENGKULU", "Bengkulu", "Bengkulu", 373_591, -3.7928, 102.2608),
+    ("PALU", "Palu", "Central Sulawesi", 373_218, -0.9003, 119.8780),
+    ("SUKABUMI", "Sukabumi", "West Java", 353_838, -6.9277, 106.9299),
+    ("AMBON", "Ambon", "Maluku", 347_484, -3.6954, 128.1814),
+    ("KENDARI", "Kendari", "Southeast Sulawesi", 345_107, -3.9985, 122.5120),
+    ("CIREBON", "Cirebon", "West Java", 341_235, -6.7320, 108.5523),
+    ("DUMAI", "Dumai", "Riau", 323_452, 1.6671, 101.4432),
+    ("BINJAI", "Binjai", "North Sumatra", 291_842, 3.6001, 98.4850),
+    ("KEDIRI", "Kediri", "East Java", 289_418, -7.8480, 112.0178),
+    ("SORONG", "Sorong", "Southwest Papua", 284_410, -0.8762, 131.2558),
+    ("TEGAL", "Tegal", "Central Java", 273_825, -6.8694, 109.1402),
+    ("PEMATANGSIANTAR", "Pematang Siantar", "North Sumatra", 268_254, 2.9595, 99.0687),
+    ("BANDA_ACEH", "Banda Aceh", "Aceh", 252_899, 5.5483, 95.3238),
+    ("TARAKAN", "Tarakan", "North Kalimantan", 242_786, 3.3000, 117.6333),
+    ("PROBOLINGGO", "Probolinggo", "East Java", 239_125, -7.7543, 113.2159),
+    ("SINGKAWANG", "Singkawang", "West Kalimantan", 235_064, 0.9060, 108.9872),
+    ("BATU", "Batu", "East Java", 213_046, -7.8671, 112.5239),
+    ("PASURUAN", "Pasuruan", "East Java", 208_006, -7.6453, 112.9075),
+    ("LHOKSEUMAWE", "Lhokseumawe", "Aceh", 188_713, 5.1801, 97.1507),
+)
 
 
 @dataclass(frozen=True)
@@ -291,8 +352,7 @@ def _json_load(path: Path) -> Any:
 
 def _json_write(path: Path, value: Any) -> None:
     path.write_text(
-        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        + "\n",
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
         encoding="utf-8",
     )
 
@@ -387,9 +447,7 @@ def _load_population(path: Path) -> list[dict[str, Any]]:
     if len(rows) != 38:
         raise ValueError(f"population source has {len(rows)} rows, expected 38")
     if sum(row["population_2025"] for row in rows) != 284_438_600:
-        raise ValueError(
-            "rounded province population rows do not sum to the expected 284,438,600"
-        )
+        raise ValueError("rounded province population rows do not sum to the expected 284,438,600")
     return rows
 
 
@@ -449,8 +507,7 @@ def _allocate_customer_counts(
         weighted.append((code, weight))
     total_weight = sum(weight for _, weight in weighted)
     exact = {
-        code: customer_count * weight / total_weight if weight else 0.0
-        for code, weight in weighted
+        code: customer_count * weight / total_weight if weight else 0.0 for code, weight in weighted
     }
     allocated = {code: math.floor(value) for code, value in exact.items()}
     remainder = customer_count - sum(allocated.values())
@@ -475,9 +532,7 @@ def _joint_sample(
         point = current.sample(rng)
         if legacy.contains(point):
             return point
-    raise RuntimeError(
-        f"failed to find an overlapping point for current province {current.name}"
-    )
+    raise RuntimeError(f"failed to find an overlapping point for current province {current.name}")
 
 
 def _customer_point(
@@ -695,17 +750,10 @@ def generate(
     scratch_root.mkdir()
 
     population_rows = _load_population(example_root / "population-2025.csv")
-    population_by_code = {
-        row["province_code"]: row["population_2025"] for row in population_rows
-    }
+    population_by_code = {row["province_code"]: row["population_2025"] for row in population_rows}
     name_by_code = {row["province_code"]: row["province_name"] for row in population_rows}
-    current_path = (
-        example_root
-        / sources["world-bank-official-boundaries-idn-adm1"]["bundled_path"]
-    )
-    legacy_path = (
-        example_root / sources["geoboundaries-gbopen-idn-adm1"]["bundled_path"]
-    )
+    current_path = example_root / sources["world-bank-official-boundaries-idn-adm1"]["bundled_path"]
+    legacy_path = example_root / sources["geoboundaries-gbopen-idn-adm1"]["bundled_path"]
     current, legacy, current_geojson = _load_boundaries(current_path, legacy_path)
     if set(current) != set(population_by_code):
         raise ValueError("current boundary and population province codes differ")
@@ -771,16 +819,13 @@ def generate(
         "nearest_forward_id",
         "nearest_distance_km",
     ]
-    forward_by_id = {site.site_id: site for site in FORWARD_WAREHOUSES}
     clustered_share = float(policy["clustered_customer_share"])
     road_factor = float(policy["road_factor"])
     speed_kph = float(policy["average_speed_kph"])
     driver_hours = float(policy["driver_hours_per_day"])
     assignment_mix = policy["current_assignment_mix"]
     nearest_threshold = float(assignment_mix["nearest_forward"])
-    second_threshold = nearest_threshold + float(
-        assignment_mix["second_nearest_legacy"]
-    )
+    second_threshold = nearest_threshold + float(assignment_mix["second_nearest_legacy"])
 
     demand_by_province: dict[str, int] = defaultdict(int)
     weighted_longitude: dict[str, float] = defaultdict(float)
@@ -839,9 +884,7 @@ def generate(
                     if assigned_id == nearest_id:
                         assigned_id = second_id
                     assigned_distance = next(
-                        distance
-                        for distance, site_id in distances
-                        if site_id == assigned_id
+                        distance for distance, site_id in distances if site_id == assigned_id
                     )
                     assignment_reason = "legacy_province_contract"
                 if assigned_id == nearest_id:
@@ -907,7 +950,6 @@ def generate(
         for code in current
     }
     quote_rows: list[dict[str, Any]] = []
-    center_by_id = {site.site_id: site for site in CENTRAL_WAREHOUSES}
     for center in CENTRAL_WAREHOUSES:
         for forward in FORWARD_WAREHOUSES:
             quote_rows.append(
@@ -1001,15 +1043,9 @@ def generate(
         center_load[forward.current_parent_center_id] += forward_load[forward.site_id]
     for site in CENTRAL_WAREHOUSES + FORWARD_WAREHOUSES:
         load = (
-            center_load[site.site_id]
-            if site.site_type == "central"
-            else forward_load[site.site_id]
+            center_load[site.site_id] if site.site_type == "central" else forward_load[site.site_id]
         )
-        factor = (
-            1.15
-            if site.site_type == "central"
-            else FORWARD_CAPACITY_BUFFERS[site.site_id]
-        )
+        factor = 1.15 if site.site_type == "central" else FORWARD_CAPACITY_BUFFERS[site.site_id]
         capacity = _round_capacity(load, factor)
         warehouse_rows.append(
             {
@@ -1173,9 +1209,7 @@ def generate(
         parent_id = forward.current_parent_center_id
         assert parent_id is not None
         quote = quote_by_id[f"LH-{parent_id}-{forward.site_id}"]
-        linehaul_cost += (
-            forward_load[forward.site_id] * int(quote["quoted_idr_per_demand_unit"])
-        )
+        linehaul_cost += forward_load[forward.site_id] * int(quote["quoted_idr_per_demand_unit"])
     last_mile_cost = 0
     for (forward_id, province_code), units in assignment_demand.items():
         quote = quote_by_id[f"LM-{forward_id}-{province_code}"]
@@ -1201,8 +1235,7 @@ def generate(
         "all_legacy_customer_boundaries_pass": legacy_boundary_rate
         >= float(gates["required_legacy_boundary_pass_rate"]),
         "all_sites_pass_both_boundaries": all(
-            row["current_boundary_pass"] and row["legacy_boundary_pass"]
-            for row in site_checks
+            row["current_boundary_pass"] and row["legacy_boundary_pass"] for row in site_checks
         ),
         "population_customer_relationship_is_positive": population_customer_spearman
         >= float(gates["minimum_population_customer_spearman"]),
@@ -1256,9 +1289,7 @@ def generate(
         "sources": {
             "source_lock_sha256": _sha256(example_root / "source-lock.json"),
             "population_sha256": _sha256(example_root / "population-2025.csv"),
-            "generation_policy_sha256": _sha256(
-                example_root / "generation-policy.json"
-            ),
+            "generation_policy_sha256": _sha256(example_root / "generation-policy.json"),
             "world_bank_boundary_sha256": _sha256(current_path),
             "geoboundaries_sha256": _sha256(legacy_path),
             "government_validation": government_check,
@@ -1286,11 +1317,9 @@ def generate(
             "forward_warehouse_count": len(FORWARD_WAREHOUSES),
             "candidate_location_count": len(CANDIDATE_LOCATIONS),
             "nearest_customer_assignment_share": nearest_share,
-            "nearest_center_link_share": nearest_parent_count
-            / len(FORWARD_WAREHOUSES),
+            "nearest_center_link_share": nearest_parent_count / len(FORWARD_WAREHOUSES),
             "coverage_by_demand_units": {
-                f"{day}_day": coverage_units[day] / total_demand_units
-                for day in (1, 2, 3)
+                f"{day}_day": coverage_units[day] / total_demand_units for day in (1, 2, 3)
             },
             "coverage_by_customer_count": {
                 f"{day}_day": coverage_customers[day] / requested_customer_count
@@ -1372,6 +1401,555 @@ def generate(
     }
 
 
+def _network_geometry_bounds(geometry: dict[str, Any]) -> tuple[float, float, float, float]:
+    coordinates = geometry.get("coordinates", [])
+    points: list[tuple[float, float]] = []
+
+    def collect(value: Any) -> None:
+        if isinstance(value, list) and value and isinstance(value[0], (int, float)):
+            points.append((float(value[0]), float(value[1])))
+        elif isinstance(value, list):
+            for child in value:
+                collect(child)
+
+    collect(coordinates)
+    if not points:
+        raise ValueError("ADM2 geometry has no coordinates")
+    longitudes = [point[0] for point in points]
+    latitudes = [point[1] for point in points]
+    return min(longitudes), min(latitudes), max(longitudes), max(latitudes)
+
+
+def _network_ring_contains(ring: list[list[float]], longitude: float, latitude: float) -> bool:
+    inside = False
+    previous = ring[-1]
+    for current in ring:
+        x1, y1 = float(previous[0]), float(previous[1])
+        x2, y2 = float(current[0]), float(current[1])
+        if (y1 > latitude) != (y2 > latitude):
+            crossing = (x2 - x1) * (latitude - y1) / (y2 - y1) + x1
+            if longitude < crossing:
+                inside = not inside
+        previous = current
+    return inside
+
+
+def _network_geometry_contains(geometry: dict[str, Any], longitude: float, latitude: float) -> bool:
+    if geometry.get("type") == "Polygon":
+        rings = geometry.get("coordinates", [])
+        return (
+            bool(rings)
+            and _network_ring_contains(rings[0], longitude, latitude)
+            and not any(_network_ring_contains(ring, longitude, latitude) for ring in rings[1:])
+        )
+    if geometry.get("type") == "MultiPolygon":
+        return any(
+            _network_geometry_contains(
+                {"type": "Polygon", "coordinates": polygon}, longitude, latitude
+            )
+            for polygon in geometry.get("coordinates", [])
+        )
+    raise ValueError(f"unsupported ADM2 geometry type: {geometry.get('type')}")
+
+
+def _network_slug(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+
+
+def _network_find_feature(
+    features: list[dict[str, Any]],
+    longitude: float,
+    latitude: float,
+) -> dict[str, Any]:
+    matches = [
+        feature
+        for feature in features
+        if _network_geometry_contains(feature["geometry"], longitude, latitude)
+    ]
+    if len(matches) != 1:
+        raise ValueError(f"city point must match exactly one ADM2 feature, got {len(matches)}")
+    return matches[0]
+
+
+def _network_sample_point(
+    feature: dict[str, Any], seed: int, fallback: tuple[float, float]
+) -> tuple[float, float]:
+    geometry = feature["geometry"]
+    min_lon, min_lat, max_lon, max_lat = _network_geometry_bounds(geometry)
+    rng = random.Random(seed)
+    for _ in range(20_000):
+        point = (
+            round(rng.uniform(min_lon, max_lon), 6),
+            round(rng.uniform(min_lat, max_lat), 6),
+        )
+        if _network_geometry_contains(geometry, point[0], point[1]):
+            return point
+    if _network_geometry_contains(geometry, fallback[0], fallback[1]):
+        return round(fallback[0], 6), round(fallback[1], 6)
+    raise ValueError("failed to sample a point inside the matched ADM2 boundary")
+
+
+def generate_network_fixture(*, root: Path, replace: bool) -> dict[str, Any]:
+    """Generate the composable, 50-city tutorial fixtures.
+
+    This path is separate from the historical large-customer release generator:
+    it creates the current tutorial sources without changing that old fixture's
+    byte-level contract.  The command is explicit so an empty Workspace never
+    causes these files to be loaded automatically.
+    """
+    if root.exists() and replace:
+        for generated_name in ("base", "current-coverage-extension", "candidate-extension"):
+            shutil.rmtree(root / generated_name, ignore_errors=True)
+    if root.exists() and any(
+        item.name not in {"source", "base", "current-coverage-extension", "candidate-extension"}
+        for item in root.iterdir()
+    ):
+        raise FileExistsError(f"network fixture path contains unsupported files: {root}")
+    base = root / "base"
+    current_extension = root / "current-coverage-extension"
+    candidate_extension = root / "candidate-extension"
+    source_path = root / "source" / "geoboundaries-idn-adm2.geojson"
+    if not source_path.exists():
+        raise FileNotFoundError(
+            f"missing ADM2 source {source_path}; download the locked geoBoundaries snapshot first"
+        )
+    for directory in (base, current_extension, candidate_extension):
+        directory.mkdir(parents=True, exist_ok=True)
+
+    boundary_payload = _json_load(source_path)
+    features = boundary_payload.get("features")
+    if not isinstance(features, list) or len(features) < 500:
+        raise ValueError("geoBoundaries ADM2 source is unexpectedly incomplete")
+
+    demand_rows: list[dict[str, Any]] = []
+    by_city_name: dict[str, dict[str, Any]] = {}
+    boundary_checks: list[dict[str, Any]] = []
+    for index, (city_key, city_name, province_name, population, latitude, longitude) in enumerate(
+        TOP_50_CITIES,
+        start=1,
+    ):
+        feature = _network_find_feature(features, longitude, latitude)
+        point = _network_sample_point(feature, 20260807 + index, (longitude, latitude))
+        city_id = f"IDN-CITY-{index:03d}"
+        province_id = f"IDN-PROV-{_network_slug(province_name).upper()}"
+        row = {
+            "city_id": city_id,
+            "city_name": city_name,
+            "province_id": province_id,
+            "province_name": province_name,
+            "admin2_id": feature["properties"]["shapeID"],
+            "admin2_name": feature["properties"]["shapeName"],
+            "population": population,
+            "demand_quantity": math.ceil(population / 1000),
+            "longitude": f"{point[0]:.6f}",
+            "latitude": f"{point[1]:.6f}",
+        }
+        demand_rows.append(row)
+        by_city_name[city_key] = row
+        boundary_checks.append(
+            {
+                "city_id": city_id,
+                "city_name": city_name,
+                "admin2_id": row["admin2_id"],
+                "inside_admin2": _network_geometry_contains(
+                    feature["geometry"], point[0], point[1]
+                ),
+            }
+        )
+
+    demand_fields = [
+        "city_id",
+        "city_name",
+        "province_id",
+        "province_name",
+        "admin2_id",
+        "admin2_name",
+        "population",
+        "demand_quantity",
+        "longitude",
+        "latitude",
+    ]
+    _write_csv(base / "demand-cities.csv", demand_fields, demand_rows)
+    _write_csv(
+        base / "population-snapshot.csv",
+        ["city_id", "city_name", "province_name", "population"],
+        [
+            {key: row[key] for key in ("city_id", "city_name", "province_name", "population")}
+            for row in demand_rows
+        ],
+    )
+    _json_write(
+        base / "administrative-areas.json",
+        {
+            "schema_version": "administrative_catalog.v1",
+            "country_code": "ID",
+            "admin_level": "ADM2",
+            "boundary_source": "geoBoundariesSSCU-3_0_0-IDN-ADM2",
+            "rows": [
+                {
+                    "city_id": row["city_id"],
+                    "city_name": row["city_name"],
+                    "province_id": row["province_id"],
+                    "province_name": row["province_name"],
+                    "admin2_id": row["admin2_id"],
+                    "admin2_name": row["admin2_name"],
+                    "longitude": float(row["longitude"]),
+                    "latitude": float(row["latitude"]),
+                    "is_province_capital": True,
+                }
+                for row in demand_rows
+            ],
+        },
+    )
+
+    center_keys = ("JAKARTA", "PALEMBANG", "MEDAN", "SURABAYA", "MAKASSAR")
+    cross_keys = ("BEKASI", "BANDUNG", "DEPOK", "TANGERANG", "SEMARANG", "SOUTH_TANGERANG")
+    center_rows = []
+    warehouse_rows = []
+    for warehouse_type, keys in (("center", center_keys), ("cross_docking", cross_keys)):
+        for key in keys:
+            row = by_city_name[key]
+            warehouse_id = f"WH-{warehouse_type.upper()}-{key}"
+            center_rows.append((warehouse_id, row))
+            warehouse_rows.append(
+                {
+                    "warehouse_id": warehouse_id,
+                    "warehouse_name": f"{row['city_name']} {warehouse_type.replace('_', ' ').title()}",
+                    "warehouse_type": warehouse_type,
+                    "city_id": row["city_id"],
+                    "city_name": row["city_name"],
+                    "province_id": row["province_id"],
+                    "province_name": row["province_name"],
+                    "longitude": row["longitude"],
+                    "latitude": row["latitude"],
+                    "is_existing": "true",
+                    "is_fixed": "true",
+                }
+            )
+    centers = [row for row in warehouse_rows if row["warehouse_type"] == "center"]
+    crosses = [row for row in warehouse_rows if row["warehouse_type"] == "cross_docking"]
+    for row in crosses:
+        parent = min(
+            centers,
+            key=lambda center: haversine_km(
+                (float(center["longitude"]), float(center["latitude"])),
+                (float(row["longitude"]), float(row["latitude"])),
+            ),
+        )
+        row["upstream_center_id"] = parent["warehouse_id"]
+    _write_csv(
+        base / "existing-warehouses.csv",
+        [
+            "warehouse_id",
+            "warehouse_name",
+            "warehouse_type",
+            "city_id",
+            "city_name",
+            "province_id",
+            "province_name",
+            "longitude",
+            "latitude",
+            "upstream_center_id",
+            "is_existing",
+            "is_fixed",
+        ],
+        warehouse_rows,
+    )
+
+    quote_rows: list[dict[str, Any]] = []
+    route_factor = 1.28
+    average_speed_kph = 42.0
+    city_points = {
+        row["city_id"]: (float(row["longitude"]), float(row["latitude"])) for row in demand_rows
+    }
+    for warehouse in warehouse_rows:
+        origin = (float(warehouse["longitude"]), float(warehouse["latitude"]))
+        for demand in demand_rows:
+            distance = haversine_km(origin, city_points[demand["city_id"]]) * route_factor
+            noise = stable_uniform(
+                f"{warehouse['warehouse_id']}:{demand['city_id']}",
+                0.985,
+                1.015,
+            )
+            price = round((45_000 + distance * 1_450) * noise / 10_000) * 10_000
+            quote_rows.append(
+                {
+                    "origin_id": warehouse["warehouse_id"],
+                    "destination_id": demand["city_id"],
+                    "destination_name": demand["city_name"],
+                    "layer": "last_mile",
+                    "distance_km": f"{distance:.3f}",
+                    "duration_hours": f"{distance / average_speed_kph:.3f}",
+                    "price_per_vehicle": price,
+                    "currency": "IDR",
+                    "vehicle_capacity": 1,
+                    "method": "haversine",
+                }
+            )
+    linehaul_rows = []
+    for cross in crosses:
+        for parent in centers:
+            distance = (
+                haversine_km(
+                    (float(parent["longitude"]), float(parent["latitude"])),
+                    (float(cross["longitude"]), float(cross["latitude"])),
+                )
+                * route_factor
+            )
+            price = round((125_000 + distance * 1_100) / 10_000) * 10_000
+            linehaul_rows.append(
+                {
+                    "origin_id": parent["warehouse_id"],
+                    "destination_id": cross["warehouse_id"],
+                    "destination_name": cross["city_name"],
+                    "layer": "linehaul",
+                    "distance_km": f"{distance:.3f}",
+                    "duration_hours": f"{distance / average_speed_kph:.3f}",
+                    "price_per_vehicle": price,
+                    "currency": "IDR",
+                    "vehicle_capacity": 1,
+                    "method": "haversine",
+                }
+            )
+    quote_rows.extend(linehaul_rows)
+    _write_csv(
+        base / "route-quotes.csv",
+        [
+            "origin_id",
+            "destination_id",
+            "destination_name",
+            "layer",
+            "distance_km",
+            "duration_hours",
+            "price_per_vehicle",
+            "currency",
+            "vehicle_capacity",
+            "method",
+        ],
+        quote_rows,
+    )
+
+    candidate_keys = (
+        "PADANG",
+        "PEKANBARU",
+        "JAMBI",
+        "BANDAR_LAMPUNG",
+        "PONTIANAK",
+        "BANJARMASIN",
+        "BALIKPAPAN",
+        "MANADO",
+        "PALU",
+        "KENDARI",
+        "MATARAM",
+        "KUPANG",
+    )
+    candidate_rows = []
+    for key in candidate_keys:
+        row = by_city_name[key]
+        nearest_center = min(
+            centers,
+            key=lambda center: haversine_km(
+                (float(center["longitude"]), float(center["latitude"])),
+                (float(row["longitude"]), float(row["latitude"])),
+            ),
+        )
+        candidate_rows.append(
+            {
+                "warehouse_id": f"WH-CANDIDATE-{key}",
+                "warehouse_name": f"{row['city_name']} Candidate Cross Docking",
+                "warehouse_type": "cross_docking",
+                "city_id": row["city_id"],
+                "city_name": row["city_name"],
+                "province_id": row["province_id"],
+                "province_name": row["province_name"],
+                "longitude": row["longitude"],
+                "latitude": row["latitude"],
+                "upstream_center_id": nearest_center["warehouse_id"],
+                "is_existing": "false",
+                "is_fixed": "false",
+            }
+        )
+    _write_csv(base / "candidate-warehouses.csv", list(candidate_rows[0]), candidate_rows)
+    _write_csv(
+        candidate_extension / "candidate-warehouses.csv", list(candidate_rows[0]), candidate_rows
+    )
+
+    cross_ids = [row["warehouse_id"] for row in crosses]
+    current_rows = []
+    for index, demand in enumerate(demand_rows):
+        nearest = sorted(
+            cross_ids,
+            key=lambda warehouse_id: haversine_km(
+                next(
+                    (float(row["longitude"]), float(row["latitude"]))
+                    for row in crosses
+                    if row["warehouse_id"] == warehouse_id
+                ),
+                city_points[demand["city_id"]],
+            ),
+        )
+        selected = nearest[1] if index % 5 == 0 else nearest[0]
+        parent = next(
+            row["upstream_center_id"] for row in crosses if row["warehouse_id"] == selected
+        )
+        current_rows.append(
+            {
+                "demand_city_id": demand["city_id"],
+                "serving_warehouse_id": selected,
+                "upstream_center_id": parent,
+            }
+        )
+    _write_csv(
+        current_extension / "current-coverage.csv",
+        ["demand_city_id", "serving_warehouse_id", "upstream_center_id"],
+        current_rows,
+    )
+
+    files_for_lock = [
+        base / name
+        for name in (
+            "demand-cities.csv",
+            "existing-warehouses.csv",
+            "route-quotes.csv",
+            "administrative-areas.json",
+            "candidate-warehouses.csv",
+            "population-snapshot.csv",
+        )
+    ]
+    source_lock = {
+        "schema_version": "tutorial_source_lock.v1",
+        "generated_at": "2026-08-07",
+        "generator": "generate_indonesia_tutorial_data.py:network-fixture-v1",
+        "sources": [
+            {
+                "source_id": "geoboundaries-idn-adm2",
+                "url": "https://www.geoboundaries.org/data/geoBoundaries-3_0_0/IDN/ADM2/geoBoundaries-3_0_0-IDN-ADM2.geojson",
+                "fetched_at": "2026-08-07",
+                "license": "Other - Humanitarian; source metadata identifies BPS and OCHA ROAP",
+                "path": "../source/geoboundaries-idn-adm2.geojson",
+                "sha256": _sha256(source_path),
+            },
+            {
+                "source_id": "bps-city-population-snapshot",
+                "url": "https://www.bps.go.id/",
+                "fetched_at": "2026-08-07",
+                "license": "BPS public statistics; curated rounded city snapshot for tutorial use",
+                "path": "population-snapshot.csv",
+                "sha256": _sha256(base / "population-snapshot.csv"),
+            },
+        ],
+        "generated_file_sha256": {path.name: _sha256(path) for path in files_for_lock},
+    }
+    _json_write(base / "source-lock.json", source_lock)
+    quote_distances = [float(row["distance_km"]) for row in quote_rows[: 11 * len(demand_rows)]]
+    quote_prices = [float(row["price_per_vehicle"]) for row in quote_rows[: 11 * len(demand_rows)]]
+    validation = {
+        "schema_version": "indonesia_network_fixture_validation.v1",
+        "boundary_source": {
+            "feature_count": len(features),
+            "sha256": _sha256(source_path),
+            "all_50_points_inside_adm2": all(row["inside_admin2"] for row in boundary_checks),
+            "boundary_checks": boundary_checks,
+        },
+        "demand": {
+            "city_count": len(demand_rows),
+            "demand_formula": "ceil(population / 1000)",
+            "formula_pass": all(
+                row["demand_quantity"] == math.ceil(row["population"] / 1000) for row in demand_rows
+            ),
+            "province_count": len({row["province_id"] for row in demand_rows}),
+        },
+        "network": {
+            "existing_warehouse_count": len(warehouse_rows),
+            "center_count": len(centers),
+            "cross_docking_count": len(crosses),
+            "all_existing_points_inside_declared_adm2": all(
+                any(row["city_id"] == warehouse["city_id"] for row in demand_rows)
+                for warehouse in warehouse_rows
+            ),
+        },
+        "quotes": {
+            "warehouse_to_demand_row_count": 11 * len(demand_rows),
+            "linehaul_row_count": len(linehaul_rows),
+            "total_row_count": len(quote_rows),
+            "spearman_distance_price": spearman_correlation(quote_distances, quote_prices),
+            "spearman_pass": spearman_correlation(quote_distances, quote_prices) >= 0.85,
+        },
+        "current_coverage_extension": {
+            "row_count": len(current_rows),
+            "unique_demand_cities": len({row["demand_city_id"] for row in current_rows}),
+        },
+        "all_passed": all(
+            (
+                len(demand_rows) == 50,
+                all(
+                    row["demand_quantity"] == math.ceil(row["population"] / 1000)
+                    for row in demand_rows
+                ),
+                all(row["inside_admin2"] for row in boundary_checks),
+                len(warehouse_rows) == 11,
+                len(centers) == 5,
+                len(crosses) == 6,
+                spearman_correlation(quote_distances, quote_prices) >= 0.85,
+                len(quote_rows[: 11 * len(demand_rows)]) == 550,
+                len(current_rows) == 50,
+            )
+        ),
+    }
+    _json_write(base / "validation-report.json", validation)
+    manifest_specs = [
+        ("demand-cities.csv", "demand_cities", len(demand_rows)),
+        ("existing-warehouses.csv", "existing_warehouses", len(warehouse_rows)),
+        ("route-quotes.csv", "route_quotes", len(quote_rows)),
+        ("administrative-areas.json", "administrative_catalog", len(demand_rows)),
+        ("candidate-warehouses.csv", "candidate_warehouses", len(candidate_rows)),
+        ("population-snapshot.csv", "population_snapshot", len(demand_rows)),
+        ("source-lock.json", "source_lock", 1),
+        ("validation-report.json", "validation_report", 1),
+    ]
+    manifest_files = [
+        {
+            "path": name,
+            "role": role,
+            "row_count": row_count,
+            "bytes": (base / name).stat().st_size,
+            "sha256": _sha256(base / name),
+        }
+        for name, role, row_count in manifest_specs
+    ]
+    content_identity = hashlib.sha256(
+        json.dumps(manifest_files, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    _json_write(
+        base / "dataset-manifest.json",
+        {
+            "schema_version": "workspace_dataset_release.v1",
+            "dataset_id": NETWORK_DATASET_ID,
+            "version": NETWORK_DATASET_VERSION,
+            "content_sha256": content_identity,
+            "data_classification": "synthetic_tutorial_data",
+            "customer_count": len(demand_rows),
+            "files": manifest_files,
+            "source_lock": {
+                "path": "source-lock.json",
+                "sha256": _sha256(base / "source-lock.json"),
+            },
+            "attribution": [
+                "geoBoundaries IDN ADM2, used to validate generated points.",
+                "BPS-Statistics Indonesia, curated population snapshot for tutorial use.",
+            ],
+        },
+    )
+    return {
+        "root": str(root),
+        "demand_city_count": len(demand_rows),
+        "existing_warehouse_count": len(warehouse_rows),
+        "quote_count": len(quote_rows),
+        "all_passed": validation["all_passed"],
+        "source_sha256": _sha256(source_path),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--example-root", type=Path, default=EXAMPLE_ROOT)
@@ -1380,15 +1958,30 @@ def main() -> None:
     parser.add_argument("--replace", action="store_true")
     parser.add_argument("--download-missing-sources", action="store_true")
     parser.add_argument("--refresh-external-validation", action="store_true")
-    args = parser.parse_args()
-    result = generate(
-        example_root=args.example_root.resolve(),
-        release_root=args.output_dir.resolve(),
-        customer_count=args.customer_count,
-        replace=args.replace,
-        download_missing_sources=args.download_missing_sources,
-        refresh_external_validation=args.refresh_external_validation,
+    parser.add_argument(
+        "--network-fixture",
+        action="store_true",
+        help="Generate the current composable 50-city network tutorial fixture.",
     )
+    parser.add_argument(
+        "--network-output-dir",
+        type=Path,
+        default=NETWORK_EXAMPLE_ROOT,
+    )
+    args = parser.parse_args()
+    if args.network_fixture:
+        result = generate_network_fixture(
+            root=args.network_output_dir.resolve(), replace=args.replace
+        )
+    else:
+        result = generate(
+            example_root=args.example_root.resolve(),
+            release_root=args.output_dir.resolve(),
+            customer_count=args.customer_count,
+            replace=args.replace,
+            download_missing_sources=args.download_missing_sources,
+            refresh_external_validation=args.refresh_external_validation,
+        )
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
 
 

@@ -1,202 +1,106 @@
-# 印尼仓网 1：发布并核验大型规划数据
+# 印尼仓网 1：从 Web 跑通第一份网络分析
 
-本篇只完成一件事：把印尼仓网的 10 个文件作为一个不可变 Dataset Release 发布，并让
-Data Agent 核验它。暂不计算时效、成本或选址。
+本篇只解决一个问题：在不计算运输成本、不接导航接口的前提下，用 50 个印尼需求城市和已有仓库，按球面距离估算时效，得到 6、12、18 小时覆盖率。
 
-比[单 Agent 配送审计](web-single-agent-delivery-audit.md)增加的难点是：数据规模更大、
-文件之间有关联、客户坐标必须位于省界内，并且结果要成为后续 Agent 可复用的持久
-Resource。
+本篇是四篇教程的起点。它先让读者理解最小链路：
 
-预计用时 20–30 分钟。Data Tool 会流式检查 240,000 个客户，通常需要几十秒。
-
-先阅读[案例总览](supply-chain-agent-tutorial.md)。
-
-## 完成后的结果
-
-你会得到：
-
-```text
-indonesia-warehouse-network-tutorial@1.0.0   Dataset Release
-tutorial-indonesia-data@1.0.0                Agent Release
-indonesia_dataset_inspection.v1              durable Resource Artifact
+```mermaid
+flowchart LR
+  U[用户问题] --> S[Supervisor]
+  S --> C[创建 Network Case]
+  C --> N[Network Agent 写入本次数据需求]
+  C --> D[Data Agent 发现并标准化文件]
+  D --> C
+  N --> C
+  C --> R[覆盖率与最终报告]
 ```
 
-正确 inspection 的关键事实为：
+## 你会用到什么
 
-| 检查项 | 期望值 |
-| --- | ---: |
-| 客户数 | 240,000 |
-| 年需求单位 | 6,908,721 |
-| 当前省级行政区 | 38 |
-| 中心仓 | 3 |
-| 前置仓 | 8 |
-| 候选点 | 20 |
-| 报价行 | 1,148 |
-
-## 1. 认识这 10 个文件
-
-文件位于
-[`releases/1.0.0`](../../tools/supply-chain-network-planner/examples/indonesia-tutorial/releases/1.0.0/)。
-
-| 文件 | 角色 | 为什么需要 |
-| --- | --- | --- |
-| `dataset-manifest.json` | 数据说明和内部哈希 | 固定来源、规模、角色和生成版本 |
-| `province-boundaries.geojson` | 38 省边界 | 检查客户、仓库和候选点是否在正确省内 |
-| `customers.csv.gz` | 240,000 个合成客户 | 客户坐标、省份和年度需求 |
-| `customer-assignments.csv.gz` | 当前客户到前置仓关系 | 保存现状，而不是先假定全部重分配 |
-| `warehouses.csv` | 3 中心仓和 8 前置仓 | 名称、类型、位置、容量和当前负荷 |
-| `warehouse-links.csv` | 中心仓到前置仓关系 | 定义两级补货网络 |
-| `candidate-locations.csv` | 20 个候选前置仓 | 最终有限候选优化的搜索空间 |
-| `transport-quotes.csv` | 干线和末端报价 | 后续计算当前与候选成本 |
-| `planning-policy.json` | 距离、速度和工作时长 | 固定计算口径 |
-| `validation-report.json` | 生成器对账结果 | 让独立 Tool 核对生成时的期望值 |
-
-这些文件共同形成一个数据版本。只上传 `customers.csv.gz` 再让模型搜索其他文件，会失去
-文件之间的一致性和授权边界。
-
-## 2. 在 Workspace 发布数据
-
-本篇属于高级 Builder 路径；快速体验会通过 Tutorial Blueprint 安装同一受审数据。
-手工发布时，在 Web 中：
-
-1. 选择目标 Workspace，打开右侧 **Files**。
-2. 点击头部或空状态中的 **Add data**。
-3. 在 **Publish a data release** 中点击 **Choose release files**。
-4. 从 `releases/1.0.0` 同时选择上表全部 10 个文件。
-5. 确认 Manifest 自动填入 Dataset ID
-   `indonesia-warehouse-network-tutorial` 和版本 `1.0.0`。
-6. **Name** 填 `Indonesia Warehouse Network Tutorial`。
-7. **What this data is for** 填
-   `Synthetic, source-locked data for the progressive Indonesia warehouse-network tutorials.`。
-8. 核对各文件角色与上表一致。
-9. 点击 **Publish release**。
-
-正确结果：
-
-```text
-Published indonesia-warehouse-network-tutorial@1.0.0
-10 files · published
-```
-
-平台发布时重新计算每个文件和整个 Release 的 SHA-256。不要把源码目录中的预生成哈希
-手工填成平台哈希；平台是本次 Workspace Release 身份的权威所有者。
-
-## 3. 基于 Data 模板发布 Agent
-
-打开 **Agent Studio → Agents → New Agent**，填写：
-
-| 字段 | 值 |
+| 对象 | 本篇的作用 |
 | --- | --- |
-| Agent ID | `tutorial-indonesia-data` |
-| Version | `1.0.0` |
-| Display name | `Tutorial Indonesia Data Agent` |
-| Description | `Validates one exact Indonesia warehouse-network Dataset Release.` |
-| Reviewed capability template | `Enterprise Data Agent · 4.0.0` |
+| Supervisor | 根据缺口协调两个 Agent，不负责计算 |
+| Network Agent | 说明本次问题需要需求城市、已有仓库、路线参数和时效目标 |
+| Data Agent | 检查 CSV/JSON/XLSX、生成字段映射、补充行政区和坐标 |
+| `supply_chain_network` | 在同一个 Case 中发现来源、确认映射、构建矩阵、计算覆盖率并发布报告 |
+| Network Case | 保存来源、映射、标准化数据、矩阵和结果；Agent 消息只传 `case_id` 和有限摘要 |
+| Artifact | 只保存用户最终需要查看和下载的报告，不承担 Agent 间数据交换 |
 
-**Responsibilities**：
+本篇只用 `haversine distance × 绕路系数`。它是规划估算，不是导航承诺。导航接口要在后续得到明确许可后批量调用，不能逐个客户调用。
 
-```text
-核验一个平台授权的印尼仓网 Dataset Release
-检查文件哈希、客户与分配对齐、省界、公式、报价完整性和生成器对账
-只发布有界的数据检查结果，不返回原始客户行或选择网络方案
-```
+## 准备教程数据
 
-**Custom Agent instructions**：
+数据已经生成并保存在 [base fixture](../../tools/supply-chain-network-planner/examples/indonesia-network/base/)：
 
-```text
-只使用平台附加到本 Agent instructions 的精确 Dataset Release 身份。
-调用 supply_chain_indonesia.inspect_indonesia_dataset_release，并使用完整的 workspace_id、
-release_id、dataset_id、version 和 content_sha256。使用 Tool 的确定性校验，不扫描
-Workspace、不运行终端命令、不直接打开 CSV/GeoJSON，也不把客户行复制进上下文。
-
-Tool 成功后读取并核对有界 inspection Resource。最终回答先输出 Tool 返回的原样
-ARTIFACT_HANDOFF，随后报告数据版本、规模、来源、checks 和 warnings。任何哈希、文件、
-省界、公式或报价校验失败时停止；不得猜测或改用其他数据。
-```
-
-选择：
-
-```text
-Authorized data · Indonesia Warehouse Network Tutorial · 1.0.0
-Output · indonesia_dataset_inspection.v1
-```
-
-然后依次点击：
-
-```text
-Create draft → Validate → Publish
-```
-
-选择 Dataset Release 后，这个 Agent 只与当前 Workspace 兼容。平台在启动前校验
-Workspace、Release ID、版本和内容哈希；Runtime 只收到逻辑身份，不收到浏览器提供的
-本地路径。
-
-## 4. 直接启动 Data Agent
-
-回到主页面，在 Workspace 行点击 **New task**。在 **Start a task** 中选择
-**Agent**，再选择 **Tutorial Indonesia Data Agent · 1.0.0**。
-
-发送：
-
-```text
-核验我授权的印尼仓网教程数据。报告客户、需求、省份、中心仓、前置仓、候选点和报价规模，
-说明来源、完成的检查和任何警告。不要做时效、成本或选址分析。
-```
-
-这里只需要一个 Agent，因此不要创建 Supervisor。Supervisor 只有在多个独立职责需要
-协调和交接时才增加价值。
-
-## 5. 审阅结果
-
-正确执行应包含：
-
-1. 一个真实的 `supply_chain_indonesia.inspect_indonesia_dataset_release` Tool 调用；
-2. Tool 参数与 Agent 自动附加的精确 Dataset Release 身份一致；
-3. Tool 返回 `resource_name` 和完整结构化 `data_ref`；
-4. `indonesia_dataset_inspection.v1` Artifact 状态为 `ready`；
-5. inspection 报告 240,000 客户、6,908,721 需求单位、38 省、3 中心仓、8 前置仓、
-   20 候选和 1,148 报价；
-6. 原始客户行、服务器路径和 Resource URI 不出现在最终报告；
-7. 刷新页面后，Tool 事件、Artifact 和最终回答仍能恢复。
-
-Data Tool 实际完成的检查包括：
-
-- 每个 Workspace 文件与平台 Manifest 的大小和 SHA-256 一致；
-- 240,000 个客户和 240,000 条分配逐行对齐；
-- 客户、仓库和候选位置在声明的省界内；
-- 距离和服务天数能按 policy 重算；
-- 当前仓和全部候选的报价矩阵完整；
-- 当前负荷、覆盖和生成器校验报告相互对账。
-
-## 6. 失败应该是什么样
-
-以下情况必须明确失败：
-
-| 问题 | 正确结果 |
+| 文件 | 用途 |
 | --- | --- |
-| 少上传一个文件 | Data Tool 报告文件合同不完整 |
-| 文件内容发布后被改动 | 平台或 Tool 报告哈希不一致 |
-| Agent 未绑定 Dataset Release | Agent 报告没有精确授权身份 |
-| 在其他 Workspace 启动 | Agent 不出现在兼容选择列表，或启动前拒绝 |
-| Tool 不可见 | Agent 报告能力缺口，不用终端手工启动 MCP |
+| `demand-cities.csv` | 50 个需求城市、人口、需求量、城市和省份坐标 |
+| `existing-warehouses.csv` | Jakarta、Palembang、Medan、Surabaya、Makassar 五个中心仓和六个 cross-docking 仓 |
+| `administrative-areas.json` | 城市、省份、坐标和 ADM2 来源信息 |
+| `candidate-warehouses.csv` | 第四篇才使用的候选仓，第一篇可以先不上传 |
+| `route-quotes.csv` | 第二篇才使用的报价 |
+| `source-lock.json`、`validation-report.json` | 来源、许可证、hash 和生成校验，不是计算输入 |
 
-不要用“先读源码里的同名文件”作为补救。源码示例和当前 Workspace Release 不是同一个
-授权对象。
+生成器已验证 50 个需求点位于 geoBoundaries ADM2 边界内，需求量为 `ceil(population / 1000)`，11 个已有仓，550 条末端报价和 30 条干线报价。不要手工改动这些文件；改动后应重新生成并检查 `validation-report.json`。
 
-## 7. 你自己的数据应怎样准备
+## Web 操作
 
-一个可复用的业务 Dataset Release 至少应写清：
+1. 打开 Web 的 **Workspace → Files**，选择一个有权使用的 Workspace。
+2. 点击 **Add data**，上传 `demand-cities.csv`、`existing-warehouses.csv` 和 `administrative-areas.json`。只接受 CSV、JSON、XLSX；不要上传 `geoboundaries-idn-adm2.geojson` 原始大文件，边界核验结果已经保存在行政区数据和校验报告中。
+3. 在 **Supervisor / Enterprise Network Planning Copilot** 中选择 `6.0.0`。如果列表没有该版本，说明服务未应用当前 seed migration，不要改用旧 Supervisor。
+4. 创建 Thread，发送：
 
-- 每个文件的逻辑名称、角色、媒体类型和口径；
-- 数据时间范围、币种、单位和分类；
-- 主键、外键和跨文件对账规则；
-- 来源、许可、提取时间和生成版本；
-- 缺失、重复、越界和异常值的处理规则；
-- 哪些字段允许模型看到，哪些只能由 Tool 流式处理。
+   ```text
+   规划国家是印度尼西亚。请使用我上传的教程 mock 数据，先只分析已有仓库覆盖。
+   不计算运输成本、不调用导航接口。使用球面距离乘绕路系数估算距离，使用平均行驶速度估算时效，给出 6、12、18 小时需求覆盖率，并说明各省哪些较差。
+   ```
 
-不要把“数据在某个目录”当作数据目录。Agent 需要的是一个可发现、可授权、可验证的
-Release 身份。
+“教程 mock 数据”是明确的示例数据意图；没有这句话时，系统不得自动加载 Demo fixture。
 
-下一篇：
+## 预期交互
 
-[印尼仓网 2：只分析当前单层时效](indonesia-network-02-service-baseline.md)
+Supervisor 先创建 Network Case。Network Agent 把本次最小数据需求写入 Case，Data Agent 使用同一个 `case_id`：
+
+1. 发现并检查 Workspace 来源，更新 Case 的 `source_inventory` facet。
+2. 提出显式字段映射，说明每个源字段如何映射到需求城市、已有仓库和行政区字段。
+3. 如果字段名或城市名有歧义，显示用户输入卡片。`ambiguous` 不能由模型猜测。
+4. 把标准化输入和数据质量状态提交到 Case，不把数据行带回对话。
+
+Network Agent 再请求缺失参数。第一次看到输入卡片时选择：
+
+| 参数 | 教程建议值 | 原因 |
+| --- | ---: | --- |
+| 绕路系数 | `1.28` | 用于把球面距离调整为规划道路距离 |
+| 平均行驶速度 | `42 km/h` | 用于把调整后距离换算成行驶时间 |
+| 每日可行驶小时 | `6` | 本篇把日级时效换算为 6 小时一个驾驶日 |
+| 目标时效 | `6, 12, 18 小时` | 同时输出三个需求加权覆盖率 |
+
+前端应显示一个简短的 Agent execution 卡片，而不是连续显示 `wait` 消息。卡片的终态应是“已完成”或明确的“等待输入/失败”；原始事件仍保存在 Run 审计中。
+
+## 真实结果检查
+
+检查以下事实，而不是只看模型的一段总结：
+
+- Case 的 `normalized_input` facet 为 `ready`，且摘要显示 50 个需求城市和 11 个已有仓。
+- Case 的 `route_matrix` facet 为 `ready`，方法是 `haversine`，路线数等于 11 × 50 = 550。
+- 路线组件保存绕路系数和平均速度；没有 `navigation` 结果。
+- Case 的 `baseline` facet 为 `ready`，并发布了一个 `network_planning_report.v1` Artifact。
+- 报告写明这是 `optimized_existing_footprint`，因为本篇没有上传当前覆盖关系；不能称为实际当前方案。
+- 刷新页面后，输入卡片、Agent 状态和报告 Artifact 仍可恢复。
+
+## 常见失败
+
+| 现象 | 含义和处理 |
+| --- | --- |
+| 找不到需求城市 | 文件没有城市标识或需求量；补充 `city_id/city_name/demand_quantity` |
+| 找不到已有仓库 | 文件没有 `warehouse_id/name/type/city_id/city_name`；补充仓库列表 |
+| 坐标缺失 | Data Agent 应先用行政区目录补充；匹配不明确时由用户选择，不要填 0 |
+| 要求导航许可 | 本篇参数选择错了；选择球面距离，或明确承担批量导航费用 |
+| 显示没有当前覆盖 | 这是预期结果，不是运行失败；本篇只计算已有仓范围内的优化基线 |
+| 空 Workspace 自动出现示例数据 | 这是缺陷。空 Workspace 必须保持 `needs_input`，不能 Mock 回退 |
+
+## 换成自己的数据
+
+只需要替换需求城市和已有仓库文件，并在映射卡片中确认字段。需求城市至少需要：`city_id`、`city_name`、`demand_quantity`；已有仓库至少需要：`warehouse_id`、`warehouse_name`、`warehouse_type`、`city_id`、`city_name`。如果文件没有经纬度，Data Agent 可以使用已授权的行政区目录补充，但必须保留匹配来源和结果状态。
+
+下一篇将加入报价、center/cross-docking 两级关系和全网运输成本。

@@ -68,15 +68,11 @@ class PrepareMapInput(StrictModel):
     baseline_resource_name: str = Field(
         pattern=r"^indonesia_current_network_analysis\.v1-[0-9a-f]{24}$"
     )
-    candidate_resource_name: str = Field(
-        pattern=r"^indonesia_candidate_scenario\.v1-[0-9a-f]{24}$"
-    )
+    candidate_resource_name: str = Field(pattern=r"^indonesia_candidate_scenario\.v1-[0-9a-f]{24}$")
 
 
 class PrepareMapRenderInput(StrictModel):
-    map_resource_name: str = Field(
-        pattern=r"^indonesia_network_map\.v1-[0-9a-f]{24}$"
-    )
+    map_resource_name: str = Field(pattern=r"^indonesia_network_map\.v1-[0-9a-f]{24}$")
     geojson_resource_name: str = Field(pattern=r"^geojson\.v1-[0-9a-f]{24}$")
 
 
@@ -84,21 +80,15 @@ class PrepareDecisionReportInput(StrictModel):
     inspection_resource_name: str = Field(
         pattern=r"^indonesia_dataset_inspection\.v1-[0-9a-f]{24}$"
     )
-    service_resource_name: str = Field(
-        pattern=r"^indonesia_service_baseline\.v1-[0-9a-f]{24}$"
-    )
+    service_resource_name: str = Field(pattern=r"^indonesia_service_baseline\.v1-[0-9a-f]{24}$")
     current_resource_name: str = Field(
         pattern=r"^indonesia_current_network_analysis\.v1-[0-9a-f]{24}$"
     )
     optimization_resource_name: str = Field(
         pattern=r"^indonesia_location_optimization\.v1-[0-9a-f]{24}$"
     )
-    candidate_resource_name: str = Field(
-        pattern=r"^indonesia_candidate_scenario\.v1-[0-9a-f]{24}$"
-    )
-    map_resource_name: str = Field(
-        pattern=r"^indonesia_network_map\.v1-[0-9a-f]{24}$"
-    )
+    candidate_resource_name: str = Field(pattern=r"^indonesia_candidate_scenario\.v1-[0-9a-f]{24}$")
+    map_resource_name: str = Field(pattern=r"^indonesia_network_map\.v1-[0-9a-f]{24}$")
     geojson_resource_name: str = Field(pattern=r"^geojson\.v1-[0-9a-f]{24}$")
 
 
@@ -166,12 +156,12 @@ class ProvinceServiceMetric(StrictModel):
 class ProvinceRankingPolicy(StrictModel):
     eligible_provinces: Literal["positive_demand_only"] = "positive_demand_only"
     primary_metric: Literal["two_day_demand_coverage"] = "two_day_demand_coverage"
-    priority_order: Literal[
+    priority_order: Literal["ascending_coverage_then_descending_average_service_days"] = (
         "ascending_coverage_then_descending_average_service_days"
-    ] = "ascending_coverage_then_descending_average_service_days"
-    best_order: Literal[
+    )
+    best_order: Literal["descending_coverage_then_ascending_average_service_days"] = (
         "descending_coverage_then_ascending_average_service_days"
-    ] = "descending_coverage_then_ascending_average_service_days"
+    )
     returned_limit: Literal[6] = 6
 
 
@@ -208,9 +198,7 @@ class NetworkLink(StrictModel):
 
 
 class IndonesiaServiceBaseline(StrictModel):
-    schema_version: Literal["indonesia_service_baseline.v1"] = (
-        "indonesia_service_baseline.v1"
-    )
+    schema_version: Literal["indonesia_service_baseline.v1"] = "indonesia_service_baseline.v1"
     release: DatasetReleaseBinding
     method: Literal["current_forward_assignment_last_mile_only"] = (
         "current_forward_assignment_last_mile_only"
@@ -327,9 +315,7 @@ class IndonesiaDecisionReportSources(StrictModel):
 
 
 class IndonesiaDecisionReport(StrictModel):
-    schema_version: Literal["indonesia_decision_report.v1"] = (
-        "indonesia_decision_report.v1"
-    )
+    schema_version: Literal["indonesia_decision_report.v1"] = "indonesia_decision_report.v1"
     release: DatasetReleaseBinding
     sources: IndonesiaDecisionReportSources
     markdown: str = Field(min_length=1, max_length=64_000)
@@ -395,9 +381,7 @@ class IndonesiaReportArtifact(StrictModel):
 
 class IndonesiaReportArtifactEmbed(StrictModel):
     syntax: Literal["codex-inline-vis.artifact.v1"]
-    code: str = Field(
-        pattern=r'^::codex-inline-vis\{artifact="report-[0-9a-f]{24}"\}$'
-    )
+    code: str = Field(pattern=r'^::codex-inline-vis\{artifact="report-[0-9a-f]{24}"\}$')
 
 
 class IndonesiaDecisionReportToolResult(StrictModel):

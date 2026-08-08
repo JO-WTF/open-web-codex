@@ -1342,9 +1342,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "open-web-codex-capability-catalog"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hex",
+ "open-web-codex-platform-contracts",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
 name = "open-web-codex-codex-contracts"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "open-web-codex-data-intake-service"
+version = "0.1.0"
+dependencies = [
+ "open-web-codex-platform-contracts",
  "serde",
  "serde_json",
  "thiserror",
@@ -1484,7 +1508,9 @@ dependencies = [
  "open-web-codex-adapter",
  "open-web-codex-approval-service",
  "open-web-codex-auth",
+ "open-web-codex-capability-catalog",
  "open-web-codex-codex-contracts",
+ "open-web-codex-data-intake-service",
  "open-web-codex-git-runtime",
  "open-web-codex-platform-contracts",
  "open-web-codex-platform-store",
@@ -1494,6 +1520,7 @@ dependencies = [
  "open-web-codex-run-orchestrator",
  "open-web-codex-secret-store",
  "open-web-codex-supervisor-catalog",
+ "open-web-codex-work-state-service",
  "rand 0.8.7",
  "reqwest",
  "serde",
@@ -1525,6 +1552,19 @@ dependencies = [
  "sha2 0.10.9",
  "thiserror",
  "toml_edit",
+ "uuid",
+]
+
+[[package]]
+name = "open-web-codex-work-state-service"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "open-web-codex-platform-contracts",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror",
  "uuid",
 ]
 

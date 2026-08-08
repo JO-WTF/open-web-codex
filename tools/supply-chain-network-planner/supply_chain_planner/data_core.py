@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+
 from .models import (
     DeliveryBaseline,
     DemandDistributionRow,
@@ -41,9 +42,7 @@ def build_planning_dataset(source: PlanningSource) -> PlanningDataset:
     summary, distribution, baseline, quality = _analyze(source)
     city_by_id = {item.city_id: item for item in source.cities}
     current_coverage = {
-        item.city_id: item.facility_id
-        for item in source.warehouse_city_coverage
-        if item.is_current
+        item.city_id: item.facility_id for item in source.warehouse_city_coverage if item.is_current
     }
     demand_points = [
         DemandPoint(
@@ -162,10 +161,9 @@ def _analyze(
     missing_assignments = sorted(
         item.city_id
         for item in source.city_demands
-        if item.city_id not in {
-            coverage.city_id
-            for coverage in source.warehouse_city_coverage
-            if coverage.is_current
+        if item.city_id
+        not in {
+            coverage.city_id for coverage in source.warehouse_city_coverage if coverage.is_current
         }
     )
     if missing_assignments:

@@ -8,6 +8,16 @@ import type {
   AgentDefinitionValidationResult,
   AgentRunSelection,
   CapabilityPackageSummary,
+  CapabilityDraftDetail,
+  CapabilityDraftSummary,
+  CapabilityInstallationSummary,
+  CapabilityReleaseSummary,
+  CapabilityReadinessSummary,
+  CapabilityValidationResult,
+  CatalogDraftContent,
+  CatalogResourceKind,
+  CollaborationStatusSummary,
+  ProviderCallMetric,
   PythonCapabilityPublishRequest,
   PythonCapabilityPublishResponse,
   PythonCapabilityToolTestRequest,
@@ -29,6 +39,7 @@ import type {
   RunEvent,
   RuntimeAgentActivity,
   RuntimeAgentExecution,
+  PendingUserInputSummary,
   Session,
   Task,
   Workspace,
@@ -603,6 +614,84 @@ export class PlatformClient {
     return this.request<CapabilityPackageSummary[]>("/api/capability-packages");
   }
 
+  listCapabilityDrafts() {
+    return this.request<CapabilityDraftSummary[]>("/api/catalog/drafts");
+  }
+
+  getCapabilityDraft(id: string) {
+    return this.request<CapabilityDraftDetail>(`/api/catalog/drafts/${encodeURIComponent(id)}`);
+  }
+
+  createCapabilityDraft(input: {
+    kind: CatalogResourceKind;
+    resourceId: string;
+    displayName: string;
+    description: string;
+    content: CatalogDraftContent;
+  }) {
+    return this.request<CapabilityDraftDetail>("/api/catalog/drafts", {
+      method: "POST",
+      body: JSON.stringify({
+        kind: input.kind,
+        resourceId: input.resourceId,
+        displayName: input.displayName,
+        description: input.description,
+        content: input.content,
+      }),
+    });
+  }
+
+  saveCapabilityDraft(id: string, input: {
+    expectedRevision: number;
+    displayName: string;
+    description: string;
+    content: CatalogDraftContent;
+  }) {
+    return this.request<CapabilityDraftDetail>(
+      `/api/catalog/drafts/${encodeURIComponent(id)}/save`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          expectedRevision: input.expectedRevision,
+          displayName: input.displayName,
+          description: input.description,
+          content: input.content,
+        }),
+      },
+    );
+  }
+
+  validateCapabilityDraft(id: string) {
+    return this.request<CapabilityValidationResult>(
+      `/api/catalog/drafts/${encodeURIComponent(id)}/validate`,
+      { method: "POST" },
+    );
+  }
+
+  publishCapabilityDraft(id: string, expectedRevision: number) {
+    return this.request<CapabilityReleaseSummary>(
+      `/api/catalog/drafts/${encodeURIComponent(id)}/publish`,
+      { method: "POST", body: JSON.stringify({ expectedRevision }) },
+    );
+  }
+
+  listCapabilityReleases() {
+    return this.request<CapabilityReleaseSummary[]>("/api/catalog/releases");
+  }
+
+  installCapabilityRelease(releaseId: string, workspaceId: string) {
+    return this.request<CapabilityInstallationSummary>(
+      `/api/catalog/releases/${encodeURIComponent(releaseId)}/install`,
+      { method: "POST", body: JSON.stringify({ workspaceId }) },
+    );
+  }
+
+  getCapabilityReadiness(releaseId: string, workspaceId: string) {
+    return this.request<CapabilityReadinessSummary>(
+      `/api/catalog/releases/${encodeURIComponent(releaseId)}/workspaces/${encodeURIComponent(workspaceId)}/readiness`,
+    );
+  }
+
   validatePythonCapability(
     workspaceId: string,
     request: PythonCapabilityPublishRequest,
@@ -682,10 +771,17 @@ export class PlatformClient {
     });
   }
 
-  saveSupervisorDraft(definitionId: string, draft: SupervisorDraftRequest) {
+  saveSupervisorDraft(
+    definitionId: string,
+    draft: SupervisorDraftRequest,
+    expectedRevision: number,
+  ) {
     return this.request<SupervisorDefinitionSummary>(
       `/api/supervisor-definitions/${encodeURIComponent(definitionId)}/draft`,
-      { method: "PUT", body: JSON.stringify(draft) },
+      {
+        method: "PUT",
+        body: JSON.stringify({ draft, expected_revision: expectedRevision }),
+      },
     );
   }
 
@@ -696,10 +792,13 @@ export class PlatformClient {
     );
   }
 
-  publishSupervisorDraft(definitionId: string) {
+  publishSupervisorDraft(definitionId: string, expectedRevision: number) {
     return this.request<SupervisorReleaseSummary>(
       `/api/supervisor-definitions/${encodeURIComponent(definitionId)}/publish`,
-      { method: "POST" },
+      {
+        method: "POST",
+        body: JSON.stringify({ expected_revision: expectedRevision }),
+      },
     );
   }
 
@@ -724,6 +823,24 @@ export class PlatformClient {
   listRunAgentExecutions(runId: string) {
     return this.request<RuntimeAgentExecution[]>(
       `/api/runs/${encodeURIComponent(runId)}/agent-executions`,
+    );
+  }
+
+  getRunCollaborationStatus(runId: string) {
+    return this.request<CollaborationStatusSummary>(
+      `/api/runs/${encodeURIComponent(runId)}/collaboration-status`,
+    );
+  }
+
+  listRunProviderMetrics(runId: string) {
+    return this.request<ProviderCallMetric[]>(
+      `/api/runs/${encodeURIComponent(runId)}/provider-metrics`,
+    );
+  }
+
+  listRunUserInputRequests(runId: string) {
+    return this.request<PendingUserInputSummary[]>(
+      `/api/runs/${encodeURIComponent(runId)}/user-input-requests`,
     );
   }
 

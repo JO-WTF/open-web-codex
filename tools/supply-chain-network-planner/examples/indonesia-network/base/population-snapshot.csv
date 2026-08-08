@@ -1,0 +1,51 @@
+city_id,city_name,province_name,population
+IDN-CITY-001,Jakarta,Jakarta,10562088
+IDN-CITY-002,Surabaya,East Java,2874314
+IDN-CITY-003,Bekasi,West Java,2543676
+IDN-CITY-004,Bandung,West Java,2510103
+IDN-CITY-005,Medan,North Sumatra,2435252
+IDN-CITY-006,Depok,West Java,2056335
+IDN-CITY-007,Tangerang,Banten,1930556
+IDN-CITY-008,Palembang,South Sumatra,1668848
+IDN-CITY-009,Semarang,Central Java,1653524
+IDN-CITY-010,Makassar,South Sulawesi,1423877
+IDN-CITY-011,Tangerang Selatan,Banten,1354350
+IDN-CITY-012,Batam,Riau Islands,1196396
+IDN-CITY-013,Bandar Lampung,Lampung,1166066
+IDN-CITY-014,Bogor,West Java,1043070
+IDN-CITY-015,Pekanbaru,Riau,983356
+IDN-CITY-016,Padang,West Sumatra,909040
+IDN-CITY-017,Malang,East Java,843810
+IDN-CITY-018,Samarinda,East Kalimantan,827994
+IDN-CITY-019,Denpasar,Bali,725314
+IDN-CITY-020,Tasikmalaya,West Java,733467
+IDN-CITY-021,Balikpapan,East Kalimantan,704110
+IDN-CITY-022,Serang,Banten,692101
+IDN-CITY-023,Pontianak,West Kalimantan,658685
+IDN-CITY-024,Banjarmasin,South Kalimantan,657663
+IDN-CITY-025,Jambi,Jambi,604736
+IDN-CITY-026,Manado,North Sulawesi,451916
+IDN-CITY-027,Kupang,East Nusa Tenggara,442758
+IDN-CITY-028,Mataram,West Nusa Tenggara,441561
+IDN-CITY-029,Cilegon,Banten,434896
+IDN-CITY-030,Yogyakarta,Special Region of Yogyakarta,414704
+IDN-CITY-031,Jayapura,Papua,398478
+IDN-CITY-032,Bengkulu,Bengkulu,373591
+IDN-CITY-033,Palu,Central Sulawesi,373218
+IDN-CITY-034,Sukabumi,West Java,353838
+IDN-CITY-035,Ambon,Maluku,347484
+IDN-CITY-036,Kendari,Southeast Sulawesi,345107
+IDN-CITY-037,Cirebon,West Java,341235
+IDN-CITY-038,Dumai,Riau,323452
+IDN-CITY-039,Binjai,North Sumatra,291842
+IDN-CITY-040,Kediri,East Java,289418
+IDN-CITY-041,Sorong,Southwest Papua,284410
+IDN-CITY-042,Tegal,Central Java,273825
+IDN-CITY-043,Pematang Siantar,North Sumatra,268254
+IDN-CITY-044,Banda Aceh,Aceh,252899
+IDN-CITY-045,Tarakan,North Kalimantan,242786
+IDN-CITY-046,Probolinggo,East Java,239125
+IDN-CITY-047,Singkawang,West Kalimantan,235064
+IDN-CITY-048,Batu,East Java,213046
+IDN-CITY-049,Pasuruan,East Java,208006
+IDN-CITY-050,Lhokseumawe,Aceh,188713

@@ -37,6 +37,7 @@ pub(crate) struct ResolvedSupervisorPolicy {
     pub required_runtime_roles: Vec<PlatformRuntimeRole>,
     pub role_spawn_limits: BTreeMap<String, u32>,
     pub required_mcp_servers: Vec<RequiredMcpServer>,
+    pub coordination_mcp_servers: Vec<RequiredMcpServer>,
     pub required_workspace_id: Option<Uuid>,
     pub workspace_capability_packages: Vec<WorkspaceCapabilityPackageRequirement>,
     pub dataset_releases: Vec<AgentDatasetReleaseBinding>,
@@ -83,7 +84,7 @@ pub(crate) async fn list_published(
             .map_err(|_| SupervisorPolicyError::Invalid("Supervisor Draft is invalid"))?;
         published.push(SupervisorPolicySummary {
             policy_id: draft.policy_id,
-            version: draft.version,
+            version: "draft".to_string(),
             display_name: draft.display_name,
             description: draft.description,
             source: SupervisorPolicyOrigin::Draft,
@@ -206,6 +207,7 @@ fn from_package(
             })
             .collect(),
         data_requirement_contracts: package.data_requirement_contracts.clone(),
+        coordination_capabilities: package.coordination_capabilities.clone(),
         max_active_child_agents: package.max_active_child_agents,
         content_sha256: package.content_sha256.clone(),
         execution_semantics_sha256: package.execution_semantics_sha256(),
@@ -226,6 +228,7 @@ fn from_package(
         required_runtime_roles: package.required_runtime_roles,
         role_spawn_limits: package.role_spawn_limits,
         required_mcp_servers: package.required_mcp_servers,
+        coordination_mcp_servers: package.coordination_mcp_servers,
         required_workspace_id: package.required_workspace_id,
         workspace_capability_packages: package.workspace_capability_packages,
         dataset_releases: package.dataset_releases,

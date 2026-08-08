@@ -24,20 +24,41 @@ from mcp.types import (
     TextResourceContents,
 )
 
+from .case_models import (
+    ArtifactRef,
+    CurrentAssignment,
+    DataQualityIssue,
+    DataQualityReport,
+    DemandCity,
+    NormalizedNetworkInput,
+    Warehouse,
+)
 from .data_core import build_planning_dataset as aggregate_planning_dataset
+from .geography import (
+    build_administrative_candidates as _build_administrative_candidates,
+)
+from .geography import (
+    load_administrative_catalog as _load_administrative_catalog,
+)
+from .geography import (
+    resolve_place_names as _resolve_place_names,
+)
+from .geography import (
+    validate_points_within_boundaries as _validate_points_within_boundaries,
+)
 from .models import (
     City,
-    DataAgentRef,
-    DataAgentResourceToolResult,
     CityDemand,
     CityLane,
+    DataAgentRef,
+    DataAgentResourceToolResult,
     Facility,
     PlanningDataset,
     PlanningSource,
     Point,
     ServicePolicy,
-    WarehouseCityCoverage,
     ValidationResult,
+    WarehouseCityCoverage,
 )
 from .resource_store import PublishedResource, ResourceStore
 from .workspace_intake import (
@@ -45,6 +66,7 @@ from .workspace_intake import (
     flatten_record,
     inspect,
     propose_mapping,
+    read_json_document,
     read_rows,
     trusted_workspace_root,
     workspace_source_metadata,
@@ -65,12 +87,11 @@ mcp = FastMCP(
         "Workspace before proposing mappings. Inspection returns exact record counts plus a "
         "head preview; preview rows are examples only and never the full source. Never use "
         "the preview row count as the source row count. The normalization tool rereads the "
-        "complete source files and publishes "
-        "planning-dataset.v2 as an immutable "
-        "MCP Resource with source range, units, row counts, promotion share, delivery baseline, "
-        "and data-quality limitations. Copy data_ref unchanged. Validate the Resource before "
-        "handing it to the Network Planning Agent. Do not paste unbounded source rows into "
-        "messages and do not choose a warehouse-network solution."
+        "complete source files and publishes only the entities required by the current "
+        "question as normalized_network_input.v1 plus data_quality_report.v1. Copy every "
+        "returned Resource reference unchanged. Validate the Resource before handing it to "
+        "the Network Planning Agent. Do not paste unbounded source rows into messages and do "
+        "not choose a warehouse-network solution."
     ),
     json_response=True,
 )
@@ -101,20 +122,32 @@ def _store() -> ResourceStore:
 
 @mcp.resource(
     "supply-chain-data://resources/{resource_id}",
-    name="supply_chain_planning_dataset",
-    title="Supply-chain planning dataset",
+    name="supply_chain_data_resource",
+    title="Supply-chain data Resource",
     mime_type="application/json",
 )
-def read_planning_dataset_resource(resource_id: str) -> str:
-    """Read a planning dataset previously published by the read-only data MCP."""
+def read_data_resource(resource_id: str) -> str:
+    """Read one immutable data Resource by its opaque Resource name."""
     return _store().read(resource_id)
 
 
 def _data_ref(published: PublishedResource) -> DataAgentRef:
+    content = _store().read(published.resource_id).encode("utf-8")
     return DataAgentRef(
         server=MCP_SERVER_NAME,
         uri=published.uri,
         resource_schema=published.schema,
+        content_sha256=hashlib.sha256(content).hexdigest(),
+    )
+
+
+def _artifact_ref(published: PublishedResource) -> ArtifactRef:
+    content = _store().read(published.resource_id).encode("utf-8")
+    return ArtifactRef(
+        server_name=MCP_SERVER_NAME,
+        resource_schema=published.schema,
+        resource_name=published.resource_id,
+        content_sha256=hashlib.sha256(content).hexdigest(),
     )
 
 
@@ -134,7 +167,7 @@ def _resource_link(
 
 
 _INTAKE_SCHEMAS = {
-    "data_requirement_profile.v1",
+    "data_requirement_profile.v2",
     "source_profile.v1",
     "mapping_proposal.v1",
     "input_gap.v1",
@@ -305,11 +338,30 @@ def inspect_workspace_sources(
     if not source_refs or len(source_refs) > MAX_SOURCE_CATALOG_ENTRIES:
         raise ValueError("source_refs must contain 1-100 opaque source references")
     root = _workspace(ctx)
-    return {
+    profile = {
         "schema": "source_profile.v1",
         "sources": [inspect(root, source_ref) for source_ref in source_refs],
         **workspace_source_metadata(root),
     }
+    return _bound_agent_previews(profile)
+
+
+def _bound_agent_previews(profile: dict[str, Any]) -> dict[str, Any]:
+    """Keep structural evidence while preventing sample rows from entering context."""
+    def trim(value: Any) -> Any:
+        if isinstance(value, dict):
+            result = {key: trim(item) for key, item in value.items()}
+            preview = result.get("preview")
+            if isinstance(preview, dict) and isinstance(preview.get("rows"), list):
+                preview["rows"] = preview["rows"][:3]
+                preview["returned_count"] = len(preview["rows"])
+                preview["limit"] = min(int(preview.get("limit", 3)), 3)
+            return result
+        if isinstance(value, list):
+            return [trim(item) for item in value]
+        return value
+
+    return trim(profile)
 
 
 @mcp.tool(structured_output=True)
@@ -322,7 +374,11 @@ def publish_source_profile(
         "source_profile.v1",
         inspect_workspace_sources(source_refs, ctx),
     )
-    summary = f"Profiled {len(profile['sources'])} authorized Workspace sources."
+    summary = (
+        f"Profiled {len(profile['sources'])} authorized Workspace sources. "
+        "This source profile is complete for the supplied evidence; do not call "
+        "publish_source_profile again for the same source references."
+    )
     result = _publish_json("source_profile.v1", profile, summary)
     return result
 
@@ -383,7 +439,680 @@ def _load_source_profile(resource_ref: DataAgentRef) -> dict[str, Any]:
     return profile
 
 
+def _mapping_rows(
+    root: Path,
+    source_refs: list[str],
+    mappings: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Apply an explicit mapping revision while keeping full rows server-side."""
+    by_source: dict[str, list[dict[str, Any]]] = {}
+    for mapping in mappings:
+        source_ref = str(mapping.get("source_ref", "")).strip()
+        if source_ref not in source_refs:
+            continue
+        by_source.setdefault(source_ref, []).append(mapping)
+    entities: dict[str, list[dict[str, Any]]] = {}
+    for source_ref in source_refs:
+        source_mappings = by_source.get(source_ref, [])
+        if not source_mappings:
+            continue
+        for row_index, row in enumerate(read_rows(root, source_ref)):
+            flattened = flatten_record(row)
+            grouped: dict[str, dict[str, Any]] = {}
+            for mapping in source_mappings:
+                source_field = str(mapping.get("source_field", "")).strip()
+                target_entity = str(mapping.get("target_entity", "")).strip()
+                target_field = str(mapping.get("target_field", "")).strip()
+                if not source_field or not target_entity or not target_field:
+                    continue
+                value = flattened.get(source_field)
+                if value in (None, "") and "[]." in source_field:
+                    # read_rows already yields one array item, so an explicit
+                    # JSON array path resolves relative to that item.
+                    value = flattened.get(source_field.rsplit("[].", 1)[-1])
+                if value in (None, ""):
+                    continue
+                grouped.setdefault(target_entity, {"_source_ref": source_ref, "_row": row_index})[
+                    target_field
+                ] = value
+            for entity, values in grouped.items():
+                entities.setdefault(entity, []).append(values)
+    return entities
+
+
+def _canonicalize_mapping_items(
+    mappings: Any,
+    sources: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Convert bounded mapping forms into the internal field form.
+
+    The Data Agent may return either the flat ``mappings`` list emitted by the
+    proposal tool or an entity-oriented ``entities`` object after the user has
+    confirmed the mapping. Both forms carry the same explicit source and target
+    fields; accepting both avoids making the model translate a valid mapping
+    into an unnecessary second wire shape.
+    """
+    by_file: dict[str, str] = {}
+    for source in sources:
+        source_ref = str(source.get("source_ref", "")).strip()
+        for name in (
+            source.get("relative_path"),
+            source.get("path"),
+            source.get("display_name"),
+        ):
+            normalized = str(name or "").strip()
+            if normalized and source_ref:
+                by_file[normalized] = source_ref
+
+    def resolve_source_ref(
+        value: dict[str, Any],
+        inherited_ref: str = "",
+        inherited_file: str = "",
+    ) -> str:
+        explicit_ref = str(
+            value.get("source_ref") or value.get("sourceRef") or inherited_ref
+        ).strip()
+        if explicit_ref:
+            return explicit_ref
+        source_refs = value.get("source_refs") or value.get("sourceRefs")
+        if isinstance(source_refs, list) and len(source_refs) == 1:
+            return str(source_refs[0]).strip()
+        source_file = str(
+            value.get("source_file")
+            or value.get("sourceFile")
+            or value.get("source")
+            or inherited_file
+        ).strip()
+        return by_file.get(source_file, "")
+
+    def resolve_source_file(value: dict[str, Any], inherited_file: str = "") -> str:
+        return str(
+            value.get("source_file")
+            or value.get("sourceFile")
+            or value.get("source")
+            or inherited_file
+        ).strip()
+
+    if isinstance(mappings, dict):
+        expanded_entities: list[dict[str, Any]] = []
+        for entity, value in mappings.items():
+            if not isinstance(value, dict):
+                continue
+            entity_source_file = resolve_source_file(value)
+            entity_source_ref = resolve_source_ref(value)
+            fields = value.get("fields") or value.get("field_mappings") or value.get(
+                "fieldMappings"
+            )
+            if isinstance(fields, list):
+                for field in fields:
+                    if not isinstance(field, dict):
+                        continue
+                    expanded_entities.append(
+                        {
+                            "source_ref": resolve_source_ref(
+                                field, entity_source_ref, entity_source_file
+                            ),
+                            "source_file": resolve_source_file(field, entity_source_file),
+                            "target_entity": field.get("target_entity") or entity,
+                            "target_field": field.get("target_field"),
+                            "source_field": field.get("source_field")
+                            or field.get("sourceField"),
+                        }
+                    )
+            else:
+                expanded_entities.append(
+                    {
+                        "target_entity": entity,
+                        "source_ref": entity_source_ref,
+                        "source_file": entity_source_file,
+                        **value,
+                    }
+                )
+        mappings = expanded_entities
+    if not isinstance(mappings, list):
+        return []
+    expanded: list[dict[str, Any]] = []
+    for mapping in mappings:
+        if not isinstance(mapping, dict):
+            continue
+        source_ref = resolve_source_ref(mapping)
+        if not source_ref:
+            source_ref = by_file.get(resolve_source_file(mapping), "")
+        target_entity = str(mapping.get("target_entity", "")).strip()
+        fields = mapping.get("fields") or mapping.get("field_mappings") or mapping.get(
+            "fieldMappings"
+        )
+        if isinstance(fields, dict):
+            for target_field, source_field in fields.items():
+                if isinstance(source_field, dict):
+                    field_source_ref = resolve_source_ref(source_field, source_ref)
+                    source_field = source_field.get("source_field") or source_field.get(
+                        "sourceField"
+                    )
+                else:
+                    field_source_ref = source_ref
+                if field_source_ref and source_field and target_entity and target_field:
+                    expanded.append(
+                        {
+                            "source_ref": field_source_ref,
+                            "source_field": str(source_field),
+                            "target_entity": target_entity,
+                            "target_field": str(target_field),
+                        }
+                    )
+            continue
+        if isinstance(fields, list):
+            for field in fields:
+                if not isinstance(field, dict):
+                    continue
+                field_source_ref = str(field.get("source_ref") or source_ref).strip()
+                field_target_entity = str(
+                    field.get("target_entity") or target_entity
+                ).strip()
+                if (
+                    field_source_ref
+                    and field.get("source_field")
+                    and field_target_entity
+                    and field.get("target_field")
+                ):
+                    expanded.append(
+                        {
+                            "source_ref": field_source_ref,
+                            "source_field": str(field["source_field"]),
+                            "target_entity": field_target_entity,
+                            "target_field": str(field["target_field"]),
+                        }
+                    )
+            continue
+        source_field = mapping.get("source_field") or mapping.get("sourceField")
+        target_field = mapping.get("target_field") or mapping.get("targetField")
+        if source_ref and source_field and target_entity and target_field:
+            expanded.append(
+                {
+                    "source_ref": source_ref,
+                    "source_field": str(source_field),
+                    "target_entity": target_entity,
+                    "target_field": str(target_field),
+                }
+            )
+    return expanded
+
+
+def _mapped_value(row: dict[str, Any], *names: str) -> Any:
+    for name in names:
+        if row.get(name) not in (None, ""):
+            return row[name]
+    return None
+
+
+def _mapped_float(value: Any, field: str) -> float:
+    if value in (None, ""):
+        raise ValueError(f"missing_required_field:{field}")
+    try:
+        result = float(str(value).replace(",", ""))
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"invalid_numeric_field:{field}") from error
+    if not math.isfinite(result):
+        raise ValueError(f"invalid_numeric_field:{field}")
+    return result
+
+
+def _mapped_int(value: Any, field: str) -> int:
+    result = _mapped_float(value, field)
+    if result < 0 or result != int(result):
+        raise ValueError(f"invalid_integer_field:{field}")
+    return int(result)
+
+
+def _city_rows_by_id(entities: dict[str, list[dict[str, Any]]]) -> dict[str, dict[str, Any]]:
+    cities: dict[str, dict[str, Any]] = {}
+    for row in entities.get("City", []):
+        city_id = _mapped_value(row, "city_id", "demand_city_id")
+        if city_id not in (None, ""):
+            cities[str(city_id)] = row
+    return cities
+
+
+def _compose_demand_rows(
+    entities: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """Join the requirement profile's City and CityDemand entities by city ID."""
+    rows: list[dict[str, Any]] = []
+    for entity_name in (
+        "DemandCity",
+        "demand",
+        "demand_points",
+        "demand_cities",
+        "DemandPoints",
+        "DemandCities",
+    ):
+        rows.extend(entities.get(entity_name, []))
+    cities = _city_rows_by_id(entities)
+    for demand in entities.get("CityDemand", []):
+        city_id = _mapped_value(demand, "city_id", "demand_city_id")
+        city = cities.get(str(city_id), {}) if city_id not in (None, "") else {}
+        merged = {**city, **demand}
+        if city:
+            merged.setdefault("city_name", _mapped_value(city, "city_name", "name"))
+            merged.setdefault(
+                "province_name", _mapped_value(city, "province_name", "region")
+            )
+            merged.setdefault(
+                "province_id",
+                _mapped_value(city, "province_id", "region_id", "province_name", "region"),
+            )
+        rows.append(merged)
+    return rows
+
+
+def _compose_facility_rows(
+    entities: dict[str, list[dict[str, Any]]],
+) -> list[tuple[dict[str, Any], bool]]:
+    """Enrich generic Facility rows with their city attributes and ownership state."""
+    cities = _city_rows_by_id(entities)
+    rows: list[tuple[dict[str, Any], bool]] = []
+    for facility in entities.get("Facility", []):
+        city_id = _mapped_value(facility, "city_id")
+        city = cities.get(str(city_id), {}) if city_id not in (None, "") else {}
+        merged = dict(facility)
+        if city:
+            merged.setdefault("city_name", _mapped_value(city, "city_name", "name"))
+            merged.setdefault("longitude", _mapped_value(city, "longitude", "lon"))
+            merged.setdefault("latitude", _mapped_value(city, "latitude", "lat"))
+        ownership = str(
+            _mapped_value(facility, "existing_or_candidate", "is_existing") or "existing"
+        ).strip().lower()
+        is_existing = ownership not in {"candidate", "false", "0", "no"}
+        rows.append((merged, is_existing))
+    return rows
+
+
 @mcp.tool(structured_output=True)
+def normalize_network_input(
+    requirement_profile_ref: dict[str, Any],
+    source_profile_ref: DataAgentRef,
+    mapping_revision: dict[str, Any],
+    parameter_snapshot: dict[str, Any],
+    ctx: Context,
+) -> Annotated[CallToolResult, DataAgentResourceToolResult]:
+    """Normalize only the entities required by the current network question.
+
+    The complete source files are reread from the authorized Workspace. The model
+    passes references and mapping decisions, never source rows.
+    """
+    if source_profile_ref.resource_schema != "source_profile.v1":
+        raise ValueError("source_profile_ref_must_be_source_profile_v1")
+    if mapping_revision.get("confirmed") is not True:
+        raise ValueError("mapping_revision_requires_confirmation")
+    profile = _load_source_profile(source_profile_ref)
+    mappings = _canonicalize_mapping_items(
+        mapping_revision.get("mappings")
+        or mapping_revision.get("candidates")
+        or mapping_revision.get("entities"),
+        profile.get("sources", []),
+    )
+    if not mappings:
+        raise ValueError("mapping_revision_mappings_missing")
+    source_refs = [str(source.get("source_ref")) for source in profile.get("sources", [])]
+    entities = _mapping_rows(_workspace(ctx), source_refs, mappings)
+    country = (
+        str(
+            parameter_snapshot.get("country_code")
+            or parameter_snapshot.get("country")
+            or requirement_profile_ref.get("country_code")
+            or requirement_profile_ref.get("country")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+    # The platform accepts either ISO 3166 alpha-2 or alpha-3 identifiers. The
+    # tutorial and geography catalog use IDN, while user data commonly uses ID;
+    # rejecting one form here makes the agent contract internally inconsistent.
+    if not re.fullmatch(r"[A-Z]{2,3}", country):
+        raise ValueError("country_code_required_iso_alpha2_or_alpha3")
+
+    issues: list[DataQualityIssue] = []
+    demands: list[DemandCity] = []
+    warehouses: list[Warehouse] = []
+    candidates: list[Warehouse] = []
+    assignments: list[CurrentAssignment] = []
+    quotes: list[dict[str, Any]] = []
+
+    for row in _compose_demand_rows(entities):
+        try:
+            city_id = _mapped_value(row, "city_id", "demand_city_id")
+            city_name = _mapped_value(row, "city_name", "name")
+            province_name = _mapped_value(row, "province_name", "region")
+            province_id = _mapped_value(
+                row, "province_id", "region_id", "province_name", "region"
+            )
+            if any(
+                value in (None, "")
+                for value in (city_id, city_name, province_id, province_name)
+            ):
+                raise ValueError("missing_required_field:demand_city_identity")
+            demands.append(
+                DemandCity(
+                    city_id=str(city_id),
+                    city_name=str(city_name),
+                    province_id=str(province_id),
+                    province_name=str(province_name),
+                    demand_quantity=_mapped_int(
+                        _mapped_value(row, "demand_quantity", "quantity", "demand_units"),
+                        "demand_quantity",
+                    ),
+                    longitude=_mapped_float(_mapped_value(row, "longitude", "lon"), "longitude"),
+                    latitude=_mapped_float(_mapped_value(row, "latitude", "lat"), "latitude"),
+                )
+            )
+        except (ValueError, TypeError) as error:
+            issues.append(
+                DataQualityIssue(
+                    code="demand_city_incomplete",
+                    severity="error",
+                    business_message="需求城市需要城市、行政区、需求量和经纬度。",
+                    field_name=str(error),
+                )
+            )
+
+    warehouse_sources = (
+        ("Warehouse", warehouses, True, True),
+        ("ExistingWarehouse", warehouses, True, True),
+        ("warehouses", warehouses, True, True),
+        ("existing_warehouses", warehouses, True, True),
+        ("CandidateWarehouse", candidates, False, False),
+        ("candidate_warehouses", candidates, False, False),
+    )
+    for entity_name, target, is_existing, is_fixed in warehouse_sources:
+        for row in entities.get(entity_name, []):
+            try:
+                warehouse_id = _mapped_value(row, "warehouse_id", "id")
+                warehouse_name = _mapped_value(row, "warehouse_name", "name")
+                city_id = _mapped_value(row, "city_id")
+                city_name = _mapped_value(row, "city_name", "name")
+                if any(
+                    value in (None, "")
+                    for value in (warehouse_id, warehouse_name, city_id, city_name)
+                ):
+                    raise ValueError("missing_required_field:warehouse_identity")
+                warehouse_type = str(
+                    _mapped_value(row, "warehouse_type", "type") or "center"
+                ).lower()
+                warehouse = Warehouse(
+                    warehouse_id=str(warehouse_id),
+                    warehouse_name=str(warehouse_name),
+                    warehouse_type="cross_docking"
+                    if warehouse_type in {"cross_docking", "cross docking", "前置仓"}
+                    else "center",
+                    city_id=str(city_id),
+                    city_name=str(city_name),
+                    longitude=_mapped_float(_mapped_value(row, "longitude", "lon"), "longitude"),
+                    latitude=_mapped_float(_mapped_value(row, "latitude", "lat"), "latitude"),
+                    upstream_center_id=(
+                        str(_mapped_value(row, "upstream_center_id", "center_id"))
+                        if _mapped_value(row, "upstream_center_id", "center_id") not in (None, "")
+                        else None
+                    ),
+                    is_existing=is_existing,
+                    is_fixed=is_fixed,
+                )
+                target.append(warehouse)
+            except (ValueError, TypeError):
+                issues.append(
+                    DataQualityIssue(
+                        code="warehouse_incomplete",
+                        severity="error",
+                        business_message="已有仓库需要仓库标识、类型、城市和经纬度。",
+                    )
+                )
+
+    for row, is_existing in _compose_facility_rows(entities):
+        target = warehouses if is_existing else candidates
+        try:
+            warehouse_id = _mapped_value(row, "warehouse_id", "facility_id", "id")
+            warehouse_name = _mapped_value(row, "warehouse_name", "name")
+            city_id = _mapped_value(row, "city_id")
+            city_name = _mapped_value(row, "city_name")
+            if any(
+                value in (None, "")
+                for value in (warehouse_id, warehouse_name, city_id, city_name)
+            ):
+                raise ValueError("missing_required_field:warehouse_identity")
+            warehouse_type = str(
+                _mapped_value(row, "warehouse_type", "type") or "center"
+            ).lower()
+            target.append(
+                Warehouse(
+                    warehouse_id=str(warehouse_id),
+                    warehouse_name=str(warehouse_name),
+                    warehouse_type="cross_docking"
+                    if warehouse_type in {"cross_docking", "cross docking", "前置仓"}
+                    else "center",
+                    city_id=str(city_id),
+                    city_name=str(city_name),
+                    longitude=_mapped_float(
+                        _mapped_value(row, "longitude", "lon"), "longitude"
+                    ),
+                    latitude=_mapped_float(
+                        _mapped_value(row, "latitude", "lat"), "latitude"
+                    ),
+                    upstream_center_id=(
+                        str(_mapped_value(row, "upstream_center_id", "center_id"))
+                        if _mapped_value(row, "upstream_center_id", "center_id")
+                        not in (None, "")
+                        else None
+                    ),
+                    is_existing=is_existing,
+                    is_fixed=is_existing,
+                )
+            )
+        except (ValueError, TypeError):
+            issues.append(
+                DataQualityIssue(
+                    code="warehouse_incomplete",
+                    severity="error",
+                    business_message="已有仓库需要仓库标识、类型、城市和经纬度。",
+                )
+            )
+
+    for row in entities.get("CurrentAssignment", []) + entities.get("Coverage", []):
+        demand_id = _mapped_value(row, "demand_city_id", "city_id")
+        warehouse_id = _mapped_value(row, "serving_warehouse_id", "warehouse_id", "facility_id")
+        if demand_id and warehouse_id:
+            assignments.append(
+                CurrentAssignment(
+                    demand_city_id=str(demand_id),
+                    serving_warehouse_id=str(warehouse_id),
+                    upstream_center_id=(
+                        str(_mapped_value(row, "upstream_center_id", "center_id"))
+                        if _mapped_value(row, "upstream_center_id", "center_id") not in (None, "")
+                        else None
+                    ),
+                )
+            )
+
+    for row in (
+        entities.get("Quote", []) + entities.get("RouteQuote", []) + entities.get("Lane", [])
+    ):
+        origin = _mapped_value(row, "origin_id", "origin_city_id", "ori_city_id")
+        destination = _mapped_value(row, "destination_id", "destination_city_id", "dest_city_id")
+        price = _mapped_value(row, "price_per_vehicle", "price", "cost")
+        if origin and destination and price not in (None, ""):
+            quotes.append(
+                {
+                    "origin_id": str(origin),
+                    "destination_id": str(destination),
+                    "layer": str(_mapped_value(row, "layer", "network_layer") or "last_mile"),
+                    "price_per_vehicle": _mapped_float(price, "price_per_vehicle"),
+                    "currency": str(_mapped_value(row, "currency") or "IDR").upper(),
+                    "vehicle_capacity": _mapped_int(
+                        _mapped_value(row, "vehicle_capacity") or 1, "vehicle_capacity"
+                    ),
+                }
+            )
+
+    if not demands:
+        issues.append(
+            DataQualityIssue(
+                code="demand_city_missing",
+                severity="error",
+                business_message="没有找到可用于规划的需求城市数据。",
+            )
+        )
+    if not warehouses:
+        issues.append(
+            DataQualityIssue(
+                code="existing_warehouse_missing",
+                severity="error",
+                business_message="没有找到已有仓库数据。",
+            )
+        )
+    quality = DataQualityReport(
+        state="ready"
+        if demands and warehouses and not any(issue.severity == "error" for issue in issues)
+        else "needs_input",
+        issues=issues,
+        ready_entities=[
+            name
+            for name, values in (
+                ("demand", demands),
+                ("existing_warehouses", warehouses),
+                ("candidates", candidates),
+                ("current_assignments", assignments),
+                ("quotes", quotes),
+            )
+            if values
+        ],
+        missing_entities=["demand", "existing_warehouses"] if not demands or not warehouses else [],
+    )
+    if quality.state != "ready":
+        return _publish_json(
+            "data_quality_report.v1",
+            _wrap_intake_payload("data_quality_report.v1", quality.model_dump(mode="json")),
+            "需求城市或已有仓库数据还不完整，暂不能形成网络规划输入。",
+        )
+    input_model = NormalizedNetworkInput(
+        country_code=country,
+        demand=demands,
+        existing_warehouses=warehouses,
+        candidate_warehouses=candidates,
+        current_assignments=assignments,
+        route_quotes=quotes,
+        quality=quality,
+        parameters=parameter_snapshot,
+    )
+    payload = input_model.model_dump(mode="json")
+    payload["quality"] = quality.model_dump(mode="json")
+    payload["source_refs"] = [
+        {
+            "server_name": MCP_SERVER_NAME,
+            "resource_schema": "source_profile.v1",
+            "resource_name": source_profile_ref.uri.rsplit("/", 1)[-1],
+            "content_sha256": hashlib.sha256(
+                _store().read(source_profile_ref.uri.rsplit("/", 1)[-1]).encode("utf-8")
+            ).hexdigest(),
+        }
+    ]
+    wrapped = _wrap_intake_payload("normalized_network_input.v1", payload)
+    result = _publish_json(
+        "normalized_network_input.v1",
+        wrapped,
+        "已完成需求城市和已有仓库的标准化；可选覆盖、候选仓和报价按当前问题继续补充。",
+    )
+    return result
+
+
+@mcp.tool(structured_output=True)
+def validate_normalized_network_input(
+    normalized_input_ref: DataAgentRef,
+    requested_analysis: str,
+) -> dict[str, Any]:
+    """Validate only the data needed by the requested analysis."""
+    if normalized_input_ref.resource_schema != "normalized_network_input.v1":
+        raise ValueError("normalized_input_ref_must_be_normalized_network_input_v1")
+    payload = _store().load_uri(normalized_input_ref.uri)
+    quality = payload.get("quality") or {}
+    errors = [issue for issue in quality.get("issues", []) if issue.get("severity") == "error"]
+    if requested_analysis in {"current_coverage", "current_cost"} and not payload.get(
+        "current_assignments"
+    ):
+        return {
+            "schema": "data_quality_report.v1",
+            "state": "needs_input",
+            "issues": [
+                {
+                    "code": "current_assignment_missing",
+                    "severity": "warning",
+                    "business_message": "没有提供当前覆盖关系，将改为计算已有仓范围内的优化基线。",
+                }
+            ],
+        }
+    return {
+        "schema": "data_quality_report.v1",
+        "state": "failed" if errors else "ready",
+        "issues": errors,
+        "requested_analysis": requested_analysis,
+    }
+
+
+@mcp.tool(structured_output=True)
+def load_administrative_catalog(
+    country_code: str,
+    admin_level: str,
+    source_ref: str,
+    ctx: Context,
+) -> Annotated[CallToolResult, DataAgentResourceToolResult]:
+    """Load a country administrative catalog from an authorized JSON source."""
+    payload = read_json_document(_workspace(ctx), source_ref)
+    catalog = _load_administrative_catalog(country_code, admin_level, payload)
+    return _publish_json(
+        "administrative_catalog.v1",
+        catalog,
+        f"Loaded the {country_code.upper()} {admin_level} administrative catalog.",
+    )
+
+
+@mcp.tool(structured_output=True)
+def resolve_place_names(
+    rows_ref: DataAgentRef,
+    admin_catalog_ref: DataAgentRef,
+) -> Annotated[CallToolResult, DataAgentResourceToolResult]:
+    """Resolve city identifiers and names without guessing ambiguous matches."""
+    rows_payload = _store().load_uri(rows_ref.uri)
+    catalog_payload = _store().load_uri(admin_catalog_ref.uri)
+    rows = rows_payload.get("rows") or rows_payload.get("records") or []
+    result = _resolve_place_names(rows, catalog_payload)
+    return _publish_json(
+        "place_resolution.v1", result, "Resolved administrative names and reported ambiguities."
+    )
+
+
+@mcp.tool(structured_output=True)
+def build_administrative_candidates(
+    admin_catalog_ref: DataAgentRef,
+    level: str,
+) -> Annotated[CallToolResult, DataAgentResourceToolResult]:
+    """Create province- or city-level candidate warehouse records."""
+    catalog = _store().load_uri(admin_catalog_ref.uri)
+    result = _build_administrative_candidates(catalog, level)
+    return _publish_json(
+        "warehouse_candidates.v1", result, "Built administrative candidate warehouse locations."
+    )
+
+
+@mcp.tool(structured_output=True)
+def validate_points_within_boundaries(
+    points_source_ref: str,
+    boundary_ref: DataAgentRef,
+    ctx: Context,
+) -> dict[str, Any]:
+    """Validate Workspace point records against a published boundary Resource."""
+    points = read_rows(_workspace(ctx), points_source_ref)
+    boundary_payload = _store().load_uri(boundary_ref.uri)
+    return _validate_points_within_boundaries(points, boundary_payload)
+
+
 def normalize_planning_dataset(
     source_refs: list[str],
     requirement_profile: dict[str, Any],
@@ -400,9 +1129,9 @@ def normalize_planning_dataset(
     profile_payload = requirement_profile
     if (
         not isinstance(profile_payload, dict)
-        or profile_payload.get("schemaVersion") != "data_requirement_profile.v1"
+        or profile_payload.get("schemaVersion") != "data_requirement_profile.v2"
     ):
-        raise ValueError("requirement_profile must contain data_requirement_profile.v1")
+        raise ValueError("requirement_profile must contain data_requirement_profile.v2")
     if confirmed_mapping.get("confirmed") is not True:
         raise ValueError("planning dataset normalization requires confirmed mapping")
     if confirmed_parameters.get("confirmed") is not True:
@@ -569,7 +1298,12 @@ def _build_planning_source(
     for row in grouped.get("Coverage", []):
         facility_id = _text(row.get("facility_id"), None)
         city_id = _text(row.get("city_id"), None)
-        if not facility_id or not city_id or facility_id not in facility_ids or city_id not in city_by_id:
+        if (
+            not facility_id
+            or not city_id
+            or facility_id not in facility_ids
+            or city_id not in city_by_id
+        ):
             raise ValueError("planning_dataset_coverage_relation_invalid")
         coverage.append(
             WarehouseCityCoverage(
@@ -696,7 +1430,6 @@ def _date(value: Any) -> date:
     raise ValueError("invalid_date_value")
 
 
-@mcp.tool(structured_output=True)
 def validate_planning_dataset(
     resource_ref: DataAgentRef,
 ) -> ValidationResult:
@@ -748,7 +1481,7 @@ def validate_planning_dataset(
         parameter_confirmation = normalization.get("parameters")
         if (
             not isinstance(profile, dict)
-            or profile.get("schemaVersion") != "data_requirement_profile.v1"
+            or profile.get("schemaVersion") != "data_requirement_profile.v2"
         ):
             errors.append("data requirement profile is missing")
         if (

@@ -11,7 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from .models import DataRef, MCP_SERVER_NAME
+from .models import MCP_SERVER_NAME, DataRef
 
 RESOURCE_ID_PATTERN = re.compile(r"^[a-z0-9_.-]{1,160}$")
 RESOURCE_URI_PREFIX = "supply-chain://resources/"

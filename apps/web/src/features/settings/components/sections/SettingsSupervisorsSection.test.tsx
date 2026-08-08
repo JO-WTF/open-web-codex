@@ -289,6 +289,7 @@ describe("SettingsSupervisorsSection", () => {
               required: true,
             },
           ],
+          coordination_capabilities: [],
           max_active_child_agents: 2,
           content_sha256: "a".repeat(64),
           execution_semantics_sha256: "d".repeat(64),
@@ -348,6 +349,7 @@ describe("SettingsSupervisorsSection", () => {
               required: true,
             },
           ],
+          coordination_capabilities: [],
           max_active_child_agents: 1,
           content_sha256: "a".repeat(64),
           execution_semantics_sha256: "d".repeat(64),
@@ -362,7 +364,7 @@ describe("SettingsSupervisorsSection", () => {
     );
 
     expect((screen.getByLabelText("Policy ID") as HTMLInputElement).value).toBe("");
-    expect((screen.getByLabelText("Version") as HTMLInputElement).value).toBe("1.0.0");
+    expect(screen.queryByLabelText("Version")).toBeNull();
     expect(
       (screen.getByLabelText("Custom Supervisor instructions") as HTMLTextAreaElement).value,
     ).toBe("Deliver the governed decision report.");
@@ -373,7 +375,7 @@ describe("SettingsSupervisorsSection", () => {
     ).toBe(true);
   });
 
-  it("creates a new version from the complete exact user Supervisor release", () => {
+  it("creates a draft from the complete exact user Supervisor release", () => {
     const policy = {
       policy_id: "network-supervisor",
       version: "2.4.6",
@@ -431,6 +433,7 @@ describe("SettingsSupervisorsSection", () => {
               required: true,
             },
           ],
+          coordination_capabilities: [],
           max_active_child_agents: 1,
           content_sha256: "a".repeat(64),
           execution_semantics_sha256: "d".repeat(64),
@@ -445,7 +448,7 @@ describe("SettingsSupervisorsSection", () => {
     expect((screen.getByLabelText("Policy ID") as HTMLInputElement).value).toBe(
       policy.policy_id,
     );
-    expect((screen.getByLabelText("Version") as HTMLInputElement).value).toBe("2.4.7");
+    expect(screen.queryByLabelText("Version")).toBeNull();
     expect(
       (screen.getByLabelText("Custom Supervisor instructions") as HTMLTextAreaElement).value,
     ).toBe("Preserve the exact reviewed orchestration method.");

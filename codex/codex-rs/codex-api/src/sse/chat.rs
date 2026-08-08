@@ -326,8 +326,10 @@ struct ChatToolCallFunctionDelta {
 struct ChatUsage {
     #[serde(alias = "prompt_tokens")]
     input_tokens: i64,
-    #[serde(default)]
+    #[serde(default, alias = "prompt_tokens_details")]
     input_tokens_details: Option<ChatInputTokensDetails>,
+    #[serde(default)]
+    prompt_cache_hit_tokens: Option<i64>,
     #[serde(alias = "completion_tokens")]
     output_tokens: i64,
     #[serde(default)]
@@ -338,12 +340,14 @@ struct ChatUsage {
 
 impl From<ChatUsage> for TokenUsage {
     fn from(value: ChatUsage) -> Self {
+        let cached_input_tokens = value
+            .input_tokens_details
+            .and_then(|details| details.cached_tokens)
+            .or(value.prompt_cache_hit_tokens)
+            .unwrap_or(0);
         Self {
             input_tokens: value.input_tokens,
-            cached_input_tokens: value
-                .input_tokens_details
-                .map(|details| details.cached_tokens)
-                .unwrap_or(0),
+            cached_input_tokens,
             cache_write_input_tokens: 0,
             output_tokens: value.output_tokens,
             reasoning_output_tokens: value
@@ -358,7 +362,7 @@ impl From<ChatUsage> for TokenUsage {
 #[derive(Debug, Deserialize)]
 struct ChatInputTokensDetails {
     #[serde(default)]
-    cached_tokens: i64,
+    cached_tokens: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -481,6 +485,67 @@ mod tests {
                 total_tokens: 5,
             })
         );
+    }
+
+    #[test]
+    fn chat_usage_reads_standard_cached_token_details() {
+        let usage: ChatUsage = serde_json::from_value(serde_json::json!({
+            "prompt_tokens": 100,
+            "prompt_tokens_details": { "cached_tokens": 80 },
+            "completion_tokens": 20,
+            "total_tokens": 120
+        }))
+        .expect("standard chat usage should deserialize");
+
+        assert_eq!(
+            TokenUsage::from(usage),
+            TokenUsage {
+                input_tokens: 100,
+                cached_input_tokens: 80,
+                cache_write_input_tokens: 0,
+                output_tokens: 20,
+                reasoning_output_tokens: 0,
+                total_tokens: 120,
+            }
+        );
+    }
+
+    #[test]
+    fn chat_usage_reads_deepseek_top_level_cache_hits() {
+        let usage: ChatUsage = serde_json::from_value(serde_json::json!({
+            "prompt_tokens": 100,
+            "prompt_cache_hit_tokens": 75,
+            "prompt_cache_miss_tokens": 25,
+            "completion_tokens": 20,
+            "total_tokens": 120
+        }))
+        .expect("DeepSeek chat usage should deserialize");
+
+        assert_eq!(
+            TokenUsage::from(usage),
+            TokenUsage {
+                input_tokens: 100,
+                cached_input_tokens: 75,
+                cache_write_input_tokens: 0,
+                output_tokens: 20,
+                reasoning_output_tokens: 0,
+                total_tokens: 120,
+            }
+        );
+    }
+
+    #[test]
+    fn chat_usage_prefers_standard_cache_details_when_both_are_present() {
+        let usage: ChatUsage = serde_json::from_value(serde_json::json!({
+            "prompt_tokens": 100,
+            "prompt_tokens_details": { "cached_tokens": 60 },
+            "prompt_cache_hit_tokens": 75,
+            "completion_tokens": 20,
+            "total_tokens": 120
+        }))
+        .expect("combined chat usage should deserialize");
+
+        assert_eq!(TokenUsage::from(usage).cached_input_tokens, 60);
     }
 
     #[tokio::test]

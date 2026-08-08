@@ -7,7 +7,7 @@ import pytest
 from openpyxl import Workbook
 
 from supply_chain_planner.data_server import _build_planning_source
-from supply_chain_planner.workspace_intake import discover, inspect, propose_mapping
+from supply_chain_planner.workspace_intake import discover, inspect, propose_mapping, read_rows
 
 
 def test_workspace_discovery_is_bounded_and_returns_opaque_refs(tmp_path: Path) -> None:
@@ -48,11 +48,7 @@ def test_csv_and_json_profiles_are_structural_samples_with_exact_counts(tmp_path
     json_path = tmp_path / "nested.json"
     json_path.write_text(
         json.dumps(
-            {
-                "orders": [
-                    {"origin": f"city-{index}", "quantity": index} for index in range(25)
-                ]
-            }
+            {"orders": [{"origin": f"city-{index}", "quantity": index} for index in range(25)]}
         ),
         encoding="utf-8",
     )
@@ -76,6 +72,18 @@ def test_csv_and_json_profiles_are_structural_samples_with_exact_counts(tmp_path
     assert json_array["length_exact"] is True
     assert json_array["preview"]["returned_count"] == 3
     assert json_array["preview"]["complete"] is False
+
+
+def test_read_rows_supports_explicit_rows_array(tmp_path: Path) -> None:
+    (tmp_path / "administrative-areas.json").write_text(
+        json.dumps({"rows": [{"city_id": "IDN-CITY-001", "city_name": "Jakarta"}]}),
+        encoding="utf-8",
+    )
+    source = discover(tmp_path)[0]
+
+    assert read_rows(tmp_path, source["source_ref"]) == [
+        {"city_id": "IDN-CITY-001", "city_name": "Jakarta"}
+    ]
 
 
 def test_xlsx_profile_preserves_multiple_sheets_and_bounded_rows(tmp_path: Path) -> None:
@@ -132,6 +140,74 @@ def test_mapping_candidates_do_not_promote_cross_entity_substring_matches(tmp_pa
         for item in proposal["candidates"]
     )
     assert not proposal["conflicts"]
+
+
+def test_mapping_accepts_entity_oriented_requirement_maps(tmp_path: Path) -> None:
+    (tmp_path / "demand-cities.csv").write_text(
+        "city_id,city_name,demand_quantity,longitude,latitude\n"
+        "IDN-CITY-001,Jakarta,10,106.8,-6.2\n",
+        encoding="utf-8",
+    )
+    profiles = [inspect(tmp_path, source["source_ref"]) for source in discover(tmp_path)]
+
+    proposal = propose_mapping(
+        profiles,
+        {
+            "schema": "data_requirement_profile.v2",
+            "demand_points": {
+                "required_fields": ["city_id", "city_name", "demand_quantity", "longitude", "latitude"],
+                "optional_fields": ["province_id"],
+            },
+        },
+    )
+
+    assert {item["target_field"] for item in proposal["candidates"]} >= {
+        "city_id",
+        "city_name",
+        "demand_quantity",
+        "longitude",
+        "latitude",
+    }
+
+
+def test_mapping_accepts_runtime_entity_and_entity_type_names(tmp_path: Path) -> None:
+    (tmp_path / "existing-warehouses.csv").write_text(
+        "warehouse_id,warehouse_name,warehouse_type,city_id,longitude,latitude\n"
+        "WH-JKT,Jakarta,center,IDN-CITY-001,106.8,-6.2\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "demand-cities.csv").write_text(
+        "city_id,city_name,demand_quantity,longitude,latitude\n"
+        "IDN-CITY-001,Jakarta,10,106.8,-6.2\n",
+        encoding="utf-8",
+    )
+    profiles = [inspect(tmp_path, source["source_ref"]) for source in discover(tmp_path)]
+
+    proposal = propose_mapping(
+        profiles,
+        {
+            "schema": "data_requirement_profile.v2",
+            "entities": [
+                {
+                    "entity_type": "facility",
+                    "fields": ["warehouse_id", "warehouse_name", "warehouse_type"],
+                },
+                {
+                    "entity": "demand",
+                    "fields": ["city_id", "city_name", "demand_quantity"],
+                },
+            ],
+        },
+    )
+
+    assert {(item["target_entity"], item["target_field"]) for item in proposal["candidates"]} >= {
+        ("facility", "warehouse_id"),
+        ("facility", "warehouse_name"),
+        ("facility", "warehouse_type"),
+        ("demand", "city_id"),
+        ("demand", "city_name"),
+        ("demand", "demand_quantity"),
+    }
 
 
 def test_confirmed_mapping_builds_strict_planning_source(tmp_path: Path) -> None:

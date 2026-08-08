@@ -31,6 +31,22 @@ const SUPPLY_CHAIN_MCP: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../../../tools/supply-chain-network-planner/.mcp.json"
 ));
+const PLATFORM_COORDINATION_MANIFEST: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../tools/platform-coordination-mcp/.codex-plugin/plugin.json"
+));
+const PLATFORM_COORDINATION_MCP: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../tools/platform-coordination-mcp/.mcp.json"
+));
+const PLATFORM_WORK_STATE_MANIFEST: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../tools/platform-work-state-mcp/.codex-plugin/plugin.json"
+));
+const PLATFORM_WORK_STATE_MCP: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../tools/platform-work-state-mcp/.mcp.json"
+));
 
 struct CapabilityPackageResource {
     manifest: &'static str,
@@ -38,7 +54,7 @@ struct CapabilityPackageResource {
     capability_root_id: &'static str,
 }
 
-const CAPABILITY_PACKAGE_RESOURCES: [CapabilityPackageResource; 3] = [
+const CAPABILITY_PACKAGE_RESOURCES: [CapabilityPackageResource; 5] = [
     CapabilityPackageResource {
         manifest: HELLO_AGENT_MANIFEST,
         mcp: HELLO_AGENT_MCP,
@@ -53,6 +69,16 @@ const CAPABILITY_PACKAGE_RESOURCES: [CapabilityPackageResource; 3] = [
         manifest: SUPPLY_CHAIN_MANIFEST,
         mcp: SUPPLY_CHAIN_MCP,
         capability_root_id: "local-supply-chain-network-planner",
+    },
+    CapabilityPackageResource {
+        manifest: PLATFORM_COORDINATION_MANIFEST,
+        mcp: PLATFORM_COORDINATION_MCP,
+        capability_root_id: "local-platform-coordination-mcp",
+    },
+    CapabilityPackageResource {
+        manifest: PLATFORM_WORK_STATE_MANIFEST,
+        mcp: PLATFORM_WORK_STATE_MCP,
+        capability_root_id: "local-platform-work-state-mcp",
     },
 ];
 
@@ -181,5 +207,19 @@ mod tests {
         assert_eq!(maps.capability_root_id, "local-maps-mcp");
         assert_eq!(maps.mcp_server_names, vec!["map_utils"]);
         assert!(maps.includes_skills);
+    }
+
+    #[test]
+    fn lists_work_state_as_a_domain_only_platform_capability() {
+        let packages = list_published().unwrap();
+        let work_state = packages
+            .iter()
+            .find(|package| package.package_id == "platform-work-state")
+            .unwrap();
+        assert_eq!(
+            work_state.capability_root_id,
+            "local-platform-work-state-mcp"
+        );
+        assert_eq!(work_state.mcp_server_names, vec!["platform_work_state"]);
     }
 }

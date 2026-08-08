@@ -26,6 +26,7 @@ Codex 已经能够理解目标、维护 Thread 上下文、使用工具和 Skill
 第一阶段面向需要在团队环境中使用 Codex 的可信研发团队：
 
 - Developer 使用 Agent 完成编码、分析和交付；
+- Algorithm Engineer 把业务算法封装为 Tool，并组合 Skill、Domain Agent 和 Supervisor；
 - Reviewer 审查执行过程、审批和变更；
 - Project Admin 管理项目、成员、策略和 Workspace；
 - Platform Admin 维护 Profile、Runner、版本与容量，但不默认读取业务内容。
@@ -80,24 +81,28 @@ MCP 完成的能力，不扩散到 Codex 高变化模块中。
 
 这一阶段证明平台可以复用 Codex，而不改变 Codex 的 Thread 和执行语义。
 
-### 第二阶段：Enterprise Supervisor Copilot
+### 第二阶段：单 Profile Copilot 创作平台
 
-在一个真实企业用例中形成最小多 Agent 协作闭环：
+在一个用户和一个持久 Profile 上交付平台化的多 Agent 创作与运行闭环：
 
-- 根 Thread 在版本化 Supervisor Policy 约束下承担最终综合责任；
-- 少量经评审的 Agent Definition 映射为真实可发现的 Runtime Role；
-- Domain Agents 使用受限企业 MCP 产生和交换持久 Artifact；
-- 平台能够观察父子 Thread、审批、失败、继续执行和结果来源。
+- 算法工程师通过 SDK 创建规范化 Tool，并通过受控发布和安装让 Runtime 发现；
+- 用户在 Web 编写中文 Skill，定义方法、输入、Tool、失败处理和交付件；
+- 用户创建 Domain Agent，组合 Skills、Tools、数据权限和交付合同；
+- 用户创建 Supervisor，选择精确 Agent Releases，定义总体责任和动态协作原则；
+- 平台自动处理 Draft revision、Release version、hash、依赖锁、安装和 readiness；
+- 根 Thread 使用平台提供的只读协调能力观察 Agent、用户输入、共享工作状态和交付件；
+- 印尼仓网和第二个非供应链案例共同证明扩展能力不是领域硬编码。
 
-这一阶段的目标不是建设完整 Agent Studio，而是证明多 Agent 协作可以被治理、
-恢复和解释。
+这一阶段建设的是有界、可验证的 Copilot Studio，不是任意代码托管平台，也不是第二套
+Agent Runtime。Runtime 仍拥有 Thread、上下文、spawn、wait、Skills、MCP 和 Tool 执行；
+平台拥有 Catalog、授权、安装事务、工作状态元数据、执行投影和 Artifact。
 
 ### 第三阶段：受治理的多用户 Agent 平台
 
-当多个团队开始复用这些能力后，再完善：
+当单 Profile 创作和运行闭环稳定后，再开放：
 
 - 多 Profile 路由和跨用户隔离；
-- Agent Catalog、版本、发布、弃用和评价；
+- 组织级 Catalog 可见性、发布、弃用、评价和授权；
 - 有界候选查询与 Runtime 可用性验证；
 - 企业 Tool 的不可伪造执行授权上下文；
 - Artifact 的跨 Run 复用、保留和依赖关系。
@@ -120,8 +125,11 @@ MCP 完成的能力，不扩散到 Codex 高变化模块中。
 | Task、Run、租约和恢复 | Platform |
 | Thread、Turn、Context 和 Agent 执行 | Codex Runtime |
 | Skills、Plugins、MCP 和 Tool 执行语义 | Codex Runtime |
-| Agent Definition、Supervisor Policy 和发布治理 | Platform |
+| Tool、Skill、Agent、Supervisor、Copilot 的 Catalog 与发布治理 | Platform |
 | Runtime Role 的发现和应用 | Codex Runtime |
+| Profile Installation 与 Runtime readiness 投影 | Platform + Profile Host |
+| 通用 Work State 元数据 | Platform |
+| 领域 Work State payload 和业务算法 | Domain Tool package |
 | Artifact 身份、授权和保留 | Platform Artifact Store |
 | 企业数据访问决定 | 企业 Tool/MCP 边界 |
 

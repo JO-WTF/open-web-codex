@@ -509,7 +509,7 @@ def read_rows(root: Path, source_ref: str) -> list[dict[str, Any]]:
     if suffix == ".json":
         records: list[dict[str, Any]] = []
         with path.open("rb") as stream:
-            for prefix in ("item", "orders.item", "records.item", "data.item"):
+            for prefix in ("item", "rows.item", "orders.item", "records.item", "data.item"):
                 stream.seek(0)
                 try:
                     for value in ijson.items(stream, prefix):
@@ -548,6 +548,20 @@ def read_rows(root: Path, source_ref: str) -> list[dict[str, Any]]:
     finally:
         workbook.close()
     return records
+
+
+def read_json_document(root: Path, source_ref: str) -> dict[str, Any]:
+    """Read one bounded JSON document from an authorized Workspace source."""
+    path = _resolve_ref(root, source_ref)
+    if path.suffix.lower() != ".json":
+        raise ValueError("source_ref_must_be_json")
+    if path.stat().st_size > 8 * 1024 * 1024:
+        raise ValueError("json_source_exceeds_size_limit")
+    with path.open("r", encoding=detect_encoding(_read_prefix(path, 64 * 1024))) as stream:
+        payload = json.load(stream)
+    if not isinstance(payload, dict):
+        raise ValueError("json_source_must_be_object")
+    return payload
 
 
 def flatten_record(record: dict[str, Any]) -> dict[str, Any]:
@@ -624,19 +638,74 @@ def _validate_json_stream(stream: BinaryIO) -> None:
 def propose_mapping(
     profiles: list[dict[str, Any]], requirement_profile: dict[str, Any]
 ) -> dict[str, Any]:
-    fields = []
-    for entity in requirement_profile.get(
-        "entities", requirement_profile.get("requiredEntities", [])
-    ):
-        entity_name = entity.get("name", entity.get("displayName", ""))
-        for field in entity.get("fields", entity.get("requiredFields", [])):
-            fields.append(
-                (
+    fields: list[tuple[str, str, Any]] = []
+    seen_fields: set[tuple[str, str]] = set()
+
+    def add_field(entity_name: str, field_name: Any, unit: Any = None) -> None:
+        entity = str(entity_name).strip()
+        field = str(field_name).strip()
+        identity = (entity, field)
+        if entity and field and identity not in seen_fields:
+            seen_fields.add(identity)
+            fields.append((entity, field, unit))
+
+    def add_entity(entity_name: str, entity: Any) -> None:
+        if not isinstance(entity, dict):
+            return
+        declared = entity.get("fields")
+        if isinstance(declared, dict):
+            for field_name, spec in declared.items():
+                add_field(
                     entity_name,
-                    field.get("name", field.get("displayName", "")),
-                    field.get("unit"),
+                    field_name,
+                    spec.get("unit") if isinstance(spec, dict) else None,
                 )
-            )
+        elif isinstance(declared, list):
+            for field in declared:
+                if isinstance(field, dict):
+                    add_field(
+                        entity_name,
+                        field.get("name", field.get("displayName", "")),
+                        field.get("unit"),
+                    )
+                else:
+                    add_field(entity_name, field)
+        for key in ("required_fields", "requiredFields", "optional_fields", "optionalFields"):
+            declared = entity.get(key, [])
+            if isinstance(declared, list):
+                for field in declared:
+                    if isinstance(field, dict):
+                        add_field(entity_name, field.get("name", field.get("displayName", "")))
+                    else:
+                        add_field(entity_name, field)
+
+    entities = requirement_profile.get("entities")
+    if entities is None:
+        entities = requirement_profile.get("requiredEntities")
+    if isinstance(entities, list):
+        for entity in entities:
+            if isinstance(entity, dict):
+                add_entity(
+                    entity.get("name")
+                    or entity.get("displayName")
+                    or entity.get("entity")
+                    or entity.get("entity_type")
+                    or "",
+                    entity,
+                )
+    elif isinstance(entities, dict):
+        for entity_name, entity in entities.items():
+            add_entity(entity_name, entity)
+    else:
+        # The current Network Agent contract uses an entity-oriented map at the
+        # top level. Only values that look like field declarations are accepted;
+        # metadata such as country and analysis settings is ignored.
+        for entity_name, entity in requirement_profile.items():
+            if isinstance(entity, dict) and any(
+                key in entity
+                for key in ("fields", "required_fields", "requiredFields", "optional_fields", "optionalFields")
+            ):
+                add_entity(entity_name, entity)
     ranked: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for profile in profiles:
         structure = profile.get("structure", {})
@@ -657,8 +726,11 @@ def propose_mapping(
                 entity_tokens = {
                     "city": ("city", "cities", "城市"),
                     "demandlocation": ("location", "locations", "demand_location", "需求点"),
+                    "demandpoints": ("demand", "order", "orders", "需求", "location", "locations"),
                     "demand": ("demand", "order", "orders", "需求"),
                     "facility": ("facility", "facilities", "warehouse", "仓", "设施"),
+                    "existingwarehouses": ("warehouse", "warehouses", "facility", "facilities", "仓", "设施"),
+                    "warehouses": ("warehouse", "warehouses", "facility", "facilities", "仓", "设施"),
                     "assignment": ("assignment", "assignments", "allocation", "分配"),
                     "rate": ("rate", "rates", "cost", "费率", "成本"),
                     "route": ("route", "routes", "travel", "路线"),
@@ -668,8 +740,11 @@ def propose_mapping(
                     for values in {
                         "city": ("city", "cities", "城市"),
                         "demandlocation": ("location", "locations", "demand_location", "需求点"),
+                        "demandpoints": ("demand", "order", "orders", "需求", "location", "locations"),
                         "demand": ("demand", "order", "orders", "需求"),
                         "facility": ("facility", "facilities", "warehouse", "仓", "设施"),
+                        "existingwarehouses": ("warehouse", "warehouses", "facility", "facilities", "仓", "设施"),
+                        "warehouses": ("warehouse", "warehouses", "facility", "facilities", "仓", "设施"),
                         "assignment": ("assignment", "assignments", "allocation", "分配"),
                         "rate": ("rate", "rates", "cost", "费率", "成本"),
                         "route": ("route", "routes", "travel", "路线"),

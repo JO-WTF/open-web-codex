@@ -9,17 +9,17 @@ python_bin="$venv_dir/bin/python"
 log_dir="${OPEN_WEB_CODEX_LOG_DIR:-$data_dir/logs}"
 log_file="$log_dir/supply-chain-network-planner-launcher.log"
 server_module="supply_chain_planner.server"
+forward_args=()
 
-if [[ "${1:-}" == "--data-server" ]]; then
-  server_module="supply_chain_planner.data_server"
+while (($# > 0)); do
+  case "$1" in
+    --demo-server) server_module="supply_chain_planner.demo_server" ;;
+    --data-server) server_module="supply_chain_planner.data_server" ;;
+    *) forward_args+=("$1") ;;
+  esac
   shift
-elif [[ "${1:-}" == "--demo-server" ]]; then
-  server_module="supply_chain_planner.demo_server"
-  shift
-elif [[ "${1:-}" == "--indonesia-server" ]]; then
-  server_module="supply_chain_planner.indonesia_server"
-  shift
-fi
+done
+set -- "${forward_args[@]}"
 
 mkdir -p "$log_dir"
 
@@ -44,7 +44,7 @@ fi
 
 export PYTHONPATH="$root_dir${PYTHONPATH:+:$PYTHONPATH}"
 
-if ! "$python_bin" -c 'import mcp, pydantic, supply_chain_planner.server, supply_chain_planner.data_server, supply_chain_planner.demo_server, supply_chain_planner.indonesia_server' >/dev/null 2>&1; then
+if ! "$python_bin" -c 'import mcp, pydantic, supply_chain_planner.server' >/dev/null 2>&1; then
   if [[ "${SUPPLY_CHAIN_MCP_AUTO_INSTALL:-0}" != "1" ]]; then
     cat >&2 <<EOF
 supply-chain-network-planner: dependencies are not installed in $venv_dir

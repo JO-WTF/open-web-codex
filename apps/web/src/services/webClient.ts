@@ -10,6 +10,7 @@ import type {
   RuntimeAgentActivity,
   RuntimeAgentExecution,
   RuntimeAgentProjection,
+  PendingUserInputSummary,
   SupervisorPolicyBinding,
   SupervisorPolicySelection,
   SupervisorPolicySummary,
@@ -148,6 +149,16 @@ function runtimeMessage(event: RunEvent): JsonRecord | null {
     const requestParams = isRecord(data.requestParams) ? data.requestParams : null;
     const approvalId = typeof data.approvalId === "string" ? data.approvalId : null;
     if (!requestMethod || !requestParams || !approvalId) return null;
+    if (requestMethod === "item/tool/requestUserInput") {
+      return {
+        method: "platform/userInputRequested",
+        params: {
+          ...base,
+          runId: event.run_id,
+          approvalId,
+        },
+      };
+    }
     const needsGenericApprovalCard = requestMethod === "item/fileChange/requestApproval"
       || requestMethod === "item/permissions/requestApproval"
       || requestMethod === "mcpServer/elicitation/request";
@@ -176,6 +187,23 @@ function runtimeMessage(event: RunEvent): JsonRecord | null {
       method,
       id: approvalId,
       params: { ...base, ...params },
+    };
+  }
+  if (event.event_type === "platform.approval.resolved") {
+    const approvalId = typeof data.approvalId === "string"
+      ? data.approvalId
+      : typeof data.requestId === "string" ? data.requestId : null;
+    if (!approvalId) return null;
+    const requestMethod = typeof data.requestMethod === "string" ? data.requestMethod : null;
+    if (requestMethod !== "item/tool/requestUserInput") {
+      return {
+        method: "serverRequest/resolved",
+        params: { ...base, requestId: approvalId, approvalStatus: data.approvalStatus },
+      };
+    }
+    return {
+      method: "platform/userInputResolved",
+      params: { ...base, runId: event.run_id, approvalId },
     };
   }
   if (event.event_type === "platform.data_intake.changed") {
@@ -338,6 +366,10 @@ export class CodexMonitorWebClient {
 
   async taskIdForThread(threadId: string): Promise<string> {
     return (await this.findThreadContext(threadId)).taskId;
+  }
+
+  async runIdForThread(threadId: string): Promise<string> {
+    return (await this.findThreadContext(threadId)).runId;
   }
 
   private async findRunEventContext(runId: string): Promise<ThreadContext> {
@@ -666,6 +698,23 @@ export class CodexMonitorWebClient {
       this.platform.listTaskArtifacts(context.taskId),
     ]);
     return { taskTitle: task.title, policy, agents, activities, executions, artifacts };
+  }
+
+  async listRunUserInputRequests(runId: string): Promise<PendingUserInputSummary[]> {
+    return this.platform.listRunUserInputRequests(runId);
+  }
+
+  async listThreadUserInputRequests(threadId: string): Promise<PendingUserInputSummary[]> {
+    const context = await this.findThreadContext(threadId);
+    return this.platform.listRunUserInputRequests(context.runId);
+  }
+
+  respondToUserInput(
+    approvalId: string,
+    version: number,
+    answers: Record<string, { answers: string[] }>,
+  ): Promise<void> {
+    return this.platform.respondUserInput(approvalId, answers, version);
   }
 
   async listAgentThreadTurns(

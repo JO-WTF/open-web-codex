@@ -1,566 +1,569 @@
-# Supervisor、Agent、Skill 与 Tool 的分层架构
+# Copilot 开发平台：Supervisor、Domain Agent、Skill 与 Tool 架构
 
-> 文档性质：企业 Agent 能力分层与平台对象关系说明
->
-> 更新日期：2026-07-27
->
-> 适用范围：解释 `Supervisor → Agent ↔ Agent → Skill → Tool/MCP` 与
-> Profile、Workspace、Thread、Agent Registry（实施对象称为 Agent Catalog）的关系
->
-> 事实边界：图中同时包含当前骨架与目标治理能力；每一节会明确区分二者
+| 字段 | 内容 |
+| --- | --- |
+| 状态 | 当前接受的目标架构 |
+| 更新日期 | 2026-08-08 |
+| 当前阶段 | 单用户、单 Profile；所有身份和数据边界按未来多用户作用域设计 |
+| 参考实现 | 印尼仓网规划 Copilot |
+| 实施计划 | [Agent 能力生命周期实施计划](agent-capability-lifecycle-plan.md) |
 
----
+本文定义算法工程师如何以最小工作量创建 Tool、Skill、Domain Agent、Supervisor，
+并把它们发布为可从 Web 运行的 Copilot。本文不把目标能力描述成当前已实现事实；
+当前证据仍以 [能力基线](capability-baseline.md) 为准。
 
-## 结论先行
+## 1. 产品目标
 
-`Supervisor → Agent → Skill → Tool` 看起来像一条调用链，但更准确地说，它是四层
-责任：
+算法工程师完成业务调研后，应能按以下路径交付一个场景：
 
-| 层 | 回答的问题 | 本质 |
-| --- | --- | --- |
-| Supervisor | 为了完成总目标，下一步应该解决什么、由谁负责 | 根 Thread 中的协调角色 |
-| Agent | 某个专业子问题由谁持续分析并返回结论 | 运行在独立 Thread 中的专业角色 |
-| Skill | 这类问题应该遵循什么方法、步骤和输出约定 | Runtime 向模型提供的可发现说明 |
-| Tool / MCP | 哪项确定性动作真正访问数据、计算或改变外部系统 | 受权限约束的执行能力 |
+1. 把稳定、可测试的算法和外部系统访问实现为 Tool；
+2. 用中文 Skill 说明方法、输入条件、工具选择、失败处理和交付标准；
+3. 创建一个或多个 Domain Agent，组合 Skills、Tools、数据权限和交付件；
+4. 创建 Supervisor，定义总体责任、可用 Agent、协作规则和最终交付；
+5. 在 Web 中验证、发布、安装、创建任务并观察真实执行；
+6. 平台自动处理版本、内容摘要、依赖锁定、授权、持久化投影和恢复。
 
-Skill 不会代替 Agent 思考，也不是一个后台服务；MCP 不会决定业务目标，也不是
-Agent。Supervisor 和 Domain Agent 都可以使用 Skill 和 Tool，区别在于它们承担的
-责任不同。
+仓网规划只是验证这条路径的第一个参考场景。新增财务分析、质量检查或营销归因
+Copilot 时，不应重新实现输入请求、Agent 生命周期、协作状态、版本发布、Artifact
+交付和前端执行卡片。
 
-Capability 也很重要，但它不是第五层执行组件。它是一项稳定的能力声明，用来连接
-Agent Definition、Skill、Tool 和治理策略。例如，`network.optimize` 表示“能够完成
-受约束的仓网优化”，具体方法可以由一个或多个 Skill 描述，实际计算可以由不同 Tool
-实现，平台策略则决定当前任务是否允许使用。
+## 2. 设计原则
 
-Agent 之间的横向协作也不意味着默认采用 P2P 网络。Domain Agents 可以交换有限
-消息或引用彼此的 Artifact，最终目标和结论仍由 Root Supervisor 负责。
+1. **Runtime 执行，Platform 治理。** Thread、Turn、上下文、spawn、wait、Tool 调用、
+   Skill 解释和 MCP 生命周期由 Codex Runtime 拥有；Platform 不创建第二个调度器。
+2. **领域定义语义，平台提供机制。** 仓库、路线、成本属于仓网包；revision、依赖、
+   readiness、幂等、终态和交付件索引属于通用平台能力。
+3. **Catalog 不等于 Runtime ready。** 已发布、已授权、已安装、已被 Runtime 发现和
+   当前可执行是不同状态，必须分别表达。
+4. **Prompt 不承担权限。** 自然语言说明怎样工作，类型化合同决定能访问什么、需要
+   什么输入、能交付什么以及是否允许执行。
+5. **引用代替复制。** Agent 消息只传稳定身份、有界摘要和必要参数；大数据由权威
+   owner 持久化，按授权和范围读取。
+6. **发布者不维护机器字段。** semver、hash、Runtime role ID、MCP 内部名称、宿主
+   路径和 lock file 由编译器生成。
+7. **不兼容旧项目合同。** 直接迁移当前开发环境和所有调用方，删除 2.x、5.x、
+   `planning-dataset.v2` 及领域协议在平台中的兼容分支。
 
----
-
-## 1. 一张图看清完整结构
+## 3. 总体分层
 
 ```mermaid
 flowchart TB
-    subgraph PLATFORM["Platform：企业身份、治理与持久状态"]
-        USER["User / Organization"]
-        PROFILE["Profile<br/>持久 CODEX_HOME 与 Runtime 身份"]
-        WORKSPACES["Authorized Workspaces<br/>独立执行根"]
-        POLICIES["Supervisor Policies<br/>版本与快照"]
-        REGISTRY["Agent Catalog<br/>Definition、Capability、版本与评价"]
-        TASKRUN["Task / Run<br/>调度、租约、审批与恢复"]
-        ARTIFACTS["Artifact Store<br/>身份、授权、来源与保留"]
-    end
+    UI["Web Copilot Studio"]
+    API["Platform API"]
+    CAT["Catalog and Release Service"]
+    COMP["Copilot Package Compiler"]
+    WS["Work State Service"]
+    DATA["Data Intake Service"]
+    ART["Artifact Service"]
+    HOST["Profile Host and Codex Adapter"]
+    RT["Codex app-server and Runtime"]
+    PKG["Installed Skill Plugin MCP packages"]
+    DOMAIN["Domain Tool Services"]
 
-    subgraph BRIDGE["Profile Host / Adapter"]
-        HOST["一个主 app-server 进程 / Profile<br/>正式合同与安全事件归一化"]
-    end
-
-    subgraph RUNTIME["Codex Runtime：模型可见执行"]
-        ROOT["Root Thread<br/>Supervisor"]
-        AGENT1["Child Thread<br/>Domain Agent A"]
-        AGENT2["Child Thread<br/>Domain Agent B"]
-        SKILLS["Skills / Plugins<br/>可发现的方法与能力说明"]
-        TOOLS["Tools / MCP<br/>数据、计算与外部动作"]
-    end
-
-    USER --> TASKRUN
-    USER --> PROFILE
-    PROFILE --> HOST
-    WORKSPACES -. "授权 cwd" .-> TASKRUN
-    POLICIES -. "不可变 Policy Snapshot" .-> TASKRUN
-    REGISTRY -. "有界 Agent 候选" .-> TASKRUN
-    TASKRUN --> HOST
-    HOST --> ROOT
-    ROOT -->|"spawn / message / wait / interrupt"| AGENT1
-    ROOT -->|"spawn / message / wait / interrupt"| AGENT2
-    AGENT1 <-. "有界消息或 Artifact 引用" .-> AGENT2
-    ROOT -. "发现并采用" .-> SKILLS
-    AGENT1 -. "发现并采用" .-> SKILLS
-    AGENT2 -. "发现并采用" .-> SKILLS
-    SKILLS -. "指导如何使用" .-> TOOLS
-    ROOT --> TOOLS
-    AGENT1 --> TOOLS
-    AGENT2 --> TOOLS
-    TOOLS --> ARTIFACTS
-    ARTIFACTS -. "授权 Artifact 引用" .-> ROOT
-    ARTIFACTS -. "授权 Artifact 引用" .-> AGENT1
-    ARTIFACTS -. "授权 Artifact 引用" .-> AGENT2
+    UI --> API
+    API --> CAT
+    CAT --> COMP
+    API --> DATA
+    API --> ART
+    API --> HOST
+    HOST --> RT
+    COMP --> HOST
+    RT --> PKG
+    PKG --> DOMAIN
+    DOMAIN --> WS
+    DOMAIN --> DATA
+    DOMAIN --> ART
 ```
 
-这张图有三条需要特别注意的边界：
-
-1. **Profile 和 Workspace 不在 Agent 层级中。** Profile 是 Runtime 身份与环境，
-   Workspace 是授权执行根，它们不会因为创建子 Agent 而被复制。
-2. **Agent Catalog 不创建正在运行的 Agent。** 它提供经过治理的 Definition；
-   Runtime 真正创建的是 Root/Child Thread。本文把常说的 “Agent Registry” 收敛为
-   Agent Catalog，避免与 Codex 内部的 Runtime Registry 混淆。
-3. **Artifact 不属于某个 Thread。** Thread、Turn 和 Item 只记录来源；Artifact
-   自身拥有身份、授权和保留周期。
-
----
-
-## 2. 四层能力分别负责什么
-
-### 2.1 Supervisor：维护总目标和最终责任
-
-Supervisor 运行在根 Thread 中。Codex 已经提供创建子 Agent、发送消息、等待和中断
-的运行机制，但默认根 Agent 并不会自动成为企业 Supervisor。
-
-企业 Supervisor 还需要版本化行为策略，明确：
-
-- 怎样建立共同的问题框架；
-- 什么情况下应该委派；
-- 子任务需要什么输入和 Artifact；
-- 什么时候追加调查，什么时候复用既有 Agent；
-- 怎样识别数据、假设、方法和评价标准冲突；
-- 什么情况下停止；
-- 最终报告必须包含哪些依据、风险和缺失证据。
-
-当前项目通过代码发布的 Supervisor Policy，将这些规则作为服务端解析的
-`developer_instructions` 进入受治理根 Thread。Policy 被保存为不可变快照并绑定到
-Run；浏览器不能提交一段任意 Prompt 来替换它。Workspace 中的通用 Governed
-Supervisor 入口读取服务端发布目录并让用户选择 Policy，不绑定任何领域 Policy
-ID、版本或 Agent 顺序。当前供应链顺序只属于
-`enterprise-supervisor-copilot@2.0.0` 这一可选 Policy，服务端不发布或解析旧版本。
-当前 Policy 通过 Runtime 的 exact Agent Role allowlist 和 per-Role instance limit
-约束模型可见目录、执行入口与驻留实例数，并通过 Role 配置关闭子 Agent 继续委派；
-提示词不承担授权职责。已发布显示名和执行内容保持不可变，需要改变时必须发布新版本。
-
-Supervisor 不负责：
-
-- 判定用户是否有权限；
-- 批准高风险操作；
-- 维护 Run 租约和终态；
-- 伪造 Tool 结果；
-- 宣布 Artifact 已持久化；
-- 自己实现子 Thread 消息路由。
-
-### 2.2 Agent：拥有专业任务的 Runtime 角色
-
-Domain Agent 是在独立 Runtime Thread 中执行的专业角色。它应该有清楚的职责、
-输入、输出、可使用能力和禁止范围。
-
-以当前印尼供应链案例为例：
-
-| Agent | 负责 | 不负责 |
+| 层 | 拥有 | 不拥有 |
 | --- | --- | --- |
-| Data Agent | 按 typed metadata 检查数据源、生成并验证规划数据 Artifact | 选择仓址或作最终建议 |
-| Network Planning Agent | 读取授权输入、按目标选择必要的确定性规划分析 | 扩大数据权限或替企业作决定 |
-| Finance Agent | 对兼容方案做投资评价 | 授权投资或修改网络事实 |
-| Risk Agent | 发布证据关联的风险、缓解措施和触发条件 | 伪造外部监管或运营事实 |
-| Root Supervisor | 分工、检查证据、处理冲突、综合最终报告 | 代替专业工具计算或批准操作 |
+| Browser | 编辑、选择、验证结果、执行展示、用户输入 | Runtime ID、宿主路径、Secret、调度语义 |
+| Platform Server | Catalog、Draft/Release、授权、Secret 引用、Data Intake、Work State 元数据、Artifact、执行投影 | 模型上下文、Agent 推理、MCP 执行 |
+| Package Compiler | 规范化、依赖解析、hash、版本、安装清单、能力要求 | 运行时发现结果、业务计算 |
+| Profile Host | Profile 进程、类型化桥接、安装事务、Runtime 状态归一化 | 产品目录、业务工作状态 |
+| Codex Runtime | Thread/Turn/Item、上下文、Agent 调度、Skills/Plugins/MCP/Tools | Web 工作流、企业授权、Catalog |
+| Domain Package | 领域 schema、算法、外部系统适配、领域校验和报告 | 用户身份、通用上传、通用 Agent 状态 |
 
-Agent 的三个名称容易混淆：
+## 4. 五类可发布资源
 
-| 概念 | 含义 |
+所有资源采用 `Draft -> Validated Draft -> Immutable Release` 生命周期。Draft 使用整数
+revision；Release 版本由服务器自动分配。发布操作锁定规范化内容和所有精确依赖。
+
+### 4.1 ToolPackage
+
+ToolPackage 是确定性能力及其安装声明，不等于某个 Python 文件。
+
+```text
+ToolPackage
+  identity: organization_id + tool_package_id
+  draft: revision + source bundle
+  release: generated version + content_sha256
+  contract: input schema + output schema + error taxonomy
+  runtime: transport + launcher + health check + capability inventory
+  policy: secret refs + network/filesystem/side-effect class + approval class
+  tests: contract cases + stdio/HTTP smoke + deterministic fixtures
+```
+
+首期提供受限 Python MCP SDK：固定 launcher、依赖锁、JSON Schema、结构化错误、
+有界 Tool result、Resource/Artifact 发布适配器和本地测试器。平台不得把任意用户 shell
+命令直接变成 Tool，也不得用 `source` 执行 Tool。
+
+### 4.2 SkillPackage
+
+SkillPackage 是模型可见的方法说明。中文 `SKILL.md` 是正文，但发布资源还包含机器可
+校验的声明：
+
+- 适用任务和不适用任务；
+- 必需/可选输入及其 owner；
+- 可用 Tool capability，而不是显示名称；
+- 输出交付件类型；
+- 必须请求用户的情况；
+- 失败、unavailable、timeout 的处理；
+- 上下文预算与禁止复制的数据；
+- 示例和验证用例。
+
+Skill 可以依赖 Tool capability，但不能自行授予权限或修改 Profile。
+
+### 4.3 AgentDefinition
+
+AgentDefinition 是可评审的专业角色：
+
+```text
+AgentDefinition
+  purpose
+  instructions
+  skill_requirements[]
+  tool_capability_requirements[]
+  data_permissions[]
+  input_contract
+  assignment_contract
+  deliverable_contracts[]
+  execution_limits
+  model_policy
+```
+
+指令描述责任和判断方法；类型化字段约束输入、权限、资源和交付。Agent Release 不保存
+宿主路径，不通过 “data agent” 等显示文本推断能力。
+
+### 4.4 SupervisorDefinition
+
+SupervisorDefinition 负责一个任务的最终结果，而不是固定工作流脚本：
+
+```text
+SupervisorDefinition
+  objective and final responsibility
+  allowed_agent_releases[]
+  selection_guidance
+  collaboration_policy
+  required_final_deliverables[]
+  stopping_and_partial_failure_policy
+  root_read_capabilities[]
+  execution_limits
+```
+
+Supervisor 可以根据缺口 spawn、follow-up、wait 和综合，但不能绕过 Runtime 调度；
+也不能把“先 Data、后 Network”写成平台硬编码。固定、有业务确定性的处理顺序应进入
+Tool 或领域状态依赖，而不是用 Prompt 模拟工作流引擎。
+
+### 4.5 CopilotPackage
+
+CopilotPackage 是用户可安装、可运行的完整产品单元：
+
+- 一个精确 Supervisor Release；
+- 精确 Agent、Skill 和 Tool 依赖；
+- 所需 Runtime capability；
+- 默认权限模板和 Secret slot；
+- 可选 Tutorial Blueprint、示例数据和验收用例；
+- 安装、升级、卸载和健康检查合同。
+
+Catalog 中的 Copilot Release 不代表可运行。只有依赖已授权、安装事务成功、Runtime
+重新发现并通过 readiness 后，Profile Installation 才能进入 `ready`。
+
+## 5. 通用 Work State
+
+### 5.1 为什么需要
+
+仓网 6.0 中的 case identity、facet revision、dependency、stale、operation、readiness
+和 deliverable 已经证明这些机制有价值，但把它们留在供应链 MCP 会导致每个领域重复
+实现相同基础设施，也使 Root 只能询问子 Agent 获取进度。
+
+平台应抽取一个通用 **Work State** 元数据引擎。它不是 Thread、Memory、Workflow
+或 Blackboard；它只保存任务内可审计的结构化工作事实和对领域 payload 的引用。
+
+### 5.2 权威边界
+
+Platform Work State 保存：
+
+- `work_state_id`、organization/profile/workspace/task/run scope；
+- component type、revision、state、content reference 和 content hash；
+- component dependency 与 stale 原因；
+- operation identity、idempotency key、开始时间和完整终态；
+- blocking issue、readiness、next action 的类型化摘要；
+- deliverable 与 Artifact provenance 关系。
+
+领域包保存或定义：
+
+- component payload schema；
+- 业务字段和业务校验；
+- 哪些输入变化使哪些结果失效；
+- 领域 operation 的计算；
+- 领域摘要如何安全生成。
+
+Platform 不读取仓库、路线、成本等字段来决定业务状态。领域 Tool 通过 SDK 提交
+mutation，Work State Service 校验 scope、revision、依赖和幂等后原子写入元数据。
+
+### 5.3 最小状态模型
+
+```text
+WorkState
+  id, scope, definition_release_id, revision, status
+
+WorkComponent
+  component_id, component_type, revision, state
+  payload_ref, content_sha256, summary
+
+WorkDependency
+  source_component, target_component, invalidation_policy
+
+WorkOperation
+  operation_id, operation_type, idempotency_key
+  status: pending|running|waiting_input|completed|failed|cancelled|timeout|interrupted
+  input_component_revisions, result_component_revisions, safe_error
+
+WorkDeliverable
+  deliverable_type, artifact_id, source_component_revisions
+```
+
+大 payload 不进入表内 JSON、Agent 消息或事件。`payload_ref` 指向授权的 Dataset Release、
+Artifact 或领域 Resource；Platform 只保存有界摘要和 hash。
+
+## 6. Root 的通用只读协调能力
+
+Root 不应依赖子 Agent 自述“做完了什么”，也不能获得平台写权限。平台提供一个按当前
+Task/Run 自动绑定 scope 的只读 Coordination Tool：
+
+```text
+get_collaboration_status()
+list_agent_executions(status?, limit?, cursor?)
+get_agent_execution(execution_id)
+get_work_state_summary(work_state_id)
+list_blocking_inputs(work_state_id?)
+list_deliverables(work_state_id?, type?)
+```
+
+这些 Tool 只读取 Approval、agent execution projection、Work State 和 Artifact 的权威
+投影，返回 `platform-tool-result.v1` 有界结果。它们不得：
+
+- spawn、interrupt、审批或修改 Agent；
+- 修改 Work State 或宣称业务成功；
+-返回原始 Runtime request ID、路径、Secret、完整事件或完整 Artifact；
+- 根据 Agent 名称、Prompt 文本或错误字符串推断状态。
+
+Runtime 仍通过官方 Agent 工具执行 spawn/follow-up/wait。Coordination Tool 只消除
+重复追问和不可信进度转述，不构成第二个 scheduler。
+
+## 7. Agent 协作合同
+
+### 7.1 CollaborationContext
+
+每次受治理执行由 Platform/Profile Host 根据授权状态生成不可变上下文，模型和浏览器
+不能自行构造：
+
+```text
+CollaborationContext
+  organization_id
+  profile_id
+  workspace_id
+  task_id
+  run_id
+  root_thread_id
+  supervisor_release_id
+  installation_id
+  authorized_work_state_ids[]
+  authorized_dataset_release_ids[]
+  capability_grants[]
+  context_budget_policy
+```
+
+这个上下文用于 scope Tool、Artifact、用户输入和执行投影。它不是把全部数据注入
+Prompt 的 context bundle，也不改变 Codex 拥有 Thread context 的事实。
+
+### 7.2 AssignmentContract
+
+Supervisor 委派给 Agent 时，除自然语言任务外还应提供由平台生成的有界合同：
+
+```text
+AssignmentContract
+  assignment_id
+  objective
+  work_state_id
+  readable_components[]
+  expected_deliverables[]
+  allowed_capabilities[]
+  blocking_input_policy
+  completion_criteria
+  summary_budget
+```
+
+首期可以把合同作为受控 assignment metadata 注入现有 Runtime Agent seam；长期优先
+采用官方类型化 Agent contract。不得解析自然语言 assignment 来恢复权限或资源 ID。
+
+### 7.3 信息交换规则
+
+| 信息 | 交换方式 |
 | --- | --- |
-| Agent Definition | 平台治理记录，描述职责、版本、能力、输入输出和风险 |
-| Runtime Role | Codex 能发现并在 spawn 时应用的执行配置 |
-| Agent Thread | 本次协作中实际运行的 Agent 身份与历史 |
+| 简短目标、假设、结论 | Runtime Agent message |
+| 共享状态、readiness、依赖 | Work State 引用与有界摘要 |
+| 原始文件和规范化表 | Platform Dataset Release |
+| 大型矩阵和计算中间结果 | 领域 payload Resource 或 Artifact 引用 |
+| 最终报告、地图、可下载文件 | Platform Artifact |
+| 需要人的业务选择 | 官方 `request_user_input` 经持久 Approval 投影 |
+| Agent 进度和终态 | Runtime 事件的 Platform execution projection |
 
-当前代码中，四个可选 Agent Definition 被映射为精确 Runtime Role；根 Supervisor 通过
-Codex 原生多 Agent 工具创建子 Thread。当前受治理供应链 Policy 的根 Thread 不暴露
-shell 或业务 MCP；每个 Role 只重新启用 Definition 声明的 MCP server/tool
-allowlist。平台不会插入一条“Agent 实例”数据库记录来模拟这个过程。
+Agent 不应在消息中转发完整文件、矩阵、Tool schema inventory、另一个 Agent 的完整
+输出或重复 Skill 正文。需要读取时，通过明确引用调用 owner 提供的有界 Tool。
 
-### 2.3 Skill：把专业方法交给 Agent
+## 8. 通用 Tool 结果合同
 
-Skill 是模型可发现的任务方法和操作说明。它适合表达：
+平台事件和 Web 不能认识 `network-case-tool-result.v1`。Tool SDK 统一产生：
 
-- 什么时候使用这项能力；
-- 按什么步骤完成；
-- 需要先检查哪些输入；
-- 应调用哪些正式 Tool/MCP；
-- 输出必须满足什么结构和质量标准；
-- 常见错误和停止条件是什么。
+```json
+{
+  "schema": "platform-tool-result.v1",
+  "status": "completed",
+  "summary": "已生成时效优先基线",
+  "work_state": {
+    "id": "...",
+    "revision": 12,
+    "changed_components": ["baseline_assignment"]
+  },
+  "artifacts": [
+    {"artifact_id": "...", "type": "network_planning_report.v1"}
+  ],
+  "blocking_inputs": [],
+  "diagnostics": [],
+  "page": null
+}
+```
 
-Skill 不应包含：
+合同要求：
 
-- 绕过 Runtime 的隐藏执行器；
-- Secret 或固定用户凭据；
-- 由文件名或显示文本猜测权限的逻辑；
-- 与平台数据库并行的状态机；
-- 只在某个示例里成立、却伪装成通用规则的常量。
+- `status` 使用稳定枚举，不从正文判断成功；
+- `summary`、diagnostics、列表和分页有统一上限；
+- 大型内容只返回引用；
+- secret、路径、内部 request ID 和思维链永不进入结果；
+- timeout、unavailable、partial、failed 均有明确语义；
+- Web 只根据通用 envelope 和 Artifact renderer registry 投影卡片。
 
-当前供应链工具包已经把数据准备、基线建立、方案评估、优化、财务评价、风险登记和
-结果验证拆为独立 Skills。印尼市场、候选设施、路线和成本由
-`planning-dataset.v2` 提供，Skill 描述通用方法，不背诵某个示例答案。
+领域可以在 `domain` 字段内返回受 schema 约束的有界扩展，但平台核心不得按领域
+schema 分支。供应链现有 envelope 必须被替换，而不是双读。
 
-### 2.4 Tool / MCP：执行确定性动作
+## 9. Data Intake 只有一个 owner
 
-Tool 是 Runtime 可以调用的动作；MCP 是把外部工具和资源以标准方式提供给 Runtime
-的一种协议边界。
+Platform 已拥有 SourceAsset、DataIntakeSession、mapping 和 Dataset Release，领域 Case
+不得再次扫描 Workspace、保存来源 revision 或建立第二套映射状态机。
 
-企业 Tool/MCP 适合负责：
-
-- 查询授权数据；
-- 执行确定性计算和优化；
-- 校验 Schema、单位和约束；
-- 读取或发布受控 Resource；
-- 调用企业系统；
-- 对高成本或有副作用的动作提出审批要求。
-
-Tool/MCP 必须自行执行授权和输入校验。即使 Prompt 或 Supervisor 消息声称“已经
-批准”，也不能把自然语言当作可信执行上下文。
-
-在当前案例中：
-
-- `supply_chain_data` 提供有界数据源目录、只读数据检查、构建和验证；
-- `supply_chain_planner` 提供仓网快照、路线、方案计算、优化和验证；
-- MCP 返回类型化 `data_ref` 与 `resource_name`；
-- 平台把可交付结果登记为独立 Artifact，并向浏览器隐藏内部 Resource URI。
-
-### 2.5 Capability：连接治理声明与真实能力
-
-Capability 回答“这个 Agent 声称能完成什么”，但声明本身不证明能力真的可用。
-
-一项企业 Agent Capability 成立，至少需要四个条件同时满足：
-
-1. Agent Definition 声明该能力和适用边界；
-2. 当前 Runtime 能发现需要的 Role、Skill 与 Tool；
-3. 当前用户、Task 和资源范围获得企业授权；
-4. 真实验证证明输入、输出和失败语义符合合同。
-
-还需要区分两类容易同名的能力：
-
-| 类型 | 示例 | 作用 |
-| --- | --- | --- |
-| 业务 Capability | `network.optimize`、`data.query` | 描述 Agent 对业务能做什么 |
-| Runtime Capability | `agents.multi_agent@1.0.0` | 证明当前 Codex 构建支持某项运行机制 |
-
-Supervisor 只能从已经通过这两层检查的候选中选择 Agent。目录里写着“支持仓网优化”，
-但 Runtime 没有规划 Tool，或者当前 Task 没有数据授权，都必须明确判定为不可用。
-
----
-
-## 3. Supervisor → Agent ↔ Agent → Skill → Tool 应该怎样理解
-
-### 3.1 它不是每次都必须走完的固定流水线
-
-通用 Supervisor 只有在其治理合同明确授予对应 Tool 时，才可以直接获取简单事实；
-也可以先委派 Agent。当前供应链根 Supervisor 的合同只授予协作能力，领域 Tool
-必须由 owning Domain Agent 调用。Agent 可以根据任务采用一个或多个 Skill，再调用
-多个 Tool。Skill 只在相关时被发现和采用，不会成为所有调用的中转服务。
-
-因此，更准确的关系是：
+正确链路：
 
 ```mermaid
 flowchart LR
-    SUP["Supervisor<br/>决定下一步"]
-    AGENT["Domain Agent<br/>负责专业子问题"]
-    SKILL["Skill<br/>提供方法"]
-    TOOL["Tool / MCP<br/>执行动作"]
-    OUTPUT["Message + Artifact<br/>返回协调信息与成果"]
-
-    SUP -->|"委派"| AGENT
-    SUP -->|"简单事实可直接调用"| TOOL
-    AGENT -. "按任务发现" .-> SKILL
-    SKILL -. "指导选择和使用" .-> TOOL
-    AGENT --> TOOL
-    TOOL --> OUTPUT
-    OUTPUT --> SUP
+    F["Web upload"] --> S["SourceAsset revision"]
+    S --> I["DataIntakeSession"]
+    I --> P["Source profile"]
+    P --> M["Explicit mapping revision"]
+    M --> D["Immutable Dataset Release"]
+    D --> B["Work State component binding"]
+    B --> T["Domain Tool calculation"]
 ```
 
-### 3.2 Agent ↔ Agent 有两种交换方式
+Data Intake 负责格式、文件 revision、通用字段画像、映射选择和 Dataset 发布。领域包
+通过 `DataRequirementContract` 声明需要的业务实体与字段，并提供领域 validator/
+normalizer。Work State 只绑定 Dataset Release 和领域校验结果，不复制源文件状态。
 
-| 方式 | 适合 | 不适合 |
-| --- | --- | --- |
-| Runtime 消息 | 追问、纠偏、小型摘要、等待和中断 | 大型数据、长期结果和授权事实 |
-| Artifact 引用 | 数据集、计算结果、图表、报告和可复核证据 | 代替及时的协调消息 |
+当前仓网 `case_sources`、映射候选和映射选择表必须删除；`workspace_intake.py` 的通用
+扫描能力迁入或接入 Platform Data Intake，供应链包只保留网络数据需求和业务转换。
 
-Domain Agents 可以直接交换有限消息，但默认仍由 Supervisor 维护全局目标。只有在
-局部问题确实需要平等协商，并且规模、权限、预算和退出条件明确时，才考虑受限 Peer
-模式。
+## 10. Web 开发者旅程
 
-### 3.3 Skill 与 Tool 的边界
+### 10.1 Tool Studio
 
-用仓网规划说明：
+1. 创建 Tool Draft，选择受支持的 Python MCP SDK 模板或导入规范包；
+2. 编辑代码、依赖、input/output schema、Secret slot 和副作用分类；
+3. 在隔离测试 Runner 中运行 contract tests 和 Tool smoke；
+4. 查看 Tool inventory、错误分类、资源消耗和安全检查；
+5. 发布，平台生成版本、hash 和安装包；
+6. 安装到当前 Profile，Profile Host 完成事务式物化和 Runtime reload；
+7. Web 分别显示 `published`、`installed`、`discovered`、`ready`。
 
-- Skill 说明“先读取规划数据，确认单位和服务策略，再建立基线，最后比较同口径方案”；
-- MCP Tool 负责真正读取数据、计算覆盖率、求解候选位置和验证结果；
-- Agent 负责判断该采用哪种分析方法、如何解释结果和报告限制；
-- Supervisor 负责判断这份结果是否足以回答企业问题。
+首期不承诺浏览器内任意依赖构建。SDK CLI 与 Web 上传可以共用同一个 package format；
+Web 是治理入口，算法工程师仍可在本地 IDE 开发并上传包。
 
-把这些责任混在一起会产生两种相反错误：
+### 10.2 Skill Studio
 
-- 把业务判断硬编码进 Tool，使工具只能重复一个案例；
-- 把确定性计算写进 Prompt，使不同运行得到不可验证的数字。
+1. 用中文模板编写 `SKILL.md`；
+2. 选择 Tool capabilities、输入和交付件；
+3. 运行静态校验和示例任务测试；
+4. 发布并安装；
+5. 通过 Runtime 官方 discovery 确认模型可见，而不是检查某个目录。
 
----
+### 10.3 Agent Studio
 
-## 4. Profile、Workspace、Thread 与 Agent Catalog
+1. 填写职责、边界、指令、Skills、Tools、数据权限、交付件和执行限制；
+2. 编译器验证依赖存在、授权不越界、输出合同可满足；
+3. 先以单 Agent test task 运行；
+4. 发布 Agent Release；
+5. Profile Installation 只有在 Runtime 可发现 exact role 后才 ready。
 
-### 4.1 对象关系图
+### 10.4 Supervisor Studio
 
-```mermaid
-flowchart TB
-    ORG["Organization / User"]
-    PROFILE["Profile<br/>持久 Runtime 身份"]
-    HOME["CODEX_HOME<br/>配置、Skills、Plugins、MCP、Memory"]
-    HOST["Profile Host<br/>主 app-server 进程"]
-    WS1["Workspace A"]
-    WS2["Workspace B"]
-    TASK["Task"]
-    RUN["Run<br/>一次调度与审计尝试"]
-    ROOT["Root Thread<br/>Supervisor"]
-    CHILD1["Child Thread<br/>Agent A"]
-    CHILD2["Child Thread<br/>Agent B"]
-    REG["Agent Catalog<br/>企业 Agent Definitions"]
-    ROLE["Runtime Role"]
-    ART["Artifact"]
+1. 填写目标、最终责任、协作原则、停止规则和部分失败策略；
+2. 选择精确 Agent Releases 和最终交付件；
+3. 自动获得平台只读 coordination capability；
+4. 运行协作模拟和真实测试任务；
+5. 发布为 Supervisor Release 或完整 Copilot Package。
 
-    ORG --> PROFILE
-    PROFILE --> HOME
-    PROFILE --> HOST
-    ORG --> WS1
-    ORG --> WS2
-    TASK --> RUN
-    RUN -. "引用授权 Workspace" .-> WS1
-    HOST --> ROOT
-    RUN -. "绑定执行来源" .-> ROOT
-    ROOT --> CHILD1
-    ROOT --> CHILD2
-    REG -. "Definition 映射" .-> ROLE
-    ROLE -. "spawn 时应用" .-> CHILD1
-    ROLE -. "spawn 时应用" .-> CHILD2
-    ROOT -. "cwd" .-> WS1
-    CHILD1 -. "继承受控执行环境" .-> WS1
-    CHILD2 -. "继承受控执行环境" .-> WS1
-    CHILD1 --> ART
-    CHILD2 --> ART
-    ART -. "属于 Task；Thread 仅为来源" .-> TASK
+用户不输入 semver、hash、Runtime role ID、MCP server 内部名称、JSON-RPC ID 或宿主
+路径。高级页面可以展示生成结果，但不能要求用户手工维持它们的一致性。
+
+## 11. Copilot Package Compiler
+
+编译器是 Catalog Draft 到 Runtime 可执行安装包的唯一转换器：
+
+```text
+normalize draft
+  -> validate typed contracts
+  -> resolve exact releases
+  -> intersect requested permissions with grants
+  -> generate runtime role/plugin/mcp materialization
+  -> compute canonical content hash
+  -> allocate release version transactionally
+  -> emit immutable lock manifest
+  -> run package validation
 ```
 
-### 4.2 Profile：一个用户的持久 Runtime 环境
+建议核心接口：
 
-Profile 包含一个用户的 Runtime 身份和持久 `CODEX_HOME`，承载配置、Provider、
-Skills、Plugins、MCP、Memory 和 Thread 历史所需环境。当前组合采用一个主
-app-server 进程服务一个 Profile。
+```rust
+trait PackageCompiler {
+    fn validate(&self, draft: CopilotDraft) -> ValidationReport;
+    fn compile(&self, draft: CopilotDraft, resolved: ResolvedDependencies)
+        -> CompiledCopilotPackage;
+}
 
-一个 Profile 可以使用多个经过授权的 Workspace，也可以拥有多个 Thread。创建
-子 Agent 不会创建新 Profile；它是在同一 Runtime 环境中创建新的 Agent Thread。
-
-当前状态：
-
-- 单 Profile 主路径已实现；
-- 企业 Supervisor 的 Runtime Roles 只对受治理请求可见；
-- 多 Profile 动态路由和完整隔离仍是后续阶段。
-
-### 4.3 Workspace：独立授权的执行根
-
-Workspace 是文件系统和 Git 执行的授权根，不属于某个 Thread 或 Run。多个 Thread
-可以在授权允许时使用同一个 Workspace。
-
-Thread 的当前 `cwd` 由 Codex Runtime 拥有；平台负责验证它位于授权 Workspace
-之内。Run 只引用选中的 Workspace，不创建或拥有一个 Run 私有 checkout。
-
-这意味着：
-
-- 创建 Agent 不复制 Workspace；
-- Agent Definition 不绑定服务器绝对路径；
-- Skill 可以描述相对的工作方法，却不能绕过 Workspace 授权；
-- 托管 clone/worktree 是显式 Workspace 资源，不是 Thread 的隐式副作用。
-
-### 4.4 Thread：Agent 真正运行的地方
-
-Root Supervisor 和每个实际子 Agent 都运行在 Codex Thread 中。Thread 拥有：
-
-- Turn 和 Item 历史；
-- 模型可见上下文；
-- Context compaction 与恢复语义；
-- 工具调用与 Agent 通信；
-- 当前 `cwd`。
-
-根 Thread 可以创建子 Thread。子 Agent 完成一项任务后，后续对同一个 Agent 的追加
-工作会形成新的 Turn；Web 可以为每个 Turn 建立独立任务节点，但这些节点只是从
-Runtime 事件重建的视图，不能反向驱动 Agent。
-
-### 4.5 Agent Catalog：Agent Registry 的实施对象
-
-在理想架构讨论中，这项能力常被称为 Agent Registry。进入实施设计后，项目统一使用
-**Agent Catalog**：它保存 Agent Definition，同时避免与 Codex Runtime 内部用于
-发现 Agent 配置的 Registry 混淆。Catalog 中的 Definition 包含：
-
-- 稳定 ID 和版本；
-- 适用范围与所有者；
-- 职责、输入、输出和所需能力；
-- Runtime Role 引用；
-- 风险、评价、发布和弃用状态。
-
-它回答“企业允许使用哪些 Agent”，不回答“这次实际创建了哪些 Agent”。后一个问题
-由 Runtime Thread 与 Agent 执行树回答。
-
-当前项目还没有通用 Agent Catalog。现有的两个代码发布 Definition 是受限起点：
-
-- 它们可以被服务端列出和解析；
-- Policy 精确绑定其版本和 Runtime Role；
-- 它们不能由普通用户在线创建或发布；
-- 它们不拥有运行状态，也不充当子 Thread 记录。
-
-Supervisor Policy 目录已经先采用同一原则：服务端注册表是新 Run 可选版本的唯一
-来源，浏览器只消费其有界摘要；不可变历史版本仍可被已绑定 Run 恢复，但不会出现在
-新建列表，也不能通过新 Run 接口重新选择。当前目录只有一个供应链模板不代表产品
-语义被限定为供应链，增加其他领域应通过发布新的 Policy/Definition 包完成。
-
-### 4.6 Task 与 Run：把业务目标和执行尝试分开
-
-完整关系还需要 Task 与 Run 来连接业务目标和实际执行：
-
-- Task 表示用户要完成的长期业务目标；
-- Run 表示一次排队、租约、恢复和审计尝试；
-- Root Thread 承担这次模型可见协作；
-- Artifact 归属于 Task 的授权范围；
-- Run、Thread、Turn 和 Item 保留 Artifact 的生产来源。
-
-这样，一次 Run 失败不会抹去已经验证的业务成果，重新执行也不会要求创建新的
-Workspace 所有权模型。
-
----
-
-## 5. 一次真实任务怎样穿过这些层
-
-```mermaid
-sequenceDiagram
-    actor U as 用户
-    participant P as Platform
-    participant H as Profile Host
-    participant S as Root Thread / Supervisor
-    participant D as Child Thread / Data Agent
-    participant SK as Skill
-    participant MCP as Enterprise MCP
-    participant A as Artifact Store
-
-    U->>P: 在授权 Workspace 中启动企业任务
-    P->>P: 解析 Policy、Agent Definition 与 Capability
-    P->>H: 以授权 cwd 启动受治理根 Thread
-    H->>S: 注入不可变 Supervisor Policy
-    S->>D: spawn 精确 Runtime Role 并说明交付契约
-    D->>SK: 发现并采用数据准备方法
-    SK-->>D: 步骤、Tool 约定与完成标准
-    D->>MCP: 读取、构建并验证规划数据
-    MCP-->>D: 类型化结果与 Resource 引用
-    P->>A: 登记 Artifact、来源与 Task 授权
-    D-->>S: 返回摘要、resource_name 与精确引用
-    S-->>U: 综合结论并引用可追溯依据
+struct CompiledCopilotPackage {
+    manifest: CopilotLockManifest,
+    runtime_bundle: RuntimeInstallationBundle,
+    content_sha256: String,
+    capability_requirements: Vec<CapabilityRequirement>,
+}
 ```
 
-这里有两条并行发生的事实链：
+代码 seed、Web Draft 和教程 Blueprint 必须调用同一个 compiler。任何 hash 漂移都应在
+编译阶段自动产生新 Release 或阻止发布，不再手工同步 migration 常量。
 
-- **Runtime 链**：谁创建了谁、Agent 看到了什么、调用了什么；
-- **Platform 链**：谁有权启动、使用哪个 Workspace、Artifact 是否持久、谁可读取。
+## 12. 安装、发现和运行时卡控
 
-二者通过正式合同连接，但不互相复制所有权。
+发布生命周期与运行生命周期分离：
 
----
+```text
+Draft -> Validated -> Released
+Released -> Authorized -> Installing -> Installed -> Discovered -> Ready
+Ready -> Degraded | Unavailable
+```
 
-## 6. 当前实现与目标状态对照
+- Catalog Service 是 Release 和依赖锁的 owner；
+- Installation Service 是 Profile 安装状态的 owner；
+- Runtime discovery 是可执行能力的 owner；
+- Readiness 聚合三个事实，但不猜测或自动降级；
+- 新任务固定 installation snapshot，运行中发布新版本不改变已有任务；
+- Draft 可以连续保存，Release 不可变；开发者默认自动 patch，必要时由发布策略选择
+  minor/major，而不是每次保存改版本。
 
-| 领域 | 当前实现 | 下一步目标 |
-| --- | --- | --- |
-| Supervisor | 一个代码发布 Policy，快照绑定根 Thread | Policy 评审、发布、弃用和评价 |
-| Agent Catalog | 两个代码发布 Definition | 通用、受治理的 Catalog 与候选查询 |
-| Runtime Agent | 原生根/子 Thread，精确 Role，顺序真实案例 | 追加任务、并行、中断、部分失败和深层关系验证 |
-| Agent Web 视图 | 持久树投影与每 Turn 任务节点 | 进入权威历史、异常状态和多层导航 |
-| Skill | Runtime 正式发现，仓网方法拆为多项 Skill | 去除案例固化，形成通用专业方法 |
-| Tool/MCP | 只读数据与确定性仓网规划 MCP | 补充真实事实、数据、规则与生产授权上下文 |
-| Workspace | 独立授权 managed Workspace | existing root、共享并发和 multi-`cwd` 证据 |
-| Profile | 单 Profile 主进程 | 多 Profile 路由、隔离和生命周期 |
-| Artifact | Task 级身份、来源、同 Task 交接 | 依赖、替代、失效、保留和跨 Run 复用 |
+不保留旧 package 的兼容读取。开发数据库和 Profile installation 可按文档化流程重建，
+启动路径不得猜测、修补或自动回退到旧版本。
 
----
+## 13. Codex Runtime 定制策略
 
-## 7. 最容易混淆的边界
+优先级固定为：
 
-### Agent Definition 不是 Prompt 文件
+1. 官方 app-server V2 合同和 Runtime discovery；
+2. 官方 Skill、Plugin、MCP 包格式与配置；
+3. Platform Catalog、Package Compiler、Profile Host 安装事务和安全 DTO；
+4. 已登记在 Patch Map 的最小 retained seam；
+5. 只有前四项无法满足必要合同，才提出新的 `codex-rs` 修改。
 
-Prompt 或 developer instructions 只描述 Runtime 行为。Definition 还需要稳定身份、
-版本、能力、输入输出、风险和治理状态。
+当前已确认 Runtime 提供 Skill 列表/配置、MCP 状态/reload/OAuth/resource/tool 等能力，
+应先复用。当前代码没有证明存在完整的官方 Agent CRUD，因此近期由 Platform Catalog
+和现有 request-scoped exact role seam 提供发布与运行桥接；这不等于先假设必须扩展
+Codex。只有当“安全安装用户定义 Agent 且让新 Thread 精确发现”无法通过现有 seam
+完成时，才可按 Patch Map 流程提出最小协议扩展。
 
-### Runtime Role 不是企业权限身份
+平台不得因 UI 需要修改 Codex；浏览器卡片、Catalog、版本、Work State、Data Intake、
+Artifact 和执行投影都属于 Web/server。
 
-Role 可以约束专业行为，但 Tool/MCP 仍然必须根据服务端绑定的用户、Task、Profile
-和资源范围授权。不能因为角色名叫 `data_agent` 就自动获得数据权限。
+## 14. 多用户就绪边界
 
-### Skill 不是 Agent
+当前不建设成员、邀请和租户管理 UI，但所有新表、缓存、事件和进程键必须包含权威
+scope：
 
-Skill 没有独立目标、Thread 和最终责任。Agent 可以组合多个 Skill，同一个 Skill
-也可以被多个 Agent 使用。
+- organization/user/profile/workspace/task/run；
+- Catalog visibility 与 publisher；
+- Profile Installation；
+- Secret grant 与 Tool capability grant；
+- Work State、Dataset、Artifact 和 execution projection；
+- subscription、idempotency 和审计键。
 
-### MCP Server 不是 Agent Catalog
+当前单用户默认记录不能变成无 scope singleton。开放多用户前必须完成两用户并发、
+越权 ID、重启、缓存污染和 Runtime 进程隔离矩阵。
 
-MCP 提供工具和资源，不决定哪一个专业 Agent 应该被调用，也不保存 Agent 发布状态。
+## 15. 仓网参考实现如何迁移
 
-### Web Agent 节点不是 Runtime Agent 状态机
+| 当前供应链实现 | 目标归属 |
+| --- | --- |
+| case identity/revision/operation/dependency/readiness | Platform Work State |
+| case_sources、文件 revision、mapping state | Platform Data Intake，删除领域副本 |
+| demand/warehouse/route/cost/assignment/scenario | Supply Chain domain schema/payload |
+| `network-case-tool-result.v1` | `platform-tool-result.v1` |
+| Root `get_network_case_status` | 通用 coordination + work-state read Tool |
+| Data/Network Agent | 用户可发布的 Agent Releases |
+| 中文仓网 Skills | 用户可发布的 Skill Releases |
+| 单一供应链 MCP | ToolPackage reference implementation |
+| 报告和地图 | Artifact renderer registry + 领域 renderer |
+| 6.0 手工 package/hash | Compiler 生成的无手工版本 Release |
 
-节点是从持久 Runtime 事件重建的安全视图。完成节点保持不变，是为了正确展示历史，
-不是因为平台接管了 Agent 生命周期。
+领域中仍然保留：网络数据需求、行政区匹配、距离/时效/成本矩阵、覆盖、模拟、选址和
+地图的业务语义。平台不得理解这些字段。
 
-### Workspace 不是共享记忆
+## 16. 禁止的实现方式
 
-多个 Agent 可以在同一授权 Workspace 中工作，但模型上下文仍属于各自 Thread；
-需要长期交换的业务成果应使用 Artifact，而不是依赖某个文件恰好存在于当前目录。
+- 在 Platform Server 中根据领域 envelope、Agent 显示名或 Tool 名写分支；
+- 用长 Prompt、完整 Resource 列表或目录扫描代替类型化 discovery；
+- 把 Agent 进度、共享状态或 Artifact 正文全部放入模型上下文；
+- 在每个领域包重建上传、映射、Approval、Agent execution 或发布版本；
+- 让 Root 轮询所有子 Agent 的自然语言状态，或为解决该问题自建 scheduler；
+- Catalog 发布成功后直接宣称 Runtime ready；
+- 浏览器直接写 `CODEX_HOME`、MCP 配置或 Runtime 文件；
+- 用 retry、mock、fallback 或旧协议双读掩盖安装、发现和执行失败；
+- 因开发环境可重建而在启动路径中自动篡改已应用迁移。
 
----
+## 17. 架构验收
 
-## 8. 设计检查清单
+新架构只有同时满足以下证据才成立：
 
-新增一个企业 Agent 能力时，应逐项回答：
+1. 一个算法工程师能用 SDK + Web 从零发布 Tool、中文 Skill、两个 Domain Agent 和
+   一个 Supervisor，不手写内部版本/hash/path；
+2. 仓网 Copilot 迁移后不再拥有通用 Source/mapping/operation/readiness 基础设施；
+3. 再实现一个非供应链 Copilot 时，可复用 Work State、coordination、发布、安装、
+   用户输入、execution 和 Artifact 能力，不修改平台领域分支；
+4. Root 能读取可信进度、阻塞输入和交付件，但无法通过该接口调度或越权；
+5. 大文件和矩阵不进入 Agent 消息，Provider 观测能证明输入、输出、cache、Tool schema
+   和 compaction 开销受预算约束；
+6. 刷新、重连、Runtime/Profile 重启、失败、取消、超时、乱序和并发发布都收敛到同一
+   权威状态；
+7. Catalog、Installation、Runtime discovery 三种状态可独立失败并得到安全诊断；
+8. `codex-rs` 没有新增差异，或新增 seam 已具备无法外置的证据、Patch Map、测试和
+   明确退出条件；
+9. 两用户隔离矩阵通过后，才开放多用户产品入口。
 
-### Supervisor
-
-- 谁维护最终目标并综合结论？
-- 什么情况下委派、追问、停止？
-- 冲突由谁处理？
-
-### Agent
-
-- Definition 的稳定 ID、版本和职责是什么？
-- 对应的 Runtime Role 是否真实可用？
-- 输入、输出和禁止范围是什么？
-
-### Skill
-
-- 它描述的是可复用方法，还是只写死了一个案例？
-- 哪些步骤需要 Tool 的确定性保证？
-- 输出标准和失败条件是否清楚？
-
-### Tool / MCP
-
-- 权限依据来自哪里？
-- 输入 Schema、单位、范围和资源限制是什么？
-- 成功、失败、取消、超时和审批怎样表达？
-
-### 平台对象
-
-- 使用哪个 Profile 和授权 Workspace？
-- Root/Child Thread 的关系由谁维护？
-- Artifact 属于哪个 Task，来源是什么？
-- Catalog 记录与 Runtime 实例是否保持分离？
-
-### 验证
-
-- 正常路径是否使用真实 Runtime 和 MCP？
-- 刷新、重连和重启后是否恢复同一事实？
-- 并行、追加任务、中断和部分失败是否有证据？
-- 浏览器是否隐藏 Secret、内部 URI、路径和无界 Runtime 数据？
-
----
-
-## 9. 代码事实入口
-
-- Profile 与 Runtime 启动桥接：
-  [`profile-host`](../apps/web/crates/profile-host)、
-  [`codex-adapter`](../apps/web/crates/codex-adapter)；
-- Supervisor Policy 与受治理启动：
-  [`supervisor_policy.rs`](../apps/web/server/src/supervisor_policy.rs)、
-  [`supervisor_runtime_preflight.rs`](../apps/web/server/src/supervisor_runtime_preflight.rs)；
-- Agent Definition 与 Runtime Role 映射：
-  [`agent_definition.rs`](../apps/web/server/src/agent_definition.rs)；
-- Agent 与 Artifact 投影：
-  [`event_projection.rs`](../apps/web/server/src/event_projection.rs)；
-- 当前仓网 Skills 与 MCP：
-  [`tools/supply-chain-network-planner`](../tools/supply-chain-network-planner)；
-- 当前对象所有权：
-  [系统架构](architecture.md)；
-- 当前可验证能力：
-  [能力基线](capability-baseline.md)。
+实施顺序、类和方法级任务见
+[Agent 能力生命周期实施计划](agent-capability-lifecycle-plan.md)。

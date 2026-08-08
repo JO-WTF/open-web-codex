@@ -12,11 +12,13 @@ dependencies = [
   "openpyxl>=3.1,<4",
   "ijson>=3.2,<4",
   "charset-normalizer>=3.3,<4",
+  "ortools>=9.12,<10",
 ]
 
 [project.optional-dependencies]
 dev = [
   "pytest>=8,<10",
+  "ruff>=0.8,<1",
 ]
 
 [project.scripts]
@@ -33,3 +35,4 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
+ignore = ["E501"]

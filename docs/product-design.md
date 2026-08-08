@@ -8,11 +8,11 @@
 | 更新时间 | 2026-07-26 |
 | 产品形态 | 单组织、多用户、自托管 Codex Web Harness |
 | 用户客户端 | 标准浏览器 |
-| Agent Runtime | 服务端定制 Codex `app-server` |
+| Agent Runtime | 官方 Codex `app-server` + Patch Map 登记的最小 retained seams |
 | 产品北极星 | `docs/product-vision.md` |
 | 关联架构 | `docs/architecture.md` |
 | 安全模型 | `docs/security-model.md` |
-| 多 Agent 演进设计 | `docs/enterprise-agent-platform-architecture.md` |
+| Copilot 创作架构 | `docs/supervisor-agent-skill-tool-architecture.md` |
 | 能力事实 | `docs/capability-baseline.md` |
 | 中期路线 | `docs/roadmap.md` |
 | 研发计划 | `docs/development-plan.md` |
@@ -30,11 +30,11 @@
 
 平台不得创建第二套 Agent 调度器、Thread 历史或 Memory Engine。平台可以保存 Codex ID、事件投影和检索索引，但恢复模型可见上下文必须以 Codex Profile 为事实来源。
 
-企业多 Agent 协作是这套工作台之上的演进方向，而不是另一套产品边界。目标架构会在
-Codex 原生根 Thread、子 Agent 和 Runtime Role 之上增加 Supervisor Policy、
-Agent Definition 治理、持久 Artifact 与企业能力授权；这些目标能力只有进入研发
-计划并通过能力基线验证后，才属于可交付产品。V1 仍以可信研发团队的浏览器 Codex
-闭环为发布范围。
+平台化多 Agent 协作是这套工作台当前阶段的主线，而不是另一套产品边界。目标架构在
+Codex 原生根 Thread、子 Agent 和 Runtime Role 之上增加 Tool/Skill/Agent/Supervisor/
+Copilot Catalog、受控安装、通用 Work State、持久 Artifact 与企业能力授权；这些能力
+只有通过能力基线验证后才可声明可用。当前先在单用户、单 Profile 中交付完整创作闭环，
+多用户入口在隔离门禁通过后开放。
 
 ### 1.1 核心价值
 
@@ -56,7 +56,7 @@ Agent Definition 治理、持久 Artifact 与企业能力授权；这些目标�
 - **可恢复：** 页面刷新、网络断开、进程退出和服务重启不能产生无明确终态的 Run。
 - **能力协商：** UI 只启用当前构建明确声明且平台适配的能力。
 - **显式交付：** 平台不自动 Commit、Force Push、Merge 或删除远端分支。
-- **渐进交付：** 先完成浏览器纵向闭环，再增加多用户和 Studio；所有新能力沿平台边界演进。
+- **渐进交付：** 当前先完成单 Profile Copilot 创作与运行闭环，再开放多用户、组织共享和规模化治理；所有新能力沿平台边界演进。
 
 ### 1.3 最终目标的完成定义
 
@@ -87,7 +87,7 @@ Agent Definition 治理、持久 Artifact 与企业能力授权；这些目标�
   Diff、Commit 和 Push；Workspace 不归 Thread 所有，同一 Workspace 可以承载多个
   经授权的 Thread。
 - 支持持久化审批、Control Lease、事件补发和审计。
-- 以能力门控逐步开放 Profiles、MCP、Plugins、Memory、Agents 和 Skills Studio。
+- 交付有界的 Tool、中文 Skill、Agent、Supervisor 和 Copilot Studio；其他 Runtime 管理模块继续按能力门控开放。
 - 固定并验证 Codex 构建，支持官方上游同步、灰度和回滚。
 - GA 时用户核心流程只依赖浏览器。
 
@@ -108,6 +108,7 @@ Agent Definition 治理、持久 Artifact 与企业能力授权；这些目标�
 | --- | --- | --- |
 | Organization Owner | 管理团队、安全、平台策略 | 全部组织权限、Owner 管理 |
 | Project Admin | 管理仓库、成员与项目策略 | 项目设置、成员、Task 管理 |
+| Algorithm Engineer | 把业务算法和协作方法发布为 Copilot | Tool SDK、Skill/Agent/Supervisor/Copilot Draft、测试与发布 |
 | Developer | 使用 Agent 完成开发任务 | 创建/控制 Task、审查、Commit/Push |
 | Reviewer | 审查执行和代码变更 | 查看、评论、按策略审批 |
 | Viewer | 了解进展与结果 | 只读项目、Task、Diff 和审计摘要 |
@@ -137,6 +138,9 @@ Agent Definition 治理、持久 Artifact 与企业能力授权；这些目标�
 | WorkspaceDataDraft / SourceAsset | 用户上传的原始数据和不可变 revision；不要求用户知道 Dataset manifest | Platform database scoped by Workspace |
 | DataIntakeSession | Task/Thread 保存画像、模糊候选、缺口、用户确认和参数答案；生命周期为 `active | ready | failed | cancelled` | Platform evidence projection |
 | TaskDatasetBinding | 归一化 Dataset Release 与合同、映射、参数快照的不可变分析绑定 | Platform database + Dataset Release owner |
+| WorkState | Task 范围的通用 component revision、operation、dependency、readiness、blocking input 和 deliverable 元数据；业务 payload 仍由领域包拥有 | Platform database + domain content reference |
+| Catalog Resource | Tool、Skill、Agent、Supervisor 或 Copilot 的稳定身份、Draft 和不可变 Release | Platform Catalog |
+| Profile Installation | 一个精确 Catalog Release 在指定 Profile 的安装、发现和 readiness 状态 | Platform + Profile Host + Runtime discovery |
 | Provider | 模型服务、Wire API、模型目录和上下文配置 | Codex Profile |
 | Approval | Codex Server Request 的持久平台决策记录 | PostgreSQL |
 | Control Lease | 控制 Task/Run 的短期租约 | PostgreSQL |
@@ -157,19 +161,19 @@ Agent Definition 治理、持久 Artifact 与企业能力授权；这些目标�
 
 ### Thread-first 业务数据闭环
 
-普通业务用户先从已有授权 Workspace 创建 Thread，随后由 Supervisor 识别目标并
-选择版本化 `DataRequirementContract`。平台提供上传入口，接受 `.xlsx`、`.csv`、
-`.json` 并把文件保存为不可变 SourceAsset；用户不需要填写 Dataset ID、版本、文件
-角色或内部 manifest。领域 capability package 画像文件并只产生模糊映射候选，用户
-确认会影响模型结果的字段后，Supervisor 再询问规划模式、绕路系数、目标时效、覆盖
-目标、规划周期、币种和成本口径等带单位、有来源的参数。
+普通业务用户先从已有授权 Workspace 创建 Task。Supervisor 识别目标并选择版本化
+`DataRequirementContract`；平台提供上传入口，接受该合同声明的受支持格式，并把文件
+保存为不可变 SourceAsset。用户不需要填写 Dataset ID、版本、文件角色或内部 manifest。
+Platform Data Intake 负责文件 revision、画像、显式映射和 Dataset Release；领域 adapter
+只定义业务字段、单位、关系、参数、规范化和领域校验，不再扫描 Workspace 或保存第二
+份 source/mapping 状态。
 
-Intake 的生命周期仅为 `active | ready | failed | cancelled`；`provide_data`、映射、参数和
-确认请求由 `DataIntakeInputRequest` 投影表达，而不是把等待状态伪装成悬挂 Run。每个等待
-用户输入的 Turn 有界结束，下一次用户消息在原 Thread 恢复。只有领域能力生成严格
-`planning-dataset.v2`、建立 TaskDatasetBinding 并锁定 contract/mapping/parameter
-fingerprint，Analysis readiness 才允许 Network 或 Visualization。空 Workspace 的有效
-结果是“Thread 可创建，Input/Analysis blocked”，而不是分析成功或不断重试。
+Intake 的生命周期仅为 `active | ready | failed | cancelled`；映射和参数请求使用
+Platform Data Intake 输入合同，Agent 运行中的业务选择使用官方 `request_user_input` 经
+持久 Approval 投影。领域只按当前分析请求验证最小必要实体，不要求先构造一个单体完整
+Dataset。发布的 Dataset Release 绑定到 Work State component；依赖未满足时 readiness
+明确为 `needs_input`、`unavailable` 或 `failed`。空 Workspace 不触发 Mock、无限重试或
+悬挂 Run。
 
 ### 4.2 多用户隔离键
 
@@ -201,9 +205,10 @@ authenticated user
 2. **项目：** 仓库、Task、成员、策略和设置。
 3. **审批中心：** 当前用户有权处理的待审批、已决与过期请求。
 4. **Learn：** 安装受审示例、检查运行依赖、启动任务并审阅可验证结果。
-5. **Codex Studio：** Profiles、Providers、MCP、Plugins、Memory、Agents、Skills。
-6. **团队设置：** 成员、邀请、角色、会话和组织安全。
-7. **平台管理：** Runners、队列、容量、版本、审计和系统健康。
+5. **Copilot Studio：** Tools、Skills、Agents、Supervisors、Copilots 及其发布、安装和 readiness。
+6. **Codex 设置：** Profiles、Providers、MCP、Plugins 和 Memory 的 Runtime 管理能力。
+7. **团队设置：** 成员、邀请、角色、会话和组织安全；当前单用户阶段不显示。
+8. **平台管理：** Runners、队列、容量、版本、审计和系统健康。
 
 ### 5.2 路由
 
@@ -223,8 +228,11 @@ authenticated user
 | `/codex/mcp` | MCP 与 Tools | Developer | 配置、OAuth、状态、测试 |
 | `/codex/plugins` | Plugins | Developer | 浏览、安装、升级、停用、卸载 |
 | `/codex/memory` | Memory | Developer | 健康、连续性、导出、重置 |
-| `/codex/agents` | Native Agents | Developer | 管理 Agent 与多 Agent 参数 |
-| `/codex/skills` | Skills | Developer | 创建、验证、测试、发布、回滚 |
+| `/codex/tools` | Tool Studio | Developer | 导入 SDK 包、验证、测试、发布、安装、查看 Runtime readiness |
+| `/codex/skills` | Skill Studio | Developer | 用中文创建、验证、测试、发布、安装和回滚 |
+| `/codex/agents` | Agent Studio | Developer | 组合 Skills、Tools、数据权限、交付件并测试发布 Agent |
+| `/codex/supervisors` | Supervisor Studio | Developer | 组合精确 Agents、协作原则、停止规则和最终交付 |
+| `/codex/copilots` | Copilot Builder | Developer | 锁定依赖、验证、发布、安装和运行完整 Copilot |
 | `/settings/team` | 团队设置 | Owner | 邀请、角色、禁用、会话吊销 |
 | `/admin/runners` | Runner 管理 | Platform Admin | 暂停、排空、恢复、版本检查 |
 | `/admin/audit` | 审计 | Owner/授权管理员 | 查询、导出安全事件 |
@@ -336,11 +344,24 @@ authenticated user
 - 终态：Task archived；Workspace 保持原有状态，除非另一个显式 Workspace
   生命周期操作改变它。
 
-### WF-13 Codex Studio 操作
+### WF-13 Copilot Studio 操作
 
-- 正常：UI 先读取 Manifest，再启用支持的 Provider/MCP/Plugin/Memory/Agent/Skill 操作；写操作展示影响与权限。
-- 异常：unsupported、experimental 未授权、版本漂移或操作部分失败时不得伪装成功。
-- 终态：Runtime 原生状态与平台显示一致，操作产生审计和刷新结果。
+- 正常：算法工程师通过 SDK 创建 Tool package，在 Web 导入并完成 contract test、发布和
+  Profile 安装；随后用中文创建 Skill，组合 Tool capabilities 创建 Agent，再组合精确
+  Agent Releases 创建 Supervisor/Copilot。Platform Compiler 自动生成版本、hash、依赖
+  lock 和 Runtime bundle；Profile Host 安装后由 Runtime discovery 决定 readiness。
+- 异常：Draft 校验失败、依赖缺失、安装失败、Runtime 未发现、版本漂移、权限不足或测试
+  超时分别进入明确状态；不得把 Catalog `published` 伪装成 Runtime `ready`，不得自动
+  回退旧版本或要求用户填写路径、Runtime Role、MCP 内部名称和 hash。
+- 终态：Draft、Release、Installation、Runtime readiness 和测试运行各自有唯一 owner、
+  完整终态与审计；卸载不影响已固定 installation snapshot 的历史任务。
+
+### WF-13A Codex Runtime 设置
+
+- 正常：UI 先读取 Manifest，再启用支持的 Provider/MCP/Plugin/Memory 操作；写操作展示
+  影响、权限和 reload 结果。
+- 异常：unsupported、experimental 未授权、版本漂移或部分失败不得伪装成功。
+- 终态：Runtime 原生状态与平台投影一致，浏览器不接触配置路径或 raw RPC。
 
 ### WF-14 Codex 上游升级
 
@@ -460,12 +481,26 @@ authenticated user
 | GIT-005 | P1 | Push 失败保留本地 Commit 并给出 Fetch/Rebase/人工处理建议 |
 | GIT-006 | P1 | 支持测试报告、补丁和日志 Artifact 下载权限 |
 
-### 7.7 Codex Studio
+### 7.7 Copilot Studio 与 Codex 设置
 
 | ID | P | 需求 |
 | --- | --- | --- |
 | CAP-001 | P0 | 所有 Studio 模块由 Manifest 能力、版本、状态和策略共同门控 |
 | CAP-002 | P0 | incompatible/unsupported 显示原因、要求版本和修复入口 |
+| CAT-001 | P0 M2 | Tool、Skill、Agent、Supervisor、Copilot 使用统一 Draft revision、不可变 Release、精确依赖和 Profile Installation 生命周期 |
+| CAT-002 | P0 M2 | Release version、content hash、Runtime bundle 和 lock manifest 由服务器 compiler 生成；用户不得手工维持内部字段 |
+| CAT-003 | P0 M2 | `published`、`authorized`、`installed`、`discovered`、`ready` 分别表达并由对应 owner 更新 |
+| TOL-001 | P0 M2 | 受限 Python MCP SDK 提供 init、validate、test、pack；Server 对上传包重新验证并在隔离 Runner 测试 |
+| TOL-002 | P0 M2 | Tool schema、Secret slot、网络/文件权限、副作用、超时和结果上限是类型化合同，不从说明文本推断 |
+| TOL-003 | P0 M2 | Tool 通过受控 Profile Installation 和 Runtime discovery 生效，禁止 `source`、任意 shell launcher 和目录存在性判断 |
+| SKL-001 | P0 M2 | Skill 主体使用中文，声明适用问题、输入 owner、Tool capability、交付件、输入请求、失败处理和上下文限制 |
+| SKL-002 | P0 M2 | 支持 Skill 创建、验证、示例测试、发布、安装、Runtime discovery 和卸载 |
+| AGT-001 | P0 M2 | Agent 组合精确 Skill Releases、Tool capabilities、数据权限、assignment 和 deliverable 合同，不依赖名称启发式 |
+| AGT-002 | P0 M2 | Agent 可独立测试；执行展示父子 Thread、角色、状态、等待输入、终态和安全结果摘要 |
+| SUP-001 | P0 M2 | Supervisor 组合精确 Agent Releases、动态协作原则、停止/部分失败规则和最终交付，不使用固定阶段工作流 |
+| SUP-002 | P0 M2 | Root 自动获得 Task/Run scoped 只读 coordination capability；该能力不能 spawn、审批、修改 Work State 或越权 |
+| WST-001 | P0 M2 | Platform Work State 保存通用 revision、operation、dependency、readiness 和 deliverable 元数据；领域拥有 payload/schema/算法 |
+| WST-002 | P0 M2 | 大型数据通过 Dataset/Artifact/Domain Resource 引用交换，不复制到 Agent 消息、事件或 Tool result |
 | MCP-001 | P0 Beta | 展示 Server 状态、认证、Tools、Resources 和错误 |
 | MCP-002 | P0 Beta | 支持 Secret 引用配置、Reload、OAuth 和 elicitation |
 | MCP-003 | P1 | 测试调用展示 Schema、权限和结构化结果，调用受审计 |
@@ -473,10 +508,6 @@ authenticated user
 | PLG-002 | P1 | 安装/升级前展示来源、完整性、能力和权限变化 |
 | MEM-001 | P1 | 展示 compaction、连续性、容量和错误，不展示 Memory 正文 |
 | MEM-002 | P1 | 导出和重置为危险操作，要求二次确认与审计 |
-| AGT-001 | P1 | 管理原生 Agent 配置并展示校验/Reload 结果 |
-| AGT-002 | P1 | 展示父子 Thread、角色、状态、委派、等待、返回和失败 |
-| SKL-001 | P1 | 支持个人与项目 Skill 的读取、创建、验证、测试和发布 |
-| SKL-002 | P1 | 项目 Skill 通过 Git 版本化；个人 Skill 保存在 Profile |
 
 ### 7.8 平台管理
 
@@ -494,7 +525,7 @@ authenticated user
 | --- | --- | --- |
 | LRN-001 | P0 M2 | Tutorial Blueprint 是只读、版本化的平台资源，精确声明受审资产、依赖、推荐 Prompt 和验收值 |
 | LRN-002 | P0 M2 | 示例 reconcile 复用正式发布 owner service 和幂等键；相同身份不同内容显式冲突，部分成功可继续 |
-| LRN-003 | P0 M2 | Thread readiness 只检查平台/Runtime/Provider 与已有授权 Workspace；Input/Analysis readiness 另外检查 Data Requirement Contract、Draft/映射/参数、normalized Release、TaskDatasetBinding 和稳定 fingerprint |
+| LRN-003 | P0 M2 | Task readiness 分别检查 Platform、Profile Installation、Runtime discovery、Provider、Workspace、Data Intake、Dataset Release、Work State 和当前分析所需 components；任何一项缺失都返回类型化 blocker |
 | LRN-004 | P0 M2 | 正式启动重新验证 readiness fingerprint；漂移时保留草稿并重新检查，不重复创建 Task |
 | LRN-005 | P0 M2 | 新用户只通过 Web 完成 Workspace 内的数据上传、画像、映射确认、参数补齐、依赖修复、启动、审批、结果审阅和刷新恢复，不输入 Dataset/Runtime 内部 ID 或宿主路径 |
 | LRN-006 | P1 M2 | Learn 进度只从权威资源推导；UI 可返回第一个未完成步骤，但不建立第二套教程状态 |
@@ -683,7 +714,9 @@ Lease 使用数据库时间与版本号；客户端时间不能决定有效性�
 Task/Run、授权 Workspace、Thread/Turn、实时事件、审批、取消/继续、Diff、Commit、
 浏览器刷新恢复和 Host 重启恢复。
 
-Alpha 不承诺多用户、Push、完整 Studio 或生产 SLA。
+Alpha 不承诺多用户、Push、无界 Codex 管理 Studio 或生产 SLA；但 M2 必须交付本文件
+定义的有界 Copilot Studio，使单用户可以创建和运行 Tool、中文 Skill、Agent、Supervisor
+和 Copilot。
 
 ### 14.2 Beta
 
@@ -705,7 +738,7 @@ Beta 门禁：两名用户并发故障注入无串流；备份恢复演练通过
 | Profile/Memory 串用 | 隐私与身份事故 | 一用户一 Home、路径/Thread 归属校验、跨用户测试 |
 | Agent 恶意命令 | 宿主/数据泄露 | rootless、出网策略、审批、最小凭据 |
 | 事件与数据库不一致 | UI 伪 running/重复审批 | 序号、幂等、租约、巡检与三方恢复 |
-| V1 范围膨胀 | Alpha 长期不可用 | Studio 不阻塞纵向闭环，按能力独立发布 |
+| V1 范围膨胀 | Alpha 长期不可用 | 只交付 Copilot 创作闭环必需的有界 Studio；多用户、Marketplace 和无关 Runtime 管理后置 |
 | 平台功能回归 | 浏览器纵向闭环不可用 | 合同、PostgreSQL 集成、真实 app-server 与浏览器 E2E 共同门禁 |
 
 ## 16. 待决策项

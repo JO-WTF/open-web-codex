@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use open_web_codex_adapter::{PlatformRuntimeRole, RequiredMcpServer};
+use open_web_codex_adapter::{CapabilityRootMcpInventory, PlatformRuntimeRole, RequiredMcpServer};
 use open_web_codex_platform_contracts::{
     AgentCapabilityTemplateSource, AgentDatasetReleaseBinding, DataRequirementContractReference,
     SupervisorAgentSelection, SupervisorArtifactContractInput, SupervisorDraftRequest,
@@ -20,20 +20,17 @@ use crate::validation::{
     is_safe_capability_segment, is_safe_definition_id, is_safe_runtime_role_name, is_safe_version,
 };
 
-#[cfg(test)]
 const INDONESIA_NETWORK_PLANNING_DRAFT_MANIFEST: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/5.2.0/manifest.json"
+    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/6.0.0/manifest.json"
 ));
-#[cfg(test)]
 const INDONESIA_NETWORK_PLANNING_DRAFT_CUSTOM_INSTRUCTIONS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/5.2.0/custom-instructions.md"
+    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/6.0.0/custom-instructions.md"
 ));
-#[cfg(test)]
 const INDONESIA_NETWORK_PLANNING_DRAFT_ARTIFACT_CONTRACTS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/5.2.0/artifact-contracts.json"
+    "/../../../../capabilities/supervisors/enterprise-supervisor-copilot/6.0.0/artifact-contracts.json"
 ));
 const MAX_SUPERVISOR_INSTRUCTIONS_BYTES: usize = 16 * 1024;
 
@@ -43,7 +40,12 @@ struct PublishedSupervisorResource {
     artifact_contracts: &'static str,
 }
 
-const PUBLISHED_SUPERVISOR_RESOURCES: [PublishedSupervisorResource; 0] = [];
+const PUBLISHED_SUPERVISOR_RESOURCES: [PublishedSupervisorResource; 1] =
+    [PublishedSupervisorResource {
+        manifest: INDONESIA_NETWORK_PLANNING_DRAFT_MANIFEST,
+        custom_instructions: INDONESIA_NETWORK_PLANNING_DRAFT_CUSTOM_INSTRUCTIONS,
+        artifact_contracts: INDONESIA_NETWORK_PLANNING_DRAFT_ARTIFACT_CONTRACTS,
+    }];
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -59,6 +61,8 @@ struct SupervisorPackageManifest {
     artifact_contracts_file: String,
     #[serde(default)]
     data_requirement_contracts: Vec<DataRequirementContractReference>,
+    #[serde(default)]
+    coordination_capabilities: Vec<String>,
     agents: Vec<SupervisorAgentReference>,
     runtime_requirements: Vec<RuntimeCapabilityRequirement>,
     execution: SupervisorExecutionContract,
@@ -125,6 +129,8 @@ pub struct SupervisorReleaseSpec {
     pub artifact_contracts: Vec<ArtifactContract>,
     #[serde(default)]
     pub data_requirement_contracts: Vec<DataRequirementContractReference>,
+    #[serde(default)]
+    pub coordination_capabilities: Vec<String>,
     pub max_active_child_agents: u32,
 }
 
@@ -144,6 +150,8 @@ pub struct ResolvedSupervisorPackage {
     pub required_runtime_roles: Vec<PlatformRuntimeRole>,
     pub role_spawn_limits: BTreeMap<String, u32>,
     pub required_mcp_servers: Vec<RequiredMcpServer>,
+    pub coordination_mcp_servers: Vec<RequiredMcpServer>,
+    pub coordination_capabilities: Vec<String>,
     pub required_workspace_id: Option<Uuid>,
     pub workspace_capability_packages: Vec<WorkspaceCapabilityPackageRequirement>,
     pub dataset_releases: Vec<AgentDatasetReleaseBinding>,
@@ -265,9 +273,9 @@ fn parse_resource_sources(
     }
     let declared_agents = manifest.agents.clone();
     let declared_runtime_requirements = manifest.runtime_requirements.clone();
+    let instruction_policy = crate::instruction_policy::resolve(&manifest.instruction_policy)?;
     let draft = SupervisorDraftRequest {
         policy_id: manifest.policy_id,
-        version: manifest.version,
         display_name: manifest.display_name,
         description: manifest.description,
         responsibilities: manifest.responsibilities,
@@ -293,10 +301,16 @@ fn parse_resource_sources(
             })
             .collect(),
         data_requirement_contracts: manifest.data_requirement_contracts,
+        coordination_capabilities: manifest.coordination_capabilities,
         max_active_child_agents: manifest.execution.max_active_child_agents,
     };
     let available_agents = agent::list_resolved_builtins().map_err(map_agent_error)?;
-    let package = resolve_authoring_spec(draft, &available_agents)?;
+    let package = resolve_authoring_spec_with_version(
+        draft,
+        &available_agents,
+        &instruction_policy,
+        &manifest.version,
+    )?;
     if declared_runtime_requirements != package.runtime_requirements
         || declared_agents != package.agents
     {
@@ -332,8 +346,27 @@ pub fn resolve_authoring_spec_with_policy(
     available_agents: &[ResolvedAgentDefinition],
     instruction_policy: &SupervisorInstructionPolicyDetail,
 ) -> Result<ResolvedSupervisorPackage, SupervisorCatalogError> {
-    let spec =
-        release_spec_from_authoring_with_policy(draft, available_agents, instruction_policy)?;
+    let spec = release_spec_from_authoring_with_version(
+        draft,
+        available_agents,
+        instruction_policy,
+        "draft",
+    )?;
+    validate_release_with_agents_and_policy(spec, available_agents, instruction_policy)
+}
+
+pub fn resolve_authoring_spec_with_version(
+    draft: SupervisorDraftRequest,
+    available_agents: &[ResolvedAgentDefinition],
+    instruction_policy: &SupervisorInstructionPolicyDetail,
+    version: &str,
+) -> Result<ResolvedSupervisorPackage, SupervisorCatalogError> {
+    let spec = release_spec_from_authoring_with_version(
+        draft,
+        available_agents,
+        instruction_policy,
+        version,
+    )?;
     validate_release_with_agents_and_policy(spec, available_agents, instruction_policy)
 }
 
@@ -350,6 +383,20 @@ pub fn release_spec_from_authoring_with_policy(
     available_agents: &[ResolvedAgentDefinition],
     instruction_policy: &SupervisorInstructionPolicyDetail,
 ) -> Result<SupervisorReleaseSpec, SupervisorCatalogError> {
+    release_spec_from_authoring_with_version(draft, available_agents, instruction_policy, "draft")
+}
+
+pub fn release_spec_from_authoring_with_version(
+    draft: SupervisorDraftRequest,
+    available_agents: &[ResolvedAgentDefinition],
+    instruction_policy: &SupervisorInstructionPolicyDetail,
+    version: &str,
+) -> Result<SupervisorReleaseSpec, SupervisorCatalogError> {
+    if !is_safe_version(version) {
+        return Err(SupervisorCatalogError::Invalid(
+            "Supervisor Release version is invalid",
+        ));
+    }
     if instruction_policy.policy_id != draft.instruction_policy.policy_id
         || instruction_policy.version != draft.instruction_policy.version
     {
@@ -392,7 +439,7 @@ pub fn release_spec_from_authoring_with_policy(
         .collect();
     Ok(SupervisorReleaseSpec {
         policy_id: draft.policy_id,
-        version: draft.version,
+        version: version.to_string(),
         display_name: draft.display_name,
         description: draft.description,
         responsibilities: draft.responsibilities,
@@ -403,6 +450,7 @@ pub fn release_spec_from_authoring_with_policy(
         runtime_requirements: governed_runtime_requirements(),
         artifact_contracts,
         data_requirement_contracts: draft.data_requirement_contracts,
+        coordination_capabilities: draft.coordination_capabilities,
         max_active_child_agents: draft.max_active_child_agents,
     })
 }
@@ -515,6 +563,8 @@ pub fn validate_release_with_agents_and_policy(
     validate_artifact_contracts(&artifact_contracts.contracts, &contracts)?;
     let required_mcp_servers =
         agent::merge_required_mcp_servers(&resolved_agents).map_err(map_agent_error)?;
+    let coordination_mcp_servers =
+        select_coordination_mcp_servers(&required_mcp_servers, &spec.coordination_capabilities)?;
     let developer_instructions = compile_developer_instructions(
         instruction_policy,
         &spec.custom_instructions,
@@ -544,6 +594,8 @@ pub fn validate_release_with_agents_and_policy(
         required_runtime_roles: roles,
         role_spawn_limits,
         required_mcp_servers,
+        coordination_mcp_servers,
+        coordination_capabilities: spec.coordination_capabilities,
         required_workspace_id: capability_workspace_ids.into_iter().next(),
         workspace_capability_packages: workspace_capability_packages.into_values().collect(),
         dataset_releases: dataset_releases.into_values().collect(),
@@ -612,14 +664,15 @@ fn compile_developer_instructions(
          receive the original tuple when that tuple is already available from the same batch.\n",
     );
     compiled.push_str(
-        "\n## Evidence batches\n\
-         Execute the warehouse-network journey in order: (1) Network Planning publishes the \
-         requirement profile; (2) Data Preparation reads that profile once, profiles the Workspace, \
-         and publishes the source profile and mapping proposal; (3) after the required mapping and \
-         parameter decision, Data Preparation normalizes and validates the planning dataset; (4) \
-         Network Planning publishes readiness and performs analysis. Do not profile Workspace files \
-         before Batch 1, skip a batch, run dependent batches in parallel, or repeat an unchanged \
-         batch.\n",
+        "\n## On-demand coordination\n\
+         Start from the user's country, question, and current evidence gap. Ask Network Planning \
+         to publish the smallest data requirement for this question. Invoke Data Preparation only \
+         when a source must be discovered, inspected, mapped, normalized, or geographically \
+         validated; it must not decide network objectives or perform network analysis.\n\
+         Do not require one global artifact or a fixed phase sequence. Run independent work in \
+         parallel, wait for the relevant readiness Resource before analysis, and request only the \
+         missing business parameter from the Agent that owns it. Reuse an unchanged Resource \
+         reference instead of asking an Agent to rescan or regenerate it.\n",
     );
     for contract in artifact_contracts {
         writeln!(
@@ -675,6 +728,17 @@ fn validate_manifest(manifest: &SupervisorPackageManifest) -> Result<(), Supervi
             "manifest fields are invalid",
         ));
     }
+    let mut coordination_capabilities = BTreeSet::new();
+    if manifest.coordination_capabilities.len() > 16
+        || manifest.coordination_capabilities.iter().any(|capability| {
+            !is_safe_mcp_capability(capability)
+                || !coordination_capabilities.insert(capability.as_str())
+        })
+    {
+        return Err(SupervisorCatalogError::Invalid(
+            "Supervisor coordination capabilities are invalid",
+        ));
+    }
     let mut agent_refs = BTreeSet::new();
     let mut runtime_roles = BTreeSet::new();
     for reference in &manifest.agents {
@@ -707,6 +771,87 @@ fn validate_manifest(manifest: &SupervisorPackageManifest) -> Result<(), Supervi
         }
     }
     Ok(())
+}
+
+fn select_coordination_mcp_servers(
+    available: &[RequiredMcpServer],
+    capabilities: &[String],
+) -> Result<Vec<RequiredMcpServer>, SupervisorCatalogError> {
+    let platform_coordination = platform_coordination_mcp_server();
+    let mut selected = BTreeMap::<String, BTreeSet<String>>::new();
+    for capability in capabilities {
+        let (server_name, tool_name) =
+            capability
+                .split_once('.')
+                .ok_or(SupervisorCatalogError::Invalid(
+                    "Supervisor coordination capability is invalid",
+                ))?;
+        let server = if server_name == platform_coordination.name {
+            &platform_coordination
+        } else {
+            available
+                .iter()
+                .find(|server| server.name == server_name)
+                .ok_or(SupervisorCatalogError::Invalid(
+                    "Supervisor coordination MCP Server is unavailable",
+                ))?
+        };
+        if !server.tools.iter().any(|tool| tool == tool_name) {
+            return Err(SupervisorCatalogError::Invalid(
+                "Supervisor coordination MCP Tool is unavailable",
+            ));
+        }
+        selected
+            .entry(server_name.to_string())
+            .or_default()
+            .insert(tool_name.to_string());
+    }
+    selected
+        .into_iter()
+        .map(|(server_name, tools)| {
+            let server = if server_name == platform_coordination.name {
+                &platform_coordination
+            } else {
+                available
+                    .iter()
+                    .find(|server| server.name == server_name)
+                    .ok_or(SupervisorCatalogError::Invalid(
+                        "Supervisor coordination MCP Server is unavailable",
+                    ))?
+            };
+            Ok(RequiredMcpServer {
+                name: server_name,
+                tools: tools.into_iter().collect(),
+                capability_roots: server.capability_roots.clone(),
+            })
+        })
+        .collect()
+}
+
+fn platform_coordination_mcp_server() -> RequiredMcpServer {
+    RequiredMcpServer {
+        name: "platform_coordination".to_string(),
+        tools: vec![
+            "get_collaboration_status".to_string(),
+            "list_agent_executions".to_string(),
+            "get_work_state_summary".to_string(),
+            "list_blocking_inputs".to_string(),
+            "list_deliverables".to_string(),
+        ],
+        capability_roots: vec![CapabilityRootMcpInventory {
+            capability_root_id: "local-platform-coordination-mcp".to_string(),
+            mcp_server_names: vec!["platform_coordination".to_string()],
+        }],
+    }
+}
+
+fn is_safe_mcp_capability(value: &str) -> bool {
+    let mut segments = value.split('.');
+    matches!(
+        (segments.next(), segments.next(), segments.next()),
+        (Some(server), Some(tool), None)
+            if is_safe_capability_segment(server) && is_safe_capability_segment(tool)
+    )
 }
 
 fn validate_release_fields(spec: &SupervisorReleaseSpec) -> Result<(), SupervisorCatalogError> {
@@ -752,6 +897,7 @@ fn validate_release_fields(spec: &SupervisorReleaseSpec) -> Result<(), Superviso
         custom_instructions_file: "custom-instructions.md".to_string(),
         artifact_contracts_file: "artifact-contracts.json".to_string(),
         data_requirement_contracts: spec.data_requirement_contracts.clone(),
+        coordination_capabilities: spec.coordination_capabilities.clone(),
         agents: spec.agents.clone(),
         runtime_requirements: spec.runtime_requirements.clone(),
         execution: SupervisorExecutionContract {
@@ -791,16 +937,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn repository_catalog_has_no_published_supervisor_package() {
+    fn repository_catalog_publishes_the_current_supervisor_package() {
         let summaries = list_published().unwrap();
-        assert!(summaries.is_empty());
+        assert_eq!(summaries.len(), 1);
         assert_eq!(
             resolve(&SupervisorPolicySelection {
                 policy_id: "enterprise-supervisor-copilot".to_string(),
-                version: "5.0.1".to_string(),
+                version: "6.0.0".to_string(),
             })
-            .unwrap_err(),
-            SupervisorCatalogError::NotFound
+            .unwrap()
+            .version,
+            "6.0.0"
         );
     }
 
@@ -850,7 +997,6 @@ mod tests {
         .unwrap();
         let draft = SupervisorDraftRequest {
             policy_id: repository.policy_id.clone(),
-            version: repository.version.clone(),
             display_name: repository.display_name.clone(),
             description: repository.description.clone(),
             responsibilities: repository.responsibilities.clone(),
@@ -880,17 +1026,38 @@ mod tests {
                 })
                 .collect(),
             data_requirement_contracts: repository.data_requirement_contracts.clone(),
+            coordination_capabilities: repository
+                .coordination_mcp_servers
+                .iter()
+                .flat_map(|server| {
+                    server
+                        .tools
+                        .iter()
+                        .map(|tool| format!("{}.{}", server.name, tool))
+                })
+                .collect(),
             max_active_child_agents: repository.max_active_child_agents,
         };
         let available_agents = agent::list_resolved_builtins().unwrap();
-        let web = resolve_authoring_spec(draft.clone(), &available_agents).unwrap();
+        let web = resolve_authoring_spec_with_version(
+            draft.clone(),
+            &available_agents,
+            &crate::instruction_policy::resolve(&SupervisorInstructionPolicySelection {
+                policy_id: repository.instruction_policy.policy_id.clone(),
+                version: repository.instruction_policy.version.clone(),
+            })
+            .unwrap(),
+            &repository.version,
+        )
+        .unwrap();
 
         for required in [
             "## Artifact handoffs",
             "Every producer Tool result is submitted as one bounded evidence batch",
             "Do not use `followup_task` to recover a handoff from a terminal producer",
-            "## Evidence batches",
-            "Network Planning publishes the requirement profile",
+            "## On-demand coordination",
+            "Ask Network Planning to publish the smallest data requirement",
+            "Do not require one global artifact or a fixed phase sequence",
         ] {
             assert!(
                 web.developer_instructions.contains(required),
@@ -917,7 +1084,6 @@ mod tests {
         let changed = resolve_authoring_spec(
             SupervisorDraftRequest {
                 policy_id: repository.policy_id.clone(),
-                version: repository.version.clone(),
                 display_name: repository.display_name.clone(),
                 description: repository.description.clone(),
                 responsibilities: repository.responsibilities.clone(),
@@ -937,6 +1103,16 @@ mod tests {
                     })
                     .collect(),
                 data_requirement_contracts: repository.data_requirement_contracts.clone(),
+                coordination_capabilities: repository
+                    .coordination_mcp_servers
+                    .iter()
+                    .flat_map(|server| {
+                        server
+                            .tools
+                            .iter()
+                            .map(|tool| format!("{}.{}", server.name, tool))
+                    })
+                    .collect(),
                 artifact_contracts: repository
                     .artifact_contracts
                     .iter()
@@ -961,7 +1137,7 @@ mod tests {
     #[test]
     fn repository_derived_fields_cannot_drift_from_the_canonical_compiler() {
         let manifest = INDONESIA_NETWORK_PLANNING_DRAFT_MANIFEST.replacen(
-            "\"runtimeRole\": \"agent_da32e77f9c1f5f98184e9ef7593367be\"",
+            "\"runtimeRole\": \"agent_4214e235da7aa1d791f4b2951170397b\"",
             "\"runtimeRole\": \"drifted_data_agent\"",
             1,
         );
@@ -982,14 +1158,12 @@ mod tests {
     fn current_supervisor_package_requires_a_business_facing_evidence_summary() {
         let instructions = INDONESIA_NETWORK_PLANNING_DRAFT_CUSTOM_INSTRUCTIONS;
         for required in [
-            "Field mapping",
-            "Multi-source conflicts",
-            "Business parameters",
-            "planning-dataset.v2",
-            "confirm the requirement profile again",
-            "## Sequential evidence batches",
-            "HANDOFF_BATCH",
-            "terminal child is not to be called again",
+            "Network Agent",
+            "Data Agent",
+            "Work State",
+            "platform_coordination",
+            "当前覆盖",
+            "request_user_input",
         ] {
             assert!(
                 instructions.contains(required),

@@ -2,11 +2,7 @@
   "mcpServers": {
     "supply_chain_data": {
       "command": "./bin/supply-chain-planner-launcher",
-      "args": [
-        "--data-server",
-        "--workspace-root",
-        "."
-      ],
+      "args": ["--data-server", "--workspace-root", "."],
       "cwd": ".",
       "default_tools_approval_mode": "approve",
       "env_vars": [
@@ -14,7 +10,7 @@
         "OPEN_WEB_CODEX_DATA_DIR",
         "OPEN_WEB_CODEX_LOG_DIR",
         "OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV",
-        "SUPPLY_CHAIN_READONLY_DATA_ROOT",
+        "SUPPLY_CHAIN_DATA_ROOT",
         "SUPPLY_CHAIN_DATA_RESOURCE_DIR",
         "SUPPLY_CHAIN_MCP_AUTO_INSTALL",
         "HTTP_PROXY",
@@ -27,24 +23,7 @@
         "no_proxy"
       ]
     },
-    "supply_chain_demo": {
-      "command": "./bin/supply-chain-planner-launcher",
-      "args": [
-        "--demo-server",
-        "--workspace-root",
-        "."
-      ],
-      "cwd": ".",
-      "default_tools_approval_mode": "approve",
-      "env_vars": [
-        "CODEX_HOME",
-        "OPEN_WEB_CODEX_DATA_DIR",
-        "OPEN_WEB_CODEX_LOG_DIR",
-        "OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV",
-        "SUPPLY_CHAIN_MCP_AUTO_INSTALL"
-      ]
-    },
-    "supply_chain_planner": {
+    "supply_chain_network": {
       "command": "./bin/supply-chain-planner-launcher",
       "args": [
         "--workspace-root",
@@ -70,13 +49,9 @@
         "no_proxy"
       ]
     },
-    "supply_chain_indonesia": {
+    "supply_chain_demo": {
       "command": "./bin/supply-chain-planner-launcher",
-      "args": [
-        "--indonesia-server",
-        "--workspace-root",
-        "."
-      ],
+      "args": ["--demo-server", "--workspace-root", "."],
       "cwd": ".",
       "default_tools_approval_mode": "approve",
       "env_vars": [
@@ -84,7 +59,6 @@
         "OPEN_WEB_CODEX_DATA_DIR",
         "OPEN_WEB_CODEX_LOG_DIR",
         "OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV",
-        "SUPPLY_CHAIN_INDONESIA_RESOURCE_DIR",
         "SUPPLY_CHAIN_MCP_AUTO_INSTALL",
         "HTTP_PROXY",
         "HTTPS_PROXY",

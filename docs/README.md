@@ -20,7 +20,7 @@
 | 能力证据 | [能力基线](capability-baseline.md) | 当前构建中什么已实现、验证到什么程度、还缺什么 | 描述产品愿景或未来任务 |
 | 中期顺序 | [产品与工程路线图](roadmap.md) | 各阶段交付什么结果、进入和退出条件是什么 | 保存逐文件任务和完成历史 |
 | 近期执行 | [开发计划](development-plan.md) | 当前与下一个里程碑的任务、阻塞和验收 | 重复全部长期路线图 |
-| M2 专项执行 | [Enterprise Supervisor Copilot 短期实施计划](enterprise-supervisor-copilot-plan.md) | 单 Profile 多 Agent 功能闭环怎样分片实现、如何验收、哪些可信风险暂缓但必须登记 | 改写中期阶段顺序或宣称能力已经成立 |
+| M2 专项执行 | [Copilot 开发平台实施计划](agent-capability-lifecycle-plan.md) | 单 Profile Tool、Skill、Agent、Supervisor、Copilot 平台怎样按类、方法和门禁实施 | 改写中期阶段顺序或宣称能力已经成立 |
 | 运行操作 | [本地运行手册](mvp-runbook.md) | 如何启动、配置、验证和排错 | 定义产品或架构 |
 | 开发约束 | [项目 Agent Guide](../AGENTS.md) | 修改代码时必须遵守的所有权、流程和验证规则 | 代替面向读者的产品文档 |
 
@@ -65,11 +65,11 @@ Agent Definition、Runtime Role 等核心术语。
 ### 当前纵向切片
 
 - [Enterprise Supervisor Copilot 短期实施计划](enterprise-supervisor-copilot-plan.md)：
-  当前单 Profile 多 Agent Copilot 的详细工作包、真实企业案例、功能完成标准和活动
-  可信风险。功能完成后，其事实进入能力基线；已经解决的过程不长期保留在计划中。
-- [Agent、Skill 与 MCP 原生生命周期整改计划](agent-capability-lifecycle-plan.md)：
-  从当前 V2-only 企业案例过渡到 Runtime 原生 Agent、Skill、MCP Studio 的跨里程碑
-  整改顺序、所有权、合同和退出条件。
+  当前仓网 6.0 过渡实现的角色、Case 和 E2E 合同。它是迁移输入，不再拥有平台总体
+  工作顺序；迁移完成后由能力基线和教程替代。
+- [Copilot 开发平台实施计划](agent-capability-lifecycle-plan.md)：
+  从当前仓网纵向实现迁移到通用 Work State、Tool SDK、中文 Skill、Agent、Supervisor、
+  Copilot Studio 的类和方法级实施顺序、所有权、删除项和退出条件。
 
 ### 多 Agent 核心设计
 
@@ -80,8 +80,8 @@ Agent Definition、Runtime Role 等核心术语。
   区分 Runtime 消息、Thread Context、Artifact 和可选 Task Knowledge Ledger，说明
   为什么先采用 Artifact First，以及完整成果生命周期怎样演进。
 - [Supervisor、Agent、Skill 与 Tool 的分层架构](supervisor-agent-skill-tool-architecture.md)：
-  解释认知协调、专业角色、方法说明和确定性工具的分层，并把它们与 Profile、
-  Workspace、Thread、Task/Run、Artifact 和 Agent Catalog 放在同一张架构图中。
+  定义平台化 Copilot 创作目标、五类发布资源、通用 Work State、Root 只读协调、
+  Data Intake、Package Compiler、安装/discovery 和 Codex 最小定制策略。
 
 这三篇文档细化企业架构报告中的两条核心能力和实现分层。它们可以记录当前阶段标记，
 但“是否已经实现”的最终判断仍以能力基线和代码验证为准；全项目阶段顺序仍由路线图
@@ -105,8 +105,8 @@ Agent Definition、Runtime Role 等核心术语。
 2. “V1 要交付什么”以产品设计为准。
 3. “当前代码由谁拥有、如何连接”以系统架构和代码为准。
 4. “当前能力能否对外声称可用”以能力基线及其验证证据为准。
-5. “接下来先做什么”以路线图和开发计划为准；当前 M2 的逐切片实现和风险登记以
-   Enterprise Supervisor Copilot 短期实施计划为准。
+5. “接下来先做什么”以路线图和开发计划为准；当前 M2 的类和方法级实施以
+   Copilot 开发平台实施计划为准。
 6. “为什么接受某个长期技术决定”以 ADR 为准。
 
 代码、生成合同和可复现测试是实现事实的最终证据。文档与代码冲突时，不能默默把
@@ -119,7 +119,7 @@ Agent Definition、Runtime Role 等核心术语。
 | 目标用户、产品边界或长期价值变化 | 产品愿景、产品设计、路线图 |
 | 所有权、组件关系或持久化边界变化 | 系统架构、安全模型、相关 ADR |
 | Runtime、Web 或平台能力新增或降级 | 能力基线、开发计划 |
-| M2 工作切片、功能验收或可信风险变化 | Enterprise Supervisor Copilot 短期实施计划；形成证据后再更新能力基线 |
+| M2 工作切片、功能验收或可信风险变化 | Copilot 开发平台实施计划；仓网过渡合同变化另复审 Enterprise Supervisor 文档；形成证据后再更新能力基线 |
 | 多 Agent 协同方式、Agent 责任或异常收敛规则变化 | 多 Agent 协同演进、能力基线、相关计划 |
 | Agent 交换合同、Artifact 或 Ledger 边界变化 | Agent 信息交换演进、系统架构、能力基线 |
 | Supervisor、Agent、Skill、MCP 或核心对象关系变化 | Agent 能力分层、系统架构、相关 ADR |

@@ -5,7 +5,9 @@
 //! small authorized projection needed to make a decision.
 
 use open_web_codex_platform_contracts::{
-    ApprovalDecision, ApprovalSummary, DecideApprovalRequest, RespondUserInputRequest,
+    ApprovalDecision, ApprovalSummary, DecideApprovalRequest, PendingUserInputSummary,
+    RespondUserInputRequest, UserInputOptionSummary, UserInputQuestionSummary,
+    UserInputRequestSource,
 };
 use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
@@ -30,6 +32,7 @@ pub struct ApprovalDispatch {
     pub runtime_instance_id: Uuid,
     pub runtime_request_id: Value,
     pub response: Value,
+    pub audit_metadata: Value,
     pub dispatch_version: i64,
     terminal_state: &'static str,
     decision: &'static str,
@@ -41,6 +44,7 @@ pub struct ResolvedApproval {
     pub thread_id: String,
     pub turn_id: Option<String>,
     pub item_id: Option<String>,
+    pub request_type: String,
     pub outcome: ApprovalOutcome,
 }
 
@@ -203,6 +207,7 @@ impl ApprovalService {
              FROM approvals a JOIN profiles p ON p.id = a.profile_id \
              WHERE a.organization_id = $1 AND p.owner_user_id = $2 \
                AND p.runtime_key = $3 AND a.state IN ('pending', 'dispatching', 'delivery_unknown') \
+               AND a.request_type <> $5 \
                AND a.runtime_instance_id = $4 \
              ORDER BY a.created_at, a.id",
         )
@@ -210,9 +215,108 @@ impl ApprovalService {
         .bind(actor.user_id)
         .bind(&self.runtime_key)
         .bind(runtime_instance_id)
+        .bind(USER_INPUT_REQUEST)
         .fetch_all(&self.db)
         .await?;
         Ok(rows.iter().map(summary_from_row).collect())
+    }
+
+    pub async fn list_pending_user_inputs(
+        &self,
+        actor: ApprovalActor,
+        runtime_instance_id: Uuid,
+        run_id: Option<Uuid>,
+    ) -> Result<Vec<PendingUserInputSummary>, ApprovalServiceError> {
+        self.cancel_stale_runtime_requests(runtime_instance_id)
+            .await?;
+        let rows = sqlx::query(
+            "SELECT a.id, a.run_id, a.thread_id, a.request_payload, a.state, a.version, \
+                    a.created_at \
+             FROM approvals a JOIN profiles p ON p.id = a.profile_id \
+             WHERE a.organization_id = $1 AND p.owner_user_id = $2 \
+               AND p.runtime_key = $3 AND a.request_type = $4 \
+               AND a.state IN ('pending', 'dispatching', 'delivery_unknown') \
+               AND a.runtime_instance_id = $5 \
+               AND ($6::uuid IS NULL OR a.run_id = $6) \
+             ORDER BY a.created_at, a.id",
+        )
+        .bind(actor.organization_id)
+        .bind(actor.user_id)
+        .bind(&self.runtime_key)
+        .bind(USER_INPUT_REQUEST)
+        .bind(runtime_instance_id)
+        .bind(run_id)
+        .fetch_all(&self.db)
+        .await?;
+
+        let mut summaries = Vec::with_capacity(rows.len());
+        for row in rows {
+            let payload: Value = row.get("request_payload");
+            let Some(source) = self
+                .resolve_user_input_source(
+                    actor,
+                    row.get("run_id"),
+                    row.get("thread_id"),
+                    payload.get("turnId").and_then(Value::as_str),
+                )
+                .await?
+            else {
+                continue;
+            };
+            summaries.push(PendingUserInputSummary {
+                id: row.get("id"),
+                run_id: row.get("run_id"),
+                source,
+                questions: parse_user_input_questions(&payload)?,
+                state: row.get("state"),
+                version: row.get("version"),
+                auto_resolution_ms: payload.get("autoResolutionMs").and_then(Value::as_i64),
+                created_at: row.get("created_at"),
+            });
+        }
+        Ok(summaries)
+    }
+
+    async fn resolve_user_input_source(
+        &self,
+        actor: ApprovalActor,
+        run_id: Uuid,
+        thread_id: &str,
+        turn_id: Option<&str>,
+    ) -> Result<Option<UserInputRequestSource>, ApprovalServiceError> {
+        let is_root = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM runs r \
+             WHERE r.id = $1 AND r.organization_id = $2 AND r.codex_thread_id = $3)",
+        )
+        .bind(run_id)
+        .bind(actor.organization_id)
+        .bind(thread_id)
+        .fetch_one(&self.db)
+        .await?;
+        if is_root {
+            return Ok(Some(UserInputRequestSource::Root));
+        }
+
+        let row = sqlx::query(
+            "SELECT execution.id, execution.display_title, execution.status \
+             FROM runtime_agent_execution_projections execution \
+             JOIN runs r ON r.id = execution.root_run_id \
+             WHERE execution.root_run_id = $1 AND execution.organization_id = $2 \
+               AND r.organization_id = $2 AND execution.agent_thread_id = $3 \
+               AND ($4::text IS NULL OR execution.turn_id = $4) \
+             ORDER BY (execution.turn_id = $4) DESC, execution.ordinal DESC \
+             LIMIT 1",
+        )
+        .bind(run_id)
+        .bind(actor.organization_id)
+        .bind(thread_id)
+        .bind(turn_id)
+        .fetch_optional(&self.db)
+        .await?;
+        Ok(row.map(|row| UserInputRequestSource::Agent {
+            execution_id: row.get("id"),
+            display_title: row.get("display_title"),
+        }))
     }
 
     /// Resolve a Runtime request id to its browser-safe platform identity.
@@ -242,7 +346,7 @@ impl ApprovalService {
             serde_json::to_string(runtime_request_id).map_err(|_| ApprovalServiceError::Invalid)?;
         let mut transaction = self.db.begin().await?;
         let row = sqlx::query(
-            "SELECT a.id, a.thread_id, a.request_payload, a.state, a.decision \
+            "SELECT a.id, a.thread_id, a.request_type, a.request_payload, a.state, a.decision \
              FROM approvals a JOIN profiles p ON p.id = a.profile_id \
              WHERE p.runtime_key = $1 AND a.runtime_instance_id = $2 \
                AND a.thread_id = $3 AND a.runtime_request_id = $4 \
@@ -265,6 +369,7 @@ impl ApprovalService {
             .filter(|value| !value.is_empty())
             .ok_or(ApprovalServiceError::Invalid)?;
         let request_payload: Value = row.get("request_payload");
+        let request_type: String = row.get("request_type");
         let turn_id = request_payload
             .get("turnId")
             .and_then(Value::as_str)
@@ -299,6 +404,7 @@ impl ApprovalService {
             thread_id,
             turn_id,
             item_id,
+            request_type,
             outcome,
         }))
     }
@@ -361,6 +467,7 @@ impl ApprovalService {
             runtime_request_id: serde_json::from_str(&runtime_request_id)
                 .map_err(|_| ApprovalServiceError::Invalid)?,
             response,
+            audit_metadata: json!({ "decision": decision }),
             dispatch_version,
             terminal_state,
             decision,
@@ -407,6 +514,8 @@ impl ApprovalService {
             return Err(ApprovalServiceError::Invalid);
         }
         validate_user_input_answers(&payload, &request)?;
+        let questions = parse_user_input_questions(&payload)?;
+        let audit_metadata = redact_user_input_decision(&questions, &request.answers);
         let dispatch_version = version + 1;
         sqlx::query(
             "UPDATE approvals SET state = 'dispatching', decision = 'answered', decided_by = $1, \
@@ -425,6 +534,7 @@ impl ApprovalService {
             runtime_request_id: serde_json::from_str(&runtime_request_id)
                 .map_err(|_| ApprovalServiceError::Invalid)?,
             response: json!({ "answers": request.answers }),
+            audit_metadata,
             dispatch_version,
             terminal_state: "answered",
             decision: "answered",
@@ -562,17 +672,90 @@ fn approval_payload(request_type: &str, params: &Value) -> Value {
     Value::Object(payload)
 }
 
+fn parse_user_input_questions(
+    payload: &Value,
+) -> Result<Vec<UserInputQuestionSummary>, ApprovalServiceError> {
+    let questions = payload
+        .get("questions")
+        .and_then(Value::as_array)
+        .ok_or(ApprovalServiceError::Invalid)?;
+    if !(1..=3).contains(&questions.len()) {
+        return Err(ApprovalServiceError::Invalid);
+    }
+    questions
+        .iter()
+        .map(|question| {
+            let id = bounded_input_text(question.get("id"), 128)?;
+            let header = bounded_optional_input_text(question.get("header"), 80)?;
+            let prompt = bounded_input_text(question.get("question"), 1_000)?;
+            let options = question
+                .get("options")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if options.len() > 3 {
+                return Err(ApprovalServiceError::Invalid);
+            }
+            let options = options
+                .iter()
+                .map(|option| {
+                    Ok(UserInputOptionSummary {
+                        label: bounded_input_text(option.get("label"), 80)?,
+                        description: bounded_optional_input_text(option.get("description"), 240)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, ApprovalServiceError>>()?;
+            Ok(UserInputQuestionSummary {
+                id,
+                header,
+                question: prompt,
+                is_other: question
+                    .get("isOther")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                is_secret: question
+                    .get("isSecret")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                options,
+            })
+        })
+        .collect()
+}
+
+fn bounded_input_text(
+    value: Option<&Value>,
+    max_len: usize,
+) -> Result<String, ApprovalServiceError> {
+    let value = value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && value.len() <= max_len)
+        .ok_or(ApprovalServiceError::Invalid)?;
+    Ok(value.to_string())
+}
+
+fn bounded_optional_input_text(
+    value: Option<&Value>,
+    max_len: usize,
+) -> Result<String, ApprovalServiceError> {
+    let Some(value) = value else {
+        return Ok(String::new());
+    };
+    if value.is_null() {
+        return Ok(String::new());
+    }
+    bounded_input_text(Some(value), max_len)
+}
+
 fn validate_user_input_answers(
     payload: &Value,
     request: &RespondUserInputRequest,
 ) -> Result<(), ApprovalServiceError> {
-    let question_ids = payload
-        .get("questions")
-        .and_then(Value::as_array)
-        .ok_or(ApprovalServiceError::Invalid)?
+    let questions = parse_user_input_questions(payload)?;
+    let question_ids = questions
         .iter()
-        .filter_map(|question| question.get("id").and_then(Value::as_str))
-        .filter(|id| !id.is_empty())
+        .map(|question| question.id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
     if question_ids.is_empty()
         || request.answers.len() != question_ids.len()
@@ -584,21 +767,53 @@ fn validate_user_input_answers(
         return Err(ApprovalServiceError::Invalid);
     }
     let mut total_bytes = 0usize;
-    for answer in request.answers.values() {
-        if answer.answers.is_empty() || answer.answers.len() > 20 {
+    for question in &questions {
+        let answer = request
+            .answers
+            .get(&question.id)
+            .ok_or(ApprovalServiceError::Invalid)?;
+        if answer.answers.len() != 1 {
             return Err(ApprovalServiceError::Invalid);
         }
-        for value in &answer.answers {
-            if value.contains('\0') || value.len() > 4096 {
-                return Err(ApprovalServiceError::Invalid);
-            }
-            total_bytes = total_bytes.saturating_add(value.len());
+        let value = answer.answers[0].trim();
+        if value.is_empty() || value.contains('\0') || value.len() > 4096 {
+            return Err(ApprovalServiceError::Invalid);
         }
+        if !question.options.is_empty()
+            && !question.is_other
+            && !question.options.iter().any(|option| option.label == value)
+        {
+            return Err(ApprovalServiceError::Invalid);
+        }
+        total_bytes = total_bytes.saturating_add(value.len());
     }
     if total_bytes > 64 * 1024 {
         return Err(ApprovalServiceError::Invalid);
     }
     Ok(())
+}
+
+fn redact_user_input_decision(
+    questions: &[UserInputQuestionSummary],
+    answers: &std::collections::BTreeMap<
+        String,
+        open_web_codex_platform_contracts::UserInputAnswer,
+    >,
+) -> Value {
+    let mut redacted = serde_json::Map::new();
+    for question in questions {
+        let count = answers
+            .get(&question.id)
+            .map(|answer| answer.answers.len())
+            .unwrap_or(0);
+        let mut entry = serde_json::Map::new();
+        entry.insert("answerCount".to_string(), Value::from(count));
+        if question.is_secret {
+            entry.insert("redacted".to_string(), Value::Bool(true));
+        }
+        redacted.insert(question.id.clone(), Value::Object(entry));
+    }
+    Value::Object(redacted)
 }
 
 async fn insert_audit(
@@ -615,7 +830,7 @@ async fn insert_audit(
     .bind(actor.organization_id)
     .bind(actor.user_id)
     .bind(dispatch.approval_id)
-    .bind(json!({ "decision": dispatch.decision }))
+    .bind(&dispatch.audit_metadata)
     .bind(outcome)
     .execute(&mut **transaction)
     .await?;

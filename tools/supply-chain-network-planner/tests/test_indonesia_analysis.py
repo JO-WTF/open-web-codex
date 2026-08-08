@@ -185,9 +185,7 @@ def test_current_network_reconciles_generator_metrics(prepared_release) -> None:
     with pytest.raises(ValueError, match="Current transport cost components do not reconcile"):
         require_valid_indonesia_resource(invalid)
     invalid_ranking = current.model_dump(mode="json")
-    invalid_ranking["best_province_codes"] = list(
-        reversed(invalid_ranking["best_province_codes"])
-    )
+    invalid_ranking["best_province_codes"] = list(reversed(invalid_ranking["best_province_codes"]))
     with pytest.raises(ValueError, match="Best province ranking is inconsistent"):
         require_valid_indonesia_resource(invalid_ranking)
 
@@ -205,9 +203,7 @@ def test_candidate_scenario_respects_capacity_and_builds_bounded_map(
         >= (scenario.baseline_coverage.demand_coverage["2_day"])
     )
     assert scenario.candidate.selected_demand_units == 249_999
-    assert scenario.candidate_coverage.demand_coverage["2_day"] == pytest.approx(
-        0.741797070687903
-    )
+    assert scenario.candidate_coverage.demand_coverage["2_day"] == pytest.approx(0.741797070687903)
     assert scenario.candidate_costs.transport_total_idr == 109_048_262_500
     assert scenario.transport_cost_delta_idr == -976_434_900
     assert scenario.candidate_costs.annual_decision_cost_idr == 125_473_262_500
@@ -299,10 +295,7 @@ def test_decision_report_is_deterministic_and_contains_only_owned_deltas(
     network_map = prepared_map.to_resource(
         geojson_resource_name=sources.geojson_resource_name,
         geojson_ref=IndonesiaGeoJsonRef(
-            uri=(
-                "supply-chain-indonesia://geojson/"
-                f"{sources.geojson_resource_name}"
-            )
+            uri=(f"supply-chain-indonesia://geojson/{sources.geojson_resource_name}")
         ),
     )
 
@@ -317,9 +310,7 @@ def test_decision_report_is_deterministic_and_contains_only_owned_deltas(
     )
 
     assert validate_indonesia_resource(report.model_dump(mode="json")).valid
-    assert report.markdown_sha256 == hashlib.sha256(
-        report.markdown.encode("utf-8")
-    ).hexdigest()
+    assert report.markdown_sha256 == hashlib.sha256(report.markdown.encode("utf-8")).hexdigest()
     for known_answer in (
         "71.80%",
         "75.33%",
@@ -360,10 +351,7 @@ def test_decision_report_is_deterministic_and_contains_only_owned_deltas(
 def test_decision_report_tool_contract_is_reference_only() -> None:
     artifact_ref = "report-" + "a" * 24
     source = IndonesiaDataRef(
-        uri=(
-            "supply-chain-indonesia://resources/"
-            "indonesia_decision_report.v1-" + "a" * 24
-        ),
+        uri=("supply-chain-indonesia://resources/indonesia_decision_report.v1-" + "a" * 24),
         resource_schema="indonesia_decision_report.v1",
     )
     payload = {
@@ -404,9 +392,7 @@ def test_decision_report_tool_contract_is_reference_only() -> None:
     )
 
     mismatched_embed = json.loads(json.dumps(payload))
-    mismatched_embed["embed"]["code"] = (
-        '::codex-inline-vis{artifact="report-' + "b" * 24 + '"}'
-    )
+    mismatched_embed["embed"]["code"] = '::codex-inline-vis{artifact="report-' + "b" * 24 + '"}'
     with pytest.raises(ValueError, match="embed code must reference artifact.ref"):
         IndonesiaDecisionReportToolResult.model_validate(mismatched_embed)
 

@@ -2,7 +2,6 @@
 
 import assert from "node:assert/strict";
 import { Blob } from "node:buffer";
-import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -11,85 +10,80 @@ import { requireCompletedTurn } from "./e2e-turn-contract.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../../..");
-const indonesiaReleaseRoot = path.join(
+const fixtureRoot = path.join(
   repoRoot,
-  "tools/supply-chain-network-planner/examples/indonesia-tutorial/releases/1.0.0",
+  "tools/supply-chain-network-planner/examples/indonesia-network/base",
 );
-const baseUrl = (process.env.E2E_BASE_URL ?? "http://127.0.0.1:4810").replace(/\/$/, "");
+const baseUrl = (process.env.E2E_BASE_URL ?? "http://127.0.0.1:4800").replace(
+  /\/$/,
+  "",
+);
 const apiBase = `${baseUrl}/api`;
 const providerId = process.env.E2E_PROVIDER_ID ?? "deepseek-enterprise-e2e";
-const providerBaseUrl = process.env.E2E_PROVIDER_BASE_URL ?? "https://api.deepseek.com";
+const providerBaseUrl =
+  process.env.E2E_PROVIDER_BASE_URL ?? "https://api.deepseek.com";
 const providerWireApi = process.env.E2E_PROVIDER_WIRE_API ?? "chat";
 const model = process.env.E2E_MODEL ?? "deepseek-v4-flash";
 const effort = process.env.E2E_EFFORT ?? "none";
 const useBuiltInProvider = process.env.E2E_USE_BUILT_IN_PROVIDER === "1";
-const promptOverride = process.env.E2E_PROMPT?.trim();
-const observationOnly = process.env.E2E_OBSERVE_ONLY === "1";
-const lifecycleProbe = process.env.E2E_LIFECYCLE_PROBE === "1";
-const caseName = process.env.E2E_CASE_NAME?.trim() || "Indonesia Web authoring E2E";
+const runExtendedCases = process.env.E2E_RUN_EXTENDED_CASES !== "0";
 const username = process.env.E2E_ADMIN_USERNAME ?? "enterprise-e2e";
-const email = process.env.E2E_ADMIN_EMAIL ?? "enterprise-e2e@open-web-codex.local";
-const password = process.env.E2E_ADMIN_PASSWORD ?? "open-web-codex-enterprise-e2e";
+const email =
+  process.env.E2E_ADMIN_EMAIL ?? "enterprise-e2e@open-web-codex.local";
+const password =
+  process.env.E2E_ADMIN_PASSWORD ?? "open-web-codex-enterprise-e2e";
 const repositoryPolicy = {
   policy_id: "enterprise-supervisor-copilot",
-  version: "5.1.0",
+  version: "6.0.0",
 };
 const repositoryAgents = {
-  data: { definition_id: "enterprise-data-agent", version: "5.1.0" },
+  data: { definition_id: "enterprise-data-agent", version: "6.0.0" },
   network: {
     definition_id: "enterprise-network-planning-agent",
-    version: "5.1.0",
-  },
-  visualization: {
-    definition_id: "enterprise-visualization-agent",
-    version: "2.0.0",
+    version: "6.0.0",
   },
 };
+const fixtureFiles = [
+  ["demand-cities.csv", "demand_cities", "text/csv"],
+  ["existing-warehouses.csv", "existing_warehouses", "text/csv"],
+  ["route-quotes.csv", "route_quotes", "text/csv"],
+  ["administrative-areas.json", "administrative_areas", "application/json"],
+  ["candidate-warehouses.csv", "candidate_warehouses", "text/csv"],
+  ["source-lock.json", "source_lock", "application/json"],
+  ["validation-report.json", "validation_report", "application/json"],
+];
 const providerKey = useBuiltInProvider
   ? null
-  : await loadSecret("DEEPSEEK_API_KEY", process.env.DEEPSEEK_API_KEY_FILE);
+  : await loadSecret(
+      "DEEPSEEK_API_KEY",
+      process.env.DEEPSEEK_API_KEY_FILE,
+    );
+const secrets = [providerKey, password].filter(Boolean);
 const evidenceFile = process.env.E2E_EVIDENCE_FILE
   ? path.resolve(process.env.E2E_EVIDENCE_FILE)
   : null;
-const secrets = [providerKey, password].filter(Boolean);
 const stamp = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14);
-const customVersion = "1.0.0";
-const customAgentIds = {
-  data: `indonesia-data-${stamp}`,
-  network: `indonesia-network-${stamp}`,
-  visualization: `indonesia-map-${stamp}`,
-};
 const customPolicyId = `indonesia-supervisor-${stamp}`;
-const indonesiaFileContract = [
-  ["dataset-manifest.json", "dataset_manifest", "application/json"],
-  ["province-boundaries.geojson", "province_boundaries", "application/geo+json"],
-  ["customers.csv.gz", "customers", "application/gzip"],
-  ["customer-assignments.csv.gz", "customer_assignments", "application/gzip"],
-  ["warehouses.csv", "warehouses", "text/csv"],
-  ["warehouse-links.csv", "warehouse_links", "text/csv"],
-  ["candidate-locations.csv", "candidate_locations", "text/csv"],
-  ["transport-quotes.csv", "transport_quotes", "text/csv"],
-  ["planning-policy.json", "planning_policy", "application/json"],
-  ["validation-report.json", "validation_report", "application/json"],
-];
 const state = {
   token: undefined,
   project: undefined,
   workspace: undefined,
-  datasetRelease: undefined,
-  repositoryAgentDetails: {},
-  repositorySupervisor: undefined,
-  agentReleases: {},
-  supervisorRelease: undefined,
-  policy: undefined,
+  workState: undefined,
+  dataset: undefined,
   task: undefined,
   run: undefined,
-  turnId: undefined,
-  capabilityPackages: {},
+  policy: undefined,
+  rootTurnIds: [],
 };
 const results = [];
-const approvedEnterpriseMcpRequests = new Set();
-const approvedMcpServers = new Set(["supply_chain_indonesia", "map_utils"]);
+const answeredInputs = new Set();
+const approvedMcpRequests = new Set();
+const approvedMcpServers = new Set([
+  "platform_coordination",
+  "platform_work_state",
+  "supply_chain_data",
+  "supply_chain_network",
+]);
 
 function sanitize(value) {
   let text = typeof value === "string" ? value : JSON.stringify(value);
@@ -136,9 +130,12 @@ async function api(pathname, options = {}) {
     }
   }
   if (!response.ok) {
-    throw new Error(
+    const error = new Error(
       `${options.method ?? "GET"} ${pathname} failed (${response.status}): ${sanitize(body)}`,
     );
+    error.status = response.status;
+    error.body = body;
+    throw error;
   }
   return body;
 }
@@ -167,123 +164,33 @@ async function runCase(name, test) {
     const details = await test();
     const durationMs = Math.round(performance.now() - started);
     results.push({ name, status: "passed", durationMs, details });
-    log(`[PASS] ${name} (${durationMs} ms)${details ? ` — ${details}` : ""}`);
+    log(`[PASS] ${name} (${durationMs} ms)${details ? ` - ${details}` : ""}`);
   } catch (error) {
     const durationMs = Math.round(performance.now() - started);
-    results.push({ name, status: "failed", durationMs, error: sanitize(error.message) });
-    log(`[FAIL] ${name} (${durationMs} ms) — ${error.message}`);
+    results.push({
+      name,
+      status: "failed",
+      durationMs,
+      error: sanitize(error.message),
+    });
+    log(`[FAIL] ${name} (${durationMs} ms) - ${error.message}`);
     throw error;
   }
 }
 
-function findProvider(catalog, id) {
-  return catalog.data.find((provider) => provider.id === id);
-}
-
-function currentProviderId(catalog) {
-  return catalog.currentProviderId ?? catalog.current_provider_id;
-}
-
-function identity(definition) {
-  return `${definition.definition_id}@${definition.version}`;
-}
-
-async function allTaskEvents(taskId) {
+async function allTaskEvents() {
   const events = [];
   let afterSequence = 0;
   for (;;) {
-    const query = new URLSearchParams({ limit: "200" });
-    query.set("after_sequence", String(afterSequence));
-    const page = await api(`/tasks/${taskId}/events?${query}`);
+    const query = new URLSearchParams({
+      after_sequence: String(afterSequence),
+      limit: "200",
+    });
+    const page = await api(`/tasks/${state.task.id}/events?${query}`);
     events.push(...page);
     if (page.length < 200) return events;
     afterSequence = page.at(-1).sequence;
   }
-}
-
-async function approvePendingEnterpriseMcpRequests() {
-  const pending = await api("/approvals");
-  for (const approval of pending) {
-    if (
-      approval.runId !== state.run.id ||
-      approval.requestType !== "mcpServer/elicitation/request" ||
-      approvedEnterpriseMcpRequests.has(approval.id)
-    ) {
-      continue;
-    }
-    const events = await allTaskEvents(state.task.id);
-    const requestEvent = events.find(
-      (event) =>
-        event.event_type === "platform.approval.requested" &&
-        event.payload?.data?.approvalId === approval.id,
-    );
-    assert(requestEvent, `Approval ${approval.id} omitted its durable request event`);
-    const requestParams = requestEvent.payload?.data?.requestParams;
-    assert(
-      approvedMcpServers.has(requestParams?.serverName),
-      `Unexpected MCP approval server: ${requestParams?.serverName ?? "missing"}`,
-    );
-    assert(
-      typeof requestParams?.message === "string" &&
-        requestParams.message.trim().length > 0,
-      `MCP approval ${approval.id} omitted its display message`,
-    );
-    await api(`/approvals/${approval.id}/decision`, {
-      method: "POST",
-      body: {
-        decision: "accept",
-        version: approval.version,
-      },
-    });
-    approvedEnterpriseMcpRequests.add(approval.id);
-  }
-}
-
-async function waitForTurn(taskId, turnId) {
-  return eventually(
-    async () => {
-      await approvePendingEnterpriseMcpRequests();
-      const events = await allTaskEvents(taskId);
-      const rootFailure = events.find(
-        (event) =>
-          event.thread_id === state.run.codex_thread_id &&
-          event.turn_id === turnId &&
-          (event.event_type === "codex.thread.failed" ||
-            event.payload?.data?.failureReason),
-      );
-      if (rootFailure) {
-        throw new Error(`Root Turn failed: ${sanitize(rootFailure.payload)}`);
-      }
-      return requireCompletedTurn(events, {
-        threadId: state.run.codex_thread_id,
-        turnId,
-        label: "Root Turn",
-        sanitize,
-      });
-    },
-    `Enterprise Supervisor Turn ${turnId}`,
-    Number(process.env.E2E_TURN_TIMEOUT_MS ?? 900_000),
-    1_000,
-  );
-}
-
-async function waitForTurnStarted(taskId, turnId) {
-  return eventually(
-    async () => {
-      const events = await allTaskEvents(taskId);
-      return events.some(
-        (event) =>
-          event.thread_id === state.run.codex_thread_id &&
-          event.turn_id === turnId &&
-          event.event_type === "codex.turn.started",
-      )
-        ? events
-        : undefined;
-    },
-    `Runtime start for Turn ${turnId}`,
-    120_000,
-    100,
-  );
 }
 
 function itemType(event) {
@@ -298,87 +205,438 @@ function completedMcpCalls(events) {
   );
 }
 
-function findToolCall(calls, server, tool) {
-  return calls.find(
-    (event) =>
-      event.payload?.data?.server === server && event.payload?.data?.tool === tool,
-  );
-}
-
-function lastRootDeliveryMessage(events, turnId = state.turnId) {
-  return events
-    .filter(
+async function approveMcpRequests() {
+  const pending = await api("/approvals");
+  for (const approval of pending) {
+    if (
+      approval.runId !== state.run.id ||
+      approval.requestType !== "mcpServer/elicitation/request" ||
+      approvedMcpRequests.has(approval.id)
+    ) {
+      continue;
+    }
+    const events = await allTaskEvents();
+    const requestEvent = events.find(
       (event) =>
-        event.thread_id === state.run.codex_thread_id &&
-        event.turn_id === turnId &&
-        event.event_type === "codex.item.completed" &&
-        itemType(event) === "agentMessage",
-    )
-    .map((event) => event.payload?.data?.text)
-    .filter((text) => typeof text === "string" && text.trim())
-    .at(-1);
+        event.event_type === "platform.approval.requested" &&
+        event.payload?.data?.approvalId === approval.id,
+    );
+    assert(requestEvent, `Approval ${approval.id} has no durable request event`);
+    const serverName = requestEvent.payload?.data?.requestParams?.serverName;
+    assert(
+      approvedMcpServers.has(serverName),
+      `Unexpected MCP approval server: ${serverName ?? "missing"}`,
+    );
+    await api(`/approvals/${approval.id}/decision`, {
+      method: "POST",
+      body: { decision: "accept", version: approval.version },
+    });
+    approvedMcpRequests.add(approval.id);
+  }
 }
 
-function rootArtifactEvents(events, turnId = state.turnId) {
-  return events.filter(
-    (event) =>
-      event.thread_id === state.run.codex_thread_id &&
-      event.turn_id === turnId &&
-      event.event_type === "codex.item.completed" &&
-      itemType(event) === "agentMessage" &&
-      Array.isArray(event.payload?.data?.inlineArtifacts) &&
-      event.payload.data.inlineArtifacts.length > 0,
+function answerFor(question) {
+  if (question.options?.length) return question.options[0].label;
+  const text = `${question.id} ${question.header} ${question.question}`.toLowerCase();
+  if (text.includes("系数") || text.includes("coefficient")) return "1.25";
+  if (text.includes("速度") || text.includes("speed")) return "40";
+  if (text.includes("小时") || text.includes("hour")) return "6,12,18";
+  return "使用球面距离 × 绕路系数，不调用导航接口。";
+}
+
+async function answerPendingInputs() {
+  const requests = await api(`/runs/${state.run.id}/user-input-requests`);
+  for (const request of requests) {
+    if (answeredInputs.has(request.id)) continue;
+    const answers = Object.fromEntries(
+      request.questions.map((question) => [
+        question.id,
+        { answers: [answerFor(question)] },
+      ]),
+    );
+    try {
+      await api(`/approvals/${request.id}/user-input`, {
+        method: "POST",
+        body: { version: request.version, answers },
+      });
+      answeredInputs.add(request.id);
+    } catch (error) {
+      if (error.status !== 409) throw error;
+      answeredInputs.add(request.id);
+    }
+  }
+}
+
+async function waitForTurn(turnId) {
+  return eventually(
+    async () => {
+      await approveMcpRequests();
+      await answerPendingInputs();
+      const events = await allTaskEvents();
+      const failure = events.find(
+        (event) =>
+          event.thread_id === state.run.codex_thread_id &&
+          event.turn_id === turnId &&
+          (event.event_type === "codex.thread.failed" ||
+            event.payload?.data?.failureReason),
+      );
+      if (failure) throw new Error(`Root Turn failed: ${sanitize(failure.payload)}`);
+      return requireCompletedTurn(events, {
+        threadId: state.run.codex_thread_id,
+        turnId,
+        label: "Network Supervisor Turn",
+        sanitize,
+      });
+    },
+    `Network Supervisor Turn ${turnId}`,
+    Number(process.env.E2E_TURN_TIMEOUT_MS ?? 900_000),
+    1_000,
   );
 }
 
-async function publishAgentRelease(kind, datasetReleaseIds) {
-  const templateIdentity = repositoryAgents[kind];
-  const template = state.repositoryAgentDetails[kind];
-  const draft = {
-    definition_id: customAgentIds[kind],
-    version: customVersion,
-    display_name: `${template.display_name} Web E2E`,
-    description: template.description,
-    responsibilities: template.responsibilities,
-    developer_instructions: template.developer_instructions,
-    input_artifact_types: template.input_artifact_types,
-    output_artifact_types: template.output_artifact_types,
-    capability_template: {
-      source: "repository_agent",
-      definition_id: templateIdentity.definition_id,
-      version: templateIdentity.version,
-      release_id: null,
+async function sendMessage(text) {
+  const sent = await api(`/tasks/${state.task.id}/messages`, {
+    method: "POST",
+    body: {
+      text,
+      model,
+      model_provider: providerId,
+      effort,
+      service_tier: null,
+      access_mode: "workspace-write",
+      images: [],
+      collaboration_mode: {
+        mode: "default",
+        settings: {
+          model,
+          reasoning_effort: effort,
+        },
+      },
     },
-    dataset_release_ids: datasetReleaseIds,
+  });
+  assert.equal(sent.thread_id, state.run.codex_thread_id);
+  state.rootTurnIds.push(sent.turn_id);
+  await waitForTurn(sent.turn_id);
+  return sent.turn_id;
+}
+
+async function uploadDataset(datasetId, version, files) {
+  const form = new FormData();
+  form.append(
+    "metadata",
+    JSON.stringify({
+      idempotency_key: `${datasetId}-${version}-${crypto.randomUUID()}`,
+      dataset_id: datasetId,
+      version,
+      display_name: `Indonesia network ${version}`,
+      description: "Explicitly requested tutorial fixture for E2E validation.",
+      files: files.map(([logicalName, role, mediaType], index) => ({
+        field_id: `file-${index + 1}`,
+        logical_name: logicalName,
+        role,
+        media_type: mediaType,
+      })),
+    }),
+  );
+  for (const [index, [logicalName, , mediaType]] of files.entries()) {
+    const bytes = await readFile(path.join(fixtureRoot, logicalName));
+    form.append(
+      `file-${index + 1}`,
+      new Blob([bytes], { type: mediaType }),
+      logicalName,
+    );
+  }
+  const release = await api(
+    `/workspaces/${encodeURIComponent(state.workspace.id)}/datasets`,
+    { method: "POST", body: form },
+  );
+  assert.equal(release.state, "published");
+  assert.equal(release.workspace_id, state.workspace.id);
+  assert.equal(release.files.length, files.length);
+  assert.match(release.content_sha256, /^[0-9a-f]{64}$/);
+  return release;
+}
+
+async function uploadWorkspaceFiles(files) {
+  const form = new FormData();
+  for (const [logicalName, , mediaType] of files) {
+    const bytes = await readFile(path.join(fixtureRoot, logicalName));
+    form.append(
+      "file",
+      new Blob([bytes], { type: mediaType }),
+      `tutorial/${logicalName}`,
+    );
+  }
+  const uploaded = await api(
+    `/workspaces/${encodeURIComponent(state.workspace.id)}/files`,
+    { method: "POST", body: form },
+  );
+  assert.equal(uploaded.paths.length, files.length);
+  return uploaded.paths;
+}
+
+async function createWorkState() {
+  return api(`/tasks/${encodeURIComponent(state.task.id)}/work-states`, {
+    method: "POST",
+    body: {
+      workspaceId: state.workspace.id,
+      definition: {
+        id: crypto.randomUUID(),
+        definitionId: "indonesia-network-planning",
+        version: "1.0.0",
+        contentSha256: "b".repeat(64),
+        components: [
+          {
+            key: "network_requirements",
+            displayName: "本次网络问题的数据需求",
+            required: true,
+            resourceTypes: ["data_requirement_profile.v2"],
+            dependsOn: [],
+          },
+          {
+            key: "network_input",
+            displayName: "网络输入",
+            required: true,
+            resourceTypes: ["normalized_network_input.v1"],
+            dependsOn: ["network_requirements"],
+          },
+          {
+            key: "route_matrix",
+            displayName: "路线矩阵",
+            required: false,
+            resourceTypes: ["route_matrix.v1"],
+            dependsOn: ["network_input"],
+          },
+          {
+            key: "network_deliverables",
+            displayName: "规划交付件",
+            required: false,
+            resourceTypes: ["network_planning_report.v1", "network_comparison_map.v1"],
+            dependsOn: ["route_matrix"],
+          },
+        ],
+      },
+      idempotencyKey: `indonesia-work-state-${crypto.randomUUID()}`,
+    },
+  });
+}
+
+async function uploadCurrentCoverageExtension() {
+  const logicalName = "current-coverage.csv";
+  const bytes = await readFile(
+    path.join(
+      repoRoot,
+      "tools/supply-chain-network-planner/examples/indonesia-network/current-coverage-extension",
+      logicalName,
+    ),
+  );
+  const form = new FormData();
+  form.append(
+    "metadata",
+    JSON.stringify({
+      idempotency_key: `current-coverage-${crypto.randomUUID()}`,
+      dataset_id: "indonesia-warehouse-network-current-coverage",
+      version: "1.0.0",
+      display_name: "Indonesia current coverage extension",
+      description: "Explicit current coverage extension for the tutorial.",
+      files: [
+        {
+          field_id: "file-1",
+          logical_name: logicalName,
+          role: "current_coverage",
+          media_type: "text/csv",
+        },
+      ],
+    }),
+  );
+  form.append("file-1", new Blob([bytes], { type: "text/csv" }), logicalName);
+  const release = await api(
+    `/workspaces/${encodeURIComponent(state.workspace.id)}/datasets`,
+    { method: "POST", body: form },
+  );
+  const workspaceForm = new FormData();
+  workspaceForm.append(
+    "file",
+    new Blob([bytes], { type: "text/csv" }),
+    `tutorial/${logicalName}`,
+  );
+  await api(`/workspaces/${encodeURIComponent(state.workspace.id)}/files`, {
+    method: "POST",
+    body: workspaceForm,
+  });
+  return release;
+}
+
+function identity(value) {
+  return `${value.definition_id}@${value.version}`;
+}
+
+async function publishSupervisorDraft() {
+  const policies = await api("/supervisor-policies");
+  const summary = policies.find(
+    (entry) =>
+      entry.policy_id === repositoryPolicy.policy_id &&
+      entry.version === repositoryPolicy.version,
+  );
+  assert(summary, "The current 6.0 Supervisor package is not published");
+  const repository = await api(
+    `/supervisor-policies/${repositoryPolicy.policy_id}/${repositoryPolicy.version}`,
+  );
+  assert.deepEqual(
+    repository.agents.map(identity).sort(),
+    Object.values(repositoryAgents).map(identity).sort(),
+  );
+  assert.equal(repository.agents.length, 2);
+  assert(
+    repository.artifact_contracts.every(
+      (contract) => !contract.artifact_type.includes("planning-dataset.v2"),
+    ),
+    "The current Supervisor still requires the removed monolithic dataset contract",
+  );
+
+  const draft = {
+    policy_id: customPolicyId,
+    display_name: "Indonesia Network Tutorial Supervisor",
+    description: "A user-authored Supervisor for the composable network tutorial.",
+    responsibilities: repository.responsibilities,
+    instruction_policy: {
+      policy_id: repository.instruction_policy.policy_id,
+      version: repository.instruction_policy.version,
+    },
+    custom_instructions: repository.custom_instructions,
+    coordination_capabilities: repository.coordination_capabilities,
+    agents: repository.agents,
+    artifact_contracts: repository.artifact_contracts,
+    data_requirement_contracts: repository.data_requirement_contracts ?? [],
+    max_active_child_agents: 2,
   };
-  const resource = await api("/agent-definition-resources", {
+  let definition = await api("/supervisor-definitions", {
     method: "POST",
     body: draft,
   });
+  assert.equal(definition.draft_metadata.revision, 1);
+  for (let revision = 1; revision <= 2; revision += 1) {
+    definition = await api(
+      `/supervisor-definitions/${encodeURIComponent(definition.id)}/draft`,
+      {
+        method: "PUT",
+        body: {
+          draft: {
+            ...draft,
+            custom_instructions: `${draft.custom_instructions}\nRevision check ${revision}.`,
+          },
+          expected_revision: revision,
+        },
+      },
+    );
+    assert.equal(definition.draft_metadata.revision, revision + 1);
+  }
   const validation = await api(
-    `/agent-definition-resources/${encodeURIComponent(resource.id)}/validate`,
+    `/supervisor-definitions/${encodeURIComponent(definition.id)}/validate`,
     { method: "POST" },
   );
   assert.equal(validation.valid, true, JSON.stringify(validation.issues));
-  assert.match(validation.content_sha256, /^[0-9a-f]{64}$/);
-  assert.match(validation.execution_semantics_sha256, /^[0-9a-f]{64}$/);
   const release = await api(
-    `/agent-definition-resources/${encodeURIComponent(resource.id)}/publish`,
-    { method: "POST" },
+    `/supervisor-definitions/${encodeURIComponent(definition.id)}/publish`,
+    {
+      method: "POST",
+      body: { expected_revision: definition.draft_metadata.revision },
+    },
   );
-  assert.equal(release.definition_id, customAgentIds[kind]);
-  assert.equal(release.version, customVersion);
-  return { draft, resource, release };
+  assert.equal(release.version, "1.0.0");
+  state.policy = { policy_id: release.policy_id, version: release.version };
+  return { definition, release };
 }
 
-function remapAgentIdentity(value) {
-  if (value === "supervisor") return value;
-  for (const [kind, repositoryAgent] of Object.entries(repositoryAgents)) {
-    if (value === identity(repositoryAgent)) {
-      return `${customAgentIds[kind]}@${customVersion}`;
-    }
-  }
-  throw new Error(`Unknown repository Agent identity in Supervisor contract: ${value}`);
+async function inspectRun() {
+  const lifecycle = await eventually(async () => {
+    const [agents, executions] = await Promise.all([
+      api(`/runs/${state.run.id}/agents`),
+      api(`/runs/${state.run.id}/agent-executions`),
+    ]);
+    const children = agents.filter((agent) => !agent.is_root);
+    const childThreadIds = new Set(children.map((agent) => agent.thread_id));
+    const childExecutions = executions.filter((execution) =>
+      childThreadIds.has(execution.thread_id),
+    );
+    const terminal = new Set(["completed", "failed", "interrupted"]);
+    const everyChildObserved = children.every((agent) =>
+      childExecutions.some((execution) => execution.thread_id === agent.thread_id),
+    );
+    return children.length >= 2 &&
+      everyChildObserved &&
+      childExecutions.length >= children.length &&
+      childExecutions.every((execution) => terminal.has(execution.status))
+      ? { agents, executions, children, childExecutions }
+      : undefined;
+  }, "Agent execution projections to reach terminal state", 60_000);
+  const { agents, executions, children, childExecutions } = lifecycle;
+  const [activities, events, artifacts] = await Promise.all([
+    api(`/runs/${state.run.id}/agent-activities`),
+    allTaskEvents(),
+    api(`/tasks/${state.task.id}/artifacts`),
+  ]);
+  assert(
+    children.length >= 2,
+    "The Supervisor did not create the required Data and Network Agent Threads",
+  );
+  assert(
+    children.every((agent) => agent.parent_thread_id === state.run.codex_thread_id),
+    "A child Agent is not attached to the root Thread",
+  );
+  assert(
+    childExecutions.length >= children.length &&
+      childExecutions.every((execution) =>
+        ["completed", "failed", "interrupted"].includes(execution.status),
+      ),
+    "An Agent execution remained non-terminal after the root Turn completed",
+  );
+  assert(childExecutions.every((execution) => execution.display_title?.trim()));
+  assert(childExecutions.every((execution) => Number.isInteger(execution.wait_cycle_count)));
+  assert(
+    !activities.some((activity) =>
+      /Waiting for Agent updates|Wait cycle finished/i.test(activity.title ?? ""),
+    ),
+    "The main Agent timeline still contains one card per wait cycle",
+  );
+  const calls = completedMcpCalls(events);
+  assert(calls.some((event) => event.payload?.data?.server === "supply_chain_data"));
+  assert(calls.some((event) => event.payload?.data?.server === "supply_chain_network"));
+  assert(calls.some((event) => event.payload?.data?.server === "platform_work_state"));
+  assert(
+    !calls.some((event) =>
+      ["supply_chain_indonesia"].includes(event.payload?.data?.server),
+    ),
+    "The current run called a removed MCP entry point",
+  );
+  assert(
+    !calls.some((event) =>
+      String(event.payload?.data?.tool ?? "").includes("planning_dataset"),
+    ),
+    "The current run called a removed monolithic dataset tool",
+  );
+  const inputRequested = events.filter(
+    (event) =>
+      event.event_type === "platform.approval.requested" &&
+      event.payload?.data?.requestMethod === "item/tool/requestUserInput",
+  );
+  const inputResolved = events.filter(
+    (event) =>
+      event.event_type === "platform.approval.resolved" &&
+      event.payload?.data?.requestMethod === "item/tool/requestUserInput",
+  );
+  return {
+    agents,
+    children,
+    executions,
+    childExecutions,
+    activities,
+    events,
+    artifacts,
+    calls,
+    inputRequested,
+    inputResolved,
+  };
 }
 
 await runCase("authenticated single-Profile bootstrap", async () => {
@@ -388,7 +646,7 @@ await runCase("authenticated single-Profile bootstrap", async () => {
   try {
     auth = await api("/sessions/local", { method: "POST" });
   } catch (error) {
-    if (!error.message.includes("503")) throw error;
+    if (error.status !== 503) throw error;
     auth = await api("/bootstrap", {
       method: "POST",
       body: { name: "Enterprise E2E Owner", username, email, password },
@@ -415,80 +673,69 @@ await runCase("real Provider selection", async () => {
         select: true,
       },
     });
-    assert(!JSON.stringify(catalog).includes(providerKey), "Provider response leaked its API key");
+    assert(!JSON.stringify(catalog).includes(providerKey));
     catalog = await api(`/providers/${providerId}/models/refresh`, { method: "POST" });
   }
-  assert.equal(currentProviderId(catalog), providerId);
-  const provider = findProvider(catalog, providerId);
+  let provider = catalog.data.find((entry) => entry.id === providerId);
   assert(provider, `${providerId} Provider was not discovered`);
-  if (!useBuiltInProvider || provider.models.length > 0) {
-    assert(
-      provider.models.some((entry) => entry.modelId === model),
-      `${model} was not discovered; available=${provider.models
-        .map((entry) => entry.modelId)
-        .join(",")}`,
+  if (!provider.models.some((entry) => entry.modelId === model)) {
+    catalog = await api(
+      `/providers/${encodeURIComponent(providerId)}/models/${encodeURIComponent(model)}`,
+      {
+        method: "PATCH",
+        body: { contextWindow: 128000 },
+      },
     );
+    provider = catalog.data.find((entry) => entry.id === providerId);
   }
-  return `provider=${providerId}`;
+  assert(provider.models.some((entry) => entry.modelId === model), `${model} was not registered for the selected Provider`);
+  await api(
+    `/providers/${encodeURIComponent(providerId)}/models/${encodeURIComponent(model)}/select`,
+    { method: "POST" },
+  );
+  return `provider=${providerId}; model=${model}`;
 });
 
-await runCase("current repository capability contracts", async () => {
-  const [policies, definitions, capabilityPackages] = await Promise.all([
+await runCase("current 6.0 capability contracts", async () => {
+  const [policies, definitions, packages] = await Promise.all([
     api("/supervisor-policies"),
     api("/agent-definitions"),
     api("/capability-packages"),
   ]);
-  const draftDefinition = definitions.find(
-    (entry) =>
-      entry.policy_id === repositoryPolicy.policy_id &&
-      entry.draft?.version === repositoryPolicy.version,
-  );
-  const supervisor = draftDefinition?.draft;
-  assert(supervisor, "Indonesia Network Planning Copilot Draft was not found");
   assert(
     policies.some(
       (entry) =>
         entry.policy_id === repositoryPolicy.policy_id &&
-        entry.version === repositoryPolicy.version &&
-        entry.source === "draft" &&
-        entry.draft_id === draftDefinition.id,
+        entry.version === repositoryPolicy.version,
     ),
   );
-  for (const [kind, agentIdentity] of Object.entries(repositoryAgents)) {
+  for (const agent of Object.values(repositoryAgents)) {
     assert(
       definitions.some(
         (entry) =>
-          entry.definition_id === agentIdentity.definition_id &&
-          entry.version === agentIdentity.version &&
+          entry.definition_id === agent.definition_id &&
+          entry.version === agent.version &&
           entry.source === "repository",
       ),
-      `${identity(agentIdentity)} is not published`,
-    );
-    state.repositoryAgentDetails[kind] = await api(
-      `/agent-definitions/${agentIdentity.definition_id}/${agentIdentity.version}`,
+      `${identity(agent)} is not published`,
     );
   }
-  state.repositorySupervisor = supervisor;
-  assert.deepEqual(
-    supervisor.agents.map((entry) => `${entry.definition_id}@${entry.version}`).sort(),
-    Object.values(repositoryAgents).map(identity).sort(),
+  const supplyChainPackage = packages.find(
+    (entry) => entry.mcp_server_names.includes("supply_chain_network"),
   );
-  const supplyChainPackages = capabilityPackages.filter(
-    (entry) =>
-      entry.includes_skills &&
-      entry.mcp_server_names.includes("supply_chain_indonesia"),
+  assert(supplyChainPackage, "The single-entry supply-chain MCP package was not discovered");
+  assert(
+    packages.some((entry) => entry.mcp_server_names.includes("platform_work_state")),
+    "The Domain Agent Work State MCP package was not discovered",
   );
-  const mapPackages = capabilityPackages.filter((entry) =>
-    entry.mcp_server_names.includes("map_utils"),
+  assert(
+    !packages.some((entry) => entry.mcp_server_names.includes("supply_chain_indonesia")),
+    "The removed Indonesia MCP entry is still advertised",
   );
-  assert.equal(supplyChainPackages.length, 1, "Indonesia capability discovery was ambiguous");
-  assert.equal(mapPackages.length, 1, "Map capability discovery was ambiguous");
-  state.capabilityPackages.supplyChain = supplyChainPackages[0];
-  state.capabilityPackages.maps = mapPackages[0];
-  return `${repositoryPolicy.policy_id}@${repositoryPolicy.version}; 3 governed roles`;
+  return "6.0 Data Agent + Network Agent; one supply-chain MCP entry";
 });
 
-await runCase("managed Workspace", async () => {
+await runCase("managed Workspace and explicit tutorial fixture upload", async () => {
   state.project = await api("/projects/managed", {
     method: "POST",
     body: { name: `Indonesia Network Tutorial ${stamp}` },
@@ -505,167 +752,48 @@ await runCase("managed Workspace", async () => {
       copy_agents_md: false,
     },
   });
-  assert.equal(state.workspace.project_id, state.project.id);
-  return `workspace=${state.workspace.id}`;
+  state.dataset = await uploadDataset(
+    "indonesia-warehouse-network-tutorial",
+    "1.0.0",
+    fixtureFiles,
+  );
+  const workspaceFiles = await uploadWorkspaceFiles(fixtureFiles);
+  return `workspace=${state.workspace.id}; files=${state.dataset.files.length}; workspaceFiles=${workspaceFiles.length}`;
 });
 
-await runCase("Web-published immutable Indonesia Dataset Release", async () => {
-  const form = new FormData();
-  const metadata = {
-    idempotency_key: `indonesia-dataset-${crypto.randomUUID()}`,
-    dataset_id: "indonesia-warehouse-network-tutorial",
-    version: "1.0.0",
-    display_name: "Indonesia Warehouse Network Tutorial",
-    description:
-      "Synthetic, source-locked tutorial data for governed Indonesia warehouse-network analysis.",
-    files: indonesiaFileContract.map(([logicalName, role, mediaType], index) => ({
-      field_id: `file-${index + 1}`,
-      logical_name: logicalName,
-      role,
-      media_type: mediaType,
-    })),
-  };
-  form.append("metadata", JSON.stringify(metadata));
-  for (const [index, [logicalName, , mediaType]] of indonesiaFileContract.entries()) {
-    const bytes = await readFile(path.join(indonesiaReleaseRoot, logicalName));
-    form.append(
-      `file-${index + 1}`,
-      new Blob([bytes], { type: mediaType }),
-      logicalName,
-    );
-  }
-  state.datasetRelease = await api(
-    `/workspaces/${encodeURIComponent(state.workspace.id)}/datasets`,
-    { method: "POST", body: form },
+await runCase("Supervisor draft revisions and automatic release version", async () => {
+  const published = await publishSupervisorDraft();
+  const persistedDefinitions = await api("/supervisor-definitions");
+  const persistedDefinition = persistedDefinitions.find(
+    (definition) => definition.id === published.definition.id,
   );
-  assert.equal(state.datasetRelease.state, "published");
-  assert.equal(state.datasetRelease.workspace_id, state.workspace.id);
-  assert.equal(state.datasetRelease.files.length, indonesiaFileContract.length);
-  assert.match(state.datasetRelease.content_sha256, /^[0-9a-f]{64}$/);
-  const listed = await api(
-    `/workspaces/${encodeURIComponent(state.workspace.id)}/datasets`,
-  );
-  assert(
-    listed.some(
-      (release) =>
-        release.id === state.datasetRelease.id &&
-        release.content_sha256 === state.datasetRelease.content_sha256,
-    ),
-  );
-  return `${state.datasetRelease.dataset_id}@${state.datasetRelease.version}; 10 files`;
+  assert.ok(persistedDefinition, "published Supervisor definition was not persisted");
+  assert.equal(persistedDefinition.draft, null);
+  assert.equal(published.release.version, "1.0.0");
+  return `${published.release.policy_id}@${published.release.version}; draft revisions=3`;
 });
 
-await runCase("Web-published least-privilege Agent Releases", async () => {
-  state.agentReleases.data = await publishAgentRelease("data", [
-    state.datasetRelease.id,
-  ]);
-  state.agentReleases.network = await publishAgentRelease("network", []);
-  state.agentReleases.visualization = await publishAgentRelease("visualization", []);
-
-  const definitions = await api("/agent-definitions");
-  for (const [kind, published] of Object.entries(state.agentReleases)) {
-    const definition = definitions.find(
-      (entry) =>
-        entry.definition_id === customAgentIds[kind] &&
-        entry.version === customVersion &&
-        entry.release_id === published.release.id,
-    );
-    assert(definition, `${customAgentIds[kind]} was not discoverable after publication`);
-    assert.equal(definition.source, "user_release");
-    if (kind === "data") {
-      assert.equal(definition.required_workspace_id, state.workspace.id);
-      assert.deepEqual(
-        definition.dataset_releases.map((release) => release.release_id),
-        [state.datasetRelease.id],
-      );
-    } else {
-      assert.equal(definition.dataset_releases.length, 0);
-    }
-  }
-  return "Data, Network, and Visualization Agent Releases published";
-});
-
-await runCase("Web-published dynamic Supervisor Release", async () => {
-  const repository = state.repositorySupervisor;
-  let customInstructions = repository.custom_instructions;
-  for (const [kind, repositoryAgent] of Object.entries(repositoryAgents)) {
-    customInstructions = customInstructions.replaceAll(
-      identity(repositoryAgent),
-      `${customAgentIds[kind]}@${customVersion}`,
-    );
-  }
-  const draft = {
-    policy_id: customPolicyId,
-    version: customVersion,
-    display_name: "Indonesia Network Tutorial Supervisor",
-    description:
-      "Dynamically coordinates the smallest governed Agent set needed for an Indonesia network decision.",
-    responsibilities: repository.responsibilities,
-    instruction_policy: {
-      policy_id: repository.instruction_policy.policy_id,
-      version: repository.instruction_policy.version,
-    },
-    custom_instructions: customInstructions,
-    agents: Object.keys(repositoryAgents).map((kind) => ({
-      definition_id: customAgentIds[kind],
-      version: customVersion,
-      release_id: state.agentReleases[kind].release.id,
-      spawn_limit: 1,
-    })),
-    artifact_contracts: repository.artifact_contracts.map((contract) => ({
-      artifact_type: contract.artifact_type,
-      producer_agent: remapAgentIdentity(contract.producer_agent),
-      consumer_agents: contract.consumer_agents.map(remapAgentIdentity),
-      required: contract.required,
-    })),
-    max_active_child_agents: 3,
-  };
-  const resource = await api("/supervisor-definitions", {
-    method: "POST",
-    body: draft,
-  });
-  const validation = await api(
-    `/supervisor-definitions/${encodeURIComponent(resource.id)}/validate`,
-    { method: "POST" },
-  );
-  assert.equal(validation.valid, true, JSON.stringify(validation.issues));
-  assert.match(validation.content_sha256, /^[0-9a-f]{64}$/);
-  assert.match(validation.execution_semantics_sha256, /^[0-9a-f]{64}$/);
-  const release = await api(
-    `/supervisor-definitions/${encodeURIComponent(resource.id)}/publish`,
-    { method: "POST" },
-  );
-  state.supervisorRelease = { draft, resource, release };
-  state.policy = { policy_id: customPolicyId, version: customVersion };
-  const resolved = await api(
-    `/supervisor-policies/${customPolicyId}/${customVersion}`,
-  );
-  assert.equal(resolved.source, "user_release");
-  assert.deepEqual(
-    resolved.agents.map((entry) => entry.release_id).sort(),
-    Object.values(state.agentReleases).map((entry) => entry.release.id).sort(),
-  );
-  assert.equal(resolved.max_active_child_agents, 3);
-  return `${customPolicyId}@${customVersion}`;
-});
-
-await runCase("Policy-bound root Thread", async () => {
+await runCase("policy-bound root Thread", async () => {
   state.task = await api("/tasks", {
     method: "POST",
     body: {
       project_id: state.project.id,
-      title: "印尼全国履约网络决策",
+      title: "印尼仓网规划 6.0 E2E",
       model_provider: providerId,
       model,
     },
   });
+  state.workState = await createWorkState();
+  assert.equal(state.workState.taskId, state.task.id);
+  assert.equal(state.workState.workspaceId, state.workspace.id);
   const readiness = await api(
-    `/workspaces/${state.workspace.id}/run-readiness`,
+    `/workspaces/${encodeURIComponent(state.workspace.id)}/run-readiness`,
     {
       method: "POST",
       body: {
         model_provider: providerId,
         model,
+        purpose: "conversation",
         supervisor_policy: state.policy,
         agent: null,
       },
@@ -678,6 +806,7 @@ await runCase("Policy-bound root Thread", async () => {
       idempotency_key: `indonesia-run-${crypto.randomUUID()}`,
       readiness_fingerprint: readiness.evaluation_fingerprint,
       workspace_id: state.workspace.id,
+      purpose: "conversation",
       fork_thread_id: null,
       fork_source_run_id: null,
       supervisor_policy: state.policy,
@@ -686,960 +815,111 @@ await runCase("Policy-bound root Thread", async () => {
   state.run = await eventually(async () => {
     const run = await api(`/runs/${started.run.id}`);
     return run.codex_thread_id && run.workspace_id ? run : undefined;
-  }, "Policy-bound root Thread", 120_000, 500);
+  }, "policy-bound root Thread");
   const binding = await eventually(async () => {
-    const current = await api(`/runs/${state.run.id}/supervisor-policy`);
-    return current?.state === "bound" ? current : undefined;
-  }, "Supervisor Policy binding");
-  assert.equal(binding.thread_id, state.run.codex_thread_id);
+    const value = await api(`/runs/${state.run.id}/supervisor-policy`);
+    return value?.state === "bound" ? value : undefined;
+  });
   assert.equal(binding.policy_id, state.policy.policy_id);
   assert.equal(binding.version, state.policy.version);
-  return `run=${state.run.id}; root Thread=${state.run.codex_thread_id}`;
+  return `run=${state.run.id}`;
 });
 
-await runCase("dynamic Indonesian network decision and map", async () => {
-  const prompt = promptOverride ?? `分析现有印尼仓库网络并给出建议。
-
-我需要知道当前网络的一日、两日和三日需求覆盖率、全网干线与末端年度运输成本、各省时效表现，并按数据合同声明的省份排名口径分别列出表现最好和最需要改善的前三个省份。然后判断能否在完整的已审核候选点中新增一个前置仓，使两日需求覆盖率达到 74%；建设费用按 5 年摊销。请比较当前方案与入选方案的一日、两日、三日覆盖率，以及干线、末端、运输总成本、年度固定成本、摊销建设成本和年度决策总成本，并创建一张地图展示两者差异。
-
-请根据尚未解决的证据问题动态决定需要哪些 Agent，不要为了凑数量运行角色，也不要按写死的 Agent 顺序执行。只使用平台授权的数据与类型化 Artifact；不要扫描工作区、运行终端命令、读取原始客户行、调用导航服务或自行编造候选地点。距离采用教程声明的球面距离乘系数方法，司机每天可行驶 6 小时。
-
-确定性报告 Artifact 必须包含“证据索引”，并使用“事实、假设、分析、建议、局限、缺失证据”六个部分。证据索引必须列出数据检查、现网、候选优化、入选方案和地图所使用的每个原样 resource_name 及其负责的事实。每个关键数字注明拥有该字段的 Artifact schema 和原样 resource_name，不要用服务基线引用成本，不要用入选方案引用完整候选集合，也不要暴露 Resource URI。优化状态必须原样写出 Tool 返回的枚举；所有金额保留 Resource 中的精确 IDR 整数，不要换算为 B、million、billion、万或亿，也不要自行计算新的金额比例。删除任何没有精确前后字段支撑的运营效果推断。最终只交付平台可解析的 report.v1 与 map.v3 引用，不要让模型复制或改写报告正文。`;
-
-  const sent = await api(`/tasks/${state.task.id}/messages`, {
-    method: "POST",
-    body: {
-      text: prompt,
-      model,
-      model_provider: providerId,
-      effort,
-      service_tier: null,
-      access_mode: "workspace-write",
-      images: [],
-      collaboration_mode: null,
-    },
-  });
-  assert.equal(sent.thread_id, state.run.codex_thread_id);
-  state.turnId = sent.turn_id;
-  const events = await waitForTurn(state.task.id, state.turnId);
-  return `${events.length} durable browser events`;
+await runCase("baseline journey with explicit user input and one Work State", async () => {
+  const turnId = await sendMessage(`
+使用已上传的印尼仓网教程 mock 数据，明确这是用户主动要求使用的示例数据。识别国家为印度尼西亚，并让 Data Agent 与 Network Agent 在整个任务中使用同一个平台 Work State（ID: ${state.workState.id}）。
+先让 Network Agent 定义本次最小数据需求，再让 Data Agent 检查 Workspace 文件、确认字段映射并把标准化结果作为 Resource 引用提交到 Work State。Agent 之间不要传 Resource URI、hash、路径、完整工具结果或原始数据。
+本轮标准化输入必须与网络模型合同一致：已有仓库至少包含 warehouse_id、warehouse_name、warehouse_type、city_id、city_name、longitude、latitude、is_existing；需求城市至少包含 city_id、city_name、province_id、province_name、longitude、latitude、demand_quantity。
+每个子 Agent assignment 都必须包含当前 Run ID（${state.run.id}）和 Work State ID；使用 platform_work_state 的 begin/apply/fail 工具记录操作和交付件。
+路线只使用球面距离乘绕路系数，不调用导航。绕路系数尚未给出，Root Supervisor 必须在派发依赖该参数的子 Agent 前使用官方 request_user_input 询问；E2E 会回答 1.25。平均速度使用 40 km/h，目标时效为 6、12、18 小时。
+计算现有仓范围内的时效最优覆盖。由于没有 current coverage，必须标记 optimized_existing_footprint 并说明不是当前实际方案。最后发布 network_planning_report.v1；本轮不计算成本、不新增仓库、不生成方案地图。`);
+  const snapshot = await inspectRun();
+  assert(snapshot.inputRequested.length > 0, "The missing route parameter did not create a durable input request");
+  assert(
+    snapshot.inputResolved.length >= snapshot.inputRequested.length,
+    "The user input request was not durably resolved",
+  );
+  assert(
+    snapshot.artifacts.every((artifact) => artifact.state === "ready"),
+    "A report Artifact is not ready after the completed baseline Turn",
+  );
+  state.baseline = snapshot;
+  return `${turnId}; children=${snapshot.children.length}; input requests=${snapshot.inputRequested.length}; calls=${snapshot.calls.length}`;
 });
 
-if (observationOnly) {
-  await runCase("capture Runtime collaboration evidence", async () => {
-    const [agents, executions, events, artifacts, binding] = await Promise.all([
-      api(`/runs/${state.run.id}/agents`),
-      api(`/runs/${state.run.id}/agent-executions`),
-      allTaskEvents(state.task.id),
-      api(`/tasks/${state.task.id}/artifacts`),
-      api(`/runs/${state.run.id}/supervisor-policy`),
-    ]);
-    const calls = completedMcpCalls(events);
-    const deliveryMessage = lastRootDeliveryMessage(events);
-    assert(deliveryMessage, "Root Supervisor did not produce a final delivery");
-    if (evidenceFile) {
-      const evidence = {
-        schemaVersion: "indonesia-supervisor-observation.v1",
-        verifiedAt: new Date().toISOString(),
-        case: caseName,
-        provider: { id: providerId, model },
-        datasetRelease: state.datasetRelease,
-        agentReleases: Object.fromEntries(
-          Object.entries(state.agentReleases).map(([kind, value]) => [
-            kind,
-            value.release,
-          ]),
-        ),
-        policy: binding,
-        run: {
-          id: state.run.id,
-          rootThreadId: state.run.codex_thread_id,
-          turnId: state.turnId,
-          workspaceId: state.workspace.id,
-        },
-        agents,
-        executions,
-        toolCalls: calls.map((event) => ({
-          sequence: event.sequence,
-          threadId: event.thread_id,
-          server: event.payload?.data?.server,
-          tool: event.payload?.data?.tool,
-        })),
-        artifacts,
-        deliveryMessage,
-      };
-      await mkdir(path.dirname(evidenceFile), { recursive: true });
-      await writeFile(evidenceFile, `${JSON.stringify(evidence, null, 2)}\n`, {
-        mode: 0o600,
-      });
-      log(`\nEvidence: ${evidenceFile}`);
-    }
-    return `${agents.length} Runtime Threads; ${executions.length} Agent tasks; ${calls.length} MCP calls; ${artifacts.length} Resource Artifacts`;
-  });
-
-  log("\nIndonesia Supervisor observation summary");
-  for (const result of results) {
-    log(`- ${result.status.toUpperCase()} ${result.name} (${result.durationMs} ms)`);
-  }
-  log(`\n${results.length}/${results.length} cases passed.`);
-  process.exit(0);
-}
-
-let finalEvidence;
-await runCase("Runtime-selected Agent tree and governed tool scope", async () => {
-  const agents = await eventually(async () => {
-    const current = await api(`/runs/${state.run.id}/agents`);
-    return current.length >= 4 ? current : undefined;
-  }, "root plus three task-required Runtime child Threads");
-  const root = agents.find((agent) => agent.is_root);
-  assert(root);
-  assert.equal(root.agent_role, null);
-  assert.equal(root.thread_id, state.run.codex_thread_id);
-  const children = agents.filter((agent) => !agent.is_root);
-  assert.equal(children.length, 3, "Supervisor did not choose the three task-required roles");
-  assert(
-    children.every((agent) => agent.parent_thread_id === root.thread_id),
-    "A governed child Agent is not attached to the root Thread",
-  );
-  assert(
-    children.every(
-      (agent) => !["failed", "interrupted"].includes(agent.status_type),
-    ),
-    "A selected Agent terminated unsuccessfully",
-  );
-
-  const events = await allTaskEvents(state.task.id);
-  const calls = completedMcpCalls(events);
-  const inspectCall = findToolCall(
-    calls,
-    "supply_chain_indonesia",
-    "inspect_indonesia_dataset_release",
-  );
-  const currentCall = findToolCall(
-    calls,
-    "supply_chain_indonesia",
-    "evaluate_indonesia_current_network",
-  );
-  const optimizeCall = findToolCall(
-    calls,
-    "supply_chain_indonesia",
-    "optimize_indonesia_new_warehouse",
-  );
-  const prepareMapCall = findToolCall(
-    calls,
-    "supply_chain_indonesia",
-    "prepare_indonesia_network_map",
-  );
-  const prepareRenderCall = findToolCall(
-    calls,
-    "supply_chain_indonesia",
-    "prepare_indonesia_map_render",
-  );
-  const createMapCall = findToolCall(calls, "map_utils", "create_map_card");
-  const prepareReportCall = findToolCall(
-    calls,
-    "supply_chain_indonesia",
-    "prepare_indonesia_decision_report",
-  );
-  assert(inspectCall, "Data Agent did not inspect the authorized Dataset Release");
-  assert(currentCall, "Network Agent did not evaluate the current network");
-  assert(optimizeCall, "Network Agent did not evaluate the finite candidate set");
-  assert(prepareMapCall, "Network Agent did not prepare bounded map evidence");
-  assert(
-    prepareRenderCall,
-    "Visualization Agent did not resolve the exact map Resource names",
-  );
-  assert(createMapCall, "Visualization Agent did not create a browser map");
-  assert(
-    prepareReportCall,
-    "Network Agent did not prepare the deterministic decision report",
-  );
-  assert.equal(
-    calls.filter(
-      (event) =>
-        event.payload?.data?.server === "supply_chain_indonesia" &&
-        event.payload?.data?.tool === "prepare_indonesia_decision_report",
-    ).length,
-    1,
-    "Network Agent retried or duplicated deterministic report publication",
-  );
-
-  const dataAgent = agents.find((agent) => agent.thread_id === inspectCall.thread_id);
-  const networkAgent = agents.find((agent) => agent.thread_id === currentCall.thread_id);
-  const visualizationAgent = agents.find(
-    (agent) => agent.thread_id === createMapCall.thread_id,
-  );
-  assert(dataAgent && networkAgent && visualizationAgent);
-  assert.notEqual(dataAgent.thread_id, networkAgent.thread_id);
-  assert.notEqual(networkAgent.thread_id, visualizationAgent.thread_id);
-  assert.notEqual(dataAgent.thread_id, visualizationAgent.thread_id);
-  assert.equal(optimizeCall.thread_id, networkAgent.thread_id);
-  assert.equal(prepareMapCall.thread_id, networkAgent.thread_id);
-  assert.equal(prepareReportCall.thread_id, networkAgent.thread_id);
-  assert.equal(prepareRenderCall.thread_id, visualizationAgent.thread_id);
-
-  const mapToolOutput = createMapCall.payload?.data?.result?.structuredContent;
-  assert.equal(
-    mapToolOutput?.kind,
-    "inline-visualization.v1",
-    "Map Tool omitted its typed inline-visualization contract",
-  );
-  assert.equal(
-    mapToolOutput?.artifact?.renderer?.kind,
-    "map.v3",
-    "Map Tool returned an unexpected renderer contract",
-  );
-  const mapArtifactId = mapToolOutput?.artifact?.ref;
-  const mapEmbedCode = mapToolOutput?.embed?.code;
-  assert.match(
-    mapArtifactId ?? "",
-    /^map-[a-f0-9-]+$/i,
-    "Map Tool omitted its typed Artifact reference",
-  );
-  assert.equal(
-    mapEmbedCode,
-    `::codex-inline-vis{artifact="${mapArtifactId}"}`,
-    "Map Tool Artifact reference and embed directive diverged",
-  );
-
-  const visualizationHandoffEvent = events
-    .filter(
-      (event) =>
-        event.thread_id === visualizationAgent.thread_id &&
-        event.event_type === "codex.item.completed" &&
-        itemType(event) === "agentMessage" &&
-        event.payload?.data?.text?.includes("MAP_HANDOFF"),
-    )
-    .at(-1);
-  const visualizationHandoff = visualizationHandoffEvent?.payload?.data?.text;
-  assert(visualizationHandoff, "Visualization Agent omitted MAP_HANDOFF provenance");
-  assert(
-    /"map_manifest_resource_name"\s*:\s*"indonesia_network_map\.v1-[a-f0-9]{24}"/i.test(
-      visualizationHandoff,
-    ),
-    "Visualization Agent omitted the exact map manifest Resource name",
-  );
-  assert(
-    /"geojson_resource_name"\s*:\s*"geojson\.v1-[a-f0-9]{24}"/i.test(
-      visualizationHandoff,
-    ),
-    "Visualization Agent omitted the exact GeoJSON Resource name",
-  );
-  assert(
-    new RegExp(
-      `"map_artifact_id"\\s*:\\s*"${mapArtifactId}"`,
-      "i",
-    ).test(visualizationHandoff),
-    "Visualization Agent handoff diverged from the Tool-owned map Artifact ID",
-  );
-  assert.equal(
-    visualizationHandoff.includes('"map_embed_code"'),
-    false,
-    "Visualization Agent duplicated the embed directive inside model-authored JSON",
-  );
-  assert.equal(
-    visualizationHandoff.split(/\r?\n/).filter((line) => line === mapEmbedCode)
-      .length,
-    1,
-    "Visualization Agent did not copy the Tool-owned embed directive exactly once as a standalone paragraph",
-  );
-  const projectedMapArtifacts =
-    visualizationHandoffEvent.payload?.data?.inlineArtifacts?.filter(
-      (artifact) => artifact.renderer?.kind === "map.v3",
-    ) ?? [];
-  assert.equal(
-    projectedMapArtifacts.length,
-    1,
-    "Platform did not project exactly one typed map Artifact from the child handoff",
-  );
-  assert.equal(
-    projectedMapArtifacts[0].ref,
-    mapArtifactId,
-    "Platform map projection diverged from the Tool-owned Artifact reference",
-  );
-
-  const reportToolOutput =
-    prepareReportCall.payload?.data?.result?.structuredContent;
-  const reportSourceArguments = prepareReportCall.payload?.data?.arguments;
-  assert(
-    reportSourceArguments &&
-      typeof reportSourceArguments === "object" &&
-      !Array.isArray(reportSourceArguments),
-    "Decision-report Tool call omitted its typed Resource inputs",
-  );
-  assert.equal(
-    reportToolOutput?.kind,
-    "inline-visualization.v1",
-    "Decision-report Tool omitted its typed delivery contract",
-  );
-  assert.equal(
-    reportToolOutput?.artifact?.renderer?.kind,
-    "report.v1",
-    "Decision-report Tool returned an unexpected renderer contract",
-  );
-  const reportArtifactId = reportToolOutput?.artifact?.ref;
-  const reportEmbedCode = reportToolOutput?.embed?.code;
-  assert.match(
-    reportArtifactId ?? "",
-    /^report-[a-f0-9-]+$/i,
-    "Decision-report Tool omitted its typed Artifact reference",
-  );
-  assert.equal(
-    reportEmbedCode,
-    `::codex-inline-vis{artifact="${reportArtifactId}"}`,
-    "Decision-report Tool Artifact reference and embed directive diverged",
-  );
-  assert.equal(
-    Object.hasOwn(reportToolOutput ?? {}, "report_markdown"),
-    false,
-    "Decision-report Tool copied the full report into model-visible structured output",
-  );
-
-  const reportHandoffEvent = events
-    .filter(
-      (event) =>
-        event.thread_id === networkAgent.thread_id &&
-        event.event_type === "codex.item.completed" &&
-        itemType(event) === "agentMessage" &&
-        event.payload?.data?.text?.includes("REPORT_HANDOFF"),
-    )
-    .at(-1);
-  const reportHandoff = reportHandoffEvent?.payload?.data?.text;
-  assert(reportHandoff, "Network Agent omitted REPORT_HANDOFF provenance");
-  assert(
-    /"report_resource_name"\s*:\s*"indonesia_decision_report\.v1-[a-f0-9]{24}"/i.test(
-      reportHandoff,
-    ),
-    "Network Agent omitted the exact decision-report Resource name",
-  );
-  assert(
-    new RegExp(
-      `"report_artifact_id"\\s*:\\s*"${reportArtifactId}"`,
-      "i",
-    ).test(reportHandoff),
-    "Network Agent handoff diverged from the Tool-owned report Artifact ID",
-  );
-  assert.equal(
-    reportHandoff.split(/\r?\n/).filter((line) => line === reportEmbedCode)
-      .length,
-    1,
-    "Network Agent did not copy the Tool-owned report directive exactly once as a standalone paragraph",
-  );
-  const projectedReportArtifacts =
-    reportHandoffEvent.payload?.data?.inlineArtifacts?.filter(
-      (artifact) => artifact.renderer?.kind === "report.v1",
-    ) ?? [];
-  assert.equal(
-    projectedReportArtifacts.length,
-    1,
-    "Platform did not project exactly one typed report Artifact from the child handoff",
-  );
-  assert.equal(
-    projectedReportArtifacts[0].ref,
-    reportArtifactId,
-    "Platform report projection diverged from the Tool-owned Artifact reference",
-  );
-
-  const executions = await eventually(async () => {
-    const current = await api(`/runs/${state.run.id}/agent-executions`);
-    return current.length >= 3 &&
-      current.every((execution) =>
-        ["completed", "failed", "interrupted"].includes(execution.status)
-      )
-      ? current
-      : undefined;
-  }, "persisted child Agent task executions");
-  assert(executions.every((execution) => execution.status === "completed"));
-  for (const agent of [dataAgent, networkAgent, visualizationAgent]) {
+if (runExtendedCases) {
+  await runCase("current-coverage extension and actual-current label", async () => {
+    const extension = await uploadCurrentCoverageExtension();
+    assert.equal(extension.state, "published");
+    await sendMessage(
+      "现在已经明确上传 current coverage extension。请重新检查当前覆盖关系，只计算 actual_current 的当前时效基线；仍然只使用球面距离，不要把优化基线冒充实际方案。",
+    );
+    const snapshot = await inspectRun();
     assert(
-      executions.some((execution) => execution.thread_id === agent.thread_id),
-      `Agent ${agent.thread_id} has no persisted execution`,
-    );
-  }
-  assert(
-    executions.every(
-      (execution) =>
-        typeof execution.task === "string" && execution.task.trim().length > 0,
-    ),
-    "Agent task text was not persisted",
-  );
-
-  const commandExecutions = events.filter(
-    (event) => itemType(event) === "commandExecution",
-  );
-  assert.equal(
-    commandExecutions.length,
-    0,
-    "A governed Agent bypassed Runtime capabilities with a terminal command",
-  );
-  assert.equal(
-    calls.filter((event) => event.thread_id === root.thread_id).length,
-    0,
-    "Root Supervisor executed a business MCP Tool",
-  );
-  const failedMcpCalls = calls.filter(
-    (event) => event.payload?.data?.status !== "completed",
-  );
-  assert.equal(
-    failedMcpCalls.length,
-    0,
-    `Governed Agents made failed MCP calls: ${failedMcpCalls
-      .map(
-        (event) =>
-          `${event.payload?.data?.server}.${event.payload?.data?.tool}: ${event.payload?.data?.error?.message ?? "unknown error"}`,
-      )
-      .join("; ")}`,
-  );
-  assert.equal(
-    calls.filter((event) =>
-      ["list_mcp_resources", "list_mcp_resource_templates"].includes(
-        event.payload?.data?.tool,
-      )
-    ).length,
-    0,
-    "An Agent searched MCP Resource catalogs instead of using the exact Artifact handoff",
-  );
-
-  const resourceProtocolTools = new Set([
-    "read_mcp_resource",
-  ]);
-  const allowedBusinessTools = new Map([
-    [
-      dataAgent.thread_id,
-      new Set(["inspect_indonesia_dataset_release"]),
-    ],
-    [
-      networkAgent.thread_id,
-      new Set([
-        "evaluate_indonesia_service_baseline",
-        "evaluate_indonesia_current_network",
-        "evaluate_indonesia_candidate",
-        "optimize_indonesia_new_warehouse",
-        "prepare_indonesia_network_map",
-        "prepare_indonesia_decision_report",
-        "validate_indonesia_resource",
-      ]),
-    ],
-    [
-      visualizationAgent.thread_id,
-      new Set(["prepare_indonesia_map_render", "create_map_card"]),
-    ],
-  ]);
-  for (const call of calls) {
-    const tool = call.payload?.data?.tool;
-    const server = call.payload?.data?.server;
-    if (resourceProtocolTools.has(tool)) continue;
-    const allowed = allowedBusinessTools.get(call.thread_id);
-    assert(allowed?.has(tool), `Tool ${server}.${tool} escaped its Agent role`);
-    assert(
-      (server === "supply_chain_indonesia" && tool !== "create_map_card") ||
-        (server === "map_utils" && tool === "create_map_card"),
-      `Tool ${server}.${tool} used an undeclared MCP server`,
-    );
-  }
-  assert(
-    !calls.some(
-      (event) =>
-        event.thread_id === visualizationAgent.thread_id &&
-        resourceProtocolTools.has(event.payload?.data?.tool),
-    ),
-    "Visualization Agent bypassed typed map preparation with direct Resource reads",
-  );
-  assert(inspectCall.sequence < currentCall.sequence);
-  assert(currentCall.sequence < prepareMapCall.sequence);
-  assert(optimizeCall.sequence < prepareMapCall.sequence);
-  assert(prepareMapCall.sequence < prepareRenderCall.sequence);
-  assert(prepareRenderCall.sequence < createMapCall.sequence);
-  assert(prepareMapCall.sequence < prepareReportCall.sequence);
-
-  finalEvidence = {
-    agents,
-    executions,
-    events,
-    calls,
-    dataAgent,
-    networkAgent,
-    visualizationAgent,
-    reportArtifactId,
-    reportEmbedCode,
-    reportSourceArguments,
-    mapArtifactId,
-    mapEmbedCode,
-  };
-  return `root + 3 child Threads; ${executions.length} persisted Agent tasks; ${calls.length} MCP calls`;
-});
-
-await runCase("durable typed Resources and cross-Agent map resolution", async () => {
-  const requiredSchemas = [
-    "indonesia_dataset_inspection.v1",
-    "indonesia_service_baseline.v1",
-    "indonesia_current_network_analysis.v1",
-    "indonesia_candidate_scenario.v1",
-    "indonesia_location_optimization.v1",
-    "indonesia_network_map.v1",
-    "geojson.v1",
-    "indonesia_decision_report.v1",
-  ];
-  const optionalSchemas = [];
-  const artifacts = await eventually(async () => {
-    const current = await api(`/tasks/${state.task.id}/artifacts`);
-    const failed = current.find((artifact) => artifact.state === "failed");
-    if (failed) throw new Error(`Artifact ${failed.id} failed materialization`);
-    const schemas = new Set(current.map((artifact) => artifact.artifact_schema));
-    return requiredSchemas.every((schema) => schemas.has(schema)) &&
-      current.every((artifact) => artifact.state === "ready")
-      ? current
-      : undefined;
-  }, "durable Indonesia Resource Artifacts", 180_000, 1_000);
-
-  for (const schema of requiredSchemas) {
-    assert.equal(
-      artifacts.filter((artifact) => artifact.artifact_schema === schema).length,
-      1,
-      `${schema} did not materialize exactly once`,
-    );
-  }
-  for (const schema of optionalSchemas) {
-    assert(
-      artifacts.filter((artifact) => artifact.artifact_schema === schema).length <= 1,
-      `${schema} materialized more than once`,
-    );
-  }
-  const inspection = artifacts.find(
-    (artifact) => artifact.artifact_schema === "indonesia_dataset_inspection.v1",
-  );
-  assert.equal(inspection.producer_agent_role, finalEvidence.dataAgent.agent_role);
-  for (const artifact of artifacts.filter(
-    (entry) => entry.artifact_schema !== "indonesia_dataset_inspection.v1",
-  )) {
-    assert.equal(artifact.producer_agent_role, finalEvidence.networkAgent.agent_role);
-  }
-
-  const contents = {};
-  for (const artifact of artifacts) {
-    assert.equal(artifact.task_id, state.task.id);
-    assert.equal(artifact.producer_run_id, state.run.id);
-    assert.equal(typeof artifact.producer_thread_id, "string");
-    assert(artifact.producer_thread_id.length > 0);
-    assert.equal(typeof artifact.producer_turn_id, "string");
-    assert(artifact.producer_turn_id.length > 0);
-    assert.equal(typeof artifact.producer_item_id, "string");
-    assert(artifact.producer_item_id.length > 0);
-    assert.match(artifact.content_sha256 ?? "", /^[a-f0-9]{64}$/);
-    const summary = await api(`/artifacts/${artifact.id}`);
-    assert.equal(summary.id, artifact.id);
-    assert.equal(summary.task_id, state.task.id);
-    assert.equal(summary.producer_run_id, state.run.id);
-    assert.equal(summary.producer_thread_id, artifact.producer_thread_id);
-    assert.equal(summary.producer_turn_id, artifact.producer_turn_id);
-    assert.equal(summary.producer_item_id, artifact.producer_item_id);
-    assert.equal(summary.content_sha256, artifact.content_sha256);
-    assert(!Object.hasOwn(summary, "source_server"));
-    assert(!Object.hasOwn(summary, "source_uri"));
-    const content = await api(`/artifacts/${artifact.id}/content`);
-    if (artifact.artifact_schema === "geojson.v1") {
-      assert.equal(content.type, "FeatureCollection");
-      assert(content.features.length > 0 && content.features.length < 200);
-      assert(
-        content.features.every(
-          (feature) => !Object.hasOwn(feature.properties ?? {}, "customer_id"),
-        ),
-        "Map Artifact exposed customer rows",
-      );
-    } else {
-      assert.equal(content.schema_version, artifact.artifact_schema);
-    }
-    contents[artifact.id] = content;
-  }
-
-  const rootDeliveryEvents = rootArtifactEvents(finalEvidence.events);
-  assert(
-    rootDeliveryEvents.length > 0,
-    "Root Supervisor did not deliver typed report and map Artifacts",
-  );
-  const rootInlineArtifacts = rootDeliveryEvents.flatMap(
-    (event) => event.payload.data.inlineArtifacts,
-  );
-  const inlineReports = rootInlineArtifacts.filter(
-    (artifact) => artifact.renderer?.kind === "report.v1",
-  );
-  const inlineMaps = rootInlineArtifacts.filter(
-    (artifact) => artifact.renderer?.kind === "map.v3",
-  );
-  assert.equal(inlineReports.length, 1);
-  assert.equal(inlineMaps.length, 1);
-  const decisionReportArtifact = artifacts.find(
-    (artifact) => artifact.artifact_schema === "indonesia_decision_report.v1",
-  );
-  assert(decisionReportArtifact, "Deterministic decision-report Artifact is missing");
-  const reportRendererPayload = inlineReports[0].renderer.payload;
-  assert.equal(reportRendererPayload.status, "ready");
-  assert.equal(reportRendererPayload.source.type, "artifact");
-  assert.equal(reportRendererPayload.source.format, "json");
-  assert.equal(
-    reportRendererPayload.source.artifact_id,
-    decisionReportArtifact.id,
-  );
-  assert.equal(
-    reportRendererPayload.source.url,
-    `/api/artifacts/${decisionReportArtifact.id}/content`,
-  );
-  assert.equal(reportRendererPayload.source.mime_type, "application/json");
-  assert(!JSON.stringify(reportRendererPayload).includes("supply-chain-indonesia://"));
-  const rendererPayload = inlineMaps[0].renderer.payload;
-  assert.equal(rendererPayload.status, "ready");
-  assert.equal(rendererPayload.sources.network.data.type, "artifact");
-  assert.match(
-    rendererPayload.sources.network.data.url,
-    /^\/api\/artifacts\/[0-9a-f-]+\/content$/,
-  );
-  assert(!JSON.stringify(rendererPayload).includes("supply-chain-indonesia://"));
-
-  const binding = await api(`/runs/${state.run.id}/supervisor-policy`);
-  const safeTrace = JSON.stringify({
-    binding,
-    agents: finalEvidence.agents,
-    executions: finalEvidence.executions,
-    artifacts,
-    events: finalEvidence.events,
-  });
-  assert(!safeTrace.includes("supply-chain-indonesia://"));
-  assert(!safeTrace.includes(repoRoot));
-
-  finalEvidence.artifacts = artifacts;
-  finalEvidence.contents = contents;
-  finalEvidence.binding = binding;
-  finalEvidence.inlineReport = inlineReports[0];
-  finalEvidence.inlineMap = inlineMaps[0];
-  return `${artifacts.length} ready Resource Artifacts; one report.v1 and one map.v3 delivery`;
-});
-
-await runCase("typed Supervisor report Artifact", async () => {
-  const decisionReportArtifact = finalEvidence.artifacts.find(
-    (artifact) => artifact.artifact_schema === "indonesia_decision_report.v1",
-  );
-  assert(decisionReportArtifact, "Deterministic decision-report Artifact is missing");
-  assert.equal(decisionReportArtifact.state, "ready");
-  assert.equal(decisionReportArtifact.producer_run_id, state.run.id);
-  assert.equal(
-    decisionReportArtifact.producer_thread_id,
-    finalEvidence.networkAgent.thread_id,
-  );
-  assert.equal(
-    decisionReportArtifact.producer_agent_role,
-    finalEvidence.networkAgent.agent_role,
-  );
-  const decisionReport = finalEvidence.contents[decisionReportArtifact.id];
-  assert.equal(decisionReport.schema_version, "indonesia_decision_report.v1");
-  assert.equal(typeof decisionReport.markdown, "string");
-  assert(decisionReport.markdown.trim(), "Decision-report Artifact markdown is empty");
-  assert.match(decisionReport.markdown_sha256 ?? "", /^[a-f0-9]{64}$/);
-  assert.equal(
-    createHash("sha256").update(decisionReport.markdown).digest("hex"),
-    decisionReport.markdown_sha256,
-    "Decision-report Artifact markdown does not match its declared digest",
-  );
-
-  const expectedSourceSchemas = {
-    inspection_resource_name: "indonesia_dataset_inspection.v1",
-    service_resource_name: "indonesia_service_baseline.v1",
-    current_resource_name: "indonesia_current_network_analysis.v1",
-    optimization_resource_name: "indonesia_location_optimization.v1",
-    candidate_resource_name: "indonesia_candidate_scenario.v1",
-    map_resource_name: "indonesia_network_map.v1",
-    geojson_resource_name: "geojson.v1",
-  };
-  assert(
-    decisionReport.sources &&
-      typeof decisionReport.sources === "object" &&
-      !Array.isArray(decisionReport.sources),
-    "Decision-report Artifact omitted its typed sources",
-  );
-  assert.deepEqual(
-    Object.keys(decisionReport.sources).sort(),
-    Object.keys(expectedSourceSchemas).sort(),
-  );
-  assert.deepEqual(
-    decisionReport.sources,
-    finalEvidence.reportSourceArguments,
-    "Decision-report sources diverged from the exact Tool inputs",
-  );
-  for (const [sourceKey, schema] of Object.entries(expectedSourceSchemas)) {
-    const sourceArtifact = finalEvidence.artifacts.find(
-      (artifact) => artifact.artifact_schema === schema,
-    );
-    assert(sourceArtifact, `Decision-report source Artifact ${schema} is missing`);
-    assert.equal(
-      decisionReport.sources[sourceKey],
-      `${schema}-${sourceArtifact.content_sha256.slice(0, 24)}`,
-      `Decision-report source ${sourceKey} diverged from its ready Artifact`,
-    );
-    assert.equal(sourceArtifact.producer_run_id, state.run.id);
-  }
-  assert(
-    Array.isArray(decisionReport.checks) &&
-      decisionReport.checks.length > 0 &&
-      decisionReport.checks.every(
-        (check) => typeof check === "string" && check.trim().length > 0,
+      snapshot.calls.some(
+        (event) => event.payload?.data?.tool === "evaluate_network_baseline",
       ),
-    "Decision-report Artifact omitted its typed validation checks",
-  );
-  assert.deepEqual(decisionReport.release, {
-    workspace_id: state.workspace.id,
-    release_id: state.datasetRelease.id,
-    dataset_id: state.datasetRelease.dataset_id,
-    version: state.datasetRelease.version,
-    content_sha256: state.datasetRelease.content_sha256,
+      "The current-coverage Turn did not call the composable baseline tool",
+    );
+    state.currentCoverage = snapshot;
+    return `extension=${extension.id}; actual-current baseline requested`;
   });
 
-  assert(
-    !decisionReport.markdown.includes("::codex-inline-vis{"),
-    "Decision-report Resource crossed ownership by embedding a browser Artifact",
-  );
-  assert.equal(
-    finalEvidence.inlineReport.ref,
-    finalEvidence.reportArtifactId,
-    "Root report projection diverged from the Tool-owned Artifact reference",
-  );
-  assert.equal(
-    finalEvidence.inlineMap.ref,
-    finalEvidence.mapArtifactId,
-    "Root map projection diverged from the Tool-owned Artifact reference",
-  );
-  const safeReport = JSON.stringify(decisionReport);
-  assert(!safeReport.includes("[internal-resource-uri]"));
-  assert(!safeReport.includes("supply-chain-indonesia://"));
-  assert(!safeReport.includes(repoRoot));
-  finalEvidence.report = {
-    artifactId: decisionReportArtifact.id,
-    contentSha256: decisionReportArtifact.content_sha256,
-    markdownSha256: decisionReport.markdown_sha256,
-  };
-  return "ready report Artifact with validated digest, sources, checks, and provenance";
-});
-
-await runCase("browser history and evidence recovery", async () => {
-  const turns = await api(`/runs/${state.run.id}/thread/turns`);
-  const deliveryItems = turns
-    .flatMap((turn) => turn.items ?? [])
-    .filter(
-      (item) =>
-        item.type === "agentMessage" &&
-        Array.isArray(item.inlineArtifacts) &&
-        item.inlineArtifacts.length > 0,
-    );
-  const restoredInlineArtifacts = deliveryItems.flatMap(
-    (item) => item.inlineArtifacts,
-  );
-  const restoredReports = restoredInlineArtifacts.filter(
-    (artifact) => artifact.renderer?.kind === "report.v1",
-  );
-  const restoredMaps = restoredInlineArtifacts.filter(
-    (artifact) => artifact.renderer?.kind === "map.v3",
-  );
-  assert.equal(restoredReports.length, 1, "Browser history did not restore report.v1");
-  assert.equal(restoredMaps.length, 1, "Browser history did not restore map.v3");
-  assert.deepEqual(restoredReports[0], finalEvidence.inlineReport);
-  assert.deepEqual(restoredMaps[0], finalEvidence.inlineMap);
-  assert.equal(
-    restoredReports[0].renderer.payload.source.artifact_id,
-    finalEvidence.report.artifactId,
-  );
-  const restoredReportContent = await api(
-    `/artifacts/${restoredReports[0].renderer.payload.source.artifact_id}/content`,
-  );
-  assert.equal(
-    restoredReportContent.schema_version,
-    "indonesia_decision_report.v1",
-  );
-  assert.equal(typeof restoredReportContent.markdown, "string");
-  assert(restoredReportContent.markdown.trim());
-  assert.equal(
-    restoredReportContent.markdown_sha256,
-    finalEvidence.report.markdownSha256,
-  );
-  assert.equal(
-    createHash("sha256").update(restoredReportContent.markdown).digest("hex"),
-    restoredReportContent.markdown_sha256,
-  );
-
-  const [binding, agents, executions, artifacts] = await Promise.all([
-    api(`/runs/${state.run.id}/supervisor-policy`),
-    api(`/runs/${state.run.id}/agents`),
-    api(`/runs/${state.run.id}/agent-executions`),
-    api(`/tasks/${state.task.id}/artifacts`),
-  ]);
-  const overview = { binding, agents, executions, artifacts };
-  assert.equal(binding.policy_id, state.policy.policy_id);
-  assert.equal(binding.version, state.policy.version);
-  assert.equal(agents.length, finalEvidence.agents.length);
-  assert.deepEqual(executions, finalEvidence.executions);
-  assert.equal(artifacts.length, finalEvidence.artifacts.length);
-  assert(artifacts.every((artifact) => artifact.state === "ready"));
-  const restoredReportArtifact = artifacts.find(
-    (artifact) => artifact.id === finalEvidence.report.artifactId,
-  );
-  assert(restoredReportArtifact, "Restored Artifact list omitted the report");
-  assert.equal(
-    restoredReportArtifact.content_sha256,
-    finalEvidence.report.contentSha256,
-  );
-  assert.equal(restoredReportArtifact.producer_run_id, state.run.id);
-  assert(!JSON.stringify(overview).includes("supply-chain-indonesia://"));
-  return `${turns.length} restored Turns; ${agents.length} Agents; ${artifacts.length} Resource Artifacts`;
-});
-
-if (lifecycleProbe) {
-  await runCase("completed Network Agent follow-up preserves child Thread identity", async () => {
-    const target = finalEvidence.networkAgent;
-    const previousExecutions = finalEvidence.executions
-      .filter((execution) => execution.thread_id === target.thread_id)
-      .sort((left, right) => left.ordinal - right.ordinal);
-    const previousOrdinal = previousExecutions.at(-1).ordinal;
-    const sent = await api(`/tasks/${state.task.id}/messages`, {
-      method: "POST",
-      body: {
-        text: `执行一次生命周期复核。不要创建任何新 Agent。必须通过 Runtime 协作工具向上一轮已完成的 Network Planning Agent 发送一个新任务，请它基于已验证证据说明“当前入选方案相对实际网络的主要改善，以及什么变化会推翻该结论”，等待同一个 Agent 完成后再用两句话汇总。不要重新运行 MCP 工具。`,
-        model,
-        model_provider: providerId,
-        effort,
-        service_tier: null,
-        access_mode: "workspace-write",
-        images: [],
-        collaboration_mode: null,
-      },
-    });
-    await waitForTurn(state.task.id, sent.turn_id);
-
-    const targetExecutions = await eventually(async () => {
-      const current = await api(`/runs/${state.run.id}/agent-executions`);
-      const matching = current
-        .filter((execution) => execution.thread_id === target.thread_id)
-        .sort((left, right) => left.ordinal - right.ordinal);
-      const latest = matching.at(-1);
-      return latest?.ordinal === previousOrdinal + 1 && latest.status === "completed"
-        ? matching
-        : undefined;
-    }, "follow-up execution on the completed Network Agent", 300_000, 1_000);
-    const agents = await api(`/runs/${state.run.id}/agents`);
-    assert.equal(agents.length, finalEvidence.agents.length, "Follow-up spawned a new Agent");
-    const followUp = targetExecutions.at(-1);
-    const turns = await api(
-      `/runs/${state.run.id}/agents/${encodeURIComponent(target.thread_id)}/turns`,
-    );
-    assert(
-      turns.some((turn) => turn.id === followUp.turn_id),
-      "Browser-safe child history omitted the follow-up Turn",
-    );
-    finalEvidence.lifecycle = {
-      followUp: {
-        rootTurnId: sent.turn_id,
-        agentThreadId: target.thread_id,
-        agentTurnId: followUp.turn_id,
-        ordinal: followUp.ordinal,
-      },
-    };
-    return `same child Thread=${target.thread_id}; execution ordinal=${followUp.ordinal}`;
-  });
-
-  await runCase("Runtime interrupt reaches a terminal outcome and recovers", async () => {
-    const interrupted = await api(`/tasks/${state.task.id}/messages`, {
-      method: "POST",
-      body: {
-        text: "开始一次新的网络假设复核，在给出结论前逐项检查上一轮证据。",
-        model,
-        model_provider: providerId,
-        effort,
-        service_tier: null,
-        access_mode: "workspace-write",
-        images: [],
-        collaboration_mode: null,
-      },
-    });
-    await waitForTurnStarted(state.task.id, interrupted.turn_id);
-    const interruptResult = await api(`/runs/${state.run.id}/interrupt`, {
-      method: "POST",
-      body: { turn_id: interrupted.turn_id },
-    });
-    assert.equal(interruptResult.status, "interrupted");
-    const interruptedTurn = await eventually(async () => {
-      const turns = await api(`/runs/${state.run.id}/thread/turns`);
-      const turn = turns.find((candidate) => candidate.id === interrupted.turn_id);
-      return turn?.status?.toLowerCase().includes("interrupt") ? turn : undefined;
-    }, "authoritative interrupted Turn history", 120_000, 500);
-
-    const recovered = await api(`/tasks/${state.task.id}/messages`, {
-      method: "POST",
-      body: {
-        text: "不要创建 Agent 或调用工具，只回复 LIFECYCLE_RECOVERED。",
-        model,
-        model_provider: providerId,
-        effort,
-        service_tier: null,
-        access_mode: "workspace-write",
-        images: [],
-        collaboration_mode: null,
-      },
-    });
-    await waitForTurn(state.task.id, recovered.turn_id);
-    const rootTurns = await api(`/runs/${state.run.id}/thread/turns`);
-    const recoveredTurn = rootTurns.find((turn) => turn.id === recovered.turn_id);
-    assert(recoveredTurn, "Runtime did not persist the recovery Turn");
-    assert(
-      recoveredTurn.items.some(
-        (item) =>
-          item.type === "agentMessage" &&
-          typeof item.text === "string" &&
-          item.text.includes("LIFECYCLE_RECOVERED"),
-      ),
-      "Recovery Turn did not complete with the expected response",
-    );
-    finalEvidence.lifecycle.interrupt = {
-      interruptedTurnId: interruptedTurn.id,
-      interruptedStatus: interruptedTurn.status,
-      recoveryTurnId: recovered.turn_id,
-    };
-    return `interrupted=${interruptedTurn.status}; recovery Turn=${recovered.turn_id}`;
+  await runCase("cost, scenario, facility location and map comparison journey", async () => {
+    await sendMessage(`
+继续使用当前已上传的印尼教程数据。现在补充回答：使用 route quotes 计算 linehaul 和 last-mile 成本；一辆车装 1 个需求单位。
+先计算成本优先覆盖和全网成本，再模拟新增一个候选仓，最后在已有仓固定的前提下执行 p-median 和 6/12/18 小时服务约束选址。求解器若返回 timeout 或非最优，必须原样标注。
+所有操作继续使用已有 Work State（ID: ${state.workState.id}）和当前 Run ID。比较基线和入选方案，调用 render_network_comparison_map，输出 network_comparison_map.v1 和 network_planning_report.v1。
+不要复制任何原始数据、矩阵行、完整工具结果或内部 Work State 组件标识；不要调用旧的 MCP 入口或 planning-dataset.v2 工具。`);
+    const snapshot = await inspectRun();
+    const tools = new Set(snapshot.calls.map((event) => event.payload?.data?.tool));
+    for (const required of [
+      "plan_cost_matrix",
+      "evaluate_facility_scenario",
+      "solve_p_median",
+      "render_network_comparison_map",
+      "publish_network_planning_report",
+    ]) {
+      assert(tools.has(required), `The extended Turn did not call ${required}`);
+    }
+    state.extended = snapshot;
+    return `calls=${snapshot.calls.length}; artifacts=${snapshot.artifacts.length}`;
   });
 }
 
 if (evidenceFile) {
+  const snapshots = [state.baseline, state.currentCoverage, state.extended].filter(Boolean);
   const evidence = {
-    schemaVersion: "indonesia-supervisor-e2e.v1",
+    schemaVersion: "enterprise-supervisor-e2e.v2",
     verifiedAt: new Date().toISOString(),
-    case: "印尼全国履约网络决策",
+    baseUrl,
     provider: { id: providerId, model },
-    datasetRelease: state.datasetRelease,
-    agentReleases: Object.fromEntries(
-      Object.entries(state.agentReleases).map(([kind, value]) => [
-        kind,
-        value.release,
-      ]),
-    ),
-    policy: finalEvidence.binding,
+    policy: state.policy,
     run: {
       id: state.run.id,
       rootThreadId: state.run.codex_thread_id,
-      turnId: state.turnId,
+      turnIds: state.rootTurnIds,
       workspaceId: state.workspace.id,
     },
-    agents: finalEvidence.agents,
-    executions: finalEvidence.executions,
-    toolCalls: finalEvidence.calls.map((event) => ({
-      sequence: event.sequence,
-      threadId: event.thread_id,
-      server: event.payload?.data?.server,
-      tool: event.payload?.data?.tool,
+    turns: snapshots.map((snapshot) => ({
+      agents: snapshot.agents,
+      executions: snapshot.executions,
+      activities: snapshot.activities,
+      inputRequestCount: snapshot.inputRequested.length,
+      inputResolvedCount: snapshot.inputResolved.length,
+      toolCalls: snapshot.calls.map((event) => ({
+        sequence: event.sequence,
+        threadId: event.thread_id,
+        server: event.payload?.data?.server,
+        tool: event.payload?.data?.tool,
+      })),
+      artifacts: snapshot.artifacts.map((artifact) => ({
+        id: artifact.id,
+        schema: artifact.artifact_schema,
+        state: artifact.state,
+        content_sha256: artifact.content_sha256,
+      })),
     })),
-    artifacts: finalEvidence.artifacts,
-    inlineReport: finalEvidence.inlineReport,
-    inlineMap: finalEvidence.inlineMap,
-    report: {
-      artifactId: finalEvidence.report.artifactId,
-      contentSha256: finalEvidence.report.contentSha256,
-      markdownSha256: finalEvidence.report.markdownSha256,
-    },
-    ...(finalEvidence.lifecycle ? { lifecycle: finalEvidence.lifecycle } : {}),
   };
   await mkdir(path.dirname(evidenceFile), { recursive: true });
   await writeFile(evidenceFile, `${JSON.stringify(evidence, null, 2)}\n`, {

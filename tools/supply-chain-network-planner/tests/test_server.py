@@ -21,15 +21,19 @@ def test_profile_goal_rejects_blank_business_summary() -> None:
         _normalize_profile_goal("  \n  ")
 
 
-def test_requirement_profile_is_published_without_a_confirmation_request(tmp_path, monkeypatch) -> None:
+def test_requirement_profile_is_published_without_a_confirmation_request(
+    tmp_path, monkeypatch
+) -> None:
     monkeypatch.setattr(server, "_resource_store", ResourceStore(tmp_path / "resources"))
 
-    result = server.publish_data_requirement_profile("Optimize warehouse coverage for the current demand")
+    result = server.publish_data_requirement_profile(
+        "Optimize warehouse coverage for the current demand"
+    )
 
     assert result.structuredContent is not None
     payload = server._store().load_uri(result.structuredContent["data_ref"]["uri"])
-    assert payload["schemaVersion"] == "data_requirement_profile.v1"
-    assert "inputRequest" not in payload
+    assert payload["schemaVersion"] == "data_requirement_profile.v2"
+    assert payload["inputRequest"] == {"kind": "data_requirement", "status": "published"}
     assert "confirmation" not in result.content[0].text.lower()
 
 
@@ -73,3 +77,60 @@ def test_input_gap_loads_data_agent_resource_references(tmp_path, monkeypatch) -
         "confirm_mapping",
         "answer_parameters",
     }
+
+
+def test_planner_accepts_normalized_data_agent_ref_at_network_boundary(
+    tmp_path, monkeypatch
+) -> None:
+    data_store = ResourceStore(
+        tmp_path / "data-resources", uri_prefix=data_server.RESOURCE_URI_PREFIX
+    )
+    monkeypatch.setattr(server, "_data_resource_store", data_store)
+    published = data_store.publish(
+        "normalized_network_input.v1",
+        {
+            "schemaVersion": "normalized_network_input.v1",
+            "country_code": "ID",
+            "demand": [
+                {
+                    "city_id": "city-a",
+                    "city_name": "Jakarta",
+                    "province_id": "province-a",
+                    "province_name": "Jakarta",
+                    "demand_quantity": 10,
+                    "longitude": 106.8,
+                    "latitude": -6.2,
+                }
+            ],
+            "existing_warehouses": [
+                {
+                    "warehouse_id": "warehouse-a",
+                    "warehouse_name": "Jakarta Center",
+                    "warehouse_type": "center",
+                    "city_id": "city-a",
+                    "city_name": "Jakarta",
+                    "longitude": 106.8,
+                    "latitude": -6.2,
+                    "is_existing": True,
+                    "is_fixed": True,
+                }
+            ],
+            "quality": {
+                "state": "ready",
+                "issues": [],
+                "ready_entities": ["demand", "existing_warehouses"],
+                "missing_entities": [],
+            },
+        },
+    )
+    ref = DataAgentRef(
+        uri=published.uri,
+        resource_schema="normalized_network_input.v1",
+    )
+
+    case = server._case_from_input_ref(ref)
+
+    assert case.country_code == "ID"
+    assert case.input_ref.server_name == "supply_chain_data"
+    assert case.input_ref.resource_name == published.resource_id
+    assert len(case.input_ref.content_sha256) == 64

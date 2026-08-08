@@ -1,0 +1,19 @@
+{
+  "name": "platform-work-state",
+  "version": "0.1.0",
+  "description": "为授权 Domain Agent 提供有界、可审计的 Work State 写入能力。",
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Platform Work State",
+    "shortDescription": "Domain Agent Work State mutations",
+    "longDescription": "Platform-owned begin/apply/fail operations for an active Run.",
+    "icon": "./assets/icon.svg",
+    "brandColor": "#0f766e",
+    "capabilities": [
+      "platform_work_state.begin_work_operation",
+      "platform_work_state.apply_work_state_mutation",
+      "platform_work_state.fail_work_operation"
+    ]
+  }
+}

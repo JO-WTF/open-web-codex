@@ -4,9 +4,10 @@ use serde_json::{json, Value};
 use super::{require_runtime_manifest, resolve_builtin, SupervisorPolicyError};
 
 #[test]
-fn has_no_repository_supervisor_release_after_moving_to_draft() {
+fn resolves_the_current_repository_supervisor_release_without_fallback() {
     let published = open_web_codex_supervisor_catalog::supervisor::list_published().unwrap();
-    assert!(published.is_empty());
+    assert_eq!(published.len(), 1);
+    assert_eq!(published[0].version, "6.0.0");
     assert_eq!(
         resolve_builtin(&SupervisorPolicySelection {
             policy_id: "enterprise-supervisor-copilot".to_string(),

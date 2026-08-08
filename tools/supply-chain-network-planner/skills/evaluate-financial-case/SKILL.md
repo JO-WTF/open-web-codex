@@ -1,21 +1,13 @@
 ---
 name: evaluate-financial-case
-description: Evaluate opening investment, recurring operating savings, NPV, payback, and financial viability for one compatible supply-chain network option using exact planning Resources.
+description: 在投资经济性可能改变仓网决策时，评估建设投入、运营节省、净现值和回收期。
 ---
 
-# Evaluate Financial Case
+# 评估财务方案
 
-Use this method only when investment economics can change the supply-chain decision.
+1. 只比较同一个 Network Case 中、使用相同需求版本、路线方法、服务策略、币种和期间的基线与候选方案。
+2. 向用户确认评估年限、折现率、需求增长和一次性投入。探索性默认值必须显式标注，不能隐藏。
+3. 使用确定性财务工具计算，不在模型回复中重新实现公式。
+4. 输出币种、期间、假设、排除项、净现值、回收期和敏感性边界。
 
-1. Require exact `network_snapshot.v1` and two compatible
-   `network_scenario_result.v1` references representing the baseline and candidate.
-2. Confirm the horizon, discount rate, and annual growth assumption. Defaults are
-   acceptable only for a clearly labeled exploratory estimate.
-3. Call `supply_chain_planner.evaluate_financial_case`. Do not recreate its calculations
-   in prose.
-4. Validate the returned `financial_evaluation.v1` Resource.
-5. Return its unchanged `data_ref` and `resource_name`, with currency, period,
-   assumptions, exclusions, NPV, payback, and sensitivity limits.
-
-Do not compare scenarios from different snapshots, routes, service policies, currencies,
-or periods. A positive modeled NPV does not authorize an investment.
+正的模型净现值不等于投资授权。输入不兼容或关键参数缺失时必须停止并请求用户确认。

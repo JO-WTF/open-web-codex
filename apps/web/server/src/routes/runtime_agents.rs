@@ -6,7 +6,7 @@ use axum::{
 use open_web_codex_platform_contracts::error::PlatformError;
 use open_web_codex_platform_contracts::{
     RuntimeAgentActivity, RuntimeAgentActivityKind, RuntimeAgentActivityStatus,
-    RuntimeAgentExecution, RuntimeAgentProjection,
+    RuntimeAgentExecution, RuntimeAgentExecutionStatus, RuntimeAgentProjection,
 };
 use open_web_codex_platform_store::AppState;
 use serde_json::Value;
@@ -151,7 +151,15 @@ pub async fn list_activities_for_run(
                 WaitTaskContext {
                     task,
                     latest_progress,
-                    active: !matches!(status.as_str(), "completed" | "failed" | "interrupted"),
+                    active: !matches!(
+                        status.as_str(),
+                        "completed"
+                            | "failed"
+                            | "rejected"
+                            | "cancelled"
+                            | "timeout"
+                            | "interrupted"
+                    ),
                 },
             )
         })
@@ -208,11 +216,13 @@ pub async fn list_executions_for_run(
 
     let rows = sqlx::query(
         "SELECT id, root_run_id, agent_thread_id, turn_id, ordinal, task, status,
-                current_behavior, latest_progress, first_observed_sequence,
+                current_behavior, latest_progress, display_title, result_summary,
+                waiting_approval_id, wait_cycle_count, first_observed_sequence,
                 last_observed_sequence, started_at, completed_at, created_at, updated_at
          FROM (
              SELECT id, root_run_id, agent_thread_id, turn_id, ordinal, task, status,
-                    current_behavior, latest_progress, first_observed_sequence,
+                    current_behavior, latest_progress, display_title, result_summary,
+                    waiting_approval_id, wait_cycle_count, first_observed_sequence,
                     last_observed_sequence, started_at, completed_at, created_at, updated_at
              FROM runtime_agent_execution_projections
              WHERE root_run_id = $1 AND organization_id = $2
@@ -237,9 +247,13 @@ pub async fn list_executions_for_run(
                 turn_id: row.get("turn_id"),
                 ordinal: row.get("ordinal"),
                 task: row.get("task"),
-                status: row.get("status"),
+                status: execution_status(row.get("status")),
                 current_behavior: row.get("current_behavior"),
                 latest_progress: row.get("latest_progress"),
+                display_title: row.get("display_title"),
+                result_summary: row.get("result_summary"),
+                waiting_approval_id: row.get("waiting_approval_id"),
+                wait_cycle_count: row.get("wait_cycle_count"),
                 first_observed_sequence: row.get("first_observed_sequence"),
                 last_observed_sequence: row.get("last_observed_sequence"),
                 started_at: row.get("started_at"),
@@ -249,6 +263,22 @@ pub async fn list_executions_for_run(
             })
             .collect(),
     ))
+}
+
+fn execution_status(value: String) -> RuntimeAgentExecutionStatus {
+    match value.as_str() {
+        "pending" => RuntimeAgentExecutionStatus::Pending,
+        "running" => RuntimeAgentExecutionStatus::Running,
+        "waiting" => RuntimeAgentExecutionStatus::Waiting,
+        "waiting_for_input" => RuntimeAgentExecutionStatus::WaitingForInput,
+        "completed" => RuntimeAgentExecutionStatus::Completed,
+        "failed" => RuntimeAgentExecutionStatus::Failed,
+        "rejected" => RuntimeAgentExecutionStatus::Rejected,
+        "cancelled" => RuntimeAgentExecutionStatus::Cancelled,
+        "timeout" => RuntimeAgentExecutionStatus::Timeout,
+        "interrupted" => RuntimeAgentExecutionStatus::Interrupted,
+        _ => unreachable!("runtime agent execution status is constrained by the database"),
+    }
 }
 
 struct ActivityEvent {
@@ -262,6 +292,7 @@ struct ActivityEvent {
     created_at: chrono::DateTime<chrono::Utc>,
 }
 
+#[cfg(test)]
 fn project_activities(event: ActivityEvent) -> Vec<RuntimeAgentActivity> {
     project_activities_with_wait_context(event, &HashMap::new(), &HashMap::new())
 }
@@ -296,16 +327,9 @@ fn project_activities_with_wait_context(
         .unwrap_or_default();
 
     if is_collaboration_item && matches!(collaboration_tool.as_str(), "wait" | "waitagent") {
-        let (status, title, detail) =
-            project_wait_activity(data, completed, wait_context, projection_wait_context);
-        return vec![activity(
-            &event,
-            event.thread_id.clone(),
-            RuntimeAgentActivityKind::Waiting,
-            status,
-            &title,
-            Some(detail),
-        )];
+        // Wait is durable execution state, not a new timeline message. The
+        // execution projection carries the cycle count and current behavior.
+        return Vec::new();
     }
 
     if is_collaboration_item && !completed {
@@ -467,16 +491,40 @@ fn project_activities_with_wait_context(
             RuntimeAgentActivityStatus::Failed,
             "Agent execution failed".to_string(),
         )),
-        "platform.approval.requested" => Some((
-            RuntimeAgentActivityKind::Waiting,
-            RuntimeAgentActivityStatus::Waiting,
-            "Waiting for approval".to_string(),
-        )),
-        "platform.approval.resolved" => Some((
-            RuntimeAgentActivityKind::TurnStarted,
-            RuntimeAgentActivityStatus::Running,
-            "Approval resolved; continuing work".to_string(),
-        )),
+        "platform.approval.requested" => {
+            let is_user_input = data.get("requestMethod").and_then(Value::as_str)
+                == Some("item/tool/requestUserInput");
+            Some((
+                if is_user_input {
+                    RuntimeAgentActivityKind::InputRequested
+                } else {
+                    RuntimeAgentActivityKind::Waiting
+                },
+                RuntimeAgentActivityStatus::Waiting,
+                if is_user_input {
+                    "Waiting for your input".to_string()
+                } else {
+                    "Waiting for approval".to_string()
+                },
+            ))
+        }
+        "platform.approval.resolved" => {
+            let is_user_input = data.get("requestMethod").and_then(Value::as_str)
+                == Some("item/tool/requestUserInput");
+            Some((
+                if is_user_input {
+                    RuntimeAgentActivityKind::InputAnswered
+                } else {
+                    RuntimeAgentActivityKind::TurnStarted
+                },
+                RuntimeAgentActivityStatus::Running,
+                if is_user_input {
+                    "Input received; continuing work".to_string()
+                } else {
+                    "Approval resolved; continuing work".to_string()
+                },
+            ))
+        }
         "codex.item.started" | "codex.item.completed" => {
             project_item_activity(item_type, data, completed)
         }
@@ -582,66 +630,6 @@ fn project_item_activity(
     Some((kind, status, format!("{verb} {subject}")))
 }
 
-fn project_wait_activity(
-    data: &Value,
-    completed: bool,
-    wait_context: &HashMap<String, WaitTaskContext>,
-    projection_wait_context: &HashMap<String, WaitTaskContext>,
-) -> (RuntimeAgentActivityStatus, String, String) {
-    let receiver_count = string_list(data.get("receiverThreadIds")).len();
-    let task_detail = describe_wait_tasks(data, completed, wait_context, projection_wait_context);
-    if !completed {
-        let title = if receiver_count == 0 {
-            "Waiting for Agent updates".to_string()
-        } else if receiver_count == 1 {
-            "Waiting for 1 Agent".to_string()
-        } else {
-            format!("Waiting for {receiver_count} Agents")
-        };
-        let detail = if let Some(task_detail) = task_detail {
-            task_detail
-        } else if receiver_count == 0 {
-            "The Supervisor is waiting for any Agent update or new input. This is a bounded wait, not a stopped task.".to_string()
-        } else {
-            format!(
-                "The Supervisor is waiting for {receiver_count} assigned {} to finish or report a terminal state.",
-                if receiver_count == 1 {
-                    "Agent"
-                } else {
-                    "Agents"
-                }
-            )
-        };
-        return (RuntimeAgentActivityStatus::Waiting, title, detail);
-    }
-
-    let failed = matches!(
-        data.get("status").and_then(Value::as_str),
-        Some("failed" | "error")
-    );
-    if failed {
-        return (
-            RuntimeAgentActivityStatus::Failed,
-            "Agent wait failed".to_string(),
-            task_detail.unwrap_or_else(|| {
-                "The bounded wait ended with an error. The Supervisor task is still observable through subsequent activity.".to_string()
-            }),
-        );
-    }
-
-    let summary = summarize_wait_states(data.get("agentsStates"));
-    (
-        RuntimeAgentActivityStatus::Completed,
-        "Wait cycle finished".to_string(),
-        match (task_detail, summary) {
-            (Some(task_detail), Some(summary)) => format!("{task_detail} {summary}"),
-            (Some(task_detail), None) => task_detail,
-            (None, Some(summary)) => summary,
-            (None, None) => "This bounded wait cycle ended. The Supervisor is processing any available update and may start another wait cycle.".to_string(),
-        },
-    )
-}
-
 fn update_wait_context(event: &ActivityEvent, wait_context: &mut HashMap<String, WaitTaskContext>) {
     if event.event_type == "codex.item.completed"
         && matches!(
@@ -701,66 +689,6 @@ fn update_wait_context(event: &ActivityEvent, wait_context: &mut HashMap<String,
     }
 }
 
-fn describe_wait_tasks(
-    data: &Value,
-    completed: bool,
-    wait_context: &HashMap<String, WaitTaskContext>,
-    projection_wait_context: &HashMap<String, WaitTaskContext>,
-) -> Option<String> {
-    let requested_ids = string_list(data.get("receiverThreadIds"));
-    let mut thread_ids = if requested_ids.is_empty() {
-        let mut ids = Vec::new();
-        for context in [wait_context, projection_wait_context] {
-            ids.extend(
-                context
-                    .iter()
-                    .filter(|(_, entry)| completed || entry.active)
-                    .filter(|(_, entry)| entry.task.is_some())
-                    .map(|(thread_id, _)| thread_id.clone()),
-            );
-        }
-        ids.sort();
-        ids.dedup();
-        ids
-    } else {
-        requested_ids
-    };
-    thread_ids.truncate(4);
-
-    let mut descriptions = Vec::new();
-    for thread_id in thread_ids {
-        let entry = wait_context
-            .get(&thread_id)
-            .filter(|entry| entry.task.is_some())
-            .or_else(|| {
-                projection_wait_context
-                    .get(&thread_id)
-                    .filter(|entry| entry.task.is_some())
-            });
-        let Some(entry) = entry else {
-            continue;
-        };
-        let Some(task) = entry.task.as_deref() else {
-            continue;
-        };
-        let description = match entry.latest_progress.as_deref() {
-            Some(progress) => format!("{task} (latest progress: {progress})"),
-            None => task.to_string(),
-        };
-        descriptions.push(description);
-    }
-    if descriptions.is_empty() {
-        return None;
-    }
-
-    let prefix = if descriptions.len() == 1 {
-        "Waiting for Agent update: "
-    } else {
-        "Waiting for Agent updates: "
-    };
-    bounded_detail(&format!("{prefix}{}", descriptions.join("; ")))
-}
-
 fn wait_task_summary(value: &str) -> Option<String> {
     summarize_wait_text(value, 240)
 }
@@ -792,53 +720,6 @@ fn summarize_wait_text(value: &str, max_chars: usize) -> Option<String> {
 
 fn brief_description(value: &str) -> Option<String> {
     summarize_wait_text(value, 120)
-}
-
-fn summarize_wait_states(value: Option<&Value>) -> Option<String> {
-    let states = value?.as_object()?;
-    if states.is_empty() {
-        return None;
-    }
-
-    let mut pending = 0;
-    let mut running = 0;
-    let mut completed = 0;
-    let mut interrupted = 0;
-    let mut failed = 0;
-    let mut stopped = 0;
-    let mut unknown = 0;
-    for state in states.values() {
-        let status = state
-            .get("status")
-            .and_then(Value::as_str)
-            .map(normalize_tool_name)
-            .unwrap_or_default();
-        match status.as_str() {
-            "pendinginit" | "pending" => pending += 1,
-            "running" => running += 1,
-            "completed" => completed += 1,
-            "interrupted" => interrupted += 1,
-            "errored" | "error" | "failed" | "notfound" => failed += 1,
-            "shutdown" => stopped += 1,
-            _ => unknown += 1,
-        }
-    }
-
-    let mut parts = Vec::new();
-    for (count, label) in [
-        (completed, "completed"),
-        (running, "still running"),
-        (pending, "starting"),
-        (interrupted, "interrupted"),
-        (failed, "failed or unavailable"),
-        (stopped, "shut down"),
-        (unknown, "status unknown"),
-    ] {
-        if count > 0 {
-            parts.push(format!("{count} {label}"));
-        }
-    }
-    (!parts.is_empty()).then(|| format!("Agent status after this wait: {}.", parts.join(", ")))
 }
 
 fn activity(
@@ -1168,24 +1049,8 @@ mod tests {
             }),
         ));
 
-        assert_eq!(started.len(), 1);
-        assert_eq!(started[0].kind, RuntimeAgentActivityKind::Waiting);
-        assert_eq!(started[0].status, RuntimeAgentActivityStatus::Waiting);
-        assert_eq!(started[0].title, "Waiting for Agent updates");
-        assert!(started[0]
-            .detail
-            .as_deref()
-            .unwrap()
-            .contains("bounded wait"));
-
-        assert_eq!(completed.len(), 1);
-        assert_eq!(completed[0].status, RuntimeAgentActivityStatus::Completed);
-        assert_eq!(completed[0].title, "Wait cycle finished");
-        assert!(completed[0]
-            .detail
-            .as_deref()
-            .unwrap()
-            .contains("may start another"));
+        assert!(started.is_empty());
+        assert!(completed.is_empty());
     }
 
     #[test]
@@ -1218,13 +1083,7 @@ mod tests {
             &HashMap::new(),
         );
 
-        assert_eq!(activities.len(), 1);
-        assert_eq!(
-            activities[0].detail.as_deref(),
-            Some(
-                "Waiting for Agent update: Generate the Indonesia demo data. (latest progress: Writing city and warehouse files.)"
-            )
-        );
+        assert!(activities.is_empty());
     }
 
     #[test]
@@ -1278,11 +1137,7 @@ mod tests {
             &HashMap::new(),
         );
 
-        assert_eq!(activities.len(), 1);
-        let detail = activities[0].detail.as_deref().unwrap();
-        assert!(detail.contains("Prepare the warehouse network demo."));
-        assert!(detail.contains("Checking the city and warehouse inputs."));
-        assert!(detail.chars().count() <= 1_000);
+        assert!(activities.is_empty());
     }
 
     #[test]
@@ -1307,11 +1162,7 @@ mod tests {
             }),
         ));
 
-        assert_eq!(activities.len(), 1);
-        assert_eq!(
-            activities[0].detail.as_deref(),
-            Some("Agent status after this wait: 1 completed, 1 still running.")
-        );
+        assert!(activities.is_empty());
         let serialized = serde_json::to_string(&activities).unwrap();
         assert!(!serialized.contains("secret-data-thread"));
         assert!(!serialized.contains("private model output"));

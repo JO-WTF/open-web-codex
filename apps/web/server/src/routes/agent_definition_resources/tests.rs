@@ -5,8 +5,8 @@ use axum::{
 };
 use open_web_codex_platform_contracts::{
     AgentCapabilityTemplateSelection, AgentCapabilityTemplateSource, AgentDefinitionDraftRequest,
-    SupervisorAgentSelection, SupervisorArtifactContractInput, SupervisorDraftRequest,
-    SupervisorInstructionPolicySelection, SupervisorPolicySelection,
+    PublishSupervisorDraftRequest, SupervisorAgentSelection, SupervisorArtifactContractInput,
+    SupervisorDraftRequest, SupervisorInstructionPolicySelection, SupervisorPolicySelection,
 };
 use open_web_codex_platform_store::AppState;
 use sqlx::Row;
@@ -159,7 +159,6 @@ async fn publishes_agent_and_uses_it_in_an_organization_supervisor() {
         auth.clone(),
         Json(SupervisorDraftRequest {
             policy_id: "regional-review-supervisor".to_string(),
-            version: "1.0.0".to_string(),
             display_name: "Regional Review Supervisor".to_string(),
             description: "Coordinates one governed regional data review.".to_string(),
             responsibilities: vec!["Deliver the reviewed planning dataset.".to_string()],
@@ -182,17 +181,24 @@ async fn publishes_agent_and_uses_it_in_an_organization_supervisor() {
                 required: true,
             }],
             data_requirement_contracts: Vec::new(),
+            coordination_capabilities: Vec::new(),
             max_active_child_agents: 1,
         }),
     )
     .await
     .unwrap()
     .0;
-    let supervisor_release =
-        crate::routes::supervisor_definitions::publish(State(state), auth, Path(supervisor.id))
-            .await
-            .unwrap()
-            .0;
+    let supervisor_release = crate::routes::supervisor_definitions::publish(
+        State(state),
+        auth,
+        Path(supervisor.id),
+        Json(PublishSupervisorDraftRequest {
+            expected_revision: 1,
+        }),
+    )
+    .await
+    .unwrap()
+    .0;
     let resolved = crate::supervisor_policy::resolve_for_new_run(
         &pool,
         organization_id,

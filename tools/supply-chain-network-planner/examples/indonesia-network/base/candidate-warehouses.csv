@@ -1,0 +1,13 @@
+warehouse_id,warehouse_name,warehouse_type,city_id,city_name,province_id,province_name,longitude,latitude,upstream_center_id,is_existing,is_fixed
+WH-CANDIDATE-PADANG,Padang Candidate Cross Docking,cross_docking,IDN-CITY-016,Padang,IDN-PROV-WEST-SUMATRA,West Sumatra,100.395556,-0.937033,WH-CENTER-PALEMBANG,false,false
+WH-CANDIDATE-PEKANBARU,Pekanbaru Candidate Cross Docking,cross_docking,IDN-CITY-015,Pekanbaru,IDN-PROV-RIAU,Riau,101.466775,0.452204,WH-CENTER-MEDAN,false,false
+WH-CANDIDATE-JAMBI,Jambi Candidate Cross Docking,cross_docking,IDN-CITY-025,Jambi,IDN-PROV-JAMBI,Jambi,103.548039,-1.612665,WH-CENTER-PALEMBANG,false,false
+WH-CANDIDATE-BANDAR_LAMPUNG,Bandar Lampung Candidate Cross Docking,cross_docking,IDN-CITY-013,Bandar Lampung,IDN-PROV-LAMPUNG,Lampung,105.254610,-5.407757,WH-CENTER-JAKARTA,false,false
+WH-CANDIDATE-PONTIANAK,Pontianak Candidate Cross Docking,cross_docking,IDN-CITY-023,Pontianak,IDN-PROV-WEST-KALIMANTAN,West Kalimantan,109.373867,-0.024150,WH-CENTER-PALEMBANG,false,false
+WH-CANDIDATE-BANJARMASIN,Banjarmasin Candidate Cross Docking,cross_docking,IDN-CITY-024,Banjarmasin,IDN-PROV-SOUTH-KALIMANTAN,South Kalimantan,114.549389,-3.360475,WH-CENTER-SURABAYA,false,false
+WH-CANDIDATE-BALIKPAPAN,Balikpapan Candidate Cross Docking,cross_docking,IDN-CITY-021,Balikpapan,IDN-PROV-EAST-KALIMANTAN,East Kalimantan,116.996737,-1.202072,WH-CENTER-MAKASSAR,false,false
+WH-CANDIDATE-MANADO,Manado Candidate Cross Docking,cross_docking,IDN-CITY-026,Manado,IDN-PROV-NORTH-SULAWESI,North Sulawesi,124.874513,1.517023,WH-CENTER-MAKASSAR,false,false
+WH-CANDIDATE-PALU,Palu Candidate Cross Docking,cross_docking,IDN-CITY-033,Palu,IDN-PROV-CENTRAL-SULAWESI,Central Sulawesi,119.863882,-0.923711,WH-CENTER-MAKASSAR,false,false
+WH-CANDIDATE-KENDARI,Kendari Candidate Cross Docking,cross_docking,IDN-CITY-036,Kendari,IDN-PROV-SOUTHEAST-SULAWESI,Southeast Sulawesi,122.494827,-3.957986,WH-CENTER-MAKASSAR,false,false
+WH-CANDIDATE-MATARAM,Mataram Candidate Cross Docking,cross_docking,IDN-CITY-028,Mataram,IDN-PROV-WEST-NUSA-TENGGARA,West Nusa Tenggara,116.153243,-8.603566,WH-CENTER-SURABAYA,false,false
+WH-CANDIDATE-KUPANG,Kupang Candidate Cross Docking,cross_docking,IDN-CITY-027,Kupang,IDN-PROV-EAST-NUSA-TENGGARA,East Nusa Tenggara,123.666733,-10.143742,WH-CENTER-MAKASSAR,false,false

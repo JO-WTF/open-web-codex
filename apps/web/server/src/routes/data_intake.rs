@@ -11,6 +11,7 @@ use axum::{
     Extension, Json,
 };
 use open_web_codex_adapter::{AuthorizedWorkspace, CodexAdapter, TurnOptions};
+use open_web_codex_data_intake_service as intake_contract;
 use open_web_codex_git_runtime::GitRuntime;
 use open_web_codex_platform_contracts::error::{ErrorKind, PlatformError};
 use open_web_codex_platform_contracts::{
@@ -40,10 +41,6 @@ type ApiResult<T> = Result<Json<T>, ApiError>;
 const MAX_FILES: usize = 20;
 const MAX_FILE_BYTES: usize = 100 * 1024 * 1024;
 const MAX_TOTAL_FILE_BYTES: usize = 250 * 1024 * 1024;
-const MAX_JSON_DEPTH: usize = 64;
-const MAX_JSON_NODES: usize = 250_000;
-const MAX_XLSX_ENTRIES: u32 = 2_048;
-const MAX_XLSX_EXPANDED_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Debug)]
 struct UploadedAsset {
@@ -445,7 +442,7 @@ pub(crate) async fn ensure_session_for_thread(
     }
     .map_err(|_| conflict("The bound Supervisor Policy could not be resolved"))?;
     let supports_intake = policy.detail.artifact_contracts.iter().any(|contract| {
-        contract.artifact_type == "data_requirement_profile.v1"
+        contract.artifact_type == "data_requirement_profile.v2"
             && contract
                 .producer_agent
                 .starts_with("enterprise-network-planning-agent@")
@@ -2133,218 +2130,25 @@ fn validate_answers(
     parameters: &[DataRequirementParameter],
     answers: &[DataIntakeParameterAnswer],
 ) -> Result<Vec<DataIntakeParameterAnswer>, ApiError> {
-    let mut seen = std::collections::HashSet::new();
-    for answer in answers {
-        let parameter = parameters
-            .iter()
-            .find(|parameter| parameter.name == answer.name)
-            .ok_or_else(|| {
-                bad_request("The submitted parameter is not in the published requirement Profile")
-            })?;
-        if answer.source.trim().is_empty()
-            || answer.value.is_null()
-            || !seen.insert(answer.name.clone())
-        {
-            return Err(bad_request(format!(
-                "Parameter {} requires a non-empty source and one value",
-                parameter.display_name
-            )));
-        }
-        if answer.unit.as_deref() != parameter.unit.as_deref() {
-            return Err(bad_request(format!(
-                "Parameter {} must use unit {:?}",
-                parameter.display_name, parameter.unit
-            )));
-        }
-        if parameter.data_type == "number"
-            && answer.value.as_f64().is_none_or(|value| !value.is_finite())
-        {
-            return Err(bad_request(format!(
-                "Parameter {} must be a finite number",
-                parameter.display_name
-            )));
-        }
-        if parameter.data_type == "string"
-            && answer
-                .value
-                .as_str()
-                .is_some_and(|value| value.trim().is_empty())
-        {
-            return Err(bad_request(format!(
-                "Parameter {} must not be empty",
-                parameter.display_name
-            )));
-        }
-    }
-    Ok(answers.to_vec())
+    intake_contract::validate_parameter_answers(parameters, answers)
+        .map_err(|error| bad_request(error.to_string()))
 }
 
 fn validate_file_name(file_name: &str) -> Result<(), ApiError> {
-    if file_name.len() > 256
-        || file_name.contains('/')
-        || file_name.contains('\\')
-        || file_name == "."
-        || file_name == ".."
-    {
-        return Err(bad_request("File names must be simple relative names"));
-    }
-    if file_name.to_ascii_lowercase().ends_with(".xls") {
-        return Err(bad_request(
-            "Legacy .xls files are not supported; export as .xlsx, .csv or .json",
-        ));
-    }
-    Ok(())
+    intake_contract::validate_file_name(file_name).map_err(|error| bad_request(error.to_string()))
 }
 
 fn normalize_file_name(file_name: &str) -> String {
-    file_name.trim().to_ascii_lowercase()
+    intake_contract::normalize_file_name(file_name)
 }
 
 fn media_type_for(file_name: &str) -> Result<String, ApiError> {
-    let lower = file_name.to_ascii_lowercase();
-    if lower.ends_with(".xlsx") {
-        Ok("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".to_string())
-    } else if lower.ends_with(".csv") {
-        Ok("text/csv".to_string())
-    } else if lower.ends_with(".json") {
-        Ok("application/json".to_string())
-    } else {
-        Err(bad_request(
-            "Only .xlsx, .csv and .json files are supported",
-        ))
-    }
+    intake_contract::media_type_for(file_name).map_err(|error| bad_request(error.to_string()))
 }
 
 fn validate_content(file_name: &str, bytes: &[u8]) -> Result<(), ApiError> {
-    let lower = file_name.to_ascii_lowercase();
-    if lower.ends_with(".json") {
-        let value: Value =
-            serde_json::from_slice(bytes).map_err(|_| bad_request("JSON input is invalid"))?;
-        let mut count = 0;
-        validate_json_shape(&value, 0, &mut count)?;
-    } else if lower.ends_with(".xlsx") {
-        validate_xlsx_archive(bytes)?;
-    } else if bytes.iter().filter(|byte| **byte == b'\n').count() > 1_000_000 {
-        return Err(bad_request("CSV contains too many rows"));
-    }
-    Ok(())
-}
-
-fn validate_xlsx_archive(bytes: &[u8]) -> Result<(), ApiError> {
-    if !bytes.starts_with(b"PK\x03\x04") {
-        return Err(bad_request("The XLSX file is invalid"));
-    }
-    let search_start = bytes.len().saturating_sub(65_557);
-    let eocd = bytes[search_start..]
-        .windows(4)
-        .rposition(|window| window == b"PK\x05\x06")
-        .map(|offset| search_start + offset)
-        .ok_or_else(|| bad_request("The XLSX central directory is missing"))?;
-    if eocd + 22 > bytes.len() {
-        return Err(bad_request("The XLSX central directory is truncated"));
-    }
-    let entries = u16::from_le_bytes([bytes[eocd + 10], bytes[eocd + 11]]) as u32;
-    let central_size = u32::from_le_bytes([
-        bytes[eocd + 12],
-        bytes[eocd + 13],
-        bytes[eocd + 14],
-        bytes[eocd + 15],
-    ]) as usize;
-    let central_offset = u32::from_le_bytes([
-        bytes[eocd + 16],
-        bytes[eocd + 17],
-        bytes[eocd + 18],
-        bytes[eocd + 19],
-    ]) as usize;
-    if entries == 0
-        || entries > MAX_XLSX_ENTRIES
-        || central_offset
-            .checked_add(central_size)
-            .is_none_or(|end| end > bytes.len())
-    {
-        return Err(bad_request("The XLSX archive is too large or unsupported"));
-    }
-    let central_end = central_offset + central_size;
-    let mut cursor = central_offset;
-    let mut expanded_bytes = 0u64;
-    for _ in 0..entries {
-        if cursor.checked_add(46).is_none_or(|end| end > central_end)
-            || &bytes[cursor..cursor + 4] != b"PK\x01\x02"
-        {
-            return Err(bad_request("The XLSX central directory is invalid"));
-        }
-        let compressed = u32::from_le_bytes([
-            bytes[cursor + 20],
-            bytes[cursor + 21],
-            bytes[cursor + 22],
-            bytes[cursor + 23],
-        ]) as u64;
-        let expanded = u32::from_le_bytes([
-            bytes[cursor + 24],
-            bytes[cursor + 25],
-            bytes[cursor + 26],
-            bytes[cursor + 27],
-        ]) as u64;
-        let name_len = u16::from_le_bytes([bytes[cursor + 28], bytes[cursor + 29]]) as usize;
-        let extra_len = u16::from_le_bytes([bytes[cursor + 30], bytes[cursor + 31]]) as usize;
-        let comment_len = u16::from_le_bytes([bytes[cursor + 32], bytes[cursor + 33]]) as usize;
-        let record_end = cursor
-            .checked_add(46)
-            .and_then(|end| end.checked_add(name_len))
-            .and_then(|end| end.checked_add(extra_len))
-            .and_then(|end| end.checked_add(comment_len))
-            .ok_or_else(|| bad_request("The XLSX central directory is invalid"))?;
-        if record_end > central_end {
-            return Err(bad_request("The XLSX central directory is truncated"));
-        }
-        let name = &bytes[cursor + 46..cursor + 46 + name_len];
-        if name
-            .windows(b"vbaProject.bin".len())
-            .any(|part| part.eq_ignore_ascii_case(b"vbaProject.bin"))
-            || name
-                .windows(b"externalLinks/".len())
-                .any(|part| part.eq_ignore_ascii_case(b"externalLinks/"))
-        {
-            return Err(bad_request(
-                "The XLSX file contains macros or external links",
-            ));
-        }
-        expanded_bytes = expanded_bytes
-            .checked_add(expanded)
-            .ok_or_else(|| bad_request("The XLSX archive is too large"))?;
-        if expanded_bytes > MAX_XLSX_EXPANDED_BYTES
-            || (compressed == 0 && expanded > 0)
-            || (compressed > 0 && expanded > compressed.saturating_mul(100))
-        {
-            return Err(bad_request(
-                "The XLSX archive exceeds decompression safety limits",
-            ));
-        }
-        cursor = record_end;
-    }
-    if cursor != central_end {
-        return Err(bad_request("The XLSX central directory is invalid"));
-    }
-    Ok(())
-}
-
-fn validate_json_shape(value: &Value, depth: usize, count: &mut usize) -> Result<(), ApiError> {
-    if depth > MAX_JSON_DEPTH {
-        return Err(bad_request("JSON nesting is too deep"));
-    }
-    *count += 1;
-    if *count > MAX_JSON_NODES {
-        return Err(bad_request("JSON contains too many values"));
-    }
-    match value {
-        Value::Object(map) => map
-            .values()
-            .try_for_each(|value| validate_json_shape(value, depth + 1, count)),
-        Value::Array(values) => values
-            .iter()
-            .try_for_each(|value| validate_json_shape(value, depth + 1, count)),
-        _ => Ok(()),
-    }
+    intake_contract::validate_content(file_name, bytes)
+        .map_err(|error| bad_request(error.to_string()))
 }
 
 fn same_assets(stored: &[SourceAssetSummary], uploaded: &[UploadedAsset]) -> bool {
@@ -2426,7 +2230,7 @@ fn internal_serde_error(error: serde_json::Error) -> ApiError {
 
 #[cfg(test)]
 mod tests {
-    use super::{contract_summary, validate_file_name, validate_json_shape, validate_xlsx_archive};
+    use super::{contract_summary, intake_contract, validate_file_name};
     use serde_json::json;
 
     #[test]
@@ -2449,14 +2253,19 @@ mod tests {
     fn json_profile_limits_depth_and_node_count() {
         let value = json!({"orders": [{"origin": "JKT"}]});
         let mut count = 0;
-        assert!(validate_json_shape(&value, 0, &mut count).is_ok());
+        assert!(intake_contract::validate_json_shape(&value, 0, &mut count).is_ok());
         let mut count = 0;
-        assert!(validate_json_shape(&value, super::MAX_JSON_DEPTH + 1, &mut count).is_err());
+        assert!(intake_contract::validate_json_shape(
+            &value,
+            intake_contract::MAX_JSON_DEPTH + 1,
+            &mut count
+        )
+        .is_err());
     }
 
     #[test]
     fn xlsx_requires_a_bounded_central_directory() {
-        assert!(validate_xlsx_archive(b"PK\x03\x04").is_err());
+        assert!(intake_contract::validate_xlsx_archive(b"PK\x03\x04").is_err());
     }
 
     #[tokio::test]

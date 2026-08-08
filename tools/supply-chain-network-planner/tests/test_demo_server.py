@@ -41,51 +41,34 @@ def test_empty_workspace_generation_is_complete_and_idempotent(tmp_path: Path) -
     assert reused["status"] == "reused"
     assert created["dataClassification"] == "synthetic_demo"
     assert created["template"] == {
-        "id": "warehouse-network-large",
+        "id": "indonesia-network-tutorial",
         "version": "1.0.0",
         "seed": 42,
     }
-    assert created["contentSummary"]["sourceFileCount"] == 6
+    assert created["contentSummary"]["sourceFileCount"] == 8
     assert created["contentSummary"]["totalBytes"] > 0
     assert len(created["contentSummary"]["manifestSha256"]) == 64
-    assert len(created["sources"]) == 7
+    assert len(created["sources"]) == 9
     assert all("/" not in source["source_ref"] for source in created["sources"])
     assert all("path" not in source for source in created["sources"])
     assert workspace_source_metadata(tmp_path)["dataClassification"] == "synthetic_demo"
-    assert len(discover(tmp_path)) == 7
+    assert len(discover(tmp_path)) == 9
 
 
-
-def test_large_template_uses_city_grain_lanes(tmp_path: Path) -> None:
+def test_tutorial_template_contains_validated_network_fixture(tmp_path: Path) -> None:
     created = create_sources(tmp_path, TEMPLATE_REF, 42)
-    target = tmp_path / "demo-data" / "warehouse-network-large-1.0.0"
+    target = tmp_path / "demo-data" / "indonesia-network-tutorial-1.0.0"
 
     assert created["status"] == "created"
     assert created["contentSummary"]["cityDemandCount"] == LARGE_CITY_DEMAND_COUNT
-    assert created["contentSummary"]["routeCount"] == 144
-    assert "ID1-Jakarta" in (target / "facilities.csv").read_text(encoding="utf-8")
-    assert "ID6-Ambon" in (target / "facilities.csv").read_text(encoding="utf-8")
-    assert "existing_or_candidate" in (target / "facilities.csv").read_text(encoding="utf-8")
-    assert "Jakarta" in (target / "cities.csv").read_text(encoding="utf-8")
-    cities = {
-        row["city_id"]: (row["latitude"], row["longitude"])
-        for row in csv.DictReader((target / "cities.csv").open(encoding="utf-8"))
-    }
-    city_demands = list(csv.DictReader((target / "city-demand.csv").open(encoding="utf-8")))
-    assert len(city_demands) == LARGE_CITY_DEMAND_COUNT
-    assert {row["city_id"] for row in city_demands} == set(cities)
-    assert all(int(row["quantity"]) > 0 for row in city_demands)
-    coverage = list(
-        csv.DictReader((target / "warehouse-city-coverage.csv").open(encoding="utf-8"))
-    )
-    assert len(coverage) == LARGE_CITY_DEMAND_COUNT
-    assert {row["city_id"] for row in coverage} == set(cities)
-    lanes = list(csv.DictReader((target / "city-lanes.csv").open(encoding="utf-8")))
-    assert len(lanes) == 144
-    assert set(lanes[0]) == {
-        "origin_city_id", "destination_city_id", "distance_km", "travel_time_hours",
-        "base_cost_per_unit", "distance_cost_per_km_per_unit", "currency",
-    }
+    assert created["contentSummary"]["routeCount"] == 580
+    demand = list(csv.DictReader((target / "demand-cities.csv").open(encoding="utf-8")))
+    warehouses = list(csv.DictReader((target / "existing-warehouses.csv").open(encoding="utf-8")))
+    quotes = list(csv.DictReader((target / "route-quotes.csv").open(encoding="utf-8")))
+    assert len(demand) == 50
+    assert len(warehouses) == 11
+    assert len(quotes) == 580
+    assert json.loads((target / "validation-report.json").read_text())["all_passed"] is True
 
 
 def test_generation_rejects_non_empty_workspace(tmp_path: Path) -> None:
@@ -111,11 +94,11 @@ def test_generation_rejects_empty_supported_file_and_source_symlink(tmp_path: Pa
 @pytest.mark.parametrize("mutation", ["missing", "drift", "extra"])
 def test_generation_rejects_partial_or_modified_target(tmp_path: Path, mutation: str) -> None:
     create_sources(tmp_path, TEMPLATE_REF, 42)
-    target = tmp_path / "demo-data" / "warehouse-network-large-1.0.0"
+    target = tmp_path / "demo-data" / "indonesia-network-tutorial-1.0.0"
     if mutation == "missing":
-        (target / "city-lanes.csv").unlink()
+        (target / "route-quotes.csv").unlink()
     elif mutation == "drift":
-        (target / "city-lanes.csv").write_text("modified", encoding="utf-8")
+        (target / "route-quotes.csv").write_text("modified", encoding="utf-8")
     else:
         (target / "extra.csv").write_text("unexpected", encoding="utf-8")
 
@@ -138,9 +121,9 @@ def test_concurrent_generation_converges_without_overwrite(tmp_path: Path) -> No
 
     assert sorted(result["status"] for result in results) == ["created", "reused"]
     manifest = json.loads(
-        (tmp_path / "demo-data" / "warehouse-network-large-1.0.0" / "demo-manifest.json").read_text(
-            encoding="utf-8"
-        )
+        (
+            tmp_path / "demo-data" / "indonesia-network-tutorial-1.0.0" / "demo-manifest.json"
+        ).read_text(encoding="utf-8")
     )
     assert manifest["dataClassification"] == "synthetic_demo"
 

@@ -119,7 +119,7 @@ async fn supervisor_has_active_children(
              SELECT 1
              FROM runtime_agent_execution_projections
              WHERE root_run_id = $1
-               AND status IN ('pending', 'running', 'waiting')
+               AND status IN ('pending', 'running', 'waiting', 'waiting_for_input')
          )",
     )
     .bind(run_id)
@@ -196,7 +196,7 @@ async fn claim_supervisor_continuation(
                SELECT 1
                FROM runtime_agent_execution_projections execution
                WHERE execution.root_run_id = run.id
-                 AND execution.status IN ('pending', 'running', 'waiting')
+                 AND execution.status IN ('pending', 'running', 'waiting', 'waiting_for_input')
            )
          FOR UPDATE OF continuation, run
          LIMIT 1",
@@ -391,7 +391,7 @@ pub async fn hold_data_intake_agents(
              WHERE execution.root_run_id = $1
                AND execution.organization_id = $2
                AND execution.turn_id IS NOT NULL
-               AND execution.status IN ('pending', 'running', 'waiting')
+               AND execution.status IN ('pending', 'running', 'waiting', 'waiting_for_input')
          )
          SELECT active.thread_id, active.turn_id, workspace.id AS workspace_id,
                 workspace.root_path
@@ -560,6 +560,7 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
     .map_err(|error| format!("event insert error: {error}"))?;
     let event_sequence = persisted.get::<i64, _>("sequence");
     let event_created_at = persisted.get::<chrono::DateTime<chrono::Utc>, _>("created_at");
+    project_provider_call_metric(&mut transaction, &context, &event, event_sequence).await?;
     project_runtime_agent_execution(
         &mut transaction,
         &context,
@@ -777,6 +778,126 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
         data_intake_confirmation_run_id,
         supervisor_continuation_run_id,
     }))
+}
+
+/// Persist only provider-reported, bounded usage metadata. This function is
+/// intentionally a no-op when the Runtime did not emit token usage; a missing
+/// field is different from a reported zero and remains observable as NULL.
+async fn project_provider_call_metric(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    context: &EventRunContext,
+    event: &ProjectedEvent,
+    event_sequence: i64,
+) -> Result<(), String> {
+    if event.event_type != "codex.thread.token_usage.updated" {
+        return Ok(());
+    }
+    let usage = event
+        .payload
+        .pointer("/data/tokenUsage/last")
+        .or_else(|| event.payload.pointer("/data/tokenUsage/total"));
+    let Some(usage) = usage else {
+        return Ok(());
+    };
+    let task = sqlx::query(
+        "SELECT COALESCE(model_provider, 'unreported') AS provider_id,
+                COALESCE(model, 'unreported') AS model_id
+         FROM tasks WHERE id = $1 AND organization_id = $2",
+    )
+    .bind(context.task_id)
+    .bind(context.organization_id)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(|error| format!("provider metric task lookup error: {error}"))?;
+    let Some(task) = task else {
+        return Ok(());
+    };
+    let input_tokens = token_number(usage, &["inputTokens", "input_tokens"]);
+    let cached_input_tokens = token_number(
+        usage,
+        &[
+            "cachedInputTokens",
+            "cached_input_tokens",
+            "cacheReadInputTokens",
+        ],
+    );
+    let output_tokens = token_number(usage, &["outputTokens", "output_tokens"]);
+    let tool_schema_tokens = token_number(usage, &["toolSchemaTokens", "tool_schema_tokens"]);
+    let compaction_count = token_number(
+        event.payload.pointer("/data").unwrap_or(&Value::Null),
+        &["compactionCount", "compaction_count"],
+    )
+    .unwrap_or(0)
+    .clamp(0, i64::from(i32::MAX)) as i32;
+    let latency_ms = elapsed_ms(event.payload.pointer("/data").unwrap_or(&Value::Null));
+    let stable_prefix_sha256 = safe_sha256_field(event, "stablePrefixSha256");
+    let tool_inventory_sha256 = safe_sha256_field(event, "toolInventorySha256");
+    let skill_set_sha256 = safe_sha256_field(event, "skillSetSha256");
+    let runtime_role_sha256 = safe_sha256_field(event, "runtimeRoleSha256");
+    sqlx::query(
+        "INSERT INTO provider_call_metrics
+         (organization_id, profile_id, run_id, provider_id, model_id,
+          input_tokens, cached_input_tokens, output_tokens, tool_schema_tokens,
+          latency_ms, first_token_ms, compaction_count, terminal_status,
+          stable_prefix_sha256, tool_inventory_sha256, skill_set_sha256,
+          runtime_role_sha256, source_event_sequence)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                 'observed', $13, $14, $15, $16, $17)
+         ON CONFLICT (run_id, source_event_sequence) DO NOTHING",
+    )
+    .bind(context.organization_id)
+    .bind(context.profile_id)
+    .bind(context.run_id)
+    .bind(task.get::<String, _>("provider_id"))
+    .bind(task.get::<String, _>("model_id"))
+    .bind(input_tokens)
+    .bind(cached_input_tokens)
+    .bind(output_tokens)
+    .bind(tool_schema_tokens)
+    .bind(latency_ms)
+    .bind(first_token_ms(
+        event.payload.pointer("/data").unwrap_or(&Value::Null),
+    ))
+    .bind(compaction_count)
+    .bind(stable_prefix_sha256)
+    .bind(tool_inventory_sha256)
+    .bind(skill_set_sha256)
+    .bind(runtime_role_sha256)
+    .bind(event_sequence)
+    .execute(&mut **transaction)
+    .await
+    .map_err(|error| format!("provider metric projection error: {error}"))?;
+    Ok(())
+}
+
+fn token_number(value: &Value, keys: &[&str]) -> Option<i64> {
+    keys.iter()
+        .find_map(|key| value.get(*key))
+        .and_then(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+        })
+}
+
+fn elapsed_ms(value: &Value) -> Option<i64> {
+    let started = token_number(value, &["startedAtMs", "started_at_ms"])?;
+    let completed = token_number(value, &["completedAtMs", "completed_at_ms"])?;
+    (completed >= started).then_some(completed - started)
+}
+
+fn first_token_ms(value: &Value) -> Option<i64> {
+    token_number(value, &["firstTokenMs", "first_token_ms"])
+}
+
+fn safe_sha256_field(event: &ProjectedEvent, key: &str) -> Option<String> {
+    let value = event
+        .payload
+        .pointer("/data")
+        .and_then(|data| data.get(key))
+        .and_then(Value::as_str)
+        .filter(|value| value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))?;
+    Some(value.to_ascii_lowercase())
 }
 
 async fn persist_terminal_frame(
@@ -1581,11 +1702,11 @@ async fn project_supervisor_assignment(
             "INSERT INTO runtime_agent_execution_projections (
                 organization_id, profile_id, workspace_id, root_run_id,
                 agent_thread_id, ordinal, assignment_sequence, assignment_item_id,
-                task, status, current_behavior, first_observed_sequence,
+                task, display_title, status, current_behavior, first_observed_sequence,
                 last_observed_sequence, created_at, updated_at
              ) VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8,
-                $9, 'pending', 'Waiting to start', $7, $7, $10, $10
+                $9, $10, 'pending', 'Waiting to start', $7, $7, $11, $11
              )
              ON CONFLICT (root_run_id, agent_thread_id, assignment_item_id)
              DO UPDATE SET
@@ -1613,6 +1734,7 @@ async fn project_supervisor_assignment(
         .bind(sequence)
         .bind(&event.item_id)
         .bind(&task)
+        .bind(build_execution_title(None, Some(&task)))
         .bind(observed_at)
         .execute(&mut **transaction)
         .await
@@ -1712,18 +1834,22 @@ async fn ensure_agent_execution(
         .and_then(|value| truncated_projection_text(&value, 1_000));
     let first_observed_sequence = assignment_sequence.unwrap_or(sequence);
     let ordinal = next_agent_execution_ordinal(transaction, context.run_id, thread_id).await?;
+    let display_title = task
+        .as_deref()
+        .map(|value| build_execution_title(None, Some(value)))
+        .unwrap_or_else(|| build_execution_title(None, None));
 
     sqlx::query(
         "INSERT INTO runtime_agent_execution_projections (
             organization_id, profile_id, workspace_id, root_run_id,
             agent_thread_id, turn_id, ordinal, assignment_sequence,
-            assignment_item_id, task, status, current_behavior,
+            assignment_item_id, task, display_title, status, current_behavior,
             first_observed_sequence, last_observed_sequence, started_at,
             created_at, updated_at
          ) VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8,
-            $9, $10, 'running', 'Started working',
-            $11, $12, $13, $13, $13
+            $9, $10, $11, 'running', 'Started working',
+            $12, $13, $14, $14, $14
          )
          ON CONFLICT (root_run_id, agent_thread_id, turn_id) DO NOTHING",
     )
@@ -1737,6 +1863,7 @@ async fn ensure_agent_execution(
     .bind(assignment_sequence)
     .bind(assignment_item_id)
     .bind(task)
+    .bind(display_title)
     .bind(first_observed_sequence)
     .bind(sequence)
     .bind(observed_at)
@@ -1760,8 +1887,9 @@ async fn update_agent_execution(
     };
     let terminal = matches!(
         observation.status,
-        Some("completed" | "failed" | "interrupted")
+        Some("completed" | "failed" | "rejected" | "cancelled" | "timeout" | "interrupted")
     );
+    let waiting_for_input = observation.status == Some("waiting_for_input");
     sqlx::query(
         "UPDATE runtime_agent_execution_projections
          SET status = COALESCE($1, status),
@@ -1769,9 +1897,22 @@ async fn update_agent_execution(
              latest_progress = COALESCE($3, latest_progress),
              last_observed_sequence = GREATEST(last_observed_sequence, $4),
              completed_at = CASE WHEN $5 THEN COALESCE(completed_at, $6) ELSE completed_at END,
+             terminal_sequence = CASE WHEN $5 THEN COALESCE(terminal_sequence, $4) ELSE terminal_sequence END,
+             waiting_approval_id = CASE
+                 WHEN $7 THEN $8
+                 WHEN $9 THEN NULL
+                 ELSE waiting_approval_id
+             END,
+             wait_started_at = CASE
+                 WHEN $7 THEN COALESCE(wait_started_at, $6)
+                 WHEN $9 OR $5 THEN NULL
+                 ELSE wait_started_at
+             END,
+             wait_cycle_count = CASE WHEN $10 THEN wait_cycle_count + 1 ELSE wait_cycle_count END,
+             result_summary = COALESCE($11, result_summary),
              updated_at = now()
-         WHERE root_run_id = $7 AND agent_thread_id = $8 AND turn_id = $9
-           AND status NOT IN ('completed', 'failed', 'interrupted')",
+         WHERE root_run_id = $12 AND agent_thread_id = $13 AND turn_id = $14
+           AND terminal_sequence IS NULL",
     )
     .bind(observation.status)
     .bind(observation.behavior)
@@ -1779,6 +1920,11 @@ async fn update_agent_execution(
     .bind(sequence)
     .bind(terminal)
     .bind(observed_at)
+    .bind(waiting_for_input)
+    .bind(observation.approval_id)
+    .bind(observation.clear_waiting)
+    .bind(observation.increment_wait_cycle)
+    .bind(observation.result_summary)
     .bind(context.run_id)
     .bind(&event.thread_id)
     .bind(turn_id)
@@ -1805,12 +1951,14 @@ async fn project_turnless_agent_terminal(
         "UPDATE runtime_agent_execution_projections
          SET status = $1, current_behavior = $2,
              last_observed_sequence = GREATEST(last_observed_sequence, $3),
-             completed_at = COALESCE(completed_at, $4), updated_at = now()
+             completed_at = COALESCE(completed_at, $4),
+             terminal_sequence = COALESCE(terminal_sequence, $3),
+             updated_at = now()
          WHERE id = (
              SELECT id
              FROM runtime_agent_execution_projections
              WHERE root_run_id = $5 AND agent_thread_id = $6
-               AND status NOT IN ('completed', 'failed', 'interrupted')
+               AND terminal_sequence IS NULL
              ORDER BY ordinal DESC
              LIMIT 1
          )",
@@ -1831,6 +1979,10 @@ struct AgentExecutionObservation {
     status: Option<&'static str>,
     behavior: Option<String>,
     progress: Option<String>,
+    approval_id: Option<Uuid>,
+    clear_waiting: bool,
+    increment_wait_cycle: bool,
+    result_summary: Option<String>,
 }
 
 fn agent_execution_observation(event: &ProjectedEvent) -> Option<AgentExecutionObservation> {
@@ -1839,11 +1991,18 @@ fn agent_execution_observation(event: &ProjectedEvent) -> Option<AgentExecutionO
             status: Some("running"),
             behavior: Some("Started working".to_string()),
             progress: None,
+            approval_id: None,
+            clear_waiting: true,
+            increment_wait_cycle: false,
+            result_summary: None,
         }),
         "codex.turn.completed" => {
             let status = projected_turn_terminal_status(&event.payload);
             let behavior = match status {
                 "failed" => "Agent execution failed",
+                "rejected" => "Agent execution was rejected",
+                "cancelled" => "Agent execution was cancelled",
+                "timeout" => "Agent execution timed out",
                 "interrupted" => "Agent execution interrupted",
                 _ => "Finished this work cycle",
             };
@@ -1851,17 +2010,46 @@ fn agent_execution_observation(event: &ProjectedEvent) -> Option<AgentExecutionO
                 status: Some(status),
                 behavior: Some(behavior.to_string()),
                 progress: None,
+                approval_id: None,
+                clear_waiting: true,
+                increment_wait_cycle: false,
+                result_summary: None,
             })
         }
-        "platform.approval.requested" => Some(AgentExecutionObservation {
-            status: Some("waiting"),
-            behavior: Some("Waiting for approval".to_string()),
-            progress: None,
-        }),
+        "platform.approval.requested" => {
+            let data = event.payload.get("data").unwrap_or(&Value::Null);
+            let request_method = data.get("requestMethod").and_then(Value::as_str);
+            let approval_id = data
+                .get("approvalId")
+                .and_then(Value::as_str)
+                .and_then(|value| Uuid::parse_str(value).ok());
+            let is_user_input = request_method == Some("item/tool/requestUserInput");
+            Some(AgentExecutionObservation {
+                status: Some(if is_user_input {
+                    "waiting_for_input"
+                } else {
+                    "waiting"
+                }),
+                behavior: Some(if is_user_input {
+                    "Waiting for your input".to_string()
+                } else {
+                    "Waiting for approval".to_string()
+                }),
+                progress: None,
+                approval_id,
+                clear_waiting: false,
+                increment_wait_cycle: false,
+                result_summary: None,
+            })
+        }
         "platform.approval.resolved" => Some(AgentExecutionObservation {
             status: Some("running"),
-            behavior: Some("Approval resolved; continuing work".to_string()),
+            behavior: Some("Input or approval resolved; continuing work".to_string()),
             progress: None,
+            approval_id: None,
+            clear_waiting: true,
+            increment_wait_cycle: false,
+            result_summary: None,
         }),
         "codex.item.started" | "codex.item.completed" => project_agent_item_observation(event),
         _ => None,
@@ -1876,6 +2064,26 @@ fn project_agent_item_observation(event: &ProjectedEvent) -> Option<AgentExecuti
         .unwrap_or_default();
     let data = event.payload.get("data").unwrap_or(&Value::Null);
     let completed = event.event_type == "codex.item.completed";
+    if matches!(item_type, "collabAgentToolCall" | "collabToolCall")
+        && data
+            .get("tool")
+            .and_then(Value::as_str)
+            .is_some_and(|tool| normalize_agent_tool(tool) == "wait")
+    {
+        return Some(AgentExecutionObservation {
+            status: Some(if completed { "running" } else { "waiting" }),
+            behavior: Some(if completed {
+                "Wait cycle finished".to_string()
+            } else {
+                "Waiting for Agent updates".to_string()
+            }),
+            progress: None,
+            approval_id: None,
+            clear_waiting: completed,
+            increment_wait_cycle: !completed,
+            result_summary: None,
+        });
+    }
     if item_type == "agentMessage" && completed {
         let phase = data.get("phase").and_then(Value::as_str)?;
         let progress = data
@@ -1891,9 +2099,16 @@ fn project_agent_item_observation(event: &ProjectedEvent) -> Option<AgentExecuti
             _ => return None,
         };
         return Some(AgentExecutionObservation {
-            status: None,
+            status: (phase == "final_answer").then_some("completed"),
             behavior: Some(behavior.to_string()),
             progress,
+            approval_id: None,
+            clear_waiting: phase == "final_answer",
+            increment_wait_cycle: false,
+            result_summary: (phase == "final_answer")
+                .then(|| data.get("text").and_then(Value::as_str))
+                .flatten()
+                .and_then(|value| truncated_projection_text(value, 1_000)),
         });
     }
 
@@ -1943,6 +2158,10 @@ fn project_agent_item_observation(event: &ProjectedEvent) -> Option<AgentExecuti
         status: None,
         behavior: Some(format!("{verb} {subject}")),
         progress: None,
+        approval_id: None,
+        clear_waiting: false,
+        increment_wait_cycle: false,
+        result_summary: None,
     })
 }
 
@@ -1961,7 +2180,13 @@ fn projected_turn_terminal_status(payload: &Value) -> &'static str {
         .to_ascii_lowercase();
     if status.contains("fail") || status.contains("error") {
         "failed"
-    } else if status.contains("interrupt") || status.contains("cancel") {
+    } else if status.contains("reject") {
+        "rejected"
+    } else if status.contains("timeout") {
+        "timeout"
+    } else if status.contains("cancel") {
+        "cancelled"
+    } else if status.contains("interrupt") {
         "interrupted"
     } else {
         "completed"
@@ -2011,6 +2236,17 @@ fn display_agent_identifier(value: &str) -> String {
         .trim()
         .trim_start_matches("mcp__")
         .replace(['_', '-'], " ")
+}
+
+fn build_execution_title(agent_label: Option<&str>, task: Option<&str>) -> String {
+    let label = agent_label
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Agent");
+    let summary = task
+        .and_then(|value| truncated_projection_text(value, 70))
+        .unwrap_or_else(|| "Assigned task".to_string());
+    format!("{label} · {summary}").chars().take(80).collect()
 }
 
 fn truncated_projection_text(value: &str, max_chars: usize) -> Option<String> {
@@ -2148,11 +2384,23 @@ pub(crate) fn project_item(item: &Map<String, Value>) -> Value {
 fn project_inline_visualization_artifact(
     item: &Map<String, Value>,
 ) -> Option<InlineVisualizationArtifactCandidate> {
-    let structured = item
+    let structured_root = item
         .get("result")?
         .as_object()?
         .get("structuredContent")?
         .as_object()?;
+    let structured =
+        if structured_root.get("type").and_then(Value::as_str) == Some("open-web-artifact") {
+            structured_root
+        } else if structured_root
+            .get("schema_version")
+            .and_then(Value::as_str)
+            == Some("platform-tool-result.v1")
+        {
+            structured_root.get("inline_visualization")?.as_object()?
+        } else {
+            return None;
+        };
     if structured.get("type")?.as_str()? != "open-web-artifact"
         || structured.get("kind")?.as_str()? != "inline-visualization.v1"
         || structured.keys().any(|key| {
@@ -3059,7 +3307,7 @@ async fn project_data_intake_evidence(
         });
         if matches!(
             artifact.artifact_schema.as_str(),
-            "data_requirement_profile.v1"
+            "data_requirement_profile.v2"
                 | "source_profile.v1"
                 | "mapping_proposal.v1"
                 | "input_gap.v1"
@@ -3113,13 +3361,13 @@ async fn project_data_intake_evidence(
             result.changed = true;
         }
         let automatic_evidence_column = match artifact.artifact_schema.as_str() {
-            "data_requirement_profile.v1" => Some("requirement_artifact_id"),
+            "data_requirement_profile.v2" => Some("requirement_artifact_id"),
             "source_profile.v1" => Some("source_artifact_id"),
             "planning-dataset.v2" => Some("dataset_artifact_id"),
             _ => None,
         };
         let request_kind = match artifact.artifact_schema.as_str() {
-            "data_requirement_profile.v1" => None,
+            "data_requirement_profile.v2" => None,
             "mapping_proposal.v1" => Some("confirm_mapping".to_string()),
             "input_gap.v1" => {
                 // A ready Resource without its bounded envelope is not enough
@@ -3197,7 +3445,7 @@ async fn project_data_intake_evidence(
                 .execute(&mut **transaction)
                 .await
                 .map_err(|error| format!("Intake automatic evidence projection error: {error}"))?;
-            if artifact.artifact_schema == "data_requirement_profile.v1" {
+            if artifact.artifact_schema == "data_requirement_profile.v2" {
                 let downstream_kinds: &[&str] =
                     &["confirm_mapping", "answer_parameters", "confirm_analysis"];
                 sqlx::query(
@@ -3322,13 +3570,13 @@ async fn project_data_intake_evidence(
         .execute(&mut **transaction)
         .await
         .map_err(|error| format!("Analysis snapshot revocation error: {error}"))?;
-        if artifact.artifact_schema == "data_requirement_profile.v1"
+        if artifact.artifact_schema == "data_requirement_profile.v2"
             || artifact.artifact_schema == "source_profile.v1"
             || artifact.artifact_schema == "mapping_proposal.v1"
             || artifact.artifact_schema == "planning-dataset.v2"
         {
             let downstream_kinds: &[&str] = match artifact.artifact_schema.as_str() {
-                "data_requirement_profile.v1" | "source_profile.v1" => {
+                "data_requirement_profile.v2" | "source_profile.v1" => {
                     &["confirm_mapping", "answer_parameters", "confirm_analysis"]
                 }
                 "mapping_proposal.v1" => &["answer_parameters", "confirm_analysis"],
@@ -3485,7 +3733,7 @@ fn valid_intake_envelope(content: &Value, artifact_schema: &str) -> bool {
     // these checks only enforce the small readiness invariants that the
     // platform is allowed to project.
     match artifact_schema {
-        "data_requirement_profile.v1" => {
+        "data_requirement_profile.v2" => {
             object
                 .get("entities")
                 .or_else(|| object.get("requiredEntities"))
@@ -4615,6 +4863,22 @@ mod tests {
         let artifact = project_inline_visualization_artifact(item.as_object().unwrap()).unwrap();
         assert_eq!(artifact.artifact_ref, "map-7d67b30d");
         assert_eq!(artifact.renderer_kind, "map.v3");
+
+        let inline_visualization = item["result"]["structuredContent"].clone();
+        let nested = json!({
+            "type": "mcpToolCall",
+            "status": "completed",
+            "result": {
+                "structuredContent": {
+                    "schema_version": "platform-tool-result.v1",
+                    "inline_visualization": inline_visualization
+                }
+            }
+        });
+        let nested_artifact =
+            project_inline_visualization_artifact(nested.as_object().unwrap()).unwrap();
+        assert_eq!(nested_artifact.artifact_ref, "map-7d67b30d");
+        assert_eq!(nested_artifact.renderer_kind, "map.v3");
         assert_eq!(artifact.renderer_payload["title"], "Locations");
         assert_eq!(artifact.renderer_payload["zoom"].as_f64(), Some(10.0));
         assert_eq!(

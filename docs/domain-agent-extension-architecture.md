@@ -2,6 +2,11 @@
 
 ## 1. 文档概述
 
+本文说明领域包内部如何组织专业能力。Tool/Skill/Agent/Supervisor/Copilot 的发布、
+Platform Work State、Data Intake、安装和 Runtime discovery 以
+[`supervisor-agent-skill-tool-architecture.md`](supervisor-agent-skill-tool-architecture.md)
+为准；领域扩展不得自行重建这些平台能力。
+
 领域 Agent 扩展架构由 **Agent Definition、Runtime Role、Domain Knowledge、
 Skills 与 MCP Servers** 组成，适合为 Codex 增加供应链、系统架构、数据分析等
 专业能力。
@@ -88,9 +93,9 @@ flowchart LR
 
 ### 3.1 定义
 
-Agent Definition 是领域 Agent 的治理记录。它可以先以版本化 Manifest
-随代码管理，未来再进入 Agent Catalog；无论采用哪种存储形式，都不等于一个正在
-运行的 Agent。
+Agent Definition 是领域 Agent 的治理记录。当前目标是通过统一 Catalog Draft/Release
+发布；代码 Manifest 也必须由同一 Package Compiler 导入，不形成第二条发布路径。
+无论采用哪种来源，都不等于一个正在运行的 Agent。
 
 它用于描述：
 
@@ -112,10 +117,10 @@ Runtime Role 则是 Codex 能够发现和解析的执行配置，包含角色描
 修改普通 Thread 的配置。平台保留名称不能由通用 Profile Agent CRUD 创建或覆盖，
 但受治理请求也不依赖读取、合并或改写用户的同名全局配置。
 
-这是 Codex 尚无原生 Agent CRUD 时的内部过渡边界。长期应由类型化 app-server V2
-Agent 生命周期接口负责 Runtime Role 的写入、校验、发现和 reload；Platform 只保存
-治理身份、发布状态和授权。Runtime 真正 spawn 后产生的子 Agent Thread，才是运行
-实例。
+这是 Codex 尚无完整原生 Agent CRUD 时的内部过渡边界。近期先复用当前 exact role
+seam、Profile Host 安装事务和 Runtime discovery；只有证据证明现有边界无法安全安装
+用户定义 Agent 时，才按 Patch Map 评审最小 app-server 扩展。Runtime 真正 spawn 后
+产生的子 Agent Thread，才是运行实例。
 
 Agent Definition 通常包含：
 

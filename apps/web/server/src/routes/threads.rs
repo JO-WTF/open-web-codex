@@ -565,6 +565,15 @@ async fn load_history_overlay(
             continue;
         };
         let payload: serde_json::Value = row.get("payload");
+        if payload
+            .pointer("/data/requestMethod")
+            .and_then(serde_json::Value::as_str)
+            == Some("item/tool/requestUserInput")
+        {
+            // User input is rendered from the run-scoped durable input queue.
+            // Do not reinsert it as a generic approval item in the transcript.
+            continue;
+        }
         let Some(approval_id) = payload
             .pointer("/data/approvalId")
             .and_then(serde_json::Value::as_str)

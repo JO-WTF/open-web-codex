@@ -85,6 +85,7 @@ pub enum ThreadStartMode {
         roles: Vec<PlatformRuntimeRole>,
         role_spawn_limits: BTreeMap<String, u32>,
         required_mcp_servers: Vec<RequiredMcpServer>,
+        coordination_mcp_servers: Vec<RequiredMcpServer>,
         max_threads: u32,
     },
 }
@@ -692,16 +693,33 @@ pub(crate) fn governed_runtime_role_config_overrides(
     roles: &[PlatformRuntimeRole],
     role_spawn_limits: &BTreeMap<String, u32>,
     required_mcp_servers: &[RequiredMcpServer],
+    coordination_mcp_servers: &[RequiredMcpServer],
     max_threads: u32,
     verified_host_paths: &HashMap<String, PathBuf>,
 ) -> Result<Value, AdapterError> {
     validate_platform_runtime_roles(roles, max_threads)?;
     validate_role_spawn_limits(roles, role_spawn_limits)?;
     validate_required_mcp_servers(required_mcp_servers)?;
-    let capability_roots = merge_capability_root_mcp_inventories(required_mcp_servers)?;
+    if !coordination_mcp_servers.is_empty() {
+        validate_required_mcp_servers(coordination_mcp_servers)?;
+    }
+    // Root coordination is platform-owned and may be installed separately
+    // from the domain Agent packages.  Merge both inventories for config
+    // isolation, but do not require the root read-only capability to be part
+    // of a child Agent's tool inventory.
+    let mut all_servers = required_mcp_servers.to_vec();
+    all_servers.extend_from_slice(coordination_mcp_servers);
+    let capability_roots = merge_capability_root_mcp_inventories(&all_servers)?;
     let mut overrides = serde_json::Map::new();
     overrides.insert("features.apps".to_string(), Value::Bool(false));
     overrides.insert("features.multi_agent_v2".to_string(), Value::Bool(true));
+    // The official input tool is root-thread owned. Governed Supervisors use
+    // the Runtime's default-mode feature so the Platform can persist and
+    // project the same request without inventing a parallel input protocol.
+    overrides.insert(
+        "features.default_mode_request_user_input".to_string(),
+        Value::Bool(true),
+    );
     overrides.insert("features.plugins".to_string(), Value::Bool(false));
     overrides.insert("features.shell_tool".to_string(), Value::Bool(false));
     overrides.insert(
@@ -736,6 +754,24 @@ pub(crate) fn governed_runtime_role_config_overrides(
             overrides.insert(
                 format!("plugins.{capability_root_id}.mcp_servers.{server_name}.enabled"),
                 Value::Bool(false),
+            );
+        }
+    }
+    for server in coordination_mcp_servers {
+        for capability_root in &server.capability_roots {
+            overrides.insert(
+                format!(
+                    "plugins.{}.mcp_servers.{}.enabled",
+                    capability_root.capability_root_id, server.name
+                ),
+                Value::Bool(true),
+            );
+            overrides.insert(
+                format!(
+                    "plugins.{}.mcp_servers.{}.enabled_tools",
+                    capability_root.capability_root_id, server.name
+                ),
+                Value::Array(server.tools.iter().cloned().map(Value::String).collect()),
             );
         }
     }

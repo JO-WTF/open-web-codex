@@ -113,10 +113,18 @@ function executionStatusPresentation(status: AgentExecutionStatus): {
       return { label: "Running", tone: "active" };
     case "waiting":
       return { label: "Waiting", tone: "waiting" };
+    case "waiting_for_input":
+      return { label: "Waiting for your input", tone: "waiting" };
     case "completed":
       return { label: "Completed", tone: "terminal" };
     case "failed":
       return { label: "Failed", tone: "error" };
+    case "rejected":
+      return { label: "Rejected", tone: "error" };
+    case "cancelled":
+      return { label: "Cancelled", tone: "terminal" };
+    case "timeout":
+      return { label: "Timed out", tone: "error" };
     case "interrupted":
       return { label: "Interrupted", tone: "terminal" };
   }
@@ -157,10 +165,20 @@ function activityKindLabel(kind: RuntimeAgentActivity["kind"]): string {
       return "Progress";
     case "waiting":
       return "Wait";
+    case "input_requested":
+      return "Input";
+    case "input_answered":
+      return "Input resolved";
     case "completed":
       return "Completion";
     case "failed":
       return "Failure";
+    case "rejected":
+      return "Rejection";
+    case "cancelled":
+      return "Cancellation";
+    case "timeout":
+      return "Timeout";
     case "interrupted":
       return "Interruption";
   }
@@ -408,7 +426,7 @@ export default function SupervisorOverview({
                             <Network size={15} />
                           </span>
                           <span className="web-supervisor-agent-copy">
-                            <strong>{agent ? agentLabel(agent) : "Runtime Agent"}</strong>
+                            <strong>{execution.display_title || (agent ? agentLabel(agent) : "Runtime Agent")}</strong>
                             <span>
                               {agent?.agent_role ?? "Runtime Agent"}
                               {" · "}
@@ -426,6 +444,12 @@ export default function SupervisorOverview({
                           <Detail label="Latest progress">
                             {execution.latest_progress ?? "No progress reported yet"}
                           </Detail>
+                          {execution.wait_cycle_count > 0 ? (
+                            <Detail label="Wait cycles">{String(execution.wait_cycle_count)}</Detail>
+                          ) : null}
+                          {execution.result_summary ? (
+                            <Detail label="Result">{execution.result_summary}</Detail>
+                          ) : null}
                         </dl>
                         {onLoadAgentHistory ? (
                           <button

@@ -4,11 +4,8 @@ import ChevronUp from "lucide-react/dist/esm/icons/chevron-up";
 import type {
   ConversationItem,
   OpenAppTarget,
-  RequestUserInputRequest,
-  RequestUserInputResponse,
 } from "../../../types";
 import { PlanReadyFollowupMessage } from "../../app/components/PlanReadyFollowupMessage";
-import { RequestUserInputMessage } from "../../app/components/RequestUserInputMessage";
 import { useFileLinkOpener } from "../hooks/useFileLinkOpener";
 import { formatCount, parseReasoning } from "../utils/messageRenderUtils";
 import {
@@ -38,11 +35,6 @@ type MessagesProps = {
   selectedOpenAppId: string;
   codeBlockCopyUseModifier?: boolean;
   showMessageFilePath?: boolean;
-  userInputRequests?: RequestUserInputRequest[];
-  onUserInputSubmit?: (
-    request: RequestUserInputRequest,
-    response: RequestUserInputResponse,
-  ) => void;
   onPlanAccept?: () => void;
   onPlanSubmitChanges?: (changes: string) => void;
   onOpenThreadLink?: (threadId: string, workspaceId?: string | null) => void;
@@ -64,21 +56,11 @@ export const Messages = memo(function Messages({
   selectedOpenAppId,
   codeBlockCopyUseModifier = false,
   showMessageFilePath = true,
-  userInputRequests = [],
-  onUserInputSubmit,
   onPlanAccept,
   onPlanSubmitChanges,
   onOpenThreadLink,
   onQuoteMessage,
 }: MessagesProps) {
-  const activeUserInputRequestId =
-    threadId && userInputRequests.length
-      ? (userInputRequests.find(
-          (request) =>
-            request.params.thread_id === threadId &&
-            (!workspaceId || request.workspace_id === workspaceId),
-        )?.request_id ?? null)
-      : null;
   const { openFileLink, showFileLinkMenu } = useFileLinkOpener(
     workspacePath,
     openTargets,
@@ -91,17 +73,6 @@ export const Messages = memo(function Messages({
     [onOpenThreadLink, workspaceId],
   );
 
-  const hasActiveUserInputRequest = activeUserInputRequestId !== null;
-  const hasVisibleUserInputRequest = hasActiveUserInputRequest && Boolean(onUserInputSubmit);
-  const userInputNode =
-    hasActiveUserInputRequest && onUserInputSubmit ? (
-      <RequestUserInputMessage
-        requests={userInputRequests}
-        activeThreadId={threadId}
-        activeWorkspaceId={workspaceId}
-        onSubmit={onUserInputSubmit}
-      />
-    ) : null;
   const {
     bottomRef,
     containerRef,
@@ -123,8 +94,6 @@ export const Messages = memo(function Messages({
     items,
     threadId,
     isThinking,
-    activeUserInputRequestId,
-    hasVisibleUserInputRequest,
     onPlanAccept,
     onPlanSubmitChanges,
     onQuoteMessage,
@@ -282,7 +251,6 @@ export const Messages = memo(function Messages({
           return renderItem(entry.item);
         })}
         {planFollowupNode}
-        {userInputNode}
         <WorkingIndicator
           isThinking={isThinking}
           processingStartedAt={processingStartedAt}
@@ -292,12 +260,12 @@ export const Messages = memo(function Messages({
           showPollingFetchStatus={showPollingFetchStatus}
           pollingIntervalMs={pollingIntervalMs}
         />
-        {!items.length && !userInputNode && !isThinking && !isLoadingMessages && (
+        {!items.length && !isThinking && !isLoadingMessages && (
           <div className="empty messages-empty">
             {threadId ? "Send a prompt to the agent." : "Send a prompt to start a new agent."}
           </div>
         )}
-        {!items.length && !userInputNode && !isThinking && isLoadingMessages && (
+        {!items.length && !isThinking && isLoadingMessages && (
           <div className="empty messages-empty">
             <div className="messages-loading-indicator" role="status" aria-live="polite">
               <span className="working-spinner" aria-hidden />

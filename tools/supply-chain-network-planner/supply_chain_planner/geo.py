@@ -71,10 +71,7 @@ def stable_uniform(key: str, low: float, high: float) -> float:
 
 def _ring_area(ring: tuple[Coordinate, ...]) -> float:
     return abs(
-        sum(
-            x1 * y2 - x2 * y1
-            for (x1, y1), (x2, y2) in zip(ring, ring[1:] + ring[:1], strict=True)
-        )
+        sum(x1 * y2 - x2 * y1 for (x1, y1), (x2, y2) in zip(ring, ring[1:] + ring[:1], strict=True))
         / 2
     )
 

@@ -270,24 +270,27 @@ flowchart TB
 sequenceDiagram
     participant S as Supervisor
     participant D as Data Agent
-    participant DM as Data MCP
+    participant DI as Platform Data Intake
+    participant W as Platform Work State
     participant A as Artifact Store
     participant N as Network Planning Agent
     participant PM as Planning MCP
 
-    S->>D: 缺少适用 Dataset 时准备并验证规划数据
-    D->>DM: 按 typed market/period metadata 读取受限数据源
-    DM-->>D: planning-dataset.v2 + data_ref
-    D-->>S: 返回精确引用与摘要
-    A-->>N: 按同 Task 授权解析同一成果
-    S->>N: 基于该 Artifact 回答网络决策问题
+    S->>N: 定义当前问题和最小数据需求
+    N->>W: 提交 requirement component
+    S->>D: 仅在数据未就绪时准备输入
+    D->>DI: 检查 SourceAsset、确认映射、发布 Dataset Release
+    D->>W: 绑定 normalized input component
+    S->>W: 只读检查 readiness 和 blocker
+    S->>N: 基于同一 Work State 回答网络决策问题
     N->>PM: 计算并验证候选方案
-    PM-->>N: 类型化规划结果
-    N-->>S: 返回结果 Artifact 与结论
+    PM->>W: 提交有界 component 引用
+    N->>A: 发布报告与地图 Artifact
+    N-->>S: 返回 Artifact 引用与有界结论
 ```
 
-Runtime 中传递的是精确 `data_ref` 和人类可读的 `resource_name`；浏览器看到的是平台
-登记后的安全 Artifact ID、Schema、状态和生产来源，不接收内部 MCP Resource URI。
+Runtime 中传递的是 Work State/Dataset/Artifact 的稳定身份和有界摘要；浏览器看到的是
+平台鉴权后的安全 DTO，不接收内部 MCP Resource URI、宿主路径或完整业务 payload。
 
 ### 细致目标
 
@@ -461,9 +464,10 @@ Ledger 能够减少重复整理和依赖排查，同时没有变成第二套 Run
 ### 已实现
 
 - Runtime 原生父子 Thread 与协作事件；
-- Supervisor 到四个可选 exact Runtime Role 的按需任务委派；
+- Supervisor 到 Data/Network 两个 exact Runtime Role 的按需任务委派；
 - Task 级持久 Artifact、生产来源和同 Task 授权；
-- 跨子 Thread 的 `planning-dataset.v2`、规划、财务与风险结果条件性交接；
+- 当前仓网 Case 通过 `case_id`、有界摘要和最终 Artifact 进行交接；该通用状态机制仍需
+  迁移到 Platform Work State，数据来源和映射仍需迁移到唯一 Platform Data Intake；
 - Artifact 内容物化、Schema、摘要和安全浏览器 DTO；
 - 删除生产 Run 后保留 Artifact 身份、授权和来源的数据库验证；
 - Web 恢复 Agent、Artifact 和最终 Thread 报告。

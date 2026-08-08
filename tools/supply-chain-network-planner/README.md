@@ -1,138 +1,84 @@
 # Supply Chain Network Planner
 
-This Codex Plugin provides reviewed supply-chain MCP capabilities. Domain
-calculations and Resource publication stay in this package; Codex Runtime owns Tool,
-Skill, MCP and Agent execution.
+这个 Codex Plugin 提供通用仓网规划能力。Codex Runtime 负责 Thread、Turn、Agent、Skill、MCP 和模型执行；本包只负责经过审查的 Data/Network 工具和持久化 Resource。
 
-## MCP boundaries
+## MCP 入口
 
-The package declares four independent MCP Servers:
+本包只注册三个入口，均由同一个 launcher 启动，并使用隔离 Python 环境：
 
-| Server | Current owner and use |
+| Server | 责任 |
 | --- | --- |
-| `supply_chain_data` | General bounded planning-source discovery and `planning-dataset.v2` publication |
-| `supply_chain_demo` | One explicit, approved, deterministic write into the current empty Workspace |
-| `supply_chain_planner` | General snapshot, route, scenario, facility, finance and risk Resources |
-| `supply_chain_indonesia` | Exact Workspace Dataset Release access and the progressive Indonesia tutorials |
+| `supply_chain_data` | 发现和检查授权 Workspace 的 CSV/JSON/XLSX，发布来源画像、映射、标准化输入和行政区结果 |
+| `supply_chain_planner` | 构建路线/成本矩阵，计算覆盖、成本、场景、p-median、服务约束选址、比较地图和报告 |
+| `supply_chain_demo` | 只有用户明确要求 mock/demo/tutorial 时，向空 Workspace 复制已验证的印尼教程 fixture |
 
-The current `enterprise-supervisor-copilot@5.2.0` Draft delegates normal Network Planning
-to the bounded `supply_chain_data` intake server, the generic `supply_chain_planner`
-server and the separate `map_utils` Plugin. `supply_chain_indonesia` remains an
-independent tutorial capability and is not part of the normal Workspace intake path.
+没有独立的 Indonesia MCP。国家由用户问题确定，行政区能力属于 `supply_chain_data`；地图由 Network Agent 使用 Planner 的确定性地图工具生成。
 
-`supply_chain_demo` creates the single reviewed `warehouse-network-large@1.0.0`
-template, which generates one city-demand row for each of 24 Indonesian cities.
-Warehouses are tied to cities, current coverage is warehouse-to-city, and each
-city-to-city lane combines distance, travel time and transport quote fields. The
-template therefore contains 24 city-demand rows, 24 coverage rows and 144 lanes.
+## 当前网络工具
 
-## Indonesia tools
-
-`supply_chain_indonesia` exposes:
-
-- `inspect_indonesia_dataset_release`
-- `evaluate_indonesia_service_baseline`
-- `evaluate_indonesia_current_network`
-- `evaluate_indonesia_candidate`
-- `optimize_indonesia_new_warehouse`
-- `prepare_indonesia_network_map`
-- `prepare_indonesia_map_render`
-- `prepare_indonesia_decision_report`
-- `validate_indonesia_resource`
-
-The service-baseline Tool intentionally returns current forward-to-customer service and
-province metrics without linehaul, capacity or cost fields. The current-network Tool adds
-the full two-level cost and capacity view. Candidate and optimization Tools use only the
-twenty reviewed candidates.
-
-Every producer validates its typed Resource and cross-field totals before publication.
-Validation failure is a failed Tool call; correctness does not depend on the model choosing a
-second validator call. Same-server analysis Tools consume exact `resource_name` values and let
-the server resolve its own Resource Store; models do not copy or reconstruct internal URIs.
-Resource-producing Tools still return an unchanged structured `data_ref` for durable provenance
-and bounded direct reads. The decision-report Tool cross-checks the seven Resource identities it
-owns and deterministically renders the business-report Markdown. The separate `map_utils` Tool
-owns the browser Artifact and exact `structuredContent.embed.code`. `MAP_HANDOFF` preserves only
-the two input Resource names and matching map Artifact ID. The embed code appears once as a
-standalone directive, and the Platform event's typed `inlineArtifacts` projection—not an escaped
-copy in model JSON—is the browser rendering authority.
-
-## Current governed roles
-
-| Release | Exact capability boundary |
-| --- | --- |
-| `enterprise-data-agent@5.1.0` | Workspace-only discovery plus one explicitly requested empty-Workspace Demo generation Tool, profiling, mapping and normalization after mapping and parameter confirmation |
-| `enterprise-network-planning-agent@5.1.0` | Generic warehouse-network requirement profile, input-gap decision, readiness checklist and deterministic analysis without separate requirement-profile confirmation or geography defaults |
-| `enterprise-visualization-agent@2.0.0` | Exact comparison-map/GeoJSON render preparation, provenance-only `MAP_HANDOFF` and one standalone Tool-owned embed directive |
-| `enterprise-supervisor-copilot@5.2.0` Draft | Evidence-driven coordination, business-language final status with field mappings and multi-source conflicts, explicit Demo authorization, published requirement-before-Demo order, no empty-Workspace fallback and same-Thread analysis handoff |
-
-The root Supervisor receives collaboration capabilities but no business MCP or shell. Child
-roles receive only their exact MCP Server, Tool and capability-root inventory. Disabled sibling
-Servers are not treated as missing dependencies.
-
-Web-authored Agent Releases inherit one reviewed template and may narrow Artifact contracts.
-They cannot add Tools through instructions. A Dataset-dependent Agent binds exact Workspace,
-Release, Dataset, version and SHA-256 identities; Runtime receives no browser-supplied host path.
-
-## Indonesia data
-
-The reproducible release is under:
+Network Agent 的主要工具是：
 
 ```text
-examples/indonesia-tutorial/releases/1.0.0/
+plan_route_matrix
+build_haversine_route_matrix
+register_navigation_route_matrix
+validate_route_matrix
+plan_cost_matrix
+compute_optimal_assignment
+evaluate_network_baseline
+evaluate_service_targets
+summarize_network_cost
+evaluate_facility_scenario
+solve_p_median
+solve_service_constrained_location
+compare_network_scenarios
+render_network_comparison_map
+publish_network_planning_report
 ```
 
-It contains 240,000 synthetic customers, 38 current provinces, three central warehouses,
-eight forward warehouses, twenty reviewed candidates and 1,148 quote rows. The source lock,
-generation policy and validation report are checked in beside the release.
+每个大数据结果都写入 Resource Store。Agent 消息只传 `ArtifactRef` 或工具返回的精确引用，不传原始文件、整张矩阵、完整工具结果或内部路径。缺失数据、矩阵不完整、求解器不可用和超时都是显式状态；不会自动加载 Mock、填零或切换旧实现。
 
-The authoritative synthetic-data rules are in
-[`references/indonesia-tutorial-data-contract.md`](references/indonesia-tutorial-data-contract.md).
-The Web learning path begins at
-[`docs/tutorials/README.md`](../../docs/tutorials/README.md).
+## 6.0 能力包
 
-## Resource and approval behavior
+| Package | 责任 |
+| --- | --- |
+| `enterprise-data-agent@6.0.0` | 来源发现、字段映射、行政区解析、坐标和边界校验、按需标准化 |
+| `enterprise-network-planning-agent@6.0.0` | 需求定义、路线/成本口径、覆盖、成本、场景、选址和地图/报告 |
+| `enterprise-supervisor-copilot@6.0.0` | 动态协调 Data 和 Network，不写死国家、阶段数量或调用顺序 |
 
-The Indonesia Server reads one exact platform-authorized Dataset Release through trusted Codex
-Turn metadata. It never accepts a host path as a Tool argument, scans a Workspace, or returns raw
-customer rows. Bounded JSON and GeoJSON Resources live in Profile-scoped MCP state.
+Supervisor 不绑定 Visualization Agent。用户输入统一通过 Runtime 官方 `requestUserInput`，平台将 root 和 child 请求投影到同一个 Run 输入队列。
 
-The checked-in MCP declarations classify the complete current Server toolsets as reviewed,
-read-only, deterministic and idempotent, so their default approval mode is `approve`. This is not
-a global approval bypass. Commands, file writes, credentials, external effects and future
-higher-risk Servers remain subject to their own Runtime and platform contracts.
+## 印尼教程 Fixture
 
-## Development setup and validation
+已验证数据位于：
 
-The real-mode startup scripts provision the shared MCP environment. For manual setup:
-
-```bash
-./bin/setup-env
+```text
+examples/indonesia-network/base/
+examples/indonesia-network/current-coverage-extension/
+examples/indonesia-network/candidate-extension/
 ```
 
-Run deterministic tests with the project test Python:
+基础 fixture 包含 50 个需求城市、5 个中心仓、6 个 cross-docking 仓、550 条末端报价和 30 条干线报价。需求量是 `ceil(population / 1000)`；城市点位经过 geoBoundaries ADM2 point-in-polygon 校验；报价与距离的 Spearman 相关系数不低于 0.85。`current-coverage-extension` 只在用户需要实际当前方案时使用。
+
+教程生成器会保存来源 URL、获取日期、许可证、原始 hash 和生成器版本：
 
 ```bash
-PYTHONPATH=tools/supply-chain-network-planner \
-  python3 -m pytest tools/supply-chain-network-planner/tests -q
+python3 tools/supply-chain-network-planner/scripts/generate_indonesia_tutorial_data.py \
+  --network-fixture
 ```
 
-Run the real stdio protocol smoke with the MCP environment:
+生成器不访问模型、不修改 Runtime，也不会把 fixture 作为空 Workspace 的自动回退。
+
+## 开发和验证
 
 ```bash
+./tools/supply-chain-network-planner/bin/setup-env
 PYTHONPATH=tools/supply-chain-network-planner \
   .local/open-web-codex/tool-envs/supply-chain-network-planner/bin/python \
-  tools/supply-chain-network-planner/tests/stdio_smoke.py
+  -m pytest tools/supply-chain-network-planner/tests -q
+PYTHONPATH=tools/supply-chain-network-planner \
+  .local/open-web-codex/tool-envs/supply-chain-network-planner/bin/python \
+  -m ruff check tools/supply-chain-network-planner
 ```
 
-The local Workspace intake gate is:
-
-```bash
-NETWORK_PLANNING_SMOKE_MODE=local scripts/smoke-network-planning-intake.sh
-```
-
-The same script requires explicit Web, Runtime, MCP, database and Provider
-prerequisites before it will run a real journey; absent those prerequisites it
-returns `network_planning_real_e2e_unavailable` rather than claiming success.
-
-No Provider or navigation API key is owned or stored by this Plugin.
+真实 stdio smoke 只在明确设置 `RUN_REAL_STDIO_SMOKE=1` 时启动三个 MCP 入口。任何 MCP Tool 都通过 Runtime 的 MCP 调用路径执行，禁止通过 shell `source`、目录遍历或手工拼接 Resource URI 调用。

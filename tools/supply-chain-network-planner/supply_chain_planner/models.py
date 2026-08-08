@@ -36,6 +36,7 @@ class DataAgentRef(StrictModel):
     uri: str = Field(pattern=r"^supply-chain-data://resources/[a-z0-9_.-]{1,160}$")
     format: Literal["json"] = "json"
     resource_schema: str
+    content_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class MapDataRef(StrictModel):
@@ -283,7 +284,9 @@ class PlanningSource(StrictModel):
         }
         if set(current_coverage) != set(demand_city_ids):
             raise ValueError("current warehouse city coverage is incomplete")
-        if any(facility_id not in existing_facility_ids for facility_id in current_coverage.values()):
+        if any(
+            facility_id not in existing_facility_ids for facility_id in current_coverage.values()
+        ):
             raise ValueError("current coverage references a non-existing facility")
         projected_demands = [
             DemandPoint(

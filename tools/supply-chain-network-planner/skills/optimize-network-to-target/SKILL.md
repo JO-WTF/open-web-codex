@@ -1,46 +1,14 @@
 ---
 name: optimize-network-to-target
-description: Design a warehouse network that reaches a requested delivery-coverage target with the fewest added warehouses and lowest modeled cost. Use for requests such as reaching 90 percent 1-day coverage, deciding how many warehouses to add, or selecting from a finite set of candidate warehouse locations.
+description: 在明确的候选仓集合中执行 p-median 或时效约束选址，并保留求解状态和最优性边界。
 ---
 
-# Optimize Network To Target
+# 按目标优化仓网
 
-Solve a bounded, auditable candidate-location problem. Read
-[planning-contracts.md](../../references/planning-contracts.md).
+1. 确认 Case 中已有仓、候选仓、需求、路线矩阵和成本矩阵均已就绪。
+2. 确认开仓数量、优化目标、时效目标和最低覆盖率。已有仓默认固定开启；只有用户明确列为可选的已有仓才允许关闭。
+3. 成本最优调用 `solve_p_median`；带时效覆盖约束时调用 `solve_service_constrained_location`。
+4. 求解器固定单线程、随机种子和时间上限。`timeout` 只能表示当前可行解，不能称为最优；`unavailable` 是明确能力缺失，不能换成本地猜测算法。
+5. 使用同一 Case 基线比较成本、覆盖率和仓库变化。只有用户要求时才生成地图。
 
-## Workflow
-
-1. Use `$prepare-network-baseline` unless a validated snapshot and complete route matrix
-   already contain every existing and candidate facility.
-2. Confirm the coverage target is a demand-weighted ratio in `(0, 1]`, and that the
-   service policy represents the requested promise such as 1-day delivery.
-3. Review the candidate set with the user when it embodies a material business choice.
-   Candidate coordinates, capacity, cost, rates, and all candidate-demand routes must be
-   present. The exact solver supports at most 14 candidate facilities.
-4. Call `supply_chain_planner.solve_facility_location`.
-5. Call `supply_chain_planner.validate_network_resource` on both `solution_ref` and the
-   solution's `result_ref`.
-6. If status is `infeasible`, report the best evaluated coverage and binding limitations.
-   Do not reinterpret it as a successful recommendation.
-7. For sensitivity, prepare separate immutable snapshots or policies and rerun the
-   solver. Never overwrite assumptions inside an earlier solution.
-
-## Objective and claim boundary
-
-The solver keeps all existing facilities open, enumerates every subset of the finite
-candidate set, and uses capacity-constrained min-cost flow for each subset. It minimizes:
-
-1. number of added candidate facilities;
-2. modeled total cost among solutions using that number;
-3. higher coverage as a deterministic tie-breaker.
-
-Demand uses integer planning units and may split across facilities. The result is exact
-for the supplied candidates, route matrix, rates, capacities, and policy. It is not a
-global geographic optimum and does not discover arbitrary new coordinates.
-
-## Handoff
-
-Report selected facilities, facility count, coverage numerator and denominator, target
-gap, modeled total cost, evaluated subset count, assumptions, exclusions, and at least
-one sensitivity or validation caveat. Distinguish the solver's finite-candidate
-optimality from a broader strategic recommendation.
+输出候选集范围、固定仓、可选仓、选中仓、目标值、服务指标、求解状态和是否证明最优。不得自行创造坐标或静默关闭已有仓。

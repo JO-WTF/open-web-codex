@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
 
 use open_web_codex_platform_contracts::{
-    SupervisorDefinitionSummary, SupervisorDraftRequest, SupervisorReleaseSummary,
+    SupervisorDefinitionSummary, SupervisorDraftRequest, SupervisorDraftSummary,
+    SupervisorReleaseSummary,
 };
+use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
@@ -24,7 +26,8 @@ pub(super) async fn load_definitions(
     .await
     .map_err(database_error)?;
     let drafts = sqlx::query(
-        "SELECT definition_id, draft_spec FROM supervisor_revisions \
+        "SELECT definition_id, draft_spec, revision_number, content_sha256, updated_at \
+                FROM supervisor_revisions \
          WHERE organization_id = $1 AND state = 'draft'",
     )
     .bind(organization_id)
@@ -33,9 +36,21 @@ pub(super) async fn load_definitions(
     .map_err(database_error)?
     .into_iter()
     .map(|row| {
+        let draft = parse_draft(row.get("draft_spec"))?;
+        let content_sha256 = row
+            .get::<Option<String>, _>("content_sha256")
+            .unwrap_or_else(|| draft_content_sha256(&draft));
         Ok((
             row.get::<Uuid, _>("definition_id"),
-            parse_draft(row.get("draft_spec"))?,
+            (
+                draft,
+                SupervisorDraftSummary {
+                    revision: row.get("revision_number"),
+                    content_sha256,
+                    validation_state: "unvalidated".to_string(),
+                    updated_at: row.get("updated_at"),
+                },
+            ),
         ))
     })
     .collect::<Result<BTreeMap<_, _>, ApiError>>()?;
@@ -66,7 +81,8 @@ pub(super) async fn load_definitions(
                 display_name: row.get("display_name"),
                 description: row.get("description"),
                 owner_user_id: row.get("owner_user_id"),
-                draft: drafts.get(&id).cloned(),
+                draft: drafts.get(&id).map(|entry| entry.0.clone()),
+                draft_metadata: drafts.get(&id).map(|entry| entry.1.clone()),
                 releases: releases.remove(&id).unwrap_or_default(),
                 created_at: row.get("created_at"),
                 updated_at: row.get("updated_at"),
@@ -158,4 +174,9 @@ fn release_summary(row: &sqlx::postgres::PgRow) -> SupervisorReleaseSummary {
         content_sha256: row.get("content_sha256"),
         published_at: row.get("published_at"),
     }
+}
+
+pub(super) fn draft_content_sha256(draft: &SupervisorDraftRequest) -> String {
+    let bytes = serde_json::to_vec(draft).expect("Supervisor Draft serializes");
+    hex::encode(Sha256::digest(bytes))
 }

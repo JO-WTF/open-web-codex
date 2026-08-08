@@ -103,6 +103,7 @@ fn apply_thread_start_mode(
                 roles,
                 role_spawn_limits,
                 required_mcp_servers,
+                coordination_mcp_servers,
                 max_threads,
             },
             Some(config),
@@ -110,6 +111,9 @@ fn apply_thread_start_mode(
             validate_platform_runtime_roles(roles, *max_threads)?;
             validate_role_spawn_limits(roles, role_spawn_limits)?;
             validate_required_mcp_servers(required_mcp_servers)?;
+            if !coordination_mcp_servers.is_empty() {
+                validate_required_mcp_servers(coordination_mcp_servers)?;
+            }
             let instructions = developer_instructions.trim();
             if instructions.is_empty() || instructions.len() > MAX_DEVELOPER_INSTRUCTIONS_BYTES {
                 return Err(AdapterError::Internal(
@@ -297,6 +301,7 @@ impl RealCodexAdapter {
                 roles,
                 role_spawn_limits,
                 required_mcp_servers,
+                coordination_mcp_servers,
                 max_threads,
                 ..
             } => {
@@ -305,6 +310,7 @@ impl RealCodexAdapter {
                     roles,
                     role_spawn_limits,
                     required_mcp_servers,
+                    coordination_mcp_servers,
                     *max_threads,
                     &paths,
                 )
@@ -373,23 +379,24 @@ impl RealCodexAdapter {
             ThreadStartMode::Standard => Ok(()),
             ThreadStartMode::GovernedSupervisor {
                 required_mcp_servers,
+                coordination_mcp_servers,
                 ..
             } => {
                 validate_required_mcp_servers(required_mcp_servers)?;
                 let inventory = self.read_mcp_inventory(Some(thread_id)).await?;
-                let exposed = exposed_mcp_capabilities(&inventory);
-                if exposed.is_empty() {
-                    return Ok(());
+                if coordination_mcp_servers.is_empty() {
+                    let exposed = exposed_mcp_capabilities(&inventory);
+                    if exposed.is_empty() {
+                        Ok(())
+                    } else {
+                        Err(governed_mcp_unavailable(&format!(
+                            "root Thread exposes {}",
+                            exposed.join(", ")
+                        )))
+                    }
+                } else {
+                    require_exact_agent_mcp_inventory(coordination_mcp_servers, &inventory)
                 }
-                tracing::warn!(
-                    thread_id,
-                    exposed = ?exposed,
-                    "governed root Runtime Thread retained business MCP capabilities"
-                );
-                Err(governed_mcp_unavailable(&format!(
-                    "root Thread exposes {}",
-                    exposed.join(", ")
-                )))
             }
             ThreadStartMode::GovernedAgent {
                 required_mcp_servers,
@@ -1915,27 +1922,32 @@ fn add_selected_capability_roots(
         source_repo_root(),
         env_value.as_ref().map(std::ffi::OsString::as_os_str),
     );
-    let required_mcp_servers = match mode {
-        ThreadStartMode::Standard => None,
+    let (required_mcp_servers, coordination_mcp_servers): (
+        &[RequiredMcpServer],
+        &[RequiredMcpServer],
+    ) = match mode {
+        ThreadStartMode::Standard => (&[], &[]),
         ThreadStartMode::GovernedAgent {
             required_mcp_servers,
             ..
-        }
-        | ThreadStartMode::GovernedSupervisor {
+        } => (required_mcp_servers, &[]),
+        ThreadStartMode::GovernedSupervisor {
             required_mcp_servers,
+            coordination_mcp_servers,
             ..
-        } => Some(required_mcp_servers),
+        } => (required_mcp_servers, coordination_mcp_servers),
     };
-    if let Some(required_mcp_servers) = required_mcp_servers {
-        let required_root_ids = required_mcp_servers
-            .iter()
-            .flat_map(|server| {
-                server
-                    .capability_roots
-                    .iter()
-                    .map(|root| &root.capability_root_id)
-            })
-            .collect::<HashSet<_>>();
+    let required_root_ids = required_mcp_servers
+        .iter()
+        .chain(coordination_mcp_servers.iter())
+        .flat_map(|server| {
+            server
+                .capability_roots
+                .iter()
+                .map(|root| &root.capability_root_id)
+        })
+        .collect::<HashSet<_>>();
+    if !required_root_ids.is_empty() {
         selected.retain(|root| {
             root.get("id").and_then(Value::as_str).is_some_and(|id| {
                 required_root_ids
@@ -1952,8 +1964,19 @@ fn add_selected_capability_roots(
                 .iter()
                 .any(|required| !selected_root_ids.contains(&required.as_str()))
         {
+            let mut required_root_ids = required_root_ids
+                .iter()
+                .map(|root| root.as_str())
+                .collect::<Vec<_>>();
+            required_root_ids.sort_unstable();
+            let mut selected_root_ids = selected_root_ids;
+            selected_root_ids.sort_unstable();
             return Err(governed_mcp_unavailable(
-                "a required capability root is unavailable or ambiguous",
+                &format!(
+                    "a required capability root is unavailable or ambiguous (required=[{}], selected=[{}])",
+                    required_root_ids.join(","),
+                    selected_root_ids.join(",")
+                ),
             ));
         }
     }
@@ -2288,8 +2311,6 @@ mod tests {
             enabled = true\nenabled_tools = [\"discover_workspace_sources\"]\n\
             \n[plugins.local-supply-chain-network-planner.mcp_servers.supply_chain_demo]\n\
             enabled = false\n\
-            \n[plugins.local-supply-chain-network-planner.mcp_servers.supply_chain_indonesia]\n\
-            enabled = false\n\
             \n[plugins.local-supply-chain-network-planner.mcp_servers.supply_chain_planner]\n\
             enabled = false\n";
         PlatformRuntimeRole {
@@ -2337,10 +2358,10 @@ mod tests {
                 &[
                     "supply_chain_data",
                     "supply_chain_demo",
-                    "supply_chain_indonesia",
                     "supply_chain_planner",
                 ],
             )],
+            coordination_mcp_servers: Vec::new(),
             max_threads: 2,
         }
     }
@@ -2376,10 +2397,10 @@ mod tests {
                 &[
                     "supply_chain_data",
                     "supply_chain_demo",
-                    "supply_chain_indonesia",
                     "supply_chain_planner",
                 ],
             )],
+            &[],
             2,
             &verified_host_paths,
         )
@@ -2658,6 +2679,10 @@ mod tests {
             );
             assert_eq!(params["config"]["features.apps"], false);
             assert_eq!(params["config"]["features.multi_agent_v2"], true);
+            assert_eq!(
+                params["config"]["features.default_mode_request_user_input"],
+                true
+            );
             assert_eq!(params["config"]["features.plugins"], false);
             assert_eq!(params["config"]["features.shell_tool"], false);
             assert_eq!(params["config"]["skills.include_instructions"], false);
@@ -2701,6 +2726,74 @@ mod tests {
                 })
             );
         }
+    }
+
+    #[test]
+    fn selects_supervisor_coordination_roots_in_addition_to_domain_roots() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        create_plugin_root(&temp.path().join("tools"), "governed-domain-tools");
+        create_plugin_root(&temp.path().join("tools"), "governed-coordination-tools");
+
+        let role = platform_runtime_role();
+        let required_mcp_servers = vec![required_server(
+            "supply_chain_data",
+            &["discover_workspace_sources"],
+            "local-governed-domain-tools",
+            &[
+                "supply_chain_data",
+                "supply_chain_demo",
+                "supply_chain_planner",
+            ],
+        )];
+        let coordination_mcp_servers = vec![required_server(
+            "platform_coordination",
+            &["get_work_state_summary"],
+            "local-governed-coordination-tools",
+            &["platform_coordination"],
+        )];
+        let mode = ThreadStartMode::GovernedSupervisor {
+            developer_instructions: "Coordinate the approved platform roles.".to_string(),
+            roles: vec![role.clone()],
+            role_spawn_limits: [("data_agent".to_string(), 1)].into_iter().collect(),
+            required_mcp_servers: required_mcp_servers.clone(),
+            coordination_mcp_servers: coordination_mcp_servers.clone(),
+            max_threads: 2,
+        };
+        let mut verified_host_paths = HashMap::new();
+        verified_host_paths.insert(
+            role.name.clone(),
+            PathBuf::from(format!("/profile/{}", role.config_file)),
+        );
+        let config = governed_runtime_role_config_overrides(
+            &[role],
+            &[("data_agent".to_string(), 1)].into_iter().collect(),
+            &required_mcp_servers,
+            &coordination_mcp_servers,
+            2,
+            &verified_host_paths,
+        )
+        .expect("build verified governed configuration");
+
+        let params = thread_start_params(
+            temp.path().to_str().expect("workspace path"),
+            &mode,
+            Some(config),
+        )
+        .expect("governed start parameters");
+        let selected = params["selectedCapabilityRoots"]
+            .as_array()
+            .expect("selected capability roots")
+            .iter()
+            .map(|root| root["id"].as_str().expect("capability root id"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            selected,
+            vec![
+                "local-governed-coordination-tools",
+                "local-governed-domain-tools"
+            ]
+        );
     }
 
     #[test]
@@ -2813,6 +2906,7 @@ mod tests {
                 "missing-capability-root",
                 &["supply_chain_data"],
             )],
+            coordination_mcp_servers: Vec::new(),
             max_threads: 2,
         };
         let error = thread_start_params(
@@ -2822,10 +2916,9 @@ mod tests {
         )
         .unwrap_err();
 
-        assert_eq!(
-            error.to_string(),
-            "Required Runtime capabilities unavailable: a required capability root is unavailable or ambiguous"
-        );
+        assert!(error.to_string().starts_with(
+            "Required Runtime capabilities unavailable: a required capability root is unavailable or ambiguous (required=["
+        ));
     }
 
     #[test]
@@ -2864,6 +2957,46 @@ mod tests {
                 "supply_chain_data.inspect_planning_source",
             ]
         );
+    }
+
+    #[test]
+    fn governed_supervisor_enables_only_declared_coordination_tools_for_root() {
+        let role = platform_runtime_role();
+        let required = required_server(
+            "supply_chain_network",
+            &["create_network_case", "normalize_case_input"],
+            "local-supply-chain-network-planner",
+            &["supply_chain_network"],
+        );
+        let coordination = required_server(
+            "supply_chain_network",
+            &["create_network_case"],
+            "local-supply-chain-network-planner",
+            &["supply_chain_network"],
+        );
+        let role_name = role.name.clone();
+        let mut paths = HashMap::new();
+        paths.insert(
+            role.name.clone(),
+            PathBuf::from(format!("/profile/{}", role.config_file)),
+        );
+
+        let config = governed_runtime_role_config_overrides(
+            &[role],
+            &[(role_name, 1)].into_iter().collect(),
+            &[required],
+            &[coordination],
+            2,
+            &paths,
+        )
+        .unwrap();
+
+        let key = "plugins.local-supply-chain-network-planner.mcp_servers.supply_chain_network.enabled_tools";
+        assert_eq!(
+            config.get(key),
+            Some(&serde_json::json!(["create_network_case"]))
+        );
+        assert!(!config.to_string().contains("normalize_case_input"));
     }
 
     #[test]

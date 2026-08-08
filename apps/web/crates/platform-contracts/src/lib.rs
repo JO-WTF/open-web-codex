@@ -688,6 +688,428 @@ pub struct AnalysisStartResponse {
     pub state: String,
 }
 
+// ── Capability catalog and collaboration ───────────────────────────
+
+/// The product-level resource categories that can be composed into a Copilot.
+/// Runtime Roles, file paths and MCP server names are deliberately not part of
+/// this browser-safe contract.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CatalogResourceKind {
+    ToolPackage,
+    SkillPackage,
+    AgentDefinition,
+    SupervisorDefinition,
+    CopilotPackage,
+}
+
+/// A single package-relative file owned by a catalog Draft. The server checks
+/// paths and content before a Release can be installed; callers never choose
+/// a host path or launcher command.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogPackageFile {
+    pub path: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogDependency {
+    pub kind: CatalogResourceKind,
+    pub resource_id: String,
+    pub release_id: Option<Uuid>,
+    pub release_version: Option<String>,
+}
+
+/// The only mutable payload a Studio edits. The catalog compiler owns all
+/// derived Runtime role, MCP inventory and execution hashes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogDraftContent {
+    pub files: Vec<CatalogPackageFile>,
+    pub definition: serde_json::Value,
+    pub dependencies: Vec<CatalogDependency>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CapabilityDraftSummary {
+    pub id: Uuid,
+    pub kind: CatalogResourceKind,
+    pub resource_id: String,
+    pub display_name: String,
+    pub description: String,
+    pub metadata: DraftMetadata,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CapabilityDraftDetail {
+    pub summary: CapabilityDraftSummary,
+    pub content: CatalogDraftContent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CapabilityValidationResult {
+    pub valid: bool,
+    pub issues: Vec<String>,
+    pub content_sha256: Option<String>,
+    pub execution_semantics_sha256: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CapabilityReleaseSummary {
+    pub id: Uuid,
+    pub kind: CatalogResourceKind,
+    pub resource_id: String,
+    pub release_version: String,
+    pub display_name: String,
+    pub description: String,
+    pub identity: ReleaseIdentity,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CapabilityInstallationSummary {
+    pub id: Uuid,
+    pub release_id: Uuid,
+    pub workspace_id: Uuid,
+    pub profile_id: Uuid,
+    pub state: InstallationState,
+    pub observed_content_sha256: Option<String>,
+    pub failure_code: Option<String>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CapabilityReadinessSummary {
+    pub release: CapabilityReleaseSummary,
+    pub installation: Option<CapabilityInstallationSummary>,
+    pub runtime_discovered: bool,
+    pub missing_capabilities: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateCapabilityDraftRequest {
+    pub kind: CatalogResourceKind,
+    pub resource_id: String,
+    pub display_name: String,
+    pub description: String,
+    pub content: CatalogDraftContent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveCapabilityDraftRequest {
+    pub expected_revision: i64,
+    pub display_name: String,
+    pub description: String,
+    pub content: CatalogDraftContent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PublishCapabilityDraftRequest {
+    pub expected_revision: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallCapabilityReleaseRequest {
+    pub workspace_id: Uuid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CoordinationExecutionSummary {
+    pub id: Uuid,
+    pub display_title: String,
+    pub status: RuntimeAgentExecutionStatus,
+    pub current_behavior: String,
+    pub latest_progress: Option<String>,
+    pub result_summary: Option<String>,
+    pub wait_cycle_count: i32,
+    pub waiting_for_input: bool,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Root coordination is a bounded read model. It exposes no Runtime Thread
+/// identifiers and has no mutation or scheduling authority.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CollaborationStatusSummary {
+    pub run_id: Uuid,
+    pub task_id: Uuid,
+    pub work_state: Option<WorkStateSummary>,
+    pub executions: Vec<CoordinationExecutionSummary>,
+    pub open_user_input_count: i64,
+    pub deliverables: Vec<WorkDeliverableSummary>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Mutable authoring metadata. Draft versions are integer revisions; only a
+/// published Release has a server-issued semantic version.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftMetadata {
+    pub id: Uuid,
+    pub revision: i64,
+    pub content_sha256: String,
+    pub validation_state: String,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One exact immutable catalog Release selected for installation or execution.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReleaseIdentity {
+    pub id: Uuid,
+    pub kind: CatalogResourceKind,
+    pub resource_id: String,
+    pub release_version: String,
+    pub content_sha256: String,
+    pub execution_semantics_sha256: String,
+    pub published_at: DateTime<Utc>,
+}
+
+/// Installation is a platform-owned lifecycle. A Release is not Runtime-ready
+/// until discovery has observed the atomically installed content.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum InstallationState {
+    Authorized,
+    Installing,
+    Installed,
+    Discovered,
+    Ready,
+    Failed,
+    Uninstalled,
+}
+
+/// A durable reference to large data or an immutable domain resource. It is
+/// the only payload shape accepted by Work State component and operation
+/// contracts; raw datasets never belong in Agent assignments.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkResourceReference {
+    pub owner: String,
+    pub resource_type: String,
+    pub resource_id: String,
+    pub content_sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkComponentDefinition {
+    pub key: String,
+    pub display_name: String,
+    pub required: bool,
+    pub resource_types: Vec<String>,
+    pub depends_on: Vec<String>,
+}
+
+/// Immutable schema for a class of domain work. Domain packages register this
+/// contract; the platform owns all state transitions and persistence.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkStateDefinition {
+    pub id: Uuid,
+    pub definition_id: String,
+    pub version: String,
+    pub content_sha256: String,
+    pub components: Vec<WorkComponentDefinition>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkComponentState {
+    Missing,
+    Ready,
+    Invalidated,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkComponentSummary {
+    pub key: String,
+    pub revision: i64,
+    pub state: WorkComponentState,
+    pub resource: Option<WorkResourceReference>,
+    pub summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkOperationStatus {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+    Rejected,
+    Cancelled,
+    Timeout,
+    Interrupted,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkOperationSummary {
+    pub id: Uuid,
+    pub kind: String,
+    pub status: WorkOperationStatus,
+    pub idempotency_key: String,
+    pub started_at: DateTime<Utc>,
+    pub terminal_at: Option<DateTime<Utc>>,
+    pub failure_code: Option<String>,
+    pub summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkBlockingInputSummary {
+    pub id: Uuid,
+    pub code: String,
+    pub prompt: String,
+    pub source_operation_id: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkDeliverableSummary {
+    pub id: Uuid,
+    pub schema: String,
+    pub display_name: String,
+    pub resource: WorkResourceReference,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Bounded platform projection of current domain work. It is a read model,
+/// never a replacement for Codex Thread/Turn or Agent scheduling state.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkStateSummary {
+    pub id: Uuid,
+    pub task_id: Uuid,
+    pub workspace_id: Uuid,
+    pub definition: WorkStateDefinition,
+    pub revision: i64,
+    pub state: String,
+    pub components: Vec<WorkComponentSummary>,
+    pub blocking_inputs: Vec<WorkBlockingInputSummary>,
+    pub deliverables: Vec<WorkDeliverableSummary>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkComponentMutation {
+    pub key: String,
+    pub state: WorkComponentState,
+    pub resource: Option<WorkResourceReference>,
+    pub summary: Option<String>,
+}
+
+/// An operation-scoped, compare-and-swap Work State change. The caller may
+/// publish references and bounded summaries only; the service owns revisions,
+/// dependency invalidation and terminal operation transitions.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkStateMutation {
+    pub expected_revision: i64,
+    pub components: Vec<WorkComponentMutation>,
+    pub blocking_inputs: Vec<WorkBlockingInputSummary>,
+    pub deliverables: Vec<WorkDeliverableSummary>,
+    pub summary: Option<String>,
+}
+
+/// Browser request to create a domain Work State from a registered immutable
+/// definition. The platform resolves Profile ownership from the authorized
+/// Workspace; browsers never choose a Profile directly.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateWorkStateApiRequest {
+    pub workspace_id: Uuid,
+    pub definition: WorkStateDefinition,
+    pub idempotency_key: String,
+}
+
+/// The bounded context assigned to one Runtime-owned Agent turn. It replaces
+/// naming heuristics and unbounded copied Resources with explicit authority.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CollaborationContext {
+    pub run_id: Uuid,
+    pub task_id: Uuid,
+    pub work_state_id: Option<Uuid>,
+    pub readable_components: Vec<WorkComponentSummary>,
+    pub allowed_capabilities: Vec<ReleaseIdentity>,
+    pub expected_deliverable_schemas: Vec<String>,
+    pub blocking_input_policy: String,
+    pub summary_budget_chars: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AssignmentContract {
+    pub objective: String,
+    pub completion_criteria: Vec<String>,
+    pub context: CollaborationContext,
+}
+
+/// Uniform bounded result emitted by platform-provided tools. Domain tools
+/// retain their own schemas and publish immutable references separately.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PlatformToolResultStatus {
+    Ready,
+    NeedsInput,
+    Unavailable,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlatformToolResult {
+    pub schema_version: String,
+    pub status: PlatformToolResultStatus,
+    pub summary: String,
+    pub references: Vec<WorkResourceReference>,
+    pub blocking_input_ids: Vec<Uuid>,
+}
+
+/// Safe per-call provider metrics. Prompt, completion content and reasoning
+/// are intentionally excluded from persistence and browser DTOs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderCallMetric {
+    pub id: Uuid,
+    pub run_id: Option<Uuid>,
+    pub provider_id: String,
+    pub model_id: String,
+    pub input_tokens: Option<i64>,
+    pub cached_input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub tool_schema_tokens: Option<i64>,
+    pub latency_ms: Option<i64>,
+    pub first_token_ms: Option<i64>,
+    pub compaction_count: i32,
+    pub terminal_status: String,
+    pub stable_prefix_sha256: Option<String>,
+    pub tool_inventory_sha256: Option<String>,
+    pub skill_set_sha256: Option<String>,
+    pub runtime_role_sha256: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
 /// Response from starting a run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartRunResponse {
@@ -794,6 +1216,8 @@ pub struct SupervisorPolicyDetail {
     pub artifact_contracts: Vec<SupervisorArtifactContractInput>,
     #[serde(default)]
     pub data_requirement_contracts: Vec<DataRequirementContractReference>,
+    #[serde(default)]
+    pub coordination_capabilities: Vec<String>,
     pub max_active_child_agents: u32,
     pub content_sha256: String,
     pub execution_semantics_sha256: String,
@@ -821,7 +1245,6 @@ pub struct SupervisorArtifactContractInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SupervisorDraftRequest {
     pub policy_id: String,
-    pub version: String,
     pub display_name: String,
     pub description: String,
     pub responsibilities: Vec<String>,
@@ -831,7 +1254,29 @@ pub struct SupervisorDraftRequest {
     pub artifact_contracts: Vec<SupervisorArtifactContractInput>,
     #[serde(default)]
     pub data_requirement_contracts: Vec<DataRequirementContractReference>,
+    #[serde(default)]
+    pub coordination_capabilities: Vec<String>,
     pub max_active_child_agents: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SupervisorDraftUpdateRequest {
+    pub draft: SupervisorDraftRequest,
+    pub expected_revision: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PublishSupervisorDraftRequest {
+    pub expected_revision: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SupervisorDraftSummary {
+    pub revision: i64,
+    pub content_sha256: String,
+    pub validation_state: String,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -867,6 +1312,7 @@ pub struct SupervisorDefinitionSummary {
     pub description: String,
     pub owner_user_id: Uuid,
     pub draft: Option<SupervisorDraftRequest>,
+    pub draft_metadata: Option<SupervisorDraftSummary>,
     pub releases: Vec<SupervisorReleaseSummary>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -1142,6 +1588,8 @@ pub enum RuntimeAgentActivityKind {
     ToolFailed,
     Reporting,
     Waiting,
+    InputRequested,
+    InputAnswered,
     Completed,
     Failed,
     Interrupted,
@@ -1155,6 +1603,21 @@ pub enum RuntimeAgentActivityStatus {
     Completed,
     Failed,
     Waiting,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeAgentExecutionStatus {
+    Pending,
+    Running,
+    Waiting,
+    WaitingForInput,
+    Completed,
+    Failed,
+    Rejected,
+    Cancelled,
+    Timeout,
+    Interrupted,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1183,9 +1646,13 @@ pub struct RuntimeAgentExecution {
     pub turn_id: Option<String>,
     pub ordinal: i32,
     pub task: Option<String>,
-    pub status: String,
+    pub status: RuntimeAgentExecutionStatus,
     pub current_behavior: String,
     pub latest_progress: Option<String>,
+    pub display_title: String,
+    pub result_summary: Option<String>,
+    pub waiting_approval_id: Option<Uuid>,
+    pub wait_cycle_count: i32,
     pub first_observed_sequence: i64,
     pub last_observed_sequence: i64,
     pub started_at: Option<DateTime<Utc>>,
@@ -2014,6 +2481,47 @@ pub struct DecideApprovalRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserInputAnswer {
     pub answers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UserInputOptionSummary {
+    pub label: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UserInputQuestionSummary {
+    pub id: String,
+    pub header: String,
+    pub question: String,
+    pub is_other: bool,
+    pub is_secret: bool,
+    pub options: Vec<UserInputOptionSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum UserInputRequestSource {
+    Root,
+    Agent {
+        execution_id: Uuid,
+        display_title: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingUserInputSummary {
+    pub id: Uuid,
+    pub run_id: Uuid,
+    pub source: UserInputRequestSource,
+    pub questions: Vec<UserInputQuestionSummary>,
+    pub state: String,
+    pub version: i64,
+    pub auto_resolution_ms: Option<i64>,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

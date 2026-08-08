@@ -454,9 +454,15 @@ async fn independent_workspace_is_reused_across_run_lifecycles() {
             .unwrap(),
         1
     );
-    let reconciled = second.get_run(organization_id, recovery_run.id).await.unwrap();
+    let reconciled = second
+        .get_run(organization_id, recovery_run.id)
+        .await
+        .unwrap();
     assert_eq!(reconciled.status, "recovery_pending");
-    assert_eq!(reconciled.failure_code.as_deref(), Some("runtime_restarted"));
+    assert_eq!(
+        reconciled.failure_code.as_deref(),
+        Some("runtime_restarted")
+    );
     assert!(reconciled.active_turn_id.is_none());
     let cleanup_jobs: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM runner_jobs WHERE state IN ('pending', 'running')",

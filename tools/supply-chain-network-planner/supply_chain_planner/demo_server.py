@@ -24,13 +24,26 @@ from .workspace_intake import (
 )
 
 SANDBOX_STATE_META_CAPABILITY = "codex/sandbox-state-meta"
-TEMPLATE_ID = "warehouse-network-large"
+TEMPLATE_ID = "indonesia-network-tutorial"
 TEMPLATE_VERSION = "1.0.0"
 TEMPLATE_REF = f"{TEMPLATE_ID}@{TEMPLATE_VERSION}"
-LARGE_CITY_DEMAND_COUNT = 24
+LARGE_CITY_DEMAND_COUNT = 50
 DEFAULT_SEED = 42
 MANIFEST_NAME = "demo-manifest.json"
 TEMPLATES = {TEMPLATE_REF: (TEMPLATE_ID, TEMPLATE_VERSION)}
+TUTORIAL_FIXTURE_ROOT = (
+    Path(__file__).resolve().parents[1] / "examples" / "indonesia-network" / "base"
+)
+TUTORIAL_FIXTURE_FILES = (
+    "demand-cities.csv",
+    "existing-warehouses.csv",
+    "route-quotes.csv",
+    "administrative-areas.json",
+    "candidate-warehouses.csv",
+    "source-lock.json",
+    "validation-report.json",
+    "dataset-manifest.json",
+)
 
 mcp = FastMCP(
     "Supply Chain Demo Data",
@@ -50,7 +63,6 @@ def _csv_bytes(fieldnames: list[str], rows: Iterable[dict[str, object]]) -> byte
     writer.writeheader()
     writer.writerows(rows)
     return output.getvalue().encode("utf-8")
-
 
 
 def _large_cities() -> list[dict[str, object]]:
@@ -193,12 +205,18 @@ def _large_template_files(seed: int) -> dict[str, bytes]:
             key=lambda item: haversine_km(
                 city_point,
                 (
-                    float(city_by_id[str(item["city_id"])] ["longitude"]),
-                    float(city_by_id[str(item["city_id"])] ["latitude"]),
+                    float(city_by_id[str(item["city_id"])]["longitude"]),
+                    float(city_by_id[str(item["city_id"])]["latitude"]),
                 ),
             ),
         )
-        coverage.append({"facility_id": facility["facility_id"], "city_id": city["city_id"], "is_current": "true"})
+        coverage.append(
+            {
+                "facility_id": facility["facility_id"],
+                "city_id": city["city_id"],
+                "is_current": "true",
+            }
+        )
     lanes = []
     for origin_city_id in origin_city_ids:
         origin = city_by_id[origin_city_id]
@@ -249,17 +267,23 @@ def _large_template_files(seed: int) -> dict[str, bytes]:
 
 def _template_files(template_ref: str, seed: int) -> dict[str, bytes]:
     if template_ref == TEMPLATE_REF:
-        return _large_template_files(seed)
+        if not TUTORIAL_FIXTURE_ROOT.is_dir():
+            raise ValueError("demo_template_unavailable")
+        return {
+            name: (TUTORIAL_FIXTURE_ROOT / name).read_bytes() for name in TUTORIAL_FIXTURE_FILES
+        }
     raise ValueError("demo_template_unavailable")
 
 
 def _template_statistics(template_ref: str) -> dict[str, int]:
     if template_ref == TEMPLATE_REF:
         return {
-            "cityCount": 24,
+            "cityCount": 50,
             "cityDemandCount": LARGE_CITY_DEMAND_COUNT,
-            "facilityCount": 6,
-            "routeCount": 144,
+            "facilityCount": 11,
+            "routeCount": 580,
+            "lastMileRouteCount": 550,
+            "linehaulRouteCount": 30,
         }
     raise ValueError("demo_template_unavailable")
 

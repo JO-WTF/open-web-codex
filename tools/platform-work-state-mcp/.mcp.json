@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "platform_work_state": {
+      "command": "./bin/platform-work-state-launcher",
+      "args": [],
+      "cwd": ".",
+      "default_tools_approval_mode": "approve",
+      "env_vars": [
+        "OPEN_WEB_CODEX_WORK_STATE_GATE_URL",
+        "OPEN_WEB_CODEX_WORK_STATE_READ_URL",
+        "OPEN_WEB_CODEX_WORK_STATE_GATE_KEY",
+        "OPEN_WEB_CODEX_WORK_STATE_MCP_VENV",
+        "OPEN_WEB_CODEX_DATA_DIR",
+        "OPEN_WEB_CODEX_LOG_DIR"
+      ]
+    }
+  }
+}

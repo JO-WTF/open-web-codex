@@ -2086,7 +2086,11 @@ Phase 2 在同一用例上增加第二个组织和第二个 Profile 并发运行
 
 前面的分析改变了建设顺序。Profile Host、Run Orchestrator、Codex Adapter、事件投影和 Inline Artifact 已经存在；下一步集中在几条尚未穿透真实边界的产品链路。
 
-第 24、25 章已经给出完整风险和验证矩阵。路线图据此先处理 Runtime 执行轨迹、Supervisor Policy 绑定和 Artifact 交接，再处理执行授权、多 Profile 路由与 Agent Catalog；Task Knowledge Ledger 始终留在生产数据证明必要之后。组件只有在消除这些风险时才进入路线图。
+第 24、25 章已经给出完整风险和验证矩阵。2026-08-08 的路线图调整确认：用户创建
+Tool、中文 Skill、Agent 和 Supervisor 已经是当前纵向闭环本身，因此单 Profile
+Copilot 创作平台与 Runtime 执行轨迹、Artifact、Data Intake、Work State 一起进入
+Phase 1；多用户路由和组织治理仍在 Phase 2。Task Knowledge Ledger 继续留在生产数据
+证明必要之后。
 
 ![演进路线：每一层复杂度都由已验证问题支付](images/enterprise-agent-platform/evolution-roadmap-report.png)
 
@@ -2094,9 +2098,9 @@ Phase 2 在同一用例上增加第二个组织和第二个 Profile 并发运行
 
 ```mermaid
 flowchart LR
-    P0["Phase 0<br/>证明 Runtime 事实"]
-    P1["Phase 1<br/>Supervisor Copilot 闭环"]
-    P2["Phase 2<br/>受治理的多 Agent 执行"]
+    P0["Phase 0<br/>恢复可重复平台事实"]
+    P1["Phase 1<br/>单 Profile Copilot 创作平台"]
+    P2["Phase 2<br/>受治理的多用户执行"]
     P3["Phase 3<br/>按证据增加 Ledger"]
     P4["Phase 4<br/>Agent Decision OS"]
 
@@ -2109,7 +2113,8 @@ flowchart LR
 
 ##### 目标
 
-第一步先证明 Codex 原生多 Agent 能力在真实 Profile、真实 app-server、真实 Adapter 和真实 Web 投影中保持同一套语义，Agent Studio 暂不进入范围。
+第一步先恢复数据库、Workspace、Codex 原生多 Agent、真实 Profile、真实 app-server、
+Adapter 和 Web 投影的可重复事实，为 Phase 1 的有界 Studio 提供可信基线。
 
 这一步重点回答：
 
@@ -2126,7 +2131,9 @@ flowchart LR
 
 ##### 本阶段不建设
 
-Phase 0 不建设 Agent Catalog CRUD、通用 Blackboard、独立 Planner、Peer Agent Network、平台 Agent Scheduler 或 Tool Catalog fallback。
+Phase 0 不建设通用 Blackboard、独立 Planner、Peer Agent Network、平台 Agent Scheduler
+或 Tool Catalog fallback。Catalog/Studio 的业务实现进入 Phase 1，不通过 Phase 0 的
+启动、迁移和 Runtime 事实门禁提前宣称 ready。
 
 ##### 退出条件
 
@@ -2140,39 +2147,49 @@ Phase 0 不建设 Agent Catalog CRUD、通用 Blackboard、独立 Planner、Peer
 
 ---
 
-#### 26.2 Phase 1：Enterprise Supervisor Copilot
+#### 26.2 Phase 1：单 Profile Copilot 创作平台
 
 ##### 目标
 
-在一个授权 Profile 和一个真实企业用例中，完成“根 Supervisor + 少量 Domain Agents + 企业 Tool + 持久 Artifact”的最小闭环。
+在一个授权 Profile 中完成 Tool、中文 Skill、Domain Agent、Supervisor、Copilot 的创建、
+发布、安装、Runtime discovery 和真实运行闭环。印尼仓网是第一条参考实现，第二个
+非供应链案例验证平台没有领域硬编码。
 
-推荐从 Data Agent 和 Network Planning Agent 开始。它们存在清楚的前后依赖：前者产生订单与时效数据，后者基于同一份数据比较仓网方案。只有用例确实需要时，才增加 Finance Agent。
+仓网从 Data Agent 和 Network Planning Agent 开始。二者的先后关系由当前 Work State
+readiness 和用户问题决定，不由 Supervisor 固定阶段；平台提供 Root 只读 coordination，
+Runtime 继续拥有 spawn、follow-up、wait 和 interrupt。
 
 ##### 需要同时交付的能力
 
 | 能力 | 第一阶段的最小范围 |
 | --- | --- |
-| Supervisor | 发布、解析并绑定版本化 Policy Snapshot；Adapter 通过 `thread/start.developerInstructions` 传入根 Thread |
-| Domain Agent | 两个代码管理、可评审的 Agent Definition Manifest，并验证真实 Runtime Role 可发现 |
-| 企业 Tool | 只读数据 MCP 与有界仿真 MCP；使用 Task/Profile 级受限凭据，不提前声称 Runtime Role 级动态授权 |
+| Catalog | Tool、Skill、Agent、Supervisor、Copilot 共享 Draft、Release、精确依赖和 Profile Installation |
+| Compiler | 自动生成版本、hash、依赖 lock、Runtime bundle 和 capability requirements |
+| Supervisor | 绑定精确 Agent Releases、动态协作原则、部分失败规则和最终交付 |
+| Domain Agent | 用户可创建并测试的 Agent Definition，组合 Skills、Tools、数据权限和交付合同 |
+| 企业 Tool | 受限 Python MCP SDK、contract test、受控安装和真实 Runtime discovery |
+| Skill | 中文方法说明，类型化绑定输入 owner、Tool capability、失败处理和交付件 |
+| Work State | 通用 operation/dependency/readiness/deliverable 元数据；领域包拥有 payload |
+| Data Intake | Platform 唯一拥有 SourceAsset、mapping、Dataset Release；领域只做 validator/normalizer |
 | Artifact | 独立 Artifact ID、Schema、provenance，以及同一 Task 内跨子 Thread 授权读取 |
 | Runtime 协作 | 原生 spawn、follow-up、wait、interrupt，不增加平台 Agent 调度器 |
 | 产品控制 | 审批、取消、deadline、并发和费用边界，以及安全的 Agent 执行轨迹 DTO |
 | 评价 | 一个端到端用例和一组越权、恢复、部分成功反例 |
 
-本方案把 Artifact 迁移前置到 Phase 1。否则 Data Agent 与 Network Agent 仍然只能复制文本，Artifact First 会在第一次真实协作中失效。
+本方案把 Work State、Data Intake、Artifact 和上下文观测一并前置到 Phase 1。否则
+Studio 只是在 Web 创建更多 Prompt，Agent 仍会复制数据、重复扫描和用自然语言传状态。
 
-##### Agent Catalog 只做到“可验证候选”
+##### Studio 是有界创作平台
 
-第一阶段的 Catalog 可以由版本化 Manifest 与只读候选查询组成。平台检查组织授权策略，Runtime 验证 `runtime_role_ref` 是否真的可发现，然后才把候选交给 Supervisor。
-
-发布、安装和 Runtime 可用性的责任边界沿用第 21.2 节；Phase 1 不再引入第二条配置路径。
-
-第一阶段也不开放任意用户在线编辑 Agent Prompt、自动安装 Plugin、Agent Marketplace、长期 Task Knowledge Ledger、复杂触发器或跨组织 Agent 共享。
+第一阶段允许用户编辑 Tool package、中文 Skill、Agent 和 Supervisor，但不开放任意
+shell、无约束在线依赖构建、Plugin Marketplace、长期 Ledger、复杂触发器或跨组织共享。
+Catalog Release、Profile Installation 和 Runtime 可用性分别表达；Platform 不通过目录
+存在、角色名称或发布记录伪造可执行状态。
 
 ##### 退出条件
 
-- 华东新增仓用例从数据读取、跨 Agent Artifact 交接到最终报告完整运行；
+- 印尼仓网和第二个非供应链用例都从数据读取、跨 Agent 协作到最终交付完整运行；
+- 用户不修改 migration、`.mcp.json`、Profile 隐藏配置或手工 hash 即可创建 Copilot；
 - 每个关键结论引用至少一个可授权 Artifact；
 - Supervisor Policy 版本能够从最终结果追溯到根 Thread；
 - Data Agent 在 Prompt 诱导下仍无法写生产库；
@@ -2183,11 +2200,12 @@ Phase 0 不建设 Agent Catalog CRUD、通用 Blackboard、独立 Planner、Peer
 
 ---
 
-#### 26.3 Phase 2：Governed Multi-Agent Execution
+#### 26.3 Phase 2：受治理的多用户执行
 
 ##### 目标
 
-Phase 1 证明一个用例能够可信运行；Phase 2 才把它扩展为多个团队、多个 Profile 可以长期复用的平台能力。
+Phase 1 证明单 Profile 创作和运行能够可信成立；Phase 2 才开放多个团队、多个用户和
+多个 Profile 的组织能力。
 
 建设重点包括：
 
@@ -2204,9 +2222,10 @@ Phase 1 证明一个用例能够可信运行；Phase 2 才把它扩展为多个�
 
 如果采用 MCP 2025-11-25 中仍属实验性的 MCP Tasks 处理长时间 Tool 请求，也要保持边界：MCP Task 只跟踪一个被延迟执行的 MCP 请求，不替代平台 Task/Run 的用户授权、调度、Run Attempt、审计和交付语义。
 
-##### Agent Studio 的开放条件
+##### 组织级 Studio 的开放条件
 
-当前已经存在 Web Profile Agent 编辑功能，因此问题不再是“有没有编辑页面”，而是它何时有资格升级为企业 Studio。
+Phase 1 已交付单 Profile 有界 Studio；Phase 2 的问题是它何时有资格开放跨用户共享、
+组织发布和管理。
 
 至少满足以下条件后，才能开放正式发布：
 
@@ -2216,7 +2235,8 @@ Phase 1 证明一个用例能够可信运行；Phase 2 才把它扩展为多个�
 4. 活动 Thread 不会被后台配置变化静默改变；
 5. 现有托管文件路径有明确迁移和退出条件。
 
-在此之前，Studio 可以展示版本、评价、Supervisor Policy、授权策略和 Runtime 可用性，也可以发起受控发布流程，但不能把“直接写 Profile 文件”展示成全局安装成功。
+在此之前，单 Profile Studio 可以完成受控发布和安装，但不能把直接写 Profile 文件展示
+成组织共享或全局安装成功。
 
 ##### 退出条件
 

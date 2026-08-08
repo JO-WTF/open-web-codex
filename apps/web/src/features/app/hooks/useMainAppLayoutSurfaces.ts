@@ -65,7 +65,6 @@ type UseMainAppLayoutSurfacesArgs = {
   onCancelSwitchAccount: SidebarProps["onCancelSwitchAccount"];
   onDecision: LayoutNodesOptions["primary"]["approvalToastsProps"]["onDecision"];
   onRemember: LayoutNodesOptions["primary"]["approvalToastsProps"]["onRemember"];
-  onUserInputSubmit: LayoutNodesOptions["primary"]["messagesProps"]["onUserInputSubmit"];
   onPlanAccept: LayoutNodesOptions["primary"]["messagesProps"]["onPlanAccept"];
   onPlanSubmitChanges: LayoutNodesOptions["primary"]["messagesProps"]["onPlanSubmitChanges"];
   activePlan: LayoutNodesOptions["secondary"]["planPanelProps"]["plan"];
@@ -268,7 +267,6 @@ function buildPrimarySurface({
   onCancelSwitchAccount,
   onDecision,
   onRemember,
-  onUserInputSubmit,
   onPlanAccept,
   onPlanSubmitChanges,
   activeTokenUsage,
@@ -445,8 +443,6 @@ function buildPrimarySurface({
       selectedOpenAppId: appSettings.selectedOpenAppId,
       codeBlockCopyUseModifier: appSettings.composerCodeBlockCopyUseModifier,
       showMessageFilePath: appSettings.showMessageFilePath,
-      userInputRequests,
-      onUserInputSubmit,
       onPlanAccept,
       onPlanSubmitChanges,
       onOpenThreadLink: handleOpenThreadLink,
@@ -975,7 +971,6 @@ export function useMainAppLayoutSurfaces({
   onCancelSwitchAccount,
   onDecision,
   onRemember,
-  onUserInputSubmit,
   onPlanAccept,
   onPlanSubmitChanges,
   activePlan,
@@ -1137,7 +1132,6 @@ export function useMainAppLayoutSurfaces({
     onCancelSwitchAccount,
     onDecision,
     onRemember,
-    onUserInputSubmit,
     onPlanAccept,
     onPlanSubmitChanges,
     activePlan,

@@ -491,7 +491,6 @@ export default function MainApp() {
     confirmCustom,
     handleApprovalDecision,
     handleApprovalRemember,
-    handleUserInputSubmit,
     refreshAccountInfo,
     refreshAccountRateLimits,
   } = useThreads({
@@ -1624,7 +1623,6 @@ export default function MainApp() {
     onCancelSwitchAccount: handleCancelSwitchAccount,
     onDecision: handleApprovalDecision,
     onRemember: handleApprovalRemember,
-    onUserInputSubmit: handleUserInputSubmit,
     onPlanAccept: handlePlanAccept,
     onPlanSubmitChanges: handlePlanSubmitChanges,
     activePlan,

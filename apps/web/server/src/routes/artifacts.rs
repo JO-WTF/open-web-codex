@@ -200,7 +200,7 @@ async fn reconcile_unprojected_ready_intake_artifacts(
          WHERE artifact.state = 'ready'
            AND artifact.retention_state = 'active'
            AND artifact.artifact_schema IN (
-                'data_requirement_profile.v1',
+                'data_requirement_profile.v2',
                 'source_profile.v1',
                 'mapping_proposal.v1',
                 'input_gap.v1',

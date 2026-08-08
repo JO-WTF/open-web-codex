@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AppServerEvent, RequestUserInputRequest, RequestUserInputResponse, ThreadTokenUsage, WorkspaceInfo } from "./types";
+import type { AppServerEvent, ThreadTokenUsage, WorkspaceInfo } from "./types";
 import {
   CodexMonitorWebClient,
   type SupervisorOverviewData,
@@ -9,6 +9,7 @@ import type {
   DataIntakeParameterAnswer,
   DataIntakeSessionSummary,
   DataMappingCandidate,
+  PendingUserInputSummary,
   RunReadiness,
   RunReadinessAction,
   SupervisorPolicySummary,
@@ -30,7 +31,6 @@ import { normalizeTokenUsage } from "./features/threads/utils/threadNormalize";
 import { normalizePlanUpdate } from "./features/threads/utils/threadNormalize";
 import { parseWebTurnDiff } from "./utils/webTurnDiff";
 import { isWebAppServerRecoveryEvent, parseCodexStderr, parseWebAppServerError } from "./utils/webAppServerError";
-import { parseWebUserInputRequest } from "./utils/webUserInput";
 import { summarizeWebAppServerEvent } from "./utils/webAppServerEventSummary";
 import { stripLeadingProviderSentinel } from "./utils/providerText";
 import { mergeRateLimits, parseInitialMcpServers, parseInitialRateLimits } from "./utils/webInitialStatus";
@@ -307,8 +307,12 @@ export default function WebApp() {
   const [stopping, setStopping] = useState(false);
   const [queuedFollowUps, setQueuedFollowUps] = useState<QueuedFollowUp[]>([]);
   const [steeringFollowUpId, setSteeringFollowUpId] = useState<string | null>(null);
-  const [userInputRequests, setUserInputRequests] = useState<RequestUserInputRequest[]>([]);
-  const [submittingUserInputId, setSubmittingUserInputId] = useState<number | string | null>(null);
+  const [pendingUserInputsById, setPendingUserInputsById] = useState<Map<string, PendingUserInputSummary>>(
+    () => new Map(),
+  );
+  const [submittingPendingUserInputIds, setSubmittingPendingUserInputIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [approvalProjectionRevision, setApprovalProjectionRevision] = useState(0);
   const [submittingApprovalIds, setSubmittingApprovalIds] = useState<Set<string>>(
     () => new Set(),
@@ -654,6 +658,7 @@ export default function WebApp() {
   const activeTaskIdRef = useRef(activeTaskId);
   activeTaskIdRef.current = activeTaskId;
   const dataIntakeSequence = useRef(0);
+  const pendingUserInputSequence = useRef(0);
 
   const refreshDataIntake = useCallback(async (taskId = activeTaskId) => {
     const sequence = ++dataIntakeSequence.current;
@@ -684,6 +689,26 @@ export default function WebApp() {
     }
   }, [activeTaskId, client]);
   refreshDataIntakeRef.current = refreshDataIntake;
+
+  const refreshPendingUserInputs = useCallback(async (
+    threadId: string | null = activeThreadIdRef.current,
+    runId?: string,
+  ) => {
+    const sequence = ++pendingUserInputSequence.current;
+    if (!threadId && !runId) {
+      setPendingUserInputsById(new Map());
+      return;
+    }
+    try {
+      const requests = runId
+        ? await client.listRunUserInputRequests(runId)
+        : await client.listThreadUserInputRequests(threadId as string);
+      if (sequence !== pendingUserInputSequence.current) return;
+      setPendingUserInputsById(new Map(requests.map((request) => [request.id, request])));
+    } catch {
+      if (sequence === pendingUserInputSequence.current) setPendingUserInputsById(new Map());
+    }
+  }, [client]);
 
   const scheduleDataIntakeRefresh = useCallback(() => {
     if (dataIntakeRefreshTimer.current !== null) {
@@ -921,6 +946,10 @@ export default function WebApp() {
   }, [activeThreadId, refreshSupervisorOverview]);
 
   useEffect(() => {
+    void refreshPendingUserInputs(activeThreadId);
+  }, [activeThreadId, refreshPendingUserInputs]);
+
+  useEffect(() => {
     // Workspace selection is intentionally workspace-first. A Thread becomes
     // active only after the user selects or creates one, so no transcript or
     // per-Thread runtime state may survive a workspace change.
@@ -932,7 +961,8 @@ export default function WebApp() {
     setMessages([]);
     setQueuedFollowUps([]);
     setSteeringFollowUpId(null);
-    setUserInputRequests([]);
+    setPendingUserInputsById(new Map());
+    setSubmittingPendingUserInputIds(new Set());
     setTokenUsage(null);
     setGoal(null);
     setThinking(false);
@@ -1038,6 +1068,8 @@ export default function WebApp() {
           "turn/completed",
           "serverRequest/resolved",
           "platform/data-intake/changed",
+          "platform/userInputRequested",
+          "platform/userInputResolved",
         ].includes(method)
         || (["item/started", "item/completed"].includes(method) && agentRelevantItem)
         || method.endsWith("/requestApproval")
@@ -1089,6 +1121,8 @@ export default function WebApp() {
         belongsToBackgroundThread
         && method !== "item/commandExecution/requestApproval"
         && method !== "serverRequest/resolved"
+        && method !== "platform/userInputRequested"
+        && method !== "platform/userInputResolved"
       ) {
         return null;
       }
@@ -1097,6 +1131,8 @@ export default function WebApp() {
         && method !== "turn/completed"
         && method !== "thread/status/changed"
         && method !== "serverRequest/resolved"
+        && method !== "platform/userInputRequested"
+        && method !== "platform/userInputResolved"
       ) {
         return null;
       }
@@ -1920,15 +1956,30 @@ export default function WebApp() {
           };
         }
 
-        case "item/tool/requestUserInput": {
-          const requestId = message.id;
-          if (typeof requestId !== "number" && typeof requestId !== "string") return null;
-          const request = parseWebUserInputRequest(event.workspace_id, requestId, params);
-          if (!request) return null;
-          setUserInputRequests((previous) => [
-            ...previous.filter((candidate) => !(candidate.workspace_id === request.workspace_id && candidate.request_id === request.request_id)),
-            request,
-          ]);
+        case "platform/userInputRequested": {
+          const runId = typeof params.runId === "string" ? params.runId : null;
+          const activeThreadId = activeThreadIdRef.current;
+          if (runId && activeThreadId) {
+            void client.runIdForThread(activeThreadId).then((activeRunId) => {
+              if (activeRunId === runId) {
+                void refreshPendingUserInputs(activeThreadId, runId);
+              }
+            }).catch(() => undefined);
+          }
+          return null;
+        }
+
+        case "platform/userInputResolved": {
+          const approvalId = typeof params.approvalId === "string" ? params.approvalId : null;
+          if (approvalId) {
+            pendingUserInputSequence.current += 1;
+            setPendingUserInputsById((previous) => {
+              if (!previous.has(approvalId)) return previous;
+              const next = new Map(previous);
+              next.delete(approvalId);
+              return next;
+            });
+          }
           return null;
         }
 
@@ -1959,7 +2010,6 @@ export default function WebApp() {
                 ? { ...entry, approvalRequestId: requestId, approvalStatus: status }
                 : entry);
           });
-          setUserInputRequests((previous) => previous.filter((request) => request.request_id !== requestId));
           return null;
         }
 
@@ -1970,7 +2020,7 @@ export default function WebApp() {
         }
       }
     },
-    [scheduleDataIntakeRefresh, scheduleSupervisorOverviewRefresh],
+    [client, refreshPendingUserInputs, scheduleDataIntakeRefresh, scheduleSupervisorOverviewRefresh],
   );
 
   /* ─── Connection ─── */
@@ -2629,18 +2679,39 @@ export default function WebApp() {
     setQueuedFollowUps((previous) => previous.filter((item) => item.id !== id));
   }, []);
 
-  const submitUserInput = useCallback(async (request: RequestUserInputRequest, response: RequestUserInputResponse) => {
-    if (submittingUserInputId !== null) return;
-    setSubmittingUserInputId(request.request_id);
+  const submitPendingUserInput = useCallback(async (
+    requestId: string,
+    version: number,
+    answers: Record<string, { answers: string[] }>,
+  ) => {
+    if (submittingPendingUserInputIds.has(requestId)) return;
+    setSubmittingPendingUserInputIds((previous) => new Set(previous).add(requestId));
     try {
-      await client.respondToServerRequest(request.workspace_id, request.request_id, { answers: response.answers });
-      setUserInputRequests((previous) => previous.filter((candidate) => !(candidate.workspace_id === request.workspace_id && candidate.request_id === request.request_id)));
+      await client.respondToUserInput(requestId, version, answers);
+      pendingUserInputSequence.current += 1;
+      setPendingUserInputsById((previous) => {
+        if (!previous.has(requestId)) return previous;
+        const next = new Map(previous);
+        next.delete(requestId);
+        return next;
+      });
     } catch (error) {
-      appendLog("error", error instanceof Error ? error.message : String(error));
+      const status = error && typeof error === "object" && "status" in error
+        ? (error as { status?: unknown }).status
+        : null;
+      if (status === 409) {
+        await refreshPendingUserInputs(activeThreadIdRef.current);
+      } else {
+        appendLog("error", error instanceof Error ? error.message : String(error));
+      }
     } finally {
-      setSubmittingUserInputId(null);
+      setSubmittingPendingUserInputIds((previous) => {
+        const next = new Set(previous);
+        next.delete(requestId);
+        return next;
+      });
     }
-  }, [appendLog, client, submittingUserInputId]);
+  }, [appendLog, client, refreshPendingUserInputs, submittingPendingUserInputIds]);
 
   const resolveApproval = useCallback(async (
     workspaceId: string,
@@ -2825,9 +2896,10 @@ export default function WebApp() {
 
   /* ─── Render ─── */
 
-  const activeUserInputRequest = userInputRequests.find((request) =>
-    request.workspace_id === activeWorkspaceId && request.params.thread_id === activeThreadId,
-  ) ?? null;
+  const pendingUserInputRequests = useMemo(
+    () => Array.from(pendingUserInputsById.values()),
+    [pendingUserInputsById],
+  );
   const activeThread = activeWorkspaceId && activeThreadId
     ? threadsByWorkspace[activeWorkspaceId]?.find((thread) => thread.id === activeThreadId) ?? null
     : null;
@@ -3081,9 +3153,11 @@ export default function WebApp() {
         canSteer={Boolean(activeTurnId) && thinking && !stopping}
         onSteerFollowUp={(id) => { void steerFollowUp(id); }}
         onDeleteFollowUp={deleteFollowUp}
-        userInputRequest={activeUserInputRequest}
-        submittingUserInput={activeUserInputRequest?.request_id === submittingUserInputId}
-        onSubmitUserInput={(request, response) => { void submitUserInput(request, response); }}
+        pendingUserInputRequests={pendingUserInputRequests}
+        submittingPendingUserInputIds={submittingPendingUserInputIds}
+        onSubmitPendingUserInput={(requestId, version, answers) => {
+          void submitPendingUserInput(requestId, version, answers);
+        }}
         busy={busy}
         sendDisabled={
           !activeWorkspaceId

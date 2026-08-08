@@ -72,9 +72,11 @@ pub(crate) fn package_content_sha256(
 ) -> String {
     let mut digest = Sha256::new();
     update_digest_field(&mut digest, b"supervisor-package.v1");
+    let mut content_spec = spec.clone();
+    content_spec.version.clear();
     update_digest_field(
         &mut digest,
-        serde_json::to_string(spec)
+        serde_json::to_string(&content_spec)
             .expect("validated Release serializes")
             .as_bytes(),
     );

@@ -31,11 +31,15 @@ export type SettingsSupervisorsSectionProps = {
   onSaveDraft: (
     draft: SupervisorDraftRequest,
     definitionId?: string,
+    expectedRevision?: number,
   ) => Promise<SupervisorDefinitionSummary | null>;
   onValidate: (
     definitionId: string,
   ) => Promise<SupervisorValidationResult | null>;
-  onPublish: (definitionId: string) => Promise<SupervisorReleaseSummary | null>;
+  onPublish: (
+    definitionId: string,
+    expectedRevision?: number,
+  ) => Promise<SupervisorReleaseSummary | null>;
   onLoadPublished: (
     policy: SupervisorPolicySummary,
   ) => Promise<SupervisorPolicyDetail | null>;
@@ -131,13 +135,21 @@ export function useSettingsSupervisorsSection(): SettingsSupervisorsSectionProps
   }, [refresh]);
 
   const onSaveDraft = useCallback(
-    async (draft: SupervisorDraftRequest, definitionId?: string) => {
+    async (
+      draft: SupervisorDraftRequest,
+      definitionId?: string,
+      expectedRevision?: number,
+    ) => {
       const actionId = definitionId ?? "new";
       setActionDefinitionId(actionId);
       setError(null);
       try {
         const saved = definitionId
-          ? await platformClient.saveSupervisorDraft(definitionId, draft)
+          ? await platformClient.saveSupervisorDraft(
+              definitionId,
+              draft,
+              expectedRevision ?? 1,
+            )
           : await platformClient.createSupervisorDefinition(draft);
         if (definitionId) {
           setValidationByDefinition((current) => {
@@ -178,12 +190,15 @@ export function useSettingsSupervisorsSection(): SettingsSupervisorsSectionProps
   }, []);
 
   const onPublish = useCallback(
-    async (definitionId: string) => {
+    async (definitionId: string, expectedRevision?: number) => {
       setActionDefinitionId(definitionId);
       setError(null);
       try {
         const release =
-          await platformClient.publishSupervisorDraft(definitionId);
+          await platformClient.publishSupervisorDraft(
+            definitionId,
+            expectedRevision ?? 1,
+          );
         setValidationByDefinition((current) => {
           const next = { ...current };
           delete next[definitionId];

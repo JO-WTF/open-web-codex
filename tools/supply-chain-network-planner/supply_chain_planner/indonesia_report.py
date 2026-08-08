@@ -82,9 +82,7 @@ def _render_markdown(
     network_map: IndonesiaNetworkMap,
     sources: IndonesiaDecisionReportSources,
 ) -> str:
-    current_provinces = {
-        province.province_code: province for province in current.provinces
-    }
+    current_provinces = {province.province_code: province for province in current.provinces}
     best = [current_provinces[code] for code in current.best_province_codes[:3]]
     priority = [current_provinces[code] for code in current.priority_province_codes[:3]]
     policy = inspection.policy
@@ -131,8 +129,7 @@ def _render_markdown(
         ),
     ]
     evidence_table = "\n".join(
-        f"| `{schema}` | `{name}` | {facts} |"
-        for schema, name, facts in evidence_rows
+        f"| `{schema}` | `{name}` | {facts} |" for schema, name, facts in evidence_rows
     )
     best_table = _province_table(best)
     priority_table = _province_table(priority)
@@ -301,16 +298,11 @@ def _province_table(provinces: list) -> str:
 
 def _cost_row(label: str, baseline: int, scenario: int, delta: int | None) -> str:
     rendered_delta = "Resource 未单列" if delta is None else _signed_idr(delta)
-    return (
-        f"| {label} | {_idr(baseline)} | {_idr(scenario)} | "
-        f"{rendered_delta} |"
-    )
+    return f"| {label} | {_idr(baseline)} | {_idr(scenario)} | {rendered_delta} |"
 
 
 def _day_label(day: str) -> str:
-    return {"1_day": "一日需求覆盖率", "2_day": "两日需求覆盖率", "3_day": "三日需求覆盖率"}[
-        day
-    ]
+    return {"1_day": "一日需求覆盖率", "2_day": "两日需求覆盖率", "3_day": "三日需求覆盖率"}[day]
 
 
 def _pct(value: float) -> str:

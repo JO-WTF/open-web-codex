@@ -36,7 +36,6 @@ function emptyDraft(
 ): SupervisorDraftRequest {
   return {
     policy_id: "",
-    version: "1.0.0",
     display_name: "",
     description: "",
     responsibilities: [],
@@ -47,13 +46,9 @@ function emptyDraft(
     custom_instructions: "",
     agents: [],
     artifact_contracts: [],
+    coordination_capabilities: [],
     max_active_child_agents: 2,
   };
-}
-
-function nextPatchVersion(version: string) {
-  const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(version);
-  return match ? `${match[1]}.${match[2]}.${Number(match[3]) + 1}` : "";
 }
 
 function contractsForAgents(
@@ -156,6 +151,7 @@ export function SettingsSupervisorsSection({
   const [editingDefinitionId, setEditingDefinitionId] = useState<string | null>(
     null,
   );
+  const [editingRevision, setEditingRevision] = useState<number | null>(null);
   const [viewingPolicyKey, setViewingPolicyKey] = useState<string | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [draft, setDraft] = useState<SupervisorDraftRequest>(() =>
@@ -223,14 +219,6 @@ export function SettingsSupervisorsSection({
       return "Enter a valid Policy ID using lowercase letters, numbers, hyphens, or underscores.";
     }
     if (
-      !isAgentStudioIdentifier(draft.version, {
-        allowPeriod: true,
-        maximumBytes: 64,
-      })
-    ) {
-      return "Enter a valid version using lowercase letters, numbers, periods, hyphens, or underscores.";
-    }
-    if (
       !draft.display_name.trim()
       || agentStudioUtf8ByteLength(draft.display_name) > 160
     ) {
@@ -288,6 +276,7 @@ export function SettingsSupervisorsSection({
 
   const resetEditor = () => {
     setEditingDefinitionId(null);
+    setEditingRevision(null);
     setDraft(emptyDraft(instructionPolicies[0]));
     setResponsibilitiesText("");
     setShowEditorValidation(false);
@@ -297,6 +286,7 @@ export function SettingsSupervisorsSection({
   const createDefinition = () => {
     setViewingPolicyKey(null);
     setEditingDefinitionId(null);
+    setEditingRevision(null);
     setDraft(emptyDraft(instructionPolicies[0]));
     setResponsibilitiesText("");
     setShowEditorValidation(false);
@@ -306,8 +296,10 @@ export function SettingsSupervisorsSection({
   const editDefinition = (
     definitionId: string | null,
     nextDraft: SupervisorDraftRequest,
+    revision: number | null,
   ) => {
     setEditingDefinitionId(definitionId);
+    setEditingRevision(revision);
     setDraft(nextDraft);
     setResponsibilitiesText(nextDraft.responsibilities.join("\n"));
     setShowEditorValidation(false);
@@ -320,7 +312,6 @@ export function SettingsSupervisorsSection({
     definitionId: string | null,
   ): SupervisorDraftRequest => ({
     policy_id: definitionId ? detail.policy_id : "",
-    version: definitionId ? nextPatchVersion(detail.version) : "1.0.0",
     display_name: definitionId ? detail.display_name : `${detail.display_name} custom`,
     description: detail.description,
     responsibilities: detail.responsibilities,
@@ -331,6 +322,7 @@ export function SettingsSupervisorsSection({
     custom_instructions: detail.custom_instructions,
     agents: detail.agents,
     artifact_contracts: detail.artifact_contracts,
+    coordination_capabilities: detail.coordination_capabilities,
     max_active_child_agents: detail.max_active_child_agents,
   });
 
@@ -338,7 +330,7 @@ export function SettingsSupervisorsSection({
     detail: SupervisorPolicyDetail,
     definitionId: string | null,
   ) => {
-    editDefinition(definitionId, draftFromPublished(detail, definitionId));
+    editDefinition(definitionId, draftFromPublished(detail, definitionId), null);
   };
 
   const openNextDefinitionVersion = async (
@@ -458,6 +450,7 @@ export function SettingsSupervisorsSection({
     const saved = await onSaveDraft(
       { ...draft, responsibilities },
       editingDefinitionId ?? undefined,
+      editingRevision ?? undefined,
     );
     if (saved) resetEditor();
   };
@@ -806,24 +799,6 @@ export function SettingsSupervisorsSection({
               placeholder="network-planning-supervisor"
               disabled={editingDefinitionId != null}
               maxLength={96}
-            />
-          </label>
-          <label className="settings-label">
-            <AgentStudioFieldHeading help="Use the next semantic version. Published Supervisor definitions are immutable and resolved by exact version.">
-              Version
-            </AgentStudioFieldHeading>
-            <input
-              className="settings-input"
-              aria-label="Version"
-              value={draft.version}
-              onChange={(event) =>
-                setDraft((current) => ({
-                  ...current,
-                  version: event.target.value,
-                }))
-              }
-              placeholder="1.0.0"
-              maxLength={64}
             />
           </label>
         </div>
@@ -1213,7 +1188,7 @@ export function SettingsSupervisorsSection({
                 <div className="settings-help">
                   {definition.policy_id}
                   {definition.draft
-                    ? ` · draft ${definition.draft.version}`
+                    ? ` · draft ${definition.draft_metadata?.revision ?? "current"}`
                     : " · no draft"}
                 </div>
               </div>
@@ -1224,7 +1199,11 @@ export function SettingsSupervisorsSection({
                       type="button"
                       className="ghost"
                       onClick={() =>
-                        editDefinition(definition.id, definition.draft!)
+                        editDefinition(
+                          definition.id,
+                          definition.draft!,
+                          definition.draft_metadata?.revision ?? null,
+                        )
                       }
                       disabled={busy}
                     >
@@ -1241,7 +1220,12 @@ export function SettingsSupervisorsSection({
                     <button
                       type="button"
                       className="ghost"
-                      onClick={() => void onPublish(definition.id)}
+                      onClick={() =>
+                        void onPublish(
+                          definition.id,
+                          definition.draft_metadata?.revision ?? 1,
+                        )
+                      }
                       disabled={busy || validation?.valid !== true}
                       title={
                         validation?.valid

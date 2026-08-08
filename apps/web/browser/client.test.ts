@@ -38,6 +38,7 @@ describe("PlatformClient", () => {
       fork_thread_id: null,
       fork_source_run_id: null,
       supervisor_policy: null,
+      supervisor_draft_id: null,
       agent: null,
     });
     expect(fetchMock.mock.calls[1]?.[0]).toBe("https://platform.test/api/tasks/task%2Fone/messages");
@@ -183,6 +184,7 @@ describe("PlatformClient", () => {
         policy_id: "enterprise-supervisor-copilot",
         version: "1.0.0",
       },
+      supervisor_draft_id: null,
       agent: null,
     });
   });
@@ -210,6 +212,7 @@ describe("PlatformClient", () => {
       fork_thread_id: null,
       fork_source_run_id: null,
       supervisor_policy: null,
+      supervisor_draft_id: null,
       agent: {
         definition_id: "network-planning-agent",
         version: "2.0.0",

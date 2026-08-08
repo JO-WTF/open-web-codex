@@ -1622,7 +1622,7 @@ describe("Messages", () => {
     expect(screen.queryByText("Plan ready")).toBeNull();
   });
 
-  it("hides the plan follow-up when an input-requested bubble is active", () => {
+  it("does not render the removed legacy input-request bubble", () => {
     const onPlanAccept = vi.fn();
     const onPlanSubmitChanges = vi.fn();
     const items: ConversationItem[] = [
@@ -1645,26 +1645,13 @@ describe("Messages", () => {
         isThinking={false}
         openTargets={[]}
         selectedOpenAppId=""
-        userInputRequests={[
-          {
-            workspace_id: "ws-1",
-            request_id: 1,
-            params: {
-              thread_id: "thread-1",
-              turn_id: "turn-1",
-              item_id: "item-1",
-              questions: [],
-            },
-          },
-        ]}
-        onUserInputSubmit={vi.fn()}
         onPlanAccept={onPlanAccept}
         onPlanSubmitChanges={onPlanSubmitChanges}
       />,
     );
 
-    expect(screen.getByText("Input requested")).toBeTruthy();
-    expect(screen.queryByText("Plan ready")).toBeNull();
+    expect(screen.queryByText("Input requested")).toBeNull();
+    expect(screen.getByText("Plan ready")).toBeTruthy();
   });
 
   it("renders hook rows through the standard tool renderer", () => {

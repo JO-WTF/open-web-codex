@@ -38,51 +38,47 @@ type ApiResult<T> = Result<Json<T>, ApiError>;
 
 const BLUEPRINT_MANIFEST: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../capabilities/tutorial-blueprints/indonesia-warehouse-network/1.5.0/manifest.json"
+    "/../../../capabilities/tutorial-blueprints/indonesia-warehouse-network/1.6.0/manifest.json"
 ));
 const RECOMMENDED_PROMPT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../capabilities/tutorial-blueprints/indonesia-warehouse-network/1.5.0/recommended-prompt.md"
+    "/../../../capabilities/tutorial-blueprints/indonesia-warehouse-network/1.6.0/recommended-prompt.md"
 ));
 const DATASET_MANIFEST: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../tools/supply-chain-network-planner/examples/indonesia-tutorial/releases/1.0.0/dataset-manifest.json"
+    "/../../../tools/supply-chain-network-planner/examples/indonesia-network/base/dataset-manifest.json"
 ));
-const PROVINCE_BOUNDARIES: &[u8] = include_bytes!(concat!(
+const DEMAND_CITIES: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../tools/supply-chain-network-planner/examples/indonesia-tutorial/releases/1.0.0/province-boundaries.geojson"
+    "/../../../tools/supply-chain-network-planner/examples/indonesia-network/base/demand-cities.csv"
 ));
-const CUSTOMERS: &[u8] = include_bytes!(concat!(
+const EXISTING_WAREHOUSES: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../tools/supply-chain-network-planner/examples/indonesia-tutorial/releases/1.0.0/customers.csv.gz"
+    "/../../../tools/supply-chain-network-planner/examples/indonesia-network/base/existing-warehouses.csv"
 ));
-const CUSTOMER_ASSIGNMENTS: &[u8] = include_bytes!(concat!(
+const ROUTE_QUOTES: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../tools/supply-chain-network-planner/examples/indonesia-tutorial/releases/1.0.0/customer-assignments.csv.gz"
+    "/../../../tools/supply-chain-network-planner/examples/indonesia-network/base/route-quotes.csv"
 ));
-const WAREHOUSES: &[u8] = include_bytes!(concat!(
+const ADMINISTRATIVE_AREAS: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../tools/supply-chain-network-planner/examples/indonesia-tutorial/releases/1.0.0/warehouses.csv"
+    "/../../../tools/supply-chain-network-planner/examples/indonesia-network/base/administrative-areas.json"
 ));
-const WAREHOUSE_LINKS: &[u8] = include_bytes!(concat!(
+const CANDIDATE_WAREHOUSES: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../tools/supply-chain-network-planner/examples/indonesia-tutorial/releases/1.0.0/warehouse-links.csv"
+    "/../../../tools/supply-chain-network-planner/examples/indonesia-network/base/candidate-warehouses.csv"
 ));
-const CANDIDATE_LOCATIONS: &[u8] = include_bytes!(concat!(
+const POPULATION_SNAPSHOT: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../tools/supply-chain-network-planner/examples/indonesia-tutorial/releases/1.0.0/candidate-locations.csv"
+    "/../../../tools/supply-chain-network-planner/examples/indonesia-network/base/population-snapshot.csv"
 ));
-const TRANSPORT_QUOTES: &[u8] = include_bytes!(concat!(
+const SOURCE_LOCK: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../tools/supply-chain-network-planner/examples/indonesia-tutorial/releases/1.0.0/transport-quotes.csv"
-));
-const PLANNING_POLICY: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../../tools/supply-chain-network-planner/examples/indonesia-tutorial/releases/1.0.0/planning-policy.json"
+    "/../../../tools/supply-chain-network-planner/examples/indonesia-network/base/source-lock.json"
 ));
 const VALIDATION_REPORT: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../tools/supply-chain-network-planner/examples/indonesia-tutorial/releases/1.0.0/validation-report.json"
+    "/../../../tools/supply-chain-network-planner/examples/indonesia-network/base/validation-report.json"
 ));
 
 #[derive(Clone, Copy)]
@@ -97,42 +93,38 @@ struct PublishedBlueprintResource {
     dataset_files: &'static [DatasetBundleFile<'static>],
 }
 
-const INDONESIA_DATASET_FILES: [DatasetBundleFile<'static>; 10] = [
+const INDONESIA_DATASET_FILES: [DatasetBundleFile<'static>; 9] = [
     DatasetBundleFile {
         logical_name: "dataset-manifest.json",
         bytes: DATASET_MANIFEST,
     },
     DatasetBundleFile {
-        logical_name: "province-boundaries.geojson",
-        bytes: PROVINCE_BOUNDARIES,
+        logical_name: "demand-cities.csv",
+        bytes: DEMAND_CITIES,
     },
     DatasetBundleFile {
-        logical_name: "customers.csv.gz",
-        bytes: CUSTOMERS,
+        logical_name: "existing-warehouses.csv",
+        bytes: EXISTING_WAREHOUSES,
     },
     DatasetBundleFile {
-        logical_name: "customer-assignments.csv.gz",
-        bytes: CUSTOMER_ASSIGNMENTS,
+        logical_name: "route-quotes.csv",
+        bytes: ROUTE_QUOTES,
     },
     DatasetBundleFile {
-        logical_name: "warehouses.csv",
-        bytes: WAREHOUSES,
+        logical_name: "administrative-areas.json",
+        bytes: ADMINISTRATIVE_AREAS,
     },
     DatasetBundleFile {
-        logical_name: "warehouse-links.csv",
-        bytes: WAREHOUSE_LINKS,
+        logical_name: "candidate-warehouses.csv",
+        bytes: CANDIDATE_WAREHOUSES,
     },
     DatasetBundleFile {
-        logical_name: "candidate-locations.csv",
-        bytes: CANDIDATE_LOCATIONS,
+        logical_name: "population-snapshot.csv",
+        bytes: POPULATION_SNAPSHOT,
     },
     DatasetBundleFile {
-        logical_name: "transport-quotes.csv",
-        bytes: TRANSPORT_QUOTES,
-    },
-    DatasetBundleFile {
-        logical_name: "planning-policy.json",
-        bytes: PLANNING_POLICY,
+        logical_name: "source-lock.json",
+        bytes: SOURCE_LOCK,
     },
     DatasetBundleFile {
         logical_name: "validation-report.json",
@@ -489,7 +481,6 @@ pub async fn reconcile(
     let supervisor_id = format!("tutorial-{}-supervisor-{suffix}", blueprint.blueprint_id);
     let supervisor_draft = SupervisorDraftRequest {
         policy_id: supervisor_id,
-        version: blueprint.revision.clone(),
         display_name: format!("{} Supervisor", blueprint.display_name),
         description: supervisor_template.detail.description,
         responsibilities: supervisor_template.detail.responsibilities,
@@ -502,6 +493,7 @@ pub async fn reconcile(
         agents,
         artifact_contracts,
         data_requirement_contracts: Vec::new(),
+        coordination_capabilities: supervisor_template.detail.coordination_capabilities,
         max_active_child_agents: supervisor_template.detail.max_active_child_agents,
     };
     match supervisor_definitions::publish_or_reuse_trusted(&state, &auth, supervisor_draft).await {
@@ -854,21 +846,48 @@ mod tests {
     use open_web_codex_platform_contracts::error::{ErrorKind, PlatformError};
 
     use super::{
-        detail, issue, load_blueprints, validate_dataset_bundle, DatasetBundleFile,
-        INDONESIA_DATASET_FILES,
+        detail, issue, load_blueprints, validate_blueprint_contracts, validate_dataset_bundle,
+        DatasetBundleFile, PublishedBlueprint, BLUEPRINT_MANIFEST, INDONESIA_DATASET_FILES,
     };
 
     #[test]
     fn checked_in_blueprint_is_complete_and_path_free() {
+        let definition = serde_json::from_str::<PublishedBlueprint>(BLUEPRINT_MANIFEST)
+            .expect("Blueprint manifest");
+        for template in &definition.agent_templates {
+            let resolved = open_web_codex_supervisor_catalog::agent::resolve_builtin(
+                &template.definition_id,
+                &template.version,
+            )
+            .expect("Agent template");
+            assert_eq!(
+                template.content_sha256, resolved.content_sha256,
+                "Blueprint Agent hash drifted for {}@{}",
+                template.definition_id, template.version
+            );
+        }
+        let supervisor = crate::supervisor_policy::resolve_builtin(
+            &open_web_codex_platform_contracts::SupervisorPolicySelection {
+                policy_id: definition.supervisor_template.policy_id.clone(),
+                version: definition.supervisor_template.version.clone(),
+            },
+        )
+        .expect("Supervisor template");
+        assert_eq!(
+            definition.supervisor_template.content_sha256, supervisor.snapshot.content_sha256,
+            "Blueprint Supervisor hash drifted"
+        );
+        validate_blueprint_contracts(&definition)
+            .expect("Blueprint hashes must bind the current Agent and Supervisor packages");
         let blueprint = load_blueprints()
             .expect("blueprints")
             .into_iter()
             .next()
             .expect("blueprint");
         let public = detail(&blueprint);
-        assert_eq!(public.dataset.file_count, 10);
-        assert_eq!(public.agent_templates.len(), 3);
-        assert_eq!(public.expected_artifact_types.len(), 10);
+        assert_eq!(public.dataset.file_count, 9);
+        assert_eq!(public.agent_templates.len(), 2);
+        assert_eq!(public.expected_artifact_types.len(), 2);
         let encoded = serde_json::to_string(&public).expect("serialize");
         assert!(!encoded.contains("/Users/"));
         assert!(!encoded.contains("/home/"));

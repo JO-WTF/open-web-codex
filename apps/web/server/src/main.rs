@@ -57,6 +57,10 @@ struct Cli {
     /// Run database migrations on startup.
     #[arg(long, default_value_t = true)]
     migrate: bool,
+    /// Apply the current database migrations and exit without starting a Runtime.
+    /// This is used by the explicit development-database rebuild workflow.
+    #[arg(long, default_value_t = false)]
+    migrate_only: bool,
     /// Codex adapter mode: "fake" (in-memory) or "real" (native Profile Host).
     #[arg(long, env = "CODEX_MODE", default_value = "real")]
     codex_mode: String,
@@ -118,6 +122,10 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("database migrations complete");
     }
 
+    if cli.migrate_only {
+        return Ok(());
+    }
+
     assert_required_data_intake_schema(&pool).await?;
 
     let master_key = match std::env::var("OPEN_WEB_CODEX_MASTER_KEY") {
@@ -130,9 +138,13 @@ async fn main() -> anyhow::Result<()> {
         Err(_) => MasterKey::generate()?,
     };
     let analysis_gate_key = master_key.derive_key(b"analysis-gate/v1").to_vec();
+    let coordination_gate_key = master_key.derive_key(b"coordination/v1").to_vec();
+    let work_state_gate_key = master_key.derive_key(b"work-state/v1").to_vec();
     let state = AppState::new(pool)
         .with_schema_current(true)
-        .with_analysis_gate_key(analysis_gate_key.clone());
+        .with_analysis_gate_key(analysis_gate_key.clone())
+        .with_coordination_gate_key(coordination_gate_key.clone())
+        .with_work_state_gate_key(work_state_gate_key.clone());
     let mut git_config = GitRuntimeConfig::new(cli.runner_root.clone());
     if cli.allow_local_git_sources {
         tracing::warn!("local filesystem Git sources are enabled");
@@ -203,11 +215,32 @@ async fn main() -> anyhow::Result<()> {
                         .with_environment(
                             "OPEN_WEB_CODEX_ANALYSIS_GATE_KEY",
                             URL_SAFE_NO_PAD.encode(&analysis_gate_key),
+                        )
+                        .with_environment(
+                            "OPEN_WEB_CODEX_COORDINATION_GATE_URL",
+                            format!("http://{}/api/internal/coordination/v1/query", cli.bind),
+                        )
+                        .with_environment(
+                            "OPEN_WEB_CODEX_COORDINATION_GATE_KEY",
+                            URL_SAFE_NO_PAD.encode(&coordination_gate_key),
                         );
+                let host_config = host_config.with_environment(
+                    "OPEN_WEB_CODEX_WORK_STATE_GATE_URL",
+                    format!("http://{}/api/internal/work-state/v1/mutate", cli.bind),
+                )
+                .with_environment(
+                    "OPEN_WEB_CODEX_WORK_STATE_READ_URL",
+                    format!("http://{}/api/internal/work-state/v1/read", cli.bind),
+                )
+                .with_environment(
+                    "OPEN_WEB_CODEX_WORK_STATE_GATE_KEY",
+                    URL_SAFE_NO_PAD.encode(&work_state_gate_key),
+                );
                 let workspace_root = host_config.workspace_root.clone();
                 let host = registry
                     .register_with_secret_environment(host_config, secret_environment)
                     .await?;
+                providers.restore_persisted_configuration().await?;
                 let capabilities = profile_capability_record(&host).await?;
                 profile_binding.capabilities.set(capabilities.clone()).await;
                 persist_profile_capabilities(
@@ -406,6 +439,14 @@ async fn assert_required_data_intake_schema(pool: &sqlx::PgPool) -> anyhow::Resu
         "task_analysis_execution_snapshots",
         "task_intake_artifact_projections",
         "task_policy_agent_producers",
+        "work_state_definitions",
+        "work_states",
+        "work_components",
+        "work_operations",
+        "capability_catalog_drafts",
+        "capability_catalog_releases",
+        "capability_catalog_installations",
+        "provider_call_metrics",
     ];
     for table in REQUIRED_TABLES {
         let present: bool = sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
@@ -603,6 +644,10 @@ fn public_resolved_approval_frame(
             serde_json::Value::String(item_id.clone()),
         );
     }
+    public_params.insert(
+        "requestMethod".to_string(),
+        serde_json::Value::String(resolved.request_type.clone()),
+    );
     let public = serde_json::json!({
         "method": "app-server-event",
         "params": {
@@ -1111,6 +1156,7 @@ mod tests {
                 thread_id: "platform-thread".to_string(),
                 turn_id: Some("platform-turn".to_string()),
                 item_id: Some("platform-item".to_string()),
+                request_type: "item/commandExecution/requestApproval".to_string(),
                 outcome: open_web_codex_approval_service::ApprovalOutcome::Accepted,
             },
         )

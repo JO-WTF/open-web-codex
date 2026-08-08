@@ -181,7 +181,6 @@ def evaluate_current_assignment(
         facility.facility_id: facility for facility in snapshot.facilities if facility.is_existing
     }
     routes = _route_index(matrix)
-    city_by_id = {city.city_id: city for city in snapshot.cities}
     rates = _rate_index(snapshot)
     allocations: list[Allocation] = []
     issues: list[str] = []
@@ -366,7 +365,6 @@ def evaluate_optimized_network(
     facilities = [all_facilities[facility_id] for facility_id in sorted(active_facility_ids)]
     demands = sorted(snapshot.demand_points, key=lambda item: item.demand_id)
     routes = _route_index(matrix)
-    city_by_id = {city.city_id: city for city in snapshot.cities}
     rates = _rate_index(snapshot)
     issues: list[str] = []
     total_demand = sum(item.demand_units for item in demands)

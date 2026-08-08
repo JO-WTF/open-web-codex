@@ -493,9 +493,7 @@ async def call_tool(
         network_map = IndonesiaNetworkMap.model_validate(map_payload)
         if network_map.geojson_resource_name != request.geojson_resource_name:
             raise ValueError("Map and GeoJSON Resource names do not match")
-        expected_geojson_uri = (
-            f"{INDONESIA_GEOJSON_URI_PREFIX}{request.geojson_resource_name}"
-        )
+        expected_geojson_uri = f"{INDONESIA_GEOJSON_URI_PREFIX}{request.geojson_resource_name}"
         if network_map.geojson_ref.uri != expected_geojson_uri:
             raise ValueError("Map GeoJSON reference does not match its Resource name")
         geojson = _geojson_store().load_uri(expected_geojson_uri)
@@ -565,9 +563,7 @@ async def call_tool(
                 "indonesia_network_map.v1",
             )
         )
-        expected_geojson_uri = (
-            f"{INDONESIA_GEOJSON_URI_PREFIX}{request.geojson_resource_name}"
-        )
+        expected_geojson_uri = f"{INDONESIA_GEOJSON_URI_PREFIX}{request.geojson_resource_name}"
         geojson = _geojson_store().load_uri(expected_geojson_uri)
         if (
             geojson.get("type") != "FeatureCollection"

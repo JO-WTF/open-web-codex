@@ -12,6 +12,7 @@ import ServerCog from "lucide-react/dist/esm/icons/server-cog";
 import Bot from "lucide-react/dist/esm/icons/bot";
 import Library from "lucide-react/dist/esm/icons/library";
 import Network from "lucide-react/dist/esm/icons/network";
+import Package from "lucide-react/dist/esm/icons/package";
 import Info from "lucide-react/dist/esm/icons/info";
 import { PanelNavItem, PanelNavList } from "@/features/design-system/components/panel/PanelPrimitives";
 import type { CodexSection } from "./settingsTypes";
@@ -128,6 +129,15 @@ export function SettingsNav({
           onClick={() => onSelectSection("agent-catalog")}
         >
           Agent Catalog
+        </PanelNavItem>
+        <PanelNavItem
+          className="settings-nav"
+          icon={<Package aria-hidden />}
+          active={activeSection === "capabilities"}
+          showDisclosure={showDisclosure}
+          onClick={() => onSelectSection("capabilities")}
+        >
+          Tool &amp; Skill Studio
         </PanelNavItem>
         <PanelNavItem
           className="settings-nav"

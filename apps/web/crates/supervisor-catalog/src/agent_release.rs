@@ -165,7 +165,6 @@ fn validate_user_release_fields(
         || spec.developer_instructions.len() > MAX_RUNTIME_ROLE_INSTRUCTIONS_BYTES
         || spec.developer_instructions.contains("'''")
         || spec.input_artifact_types.len() > 32
-        || spec.output_artifact_types.is_empty()
         || spec.output_artifact_types.len() > 32
         || spec.dataset_releases.len() > 16
         || spec
@@ -263,7 +262,7 @@ mod tests {
 
     #[test]
     fn dataset_binding_compiles_into_runtime_instructions() {
-        let template = resolve_builtin("enterprise-data-agent", "5.1.0").unwrap();
+        let template = resolve_builtin("enterprise-data-agent", "6.0.0").unwrap();
         let workspace_id = Uuid::parse_str("0198d5b5-7d0f-7a62-8d9a-f6472dbfab11").unwrap();
         let release_id = Uuid::parse_str("0198d5b5-7d0f-7a62-8d9a-f6472dbfab12").unwrap();
         let mut spec = template.authoring_spec();

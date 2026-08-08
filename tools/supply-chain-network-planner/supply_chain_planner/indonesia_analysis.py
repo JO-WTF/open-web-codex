@@ -1112,9 +1112,7 @@ def validate_indonesia_resource(payload: dict[str, Any]) -> IndonesiaValidationR
     elif isinstance(value, IndonesiaLocationOptimization):
         if value.evaluated_candidate_count != len(value.evaluations):
             errors.append("Optimization evaluated count is inconsistent.")
-        actual_target_met_count = sum(
-            evaluation.target_met for evaluation in value.evaluations
-        )
+        actual_target_met_count = sum(evaluation.target_met for evaluation in value.evaluations)
         if value.target_met_candidate_count != actual_target_met_count:
             errors.append("Optimization target-met count is inconsistent.")
         if value.status == "target_already_met" and (
@@ -1148,15 +1146,11 @@ def validate_indonesia_resource(payload: dict[str, Any]) -> IndonesiaValidationR
             errors.append("Map GeoJSON exceeds the bounded feature count.")
         checks.append("Map manifest references a bounded GeoJSON Resource.")
     elif isinstance(value, IndonesiaDecisionReport):
-        expected_markdown_sha256 = hashlib.sha256(
-            value.markdown.encode("utf-8")
-        ).hexdigest()
+        expected_markdown_sha256 = hashlib.sha256(value.markdown.encode("utf-8")).hexdigest()
         if value.markdown_sha256 != expected_markdown_sha256:
             errors.append("Decision-report Markdown digest is inconsistent.")
         if "::codex-inline-vis{" in value.markdown:
-            errors.append(
-                "Decision report must not embed a cross-owner visualization Artifact."
-            )
+            errors.append("Decision report must not embed a cross-owner visualization Artifact.")
         checks.append(
             "Decision-report Markdown digest is valid and contains no cross-owner map directive."
         )
@@ -1188,9 +1182,7 @@ def require_valid_indonesia_resource(payload: dict[str, Any]) -> IndonesiaValida
     validation = validate_indonesia_resource(payload)
     if not validation.valid:
         details = "; ".join(validation.errors) or "unknown validation failure"
-        raise ValueError(
-            f"{validation.resource_schema} failed deterministic validation: {details}"
-        )
+        raise ValueError(f"{validation.resource_schema} failed deterministic validation: {details}")
     return validation
 
 

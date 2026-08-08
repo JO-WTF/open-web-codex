@@ -23,59 +23,19 @@ use crate::validation::{
 
 const DATA_AGENT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/agents/enterprise-data-agent/5.1.0/definition.json"
+    "/../../../../capabilities/agents/enterprise-data-agent/6.0.0/definition.json"
 ));
 const DATA_AGENT_INSTRUCTIONS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/agents/enterprise-data-agent/5.1.0/instructions.md"
+    "/../../../../capabilities/agents/enterprise-data-agent/6.0.0/instructions.md"
 ));
 const NETWORK_PLANNING_AGENT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/agents/enterprise-network-planning-agent/5.1.0/definition.json"
+    "/../../../../capabilities/agents/enterprise-network-planning-agent/6.0.0/definition.json"
 ));
 const NETWORK_PLANNING_AGENT_INSTRUCTIONS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/agents/enterprise-network-planning-agent/5.1.0/instructions.md"
-));
-const VISUALIZATION_AGENT: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/agents/enterprise-visualization-agent/2.0.0/definition.json"
-));
-const VISUALIZATION_AGENT_INSTRUCTIONS: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/agents/enterprise-visualization-agent/2.0.0/instructions.md"
-));
-const FINANCE_AGENT: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/agents/enterprise-finance-agent/2.0.0/definition.json"
-));
-const FINANCE_AGENT_INSTRUCTIONS: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/agents/enterprise-finance-agent/2.0.0/instructions.md"
-));
-const RISK_AGENT: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/agents/enterprise-risk-agent/2.0.0/definition.json"
-));
-const RISK_AGENT_INSTRUCTIONS: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/agents/enterprise-risk-agent/2.0.0/instructions.md"
-));
-const LEGACY_DATA_AGENT: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/agents/enterprise-data-agent/5.0.0/definition.json"
-));
-const LEGACY_DATA_AGENT_INSTRUCTIONS: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/agents/enterprise-data-agent/5.0.0/instructions.md"
-));
-const LEGACY_NETWORK_PLANNING_AGENT: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/agents/enterprise-network-planning-agent/5.0.0/definition.json"
-));
-const LEGACY_NETWORK_PLANNING_AGENT_INSTRUCTIONS: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../../../capabilities/agents/enterprise-network-planning-agent/5.0.0/instructions.md"
+    "/../../../../capabilities/agents/enterprise-network-planning-agent/6.0.0/instructions.md"
 ));
 
 const MAX_RUNTIME_ROLE_INSTRUCTIONS_BYTES: usize = 16 * 1024;
@@ -85,7 +45,7 @@ struct PublishedAgentResource {
     developer_instructions: &'static str,
 }
 
-const PUBLISHED_AGENT_RESOURCES: [PublishedAgentResource; 5] = [
+const PUBLISHED_AGENT_RESOURCES: [PublishedAgentResource; 2] = [
     PublishedAgentResource {
         definition: DATA_AGENT,
         developer_instructions: DATA_AGENT_INSTRUCTIONS,
@@ -94,30 +54,9 @@ const PUBLISHED_AGENT_RESOURCES: [PublishedAgentResource; 5] = [
         definition: NETWORK_PLANNING_AGENT,
         developer_instructions: NETWORK_PLANNING_AGENT_INSTRUCTIONS,
     },
-    PublishedAgentResource {
-        definition: VISUALIZATION_AGENT,
-        developer_instructions: VISUALIZATION_AGENT_INSTRUCTIONS,
-    },
-    PublishedAgentResource {
-        definition: FINANCE_AGENT,
-        developer_instructions: FINANCE_AGENT_INSTRUCTIONS,
-    },
-    PublishedAgentResource {
-        definition: RISK_AGENT,
-        developer_instructions: RISK_AGENT_INSTRUCTIONS,
-    },
 ];
 
-const LEGACY_AGENT_RESOURCES: [PublishedAgentResource; 2] = [
-    PublishedAgentResource {
-        definition: LEGACY_DATA_AGENT,
-        developer_instructions: LEGACY_DATA_AGENT_INSTRUCTIONS,
-    },
-    PublishedAgentResource {
-        definition: LEGACY_NETWORK_PLANNING_AGENT,
-        developer_instructions: LEGACY_NETWORK_PLANNING_AGENT_INSTRUCTIONS,
-    },
-];
+const LEGACY_AGENT_RESOURCES: [PublishedAgentResource; 0] = [];
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -599,11 +538,7 @@ fn parse_definition(source: &str) -> Result<PublishedAgentDefinition, AgentCatal
     {
         return Err(AgentCatalogError::Invalid);
     }
-    for values in [
-        &definition.responsibilities,
-        &definition.output_artifact_types,
-        &definition.risks,
-    ] {
+    for values in [&definition.responsibilities, &definition.risks] {
         if values.is_empty()
             || values
                 .iter()
@@ -611,6 +546,13 @@ fn parse_definition(source: &str) -> Result<PublishedAgentDefinition, AgentCatal
         {
             return Err(AgentCatalogError::Invalid);
         }
+    }
+    if definition
+        .output_artifact_types
+        .iter()
+        .any(|value| value.trim().is_empty() || value.len() > 512)
+    {
+        return Err(AgentCatalogError::Invalid);
     }
     if definition
         .input_artifact_types

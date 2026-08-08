@@ -1,51 +1,18 @@
 ---
 name: prepare-network-baseline
-description: Prepare an immutable, validated supply-chain network snapshot and route matrix from a planning-dataset.v2 Resource. Use before calculating current coverage, comparing a network option, or optimizing reviewed candidate locations.
+description: 为当前问题准备最小的数据、矩阵和业务参数，并形成可审查的仓网基线。
 ---
 
-# Prepare Network Baseline
+# 准备仓网基线
 
-Create one auditable input state before any coverage, cost, or location calculation.
-Read [planning-contracts.md](../../references/planning-contracts.md) before using the
-planning tools.
+本 Skill 由 Network Agent 使用，目标是只准备当前问题真正依赖的内容。
 
-## Workflow
+1. 调用 `define_network_requirements`，明确国家、分析类型、目标和必要参数。
+2. 调用 `get_network_case_status`。数据未就绪时，让 Supervisor 把同一个 `case_id` 交给 Data Agent，不能要求 Data Agent 另建数据包。
+3. 使用 `build-network-matrices` 准备路线矩阵。只有成本问题才准备成本矩阵。
+4. 用户询问当前时效或成本时，优先使用当前覆盖；如果 Case 中没有当前覆盖，必须说明“未发现当前覆盖方案”，并计算 `optimized_existing_footprint`。
+5. 调用 `evaluate_network_baseline`，明确 `min_time` 或 `min_cost`、时效目标和是否包含成本。
 
-1. Identify the planning period, currency, demand unit, service promise, and the exact
-   end-to-end SLA formula. Do not infer a 1-day threshold from route duration alone.
-2. Require a validated `planning-dataset.v2` produced by
-   `$prepare-planning-dataset`. Read its Resource and use the exact `network_input`,
-   `route_provider`, `route_method`, and `route_entries` fields. Preserve stable
-   business identifiers; do not add candidate or route facts from local files.
-3. Confirm that every demand point and facility references a known city and that each
-   city has coordinates. Require every origin-facility city to destination-demand city
-   route pair once; demand points in the same city reuse that route.
-4. Call `supply_chain_planner.prepare_network_snapshot`. Carry its `data_ref` unchanged.
-   Never mutate a published snapshot; prepare a new one when source facts or policy
-   assumptions change.
-5. Register the dataset's exact route rows with its declared provider and method. Do
-   not regenerate reviewed routes unless the assignment explicitly requires refreshed
-   route evidence from an authorized routing capability.
-6. Require a complete matrix for decision work. Use an incomplete matrix only for
-   explicit diagnostics, keeping missing and unreachable pairs visible.
-7. Call `supply_chain_planner.validate_network_resource` for both snapshot and route
-   matrix. Stop on validation errors. Report missing or unreachable route pairs rather
-   than silently substituting straight-line distance.
+球面距离是规划估算，不是导航承诺。日级时效需要额外确认司机每日有效行驶小时数，教程建议值不能成为隐藏默认值。
 
-## Input rules
-
-- `demand_units` and `capacity_units` are nonnegative integer planning units.
-- `currency` is one ISO-style three-letter currency and all costs use it.
-- Every required lane must resolve to exactly one transport rate selected by the
-  origin city's region and destination city ID. Demand IDs and facility IDs are not
-  transport-rate selectors.
-- Existing demand relationships use `current_facility_id`; missing relationships remain
-  missing and are not imputed.
-- Include candidate facilities and their routes in the same snapshot when the next task
-  is location optimization. Otherwise the solver cannot evaluate them.
-
-## Handoff
-
-Return the snapshot and route-matrix `data_ref` objects, source counts, planning period,
-currency, service-policy formula, route completeness, geocoding exceptions, and material
-data-quality caveats. Do not paste Resource JSON into the answer.
+交付时只返回 Case 的方案标签、需求量、未分配需求、时效覆盖率、成本摘要、假设和缺口，不返回覆盖明细行。

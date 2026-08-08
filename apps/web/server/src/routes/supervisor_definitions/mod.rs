@@ -5,8 +5,8 @@ use axum::{
 };
 use open_web_codex_platform_contracts::error::PlatformError;
 use open_web_codex_platform_contracts::{
-    SupervisorDefinitionSummary, SupervisorDraftRequest, SupervisorReleaseSummary,
-    SupervisorValidationResult,
+    PublishSupervisorDraftRequest, SupervisorDefinitionSummary, SupervisorDraftRequest,
+    SupervisorDraftUpdateRequest, SupervisorReleaseSummary, SupervisorValidationResult,
 };
 use open_web_codex_platform_store::AppState;
 use open_web_codex_supervisor_catalog::supervisor;
@@ -22,11 +22,12 @@ mod store;
 #[cfg(test)]
 use resolution::release_spec_from_draft;
 use resolution::{
-    ensure_draft_version_is_new, release_spec_from_draft_with_policy, validate_draft,
+    release_spec_from_draft_with_policy, release_spec_from_draft_with_version, validate_draft,
     validate_draft_storage_shape,
 };
 use store::{
-    load_definition, load_definitions, load_draft_row, lock_definition, parse_draft, record_audit,
+    draft_content_sha256, load_definition, load_definitions, load_draft_row, lock_definition,
+    parse_draft, record_audit,
 };
 
 pub(crate) type ApiError = (StatusCode, Json<PlatformError>);
@@ -47,7 +48,6 @@ pub async fn create(
     Json(draft): Json<SupervisorDraftRequest>,
 ) -> ApiResult<SupervisorDefinitionSummary> {
     validate_draft_storage_shape(&draft)?;
-    ensure_draft_version_is_new(&state.db, auth.organization_id, &draft).await?;
     if supervisor_policy::is_reserved_builtin_policy_id(&draft.policy_id) {
         return Err(bad_request(
             "The policy id is reserved by a built-in Supervisor Package",
@@ -56,6 +56,7 @@ pub async fn create(
     let definition_id = Uuid::now_v7();
     let revision_id = Uuid::now_v7();
     let draft_spec = serde_json::to_value(&draft).map_err(|_| internal_error())?;
+    let content_sha256 = draft_content_sha256(&draft);
     let mut transaction = state.db.begin().await.map_err(database_error)?;
     sqlx::query(
         "INSERT INTO supervisor_definitions \
@@ -73,14 +74,15 @@ pub async fn create(
     .map_err(database_conflict)?;
     sqlx::query(
         "INSERT INTO supervisor_revisions \
-         (id, organization_id, definition_id, version, draft_spec, created_by) \
-         VALUES ($1, $2, $3, $4, $5, $6)",
+         (id, organization_id, definition_id, version, draft_spec, content_sha256, created_by) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(revision_id)
     .bind(auth.organization_id)
     .bind(definition_id)
-    .bind(&draft.version)
+    .bind(Option::<String>::None)
     .bind(draft_spec)
+    .bind(content_sha256)
     .bind(auth.user_id)
     .execute(&mut *transaction)
     .await
@@ -102,11 +104,15 @@ pub async fn save_draft(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
     Path(definition_id): Path<Uuid>,
-    Json(draft): Json<SupervisorDraftRequest>,
+    Json(request): Json<SupervisorDraftUpdateRequest>,
 ) -> ApiResult<SupervisorDefinitionSummary> {
+    let draft = request.draft;
+    if request.expected_revision < 1 {
+        return Err(bad_request("expected_revision must be positive"));
+    }
     validate_draft_storage_shape(&draft)?;
-    ensure_draft_version_is_new(&state.db, auth.organization_id, &draft).await?;
     let draft_spec = serde_json::to_value(&draft).map_err(|_| internal_error())?;
+    let content_sha256 = draft_content_sha256(&draft);
     let mut transaction = state.db.begin().await.map_err(database_error)?;
     let definition = lock_definition(&mut transaction, auth.organization_id, definition_id).await?;
     require_manage(&auth, definition.get("owner_user_id"))?;
@@ -116,7 +122,7 @@ pub async fn save_draft(
         ));
     }
     let draft_revision = sqlx::query(
-        "SELECT id FROM supervisor_revisions \
+        "SELECT id, revision_number FROM supervisor_revisions \
          WHERE organization_id = $1 AND definition_id = $2 AND state = 'draft' \
          FOR UPDATE",
     )
@@ -126,14 +132,23 @@ pub async fn save_draft(
     .await
     .map_err(database_error)?;
     if let Some(row) = draft_revision {
+        let current_revision: i64 = row.get("revision_number");
+        if current_revision != request.expected_revision {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(PlatformError::bad_request(
+                    "Supervisor draft revision is stale; reload before saving",
+                )),
+            ));
+        }
         sqlx::query(
             "UPDATE supervisor_revisions \
-             SET version = $1, draft_spec = $2, revision_number = revision_number + 1, \
+             SET draft_spec = $1, content_sha256 = $2, revision_number = revision_number + 1, \
                  updated_at = now() \
              WHERE id = $3 AND organization_id = $4 AND state = 'draft'",
         )
-        .bind(&draft.version)
         .bind(draft_spec)
+        .bind(&content_sha256)
         .bind(row.get::<Uuid, _>("id"))
         .bind(auth.organization_id)
         .execute(&mut *transaction)
@@ -142,14 +157,15 @@ pub async fn save_draft(
     } else {
         sqlx::query(
             "INSERT INTO supervisor_revisions \
-             (id, organization_id, definition_id, version, draft_spec, created_by) \
-             VALUES ($1, $2, $3, $4, $5, $6)",
+             (id, organization_id, definition_id, version, draft_spec, content_sha256, created_by) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(Uuid::now_v7())
         .bind(auth.organization_id)
         .bind(definition_id)
-        .bind(&draft.version)
+        .bind(Option::<String>::None)
         .bind(draft_spec)
+        .bind(content_sha256)
         .bind(auth.user_id)
         .execute(&mut *transaction)
         .await
@@ -188,7 +204,6 @@ pub async fn validate(
     let row = load_draft_row(&state.db, auth.organization_id, definition_id).await?;
     require_manage(&auth, row.get("owner_user_id"))?;
     let draft = parse_draft(row.get("draft_spec"))?;
-    ensure_draft_version_is_new(&state.db, auth.organization_id, &draft).await?;
     Ok(Json(
         validate_draft(&state.db, auth.organization_id, &draft).await,
     ))
@@ -198,11 +213,15 @@ pub async fn publish(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
     Path(definition_id): Path<Uuid>,
+    Json(request): Json<PublishSupervisorDraftRequest>,
 ) -> ApiResult<SupervisorReleaseSummary> {
+    if request.expected_revision < 1 {
+        return Err(bad_request("expected_revision must be positive"));
+    }
     let mut transaction = state.db.begin().await.map_err(database_error)?;
     let row = sqlx::query(
         "SELECT definition.owner_user_id, definition.policy_id, revision.id AS revision_id, \
-                revision.draft_spec \
+                revision.revision_number, revision.draft_spec \
          FROM supervisor_definitions definition \
          JOIN supervisor_revisions revision ON revision.definition_id = definition.id \
            AND revision.organization_id = definition.organization_id AND revision.state = 'draft' \
@@ -216,6 +235,14 @@ pub async fn publish(
     .map_err(database_error)?
     .ok_or_else(|| not_found("Supervisor draft was not found"))?;
     require_manage(&auth, row.get("owner_user_id"))?;
+    if row.get::<i64, _>("revision_number") != request.expected_revision {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(PlatformError::bad_request(
+                "Supervisor draft revision is stale; reload before publishing",
+            )),
+        ));
+    }
     let draft = parse_draft(row.get("draft_spec"))?;
     if row.get::<String, _>("policy_id") != draft.policy_id {
         return Err(internal_error());
@@ -234,14 +261,27 @@ pub async fn publish(
                     )),
                 )
             })?;
-    let release_spec =
-        release_spec_from_draft_with_policy(&draft, &available_agents, &instruction_policy)
-            .map_err(|issue| {
-                (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(PlatformError::bad_request(issue.message)),
-                )
-            })?;
+    // Serialize release allocation for one policy even when separate Definitions
+    // are published concurrently.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+        .bind(&draft.policy_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(database_error)?;
+    let release_version =
+        next_release_version(&mut transaction, auth.organization_id, &draft.policy_id).await?;
+    let release_spec = release_spec_from_draft_with_version(
+        &draft,
+        &available_agents,
+        &instruction_policy,
+        &release_version,
+    )
+    .map_err(|issue| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(PlatformError::bad_request(issue.message)),
+        )
+    })?;
     let package = supervisor::validate_release_with_agents_and_policy(
         release_spec.clone(),
         &available_agents,
@@ -304,9 +344,10 @@ pub async fn publish(
     }
     sqlx::query(
         "UPDATE supervisor_revisions \
-         SET state = 'published', published_at = $1, updated_at = $1 \
-         WHERE id = $2 AND organization_id = $3 AND state = 'draft'",
+         SET state = 'published', version = $1, published_at = $2, updated_at = $2 \
+         WHERE id = $3 AND organization_id = $4 AND state = 'draft'",
     )
+    .bind(&package.version)
     .bind(published_at)
     .bind(revision_id)
     .bind(auth.organization_id)
@@ -340,6 +381,43 @@ pub async fn publish(
         content_sha256: package.content_sha256,
         published_at,
     }))
+}
+
+async fn next_release_version(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    organization_id: Uuid,
+    policy_id: &str,
+) -> Result<String, ApiError> {
+    let versions = sqlx::query_scalar::<_, String>(
+        "SELECT version FROM supervisor_releases \
+         WHERE organization_id = $1 AND policy_id = $2",
+    )
+    .bind(organization_id)
+    .bind(policy_id)
+    .fetch_all(&mut **transaction)
+    .await
+    .map_err(database_error)?;
+    if versions.is_empty() {
+        return Ok("1.0.0".to_string());
+    }
+    let mut latest = (1_u64, 0_u64, 0_u64);
+    for version in versions {
+        let mut parts = version.split('.');
+        let Some(major) = parts.next().and_then(|part| part.parse::<u64>().ok()) else {
+            return Err(internal_error());
+        };
+        let Some(minor) = parts.next().and_then(|part| part.parse::<u64>().ok()) else {
+            return Err(internal_error());
+        };
+        let Some(patch) = parts.next().and_then(|part| part.parse::<u64>().ok()) else {
+            return Err(internal_error());
+        };
+        if parts.next().is_some() {
+            return Err(internal_error());
+        }
+        latest = latest.max((major, minor, patch));
+    }
+    Ok(format!("{}.{}.{}", latest.0, latest.1, latest.2 + 1))
 }
 
 /// Idempotently publish a trusted, server-authored Supervisor draft through
@@ -387,11 +465,12 @@ pub(crate) async fn publish_or_reuse_trusted(
     if let Some(row) = sqlx::query(
         "SELECT id, policy_id, version, display_name, description, content_sha256, published_at \
          FROM supervisor_releases \
-         WHERE organization_id = $1 AND policy_id = $2 AND version = $3",
+         WHERE organization_id = $1 AND policy_id = $2 AND content_sha256 = $3 \
+         ORDER BY published_at DESC LIMIT 1",
     )
     .bind(auth.organization_id)
     .bind(&draft.policy_id)
-    .bind(&draft.version)
+    .bind(&expected.content_sha256)
     .fetch_optional(&state.db)
     .await
     .map_err(database_error)?
@@ -440,9 +519,23 @@ pub(crate) async fn publish_or_reuse_trusted(
             .0
             .id
     };
-    publish(State(state.clone()), auth.clone(), Path(resource_id))
-        .await
-        .map(|Json(release)| release)
+    let expected_revision = sqlx::query_scalar::<_, i64>(
+        "SELECT revision_number FROM supervisor_revisions \
+         WHERE organization_id = $1 AND definition_id = $2 AND state = 'draft'",
+    )
+    .bind(auth.organization_id)
+    .bind(resource_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(database_error)?;
+    publish(
+        State(state.clone()),
+        auth.clone(),
+        Path(resource_id),
+        Json(PublishSupervisorDraftRequest { expected_revision }),
+    )
+    .await
+    .map(|Json(release)| release)
 }
 
 fn require_manage(auth: &AuthenticatedUser, owner_user_id: Uuid) -> Result<(), ApiError> {

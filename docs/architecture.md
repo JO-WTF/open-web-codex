@@ -1,585 +1,89 @@
 # Architecture
 
-This document records the current technical architecture and authoritative
-ownership boundaries. It does not prove a capability is release-ready or
-replace the long-term product and multi-agent design. Current validation lives
-in `capability-baseline.md`; normative trust boundaries live in
-`security-model.md`.
+本文描述当前实现的所有权和边界。长期产品方向见 `product-vision.md`；目标 Copilot
+创作架构见 `supervisor-agent-skill-tool-architecture.md`；能力证据见
+`capability-baseline.md`；本仓网 6.0 的过渡实现合同见
+`enterprise-supervisor-copilot-plan.md`。
 
-## Architectural objective
+当前 Network Case 不是目标平台通用对象：其来源/映射与 Platform Data Intake 重复，
+其 revision/operation/readiness 属于待提取的 Platform Work State，当前领域 Tool envelope
+也泄漏到 event projection。以下章节记录这些代码现在如何运行，不代表重构后的 owner。
 
-`open-web-codex` is a multi-user Web control plane around the official Codex
-runtime. It is not a browser reimplementation of Codex. The design maximizes
-reuse of `codex/`, keeps product-specific Runtime changes behind narrow
-app-server contracts, and preserves regular subtree synchronization with
-`openai/codex/main`.
+## 目标
 
-The initial deployable is a modular monolith with PostgreSQL and colocated
-Profile Host/Runner processes. Boundaries are interfaces and ownership rules,
-not a requirement to create network microservices. Components separate only
-when measured capacity or isolation needs justify it.
-
-The enterprise multi-agent design in
-`docs/enterprise-agent-platform-architecture.md` remains the evolutionary
-target above this control plane. The current constrained M2 slice implements a
-typed Supervisor capability catalog, Web authoring with mutable Drafts and
-immutable publication of organization-scoped Agent and Supervisor Releases,
-Policy snapshots bound
-to root Threads, request-scoped Runtime Roles, native child-agent execution,
-rebuildable Agent projections and Task-owned durable Artifacts. A user-authored
-Agent currently narrows one reviewed code-published capability template; it
-cannot invent Runtime capabilities, MCP servers or Tools. A separate bounded
-Python package path can declare standard-library Tool functions, an MCP Server
-and one Skill under an authorized Workspace, but it is not arbitrary
-Tool/Plugin lifecycle. Native Runtime Agent CRUD, Role-level dynamic
-authorization and production multi-user operation remain targets rather than
-current capability.
-`capability-baseline.md` is authoritative for the verified scope; the roadmap
-and development plan control the remaining order.
-
-## System shape
+`open-web-codex` 是围绕官方 Codex Runtime 的浏览器控制面，不在 WebApp、Server 或数据库中重新实现 Thread、Turn、Agent、Skill、MCP、记忆或模型上下文。
 
 ```text
 Browser
-  -> authenticated platform HTTP + WebSocket API
-  -> authorization / Task / Run / Approval services
-  -> Profile Host ---------------------> persistent per-user Profile Home
-  -> Codex app-server                   -> Thread / Turn / memory / agents
-  -> event normalizer and durable projection
-
-Workspace authorization service
-  -> authorized existing execution roots
-  -> explicit managed clone/worktree resources
-
-Run orchestrator
-  -> validates the Thread's Codex cwd against authorized Workspace roots
-  -> resolves the latest organization Draft, a built-in Package or an immutable Release
-  -> preflights exact Agent Definitions before governed Thread creation
-  -> Runner sandbox / Git delivery
-
-Governed Supervisor preflight
-  -> Profile Host atomically materializes immutable Role instruction files
-  -> adapter reopens and verifies exact content before Runtime consumption
-  -> thread/start or thread/fork carries V2 feature, limits and Roles in request config
-  -> Runtime creates root/child Threads and owns multi-agent coordination
-  -> platform projects the observable Agent tree from Runtime events
-
-Codex build
-  -> generated protocol Schema + TypeScript
-  -> generated Capability Manifest + fixtures + digest
-  -> Web feature policy and compatibility gate
+  -> authenticated Web API + WebSocket
+  -> Platform Server: Profile / Workspace / Run / Approval / Artifact / audit
+  -> Profile Host: one isolated CODEX_HOME and one app-server per Profile
+  -> Codex Runtime: Thread / Turn / Item / context / Agent / Skill / MCP / Provider
+  -> authorized Workspace / Runner / Git for execution roots
 ```
 
-The checked-in repository has one browser bridge. `apps/web/src/platform` calls
-typed platform resources under `/api`; live updates use an authenticated
-WebSocket whose first frame carries the session token. `apps/web/server`,
-`apps/web/crates` and `apps/web/migrations` own the server boundary. There is no
-local sidecar, raw browser JSON-RPC route, query-token event stream, or trusted
-browser-supplied filesystem path.
+## 所有权
 
-The established React component tree and styles remain the browser product.
-Desktop imports are replaced at their original call sites by browser adapters,
-so UI components do not own platform authorization or transport details. Native
-window, tray, updater, daemon and desktop file-manager actions either map to a
-safe browser capability or return an explicit deployment-managed/unavailable
-result; they never cause a Tauri runtime to reappear.
-
-## Facts and ownership
-
-| Fact | Authoritative owner | Web may persist |
+| 层 | 拥有 | 不拥有 |
 | --- | --- | --- |
-| User, organization, membership and session | Web platform database | complete platform record |
-| Project, Task, Run, Thread model selection, lease, approval and audit | Web platform database | complete platform record |
-| Profile ownership and process health | Web database + Profile Host | mapping, health, build and capability snapshot |
-| Supervisor Definition, Revision, Release, immutable snapshot and root-Thread binding | Web platform database + code-published capability package | complete governance record and binding; never Runtime conversation state |
-| Supervisor platform instruction policy | Web platform global immutable Release + code-published baseline | exact policy version/content identity and model-visible platform behavior; never authorization or Runtime capability truth |
-| Agent Definition, Revision, immutable Release, reviewed capability-template binding and Supervisor dependency | Web platform database + code-published capability catalog | governance metadata, exact release/content identity and derived instruction digest; never child-Thread state or a copied Tool catalog |
-| Thread, Turn, items, compaction and model-visible context | Codex Profile/app-server | opaque IDs, event projection and search index |
-| Provider config and runtime model catalog | Codex Profile/app-server | secret references, global default Provider/model selection, policy and display cache scoped to Profile |
-| Agent scheduling and parent/child execution | Codex runtime | observable trajectory and status projection |
-| Governed Runtime Role execution config | Codex request config; transitional file materialization by Profile Host | no PostgreSQL configuration copy; only immutable governance metadata and rebuildable execution observations |
-| Runtime Agent tree, task execution and status projections | Codex events are authoritative | bounded `runtime_agent_projections` plus durable `runtime_agent_execution_projections` rows that can be deleted and rebuilt |
-| Skills, plugins, MCP and memory state | Codex Profile/app-server | permissions, audit and capability-gated projection |
-| Thread current working directory | Codex Profile/app-server | authorized Workspace ID and safe display metadata |
-| Workspace authorization and managed checkout lifecycle | Web platform + filesystem/Git | complete authorization record and safe lifecycle metadata |
-| Repository objects and checkout contents | Filesystem/Git | status, diff summary and artifact references |
-| Durable Artifact identity, authorization and retention | Web platform Artifact store | producer Run/Thread/Turn/Item provenance and safe references |
-| DataRequirementContract | Domain capability package, versioned with a content hash | human-readable contract projection |
-| WorkspaceDataDraft and SourceAsset | Web platform, scoped to an authorized Workspace | immutable source metadata and safe status |
-| DataIntakeSession | Web platform workflow state for a Task/Thread and contract | gaps, mapping candidates, confirmations and parameters |
-| TaskDatasetBinding | Web platform binding to a published normalized Dataset Release | contract/mapping/parameter snapshot and fingerprint |
+| Browser WebApp | 表现、输入、可访问性、平台 DTO 渲染 | Thread 语义、模型上下文、Runtime discovery、凭据、原始 JSON-RPC |
+| Platform Server | Profile、Workspace 授权、Run、Approval、Artifact、审计、浏览器 DTO、执行投影 | 推理、上下文压缩、Skill/MCP 生命周期、Provider transport |
+| Profile Host | 隔离 `CODEX_HOME`、app-server 进程、请求桥接、Runtime 事件归一化 | Web UI、平台组织、第二个状态库、Runtime 模拟 |
+| Codex Runtime | Thread/Turn/Item、Agent 调度、Skill/Plugin/MCP discovery、模型调用和官方输入请求 | Web session、组织授权、浏览器 DTO、Workspace provisioning |
+| Workspace/Runner/Git | 授权执行根、Run lease、clone/worktree、命令和交付 | 模型可见对话状态 |
+| Skill/Plugin/MCP | 模型可见的指令、声明、Tool、Resource | 隐式 Profile mutation、Web 命令拦截、平台授权 |
 
-The platform must recover model-visible history from Codex. Event projections
-are rebuildable UI/read models and never become a second Thread store, memory
-engine or agent scheduler.
+平台事件和数据库表是可重建投影，不是第二个 Thread 或第二个 Supervisor。Codex 保持模型可见对话的唯一权威。
 
-### Current governed multi-agent slice
+## Supervisor 协作
 
-An Enterprise Run may explicitly select one code-published Supervisor Package,
-the latest validated organization-scoped Supervisor Draft, or one immutable
-organization-scoped Supervisor Release. A Draft is resolved server-side and
-captured into an immutable Run snapshot carrying its numeric Draft revision;
-editing the Draft increments that revision and affects only later Runs. Draft
-identity and preflight use the revision, not a content hash. An older Run whose
-Draft revision is no longer current is rejected as stale rather than being
-silently reinterpreted. Published Releases retain their content-integrity
-checks. The platform seals the selected Policy and its referenced Agent
-Definition versions into an immutable snapshot and binds it to the actual root
-Thread. Immediately before a governed root start or inherited fork, the worker
-re-resolves the repository Package, current Draft revision or exact persisted
-Release identity, rejects snapshot, dependency or instruction drift and checks
-every type-declared Runtime capability and required limit.
+Supervisor 不承载仓网业务流程。它先创建一个 Network Case，再根据当前用户问题和 Case readiness 动态选择：
 
-Code-managed publication sources live under `capabilities/supervisors/` and
-`capabilities/agents/`. Tool, MCP, Skill and Plugin implementations remain in
-their owning packages; manifests relate them by stable capability IDs rather
-than by filesystem nesting. Web-authored Supervisor and Agent drafts are
-organization- and owner-scoped PostgreSQL resources. A custom Agent must select
-one exact reviewed code-published Agent as its capability template and may only
-narrow that template's Artifact inputs and outputs. Validation derives its
-Runtime Role name, configuration path, MCP inventory, Tool allowlist and
-Runtime capability requirements server-side. Agent publication locks the
-complete spec, derived Role digest and template digest. Supervisor publication
-then binds the exact custom Agent Release UUID, version and content hash through
-an immutable dependency row. Published rows cannot be edited, and missing or
-drifted dependencies fail preflight without name/version fallback.
+```mermaid
+flowchart LR
+  U[用户问题] --> S[Root Supervisor]
+  S --> C[Network Case]
+  C --> N[Network Agent: 定义需求和计算口径]
+  C --> D[Data Agent: 文件检查和标准化]
+  D --> C
+  N --> C
+  N --> O[矩阵、覆盖、成本、场景、选址]
+  O --> C
+  C --> P[最终报告 Artifact]
+```
 
-Normal Workspace intake has no packaged source catalog. `supply_chain_data`
-uses only the trusted Turn `sandboxCwd` advertised through
-`codex/sandbox-state-meta`; an empty Workspace produces an empty catalog. The
-separate `supply_chain_demo` MCP owns one explicit, approved write operation
-that atomically creates versioned synthetic source files in the current empty
-Workspace. It cannot accept a path or create a Dataset Release. Those files
-then traverse the ordinary confirmed Intake path, with `synthetic_demo`,
-template identity and source digests preserved through Resource, Release and
-TaskDatasetBinding provenance. Learn Tutorial Blueprints remain platform-owned
-installations of locked Releases and are not discoverable by ordinary Intake.
-The generic warehouse-network contract keeps demand points as allocation facts while
-sharing transport facts at their authoritative grain: routes are city-to-city and
-rates are origin-region-to-destination-city. High-volume Demo demand therefore does
-not multiply route or quote rows by demand-point count.
+Root 只创建和查询 Case，并把同一个 `case_id` 放进每个子 Agent assignment。Network Agent 把本次最小数据需求写入 Case；Data Agent 只有在存在用户文件或用户明确请求教程 Demo 时才发现来源。候选仓、current coverage、报价、成本规则、导航许可和时效目标都是按当前问题决定的条件输入。没有一个完整数据集是所有分析的通用前置条件。
 
-Because the current Runtime does not expose native Agent CRUD, Profile Host
-temporarily materializes the exact versioned Role instruction files under a
-platform-reserved Profile directory. The adapter reopens those files without
-following links, verifies their hashes, and places `features.multi_agent_v2`,
-the V2 concurrency limit and the exact Role definitions only in that Thread
-request's config. This path does not call persistent Agent configuration
-write/reload APIs, does not register enterprise Roles in Profile or Project
-configuration and does not duplicate Runtime Role configuration in PostgreSQL.
-Ordinary Threads receive none of the Policy instructions, enterprise Roles or
-V2 overrides.
+## Case 与 Artifact
 
-Codex Runtime remains authoritative for spawn, wait, follow-up, interrupt,
-parent/child identity and model-visible Agent state. The platform persists only
-the Policy/Definition governance facts, Task-owned Artifacts and rebuildable
-read models from official Runtime events: `runtime_agent_projections` records
-the observed Thread tree, while `runtime_agent_execution_projections` gives
-each observed child Turn a stable Web task node. A completed execution row is
-terminal; another Turn on the same child Thread creates the next ordinal
-instead of rewriting it. These rows cannot create or drive an Agent. The
-temporary file materializer must be removed after a typed app-server V2 Agent
-lifecycle owns write, validation, discovery and reload.
-
-The Platform Run lifecycle does not treat a governed root Turn as a completed
-Run while a projected child execution is still `pending`, `running` or
-`waiting`. It persists one `child_completion` continuation, waits for the
-official Runtime child terminal events, and then uses the typed
-`send_user_message` operation to continue the same root Thread. The
-continuation is claimed and recorded transactionally, so an out-of-order or
-duplicate child event cannot create duplicate root Turns. Codex remains the
-authority for Thread/Turn semantics and child-agent coordination; the Platform
-owns only this durable Run completion gate and audit projection.
-
-## Web / app-server / Codex server boundary contract
-
-All feature work must start by selecting the owning layer below. A change that
-cannot be placed in exactly one owner must be split until each part has a clear
-owner and contract.
-
-| Layer | Owns | Must not own |
-| --- | --- | --- |
-| WebApp / browser | Presentation state, input controls, optimistic UI, safe rendering of platform DTOs, accessibility, and browser-only fallbacks | MCP/Skills/Plugins discovery, tool catalogs, model-visible prompt injection, Thread/Turn semantics, filesystem authority, credentials, raw app-server JSON-RPC, or local Profile paths |
-| Platform app-server | Authentication, authorization, Profile/Runner lifecycle, Task/Run/Approval/Git persistence, Secret injection, audit, durable event projection, typed browser DTOs and capability gating | Model reasoning, context compaction, memory, tool execution policy, MCP/Skills/Plugins lifecycle, Provider transport internals, or untyped protocol passthrough to the browser |
-| Profile Host / adapter | Narrow, typed bridge from platform resources to Codex app-server requests and notifications; process-instance isolation; request-id mapping; safe event normalization | Product UI behavior, broad protocol rewriting, model/tool discovery emulation, or persistent state that belongs to Codex Profile or platform tables |
-| Codex app-server / Runtime | Thread/Turn lifecycle, model context, tools, MCP, Skills, Plugins, memory, multi-agent coordination, Provider model/transport behavior and generated protocol facts | Web sessions, organizations, browser DTOs, platform authorization, Git workspace provisioning, deployment scripts, or Profile ownership policy |
-| Plugin / Skill / MCP package | Model-visible capability instructions and tool/server declarations consumed by Codex discovery | Web-side command interception, platform config mutation, or hidden Profile `config.toml` edits |
-
-Planning and code review must reject these anti-patterns:
-
-1. A browser command or composer shortcut that answers a Runtime capability
-   question without sending the user's intent through Codex.
-2. A server route or startup script that injects MCP/Skill/Plugin configuration
-   directly into a Profile as a substitute for Codex discovery or a typed
-   platform lifecycle API.
-3. A Web/server prompt injection workaround for provider-neutral capabilities
-   when the capability can be expressed by Runtime tools, Skills, Plugins, MCP
-   or a generated app-server contract.
-4. Browser exposure of raw request ids, raw JSON-RPC, local paths, credentials,
-   unbounded protocol payloads or unvetted tool catalogs.
-5. Product-specific changes spread through high-churn Codex files when the same
-   behavior can live in `apps/web`, a plugin, a skill, an MCP server or a narrow
-   generated protocol seam.
-
-Every feature proposal must include a short boundary note naming the owner,
-inputs, outputs, capability gate and tests. If the owner is Codex, follow the
-upstream customization workflow before editing. If the owner is Web/platform,
-prove that the implementation consumes typed contracts rather than recreating
-Runtime behavior.
-
-## Multi-user isolation model
-
-The authorization chain is:
+大数据不经过 Agent 消息传递，也不通过多个 MCP Resource 串联。Network Case 是业务状态的唯一来源，使用 Profile 范围内的 SQLite 保存：
 
 ```text
-session -> user -> organization membership -> project permission
-        -> profile/workspace grant
-        -> task/thread -> run/event/approval
-        -> durable artifact grant + producer provenance
+requirements -> sources -> mapping -> normalized input
+             -> route/cost matrix -> baseline/scenario/facility solution
 ```
 
-- One member has one persistent personal Profile by default.
-- A Profile has a dedicated `CODEX_HOME`, credentials, Provider configuration,
-  Threads, memory, skills, plugins and MCP configuration.
-- One Profile has at most one primary app-server process. Cross-process locking
-  and a process registry enforce the invariant.
-- A Profile may execute multiple authorized Tasks only within measured Runtime
-  concurrency limits. It never shares a Home with another user.
-- A Workspace is an independently authorized execution root. It may be an
-  operator-registered existing directory or an explicitly created managed
-  clone/worktree. It is never implicitly owned by a Thread, Task or Run.
-- Codex owns each Thread's current `cwd` and supports changing it through its
-  official Thread/Turn contracts. Multiple Threads may use the same authorized
-  Workspace; starting, resuming or running a Thread does not create a checkout.
-- Profile Host validates that every Runtime `cwd` is contained by a Workspace
-  authorized for the Profile/user. Runner revalidates the Workspace grant for
-  Git and delivery operations. Normal browser users never submit trusted
-  filesystem paths.
-- Thread startup uses Thread readiness only; it does not require a Dataset
-  Release and never creates a Workspace. Analysis readiness is task-scoped and
-  requires a ready DataIntakeSession, a published normalized Release and a
-  TaskDatasetBinding with matching fingerprints.
-- Planning-data raw uploads are SourceAssets in a WorkspaceDataDraft, while
-  ordinary Files-panel uploads are regular Workspace files, not Artifacts.
-  Domain
-  capability packages own business profiling, fuzzy mapping and normalization;
-  `provide_data`, `confirm_mapping` and `answer_parameters` are durable typed
-  InputRequests while the Session itself remains `active`, rather than a
-  long-running Run or a second workflow state machine.
-- Cache, subscription, model and secret keys include their user/Profile scope.
-  Cross-user and guessed-ID denial tests are release gates.
+每次工具调用只返回 `case_id`、facet 状态、有限问题和有限指标。内部组件用内容 hash、revision 和依赖关系进行失效与幂等控制，但这些内部标识不进入模型消息。只有 `publish_network_planning_report` 会创建内容寻址的 `network_planning_report.v1` ResourceLink；平台把它投影为已授权 Artifact。Resource 不再承担 Agent 间数据总线职责。
 
-### Single-Profile convergence mode
+## 仓网计算边界
 
-The current near-term runtime target is a deliberately narrowed deployment mode:
-one implicit local Owner, one persistent Profile Home, one primary Profile
-Host process and a fixed set of authorized Workspace roots from which each
-Thread's Codex `cwd` is selected. This is a deployment constraint, not a
-boundary exception. The same ownership table above continues to apply:
+- Data Server 使用 `workspace_intake.py` 作为唯一 CSV/JSON/XLSX 来源发现和检查实现。
+- `geography.py` 负责行政区目录、名称解析、候选仓构建和边界校验；ambiguous/missing 进入用户输入。
+- Planner 使用 `matrix.py` 构建球面路线、批量导航注册和成本矩阵；不改 Maps MCP `distance_matrix` 接口，也不从一个 MCP 内部调用另一个 MCP。
+- Solver 使用 OR-Tools CP-SAT；固定已有仓默认开启，用户明确指定的 optional existing 才能关闭；求解超时返回当前可行解和 `timeout`。
+- `evaluate_network_baseline` 将真实当前覆盖和已有仓优化基线分开。没有 current assignment 时不能输出 `actual_current`。
+- 地图由 Planner 从同一个 Case 中的两个方案生成，不增加 Visualization Agent 的二次计算链路。
 
-- The platform starts and monitors the single Profile Host, injects only
-  authorized environment and secret references, and records safe diagnostics.
-- The selected `CODEX_HOME`, Profile identity, authorized Workspace roots,
-  Runner/source roots and capability roots are fixed at startup or by typed
-  platform lifecycle state; browser input never changes server-local paths.
-- To unblock the single Profile smoke, the platform may copy a file-backed
-  `auth.json` from an already logged-in local Codex home into an empty Profile
-  home before starting the Profile Host. This is a transitional single-user
-  import path only; it must not become the multi-user credential model.
-- Skills, Plugins and MCP are still discovered and executed by Codex Runtime.
-  The WebApp does not scan `.mcp.json`, run plugin launchers, answer MCP
-  inventory questions locally or write hidden Profile configuration.
-- MCP startup notifications are persisted as the browser's lightweight status
-  projection. Thread hydration reads that projection and never calls the full
-  Runtime MCP inventory path, whose tools and resources are unrelated to the
-  sidebar status surface.
-- The Server ensures the implicit local Owner on startup, and the browser
-  obtains a local Session without rendering login or registration. Session,
-  Organization, Profile and resource authorization remain the internal request
-  context; this transition mode is not a public or multi-user authentication
-  design.
-- Local capability packages such as `tools/maps-mcp` are made available as
-  selected capability roots. Their launchers own package bootstrap, dependency
-  checks and MCP server startup; Profile Host only reports safe startup status
-  and categorized failures.
-- Agent Studio exposes a bounded capability-package directory compiled from
-  checked-in Plugin and MCP manifests. Directory presence means the package is
-  platform-reviewed and available for selection; it does not imply that any
-  current Thread enabled or successfully started the package. Thread-specific
-  MCP status remains a separate durable Runtime projection.
-- Agent Studio also exposes one bounded Python package authoring path. The
-  browser submits Tool JSON Schemas, standard-library Python functions and one
-  Skill through a typed Workspace resource. The Platform fixes the package
-  layout and launcher, validates identifiers and size limits, probes MCP
-  initialization/discovery/calls in a cleared environment, then atomically
-  publishes an immutable package under the authorized Workspace. A new Thread
-  still relies on Codex Runtime capability-root, Skill and MCP discovery;
-  publication does not register a parallel platform Tool catalog or edit hidden
-  Profile configuration. Secret-backed servers, arbitrary launch commands and
-  general Plugin/MCP CRUD are not part of this slice.
-- This mode must pass single Profile smoke tests for Provider login/model
-  discovery, Runtime MCP discovery, MCP startup, third-party Provider tool calls,
-  map-card rendering and Thread resume before multi-Profile routing work
-  resumes.
+## 用户输入和执行投影
 
-## Runtime bridge
+Runtime `item/tool/requestUserInput` 由平台先创建 Approval，再广播 `platform/userInputRequested`。平台解析问题、选项、secret 标记和 root/child 来源，但不把 Runtime server request ID 暴露给浏览器。回答使用 Approval UUID 和版本做并发控制，secret 不保存正文；Runtime 投递未知时保持 `delivery_unknown`。
 
-Codex produces a build-specific contract bundle containing:
+每个 child execution 在首次 assignment/spawn 时生成稳定短标题。连续普通 wait 只更新 `wait_cycle_count` 和当前状态；等待用户输入进入 `waiting_for_input` 并关联平台 Approval。完成、失败和中断只允许一个终态，乱序事件不能把终态恢复成 running。原始 Run 事件继续完整持久化，execution/activity 是可重建的浏览器投影。
 
-1. JSON Schema and TypeScript definitions generated by app-server protocol.
-2. A Capability Manifest derived from the build's method registry,
-   experimental annotations, limits and build identity.
-3. Protocol fixtures and stable structured error metadata.
-4. Codex commit, target, binary digest and compatibility notes.
+## Supervisor Draft
 
-The Web build consumes the bundle by digest. A separate Web feature policy maps
-product features to capability IDs and minimum versions; it cannot claim a
-server supports a feature. A capability is enabled only when generated
-contracts, offline fixtures and a real app-server smoke test agree.
+Draft 是可变资源，使用 `revision`、`content_sha256` 和 `updated_at`；保存时使用 expected revision 做乐观并发控制。发布是不可变 Release，服务器在事务中分配 semver patch 版本。运行绑定记录 Draft revision/hash 或 Release version/hash，避免运行过程中内容漂移。不要要求用户输入语义版本号，也不要为历史本地实现增加双读或旧字段兜底。
 
-Browser DTOs are stable platform resources, not passthrough JSON-RPC. Raw
-app-server request IDs, Profile paths, local paths, credentials and unknown
-protocol payloads remain inside the Host/adapter boundary. Unknown Runtime
-events may be retained for diagnostics but cannot be exposed as an unsafe public
-API or crash the event stream.
+## Codex 定制门禁
 
-
-### Rich reply cards and map visualization
-
-Structured reply cards are browser projections of Codex message content and
-platform artifacts. Codex remains responsible for deciding when to use tools and
-what to say. Skills, Plugins and MCP servers may provide model-visible
-instructions or tools that return versioned `structuredContent`; the Web
-platform may validate and render a supported contract, but it must not make the
-model "discover" a capability by intercepting composer text or injecting ad-hoc
-prompts.
-
-The target map-card contract follows this flow. The current Artifact store uses
-an independent identity, Task grant and producer provenance rather than
-Run/Thread ownership. Its implemented scope and remaining lifecycle gaps are
-recorded in `docs/capability-baseline.md` and `docs/development-plan.md`:
-
-1. Geocoding and routing tools publish GeoJSON as standard MCP Resources. Their
-   `outputSchema`-validated `data_ref` contains the raw MCP server ID and the same
-   URI exposed by `resource_link.uri`. The complete reference is card-compatible;
-   its server and URI are directly reusable by MCP `resources/read`. The raw
-   server ID is distinct from the model-visible `mcp__server` Tool namespace.
-   `map_utils.create_map_card` exposes one `map.v3` contract. GeoJSON `sources`
-   are keyed by source ID; inline GeoJSON uses standard `source.data`, while a
-   complete Resource reference uses the mutually exclusive Open Web
-   `source.data_ref`. Standard GeoJSON source options are preserved. `layers`
-   is official Mapbox Style Specification Layer JSON and is validated with the
-   official validator rather than a second paint/layout/filter/expression
-   whitelist. Official unknown-property diagnostics are warnings and invalid
-   known syntax is rejected. Standard camera fields remain top-level. Optional
-   Open Web behavior is isolated under `extensions.hover` and
-   `extensions.legend`; neither is represented as a Mapbox layer field.
-   `create_map_card`
-   advertises an MCP `outputSchema` and returns a
-   generic `open-web-artifact` / `inline-visualization.v1` envelope. Its first
-   renderer kind is `map.v3`; the Tool also generates the complete
-   `::codex-inline-vis{artifact="..."}` line. Resource sources copy a complete
-   `data_ref` from an earlier completed Tool item available to the producing
-   Runtime context.
-   Tool `content` only tells the model to copy
-   `structuredContent.embed.code` as one standalone line and is never a rendering
-   input. Agent-owned `MAP_HANDOFF` JSON carries only input Resource provenance
-   and the matching Artifact ID; it never duplicates the embed line as an
-   escaped string.
-2. The Server recognizes the generic envelope without branching on MCP server
-   or Tool names, dispatches `renderer.kind` through a renderer registry and
-   validates the stable card envelope, source authorization graph, camera, and
-   extension references without reimplementing Mapbox style semantics. It registers
-   the Inline Visualization Artifact with a durable identity and an explicit
-   organization/user or project authorization grant independent of the
-   producing Run and Thread. The producing Turn and Tool Item are retained as
-   provenance, not as an authorization or lifecycle boundary. Resource
-   server/URI pairs resolve only to earlier completed Tool
-   items, are loaded through official `mcpServer/resource/read`, and are replaced
-   by authorized Artifact URLs before renderer payload persistence. Public Tool
-   projection strips the payload and MCP URI. Registration runs in a savepoint,
-   so a projection failure cannot suppress the underlying Tool terminal event.
-3. Tool completion never displays a map. An Agent Message places the Tool-generated
-   embed line between arbitrary Markdown segments. The Server resolves only
-   standalone directives and attaches the matching safe renderer DTO as typed
-   `inlineArtifacts` on the projected Agent Message event. The Web parser accepts
-   only standalone directives in Agent Messages, excludes fenced and indented
-   code, and buffers incomplete streaming directives. `file="*.html"` retains
-   the official local-HTML meaning; `artifact="..."` resolves an authorized typed
-   renderer. The parser does not inspect Tool, Reasoning, Command, user text or
-   JSON inside `MAP_HANDOFF`.
-4. Live Agent Message completion and authoritative history receive the same typed
-   `inlineArtifacts` DTO, which is the browser rendering authority. Resolution
-   uses the durable Artifact ref and current
-   caller authorization, so later Runs and authorized Threads may reuse a
-   completed Artifact without inheriting its producer's lifecycle. Producer
-   Turn/Item identity only verifies provenance because
-   `thread/turns/list` may synthesize `item-N` identities. The old Tool-attached `replyCard`, dual-write, old-history
-   reconstruction, Assistant JSON scan and position fallback paths are absent.
-5. The browser reads referenced GeoJSON from authenticated Artifact URLs and
-   renders point, line and polygon layers with Mapbox GL in an explicit Mercator
-   projection. Point layers support circle, square, diamond, triangle and pin
-   shapes plus CORS-enabled HTTPS PNG/JPEG/WebP icons. Line and polygon borders
-   support opacity, width, cap/join and dash arrays. Any geometry may declare a
-   bounded list of GeoJSON properties for a text-only hover popup; the renderer
-   creates DOM text nodes rather than accepting Tool-supplied HTML. Fit
-   viewports run after map load and after the container receives its first real
-   size; camera viewports preserve explicit center and zoom. Card chrome shows
-   the user-authored summary and legend, not internal source/layer counts or
-   viewport diagnostics. The browser reads the
-   restricted public `pk.` token through the typed
-   authenticated `/api/configuration/maps` resource. Without a token the map
-   card remains visible and opens an in-card configuration dialog; authorized
-   owners/admins save through the same resource and all visible cards update.
-   The shared dialog selects the one active Mapbox or Google Maps provider for
-   server-side `map_utils` tools; saving replaces the prior provider and key.
-   `VITE_MAPBOX_ACCESS_TOKEN` remains a build-time fallback.
-   The retained Chat Completions transport still classifies text accompanying
-   Tool calls as `commentary` and text-only completion as `final_answer`. This
-   phase classification is compatibility behavior, not a
-   Chat Completions wire guarantee. A Chat response does not identify ordinary
-   `content` as reasoning, commentary, or final answer merely because it also
-   contains Tool calls. This known gap can misclassify user-visible preambles;
-   the proposed replacement preserves standard Chat text with unspecified phase,
-   keeps Reasoning as a separate Item, and preserves first-appearance Item order.
-   The target contract and staged work are defined in
-   `docs/chat-responses-translation-spec.md` and
-   `docs/chat-responses-translation-plan.md`.
-6. The selected provider/key pair is one encrypted global entry in
-   `platform_configuration_secrets`; the next save atomically replaces its
-   value. The browser receives provider/configured status and, only while
-   Mapbox is active, the restricted public `pk.` token required by Mapbox GL.
-   The Server delivers the selected provider and key directly to a strictly
-   validated local MCP elicitation URL without opening that one-time page.
-   The global scope is temporary and reserves a later per-user move.
-7. `map.v3` has no card-specific 16 KiB limit. Small GeoJSON can be inline;
-   large GeoJSON stays outside the model/card payload and is loaded lazily from
-   the Artifact cache. A general 128 MiB per-Resource memory-safety boundary is
-   enforced by the Server; future larger formats require a streamed PMTiles or
-   MVT source contract.
-8. Invalid or unresolved data is not promoted into a browser card. Public
-   ResourceLink projections remove source URIs and private metadata, while
-   Artifact responses expose only authorized opaque URLs. Local paths,
-   credentials, app-server request IDs and unbounded protocol payloads never
-   reach the browser; ordinary Tool events may still show logical MCP
-   server/tool names.
-
-This design follows the official Codex inline-visualization directive already
-implemented in the upstream TUI and the Apps SDK separation between data tools
-and render tools. It does not broaden the Codex subtree: Chat translation
-preserves text, official app-server Items remain unchanged, and Artifact
-authorization/rendering stay in the Web platform. The implemented contract and
-remaining Chat translation stages are defined in `docs/adr/005-map-reply-cards.md`,
-`docs/chat-responses-translation-spec.md` and
-`docs/chat-responses-translation-plan.md`.
-
-## Primary runtime flows
-
-### Create and run a Task
-
-1. Platform authenticates the session and authorizes project/task creation.
-2. A transaction creates the Task and `pending` Run using an idempotency key.
-3. The user selects an authorized Workspace. A new managed clone/worktree, when
-   needed, is created explicitly as an independent resource before the Thread.
-   Scheduler leases the Run and validates that Workspace grant without creating
-   a checkout.
-4. Profile Host locks/starts the user's Profile, verifies contract
-   compatibility and starts, resumes or updates the mapped Codex Thread with a
-   `cwd` contained by the authorized Workspace.
-5. Runtime events are normalized, assigned a per-Task monotonic sequence and
-   persisted before browser fan-out. After the WebSocket is subscribed, the
-   initial browser snapshot establishes each Task cursor at its latest durable
-   sequence; only reconnect gaps are replayed. Authoritative Codex history
-   hydrates the selected Thread, so a page refresh does not replay every old
-   Item delta through the presentation tree.
-6. Terminal state is reconciled across database, Codex Profile and Git. No Run
-   remains `running` without a valid lease/heartbeat and recoverable owner.
-
-### Approval or structured input
-
-1. Each app-server process receives a fresh Runtime instance UUID. Profile Host
-   receives a Codex Server Request and persists an internal mapping to
-   Profile/Task/Run/Thread plus that instance before notification.
-2. Platform filters recipients by resource permission and approval policy.
-   A reviewed capability package may classify an entire MCP server as
-   pre-approved only when every exposed Tool is bounded, read-only or
-   deterministic and the effective Agent Role narrows the exact Tool allowlist.
-   Mixed-risk servers, credentials, external side effects and authority
-   expansion continue to require explicit approval.
-3. The browser projects pending approvals at Task scope. Root and known child
-   Agent Threads use the same typed platform approval identity, so a delegated
-   approval remains actionable from the root conversation and Agent Activity
-   after refresh without exposing a raw Runtime request id.
-4. The first valid decision wins through compare-and-swap semantics.
-5. Host responds only when both the process instance and request id still match.
-   Active Turns and unresolved Server Requests block credential-triggered
-   restart; after an actual restart, old-instance requests become cancelled and
-   a reused numeric request id cannot receive the stale response.
-6. An uncertain transport delivery remains retryable only with the same stored
-   decision; expiry or Run termination produces an explicit terminal state.
-
-### Provider model catalog refresh
-
-1. The typed Provider service authorizes and persists a Provider-scoped model
-   refresh or context-window edit through the app-server config contract.
-2. Profile Registry marks the owned app-server process for replacement. An
-   active Turn, unresolved Server Request, or persistent Thread that has not
-   yet materialized its first official rollout continues on the current
-   process and blocks replacement. A credential change that requires immediate
-   process replacement fails closed while one of those blockers exists; it
-   does not leave the browser holding a Thread id that the replacement Runtime
-   cannot resume. Because official `thread/archive` also requires a rollout,
-   the platform's explicit archive path abandons only a Host-tracked,
-   unmaterialized identity and then permits replacement; no persisted Runtime
-   history is synthesized or deleted.
-3. At the next safe Turn boundary, the adapter replaces the process under one
-   serialized Runtime operation, invalidates process-local Thread bindings and
-   resumes the same persisted Codex Thread before starting its next Turn.
-4. The replacement Runtime rebuilds its startup-scoped model catalog from the
-   Profile configuration. Context accounting and compaction remain Runtime
-   behavior; the Server only owns the safe process lifecycle transition.
-5. Opening an existing Thread is not a configuration boundary. The browser
-   projects the Task's persisted Provider/model pair from the already loaded
-   Profile catalog. New Threads opt into the official paginated history mode;
-   Profile Host resumes an unloaded Thread with `excludeTurns`, then the adapter
-   joins indexed `thread/turns/list(itemsView=notLoaded)` and
-   `thread/items/list` streams by stable Turn id instead of invoking the
-   app-server's serial full-item compatibility hydrator. Existing legacy
-   rollout histories stay in one isolated compatibility branch until those
-   Profile histories are retired. The browser reuses an unchanged completed
-   Thread projection already loaded in the current session and invalidates it
-   on background Runtime events. A Provider catalog cache miss may trigger a
-   read-only background lookup, but Thread hydration never writes the global
-   Profile selection, refreshes the Runtime catalog or waits for that lookup.
-
-### Commit and push
-
-Runner revalidates Workspace authorization, containment of the Thread's current
-`cwd` and Git status immediately before the operation. Commit and Push are
-explicit user actions with audit records. Force Push, implicit Merge and
-automatic remote branch deletion are outside the product contract.
-
-## Upstream synchronization boundary
-
-`codex/` is a Git subtree tracking official `openai/codex/main`. Before touching
-high-churn Runtime files, run `scripts/codex-upstream-status.sh`. Official
-updates use `scripts/sync-codex-upstream.sh --apply` on a dedicated
-`codex/sync-upstream-*` branch.
-
-Prefer, in order:
-
-1. consume an existing upstream app-server method;
-2. add generated protocol/manifest metadata around upstream structure;
-3. add the smallest isolated Runtime seam with scoped tests;
-4. implement platform policy outside `codex/`.
-
-Never fork Thread history, compaction, memory, multi-agent scheduling, Skills,
-Plugins or MCP into the Web platform for short-term convenience.
-
-## Current implementation boundary
-
-The live capability and delivery status are intentionally not duplicated here.
-Use `docs/capability-baseline.md` for verified Runtime/platform facts and
-`docs/roadmap.md` for accepted stage order, and `docs/development-plan.md` for
-current and next work. ADRs under `docs/adr/` record accepted implementation
-choices without redefining these ownership rules.
+官方 Runtime 已提供用户输入和 Agent 生命周期，因此这些能力没有新增 Codex 修改。第三方 Chat usage 的缓存统计属于现有 `provider-chat-transport` 保留补丁：`codex-api` 同时解析标准 `prompt_tokens_details.cached_tokens` 和 DeepSeek 顶层 `prompt_cache_hit_tokens`。任何其他 Runtime 修改仍必须先运行 upstream/customization status 脚本并满足 Patch Map 门禁。

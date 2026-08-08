@@ -137,7 +137,8 @@ Server 指纹匹配时不调用其 Cargo 构建；Runtime 两者均匹配时不�
 Codex 的全部构建检查。仓库构建默认关闭 Cargo 增量编译并在已安装时使用容量上限为
 8 GiB 的 sccache；Rust 测试使用独立的 `ci-test` Profile。Web 与 Codex target
 合计超过 24 GiB 时，脚本按 Profile 清理到 16 GiB，并始终保留 Release 产物。
-终端只展示阶段、耗时和最终服务面板；构建与环境准备详情位于
+终端展示阶段、耗时和最终服务面板；交互式终端中 Rust 构建步骤还会实时显示
+Cargo 构建进度。完整的构建与环境准备详情位于
 `.local/open-web-codex/logs/run-local.log`，Server 输出位于同目录的
 `server.log`。失败时脚本直接显示相关日志尾部。
 

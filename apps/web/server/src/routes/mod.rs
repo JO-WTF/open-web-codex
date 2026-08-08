@@ -5,7 +5,10 @@ pub mod approvals;
 pub mod artifacts;
 pub mod bootstrap;
 pub mod browser_workspaces;
+pub mod capability_catalog;
 pub mod capability_packages;
+pub mod collaboration;
+pub mod coordination_gate;
 pub mod configuration;
 pub mod data_intake;
 pub mod events;
@@ -17,6 +20,7 @@ pub mod organizations;
 pub mod profile;
 pub mod profile_content;
 pub mod projects;
+pub mod provider_metrics;
 pub mod providers;
 pub mod python_capabilities;
 pub mod runs;
@@ -31,6 +35,8 @@ pub mod threads;
 pub mod tutorial_blueprints;
 pub mod workspace_datasets;
 pub mod workspaces;
+pub mod work_states;
+pub mod work_state_gate;
 
 use std::sync::Arc;
 
@@ -96,6 +102,39 @@ pub fn router(
         .route(
             "/capability-packages",
             axum::routing::get(capability_packages::list),
+        )
+        .route(
+            "/catalog/drafts",
+            axum::routing::get(capability_catalog::list_drafts)
+                .post(capability_catalog::create),
+        )
+        .route(
+            "/catalog/drafts/{id}",
+            axum::routing::get(capability_catalog::get),
+        )
+        .route(
+            "/catalog/drafts/{id}/save",
+            axum::routing::put(capability_catalog::save),
+        )
+        .route(
+            "/catalog/drafts/{id}/validate",
+            axum::routing::post(capability_catalog::validate),
+        )
+        .route(
+            "/catalog/drafts/{id}/publish",
+            axum::routing::post(capability_catalog::publish),
+        )
+        .route(
+            "/catalog/releases",
+            axum::routing::get(capability_catalog::list_releases),
+        )
+        .route(
+            "/catalog/releases/{release_id}/install",
+            axum::routing::post(capability_catalog::install),
+        )
+        .route(
+            "/catalog/releases/{release_id}/workspaces/{workspace_id}/readiness",
+            axum::routing::get(capability_catalog::readiness),
         )
         .route(
             "/workspaces/{id}/python-capabilities/validate",
@@ -246,6 +285,10 @@ pub fn router(
         )
         .route("/approvals", axum::routing::get(approvals::list_pending))
         .route(
+            "/runs/{id}/user-input-requests",
+            axum::routing::get(approvals::list_run_user_inputs),
+        )
+        .route(
             "/approvals/{id}/decision",
             axum::routing::post(approvals::decide),
         )
@@ -318,6 +361,14 @@ pub fn router(
             axum::routing::get(runtime_agents::list_executions_for_run),
         )
         .route(
+            "/runs/{id}/collaboration-status",
+            axum::routing::get(collaboration::status),
+        )
+        .route(
+            "/runs/{id}/provider-metrics",
+            axum::routing::get(provider_metrics::list_for_run),
+        )
+        .route(
             "/runs/{id}/supervisor-policy",
             axum::routing::get(supervisor_policies::get_run_binding),
         )
@@ -356,6 +407,22 @@ pub fn router(
         .route(
             "/runs/{id}/compact",
             axum::routing::post(runs::compact_run_thread),
+        )
+        .route(
+            "/tasks/{task_id}/work-states",
+            axum::routing::post(work_states::create),
+        )
+        .route(
+            "/work-states/{id}",
+            axum::routing::get(work_states::get),
+        )
+        .route(
+            "/work-states/{id}/blocking-inputs",
+            axum::routing::get(work_states::list_blocking_inputs),
+        )
+        .route(
+            "/work-states/{id}/deliverables",
+            axum::routing::get(work_states::list_deliverables),
         )
         .route("/runs/{id}/review", axum::routing::post(runs::start_review))
         .route(
@@ -588,6 +655,18 @@ pub fn router(
         .route(
             "/internal/analysis-gate/v1/authorize",
             axum::routing::post(analysis_gate::authorize),
+        )
+        .route(
+            "/internal/coordination/v1/query",
+            axum::routing::post(coordination_gate::query),
+        )
+        .route(
+            "/internal/work-state/v1/mutate",
+            axum::routing::post(work_state_gate::mutate),
+        )
+        .route(
+            "/internal/work-state/v1/read",
+            axum::routing::post(work_state_gate::read),
         )
         .route(
             "/tasks/{id}/analysis-readiness",

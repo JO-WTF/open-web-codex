@@ -17,9 +17,14 @@ ADR 记录已经接受、会长期约束实现且不能仅从当前代码推断�
 | [ADR-006](006-supervisor-capability-packages.md) | Supervisor Capability Package |
 | [ADR-007](007-workspace-dataset-releases.md) | Workspace Dataset Release |
 | [ADR-008](008-installable-tutorial-blueprints.md) | 版本化可安装 Tutorial Blueprint |
-| [ADR-009](009-thread-first-data-intake.md) | Thread-first 数据接入与分阶段 Readiness |
-| [ADR-010](010-workspace-wide-intake-discovery.md) | Workspace 全域数据接入与 Task 级确认 |
+| [ADR-009](009-thread-first-data-intake.md) | Thread-first 数据接入与分阶段 Readiness；数据 owner 部分已被 ADR-013 取代 |
+| [ADR-010](010-workspace-wide-intake-discovery.md) | 已被 ADR-013 取代 |
 | [ADR-011](011-explicit-demo-workspace-sources.md) | 显式 Demo Workspace 原始源与 Tutorial Blueprint 分离 |
+| [ADR-012](012-explicit-development-database-rebuild.md) | 开发数据库只允许显式重建 |
+| [ADR-013](013-platform-data-intake-and-work-state.md) | Platform Data Intake 与通用 Work State 分工 |
+| [ADR-014](014-release-installation-runtime-discovery.md) | Release、Installation 与 Runtime Discovery 分离 |
+| [ADR-015](015-bounded-platform-tool-result.md) | 有界通用 Platform Tool Result |
+| [ADR-016](016-collaboration-context-and-root-read-model.md) | 不可伪造 CollaborationContext 与 Root 只读协调 |
 
 ## 何时创建 ADR
 

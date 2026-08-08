@@ -154,6 +154,7 @@ impl RunStartPreflight for GovernedRuntimePreflight {
             roles: policy.required_runtime_roles,
             role_spawn_limits: policy.role_spawn_limits,
             required_mcp_servers: policy.required_mcp_servers,
+            coordination_mcp_servers: policy.coordination_mcp_servers,
             max_threads: policy.max_active_child_agents,
         })
     }

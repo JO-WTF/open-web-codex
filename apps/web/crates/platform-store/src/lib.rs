@@ -38,6 +38,10 @@ pub struct AppState {
     /// Process-local secret used only by the internal analysis authorization
     /// endpoint and inherited by the Profile Host's MCP children.
     pub analysis_gate_key: Arc<Vec<u8>>,
+    /// Process-local secret used only by the read-only coordination MCP.
+    pub coordination_gate_key: Arc<Vec<u8>>,
+    /// Process-local secret used only by the Profile Host Work State writer.
+    pub work_state_gate_key: Arc<Vec<u8>>,
 }
 
 impl AppState {
@@ -50,6 +54,8 @@ impl AppState {
             started_at_utc: chrono::Utc::now(),
             schema_current: true,
             analysis_gate_key: Arc::new(Vec::new()),
+            coordination_gate_key: Arc::new(Vec::new()),
+            work_state_gate_key: Arc::new(Vec::new()),
         }
     }
 
@@ -60,6 +66,16 @@ impl AppState {
 
     pub fn with_analysis_gate_key(mut self, key: Vec<u8>) -> Self {
         self.analysis_gate_key = Arc::new(key);
+        self
+    }
+
+    pub fn with_coordination_gate_key(mut self, key: Vec<u8>) -> Self {
+        self.coordination_gate_key = Arc::new(key);
+        self
+    }
+
+    pub fn with_work_state_gate_key(mut self, key: Vec<u8>) -> Self {
+        self.work_state_gate_key = Arc::new(key);
         self
     }
 }

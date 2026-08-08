@@ -7,10 +7,9 @@ import MessageList from "./MessageList";
 import Composer from "./Composer";
 import GoalBanner from "./GoalBanner";
 import FollowUpQueue, { type QueuedFollowUp } from "./FollowUpQueue";
-import UserInputCard from "./messages/UserInputCard";
+import UserInputQueue from "./UserInputQueue";
 import DataIntakePanel from "./DataIntakePanel";
-import type { DataIntakeParameterAnswer, DataIntakeSessionSummary, DataMappingCandidate, SourceAssetSummary } from "../../../browser/types";
-import type { RequestUserInputRequest, RequestUserInputResponse } from "../../types";
+import type { DataIntakeParameterAnswer, DataIntakeSessionSummary, DataMappingCandidate, PendingUserInputSummary, SourceAssetSummary } from "../../../browser/types";
 import type { ModelProviderSummary, ModelSummary } from "./Composer";
 import TaskApprovalQueue, {
   type TaskApprovalRequest,
@@ -69,9 +68,13 @@ type Props = {
   canSteer: boolean;
   onSteerFollowUp: (id: string) => void;
   onDeleteFollowUp: (id: string) => void;
-  userInputRequest: RequestUserInputRequest | null;
-  submittingUserInput: boolean;
-  onSubmitUserInput: (request: RequestUserInputRequest, response: RequestUserInputResponse) => void;
+  pendingUserInputRequests: PendingUserInputSummary[];
+  submittingPendingUserInputIds?: Set<string>;
+  onSubmitPendingUserInput: (
+    requestId: string,
+    version: number,
+    answers: Record<string, { answers: string[] }>,
+  ) => Promise<void> | void;
   busy: boolean;
   sendDisabled: boolean;
   onResolveApproval?: (workspaceId: string, requestId: number | string, decision: "accept" | "decline") => void;
@@ -136,9 +139,9 @@ export default function Conversation({
   canSteer,
   onSteerFollowUp,
   onDeleteFollowUp,
-  userInputRequest,
-  submittingUserInput,
-  onSubmitUserInput,
+  pendingUserInputRequests = [],
+  submittingPendingUserInputIds = new Set(),
+  onSubmitPendingUserInput,
   busy,
   sendDisabled,
   onResolveApproval,
@@ -269,7 +272,11 @@ export default function Conversation({
             ariaLabel="Task approvals"
             onResolve={onResolveApproval}
           />
-          {userInputRequest ? <UserInputCard request={userInputRequest} submitting={submittingUserInput} onSubmit={onSubmitUserInput} /> : null}
+          <UserInputQueue
+            requests={pendingUserInputRequests}
+            submittingIds={submittingPendingUserInputIds}
+            onSubmit={onSubmitPendingUserInput}
+          />
           {thinking && threadStatus !== "reconnecting" && !visibleMessages.some((entry) => entry.level === "user") && <ThinkingIndicator />}
         </div>
       </div>

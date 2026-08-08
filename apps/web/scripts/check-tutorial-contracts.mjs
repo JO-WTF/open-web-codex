@@ -5,47 +5,47 @@ import { fileURLToPath } from "node:url";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(webRoot, "../..");
+const fixtureRoot = resolve(
+  repoRoot,
+  "tools/supply-chain-network-planner/examples/indonesia-network/base",
+);
 
 const paths = {
+  dataDefinition: resolve(
+    repoRoot,
+    "capabilities/agents/enterprise-data-agent/6.0.0/definition.json",
+  ),
+  dataInstructions: resolve(
+    repoRoot,
+    "capabilities/agents/enterprise-data-agent/6.0.0/instructions.md",
+  ),
   networkDefinition: resolve(
     repoRoot,
-    "capabilities/agents/enterprise-network-planning-agent/5.0.0/definition.json",
+    "capabilities/agents/enterprise-network-planning-agent/6.0.0/definition.json",
   ),
   networkInstructions: resolve(
     repoRoot,
-    "capabilities/agents/enterprise-network-planning-agent/5.0.0/instructions.md",
+    "capabilities/agents/enterprise-network-planning-agent/6.0.0/instructions.md",
   ),
   supervisorManifest: resolve(
     repoRoot,
-    "capabilities/supervisors/enterprise-supervisor-copilot/5.0.0/manifest.json",
+    "capabilities/supervisors/enterprise-supervisor-copilot/6.0.0/manifest.json",
   ),
   artifactContracts: resolve(
     repoRoot,
-    "capabilities/supervisors/enterprise-supervisor-copilot/5.0.0/artifact-contracts.json",
+    "capabilities/supervisors/enterprise-supervisor-copilot/6.0.0/artifact-contracts.json",
   ),
   supervisorInstructions: resolve(
     repoRoot,
-    "capabilities/supervisors/enterprise-supervisor-copilot/5.0.0/custom-instructions.md",
-  ),
-  visualizationInstructions: resolve(
-    repoRoot,
-    "capabilities/agents/enterprise-visualization-agent/2.0.0/instructions.md",
-  ),
-  datasetManifest: resolve(
-    repoRoot,
-    "tools/supply-chain-network-planner/examples/indonesia-tutorial/releases/1.0.0/dataset-manifest.json",
-  ),
-  validationReport: resolve(
-    repoRoot,
-    "tools/supply-chain-network-planner/examples/indonesia-tutorial/releases/1.0.0/validation-report.json",
+    "capabilities/supervisors/enterprise-supervisor-copilot/6.0.0/custom-instructions.md",
   ),
   blueprintManifest: resolve(
     repoRoot,
-    "capabilities/tutorial-blueprints/indonesia-warehouse-network/1.5.0/manifest.json",
+    "capabilities/tutorial-blueprints/indonesia-warehouse-network/1.6.0/manifest.json",
   ),
   blueprintPrompt: resolve(
     repoRoot,
-    "capabilities/tutorial-blueprints/indonesia-warehouse-network/1.5.0/recommended-prompt.md",
+    "capabilities/tutorial-blueprints/indonesia-warehouse-network/1.6.0/recommended-prompt.md",
   ),
   tutorials: resolve(repoRoot, "docs/tutorials"),
 };
@@ -66,9 +66,7 @@ function read(path) {
 
 function readJson(path) {
   const source = read(path);
-  if (!source) {
-    return {};
-  }
+  if (!source) return {};
   try {
     return JSON.parse(source);
   } catch (error) {
@@ -78,406 +76,224 @@ function readJson(path) {
 }
 
 function requireText(source, needle, label) {
-  if (!source.includes(needle)) {
-    fail(`${label} must contain ${JSON.stringify(needle)}`);
-  }
+  if (!source.includes(needle)) fail(`${label} must contain ${JSON.stringify(needle)}`);
 }
 
 function forbidText(source, pattern, label) {
-  if (pattern.test(source)) {
-    fail(`${label} contains prohibited text matching ${pattern}`);
-  }
+  if (pattern.test(source)) fail(`${label} contains prohibited text matching ${pattern}`);
 }
 
-function formatInteger(value) {
-  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value);
+function sha256(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
 }
 
 function isSha256(value) {
   return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 }
 
+const data = readJson(paths.dataDefinition);
 const network = readJson(paths.networkDefinition);
 const supervisor = readJson(paths.supervisorManifest);
 const contracts = readJson(paths.artifactContracts);
-const dataset = readJson(paths.datasetManifest);
-const validation = readJson(paths.validationReport);
 const blueprint = readJson(paths.blueprintManifest);
+const sourceManifest = readJson(resolve(fixtureRoot, "dataset-manifest.json"));
+const validation = readJson(resolve(fixtureRoot, "validation-report.json"));
+const dataInstructions = read(paths.dataInstructions);
 const networkInstructions = read(paths.networkInstructions);
 const supervisorInstructions = read(paths.supervisorInstructions);
-const visualizationInstructions = read(paths.visualizationInstructions);
+const blueprintPrompt = read(paths.blueprintPrompt);
 
-const quickstartPath = resolve(paths.tutorials, "indonesia-network-quickstart.md");
-const overviewPath = resolve(paths.tutorials, "supply-chain-agent-tutorial.md");
-const servicePath = resolve(paths.tutorials, "indonesia-network-02-service-baseline.md");
-const costPath = resolve(paths.tutorials, "indonesia-network-03-two-level-cost.md");
-const completePath = resolve(paths.tutorials, "indonesia-network-04-optimization-map.md");
+const quickstart = read(resolve(paths.tutorials, "indonesia-network-quickstart.md"));
+const overview = read(resolve(paths.tutorials, "supply-chain-agent-tutorial.md"));
+const dataTutorial = read(resolve(paths.tutorials, "indonesia-network-01-data.md"));
+const serviceTutorial = read(resolve(paths.tutorials, "indonesia-network-02-service-baseline.md"));
+const currentTutorial = read(resolve(paths.tutorials, "indonesia-network-03-two-level-cost.md"));
+const optimizationTutorial = read(
+  resolve(paths.tutorials, "indonesia-network-04-optimization-map.md"),
+);
 
-const quickstart = read(quickstartPath);
-const overview = read(overviewPath);
-const service = read(servicePath);
-const cost = read(costPath);
-const complete = read(completePath);
-
+if (data.version !== "6.0.0" || network.version !== "6.0.0") {
+  fail("The current tutorial must bind Data Agent and Network Agent 6.0.0");
+}
+if (data.definitionId !== "enterprise-data-agent") fail("Data Agent identity drifted");
 if (network.definitionId !== "enterprise-network-planning-agent") {
-  fail("Network definition identity drifted");
+  fail("Network Agent identity drifted");
 }
-if (network.version !== "5.0.0") {
-  fail(`Expected Network Agent 5.0.0, found ${network.version ?? "missing"}`);
-}
-
-if (
-  blueprint.blueprintId !== "indonesia-warehouse-network" ||
-  blueprint.revision !== "1.5.0"
-) {
+if (blueprint.blueprintId !== "indonesia-warehouse-network" || blueprint.revision !== "1.6.0") {
   fail("Tutorial Blueprint identity drifted");
 }
-for (const marker of [
-  "MAP_HANDOFF",
-  "map_manifest_resource_name",
-  "geojson_resource_name",
-  "map_artifact_id",
-  "structuredContent.embed.code",
+if (supervisor.policyId !== "enterprise-supervisor-copilot" || supervisor.version !== "6.0.0") {
+  fail("Supervisor package identity drifted");
+}
+
+const supervisorAgentKeys = new Set(
+  (supervisor.agents ?? []).map((agent) => `${agent.definitionId}@${agent.version}`),
+);
+if (
+  supervisorAgentKeys.size !== 2 ||
+  !supervisorAgentKeys.has("enterprise-data-agent@6.0.0") ||
+  !supervisorAgentKeys.has("enterprise-network-planning-agent@6.0.0")
+) {
+  fail("Current Supervisor must bind exactly Data Agent and Network Agent 6.0.0");
+}
+if ((blueprint.agentTemplates ?? []).length !== 2) {
+  fail("Current Blueprint must bind exactly two domain Agents");
+}
+
+const expectedMcpServers = new Set(["supply_chain_network"]);
+const declaredMcpServers = new Set(blueprint.requiredMcpServers ?? []);
+if (
+  declaredMcpServers.size !== expectedMcpServers.size ||
+  [...expectedMcpServers].some((name) => !declaredMcpServers.has(name))
+) {
+  fail("Current Blueprint MCP requirements drifted");
+}
+const agentMcpServers = new Set(
+  [data, network].flatMap((definition) =>
+    (definition.requiredMcpServers ?? []).map((server) => server.name),
+  ),
+);
+if ([...agentMcpServers].some((name) => !declaredMcpServers.has(name))) {
+  fail("Blueprint MCP requirements omit an Agent capability");
+}
+
+if (
+  blueprint.dataset?.datasetId !== sourceManifest.dataset_id ||
+  blueprint.dataset?.version !== sourceManifest.version ||
+  blueprint.dataset?.sourceContentSha256 !== sourceManifest.content_sha256
+) {
+  fail("Blueprint Dataset identity/hash does not match the generated fixture");
+}
+const sourceFiles = new Set(["dataset-manifest.json", ...(sourceManifest.files ?? []).map((file) => file.path)]);
+const blueprintFiles = new Set((blueprint.dataset?.files ?? []).map((file) => file.logicalName));
+if (
+  sourceFiles.size !== blueprintFiles.size ||
+  [...sourceFiles].some((name) => !blueprintFiles.has(name))
+) {
+  fail("Blueprint Dataset file list drifted from the generated fixture");
+}
+for (const file of blueprint.dataset?.files ?? []) {
+  const bytes = readFileSync(resolve(fixtureRoot, file.logicalName));
+  if (bytes.length !== file.bytes || sha256(bytes) !== file.sha256) {
+    fail(`Blueprint fixture digest drifted for ${file.logicalName}`);
+  }
+}
+for (const file of sourceManifest.files ?? []) {
+  const bytes = readFileSync(resolve(fixtureRoot, file.path));
+  if (bytes.length !== file.bytes || sha256(bytes) !== file.sha256) {
+    fail(`Source manifest digest drifted for ${file.path}`);
+  }
+}
+
+const contractTypes = (contracts.contracts ?? []).map((contract) => contract.artifactType);
+const blueprintTypes = blueprint.expectedArtifactTypes ?? [];
+if (
+  new Set(contractTypes).size !== contractTypes.length ||
+  new Set(blueprintTypes).size !== blueprintTypes.length ||
+  contractTypes.length !== blueprintTypes.length ||
+  contractTypes.some((type) => !blueprintTypes.includes(type))
+) {
+  fail("Current Supervisor and Blueprint Artifact contracts drifted");
+}
+for (const type of ["network_comparison_map.v1", "network_planning_report.v1"]) {
+  requireText(quickstart + dataTutorial + serviceTutorial + currentTutorial + optimizationTutorial, type, "tutorial artifact contract");
+}
+for (const facet of [
+  "requirements",
+  "source_inventory",
+  "mapping",
+  "normalized_input",
+  "route_matrix",
+  "cost_matrix",
+  "baseline",
+  "scenario",
+  "facility_location",
 ]) {
   requireText(
-    visualizationInstructions,
-    marker,
-    "Visualization Agent stable map handoff",
+    quickstart + dataTutorial + serviceTutorial + currentTutorial + optimizationTutorial,
+    facet,
+    "tutorial Network Case contract",
   );
-}
-requireText(
-  visualizationInstructions,
-  "Do not reproduce renderer JSON or the GeoJSON body",
-  "Visualization Agent non-duplicated embed contract",
-);
-if (
-  blueprint.dataset?.datasetId !== dataset.dataset_id ||
-  blueprint.dataset?.version !== dataset.version ||
-  blueprint.dataset?.sourceContentSha256 !== dataset.content_sha256
-) {
-  fail("Tutorial Blueprint Dataset identity/hash does not match the source manifest");
-}
-
-const sourceDatasetFiles = new Set([
-  "dataset-manifest.json",
-  ...((dataset.files ?? []).map((file) => file.path)),
-]);
-const blueprintDatasetFiles = new Set(
-  (blueprint.dataset?.files ?? []).map((file) => file.logicalName),
-);
-if (
-  sourceDatasetFiles.size !== blueprintDatasetFiles.size ||
-  [...sourceDatasetFiles].some((file) => !blueprintDatasetFiles.has(file))
-) {
-  fail("Tutorial Blueprint Dataset file list drifted from the source release");
-}
-
-const requiredMcpServers = new Set();
-for (const template of blueprint.agentTemplates ?? []) {
-  const definitionPath = resolve(
-    repoRoot,
-    "capabilities/agents",
-    template.definitionId,
-    template.version,
-    "definition.json",
-  );
-  const definition = readJson(definitionPath);
-  if (
-    definition.definitionId !== template.definitionId ||
-    definition.version !== template.version
-  ) {
-    fail(
-      `Tutorial Blueprint Agent template is unavailable: ${template.definitionId}@${template.version}`,
-    );
-  }
-  if (!isSha256(template.contentSha256)) {
-    fail(
-      `Tutorial Blueprint Agent template has no exact content hash: ${template.definitionId}@${template.version}`,
-    );
-  }
-  for (const server of definition.requiredMcpServers ?? []) {
-    requiredMcpServers.add(server.name);
-  }
-}
-const blueprintMcpServers = new Set(blueprint.requiredMcpServers ?? []);
-if (
-  [...requiredMcpServers].some((server) => !blueprintMcpServers.has(server)) ||
-  !blueprintMcpServers.has("supply_chain_indonesia")
-) {
-  fail("Tutorial Blueprint MCP requirements omit an Agent or tutorial-only server");
-}
-
-if (
-  blueprint.supervisorTemplate?.policyId !== supervisor.policyId ||
-  blueprint.supervisorTemplate?.version !== supervisor.version
-) {
-  fail("Tutorial Blueprint Supervisor template drifted from the Indonesia Network Planning Copilot Draft");
-}
-if (!isSha256(blueprint.supervisorTemplate?.contentSha256)) {
-  fail("Tutorial Blueprint Supervisor template has no exact content hash");
-}
-
-const instructionPolicy = blueprint.instructionPolicyTemplate ?? {};
-const instructionPolicyManifestPath = resolve(
-  repoRoot,
-  "capabilities/supervisor-instruction-policies",
-  instructionPolicy.policyId ?? "",
-  instructionPolicy.version ?? "",
-  "manifest.json",
-);
-const instructionPolicyManifest = readJson(instructionPolicyManifestPath);
-const instructionPolicyText = read(
-  resolve(dirname(instructionPolicyManifestPath), instructionPolicyManifest.instructionsFile ?? ""),
-).trim();
-const instructionPolicyHash = createHash("sha256")
-  .update(instructionPolicyText)
-  .digest("hex");
-if (
-  instructionPolicyManifest.policyId !== instructionPolicy.policyId ||
-  instructionPolicyManifest.version !== instructionPolicy.version ||
-  instructionPolicy.contentSha256 !== instructionPolicyHash
-) {
-  fail("Tutorial Blueprint instruction-policy exact reference/hash drifted");
-}
-if (blueprint.recommendedPromptFile !== "recommended-prompt.md") {
-  fail("Tutorial Blueprint recommended Prompt identity drifted");
-}
-if (!read(paths.blueprintPrompt).trim()) {
-  fail("Tutorial Blueprint recommended Prompt is empty");
-}
-
-const supervisorNetwork = supervisor.agents?.find(
-  (agent) => agent.definitionId === network.definitionId,
-);
-if (supervisorNetwork?.version !== network.version) {
-  fail("Supervisor does not bind the current exact Network Agent version");
-}
-
-const contractTypes = contracts.contracts?.map((contract) => contract.artifactType) ?? [];
-const uniqueContractTypes = new Set(contractTypes);
-if (uniqueContractTypes.size !== contractTypes.length) {
-  fail("Supervisor Artifact contracts contain duplicate artifact types");
-}
-
-const deliveryTypes = ["report.v1", "map.v3"];
-const blueprintArtifactTypes = new Set(blueprint.expectedArtifactTypes ?? []);
-const resourceTypes = [...blueprintArtifactTypes].filter(
-  (type) => !deliveryTypes.includes(type),
-);
-if (!blueprintArtifactTypes.has("report.v1") || !blueprintArtifactTypes.has("map.v3")) {
-  fail("Tutorial Blueprint must declare report.v1 and map.v3 delivery Artifacts");
 }
 
 for (const [label, source] of [
-  ["quickstart", quickstart],
-  ["complete tutorial", complete],
+  ["Data Agent instructions", dataInstructions],
+  ["Network Agent instructions", networkInstructions],
+  ["Supervisor instructions", supervisorInstructions],
+  ["Blueprint prompt", blueprintPrompt],
 ]) {
-  for (const type of resourceTypes) {
-    requireText(source, type, label);
-  }
-  for (const type of deliveryTypes) {
-    requireText(source, type, label);
-  }
-}
-
-for (const marker of [
-  "indonesia_decision_report.v1",
-  "report.v1",
-  "REPORT_HANDOFF",
-  "report_resource_name",
-  "report_artifact_id",
-]) {
-  requireText(complete, marker, "complete tutorial typed report delivery");
-}
-requireText(
-  complete,
-  "模型正文不是报告来源",
-  "complete tutorial report authority",
-);
-requireText(
-  supervisorInstructions,
-  "An empty Workspace is a real zero-source result",
-  "Supervisor real Workspace isolation",
-);
-requireText(
-  supervisorInstructions,
-  "synthetic_demo",
-  "Supervisor Demo provenance",
-);
-
-requireText(
-  service,
-  `Enterprise Network Planning Agent · ${network.version}`,
-  "service tutorial",
-);
-requireText(
-  cost,
-  `Enterprise Network Planning Agent · ${network.version}`,
-  "cost tutorial",
-);
-forbidText(
-  `${service}\n${cost}\n${complete}`,
-  /Enterprise Network Planning Agent · 3\.1\.0/,
-  "network tutorials",
-);
-
-requireText(overview, "deterministic decision report", "tutorial overview");
-requireText(complete, "以下八个 Resource Artifact", "complete tutorial");
-requireText(
-  complete,
-  "prepare_indonesia_decision_report",
-  "complete tutorial",
-);
-requireText(
-  complete,
-  "模型正文不是报告来源",
-  "complete tutorial report ownership",
-);
-forbidText(
-  `${quickstart}\n${complete}`,
-  /\breport_markdown\b/,
-  "typed report tutorials",
-);
-forbidText(
-  `${quickstart}\n${complete}`,
-  /(?:最终正文必须等于|原样\s+report_markdown|原样报告|byte[- ]for[- ]byte)/i,
-  "typed report tutorial delivery",
-);
-
-requireText(
-  quickstart,
-  `${blueprint.blueprintId}@${blueprint.revision}`,
-  "quickstart Blueprint",
-);
-requireText(
-  quickstart,
-  `${blueprint.displayName} · ${blueprint.revision}`,
-  "quickstart Blueprint display",
-);
-for (const label of [
-  "Learn",
-  "Set up example",
-  "Readiness",
-  "Start task",
-  "Send",
-]) {
-  requireText(quickstart, label, "quickstart UI");
-}
-
-for (const label of ["Add data", "Publish a data release"]) {
-  const builderDocs = `${read(resolve(paths.tutorials, "indonesia-network-01-data.md"))}\n${read(
-    resolve(paths.tutorials, "web-single-agent-delivery-audit.md"),
-  )}`;
-  requireText(builderDocs, label, "Builder data tutorials");
-}
-
-const expectedDatasetFacts = [
-  dataset.customer_count,
-  validation.demand?.annual_demand_units,
-  validation.geometry?.current_province_count,
-  validation.network?.central_warehouse_count,
-  validation.network?.forward_warehouse_count,
-  validation.network?.candidate_location_count,
-  validation.quotes?.row_count,
-];
-const dataTutorial = read(resolve(paths.tutorials, "indonesia-network-01-data.md"));
-for (const value of expectedDatasetFacts) {
-  if (!Number.isFinite(value)) {
-    fail("Dataset validation report is missing a required known-answer value");
-    continue;
-  }
-  requireText(dataTutorial, formatInteger(value), "data tutorial known answers");
-}
-
-for (const value of [
-  976_434_900,
-  16_425_000_000,
-  15_448_565_100,
-]) {
-  requireText(cost, formatInteger(value), "cost tutorial exact IDR");
-}
-for (const value of [2_835_533_800, 13_589_466_200]) {
-  requireText(complete, formatInteger(value), "complete tutorial exact IDR");
-  requireText(quickstart, formatInteger(value), "quickstart exact IDR");
-}
-
-forbidText(
-  `${cost}\n${complete}`,
-  /\b(?:million|billion)\s+IDR\b/i,
-  "Indonesia monetary conclusions",
-);
-forbidText(
-  complete,
-  /(?:以下|至少应产生以下)六个 Resource Artifact/,
-  "complete tutorial Resource count",
-);
-forbidText(
-  read(resolve(paths.tutorials, "README.md")),
-  /使用 `1\.0\.1`/,
-  "tutorial version guidance",
-);
-
-const tutorialFiles = [
-  "README.md",
-  "indonesia-network-quickstart.md",
-  "supply-chain-agent-tutorial.md",
-  "indonesia-network-01-data.md",
-  "indonesia-network-02-service-baseline.md",
-  "indonesia-network-03-two-level-cost.md",
-  "indonesia-network-04-optimization-map.md",
-  "web-single-agent-delivery-audit.md",
-  "approvals-and-recovery.md",
-  "hello-agent-quickstart.md",
-].map((name) => resolve(paths.tutorials, name));
-
-for (const path of tutorialFiles) {
-  const source = read(path);
-  const label = path.slice(repoRoot.length + 1);
-  forbidText(source, /(?:^|[\s("'`])(?:\/Users\/|\/home\/|file:\/\/)[^\s)"'`]*/m, label);
-  forbidText(source, /\b(?:mcp|resource|codex):\/\/[^\s)"'`]*/i, label);
-  forbidText(source, /\bsk-[A-Za-z0-9_-]{12,}\b/, label);
+  requireText(source, "Network Case", label);
   forbidText(
     source,
-    /\*\*(?:New thread|Start governed agent|Start governed supervisor)\*\*|机器人图标|星光图标/,
+    /supply_chain_(?:data|planner|demo|indonesia)|planning-dataset\.v2|source\s+.+\.sh/i,
     label,
   );
+}
+requireText(supervisorInstructions, "Data Agent", "Supervisor responsibilities");
+requireText(supervisorInstructions, "Network Agent", "Supervisor responsibilities");
+requireText(supervisorInstructions, "request_user_input", "Supervisor input contract");
+requireText(supervisorInstructions, "当前覆盖", "Supervisor current-plan label");
+
+requireText(quickstart, "enterprise-supervisor-copilot@6.0.0", "quickstart Supervisor");
+requireText(quickstart, "optimized_existing_footprint", "quickstart baseline label");
+requireText(dataTutorial, "50 个印尼需求城市", "data tutorial fixture scope");
+requireText(dataTutorial, "550", "data tutorial route count");
+requireText(serviceTutorial, "cost_matrix", "cost tutorial matrix");
+requireText(serviceTutorial, "linehaul", "cost tutorial network layer");
+requireText(currentTutorial, "actual_current", "current coverage tutorial label");
+requireText(currentTutorial, "current-coverage.csv", "current coverage tutorial input");
+requireText(optimizationTutorial, "facility_location", "optimization solution");
+requireText(optimizationTutorial, "network_comparison_map.v1", "optimization map");
+
+if (
+  validation.demand?.city_count !== 50 ||
+  validation.demand?.formula_pass !== true ||
+  validation.network?.existing_warehouse_count !== 11 ||
+  validation.network?.center_count !== 5 ||
+  validation.network?.cross_docking_count !== 6 ||
+  validation.quotes?.warehouse_to_demand_row_count !== 550 ||
+  validation.quotes?.linehaul_row_count !== 30 ||
+  validation.quotes?.total_row_count !== 580 ||
+  validation.all_passed !== true
+) {
+  fail("Generated Indonesia fixture quality gates drifted");
+}
+
+for (const [name, source] of [
+  ["quickstart", quickstart],
+  ["overview", overview],
+  ["data tutorial", dataTutorial],
+  ["service tutorial", serviceTutorial],
+  ["current coverage tutorial", currentTutorial],
+  ["optimization tutorial", optimizationTutorial],
+]) {
+  forbidText(source, /(?:^|[\s("'`])(?:\/Users\/|\/home\/|file:\/\/)[^\s)"'`]*/m, name);
+  forbidText(source, /\b(?:mcp|resource|codex):\/\/[^\s)"'`]*/i, name);
+  forbidText(source, /\bsk-[A-Za-z0-9_-]{12,}\b/, name);
   forbidText(
     source,
-    /\brequest[_ -]?id\s*[:=]\s*["'`]?[A-Za-z0-9_-]{6,}/i,
-    label,
+    /supply_chain_(?:data|planner|demo|indonesia)|planning-dataset\.v2|(?:data_requirement_profile|normalized_network_input|route_matrix|cost_matrix|network_assignment|network_service_metrics|network_cost_summary|network_scenario|facility_location_solution)\.v\d+/,
+    name,
   );
 
   const linkPattern = /\[[^\]]+\]\(([^)]+)\)/g;
   for (const match of source.matchAll(linkPattern)) {
     const target = match[1].trim();
-    if (
-      !target ||
-      target.startsWith("#") ||
-      /^[a-z][a-z0-9+.-]*:/i.test(target)
-    ) {
-      continue;
-    }
+    if (!target || target.startsWith("#") || /^[a-z][a-z0-9+.-]*:/i.test(target)) continue;
     const withoutFragment = target.split("#", 1)[0];
-    if (!withoutFragment) {
-      continue;
-    }
-    const resolved = resolve(dirname(path), decodeURIComponent(withoutFragment));
-    if (!existsSync(resolved)) {
-      fail(`${label} links to missing local target ${target}`);
-    } else if (extname(resolved) === ".md" && !read(resolved).trim()) {
-      fail(`${label} links to empty Markdown target ${target}`);
-    }
+    if (!withoutFragment) continue;
+    const resolved = resolve(dirname(resolve(paths.tutorials, `${name}.md`)), decodeURIComponent(withoutFragment));
+    if (!existsSync(resolved)) fail(`${name} links to missing local target ${target}`);
+    else if (extname(resolved) === ".md" && !read(resolved).trim()) fail(`${name} links to empty Markdown target ${target}`);
   }
 }
 
 if (failures.length > 0) {
   console.error("Tutorial contract check failed:");
-  for (const failure of failures) {
-    console.error(`- ${failure}`);
-  }
+  for (const failure of failures) console.error(`- ${failure}`);
   process.exit(1);
 }
 
 console.log(
-  `Tutorial contracts pass: Blueprint ${blueprint.revision}, Supervisor ${supervisor.version}, Network ${network.version}, ${contractTypes.length} handoffs, ${resourceTypes.length} Resources + report.v1 + map.v3.`,
+  `Tutorial contracts pass: Blueprint ${blueprint.revision}, Supervisor ${supervisor.version}, Network ${network.version}, one Network Case and ${contractTypes.length} final Artifact contracts.`,
 );

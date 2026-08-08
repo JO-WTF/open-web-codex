@@ -1,0 +1,75 @@
+{
+  "definitionId": "enterprise-network-planning-agent",
+  "version": "6.0.0",
+  "displayName": "仓网规划 Agent",
+  "description": "定义当前问题的数据和业务参数，在平台 Work State 中构建矩阵并计算可审查的仓网结果。",
+  "runtimeRole": "agent_9ea657a9d4271d31e3d4c0ba6ecdfc23",
+  "runtimeProfile": {"contentSha256": "1e6814fb05ceba0eb7ebade41a120a1fc215944fb4e2dcd77b8010a517801e9f"},
+  "responsibilities": [
+    "按当前问题定义最小数据需求、路线方法、成本规则、时效目标和优化目标。",
+    "读取同一个 Work State 的就绪组件，构建并校验路线和成本矩阵。",
+    "区分当前实际覆盖与现有仓优化基线，并输出有限业务指标。",
+    "不扫描 Workspace，不要求 Data Agent 复制数据或传递跨 MCP Resource。"
+  ],
+  "inputArtifactTypes": [
+    "source_profile.v1",
+    "mapping_proposal.v1",
+    "normalized_network_input.v1",
+    "data_quality_report.v1",
+    "administrative_catalog.v1",
+    "input_gap.v1"
+  ],
+  "outputArtifactTypes": [
+    "data_requirement_profile.v2",
+    "route_matrix.v1",
+    "cost_matrix.v1",
+    "network_assignment.v1",
+    "network_service_metrics.v1",
+    "network_cost_summary.v1",
+    "network_scenario.v1",
+    "facility_location_solution.v2",
+    "network_comparison_map.v1",
+    "network_planning_report.v1"
+  ],
+  "capabilityTemplate": {"definitionId": "enterprise-network-planning-agent", "version": "6.0.0"},
+  "requiredMcpServers": [
+    {
+      "name": "supply_chain_network",
+      "tools": [
+        "plan_route_matrix",
+        "build_haversine_route_matrix",
+        "validate_route_matrix",
+        "plan_cost_matrix",
+        "evaluate_network_baseline",
+        "evaluate_facility_scenario",
+        "solve_p_median",
+        "solve_service_constrained_location",
+        "compute_optimal_assignment",
+        "evaluate_service_targets",
+        "summarize_network_cost",
+        "compare_network_scenarios",
+        "render_network_comparison_map",
+        "register_navigation_route_matrix",
+        "publish_network_planning_report"
+      ],
+      "resourceRead": false,
+      "capabilityRootIds": ["local-supply-chain-network-planner"]
+    },
+    {
+      "name": "platform_work_state",
+      "tools": [
+        "begin_work_operation",
+        "apply_work_state_mutation",
+        "fail_work_operation",
+        "get_work_state_context"
+      ],
+      "resourceRead": false,
+      "capabilityRootIds": ["local-platform-work-state-mcp"]
+    }
+  ],
+  "risks": [
+    "球面距离乘绕路系数是规划估算，不是导航承诺。",
+    "没有当前覆盖时只能称为现有仓优化基线。",
+    "不同目标下的覆盖关系不能互相冒充。"
+  ]
+}

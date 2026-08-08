@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+data_dir="${OPEN_WEB_CODEX_DATA_DIR:-$(cd "$root_dir/../.." && pwd)/.local/open-web-codex}"
+venv_dir="${OPEN_WEB_CODEX_COORDINATION_MCP_VENV:-$data_dir/tool-envs/platform-coordination}"
+python_bin="${OPEN_WEB_CODEX_COORDINATION_PYTHON:-$venv_dir/bin/python}"
+if [[ -z "$python_bin" || ! -x "$python_bin" ]]; then
+  printf 'platform-coordination: shared Python environment is missing: %s\n' "$venv_dir" >&2
+  printf 'platform-coordination: run scripts/setup-platform-coordination-mcp-env.sh\n' >&2
+  exit 127
+fi
+
+export PYTHONPATH="$root_dir${PYTHONPATH:+:$PYTHONPATH}"
+exec "$python_bin" "$root_dir/server.py" "$@"

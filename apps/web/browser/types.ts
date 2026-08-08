@@ -360,6 +360,94 @@ export type CapabilityPackageSummary = {
   content_sha256: string;
 };
 
+export type CatalogResourceKind =
+  | "tool_package"
+  | "skill_package"
+  | "agent_definition"
+  | "supervisor_definition"
+  | "copilot_package";
+
+export type CatalogPackageFile = {
+  path: string;
+  content: string;
+};
+
+export type CatalogDependency = {
+  kind: CatalogResourceKind;
+  resourceId: string;
+  releaseId: string | null;
+  releaseVersion: string | null;
+};
+
+export type CatalogDraftContent = {
+  files: CatalogPackageFile[];
+  definition: unknown;
+  dependencies: CatalogDependency[];
+};
+
+export type CapabilityDraftSummary = {
+  id: string;
+  kind: CatalogResourceKind;
+  resourceId: string;
+  displayName: string;
+  description: string;
+  metadata: {
+    id: string;
+    revision: number;
+    contentSha256: string;
+    validationState: string;
+    updatedAt: string;
+  };
+};
+
+export type CapabilityDraftDetail = {
+  summary: CapabilityDraftSummary;
+  content: CatalogDraftContent;
+};
+
+export type CapabilityReleaseSummary = {
+  id: string;
+  kind: CatalogResourceKind;
+  resourceId: string;
+  releaseVersion: string;
+  displayName: string;
+  description: string;
+  identity: {
+    id: string;
+    kind: CatalogResourceKind;
+    resourceId: string;
+    releaseVersion: string;
+    contentSha256: string;
+    executionSemanticsSha256: string;
+    publishedAt: string;
+  };
+};
+
+export type CapabilityInstallationSummary = {
+  id: string;
+  releaseId: string;
+  workspaceId: string;
+  profileId: string;
+  state: "authorized" | "installing" | "installed" | "discovered" | "ready" | "failed" | "uninstalled";
+  observedContentSha256: string | null;
+  failureCode: string | null;
+  updatedAt: string;
+};
+
+export type CapabilityReadinessSummary = {
+  release: CapabilityReleaseSummary;
+  installation: CapabilityInstallationSummary | null;
+  runtimeDiscovered: boolean;
+  missingCapabilities: string[];
+};
+
+export type CapabilityValidationResult = {
+  valid: boolean;
+  issues: string[];
+  contentSha256: string | null;
+  executionSemanticsSha256: string | null;
+};
+
 export type PythonCapabilityTool = {
   name: string;
   description: string;
@@ -503,6 +591,7 @@ export type SupervisorPolicyDetail = SupervisorPolicySummary & {
   custom_instructions: string;
   agents: SupervisorAgentSelection[];
   artifact_contracts: SupervisorArtifactContractInput[];
+  coordination_capabilities: string[];
   max_active_child_agents: number;
   content_sha256: string;
   execution_semantics_sha256: string;
@@ -510,7 +599,6 @@ export type SupervisorPolicyDetail = SupervisorPolicySummary & {
 
 export type SupervisorDraftRequest = {
   policy_id: string;
-  version: string;
   display_name: string;
   description: string;
   responsibilities: string[];
@@ -518,7 +606,24 @@ export type SupervisorDraftRequest = {
   custom_instructions: string;
   agents: SupervisorAgentSelection[];
   artifact_contracts: SupervisorArtifactContractInput[];
+  coordination_capabilities: string[];
   max_active_child_agents: number;
+};
+
+export type SupervisorDraftUpdateRequest = {
+  draft: SupervisorDraftRequest;
+  expected_revision: number;
+};
+
+export type PublishSupervisorDraftRequest = {
+  expected_revision: number;
+};
+
+export type SupervisorDraftSummary = {
+  revision: number;
+  content_sha256: string;
+  validation_state: string;
+  updated_at: string;
 };
 
 export type SupervisorValidationResult = {
@@ -541,6 +646,7 @@ export type SupervisorDefinitionSummary = {
   description: string;
   owner_user_id: string;
   draft: SupervisorDraftRequest | null;
+  draft_metadata?: SupervisorDraftSummary | null;
   releases: SupervisorReleaseSummary[];
   created_at: string;
   updated_at: string;
@@ -571,8 +677,13 @@ export type RuntimeAgentActivityKind =
   | "tool_failed"
   | "reporting"
   | "waiting"
+  | "input_requested"
+  | "input_answered"
   | "completed"
   | "failed"
+  | "rejected"
+  | "cancelled"
+  | "timeout"
   | "interrupted";
 
 export type RuntimeAgentActivity = {
@@ -595,15 +706,104 @@ export type RuntimeAgentExecution = {
   turn_id: string | null;
   ordinal: number;
   task: string | null;
-  status: "pending" | "running" | "waiting" | "completed" | "failed" | "interrupted";
+  status: RuntimeAgentExecutionStatus;
   current_behavior: string;
   latest_progress: string | null;
+  display_title: string;
+  result_summary: string | null;
+  waiting_approval_id: string | null;
+  wait_cycle_count: number;
   first_observed_sequence: number;
   last_observed_sequence: number;
   started_at: string | null;
   completed_at: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type RuntimeAgentExecutionStatus =
+  | "pending"
+  | "running"
+  | "waiting"
+  | "waiting_for_input"
+  | "completed"
+  | "failed"
+  | "rejected"
+  | "cancelled"
+  | "timeout"
+  | "interrupted";
+
+export type CoordinationExecutionSummary = {
+  id: string;
+  displayTitle: string;
+  status: RuntimeAgentExecutionStatus;
+  currentBehavior: string;
+  latestProgress: string | null;
+  resultSummary: string | null;
+  waitCycleCount: number;
+  waitingForInput: boolean;
+  startedAt: string | null;
+  completedAt: string | null;
+  updatedAt: string;
+};
+
+export type CollaborationStatusSummary = {
+  runId: string;
+  taskId: string;
+  workState: unknown | null;
+  executions: CoordinationExecutionSummary[];
+  openUserInputCount: number;
+  deliverables: unknown[];
+  updatedAt: string;
+};
+
+export type ProviderCallMetric = {
+  id: string;
+  runId: string | null;
+  providerId: string;
+  modelId: string;
+  inputTokens: number | null;
+  cachedInputTokens: number | null;
+  outputTokens: number | null;
+  toolSchemaTokens: number | null;
+  latencyMs: number | null;
+  firstTokenMs: number | null;
+  compactionCount: number;
+  terminalStatus: string;
+  stablePrefixSha256: string | null;
+  toolInventorySha256: string | null;
+  skillSetSha256: string | null;
+  runtimeRoleSha256: string | null;
+  createdAt: string;
+};
+
+export type UserInputOptionSummary = {
+  label: string;
+  description: string;
+};
+
+export type UserInputQuestionSummary = {
+  id: string;
+  header: string;
+  question: string;
+  isOther: boolean;
+  isSecret: boolean;
+  options: UserInputOptionSummary[];
+};
+
+export type UserInputRequestSource =
+  | { kind: "root" }
+  | { kind: "agent"; executionId: string; displayTitle: string };
+
+export type PendingUserInputSummary = {
+  id: string;
+  runId: string;
+  source: UserInputRequestSource;
+  questions: UserInputQuestionSummary[];
+  state: string;
+  version: number;
+  autoResolutionMs: number | null;
+  createdAt: string;
 };
 
 export type ArtifactSummary = {

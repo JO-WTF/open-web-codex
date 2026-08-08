@@ -2,6 +2,8 @@
 resolver = "2"
 members = [
     "crates/codex-adapter",
+    "crates/capability-catalog",
+    "crates/data-intake-service",
     "crates/codex-contracts",
     "crates/git-runtime",
     "crates/auth",
@@ -14,6 +16,7 @@ members = [
     "crates/run-orchestrator",
     "crates/secret-store",
     "crates/supervisor-catalog",
+    "crates/work-state-service",
     "server",
 ]
 

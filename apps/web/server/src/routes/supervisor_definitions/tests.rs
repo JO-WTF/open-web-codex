@@ -3,61 +3,56 @@ use axum::{
     Json,
 };
 use open_web_codex_platform_contracts::{
-    SupervisorAgentSelection, SupervisorArtifactContractInput, SupervisorDraftRequest,
-    SupervisorInstructionPolicySelection, SupervisorPolicySelection,
+    PublishSupervisorDraftRequest, SupervisorAgentSelection, SupervisorArtifactContractInput,
+    SupervisorDraftRequest, SupervisorDraftUpdateRequest, SupervisorInstructionPolicySelection,
+    SupervisorPolicySelection,
 };
 use open_web_codex_platform_store::AppState;
 use uuid::Uuid;
 
-use super::{create, publish, release_spec_from_draft};
+use super::{create, publish, release_spec_from_draft, save_draft};
 use crate::middleware::auth::AuthenticatedUser;
 
 fn valid_draft() -> SupervisorDraftRequest {
+    let package =
+        open_web_codex_supervisor_catalog::supervisor::resolve(&SupervisorPolicySelection {
+            policy_id: "enterprise-supervisor-copilot".to_string(),
+            version: "6.0.0".to_string(),
+        })
+        .expect("current repository Supervisor package");
     SupervisorDraftRequest {
         policy_id: "network-supervisor".to_string(),
-        version: "1.0.0".to_string(),
-        display_name: "Network Supervisor".to_string(),
-        description: "Coordinates a bounded network-planning workflow.".to_string(),
-        responsibilities: vec![
-            "Coordinate typed Agent handoffs.".to_string(),
-            "Publish the final recommendation.".to_string(),
-        ],
+        display_name: package.display_name,
+        description: package.description,
+        responsibilities: package.responsibilities,
         instruction_policy: SupervisorInstructionPolicySelection {
-            policy_id: "platform-supervisor-behavior".to_string(),
-            version: "1.1.0".to_string(),
+            policy_id: package.instruction_policy.policy_id,
+            version: package.instruction_policy.version,
         },
-        custom_instructions: "Delegate data preparation before network scenario analysis."
-            .to_string(),
-        agents: vec![
-            SupervisorAgentSelection {
-                definition_id: "enterprise-data-agent".to_string(),
-                version: "5.1.0".to_string(),
-                release_id: None,
-                spawn_limit: 1,
-            },
-            SupervisorAgentSelection {
-                definition_id: "enterprise-network-planning-agent".to_string(),
-                version: "5.1.0".to_string(),
-                release_id: None,
-                spawn_limit: 1,
-            },
-        ],
-        artifact_contracts: vec![
-            SupervisorArtifactContractInput {
-                artifact_type: "planning-dataset.v2".to_string(),
-                producer_agent: "enterprise-data-agent@5.1.0".to_string(),
-                consumer_agents: vec!["enterprise-network-planning-agent@5.1.0".to_string()],
-                required: true,
-            },
-            SupervisorArtifactContractInput {
-                artifact_type: "network_snapshot.v1".to_string(),
-                producer_agent: "enterprise-network-planning-agent@5.1.0".to_string(),
-                consumer_agents: vec!["supervisor".to_string()],
-                required: true,
-            },
-        ],
-        data_requirement_contracts: Vec::new(),
-        max_active_child_agents: 2,
+        custom_instructions: package.custom_instructions,
+        agents: package
+            .agents
+            .into_iter()
+            .map(|agent| SupervisorAgentSelection {
+                definition_id: agent.definition_id,
+                version: agent.version,
+                release_id: agent.release_id,
+                spawn_limit: agent.spawn_limit,
+            })
+            .collect(),
+        artifact_contracts: package
+            .artifact_contracts
+            .into_iter()
+            .map(|contract| SupervisorArtifactContractInput {
+                artifact_type: contract.artifact_type,
+                producer_agent: contract.producer_agent,
+                consumer_agents: contract.consumer_agents,
+                required: contract.required,
+            })
+            .collect(),
+        data_requirement_contracts: package.data_requirement_contracts,
+        coordination_capabilities: package.coordination_capabilities,
+        max_active_child_agents: package.max_active_child_agents,
     }
 }
 
@@ -150,15 +145,49 @@ async fn publishes_and_resolves_an_organization_scoped_release() {
         .await
         .unwrap()
         .0;
+    let mut edited_draft = valid_draft();
+    edited_draft.display_name = "Network Supervisor revised".to_string();
+    let saved = save_draft(
+        State(state.clone()),
+        auth.clone(),
+        Path(definition.id),
+        Json(SupervisorDraftUpdateRequest {
+            draft: edited_draft.clone(),
+            expected_revision: 1,
+        }),
+    )
+    .await
+    .unwrap()
+    .0;
+    assert_eq!(saved.draft_metadata.unwrap().revision, 2);
+    let stale = save_draft(
+        State(state.clone()),
+        auth.clone(),
+        Path(definition.id),
+        Json(SupervisorDraftUpdateRequest {
+            draft: valid_draft(),
+            expected_revision: 1,
+        }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(stale.0, axum::http::StatusCode::CONFLICT);
     let validation = super::validate(State(state.clone()), auth.clone(), Path(definition.id))
         .await
         .unwrap()
         .0;
     assert!(validation.valid);
-    let release = publish(State(state), auth, Path(definition.id))
-        .await
-        .unwrap()
-        .0;
+    let release = publish(
+        State(state),
+        auth,
+        Path(definition.id),
+        Json(PublishSupervisorDraftRequest {
+            expected_revision: 2,
+        }),
+    )
+    .await
+    .unwrap()
+    .0;
     let selection = SupervisorPolicySelection {
         policy_id: release.policy_id,
         version: release.version,

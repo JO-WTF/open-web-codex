@@ -3,12 +3,9 @@ use super::*;
 #[test]
 fn publishes_exact_runtime_roles_and_seals_role_content() {
     let definitions = list_published().unwrap();
-    assert_eq!(definitions.len(), 5);
-    assert_eq!(definitions[0].version, "5.1.0");
-    assert_eq!(definitions[1].version, "5.1.0");
-    assert_eq!(definitions[2].version, "2.0.0");
-    assert_eq!(definitions[3].version, "2.0.0");
-    assert_eq!(definitions[4].version, "2.0.0");
+    assert_eq!(definitions.len(), 2);
+    assert_eq!(definitions[0].version, "6.0.0");
+    assert_eq!(definitions[1].version, "6.0.0");
 
     let roles = platform_runtime_roles().unwrap();
     let resolved_definitions = list_resolved_builtins().unwrap();
@@ -18,11 +15,8 @@ fn publishes_exact_runtime_roles_and_seals_role_content() {
             .map(|role| role.name.as_str())
             .collect::<Vec<_>>(),
         vec![
-            "agent_da32e77f9c1f5f98184e9ef7593367be",
-            "agent_4e90dae277cf065190ed25bfaf799ce8",
-            "agent_f533a88cc2fcde170744b35f4538deb9",
-            "agent_9040f76e7387b00fff5e63fd574e63df",
-            "agent_b85d26c7975f69e43b87043fc48e08ea"
+            "agent_4214e235da7aa1d791f4b2951170397b",
+            "agent_9ea657a9d4271d31e3d4c0ba6ecdfc23",
         ]
     );
     for (role, definition) in roles.iter().zip(resolved_definitions) {
@@ -50,24 +44,14 @@ fn publishes_exact_runtime_roles_and_seals_role_content() {
         "[plugins.local-supply-chain-network-planner.mcp_servers.supply_chain_data]\n\
          enabled = true"
     ));
+    assert!(data_role.contains("begin_work_operation"));
     assert!(data_role.contains(
-        "[plugins.local-supply-chain-network-planner.mcp_servers.supply_chain_demo]\n\
-         enabled = true\nenabled_tools = [\"create_demo_workspace_sources\"]"
+        "[plugins.local-platform-work-state-mcp.mcp_servers.platform_work_state]\n\
+         enabled = true"
     ));
-    assert!(!data_role.contains("list_planning_sources"));
-    assert!(!data_role.contains("inspect_planning_source"));
-    assert!(data_role.contains(
-        "[plugins.local-supply-chain-network-planner.mcp_servers.supply_chain_planner]\n\
-         enabled = true\n\
-         enabled_tools = []"
-    ));
-    for role in [&roles[1].config_toml, &roles[2].config_toml] {
-        assert!(role.contains(
-            "[plugins.local-supply-chain-network-planner.mcp_servers.supply_chain_demo]\n\
-             enabled = false"
-        ));
-        assert!(!role.contains("create_demo_workspace_sources"));
-    }
+    assert!(!roles[1]
+        .config_toml
+        .contains("create_demo_workspace_sources"));
 }
 
 #[test]
@@ -98,18 +82,6 @@ fn definitions_bind_versions_to_reviewed_runtime_instructions() {
             parse_definition(NETWORK_PLANNING_AGENT).unwrap(),
             NETWORK_PLANNING_AGENT_INSTRUCTIONS,
         ),
-        (
-            parse_definition(VISUALIZATION_AGENT).unwrap(),
-            VISUALIZATION_AGENT_INSTRUCTIONS,
-        ),
-        (
-            parse_definition(FINANCE_AGENT).unwrap(),
-            FINANCE_AGENT_INSTRUCTIONS,
-        ),
-        (
-            parse_definition(RISK_AGENT).unwrap(),
-            RISK_AGENT_INSTRUCTIONS,
-        ),
     ] {
         assert_eq!(
             definition.runtime_profile.content_sha256,
@@ -121,19 +93,10 @@ fn definitions_bind_versions_to_reviewed_runtime_instructions() {
 #[test]
 fn platform_runtime_role_names_are_reserved() {
     assert!(is_platform_runtime_role(
-        "agent_da32e77f9c1f5f98184e9ef7593367be"
+        "agent_4214e235da7aa1d791f4b2951170397b"
     ));
     assert!(is_platform_runtime_role(
-        "agent_4e90dae277cf065190ed25bfaf799ce8"
-    ));
-    assert!(is_platform_runtime_role(
-        "agent_f533a88cc2fcde170744b35f4538deb9"
-    ));
-    assert!(is_platform_runtime_role(
-        "agent_9040f76e7387b00fff5e63fd574e63df"
-    ));
-    assert!(is_platform_runtime_role(
-        "agent_b85d26c7975f69e43b87043fc48e08ea"
+        "agent_9ea657a9d4271d31e3d4c0ba6ecdfc23"
     ));
     assert!(!is_platform_runtime_role("user_defined_agent"));
 }
@@ -149,11 +112,11 @@ fn user_release_inherits_only_reviewed_template_capabilities() {
         developer_instructions:
             "Inspect the authorized planning sources and publish a validated dataset.".to_string(),
         input_artifact_types: Vec::new(),
-        output_artifact_types: vec!["planning-dataset.v2".to_string()],
+        output_artifact_types: Vec::new(),
         capability_template: AgentCapabilityTemplateSelection {
             source: AgentCapabilityTemplateSource::RepositoryAgent,
             definition_id: "enterprise-data-agent".to_string(),
-            version: "5.1.0".to_string(),
+            version: "6.0.0".to_string(),
             release_id: None,
         },
         dataset_releases: Vec::new(),
@@ -161,7 +124,7 @@ fn user_release_inherits_only_reviewed_template_capabilities() {
     let resolved = validate_user_release(spec.clone()).unwrap();
     assert_eq!(
         resolved.required_capabilities,
-        resolve_builtin("enterprise-data-agent", "5.1.0")
+        resolve_builtin("enterprise-data-agent", "6.0.0")
             .unwrap()
             .required_capabilities
     );
@@ -172,7 +135,7 @@ fn user_release_inherits_only_reviewed_template_capabilities() {
     assert!(resolved
         .runtime_role
         .config_toml
-        .contains("enabled_tools = [\"discover_workspace_sources\""));
+        .contains("enabled_tools = [\"apply_work_state_mutation\""));
     assert!(resolved.runtime_role.config_toml.contains(
         "[plugins.local-supply-chain-network-planner.mcp_servers.supply_chain_data]\n\
          enabled = true"
@@ -213,7 +176,7 @@ fn repository_and_web_agent_sources_compile_to_identical_execution_semantics() {
 
 #[test]
 fn user_release_seals_exact_dataset_release_without_a_host_path() {
-    let template = resolve_builtin("enterprise-data-agent", "5.1.0").unwrap();
+    let template = resolve_builtin("enterprise-data-agent", "6.0.0").unwrap();
     let workspace_id = Uuid::now_v7();
     let release_id = Uuid::now_v7();
     let mut spec = template.authoring_spec();
@@ -245,50 +208,4 @@ fn user_release_seals_exact_dataset_release_without_a_host_path() {
         .config_toml
         .contains("indonesia-network@1.0.0"));
     assert!(!resolved.runtime_role.config_toml.contains("/datasets/"));
-}
-
-#[test]
-fn visualization_agent_binds_each_server_to_its_own_capability_root() {
-    let definition = resolve_builtin("enterprise-visualization-agent", "2.0.0").unwrap();
-
-    assert_eq!(
-        definition.required_capabilities,
-        vec![
-            "map_utils.create_map_card".to_string(),
-            "supply_chain_planner.prepare_network_map_render".to_string(),
-        ]
-    );
-    assert_eq!(definition.required_mcp_servers.len(), 2);
-    assert_eq!(definition.required_mcp_servers[0].name, "map_utils");
-    assert_eq!(
-        definition.required_mcp_servers[0].capability_roots,
-        vec![CapabilityRootMcpInventory {
-            capability_root_id: "local-maps-mcp".to_string(),
-            mcp_server_names: vec!["map_utils".to_string()],
-        }]
-    );
-    assert_eq!(
-        definition.required_mcp_servers[0].tools,
-        vec!["create_map_card"]
-    );
-    assert_eq!(
-        definition.required_mcp_servers[1].name,
-        "supply_chain_planner"
-    );
-    assert_eq!(
-        definition.required_mcp_servers[1].capability_roots,
-        vec![CapabilityRootMcpInventory {
-            capability_root_id: "local-supply-chain-network-planner".to_string(),
-            mcp_server_names: vec![
-                "supply_chain_data".to_string(),
-                "supply_chain_demo".to_string(),
-                "supply_chain_indonesia".to_string(),
-                "supply_chain_planner".to_string(),
-            ],
-        }]
-    );
-    assert_eq!(
-        definition.required_mcp_servers[1].tools,
-        vec!["prepare_network_map_render"]
-    );
 }

@@ -27,9 +27,9 @@ const baseProps = {
   canSteer: false,
   onSteerFollowUp: vi.fn(),
   onDeleteFollowUp: vi.fn(),
-  userInputRequest: null,
-  submittingUserInput: false,
-  onSubmitUserInput: vi.fn(),
+  pendingUserInputRequests: [],
+  submittingPendingUserInputIds: new Set<string>(),
+  onSubmitPendingUserInput: vi.fn(),
   busy: false,
   sendDisabled: false,
 };

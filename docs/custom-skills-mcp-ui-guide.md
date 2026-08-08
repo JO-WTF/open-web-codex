@@ -8,6 +8,11 @@ MCP Server、Secret 配置、审批适配或专用 Web 面板。`tools/maps-mcp`
 `docs/capability-baseline.md` 为准，阶段顺序以 `docs/roadmap.md` 为准，当前
 任务以 `docs/development-plan.md` 为准。
 
+目标态下，算法工程师通过 Tool SDK 和 Copilot Studio 完成这些步骤，发布与安装合同
+以 `docs/supervisor-agent-skill-tool-architecture.md` 为准。当前直接编辑目录的命令只
+用于仓库内参考包开发，不是未来 Web 用户的安装协议。新建或重写的 `SKILL.md` 主体
+必须使用中文；代码标识、Schema 字段和正式产品名可以保留英文。
+
 如需先理解 Agent Definition、Runtime Role、领域知识、Skill 与 MCP 的职责拆分和组合方式，参见
 [`domain-agent-extension-architecture.md`](domain-agent-extension-architecture.md)。
 

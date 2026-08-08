@@ -5,7 +5,7 @@ use open_web_codex_adapter::CodexAdapter;
 use open_web_codex_approval_service::{ApprovalActor, ApprovalService, ApprovalServiceError};
 use open_web_codex_platform_contracts::error::PlatformError;
 use open_web_codex_platform_contracts::{
-    ApprovalSummary, DecideApprovalRequest, RespondUserInputRequest,
+    ApprovalSummary, DecideApprovalRequest, PendingUserInputSummary, RespondUserInputRequest,
 };
 use uuid::Uuid;
 
@@ -21,6 +21,20 @@ pub async fn list_pending(
     let runtime_instance_id = adapter.runtime_instance_id().await;
     approvals
         .list_pending(actor(&auth), runtime_instance_id)
+        .await
+        .map(Json)
+        .map_err(approval_error)
+}
+
+pub async fn list_run_user_inputs(
+    auth: AuthenticatedUser,
+    Path(run_id): Path<Uuid>,
+    Extension(approvals): Extension<Arc<ApprovalService>>,
+    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
+) -> Result<Json<Vec<PendingUserInputSummary>>, ApiError> {
+    let runtime_instance_id = adapter.runtime_instance_id().await;
+    approvals
+        .list_pending_user_inputs(actor(&auth), runtime_instance_id, Some(run_id))
         .await
         .map(Json)
         .map_err(approval_error)
