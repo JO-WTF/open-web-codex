@@ -18,7 +18,8 @@ from supply_chain_planner.mcp_resources import (
     McpResourceContractError,
     McpResourceRuntime,
 )
-from supply_chain_planner.models import PreparedNetworkResource, ResourceRef
+from supply_chain_planner.mcp_contracts import ResourceRef
+from supply_chain_planner.models import PreparedNetworkResource
 from supply_chain_planner.network_models import RouteQuoteRecord
 from supply_chain_planner.optimization_models import (
     AssignmentComparison,
@@ -28,7 +29,7 @@ from supply_chain_planner.optimization_models import (
     ScenarioSpec,
     ServiceCoverageConstraint,
 )
-from supply_chain_planner.resource_store import ResourceStore, resource_ref
+from supply_chain_planner.resource_store import ResourceStore
 
 BEKASI_ID = "WH-CROSS_DOCKING-BEKASI"
 
@@ -36,7 +37,10 @@ BEKASI_ID = "WH-CROSS_DOCKING-BEKASI"
 def _runtime(tmp_path: Path, monkeypatch) -> tuple[Path, ResourceStore]:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    store = ResourceStore(tmp_path / "profile" / "resources")
+    store = ResourceStore(
+        tmp_path / "profile" / "resources",
+        uri_prefix=server.RESOURCE_URI_PREFIX,
+    )
     monkeypatch.setattr(
         server,
         "_mcp_resource_runtime",
@@ -115,9 +119,9 @@ def _published_network(
         if not warehouse.is_existing
     }
     return (
-        resource_ref(store.publish(prepared.schema_version, prepared)),
-        resource_ref(store.publish(routes.schema_version, routes)),
-        resource_ref(store.publish(costs.schema_version, costs)),
+        server.resource_ref(store.publish(prepared.schema_version, prepared)),
+        server.resource_ref(store.publish(routes.schema_version, routes)),
+        server.resource_ref(store.publish(costs.schema_version, costs)),
         existing_ids,
         candidate_ids,
     )
@@ -330,7 +334,7 @@ def test_baseline_and_p_median_reject_missing_explicit_inputs(
         PreparedNetworkResource,
     )
     without_current = prepared.model_copy(update={"current_assignments": []})
-    without_current_ref = resource_ref(
+    without_current_ref = server.resource_ref(
         store.publish(without_current.schema_version, without_current)
     )
     with pytest.raises(McpResourceContractError, match="current_assignments_required"):

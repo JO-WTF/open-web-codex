@@ -20,14 +20,18 @@ from supply_chain_planner.mcp_resources import (
     McpResourceContractError,
     McpResourceRuntime,
 )
-from supply_chain_planner.models import PreparedNetworkResource, ResourceRef
-from supply_chain_planner.resource_store import ResourceStore, resource_ref
+from supply_chain_planner.mcp_contracts import ResourceRef
+from supply_chain_planner.models import PreparedNetworkResource
+from supply_chain_planner.resource_store import ResourceStore
 
 
 def _runtime(tmp_path: Path, monkeypatch) -> tuple[Path, ResourceStore]:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    store = ResourceStore(tmp_path / "profile" / "resources")
+    store = ResourceStore(
+        tmp_path / "profile" / "resources",
+        uri_prefix=server.RESOURCE_URI_PREFIX,
+    )
     monkeypatch.setattr(
         server,
         "_mcp_resource_runtime",
@@ -61,7 +65,7 @@ def _prepared_ref(store: ResourceStore, *, state: str = "ready") -> ResourceRef:
         current_assignments=[],
         route_quotes=[],
     )
-    return resource_ref(store.publish(prepared.schema_version, prepared))
+    return server.resource_ref(store.publish(prepared.schema_version, prepared))
 
 
 def _result_ref(result) -> ResourceRef:
@@ -127,7 +131,7 @@ def test_route_and_cost_tools_use_exact_pair_reuse(tmp_path: Path, monkeypatch) 
     )
     original = server._runtime().load_model(route_ref, "route_matrix.v2", RouteMatrix)
     partial = original.model_copy(update={"rows": original.rows[:-2]})
-    partial_ref = resource_ref(store.publish(partial.schema_version, partial))
+    partial_ref = server.resource_ref(store.publish(partial.schema_version, partial))
     completed_ref = _result_ref(
         server.build_haversine_route_matrix(
             prepared_ref,
@@ -162,7 +166,7 @@ def test_route_and_cost_tools_use_exact_pair_reuse(tmp_path: Path, monkeypatch) 
     )
     original_cost = server._runtime().load_model(cost_ref, "cost_matrix.v2", CostMatrix)
     partial_cost = original_cost.model_copy(update={"rows": original_cost.rows[:-2]})
-    partial_cost_ref = resource_ref(
+    partial_cost_ref = server.resource_ref(
         store.publish(partial_cost.schema_version, partial_cost)
     )
     completed_cost_ref = _result_ref(
@@ -207,7 +211,7 @@ def test_navigation_tool_merges_prior_workspace_file_and_reports_counts(
         for row in haversine.rows
     ]
     prior = RouteMatrix(method="navigation", rows=rows[:3])
-    prior_ref = resource_ref(store.publish(prior.schema_version, prior))
+    prior_ref = server.resource_ref(store.publish(prior.schema_version, prior))
     supplied = RouteMatrix(method="navigation", rows=rows[3:])
     (workspace / "navigation.json").write_text(
         json.dumps(supplied.model_dump(mode="json")),
