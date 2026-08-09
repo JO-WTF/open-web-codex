@@ -143,6 +143,7 @@ class PMedianSolution(OptimizationModel):
     closed_existing_ids: list[str]
     assignment: AssignmentResult | None = None
     objective_value: float | None = None
+    cost: CostSummary | None = None
     best_bound: float | None = None
     service: list[ServiceMetric] = Field(default_factory=list)
     optimality: Literal["proven", "feasible_only", "not_available"]

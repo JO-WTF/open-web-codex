@@ -11,8 +11,16 @@ from pydantic import ValidationError
 
 from supply_chain_planner.matrix import build_cost_matrix, build_haversine_route_matrix
 from supply_chain_planner.matrix_models import CostCalculationPolicy, DemandUnitCostRule
-from supply_chain_planner.optimization_models import PMedianRequest, ScenarioSpec
-from supply_chain_planner.solver import enumerate_p_median
+from supply_chain_planner.optimization_models import (
+    PMedianRequest,
+    PMedianSolution,
+    ScenarioSpec,
+)
+from supply_chain_planner.solver import (
+    enumerate_p_median,
+    service_metrics,
+    summarize_assignment_cost,
+)
 
 
 def test_p_median_keeps_fixed_existing_warehouses_and_opens_requested_candidates() -> None:
@@ -95,6 +103,24 @@ def test_sample2_opens_exactly_two_candidates_with_existing_sites_explicitly_fix
     assert len(result.opened_candidate_ids) == 2
     assert fixed_existing.issubset(result.active_warehouse_ids)
     assert result.closed_existing_ids == []
+    solution = PMedianSolution(
+        status="optimal",
+        active_warehouse_ids=result.active_warehouse_ids,
+        opened_candidate_ids=result.opened_candidate_ids,
+        closed_existing_ids=result.closed_existing_ids,
+        assignment=result.assignment,
+        objective_value=result.objective_value,
+        cost=summarize_assignment_cost(result.assignment, costs),
+        service=service_metrics(result.assignment, [6, 12, 18]),
+        optimality="proven",
+    )
+    assert solution.cost is not None
+    assert solution.cost.complete is True
+    assert solution.cost.total == solution.cost.linehaul + solution.cost.last_mile
+    assert solution.cost.by_warehouse
+    assert solution.cost.linehaul_by_warehouse
+    assert solution.cost.last_mile_by_warehouse
+    assert [metric.target_hours for metric in solution.service] == [6, 12, 18]
 
 
 def test_planning_objective_and_existing_policy_have_no_hidden_defaults() -> None:
