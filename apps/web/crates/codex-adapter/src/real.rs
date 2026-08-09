@@ -142,6 +142,14 @@ impl RealCodexAdapter {
         })
     }
 
+    fn mcp_resource_resume_params(thread_id: &str, workspace_root: &str) -> Value {
+        json!({
+            "threadId": thread_id,
+            "cwd": workspace_root,
+            "excludeTurns": true,
+        })
+    }
+
     async fn prepare_runtime(&self) -> Result<OwnedMutexGuard<Option<uuid::Uuid>>, AdapterError> {
         let mut runtime_instance = self.runtime_instance.clone().lock_owned().await;
         self.host.apply_scheduled_restart().await?;
@@ -727,12 +735,24 @@ impl CodexAdapter for RealCodexAdapter {
         server: &str,
         uri: &str,
     ) -> Result<Value, AdapterError> {
-        let (_workspace_root, _runtime) = self.ensure_thread_bound(workspace, thread_id).await?;
+        let (workspace_root, _runtime) = self.ensure_thread_bound(workspace, thread_id).await?;
         if server.trim().is_empty() || uri.trim().is_empty() {
             return Err(AdapterError::Internal(
                 "MCP Resource server and URI are required".to_string(),
             ));
         }
+        // Child Threads may be unloaded after their terminal result has been
+        // delivered. Rejoin the authoritative persisted Thread through the
+        // official app-server lifecycle before asking its Role-scoped MCP
+        // runtime to read the provider-owned Resource. This keeps the
+        // producing Thread, cwd and MCP inventory authoritative without a
+        // Platform-side Resource broker or a second MCP configuration owner.
+        self.host
+            .request(
+                "thread/resume",
+                Self::mcp_resource_resume_params(thread_id, &workspace_root),
+            )
+            .await?;
         self.host
             .request(
                 "mcpServer/resource/read",
@@ -1563,7 +1583,7 @@ mod tests {
     use super::{
         agent_core_batch_write_params, app_server_event_frame, codex_bubblewrap_is_unavailable,
         codex_sandbox_disabled_by_environment, is_authorized_workspace_root, login_completion,
-        message_parent_thread_id, message_thread_id, turn_sandbox_policy,
+        message_parent_thread_id, message_thread_id, turn_sandbox_policy, RealCodexAdapter,
     };
     use serde_json::{json, Value};
     use std::path::Path;
@@ -1680,6 +1700,16 @@ mod tests {
         let policy = turn_sandbox_policy(Path::new("/runner/workspace"), true);
 
         assert_eq!(policy, json!({ "type": "readOnly" }));
+    }
+
+    #[test]
+    fn mcp_resource_resume_rejoins_without_overriding_thread_policy() {
+        let value = RealCodexAdapter::mcp_resource_resume_params("thread-1", "/runner/workspace");
+
+        assert_eq!(value["threadId"], "thread-1");
+        assert_eq!(value["cwd"], "/runner/workspace");
+        assert_eq!(value["excludeTurns"], true);
+        assert!(value.get("approvalPolicy").is_none());
     }
 
     #[test]

@@ -123,6 +123,44 @@ async fn apply_role_returns_unavailable_for_invalid_user_role_toml() {
 }
 
 #[tokio::test]
+async fn reapply_role_restores_role_mcp_inventory_and_preserves_runtime_cwd() {
+    let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+    let runtime_cwd = config.cwd.clone();
+    config.model = Some("persisted-thread-model".to_string());
+    config.model_reasoning_effort = Some(ReasoningEffort::Low);
+    let role_path = write_role_config(
+        &home,
+        "resource-role.toml",
+        r#"developer_instructions = "Read provider-owned resources"
+model = "role-default-model"
+model_reasoning_effort = "high"
+
+[mcp_servers.role_resources]
+command = "/bin/echo"
+args = []
+"#,
+    )
+    .await;
+    config.agent_roles.insert(
+        "resource-reader".to_string(),
+        AgentRoleConfig {
+            description: None,
+            config_file: Some(role_path),
+            nickname_candidates: None,
+        },
+    );
+
+    reapply_role_to_config_for_multi_agent_v2(&mut config, "resource-reader")
+        .await
+        .expect("persisted role should reapply");
+
+    assert_eq!(config.cwd, runtime_cwd);
+    assert_eq!(config.model.as_deref(), Some("persisted-thread-model"));
+    assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::Low));
+    assert!(config.mcp_servers.get().contains_key("role_resources"));
+}
+
+#[tokio::test]
 async fn apply_role_ignores_agent_metadata_fields_in_user_role_file() {
     let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
     let role_path = write_role_config(

@@ -9,6 +9,7 @@
 use crate::config::AgentRoleConfig;
 use crate::config::Config;
 use crate::config::ConfigOverrides;
+use crate::config::PermissionProfileSnapshot;
 use crate::config::agent_roles::parse_agent_role_file_contents;
 use crate::config::deserialize_config_toml_with_base;
 use anyhow::anyhow;
@@ -62,6 +63,59 @@ pub(crate) async fn apply_role_to_config_for_multi_agent_v2(
         RoleDeveloperInstructions::PreserveCallerInstructions,
     )
     .await
+}
+
+/// Reapplies a persisted v2 child Role while preserving runtime-owned session state.
+///
+/// Both native collaboration residency recovery and app-server cold resume use this helper so a
+/// resumed child regains the same Role-owned Skills and MCP inventory without allowing the Role
+/// layer to replace its persisted model selection or the caller-authorized cwd, approval policy,
+/// reviewer, and permission profile.
+pub(crate) async fn reapply_role_to_config_for_multi_agent_v2(
+    config: &mut Config,
+    role_name: &str,
+) -> Result<(), String> {
+    let runtime_model = config.model.clone();
+    let runtime_model_reasoning_effort = config.model_reasoning_effort.clone();
+    let runtime_model_reasoning_summary = config.model_reasoning_summary.clone();
+    let runtime_model_verbosity = config.model_verbosity.clone();
+    let runtime_model_provider_id = config.model_provider_id.clone();
+    let runtime_model_provider = config.model_provider.clone();
+    let runtime_service_tier = config.service_tier.clone();
+    let runtime_approval_policy = config.permissions.approval_policy.value();
+    let runtime_approvals_reviewer = config.approvals_reviewer;
+    let runtime_cwd = config.cwd.clone();
+    let runtime_permission_profile = match config.permissions.active_permission_profile() {
+        Some(active_permission_profile) => {
+            PermissionProfileSnapshot::active_with_profile_workspace_roots(
+                config.permissions.permission_profile().clone(),
+                active_permission_profile,
+                config.permissions.profile_workspace_roots().to_vec(),
+            )
+        }
+        None => PermissionProfileSnapshot::legacy(config.permissions.permission_profile().clone()),
+    };
+
+    apply_role_to_config_for_multi_agent_v2(config, Some(role_name)).await?;
+    config.model = runtime_model;
+    config.model_reasoning_effort = runtime_model_reasoning_effort;
+    config.model_reasoning_summary = runtime_model_reasoning_summary;
+    config.model_verbosity = runtime_model_verbosity;
+    config.model_provider_id = runtime_model_provider_id;
+    config.model_provider = runtime_model_provider;
+    config.service_tier = runtime_service_tier;
+    config
+        .permissions
+        .approval_policy
+        .set(runtime_approval_policy)
+        .map_err(|err| format!("approval_policy is invalid: {err}"))?;
+    config.approvals_reviewer = runtime_approvals_reviewer;
+    config.cwd = runtime_cwd;
+    config
+        .permissions
+        .set_permission_profile_from_session_snapshot(runtime_permission_profile)
+        .map_err(|err| format!("permission_profile is invalid: {err}"))?;
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
