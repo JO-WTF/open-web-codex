@@ -37,7 +37,6 @@ from supply_chain_planner.optimization_models import (
 )
 from supply_chain_planner.report_service import NetworkPlanningReportBundle
 from supply_chain_planner.resource_store import ResourceStore
-from supply_chain_planner.workspace_files import WorkspaceFileError
 
 BEKASI_ID = "WH-CROSS_DOCKING-BEKASI"
 
@@ -314,7 +313,7 @@ def test_s2_final_tools_create_exact_self_contained_json_artifacts(
         18,
     ]
 
-    with pytest.raises(WorkspaceFileError, match="workspace_file_exists"):
+    with pytest.raises(McpResourceContractError, match="workspace_file_invalid"):
         server.render_network_comparison_map(
             *refs,
             "outputs/network-map.json",
@@ -324,12 +323,12 @@ def test_s2_final_tools_create_exact_self_contained_json_artifacts(
         (workspace / "absolute.json").as_posix(),
         "../escape.json",
     ):
-        with pytest.raises(WorkspaceFileError, match="workspace_path_invalid"):
+        with pytest.raises(McpResourceContractError, match="workspace_file_invalid"):
             server.publish_network_planning_report(*refs, invalid_path, ctx)
     outside = tmp_path / "outside"
     outside.mkdir()
     (workspace / "linked").symlink_to(outside, target_is_directory=True)
-    with pytest.raises(WorkspaceFileError, match="workspace_symlink_rejected"):
+    with pytest.raises(McpResourceContractError, match="workspace_file_invalid"):
         server.publish_network_planning_report(
             *refs,
             "linked/report.json",

@@ -3767,11 +3767,10 @@ def _write_final_delivery_bundle(
     ctx: Context,
     summary: str,
 ) -> CallToolResult:
-    encoded = bundle.model_dump_json(by_alias=True).encode("utf-8")
-    created = _runtime().create_workspace_file(
+    created = _runtime().create_workspace_model(
         ctx,
         output_relative_path,
-        encoded,
+        bundle,
         max_bytes=MAX_WORKSPACE_FILE_BYTES,
     )
     structured = NetworkFinalArtifactToolResult(
