@@ -138,6 +138,26 @@ describe("McpFormQueue", () => {
     expect(onSubmit).toHaveBeenNthCalledWith(2, "approval-1", 3, "cancel", undefined);
   });
 
+  it("renders and accepts an official zero-field MCP tool approval", () => {
+    const onSubmit = vi.fn();
+    render(
+      <McpFormQueue
+        requests={[{
+          ...request,
+          id: "approval-tool-1",
+          message: "Allow the supply_chain MCP server to run this tool?",
+          fields: [],
+        }]}
+        submittingIds={new Set()}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    expect(screen.getByText(/Allow the supply_chain MCP server/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Accept" }));
+    expect(onSubmit).toHaveBeenCalledWith("approval-tool-1", 3, "accept", {});
+  });
+
   it("blocks acceptance when a bounded field is invalid", () => {
     render(<McpFormQueue requests={[request]} submittingIds={new Set()} onSubmit={vi.fn()} />);
     fireEvent.change(screen.getByLabelText(/Warehouse count/), { target: { value: "1.5" } });

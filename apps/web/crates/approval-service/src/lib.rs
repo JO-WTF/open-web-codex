@@ -1096,7 +1096,10 @@ fn parse_mcp_form_fields(
         .get("properties")
         .and_then(Value::as_object)
         .ok_or(ApprovalServiceError::Invalid)?;
-    if !(1..=MAX_MCP_FORM_FIELDS).contains(&properties.len()) {
+    // Codex uses a form elicitation with an empty object schema for an MCP
+    // tool approval. It is still a typed approval request: the browser must
+    // offer Accept / Decline / Cancel rather than silently dropping it.
+    if properties.len() > MAX_MCP_FORM_FIELDS {
         return Err(ApprovalServiceError::Invalid);
     }
     let required_values: &[Value] = match schema.get("required") {
@@ -1791,6 +1794,26 @@ mod tests {
         assert_eq!(audit["fieldCount"], 6);
         assert!(!audit.to_string().contains("Actual plan"));
         assert!(!audit.to_string().contains("navigation"));
+    }
+
+    #[test]
+    fn accepts_the_zero_field_mcp_tool_approval_form() {
+        let fields = parse_mcp_form_fields(&json!({
+            "mode": "form",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {}
+            }
+        }))
+        .unwrap();
+        assert!(fields.is_empty());
+
+        let request = RespondMcpFormRequest {
+            action: McpFormResponseAction::Accept,
+            content: Some(BTreeMap::new()),
+            version: 0,
+        };
+        assert_eq!(validate_mcp_form_response(&fields, &request).unwrap(), json!({}));
     }
 
     #[test]
