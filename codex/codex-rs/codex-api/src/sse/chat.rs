@@ -348,3 +348,7 @@ async fn finish_chat_stream(
 #[cfg(test)]
 #[path = "chat_smoke_tests.rs"]
 mod smoke_tests;
+
+#[cfg(test)]
+#[path = "chat_tests.rs"]
+mod tests;
