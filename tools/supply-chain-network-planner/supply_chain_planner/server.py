@@ -49,15 +49,15 @@ from .decision_core import (
 from .map_service import NetworkMapService
 from .mapping_service import CaseMappingService
 from .matrix import build_cost_matrix as _build_composable_cost_matrix
-from .matrix import build_haversine_route_matrix as _build_composable_haversine_matrix
+from .matrix import build_route_matrix_with_reuse
 from .matrix import plan_route_matrix as _plan_composable_route_matrix
 from .matrix import register_navigation_route_matrix as _register_composable_navigation_matrix
 from .matrix import validate_route_matrix as _validate_route_matrix_model
-from .matrix_models import CostMatrix, RouteMatrixPlan, RouteMatrixRow
+from .matrix_models import CostCalculationPolicy, CostMatrix, RouteMatrixRow
 from .matrix_models import RouteMatrix as ComposableRouteMatrix
 from .matrix_service import CaseMatrixService
 from .mcp_contracts import ResourceRef
-from .mcp_resources import McpResourceRuntime, bind_runtime
+from .mcp_resources import McpResourceContractError, McpResourceRuntime, bind_runtime
 from .models import (
     ComparisonToolResult,
     CurrentCoverageResult,
@@ -74,6 +74,7 @@ from .models import (
     NetworkSnapshot,
     NetworkSnapshotPreparationToolResult,
     PlanningDataset,
+    PreparedNetworkResource,
     ResourceToolResult,
     RiskItem,
     RiskRegister,
@@ -86,7 +87,6 @@ from .models import RouteMatrix as LegacyRouteMatrix
 from .network_data import SourceInventoryService
 from .network_models import (
     DemandCityRecord,
-    RouteQuoteRecord,
     WarehouseRecord,
 )
 from .normalization import NormalizationService
@@ -118,6 +118,7 @@ from .solver import (
     solve_current_assignment,
     summarize_assignment_cost,
 )
+from .workspace_intake import read_json_document
 
 MAX_SOURCE_BYTES = 20 * 1024 * 1024
 MAX_PROFILE_GOAL_CHARS = 8_000
@@ -3158,87 +3159,105 @@ def _resource_case_records(
     return case, demand, warehouses
 
 
-def _resource_route_quotes(case: NetworkCase) -> list[RouteQuoteRecord]:
-    try:
-        return [RouteQuoteRecord.model_validate(row) for row in case.route_quotes]
-    except ValidationError as error:
-        raise ValueError("normalized_route_quote_is_invalid") from error
-
-
-def _load_navigation_rows(ref: ArtifactRef | ResourceRef) -> list[RouteMatrixRow]:
-    if isinstance(ref, ResourceRef):
-        payload = _store().load_uri(ref.uri)
-    else:
-        payload = _load_artifact(ref)
-    rows = payload.get("rows") or payload.get("routes")
-    if not isinstance(rows, list) or len(rows) > 50_000:
-        raise ValueError("navigation_result_rows_missing_or_too_large")
-    try:
-        return [RouteMatrixRow.model_validate(row) for row in rows]
-    except ValidationError as error:
-        raise ValueError("navigation_result_rows_invalid") from error
+def _load_ready_network(resource_ref: ResourceRef) -> PreparedNetworkResource:
+    prepared = _runtime().load_model(
+        resource_ref,
+        "normalized_network_input.v1",
+        PreparedNetworkResource,
+    )
+    if prepared.state != "ready":
+        raise McpResourceContractError("normalized_input_not_ready")
+    return prepared
 
 
 @mcp.tool(structured_output=True)
 def plan_route_matrix(
-    network_case_ref: ArtifactRef | ResourceRef,
+    normalized_input_ref: ResourceRef,
     route_method: Literal["haversine", "navigation", "provided"],
+    ctx: Context,
     detour_coefficient: float | None = None,
     average_speed_kph: float | None = None,
 ) -> CallToolResult:
-    """Plan a bounded matrix from a normalized resource, without a Case handle."""
-    _case, demand, warehouses = _resource_case_records(network_case_ref)
+    """Plan required layered route pairs without persisting workflow state."""
+    _runtime().require_workspace(ctx)
+    prepared = _load_ready_network(normalized_input_ref)
     plan = _plan_composable_route_matrix(
-        demand,
-        warehouses,
+        prepared.demand_cities,
+        prepared.warehouses,
         route_method,
         detour_coefficient,
         average_speed_kph,
     )
-    return _publish_new_resource(
+    return _runtime().publish(
         plan.schema_version,
         plan,
-        f"Planned {plan.route_count} warehouse-to-city routes using {plan.method}; "
+        f"Planned {plan.route_count} layered routes using {plan.method}; "
         f"estimated billable navigation calls: {plan.estimated_billable_calls}.",
     )
 
 
 @mcp.tool(structured_output=True)
 def build_haversine_route_matrix(
-    network_case_ref: ArtifactRef | ResourceRef,
-    route_plan_ref: ArtifactRef,
-    detour_coefficient: float | None = None,
-    average_speed_kph: float | None = None,
+    normalized_input_ref: ResourceRef,
+    detour_coefficient: float,
+    average_speed_kph: float,
+    ctx: Context,
+    prior_route_matrix_ref: ResourceRef | None = None,
 ) -> CallToolResult:
-    """Build deterministic distance and duration rows from a route plan."""
-    plan = _load_new_model(route_plan_ref, RouteMatrixPlan)
-    coefficient = detour_coefficient or plan.detour_coefficient
-    speed = average_speed_kph or plan.average_speed_kph
-    if plan.method != "haversine" or coefficient is None or speed is None:
-        raise ValueError("haversine_route_plan_requires_coefficient_and_speed")
-    _case, demand, warehouses = _resource_case_records(network_case_ref)
-    matrix = _build_composable_haversine_matrix(demand, warehouses, coefficient, speed)
-    return _publish_new_resource(
+    """Build missing haversine facts and reuse only exact prior pair facts."""
+    _runtime().require_workspace(ctx)
+    prepared = _load_ready_network(normalized_input_ref)
+    prior = (
+        _runtime().load_model(
+            prior_route_matrix_ref,
+            "route_matrix.v2",
+            ComposableRouteMatrix,
+        )
+        if prior_route_matrix_ref is not None
+        else None
+    )
+    matrix = build_route_matrix_with_reuse(
+        prepared.demand_cities,
+        prepared.warehouses,
+        prior.rows if prior is not None else [],
+        detour_coefficient,
+        average_speed_kph,
+    )
+    validation = matrix.validation
+    return _runtime().publish(
         matrix.schema_version,
         matrix,
-        f"Built {len(matrix.rows)} haversine distance and duration routes.",
+        "Built route matrix with "
+        f"{validation['reused_pair_count']} reused, "
+        f"{validation['computed_pair_count']} computed, and "
+        f"{validation['missing_pair_count']} missing pairs.",
     )
 
 
 @mcp.tool(structured_output=True)
 def validate_route_matrix(
-    network_case_ref: ArtifactRef | ResourceRef,
-    route_matrix_ref: ArtifactRef,
+    normalized_input_ref: ResourceRef,
+    route_matrix_ref: ResourceRef,
+    ctx: Context,
 ) -> CallToolResult:
-    """Validate completeness and uniqueness of one immutable route matrix."""
-    _case, demand, warehouses = _resource_case_records(network_case_ref)
-    matrix = _load_new_model(route_matrix_ref, ComposableRouteMatrix)
-    validation = _validate_route_matrix_model(demand, warehouses, matrix)
+    """Validate completeness and uniqueness against the normalized network."""
+    _runtime().require_workspace(ctx)
+    prepared = _load_ready_network(normalized_input_ref)
+    matrix = _runtime().load_model(
+        route_matrix_ref,
+        "route_matrix.v2",
+        ComposableRouteMatrix,
+    )
+    validation = _validate_route_matrix_model(
+        prepared.demand_cities,
+        prepared.warehouses,
+        matrix,
+    )
     payload = {
-        "schema_version": "route_matrix_validation.v1",
-        **validation,
+        "schemaVersion": "route_matrix_validation.v1",
+        **{key: value for key, value in validation.items() if key != "schema"},
     }
-    return _publish_new_resource(
+    return _runtime().publish(
         "route_matrix_validation.v1",
         payload,
         f"Route matrix validation {'passed' if validation['valid'] else 'failed'} "
@@ -3248,50 +3267,110 @@ def validate_route_matrix(
 
 @mcp.tool(structured_output=True)
 def register_navigation_route_matrix(
-    network_case_ref: ArtifactRef | ResourceRef,
-    navigation_result_ref: ArtifactRef | ResourceRef,
+    normalized_input_ref: ResourceRef,
+    navigation_result_relative_path: Annotated[
+        str,
+        Field(min_length=1, max_length=1024),
+    ],
+    ctx: Context,
+    prior_route_matrix_ref: ResourceRef | None = None,
 ) -> CallToolResult:
-    """Register a complete navigation result supplied as a bounded Resource."""
-    _case, demand, warehouses = _resource_case_records(network_case_ref)
-    rows = _load_navigation_rows(navigation_result_ref)
-    matrix = _register_composable_navigation_matrix(demand, warehouses, rows)
+    """Register navigation facts from one validated Workspace-relative JSON file."""
+    workspace = _runtime().require_workspace(ctx)
+    prepared = _load_ready_network(normalized_input_ref)
+    document = read_json_document(workspace, navigation_result_relative_path)
+    try:
+        supplied = ComposableRouteMatrix.model_validate(document)
+    except ValidationError as error:
+        raise McpResourceContractError("navigation_result_invalid") from error
+    if supplied.method != "navigation":
+        raise McpResourceContractError("navigation_result_method_mismatch")
+    prior = (
+        _runtime().load_model(
+            prior_route_matrix_ref,
+            "route_matrix.v2",
+            ComposableRouteMatrix,
+        )
+        if prior_route_matrix_ref is not None
+        else None
+    )
+    prior_rows = prior.rows if prior is not None else []
+    matrix = _register_composable_navigation_matrix(
+        prepared.demand_cities,
+        prepared.warehouses,
+        [*prior_rows, *supplied.rows],
+    )
     if matrix.missing_routes:
-        raise ValueError(f"navigation_matrix_incomplete:{len(matrix.missing_routes)}")
-    return _publish_new_resource(
+        raise McpResourceContractError("navigation_matrix_incomplete")
+    matrix = matrix.model_copy(
+        update={
+            "validation": {
+                **matrix.validation,
+                "reused_pair_count": len(prior_rows),
+                "registered_pair_count": len(supplied.rows),
+                "missing_pair_count": 0,
+            }
+        }
+    )
+    return _runtime().publish(
         matrix.schema_version,
         matrix,
-        f"Registered {len(matrix.rows)} navigation distance and duration routes.",
+        f"Registered navigation matrix with {len(prior_rows)} reused and "
+        f"{len(supplied.rows)} supplied pair facts.",
     )
 
 
 @mcp.tool(structured_output=True)
 def plan_cost_matrix(
-    network_case_ref: ArtifactRef | ResourceRef,
-    route_matrix_ref: ArtifactRef | None = None,
-    fallback_rule: dict[str, Any] | None = None,
-    warehouse_scope: Literal["existing_only", "all_warehouses"] = "all_warehouses",
+    normalized_input_ref: ResourceRef,
+    warehouse_scope: Literal["existing_only", "all_warehouses"],
+    ctx: Context,
+    calculation_policy: CostCalculationPolicy | None = None,
+    route_matrix_ref: ResourceRef | None = None,
+    prior_cost_matrix_ref: ResourceRef | None = None,
 ) -> CallToolResult:
-    """Build a cost matrix from explicit quotes or an explicit distance rule."""
-    case, demand, warehouses = _resource_case_records(network_case_ref)
+    """Build quote-first lane costs with an optional explicit calculation policy."""
+    _runtime().require_workspace(ctx)
+    prepared = _load_ready_network(normalized_input_ref)
+    warehouses = prepared.warehouses
     if warehouse_scope == "existing_only":
         warehouses = [warehouse for warehouse in warehouses if warehouse.is_existing]
     route_matrix = (
-        _load_new_model(route_matrix_ref, ComposableRouteMatrix)
+        _runtime().load_model(
+            route_matrix_ref,
+            "route_matrix.v2",
+            ComposableRouteMatrix,
+        )
         if route_matrix_ref is not None
         else None
     )
-    matrix = _build_composable_cost_matrix(
-        demand,
-        warehouses,
-        _resource_route_quotes(case),
-        fallback_rule,
-        route_matrix,
-    ).model_copy(update={"warehouse_scope": warehouse_scope})
-    summary = (
-        f"Built {len(matrix.rows)} cost routes; "
-        f"{len(matrix.missing_routes)} routes still require a cost rule or quote."
+    prior = (
+        _runtime().load_model(
+            prior_cost_matrix_ref,
+            "cost_matrix.v2",
+            CostMatrix,
+        )
+        if prior_cost_matrix_ref is not None
+        else None
     )
-    return _publish_new_resource(matrix.schema_version, matrix, summary)
+    matrix = _build_composable_cost_matrix(
+        prepared.demand_cities,
+        warehouses,
+        prepared.route_quotes,
+        calculation_policy,
+        route_matrix,
+        prior.rows if prior is not None else None,
+        warehouse_scope=warehouse_scope,
+    )
+    validation = matrix.validation
+    return _runtime().publish(
+        matrix.schema_version,
+        matrix,
+        "Built cost matrix with "
+        f"{validation['reused_pair_count']} reused, "
+        f"{validation['computed_pair_count']} computed, and "
+        f"{validation['missing_pair_count']} missing lane costs.",
+    )
 
 
 @mcp.tool(structured_output=True)

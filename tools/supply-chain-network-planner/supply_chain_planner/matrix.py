@@ -269,6 +269,7 @@ def register_navigation_route_matrix(
     warehouse_by_id = {warehouse.warehouse_id: warehouse for warehouse in warehouses}
     demand_by_id = {demand.city_id: demand for demand in demand_cities}
     supplied: set[tuple[str, str, NetworkLayer]] = set()
+    provenance: set[tuple[str, str, str]] = set()
     for row in rows:
         key = (row.origin_id, row.destination_id, row.layer)
         if key not in expected:
@@ -284,6 +285,9 @@ def register_navigation_route_matrix(
             raise ValueError("navigation_matrix_requires_navigation_method")
         if not row.navigation_provider or not row.navigation_profile:
             raise ValueError("navigation_parameters_unavailable")
+        provenance.add(
+            (row.navigation_provider, row.navigation_profile, row.tool_version)
+        )
         origin = warehouse_by_id.get(row.origin_id)
         destination = (
             demand_by_id.get(row.destination_id)
@@ -296,6 +300,8 @@ def register_navigation_route_matrix(
             raise ValueError(
                 f"navigation_route_endpoint_mismatch:{row.origin_id}:{row.destination_id}:{row.layer}"
             )
+    if len(provenance) > 1:
+        raise ValueError("navigation_route_provenance_conflict")
     missing = sorted(expected - supplied)
     return RouteMatrix(
         method="navigation",

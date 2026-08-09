@@ -1,0 +1,297 @@
+from __future__ import annotations
+
+import asyncio
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from _network_fixtures import network_case
+
+from supply_chain_planner import server
+from supply_chain_planner.matrix import build_haversine_route_matrix
+from supply_chain_planner.matrix_models import (
+    CostCalculationPolicy,
+    CostMatrix,
+    DemandUnitCostRule,
+    RouteMatrix,
+)
+from supply_chain_planner.mcp_resources import (
+    McpResourceContractError,
+    McpResourceRuntime,
+)
+from supply_chain_planner.models import PreparedNetworkResource, ResourceRef
+from supply_chain_planner.resource_store import ResourceStore, resource_ref
+
+
+def _runtime(tmp_path: Path, monkeypatch) -> tuple[Path, ResourceStore]:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = ResourceStore(tmp_path / "profile" / "resources")
+    monkeypatch.setattr(
+        server,
+        "_mcp_resource_runtime",
+        McpResourceRuntime(
+            workspace,
+            tmp_path / "profile",
+            server.MCP_SERVER_NAME,
+            "supply-chain://resources/",
+            store=store,
+        ),
+    )
+    return workspace, store
+
+
+def _context(workspace: Path) -> SimpleNamespace:
+    meta = SimpleNamespace(
+        model_extra={
+            "codex/sandbox-state-meta": {"sandboxCwd": workspace.as_uri()}
+        }
+    )
+    return SimpleNamespace(request_context=SimpleNamespace(meta=meta))
+
+
+def _prepared_ref(store: ResourceStore, *, state: str = "ready") -> ResourceRef:
+    fixture = network_case()
+    prepared = PreparedNetworkResource(
+        country_code="ID",
+        state=state,
+        demand_cities=fixture.demand,
+        warehouses=fixture.warehouses,
+        current_assignments=[],
+        route_quotes=[],
+    )
+    return resource_ref(store.publish(prepared.schema_version, prepared))
+
+
+def _result_ref(result) -> ResourceRef:
+    assert result.structuredContent is not None
+    assert set(result.structuredContent) == {"summary", "resource_ref"}
+    return ResourceRef.model_validate(result.structuredContent["resource_ref"])
+
+
+def _cost_policy() -> CostCalculationPolicy:
+    return CostCalculationPolicy(
+        rules=[
+            DemandUnitCostRule(
+                layer=layer,
+                currency="IDR",
+                fixed_cost_per_demand_unit=5,
+                cost_per_km_per_demand_unit=2,
+            )
+            for layer in ("last_mile", "linehaul")
+        ]
+    )
+
+
+def test_matrix_tools_expose_composable_resource_schemas() -> None:
+    tools = {tool.name: tool for tool in asyncio.run(server.mcp.list_tools())}
+    for name in (
+        "plan_route_matrix",
+        "build_haversine_route_matrix",
+        "validate_route_matrix",
+        "register_navigation_route_matrix",
+        "plan_cost_matrix",
+    ):
+        schema = tools[name].inputSchema
+        assert "ctx" not in schema["properties"]
+        assert "normalized_input_ref" in schema["required"]
+
+    plan = tools["plan_route_matrix"].inputSchema
+    assert "prior_route_matrix_ref" not in plan["properties"]
+    haversine = tools["build_haversine_route_matrix"].inputSchema
+    assert "route_plan_ref" not in haversine["properties"]
+    assert {"detour_coefficient", "average_speed_kph"}.issubset(
+        haversine["required"]
+    )
+    navigation = tools["register_navigation_route_matrix"].inputSchema
+    assert "navigation_result_relative_path" in navigation["required"]
+    assert "navigation_result_ref" not in navigation["properties"]
+    cost = tools["plan_cost_matrix"].inputSchema
+    assert "warehouse_scope" in cost["required"]
+    assert "calculation_policy" not in cost["required"]
+
+
+def test_route_and_cost_tools_use_exact_pair_reuse(tmp_path: Path, monkeypatch) -> None:
+    workspace, store = _runtime(tmp_path, monkeypatch)
+    ctx = _context(workspace)
+    prepared_ref = _prepared_ref(store)
+
+    plan_ref = _result_ref(
+        server.plan_route_matrix(prepared_ref, "haversine", ctx, 1.2, 40)
+    )
+    assert plan_ref.resource_schema == "route_matrix_plan.v2"
+
+    route_ref = _result_ref(
+        server.build_haversine_route_matrix(prepared_ref, 1.2, 40, ctx)
+    )
+    original = server._runtime().load_model(route_ref, "route_matrix.v2", RouteMatrix)
+    partial = original.model_copy(update={"rows": original.rows[:-2]})
+    partial_ref = resource_ref(store.publish(partial.schema_version, partial))
+    completed_ref = _result_ref(
+        server.build_haversine_route_matrix(
+            prepared_ref,
+            1.2,
+            40,
+            ctx,
+            prior_route_matrix_ref=partial_ref,
+        )
+    )
+    completed = server._runtime().load_model(
+        completed_ref,
+        "route_matrix.v2",
+        RouteMatrix,
+    )
+    assert completed.validation["reused_pair_count"] == len(original.rows) - 2
+    assert completed.validation["computed_pair_count"] == 2
+    assert completed.validation["missing_pair_count"] == 0
+
+    validation_ref = _result_ref(
+        server.validate_route_matrix(prepared_ref, completed_ref, ctx)
+    )
+    assert store.load(validation_ref)["valid"] is True
+
+    cost_ref = _result_ref(
+        server.plan_cost_matrix(
+            prepared_ref,
+            "all_warehouses",
+            ctx,
+            _cost_policy(),
+            route_matrix_ref=completed_ref,
+        )
+    )
+    original_cost = server._runtime().load_model(cost_ref, "cost_matrix.v2", CostMatrix)
+    partial_cost = original_cost.model_copy(update={"rows": original_cost.rows[:-2]})
+    partial_cost_ref = resource_ref(
+        store.publish(partial_cost.schema_version, partial_cost)
+    )
+    completed_cost_ref = _result_ref(
+        server.plan_cost_matrix(
+            prepared_ref,
+            "all_warehouses",
+            ctx,
+            _cost_policy(),
+            route_matrix_ref=completed_ref,
+            prior_cost_matrix_ref=partial_cost_ref,
+        )
+    )
+    completed_cost = server._runtime().load_model(
+        completed_cost_ref,
+        "cost_matrix.v2",
+        CostMatrix,
+    )
+    assert completed_cost.warehouse_scope == "all_warehouses"
+    assert completed_cost.validation["reused_pair_count"] == len(original_cost.rows) - 2
+    assert completed_cost.validation["computed_pair_count"] == 2
+    assert completed_cost.validation["missing_pair_count"] == 0
+
+
+def test_navigation_tool_merges_prior_workspace_file_and_reports_counts(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace, store = _runtime(tmp_path, monkeypatch)
+    prepared_ref = _prepared_ref(store)
+    fixture = network_case()
+    haversine = build_haversine_route_matrix(fixture.demand, fixture.warehouses, 1.2, 40)
+    rows = [
+        row.model_copy(
+            update={
+                "method": "navigation",
+                "tool_version": "navigation-test.v1",
+                "detour_coefficient": None,
+                "average_speed_kph": None,
+                "navigation_provider": "test-provider",
+                "navigation_profile": "truck",
+            }
+        )
+        for row in haversine.rows
+    ]
+    prior = RouteMatrix(method="navigation", rows=rows[:3])
+    prior_ref = resource_ref(store.publish(prior.schema_version, prior))
+    supplied = RouteMatrix(method="navigation", rows=rows[3:])
+    (workspace / "navigation.json").write_text(
+        json.dumps(supplied.model_dump(mode="json")),
+        encoding="utf-8",
+    )
+
+    result_ref = _result_ref(
+        server.register_navigation_route_matrix(
+            prepared_ref,
+            "navigation.json",
+            _context(workspace),
+            prior_ref,
+        )
+    )
+    registered = server._runtime().load_model(
+        result_ref,
+        "route_matrix.v2",
+        RouteMatrix,
+    )
+    assert registered.missing_routes == []
+    assert registered.validation["reused_pair_count"] == 3
+    assert registered.validation["registered_pair_count"] == len(rows) - 3
+
+    mixed = supplied.model_copy(
+        update={
+            "rows": [
+                supplied.rows[0].model_copy(update={"tool_version": "navigation-test.v2"}),
+                *supplied.rows[1:],
+            ]
+        }
+    )
+    (workspace / "navigation.json").write_text(
+        json.dumps(mixed.model_dump(mode="json")),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="navigation_route_provenance_conflict"):
+        server.register_navigation_route_matrix(
+            prepared_ref,
+            "navigation.json",
+            _context(workspace),
+            prior_ref,
+        )
+
+
+def test_navigation_tool_rejects_absolute_escape_and_symlink_paths(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace, store = _runtime(tmp_path, monkeypatch)
+    prepared_ref = _prepared_ref(store)
+    outside = tmp_path / "outside.json"
+    outside.write_text("{}", encoding="utf-8")
+    (workspace / "linked.json").symlink_to(outside)
+    ctx = _context(workspace)
+
+    for invalid_path, code in (
+        (outside.as_posix(), "invalid_workspace_relative_path"),
+        ("../outside.json", "invalid_workspace_relative_path"),
+        ("linked.json", "workspace_source_symlink_rejected"),
+    ):
+        with pytest.raises(ValueError, match=code):
+            server.register_navigation_route_matrix(
+                prepared_ref,
+                invalid_path,
+                ctx,
+            )
+
+
+def test_network_tools_reject_non_ready_input_and_wrong_workspace(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace, store = _runtime(tmp_path, monkeypatch)
+    ctx = _context(workspace)
+    with pytest.raises(McpResourceContractError, match="normalized_input_not_ready"):
+        server.plan_route_matrix(
+            _prepared_ref(store, state="needs_input"),
+            "navigation",
+            ctx,
+        )
+
+    other = tmp_path / "other"
+    other.mkdir()
+    with pytest.raises(McpResourceContractError, match="workspace_scope_mismatch"):
+        server.plan_route_matrix(
+            _prepared_ref(store),
+            "navigation",
+            _context(other),
+        )

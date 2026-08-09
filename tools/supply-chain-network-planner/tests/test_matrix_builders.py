@@ -66,6 +66,27 @@ def test_navigation_registration_reports_missing_routes_without_filling_them() -
             [rows[0].model_copy(update={"destination_id": "not-required"})],
         )
 
+    haversine = build_haversine_route_matrix(case.demand, case.warehouses, 1.2, 40)
+    mixed_provenance = [
+        row.model_copy(
+            update={
+                "method": "navigation",
+                "tool_version": f"navigation-provider.v{index}",
+                "detour_coefficient": None,
+                "average_speed_kph": None,
+                "navigation_provider": "test-provider",
+                "navigation_profile": "truck",
+            }
+        )
+        for index, row in enumerate(haversine.rows[:2], start=1)
+    ]
+    with pytest.raises(ValueError, match="navigation_route_provenance_conflict"):
+        register_navigation_route_matrix(
+            case.demand,
+            case.warehouses,
+            mixed_provenance,
+        )
+
 
 def test_route_reuse_is_exact_per_pair_and_ignores_unrelated_prior_rows() -> None:
     case = network_case()
