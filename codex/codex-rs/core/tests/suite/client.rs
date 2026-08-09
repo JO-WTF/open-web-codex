@@ -1872,6 +1872,88 @@ async fn chat_provider_completes_mixed_message_before_core_tool_item() -> anyhow
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chat_provider_replays_reasoning_for_tool_only_turn() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    mount_chat_response_sequence(
+        &server,
+        vec![
+            concat!(
+                "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"check route coordinates\"}}]}\n\n",
+                "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"exec_command\",\"arguments\":\"{\\\"cmd\\\":\\\"printf ready\\\"}\"}}]}}]}\n\n",
+                "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+                "data: [DONE]\n\n"
+            )
+            .to_string(),
+            concat!(
+                "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"route complete\"}}]}\n\n",
+                "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: [DONE]\n\n"
+            )
+            .to_string(),
+        ],
+    )
+    .await;
+    let provider = mock_provider(&server, WireApi::Chat);
+    let test = test_codex()
+        .with_model_info_override("gpt-5.4", |model_info| {
+            model_info.support_verbosity = false;
+            model_info.default_verbosity = None;
+            model_info.supports_search_tool = false;
+            model_info.apply_patch_tool_type = None;
+            model_info.experimental_supported_tools.clear();
+        })
+        .with_config(move |config| {
+            config.model_provider_id = provider.name.clone();
+            config.model_provider = provider;
+            config
+                .web_search_mode
+                .set(WebSearchMode::Disabled)
+                .expect("test Chat provider should allow disabled web search");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "check the route".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    loop {
+        match wait_for_event(&test.codex, |_| true).await {
+            EventMsg::Error(error) => panic!("Chat core reducer failed: {}", error.message),
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("recorded Chat requests");
+    assert_eq!(requests.len(), 2);
+    let second_body: serde_json::Value = serde_json::from_slice(&requests[1].body)?;
+    let assistant_tool_call = second_body["messages"]
+        .as_array()
+        .expect("Chat request messages")
+        .iter()
+        .find(|message| message["role"] == "assistant" && message["tool_calls"].is_array())
+        .expect("second Chat request must replay the assistant tool-call message");
+    assert_eq!(assistant_tool_call["content"], "");
+    assert_eq!(
+        assistant_tool_call["reasoning_content"],
+        "check route coordinates"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_provider_rejects_explicit_reasoning_summary_without_network_request() {
     let server = MockServer::start().await;
     let provider = mock_provider(&server, WireApi::Chat);

@@ -254,6 +254,58 @@ fn groups_raw_reasoning_assistant_text_and_tool_calls() {
 }
 
 #[test]
+fn groups_raw_reasoning_tool_only_and_output() {
+    let mut request = request(None);
+    request.instructions.clear();
+    request.input = vec![
+        ResponseItem::Reasoning {
+            id: None,
+            summary: Vec::new(),
+            content: Some(vec![
+                codex_protocol::models::ReasoningItemContent::ReasoningText {
+                    text: "check route coordinates".to_string(),
+                },
+            ]),
+            encrypted_content: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        function_call("route", Some("mcp__maps"), "call_1"),
+        ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: "call_1".to_string(),
+            output: FunctionCallOutputPayload::from_text("12 km".to_string()),
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+
+    assert_eq!(
+        responses_request_to_chat_completions_request(request)
+            .unwrap()
+            .messages,
+        vec![
+            ChatMessage::Assistant {
+                role: "assistant".to_string(),
+                content: String::new(),
+                reasoning_content: Some("check route coordinates".to_string()),
+                tool_calls: Some(vec![ChatToolCall {
+                    id: "call_1".to_string(),
+                    r#type: "function".to_string(),
+                    function: ChatToolCallFunction {
+                        name: "mcp__maps__route".to_string(),
+                        arguments: "{}".to_string(),
+                    },
+                }]),
+            },
+            ChatMessage::ToolResult {
+                role: "tool".to_string(),
+                tool_call_id: "call_1".to_string(),
+                content: "12 km".to_string(),
+            },
+        ]
+    );
+}
+
+#[test]
 fn preserves_each_supported_message_item_without_merging_or_text_rewrites() {
     let mut request = request(None);
     request.instructions.clear();

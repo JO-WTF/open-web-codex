@@ -68,19 +68,24 @@ pub(crate) fn responses_input_to_chat_messages(
                     encrypted_content.as_deref(),
                 )?;
                 index += 1;
+                let assistant_message_present = matches!(
+                    input.get(index),
+                    Some(ResponseItem::Message { role, .. }) if role == "assistant"
+                );
                 let assistant_content = match input.get(index) {
                     Some(ResponseItem::Message { role, content, .. }) if role == "assistant" => {
                         index += 1;
                         response_message_text("assistant", content)?
                     }
-                    _ => {
+                    _ => String::new(),
+                };
+                let tool_calls = take_function_calls(input, &mut index);
+                if tool_calls.is_empty() {
+                    if !assistant_message_present {
                         return Err(unsupported(
                             "reasoning history not followed by an assistant message",
                         ));
                     }
-                };
-                let tool_calls = take_function_calls(input, &mut index);
-                if tool_calls.is_empty() {
                     push_assistant(
                         &mut messages,
                         assistant_content,
