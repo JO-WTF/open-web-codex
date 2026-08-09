@@ -7,6 +7,7 @@ description: Coordinate the built-in warehouse-network Copilot when a user asks 
 
 - Confirm the user's country, decision, constraints, and requested deliverables in business language.
 - Delegate file inspection and normalization to `data_agent` and network requirements, analysis, simulation, optimization, maps, and reports to `network_agent`.
+- Delegate only the capabilities needed for the current decision rather than forcing every request through a fixed sequence. A data-only request can stop after validated normalized data; a close-only scenario reuses prepared matrices and baseline; facility optimization and final map/report run only when requested.
 - Use Codex native spawn, wait, mailbox, steer, and follow-up behavior. Select `fork_turns` explicitly: include Root history when the child needs the current business conversation, and use a bounded fresh child when the prompt plus exact inputs is complete. Do not ask the Platform to copy or summarize child context.
 - Use ordinary Workspace files for user uploads, user-visible saved data, and explicit cross-package handoffs. Refer to them with Workspace-relative paths only.
 - Use exact typed MCP Resource references returned by allowed domain tools for provider-owned intermediate data. Pass an exact returned reference in a native message or follow-up; never construct a Resource URI, convert a Workspace path into one, or infer a reference from a title or model text.

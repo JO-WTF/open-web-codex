@@ -473,6 +473,28 @@ mod tests {
             .as_array()
             .expect("network args")
             .is_empty());
+        let supply_chain_tools = network["mcp_servers"]["supply_chain"]["enabled_tools"]
+            .as_array()
+            .expect("supply chain tools")
+            .iter()
+            .filter_map(|item| item.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            supply_chain_tools,
+            vec![
+                "plan_route_matrix",
+                "build_haversine_route_matrix",
+                "validate_route_matrix",
+                "register_navigation_route_matrix",
+                "plan_cost_matrix",
+                "evaluate_network_baseline",
+                "evaluate_facility_scenario",
+                "solve_p_median",
+                "compare_network_scenarios",
+                "render_network_comparison_map",
+                "publish_network_planning_report",
+            ]
+        );
         assert_eq!(
             network["mcp_servers"]["map_utils"]["command"].as_str(),
             Some(path_text("maps launcher", &assets.maps_launcher).expect("path"))
@@ -517,6 +539,21 @@ mod tests {
             5
         );
         assert!(!profile.join("config.toml").exists());
+    }
+
+    #[test]
+    fn network_skill_uses_composable_current_tool_contracts() {
+        assert!(NETWORK_SKILL.contains("composable capabilities"));
+        assert!(NETWORK_SKILL.contains("complete fixed/optional existing-warehouse policy"));
+        assert!(NETWORK_SKILL.contains("create-new Workspace-relative output path"));
+        for deprecated in [
+            "compute_optimal_assignment",
+            "evaluate_service_targets",
+            "summarize_network_cost",
+            "solve_service_constrained_location",
+        ] {
+            assert!(!NETWORK_ROLE.contains(deprecated));
+        }
     }
 
     #[test]

@@ -47,20 +47,17 @@ const DATA_TOOLS: [&str; 4] = [
     "normalize_network_input",
     "prepare_network_geography",
 ];
-const NETWORK_TOOLS: [&str; 14] = [
+const NETWORK_TOOLS: [&str; 11] = [
     "build_haversine_route_matrix",
     "compare_network_scenarios",
-    "compute_optimal_assignment",
     "evaluate_facility_scenario",
     "evaluate_network_baseline",
-    "evaluate_service_targets",
     "plan_cost_matrix",
     "plan_route_matrix",
+    "publish_network_planning_report",
     "register_navigation_route_matrix",
     "render_network_comparison_map",
     "solve_p_median",
-    "solve_service_constrained_location",
-    "summarize_network_cost",
     "validate_route_matrix",
 ];
 const MAP_TOOLS: [&str; 5] = [
