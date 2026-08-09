@@ -4,20 +4,37 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 文档状态 | V1 产品与研发评审基线 |
-| 更新时间 | 2026-07-26 |
-| 产品形态 | 单组织、多用户、自托管 Codex Web Harness |
+| 文档状态 | 阶段一产品与研发评审基线 |
+| 更新时间 | 2026-08-08 |
+| 产品形态 | 当前单用户、单 Profile；长期多用户的自托管 Codex Web Workbench |
 | 用户客户端 | 标准浏览器 |
 | Agent Runtime | 官方 Codex `app-server` + Patch Map 登记的最小 retained seams |
 | 产品北极星 | `docs/product-vision.md` |
 | 关联架构 | `docs/architecture.md` |
 | 安全模型 | `docs/security-model.md` |
-| Copilot 创作架构 | `docs/supervisor-agent-skill-tool-architecture.md` |
+| 阶段二研究输入 | `docs/supervisor-agent-skill-tool-architecture.md` |
 | 能力事实 | `docs/capability-baseline.md` |
 | 中期路线 | `docs/roadmap.md` |
 | 研发计划 | `docs/development-plan.md` |
+| 接受基线 | `docs/adr/018-built-in-network-copilot-runtime-closure.md` |
 
-本文档定义产品目标、用户、业务对象、页面、流程、功能需求、权限、状态机、非功能指标和版本验收。运行时能力是否已经存在，以能力基线和实际构建生成的 Capability Manifest 为准；本文档描述产品需要什么，不宣称服务器已经支持什么。
+本文档定义产品目标、用户、业务对象、页面、流程、功能需求、权限、状态机、非功能指标和版本验收。运行时能力是否已经存在，以能力基线、官方生成的 app-server 协议和实际边界验证为准；本文档描述产品需要什么，不宣称服务器已经支持什么。
+
+## 阶段优先级作用域（必须先读）
+
+本文件同时保留阶段一要求和长期产品要求。**阶段一 P0 只有三组**：
+
+1. ADR-018 与 [开发计划](development-plan.md) 明确的普通 Workspace 文件、Codex 原生
+   协同、child elicitation、Profile 热加载和完整仓网双硬门；
+2. 第 7 节中的 `CAP-*`、`TOOL-*`、`SKILL-*`、`AGENT-*`、`FILE-*`、`ART-*`、`NET-*`；
+3. 为上述链路必需且已经存在的单用户底座：一个 Profile/Provider、Task/Run、Task 固定
+   Workspace、Runtime 事件恢复、Approval/MCP elicitation、通用文件 API 和 Artifact 展示。
+
+本文件其他 `P0/P1`、页面、角色、流程、指标和状态模型均表示长期产品优先级，**不是
+阶段一开发任务或退出门**。Organization Owner、多用户登录与邀请、成员/RBAC、Control
+Lease、Git Commit/Push、公开 Studio/Catalog/Marketplace、完整管理面、Beta/GA、生产
+SLA、容量和保留策略全部在阶段二之后；不得因它们仍保留在本文而扩大当前实施范围。
+发生冲突时，ADR-018 和开发计划优先。
 
 ## 1. 产品摘要
 
@@ -30,11 +47,10 @@
 
 平台不得创建第二套 Agent 调度器、Thread 历史或 Memory Engine。平台可以保存 Codex ID、事件投影和检索索引，但恢复模型可见上下文必须以 Codex Profile 为事实来源。
 
-平台化多 Agent 协作是这套工作台当前阶段的主线，而不是另一套产品边界。目标架构在
-Codex 原生根 Thread、子 Agent 和 Runtime Role 之上增加 Tool/Skill/Agent/Supervisor/
-Copilot Catalog、受控安装、通用 Work State、持久 Artifact 与企业能力授权；这些能力
-只有通过能力基线验证后才可声明可用。当前先在单用户、单 Profile 中交付完整创作闭环，
-多用户入口在隔离门禁通过后开放。
+平台化多 Agent 协作是当前主线。阶段一只交付内置仓网 Copilot：最大化复用 Codex 原生
+cwd、Root/child、wait/mailbox/steer、MCP elicitation 和 Skill/Plugin/MCP 热刷新；Platform
+只负责 Task→Workspace、授权、通用文件 Web 能力、Artifact 交付和安全投影。公开 SDK、
+Studio、Catalog、Marketplace 与多用户入口后移。
 
 ### 1.1 核心价值
 
@@ -49,14 +65,14 @@ Copilot Catalog、受控安装、通用 Work State、持久 Artifact 与企业�
 ### 1.2 产品原则
 
 - **Codex 原生优先：** Runtime 已提供的能力不在平台重复实现。
-- **官方路线优先：** Workspace、Thread/Turn 与工具语义跟随官方 Codex；平台只增加多用户授权、持久工作流和浏览器安全边界。
+- **官方路线优先：** Workspace、Thread/Turn 与工具语义跟随官方 Codex；平台只增加授权、Task/Run、通用文件和浏览器安全边界。
 - **事实来源唯一：** 平台、Codex Profile 与 Git 各自拥有明确的数据边界。
 - **默认隔离：** 用户、Profile、Workspace、Secret 和事件流默认互相隔离。
 - **人在回路：** 命令、文件变更、权限提升和结构化输入必须可审查。
 - **可恢复：** 页面刷新、网络断开、进程退出和服务重启不能产生无明确终态的 Run。
 - **能力协商：** UI 只启用当前构建明确声明且平台适配的能力。
 - **显式交付：** 平台不自动 Commit、Force Push、Merge 或删除远端分支。
-- **渐进交付：** 当前先完成单 Profile Copilot 创作与运行闭环，再开放多用户、组织共享和规模化治理；所有新能力沿平台边界演进。
+- **渐进交付：** 当前先完成内置仓网 Copilot 双硬门，再建设公开创作体验、多用户和规模化治理。
 
 ### 1.3 最终目标的完成定义
 
@@ -68,32 +84,36 @@ Copilot Catalog、受控安装、通用 Work State、持久 Artifact 与企业�
    Workspace 作为独立授权的执行目录存在，Codex Thread 保存当前 `cwd`，平台验证其
    位于用户有权使用的 Workspace 内；Run 的事件、审批和交付权限独立审计，并有跨
    用户负向测试证明。
-4. Runtime 与 Web 通过生成的版本化合同和 Capability Manifest 协商；不支持或未验证的能力在 UI 中明确禁用，不能由平台 fallback 实现。
+4. Runtime 与 Web 通过官方生成的版本化合同交互；不支持或未验证的 operation 必须返回 typed unavailable，不能由平台 fallback 实现或由第二份 capability 目录猜测。
 5. `codex/` 能持续同步官方 `openai/codex/main`。产品定制集中在稳定桥接 seam，任何上游高频文件修改都有必要性、测试和 patch map 记录。
 
 这五项是架构和里程碑取舍的最高优先级；局部功能如果破坏复用、隔离或可同步性，即使短期可用也不算目标实现。
 
 ## 2. 目标与非目标
 
-### 2.1 V1 目标
+### 2.1 阶段一目标
 
-- 邀请制成员登录、单组织成员与角色管理。
-- 通过 Git URL 创建项目并验证仓库、凭据和默认分支。
-- 创建、排队、运行、继续、取消、归档 Task 和 Run。
-- 展示消息、计划、工具、命令输出、Diff、审批与多 Agent 轨迹。
-- 每用户独立、持久的 Profile 与 `CODEX_HOME`。
+- 创建、运行、继续和取消仓网 Task/Run。
+- 展示消息、工具、child elicitation、多 Agent 轨迹和最终交付。
+- 一个隔离、持久的 Profile 与 `CODEX_HOME`，身份字段保留未来多用户 scope。
 - 支持 OpenAI 与第三方 Provider，模型列表按 Provider 隔离并可刷新。
-- Thread/Chat 可以选择经授权的可写 Workspace，并通过 Codex 的 `cwd` 在其中完成
-  Diff、Commit 和 Push；Workspace 不归 Thread 所有，同一 Workspace 可以承载多个
-  经授权的 Thread。
-- 支持持久化审批、Control Lease、事件补发和审计。
-- 交付有界的 Tool、中文 Skill、Agent、Supervisor 和 Copilot Studio；其他 Runtime 管理模块继续按能力门控开放。
-- 固定并验证 Codex 构建，支持官方上游同步、灰度和回滚。
-- GA 时用户核心流程只依赖浏览器。
+- Task 固定一个授权 Workspace；Root/child 使用同一原生 `cwd`。同 Workspace Task
+  可显式复用普通文件和同一授权 MCP provider 的精确 Resource ref，没有 Task→Task
+  context/result/data API 或 Task 私有文件层。
+- Web 提供通用 Workspace 文件列举、上传、读取、下载和删除；允许经校验的相对路径。
+- 支持阶段一实际使用的 Approval/MCP elicitation、事件补发和安全审计底座。
+- 通过 Profile 托管和 Codex 原生 discovery/reload 激活内置仓网 Supervisor、Data/Network
+  Roles、Skills 和 MCP tools。
+- 同时通过印尼 Mock 零 elicitation 全链与真实 Excel/CSV/JSON 交互全链。
+- Artifact 只保存地图、报告等用户交付，不承担 Agent/Task 数据传输。
+- 路线和成本按 exact pair/lane fact 复用已有真实计算，只补算缺失部分。
+- 固定并验证实际 Codex 构建，继续遵守官方上游同步边界。
+- 用户核心流程只依赖浏览器。
 
-### 2.2 V1 非目标
+### 2.2 阶段一非目标
 
 - 公共注册、匿名访问、计费、订阅和公共多租户 SaaS。
+- 邀请、成员角色、多用户产品入口、公开 SDK/Studio/Catalog/Marketplace。
 - 自建 Agent Planner、子 Agent Scheduler、Memory Engine、Skill Interpreter、Plugin Runtime 或 MCP Runtime。
 - 浏览器操作用户个人电脑上的仓库、终端或文件系统。
 - 完整在线 IDE、任意文件编辑器或无限制交互 Shell。
@@ -101,8 +121,12 @@ Copilot Catalog、受控安装、通用 Work State、持久 Artifact 与企业�
 - 自动 Commit、Force Push、自动合并或自动删除远端分支。
 - 兼容任意未固定版本的 Codex CLI。
 - 在平台数据库中复制并替代 Codex Thread 或 Memory。
+- Data Intake、DatasetRelease、DomainResource、Resource Broker、Work State、Blackboard。
+- Workspace data revision/head/registry/binding/fingerprint/cache、Task 私有文件层、COW/
+  overlay/snapshot/worktree。
+- Artifact 作为 Agent 输入或 Task 间交换。
 
-## 3. 用户与角色
+## 3. 长期用户与角色（非阶段一开发项）
 
 | 角色 | 核心诉求 | 默认能力 |
 | --- | --- | --- |
@@ -134,18 +158,13 @@ Copilot Catalog、受控安装、通用 Work State、持久 Artifact 与企业�
 | Thread | Codex 对话与模型可见上下文 | Codex Profile |
 | Turn | Thread 中一次模型执行 | Codex Profile |
 | Workspace | 独立于 Thread/Run 的经授权执行目录；可以是管理员登记的现有目录，也可以是用户显式创建的托管 clone/worktree | Platform authorization + filesystem/Git |
-| DataRequirementContract | 领域 capability package 提供的版本化逻辑实体、字段、单位、条件关系和业务参数要求 | Platform contract projection + capability package |
-| WorkspaceDataDraft / SourceAsset | 用户上传的原始数据和不可变 revision；不要求用户知道 Dataset manifest | Platform database scoped by Workspace |
-| DataIntakeSession | Task/Thread 保存画像、模糊候选、缺口、用户确认和参数答案；生命周期为 `active | ready | failed | cancelled` | Platform evidence projection |
-| TaskDatasetBinding | 归一化 Dataset Release 与合同、映射、参数快照的不可变分析绑定 | Platform database + Dataset Release owner |
-| WorkState | Task 范围的通用 component revision、operation、dependency、readiness、blocking input 和 deliverable 元数据；业务 payload 仍由领域包拥有 | Platform database + domain content reference |
-| Catalog Resource | Tool、Skill、Agent、Supervisor 或 Copilot 的稳定身份、Draft 和不可变 Release | Platform Catalog |
-| Profile Installation | 一个精确 Catalog Release 在指定 Profile 的安装、发现和 readiness 状态 | Platform + Profile Host + Runtime discovery |
+| WorkspaceFile | Workspace 中用户可见的普通文件，以经校验相对路径定位；同 Workspace Task 天然可见 | Workspace filesystem + Platform path authorization |
+| Built-in Capability Package | Profile 托管的内置 Roles、Skills、MCP servers 和 fixture | Profile-owned files + Codex Runtime discovery |
 | Provider | 模型服务、Wire API、模型目录和上下文配置 | Codex Profile |
 | Approval | Codex Server Request 的持久平台决策记录 | PostgreSQL |
 | Control Lease | 控制 Task/Run 的短期租约 | PostgreSQL |
-| Artifact | 具有独立身份、授权和保留周期的日志、测试报告、补丁、附件或可视化数据；生产 Run/Thread/Turn/Item 只记录来源 | Object Storage/本地受控存储 + PostgreSQL 授权 |
-| Capability Manifest | 构建实际支持的方法、事件、版本和限制 | Codex 构建产物 |
+| Artifact | 具有独立身份、授权和保留周期的地图、报告等用户交付；不作为 Agent 输入或 Task 间数据通道 | Object Storage/本地受控存储 + PostgreSQL 授权 |
+| Official app-server protocol | 构建生成的方法、事件和类型边界 | Codex 构建产物 |
 
 ### 4.1 Profile 与 Workspace 边界
 
@@ -159,21 +178,23 @@ Copilot Catalog、受控安装、通用 Work State、持久 Artifact 与企业�
 - 托管 clone/worktree 只能由用户或平台策略显式创建、保留和删除，不能在新建
   Thread、恢复 Thread 或创建后继 Run 时隐式生成。
 
-### Thread-first 业务数据闭环
+### Codex 原生数据交换业务闭环
 
-普通业务用户先从已有授权 Workspace 创建 Task。Supervisor 识别目标并选择版本化
-`DataRequirementContract`；平台提供上传入口，接受该合同声明的受支持格式，并把文件
-保存为不可变 SourceAsset。用户不需要填写 Dataset ID、版本、文件角色或内部 manifest。
-Platform Data Intake 负责文件 revision、画像、显式映射和 Dataset Release；领域 adapter
-只定义业务字段、单位、关系、参数、规范化和领域校验，不再扫描 Workspace 或保存第二
-份 source/mapping 状态。
+用户从已有授权 Workspace 创建 Task，并通过通用文件面板上传 Excel/CSV/JSON。Task
+创建后固定该 Workspace；Root 和所有 child Thread 使用同一原生 `cwd`。用户、Skill、
+模型和 Tool 可以使用经校验的 Workspace 相对路径，不能使用服务器绝对路径、路径逃逸、
+含义不明的 `source_ref` alias 或历史 asset/Dataset ID。provider-owned typed intermediate 使用
+Codex 官方 MCP Resource ref，不伪装成 Workspace 路径。
 
-Intake 的生命周期仅为 `active | ready | failed | cancelled`；映射和参数请求使用
-Platform Data Intake 输入合同，Agent 运行中的业务选择使用官方 `request_user_input` 经
-持久 Approval 投影。领域只按当前分析请求验证最小必要实体，不要求先构造一个单体完整
-Dataset。发布的 Dataset Release 绑定到 Work State component；依赖未满足时 readiness
-明确为 `needs_input`、`unavailable` 或 `failed`。空 Workspace 不触发 Mock、无限重试或
-悬挂 Run。
+Data Agent 负责文件画像、字段映射、标准化、行政区和候选仓补全；Network Agent 负责
+距离、成本、覆盖、SLA、模拟和求解。保存什么、读什么、如何复用、裁剪或合并由用户
+要求、Skill 和 Tool 决定，Platform 不保存映射状态、不建立数据 revision 或复用门。
+child Tool 缺业务输入时直接使用原生 MCP elicitation，答案返回原 child request。
+
+同 Workspace 的 Task 可以读取普通文件，也可以使用同一授权 Profile/provider 内由 exact
+official Item 或用户显式选择的 Resource ref；没有 Task 消息、上下文、结果或 adopt 接口。
+Mock 只有在用户明确选择印尼完整示例时才写入可见普通文件；真实输入失败不得静默回退。
+Artifact 只承载最终地图、报告等交付。
 
 ### 4.2 多用户隔离键
 
@@ -197,17 +218,17 @@ authenticated user
 - 缓存、事件订阅、模型目录和 Secret 引用的 key 必须包含 Profile 或用户作用域；禁止使用跨用户全局“当前 Profile/Provider”。
 - 自动化测试必须覆盖相邻用户、相邻项目和猜测 ID 的拒绝路径，不能只验证正常用户流程。
 
-## 5. 信息架构
+## 5. 长期信息架构（阶段一仅实现明确入口）
 
 ### 5.1 主导航
 
 1. **工作台：** 我的 Task、运行中、待审批、异常和最近项目。
 2. **项目：** 仓库、Task、成员、策略和设置。
 3. **审批中心：** 当前用户有权处理的待审批、已决与过期请求。
-4. **Learn：** 安装受审示例、检查运行依赖、启动任务并审阅可验证结果。
-5. **Copilot Studio：** Tools、Skills、Agents、Supervisors、Copilots 及其发布、安装和 readiness。
-6. **Codex 设置：** Profiles、Providers、MCP、Plugins 和 Memory 的 Runtime 管理能力。
-7. **团队设置：** 成员、邀请、角色、会话和组织安全；当前单用户阶段不显示。
+4. **Workspace 文件：** 列举、上传、查看、下载和删除普通文件。
+5. **内置仓网 Copilot：** 创建 Task、运行完整示例或使用真实文件、查看进度与交付。
+6. **Codex 设置：** 当前 Profile、Provider 与必要 Runtime 状态。
+7. **Copilot Studio、团队设置与 Marketplace：** 阶段二之后，阶段一不显示。
 8. **平台管理：** Runners、队列、容量、版本、审计和系统健康。
 
 ### 5.2 路由
@@ -228,11 +249,8 @@ authenticated user
 | `/codex/mcp` | MCP 与 Tools | Developer | 配置、OAuth、状态、测试 |
 | `/codex/plugins` | Plugins | Developer | 浏览、安装、升级、停用、卸载 |
 | `/codex/memory` | Memory | Developer | 健康、连续性、导出、重置 |
-| `/codex/tools` | Tool Studio | Developer | 导入 SDK 包、验证、测试、发布、安装、查看 Runtime readiness |
-| `/codex/skills` | Skill Studio | Developer | 用中文创建、验证、测试、发布、安装和回滚 |
-| `/codex/agents` | Agent Studio | Developer | 组合 Skills、Tools、数据权限、交付件并测试发布 Agent |
-| `/codex/supervisors` | Supervisor Studio | Developer | 组合精确 Agents、协作原则、停止规则和最终交付 |
-| `/codex/copilots` | Copilot Builder | Developer | 锁定依赖、验证、发布、安装和运行完整 Copilot |
+| `/workspaces/:id/files` | Workspace 文件 | Workspace 成员 | 列举、上传、查看、下载、删除普通文件 |
+| `/studio/**` | 阶段二候选 | — | 阶段一不暴露公开创作入口 |
 | `/settings/team` | 团队设置 | Owner | 邀请、角色、禁用、会话吊销 |
 | `/admin/runners` | Runner 管理 | Platform Admin | 暂停、排空、恢复、版本检查 |
 | `/admin/audit` | 审计 | Owner/授权管理员 | 查询、导出安全事件 |
@@ -247,7 +265,7 @@ authenticated user
 
 平板将右栏改为可切换 Inspector；手机使用 Activity、Changes、Approvals、Details 四个底部 Tab。手机端必须支持观察、回复、停止和审批，不要求完成复杂多文件 Diff 审查。
 
-## 6. 核心用户流程
+## 6. 用户流程全集（按顶部阶段作用域执行）
 
 每个流程均要求正常路径、异常路径和明确终态。
 
@@ -285,16 +303,18 @@ authenticated user
 ### WF-05 创建 Task
 
 - 前置：Project ready、Profile 可用、用户拥有 `task.create`。
-- 正常：输入目标，选择基线分支、Provider/模型、推理等级、Agent、附件和审批策略；通过幂等键创建 Task 与 `pending` Run。
-- 异常：分支消失、附件失败、能力不兼容、配额不足时保留草稿并给出修复入口。
+- 正常：输入目标并选择一个已有授权 Workspace、Provider/模型和审批策略；通过幂等键
+  创建固定 `workspace_id` 的 Task 与 `pending` Run。数据文件在 Workspace 文件面板管理，
+  不附加到 Task。
+- 异常：Workspace 不可用、能力不兼容或配额不足时保留草稿并给出修复入口。
 - 终态：Task active，Run `pending`；创建者获得初始 Control Lease。
 
-### WF-06 排队、Workspace 选择与 Runtime 准备
+### WF-06 排队与 Runtime 准备
 
-- 正常：用户从有权使用的 Workspace 中选择执行目录；需要新的托管 clone/worktree
-  时先显式创建独立 Workspace。调度器领取 Run 后验证授权，Profile Host 启动或
-  复用 app-server，并通过官方 `thread/start`、`thread/resume` 或
-  `thread/settings/update` 合同传递 `cwd`。创建或恢复 Thread 不创建 checkout。
+- 正常：调度器从 Task 读取固定 Workspace 并验证授权；Profile Host 启动或复用
+  app-server，通过官方 `thread/start`、`thread/resume` 或 `thread/settings/update`
+  合同传递同一 `cwd`。child Thread 原生继承，不创建 checkout、worktree、overlay、
+  snapshot 或 Task 私有文件层。
 - 异常：Workspace 未授权、`cwd` 越界或目录不可用时拒绝启动；容量不足保持
   `pending`；凭据失败进入 `failed` 并记录 `failure_code`；取消
   `provisioning` 必须进入可解释的取消流程。
@@ -344,17 +364,15 @@ authenticated user
 - 终态：Task archived；Workspace 保持原有状态，除非另一个显式 Workspace
   生命周期操作改变它。
 
-### WF-13 Copilot Studio 操作
+### WF-13 内置能力激活
 
-- 正常：算法工程师通过 SDK 创建 Tool package，在 Web 导入并完成 contract test、发布和
-  Profile 安装；随后用中文创建 Skill，组合 Tool capabilities 创建 Agent，再组合精确
-  Agent Releases 创建 Supervisor/Copilot。Platform Compiler 自动生成版本、hash、依赖
-  lock 和 Runtime bundle；Profile Host 安装后由 Runtime discovery 决定 readiness。
-- 异常：Draft 校验失败、依赖缺失、安装失败、Runtime 未发现、版本漂移、权限不足或测试
-  超时分别进入明确状态；不得把 Catalog `published` 伪装成 Runtime `ready`，不得自动
-  回退旧版本或要求用户填写路径、Runtime Role、MCP 内部名称和 hash。
-- 终态：Draft、Release、Installation、Runtime readiness 和测试运行各自有唯一 owner、
-  完整终态与审计；卸载不影响已固定 installation snapshot 的历史任务。
+- 正常：Profile Host 托管内置仓网 Supervisor、Data/Network Roles、Skills、MCP servers
+  和 fixture，并通过 Codex 原生 discovery、Skill reload/changed 与 MCP reload/status
+  激活；readiness 只读取 Runtime 实际 inventory。
+- 异常：缺失 Role、Skill、MCP/tool 或 reload 失败时明确 unavailable，不回退到源码目录、
+  Workspace 扫描、旧进程或数据库 `installed` 状态。
+- 终态：当前 Profile 的仓网能力可发现且 ready，或返回有原因的 unavailable。公开 SDK、
+  Studio、Catalog、Release 与 Marketplace 是阶段二范围。
 
 ### WF-13A Codex Runtime 设置
 
@@ -371,27 +389,32 @@ authenticated user
 
 ### WF-15 运行受治理的示例
 
-- 前置：本地 Session、Profile、Provider/模型和目标 Workspace 已存在；用户有权发布
-  Workspace 资源和创建 Task。
-- 正常：用户从 **Learn** 选择一个精确 Tutorial Blueprint revision，查看将创建或复用
-  的 Dataset、Agent、Supervisor 和 capability package，点击 **Set up example**。
-  Platform 通过正式发布服务幂等 reconcile 资源；随后 **Readiness** 使用类型化事实
-  检查 Profile、Provider/模型、执行定义、Workspace 依赖、Runtime capability、MCP 和
-  可选地图呈现。状态为 `ready` 或仅有非阻塞 `degraded` 时，用户在 **Learn** 点击
-  **Start task**；平台接受受治理 Supervisor 后创建 Thread，并把受审 Prompt 放入
-  输入框。用户检查 Prompt 并点击 **Send** 后任务才开始执行。任务执行后，用户处理
-  必要审批，审阅报告、地图和 Artifact，再刷新页面确认恢复。
-- 异常：Blueprint 资产或同身份内容冲突、发布部分失败、必需依赖缺失、readiness
-  fingerprint 在启动前变化、审批拒绝或 Runtime 失败时，保留已成功的不可变资源和当前
-  Task 草稿，显示类型化阻塞项与修复动作；不得创建假 Thread、自动升级版本、切换隐藏
-  实现，或要求用户/模型提供服务器路径、Runtime Role、MCP 内部标识和资源 ID。
-- 终态：示例资源由权威 Release 状态表示；Task/Run 为明确成功、失败、拒绝、取消或
-  中断终态；教程完成度从 Dataset、Release、readiness、Run 和 Artifact 推导，不单独
-  保存一份可能漂移的进度。
+- 前置：本地 Session、Profile、Provider/模型和一个干净授权 Workspace 已存在；Runtime
+  已发现内置仓网 Roles、Skills 和 MCP tools。
+- 正常：用户明确要求“使用印尼仓网完整示例”。仓网 Tool 将 fixture 写成 Workspace 中
+  可见普通文件，Root 通过原生 Network→Data→Network follow-up 完成全链，最后展示地图
+  和报告 Artifact。默认文件和参数完整，全程零 elicitation。
+- 异常：Workspace 文件重名、能力缺失、Provider/Runtime 失败时明确阻塞；不得静默覆盖、
+  切换真实/Mock、创建隐藏 Dataset 或要求用户提供内部 ID。
+- 终态：Task/Run 使用 Runtime 真实终态；Workspace 文件保持可见，Artifact 只表示最终
+  交付。现有 Blueprint/Release 教程属于冻结旧原型，不是当前入口。
 
 ## 7. 功能需求
 
 优先级：P0 为对应版本门禁；P1 为版本内应完成；P2 可延期。
+
+### 7.0 阶段一 P0 白名单
+
+阶段一只执行：
+
+- `CAP-*`、`TOOL-*`、`SKILL-*`、`AGENT-*`、`FILE-*`、`ART-*`；
+- `NET-*`；
+- 现有底座中为它们直接服务的 Profile/Provider、Task/Run、Task→Workspace、Runtime
+  event replay、Approval/MCP elicitation、Workspace file API 与 Artifact renderer 缺口。
+
+第 7.1–7.6、7.8 的其他条目保留长期需求编号，但它们的 `P0/P1` 不代表阶段一优先级。
+尤其 `AUTH/ORG/RBAC/COL/GIT/ADM` 的多用户、Control Lease、Push 和完整管理能力不得进入
+当前任务；只有现有单用户 Session、Workspace 授权与必要安全检查作为底座复用。
 
 ### 7.1 认证、组织与权限
 
@@ -481,33 +504,25 @@ authenticated user
 | GIT-005 | P1 | Push 失败保留本地 Commit 并给出 Fetch/Rebase/人工处理建议 |
 | GIT-006 | P1 | 支持测试报告、补丁和日志 Artifact 下载权限 |
 
-### 7.7 Copilot Studio 与 Codex 设置
+### 7.7 内置 Copilot 与 Codex 设置
 
 | ID | P | 需求 |
 | --- | --- | --- |
-| CAP-001 | P0 | 所有 Studio 模块由 Manifest 能力、版本、状态和策略共同门控 |
-| CAP-002 | P0 | incompatible/unsupported 显示原因、要求版本和修复入口 |
-| CAT-001 | P0 M2 | Tool、Skill、Agent、Supervisor、Copilot 使用统一 Draft revision、不可变 Release、精确依赖和 Profile Installation 生命周期 |
-| CAT-002 | P0 M2 | Release version、content hash、Runtime bundle 和 lock manifest 由服务器 compiler 生成；用户不得手工维持内部字段 |
-| CAT-003 | P0 M2 | `published`、`authorized`、`installed`、`discovered`、`ready` 分别表达并由对应 owner 更新 |
-| TOL-001 | P0 M2 | 受限 Python MCP SDK 提供 init、validate、test、pack；Server 对上传包重新验证并在隔离 Runner 测试 |
-| TOL-002 | P0 M2 | Tool schema、Secret slot、网络/文件权限、副作用、超时和结果上限是类型化合同，不从说明文本推断 |
-| TOL-003 | P0 M2 | Tool 通过受控 Profile Installation 和 Runtime discovery 生效，禁止 `source`、任意 shell launcher 和目录存在性判断 |
-| SKL-001 | P0 M2 | Skill 主体使用中文，声明适用问题、输入 owner、Tool capability、交付件、输入请求、失败处理和上下文限制 |
-| SKL-002 | P0 M2 | 支持 Skill 创建、验证、示例测试、发布、安装、Runtime discovery 和卸载 |
-| AGT-001 | P0 M2 | Agent 组合精确 Skill Releases、Tool capabilities、数据权限、assignment 和 deliverable 合同，不依赖名称启发式 |
-| AGT-002 | P0 M2 | Agent 可独立测试；执行展示父子 Thread、角色、状态、等待输入、终态和安全结果摘要 |
-| SUP-001 | P0 M2 | Supervisor 组合精确 Agent Releases、动态协作原则、停止/部分失败规则和最终交付，不使用固定阶段工作流 |
-| SUP-002 | P0 M2 | Root 自动获得 Task/Run scoped 只读 coordination capability；该能力不能 spawn、审批、修改 Work State 或越权 |
-| WST-001 | P0 M2 | Platform Work State 保存通用 revision、operation、dependency、readiness 和 deliverable 元数据；领域拥有 payload/schema/算法 |
-| WST-002 | P0 M2 | 大型数据通过 Dataset/Artifact/Domain Resource 引用交换，不复制到 Agent 消息、事件或 Tool result |
-| MCP-001 | P0 Beta | 展示 Server 状态、认证、Tools、Resources 和错误 |
-| MCP-002 | P0 Beta | 支持 Secret 引用配置、Reload、OAuth 和 elicitation |
-| MCP-003 | P1 | 测试调用展示 Schema、权限和结构化结果，调用受审计 |
-| PLG-001 | P1 | 支持 Marketplace、Plugin list/read/install/uninstall |
-| PLG-002 | P1 | 安装/升级前展示来源、完整性、能力和权限变化 |
-| MEM-001 | P1 | 展示 compaction、连续性、容量和错误，不展示 Memory 正文 |
-| MEM-002 | P1 | 导出和重置为危险操作，要求二次确认与审计 |
+| CAP-001 | P0 | Profile 托管内置 Supervisor、Data/Network Roles、Skills、MCP servers 和 fixture |
+| CAP-002 | P0 | readiness 只根据 Runtime discovery/reload/status；缺失能力显式 unavailable |
+| CAP-003 | P0 | 禁止从 process cwd、Workspace 或源码仓库扫描能力，禁止数据库假 installation |
+| TOOL-001 | P0 | Data/Network Tool 只接受 Workspace 相对路径、typed MCP Resource ref 或普通业务参数，拒绝绝对路径、逃逸、含义不明的 `source_ref` alias 与历史 asset/Dataset ID |
+| TOOL-002 | P0 | Tool 负责格式/字段校验、原子 create-new、同名 elicitation 和外部导航许可 |
+| TOOL-003 | P0 | 路线/成本 Tool 按 exact pair/lane fact 复用，只计算缺失项并报告 reused/computed 数量 |
+| SKILL-001 | P0 | Supervisor/Data/Network Skills 定义角色、文件选择、复用、业务顺序、问题和交付标准 |
+| AGENT-001 | P0 | Root 使用原生 spawn/follow-up/wait/mailbox/steer；Supervisor 根据 child 是否需要 Root 历史显式选择 `fork_turns` |
+| AGENT-002 | P0 | child MCP form 直接到浏览器并返回原 child request；Platform 不做输入中继或 continuation |
+| DATA-001 | P0 | 跨 Task 只显式复用同 Workspace 文件或授权 exact MCP Resource ref；没有 Task→Task context/result/data API |
+| DATA-002 | P0 | Web Resource ref 可发现若实现，只从 authorized official Item 构建可重建投影，不存内容或建 Broker |
+| ART-001 | P0 | Artifact 只保存地图、报告等明确用户交付，只由 allowlisted final Tool exact Item 注册 |
+
+公开 Tool SDK、Skill/Agent/Supervisor/Copilot Studio、Catalog、Release、Marketplace、Plugin
+管理与完整 Runtime 设置产品面属于阶段二之后，不能作为阶段一 P0。
 
 ### 7.8 平台管理
 
@@ -519,16 +534,15 @@ authenticated user
 | ADM-004 | P1 | 审计按用户、项目、Task、动作、结果和时间检索 |
 | ADM-005 | P1 | 敏感审计导出需要额外权限并生成导出审计 |
 
-### 7.9 Learn 与受治理启动
+### 7.9 阶段一仓网入口
 
 | ID | P | 需求 |
 | --- | --- | --- |
-| LRN-001 | P0 M2 | Tutorial Blueprint 是只读、版本化的平台资源，精确声明受审资产、依赖、推荐 Prompt 和验收值 |
-| LRN-002 | P0 M2 | 示例 reconcile 复用正式发布 owner service 和幂等键；相同身份不同内容显式冲突，部分成功可继续 |
-| LRN-003 | P0 M2 | Task readiness 分别检查 Platform、Profile Installation、Runtime discovery、Provider、Workspace、Data Intake、Dataset Release、Work State 和当前分析所需 components；任何一项缺失都返回类型化 blocker |
-| LRN-004 | P0 M2 | 正式启动重新验证 readiness fingerprint；漂移时保留草稿并重新检查，不重复创建 Task |
-| LRN-005 | P0 M2 | 新用户只通过 Web 完成 Workspace 内的数据上传、画像、映射确认、参数补齐、依赖修复、启动、审批、结果审阅和刷新恢复，不输入 Dataset/Runtime 内部 ID 或宿主路径 |
-| LRN-006 | P1 M2 | Learn 进度只从权威资源推导；UI 可返回第一个未完成步骤，但不建立第二套教程状态 |
+| NET-001 | P0 | 用户明确选择印尼完整示例后，fixture 写成普通 Workspace 文件并完成零 elicitation 全链 |
+| NET-002 | P0 | 用户通过通用 Workspace 文件面板上传 Excel/CSV/JSON，完成真实交互全链 |
+| NET-003 | P0 | 完整链覆盖数据准备、距离/成本、覆盖/SLA、成本、三类模拟、p-median、服务约束、地图和报告 |
+| NET-004 | P0 | 同 Workspace 10 仓/5 仓 Task 可共享文件但没有直接接口；不同 Workspace 严格拒绝 |
+| NET-005 | P0 | 刷新、Profile restart、child error/cancel、steer、pending form 与 hot reload 有真实验收 |
 
 ## 8. 状态模型
 
@@ -603,7 +617,7 @@ requested -> active -> released
 
 Lease 使用数据库时间与版本号；客户端时间不能决定有效性。
 
-## 9. 权限矩阵
+## 9. 长期权限矩阵（非阶段一多用户任务）
 
 | 操作 | Owner | Project Admin | Developer | Reviewer | Viewer | Platform Admin |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -632,7 +646,7 @@ Lease 使用数据库时间与版本号；客户端时间不能决定有效性�
 - 浏览器历史必须恢复 Tab、筛选和选中文件，不恢复失效写表单。
 - URL 只包含稳定资源 ID 和非敏感视图参数，不包含 Token、Prompt、路径或代码正文。
 
-## 11. 非功能需求
+## 11. 长期非功能目标（非阶段一退出门）
 
 ### 11.1 性能与容量目标
 
@@ -677,7 +691,7 @@ Lease 使用数据库时间与版本号；客户端时间不能决定有效性�
 - 支持当前及前一主版本 Chrome、Edge、Safari；Firefox 作为 Beta 兼容目标。
 - 关键状态不只依赖颜色；动态日志提供暂停自动滚动。
 
-## 12. 数据保留与隐私
+## 12. 长期数据保留与隐私目标（非阶段一任务）
 
 | 数据 | 默认保留 | 可配置 | 删除原则 |
 | --- | --- | --- | --- |
@@ -691,7 +705,7 @@ Lease 使用数据库时间与版本号；客户端时间不能决定有效性�
 
 用户删除或禁用不自动删除组织拥有的 Task/审计；Profile 删除需要单独的数据治理流程。
 
-## 13. 产品指标
+## 13. 长期产品指标（非阶段一任务）
 
 只记录资源 ID、状态、耗时和错误分类，不记录 Prompt、代码、Diff 或 Secret。
 
@@ -708,15 +722,15 @@ Lease 使用数据库时间与版本号；客户端时间不能决定有效性�
 
 ## 14. 发布范围与门禁
 
+本阶段只执行 14.1 Alpha 与第 17 节；14.2 Beta 和 14.3 V1 GA 均为阶段二之后目标。
+
 ### 14.1 Alpha
 
-单管理员、单部署、单或少量项目。必须完成：项目导入、Profile/Provider、
-Task/Run、授权 Workspace、Thread/Turn、实时事件、审批、取消/继续、Diff、Commit、
-浏览器刷新恢复和 Host 重启恢复。
+单用户、单 Profile、单部署。必须完成：Profile/Provider、Task/Run、Task 固定 Workspace、
+普通 Workspace 文件、Thread/Turn、原生多 Agent、child elicitation、实时事件、取消/继续、
+浏览器刷新恢复、Profile restart，以及仓网双硬门。
 
-Alpha 不承诺多用户、Push、无界 Codex 管理 Studio 或生产 SLA；但 M2 必须交付本文件
-定义的有界 Copilot Studio，使单用户可以创建和运行 Tool、中文 Skill、Agent、Supervisor
-和 Copilot。
+Alpha 不承诺多用户、公开 SDK/Studio/Catalog/Marketplace、第二领域或生产 SLA。
 
 ### 14.2 Beta
 
@@ -728,7 +742,7 @@ Beta 门禁：两名用户并发故障注入无串流；备份恢复演练通过
 
 完成容量、安全、浏览器、可访问性、升级回滚和运维手册。Studio 模块仅发布通过独立能力门禁的部分。生产形态只有浏览器与平台服务，不包含本地桌面运行时。
 
-## 15. 风险与产品处理
+## 15. 长期风险参考（不直接生成阶段一 backlog）
 
 | 风险 | 影响 | 处理 |
 | --- | --- | --- |
@@ -741,7 +755,7 @@ Beta 门禁：两名用户并发故障注入无串流；备份恢复演练通过
 | V1 范围膨胀 | Alpha 长期不可用 | 只交付 Copilot 创作闭环必需的有界 Studio；多用户、Marketplace 和无关 Runtime 管理后置 |
 | 平台功能回归 | 浏览器纵向闭环不可用 | 合同、PostgreSQL 集成、真实 app-server 与浏览器 E2E 共同门禁 |
 
-## 16. 待决策项
+## 16. 后续阶段待决策项（不阻塞阶段一）
 
 以下事项必须在对应研发任务开始前关闭：
 
@@ -754,21 +768,22 @@ Beta 门禁：两名用户并发故障注入无串流；备份恢复演练通过
 7. Alpha 是否包含 Push；本 PRD 默认 Alpha 只要求 Commit，Beta 要求 Push。
 8. Codex 首个兼容冻结点：先同步当前官方 main，还是选择最近稳定 Tag/构建。
 
-## 17. 总体验收标准
+## 17. 阶段一总体验收标准
 
-V1 只有在以下条件全部满足时才能发布：
+阶段一只有在以下条件全部满足时才能声明完成：
 
-- 两名以上用户可同时运行不同 Task，Profile、事件、Secret、Workspace 无串流。
-- 每个 Thread/Chat 的当前 `cwd` 都位于经授权 Workspace 内；Workspace 独立于
-  Thread/Run 并可被多个 Thread 使用。创建或恢复 Thread/Run 不隐式创建 checkout，
-  普通用户不能注册任意服务器路径。
-- 同一 Profile 使用持久 Home 和唯一主 app-server；Host 重启后恢复 Thread、Provider 与记忆连续性。
-- 页面刷新、网络断开、Server/Host/Runner 重启后 Run 进入可解释状态。
-- 审批、Lease、Commit、Push 和危险 Studio 操作均可追溯。
-- Provider 模型目录按 Profile/Provider 隔离，切换 Provider 不使用旧目录或旧 Secret。
-- 多 Agent 父子关系和协作 Item 在 Web 可见，平台不存在自建调度器。
-- MCP/Plugin/Memory/Agent/Skill 状态与固定 Codex 构建查询一致；缺失能力只禁用。
-- Codex 构建通过 Schema、Manifest、Fixture、真实 Smoke、升级和回滚测试。
-- 安全测试无法通过 URL Token、CSRF、SSRF、路径穿越、跨项目 ID 或日志取得凭据。
-- 完整用户流程不要求桌面程序、浏览器扩展或本地桥接进程。
-- 生产部署、备份、恢复、告警和升级 Runbook 已由非作者执行验证。
+- 每个 Task 固定一个授权 Workspace；Root 和 child 当前 `cwd` 相同且不能逃逸。
+- 同 Workspace Task 可使用相同普通文件与授权 exact MCP Resource ref，且没有直连 context/result/data API；未授权 Resource 与不同 Workspace 文件无法交叉读取。
+- 用户、Skill、模型和 Tool 可使用经校验相对路径与 typed MCP Resource ref；绝对路径、
+  含义不明的 `source_ref` alias 和历史 asset/Dataset ID 被拒绝。
+- 同一 Profile 使用持久 Home 和唯一主 app-server；重启后恢复 Thread 与文件访问边界。
+- 页面刷新、断线、child error/cancel、steer 和 pending elicitation 进入可解释状态。
+- 多 Agent 父子关系和 Tool 活动在 Web 可见，Platform 不调度、不 continuation、不全局
+  interrupt。
+- Roles、Skills、MCP 和 Tool inventory 来自 Runtime discovery/reload；缺失能力明确失败。
+- 印尼 Mock 零 elicitation 完整链与真实 Excel/CSV/JSON 交互完整链均从 Web 入口通过。
+- Artifact 只保存地图、报告等明确交付；中间数据由 Workspace 文件或 MCP Resource 拥有。
+- Work State、Data Intake、Dataset/DomainResource/Broker、Case/NetworkSnapshot、generic
+  ResourceLink→Artifact、source_ref、假安装、路径扫描和旧 E2E
+  已从代码、schema、测试和当前文档删除。
+- 完整用户流程不要求桌面程序、浏览器扩展、本地桥接进程或内部平台 ID。

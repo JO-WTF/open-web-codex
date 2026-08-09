@@ -6,13 +6,11 @@ edition = "2021"
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 url.workspace = true
 uuid.workspace = true
-hex.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

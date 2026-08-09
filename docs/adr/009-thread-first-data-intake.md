@@ -1,10 +1,8 @@
 # ADR-009：Thread-first 数据接入与分阶段 Readiness
 
-状态：部分被 [ADR-013](013-platform-data-intake-and-work-state.md) 取代（2026-08-08）
-
-仍保留：Workspace 独立于 Thread/Run、SourceAsset 不可变、Readiness 分层、缺口不通过
-悬挂 Run 表达。已取代：由领域 Agent 扫描 Workspace、保存 source/mapping 生命周期、
-依赖单体 planning Dataset 和版本化固定角色合同。当前数据 owner 以 ADR-013 为准。
+状态：已被 [ADR-018](018-built-in-network-copilot-runtime-closure.md) 替代（2026-08-08）；
+下文仅保存历史决定，不得作为当前实现合同。Workspace 仍独立于 Thread/Run，但当前
+数据路径是普通 Workspace 文件，不再使用 SourceAsset、Data Intake 或 Dataset binding。
 
 ## 背景
 

@@ -8,207 +8,42 @@ use axum::{
 use open_web_codex_adapter::{
     AuthorizedWorkspace, CodexAdapter, ReviewTarget as AdapterReviewTarget,
 };
-use open_web_codex_platform_contracts::error::{ErrorKind, PlatformError};
+use open_web_codex_platform_contracts::error::PlatformError;
 use open_web_codex_platform_contracts::{
-    InterruptRunRequest, ReviewTarget as PlatformReviewTarget, Run, RunFailureCode, RunReadiness,
-    RunReadinessRequest, RunReadinessStatus, StartReviewRequest, StartRunRequest, StartRunResponse,
-    SteerRunRequest, TaskAnalysisReadinessRequest,
+    InterruptRunRequest, ReviewTarget as PlatformReviewTarget, Run, RunFailureCode,
+    StartReviewRequest, StartRunRequest, StartRunResponse, SteerRunRequest,
 };
 use open_web_codex_platform_store::AppState;
-use open_web_codex_provider_service::secured::{AuthorizedProviderOperations, ProviderActor};
 use open_web_codex_run_orchestrator::{
-    AgentRunSnapshotInput, AgentRunSource, CancelRunRequest, EnqueueRunRequest, ReplayRunRequest,
-    RunExecutionSelection, RunOrchestrator, RunOrchestratorError, RunRecord,
+    CancelRunRequest, EnqueueRunRequest, ReplayRunRequest, RunOrchestrator, RunOrchestratorError,
+    RunRecord,
 };
-use open_web_codex_secret_store::PostgresSecretStore;
 use sqlx::Row;
 use uuid::Uuid;
 
 use crate::middleware::auth::{require_runtime_profile, AuthenticatedUser};
 use crate::routes::RuntimeProfileBinding;
-use crate::run_readiness;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
 
-/// Evaluate the exact browser-selected execution without creating a Task,
-/// Run, or Codex Thread.
-pub async fn readiness(
-    State(state): State<AppState>,
-    auth: AuthenticatedUser,
-    Path(workspace_id): Path<Uuid>,
-    Extension(orchestrator): Extension<Arc<RunOrchestrator>>,
-    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
-    Extension(providers): Extension<Arc<dyn AuthorizedProviderOperations>>,
-    Extension(git): Extension<Arc<open_web_codex_git_runtime::GitRuntime>>,
-    Extension(configuration_secrets): Extension<Arc<PostgresSecretStore>>,
-    Extension(profile): Extension<RuntimeProfileBinding>,
-    Json(request): Json<RunReadinessRequest>,
-) -> ApiResult<RunReadiness> {
-    require_runtime_profile(&state.db, &auth, &profile.runtime_key).await?;
-    let workspace = readiness_workspace(&state, &auth, workspace_id).await?;
-    let workspace_id = Uuid::parse_str(&workspace.id).expect("Workspace id was created from UUID");
-    let request = resolve_readiness_execution(&orchestrator, &auth, request).await?;
-    let catalog = providers
-        .list(ProviderActor {
-            user_id: auth.user_id,
-            organization_id: auth.organization_id,
-        })
-        .await
-        .map_err(|_| {
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(PlatformError::internal(
-                    "Provider catalog is temporarily unavailable",
-                )),
-            )
-        })?;
-    let runtime_healthy = adapter.health().await.is_ok_and(|health| health.ok);
-    let browser_map_configured =
-        super::configuration::browser_map_configured(&state, &configuration_secrets).await?;
-    let evaluated = run_readiness::evaluate(
-        &state.db,
-        &git,
-        &profile,
-        auth.organization_id,
-        workspace_id,
-        &request,
-        &catalog,
-        runtime_healthy,
-        browser_map_configured,
-    )
-    .await;
-    Ok(Json(evaluated.readiness))
+struct TaskWorkspace {
+    id: Uuid,
 }
 
-/// Evaluate task-scoped Analysis Readiness. Unlike Thread readiness this
-/// endpoint can require the immutable intake/release binding for the exact
-/// Task, so a missing dataset is an explicit blocked result.
-pub async fn analysis_readiness(
-    State(state): State<AppState>,
-    auth: AuthenticatedUser,
-    Path(task_id): Path<Uuid>,
-    Extension(orchestrator): Extension<Arc<RunOrchestrator>>,
-    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
-    Extension(providers): Extension<Arc<dyn AuthorizedProviderOperations>>,
-    Extension(git): Extension<Arc<open_web_codex_git_runtime::GitRuntime>>,
-    Extension(configuration_secrets): Extension<Arc<PostgresSecretStore>>,
-    Extension(profile): Extension<RuntimeProfileBinding>,
-    Json(mut request): Json<TaskAnalysisReadinessRequest>,
-) -> ApiResult<RunReadiness> {
-    require_runtime_profile(&state.db, &auth, &profile.runtime_key).await?;
-    let task_exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM tasks WHERE id = $1 AND organization_id = $2)",
-    )
-    .bind(task_id)
-    .bind(auth.organization_id)
-    .fetch_one(&state.db)
-    .await
-    .map_err(database_error)?;
-    if !task_exists {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(PlatformError::not_found("Task was not found")),
-        ));
-    }
-    let workspace = readiness_workspace(&state, &auth, request.workspace_id).await?;
-    let workspace_id = Uuid::parse_str(&workspace.id).expect("Workspace id was created from UUID");
-    request.execution.purpose = open_web_codex_platform_contracts::RunStartPurpose::Analysis;
-    request.execution.task_id = Some(task_id);
-    let execution = resolve_readiness_execution(&orchestrator, &auth, request.execution).await?;
-    let catalog = providers
-        .list(ProviderActor {
-            user_id: auth.user_id,
-            organization_id: auth.organization_id,
-        })
-        .await
-        .map_err(|_| {
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(PlatformError::internal(
-                    "Provider catalog is temporarily unavailable",
-                )),
-            )
-        })?;
-    let runtime_healthy = adapter.health().await.is_ok_and(|health| health.ok);
-    let browser_map_configured =
-        super::configuration::browser_map_configured(&state, &configuration_secrets).await?;
-    let evaluated = run_readiness::evaluate(
-        &state.db,
-        &git,
-        &profile,
-        auth.organization_id,
-        workspace_id,
-        &execution,
-        &catalog,
-        runtime_healthy,
-        browser_map_configured,
-    )
-    .await;
-    Ok(Json(evaluated.readiness))
-}
-
-/// Queue a Run against an existing authorized Workspace. The worker owns only
-/// Run scheduling and Runtime delivery; Workspace provisioning is independent.
+/// Queue a Run against the immutable authorized Workspace selected by its Task.
+/// The worker owns only Run scheduling and Runtime delivery; Workspace
+/// provisioning is independent.
 pub async fn start_run(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
     Path(task_id): Path<Uuid>,
     Extension(orchestrator): Extension<Arc<RunOrchestrator>>,
-    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
-    Extension(providers): Extension<Arc<dyn AuthorizedProviderOperations>>,
-    Extension(git): Extension<Arc<open_web_codex_git_runtime::GitRuntime>>,
-    Extension(configuration_secrets): Extension<Arc<PostgresSecretStore>>,
     Extension(profile): Extension<RuntimeProfileBinding>,
     Json(req): Json<StartRunRequest>,
 ) -> ApiResult<StartRunResponse> {
     require_runtime_profile(&state.db, &auth, &profile.runtime_key).await?;
-    if req.purpose == open_web_codex_platform_contracts::RunStartPurpose::Analysis {
-        return Err((
-            StatusCode::CONFLICT,
-            Json(PlatformError::bad_request(
-                "analysis_start_required: analysis Turns must be created through /api/tasks/:task_id/analysis-start",
-            )),
-        ));
-    }
-    if req.supervisor_policy.is_some() && req.supervisor_draft_id.is_some() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(PlatformError::bad_request(
-                "Select either a published Supervisor Policy or a Supervisor Draft",
-            )),
-        ));
-    }
-    if (req.supervisor_policy.is_some() || req.supervisor_draft_id.is_some()) && req.agent.is_some()
-    {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(PlatformError::bad_request(
-                "Select either one root Agent or one Supervisor Policy",
-            )),
-        ));
-    }
-    let workspace = readiness_workspace(&state, &auth, req.workspace_id).await?;
-    let workspace_id = Uuid::parse_str(&workspace.id).expect("Workspace id was created from UUID");
-    let replay_execution = if req.fork_thread_id.is_some() || req.fork_source_run_id.is_some() {
-        RunExecutionSelection::Inherited
-    } else if let Some(draft_id) = req.supervisor_draft_id {
-        RunExecutionSelection::SupervisorDraft {
-            definition_id: draft_id,
-        }
-    } else if let Some(selection) = req.supervisor_policy.as_ref() {
-        RunExecutionSelection::Supervisor {
-            policy_id: selection.policy_id.clone(),
-            version: selection.version.clone(),
-        }
-    } else if let Some(selection) = req.agent.as_ref() {
-        RunExecutionSelection::Agent {
-            definition_id: selection.definition_id.clone(),
-            version: selection.version.clone(),
-            release_id: selection.release_id,
-        }
-    } else {
-        RunExecutionSelection::Standard
-    };
+    let task = authorized_task_workspace(&state, &auth, &profile, task_id).await?;
+    let workspace_id = task.id;
     if let Some(run) = orchestrator
         .replay_run(ReplayRunRequest {
             organization_id: auth.organization_id,
@@ -218,7 +53,6 @@ pub async fn start_run(
             workspace_id,
             fork_thread_id: req.fork_thread_id.clone(),
             fork_source_run_id: req.fork_source_run_id,
-            execution: replay_execution,
         })
         .await
         .map_err(orchestrator_error)?
@@ -227,100 +61,6 @@ pub async fn start_run(
             run: run_from_record(run),
         }));
     }
-    let task = sqlx::query(
-        "SELECT model_provider, model FROM tasks WHERE id = $1 AND organization_id = $2",
-    )
-    .bind(task_id)
-    .bind(auth.organization_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(database_error)?
-    .ok_or_else(|| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(PlatformError::not_found("Task was not found")),
-        )
-    })?;
-    let readiness_request = RunReadinessRequest {
-        model_provider: task
-            .get::<Option<String>, _>("model_provider")
-            .unwrap_or_default(),
-        model: task.get::<Option<String>, _>("model").unwrap_or_default(),
-        supervisor_policy: req.supervisor_policy.clone(),
-        supervisor_draft_id: req.supervisor_draft_id,
-        agent: req.agent.clone(),
-        fork_thread_id: req.fork_thread_id.clone(),
-        fork_source_run_id: req.fork_source_run_id,
-        purpose: req.purpose,
-        // Conversation readiness is intentionally evaluated before the Task
-        // exists, so the formal start must preserve that same scope. Including
-        // the newly-created Task ID here changes an otherwise identical
-        // readiness fingerprint and makes every Thread start fail with
-        // `readiness_changed`. Analysis readiness remains Task-scoped and is
-        // admitted through the dedicated analysis-start route above.
-        task_id: readiness_task_id(req.purpose, task_id),
-    };
-    let readiness_request =
-        resolve_readiness_execution(&orchestrator, &auth, readiness_request).await?;
-    let catalog = providers
-        .list(ProviderActor {
-            user_id: auth.user_id,
-            organization_id: auth.organization_id,
-        })
-        .await
-        .map_err(|_| {
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(PlatformError::internal(
-                    "Provider catalog is temporarily unavailable",
-                )),
-            )
-        })?;
-    let runtime_healthy = adapter.health().await.is_ok_and(|health| health.ok);
-    let browser_map_configured =
-        super::configuration::browser_map_configured(&state, &configuration_secrets).await?;
-    let evaluated = run_readiness::evaluate(
-        &state.db,
-        &git,
-        &profile,
-        auth.organization_id,
-        workspace_id,
-        &readiness_request,
-        &catalog,
-        runtime_healthy,
-        browser_map_configured,
-    )
-    .await;
-    if req.readiness_fingerprint != evaluated.readiness.evaluation_fingerprint {
-        return Err(readiness_changed());
-    }
-    if evaluated.readiness.status == RunReadinessStatus::Blocked {
-        return Err(run_not_ready());
-    }
-    let forked = req.fork_thread_id.is_some();
-    let supervisor_policy = if forked {
-        None
-    } else {
-        evaluated.supervisor_policy.map(|policy| policy.snapshot)
-    };
-    let agent = if forked {
-        None
-    } else if let Some(resolved) = evaluated.agent {
-        Some(AgentRunSnapshotInput {
-            definition_id: resolved.definition_id,
-            version: resolved.version,
-            display_name: resolved.display_name,
-            content_sha256: resolved.content_sha256,
-            source: if resolved.release_id.is_some() {
-                AgentRunSource::UserRelease
-            } else {
-                AgentRunSource::Repository
-            },
-            release_id: resolved.release_id,
-        })
-    } else {
-        None
-    };
     let run = orchestrator
         .enqueue_run(EnqueueRunRequest {
             organization_id: auth.organization_id,
@@ -330,8 +70,6 @@ pub async fn start_run(
             workspace_id,
             fork_thread_id: req.fork_thread_id,
             fork_source_run_id: req.fork_source_run_id,
-            supervisor_policy,
-            agent,
         })
         .await
         .map_err(orchestrator_error)?;
@@ -587,6 +325,9 @@ async fn authorized_thread_context(
         "SELECT run.codex_thread_id, run.active_turn_id, run.workspace_id, \
                 run.requested_by, workspace.root_path \
          FROM runs run \
+         JOIN tasks task ON task.id = run.task_id \
+           AND task.organization_id = run.organization_id \
+           AND task.workspace_id = run.workspace_id \
          JOIN workspaces workspace ON workspace.id = run.workspace_id \
            AND workspace.organization_id = run.organization_id \
          JOIN workspace_grants workspace_grant ON workspace_grant.workspace_id = workspace.id \
@@ -617,22 +358,13 @@ async fn authorized_thread_context(
             Json(PlatformError::not_found("active Run was not found")),
         ));
     }
-    let workspace_id: Option<Uuid> = row.get("workspace_id");
+    let workspace_id: Uuid = row.get("workspace_id");
     let root_path: String = row.get("root_path");
     let thread_id: Option<String> = row.get("codex_thread_id");
     let turn_id: Option<String> = row.get("active_turn_id");
     Ok(AuthorizedThreadContext {
         workspace: AuthorizedWorkspace {
-            id: workspace_id
-                .ok_or_else(|| {
-                    (
-                        StatusCode::CONFLICT,
-                        Json(PlatformError::bad_request(
-                            "the selected Workspace is not ready",
-                        )),
-                    )
-                })?
-                .to_string(),
+            id: workspace_id.to_string(),
             root: root_path.into(),
         },
         thread_id: thread_id.ok_or_else(|| {
@@ -717,93 +449,6 @@ fn run_from_record(run: RunRecord) -> Run {
     }
 }
 
-fn readiness_task_id(
-    purpose: open_web_codex_platform_contracts::RunStartPurpose,
-    task_id: Uuid,
-) -> Option<Uuid> {
-    (purpose == open_web_codex_platform_contracts::RunStartPurpose::Analysis).then_some(task_id)
-}
-
-async fn resolve_readiness_execution(
-    orchestrator: &RunOrchestrator,
-    auth: &AuthenticatedUser,
-    mut request: RunReadinessRequest,
-) -> Result<RunReadinessRequest, (StatusCode, Json<PlatformError>)> {
-    match (
-        request.fork_thread_id.as_deref(),
-        request.fork_source_run_id,
-    ) {
-        (None, None) => Ok(request),
-        (Some(thread_id), Some(source_run_id)) => {
-            if request.supervisor_policy.is_some()
-                || request.supervisor_draft_id.is_some()
-                || request.agent.is_some()
-            {
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    Json(PlatformError::bad_request(
-                        "Fork readiness inherits its source execution selection",
-                    )),
-                ));
-            }
-            match orchestrator
-                .resolve_fork_execution(
-                    auth.organization_id,
-                    auth.user_id,
-                    source_run_id,
-                    thread_id,
-                )
-                .await
-                .map_err(orchestrator_error)?
-            {
-                RunExecutionSelection::Standard => {}
-                RunExecutionSelection::Supervisor { policy_id, version } => {
-                    request.supervisor_policy = Some(
-                        open_web_codex_platform_contracts::SupervisorPolicySelection {
-                            policy_id,
-                            version,
-                        },
-                    );
-                }
-                RunExecutionSelection::SupervisorDraft { .. } => {
-                    return Err((
-                        StatusCode::CONFLICT,
-                        Json(PlatformError::bad_request(
-                            "Draft execution cannot be inherited by a fork",
-                        )),
-                    ));
-                }
-                RunExecutionSelection::Agent {
-                    definition_id,
-                    version,
-                    release_id,
-                } => {
-                    request.agent = Some(open_web_codex_platform_contracts::AgentRunSelection {
-                        definition_id,
-                        version,
-                        release_id,
-                    });
-                }
-                RunExecutionSelection::Inherited => {
-                    return Err((
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(PlatformError::internal(
-                            "Fork execution identity could not be resolved",
-                        )),
-                    ));
-                }
-            }
-            Ok(request)
-        }
-        _ => Err((
-            StatusCode::BAD_REQUEST,
-            Json(PlatformError::bad_request(
-                "Fork source Thread and Run must be provided together",
-            )),
-        )),
-    }
-}
-
 fn run_from_row(row: &sqlx::postgres::PgRow) -> Run {
     Run {
         id: row.get("id"),
@@ -838,10 +483,6 @@ pub(crate) fn orchestrator_error(error: RunOrchestratorError) -> (StatusCode, Js
             StatusCode::BAD_GATEWAY,
             PlatformError::internal("Codex Runtime operation failed"),
         ),
-        RunOrchestratorError::StartPreflight(_) => (
-            StatusCode::CONFLICT,
-            PlatformError::bad_request("Runtime start requirements are unavailable"),
-        ),
         RunOrchestratorError::LeaseLost => (
             StatusCode::CONFLICT,
             PlatformError::bad_request("Run ownership changed; reload its current state"),
@@ -860,75 +501,59 @@ fn database_error(_error: sqlx::Error) -> (StatusCode, Json<PlatformError>) {
         Json(PlatformError::internal("database operation failed")),
     )
 }
-fn readiness_changed() -> (StatusCode, Json<PlatformError>) {
-    (
-        StatusCode::CONFLICT,
-        Json(PlatformError {
-            kind: ErrorKind::Conflict,
-            message: "readiness_changed".to_string(),
-            request_id: None,
-            retry_after_ms: None,
-        }),
-    )
-}
-
-async fn readiness_workspace(
+/// Resolve the immutable Task Workspace under the same active Profile and
+/// write-grant conditions used by the Run scheduler. No browser-selected path
+/// or Run-level Workspace identifier participates in this lookup.
+async fn authorized_task_workspace(
     state: &AppState,
     auth: &AuthenticatedUser,
-    workspace_id: Uuid,
-) -> Result<AuthorizedWorkspace, (StatusCode, Json<PlatformError>)> {
-    let workspace_id =
-        match super::workspaces::authorized_workspace(state, auth, workspace_id, false).await {
-            Ok(workspace_id) => workspace_id,
-            Err((status, _))
-                if status == StatusCode::NOT_FOUND || status == StatusCode::CONFLICT =>
-            {
-                return Err((
-                    StatusCode::CONFLICT,
-                    Json(PlatformError::workspace_unavailable(
-                        "workspace_unavailable",
-                    )),
-                ));
-            }
-            Err(error) => return Err(error),
-        };
-    let root = sqlx::query_scalar::<_, String>(
-        "SELECT root_path FROM workspaces WHERE id = $1 AND organization_id = $2",
+    profile: &RuntimeProfileBinding,
+    task_id: Uuid,
+) -> Result<TaskWorkspace, (StatusCode, Json<PlatformError>)> {
+    let row = sqlx::query(
+        "SELECT task.workspace_id \
+         FROM tasks task \
+         JOIN profiles runtime_profile ON runtime_profile.organization_id = task.organization_id \
+           AND runtime_profile.owner_user_id = $2 AND runtime_profile.runtime_key = $3 \
+           AND runtime_profile.status = 'active' \
+         JOIN workspaces workspace ON workspace.id = task.workspace_id \
+           AND workspace.organization_id = task.organization_id \
+           AND workspace.project_id = task.project_id \
+           AND workspace.profile_id = runtime_profile.id \
+           AND workspace.state IN ('ready', 'retained') \
+         JOIN workspace_grants workspace_grant \
+           ON workspace_grant.workspace_id = workspace.id \
+          AND workspace_grant.organization_id = workspace.organization_id \
+          AND workspace_grant.user_id = $2 \
+          AND workspace_grant.profile_id = runtime_profile.id \
+          AND workspace_grant.role IN ('owner', 'write') \
+         WHERE task.id = $1 AND task.organization_id = $4",
     )
-    .bind(workspace_id)
+    .bind(task_id)
+    .bind(auth.user_id)
+    .bind(&profile.runtime_key)
     .bind(auth.organization_id)
     .fetch_optional(&state.db)
     .await
     .map_err(database_error)?
     .ok_or_else(|| {
         (
-            StatusCode::NOT_FOUND,
-            Json(PlatformError::not_found("Workspace was not found")),
+            StatusCode::CONFLICT,
+            Json(PlatformError::workspace_unavailable(
+                "task_workspace_unavailable",
+            )),
         )
     })?;
-    Ok(AuthorizedWorkspace {
-        id: workspace_id.to_string(),
-        root: root.into(),
+    Ok(TaskWorkspace {
+        id: row.get("workspace_id"),
     })
-}
-
-fn run_not_ready() -> (StatusCode, Json<PlatformError>) {
-    (
-        StatusCode::CONFLICT,
-        Json(PlatformError {
-            kind: ErrorKind::Conflict,
-            message: "run_not_ready".to_string(),
-            request_id: None,
-            retry_after_ms: None,
-        }),
-    )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{readiness_task_id, run_from_record};
+    use super::run_from_record;
     use chrono::Utc;
-    use open_web_codex_platform_contracts::{RunFailureCode, RunStartPurpose};
+    use open_web_codex_platform_contracts::RunFailureCode;
     use open_web_codex_run_orchestrator::RunRecord;
     use uuid::Uuid;
 
@@ -938,10 +563,10 @@ mod tests {
             id: Uuid::now_v7(),
             task_id: Uuid::now_v7(),
             status: "failed".to_string(),
-            failure_code: Some("runtime_start_preflight_failed".to_string()),
+            failure_code: Some("codex_unavailable".to_string()),
             codex_thread_id: None,
             active_turn_id: None,
-            workspace_id: Some(Uuid::now_v7()),
+            workspace_id: Uuid::now_v7(),
             attempt: 1,
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -949,11 +574,11 @@ mod tests {
 
         assert_eq!(
             projected.failure_code,
-            Some(RunFailureCode::RuntimeStartPreflightFailed)
+            Some(RunFailureCode::CodexUnavailable)
         );
         assert_eq!(
             serde_json::to_value(projected).unwrap()["failure_code"],
-            "runtime_start_preflight_failed"
+            "codex_unavailable"
         );
     }
 
@@ -966,7 +591,7 @@ mod tests {
             failure_code: Some("raw internal failure detail".to_string()),
             codex_thread_id: None,
             active_turn_id: None,
-            workspace_id: Some(Uuid::now_v7()),
+            workspace_id: Uuid::now_v7(),
             attempt: 1,
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -976,20 +601,6 @@ mod tests {
         assert_eq!(
             serde_json::to_value(projected).unwrap()["failure_code"],
             "unknown_failure"
-        );
-    }
-
-    #[test]
-    fn formal_conversation_readiness_preserves_the_pre_task_scope() {
-        let task_id = Uuid::now_v7();
-
-        assert_eq!(
-            readiness_task_id(RunStartPurpose::Conversation, task_id),
-            None
-        );
-        assert_eq!(
-            readiness_task_id(RunStartPurpose::Analysis, task_id),
-            Some(task_id)
         );
     }
 }

@@ -1,13 +1,17 @@
 # Agent 信息交换：从消息传递到可追溯的协作事实
 
-> 文档性质：多 Agent 信息交换专项演进设计
+> 文档性质：Agent 信息交换历史研究输入；不是当前计划
 >
-> 更新日期：2026-07-29
+> 更新日期：2026-08-08
 >
-> 当前阶段：Artifact First 的 Task 内交接已经形成，正在补齐生命周期、依赖和异常路径
+> 当前阶段：Agent 协作使用 Runtime 原生消息与 Thread Context；provider-owned intermediate
+> 使用官方 MCP Resource；用户可见/跨 package 交接使用 Workspace 文件；Artifact 只用于最终交付
 >
-> 事实边界：本文描述信息交换的分层、演进里程碑和当前实现位置；当前能力声明以
-> [能力基线](capability-baseline.md) 为准
+> 事实边界：下文 typed Dataset/Domain Resource、Resource Broker、Work State、Artifact
+> 交接与 Ledger 路线已被 ADR-018 否决；这里的 DomainResource/Broker 不等于 Codex 官方 MCP
+> Resource。下文仅保存历史推演，当前合同以
+> [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) 和
+> [开发计划](development-plan.md) 为准；当前能力声明以 [能力基线](capability-baseline.md) 为准
 
 ---
 
@@ -16,17 +20,18 @@
 Agent 之间并不需要共享彼此的全部上下文。它们真正需要交换的是两类信息：
 
 - 用来协调下一步的短消息，例如任务、追问、状态和完成通知；
-- 需要复用、复核和进入最终结论的持久成果，例如数据集、计算结果、图表和报告。
+- 需要复用、复核和进入最终结论的持久内容，例如数据集、领域中间结果、图表和报告。
 
-前者由 Codex Runtime 的 Agent 通信承担，后者以具有稳定身份、类型、来源和授权的
-Artifact 交接。只有当真实业务持续证明 Artifact 过于粗粒度时，才增加结构化的
-Task Knowledge Ledger。
+前者由 Codex Runtime 的 Agent 通信承担；后者按生命周期分别使用有稳定身份、类型、
+来源和授权的 `DatasetReleaseRef`、`DomainResourceRef` 与 `ArtifactRef`。Artifact 只拥有
+用户可见或需长期保留的交付物，不再充当所有大型中间内容的总称。只有当这些类型化
+引用仍然过于粗粒度时，才考虑结构化 Task Knowledge Ledger。
 
 ```mermaid
 flowchart LR
     MSG["控制消息<br/>任务、追问、等待、中断"]
     CTX["Thread Context<br/>模型实际看到的历史"]
-    ART["Artifact<br/>可复用的持久成果"]
+    ART["Typed content refs<br/>Dataset、Domain Resource、Artifact"]
     LEDGER["Task Knowledge Ledger<br/>显式事实、假设和关系"]
 
     MSG -->|"Runtime 管理"| CTX
@@ -34,13 +39,16 @@ flowchart LR
     LEDGER -. "有证据后按需引入" .-> ART
 ```
 
-这四种对象不能合并成一个“共享记忆”：
+这些对象不能合并成一个“共享记忆”：
 
 | 信息类型 | 解决的问题 | 权威所有者 |
 | --- | --- | --- |
 | Agent 消息 | 下一步做什么、发给谁、是否等待或中断 | Codex Runtime |
 | Thread Context | 模型在当前 Thread 中实际看到什么 | Codex Runtime |
-| Artifact | 某份成果是什么、谁能读、由什么产生 | Platform Artifact Store |
+| Dataset Release | 不可变标准化输入是什么、谁能读 | Platform Data Intake |
+| Domain Resource | 大型中间结果是什么、谁生产和消费 | Domain Package + Resource Broker |
+| Artifact | 用户可见或长期交付物是什么、谁能读、由什么产生 | Platform Artifact Store |
+| Work State | 本次任务的依赖、readiness、operation 和引用摘要 | Platform Work State |
 | Task Knowledge Ledger | 某项业务事实或假设当前采用哪一版 | 可选的平台业务记录 |
 
 ---
@@ -65,7 +73,8 @@ flowchart LR
 
 因此，消息和成果必须分开：
 
-> 消息告诉协作者“接下来做什么”；Artifact 让协作者准确取得“应该基于什么做”。
+> 消息告诉协作者“接下来做什么”；类型化内容引用让协作者准确取得“应该基于什么做”；
+> Artifact 专门承载用户可见或长期保留的交付。
 
 ---
 
@@ -186,7 +195,7 @@ flowchart TB
 | --- | --- | --- | --- |
 | I0 对话内结果 | 先完成单 Thread 工具闭环 | 消息与 Thread Context | 基础已具备 |
 | I1 Runtime 协调消息 | 让真实 Agent 能够分工和返回结果 | spawn、message、wait、interrupt | 原语已有，真实异常矩阵未完成 |
-| I2 Artifact First | 让成果有稳定身份并跨子 Thread 交接 | Runtime 消息携带 Artifact 引用 | **当前核心阶段；Task 内主路径已实现** |
+| I2 Typed Reference First | 让内容有稳定类型和身份并跨子 Thread 交接 | Runtime 消息携带 Dataset/Domain Resource/Artifact 引用 | 仓网原型部分使用；公共 handle/resolver 未完成 |
 | I3 完整成果生命周期 | 管理版本、依赖、替代、失效和保留 | 类型化 Artifact 与依赖关系 | 部分实现 |
 | I4 Task Knowledge Ledger | 管理细粒度事实、假设、冲突和问题 | 有限类型业务记录 | 条件阶段 |
 | I5 Decision Knowledge | 支撑跨 Task 决策复核和有界重评 | 授权的决策记录与事件 | 条件阶段 |
@@ -256,15 +265,17 @@ flowchart TB
 
 ---
 
-## 7. I2：Artifact First
+## 7. I2：Typed Reference First
 
 ### 阶段目标
 
-让 Agent 交换同一份经过验证的成果，而不是复制数据、工具结果或聊天内容。
+让 Agent 交换同一份经过验证且类型正确的内容，而不是复制数据、工具结果或聊天内容，
+也不把 Workspace `source_ref`、MCP URI、领域 Resource 和 Artifact 混成字符串。
 
-### 当前案例
+### 迁移后的目标案例
 
-当前印尼仓网案例采用条件性交接链：
+当前 7/7 E3 仍由脚本创建 Work State、Prompt 注入内部身份，并要求 Agent 拼装部分领域
+引用。迁移后的仓网案例必须采用以下交接链：
 
 ```mermaid
 sequenceDiagram
@@ -289,7 +300,8 @@ sequenceDiagram
     N-->>S: 返回 Artifact 引用与有界结论
 ```
 
-Runtime 中传递的是 Work State/Dataset/Artifact 的稳定身份和有界摘要；浏览器看到的是
+Runtime 中传递的是 Work State 与 tagged Dataset/Domain Resource/Artifact handle 的
+稳定身份和有界摘要；Resource Broker 根据当前 Assignment Grant 解析。浏览器看到的是
 平台鉴权后的安全 DTO，不接收内部 MCP Resource URI、宿主路径或完整业务 payload。
 
 ### 细致目标
@@ -466,8 +478,8 @@ Ledger 能够减少重复整理和依赖排查，同时没有变成第二套 Run
 - Runtime 原生父子 Thread 与协作事件；
 - Supervisor 到 Data/Network 两个 exact Runtime Role 的按需任务委派；
 - Task 级持久 Artifact、生产来源和同 Task 授权；
-- 当前仓网 Case 通过 `case_id`、有界摘要和最终 Artifact 进行交接；该通用状态机制仍需
-  迁移到 Platform Work State，数据来源和映射仍需迁移到唯一 Platform Data Intake；
+- Platform Work State 的 component/operation/blocker/deliverable 持久化骨架；最新最小
+  E2E 已用它交接标准化输入、路线矩阵和规划报告；
 - Artifact 内容物化、Schema、摘要和安全浏览器 DTO；
 - 删除生产 Run 后保留 Artifact 身份、授权和来源的数据库验证；
 - Web 恢复 Agent、Artifact 和最终 Thread 报告。
@@ -475,6 +487,10 @@ Ledger 能够减少重复整理和依赖排查，同时没有变成第二套 Run
 ### 部分实现
 
 - Artifact 当前能表达类型和来源，但完整输入依赖关系尚未建立；
+- Work State 当前只有 `{owner,type,id,hash}` 通用引用，领域仍要求 Agent 构造 MCP URI；
+- Workspace SourceAsset、Dataset、Domain Resource 和 Artifact 不是不同 tagged handle；
+- Platform Data Intake 与供应链 CaseRepository 仍重复保存 source/mapping/operation；
+- Data Server 通过 aliases 接受多个 wire shape，正式交换 schema 仍不唯一；
 - 当前状态覆盖物化成功与失败，但业务替代、失效和归档尚未完成；
 - 当前案例能引用 Artifact，但浏览器打开、比较和依赖导航仍有限；
 - Runtime 有 follow-up、message 和 interrupt 原语，真实企业异常矩阵尚未完成。
@@ -491,13 +507,14 @@ Ledger 能够减少重复整理和依赖排查，同时没有变成第二套 Run
 
 ## 12. 下一步优先级
 
-1. 让 Agent 节点和 Artifact 都能进入对应的权威 Thread/Turn 与内容视图；
-2. 记录规划结果对输入 Artifact 的显式依赖；
-3. 在追加任务和部分失败中证明既有 Artifact 可以安全复用；
-4. 定义 Artifact 替代、失效、归档和删除语义；
-5. 完成跨 Run 授权与保留测试；
-6. 收集真实案例中 Artifact 仍然无法解决的信息交换问题；
-7. 只有证据充分时才立项 Task Knowledge Ledger。
+1. 先完成无数据 Clean Spine 的 Catalog/Compiler、Profile Installation、Runtime discovery、
+   Assignment Grant、ToolOutcome 与 Run Completion；
+2. 再建立 scope-bound `SourceAssetRef/DatasetReleaseRef/DomainResourceRef/ArtifactRef`；
+3. 由 Resource Broker 解析 handle，MCP URI 只留在 Runtime/MCP 内部；
+4. Data Intake 成为 source/mapping/Dataset 唯一 owner并删除领域副本；
+5. 验证追加任务、部分失败、刷新和重启中既有引用安全复用；
+6. 完成 Artifact 替代、失效、归档、删除和跨 Run 授权；
+7. 只有 typed handle 与 Artifact 仍无法解决的真实证据出现时，才立项 Knowledge Ledger。
 
 ---
 
@@ -513,8 +530,8 @@ Ledger 能够减少重复整理和依赖排查，同时没有变成第二套 Run
   [`20260726000022_task_artifacts.sql`](../apps/web/migrations/20260726000022_task_artifacts.sql)；
 - 仓网数据和规划 MCP：
   [`tools/supply-chain-network-planner`](../tools/supply-chain-network-planner)；
-- 真实交接验证：
-  [`enterprise-supervisor-e2e.mjs`](../apps/web/scripts/enterprise-supervisor-e2e.mjs)。
+- 已退役旧交接验证：旧 `enterprise-supervisor-e2e.mjs` 已随 Platform 数据面和冻结能力包
+  删除，只保留在版本历史中作为迁移证据。
 
 本文不以源码中“存在某个字段或方法”替代产品验证。各能力能否对外声称可用，仍以
 [能力基线](capability-baseline.md) 的验证范围为准。

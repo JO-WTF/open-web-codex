@@ -56,6 +56,15 @@ impl PlatformError {
         }
     }
 
+    pub fn conflict(message: impl Into<String>) -> Self {
+        Self {
+            kind: ErrorKind::Conflict,
+            message: message.into(),
+            request_id: None,
+            retry_after_ms: None,
+        }
+    }
+
     pub fn internal(message: impl Into<String>) -> Self {
         Self {
             kind: ErrorKind::Internal,

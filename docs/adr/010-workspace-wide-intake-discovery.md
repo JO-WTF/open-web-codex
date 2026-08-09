@@ -1,10 +1,8 @@
 # ADR-010：Workspace 全域数据接入与 Task 级确认
 
-状态：已被 [ADR-013](013-platform-data-intake-and-work-state.md) 取代（2026-08-08）
-
-领域 Agent 不再遍历 Workspace 或发布 source/mapping 生命周期。Platform Data Intake 是
-SourceAsset、画像、显式映射和 Dataset Release 的唯一 owner；领域包只实现业务合同、
-validator 和 normalizer。本文件仅保留历史决策背景。
+状态：已被 [ADR-018](018-built-in-network-copilot-runtime-closure.md) 替代（2026-08-08）。
+当前数据路径是经校验相对路径访问普通 Workspace 文件；Platform 不拥有 Data Intake、
+SourceAsset、mapping 或 Dataset Release。本文件仅保留历史决策背景。
 
 ## 决定
 

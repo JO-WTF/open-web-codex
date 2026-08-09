@@ -13,14 +13,10 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::{
-    validate_platform_runtime_role_files, validate_platform_runtime_roles,
-    validate_required_mcp_servers, validate_role_spawn_limits, AdapterError, AuthorizedWorkspace,
-    CanceledProfileLogin, CodexAdapter, HealthStatus, PlatformRuntimeRole, ProfileLoginStatus,
-    ProfileMutation, ProfileQuery, ReviewTarget, StartedProfileLogin, StartedThread,
-    ThreadStartMode, TurnOptions,
+    AdapterError, AuthorizedWorkspace, CanceledProfileLogin, CodexAdapter, HealthStatus,
+    ProfileLoginStatus, ProfileMutation, ProfileQuery, ReviewTarget, StartedProfileLogin,
+    StartedThread, TurnOptions,
 };
-
-const MAX_DEVELOPER_INSTRUCTIONS_BYTES: usize = 16 * 1024;
 /// A tracked mock thread for list/show responses.
 #[derive(Clone)]
 struct MockThread {
@@ -33,106 +29,6 @@ struct MockThread {
     updated_at: i64,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::FakeCodexAdapter;
-    use crate::{
-        platform_runtime_role_config_file, AuthorizedWorkspace, CapabilityRootMcpInventory,
-        CodexAdapter, PlatformRuntimeRole, ProfileMutation, ProfileQuery, RequiredMcpServer,
-        ThreadStartMode,
-    };
-    use sha2::{Digest, Sha256};
-
-    fn platform_runtime_role() -> PlatformRuntimeRole {
-        let config_toml = "developer_instructions = '''\nBuild and validate the dataset.\n'''\n\
-            \n[agents]\nenabled = false\n\
-            \n[skills]\ninclude_instructions = false\n\
-            \n[features]\napps = false\nmulti_agent_v2 = false\nplugins = false\nshell_tool = false\n\
-            \n[plugins.local-supply-chain-network-planner]\nenabled = true\n\
-            \n[plugins.local-supply-chain-network-planner.mcp_servers.supply_chain_data]\n\
-            enabled = true\nenabled_tools = [\"inspect_planning_source\"]\n";
-        PlatformRuntimeRole {
-            definition_id: "data-agent".to_string(),
-            version: "1.0.0".to_string(),
-            name: "data_agent".to_string(),
-            description: "Builds the governed planning dataset.".to_string(),
-            config_file: platform_runtime_role_config_file("data-agent", "1.0.0"),
-            config_toml: config_toml.to_string(),
-            content_sha256: hex::encode(Sha256::digest(config_toml.as_bytes())),
-        }
-    }
-
-    #[tokio::test]
-    async fn materializes_platform_role_without_polluting_profile_config() {
-        let adapter = FakeCodexAdapter::new();
-        let role = platform_runtime_role();
-
-        adapter
-            .mutate_profile(ProfileMutation::MaterializePlatformRuntimeRoleFiles {
-                roles: vec![role.clone()],
-            })
-            .await
-            .expect("project platform role");
-        let config = adapter
-            .query_profile(ProfileQuery::Config)
-            .await
-            .expect("read fake config");
-
-        assert!(config["config"]["agents"].get("data_agent").is_none());
-    }
-
-    #[tokio::test]
-    async fn revalidates_platform_role_file_before_governed_start() {
-        let adapter = FakeCodexAdapter::new();
-        let role = platform_runtime_role();
-        let workspace = AuthorizedWorkspace {
-            id: "workspace-1".to_string(),
-            root: "/runner/workspace-1".into(),
-        };
-        adapter
-            .mutate_profile(ProfileMutation::MaterializePlatformRuntimeRoleFiles {
-                roles: vec![role.clone()],
-            })
-            .await
-            .expect("project platform role");
-        let mode = ThreadStartMode::GovernedSupervisor {
-            developer_instructions: "Coordinate the verified role.".to_string(),
-            roles: vec![role.clone()],
-            role_spawn_limits: [("data_agent".to_string(), 1)].into_iter().collect(),
-            required_mcp_servers: vec![RequiredMcpServer {
-                name: "supply_chain_data".to_string(),
-                tools: vec!["inspect_planning_source".to_string()],
-                capability_roots: vec![CapabilityRootMcpInventory {
-                    capability_root_id: "local-supply-chain-network-planner".to_string(),
-                    mcp_server_names: vec!["supply_chain_data".to_string()],
-                }],
-            }],
-            coordination_mcp_servers: Vec::new(),
-            max_threads: 2,
-        };
-
-        adapter
-            .start_thread(&workspace, &mode)
-            .await
-            .expect("start with a verified projection");
-
-        adapter
-            .state
-            .lock()
-            .await
-            .platform_runtime_roles
-            .remove(&role.name);
-        let error = adapter
-            .start_thread(&workspace, &mode)
-            .await
-            .expect_err("tampered projection must not start");
-        assert_eq!(
-            error.to_string(),
-            "Internal error: platform Runtime Role file failed verification"
-        );
-    }
-}
-
 /// In-memory state shared between RPC handlers and event generator.
 struct FakeState {
     workspaces: Vec<Value>,
@@ -141,8 +37,6 @@ struct FakeState {
     pending_events: Vec<Value>,
     /// Effective Profile configuration returned by the typed config/read path.
     profile_config: Value,
-    /// Fake equivalent of the Profile Host's immutable, hash-checked role files.
-    platform_runtime_roles: HashMap<String, PlatformRuntimeRole>,
 }
 
 fn default_profile_config() -> Value {
@@ -200,7 +94,6 @@ impl FakeCodexAdapter {
                 threads: vec![],
                 pending_events: vec![],
                 profile_config: default_profile_config(),
-                platform_runtime_roles: HashMap::new(),
             })),
             active_login_id: Arc::new(Mutex::new(None)),
             login_statuses: Arc::new(Mutex::new(HashMap::new())),
@@ -268,7 +161,6 @@ impl CodexAdapter for FakeCodexAdapter {
     async fn health(&self) -> Result<HealthStatus, AdapterError> {
         Ok(HealthStatus {
             ok: true,
-            version: "0.1.0-mock".into(),
             name: "open-web-codex-mock".into(),
         })
     }
@@ -399,7 +291,6 @@ impl CodexAdapter for FakeCodexAdapter {
     async fn start_thread(
         &self,
         workspace: &AuthorizedWorkspace,
-        mode: &ThreadStartMode,
     ) -> Result<StartedThread, AdapterError> {
         {
             let mut state = self.state.lock().await;
@@ -417,59 +308,9 @@ impl CodexAdapter for FakeCodexAdapter {
                 }));
             }
         }
-        let mut params = json!({ "workspaceId": workspace.id });
-        match mode {
-            ThreadStartMode::Standard => {}
-            ThreadStartMode::GovernedAgent {
-                developer_instructions,
-                required_mcp_servers,
-            } => {
-                validate_required_mcp_servers(required_mcp_servers)?;
-                let instructions = developer_instructions.trim();
-                if instructions.is_empty() || instructions.len() > MAX_DEVELOPER_INSTRUCTIONS_BYTES
-                {
-                    return Err(AdapterError::Internal(
-                        "Agent developer instructions must contain 1 to 16384 bytes".to_string(),
-                    ));
-                }
-                params["developerInstructions"] = Value::String(instructions.to_string());
-            }
-            ThreadStartMode::GovernedSupervisor {
-                developer_instructions,
-                roles,
-                role_spawn_limits,
-                required_mcp_servers,
-                coordination_mcp_servers,
-                max_threads,
-            } => {
-                validate_platform_runtime_roles(roles, *max_threads)?;
-                validate_role_spawn_limits(roles, role_spawn_limits)?;
-                validate_required_mcp_servers(required_mcp_servers)?;
-                if !coordination_mcp_servers.is_empty() {
-                    validate_required_mcp_servers(coordination_mcp_servers)?;
-                }
-                let state = self.state.lock().await;
-                if roles
-                    .iter()
-                    .any(|role| state.platform_runtime_roles.get(&role.name) != Some(role))
-                {
-                    return Err(AdapterError::Internal(
-                        "platform Runtime Role file failed verification".to_string(),
-                    ));
-                }
-                drop(state);
-                let instructions = developer_instructions.trim();
-                if instructions.is_empty() || instructions.len() > MAX_DEVELOPER_INSTRUCTIONS_BYTES
-                {
-                    return Err(AdapterError::Internal(
-                        "Supervisor developer instructions must contain 1 to 16384 bytes"
-                            .to_string(),
-                    ));
-                }
-                params["developerInstructions"] = Value::String(instructions.to_string());
-            }
-        }
-        let result = self.rpc("start_thread", params).await?;
+        let result = self
+            .rpc("start_thread", json!({ "workspaceId": workspace.id }))
+            .await?;
         let thread_id = result
             .get("threadId")
             .and_then(Value::as_str)
@@ -484,14 +325,13 @@ impl CodexAdapter for FakeCodexAdapter {
         _source_workspace: &AuthorizedWorkspace,
         target_workspace: &AuthorizedWorkspace,
         thread_id: &str,
-        mode: &ThreadStartMode,
     ) -> Result<StartedThread, AdapterError> {
         if thread_id.trim().is_empty() {
             return Err(AdapterError::Internal(
                 "fork source Thread is required".to_string(),
             ));
         }
-        self.start_thread(target_workspace, mode).await
+        self.start_thread(target_workspace).await
     }
 
     async fn read_thread(
@@ -681,14 +521,6 @@ impl CodexAdapter for FakeCodexAdapter {
             }
             ProfileMutation::RemoveAgentDefinition { name } => {
                 fake_profile_section_mut(&mut state.profile_config, "agents").remove(&name);
-            }
-            ProfileMutation::MaterializePlatformRuntimeRoleFiles { roles } => {
-                validate_platform_runtime_role_files(&roles)?;
-                for role in &roles {
-                    state
-                        .platform_runtime_roles
-                        .insert(role.name.clone(), role.clone());
-                }
             }
         }
         Ok(json!({ "status": "ok" }))

@@ -1,72 +1,7 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Sidebar from "./index";
-
-vi.mock("../../../browser/session", () => ({
-  platformClient: {
-    listCapabilityPackages: vi.fn(async () => [
-      {
-        package_id: "map-utils",
-        version: "0.1.0",
-        display_name: "Map Utils",
-        description: "Geocode, route, and create map cards.",
-        capability_root_id: "local-maps-mcp",
-        capabilities: ["Maps", "Map cards"],
-        mcp_server_names: ["map_utils"],
-        includes_skills: true,
-        source: "repository",
-      },
-    ]),
-  },
-}));
-
-vi.mock("@/features/settings/hooks/useSettingsAgentCatalogSection", () => ({
-  useSettingsAgentCatalogSection: () => ({
-    definitions: [],
-    publishedAgents: [],
-    templates: [],
-    capabilityPackages: [],
-    datasetReleases: [],
-    workspaceNames: {},
-    isLoadingDatasets: false,
-    isLoading: false,
-    actionDefinitionId: null,
-    loadingAgentKey: null,
-    error: null,
-    validationByDefinition: {},
-    detailByAgent: {},
-    onRefresh: vi.fn(),
-    onSaveDraft: vi.fn(),
-    onValidate: vi.fn(),
-    onPublish: vi.fn(),
-    onLoadPublished: vi.fn(),
-    onLoadDatasetReleases: vi.fn(),
-  }),
-}));
-
-vi.mock("@/features/settings/hooks/useSettingsSupervisorsSection", () => ({
-  useSettingsSupervisorsSection: () => ({
-    definitions: [],
-    publishedPolicies: [],
-    agents: [],
-    instructionPolicies: [],
-    instructionPolicyDetails: {},
-    isPublishingInstructionPolicy: false,
-    isLoading: false,
-    actionDefinitionId: null,
-    loadingPolicyKey: null,
-    error: null,
-    validationByDefinition: {},
-    detailByPolicy: {},
-    onRefresh: vi.fn(),
-    onSaveDraft: vi.fn(),
-    onValidate: vi.fn(),
-    onPublish: vi.fn(),
-    onLoadPublished: vi.fn(),
-    onPublishInstructionPolicy: vi.fn(),
-  }),
-}));
 
 describe("Sidebar settings", () => {
   afterEach(cleanup);
@@ -85,10 +20,6 @@ describe("Sidebar settings", () => {
         activeThreadId={null}
         onSelectThread={vi.fn()}
         onNewThread={vi.fn()}
-        onEvaluateReadiness={vi.fn()}
-        onStartTask={vi.fn()}
-        onReadinessAction={vi.fn()}
-        onTutorialPromptReady={vi.fn()}
         onArchiveThread={vi.fn()}
         onRemoveWorkspace={vi.fn()}
         baseUrl="http://127.0.0.1:4733"
@@ -102,7 +33,6 @@ describe("Sidebar settings", () => {
         busy={false}
         theme="dark"
         onToggleTheme={vi.fn()}
-        onSupervisorCatalogChanged={vi.fn()}
       />,
     );
 
@@ -130,10 +60,6 @@ describe("Sidebar settings", () => {
         activeThreadId={null}
         onSelectThread={vi.fn()}
         onNewThread={vi.fn()}
-        onEvaluateReadiness={vi.fn()}
-        onStartTask={vi.fn()}
-        onReadinessAction={vi.fn()}
-        onTutorialPromptReady={vi.fn()}
         onArchiveThread={vi.fn()}
         onRemoveWorkspace={vi.fn()}
         baseUrl="http://127.0.0.1:4733"
@@ -147,7 +73,6 @@ describe("Sidebar settings", () => {
         busy={false}
         theme="dark"
         onToggleTheme={onToggleTheme}
-        onSupervisorCatalogChanged={vi.fn()}
       />,
     );
 
@@ -168,10 +93,6 @@ describe("Sidebar settings", () => {
         activeThreadId={null}
         onSelectThread={vi.fn()}
         onNewThread={vi.fn()}
-        onEvaluateReadiness={vi.fn()}
-        onStartTask={vi.fn()}
-        onReadinessAction={vi.fn()}
-        onTutorialPromptReady={vi.fn()}
         onArchiveThread={vi.fn()}
         onRemoveWorkspace={vi.fn()}
         baseUrl="http://127.0.0.1:4733"
@@ -185,74 +106,9 @@ describe("Sidebar settings", () => {
         busy={false}
         theme="light"
         onToggleTheme={onToggleTheme}
-        onSupervisorCatalogChanged={vi.fn()}
       />,
     );
     expect(screen.getByRole("button", { name: "Switch to dark theme" })).toBeTruthy();
-  });
-
-  it("opens Agent Studio and separates capability directories from Thread status", async () => {
-    render(
-      <Sidebar
-        gatewayState="online"
-        gatewayVersion="1.0.0"
-        workspaces={[]}
-        activeWorkspaceId={null}
-        onSelectWorkspace={vi.fn()}
-        onCreateWorkspace={vi.fn()}
-        onLoadWorkspaces={vi.fn()}
-        onConnectWorkspace={vi.fn()}
-        threadsByWorkspace={{}}
-        activeThreadId={null}
-        onSelectThread={vi.fn()}
-        onNewThread={vi.fn()}
-        onEvaluateReadiness={vi.fn()}
-        onStartTask={vi.fn()}
-        onReadinessAction={vi.fn()}
-        onTutorialPromptReady={vi.fn()}
-        onArchiveThread={vi.fn()}
-        onRemoveWorkspace={vi.fn()}
-        baseUrl="http://127.0.0.1:4733"
-        token=""
-        onBaseUrlChange={vi.fn()}
-        onTokenChange={vi.fn()}
-        onCheckGateway={vi.fn()}
-        mcpServers={{
-          map_utils: { name: "map_utils", status: "ready" },
-        }}
-        rateLimits={null}
-        currentProviderId={null}
-        busy={false}
-        theme="dark"
-        onToggleTheme={vi.fn()}
-        onSupervisorCatalogChanged={vi.fn()}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Open Agent Studio" }));
-    expect(screen.getByRole("dialog", { name: "Agent Studio" })).toBeTruthy();
-    expect(screen.getByText("Agent directory")).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: /^MCPAvailable/ }));
-    expect(screen.getByText("MCP servers")).toBeTruthy();
-    await waitFor(() => expect(screen.getByText("map_utils")).toBeTruthy());
-    expect(screen.getByText("Map Utils")).toBeTruthy();
-    expect(screen.getAllByText("ready")).toHaveLength(2);
-    expect(
-      screen.queryByRole("button", { name: "New Python capability" }),
-    ).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: /Capabilities/ }));
-    expect(screen.getByText("Map Utils")).toBeTruthy();
-    expect(screen.getByText(/map-utils@0.1.0/)).toBeTruthy();
-    expect(screen.getByText(/Includes Skills/)).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "New Python capability" }),
-    ).toBeTruthy();
-
-    const dialog = screen.getByRole("dialog", { name: "Agent Studio" });
-    fireEvent.mouseDown(dialog.parentElement!);
-    expect(screen.queryByRole("dialog", { name: "Agent Studio" })).toBeNull();
   });
 
   it("renders Codex quota windows above the settings control", () => {
@@ -270,10 +126,6 @@ describe("Sidebar settings", () => {
         activeThreadId={null}
         onSelectThread={vi.fn()}
         onNewThread={vi.fn()}
-        onEvaluateReadiness={vi.fn()}
-        onStartTask={vi.fn()}
-        onReadinessAction={vi.fn()}
-        onTutorialPromptReady={vi.fn()}
         onArchiveThread={vi.fn()}
         onRemoveWorkspace={vi.fn()}
         baseUrl="http://127.0.0.1:4733"
@@ -291,7 +143,6 @@ describe("Sidebar settings", () => {
         busy={false}
         theme="dark"
         onToggleTheme={vi.fn()}
-        onSupervisorCatalogChanged={vi.fn()}
       />,
     );
 
@@ -317,10 +168,6 @@ describe("Sidebar settings", () => {
         activeThreadId={null}
         onSelectThread={vi.fn()}
         onNewThread={vi.fn()}
-        onEvaluateReadiness={vi.fn()}
-        onStartTask={vi.fn()}
-        onReadinessAction={vi.fn()}
-        onTutorialPromptReady={vi.fn()}
         onArchiveThread={vi.fn()}
         onRemoveWorkspace={vi.fn()}
         baseUrl="http://127.0.0.1:4733"
@@ -337,7 +184,6 @@ describe("Sidebar settings", () => {
         busy={false}
         theme="dark"
         onToggleTheme={vi.fn()}
-        onSupervisorCatalogChanged={vi.fn()}
       />,
     );
 

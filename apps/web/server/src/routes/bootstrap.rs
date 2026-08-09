@@ -129,24 +129,6 @@ pub async fn bootstrap(
     .await
     .map_err(internal_database_error)?;
 
-    if let Some(capabilities) = profile.capabilities.get().await {
-        sqlx::query(
-            "INSERT INTO profile_capabilities \
-             (profile_id, server_build, protocol_version, manifest, observed_at) \
-             SELECT id, $1, $2, $3, now() FROM profiles WHERE runtime_key = $4 \
-             ON CONFLICT (profile_id) DO UPDATE SET server_build = EXCLUDED.server_build, \
-             protocol_version = EXCLUDED.protocol_version, manifest = EXCLUDED.manifest, \
-             observed_at = now()",
-        )
-        .bind(capabilities.server_build)
-        .bind(capabilities.protocol_version)
-        .bind(capabilities.manifest)
-        .bind(&profile.runtime_key)
-        .execute(&mut *transaction)
-        .await
-        .map_err(internal_database_error)?;
-    }
-
     sqlx::query(
         "INSERT INTO sessions (user_id, organization_id, token_hash, expires_at) \
          VALUES ($1, $2, $3, now() + interval '7 days')",

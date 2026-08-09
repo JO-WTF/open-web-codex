@@ -11,9 +11,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebApp, {
-  prepareTutorialPromptDraft,
   resolveTurnStartedAt,
-  shouldRefreshDataIntakeForAppEvent,
 } from "./WebApp";
 import type { AppServerEvent } from "./types";
 
@@ -31,11 +29,8 @@ const client = {
   selectProviderModel: vi.fn(),
   updateThreadModelSelection: vi.fn(),
   listMcpServerStatus: vi.fn(),
-  listAgentDefinitions: vi.fn(),
-  listSupervisorPolicies: vi.fn(),
   getAccountRateLimits: vi.fn(),
   getSupervisorOverview: vi.fn(),
-  evaluateRunReadiness: vi.fn(),
   startThread: vi.fn(),
   resumeThread: vi.fn(),
   listThreadTurns: vi.fn(),
@@ -82,21 +77,8 @@ describe("WebApp workspace-first messaging", () => {
     client.selectProviderModel.mockResolvedValue({ data: [] });
     client.updateThreadModelSelection.mockResolvedValue({});
     client.listMcpServerStatus.mockResolvedValue({ data: [] });
-    client.listAgentDefinitions.mockResolvedValue([]);
-    client.listSupervisorPolicies.mockResolvedValue([{
-      policy_id: "enterprise-supervisor-copilot",
-      version: "4.0.0",
-      display_name: "Enterprise Supervisor Copilot",
-      description: "Coordinates governed data analysis and warehouse-network planning agents.",
-      source: "repository",
-    }]);
     client.getAccountRateLimits.mockResolvedValue({});
     client.getSupervisorOverview.mockResolvedValue(null);
-    client.evaluateRunReadiness.mockResolvedValue({
-      status: "ready",
-      evaluation_fingerprint: "readiness-test",
-      checks: [],
-    });
     client.startThread.mockImplementation(async (
       _workspaceId: string,
       options: { onRunAccepted?: (value: { taskId: string; runId: string }) => void },
@@ -110,43 +92,6 @@ describe("WebApp workspace-first messaging", () => {
     client.sendUserMessage.mockResolvedValue({ turn: { id: "turn-1" } });
     client.interruptTurn.mockResolvedValue({ status: "interrupted" });
     client.respondToServerRequest.mockResolvedValue({});
-  });
-
-  it("refreshes data intake when Agent output can publish a new user request", () => {
-    expect(shouldRefreshDataIntakeForAppEvent("platform/data-intake/changed", null)).toBe(true);
-    expect(shouldRefreshDataIntakeForAppEvent("item/completed", "mcpToolCall")).toBe(true);
-    expect(shouldRefreshDataIntakeForAppEvent("item/completed", "agentMessage")).toBe(true);
-    expect(shouldRefreshDataIntakeForAppEvent("turn/completed", null)).toBe(true);
-    expect(shouldRefreshDataIntakeForAppEvent("item/started", "mcpToolCall")).toBe(false);
-    expect(shouldRefreshDataIntakeForAppEvent("item/completed", "commandExecution")).toBe(false);
-  });
-
-  it("does not overwrite an existing composer draft with a tutorial prompt", () => {
-    expect(
-      prepareTutorialPromptDraft(
-        "Keep my unfinished analysis",
-        "Run the prepared tutorial",
-      ),
-    ).toEqual({
-      draft: "Keep my unfinished analysis",
-      loaded: false,
-    });
-    expect(
-      prepareTutorialPromptDraft("   ", "Run the prepared tutorial"),
-    ).toEqual({
-      draft: "Run the prepared tutorial",
-      loaded: true,
-    });
-    expect(
-      prepareTutorialPromptDraft(
-        "Keep my unfinished analysis",
-        "Run the prepared tutorial",
-        true,
-      ),
-    ).toEqual({
-      draft: "Run the prepared tutorial",
-      loaded: true,
-    });
   });
 
   it("keeps a local send time when Runtime reports a different Turn start", () => {
@@ -166,9 +111,7 @@ describe("WebApp workspace-first messaging", () => {
     await waitFor(() => expect(client.startThread).toHaveBeenCalledWith(
       "workspace-1",
       expect.objectContaining({
-        agent: null,
-        supervisorPolicy: null,
-        readinessFingerprint: "readiness-test",
+        operationId: expect.any(String),
         onRunAccepted: expect.any(Function),
       }),
     ));
@@ -178,7 +121,6 @@ describe("WebApp workspace-first messaging", () => {
       "Start from this workspace",
       null,
       null,
-      [],
     ));
     expect(client.startThread.mock.invocationCallOrder[0]).toBeLessThan(
       client.sendUserMessage.mock.invocationCallOrder[0],
@@ -210,117 +152,6 @@ describe("WebApp workspace-first messaging", () => {
 
     await waitFor(() => expect(agentsTab.getAttribute("aria-selected")).toBe("true"));
     expect(screen.getByText("No Agent activity yet")).toBeTruthy();
-  });
-
-  it("starts and identifies a Supervisor selected from the published catalog", async () => {
-    client.getSupervisorOverview.mockResolvedValue({
-      taskTitle: "Enterprise network planning",
-      policy: {
-        run_id: "run-enterprise",
-        task_id: "task-enterprise",
-        thread_id: "thread-new",
-        policy_id: "enterprise-supervisor-copilot",
-        version: "4.0.0",
-        display_name: "Enterprise Supervisor Copilot",
-        content_sha256: "a".repeat(64),
-        state: "bound",
-        created_at: "2026-07-26T00:00:00Z",
-        bound_at: "2026-07-26T00:00:01Z",
-      },
-      agents: [
-        {
-          run_id: "run-enterprise",
-          thread_id: "thread-new",
-          parent_thread_id: null,
-          source_kind: "root",
-          agent_path: null,
-          agent_nickname: null,
-          agent_role: null,
-          status_type: "idle",
-          active_flags: [],
-          is_root: true,
-          first_observed_at: "2026-07-26T00:00:01Z",
-          last_observed_at: "2026-07-26T00:00:01Z",
-        },
-        {
-          run_id: "run-enterprise",
-          thread_id: "data-thread",
-          parent_thread_id: "thread-new",
-          source_kind: "thread_spawn",
-          agent_path: "/root/data",
-          agent_nickname: "Data Analyst",
-          agent_role: "data_agent",
-          status_type: "active",
-          active_flags: [],
-          is_root: false,
-          first_observed_at: "2026-07-26T00:00:02Z",
-          last_observed_at: "2026-07-26T00:00:02Z",
-        },
-      ],
-      activities: [{
-        run_id: "run-enterprise",
-        sequence: 4,
-        thread_id: "data-thread",
-        turn_id: null,
-        item_id: "spawn-data",
-        kind: "assignment",
-        status: "pending",
-        title: "Task assigned",
-        detail: "Inspect enterprise planning data.",
-        created_at: "2026-07-26T00:00:02Z",
-      }],
-      executions: [{
-        id: "execution-data-1",
-        run_id: "run-enterprise",
-        thread_id: "data-thread",
-        turn_id: null,
-        ordinal: 1,
-        task: "Inspect enterprise planning data.",
-        status: "pending",
-        current_behavior: "Waiting to start",
-        latest_progress: null,
-        first_observed_sequence: 4,
-        last_observed_sequence: 4,
-        started_at: null,
-        completed_at: null,
-        created_at: "2026-07-26T00:00:02Z",
-        updated_at: "2026-07-26T00:00:02Z",
-      }],
-      artifacts: [],
-    });
-    render(<WebApp />);
-
-    fireEvent.click(await screen.findByRole("button", {
-      name: "New task in Demo",
-    }));
-    fireEvent.click(screen.getByRole("button", { name: "Supervisor" }));
-    fireEvent.click(await screen.findByRole("button", {
-      name: /Enterprise Supervisor Copilot/,
-    }));
-    await screen.findByText("Ready to start");
-    fireEvent.click(screen.getByRole("button", { name: "Create Thread" }));
-
-    await waitFor(() => expect(client.startThread).toHaveBeenCalledWith(
-      "workspace-1",
-      expect.objectContaining({
-        agent: null,
-        supervisorPolicy: {
-          policy_id: "enterprise-supervisor-copilot",
-          version: "4.0.0",
-        },
-        readinessFingerprint: "readiness-test",
-        onRunAccepted: expect.any(Function),
-      }),
-    ));
-    await waitFor(() => expect(client.getSupervisorOverview)
-      .toHaveBeenCalledWith("thread-new"));
-    fireEvent.click(await screen.findByRole("button", { name: "Agent activity" }));
-    await waitFor(() => {
-      expect(screen.getByText("Policy enterprise-supervisor-copilot · 4.0.0"))
-        .toBeTruthy();
-      expect(screen.getByText("Root Supervisor")).toBeTruthy();
-      expect(screen.getAllByText("Inspect enterprise planning data.")).toHaveLength(2);
-    });
   });
 
   it("keeps Agent activity live while Files is selected and marks it unread", async () => {
@@ -626,9 +457,6 @@ describe("WebApp workspace-first messaging", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "New task in Demo" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Standard" }));
-    await screen.findByText("Ready to start");
-    fireEvent.click(screen.getByRole("button", { name: "Create Thread" }));
 
     await waitFor(() => expect(client.startThread).toHaveBeenCalledTimes(1));
     expect(screen.queryByText("正在创建 Thread…")).toBeNull();
@@ -680,9 +508,6 @@ describe("WebApp workspace-first messaging", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "New task in Demo" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Standard" }));
-    await screen.findByText("Ready to start");
-    fireEvent.click(screen.getByRole("button", { name: "Create Thread" }));
 
     await waitFor(() => expect(screen.getAllByText("Server generated title")).toHaveLength(2));
     expect(screen.queryByText("正在创建 Thread…")).toBeNull();
@@ -711,7 +536,7 @@ describe("WebApp workspace-first messaging", () => {
     });
   });
 
-  it("keeps the launcher draft retryable when formal start fails", async () => {
+  it("allows a direct Standard start to be retried after admission fails", async () => {
     client.startThread
       .mockRejectedValueOnce(new Error("Thread startup failed"))
       .mockImplementationOnce(async (
@@ -728,16 +553,11 @@ describe("WebApp workspace-first messaging", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "New task in Demo" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Standard" }));
-    await screen.findByText("Ready to start");
-    fireEvent.click(screen.getByRole("button", { name: "Create Thread" }));
 
     await screen.findByText("Thread startup failed");
     expect(screen.queryByText("正在创建 Thread…")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
-    await screen.findByText("Ready to start");
-    fireEvent.click(screen.getByRole("button", { name: "Create Thread" }));
+    fireEvent.click(screen.getByRole("button", { name: "New task in Demo" }));
     await waitFor(() => expect(client.startThread).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByText("正在创建 Thread…")).toBeNull());
     expect(

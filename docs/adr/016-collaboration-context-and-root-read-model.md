@@ -1,6 +1,8 @@
 # ADR-016：不可伪造 CollaborationContext 与 Root 只读协调
 
-状态：已接受（2026-08-08），实现待完成
+状态：已被 [ADR-018](018-built-in-network-copilot-runtime-closure.md) 替代（2026-08-08）；
+下文仅保存历史决定。当前阶段直接复用 Runtime wait/mailbox/steer、child elicitation 和
+终态，不建设 Assignment Grant、Root coordination MCP 或 Run Completion Controller。
 
 ## 背景
 

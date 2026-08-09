@@ -38,11 +38,6 @@ jobs:
       - run: npm run typecheck
       - run: npm run test
       - run: npm run build
-      - run: npm run check:codex-contracts
-      - run: npm run check:codex-generated
-      - run: npm run test:codex-capabilities
-      - run: npm run test:feature-policy
-      - run: npm run test:codex-fixtures
       - run: npm run test:codex-harness
 
   platform-rust:
@@ -70,9 +65,6 @@ jobs:
         run: |
           (cd apps/web && cargo fmt --all -- --check)
           ./scripts/test-web-rust.sh
-      - name: Cargo build retention policy
-        working-directory: .
-        run: ./scripts/tests/cargo-build-retention.sh
       - name: Real PostgreSQL integration tests
         working-directory: .
         env:

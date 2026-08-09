@@ -8,7 +8,6 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 web_root="$repo_root/apps/web"
 runtime_root="$repo_root/codex/codex-rs"
 cargo_cache_lib="$script_dir/cargo-build-cache.sh"
-target_gc="$script_dir/cargo-target-gc.sh"
 cargo_fingerprint_tool="$script_dir/cargo-dep-fingerprint.mjs"
 
 # shellcheck source=scripts/cargo-build-cache.sh
@@ -25,7 +24,6 @@ database_url="${DATABASE_URL:-}"
 database_url_file=""
 default_database_url_file="$data_dir/database-url"
 database_max_connections="${DATABASE_MAX_CONNECTIONS:-10}"
-skip_target_gc="${OPEN_WEB_CODEX_SKIP_TARGET_GC:-0}"
 
 run_dir="$data_dir/run"
 log_dir="$data_dir/logs"
@@ -70,30 +68,24 @@ Environment:
                                      generated under the data directory if absent
   OPEN_WEB_CODEX_RUNNER_ROOT         Private mirror/workspace root
   OPEN_WEB_CODEX_DATA_DIR            Runtime data and logs directory
+  OPEN_WEB_CODEX_MAPS_ASSET_ROOT     Read-only maps MCP application assets
+                                     (default: repository tools/maps-mcp)
   OPEN_WEB_CODEX_MAPS_MCP_VENV       Shared maps MCP Python environment
                                      (default: $OPEN_WEB_CODEX_DATA_DIR/tool-envs/maps-mcp)
   OPEN_WEB_CODEX_SKIP_MAPS_MCP_SETUP 1 to skip startup preparation of maps MCP
   OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV
                                      Shared supply-chain MCP Python environment
+  OPEN_WEB_CODEX_SUPPLY_CHAIN_ASSET_ROOT
+                                     Read-only supply-chain MCP application assets
+                                     (default: repository tools/supply-chain-network-planner)
   OPEN_WEB_CODEX_SKIP_SUPPLY_CHAIN_MCP_SETUP
                                      1 to skip supply-chain MCP preparation
-  OPEN_WEB_CODEX_COORDINATION_MCP_VENV
-                                     Shared platform coordination MCP environment
-  OPEN_WEB_CODEX_SKIP_COORDINATION_MCP_SETUP
-                                     1 to skip platform coordination MCP preparation
-  OPEN_WEB_CODEX_WORK_STATE_MCP_VENV
-                                     Shared platform Work State MCP environment
-  OPEN_WEB_CODEX_SKIP_WORK_STATE_MCP_SETUP
-                                     1 to skip platform Work State MCP preparation
   OPEN_WEB_CODEX_BIND_HOST           Bind host
   OPEN_WEB_CODEX_SERVER_PORT         HTTP/WebSocket port
   OPEN_WEB_CODEX_SKIP_BUILD          1 to reuse build outputs
   OPEN_WEB_CODEX_BUILD_PROFILE       debug (default) or release
   OPEN_WEB_CODEX_SCCACHE_MODE        auto (default), required, or off
   SCCACHE_CACHE_SIZE                 Bounded compiler cache size (default: 8G)
-  OPEN_WEB_CODEX_TARGET_LIMIT_GB     Target high-water mark (default: 24)
-  OPEN_WEB_CODEX_TARGET_LOW_WATER_GB Target low-water mark (default: 16)
-  OPEN_WEB_CODEX_SKIP_TARGET_GC      1 to skip this invocation's target check
   OPEN_WEB_CODEX_DISABLE_CODEX_SANDBOX
                                      1 to trust the surrounding container and
                                      avoid nested Codex bubblewrap sandboxing
@@ -252,7 +244,6 @@ while (($# > 0)); do
 done
 
 case "$skip_build" in 0|1) ;; *) error "OPEN_WEB_CODEX_SKIP_BUILD must be 0 or 1"; exit 2 ;; esac
-case "$skip_target_gc" in 0|1) ;; *) error "OPEN_WEB_CODEX_SKIP_TARGET_GC must be 0 or 1"; exit 2 ;; esac
 case "$codex_mode" in real|fake) ;; *) error "CODEX_MODE must be real or fake"; exit 2 ;; esac
 case "$build_profile" in debug|release) ;; *) error "OPEN_WEB_CODEX_BUILD_PROFILE must be debug or release"; exit 2 ;; esac
 [[ "$server_port" =~ ^[1-9][0-9]*$ ]] || { error "port must be a positive integer"; exit 2; }
@@ -418,8 +409,8 @@ case "$database_url" in postgres://*|postgresql://*) ;; *) error "database URL m
 mkdir -p "$run_dir" "$log_dir" "$profile_home" "$runner_root"
 maps_mcp_venv="${OPEN_WEB_CODEX_MAPS_MCP_VENV:-$data_dir/tool-envs/maps-mcp}"
 supply_chain_mcp_venv="${OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV:-$data_dir/tool-envs/supply-chain-network-planner}"
-coordination_mcp_venv="${OPEN_WEB_CODEX_COORDINATION_MCP_VENV:-$data_dir/tool-envs/platform-coordination}"
-work_state_mcp_venv="${OPEN_WEB_CODEX_WORK_STATE_MCP_VENV:-$data_dir/tool-envs/platform-work-state}"
+maps_asset_root="${OPEN_WEB_CODEX_MAPS_ASSET_ROOT:-$repo_root/tools/maps-mcp}"
+supply_chain_asset_root="${OPEN_WEB_CODEX_SUPPLY_CHAIN_ASSET_ROOT:-$repo_root/tools/supply-chain-network-planner}"
 if [[ "$codex_mode" == "real" && -z "${OPEN_WEB_CODEX_MASTER_KEY:-}" ]]; then
   if [[ ! -f "$master_key_file" ]]; then
     command -v openssl >/dev/null 2>&1 || { error "openssl is required to create the local Secret Store key"; exit 1; }
@@ -634,42 +625,18 @@ build_stale_codex_runtime_components() {
   fi
 }
 
-enforce_target_retention() {
-  "$target_gc" --preserve-profile "$cargo_profile"
-}
-
-enforce_target_retention_on_exit() {
-  local exit_status=$?
-  trap - EXIT
-  if ! enforce_target_retention >>"$launcher_log" 2>&1; then
-    printf 'warning: Cargo target retention also failed; inspect %s\n' \
-      "$launcher_log" >&2
-  fi
-  exit "$exit_status"
-}
-
 prepare_maps_mcp() {
-  OPEN_WEB_CODEX_MAPS_MCP_VENV="$maps_mcp_venv" \
+  OPEN_WEB_CODEX_MAPS_ASSET_ROOT="$maps_asset_root" \
+    OPEN_WEB_CODEX_MAPS_MCP_VENV="$maps_mcp_venv" \
     OPEN_WEB_CODEX_LOG_DIR="$log_dir" \
     "$script_dir/setup-maps-mcp-env.sh"
 }
 
 prepare_supply_chain_mcp() {
-  OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV="$supply_chain_mcp_venv" \
+  OPEN_WEB_CODEX_SUPPLY_CHAIN_ASSET_ROOT="$supply_chain_asset_root" \
+    OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV="$supply_chain_mcp_venv" \
     OPEN_WEB_CODEX_LOG_DIR="$log_dir" \
     "$script_dir/setup-supply-chain-mcp-env.sh"
-}
-
-prepare_coordination_mcp() {
-  OPEN_WEB_CODEX_COORDINATION_MCP_VENV="$coordination_mcp_venv" \
-    OPEN_WEB_CODEX_LOG_DIR="$log_dir" \
-    "$script_dir/setup-platform-coordination-mcp-env.sh"
-}
-
-prepare_work_state_mcp() {
-  OPEN_WEB_CODEX_WORK_STATE_MCP_VENV="$work_state_mcp_venv" \
-    OPEN_WEB_CODEX_LOG_DIR="$log_dir" \
-    "$script_dir/setup-platform-work-state-mcp-env.sh"
 }
 
 prepare_build_tools() {
@@ -681,15 +648,7 @@ show_launch_header
 : >"$launcher_log"
 cargo_build_cache_configure "$repo_root"
 cargo_build_cache_describe >>"$launcher_log"
-if [[ "$skip_target_gc" == "0" ]]; then
-  run_step "Cargo target preflight" enforce_target_retention
-else
-  show_step_skipped "Cargo target preflight" "skipped"
-fi
 if [[ "$skip_build" == "0" ]]; then
-  if [[ "$skip_target_gc" == "0" ]]; then
-    trap enforce_target_retention_on_exit EXIT
-  fi
   prepare_build_tools
   if [[ ! -d "$web_root/node_modules" \
     || ! -f "$web_root/node_modules/.package-lock.json" \
@@ -703,10 +662,6 @@ if [[ "$skip_build" == "0" ]]; then
   build_stale_platform_server
   if [[ "$codex_mode" == "real" && "$using_repository_codex" == "1" ]]; then
     build_stale_codex_runtime_components
-  fi
-  if [[ "$skip_target_gc" == "0" ]]; then
-    trap - EXIT
-    run_step "Cargo target retention" enforce_target_retention
   fi
 else
   assert_reusable_outputs_current
@@ -729,16 +684,6 @@ if [[ "$codex_mode" == "real" ]]; then
     run_step "Supply-chain MCP" prepare_supply_chain_mcp
   else
     show_step_skipped "Supply-chain MCP" "skipped"
-  fi
-  if [[ "${OPEN_WEB_CODEX_SKIP_COORDINATION_MCP_SETUP:-0}" != "1" ]]; then
-    run_step "Platform coordination MCP" prepare_coordination_mcp
-  else
-    show_step_skipped "Platform coordination MCP" "skipped"
-  fi
-  if [[ "${OPEN_WEB_CODEX_SKIP_WORK_STATE_MCP_SETUP:-0}" != "1" ]]; then
-    run_step "Platform Work State MCP" prepare_work_state_mcp
-  else
-    show_step_skipped "Platform Work State MCP" "skipped"
   fi
 fi
 
@@ -776,9 +721,9 @@ if [[ "$codex_mode" == "real" ]]; then
   export CODEX_BIN="$codex_bin"
   export OPEN_WEB_CODEX_MAPS_MCP_VENV="$maps_mcp_venv"
   export MAPS_MCP_VENV="$maps_mcp_venv"
+  export OPEN_WEB_CODEX_MAPS_ASSET_ROOT="$maps_asset_root"
   export OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV="$supply_chain_mcp_venv"
-  export OPEN_WEB_CODEX_COORDINATION_MCP_VENV="$coordination_mcp_venv"
-  export OPEN_WEB_CODEX_WORK_STATE_MCP_VENV="$work_state_mcp_venv"
+  export OPEN_WEB_CODEX_SUPPLY_CHAIN_ASSET_ROOT="$supply_chain_asset_root"
   export OPEN_WEB_CODEX_LOG_DIR="$log_dir"
 else
   unset CODEX_HOME CODEX_BIN

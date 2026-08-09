@@ -20,7 +20,6 @@ use uuid::Uuid;
 
 use crate::middleware::auth::{require_runtime_profile, AuthenticatedUser};
 use crate::routes::RuntimeProfileBinding;
-use open_web_codex_supervisor_catalog::agent;
 
 type ApiError = (StatusCode, Json<PlatformError>);
 type ApiResult<T> = Result<Json<T>, ApiError>;
@@ -664,19 +663,11 @@ fn managed_agent_config_file(name: &str) -> String {
 }
 
 fn validate_browser_managed_agent_name(value: &str) -> Result<String, ApiError> {
-    let name = validate_identifier(value, "agent")?;
-    if agent::is_platform_runtime_role(&name) {
-        return Err(bad_request(
-            "Platform Runtime Role cannot be managed through the browser",
-        ));
-    }
-    Ok(name)
+    validate_identifier(value, "agent")
 }
 
 fn is_browser_managed_agent_name(name: &str) -> bool {
-    !is_reserved_agent_name(name)
-        && !agent::is_platform_runtime_role(name)
-        && validate_identifier(name, "agent").is_ok()
+    !is_reserved_agent_name(name) && validate_identifier(name, "agent").is_ok()
 }
 
 fn managed_agent_path_from_config(root: &Path, config_file: &str) -> Option<PathBuf> {
@@ -999,35 +990,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn platform_runtime_roles_are_not_browser_managed_agent_names() {
-        let names = agent::list_resolved_builtins()
-            .unwrap()
-            .into_iter()
-            .map(|definition| definition.runtime_role.name)
-            .collect::<Vec<_>>();
-        for name in names {
-            assert!(validate_browser_managed_agent_name(&name).is_err());
-            assert!(!is_browser_managed_agent_name(&name));
-        }
+    fn browser_managed_agent_names_use_native_role_identifiers() {
         assert_eq!(
             validate_browser_managed_agent_name("user_defined_agent").unwrap(),
             "user_defined_agent"
         );
         assert!(is_browser_managed_agent_name("user_defined_agent"));
-    }
-
-    #[test]
-    fn browser_agent_list_excludes_platform_runtime_roles() {
-        let mut configured_agents = agent::list_resolved_builtins()
-            .unwrap()
-            .into_iter()
-            .map(|definition| definition.runtime_role.name)
-            .collect::<Vec<_>>();
-        configured_agents.push("user_defined_agent".to_string());
-        let visible = configured_agents
-            .into_iter()
-            .filter(|name| is_browser_managed_agent_name(name))
-            .collect::<Vec<_>>();
-        assert_eq!(visible, vec!["user_defined_agent".to_string()]);
+        assert!(validate_browser_managed_agent_name("bad/name").is_err());
+        assert!(!is_browser_managed_agent_name("bad/name"));
     }
 }

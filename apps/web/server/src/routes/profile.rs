@@ -354,24 +354,12 @@ pub async fn runtime_status(
         Ok(status) => json!({
             "ok": status.ok,
             "name": status.name,
-            "version": status.version,
         }),
         Err(_) => json!({
             "ok": false,
             "error": "runtime_health_unavailable",
         }),
     };
-    let capabilities = profile.capabilities.get().await.map(|record| {
-        json!({
-            "serverBuild": record.server_build,
-            "protocolVersion": record.protocol_version,
-            "capabilityCount": record
-                .manifest
-                .get("capabilities")
-                .and_then(Value::as_array)
-                .map_or(0, Vec::len),
-        })
-    });
     let mcp_servers = match adapter
         .query_profile(ProfileQuery::McpServers {
             cursor: None,
@@ -395,7 +383,6 @@ pub async fn runtime_status(
         data: json!({
             "profile": single_profile_summary(&profile),
             "runtime": runtime,
-            "capabilities": capabilities,
             "mcpServers": mcp_servers,
             "providerModels": provider_models,
         }),
@@ -731,7 +718,7 @@ mod tests {
     use super::{
         build_usage_snapshot, sanitize_projection, single_profile_summary, UsageBreakdown,
     };
-    use crate::routes::{RuntimeCapabilityState, RuntimeProfileBinding};
+    use crate::routes::RuntimeProfileBinding;
     use serde_json::json;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
@@ -762,7 +749,6 @@ mod tests {
             runtime_key: "default-profile".to_string(),
             name: "Default".to_string(),
             codex_home: Some(Arc::new(PathBuf::from("/srv/private/codex-home"))),
-            capabilities: RuntimeCapabilityState::default(),
         };
 
         let summary = single_profile_summary(&profile);

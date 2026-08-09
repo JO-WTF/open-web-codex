@@ -74,6 +74,9 @@ pub struct CreateManagedProjectRequest {
 pub struct Task {
     pub id: Uuid,
     pub project_id: Uuid,
+    /// Immutable authorized execution root selected when the Task is created.
+    /// Runs always derive their Workspace from this value.
+    pub workspace_id: Uuid,
     pub title: String,
     pub status: String,
     pub model_provider: Option<String>,
@@ -86,6 +89,9 @@ pub struct Task {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateTaskRequest {
     pub project_id: Uuid,
+    /// Stable Workspace identity only. The server resolves the corresponding
+    /// authorized root; no path is accepted from the browser.
+    pub workspace_id: Uuid,
     pub title: String,
     #[serde(default)]
     pub model_provider: Option<String>,
@@ -237,7 +243,6 @@ pub enum RunFailureCode {
     LeaseLost,
     DatabaseError,
     GitWorkspaceError,
-    RuntimeStartPreflightFailed,
     CodexUnavailable,
     RunCancelled,
     InterruptFailed,
@@ -254,7 +259,6 @@ impl RunFailureCode {
             "lease_lost" => Self::LeaseLost,
             "database_error" => Self::DatabaseError,
             "git_workspace_error" => Self::GitWorkspaceError,
-            "runtime_start_preflight_failed" => Self::RuntimeStartPreflightFailed,
             "codex_unavailable" => Self::CodexUnavailable,
             "run_cancelled" => Self::RunCancelled,
             "interrupt_failed" => Self::InterruptFailed,
@@ -273,7 +277,9 @@ pub struct Run {
     pub failure_code: Option<RunFailureCode>,
     pub codex_thread_id: Option<String>,
     pub active_turn_id: Option<String>,
-    pub workspace_id: Option<Uuid>,
+    /// Immutable copy of the owning Task's Workspace, enforced by the
+    /// database composite foreign key.
+    pub workspace_id: Uuid,
     pub attempt: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -334,756 +340,39 @@ pub struct ThreadHistoryResponse {
 
 /// Request to start a run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StartRunRequest {
     pub idempotency_key: String,
-    pub readiness_fingerprint: String,
-    pub workspace_id: Uuid,
-    /// Conversation runs may be created before business input is ready. An
-    /// analysis run is only accepted after the immutable input binding exists.
-    #[serde(default)]
-    pub purpose: RunStartPurpose,
     #[serde(default)]
     pub fork_thread_id: Option<String>,
     #[serde(default)]
     pub fork_source_run_id: Option<Uuid>,
-    #[serde(default)]
-    pub supervisor_policy: Option<SupervisorPolicySelection>,
-    #[serde(default)]
-    pub supervisor_draft_id: Option<Uuid>,
-    #[serde(default)]
-    pub agent: Option<AgentRunSelection>,
 }
 
-/// A read-only, browser-requested evaluation of the exact execution that may
-/// later be submitted to `StartRunRequest`. Provider and model are included so
-/// the resulting fingerprint can be checked against the Task at enqueue time.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RunReadinessRequest {
-    pub model_provider: String,
-    pub model: String,
-    #[serde(default)]
-    pub supervisor_policy: Option<SupervisorPolicySelection>,
-    #[serde(default)]
-    pub supervisor_draft_id: Option<Uuid>,
-    #[serde(default)]
-    pub agent: Option<AgentRunSelection>,
-    #[serde(default)]
-    pub fork_thread_id: Option<String>,
-    #[serde(default)]
-    pub fork_source_run_id: Option<Uuid>,
-    #[serde(default)]
-    pub purpose: RunStartPurpose,
-    /// Analysis readiness is task-scoped because the binding belongs to the
-    /// Task. A pre-Task conversation check intentionally leaves this unset.
-    #[serde(default)]
-    pub task_id: Option<Uuid>,
-}
+#[cfg(test)]
+mod task_workspace_contract_tests {
+    use super::StartRunRequest;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub struct TaskAnalysisReadinessRequest {
-    pub workspace_id: Uuid,
-    #[serde(flatten)]
-    pub execution: RunReadinessRequest,
-}
+    #[test]
+    fn start_run_accepts_only_the_standard_or_fork_contract() {
+        let valid = serde_json::json!({
+            "idempotency_key": "run-request-1",
+            "fork_thread_id": "thread-source",
+            "fork_source_run_id": "018f854d-2d2c-7363-99a9-804e6cc4a99e"
+        });
+        assert!(serde_json::from_value::<StartRunRequest>(valid).is_ok());
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum RunStartPurpose {
-    /// Establishes a Thread against an existing Workspace and supports the
-    /// durable data-intake conversation. It never claims analysis readiness.
-    Conversation,
-    /// Starts an analysis execution and therefore requires Input Readiness.
-    #[default]
-    Analysis,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum RunReadinessStatus {
-    Ready,
-    Degraded,
-    Blocked,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum RunReadinessCheckCode {
-    RuntimeProfile,
-    ProviderModel,
-    ExecutionDefinition,
-    WorkspaceDependencies,
-    RuntimeCapabilities,
-    McpServers,
-    MapPresentation,
-    DataIntake,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum RunReadinessAction {
-    OpenWorkspaceData,
-    OpenAgentStudio,
-    OpenProviderSettings,
-    OpenMcpStatus,
-    OpenMapsSettings,
-    Retry,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RunReadinessCheck {
-    pub code: RunReadinessCheckCode,
-    pub status: RunReadinessStatus,
-    pub message: String,
-    pub action: Option<RunReadinessAction>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RunReadiness {
-    pub status: RunReadinessStatus,
-    pub evaluation_fingerprint: String,
-    pub checks: Vec<RunReadinessCheck>,
-    /// The readiness layer represented by `status`; the three layer snapshot
-    /// is included so a Thread can be ready while its future analysis remains
-    /// blocked on data intake.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub scope: Option<ReadinessScope>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thread_status: Option<RunReadinessStatus>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input_status: Option<RunReadinessStatus>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub analysis_status: Option<RunReadinessStatus>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ReadinessScope {
-    Thread,
-    Analysis,
-}
-
-// ── Thread-first data intake ───────────────────────────────────────
-
-/// Versioned, capability-owned contract selected by the Supervisor. The
-/// browser receives only human-readable requirements; the semantic schema is
-/// never accepted from browser input.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct DataRequirementContract {
-    pub contract_id: String,
-    pub version: String,
-    pub content_sha256: String,
-    pub display_name: String,
-    pub description: String,
-    pub required_entities: Vec<DataRequirementEntity>,
-    pub business_parameters: Vec<DataRequirementParameter>,
-}
-
-/// A capability-owned contract reference selected by an immutable Supervisor
-/// Policy.  The platform persists and authorizes this reference, but does not
-/// interpret the domain schema or provide business defaults.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct DataRequirementContractReference {
-    pub contract_id: String,
-    pub version: String,
-    pub content_sha256: String,
-    pub capability_package: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct DataRequirementEntity {
-    pub name: String,
-    pub display_name: String,
-    pub required_fields: Vec<DataRequirementField>,
-    pub conditional: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct DataRequirementField {
-    pub name: String,
-    pub display_name: String,
-    pub data_type: String,
-    pub unit: Option<String>,
-    pub granularity: Option<String>,
-    pub required: bool,
-    pub derivable: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct DataRequirementParameter {
-    pub name: String,
-    pub display_name: String,
-    pub data_type: String,
-    pub unit: Option<String>,
-    pub required: bool,
-    pub description: String,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum DataIntakeStatus {
-    Active,
-    Ready,
-    Failed,
-    Cancelled,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum DataGapKind {
-    MissingEntity,
-    MissingField,
-    AmbiguousMapping,
-    InvalidUnit,
-    InvalidGranularity,
-    MissingRelation,
-    InvalidParameter,
-    UnsupportedFormat,
-    ProfileUnavailable,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct DataIntakeGap {
-    pub code: DataGapKind,
-    pub path: String,
-    pub message: String,
-    pub required: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct DataMappingCandidate {
-    #[serde(default)]
-    pub source_asset_id: Option<Uuid>,
-    #[serde(default)]
-    pub source_ref: Option<String>,
-    #[serde(default)]
-    pub source_display_name: Option<String>,
-    pub source_path: String,
-    pub source_field: String,
-    pub target_entity: String,
-    pub target_field: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_unit: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target_unit: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub transformation: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub conflict: Option<String>,
-    pub confidence: f32,
-    pub reason: String,
-    pub requires_confirmation: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct DataIntakeParameterAnswer {
-    pub name: String,
-    pub value: serde_json::Value,
-    pub unit: Option<String>,
-    pub source: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkspaceDataDraftSummary {
-    pub draft_id: Uuid,
-    pub workspace_id: Uuid,
-    pub revision: i64,
-    pub assets: Vec<SourceAssetSummary>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct SourceAssetSummary {
-    pub asset_id: Uuid,
-    pub file_name: String,
-    pub media_type: String,
-    pub byte_size: i64,
-    /// Kept in the platform contract for server-side audit joins, but never
-    /// serialized to the browser. The browser only needs an opaque asset ID.
-    #[serde(skip_serializing)]
-    pub content_sha256: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct DataIntakeSessionSummary {
-    pub intake_id: Uuid,
-    pub task_id: Uuid,
-    pub workspace_id: Uuid,
-    pub contract: DataRequirementContract,
-    pub status: DataIntakeStatus,
-    pub input_revision: i64,
-    pub mapping_revision: i64,
-    pub gap_fingerprint: String,
-    pub evidence_fingerprint: String,
-    pub gaps: Vec<DataIntakeGap>,
-    pub candidates: Vec<DataMappingCandidate>,
-    pub confirmed_mapping: Vec<DataMappingCandidate>,
-    pub parameters: Vec<DataRequirementParameter>,
-    pub answers: Vec<DataIntakeParameterAnswer>,
-    pub attempt_count: i32,
-    pub failure_code: Option<String>,
-    pub failure_summary: Option<String>,
-    #[serde(default)]
-    pub input_requests: Vec<DataIntakeInputRequest>,
-    #[serde(default)]
-    pub requirement_profile: Option<serde_json::Value>,
-    #[serde(default)]
-    pub source_profile: Option<serde_json::Value>,
-    #[serde(default)]
-    pub mapping_proposal: Option<serde_json::Value>,
-    #[serde(default)]
-    pub readiness_review: Option<serde_json::Value>,
-}
-
-/// A browser-safe, task-scoped request projected from a Supervisor/Agent
-/// artifact.  The answer is persisted by the platform and resumed in a new
-/// Turn; no Runtime request handle is exposed to the browser.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct DataIntakeInputRequest {
-    pub request_id: Uuid,
-    pub task_id: Uuid,
-    pub intake_id: Uuid,
-    pub kind: String,
-    pub session_revision: i64,
-    pub status: String,
-    pub prompt: String,
-    pub value: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct DataIntakeResponseRequest {
-    pub request_id: Uuid,
-    pub expected_session_revision: i64,
-    pub idempotency_key: String,
-    pub response: serde_json::Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct AnalysisStartRequest {
-    pub request_id: Uuid,
-    pub expected_session_revision: i64,
-    pub readiness_fingerprint: String,
-    pub idempotency_key: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct AnalysisStartResponse {
-    pub execution_snapshot_id: Uuid,
-    pub task_dataset_binding_id: Uuid,
-    pub readiness_fingerprint: String,
-    pub state: String,
-}
-
-// ── Capability catalog and collaboration ───────────────────────────
-
-/// The product-level resource categories that can be composed into a Copilot.
-/// Runtime Roles, file paths and MCP server names are deliberately not part of
-/// this browser-safe contract.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum CatalogResourceKind {
-    ToolPackage,
-    SkillPackage,
-    AgentDefinition,
-    SupervisorDefinition,
-    CopilotPackage,
-}
-
-/// A single package-relative file owned by a catalog Draft. The server checks
-/// paths and content before a Release can be installed; callers never choose
-/// a host path or launcher command.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct CatalogPackageFile {
-    pub path: String,
-    pub content: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct CatalogDependency {
-    pub kind: CatalogResourceKind,
-    pub resource_id: String,
-    pub release_id: Option<Uuid>,
-    pub release_version: Option<String>,
-}
-
-/// The only mutable payload a Studio edits. The catalog compiler owns all
-/// derived Runtime role, MCP inventory and execution hashes.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct CatalogDraftContent {
-    pub files: Vec<CatalogPackageFile>,
-    pub definition: serde_json::Value,
-    pub dependencies: Vec<CatalogDependency>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct CapabilityDraftSummary {
-    pub id: Uuid,
-    pub kind: CatalogResourceKind,
-    pub resource_id: String,
-    pub display_name: String,
-    pub description: String,
-    pub metadata: DraftMetadata,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct CapabilityDraftDetail {
-    pub summary: CapabilityDraftSummary,
-    pub content: CatalogDraftContent,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct CapabilityValidationResult {
-    pub valid: bool,
-    pub issues: Vec<String>,
-    pub content_sha256: Option<String>,
-    pub execution_semantics_sha256: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct CapabilityReleaseSummary {
-    pub id: Uuid,
-    pub kind: CatalogResourceKind,
-    pub resource_id: String,
-    pub release_version: String,
-    pub display_name: String,
-    pub description: String,
-    pub identity: ReleaseIdentity,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct CapabilityInstallationSummary {
-    pub id: Uuid,
-    pub release_id: Uuid,
-    pub workspace_id: Uuid,
-    pub profile_id: Uuid,
-    pub state: InstallationState,
-    pub observed_content_sha256: Option<String>,
-    pub failure_code: Option<String>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct CapabilityReadinessSummary {
-    pub release: CapabilityReleaseSummary,
-    pub installation: Option<CapabilityInstallationSummary>,
-    pub runtime_discovered: bool,
-    pub missing_capabilities: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct CreateCapabilityDraftRequest {
-    pub kind: CatalogResourceKind,
-    pub resource_id: String,
-    pub display_name: String,
-    pub description: String,
-    pub content: CatalogDraftContent,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct SaveCapabilityDraftRequest {
-    pub expected_revision: i64,
-    pub display_name: String,
-    pub description: String,
-    pub content: CatalogDraftContent,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct PublishCapabilityDraftRequest {
-    pub expected_revision: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct InstallCapabilityReleaseRequest {
-    pub workspace_id: Uuid,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct CoordinationExecutionSummary {
-    pub id: Uuid,
-    pub display_title: String,
-    pub status: RuntimeAgentExecutionStatus,
-    pub current_behavior: String,
-    pub latest_progress: Option<String>,
-    pub result_summary: Option<String>,
-    pub wait_cycle_count: i32,
-    pub waiting_for_input: bool,
-    pub started_at: Option<DateTime<Utc>>,
-    pub completed_at: Option<DateTime<Utc>>,
-    pub updated_at: DateTime<Utc>,
-}
-
-/// Root coordination is a bounded read model. It exposes no Runtime Thread
-/// identifiers and has no mutation or scheduling authority.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct CollaborationStatusSummary {
-    pub run_id: Uuid,
-    pub task_id: Uuid,
-    pub work_state: Option<WorkStateSummary>,
-    pub executions: Vec<CoordinationExecutionSummary>,
-    pub open_user_input_count: i64,
-    pub deliverables: Vec<WorkDeliverableSummary>,
-    pub updated_at: DateTime<Utc>,
-}
-
-/// Mutable authoring metadata. Draft versions are integer revisions; only a
-/// published Release has a server-issued semantic version.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct DraftMetadata {
-    pub id: Uuid,
-    pub revision: i64,
-    pub content_sha256: String,
-    pub validation_state: String,
-    pub updated_at: DateTime<Utc>,
-}
-
-/// One exact immutable catalog Release selected for installation or execution.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ReleaseIdentity {
-    pub id: Uuid,
-    pub kind: CatalogResourceKind,
-    pub resource_id: String,
-    pub release_version: String,
-    pub content_sha256: String,
-    pub execution_semantics_sha256: String,
-    pub published_at: DateTime<Utc>,
-}
-
-/// Installation is a platform-owned lifecycle. A Release is not Runtime-ready
-/// until discovery has observed the atomically installed content.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum InstallationState {
-    Authorized,
-    Installing,
-    Installed,
-    Discovered,
-    Ready,
-    Failed,
-    Uninstalled,
-}
-
-/// A durable reference to large data or an immutable domain resource. It is
-/// the only payload shape accepted by Work State component and operation
-/// contracts; raw datasets never belong in Agent assignments.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkResourceReference {
-    pub owner: String,
-    pub resource_type: String,
-    pub resource_id: String,
-    pub content_sha256: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkComponentDefinition {
-    pub key: String,
-    pub display_name: String,
-    pub required: bool,
-    pub resource_types: Vec<String>,
-    pub depends_on: Vec<String>,
-}
-
-/// Immutable schema for a class of domain work. Domain packages register this
-/// contract; the platform owns all state transitions and persistence.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkStateDefinition {
-    pub id: Uuid,
-    pub definition_id: String,
-    pub version: String,
-    pub content_sha256: String,
-    pub components: Vec<WorkComponentDefinition>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkComponentState {
-    Missing,
-    Ready,
-    Invalidated,
-    Failed,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkComponentSummary {
-    pub key: String,
-    pub revision: i64,
-    pub state: WorkComponentState,
-    pub resource: Option<WorkResourceReference>,
-    pub summary: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkOperationStatus {
-    Pending,
-    Running,
-    Completed,
-    Failed,
-    Rejected,
-    Cancelled,
-    Timeout,
-    Interrupted,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkOperationSummary {
-    pub id: Uuid,
-    pub kind: String,
-    pub status: WorkOperationStatus,
-    pub idempotency_key: String,
-    pub started_at: DateTime<Utc>,
-    pub terminal_at: Option<DateTime<Utc>>,
-    pub failure_code: Option<String>,
-    pub summary: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkBlockingInputSummary {
-    pub id: Uuid,
-    pub code: String,
-    pub prompt: String,
-    pub source_operation_id: Option<Uuid>,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkDeliverableSummary {
-    pub id: Uuid,
-    pub schema: String,
-    pub display_name: String,
-    pub resource: WorkResourceReference,
-    pub created_at: DateTime<Utc>,
-}
-
-/// Bounded platform projection of current domain work. It is a read model,
-/// never a replacement for Codex Thread/Turn or Agent scheduling state.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkStateSummary {
-    pub id: Uuid,
-    pub task_id: Uuid,
-    pub workspace_id: Uuid,
-    pub definition: WorkStateDefinition,
-    pub revision: i64,
-    pub state: String,
-    pub components: Vec<WorkComponentSummary>,
-    pub blocking_inputs: Vec<WorkBlockingInputSummary>,
-    pub deliverables: Vec<WorkDeliverableSummary>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkComponentMutation {
-    pub key: String,
-    pub state: WorkComponentState,
-    pub resource: Option<WorkResourceReference>,
-    pub summary: Option<String>,
-}
-
-/// An operation-scoped, compare-and-swap Work State change. The caller may
-/// publish references and bounded summaries only; the service owns revisions,
-/// dependency invalidation and terminal operation transitions.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkStateMutation {
-    pub expected_revision: i64,
-    pub components: Vec<WorkComponentMutation>,
-    pub blocking_inputs: Vec<WorkBlockingInputSummary>,
-    pub deliverables: Vec<WorkDeliverableSummary>,
-    pub summary: Option<String>,
-}
-
-/// Browser request to create a domain Work State from a registered immutable
-/// definition. The platform resolves Profile ownership from the authorized
-/// Workspace; browsers never choose a Profile directly.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct CreateWorkStateApiRequest {
-    pub workspace_id: Uuid,
-    pub definition: WorkStateDefinition,
-    pub idempotency_key: String,
-}
-
-/// The bounded context assigned to one Runtime-owned Agent turn. It replaces
-/// naming heuristics and unbounded copied Resources with explicit authority.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct CollaborationContext {
-    pub run_id: Uuid,
-    pub task_id: Uuid,
-    pub work_state_id: Option<Uuid>,
-    pub readable_components: Vec<WorkComponentSummary>,
-    pub allowed_capabilities: Vec<ReleaseIdentity>,
-    pub expected_deliverable_schemas: Vec<String>,
-    pub blocking_input_policy: String,
-    pub summary_budget_chars: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct AssignmentContract {
-    pub objective: String,
-    pub completion_criteria: Vec<String>,
-    pub context: CollaborationContext,
-}
-
-/// Uniform bounded result emitted by platform-provided tools. Domain tools
-/// retain their own schemas and publish immutable references separately.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum PlatformToolResultStatus {
-    Ready,
-    NeedsInput,
-    Unavailable,
-    Failed,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct PlatformToolResult {
-    pub schema_version: String,
-    pub status: PlatformToolResultStatus,
-    pub summary: String,
-    pub references: Vec<WorkResourceReference>,
-    pub blocking_input_ids: Vec<Uuid>,
+        for retired_field in ["workspace_id", "readiness_fingerprint", "agent", "purpose"] {
+            let mut request = serde_json::json!({
+                "idempotency_key": "run-request-1"
+            });
+            request[retired_field] = serde_json::Value::Null;
+            assert!(
+                serde_json::from_value::<StartRunRequest>(request).is_err(),
+                "retired field {retired_field} must be rejected"
+            );
+        }
+    }
 }
 
 /// Safe per-call provider metrics. Prompt, completion content and reasoning
@@ -1103,10 +392,6 @@ pub struct ProviderCallMetric {
     pub first_token_ms: Option<i64>,
     pub compaction_count: i32,
     pub terminal_status: String,
-    pub stable_prefix_sha256: Option<String>,
-    pub tool_inventory_sha256: Option<String>,
-    pub skill_set_sha256: Option<String>,
-    pub runtime_role_sha256: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -1114,443 +399,6 @@ pub struct ProviderCallMetric {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartRunResponse {
     pub run: Run,
-}
-
-/// Browser-selectable reference to a server-resolved Supervisor Policy.
-/// Published policy content or Draft content is always resolved by the platform.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SupervisorPolicySelection {
-    pub policy_id: String,
-    pub version: String,
-}
-
-/// Browser-selectable identity of one exact published root Agent. A repository
-/// Agent has no Release UUID; an organization Agent must include one.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AgentRunSelection {
-    pub definition_id: String,
-    pub version: String,
-    #[serde(default)]
-    pub release_id: Option<Uuid>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SupervisorPolicySummary {
-    pub policy_id: String,
-    pub version: String,
-    pub display_name: String,
-    pub description: String,
-    pub source: SupervisorPolicyOrigin,
-    #[serde(default)]
-    pub draft_id: Option<Uuid>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SupervisorPolicyOrigin {
-    Repository,
-    UserRelease,
-    Draft,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SupervisorInstructionPolicySelection {
-    #[serde(alias = "policyId")]
-    pub policy_id: String,
-    pub version: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SupervisorInstructionPolicySummary {
-    pub release_id: Option<Uuid>,
-    pub policy_id: String,
-    pub version: String,
-    pub display_name: String,
-    pub description: String,
-    pub source: SupervisorInstructionPolicyOrigin,
-    pub content_sha256: String,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SupervisorInstructionPolicyOrigin {
-    Repository,
-    PlatformRelease,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SupervisorInstructionPolicyDetail {
-    pub release_id: Option<Uuid>,
-    pub policy_id: String,
-    pub version: String,
-    pub display_name: String,
-    pub description: String,
-    pub source: SupervisorInstructionPolicyOrigin,
-    pub platform_instructions: String,
-    pub content_sha256: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SupervisorInstructionPolicyPublishRequest {
-    pub policy_id: String,
-    pub version: String,
-    pub display_name: String,
-    pub description: String,
-    pub platform_instructions: String,
-}
-
-/// Browser-safe, bounded description of one exact published Supervisor.
-/// Runtime Role names, MCP configuration and host paths remain internal.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SupervisorPolicyDetail {
-    pub policy_id: String,
-    pub version: String,
-    pub display_name: String,
-    pub description: String,
-    pub source: SupervisorPolicyOrigin,
-    pub responsibilities: Vec<String>,
-    pub instruction_policy: SupervisorInstructionPolicySummary,
-    pub platform_instructions: String,
-    pub custom_instructions: String,
-    pub agents: Vec<SupervisorAgentSelection>,
-    pub artifact_contracts: Vec<SupervisorArtifactContractInput>,
-    #[serde(default)]
-    pub data_requirement_contracts: Vec<DataRequirementContractReference>,
-    #[serde(default)]
-    pub coordination_capabilities: Vec<String>,
-    pub max_active_child_agents: u32,
-    pub content_sha256: String,
-    pub execution_semantics_sha256: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SupervisorAgentSelection {
-    pub definition_id: String,
-    pub version: String,
-    #[serde(default)]
-    pub release_id: Option<Uuid>,
-    pub spawn_limit: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SupervisorArtifactContractInput {
-    pub artifact_type: String,
-    pub producer_agent: String,
-    pub consumer_agents: Vec<String>,
-    pub required: bool,
-}
-
-/// Browser-authored Supervisor draft. Runtime Role names, MCP inventory and
-/// Runtime capability requirements are resolved by the platform.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SupervisorDraftRequest {
-    pub policy_id: String,
-    pub display_name: String,
-    pub description: String,
-    pub responsibilities: Vec<String>,
-    pub instruction_policy: SupervisorInstructionPolicySelection,
-    pub custom_instructions: String,
-    pub agents: Vec<SupervisorAgentSelection>,
-    pub artifact_contracts: Vec<SupervisorArtifactContractInput>,
-    #[serde(default)]
-    pub data_requirement_contracts: Vec<DataRequirementContractReference>,
-    #[serde(default)]
-    pub coordination_capabilities: Vec<String>,
-    pub max_active_child_agents: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SupervisorDraftUpdateRequest {
-    pub draft: SupervisorDraftRequest,
-    pub expected_revision: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PublishSupervisorDraftRequest {
-    pub expected_revision: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct SupervisorDraftSummary {
-    pub revision: i64,
-    pub content_sha256: String,
-    pub validation_state: String,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SupervisorValidationIssue {
-    pub code: String,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SupervisorValidationResult {
-    pub valid: bool,
-    pub content_sha256: Option<String>,
-    pub execution_semantics_sha256: Option<String>,
-    pub issues: Vec<SupervisorValidationIssue>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SupervisorReleaseSummary {
-    pub id: Uuid,
-    pub policy_id: String,
-    pub version: String,
-    pub display_name: String,
-    pub description: String,
-    pub content_sha256: String,
-    pub published_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SupervisorDefinitionSummary {
-    pub id: Uuid,
-    pub policy_id: String,
-    pub display_name: String,
-    pub description: String,
-    pub owner_user_id: Uuid,
-    pub draft: Option<SupervisorDraftRequest>,
-    pub draft_metadata: Option<SupervisorDraftSummary>,
-    pub releases: Vec<SupervisorReleaseSummary>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentDefinitionSource {
-    Repository,
-    UserRelease,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentCapabilityTemplateSource {
-    RepositoryAgent,
-    WorkspacePackageRelease,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AgentCapabilityTemplateSelection {
-    pub source: AgentCapabilityTemplateSource,
-    pub definition_id: String,
-    pub version: String,
-    pub release_id: Option<Uuid>,
-}
-
-/// Browser-safe identity of one exact immutable Dataset Release authorized for
-/// an Agent. Runtime paths remain internal to the selected Workspace.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AgentDatasetReleaseBinding {
-    pub release_id: Uuid,
-    pub workspace_id: Uuid,
-    pub dataset_id: String,
-    pub version: String,
-    pub display_name: String,
-    pub content_sha256: String,
-}
-
-/// Browser-authored governance metadata for an Agent Definition. Executable
-/// Runtime Role and MCP facts are always derived by the platform.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AgentDefinitionDraftRequest {
-    pub definition_id: String,
-    pub version: String,
-    pub display_name: String,
-    pub description: String,
-    pub responsibilities: Vec<String>,
-    pub developer_instructions: String,
-    pub input_artifact_types: Vec<String>,
-    pub output_artifact_types: Vec<String>,
-    pub capability_template: AgentCapabilityTemplateSelection,
-    pub dataset_release_ids: Vec<Uuid>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AgentDefinitionValidationIssue {
-    pub code: String,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AgentDefinitionValidationResult {
-    pub valid: bool,
-    pub content_sha256: Option<String>,
-    pub execution_semantics_sha256: Option<String>,
-    pub issues: Vec<AgentDefinitionValidationIssue>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AgentDefinitionReleaseSummary {
-    pub id: Uuid,
-    pub definition_id: String,
-    pub version: String,
-    pub display_name: String,
-    pub description: String,
-    pub content_sha256: String,
-    pub published_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AgentDefinitionResourceSummary {
-    pub id: Uuid,
-    pub definition_id: String,
-    pub display_name: String,
-    pub description: String,
-    pub owner_user_id: Uuid,
-    pub draft: Option<AgentDefinitionDraftRequest>,
-    pub releases: Vec<AgentDefinitionReleaseSummary>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SupervisorPolicyBinding {
-    pub run_id: Uuid,
-    pub task_id: Uuid,
-    pub thread_id: Option<String>,
-    pub policy_id: String,
-    pub version: String,
-    pub display_name: String,
-    pub content_sha256: String,
-    pub state: String,
-    pub created_at: DateTime<Utc>,
-    pub bound_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AgentDefinitionSummary {
-    pub source: AgentDefinitionSource,
-    pub release_id: Option<Uuid>,
-    pub definition_id: String,
-    pub version: String,
-    pub display_name: String,
-    pub description: String,
-    pub responsibilities: Vec<String>,
-    pub input_artifact_types: Vec<String>,
-    pub output_artifact_types: Vec<String>,
-    pub required_capabilities: Vec<String>,
-    pub capability_template: Option<AgentCapabilityTemplateSelection>,
-    pub dataset_releases: Vec<AgentDatasetReleaseBinding>,
-    pub required_workspace_id: Option<Uuid>,
-}
-
-/// Browser-safe, bounded description of one exact published Agent.
-/// Runtime Role names, MCP configuration and host paths remain internal.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AgentDefinitionDetail {
-    pub source: AgentDefinitionSource,
-    pub release_id: Option<Uuid>,
-    pub definition_id: String,
-    pub version: String,
-    pub display_name: String,
-    pub description: String,
-    pub responsibilities: Vec<String>,
-    pub developer_instructions: String,
-    pub input_artifact_types: Vec<String>,
-    pub output_artifact_types: Vec<String>,
-    pub required_capabilities: Vec<String>,
-    pub capability_template: Option<AgentCapabilityTemplateSelection>,
-    pub dataset_releases: Vec<AgentDatasetReleaseBinding>,
-    pub required_workspace_id: Option<Uuid>,
-    pub content_sha256: String,
-    pub execution_semantics_sha256: String,
-}
-
-/// Browser-safe catalog entry for one checked-in capability package.
-///
-/// This describes platform-reviewed package declarations. It does not claim
-/// that the package is enabled or healthy in any particular Runtime Thread.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CapabilityPackageSummary {
-    pub release_id: Option<Uuid>,
-    pub workspace_id: Option<Uuid>,
-    pub package_id: String,
-    pub version: String,
-    pub display_name: String,
-    pub description: String,
-    pub capability_root_id: String,
-    pub capabilities: Vec<String>,
-    pub mcp_server_names: Vec<String>,
-    pub tool_names: Vec<String>,
-    pub input_artifact_types: Vec<String>,
-    pub output_artifact_types: Vec<String>,
-    pub includes_skills: bool,
-    pub source: String,
-    pub content_sha256: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PythonCapabilityTool {
-    pub name: String,
-    pub description: String,
-    pub input_schema: serde_json::Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PythonCapabilitySkill {
-    pub name: String,
-    pub description: String,
-    pub instructions: String,
-}
-
-/// Project-scoped Python MCP package authored through the browser.
-///
-/// The platform generates the Plugin manifest, MCP configuration and launcher.
-/// Browser input never contains a command, host path or environment variable.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PythonCapabilityPublishRequest {
-    pub idempotency_key: String,
-    pub slug: String,
-    pub version: String,
-    pub display_name: String,
-    pub description: String,
-    pub server_name: String,
-    pub python_source: String,
-    pub tools: Vec<PythonCapabilityTool>,
-    pub skill: PythonCapabilitySkill,
-    pub input_artifact_types: Vec<String>,
-    pub output_artifact_types: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PythonCapabilityValidationIssue {
-    pub code: String,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PythonCapabilityValidationResult {
-    pub valid: bool,
-    pub tool_names: Vec<String>,
-    pub issues: Vec<PythonCapabilityValidationIssue>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PythonCapabilityPublishResponse {
-    pub release_id: Uuid,
-    pub package_id: String,
-    pub version: String,
-    pub capability_root_id: String,
-    pub server_name: String,
-    pub skill_name: String,
-    pub content_sha256: String,
-    pub written_files: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PythonCapabilityToolTestRequest {
-    pub capability: PythonCapabilityPublishRequest,
-    pub tool_name: String,
-    pub arguments: serde_json::Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PythonCapabilityToolTestResponse {
-    pub tool_name: String,
-    pub result: serde_json::Value,
 }
 
 /// Rebuildable, browser-safe view of one Runtime-owned Thread in a root Run's
@@ -1778,146 +626,6 @@ pub struct WorkspacePathRequest {
 pub struct WorkspaceFileUploadResponse {
     pub status: String,
     pub paths: Vec<String>,
-}
-
-/// Browser-declared metadata for one file in a Dataset Release. `field_id`
-/// binds a multipart field to this logical record and is not a filesystem path.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct WorkspaceDatasetUploadFile {
-    pub field_id: String,
-    pub logical_name: String,
-    pub role: String,
-    pub media_type: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PublishWorkspaceDatasetRequest {
-    pub idempotency_key: String,
-    pub dataset_id: String,
-    pub version: String,
-    pub display_name: String,
-    pub description: String,
-    pub files: Vec<WorkspaceDatasetUploadFile>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct WorkspaceDatasetReleaseFileSummary {
-    pub logical_name: String,
-    pub role: String,
-    pub media_type: String,
-    pub byte_size: i64,
-    pub content_sha256: String,
-}
-
-/// Browser-safe projection of one immutable Dataset Release. Host paths are
-/// deliberately absent; consumers resolve the release server-side.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct WorkspaceDatasetReleaseSummary {
-    pub id: Uuid,
-    pub workspace_id: Uuid,
-    pub dataset_id: String,
-    pub version: String,
-    pub display_name: String,
-    pub description: String,
-    pub state: String,
-    pub content_sha256: String,
-    pub failure_code: Option<String>,
-    pub files: Vec<WorkspaceDatasetReleaseFileSummary>,
-    pub published_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-/// A checked-in, versioned tutorial recipe. It contains only logical,
-/// browser-safe identities; trusted bundle files remain server-side.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TutorialBlueprintSummary {
-    pub blueprint_id: String,
-    pub revision: String,
-    pub display_name: String,
-    pub description: String,
-    pub estimated_minutes: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TutorialBlueprintDataset {
-    pub dataset_id: String,
-    pub version: String,
-    pub display_name: String,
-    pub description: String,
-    pub file_count: u32,
-    pub source_content_sha256: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TutorialBlueprintAgentTemplate {
-    pub definition_id: String,
-    pub version: String,
-    pub content_sha256: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TutorialBlueprintSupervisorTemplate {
-    pub policy_id: String,
-    pub version: String,
-    pub content_sha256: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TutorialBlueprintInstructionPolicyTemplate {
-    pub policy_id: String,
-    pub version: String,
-    pub content_sha256: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TutorialBlueprint {
-    pub blueprint_id: String,
-    pub revision: String,
-    pub display_name: String,
-    pub description: String,
-    pub estimated_minutes: u32,
-    pub dataset: TutorialBlueprintDataset,
-    pub agent_templates: Vec<TutorialBlueprintAgentTemplate>,
-    pub supervisor_template: TutorialBlueprintSupervisorTemplate,
-    pub instruction_policy_template: TutorialBlueprintInstructionPolicyTemplate,
-    pub required_mcp_servers: Vec<String>,
-    pub expected_artifact_types: Vec<String>,
-    pub recommended_prompt: String,
-    pub content_sha256: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ReconcileTutorialBlueprintRequest {
-    pub idempotency_key: String,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum TutorialBlueprintReconcileStatus {
-    Installed,
-    Partial,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TutorialBlueprintIssue {
-    pub code: String,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TutorialBlueprintReconcileResponse {
-    pub status: TutorialBlueprintReconcileStatus,
-    pub blueprint_id: String,
-    pub revision: String,
-    pub workspace_id: Uuid,
-    pub dataset_release: Option<WorkspaceDatasetReleaseSummary>,
-    pub agent_releases: Vec<AgentDefinitionReleaseSummary>,
-    pub supervisor_release: Option<SupervisorReleaseSummary>,
-    pub supervisor_policy: Option<SupervisorPolicySelection>,
-    pub recommended_prompt: String,
-    pub expected_artifact_types: Vec<String>,
-    pub issues: Vec<TutorialBlueprintIssue>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2401,10 +1109,6 @@ pub struct RememberApprovalRuleRequest {
 pub struct SendMessageRequest {
     #[serde(default)]
     pub text: String,
-    /// Opaque Workspace SourceAsset ids attached as evidence hints. The
-    /// platform validates ownership; Runtime receives only safe descriptions.
-    #[serde(default)]
-    pub source_asset_ids: Vec<Uuid>,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
@@ -2502,7 +1206,11 @@ pub struct UserInputQuestionSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum UserInputRequestSource {
     Root,
     Agent {
@@ -2527,6 +1235,140 @@ pub struct PendingUserInputSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RespondUserInputRequest {
     pub answers: std::collections::BTreeMap<String, UserInputAnswer>,
+    pub version: i64,
+}
+
+/// Browser-safe identity for the Runtime owner of an MCP form request.
+///
+/// Runtime Thread and request ids intentionally remain server-side.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum McpFormRequestSource {
+    Root,
+    Agent {
+        execution_id: Uuid,
+        display_title: String,
+    },
+}
+
+#[cfg(test)]
+mod approval_source_serialization_tests {
+    use super::{McpFormRequestSource, UserInputRequestSource};
+    use serde_json::json;
+    use uuid::Uuid;
+
+    #[test]
+    fn agent_sources_serialize_browser_field_names() {
+        let expected = json!({
+            "kind": "agent",
+            "executionId": Uuid::nil(),
+            "displayTitle": "Data Agent"
+        });
+
+        assert_eq!(
+            serde_json::to_value(UserInputRequestSource::Agent {
+                execution_id: Uuid::nil(),
+                display_title: "Data Agent".to_string(),
+            })
+            .unwrap(),
+            expected
+        );
+        assert_eq!(
+            serde_json::to_value(McpFormRequestSource::Agent {
+                execution_id: Uuid::nil(),
+                display_title: "Data Agent".to_string(),
+            })
+            .unwrap(),
+            expected
+        );
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct McpFormOptionSummary {
+    pub value: String,
+    pub label: String,
+}
+
+/// The bounded form field subset rendered by the phase-one browser.
+///
+/// This is a Platform product DTO, not a passthrough of arbitrary JSON Schema.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum McpFormFieldSchema {
+    String {
+        default: Option<String>,
+        min_length: Option<u32>,
+        max_length: Option<u32>,
+    },
+    Number {
+        default: Option<f64>,
+        minimum: Option<f64>,
+        maximum: Option<f64>,
+    },
+    Integer {
+        default: Option<i64>,
+        minimum: Option<i64>,
+        maximum: Option<i64>,
+    },
+    Boolean {
+        default: Option<bool>,
+    },
+    SingleSelect {
+        options: Vec<McpFormOptionSummary>,
+        default: Option<String>,
+    },
+    MultiSelect {
+        options: Vec<McpFormOptionSummary>,
+        default: Option<Vec<String>>,
+        min_items: Option<u32>,
+        max_items: Option<u32>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct McpFormFieldSummary {
+    pub name: String,
+    pub title: String,
+    pub description: String,
+    pub required: bool,
+    pub schema: McpFormFieldSchema,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingMcpFormSummary {
+    pub id: Uuid,
+    pub run_id: Uuid,
+    pub source: McpFormRequestSource,
+    pub server_name: String,
+    pub message: String,
+    pub fields: Vec<McpFormFieldSummary>,
+    pub state: String,
+    pub version: i64,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum McpFormResponseAction {
+    Accept,
+    Decline,
+    Cancel,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RespondMcpFormRequest {
+    pub action: McpFormResponseAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<std::collections::BTreeMap<String, serde_json::Value>>,
     pub version: i64,
 }
 

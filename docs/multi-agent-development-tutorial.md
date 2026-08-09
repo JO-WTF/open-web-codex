@@ -1,7 +1,12 @@
 # 从 Web 单 Agent 到动态多 Agent Supervisor
 
-这是项目当前的新手实践入口。它不要求读者运行隐藏配置命令，核心对象都通过 Web
-发布、绑定、启动和审阅。
+状态：冻结迁移输入（2026-08-08）。
+
+本组教程记录旧仓网原型的页面与合同，不是当前可执行的新手入口。阶段一完成后必须按
+“普通 Workspace 文件 -> 内置能力原生 discovery -> Task”的正式链路整体重写；在此之前
+不得依据教程继续增加 Dataset、Artifact 数据交接、capability template、Workspace 安装、
+路径扫描或手工版本/hash。当前能力以 [能力基线](capability-baseline.md) 为准，目标合同以
+[ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) 为准。
 
 教程质量标准、对象分工和完整学习路径见：
 

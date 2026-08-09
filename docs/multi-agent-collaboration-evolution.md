@@ -1,14 +1,17 @@
 # 多 Agent 协同：从单一执行到可治理协作
 
-> 文档性质：多 Agent 协同专项演进设计
+> 文档性质：多 Agent 协同历史研究输入；不是当前计划
 >
-> 更新日期：2026-07-29
+> 更新日期：2026-08-08
 >
-> 当前阶段：产品路线图位于 M2；协同专项的 C2 核心闭环已经形成，正在补齐 C3
-> 所需的追加任务、中断、并行与恢复证据
+> 当前阶段：阶段一按 ADR-018 复用 Codex 原生 Root/child、follow-up、wait/mailbox、
+> steer、child elicitation 和终态；不建设 Assignment、Work State 或 Run Completion
 >
 > 事实边界：当前能力以 [能力基线](capability-baseline.md) 和代码为准；本文负责说明
-> 协同能力为什么按这一顺序演进，以及每个里程碑完成后用户实际得到什么
+> 协同能力为什么演进。下文 C0-C5 保留历史推演，但其中 Work State、Dataset、Artifact
+> 交接、Platform coordination 和 Clean Spine 顺序已失效；当前实施只以
+> [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) 与
+> [开发计划](development-plan.md) 为准
 
 ---
 
@@ -29,13 +32,17 @@
 flowchart LR
     C0["C0<br/>单 Agent 执行基础"]
     C1["C1<br/>Supervisor 与固定专业角色"]
-    C2["C2<br/>真实多 Agent 闭环<br/>当前核心阶段"]
+    C2["C2<br/>真实多 Agent 闭环<br/>仓网原型证据"]
     C3["C3<br/>可恢复的动态协作"]
     C4["C4<br/>受治理的能力复用"]
     C5["C5<br/>持续决策协作<br/>条件阶段"]
 
     C0 --> C1 --> C2 --> C3 --> C4 --> C5
 ```
+
+C0—C5 表示协同成熟度，不再充当严格施工顺序。Clean Spine A 会先建立最小 Catalog、
+Profile Installation 和 Studio，再完成 C2/C3 所需的 Assignment 与恢复，避免继续依赖
+代码预装角色；这是一条跨里程碑的产品垂直切片。
 
 默认架构始终是 **Root Supervisor + Domain Agents**。顺序执行、并行执行、追问、
 中断、Critic 或局部 Peer 协作，是这套责任结构内部可以按需采用的协作方式，而不是
@@ -149,17 +156,18 @@ flowchart TB
 | 里程碑 | 阶段目标 | 用户获得的主要能力 | 当前状态 |
 | --- | --- | --- | --- |
 | C0 单 Agent 执行基础 | 建立可靠的浏览器到 Runtime 闭环 | 在授权 Workspace 中创建、继续、取消和恢复一次执行 | 基础已具备，生产门禁仍在路线图中 |
-| C1 Supervisor 与固定专业角色 | 固定协调责任和可审查的专业边界 | 选择企业 Supervisor，并只调用明确发布的角色 | 已实现受限版本 |
-| C2 真实多 Agent 闭环 | 让多个真实子 Thread 完成一个企业案例 | 看见分工、Agent 过程、Artifact 和最终报告 | **当前核心阶段；主路径已实现** |
-| C3 可恢复的动态协作 | 处理追加任务、并行、中断和部分失败 | Agent 不是一次性调用，协作可调整并可恢复 | 已有部分基础，真实矩阵未完成 |
-| C4 受治理的能力复用 | 从固定角色走向可发现、可评价的 Agent Catalog | 不同团队复用版本化 Agent，并知道其适用范围 | 尚未开始通用能力建设 |
+| C1 Supervisor 与固定专业角色 | 固定协调责任和可审查的专业边界 | 选择企业 Supervisor，并只调用明确发布的角色 | 仓网冻结原型已具备 |
+| C2 真实多 Agent 闭环 | 让多个真实子 Thread 完成一个企业案例 | 看见分工、Agent 过程、Artifact 和最终报告 | E3 最小原型通过；正式用户入口未通过 |
+| C3 可恢复的动态协作 | 处理追加任务、并行、中断和部分失败 | Agent 不是一次性调用，协作可调整并可恢复 | Runtime 原语/投影局部存在；公共状态机未完成 |
+| C4 受治理的能力复用 | 从固定角色走向可发现、可评价的 Agent Catalog | 不同团队复用版本化 Agent，并知道其适用范围 | Catalog 骨架存在；Compiler/安装/discovery 主链未完成 |
 | C5 持续决策协作 | 在事实变化时有界重评长期问题 | 保留决策依据、触发复核、由人作最终决定 | 条件阶段 |
 
 当前不能笼统地说“已经完成多 Agent 平台”。更准确的描述是：
 
-> 已经形成单 Profile、版本化 Supervisor Policy、四个可选 Runtime Role 和条件性
-> Artifact handoff 的动态协作实现；当前印尼案例的精确 `2.0.0` Runtime 重跑与
-> 追加任务、中断、并行和恢复矩阵仍是 C2/C3 的退出门禁。
+> 一个代码预装、脚本预接的仓网 Supervisor 已在真实 Runtime/Provider 下完成 7/7
+> 最小链、4 个 execution、2 次 Root 输入和 Work State 交付；它尚未经过 SDK/Web、
+> Profile Installation、Runtime discovery 或通用 Assignment/Completion 主链，不能代表
+> C2/C3 或 Copilot 平台完成。
 
 ---
 
@@ -214,14 +222,15 @@ flowchart TB
 
 ### 细致目标
 
-- [x] 发布当前 `enterprise-supervisor-copilot@2.0.0`；
-- [x] 把不可变 Policy Snapshot 绑定到 Run 和根 Thread；
-- [x] 发布 Data、Network Planning、Finance 与 Risk 四个可选 Agent Definition；
-- [x] 每个 Definition 映射到一个精确 Runtime Role 和指令摘要；
+- [x] 仓库内置 Supervisor 与 Data/Network Agent 定义可被脚本发布和运行；
+- [x] 把 Policy Snapshot 绑定到 Run 和根 Thread；
+- [x] 每个已用 Definition 映射到一个精确 Runtime Role 和指令摘要；
 - [x] 在根 Thread 启动前验证 Runtime Capability；
 - [x] 只对这次受治理的请求启用所需 Runtime Roles；
 - [x] 不把 Runtime Role 配置复制成 PostgreSQL 中的第二套真相；
-- [ ] 用 Runtime 原生 Agent 生命周期替代当前过渡性的 Role 文件物化。
+- [ ] 由统一 Catalog/Compiler 生成 Release 与 Runtime bundle；
+- [ ] 通过 Profile Installation 与 Runtime discovery 证明 exact Role 可用；
+- [ ] 删除旧 Policy/Definition route、代码版本/hash 和 Role 文件物化主链。
 
 ### 退出标准
 
@@ -230,8 +239,8 @@ Policy、Definition 或 Runtime Capability 不匹配时明确失败；成功启�
 
 ### 当前判断
 
-受限版本已经实现。它证明了 Supervisor 不需要一套新的 Runtime，但确实需要版本化
-的产品行为策略。
+仓网受限原型已经实现，证明 Supervisor 不需要一套新的 Runtime。它仍依赖代码定义、
+脚本发布和旧 Catalog，不能作为用户可发布 Supervisor 的当前合同。
 
 ---
 
@@ -242,9 +251,9 @@ Policy、Definition 或 Runtime Capability 不匹配时明确失败；成功启�
 让一个真实企业问题通过根 Supervisor、按证据选择的真实子 Agent、企业 MCP 和持久
 Artifact 完成，并让用户在 Web 端看见这条协作链。
 
-### 第一条业务路径
+### 迁移后的第一条业务路径
 
-当前案例是印尼配送网络决策：
+目标参考案例是印尼配送网络决策：
 
 1. Supervisor 识别国家、目标和最终交付，并创建或绑定一个通用 Work State；
 2. Network Agent 根据当前问题发布最小数据需求和分析条件；
@@ -257,6 +266,9 @@ Artifact 完成，并让用户在 Web 端看见这条协作链。
 
 Policy 不规定固定角色数量或顺序。Dataset 等确定性输入依赖会自然形成先后关系；
 输入已经满足的独立调查可以并行，新证据只触发最小必要的复算或追问。
+
+当前 7/7 E3 只完成了其中的最小基线子集，并由脚本直接创建 Work State、复制定义及在
+Prompt 中注入内部接线；上面的 Data Intake、Assignment 和正式安装/发现链尚未成立。
 
 ### 用户可见功能
 
@@ -275,9 +287,10 @@ Policy 不规定固定角色数量或顺序。Dataset 等确定性输入依赖�
 - [x] Runtime 事件投影为根/子 Thread 关系和安全活动摘要；
 - [x] 已完成节点不会被后续事件改写；
 - [x] Web 端用 Agent / Files 标签共享右侧栏，没有 Agent 时保持可用空态；
-- [x] 既有回归旅程验证了 spawn/wait、MCP、Artifact、刷新与重启恢复；
-- [x] 当前 `2.0.0` 印尼语义 E2E 已通过真实 Runtime happy path；
-- [x] 每 Turn 持久任务节点已在当前真实企业旅程中完成复验；
+- [x] 当前仓网最小 E3 验证了 spawn/wait、真实 MCP、4 个 execution、2 次 Root 输入、
+  Work State 与报告；
+- [~] 历史局部测试覆盖过部分刷新/重启与持久节点，但最新 E3 未复验，不能作为当前
+  产品恢复证据；
 - [ ] 子节点尚不能直接进入它所对应的权威 Thread/Turn 历史；
 - [ ] Artifact 打开、比较和依赖关系体验仍需完善。
 
@@ -295,8 +308,9 @@ Policy 不规定固定角色数量或顺序。Dataset 等确定性输入依赖�
 
 ### 当前判断
 
-C2 的主路径已经形成，当前最重要的不是再增加角色数量，而是把这一闭环推进到 C3
-的动态和异常路径。
+C2 已有可保留的 Runtime 原型证据，但正式主路径尚未形成。当前先完成 Clean Spine 的
+SDK/Studio/安装、Assignment 和 Run Completion，再验证 C2/C3 的动态与异常路径；不再
+通过增加仓网 Prompt 或角色数量推进成熟度。
 
 ---
 
@@ -404,9 +418,10 @@ Definition 的发布状态。
 
 ### 当前判断
 
-当前只有两个代码发布的 Definition，可视为 Registry 的受限种子，不是通用 Agent
-Catalog。C4 与动态协作按共同合同并行推进：Studio 不能伪造 Runtime 能力，动态协作也
-不能继续依赖代码常量作为长期发布方式。
+当前有新旧 Catalog、代码发布 Definition 和 Settings 编辑器等多条路径，但没有一个由
+统一 Compiler、Profile Installation 和 Runtime discovery 证明的生产 Catalog。Clean
+Spine 会先建立 C4 的最小创作/安装基础，再验证 C2/C3；Studio 不能伪造 Runtime 能力，
+协作也不能继续依赖代码常量作为长期发布方式。
 
 ---
 
@@ -461,27 +476,30 @@ Catalog。C4 与动态协作按共同合同并行推进：Studio 不能伪造 Ru
 | 子 Agent 是真实 Runtime Agent | 精确 Runtime Role 通过 Codex 原生多 Agent 工具创建子 Thread |
 | 专业角色边界明确 | Data 与 Network Agent 有独立 Definition、中文指令和 Tool allowlist |
 | Agent 过程可观察 | Runtime Thread、Turn、Item 和协作事件形成安全投影 |
-| Agent 历史可持久化展示 | 根/子树投影和每 Turn 任务节点保存在 PostgreSQL，可在 Web 恢复 |
-| 成果可跨子 Thread 交接 | 同 Task Artifact、生产来源和授权读取已经进入真实案例 |
-| 主路径可恢复 | 既有仓网旅程验证过刷新和 Server/Profile Host 重启恢复 |
+| Agent execution 有真实终态 | 最新最小仓网 E2E 中 4 个 execution 全部 completed |
+| Root 官方输入可用 | 最新最小 E2E 中 2 个输入已持久化并回答，无 pending |
+| 最小共享工作状态可用 | `network_input`、`route_matrix`、`network_deliverables` 在 Work State ready |
+| 最小多 Agent 结果 | 真实 Runtime/Provider 完成 7/7 最小链并生成报告 |
 
 ### 10.2 仍不能提前声称的能力
 
 - 还没有完成统一 Catalog/Installation 或在线 Agent/Supervisor/Copilot Studio；
-- 当前仓网 6.0 只有局部测试证据，完整真实 Runtime/Web E2E 尚未通过；
+- 当前 7/7 只是一条脚本预接的最小 E2E，不是 SDK/Web Copilot 创作闭环；
+- Assignment Grant、typed `needs_input` 和 Run Completion 尚未接入生产主链；
+- Event Projection 当前仍注入 continuation Prompt 并主动 interrupt，不是纯投影；
 - follow-up、interrupt、部分失败和深层 Agent 树仍缺真实端到端矩阵；
-- 每 Turn 任务节点的新持久投影尚待完整企业旅程复验；
+- 浏览器刷新、断线和 Server/Profile Host 重启尚未由当前最小 E2E 复验；
 - 多用户、多 Profile 和跨组织生产隔离尚未完成；
 - Agent Decision OS 和 Task Knowledge Ledger 仍是条件能力。
 
 ### 10.3 下一阶段的最小交付顺序
 
-1. 让 Agent 节点能够进入对应的权威 Thread/Turn 历史；
-2. 在真实仓网任务中复用一个已完成 Agent，并形成第二个 Turn 节点；
-3. 增加一个业务上真正独立的并行子任务；
-4. 覆盖 interrupt 或部分失败，并由 Supervisor 复用有效 Artifact；
-5. 验证刷新、重连和服务重启后的同一轨迹；
-6. 再根据证据决定是否增加第三个专业角色。
+1. 先完成无领域 Clean Spine，把不可变 Assignment Grant 接入真实 Run；
+2. child 只返回 typed `needs_input`，Root 通过官方输入后创建新 assignment；
+3. Tool SDK/Runner 原子提交 outcome，模型不再管理 Work State transaction；
+4. Run 明确 `awaiting_children`、`awaiting_synthesis` 和一次有界综合恢复；
+5. 删除 Event Projection 的 continuation 和全局 interrupt；
+6. 验证失败、取消、超时、刷新和 Profile 重启后，再迁移仓网与并行任务。
 
 ---
 
@@ -500,8 +518,8 @@ Catalog。C4 与动态协作按共同合同并行推进：Studio 不能伪造 Ru
   [`platform-contracts/src/lib.rs`](../apps/web/crates/platform-contracts/src/lib.rs)；
 - Agent 右侧栏：
   [`SupervisorOverview.tsx`](../apps/web/src/components/Conversation/SupervisorOverview.tsx)；
-- 真实企业旅程：
-  [`enterprise-supervisor-e2e.mjs`](../apps/web/scripts/enterprise-supervisor-e2e.mjs)。
+- 已退役旧企业旅程：旧 `enterprise-supervisor-e2e.mjs` 已随 Platform 数据面和冻结能力包
+  删除，只保留在版本历史中作为迁移证据。
 
 这些入口只能证明相应机制和验证范围。完整、可对外声明的当前能力仍以
 [能力基线](capability-baseline.md) 为准。

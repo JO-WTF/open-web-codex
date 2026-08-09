@@ -37,7 +37,7 @@ pub async fn list_tasks(
     Query(params): Query<ListTasksParams>,
 ) -> ApiResult<Vec<Task>> {
     let rows = sqlx::query(
-        "SELECT id, project_id, title, status, model_provider, model, created_at, updated_at \
+        "SELECT id, project_id, workspace_id, title, status, model_provider, model, created_at, updated_at \
          FROM tasks WHERE project_id = $1 AND organization_id = $2 ORDER BY created_at DESC",
     )
     .bind(params.project_id)
@@ -56,6 +56,7 @@ pub async fn list_tasks(
         .map(|row| Task {
             id: row.get("id"),
             project_id: row.get("project_id"),
+            workspace_id: row.get("workspace_id"),
             title: row.get("title"),
             status: row.get("status"),
             model_provider: row.get("model_provider"),
@@ -72,6 +73,7 @@ pub async fn list_tasks(
 pub async fn create_task(
     auth: AuthenticatedUser,
     State(state): State<AppState>,
+    Extension(profile): Extension<RuntimeProfileBinding>,
     Json(req): Json<CreateTaskRequest>,
 ) -> ApiResult<Task> {
     if req.title.trim().is_empty() {
@@ -86,19 +88,38 @@ pub async fn create_task(
         None => load_default_model_selection(&state).await?,
     };
 
+    require_runtime_profile(&state.db, &auth, &profile.runtime_key).await?;
+
     let row = sqlx::query(
         "INSERT INTO tasks \
-         (organization_id, project_id, created_by, title, model_provider, model) \
-         SELECT organization_id, id, $4, $2, $5, $6 \
-         FROM projects WHERE id = $1 AND organization_id = $3 \
-         RETURNING id, project_id, title, status, model_provider, model, created_at, updated_at",
+         (organization_id, project_id, workspace_id, created_by, title, model_provider, model) \
+         SELECT project.organization_id, project.id, workspace.id, $4, $2, $5, $6 \
+         FROM projects project \
+         JOIN profiles runtime_profile ON runtime_profile.organization_id = project.organization_id \
+           AND runtime_profile.owner_user_id = $4 AND runtime_profile.runtime_key = $7 \
+           AND runtime_profile.status = 'active' \
+         JOIN workspaces workspace ON workspace.id = $3 \
+           AND workspace.organization_id = project.organization_id \
+           AND workspace.project_id = project.id \
+           AND workspace.profile_id = runtime_profile.id \
+           AND workspace.state IN ('ready', 'retained') \
+         JOIN workspace_grants workspace_grant \
+           ON workspace_grant.workspace_id = workspace.id \
+          AND workspace_grant.organization_id = workspace.organization_id \
+          AND workspace_grant.user_id = $4 \
+          AND workspace_grant.profile_id = runtime_profile.id \
+          AND workspace_grant.role IN ('owner', 'write') \
+         WHERE project.id = $1 AND project.organization_id = $8 \
+         RETURNING id, project_id, workspace_id, title, status, model_provider, model, created_at, updated_at",
     )
     .bind(req.project_id)
     .bind(&req.title)
-    .bind(auth.organization_id)
+    .bind(req.workspace_id)
     .bind(auth.user_id)
     .bind(selection.as_ref().map(|value| value.provider_id.as_str()))
     .bind(selection.as_ref().map(|value| value.model_id.as_str()))
+    .bind(&profile.runtime_key)
+    .bind(auth.organization_id)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| {
@@ -110,13 +131,16 @@ pub async fn create_task(
     .ok_or_else(|| {
         (
             StatusCode::NOT_FOUND,
-            Json(PlatformError::not_found("project not found")),
+            Json(PlatformError::not_found(
+                "project or authorized Workspace was not found",
+            )),
         )
     })?;
 
     Ok(Json(Task {
         id: row.get("id"),
         project_id: row.get("project_id"),
+        workspace_id: row.get("workspace_id"),
         title: row.get("title"),
         status: row.get("status"),
         model_provider: row.get("model_provider"),
@@ -276,11 +300,11 @@ pub async fn send_message(
     Extension(profile): Extension<RuntimeProfileBinding>,
     Json(req): Json<SendMessageRequest>,
 ) -> ApiResult<SendMessageResponse> {
-    if req.text.trim().is_empty() && req.images.is_empty() && req.source_asset_ids.is_empty() {
+    if req.text.trim().is_empty() && req.images.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(PlatformError::bad_request(
-                "message text, image, or Workspace data attachment is required",
+                "message text or image is required",
             )),
         ));
     }
@@ -291,6 +315,8 @@ pub async fn send_message(
         "SELECT r.id, r.status, r.codex_thread_id, r.workspace_id, w.root_path, \
                 t.title, t.model_provider, t.model \
          FROM runs r JOIN tasks t ON t.id = r.task_id \
+           AND t.organization_id = r.organization_id \
+           AND t.workspace_id = r.workspace_id \
          JOIN workspaces w ON w.id = r.workspace_id \
            AND w.organization_id = r.organization_id \
            AND w.state IN ('ready', 'retained') \
@@ -334,98 +360,11 @@ pub async fn send_message(
             )),
         )
     })?;
-    let workspace_id: Option<Uuid> = active_run.get("workspace_id");
-    let root_path: Option<String> = active_run.get("root_path");
-    let workspace = match (workspace_id, root_path) {
-        (Some(workspace_id), Some(root)) => AuthorizedWorkspace {
-            id: workspace_id.to_string(),
-            root: root.into(),
-        },
-        _ => {
-            return Err((
-                StatusCode::CONFLICT,
-                Json(PlatformError::bad_request(
-                    "the active Run's selected Workspace is not ready",
-                )),
-            ));
-        }
+    let workspace_id: Uuid = active_run.get("workspace_id");
+    let workspace = AuthorizedWorkspace {
+        id: workspace_id.to_string(),
+        root: active_run.get::<String, _>("root_path").into(),
     };
-    if req.source_asset_ids.len() > 32 {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(PlatformError::bad_request(
-                "at most 32 Workspace data attachments may be sent with one message",
-            )),
-        ));
-    }
-    let attachment_summary = if req.source_asset_ids.is_empty() {
-        String::new()
-    } else {
-        let rows = sqlx::query(
-            "SELECT id, file_name, media_type, byte_size, content_sha256 \
-             FROM workspace_data_source_assets \
-             WHERE organization_id = $1 AND workspace_id = $2 AND id = ANY($3)",
-        )
-        .bind(auth.organization_id)
-        .bind(workspace.id.parse::<Uuid>().map_err(|_| {
-            (
-                StatusCode::CONFLICT,
-                Json(PlatformError::bad_request(
-                    "active Workspace identity is invalid",
-                )),
-            )
-        })?)
-        .bind(&req.source_asset_ids)
-        .fetch_all(&state.db)
-        .await
-        .map_err(database_error)?;
-        if rows.len() != req.source_asset_ids.len() {
-            return Err((
-                StatusCode::FORBIDDEN,
-                Json(PlatformError::forbidden(
-                    "one or more data attachments are not in the active Workspace",
-                )),
-            ));
-        }
-        let descriptions = rows
-            .iter()
-            .map(|row| {
-                format!(
-                    "{} [asset:{}] ({}, {} bytes)",
-                    row.get::<String, _>("file_name"),
-                    row.get::<Uuid, _>("id"),
-                    row.get::<String, _>("media_type"),
-                    row.get::<i64, _>("byte_size"),
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("; ");
-        format!(
-            "\n\nWorkspace data attachments for this request (the Workspace is the authority; inspect them with the data capability): {descriptions}"
-        )
-    };
-    let message_text = if req.text.trim().is_empty() {
-        format!(
-            "Please inspect the attached Workspace data and continue the task.{attachment_summary}"
-        )
-    } else {
-        format!("{}{attachment_summary}", req.text)
-    };
-    crate::routes::data_intake::ensure_session_for_thread(
-        &state,
-        &auth,
-        task_id,
-        workspace.id.parse::<Uuid>().map_err(|_| {
-            (
-                StatusCode::CONFLICT,
-                Json(PlatformError::bad_request(
-                    "active Workspace identity is invalid",
-                )),
-            )
-        })?,
-        &thread_id,
-    )
-    .await?;
     if active_run.get::<String, _>("status") == "recovery_pending" {
         orchestrator
             .recover_run(RecoverRunRequest {
@@ -461,7 +400,7 @@ pub async fn send_message(
         .send_user_message(
             &workspace,
             &thread_id,
-            &message_text,
+            &req.text,
             &TurnOptions {
                 model: selection.as_ref().map(|value| value.model_id.clone()),
                 model_provider: selection.as_ref().map(|value| value.provider_id.clone()),
@@ -583,7 +522,7 @@ pub async fn get_task(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Task> {
     let row = sqlx::query(
-        "SELECT id, project_id, title, status, model_provider, model, created_at, updated_at \
+        "SELECT id, project_id, workspace_id, title, status, model_provider, model, created_at, updated_at \
          FROM tasks WHERE id = $1 AND organization_id = $2",
     )
     .bind(id)
@@ -606,6 +545,7 @@ pub async fn get_task(
     Ok(Json(Task {
         id: row.get("id"),
         project_id: row.get("project_id"),
+        workspace_id: row.get("workspace_id"),
         title: row.get("title"),
         status: row.get("status"),
         model_provider: row.get("model_provider"),

@@ -10,18 +10,6 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import FileManager from "./index";
 
-const {
-  createDataDraft,
-} = vi.hoisted(() => ({
-  createDataDraft: vi.fn(),
-}));
-
-vi.mock("../../../browser/session", () => ({
-  platformClient: {
-    createDataDraft,
-  },
-}));
-
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
@@ -153,7 +141,13 @@ describe("FileManager", () => {
     expect(screen.queryByText("Drop files to upload")).toBeNull();
   });
 
-  it("opens the user-facing data draft uploader from the production Files panel", async () => {
+  it("uploads selections one file at a time and reports a later failure", async () => {
+    const listFiles = vi.fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValue(["first.csv"]);
+    const uploadFiles = vi.fn()
+      .mockResolvedValueOnce({ status: "uploaded", paths: ["first.csv"] })
+      .mockRejectedValueOnce(new Error("network unavailable"));
     render(
       <FileManager
         workspaceId="workspace-1"
@@ -162,36 +156,41 @@ describe("FileManager", () => {
         onClose={vi.fn()}
         panelWidth={360}
         onPanelWidthChange={vi.fn()}
-        listFiles={vi.fn().mockResolvedValue([])}
+        listFiles={listFiles}
+        uploadFiles={uploadFiles}
         readFile={vi.fn().mockResolvedValue({ content: "", truncated: false })}
         loadGitStatus={vi.fn().mockResolvedValue({ files: [] })}
         embedded
       />,
     );
+    const first = new File(["first"], "first.csv", { type: "text/csv" });
+    const second = new File(["second"], "second.csv", { type: "text/csv" });
+    fireEvent.change(screen.getByLabelText("Upload Workspace files"), {
+      target: { files: [first, second] },
+    });
 
-    expect(await screen.findByText("No Workspace files yet")).toBeTruthy();
-    fireEvent.click(screen.getByTestId("workspace-files-empty-add-data"));
-
-    expect(
-      await screen.findByRole("heading", { name: "Add planning data" }),
-    ).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Close data upload" }));
-    expect(
-      screen.queryByRole("heading", { name: "Add planning data" }),
-    ).toBeNull();
+    await waitFor(() => expect(uploadFiles).toHaveBeenCalledTimes(2));
+    expect(uploadFiles).toHaveBeenNthCalledWith(1, "workspace-1", [first]);
+    expect(uploadFiles).toHaveBeenNthCalledWith(2, "workspace-1", [second]);
+    expect(await screen.findByText(/second\.csv: network unavailable/)).toBeTruthy();
+    await waitFor(() => expect(listFiles).toHaveBeenCalledTimes(2));
   });
 
-  it("refreshes Workspace files after a data draft is uploaded", async () => {
-    createDataDraft.mockResolvedValue({
-      draftId: "draft-1",
-      workspaceId: "workspace-1",
-      revision: 1,
-      assets: [],
+  it("continues a multi-file selection after the user skips one conflict", async () => {
+    const conflict = Object.assign(new Error("workspace_file_exists"), {
+      kind: "conflict",
+      code: "workspace_file_exists",
     });
     const listFiles = vi.fn()
       .mockResolvedValueOnce([])
-      .mockResolvedValue(["planning.csv"]);
-    const { container } = render(
+      .mockResolvedValue(["first.csv", "third.csv"]);
+    const uploadFiles = vi.fn()
+      .mockResolvedValueOnce({ status: "uploaded", paths: ["first.csv"] })
+      .mockRejectedValueOnce(conflict)
+      .mockResolvedValueOnce({ status: "uploaded", paths: ["third.csv"] });
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    vi.spyOn(window, "prompt").mockReturnValue("");
+    render(
       <FileManager
         workspaceId="workspace-1"
         selectedPath={null}
@@ -200,37 +199,126 @@ describe("FileManager", () => {
         panelWidth={360}
         onPanelWidthChange={vi.fn()}
         listFiles={listFiles}
+        uploadFiles={uploadFiles}
         readFile={vi.fn().mockResolvedValue({ content: "", truncated: false })}
         loadGitStatus={vi.fn().mockResolvedValue({ files: [] })}
         embedded
       />,
     );
-
-    await screen.findByText("No Workspace files yet");
-    fireEvent.click(screen.getByTestId("workspace-files-empty-add-data"));
-    const fileInput = document.body.querySelector<HTMLInputElement>(
-      '.dataset-release-file-input[type="file"]',
-    );
-    expect(fileInput).not.toBeNull();
-    fireEvent.change(fileInput!, {
-      target: {
-        files: [new File(["data"], "data.csv", { type: "text/csv" })],
-      },
+    const first = new File(["first"], "first.csv", { type: "text/csv" });
+    const second = new File(["second"], "second.csv", { type: "text/csv" });
+    const third = new File(["third"], "third.csv", { type: "text/csv" });
+    fireEvent.change(screen.getByLabelText("Upload Workspace files"), {
+      target: { files: [first, second, third] },
     });
 
-    await waitFor(() =>
-      expect(
-        (screen.getByRole("button", {
-          name: "Upload data",
-        }) as HTMLButtonElement).disabled,
-      ).toBe(false),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Upload data" }));
+    await waitFor(() => expect(uploadFiles).toHaveBeenCalledTimes(3));
+    expect(uploadFiles).toHaveBeenNthCalledWith(1, "workspace-1", [first]);
+    expect(uploadFiles).toHaveBeenNthCalledWith(2, "workspace-1", [second]);
+    expect(uploadFiles).toHaveBeenNthCalledWith(3, "workspace-1", [third]);
+    expect(window.confirm).toHaveBeenCalledTimes(1);
+    expect(window.prompt).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText("third.csv")).toBeTruthy();
+    expect(screen.queryByText(/Some files were not uploaded/)).toBeNull();
+  });
 
-    await waitFor(() => expect(listFiles).toHaveBeenCalledTimes(2));
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
-    expect(await screen.findByText("planning.csv")).toBeTruthy();
-    expect(container.querySelector(".web-file-manager")).toBeTruthy();
+  it("requires an explicit overwrite decision when a Workspace path exists", async () => {
+    const conflict = Object.assign(new Error("workspace_file_exists"), {
+      kind: "conflict",
+      code: "workspace_file_exists",
+    });
+    const uploadFiles = vi.fn()
+      .mockRejectedValueOnce(conflict)
+      .mockResolvedValueOnce({ status: "uploaded", paths: ["planning.csv"] });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(
+      <FileManager
+        workspaceId="workspace-1"
+        selectedPath={null}
+        onSelectedPathChange={vi.fn()}
+        onClose={vi.fn()}
+        panelWidth={360}
+        onPanelWidthChange={vi.fn()}
+        listFiles={vi.fn().mockResolvedValue(["planning.csv"])}
+        uploadFiles={uploadFiles}
+        readFile={vi.fn().mockResolvedValue({ content: "", truncated: false })}
+        loadGitStatus={vi.fn().mockResolvedValue({ files: [] })}
+        embedded
+      />,
+    );
+    const file = new File(["new"], "planning.csv", { type: "text/csv" });
+    await screen.findByText("planning.csv");
+    fireEvent.change(screen.getByLabelText("Upload Workspace files"), {
+      target: { files: [file] },
+    });
+    await waitFor(() => expect(uploadFiles).toHaveBeenCalledTimes(2));
+    expect(uploadFiles).toHaveBeenNthCalledWith(1, "workspace-1", [file]);
+    expect(uploadFiles).toHaveBeenNthCalledWith(
+      2,
+      "workspace-1",
+      [file],
+      { overwrite: true },
+    );
+  });
+
+  it("supports rename or cancel without silently overwriting", async () => {
+    const conflict = Object.assign(new Error("workspace_file_exists"), {
+      kind: "conflict",
+      code: "workspace_file_exists",
+    });
+    const uploadFiles = vi.fn()
+      .mockRejectedValueOnce(conflict)
+      .mockResolvedValueOnce({ status: "uploaded", paths: ["renamed.csv"] });
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    vi.spyOn(window, "prompt").mockReturnValue("inputs/renamed.csv");
+    const { rerender } = render(
+      <FileManager
+        workspaceId="workspace-1"
+        selectedPath={null}
+        onSelectedPathChange={vi.fn()}
+        onClose={vi.fn()}
+        panelWidth={360}
+        onPanelWidthChange={vi.fn()}
+        listFiles={vi.fn().mockResolvedValue([])}
+        uploadFiles={uploadFiles}
+        readFile={vi.fn().mockResolvedValue({ content: "", truncated: false })}
+        loadGitStatus={vi.fn().mockResolvedValue({ files: [] })}
+        embedded
+      />,
+    );
+    const file = new File(["new"], "planning.csv", { type: "text/csv" });
+    fireEvent.change(screen.getByLabelText("Upload Workspace files"), {
+      target: { files: [file] },
+    });
+    await waitFor(() => expect(uploadFiles).toHaveBeenCalledTimes(2));
+    expect(uploadFiles).toHaveBeenNthCalledWith(
+      2,
+      "workspace-1",
+      [file],
+      { paths: ["inputs/renamed.csv"] },
+    );
+
+    const cancelledUpload = vi.fn().mockRejectedValue(conflict);
+    vi.mocked(window.prompt).mockReturnValue("");
+    rerender(
+      <FileManager
+        workspaceId="workspace-1"
+        selectedPath={null}
+        onSelectedPathChange={vi.fn()}
+        onClose={vi.fn()}
+        panelWidth={360}
+        onPanelWidthChange={vi.fn()}
+        listFiles={vi.fn().mockResolvedValue([])}
+        uploadFiles={cancelledUpload}
+        readFile={vi.fn().mockResolvedValue({ content: "", truncated: false })}
+        loadGitStatus={vi.fn().mockResolvedValue({ files: [] })}
+        embedded
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("Upload Workspace files"), {
+      target: { files: [file] },
+    });
+    await waitFor(() => expect(cancelledUpload).toHaveBeenCalledTimes(1));
   });
 
   it("loads a file selected by an external message link", async () => {

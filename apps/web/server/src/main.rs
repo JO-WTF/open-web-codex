@@ -1,13 +1,11 @@
-mod agent_catalog;
+mod builtin_network_copilot;
+#[cfg(test)]
+mod builtin_network_copilot_runtime_tests;
 mod event_projection;
-mod governed_runtime_preflight;
 mod middleware;
 mod routes;
-mod run_readiness;
 #[cfg(test)]
 mod security_integration;
-mod supervisor_instruction_policy;
-mod supervisor_policy;
 
 use std::fs;
 use std::net::SocketAddr;
@@ -15,11 +13,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::Router;
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use clap::Parser;
 use open_web_codex_approval_service::{ApprovalService, ResolvedApproval};
 use open_web_codex_git_runtime::{GitRuntime, GitRuntimeConfig};
-use open_web_codex_profile_host::{ProfileHost, ProfileHostConfig};
+use open_web_codex_profile_host::ProfileHostConfig;
 use open_web_codex_profile_registry::ProfileRegistry;
 use open_web_codex_provider_service::secured::{
     AuthorizedProviderOperations, InMemoryAuthorizedProviderService, SecuredProviderService,
@@ -73,6 +70,19 @@ struct Cli {
     /// Codex executable used by the native Profile Host.
     #[arg(long, env = "CODEX_BIN", default_value = "codex")]
     codex_bin: PathBuf,
+    /// Explicit read-only application asset root for the built-in
+    /// warehouse-network tools and Demo source.
+    #[arg(long, env = "OPEN_WEB_CODEX_SUPPLY_CHAIN_ASSET_ROOT")]
+    supply_chain_asset_root: Option<PathBuf>,
+    /// Shared prepared Python environment for the supply-chain MCP servers.
+    #[arg(long, env = "OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV")]
+    supply_chain_mcp_venv: Option<PathBuf>,
+    /// Explicit read-only application asset root for the maps MCP server.
+    #[arg(long, env = "OPEN_WEB_CODEX_MAPS_ASSET_ROOT")]
+    maps_asset_root: Option<PathBuf>,
+    /// Shared prepared Python environment for the maps MCP server.
+    #[arg(long, env = "OPEN_WEB_CODEX_MAPS_MCP_VENV")]
+    maps_mcp_venv: Option<PathBuf>,
     /// Private root for server-owned repository mirrors and managed Workspaces.
     #[arg(
         long,
@@ -126,8 +136,6 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    assert_required_data_intake_schema(&pool).await?;
-
     let master_key = match std::env::var("OPEN_WEB_CODEX_MASTER_KEY") {
         Ok(value) => MasterKey::from_base64(&value)?,
         Err(_) if cli.codex_mode == "real" => {
@@ -137,14 +145,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Err(_) => MasterKey::generate()?,
     };
-    let analysis_gate_key = master_key.derive_key(b"analysis-gate/v1").to_vec();
-    let coordination_gate_key = master_key.derive_key(b"coordination/v1").to_vec();
-    let work_state_gate_key = master_key.derive_key(b"work-state/v1").to_vec();
-    let state = AppState::new(pool)
-        .with_schema_current(true)
-        .with_analysis_gate_key(analysis_gate_key.clone())
-        .with_coordination_gate_key(coordination_gate_key.clone())
-        .with_work_state_gate_key(work_state_gate_key.clone());
+    let state = AppState::new(pool).with_schema_current(true);
     let mut git_config = GitRuntimeConfig::new(cli.runner_root.clone());
     if cli.allow_local_git_sources {
         tracing::warn!("local filesystem Git sources are enabled");
@@ -155,7 +156,6 @@ async fn main() -> anyhow::Result<()> {
         runtime_key: cli.profile_id.clone(),
         name: cli.profile_id.clone(),
         codex_home: cli.codex_home.clone().map(Arc::new),
-        capabilities: routes::RuntimeCapabilityState::default(),
     };
     ensure_local_owner(&state.db).await?;
     ensure_transitional_profile_binding(
@@ -187,6 +187,25 @@ async fn main() -> anyhow::Result<()> {
                     cli.import_codex_auth_from.as_deref(),
                     &codex_home,
                 )?;
+                let builtin_assets = builtin_network_copilot::BuiltinNetworkCopilotAssets::resolve(
+                    required_real_path(
+                        cli.supply_chain_asset_root.as_deref(),
+                        "--supply-chain-asset-root / OPEN_WEB_CODEX_SUPPLY_CHAIN_ASSET_ROOT",
+                    )?,
+                    required_real_path(
+                        cli.supply_chain_mcp_venv.as_deref(),
+                        "--supply-chain-mcp-venv / OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV",
+                    )?,
+                    required_real_path(
+                        cli.maps_asset_root.as_deref(),
+                        "--maps-asset-root / OPEN_WEB_CODEX_MAPS_ASSET_ROOT",
+                    )?,
+                    required_real_path(
+                        cli.maps_mcp_venv.as_deref(),
+                        "--maps-mcp-venv / OPEN_WEB_CODEX_MAPS_MCP_VENV",
+                    )?,
+                )?;
+                let startup_files = builtin_assets.startup_files(&codex_home)?;
                 let workspace_root = git.workspace_root().to_path_buf();
                 tracing::info!(
                     profile_id = %cli.profile_id,
@@ -204,51 +223,13 @@ async fn main() -> anyhow::Result<()> {
                 let secret_environment = providers.startup_secret_environment().await?;
                 let host_config =
                     ProfileHostConfig::new(cli.profile_id.clone(), codex_home, workspace_root)
-                        .with_codex_bin(cli.codex_bin.clone())
-                        .with_environment(
-                            "OPEN_WEB_CODEX_ANALYSIS_GATE_URL",
-                            format!(
-                                "http://{}/api/internal/analysis-gate/v1/authorize",
-                                cli.bind
-                            ),
-                        )
-                        .with_environment(
-                            "OPEN_WEB_CODEX_ANALYSIS_GATE_KEY",
-                            URL_SAFE_NO_PAD.encode(&analysis_gate_key),
-                        )
-                        .with_environment(
-                            "OPEN_WEB_CODEX_COORDINATION_GATE_URL",
-                            format!("http://{}/api/internal/coordination/v1/query", cli.bind),
-                        )
-                        .with_environment(
-                            "OPEN_WEB_CODEX_COORDINATION_GATE_KEY",
-                            URL_SAFE_NO_PAD.encode(&coordination_gate_key),
-                        );
-                let host_config = host_config.with_environment(
-                    "OPEN_WEB_CODEX_WORK_STATE_GATE_URL",
-                    format!("http://{}/api/internal/work-state/v1/mutate", cli.bind),
-                )
-                .with_environment(
-                    "OPEN_WEB_CODEX_WORK_STATE_READ_URL",
-                    format!("http://{}/api/internal/work-state/v1/read", cli.bind),
-                )
-                .with_environment(
-                    "OPEN_WEB_CODEX_WORK_STATE_GATE_KEY",
-                    URL_SAFE_NO_PAD.encode(&work_state_gate_key),
-                );
+                        .with_startup_files(startup_files)
+                        .with_codex_bin(cli.codex_bin.clone());
                 let workspace_root = host_config.workspace_root.clone();
                 let host = registry
                     .register_with_secret_environment(host_config, secret_environment)
                     .await?;
                 providers.restore_persisted_configuration().await?;
-                let capabilities = profile_capability_record(&host).await?;
-                profile_binding.capabilities.set(capabilities.clone()).await;
-                persist_profile_capabilities(
-                    &state.db,
-                    &profile_binding.runtime_key,
-                    &capabilities,
-                )
-                .await?;
                 let real =
                     RealCodexAdapter::from_host(host, cli.workspace_id.clone(), workspace_root)?;
                 (Arc::new(real), Arc::new(providers))
@@ -259,17 +240,10 @@ async fn main() -> anyhow::Result<()> {
         state.db.clone(),
         profile_binding.runtime_key.clone(),
     ));
-    let start_preflight = Arc::new(governed_runtime_preflight::GovernedRuntimePreflight::new(
-        adapter.clone(),
-        profile_binding.clone(),
-        state.db.clone(),
-        git.clone(),
-    ));
     let orchestrator = Arc::new(RunOrchestrator::new(
         state.db.clone(),
         git.clone(),
         adapter.clone(),
-        start_preflight,
         profile_binding.runtime_key.clone(),
         format!("server-{}", uuid::Uuid::now_v7()),
         std::time::Duration::from_secs(30),
@@ -393,7 +367,6 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(routes::artifacts::recover_and_materialize_pending(
         state.db.clone(),
         adapter.clone(),
-        state.event_bus.clone(),
     ));
 
     let mut app = Router::new().nest(
@@ -428,91 +401,6 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn assert_required_data_intake_schema(pool: &sqlx::PgPool) -> anyhow::Result<()> {
-    const REQUIRED_TABLES: &[&str] = &[
-        "workspace_data_source_assets",
-        "workspace_data_drafts",
-        "workspace_data_draft_assets",
-        "data_intake_sessions",
-        "data_intake_input_requests",
-        "task_dataset_bindings",
-        "task_analysis_execution_snapshots",
-        "task_intake_artifact_projections",
-        "task_policy_agent_producers",
-        "work_state_definitions",
-        "work_states",
-        "work_components",
-        "work_operations",
-        "capability_catalog_drafts",
-        "capability_catalog_releases",
-        "capability_catalog_installations",
-        "provider_call_metrics",
-    ];
-    for table in REQUIRED_TABLES {
-        let present: bool = sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
-            .bind(format!("public.{table}"))
-            .fetch_one(pool)
-            .await
-            .map_err(|_| anyhow::anyhow!("database_schema_not_current"))?;
-        if !present {
-            anyhow::bail!("database_schema_not_current");
-        }
-    }
-    const REQUIRED_COLUMNS: &[(&str, &str)] = &[
-        ("workspaces", "source_revision"),
-        ("workspace_data_source_assets", "content_sha256"),
-        ("workspace_data_source_assets", "relative_path"),
-        ("data_intake_sessions", "requirement_artifact_id"),
-        ("data_intake_sessions", "current_binding_id"),
-        ("data_intake_sessions", "evidence_fingerprint"),
-        ("data_intake_input_requests", "session_revision"),
-        ("data_intake_input_requests", "evidence_fingerprint"),
-        ("data_intake_input_requests", "response_state"),
-        ("task_dataset_bindings", "fingerprint"),
-        ("task_analysis_execution_snapshots", "readiness_fingerprint"),
-        ("artifacts", "intake_envelope"),
-    ];
-    for (table, column) in REQUIRED_COLUMNS {
-        let present: bool = sqlx::query_scalar(
-            "SELECT EXISTS (
-                 SELECT 1 FROM information_schema.columns
-                 WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2
-             )",
-        )
-        .bind(table)
-        .bind(column)
-        .fetch_one(pool)
-        .await
-        .map_err(|_| anyhow::anyhow!("database_schema_not_current"))?;
-        if !present {
-            anyhow::bail!("database_schema_not_current");
-        }
-    }
-    const REQUIRED_INDEXES: &[&str] = &[
-        "data_intake_input_requests_pending",
-        "data_intake_input_requests_open_evidence",
-        "data_intake_input_requests_response_key",
-        "task_dataset_bindings_current",
-        "task_policy_agent_producers_task",
-    ];
-    for index in REQUIRED_INDEXES {
-        let present: bool = sqlx::query_scalar(
-            "SELECT EXISTS (
-                 SELECT 1 FROM pg_indexes
-                 WHERE schemaname = 'public' AND indexname = $1
-             )",
-        )
-        .bind(index)
-        .fetch_one(pool)
-        .await
-        .map_err(|_| anyhow::anyhow!("database_schema_not_current"))?;
-        if !present {
-            anyhow::bail!("database_schema_not_current");
-        }
-    }
-    Ok(())
-}
-
 async fn persist_and_broadcast(
     data: &[u8],
     projection_db: &sqlx::PgPool,
@@ -521,32 +409,11 @@ async fn persist_and_broadcast(
 ) {
     match event_projection::persist_frame(data, projection_db).await {
         Ok(Some(projected)) => {
-            if let Some(run_id) = projected.data_intake_confirmation_run_id {
-                if let Err(error) = event_projection::hold_data_intake_agents(
-                    projection_db,
-                    adapter.as_ref(),
-                    projected.organization_id,
-                    run_id,
-                )
-                .await
-                {
-                    tracing::warn!(%run_id, %error, "data-intake confirmation hold failed");
-                }
-            }
-            if let Some(run_id) = projected.supervisor_continuation_run_id {
-                tokio::spawn(event_projection::dispatch_supervisor_continuation(
-                    projection_db.clone(),
-                    adapter.clone(),
-                    projected.organization_id,
-                    run_id,
-                ));
-            }
             if !projected.pending_artifact_ids.is_empty() {
                 tokio::spawn(routes::artifacts::materialize_artifacts(
                     projection_db.clone(),
                     adapter.clone(),
                     projected.pending_artifact_ids,
-                    event_bus.clone(),
                 ));
             }
             let live = open_web_codex_platform_store::LiveEvent {
@@ -648,6 +515,12 @@ fn public_resolved_approval_frame(
         "requestMethod".to_string(),
         serde_json::Value::String(resolved.request_type.clone()),
     );
+    if let Some(request_mode) = &resolved.request_mode {
+        public_params.insert(
+            "requestMode".to_string(),
+            serde_json::Value::String(request_mode.clone()),
+        );
+    }
     let public = serde_json::json!({
         "method": "app-server-event",
         "params": {
@@ -699,7 +572,10 @@ fn public_approval_frame(frame: &[u8], approval_id: uuid::Uuid) -> anyhow::Resul
         }
     }
     if request_method == "mcpServer/elicitation/request" {
-        for key in ["serverName", "mode", "message", "requestedSchema"] {
+        // Form schema is projected only through the typed, run-scoped pending
+        // form resource backed by approvals.request_payload. Realtime events
+        // are notifications, not a second schema recovery source.
+        for key in ["serverName", "mode", "message"] {
             if let Some(value) = params.get(key) {
                 request_params.insert(key.to_string(), value.clone());
             }
@@ -748,47 +624,8 @@ fn public_approval_frame(frame: &[u8], approval_id: uuid::Uuid) -> anyhow::Resul
     Ok(projected)
 }
 
-async fn profile_capability_record(
-    host: &ProfileHost,
-) -> anyhow::Result<routes::RuntimeCapabilityRecord> {
-    let snapshot = host.snapshot().await;
-    let manifest = host
-        .capability_manifest()
-        .await
-        .ok_or_else(|| anyhow::anyhow!("initialized Profile omitted its Capability Manifest"))?;
-    let server_build = snapshot
-        .server_build
-        .ok_or_else(|| anyhow::anyhow!("initialized Profile omitted its server build"))?;
-    let protocol_version = snapshot
-        .protocol_version
-        .ok_or_else(|| anyhow::anyhow!("initialized Profile omitted its protocol version"))?;
-    Ok(routes::RuntimeCapabilityRecord {
-        server_build,
-        protocol_version,
-        manifest: serde_json::to_value(manifest)?,
-    })
-}
-
-async fn persist_profile_capabilities(
-    db: &sqlx::PgPool,
-    runtime_key: &str,
-    capabilities: &routes::RuntimeCapabilityRecord,
-) -> anyhow::Result<()> {
-    sqlx::query(
-        "INSERT INTO profile_capabilities \
-         (profile_id, server_build, protocol_version, manifest, observed_at) \
-         SELECT id, $1, $2, $3, now() FROM profiles WHERE runtime_key = $4 \
-         ON CONFLICT (profile_id) DO UPDATE SET server_build = EXCLUDED.server_build, \
-         protocol_version = EXCLUDED.protocol_version, manifest = EXCLUDED.manifest, \
-         observed_at = now()",
-    )
-    .bind(&capabilities.server_build)
-    .bind(&capabilities.protocol_version)
-    .bind(&capabilities.manifest)
-    .bind(runtime_key)
-    .execute(db)
-    .await?;
-    Ok(())
+fn required_real_path<'a>(path: Option<&'a Path>, contract: &str) -> anyhow::Result<&'a Path> {
+    path.ok_or_else(|| anyhow::anyhow!("{contract} is required in real Codex mode"))
 }
 
 fn prepare_single_profile_auth_import(
@@ -1120,6 +957,19 @@ mod tests {
     }
 
     #[test]
+    fn public_mcp_form_event_is_notification_not_schema_recovery_state() {
+        let mut raw = br#"data: {"method":"app-server-event","params":{"workspace_id":"workspace-1","message":{"id":89,"method":"mcpServer/elicitation/request","params":{"threadId":"thread-1","turnId":"turn-1","serverName":"supply_chain_data","mode":"form","message":"Provide route inputs","requestedSchema":{"type":"object","properties":{"secret_business_value":{"type":"string"}},"required":["secret_business_value"]}}}}}"#.to_vec();
+        raw.extend_from_slice(b"\n\n");
+        let projected = public_approval_frame(&raw, Uuid::now_v7()).expect("form projection");
+        let text = String::from_utf8(projected).unwrap();
+        assert!(text.contains("Provide route inputs"));
+        assert!(text.contains("supply_chain_data"));
+        assert!(!text.contains("requestedSchema"));
+        assert!(!text.contains("secret_business_value"));
+        assert!(!text.contains("\"id\":89"));
+    }
+
+    #[test]
     fn public_mcp_elicitation_rejects_non_loopback_configuration_urls() {
         assert_eq!(
             safe_maps_credential_url("http://127.0.0.1:43123/one-time-token"),
@@ -1157,6 +1007,7 @@ mod tests {
                 turn_id: Some("platform-turn".to_string()),
                 item_id: Some("platform-item".to_string()),
                 request_type: "item/commandExecution/requestApproval".to_string(),
+                request_mode: None,
                 outcome: open_web_codex_approval_service::ApprovalOutcome::Accepted,
             },
         )

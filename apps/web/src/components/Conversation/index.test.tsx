@@ -30,6 +30,9 @@ const baseProps = {
   pendingUserInputRequests: [],
   submittingPendingUserInputIds: new Set<string>(),
   onSubmitPendingUserInput: vi.fn(),
+  pendingMcpFormRequests: [],
+  submittingMcpFormIds: new Set<string>(),
+  onSubmitMcpForm: vi.fn(),
   busy: false,
   sendDisabled: false,
 };

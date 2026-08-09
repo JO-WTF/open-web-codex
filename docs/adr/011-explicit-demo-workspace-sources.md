@@ -1,6 +1,12 @@
 # ADR-011：显式 Demo Workspace 原始源与 Tutorial Blueprint 分离
 
-状态：已接受（2026-08-03）
+状态：部分被 [ADR-013](013-platform-data-intake-and-work-state.md) 与
+[ADR-017](017-clean-copilot-platform-spine.md) 替代（2026-08-08）
+
+仍有效：合成 Demo 必须由用户显式选择、保留 provenance，且不能在失败时隐藏回退。
+已替代：让 Agent 扫描 Workspace、生成普通文件后再走领域 discovery/profile/mapping 的
+具体链路。Demo 输入必须进入 Platform Data Intake，后续只通过类型化引用消费；本文
+其余内容仅保存历史背景。
 
 ## 决定
 

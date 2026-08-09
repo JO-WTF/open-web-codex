@@ -468,10 +468,10 @@ just test -p codex-app-server-protocol
 跨项目：
 
 ```bash
-npm run typecheck
-npm run test
-npm run check:codex-contracts
-npm run smoke:codex-app-server -- --require-manifest
+./scripts/test-codex.sh -p codex-app-server-protocol schema_fixtures::
+npm --prefix apps/web run typecheck
+npm --prefix apps/web run test
+npm --prefix apps/web run smoke:codex-app-server
 scripts/smoke-third-party-map-card-mcp.sh
 scripts/smoke-map-card-rendering.sh
 ```

@@ -70,16 +70,19 @@ MCP 完成的能力，不扩散到 Codex 高变化模块中。
 
 产品按问题成熟度演进，而不是按 Agent 数量演进。
 
-### 第一阶段：Codex Web Workbench
+### 第一阶段：内置仓网 Copilot 完整闭环
 
-先建立可信的浏览器纵向闭环：
+先在单用户、单 Profile 中建立可信的浏览器与多 Agent 纵向闭环：
 
 - 持久 Profile 与授权 Workspace；
-- Task/Run、审批、事件、恢复和审计；
+- Task 固定 Workspace，同 Workspace Task 通过普通文件共享数据；
+- 通用 Workspace 文件上传、读取、下载和安全相对路径；
+- 原生 Root/child、wait/mailbox/steer、MCP elicitation 和能力热刷新；
+- 完整仓网数据准备、分析、地图和报告；
 - Provider、模型、Git 与 Runtime 能力的安全桥接；
 - 浏览器刷新、服务重启和执行失败后的可解释状态。
 
-这一阶段证明平台可以复用 Codex，而不改变 Codex 的 Thread 和执行语义。
+这一阶段证明平台可以复用 Codex，而不改变 Thread、Agent、Workspace cwd 和文件语义。
 
 ### 第二阶段：单 Profile Copilot 创作平台
 
@@ -89,13 +92,14 @@ MCP 完成的能力，不扩散到 Codex 高变化模块中。
 - 用户在 Web 编写中文 Skill，定义方法、输入、Tool、失败处理和交付件；
 - 用户创建 Domain Agent，组合 Skills、Tools、数据权限和交付合同；
 - 用户创建 Supervisor，选择精确 Agent Releases，定义总体责任和动态协作原则；
-- 平台自动处理 Draft revision、Release version、hash、依赖锁、安装和 readiness；
-- 根 Thread 使用平台提供的只读协调能力观察 Agent、用户输入、共享工作状态和交付件；
+- 平台提供简单的创作、验证和 Profile 激活体验，Runtime discovery 证明能力可用；
+- 根 Thread 继续使用 Codex 原生 Agent、wait/mailbox、elicitation 和 Runtime 事件；
 - 印尼仓网和第二个非供应链案例共同证明扩展能力不是领域硬编码。
 
 这一阶段建设的是有界、可验证的 Copilot Studio，不是任意代码托管平台，也不是第二套
 Agent Runtime。Runtime 仍拥有 Thread、上下文、spawn、wait、Skills、MCP 和 Tool 执行；
-平台拥有 Catalog、授权、安装事务、工作状态元数据、执行投影和 Artifact。
+平台拥有授权、Profile 激活入口、执行投影和 Artifact，但不拥有领域数据语义或 Agent
+工作状态。
 
 ### 第三阶段：受治理的多用户 Agent 平台
 
@@ -105,7 +109,8 @@ Agent Runtime。Runtime 仍拥有 Thread、上下文、spawn、wait、Skills、M
 - 组织级 Catalog 可见性、发布、弃用、评价和授权；
 - 有界候选查询与 Runtime 可用性验证；
 - 企业 Tool 的不可伪造执行授权上下文；
-- Artifact 的跨 Run 复用、保留和依赖关系。
+- Artifact 的授权、保留和展示治理；跨 Task 数据按 owner 显式复用授权 Workspace 文件或
+  provider-owned MCP Resource，不建立 Platform 数据总线。
 
 ### 第四阶段：持续决策系统
 
@@ -128,9 +133,9 @@ Agent Runtime。Runtime 仍拥有 Thread、上下文、spawn、wait、Skills、M
 | Tool、Skill、Agent、Supervisor、Copilot 的 Catalog 与发布治理 | Platform |
 | Runtime Role 的发现和应用 | Codex Runtime |
 | Profile Installation 与 Runtime readiness 投影 | Platform + Profile Host |
-| 通用 Work State 元数据 | Platform |
-| 领域 Work State payload 和业务算法 | Domain Tool package |
-| Artifact 身份、授权和保留 | Platform Artifact Store |
+| 普通文件、相对路径与同 Workspace 共享 | Workspace filesystem + Platform authorization |
+| 文件选择、映射、复用与业务算法 | 用户 + Skill + Domain Tool package |
+| Artifact 身份、授权和保留 | Platform Artifact Store；只承载用户交付 |
 | 企业数据访问决定 | 企业 Tool/MCP 边界 |
 
 这些所有权不会因为产品阶段、页面设计或临时实现便利而改变。
@@ -152,6 +157,10 @@ Agent Runtime。Runtime 仍拥有 Thread、上下文、spawn、wait、Skills、M
 - 不建设第二套 Codex、Thread Store、Memory Engine 或 Agent Scheduler；
 - 不让浏览器直接访问 Runtime 协议、服务器路径或凭据；
 - 不把 Workspace 绑定为某个 Thread 或 Run 独占的 checkout；
+- 不为 Task 创建 COW、overlay、snapshot、worktree 或私有文件层；
+- 不建设 Dataset、Resource Broker、Workspace 数据 registry/revision/binding/cache 或
+  Task→Task 数据接口；
+- 不把 Artifact 当作 Agent 输入或跨 Task 数据通道；
 - 不把 Prompt 当作权限系统；
 - 不把企业 Agent 目录记录当作正在运行的 Agent；
 - 不默认建设无界 Blackboard、自由 swarm 或自动执行企业决策；

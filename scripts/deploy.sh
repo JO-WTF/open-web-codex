@@ -2,7 +2,7 @@
 
 # Single-host production deployment policy.
 # Database provisioning and deployment state remain here; run-local owns the
-# Release build, target retention, service replacement, and startup health gate.
+# Release build, service replacement, and startup health gate.
 
 set -Eeuo pipefail
 umask 077
@@ -65,9 +65,6 @@ Environment:
   OPEN_WEB_CODEX_MASTER_KEY         Stable Base64-encoded 32-byte key
   OPEN_WEB_CODEX_DATA_DIR           Runtime state and log directory
   OPEN_WEB_CODEX_PUBLIC_URL         Reverse-proxy/public Web URL
-  OPEN_WEB_CODEX_TARGET_LIMIT_GB    Target high-water mark (default: 24; 0 disables)
-  OPEN_WEB_CODEX_TARGET_LOW_WATER_GB
-                                    Target low-water mark (default: 16)
   OPEN_WEB_CODEX_SCCACHE_MODE       auto (default), required, or off
   SCCACHE_CACHE_SIZE                Bounded compiler cache size (default: 8G)
   DATABASE_URL                      PostgreSQL connection URL

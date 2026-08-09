@@ -163,21 +163,6 @@ async fn load_maps_credential(
     }))
 }
 
-/// Read-only readiness fact for browser map presentation. Credentials remain
-/// inside the configuration owner; callers receive only whether a Mapbox
-/// public token can be projected to the browser.
-pub(crate) async fn browser_map_configured(
-    state: &AppState,
-    secrets: &PostgresSecretStore,
-) -> Result<bool, (StatusCode, Json<PlatformError>)> {
-    Ok(load_maps_credential(state, secrets)
-        .await?
-        .is_some_and(|loaded| {
-            loaded.credential.provider == MapsProvider::Mapbox
-                && loaded.credential.api_key.starts_with("pk.")
-        }))
-}
-
 fn decode_maps_credential(
     stored: StoredConfigurationSecret,
 ) -> Result<LoadedMapsCredential, (StatusCode, Json<PlatformError>)> {

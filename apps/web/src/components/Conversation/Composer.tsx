@@ -14,19 +14,11 @@ import Save from "lucide-react/dist/esm/icons/save";
 import ShieldCheck from "lucide-react/dist/esm/icons/shield-check";
 import Trash2 from "lucide-react/dist/esm/icons/trash-2";
 import X from "lucide-react/dist/esm/icons/x";
-import Upload from "lucide-react/dist/esm/icons/upload";
-import type { SourceAssetSummary } from "../../../browser/types";
 
 type Props = {
   draft: string;
   onDraftChange: (text: string) => void;
-  onSend: (sourceAssetIds?: string[]) => void;
-  onUploadDataFiles?: (
-    files: File[],
-    onProgress?: (percent: number) => void,
-  ) => Promise<SourceAssetSummary[]>;
-  /** Increment to open the hidden Workspace data picker from an intake card. */
-  openDataUploadRequest?: number;
+  onSend: () => void;
   onStop: () => void;
   running: boolean;
   stopping: boolean;
@@ -111,7 +103,7 @@ function providerDescription(provider: ModelProviderSummary): string {
   return provider.kind === "builtIn" ? "Built-in catalog" : "No models fetched";
 }
 
-export default function Composer({ draft, onDraftChange, onUploadDataFiles, openDataUploadRequest = 0, onSend, onStop, running, stopping, busy, disabled, tokenUsage, providers = [], currentProviderId = null, models = [], catalogLoading = false, catalogError = null, onRefreshCatalog, onWriteProvider, onSelectProvider, selectedModelId = null, onSelectModel, providerCatalogOpenRequest = 0 }: Props) {
+export default function Composer({ draft, onDraftChange, onSend, onStop, running, stopping, busy, disabled, tokenUsage, providers = [], currentProviderId = null, models = [], catalogLoading = false, catalogError = null, onRefreshCatalog, onWriteProvider, onSelectProvider, selectedModelId = null, onSelectModel, providerCatalogOpenRequest = 0 }: Props) {
   const textRef = useRef<HTMLTextAreaElement>(null);
   const catalogRef = useRef<HTMLDivElement>(null);
   const composingRef = useRef(false);
@@ -124,12 +116,6 @@ export default function Composer({ draft, onDraftChange, onUploadDataFiles, open
   const [providerPendingDelete, setProviderPendingDelete] = useState<ModelProviderSummary | null>(null);
   const [deleteProviderState, setDeleteProviderState] = useState<"idle" | "deleting">("idle");
   const [deleteProviderError, setDeleteProviderError] = useState<string | null>(null);
-  const [dataAttachments, setDataAttachments] = useState<Array<{ asset: SourceAssetSummary; state: "ready" | "uploading" }>>([]);
-  const [dataUploadError, setDataUploadError] = useState<string | null>(null);
-  const [uploadingFileNames, setUploadingFileNames] = useState<string[]>([]);
-  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
-  const [failedUploadFiles, setFailedUploadFiles] = useState<File[]>([]);
-  const dataInputRef = useRef<HTMLInputElement>(null);
   const currentProvider = providers.find((provider) => provider.id === currentProviderId);
   const builtInProviders = providers.filter((provider) => provider.kind === "builtIn");
   const localProviders = providers.filter((provider) => provider.kind === "local");
@@ -151,11 +137,6 @@ export default function Composer({ draft, onDraftChange, onUploadDataFiles, open
     }
   }, [providerCatalogOpenRequest]);
 
-  useEffect(() => {
-    if (openDataUploadRequest > 0 && onUploadDataFiles) {
-      dataInputRef.current?.click();
-    }
-  }, [onUploadDataFiles, openDataUploadRequest]);
   const saveProviderDraft = () => {
     if (!providerDraftValid) return;
     void onWriteProvider?.({
@@ -295,36 +276,8 @@ export default function Composer({ draft, onDraftChange, onUploadDataFiles, open
       return;
     }
     if (!disabled && !busy) {
-      onSend(dataAttachments.map(({ asset }) => asset.assetId));
-      setDataAttachments([]);
-      setDataUploadError(null);
+      onSend();
     }
-  };
-
-  const uploadFiles = (files: File[]) => {
-    if (!files.length || !onUploadDataFiles) return;
-    const accepted = files.filter((file) => /\.(xlsx|csv|json)$/i.test(file.name));
-    if (!accepted.length) {
-      setDataUploadError("Only .xlsx, .csv and .json files are supported.");
-      return;
-    }
-    setDataUploadError(null);
-    setFailedUploadFiles([]);
-    setUploadingFileNames(accepted.map((file) => file.name));
-    setUploadProgress(0);
-    void onUploadDataFiles(accepted, setUploadProgress)
-      .then((assets) => setDataAttachments((current) => [
-        ...current,
-        ...assets.map((asset) => ({ asset, state: "ready" as const })),
-      ]))
-      .catch((error) => {
-        setFailedUploadFiles(accepted);
-        setDataUploadError(error instanceof Error ? error.message : "The data upload failed.");
-      })
-      .finally(() => {
-        setUploadingFileNames([]);
-        setUploadProgress(null);
-      });
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -486,63 +439,9 @@ export default function Composer({ draft, onDraftChange, onUploadDataFiles, open
       <form
         className="web-composer"
         onSubmit={handleSubmit}
-        onDragOver={(event) => event.preventDefault()}
-        onDrop={(event) => {
-          event.preventDefault();
-          uploadFiles(Array.from(event.dataTransfer.files));
-        }}
       >
       <div className="web-composer-main">
-        <input
-          ref={dataInputRef}
-          type="file"
-          accept=".xlsx,.csv,.json"
-          multiple
-          hidden
-          onChange={(event) => {
-            const files = event.target.files ? Array.from(event.target.files) : [];
-            event.currentTarget.value = "";
-            uploadFiles(files);
-          }}
-        />
-        <button
-          type="button"
-          className="web-composer-utility web-composer-upload"
-          title="Attach Excel, CSV or JSON"
-          aria-label="Attach Excel, CSV or JSON"
-          onClick={() => dataInputRef.current?.click()}
-          disabled={disabled || busy || !onUploadDataFiles}
-        >
-          <Upload size={17} />
-        </button>
         <div className="web-composer-inner">
-          {dataAttachments.length > 0 ? (
-            <div className="web-composer-data-attachments" aria-label="Attached planning data">
-              {dataAttachments.map(({ asset }) => (
-                <span className="web-composer-data-attachment" key={asset.assetId}>
-                  <span>{asset.fileName}</span>
-                  <button
-                    type="button"
-                    aria-label={`Remove ${asset.fileName}`}
-                    onClick={() => setDataAttachments((current) => current.filter(({ asset: item }) => item.assetId !== asset.assetId))}
-                  >
-                    <X size={12} />
-                  </button>
-                </span>
-              ))}
-            </div>
-          ) : null}
-          {dataUploadError ? <div className="web-composer-upload-error" role="alert">{dataUploadError}</div> : null}
-          {uploadingFileNames.length > 0 ? (
-            <div className="web-composer-upload-progress" role="status">
-              Uploading {uploadingFileNames.join(", ")}… {uploadProgress ?? 0}%
-            </div>
-          ) : null}
-          {failedUploadFiles.length > 0 ? (
-            <button type="button" className="web-composer-upload-retry" onClick={() => uploadFiles(failedUploadFiles)}>
-              Retry upload
-            </button>
-          ) : null}
           <textarea
             ref={textRef}
             value={draft}

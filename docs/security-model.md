@@ -17,7 +17,8 @@
 
 1. 用户只能发现、读取和控制自己被授权的资源；
 2. Profile、Thread、Workspace、Secret、Artifact 和事件不会跨用户或组织串流；
-3. 浏览器输入不能成为可信服务器路径、Runtime 身份或授权决定；
+3. 浏览器输入不能成为可信服务器绝对路径、Runtime 身份或授权决定；经授权 Workspace
+   解析和边界检查后的相对路径可以作为普通文件定位输入；
 4. Codex 和子 Agent 不能通过 Prompt、自报身份或 Tool 参数扩大权限；
 5. 凭据只在拥有其生命周期的服务端进程或企业 Tool 边界中出现；
 6. 审批、取消、恢复和交付具有稳定身份、明确终态和不可抵赖审计；
@@ -38,7 +39,7 @@
 | Thread/Turn 上下文 | 被平台复制、跨用户恢复、错误绑定 |
 | Approval 与 Control Lease | 重放、并发双决策、旧进程请求复用 |
 | Artifact | 猜测 ID、跨任务读取、内容类型混淆、过期引用 |
-| 企业数据与 MCP | Tool 越权、SSRF、调用者身份伪造、权限放大 |
+| Workspace 文件与 MCP Resource | 路径逃逸、未授权 Resource ref 发现/读取、Tool 越权、SSRF、权限放大 |
 | 事件、审计和评价 | 丢失、乱序、伪造成功、无法追责 |
 | Codex 构建与 Provider transport | 供应链污染、能力漂移、协议误判 |
 
@@ -61,7 +62,8 @@ Platform
 
 ### 浏览器
 
-浏览器是不可信输入端。它可以提交稳定平台资源 ID 和业务参数，但不能提交可信的：
+浏览器是不可信输入端。它可以提交稳定平台资源 ID、业务参数和 Workspace 相对路径，
+但相对路径必须由服务端在当前授权 Workspace 下重新解析。浏览器不能提交可信的：
 
 - 服务器本地路径或 `CODEX_HOME`；
 - `organization_id`、`profile_id`、AgentPath 或 Runtime Role 身份；
@@ -74,7 +76,8 @@ Platform
 
 ### Platform
 
-Platform 是身份、授权、Task/Run、审批、Artifact、审计和浏览器合同的信任边界。
+Platform 是身份、授权、Task/Run、Workspace 路径边界、审批、Artifact、审计和浏览器
+合同的信任边界。
 它可以调用 Runtime，但不能伪造 Thread 历史、模型上下文、Agent 状态或 Tool
 执行结果。
 
@@ -122,10 +125,15 @@ session
 
 - 每个用户的 Profile 拥有独立、持久 `CODEX_HOME`；
 - 同一 Profile 同时最多有一个主 app-server 进程；
+- Profile 只能从平台显式授权的 Provider/Secret 与能力配置初始化；不得默认复制、
+  挂载或读取服务器操作者的 `$HOME/.codex/auth.json`、Skills、Plugins、MCP 或 Memory；
 - Profile 进程、缓存、Provider 目录、Secret 注入和 Runtime request 映射必须以
   Profile 与进程实例为 key；
 - Runtime 重启后，旧进程的 request ID、审批和响应能力立即失效；
 - Thread 必须属于当前授权 Profile；平台不能通过复制数据库事件恢复模型上下文；
+- Profile Runtime 配置只能经 official typed config write/CAS/reload 合同修改；Browser 不能提交
+  whole-file `config.toml`，Platform 也不能绕过 Runtime 直接替换该文件。Profile instruction、
+  Skill 和 Agent authoring 必须各自使用明确、受限的文件或 Runtime 合同，不能借通用 Profile writer；
 - 多 Profile 路由完成前，单 Profile 模式只能作为受限部署形态，不能宣称多用户
   进程隔离已经成立。
 
@@ -136,13 +144,36 @@ Workspace 是独立授权执行根，不属于 Thread、Task 或 Run。
 必须满足：
 
 - 浏览器使用 Workspace ID，服务端解析规范化根路径；
+- Task 创建后固定一个授权 Workspace；start、resume、follow-up 和 child Thread 都使用
+  同一原生 Workspace `cwd`，Run 不得另选执行根；
 - Thread 当前 `cwd` 必须包含在授权 Workspace 内；
+- Root/child `cwd` 与授权 Workspace 的等值和 containment 必须基于服务端解析后的 canonical
+  physical path，而不是原始字符串或词法前缀；macOS `/var` 与 `/private/var` 等同 inode alias
+  必须视为同一位置，同时继续拒绝 symlink 和规范化后的逃逸；
+- 用户、Skill、模型和 Tool 可以使用 Workspace 相对路径；绝对路径、`..`、symlink 逃逸、
+  含义不明的 `source_ref` alias 和历史 asset/Dataset ID 必须被拒绝；
 - 文件、Terminal、Git、GitHub 和 Runtime 操作分别重新检查 Workspace grant；
 - symlink、`..`、嵌套 Git root 和路径规范化不能逃逸授权根；
 - 托管 clone/worktree 只能通过显式 Workspace 生命周期创建和删除；
 - Run 取消、失败、租约过期或恢复不能隐式删除 Workspace；
 - 删除前检查活动 Run、Thread 使用、Terminal、子 worktree 和未交付变更；
 - Push、保护分支和远端变更始终需要显式产品操作，禁止 Force Push。
+
+同一 Workspace 的所有授权 Task 看到同一组普通文件。Platform 不建立 Task→文件授权、
+Task 私有副本、COW/overlay/snapshot、数据 revision、registry、binding 或语义 cache；
+Task 间也没有消息、上下文、结果或数据 API。跨 Task 复用由用户显式选择同 Workspace
+普通文件，或同一授权 Profile/provider 内有精确 official Item provenance 的 MCP Resource ref。
+
+MCP Resource 不是 Workspace 路径。内容由 provider 持有，Codex 按当前 Thread 已配置的同名
+server 执行发现和读取。Web 若提供跨 Task 可发现，必须由专用授权 selector 从已授权 Thread
+history 的 exact Item provenance 返回 bounded exact ResourceRef。Browser 选择时提交 producer
+event ID、ordinal 和 exact ref；Server 重新校验 user/organization/Profile/Workspace、producer
+provenance 以及 `{server, uri}` 逐字段相等。普通 RunEvent WS/HTTP 不广播 raw URI，但 URI 本身
+不是 Secret 或宿主路径；不得另造 opaque handle、latest alias 或通用 Resource registry，也不得
+从模型文本或标题猜测。在 provider scope 和拒绝测试完成前，不对外宣称跨 Workspace/Profile 共享。
+
+SHA 只用于字节完整性、ETag 或 provider 物理去重，不能替代授权，也不能用整数据集指纹
+裁决业务复用。
 
 共享 Workspace 会引入并发写入和状态竞争。平台必须通过锁、策略或明确冲突结果
 处理，不能通过重新引入“每 Run 私有 Workspace”掩盖问题。
@@ -175,6 +206,9 @@ Workspace 是独立授权执行根，不属于 Thread、Task 或 Run。
   合同中声明默认预批准，并仍受 Thread capability root 与 Agent Tool allowlist 限制；
   混合风险 Server、凭据、外部副作用、权限扩大和非幂等写入不得使用该默认值；
 - 并发决策只有一个成功；
+- 持久或 session 级“以后允许”只能响应同一未决 official approval 返回的
+  `proposedExecpolicyAmendment`，并使用 Runtime 的 typed decision；Browser 不能自报命令前缀，
+  Platform 不能另设 rules 写接口或直接修改 Profile rule 文件；
 - approved、rejected、expired、cancelled 等终态不可逆；
 - 旧进程 request ID 不能在重启后重新获得响应能力；
 - `delivery_unknown` 只允许相同决定重试，不允许改变答案。
@@ -203,7 +237,10 @@ Workspace 是独立授权执行根，不属于 Thread、Task 或 Run。
 - 浏览器通过授权 DTO 或短时受控 URL 读取；
 - 子 Thread、后继 Run 和历史恢复分别执行 Artifact 授权；
 - renderer 只处理声明并允许的类型，不执行 Artifact 中的任意脚本；
-- 大型 Resource 通过有界读取和授权引用加载，不能把内部 URI 暴露给模型回复；
+- Artifact 只承载地图、报告和明确用户交付，不作为 Agent 输入、Task 间交换、Workspace
+  文件替代品或工作流门禁；
+- Artifact、含义不明的 `source_ref`、asset/Dataset ID 和内容 hash 都不能替代授权合同；
+  Workspace 文件用相对路径，MCP Resource 用已授权 provider 与精确 URI，两者不互相伪装；
 - 删除、保留、替代和依赖失效产生审计。
 
 当前 Inline Visualization 的 Run/Thread 作用域是能力缺口，不是目标安全边界；在
@@ -215,11 +252,11 @@ Workspace 是独立授权执行根，不属于 Thread、Task 或 Run。
 
 | 风险 | 必须的控制 |
 | --- | --- |
-| Supervisor 选择未发布或漂移的 Agent | 候选来自组织可见 Agent Catalog；用户 Agent 必须绑定代码评审的 capability template，Supervisor 必须绑定精确 Release UUID、版本和内容哈希，预检重新解析且不按名称回退 |
-| 浏览器扩大 Agent 权限 | 浏览器不能提交 Runtime Role、MCP、Tool、capability root 或路径；服务端只允许收窄所选模板的 Artifact 合同并派生可执行配置 |
-| 子 Agent 继承全部权限 | 受限连接、最小凭据和 Capability/Resource 裁剪 |
+| Supervisor 使用不存在或漂移的 Role | Role、Skill、MCP 和 Tool 必须来自当前 Profile 的 Runtime discovery；不能由数据库状态或路径扫描冒充 ready |
+| 浏览器扩大 Agent 权限 | 浏览器不能提交 Runtime Role、MCP、Tool 或 capability root；Workspace 相对路径仍需服务端边界检查 |
+| 子 Agent 继承全部权限 | 使用 Runtime Role 的精确 Tool/MCP 暴露和相同 Workspace 授权，不增加 Platform 资源裁剪协议 |
 | 模型伪造 Task 或角色 | 身份由系统绑定，不接受模型提交的组织/Profile/Runtime Role |
-| Agent 之间复制敏感数据 | 通过授权 Artifact/Resource 引用交接，避免复制无界上下文 |
+| Agent/Task 之间复制敏感数据 | child 协作使用 Runtime 消息；跨 Task 仅显式选择相同授权 Workspace 文件或带 exact Item provenance 的授权 MCP Resource ref；Artifact 不作输入 |
 | 不同 Agent 结论冲突 | Supervisor 负责补充调查和最终综合，保留各自产物与依据 |
 | Agent 网络无限扩张 | Runtime 并发、深度、预算、超时和停止规则 |
 | Prompt 注入影响权限 | Prompt 只提供行为指导，服务端继续执行确定性授权 |
@@ -241,7 +278,9 @@ Workspace 是独立授权执行根，不属于 Thread、Task 或 Run。
 ## 供应链与 Codex 定制
 
 - Codex 构建固定到明确 revision；
-- 生成 Schema、TypeScript、Capability Manifest 和 fixtures 是协议事实；
+- Codex 从 Rust 类型生成的 Schema、TypeScript 和 fixtures 是协议事实；运行时可用性
+  只由官方 typed operation、显式 unavailable 结果和实际边界验证证明，不维护第二份
+  capability 目录；
 - 本地非生成差异必须进入 Patch Map，说明原因、测试和退出条件；
 - 官方同步在专用分支完成，先接受上游结构，再重放保留 seam；
 - 依赖、Plugin、Skill 和 MCP 包需要来源、完整性和权限策略；
@@ -258,8 +297,9 @@ Workspace 是独立授权执行根，不属于 Thread、Task 或 Run。
 5. Secret 不进入浏览器 DTO、日志、Artifact、配置响应和测试输出；
 6. Approval 重放、并发决策、旧进程 request ID 和不确定投递；
 7. Artifact 类型、Schema、授权、历史恢复和 renderer 安全；
-8. Capability 未声明、不兼容和 Runtime Role 不可发现的失败关闭；
-9. 真实 PostgreSQL、真实 Codex app-server 和适用的真实浏览器纵向验证。
+8. MCP Resource ref 猜测、未授权 Item/provider、跨 Workspace/Profile 拒绝，以及 Artifact 不回流；
+9. Capability 未声明、不兼容和 Runtime Role 不可发现的失败关闭；
+10. 真实 PostgreSQL、真实 Codex app-server 和适用的真实浏览器纵向验证。
 
 具体命令和当前通过情况不写入本安全模型；它们分别属于组件开发规则、开发计划和
 能力基线。

@@ -17,7 +17,6 @@ function run(mode, timeoutMs = 1000) {
       `--mode=${mode}`,
       "--timeout-ms",
       String(timeoutMs),
-      "--require-manifest",
     ],
     { encoding: "utf8" },
   );
@@ -28,15 +27,17 @@ if (success.status !== 0) {
   throw new Error(`success mode failed: ${success.stderr}`);
 }
 const successPayload = JSON.parse(success.stdout);
-if (successPayload.ok !== true || successPayload.capabilityCount !== 1) {
+if (successPayload.ok !== true || successPayload.threadListCount !== 0) {
   throw new Error(`unexpected success payload: ${success.stdout}`);
 }
 
 const cases = [
   ["invalid-json", "invalid JSON from app-server", 1000],
   ["error", "initialize returned an error", 1000],
-  ["exit", "exited before initialize response", 1000],
-  ["timeout", "initialize timed out", 100],
+  ["invalid-initialize", "initialize response must contain string userAgent", 1000],
+  ["thread-list-error", "thread/list returned an error", 1000],
+  ["exit", "exited before official initialize/thread/list completed", 1000],
+  ["timeout", "official initialize/thread/list timed out", 100],
 ];
 
 for (const [mode, expected, timeoutMs] of cases) {

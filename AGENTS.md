@@ -132,6 +132,34 @@ composition, authentication entry and milestone status are current-state facts
 owned by `docs/architecture.md`, `docs/capability-baseline.md` and
 `docs/development-plan.md`; do not duplicate them here.
 
+For current Copilot-platform work, ADR-018 is the normative design and
+development baseline. The current stage is the built-in network-planning
+Copilot's architecture correction and complete runtime closure; public SDK,
+Studio, five-object publishing, Marketplace, a domain-free demo, a second domain
+and multi-user product flows are later-stage work. Treat the warehouse Supervisor
+path as migration input and regression evidence, not as a platform contract. Do
+not extend it with Prompt wiring, aliases, path-scanned discovery, false
+installation/readiness, model-visible transaction protocols or projection-owned
+workflow behavior.
+
+In phase one, do not add a Platform-owned Task-to-Task message, context, result,
+data, or adoption API. Reuse Codex-native exchange first: Thread context and
+native Agent collaboration for live coordination, MCP Resources for typed
+provider-owned intermediate data, ordinary files in the authorized Workspace
+for user-visible durable data, and Artifacts only for explicit final
+deliverables. A bounded Web projection may make exact authorized Resource
+references from official Thread Items discoverable, but it must not store the
+content, become a Resource Broker, or create a second context/data system.
+
+The user, Skills, model, and Tools may use validated Workspace-relative paths
+and typed MCP Resource references. Reject server-absolute paths, path or
+symlink escape, ambiguous `source_ref` aliases, and historical asset/Dataset
+IDs. Do not add COW, overlay, snapshots, Task-private files, Platform data
+revisions, semantic registries, bindings, whole-dataset fingerprints/reuse
+gates, or Artifact-based data transfer. Provider-owned pair-level reuse of
+deterministic route and cost facts is a domain Tool responsibility, not a
+Platform data plane.
+
 - Do not build tenant administration, invitations, member roles, interactive
   multi-user authentication or cross-tenant UI in the current stage.
 - Keep User, Organization, Profile, Workspace and owner identities in database
@@ -173,8 +201,10 @@ second Thread, memory or agent system.
 - Do not recreate Codex capabilities in the WebApp, server routes, startup
   scripts or database. Runtime-facing behavior goes through Codex discovery or
   a typed app-server contract.
-- Do not expose raw JSON-RPC, app-server request IDs, local paths, credentials,
-  configuration key paths or unbounded Runtime payloads to the browser.
+- Do not expose raw JSON-RPC, app-server request IDs, server-absolute paths,
+  credentials, configuration key paths or unbounded Runtime payloads to the
+  browser. Validated Workspace-relative paths are an intentional product
+  contract, not server-local authority.
 - Do not add a desktop shell, Tauri layer, sidecar daemon, loopback proxy or a
   second browser-to-Runtime gateway.
 - Resolve every Profile and authorized Workspace through authenticated platform
@@ -243,9 +273,21 @@ seams.
   contract; it does not create a Thread-owned checkout. Managed clones or
   worktrees are explicit Workspace resources with their own lifecycle and may
   serve multiple authorized Threads.
+- A phase-one Task fixes one authorized Workspace. Root and child Threads use
+  that same native `cwd`; the platform does not create a Task-owned checkout,
+  worktree, overlay, snapshot, COW layer, or file binding. Same-Workspace Tasks
+  may reuse ordinary files and authorized MCP Resources through their owning
+  native contracts; the Platform does not connect their contexts or results.
 - Durable Artifacts have their own identity, authorization and retention
   lifecycle. Producing Run/Thread/Turn/Item IDs are provenance only and must not
-  prevent later authorized history from resolving embedded content.
+  prevent later authorized history from resolving delivery content. In phase
+  one, Artifacts are reports, maps, and other explicit user deliverables; they
+  are not Agent inputs or Task-to-Task data transport.
+- MCP Resource content remains owned by its configured provider. Codex owns
+  resource discovery/read execution and official Tool Item history; a Web
+  authorization or discoverability projection may reference an exact official
+  Item and `{server, uri}` but must remain rebuildable and must not copy the
+  content, version it, or infer resource identity from model text.
 - Provider credentials remain encrypted platform Secrets and are injected only
   into the owned Profile process. They never enter browser-readable state.
 - Skills, Plugins and MCP are discovered and executed by Codex Runtime.
@@ -264,7 +306,11 @@ seams.
 - Verified Runtime/platform capability: `docs/capability-baseline.md`
 - Accepted stage order: `docs/roadmap.md`
 - Current and next milestone execution: `docs/development-plan.md`
-- Active single-Profile Supervisor Copilot slices and trust-risk register:
+- Accepted phase-one Copilot design and development baseline:
+  `docs/adr/018-built-in-network-copilot-runtime-closure.md`
+- Deferred phase-two public Copilot platform implementation input:
+  `docs/agent-capability-lifecycle-plan.md`
+- Frozen warehouse Supervisor prototype migration input:
   `docs/enterprise-supervisor-copilot-plan.md`
 - Codex synchronization: `docs/codex-upstream-sync.md`
 - Retained Codex seams: `docs/custom-codex-patch-map.md`
@@ -282,15 +328,16 @@ redefine product scope, capability status, security invariants or ownership.
   Runtime work.
 - Run platform Rust tests through `scripts/test-web-rust.sh` and Codex tests
   through `scripts/test-codex.sh`. These wrappers preserve the component-owned
-  test commands while selecting the bounded `ci-test` Cargo profile, enabling
-  sccache when available and enforcing the repository target high/low-water
-  policy after success or failure.
+  test commands while selecting the bounded `ci-test` Cargo profile and
+  enabling sccache when available. Cargo build outputs remain available for
+  incremental runs; the wrappers do not enforce a storage watermark.
 - Web changes require type checking and relevant tests; integration changes
   require contract coverage.
 - Codex changes require its formatting and scoped test workflow. TUI changes
   require snapshot coverage.
-- Protocol changes require regenerated Schema and TypeScript, updated fixtures,
-  Web and Codex checks, `npm run check:codex-contracts`, and a real
-  `npm run smoke:codex-app-server -- --require-manifest` run.
+- Protocol changes require regenerated official Codex Schema and TypeScript,
+  the owner `schema_fixtures` drift gate, relevant Web and Codex checks, and a
+  real `npm run smoke:codex-app-server` run against the official
+  `initialize` and `thread/list` contracts.
 - Authorization, persistence and recovery changes must cover denial, restart,
   interruption and concurrency as applicable.

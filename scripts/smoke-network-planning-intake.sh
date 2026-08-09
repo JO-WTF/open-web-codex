@@ -21,7 +21,7 @@ if [[ "${mode}" == "local" ]]; then
     "${repo_root}/tools/supply-chain-network-planner/tests/test_workspace_intake.py" \
     "${repo_root}/tools/supply-chain-network-planner/tests/test_data_core.py::test_builds_planning_dataset_and_network_handoff" \
     "${repo_root}/tools/supply-chain-network-planner/tests/stdio_smoke.py"
-  (cd "${repo_root}/apps/web" && npm run typecheck && npm run check:codex-contracts)
+  (cd "${repo_root}/apps/web" && npm run typecheck)
   echo 'Workspace intake local contract smoke passed; real Web + Runtime + MCP E2E remains a separate gate.'
   exit 0
 fi

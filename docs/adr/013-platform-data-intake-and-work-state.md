@@ -1,6 +1,7 @@
 # ADR-013：Platform Data Intake 与通用 Work State 分工
 
-状态：已接受（2026-08-08），实现待完成
+状态：已被 [ADR-018](018-built-in-network-copilot-runtime-closure.md) 替代（2026-08-08）；
+下文仅保存历史决定，不得作为当前实现合同。
 
 替代：[ADR-010](010-workspace-wide-intake-discovery.md)，并替代
 [ADR-009](009-thread-first-data-intake.md) 中由领域 Agent 扫描 Workspace、保存映射状态和

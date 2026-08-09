@@ -1,4 +1,4 @@
-.PHONY: mvp deploy deploy-status deploy-stop web-install web-check web-test web-rust-test codex-test contracts-check cargo-cache-status cargo-target-status cargo-target-gc build-cache-test deploy-policy-test codex-upstream-status codex-upstream-sync
+.PHONY: mvp deploy deploy-status deploy-stop web-install web-check web-test web-rust-test codex-test contracts-check cargo-cache-status deploy-policy-test codex-upstream-status codex-upstream-sync
 
 mvp:
 	./scripts/run-local.sh --background
@@ -16,7 +16,7 @@ web-install:
 	cd apps/web && npm ci
 
 web-check:
-	cd apps/web && npm run typecheck && npm run check:codex-contracts
+	cd apps/web && npm run typecheck
 
 web-test:
 	cd apps/web && npm test
@@ -28,19 +28,10 @@ codex-test:
 	./scripts/test-codex.sh
 
 contracts-check:
-	cd apps/web && npm run test:codex-capabilities && npm run test:codex-fixtures && npm run test:codex-harness
+	cd apps/web && npm run test:codex-harness
 
 cargo-cache-status:
 	./scripts/cargo-build-cache-status.sh
-
-cargo-target-status:
-	./scripts/cargo-target-gc.sh --status
-
-cargo-target-gc:
-	./scripts/cargo-target-gc.sh
-
-build-cache-test:
-	./scripts/tests/cargo-build-retention.sh
 
 deploy-policy-test:
 	./scripts/tests/deploy-policy.sh

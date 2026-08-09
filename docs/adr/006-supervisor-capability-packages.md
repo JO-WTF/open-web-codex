@@ -1,7 +1,13 @@
 # ADR-006：Supervisor Capability Package
 
-- 状态：Accepted
+- 状态：部分被 [ADR-014](014-release-installation-runtime-discovery.md) 与
+  [ADR-017](017-clean-copilot-platform-spine.md) 替代
 - 日期：2026-07-28
+
+仍有效：Release 不可变、精确依赖、Platform 治理与 Codex Runtime 执行/发现分离。
+已替代：reviewed capability template、作者/代码手工版本与 hash、Workspace 发布、旧
+Agent/Supervisor compiler 和目录合同。新实现只使用统一 Catalog/Compiler、Profile
+Installation、Runtime discovery 与 Assignment Grant；本文其余内容仅保存历史背景。
 
 ## 背景
 

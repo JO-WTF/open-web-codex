@@ -8,8 +8,13 @@ import Composer from "./Composer";
 import GoalBanner from "./GoalBanner";
 import FollowUpQueue, { type QueuedFollowUp } from "./FollowUpQueue";
 import UserInputQueue from "./UserInputQueue";
-import DataIntakePanel from "./DataIntakePanel";
-import type { DataIntakeParameterAnswer, DataIntakeSessionSummary, DataMappingCandidate, PendingUserInputSummary, SourceAssetSummary } from "../../../browser/types";
+import McpFormQueue from "./McpFormQueue";
+import type {
+  McpFormContent,
+  McpFormResponseAction,
+  PendingMcpFormSummary,
+  PendingUserInputSummary,
+} from "../../../browser/types";
 import type { ModelProviderSummary, ModelSummary } from "./Composer";
 import TaskApprovalQueue, {
   type TaskApprovalRequest,
@@ -58,9 +63,7 @@ type Props = {
   turnStartedAt?: number | null;
   draft: string;
   onDraftChange: (text: string) => void;
-  onSend: (sourceAssetIds?: string[]) => void;
-  onUploadDataFiles?: (files: File[]) => Promise<SourceAssetSummary[]>;
-  openDataUploadRequest?: number;
+  onSend: () => void;
   onStop: () => void;
   stopping: boolean;
   queuedFollowUps: QueuedFollowUp[];
@@ -75,19 +78,17 @@ type Props = {
     version: number,
     answers: Record<string, { answers: string[] }>,
   ) => Promise<void> | void;
+  pendingMcpFormRequests: PendingMcpFormSummary[];
+  submittingMcpFormIds?: Set<string>;
+  onSubmitMcpForm: (
+    requestId: string,
+    version: number,
+    action: McpFormResponseAction,
+    content?: McpFormContent,
+  ) => Promise<void> | void;
   busy: boolean;
   sendDisabled: boolean;
   onResolveApproval?: (workspaceId: string, requestId: number | string, decision: "accept" | "decline") => void;
-  dataIntakeTaskId?: string | null;
-  dataIntake?: DataIntakeSessionSummary | null;
-  dataIntakeLoading?: boolean;
-  dataIntakeError?: string | null;
-  onRefreshDataIntake?: () => void;
-  onOpenDataUpload?: () => void;
-  onConfirmDataMapping?: (confirmed: DataMappingCandidate[]) => void;
-  onSubmitDataParameters?: (answers: DataIntakeParameterAnswer[]) => void;
-  onConfirmDataAnalysis?: (requestId: string) => void;
-  onRequestDataChange?: (message: string) => void;
 };
 
 export default function Conversation({
@@ -130,8 +131,6 @@ export default function Conversation({
   draft,
   onDraftChange,
   onSend,
-  onUploadDataFiles,
-  openDataUploadRequest = 0,
   onStop,
   stopping,
   queuedFollowUps,
@@ -142,19 +141,12 @@ export default function Conversation({
   pendingUserInputRequests = [],
   submittingPendingUserInputIds = new Set(),
   onSubmitPendingUserInput,
+  pendingMcpFormRequests = [],
+  submittingMcpFormIds = new Set(),
+  onSubmitMcpForm,
   busy,
   sendDisabled,
   onResolveApproval,
-  dataIntakeTaskId = null,
-  dataIntake = null,
-  dataIntakeLoading = false,
-  dataIntakeError = null,
-  onRefreshDataIntake,
-  onOpenDataUpload,
-  onConfirmDataMapping,
-  onSubmitDataParameters,
-  onConfirmDataAnalysis,
-  onRequestDataChange,
 }: Props) {
   const messageAreaRef = useRef<HTMLDivElement | null>(null);
   const isAtBottomRef = useRef(true);
@@ -254,19 +246,6 @@ export default function Conversation({
             workspaceId={workspaceId}
             onResolveApproval={onResolveApproval}
           />
-          {workspaceId && dataIntakeTaskId && (dataIntake || dataIntakeError) && onRefreshDataIntake && onOpenDataUpload && onConfirmDataMapping && onSubmitDataParameters && onConfirmDataAnalysis && onRequestDataChange ? (
-            <DataIntakePanel
-              session={dataIntake}
-              loading={dataIntakeLoading}
-              error={dataIntakeError}
-              onRefresh={onRefreshDataIntake}
-              onOpenUpload={onOpenDataUpload}
-              onConfirmMapping={onConfirmDataMapping}
-              onSubmitParameters={onSubmitDataParameters}
-              onConfirmAnalysis={onConfirmDataAnalysis}
-              onRequestChange={onRequestDataChange}
-            />
-          ) : null}
           <TaskApprovalQueue
             approvals={taskApprovals}
             ariaLabel="Task approvals"
@@ -276,6 +255,11 @@ export default function Conversation({
             requests={pendingUserInputRequests}
             submittingIds={submittingPendingUserInputIds}
             onSubmit={onSubmitPendingUserInput}
+          />
+          <McpFormQueue
+            requests={pendingMcpFormRequests}
+            submittingIds={submittingMcpFormIds}
+            onSubmit={onSubmitMcpForm}
           />
           {thinking && threadStatus !== "reconnecting" && !visibleMessages.some((entry) => entry.level === "user") && <ThinkingIndicator />}
         </div>
@@ -291,9 +275,7 @@ export default function Conversation({
       <Composer
         draft={draft}
         onDraftChange={onDraftChange}
-          onSend={onSend}
-          onUploadDataFiles={onUploadDataFiles}
-          openDataUploadRequest={openDataUploadRequest}
+        onSend={onSend}
         onStop={onStop}
         running={thinking || threadStatus === "running" || threadStatus === "reconnecting" || threadStatus.startsWith("active")}
         stopping={stopping}

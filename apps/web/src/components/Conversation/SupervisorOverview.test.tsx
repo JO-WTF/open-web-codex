@@ -10,19 +10,6 @@ import SupervisorOverview from "./SupervisorOverview";
 
 afterEach(cleanup);
 
-const policy = {
-  run_id: "run-1",
-  task_id: "task-1",
-  thread_id: "root-thread",
-  policy_id: "enterprise-supervisor-copilot",
-  version: "1.0.0",
-  display_name: "Enterprise Supervisor Copilot",
-  content_sha256: "a".repeat(64),
-  state: "bound" as const,
-  created_at: "2026-07-26T00:00:00Z",
-  bound_at: "2026-07-26T00:00:01Z",
-};
-
 const rootAgent = {
   run_id: "run-1",
   thread_id: "root-thread",
@@ -129,7 +116,6 @@ describe("SupervisorOverview", () => {
     render(
       <SupervisorOverview
         taskTitle="Standard task"
-        policy={null}
         agents={[]}
         artifacts={[]}
       />,
@@ -145,7 +131,6 @@ describe("SupervisorOverview", () => {
     render(
       <SupervisorOverview
         taskTitle="Network planning"
-        policy={policy}
         agents={[rootAgent, networkAgent]}
         executions={repeatedExecutions}
         artifacts={[]}
@@ -163,7 +148,6 @@ describe("SupervisorOverview", () => {
     render(
       <SupervisorOverview
         taskTitle="Network planning"
-        policy={policy}
         agents={[rootAgent, dataAgent]}
         approvals={[{
           threadId: "data-thread",
@@ -196,7 +180,6 @@ describe("SupervisorOverview", () => {
     render(
       <SupervisorOverview
         taskTitle="Network planning"
-        policy={policy}
         agents={[rootAgent, dataAgent, networkAgent]}
         executions={[
           execution("data-1", {
@@ -224,7 +207,6 @@ describe("SupervisorOverview", () => {
     render(
       <SupervisorOverview
         taskTitle="Network planning"
-        policy={policy}
         agents={[rootAgent, dataAgent]}
         activities={[
           activity(11, {
@@ -270,7 +252,6 @@ describe("SupervisorOverview", () => {
     render(
       <SupervisorOverview
         taskTitle="Optimize the enterprise supply-chain network"
-        policy={policy}
         agents={[rootAgent, networkAgent]}
         activities={[
           activity(1, {
@@ -306,8 +287,8 @@ describe("SupervisorOverview", () => {
       />,
     );
 
-    expect(screen.getByText("Enterprise Supervisor Copilot")).toBeTruthy();
-    expect(screen.getByText("Policy enterprise-supervisor-copilot · 1.0.0")).toBeTruthy();
+    expect(screen.getByText("Agent collaboration")).toBeTruthy();
+    expect(screen.getByText("Runtime-owned Agent collaboration")).toBeTruthy();
     expect(screen.getByRole("article", { name: "Supervisor status" })).toBeTruthy();
     expect(screen.getByText("Optimize the enterprise supply-chain network")).toBeTruthy();
     expect(screen.getAllByText(
@@ -337,7 +318,6 @@ describe("SupervisorOverview", () => {
     render(
       <SupervisorOverview
         taskTitle="Network planning"
-        policy={policy}
         agents={[rootAgent, networkAgent]}
         executions={repeatedExecutions}
         artifacts={[]}
@@ -362,7 +342,6 @@ describe("SupervisorOverview", () => {
     render(
       <SupervisorOverview
         taskTitle="Network planning"
-        policy={policy}
         agents={[rootAgent, dataAgent]}
         artifacts={[{
           id: artifactId,

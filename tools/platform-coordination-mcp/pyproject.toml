@@ -1,6 +1,0 @@
-[project]
-name = "open-web-codex-platform-coordination-mcp"
-version = "0.1.0"
-description = "Read-only platform coordination MCP server"
-requires-python = ">=3.11"
-dependencies = ["mcp>=1.0,<2"]

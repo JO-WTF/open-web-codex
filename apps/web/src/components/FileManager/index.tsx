@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, DragEvent } from "react";
-import { createPortal } from "react-dom";
 import ChevronRight from "lucide-react/dist/esm/icons/chevron-right";
-import Database from "lucide-react/dist/esm/icons/database";
 import Download from "lucide-react/dist/esm/icons/download";
 import Folder from "lucide-react/dist/esm/icons/folder";
 import RefreshCw from "lucide-react/dist/esm/icons/refresh-cw";
@@ -11,7 +9,6 @@ import Trash2 from "lucide-react/dist/esm/icons/trash-2";
 import Upload from "lucide-react/dist/esm/icons/upload";
 import X from "lucide-react/dist/esm/icons/x";
 import type { GitFileStatus } from "../../types";
-import { WorkspaceDataDraftDialog } from "../../features/files/components/WorkspaceDataDraftDialog";
 import { Markdown } from "../../features/messages/components/Markdown";
 import { getFileTypeIconUrl } from "../../utils/fileTypeIcons";
 
@@ -23,14 +20,17 @@ type Props = {
   panelWidth: number;
   onPanelWidthChange: (width: number) => void;
   listFiles: (workspaceId: string) => Promise<string[]>;
-  uploadFiles?: (workspaceId: string, files: File[]) => Promise<unknown>;
+  uploadFiles?: (
+    workspaceId: string,
+    files: File[],
+    options?: { overwrite?: boolean; paths?: string[] },
+  ) => Promise<unknown>;
   readFile: (workspaceId: string, path: string) => Promise<{ content: string; truncated: boolean }>;
   downloadFile?: (workspaceId: string, path: string) => Promise<{ blob: Blob; filename: string }>;
   deleteFile?: (workspaceId: string, path: string) => Promise<unknown>;
   loadGitStatus: (workspaceId: string) => Promise<{ files: GitFileStatus[] }>;
   embedded?: boolean;
   enabled?: boolean;
-  onDataDraftChanged?: () => void;
 };
 
 type Row = { path: string; name: string; depth: number; folder: boolean };
@@ -61,7 +61,7 @@ function resolveMarkdownLink(currentPath: string, targetPath: string) {
   return resolved.join("/");
 }
 
-export default function FileManager({ workspaceId, selectedPath, onSelectedPathChange, onClose, panelWidth, onPanelWidthChange, listFiles, uploadFiles, readFile, downloadFile, deleteFile, loadGitStatus, embedded = false, enabled = true, onDataDraftChanged }: Props) {
+export default function FileManager({ workspaceId, selectedPath, onSelectedPathChange, onClose, panelWidth, onPanelWidthChange, listFiles, uploadFiles, readFile, downloadFile, deleteFile, loadGitStatus, embedded = false, enabled = true }: Props) {
   const [files, setFiles] = useState<string[]>([]);
   const [statuses, setStatuses] = useState<Map<string, string>>(new Map());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -71,11 +71,9 @@ export default function FileManager({ workspaceId, selectedPath, onSelectedPathC
   const [loading, setLoading] = useState(false);
   const [treeOpen, setTreeOpen] = useState(true);
   const [query, setQuery] = useState("");
-  const [datasetDialogOpen, setDatasetDialogOpen] = useState(false);
   const [fileActionPath, setFileActionPath] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [uploadingFiles, setUploadingFiles] = useState(false);
-  const datasetDialogTrigger = useRef<HTMLElement | null>(null);
   const uploadInput = useRef<HTMLInputElement | null>(null);
   const resizeSession = useRef<ResizeSession | null>(null);
   const refreshRequest = useRef(0);
@@ -181,11 +179,43 @@ export default function FileManager({ workspaceId, selectedPath, onSelectedPathC
     if (!workspaceId || !uploadFiles || files.length === 0) return;
     setUploadingFiles(true);
     setError(null);
+    let changed = false;
+    const failures: string[] = [];
     try {
-      await uploadFiles(workspaceId, files);
-      await refresh();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      for (const file of files) {
+        const currentPath = file.webkitRelativePath || file.name;
+        try {
+          try {
+            await uploadFiles(workspaceId, [file]);
+          } catch (reason) {
+            const platformError = reason as Error & { kind?: string; code?: string };
+            if (platformError.kind !== "conflict" || platformError.code !== "workspace_file_exists") {
+              throw reason;
+            }
+            const overwrite = window.confirm(
+              `${currentPath} already exists. Select OK to overwrite it, or Cancel to rename this file or skip it.`,
+            );
+            if (overwrite) {
+              await uploadFiles(workspaceId, [file], { overwrite: true });
+            } else {
+              const renamed = window.prompt(
+                `Enter a new Workspace-relative path for ${currentPath}. Leave it blank to skip this file.`,
+                currentPath,
+              );
+              if (!renamed?.trim()) continue;
+              await uploadFiles(workspaceId, [file], { paths: [renamed.trim()] });
+            }
+          }
+          changed = true;
+        } catch (reason) {
+          const message = reason instanceof Error ? reason.message : String(reason);
+          failures.push(`${currentPath}: ${message}`);
+        }
+      }
+      if (changed) await refresh();
+      if (failures.length > 0) {
+        setError(`Some files were not uploaded: ${failures.join("; ")}`);
+      }
     } finally {
       setUploadingFiles(false);
     }
@@ -247,16 +277,6 @@ export default function FileManager({ workspaceId, selectedPath, onSelectedPathC
     }).map((path): Row => ({ path, name: path.split("/").pop() ?? path, depth: path.split("/").length - 1, folder: folders.has(path) }));
   }, [expanded, files, query]);
   const markdownPreview = Boolean(selectedPath && MARKDOWN_FILE_PATTERN.test(selectedPath));
-  const openDatasetDialog = (trigger: HTMLElement) => {
-    datasetDialogTrigger.current = trigger;
-    setDatasetDialogOpen(true);
-  };
-  const closeDatasetDialog = () => {
-    const trigger = datasetDialogTrigger.current;
-    setDatasetDialogOpen(false);
-    queueMicrotask(() => trigger?.isConnected && trigger.focus());
-  };
-
   const clampPanelWidth = (width: number) => Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, width));
   return (
     <aside className={`web-file-manager${embedded ? " is-embedded" : ""}`} aria-label="Workspace files">
@@ -315,17 +335,6 @@ export default function FileManager({ workspaceId, selectedPath, onSelectedPathC
       <div className="web-file-manager-header">
         <strong>{embedded ? "Workspace" : "Files"}</strong>
         <div>
-          <button
-            type="button"
-            className="web-file-data-button"
-            onClick={(event) => openDatasetDialog(event.currentTarget)}
-            disabled={!workspaceId}
-            aria-label="Add data"
-            data-testid="workspace-files-add-data"
-          >
-            <Database size={14} aria-hidden="true" />
-            <span>Add data</span>
-          </button>
           {uploadFiles ? <>
             <button
               type="button"
@@ -338,6 +347,7 @@ export default function FileManager({ workspaceId, selectedPath, onSelectedPathC
               ref={uploadInput}
               className="web-file-upload-input"
               type="file"
+              aria-label="Upload Workspace files"
               multiple
               tabIndex={-1}
               aria-hidden="true"
@@ -378,16 +388,16 @@ export default function FileManager({ workspaceId, selectedPath, onSelectedPathC
             </div> : null}
             {uploadingFiles ? <div className="web-file-upload-status" role="status">Uploading files…</div> : null}
             {!workspaceId ? <div className="web-file-empty">Select a workspace</div> : rows.length === 0 && !query.trim() ? (
-              <div className="web-file-empty web-file-empty--data">
-                <Database size={20} aria-hidden="true" />
+              <div className="web-file-empty">
                 <strong>No Workspace files yet</strong>
-                <span>Upload planning files; the Supervisor will profile and map them before analysis.</span>
+                <span>Upload files to make them available to every Task in this Workspace.</span>
                 <button
                   type="button"
-                  onClick={(event) => openDatasetDialog(event.currentTarget)}
-                  data-testid="workspace-files-empty-add-data"
+                  onClick={() => uploadInput.current?.click()}
+                  disabled={!uploadFiles || uploadingFiles}
+                  data-testid="workspace-files-empty-upload"
                 >
-                  Add data
+                  Upload files
                 </button>
               </div>
             ) : rows.length === 0 ? <div className="web-file-empty">No matching files</div> : rows.map((row) => {
@@ -436,19 +446,6 @@ export default function FileManager({ workspaceId, selectedPath, onSelectedPathC
           />
         ) : <pre><code>{content}</code></pre> : <div className="web-file-empty">Select a file to preview</div>}
       </div>
-      {datasetDialogOpen && workspaceId
-        ? createPortal(
-            <WorkspaceDataDraftDialog
-              workspaceId={workspaceId}
-              onClose={closeDatasetDialog}
-              onCreated={() => {
-                void refresh();
-                onDataDraftChanged?.();
-              }}
-            />,
-            document.body,
-          )
-        : null}
     </aside>
   );
 }

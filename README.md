@@ -102,25 +102,19 @@ Rust validation uses separate, bounded test profiles:
 ```
 
 Repository launch, deploy, and Rust test workflows use `sccache` when it is
-installed. The local compiler cache defaults to an 8 GiB maximum. Cargo targets
-start profile-level cleanup above 24 GiB and clean toward 16 GiB while always
-preserving release artifacts:
+installed. The local compiler cache defaults to an 8 GiB maximum. Cargo target
+outputs are retained for normal incremental builds and are not subject to an
+automatic repository storage watermark:
 
 ```bash
 # macOS; on other platforms install a prebuilt sccache binary on PATH.
 brew install sccache
 make cargo-cache-status
-make cargo-target-status
-make cargo-target-gc
-make build-cache-test
 ```
 
 Set `OPEN_WEB_CODEX_SCCACHE_MODE=required` to fail when sccache is unavailable,
-`SCCACHE_CACHE_SIZE` to change its hard cache limit, and
-`OPEN_WEB_CODEX_TARGET_LIMIT_GB` /
-`OPEN_WEB_CODEX_TARGET_LOW_WATER_GB` to change the target high/low-water marks.
-The wrappers disable rustc incremental output because it cannot be cached by
-sccache.
+and `SCCACHE_CACHE_SIZE` to change its hard cache limit. The wrappers disable
+rustc incremental output because it cannot be cached by sccache.
 
 Inspect the official Codex upstream status:
 

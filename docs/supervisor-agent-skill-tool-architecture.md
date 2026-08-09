@@ -2,15 +2,21 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 状态 | 当前接受的目标架构 |
+| 状态 | 阶段二历史研究输入；不是当前接受架构 |
 | 更新日期 | 2026-08-08 |
-| 当前阶段 | 单用户、单 Profile；所有身份和数据边界按未来多用户作用域设计 |
+| 当前阶段 | 阶段一以 Codex 原生协作、MCP Resource 与 Workspace 文件完成内置仓网闭环 |
 | 参考实现 | 印尼仓网规划 Copilot |
-| 实施计划 | [Agent 能力生命周期实施计划](agent-capability-lifecycle-plan.md) |
+| 当前实施 | [开发计划](development-plan.md) |
+| 接受基线 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) |
 
-本文定义算法工程师如何以最小工作量创建 Tool、Skill、Domain Agent、Supervisor，
-并把它们发布为可从 Web 运行的 Copilot。本文不把目标能力描述成当前已实现事实；
-当前证据仍以 [能力基线](capability-baseline.md) 为准。
+本文保存 ADR-017 时期对公开 Tool/Skill/Agent/Supervisor/Copilot 创作平台的研究。下文
+关于 Work State、Data Intake、typed handles、Resource Broker、Assignment Grant、
+Run Completion、Root-only 输入和五对象发布的设计已被 ADR-018 否决，既不是阶段一
+合同，也不能直接作为阶段二 backlog。阶段二开始前必须根据阶段一证据重写本文件。
+
+当前阶段只有以下合同有效：Task 固定授权 Workspace；同 Workspace Task 可显式复用普通文件
+和授权 exact MCP Resource ref；允许经校验相对路径；Platform 不理解数据语义；Artifact 只承载用户交付；
+协同、elicitation 与热加载最大化复用 Codex 原生能力。
 
 ## 1. 产品目标
 
@@ -43,6 +49,24 @@ Copilot 时，不应重新实现输入请求、Agent 生命周期、协作状态
    路径和 lock file 由编译器生成。
 7. **不兼容旧项目合同。** 直接迁移当前开发环境和所有调用方，删除 2.x、5.x、
    `planning-dataset.v2` 及领域协议在平台中的兼容分支。
+
+### 2.1 平台机制、Skill 与执行 guardrail
+
+可信机制只保护模型无法可靠承担的硬不变量；业务判断、分析方法和沟通方式继续由
+Skill/Supervisor 指导。
+
+| 问题 | Platform/Runtime 机制 | Skill/Instructions | 执行 guardrail |
+| --- | --- | --- | --- |
+| 可调用能力 | exact Release、Role 与 capability grant | 何时使用哪项已授权能力 | 未授权 Tool 不进入模型可见目录 |
+| 数据访问 | typed handle、scope 与 resolver | 如何解释数据和判断缺口 | 错误类型、过期或越权在 Tool 边界拒绝 |
+| 用户输入 | Runtime Root-only + durable Approval | Root 何时询问、怎样解释 | child 只返回 typed `needs_input` |
+| Work State | SDK/server 原子 begin/commit、固定 write-set | Agent 判断业务 outcome | 模型不传 revision、operation ID 或 mutation JSON |
+| Wire shape | Compiler 生成一个当前 Schema | 不指导字段兼容写法 | 严格校验，禁止 aliases 和字段猜测 |
+| Run 完成 | required assignments 与 deliverable gate | Root 综合、解释冲突和部分成功 | 不满足合同不能标 completed |
+| 安装可用 | Release、Installation、Discovery、Readiness 分别持有事实 | 不属于 Skill | `installed != discovered != ready` |
+| 重试 | 稳定 operation identity 和幂等合同 | 是否更换业务方法 | 有界次数并保留原始 cause |
+
+当前闭环不建设复杂信任分、证据图、自动重规划服务、Blackboard 或通用工作流 DSL。
 
 ## 3. 总体分层
 
@@ -83,6 +107,20 @@ flowchart TB
 | Profile Host | Profile 进程、类型化桥接、安装事务、Runtime 状态归一化 | 产品目录、业务工作状态 |
 | Codex Runtime | Thread/Turn/Item、上下文、Agent 调度、Skills/Plugins/MCP/Tools | Web 工作流、企业授权、Catalog |
 | Domain Package | 领域 schema、算法、外部系统适配、领域校验和报告 | 用户身份、通用上传、通用 Agent 状态 |
+
+### 3.1 三平面、模块化单体
+
+当前阶段采用模块化单体，不提前拆微服务。下列 Service/Controller 是同一个 Platform
+Server 内的逻辑 owner 和可测试边界：
+
+| 平面 | 权威 owner | 逻辑模块 |
+| --- | --- | --- |
+| Control Plane | Platform | Identity/Auth、Catalog/Compiler、Installation、Task/Run、Assignment Grant、Approval、Audit、Artifact metadata |
+| Runtime Plane | Codex Runtime；Profile Host 只桥接 | Thread/Turn/context、Root/child Agent、spawn/wait/follow-up、Skill/Plugin/MCP discovery、Tool execution、Provider transport、官方输入 |
+| Data Plane | Platform Data Intake + Domain Package | SourceAsset、Mapping Revision、Dataset Release、Work State、Domain Resource、Artifact blob、领域 schema/算法/校验 |
+
+模块通过 typed contract 连接，但不因未来规模而先增加网络调用、分布式事务和独立部署。
+多用户和容量证据出现后，再按 owner 边界评估拆分。
 
 ## 4. 五类可发布资源
 
@@ -136,7 +174,7 @@ AgentDefinition
   tool_capability_requirements[]
   data_permissions[]
   input_contract
-  assignment_contract
+  assignment_requirements
   deliverable_contracts[]
   execution_limits
   model_policy
@@ -209,8 +247,10 @@ Platform Work State 保存：
 - 领域 operation 的计算；
 - 领域摘要如何安全生成。
 
-Platform 不读取仓库、路线、成本等字段来决定业务状态。领域 Tool 通过 SDK 提交
-mutation，Work State Service 校验 scope、revision、依赖和幂等后原子写入元数据。
+Platform 不读取仓库、路线、成本等字段来决定业务状态。领域 Tool 只返回业务
+`ToolOutcome`；Tool SDK/Runner 根据服务器注入的 Assignment Grant 自动 begin/commit，
+Work State Service 校验 scope、固定 write-set、revision、依赖和幂等后原子写入元数据。
+低层 mutation API 只供受信 SDK/服务内部使用，不进入模型 Tool inventory。
 
 ### 5.3 最小状态模型
 
@@ -246,13 +286,13 @@ Task/Run 自动绑定 scope 的只读 Coordination Tool：
 get_collaboration_status()
 list_agent_executions(status?, limit?, cursor?)
 get_agent_execution(execution_id)
-get_work_state_summary(work_state_id)
-list_blocking_inputs(work_state_id?)
-list_deliverables(work_state_id?, type?)
+get_work_state_summary()
+list_blocking_inputs()
+list_deliverables(type?)
 ```
 
 这些 Tool 只读取 Approval、agent execution projection、Work State 和 Artifact 的权威
-投影，返回 `platform-tool-result.v1` 有界结果。它们不得：
+投影，返回 `platform-tool-outcome.v1` 有界结果。它们不得：
 
 - spawn、interrupt、审批或修改 Agent；
 - 修改 Work State 或宣称业务成功；
@@ -288,25 +328,29 @@ CollaborationContext
 这个上下文用于 scope Tool、Artifact、用户输入和执行投影。它不是把全部数据注入
 Prompt 的 context bundle，也不改变 Codex 拥有 Thread context 的事实。
 
-### 7.2 AssignmentContract
+### 7.2 Assignment Grant
 
-Supervisor 委派给 Agent 时，除自然语言任务外还应提供由平台生成的有界合同：
+Supervisor 选择 Agent 和业务目标后，由 Assignment Service 编译不可变、有界的授权合同：
 
 ```text
-AssignmentContract
+AssignmentGrant
   assignment_id
   objective
   work_state_id
-  readable_components[]
-  expected_deliverables[]
-  allowed_capabilities[]
+  read_set[]
+  write_set[]
+  exact_capabilities[]
+  expected_outputs[]
+  parameters_snapshot
   blocking_input_policy
   completion_criteria
-  summary_budget
+  time/cost/context budgets
 ```
 
-首期可以把合同作为受控 assignment metadata 注入现有 Runtime Agent seam；长期优先
-采用官方类型化 Agent contract。不得解析自然语言 assignment 来恢复权限或资源 ID。
+Assignment Service 不 spawn Agent；Codex Runtime 继续拥有 spawn、wait、follow-up 和
+interrupt。首期可以把 Grant 作为受控 assignment metadata 注入现有 Runtime Agent seam；
+长期优先采用官方类型化 Agent contract。不得解析自然语言 assignment 来恢复权限、
+资源 ID、write-set 或参数。
 
 ### 7.3 信息交换规则
 
@@ -317,30 +361,65 @@ AssignmentContract
 | 原始文件和规范化表 | Platform Dataset Release |
 | 大型矩阵和计算中间结果 | 领域 payload Resource 或 Artifact 引用 |
 | 最终报告、地图、可下载文件 | Platform Artifact |
-| 需要人的业务选择 | 官方 `request_user_input` 经持久 Approval 投影 |
+| child 发现需要人的业务选择 | typed `needs_input` 终态，交给 Root |
+| Root 向人提问 | 官方 `request_user_input` 经持久 Approval 投影 |
 | Agent 进度和终态 | Runtime 事件的 Platform execution projection |
 
 Agent 不应在消息中转发完整文件、矩阵、Tool schema inventory、另一个 Agent 的完整
 输出或重复 Skill 正文。需要读取时，通过明确引用调用 owner 提供的有界 Tool。
 
-## 8. 通用 Tool 结果合同
+### 7.4 类型化内容引用
 
-平台事件和 Web 不能认识 `network-case-tool-result.v1`。Tool SDK 统一产生：
+跨 owner 的内容引用使用带 discriminator、scope 和状态校验的当前合同：
+
+- `SourceAssetRef`：Platform Data Intake 私有输入；只有获授权的数据准备能力可消费；
+- `DatasetReleaseRef`：不可变标准化数据；Domain Tool 通过服务端 resolver 消费；
+- `DomainResourceRef`：矩阵、方案、求解结果等领域中间资源；按 producer/consumer grant；
+- `ArtifactRef`：用户可见、可授权下载或渲染的长期交付物；
+- `McpResourceUri`：只存在于 Runtime/MCP 传输内部，不进入 Work State、Assignment 或
+  Agent 间消息。
+
+引用中的 URI、路径、hash 或显示名都不是授权身份。Resolver 根据当前 Assignment Grant
+和 scope 解析 handle；错误 variant、过期状态或越权返回 typed `rejected`。尤其不能用
+Skill 文字禁止把 Workspace `source_ref` 当成 MCP Resource；Network Agent 根本不获得
+SourceAsset capability，Data Agent 只调用接受 `SourceAssetRef` 的工具。
+
+### 7.5 Root-only 输入与 Run Completion
+
+child 不能直接调用官方用户输入。它在发现缺参数、歧义或授权选择时，以
+`needs_input` 结束当前 assignment，返回问题 schema、业务原因和可选项。Root 通过官方
+`request_user_input` 收集答案后，Platform 创建一个带新参数快照的新 assignment；原
+assignment 不恢复成 running。
+
+Run Orchestrator 维护通用完成状态：
+
+```text
+prepared -> awaiting_children -> awaiting_synthesis
+         -> succeeded
+         -> partial | failed | rejected | cancelled | timeout | interrupted
+         -> orchestration_incomplete
+```
+
+所有 required child terminal 且交付合同满足后才进入 `awaiting_synthesis`。Root 过早结束
+时，Run Completion Controller 最多执行一次通用、有界、幂等的 synthesis 恢复，只要求
+读取当前 coordination 状态并完成综合，不能含仓网字段、映射数量或固定步骤。第二次仍
+未完成则返回 `orchestration_incomplete`，由 UI 提供恢复入口。Event Projector 只做幂等
+投影和广播，不能发送消息、调度 Agent 或 interrupt Turn。
+
+## 8. 通用 ToolOutcome 合同
+
+平台事件和 Web 不能认识 `network-case-tool-result.v1`。领域 Tool 只产生业务 outcome，
+Work State commit 由受信 SDK/Runner 完成；模型可见的统一结果为：
 
 ```json
 {
-  "schema": "platform-tool-result.v1",
-  "status": "completed",
+  "schema": "platform-tool-outcome.v1",
+  "status": "succeeded",
   "summary": "已生成时效优先基线",
-  "work_state": {
-    "id": "...",
-    "revision": 12,
-    "changed_components": ["baseline_assignment"]
-  },
-  "artifacts": [
-    {"artifact_id": "...", "type": "network_planning_report.v1"}
+  "references": [
+    {"type": "artifact_ref", "handle": "...", "schema": "network_planning_report.v1"}
   ],
-  "blocking_inputs": [],
+  "needs_input": null,
   "diagnostics": [],
   "page": null
 }
@@ -348,11 +427,13 @@ Agent 不应在消息中转发完整文件、矩阵、Tool schema inventory、�
 
 合同要求：
 
-- `status` 使用稳定枚举，不从正文判断成功；
+- `status` 使用 `succeeded | needs_input | failed | rejected | cancelled | timeout |
+  interrupted`，不从正文判断成功；
 - `summary`、diagnostics、列表和分页有统一上限；
-- 大型内容只返回引用；
+- 大型内容只返回 typed handle；
+- revision、operation ID、CAS、Run/Work State ID 不进入模型结果；
 - secret、路径、内部 request ID 和思维链永不进入结果；
-- timeout、unavailable、partial、failed 均有明确语义；
+- 原始失败 cause 安全保留，重试只能由幂等合同允许；
 - Web 只根据通用 envelope 和 Artifact renderer registry 投影卡片。
 
 领域可以在 `domain` 字段内返回受 schema 约束的有界扩展，但平台核心不得按领域
@@ -478,6 +559,9 @@ Ready -> Degraded | Unavailable
 - 新任务固定 installation snapshot，运行中发布新版本不改变已有任务；
 - Draft 可以连续保存，Release 不可变；开发者默认自动 patch，必要时由发布策略选择
   minor/major，而不是每次保存改版本。
+- 安装只能物化到目标 Profile generation；不得把 package 写入 Workspace 后冒充安装；
+- discovery 只能读取原子激活的 installation snapshot；不得扫描进程 cwd、Workspace、
+  source repository、文件存在或错误文本推断能力。
 
 不保留旧 package 的兼容读取。开发数据库和 Profile installation 可按文档化流程重建，
 启动路径不得猜测、修补或自动回退到旧版本。
@@ -523,7 +607,7 @@ scope：
 | case identity/revision/operation/dependency/readiness | Platform Work State |
 | case_sources、文件 revision、mapping state | Platform Data Intake，删除领域副本 |
 | demand/warehouse/route/cost/assignment/scenario | Supply Chain domain schema/payload |
-| `network-case-tool-result.v1` | `platform-tool-result.v1` |
+| `network-case-tool-result.v1` | `platform-tool-outcome.v1` |
 | Root `get_network_case_status` | 通用 coordination + work-state read Tool |
 | Data/Network Agent | 用户可发布的 Agent Releases |
 | 中文仓网 Skills | 用户可发布的 Skill Releases |
@@ -546,6 +630,16 @@ scope：
 - 用 retry、mock、fallback 或旧协议双读掩盖安装、发现和执行失败；
 - 因开发环境可重建而在启动路径中自动篡改已应用迁移。
 
+### 16.1 当前最小可靠内核
+
+当前闭环只建设：一个 Catalog/Compiler、一个 Profile Installation、Runtime discovery、
+Assignment Grant、Root-only input、原子 ToolOutcome/Work State commit、Run Completion、
+bounded execution projection 和 typed handles。
+
+以下能力明确暂缓：微服务拆分、通用工作流引擎、Marketplace、自动 Agent 规划器、复杂
+trust score、Blackboard/Knowledge Ledger、多租户管理 UI 和任意依赖构建。它们不能成为
+Clean Spine 验收的前置条件。
+
 ## 17. 架构验收
 
 新架构只有同时满足以下证据才成立：
@@ -565,5 +659,5 @@ scope：
    明确退出条件；
 9. 两用户隔离矩阵通过后，才开放多用户产品入口。
 
-实施顺序、类和方法级任务见
+实施顺序、owner、类型化合同与删除门见
 [Agent 能力生命周期实施计划](agent-capability-lifecycle-plan.md)。

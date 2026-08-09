@@ -1,7 +1,11 @@
 # ADR-007：Workspace Dataset Release
 
-- 状态：Accepted
+- 状态：已被 [ADR-018](018-built-in-network-copilot-runtime-closure.md) 替代；下文仅保存
+  历史决定，不得作为当前实现合同
 - 日期：2026-07-29
+
+当前文件访问合同是经校验的 Workspace 相对路径；Platform 不建立 Dataset Release、
+数据身份或 typed resource resolver。本文其余内容仅保存历史背景。
 
 ## 背景
 

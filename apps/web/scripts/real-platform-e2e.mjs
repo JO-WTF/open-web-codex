@@ -127,30 +127,16 @@ async function createTaskAndRun(title) {
     method: "POST",
     body: {
       project_id: state.project.id,
+      workspace_id: state.workspace.id,
       title,
       model_provider: providerId,
       model,
     },
   });
-  const readiness = await api(
-    `/workspaces/${state.workspace.id}/run-readiness`,
-    {
-      method: "POST",
-      body: {
-        model_provider: providerId,
-        model,
-        supervisor_policy: null,
-        agent: null,
-      },
-    },
-  );
-  assert.notEqual(readiness.status, "blocked", JSON.stringify(readiness.checks));
   const response = await api(`/tasks/${task.id}/runs`, {
     method: "POST",
     body: {
       idempotency_key: `real-e2e-${crypto.randomUUID()}`,
-      readiness_fingerprint: readiness.evaluation_fingerprint,
-      workspace_id: state.workspace.id,
       fork_thread_id: null,
       fork_source_run_id: null,
     },

@@ -9,9 +9,7 @@ export type SettingsSection =
   | "open-apps"
   | "git"
   | "codex"
-  | "features"
-  | "agent-catalog"
-  | "supervisors";
+  | "features";
 
 export function useSettingsModalState() {
   const [settingsOpen, setSettingsOpen] = useState(false);

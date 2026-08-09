@@ -11,7 +11,6 @@ import type {
   RuntimeAgentActivity,
   RuntimeAgentExecution,
   RuntimeAgentProjection,
-  SupervisorPolicyBinding,
   ThreadHistoryTurn,
 } from "../../../browser/types";
 import { ModalShell } from "../../features/design-system/components/modal/ModalShell";
@@ -21,7 +20,6 @@ import TaskApprovalQueue, {
 
 type Props = {
   taskTitle: string;
-  policy: SupervisorPolicyBinding | null;
   agents: RuntimeAgentProjection[];
   activities?: RuntimeAgentActivity[];
   executions?: RuntimeAgentExecution[];
@@ -231,7 +229,6 @@ function reviewItemText(item: Record<string, unknown>): string {
 
 export default function SupervisorOverview({
   taskTitle,
-  policy,
   agents,
   activities = [],
   executions = [],
@@ -345,18 +342,9 @@ export default function SupervisorOverview({
           <ShieldCheck size={16} />
         </span>
         <div>
-          <strong>{policy?.display_name ?? "Agent collaboration"}</strong>
-          <span>
-            {policy
-              ? `Policy ${policy.policy_id} · ${policy.version}`
-              : "Runtime-owned Agent collaboration"}
-          </span>
+          <strong>Agent collaboration</strong>
+          <span>Runtime-owned Agent collaboration</span>
         </div>
-        {policy ? (
-          <span className={`web-supervisor-binding is-${policy.state}`}>
-            {policy.state}
-          </span>
-        ) : null}
       </div>
 
       {error ? (

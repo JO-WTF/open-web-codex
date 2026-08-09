@@ -2,21 +2,18 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use axum::body::{to_bytes, Body};
 use axum::http::{HeaderMap, Request, StatusCode};
 use axum::Router;
 use futures_util::{SinkExt, StreamExt};
-use open_web_codex_adapter::{fake::FakeCodexAdapter, CodexAdapter, ThreadStartMode};
+use open_web_codex_adapter::{fake::FakeCodexAdapter, CodexAdapter};
 use open_web_codex_approval_service::{ApprovalActor, ApprovalService};
 use open_web_codex_auth::hash_password;
 use open_web_codex_git_runtime::{GitRuntime, GitRuntimeConfig};
 use open_web_codex_platform_contracts::{ApprovalDecision, DecideApprovalRequest};
 use open_web_codex_platform_store::AppState;
 use open_web_codex_provider_service::secured::InMemoryAuthorizedProviderService;
-use open_web_codex_run_orchestrator::{
-    RunLease, RunOrchestrator, RunStartPreflight, RunStartPreflightError,
-};
+use open_web_codex_run_orchestrator::RunOrchestrator;
 use open_web_codex_secret_store::{PostgresSecretStore, SecretCipher};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -28,17 +25,414 @@ use uuid::Uuid;
 use crate::ensure_transitional_profile_binding;
 use crate::routes::{self, RuntimeProfileBinding};
 
-/// Test composition must opt into a preflight explicitly; production has no
-/// default/no-op path.
-struct TestStartPreflight;
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL pointing at a disposable PostgreSQL database"]
+async fn task_creation_binds_only_an_authorized_project_workspace() {
+    let database_url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL");
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&database_url)
+        .await
+        .expect("connect disposable PostgreSQL database");
+    open_web_codex_platform_store::migrate::run(&pool)
+        .await
+        .expect("migrate database");
+    for retired_table in [
+        "data_intake_sessions",
+        "data_intake_input_requests",
+        "workspace_data_drafts",
+        "workspace_data_source_assets",
+        "workspace_dataset_releases",
+        "workspace_dataset_release_files",
+        "task_dataset_bindings",
+        "task_analysis_execution_snapshots",
+        "task_intake_artifact_projections",
+        "task_policy_agent_producers",
+        "agent_release_dataset_dependencies",
+        "capability_catalog_installation_events",
+        "capability_catalog_installations",
+        "capability_catalog_release_dependencies",
+        "capability_catalog_releases",
+        "capability_catalog_drafts",
+        "agent_run_bindings",
+        "agent_run_snapshots",
+        "supervisor_release_agent_dependencies",
+        "agent_release_capability_package_dependencies",
+        "agent_definition_releases",
+        "agent_definition_revisions",
+        "agent_definitions",
+        "workspace_capability_package_releases",
+        "supervisor_instruction_policy_releases",
+        "work_operation_inputs",
+        "work_operation_outputs",
+        "work_state_events",
+        "work_deliverables",
+        "work_blocking_inputs",
+        "work_component_dependencies",
+        "work_components",
+        "work_operations",
+        "work_states",
+        "work_state_definitions",
+        "supervisor_policy_bindings",
+        "supervisor_run_continuations",
+        "supervisor_policy_snapshots",
+        "supervisor_releases",
+        "supervisor_revisions",
+        "supervisor_definitions",
+        "profile_capabilities",
+    ] {
+        let relation: Option<String> = sqlx::query_scalar("SELECT to_regclass($1)::text")
+            .bind(retired_table)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(relation, None, "retired table remains: {retired_table}");
+    }
+    for retained_table in [
+        "provider_call_metrics",
+        "runtime_agent_projections",
+        "runtime_agent_execution_projections",
+    ] {
+        let relation: Option<String> = sqlx::query_scalar("SELECT to_regclass($1)::text")
+            .bind(retained_table)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            relation.as_deref(),
+            Some(retained_table),
+            "retained table is missing: {retained_table}"
+        );
+    }
+    for (table, column) in [
+        ("workspaces", "source_revision"),
+        ("artifacts", "intake_envelope"),
+        ("provider_call_metrics", "stable_prefix_sha256"),
+        ("provider_call_metrics", "tool_inventory_sha256"),
+        ("provider_call_metrics", "skill_set_sha256"),
+        ("provider_call_metrics", "runtime_role_sha256"),
+    ] {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM information_schema.columns \
+             WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2",
+        )
+        .bind(table)
+        .bind(column)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 0, "retired column remains: {table}.{column}");
+    }
+    let runtime_key = "task-workspace-test-profile";
+    let profile = RuntimeProfileBinding {
+        runtime_key: runtime_key.to_string(),
+        name: "Task Workspace Test Profile".to_string(),
+        codex_home: None,
+    };
+    let runner_root = tempfile::tempdir().expect("runner root");
+    let git = Arc::new(
+        GitRuntime::new(GitRuntimeConfig::new(runner_root.path()).with_local_sources())
+            .expect("Git runtime"),
+    );
+    let adapter = Arc::new(FakeCodexAdapter::new().with_demo_workspace().await);
+    let orchestrator = Arc::new(
+        RunOrchestrator::new(
+            pool.clone(),
+            git.clone(),
+            adapter.clone(),
+            runtime_key,
+            "task-workspace-test-worker",
+            std::time::Duration::from_secs(30),
+        )
+        .expect("Run orchestrator"),
+    );
+    let app = Router::new()
+        .nest(
+            "/api",
+            routes::router(
+                adapter,
+                Arc::new(InMemoryAuthorizedProviderService::default()),
+                Arc::new(ApprovalService::new(pool.clone(), runtime_key)),
+                git.clone(),
+                orchestrator,
+                Arc::new(PostgresSecretStore::new(
+                    pool.clone(),
+                    SecretCipher::generate("task-workspace-test-v1").expect("test Secret cipher"),
+                )),
+                profile,
+            ),
+        )
+        .with_state(AppState::new(pool.clone()));
 
-#[async_trait]
-impl RunStartPreflight for TestStartPreflight {
-    async fn prepare_runtime_start(
-        &self,
-        _lease: &RunLease,
-    ) -> Result<ThreadStartMode, RunStartPreflightError> {
-        Ok(ThreadStartMode::Standard)
+    let bootstrap = call(
+        &app,
+        Request::post("/api/bootstrap")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "name": "Task Workspace Owner",
+                    "username": "task-workspace-owner",
+                    "email": "task-workspace@example.invalid",
+                    "password": "task-workspace-password"
+                })
+                .to_string(),
+            ))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(bootstrap.0, StatusCode::OK);
+    let token = bootstrap.1["session_token"].as_str().unwrap();
+    let user_id = Uuid::parse_str(bootstrap.1["user"]["id"].as_str().unwrap()).unwrap();
+    let organization_id =
+        Uuid::parse_str(bootstrap.1["organization"]["id"].as_str().unwrap()).unwrap();
+
+    let missing_task_run = call(
+        &app,
+        authenticated_json(
+            "POST",
+            &format!("/api/tasks/{}/runs", Uuid::now_v7()),
+            token,
+            json!({
+                "idempotency_key": "missing-task-run"
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(missing_task_run.0, StatusCode::CONFLICT);
+    assert_eq!(missing_task_run.1["kind"], "workspace_unavailable");
+    assert_eq!(missing_task_run.1["message"], "task_workspace_unavailable");
+
+    let profile_id: Uuid = sqlx::query_scalar("SELECT id FROM profiles WHERE runtime_key = $1")
+        .bind(runtime_key)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let project = call(
+        &app,
+        authenticated_json(
+            "POST",
+            "/api/projects",
+            token,
+            json!({"name": "Bound Project", "git_url": "https://example.invalid/bound.git"}),
+        ),
+    )
+    .await;
+    assert_eq!(project.0, StatusCode::OK);
+    let project_id = Uuid::parse_str(project.1["id"].as_str().unwrap()).unwrap();
+    let workspace_id = Uuid::now_v7();
+    let workspace_root = git.workspace_path(workspace_id);
+    std::fs::create_dir(&workspace_root).unwrap();
+    fixture_git(&workspace_root, &["init", "-b", "main"]);
+    sqlx::query(
+        "INSERT INTO workspaces \
+         (id, organization_id, project_id, profile_id, created_by, kind, name, root_path, source_ref, state) \
+         VALUES ($1, $2, $3, $4, $5, 'main', 'Authorized Workspace', $6, 'main', 'ready')",
+    )
+    .bind(workspace_id)
+    .bind(organization_id)
+    .bind(project_id)
+    .bind(profile_id)
+    .bind(user_id)
+    .bind(workspace_root.to_string_lossy().as_ref())
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let create = |project_id: Uuid, title: &'static str| {
+        authenticated_json(
+            "POST",
+            "/api/tasks",
+            token,
+            json!({
+                "project_id": project_id,
+                "workspace_id": workspace_id,
+                "title": title
+            }),
+        )
+    };
+    assert_eq!(
+        call(&app, create(project_id, "No Grant")).await.0,
+        StatusCode::NOT_FOUND
+    );
+
+    sqlx::query(
+        "INSERT INTO workspace_grants \
+         (workspace_id, organization_id, user_id, profile_id, role) \
+         VALUES ($1, $2, $3, $4, 'owner')",
+    )
+    .bind(workspace_id)
+    .bind(organization_id)
+    .bind(user_id)
+    .bind(profile_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let other_project = call(
+        &app,
+        authenticated_json(
+            "POST",
+            "/api/projects",
+            token,
+            json!({"name": "Other Project", "git_url": "https://example.invalid/other.git"}),
+        ),
+    )
+    .await;
+    let other_project_id = Uuid::parse_str(other_project.1["id"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        call(&app, create(other_project_id, "Wrong Project"))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+
+    let created = call(&app, create(project_id, "Authorized Task")).await;
+    assert_eq!(created.0, StatusCode::OK);
+    assert_eq!(created.1["workspace_id"], workspace_id.to_string());
+    assert!(created.1.get("root_path").is_none());
+    let task_id = created.1["id"].as_str().unwrap();
+    let loaded = call(
+        &app,
+        authenticated("GET", &format!("/api/tasks/{task_id}"), token),
+    )
+    .await;
+    assert_eq!(loaded.0, StatusCode::OK);
+    assert_eq!(loaded.1["workspace_id"], workspace_id.to_string());
+
+    let retired_run_contract = app
+        .clone()
+        .oneshot(authenticated_json(
+            "POST",
+            &format!("/api/tasks/{task_id}/runs"),
+            token,
+            json!({
+                "idempotency_key": "retired-run-contract",
+                "readiness_fingerprint": "retired"
+            }),
+        ))
+        .await
+        .expect("retired Run contract response");
+    assert_eq!(
+        retired_run_contract.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+
+    let second = call(&app, create(project_id, "Second Shared-Workspace Task")).await;
+    assert_eq!(second.0, StatusCode::OK);
+    let second_task_id = Uuid::parse_str(second.1["id"].as_str().unwrap()).unwrap();
+    let task_workspaces = sqlx::query_scalar::<_, Uuid>(
+        "SELECT workspace_id FROM tasks WHERE id = ANY($1) ORDER BY id",
+    )
+    .bind(vec![Uuid::parse_str(task_id).unwrap(), second_task_id])
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(task_workspaces, vec![workspace_id, workspace_id]);
+
+    let shared_path = "shared/planning-input.csv";
+    let shared_bytes = b"city_id,demand_quantity\n3171,10\n";
+    git.write_file(workspace_id, shared_path, shared_bytes, false)
+        .await
+        .expect("write ordinary shared Workspace file");
+    assert!(matches!(
+        git.write_file(workspace_id, shared_path, b"replacement", false)
+            .await,
+        Err(open_web_codex_git_runtime::GitRuntimeError::FileAlreadyExists(path))
+            if path == shared_path
+    ));
+    let shared = call(
+        &app,
+        authenticated(
+            "GET",
+            &format!(
+                "/api/workspaces/{workspace_id}/files/content?path=shared%2Fplanning-input.csv"
+            ),
+            token,
+        ),
+    )
+    .await;
+    assert_eq!(shared.0, StatusCode::OK);
+    assert_eq!(
+        shared.1["content"].as_str(),
+        Some(String::from_utf8_lossy(shared_bytes).as_ref())
+    );
+
+    let task_file_api = app
+        .clone()
+        .oneshot(authenticated(
+            "GET",
+            &format!("/api/tasks/{second_task_id}/files"),
+            token,
+        ))
+        .await;
+    assert_eq!(task_file_api.unwrap().status(), StatusCode::NOT_FOUND);
+
+    for retired_route in [
+        "/api/agent-definitions",
+        "/api/agent-definition-resources",
+        "/api/capability-packages",
+        "/api/supervisor-definitions",
+        "/api/supervisor-instruction-policies",
+        "/api/supervisor-policies",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(authenticated("GET", retired_route, token))
+            .await
+            .expect("retired catalog route response");
+        assert_eq!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "retired route remains: {retired_route}"
+        );
+    }
+    let retired_python_route =
+        format!("/api/workspaces/{workspace_id}/python-capabilities/validate");
+    for retired_route in ["/api/catalog/drafts", retired_python_route.as_str()] {
+        let response = app
+            .clone()
+            .oneshot(authenticated_json("POST", retired_route, token, json!({})))
+            .await
+            .expect("retired authoring route response");
+        assert_eq!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "retired route remains: {retired_route}"
+        );
+    }
+
+    let boundary = "slice2-workspace-upload";
+    let multipart = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"batch-one.csv\"\r\nContent-Type: text/csv\r\n\r\none\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"batch-two.csv\"\r\nContent-Type: text/csv\r\n\r\ntwo\r\n--{boundary}--\r\n"
+    );
+    let multi_file_upload = call(
+        &app,
+        Request::post(format!("/api/workspaces/{workspace_id}/files"))
+            .header("authorization", format!("Bearer {token}"))
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(Body::from(multipart))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(multi_file_upload.0, StatusCode::BAD_REQUEST);
+    assert!(!workspace_root.join("batch-one.csv").exists());
+    assert!(!workspace_root.join("batch-two.csv").exists());
+
+    for escaped in ["%2Fetc%2Fpasswd", "..%2Foutside.csv"] {
+        let response = app
+            .clone()
+            .oneshot(authenticated(
+                "GET",
+                &format!("/api/workspaces/{workspace_id}/files/content?path={escaped}"),
+                token,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }
 
@@ -59,7 +453,6 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
         runtime_key: "security-test-profile".to_string(),
         name: "Security Test Profile".to_string(),
         codex_home: None,
-        capabilities: routes::RuntimeCapabilityState::default(),
     };
     let state = AppState::new(pool.clone());
     let approval_service = Arc::new(ApprovalService::new(pool.clone(), "security-test-profile"));
@@ -74,7 +467,6 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
             pool.clone(),
             git.clone(),
             adapter.clone(),
-            Arc::new(TestStartPreflight),
             "security-test-profile",
             "security-test-worker",
             std::time::Duration::from_secs(30),
@@ -183,16 +575,6 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
 
     let first_task_id = Uuid::now_v7();
     let first_run_id = Uuid::now_v7();
-    sqlx::query(
-        "INSERT INTO tasks (id, organization_id, project_id, title) \
-         VALUES ($1, $2, $3, 'Approval Task')",
-    )
-    .bind(first_task_id)
-    .bind(first_organization_id)
-    .bind(Uuid::parse_str(&first_project_id).unwrap())
-    .execute(&pool)
-    .await
-    .unwrap();
     let source = runner_root.path().join("image-source");
     std::fs::create_dir(&source).unwrap();
     fixture_git(&source, &["init", "-b", "main"]);
@@ -243,6 +625,7 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     .execute(&pool)
     .await
     .unwrap();
+
     sqlx::query(
         "INSERT INTO workspace_grants \
          (workspace_id, organization_id, user_id, profile_id, role) \
@@ -255,117 +638,28 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     .execute(&pool)
     .await
     .unwrap();
-
-    let tutorial_install = call(
-        &app,
-        authenticated_json(
-            "POST",
-            &format!(
-                "/api/workspaces/{workspace_id}/tutorial-blueprints/indonesia-warehouse-network/1.5.0/reconcile"
-            ),
-            &first_token,
-            json!({"idempotency_key": "security-tutorial-install-one"}),
-        ),
+    sqlx::query(
+        "INSERT INTO tasks (id, organization_id, project_id, workspace_id, title) \
+         VALUES ($1, $2, $3, $4, 'Approval Task')",
     )
-    .await;
-    assert_eq!(tutorial_install.0, StatusCode::OK);
-    assert_eq!(tutorial_install.1["status"], "installed");
-    assert_eq!(
-        tutorial_install.1["agent_releases"]
-            .as_array()
-            .map(Vec::len),
-        Some(3)
-    );
-    let tutorial_reconcile = call(
-        &app,
-        authenticated_json(
-            "POST",
-            &format!(
-                "/api/workspaces/{workspace_id}/tutorial-blueprints/indonesia-warehouse-network/1.5.0/reconcile"
-            ),
-            &first_token,
-            json!({"idempotency_key": "security-tutorial-install-two"}),
-        ),
-    )
-    .await;
-    assert_eq!(tutorial_reconcile.0, StatusCode::OK);
-    assert_eq!(tutorial_reconcile.1["status"], "installed");
-    assert_eq!(
-        tutorial_reconcile.1["dataset_release"]["id"],
-        tutorial_install.1["dataset_release"]["id"]
-    );
-    assert_eq!(
-        tutorial_reconcile.1["supervisor_release"]["id"],
-        tutorial_install.1["supervisor_release"]["id"]
-    );
-    let tutorial_dataset_release_id = Uuid::parse_str(
-        tutorial_install.1["dataset_release"]["id"]
-            .as_str()
-            .expect("Tutorial Dataset Release id"),
-    )
-    .expect("Tutorial Dataset Release UUID");
-    let tutorial_dataset_content_sha256 = tutorial_install.1["dataset_release"]["content_sha256"]
-        .as_str()
-        .expect("Tutorial Dataset Release digest")
-        .to_string();
-    sqlx::query("UPDATE workspace_dataset_releases SET content_sha256 = $1 WHERE id = $2")
-        .bind("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
-        .bind(tutorial_dataset_release_id)
-        .execute(&pool)
-        .await
-        .unwrap();
-    let tutorial_conflict = call(
-        &app,
-        authenticated_json(
-            "POST",
-            &format!(
-                "/api/workspaces/{workspace_id}/tutorial-blueprints/indonesia-warehouse-network/1.5.0/reconcile"
-            ),
-            &first_token,
-            json!({"idempotency_key": "security-tutorial-install-conflict"}),
-        ),
-    )
-    .await;
-    assert_eq!(tutorial_conflict.0, StatusCode::OK);
-    assert_eq!(tutorial_conflict.1["status"], "partial");
-    assert_eq!(
-        tutorial_conflict.1["issues"][0]["code"],
-        "dataset_release_conflict"
-    );
-    sqlx::query("UPDATE workspace_dataset_releases SET content_sha256 = $1 WHERE id = $2")
-        .bind(tutorial_dataset_content_sha256)
-        .bind(tutorial_dataset_release_id)
-        .execute(&pool)
-        .await
-        .unwrap();
-    let tutorial_recovered = call(
-        &app,
-        authenticated_json(
-            "POST",
-            &format!(
-                "/api/workspaces/{workspace_id}/tutorial-blueprints/indonesia-warehouse-network/1.5.0/reconcile"
-            ),
-            &first_token,
-            json!({"idempotency_key": "security-tutorial-install-recovered"}),
-        ),
-    )
-    .await;
-    assert_eq!(tutorial_recovered.0, StatusCode::OK);
-    assert_eq!(tutorial_recovered.1["status"], "installed");
-    assert_eq!(
-        tutorial_recovered.1["dataset_release"]["id"],
-        tutorial_install.1["dataset_release"]["id"]
-    );
+    .bind(first_task_id)
+    .bind(first_organization_id)
+    .bind(Uuid::parse_str(&first_project_id).unwrap())
+    .bind(workspace_id)
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let completed_followup_task_id = Uuid::now_v7();
     let completed_followup_run_id = Uuid::now_v7();
     sqlx::query(
-        "INSERT INTO tasks (id, organization_id, project_id, created_by, title, status) \
-         VALUES ($1, $2, $3, $4, 'Completed Followup Task', 'completed')",
+        "INSERT INTO tasks (id, organization_id, project_id, workspace_id, created_by, title, status) \
+         VALUES ($1, $2, $3, $4, $5, 'Completed Followup Task', 'completed')",
     )
     .bind(completed_followup_task_id)
     .bind(first_organization_id)
     .bind(Uuid::parse_str(&first_project_id).unwrap())
+    .bind(workspace_id)
     .bind(first_user_id)
     .execute(&pool)
     .await
@@ -428,18 +722,6 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     .execute(&pool)
     .await
     .unwrap();
-    let standard_run_policy = call(
-        &app,
-        authenticated(
-            "GET",
-            &format!("/api/runs/{first_run_id}/supervisor-policy"),
-            &first_token,
-        ),
-    )
-    .await;
-    assert_eq!(standard_run_policy.0, StatusCode::OK);
-    assert!(standard_run_policy.1.is_null());
-
     let artifact_id = Uuid::now_v7();
     let artifact_bytes = br#"{"type":"FeatureCollection","features":[]}"#;
     let artifact_digest = hex::encode(Sha256::digest(artifact_bytes));
@@ -732,6 +1014,21 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     .execute(&pool)
     .await
     .unwrap();
+    sqlx::query(
+        "INSERT INTO runtime_agent_execution_projections (
+            organization_id, profile_id, workspace_id, root_run_id, agent_thread_id,
+            turn_id, ordinal, task, display_title, status, current_behavior,
+            first_observed_sequence, last_observed_sequence
+         ) VALUES ($1, $2, $3, $4, 'approval-child-thread', 'child-turn-1', 1,
+                   'Prepare data', 'Data Agent', 'waiting', 'Waiting for input', 1, 1)",
+    )
+    .bind(first_organization_id)
+    .bind(profile_id)
+    .bind(workspace_id)
+    .bind(first_run_id)
+    .execute(&pool)
+    .await
+    .unwrap();
     let child_approval_id = approval_service
         .capture_message(
             runtime_instance_id,
@@ -741,13 +1038,25 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
                 "params": {
                     "threadId": "approval-child-thread",
                     "turnId": "child-turn-1",
+                    "serverName": "supply_chain_data",
                     "mode": "form",
+                    "message": "Provide the route method and detour factor.",
                     "requestedSchema": {
                         "type": "object",
                         "properties": {
-                            "confirmed": { "type": "boolean" }
+                            "method": {
+                                "type": "string",
+                                "enum": ["curve", "navigation"],
+                                "default": "curve"
+                            },
+                            "factor": {
+                                "type": "number",
+                                "minimum": 1.0,
+                                "maximum": 2.0,
+                                "default": 1.2
+                            }
                         },
-                        "required": ["confirmed"]
+                        "required": ["method", "factor"]
                     }
                 }
             }),
@@ -761,31 +1070,53 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
         .await
         .unwrap();
     assert_eq!(child_run_id, first_run_id);
-    let child_dispatch = approval_service
-        .begin_decision(
-            ApprovalActor {
-                user_id: first_user_id,
-                organization_id: first_organization_id,
-            },
-            child_approval_id,
-            runtime_instance_id,
-            DecideApprovalRequest {
-                decision: ApprovalDecision::Accept,
-                version: 0,
-            },
-        )
-        .await
-        .expect("begin child Thread approval delivery");
-    approval_service
-        .complete_decision(
-            ApprovalActor {
-                user_id: first_user_id,
-                organization_id: first_organization_id,
-            },
-            &child_dispatch,
-        )
-        .await
-        .expect("complete child Thread approval");
+    let generic_pending = call(&app, authenticated("GET", "/api/approvals", &first_token)).await;
+    assert!(!generic_pending
+        .1
+        .to_string()
+        .contains(&child_approval_id.to_string()));
+    let child_forms = call(
+        &app,
+        authenticated(
+            "GET",
+            &format!("/api/runs/{first_run_id}/mcp-form-requests"),
+            &first_token,
+        ),
+    )
+    .await;
+    assert_eq!(child_forms.0, StatusCode::OK);
+    assert_eq!(child_forms.1[0]["id"], child_approval_id.to_string());
+    assert_eq!(child_forms.1[0]["source"]["kind"], "agent");
+    assert_eq!(child_forms.1[0]["source"]["displayTitle"], "Data Agent");
+    assert_eq!(child_forms.1[0]["fields"].as_array().unwrap().len(), 2);
+    assert!(!child_forms.1.to_string().contains("requestedSchema"));
+    assert!(!child_forms.1.to_string().contains("approval-child-thread"));
+    let accepted_child_form = call(
+        &app,
+        authenticated_json(
+            "POST",
+            &format!("/api/approvals/{child_approval_id}/mcp-form"),
+            &first_token,
+            json!({
+                "action": "accept",
+                "content": { "method": "navigation", "factor": 1.35 },
+                "version": 0
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(accepted_child_form.0, StatusCode::NO_CONTENT);
+    let child_audit: Value = sqlx::query_scalar(
+        "SELECT metadata FROM audit_log WHERE target_id = $1 AND action = 'approval.decide'",
+    )
+    .bind(child_approval_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(child_audit["action"], "accept");
+    assert_eq!(child_audit["fieldCount"], 2);
+    assert!(!child_audit.to_string().contains("navigation"));
+    assert!(!child_audit.to_string().contains("1.35"));
 
     let retry_approval_id = approval_service
         .capture_message(
@@ -908,6 +1239,51 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     .execute(&pool)
     .await
     .unwrap();
+    let argon_login = call(
+        &app,
+        Request::post("/api/sessions")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "username": "second-owner",
+                    "password": "second-password",
+                })
+                .to_string(),
+            ))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(argon_login.0, StatusCode::OK);
+
+    let legacy_password_hash = "a".repeat(64);
+    sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
+        .bind(&legacy_password_hash)
+        .bind(second_user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let legacy_login = call(
+        &app,
+        Request::post("/api/sessions")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "username": "second-owner",
+                    "password": "second-password",
+                })
+                .to_string(),
+            ))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(legacy_login.0, StatusCode::UNAUTHORIZED);
+    let stored_legacy_password_hash: String =
+        sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1")
+            .bind(second_user_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored_legacy_password_hash, legacy_password_hash);
     sqlx::query(
         "INSERT INTO sessions (user_id, organization_id, token_hash, expires_at) \
          VALUES ($1, $2, $3, now() + interval '1 hour')",
@@ -957,19 +1333,37 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     )
     .await;
     assert_eq!(cross_tenant_asset.0, StatusCode::NOT_FOUND);
-    let cross_tenant_tutorial_install = call(
+    let cross_tenant_file_list = call(
         &app,
-        authenticated_json(
-            "POST",
-            &format!(
-                "/api/workspaces/{workspace_id}/tutorial-blueprints/indonesia-warehouse-network/1.5.0/reconcile"
-            ),
+        authenticated(
+            "GET",
+            &format!("/api/workspaces/{workspace_id}/files"),
             second_token,
-            json!({"idempotency_key": "cross-tenant-tutorial-install"}),
         ),
     )
     .await;
-    assert_eq!(cross_tenant_tutorial_install.0, StatusCode::NOT_FOUND);
+    assert_eq!(cross_tenant_file_list.0, StatusCode::NOT_FOUND);
+    let cross_tenant_file_read = call(
+        &app,
+        authenticated(
+            "GET",
+            &format!("/api/workspaces/{workspace_id}/files/content?path=icon.png"),
+            second_token,
+        ),
+    )
+    .await;
+    assert_eq!(cross_tenant_file_read.0, StatusCode::NOT_FOUND);
+    let cross_tenant_file_delete = call(
+        &app,
+        authenticated_json(
+            "DELETE",
+            &format!("/api/workspaces/{workspace_id}/files"),
+            second_token,
+            json!({ "path": "icon.png" }),
+        ),
+    )
+    .await;
+    assert_eq!(cross_tenant_file_delete.0, StatusCode::NOT_FOUND);
     let cross_tenant_artifact = call(
         &app,
         authenticated(
@@ -980,16 +1374,6 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     )
     .await;
     assert_eq!(cross_tenant_artifact.0, StatusCode::NOT_FOUND);
-    let cross_tenant_supervisor_policy = call(
-        &app,
-        authenticated(
-            "GET",
-            &format!("/api/runs/{first_run_id}/supervisor-policy"),
-            second_token,
-        ),
-    )
-    .await;
-    assert_eq!(cross_tenant_supervisor_policy.0, StatusCode::NOT_FOUND);
     let cross_tenant_agent_executions = call(
         &app,
         authenticated(
@@ -1000,6 +1384,27 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     )
     .await;
     assert_eq!(cross_tenant_agent_executions.0, StatusCode::NOT_FOUND);
+    let cross_tenant_mcp_forms = call(
+        &app,
+        authenticated(
+            "GET",
+            &format!("/api/runs/{first_run_id}/mcp-form-requests"),
+            second_token,
+        ),
+    )
+    .await;
+    assert_eq!(cross_tenant_mcp_forms.0, StatusCode::NOT_FOUND);
+    let cross_tenant_mcp_form_response = call(
+        &app,
+        authenticated_json(
+            "POST",
+            &format!("/api/approvals/{child_approval_id}/mcp-form"),
+            second_token,
+            json!({ "action": "cancel", "version": 2 }),
+        ),
+    )
+    .await;
+    assert_eq!(cross_tenant_mcp_form_response.0, StatusCode::NOT_FOUND);
     let cross_tenant_agent_history = call(
         &app,
         authenticated(
@@ -1160,7 +1565,12 @@ async fn call(app: &Router, request: Request<Body>) -> (StatusCode, Value) {
     let value = if body.is_empty() {
         Value::Null
     } else {
-        serde_json::from_slice(&body).expect("JSON response")
+        serde_json::from_slice(&body).unwrap_or_else(|error| {
+            panic!(
+                "JSON response for status {status} ({error}): {}",
+                String::from_utf8_lossy(&body)
+            )
+        })
     };
     (status, value)
 }
@@ -1175,7 +1585,12 @@ async fn call_with_headers(app: &Router, request: Request<Body>) -> (StatusCode,
     let value = if body.is_empty() {
         Value::Null
     } else {
-        serde_json::from_slice(&body).expect("JSON response")
+        serde_json::from_slice(&body).unwrap_or_else(|error| {
+            panic!(
+                "JSON response for status {status} ({error}): {}",
+                String::from_utf8_lossy(&body)
+            )
+        })
     };
     (status, headers, value)
 }

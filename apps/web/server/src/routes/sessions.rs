@@ -4,7 +4,7 @@ use axum::{
     response::AppendHeaders,
     Json,
 };
-use open_web_codex_auth::{hash_password, needs_rehash, verify_password_or_dummy};
+use open_web_codex_auth::verify_password_or_dummy;
 use open_web_codex_platform_contracts::error::PlatformError;
 use open_web_codex_platform_contracts::{
     LoginRequest, LoginResponse, Organization, SelectOrganizationRequest, SessionOrganization, User,
@@ -144,21 +144,6 @@ pub async fn create_session(
             )),
         )
     })?;
-
-    let existing_hash: String = user.get("password_hash");
-    if needs_rehash(&existing_hash) {
-        let password = req.password.clone();
-        let replacement = tokio::task::spawn_blocking(move || hash_password(&password))
-            .await
-            .map_err(|_| internal_password_error())?
-            .map_err(|_| internal_password_error())?;
-        sqlx::query("UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2")
-            .bind(replacement)
-            .bind(user_id)
-            .execute(&state.db)
-            .await
-            .map_err(internal_database_error)?;
-    }
 
     let session_token: String = rand::thread_rng()
         .sample_iter(&rand::distributions::Alphanumeric)

@@ -36,6 +36,7 @@ export type Project = {
 export type Task = {
   id: string;
   project_id: string;
+  workspace_id: string;
   title: string;
   status: string;
   model_provider: string | null;
@@ -51,7 +52,7 @@ export type Run = {
   failure_code: RunFailureCode | null;
   codex_thread_id: string | null;
   active_turn_id: string | null;
-  workspace_id: string | null;
+  workspace_id: string;
   attempt: number;
   created_at: string;
   updated_at: string;
@@ -64,593 +65,11 @@ export type RunFailureCode =
   | "lease_lost"
   | "database_error"
   | "git_workspace_error"
-  | "runtime_start_preflight_failed"
   | "codex_unavailable"
   | "run_cancelled"
   | "interrupt_failed"
   | "lease_expired"
   | "unknown_failure";
-
-export type SupervisorPolicySelection = {
-  policy_id: string;
-  version: string;
-};
-
-export type AgentRunSelection = {
-  definition_id: string;
-  version: string;
-  release_id: string | null;
-};
-
-export type RunReadinessRequest = {
-  model_provider: string;
-  model: string;
-  supervisor_policy: SupervisorPolicySelection | null;
-  supervisor_draft_id?: string | null;
-  agent: AgentRunSelection | null;
-  fork_thread_id?: string | null;
-  fork_source_run_id?: string | null;
-  purpose?: "conversation" | "analysis";
-  task_id?: string | null;
-};
-
-export type TaskAnalysisReadinessRequest = RunReadinessRequest & {
-  workspace_id: string;
-};
-
-export type RunReadinessStatus = "ready" | "degraded" | "blocked";
-
-export type RunReadinessCheckCode =
-  | "runtime_profile"
-  | "provider_model"
-  | "execution_definition"
-  | "workspace_dependencies"
-  | "runtime_capabilities"
-  | "mcp_servers"
-  | "map_presentation"
-  | "data_intake";
-
-export type RunReadinessAction =
-  | "open_workspace_data"
-  | "open_agent_studio"
-  | "open_provider_settings"
-  | "open_mcp_status"
-  | "open_maps_settings"
-  | "retry";
-
-export type RunReadinessCheck = {
-  code: RunReadinessCheckCode;
-  status: RunReadinessStatus;
-  message: string;
-  action: RunReadinessAction | null;
-};
-
-export type RunReadiness = {
-  status: RunReadinessStatus;
-  evaluation_fingerprint: string;
-  checks: RunReadinessCheck[];
-  scope?: "thread" | "analysis";
-  thread_status?: RunReadinessStatus;
-  input_status?: RunReadinessStatus;
-  analysis_status?: RunReadinessStatus;
-};
-
-export type DataRequirementField = {
-  name: string;
-  displayName: string;
-  dataType: string;
-  unit: string | null;
-  granularity: string | null;
-  required: boolean;
-  derivable: boolean;
-};
-
-export type DataRequirementEntity = {
-  name: string;
-  displayName: string;
-  requiredFields: DataRequirementField[];
-  conditional: string | null;
-};
-
-export type DataRequirementParameter = {
-  name: string;
-  displayName: string;
-  dataType: string;
-  unit: string | null;
-  required: boolean;
-  description: string;
-};
-
-export type DataRequirementContract = {
-  contractId: string;
-  version: string;
-  contentSha256: string;
-  displayName: string;
-  description: string;
-  requiredEntities: DataRequirementEntity[];
-  businessParameters: DataRequirementParameter[];
-};
-
-export type DataIntakeStatus =
-  | "active"
-  | "ready"
-  | "failed"
-  | "cancelled";
-
-export type DataIntakeGap = {
-  code: string;
-  path: string;
-  message: string;
-  required: boolean;
-};
-
-export type DataMappingCandidate = {
-  sourceAssetId: string | null;
-  sourceRef?: string | null;
-  sourceDisplayName?: string | null;
-  sourcePath: string;
-  sourceField: string;
-  targetEntity: string;
-  targetField: string;
-  sourceUnit?: string | null;
-  targetUnit?: string | null;
-  transformation?: string | null;
-  conflict?: string | null;
-  confidence: number;
-  reason: string;
-  requiresConfirmation: boolean;
-};
-
-export type DataIntakeParameterAnswer = {
-  name: string;
-  value: unknown;
-  unit: string | null;
-  source: string;
-};
-
-export type SourceAssetSummary = {
-  assetId: string;
-  fileName: string;
-  mediaType: string;
-  byteSize: number;
-};
-
-export type DataIntakeResponseRequest = {
-  requestId: string;
-  expectedSessionRevision: number;
-  idempotencyKey: string;
-  response: unknown;
-};
-
-export type AnalysisStartRequest = {
-  requestId: string;
-  expectedSessionRevision: number;
-  readinessFingerprint: string;
-  idempotencyKey: string;
-};
-
-export type AnalysisStartResponse = {
-  executionSnapshotId: string;
-  taskDatasetBindingId: string;
-  readinessFingerprint: string;
-  state: string;
-};
-
-export type WorkspaceDataDraftSummary = {
-  draftId: string;
-  workspaceId: string;
-  revision: number;
-  assets: SourceAssetSummary[];
-};
-
-export type DataIntakeSessionSummary = {
-  intakeId: string;
-  taskId: string;
-  workspaceId: string;
-  contract: DataRequirementContract;
-  status: DataIntakeStatus;
-  inputRevision: number;
-  mappingRevision: number;
-  gapFingerprint: string;
-  evidenceFingerprint: string;
-  gaps: DataIntakeGap[];
-  candidates: DataMappingCandidate[];
-  confirmedMapping: DataMappingCandidate[];
-  parameters: DataRequirementParameter[];
-  answers: DataIntakeParameterAnswer[];
-  attemptCount: number;
-  failureCode: string | null;
-  failureSummary: string | null;
-  inputRequests: DataIntakeInputRequest[];
-  requirementProfile: unknown | null;
-  sourceProfile: unknown | null;
-  mappingProposal: unknown | null;
-  readinessReview: unknown | null;
-};
-
-export type DataIntakeInputRequest = {
-  requestId: string;
-  taskId: string;
-  intakeId: string;
-  kind: string;
-  sessionRevision: number;
-  status: string;
-  prompt: string;
-  value: unknown;
-};
-
-export type SupervisorPolicySummary = SupervisorPolicySelection & {
-  display_name: string;
-  description: string;
-  source: "repository" | "user_release" | "draft";
-  draft_id?: string | null;
-};
-
-export type SupervisorInstructionPolicySelection = {
-  policy_id: string;
-  version: string;
-};
-
-export type SupervisorInstructionPolicySummary = SupervisorInstructionPolicySelection & {
-  release_id: string | null;
-  display_name: string;
-  description: string;
-  source: "repository" | "platform_release";
-  content_sha256: string;
-};
-
-export type SupervisorInstructionPolicyDetail = SupervisorInstructionPolicySummary & {
-  platform_instructions: string;
-};
-
-export type SupervisorInstructionPolicyPublishRequest = SupervisorInstructionPolicySelection & {
-  display_name: string;
-  description: string;
-  platform_instructions: string;
-};
-
-export type SupervisorPolicyBinding = SupervisorPolicySelection & {
-  run_id: string;
-  task_id: string;
-  thread_id: string | null;
-  display_name: string;
-  content_sha256: string;
-  state: "prepared" | "bound" | "failed" | "cancelled";
-  created_at: string;
-  bound_at: string | null;
-};
-
-export type AgentDefinitionSummary = {
-  source: "repository" | "user_release";
-  release_id: string | null;
-  definition_id: string;
-  version: string;
-  display_name: string;
-  description: string;
-  responsibilities: string[];
-  input_artifact_types: string[];
-  output_artifact_types: string[];
-  required_capabilities: string[];
-  capability_template: AgentCapabilityTemplateSelection | null;
-  dataset_releases: AgentDatasetReleaseBinding[];
-  required_workspace_id: string | null;
-};
-
-export type AgentDefinitionDetail = AgentDefinitionSummary & {
-  developer_instructions: string;
-  content_sha256: string;
-  execution_semantics_sha256: string;
-};
-
-export type CapabilityPackageSummary = {
-  release_id: string | null;
-  workspace_id: string | null;
-  package_id: string;
-  version: string;
-  display_name: string;
-  description: string;
-  capability_root_id: string;
-  capabilities: string[];
-  mcp_server_names: string[];
-  tool_names: string[];
-  input_artifact_types: string[];
-  output_artifact_types: string[];
-  includes_skills: boolean;
-  source: "repository" | "workspace_release";
-  content_sha256: string;
-};
-
-export type CatalogResourceKind =
-  | "tool_package"
-  | "skill_package"
-  | "agent_definition"
-  | "supervisor_definition"
-  | "copilot_package";
-
-export type CatalogPackageFile = {
-  path: string;
-  content: string;
-};
-
-export type CatalogDependency = {
-  kind: CatalogResourceKind;
-  resourceId: string;
-  releaseId: string | null;
-  releaseVersion: string | null;
-};
-
-export type CatalogDraftContent = {
-  files: CatalogPackageFile[];
-  definition: unknown;
-  dependencies: CatalogDependency[];
-};
-
-export type CapabilityDraftSummary = {
-  id: string;
-  kind: CatalogResourceKind;
-  resourceId: string;
-  displayName: string;
-  description: string;
-  metadata: {
-    id: string;
-    revision: number;
-    contentSha256: string;
-    validationState: string;
-    updatedAt: string;
-  };
-};
-
-export type CapabilityDraftDetail = {
-  summary: CapabilityDraftSummary;
-  content: CatalogDraftContent;
-};
-
-export type CapabilityReleaseSummary = {
-  id: string;
-  kind: CatalogResourceKind;
-  resourceId: string;
-  releaseVersion: string;
-  displayName: string;
-  description: string;
-  identity: {
-    id: string;
-    kind: CatalogResourceKind;
-    resourceId: string;
-    releaseVersion: string;
-    contentSha256: string;
-    executionSemanticsSha256: string;
-    publishedAt: string;
-  };
-};
-
-export type CapabilityInstallationSummary = {
-  id: string;
-  releaseId: string;
-  workspaceId: string;
-  profileId: string;
-  state: "authorized" | "installing" | "installed" | "discovered" | "ready" | "failed" | "uninstalled";
-  observedContentSha256: string | null;
-  failureCode: string | null;
-  updatedAt: string;
-};
-
-export type CapabilityReadinessSummary = {
-  release: CapabilityReleaseSummary;
-  installation: CapabilityInstallationSummary | null;
-  runtimeDiscovered: boolean;
-  missingCapabilities: string[];
-};
-
-export type CapabilityValidationResult = {
-  valid: boolean;
-  issues: string[];
-  contentSha256: string | null;
-  executionSemanticsSha256: string | null;
-};
-
-export type PythonCapabilityTool = {
-  name: string;
-  description: string;
-  input_schema: Record<string, unknown>;
-};
-
-export type PythonCapabilitySkill = {
-  name: string;
-  description: string;
-  instructions: string;
-};
-
-export type PythonCapabilityPublishRequest = {
-  idempotency_key: string;
-  slug: string;
-  version: string;
-  display_name: string;
-  description: string;
-  server_name: string;
-  python_source: string;
-  tools: PythonCapabilityTool[];
-  skill: PythonCapabilitySkill;
-  input_artifact_types: string[];
-  output_artifact_types: string[];
-};
-
-export type PythonCapabilityValidationIssue = {
-  code: string;
-  message: string;
-};
-
-export type PythonCapabilityValidationResult = {
-  valid: boolean;
-  tool_names: string[];
-  issues: PythonCapabilityValidationIssue[];
-};
-
-export type PythonCapabilityToolTestRequest = {
-  capability: PythonCapabilityPublishRequest;
-  tool_name: string;
-  arguments: Record<string, unknown>;
-};
-
-export type PythonCapabilityToolTestResponse = {
-  tool_name: string;
-  result: unknown;
-};
-
-export type PythonCapabilityPublishResponse = {
-  release_id: string;
-  package_id: string;
-  version: string;
-  capability_root_id: string;
-  server_name: string;
-  skill_name: string;
-  content_sha256: string;
-  written_files: string[];
-};
-
-export type AgentCapabilityTemplateSelection = {
-  source: "repository_agent" | "workspace_package_release";
-  definition_id: string;
-  version: string;
-  release_id: string | null;
-};
-
-export type AgentDatasetReleaseBinding = {
-  release_id: string;
-  workspace_id: string;
-  dataset_id: string;
-  version: string;
-  display_name: string;
-  content_sha256: string;
-};
-
-export type AgentDefinitionDraftRequest = {
-  definition_id: string;
-  version: string;
-  display_name: string;
-  description: string;
-  responsibilities: string[];
-  developer_instructions: string;
-  input_artifact_types: string[];
-  output_artifact_types: string[];
-  capability_template: AgentCapabilityTemplateSelection;
-  dataset_release_ids: string[];
-};
-
-export type AgentDefinitionValidationIssue = {
-  code: string;
-  message: string;
-};
-
-export type AgentDefinitionValidationResult = {
-  valid: boolean;
-  content_sha256: string | null;
-  execution_semantics_sha256: string | null;
-  issues: AgentDefinitionValidationIssue[];
-};
-
-export type AgentDefinitionReleaseSummary = {
-  id: string;
-  definition_id: string;
-  version: string;
-  display_name: string;
-  description: string;
-  content_sha256: string;
-  published_at: string;
-};
-
-export type AgentDefinitionResourceSummary = {
-  id: string;
-  definition_id: string;
-  display_name: string;
-  description: string;
-  owner_user_id: string;
-  draft: AgentDefinitionDraftRequest | null;
-  releases: AgentDefinitionReleaseSummary[];
-  created_at: string;
-  updated_at: string;
-};
-
-export type SupervisorAgentSelection = {
-  definition_id: string;
-  version: string;
-  release_id: string | null;
-  spawn_limit: number;
-};
-
-export type SupervisorArtifactContractInput = {
-  artifact_type: string;
-  producer_agent: string;
-  consumer_agents: string[];
-  required: boolean;
-};
-
-export type SupervisorPolicyDetail = SupervisorPolicySummary & {
-  responsibilities: string[];
-  instruction_policy: SupervisorInstructionPolicySummary;
-  platform_instructions: string;
-  custom_instructions: string;
-  agents: SupervisorAgentSelection[];
-  artifact_contracts: SupervisorArtifactContractInput[];
-  coordination_capabilities: string[];
-  max_active_child_agents: number;
-  content_sha256: string;
-  execution_semantics_sha256: string;
-};
-
-export type SupervisorDraftRequest = {
-  policy_id: string;
-  display_name: string;
-  description: string;
-  responsibilities: string[];
-  instruction_policy: SupervisorInstructionPolicySelection;
-  custom_instructions: string;
-  agents: SupervisorAgentSelection[];
-  artifact_contracts: SupervisorArtifactContractInput[];
-  coordination_capabilities: string[];
-  max_active_child_agents: number;
-};
-
-export type SupervisorDraftUpdateRequest = {
-  draft: SupervisorDraftRequest;
-  expected_revision: number;
-};
-
-export type PublishSupervisorDraftRequest = {
-  expected_revision: number;
-};
-
-export type SupervisorDraftSummary = {
-  revision: number;
-  content_sha256: string;
-  validation_state: string;
-  updated_at: string;
-};
-
-export type SupervisorValidationResult = {
-  valid: boolean;
-  content_sha256: string | null;
-  execution_semantics_sha256: string | null;
-  issues: Array<{ code: string; message: string }>;
-};
-
-export type SupervisorReleaseSummary = Omit<SupervisorPolicySummary, "source"> & {
-  id: string;
-  content_sha256: string;
-  published_at: string;
-};
-
-export type SupervisorDefinitionSummary = {
-  id: string;
-  policy_id: string;
-  display_name: string;
-  description: string;
-  owner_user_id: string;
-  draft: SupervisorDraftRequest | null;
-  draft_metadata?: SupervisorDraftSummary | null;
-  releases: SupervisorReleaseSummary[];
-  created_at: string;
-  updated_at: string;
-};
 
 export type RuntimeAgentProjection = {
   run_id: string;
@@ -733,30 +152,6 @@ export type RuntimeAgentExecutionStatus =
   | "timeout"
   | "interrupted";
 
-export type CoordinationExecutionSummary = {
-  id: string;
-  displayTitle: string;
-  status: RuntimeAgentExecutionStatus;
-  currentBehavior: string;
-  latestProgress: string | null;
-  resultSummary: string | null;
-  waitCycleCount: number;
-  waitingForInput: boolean;
-  startedAt: string | null;
-  completedAt: string | null;
-  updatedAt: string;
-};
-
-export type CollaborationStatusSummary = {
-  runId: string;
-  taskId: string;
-  workState: unknown | null;
-  executions: CoordinationExecutionSummary[];
-  openUserInputCount: number;
-  deliverables: unknown[];
-  updatedAt: string;
-};
-
 export type ProviderCallMetric = {
   id: string;
   runId: string | null;
@@ -770,10 +165,6 @@ export type ProviderCallMetric = {
   firstTokenMs: number | null;
   compactionCount: number;
   terminalStatus: string;
-  stablePrefixSha256: string | null;
-  toolInventorySha256: string | null;
-  skillSetSha256: string | null;
-  runtimeRoleSha256: string | null;
   createdAt: string;
 };
 
@@ -805,6 +196,53 @@ export type PendingUserInputSummary = {
   autoResolutionMs: number | null;
   createdAt: string;
 };
+
+export type McpFormRequestSource =
+  | { kind: "root" }
+  | { kind: "agent"; executionId: string; displayTitle: string };
+
+export type McpFormOptionSummary = {
+  value: string;
+  label: string;
+};
+
+export type McpFormFieldSchema =
+  | { kind: "string"; default: string | null; minLength: number | null; maxLength: number | null }
+  | { kind: "number"; default: number | null; minimum: number | null; maximum: number | null }
+  | { kind: "integer"; default: number | null; minimum: number | null; maximum: number | null }
+  | { kind: "boolean"; default: boolean | null }
+  | { kind: "singleSelect"; options: McpFormOptionSummary[]; default: string | null }
+  | {
+      kind: "multiSelect";
+      options: McpFormOptionSummary[];
+      default: string[] | null;
+      minItems: number | null;
+      maxItems: number | null;
+    };
+
+export type McpFormFieldSummary = {
+  name: string;
+  title: string;
+  description: string;
+  required: boolean;
+  schema: McpFormFieldSchema;
+};
+
+export type PendingMcpFormSummary = {
+  id: string;
+  runId: string;
+  source: McpFormRequestSource;
+  serverName: string;
+  message: string;
+  fields: McpFormFieldSummary[];
+  state: string;
+  version: number;
+  createdAt: string;
+};
+
+export type McpFormResponseAction = "accept" | "decline" | "cancel";
+
+export type McpFormContent = Record<string, string | number | boolean | string[]>;
 
 export type ArtifactSummary = {
   id: string;
@@ -925,111 +363,6 @@ export type WorkspaceFileContent = {
 export type WorkspaceFileUploadResponse = {
   status: string;
   paths: string[];
-};
-
-export type WorkspaceDatasetUploadFile = {
-  field_id: string;
-  logical_name: string;
-  role: string;
-  media_type: string;
-};
-
-export type PublishWorkspaceDatasetRequest = {
-  idempotency_key: string;
-  dataset_id: string;
-  version: string;
-  display_name: string;
-  description: string;
-  files: WorkspaceDatasetUploadFile[];
-};
-
-export type WorkspaceDatasetReleaseFileSummary = {
-  logical_name: string;
-  role: string;
-  media_type: string;
-  byte_size: number;
-  content_sha256: string;
-};
-
-export type WorkspaceDatasetReleaseSummary = {
-  id: string;
-  workspace_id: string;
-  dataset_id: string;
-  version: string;
-  display_name: string;
-  description: string;
-  state: "publishing" | "published" | "failed";
-  content_sha256: string;
-  failure_code: string | null;
-  files: WorkspaceDatasetReleaseFileSummary[];
-  published_at: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
-export type TutorialBlueprintSummary = {
-  blueprint_id: string;
-  revision: string;
-  display_name: string;
-  description: string;
-  estimated_minutes: number;
-};
-
-export type TutorialBlueprintDataset = {
-  dataset_id: string;
-  version: string;
-  display_name: string;
-  description: string;
-  file_count: number;
-  source_content_sha256: string;
-};
-
-export type TutorialBlueprintAgentTemplate = {
-  definition_id: string;
-  version: string;
-  content_sha256: string;
-};
-
-export type TutorialBlueprintSupervisorTemplate = {
-  policy_id: string;
-  version: string;
-  content_sha256: string;
-};
-
-export type TutorialBlueprintInstructionPolicyTemplate = {
-  policy_id: string;
-  version: string;
-  content_sha256: string;
-};
-
-export type TutorialBlueprint = TutorialBlueprintSummary & {
-  dataset: TutorialBlueprintDataset;
-  agent_templates: TutorialBlueprintAgentTemplate[];
-  supervisor_template: TutorialBlueprintSupervisorTemplate;
-  instruction_policy_template: TutorialBlueprintInstructionPolicyTemplate;
-  required_mcp_servers: string[];
-  expected_artifact_types: string[];
-  recommended_prompt: string;
-  content_sha256: string;
-};
-
-export type TutorialBlueprintIssue = {
-  code: string;
-  message: string;
-};
-
-export type TutorialBlueprintReconcileResponse = {
-  status: "installed" | "partial";
-  blueprint_id: string;
-  revision: string;
-  workspace_id: string;
-  dataset_release: WorkspaceDatasetReleaseSummary | null;
-  agent_releases: AgentDefinitionReleaseSummary[];
-  supervisor_release: SupervisorReleaseSummary | null;
-  supervisor_policy: SupervisorPolicySelection | null;
-  recommended_prompt: string;
-  expected_artifact_types: string[];
-  issues: TutorialBlueprintIssue[];
 };
 
 export type WorkspaceFileDiff = {

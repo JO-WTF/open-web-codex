@@ -1,79 +1,384 @@
 # Capability Baseline
 
-本文记录当前分支的能力事实和证据等级。源码、迁移、局部测试通过和真实 `/web` E2E 是不同证据，不能相互替代。当前文档不保存已删除实现的流程说明；历史决策放在 ADR 和 Git 历史中。
+| 字段 | 内容 |
+| --- | --- |
+| 文档性质 | 当前事实与证据 |
+| 观察日期 | 2026-08-09 |
+| 代码快照 | HEAD `75a3d5eb98a42e8556da34a19e1ca5bfe4571326` + 当前阶段一工作树 |
+| 当前阶段 | 阶段一：内置仓网 Copilot 架构纠偏与完整运行闭环（实施中） |
+| 接受基线 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) |
 
-## 当前快照
+本文回答“当前构建能证明什么”。源码存在、局部测试通过、真实 Runtime 运行和从阶段一
+业务 Task/Web 开始的产品 E2E 是不同证据，不能互相替代。
 
-观察日期：2026-08-08。
+## 1. 结论
 
-| 能力 | 当前事实 | 证据等级 |
+历史工作树曾跑通一条真实的最小仓网多 Agent 纵向证据，但该旧链的脚本、冻结能力包和
+Platform 数据面已从当前实现删除；当前还没有阶段一仓网闭环或 Copilot 创作平台闭环。
+
+历史证据只能支持：
+
+> 一个已经由仓库代码预装、预定义并由 E2E 脚本精确接线的仓网 Supervisor，可以在
+> 真实 Codex Runtime 和真实 Provider 下协调 Root、Data Agent、Network Agent，完成
+> 用户输入、数据标准化、路线矩阵、基线分析、Work State 和报告交付。
+
+这里的 Work State、SourceAsset、Case 和 Prompt 接线只是本次旧原型实际经过的路径，
+不是阶段一目标合同或可保留能力。接受基线已经改为 Codex 原生协作和 MCP Resource、
+Workspace 普通文件、最终 Artifact 的分工；当前实现尚未完成这个迁移。
+
+不能声称：
+
+> 算法工程师已经可以只用正式 SDK 和 Web，从零创建、发布、安装、发现并运行
+> Tool、Skill、Agent、Supervisor 和 Copilot。
+
+产品成熟度应分开判断：
+
+| 维度 | 当前等级 |
+| --- | --- |
+| 真实多 Agent 运行 | Early Alpha，有最小真实证据 |
+| Root 用户输入与 execution projection | 局部可用；child form 与恢复仍缺产品 E2E |
+| Tool/Skill SDK 与 Studio | CLI 脚手架仍在；旧 Web Studio 已删除 |
+| Agent/Supervisor 创作 | 旧 Web authoring 已删除；阶段一仅直接编辑 Profile Skill/Role |
+| Copilot 编译、Profile 安装和通用 Runtime discovery | 未形成生产链；built-in 有独立真实 gate |
+| 算法工程师自助扩展 | 未实现 |
+| 第二领域与多用户隔离 | 未验证 |
+
+## 2. 证据等级
+
+| 等级 | 含义 |
+| --- | --- |
+| E0 | 只有目标文档、类型或源码骨架 |
+| E1 | 单元/静态合同通过，但没有跨 owner 边界 |
+| E2 | 服务或集成测试通过，仍可使用预置对象/Fake |
+| E3 | 真实 Provider + 真实 Codex Runtime 的受控纵向运行 |
+| E4 | 从空 DB/Profile 的阶段一业务 Task 入口开始，覆盖完整仓网闭环、恢复和故障矩阵 |
+
+当前没有任何阶段一内置仓网 Copilot 能力达到 E4。
+
+## 3. 最近一次已退役旧链的真实最小 E2E
+
+证据来源是 Codex 任务“开发牛马”中 2026-08-08 完成的真实运行记录，任务 ID
+`019fdfc8-d475-7821-8ff6-a3b785a9d536`，执行 Turn
+`019fe094-c071-75d2-bc4a-80d46166eabf`。运行当时使用仓库内旧 E2E 脚本和旧服务路径；
+这些入口已随旧数据面删除，仓库也没有保存一份可重放的脱敏 evidence JSON。因此下列
+结果是已核对的历史运行记录，不是当前 checkout 可重放的发布证明。
+
+### 已通过
+
+- E2E `7/7` 阶段通过，约 721 秒；
+- 真实 DeepSeek Provider 与真实 Codex Runtime；
+- Root、Network Agent、Data Agent 均参与；
+- 4 个 Agent execution 全部为 `completed`；
+- 2 个官方 Root `request_user_input` 均为 `answered`，无 pending input；
+- Work State 中 `network_input`、`route_matrix`、`network_deliverables` 均为 `ready`；
+- 处理 50 个需求城市、11 个仓、550 条球面距离路线；
+- `optimized_existing_footprint` 为 50,815 个需求单位完成分配，且未冒充
+  `actual_current`；
+- 生成 `network_planning_report.v1`；
+- 后置供应链 Python 测试 `100 passed`、Codex 合同检查和 `git diff --check` 通过；
+- 本轮没有新增 `codex-rs` 修改。
+
+### 仍有异常
+
+- 一次重复登记中间交付件触发非关键 Work State mutation 失败；最终组件和最终 operation
+  仍完成。该异常说明模型可见的低层事务接口仍容易重复提交，不能按“最终成功”忽略。
+- 约 12 分钟的最小链路仍依赖大量模型协调，尚无产品级耗时、取消和阶段进度门禁。
+
+### 这次运行没有覆盖
+
+- `current-coverage-extension` 和 `actual_current`；
+- 成本矩阵、网络场景、p-median、服务约束选址和地图；
+- 浏览器从新建 Copilot 开始的完整创作旅程；
+- SDK package push/import、Catalog Compiler、Profile Installation、Runtime discovery；
+- 浏览器刷新、断线恢复、Profile/Runtime 重启；
+- 未授权 Role/Tool 与跨 Workspace 路径拒绝；
+- 第二个非供应链领域；
+- 两用户并发隔离。
+
+### 为什么它不是产品 E2E
+
+已删除的 `apps/web/scripts/enterprise-supervisor-e2e.mjs` 当时：
+
+- 直接通过内部 API 上传数据并创建带仓网 component 的 Work State；
+- 从仓库内置 6.0 Agent/Supervisor 复制定义并发布 Draft；
+- 在任务 Prompt 中注入 Work State ID、Run ID、字段形状、MCP/Tool 使用规则、执行顺序
+  和禁止事项；
+- 没有通过 Tool SDK、Skill Studio、Agent Studio、Copilot Builder、Profile Installation
+  和 Runtime discovery 的完整路径。
+
+因此证据等级是 E3，而不是 E4。
+
+### 2026-08-09 阶段一 Workspace 与 Task 绑定证据
+
+以下证据与上面的旧仓网 7/7 E2E 分开判断，不使用 Work State、Dataset、SourceAsset 或
+新增 Codex seam：
+
+- `native_workspace_probe` 使用当前 checkout 构建的 Codex app-server、真实 Profile Host、
+  native `collaboration.spawn_agent` 和 Python FastMCP；Root 与 child 在 Indonesia Workspace
+  只能读取 Indonesia 文件，在 Thailand Workspace 只能读取 Thailand 文件，Plugin process
+  cwd 没有被当作业务 Workspace；Root 在 child 运行期间通过官方 `turn/steer` 继续交互。
+- `StartRunRequest` 的合同测试证明退役的 Run-level `workspace_id` 会被明确拒绝；Browser
+  client 和 Web client 的 52 个定向测试证明 Task 创建提交 Workspace UUID，而 Run 启动和
+  Task analysis readiness 不再提交 Workspace。
+- 一次性干净 PostgreSQL 集成测试证明 Task 创建会校验 Project、Profile、Workspace
+  grant 和 Workspace 状态，响应不暴露 `root_path`；不存在的 Task 统一返回 typed
+  `task_workspace_unavailable`。
+- Run orchestrator 一次性数据库测试证明同一 Task 多 Run、合法同 Task fork、恢复和续跑
+  保持同一 Workspace；Run-level Workspace 切换、跨 Task fork 和跨 Workspace fork 在
+  预解析、入队及执行层被拒绝。
+- 当前 `codex/` 没有新增源码差异；上述能力复用官方 cwd、spawn、steer 和 fork 路径。
+
+这些证据把 Task→Workspace 固定合同和 native Root/child Workspace 传播提升到 E2；它们
+仍不是仓网完整 E4。
+
+### 2026-08-09 阶段一普通 Workspace 文件证据
+
+Slice 2 直接复用 `/workspaces/{id}/files` 与 `GitRuntime`，没有增加文件 registry、revision、
+Task binding、Task files API 或 Artifact 输入链：
+
+- Web 只有 Workspace 文件面板这一处普通文件入口，支持列举/搜索、逐文件上传、文本查看、
+  二进制下载和删除；每个 HTTP multipart 请求只接受一个 file。
+- 已有目标默认返回 typed `workspace_file_exists` conflict；Web 对当前文件明确选择覆盖、
+  改名或取消。多选由 Web 逐文件执行，后项失败或跳过不会把前项伪装成失败或静默重试。
+- `GitRuntime` 以 Workspace-relative path 写入，同目录 staging file 完成 write/sync 后才
+  publish；publish 成功即成功，staging 失败会清理临时文件。19 项 crate 测试覆盖普通读写、
+  create-new/overwrite、absolute/`..`、symlink、regular-file 和大小边界。
+- fresh PostgreSQL ignored integration 证明同 Workspace 两个 Task 可读取同一路径文件，
+  `/tasks/{id}/files` 不存在，多-part request 在任何文件落盘前被拒绝；另一个租户对普通
+  Workspace files 的 list/content/delete 都得到 `NOT_FOUND`。
+- 当前 schema migration 删除 Data Intake session/draft/mapping/input request、SourceAsset、
+  Dataset Release/file、Task dataset/analysis snapshot/intake projection、Agent dataset
+  dependency，以及 `workspaces.source_revision` 和 `artifacts.intake_envelope`；干净数据库
+  断言这些对象不存在。
+- 冻结的仓网 Agent/Supervisor/Instruction Policy/Tutorial 包、旧 E2E 和 lifecycle smoke
+  入口已删除；确定性供应链 Python MCP/算法与普通 Workspace fixture 保留供后续切片重建。
+
+这些证据把普通 Workspace 文件数据面提升到 E2，但不证明 Profile 热加载、原生协同或完整
+仓网 E4。
+
+### 2026-08-09 Profile 原生热加载审计证据
+
+Slice 3A 只审计 Codex 原生路径并运行定向测试，没有修改 `codex/` 或产品实现：
+
+- `skills_changed_notification_is_emitted_after_skill_change` 通过，证明 Skill watcher 会清
+  Runtime Skill cache 并发送 `skills/changed`；客户端仍需重新 `skills/list`，新内容从下一
+  Turn 生效。
+- `refresh_mcp_servers_keeps_the_previous_runtime_alive` 通过，证明 MCP refresh 原子发布新
+  runtime，而活动 step 持有的旧 runtime 可继续完成。
+- `apply_role_skills_config_disables_skill_for_spawned_agent` 通过，证明原生 Role layer 可以
+  控制 child Skill；`cli_override_can_update_project_local_mcp_server_when_project_is_trusted`
+  通过，证明高优先级 Role MCP enable/tool policy 可以递归保留底层 server transport 定义。
+- 源码确认 Role 文件在每次 spawn 时重读，因此内容修改对下一次 spawn 生效；既有 Root
+  Thread 的 Role 集合、allowlist 和 spawn limits 不会随 user config reload 完整重算，角色
+  增删改名只对新 Root Thread 保证。
+- 源码确认 selected capability discovery cache 是 Thread-scoped、没有 invalidation，并同时
+  缓存成功与失败。因此它不能作为 built-in 热加载基础；阶段一不使用 Plugin、Marketplace、
+  Installation 或 `selectedCapabilityRoots`。
+
+这些证据把 Skill/MCP 热刷新与 Role 应用语义提升到 E1。Slice 3B.1 已进一步实现启动前
+Profile seed 与显式应用资产 composition：
+
+- checked-in `apps/web/builtin/warehouse-network-copilot` 提供 Root Supervisor、Data、Network
+  三项 Skill 默认内容和 `data_agent`、`network_agent` 两项原生 Role 默认配置；
+- Profile Host 只接受 native Skill/Role 两种 typed startup destination。duplicate spec 在任何
+  写入前拒绝；clean Profile 缺失项逐文件原子 create-new；已存在普通文件保留，不覆盖用户
+  热修改；symlink、目录、逃逸和非法 seed 失败；`config.toml`、用户其他 Skill/Role 与
+  Workspace 不受影响。5 项单测通过；
+- real mode 必须显式提供 supply-chain/maps application asset root 与 prepared venv。Server
+  canonicalize 并验证固定 launcher/runtime、八项只读印尼 Mock 源和 Mapbox Style Spec，
+  不从 cwd、Workspace、`CARGO_MANIFEST_DIR` 或源码树扫描 fallback；部署 root symlink 可用，
+  child escape 拒绝。3 项 composition 单测覆盖含引号、空格和非 ASCII 的 TOML 路径；
+- Profile 不复制 Tool、venv、Node dependency、Mock、cache 或 test。Data/Network Role 持有
+  role-local MCP transport 与精确 tool allowlist，Root 没有全局仓网 MCP；maps cwd 是共享只读
+  asset root，状态写入 Profile 私有 `mcp-state/maps-mcp`；
+- `probe-builtin-network-copilot-mcp-assets.sh` 真实启动 Data、Demo、Network、maps 四个 stdio
+  MCP 并读取 inventory，退出码 0；启动前后两个共享 asset tree 的文件集合、size 和 mtime
+  快照完全一致。
+
+这些证据把启动 seed、显式应用资产和低层 MCP inventory 提升到 E2。Slice 3B.2 又完成
+两个使用生产 composition、真实 Codex app-server 与本地 mock Responses provider 的 ignored
+exact integration：
+
+- clean Profile 的官方 `skills/list(forceReload=true)` 在 user scope 精确发现三项仓网 Skill，
+  repo scope 为空；Standard Root 的官方 MCP status 没有四个仓网 server；
+- Root 通过原生 collaboration namespace spawn Data/Network。Data 只启用 warehouse-data，
+  只看到 supply-chain Data/Demo 的 `8+1` 项工具；Network 只启用 warehouse-network，只看到
+  Network/Map 的 `14+5` 项工具。两者都由真实 child model request 与官方
+  `mcpServerStatus/list` 观察，不由 Host 文件自报；
+- Root 两次 native wait/mailbox 与对同一 Data child 的 follow-up 正常，Root/Data/Network
+  全部到达原生 terminal。对既有 Data child 请求官方 MCP reload 后，在 follow-up safe
+  boundary 继续使用同一精确 inventory；Role layer 没有 delta，因此没有伪造 startup event；
+- 修改 Profile seed 副本中的 Skill 后收到 `skills/changed`，force reload 读取新 marker；修改
+  Profile Role 后只有下一次同 Role spawn 的真实请求包含新 marker，既有 child 请求不变；
+- 隔离用例在 Profile 中写入 malformed Role 并 restart，Runtime 发出
+  `Ignoring malformed agent role definition` config warning；Root 的 native spawn 明确返回
+  `unknown agent_type`、不创建 child，Root 仍正常终结；
+- Profile Host 为每个 Host 持有系统临时根下的 canonical 0700 neutral process cwd，初启与
+  restart 共用；Profile 私有 `HOME`/`USERPROFILE` 与 neutral cwd 阻止宿主
+  `$HOME/.agents`、Runner/源码祖先 `.codex` 进入 clean Profile discovery。Thread 业务 cwd
+  仍由官方授权 Workspace 参数拥有。
+
+这把当前 built-in 原生发现、Role activation、精确 inventory 和已声明热边界提升到 E2，
+但没有仓网业务入口或完整链，因此仍不能声称阶段一完成。3B.3-B2 已删除
+`RunStartPreflight`、Governed runtime mode、request-scoped Role SHA/inventory 校验和 Profile
+`platform-agents` 第二启动系统；真实 Indonesia/Thailand 探针继续证明 Standard Root 与原生
+child 的 `sandboxCwd` 都等于各自授权 Workspace，MCP process cwd 不承担业务 Workspace。
+Catalog/Studio/Python publish 生产表面已由 3B.3-B3 删除；3B.3-B4 又删除 DB-only readiness、
+旧 Draft/Release/Installation、Agent definition/release/run binding、Workspace package release 与
+Supervisor instruction policy release 等 14 张无 owner 表。Slice 4B.2-A 的 fresh
+PostgreSQL 全迁移链又断言 Work State 十表、Supervisor 六表及 provider speculative hash
+四列全部不存在，同时保留 provider_call_metrics 与 Runtime agent projection。Slice 4B.2-B 已由
+migration 56 删除 `profile_capabilities`，并从 Codex initialize、ProfileHost、Server 和 Web
+删除本地 capability manifest；ProfileHost 只 typed 校验官方四字段和 owned `codexHome`。
+Slice 3 至此完成。
+fresh PostgreSQL integration 明确断言旧 Agent/Supervisor/Catalog/Python authoring HTTP route
+均为 `NOT_FOUND`，同时继续覆盖普通 Workspace 文件；全 workspace Rust wrapper、Web
+lint/typecheck、181 个测试文件共 1280 项测试、build 与 no-desktop 通过。3B.2 clean/hot、
+malformed Role 和 Indonesia/Thailand native Workspace exact gate 也在删除后继续通过。
+
+## 4. 当前能力矩阵
+
+| 能力 | 当前事实 | 等级 |
 | --- | --- | --- |
-| Codex Runtime | 继续使用官方 `requestUserInput`、子 Agent 生命周期和 Thread/Turn/Item 语义；现有 Chat transport 保留补丁补充标准与 DeepSeek 缓存命中 usage 解析 | `codex-api` 165 项测试和 Patch Map |
-| Web Platform | 持有 Profile、Workspace、Thread、Run、Approval、Artifact 和事件投影；浏览器只访问平台 DTO | Rust 编译与已有平台测试 |
-| Workspace 数据 | Workspace SourceAsset 支持受控上传、列表和持久化；Data Agent 通过 `workspace_intake.py` 发现 CSV/JSON/XLSX | 平台路由和 Python intake 测试 |
-| User Input | root/child Runtime 输入请求归属 root Run，Approval UUID 和 version 用于并发回答；secret 回答不写入数据库或日志 | DTO、Service、路由和前端状态检查 |
-| Agent execution | execution projection 保存标题、结果摘要、等待轮次、等待输入和终态序列；连续 wait 在前端聚合 | Rust cargo check；完整浏览器恢复仍需 E2E |
-| Supervisor Draft | 草稿使用整数 revision 和内容 hash；发布时由服务器事务分配 Release patch version | Rust cargo check；并发数据库矩阵仍需运行 |
-| Network package | Data、Network、Supervisor 当前包为 `6.0.0`；Supervisor 只绑定两个子 Agent，国家和调用顺序不写死 | capability package、catalog 和 seed migration |
-| MCP 注册 | 只有 `supply_chain_network` 一个入口；Data、Planner 和显式 Demo 工具由同一 Case 服务提供 | `.mcp.json`、launcher、精确 tool inventory 测试 |
-| Planner data contract | Agent 只交换同一个 `case_id`；来源、映射、标准化数据、矩阵和结果保存在 Case 中，只有最终报告发布为 Artifact | SQLite Case schema、service 和全量 Python 测试 |
-| Indonesia fixture | 50 个需求城市、11 个已有仓、580 条报价；点位经过 geoBoundaries ADM2 校验，需求量按人口公式生成 | `validation-report.json` 和 fixture tests |
-| Solver | OR-Tools CP-SAT；固定已有仓默认开启；超时和依赖缺失返回显式状态 | solver tests；真实 MCP 调用仍需 smoke |
+| Codex Runtime bridge | 官方 Thread/Turn/Item、Agent 生命周期、Tool 和 Root 输入继续由 Runtime 拥有；pure-official probe 已由 `SubAgentActivity` Item 的 child Thread ID 通过 `thread/read` 读到 parent/source/Role/nickname/Provider/status | E3，child identity 无需本地 seam；physical-cwd join 属后续 backlog，不是当前仓网前置 |
+| Runtime history | 当前 subtree 有 `thread/turns/list`/`thread/items/list` 与本地 history seam；隔离 sync 的 latest official 已原生提供 paginated history、Item timestamp 和 Turn error 语义 | official 能力已证实但尚未回填；legacy/materialization 清理进入后续 backlog |
+| Durable event projection | `run_events` 有全局 sequence、run/thread/turn/item provenance、Task/Organization 授权查询和 reconnect replay | 身份/顺序基础可保留；payload、unknown event 与 Browser heuristic 收敛进入后续 backlog，除非真实仓网门证明会泄密或写错数据 |
+| Profile Host | 单 Profile 目录、进程已隔离；只 typed 接收官方 `initialize` 四字段，并只以 `codexHome` 对 owning Profile home 做安全校验；Runtime HOME 与 neutral process cwd 已隔离；Server 仍有显式宿主 auth 导入 | E2，Runtime discovery 隔离已通过，身份隔离未完成 |
+| Approval / User Input | Root 官方输入可持久化、回答并恢复执行 | E3，最小链 2 次通过 |
+| Agent execution projection | 4 个 execution 收敛到 terminal；等待和输入可投影 | E3，刷新/重启未测 |
+| Work State / Platform coordination | 无 production crate、route、MCP、gate 或 current schema 对象；migration 55 删除十张 Work State 表 | 已删除；不建设替代状态机 |
+| Root coordination | Platform 第二控制面、Supervisor continuation 与主动 Root Turn 已删除；Runtime 原生 wait/mailbox/steer 是唯一协作路径 | E2 原生 runtime/projection gate；完整业务 E2E 未完成 |
+| Capability Catalog | 无生产 crate、API、Browser DTO/client、UI 或当前 schema 对象 | 不再是阶段一能力 |
+| Package Compiler | 无当前生产 owner；阶段二目标文档保留设计输入 | 不再是阶段一能力 |
+| Profile Installation | 无生产安装路径；built-in 直接使用 Profile 原生 seed/Runtime discovery | 不再是阶段一能力 |
+| Runtime discovery/readiness | built-in clean Profile 已通过官方 Skill/MCP status 与 native Role spawn gate；产品 Run admission 只走 Standard，旧 DB installation/readiness 对象已删除 | built-in gate E2；无独立产品 readiness owner |
+| Tool SDK | `init/validate/test/pack` 与少量 manifest tests 存在 | E1，未连接 Web/安装 |
+| Skill 创作 | 阶段一仅支持直接编辑 Profile Skill；公开 SDK/Web 创作后移 | 无阶段一产品流 |
+| Agent/Supervisor Studio | 旧 Settings/Sidebar Studio 已删除；原生 Profile Agent 配置保留 | 无阶段一 authoring 产品流 |
+| Copilot Builder | 没有完整产品入口和安装总览 | E0 |
+| Browser 产品入口 | 生产 `index.html` 只经 `browser-entry.ts` 渲染 `WebApp`；展开 Vite alias 后 production graph 为 75 个本地 non-test 文件，另 466 个不在图内却仍由 `tsconfig` 编译；完整 `PlatformClient` 又把 dead endpoint methods 带入 bundle | E2 单一生产入口；legacy import graph/client 收缩进入后续 backlog，不阻断当前仓网链 |
+| Web UI parity | `check-main-ui-parity` 仍以历史 Git/UI overlay 和手工 SHA 清单约束整个 `apps/web/src`，不是行为或合同证据 | 待删除的第二 UI truth；后续 backlog，不再作为 4B.3 或仓网前置 |
+| Browser Terminal | 生产 `/web` WebApp 不调用 Terminal API；旧 App 路径仍保留 Workspace Terminal UI。Server 打开 Terminal 时按 `run.updated_at DESC` 猜一个最新 Run，并把输出投影到该 Run | E1 legacy 残余；多 Task/fork 时会错配会话，待确认旧 App 退出后原子删除，当前不建设新 selector |
+| Browser local usage | 旧 App 的 `/profile/usage` 同时从 `run_events` 近似重算 token/turn，并在完全空时切换到 official `account/usage`；生产 `/web` 未调用 | E1 legacy 双 owner；随旧 App 删除，不建设第二 usage aggregator；`provider_call_metrics` 独立保留真实观测 |
+| Browser hidden generation | 已认证的 `/runs/{id}/generate` 会在 adapter 中创建一个被 `suppressed_threads` 隐藏的持久 official Thread，手工等待 Turn delta 并 best-effort archive；production 无 caller 的 generic `rpc(method, Value)` 又保留字符串 `start_thread`/`send_user_message`；生产 `/web` 不使用两者，但 direct HTTP generation 仍可触发 | 已证实 legacy 偏离；原子删除进入后续 backlog，不阻断当前仓网链 |
+| Browser remembered approval | 生产 `/web` 不使用 `/profile/approval-rules`；该 route 只凭 Run 授权接收 Browser 自报命令前缀并永久写 Profile `default.rules`，不绑定 pending approval/item/version/Profile | 已证实永久执行授权旁路；后续原子删除，当前仓网链只使用 exact pending approval accept/decline |
+| Browser raw Profile files | 生产 `/web` 不使用 `/profile/files/{agents|config}`；config PUT 直接替换整个 `config.toml`，只在事后调用 `config/read`，绕过 official expected-version CAS 和 reload owner | 已证实配置写旁路；后续整链删除，Workspace `AGENTS.md` 文件面不受影响 |
+| Browser Workspace preferences | 生产 `/web` 不使用 `browser_workspace_preferences`；旧 App 路径仍可存任意 JSON、不会实际应用却回显为 applied 的 Runtime 参数，以及取出后经 Terminal 自动执行的 worktree setup script | E1 legacy 假能力/危险执行残余；与 Terminal/Usage 同片删除，不保留为未来 Workspace 合同 |
+| Browser custom prompts | 生产 `/web` 不使用 `/profile/prompts`；Platform 自行扫描和编辑 `$CODEX_HOME/web-prompts/<project>` 与 `$CODEX_HOME/prompts`，但 latest official 没有 prompts discovery/API，只有 cwd-scoped Skills/Plugins | E1 legacy Profile 污染；与旧 App 同片删除，不迁移为另一套 Prompt 系统 |
+| Task→Workspace 固定合同 | Task 持久化唯一 Workspace；Run/fork/recovery 只能继承；Browser 无 Run-level 选择权 | E2；HTTP、数据库、orchestrator 与 Browser 定向测试通过 |
+| 通用 Workspace 文件 | `/workspaces/{id}/files` + `GitRuntime` 是当前唯一用户上传/浏览/编辑文件产品面；Web 逐文件处理 conflict，同 Workspace 两 Task 共享和跨租户拒绝已通过 | E2；完整仓网业务链未验收 |
+| MCP Resource | Codex 官方 Tool Item/ResourceLink/read_resource 已存在；供应链 ResourceStore 能保存不可变 provider 内容，但 Data/Network 跨 server 仍直接打开 Profile 目录，无授权跨 Task ref 可发现产品合同 | E1/E2 分散证据；混合边界未完成 |
+| Final Artifact | `artifacts`、Task grant、exact Run/Thread/Turn/Item provenance、物化字节和授权读取已存在；当前仍由 generic ResourceLink、Run-scoped inline 表、模型文本指令和跨 child lookup 驱动，`retention_state` 无 writer | E1 旧投影；显式 final Tool + Workspace bundle 合同未实现 |
+| Data Intake | SourceAsset、session/draft/mapping/gate、Dataset Release、Task binding/snapshot/projection 生产路径与当前 schema 已删除 | 不再是当前能力；阶段一无替代状态机 |
+| 旧数据引用 | Platform 文件面只接受 Workspace 相对路径；Case/NetworkSnapshot、`source_ref`、ArtifactRef、taskEvidence hashes 和双重 ref 仍在旧 Tool 内 | E1 旧原型；删过重层并保留简化 ResourceStore |
+| 仓网算法 | 数据标准化、球面矩阵、成本、场景、求解、报告、地图代码与 100 项 Python 测试 | E2；最小子集 E3 |
+| Provider 定义与选择 | Profile `config.toml` 和 Runtime 已能持久化 Provider/模型及未来 Thread 默认选择；已物化 Thread 的实际 pair 由 official Thread settings 拥有。Platform 仍镜像 `profile_provider_definitions` 与 global `models.default_selection`，并在启动时回放 | 第二/第三 owner 与 Task pair 全量收敛进入后续 backlog；当前只补真实 DeepSeek 门直接依赖 |
+| Provider 模型刷新 | current Platform 先把目标 Provider 设为默认，再调用 `model/list {forceRefresh:true}`；official 646 没有 `forceRefresh` 或 `providerId`，pre-sync seam 只有 `forceRefresh` | 已证实但进入后续 backlog；当前 R2 真实门不执行 refresh，只要求 `modelProvider/list`、Secret restart 和显式 model Turn |
+| Provider Secret | Profile/provider scoped Secret 以平台密文保存，只把稳定 env ref 写入 Codex config，并在 owned Profile process 注入 | E2；重启与零明文负向门保留 |
+| Provider metrics | 持久化 schema/route 保留真实 token、延迟、压缩和终态观测；四个没有 Codex producer 的 speculative SHA 字段已删除 | 真实 usage 观测未验收 |
+| 多用户隔离 | 身份 scope 部分存在，产品入口仍单用户 | E0，隔离矩阵未运行 |
 
-## 当前 MCP 工具
+## 5. 已证实的架构偏离
 
-单一 `supply_chain_network` MCP 暴露：
+以下是本轮过度设计、重复 owner 与未充分复用 Codex 原生能力审计的统一索引。
+Architecture 只陈述当前 owner 与运行事实，Development Plan 只维护唯一执行顺序，
+ADR-018 是阶段一规范裁决，Codex 子树 seam 只由 Patch Map 分类。本表不新建第二份
+架构 truth，也不把后续 backlog 提升为当前阶段前置。
 
-```text
-create_network_case
-get_network_case_status
-define_network_requirements
-refresh_case_sources
-inspect_case_sources
-propose_case_mapping
-apply_case_mapping
-normalize_case_input
-plan_route_matrix
-build_haversine_route_matrix
-validate_route_matrix
-plan_cost_matrix
-evaluate_network_baseline
-evaluate_facility_scenario
-solve_p_median
-solve_service_constrained_location
-publish_network_planning_report
-create_demo_workspace_sources
-archive_network_case
-```
+| 稳定 ID | 分类 | 已验证问题与源码证据 | 风险 | 当前裁决与阶段/触发条件 | 目标 owner/删除条件 | 状态 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `P1-R2-CHAT` | 当前关键链 | pinned official Codex 无 Chat transport 和当前 Platform `PUT/list` 所需的 `modelProvider/list`；当前窄 seam 位于 `codex/codex-rs/codex-api/src/chat_translate.rs`、`codex/codex-rs/core/src/client/chat.rs` 与 app-server catalog processor，Platform Secret 位于 `apps/web/crates/provider-service` | 真实 DeepSeek 无法建立 Turn，或 Secret 穿透到普通配置/日志 | 只保留真实仓网 gate 的最小 typed seam：`PUT/list`、密文 Secret restart、显式 `deepseek-v4-flash` Turn、两次串行 MCP 到 final；model refresh/catalog 不在当前 gate | Codex 拥有 wire/app-server typed 执行，Platform 只拥有 CRUD 授权与密文注入；以真实 gate 和零明文负向门为删改条件 | 已通过：Shared `de9cc23b4` 的 fresh 真实门完成 encrypted Secret restart、显式 `deepseek-v4-flash` Turn、两次串行且相互依赖的 MCP 调用和 final；清理与零明文门通过 |
+| `P1-SC-REF` | 当前关键链 | `data_server.py`/`server.py` 使用不同 server、URI 和 Profile-global store，`models.py` 同时定义 `DataRef`/`DataAgentRef`，Network 还直接打开 Data store | 跨 provider 越权、Resource 不可达、同一内容多个身份 | Data4/Network9 切换 atom 统一为一个逻辑 `supply_chain` provider、Workspace-scope store 和 strict `ResourceRef`；不建 Broker/registry/新表 | MCP provider 拥有中间内容；每个 tool 验证启动 scope 与 native `sandboxCwd`，旧双 store/双 ref caller 归零后删除 | 未实现，Data4 首个原子片 |
+| `P1-SC-DATA4` | 当前关键链 | `workspace_intake.py` 用 hash `source_ref` 重扫 Workspace，`data_server.py` 接受多套 alias/wire shape；`inspect` 不产生 allowlist 中 `normalize` 要求的 Resource，且 normalize 在 geography 前强制坐标 | 默认印尼数据准备链不可达，模型被迫翻译协议或猜字段 | 重写为 Data4：可选 discover、一次 inspect 产 source-profile Resource、normalize 只接显式歧义决定并可返回 `needs_geography`、prepare-geography 接收 adapter 已验证的行政区 catalog 并处理候选/覆写；Indonesia built-in asset 只属于验收 fixture，其他国家无 provider 时 typed unavailable | Tool 拥有格式/映射/标准化；复用 `workspace_intake.py`、`mapping.py`、`normalization.py` 中纯函数与 `geography.py`，删 source/revision/CAS 包装 | 未实现，R2 后立即进入 |
+| `P1-SC-NET9` | 当前关键链 | `server.py` 的 active Resource tools 仍经 `ArtifactRef | DataAgentRef` 和 `_case_from_input_ref` 构造 `NetworkCase`；`CaseRepository` 及 mapping/matrix/analysis/scenario service 仍被启动和死代码引用 | Data4 输出无法以单一 ref 进入全链，Case 仍成为第二业务状态 | 同一 merge atom 把 Network active surface 收缩到已裁决 9 tools，使用 strict `ResourceRef`；路线/cost 由 pair/lane fact 自主部分复用，Case 在所有 active caller 替换后尾删 | Network Tool 拥有算法与 pair facts；保留 `matrix.py`/`solver.py` 纯算法，删 `case_repository.py` 及 Case service/schema/tests | 未实现，与 Data4 不得以断链中间态合并 |
+| `P1-ART-FINAL` | 当前关键链 | `apps/web/server/src/event_projection.rs::artifact_candidates` 将 generic ResourceLink 升为 Artifact，还有 `inline_visualization_artifacts`、跨 child lookup 和模型文本指令；`artifacts.retention_state` 无 writer | 中间矩阵被二次物化，Artifact 变成数据交换层，Run 生命周期又误删交付 | 新 Resource active surface 切换硬门先删 generic 链；final map/report 只认 built-in exact `(server, tool)` + typed Workspace-relative self-contained bundle + exact Item provenance | Platform 只拥有显式最终交付物化/授权，MCP provider 拥有中间 Resource；中间 Resource 永不进 Artifact | 未实现，仓网 active-chain 与 final E2E 硬门 |
+| `B-PROVIDER-OWNER` | 后续 backlog | `apps/web/crates/provider-service/src/secured.rs` 的 `profile_provider_definitions`、`apps/web/crates/platform-store/src/configuration.rs` 的 global default 与 Profile config/Runtime 重复 | 默认选择、已物化 Thread 实际 pair 和 refresh 被不同 owner 覆盖 | 当前 R2 只补 exact 真实 gate 依赖；全量 owner 收敛仅在仓网 gate 证明会选错 Provider/model 时提前 | Profile config/Runtime 拥有定义、未来 Thread default 和 Thread actual pair；Platform 只留密文 Secret 与必要 audit | 已证实，不阻断当前关键链 |
+| `B-THREAD-HISTORY` | 后续 backlog | `codex-adapter/src/real.rs` 的 history mode/隐藏 Thread，`routes/threads.rs` 的 overlay，`WebApp.tsx`/`webThreadHistory.ts` 的 live/history 启发式合并 | 连续同文本消息误去重，Task/Run status 可以冒充 official Thread/Turn 事实 | 全量 Thread/Run/history/lease 轻纠偏是后续 backlog；只有当前 E2E 证明消息投递错乱才同原子修复 | Codex Runtime 拥有 Thread/Turn/Item/history，Platform 只做授权和 exact Item 投影 | 已证实，不阻断当前关键链 |
+| `B-EVENT-BOUND` | 后续 backlog | `apps/web/server/src/event_projection.rs` 和 Browser item renderer 仍按动态 Tool 名/文本猜 command/diff，unknown event 可进对话，多类 payload 无统一限长/retention owner | 事件污染、过大持久化与未授权内容暴露 | 保留 `run_events` sequence/provenance；普通 RunEvent 不广播 private Resource ref；若仓网真实 gate 证明泄密才成为当前安全门 | Platform 只投影 bounded typed Runtime 事实；unknown 不猜内容 | 已证实，当前仅保留泄密负向门 |
+| `B-BROWSER-LEGACY` | 后续 backlog | 生产只有 `browser-entry.ts`→`WebApp`，但死 `main.tsx`/`App`、全量 client、Terminal/Usage/generation/prompts/preferences/raw Profile writer/记忆 approval routes 仍在 | 继续维护第二 UI/API 表面，其中 generation/规则/整文件写面可创建隐藏 Thread 或绕过 official CAS/approval | 统一收缩已记入 backlog，不再作为仓网前置；只在真实关键链调用到旧入口时前移 | Browser 只保留 WebApp typed surface；Server 路由按 production reachability 原子删除，不建替代子系统 | 已证实，不阻断当前关键链 |
+| `B-PROFILE-AUTH` | 后续 backlog | `apps/web/server/src/main.rs::import_file_backed_codex_auth_if_missing` 在单 Profile 过渡模式可从宿主 home 导入 `auth.json` | 未来多用户身份边界不成立 | 当前单 Profile 不阻断；启用多用户前必须删除宿主默认导入并完成隔离矩阵 | Profile 认证由显式用户/Profile owner 提供，不读服务器操作者 home | 已证实，多用户触发 |
+| `D-CONTROL-PLANE` | 已删除 | migration 55 和 fresh-schema gate 证明 Work State/coordination 十表、Supervisor snapshot/binding/continuation 六表及对应 crate/route/MCP/gate 不存在 | 曾与 Codex context/mailbox/scheduler 形成第二控制面 | 不建替代状态机 | Codex 拥有协作；Platform 仅保留 Agent/Approval/Audit 投影 | 已完成，需继续通过 fresh-schema denial |
+| `D-CATALOG-MANIFEST` | 已删除 | Catalog/Studio/Python publish 生产链与无 owner 表已删；migration 56 删 `profile_capabilities`，ProfileHost 只验证 official initialize 四字段 | 曾在 Codex 原生 Skill/Role/MCP discovery 上叠加发布/安装/本地 manifest truth | 阶段一 built-in 只走 Profile seed + Runtime discovery；公开 Studio/SDK 后移 | Codex 拥有 discovery，Platform 不伪造 readiness | 已完成，公开平台另起后续阶段 |
+| `D-PLATFORM-DATA` | 已删除 | SourceAsset/Data Intake/Dataset Release/Task binding/snapshot/projection 生产路由和当前 schema 已删，Workspace 文件面与 denial 集成通过 | 曾与 Workspace 文件和 MCP Resource 形成第二数据操作系统 | 不建设 replacement registry/revision/binding/cache | Workspace 拥有普通文件，MCP provider 拥有 typed intermediate | 已完成，仓网 Tool 内旧 Case/ref 仍由 `P1-SC-*` 收敛 |
+| `D-TRUST-STACK` | 已删除 | provider speculative SHA 四列、历史 SHA password compatibility、Capability Manifest 与 Work State snapshot/hash 链已从 production caller/schema 删除 | 曾在 official Runtime snapshot/config CAS 上重复叠加平台“可信”链 | official config CAS/MCP/Turn/Skill snapshots 原样保留，Web 不镜像；ResourceStore SHA 仅作不可见物理 ID/字节完整性 | 各 owning layer；无 production caller 即删 | 已完成，不得复活 |
 
-旧的 intake Resource、`planning-dataset.v2`、analysis snapshot、旧 Indonesia 和 Visualization 工具不在 MCP 注册表中。`create_demo_workspace_sources` 只有收到明确 Demo 意图并确认目标 Workspace 为空时才写入已验证 fixture；空 Workspace、缺文件或真实 Tool 失败都不会触发 Mock。
+索引中的当前关键链精确顺序仍以 [开发计划](development-plan.md) 为准；
+`codex/` 中的 retain/drop/upstreamed 状态只以
+[Custom Codex Patch Map](custom-codex-patch-map.md) 为准。下列详细证据保留对源码现象的完整说明：
 
-## 关键不变量
+1. 供应链 `CaseRepository`/`NetworkSnapshot` 仍在 Workspace 文件和 MCP Resource 外保存
+   source/mapping/operation 状态。
+2. 供应链 Tool 内 `source_ref`、MCP Resource、ArtifactRef 和普通文件仍混用；Data/Network
+   跨 server 直接打开 provider 目录，taskEvidence/content SHA 额外加了信任层。
+3. Event Projection 把 generic ResourceLink 提升成 Artifact、跨 child 搜索 Resource，并解析模型
+   文本指令；`inline_visualization_artifacts` 随 Run 级联删除，`retention_state` 又没有任何
+   production writer，还没有收敛为显式 final-deliverable 合同。
+4. Data Server 接受多种字段别名和 wire shape，正式 schema 不唯一。
+5. Profile Runtime HOME/process cwd 已隔离，但 Server 默认认证导入仍可读取宿主
+    `$HOME/.codex/auth.json`。
+6. `check-main-ui-parity` 把生产 WebApp 源码与历史分支、overlay commit 和手工 SHA 绑定，
+   在行为测试之外维持第二 UI truth；legacy `main.tsx`/`App`/hooks/facade 仍在非生产维护面。
+7. Platform 以 `profile_provider_definitions`、global `models.default_selection` 和启动回放重复
+   拥有 Codex Profile 的 Provider 定义、模型目录及未来 Thread 默认选择；Task pair 又被错误用于
+   后续 Turn。非当前 Provider 刷新会改变 Profile 默认 Provider，普通 catalog 更新还叠加了一条
+   只有 Provider 服务使用的 scheduled-restart 生命周期。
+8. Server approval history overlay 会按 Tool 字段或 message 文本猜关联位置；Browser
+   `mergeWebThreadHistory` 又按相同用户文本消除 optimistic echo。latest official 已提供
+   `clientUserMessageId`→`userMessage.clientId` 精确关联，但当前 Platform DTO/adapter/WebApp 尚未使用。
+9. Browser 会按动态 Tool 名称和输出文本把 generic Tool 猜成 command/diff，并把 unknown event
+   JSON 作为对话内容；`run_events` 对多类内容没有统一 payload 上限或 retention owner。
+10. legacy Terminal 路径把 Workspace 级终端会话强制挂到 `updated_at` 最新 Run；同一 Workspace
+    存在多个 Task 或 fork 时会把终端输出投影到错误会话。生产 `/web` 尚未使用该能力，不应为其
+    新建 Run selector；应在 legacy App 退出后删除未使用的 route、session schema 和事件投影。
+    同一路径的 `/profile/usage` 又混用本地 `run_events` 近似值与 official account usage，并把
+    Turn 数标成 Agent Run；它应随旧 App 删除，不能演化为另一套 usage owner。
+11. legacy `/runs/{id}/generate` 由 Platform 写死生成提示词，并在 adapter 内创建不会进入正常
+    事件投影的持久 official Thread；`suppressed_threads` 没有终止清理，archive 又只是 best-effort，
+    因而 direct HTTP 可制造隐藏 Thread、吞掉官方事件并累积进程状态。generic adapter
+    `rpc(method, Value)` 同时保留字符串 `start_thread`/`send_user_message`，虽无 production caller，
+    仍会迫使 typed Provider/首消息合同保留旁路。两者都不应继续兼容新的 `thread/start` 合同。
+12. `browser_workspace_preferences` 只服务旧 App，却继续持久化 untyped settings、未实际应用的
+    Runtime 参数和由 Terminal 自动执行的 worktree setup script；这些字段没有当前 Workspace/Runner
+    lifecycle owner，不能作为未来初始化或 Runtime 配置合同保留。
+13. `/profile/prompts` 只服务旧 App，在 Platform 内自建 project/global 目录、扫描、frontmatter
+    parser 和 move lifecycle；latest official Runtime 不发现这些目录，当前原生扩展面是 cwd-scoped
+    Skills/Plugins，因此该 API 写入的文件不是可用 Runtime capability。
+14. `/profile/approval-rules` 没有绑定 exact pending approval、Item、版本或 requested Profile，
+    却接受 Browser 自报命令前缀并永久写 Profile allow rule；latest official 已让 approval 请求携带
+    `proposedExecpolicyAmendment` 并以 typed decision 原路响应，因此该文件写入是额外授权旁路。
+15. `/profile/files/{agents|config}` 把 Profile 指令和 Runtime 配置折叠为同一个 whole-file writer；
+    config 分支直接 rename 文件后才做 `config/read` 探测，没有使用 official config write 的
+    expected-version CAS/reload，因此可与 Provider/Agent 等合法配置写并发互相覆盖。
 
-1. Case 是 Agent 间业务状态的唯一来源；Agent 只传 `case_id` 和有限摘要，原始表格、矩阵和完整工具参数不能进入普通消息。
-2. Data Agent 负责“数据能否使用、字段如何映射”；Network Agent 负责“需要什么、怎么算、结果代表什么”。
-3. 名称匹配结果必须是 `exact`、`normalized`、`ambiguous` 或 `missing`；歧义必须请求用户，不能靠显示文本猜测。
-4. 球面路线为 `haversine × detour_coefficient`，时效为调整后距离除以平均速度；每天驾驶小时是单独业务参数。
-5. 有 current assignment 才能标记 `actual_current`；没有时只能标记 `optimized_existing_footprint`。
-6. 有报价时精确报价优先；缺报价必须要求显式成本规则，不能填零。
-7. p-median 只对上传的候选集合成立；固定已有仓、可关闭已有仓和新增候选必须是类型化输入。
-8. `completed`、`failed`、`interrupted` 是 execution 终态；终态后乱序 running/waiting 不能回写运行状态。
-9. `waiting_for_input` 只表示未解决的用户输入；普通协作等待使用 `waiting`，二者不能混用。
+## 6. 当前阶段裁决
 
-## 未完成的发布门禁
+当前不是“仓网迁移已完成”，而是阶段一启动点上的跨 owner 原型：
 
-- 当前 Case 的 source/mapping 生命周期与 Platform Data Intake 重复；必须迁移到唯一
-  owner 后删除领域副本。
-- `event_projection.rs` 当前识别 `network-case-tool-result.v1`；必须改为通用有界 Tool
-  result，平台核心不得包含领域分支。
-- Root 尚无 Platform 提供的 Task/Run scoped 只读 coordination Tool；当前 Case 查询不能
-  视为通用多 Agent 协作能力。
-- Tool、Skill、Agent、Supervisor、Copilot 尚未共享统一 Catalog/Release/Installation/
-  Runtime discovery 生命周期，Web 创作平台仍未完成。
-- 运行全量 `./scripts/test-web-rust.sh`，确认新迁移、审批、执行投影和 Draft 并发测试在真实数据库中通过。
-- 运行 Web typecheck、lint、Vitest、build，并验证多个输入卡片、子 Agent 输入、wait 聚合和刷新恢复。
-- 运行 Python/MCP 全量 pytest、ruff、stdio smoke，并用真实 MCP 调用验证 50 城市流程。
-- 在 `CODEX_MODE=real` 的 4800 Web 页面创建 6.0 Supervisor Thread，明确使用教程数据，回答参数输入，核对两个 execution 卡片、终态、报告、地图和刷新恢复。
-- E2E 需要同时覆盖无 current coverage 和 `current-coverage-extension` 两种标签，不能只验证模型最终文本。
+- Runtime/bridge、Approval、execution、通用 Workspace 文件、provider ResourceStore 与最终 Artifact
+  有可保留部分；三类边界和跨 Task 显式 ref 仍未收敛；
+- Platform Data Intake、冻结能力包、Catalog/Studio/Python publish 生产系统及无 owner 数据表已
+  删除；Slice 4B.2-A 已继续删除 Work State、Assignment/coordination、Supervisor continuation、
+  speculative provider hashes 与历史 SHA password compatibility；
+- 仓网最小 E2E 只有已退役旧链的历史证据；当前阶段一链尚未成立；
+- SDK/Web 自助创作、Profile Installation、通用产品 Runtime discovery 和第二领域仍未成立；
+  built-in 的 3B.2 Runtime gate 不等于这些产品能力。
 
-在上述证据完成前，当前能力只能称为“实现并通过局部边界验证”，不能声称印尼仓网真实浏览器闭环已发布。
+因此对外统一使用“阶段一内置仓网 Copilot 架构纠偏与完整运行闭环（实施中）”描述当前
+阶段。开发顺序见 [开发计划](development-plan.md)，当前边界见
+[ADR-018](adr/018-built-in-network-copilot-runtime-closure.md)。公开 SDK/Web 自助创作与
+第二领域仍是后续阶段目标，而不是本阶段完成定义。
+
+## 7. 证据更新规则
+
+以后只有满足以下要求，能力才能提高证据等级：
+
+1. E2E 输出脱敏、机器可读 evidence，记录 commit、实际 Profile/Runtime build、Runtime
+   discovery inventory、Workspace、Run、terminal、交付 Artifact 和测试结果；
+2. E4 必须从干净数据库和干净 Profile 开始，不复制宿主 auth/plugin/MCP 状态；
+3. E4 必须从阶段一业务 Task 入口开始，不脚本手建 Work State、Data Intake、Dataset 或在
+   Prompt 注入内部 ID；
+4. E4 同时通过印尼 Mock 零 elicitation 全链和真实 Workspace 文件上传交互全链，且通过
+   exact MCP Resource ref 复用与 pair-level 部分复用验收；
+5. 刷新、重启、失败、取消、超时、Role 越权、跨 Workspace 路径、同 Workspace 多 Task
+   文件/Resource 复用、写冲突和 Artifact 缺失按各自 owner 验证；
+6. 文档只在证据完成后更新，不以模型最终文本或数据库 success 字段代替验证。

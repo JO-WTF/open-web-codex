@@ -5,7 +5,8 @@ use open_web_codex_adapter::CodexAdapter;
 use open_web_codex_approval_service::{ApprovalActor, ApprovalService, ApprovalServiceError};
 use open_web_codex_platform_contracts::error::PlatformError;
 use open_web_codex_platform_contracts::{
-    ApprovalSummary, DecideApprovalRequest, PendingUserInputSummary, RespondUserInputRequest,
+    ApprovalSummary, DecideApprovalRequest, PendingMcpFormSummary, PendingUserInputSummary,
+    RespondMcpFormRequest, RespondUserInputRequest,
 };
 use uuid::Uuid;
 
@@ -35,6 +36,20 @@ pub async fn list_run_user_inputs(
     let runtime_instance_id = adapter.runtime_instance_id().await;
     approvals
         .list_pending_user_inputs(actor(&auth), runtime_instance_id, Some(run_id))
+        .await
+        .map(Json)
+        .map_err(approval_error)
+}
+
+pub async fn list_run_mcp_forms(
+    auth: AuthenticatedUser,
+    Path(run_id): Path<Uuid>,
+    Extension(approvals): Extension<Arc<ApprovalService>>,
+    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
+) -> Result<Json<Vec<PendingMcpFormSummary>>, ApiError> {
+    let runtime_instance_id = adapter.runtime_instance_id().await;
+    approvals
+        .list_pending_mcp_forms(actor(&auth), runtime_instance_id, run_id)
         .await
         .map(Json)
         .map_err(approval_error)
@@ -110,6 +125,46 @@ pub async fn respond_user_input(
             StatusCode::BAD_GATEWAY,
             Json(PlatformError::internal(
                 "User input delivery status is unknown; inspect before retrying",
+            )),
+        ));
+    }
+    approvals
+        .complete_decision(actor, &dispatch)
+        .await
+        .map_err(approval_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn respond_mcp_form(
+    auth: AuthenticatedUser,
+    Path(id): Path<Uuid>,
+    Extension(approvals): Extension<Arc<ApprovalService>>,
+    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
+    Json(request): Json<RespondMcpFormRequest>,
+) -> Result<StatusCode, ApiError> {
+    let actor = actor(&auth);
+    let runtime_instance_id = adapter.runtime_instance_id().await;
+    let dispatch = approvals
+        .begin_mcp_form_response(actor, id, runtime_instance_id, request)
+        .await
+        .map_err(approval_error)?;
+    if adapter
+        .respond_to_server_request(
+            dispatch.runtime_instance_id,
+            dispatch.runtime_request_id.clone(),
+            dispatch.response.clone(),
+        )
+        .await
+        .is_err()
+    {
+        approvals
+            .mark_delivery_unknown(actor, &dispatch)
+            .await
+            .map_err(approval_error)?;
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            Json(PlatformError::internal(
+                "MCP form delivery status is unknown; inspect before retrying",
             )),
         ));
     }

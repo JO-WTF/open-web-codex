@@ -34,8 +34,7 @@ pub async fn list_for_run(
         "SELECT id, run_id, provider_id, model_id, input_tokens,
                 cached_input_tokens, output_tokens, tool_schema_tokens,
                 latency_ms, first_token_ms, compaction_count, terminal_status,
-                stable_prefix_sha256, tool_inventory_sha256, skill_set_sha256,
-                runtime_role_sha256, created_at
+                created_at
          FROM provider_call_metrics
          WHERE organization_id = $1 AND run_id = $2
          ORDER BY created_at, id LIMIT 500",
@@ -60,10 +59,6 @@ pub async fn list_for_run(
                 first_token_ms: row.get("first_token_ms"),
                 compaction_count: row.get("compaction_count"),
                 terminal_status: row.get("terminal_status"),
-                stable_prefix_sha256: row.get("stable_prefix_sha256"),
-                tool_inventory_sha256: row.get("tool_inventory_sha256"),
-                skill_set_sha256: row.get("skill_set_sha256"),
-                runtime_role_sha256: row.get("runtime_role_sha256"),
                 created_at: row.get("created_at"),
             })
             .collect(),

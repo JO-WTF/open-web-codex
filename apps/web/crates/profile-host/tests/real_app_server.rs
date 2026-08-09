@@ -172,7 +172,7 @@ stream_max_retries = 0
     let first_runtime_instance_id = first.runtime_instance_id().await;
     let snapshot = first.snapshot().await;
     assert_eq!(snapshot.state, ProfileHostState::Ready);
-    assert!(snapshot.capability_count >= 3);
+    assert!(snapshot.last_error.is_none());
     let started = first
         .request(
             "thread/start",

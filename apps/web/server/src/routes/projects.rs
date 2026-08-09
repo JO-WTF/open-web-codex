@@ -27,7 +27,7 @@ pub async fn list_thread_contexts(
     let rows = sqlx::query(
         "SELECT p.id AS project_id, p.name AS project_name, p.git_url, p.default_branch, \
                 p.created_at AS project_created_at, p.updated_at AS project_updated_at, \
-                t.id AS task_id, t.title, t.status AS task_status, \
+                t.id AS task_id, t.workspace_id AS task_workspace_id, t.title, t.status AS task_status, \
                 t.model_provider, t.model, \
                 t.created_at AS task_created_at, t.updated_at AS task_updated_at, \
                 r.id AS run_id, r.status AS run_status, r.failure_code AS run_failure_code, \
@@ -35,7 +35,7 @@ pub async fn list_thread_contexts(
                 r.workspace_id, r.attempt, \
                 r.created_at AS run_created_at, r.updated_at AS run_updated_at \
          FROM projects p JOIN tasks t ON t.project_id = p.id \
-         JOIN runs r ON r.task_id = t.id \
+         JOIN runs r ON r.task_id = t.id AND r.workspace_id = t.workspace_id \
          WHERE p.id = $1 AND p.organization_id = $2 AND t.organization_id = $2 \
            AND r.organization_id = $2 AND r.codex_thread_id IS NOT NULL \
          ORDER BY r.created_at DESC",
@@ -59,6 +59,7 @@ pub async fn list_thread_contexts(
                 task: Task {
                     id: row.get("task_id"),
                     project_id,
+                    workspace_id: row.get("task_workspace_id"),
                     title: row.get("title"),
                     status: row.get("task_status"),
                     model_provider: row.get("model_provider"),

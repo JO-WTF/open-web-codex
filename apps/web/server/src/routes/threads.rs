@@ -199,6 +199,9 @@ async fn authorized_thread(
         "SELECT run.task_id, run.workspace_id, run.codex_thread_id, run.requested_by, \
                 workspace.root_path, workspace.state \
          FROM runs run \
+         JOIN tasks task ON task.id = run.task_id \
+           AND task.organization_id = run.organization_id \
+           AND task.workspace_id = run.workspace_id \
          JOIN workspaces workspace ON workspace.id = run.workspace_id \
            AND workspace.organization_id = run.organization_id \
          JOIN workspace_grants workspace_grant ON workspace_grant.workspace_id = workspace.id \
@@ -247,6 +250,9 @@ async fn authorized_agent_thread(
         "SELECT run.task_id, run.workspace_id, run.requested_by, workspace.root_path,
                 workspace.state, agent.thread_id
          FROM runs run
+         JOIN tasks task ON task.id = run.task_id
+           AND task.organization_id = run.organization_id
+           AND task.workspace_id = run.workspace_id
          JOIN runtime_agent_projections agent
            ON agent.root_run_id = run.id
           AND agent.organization_id = run.organization_id

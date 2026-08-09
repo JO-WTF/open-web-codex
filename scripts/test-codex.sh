@@ -10,13 +10,4 @@ source "$script_dir/cargo-build-cache.sh"
 cargo_build_cache_configure "$repo_root"
 cargo_build_cache_describe
 
-test_status=0
-gc_status=0
-"$script_dir/cargo-target-gc.sh" --preserve-profile dev-small
-(cd "$repo_root/codex" && just test --cargo-profile ci-test "$@") || test_status=$?
-"$script_dir/cargo-target-gc.sh" --preserve-profile dev-small || gc_status=$?
-
-if ((test_status != 0)); then
-  exit "$test_status"
-fi
-exit "$gc_status"
+(cd "$repo_root/codex" && just test --cargo-profile ci-test "$@")

@@ -1,11 +1,17 @@
 # ADR-008：版本化可安装 Tutorial Blueprint
 
-- 状态：Accepted
+- 状态：部分被 [ADR-014](014-release-installation-runtime-discovery.md) 与
+  [ADR-017](017-clean-copilot-platform-spine.md) 替代
 - 日期：2026-07-30
 - 相关阶段：M2 Enterprise Supervisor Copilot
 - 相关文档：[产品设计](../product-design.md)、
   [M2 短期计划](../enterprise-supervisor-copilot-plan.md)、
   [Workspace Dataset Release](007-workspace-dataset-releases.md)
+
+仍有效：教程包必须版本化、幂等、无隐藏 fallback，并复用正式 Catalog owner。
+已替代：Workspace-scoped reconcile、手工锁定旧 package/hash 和把旧仓网资源链作为当前
+新手入口。未来 Blueprint 必须由统一 Compiler 生成，并通过 Profile Installation 与
+Runtime discovery；本文其余内容仅保存历史背景。
 
 ## 背景
 

@@ -1,89 +1,241 @@
 # Architecture
 
-本文描述当前实现的所有权和边界。长期产品方向见 `product-vision.md`；目标 Copilot
-创作架构见 `supervisor-agent-skill-tool-architecture.md`；能力证据见
-`capability-baseline.md`；本仓网 6.0 的过渡实现合同见
-`enterprise-supervisor-copilot-plan.md`。
+| 字段 | 内容 |
+| --- | --- |
+| 文档性质 | 当前事实 |
+| 快照日期 | 2026-08-09 |
+| 代码快照 | HEAD `75a3d5eb98a42e8556da34a19e1ca5bfe4571326` + 当前阶段一工作树 |
+| 当前阶段边界 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) 与 [开发计划](development-plan.md) |
+| 接受决策 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) |
 
-当前 Network Case 不是目标平台通用对象：其来源/映射与 Platform Data Intake 重复，
-其 revision/operation/readiness 属于待提取的 Platform Work State，当前领域 Tool envelope
-也泄漏到 event projection。以下章节记录这些代码现在如何运行，不代表重构后的 owner。
+本文只描述当前代码怎样组成、事实由谁保存以及已经存在的边界偏离。目标方案不在这里
+冒充现状；验证强度以 [能力基线](capability-baseline.md) 为准。
 
-## 目标
-
-`open-web-codex` 是围绕官方 Codex Runtime 的浏览器控制面，不在 WebApp、Server 或数据库中重新实现 Thread、Turn、Agent、Skill、MCP、记忆或模型上下文。
+## 1. 当前运行拓扑
 
 ```text
-Browser
-  -> authenticated Web API + WebSocket
-  -> Platform Server: Profile / Workspace / Run / Approval / Artifact / audit
-  -> Profile Host: one isolated CODEX_HOME and one app-server per Profile
-  -> Codex Runtime: Thread / Turn / Item / context / Agent / Skill / MCP / Provider
-  -> authorized Workspace / Runner / Git for execution roots
+Browser WebApp
+  -> authenticated Platform API + WebSocket
+  -> Platform Server + PostgreSQL
+  -> Profile Host / Codex Adapter
+  -> one Codex app-server process for the current Profile
+  -> Codex Runtime
+  -> authorized Workspace / managed Runner
+  -> Profile-native Skill/Role plus role-local MCP over explicit application assets
 ```
 
-## 所有权
+当前交付仍是单用户、单 Profile，但 User、Organization、Profile、Workspace、Task、Run
+等身份已经存在于主要数据库记录和运行合同中。Browser 不直接访问 app-server；平台把
+Runtime 事件转换成浏览器 DTO 和持久化投影。
 
-| 层 | 拥有 | 不拥有 |
+## 2. 当前权威所有者
+
+| 事实 | 当前 owner | 当前实现状态 |
 | --- | --- | --- |
-| Browser WebApp | 表现、输入、可访问性、平台 DTO 渲染 | Thread 语义、模型上下文、Runtime discovery、凭据、原始 JSON-RPC |
-| Platform Server | Profile、Workspace 授权、Run、Approval、Artifact、审计、浏览器 DTO、执行投影 | 推理、上下文压缩、Skill/MCP 生命周期、Provider transport |
-| Profile Host | 隔离 `CODEX_HOME`、app-server 进程、请求桥接、Runtime 事件归一化 | Web UI、平台组织、第二个状态库、Runtime 模拟 |
-| Codex Runtime | Thread/Turn/Item、Agent 调度、Skill/Plugin/MCP discovery、模型调用和官方输入请求 | Web session、组织授权、浏览器 DTO、Workspace provisioning |
-| Workspace/Runner/Git | 授权执行根、Run lease、clone/worktree、命令和交付 | 模型可见对话状态 |
-| Skill/Plugin/MCP | 模型可见的指令、声明、Tool、Resource | 隐式 Profile mutation、Web 命令拦截、平台授权 |
+| Thread、Turn、Item、上下文、Agent 调度 | Codex Runtime | Runtime 是权威 owner；已物化 Thread 的实际 Provider/model 属于 official Thread settings，不由 Profile 默认值或 Task 字段覆盖。当前 Adapter/Server/Browser 仍叠加本地 history mode、approval overlay 和 live/history merge，其中 Browser 会按相同用户文本去重，尚未收敛为 official Item/client identity 的纯投影 |
+| Skill、Plugin、MCP、Tool 执行 | Codex Runtime | Runtime 执行；阶段一 built-in 使用原生 Profile Skill/Role 与 Role-local MCP；Standard/fork 产品路径不再注入 selected capability roots，也不扫描 cwd、Workspace 或源码树寻找 built-in |
+| Profile 进程与 `CODEX_HOME` | Profile Host | 单 Profile 进程已存在；启动前只为 clean Profile 原子 seed 固定 Skill/Role，已存在普通文件归 Profile 所有且不覆盖；进程 `HOME`/`USERPROFILE` 与 neutral cwd 均按 Profile Host 隔离；Server 仍有显式宿主认证导入路径 |
+| Provider 定义、模型目录与 Profile 的未来 Thread 默认选择 | Codex Profile config + Runtime | `config/batchWrite` 已持久化到 Profile `config.toml`，Runtime 读取并用于后续新 Thread；Platform 当前仍以 `profile_provider_definitions` 和 global `models.default_selection` 镜像并在启动后回写，属于待原子删除的第二/第三 owner |
+| Provider Secret | Platform encrypted Secret store | Profile/provider scope 的密文和进程环境注入由 Platform 拥有；Codex config 只保存环境变量引用，不保存明文 |
+| Workspace 授权、执行根与普通文件 | Platform + Runner | Workspace 独立于 Thread/Run；Task 已固定唯一授权 Workspace，Run/fork/recovery 受数据库和服务端不变量约束；真实 Runtime Probe 已证明 Root/child 使用同一 native `sandboxCwd`，同时观察到 macOS `/var` 与 `/private/var` 的同 inode 词法差异；physical-path join 的通用收敛进入后续 backlog，当前仓网链继续以既有 Workspace denial gate 为边界；通用文件 Web 产品流已统一到 `/workspaces/{id}/files` 与 `GitRuntime` |
+| MCP Resource 内容与生命周期 | 各个 MCP provider | Codex 按 Thread/Turn 当前 server inventory 执行 list/read，official Tool Item 保存 ResourceLink/structuredContent；供应链 provider 当前把字节保存在 Profile 私有、按 canonical Workspace 隔离的 `ResourceStore` 中，Platform 不复制内容或充当 Resource Broker |
+| 通用 Copilot Resource/Workspace 基础合同 | 长期由 Platform/Workspace authority 与平台提供的 provider library 分工拥有 | Workspace 授权、canonical containment/no-follow、final file atomic create-new 和 Artifact 物化属于 Platform/Runner；`ResourceRef` envelope、expected-schema 校验、canonical codec、payload bounds、typed errors 与 provider load/publish primitives 长期应由平台提供给所有 Copilot。阶段一仍以内嵌在 `supply_chain` 的领域无关单模块孵化，尚未成为公开 SDK |
+| Task、Run、Approval、Artifact、Audit | Platform | 已有持久化对象和浏览器 DTO；当前 Artifact 投影仍会把任意 JSON/GeoJSON ResourceLink 提升和二次物化，并以 Run-scoped inline 表和模型文本指令决定展示，属于待删偏离 |
+| 用户输入 | Runtime 请求，Platform Approval 投影 | Root 官方输入路径已在真实 E2E 中通过 |
+| Agent execution | Runtime 事件，Platform projection | 有等待、输入和完整终态投影；属于可重建视图 |
+| Capability Draft/Release/Installation | 无当前生产 owner | Catalog/Studio/Python publish crate、route、DTO、client、UI 与无 owner 数据表均已删除，不参与启动或 readiness |
+| Work State 与 Platform coordination | 无当前 production owner | work-state-service、route、MCP、gate、schema 与第二控制面已由 Slice 4B.2-A 删除；不建设替代状态机 |
+| Data Intake | 无当前 owner | 生产 route、validation crate、SourceAsset/Dataset/Task binding 表与产品入口已删除；阶段一不建设替代状态机 |
+| 仓网规划能力 | 供应链 Python 包的 domain owners | 当前阶段统一拥有 demand/facility/candidate/location/lane/route/cost records，Data mapping/normalization/geography，route/cost fact 与 matrix build/validate/partial reuse，actual/optimized baseline、open/close/relocation scenario、assignment/service/cost evaluation、p-median、before/after comparison 与 final map/report；不拥有通用 Resource/Workspace infrastructure。Case/NetworkSnapshot/source_ref/ArtifactRef 与多层 hashes 仍是待删偏离。未来若第二个供应链 Copilot 证明存在稳定公共领域合同，再评估内部提取，不在阶段一新增实现层 |
 
-平台事件和数据库表是可重建投影，不是第二个 Thread 或第二个 Supervisor。Codex 保持模型可见对话的唯一权威。
+Codex Runtime 仍是模型可见对话状态的唯一权威。Platform events、execution、activity
+和协作状态都是投影，不应成为第二个 Thread、Memory 或 Supervisor。
 
-## Supervisor 协作
+## 3. Capability 创作、发布和安装的当前形态
 
-Supervisor 不承载仓网业务流程。它先创建一个 Network Case，再根据当前用户问题和 Case readiness 动态选择：
+阶段一已经删除旧 `capability-catalog`、`supervisor-catalog` crate，Agent/Supervisor/
+Instruction Policy definition routes，Python capability validate/test/publish，Workspace
+capability package publisher，以及对应 Rust/Browser DTO、client、Settings Studio 和 Sidebar
+入口。普通 Workspace `tools/` 内容不再被平台识别、发布或迁移；它只是普通文件。
 
-```mermaid
-flowchart LR
-  U[用户问题] --> S[Root Supervisor]
-  S --> C[Network Case]
-  C --> N[Network Agent: 定义需求和计算口径]
-  C --> D[Data Agent: 文件检查和标准化]
-  D --> C
-  N --> C
-  N --> O[矩阵、覆盖、成本、场景、选址]
-  O --> C
-  C --> P[最终报告 Artifact]
-```
+当前 schema 已删除 Capability Catalog Draft/Release/Installation、Agent definition/release/
+run binding、Workspace package release 与 Supervisor instruction policy release 等无 owner
+对象。产品启动只走 Standard Thread，不读取安装状态、Agent/Supervisor binding 或 governed
+execution selection。Slice 4B.2-A 已由 migration 55 删除 Supervisor policy
+snapshot/binding、definition/revision/release 和 continuation 六表；它们不再构成 Catalog、
+发布或协作表面。Runtime agent projection 是现役 Platform 可重建投影。Slice 4B.2-B 已删除
+本地 capability manifest、`profile_capabilities` 和 Web contract bundle；Profile Host 只
+typed 校验官方 `initialize` 的四字段，并只对 `codexHome` 执行 Profile owner 安全校验。
 
-Root 只创建和查询 Case，并把同一个 `case_id` 放进每个子 Agent assignment。Network Agent 把本次最小数据需求写入 Case；Data Agent 只有在存在用户文件或用户明确请求教程 Demo 时才发现来源。候选仓、current coverage、报价、成本规则、导航许可和时效目标都是按当前问题决定的条件输入。没有一个完整数据集是所有分析的通用前置条件。
+阶段一 built-in 不再经过上述路径。Server 从 checked-in 三项 Skill、两项 Role 模板组合
+启动 seed，并要求显式配置 supply-chain/maps 的共享应用资产根和 prepared Python 环境；
+缺少固定 launcher、runtime、Mock 源或依赖文件时 real mode 明确 unavailable。Profile Host
+只允许 `$CODEX_HOME/skills/<id>/SKILL.md` 和 `$CODEX_HOME/agents/<role>.toml` 两种
+typed destination，不写 `config.toml`，不复制工具代码、venv、Node 依赖、Mock 或缓存。
+clean Profile 缺失文件使用 create-new 原子落盘；现有普通文件保留，使开发者修改后的
+Skill watcher 和下一次 Role spawn 仍由 Codex 原生语义拥有。
 
-## Case 与 Artifact
+Data/Network Role TOML 各自持有完整 MCP transport 与精确 `enabled_tools`；Root 没有全局
+仓网 MCP。当前 composition 仍把 MCP process cwd 设为 canonical 共享应用资产根，这只是
+下一切片迁移输入而非目标合同：目标是 launcher、代码和 fixture 来自显式只读 application
+assets，stdio MCP config 不设置 cwd，provider Resource scope 复用官方 Thread Workspace
+cwd。maps 状态根单独指向 Profile 私有 `.open-web-codex/mcp-state/maps-mcp`。真实 stdio
+启动探针已证明四个 MCP server 能列出 Role 所需 inventory，且启动前后共享应用资产树没有
+新增文件或 mtime 变化。
 
-大数据不经过 Agent 消息传递，也不通过多个 MCP Resource 串联。Network Case 是业务状态的唯一来源，使用 Profile 范围内的 SQLite 保存：
+3B.2 的真实 Runtime gate 已使用当前 checkout 构建的 Codex、生产 Profile seed composition
+和本地 mock Responses provider 证明：clean Profile 的官方 `skills/list(forceReload=true)`
+精确发现三项仓网 Skill；Standard Root 不发现任何仓网 MCP；原生 Data/Network spawn 只看到
+各自 Role Skill 与精确 MCP/tool inventory；native wait/mailbox、同 child follow-up 和终态正常。
+修改 Profile Skill 会发出 `skills/changed`，force reload 读取新内容；修改 Profile Role 只影响
+下一次 spawn，既有 child 不变。既有 child 对无配置 delta 的官方 MCP reload 是 safe-boundary
+no-op，status 仍返回同一 inventory，不伪造 startup transition。单独的 malformed Role gate
+收到 `configWarning`，spawn 明确返回 `unknown agent_type`、不创建 child，Root 仍正常终结。
+3B.3-B2 又删除了 `RunStartPreflight`、Governed Agent/Supervisor mode、request-scoped Role
+SHA/inventory 校验、Profile `platform-agents` writer/verifier 和相应 Server preflight。唯一启动链
+现在是 authorized Task Workspace → Standard start/fork → Codex 原生 Profile Skill/Role/MCP。
+Indonesia/Thailand 真实探针证明 Standard Root 与原生 child 都从各自 Turn `sandboxCwd` 读取
+同一授权 Workspace，Workspace 中没有 capability 文件。MCP process cwd 仍是共享应用资产根
+的现状只作为后续按 ADR-018 迁移到 native Thread Workspace cwd 的输入。
+3B.3-B4 已从当前 schema 删除 DB-only readiness 与 Catalog/Installation 等无 owner 对象；
+Slice 4B.2-A 又由 fresh PostgreSQL 全迁移链断言 Work State 十表、Supervisor 六表和
+provider speculative hash 四列不存在，同时保留 provider_call_metrics 与 Runtime agent
+projection 表。阶段一仓网业务闭环仍未完成。
 
-```text
-requirements -> sources -> mapping -> normalized input
-             -> route/cost matrix -> baseline/scenario/facility solution
-```
+## 4. 当前协同和 Run 生命周期
 
-每次工具调用只返回 `case_id`、facet 状态、有限问题和有限指标。内部组件用内容 hash、revision 和依赖关系进行失效与幂等控制，但这些内部标识不进入模型消息。只有 `publish_network_planning_report` 会创建内容寻址的 `network_planning_report.v1` ResourceLink；平台把它投影为已授权 Artifact。Resource 不再承担 Agent 间数据总线职责。
+当前已存在以下可保留的基础：
 
-## 仓网计算边界
+- Runtime Root/child Agent 生命周期和精确 Runtime Role；
+- Approval、Root 官方 `request_user_input`、回答持久化和输入队列；
+- Agent execution 的稳定身份、等待状态和完整终态。
 
-- Data Server 使用 `workspace_intake.py` 作为唯一 CSV/JSON/XLSX 来源发现和检查实现。
-- `geography.py` 负责行政区目录、名称解析、候选仓构建和边界校验；ambiguous/missing 进入用户输入。
-- Planner 使用 `matrix.py` 构建球面路线、批量导航注册和成本矩阵；不改 Maps MCP `distance_matrix` 接口，也不从一个 MCP 内部调用另一个 MCP。
-- Solver 使用 OR-Tools CP-SAT；固定已有仓默认开启，用户明确指定的 optional existing 才能关闭；求解超时返回当前可行解和 `timeout`。
-- `evaluate_network_baseline` 将真实当前覆盖和已有仓优化基线分开。没有 current assignment 时不能输出 `actual_current`。
-- 地图由 Planner 从同一个 Case 中的两个方案生成，不增加 Visualization Agent 的二次计算链路。
+Slice 4B.2-A 已删除 Platform Work State/coordination 控制面、Supervisor
+snapshot/binding/continuation 以及 Event Projection 的领域 continuation dispatcher 和主动
+Root Turn。当前投影只保存 Runtime 事实：native Agent、activity、execution、Approval 和
+Artifact；它不再负责协作调度。fresh PostgreSQL security gate 与原生 child projection
+gate 均证明删除后 Runtime child lifecycle、Artifact 和资源投影继续可用。
 
-## 用户输入和执行投影
+## 5. 当前文件、Resource 与旧数据边界
 
-Runtime `item/tool/requestUserInput` 由平台先创建 Approval，再广播 `platform/userInputRequested`。平台解析问题、选项、secret 标记和 root/child 来源，但不把 Runtime server request ID 暴露给浏览器。回答使用 Approval UUID 和版本做并发控制，secret 不保存正文；Runtime 投递未知时保持 `delivery_unknown`。
+通用 Workspace 文件 route、Runner 与 Web 文件面板现在统一提供列举/搜索、单文件上传、
+文本查看、二进制下载和删除。每个上传请求只接受一个 multipart file；目标存在时返回 typed
+conflict，由 Web 对该文件逐项选择覆盖、改名或取消，避免未报告的批量部分成功。GitRuntime
+执行授权 Workspace、普通相对路径、大小、regular-file 与 symlink 边界检查，并用同目录
+临时文件和原子落盘语义写入。
 
-每个 child execution 在首次 assignment/spawn 时生成稳定短标题。连续普通 wait 只更新 `wait_cycle_count` 和当前状态；等待用户输入进入 `waiting_for_input` 并关联平台 Approval。完成、失败和中断只允许一个终态，乱序事件不能把终态恢复成 running。原始 Run 事件继续完整持久化，execution/activity 是可重建的浏览器投影。
+Task 已在创建时固定一个授权 Workspace，Browser 不能在 Run 启动时改选；真实 Runtime
+Probe 已证明 Root 与 native spawned child 的 FastMCP 调用都读取 Turn 的
+`sandboxCwd`，而不是 Plugin 进程 cwd。集成测试进一步证明同 Workspace 两个 Task 读取
+同一普通文件、没有 Task files API，另一个租户不能列举、读取或删除该 Workspace 文件。
 
-## Supervisor Draft
+Platform 的 SourceAsset、Data Intake session/draft/mapping/gate、Dataset Release、Task
+attachment/binding/snapshot/projection 生产路径和数据库对象已删除，没有引入 replacement
+registry、revision、binding、fingerprint 或 cache。Platform Work State 与其
+WorkResourceReference 已随 Slice 4B.2-A 完全删除。供应链 `CaseRepository` 仍保存
+source、mapping、revision、operation、dependency、readiness 和 deliverable，是下一切片
+必须从 Platform 之外收敛的领域重复状态。
 
-Draft 是可变资源，使用 `revision`、`content_sha256` 和 `updated_at`；保存时使用 expected revision 做乐观并发控制。发布是不可变 Release，服务器在事务中分配 semver patch 版本。运行绑定记录 Draft revision/hash 或 Release version/hash，避免运行过程中内容漂移。不要要求用户输入语义版本号，也不要为历史本地实现增加双读或旧字段兜底。
+当前 `ResourceStore` 以内容寻址 URI 为同一 logical `supply_chain` provider 的 Data/Network
+能力提供不可变 Resource 内容，并以 Profile 私有、canonical Workspace 隔离的物理目录保存
+字节；这一 provider content owner 与 Codex 官方 MCP Resource 合同一致，不应与
+CaseRepository 一起删除。当前迁移仍未完成：旧 Tool 会把同一 Resource 同时包装为
+`DataAgentRef` 和 `ArtifactRef`、在下游重算 content SHA，并散落各自的 load/publish/schema
+处理。阶段一允许把 scope/ref/store/codec/bounds/error/writer 的领域无关实现集中在
+`supply_chain` 单一模块，供 Data、Network 和 final Tool 共用；这只是平台级 Copilot
+infrastructure 的内嵌孵化位置，不改变 provider 对 Resource 字节和生命周期的所有权。
 
-## Codex 定制门禁
+Data Server 同时接受 `source_ref/sourceRef/source_refs/sourceRefs/source/source_file`、
+`mappings/entities`、`fields/field_mappings/fieldMappings` 等多种 wire shape。它提高了当前
+仓网原型的容错率，但也证明模型正在承担协议翻译。这些对象和 aliases 全部属于删除
+范围，不能通过新增通用 resolver 修补。目标工具合同对用户文件直接使用经校验的
+Workspace 相对路径，对 provider-owned intermediate 使用单一 typed MCP Resource ref；Platform 不建立
+数据 revision/binding/fingerprint/cache 或通用 Broker。跨 Task 可发现若在阶段一实现，只能是从
+official history exact Item 重建的授权 `{server, uri}` 引用投影；当前源码尚无该完整合同。
 
-官方 Runtime 已提供用户输入和 Agent 生命周期，因此这些能力没有新增 Codex 修改。第三方 Chat usage 的缓存统计属于现有 `provider-chat-transport` 保留补丁：`codex-api` 同时解析标准 `prompt_tokens_details.cached_tokens` 和 DeepSeek 顶层 `prompt_cache_hit_tokens`。任何其他 Runtime 修改仍必须先运行 upstream/customization status 脚本并满足 Patch Map 门禁。
+当前 `artifacts`、`artifact_task_grants`、exact Item provenance 和物化字节是可保留的
+Platform owner，但注册和来源合同尚未收敛。`artifact_candidates` 会把任何完成 MCP Tool
+返回的 JSON/GeoJSON ResourceLink 自动注册并读回 PostgreSQL；`inline_visualization_artifacts`
+又以 Run 外键保存 renderer，并依赖 Assistant 复述 `::codex-inline-vis` 文本指令和跨 child
+Resource 搜索。这会把中间数据提升为 Artifact，也使 Run 删除同时删除所谓可持久交付。
+`artifacts.retention_state` 只有读取条件，没有 expiration/delete/policy writer，当前并不存在
+真实保留周期。上述旧链必须在新的仓网 Resource active surface 切换前删除；目标 final map/report
+由明确 built-in final Tool 原子写入 Workspace-relative create-new 自包含 bundle，Platform 只从
+其 exact official completed Item 和 typed output schema 注册、通过 producing Run 的授权 Workspace
+使用既有 no-follow/containment/size 边界即时复制。`content_sha256` 只记录复制后字节完整性，
+不参与业务复用或准入。
+
+## 6. Profile 与认证的当前边界
+
+Profile Host 已为 Runtime 创建独立目录和进程。每个 Host 以系统临时根下独立的 0700
+neutral directory 作为 app-server process cwd，初启与 restart 共用该目录；`HOME` 和
+`USERPROFILE` 指向 Profile 私有 process home，因此不会通过宿主 HOME 或源码/Runner 祖先
+发现用户 Skill、Plugin 或项目 `.codex`。业务 Workspace cwd 仍只由官方 Thread/Turn 参数
+传入。Server 的单 Profile 初始化在没有显式来源时仍会默认读取服务器操作者的
+`$HOME/.codex/auth.json`，并在目标 Profile 缺少认证文件时复制；这条显式认证导入仍不是
+未来多用户身份隔离合同。
+
+## 7. 当前浏览器产品表面
+
+生产构建只有一个浏览器入口：`index.html` 加载 `browser/browser-entry.ts`，入口完成平台会话
+后直接渲染 `WebApp`。仓库没有 desktop/Tauri Runtime；源码中的 `@tauri-apps/*` specifier 由
+Vite 映射到 browser shim。当前 production import graph 在展开该 alias 后只包含 75 个本地
+non-test TS/TSX/CSS 文件，其中 Markdown 外链仍通过一个 opener shim；仓库另有 466 个 non-test
+Browser 文件不在该图内，但 `tsconfig` 仍会把它们全部编译。`src/main.tsx`、`App`、`MainApp`
+及其 hooks/facade/styles/tests 因而仍构成非生产维护面。`PlatformClient` 又以一个完整 class 进入
+生产 bundle，未使用的 legacy methods 和 endpoint 字符串不会被 tree-shake，形成浏览器 API
+第二表面；这些事实不能作为第二产品入口或兼容合同继续扩展。
+当前 `check-main-ui-parity` 还会把整个 `apps/web/src` 与历史 Git/UI overlay 和手工 SHA 清单
+做字节级比较；它是阻碍当前 WebApp 演进的历史第二 UI truth，现阶段仍是已启用的 CI gate。
+该清理进入后续 backlog，不再作为仓网闭环或 4B.3 的前置；`check:no-desktop` 继续作为
+browser-only 边界门。
+
+Settings 只保留 Codex 原生 Runtime Agents、Skills/MCP 等当前运行配置表面；旧 Agent
+Catalog、Tool & Skill Studio、Supervisor Studio 与 Sidebar Agent Studio 已删除。当前阶段没有
+公开 Capability authoring/publish/install 产品入口。
+
+SDK 当前只有 `tool init/validate/test/pack`，Web 也没有消费 SDK 包的正式导入链路。
+公开 SDK、Studio 和 Copilot Builder 已后移到阶段二；它们不是阶段一缺口或退出门。
+
+## 8. 当前最重要的边界偏离
+
+1. 供应链 Case/NetworkSnapshot 仍在普通 Workspace 文件和 MCP Resource 之外保存
+   source/mapping/workflow 事实。
+2. 供应链 Tool 中 `source_ref`、MCP Resource、ArtifactRef 和普通 Workspace 文件仍混用；
+   Data/Network 跨 server 直接打开 provider 目录，taskEvidence/content SHA 成为额外信任层。
+3. Event Projection 把 generic ResourceLink 提升成 Artifact、执行跨 child Resource lookup 并解析
+   模型文本呈现指令；Run-scoped inline 表和无 writer 的 `retention_state` 又伪装了不存在的
+   持久展示与保留生命周期，使 Artifact 超出最终交付 owner。
+4. Profile Runtime 的 HOME 与 process cwd 已隔离，但 Server 仍可默认导入宿主认证；未来
+   多用户身份隔离尚未成立。
+5. Provider 定义、模型目录和未来 Thread 默认选择已由持久 Profile config/Runtime 拥有，但 Platform 仍在
+   `profile_provider_definitions` 和 global `models.default_selection` 重复保存、启动回放和覆盖
+   Runtime 结果；非默认 Provider 刷新还会改写 Profile 默认选择，普通目录更新会安排额外 Runtime 重启。
+6. Task 固定 Workspace、child `sandboxCwd`、通用 Workspace 文件产品入口和旧 Platform
+   数据路径删除已有独立集成证据，但完整仓网纵向 E2E 尚未形成。
+7. 当前 history overlay 按 Tool 名称或 approval message 推断插入位置，Browser 又以相同用户
+   文本合并 optimistic/live/history 消息；这些启发式在 Runtime exact Item ID 之外形成第二历史
+   关联规则，连续相同消息会被误合并。当前 Codex subtree 还保留旧 legacy response-tool/history
+   materialization seam，尚未接受 latest official paginated history 全量实现。
+8. `run_events` 的 sequence 和 run/thread/turn/item provenance 是合理的持久投影，但当前
+   `project_item` 会把未统一限长的 agent text、reasoning、command output、diff 与 Tool result
+   同时写入 PostgreSQL 和 WebSocket，且 unknown Runtime method 仍可能被 Browser JSON summary
+   放入对话；当前没有 event retention/prune owner。
+9. 通用 Copilot Resource/Workspace primitives 仍内嵌在供应链包中；当前只能保持其领域无关、
+   单一实现且由 Data、Network 与 final binding 共用，并保持依赖方向
+   `warehouse planning -> common infrastructure`。出现第二个真实 Copilot，或进入 phase-two public
+   Copilot SDK 之前，必须在不改变 `ResourceRef`、Tool 合同和 provider content owner 的前提下，
+   把它迁到平台提供的通用 provider library 与 Platform/Runner Workspace authority。
+
+这些都是当前事实，不是应继续兼容的接口，也不自动成为仓网闭环前置。当前只处理会直接
+使 DeepSeek + supply-chain + final map/report + Indonesia E2E 链不可达、写错数据或泄露 Secret
+的缺口；Browser legacy、Provider 全量去重和完整 Thread/history/lease 收敛进入后续 backlog。
+阶段一边界由 [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) 约束；具体顺序只进入
+[开发计划](development-plan.md)。
+
+## 9. 证据入口
+
+- 当前能力和真实 E2E 范围：[能力基线](capability-baseline.md)
+- 本轮源码与失败链审计：[临时审计](temporary-copilot-platform-refactor-audit-2026-08-08.md)
+- 当前阶段所有权与协同合同：[ADR-018](adr/018-built-in-network-copilot-runtime-closure.md)
+- 当前下一步：[开发计划](development-plan.md)

@@ -33,20 +33,35 @@ input.on("line", (line) => {
       process.exit(42);
       return;
     }
-    send({
-      id: 1,
-      result: {
-        serverInfo: { name: "fake-codex-app-server", version: "1.0.0" },
-        capabilityManifest: {
-          schemaVersion: "1.0.0",
-          capabilities: [{ id: "protocol.initialize", status: "supported" }],
-        },
-      },
-    });
+    const result = {
+      userAgent: "fake-codex-app-server/1.0.0",
+      codexHome: "/tmp/fake-codex-home",
+      platformFamily: "test",
+      platformOs: "test",
+    };
+    if (mode === "invalid-initialize") {
+      delete result.userAgent;
+    }
+    send({ id: 1, result });
     return;
   }
 
   if (message.method === "initialized") {
-    process.exit(0);
+    return;
+  }
+
+  if (message.method === "thread/list" && message.id === 2) {
+    if (mode === "thread-list-error") {
+      send({ id: 2, error: { code: -32603, message: "fixture thread/list failure" } });
+      return;
+    }
+    send({
+      id: 2,
+      result: {
+        data: [],
+        nextCursor: null,
+        backwardsCursor: null,
+      },
+    });
   }
 });

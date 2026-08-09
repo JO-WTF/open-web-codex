@@ -1,44 +1,16 @@
 import type {
   Approval,
-  AgentDefinitionSummary,
-  AgentDefinitionDetail,
-  AgentDefinitionDraftRequest,
-  AgentDefinitionReleaseSummary,
-  AgentDefinitionResourceSummary,
-  AgentDefinitionValidationResult,
-  AgentRunSelection,
-  CapabilityPackageSummary,
-  CapabilityDraftDetail,
-  CapabilityDraftSummary,
-  CapabilityInstallationSummary,
-  CapabilityReleaseSummary,
-  CapabilityReadinessSummary,
-  CapabilityValidationResult,
-  CatalogDraftContent,
-  CatalogResourceKind,
-  CollaborationStatusSummary,
   ProviderCallMetric,
-  PythonCapabilityPublishRequest,
-  PythonCapabilityPublishResponse,
-  PythonCapabilityToolTestRequest,
-  PythonCapabilityToolTestResponse,
-  PythonCapabilityValidationResult,
   Me,
   Project,
   ProviderCatalog,
   Run,
-  RunReadiness,
-  RunReadinessRequest,
-  TaskAnalysisReadinessRequest,
-  DataIntakeSessionSummary,
-  DataIntakeResponseRequest,
-  AnalysisStartRequest,
-  AnalysisStartResponse,
-  WorkspaceDataDraftSummary,
-  SourceAssetSummary,
   RunEvent,
   RuntimeAgentActivity,
   RuntimeAgentExecution,
+  McpFormContent,
+  McpFormResponseAction,
+  PendingMcpFormSummary,
   PendingUserInputSummary,
   Session,
   Task,
@@ -47,11 +19,6 @@ import type {
   WorkspaceFileContent,
   WorkspaceFileUploadResponse,
   WorkspaceFileDiff,
-  PublishWorkspaceDatasetRequest,
-  WorkspaceDatasetReleaseSummary,
-  TutorialBlueprint,
-  TutorialBlueprintReconcileResponse,
-  TutorialBlueprintSummary,
   WorkspaceBranch,
   WorkspaceLog,
   WorkspaceCommitDiff,
@@ -72,17 +39,6 @@ import type {
   CreateGitHubRepositoryResponse,
   MapsConfiguration,
   MapsProvider,
-  SupervisorInstructionPolicyDetail,
-  SupervisorInstructionPolicyPublishRequest,
-  SupervisorInstructionPolicySummary,
-  SupervisorPolicyBinding,
-  SupervisorPolicyDetail,
-  SupervisorPolicySelection,
-  SupervisorPolicySummary,
-  SupervisorDefinitionSummary,
-  SupervisorDraftRequest,
-  SupervisorReleaseSummary,
-  SupervisorValidationResult,
   RuntimeAgentProjection,
   ArtifactSummary,
 } from "./types";
@@ -330,6 +286,7 @@ export class PlatformClient {
 
   createTask(
     projectId: string,
+    workspaceId: string,
     title: string,
     selection?: { providerId: string; modelId: string } | null,
   ) {
@@ -337,6 +294,7 @@ export class PlatformClient {
       method: "POST",
       body: JSON.stringify({
         project_id: projectId,
+        workspace_id: workspaceId,
         title,
         model_provider: selection?.providerId ?? null,
         model: selection?.modelId ?? null,
@@ -411,403 +369,21 @@ export class PlatformClient {
 
   startRun(
     taskId: string,
-    workspaceId: string,
     options: {
-      readinessFingerprint: string;
       idempotencyKey?: string;
       forkThreadId?: string | null;
       forkSourceRunId?: string | null;
-      supervisorPolicy?: SupervisorPolicySelection | null;
-      supervisorDraftId?: string | null;
-      agent?: AgentRunSelection | null;
-      purpose?: "conversation" | "analysis";
     },
   ) {
     return this.request<{ run: Run }>(`/api/tasks/${encodeURIComponent(taskId)}/runs`, {
       method: "POST",
       body: JSON.stringify({
         idempotency_key: options.idempotencyKey ?? createIdempotencyKey(),
-        readiness_fingerprint: options.readinessFingerprint,
-        workspace_id: workspaceId,
         fork_thread_id: options.forkThreadId ?? null,
         fork_source_run_id: options.forkSourceRunId ?? null,
-        supervisor_policy: options.supervisorPolicy ?? null,
-        supervisor_draft_id: options.supervisorDraftId ?? null,
-        agent: options.agent ?? null,
-        ...(options.purpose ? { purpose: options.purpose } : {}),
       }),
     });
   }
-
-  evaluateRunReadiness(workspaceId: string, request: RunReadinessRequest) {
-    return this.request<RunReadiness>(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/run-readiness`,
-      { method: "POST", body: JSON.stringify(request) },
-    );
-  }
-
-  evaluateAnalysisReadiness(
-    taskId: string,
-    workspaceId: string,
-    request: Omit<RunReadinessRequest, "purpose" | "task_id">,
-  ) {
-    const body: TaskAnalysisReadinessRequest = {
-      workspace_id: workspaceId,
-      ...request,
-      purpose: "analysis",
-      task_id: taskId,
-    };
-    return this.request<RunReadiness>(
-      `/api/tasks/${encodeURIComponent(taskId)}/analysis-readiness`,
-      { method: "POST", body: JSON.stringify(body) },
-    );
-  }
-
-  createDataDraft(
-    workspaceId: string,
-    files: File[],
-    idempotencyKey = createIdempotencyKey(),
-  ) {
-    const body = new FormData();
-    for (const file of files) body.append("files", file, file.name);
-    return this.request<WorkspaceDataDraftSummary>(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/data-drafts`,
-      {
-        method: "POST",
-        headers: {
-          "idempotency-key": idempotencyKey,
-        },
-        body,
-      },
-    );
-  }
-
-  /** Upload a Workspace data draft while exposing the browser's real byte
-   * progress.  The ordinary fetch-based method remains the small reusable
-   * API used by non-composer callers; the Composer uses this method so its
-   * progress indicator cannot pretend that an upload has finished early. */
-  uploadDataDraft(
-    workspaceId: string,
-    files: File[],
-    onProgress?: (percent: number) => void,
-    idempotencyKey = createIdempotencyKey(),
-  ): Promise<WorkspaceDataDraftSummary> {
-    if (typeof XMLHttpRequest === "undefined") {
-      return this.createDataDraft(workspaceId, files, idempotencyKey);
-    }
-    const body = new FormData();
-    for (const file of files) body.append("files", file, file.name);
-    return new Promise((resolve, reject) => {
-      const request = new XMLHttpRequest();
-      request.open(
-        "POST",
-        `${this.baseUrl}/api/workspaces/${encodeURIComponent(workspaceId)}/data-drafts`,
-      );
-      request.responseType = "text";
-      if (this.token) request.setRequestHeader("authorization", `Bearer ${this.token}`);
-      request.setRequestHeader("idempotency-key", idempotencyKey);
-      request.upload.onprogress = (event) => {
-        if (!event.lengthComputable) return;
-        onProgress?.(Math.max(0, Math.min(100, Math.round((event.loaded / event.total) * 100))));
-      };
-      request.onerror = () => reject(new Error("The data upload failed."));
-      request.onabort = () => reject(new Error("The data upload was cancelled."));
-      request.onload = () => {
-        let payload: unknown = null;
-        if (request.responseText) {
-          try {
-            payload = JSON.parse(request.responseText) as unknown;
-          } catch {
-            reject(new Error(`Server returned a non-JSON response for data upload (HTTP ${request.status}).`));
-            return;
-          }
-        }
-        if (request.status < 200 || request.status >= 300) {
-          const record = payload && typeof payload === "object"
-            ? payload as Record<string, unknown>
-            : null;
-          const error = new Error(
-            typeof record?.message === "string"
-              ? record.message
-              : `Data upload failed (HTTP ${request.status}).`,
-          ) as Error & { code?: string; status?: number };
-          error.name = "PlatformRequestError";
-          error.code = typeof record?.code === "string" ? record.code : error.message;
-          error.status = request.status;
-          reject(error);
-          return;
-        }
-        onProgress?.(100);
-        resolve(payload as WorkspaceDataDraftSummary);
-      };
-      request.send(body);
-    });
-  }
-
-  getDataIntake(taskId: string) {
-    return this.request<DataIntakeSessionSummary>(
-      `/api/tasks/${encodeURIComponent(taskId)}/data-intake`,
-    );
-  }
-
-  listTutorialBlueprints() {
-    return this.request<TutorialBlueprintSummary[]>("/api/tutorial-blueprints");
-  }
-
-  getTutorialBlueprint(blueprintId: string, revision: string) {
-    return this.request<TutorialBlueprint>(
-      `/api/tutorial-blueprints/${encodeURIComponent(blueprintId)}/${encodeURIComponent(revision)}`,
-    );
-  }
-
-  reconcileTutorialBlueprint(
-    workspaceId: string,
-    blueprintId: string,
-    revision: string,
-    idempotencyKey: string,
-  ) {
-    return this.request<TutorialBlueprintReconcileResponse>(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/tutorial-blueprints/${encodeURIComponent(blueprintId)}/${encodeURIComponent(revision)}/reconcile`,
-      {
-        method: "POST",
-        body: JSON.stringify({ idempotency_key: idempotencyKey }),
-      },
-    );
-  }
-
-  listSupervisorPolicies() {
-    return this.request<SupervisorPolicySummary[]>("/api/supervisor-policies");
-  }
-
-  getSupervisorPolicy(policyId: string, version: string) {
-    return this.request<SupervisorPolicyDetail>(
-      `/api/supervisor-policies/${encodeURIComponent(policyId)}/${encodeURIComponent(version)}`,
-    );
-  }
-
-  listSupervisorInstructionPolicies() {
-    return this.request<SupervisorInstructionPolicySummary[]>(
-      "/api/supervisor-instruction-policies",
-    );
-  }
-
-  getSupervisorInstructionPolicy(policyId: string, version: string) {
-    return this.request<SupervisorInstructionPolicyDetail>(
-      `/api/supervisor-instruction-policies/${encodeURIComponent(policyId)}/${encodeURIComponent(version)}`,
-    );
-  }
-
-  publishSupervisorInstructionPolicy(
-    request: SupervisorInstructionPolicyPublishRequest,
-  ) {
-    return this.request<SupervisorInstructionPolicyDetail>(
-      "/api/supervisor-instruction-policies",
-      { method: "POST", body: JSON.stringify(request) },
-    );
-  }
-
-  listAgentDefinitions() {
-    return this.request<AgentDefinitionSummary[]>("/api/agent-definitions");
-  }
-
-  listCapabilityPackages() {
-    return this.request<CapabilityPackageSummary[]>("/api/capability-packages");
-  }
-
-  listCapabilityDrafts() {
-    return this.request<CapabilityDraftSummary[]>("/api/catalog/drafts");
-  }
-
-  getCapabilityDraft(id: string) {
-    return this.request<CapabilityDraftDetail>(`/api/catalog/drafts/${encodeURIComponent(id)}`);
-  }
-
-  createCapabilityDraft(input: {
-    kind: CatalogResourceKind;
-    resourceId: string;
-    displayName: string;
-    description: string;
-    content: CatalogDraftContent;
-  }) {
-    return this.request<CapabilityDraftDetail>("/api/catalog/drafts", {
-      method: "POST",
-      body: JSON.stringify({
-        kind: input.kind,
-        resourceId: input.resourceId,
-        displayName: input.displayName,
-        description: input.description,
-        content: input.content,
-      }),
-    });
-  }
-
-  saveCapabilityDraft(id: string, input: {
-    expectedRevision: number;
-    displayName: string;
-    description: string;
-    content: CatalogDraftContent;
-  }) {
-    return this.request<CapabilityDraftDetail>(
-      `/api/catalog/drafts/${encodeURIComponent(id)}/save`,
-      {
-        method: "PUT",
-        body: JSON.stringify({
-          expectedRevision: input.expectedRevision,
-          displayName: input.displayName,
-          description: input.description,
-          content: input.content,
-        }),
-      },
-    );
-  }
-
-  validateCapabilityDraft(id: string) {
-    return this.request<CapabilityValidationResult>(
-      `/api/catalog/drafts/${encodeURIComponent(id)}/validate`,
-      { method: "POST" },
-    );
-  }
-
-  publishCapabilityDraft(id: string, expectedRevision: number) {
-    return this.request<CapabilityReleaseSummary>(
-      `/api/catalog/drafts/${encodeURIComponent(id)}/publish`,
-      { method: "POST", body: JSON.stringify({ expectedRevision }) },
-    );
-  }
-
-  listCapabilityReleases() {
-    return this.request<CapabilityReleaseSummary[]>("/api/catalog/releases");
-  }
-
-  installCapabilityRelease(releaseId: string, workspaceId: string) {
-    return this.request<CapabilityInstallationSummary>(
-      `/api/catalog/releases/${encodeURIComponent(releaseId)}/install`,
-      { method: "POST", body: JSON.stringify({ workspaceId }) },
-    );
-  }
-
-  getCapabilityReadiness(releaseId: string, workspaceId: string) {
-    return this.request<CapabilityReadinessSummary>(
-      `/api/catalog/releases/${encodeURIComponent(releaseId)}/workspaces/${encodeURIComponent(workspaceId)}/readiness`,
-    );
-  }
-
-  validatePythonCapability(
-    workspaceId: string,
-    request: PythonCapabilityPublishRequest,
-  ) {
-    return this.request<PythonCapabilityValidationResult>(
-      `/api/workspaces/${workspaceId}/python-capabilities/validate`,
-      { method: "POST", body: JSON.stringify(request) },
-    );
-  }
-
-  testPythonCapability(
-    workspaceId: string,
-    request: PythonCapabilityToolTestRequest,
-  ) {
-    return this.request<PythonCapabilityToolTestResponse>(
-      `/api/workspaces/${workspaceId}/python-capabilities/test`,
-      { method: "POST", body: JSON.stringify(request) },
-    );
-  }
-
-  publishPythonCapability(
-    workspaceId: string,
-    request: PythonCapabilityPublishRequest,
-  ) {
-    return this.request<PythonCapabilityPublishResponse>(
-      `/api/workspaces/${workspaceId}/python-capabilities/publish`,
-      { method: "POST", body: JSON.stringify(request) },
-    );
-  }
-
-  getAgentDefinition(definitionId: string, version: string) {
-    return this.request<AgentDefinitionDetail>(
-      `/api/agent-definitions/${encodeURIComponent(definitionId)}/${encodeURIComponent(version)}`,
-    );
-  }
-
-  listAgentDefinitionResources() {
-    return this.request<AgentDefinitionResourceSummary[]>("/api/agent-definition-resources");
-  }
-
-  createAgentDefinition(draft: AgentDefinitionDraftRequest) {
-    return this.request<AgentDefinitionResourceSummary>("/api/agent-definition-resources", {
-      method: "POST",
-      body: JSON.stringify(draft),
-    });
-  }
-
-  saveAgentDefinitionDraft(definitionId: string, draft: AgentDefinitionDraftRequest) {
-    return this.request<AgentDefinitionResourceSummary>(
-      `/api/agent-definition-resources/${encodeURIComponent(definitionId)}/draft`,
-      { method: "PUT", body: JSON.stringify(draft) },
-    );
-  }
-
-  validateAgentDefinitionDraft(definitionId: string) {
-    return this.request<AgentDefinitionValidationResult>(
-      `/api/agent-definition-resources/${encodeURIComponent(definitionId)}/validate`,
-      { method: "POST" },
-    );
-  }
-
-  publishAgentDefinitionDraft(definitionId: string) {
-    return this.request<AgentDefinitionReleaseSummary>(
-      `/api/agent-definition-resources/${encodeURIComponent(definitionId)}/publish`,
-      { method: "POST" },
-    );
-  }
-
-  listSupervisorDefinitions() {
-    return this.request<SupervisorDefinitionSummary[]>("/api/supervisor-definitions");
-  }
-
-  createSupervisorDefinition(draft: SupervisorDraftRequest) {
-    return this.request<SupervisorDefinitionSummary>("/api/supervisor-definitions", {
-      method: "POST",
-      body: JSON.stringify(draft),
-    });
-  }
-
-  saveSupervisorDraft(
-    definitionId: string,
-    draft: SupervisorDraftRequest,
-    expectedRevision: number,
-  ) {
-    return this.request<SupervisorDefinitionSummary>(
-      `/api/supervisor-definitions/${encodeURIComponent(definitionId)}/draft`,
-      {
-        method: "PUT",
-        body: JSON.stringify({ draft, expected_revision: expectedRevision }),
-      },
-    );
-  }
-
-  validateSupervisorDraft(definitionId: string) {
-    return this.request<SupervisorValidationResult>(
-      `/api/supervisor-definitions/${encodeURIComponent(definitionId)}/validate`,
-      { method: "POST" },
-    );
-  }
-
-  publishSupervisorDraft(definitionId: string, expectedRevision: number) {
-    return this.request<SupervisorReleaseSummary>(
-      `/api/supervisor-definitions/${encodeURIComponent(definitionId)}/publish`,
-      {
-        method: "POST",
-        body: JSON.stringify({ expected_revision: expectedRevision }),
-      },
-    );
-  }
-
-  getRunSupervisorPolicy(runId: string) {
-    return this.request<SupervisorPolicyBinding | null>(
-      `/api/runs/${encodeURIComponent(runId)}/supervisor-policy`,
-    );
-  }
-
   listRunAgents(runId: string) {
     return this.request<RuntimeAgentProjection[]>(
       `/api/runs/${encodeURIComponent(runId)}/agents`,
@@ -826,12 +402,6 @@ export class PlatformClient {
     );
   }
 
-  getRunCollaborationStatus(runId: string) {
-    return this.request<CollaborationStatusSummary>(
-      `/api/runs/${encodeURIComponent(runId)}/collaboration-status`,
-    );
-  }
-
   listRunProviderMetrics(runId: string) {
     return this.request<ProviderCallMetric[]>(
       `/api/runs/${encodeURIComponent(runId)}/provider-metrics`,
@@ -841,6 +411,12 @@ export class PlatformClient {
   listRunUserInputRequests(runId: string) {
     return this.request<PendingUserInputSummary[]>(
       `/api/runs/${encodeURIComponent(runId)}/user-input-requests`,
+    );
+  }
+
+  listRunMcpFormRequests(runId: string) {
+    return this.request<PendingMcpFormSummary[]>(
+      `/api/runs/${encodeURIComponent(runId)}/mcp-form-requests`,
     );
   }
 
@@ -872,7 +448,6 @@ export class PlatformClient {
       serviceTier?: string | null;
       accessMode?: string | null;
       images?: string[];
-      sourceAssetIds?: string[];
       collaborationMode?: Record<string, unknown> | null;
     } = {},
   ) {
@@ -893,32 +468,12 @@ export class PlatformClient {
           service_tier: options.serviceTier ?? null,
           access_mode: options.accessMode ?? null,
           images: options.images ?? [],
-          source_asset_ids: options.sourceAssetIds ?? [],
           collaboration_mode: options.collaborationMode ?? null,
         }),
       },
     );
   }
 
-  listWorkspaceSourceAssets(workspaceId: string) {
-    return this.request<SourceAssetSummary[]>(
-      "/api/workspaces/" + encodeURIComponent(workspaceId) + "/source-assets",
-    );
-  }
-
-  respondToDataIntake(taskId: string, request: DataIntakeResponseRequest) {
-    return this.request<DataIntakeSessionSummary>(
-      "/api/tasks/" + encodeURIComponent(taskId) + "/data-intake/responses",
-      { method: "POST", body: JSON.stringify(request) },
-    );
-  }
-
-  startAnalysis(taskId: string, request: AnalysisStartRequest) {
-    return this.request<AnalysisStartResponse>(
-      "/api/tasks/" + encodeURIComponent(taskId) + "/analysis-start",
-      { method: "POST", body: JSON.stringify(request) },
-    );
-  }
 
   interruptRun(runId: string, turnId: string) {
     return this.request<{ status: string }>(`/api/runs/${encodeURIComponent(runId)}/interrupt`, {
@@ -1007,6 +562,18 @@ export class PlatformClient {
     });
   }
 
+  respondMcpForm(
+    id: string,
+    action: McpFormResponseAction,
+    content: McpFormContent | undefined,
+    version: number,
+  ) {
+    return this.request<void>(`/api/approvals/${encodeURIComponent(id)}/mcp-form`, {
+      method: "POST",
+      body: JSON.stringify({ action, ...(content === undefined ? {} : { content }), version }),
+    });
+  }
+
   workspaceStatus(workspaceId: string) {
     return this.request<WorkspaceStatus>(
       `/api/workspaces/${encodeURIComponent(workspaceId)}/status`,
@@ -1031,44 +598,26 @@ export class PlatformClient {
     return this.request<string[]>(`/api/workspaces/${encodeURIComponent(workspaceId)}/files`);
   }
 
-  uploadWorkspaceFiles(workspaceId: string, files: File[]) {
-    if (files.length === 0) {
-      throw new Error("Choose at least one file to upload.");
+  uploadWorkspaceFiles(
+    workspaceId: string,
+    files: File[],
+    options: { overwrite?: boolean; paths?: string[] } = {},
+  ) {
+    if (files.length !== 1) {
+      throw new Error("Upload exactly one Workspace file per request.");
+    }
+    if (options.paths && options.paths.length !== files.length) {
+      throw new Error("Every uploaded file needs one Workspace-relative path.");
     }
     const body = new FormData();
-    for (const file of files) {
-      const relativePath = file.webkitRelativePath || file.name;
+    for (const [index, file] of files.entries()) {
+      const relativePath = options.paths?.[index] || file.webkitRelativePath || file.name;
       body.append("files", file, relativePath);
     }
+    const query = options.overwrite ? "?overwrite=true" : "";
     return this.request<WorkspaceFileUploadResponse>(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/files`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/files${query}`,
       { method: "POST", body },
-    );
-  }
-
-  listWorkspaceDatasetReleases(workspaceId: string) {
-    return this.request<WorkspaceDatasetReleaseSummary[]>(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/datasets`,
-    );
-  }
-
-  publishWorkspaceDatasetRelease(
-    workspaceId: string,
-    request: PublishWorkspaceDatasetRequest,
-    files: Map<string, File>,
-  ) {
-    const form = new FormData();
-    form.append("metadata", JSON.stringify(request));
-    for (const descriptor of request.files) {
-      const file = files.get(descriptor.field_id);
-      if (!file) {
-        throw new Error(`Dataset file ${descriptor.logical_name} is missing.`);
-      }
-      form.append(descriptor.field_id, file, file.name);
-    }
-    return this.request<WorkspaceDatasetReleaseSummary>(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/datasets`,
-      { method: "POST", body: form },
     );
   }
 

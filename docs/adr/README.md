@@ -14,17 +14,19 @@ ADR 记录已经接受、会长期约束实现且不能仅从当前代码推断�
 | [ADR-003](003-workspace-structure.md) | 平台 Cargo Workspace 结构 |
 | [ADR-004](004-codex-adapter-pattern.md) | Codex Adapter 抽象 |
 | [ADR-005](005-map-reply-cards.md) | Inline Visualization Artifact 与回复引用 |
-| [ADR-006](006-supervisor-capability-packages.md) | Supervisor Capability Package |
-| [ADR-007](007-workspace-dataset-releases.md) | Workspace Dataset Release |
-| [ADR-008](008-installable-tutorial-blueprints.md) | 版本化可安装 Tutorial Blueprint |
-| [ADR-009](009-thread-first-data-intake.md) | Thread-first 数据接入与分阶段 Readiness；数据 owner 部分已被 ADR-013 取代 |
-| [ADR-010](010-workspace-wide-intake-discovery.md) | 已被 ADR-013 取代 |
-| [ADR-011](011-explicit-demo-workspace-sources.md) | 显式 Demo Workspace 原始源与 Tutorial Blueprint 分离 |
+| [ADR-006](006-supervisor-capability-packages.md) | Supervisor Capability Package；旧模板/发布合同被 ADR-014/017 替代 |
+| [ADR-007](007-workspace-dataset-releases.md) | Workspace Dataset Release；已被 ADR-018 替代 |
+| [ADR-008](008-installable-tutorial-blueprints.md) | 版本化 Tutorial Blueprint；旧安装合同被 ADR-014/017 替代 |
+| [ADR-009](009-thread-first-data-intake.md) | Thread-first Data Intake；已被 ADR-018 替代 |
+| [ADR-010](010-workspace-wide-intake-discovery.md) | 已被 ADR-018 替代 |
+| [ADR-011](011-explicit-demo-workspace-sources.md) | 显式 Demo 与 Blueprint 分离；旧 Workspace 发现链被 ADR-013/017 替代 |
 | [ADR-012](012-explicit-development-database-rebuild.md) | 开发数据库只允许显式重建 |
-| [ADR-013](013-platform-data-intake-and-work-state.md) | Platform Data Intake 与通用 Work State 分工 |
-| [ADR-014](014-release-installation-runtime-discovery.md) | Release、Installation 与 Runtime Discovery 分离 |
-| [ADR-015](015-bounded-platform-tool-result.md) | 有界通用 Platform Tool Result |
-| [ADR-016](016-collaboration-context-and-root-read-model.md) | 不可伪造 CollaborationContext 与 Root 只读协调 |
+| [ADR-013](013-platform-data-intake-and-work-state.md) | Platform Data Intake 与 Work State；已被 ADR-018 替代 |
+| [ADR-014](014-release-installation-runtime-discovery.md) | Release/Installation；阶段一部分已被 ADR-018 替代 |
+| [ADR-015](015-bounded-platform-tool-result.md) | Platform Tool Result；已被 ADR-018 替代 |
+| [ADR-016](016-collaboration-context-and-root-read-model.md) | CollaborationContext/Root read model；已被 ADR-018 替代 |
+| [ADR-017](017-clean-copilot-platform-spine.md) | 以干净 Copilot 主干替换仓网原型边界；已被 ADR-018 替代 |
+| [ADR-018](018-built-in-network-copilot-runtime-closure.md) | Codex 原生机制驱动的内置仓网 Copilot；当前阶段基线 |
 
 ## 何时创建 ADR
 

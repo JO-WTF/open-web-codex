@@ -1,23 +1,19 @@
 import { PlatformClient } from "../../browser/client";
 import type {
-  AgentRunSelection,
-  DataIntakeSessionSummary,
   Approval,
   ArtifactSummary,
+  McpFormContent,
+  McpFormResponseAction,
+  PendingMcpFormSummary,
   Run,
   RunEvent,
-  RunReadiness,
   RuntimeAgentActivity,
   RuntimeAgentExecution,
   RuntimeAgentProjection,
   PendingUserInputSummary,
-  SupervisorPolicyBinding,
-  SupervisorPolicySelection,
-  SupervisorPolicySummary,
   Task,
   ThreadHistoryTurn,
   Workspace,
-  WorkspaceDataDraftSummary,
 } from "../../browser/types";
 import type { AppServerEvent, GitFileStatus, WorkspaceInfo } from "../types";
 
@@ -34,7 +30,6 @@ export type GatewayHealth = {
 
 export type SupervisorOverviewData = {
   taskTitle: string;
-  policy: SupervisorPolicyBinding | null;
   agents: RuntimeAgentProjection[];
   activities: RuntimeAgentActivity[];
   executions: RuntimeAgentExecution[];
@@ -60,7 +55,6 @@ type ThreadStartDraft = {
   taskPromise: Promise<Task> | null;
   runIdempotencyKey: string;
   acceptedRunId: string | null;
-  executionKey: string;
 };
 
 export type AcceptedThreadStart = {
@@ -88,19 +82,6 @@ function threadStartDraftKey(
   operationId: string,
 ) {
   return `${workspaceId}:${operationId}`;
-}
-
-function threadStartExecutionKey(
-  supervisorPolicy: (SupervisorPolicySelection & { draft_id?: string | null }) | null | undefined,
-  agent: AgentRunSelection | null | undefined,
-) {
-  if (supervisorPolicy) {
-    return `supervisor:${supervisorPolicy.policy_id}@${supervisorPolicy.version}:${supervisorPolicy.draft_id ?? "published"}`;
-  }
-  if (agent) {
-    return `agent:${agent.definition_id}@${agent.version}:${agent.release_id ?? "repository"}`;
-  }
-  return "standard";
 }
 
 function platformWorkspace(workspace: Workspace): WorkspaceInfo {
@@ -159,9 +140,22 @@ function runtimeMessage(event: RunEvent): JsonRecord | null {
         },
       };
     }
+    if (
+      requestMethod === "mcpServer/elicitation/request"
+      && requestParams.mode === "form"
+    ) {
+      return {
+        method: "platform/mcpFormRequested",
+        params: {
+          ...base,
+          runId: event.run_id,
+          approvalId,
+        },
+      };
+    }
     const needsGenericApprovalCard = requestMethod === "item/fileChange/requestApproval"
       || requestMethod === "item/permissions/requestApproval"
-      || requestMethod === "mcpServer/elicitation/request";
+      || (requestMethod === "mcpServer/elicitation/request" && requestParams.mode === "url");
     const method = needsGenericApprovalCard
       ? "item/commandExecution/requestApproval"
       : requestMethod;
@@ -195,6 +189,15 @@ function runtimeMessage(event: RunEvent): JsonRecord | null {
       : typeof data.requestId === "string" ? data.requestId : null;
     if (!approvalId) return null;
     const requestMethod = typeof data.requestMethod === "string" ? data.requestMethod : null;
+    if (
+      requestMethod === "mcpServer/elicitation/request"
+      && data.requestMode === "form"
+    ) {
+      return {
+        method: "platform/mcpFormResolved",
+        params: { ...base, runId: event.run_id, approvalId },
+      };
+    }
     if (requestMethod !== "item/tool/requestUserInput") {
       return {
         method: "serverRequest/resolved",
@@ -204,13 +207,6 @@ function runtimeMessage(event: RunEvent): JsonRecord | null {
     return {
       method: "platform/userInputResolved",
       params: { ...base, runId: event.run_id, approvalId },
-    };
-  }
-  if (event.event_type === "platform.data_intake.changed") {
-    if (data.sourceType !== "platform/data-intake/changed") return null;
-    return {
-      method: "platform/data-intake/changed",
-      params: { ...base, ...data },
     };
   }
   if (event.event_type === "codex.item.started" || event.event_type === "codex.item.completed") {
@@ -493,46 +489,24 @@ export class CodexMonitorWebClient {
     workspaceId: string,
     options: {
       operationId: string;
-      readinessFingerprint: string;
       providerId: string;
       modelId: string;
-      supervisorPolicy?: SupervisorPolicySelection | null;
-      supervisorDraftId?: string | null;
-      agent?: AgentRunSelection | null;
       onRunAccepted?: (accepted: AcceptedThreadStart) => void;
     },
   ) {
-    if (options?.supervisorPolicy && options.agent) {
-      throw new Error("A Thread cannot start as both an Agent and a Supervisor.");
-    }
     const operationId = options.operationId.trim();
     if (!operationId || operationId.length > 256) {
       throw new Error("Thread start operation identity is invalid.");
     }
     const workspace = await this.platform.getWorkspace(workspaceId);
-    const taskTitle = options?.supervisorPolicy
-      ? `Governed Supervisor · ${options.supervisorPolicy.policy_id}@${options.supervisorPolicy.version}`
-      : options?.agent
-        ? `Governed Agent · ${options.agent.definition_id}@${options.agent.version}`
-        : "Thread";
     const draftKey = threadStartDraftKey(workspaceId, operationId);
-    const executionKey = threadStartExecutionKey(
-      options.supervisorPolicy,
-      options.agent,
-    );
     let draft = this.threadStartDrafts.get(draftKey);
-    if (draft && draft.executionKey !== executionKey) {
-      throw new Error(
-        "Thread start operation identity is already bound to another execution selection.",
-      );
-    }
     if (!draft) {
       draft = {
         taskId: null,
         taskPromise: null,
         runIdempotencyKey: newIdempotencyKey(),
         acceptedRunId: null,
-        executionKey,
       };
       this.threadStartDrafts.set(draftKey, draft);
     }
@@ -543,7 +517,8 @@ export class CodexMonitorWebClient {
     } else {
       draft.taskPromise ??= this.platform.createTask(
         workspace.project_id,
-        taskTitle,
+        workspace.id,
+        "Thread",
         {
           providerId: options.providerId,
           modelId: options.modelId,
@@ -575,13 +550,8 @@ export class CodexMonitorWebClient {
     const run = draft.acceptedRunId
       ? await this.platform.getRun(draft.acceptedRunId)
       : (
-          await this.platform.startRun(task.id, workspaceId, {
-            readinessFingerprint: options.readinessFingerprint,
+          await this.platform.startRun(task.id, {
             idempotencyKey: draft.runIdempotencyKey,
-            supervisorPolicy: options?.supervisorPolicy ?? null,
-            supervisorDraftId: options?.supervisorDraftId ?? null,
-            agent: options?.agent ?? null,
-            purpose: "conversation",
           })
         ).run;
     draft.acceptedRunId = run.id;
@@ -611,93 +581,18 @@ export class CodexMonitorWebClient {
     }
   }
 
-  evaluateRunReadiness(
-    workspaceId: string,
-    options: {
-      providerId: string;
-      modelId: string;
-      supervisorPolicy?: SupervisorPolicySelection | null;
-      supervisorDraftId?: string | null;
-      agent?: AgentRunSelection | null;
-      purpose?: "conversation" | "analysis";
-    },
-  ): Promise<RunReadiness> {
-    if (options.supervisorPolicy && options.agent) {
-      throw new Error("A Thread cannot start as both an Agent and a Supervisor.");
-    }
-    return this.platform.evaluateRunReadiness(workspaceId, {
-      model_provider: options.providerId,
-      model: options.modelId,
-      supervisor_policy: options.supervisorPolicy ?? null,
-      supervisor_draft_id: options.supervisorDraftId ?? null,
-      agent: options.agent ?? null,
-      purpose: options.purpose ?? "conversation",
-    });
-  }
-
-  evaluateAnalysisReadiness(
-    taskId: string,
-    workspaceId: string,
-    options: {
-      providerId: string;
-      modelId: string;
-      supervisorPolicy?: SupervisorPolicySelection | null;
-      agent?: AgentRunSelection | null;
-    },
-  ): Promise<RunReadiness> {
-    if (options.supervisorPolicy && options.agent) {
-      throw new Error("A Thread cannot start as both an Agent and a Supervisor.");
-    }
-    return this.platform.evaluateAnalysisReadiness(taskId, workspaceId, {
-      model_provider: options.providerId,
-      model: options.modelId,
-      supervisor_policy: options.supervisorPolicy ?? null,
-      agent: options.agent ?? null,
-    });
-  }
-
-  createDataDraft(
-    workspaceId: string,
-    files: File[],
-    idempotencyKey?: string,
-  ): Promise<WorkspaceDataDraftSummary> {
-    return this.platform.createDataDraft(workspaceId, files, idempotencyKey);
-  }
-
-  uploadDataDraft(
-    workspaceId: string,
-    files: File[],
-    onProgress?: (percent: number) => void,
-    idempotencyKey?: string,
-  ): Promise<WorkspaceDataDraftSummary> {
-    return this.platform.uploadDataDraft(workspaceId, files, onProgress, idempotencyKey);
-  }
-
-  getDataIntake(taskId: string): Promise<DataIntakeSessionSummary> {
-    return this.platform.getDataIntake(taskId);
-  }
-
-  listSupervisorPolicies(): Promise<SupervisorPolicySummary[]> {
-    return this.platform.listSupervisorPolicies();
-  }
-
-  listAgentDefinitions() {
-    return this.platform.listAgentDefinitions();
-  }
-
   async getSupervisorOverview(
     threadId: string,
   ): Promise<SupervisorOverviewData | null> {
     const context = await this.findThreadContext(threadId);
-    const [task, policy, agents, activities, executions, artifacts] = await Promise.all([
+    const [task, agents, activities, executions, artifacts] = await Promise.all([
       this.platform.getTask(context.taskId),
-      this.platform.getRunSupervisorPolicy(context.runId),
       this.platform.listRunAgents(context.runId),
       this.platform.listRunAgentActivities(context.runId),
       this.platform.listRunAgentExecutions(context.runId),
       this.platform.listTaskArtifacts(context.taskId),
     ]);
-    return { taskTitle: task.title, policy, agents, activities, executions, artifacts };
+    return { taskTitle: task.title, agents, activities, executions, artifacts };
   }
 
   async listRunUserInputRequests(runId: string): Promise<PendingUserInputSummary[]> {
@@ -709,12 +604,30 @@ export class CodexMonitorWebClient {
     return this.platform.listRunUserInputRequests(context.runId);
   }
 
+  listRunMcpFormRequests(runId: string): Promise<PendingMcpFormSummary[]> {
+    return this.platform.listRunMcpFormRequests(runId);
+  }
+
+  async listThreadMcpFormRequests(threadId: string): Promise<PendingMcpFormSummary[]> {
+    const context = await this.findThreadContext(threadId);
+    return this.platform.listRunMcpFormRequests(context.runId);
+  }
+
   respondToUserInput(
     approvalId: string,
     version: number,
     answers: Record<string, { answers: string[] }>,
   ): Promise<void> {
     return this.platform.respondUserInput(approvalId, answers, version);
+  }
+
+  respondToMcpForm(
+    approvalId: string,
+    version: number,
+    action: McpFormResponseAction,
+    content?: McpFormContent,
+  ): Promise<void> {
+    return this.platform.respondMcpForm(approvalId, action, content, version);
   }
 
   async listAgentThreadTurns(
@@ -903,9 +816,14 @@ export class CodexMonitorWebClient {
     return await this.platform.listWorkspaceFiles(workspaceId);
   }
 
-  async uploadWorkspaceFiles(workspaceId: string, files: File[], threadId?: string | null) {
+  async uploadWorkspaceFiles(
+    workspaceId: string,
+    files: File[],
+    threadId?: string | null,
+    options: { overwrite?: boolean; paths?: string[] } = {},
+  ) {
     if (threadId) await this.readyRunForWorkspace(workspaceId, threadId);
-    return await this.platform.uploadWorkspaceFiles(workspaceId, files);
+    return await this.platform.uploadWorkspaceFiles(workspaceId, files, options);
   }
 
   async readWorkspaceFile(workspaceId: string, path: string, threadId?: string | null) {
@@ -942,14 +860,12 @@ export class CodexMonitorWebClient {
     text: string,
     model?: string | null,
     modelProvider?: string | null,
-    sourceAssetIds: string[] = [],
   ) {
     const context = await this.findThreadContext(threadId);
     this.selectedRunByWorkspace.set(context.workspaceId, context.runId);
     const response = await this.platform.sendMessage(context.taskId, text, {
       model,
       modelProvider,
-      sourceAssetIds,
     });
     return {
       status: response.status,
@@ -957,18 +873,6 @@ export class CodexMonitorWebClient {
       threadName: response.thread_name ?? null,
       turn: { id: response.turn_id, status: "inProgress" },
     };
-  }
-
-  async listWorkspaceSourceAssets(workspaceId: string) {
-    return await this.platform.listWorkspaceSourceAssets(workspaceId);
-  }
-
-  async respondToDataIntake(taskId: string, request: Parameters<typeof this.platform.respondToDataIntake>[1]) {
-    return await this.platform.respondToDataIntake(taskId, request);
-  }
-
-  async startAnalysis(taskId: string, request: Parameters<typeof this.platform.startAnalysis>[1]) {
-    return await this.platform.startAnalysis(taskId, request);
   }
 
   async interruptTurn(_workspaceId: string, threadId: string, turnId: string) {

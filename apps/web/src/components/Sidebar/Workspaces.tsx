@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import Archive from "lucide-react/dist/esm/icons/archive";
 import ChevronRight from "lucide-react/dist/esm/icons/chevron-right";
@@ -7,16 +7,7 @@ import LoaderCircle from "lucide-react/dist/esm/icons/loader-circle";
 import MessageSquare from "lucide-react/dist/esm/icons/message-square";
 import Sparkles from "lucide-react/dist/esm/icons/sparkles";
 import Trash2 from "lucide-react/dist/esm/icons/trash-2";
-import type {
-  AgentDefinitionSummary,
-  RunReadiness,
-  RunReadinessAction,
-  SupervisorPolicySummary,
-} from "../../../browser/types";
 import type { WorkspaceInfo } from "../../types";
-import RunLauncherDialog, {
-  type RunLaunchSelection,
-} from "./RunLauncherDialog";
 
 type ThreadInfo = {
   id: string;
@@ -38,23 +29,7 @@ type Props = {
   threadsByWorkspace: Record<string, ThreadInfo[]>;
   activeThreadId: string | null;
   onSelectThread: (id: string) => void;
-  supervisorPolicies?: SupervisorPolicySummary[];
-  supervisorPoliciesLoading?: boolean;
-  supervisorPoliciesError?: string | null;
-  agents?: AgentDefinitionSummary[];
-  agentsLoading?: boolean;
-  agentsError?: string | null;
-  onEvaluateReadiness: (
-    workspaceId: string,
-    selection: RunLaunchSelection,
-  ) => Promise<RunReadiness>;
-  onStartTask: (
-    workspaceId: string,
-    selection: RunLaunchSelection,
-    readiness: RunReadiness,
-    operationId: string,
-  ) => Promise<boolean>;
-  onReadinessAction: (action: RunReadinessAction, workspaceId: string) => void;
+  onStartTask: (workspaceId: string) => void;
   onArchiveThread: (workspaceId: string, threadId: string) => void;
   onRemoveWorkspace: (workspaceId: string) => void;
 };
@@ -69,15 +44,7 @@ export default function Workspaces({
   threadsByWorkspace,
   activeThreadId,
   onSelectThread,
-  supervisorPolicies = [],
-  supervisorPoliciesLoading = false,
-  supervisorPoliciesError = null,
-  agents = [],
-  agentsLoading = false,
-  agentsError = null,
-  onEvaluateReadiness,
   onStartTask,
-  onReadinessAction,
   onArchiveThread,
   onRemoveWorkspace,
 }: Props) {
@@ -88,27 +55,15 @@ export default function Workspaces({
     threadId: string;
     label: string;
   } | null>(null);
-  const [pendingLaunch, setPendingLaunch] = useState<{
-    workspaceId: string;
-    workspaceName: string;
-  } | null>(null);
-  const launchTrigger = useRef<HTMLButtonElement | null>(null);
-
-  const closePendingLaunch = useCallback(() => {
-    setPendingLaunch(null);
-    window.setTimeout(() => launchTrigger.current?.focus(), 0);
-  }, []);
-
   useEffect(() => {
-    if (!pendingArchive && !pendingLaunch) return;
+    if (!pendingArchive) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       setPendingArchive(null);
-      closePendingLaunch();
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [closePendingLaunch, pendingArchive, pendingLaunch]);
+  }, [pendingArchive]);
 
   const toggleExpand = (wsId: string) => {
     setExpandedId(prev => (prev === wsId ? null : wsId));
@@ -201,12 +156,8 @@ export default function Workspaces({
                   className="web-ws-row-action web-ws-new-thread-btn"
                   onClick={(event) => {
                     event.stopPropagation();
-                    launchTrigger.current = event.currentTarget;
                     setExpandedId(ws.id);
-                    setPendingLaunch({
-                      workspaceId: ws.id,
-                      workspaceName: ws.name,
-                    });
+                    onStartTask(ws.id);
                   }}
                   disabled={busy}
                   aria-label={`New task in ${ws.name}`}
@@ -274,44 +225,6 @@ export default function Workspaces({
           );
         })}
       </div>
-      {pendingLaunch && createPortal(
-        <div
-          className="web-settings-backdrop"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) closePendingLaunch();
-          }}
-        >
-          <RunLauncherDialog
-            workspaceId={pendingLaunch.workspaceId}
-            workspaceName={pendingLaunch.workspaceName}
-            agents={agents}
-            agentsLoading={agentsLoading}
-            agentsError={agentsError}
-            supervisorPolicies={supervisorPolicies}
-            supervisorPoliciesLoading={supervisorPoliciesLoading}
-            supervisorPoliciesError={supervisorPoliciesError}
-            busy={busy}
-            onEvaluate={(selection) =>
-              onEvaluateReadiness(pendingLaunch.workspaceId, selection)
-            }
-            onStart={(selection, readiness, operationId) =>
-              onStartTask(
-                pendingLaunch.workspaceId,
-                selection,
-                readiness,
-                operationId,
-              )
-            }
-            onAction={(action) => {
-              const workspaceId = pendingLaunch.workspaceId;
-              closePendingLaunch();
-              onReadinessAction(action, workspaceId);
-            }}
-            onClose={closePendingLaunch}
-          />
-        </div>,
-        document.body,
-      )}
       {pendingArchive && createPortal(
         <div
           className="web-settings-backdrop"

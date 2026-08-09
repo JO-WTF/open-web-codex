@@ -2,10 +2,11 @@
 
 ## 1. 文档概述
 
-本文说明领域包内部如何组织专业能力。Tool/Skill/Agent/Supervisor/Copilot 的发布、
-Platform Work State、Data Intake、安装和 Runtime discovery 以
-[`supervisor-agent-skill-tool-architecture.md`](supervisor-agent-skill-tool-architecture.md)
-为准；领域扩展不得自行重建这些平台能力。
+本文说明领域包内部如何组织专业能力。当前阶段只以
+[ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) 为准：领域包通过 Profile
+托管并由 Codex 原生发现；数据读写使用经校验的 Workspace 相对路径；Platform 不提供
+Work State、Data Intake、Dataset/Resource Broker 或 Task 数据接口。公开发布和 Studio
+属于阶段二，届时重新裁决，不能沿用本文件旧 Catalog 设想直接实现。
 
 领域 Agent 扩展架构由 **Agent Definition、Runtime Role、Domain Knowledge、
 Skills 与 MCP Servers** 组成，适合为 Codex 增加供应链、系统架构、数据分析等

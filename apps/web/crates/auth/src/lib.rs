@@ -1,14 +1,10 @@
-//! Password hashing and compatibility verification for platform identities.
+//! Argon2id password hashing and verification for platform identities.
 
 use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
-use sha2::{Digest, Sha256};
 use std::sync::OnceLock;
-use subtle::ConstantTimeEq;
 use thiserror::Error;
-
-const LEGACY_SHA256_HEX_LENGTH: usize = 64;
 
 #[derive(Debug, Error)]
 pub enum PasswordError {
@@ -30,12 +26,11 @@ pub fn hash_password(password: &str) -> Result<String, PasswordError> {
 }
 
 pub fn verify_password(password: &str, encoded: &str) -> bool {
-    if let Ok(hash) = PasswordHash::new(encoded) {
-        return Argon2::default()
+    PasswordHash::new(encoded).is_ok_and(|hash| {
+        Argon2::default()
             .verify_password(password.as_bytes(), &hash)
-            .is_ok();
-    }
-    verify_legacy_sha256(password, encoded)
+            .is_ok()
+    })
 }
 
 /// Verify an optional account hash while still doing an Argon2 verification
@@ -54,24 +49,9 @@ pub fn verify_password_or_dummy(password: &str, encoded: Option<&str>) -> bool {
     verify_password(password, encoded) && exists
 }
 
-pub fn needs_rehash(encoded: &str) -> bool {
-    !encoded.starts_with("$argon2id$")
-}
-
-fn verify_legacy_sha256(password: &str, encoded: &str) -> bool {
-    if encoded.len() != LEGACY_SHA256_HEX_LENGTH
-        || !encoded.bytes().all(|byte| byte.is_ascii_hexdigit())
-    {
-        return false;
-    }
-    let candidate = hex::encode(Sha256::digest(password.as_bytes()));
-    bool::from(candidate.as_bytes().ct_eq(encoded.as_bytes()))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{hash_password, needs_rehash, verify_password, verify_password_or_dummy};
-    use sha2::{Digest, Sha256};
+    use super::{hash_password, verify_password, verify_password_or_dummy};
 
     #[test]
     fn hashes_with_argon2id_and_verifies_without_exposing_the_password() {
@@ -82,16 +62,14 @@ mod tests {
         assert!(!encoded.contains(password));
         assert!(verify_password(password, &encoded));
         assert!(!verify_password("wrong", &encoded));
-        assert!(!needs_rehash(&encoded));
     }
 
     #[test]
-    fn accepts_legacy_sha256_only_for_an_in_place_upgrade() {
-        let legacy = hex::encode(Sha256::digest(b"legacy-password"));
-
-        assert!(verify_password("legacy-password", &legacy));
-        assert!(!verify_password("wrong", &legacy));
-        assert!(needs_rehash(&legacy));
+    fn rejects_legacy_sha256_password_hashes() {
+        assert!(!verify_password(
+            "legacy-password",
+            "11b564e7b4ba0b765a5d7b11d8e29b3bfbaad4249fefee3134523245640491fc"
+        ));
     }
 
     #[test]

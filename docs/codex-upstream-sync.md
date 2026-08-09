@@ -45,7 +45,7 @@ Resolve by architectural layer:
 1. Accept official file/module moves and public API shapes first.
 2. Reapply retained seams in this order: Chat transport; Provider metadata,
    model discovery and cache; app-server Provider API; TUI Provider workflows;
-   legacy history compatibility; Capability Manifest; generated artifacts.
+   legacy history compatibility; then their generated artifacts.
 3. Do not preserve a custom workaround when upstream now provides the behavior.
 4. Keep protocol/schema generated files aligned with their Rust source.
 5. Avoid mixing product Web changes into an upstream runtime sync.
@@ -70,9 +70,10 @@ just test -p codex-tui
 Then run:
 
 ```bash
+cd ../..
+./scripts/test-codex.sh -p codex-app-server-protocol schema_fixtures::
 cd apps/web
-npm run check:codex-contracts
-npm run smoke:codex-app-server -- --require-manifest
+npm run smoke:codex-app-server
 ```
 
 Update both `.sync/codex-upstream.json` and

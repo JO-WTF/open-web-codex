@@ -1,15 +1,17 @@
-# Enterprise Supervisor Copilot 当前实施合同
+# Enterprise Supervisor Copilot 冻结迁移输入
 
 ## 文档定位
 
-本文是当前仓网 6.0 过渡实现的合同和验收清单，不是平台目标架构，也不再拥有 M2 总体
-工作顺序。平台化重构以 `docs/supervisor-agent-skill-tool-architecture.md` 和
-`docs/agent-capability-lifecycle-plan.md` 为准；当前 Case 中的通用 revision、operation、
-dependency、readiness 和 deliverable 将迁移到 Platform Work State，来源和映射将迁移到
-唯一的 Platform Data Intake。迁移完成后删除本文，由能力基线和教程描述当前事实。
+本文已于 2026-08-08 冻结，只保存仓网 6.0 原型的角色、算法和迁移输入，不再是当前
+实现合同，不得从本文继续添加 Prompt、aliases、Case、continuation 或平台领域分支。
+当前实现事实与最新 7/7 最小真实 E2E 以 `docs/capability-baseline.md` 为准；接受边界以
+`docs/adr/018-built-in-network-copilot-runtime-closure.md` 为准；执行顺序只以
+`docs/development-plan.md` 为准。
 
-在过渡期内 Supervisor 仍必须保持通用：国家、数据来源、问题类型、分析数量和 Agent
-调用顺序都由当前请求和 readiness 决定。
+本文后续只允许修正会误导迁移的安全/算法事实。阶段一仓网迁移完成后删除，由
+能力基线和教程描述新主链。
+
+以下内容描述冻结时的原型，不代表目标 Platform owner 或可继续兼容的 wire contract。
 
 | 项目 | 当前值 |
 | --- | --- |

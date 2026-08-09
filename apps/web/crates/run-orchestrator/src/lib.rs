@@ -1,40 +1,17 @@
-mod agent_run;
 mod execution;
 mod scheduler;
-mod supervisor_policy;
 mod workspace;
 
-use async_trait::async_trait;
 use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use open_web_codex_adapter::{AdapterError, CodexAdapter, ThreadStartMode};
+use open_web_codex_adapter::{AdapterError, CodexAdapter};
 use open_web_codex_git_runtime::{GitRuntime, GitRuntimeError};
 use sqlx::PgPool;
 use std::path::PathBuf;
 use thiserror::Error;
 use uuid::Uuid;
-
-/// Server-owned gate evaluated immediately before a leased Run creates or
-/// forks a Runtime Thread.
-///
-/// The orchestrator deliberately has no default implementation: composition
-/// must install the policy-specific gate that turns durable Run facts into the
-/// exact Runtime start configuration for the current execution.
-#[async_trait]
-pub trait RunStartPreflight: Send + Sync {
-    async fn prepare_runtime_start(
-        &self,
-        lease: &RunLease,
-    ) -> Result<ThreadStartMode, RunStartPreflightError>;
-}
-
-#[derive(Debug, Error)]
-pub enum RunStartPreflightError {
-    #[error("Runtime start preflight rejected the Run: {0}")]
-    Rejected(String),
-}
 
 #[derive(Debug, Error)]
 pub enum RunOrchestratorError {
@@ -52,8 +29,6 @@ pub enum RunOrchestratorError {
     Git(#[from] GitRuntimeError),
     #[error("Codex Runtime operation failed: {0}")]
     Adapter(#[from] AdapterError),
-    #[error("Runtime start preflight failed: {0}")]
-    StartPreflight(#[from] RunStartPreflightError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,31 +40,6 @@ pub struct EnqueueRunRequest {
     pub workspace_id: Uuid,
     pub fork_thread_id: Option<String>,
     pub fork_source_run_id: Option<Uuid>,
-    pub supervisor_policy: Option<SupervisorPolicySnapshotInput>,
-    pub agent: Option<AgentRunSnapshotInput>,
-}
-
-/// Stable client-selected execution identity used to replay an already
-/// accepted Run without re-reading mutable Provider, Runtime, or capability
-/// state.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RunExecutionSelection {
-    Standard,
-    Supervisor {
-        policy_id: String,
-        version: String,
-    },
-    SupervisorDraft {
-        definition_id: Uuid,
-    },
-    Agent {
-        definition_id: String,
-        version: String,
-        release_id: Option<Uuid>,
-    },
-    /// Forked Runs inherit the persisted execution binding of their exact
-    /// source Run. They never accept a second direct execution selection.
-    Inherited,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,120 +51,6 @@ pub struct ReplayRunRequest {
     pub workspace_id: Uuid,
     pub fork_thread_id: Option<String>,
     pub fork_source_run_id: Option<Uuid>,
-    pub execution: RunExecutionSelection,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AgentRunSource {
-    Repository,
-    UserRelease,
-}
-
-impl AgentRunSource {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Repository => "repository",
-            Self::UserRelease => "user_release",
-        }
-    }
-}
-
-impl std::str::FromStr for AgentRunSource {
-    type Err = ();
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "repository" => Ok(Self::Repository),
-            "user_release" => Ok(Self::UserRelease),
-            _ => Err(()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentRunSnapshotInput {
-    pub definition_id: String,
-    pub version: String,
-    pub display_name: String,
-    pub content_sha256: String,
-    pub source: AgentRunSource,
-    pub release_id: Option<Uuid>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentRunLease {
-    pub binding_id: Uuid,
-    pub definition_id: String,
-    pub version: String,
-    pub content_sha256: String,
-    pub source: AgentRunSource,
-    pub release_id: Option<Uuid>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SupervisorPolicySource {
-    Repository,
-    UserRelease,
-    Draft,
-}
-
-impl SupervisorPolicySource {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Repository => "repository",
-            Self::UserRelease => "user_release",
-            Self::Draft => "draft",
-        }
-    }
-}
-
-impl std::str::FromStr for SupervisorPolicySource {
-    type Err = ();
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "repository" => Ok(Self::Repository),
-            "user_release" => Ok(Self::UserRelease),
-            "draft" => Ok(Self::Draft),
-            _ => Err(()),
-        }
-    }
-}
-
-/// A server-resolved, immutable Supervisor Policy version.
-///
-/// The orchestrator persists the exact content before a worker delivers it to
-/// Codex. Callers may select an id/version, but must never supply untrusted
-/// policy content from a browser request.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SupervisorPolicySnapshotInput {
-    pub policy_id: String,
-    pub version: String,
-    pub display_name: String,
-    pub developer_instructions: String,
-    pub content_sha256: String,
-    pub source: SupervisorPolicySource,
-    pub release_id: Option<Uuid>,
-    pub draft_definition_id: Option<Uuid>,
-    pub draft_revision: Option<i64>,
-}
-
-/// Immutable Supervisor Policy facts leased with a Run.
-///
-/// These facts are read from the persisted binding/snapshot pair while the
-/// Run is claimed. The execution-time preflight compares them with the
-/// repository-published policy before allowing any Runtime Thread creation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SupervisorPolicyLease {
-    pub binding_id: Uuid,
-    pub policy_id: String,
-    pub version: String,
-    pub content_sha256: String,
-    pub developer_instructions: String,
-    pub source: SupervisorPolicySource,
-    pub release_id: Option<Uuid>,
-    pub draft_definition_id: Option<Uuid>,
-    pub draft_revision: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -225,7 +61,7 @@ pub struct RunRecord {
     pub failure_code: Option<String>,
     pub codex_thread_id: Option<String>,
     pub active_turn_id: Option<String>,
-    pub workspace_id: Option<Uuid>,
+    pub workspace_id: Uuid,
     pub attempt: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -295,8 +131,6 @@ pub struct RunLease {
     pub workspace_root: PathBuf,
     pub fork_thread_id: Option<String>,
     pub fork_source_run_id: Option<Uuid>,
-    pub supervisor_policy: Option<SupervisorPolicyLease>,
-    pub agent: Option<AgentRunLease>,
     pub token: String,
 }
 
@@ -305,7 +139,6 @@ pub struct RunOrchestrator {
     pub(crate) db: PgPool,
     pub(crate) git: Arc<GitRuntime>,
     pub(crate) adapter: Arc<dyn CodexAdapter>,
-    pub(crate) start_preflight: Arc<dyn RunStartPreflight>,
     pub(crate) runtime_key: String,
     pub(crate) worker_id: String,
     pub(crate) lease_ttl: Duration,
@@ -316,7 +149,6 @@ impl RunOrchestrator {
         db: PgPool,
         git: Arc<GitRuntime>,
         adapter: Arc<dyn CodexAdapter>,
-        start_preflight: Arc<dyn RunStartPreflight>,
         runtime_key: impl Into<String>,
         worker_id: impl Into<String>,
         lease_ttl: Duration,
@@ -336,7 +168,6 @@ impl RunOrchestrator {
             db,
             git,
             adapter,
-            start_preflight,
             runtime_key: runtime_key.into(),
             worker_id,
             lease_ttl,

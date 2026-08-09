@@ -8,14 +8,12 @@ use axum::{
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use open_web_codex_adapter::{AuthorizedWorkspace, CodexAdapter};
 use open_web_codex_platform_contracts::{error::PlatformError, ArtifactSummary};
-use open_web_codex_platform_store::{AppState, LiveEvent};
+use open_web_codex_platform_store::AppState;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
-use tokio::sync::broadcast::Sender;
 use uuid::Uuid;
 
-use crate::event_projection::{reconcile_materialized_intake_artifact, LiveProjection};
 use crate::middleware::auth::AuthenticatedUser;
 
 type ApiError = (StatusCode, Json<PlatformError>);
@@ -146,11 +144,7 @@ pub async fn read_content(
     Ok(Json(value))
 }
 
-pub(crate) async fn recover_and_materialize_pending(
-    db: PgPool,
-    adapter: Arc<dyn CodexAdapter>,
-    event_bus: Sender<LiveEvent>,
-) {
+pub(crate) async fn recover_and_materialize_pending(db: PgPool, adapter: Arc<dyn CodexAdapter>) {
     if let Err(error) =
         sqlx::query("UPDATE artifacts SET state = 'pending' WHERE state = 'materializing'")
             .execute(&db)
@@ -173,77 +167,17 @@ pub(crate) async fn recover_and_materialize_pending(
             return;
         }
     };
-    materialize_artifacts(db.clone(), adapter.clone(), ids, event_bus.clone()).await;
-    reconcile_unprojected_ready_intake_artifacts(&db, adapter.as_ref(), &event_bus).await;
-}
-
-/// Rebuild the task-owned Intake projection for a ResourceLink that was
-/// materialized before its projection could be committed. This is deliberately
-/// limited to typed Intake artifacts and is safe to repeat because the
-/// projection uses the Artifact identity and envelope hash as its key.
-async fn reconcile_unprojected_ready_intake_artifacts(
-    db: &PgPool,
-    adapter: &dyn CodexAdapter,
-    event_bus: &Sender<LiveEvent>,
-) {
-    let ids = match sqlx::query_scalar::<_, Uuid>(
-        "SELECT DISTINCT artifact.id
-         FROM artifacts artifact
-         JOIN artifact_task_grants grant_row
-           ON grant_row.organization_id = artifact.organization_id
-          AND grant_row.artifact_id = artifact.id
-          AND grant_row.permission = 'read'
-         LEFT JOIN task_intake_artifact_projections projection
-           ON projection.organization_id = grant_row.organization_id
-          AND projection.task_id = grant_row.task_id
-          AND projection.artifact_id = artifact.id
-         WHERE artifact.state = 'ready'
-           AND artifact.retention_state = 'active'
-           AND artifact.artifact_schema IN (
-                'data_requirement_profile.v2',
-                'source_profile.v1',
-                'mapping_proposal.v1',
-                'input_gap.v1',
-                'planning-dataset.v2',
-                'analysis_readiness_review.v1'
-           )
-           AND projection.artifact_id IS NULL
-         ORDER BY artifact.id",
-    )
-    .fetch_all(db)
-    .await
-    {
-        Ok(ids) => ids,
-        Err(error) => {
-            tracing::warn!(%error, "ready Intake Artifact reconciliation lookup failed");
-            return;
-        }
-    };
-    for artifact_id in ids {
-        match reconcile_materialized_intake_artifact(db, artifact_id).await {
-            Ok(Some(projection)) => {
-                broadcast_live_projection(db, adapter, event_bus, projection).await
-            }
-            Ok(None) => {}
-            Err(error) => {
-                tracing::warn!(%error, %artifact_id, "ready Intake Artifact reconciliation failed");
-            }
-        }
-    }
+    materialize_artifacts(db, adapter, ids).await;
 }
 
 pub(crate) async fn materialize_artifacts(
     db: PgPool,
     adapter: Arc<dyn CodexAdapter>,
     artifact_ids: Vec<Uuid>,
-    event_bus: Sender<LiveEvent>,
 ) {
     for artifact_id in artifact_ids {
         match materialize_artifact(&db, adapter.as_ref(), artifact_id).await {
-            Ok(Some(projection)) => {
-                broadcast_live_projection(&db, adapter.as_ref(), &event_bus, projection).await
-            }
-            Ok(None) => {}
+            Ok(()) => {}
             Err(error) => {
                 tracing::warn!(%error, %artifact_id, "Artifact materialization failed");
             }
@@ -251,40 +185,11 @@ pub(crate) async fn materialize_artifacts(
     }
 }
 
-async fn broadcast_live_projection(
-    db: &PgPool,
-    adapter: &dyn CodexAdapter,
-    event_bus: &Sender<LiveEvent>,
-    projection: LiveProjection,
-) {
-    if let Some(run_id) = projection.data_intake_confirmation_run_id {
-        if let Err(error) = crate::event_projection::hold_data_intake_agents(
-            db,
-            adapter,
-            projection.organization_id,
-            run_id,
-        )
-        .await
-        {
-            tracing::warn!(%run_id, %error, "data-intake confirmation hold failed");
-        }
-    }
-    if event_bus
-        .send(LiveEvent {
-            organization_id: projection.organization_id,
-            payload: projection.payload,
-        })
-        .is_err()
-    {
-        tracing::debug!("event bus: no active receivers for data intake change");
-    }
-}
-
 async fn materialize_artifact(
     db: &PgPool,
     adapter: &dyn CodexAdapter,
     artifact_id: Uuid,
-) -> Result<Option<LiveProjection>, String> {
+) -> Result<(), String> {
     let row = sqlx::query(
         "WITH claimed AS (
              UPDATE artifacts
@@ -312,7 +217,7 @@ async fn materialize_artifact(
     .await
     .map_err(|error| format!("Artifact claim failed: {error}"))?;
     let Some(row) = row else {
-        return Ok(None);
+        return Ok(());
     };
 
     let expected_size: Option<i64> = row.get("expected_size");
@@ -382,7 +287,7 @@ async fn materialize_artifact(
     if updated.rows_affected() != 1 {
         return Err("Artifact state changed during materialization".to_string());
     }
-    reconcile_materialized_intake_artifact(db, artifact_id).await
+    Ok(())
 }
 
 async fn mark_failed(db: &PgPool, artifact_id: Uuid, failure_code: &str) -> Result<(), String> {

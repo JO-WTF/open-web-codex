@@ -14,6 +14,7 @@ const project = {
 const task = {
   id: "task-1",
   project_id: project.id,
+  workspace_id: project.id,
   title: "Thread",
   status: "pending",
   model_provider: "deepseek",
@@ -150,147 +151,6 @@ describe("WebApp direct Server client", () => {
     });
   });
 
-  it("starts a governed Supervisor with an exact published Policy reference", async () => {
-    const baseFetch = resourceFetch();
-    const enterpriseTask = {
-      ...task,
-      title: "Governed Supervisor · enterprise-supervisor-copilot@1.1.0",
-    };
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = new URL(String(input));
-      if (url.pathname === "/api/tasks" && init?.method === "POST") {
-        expect(JSON.parse(String(init.body))).toMatchObject({
-          project_id: project.id,
-          title: "Governed Supervisor · enterprise-supervisor-copilot@1.1.0",
-        });
-        return json(enterpriseTask);
-      }
-      if (
-        url.pathname === `/api/tasks/${enterpriseTask.id}/runs`
-        && init?.method === "POST"
-      ) {
-        expect(JSON.parse(String(init.body))).toMatchObject({
-          workspace_id: workspace.id,
-          supervisor_policy: {
-            policy_id: "enterprise-supervisor-copilot",
-            version: "1.1.0",
-          },
-        });
-        return json({ run });
-      }
-      if (url.pathname === `/api/tasks/${enterpriseTask.id}`) {
-        return json(enterpriseTask);
-      }
-      if (url.pathname === `/api/runs/${run.id}/thread`) {
-        return json({
-          thread: {
-            id: "thread-1",
-            name: enterpriseTask.title,
-            preview: enterpriseTask.title,
-            createdAt: 1,
-            updatedAt: 2,
-            status: runtimeStatus(run),
-            turns: [],
-          },
-        });
-      }
-      return baseFetch(input, init);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    vi.stubGlobal("crypto", { randomUUID: () => "018f-idempotency-key" });
-    const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
-
-    await expect(
-      client.startThread(workspace.id, {
-        operationId: "start-supervisor-1",
-        readinessFingerprint: "ready-supervisor",
-        providerId: "openai",
-        modelId: "gpt-5",
-        supervisorPolicy: {
-          policy_id: "enterprise-supervisor-copilot",
-          version: "1.1.0",
-        },
-      }),
-    ).resolves.toEqual({
-      thread: expect.objectContaining({
-        id: "thread-1",
-        name: "Governed Supervisor · enterprise-supervisor-copilot@1.1.0",
-      }),
-    });
-  });
-
-  it("starts a governed Agent with an exact published definition reference", async () => {
-    const baseFetch = resourceFetch();
-    const agentTask = {
-      ...task,
-      title: "Governed Agent · network-planning-agent@2.0.0",
-    };
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = new URL(String(input));
-      if (url.pathname === "/api/tasks" && init?.method === "POST") {
-        expect(JSON.parse(String(init.body))).toMatchObject({
-          project_id: project.id,
-          title: "Governed Agent · network-planning-agent@2.0.0",
-        });
-        return json(agentTask);
-      }
-      if (
-        url.pathname === `/api/tasks/${agentTask.id}/runs`
-        && init?.method === "POST"
-      ) {
-        expect(JSON.parse(String(init.body))).toMatchObject({
-          workspace_id: workspace.id,
-          supervisor_policy: null,
-          agent: {
-            definition_id: "network-planning-agent",
-            version: "2.0.0",
-            release_id: "018f-agent-release",
-          },
-        });
-        return json({ run });
-      }
-      if (url.pathname === `/api/tasks/${agentTask.id}`) {
-        return json(agentTask);
-      }
-      if (url.pathname === `/api/runs/${run.id}/thread`) {
-        return json({
-          thread: {
-            id: "thread-1",
-            name: agentTask.title,
-            preview: agentTask.title,
-            createdAt: 1,
-            updatedAt: 2,
-            status: runtimeStatus(run),
-            turns: [],
-          },
-        });
-      }
-      return baseFetch(input);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    vi.stubGlobal("crypto", { randomUUID: () => "018f-idempotency-key" });
-    const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
-
-    await expect(
-      client.startThread(workspace.id, {
-        operationId: "start-agent-1",
-        readinessFingerprint: "ready-agent",
-        providerId: "openai",
-        modelId: "gpt-5",
-        agent: {
-          definition_id: "network-planning-agent",
-          version: "2.0.0",
-          release_id: "018f-agent-release",
-        },
-      }),
-    ).resolves.toEqual({
-      thread: expect.objectContaining({
-        id: "thread-1",
-        name: "Governed Agent · network-planning-agent@2.0.0",
-      }),
-    });
-  });
-
   it("keeps polling an accepted Run through a transient read failure without creating a second Task or Run", async () => {
     const baseFetch = resourceFetch();
     const pendingRun = {
@@ -337,7 +197,6 @@ describe("WebApp direct Server client", () => {
     });
     const options = {
       operationId: "stable-launch-operation",
-      readinessFingerprint: "ready-standard",
       providerId: task.model_provider,
       modelId: task.model,
     };
@@ -362,7 +221,7 @@ describe("WebApp direct Server client", () => {
     const failedRun = {
       ...pendingRun,
       status: "failed",
-      failure_code: "runtime_start_preflight_failed" as const,
+      failure_code: "codex_unavailable" as const,
     };
     const onRunAccepted = vi.fn();
     const fetchMock = vi.fn(
@@ -397,7 +256,6 @@ describe("WebApp direct Server client", () => {
     await expect(
       client.startThread(workspace.id, {
         operationId: "accepted-terminal-run",
-        readinessFingerprint: "ready-standard",
         providerId: task.model_provider,
         modelId: task.model,
         onRunAccepted,
@@ -405,7 +263,7 @@ describe("WebApp direct Server client", () => {
     ).rejects.toMatchObject({
       code: "run_terminal",
       message:
-        "Run failed before its Codex Thread was ready. Failure code: runtime_start_preflight_failed.",
+        "Run failed before its Codex Thread was ready. Failure code: codex_unavailable.",
     });
     expect(onRunAccepted).toHaveBeenCalledWith({
       taskId: task.id,
@@ -413,20 +271,8 @@ describe("WebApp direct Server client", () => {
     });
   });
 
-  it("restores the bound Policy and Runtime Agent projection for a governed Thread", async () => {
+  it("restores Runtime Agent projections and Artifacts for a Thread", async () => {
     const baseFetch = resourceFetch();
-    const policy = {
-      run_id: run.id,
-      task_id: task.id,
-      thread_id: run.codex_thread_id,
-      policy_id: "enterprise-supervisor-copilot",
-      version: "1.0.0",
-      display_name: "Enterprise Supervisor Copilot",
-      content_sha256: "a".repeat(64),
-      state: "bound",
-      created_at: "2026-07-26T00:00:00Z",
-      bound_at: "2026-07-26T00:00:01Z",
-    };
     const agents = [{
       run_id: run.id,
       thread_id: run.codex_thread_id,
@@ -490,7 +336,6 @@ describe("WebApp direct Server client", () => {
     }];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input));
-      if (url.pathname === `/api/runs/${run.id}/supervisor-policy`) return json(policy);
       if (url.pathname === `/api/runs/${run.id}/agents`) return json(agents);
       if (url.pathname === `/api/runs/${run.id}/agent-activities`) return json(activities);
       if (url.pathname === `/api/runs/${run.id}/agent-executions`) return json(executions);
@@ -503,7 +348,6 @@ describe("WebApp direct Server client", () => {
     await client.listThreads(workspace.id);
     await expect(client.getSupervisorOverview("thread-1")).resolves.toEqual({
       taskTitle: task.title,
-      policy,
       agents,
       activities,
       executions,
@@ -987,44 +831,6 @@ describe("WebApp direct Server client", () => {
         },
       },
     });
-    socket?.onmessage?.({
-      data: JSON.stringify({
-        type: "run.event",
-        version: 1,
-        event: {
-          id: "intake-event-live",
-          sequence: 2,
-          run_id: run.id,
-          event_type: "platform.data_intake.changed",
-          projection_version: 1,
-          thread_id: "thread-1",
-          turn_id: "turn-1",
-          item_id: null,
-          payload: {
-            data: {
-              sourceType: "platform/data-intake/changed",
-              taskId: task.id,
-              inputRevision: 2,
-            },
-          },
-          created_at: "2026-07-22T00:00:04Z",
-        },
-      }),
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(events).toContainEqual({
-      workspace_id: project.id,
-      message: {
-        method: "platform/data-intake/changed",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          sourceType: "platform/data-intake/changed",
-          taskId: task.id,
-          inputRevision: 2,
-        },
-      },
-    });
     unsubscribe();
   });
 
@@ -1239,19 +1045,12 @@ describe("WebApp direct Server client", () => {
         },
       },
       {
-        method: "item/commandExecution/requestApproval",
-        id: "approval-mcp-1",
+        method: "platform/mcpFormRequested",
         params: {
           threadId: "thread-1",
           turnId: "turn-1",
-          serverName: "workspace_maps",
-          mode: "form",
-          message: "Allow the workspace_maps MCP server to run tool \"batch_geocode\"?",
-          requestedSchema: {
-            type: "object",
-            properties: {},
-          },
-          command: "Allow the workspace_maps MCP server to run tool \"batch_geocode\"?",
+          runId: "run-1",
+          approvalId: "approval-mcp-1",
         },
       },
       {
@@ -1504,5 +1303,48 @@ describe("WebApp direct Server client", () => {
       answers,
       version: 3,
     });
+  });
+
+  it("restores and answers MCP forms without replaying event schemas", async () => {
+    const form = {
+      id: "018f854d-2d2c-7363-99a9-804e6cc4a77b",
+      runId: run.id,
+      source: { kind: "agent", executionId: "execution-1", displayTitle: "Data Agent" },
+      serverName: "supply_chain_data",
+      message: "Provide route inputs",
+      fields: [{
+        name: "factor",
+        title: "Detour factor",
+        description: "",
+        required: true,
+        schema: { kind: "number", default: 1.2, minimum: 1, maximum: 2 },
+      }],
+      state: "pending",
+      version: 4,
+      createdAt: "2026-08-09T00:00:00Z",
+    };
+    const baseFetch = resourceFetch();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === `/api/runs/${run.id}/mcp-form-requests`) return json([form]);
+      if (url.pathname === `/api/approvals/${form.id}/mcp-form`) {
+        return new Response(null, { status: 204 });
+      }
+      return baseFetch(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
+
+    await expect(client.listThreadMcpFormRequests("thread-1")).resolves.toEqual([form]);
+    await client.respondToMcpForm(form.id, form.version, "accept", { factor: 1.35 });
+
+    const submit = fetchMock.mock.calls.find(([input]) =>
+      String(input).endsWith(`/api/approvals/${form.id}/mcp-form`));
+    expect(JSON.parse(String(submit?.[1]?.body))).toEqual({
+      action: "accept",
+      content: { factor: 1.35 },
+      version: 4,
+    });
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/events"))).toBe(false);
   });
 });

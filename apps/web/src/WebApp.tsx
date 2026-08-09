@@ -5,14 +5,10 @@ import {
   type SupervisorOverviewData,
 } from "./services/webClient";
 import type {
-  AgentDefinitionSummary,
-  DataIntakeParameterAnswer,
-  DataIntakeSessionSummary,
-  DataMappingCandidate,
+  McpFormContent,
+  McpFormResponseAction,
+  PendingMcpFormSummary,
   PendingUserInputSummary,
-  RunReadiness,
-  RunReadinessAction,
-  SupervisorPolicySummary,
 } from "../browser/types";
 import Layout from "./components/Layout";
 import Sidebar from "./components/Sidebar";
@@ -20,7 +16,6 @@ import Conversation from "./components/Conversation";
 import FileManager from "./components/FileManager";
 import RightSidebar, { type RightSidebarTab } from "./components/RightSidebar";
 import SupervisorOverview from "./components/Conversation/SupervisorOverview";
-import type { RunLaunchSelection } from "./components/Sidebar/RunLauncherDialog";
 import type { TaskApprovalRequest } from "./components/Conversation/TaskApprovalQueue";
 import type { GoalInfo } from "./components/Conversation/GoalBanner";
 import type { QueuedFollowUp } from "./components/Conversation/FollowUpQueue";
@@ -102,8 +97,6 @@ type ThreadInfo = {
   optimistic?: boolean;
   creationStatus?: "creating" | "failed";
   creationError?: string;
-  supervisorPolicy?: SupervisorPolicySummary;
-  agent?: AgentDefinitionSummary;
 };
 
 type ThreadTranscriptCacheEntry = {
@@ -243,16 +236,6 @@ function modelSummariesForProvider(
 
 /* ─────────── Component ─────────── */
 
-export function prepareTutorialPromptDraft(
-  currentDraft: string,
-  tutorialPrompt: string,
-  replaceExisting = false,
-) {
-  return !replaceExisting && currentDraft.trim()
-    ? { draft: currentDraft, loaded: false }
-    : { draft: tutorialPrompt, loaded: true };
-}
-
 export function resolveTurnStartedAt(
   currentStartedAt: number | null,
   runtimeStartedAt: unknown,
@@ -269,24 +252,6 @@ export function resolveTurnStartedAt(
   return now;
 }
 
-export function shouldRefreshDataIntakeForAppEvent(
-  method: string,
-  itemType: string | null,
-) {
-  if (method === "platform/data-intake/changed") return true;
-  if (method === "thread/status/changed"
-    || method === "thread/completed"
-    || method === "thread/failed"
-    || method === "turn/completed") {
-    return true;
-  }
-  return method === "item/completed"
-    && (itemType === "mcpToolCall"
-      || itemType === "agentMessage"
-      || itemType === "collabAgentToolCall"
-      || itemType === "collabToolCall");
-}
-
 export default function WebApp() {
   console.log('[open-web-codex] build:', '2026-07-12T21:20:00Z');
   const [baseUrl, setBaseUrl] = useState(
@@ -296,10 +261,6 @@ export default function WebApp() {
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
-  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
-  const [dataIntake, setDataIntake] = useState<DataIntakeSessionSummary | null>(null);
-  const [dataIntakeLoading, setDataIntakeLoading] = useState(false);
-  const [dataIntakeError, setDataIntakeError] = useState<string | null>(null);
   const [threadsByWorkspace, setThreadsByWorkspace] = useState<Record<string, ThreadInfo[]>>({});
   const [threadLoading, setThreadLoading] = useState(false);
   const [draft, setDraft] = useState("");
@@ -313,6 +274,10 @@ export default function WebApp() {
   const [submittingPendingUserInputIds, setSubmittingPendingUserInputIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [pendingMcpFormsById, setPendingMcpFormsById] = useState<Map<string, PendingMcpFormSummary>>(
+    () => new Map(),
+  );
+  const [submittingMcpFormIds, setSubmittingMcpFormIds] = useState<Set<string>>(() => new Set());
   const [approvalProjectionRevision, setApprovalProjectionRevision] = useState(0);
   const [submittingApprovalIds, setSubmittingApprovalIds] = useState<Set<string>>(
     () => new Set(),
@@ -330,13 +295,6 @@ export default function WebApp() {
     useState<SupervisorOverviewData | null>(null);
   const [supervisorOverviewLoading, setSupervisorOverviewLoading] = useState(false);
   const [supervisorOverviewError, setSupervisorOverviewError] = useState<string | null>(null);
-  const [supervisorPolicies, setSupervisorPolicies] = useState<SupervisorPolicySummary[]>([]);
-  const [supervisorPoliciesLoading, setSupervisorPoliciesLoading] = useState(true);
-  const [supervisorPoliciesError, setSupervisorPoliciesError] = useState<string | null>(null);
-  const [supervisorPoliciesRevision, setSupervisorPoliciesRevision] = useState(0);
-  const [agentDefinitions, setAgentDefinitions] = useState<AgentDefinitionSummary[]>([]);
-  const [agentDefinitionsLoading, setAgentDefinitionsLoading] = useState(true);
-  const [agentDefinitionsError, setAgentDefinitionsError] = useState<string | null>(null);
   const [rateLimits, setRateLimits] = useState<Record<string, unknown> | null>(null);
   const [goal, setGoal] = useState<GoalInfo | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() =>
@@ -344,7 +302,6 @@ export default function WebApp() {
   );
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
   const [activeRightPanelTab, setActiveRightPanelTab] = useState<RightSidebarTab>("files");
-  const [dataUploadRequest, setDataUploadRequest] = useState(0);
   const [agentPanelUnread, setAgentPanelUnread] = useState(false);
   const [rightPanelWidth, setRightPanelWidth] = useState(() => {
     if (typeof window === "undefined") return 360;
@@ -357,7 +314,6 @@ export default function WebApp() {
   const [currentProviderId, setCurrentProviderId] = useState<string | null>(null);
   const [providerModels, setProviderModels] = useState<ModelSummary[]>([]);
   const [selectedProviderModelId, setSelectedProviderModelId] = useState<string | null>(null);
-  const [providerCatalogOpenRequest, setProviderCatalogOpenRequest] = useState(0);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const activeThreadModelSelectionRef = useRef<{
@@ -397,42 +353,6 @@ export default function WebApp() {
   }, [rightPanelWidth]);
 
   const client = useMemo(() => new CodexMonitorWebClient({ baseUrl, token }), [baseUrl, token]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setSupervisorPoliciesLoading(true);
-    setSupervisorPoliciesError(null);
-    void client.listSupervisorPolicies().then((policies) => {
-      if (!cancelled) setSupervisorPolicies(policies);
-    }).catch((error) => {
-      if (cancelled) return;
-      setSupervisorPolicies([]);
-      setSupervisorPoliciesError(error instanceof Error ? error.message : String(error));
-    }).finally(() => {
-      if (!cancelled) setSupervisorPoliciesLoading(false);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, supervisorPoliciesRevision]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setAgentDefinitionsLoading(true);
-    setAgentDefinitionsError(null);
-    void client.listAgentDefinitions().then((definitions) => {
-      if (!cancelled) setAgentDefinitions(definitions);
-    }).catch((error) => {
-      if (cancelled) return;
-      setAgentDefinitions([]);
-      setAgentDefinitionsError(error instanceof Error ? error.message : String(error));
-    }).finally(() => {
-      if (!cancelled) setAgentDefinitionsLoading(false);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, supervisorPoliciesRevision]);
 
   const refreshModelCatalog = useCallback(async () => {
     if (!activeWorkspaceId) return;
@@ -606,7 +526,7 @@ export default function WebApp() {
 
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
   const listWorkspaceFiles = useCallback((workspaceId: string) => client.listWorkspaceFiles(workspaceId, activeThreadId), [activeThreadId, client]);
-  const uploadWorkspaceFiles = useCallback((workspaceId: string, files: File[]) => client.uploadWorkspaceFiles(workspaceId, files, activeThreadId), [activeThreadId, client]);
+  const uploadWorkspaceFiles = useCallback((workspaceId: string, files: File[], options?: { overwrite?: boolean; paths?: string[] }) => client.uploadWorkspaceFiles(workspaceId, files, activeThreadId, options), [activeThreadId, client]);
   const readWorkspaceFile = useCallback((workspaceId: string, path: string) => client.readWorkspaceFile(workspaceId, path, activeThreadId), [activeThreadId, client]);
   const downloadWorkspaceFile = useCallback((workspaceId: string, path: string) => client.downloadWorkspaceFile(workspaceId, path, activeThreadId), [activeThreadId, client]);
   const deleteWorkspaceFile = useCallback((workspaceId: string, path: string) => client.deleteWorkspaceFile(workspaceId, path, activeThreadId), [activeThreadId, client]);
@@ -641,9 +561,6 @@ export default function WebApp() {
     useRef<((threadId?: string | null) => Promise<void>) | null>(null);
   const supervisorOverviewSequence = useRef(0);
   const supervisorOverviewRefreshTimer = useRef<number | null>(null);
-  const dataIntakeRefreshTimer = useRef<number | null>(null);
-  const refreshDataIntakeRef =
-    useRef<((taskId?: string | null) => Promise<void>) | null>(null);
   const agentActivitySequenceByThread = useRef<Map<string, number>>(new Map());
   const supervisorOverviewRef = useRef(supervisorOverview);
   supervisorOverviewRef.current = supervisorOverview;
@@ -655,40 +572,8 @@ export default function WebApp() {
   activeThreadIdRef.current = activeThreadId;
   const activeWorkspaceIdRef = useRef(activeWorkspaceId);
   activeWorkspaceIdRef.current = activeWorkspaceId;
-  const activeTaskIdRef = useRef(activeTaskId);
-  activeTaskIdRef.current = activeTaskId;
-  const dataIntakeSequence = useRef(0);
   const pendingUserInputSequence = useRef(0);
-
-  const refreshDataIntake = useCallback(async (taskId = activeTaskId) => {
-    const sequence = ++dataIntakeSequence.current;
-    if (!taskId || taskId.startsWith("pending-task:")) {
-      setDataIntake(null);
-      setDataIntakeLoading(false);
-      setDataIntakeError(null);
-      return;
-    }
-    setDataIntakeLoading(true);
-    setDataIntakeError(null);
-    try {
-      const session = await client.getDataIntake(taskId);
-      if (sequence !== dataIntakeSequence.current) return;
-      setDataIntake(session);
-    } catch (error) {
-      if (sequence !== dataIntakeSequence.current) return;
-      const status = error && typeof error === "object" && "status" in error
-        ? (error as { status?: unknown }).status
-        : undefined;
-      if (status === 404) {
-        setDataIntake(null);
-      } else {
-        setDataIntakeError(error instanceof Error ? error.message : String(error));
-      }
-    } finally {
-      if (sequence === dataIntakeSequence.current) setDataIntakeLoading(false);
-    }
-  }, [activeTaskId, client]);
-  refreshDataIntakeRef.current = refreshDataIntake;
+  const pendingMcpFormSequence = useRef(0);
 
   const refreshPendingUserInputs = useCallback(async (
     threadId: string | null = activeThreadIdRef.current,
@@ -710,157 +595,25 @@ export default function WebApp() {
     }
   }, [client]);
 
-  const scheduleDataIntakeRefresh = useCallback(() => {
-    if (dataIntakeRefreshTimer.current !== null) {
-      window.clearTimeout(dataIntakeRefreshTimer.current);
-    }
-    dataIntakeRefreshTimer.current = window.setTimeout(() => {
-      dataIntakeRefreshTimer.current = null;
-      const taskId = activeTaskIdRef.current;
-      if (taskId) void refreshDataIntakeRef.current?.(taskId);
-    }, 120);
-  }, []);
-
-  useEffect(() => () => {
-    if (dataIntakeRefreshTimer.current !== null) {
-      window.clearTimeout(dataIntakeRefreshTimer.current);
-    }
-  }, []);
-
-  const confirmDataMapping = useCallback(async (confirmed: DataMappingCandidate[]) => {
-    if (!activeTaskId || !dataIntake) return;
-    const request = dataIntake.inputRequests.find((item) => item.kind === "confirm_mapping" && item.status === "open");
-    if (!request) {
-      setDataIntakeError("The mapping confirmation request is no longer current. Refresh the Thread.");
-      return;
-    }
-    setDataIntakeLoading(true);
-    setDataIntakeError(null);
-    try {
-      const session = await client.respondToDataIntake(activeTaskId, {
-        requestId: request.requestId,
-        expectedSessionRevision: dataIntake.inputRevision,
-        idempotencyKey: createBrowserId("data-intake"),
-        response: { kind: "confirm_mapping", value: { confirmed: true, mappings: confirmed } },
-      });
-      setDataIntake(session);
-    } catch (error) {
-      setDataIntakeError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setDataIntakeLoading(false);
-    }
-  }, [activeTaskId, client, dataIntake]);
-
-  const submitDataParameters = useCallback(async (answers: DataIntakeParameterAnswer[]) => {
-    if (!activeTaskId || !dataIntake) return;
-    const request = dataIntake.inputRequests.find((item) => item.kind === "answer_parameters" && item.status === "open");
-    if (!request) {
-      setDataIntakeError("The parameter request is no longer current. Refresh the Thread.");
-      return;
-    }
-    setDataIntakeLoading(true);
-    setDataIntakeError(null);
-    try {
-      const session = await client.respondToDataIntake(activeTaskId, {
-        requestId: request.requestId,
-        expectedSessionRevision: dataIntake.inputRevision,
-        idempotencyKey: createBrowserId("data-intake"),
-        response: { kind: "answer_parameters", value: { answers } },
-      });
-      setDataIntake(session);
-    } catch (error) {
-      setDataIntakeError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setDataIntakeLoading(false);
-    }
-  }, [activeTaskId, client, dataIntake]);
-
-  const respondToDataIntake = useCallback(async (
-    requestId: string,
-    kind: string,
-    value: unknown,
+  const refreshPendingMcpForms = useCallback(async (
+    threadId: string | null = activeThreadIdRef.current,
+    runId?: string,
   ) => {
-    if (!activeTaskId || !dataIntake) return null;
-    setDataIntakeLoading(true);
-    setDataIntakeError(null);
+    const sequence = ++pendingMcpFormSequence.current;
+    if (!threadId && !runId) {
+      setPendingMcpFormsById(new Map());
+      return;
+    }
     try {
-      const session = await client.respondToDataIntake(activeTaskId, {
-        requestId,
-        expectedSessionRevision: dataIntake.inputRevision,
-        idempotencyKey: createBrowserId("data-intake"),
-        response: { kind, value },
-      });
-      setDataIntake(session);
-      return session;
-    } catch (error) {
-      setDataIntakeError(error instanceof Error ? error.message : String(error));
-      return null;
-    } finally {
-      setDataIntakeLoading(false);
+      const requests = runId
+        ? await client.listRunMcpFormRequests(runId)
+        : await client.listThreadMcpFormRequests(threadId as string);
+      if (sequence !== pendingMcpFormSequence.current) return;
+      setPendingMcpFormsById(new Map(requests.map((request) => [request.id, request])));
+    } catch {
+      if (sequence === pendingMcpFormSequence.current) setPendingMcpFormsById(new Map());
     }
-  }, [activeTaskId, client, dataIntake]);
-
-  const confirmDataAnalysis = useCallback(async (requestId: string) => {
-    const session = await respondToDataIntake(requestId, "confirm_analysis", { confirmed: true });
-    if (!activeTaskId || !session || !session.evidenceFingerprint) return;
-    try {
-      await client.startAnalysis(activeTaskId, {
-        requestId,
-        expectedSessionRevision: session.inputRevision,
-        readinessFingerprint: session.evidenceFingerprint,
-        idempotencyKey: createBrowserId("analysis"),
-      });
-      await refreshDataIntake(activeTaskId);
-    } catch (error) {
-      setDataIntakeError(error instanceof Error ? error.message : String(error));
-    }
-  }, [activeTaskId, client, refreshDataIntake, respondToDataIntake]);
-
-  const openDataUpload = useCallback(() => {
-    // Intake cards use the same Composer picker as ordinary attachments;
-    // users should not leave the Thread to manage Dataset metadata.
-    setDataUploadRequest((request) => request + 1);
-  }, []);
-
-  const requestDataChange = useCallback((message: string) => {
-    // A requested change is an ordinary message in the same Thread. Seed the
-    // Composer so the user can edit it before sending; this never mutates a
-    // confirmation hash or pretends that a revision was confirmed.
-    setDraft(message);
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    const threadId = activeThreadId;
-    dataIntakeSequence.current += 1;
-    setDataIntake(null);
-    setDataIntakeError(null);
-    if (!threadId || threadId.startsWith("pending-thread:")) {
-      setActiveTaskId(null);
-      setDataIntakeLoading(false);
-      return () => { cancelled = true; };
-    }
-    setActiveTaskId(null);
-    if (typeof client.taskIdForThread !== "function") {
-      setDataIntakeLoading(false);
-      return () => { cancelled = true; };
-    }
-    setDataIntakeLoading(true);
-    void client.taskIdForThread(threadId).then((taskId) => {
-      if (cancelled || activeThreadIdRef.current !== threadId) return;
-      setActiveTaskId(taskId);
-    }).catch((error) => {
-      if (cancelled || activeThreadIdRef.current !== threadId) return;
-      setDataIntakeLoading(false);
-      setDataIntakeError(error instanceof Error ? error.message : String(error));
-    });
-    return () => { cancelled = true; };
-  }, [activeThreadId, client]);
-
-  useEffect(() => {
-    if (!activeTaskId) return;
-    void refreshDataIntake(activeTaskId);
-  }, [activeTaskId, refreshDataIntake]);
+  }, [client]);
 
   const refreshSupervisorOverview = useCallback(async (
     threadId: string | null = activeThreadIdRef.current,
@@ -873,8 +626,7 @@ export default function WebApp() {
       return;
     }
     const visibleOverviewThreadId = supervisorOverviewRef.current?.agents
-      .find((agent) => agent.is_root)?.thread_id
-      ?? supervisorOverviewRef.current?.policy?.thread_id;
+      .find((agent) => agent.is_root)?.thread_id;
     if (visibleOverviewThreadId !== threadId) {
       setSupervisorOverview(null);
     }
@@ -950,6 +702,10 @@ export default function WebApp() {
   }, [activeThreadId, refreshPendingUserInputs]);
 
   useEffect(() => {
+    void refreshPendingMcpForms(activeThreadId);
+  }, [activeThreadId, refreshPendingMcpForms]);
+
+  useEffect(() => {
     // Workspace selection is intentionally workspace-first. A Thread becomes
     // active only after the user selects or creates one, so no transcript or
     // per-Thread runtime state may survive a workspace change.
@@ -963,6 +719,8 @@ export default function WebApp() {
     setSteeringFollowUpId(null);
     setPendingUserInputsById(new Map());
     setSubmittingPendingUserInputIds(new Set());
+    setPendingMcpFormsById(new Map());
+    setSubmittingMcpFormIds(new Set());
     setTokenUsage(null);
     setGoal(null);
     setThinking(false);
@@ -1067,23 +825,15 @@ export default function WebApp() {
           "turn/started",
           "turn/completed",
           "serverRequest/resolved",
-          "platform/data-intake/changed",
           "platform/userInputRequested",
           "platform/userInputResolved",
+          "platform/mcpFormRequested",
+          "platform/mcpFormResolved",
         ].includes(method)
         || (["item/started", "item/completed"].includes(method) && agentRelevantItem)
         || method.endsWith("/requestApproval")
       ) {
         scheduleSupervisorOverviewRefresh();
-        if (shouldRefreshDataIntakeForAppEvent(method, runtimeItemType)) {
-          const eventTaskId = method === "platform/data-intake/changed"
-            && typeof params.taskId === "string"
-            ? params.taskId
-            : null;
-          if (!eventTaskId || eventTaskId === activeTaskIdRef.current) {
-            scheduleDataIntakeRefresh();
-          }
-        }
       }
       if (eventThreadId && event.workspace_id) {
         if (method === "thread/name/updated") {
@@ -1123,6 +873,8 @@ export default function WebApp() {
         && method !== "serverRequest/resolved"
         && method !== "platform/userInputRequested"
         && method !== "platform/userInputResolved"
+        && method !== "platform/mcpFormRequested"
+        && method !== "platform/mcpFormResolved"
       ) {
         return null;
       }
@@ -1133,6 +885,8 @@ export default function WebApp() {
         && method !== "serverRequest/resolved"
         && method !== "platform/userInputRequested"
         && method !== "platform/userInputResolved"
+        && method !== "platform/mcpFormRequested"
+        && method !== "platform/mcpFormResolved"
       ) {
         return null;
       }
@@ -1983,6 +1737,33 @@ export default function WebApp() {
           return null;
         }
 
+        case "platform/mcpFormRequested": {
+          const runId = typeof params.runId === "string" ? params.runId : null;
+          const activeThreadId = activeThreadIdRef.current;
+          if (runId && activeThreadId) {
+            void client.runIdForThread(activeThreadId).then((activeRunId) => {
+              if (activeRunId === runId) {
+                void refreshPendingMcpForms(activeThreadId, runId);
+              }
+            }).catch(() => undefined);
+          }
+          return null;
+        }
+
+        case "platform/mcpFormResolved": {
+          const approvalId = typeof params.approvalId === "string" ? params.approvalId : null;
+          if (approvalId) {
+            pendingMcpFormSequence.current += 1;
+            setPendingMcpFormsById((previous) => {
+              if (!previous.has(approvalId)) return previous;
+              const next = new Map(previous);
+              next.delete(approvalId);
+              return next;
+            });
+          }
+          return null;
+        }
+
         case "serverRequest/resolved": {
           const requestId = params.requestId ?? params.request_id;
           if (typeof requestId !== "number" && typeof requestId !== "string") return null;
@@ -2020,7 +1801,7 @@ export default function WebApp() {
         }
       }
     },
-    [client, refreshPendingUserInputs, scheduleDataIntakeRefresh, scheduleSupervisorOverviewRefresh],
+    [client, refreshPendingMcpForms, refreshPendingUserInputs, scheduleSupervisorOverviewRefresh],
   );
 
   /* ─── Connection ─── */
@@ -2208,72 +1989,20 @@ export default function WebApp() {
  const startThread = useCallback(async (
    workspaceId?: string,
    retryTemporaryId?: string,
-   supervisorPolicy?: SupervisorPolicySummary,
-   agent?: AgentDefinitionSummary,
-   checkedReadiness?: RunReadiness,
-   launchOperationId?: string,
  ): Promise<string | null> => {
    const wid = workspaceId ?? activeWorkspaceId;
    if (!wid) return null;
-   if (supervisorPolicy && agent) {
-     throw new Error("A Thread cannot start as both an Agent and a Supervisor.");
-   }
    const providerId = currentProviderId ?? "";
    const modelId = providerModels.find(
      (model) => model.id === selectedProviderModelId,
    )?.model ?? selectedProviderModelId ?? "";
-   let readiness = checkedReadiness;
-   if (!readiness) {
-     try {
-       readiness = await client.evaluateRunReadiness(wid, {
-         providerId,
-         modelId,
-         supervisorPolicy: supervisorPolicy && supervisorPolicy.source !== "draft"
-           ? {
-               policy_id: supervisorPolicy.policy_id,
-               version: supervisorPolicy.version,
-             }
-         : null,
-        supervisorDraftId: supervisorPolicy?.draft_id ?? null,
-        agent: agent
-           ? {
-               definition_id: agent.definition_id,
-               version: agent.version,
-               release_id: agent.release_id,
-             }
-         : null,
-        purpose: "conversation",
-      });
-     } catch (error) {
-       appendLog(
-         "error",
-         error instanceof Error
-           ? error.message
-           : "Task readiness could not be checked.",
-       );
-       return null;
-     }
-   }
-   if (readiness.status === "blocked" && readiness.scope === "analysis") {
-     const blockers = readiness.checks
-       .filter((check) => check.status === "blocked")
-       .map((check) => check.message);
-     appendLog(
-       "error",
-       blockers.join(" ") || "This task is not ready to start.",
-     );
-     return null;
-   }
    const temporaryId = retryTemporaryId
-     ?? (launchOperationId
-       ? `pending-thread:${launchOperationId}`
-       : `pending-thread:${newLogId()}`);
+     ?? `pending-thread:${newLogId()}`;
    const startedAt = Date.now();
    let runAccepted = false;
-   const showAcceptedStart = ({ taskId }: { taskId: string }) => {
+   const showAcceptedStart = () => {
      runAccepted = true;
      setActiveWorkspaceId(wid);
-     if (typeof client.getDataIntake === "function") setActiveTaskId(taskId);
      activeThreadIdRef.current = temporaryId;
      setActiveThreadId(temporaryId);
      setThreadLoading(false);
@@ -2289,11 +2018,7 @@ export default function WebApp() {
        const existing = previous[wid] ?? [];
        const pending: ThreadInfo = {
          id: temporaryId,
-         label: supervisorPolicy
-           ? `${supervisorPolicy.display_name} · ${supervisorPolicy.version}`
-           : agent
-             ? `${agent.display_name} · ${agent.version}`
-             : "Thread",
+         label: "Thread",
          updatedAt: startedAt,
          modelProvider: currentProviderId,
          model: providerModels.find((model) => model.id === selectedProviderModelId)?.model
@@ -2301,8 +2026,6 @@ export default function WebApp() {
          status: "creating",
          optimistic: true,
          creationStatus: "creating",
-         supervisorPolicy,
-         agent,
        };
        return {
          ...previous,
@@ -2315,24 +2038,9 @@ export default function WebApp() {
    try {
      await client.connectWorkspace(wid);
      const result = await client.startThread(wid, {
-       operationId: launchOperationId ?? temporaryId,
-       readinessFingerprint: readiness.evaluation_fingerprint,
+       operationId: temporaryId,
        providerId,
        modelId,
-       supervisorPolicy: supervisorPolicy && supervisorPolicy.source !== "draft"
-         ? {
-             policy_id: supervisorPolicy.policy_id,
-             version: supervisorPolicy.version,
-           }
-         : null,
-       supervisorDraftId: supervisorPolicy?.draft_id ?? null,
-       agent: agent
-         ? {
-             definition_id: agent.definition_id,
-             version: agent.version,
-             release_id: agent.release_id,
-           }
-         : null,
        onRunAccepted: showAcceptedStart,
      });
      // Handle Codex CLI JSON-RPC error embedded in result
@@ -2358,12 +2066,7 @@ export default function WebApp() {
        ? createdThread.model
        : providerModels.find((model) => model.id === selectedProviderModelId)?.model
          ?? selectedProviderModelId;
-     const createdName = extractThreadName(resultRecord)
-       ?? (supervisorPolicy
-         ? `${supervisorPolicy.display_name} · ${supervisorPolicy.version}`
-         : agent
-           ? `${agent.display_name} · ${agent.version}`
-           : "Thread");
+     const createdName = extractThreadName(resultRecord) ?? "Thread";
      setThreadsByWorkspace((previous) => {
        const existing = previous[wid] ?? [];
        const replaced = existing.map((thread) => thread.id === temporaryId
@@ -2405,9 +2108,6 @@ export default function WebApp() {
    } catch (error) {
      const message = error instanceof Error ? error.message : String(error);
      if (!runAccepted) {
-       if (checkedReadiness) {
-         throw error;
-       }
        appendLog("error", message);
        return null;
      }
@@ -2425,80 +2125,6 @@ export default function WebApp() {
      return null;
    }
   }, [activeWorkspaceId, appendLog, client, currentProviderId, providerModels, refreshThreads, selectedProviderModelId]);
-
-  const evaluateLaunchReadiness = useCallback(
-    (workspaceId: string, selection: RunLaunchSelection) => {
-      const providerId = currentProviderId ?? "";
-      const modelId = providerModels.find(
-        (model) => model.id === selectedProviderModelId,
-      )?.model ?? selectedProviderModelId ?? "";
-      return client.evaluateRunReadiness(workspaceId, {
-        providerId,
-        modelId,
-        supervisorPolicy:
-          selection.kind === "supervisor" && selection.policy.source !== "draft"
-            ? {
-                policy_id: selection.policy.policy_id,
-                version: selection.policy.version,
-              }
-            : null,
-        supervisorDraftId:
-          selection.kind === "supervisor" ? selection.policy.draft_id : null,
-        agent:
-          selection.kind === "agent"
-            ? {
-                definition_id: selection.agent.definition_id,
-                version: selection.agent.version,
-              release_id: selection.agent.release_id,
-            }
-          : null,
-        // Creating a Thread only requires platform/runtime readiness.  Data
-        // intake and analysis readiness are evaluated inside the Thread.
-        purpose: "conversation",
-      });
-    },
-    [
-      client,
-      currentProviderId,
-      providerModels,
-      selectedProviderModelId,
-    ],
-  );
-
-  const startLaunchSelection = useCallback(
-    async (
-      workspaceId: string,
-      selection: RunLaunchSelection,
-      readiness: RunReadiness,
-      operationId: string,
-    ) =>
-      Boolean(
-        await startThread(
-          workspaceId,
-          undefined,
-          selection.kind === "supervisor" ? selection.policy : undefined,
-          selection.kind === "agent" ? selection.agent : undefined,
-          readiness,
-          operationId,
-        ),
-      ),
-    [startThread],
-  );
-
-  const handleReadinessAction = useCallback(
-    (action: RunReadinessAction, workspaceId: string) => {
-      setActiveWorkspaceId(workspaceId);
-      if (action === "open_workspace_data") {
-        setActiveRightPanelTab("files");
-        setRightPanelOpen(true);
-        return;
-      }
-      if (action === "open_provider_settings") {
-        setProviderCatalogOpenRequest((request) => request + 1);
-      }
-    },
-    [],
-  );
 
   const archiveThread = useCallback(async (workspaceId: string, threadId: string) => {
     const thread = (threadsByWorkspace[workspaceId] ?? []).find((candidate) => candidate.id === threadId);
@@ -2528,9 +2154,8 @@ export default function WebApp() {
     text: string,
     targetWorkspaceId = activeWorkspaceId,
     targetThreadId = activeThreadId,
-    sourceAssetIds: string[] = [],
   ) => {
-    if (!targetWorkspaceId || !targetThreadId || (!text.trim() && sourceAssetIds.length === 0)) return false;
+    if (!targetWorkspaceId || !targetThreadId || !text.trim()) return false;
     appendLog("user", text);
     setThinking(true);
     setTurnStartedAt(Date.now());
@@ -2545,7 +2170,6 @@ export default function WebApp() {
         text,
         selectedModel?.model ?? selectedProviderModelId,
         currentProviderId,
-        sourceAssetIds,
       );
       const payload = unwrapWebRpcResult(response);
       const record = payload && typeof payload === "object"
@@ -2581,24 +2205,14 @@ export default function WebApp() {
     }
   }, [activeThreadId, activeWorkspaceId, appendLog, client, currentProviderId, providerModels, selectedProviderModelId]);
 
-  const uploadDataFiles = useCallback(async (
-    files: File[],
-    onProgress?: (percent: number) => void,
-  ) => {
-    if (!activeWorkspaceId) throw new Error("Select a Workspace before uploading data.");
-    const draft = await client.uploadDataDraft(activeWorkspaceId, files, onProgress);
-    void refreshDataIntake();
-    return draft.assets;
-  }, [activeWorkspaceId, client, refreshDataIntake]);
-
-  const sendMessage = useCallback(async (sourceAssetIds: string[] = []) => {
+  const sendMessage = useCallback(async () => {
     const text = draft.trim();
-    if (!activeWorkspaceId || (!text && sourceAssetIds.length === 0)) return;
+    if (!activeWorkspaceId || !text) return;
     if (!activeThreadId) {
       const threadId = await startThread(activeWorkspaceId);
       if (!threadId) return;
       setDraft("");
-      await sendText(text, activeWorkspaceId, threadId, sourceAssetIds);
+      await sendText(text, activeWorkspaceId, threadId);
       return;
     }
     setDraft("");
@@ -2610,7 +2224,7 @@ export default function WebApp() {
       if (text) setQueuedFollowUps((previous) => [...previous, { id: newLogId(), text }]);
       return;
     }
-    await sendText(text, activeWorkspaceId, activeThreadId, sourceAssetIds);
+    await sendText(text, activeWorkspaceId, activeThreadId);
   }, [activeThreadId, activeWorkspaceId, draft, sendText, startThread, thinking, threadStatus]);
 
   const stopTurn = useCallback(() => {
@@ -2712,6 +2326,41 @@ export default function WebApp() {
       });
     }
   }, [appendLog, client, refreshPendingUserInputs, submittingPendingUserInputIds]);
+
+  const submitMcpForm = useCallback(async (
+    requestId: string,
+    version: number,
+    action: McpFormResponseAction,
+    content?: McpFormContent,
+  ) => {
+    if (submittingMcpFormIds.has(requestId)) return;
+    setSubmittingMcpFormIds((previous) => new Set(previous).add(requestId));
+    try {
+      await client.respondToMcpForm(requestId, version, action, content);
+      pendingMcpFormSequence.current += 1;
+      setPendingMcpFormsById((previous) => {
+        if (!previous.has(requestId)) return previous;
+        const next = new Map(previous);
+        next.delete(requestId);
+        return next;
+      });
+    } catch (error) {
+      const status = error && typeof error === "object" && "status" in error
+        ? (error as { status?: unknown }).status
+        : null;
+      if (status === 409) {
+        await refreshPendingMcpForms(activeThreadIdRef.current);
+      } else {
+        appendLog("error", error instanceof Error ? error.message : String(error));
+      }
+    } finally {
+      setSubmittingMcpFormIds((previous) => {
+        const next = new Set(previous);
+        next.delete(requestId);
+        return next;
+      });
+    }
+  }, [appendLog, client, refreshPendingMcpForms, submittingMcpFormIds]);
 
   const resolveApproval = useCallback(async (
     workspaceId: string,
@@ -2900,6 +2549,10 @@ export default function WebApp() {
     () => Array.from(pendingUserInputsById.values()),
     [pendingUserInputsById],
   );
+  const pendingMcpFormRequests = useMemo(
+    () => Array.from(pendingMcpFormsById.values()),
+    [pendingMcpFormsById],
+  );
   const activeThread = activeWorkspaceId && activeThreadId
     ? threadsByWorkspace[activeWorkspaceId]?.find((thread) => thread.id === activeThreadId) ?? null
     : null;
@@ -2971,9 +2624,7 @@ export default function WebApp() {
     if (!activeWorkspaceId || activeThread?.creationStatus !== "failed") return;
     void startThread(
       activeWorkspaceId,
-     activeThread.id,
-     activeThread.supervisorPolicy,
-     activeThread.agent,
+      activeThread.id,
     );
   };
 
@@ -2999,7 +2650,6 @@ export default function WebApp() {
           agentPanel={
             <SupervisorOverview
               taskTitle={supervisorOverview?.taskTitle ?? activeThreadTitle ?? "Current task"}
-              policy={supervisorOverview?.policy ?? null}
               agents={supervisorOverview?.agents ?? []}
               activities={supervisorOverview?.activities ?? []}
               executions={supervisorOverview?.executions ?? []}
@@ -3028,7 +2678,6 @@ export default function WebApp() {
               loadGitStatus={loadWorkspaceGitStatus}
               embedded
               enabled={rightPanelOpen && activeRightPanelTab === "files"}
-              onDataDraftChanged={() => { void refreshDataIntake(); }}
             />
           }
         />
@@ -3046,15 +2695,6 @@ export default function WebApp() {
 
           onSelectThread={selectThread}
           onNewThread={startThread}
-          supervisorPolicies={supervisorPolicies}
-          supervisorPoliciesLoading={supervisorPoliciesLoading}
-          supervisorPoliciesError={supervisorPoliciesError}
-          agents={agentDefinitions}
-          agentsLoading={agentDefinitionsLoading}
-          agentsError={agentDefinitionsError}
-          onEvaluateReadiness={evaluateLaunchReadiness}
-          onStartTask={startLaunchSelection}
-          onReadinessAction={handleReadinessAction}
           onArchiveThread={archiveThread}
           onRemoveWorkspace={removeWorkspace}
           baseUrl={baseUrl}
@@ -3069,21 +2709,6 @@ export default function WebApp() {
           currentProviderId={currentProviderId}
           theme={theme}
           onToggleTheme={() => setTheme((current) => current === "dark" ? "light" : "dark")}
-          onSupervisorCatalogChanged={() => {
-            setSupervisorPoliciesRevision((current) => current + 1);
-          }}
-          onTutorialPromptReady={(prompt, options) => {
-            const result = prepareTutorialPromptDraft(
-              draft,
-              prompt,
-              options?.replaceExisting,
-            );
-            if (result.loaded) {
-              setDraft(result.draft);
-            }
-            return result.loaded;
-          }}
-
           onConnectWorkspace={connectWorkspace}
         />
       }
@@ -3136,16 +2761,12 @@ export default function WebApp() {
           onSelectProvider={(providerId) => { void selectProviderAndDefaultModel(providerId); }}
           selectedModelId={selectedProviderModelId}
           onSelectModel={(modelId) => { void selectThreadModel(modelId); }}
-          providerCatalogOpenRequest={providerCatalogOpenRequest}
-
         messages={messages}
         taskApprovals={delegatedTaskApprovals}
         workspaceId={activeWorkspaceId ?? undefined}
         draft={draft}
         onDraftChange={setDraft}
         onSend={sendMessage}
-        onUploadDataFiles={uploadDataFiles}
-        openDataUploadRequest={dataUploadRequest}
         onStop={stopTurn}
         stopping={stopping}
         queuedFollowUps={queuedFollowUps}
@@ -3158,6 +2779,11 @@ export default function WebApp() {
         onSubmitPendingUserInput={(requestId, version, answers) => {
           void submitPendingUserInput(requestId, version, answers);
         }}
+        pendingMcpFormRequests={pendingMcpFormRequests}
+        submittingMcpFormIds={submittingMcpFormIds}
+        onSubmitMcpForm={(requestId, version, action, content) => {
+          void submitMcpForm(requestId, version, action, content);
+        }}
         busy={busy}
         sendDisabled={
           !activeWorkspaceId
@@ -3168,16 +2794,6 @@ export default function WebApp() {
         thinking={thinking}
         turnStartedAt={turnStartedAt}
         onResolveApproval={resolveApproval}
-        dataIntakeTaskId={activeTaskId}
-        dataIntake={dataIntake}
-        dataIntakeLoading={dataIntakeLoading}
-        dataIntakeError={dataIntakeError}
-        onRefreshDataIntake={() => { void refreshDataIntake(); }}
-        onOpenDataUpload={openDataUpload}
-        onConfirmDataMapping={(confirmed) => { void confirmDataMapping(confirmed); }}
-        onSubmitDataParameters={(answers) => { void submitDataParameters(answers); }}
-        onConfirmDataAnalysis={(requestId) => { void confirmDataAnalysis(requestId); }}
-        onRequestDataChange={requestDataChange}
       />
     </Layout>
   );

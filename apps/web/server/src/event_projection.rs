@@ -1,14 +1,11 @@
-use open_web_codex_adapter::{AuthorizedWorkspace, CodexAdapter, TurnOptions};
 use open_web_codex_platform_contracts::RunEvent;
 use serde_json::{json, Map, Value};
-use sha2::{Digest, Sha256};
+use sha2::Digest;
 use sqlx::PgPool;
 use sqlx::Row;
-use std::sync::Arc;
 use uuid::Uuid;
 
 const PROJECTION_VERSION: i16 = 1;
-const DATA_INTAKE_CHANGED_EVENT_TYPE: &str = "platform.data_intake.changed";
 const REPORT_RENDERER_SOURCE_SERVER: &str = "supply_chain_indonesia";
 const REPORT_RENDERER_RESOURCE_SCHEMA: &str = "indonesia_decision_report.v1";
 const REPORT_RENDERER_URI_PREFIX: &str = "supply-chain-indonesia://resources/";
@@ -56,7 +53,6 @@ struct EventRunContext {
     profile_id: Uuid,
     workspace_id: Uuid,
     root_thread_id: String,
-    governed_supervisor: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -67,7 +63,6 @@ struct ArtifactCandidate {
     mime_type: String,
     expected_size: Option<i64>,
     inline_content: Option<Vec<u8>>,
-    intake_envelope: Option<Vec<u8>>,
 }
 
 struct RegisteredArtifact {
@@ -90,369 +85,6 @@ pub struct LiveProjection {
     pub organization_id: Uuid,
     pub payload: Vec<u8>,
     pub pending_artifact_ids: Vec<Uuid>,
-    pub data_intake_confirmation_run_id: Option<Uuid>,
-    pub supervisor_continuation_run_id: Option<Uuid>,
-}
-
-const SUPERVISOR_CONTINUATION_PROMPT: &str = concat!(
-    "All child Agents assigned to this Supervisor Run are now terminal. ",
-    "Continue the same task in this Thread. Reconcile the authoritative child outputs and ",
-    "return the required business-language result now. State what was completed, every ",
-    "source-to-target field mapping, the three evidence-backed multi-source conflicts when ",
-    "three exist, business parameters, readiness, and the next action. Do not report that ",
-    "you are waiting for an Agent and do not expose internal orchestration details."
-);
-
-struct SupervisorContinuationDelivery {
-    id: Uuid,
-    workspace_id: Uuid,
-    workspace_root: String,
-    root_thread_id: String,
-}
-
-async fn supervisor_has_active_children(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    run_id: Uuid,
-) -> Result<bool, String> {
-    sqlx::query_scalar(
-        "SELECT EXISTS (
-             SELECT 1
-             FROM runtime_agent_execution_projections
-             WHERE root_run_id = $1
-               AND status IN ('pending', 'running', 'waiting', 'waiting_for_input')
-         )",
-    )
-    .bind(run_id)
-    .fetch_one(&mut **transaction)
-    .await
-    .map_err(|error| format!("active child Agent lookup failed: {error}"))
-}
-
-async fn record_supervisor_continuation(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    context: &EventRunContext,
-) -> Result<(), String> {
-    sqlx::query(
-        "INSERT INTO supervisor_run_continuations (
-             organization_id, run_id, workspace_id, root_thread_id, kind
-         ) VALUES ($1, $2, $3, $4, 'child_completion')
-         ON CONFLICT (run_id, kind) DO NOTHING",
-    )
-    .bind(context.organization_id)
-    .bind(context.run_id)
-    .bind(context.workspace_id)
-    .bind(&context.root_thread_id)
-    .execute(&mut **transaction)
-    .await
-    .map_err(|error| format!("Supervisor continuation projection error: {error}"))?;
-    Ok(())
-}
-
-async fn supervisor_continuation_is_ready(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    context: &EventRunContext,
-) -> Result<bool, String> {
-    if supervisor_has_active_children(transaction, context.run_id).await? {
-        return Ok(false);
-    }
-    sqlx::query_scalar(
-        "SELECT EXISTS (
-             SELECT 1
-             FROM supervisor_run_continuations
-             WHERE organization_id = $1 AND run_id = $2
-               AND kind = 'child_completion' AND status = 'pending'
-         )",
-    )
-    .bind(context.organization_id)
-    .bind(context.run_id)
-    .fetch_one(&mut **transaction)
-    .await
-    .map_err(|error| format!("Supervisor continuation readiness lookup failed: {error}"))
-}
-
-async fn claim_supervisor_continuation(
-    db: &PgPool,
-    organization_id: Uuid,
-    run_id: Uuid,
-) -> Result<Option<SupervisorContinuationDelivery>, String> {
-    let mut transaction = db
-        .begin()
-        .await
-        .map_err(|error| format!("Supervisor continuation claim transaction error: {error}"))?;
-    let row = sqlx::query(
-        "SELECT continuation.id, continuation.workspace_id, continuation.root_thread_id,
-                workspace.root_path
-         FROM supervisor_run_continuations continuation
-         JOIN runs run ON run.id = continuation.run_id
-           AND run.organization_id = continuation.organization_id
-         JOIN workspaces workspace ON workspace.id = continuation.workspace_id
-           AND workspace.organization_id = continuation.organization_id
-           AND workspace.state IN ('ready', 'retained')
-         WHERE continuation.organization_id = $1 AND continuation.run_id = $2
-           AND continuation.kind = 'child_completion'
-           AND continuation.status = 'pending'
-           AND run.status = 'running' AND run.active_turn_id IS NULL
-           AND NOT EXISTS (
-               SELECT 1
-               FROM runtime_agent_execution_projections execution
-               WHERE execution.root_run_id = run.id
-                 AND execution.status IN ('pending', 'running', 'waiting', 'waiting_for_input')
-           )
-         FOR UPDATE OF continuation, run
-         LIMIT 1",
-    )
-    .bind(organization_id)
-    .bind(run_id)
-    .fetch_optional(&mut *transaction)
-    .await
-    .map_err(|error| format!("Supervisor continuation claim lookup failed: {error}"))?;
-    let Some(row) = row else {
-        transaction.commit().await.map_err(|error| {
-            format!("Supervisor continuation empty claim commit error: {error}")
-        })?;
-        return Ok(None);
-    };
-    let continuation_id: Uuid = row.get("id");
-    sqlx::query(
-        "UPDATE supervisor_run_continuations
-         SET status = 'sending', attempt = attempt + 1, updated_at = now()
-         WHERE id = $1 AND status = 'pending'",
-    )
-    .bind(continuation_id)
-    .execute(&mut *transaction)
-    .await
-    .map_err(|error| format!("Supervisor continuation claim update failed: {error}"))?;
-    let delivery = SupervisorContinuationDelivery {
-        id: continuation_id,
-        workspace_id: row.get("workspace_id"),
-        workspace_root: row.get("root_path"),
-        root_thread_id: row.get("root_thread_id"),
-    };
-    transaction
-        .commit()
-        .await
-        .map_err(|error| format!("Supervisor continuation claim commit error: {error}"))?;
-    Ok(Some(delivery))
-}
-
-async fn finish_supervisor_continuation(
-    db: &PgPool,
-    organization_id: Uuid,
-    run_id: Uuid,
-    delivery_id: Uuid,
-    outcome: Result<String, String>,
-) -> Result<(), String> {
-    let mut transaction = db
-        .begin()
-        .await
-        .map_err(|error| format!("Supervisor continuation finish transaction error: {error}"))?;
-    match outcome {
-        Ok(turn_id) => {
-            sqlx::query(
-                "UPDATE supervisor_run_continuations
-                 SET status = 'sent', turn_id = $1, failure_code = NULL, updated_at = now()
-                 WHERE id = $2 AND organization_id = $3 AND run_id = $4 AND status = 'sending'",
-            )
-            .bind(&turn_id)
-            .bind(delivery_id)
-            .bind(organization_id)
-            .bind(run_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(|error| {
-                format!("Supervisor continuation success projection error: {error}")
-            })?;
-            sqlx::query(
-                "UPDATE runs
-                 SET active_turn_id = COALESCE(active_turn_id, $1), updated_at = now()
-                 WHERE id = $2 AND organization_id = $3 AND status = 'running'",
-            )
-            .bind(&turn_id)
-            .bind(run_id)
-            .bind(organization_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(|error| format!("Supervisor continuation Run update error: {error}"))?;
-        }
-        Err(failure_code) => {
-            sqlx::query(
-                "UPDATE supervisor_run_continuations
-                 SET status = 'failed', failure_code = $1, updated_at = now()
-                 WHERE id = $2 AND organization_id = $3 AND run_id = $4 AND status = 'sending'",
-            )
-            .bind(&failure_code)
-            .bind(delivery_id)
-            .bind(organization_id)
-            .bind(run_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(|error| {
-                format!("Supervisor continuation failure projection error: {error}")
-            })?;
-            sqlx::query(
-                "WITH failed_run AS (
-                    UPDATE runs
-                    SET status = 'failed', failure_code = $1, active_turn_id = NULL,
-                        lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
-                        updated_at = now()
-                    WHERE id = $2 AND organization_id = $3
-                      AND status = 'running' AND active_turn_id IS NULL
-                    RETURNING task_id
-                 )
-                 UPDATE tasks SET status = 'failed', updated_at = now()
-                 WHERE id IN (SELECT task_id FROM failed_run)
-                   AND status NOT IN ('cancelled', 'archived')",
-            )
-            .bind(&failure_code)
-            .bind(run_id)
-            .bind(organization_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(|error| {
-                format!("Supervisor continuation Run failure update error: {error}")
-            })?;
-        }
-    }
-    transaction
-        .commit()
-        .await
-        .map_err(|error| format!("Supervisor continuation finish commit error: {error}"))?;
-    Ok(())
-}
-
-/// Continue the same governed Supervisor Thread once its child executions are
-/// terminal. The continuation is claimed durably before the Runtime call so
-/// one child event cannot start duplicate Turns.
-pub async fn dispatch_supervisor_continuation(
-    db: PgPool,
-    adapter: Arc<dyn CodexAdapter>,
-    organization_id: Uuid,
-    run_id: Uuid,
-) {
-    let delivery = match claim_supervisor_continuation(&db, organization_id, run_id).await {
-        Ok(Some(delivery)) => delivery,
-        Ok(None) => return,
-        Err(error) => {
-            tracing::warn!(%run_id, %error, "Supervisor continuation claim failed");
-            return;
-        }
-    };
-    let workspace = AuthorizedWorkspace {
-        id: delivery.workspace_id.to_string(),
-        root: delivery.workspace_root.into(),
-    };
-    let outcome = match adapter
-        .send_user_message(
-            &workspace,
-            &delivery.root_thread_id,
-            SUPERVISOR_CONTINUATION_PROMPT,
-            &TurnOptions::default(),
-        )
-        .await
-    {
-        Ok(result) => result
-            .get("turnId")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .map(str::to_string)
-            .ok_or_else(|| "runtime_turn_start_missing_id".to_string()),
-        Err(error) => {
-            tracing::warn!(%run_id, error = %error, "Supervisor continuation Turn failed to start");
-            Err("runtime_turn_start_failed".to_string())
-        }
-    };
-    if let Err(error) =
-        finish_supervisor_continuation(&db, organization_id, run_id, delivery.id, outcome).await
-    {
-        tracing::warn!(%run_id, %error, "Supervisor continuation result projection failed");
-    }
-}
-
-/// Stop every active Runtime Turn in a Run when a data-intake confirmation
-/// request becomes durable. The request itself remains the durable gate; a
-/// later user response resumes the same Thread through the data-intake route.
-pub async fn hold_data_intake_agents(
-    db: &PgPool,
-    adapter: &dyn CodexAdapter,
-    organization_id: Uuid,
-    run_id: Uuid,
-) -> Result<(), String> {
-    let rows = sqlx::query(
-        "WITH active_turns AS (
-             SELECT run.codex_thread_id AS thread_id, run.active_turn_id AS turn_id,
-                    run.workspace_id
-             FROM runs run
-             WHERE run.id = $1 AND run.organization_id = $2
-               AND run.active_turn_id IS NOT NULL
-             UNION
-             SELECT execution.agent_thread_id AS thread_id, execution.turn_id,
-                    execution.workspace_id
-             FROM runtime_agent_execution_projections execution
-             WHERE execution.root_run_id = $1
-               AND execution.organization_id = $2
-               AND execution.turn_id IS NOT NULL
-               AND execution.status IN ('pending', 'running', 'waiting', 'waiting_for_input')
-         )
-         SELECT active.thread_id, active.turn_id, workspace.id AS workspace_id,
-                workspace.root_path
-         FROM active_turns active
-         JOIN workspaces workspace ON workspace.id = active.workspace_id
-           AND workspace.organization_id = $2
-           AND workspace.state IN ('ready', 'retained')
-         WHERE active.thread_id IS NOT NULL
-         ORDER BY active.thread_id, active.turn_id",
-    )
-    .bind(run_id)
-    .bind(organization_id)
-    .fetch_all(db)
-    .await
-    .map_err(|error| format!("data-intake agent hold lookup failed: {error}"))?;
-
-    for row in rows {
-        let thread_id: String = row.get("thread_id");
-        let turn_id: String = row.get("turn_id");
-        let workspace = AuthorizedWorkspace {
-            id: row.get::<Uuid, _>("workspace_id").to_string(),
-            root: row.get::<String, _>("root_path").into(),
-        };
-        match adapter
-            .interrupt_turn(&workspace, &thread_id, &turn_id)
-            .await
-        {
-            Ok(()) => {
-                sqlx::query(
-                    "UPDATE runs SET active_turn_id = NULL, updated_at = now()
-                     WHERE id = $1 AND organization_id = $2 AND active_turn_id = $3",
-                )
-                .bind(run_id)
-                .bind(organization_id)
-                .bind(&turn_id)
-                .execute(db)
-                .await
-                .map_err(|error| format!("data-intake agent hold state update failed: {error}"))?;
-            }
-            Err(error) => {
-                tracing::warn!(
-                    %run_id,
-                    %thread_id,
-                    %turn_id,
-                    error = %error,
-                    "could not interrupt an Agent Turn for data-intake confirmation"
-                );
-            }
-        }
-    }
-    Ok(())
-}
-
-#[derive(Default)]
-struct DataIntakeProjectionResult {
-    changed: bool,
-    confirmation_opened: bool,
-}
-
-fn is_data_intake_confirmation_request(kind: &str) -> bool {
-    matches!(kind, "confirm_mapping" | "confirm_analysis")
 }
 
 pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjection>, String> {
@@ -473,40 +105,32 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
     let run_id = context.run_id;
     let organization_id = context.organization_id;
     let is_root_thread = event.thread_id == context.root_thread_id;
-    update_runtime_agent_projection(db, &mut transaction, &context, &event).await?;
+    update_runtime_agent_projection(&mut transaction, &context, &event).await?;
 
     sqlx::query("SAVEPOINT artifact_projection")
         .execute(&mut *transaction)
         .await
         .map_err(|error| format!("Artifact projection savepoint error: {error}"))?;
     let mut pending_artifact_ids = Vec::new();
-    let mut data_intake_confirmation_run_id = None;
     let artifact_result = async {
         let registered = register_artifacts(&mut transaction, &context, &event).await?;
         project_registered_artifacts(&mut event.payload, &registered);
-        let intake =
-            project_data_intake_evidence(db, &mut transaction, &context, &event, &registered)
-                .await?;
         register_inline_visualization_artifact(&mut transaction, &event, run_id, organization_id)
             .await?;
         resolve_inline_artifacts_in_transaction(&mut transaction, run_id, &mut event.payload)
             .await?;
-        Ok::<(Vec<Uuid>, bool), String>((
+        Ok::<Vec<Uuid>, String>(
             registered
                 .into_iter()
                 .filter(|artifact| artifact.state == "pending")
                 .map(|artifact| artifact.id)
                 .collect(),
-            intake.confirmation_opened,
-        ))
+        )
     }
     .await;
     match artifact_result {
-        Ok((ids, confirmation_opened)) => {
+        Ok(ids) => {
             pending_artifact_ids = ids;
-            if confirmation_opened {
-                data_intake_confirmation_run_id = Some(run_id);
-            }
             sqlx::query("RELEASE SAVEPOINT artifact_projection")
                 .execute(&mut *transaction)
                 .await
@@ -570,32 +194,6 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
     )
     .await?;
 
-    let mut supervisor_continuation_run_id = None;
-    let mut deferred_supervisor_completion = false;
-    let root_turn_completed = event.event_type == "codex.turn.completed"
-        && event
-            .payload
-            .pointer("/data/turn/status")
-            .and_then(Value::as_str)
-            == Some("completed");
-    if context.governed_supervisor && is_root_thread && root_turn_completed {
-        if supervisor_has_active_children(&mut transaction, run_id).await? {
-            record_supervisor_continuation(&mut transaction, &context).await?;
-            sqlx::query(
-                "UPDATE runs
-                 SET active_turn_id = NULL, lease_owner = NULL, lease_token = NULL,
-                     lease_expires_at = NULL, updated_at = now()
-                 WHERE id = $1 AND status = 'running' AND active_turn_id = $2",
-            )
-            .bind(run_id)
-            .bind(&event.turn_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(|error| format!("deferred Supervisor completion projection error: {error}"))?;
-            deferred_supervisor_completion = true;
-        }
-    }
-
     if is_root_thread {
         match event.event_type.as_str() {
             "codex.turn.started" => {
@@ -610,42 +208,15 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
                 .map_err(|error| format!("active Turn projection error: {error}"))?;
             }
             "codex.turn.completed" => {
-                if context.governed_supervisor
-                    && root_turn_completed
-                    && !deferred_supervisor_completion
-                {
-                    sqlx::query(
-                        "WITH completed_run AS (
-                            UPDATE runs
-                            SET status = 'completed', active_turn_id = NULL, lease_owner = NULL,
-                                lease_token = NULL, lease_expires_at = NULL, updated_at = now()
-                            WHERE id = $1 AND status = 'running' AND active_turn_id = $2
-                            RETURNING task_id
-                         )
-                         UPDATE tasks SET status = 'completed', updated_at = now()
-                         WHERE id IN (SELECT task_id FROM completed_run)
-                           AND status NOT IN ('cancelled', 'archived')",
-                    )
-                    .bind(run_id)
-                    .bind(&event.turn_id)
-                    .execute(&mut *transaction)
-                    .await
-                    .map_err(|error| {
-                        format!("governed Supervisor completion projection error: {error}")
-                    })?;
-                } else {
-                    if !deferred_supervisor_completion {
-                        sqlx::query(
-                            "UPDATE runs SET active_turn_id = NULL, updated_at = now() \
-                             WHERE id = $1 AND active_turn_id = $2",
-                        )
-                        .bind(run_id)
-                        .bind(&event.turn_id)
-                        .execute(&mut *transaction)
-                        .await
-                        .map_err(|error| format!("completed Turn projection error: {error}"))?;
-                    }
-                }
+                sqlx::query(
+                    "UPDATE runs SET active_turn_id = NULL, updated_at = now() \
+                     WHERE id = $1 AND active_turn_id = $2",
+                )
+                .bind(run_id)
+                .bind(&event.turn_id)
+                .execute(&mut *transaction)
+                .await
+                .map_err(|error| format!("completed Turn projection error: {error}"))?;
             }
             "codex.thread.archived" => {
                 sqlx::query(
@@ -696,56 +267,28 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
         _ => None,
     };
     if let Some(status) = terminal_status {
-        if context.governed_supervisor
-            && status == "completed"
-            && supervisor_has_active_children(&mut transaction, run_id).await?
-        {
-            record_supervisor_continuation(&mut transaction, &context).await?;
-            sqlx::query(
-                "UPDATE runs
-                 SET active_turn_id = NULL, lease_owner = NULL, lease_token = NULL,
-                     lease_expires_at = NULL, updated_at = now()
-                 WHERE id = $1 AND status = 'running'",
-            )
-            .bind(run_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(|error| format!("deferred Thread completion projection error: {error}"))?;
+        let task_status = if status == "completed" {
+            "completed"
         } else {
-            let task_status = if status == "completed" {
-                "completed"
-            } else {
-                "pending"
-            };
-            sqlx::query(
-                "WITH updated_run AS (
-                    UPDATE runs SET status = $1, active_turn_id = NULL, lease_owner = NULL,
-                                    lease_token = NULL, lease_expires_at = NULL, updated_at = now()
-                    WHERE id = $2 AND status = 'running'
-                    RETURNING task_id
-                 )
-                 UPDATE tasks SET status = $3, updated_at = now()
-                 WHERE id IN (SELECT task_id FROM updated_run)
-                   AND status NOT IN ('completed', 'cancelled', 'archived')",
-            )
-            .bind(status)
-            .bind(run_id)
-            .bind(task_status)
-            .execute(&mut *transaction)
-            .await
-            .map_err(|error| format!("run lifecycle update error: {error}"))?;
-        }
-    }
-
-    if context.governed_supervisor
-        && !is_root_thread
-        && matches!(
-            event.event_type.as_str(),
-            "codex.turn.completed" | "codex.thread.completed" | "codex.thread.failed"
+            "pending"
+        };
+        sqlx::query(
+            "WITH updated_run AS (
+                UPDATE runs SET status = $1, active_turn_id = NULL, lease_owner = NULL,
+                                lease_token = NULL, lease_expires_at = NULL, updated_at = now()
+                WHERE id = $2 AND status = 'running'
+                RETURNING task_id
+             )
+             UPDATE tasks SET status = $3, updated_at = now()
+             WHERE id IN (SELECT task_id FROM updated_run)
+               AND status NOT IN ('completed', 'cancelled', 'archived')",
         )
-        && supervisor_continuation_is_ready(&mut transaction, &context).await?
-    {
-        supervisor_continuation_run_id = Some(run_id);
+        .bind(status)
+        .bind(run_id)
+        .bind(task_status)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| format!("run lifecycle update error: {error}"))?;
     }
 
     transaction
@@ -775,8 +318,6 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
         organization_id,
         payload,
         pending_artifact_ids,
-        data_intake_confirmation_run_id,
-        supervisor_continuation_run_id,
     }))
 }
 
@@ -830,19 +371,14 @@ async fn project_provider_call_metric(
     .unwrap_or(0)
     .clamp(0, i64::from(i32::MAX)) as i32;
     let latency_ms = elapsed_ms(event.payload.pointer("/data").unwrap_or(&Value::Null));
-    let stable_prefix_sha256 = safe_sha256_field(event, "stablePrefixSha256");
-    let tool_inventory_sha256 = safe_sha256_field(event, "toolInventorySha256");
-    let skill_set_sha256 = safe_sha256_field(event, "skillSetSha256");
-    let runtime_role_sha256 = safe_sha256_field(event, "runtimeRoleSha256");
     sqlx::query(
         "INSERT INTO provider_call_metrics
          (organization_id, profile_id, run_id, provider_id, model_id,
           input_tokens, cached_input_tokens, output_tokens, tool_schema_tokens,
           latency_ms, first_token_ms, compaction_count, terminal_status,
-          stable_prefix_sha256, tool_inventory_sha256, skill_set_sha256,
-          runtime_role_sha256, source_event_sequence)
+          source_event_sequence)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                 'observed', $13, $14, $15, $16, $17)
+                 'observed', $13)
          ON CONFLICT (run_id, source_event_sequence) DO NOTHING",
     )
     .bind(context.organization_id)
@@ -859,10 +395,6 @@ async fn project_provider_call_metric(
         event.payload.pointer("/data").unwrap_or(&Value::Null),
     ))
     .bind(compaction_count)
-    .bind(stable_prefix_sha256)
-    .bind(tool_inventory_sha256)
-    .bind(skill_set_sha256)
-    .bind(runtime_role_sha256)
     .bind(event_sequence)
     .execute(&mut **transaction)
     .await
@@ -888,16 +420,6 @@ fn elapsed_ms(value: &Value) -> Option<i64> {
 
 fn first_token_ms(value: &Value) -> Option<i64> {
     token_number(value, &["firstTokenMs", "first_token_ms"])
-}
-
-fn safe_sha256_field(event: &ProjectedEvent, key: &str) -> Option<String> {
-    let value = event
-        .payload
-        .pointer("/data")
-        .and_then(|data| data.get(key))
-        .and_then(Value::as_str)
-        .filter(|value| value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))?;
-    Some(value.to_ascii_lowercase())
 }
 
 async fn persist_terminal_frame(
@@ -1025,8 +547,6 @@ async fn persist_terminal_frame(
         organization_id,
         payload,
         pending_artifact_ids: Vec::new(),
-        data_intake_confirmation_run_id: None,
-        supervisor_continuation_run_id: None,
     }))
 }
 
@@ -1396,11 +916,7 @@ async fn lookup_known_thread_context(
     let root = sqlx::query(
         "SELECT run.id AS run_id, run.task_id, run.organization_id,
                 run.requested_profile_id AS profile_id,
-                run.workspace_id, run.codex_thread_id AS root_thread_id,
-                EXISTS (
-                    SELECT 1 FROM supervisor_policy_bindings binding
-                    WHERE binding.run_id = run.id AND binding.state = 'bound'
-                ) AS governed_supervisor
+                run.workspace_id, run.codex_thread_id AS root_thread_id
          FROM runs run
          WHERE run.codex_thread_id = $1
            AND run.requested_profile_id IS NOT NULL
@@ -1421,11 +937,7 @@ async fn lookup_known_thread_context(
     let projected = sqlx::query(
         "SELECT projection.root_run_id AS run_id, run.task_id, projection.organization_id,
                 projection.profile_id, projection.workspace_id,
-                run.codex_thread_id AS root_thread_id,
-                EXISTS (
-                    SELECT 1 FROM supervisor_policy_bindings binding
-                    WHERE binding.run_id = run.id AND binding.state = 'bound'
-                ) AS governed_supervisor
+                run.codex_thread_id AS root_thread_id
          FROM runtime_agent_projections projection
          JOIN runs run ON run.id = projection.root_run_id
            AND run.organization_id = projection.organization_id
@@ -1450,12 +962,10 @@ fn event_run_context(row: &sqlx::postgres::PgRow) -> EventRunContext {
         profile_id: row.get("profile_id"),
         workspace_id: row.get("workspace_id"),
         root_thread_id: row.get("root_thread_id"),
-        governed_supervisor: row.get("governed_supervisor"),
     }
 }
 
 async fn update_runtime_agent_projection(
-    db: &PgPool,
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     context: &EventRunContext,
     event: &ProjectedEvent,
@@ -1503,95 +1013,6 @@ async fn update_runtime_agent_projection(
     if updated != 1 {
         return Err("Runtime agent projection changed during event delivery".to_string());
     }
-    if let Some(role_id) = metadata.and_then(|metadata| metadata.agent_role.as_deref()) {
-        register_policy_agent_producer(db, transaction, context, &event.thread_id, role_id).await?;
-    }
-    Ok(())
-}
-
-/// Record the exact Runtime child Agent that the bound immutable policy
-/// authorized. The role comes from a Runtime event, but it is accepted only
-/// when it matches the bound Draft/Release package and its immutable role hash.
-async fn register_policy_agent_producer(
-    db: &PgPool,
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    context: &EventRunContext,
-    agent_thread_id: &str,
-    role_id: &str,
-) -> Result<(), String> {
-    let policy_snapshot_id = sqlx::query_scalar::<_, Uuid>(
-        "SELECT snapshot.id
-         FROM supervisor_policy_bindings binding
-         JOIN supervisor_policy_snapshots snapshot
-           ON snapshot.organization_id = binding.organization_id
-          AND snapshot.id = binding.snapshot_id
-         WHERE binding.organization_id = $1
-           AND binding.task_id = $2
-           AND binding.thread_id = $3
-           AND binding.state = 'bound'
-         ORDER BY binding.bound_at DESC NULLS LAST, binding.id DESC
-         LIMIT 1",
-    )
-    .bind(context.organization_id)
-    .bind(context.task_id)
-    .bind(&context.root_thread_id)
-    .fetch_optional(&mut **transaction)
-    .await
-    .map_err(|error| format!("Policy producer snapshot lookup error: {error}"))?;
-    let Some(policy_snapshot_id) = policy_snapshot_id else {
-        return Ok(());
-    };
-    let policy = match crate::supervisor_policy::resolve_bound_for_task(
-        db,
-        context.organization_id,
-        context.task_id,
-    )
-    .await
-    {
-        Ok(policy) => policy,
-        Err(error) => {
-            tracing::warn!(
-                task_id = %context.task_id,
-                role_id,
-                %error,
-                "cannot verify child Agent against bound Supervisor Policy"
-            );
-            return Ok(());
-        }
-    };
-    let Some(role) = policy
-        .required_runtime_roles
-        .iter()
-        .find(|role| role.name == role_id)
-    else {
-        tracing::warn!(
-            task_id = %context.task_id,
-            role_id,
-            "Runtime Agent role is not declared by bound Supervisor Policy"
-        );
-        return Ok(());
-    };
-    sqlx::query(
-        "INSERT INTO task_policy_agent_producers (
-            organization_id, task_id, policy_snapshot_id, agent_thread_id,
-            agent_instance_id, role_id, release_hash
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT (organization_id, task_id, agent_thread_id) DO UPDATE SET
-            policy_snapshot_id = EXCLUDED.policy_snapshot_id,
-            agent_instance_id = EXCLUDED.agent_instance_id,
-            role_id = EXCLUDED.role_id,
-            release_hash = EXCLUDED.release_hash",
-    )
-    .bind(context.organization_id)
-    .bind(context.task_id)
-    .bind(policy_snapshot_id)
-    .bind(agent_thread_id)
-    .bind(agent_thread_id)
-    .bind(role_id)
-    .bind(&role.content_sha256)
-    .execute(&mut **transaction)
-    .await
-    .map_err(|error| format!("Policy producer projection error: {error}"))?;
     Ok(())
 }
 
@@ -2907,7 +2328,6 @@ fn artifact_link(content: &Value) -> Option<ArtifactCandidate> {
         mime_type,
         expected_size,
         inline_content: None,
-        intake_envelope: None,
     })
 }
 
@@ -2958,22 +2378,6 @@ fn artifact_candidates(item: &Map<String, Value>) -> std::vec::IntoIter<Artifact
                 .map(|expected| expected != bytes.len())
                 .unwrap_or(true)
         }) {
-            // Large intake resources carry a separate bounded envelope in the
-            // same MCP response.  It intentionally uses the full resource
-            // URI, so the artifact remains addressable while the platform can
-            // project readiness without persisting the business payload.
-            if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
-                let is_envelope = value.get("envelopeSchemaVersion").and_then(Value::as_str)
-                    == Some("intake_evidence_envelope.v1")
-                    && value.get("resourceUri").and_then(Value::as_str)
-                        == Some(candidate.uri.as_str())
-                    && value.get("resourceSchema").and_then(Value::as_str)
-                        == Some(candidate.artifact_schema.as_str())
-                    && bytes.len() <= 128 * 1024;
-                if is_envelope {
-                    candidate.intake_envelope = Some(bytes);
-                }
-            }
             continue;
         }
         candidate.inline_content = Some(bytes);
@@ -3105,8 +2509,8 @@ async fn register_artifacts(
             "INSERT INTO artifacts (
                 organization_id, profile_id, artifact_schema, display_name, mime_type,
                 expected_size, source_server, source_uri, content, byte_size,
-                content_sha256, intake_envelope, state
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                content_sha256, state
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
              ON CONFLICT (organization_id, profile_id, source_server, source_uri)
              DO NOTHING
              RETURNING id, state",
@@ -3122,12 +2526,6 @@ async fn register_artifacts(
         .bind(artifact.inline_content.as_deref())
         .bind(inline_size)
         .bind(&inline_sha256)
-        .bind(
-            artifact
-                .intake_envelope
-                .as_deref()
-                .and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok()),
-        )
         .bind(initial_state)
         .fetch_optional(&mut **transaction)
         .await
@@ -3140,7 +2538,7 @@ async fn register_artifacts(
         } else {
             let existing = sqlx::query(
                 "SELECT id, artifact_schema, display_name, mime_type, expected_size,
-                        content_sha256, intake_envelope, state
+                        content_sha256, state
                  FROM artifacts
                  WHERE organization_id = $1 AND profile_id = $2
                    AND source_server = $3 AND source_uri = $4",
@@ -3159,10 +2557,6 @@ async fn register_artifacts(
                 || existing.get::<Option<i64>, _>("expected_size") != expected_size
                 || inline_sha256.as_ref().is_some_and(|expected| {
                     existing.get::<Option<String>, _>("content_sha256").as_ref() != Some(expected)
-                })
-                || artifact.intake_envelope.as_ref().is_some_and(|expected| {
-                    existing.get::<Option<Value>, _>("intake_envelope").as_ref()
-                        != serde_json::from_slice::<Value>(expected).ok().as_ref()
                 })
             {
                 return Err(
@@ -3239,728 +2633,6 @@ fn project_registered_artifacts(payload: &mut Value, artifacts: &[RegisteredArti
     if let Some(data) = payload.pointer_mut("/data").and_then(Value::as_object_mut) {
         data.insert("artifacts".to_string(), Value::Array(projected));
     }
-}
-
-async fn project_data_intake_evidence(
-    db: &PgPool,
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    context: &EventRunContext,
-    event: &ProjectedEvent,
-    artifacts: &[RegisteredArtifact],
-) -> Result<DataIntakeProjectionResult, String> {
-    let mut result = DataIntakeProjectionResult::default();
-    for artifact in artifacts {
-        // ResourceLink artifacts are materialized asynchronously.  Never
-        // infer a user request from an unavailable body; the materializer
-        // calls reconcile_materialized_intake_artifact once the content is
-        // durable and ready.
-        if artifact.state != "ready" {
-            continue;
-        }
-        if !intake_artifact_allowed(
-            db,
-            transaction,
-            context,
-            &event.thread_id,
-            &artifact.artifact_schema,
-        )
-        .await?
-        {
-            tracing::warn!(
-                organization_id = %context.organization_id,
-                task_id = %context.task_id,
-                artifact_schema = %artifact.artifact_schema,
-                "data intake artifact rejected by the bound Supervisor Policy"
-            );
-            continue;
-        }
-        let envelope_hash: String = sqlx::query_scalar::<_, Option<String>>(
-            "SELECT content_sha256 FROM artifacts WHERE organization_id = $1 AND id = $2",
-        )
-        .bind(context.organization_id)
-        .bind(artifact.id)
-        .fetch_optional(&mut **transaction)
-        .await
-        .map_err(|error| format!("Intake Artifact envelope hash lookup error: {error}"))?
-        .flatten()
-        .unwrap_or_else(|| {
-            hex::encode(Sha256::digest(
-                format!("{}:{}", artifact.id, artifact.artifact_schema).as_bytes(),
-            ))
-        });
-        let artifact_content = sqlx::query(
-            "SELECT content, intake_envelope
-             FROM artifacts
-             WHERE organization_id = $1 AND id = $2 AND state = 'ready'",
-        )
-        .bind(context.organization_id)
-        .bind(artifact.id)
-        .fetch_optional(&mut **transaction)
-        .await
-        .map_err(|error| format!("Intake Artifact content lookup error: {error}"))?
-        .and_then(|row| {
-            let content = row
-                .get::<Option<Vec<u8>>, _>("content")
-                .filter(|content| content.len() <= 128 * 1024)
-                .and_then(|content| serde_json::from_slice::<Value>(&content).ok());
-            content.or_else(|| row.get::<Option<Value>, _>("intake_envelope"))
-        });
-        if matches!(
-            artifact.artifact_schema.as_str(),
-            "data_requirement_profile.v2"
-                | "source_profile.v1"
-                | "mapping_proposal.v1"
-                | "input_gap.v1"
-                | "planning-dataset.v2"
-                | "analysis_readiness_review.v1"
-        ) {
-            // Intake evidence is accepted only with the bounded envelope. A
-            // ResourceLink that is not materialized yet is retried by the
-            // materializer; malformed ready content is rejected closed.
-            let Some(content) = artifact_content.as_ref() else {
-                continue;
-            };
-            if !valid_intake_envelope(content, &artifact.artifact_schema) {
-                tracing::warn!(
-                    organization_id = %context.organization_id,
-                    task_id = %context.task_id,
-                    artifact_schema = %artifact.artifact_schema,
-                    "ready intake Artifact has an invalid bounded envelope"
-                );
-                continue;
-            }
-            if !intake_contract_matches_session(transaction, context, content).await? {
-                tracing::warn!(
-                    organization_id = %context.organization_id,
-                    task_id = %context.task_id,
-                    artifact_schema = %artifact.artifact_schema,
-                    "ready intake Artifact contract does not match the Task session"
-                );
-                continue;
-            }
-            // Claim only after the ready body has been materialized and
-            // validated.  Claiming a pending ResourceLink here would make the
-            // later materializer replay a no-op and permanently lose the
-            // InputRequest projection.
-            let projected = sqlx::query(
-                "INSERT INTO task_intake_artifact_projections
-                    (organization_id, task_id, artifact_id, envelope_sha256)
-                 VALUES ($1, $2, $3, $4)
-                 ON CONFLICT DO NOTHING RETURNING artifact_id",
-            )
-            .bind(context.organization_id)
-            .bind(context.task_id)
-            .bind(artifact.id)
-            .bind(&envelope_hash)
-            .fetch_optional(&mut **transaction)
-            .await
-            .map_err(|error| format!("Intake Artifact projection claim error: {error}"))?;
-            if projected.is_none() {
-                continue;
-            }
-            result.changed = true;
-        }
-        let automatic_evidence_column = match artifact.artifact_schema.as_str() {
-            "data_requirement_profile.v2" => Some("requirement_artifact_id"),
-            "source_profile.v1" => Some("source_artifact_id"),
-            "planning-dataset.v2" => Some("dataset_artifact_id"),
-            _ => None,
-        };
-        let request_kind = match artifact.artifact_schema.as_str() {
-            "data_requirement_profile.v2" => None,
-            "mapping_proposal.v1" => Some("confirm_mapping".to_string()),
-            "input_gap.v1" => {
-                // A ready Resource without its bounded envelope is not enough
-                // to create a user request.  Wait for materialisation instead
-                // of inventing a generic provide-data prompt.
-                if artifact_content.is_none() {
-                    continue;
-                }
-                let declared = artifact_content
-                    .as_ref()
-                    .and_then(|content| {
-                        content
-                            .get("inputRequest")
-                            .or_else(|| content.get("input_request"))
-                    })
-                    .and_then(|request| request.get("kind"))
-                    .and_then(Value::as_str);
-                let gaps_are_empty = artifact_content
-                    .as_ref()
-                    .and_then(|content| content.get("gaps"))
-                    .and_then(Value::as_array)
-                    .is_some_and(Vec::is_empty);
-                if gaps_are_empty {
-                    // A cleared input gap is evidence, not a request.  Do not
-                    // turn it into a generic provide-data loop.
-                    continue;
-                }
-                Some(match declared {
-                    Some("answer_parameters") => "answer_parameters".to_string(),
-                    Some("confirm_mapping") => "confirm_mapping".to_string(),
-                    Some("provide_data") => "provide_data".to_string(),
-                    _ => continue,
-                })
-            }
-            "analysis_readiness_review.v1" => Some("confirm_analysis".to_string()),
-            _ => None,
-        };
-        if let Some(column) = automatic_evidence_column {
-            let Some(session) = sqlx::query(
-                "SELECT id FROM data_intake_sessions WHERE organization_id = $1 AND task_id = $2 ORDER BY updated_at DESC, id DESC LIMIT 1",
-            )
-            .bind(context.organization_id)
-            .bind(context.task_id)
-            .fetch_optional(&mut **transaction)
-            .await
-            .map_err(|error| format!("Intake session lookup error: {error}"))?
-            else {
-                continue;
-            };
-            let session_id: Uuid = session.get("id");
-            let artifact_hash: Option<String> = sqlx::query_scalar(
-                "SELECT content_sha256 FROM artifacts WHERE organization_id = $1 AND id = $2",
-            )
-            .bind(context.organization_id)
-            .bind(artifact.id)
-            .fetch_one(&mut **transaction)
-            .await
-            .map_err(|error| format!("Intake Artifact hash lookup error: {error}"))?;
-            let artifact_hash = artifact_hash.unwrap_or_else(|| {
-                hex::encode(Sha256::digest(
-                    format!("{}:{}", artifact.id, artifact.artifact_schema).as_bytes(),
-                ))
-            });
-            let query = match column {
-                "requirement_artifact_id" => sqlx::query("UPDATE data_intake_sessions SET requirement_artifact_id = $1, requirement_profile = COALESCE($2, requirement_profile), mapping_confirmation_sha256 = NULL, readiness_confirmation_sha256 = NULL, mapping_artifact_id = NULL, mapping_proposal = NULL, mapping_candidates = '[]', confirmed_mapping = '[]', dataset_artifact_id = NULL, planning_dataset = NULL, readiness_artifact_id = NULL, readiness_review = NULL, normalized_release_id = NULL, current_binding_id = NULL, input_revision = input_revision + 1, evidence_revision = evidence_revision + 1, evidence_fingerprint = $3, status = 'active', updated_at = now() WHERE id = $4 AND organization_id = $5 AND requirement_artifact_id IS DISTINCT FROM $1"),
-                "source_artifact_id" => sqlx::query("UPDATE data_intake_sessions SET source_artifact_id = $1, source_profile = COALESCE($2, source_profile), mapping_artifact_id = NULL, mapping_proposal = NULL, mapping_candidates = '[]', confirmed_mapping = '[]', mapping_confirmation_sha256 = NULL, dataset_artifact_id = NULL, planning_dataset = NULL, readiness_artifact_id = NULL, readiness_review = NULL, readiness_confirmation_sha256 = NULL, normalized_release_id = NULL, current_binding_id = NULL, input_revision = input_revision + 1, evidence_revision = evidence_revision + 1, evidence_fingerprint = $3, status = 'active', updated_at = now() WHERE id = $4 AND organization_id = $5 AND source_artifact_id IS DISTINCT FROM $1"),
-                _ => sqlx::query("UPDATE data_intake_sessions SET dataset_artifact_id = $1, planning_dataset = COALESCE($2, planning_dataset), input_revision = input_revision + 1, evidence_revision = evidence_revision + 1, evidence_fingerprint = $3, status = 'active', updated_at = now() WHERE id = $4 AND organization_id = $5 AND dataset_artifact_id IS DISTINCT FROM $1"),
-            };
-            query
-                .bind(artifact.id)
-                .bind(&artifact_content)
-                .bind(artifact_hash)
-                .bind(session_id)
-                .bind(context.organization_id)
-                .execute(&mut **transaction)
-                .await
-                .map_err(|error| format!("Intake automatic evidence projection error: {error}"))?;
-            if artifact.artifact_schema == "data_requirement_profile.v2" {
-                let downstream_kinds: &[&str] =
-                    &["confirm_mapping", "answer_parameters", "confirm_analysis"];
-                sqlx::query(
-                    "UPDATE data_intake_input_requests SET status = 'superseded'
-                     WHERE organization_id = $1 AND task_id = $2 AND intake_session_id = $3
-                       AND kind = ANY($4) AND status = 'open'",
-                )
-                .bind(context.organization_id)
-                .bind(context.task_id)
-                .bind(session_id)
-                .bind(downstream_kinds)
-                .execute(&mut **transaction)
-                .await
-                .map_err(|error| format!("Intake downstream request supersede error: {error}"))?;
-            }
-        }
-        let Some(request_kind) = request_kind else {
-            continue;
-        };
-        let Some(session) = sqlx::query(
-            "SELECT id, input_revision FROM data_intake_sessions \
-             WHERE organization_id = $1 AND task_id = $2 \
-             ORDER BY updated_at DESC, id DESC LIMIT 1",
-        )
-        .bind(context.organization_id)
-        .bind(context.task_id)
-        .fetch_optional(&mut **transaction)
-        .await
-        .map_err(|error| format!("Intake session lookup error: {error}"))?
-        else {
-            continue;
-        };
-        let session_id: Uuid = session.get("id");
-        let revision: i64 = session.get("input_revision");
-        let idempotency_key = format!("artifact:{}:{}", artifact.id, artifact.artifact_schema);
-        let artifact_hash: Option<String> = sqlx::query_scalar(
-            "SELECT content_sha256 FROM artifacts WHERE organization_id = $1 AND id = $2",
-        )
-        .bind(context.organization_id)
-        .bind(artifact.id)
-        .fetch_one(&mut **transaction)
-        .await
-        .map_err(|error| format!("Intake Artifact hash lookup error: {error}"))?;
-        let artifact_hash = artifact_hash.unwrap_or_else(|| {
-            hex::encode(Sha256::digest(
-                format!("{}:{}", artifact.id, artifact.artifact_schema).as_bytes(),
-            ))
-        });
-        let update = match artifact.artifact_schema.as_str() {
-            "mapping_proposal.v1" => sqlx::query(
-                "UPDATE data_intake_sessions SET mapping_artifact_id = $1, \
-                 mapping_proposal = COALESCE($2, mapping_proposal), \
-                 mapping_confirmation_sha256 = NULL, readiness_confirmation_sha256 = NULL, \
-                 dataset_artifact_id = NULL, planning_dataset = NULL, readiness_artifact_id = NULL, \
-                 readiness_review = NULL, normalized_release_id = NULL, current_binding_id = NULL, \
-                 input_revision = input_revision + 1, evidence_revision = evidence_revision + 1, evidence_fingerprint = $3, \
-                 status = 'active', updated_at = now() WHERE id = $4 AND organization_id = $5 \
-                 AND mapping_artifact_id IS DISTINCT FROM $1",
-            ),
-            "planning-dataset.v2" => sqlx::query(
-                "UPDATE data_intake_sessions SET dataset_artifact_id = $1, \
-                 planning_dataset = COALESCE($2, planning_dataset), \
-                 readiness_confirmation_sha256 = NULL, readiness_artifact_id = NULL, \
-                 readiness_review = NULL, normalized_release_id = NULL, current_binding_id = NULL, \
-                 input_revision = input_revision + 1, evidence_revision = evidence_revision + 1, evidence_fingerprint = $3, \
-                 status = 'active', updated_at = now() WHERE id = $4 AND organization_id = $5 \
-                 AND dataset_artifact_id IS DISTINCT FROM $1",
-            ),
-            "analysis_readiness_review.v1" => sqlx::query(
-                "UPDATE data_intake_sessions SET readiness_artifact_id = $1, \
-                 readiness_review = COALESCE($2, readiness_review), \
-                 input_revision = input_revision + 1, evidence_revision = evidence_revision + 1, evidence_fingerprint = $3, \
-                 status = 'active', updated_at = now() WHERE id = $4 AND organization_id = $5 \
-                 AND readiness_artifact_id IS DISTINCT FROM $1",
-            ),
-            _ => continue,
-        };
-        update
-            .bind(artifact.id)
-            .bind(&artifact_content)
-            .bind(&artifact_hash)
-            .bind(session_id)
-            .bind(context.organization_id)
-            .execute(&mut **transaction)
-            .await
-            .map_err(|error| format!("Intake evidence projection error: {error}"))?;
-        if artifact.artifact_schema == "input_gap.v1" {
-            if let Some(content) = artifact_content.as_ref() {
-                let gaps = content
-                    .get("gaps")
-                    .cloned()
-                    .filter(Value::is_array)
-                    .unwrap_or_else(|| json!([]));
-                let gap_fingerprint = hex::encode(Sha256::digest(
-                    serde_json::to_vec(&gaps)
-                        .map_err(|error| format!("Input gap fingerprint error: {error}"))?,
-                ));
-                sqlx::query(
-                    "UPDATE data_intake_sessions
-                     SET gaps = $1, blocked_reasons = $1, gap_fingerprint = $2,
-                         status = CASE WHEN jsonb_array_length($1) = 0 THEN 'active' ELSE 'active' END,
-                         updated_at = now()
-                     WHERE id = $3 AND organization_id = $4",
-                )
-                .bind(gaps)
-                .bind(gap_fingerprint)
-                .bind(session_id)
-                .bind(context.organization_id)
-                .execute(&mut **transaction)
-                .await
-                .map_err(|error| format!("Input gap projection error: {error}"))?;
-            }
-        }
-        sqlx::query(
-            "UPDATE task_analysis_execution_snapshots
-             SET state = 'revoked', failure_code = 'input_changed', updated_at = now()
-             WHERE organization_id = $1 AND task_id = $2
-               AND state IN ('created', 'starting', 'started')",
-        )
-        .bind(context.organization_id)
-        .bind(context.task_id)
-        .execute(&mut **transaction)
-        .await
-        .map_err(|error| format!("Analysis snapshot revocation error: {error}"))?;
-        if artifact.artifact_schema == "data_requirement_profile.v2"
-            || artifact.artifact_schema == "source_profile.v1"
-            || artifact.artifact_schema == "mapping_proposal.v1"
-            || artifact.artifact_schema == "planning-dataset.v2"
-        {
-            let downstream_kinds: &[&str] = match artifact.artifact_schema.as_str() {
-                "data_requirement_profile.v2" | "source_profile.v1" => {
-                    &["confirm_mapping", "answer_parameters", "confirm_analysis"]
-                }
-                "mapping_proposal.v1" => &["answer_parameters", "confirm_analysis"],
-                _ => &["confirm_analysis"],
-            };
-            sqlx::query(
-                "UPDATE data_intake_input_requests SET status = 'superseded'
-                 WHERE organization_id = $1 AND task_id = $2 AND intake_session_id = $3
-                   AND kind = ANY($4) AND status = 'open'",
-            )
-            .bind(context.organization_id)
-            .bind(context.task_id)
-            .bind(session_id)
-            .bind(downstream_kinds)
-            .execute(&mut **transaction)
-            .await
-            .map_err(|error| format!("Intake downstream request supersede error: {error}"))?;
-        }
-        sqlx::query(
-            "UPDATE data_intake_input_requests SET status = 'superseded' \
-             WHERE organization_id = $1 AND task_id = $2 AND intake_session_id = $3 \
-               AND kind = $4 AND status = 'open' AND artifact_id <> $5",
-        )
-        .bind(context.organization_id)
-        .bind(context.task_id)
-        .bind(session_id)
-        .bind(&request_kind)
-        .bind(artifact.id)
-        .execute(&mut **transaction)
-        .await
-        .map_err(|error| format!("Intake request supersede error: {error}"))?;
-        let request_id = Uuid::now_v7();
-        let inserted = sqlx::query(
-            "INSERT INTO data_intake_input_requests (
-                id, organization_id, task_id, intake_session_id, kind,
-                artifact_id, session_revision, evidence_fingerprint, idempotency_key, status,
-                source_turn_id, source_item_id
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'open', $10, $11)
-             ON CONFLICT (organization_id, task_id, idempotency_key) DO NOTHING",
-        )
-        .bind(request_id)
-        .bind(context.organization_id)
-        .bind(context.task_id)
-        .bind(session_id)
-        .bind(&request_kind)
-        .bind(artifact.id)
-        .bind(revision + 1)
-        .bind(&artifact_hash)
-        .bind(&idempotency_key)
-        .bind(event.turn_id.as_deref())
-        .bind(event.item_id.as_deref())
-        .execute(&mut **transaction)
-        .await
-        .map_err(|error| format!("Intake input request projection error: {error}"))?;
-        if inserted.rows_affected() == 1 && is_data_intake_confirmation_request(&request_kind) {
-            result.confirmation_opened = true;
-        }
-    }
-    Ok(result)
-}
-
-/// Intake is a projection of the bound policy, not a schema-name trigger.
-/// Missing producer identity is rejected: accepting an un-attributed artifact
-/// would let a model-controlled Resource enter the task's readiness state.
-async fn intake_artifact_allowed(
-    db: &PgPool,
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    context: &EventRunContext,
-    producer_thread_id: &str,
-    artifact_schema: &str,
-) -> Result<bool, String> {
-    let Some(binding) = sqlx::query(
-        "SELECT producer.role_id, producer.release_hash
-         FROM supervisor_policy_bindings binding
-         JOIN supervisor_policy_snapshots snapshot
-           ON snapshot.organization_id = binding.organization_id
-          AND snapshot.id = binding.snapshot_id
-         JOIN task_policy_agent_producers producer
-           ON producer.organization_id = binding.organization_id
-          AND producer.task_id = binding.task_id
-          AND producer.policy_snapshot_id = snapshot.id
-          AND producer.agent_thread_id = $3
-         WHERE binding.organization_id = $1 AND binding.task_id = $2
-           AND binding.state = 'bound'
-         ORDER BY binding.bound_at DESC NULLS LAST, binding.id DESC
-         LIMIT 1",
-    )
-    .bind(context.organization_id)
-    .bind(context.task_id)
-    .bind(producer_thread_id)
-    .fetch_optional(&mut **transaction)
-    .await
-    .map_err(|error| format!("Intake policy lookup error: {error}"))?
-    else {
-        return Ok(false);
-    };
-    let policy = crate::supervisor_policy::resolve_bound_for_task(
-        db,
-        context.organization_id,
-        context.task_id,
-    )
-    .await
-    .map_err(|error| format!("Intake policy resolution error: {error}"))?;
-    let Some(contract) = policy
-        .detail
-        .artifact_contracts
-        .iter()
-        .find(|contract| contract.artifact_type == artifact_schema)
-    else {
-        return Ok(false);
-    };
-    let role: String = binding.get("role_id");
-    let release_hash: String = binding.get("release_hash");
-    let Some(runtime_role) = policy
-        .required_runtime_roles
-        .iter()
-        .find(|runtime_role| runtime_role.name == role)
-    else {
-        return Err("artifact_producer_unverified".to_string());
-    };
-    Ok(
-        format!("{}@{}", runtime_role.definition_id, runtime_role.version)
-            == contract.producer_agent
-            && runtime_role.content_sha256 == release_hash,
-    )
-}
-
-fn valid_intake_envelope(content: &Value, artifact_schema: &str) -> bool {
-    let Some(object) = content.as_object() else {
-        return false;
-    };
-    if object.get("schemaVersion").and_then(Value::as_str) != Some(artifact_schema) {
-        return false;
-    }
-    let Some(contract) = object.get("contract").and_then(Value::as_object) else {
-        return false;
-    };
-    let contract_id = contract.get("id").and_then(Value::as_str);
-    let contract_version = contract.get("version").and_then(Value::as_str);
-    let contract_hash = contract.get("contentHash").and_then(Value::as_str);
-    let envelope_valid = contract_id.is_some_and(|value| !value.is_empty())
-        && contract_version.is_some_and(|value| !value.is_empty())
-        && contract_hash.is_some_and(|value| {
-            value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-        })
-        && object.get("taskEvidence").is_some_and(Value::is_object);
-    if !envelope_valid {
-        return false;
-    }
-
-    // A bounded envelope is necessary but not sufficient: the projection must
-    // never turn a malformed or non-ready domain Artifact into an InputRequest
-    // or an Analysis binding.  The capability package owns the full schema;
-    // these checks only enforce the small readiness invariants that the
-    // platform is allowed to project.
-    match artifact_schema {
-        "data_requirement_profile.v2" => {
-            object
-                .get("entities")
-                .or_else(|| object.get("requiredEntities"))
-                .is_some_and(Value::is_array)
-                && object.get("inputRequest").is_some_and(Value::is_object)
-        }
-        "source_profile.v1" => object.get("sources").is_some_and(Value::is_array),
-        "mapping_proposal.v1" => object.get("candidates").is_some_and(Value::is_array),
-        "input_gap.v1" => object.get("gaps").is_some_and(Value::is_array),
-        "planning-dataset.v2" => {
-            object.get("normalization_status").and_then(Value::as_str) == Some("ready")
-        }
-        "analysis_readiness_review.v1" => {
-            object.get("ready").and_then(Value::as_bool) == Some(true)
-                && object
-                    .get("inputRequest")
-                    .and_then(|request| request.get("kind"))
-                    .and_then(Value::as_str)
-                    == Some("confirm_analysis")
-        }
-        _ => false,
-    }
-}
-
-async fn intake_contract_matches_session(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    context: &EventRunContext,
-    content: &Value,
-) -> Result<bool, String> {
-    let Some(contract) = content.get("contract").and_then(Value::as_object) else {
-        return Ok(false);
-    };
-    let Some(contract_id) = contract.get("id").and_then(Value::as_str) else {
-        return Ok(false);
-    };
-    let Some(contract_version) = contract.get("version").and_then(Value::as_str) else {
-        return Ok(false);
-    };
-    let Some(contract_hash) = contract.get("contentHash").and_then(Value::as_str) else {
-        return Ok(false);
-    };
-    let Some(session) = sqlx::query(
-        "SELECT contract_id, contract_version, contract_sha256
-         FROM data_intake_sessions
-         WHERE organization_id = $1 AND task_id = $2
-         ORDER BY updated_at DESC, id DESC LIMIT 1",
-    )
-    .bind(context.organization_id)
-    .bind(context.task_id)
-    .fetch_optional(&mut **transaction)
-    .await
-    .map_err(|error| format!("Intake session contract lookup error: {error}"))?
-    else {
-        return Ok(false);
-    };
-    Ok(session.get::<String, _>("contract_id") == contract_id
-        && session.get::<String, _>("contract_version") == contract_version
-        && session.get::<String, _>("contract_sha256") == contract_hash)
-}
-
-/// Reconcile a ResourceLink artifact after asynchronous materialization.  The
-/// same evidence projector is used for Runtime event delivery and recovery,
-/// so a restart cannot lose a profile, gap, or user InputRequest.
-pub(crate) async fn reconcile_materialized_intake_artifact(
-    db: &PgPool,
-    artifact_id: Uuid,
-) -> Result<Option<LiveProjection>, String> {
-    let mut transaction = db
-        .begin()
-        .await
-        .map_err(|error| format!("Intake reconciliation transaction error: {error}"))?;
-    let Some(row) = sqlx::query(
-        "SELECT artifact.artifact_schema, artifact.state,
-                provenance.producer_thread_id, provenance.producer_turn_id,
-                provenance.producer_item_id, run.workspace_id
-         FROM artifacts artifact
-         JOIN LATERAL (
-             SELECT producer_run_id, producer_thread_id, producer_turn_id,
-                    producer_item_id
-             FROM artifact_provenance
-             WHERE artifact_id = artifact.id
-             ORDER BY created_at, producer_run_id
-             LIMIT 1
-         ) provenance ON true
-         JOIN runs run ON run.id = provenance.producer_run_id
-         WHERE artifact.organization_id = run.organization_id
-           AND artifact.id = $1",
-    )
-    .bind(artifact_id)
-    .fetch_optional(&mut *transaction)
-    .await
-    .map_err(|error| format!("Intake reconciliation lookup error: {error}"))?
-    else {
-        return Ok(None);
-    };
-    if row.get::<String, _>("state") != "ready" {
-        return Ok(None);
-    }
-    let producer_thread_id: String = row.get("producer_thread_id");
-    let workspace_id: Option<Uuid> = row.get("workspace_id");
-    let Some(context) =
-        lookup_known_thread_context(&mut transaction, &producer_thread_id, workspace_id).await?
-    else {
-        return Err("artifact_producer_context_unavailable".to_string());
-    };
-    let event = ProjectedEvent {
-        event_type: "codex.item.completed".to_string(),
-        workspace_id,
-        thread_id: producer_thread_id.clone(),
-        turn_id: row.get("producer_turn_id"),
-        item_id: row.get("producer_item_id"),
-        payload: Value::Null,
-        thread_metadata: None,
-        artifacts: Vec::new(),
-        inline_artifact: None,
-    };
-    let registered = vec![RegisteredArtifact {
-        id: artifact_id,
-        artifact_schema: row.get("artifact_schema"),
-        display_name: String::new(),
-        mime_type: "application/json".to_string(),
-        expected_size: None,
-        state: "ready".to_string(),
-    }];
-    if let Some(role_id) = sqlx::query_scalar::<_, Option<String>>(
-        "SELECT agent_role
-         FROM runtime_agent_projections
-         WHERE organization_id = $1
-           AND root_run_id = $2
-           AND thread_id = $3",
-    )
-    .bind(context.organization_id)
-    .bind(context.run_id)
-    .bind(&producer_thread_id)
-    .fetch_optional(&mut *transaction)
-    .await
-    .map_err(|error| format!("Artifact producer role lookup error: {error}"))?
-    .flatten()
-    {
-        register_policy_agent_producer(
-            db,
-            &mut transaction,
-            &context,
-            &producer_thread_id,
-            &role_id,
-        )
-        .await?;
-    }
-    let intake_result =
-        project_data_intake_evidence(db, &mut transaction, &context, &event, &registered).await?;
-    if !intake_result.changed {
-        transaction
-            .commit()
-            .await
-            .map_err(|error| format!("Intake reconciliation commit error: {error}"))?;
-        return Ok(None);
-    }
-
-    let input_revision: i64 = sqlx::query_scalar(
-        "SELECT input_revision FROM data_intake_sessions
-         WHERE organization_id = $1 AND task_id = $2
-         ORDER BY updated_at DESC, id DESC LIMIT 1",
-    )
-    .bind(context.organization_id)
-    .bind(context.task_id)
-    .fetch_one(&mut *transaction)
-    .await
-    .map_err(|error| format!("Intake revision lookup error: {error}"))?;
-    let payload = json!({
-        "schemaVersion": PROJECTION_VERSION,
-        "itemType": "platformDataIntakeChanged",
-        "data": {
-            "sourceType": "platform/data-intake/changed",
-            "taskId": context.task_id,
-            "inputRevision": input_revision,
-        },
-    });
-    let persisted = sqlx::query(
-        "INSERT INTO run_events (
-            run_id, event_type, projection_version, thread_id, turn_id, item_id, payload
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-         RETURNING id, sequence, created_at",
-    )
-    .bind(context.run_id)
-    .bind(DATA_INTAKE_CHANGED_EVENT_TYPE)
-    .bind(PROJECTION_VERSION)
-    .bind(&producer_thread_id)
-    .bind(&event.turn_id)
-    .bind(&event.item_id)
-    .bind(&payload)
-    .fetch_one(&mut *transaction)
-    .await
-    .map_err(|error| format!("Intake change event insert error: {error}"))?;
-    transaction
-        .commit()
-        .await
-        .map_err(|error| format!("Intake reconciliation commit error: {error}"))?;
-
-    let public = RunEvent {
-        id: persisted.get("id"),
-        sequence: persisted.get("sequence"),
-        run_id: context.run_id,
-        event_type: DATA_INTAKE_CHANGED_EVENT_TYPE.to_string(),
-        projection_version: PROJECTION_VERSION,
-        thread_id: Some(producer_thread_id),
-        turn_id: event.turn_id,
-        item_id: event.item_id,
-        payload,
-        created_at: persisted.get("created_at"),
-    };
-    let payload = serde_json::to_vec(&json!({
-        "type": "run.event",
-        "version": 1,
-        "event": public,
-    }))
-    .map_err(|error| format!("Intake change live projection encoding error: {error}"))?;
-    Ok(Some(LiveProjection {
-        organization_id: context.organization_id,
-        payload,
-        pending_artifact_ids: Vec::new(),
-        data_intake_confirmation_run_id: if intake_result.confirmation_opened {
-            Some(context.run_id)
-        } else {
-            None
-        },
-        supervisor_continuation_run_id: None,
-    }))
 }
 
 async fn register_inline_visualization_artifact(
@@ -5647,18 +4319,6 @@ After"#;
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO tasks (
-                id, organization_id, project_id, created_by, title, status
-             ) VALUES ($1, $2, $3, $4, 'Projection Task', 'running')",
-        )
-        .bind(task_id)
-        .bind(organization_id)
-        .bind(project_id)
-        .bind(user_id)
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query(
             "INSERT INTO workspaces (
                 id, organization_id, project_id, profile_id, created_by, kind, name,
                 root_path, source_ref, state
@@ -5675,6 +4335,19 @@ After"#;
         .await
         .unwrap();
         sqlx::query(
+            "INSERT INTO tasks (
+                id, organization_id, project_id, workspace_id, created_by, title, status
+             ) VALUES ($1, $2, $3, $4, $5, 'Projection Task', 'running')",
+        )
+        .bind(task_id)
+        .bind(organization_id)
+        .bind(project_id)
+        .bind(workspace_id)
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
             "INSERT INTO runs (
                 id, organization_id, task_id, requested_by, requested_profile_id,
                 workspace_id, status, codex_thread_id
@@ -5686,33 +4359,6 @@ After"#;
         .bind(user_id)
         .bind(profile_id)
         .bind(workspace_id)
-        .execute(&pool)
-        .await
-        .unwrap();
-        let policy_snapshot_id = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO supervisor_policy_snapshots (
-                organization_id, policy_id, version, display_name,
-                developer_instructions, content_sha256
-             ) VALUES ($1, 'projection-supervisor', '1.0.0', 'Projection Supervisor',
-                       'Coordinate the projected child agents.', $2)
-             RETURNING id",
-        )
-        .bind(organization_id)
-        .bind("0".repeat(64))
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO supervisor_policy_bindings (
-                organization_id, profile_id, task_id, run_id, snapshot_id,
-                thread_id, state, bound_at
-             ) VALUES ($1, $2, $3, $4, $5, 'root-thread', 'bound', now())",
-        )
-        .bind(organization_id)
-        .bind(profile_id)
-        .bind(task_id)
-        .bind(run_id)
-        .bind(policy_snapshot_id)
         .execute(&pool)
         .await
         .unwrap();
@@ -5820,16 +4466,6 @@ After"#;
 
 "#
         );
-        let root_turn_completed = format!(
-            r#"data: {{"method":"app-server-event","params":{{"workspace_id":"{workspace_id}","message":{{"method":"turn/completed","params":{{"threadId":"root-thread","turnId":"root-turn","turn":{{"id":"root-turn","status":"completed"}}}}}}}}}}
-
-"#
-        );
-        let root_followup_completed = format!(
-            r#"data: {{"method":"app-server-event","params":{{"workspace_id":"{workspace_id}","message":{{"method":"turn/completed","params":{{"threadId":"root-thread","turnId":"root-followup-turn","turn":{{"id":"root-followup-turn","status":"completed"}}}}}}}}}}
-
-"#
-        );
         assert!(persist_frame(assignment.as_bytes(), &pool)
             .await
             .unwrap()
@@ -5854,36 +4490,6 @@ After"#;
             .await
             .unwrap()
             .is_some());
-        sqlx::query("UPDATE runs SET active_turn_id = 'root-turn' WHERE id = $1")
-            .bind(run_id)
-            .execute(&pool)
-            .await
-            .unwrap();
-        let deferred_root = persist_frame(root_turn_completed.as_bytes(), &pool)
-            .await
-            .unwrap()
-            .expect("deferred root completion projection");
-        assert_eq!(deferred_root.supervisor_continuation_run_id, None);
-        let run = sqlx::query("SELECT status, active_turn_id FROM runs WHERE id = $1")
-            .bind(run_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(run.get::<String, _>("status"), "running");
-        assert!(run.get::<Option<String>, _>("active_turn_id").is_none());
-        let continuation = sqlx::query(
-            "SELECT kind, status, attempt
-             FROM supervisor_run_continuations
-             WHERE organization_id = $1 AND run_id = $2",
-        )
-        .bind(organization_id)
-        .bind(run_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(continuation.get::<String, _>("kind"), "child_completion");
-        assert_eq!(continuation.get::<String, _>("status"), "pending");
-        assert_eq!(continuation.get::<i32, _>("attempt"), 0);
         let artifact_projection = persist_frame(child_artifact.as_bytes(), &pool)
             .await
             .unwrap()
@@ -6160,56 +4766,7 @@ After"#;
             .await
             .unwrap()
             .expect("final child terminal projection");
-        assert_eq!(
-            final_child_projection.supervisor_continuation_run_id,
-            Some(run_id)
-        );
-        let delivery = claim_supervisor_continuation(&pool, organization_id, run_id)
-            .await
-            .unwrap()
-            .expect("claim the one pending Supervisor continuation");
-        assert!(
-            claim_supervisor_continuation(&pool, organization_id, run_id)
-                .await
-                .unwrap()
-                .is_none()
-        );
-        finish_supervisor_continuation(
-            &pool,
-            organization_id,
-            run_id,
-            delivery.id,
-            Ok("root-followup-turn".to_string()),
-        )
-        .await
-        .unwrap();
-        let continuation = sqlx::query(
-            "SELECT status, attempt, turn_id
-             FROM supervisor_run_continuations
-             WHERE organization_id = $1 AND run_id = $2",
-        )
-        .bind(organization_id)
-        .bind(run_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(continuation.get::<String, _>("status"), "sent");
-        assert_eq!(continuation.get::<i32, _>("attempt"), 1);
-        assert_eq!(
-            continuation.get::<Option<String>, _>("turn_id").as_deref(),
-            Some("root-followup-turn")
-        );
-
-        let run = sqlx::query("SELECT status, active_turn_id FROM runs WHERE id = $1")
-            .bind(run_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(run.get::<String, _>("status"), "running");
-        assert_eq!(
-            run.get::<Option<String>, _>("active_turn_id").as_deref(),
-            Some("root-followup-turn")
-        );
+        assert_eq!(final_child_projection.organization_id, organization_id);
         let child = sqlx::query(
             "SELECT root_run_id, parent_thread_id, agent_role, status_type
              FROM runtime_agent_projections
@@ -6324,23 +4881,6 @@ After"#;
             artifact.get::<String, _>("producer_thread_id"),
             "child-thread"
         );
-        assert!(persist_frame(root_followup_completed.as_bytes(), &pool)
-            .await
-            .unwrap()
-            .is_some());
-        let run = sqlx::query("SELECT status, active_turn_id FROM runs WHERE id = $1")
-            .bind(run_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(run.get::<String, _>("status"), "completed");
-        assert!(run.get::<Option<String>, _>("active_turn_id").is_none());
-        let task_status: String = sqlx::query_scalar("SELECT status FROM tasks WHERE id = $1")
-            .bind(task_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(task_status, "completed");
     }
 
     #[test]

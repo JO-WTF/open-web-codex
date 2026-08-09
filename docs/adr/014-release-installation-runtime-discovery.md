@@ -1,6 +1,8 @@
 # ADR-014：Release、Installation 与 Runtime Discovery 分离
 
-状态：已接受（2026-08-08），实现待完成
+状态：阶段一能力供给部分已被
+[ADR-018](018-built-in-network-copilot-runtime-closure.md) 替代（2026-08-08）；下文仅作为
+未来公开发布治理的历史输入，不是当前实施合同。
 
 ## 背景
 

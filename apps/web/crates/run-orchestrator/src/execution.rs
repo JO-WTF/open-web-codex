@@ -1,5 +1,5 @@
 use chrono::Utc;
-use open_web_codex_adapter::{AdapterError, AuthorizedWorkspace};
+use open_web_codex_adapter::AuthorizedWorkspace;
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -27,6 +27,10 @@ impl RunOrchestrator {
             let source = sqlx::query(
                 "SELECT source_workspace.id AS workspace_id, source_workspace.root_path \
                  FROM runs source_run \
+                 JOIN runs target_run ON target_run.id = $5 \
+                   AND target_run.organization_id = source_run.organization_id \
+                   AND target_run.task_id = source_run.task_id \
+                   AND target_run.workspace_id = source_run.workspace_id \
                  JOIN workspaces source_workspace ON source_workspace.id = source_run.workspace_id \
                  JOIN workspace_grants source_grant \
                    ON source_grant.workspace_id = source_workspace.id \
@@ -35,12 +39,15 @@ impl RunOrchestrator {
                   AND source_grant.profile_id = source_workspace.profile_id \
                  WHERE source_run.id = $1 AND source_run.organization_id = $2 \
                    AND source_run.codex_thread_id = $3 \
+                   AND target_run.workspace_id = $6 \
                    AND source_workspace.state IN ('ready', 'retained')",
             )
             .bind(lease.fork_source_run_id)
             .bind(lease.organization_id)
             .bind(source_thread_id)
             .bind(lease.actor_id)
+            .bind(lease.run_id)
+            .bind(lease.workspace_id)
             .fetch_optional(&self.db)
             .await?
             .ok_or(RunOrchestratorError::NotFound)?;
@@ -52,14 +59,13 @@ impl RunOrchestrator {
         } else {
             None
         };
-        let start_mode = self.start_preflight.prepare_runtime_start(lease).await?;
         let started = match (source_workspace, lease.fork_thread_id.as_deref()) {
             (Some(source_workspace), Some(source_thread_id)) => {
                 self.adapter
-                    .fork_thread(&source_workspace, &workspace, source_thread_id, &start_mode)
+                    .fork_thread(&source_workspace, &workspace, source_thread_id)
                     .await?
             }
-            (None, None) => self.adapter.start_thread(&workspace, &start_mode).await?,
+            (None, None) => self.adapter.start_thread(&workspace).await?,
             _ => {
                 return Err(RunOrchestratorError::Conflict(
                     "fork source workspace did not match the leased Run".to_string(),
@@ -106,50 +112,6 @@ impl RunOrchestrator {
             return Err(RunOrchestratorError::LeaseLost);
         };
 
-        if let Some(binding_id) = lease
-            .supervisor_policy
-            .as_ref()
-            .map(|policy| policy.binding_id)
-        {
-            let updated = sqlx::query(
-                "UPDATE supervisor_policy_bindings \
-                 SET thread_id = $1, state = 'bound', failure_code = NULL, \
-                     bound_at = now(), updated_at = now() \
-                 WHERE id = $2 AND run_id = $3 AND state = 'prepared'",
-            )
-            .bind(thread_id)
-            .bind(binding_id)
-            .bind(lease.run_id)
-            .execute(&mut *transaction)
-            .await?
-            .rows_affected();
-            if updated != 1 {
-                transaction.rollback().await?;
-                return Err(RunOrchestratorError::Conflict(
-                    "Supervisor Policy binding changed before Thread delivery".to_string(),
-                ));
-            }
-        }
-        if let Some(binding_id) = lease.agent.as_ref().map(|agent| agent.binding_id) {
-            let updated = sqlx::query(
-                "UPDATE agent_run_bindings \
-                 SET thread_id = $1, state = 'bound', failure_code = NULL, \
-                     bound_at = now(), updated_at = now() \
-                 WHERE id = $2 AND run_id = $3 AND state = 'prepared'",
-            )
-            .bind(thread_id)
-            .bind(binding_id)
-            .bind(lease.run_id)
-            .execute(&mut *transaction)
-            .await?
-            .rows_affected();
-            if updated != 1 {
-                transaction.rollback().await?;
-                return Err(RunOrchestratorError::Conflict(
-                    "root Agent binding changed before Thread delivery".to_string(),
-                ));
-            }
-        }
         insert_root_agent_projection(&mut transaction, lease, thread_id).await?;
         sqlx::query("UPDATE tasks SET status = 'running', updated_at = now() WHERE id = $1")
             .bind(task_id)
@@ -185,52 +147,6 @@ impl RunOrchestrator {
             transaction.rollback().await?;
             return Err(RunOrchestratorError::LeaseLost);
         }
-        if let Some(binding_id) = lease
-            .supervisor_policy
-            .as_ref()
-            .map(|policy| policy.binding_id)
-        {
-            let updated = sqlx::query(
-                "UPDATE supervisor_policy_bindings \
-                 SET thread_id = COALESCE(thread_id, $1), state = 'bound', failure_code = NULL, \
-                     bound_at = COALESCE(bound_at, now()), updated_at = now() \
-                 WHERE id = $2 AND run_id = $3 \
-                   AND state IN ('prepared', 'bound', 'cancelled')",
-            )
-            .bind(thread_id)
-            .bind(binding_id)
-            .bind(lease.run_id)
-            .execute(&mut *transaction)
-            .await?
-            .rows_affected();
-            if updated != 1 {
-                transaction.rollback().await?;
-                return Err(RunOrchestratorError::Conflict(
-                    "Supervisor Policy delivery could not be recorded".to_string(),
-                ));
-            }
-        }
-        if let Some(binding_id) = lease.agent.as_ref().map(|agent| agent.binding_id) {
-            let updated = sqlx::query(
-                "UPDATE agent_run_bindings \
-                 SET thread_id = COALESCE(thread_id, $1), state = 'bound', failure_code = NULL, \
-                     bound_at = COALESCE(bound_at, now()), updated_at = now() \
-                 WHERE id = $2 AND run_id = $3 \
-                   AND state IN ('prepared', 'bound', 'cancelled')",
-            )
-            .bind(thread_id)
-            .bind(binding_id)
-            .bind(lease.run_id)
-            .execute(&mut *transaction)
-            .await?
-            .rows_affected();
-            if updated != 1 {
-                transaction.rollback().await?;
-                return Err(RunOrchestratorError::Conflict(
-                    "root Agent delivery could not be recorded".to_string(),
-                ));
-            }
-        }
         insert_root_agent_projection(&mut transaction, lease, thread_id).await?;
         transaction.commit().await?;
         Ok(())
@@ -242,7 +158,7 @@ impl RunOrchestrator {
         code: &'static str,
     ) -> Result<(), RunOrchestratorError> {
         let mut transaction = self.db.begin().await?;
-        let updated = sqlx::query(
+        sqlx::query(
             "UPDATE runs SET status = 'failed', failure_code = $1, lease_owner = NULL, \
                              lease_token = NULL, lease_expires_at = NULL, updated_at = now() \
              WHERE id = $2 AND lease_owner = $3 AND lease_token = $4 \
@@ -253,38 +169,7 @@ impl RunOrchestrator {
         .bind(&self.worker_id)
         .bind(&lease.token)
         .execute(&mut *transaction)
-        .await?
-        .rows_affected();
-        if updated == 1 {
-            if let Some(binding_id) = lease
-                .supervisor_policy
-                .as_ref()
-                .map(|policy| policy.binding_id)
-            {
-                sqlx::query(
-                    "UPDATE supervisor_policy_bindings \
-                     SET state = 'failed', failure_code = $1, updated_at = now() \
-                     WHERE id = $2 AND run_id = $3 AND state = 'prepared'",
-                )
-                .bind(code)
-                .bind(binding_id)
-                .bind(lease.run_id)
-                .execute(&mut *transaction)
-                .await?;
-            }
-            if let Some(binding_id) = lease.agent.as_ref().map(|agent| agent.binding_id) {
-                sqlx::query(
-                    "UPDATE agent_run_bindings \
-                     SET state = 'failed', failure_code = $1, updated_at = now() \
-                     WHERE id = $2 AND run_id = $3 AND state = 'prepared'",
-                )
-                .bind(code)
-                .bind(binding_id)
-                .bind(lease.run_id)
-                .execute(&mut *transaction)
-                .await?;
-            }
-        }
+        .await?;
         transaction.commit().await?;
         Ok(())
     }
@@ -404,10 +289,6 @@ fn failure_code(error: &RunOrchestratorError) -> &'static str {
         RunOrchestratorError::LeaseLost => "lease_lost",
         RunOrchestratorError::Database(_) => "database_error",
         RunOrchestratorError::Git(_) => "git_workspace_error",
-        RunOrchestratorError::Adapter(AdapterError::CapabilityUnavailable(_)) => {
-            "runtime_start_preflight_failed"
-        }
         RunOrchestratorError::Adapter(_) => "codex_unavailable",
-        RunOrchestratorError::StartPreflight(_) => "runtime_start_preflight_failed",
     }
 }

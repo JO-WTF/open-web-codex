@@ -8,10 +8,10 @@ MCP Server、Secret 配置、审批适配或专用 Web 面板。`tools/maps-mcp`
 `docs/capability-baseline.md` 为准，阶段顺序以 `docs/roadmap.md` 为准，当前
 任务以 `docs/development-plan.md` 为准。
 
-目标态下，算法工程师通过 Tool SDK 和 Copilot Studio 完成这些步骤，发布与安装合同
-以 `docs/supervisor-agent-skill-tool-architecture.md` 为准。当前直接编辑目录的命令只
-用于仓库内参考包开发，不是未来 Web 用户的安装协议。新建或重写的 `SKILL.md` 主体
-必须使用中文；代码标识、Schema 字段和正式产品名可以保留英文。
+阶段一的仓网包由 Profile 托管并通过 Codex 原生 discovery/reload 生效；公开 Tool SDK
+和 Copilot Studio 属于阶段二，合同尚未重新裁决。当前直接编辑目录的命令只用于仓库内
+参考包开发，不是未来 Web 用户的安装协议。新建或重写的 `SKILL.md` 主体必须使用中文；
+代码标识、Schema 字段和正式产品名可以保留英文。
 
 如需先理解 Agent Definition、Runtime Role、领域知识、Skill 与 MCP 的职责拆分和组合方式，参见
 [`domain-agent-extension-architecture.md`](domain-agent-extension-architecture.md)。
@@ -570,6 +570,10 @@ GeoJSON source option 保留。`layers` 是官方 Mapbox Style Specification Lay
 }
 ```
 
+> 以下 MCP Resource→Inline Artifact 链描述当前旧地图实现，属于 ADR-018 要删除的迁移
+> 输入，不得用于阶段一新增数据交换。阶段一仓网 Tool 使用 Workspace 相对路径读取数据，
+> 地图 Tool 直接产生用户交付 Artifact；Artifact 不再作为 Agent 输入。
+
 浏览器链路：
 
 1. Server 通过通用 `inline-visualization.v1` envelope 和 renderer registry 识别
@@ -752,8 +756,8 @@ cargo test --workspace --locked
 跨 Codex 协议变化还需执行：
 
 ```bash
-npm --prefix apps/web run check:codex-contracts
-npm --prefix apps/web run smoke:codex-app-server -- --require-manifest
+./scripts/test-codex.sh -p codex-app-server-protocol schema_fixtures::
+npm --prefix apps/web run smoke:codex-app-server
 ```
 
 不要为只增加 Skill/MCP 能力包而修改 Codex 协议；优先使用现有 Plugin、MCP 和

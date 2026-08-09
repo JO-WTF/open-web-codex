@@ -1,6 +1,8 @@
 # ADR-015：使用有界通用 Platform Tool Result
 
-状态：已接受（2026-08-08），实现待完成
+状态：已被 [ADR-018](018-built-in-network-copilot-runtime-closure.md) 替代（2026-08-08）；
+下文仅保存历史决定。当前阶段不建设 ToolOutcome/Work State 或大型内容引用协议；
+中间数据使用普通 Workspace 文件，Artifact 只承载用户交付。
 
 ## 背景
 

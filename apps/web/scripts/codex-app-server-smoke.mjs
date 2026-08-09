@@ -9,7 +9,6 @@ function parseArgs(argv) {
     binArgs: [],
     timeoutMs: 15_000,
     clientVersion: "codex-monitor-contract-harness/1.0.0",
-    requireManifest: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -26,8 +25,6 @@ function parseArgs(argv) {
     } else if (value === "--client-version") {
       options.clientVersion = argv[index + 1];
       index += 1;
-    } else if (value === "--require-manifest") {
-      options.requireManifest = true;
     } else {
       throw new Error(`Unknown argument: ${value}`);
     }
@@ -47,6 +44,33 @@ function parseArgs(argv) {
 
 function writeJsonLine(child, value) {
   child.stdin.write(`${JSON.stringify(value)}\n`);
+}
+
+function requireOfficialInitializeResponse(result) {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    throw new Error("initialize response must be an object");
+  }
+
+  const fields = ["userAgent", "codexHome", "platformFamily", "platformOs"];
+  for (const field of fields) {
+    if (typeof result[field] !== "string") {
+      throw new Error(`initialize response must contain string ${field}`);
+    }
+  }
+}
+
+function requireThreadListResponse(result) {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    throw new Error("thread/list response must be an object");
+  }
+  if (!Array.isArray(result.data)) {
+    throw new Error("thread/list response must contain data array");
+  }
+  for (const field of ["nextCursor", "backwardsCursor"]) {
+    if (!(field in result) || (result[field] !== null && typeof result[field] !== "string")) {
+      throw new Error(`thread/list response must contain nullable string ${field}`);
+    }
+  }
 }
 
 export async function smokeAppServer(options) {
@@ -83,7 +107,7 @@ export async function smokeAppServer(options) {
     };
 
     const timer = setTimeout(() => {
-      finish(new Error(`initialize timed out after ${options.timeoutMs} ms`));
+      finish(new Error(`official initialize/thread/list timed out after ${options.timeoutMs} ms`));
     }, options.timeoutMs);
 
     child.once("error", (error) => {
@@ -92,7 +116,7 @@ export async function smokeAppServer(options) {
     child.once("exit", (code, signal) => {
       if (!settled) {
         const diagnostic = stderr.trim() ? `; stderr: ${stderr.trim()}` : "";
-        finish(new Error(`app-server exited before initialize response (code=${code}, signal=${signal})${diagnostic}`));
+        finish(new Error(`app-server exited before official initialize/thread/list completed (code=${code}, signal=${signal})${diagnostic}`));
       }
     });
     stdout.on("line", (line) => {
@@ -106,34 +130,43 @@ export async function smokeAppServer(options) {
         finish(new Error(`invalid JSON from app-server: ${error.message}`));
         return;
       }
-      if (message.id !== 1) {
+      if (message.id !== 1 && message.id !== 2) {
         return;
       }
       if (message.error) {
-        finish(new Error(`initialize returned an error: ${JSON.stringify(message.error)}`));
+        const method = message.id === 1 ? "initialize" : "thread/list";
+        finish(new Error(`${method} returned an error: ${JSON.stringify(message.error)}`));
         return;
       }
       if (!("result" in message)) {
-        finish(new Error("initialize response has neither result nor error"));
+        const method = message.id === 1 ? "initialize" : "thread/list";
+        finish(new Error(`${method} response has neither result nor error`));
         return;
       }
 
-      const manifest = message.result?.capabilityManifest ?? message.result?.capability_manifest;
-      if (options.requireManifest && !manifest) {
-        finish(new Error("initialize response does not include capabilityManifest"));
+      if (message.id === 1) {
+        try {
+          requireOfficialInitializeResponse(message.result);
+        } catch (error) {
+          finish(error);
+          return;
+        }
+        writeJsonLine(child, { method: "initialized" });
+        writeJsonLine(child, {
+          id: 2,
+          method: "thread/list",
+          params: { limit: 1 },
+        });
         return;
       }
-      writeJsonLine(child, { method: "initialized" });
-      finish(null, {
-        manifestPresent: Boolean(manifest),
-        capabilityCount: Array.isArray(manifest?.capabilities)
-          ? manifest.capabilities.length
-          : null,
-        resultKeys:
-          message.result && typeof message.result === "object"
-            ? Object.keys(message.result).sort()
-            : [],
-      });
+
+      try {
+        requireThreadListResponse(message.result);
+      } catch (error) {
+        finish(error);
+        return;
+      }
+      finish(null, { threadListCount: message.result.data.length });
     });
 
     child.once("spawn", () => {
@@ -145,10 +178,6 @@ export async function smokeAppServer(options) {
             name: "codex_monitor_contract_harness",
             title: "Codex Monitor Contract Harness",
             version: options.clientVersion,
-          },
-          capabilities: {
-            experimentalApi: true,
-            capabilityManifest: true,
           },
         },
       });

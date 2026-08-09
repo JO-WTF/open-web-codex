@@ -1,1204 +1,560 @@
-# Copilot 开发平台实施计划
+# Copilot 开发平台历史实施输入
 
 | 字段 | 内容 |
 | --- | --- |
-| 状态 | 当前可执行工作计划 |
+| 文档性质 | 阶段二候选研究输入，不是当前计划 |
+| 状态 | 已被 ADR-018 替代；内容待阶段二重新裁决 |
 | 更新日期 | 2026-08-08 |
-| 目标架构 | [Copilot 开发平台架构](supervisor-agent-skill-tool-architecture.md) |
-| 当前事实 | [能力基线](capability-baseline.md) 与代码 |
-| 参考案例 | 印尼仓网规划 Copilot |
-| 兼容策略 | 不兼容项目历史版本；迁移所有当前调用方后删除旧路径 |
+| 当前执行 | [开发计划](development-plan.md) |
+| 接受决策 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) |
+| 当前事实 | [Capability Baseline](capability-baseline.md) |
+| 兼容策略 | 不兼容项目历史实现；更新全部调用方后原子删除旧路径 |
 
-本文把目标架构拆成可直接实施的工作包。每项均写明 owner、合同、数据、具体改动、
-删除项、测试和退出条件。工作包按依赖顺序执行；没有通过退出条件不得开始依赖它的
-发布工作。
+本文保存 ADR-017 时期对公开 SDK/Studio/Catalog 的实施研究。下文 W0-W12 全部暂停，
+不得创建阶段一任务、类型、表、route、migration 或验收门。其中 Work State、Data Intake、
+SourceAsset/DatasetRelease/DomainResource、Resource Broker、Assignment Grant、Run
+Completion、Root-only 输入中继和 installation snapshot 已被 ADR-018 否决，不是以后可直接
+恢复的 backlog。阶段二开始前必须依据阶段一证据重新写计划；不能从本文复制合同。
 
-## 1. 完成范围与优先级
+## 1. 固定实施规则
 
-### P0：不完成就无法形成正确平台闭环
+1. 当前以模块化单体实现 Control/Data 逻辑模块；不为未来规模拆微服务。
+2. Codex Runtime 继续拥有 Thread、Turn、context、Agent 调度、Skills/Plugins/MCP、Tool
+   execution 和官方输入；Platform 不创建第二个 scheduler。
+3. 一个事实只能有一个 owner。新 owner 可执行并通过边界验证后，在同一切换中删除旧
+   owner、调用方、fixture、UI、migration/seed 和 current-state 文档。
+4. Browser 只消费 bounded platform DTO；不得接触 raw JSON-RPC、Runtime request ID、
+   路径、Secret 或内部 installation layout。
+5. 模型不构造授权、scope、URI、hash、Run/Work State ID、revision、operation ID、CAS
+   或通用 mutation。
+6. Skills 只指导业务方法、判断和沟通；硬权限、类型、状态机、终态、安装和恢复由机制
+   约束。
+7. 不新增 dual read/write、aliases、路径扫描、版本 fallback、Prompt 补丁或假成功。
+8. 默认不修改 `codex-rs`。官方能力和已登记 retained seam 都无法实现必要合同后，才按
+   Patch Map 提交独立裁决。
+9. 每个工作包以纵向可执行结果完成，不以“类型、表或页面已存在”完成。
 
-| ID | 问题 | 根因 | 对应工作包 |
-| --- | --- | --- | --- |
-| P0-1 | 当前服务无法启动，真实 E2E 未完成 | 已应用开发迁移被改写，验证环境失去可重复基线 | W0 |
-| P0-2 | Platform Data Intake 与供应链 Case 双写来源和映射 | 通用数据生命周期被领域包重新实现 | W3 |
-| P0-3 | Platform event projection 识别仓网 envelope | 缺少通用 Tool SDK 和结果合同 | W2 |
-| P0-4 | 当前阶段目标与路线图仍把 Studio 放在后续 | 目标变化没有同步权威文档和门禁 | W0、文档收敛 |
+## 2. 目标公共合同
 
-### P1：不完成就会持续增加新 Case 成本和失败率
-
-| ID | 问题 | 根因 | 对应工作包 |
-| --- | --- | --- | --- |
-| P1-1 | case revision/operation/readiness 每个领域重复实现 | 缺少平台 Work State 机制 | W1、W2 |
-| P1-2 | Root 依赖子 Agent 自述进度 | 缺少可信只读 coordination projection | W2 |
-| P1-3 | assignment 只靠自然语言 | 缺少 CollaborationContext 和 AssignmentContract | W4 |
-| P1-4 | 版本、hash、Runtime Role 和依赖需手工维护 | 没有单一 Package Compiler | W5 |
-| P1-5 | Tool/Skill/Agent/Supervisor 生命周期割裂 | 按页面和案例逐项补功能，缺少统一 Release/Installation 模型 | W5-W8 |
-| P1-6 | 上下文缓存命中与 Token 开销不可诊断 | Provider 调用没有统一、逐调用、有界观测 | W9 |
-
-### P2：不清理会形成长期维护债务
-
-| ID | 问题 | 根因 | 对应工作包 |
-| --- | --- | --- | --- |
-| P2-1 | 供应链 server 保留大量未注册旧函数 | 迭代只停止暴露，没有删除旧实现 | W10 |
-| P2-2 | 导航矩阵缺完整注册闭环 | 只完成费用确认，没有结果所有权闭环 | W10 |
-| P2-3 | 文档保留 2.x/5.x、`planning-dataset.v2` | 当前事实没有随合同替换同步 | W0、W10 |
-| P2-4 | 仅有仓网案例，无法证明通用性 | 公共能力未被第二领域验证 | W12 |
-| P2-5 | 多用户边界只有设计，没有隔离矩阵 | 当前阶段单用户，但作用域仍可能退化为 singleton | W13 |
-
-## 2. 固定实施规则
-
-1. 新平台 DTO 写入 `apps/web/crates/platform-contracts`，浏览器不得接触 raw app-server。
-2. 新持久服务优先建立独立 crate；route 只鉴权、解析 DTO 和调用 service，不承载状态机。
-3. Runtime discovery 是运行可用性的 owner；数据库 Catalog 不能宣称 Runtime ready。
-4. 所有新异步操作都有 UUID、幂等键和完整终态。
-5. 所有内容上限放入类型化 `PlatformLimits` 配置或包 schema，不在各 route 散落魔法数字。
-6. 不增加历史双读、旧字段推断、自动数据库修复或 Mock fallback。
-7. 本计划默认不修改 `codex/codex-rs/**`。W8 验证现有 seam 失败后，才允许启动 Patch
-   Map 评审；评审本身也不等于获准修改。
-8. 每个提交只包含一个工作包的一个可验证边界；提交前运行 `git diff --check`。
-
-## 3. W0：恢复可重复开发基线并删除目标冲突
-
-### Owner 和依赖
-
-- Owner：Platform Operations + Documentation。
-- 前置：无。
-- 阻塞：W1-W13 的真实数据库和 E2E 验证。
-
-### W0.1 恢复数据库
-
-1. 用 PostgreSQL 18 客户端只导出当前 Provider Definition 和加密 Secret 关联记录；
-2. 校验导出文件不包含 secret 明文，记录行数和 SHA-256；
-3. 停止服务，显式删除并重建开发数据库；
-4. 从当前 migration 目录一次性初始化，不在 startup 中添加修复分支；
-5. 恢复 Provider/Secret 记录并验证 Profile process 能读取；
-6. 连续执行两次启动，证明 migration checksum 稳定；
-7. 删除失败备份临时文件，不在仓库或日志保存 key。
-
-需要补充脚本：
+下列名字是目标语义；实现时在 `platform-contracts` 中形成一个当前版本，不保留旧字段：
 
 ```text
-scripts/rebuild-development-database.sh
-  --preserve-provider-config
-  --postgres-bin <PG18 bin>
-  --confirm-development-only
+CapabilityDraft
+CapabilityRelease
+CopilotLockManifest
+ProfileInstallation
+RuntimeDiscoveryObservation
+RuntimeReadiness
+
+AssignmentGrant
+ToolOutcome
+ChildNeedsInput
+RunCompletionState
+
+SourceAssetRef
+DatasetReleaseRef
+DomainResourceRef
+ArtifactRef
 ```
 
-脚本必须先导出并验证，再执行破坏操作；任何一步失败立即停止。它是显式运维命令，
-不得被 `run-local.sh` 自动调用。
-
-### W0.2 冻结当前 migration 纪律
-
-- 当前开发库重建后，已应用 migration 永不修改；
-- 新 schema 使用新的 migration，不再重写 `20260807000045`；
-- 增加 CI：对主分支 migration filename + SHA 清单做差异检查；
-- 文档化“研究阶段允许重建，不允许启动时猜测修复”。
-
-落实已接受的运维决定：
+关键状态：
 
 ```text
-scripts/check-migration-integrity.sh
-docs/adr/012-development-schema-rebuild-policy.md
+Draft -> Validated -> Released
+Released -> Authorized -> Installing -> Installed -> Discovered -> Ready
+
+Assignment:
+prepared -> spawned -> running
+                    -> succeeded | needs_input
+                    -> failed | rejected | cancelled | timeout | interrupted
+
+Run:
+prepared -> awaiting_children -> awaiting_synthesis
+         -> succeeded | partial | failed | rejected
+         -> cancelled | timeout | interrupted | orchestration_incomplete
 ```
 
-### W0.3 收敛当前文档
+## 3. W0：冻结旧链并建立证据纪律
 
-- `product-vision.md`：第二阶段改为单 Profile Copilot Authoring Platform；
-- `roadmap.md`：Studio 前移到 M2，多用户仍在 M3；
-- `product-design.md`：删除 `planning-dataset.v2` 和“完整 Studio 后置”的冲突；
-- `development-plan.md`：当前优先级指向本计划；
-- `architecture.md`、`capability-baseline.md`：只保留已验证事实，不提前声称新架构已实现；
-- 删除 current-state 文档里的 2.x/5.x 现状描述。
+### Owner
 
-### 验证和退出
+Documentation + Platform Operations。
 
-```bash
-./scripts/test-web-rust.sh
-cd apps/web && npm run typecheck && npm run test
-./scripts/check-migration-integrity.sh
-./scripts/run-local.sh --no-build
-```
+### 实施
 
-退出条件：空库迁移、Provider 恢复、两次重启和 `/health` 通过；当前权威文档对阶段目标
-没有矛盾；真实 E2E 环境可用。
+- 将 [ADR-017](adr/017-clean-copilot-platform-spine.md) 加入所有设计/开发入口；
+- 当前仓网链只保留回归，不再扩 aliases、Prompt 或 Projection workflow；
+- E2E evidence schema 记录 commit、构建 profile/fingerprint、Profile generation、
+  Provider definition identity、Release/Installation snapshot、Runtime manifest、Task/Run、
+  assignments、inputs、terminals、artifacts 和后置测试；
+- evidence 脱敏，禁止保存 Secret、Prompt 正文、内部路径和无界 Runtime payload；
+- 图谱继续用于导航，但新增文件必须以源码和测试复核。
 
-## 4. W1：定义公共合同和 ADR
+### 删除
 
-### Owner 和依赖
+- 删除 current-state 文档中的“真实 E2E 未完成”“服务仍因旧 migration 停止”等失效事实；
+- 删除互相冲突的当前阶段表述。
 
-- Owner：`platform-contracts` + Architecture。
-- 前置：W0 文档收敛；数据库实现可与 W0 恢复并行编码，但不能验证退出。
-- 不修改：Codex 生成协议。
+### 退出
 
-### W1.1 新增平台资源 DTO
+Canonical 文档分别拥有目标、现状、计划和决定；一次 E2E 可以生成机器可读 evidence，
+且不能仅靠模型最终文本宣称成功。
 
-在 `apps/web/crates/platform-contracts/src/` 按领域拆文件，`lib.rs` 只 re-export：
+## 4. W1：干净 Profile generation
+
+### Owner
+
+Profile Host + Provider Service。
+
+### 合同
 
 ```text
-catalog.rs
-work_state.rs
-collaboration.rs
-tool_results.rs
-installations.rs
-observability.rs
+ProfileGeneration
+  organization_id, user_id, profile_id, generation_id
+  codex_home_identity
+  installation_snapshot_id
+  codex_home_identity
+  created_at, terminal_state, safe_failure
 ```
 
-核心类型：
+### 实施
 
-```rust
-struct DraftMetadata { revision: i64, content_sha256: String, validation: ValidationState }
-struct ReleaseIdentity { id: Uuid, resource_id: String, version: String, content_sha256: String }
-enum CatalogResourceKind { Tool, Skill, Agent, Supervisor, Copilot }
-enum InstallationState { Pending, Installing, Installed, Discovered, Ready, Degraded, Unavailable, Failed }
-enum OperationStatus { Pending, Running, WaitingInput, Completed, Failed, Cancelled, Timeout, Interrupted }
-struct ResourceRequirement { kind, resource_id, version_constraint, capabilities }
-struct ResolvedResourceRequirement { release_id, version, content_sha256 }
-```
+- 从空 Profile 创建唯一 generation，不默认导入宿主 `auth.json`、Plugin、Skill、MCP、
+  Memory 或 cache；
+- Provider credential 只从加密 Platform Secret grant 注入；
+- 进程、request map、discovery cache、event subscription 以 profile+generation 为 key；
+- 明确 start/ready/failed/stopping/stopped 终态和 restart 语义；
+- 构建 fingerprint 必须对应实际运行 profile，不能把 `debug` 产物当作 `dev-small` 证据。
 
-每类 Draft 使用专属内容结构，不用一个无界 JSON 代替类型：
+### 删除
 
-```rust
-ToolPackageDraft
-SkillPackageDraft
-AgentDefinitionDraft
-SupervisorDefinitionDraft
-CopilotPackageDraft
-```
+- `default_cli_codex_home()` 触发的隐式宿主认证导入；
+- 依赖服务器 cwd 或用户宿主目录的 Profile 初始化。
 
-公共字段组合为嵌套类型，避免复制版本/hash/owner 字段。所有 browser DTO 使用 opaque ID；
-内部安装 DTO 可以包含 Runtime resource handle，但不可序列化给浏览器。
+### 验证与退出
 
-### W1.2 Work State 合同
+空 Profile 冷启动、连续重启、无 Secret、错误 Secret、Runtime 启动失败、旧 generation
+事件和并发 start 均有证据；两个 generation 不共享认证或 Runtime state。
 
-```rust
-struct WorkStateDefinition {
-    definition_id: String,
-    component_types: Vec<WorkComponentType>,
-    dependencies: Vec<WorkDependencyRule>,
-    deliverable_types: Vec<DeliverableContract>,
-}
+## 5. W2：统一 Package、Catalog 与 Compiler
 
-struct WorkStateSummary { id, revision, status, components, blockers, next_actions }
-struct WorkComponentSummary { id, component_type, revision, state, safe_summary, content_sha256 }
-struct WorkStateMutation { expected_revision, operation_id, changes, invalidations, deliverables }
-struct WorkOperationSummary { id, operation_type, status, safe_error, started_at, finished_at }
-```
+### Owner
 
-`WorkStateMutation` 只能引用由当前 capability grant 允许的 component types。payload 使用
-`ContentReference`：`DatasetRelease`、`Artifact` 或 `DomainResource` 三种明确 variant。
+Capability Catalog + Package Compiler。
 
-### W1.3 Collaboration 和 Tool result 合同
+### 合同
 
-新增：
-
-```rust
-struct CollaborationContext
-struct AssignmentContract
-struct PlatformToolResult
-struct ToolResultPage
-struct ToolDiagnostic
-struct BlockingInputSummary
-struct DeliverableReference
-struct ProviderCallMetric
-```
-
-`PlatformToolResult` 总序列化大小由统一 `ToolResultLimits` 验证器控制。SDK 与 Server 使用
-同一 JSON Schema fixture，避免 Python/Rust/TypeScript 三套手写解释。
-
-### W1.4 落实 ADR
-
-实现必须逐项满足：
-
-- ADR-012：开发数据库显式重建策略；
-- ADR-013：Platform Work State 只拥有元数据，领域拥有 payload；
-- ADR-014：Catalog Release、Profile Installation、Runtime Discovery 三状态分离；
-- ADR-015：通用 `platform-tool-result.v1`；
-- ADR-016：CollaborationContext 不可由浏览器或模型构造。
-
-### 验证和退出
-
-- Rust serde round-trip、未知枚举拒绝、大小边界、secret/path 不可序列化测试；
-- TypeScript 由当前 Rust DTO 流程生成或精确合同测试，不手改 Runtime 生成物；
-- ADR 与目标架构没有 owner 冲突。
-
-退出条件：W2-W9 所需公共概念都有稳定类型，没有仓网名称或字段。
-
-## 5. W2：实现 Work State、通用 Tool SDK 和 Root Coordination
-
-### Owner 和依赖
-
-- Owner：Platform Server。
-- 前置：W1。
-- 新 crate：`apps/web/crates/work-state-service`。
-- 领域 Tool 通过服务 API/SDK 使用，不直接连接平台数据库。
-
-### W2.1 数据库
-
-新增一个 migration，建立：
+五类资源共用：
 
 ```text
-work_state_definitions
-work_states
-work_components
-work_component_dependencies
-work_operations
-work_operation_inputs
-work_operation_outputs
-work_blocking_inputs
-work_deliverables
-work_state_events
+Draft(identity, revision, author_content)
+ValidationReport(errors, warnings, generated_preview)
+Release(id, generated_version, canonical_content_sha256,
+        execution_semantics_sha256, exact_dependencies, runtime_requirements)
+CopilotLockManifest(exact Supervisor/Agent/Skill/Tool releases,
+                    grants, secret slots, runtime bundle manifest)
 ```
 
-每张表含 `organization_id`；具体资源继续含 profile/workspace/task/run owner。关键约束：
+### 实施
 
-- `(work_state_id, revision)` 单调；
-- `(work_state_id, idempotency_key)` 唯一；
-- operation 终态不可回到 running；
-- component `(id, revision)` 不可变；
-- deliverable 只引用已授权 Artifact；
-- dependency 两端属于同一 Work State；
-- payload 不落入 `work_state_events`。
+- Tool、Skill、Agent、Supervisor、Copilot 使用同一 Draft/Release service；
+- Compiler 规范化内容、解析 exact dependency、收窄 grant、生成 Runtime bundle、计算 hash、
+  事务分配版本并输出 lock manifest；
+- code seed、Tutorial、Web Draft、SDK import 全部调用同一 compiler；
+- Agent 精确组合 Skill Releases、Tool capabilities、data permissions、input/output 和
+  execution limits；
+- Supervisor 精确组合 Agent Releases 和最终交付，不保存内部 runtime/path 字段。
 
-### W2.2 Service API
+### 删除
 
-```rust
-pub struct WorkStateService { db: PgPool, artifacts: ArtifactAuthorizer, datasets: DatasetAuthorizer }
+- `supervisor-catalog` 作为第二 Release owner；
+- reviewed capability template 继承；
+- 手工 semver/hash/Runtime Role/MCP lock 常量；
+- Tutorial 自算 package hash；
+- 旧 Agent/Supervisor 发布 routes 和旧 seed owner。
 
-impl WorkStateService {
-    create_definition(actor, draft) -> WorkStateDefinition;
-    create_state(actor, scope, definition_release_id, idempotency_key) -> WorkStateSummary;
-    get_summary(actor, work_state_id) -> WorkStateSummary;
-    begin_operation(actor, request) -> WorkOperationLease;
-    apply_mutation(actor, lease, mutation) -> WorkStateSummary;
-    fail_operation(actor, lease, failure) -> WorkOperationSummary;
-    cancel_operation(actor, operation_id, expected_revision) -> WorkOperationSummary;
-    mark_timeout(system_actor, operation_id) -> WorkOperationSummary;
-    list_blocking_inputs(actor, filter, page) -> Page<BlockingInputSummary>;
-    list_deliverables(actor, filter, page) -> Page<DeliverableReference>;
-}
-```
+### 验证与退出
 
-`begin_operation` 锁定输入 component revisions 并返回短期 lease；`apply_mutation` 在一个
-事务内验证 lease、expected revision、dependency、Artifact/Dataset authorization、
-写 component、失效下游、完成 operation、追加事件。失败不修改已提交 component。
+同一 author content 由 SDK、Web、seed、Tutorial 得到同一 canonical result；并发发布只
+产生一个正确版本；缺依赖、越权 grant、循环依赖和漂移均阻止 Release。
 
-### W2.3 通用 SDK
+## 6. W3：SDK 到 Web 的单一路径
 
-新增：
+### Owner
+
+Tool SDK + Catalog import API。
+
+### 合同
 
 ```text
-sdk/python/open_web_copilot/
-  tool.py
-  result.py
-  work_state.py
-  artifacts.py
-  data_intake.py
-  testing.py
-```
-
-关键接口：
-
-```python
-@copilot_tool(input_model=Input, output_model=Output, side_effect="deterministic_write")
-def build_matrix(ctx: ToolContext, request: Input) -> PlatformToolResult: ...
-
-with ctx.work_state.operation("build_matrix", idempotency_key) as operation:
-    operation.commit(changes=[...], artifacts=[...], summary="...")
-```
-
-SDK 自动产生 envelope、限制 summary/diagnostic/page、保留原错误 cause 的安全 code，
-不允许返回本地路径、Secret 类型或超大 inline JSON。
-
-### W2.4 Root Coordination Tool
-
-新增平台内置只读 ToolPackage：
-
-```text
-capabilities/platform-coordination/
-```
-
-Profile Host 注入不可伪造 `CollaborationContext`。实现：
-
-```rust
-struct CoordinationQueryService {
-    executions: RuntimeExecutionProjectionReader,
-    approvals: ApprovalProjectionReader,
-    work_states: WorkStateReader,
-    artifacts: ArtifactReader,
-}
-```
-
-Tool 方法仅调用 query service。所有查询强制当前 task/run scope、分页和字段白名单。
-Supervisor 发布时 compiler 自动添加此只读 capability，不让用户选择写权限。
-
-### W2.5 删除领域分支
-
-- 删除 `apps/web/server/src/event_projection.rs` 中对
-  `network-case-tool-result.v1` 的判断；
-- 改为 `project_platform_tool_result(value: &Value)`，只解析通用 envelope；
-- 未识别 domain payload 作为普通有界 Tool 结果，不影响 execution 状态；
-- 原始 Runtime 事件继续完整持久化，主视图只投影安全摘要。
-
-### 测试和退出
-
-- 数据库：授权拒绝、revision 冲突、幂等重放、并发 mutation、依赖失效、所有终态；
-- SDK：Python/Rust fixture 等价、16 KiB 边界、分页、secret/path 拒绝；
-- Coordination：root scope、child execution、刷新恢复、越权 ID、不能写；
-- Event projection：任意领域 envelope 都不需要平台分支。
-
-退出条件：供应链之外的测试 fixture 可以创建 Work State、提交 component、由 Root 查询
-状态且平台代码没有领域标识。
-
-## 6. W3：统一 Data Intake
-
-### Owner 和依赖
-
-- Owner：Platform Data Intake。
-- 前置：W1；Work State binding 依赖 W2。
-- 重构目标：把当前 `routes/data_intake.rs` 中的状态机下沉到新 crate
-  `apps/web/crates/data-intake-service`。
-
-### W3.1 服务拆分
-
-从 route 提取：
-
-```rust
-pub struct DataIntakeService {
-    db: PgPool,
-    source_store: SourceAssetStore,
-    profile_analyzer: DataProfileAdapter,
-}
-
-impl DataIntakeService {
-    create_draft(actor, workspace_id, idempotency_key) -> WorkspaceDataDraftSummary;
-    add_source_revision(actor, draft_id, upload) -> SourceAssetSummary;
-    create_session(actor, task_id, requirement) -> DataIntakeSessionSummary;
-    analyze_sources(actor, intake_id, expected_revision) -> DataIntakeSessionSummary;
-    propose_mapping(actor, intake_id, requirement_release_id) -> MappingProposal;
-    confirm_mapping(actor, intake_id, expected_revision, selection) -> MappingRevision;
-    answer_parameter(actor, intake_id, expected_revision, answer) -> DataIntakeSessionSummary;
-    publish_dataset(actor, intake_id, expected_revision) -> DatasetReleaseSummary;
-    bind_to_work_state(actor, release_id, work_state_id, component_type) -> WorkStateSummary;
-}
-```
-
-Route 保留 multipart/HTTP 状态映射；所有状态转换、授权和事务进入 service。
-
-### W3.2 DataRequirementContract
-
-把当前 requirement JSON 收敛为发布资源：
-
-```rust
-struct DataRequirementContract {
-    entities: Vec<EntityRequirement>,
-    relations: Vec<RelationRequirement>,
-    parameters: Vec<ParameterRequirement>,
-    accepted_formats: BTreeSet<SourceFormat>,
-    validator_capability: CapabilityRequirement,
-}
-```
-
-Network Agent 发布“当前问题需要什么”，Data Agent/Intake 执行检查。合同允许按分析类型
-选择 required entity，不再有一个全局完整 Dataset 前置。
-
-### W3.3 领域适配器
-
-Tool SDK 暴露：
-
-```python
-class DomainDataAdapter(Protocol):
-    def requirement_contract(self, request: AnalysisIntent) -> DataRequirementContract: ...
-    def profile_fields(self, profile: SourceProfile) -> MappingProposal: ...
-    def normalize(self, release: DatasetReleaseHandle, mapping: MappingRevisionHandle) -> DomainPayloadRef: ...
-    def validate(self, payload: DomainPayloadRef, requested_analysis: str) -> DomainReadiness: ...
-```
-
-适配器读取由 Platform 授权的 bounded row stream 或 staging handle，不扫描 Workspace。
-
-### W3.4 删除供应链重复 owner
-
-删除：
-
-- `network_cases` SQLite 中的 `case_sources`；
-- case mapping proposal/candidate/selection 表和 repository 方法；
-- `discover_workspace_sources`、`inspect_workspace_sources` 作为供应链公开 Tool；
-- Data Agent 通过目录遍历发现文件的指令；
-- Work State 中源文件 revision 的重复记录。
-
-保留：网络实体要求、字段别名、业务单位、行政区匹配、规范化和业务 readiness。
-
-### 测试和退出
-
-- CSV/JSON/XLSX 上传、revision、画像、显式映射、参数、发布、刷新恢复；
-- 不支持格式、歧义字段、缺实体、越权 workspace/dataset、并发 revision 409；
-- Data Agent 只取得 authorized intake/release handle；
-- 同一个 Dataset Release 可被两个 Work State 授权绑定，不复制内容；
-- 空 Workspace 和领域失败都不加载 Mock。
-
-退出条件：任何领域的数据文件都经过同一个 Platform Intake；供应链数据库不再保存
-SourceAsset 或 mapping 生命周期。
-
-## 7. W4：CollaborationContext、AssignmentContract 与执行投影
-
-### Owner 和依赖
-
-- Owner：Platform Server + Profile Host + Codex Adapter。
-- 前置：W1、W2。
-- 不修改 Runtime 调度语义。
-
-### W4.1 生成上下文
-
-新增：
-
-```rust
-struct CollaborationContextBuilder {
-    authorizer: CollaborationAuthorizer,
-    catalog: ReleaseResolver,
-    installations: InstallationResolver,
-}
-
-impl CollaborationContextBuilder {
-    build_for_run(actor, run_id, supervisor_snapshot) -> CollaborationContext;
-    narrow_for_execution(root_context, agent_release, assignment) -> AgentExecutionContext;
-}
-```
-
-`build_for_run` 在 Run 启动事务内固定 organization/profile/workspace/task/run、Supervisor
-Release、Installation snapshot、Work State/Dataset grants 和预算。context 的内部签名或
-opaque handle 只在 Platform/Profile Host 使用，不进入 browser DTO。
-
-### W4.2 编译 assignment
-
-新增：
-
-```rust
-struct AssignmentCompiler;
-
-impl AssignmentCompiler {
-    compile(
-        supervisor: &ResolvedSupervisor,
-        agent: &ResolvedAgent,
-        context: &CollaborationContext,
-        request: AssignmentRequest,
-    ) -> AssignmentContract;
-}
-```
-
-校验：Agent 在 allowlist、capability 是交集、component/deliverable 类型已声明、预算
-不越界、资源属于 task。自然语言 objective 有长度限制，完整数据不允许进入。
-
-### W4.3 Runtime 桥接
-
-沿用当前 exact role allowlist 和 request-scoped role 注入。Adapter 增加内部方法：
-
-```rust
-prepare_supervisor_thread(context, compiled_supervisor) -> ThreadStartConfig;
-prepare_agent_assignment(context, contract, runtime_role) -> AgentAssignmentPayload;
-```
-
-如果官方 assignment metadata 没有对应字段，首期把机器合同编码为有明确 sentinel 和
-schema 的受控 developer instruction fragment；它由 Adapter 生成，不由 Prompt parser
-恢复。需要先证明现有 retained seam 无法正确完成，才评审 Codex 修改。
-
-### W4.4 执行生命周期
-
-保留 Codex Thread/Turn 为事实 owner；Platform projection 增加：
-
-- `assignment_id`、`agent_release_id`、`work_state_id`；
-- spawned/running/waiting/waiting_for_input/completed/failed/interrupted；
-- cancelled/timeout/rejected；
-- 首个 terminal sequence 和安全 result summary；
-- Tool operation ID 关联，但不保存思维链和完整结果。
-
-乱序规则集中在 `ExecutionProjectionReducer`，不在事件 handler 分散判断：
-
-```rust
-fn reduce(current: ExecutionProjection, event: ExecutionObservation) -> TransitionResult;
-```
-
-### W4.5 用户输入
-
-继续复用官方 `request_user_input`：
-
-- root/child 都先持久化为 Approval，再广播；
-- `waiting_for_input` 关联 platform approval UUID；
-- answer 精确投递 Runtime request，浏览器不见 Runtime ID；
-- secret 永不落数据库、日志、事件、错误；
-- 同时多个 Agent 请求独立展示，不阻塞 composer 或其他 Agent。
-
-### 测试和退出
-
-- context scope 收窄、Agent 越权、伪造 assignment、运行中 Release 变化不影响 snapshot；
-- root/child 输入、刷新、stale version、delivery_unknown；
-- 所有终态、乱序、重复事件、重启重放；
-- Root 通过 Coordination Tool 获取状态，不需要 Agent 发送进度说明。
-
-退出条件：一个 Supervisor 可以安全委派两个 Agent；权限和交付不依赖 Agent 名称或
-自然语言解析；平台仍没有 spawn scheduler。
-
-## 8. W5：统一 Catalog、Compiler、Release 和 Installation
-
-### Owner 和依赖
-
-- Owner：`supervisor-catalog` 重构为通用 `capability-catalog`；Profile Host 负责安装。
-- 前置：W1、W4。
-
-### W5.1 新 Catalog crate
-
-新建 `apps/web/crates/capability-catalog`，迁移并删除 `supervisor-catalog` 中通用逻辑。
-模块：
-
-```text
-drafts.rs
-releases.rs
-dependencies.rs
-compiler.rs
-installations.rs
-validation.rs
-sealing.rs
-```
-
-Service：
-
-```rust
-pub struct CapabilityCatalogService;
-
-impl CapabilityCatalogService {
-    create_draft(actor, kind, resource_id, idempotency_key) -> CatalogDraft;
-    save_draft(actor, draft_id, expected_revision, content) -> CatalogDraft;
-    validate_draft(actor, draft_id, expected_revision) -> ValidationReport;
-    publish(actor, draft_id, expected_revision, release_kind) -> CatalogRelease;
-    resolve_exact(actor, release_id) -> ResolvedRelease;
-    deprecate(actor, release_id, reason) -> CatalogRelease;
-}
-```
-
-第一次发布自动 `1.0.0`，默认后续 patch；发布请求可显式 `minor`/`major`，服务器在按
-resource 加锁的事务中分配版本。Draft 不含 version 字段。
-
-### W5.2 PackageCompiler
-
-```rust
-pub struct CopilotPackageCompiler {
-    validators: ValidatorRegistry,
-    runtime: RuntimeBundleCompiler,
-    limits: PlatformLimits,
-}
-
-impl CopilotPackageCompiler {
-    normalize_draft(&self, content: CatalogDraftContent) -> CanonicalDraft;
-    validate(&self, draft: &CanonicalDraft, deps: &ResolvedDependencyGraph) -> ValidationReport;
-    compile(&self, draft: CanonicalDraft, deps: ResolvedDependencyGraph) -> CompiledPackage;
-}
-```
-
-Canonical JSON 排序、换行和文本规范化只在这里完成。内容 hash、execution semantics hash、
-Runtime role、MCP inventory、Skill roots、Artifact contracts 和 lock manifest 都由 compiler
-生成。代码 seed、Web Draft 和 Tutorial Blueprint 调同一接口。
-
-### W5.3 数据库
-
-统一：
-
-```text
-catalog_resources
-catalog_drafts
-catalog_releases
-catalog_release_dependencies
-catalog_release_capabilities
-profile_installations
-profile_installation_resources
-installation_attempts
-```
-
-不同资源的内容放入明确 schema-versioned JSONB，但 owner、revision、release、依赖、
-安装和审计只实现一次。数据库约束确保同 resource/version 唯一、Release 不可变、Draft
-revision 单调、依赖指向精确 Release。
-
-### W5.4 安装事务
-
-```rust
-pub struct InstallationService {
-    profiles: ProfileRegistry,
-    host: ProfileHost,
-    runtime: CodexAdapter,
-}
-
-impl InstallationService {
-    plan(actor, profile_id, copilot_release_id) -> InstallationPlan;
-    install(actor, plan, idempotency_key) -> InstallationSummary;
-    reconcile(system_actor, installation_id) -> InstallationSummary;
-    uninstall(actor, installation_id, expected_revision) -> InstallationSummary;
-    get_readiness(actor, installation_id) -> InstallationReadiness;
-}
-```
-
-`install` 使用 staging directory、内容 hash 校验和原子替换；随后调用官方 reload/discovery。
-Runtime 没有发现 exact resources 时状态为 `installed` 或 `unavailable`，不得写 ready。
-失败保留安全诊断和原始 cause 分类，不自动换旧版本。
-
-### W5.5 删除旧路径
-
-- 删除手工 `include_str!` + 常量 hash 作为主要发布方式；seed 由 build/import 命令调用
-  compiler 生成 Release；
-- 删除 Agent Draft 中的 `version`；
-- 删除 Supervisor/Agent/Tutorial 各自重复的 seal/hash/version 方法；
-- 删除 `LEGACY_*`、版本启发式和旧 package fallback；
-- migration seed 只引用编译生成 fixture，不手抄 hash。
-
-### 测试和退出
-
-- 三次 Draft 保存不改版本；并发 publish 获得唯一版本；同内容幂等；不同内容冲突；
-- dependency cycle、缺 Release、capability 不满足、权限交集为空；
-- 安装 crash recovery、staging cleanup、reload 失败、discovery 缺失、uninstall in-use；
-- 代码 seed 与 Web Draft 编译结果字节一致。
-
-退出条件：开发者不维护 semver/hash/role/MCP 名；所有五类资源共享一套 Catalog/Release/
-Installation 状态机。
-
-## 9. W6：Tool SDK、Tool Studio 与受控安装
-
-### Owner 和依赖
-
-- Owner：Tool SDK + Platform Tool Studio + Profile Host。
-- 前置：W1、W5；Work State integration 使用 W2。
-
-### W6.1 SDK package format
-
-建立 `copilot-tool-package.v1`：
-
-```text
-tool-package.toml
-src/
-requirements.lock
-schemas/
-tests/
-README.md
-```
-
-manifest 字段包括 package identity、Python 版本、Tool declarations、Resource declarations、
-Secret slots、网络目标策略、副作用等级、超时/结果上限和 health check。禁止任意安装脚本。
-
-提供 CLI：
-
-```text
+copilot-sdk login
 copilot-sdk tool init
-copilot-sdk tool validate
+copilot-sdk tool dev
 copilot-sdk tool test
-copilot-sdk tool pack
+copilot-sdk tool push
 ```
 
-CLI 与 Server 共享 JSON Schema 和 fixture；Web 上传 `.copilot-tool` 包后由 Server 重新
-验证，不能信任本地结果。
+SDK package 只包含作者内容和声明，不包含服务器分配版本、宿主路径或最终 Runtime ID。
 
-### W6.2 隔离测试 Runner
+### 实施
 
-把当前 `routes/python_capabilities.rs` 中进程启动逻辑移到 `tool-runner-service`：
+- 受限 Python MCP 模板、JSON Schema、typed errors、bounded outcome、fixture 和 contract
+  tests；
+- dependency lock、launcher 与 Plugin/MCP materialization 由可信 SDK/Compiler 生成；
+- `push` 创建或更新 Web Draft，返回可打开的 Draft identity；
+- Tool 与 Skill 是独立用户对象；Tool init 不隐式发布 Skill；
+- test 必须执行至少一个声明用例；没有测试返回 `not_tested`，不能成功通过门禁；
+- 不支持任意 shell、任意在线依赖和未声明外部副作用。
 
-```rust
-trait ToolPackageRunner {
-    validate(bundle) -> PackageValidation;
-    probe(bundle) -> McpInventory;
-    test_tool(bundle, tool, args, workspace_grant) -> ToolTestResult;
-}
-```
+### 删除
 
-首期固定 Python 版本、依赖 allow policy、CPU/内存/时间/输出限制、临时只读 package
-目录和显式 workspace grant。未来容器化不改变接口。command、env 和完整 stderr 不回
-浏览器，只返回安全分类和截断诊断。
+- Web 普通模式编辑原始 `.mcp.json`、Plugin JSON、launcher 和版本；
+- SDK 作者手工维护服务器/版本/hash；
+- “No tests directory; validation passed” 成功路径。
 
-### W6.3 Web Tool Studio
+### 验证与退出
 
-新增页面和 API：
+一个新 Tool 只用正式 SDK 文档完成 init/dev/test/push，并在 Web 出现同一个 Draft；恶意
+路径、额外文件、未锁依赖、无测试和超限结果被明确拒绝。
+
+## 7. W4：Profile Installation 与 Runtime discovery
+
+### Owner
+
+Installation Controller 持有 desired state；Profile Host 执行；Codex Runtime 持有
+discovery observation。
+
+### 合同
 
 ```text
-/codex/tools
-/api/catalog/tools
-/api/catalog/tool-drafts/{id}
-/api/catalog/tool-drafts/{id}/validate
-/api/catalog/tool-drafts/{id}/test
-/api/catalog/tool-drafts/{id}/publish
-/api/profile-installations/{profileId}/tools/{releaseId}
+ProfileInstallation
+  installation_id, profile_id, profile_generation_id
+  release_id, desired_state, materialized_sha256
+  state, attempt_id, terminal, safe_failure
+
+RuntimeDiscoveryObservation
+  installation_id, runtime_generation_id
+  exact skills, roles, mcp servers, tool inventory
+  observed_at, diagnostics
 ```
 
-UI 分页展示 Draft、Release、Installation、Runtime readiness；上传 source bundle、编辑
-schema/Secret slot、运行测试、发布、安装。首期不提供任意在线 IDE，避免把代码编辑器
-误当作 package lifecycle。
+### 实施
 
-### W6.4 现有 Python capability 迁移
+- staging -> integrity check -> atomic activate -> Runtime reload/restart -> discovery；
+- Tool/Skill/Agent/Supervisor/Copilot 都必须真实物化或显式 unsupported；
+- `installed` 只说明原子物化成功；`discovered` 只由 Runtime observation 产生；
+- readiness 聚合 Release、grant、Secret、installation、discovery 和 health，不猜测；
+- Task 绑定 immutable installation snapshot，升级不改变活动 Task。
 
-- 将 `PythonCapabilityPublishRequest` 转为 ToolPackage Draft；
-- 删除请求中的用户 version，改为 Draft revision；
-- 删除按 workspace 直接写 package 目录的 route；
-- 发布到 Catalog 后由 Installation Service 物化到 Profile；
-- 当前供应链 MCP 作为 SDK reference package 导入，不再走特殊 launcher 发现。
+### 删除
 
-### 验证和退出
+- 安装到 Workspace 的主链；
+- Agent/Supervisor/Copilot 空操作 installed；
+- readiness 从数据库 state 自我推导 discovery；
+- cwd、Workspace、source repo、文件存在、Provider 名或错误文本 capability 扫描。
 
-- 恶意 zip 路径、超大包、依赖越界、shell launcher、secret 回显、网络策略拒绝；
-- MCP initialize/listTools/callTool、错误、timeout、cancel、结果上限；
-- publish/install/reload/discovery/restart/uninstall；
-- 一个 Hello Tool 和供应链 Tool 都使用相同流程。
+### 验证与退出
 
-退出条件：算法工程师能从 SDK 创建并通过 Web 发布安装 Python Tool，Runtime 真实发现；
-启动链路不执行 `source`，平台不按 Tool 名硬编码。
+安装、hash 校验、原子切换、reload、discovery、health、失败、回滚、重启和并发 reconcile
+分别可故障注入；Runtime inventory 与 lock manifest 完全匹配后才能 ready。
 
-## 10. W7：中文 Skill 生命周期与 Skill Studio
+## 8. W5：Copilot Studio 与 Builder
 
-### Owner 和依赖
+### Owner
 
-- Owner：Catalog + Runtime 官方 Skill discovery/config。
-- 前置：W5、W6。
+Browser WebApp + Platform authoring API。
 
-### W7.1 Skill compiler
+### 实施
 
-新增 `SkillPackageCompiler` validator：
+- 主导航提供独立 Copilot Studio：我的 Copilot、能力库、测试与发布、版本与安装；
+- 一个 Copilot Draft 显示目标、成员、能力、数据、权限、交付、测试和安装；
+- Skill 表单覆盖适用/不适用、输入、Tool、询问条件、失败、交付、预算和示例，生成中文
+  `SKILL.md`；
+- Agent 表单只要求责任、Skills、Tool capabilities、数据权限、输入、交付和停止条件；
+- Supervisor 表单只要求总体责任、Agent Releases、冲突/部分失败/停止和最终交付；
+- Builder 顺序执行合同校验、隔离测试、dry-run install、discovery、test task 和 Release；
+- 普通用户只看到业务状态与修复动作；内部合同进入高级详情。
 
-- `SKILL.md` 必须为中文主体；代码、schema identifier 和正式产品名可保留英文；
-- 检查适用范围、输入 owner、Tool capabilities、交付件、请求用户条件、失败处理、
-  上下文规则和禁止 Mock fallback；
-- 依赖 capability 必须由精确 Tool Releases 满足；
-- 限制正文、示例和附件大小；禁止 Secret 和绝对路径。
+### 删除
 
-### W7.2 Runtime integration
+- 普通导航中的 Runtime Agents；移到高级 Runtime 设置；
+- Settings 中 Agent Catalog、Tool & Skill、Supervisors 的竞争式编辑器；
+- 手工版本、模板、spawn limit、Artifact producer/consumer、raw JSON/Python 普通字段；
+- “查看服务端日志”作为用户错误恢复。
 
-优先复用官方 `skills/list`、Skills config write 和 discovery invalidation。Profile Host：
+### 验证与退出
 
-```rust
-install_skill_bundle(profile_id, bundle) -> RuntimeResourceHandle;
-reload_skills(profile_id) -> RuntimeDiscoverySnapshot;
-verify_skill_release(profile_id, release_id, snapshot) -> SkillReadiness;
-```
+首次使用者只按 UI/SDK 文档完成一个 Copilot；可访问性、中文术语、一致状态、保存冲突、
+失败恢复和长任务取消通过产品 E2E。
 
-Platform 不扫描 Skills 目录判断成功。若官方 API 只能 list 而不能 install，Installation
-Service 负责安全物化，Runtime list 负责最终 readiness。
+## 9. W6：Assignment Grant 与能力可见性
 
-### W7.3 Web Skill Studio
+### Owner
 
-- 中文结构模板和逐项校验；
-- 选择 Tool capability，不显示 MCP server 内部名称；
-- Preview 展示模型可见正文和机器声明；
-- 运行示例任务，记录 Skill 是否被发现及 Tool 是否按预期调用；
-- 发布、安装、停用、卸载和诊断。
+Assignment Service 编译；Codex Runtime 执行 Agent 生命周期；Tool Runner 执行 grant。
 
-### 验证和退出
-
-- 中文规则、缺章节、无效 capability、过大正文、路径/Secret 拒绝；
-- 安装后新 Thread discovery，卸载后新 Thread 不可见；
-- Plugin/Project/Profile Skill 冲突语义按官方事实验证，不自行发明优先级；
-- 仓网所有当前 Skills 迁入 Catalog，删除目录名启发式发现。
-
-退出条件：Skill Release 的发布、安装和 Runtime 可见状态独立可审计，Agent 只引用精确
-Skill Release/capability。
-
-## 11. W8：Agent、Supervisor 和 Copilot Studio
-
-### Owner 和依赖
-
-- Owner：Catalog + Package Compiler + existing Runtime role seam。
-- 前置：W4-W7。
-- 默认不修改 Codex。
-
-### W8.1 Agent Studio
-
-重构当前 Agent Draft：
-
-```rust
-struct AgentDefinitionDraft {
-    identity: DraftIdentity,
-    purpose: String,
-    instructions: String,
-    skill_requirements: Vec<ReleaseRequirement>,
-    tool_requirements: Vec<CapabilityRequirement>,
-    data_permissions: Vec<DataPermissionTemplate>,
-    input_contract: AgentInputContract,
-    assignment_contract: AssignmentContractTemplate,
-    deliverable_contracts: Vec<DeliverableContract>,
-    execution_limits: AgentExecutionLimits,
-    model_policy: ModelPolicy,
-}
-```
-
-删除 `capability_template` 继承整个已有 Agent 的做法。改为组合精确 Skill Releases、Tool
-capabilities 和可选的“Agent template”，template 只复制 Draft 初始值，不成为隐藏运行
-依赖。发布时 compiler 解析所有精确依赖。
-
-提供 **Test Agent**：创建隔离测试 Task/Thread，固定 Agent Release candidate、Dataset
-grants 和预算，验证 Runtime exact role、Skill discovery、Tool allowlist、用户输入和
-deliverable。测试记录不是生产 readiness 的替代。
-
-### W8.2 Supervisor Studio
-
-Draft 字段采用目标架构中的 `SupervisorDefinition`。自动注入 root coordination 只读
-capability；用户选择 Agent Releases、协作策略、最终交付件、最大 active children 和
-部分失败规则。UI 不提供固定阶段流程编辑器。
-
-Validator 检查：
-
-- Agent deliverable 能满足 Supervisor 最终交付；
-- Agent 依赖图无循环，允许动态调用但不要求固定顺序；
-- max children 和 context budget 在平台限制内；
-- root 不继承 domain Tool，除非 Supervisor 明确承担该领域计算且通过权限评审；
-- blocking input 有 owner，失败/timeout 有最终综合规则。
-
-### W8.3 Copilot Builder
-
-把 Supervisor、Agents、Skills、Tools、Secret slots、权限模板、Tutorial/E2E 组合为
-CopilotPackage。发布前执行：
+### 合同
 
 ```text
-resolve graph -> validate contracts -> compile runtime bundle
--> dry-run installation -> discovery probe -> test task -> publish release
+AssignmentGrant
+  assignment_id, run_id, agent_release_id
+  objective
+  read_set[], write_set[]
+  exact_capabilities[]
+  expected_outputs[]
+  parameters_snapshot
+  time/cost/context budgets
+  completion_criteria
 ```
 
-不把一次 test task 的运行数据写进 Release；只保存测试结果、构建 provenance 和 lock。
+### 实施
 
-### W8.4 判断是否需要 Codex 修改
+- Platform 根据 Task、installation snapshot、Supervisor selection 与授权生成 Grant；
+- 模型只接收业务目标和有界引用，不接收可伪造 scope/authorization；
+- Runtime `spawn_agent` 继续是唯一 spawn owner；Platform 不根据自然语言自动 spawn；
+- Agent 只能发现 Grant 中的 exact Tool；Tool Runner 再校验 assignment identity；
+- `CollaborationContextBuilder`/`AssignmentCompiler` 接入真实 Run，不再只是 library 类型。
 
-在现有 exact role seam 上验证：
+### 删除
 
-1. 用户定义 Agent 能否被安全物化并只在指定受治理 Thread 中可见；
-2. spawn 时是否能按 exact role 应用指令、模型策略和 Tool allowlist；
-3. Profile 重启和新 Thread 是否按 Installation snapshot 收敛；
-4. 未授权普通 Thread 是否无法发现受治理 Role；
-5. TUI/CLI 官方行为是否不受影响。
+- Prompt 注入 Run/Work State/MCP/server/tool 内部 ID；
+- 根据 Agent 名、Tool 名或 assignment 文本恢复权限；
+- capability template 和 unbounded root capability inventory。
 
-若全部成立，不修改 Codex。若某项失败，先证明 Platform/Profile Host 无法正确拥有该
-语义，再运行 `scripts/codex-upstream-status.sh`、`scripts/codex-customization-status.sh`，
-更新 Patch Map，提出最小 owning crate、协议、测试、重放步骤和退出条件。没有这份证据
-不得编码。
+### 验证与退出
 
-### 测试和退出
+正常、未授权 Tool、错误 Agent Release、过期 installation、越权 read/write、重复 assignment
+和 restart replay 均有 typed result；未授权 Tool 对模型不可见。
 
-- Web 连续保存、validate、publish、install、test Agent、test Supervisor；
-- 多 Agent 动态顺序、部分失败、用户输入、超时、刷新、重启；
-- 普通 Thread 隔离、exact release、运行中发布不漂移；
-- 仓网 Copilot 全部由 Web/Compiler 资源组成，不依赖代码中的 6.0 常量。
+## 10. W7：ToolOutcome、Work State 内部事务与 Run Completion
 
-退出条件：用户可以从 Web 组合 Tool + 中文 Skill + Agent + Supervisor 并发布真实
-Copilot；当前 Runtime seam 足够，或已完成单独获准的最小 Codex 变更。
+### Owner
 
-## 12. W9：上下文、Provider 缓存与执行可观测性
+Tool SDK/Runner + Work State Service + Run Orchestrator。
 
-### Owner 和依赖
-
-- Owner：Codex Adapter normalization + Platform observability + Web execution view。
-- 前置：W4；可与 W5-W8 并行。
-
-### W9.1 逐模型调用指标
-
-平台从 Runtime 安全事件归一化：
-
-```rust
-struct ProviderCallMetric {
-    call_id: Uuid,
-    run_id: Uuid,
-    thread_id: String,
-    agent_execution_id: Option<Uuid>,
-    provider_id: Uuid,
-    model: String,
-    input_tokens: Option<i64>,
-    cached_input_tokens: Option<i64>,
-    output_tokens: Option<i64>,
-    tool_schema_tokens: Option<i64>,
-    latency_ms: i64,
-    first_token_ms: Option<i64>,
-    compaction_count: i32,
-    terminal_status: ProviderCallStatus,
-}
-```
-
-不保存 prompt/reply 正文。标准 cached token 和 Provider 特有字段在 Adapter 中归一化；
-未知字段不猜测为 0，使用 `None` 并记录 capability/diagnostic。
-
-### W9.2 ContextBudgetPolicy
-
-由 Copilot/Agent Release 声明并由 Platform 校验：
-
-- assignment summary bytes；
-- Tool result inline bytes；
-- Resource page size；
-- Artifact preview bytes；
-- 最大连续 Tool inventory/schema 注入；
-- 超预算时必须发布 Artifact/Resource 或分页，不得截断后伪装完整。
-
-Runtime 仍拥有 compaction。Platform 只观察并限制自己注入的内容，不实现第二个
-compactor/cache。
-
-### W9.3 缓存 0 命中诊断
-
-为每次调用记录以下可比较 fingerprint，不保存正文：
+### 合同
 
 ```text
-stable_prefix_sha256
-tool_inventory_sha256
-skill_set_sha256
-runtime_role_sha256
-provider_cache_namespace
+ToolOutcome
+  succeeded | needs_input | failed | rejected
+  cancelled | timeout | interrupted
+  summary, typed references, diagnostics
+
+RunCompletion
+  awaiting_children | awaiting_synthesis
+  succeeded | partial | failed | rejected
+  cancelled | timeout | interrupted | orchestration_incomplete
 ```
 
-分析规则：
+### 实施
 
-- cached token 缺失与真实 0 分开；
-- stable prefix 改变时标记具体来源：role/skills/tools/provider config；
-- 动态 case 状态放在消息尾部，不重写稳定 system/developer 前缀；
-- Tool schema inventory 只注入 Agent allowlist，不注入 Profile 全量；
-- 不为了命中缓存冻结错误上下文或引入本地 prompt cache。
+- SDK 根据 Assignment Grant 内部 begin/commit Work State operation；
+- write-set、expected schema、idempotency 和 revision 由服务端校验；
+- Agent 只返回 outcome，不调用 begin/apply/fail 通用 mutation；
+- child `needs_input` 是当前 assignment 终态；Root 使用官方输入，回答后新建 assignment；
+- required assignments terminal 且 deliverable gate 满足后进入 `awaiting_synthesis`；
+- Root 过早结束时最多一次通用、有界、幂等 synthesis recovery；
+- Event Projection 只持久化/广播幂等视图。
 
-### W9.4 Web
+### 删除
 
-Agent execution 展开区显示安全指标：输入、缓存输入、输出、延迟、compaction、Tool
-调用数和数据引用数。Root/Agent 卡片不展示思维链。Run 级视图可定位某次 600 秒调用
-到底是大输入、Provider 延迟、工具等待还是未终止请求。
+- 模型可见 `begin_work_operation/apply_work_state_mutation/fail_work_operation`；
+- Supervisor continuation 的领域 Prompt 和 `supervisor_run_continuations`；
+- Data Intake gate 的全局 Turn interrupt；
+- Projection 中任何 Agent/Tool/领域 schema 调度分支。
 
-### 验证和退出
+### 验证与退出
 
-- 标准 Provider、DeepSeek top-level cache 字段、字段缺失、流中断；
-- 两次稳定前缀调用证明 hash 一致，能观测缓存是否实际命中；
-- 50 城市仓网任务不把原始 CSV/矩阵复制进调用；
-- 单次 600 秒调用能由阶段耗时拆解，不再只有总时间。
+成功、重复提交、CAS 冲突、child input、Root answer、失败、取消、超时、interrupt、Root
+提前结束、刷新和重启都收敛；重复 deliverable 不再由模型处理。
 
-退出条件：缓存命中率、上下文大小和长调用原因都可由有界指标解释；不以重试或扩大
-timeout 掩盖问题。
+## 11. W8：Typed handles 与 Resource Broker
 
-## 13. W10：供应链参考实现迁移与清理
+### Owner
 
-### Owner 和依赖
+Data/Artifact authorization services + Resource Broker。
 
-- Owner：Supply Chain ToolPackage + 两个 Agent/Skills。
-- 前置：W2、W3、W5-W9。
-
-### W10.1 领域模型
-
-保留：
-
-- `DemandCity`、`Warehouse`、`CurrentAssignment`；
-- route/time/cost matrix；
-- assignment/service/cost/scenario/location solution；
-- geography、mapping、solver、report、map 的领域实现。
-
-移除 `CaseRepository` 通用职责。新增 `SupplyChainWorkStateAdapter` 注册 component schema：
+### 合同
 
 ```text
-network_requirements.v1
-normalized_network_input.v1
-route_matrix.v1
-cost_matrix.v1
-network_assignment.v1
-service_metrics.v1
-cost_summary.v1
-scenario_result.v1
-facility_location_solution.v1
-network_planning_report.v1
-network_comparison_map.v1
+SourceAssetRef      { type, handle, revision, scope }
+DatasetReleaseRef   { type, handle, release, scope }
+DomainResourceRef   { type, handle, schema, producer, scope }
+ArtifactRef         { type, handle, schema, retention, scope }
 ```
 
-依赖和 invalidation 规则由 adapter 声明，持久化由 Work State Service 处理。
+内部 MCP URI 不属于公共合同。
 
-### W10.2 Tool inventory
+### 实施
 
-所有公开 Tool 使用 `@copilot_tool`。删除 `server.py` 中未注册的 legacy snapshot、旧
-Resource、旧 report 和旧 solver 函数。最终 inventory 由 package manifest + probe
-测试精确锁定，不再靠阅读源码猜测。
+- handle 是 opaque identity；Resolver 绑定当前 assignment、scope、grant、状态和 schema；
+- Data Agent 只获得 SourceAsset/Dataset preparation 能力；Domain Agent 不获得 SourceAsset；
+- Domain Tool 直接接受 DatasetReleaseRef/DomainResourceRef；
+- 大型内容保持在 owner store，Agent 消息只含 handle 与有界摘要；
+- hash 用于完整性，不用于授权或要求模型拼装。
 
-导航闭环新增领域 Tool：
+### 删除
+
+- `source_ref` 与 MCP Resource URI 的字符串方言；
+- Agent 构造 `DataAgentRef` URI；
+- Work State 的无 discriminator `{owner,type,id,hash}` 公共引用；
+- `read_mcp_resource` 作为 Workspace SourceAsset 读取路径。
+
+### 验证与退出
+
+错误 variant、跨 Task/Profile、过期 revision、错误 schema、猜测 handle、hash 替换和越权
+consumer 全部在 Resolver 拒绝；Prompt 文本无法扩大访问。
+
+## 12. W9：Data Intake 单一 owner
+
+### Owner
+
+Platform Data Intake；Domain Package 只提供 requirement/validator/normalizer。
+
+### 实施
 
 ```text
-plan_route_matrix
-build_haversine_route_matrix
-register_navigation_route_matrix
-validate_route_matrix
+SourceAsset revision
+-> DataIntakeSession
+-> SourceProfile
+-> MappingRevision
+-> explicit confirmation / needs_input
+-> immutable DatasetRelease
 ```
 
-Maps MCP 仍由 Network Agent 调用；供应链 Tool 不跨 MCP 调另一个 MCP。导航结果通过
-Artifact/Domain Resource handle 注册，校验 route plan、数量、hash 和费用确认。
+- 把 route 中的生命周期、SQL 和状态迁入 owning service；route 只鉴权/解析/调用；
+- Domain Package 注册 DataRequirementContract、业务字段、单位、validator 和 normalizer；
+- 映射只有一个生成 schema；不接收 camel/snake、entities/mappings 等多种方言；
+- Dataset Release 通过 typed handle 绑定 Work State component；
+- 用户确认由 Root-only 输入链完成。
 
-### W10.3 Agent/Skill
+### 删除
 
-- Data Agent：只处理 Data Intake release、领域映射/规范化/地理校验；
-- Network Agent：需求、矩阵、分析、模拟、求解、报告和地图；
-- Root：只协调、读状态和综合，不直接使用供应链 Tool；
-- Skills 全部中文，引用精确 capabilities 和 component/deliverable types；
-- 删除 `planning-dataset.v2`、6.0 目录版本和旧 2.x/5.x package；由 Catalog Release
-  替代源码目录版本号。
+- CaseRepository 的 source/mapping/revision；
+- 领域 Workspace 扫描、source profile store 和 mapping state machine；
+- Data Server canonicalizer/aliases 和文件名反推 source ref；
+- `data-intake-service` 只是校验、route 成为真正 service 的倒置结构。
 
-### W10.4 真实 E2E
+### 验证与退出
 
-完整扩展用例：
+CSV/JSON/XLSX、安全上限、映射歧义、用户确认、revision 失效、发布、重启、并发和越权
+通过；供应链只看到 DatasetReleaseRef。
 
-1. Web 上传 50 城市、11 仓、报价；
-2. 发布 Dataset Release；
-3. Web 安装或选择供应链 Copilot；
-4. 创建任务并要求分析现有网络；
-5. Data/Network 动态协作，输入卡确认绕路系数；
-6. 无 current coverage 时分别给出时效优先和成本优先优化基线，不冒充实际方案；
-7. 加入 current coverage 后输出实际方案；
-8. 运行成本、模拟、p-median、时效约束和地图；
-9. 刷新、断开、Profile 重启后恢复输入、Agent、Work State 和 Artifact；
-10. 验证 Agent 卡片单终态、wait 不刷屏、Provider 指标有界；
-11. 导航选择只验证费用确认和注册合同，批量真实计费接口单独受控测试。
+## 13. W10：仓网迁移与旧基础设施删除
 
-### 验证和退出
+### Owner
 
-- Python unit/ruff、MCP stdio smoke、SDK contract；
-- Work State/Data Intake integration；
-- Rust/Web/full real E2E；
-- `rg` 确认当前代码/文档无旧 schema/version；
-- `git diff --exit-code -- codex/codex-rs`，除已存在且另有范围的 Provider 观测 seam。
+Supply Chain Domain Package + Platform migration owner。
 
-退出条件：仓网是平台资源的消费者，不再实现公共平台能力；完整真实链路通过。
+### 实施
 
-## 14. W11：通用 Web 体验与新手交付
+- 保留仓网需求 schema、行政区匹配、矩阵、覆盖、成本、场景、求解、报告和地图 renderer；
+- Data Agent 使用 Data Intake；Network Agent 使用 DatasetReleaseRef/DomainResourceRef；
+- 使用 W6/W7 Assignment/ToolOutcome/Run completion；
+- 当前 coverage、成本、场景、选址、地图按业务请求选择，不写入平台；
+- 完成一条原子切换，不维护旧/new 两套运行模式。
 
-### Owner 和依赖
+### 删除
 
-- Owner：Browser WebApp。
-- 前置：W5-W10 API 稳定。
+- CaseRepository 的通用 identity/revision/operation/dependency/readiness/deliverable；
+- `case_sources`、mapping tables、Workspace intake；
+- 旧 Resource/template/snapshot/planning-dataset paths；
+- `network-case-tool-result.v1` 和 Platform 中仓网分支；
+- 6.0 手工包/hash、长 Prompt ID/顺序/字段合同；
+- 为旧 E2E 保留的 hidden route、seed 和 fallback。
 
-页面信息架构：
+### 验证与退出
 
-```text
-Build
-  Tools
-  Skills
-  Agents
-  Supervisors
-  Copilots
+从 Copilot Studio 安装后的真实仓网任务覆盖基础、current coverage、成本、场景、选址、
+地图、失败、取消、刷新和 Profile 重启；Platform 源码不含仓库/路线/成本/供应链分支。
 
-Run
-  Workspaces and Data
-  Tasks
-  Artifacts
-```
+## 14. W11：产品级 E2E、观测与证据
 
-每个 Build 页面统一展示 Draft revision、validation、Release、dependencies、Installation
-和 Runtime readiness。错误使用业务可理解语言，并可展开安全技术诊断。页面不展示
-本地路径、Runtime request ID 和 Secret。
+### Owner
 
-教程改为使用正式 UI：
+Platform E2E + Provider Observability + Browser UX。
 
-1. Hello Tool + 单 Agent；
-2. 两 Agent 协作；
-3. 印尼仓网渐进案例；
-4. 从本地 SDK 包导入；
-5. 常见安装、发现、权限、输入和恢复故障。
+### 实施
 
-退出条件：新用户只使用 Web 和 SDK 文档即可完成发布运行，不需要修改 migration、
-capability JSON、`.mcp.json` 或 Profile 隐藏配置。
+- E2E 从干净 Profile 的“新建 Copilot”开始；
+- 长任务持续展示 Agent、当前阶段、待输入、已产出、失败和取消；
+- 每次 Provider call 保存有界 input/cache/output/tool-schema/latency/compaction 指标；
+- 稳定前缀 fingerprint 用于解释 cache，不保存 Prompt 正文；
+- evidence 自动核对 Release、Installation、Discovery、assignment terminal、Artifact hash；
+- UI 与 capability baseline 不从模型答案推断成功。
 
-## 15. W12：第二个非供应链参考案例
+### 验证与退出
 
-### Owner 和依赖
+正常、失败、取消、超时、断网、刷新、Runtime/Profile restart、乱序和重复事件有真实
+evidence；12 分钟任务不表现为黑盒等待。
 
-- Owner：独立领域开发者；不得由供应链包复用内部代码。
-- 前置：W11。
+## 15. W12：第二领域否证与 M3 入口
 
-选择一个小型但真实的案例，例如“服务质量异常分析”：
+### Owner
 
-- Tool：指标读取、异常检测、分段比较、报告；
-- Skill：中文诊断方法；
-- Agents：Data Quality Agent + Metric Diagnostic Agent；
-- Supervisor：根据数据质量和证据缺口动态协调；
-- 数据：CSV/JSON，通过统一 Intake；
-- Work State：领域自有 component schema；
-- Artifact：报告和图表。
+第二 Domain Package 团队 + Architecture review。
 
-验证标准：新增案例不修改 Platform event projection、Work State schema、Coordination
-Tool、Data Intake 状态机或 Web 领域分支。若必须修改，先判断是缺失的通用 extension
-point 还是错误抽象，并回到 W1/W2 修正，不能复制供应链实现。
+### 实施
 
-退出条件：第二案例只新增 domain package、Skills、Agent/Supervisor Draft 和 renderer，
-证明平台扩展点成立。
+- 由不熟悉仓网内部实现的算法工程师，仅使用正式 SDK 文档和 Web 创建第二 Copilot；
+- 只新增 package、Skills、Agents、Supervisor、domain schema/validator/algorithm/renderer；
+- 复用 Catalog、Installation、Assignment、input、Work State、handles、execution、Artifact
+  和 evidence；
+- 记录实际开发时间、平台变更数、失败类型和上下文成本。
 
-## 16. W13：多用户开放门禁
+### 退出
 
-### Owner 和依赖
+第二领域不修改 Platform 领域分支即可完成 E2E。若必须新增按领域名/Tool 名/schema 的
+平台判断，返回 W2-W9 修正抽象，不以特例放行。通过后才进入 M3 两用户隔离矩阵。
 
-- Owner：Auth/Platform/Profile Host/Security。
-- 前置：W1-W12；当前只实现 scope，不开放 UI。
+## 16. 原子删除清单
 
-完成矩阵：
+以下不是“以后再清理”的建议，而是对应新 owner 退出门的一部分：
 
-- 两个 organization、user、profile、workspace 并发；
-- Catalog Draft/Release visibility；
-- Profile Installation、Runtime process/cache key；
-- Data Intake、Dataset Release、Work State、Approval、Artifact；
-- execution subscriptions 和 reconnect replay；
-- Secret grant、Tool network/data policy；
-- 猜测 UUID、跨 scope binding、共享 cache 污染；
-- restart、cancel、timeout、installation reconcile。
+| 新 owner 通过 | 同一切换必须删除 |
+| --- | --- |
+| W2 Catalog/Compiler | supervisor-catalog 第二 owner、templates、手工版本/hash/seed compiler |
+| W4 Installation | Workspace install、false installed/readiness、path-scanned discovery |
+| W5 Studio | Settings 竞争入口、raw JSON/Python 普通编辑、手工内部字段 |
+| W6 Assignment | Prompt 内部 ID/权限/能力注入、名称式角色选择 |
+| W7 ToolOutcome/Completion | 模型低层 mutation、Projection continuation/interrupt |
+| W8 handles | source_ref/URI 方言、Agent URI 构造、hash-as-authority |
+| W9 Data Intake | Case source/mapping 生命周期、Data aliases/Workspace scan |
+| W10 warehouse | Case 通用工作状态、平台供应链分支、旧 E2E hidden path |
 
-所有拒绝必须在 owning service 发生，浏览器隐藏不是授权。门禁通过后再设计成员、邀请、
-角色和租户管理 UI。
+删除包含代码、migration/seed、tests、fixtures、UI、tutorial 和 current-state 文档；不留
+deprecated 字段或 runtime compatibility reader。
 
-退出条件：两个用户无法读取、调用、安装或控制对方资源；Runtime 和缓存也按 Profile
-隔离，然后才能把当前单用户阶段改为多用户可用。
-
-## 17. 实施顺序和提交边界
-
-```text
-W0 baseline
- -> W1 contracts
- -> W2 work state + tool result + coordination
- -> W3 data intake convergence
- -> W4 collaboration contract
- -> W5 catalog/compiler/installation
- -> W6 tool SDK/studio
- -> W7 skill studio
- -> W8 agent/supervisor/copilot studio
- -> W9 observability (W4 后可并行)
- -> W10 supply-chain migration
- -> W11 browser/tutorial completion
- -> W12 second domain proof
- -> W13 multi-user gate
-```
-
-建议提交序列：
-
-1. `docs: align copilot authoring platform architecture`
-2. `ops: make development database rebuild explicit`
-3. `platform: define catalog work state and collaboration contracts`
-4. `platform: add durable work state service`
-5. `sdk: add bounded platform tool result contract`
-6. `platform: expose read only supervisor coordination tools`
-7. `data: move intake lifecycle into platform service`
-8. `runtime: bind typed collaboration context to governed runs`
-9. `catalog: unify drafts releases compiler and installations`
-10. `tools: publish python tool sdk and studio lifecycle`
-11. `skills: publish chinese skill lifecycle and studio`
-12. `agents: publish agent supervisor and copilot builders`
-13. `observability: persist provider context and cache metrics`
-14. `supply-chain: migrate network case to platform work state`
-15. `web: complete reusable copilot authoring journey`
-16. `e2e: verify supply-chain and second domain copilots`
-17. `security: verify cross-user isolation gate`
-
-## 18. 每个工作包的统一完成定义
+## 17. 统一完成定义
 
 一个工作包只有同时满足以下条件才完成：
 
-1. owner、DTO、持久化和状态机落在正确层；
-2. 新路径覆盖正常、失败、取消、超时、重启、并发和越权中适用的场景；
-3. 旧 owner、旧 API、旧字段、旧 fixture、旧文档和 fallback 已删除；
-4. 浏览器 DTO 不泄露 raw Runtime、路径或 Secret；
-5. Runtime capability 由真实 discovery 证明；
-6. 能力基线只记录已验证事实；
-7. `git diff --check` 和受影响范围测试通过；
-8. 需要真实边界的功能完成真实 Runtime/Web E2E，而不是只通过 Fake；
-9. 未获单独批准不得扩大 `codex-rs` 差异。
+1. owner、typed input/output、capability gate、persistence scope 和状态机明确；
+2. 正常、拒绝、失败、取消、超时、重启、并发和越权中适用场景有证据；
+3. 旧 owner、旧 API、旧字段、fallback、fixture、UI 和文档已删除；
+4. Browser DTO 不泄露 raw Runtime、路径、Secret 或内部 identity；
+5. Runtime capability 由 discovery 证明，不由数据库或文件存在猜测；
+6. E2E 从 owning 用户入口开始，并生成脱敏 evidence；
+7. 受影响 Rust/Web/Python 检查、`git diff --check` 和真实边界验证通过；
+8. Capability Baseline 只在证据完成后更新；
+9. 没有新增未获批准的 `codex-rs` 差异。
 
-## 19. 本轮立即执行顺序
+## 18. 当前执行顺序
 
-当前应按以下顺序继续，不先扩展仓网业务功能：
+```text
+W0
+-> W1
+-> W2 + W3
+-> W4
+-> W5
+-> W6 + W7
+-> Clean Spine A gate
+-> W8
+-> W9
+-> W10
+-> W11
+-> W12
+```
 
-1. 完成 W0 数据库恢复与文档收敛；
-2. 实施 W1-W2，把通用 Work State、Tool result 和 Root coordination 建成平台能力；
-3. 实施 W3，删除供应链的数据 Intake 双重 owner；
-4. 实施 W4-W5，让协作、版本和安装成为统一合同；
-5. 再迁移 Tool/Skill/Agent/Supervisor Web 创作链路；
-6. 最后迁移仓网并跑真实扩展 E2E；
-7. 用第二领域案例证明没有把仓网抽象硬编码进平台。
-
-临时进度和问题快照保存在
-`temporary-copilot-platform-refactor-audit-2026-08-08.md`。W10 真实 E2E 通过且能力基线
-更新后删除该临时文档。
+W8-W10 不得反向阻塞无数据 Clean Spine A；W10 通过前不继续扩展仓网功能；W12 通过前
+不宣称平台具备通用算法工程师自助扩展能力。

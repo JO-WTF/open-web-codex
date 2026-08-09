@@ -15,6 +15,11 @@ _企业多 Agent 协同平台的架构推演与落地路径_
 > 专题展开：[多 Agent 协同演进](multi-agent-collaboration-evolution.md)、
 > [Agent 信息交换演进](agent-information-exchange-evolution.md) 与
 > [Supervisor、Agent、Skill、Tool 分层架构](supervisor-agent-skill-tool-architecture.md)
+>
+> 已接受的当前 Copilot 边界以
+> [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) 为准。本文关于 Data Intake、
+> Work State、Dataset/Resource、Artifact 交接、Policy Snapshot 和 Platform 协调的阶段建议
+> 均为被否决的推演历史，不是当前或后续默认实施顺序。
 
 ---
 
@@ -1182,7 +1187,7 @@ Data Analysis Agent v3
   runtime_status: available
 ```
 
-这项候选查询能力本身也需要作为正式 Tool 或 MCP Tool 被 Codex 发现，并经过 Schema 与 Capability Manifest 验证；在它完成之前，第一阶段直接使用代码管理的有限 Runtime Role 清单。平台负责约束候选范围，Supervisor 负责认知选择，Runtime 负责真正创建 Agent——三者各自只完成一段责任。
+这项候选查询能力本身也需要作为正式 Tool 或 MCP Tool 被 Codex 发现，并经过生成 Schema 与真实 Runtime 边界验证；在它完成之前，第一阶段直接使用代码管理的有限 Runtime Role 清单。平台负责约束候选范围，Supervisor 负责认知选择，Runtime 负责真正创建 Agent——三者各自只完成一段责任。
 
 > **当前发布边界**
 >
@@ -2127,7 +2132,7 @@ Adapter 和 Web 投影的可重复事实，为 Phase 1 的有界 Studio 提供�
 | Runtime 如何限制规模 | 验证 V2 并发上限，并记录最大深度仍为缺口 |
 | Runtime Role 不可用时如何失败 | 返回明确 capability/role 错误，不静默改用其他 Agent |
 
-同时完成 Workspace `cwd` 授权的真实链路验证、审批与中断、协议生成门和 Capability Manifest 验证。当前单 Profile 部署仍要覆盖已有组织、Profile、Workspace 和 Artifact 路由的拒绝测试，但真正的“两用户同时路由到两个 Profile 进程”属于 Phase 2，不能在这里提前宣称完成。
+同时完成 Workspace `cwd` 授权的真实链路验证、审批与中断、协议生成门和实际 Runtime operation 验证。当前单 Profile 部署仍要覆盖已有组织、Profile、Workspace 和 Artifact 路由的拒绝测试，但真正的“两用户同时路由到两个 Profile 进程”属于 Phase 2，不能在这里提前宣称完成。
 
 ##### 本阶段不建设
 
@@ -2512,7 +2517,7 @@ Phase 1–2 使用 Artifact 和有界摘要协作；Phase 3 在数据证明需�
 
 在当前受限单 Profile 实现中，代码发布的 Definition/version 还携带不可变、可校验
 hash 的 Runtime 指令。只有已绑定显式已发布 Supervisor Policy 的 worker 执行前检查
-才可以在 Capability Manifest 确认 `agents.multi_agent@1.0.0` 之后，通过 Profile Host
+才可以在生成的官方 Role 配置合同和真实 spawn 验证之后，通过 Profile Host
 原子写入受管 Role 文件，并在 Runtime 消费前无跟随重开和校验 hash。受治理的
 `thread/start` 与 `thread/fork` 只通过 request-scoped config 显式启用
 `features.multi_agent_v2`、设置 V2 并发限制并引用这些精确 Role；不写入 Profile 或
@@ -2673,7 +2678,6 @@ Phase 1 使用 Task/Profile 级受限连接、只读凭据和明确资源范围�
 - Runtime 通用的 Agent 协调能力；
 - Runtime Role 解析和配置层；
 - 生成的协议类型；
-- 通用 capability manifest；
 - Provider transport/model discovery 的必要扩展；
 - app-server 的版本化 Runtime API；
 - TUI 中与保留 Provider 能力等价的体验。

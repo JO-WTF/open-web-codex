@@ -3,7 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
-tools_root="$repo_root/tools/supply-chain-network-planner"
+tools_root="${OPEN_WEB_CODEX_SUPPLY_CHAIN_ASSET_ROOT:-$repo_root/tools/supply-chain-network-planner}"
 data_dir="${OPEN_WEB_CODEX_DATA_DIR:-$repo_root/.local/open-web-codex}"
 log_dir="${OPEN_WEB_CODEX_LOG_DIR:-$data_dir/logs}"
 venv_dir="${OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV:-$data_dir/tool-envs/supply-chain-network-planner}"

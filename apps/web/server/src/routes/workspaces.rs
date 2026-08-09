@@ -22,6 +22,7 @@ use open_web_codex_run_orchestrator::{
     CreateWorkspaceRequest, RemoveWorkspaceRequest, RunOrchestrator, RunOrchestratorError,
     WorkspaceRecord,
 };
+use serde::Deserialize;
 use serde_json::json;
 use sqlx::Row;
 use uuid::Uuid;
@@ -32,9 +33,13 @@ use crate::routes::RuntimeProfileBinding;
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
 type AssetResult = Result<Response<Body>, (StatusCode, Json<PlatformError>)>;
 
-const MAX_WORKSPACE_UPLOAD_FILES: usize = 20;
 const MAX_WORKSPACE_UPLOAD_FILE_BYTES: usize = 100 * 1024 * 1024;
-const MAX_WORKSPACE_UPLOAD_TOTAL_BYTES: usize = 250 * 1024 * 1024;
+
+#[derive(Debug, Default, Deserialize)]
+pub struct WorkspaceUploadQuery {
+    #[serde(default)]
+    overwrite: bool,
+}
 
 pub async fn list_workspaces(
     State(state): State<AppState>,
@@ -145,60 +150,44 @@ pub async fn upload_files(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
     Path(workspace_id): Path<Uuid>,
+    Query(query): Query<WorkspaceUploadQuery>,
     Extension(git): Extension<Arc<GitRuntime>>,
     mut multipart: Multipart,
 ) -> ApiResult<WorkspaceFileUploadResponse> {
     let workspace_id = authorized_workspace(&state, &auth, workspace_id, true).await?;
-    let mut files = Vec::new();
-    let mut total_bytes = 0usize;
-    while let Some(field) = multipart
+    let field = multipart
         .next_field()
         .await
         .map_err(|_| bad_request("The Workspace upload could not be read"))?
+        .ok_or_else(|| bad_request("Choose one file to upload"))?;
+    let path = field
+        .file_name()
+        .map(str::to_string)
+        .ok_or_else(|| bad_request("The Workspace upload part needs a file name"))?;
+    validate_workspace_upload_path(&path)?;
+    let bytes = field
+        .bytes()
+        .await
+        .map_err(|_| bad_request("The Workspace upload could not be read"))?;
+    if bytes.len() > MAX_WORKSPACE_UPLOAD_FILE_BYTES {
+        return Err(bad_request(format!(
+            "{path} exceeds the 100 MiB per-file limit"
+        )));
+    }
+    if multipart
+        .next_field()
+        .await
+        .map_err(|_| bad_request("The Workspace upload could not be read"))?
+        .is_some()
     {
-        if files.len() >= MAX_WORKSPACE_UPLOAD_FILES {
-            return Err(bad_request(
-                "A Workspace upload may contain at most 20 files",
-            ));
-        }
-        let path = field
-            .file_name()
-            .map(str::to_string)
-            .ok_or_else(|| bad_request("Every Workspace upload part needs a file name"))?;
-        validate_workspace_upload_path(&path)?;
-        let bytes = field
-            .bytes()
-            .await
-            .map_err(|_| bad_request("The Workspace upload could not be read"))?;
-        if bytes.len() > MAX_WORKSPACE_UPLOAD_FILE_BYTES {
-            return Err(bad_request(format!(
-                "{path} exceeds the 100 MiB per-file limit"
-            )));
-        }
-        total_bytes = total_bytes
-            .checked_add(bytes.len())
-            .ok_or_else(|| bad_request("The Workspace upload is too large"))?;
-        if total_bytes > MAX_WORKSPACE_UPLOAD_TOTAL_BYTES {
-            return Err(bad_request(
-                "A Workspace upload may contain at most 250 MiB",
-            ));
-        }
-        if files.iter().any(|(existing, _)| existing == &path) {
-            return Err(bad_request(
-                "A Workspace upload cannot contain duplicate file paths",
-            ));
-        }
-        files.push((path, bytes.to_vec()));
+        return Err(bad_request(
+            "A Workspace upload request accepts exactly one file",
+        ));
     }
-    if files.is_empty() {
-        return Err(bad_request("Choose at least one file to upload"));
-    }
-    for (path, bytes) in &files {
-        git.write_file(workspace_id, path, bytes)
-            .await
-            .map_err(git_error)?;
-    }
-    let paths = files.into_iter().map(|(path, _)| path).collect::<Vec<_>>();
+    git.write_file(workspace_id, &path, bytes.as_ref(), query.overwrite)
+        .await
+        .map_err(git_error)?;
+    let paths = vec![path];
     audit_workspace_mutation(
         &state,
         &auth,
@@ -1141,14 +1130,22 @@ fn bad_request(message: impl Into<String>) -> (StatusCode, Json<PlatformError>) 
 
 pub(super) fn git_error(error: GitRuntimeError) -> (StatusCode, Json<PlatformError>) {
     match error {
+        GitRuntimeError::FileAlreadyExists(_) => (
+            StatusCode::CONFLICT,
+            Json(PlatformError::conflict("workspace_file_exists")),
+        ),
         GitRuntimeError::InvalidSource(_)
         | GitRuntimeError::InvalidRef(_)
-        | GitRuntimeError::UnsafePath(_)
-        | GitRuntimeError::Conflict(_)
-        | GitRuntimeError::NoChanges => (
-            StatusCode::CONFLICT,
+        | GitRuntimeError::UnsafePath(_) => (
+            StatusCode::BAD_REQUEST,
             Json(PlatformError::bad_request(
                 "Git workspace request was rejected",
+            )),
+        ),
+        GitRuntimeError::Conflict(_) | GitRuntimeError::NoChanges => (
+            StatusCode::CONFLICT,
+            Json(PlatformError::conflict(
+                "Git workspace request conflicts with current state",
             )),
         ),
         GitRuntimeError::UnsupportedImage(_) => (
@@ -1192,10 +1189,6 @@ fn orchestrator_error(error: RunOrchestratorError) -> (StatusCode, Json<Platform
         RunOrchestratorError::Adapter(_) => (
             StatusCode::BAD_GATEWAY,
             PlatformError::internal("Codex Runtime operation failed"),
-        ),
-        RunOrchestratorError::StartPreflight(_) => (
-            StatusCode::CONFLICT,
-            PlatformError::bad_request("Runtime start requirements are unavailable"),
         ),
         RunOrchestratorError::LeaseLost => (
             StatusCode::CONFLICT,

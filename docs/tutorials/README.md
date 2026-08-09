@@ -1,6 +1,14 @@
 # Web 新手教程标准与四条学习路径
 
-这组教程面向第一次使用 open-web-codex Web 平台的人。第一步必须先得到一个可观察结果，之后再增加数据、参数、Agent 和算法复杂度。
+状态：冻结迁移输入（2026-08-08）。
+
+以下页面记录旧仓网原型，不是当前可执行的新手入口；其中的 Settings 页面、Workspace
+发布/扫描、capability template 和手工 Release 合同均不得作为新实现依据。Clean Spine
+产品 E2E 完成后，本目录必须从正式 SDK/Copilot Studio 用户入口整体重写。当前证据以
+[能力基线](../capability-baseline.md) 为准，接受边界以
+[ADR-017](../adr/017-clean-copilot-platform-spine.md) 为准。
+
+以下保留原教程设计，供迁移时核对业务示例与学习梯度。
 
 ## 学习路径
 

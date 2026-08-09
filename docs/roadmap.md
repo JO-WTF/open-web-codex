@@ -3,201 +3,175 @@
 | 字段 | 内容 |
 | --- | --- |
 | 状态 | 当前接受的阶段顺序 |
-| 更新时间 | 2026-08-08 |
+| 更新时间 | 2026-08-09 |
 | 时间表达 | 以能力门和结果为阶段，不承诺未经评估的日期 |
 | 产品方向 | [产品愿景](product-vision.md) |
-| 目标架构 | [Copilot 开发平台架构](supervisor-agent-skill-tool-architecture.md) |
 | 当前能力 | [能力基线](capability-baseline.md) |
-| 近期任务 | [开发计划](development-plan.md) |
-| 详细实施 | [Copilot 开发平台实施计划](agent-capability-lifecycle-plan.md) |
+| 当前执行 | [开发计划](development-plan.md) |
+| 当前决定 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) |
 
-路线图只维护阶段顺序、结果和退出条件。逐文件、类和方法级任务由详细实施计划维护；
-实现事实由能力基线维护。
+路线图只维护阶段顺序、结果和退出条件。阶段一的逐项任务以开发计划为唯一来源；实现
+事实由能力基线维护。旧 Copilot Platform/Clean Spine 计划是阶段二研究输入，不得反向
+扩大阶段一。
 
 ## 顺序总览
 
 ```text
 Gate 0 可重复开发基线
-  -> M2 单 Profile Copilot 创作平台
-  -> M3 受治理的多用户执行
-  -> M4 企业 Catalog 治理与规模化复用
-  -> M5 生产 GA
-  -> 仅按证据决定 Task Knowledge Ledger / Agent Decision OS
+  -> 阶段一 内置仓网 Copilot 完整运行闭环
+  -> 阶段二 公开 SDK 与 Web 创作体验
+  -> 阶段三 受治理的多用户执行
+  -> 阶段四 企业治理与生产 GA
 ```
 
 | 阶段 | 核心结果 | 当前位置 |
 | --- | --- | --- |
-| Gate 0 | 数据库、Workspace、Runtime 和当前文档重新指向同一事实 | 当前阻塞门禁 |
-| M2 | 用户可从 Web/SDK 创建并运行 Tool + Skill + Agent + Supervisor Copilot | 已有仓网纵向实现，平台公共化待完成 |
-| M3 | 两用户、多 Profile、授权和隔离成立 | 后续 |
-| M4 | 组织级 Catalog、评价、共享、治理和规模化运维成立 | 后续 |
-| M5 | 安全、恢复、容量、升级和可用性达到生产门禁 | 后续 |
-| 条件阶段 | 长期知识和持续决策能力 | 未排期 |
+| Gate 0 | 数据库、Profile、Workspace、Runtime 与 evidence 指向同一事实 | 部分成立，仍需随阶段一全量复验 |
+| 阶段一 | Codex 原生协作与混合数据边界驱动的完整仓网 Copilot | 实施中；现有 7/7 只是冻结原型 E3 |
+| 阶段二 | 算法工程师可通过 SDK/Web 创建和组合能力 | 后续；合同需基于阶段一事实重新裁决 |
+| 阶段三 | 两用户、多 Profile、授权和隔离成立 | 后续 |
+| 阶段四 | Catalog 治理、容量、恢复、安全和运维达到生产门 | 后续 |
 
-## Gate 0：恢复可重复开发基线
+## Gate 0：可重复、无宿主继承的开发基线
 
-### 目标
+### 核心结果
 
-修复已应用 migration 被改写造成的开发数据库不可启动问题，使当前 schema、Provider、
-Profile、Workspace、Runtime 和文档可以被同一套命令重建和验证。
-
-### 核心交付
-
-- 使用匹配 PostgreSQL 18 的客户端安全保留 Provider/Secret 关联并显式重建开发库；
-- 空白数据库完成所有当前 migrations，连续两次启动 checksum 稳定；
-- 已应用 migration 不再修改，CI 校验 migration 内容完整性；
-- 当前文档删除 2.x/5.x、`planning-dataset.v2` 和“Studio 后置”的冲突；
-- 单 Profile Runtime、Provider、MCP、Workspace 和浏览器健康链路恢复；
-- 当前所有局部测试证据在重建后的数据库边界复核。
+- 空数据库由当前 migrations 完整初始化，不猜测或修补旧 schema；
+- 空 Profile 不继承服务器操作者的 auth、Skills、Plugins、MCP、Memory 或 cache；
+- Provider Secret 只注入目标 Profile，实际 Runtime build 与源码 commit 可核对；
+- Workspace、Profile、Runtime discovery inventory 和 evidence 可以由同一环境重建；
+- 当前文档只记录现行事实、接受决定和当前计划。
 
 ### 退出条件
 
-开发环境可以从当前仓库和保留的 Provider 配置完整恢复，服务连续重启成功，能力基线
-明确区分已验证与未验证能力。启动路径没有自动修复、旧 schema 猜测或隐式 Mock。
+开发环境从当前仓库和显式平台配置完整恢复，连续重启收敛；不存在隐式 Mock、旧二进制、
+宿主认证或 DB success 冒充 Runtime ready。
 
-## M2：单 Profile Copilot 创作平台
+## 阶段一：内置仓网 Copilot 架构纠偏与完整闭环
 
-### 目标
+### 用户结果
 
-在当前单用户、单 Profile 阶段，让算法工程师能用 SDK 和 Web 创建、发布、安装、组合
-并真实运行 Tool、中文 Skill、Domain Agent、Supervisor 和完整 Copilot。仓网案例是
-第一条参考实现，不是平台硬编码。
+用户在一个 Workspace 中放置普通文件，创建多个独立 Task 完成不同仓网方案。Task 没有
+相互通信或数据 API；同 Workspace 的 Task 可显式复用普通文件和同一授权 provider 的 exact
+MCP Resource ref。用户只与一个
+Copilot 对话，可以看到 Data/Network Agent 进度、回答业务问题并取得地图和报告。
 
 ### 核心交付
 
 | 能力 | 阶段结果 |
 | --- | --- |
-| 公共合同 | Tool/Skill/Agent/Supervisor/Copilot 共享 Draft、Release、依赖和安装语义 |
-| Work State | 通用 revision、operation、dependency、readiness、blocking input、deliverable 元数据 |
-| Root Coordination | Root 只读查询 Agent execution、用户输入、Work State 和 Artifact，不依赖子 Agent 自述 |
-| Data Intake | SourceAsset、mapping、Dataset Release 只有 Platform 一个 owner；领域只做业务转换 |
-| Tool SDK | 受限 Python MCP SDK、contract test、打包、发布、安装、reload 和 Runtime discovery |
-| Skill Studio | 中文 Skill 创建、验证、Tool capability 绑定、发布、安装和 Runtime 可见性 |
-| Agent Studio | Skills、Tools、数据权限、assignment 和 deliverable 合同的组合、测试和发布 |
-| Supervisor Studio | 动态协作、精确 Agent Releases、停止/部分失败规则和最终交付 |
-| Copilot Builder | 自动版本/hash/lock，事务式安装，Catalog/Installation/Discovery 状态分离 |
-| 执行体验 | 多 Agent 输入队列、单一 execution 卡片、wait 聚合、终态、刷新和重启恢复 |
-| 上下文观测 | 每次 Provider 调用的输入/缓存/输出/延迟/compaction 与稳定前缀 fingerprint |
-| 参考案例 | 完整印尼仓网 + 一个非供应链案例，不修改平台领域分支 |
+| Workspace | Task 固定授权 Workspace；root/child 使用相同原生 `cwd` |
+| 文件 | 通用列举、上传、读取、下载、删除；允许经校验相对路径 |
+| 数据交换 | Workspace 文件用于用户可见/跨 package 交接；MCP Resource 用于 provider-owned typed intermediate；无 Task→Task context/result/data API |
+| Runtime | 原生 spawn/follow-up/wait/mailbox/steer/child 终态与 history |
+| 用户输入 | child MCP elicitation 直接桥到浏览器并返回原请求 |
+| 能力供给 | Profile 托管内置 Roles/Skills/MCP；原生 discovery/reload/status |
+| 仓网能力 | 数据准备、距离/成本、覆盖/SLA、成本、模拟、p-median、地图、报告 |
+| 局部复用 | 路线/成本由 domain provider 按 exact pair/lane fact 复用，只补算缺失项 |
+| Artifact | 只由明确 final Tool Item 注册地图、报告等用户交付，不作为数据交换 |
+| 投影 | 安全、幂等、可重放，不调度 Agent 或发送 continuation |
 
-### 当前阶段允许和不允许
+### 阶段一禁止项
 
-允许：
-
-- 当前单用户入口中的完整 Copilot 创作与运行；
-- 所有数据库、缓存、事件和进程键预留 organization/user/profile scope；
-- 真实业务所需的受限 Python Tool package；
-- 使用现有 Runtime exact role seam，前提是普通 Thread 和受治理 Thread 隔离成立。
-
-不允许：
-
-- 当前就建设成员、邀请、租户管理和跨组织共享 UI；
-- 任意 shell、任意在线依赖构建或无约束代码执行；
-- Platform 自建 Agent scheduler、context manager、Skill interpreter 或 MCP Runtime；
-- 在 Platform 识别仓网 Tool/Artifact/Agent 名称；
-- Catalog 发布后未经过安装和 Runtime discovery 就宣称 ready；
-- 无证据扩大 `codex-rs` 差异。
+- Platform 仓网对象或数据语义；
+- Data Intake、SourceAsset、DatasetRelease、DomainResource、Resource Broker；
+- Workspace data revision/head/registry/binding/fingerprint/cache；
+- Task 文件绑定、Task 私有文件层、COW/overlay/snapshot/worktree；
+- Work State、Blackboard、Task 消息、第二调度器、Run Completion Controller；
+- 绝对路径、路径逃逸、含义不明的 `source_ref` alias 和历史 asset/Dataset ID；
+- Artifact 作为 Agent 输入或 Task 数据通道；
+- 正式 Catalog/Release/Installation、公开 SDK/Studio/Marketplace；
+- 为阶段一新增未经 Patch Map 证明的 Codex seam。
 
 ### 退出条件
 
-1. 新用户不修改代码常量、migration、`.mcp.json` 或 Profile 隐藏配置，即可创建并运行
-   一个 Copilot；
-2. 所有五类资源使用同一个 Catalog/Release/Installation 生命周期；
-3. 印尼仓网真实 E2E 覆盖数据、输入、两个 Agent、基线、场景、选址、地图和恢复；
-4. 第二案例只新增领域包、Skills、Agent/Supervisor 和 renderer；
-5. 大型数据不进入上下文，长模型调用和缓存命中可以由指标解释；
-6. Runtime、刷新、重启、失败、取消、超时和乱序收敛到同一事实；
-7. 当前能力基线有真实 Runtime/Web 证据。
+1. 空 DB/Profile/Workspace 下，真实 Runtime 与内置能力 discovery 成功；
+2. 用户明确选择印尼完整示例后，零 elicitation 完成全部仓网链；
+3. 用户通过通用 Workspace 文件面板上传 Excel/CSV/JSON，完成全部真实交互链；
+4. 同 Workspace 的 10 仓/5 仓 Task 可复用普通文件和授权 exact MCP Resource ref，
+   但没有直连 context/result/data API；
+5. child form、steer、mailbox、失败、取消、刷新、Profile restart 和 hot reload 通过；
+6. 旧 Work State、Data Intake、DomainResource/Broker、Case/NetworkSnapshot、generic
+   ResourceLink→Artifact、continuation 和假安装路径已从代码、
+   schema、测试与当前文档删除；
+7. Platform 没有仓网分支，Artifact 只承载交付。
 
-类和方法级顺序以 [实施计划](agent-capability-lifecycle-plan.md) W0-W12 为准。
-
-## M3：受治理的多用户执行
+## 阶段二：公开 SDK 与 Web 创作体验
 
 ### 目标
 
-在不改变 M2 能力所有权的前提下，开放多用户、多 Profile 和组织授权。
+让算法工程师在不修改平台代码的情况下，通过 SDK 和 Web 创建、测试、组合并激活 Tool、
+Skill、Domain Agent、Supervisor 和 Copilot。阶段二只在阶段一稳定后重新裁决具体对象与
+生命周期，不自动继承 ADR-017、五对象发布链、Work State 或 typed resource 方案。
 
-### 核心交付
+### 保持不变的边界
 
-- 正式登录、HttpOnly Cookie、CSRF、Session 轮换、吊销和限速；
-- User/Organization/Profile/Workspace/Catalog/Installation/Data/Work State/Artifact 全链路授权；
-- 每用户独立持久 Profile 和 app-server process；
-- 两用户并发、猜测 UUID、缓存污染、重启和故障注入隔离矩阵；
-- rootless Runner、出网、文件系统、CPU/内存/时间和 Tool 配额；
-- 组织管理员、发布者、运行者和审查者的最小 RBAC；
-- 企业 Tool 不可伪造的执行授权上下文；
-- Artifact 和 Dataset 的跨任务授权复用；
-- 显式 Push、保护分支和审计。
+- Codex Runtime 继续拥有 Thread/Turn/context、Agent、Skills、Plugins、MCP 和 Tool 执行；
+- Profile Host 通过官方 discovery/reload 激活能力，不把能力安装到 Workspace；
+- Platform 不理解领域数据，不建设数据 registry、Dataset 或 Task 文件绑定；
+- Workspace 普通文件和授权 MCP Resource 继续按各自 owner 支持显式跨 Task 复用；
+- Artifact 仍只用于用户交付；
+- Studio 不得成为第二个 Runtime、调度器或隐藏配置编辑器。
+
+### 进入条件
+
+- 阶段一双硬门全部通过；
+- 内置能力包的 Profile 激活与热刷新已经有真实证据；
+- SDK/Studio 所需的新持久对象有当前用户需求、owner、合同和可执行验收，而非沿用旧表。
 
 ### 退出条件
 
-两个组织和两个用户无法互相读取、安装、调用或控制 Profile、Workspace、Secret、
-Catalog、Work State、Execution、Approval、Dataset 和 Artifact；所有拒绝发生在 owner
-service，而不是靠 UI 隐藏。
+算法工程师可从规范化 Tool 开始，用中文 Skill 定义方法，以 Web 组合 Agent/Supervisor，
+并让真实 Runtime 发现和运行；整个旅程不要求用户编辑 Runtime Role ID、MCP JSON、宿主
+路径、hash 或内部安装状态。
 
-## M4：企业 Catalog 治理与规模化复用
+## 阶段三：受治理的多用户执行
 
 ### 目标
 
-让已经通过 M2/M3 真实验证的 Copilot 能力在组织内持续发布、评价、升级和复用。
+在不改变 Runtime、Workspace 文件与 MCP Resource owner 边界的前提下，开放多用户、多 Profile 和组织授权。
 
 ### 核心交付
 
-- Catalog 可见性、审批发布、弃用、维护者和来源 provenance；
-- Tool/Skill/Agent/Supervisor/Copilot 的兼容性和升级影响分析；
-- 安装 canary、回滚、批量 reconcile 和 Runtime readiness 监控；
-- Agent/Copilot evaluation suite、黄金任务、成本/延迟/正确性基线；
-- 有界 Agent 候选查询和能力检索，不向 Root 暴露整张 Catalog；
-- Plugin、MCP OAuth、Memory 和 renderer 的成熟 Studio 管理能力；
-- 企业模板、教程和第二方包分发；
-- 使用、错误、成本和依赖健康度报告。
+- 正式登录、Session、CSRF、轮换、吊销和限速；
+- User/Organization/Profile/Workspace/Task/Run/Approval/Artifact 全链授权；
+- 每用户独立持久 Profile 和 app-server 进程；
+- 两用户、两组织、猜测 ID、缓存污染、路径逃逸和重启隔离矩阵；
+- Workspace 共享成员权限与普通文件并发冲突策略；
+- 企业 Tool 凭据和外部副作用的明确授权；
+- Git Push、保护分支和审计。
 
 ### 退出条件
 
-能力发布、授权、安装、Runtime 可用性、评价和运行结果可以分别审计和失败；升级不需要
-修改已有任务，回滚不依赖旧协议双读。
+两个组织和两个用户无法互相读取或控制 Profile、Workspace、Task、Run、Approval、Artifact
+与 Secret；同 Workspace 成员只按 Workspace grant 共享普通文件，不产生隐式 Task 权限。
 
-## M5：生产 GA
-
-### 目标
-
-达到可持续运行、恢复、升级和审计的生产条件。
+## 阶段四：企业治理与生产 GA
 
 ### 核心交付
 
-- PostgreSQL、Profile Home、Workspace、Dataset 和 Artifact 的备份恢复演练；
+- 能力来源、评审、弃用、评价和可观测治理；
+- Profile/Runtime canary、回滚和上游同步；
+- PostgreSQL、Profile Home、Workspace 和 Artifact 备份恢复演练；
 - HTTPS、Secret Manager、密钥轮换、安全评审和 SBOM；
-- 日志、事件、Artifact、数据和审计的保留/删除策略；
-- 容量、队列、Provider、Runtime、Tool Runner、磁盘和成本告警；
-- rolling upgrade、Capability canary、兼容判断和回滚；
-- 完整浏览器、可访问性、目标视口和故障恢复 E2E；
-- 由非作者执行的部署、升级、恢复和事故手册验证。
+- 日志、事件、Artifact、Workspace 和审计的保留/删除策略；
+- 容量、队列、Provider、Runtime、Tool、磁盘和成本告警；
+- 完整浏览器、可访问性、故障恢复和升级 E2E。
 
 ### 退出条件
 
-[产品设计](product-design.md) 的 GA、安全、容量和恢复要求全部有生产形态证据，不以
-Fake Runtime、单进程 happy path 或文档声明代替。
-
-## 条件阶段：长期知识与持续决策
-
-Task Knowledge Ledger 只有在生产数据反复证明以下问题时立项：
-
-- Artifact 和 Work State 无法表达必要的细粒度事实、假设、冲突和替代关系；
-- Supervisor 持续重复整理相同证据；
-- 跨任务决策无法判断依据是否过期；
-- 有界摘要不足以支撑业务复核。
-
-Agent Decision OS 还要求身份、权限、恢复、评价、Artifact 和 Ledger 全部稳定，并有
-明确业务责任人、重评触发和停止规则。它不保存无限思维链，也不自动替代企业决策。
+能力治理、授权、Runtime 可用性和运行结果可以分别审计和失败；生产恢复不依赖旧协议
+双读、隐式 fallback、Task 文件副本或 Platform 数据语义。
 
 ## 路线图变更规则
 
-只有以下证据允许调整阶段顺序：
+只有以下证据允许调整阶段顺序或新增平台对象：
 
-- 前置能力无法消除后续阶段的关键风险；
-- 真实用户闭环证明某项能力必须前置；
+- 当前真实用户闭环无法由现有 owner 和 Codex 原生能力完成；
+- 安全、恢复或合规门禁要求新增确定性边界；
 - Codex 官方合同变化显著改变实现成本或所有权；
-- 安全、恢复或合规门禁要求前置。
+- 可执行失败证明 Codex 原生协作、MCP Resource、普通 Workspace 文件和最终 Artifact
+  的分工仍不足。
 
-变更时同步复审产品愿景、产品设计、目标架构、开发计划和能力基线。完成历史保留在
-Git；当前事实进入能力基线；长期决定进入 ADR。
+新增 registry、数据生命周期、Task 数据接口、缓存、调度器或 Codex seam 必须单独形成
+ADR、owner、退出条件和真实验收，不能以“未来可能需要”为理由进入当前阶段。

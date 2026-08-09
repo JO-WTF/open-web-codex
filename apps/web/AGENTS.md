@@ -77,10 +77,11 @@ For platform Rust changes:
 ```
 
 Run the wrapper from the repository root. It executes
-`cargo test --workspace --locked --profile ci-test`, then enforces the shared
-Cargo target retention policy even when tests fail.
+`cargo test --workspace --locked --profile ci-test` while preserving Cargo's
+normal build outputs for later incremental runs.
 
 For security or persistence changes, also run ignored PostgreSQL integration
 tests with a disposable `TEST_DATABASE_URL`. Cross-project protocol changes
-also require `npm run check:codex-contracts` and
-`npm run smoke:codex-app-server -- --require-manifest`.
+also require the owner Codex `schema_fixtures` drift gate and
+`npm run smoke:codex-app-server` against official `initialize` and
+`thread/list`.

@@ -1,16 +1,8 @@
-pub mod agent_definition_resources;
-pub mod agent_definitions;
-pub mod analysis_gate;
 pub mod approvals;
 pub mod artifacts;
 pub mod bootstrap;
 pub mod browser_workspaces;
-pub mod capability_catalog;
-pub mod capability_packages;
-pub mod collaboration;
-pub mod coordination_gate;
 pub mod configuration;
-pub mod data_intake;
 pub mod events;
 pub mod generation;
 pub mod github;
@@ -22,21 +14,13 @@ pub mod profile_content;
 pub mod projects;
 pub mod provider_metrics;
 pub mod providers;
-pub mod python_capabilities;
 pub mod runs;
 pub mod runtime_agents;
 pub mod sessions;
-pub mod supervisor_definitions;
-pub mod supervisor_instruction_policies;
-pub mod supervisor_policies;
 pub mod tasks;
 pub mod terminals;
 pub mod threads;
-pub mod tutorial_blueprints;
-pub mod workspace_datasets;
 pub mod workspaces;
-pub mod work_states;
-pub mod work_state_gate;
 
 use std::sync::Arc;
 
@@ -48,36 +32,12 @@ use open_web_codex_platform_store::AppState;
 use open_web_codex_provider_service::secured::AuthorizedProviderOperations;
 use open_web_codex_run_orchestrator::RunOrchestrator;
 use open_web_codex_secret_store::PostgresSecretStore;
-use tokio::sync::RwLock;
-
-#[derive(Clone)]
-pub struct RuntimeCapabilityRecord {
-    pub server_build: String,
-    pub protocol_version: String,
-    pub manifest: serde_json::Value,
-}
-
-#[derive(Clone, Default)]
-pub struct RuntimeCapabilityState {
-    inner: Arc<RwLock<Option<RuntimeCapabilityRecord>>>,
-}
-
-impl RuntimeCapabilityState {
-    pub async fn get(&self) -> Option<RuntimeCapabilityRecord> {
-        self.inner.read().await.clone()
-    }
-
-    pub async fn set(&self, record: RuntimeCapabilityRecord) {
-        *self.inner.write().await = Some(record);
-    }
-}
 
 #[derive(Clone)]
 pub struct RuntimeProfileBinding {
     pub runtime_key: String,
     pub name: String,
     pub codex_home: Option<Arc<std::path::PathBuf>>,
-    pub capabilities: RuntimeCapabilityState,
 }
 
 /// Assemble all platform API routes.
@@ -91,80 +51,6 @@ pub fn router(
     profile: RuntimeProfileBinding,
 ) -> Router<AppState> {
     Router::new()
-        .route(
-            "/agent-definitions",
-            axum::routing::get(agent_definitions::list_published),
-        )
-        .route(
-            "/agent-definitions/{definition_id}/{version}",
-            axum::routing::get(agent_definitions::get_published),
-        )
-        .route(
-            "/capability-packages",
-            axum::routing::get(capability_packages::list),
-        )
-        .route(
-            "/catalog/drafts",
-            axum::routing::get(capability_catalog::list_drafts)
-                .post(capability_catalog::create),
-        )
-        .route(
-            "/catalog/drafts/{id}",
-            axum::routing::get(capability_catalog::get),
-        )
-        .route(
-            "/catalog/drafts/{id}/save",
-            axum::routing::put(capability_catalog::save),
-        )
-        .route(
-            "/catalog/drafts/{id}/validate",
-            axum::routing::post(capability_catalog::validate),
-        )
-        .route(
-            "/catalog/drafts/{id}/publish",
-            axum::routing::post(capability_catalog::publish),
-        )
-        .route(
-            "/catalog/releases",
-            axum::routing::get(capability_catalog::list_releases),
-        )
-        .route(
-            "/catalog/releases/{release_id}/install",
-            axum::routing::post(capability_catalog::install),
-        )
-        .route(
-            "/catalog/releases/{release_id}/workspaces/{workspace_id}/readiness",
-            axum::routing::get(capability_catalog::readiness),
-        )
-        .route(
-            "/workspaces/{id}/python-capabilities/validate",
-            axum::routing::post(python_capabilities::validate),
-        )
-        .route(
-            "/workspaces/{id}/python-capabilities/test",
-            axum::routing::post(python_capabilities::test_tool),
-        )
-        .route(
-            "/workspaces/{id}/python-capabilities/publish",
-            axum::routing::post(python_capabilities::publish),
-        )
-        .route(
-            "/agent-definition-resources",
-            axum::routing::get(agent_definition_resources::list)
-                .post(agent_definition_resources::create),
-        )
-        .route(
-            "/agent-definition-resources/{id}/draft",
-            axum::routing::put(agent_definition_resources::save_draft),
-        )
-        .route(
-            "/agent-definition-resources/{id}/validate",
-            axum::routing::post(agent_definition_resources::validate),
-        )
-        .route(
-            "/agent-definition-resources/{id}/publish",
-            axum::routing::post(agent_definition_resources::publish),
-        )
         .route("/bootstrap", axum::routing::post(bootstrap::bootstrap))
         .route("/sessions", axum::routing::post(sessions::create_session))
         .route(
@@ -289,6 +175,10 @@ pub fn router(
             axum::routing::get(approvals::list_run_user_inputs),
         )
         .route(
+            "/runs/{id}/mcp-form-requests",
+            axum::routing::get(approvals::list_run_mcp_forms),
+        )
+        .route(
             "/approvals/{id}/decision",
             axum::routing::post(approvals::decide),
         )
@@ -296,56 +186,11 @@ pub fn router(
             "/approvals/{id}/user-input",
             axum::routing::post(approvals::respond_user_input),
         )
+        .route(
+            "/approvals/{id}/mcp-form",
+            axum::routing::post(approvals::respond_mcp_form),
+        )
         .route("/tasks/{id}/runs", axum::routing::post(runs::start_run))
-        .route(
-            "/workspaces/{id}/run-readiness",
-            axum::routing::post(runs::readiness),
-        )
-        .route(
-            "/tutorial-blueprints",
-            axum::routing::get(tutorial_blueprints::list),
-        )
-        .route(
-            "/tutorial-blueprints/{blueprint_id}/{revision}",
-            axum::routing::get(tutorial_blueprints::get),
-        )
-        .route(
-            "/workspaces/{workspace_id}/tutorial-blueprints/{blueprint_id}/{revision}/reconcile",
-            axum::routing::post(tutorial_blueprints::reconcile),
-        )
-        .route(
-            "/supervisor-policies",
-            axum::routing::get(supervisor_policies::list_published),
-        )
-        .route(
-            "/supervisor-policies/{policy_id}/{version}",
-            axum::routing::get(supervisor_policies::get_published),
-        )
-        .route(
-            "/supervisor-instruction-policies",
-            axum::routing::get(supervisor_instruction_policies::list_published)
-                .post(supervisor_instruction_policies::publish),
-        )
-        .route(
-            "/supervisor-instruction-policies/{policy_id}/{version}",
-            axum::routing::get(supervisor_instruction_policies::get_published),
-        )
-        .route(
-            "/supervisor-definitions",
-            axum::routing::get(supervisor_definitions::list).post(supervisor_definitions::create),
-        )
-        .route(
-            "/supervisor-definitions/{id}/draft",
-            axum::routing::put(supervisor_definitions::save_draft),
-        )
-        .route(
-            "/supervisor-definitions/{id}/validate",
-            axum::routing::post(supervisor_definitions::validate),
-        )
-        .route(
-            "/supervisor-definitions/{id}/publish",
-            axum::routing::post(supervisor_definitions::publish),
-        )
         .route("/runs", axum::routing::get(runs::list_runs))
         .route("/runs/{id}", axum::routing::get(runs::get_run))
         .route(
@@ -361,16 +206,8 @@ pub fn router(
             axum::routing::get(runtime_agents::list_executions_for_run),
         )
         .route(
-            "/runs/{id}/collaboration-status",
-            axum::routing::get(collaboration::status),
-        )
-        .route(
             "/runs/{id}/provider-metrics",
             axum::routing::get(provider_metrics::list_for_run),
-        )
-        .route(
-            "/runs/{id}/supervisor-policy",
-            axum::routing::get(supervisor_policies::get_run_binding),
         )
         .route("/artifacts/{id}", axum::routing::get(artifacts::get))
         .route(
@@ -408,22 +245,6 @@ pub fn router(
             "/runs/{id}/compact",
             axum::routing::post(runs::compact_run_thread),
         )
-        .route(
-            "/tasks/{task_id}/work-states",
-            axum::routing::post(work_states::create),
-        )
-        .route(
-            "/work-states/{id}",
-            axum::routing::get(work_states::get),
-        )
-        .route(
-            "/work-states/{id}/blocking-inputs",
-            axum::routing::get(work_states::list_blocking_inputs),
-        )
-        .route(
-            "/work-states/{id}/deliverables",
-            axum::routing::get(work_states::list_deliverables),
-        )
         .route("/runs/{id}/review", axum::routing::post(runs::start_review))
         .route(
             "/workspaces",
@@ -443,25 +264,6 @@ pub fn router(
                 .post(workspaces::upload_files)
                 .delete(workspaces::delete_file)
                 .layer(axum::extract::DefaultBodyLimit::max(252 * 1024 * 1024)),
-        )
-        .route(
-            "/workspaces/{id}/datasets",
-            axum::routing::get(workspace_datasets::list)
-                .post(workspace_datasets::publish)
-                .layer(axum::extract::DefaultBodyLimit::max(66 * 1024 * 1024)),
-        )
-        .route(
-            "/workspaces/{id}/datasets/{release_id}",
-            axum::routing::get(workspace_datasets::get),
-        )
-        .route(
-            "/workspaces/{workspace_id}/data-drafts",
-            axum::routing::post(data_intake::create_draft)
-                .layer(axum::extract::DefaultBodyLimit::max(252 * 1024 * 1024)),
-        )
-        .route(
-            "/workspaces/{workspace_id}/source-assets",
-            axum::routing::get(data_intake::list_source_assets),
         )
         .route(
             "/workspaces/{id}/git-roots",
@@ -639,38 +441,6 @@ pub fn router(
         .route(
             "/tasks/{id}/messages",
             axum::routing::post(tasks::send_message),
-        )
-        .route(
-            "/tasks/{id}/data-intake",
-            axum::routing::get(data_intake::get),
-        )
-        .route(
-            "/tasks/{id}/data-intake/responses",
-            axum::routing::post(data_intake::respond),
-        )
-        .route(
-            "/tasks/{id}/analysis-start",
-            axum::routing::post(data_intake::analysis_start),
-        )
-        .route(
-            "/internal/analysis-gate/v1/authorize",
-            axum::routing::post(analysis_gate::authorize),
-        )
-        .route(
-            "/internal/coordination/v1/query",
-            axum::routing::post(coordination_gate::query),
-        )
-        .route(
-            "/internal/work-state/v1/mutate",
-            axum::routing::post(work_state_gate::mutate),
-        )
-        .route(
-            "/internal/work-state/v1/read",
-            axum::routing::post(work_state_gate::read),
-        )
-        .route(
-            "/tasks/{id}/analysis-readiness",
-            axum::routing::post(runs::analysis_readiness),
         )
         .route(
             "/tasks/{id}/events",

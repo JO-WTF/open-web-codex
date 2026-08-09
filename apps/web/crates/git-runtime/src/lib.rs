@@ -8,7 +8,6 @@ use std::process::{ExitStatus, Output, Stdio};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
@@ -25,11 +24,6 @@ const MAX_WORKSPACE_UPLOAD_FILE_BYTES: usize = 100 * 1024 * 1024;
 const MAX_IMAGE_ASSET_BYTES: u64 = 50 * 1024 * 1024;
 const MAX_DIFF_BYTES: usize = 2 * 1024 * 1024;
 const MAX_APPLY_PATCH_BYTES: usize = 16 * 1024 * 1024;
-const MAX_DATASET_RELEASE_FILES: usize = 32;
-const MAX_DATASET_RELEASE_FILE_BYTES: usize = 32 * 1024 * 1024;
-const MAX_DATASET_RELEASE_BYTES: usize = 64 * 1024 * 1024;
-const MAX_DATASET_RELEASE_MANIFEST_BYTES: usize = 256 * 1024;
-const MAX_SOURCE_ASSET_BYTES: usize = 100 * 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum GitRuntimeError {
@@ -41,6 +35,8 @@ pub enum GitRuntimeError {
     UnsafePath(String),
     #[error("workspace conflict: {0}")]
     Conflict(String),
+    #[error("workspace file already exists: {0}")]
+    FileAlreadyExists(String),
     #[error("unsupported workspace image: {0}")]
     UnsupportedImage(String),
     #[error("workspace image exceeds the maximum supported size")]
@@ -693,6 +689,7 @@ impl GitRuntime {
         workspace_id: Uuid,
         relative: &str,
         bytes: &[u8],
+        overwrite: bool,
     ) -> Result<(), GitRuntimeError> {
         validate_workspace_file_path(relative)?;
         if bytes.len() > MAX_WORKSPACE_UPLOAD_FILE_BYTES {
@@ -711,6 +708,9 @@ impl GitRuntime {
                     "workspace upload target is not a regular file".to_string(),
                 ));
             }
+            Ok(_) if !overwrite => {
+                return Err(GitRuntimeError::FileAlreadyExists(relative.to_string()));
+            }
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(source) => {
@@ -722,241 +722,70 @@ impl GitRuntime {
         }
         let temporary = parent.join(format!(".upload-{}.tmp", Uuid::now_v7()));
         reject_symlink(&temporary, "workspace upload staging file")?;
-        let mut staged = tokio::fs::File::create(&temporary)
+        let mut staged = match tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
             .await
-            .map_err(|source| GitRuntimeError::Io {
-                operation: "create workspace upload staging file",
-                source,
-            })?;
-        staged
-            .write_all(bytes)
-            .await
-            .map_err(|source| GitRuntimeError::Io {
-                operation: "write workspace upload staging file",
-                source,
-            })?;
-        staged
-            .sync_all()
-            .await
-            .map_err(|source| GitRuntimeError::Io {
-                operation: "sync workspace upload staging file",
-                source,
-            })?;
-        drop(staged);
-        if let Err(source) = tokio::fs::rename(&temporary, &path).await {
-            let _ = tokio::fs::remove_file(&temporary).await;
-            return Err(GitRuntimeError::Io {
-                operation: "publish workspace upload",
-                source,
-            });
-        }
-        Ok(())
-    }
-
-    /// Atomically store an uploaded data SourceAsset under a service-owned,
-    /// Workspace-scoped directory. The returned path is a Workspace-relative
-    /// projection safe to persist in platform metadata; callers never receive
-    /// the host path.
-    pub async fn write_source_asset(
-        &self,
-        workspace_id: Uuid,
-        asset_id: Uuid,
-        file_name: &str,
-        bytes: &[u8],
-    ) -> Result<String, GitRuntimeError> {
-        if bytes.is_empty() || bytes.len() > MAX_SOURCE_ASSET_BYTES {
-            return Err(GitRuntimeError::Conflict(
-                "source asset exceeds the maximum supported size".to_string(),
-            ));
-        }
-        validate_relative_path(file_name)?;
-        let file_path = Path::new(file_name);
-        let mut components = file_path.components();
-        if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
-            return Err(GitRuntimeError::UnsafePath(
-                "source asset file name must be a single path component".to_string(),
-            ));
-        }
-        let _lock = self.acquire_workspace_lock(workspace_id).await;
-        let workspace = self.require_base_workspace(workspace_id)?;
-        let service_root = workspace.join(".open-web-codex");
-        let source_root = service_root.join("source-assets");
-        let asset_root = source_root.join(asset_id.to_string());
-        for (path, operation) in [
-            (&service_root, "workspace service directory"),
-            (&source_root, "workspace source asset directory"),
-            (&asset_root, "workspace source asset object directory"),
-        ] {
-            reject_symlink(path, operation)?;
-        }
-        tokio::fs::create_dir_all(&asset_root)
-            .await
-            .map_err(|source| GitRuntimeError::Io {
-                operation: "create workspace source asset directory",
-                source,
-            })?;
-        let canonical_root = tokio::fs::canonicalize(&workspace)
-            .await
-            .map_err(|source| GitRuntimeError::Io {
-                operation: "resolve workspace source asset root",
-                source,
-            })?;
-        let canonical_asset_root =
-            tokio::fs::canonicalize(&asset_root)
-                .await
-                .map_err(|source| GitRuntimeError::Io {
-                    operation: "resolve workspace source asset object",
-                    source,
-                })?;
-        if !canonical_asset_root.starts_with(&canonical_root) {
-            return Err(GitRuntimeError::UnsafePath(
-                "source asset directory escaped the workspace".to_string(),
-            ));
-        }
-        let target = asset_root.join(file_path);
-        reject_symlink(&target, "workspace source asset")?;
-        let temporary = asset_root.join(format!(".{}.{}.tmp", file_name, Uuid::now_v7()));
-        reject_symlink(&temporary, "workspace source asset staging file")?;
-        let mut staged = tokio::fs::File::create(&temporary)
-            .await
-            .map_err(|source| GitRuntimeError::Io {
-                operation: "create workspace source asset staging file",
-                source,
-            })?;
-        staged
-            .write_all(bytes)
-            .await
-            .map_err(|source| GitRuntimeError::Io {
-                operation: "write workspace source asset",
-                source,
-            })?;
-        staged
-            .sync_all()
-            .await
-            .map_err(|source| GitRuntimeError::Io {
-                operation: "sync workspace source asset",
-                source,
-            })?;
-        drop(staged);
-        if let Err(source) = tokio::fs::rename(&temporary, &target).await {
-            let _ = tokio::fs::remove_file(&temporary).await;
-            return Err(GitRuntimeError::Io {
-                operation: "publish workspace source asset",
-                source,
-            });
-        }
-        let directory = match tokio::fs::File::open(&asset_root).await {
-            Ok(directory) => directory,
+        {
+            Ok(staged) => staged,
             Err(source) => {
-                let _ = tokio::fs::remove_file(&target).await;
                 return Err(GitRuntimeError::Io {
-                    operation: "open workspace source asset directory for sync",
+                    operation: "create workspace upload staging file",
                     source,
                 });
             }
         };
-        if let Err(source) = directory.sync_all().await {
-            let _ = tokio::fs::remove_file(&target).await;
+        if let Err(source) = staged.write_all(bytes).await {
+            drop(staged);
+            let _ = tokio::fs::remove_file(&temporary).await;
             return Err(GitRuntimeError::Io {
-                operation: "sync workspace source asset directory",
+                operation: "write workspace upload staging file",
                 source,
             });
         }
-        Ok(format!(
-            ".open-web-codex/source-assets/{asset_id}/{file_name}"
-        ))
-    }
-
-    /// Read a bounded SourceAsset through its service-owned relative
-    /// projection. This is used by platform-owned deterministic processing;
-    /// MCP profiling uses the trusted Turn Workspace metadata instead.
-    pub async fn read_source_asset(
-        &self,
-        workspace_id: Uuid,
-        relative: &str,
-    ) -> Result<Vec<u8>, GitRuntimeError> {
-        validate_relative_path(relative)?;
-        if !relative.starts_with(".open-web-codex/source-assets/") {
-            return Err(GitRuntimeError::UnsafePath(
-                "source asset path is outside the service-owned directory".to_string(),
-            ));
-        }
-        let _lock = self.acquire_workspace_lock(workspace_id).await;
-        let workspace = self.require_base_workspace(workspace_id)?;
-        let path = workspace.join(relative);
-        let metadata =
-            tokio::fs::symlink_metadata(&path)
-                .await
-                .map_err(|source| GitRuntimeError::Io {
-                    operation: "inspect workspace source asset",
-                    source,
-                })?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err(GitRuntimeError::UnsafePath(
-                "source asset is not a regular file".to_string(),
-            ));
-        }
-        if metadata.len() > MAX_SOURCE_ASSET_BYTES as u64 {
-            return Err(GitRuntimeError::Conflict(
-                "source asset exceeds the maximum supported size".to_string(),
-            ));
-        }
-        let canonical =
-            tokio::fs::canonicalize(&path)
-                .await
-                .map_err(|source| GitRuntimeError::Io {
-                    operation: "resolve workspace source asset",
-                    source,
-                })?;
-        if !canonical.starts_with(&workspace) {
-            return Err(GitRuntimeError::UnsafePath(
-                "source asset escaped the workspace".to_string(),
-            ));
-        }
-        tokio::fs::read(canonical)
-            .await
-            .map_err(|source| GitRuntimeError::Io {
-                operation: "read workspace source asset",
+        if let Err(source) = staged.sync_all().await {
+            drop(staged);
+            let _ = tokio::fs::remove_file(&temporary).await;
+            return Err(GitRuntimeError::Io {
+                operation: "sync workspace upload staging file",
                 source,
-            })
-    }
-
-    /// Remove one exact SourceAsset object after a failed database
-    /// finalization. The asset id and file name are service-owned values.
-    pub async fn remove_source_asset(
-        &self,
-        workspace_id: Uuid,
-        asset_id: Uuid,
-        file_name: &str,
-    ) -> Result<(), GitRuntimeError> {
-        validate_relative_path(file_name)?;
-        let file_path = Path::new(file_name);
-        let mut components = file_path.components();
-        if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
-            return Err(GitRuntimeError::UnsafePath(
-                "source asset file name must be a single path component".to_string(),
-            ));
+            });
         }
-        let _lock = self.acquire_workspace_lock(workspace_id).await;
-        let workspace = self.require_base_workspace(workspace_id)?;
-        let source_root = workspace.join(".open-web-codex").join("source-assets");
-        let asset_root = source_root.join(asset_id.to_string());
-        let target = asset_root.join(file_path);
-        reject_symlink(&source_root, "workspace source asset directory")?;
-        reject_symlink(&asset_root, "workspace source asset object directory")?;
-        reject_symlink(&target, "workspace source asset")?;
-        if let Ok(metadata) = tokio::fs::symlink_metadata(&target).await {
-            if !metadata.is_file() {
-                return Err(GitRuntimeError::UnsafePath(
-                    "source asset cleanup target is not a regular file".to_string(),
-                ));
-            }
-            tokio::fs::remove_file(&target)
-                .await
-                .map_err(|source| GitRuntimeError::Io {
-                    operation: "remove failed workspace source asset",
+        drop(staged);
+        if overwrite {
+            if let Err(source) = tokio::fs::rename(&temporary, &path).await {
+                let _ = tokio::fs::remove_file(&temporary).await;
+                return Err(GitRuntimeError::Io {
+                    operation: "publish workspace upload",
                     source,
-                })?;
+                });
+            }
+        } else {
+            match tokio::fs::hard_link(&temporary, &path).await {
+                Ok(()) => {
+                    if let Err(source) = tokio::fs::remove_file(&temporary).await {
+                        tracing::warn!(
+                            %workspace_id,
+                            path = relative,
+                            temporary = %temporary.display(),
+                            error = %source,
+                            "published Workspace upload but could not remove its staging file"
+                        );
+                    }
+                }
+                Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {
+                    let _ = tokio::fs::remove_file(&temporary).await;
+                    return Err(GitRuntimeError::FileAlreadyExists(relative.to_string()));
+                }
+                Err(source) => {
+                    let _ = tokio::fs::remove_file(&temporary).await;
+                    return Err(GitRuntimeError::Io {
+                        operation: "publish workspace upload",
+                        source,
+                    });
+                }
+            }
         }
         Ok(())
     }
@@ -1588,462 +1417,6 @@ impl GitRuntime {
             });
         }
         Ok(())
-    }
-
-    /// Publish one generated capability package under the selected repository's
-    /// versioned `tools/` directory. Callers provide package-relative files
-    /// only; the browser never controls the destination path.
-    pub async fn publish_capability_package(
-        &self,
-        workspace_id: Uuid,
-        package_slug: &str,
-        version: &str,
-        files: &BTreeMap<String, String>,
-    ) -> Result<Vec<String>, GitRuntimeError> {
-        if !valid_release_slug(package_slug) {
-            return Err(GitRuntimeError::UnsafePath(
-                "capability package slug is invalid".to_string(),
-            ));
-        }
-        if !valid_release_version(version) {
-            return Err(GitRuntimeError::UnsafePath(
-                "capability package version is invalid".to_string(),
-            ));
-        }
-        if files.is_empty() || files.len() > 32 {
-            return Err(GitRuntimeError::Conflict(
-                "capability package must contain between 1 and 32 files".to_string(),
-            ));
-        }
-        if files.values().map(String::len).sum::<usize>() > MAX_FILE_READ_BYTES as usize {
-            return Err(GitRuntimeError::Conflict(
-                "capability package exceeds the workspace file limit".to_string(),
-            ));
-        }
-        for relative in files.keys() {
-            validate_relative_path(relative)?;
-        }
-
-        let _lock = self.acquire_workspace_lock(workspace_id).await;
-        let workspace = self.require_workspace(workspace_id)?;
-        let tools = workspace.join("tools");
-        reject_symlink(&tools, "workspace tools directory")?;
-        tokio::fs::create_dir_all(&tools)
-            .await
-            .map_err(|source| GitRuntimeError::Io {
-                operation: "create workspace tools directory",
-                source,
-            })?;
-        let package = tools.join(package_slug);
-        reject_symlink(&package, "workspace capability package directory")?;
-        tokio::fs::create_dir_all(&package)
-            .await
-            .map_err(|source| GitRuntimeError::Io {
-                operation: "create workspace capability package directory",
-                source,
-            })?;
-        let target = package.join(version);
-        if tokio::fs::symlink_metadata(&target).await.is_ok() {
-            return Err(GitRuntimeError::Conflict(
-                "capability package version already exists".to_string(),
-            ));
-        }
-        let temporary = package.join(format!(".{version}.{}.tmp", Uuid::now_v7()));
-        tokio::fs::create_dir(&temporary)
-            .await
-            .map_err(|source| GitRuntimeError::Io {
-                operation: "create capability package staging directory",
-                source,
-            })?;
-
-        let write_result = async {
-            for (relative, content) in files {
-                let target = temporary.join(relative);
-                if let Some(parent) = target.parent() {
-                    tokio::fs::create_dir_all(parent).await.map_err(|source| {
-                        GitRuntimeError::Io {
-                            operation: "create capability package directory",
-                            source,
-                        }
-                    })?;
-                }
-                tokio::fs::write(&target, content)
-                    .await
-                    .map_err(|source| GitRuntimeError::Io {
-                        operation: "write capability package file",
-                        source,
-                    })?;
-                #[cfg(unix)]
-                if relative == "bin/launcher" {
-                    use std::os::unix::fs::PermissionsExt;
-                    tokio::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))
-                        .await
-                        .map_err(|source| GitRuntimeError::Io {
-                            operation: "make capability launcher executable",
-                            source,
-                        })?;
-                }
-            }
-            tokio::fs::rename(&temporary, &target)
-                .await
-                .map_err(|source| GitRuntimeError::Io {
-                    operation: "publish capability package",
-                    source,
-                })
-        }
-        .await;
-        if write_result.is_err() {
-            let _ = tokio::fs::remove_dir_all(&temporary).await;
-        }
-        write_result?;
-        Ok(files
-            .keys()
-            .map(|relative| format!("tools/{package_slug}/{version}/{relative}"))
-            .collect())
-    }
-
-    /// Verify the exact platform marker for a versioned capability package.
-    /// This is used only to recover an accepted publication after an ambiguous
-    /// database finalization.
-    pub async fn capability_package_matches(
-        &self,
-        workspace_id: Uuid,
-        package_slug: &str,
-        version: &str,
-        expected_release_id: Uuid,
-        expected_content_sha256: &str,
-    ) -> Result<bool, GitRuntimeError> {
-        if !valid_release_slug(package_slug)
-            || !valid_release_version(version)
-            || expected_content_sha256.len() != 64
-            || !expected_content_sha256
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit())
-        {
-            return Err(GitRuntimeError::UnsafePath(
-                "capability package release identity is invalid".to_string(),
-            ));
-        }
-        let _lock = self.acquire_workspace_lock(workspace_id).await;
-        let workspace = self.require_workspace(workspace_id)?;
-        let tools = workspace.join("tools");
-        let package = tools.join(package_slug);
-        let target = package.join(version);
-        for (path, operation) in [
-            (&tools, "workspace tools directory"),
-            (&package, "workspace capability package directory"),
-            (&target, "workspace capability package release directory"),
-        ] {
-            reject_symlink(path, operation)?;
-        }
-        let marker_path = target.join(".open-web-release.json");
-        reject_symlink(&marker_path, "workspace capability package release marker")?;
-        let marker = match tokio::fs::read_to_string(&marker_path).await {
-            Ok(marker) => marker,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-            Err(source) => {
-                return Err(GitRuntimeError::Io {
-                    operation: "read capability package release marker",
-                    source,
-                });
-            }
-        };
-        let marker: serde_json::Value = serde_json::from_str(&marker).map_err(|_| {
-            GitRuntimeError::Conflict("capability package release marker is invalid".to_string())
-        })?;
-        let expected_workspace_id = workspace_id.to_string();
-        let expected_release_id = expected_release_id.to_string();
-        if marker
-            .get("schemaVersion")
-            .and_then(serde_json::Value::as_str)
-            != Some("workspace.capability-package-release.v1")
-            || marker
-                .get("workspaceId")
-                .and_then(serde_json::Value::as_str)
-                != Some(expected_workspace_id.as_str())
-            || marker.get("packageId").and_then(serde_json::Value::as_str) != Some(package_slug)
-            || marker.get("version").and_then(serde_json::Value::as_str) != Some(version)
-            || marker.get("releaseId").and_then(serde_json::Value::as_str)
-                != Some(expected_release_id.as_str())
-            || marker
-                .get("contentSha256")
-                .and_then(serde_json::Value::as_str)
-                != Some(expected_content_sha256)
-        {
-            return Ok(false);
-        }
-        let target = target.clone();
-        let expected_content_sha256 = expected_content_sha256.to_string();
-        tokio::task::spawn_blocking(move || {
-            capability_package_content_matches(&target, &expected_content_sha256)
-        })
-        .await
-        .map_err(|_| {
-            GitRuntimeError::Conflict(
-                "capability package verification task did not complete".to_string(),
-            )
-        })?
-    }
-
-    /// Atomically publish one immutable Dataset Release. The service owns the
-    /// manifest contents and all destination path components.
-    pub async fn publish_dataset_release(
-        &self,
-        workspace_id: Uuid,
-        dataset_id: &str,
-        version: &str,
-        manifest: &[u8],
-        files: &BTreeMap<String, Vec<u8>>,
-    ) -> Result<Vec<String>, GitRuntimeError> {
-        if !valid_release_slug(dataset_id) {
-            return Err(GitRuntimeError::UnsafePath(
-                "dataset id is invalid".to_string(),
-            ));
-        }
-        if !valid_release_version(version) {
-            return Err(GitRuntimeError::UnsafePath(
-                "dataset version is invalid".to_string(),
-            ));
-        }
-        if files.is_empty() || files.len() > MAX_DATASET_RELEASE_FILES {
-            return Err(GitRuntimeError::Conflict(format!(
-                "dataset release must contain between 1 and {MAX_DATASET_RELEASE_FILES} files"
-            )));
-        }
-        if manifest.is_empty() || manifest.len() > MAX_DATASET_RELEASE_MANIFEST_BYTES {
-            return Err(GitRuntimeError::Conflict(
-                "dataset release manifest exceeds the limit".to_string(),
-            ));
-        }
-        let mut total_bytes = manifest.len();
-        for (relative, bytes) in files {
-            validate_relative_path(relative)?;
-            if relative == "release.json" || relative.starts_with("files/") {
-                return Err(GitRuntimeError::UnsafePath(
-                    "dataset logical file name uses a reserved path".to_string(),
-                ));
-            }
-            if bytes.len() > MAX_DATASET_RELEASE_FILE_BYTES {
-                return Err(GitRuntimeError::Conflict(
-                    "dataset file exceeds the per-file limit".to_string(),
-                ));
-            }
-            total_bytes = total_bytes.checked_add(bytes.len()).ok_or_else(|| {
-                GitRuntimeError::Conflict("dataset release size overflowed".to_string())
-            })?;
-        }
-        if total_bytes > MAX_DATASET_RELEASE_BYTES {
-            return Err(GitRuntimeError::Conflict(
-                "dataset release exceeds the total size limit".to_string(),
-            ));
-        }
-
-        let _lock = self.acquire_workspace_lock(workspace_id).await;
-        let workspace = self.require_workspace(workspace_id)?;
-        let datasets = workspace.join("datasets");
-        reject_symlink(&datasets, "workspace datasets directory")?;
-        tokio::fs::create_dir_all(&datasets)
-            .await
-            .map_err(|source| GitRuntimeError::Io {
-                operation: "create workspace datasets directory",
-                source,
-            })?;
-        let dataset = datasets.join(dataset_id);
-        reject_symlink(&dataset, "workspace dataset directory")?;
-        tokio::fs::create_dir_all(&dataset)
-            .await
-            .map_err(|source| GitRuntimeError::Io {
-                operation: "create workspace dataset directory",
-                source,
-            })?;
-        let target = dataset.join(version);
-        if tokio::fs::symlink_metadata(&target).await.is_ok() {
-            return Err(GitRuntimeError::Conflict(
-                "dataset release version already exists".to_string(),
-            ));
-        }
-        let temporary = dataset.join(format!(".{version}.{}.tmp", Uuid::now_v7()));
-        tokio::fs::create_dir(&temporary)
-            .await
-            .map_err(|source| GitRuntimeError::Io {
-                operation: "create dataset release staging directory",
-                source,
-            })?;
-
-        let write_result = async {
-            tokio::fs::write(temporary.join("release.json"), manifest)
-                .await
-                .map_err(|source| GitRuntimeError::Io {
-                    operation: "write dataset release manifest",
-                    source,
-                })?;
-            let files_root = temporary.join("files");
-            tokio::fs::create_dir(&files_root)
-                .await
-                .map_err(|source| GitRuntimeError::Io {
-                    operation: "create dataset release files directory",
-                    source,
-                })?;
-            for (relative, bytes) in files {
-                let target = files_root.join(relative);
-                if let Some(parent) = target.parent() {
-                    tokio::fs::create_dir_all(parent).await.map_err(|source| {
-                        GitRuntimeError::Io {
-                            operation: "create dataset release file directory",
-                            source,
-                        }
-                    })?;
-                }
-                tokio::fs::write(&target, bytes)
-                    .await
-                    .map_err(|source| GitRuntimeError::Io {
-                        operation: "write dataset release file",
-                        source,
-                    })?;
-            }
-            tokio::fs::rename(&temporary, &target)
-                .await
-                .map_err(|source| GitRuntimeError::Io {
-                    operation: "publish dataset release",
-                    source,
-                })
-        }
-        .await;
-        if write_result.is_err() {
-            let _ = tokio::fs::remove_dir_all(&temporary).await;
-        }
-        write_result?;
-
-        let mut written = vec![format!("datasets/{dataset_id}/{version}/release.json")];
-        written.extend(
-            files
-                .keys()
-                .map(|relative| format!("datasets/{dataset_id}/{version}/files/{relative}")),
-        );
-        Ok(written)
-    }
-
-    /// Remove only the exact Dataset Release created by a failed database
-    /// finalization. The caller-provided release id must match the service-owned
-    /// manifest before any directory is removed.
-    pub async fn remove_dataset_release(
-        &self,
-        workspace_id: Uuid,
-        dataset_id: &str,
-        version: &str,
-        expected_release_id: Uuid,
-    ) -> Result<(), GitRuntimeError> {
-        if !valid_release_slug(dataset_id) || !valid_release_version(version) {
-            return Err(GitRuntimeError::UnsafePath(
-                "dataset release identity is invalid".to_string(),
-            ));
-        }
-        let _lock = self.acquire_workspace_lock(workspace_id).await;
-        let workspace = self.require_workspace(workspace_id)?;
-        let dataset = workspace.join("datasets").join(dataset_id);
-        let target = dataset.join(version);
-        reject_symlink(&workspace.join("datasets"), "workspace datasets directory")?;
-        reject_symlink(&dataset, "workspace dataset directory")?;
-        reject_symlink(&target, "workspace dataset release directory")?;
-        let manifest_path = target.join("release.json");
-        reject_symlink(&manifest_path, "workspace dataset release manifest")?;
-        let manifest = tokio::fs::read_to_string(&manifest_path)
-            .await
-            .map_err(|source| GitRuntimeError::Io {
-                operation: "read dataset release manifest for cleanup",
-                source,
-            })?;
-        let manifest: serde_json::Value = serde_json::from_str(&manifest).map_err(|_| {
-            GitRuntimeError::Conflict(
-                "dataset release manifest is invalid during cleanup".to_string(),
-            )
-        })?;
-        if manifest
-            .get("releaseId")
-            .and_then(serde_json::Value::as_str)
-            != Some(expected_release_id.to_string().as_str())
-        {
-            return Err(GitRuntimeError::Conflict(
-                "dataset release identity did not match cleanup request".to_string(),
-            ));
-        }
-        remove_internal_dir(&dataset, &target, "dataset release cleanup")
-    }
-
-    /// Check whether the exact immutable Dataset Release is already present.
-    /// This supports idempotent recovery after an ambiguous database
-    /// finalization without exposing the Workspace path.
-    pub async fn dataset_release_matches(
-        &self,
-        workspace_id: Uuid,
-        dataset_id: &str,
-        version: &str,
-        expected_release_id: Uuid,
-        expected_content_sha256: &str,
-    ) -> Result<bool, GitRuntimeError> {
-        if !valid_release_slug(dataset_id)
-            || !valid_release_version(version)
-            || expected_content_sha256.len() != 64
-            || !expected_content_sha256
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit())
-        {
-            return Err(GitRuntimeError::UnsafePath(
-                "dataset release identity is invalid".to_string(),
-            ));
-        }
-        let _lock = self.acquire_workspace_lock(workspace_id).await;
-        let workspace = self.require_workspace(workspace_id)?;
-        let datasets = workspace.join("datasets");
-        let dataset = datasets.join(dataset_id);
-        let target = dataset.join(version);
-        for (path, operation) in [
-            (&datasets, "workspace datasets directory"),
-            (&dataset, "workspace dataset directory"),
-            (&target, "workspace dataset release directory"),
-        ] {
-            reject_symlink(path, operation)?;
-        }
-        let manifest_path = target.join("release.json");
-        reject_symlink(&manifest_path, "workspace dataset release manifest")?;
-        let manifest = match tokio::fs::read_to_string(&manifest_path).await {
-            Ok(manifest) => manifest,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-            Err(source) => {
-                return Err(GitRuntimeError::Io {
-                    operation: "read dataset release manifest for recovery",
-                    source,
-                });
-            }
-        };
-        let manifest: serde_json::Value = serde_json::from_str(&manifest).map_err(|_| {
-            GitRuntimeError::Conflict(
-                "dataset release manifest is invalid during recovery".to_string(),
-            )
-        })?;
-        let expected_release_id = expected_release_id.to_string();
-        if manifest
-            .get("releaseId")
-            .and_then(serde_json::Value::as_str)
-            != Some(expected_release_id.as_str())
-            || manifest
-                .get("contentSha256")
-                .and_then(serde_json::Value::as_str)
-                != Some(expected_content_sha256)
-        {
-            return Ok(false);
-        }
-        let target = target.clone();
-        let expected_content_sha256 = expected_content_sha256.to_string();
-        tokio::task::spawn_blocking(move || {
-            dataset_release_content_matches(&target, &manifest, &expected_content_sha256)
-        })
-        .await
-        .map_err(|_| {
-            GitRuntimeError::Conflict(
-                "dataset release verification task did not complete".to_string(),
-            )
-        })?
     }
 
     pub async fn apply_workspace_changes(
@@ -3102,295 +2475,6 @@ fn ensure_workspace_parent(workspace: &Path, relative: &str) -> Result<PathBuf, 
         }
     }
     Ok(parent)
-}
-
-fn valid_release_slug(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 64
-        && !value.starts_with('-')
-        && !value.ends_with('-')
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-}
-
-fn valid_release_version(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 64
-        && !value.starts_with(['.', '-'])
-        && !value.ends_with(['.', '-'])
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
-}
-
-fn capability_package_content_matches(
-    target: &Path,
-    expected_content_sha256: &str,
-) -> Result<bool, GitRuntimeError> {
-    let mut files = BTreeMap::new();
-    let mut total_bytes = 0usize;
-    collect_release_files(
-        target,
-        target,
-        &mut files,
-        &mut total_bytes,
-        MAX_FILE_READ_BYTES as usize,
-        32,
-        Some(".open-web-release.json"),
-    )?;
-    if files.is_empty() || files.len() > 32 {
-        return Ok(false);
-    }
-    let mut digest = Sha256::new();
-    for (relative, bytes) in files {
-        for value in [relative.as_bytes(), bytes.as_slice()] {
-            digest.update((value.len() as u64).to_be_bytes());
-            digest.update(value);
-        }
-    }
-    Ok(hex::encode(digest.finalize()) == expected_content_sha256)
-}
-
-fn dataset_release_content_matches(
-    target: &Path,
-    manifest: &serde_json::Value,
-    expected_content_sha256: &str,
-) -> Result<bool, GitRuntimeError> {
-    let Some(dataset_id) = target
-        .parent()
-        .and_then(Path::file_name)
-        .and_then(OsStr::to_str)
-    else {
-        return Ok(false);
-    };
-    let Some(version) = target.file_name().and_then(OsStr::to_str) else {
-        return Ok(false);
-    };
-    if manifest
-        .get("schemaVersion")
-        .and_then(serde_json::Value::as_str)
-        != Some("workspace.dataset-release.v1")
-        || manifest
-            .get("datasetId")
-            .and_then(serde_json::Value::as_str)
-            != Some(dataset_id)
-        || manifest.get("version").and_then(serde_json::Value::as_str) != Some(version)
-    {
-        return Ok(false);
-    }
-    let Some(display_name) = manifest
-        .get("displayName")
-        .and_then(serde_json::Value::as_str)
-    else {
-        return Ok(false);
-    };
-    let Some(description) = manifest
-        .get("description")
-        .and_then(serde_json::Value::as_str)
-    else {
-        return Ok(false);
-    };
-    let Some(descriptors) = manifest.get("files").and_then(serde_json::Value::as_array) else {
-        return Ok(false);
-    };
-    if descriptors.is_empty() || descriptors.len() > MAX_DATASET_RELEASE_FILES {
-        return Ok(false);
-    }
-
-    let files_root = target.join("files");
-    reject_symlink(&files_root, "dataset release files directory")?;
-    let mut actual_files = BTreeMap::new();
-    let mut total_bytes = 0usize;
-    collect_release_files(
-        &files_root,
-        &files_root,
-        &mut actual_files,
-        &mut total_bytes,
-        MAX_DATASET_RELEASE_BYTES,
-        MAX_DATASET_RELEASE_FILES,
-        None,
-    )?;
-    let mut declared = BTreeMap::new();
-    for descriptor in descriptors {
-        let Some(logical_name) = descriptor
-            .get("logicalName")
-            .and_then(serde_json::Value::as_str)
-        else {
-            return Ok(false);
-        };
-        let Some(role) = descriptor.get("role").and_then(serde_json::Value::as_str) else {
-            return Ok(false);
-        };
-        let Some(media_type) = descriptor
-            .get("mediaType")
-            .and_then(serde_json::Value::as_str)
-        else {
-            return Ok(false);
-        };
-        let Some(byte_size) = descriptor
-            .get("byteSize")
-            .and_then(serde_json::Value::as_u64)
-        else {
-            return Ok(false);
-        };
-        let Some(content_sha256) = descriptor
-            .get("contentSha256")
-            .and_then(serde_json::Value::as_str)
-        else {
-            return Ok(false);
-        };
-        let Some(relative_path) = descriptor
-            .get("relativePath")
-            .and_then(serde_json::Value::as_str)
-        else {
-            return Ok(false);
-        };
-        if validate_relative_path(logical_name).is_err()
-            || relative_path != format!("files/{logical_name}")
-            || byte_size == 0
-            || byte_size > MAX_DATASET_RELEASE_FILE_BYTES as u64
-            || content_sha256.len() != 64
-            || !content_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
-            || declared
-                .insert(
-                    logical_name.to_string(),
-                    (
-                        role.to_string(),
-                        media_type.to_string(),
-                        byte_size,
-                        content_sha256.to_string(),
-                    ),
-                )
-                .is_some()
-        {
-            return Ok(false);
-        }
-    }
-    if declared.len() != actual_files.len() {
-        return Ok(false);
-    }
-
-    let mut digest = Sha256::new();
-    for value in [
-        "workspace.dataset-release.v1",
-        dataset_id,
-        version,
-        display_name,
-        description,
-    ] {
-        update_release_digest(&mut digest, value);
-    }
-    for (logical_name, (role, media_type, byte_size, content_sha256)) in declared {
-        let Some(bytes) = actual_files.remove(&logical_name) else {
-            return Ok(false);
-        };
-        if bytes.len() as u64 != byte_size || hex::encode(Sha256::digest(&bytes)) != content_sha256
-        {
-            return Ok(false);
-        }
-        let byte_size = byte_size.to_string();
-        for value in [
-            logical_name.as_str(),
-            role.as_str(),
-            media_type.as_str(),
-            byte_size.as_str(),
-            content_sha256.as_str(),
-        ] {
-            update_release_digest(&mut digest, value);
-        }
-    }
-    Ok(actual_files.is_empty() && hex::encode(digest.finalize()) == expected_content_sha256)
-}
-
-fn collect_release_files(
-    root: &Path,
-    current: &Path,
-    files: &mut BTreeMap<String, Vec<u8>>,
-    total_bytes: &mut usize,
-    maximum_bytes: usize,
-    maximum_files: usize,
-    skipped_root_file: Option<&str>,
-) -> Result<(), GitRuntimeError> {
-    let entries = std::fs::read_dir(current).map_err(|source| GitRuntimeError::Io {
-        operation: "read immutable release directory",
-        source,
-    })?;
-    for entry in entries {
-        let entry = entry.map_err(|source| GitRuntimeError::Io {
-            operation: "read immutable release directory entry",
-            source,
-        })?;
-        let path = entry.path();
-        let metadata = std::fs::symlink_metadata(&path).map_err(|source| GitRuntimeError::Io {
-            operation: "inspect immutable release entry",
-            source,
-        })?;
-        if metadata.file_type().is_symlink() {
-            return Err(GitRuntimeError::UnsafePath(
-                "immutable release content must not contain symlinks".to_string(),
-            ));
-        }
-        if metadata.is_dir() {
-            collect_release_files(
-                root,
-                &path,
-                files,
-                total_bytes,
-                maximum_bytes,
-                maximum_files,
-                skipped_root_file,
-            )?;
-            continue;
-        }
-        if !metadata.is_file() {
-            return Err(GitRuntimeError::UnsafePath(
-                "immutable release contains an unsupported entry".to_string(),
-            ));
-        }
-        let relative = path
-            .strip_prefix(root)
-            .map_err(|_| {
-                GitRuntimeError::UnsafePath("immutable release entry escaped its root".to_string())
-            })?
-            .components()
-            .map(|component| match component {
-                Component::Normal(value) => value.to_str().map(str::to_string).ok_or_else(|| {
-                    GitRuntimeError::UnsafePath(
-                        "immutable release path is not valid UTF-8".to_string(),
-                    )
-                }),
-                _ => Err(GitRuntimeError::UnsafePath(
-                    "immutable release path is invalid".to_string(),
-                )),
-            })
-            .collect::<Result<Vec<_>, _>>()?
-            .join("/");
-        if current == root && skipped_root_file == Some(relative.as_str()) {
-            continue;
-        }
-        let bytes = std::fs::read(&path).map_err(|source| GitRuntimeError::Io {
-            operation: "read immutable release file",
-            source,
-        })?;
-        *total_bytes = total_bytes.checked_add(bytes.len()).ok_or_else(|| {
-            GitRuntimeError::Conflict("immutable release size overflowed".to_string())
-        })?;
-        if *total_bytes > maximum_bytes
-            || files.len() >= maximum_files
-            || files.insert(relative, bytes).is_some()
-        {
-            return Err(GitRuntimeError::Conflict(
-                "immutable release content exceeds its declared bounds".to_string(),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn update_release_digest(digest: &mut Sha256, value: &str) {
-    digest.update((value.len() as u64).to_be_bytes());
-    digest.update(value.as_bytes());
 }
 
 fn image_media_type(relative: &str) -> Result<&'static str, GitRuntimeError> {

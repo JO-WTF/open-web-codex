@@ -6,7 +6,6 @@ edition = "2021"
 [dependencies]
 open-web-codex-auth = { path = "../crates/auth" }
 open-web-codex-approval-service = { path = "../crates/approval-service" }
-open-web-codex-codex-contracts = { path = "../crates/codex-contracts" }
 open-web-codex-platform-contracts = { path = "../crates/platform-contracts" }
 open-web-codex-platform-store = { path = "../crates/platform-store" }
 open-web-codex-adapter = { path = "../crates/codex-adapter" }
@@ -14,12 +13,8 @@ open-web-codex-profile-host = { path = "../crates/profile-host" }
 open-web-codex-profile-registry = { path = "../crates/profile-registry" }
 open-web-codex-provider-service = { path = "../crates/provider-service" }
 open-web-codex-secret-store = { path = "../crates/secret-store" }
-open-web-codex-supervisor-catalog = { path = "../crates/supervisor-catalog" }
 open-web-codex-git-runtime = { path = "../crates/git-runtime" }
 open-web-codex-run-orchestrator = { path = "../crates/run-orchestrator" }
-open-web-codex-work-state-service = { path = "../crates/work-state-service" }
-open-web-codex-capability-catalog = { path = "../crates/capability-catalog" }
-open-web-codex-data-intake-service = { path = "../crates/data-intake-service" }
 
 serde.workspace = true
 serde_json.workspace = true
@@ -36,7 +31,6 @@ tracing-subscriber.workspace = true
 hex.workspace = true
 rand.workspace = true
 sha2.workspace = true
-hmac.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 sqlx.workspace = true
@@ -48,4 +42,9 @@ async-trait.workspace = true
 tempfile.workspace = true
 
 [dev-dependencies]
+rmcp = { workspace = true, features = [
+    "elicitation",
+    "server",
+    "transport-streamable-http-server",
+] }
 tokio-tungstenite = "0.29"

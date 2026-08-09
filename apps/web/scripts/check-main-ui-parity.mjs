@@ -14,13 +14,32 @@ const interfaceSeams = new Set([
   "apps/web/src/services/webClient.ts",
   "apps/web/src/services/webClient.test.ts",
 ]);
+const reviewedDeletions = new Set([
+  "apps/web/src/components/Sidebar/LearnDialog.test.tsx",
+  "apps/web/src/components/Sidebar/LearnDialog.tsx",
+  "apps/web/src/features/files/components/DatasetReleaseDialog.test.tsx",
+  "apps/web/src/features/files/components/DatasetReleaseDialog.tsx",
+  "apps/web/src/components/Sidebar/RunLauncherDialog.test.tsx",
+  "apps/web/src/components/Sidebar/RunLauncherDialog.tsx",
+  "apps/web/src/components/Sidebar/AgentStudioDialog.tsx",
+  "apps/web/src/components/Sidebar/PythonCapabilityEditor.test.tsx",
+  "apps/web/src/components/Sidebar/PythonCapabilityEditor.tsx",
+  "apps/web/src/features/settings/components/sections/AgentStudioControls.tsx",
+  "apps/web/src/features/settings/components/sections/SettingsAgentCatalogSection.test.tsx",
+  "apps/web/src/features/settings/components/sections/SettingsAgentCatalogSection.tsx",
+  "apps/web/src/features/settings/components/sections/SettingsCapabilityCatalogSection.tsx",
+  "apps/web/src/features/settings/components/sections/SettingsSupervisorsSection.test.tsx",
+  "apps/web/src/features/settings/components/sections/SettingsSupervisorsSection.tsx",
+  "apps/web/src/features/settings/hooks/useSettingsAgentCatalogSection.ts",
+  "apps/web/src/features/settings/hooks/useSettingsSupervisorsSection.ts",
+]);
 // The overlay is the last reviewed UI snapshot. Files intentionally changed
 // after that snapshot are pinned individually so a parity exception cannot
 // silently grow into unrelated presentation drift.
 const exactReviewedFiles = new Map([
-  ["apps/web/src/WebApp.test.tsx", "6d026aa6f5415282a29c654ced6cbf42dba994635ec961b0678c8ccf0c98f93e"],
-  ["apps/web/src/WebApp.tsx", "1eb0f76fe54eddd3a1c172eb82023463b36994420da70b5095a0dba9431f0d05"],
-  ["apps/web/src/components/Conversation/Composer.tsx", "4a54f64e6c89f9756fbcfb9523639824e18551f3cddc3501af375260af02b261"],
+  ["apps/web/src/WebApp.test.tsx", "3d24c03172b4376b838e9d9efbb3470aa3520cf21d52873d577965778ec2d2d6"],
+  ["apps/web/src/WebApp.tsx", "f6855bbf23dca3e11de2e621aa3abdb2bb661e51a1aec7f23b56c908cb099a87"],
+  ["apps/web/src/components/Conversation/Composer.tsx", "e3954bdc54b24e7d24cd41a4e3ef4de11b1dea83ced5117f641a05b8a4c38c2b"],
   ["apps/web/src/components/Conversation/MessageList.test.tsx", "c5f3495600f8cbb147c72ef7fa19c7ef3fd7bad4bce3bba5eb2ce36e6251feaf"],
   ["apps/web/src/components/Conversation/MessageList.tsx", "6f97a2249ee3afb40bb7a7bd7c0c2d5023f633865429ff0d2f7766b284501ed8"],
   ["apps/web/src/components/Conversation/messages/AssistantMessage.test.tsx", "d2f2ff17a6a9c2187e700b0214032a0ec2b165744e563e695881752a8ca53aa9"],
@@ -30,32 +49,26 @@ const exactReviewedFiles = new Map([
   ["apps/web/src/components/Conversation/messages/ReportReplyCard.test.tsx", "17b2e0144aac3a07f2fc337a898ad946f19a15735a14d0361c6d7717abb9bff0"],
   ["apps/web/src/components/Conversation/messages/ReportReplyCard.tsx", "4127476db675bbcbeccfc1ec21b58a4a06f9b9870220f0c31e407e59dd13bcf3"],
   ["apps/web/src/components/Conversation/messages/SafeMarkdown.tsx", "1b96040f29cc4eeb4e8aeb40360569d5402ada4128f2f663b1f726566a85371c"],
-  ["apps/web/src/components/Conversation/index.tsx", "119e3a4ef40e3b38ee927ee33ad95a872e8d72fd13f6dfc8fa9d1c62c2d07f33"],
-  ["apps/web/src/components/FileManager/index.tsx", "dc13e8876259dadebbd5f177279512beac6c2225edb078f1760960f79f54a7d3"],
-  ["apps/web/src/components/FileManager/index.test.tsx", "02287632a3062fd2e1bc475f2ea70ba1a0fdefd3fd2bbaed7e092850973a8d9e"],
-  ["apps/web/src/components/Sidebar/AgentStudioDialog.tsx", "0dca928614c4b6eea8da0dfcffc83f34fe1e5bfb0bb0083b3fdffdaca9768e7a"],
-  ["apps/web/src/components/Sidebar/LearnDialog.test.tsx", "a7562b3f7b20254a5b582ba05481ba96ed618588ef67839840bc1f8369f844f5"],
-  ["apps/web/src/components/Sidebar/LearnDialog.tsx", "8b161b80b9c72099bfabbc81c844318f15dff69ebcdc9c434b51ae16c772c26b"],
+  ["apps/web/src/components/Conversation/index.tsx", "ee91b929b20250f7c9301a66754d4b62b69fa15562c7d37e30cb9a5a96c05579"],
+  ["apps/web/src/components/FileManager/index.tsx", "6824ba96b4edf0bf23281376a5fb4478133f6b333d4cad1476e09aeca8380491"],
+  ["apps/web/src/components/FileManager/index.test.tsx", "ea2dcc0097f939246a9596190e1a0070bd07e4025b6008cbeefbf58b9a1f9c58"],
   ["apps/web/src/components/Sidebar/McpStatus.test.tsx", "98f6eb2a9d2a3bf87810d2b6131d830b6721374c1cbc1c0649981ab97ec991cd"],
   ["apps/web/src/components/Sidebar/McpStatus.tsx", "ecddc1f687e06ea0394354245f3d3c29fa08e8f6e793550866f48a0d1f8e75c7"],
-  ["apps/web/src/components/Sidebar/RunLauncherDialog.test.tsx", "4fbc61168c9eb98439ec7957e486612906e8358db48227a0ab02ae61b3663b11"],
-  ["apps/web/src/components/Sidebar/RunLauncherDialog.tsx", "e0bd928a554d35e22eb3c7fb40c877f47431a891a0c0bf25f00f792065e89943"],
-  ["apps/web/src/components/Sidebar/Workspaces.test.tsx", "53178bceadc389ca60babb3f901a8bd97aa05b438e8b78789afb3b51b82ce151"],
-  ["apps/web/src/components/Sidebar/Workspaces.tsx", "0bdd32688a43476a1ee649022a9ba4780289e61d24f2a83c0d4c3d2353188150"],
-  ["apps/web/src/components/Sidebar/index.test.tsx", "79d7bb6dc0ce005d9b6010eac3a4c08a3cda3c366894645c4e2169af3e98153f"],
-  ["apps/web/src/components/Sidebar/index.tsx", "804bfb586ca8811fea00ce590f5da1876f3a20729903d3ea7824d47314251c57"],
+  ["apps/web/src/components/Sidebar/Workspaces.test.tsx", "88fe19f3bbf6c88e6e67f292ae538e082b80932ec2f0446d9f98770c61ab1811"],
+  ["apps/web/src/components/Sidebar/Workspaces.tsx", "13e3ea2351de56e71934c16f36b485ba2c6609ecbe7c6afd155e013c1b407a9e"],
+  ["apps/web/src/components/Sidebar/index.test.tsx", "a153ccdbc098c6ec68730e6ac8c3cb2b526071bf1fbbed041bc7d03cc4499729"],
+  ["apps/web/src/components/Sidebar/index.tsx", "2bfd4cba6b426d8aefb0cb6208c5ce1de82752a1b58488163311f8dba1aeebfb"],
+  ["apps/web/src/features/app/hooks/useSettingsModalState.ts", "c2d8ca76029f423e1d442682d5e6a7c6f80eb2e1abd4f07cc825ab32e05bd99a"],
   ["apps/web/src/features/app/hooks/useMainAppLayoutSurfaces.ts", "48b7a323ca22049108912d5f9cda520f24ae9787c7bdb02f7403bf6b6cd23414"],
-  ["apps/web/src/features/files/components/DatasetReleaseDialog.test.tsx", "105ac343ba3f3224ef19ee09b2a5169ee77dc5b11a40c3ef81bf02487f3e194a"],
-  ["apps/web/src/features/files/components/DatasetReleaseDialog.tsx", "243f6850414a3ec895a09fc6d9650505e5380e248546b0753024d6a78ccfa79e"],
   ["apps/web/src/features/files/components/FileTreePanel.tsx", "6fc27c1fe4c9de3dea20c37579ef968c583ee63db79db4fb59a24d2d457e6053"],
-  ["apps/web/src/features/settings/components/sections/SettingsAgentCatalogSection.test.tsx", "f5610f4298398a2775e71b5ea15dcb265fd72c6793995940bf9926017d152eea"],
-  ["apps/web/src/features/settings/components/sections/SettingsAgentCatalogSection.tsx", "887e1eee19cd6733d13da4a6747bb79647aeff308e762f15e5b3cb688052289d"],
-  ["apps/web/src/features/settings/components/sections/SettingsSupervisorsSection.test.tsx", "e6a2e28787be230faa63e8292a8d55c3017ff56191660dff3acc95f6f590f9ed"],
-  ["apps/web/src/features/settings/components/sections/SettingsSupervisorsSection.tsx", "fb59fd4acbed34554540e18e82239554aec112b2479aa197daad6b88da9e6eff"],
-  ["apps/web/src/features/settings/hooks/useSettingsAgentCatalogSection.ts", "37483b38705e971b9823dc30ddf70b1b5eda694691436dcaa94de3884d78a1b6"],
-  ["apps/web/src/styles/file-tree.css", "ccfb167e4a7fcd99a2951dfc37e72c3ed439276d077252c5a68d590bee197bb0"],
-  ["apps/web/src/styles/settings.css", "7ea6064ccb54300c3a5ee3fc04fc2c50aae3b2f2ed3c88813d48fa7a52192fcc"],
-  ["apps/web/src/styles/web-refactor.css", "8d4d0c9d2f607cd9a61effc7499d92ee7ab23a56809ed2040c20396925b0527d"],
+  ["apps/web/src/features/settings/components/SettingsNav.tsx", "3543b1c8aa3480ce0f47f4adff346ba543be19a04d88456150deb2bd4e41cdab"],
+  ["apps/web/src/features/settings/components/sections/SettingsSectionContainers.tsx", "69ef28bf42c648c1244b84837780724863dc06c2248daf79284c2b0bf2249e10"],
+  ["apps/web/src/features/settings/components/settingsTypes.ts", "76cc2a423f70f499067e2fb5fae2546eb489faca5ed977c0f1897d3b76ecfca3"],
+  ["apps/web/src/features/settings/components/settingsViewConstants.ts", "0f1db75484bba8e650fbd4b8e1d466af38bc9c01f942999f0005b64aac79c134"],
+  ["apps/web/src/features/settings/hooks/useSettingsViewOrchestration.ts", "0f7fe4507ad33951a71a063e5316888db09b9433112364e394ac1843bf472886"],
+  ["apps/web/src/styles/file-tree.css", "41074cb28f684568b254f9f1a110a84e4cbbc0629e6fe772f07c310388a5bfd0"],
+  ["apps/web/src/styles/settings.css", "fd2965f57f4442088e07f83ad99bf15181e0775a4899404c3e7f8fd2d4c8ef73"],
+  ["apps/web/src/styles/web-refactor.css", "b7d9e88f778434a1f907281665c1ccbe30c5611a082c7d4bbf99dfbe7695002c"],
   ["apps/web/src/styles/web.css", "133ce3b14a56d48e211950a562b864f6f830645e2045e83e88c792aa8f757c25"],
   ["apps/web/src/utils/replyCards.test.ts", "37f7835ea2b10344ea13ecf4e5f489b766d38a63ad300ebbe648d3853c6eae4c"],
   ["apps/web/src/utils/replyCards.ts", "26aa8476b601ef5fcf850e11dc3b87b10314ea25eff14a6393d98aabf5232345"],
@@ -128,7 +141,9 @@ for (const [path, expectedHash] of exactReviewedFiles) {
 }
 
 for (const [path, mode] of baselineFiles) {
-  if (interfaceSeams.has(path) || exactReviewedFiles.has(path)) continue;
+  if (interfaceSeams.has(path) || exactReviewedFiles.has(path) || reviewedDeletions.has(path)) {
+    continue;
+  }
   if (!worktreeFiles.has(path)) {
     failures.push(`${path}: missing from worktree`);
     continue;
@@ -152,7 +167,9 @@ for (const [path, mode] of baselineFiles) {
 }
 
 for (const path of worktreeFiles) {
-  if (interfaceSeams.has(path) || exactReviewedFiles.has(path)) continue;
+  if (interfaceSeams.has(path) || exactReviewedFiles.has(path) || reviewedDeletions.has(path)) {
+    continue;
+  }
   if (!baselineFiles.has(path)) {
     failures.push(`${path}: extra file is not present in the reviewed UI snapshot`);
   }
@@ -166,5 +183,6 @@ if (failures.length > 0) {
 
 console.log(
   `apps/web/src UI matches ${baseline} plus ${uiOverlayFiles.size} reviewed overlay paths from ${uiOverlayRef}; `
-    + `${interfaceSeams.size} adapter files and ${exactReviewedFiles.size} exact reviewed files differ.`,
+    + `${interfaceSeams.size} adapter files, ${exactReviewedFiles.size} exact reviewed files, and `
+    + `${reviewedDeletions.size} reviewed deletions differ.`,
 );
