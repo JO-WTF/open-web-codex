@@ -30,7 +30,11 @@ use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::Verbosity;
+use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::error::CodexErr;
+use codex_protocol::error::CodexErrorDetails;
+use codex_protocol::items::TurnItem;
+use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -47,6 +51,8 @@ use codex_protocol::models::WebSearchAction;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
@@ -54,6 +60,10 @@ use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
+use codex_rollout_trace::InferenceTraceContext;
+use codex_rollout_trace::RawTraceEventPayload;
+use codex_rollout_trace::TraceWriter;
+use codex_rollout_trace::replay_bundle;
 use core_test_support::TestCodexResponsesRequestKind;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::load_default_config_for_test;
@@ -88,6 +98,7 @@ use tempfile::TempDir;
 use uuid::Uuid;
 use wiremock::Mock;
 use wiremock::MockServer;
+use wiremock::Respond;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::body_string_contains;
 use wiremock::matchers::header;
@@ -1427,7 +1438,9 @@ async fn amazon_bedrock_proxy_uses_command_auth_and_custom_headers() {
         .get_or_insert_default()
         .insert("x-some-header".to_string(), "foo".to_string());
 
-    send_request_with_provider(provider).await;
+    send_request_with_provider(provider, None, ReasoningSummary::Auto)
+        .await
+        .expect("Amazon Bedrock request should complete");
 
     let request = response.single_request();
     assert_eq!(request.path(), "/v1/responses");
@@ -1470,17 +1483,551 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
         supports_standalone_web_search: false,
     };
 
-    send_request_with_provider(provider).await;
+    send_request_with_provider(provider, None, ReasoningSummary::Auto)
+        .await
+        .expect("command-auth provider request should complete");
+}
+
+fn mock_provider(server: &MockServer, wire_api: WireApi) -> ModelProviderInfo {
+    ModelProviderInfo {
+        name: "mock-provider".into(),
+        base_url: Some(format!("{}/v1", server.uri())),
+        env_key: None,
+        env_key_instructions: None,
+        experimental_bearer_token: None,
+        auth: None,
+        aws: None,
+        wire_api,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: Some(0),
+        stream_max_retries: Some(0),
+        stream_idle_timeout_ms: Some(5_000),
+        websocket_connect_timeout_ms: None,
+        requires_openai_auth: false,
+        supports_websockets: false,
+        supports_standalone_web_search: false,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[expect(clippy::unwrap_used)]
+async fn chat_provider_preflight_failure_does_not_start_inference_trace() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    let provider = mock_provider(&server, WireApi::Chat);
+    let codex_home = TempDir::new()?;
+    let mut config = load_default_config_for_test(&codex_home).await;
+    config.model_provider_id = provider.name.clone();
+    config.model_provider = provider.clone();
+    let model = codex_core::test_support::get_model_offline(config.model.as_deref());
+    config.model = Some(model.clone());
+    let config = Arc::new(config);
+    let model_info =
+        codex_core::test_support::construct_model_info_offline(model.as_str(), &config);
+    let thread_id = ThreadId::new();
+    let session_telemetry = SessionTelemetry::new(
+        thread_id,
+        model.as_str(),
+        model_info.slug.as_str(),
+        /*account_id*/ None,
+        Some("test@test.com".to_string()),
+        /*auth_mode*/ None,
+        "test_originator".to_string(),
+        /*log_user_prompts*/ false,
+        "test".to_string(),
+        SessionSource::Exec,
+    );
+    let client = ModelClient::new(
+        Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
+            "unused-api-key",
+        ))),
+        AgentIdentityAuthPolicy::JwtOnly,
+        thread_id,
+        provider,
+        SessionSource::Exec,
+        "test_originator".to_string(),
+        config.model_verbosity,
+        /*enable_request_compression*/ false,
+        /*include_timing_metrics*/ false,
+        /*beta_features_header*/ None,
+        /*concurrent_reasoning_summaries_enabled*/ false,
+        /*attestation_provider*/ None,
+        config.http_client_factory(),
+    );
+    let responses_metadata = test_turn_responses_metadata(&client, thread_id);
+    let mut client_session = client.new_session();
+    let mut prompt = Prompt::default();
+    prompt.input.push(ResponseItem::AgentMessage {
+        id: None,
+        author: "agent-a".to_string(),
+        recipient: "agent-b".to_string(),
+        content: vec![AgentMessageInputContent::InputText {
+            text: "mailbox message".to_string(),
+        }],
+        internal_chat_message_metadata_passthrough: None,
+    });
+
+    let trace_dir = TempDir::new()?;
+    let writer = Arc::new(TraceWriter::create(
+        trace_dir.path(),
+        "trace-chat-preflight".to_string(),
+        thread_id.to_string(),
+        thread_id.to_string(),
+    )?);
+    writer.append(RawTraceEventPayload::ThreadStarted {
+        thread_id: thread_id.to_string(),
+        agent_path: "/root".to_string(),
+        metadata_payload: None,
+    })?;
+    writer.append(RawTraceEventPayload::CodexTurnStarted {
+        codex_turn_id: "turn-chat-preflight".to_string(),
+        thread_id: thread_id.to_string(),
+    })?;
+    let inference_trace = InferenceTraceContext::enabled(
+        writer,
+        thread_id.to_string(),
+        "turn-chat-preflight".to_string(),
+        model_info.slug.clone(),
+        "mock-provider".to_string(),
+    );
+
+    let error = match client_session
+        .stream(
+            &prompt,
+            &model_info,
+            &session_telemetry,
+            /*effort*/ None,
+            ReasoningSummary::None,
+            /*service_tier*/ None,
+            &responses_metadata,
+            &inference_trace,
+        )
+        .await
+    {
+        Ok(_) => panic!("native AgentMessage history must fail before Chat transport"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error.details(),
+        CodexErrorDetails::InvalidRequest(_)
+    ));
+    assert!(error.to_string().contains("native Agent messages"));
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("recorded requests")
+            .is_empty(),
+        "Chat preflight rejection must not reach transport"
+    );
+    let rollout = replay_bundle(trace_dir.path())?;
+    assert!(
+        rollout.inference_calls.is_empty(),
+        "Chat preflight rejection must not create an inference attempt"
+    );
+    Ok(())
+}
+
+async fn mount_chat_response(server: &MockServer, expected_calls: usize) {
+    mount_chat_response_sequence(
+        server,
+        vec![concat!(
+            "data: {\"id\":\"chatcmpl-1\",\"model\":\"third-party-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"}}]}\n\n",
+            "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n"
+        )
+        .to_string(); expected_calls],
+    )
+    .await;
+}
+
+async fn mount_chat_response_sequence(server: &MockServer, responses: Vec<String>) {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
+    struct SequenceResponder {
+        calls: AtomicUsize,
+        responses: Vec<String>,
+    }
+
+    impl Respond for SequenceResponder {
+        fn respond(&self, _: &wiremock::Request) -> ResponseTemplate {
+            let index = self.calls.fetch_add(1, Ordering::SeqCst);
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(
+                    self.responses
+                        .get(index)
+                        .unwrap_or_else(|| panic!("unexpected Chat request {index}"))
+                        .clone(),
+                )
+        }
+    }
+
+    let count = responses.len();
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(SequenceResponder {
+            calls: AtomicUsize::new(0),
+            responses,
+        })
+        .up_to_n_times(count as u64)
+        .expect(count as u64)
+        .mount(server)
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chat_provider_uses_chat_completions_translation() {
+    let server = MockServer::start().await;
+    mount_chat_response(&server, 2).await;
+    let provider = mock_provider(&server, WireApi::Chat);
+    send_request_with_provider(provider.clone(), None, ReasoningSummary::Auto)
+        .await
+        .expect("Chat provider must accept default auto summary behavior");
+    send_request_with_provider(provider, None, ReasoningSummary::None)
+        .await
+        .expect("Chat provider must accept no-summary behavior");
+
+    let requests = server.received_requests().await.expect("recorded requests");
+    assert_eq!(requests.len(), 2);
+    for request in requests {
+        assert_eq!(request.url.path(), "/v1/chat/completions");
+        for header in [
+            "session-id",
+            "thread-id",
+            "x-client-request-id",
+            "x-openai-subagent",
+        ] {
+            assert!(request.headers.get(header).is_none());
+        }
+        let body: serde_json::Value = serde_json::from_slice(&request.body).expect("JSON body");
+        assert_eq!(body["messages"][0]["role"], "system");
+        assert!(
+            body["messages"]
+                .as_array()
+                .expect("messages array")
+                .iter()
+                .any(|message| message["role"] == "user" && message["content"] == "hello")
+        );
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["stream_options"]["include_usage"], true);
+        assert_eq!(body.pointer("/reasoning/summary"), None);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chat_provider_completes_mixed_message_before_core_tool_item() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    mount_chat_response_sequence(
+        &server,
+        vec![
+            concat!(
+                "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"check route coordinates\"}}]}\n\n",
+                "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"checking route\",\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"exec_command\",\"arguments\":\"{\\\"cmd\\\":\\\"printf ready\\\"}\"}}]}}]}\n\n",
+                "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+                "data: [DONE]\n\n"
+            )
+            .to_string(),
+            concat!(
+                "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"route complete\"}}]}\n\n",
+                "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: [DONE]\n\n"
+            )
+            .to_string(),
+        ],
+    )
+    .await;
+    let provider = mock_provider(&server, WireApi::Chat);
+    let mut builder = test_codex()
+        .with_model_info_override("gpt-5.4", |model_info| {
+            model_info.support_verbosity = false;
+            model_info.default_verbosity = None;
+            model_info.supports_search_tool = false;
+            model_info.apply_patch_tool_type = None;
+            model_info.experimental_supported_tools.clear();
+        })
+        .with_config(move |config| {
+            config.model_provider_id = provider.name.clone();
+            config.model_provider = provider;
+            config
+                .web_search_mode
+                .set(WebSearchMode::Disabled)
+                .expect("test Chat provider should allow disabled web search");
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "check the route".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    let mut reasoning_started = None;
+    let mut reasoning_completed = None;
+    let mut message_started = None;
+    let mut message_completed = None;
+    let mut command_started = None;
+    let mut command_completed = None;
+    let mut event_index = 0;
+    loop {
+        let event = wait_for_event(&test.codex, |_| true).await;
+        match event {
+            EventMsg::ItemStarted(ItemStartedEvent {
+                item: TurnItem::Reasoning(item),
+                ..
+            }) => {
+                assert_eq!(item.raw_content, Vec::<String>::new());
+                reasoning_started.get_or_insert(event_index);
+            }
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::Reasoning(item),
+                ..
+            }) => {
+                assert_eq!(
+                    item.raw_content,
+                    vec!["check route coordinates".to_string()]
+                );
+                reasoning_completed.get_or_insert(event_index);
+            }
+            EventMsg::ItemStarted(ItemStartedEvent {
+                item: TurnItem::AgentMessage(item),
+                ..
+            }) => {
+                assert_eq!(item.phase, None);
+                message_started.get_or_insert(event_index);
+            }
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::AgentMessage(item),
+                ..
+            }) => {
+                assert_eq!(item.phase, None);
+                message_completed.get_or_insert(event_index);
+            }
+            EventMsg::ItemStarted(ItemStartedEvent {
+                item: TurnItem::CommandExecution(_),
+                ..
+            }) => {
+                command_started.get_or_insert(event_index);
+            }
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::CommandExecution(_),
+                ..
+            }) => {
+                command_completed.get_or_insert(event_index);
+            }
+            EventMsg::Error(error) => panic!("Chat core reducer failed: {}", error.message),
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+        event_index += 1;
+    }
+
+    assert!(
+        reasoning_started.expect("Chat reasoning must start before assistant output")
+            < reasoning_completed.expect("Chat reasoning must complete")
+    );
+    assert!(
+        reasoning_completed.expect("Chat reasoning must complete")
+            < message_started.expect("Chat text must start an AgentMessage")
+    );
+    assert!(
+        message_started.expect("Chat text must start an AgentMessage")
+            < message_completed.expect("Chat text must complete its AgentMessage")
+    );
+    assert!(
+        message_completed.expect("Chat text must complete its AgentMessage")
+            < command_started.expect("Chat FunctionCall must start a command item")
+    );
+    assert!(
+        command_started.expect("Chat FunctionCall must start a command item")
+            < command_completed.expect("Chat FunctionCall must complete a command item")
+    );
+    let requests = server
+        .received_requests()
+        .await
+        .expect("recorded Chat requests");
+    assert_eq!(requests.len(), 2);
+    let second_body: serde_json::Value = serde_json::from_slice(&requests[1].body)?;
+    assert_eq!(second_body.get("tool_choice"), None);
+    let assistant_tool_call = second_body["messages"]
+        .as_array()
+        .expect("Chat request messages")
+        .iter()
+        .find(|message| message["role"] == "assistant" && message["tool_calls"].is_array())
+        .expect("second Chat request must replay the assistant tool-call message");
+    assert_eq!(assistant_tool_call["content"], "checking route");
+    assert_eq!(
+        assistant_tool_call["reasoning_content"],
+        "check route coordinates"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chat_provider_rejects_explicit_reasoning_summary_without_network_request() {
+    let server = MockServer::start().await;
+    let provider = mock_provider(&server, WireApi::Chat);
+
+    for summary in [ReasoningSummary::Concise, ReasoningSummary::Detailed] {
+        let error = send_request_with_provider(provider.clone(), None, summary)
+            .await
+            .expect_err("Chat must reject an explicit Responses-only reasoning summary");
+        assert!(error.to_string().contains("reasoning summaries"));
+    }
+
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("recorded requests")
+            .is_empty(),
+        "an incompatible summary must fail before any HTTP request"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chat_provider_preserves_supported_reasoning_efforts_exactly() {
+    let server = MockServer::start().await;
+    mount_chat_response(&server, 6).await;
+    let provider = mock_provider(&server, WireApi::Chat);
+    let expected_efforts = [
+        (ReasoningEffort::None, "none"),
+        (ReasoningEffort::Minimal, "minimal"),
+        (ReasoningEffort::Low, "low"),
+        (ReasoningEffort::Medium, "medium"),
+        (ReasoningEffort::High, "high"),
+        (ReasoningEffort::XHigh, "xhigh"),
+    ];
+
+    for (effort, _) in &expected_efforts {
+        send_request_with_provider(
+            provider.clone(),
+            Some(effort.clone()),
+            ReasoningSummary::None,
+        )
+        .await
+        .expect("supported Chat reasoning effort should complete");
+    }
+
+    let requests = server.received_requests().await.expect("recorded requests");
+    assert_eq!(requests.len(), expected_efforts.len());
+    for (request, (_, expected_effort)) in requests.iter().zip(expected_efforts) {
+        let body: serde_json::Value = serde_json::from_slice(&request.body).expect("JSON body");
+        assert_eq!(body["reasoning_effort"], expected_effort);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chat_provider_rejects_unsupported_reasoning_efforts_without_network_request() {
+    let server = MockServer::start().await;
+    let provider = mock_provider(&server, WireApi::Chat);
+
+    for effort in [
+        ReasoningEffort::Max,
+        ReasoningEffort::Ultra,
+        ReasoningEffort::Custom("provider-defined".to_string()),
+    ] {
+        let error =
+            send_request_with_provider(provider.clone(), Some(effort), ReasoningSummary::None)
+                .await
+                .expect_err("unsupported Chat reasoning effort must fail before transport");
+        assert!(error.to_string().contains("reasoning effort"));
+    }
+
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("recorded requests")
+            .is_empty(),
+        "an incompatible effort must fail before any HTTP request"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_provider_preserves_auto_reasoning_summary() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_raw(
+                    sse(vec![
+                        ev_response_created("resp-auto"),
+                        ev_completed("resp-auto"),
+                    ]),
+                    "text/event-stream",
+                ),
+        )
+        .mount(&server)
+        .await;
+
+    send_request_with_provider(
+        mock_provider(&server, WireApi::Responses),
+        None,
+        ReasoningSummary::Auto,
+    )
+    .await
+    .expect("Responses provider should preserve auto summary behavior");
+
+    let requests = server.received_requests().await.expect("recorded requests");
+    assert_eq!(requests.len(), 1);
+    let body: serde_json::Value = serde_json::from_slice(&requests[0].body).expect("JSON body");
+    assert_eq!(body.pointer("/reasoning/summary"), Some(&json!("auto")));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_provider_preserves_official_ultra_to_max_mapping() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_raw(
+                    sse(vec![
+                        ev_response_created("resp-ultra"),
+                        ev_completed("resp-ultra"),
+                    ]),
+                    "text/event-stream",
+                ),
+        )
+        .mount(&server)
+        .await;
+
+    send_request_with_provider(
+        mock_provider(&server, WireApi::Responses),
+        Some(ReasoningEffort::Ultra),
+        ReasoningSummary::None,
+    )
+    .await
+    .expect("Responses provider should preserve official Ultra mapping");
+
+    let requests = server.received_requests().await.expect("recorded requests");
+    assert_eq!(requests.len(), 1);
+    let body: serde_json::Value = serde_json::from_slice(&requests[0].body).expect("JSON body");
+    assert_eq!(body.pointer("/reasoning/effort"), Some(&json!("max")));
 }
 
 #[expect(clippy::unwrap_used)]
-async fn send_request_with_provider(provider: ModelProviderInfo) {
+async fn send_request_with_provider(
+    provider: ModelProviderInfo,
+    effort: Option<ReasoningEffort>,
+    summary: ReasoningSummary,
+) -> Result<(), CodexErr> {
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider_id = provider.name.clone();
     config.model_provider = provider.clone();
-    let effort = config.model_reasoning_effort.clone();
-    let summary = config.model_reasoning_summary;
     let model = codex_core::test_support::get_model_offline(config.model.as_deref());
     config.model = Some(model.clone());
     let config = Arc::new(config);
@@ -1538,19 +2085,19 @@ async fn send_request_with_provider(provider: ModelProviderInfo) {
             &model_info,
             &session_telemetry,
             effort,
-            summary.unwrap_or(ReasoningSummary::Auto),
+            summary,
             /*service_tier*/ None,
             &responses_metadata,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
         )
-        .await
-        .expect("responses stream to start");
+        .await?;
 
     while let Some(event) = stream.next().await {
         if let Ok(ResponseEvent::Completed { .. }) = event {
             break;
         }
     }
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

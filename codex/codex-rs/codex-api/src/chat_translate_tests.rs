@@ -316,6 +316,41 @@ fn preserves_each_supported_message_item_without_merging_or_text_rewrites() {
 }
 
 #[test]
+fn preserves_system_and_developer_sources_in_order_as_distinct_chat_messages() {
+    let mut request = request(None);
+    request.instructions = "top-level instructions".to_string();
+    request.input = vec![
+        text_message("system", "system source"),
+        text_message("developer", "developer source"),
+        text_message("user", "user source"),
+    ];
+
+    assert_eq!(
+        responses_request_to_chat_completions_request(request)
+            .unwrap()
+            .messages,
+        vec![
+            ChatMessage::Text {
+                role: "system".to_string(),
+                content: "top-level instructions".to_string(),
+            },
+            ChatMessage::Text {
+                role: "system".to_string(),
+                content: "system source".to_string(),
+            },
+            ChatMessage::Text {
+                role: "system".to_string(),
+                content: "developer source".to_string(),
+            },
+            ChatMessage::Text {
+                role: "user".to_string(),
+                content: "user source".to_string(),
+            },
+        ]
+    );
+}
+
+#[test]
 fn replays_final_raw_reasoning_with_its_following_assistant_message() {
     let mut request = request(None);
     request.instructions.clear();
