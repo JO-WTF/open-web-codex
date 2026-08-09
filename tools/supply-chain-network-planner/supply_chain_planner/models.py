@@ -666,6 +666,28 @@ class NetworkPlanningReportToolResult(StrictModel):
     report_ref: _ResourceRef
 
 
+class NetworkFinalArtifactDescriptor(StrictModel):
+    """Platform-readable descriptor for one explicit final domain deliverable."""
+
+    artifact_schema: Literal[
+        "network_comparison_map_bundle.v1",
+        "network_planning_report_bundle.v1",
+    ] = Field(alias="schema")
+    display_name: str = Field(min_length=1, max_length=256, alias="displayName")
+    mime_type: Literal["application/json"] = Field(alias="mimeType")
+    workspace_relative_path: str = Field(
+        min_length=1,
+        max_length=1024,
+        alias="workspaceRelativePath",
+    )
+    byte_size: int = Field(ge=0, alias="byteSize")
+
+
+class NetworkFinalArtifactToolResult(StrictModel):
+    summary: str = Field(min_length=1, max_length=512)
+    artifact: NetworkFinalArtifactDescriptor
+
+
 class CurrentCoverageToolResult(CurrentCoverageResult):
     summary: str
     resource_name: str

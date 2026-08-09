@@ -46,7 +46,11 @@ from .decision_core import (
 from .decision_core import (
     evaluate_financial_case as calculate_financial_case,
 )
-from .map_service import NetworkMapService
+from .map_service import (
+    NetworkComparisonMapBundle,
+    NetworkMapService,
+    build_network_comparison_map_bundle,
+)
 from .mapping_service import CaseMappingService
 from .matrix import build_cost_matrix as _build_composable_cost_matrix
 from .matrix import build_route_matrix_with_reuse
@@ -66,6 +70,8 @@ from .models import (
     FacilityLocationToolResult,
     FinancialEvaluation,
     FinancialEvaluationToolResult,
+    NetworkFinalArtifactDescriptor,
+    NetworkFinalArtifactToolResult,
     NetworkInput,
     NetworkMapRenderToolResult,
     NetworkMapToolResult,
@@ -87,6 +93,7 @@ from .models import RouteMatrix as LegacyRouteMatrix
 from .network_data import SourceInventoryService
 from .network_models import (
     DemandCityRecord,
+    NormalizedInputBatch,
     WarehouseRecord,
 )
 from .normalization import NormalizationService
@@ -102,7 +109,11 @@ from .optimization_models import (
     ServiceCoverageConstraint,
 )
 from .readiness import ReadinessEvaluator
-from .report_service import NetworkReportService
+from .report_service import (
+    NetworkPlanningReportBundle,
+    NetworkReportService,
+    build_network_planning_report_bundle,
+)
 from .requirements import RequirementRequest, RequirementService
 from .resource_store import (
     PublishedResource,
@@ -121,6 +132,7 @@ from .solver import (
     solve_current_assignment,
     summarize_assignment_cost,
 )
+from .workspace_files import MAX_WORKSPACE_FILE_BYTES
 from .workspace_intake import read_json_document
 
 MAX_SOURCE_BYTES = 20 * 1024 * 1024
@@ -3711,40 +3723,138 @@ def _legacy_solve_service_constrained_location_resource(
     return _publish_new_resource(solution.schema_version, solution, message)
 
 
+def _load_final_delivery_inputs(
+    normalized_input_ref: ResourceRef,
+    baseline_ref: ResourceRef,
+    facility_location_ref: ResourceRef,
+    comparison_ref: ResourceRef,
+) -> tuple[
+    PreparedNetworkResource,
+    NormalizedInputBatch,
+    BaselineResult,
+    PMedianSolution,
+    AssignmentComparison,
+]:
+    prepared = _load_ready_network(normalized_input_ref)
+    baseline = _runtime().load_model(
+        baseline_ref,
+        "network_baseline.v2",
+        BaselineResult,
+    )
+    facility = _runtime().load_model(
+        facility_location_ref,
+        "facility_location_solution.v3",
+        PMedianSolution,
+    )
+    comparison = _runtime().load_model(
+        comparison_ref,
+        "network_assignment_comparison.v1",
+        AssignmentComparison,
+    )
+    normalized = NormalizedInputBatch(
+        demand_cities=prepared.demand_cities,
+        warehouses=prepared.warehouses,
+        current_assignments=prepared.current_assignments,
+        route_quotes=prepared.route_quotes,
+        issues=prepared.issues,
+    )
+    return prepared, normalized, baseline, facility, comparison
+
+
+def _write_final_delivery_bundle(
+    bundle: NetworkComparisonMapBundle | NetworkPlanningReportBundle,
+    output_relative_path: str,
+    ctx: Context,
+    summary: str,
+) -> CallToolResult:
+    encoded = bundle.model_dump_json(by_alias=True).encode("utf-8")
+    created = _runtime().create_workspace_file(
+        ctx,
+        output_relative_path,
+        encoded,
+        max_bytes=MAX_WORKSPACE_FILE_BYTES,
+    )
+    structured = NetworkFinalArtifactToolResult(
+        summary=summary,
+        artifact=NetworkFinalArtifactDescriptor(
+            schema=bundle.schema_version,
+            displayName=bundle.title,
+            mimeType="application/json",
+            workspaceRelativePath=created.relative_path,
+            byteSize=created.byte_size,
+        ),
+    )
+    return CallToolResult(
+        content=[TextContent(type="text", text=summary)],
+        structuredContent=structured.model_dump(mode="json", by_alias=True),
+    )
+
+
 @mcp.tool(structured_output=True)
 def render_network_comparison_map(
-    network_case_ref: ArtifactRef | ResourceRef,
-    baseline_ref: ArtifactRef,
-    candidate_ref: ArtifactRef,
+    normalized_input_ref: ResourceRef,
+    baseline_ref: ResourceRef,
+    facility_location_ref: ResourceRef,
+    comparison_ref: ResourceRef,
+    output_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
+    ctx: Context,
 ) -> CallToolResult:
-    """Publish a deterministic baseline-versus-candidate map Resource."""
-    return render_legacy_network_comparison_map(network_case_ref, baseline_ref, candidate_ref)
+    """Create a self-contained baseline-versus-facility map JSON file."""
+    _runtime().require_workspace(ctx)
+    prepared, normalized, baseline, facility, comparison = (
+        _load_final_delivery_inputs(
+            normalized_input_ref,
+            baseline_ref,
+            facility_location_ref,
+            comparison_ref,
+        )
+    )
+    bundle = build_network_comparison_map_bundle(
+        normalized,
+        baseline,
+        facility,
+        comparison,
+        country_code=prepared.country_code,
+    )
+    return _write_final_delivery_bundle(
+        bundle,
+        output_relative_path,
+        ctx,
+        "Created the self-contained warehouse network comparison map.",
+    )
 
 
 @mcp.tool(structured_output=True)
 def publish_network_planning_report(
-    result_ref: ArtifactRef,
-    source: Literal["baseline", "scenario", "facility_location"],
+    normalized_input_ref: ResourceRef,
+    baseline_ref: ResourceRef,
+    facility_location_ref: ResourceRef,
+    comparison_ref: ResourceRef,
+    output_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
+    ctx: Context,
 ) -> CallToolResult:
-    """Publish a bounded report summary that cites one immutable result Resource."""
-    result = _load_artifact(result_ref)
-    assignment = result.get("assignment") if isinstance(result.get("assignment"), dict) else {}
-    service = result.get("service") if isinstance(result.get("service"), list) else []
-    payload = {
-        "schema_version": "network_planning_report.v1",
-        "source": source,
-        "result_ref": result_ref.model_dump(mode="json"),
-        "label": result.get("label"),
-        "total_demand": assignment.get("total_demand"),
-        "unassigned_demand": assignment.get("unassigned_demand"),
-        "service_metrics": service[:32],
-        "cost": result.get("cost"),
-        "warehouse_changes": result.get("warehouse_changes"),
-    }
-    return _publish_new_resource(
-        "network_planning_report.v1",
-        payload,
-        f"Published a bounded {source} network planning report.",
+    """Create a self-contained warehouse network planning report JSON file."""
+    _runtime().require_workspace(ctx)
+    prepared, normalized, baseline, facility, comparison = (
+        _load_final_delivery_inputs(
+            normalized_input_ref,
+            baseline_ref,
+            facility_location_ref,
+            comparison_ref,
+        )
+    )
+    bundle = build_network_planning_report_bundle(
+        normalized,
+        baseline,
+        facility,
+        comparison,
+        country_code=prepared.country_code,
+    )
+    return _write_final_delivery_bundle(
+        bundle,
+        output_relative_path,
+        ctx,
+        "Created the self-contained warehouse network planning report.",
     )
 
 
