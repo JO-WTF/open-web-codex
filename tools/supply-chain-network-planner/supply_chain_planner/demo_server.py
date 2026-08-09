@@ -350,7 +350,7 @@ def _source_result(
     template_id, version = TEMPLATES[template_ref]
     manifest = _manifest_bytes(template_ref, seed, files)
     names = set(files) | {MANIFEST_NAME}
-    sources = [item for item in discover(root) if item["display_name"] in names]
+    sources = [item for item in discover(root) if Path(item["relative_path"]).name in names]
     if len(sources) != len(names):
         raise ValueError("demo_source_discovery_incomplete")
     return {

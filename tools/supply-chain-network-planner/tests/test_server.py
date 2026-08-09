@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from supply_chain_planner import data_server, server
-from supply_chain_planner.models import DataAgentRef, DataRef
+from supply_chain_planner import server
+from supply_chain_planner.models import ResourceRef
 from supply_chain_planner.resource_store import ResourceStore
 from supply_chain_planner.server import MAX_PROFILE_GOAL_CHARS, _normalize_profile_goal
 
@@ -31,37 +31,33 @@ def test_requirement_profile_is_published_without_a_confirmation_request(
     )
 
     assert result.structuredContent is not None
-    payload = server._store().load_uri(result.structuredContent["data_ref"]["uri"])
+    payload = server._store().load_uri(result.structuredContent["resource_ref"]["uri"])
     assert payload["schemaVersion"] == "data_requirement_profile.v2"
     assert payload["inputRequest"] == {"kind": "data_requirement", "status": "published"}
     assert "confirmation" not in result.content[0].text.lower()
 
 
 def test_input_gap_loads_data_agent_resource_references(tmp_path, monkeypatch) -> None:
-    planner_store = ResourceStore(tmp_path / "planner-resources")
-    data_store = ResourceStore(
-        tmp_path / "data-resources", uri_prefix=data_server.RESOURCE_URI_PREFIX
-    )
-    monkeypatch.setattr(server, "_resource_store", planner_store)
-    monkeypatch.setattr(server, "_data_resource_store", data_store)
+    store = ResourceStore(tmp_path / "resources")
+    monkeypatch.setattr(server, "_resource_store", store)
 
     profile_result = server.publish_data_requirement_profile("Optimize warehouse coverage")
     assert profile_result.structuredContent is not None
-    profile_ref = DataRef.model_validate(profile_result.structuredContent["data_ref"])
+    profile_ref = ResourceRef.model_validate(profile_result.structuredContent["resource_ref"])
 
-    source = data_store.publish(
+    source = store.publish(
         "source_profile.v1",
         {"schemaVersion": "source_profile.v1", "sources": [{"display_name": "cities.csv"}]},
     )
-    mapping = data_store.publish(
+    mapping = store.publish(
         "mapping_proposal.v1",
         {
             "schemaVersion": "mapping_proposal.v1",
             "candidates": [{"target_field": "city_id"}],
         },
     )
-    source_ref = DataAgentRef(uri=source.uri, resource_schema="source_profile.v1")
-    mapping_ref = DataAgentRef(uri=mapping.uri, resource_schema="mapping_proposal.v1")
+    source_ref = ResourceRef(uri=source.uri, resource_schema="source_profile.v1")
+    mapping_ref = ResourceRef(uri=mapping.uri, resource_schema="mapping_proposal.v1")
 
     result = server.publish_input_gap(
         profile_ref,
@@ -70,7 +66,7 @@ def test_input_gap_loads_data_agent_resource_references(tmp_path, monkeypatch) -
     )
 
     assert result.structuredContent is not None
-    payload = planner_store.load_uri(result.structuredContent["data_ref"]["uri"])
+    payload = store.load_uri(result.structuredContent["resource_ref"]["uri"])
     assert payload["schemaVersion"] == "input_gap.v1"
     assert payload["inputRequest"]["kind"] == "confirm_mapping"
     assert {gap["code"] for gap in payload["gaps"]} == {
@@ -82,11 +78,9 @@ def test_input_gap_loads_data_agent_resource_references(tmp_path, monkeypatch) -
 def test_planner_accepts_normalized_data_agent_ref_at_network_boundary(
     tmp_path, monkeypatch
 ) -> None:
-    data_store = ResourceStore(
-        tmp_path / "data-resources", uri_prefix=data_server.RESOURCE_URI_PREFIX
-    )
-    monkeypatch.setattr(server, "_data_resource_store", data_store)
-    published = data_store.publish(
+    store = ResourceStore(tmp_path / "resources")
+    monkeypatch.setattr(server, "_resource_store", store)
+    published = store.publish(
         "normalized_network_input.v1",
         {
             "schemaVersion": "normalized_network_input.v1",
@@ -123,7 +117,7 @@ def test_planner_accepts_normalized_data_agent_ref_at_network_boundary(
             },
         },
     )
-    ref = DataAgentRef(
+    ref = ResourceRef(
         uri=published.uri,
         resource_schema="normalized_network_input.v1",
     )
@@ -131,6 +125,6 @@ def test_planner_accepts_normalized_data_agent_ref_at_network_boundary(
     case = server._case_from_input_ref(ref)
 
     assert case.country_code == "ID"
-    assert case.input_ref.server_name == "supply_chain_data"
+    assert case.input_ref.server_name == "supply_chain"
     assert case.input_ref.resource_name == published.resource_id
     assert len(case.input_ref.content_sha256) == 64

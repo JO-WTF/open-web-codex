@@ -13,9 +13,9 @@ import io
 import itertools
 import json
 import re
-import uuid
+import stat
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO
 from urllib.parse import unquote, urlparse
 from xml.etree import ElementTree
@@ -65,12 +65,15 @@ def trusted_workspace_root(meta: Any) -> Path:
 
 
 def _iter_files(root: Path) -> list[Path]:
+    root = root.resolve(strict=True)
     files: list[Path] = []
     for path in root.rglob("*"):
         relative = path.relative_to(root)
         if any(part in EXCLUDED_DIRS for part in relative.parts):
             continue
         if path.is_symlink():
+            if path.suffix.lower() in SUPPORTED_SUFFIXES | {".xls", ".xlsm"}:
+                raise ValueError("workspace_source_symlink_rejected")
             continue
         if path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES:
             files.append(path)
@@ -93,20 +96,63 @@ def workspace_contains_supported_sources(root: Path) -> bool:
     return False
 
 
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def _validated_source_path(root: Path, relative_path: str) -> Path:
+    """Resolve one model-visible Workspace path without following symlinks."""
+    canonical_root = root.resolve(strict=True)
+    if not canonical_root.is_dir():
+        raise ValueError("workspace_root_not_directory")
+    if not isinstance(relative_path, str) or not relative_path:
+        raise ValueError("workspace_relative_path_required")
+    relative = PurePosixPath(relative_path)
+    if (
+        relative.is_absolute()
+        or not relative.parts
+        or relative.as_posix() != relative_path
+        or any(part in {"", ".", ".."} for part in relative.parts)
+        or any(part in EXCLUDED_DIRS for part in relative.parts)
+    ):
+        raise ValueError("invalid_workspace_relative_path")
+
+    current = canonical_root
+    for index, part in enumerate(relative.parts):
+        current = current / part
+        try:
+            mode = current.lstat().st_mode
+        except FileNotFoundError as error:
+            raise ValueError("workspace_source_not_found") from error
+        if stat.S_ISLNK(mode):
+            raise ValueError("workspace_source_symlink_rejected")
+        if index < len(relative.parts) - 1 and not stat.S_ISDIR(mode):
+            raise ValueError("workspace_source_parent_not_directory")
+    if not stat.S_ISREG(current.lstat().st_mode):
+        raise ValueError("workspace_source_not_regular_file")
+    try:
+        current.resolve(strict=True).relative_to(canonical_root)
+    except ValueError as error:
+        raise ValueError("workspace_source_escape_rejected") from error
+    if current.suffix.lower() not in SUPPORTED_SUFFIXES:
+        raise ValueError("unsupported_source_format")
+    size = current.stat().st_size
+    if size <= 0 or size > MAX_BYTES:
+        raise ValueError("workspace_source_size_limit")
+    return current
+
+
+def source_descriptor(root: Path, relative_path: str) -> dict[str, Any]:
+    """Return the stable public descriptor for one validated Workspace file."""
+    path = _validated_source_path(root, relative_path)
+    return {
+        "relative_path": relative_path,
+        "format": path.suffix.lower().removeprefix("."),
+        "size": path.stat().st_size,
+    }
 
 
 def discover(root: Path) -> list[dict[str, Any]]:
     legacy = [
         path
         for path in root.rglob("*")
-        if not path.is_symlink()
-        and not any(part in EXCLUDED_DIRS for part in path.relative_to(root).parts)
+        if not any(part in EXCLUDED_DIRS for part in path.relative_to(root).parts)
         and path.is_file()
         and path.suffix.lower() in {".xls", ".xlsm"}
     ]
@@ -116,34 +162,9 @@ def discover(root: Path) -> list[dict[str, Any]]:
             "as .xlsx, .csv or .json"
         )
     files = _iter_files(root)
-    records: list[dict[str, Any]] = []
-    for path in files[:MAX_FILES]:
-        size = path.stat().st_size
-        if size <= 0 or size > MAX_BYTES:
-            continue
-        digest = _sha256_file(path)
-        relative = path.relative_to(root).as_posix()
-        source_ref = "source-" + hashlib.sha256(f"{relative}:{size}:{digest}".encode()).hexdigest()
-        record = {
-            "source_ref": source_ref,
-            "display_name": path.name,
-            "media_type": media_type(path),
-            "byte_size": size,
-            "content_sha256": digest,
-            "extension": path.suffix.lower(),
-        }
-        parts = relative.split("/")
-        if len(parts) >= 4 and parts[0:2] == [".open-web-codex", "source-assets"]:
-            try:
-                uuid.UUID(parts[2])
-            except ValueError:
-                pass
-            else:
-                record["source_asset_id"] = parts[2]
-        records.append(record)
     if len(files) > MAX_FILES:
         raise ValueError("workspace_source_limit_exceeded: more than 500 supported files")
-    return records
+    return [source_descriptor(root, path.relative_to(root).as_posix()) for path in files]
 
 
 def workspace_source_metadata(root: Path) -> dict[str, Any]:
@@ -205,17 +226,13 @@ def workspace_source_metadata(root: Path) -> dict[str, Any]:
     }
 
 
-def _resolve_ref(root: Path, source_ref: str) -> Path:
-    for path in _iter_files(root):
-        size = path.stat().st_size
-        if size <= 0 or size > MAX_BYTES:
-            continue
-        digest = _sha256_file(path)
-        relative = path.relative_to(root).as_posix()
-        candidate = "source-" + hashlib.sha256(f"{relative}:{size}:{digest}".encode()).hexdigest()
-        if candidate == source_ref:
-            return path
-    raise ValueError("source_ref is not present in the authorized Workspace")
+def _sha256_file(path: Path) -> str:
+    """Verify explicit Demo fixture bytes without exposing a source identity."""
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def media_type(path: Path) -> str:
@@ -226,9 +243,9 @@ def media_type(path: Path) -> str:
     }[path.suffix.lower()]
 
 
-def inspect(root: Path, source_ref: str) -> dict[str, Any]:
-    path = _resolve_ref(root, source_ref)
-    record = next(item for item in discover(root) if item["source_ref"] == source_ref)
+def inspect(root: Path, relative_path: str) -> dict[str, Any]:
+    path = _validated_source_path(root, relative_path)
+    record = source_descriptor(root, relative_path)
     if path.suffix.lower() == ".csv":
         structure = inspect_csv(path)
     elif path.suffix.lower() == ".json":
@@ -256,14 +273,21 @@ def inspect_csv(path: Path) -> dict[str, Any]:
     except csv.Error:
         delimiter = ","
     rows = list(csv.reader(sample, delimiter=delimiter))
-    header = [cell.strip() for cell in rows[0][:MAX_XLSX_COLUMNS]]
-    preview_rows = [row[:MAX_XLSX_COLUMNS] for row in rows[1 : MAX_SAMPLE_ROWS + 1]]
+    if len(rows[0]) > MAX_XLSX_COLUMNS:
+        raise ValueError("source_column_limit_exceeded")
+    header = [cell.strip() for cell in rows[0]]
+    preview_rows = rows[1 : MAX_SAMPLE_ROWS + 1]
+    if any(len(row) > MAX_XLSX_COLUMNS for row in preview_rows):
+        raise ValueError("source_column_limit_exceeded")
+    record_count = _count_csv_records(path, delimiter)
+    if record_count > MAX_NORMALIZE_ROWS:
+        raise ValueError("source_row_limit_exceeded")
     return {
         "kind": "table",
         "delimiter": delimiter,
         "columns": header,
         "preview": _preview_payload(preview_rows),
-        "record_count": _count_csv_records(path, delimiter),
+        "record_count": record_count,
         "record_count_exact": True,
     }
 
@@ -319,6 +343,10 @@ def inspect_json(path: Path) -> dict[str, Any]:
                 }
             if event == "map_key":
                 object_keys.setdefault(prefix, set()).add(str(value)[:256])
+                if len(object_keys[prefix]) > MAX_XLSX_COLUMNS:
+                    raise ValueError("source_column_limit_exceeded")
+            if len(arrays) > 256 or len(object_keys) > 256:
+                raise ValueError("json_structure_limit_exceeded")
 
     # ijson's event stream is used above for limits and structure.  A second
     # streaming pass counts every item while extracting at most three preview
@@ -329,6 +357,8 @@ def inspect_json(path: Path) -> dict[str, Any]:
         with path.open("rb") as stream:
             try:
                 for index, item in enumerate(ijson.items(stream, item_prefix)):
+                    if index >= MAX_NORMALIZE_ROWS:
+                        raise ValueError("source_row_limit_exceeded")
                     array["length"] = index + 1
                     if index < 3:
                         if isinstance(item, dict):
@@ -340,7 +370,7 @@ def inspect_json(path: Path) -> dict[str, Any]:
                                             "type": type(value).__name__,
                                             "sample": _bounded_json_sample(value),
                                         }
-                                        for key, value in list(item.items())[:MAX_XLSX_COLUMNS]
+                                        for key, value in item.items()
                                     },
                                 }
                             )
@@ -358,10 +388,8 @@ def inspect_json(path: Path) -> dict[str, Any]:
     return {
         "kind": "json",
         "tree": {"kind": root_kind},
-        "object_keys": {
-            path: sorted(keys)[:MAX_XLSX_COLUMNS] for path, keys in list(object_keys.items())[:256]
-        },
-        "arrays": list(arrays.values())[:256],
+        "object_keys": {path: sorted(keys) for path, keys in object_keys.items()},
+        "arrays": list(arrays.values()),
         "node_count": node_count,
     }
 
@@ -412,13 +440,17 @@ def inspect_xlsx(path: Path) -> dict[str, Any]:
         raise ValueError(f"xlsx_parse_failed:{type(error).__name__}") from error
     summaries = []
     try:
-        for worksheet in list(workbook.worksheets)[:MAX_XLSX_SHEETS]:
+        if len(workbook.worksheets) > MAX_XLSX_SHEETS:
+            raise ValueError("xlsx_sheet_limit_exceeded")
+        for worksheet in workbook.worksheets:
             header: list[Any] | None = None
             preview_rows: list[list[Any]] = []
             record_count = 0
             for row in worksheet.iter_rows(values_only=False):
                 values = []
-                for cell in row[:MAX_XLSX_COLUMNS]:
+                if len(row) > MAX_XLSX_COLUMNS:
+                    raise ValueError("source_column_limit_exceeded")
+                for cell in row:
                     value = cell.value
                     if isinstance(value, str) and value.startswith("="):
                         value = {"formula": True, "display": value[:MAX_JSON_STRING]}
@@ -428,6 +460,8 @@ def inspect_xlsx(path: Path) -> dict[str, Any]:
                         header = values
                     else:
                         record_count += 1
+                        if record_count > MAX_NORMALIZE_ROWS:
+                            raise ValueError("source_row_limit_exceeded")
                         if len(preview_rows) < MAX_SAMPLE_ROWS:
                             preview_rows.append(values)
             if header is not None:
@@ -487,9 +521,9 @@ def _xlsx_sheet(
     return {"sheet": name.rsplit("/", 1)[-1], "columns": rows[0] if rows else [], "rows": rows[1:]}
 
 
-def read_rows(root: Path, source_ref: str) -> list[dict[str, Any]]:
-    """Read bounded records only after the caller has supplied authorized refs."""
-    path = _resolve_ref(root, source_ref)
+def read_rows(root: Path, relative_path: str) -> list[dict[str, Any]]:
+    """Read bounded records from one validated Workspace-relative path."""
+    path = _validated_source_path(root, relative_path)
     suffix = path.suffix.lower()
     if suffix == ".csv":
         sample = decode_text(_read_prefix(path, 256 * 1024)).splitlines()[:20]
@@ -502,10 +536,13 @@ def read_rows(root: Path, source_ref: str) -> list[dict[str, Any]]:
                 binary, encoding=detect_encoding(_read_prefix(path, 64 * 1024)), errors="strict"
             )
             rows = csv.DictReader(text_stream, delimiter=delimiter)
-            return [
+            bounded = [
                 {str(key).strip(): value for key, value in row.items() if key is not None}
-                for row in itertools.islice(rows, MAX_NORMALIZE_ROWS)
+                for row in itertools.islice(rows, MAX_NORMALIZE_ROWS + 1)
             ]
+            if len(bounded) > MAX_NORMALIZE_ROWS:
+                raise ValueError("source_row_limit_exceeded")
+            return bounded
     if suffix == ".json":
         records: list[dict[str, Any]] = []
         with path.open("rb") as stream:
@@ -515,8 +552,8 @@ def read_rows(root: Path, source_ref: str) -> list[dict[str, Any]]:
                     for value in ijson.items(stream, prefix):
                         if isinstance(value, dict):
                             records.append(value)
-                            if len(records) >= MAX_NORMALIZE_ROWS:
-                                break
+                            if len(records) > MAX_NORMALIZE_ROWS:
+                                raise ValueError("source_row_limit_exceeded")
                     if records:
                         break
                 except ijson.common.IncompleteJSONError as error:
@@ -525,12 +562,16 @@ def read_rows(root: Path, source_ref: str) -> list[dict[str, Any]]:
     workbook = load_workbook(path, read_only=True, data_only=True, keep_links=False)
     records: list[dict[str, Any]] = []
     try:
-        for worksheet in list(workbook.worksheets)[:MAX_XLSX_SHEETS]:
+        if len(workbook.worksheets) > MAX_XLSX_SHEETS:
+            raise ValueError("xlsx_sheet_limit_exceeded")
+        for worksheet in workbook.worksheets:
             rows = worksheet.iter_rows(values_only=True)
             header = next(rows, None)
             if not header:
                 continue
-            columns = [str(value or "").strip() for value in header[:MAX_XLSX_COLUMNS]]
+            if len(header) > MAX_XLSX_COLUMNS:
+                raise ValueError("source_column_limit_exceeded")
+            columns = [str(value or "").strip() for value in header]
             for values in rows:
                 if not any(value not in (None, "") for value in values):
                     continue
@@ -543,18 +584,18 @@ def read_rows(root: Path, source_ref: str) -> list[dict[str, Any]]:
                     f"{worksheet.title}::{column}": value for column, value in record.items()
                 }
                 records.append({**qualified, **record, "__sheet_name": worksheet.title})
-                if len(records) >= MAX_NORMALIZE_ROWS:
-                    return records
+                if len(records) > MAX_NORMALIZE_ROWS:
+                    raise ValueError("source_row_limit_exceeded")
     finally:
         workbook.close()
     return records
 
 
-def read_json_document(root: Path, source_ref: str) -> dict[str, Any]:
+def read_json_document(root: Path, relative_path: str) -> dict[str, Any]:
     """Read one bounded JSON document from an authorized Workspace source."""
-    path = _resolve_ref(root, source_ref)
+    path = _validated_source_path(root, relative_path)
     if path.suffix.lower() != ".json":
-        raise ValueError("source_ref_must_be_json")
+        raise ValueError("workspace_source_must_be_json")
     if path.stat().st_size > 8 * 1024 * 1024:
         raise ValueError("json_source_exceeds_size_limit")
     with path.open("r", encoding=detect_encoding(_read_prefix(path, 64 * 1024))) as stream:
@@ -635,184 +676,7 @@ def _validate_json_stream(stream: BinaryIO) -> None:
         raise ValueError("invalid_json") from error
 
 
-def propose_mapping(
-    profiles: list[dict[str, Any]], requirement_profile: dict[str, Any]
-) -> dict[str, Any]:
-    fields: list[tuple[str, str, Any]] = []
-    seen_fields: set[tuple[str, str]] = set()
-
-    def add_field(entity_name: str, field_name: Any, unit: Any = None) -> None:
-        entity = str(entity_name).strip()
-        field = str(field_name).strip()
-        identity = (entity, field)
-        if entity and field and identity not in seen_fields:
-            seen_fields.add(identity)
-            fields.append((entity, field, unit))
-
-    def add_entity(entity_name: str, entity: Any) -> None:
-        if not isinstance(entity, dict):
-            return
-        declared = entity.get("fields")
-        if isinstance(declared, dict):
-            for field_name, spec in declared.items():
-                add_field(
-                    entity_name,
-                    field_name,
-                    spec.get("unit") if isinstance(spec, dict) else None,
-                )
-        elif isinstance(declared, list):
-            for field in declared:
-                if isinstance(field, dict):
-                    add_field(
-                        entity_name,
-                        field.get("name", field.get("displayName", "")),
-                        field.get("unit"),
-                    )
-                else:
-                    add_field(entity_name, field)
-        for key in ("required_fields", "requiredFields", "optional_fields", "optionalFields"):
-            declared = entity.get(key, [])
-            if isinstance(declared, list):
-                for field in declared:
-                    if isinstance(field, dict):
-                        add_field(entity_name, field.get("name", field.get("displayName", "")))
-                    else:
-                        add_field(entity_name, field)
-
-    entities = requirement_profile.get("entities")
-    if entities is None:
-        entities = requirement_profile.get("requiredEntities")
-    if isinstance(entities, list):
-        for entity in entities:
-            if isinstance(entity, dict):
-                add_entity(
-                    entity.get("name")
-                    or entity.get("displayName")
-                    or entity.get("entity")
-                    or entity.get("entity_type")
-                    or "",
-                    entity,
-                )
-    elif isinstance(entities, dict):
-        for entity_name, entity in entities.items():
-            add_entity(entity_name, entity)
-    else:
-        # The current Network Agent contract uses an entity-oriented map at the
-        # top level. Only values that look like field declarations are accepted;
-        # metadata such as country and analysis settings is ignored.
-        for entity_name, entity in requirement_profile.items():
-            if isinstance(entity, dict) and any(
-                key in entity
-                for key in ("fields", "required_fields", "requiredFields", "optional_fields", "optionalFields")
-            ):
-                add_entity(entity_name, entity)
-    ranked: dict[tuple[str, str], list[dict[str, Any]]] = {}
-    for profile in profiles:
-        structure = profile.get("structure", {})
-        names = _field_names(structure)
-        for entity, target, target_unit in fields:
-            for source in names:
-                score = similarity(source, target)
-                if score < 0.80:
-                    # Substring matches such as ``date`` -> ``candidate`` are
-                    # useful search hints but are not safe mapping candidates.
-                    continue
-                display_name = str(profile.get("display_name", "")).lower()
-                sheet_context = " ".join(
-                    str(sheet.get("sheet", "")).lower() for sheet in structure.get("sheets", [])
-                )
-                context = f"{display_name} {sheet_context}"
-                entity_key = "".join(char.lower() for char in entity if char.isalnum())
-                entity_tokens = {
-                    "city": ("city", "cities", "城市"),
-                    "demandlocation": ("location", "locations", "demand_location", "需求点"),
-                    "demandpoints": ("demand", "order", "orders", "需求", "location", "locations"),
-                    "demand": ("demand", "order", "orders", "需求"),
-                    "facility": ("facility", "facilities", "warehouse", "仓", "设施"),
-                    "existingwarehouses": ("warehouse", "warehouses", "facility", "facilities", "仓", "设施"),
-                    "warehouses": ("warehouse", "warehouses", "facility", "facilities", "仓", "设施"),
-                    "assignment": ("assignment", "assignments", "allocation", "分配"),
-                    "rate": ("rate", "rates", "cost", "费率", "成本"),
-                    "route": ("route", "routes", "travel", "路线"),
-                }.get(entity_key, ())
-                known_entity_tokens = {
-                    token
-                    for values in {
-                        "city": ("city", "cities", "城市"),
-                        "demandlocation": ("location", "locations", "demand_location", "需求点"),
-                        "demandpoints": ("demand", "order", "orders", "需求", "location", "locations"),
-                        "demand": ("demand", "order", "orders", "需求"),
-                        "facility": ("facility", "facilities", "warehouse", "仓", "设施"),
-                        "existingwarehouses": ("warehouse", "warehouses", "facility", "facilities", "仓", "设施"),
-                        "warehouses": ("warehouse", "warehouses", "facility", "facilities", "仓", "设施"),
-                        "assignment": ("assignment", "assignments", "allocation", "分配"),
-                        "rate": ("rate", "rates", "cost", "费率", "成本"),
-                        "route": ("route", "routes", "travel", "路线"),
-                    }.values()
-                    for token in values
-                }
-                context_has_known_entity = any(token in context for token in known_entity_tokens)
-                if context_has_known_entity and not any(
-                    token in context for token in entity_tokens
-                ):
-                    continue
-                if any(token in context for token in entity_tokens):
-                    score = min(1.0, score + 0.08)
-                ranked.setdefault((entity, target), []).append(
-                    {
-                        "source_ref": profile["source_ref"],
-                        "source_asset_id": profile.get("source_asset_id"),
-                        "source_field": source,
-                        "target_entity": entity,
-                        "target_field": target,
-                        "source_unit": None,
-                        "target_unit": target_unit,
-                        "transformation": "identity",
-                        "confidence": round(score, 3),
-                        "requires_confirmation": True,
-                        "reason": (
-                            "deterministic alias/type candidate; confirm the complete "
-                            "mapping revision"
-                        ),
-                    }
-                )
-
-    candidates: list[dict[str, Any]] = []
-    conflicts: list[dict[str, Any]] = []
-    for target, options in ranked.items():
-        options.sort(
-            key=lambda item: (
-                -float(item["confidence"]),
-                str(item.get("source_ref", "")),
-                str(item.get("source_field", "")),
-            )
-        )
-        selected = options[0]
-        candidates.append(selected)
-        if (
-            len(options) > 1
-            and float(selected["confidence"]) - float(options[1]["confidence"]) < 0.15
-        ):
-            conflicts.append(
-                {
-                    "target_entity": target[0],
-                    "target_field": target[1],
-                    "candidates": options[:5],
-                    "reason": (
-                        "multiple source fields have indistinguishable confidence; "
-                        "choose one before confirming"
-                    ),
-                }
-            )
-    return {
-        "schema": "mapping_proposal.v1",
-        "candidates": candidates,
-        "conflicts": conflicts,
-        "requires_confirmation": True,
-    }
-
-
-def _field_names(structure: dict[str, Any]) -> list[str]:
+def field_names(structure: dict[str, Any]) -> list[str]:
     if structure.get("kind") == "table":
         return [str(value) for value in structure.get("columns", []) if value]
     if structure.get("kind") == "workbook":
@@ -839,54 +703,3 @@ def _field_names(structure: dict[str, Any]) -> list[str]:
             if item.get("kind") == "object":
                 names.extend(item.get("fields", {}).keys())
     return names
-
-
-def similarity(source: str, target: str) -> float:
-    def normalize(value: str) -> str:
-        return "".join(char.lower() for char in value if char.isalnum())
-
-    left, right = normalize(source), normalize(target)
-    if not left or not right:
-        return 0.0
-    if left == right:
-        return 1.0
-    if left in right or right in left:
-        return 0.72
-    aliases = {
-        "qty": "quantity",
-        "数量": "quantity",
-        "件数": "quantity",
-        "lat": "latitude",
-        "纬度": "latitude",
-        "lon": "longitude",
-        "lng": "longitude",
-        "经度": "longitude",
-        "warehouse": "facility",
-        "仓库": "facility",
-        "仓": "facility",
-        "dc": "facility",
-        "仓库编号": "facility_id",
-        "仓库id": "facility_id",
-        "候选仓": "candidate",
-        "区域": "region",
-        "日期": "date",
-        "时间": "date",
-        "容量": "capacity",
-        "成本": "cost",
-    }
-    if aliases.get(left) == right or aliases.get(right) == left:
-        return 0.82
-    semantic_aliases = {
-        "需求点": {"demandlocationid", "demandlocation", "origin", "demandid"},
-        "需求地点": {"demandlocationid", "demandlocation", "origin"},
-        "需求编号": {"demandid", "demandlocationid"},
-        "设施编号": {"facilityid"},
-        "候选点": {"facilityid", "candidate"},
-        "现有候选": {"existingorcandidate"},
-        "固定成本": {"fixedcost"},
-        "开启成本": {"openingcost"},
-        "运输时间": {"traveltimehours", "transitdays"},
-    }
-    if right in semantic_aliases.get(left, set()) or left in semantic_aliases.get(right, set()):
-        return 0.82
-    return 0.0

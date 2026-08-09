@@ -1,8 +1,7 @@
 """Bounded stdio checks for the current Workspace-wide intake contract.
 
-This smoke intentionally does not invoke the retired tutorial servers.  It
-proves source discovery/profile/mapping handoff and proves that analysis tools
-are rejected when the Platform execution gate is absent.
+This smoke proves native-cwd source discovery and one typed source Profile.
+It inventories Network tools but never invokes them in the Data-only sample.
 """
 
 from __future__ import annotations
@@ -34,8 +33,6 @@ def server_environment(state_root: Path) -> dict[str, str]:
             "OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV": str(
                 repository_data_dir / "tool-envs" / "supply-chain-network-planner"
             ),
-            "SUPPLY_CHAIN_DATA_RESOURCE_DIR": str(state_root / "data-resources"),
-            "SUPPLY_CHAIN_RESOURCE_DIR": str(state_root / "planning-resources"),
             # Force analysis MCP calls to fail closed in this isolated smoke.
             "OPEN_WEB_CODEX_ANALYSIS_GATE_URL": "",
             "OPEN_WEB_CODEX_ANALYSIS_GATE_KEY": "",
@@ -64,8 +61,8 @@ async def smoke() -> None:
         environment = server_environment(state_root)
         demo_parameters = StdioServerParameters(
             command=str(LAUNCHER),
-            args=["--demo-server", "--workspace-root", str(ROOT)],
-            cwd=str(ROOT),
+            args=["--demo-server"],
+            cwd=str(demo_workspace),
             env=environment,
         )
         async with stdio_client(demo_parameters) as streams:
@@ -89,13 +86,14 @@ async def smoke() -> None:
                 assert reused.structuredContent["status"] == "reused"
                 assert created.structuredContent["dataClassification"] == "synthetic_demo"
         (workspace / "network.csv").write_text(
-            "demand_location_id,name,region,latitude,longitude\nd-1,Jakarta,Jakarta,-6.2,106.8\n",
+            "city_id,city_name,demand_quantity,latitude,longitude\n"
+            "city-1,Jakarta,10,-6.2,106.8\n",
             encoding="utf-8",
         )
         data_parameters = StdioServerParameters(
             command=str(LAUNCHER),
-            args=["--data-server", "--workspace-root", str(workspace)],
-            cwd=str(ROOT),
+            args=["--data-server"],
+            cwd=str(workspace),
             env=environment,
         )
         async with stdio_client(data_parameters) as streams:
@@ -106,68 +104,35 @@ async def smoke() -> None:
                 expected_tools = {
                     "discover_workspace_sources",
                     "inspect_workspace_sources",
-                    "publish_source_profile",
-                    "publish_mapping_proposal",
                     "normalize_network_input",
-                    "validate_normalized_network_input",
-                    "load_administrative_catalog",
-                    "resolve_place_names",
-                    "build_administrative_candidates",
-                    "validate_points_within_boundaries",
+                    "prepare_network_geography",
                 }
-                assert expected_tools <= names, sorted(expected_tools - names)
-                mapping_tool = next(
-                    tool for tool in tools.tools if tool.name == "publish_mapping_proposal"
-                )
-                assert "source_profile_ref" in mapping_tool.inputSchema["properties"]
-                assert "source_profile" not in mapping_tool.inputSchema["properties"]
+                assert names == expected_tools
                 meta = workspace_meta(workspace)
                 discovered = await asyncio.wait_for(
                     session.call_tool("discover_workspace_sources", {}, meta=meta), timeout=10
                 )
                 assert discovered.isError is not True
                 source = discovered.structuredContent["sources"][0]
-                source_ref = source["source_ref"]
+                relative_path = source["relative_path"]
                 profiled = await asyncio.wait_for(
                     session.call_tool(
-                        "publish_source_profile", {"source_refs": [source_ref]}, meta=meta
+                        "inspect_workspace_sources",
+                        {"relative_paths": [relative_path]},
+                        meta=meta,
                     ),
                     timeout=10,
                 )
                 assert profiled.isError is not True
-                profile_ref = profiled.structuredContent["data_ref"]
-                requirement_profile = {
-                    "schemaVersion": "data_requirement_profile.v2",
-                    "entities": [
-                        {
-                            "name": "CityDemand",
-                            "requiredFields": [
-                                {"name": "name"},
-                                {"name": "latitude"},
-                            ],
-                        }
-                    ],
-                }
-                mapping = await asyncio.wait_for(
-                    session.call_tool(
-                        "publish_mapping_proposal",
-                        {
-                            "source_profile_ref": profile_ref,
-                            "requirement_profile": requirement_profile,
-                        },
-                    ),
-                    timeout=10,
-                )
-                assert mapping.isError is not True
-                assert mapping.structuredContent["data_ref"]["resource_schema"] == (
-                    "mapping_proposal.v1"
-                )
-                proposal = await read_resource(session, mapping.structuredContent["data_ref"])
-                assert proposal["candidates"]
+                profile_ref = profiled.structuredContent["resource_ref"]
+                assert profile_ref["resource_schema"] == "source_profile.v1"
+                profile = await read_resource(session, profile_ref)
+                assert profile["sources"][0]["relative_path"] == "network.csv"
+                assert profile["sources"][0]["mapping_suggestions"]
         planning_parameters = StdioServerParameters(
             command=str(LAUNCHER),
-            args=["--workspace-root", str(workspace)],
-            cwd=str(ROOT),
+            args=[],
+            cwd=str(workspace),
             env=environment,
         )
         async with stdio_client(planning_parameters) as streams:

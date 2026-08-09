@@ -6,11 +6,12 @@ from pathlib import Path
 import pytest
 from openpyxl import Workbook
 
+from supply_chain_planner import workspace_intake
 from supply_chain_planner.data_server import _build_planning_source
-from supply_chain_planner.workspace_intake import discover, inspect, propose_mapping, read_rows
+from supply_chain_planner.workspace_intake import discover, inspect, read_rows
 
 
-def test_workspace_discovery_is_bounded_and_returns_opaque_refs(tmp_path: Path) -> None:
+def test_workspace_discovery_returns_bounded_relative_descriptors(tmp_path: Path) -> None:
     (tmp_path / "demand.csv").write_text(
         "origin,quantity,date\nJakarta,10,2026-01-01\n",
         encoding="utf-8",
@@ -24,12 +25,22 @@ def test_workspace_discovery_is_bounded_and_returns_opaque_refs(tmp_path: Path) 
 
     sources = discover(tmp_path)
 
-    assert [source["display_name"] for source in sources] == [
+    assert [source["relative_path"] for source in sources] == [
         "demand.csv",
-        "facilities.json",
+        "nested/facilities.json",
     ]
-    assert all(source["source_ref"].startswith("source-") for source in sources)
-    assert all("/" not in source["source_ref"] for source in sources)
+    assert sources == [
+        {
+            "relative_path": "demand.csv",
+            "format": "csv",
+            "size": (tmp_path / "demand.csv").stat().st_size,
+        },
+        {
+            "relative_path": "nested/facilities.json",
+            "format": "json",
+            "size": (tmp_path / "nested" / "facilities.json").stat().st_size,
+        },
+    ]
 
 
 def test_workspace_discovery_rejects_legacy_excel_formats(tmp_path: Path) -> None:
@@ -37,6 +48,49 @@ def test_workspace_discovery_rejects_legacy_excel_formats(tmp_path: Path) -> Non
 
     with pytest.raises(ValueError, match="unsupported_source_format"):
         discover(tmp_path)
+
+
+def test_exact_workspace_source_validation_rejects_escape_symlink_and_size(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / "valid.csv").write_text("id\n1\n", encoding="utf-8")
+    (tmp_path / "empty.csv").touch()
+    (tmp_path / "unsupported.txt").write_text("id\n1\n", encoding="utf-8")
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.csv"
+    outside.write_text("id\n2\n", encoding="utf-8")
+    (tmp_path / "linked.csv").symlink_to(outside)
+    (tmp_path / "linked-dir").symlink_to(tmp_path.parent, target_is_directory=True)
+
+    for relative_path, expected in [
+        ("", "relative_path_required"),
+        (".", "invalid_workspace_relative_path"),
+        ("../outside.csv", "invalid_workspace_relative_path"),
+        (str((tmp_path / "valid.csv").resolve()), "invalid_workspace_relative_path"),
+        ("linked.csv", "symlink_rejected"),
+        (f"linked-dir/{outside.name}", "symlink_rejected"),
+        ("unsupported.txt", "unsupported_source_format"),
+        ("empty.csv", "source_size_limit"),
+    ]:
+        with pytest.raises(ValueError, match=expected):
+            inspect(tmp_path, relative_path)
+
+    monkeypatch.setattr(workspace_intake, "MAX_BYTES", 4)
+    with pytest.raises(ValueError, match="source_size_limit"):
+        inspect(tmp_path, "valid.csv")
+
+
+def test_source_structure_limits_reject_instead_of_truncating(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "rows.csv").write_text("id\n1\n2\n", encoding="utf-8")
+    monkeypatch.setattr(workspace_intake, "MAX_NORMALIZE_ROWS", 1)
+    with pytest.raises(ValueError, match="row_limit"):
+        inspect(tmp_path, "rows.csv")
+
+    workbook = Workbook()
+    workbook.active.append(["first", "second"])
+    workbook.save(tmp_path / "columns.xlsx")
+    monkeypatch.setattr(workspace_intake, "MAX_XLSX_COLUMNS", 1)
+    with pytest.raises(ValueError, match="column_limit"):
+        inspect(tmp_path, "columns.xlsx")
 
 
 def test_csv_and_json_profiles_are_structural_samples_with_exact_counts(tmp_path: Path) -> None:
@@ -55,7 +109,7 @@ def test_csv_and_json_profiles_are_structural_samples_with_exact_counts(tmp_path
 
     sources = discover(tmp_path)
     profiles = {
-        source["display_name"]: inspect(tmp_path, source["source_ref"]) for source in sources
+        source["relative_path"]: inspect(tmp_path, source["relative_path"]) for source in sources
     }
 
     assert profiles["demand.csv"]["structure"]["delimiter"] == ";"
@@ -81,7 +135,7 @@ def test_read_rows_supports_explicit_rows_array(tmp_path: Path) -> None:
     )
     source = discover(tmp_path)[0]
 
-    assert read_rows(tmp_path, source["source_ref"]) == [
+    assert read_rows(tmp_path, source["relative_path"]) == [
         {"city_id": "IDN-CITY-001", "city_name": "Jakarta"}
     ]
 
@@ -98,11 +152,9 @@ def test_xlsx_profile_preserves_multiple_sheets_and_bounded_rows(tmp_path: Path)
     workbook.save(tmp_path / "network.xlsx")
 
     source = discover(tmp_path)[0]
-    profile = inspect(tmp_path, source["source_ref"])
+    profile = inspect(tmp_path, source["relative_path"])
 
-    assert (
-        source["media_type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    assert source["format"] == "xlsx"
     assert [sheet["sheet"] for sheet in profile["structure"]["sheets"]] == ["需求点", "仓库"]
     assert profile["structure"]["sheets"][0]["columns"] == [
         "Demand Location ID",
@@ -113,101 +165,6 @@ def test_xlsx_profile_preserves_multiple_sheets_and_bounded_rows(tmp_path: Path)
     assert warehouse_sheet["preview"]["rows"] == [["F1", "Existing", "existing"]]
     assert warehouse_sheet["record_count"] == 1
     assert warehouse_sheet["record_count_exact"] is True
-
-
-def test_mapping_candidates_do_not_promote_cross_entity_substring_matches(tmp_path: Path) -> None:
-    (tmp_path / "facilities.csv").write_text(
-        "facility_id,existing_or_candidate\nF1,existing\n",
-        encoding="utf-8",
-    )
-    (tmp_path / "lanes.csv").write_text(
-        "origin_city_id,destination_city_id,distance_km,travel_time_hours,"
-        "base_cost_per_unit,distance_cost_per_km_per_unit,currency\n"
-        "CITY-JKT,CITY-JKT,0,0,1,0.1,IDR\n",
-        encoding="utf-8",
-    )
-    contract = json.loads(
-        (
-            Path(__file__).resolve().parents[1] / "contracts/warehouse-network-planning-1.0.0.json"
-        ).read_text()
-    )
-    profiles = [inspect(tmp_path, source["source_ref"]) for source in discover(tmp_path)]
-
-    proposal = propose_mapping(profiles, contract)
-
-    assert any(
-        item["source_field"] == "origin_city_id" and item["target_entity"] == "Lane"
-        for item in proposal["candidates"]
-    )
-    assert not proposal["conflicts"]
-
-
-def test_mapping_accepts_entity_oriented_requirement_maps(tmp_path: Path) -> None:
-    (tmp_path / "demand-cities.csv").write_text(
-        "city_id,city_name,demand_quantity,longitude,latitude\n"
-        "IDN-CITY-001,Jakarta,10,106.8,-6.2\n",
-        encoding="utf-8",
-    )
-    profiles = [inspect(tmp_path, source["source_ref"]) for source in discover(tmp_path)]
-
-    proposal = propose_mapping(
-        profiles,
-        {
-            "schema": "data_requirement_profile.v2",
-            "demand_points": {
-                "required_fields": ["city_id", "city_name", "demand_quantity", "longitude", "latitude"],
-                "optional_fields": ["province_id"],
-            },
-        },
-    )
-
-    assert {item["target_field"] for item in proposal["candidates"]} >= {
-        "city_id",
-        "city_name",
-        "demand_quantity",
-        "longitude",
-        "latitude",
-    }
-
-
-def test_mapping_accepts_runtime_entity_and_entity_type_names(tmp_path: Path) -> None:
-    (tmp_path / "existing-warehouses.csv").write_text(
-        "warehouse_id,warehouse_name,warehouse_type,city_id,longitude,latitude\n"
-        "WH-JKT,Jakarta,center,IDN-CITY-001,106.8,-6.2\n",
-        encoding="utf-8",
-    )
-    (tmp_path / "demand-cities.csv").write_text(
-        "city_id,city_name,demand_quantity,longitude,latitude\n"
-        "IDN-CITY-001,Jakarta,10,106.8,-6.2\n",
-        encoding="utf-8",
-    )
-    profiles = [inspect(tmp_path, source["source_ref"]) for source in discover(tmp_path)]
-
-    proposal = propose_mapping(
-        profiles,
-        {
-            "schema": "data_requirement_profile.v2",
-            "entities": [
-                {
-                    "entity_type": "facility",
-                    "fields": ["warehouse_id", "warehouse_name", "warehouse_type"],
-                },
-                {
-                    "entity": "demand",
-                    "fields": ["city_id", "city_name", "demand_quantity"],
-                },
-            ],
-        },
-    )
-
-    assert {(item["target_entity"], item["target_field"]) for item in proposal["candidates"]} >= {
-        ("facility", "warehouse_id"),
-        ("facility", "warehouse_name"),
-        ("facility", "warehouse_type"),
-        ("demand", "city_id"),
-        ("demand", "city_name"),
-        ("demand", "demand_quantity"),
-    }
 
 
 def test_confirmed_mapping_builds_strict_planning_source(tmp_path: Path) -> None:
@@ -236,10 +193,10 @@ def test_confirmed_mapping_builds_strict_planning_source(tmp_path: Path) -> None
         (tmp_path / name).write_text(content, encoding="utf-8")
 
     sources = discover(tmp_path)
-    refs = {source["display_name"]: source["source_ref"] for source in sources}
+    refs = {source["relative_path"]: source["relative_path"] for source in sources}
     mapping = [
         {
-            "source_ref": refs["cities.csv"],
+            "relative_path": refs["cities.csv"],
             "source_field": field,
             "target_entity": "City",
             "target_field": field,
@@ -248,7 +205,7 @@ def test_confirmed_mapping_builds_strict_planning_source(tmp_path: Path) -> None
     ]
     mapping += [
         {
-            "source_ref": refs["city-demand.csv"],
+            "relative_path": refs["city-demand.csv"],
             "source_field": field,
             "target_entity": "CityDemand",
             "target_field": field,
@@ -257,7 +214,7 @@ def test_confirmed_mapping_builds_strict_planning_source(tmp_path: Path) -> None
     ]
     mapping += [
         {
-            "source_ref": refs["facilities.csv"],
+            "relative_path": refs["facilities.csv"],
             "source_field": field,
             "target_entity": "Facility",
             "target_field": field,
@@ -275,7 +232,7 @@ def test_confirmed_mapping_builds_strict_planning_source(tmp_path: Path) -> None
     ]
     mapping += [
         {
-            "source_ref": refs["coverage.csv"],
+            "relative_path": refs["coverage.csv"],
             "source_field": field,
             "target_entity": "Coverage",
             "target_field": field,
@@ -284,7 +241,7 @@ def test_confirmed_mapping_builds_strict_planning_source(tmp_path: Path) -> None
     ]
     mapping += [
         {
-            "source_ref": refs["lanes.csv"],
+            "relative_path": refs["lanes.csv"],
             "source_field": field,
             "target_entity": "Lane",
             "target_field": field,

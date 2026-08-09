@@ -7,10 +7,10 @@ import json
 from decimal import Decimal
 
 from .models import (
-    DataRef,
     FinancialEvaluation,
     NetworkScenarioResult,
     NetworkSnapshot,
+    ResourceRef,
     RiskItem,
     RiskRegister,
 )
@@ -32,9 +32,9 @@ def evaluate_financial_case(
     baseline: NetworkScenarioResult,
     candidate: NetworkScenarioResult,
     *,
-    snapshot_ref: DataRef,
-    baseline_result_ref: DataRef,
-    candidate_result_ref: DataRef,
+    snapshot_ref: ResourceRef,
+    baseline_result_ref: ResourceRef,
+    candidate_result_ref: ResourceRef,
     horizon_years: int,
     discount_rate: float,
     annual_growth_rate: float,

@@ -12,7 +12,7 @@ import re
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.stdio import stdio_server
@@ -37,6 +37,7 @@ from .data_core import build_planning_dataset as aggregate_planning_dataset
 from .geography import (
     build_administrative_candidates as _build_administrative_candidates,
 )
+from .geography import enrich_network_geography
 from .geography import (
     load_administrative_catalog as _load_administrative_catalog,
 )
@@ -46,34 +47,42 @@ from .geography import (
 from .geography import (
     validate_points_within_boundaries as _validate_points_within_boundaries,
 )
+from .mapping import FieldObservation, TransformSpec, suggest_role_mappings
 from .models import (
+    MCP_SERVER_NAME,
     City,
     CityDemand,
     CityLane,
-    DataAgentRef,
+    ConfirmedSourceDecision,
     DataAgentResourceToolResult,
     Facility,
+    GeographyOverride,
     PlanningDataset,
     PlanningSource,
     Point,
+    ResourceRef,
     ServicePolicy,
     ValidationResult,
     WarehouseCityCoverage,
 )
-from .resource_store import PublishedResource, ResourceStore
+from .network_models import NormalizedInputBatch
+from .normalization import (
+    ConfirmedFieldMapping,
+    ConfirmedSourceRows,
+    normalize_confirmed_rows,
+)
+from .resource_store import PublishedResource, ResourceStore, resource_ref, workspace_resource_root
 from .workspace_intake import (
     discover,
     flatten_record,
     inspect,
-    propose_mapping,
     read_json_document,
     read_rows,
     trusted_workspace_root,
     workspace_source_metadata,
 )
 
-MCP_SERVER_NAME = "supply_chain_data"
-RESOURCE_URI_PREFIX = "supply-chain-data://resources/"
+RESOURCE_URI_PREFIX = "supply-chain://resources/"
 MAX_SOURCE_CATALOG_ENTRIES = 500
 SANDBOX_STATE_META_CAPABILITY = "codex/sandbox-state-meta"
 
@@ -81,14 +90,14 @@ mcp = FastMCP(
     "Supply Chain Data",
     instructions=(
         "This is a read-only enterprise data boundary for the supply-chain Data Agent. "
-        "Inputs are opaque source references resolved under the trusted Turn Workspace; "
+        "Inputs are validated Workspace-relative paths resolved under the trusted Turn Workspace; "
         "never request or accept organization IDs, Profile IDs, credentials, arbitrary SQL, "
         "filesystem paths, or write statements. Discover and inspect the complete authorized "
-        "Workspace before proposing mappings. Inspection returns exact record counts plus a "
+        "Workspace before confirming mappings. Inspection returns exact record counts plus a "
         "head preview; preview rows are examples only and never the full source. Never use "
         "the preview row count as the source row count. The normalization tool rereads the "
         "complete source files and publishes only the entities required by the current "
-        "question as normalized_network_input.v1 plus data_quality_report.v1. Copy every "
+        "question as normalized_network_input.v1. Copy every "
         "returned Resource reference unchanged. Validate the Resource before handing it to "
         "the Network Planning Agent. Do not paste unbounded source rows into messages and do "
         "not choose a warehouse-network solution."
@@ -107,12 +116,7 @@ _CONTRACT_PATH = (
 def _store() -> ResourceStore:
     global _resource_store
     if _resource_store is None:
-        resource_root = Path(
-            os.environ.get(
-                "SUPPLY_CHAIN_DATA_RESOURCE_DIR",
-                _profile_state_root / "mcp-state" / "supply-chain-data" / "resources",
-            )
-        ).resolve()
+        resource_root = workspace_resource_root(_profile_state_root, _workspace_root)
         _resource_store = ResourceStore(
             resource_root,
             uri_prefix=RESOURCE_URI_PREFIX,
@@ -121,24 +125,14 @@ def _store() -> ResourceStore:
 
 
 @mcp.resource(
-    "supply-chain-data://resources/{resource_id}",
-    name="supply_chain_data_resource",
+    "supply-chain://resources/{resource_id}",
+    name="supply_chain_resource",
     title="Supply-chain data Resource",
     mime_type="application/json",
 )
 def read_data_resource(resource_id: str) -> str:
     """Read one immutable data Resource by its opaque Resource name."""
     return _store().read(resource_id)
-
-
-def _data_ref(published: PublishedResource) -> DataAgentRef:
-    content = _store().read(published.resource_id).encode("utf-8")
-    return DataAgentRef(
-        server=MCP_SERVER_NAME,
-        uri=published.uri,
-        resource_schema=published.schema,
-        content_sha256=hashlib.sha256(content).hexdigest(),
-    )
 
 
 def _artifact_ref(published: PublishedResource) -> ArtifactRef:
@@ -258,7 +252,10 @@ def _bounded_intake_envelope(
 
 
 def _workspace(ctx: Context) -> Path:
-    return trusted_workspace_root(ctx.request_context.meta)
+    workspace = trusted_workspace_root(ctx.request_context.meta)
+    if not workspace.samefile(_workspace_root):
+        raise ValueError("workspace_scope_mismatch")
+    return workspace
 
 
 def _publish_json(schema: str, payload: dict[str, Any], summary: str) -> CallToolResult:
@@ -267,15 +264,12 @@ def _publish_json(schema: str, payload: dict[str, Any], summary: str) -> CallToo
         TextContent(type="text", text=summary),
         _resource_link(published, summary),
     ]
-    envelope = _bounded_intake_envelope(published, payload)
-    if envelope is not None:
-        content.append(envelope)
     return CallToolResult(
         content=content,
         structuredContent={
             "summary": summary,
             "resource_name": published.resource_id,
-            "data_ref": _data_ref(published).model_dump(mode="json"),
+            "resource_ref": resource_ref(published).model_dump(mode="json"),
         },
     )
 
@@ -327,27 +321,94 @@ def discover_workspace_sources(ctx: Context) -> dict[str, Any]:
 
 @mcp.tool(structured_output=True)
 def inspect_workspace_sources(
-    source_refs: list[str],
+    relative_paths: list[str],
     ctx: Context,
-) -> dict[str, Any]:
-    """Return exact source counts plus explicitly marked head previews.
+) -> Annotated[CallToolResult, DataAgentResourceToolResult]:
+    """Inspect selected Workspace files and publish one typed source profile.
 
     Preview rows are examples for schema inspection only. They are never a
     complete source snapshot and must not be used as the source row count.
     """
-    if not source_refs or len(source_refs) > MAX_SOURCE_CATALOG_ENTRIES:
-        raise ValueError("source_refs must contain 1-100 opaque source references")
-    root = _workspace(ctx)
-    profile = {
-        "schema": "source_profile.v1",
-        "sources": [inspect(root, source_ref) for source_ref in source_refs],
-        **workspace_source_metadata(root),
-    }
-    return _bound_agent_previews(profile)
+    profile = _inspect_workspace_sources(relative_paths, ctx)
+    summary = f"Inspected {len(profile['sources'])} authorized Workspace sources."
+    return _publish_json("source_profile.v1", profile, summary)
+
+
+def _inspect_workspace_sources(
+    relative_paths: list[str],
+    ctx: Context,
+) -> dict[str, Any]:
+    if not relative_paths or len(relative_paths) > MAX_SOURCE_CATALOG_ENTRIES:
+        raise ValueError("relative_paths must contain 1-500 Workspace-relative paths")
+    if len(set(relative_paths)) != len(relative_paths):
+        raise ValueError("relative_paths must not contain duplicates")
+    sources = [inspect(_workspace(ctx), relative_path) for relative_path in relative_paths]
+    for source in sources:
+        source["mapping_suggestions"] = _mapping_suggestions(source["structure"])
+    return _bound_agent_previews(
+        {
+            "schemaVersion": "source_profile.v1",
+            "sources": sources,
+        }
+    )
+
+
+def _mapping_suggestions(structure: dict[str, Any]) -> list[dict[str, Any]]:
+    observations: list[FieldObservation] = []
+
+    def add(columns: list[Any], rows: list[Any]) -> None:
+        for index, column in enumerate(columns):
+            name = str(column).strip()
+            if not name:
+                continue
+            samples = tuple(
+                str(row[index])[:256]
+                for row in rows[:3]
+                if isinstance(row, list) and index < len(row) and row[index] not in (None, "")
+            )
+            observations.append(FieldObservation(name=name, sample_values=samples))
+
+    kind = structure.get("kind")
+    if kind == "table":
+        add(structure.get("columns", []), structure.get("preview", {}).get("rows", []))
+    elif kind == "workbook":
+        for sheet in structure.get("sheets", []):
+            add(sheet.get("columns", []), sheet.get("preview", {}).get("rows", []))
+    elif kind == "json":
+        for array in structure.get("arrays", []):
+            values: dict[str, list[str]] = {}
+            for item in array.get("preview", {}).get("rows", []):
+                for name, field in item.get("fields", {}).items():
+                    sample = field.get("sample") if isinstance(field, dict) else None
+                    if sample not in (None, ""):
+                        values.setdefault(str(name), []).append(str(sample)[:256])
+            observations.extend(
+                FieldObservation(name=name, sample_values=tuple(samples[:3]))
+                for name, samples in values.items()
+            )
+    return [
+        {
+            "role": suggestion.role.value,
+            "confidence": suggestion.confidence,
+            "ambiguous": suggestion.ambiguous,
+            "field_mappings": [
+                {
+                    "target_field": mapping.target_field,
+                    "source_fields": list(mapping.source_fields),
+                    "transform": mapping.transform.model_dump(mode="json"),
+                    "score": mapping.score,
+                    "reason_code": mapping.reason_code,
+                }
+                for mapping in suggestion.field_mappings
+            ],
+        }
+        for suggestion in suggest_role_mappings(observations)
+    ]
 
 
 def _bound_agent_previews(profile: dict[str, Any]) -> dict[str, Any]:
     """Keep structural evidence while preventing sample rows from entering context."""
+
     def trim(value: Any) -> Any:
         if isinstance(value, dict):
             result = {key: trim(item) for key, item in value.items()}
@@ -364,56 +425,7 @@ def _bound_agent_previews(profile: dict[str, Any]) -> dict[str, Any]:
     return trim(profile)
 
 
-@mcp.tool(structured_output=True)
-def publish_source_profile(
-    source_refs: list[str],
-    ctx: Context,
-) -> Annotated[CallToolResult, DataAgentResourceToolResult]:
-    """Persist an immutable bounded source_profile.v1 Resource."""
-    profile = _wrap_intake_payload(
-        "source_profile.v1",
-        inspect_workspace_sources(source_refs, ctx),
-    )
-    summary = (
-        f"Profiled {len(profile['sources'])} authorized Workspace sources. "
-        "This source profile is complete for the supplied evidence; do not call "
-        "publish_source_profile again for the same source references."
-    )
-    result = _publish_json("source_profile.v1", profile, summary)
-    return result
-
-
-@mcp.tool(structured_output=True)
-def publish_mapping_proposal(
-    source_profile_ref: DataAgentRef,
-    requirement_profile: dict[str, Any],
-) -> Annotated[CallToolResult, DataAgentResourceToolResult]:
-    """Publish fuzzy field candidates from the canonical source Profile.
-
-    The model passes only the immutable Resource reference.  Loading the
-    Profile here keeps its bounded structures, provenance and source digest
-    authoritative instead of asking the model to copy the Profile into a new
-    tool argument.
-    """
-    source_profile = _load_source_profile(source_profile_ref)
-    proposal_body = propose_mapping(source_profile["sources"], requirement_profile)
-    if not proposal_body["candidates"]:
-        raise ValueError("mapping_candidates_empty")
-    proposal = _wrap_intake_payload(
-        "mapping_proposal.v1",
-        proposal_body,
-        source_hash=hashlib.sha256(
-            json.dumps(source_profile, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest(),
-    )
-    summary = (
-        f"Generated {len(proposal['candidates'])} mapping candidates. "
-        "The complete mapping revision requires user confirmation."
-    )
-    return _publish_json("mapping_proposal.v1", proposal, summary)
-
-
-def _load_source_profile(resource_ref: DataAgentRef) -> dict[str, Any]:
+def _load_source_profile(resource_ref: ResourceRef) -> dict[str, Any]:
     """Load and validate the canonical source_profile.v1 Resource.
 
     Workspace source references and MCP Resource references are different
@@ -421,10 +433,10 @@ def _load_source_profile(resource_ref: DataAgentRef) -> dict[str, Any]:
     resolve a Workspace path from a model-provided value.
     """
     if resource_ref.server != MCP_SERVER_NAME:
-        raise ValueError("source_profile_ref must identify supply_chain_data")
+        raise ValueError("source_profile_ref must identify supply_chain")
     if resource_ref.resource_schema != "source_profile.v1":
         raise ValueError("source_profile_ref must identify source_profile.v1")
-    profile = _store().load_uri(resource_ref.uri)
+    profile = _store().load(resource_ref)
     if profile.get("schemaVersion") != "source_profile.v1":
         raise ValueError("source_profile_resource_schema_mismatch")
     sources = profile.get("sources")
@@ -441,22 +453,22 @@ def _load_source_profile(resource_ref: DataAgentRef) -> dict[str, Any]:
 
 def _mapping_rows(
     root: Path,
-    source_refs: list[str],
+    relative_paths: list[str],
     mappings: list[dict[str, Any]],
 ) -> dict[str, list[dict[str, Any]]]:
     """Apply an explicit mapping revision while keeping full rows server-side."""
     by_source: dict[str, list[dict[str, Any]]] = {}
     for mapping in mappings:
-        source_ref = str(mapping.get("source_ref", "")).strip()
-        if source_ref not in source_refs:
+        relative_path = str(mapping.get("relative_path", "")).strip()
+        if relative_path not in relative_paths:
             continue
-        by_source.setdefault(source_ref, []).append(mapping)
+        by_source.setdefault(relative_path, []).append(mapping)
     entities: dict[str, list[dict[str, Any]]] = {}
-    for source_ref in source_refs:
-        source_mappings = by_source.get(source_ref, [])
+    for relative_path in relative_paths:
+        source_mappings = by_source.get(relative_path, [])
         if not source_mappings:
             continue
-        for row_index, row in enumerate(read_rows(root, source_ref)):
+        for row_index, row in enumerate(read_rows(root, relative_path)):
             flattened = flatten_record(row)
             grouped: dict[str, dict[str, Any]] = {}
             for mapping in source_mappings:
@@ -472,9 +484,10 @@ def _mapping_rows(
                     value = flattened.get(source_field.rsplit("[].", 1)[-1])
                 if value in (None, ""):
                     continue
-                grouped.setdefault(target_entity, {"_source_ref": source_ref, "_row": row_index})[
-                    target_field
-                ] = value
+                grouped.setdefault(
+                    target_entity,
+                    {"_relative_path": relative_path, "_row": row_index},
+                )[target_field] = value
             for entity, values in grouped.items():
                 entities.setdefault(entity, []).append(values)
     return entities
@@ -484,157 +497,64 @@ def _canonicalize_mapping_items(
     mappings: Any,
     sources: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Convert bounded mapping forms into the internal field form.
+    """Normalize explicit field decisions without accepting historical aliases."""
+    available_paths = {
+        str(source.get("relative_path", "")).strip()
+        for source in sources
+        if isinstance(source, dict)
+    }
+    expanded: list[dict[str, str]] = []
 
-    The Data Agent may return either the flat ``mappings`` list emitted by the
-    proposal tool or an entity-oriented ``entities`` object after the user has
-    confirmed the mapping. Both forms carry the same explicit source and target
-    fields; accepting both avoids making the model translate a valid mapping
-    into an unnecessary second wire shape.
-    """
-    by_file: dict[str, str] = {}
-    for source in sources:
-        source_ref = str(source.get("source_ref", "")).strip()
-        for name in (
-            source.get("relative_path"),
-            source.get("path"),
-            source.get("display_name"),
-        ):
-            normalized = str(name or "").strip()
-            if normalized and source_ref:
-                by_file[normalized] = source_ref
-
-    def resolve_source_ref(
+    def add_mapping(
         value: dict[str, Any],
-        inherited_ref: str = "",
-        inherited_file: str = "",
-    ) -> str:
-        explicit_ref = str(
-            value.get("source_ref") or value.get("sourceRef") or inherited_ref
-        ).strip()
-        if explicit_ref:
-            return explicit_ref
-        source_refs = value.get("source_refs") or value.get("sourceRefs")
-        if isinstance(source_refs, list) and len(source_refs) == 1:
-            return str(source_refs[0]).strip()
-        source_file = str(
-            value.get("source_file")
-            or value.get("sourceFile")
-            or value.get("source")
-            or inherited_file
-        ).strip()
-        return by_file.get(source_file, "")
-
-    def resolve_source_file(value: dict[str, Any], inherited_file: str = "") -> str:
-        return str(
-            value.get("source_file")
-            or value.get("sourceFile")
-            or value.get("source")
-            or inherited_file
-        ).strip()
-
-    if isinstance(mappings, dict):
-        expanded_entities: list[dict[str, Any]] = []
-        for entity, value in mappings.items():
-            if not isinstance(value, dict):
-                continue
-            entity_source_file = resolve_source_file(value)
-            entity_source_ref = resolve_source_ref(value)
-            fields = value.get("fields") or value.get("field_mappings") or value.get(
-                "fieldMappings"
-            )
-            if isinstance(fields, list):
-                for field in fields:
-                    if not isinstance(field, dict):
-                        continue
-                    expanded_entities.append(
-                        {
-                            "source_ref": resolve_source_ref(
-                                field, entity_source_ref, entity_source_file
-                            ),
-                            "source_file": resolve_source_file(field, entity_source_file),
-                            "target_entity": field.get("target_entity") or entity,
-                            "target_field": field.get("target_field"),
-                            "source_field": field.get("source_field")
-                            or field.get("sourceField"),
-                        }
-                    )
-            else:
-                expanded_entities.append(
-                    {
-                        "target_entity": entity,
-                        "source_ref": entity_source_ref,
-                        "source_file": entity_source_file,
-                        **value,
-                    }
-                )
-        mappings = expanded_entities
-    if not isinstance(mappings, list):
-        return []
-    expanded: list[dict[str, Any]] = []
-    for mapping in mappings:
-        if not isinstance(mapping, dict):
-            continue
-        source_ref = resolve_source_ref(mapping)
-        if not source_ref:
-            source_ref = by_file.get(resolve_source_file(mapping), "")
-        target_entity = str(mapping.get("target_entity", "")).strip()
-        fields = mapping.get("fields") or mapping.get("field_mappings") or mapping.get(
-            "fieldMappings"
-        )
+        *,
+        inherited_entity: str = "",
+        inherited_path: str = "",
+    ) -> None:
+        relative_path = str(value.get("relative_path") or inherited_path).strip()
+        target_entity = str(value.get("target_entity") or inherited_entity).strip()
+        fields = value.get("fields")
         if isinstance(fields, dict):
             for target_field, source_field in fields.items():
-                if isinstance(source_field, dict):
-                    field_source_ref = resolve_source_ref(source_field, source_ref)
-                    source_field = source_field.get("source_field") or source_field.get(
-                        "sourceField"
-                    )
-                else:
-                    field_source_ref = source_ref
-                if field_source_ref and source_field and target_entity and target_field:
-                    expanded.append(
+                if isinstance(source_field, str):
+                    add_mapping(
                         {
-                            "source_ref": field_source_ref,
-                            "source_field": str(source_field),
-                            "target_entity": target_entity,
-                            "target_field": str(target_field),
-                        }
+                            "relative_path": relative_path,
+                            "source_field": source_field,
+                            "target_field": target_field,
+                        },
+                        inherited_entity=target_entity,
                     )
-            continue
+            return
         if isinstance(fields, list):
             for field in fields:
-                if not isinstance(field, dict):
-                    continue
-                field_source_ref = str(field.get("source_ref") or source_ref).strip()
-                field_target_entity = str(
-                    field.get("target_entity") or target_entity
-                ).strip()
-                if (
-                    field_source_ref
-                    and field.get("source_field")
-                    and field_target_entity
-                    and field.get("target_field")
-                ):
-                    expanded.append(
-                        {
-                            "source_ref": field_source_ref,
-                            "source_field": str(field["source_field"]),
-                            "target_entity": field_target_entity,
-                            "target_field": str(field["target_field"]),
-                        }
+                if isinstance(field, dict):
+                    add_mapping(
+                        field,
+                        inherited_entity=target_entity,
+                        inherited_path=relative_path,
                     )
-            continue
-        source_field = mapping.get("source_field") or mapping.get("sourceField")
-        target_field = mapping.get("target_field") or mapping.get("targetField")
-        if source_ref and source_field and target_entity and target_field:
+            return
+        source_field = str(value.get("source_field", "")).strip()
+        target_field = str(value.get("target_field", "")).strip()
+        if relative_path in available_paths and source_field and target_entity and target_field:
             expanded.append(
                 {
-                    "source_ref": source_ref,
-                    "source_field": str(source_field),
+                    "relative_path": relative_path,
+                    "source_field": source_field,
                     "target_entity": target_entity,
-                    "target_field": str(target_field),
+                    "target_field": target_field,
                 }
             )
+
+    if isinstance(mappings, dict):
+        for entity, value in mappings.items():
+            if isinstance(value, dict):
+                add_mapping(value, inherited_entity=str(entity))
+    elif isinstance(mappings, list):
+        for value in mappings:
+            if isinstance(value, dict):
+                add_mapping(value)
     return expanded
 
 
@@ -694,9 +614,7 @@ def _compose_demand_rows(
         merged = {**city, **demand}
         if city:
             merged.setdefault("city_name", _mapped_value(city, "city_name", "name"))
-            merged.setdefault(
-                "province_name", _mapped_value(city, "province_name", "region")
-            )
+            merged.setdefault("province_name", _mapped_value(city, "province_name", "region"))
             merged.setdefault(
                 "province_id",
                 _mapped_value(city, "province_id", "region_id", "province_name", "region"),
@@ -719,18 +637,19 @@ def _compose_facility_rows(
             merged.setdefault("city_name", _mapped_value(city, "city_name", "name"))
             merged.setdefault("longitude", _mapped_value(city, "longitude", "lon"))
             merged.setdefault("latitude", _mapped_value(city, "latitude", "lat"))
-        ownership = str(
-            _mapped_value(facility, "existing_or_candidate", "is_existing") or "existing"
-        ).strip().lower()
+        ownership = (
+            str(_mapped_value(facility, "existing_or_candidate", "is_existing") or "existing")
+            .strip()
+            .lower()
+        )
         is_existing = ownership not in {"candidate", "false", "0", "no"}
         rows.append((merged, is_existing))
     return rows
 
 
-@mcp.tool(structured_output=True)
-def normalize_network_input(
+def _legacy_normalize_network_input(
     requirement_profile_ref: dict[str, Any],
-    source_profile_ref: DataAgentRef,
+    source_profile_ref: ResourceRef,
     mapping_revision: dict[str, Any],
     parameter_snapshot: dict[str, Any],
     ctx: Context,
@@ -753,8 +672,8 @@ def normalize_network_input(
     )
     if not mappings:
         raise ValueError("mapping_revision_mappings_missing")
-    source_refs = [str(source.get("source_ref")) for source in profile.get("sources", [])]
-    entities = _mapping_rows(_workspace(ctx), source_refs, mappings)
+    relative_paths = [str(source.get("relative_path")) for source in profile.get("sources", [])]
+    entities = _mapping_rows(_workspace(ctx), relative_paths, mappings)
     country = (
         str(
             parameter_snapshot.get("country_code")
@@ -784,12 +703,9 @@ def normalize_network_input(
             city_id = _mapped_value(row, "city_id", "demand_city_id")
             city_name = _mapped_value(row, "city_name", "name")
             province_name = _mapped_value(row, "province_name", "region")
-            province_id = _mapped_value(
-                row, "province_id", "region_id", "province_name", "region"
-            )
+            province_id = _mapped_value(row, "province_id", "region_id", "province_name", "region")
             if any(
-                value in (None, "")
-                for value in (city_id, city_name, province_id, province_name)
+                value in (None, "") for value in (city_id, city_name, province_id, province_name)
             ):
                 raise ValueError("missing_required_field:demand_city_identity")
             demands.append(
@@ -875,13 +791,10 @@ def normalize_network_input(
             city_id = _mapped_value(row, "city_id")
             city_name = _mapped_value(row, "city_name")
             if any(
-                value in (None, "")
-                for value in (warehouse_id, warehouse_name, city_id, city_name)
+                value in (None, "") for value in (warehouse_id, warehouse_name, city_id, city_name)
             ):
                 raise ValueError("missing_required_field:warehouse_identity")
-            warehouse_type = str(
-                _mapped_value(row, "warehouse_type", "type") or "center"
-            ).lower()
+            warehouse_type = str(_mapped_value(row, "warehouse_type", "type") or "center").lower()
             target.append(
                 Warehouse(
                     warehouse_id=str(warehouse_id),
@@ -891,16 +804,11 @@ def normalize_network_input(
                     else "center",
                     city_id=str(city_id),
                     city_name=str(city_name),
-                    longitude=_mapped_float(
-                        _mapped_value(row, "longitude", "lon"), "longitude"
-                    ),
-                    latitude=_mapped_float(
-                        _mapped_value(row, "latitude", "lat"), "latitude"
-                    ),
+                    longitude=_mapped_float(_mapped_value(row, "longitude", "lon"), "longitude"),
+                    latitude=_mapped_float(_mapped_value(row, "latitude", "lat"), "latitude"),
                     upstream_center_id=(
                         str(_mapped_value(row, "upstream_center_id", "center_id"))
-                        if _mapped_value(row, "upstream_center_id", "center_id")
-                        not in (None, "")
+                        if _mapped_value(row, "upstream_center_id", "center_id") not in (None, "")
                         else None
                     ),
                     is_existing=is_existing,
@@ -1024,8 +932,138 @@ def normalize_network_input(
 
 
 @mcp.tool(structured_output=True)
+def normalize_network_input(
+    source_profile_ref: ResourceRef,
+    confirmed_sources: list[ConfirmedSourceDecision],
+    country_code: str,
+    ctx: Context,
+) -> Annotated[CallToolResult, DataAgentResourceToolResult]:
+    """Normalize exact Workspace files using only explicit confirmed decisions."""
+    profile = _load_source_profile(source_profile_ref)
+    country = country_code.strip().upper()
+    if not re.fullmatch(r"[A-Z]{2,3}", country):
+        raise ValueError("country_code_required_iso_alpha2_or_alpha3")
+    available = {str(source["relative_path"]): source for source in profile.get("sources", [])}
+    if not confirmed_sources or len(confirmed_sources) > len(available):
+        raise ValueError("confirmed_sources_must_select_profile_sources")
+    selected_paths = [decision.relative_path for decision in confirmed_sources]
+    if len(set(selected_paths)) != len(selected_paths):
+        raise ValueError("confirmed_source_relative_paths_must_be_unique")
+    if not set(selected_paths) <= set(available):
+        raise ValueError("confirmed_source_not_in_profile")
+    normalized_sources = []
+    for decision in confirmed_sources:
+        mappings = [
+            ConfirmedFieldMapping(
+                target_field=mapping.target_field,
+                source_field=mapping.source_field,
+                transform=TransformSpec(
+                    kind=mapping.transform,
+                    factor=mapping.factor,
+                ),
+            )
+            for mapping in decision.mappings
+        ]
+        normalized_sources.append(
+            ConfirmedSourceRows(
+                role=decision.role,
+                rows=read_rows(_workspace(ctx), decision.relative_path),
+                mappings=mappings,
+            )
+        )
+    state, batch = normalize_confirmed_rows(normalized_sources)
+    payload = {
+        "schemaVersion": "normalized_network_input.v1",
+        "country_code": country,
+        "state": state,
+        **batch.model_dump(mode="json"),
+    }
+    return _publish_json(
+        "normalized_network_input.v1",
+        payload,
+        f"Normalized {len(confirmed_sources)} confirmed Workspace sources; state is {state}.",
+    )
+
+
+@mcp.tool(structured_output=True)
+def prepare_network_geography(
+    normalized_input_ref: ResourceRef,
+    administrative_catalog_relative_path: str,
+    admin_level: str,
+    ctx: Context,
+    overrides: list[GeographyOverride] | None = None,
+    candidate_level: Literal["province", "city"] | None = None,
+) -> Annotated[CallToolResult, DataAgentResourceToolResult]:
+    """Enrich normalized records from one validated administrative catalog."""
+    if normalized_input_ref.resource_schema != "normalized_network_input.v1":
+        raise ValueError("normalized_input_ref_must_be_normalized_network_input_v1")
+    payload = _store().load(normalized_input_ref)
+    country_code = str(payload.get("country_code", "")).strip().upper()
+    if not re.fullmatch(r"[A-Z]{2,3}", country_code):
+        raise ValueError("normalized_input_country_code_missing")
+    batch = NormalizedInputBatch.model_validate(
+        {
+            key: payload.get(key, [])
+            for key in (
+                "demand_cities",
+                "warehouses",
+                "current_assignments",
+                "route_quotes",
+                "issues",
+            )
+        }
+    )
+    catalog = _load_administrative_catalog(
+        country_code,
+        admin_level,
+        read_json_document(_workspace(ctx), administrative_catalog_relative_path),
+    )
+    override_map = {
+        (override.entity, override.entity_id): override.catalog_city_id
+        for override in overrides or []
+    }
+    if len(override_map) != len(overrides or []):
+        raise ValueError("geography_overrides_must_be_unique")
+    demands, warehouses, candidates, issues = enrich_network_geography(
+        batch.demand_cities,
+        batch.warehouses,
+        catalog,
+        overrides=override_map,
+        candidate_level=candidate_level,
+    )
+    prepared = batch.model_copy(
+        update={
+            "demand_cities": demands,
+            "warehouses": warehouses,
+            "issues": [*batch.issues, *issues],
+        }
+    )
+    has_missing_coordinates = any(
+        item.longitude is None or item.latitude is None
+        for item in [*prepared.demand_cities, *prepared.warehouses]
+    )
+    state = (
+        "needs_input"
+        if any(issue.severity == "error" for issue in prepared.issues)
+        else "needs_geography"
+        if has_missing_coordinates
+        else "ready"
+    )
+    return _publish_json(
+        "normalized_network_input.v1",
+        {
+            "schemaVersion": "normalized_network_input.v1",
+            "country_code": country_code,
+            "state": state,
+            **prepared.model_dump(mode="json"),
+            "candidate_warehouses": candidates,
+        },
+        f"Prepared network geography; state is {state}.",
+    )
+
+
 def validate_normalized_network_input(
-    normalized_input_ref: DataAgentRef,
+    normalized_input_ref: ResourceRef,
     requested_analysis: str,
 ) -> dict[str, Any]:
     """Validate only the data needed by the requested analysis."""
@@ -1056,7 +1094,6 @@ def validate_normalized_network_input(
     }
 
 
-@mcp.tool(structured_output=True)
 def load_administrative_catalog(
     country_code: str,
     admin_level: str,
@@ -1073,10 +1110,9 @@ def load_administrative_catalog(
     )
 
 
-@mcp.tool(structured_output=True)
 def resolve_place_names(
-    rows_ref: DataAgentRef,
-    admin_catalog_ref: DataAgentRef,
+    rows_ref: ResourceRef,
+    admin_catalog_ref: ResourceRef,
 ) -> Annotated[CallToolResult, DataAgentResourceToolResult]:
     """Resolve city identifiers and names without guessing ambiguous matches."""
     rows_payload = _store().load_uri(rows_ref.uri)
@@ -1088,9 +1124,8 @@ def resolve_place_names(
     )
 
 
-@mcp.tool(structured_output=True)
 def build_administrative_candidates(
-    admin_catalog_ref: DataAgentRef,
+    admin_catalog_ref: ResourceRef,
     level: str,
 ) -> Annotated[CallToolResult, DataAgentResourceToolResult]:
     """Create province- or city-level candidate warehouse records."""
@@ -1101,10 +1136,9 @@ def build_administrative_candidates(
     )
 
 
-@mcp.tool(structured_output=True)
 def validate_points_within_boundaries(
     points_source_ref: str,
-    boundary_ref: DataAgentRef,
+    boundary_ref: ResourceRef,
     ctx: Context,
 ) -> dict[str, Any]:
     """Validate Workspace point records against a published boundary Resource."""
@@ -1138,7 +1172,7 @@ def normalize_planning_dataset(
         raise ValueError("planning dataset normalization requires confirmed parameters")
     if not source_refs or len(source_refs) > MAX_SOURCE_CATALOG_ENTRIES:
         raise ValueError("source_refs must contain 1-100 opaque source references")
-    source_profile = inspect_workspace_sources(source_refs, ctx)
+    source_profile = _inspect_workspace_sources(source_refs, ctx)
     mapping_items = confirmed_mapping.get("mappings") or confirmed_mapping.get("candidates") or []
     if not isinstance(mapping_items, list) or not mapping_items:
         raise ValueError("confirmed_mapping must contain a non-empty mappings list")
@@ -1181,7 +1215,7 @@ def normalize_planning_dataset(
 
 def _build_planning_source(
     root: Path,
-    source_refs: list[str],
+    relative_paths: list[str],
     mapping_items: list[dict[str, Any]],
     answers: list[dict[str, Any]],
 ) -> PlanningSource:
@@ -1200,11 +1234,11 @@ def _build_planning_source(
         raise ValueError("service_target_parameters_out_of_range")
     grouped: dict[str, list[dict[str, Any]]] = {}
     grouped_by_key: dict[str, dict[str, dict[str, Any]]] = {}
-    for source_ref in source_refs:
-        for row_index, row in enumerate(read_rows(root, source_ref)):
+    for relative_path in relative_paths:
+        for row_index, row in enumerate(read_rows(root, relative_path)):
             flat = flatten_record(row)
             for item in mapping_items:
-                if item.get("source_ref") != source_ref:
+                if item.get("relative_path") != relative_path:
                     continue
                 field = str(item.get("source_field", "")).strip()
                 value = flat.get(field)
@@ -1212,7 +1246,7 @@ def _build_planning_source(
                     continue
                 entity_name = str(item.get("target_entity", "")).strip()
                 target_field = str(item.get("target_field", "")).strip()
-                key = f"{source_ref}:{row.get('__sheet_name', '')}:{row_index}:{entity_name}"
+                key = f"{relative_path}:{row.get('__sheet_name', '')}:{row_index}:{entity_name}"
                 entity_index = grouped_by_key.setdefault(entity_name, {})
                 entity = entity_index.get(key)
                 if entity is None:
@@ -1344,9 +1378,8 @@ def _build_planning_source(
         raise ValueError("planning_dataset_city_lane_currency_mismatch")
     currency = currencies.pop()
     source_metadata = workspace_source_metadata(root)
-    source_hash = hashlib.sha256(json.dumps(source_refs, sort_keys=True).encode()).hexdigest()[:16]
     source = PlanningSource(
-        source_id=f"workspace-{source_hash}",
+        source_id="workspace-confirmed",
         market=market.upper(),
         label="Workspace-confirmed warehouse network planning dataset",
         source_updated_at=datetime.now(UTC),
@@ -1431,11 +1464,11 @@ def _date(value: Any) -> date:
 
 
 def validate_planning_dataset(
-    resource_ref: DataAgentRef,
+    resource_ref: ResourceRef,
 ) -> ValidationResult:
     """Validate planning-dataset structure, totals, handoff projection, and quality state."""
     if resource_ref.server != MCP_SERVER_NAME:
-        raise ValueError(f"data_ref.server must be {MCP_SERVER_NAME}")
+        raise ValueError(f"resource_ref.server must be {MCP_SERVER_NAME}")
     if resource_ref.resource_schema != "planning-dataset.v2":
         raise ValueError("resource_ref must identify planning-dataset.v2")
     raw = _store().load_uri(resource_ref.uri)
@@ -1543,24 +1576,13 @@ def validate_planning_dataset(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Read-only supply-chain data MCP server")
-    parser.add_argument(
-        "--workspace-root",
-        type=Path,
-        default=Path.cwd(),
-        help="Plugin root used for default fixture and Profile Resource locations",
-    )
     parser.add_argument("--transport", choices=("stdio",), default="stdio")
-    args = parser.parse_args()
+    parser.parse_args()
 
     global _workspace_root, _profile_state_root, _resource_store
-    _workspace_root = args.workspace_root.resolve()
+    _workspace_root = Path.cwd().resolve(strict=True)
     _profile_state_root = Path(os.environ.get("CODEX_HOME", _workspace_root / ".codex")).resolve()
-    resource_root = Path(
-        os.environ.get(
-            "SUPPLY_CHAIN_DATA_RESOURCE_DIR",
-            _profile_state_root / "mcp-state" / "supply-chain-data" / "resources",
-        )
-    ).resolve()
+    resource_root = workspace_resource_root(_profile_state_root, _workspace_root)
     _resource_store = ResourceStore(
         resource_root,
         uri_prefix=RESOURCE_URI_PREFIX,

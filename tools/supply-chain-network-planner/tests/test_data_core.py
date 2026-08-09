@@ -5,7 +5,7 @@ from pydantic import ValidationError
 
 from supply_chain_planner import server
 from supply_chain_planner.data_core import build_planning_dataset, inspect_source
-from supply_chain_planner.models import DataAgentRef, PlanningSource
+from supply_chain_planner.models import PlanningSource, ResourceRef
 from supply_chain_planner.resource_store import ResourceStore
 
 
@@ -124,10 +124,10 @@ def test_source_contract_rejects_candidate_as_current_assignment() -> None:
 
 def test_planner_rejects_historical_dataset_without_current_provenance(tmp_path, monkeypatch):
     dataset = build_planning_dataset(_source())
-    store = ResourceStore(tmp_path / "resources", uri_prefix="supply-chain-data://resources/")
-    monkeypatch.setattr(server, "_data_resource_store", store)
+    store = ResourceStore(tmp_path / "resources")
+    monkeypatch.setattr(server, "_resource_store", store)
     published = store.publish("planning-dataset.v2", dataset)
-    ref = DataAgentRef(uri=published.uri, resource_schema="planning-dataset.v2")
+    ref = ResourceRef(uri=published.uri, resource_schema="planning-dataset.v2")
     with pytest.raises(ValueError, match="current provenance"):
         server._load_planning_dataset(ref)
 
@@ -153,10 +153,10 @@ def test_planner_accepts_published_requirement_profile_without_profile_confirmat
             "dataClassification": "workspace_data",
         }
     )
-    store = ResourceStore(tmp_path / "resources", uri_prefix="supply-chain-data://resources/")
-    monkeypatch.setattr(server, "_data_resource_store", store)
+    store = ResourceStore(tmp_path / "resources")
+    monkeypatch.setattr(server, "_resource_store", store)
     published = store.publish("planning-dataset.v2", payload)
-    ref = DataAgentRef(uri=published.uri, resource_schema="planning-dataset.v2")
+    ref = ResourceRef(uri=published.uri, resource_schema="planning-dataset.v2")
 
     loaded = server._load_planning_dataset(ref)
 

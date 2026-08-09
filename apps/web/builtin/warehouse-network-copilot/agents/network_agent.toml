@@ -1,0 +1,73 @@
+name = "network_agent"
+description = "Define requirements and perform warehouse-network analysis in the authorized Workspace."
+developer_instructions = """
+Act only as the warehouse-network Network Agent. Follow the warehouse-network Skill. Use Workspace-relative paths for user files and explicit cross-package handoffs, and use only exact typed MCP Resource references returned by allowed tools or supplied by the supervisor for provider-owned intermediate data. Do not infer the business Workspace from the MCP process working directory or construct Resource URIs. Do not create platform-owned workflow or hidden case state, or communicate directly with another Task. Ask for missing business parameters and external-call permission through the original native interaction path.
+"""
+nickname_candidates = ["Euler", "Harbor"]
+
+[[skills.config]]
+name = "warehouse-supervisor"
+enabled = false
+
+[[skills.config]]
+name = "warehouse-data"
+enabled = false
+
+[[skills.config]]
+name = "warehouse-network"
+enabled = true
+
+[mcp_servers.supply_chain]
+command = "__OPEN_WEB_CODEX_SUPPLY_CHAIN_LAUNCHER__"
+args = []
+enabled = true
+required = true
+enabled_tools = [
+  "compute_optimal_assignment",
+  "evaluate_service_targets",
+  "summarize_network_cost",
+  "compare_network_scenarios",
+  "plan_route_matrix",
+  "build_haversine_route_matrix",
+  "validate_route_matrix",
+  "register_navigation_route_matrix",
+  "plan_cost_matrix",
+  "evaluate_network_baseline",
+  "evaluate_facility_scenario",
+  "solve_p_median",
+  "solve_service_constrained_location",
+  "render_network_comparison_map",
+]
+
+[mcp_servers.supply_chain.env]
+CODEX_HOME = "__OPEN_WEB_CODEX_PROFILE_HOME__"
+OPEN_WEB_CODEX_DATA_DIR = "__OPEN_WEB_CODEX_PROFILE_RUNTIME__"
+OPEN_WEB_CODEX_LOG_DIR = "__OPEN_WEB_CODEX_PROFILE_LOGS__"
+OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV = "__OPEN_WEB_CODEX_SUPPLY_CHAIN_VENV__"
+SUPPLY_CHAIN_MCP_AUTO_INSTALL = "0"
+PYTHONDONTWRITEBYTECODE = "1"
+
+[mcp_servers.map_utils]
+command = "__OPEN_WEB_CODEX_MAPS_LAUNCHER__"
+args = ["--workspace-root", "__OPEN_WEB_CODEX_MAPS_STATE_ROOT__"]
+cwd = "__OPEN_WEB_CODEX_MAPS_ASSET_ROOT__"
+enabled = true
+required = true
+startup_timeout_sec = 60
+tool_timeout_sec = 90
+enabled_tools = [
+  "batch_geocode",
+  "batch_reverse_geocode",
+  "get_route",
+  "distance_matrix",
+  "create_map_card",
+]
+
+[mcp_servers.map_utils.env]
+CODEX_HOME = "__OPEN_WEB_CODEX_PROFILE_HOME__"
+OPEN_WEB_CODEX_DATA_DIR = "__OPEN_WEB_CODEX_PROFILE_RUNTIME__"
+OPEN_WEB_CODEX_LOG_DIR = "__OPEN_WEB_CODEX_PROFILE_LOGS__"
+OPEN_WEB_CODEX_MAPS_MCP_VENV = "__OPEN_WEB_CODEX_MAPS_VENV__"
+MAPS_MCP_VENV = "__OPEN_WEB_CODEX_MAPS_VENV__"
+MAPS_MCP_AUTO_INSTALL = "0"
+PYTHONDONTWRITEBYTECODE = "1"

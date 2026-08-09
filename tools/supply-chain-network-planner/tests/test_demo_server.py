@@ -49,8 +49,8 @@ def test_empty_workspace_generation_is_complete_and_idempotent(tmp_path: Path) -
     assert created["contentSummary"]["totalBytes"] > 0
     assert len(created["contentSummary"]["manifestSha256"]) == 64
     assert len(created["sources"]) == 9
-    assert all("/" not in source["source_ref"] for source in created["sources"])
-    assert all("path" not in source for source in created["sources"])
+    assert all(source["relative_path"].startswith("demo-data/") for source in created["sources"])
+    assert all(set(source) == {"relative_path", "format", "size"} for source in created["sources"])
     assert workspace_source_metadata(tmp_path)["dataClassification"] == "synthetic_demo"
     assert len(discover(tmp_path)) == 9
 

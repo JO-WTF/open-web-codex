@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from uuid import UUID
@@ -10,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .case_repository import CaseRepository, CaseRepositoryError
 from .case_types import SourceSnapshot, SourceSummary
-from .workspace_intake import discover, inspect
+from .workspace_intake import discover, inspect, media_type
 
 
 class DataServiceContract(BaseModel):
@@ -34,19 +35,19 @@ class SourceInventoryService:
     def __init__(self, repository: CaseRepository):
         self.repository = repository
 
-    def refresh(
-        self, case_id: UUID, workspace_root: Path
-    ) -> tuple[list[SourceSummary], bool]:
+    def refresh(self, case_id: UUID, workspace_root: Path) -> tuple[list[SourceSummary], bool]:
         discovered = discover(workspace_root)
         snapshots = [
             SourceSnapshot(
-                source_ref=item["source_ref"],
-                display_name=item["display_name"],
-                media_type=item["media_type"],
-                content_sha256=item["content_sha256"],
-                byte_size=item["byte_size"],
+                source_ref=item["relative_path"],
+                display_name=item["relative_path"],
+                media_type=media_type(workspace_root / item["relative_path"]),
+                content_sha256=hashlib.sha256(
+                    (workspace_root / item["relative_path"]).read_bytes()
+                ).hexdigest(),
+                byte_size=item["size"],
                 metadata_json=json.dumps(
-                    {"extension": item["extension"]}, sort_keys=True, separators=(",", ":")
+                    {"format": item["format"]}, sort_keys=True, separators=(",", ":")
                 ),
             )
             for item in discovered
@@ -56,7 +57,10 @@ class SourceInventoryService:
     def inspect(
         self, case_id: UUID, workspace_root: Path, source_ids: list[UUID]
     ) -> list[SourceInspection]:
-        sources = {source.source_id: source for source in self.repository.list_sources(case_id, workspace_root)}
+        sources = {
+            source.source_id: source
+            for source in self.repository.list_sources(case_id, workspace_root)
+        }
         if not source_ids or len(source_ids) > 100:
             raise CaseRepositoryError(
                 "source_selection_invalid", "Select between one and one hundred active sources."
@@ -66,14 +70,18 @@ class SourceInventoryService:
             raise CaseRepositoryError(
                 "source_not_active", "One or more selected sources are not active in this Case."
             )
-        return [self._inspect_source(workspace_root, sources[source_id]) for source_id in source_ids]
+        return [
+            self._inspect_source(workspace_root, sources[source_id]) for source_id in source_ids
+        ]
 
     @staticmethod
     def _inspect_source(workspace_root: Path, source: SourceSummary) -> SourceInspection:
         payload = inspect(workspace_root, source.source_ref)
         structure = payload.get("structure") if isinstance(payload, dict) else None
         if not isinstance(structure, dict):
-            raise CaseRepositoryError("source_structure_invalid", "Source structure is unavailable.")
+            raise CaseRepositoryError(
+                "source_structure_invalid", "Source structure is unavailable."
+            )
         columns = structure.get("columns")
         preview = structure.get("preview")
         rows = preview.get("rows") if isinstance(preview, dict) else []

@@ -8,8 +8,10 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .mapping import SourceRole, TransformKind
+
 SCHEMA_VERSION = "1.0"
-MCP_SERVER_NAME = "supply_chain_planner"
+MCP_SERVER_NAME = "supply_chain"
 
 NonNegativeMoney = Annotated[Decimal, Field(ge=0, decimal_places=6)]
 
@@ -22,32 +24,49 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
-class DataRef(StrictModel):
+class ResourceRef(StrictModel):
+    """An exact provider-owned MCP Resource reference.
+
+    MIME type remains on the official ResourceLink/Resource contents contract;
+    a resource reference carries only the identity needed to read it again.
+    """
+
     type: Literal["mcp_resource"] = "mcp_resource"
-    server: Literal["supply_chain_planner"] = MCP_SERVER_NAME
+    server: Literal["supply_chain"] = MCP_SERVER_NAME
     uri: str = Field(pattern=r"^supply-chain://resources/[a-z0-9_.-]{1,160}$")
-    format: Literal["json"] = "json"
-    resource_schema: str
+    resource_schema: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[a-z][a-z0-9_.-]*$",
+    )
 
 
-class DataAgentRef(StrictModel):
-    type: Literal["mcp_resource"] = "mcp_resource"
-    server: Literal["supply_chain_data"] = "supply_chain_data"
-    uri: str = Field(pattern=r"^supply-chain-data://resources/[a-z0-9_.-]{1,160}$")
-    format: Literal["json"] = "json"
-    resource_schema: str
-    content_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+class ConfirmedFieldDecision(StrictModel):
+    source_field: str = Field(min_length=1, max_length=256)
+    target_field: str = Field(min_length=1, max_length=128)
+    transform: TransformKind
+    factor: Decimal | None = None
 
 
-class MapDataRef(StrictModel):
-    type: Literal["mcp_resource"] = "mcp_resource"
-    server: Literal["supply_chain_planner"] = MCP_SERVER_NAME
-    uri: str = Field(pattern=r"^supply-chain://resources/[a-z0-9_.-]{1,160}$")
-    format: Literal["geojson"] = "geojson"
-    resource_schema: Literal["geojson.v1"] = "geojson.v1"
+class ConfirmedSourceDecision(StrictModel):
+    relative_path: str = Field(min_length=1, max_length=1024)
+    role: SourceRole
+    mappings: list[ConfirmedFieldDecision] = Field(min_length=1, max_length=64)
+
+    @model_validator(mode="after")
+    def reject_catalog_role(self) -> ConfirmedSourceDecision:
+        if self.role == SourceRole.ADMINISTRATIVE_CATALOG:
+            raise ValueError("administrative catalog is prepared by the geography tool")
+        return self
 
 
-EvidenceRef = Annotated[DataRef | DataAgentRef, Field(discriminator="server")]
+class GeographyOverride(StrictModel):
+    entity: Literal["demand", "warehouse"]
+    entity_id: str = Field(min_length=1, max_length=128)
+    catalog_city_id: str = Field(min_length=1, max_length=128)
+
+
+EvidenceRef = ResourceRef
 
 
 class Point(StrictModel):
@@ -426,7 +445,7 @@ class PlanningSourceCatalog(StrictModel):
 class DataAgentResourceToolResult(StrictModel):
     summary: str
     resource_name: str
-    data_ref: DataAgentRef
+    resource_ref: ResourceRef
 
 
 class NetworkSnapshot(NetworkInput):
@@ -498,9 +517,9 @@ class CurrentCoverageResult(StrictModel):
     snapshot_id: str
     route_matrix_id: str
     actual_result_resource_name: str
-    actual_result_ref: DataRef
+    actual_result_ref: ResourceRef
     optimized_result_resource_name: str
-    optimized_result_ref: DataRef
+    optimized_result_ref: ResourceRef
     actual_metrics: NetworkMetrics
     optimized_metrics: NetworkMetrics
     interpretation: str
@@ -529,7 +548,7 @@ class FacilityLocationSolution(StrictModel):
     active_facility_ids: list[str]
     evaluated_subset_count: int = Field(ge=0)
     result_resource_name: str
-    result_ref: DataRef
+    result_ref: ResourceRef
     metrics: NetworkMetrics
     method: Literal["exact_subset_enumeration_with_min_cost_flow"] = (
         "exact_subset_enumeration_with_min_cost_flow"
@@ -553,7 +572,7 @@ class FinancialEvaluation(StrictModel):
     net_present_value: Decimal
     payback_years: float | None = Field(default=None, ge=0)
     financially_viable: bool
-    input_refs: list[DataRef] = Field(min_length=3)
+    input_refs: list[ResourceRef] = Field(min_length=3)
     assumptions: list[str] = Field(min_length=1)
 
 
@@ -596,15 +615,15 @@ class ValidationResult(StrictModel):
 class ResourceToolResult(StrictModel):
     summary: str
     resource_name: str
-    data_ref: DataRef
+    resource_ref: ResourceRef
 
 
 class NetworkMapToolResult(StrictModel):
     summary: str
     map_resource_name: str
-    map_ref: DataRef
+    map_ref: ResourceRef
     geojson_resource_name: str
-    geojson_ref: MapDataRef
+    geojson_ref: ResourceRef
     feature_count: int = Field(ge=0)
     title: str
     layers: list[dict[str, Any]]
@@ -614,16 +633,16 @@ class NetworkMapToolResult(StrictModel):
 class NetworkSnapshotPreparationToolResult(StrictModel):
     summary: str
     snapshot_resource_name: str
-    snapshot_ref: DataRef
+    snapshot_ref: ResourceRef
     route_matrix_resource_name: str
-    route_matrix_ref: DataRef
+    route_matrix_ref: ResourceRef
 
 
 class NetworkMapRenderToolResult(StrictModel):
     summary: str
     map_manifest_resource_name: str
     geojson_resource_name: str
-    geojson_ref: MapDataRef
+    geojson_ref: ResourceRef
     title: str
     layers: list[dict[str, Any]]
     extensions: dict[str, Any] = Field(default_factory=dict)
@@ -632,39 +651,39 @@ class NetworkMapRenderToolResult(StrictModel):
 class NetworkPlanningReportToolResult(StrictModel):
     summary: str
     resource_name: str
-    data_ref: DataRef
+    resource_ref: ResourceRef
     artifact_type: Literal["report.v1"] = "report.v1"
     title: str
     markdown_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     report_resource_name: str
-    report_ref: DataRef
+    report_ref: ResourceRef
 
 
 class CurrentCoverageToolResult(CurrentCoverageResult):
     summary: str
     resource_name: str
-    data_ref: DataRef
+    resource_ref: ResourceRef
 
 
 class ComparisonToolResult(ScenarioComparison):
     summary: str
     resource_name: str
-    data_ref: DataRef
+    resource_ref: ResourceRef
 
 
 class FacilityLocationToolResult(FacilityLocationSolution):
     summary: str
     resource_name: str
-    solution_ref: DataRef
+    solution_ref: ResourceRef
 
 
 class FinancialEvaluationToolResult(FinancialEvaluation):
     summary: str
     resource_name: str
-    data_ref: DataRef
+    resource_ref: ResourceRef
 
 
 class RiskRegisterToolResult(RiskRegister):
     summary: str
     resource_name: str
-    data_ref: DataRef
+    resource_ref: ResourceRef

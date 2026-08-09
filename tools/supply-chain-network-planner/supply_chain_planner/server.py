@@ -60,13 +60,10 @@ from .models import (
     ComparisonToolResult,
     CurrentCoverageResult,
     CurrentCoverageToolResult,
-    DataAgentRef,
-    DataRef,
     FacilityLocationSolution,
     FacilityLocationToolResult,
     FinancialEvaluation,
     FinancialEvaluationToolResult,
-    MapDataRef,
     NetworkInput,
     NetworkMapRenderToolResult,
     NetworkMapToolResult,
@@ -75,6 +72,7 @@ from .models import (
     NetworkSnapshot,
     NetworkSnapshotPreparationToolResult,
     PlanningDataset,
+    ResourceRef,
     ResourceToolResult,
     RiskItem,
     RiskRegister,
@@ -103,7 +101,7 @@ from .optimization_models import (
 from .readiness import ReadinessEvaluator
 from .report_service import NetworkReportService
 from .requirements import RequirementRequest, RequirementService
-from .resource_store import PublishedResource, ResourceStore, data_ref
+from .resource_store import PublishedResource, ResourceStore, resource_ref, workspace_resource_root
 from .scenario_service import FacilityLocationService, NetworkScenarioService
 from .solver import (
     SolverUnavailable,
@@ -117,7 +115,7 @@ from .workspace_intake import trusted_workspace_root
 
 MAX_SOURCE_BYTES = 20 * 1024 * 1024
 MAX_PROFILE_GOAL_CHARS = 8_000
-MCP_SERVER_NAME = "supply_chain_network"
+MCP_SERVER_NAME = "supply_chain"
 
 mcp = FastMCP(
     "Supply Chain Network Planner",
@@ -134,7 +132,6 @@ _workspace_root = Path.cwd().resolve()
 _data_root = Path(os.environ.get("SUPPLY_CHAIN_DATA_ROOT", _workspace_root)).resolve()
 _profile_state_root = Path(os.environ.get("CODEX_HOME", _workspace_root / ".codex")).resolve()
 _resource_store: ResourceStore | None = None
-_data_resource_store: ResourceStore | None = None
 _case_store: CaseRepository | None = None
 _CONTRACT_PATH = (
     Path(__file__).resolve().parents[1] / "contracts" / "warehouse-network-planning-1.0.0.json"
@@ -144,12 +141,7 @@ _CONTRACT_PATH = (
 def _store() -> ResourceStore:
     global _resource_store
     if _resource_store is None:
-        resource_root = Path(
-            os.environ.get(
-                "SUPPLY_CHAIN_RESOURCE_DIR",
-                _profile_state_root / "mcp-state" / "supply-chain-network-planner" / "resources",
-            )
-        ).resolve()
+        resource_root = workspace_resource_root(_profile_state_root, _workspace_root)
         _resource_store = ResourceStore(resource_root)
     return _resource_store
 
@@ -162,7 +154,10 @@ def _cases() -> CaseRepository:
 
 
 def _workspace(ctx: Context) -> Path:
-    return trusted_workspace_root(ctx.request_context.meta)
+    workspace = trusted_workspace_root(ctx.request_context.meta)
+    if not workspace.samefile(_workspace_root):
+        raise ValueError("workspace_scope_mismatch")
+    return workspace
 
 
 def _case_error_result(error: CaseRepositoryError) -> CallToolResult:
@@ -177,24 +172,10 @@ def _case_error_result(error: CaseRepositoryError) -> CallToolResult:
     )
 
 
-def _data_store() -> ResourceStore:
-    global _data_resource_store
-    if _data_resource_store is None:
-        resource_root = Path(
-            os.environ.get(
-                "SUPPLY_CHAIN_DATA_RESOURCE_DIR",
-                _profile_state_root / "mcp-state" / "supply-chain-data" / "resources",
-            )
-        ).resolve()
-        _data_resource_store = ResourceStore(
-            resource_root,
-            uri_prefix="supply-chain-data://resources/",
-        )
-    return _data_resource_store
-
-
 def _artifact_ref(published: PublishedResource, server_name: str = MCP_SERVER_NAME) -> ArtifactRef:
-    store = _store() if server_name == MCP_SERVER_NAME else _data_store()
+    if server_name != MCP_SERVER_NAME:
+        raise ValueError("unsupported_artifact_server")
+    store = _store()
     content_sha256 = hashlib.sha256(store.read(published.resource_id).encode("utf-8")).hexdigest()
     return ArtifactRef(
         server_name=server_name,
@@ -205,13 +186,9 @@ def _artifact_ref(published: PublishedResource, server_name: str = MCP_SERVER_NA
 
 
 def _load_artifact(ref: ArtifactRef) -> dict[str, object]:
-    store = {
-        MCP_SERVER_NAME: _store,
-        "supply_chain_data": _data_store,
-    }.get(ref.server_name)
-    if store is None:
+    if ref.server_name != MCP_SERVER_NAME:
         raise ValueError("unsupported_artifact_server")
-    raw = store().read(ref.resource_name)
+    raw = _store().read(ref.resource_name)
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
     if digest != ref.content_sha256:
         raise ValueError("artifact_content_hash_mismatch")
@@ -224,11 +201,11 @@ def _load_artifact(ref: ArtifactRef) -> dict[str, object]:
     return payload
 
 
-def _case_from_input_ref(ref: ArtifactRef | DataAgentRef) -> NetworkCase:
-    if isinstance(ref, DataAgentRef):
+def _case_from_input_ref(ref: ArtifactRef | ResourceRef) -> NetworkCase:
+    if isinstance(ref, ResourceRef):
         if ref.resource_schema != "normalized_network_input.v1":
             raise ValueError("network_case_requires_normalized_network_input")
-        raw = _data_store().read(ref.uri.rsplit("/", maxsplit=1)[-1])
+        raw = _store().read(ref.uri.rsplit("/", maxsplit=1)[-1])
         payload = json.loads(raw)
         artifact_ref = ArtifactRef(
             server_name=ref.server,
@@ -259,7 +236,7 @@ def _case_from_input_ref(ref: ArtifactRef | DataAgentRef) -> NetworkCase:
 
 
 def _resource_name(value: object) -> str:
-    """Return the exact opaque Resource name carried by a DataRef."""
+    """Return the exact opaque Resource name carried by a ResourceRef."""
     if isinstance(value, str):
         return value.rsplit("/", maxsplit=1)[-1]
     if isinstance(value, dict):
@@ -332,18 +309,13 @@ def _require_analysis_gate(
         raise ValueError("analysis_authorization_required")
 
 
-def _validate_evidence_ref(ref: DataRef | DataAgentRef) -> None:
-    stores = {
-        "supply_chain_data": _data_store,
-        "supply_chain_planner": _store,
-    }
-    store_factory = stores.get(ref.server)
-    if store_factory is None:
-        raise ValueError(f"unsupported evidence data_ref.server {ref.server!r}")
-    payload = store_factory().load_uri(ref.uri)
+def _validate_evidence_ref(ref: ResourceRef) -> None:
+    if ref.server != MCP_SERVER_NAME:
+        raise ValueError(f"unsupported evidence resource_ref.server {ref.server!r}")
+    payload = _store().load_uri(ref.uri)
     if payload.get("schema_version") != ref.resource_schema:
         raise ValueError(
-            f"evidence data_ref schema {ref.resource_schema!r} does not match "
+            f"evidence resource_ref schema {ref.resource_schema!r} does not match "
             f"resource schema {payload.get('schema_version')!r}"
         )
 
@@ -471,21 +443,21 @@ def _resource_call_result(
     )
 
 
-def _load_ref(ref: DataRef, model_type):
-    if ref.server != "supply_chain_planner":
-        raise ValueError("data_ref.server must be supply_chain_planner")
+def _load_ref(ref: ResourceRef, model_type):
+    if ref.server != MCP_SERVER_NAME:
+        raise ValueError(f"resource_ref.server must be {MCP_SERVER_NAME}")
     payload = _store().load(ref)
     value = model_type.model_validate(payload)
     actual_schema = getattr(value, "schema_version", None)
     if actual_schema != ref.resource_schema:
         raise ValueError(
-            f"data_ref schema {ref.resource_schema!r} does not match resource schema "
+            f"resource_ref schema {ref.resource_schema!r} does not match resource schema "
             f"{actual_schema!r}"
         )
     return value
 
 
-def _ref_for_resource(resource_name: str) -> DataRef:
+def _ref_for_resource(resource_name: str) -> ResourceRef:
     """Resolve a server-owned opaque resource name without accepting a URI."""
     if not resource_name or resource_name != Path(resource_name).name:
         raise ValueError("resource_name must be a single opaque Resource identifier")
@@ -493,13 +465,13 @@ def _ref_for_resource(resource_name: str) -> DataRef:
     schema = payload.get("schema_version")
     if not isinstance(schema, str) or not schema:
         raise ValueError("Resource is missing schema_version")
-    return DataRef(resource_schema=schema, uri=f"supply-chain://resources/{resource_name}")
+    return ResourceRef(resource_schema=schema, uri=f"supply-chain://resources/{resource_name}")
 
 
-def _load_planning_dataset(ref: DataAgentRef) -> PlanningDataset:
-    if ref.server != "supply_chain_data" or ref.resource_schema != "planning-dataset.v2":
-        raise ValueError("planning_dataset_ref must identify supply_chain_data planning-dataset.v2")
-    payload = _data_store().load_uri(ref.uri)
+def _load_planning_dataset(ref: ResourceRef) -> PlanningDataset:
+    if ref.server != MCP_SERVER_NAME or ref.resource_schema != "planning-dataset.v2":
+        raise ValueError("planning_dataset_ref must identify supply_chain planning-dataset.v2")
+    payload = _store().load_uri(ref.uri)
     if payload.get("schemaVersion") != "planning-dataset.v2":
         raise ValueError("planning dataset is missing current provenance")
     contract = payload.get("contract")
@@ -654,14 +626,14 @@ def publish_data_requirement_profile(
     structured = ResourceToolResult(
         summary=summary,
         resource_name=published.resource_id,
-        data_ref=data_ref(published),
+        resource_ref=resource_ref(published),
     ).model_dump(mode="json")
     return _resource_call_result(published, summary=summary, structured=structured)
 
 
-def _load_planner_payload(ref: DataRef) -> dict[str, object]:
-    if ref.server != "supply_chain_planner":
-        raise ValueError("profile_ref must identify a supply_chain_planner Resource")
+def _load_planner_payload(ref: ResourceRef) -> dict[str, object]:
+    if ref.server != MCP_SERVER_NAME:
+        raise ValueError("profile_ref must identify a supply_chain Resource")
     payload = _store().load(ref)
     if (
         payload.get("schema_version") not in {ref.resource_schema, None}
@@ -671,16 +643,16 @@ def _load_planner_payload(ref: DataRef) -> dict[str, object]:
     return payload
 
 
-def _load_data_payload(ref: DataAgentRef, schema: str) -> dict[str, object]:
-    if ref.server != "supply_chain_data" or ref.resource_schema != schema:
-        raise ValueError(f"expected supply_chain_data {schema} Resource")
-    return _data_store().load_uri(ref.uri)
+def _load_data_payload(ref: ResourceRef, schema: str) -> dict[str, object]:
+    if ref.server != MCP_SERVER_NAME or ref.resource_schema != schema:
+        raise ValueError(f"expected supply_chain {schema} Resource")
+    return _store().load_uri(ref.uri)
 
 
 def publish_input_gap(
-    profile_ref: DataRef,
-    source_profile_ref: DataAgentRef | None = None,
-    mapping_proposal_ref: DataAgentRef | None = None,
+    profile_ref: ResourceRef,
+    source_profile_ref: ResourceRef | None = None,
+    mapping_proposal_ref: ResourceRef | None = None,
     parameter_answers: dict[str, object] | None = None,
     mapping_confirmation: dict[str, object] | None = None,
 ) -> Annotated[CallToolResult, ResourceToolResult]:
@@ -752,16 +724,16 @@ def publish_input_gap(
     published = _store().publish("input_gap.v1", payload)
     summary = "Input gap is clear." if gaps else "No blocking input gap remains."
     structured = ResourceToolResult(
-        summary=summary, resource_name=published.resource_id, data_ref=data_ref(published)
+        summary=summary, resource_name=published.resource_id, resource_ref=resource_ref(published)
     ).model_dump(mode="json")
     return _resource_call_result(published, summary=summary, structured=structured)
 
 
 def publish_analysis_readiness_review(
-    profile_ref: DataRef,
-    source_profile_ref: DataAgentRef,
-    mapping_proposal_ref: DataAgentRef,
-    planning_dataset_ref: DataAgentRef,
+    profile_ref: ResourceRef,
+    source_profile_ref: ResourceRef,
+    mapping_proposal_ref: ResourceRef,
+    planning_dataset_ref: ResourceRef,
     parameter_answers: dict[str, object],
     mapping_confirmation: dict[str, object] | None = None,
 ) -> Annotated[CallToolResult, ResourceToolResult]:
@@ -817,7 +789,7 @@ def publish_analysis_readiness_review(
     published = _store().publish("analysis_readiness_review.v1", review)
     summary = "Final analysis checklist is ready for explicit user confirmation."
     structured = ResourceToolResult(
-        summary=summary, resource_name=published.resource_id, data_ref=data_ref(published)
+        summary=summary, resource_name=published.resource_id, resource_ref=resource_ref(published)
     ).model_dump(mode="json")
     return _resource_call_result(published, summary=summary, structured=structured)
 
@@ -865,13 +837,13 @@ def prepare_network_snapshot(
     structured = ResourceToolResult(
         summary=summary,
         resource_name=published.resource_id,
-        data_ref=data_ref(published),
+        resource_ref=resource_ref(published),
     ).model_dump(mode="json")
     return _resource_call_result(published, summary=summary, structured=structured)
 
 
 def prepare_network_snapshot_from_planning_dataset(
-    planning_dataset_ref: DataAgentRef,
+    planning_dataset_ref: ResourceRef,
     execution_snapshot_id: str | None = None,
     binding_fingerprint: str | None = None,
 ) -> Annotated[CallToolResult, NetworkSnapshotPreparationToolResult]:
@@ -917,9 +889,9 @@ def prepare_network_snapshot_from_planning_dataset(
     structured = NetworkSnapshotPreparationToolResult(
         summary=summary,
         snapshot_resource_name=snapshot_published.resource_id,
-        snapshot_ref=data_ref(snapshot_published),
+        snapshot_ref=resource_ref(snapshot_published),
         route_matrix_resource_name=matrix_published.resource_id,
-        route_matrix_ref=data_ref(matrix_published),
+        route_matrix_ref=resource_ref(matrix_published),
     ).model_dump(mode="json")
     return _resource_call_result(
         snapshot_published,
@@ -929,11 +901,11 @@ def prepare_network_snapshot_from_planning_dataset(
 
 
 def register_route_matrix(
-    snapshot_ref: DataRef,
+    snapshot_ref: ResourceRef,
     provider: str,
     method: Literal["navigation", "quoted", "haversine_estimate"],
     entries: list[RouteEntry],
-    planning_dataset_ref: DataAgentRef,
+    planning_dataset_ref: ResourceRef,
     execution_snapshot_id: str | None = None,
     binding_fingerprint: str | None = None,
     require_complete: bool = True,
@@ -982,14 +954,14 @@ def register_route_matrix(
     structured = ResourceToolResult(
         summary=summary,
         resource_name=published.resource_id,
-        data_ref=data_ref(published),
+        resource_ref=resource_ref(published),
     ).model_dump(mode="json")
     return _resource_call_result(published, summary=summary, structured=structured)
 
 
 def evaluate_current_coverage(
-    snapshot_ref: DataRef,
-    route_matrix_ref: DataRef,
+    snapshot_ref: ResourceRef,
+    route_matrix_ref: ResourceRef,
     planning_dataset_ref: str,
     execution_snapshot_id: str | None = None,
     binding_fingerprint: str | None = None,
@@ -1027,9 +999,9 @@ def evaluate_current_coverage(
         snapshot_id=snapshot.snapshot_id,
         route_matrix_id=matrix.route_matrix_id,
         actual_result_resource_name=actual_published.resource_id,
-        actual_result_ref=data_ref(actual_published),
+        actual_result_ref=resource_ref(actual_published),
         optimized_result_resource_name=optimized_published.resource_id,
-        optimized_result_ref=data_ref(optimized_published),
+        optimized_result_ref=resource_ref(optimized_published),
         actual_metrics=actual.metrics,
         optimized_metrics=optimized.metrics,
         interpretation=interpretation,
@@ -1047,7 +1019,7 @@ def evaluate_current_coverage(
         **aggregate.model_dump(),
         summary=summary,
         resource_name=aggregate_published.resource_id,
-        data_ref=data_ref(aggregate_published),
+        resource_ref=resource_ref(aggregate_published),
     ).model_dump(mode="json")
     return _resource_call_result(
         aggregate_published,
@@ -1057,11 +1029,11 @@ def evaluate_current_coverage(
 
 
 def evaluate_network_scenario(
-    snapshot_ref: DataRef,
-    route_matrix_ref: DataRef,
+    snapshot_ref: ResourceRef,
+    route_matrix_ref: ResourceRef,
     scenario_id: str,
     active_facility_ids: list[str],
-    planning_dataset_ref: DataAgentRef,
+    planning_dataset_ref: ResourceRef,
     execution_snapshot_id: str | None = None,
     binding_fingerprint: str | None = None,
 ) -> Annotated[CallToolResult, ResourceToolResult]:
@@ -1091,14 +1063,14 @@ def evaluate_network_scenario(
     structured = ResourceToolResult(
         summary=summary,
         resource_name=published.resource_id,
-        data_ref=data_ref(published),
+        resource_ref=resource_ref(published),
     ).model_dump(mode="json")
     return _resource_call_result(published, summary=summary, structured=structured)
 
 
 def compare_legacy_network_scenarios(
-    baseline_result_ref: DataRef,
-    candidate_result_ref: DataRef,
+    baseline_result_ref: ResourceRef,
+    candidate_result_ref: ResourceRef,
     planning_dataset_ref: str,
     execution_snapshot_id: str | None = None,
     binding_fingerprint: str | None = None,
@@ -1124,14 +1096,14 @@ def compare_legacy_network_scenarios(
         **comparison.model_dump(),
         summary=summary,
         resource_name=published.resource_id,
-        data_ref=data_ref(published),
+        resource_ref=resource_ref(published),
     ).model_dump(mode="json")
     return _resource_call_result(published, summary=summary, structured=structured)
 
 
 def solve_facility_location(
-    snapshot_ref: DataRef,
-    route_matrix_ref: DataRef,
+    snapshot_ref: ResourceRef,
+    route_matrix_ref: ResourceRef,
     target_coverage_ratio: float,
     planning_dataset_ref: str,
     execution_snapshot_id: str | None = None,
@@ -1167,7 +1139,7 @@ def solve_facility_location(
         active_facility_ids=result.active_facility_ids,
         evaluated_subset_count=evaluated,
         result_resource_name=result_published.resource_id,
-        result_ref=data_ref(result_published),
+        result_ref=resource_ref(result_published),
         metrics=result.metrics,
         assumptions=[
             "Demand units are nonnegative integers and may split across facilities.",
@@ -1191,7 +1163,7 @@ def solve_facility_location(
         **solution.model_dump(),
         summary=summary,
         resource_name=solution_published.resource_id,
-        solution_ref=data_ref(solution_published),
+        solution_ref=resource_ref(solution_published),
     ).model_dump(mode="json")
     return _resource_call_result(
         solution_published,
@@ -1201,9 +1173,9 @@ def solve_facility_location(
 
 
 def evaluate_financial_case(
-    snapshot_ref: DataRef,
-    baseline_result_ref: DataRef,
-    candidate_result_ref: DataRef,
+    snapshot_ref: ResourceRef,
+    baseline_result_ref: ResourceRef,
+    candidate_result_ref: ResourceRef,
     horizon_years: int = 5,
     discount_rate: float = 0.1,
     annual_growth_rate: float = 0.0,
@@ -1249,7 +1221,7 @@ def evaluate_financial_case(
         **evaluation.model_dump(),
         summary=summary,
         resource_name=published.resource_id,
-        data_ref=data_ref(published),
+        resource_ref=resource_ref(published),
     ).model_dump(mode="json")
     return _resource_call_result(published, summary=summary, structured=structured)
 
@@ -1411,9 +1383,9 @@ def prepare_network_comparison_map(
         "geojson_resource_name": geojson_published.resource_id,
         "geojson_ref": {
             "type": "mcp_resource",
-            "server": "supply_chain_planner",
+            "server": MCP_SERVER_NAME,
             "uri": geojson_published.uri,
-            "format": "geojson",
+            "resource_schema": "geojson.v1",
         },
         "feature_count": len(features),
         "layers": [
@@ -1501,9 +1473,9 @@ def prepare_network_comparison_map(
     structured = NetworkMapToolResult(
         summary=summary,
         map_resource_name=map_published.resource_id,
-        map_ref=data_ref(map_published),
+        map_ref=resource_ref(map_published),
         geojson_resource_name=geojson_published.resource_id,
-        geojson_ref=MapDataRef(uri=geojson_published.uri),
+        geojson_ref=ResourceRef(resource_schema="geojson.v1", uri=geojson_published.uri),
         feature_count=len(features),
         title=title,
         layers=map_manifest["layers"],
@@ -1545,7 +1517,10 @@ def prepare_network_map_render(
         summary=str(payload.get("summary", "Network comparison map ready")),
         map_manifest_resource_name=map_resource_name,
         geojson_resource_name=geojson_resource_name,
-        geojson_ref=MapDataRef(uri=f"supply-chain://resources/{geojson_resource_name}"),
+        geojson_ref=ResourceRef(
+            resource_schema="geojson.v1",
+            uri=f"supply-chain://resources/{geojson_resource_name}",
+        ),
         title=str(payload.get("title", "Network comparison")),
         layers=payload.get("layers", []),
         extensions=payload.get("extensions", {}),
@@ -1656,7 +1631,7 @@ def prepare_network_planning_report(
         "generated_at": datetime.now(UTC).isoformat(),
     }
     report_published = _store().publish("network_planning_report.v1", payload)
-    report_ref = DataRef(resource_schema="network_planning_report.v1", uri=report_published.uri)
+    report_ref = ResourceRef(resource_schema="network_planning_report.v1", uri=report_published.uri)
     artifact = {
         "schema_version": "report.v1",
         "title": title,
@@ -1673,11 +1648,11 @@ def prepare_network_planning_report(
     structured = NetworkPlanningReportToolResult(
         summary=summary,
         resource_name=report_published.resource_id,
-        data_ref=report_ref,
+        resource_ref=report_ref,
         title=title,
         markdown_sha256=digest,
         report_resource_name=artifact_published.resource_id,
-        report_ref=data_ref(artifact_published),
+        report_ref=resource_ref(artifact_published),
     ).model_dump(mode="json")
     return _resource_call_result(report_published, summary=summary, structured=structured)
 
@@ -1700,13 +1675,13 @@ def publish_risk_register(
         **register.model_dump(),
         summary=summary,
         resource_name=published.resource_id,
-        data_ref=data_ref(published),
+        resource_ref=resource_ref(published),
     ).model_dump(mode="json")
     return _resource_call_result(published, summary=summary, structured=structured)
 
 
 def validate_network_resource(
-    resource_ref: DataRef,
+    resource_ref: ResourceRef,
 ) -> ValidationResult:
     """Validate a snapshot, route matrix, scenario result, comparison, or solution."""
     errors: list[str] = []
@@ -1874,7 +1849,7 @@ def _publish_new_resource(schema: str, value: object, summary: str) -> CallToolR
             "summary": summary,
             "resource_name": published.resource_id,
             "artifact_ref": artifact.model_dump(mode="json"),
-            "data_ref": data_ref(published).model_dump(mode="json"),
+            "resource_ref": resource_ref(published).model_dump(mode="json"),
         },
     )
 
@@ -2046,9 +2021,7 @@ def _legacy_register_navigation_route_matrix(
     except (CaseRepositoryError, ValueError, ValidationError) as error:
         if isinstance(error, CaseRepositoryError):
             return _case_error_result(error)
-        return _case_error_result(
-            CaseRepositoryError("navigation_matrix_invalid", str(error))
-        )
+        return _case_error_result(CaseRepositoryError("navigation_matrix_invalid", str(error)))
     facet = next(item for item in status.facets if item.name.value == "route_matrix")
     issues = (
         [
@@ -2073,9 +2046,7 @@ def _legacy_register_navigation_route_matrix(
         facet_updates=[facet],
         issues=issues,
         next_action=(
-            "validate_route_matrix"
-            if not matrix.missing_routes
-            else "request_navigation_rows"
+            "validate_route_matrix" if not matrix.missing_routes else "request_navigation_rows"
         ),
     )
 
@@ -2128,7 +2099,7 @@ def _legacy_plan_cost_matrix(
 
 @mcp.tool(structured_output=True)
 def compute_optimal_assignment(
-    network_case_ref: ArtifactRef | DataAgentRef,
+    network_case_ref: ArtifactRef | ResourceRef,
     route_matrix_ref: ArtifactRef,
     cost_matrix_ref: ArtifactRef | None = None,
     objective: str = "min_time",
@@ -2495,7 +2466,7 @@ def _assignment_warehouse_ids(payload: dict[str, object]) -> set[str]:
 
 
 def render_legacy_network_comparison_map(
-    network_case_ref: ArtifactRef | DataAgentRef,
+    network_case_ref: ArtifactRef | ResourceRef,
     baseline_ref: ArtifactRef,
     candidate_ref: ArtifactRef,
 ) -> CallToolResult:
@@ -2589,9 +2560,9 @@ def _legacy_render_network_comparison_map(
     """Publish a deterministic baseline-versus-candidate GeoJSON Artifact."""
     try:
         parsed = UUID(case_id)
-        published, summary, result = NetworkMapService(
-            _cases(), _store()
-        ).publish_comparison(parsed, _workspace(ctx), candidate_source)
+        published, summary, result = NetworkMapService(_cases(), _store()).publish_comparison(
+            parsed, _workspace(ctx), candidate_source
+        )
         case = _cases().get_case(parsed, _workspace(ctx))
         status = _cases().get_status(parsed, _workspace(ctx))
     except (CaseRepositoryError, ValueError) as error:
@@ -2624,7 +2595,7 @@ def _legacy_render_network_comparison_map(
                                 "type": "mcp_resource",
                                 "server": MCP_SERVER_NAME,
                                 "uri": published.uri,
-                                "format": "geojson",
+                                "resource_schema": "geojson.v1",
                             },
                         }
                     },
@@ -2633,29 +2604,54 @@ def _legacy_render_network_comparison_map(
                             "id": "baseline-assignments",
                             "source": "network",
                             "type": "line",
-                            "filter": ["all", ["==", ["get", "kind"], "assignment"], ["==", ["get", "scenario"], "baseline"]],
-                            "paint": {"line-color": "#64748b", "line-opacity": 0.28, "line-width": 1},
+                            "filter": [
+                                "all",
+                                ["==", ["get", "kind"], "assignment"],
+                                ["==", ["get", "scenario"], "baseline"],
+                            ],
+                            "paint": {
+                                "line-color": "#64748b",
+                                "line-opacity": 0.28,
+                                "line-width": 1,
+                            },
                         },
                         {
                             "id": "candidate-assignments",
                             "source": "network",
                             "type": "line",
-                            "filter": ["all", ["==", ["get", "kind"], "assignment"], ["==", ["get", "scenario"], "candidate"]],
-                            "paint": {"line-color": "#e76f51", "line-opacity": 0.46, "line-width": 1.4},
+                            "filter": [
+                                "all",
+                                ["==", ["get", "kind"], "assignment"],
+                                ["==", ["get", "scenario"], "candidate"],
+                            ],
+                            "paint": {
+                                "line-color": "#e76f51",
+                                "line-opacity": 0.46,
+                                "line-width": 1.4,
+                            },
                         },
                         {
                             "id": "demand-cities",
                             "source": "network",
                             "type": "circle",
                             "filter": ["==", ["get", "kind"], "demand"],
-                            "paint": {"circle-color": "#2a9d8f", "circle-radius": 3, "circle-opacity": 0.72},
+                            "paint": {
+                                "circle-color": "#2a9d8f",
+                                "circle-radius": 3,
+                                "circle-opacity": 0.72,
+                            },
                         },
                         {
                             "id": "warehouses",
                             "source": "network",
                             "type": "circle",
                             "filter": ["==", ["get", "kind"], "warehouse"],
-                            "paint": {"circle-color": "#e9c46a", "circle-radius": 6, "circle-stroke-color": "#264653", "circle-stroke-width": 1.5},
+                            "paint": {
+                                "circle-color": "#e9c46a",
+                                "circle-radius": 6,
+                                "circle-stroke-color": "#264653",
+                                "circle-stroke-width": 1.5,
+                            },
                         },
                     ],
                 },
@@ -3099,7 +3095,7 @@ def define_network_requirements(
 
 
 def _resource_case_records(
-    network_case_ref: ArtifactRef | DataAgentRef,
+    network_case_ref: ArtifactRef | ResourceRef,
 ) -> tuple[NetworkCase, list[DemandCityRecord], list[WarehouseRecord]]:
     """Load bounded domain records from one immutable normalized-input resource."""
     case = _case_from_input_ref(network_case_ref)
@@ -3140,9 +3136,9 @@ def _resource_route_quotes(case: NetworkCase) -> list[RouteQuoteRecord]:
         raise ValueError("normalized_route_quote_is_invalid") from error
 
 
-def _load_navigation_rows(ref: ArtifactRef | DataAgentRef) -> list[RouteMatrixRow]:
-    if isinstance(ref, DataAgentRef):
-        payload = _data_store().load_uri(ref.uri)
+def _load_navigation_rows(ref: ArtifactRef | ResourceRef) -> list[RouteMatrixRow]:
+    if isinstance(ref, ResourceRef):
+        payload = _store().load_uri(ref.uri)
     else:
         payload = _load_artifact(ref)
     rows = payload.get("rows") or payload.get("routes")
@@ -3156,7 +3152,7 @@ def _load_navigation_rows(ref: ArtifactRef | DataAgentRef) -> list[RouteMatrixRo
 
 @mcp.tool(structured_output=True)
 def plan_route_matrix(
-    network_case_ref: ArtifactRef | DataAgentRef,
+    network_case_ref: ArtifactRef | ResourceRef,
     route_method: Literal["haversine", "navigation", "provided"],
     detour_coefficient: float | None = None,
     average_speed_kph: float | None = None,
@@ -3180,7 +3176,7 @@ def plan_route_matrix(
 
 @mcp.tool(structured_output=True)
 def build_haversine_route_matrix(
-    network_case_ref: ArtifactRef | DataAgentRef,
+    network_case_ref: ArtifactRef | ResourceRef,
     route_plan_ref: ArtifactRef,
     detour_coefficient: float | None = None,
     average_speed_kph: float | None = None,
@@ -3202,7 +3198,7 @@ def build_haversine_route_matrix(
 
 @mcp.tool(structured_output=True)
 def validate_route_matrix(
-    network_case_ref: ArtifactRef | DataAgentRef,
+    network_case_ref: ArtifactRef | ResourceRef,
     route_matrix_ref: ArtifactRef,
 ) -> CallToolResult:
     """Validate completeness and uniqueness of one immutable route matrix."""
@@ -3223,8 +3219,8 @@ def validate_route_matrix(
 
 @mcp.tool(structured_output=True)
 def register_navigation_route_matrix(
-    network_case_ref: ArtifactRef | DataAgentRef,
-    navigation_result_ref: ArtifactRef | DataAgentRef,
+    network_case_ref: ArtifactRef | ResourceRef,
+    navigation_result_ref: ArtifactRef | ResourceRef,
 ) -> CallToolResult:
     """Register a complete navigation result supplied as a bounded Resource."""
     _case, demand, warehouses = _resource_case_records(network_case_ref)
@@ -3241,7 +3237,7 @@ def register_navigation_route_matrix(
 
 @mcp.tool(structured_output=True)
 def plan_cost_matrix(
-    network_case_ref: ArtifactRef | DataAgentRef,
+    network_case_ref: ArtifactRef | ResourceRef,
     route_matrix_ref: ArtifactRef | None = None,
     fallback_rule: dict[str, Any] | None = None,
     warehouse_scope: Literal["existing_only", "all_warehouses"] = "all_warehouses",
@@ -3271,7 +3267,7 @@ def plan_cost_matrix(
 
 @mcp.tool(structured_output=True)
 def evaluate_network_baseline(
-    network_case_ref: ArtifactRef | DataAgentRef,
+    network_case_ref: ArtifactRef | ResourceRef,
     route_matrix_ref: ArtifactRef,
     objective: Literal["min_time", "min_cost"],
     service_targets: list[float],
@@ -3326,7 +3322,7 @@ def evaluate_network_baseline(
 
 @mcp.tool(structured_output=True)
 def evaluate_facility_scenario(
-    network_case_ref: ArtifactRef | DataAgentRef,
+    network_case_ref: ArtifactRef | ResourceRef,
     route_matrix_ref: ArtifactRef,
     scenario: dict[str, Any],
     cost_matrix_ref: ArtifactRef | None = None,
@@ -3379,7 +3375,7 @@ def evaluate_facility_scenario(
 
 @mcp.tool(structured_output=True)
 def solve_p_median(
-    network_case_ref: ArtifactRef | DataAgentRef,
+    network_case_ref: ArtifactRef | ResourceRef,
     route_matrix_ref: ArtifactRef,
     cost_matrix_ref: ArtifactRef,
     number_to_open: int,
@@ -3409,7 +3405,9 @@ def solve_p_median(
     else:
         unavailable_message = None
     if solved is None:
-        status = "timeout" if timed_out else ("unavailable" if unavailable_message else "infeasible")
+        status = (
+            "timeout" if timed_out else ("unavailable" if unavailable_message else "infeasible")
+        )
         solution = PMedianSolution(
             status=status,
             selected_warehouse_ids=[],
@@ -3424,7 +3422,9 @@ def solve_p_median(
             assignment=assignment,
             objective_value=value,
             optimality="feasible_only" if timed_out else "proven",
-            message="The solver returned a feasible solution before the time limit." if timed_out else None,
+            message="The solver returned a feasible solution before the time limit."
+            if timed_out
+            else None,
         )
     return _publish_new_resource(
         solution.schema_version,
@@ -3435,7 +3435,7 @@ def solve_p_median(
 
 @mcp.tool(structured_output=True)
 def solve_service_constrained_location(
-    network_case_ref: ArtifactRef | DataAgentRef,
+    network_case_ref: ArtifactRef | ResourceRef,
     route_matrix_ref: ArtifactRef,
     cost_matrix_ref: ArtifactRef,
     number_to_open: int,
@@ -3491,7 +3491,7 @@ def solve_service_constrained_location(
 
 @mcp.tool(structured_output=True)
 def render_network_comparison_map(
-    network_case_ref: ArtifactRef | DataAgentRef,
+    network_case_ref: ArtifactRef | ResourceRef,
     baseline_ref: ArtifactRef,
     candidate_ref: ArtifactRef,
 ) -> CallToolResult:
@@ -3529,12 +3529,6 @@ def publish_network_planning_report(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Supply-chain network planning MCP server")
     parser.add_argument(
-        "--workspace-root",
-        type=Path,
-        default=Path.cwd(),
-        help="Plugin root used for default data and Resource directories",
-    )
-    parser.add_argument(
         "--transport",
         choices=("stdio", "streamable-http"),
         default="stdio",
@@ -3542,15 +3536,10 @@ def main() -> None:
     args = parser.parse_args()
 
     global _workspace_root, _data_root, _profile_state_root, _resource_store, _case_store
-    _workspace_root = args.workspace_root.resolve()
+    _workspace_root = Path.cwd().resolve(strict=True)
     _data_root = Path(os.environ.get("SUPPLY_CHAIN_DATA_ROOT", _workspace_root)).resolve()
     _profile_state_root = Path(os.environ.get("CODEX_HOME", _workspace_root / ".codex")).resolve()
-    resource_root = Path(
-        os.environ.get(
-            "SUPPLY_CHAIN_RESOURCE_DIR",
-            _profile_state_root / "mcp-state" / "supply-chain-network-planner" / "resources",
-        )
-    ).resolve()
+    resource_root = workspace_resource_root(_profile_state_root, _workspace_root)
     _resource_store = ResourceStore(resource_root)
     _case_store = CaseRepository.from_profile(_profile_state_root)
     mcp.run(transport=args.transport)

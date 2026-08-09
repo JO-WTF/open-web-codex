@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
-from supply_chain_planner.resource_store import ResourceStore, data_ref
+from supply_chain_planner.models import ResourceRef
+from supply_chain_planner.resource_store import ResourceStore, resource_ref, workspace_resource_root
 
 
 def test_resource_store_is_content_addressed(tmp_path) -> None:
@@ -15,7 +19,7 @@ def test_resource_store_is_content_addressed(tmp_path) -> None:
 
     assert first.resource_id == second.resource_id
     assert json.loads(store.read(first.resource_id)) == {"value": 1}
-    assert store.load(data_ref(first)) == {"value": 1}
+    assert store.load(resource_ref(first)) == {"value": 1}
 
 
 def test_resource_store_rejects_path_traversal(tmp_path) -> None:
@@ -25,13 +29,64 @@ def test_resource_store_rejects_path_traversal(tmp_path) -> None:
         store.read("../secret")
 
 
-def test_resource_store_supports_a_separate_data_agent_uri_namespace(tmp_path) -> None:
-    store = ResourceStore(
-        tmp_path,
-        uri_prefix="supply-chain-data://resources/",
+def test_workspace_store_is_visible_across_process_and_restart(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=workspace, check=True)
+    root = workspace_resource_root(profile, workspace)
+    assert root.is_relative_to(profile / ".open-web-codex")
+    assert not root.is_relative_to(workspace)
+    package_root = Path(__file__).resolve().parents[1]
+    script = """
+from pathlib import Path
+import sys
+from supply_chain_planner.resource_store import ResourceStore
+published = ResourceStore(Path(sys.argv[1])).publish("source_profile.v1", {"ready": True})
+print(published.uri)
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script, str(root)],
+        cwd=package_root,
+        check=True,
+        capture_output=True,
+        text=True,
     )
+    uri = completed.stdout.strip()
 
-    published = store.publish("planning-dataset.v1", {"value": 1})
+    restarted = ResourceStore(workspace_resource_root(profile, workspace))
+    assert restarted.load(ResourceRef(uri=uri, resource_schema="source_profile.v1")) == {
+        "ready": True
+    }
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert status.stdout == ""
 
-    assert published.uri.startswith("supply-chain-data://resources/")
-    assert store.load_uri(published.uri) == {"value": 1}
+
+def test_workspace_store_denies_same_uri_from_another_workspace(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    first_workspace = tmp_path / "first"
+    second_workspace = tmp_path / "second"
+    first_workspace.mkdir()
+    second_workspace.mkdir()
+    first = ResourceStore(workspace_resource_root(profile, first_workspace))
+    published = first.publish("source_profile.v1", {"ready": True})
+    ref = resource_ref(published)
+
+    second = ResourceStore(workspace_resource_root(profile, second_workspace))
+    with pytest.raises(FileNotFoundError):
+        second.load(ref)
+
+
+def test_resource_store_rejects_forged_schema(tmp_path: Path) -> None:
+    store = ResourceStore(tmp_path)
+    published = store.publish("source_profile.v1", {"ready": True})
+    forged = ResourceRef(uri=published.uri, resource_schema="normalized_network_input.v1")
+
+    with pytest.raises(ValueError, match="schema"):
+        store.load(forged)

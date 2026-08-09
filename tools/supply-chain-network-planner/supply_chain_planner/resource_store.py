@@ -4,17 +4,34 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
 
-from .models import MCP_SERVER_NAME, DataRef
+from .models import MCP_SERVER_NAME, ResourceRef
 
 RESOURCE_ID_PATTERN = re.compile(r"^[a-z0-9_.-]{1,160}$")
 RESOURCE_URI_PREFIX = "supply-chain://resources/"
+
+
+def workspace_resource_root(profile_home: Path, startup_workspace: Path) -> Path:
+    """Return a private, opaque Resource namespace for one physical Workspace."""
+    canonical_workspace = startup_workspace.resolve(strict=True)
+    namespace = hashlib.sha256(os.fsencode(str(canonical_workspace))).hexdigest()
+    return (
+        profile_home
+        / ".open-web-codex"
+        / "mcp-state"
+        / "supply-chain"
+        / "workspaces"
+        / namespace
+        / "resources"
+    )
 
 
 @dataclass(frozen=True)
@@ -44,7 +61,20 @@ class ResourceStore:
         resource_id = f"{safe_schema}-{digest}"
         path = self._path(resource_id)
         if not path.exists():
-            path.write_bytes(encoded)
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{resource_id}.",
+                suffix=".tmp",
+                dir=self.root,
+            )
+            temporary = Path(temporary_name)
+            try:
+                with os.fdopen(descriptor, "wb") as stream:
+                    stream.write(encoded)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temporary, path)
+            finally:
+                temporary.unlink(missing_ok=True)
         return PublishedResource(
             resource_id=resource_id,
             uri=f"{self.uri_prefix}{resource_id}",
@@ -55,8 +85,13 @@ class ResourceStore:
     def read(self, resource_id: str) -> str:
         return self._path(resource_id).read_text(encoding="utf-8")
 
-    def load(self, data_ref: DataRef | str) -> dict[str, Any]:
-        ref = parse_data_ref(data_ref)
+    def load(self, resource_ref: ResourceRef) -> dict[str, Any]:
+        ref = resource_ref
+        resource_id = ref.uri.removeprefix(self.uri_prefix)
+        actual_schema = resource_id.rsplit("-", maxsplit=1)[0]
+        expected_schema = re.sub(r"[^a-z0-9_.-]", "-", ref.resource_schema.lower())
+        if actual_schema != expected_schema:
+            raise ValueError("resource_ref schema does not match the published Resource")
         return self.load_uri(ref.uri)
 
     def load_uri(self, uri: str) -> dict[str, Any]:
@@ -77,26 +112,8 @@ class ResourceStore:
         return path
 
 
-def parse_data_ref(value: DataRef | str) -> DataRef:
-    if isinstance(value, DataRef):
-        return value
-    if value.startswith(RESOURCE_URI_PREFIX):
-        resource_id = value.removeprefix(RESOURCE_URI_PREFIX)
-        if not RESOURCE_ID_PATTERN.fullmatch(resource_id):
-            raise ValueError("invalid supply-chain resource URI")
-        schema = resource_id.rsplit("-", maxsplit=1)[0]
-        return DataRef(
-            server=MCP_SERVER_NAME,
-            uri=value,
-            resource_schema=schema,
-        )
-    raise ValueError(
-        "expected a supply-chain MCP resource URI or the data_ref returned by an earlier tool"
-    )
-
-
-def data_ref(published: PublishedResource) -> DataRef:
-    return DataRef(
+def resource_ref(published: PublishedResource) -> ResourceRef:
+    return ResourceRef(
         server=MCP_SERVER_NAME,
         uri=published.uri,
         resource_schema=published.schema,

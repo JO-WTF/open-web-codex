@@ -19,7 +19,11 @@ while (($# > 0)); do
   esac
   shift
 done
-set -- "${forward_args[@]}"
+if ((${#forward_args[@]} > 0)); then
+  set -- "${forward_args[@]}"
+else
+  set --
+fi
 
 mkdir -p "$log_dir"
 
