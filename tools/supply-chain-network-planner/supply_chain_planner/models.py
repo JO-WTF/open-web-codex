@@ -9,6 +9,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .mapping import SourceRole, TransformKind
+from .mcp_contracts import ResourceRef as _ResourceRef
 from .network_models import (
     CurrentAssignmentRecord,
     DataQualityIssue,
@@ -29,23 +30,6 @@ def utc_now() -> datetime:
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-
-class ResourceRef(StrictModel):
-    """An exact provider-owned MCP Resource reference.
-
-    MIME type remains on the official ResourceLink/Resource contents contract;
-    a resource reference carries only the identity needed to read it again.
-    """
-
-    type: Literal["mcp_resource"] = "mcp_resource"
-    server: Literal["supply_chain"] = MCP_SERVER_NAME
-    uri: str = Field(pattern=r"^supply-chain://resources/[a-z0-9_.-]{1,160}$")
-    resource_schema: str = Field(
-        min_length=1,
-        max_length=128,
-        pattern=r"^[a-z][a-z0-9_.-]*$",
-    )
 
 
 class PreparedNetworkResource(StrictModel):
@@ -89,7 +73,7 @@ class GeographyOverride(StrictModel):
     catalog_city_id: str = Field(min_length=1, max_length=128)
 
 
-EvidenceRef = ResourceRef
+EvidenceRef = _ResourceRef
 
 
 class Point(StrictModel):
@@ -468,7 +452,7 @@ class PlanningSourceCatalog(StrictModel):
 class DataAgentResourceToolResult(StrictModel):
     summary: str
     resource_name: str
-    resource_ref: ResourceRef
+    resource_ref: _ResourceRef
 
 
 class NetworkSnapshot(NetworkInput):
@@ -540,9 +524,9 @@ class CurrentCoverageResult(StrictModel):
     snapshot_id: str
     route_matrix_id: str
     actual_result_resource_name: str
-    actual_result_ref: ResourceRef
+    actual_result_ref: _ResourceRef
     optimized_result_resource_name: str
-    optimized_result_ref: ResourceRef
+    optimized_result_ref: _ResourceRef
     actual_metrics: NetworkMetrics
     optimized_metrics: NetworkMetrics
     interpretation: str
@@ -571,7 +555,7 @@ class FacilityLocationSolution(StrictModel):
     active_facility_ids: list[str]
     evaluated_subset_count: int = Field(ge=0)
     result_resource_name: str
-    result_ref: ResourceRef
+    result_ref: _ResourceRef
     metrics: NetworkMetrics
     method: Literal["exact_subset_enumeration_with_min_cost_flow"] = (
         "exact_subset_enumeration_with_min_cost_flow"
@@ -595,7 +579,7 @@ class FinancialEvaluation(StrictModel):
     net_present_value: Decimal
     payback_years: float | None = Field(default=None, ge=0)
     financially_viable: bool
-    input_refs: list[ResourceRef] = Field(min_length=3)
+    input_refs: list[_ResourceRef] = Field(min_length=3)
     assumptions: list[str] = Field(min_length=1)
 
 
@@ -638,15 +622,15 @@ class ValidationResult(StrictModel):
 class ResourceToolResult(StrictModel):
     summary: str
     resource_name: str
-    resource_ref: ResourceRef
+    resource_ref: _ResourceRef
 
 
 class NetworkMapToolResult(StrictModel):
     summary: str
     map_resource_name: str
-    map_ref: ResourceRef
+    map_ref: _ResourceRef
     geojson_resource_name: str
-    geojson_ref: ResourceRef
+    geojson_ref: _ResourceRef
     feature_count: int = Field(ge=0)
     title: str
     layers: list[dict[str, Any]]
@@ -656,16 +640,16 @@ class NetworkMapToolResult(StrictModel):
 class NetworkSnapshotPreparationToolResult(StrictModel):
     summary: str
     snapshot_resource_name: str
-    snapshot_ref: ResourceRef
+    snapshot_ref: _ResourceRef
     route_matrix_resource_name: str
-    route_matrix_ref: ResourceRef
+    route_matrix_ref: _ResourceRef
 
 
 class NetworkMapRenderToolResult(StrictModel):
     summary: str
     map_manifest_resource_name: str
     geojson_resource_name: str
-    geojson_ref: ResourceRef
+    geojson_ref: _ResourceRef
     title: str
     layers: list[dict[str, Any]]
     extensions: dict[str, Any] = Field(default_factory=dict)
@@ -674,39 +658,39 @@ class NetworkMapRenderToolResult(StrictModel):
 class NetworkPlanningReportToolResult(StrictModel):
     summary: str
     resource_name: str
-    resource_ref: ResourceRef
+    resource_ref: _ResourceRef
     artifact_type: Literal["report.v1"] = "report.v1"
     title: str
     markdown_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     report_resource_name: str
-    report_ref: ResourceRef
+    report_ref: _ResourceRef
 
 
 class CurrentCoverageToolResult(CurrentCoverageResult):
     summary: str
     resource_name: str
-    resource_ref: ResourceRef
+    resource_ref: _ResourceRef
 
 
 class ComparisonToolResult(ScenarioComparison):
     summary: str
     resource_name: str
-    resource_ref: ResourceRef
+    resource_ref: _ResourceRef
 
 
 class FacilityLocationToolResult(FacilityLocationSolution):
     summary: str
     resource_name: str
-    solution_ref: ResourceRef
+    solution_ref: _ResourceRef
 
 
 class FinancialEvaluationToolResult(FinancialEvaluation):
     summary: str
     resource_name: str
-    resource_ref: ResourceRef
+    resource_ref: _ResourceRef
 
 
 class RiskRegisterToolResult(RiskRegister):
     summary: str
     resource_name: str
-    resource_ref: ResourceRef
+    resource_ref: _ResourceRef

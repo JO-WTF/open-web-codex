@@ -3,14 +3,16 @@ from __future__ import annotations
 import pytest
 
 from supply_chain_planner import server
+from supply_chain_planner.mcp_contracts import ResourceRef
 from supply_chain_planner.mcp_resources import bind_runtime
-from supply_chain_planner.models import ResourceRef
-from supply_chain_planner.resource_store import RESOURCE_URI_PREFIX, ResourceStore
+from supply_chain_planner.resource_store import ResourceStore
 from supply_chain_planner.server import MAX_PROFILE_GOAL_CHARS, _normalize_profile_goal
+
+RESOURCE_URI_PREFIX = "supply-chain://resources/"
 
 
 def _use_store(tmp_path, monkeypatch) -> ResourceStore:
-    store = ResourceStore(tmp_path / "resources")
+    store = ResourceStore(tmp_path / "resources", uri_prefix=RESOURCE_URI_PREFIX)
     monkeypatch.setattr(
         server,
         "_mcp_resource_runtime",
@@ -72,8 +74,16 @@ def test_input_gap_loads_data_agent_resource_references(tmp_path, monkeypatch) -
             "candidates": [{"target_field": "city_id"}],
         },
     )
-    source_ref = ResourceRef(uri=source.uri, resource_schema="source_profile.v1")
-    mapping_ref = ResourceRef(uri=mapping.uri, resource_schema="mapping_proposal.v1")
+    source_ref = ResourceRef(
+        server=server.MCP_SERVER_NAME,
+        uri=source.uri,
+        resource_schema="source_profile.v1",
+    )
+    mapping_ref = ResourceRef(
+        server=server.MCP_SERVER_NAME,
+        uri=mapping.uri,
+        resource_schema="mapping_proposal.v1",
+    )
 
     result = server.publish_input_gap(
         profile_ref,
@@ -133,6 +143,7 @@ def test_planner_accepts_normalized_data_agent_ref_at_network_boundary(
         },
     )
     ref = ResourceRef(
+        server=server.MCP_SERVER_NAME,
         uri=published.uri,
         resource_schema="normalized_network_input.v1",
     )

@@ -4,8 +4,9 @@ import asyncio
 import json
 
 from supply_chain_planner import data_server
+from supply_chain_planner.mcp_contracts import ResourceRef
 from supply_chain_planner.mcp_resources import bind_runtime
-from supply_chain_planner.models import MCP_SERVER_NAME, ConfirmedSourceDecision, ResourceRef
+from supply_chain_planner.models import MCP_SERVER_NAME, ConfirmedSourceDecision
 from supply_chain_planner.resource_store import ResourceStore
 from supply_chain_planner.workspace_intake import discover
 
@@ -13,7 +14,7 @@ RESOURCE_URI_PREFIX = "supply-chain://resources/"
 
 
 def _use_store(tmp_path, monkeypatch) -> ResourceStore:
-    store = ResourceStore(tmp_path / "profile-state")
+    store = ResourceStore(tmp_path / "profile-state", uri_prefix=RESOURCE_URI_PREFIX)
     runtime = bind_runtime(
         tmp_path,
         tmp_path / "profile",

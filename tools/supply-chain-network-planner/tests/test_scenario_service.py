@@ -166,7 +166,10 @@ def test_report_publication_exposes_summary_without_assignment_rows(tmp_path: Pa
         workspace,
         ScenarioSpec(add_warehouse_ids=["candidate-b"], service_targets=[6]),
     )
-    store = ResourceStore(tmp_path / "resources")
+    store = ResourceStore(
+        tmp_path / "resources",
+        uri_prefix="supply-chain://resources/",
+    )
 
     published, summary, _ = NetworkReportService(repository, store).publish(
         case.case_id, workspace, "scenario"
@@ -198,7 +201,10 @@ def test_comparison_map_is_published_without_returning_geojson_rows(tmp_path: Pa
         workspace,
         ScenarioSpec(add_warehouse_ids=["candidate-b"], service_targets=[6]),
     )
-    store = ResourceStore(tmp_path / "resources")
+    store = ResourceStore(
+        tmp_path / "resources",
+        uri_prefix="supply-chain://resources/",
+    )
 
     published, summary, _ = NetworkMapService(repository, store).publish_comparison(
         case.case_id, workspace, "scenario"

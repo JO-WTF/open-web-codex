@@ -1,4 +1,4 @@
-"""Content-addressed storage for MCP planning resources."""
+"""Content-addressed storage for bounded MCP Resources."""
 
 from __future__ import annotations
 
@@ -13,21 +13,24 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from .models import MCP_SERVER_NAME, ResourceRef
+from .mcp_contracts import ResourceRef
 
 RESOURCE_ID_PATTERN = re.compile(r"^[a-z0-9_.-]{1,160}$")
-RESOURCE_URI_PREFIX = "supply-chain://resources/"
-
-
-def workspace_resource_root(profile_home: Path, startup_workspace: Path) -> Path:
+def workspace_resource_root(
+    profile_home: Path,
+    startup_workspace: Path,
+    provider_namespace: str,
+) -> Path:
     """Return a private, opaque Resource namespace for one physical Workspace."""
     canonical_workspace = startup_workspace.resolve(strict=True)
+    if not re.fullmatch(r"[a-z][a-z0-9_.-]{0,127}", provider_namespace):
+        raise ValueError("provider_namespace_invalid")
     namespace = hashlib.sha256(os.fsencode(str(canonical_workspace))).hexdigest()
     return (
         profile_home
         / ".open-web-codex"
         / "mcp-state"
-        / "supply-chain"
+        / provider_namespace
         / "workspaces"
         / namespace
         / "resources"
@@ -43,7 +46,7 @@ class PublishedResource:
 
 
 class ResourceStore:
-    def __init__(self, root: Path, *, uri_prefix: str = RESOURCE_URI_PREFIX):
+    def __init__(self, root: Path, *, uri_prefix: str):
         self.root = root.resolve()
         self.uri_prefix = uri_prefix
         self.root.mkdir(parents=True, exist_ok=True)
@@ -125,16 +128,16 @@ class ResourceStore:
 
     def _path(self, resource_id: str) -> Path:
         if not RESOURCE_ID_PATTERN.fullmatch(resource_id):
-            raise ValueError("invalid supply-chain resource identifier")
+            raise ValueError("invalid resource identifier")
         path = (self.root / f"{resource_id}.json").resolve()
         if path.parent != self.root:
             raise ValueError("resource path escapes the configured resource directory")
         return path
 
 
-def resource_ref(published: PublishedResource) -> ResourceRef:
+def resource_ref(published: PublishedResource, server_name: str) -> ResourceRef:
     return ResourceRef(
-        server=MCP_SERVER_NAME,
+        server=server_name,
         uri=published.uri,
         resource_schema=published.schema,
     )

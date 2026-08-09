@@ -18,9 +18,9 @@ from supply_chain_planner.decision_core import (
     build_risk_register,
     evaluate_financial_case,
 )
+from supply_chain_planner.mcp_contracts import ResourceRef
 from supply_chain_planner.models import (
     NetworkInput,
-    ResourceRef,
     RiskItem,
     RouteEntry,
 )
@@ -202,14 +202,17 @@ def test_financial_and_risk_resources_preserve_evidence_lineage(
         scenario_id="candidate",
     )
     snapshot_ref = ResourceRef(
+        server="supply_chain",
         uri="supply-chain://resources/network_snapshot.v1-test",
         resource_schema="network_snapshot.v1",
     )
     baseline_ref = ResourceRef(
+        server="supply_chain",
         uri="supply-chain://resources/network_scenario_result.v1-baseline",
         resource_schema="network_scenario_result.v1",
     )
     candidate_ref = ResourceRef(
+        server="supply_chain",
         uri="supply-chain://resources/network_scenario_result.v1-candidate",
         resource_schema="network_scenario_result.v1",
     )

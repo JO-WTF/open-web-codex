@@ -6,11 +6,11 @@ import hashlib
 import json
 from decimal import Decimal
 
+from .mcp_contracts import ResourceRef
 from .models import (
     FinancialEvaluation,
     NetworkScenarioResult,
     NetworkSnapshot,
-    ResourceRef,
     RiskItem,
     RiskRegister,
 )

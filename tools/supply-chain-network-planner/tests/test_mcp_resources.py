@@ -7,11 +7,11 @@ from types import SimpleNamespace
 import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
+from supply_chain_planner.mcp_contracts import ResourceRef
 from supply_chain_planner.mcp_resources import (
     McpResourceContractError,
     McpResourceRuntime,
 )
-from supply_chain_planner.models import ResourceRef
 from supply_chain_planner.resource_store import ResourceStore
 
 SERVER_NAME = "supply_chain"
@@ -48,7 +48,10 @@ def _context(sandbox_cwd: str | None) -> SimpleNamespace:
 
 
 def test_runtime_publishes_and_strictly_loads_model(tmp_path: Path) -> None:
-    runtime = _runtime(tmp_path, ResourceStore(tmp_path / "resources"))
+    runtime = _runtime(
+        tmp_path,
+        ResourceStore(tmp_path / "resources", uri_prefix=URI_PREFIX),
+    )
 
     result = runtime.publish(
         "example.v1",
@@ -64,7 +67,7 @@ def test_runtime_publishes_and_strictly_loads_model(tmp_path: Path) -> None:
 
 
 def test_runtime_rejects_forged_server_schema_and_payload(tmp_path: Path) -> None:
-    store = ResourceStore(tmp_path / "resources")
+    store = ResourceStore(tmp_path / "resources", uri_prefix=URI_PREFIX)
     runtime = _runtime(tmp_path, store)
     published = store.publish("example.v1", {"schemaVersion": "wrong.v1", "value": 1})
 
@@ -79,15 +82,33 @@ def test_runtime_rejects_forged_server_schema_and_payload(tmp_path: Path) -> Non
             "example.v1",
             ExampleResource,
         )
+    with pytest.raises(McpResourceContractError, match="resource_uri_mismatch"):
+        runtime.load_model(
+            ResourceRef(
+                server=SERVER_NAME,
+                uri="other-provider://resources/example.v1-test",
+                resource_schema="example.v1",
+            ),
+            "example.v1",
+            ExampleResource,
+        )
     with pytest.raises(McpResourceContractError, match="resource_schema_mismatch"):
         runtime.load_model(
-            ResourceRef(uri=published.uri, resource_schema="other.v1"),
+            ResourceRef(
+                server=SERVER_NAME,
+                uri=published.uri,
+                resource_schema="other.v1",
+            ),
             "example.v1",
             ExampleResource,
         )
     with pytest.raises(McpResourceContractError, match="resource_payload_schema_mismatch"):
         runtime.load_model(
-            ResourceRef(uri=published.uri, resource_schema="example.v1"),
+            ResourceRef(
+                server=SERVER_NAME,
+                uri=published.uri,
+                resource_schema="example.v1",
+            ),
             "example.v1",
             ExampleResource,
         )
@@ -96,7 +117,7 @@ def test_runtime_rejects_forged_server_schema_and_payload(tmp_path: Path) -> Non
 def test_runtime_enforces_publish_read_and_load_size_bounds(
     tmp_path: Path, monkeypatch
 ) -> None:
-    store = ResourceStore(tmp_path / "resources")
+    store = ResourceStore(tmp_path / "resources", uri_prefix=URI_PREFIX)
     runtime = _runtime(tmp_path, store)
     resource = ExampleResource(schemaVersion="example.v1", value=1, note="x" * 80)
     encoded = json.dumps(
@@ -132,9 +153,13 @@ def test_runtime_accepts_physical_workspace_alias(tmp_path: Path) -> None:
     workspace.mkdir()
     alias = tmp_path / "workspace-alias"
     alias.symlink_to(workspace, target_is_directory=True)
-    runtime = _runtime(workspace, ResourceStore(tmp_path / "resources"))
+    runtime = _runtime(
+        workspace,
+        ResourceStore(tmp_path / "resources", uri_prefix=URI_PREFIX),
+    )
 
     assert runtime.require_workspace(_context(alias.as_uri())) == workspace.resolve()
+
 
 
 def test_runtime_rejects_different_workspace_and_invalid_metadata(tmp_path: Path) -> None:
@@ -142,7 +167,10 @@ def test_runtime_rejects_different_workspace_and_invalid_metadata(tmp_path: Path
     other = tmp_path / "other"
     workspace.mkdir()
     other.mkdir()
-    runtime = _runtime(workspace, ResourceStore(tmp_path / "resources"))
+    runtime = _runtime(
+        workspace,
+        ResourceStore(tmp_path / "resources", uri_prefix=URI_PREFIX),
+    )
 
     with pytest.raises(McpResourceContractError, match="workspace_scope_mismatch"):
         runtime.require_workspace(_context(other.as_uri()))

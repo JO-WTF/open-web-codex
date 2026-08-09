@@ -19,14 +19,10 @@ def test_plugin_manifest_and_mcp_config_are_wired() -> None:
     assert manifest["version"] == project["project"]["version"] == __version__ == "0.4.0"
     assert manifest["skills"] == "./skills/"
     assert manifest["mcpServers"] == "./.mcp.json"
-    assert set(mcp_config["mcpServers"]) == {
-        "supply_chain_data",
-        "supply_chain_network",
-        "supply_chain_demo",
-    }
-    server = mcp_config["mcpServers"]["supply_chain_network"]
+    assert set(mcp_config["mcpServers"]) == {"supply_chain"}
+    server = mcp_config["mcpServers"]["supply_chain"]
     assert server["command"] == "./bin/supply-chain-planner-launcher"
-    assert server["cwd"] == "."
+    assert "cwd" not in server
     assert server["default_tools_approval_mode"] == "approve"
     assert "tools" not in server
 

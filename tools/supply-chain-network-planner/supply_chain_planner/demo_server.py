@@ -19,9 +19,9 @@ from mcp.server.stdio import stdio_server
 from .geo import haversine_km, stable_uniform
 from .workspace_intake import (
     discover,
-    trusted_workspace_root,
     workspace_contains_supported_sources,
 )
+from .workspace_scope import trusted_workspace_root
 
 SANDBOX_STATE_META_CAPABILITY = "codex/sandbox-state-meta"
 TEMPLATE_ID = "indonesia-network-tutorial"

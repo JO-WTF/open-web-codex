@@ -48,6 +48,7 @@ from .geography import (
     validate_points_within_boundaries as _validate_points_within_boundaries,
 )
 from .mapping import FieldObservation, TransformSpec, suggest_role_mappings
+from .mcp_contracts import ResourceRef
 from .mcp_resources import McpResourceRuntime, bind_runtime
 from .models import (
     MCP_SERVER_NAME,
@@ -62,7 +63,6 @@ from .models import (
     PlanningSource,
     Point,
     PreparedNetworkResource,
-    ResourceRef,
     ServicePolicy,
     ValidationResult,
     WarehouseCityCoverage,

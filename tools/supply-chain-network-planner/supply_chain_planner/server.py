@@ -56,6 +56,7 @@ from .matrix import validate_route_matrix as _validate_route_matrix_model
 from .matrix_models import CostMatrix, RouteMatrixPlan, RouteMatrixRow
 from .matrix_models import RouteMatrix as ComposableRouteMatrix
 from .matrix_service import CaseMatrixService
+from .mcp_contracts import ResourceRef
 from .mcp_resources import McpResourceRuntime, bind_runtime
 from .models import (
     ComparisonToolResult,
@@ -73,7 +74,6 @@ from .models import (
     NetworkSnapshot,
     NetworkSnapshotPreparationToolResult,
     PlanningDataset,
-    ResourceRef,
     ResourceToolResult,
     RiskItem,
     RiskRegister,
@@ -103,10 +103,11 @@ from .readiness import ReadinessEvaluator
 from .report_service import NetworkReportService
 from .requirements import RequirementRequest, RequirementService
 from .resource_store import (
-    RESOURCE_URI_PREFIX,
     PublishedResource,
     ResourceStore,
-    resource_ref,
+)
+from .resource_store import (
+    resource_ref as _resource_ref,
 )
 from .scenario_service import FacilityLocationService, NetworkScenarioService
 from .solver import (
@@ -121,6 +122,11 @@ from .solver import (
 MAX_SOURCE_BYTES = 20 * 1024 * 1024
 MAX_PROFILE_GOAL_CHARS = 8_000
 MCP_SERVER_NAME = "supply_chain"
+RESOURCE_URI_PREFIX = "supply-chain://resources/"
+
+
+def resource_ref(published: PublishedResource) -> ResourceRef:
+    return _resource_ref(published, MCP_SERVER_NAME)
 
 mcp = FastMCP(
     "Supply Chain Network Planner",
@@ -475,7 +481,11 @@ def _ref_for_resource(resource_name: str) -> ResourceRef:
     schema = payload.get("schema_version")
     if not isinstance(schema, str) or not schema:
         raise ValueError("Resource is missing schema_version")
-    return ResourceRef(resource_schema=schema, uri=f"supply-chain://resources/{resource_name}")
+    return ResourceRef(
+        server=MCP_SERVER_NAME,
+        resource_schema=schema,
+        uri=f"supply-chain://resources/{resource_name}",
+    )
 
 
 def _load_planning_dataset(ref: ResourceRef) -> PlanningDataset:
@@ -1485,7 +1495,11 @@ def prepare_network_comparison_map(
         map_resource_name=map_published.resource_id,
         map_ref=resource_ref(map_published),
         geojson_resource_name=geojson_published.resource_id,
-        geojson_ref=ResourceRef(resource_schema="geojson.v1", uri=geojson_published.uri),
+        geojson_ref=ResourceRef(
+            server=MCP_SERVER_NAME,
+            resource_schema="geojson.v1",
+            uri=geojson_published.uri,
+        ),
         feature_count=len(features),
         title=title,
         layers=map_manifest["layers"],
@@ -1528,6 +1542,7 @@ def prepare_network_map_render(
         map_manifest_resource_name=map_resource_name,
         geojson_resource_name=geojson_resource_name,
         geojson_ref=ResourceRef(
+            server=MCP_SERVER_NAME,
             resource_schema="geojson.v1",
             uri=f"supply-chain://resources/{geojson_resource_name}",
         ),
@@ -1641,7 +1656,11 @@ def prepare_network_planning_report(
         "generated_at": datetime.now(UTC).isoformat(),
     }
     report_published = _store().publish("network_planning_report.v1", payload)
-    report_ref = ResourceRef(resource_schema="network_planning_report.v1", uri=report_published.uri)
+    report_ref = ResourceRef(
+        server=MCP_SERVER_NAME,
+        resource_schema="network_planning_report.v1",
+        uri=report_published.uri,
+    )
     artifact = {
         "schema_version": "report.v1",
         "title": title,

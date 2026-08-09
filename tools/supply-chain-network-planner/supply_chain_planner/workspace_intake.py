@@ -17,7 +17,6 @@ import stat
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO
-from urllib.parse import unquote, urlparse
 from xml.etree import ElementTree
 
 import ijson
@@ -45,23 +44,7 @@ EXCLUDED_DIRS = {
     "datasets",
 }
 SUPPORTED_SUFFIXES = {".xlsx", ".csv", ".json"}
-SANDBOX_META = "codex/sandbox-state-meta"
 DEMO_MANIFEST_SCHEMA = "demo_workspace_sources.v1"
-
-
-def trusted_workspace_root(meta: Any) -> Path:
-    extra = getattr(meta, "model_extra", None)
-    state = extra.get(SANDBOX_META) if isinstance(extra, dict) else None
-    sandbox_cwd = state.get("sandboxCwd") if isinstance(state, dict) else None
-    if not isinstance(sandbox_cwd, str):
-        raise ValueError("trusted Turn Workspace metadata is unavailable")
-    parsed = urlparse(sandbox_cwd)
-    if parsed.scheme != "file" or parsed.netloc not in ("", "localhost"):
-        raise ValueError("trusted Turn Workspace is not a local file URI")
-    root = Path(unquote(parsed.path)).resolve(strict=True)
-    if not root.is_dir():
-        raise ValueError("trusted Turn Workspace is not a directory")
-    return root
 
 
 def _iter_files(root: Path) -> list[Path]:

@@ -18,9 +18,9 @@ from supply_chain_planner.demo_server import (
 )
 from supply_chain_planner.workspace_intake import (
     discover,
-    trusted_workspace_root,
     workspace_source_metadata,
 )
+from supply_chain_planner.workspace_scope import trusted_workspace_root
 
 
 def test_trusted_workspace_requires_runtime_metadata(tmp_path: Path) -> None:

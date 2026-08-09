@@ -9,9 +9,9 @@ from mcp.server.fastmcp import Context
 from mcp.types import CallToolResult, ResourceLink, TextContent
 from pydantic import BaseModel, ValidationError
 
-from .models import ResourceRef
+from .mcp_contracts import ResourceRef
 from .resource_store import ResourceStore, workspace_resource_root
-from .workspace_intake import trusted_workspace_root
+from .workspace_scope import trusted_workspace_root
 
 MAX_RESOURCE_BYTES = 32 * 1024 * 1024
 ModelT = TypeVar("ModelT", bound=BaseModel)
@@ -39,8 +39,15 @@ class McpResourceRuntime:
     ) -> None:
         self.startup_workspace = startup_workspace.resolve(strict=True)
         self.server_name = server_name
+        self.uri_prefix = uri_prefix
+        if store is not None and store.uri_prefix != uri_prefix:
+            raise ValueError("resource_store_uri_prefix_mismatch")
         self.store = store or ResourceStore(
-            workspace_resource_root(profile_home, self.startup_workspace),
+            workspace_resource_root(
+                profile_home,
+                self.startup_workspace,
+                server_name,
+            ),
             uri_prefix=uri_prefix,
         )
 
@@ -63,6 +70,8 @@ class McpResourceRuntime:
     def load_payload(self, ref: ResourceRef, expected_schema: str) -> dict[str, Any]:
         if ref.server != self.server_name:
             raise McpResourceContractError("resource_server_mismatch")
+        if not ref.uri.startswith(self.uri_prefix):
+            raise McpResourceContractError("resource_uri_mismatch")
         if ref.resource_schema != expected_schema:
             raise McpResourceContractError("resource_schema_mismatch")
         try:
