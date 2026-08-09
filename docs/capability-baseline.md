@@ -184,6 +184,10 @@ Profile seed 与显式应用资产 composition：
   写入前拒绝；clean Profile 缺失项逐文件原子 create-new；已存在普通文件保留，不覆盖用户
   热修改；symlink、目录、逃逸和非法 seed 失败；`config.toml`、用户其他 Skill/Role 与
   Workspace 不受影响。5 项单测通过；
+- 仓网验收 Profile 通过 Codex 官方进程级 feature override，在首次请求前关闭
+  `plugins`、`remote_plugin`、`apps` 与 `tool_suggest`；CLI feature discovery 精确报告四项
+  均为 disabled，real clean-Profile Runtime gate 仍能发现三项内置 Skill、两项 Role 与
+  role-local MCP。平台没有复制 Plugin/App/Tool Suggest discovery，也没有改写 `config.toml`；
 - real mode 必须显式提供 supply-chain/maps application asset root 与 prepared venv。Server
   canonicalize 并验证固定 launcher/runtime、八项只读印尼 Mock 源和 Mapbox Style Spec，
   不从 cwd、Workspace、`CARGO_MANIFEST_DIR` 或源码树扫描 fallback；部署 root symlink 可用，

@@ -1177,6 +1177,7 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
     let host = ProfileHost::spawn(
         ProfileHostConfig::new("builtin-network-runtime-gate", &profile_home, &runner_root)
             .with_codex_bin(&codex_bin)
+            .with_disabled_features(crate::builtin_network_copilot::disabled_codex_features())
             .with_startup_files(
                 assets
                     .startup_files(&profile_home)

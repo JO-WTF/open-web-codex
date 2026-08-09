@@ -99,7 +99,10 @@ Skill、MCP server 和 tool allowlist。Skills 使用 `$CODEX_HOME/skills`、Rol
 `$CODEX_HOME/agents/*.toml` 自动发现，完整 MCP transport 与 `enabled_tools` 直接位于各自
 Role TOML。阶段一不改 Profile `config.toml`、不收窄全局 Role allowlist，也不覆盖 Codex
 内置或用户自建 Role。checked-in 文件只是 clean Profile 默认 seed；创建后 Profile 成为运行态
-owner，平台启动不覆盖其内容。显式 reset 或升级迁移不在阶段一。
+owner，平台启动不覆盖其内容。当前仓网验收 composition 仅在 owned `app-server` 进程启动前，
+通过 Codex 官方 feature override 关闭 `plugins`、`remote_plugin`、`apps` 和
+`tool_suggest`，以缩小该 Profile 的模型可见面；这不是 Platform 自建 discovery/filter，且不
+修改持久 Profile 文件。显式 reset 或升级迁移不在阶段一。
 
 仓网 Python/地图 launcher、代码与只读 Mock fixture 属于显式部署的只读 application assets，
 不复制到每个 Profile，也不从 process cwd、Workspace 或源码树扫描发现。Profile 配置只引用

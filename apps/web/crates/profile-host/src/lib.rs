@@ -141,6 +141,29 @@ pub struct ProfileHostConfig {
     environment: Vec<(OsString, OsString)>,
 }
 
+/// Official Codex features that a Profile composition may disable before the
+/// owned app-server starts. The CLI remains the authoritative validator and
+/// feature owner; this type only prevents product code from assembling raw
+/// feature names or post-processing Runtime discovery results.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodexFeature {
+    Apps,
+    Plugins,
+    RemotePlugin,
+    ToolSuggest,
+}
+
+impl CodexFeature {
+    const fn key(self) -> &'static str {
+        match self {
+            Self::Apps => "apps",
+            Self::Plugins => "plugins",
+            Self::RemotePlugin => "remote_plugin",
+            Self::ToolSuggest => "tool_suggest",
+        }
+    }
+}
+
 impl ProfileHostConfig {
     pub fn new(
         profile_id: impl Into<String>,
@@ -163,6 +186,21 @@ impl ProfileHostConfig {
 
     pub fn with_codex_bin(mut self, codex_bin: impl Into<PathBuf>) -> Self {
         self.codex_bin = codex_bin.into();
+        self
+    }
+
+    /// Applies official, process-scoped Codex feature overrides before the
+    /// `app-server` subcommand. This leaves the user's persistent
+    /// `config.toml` untouched and applies equally to the first request and to
+    /// every restart of this Profile process.
+    pub fn with_disabled_features(
+        mut self,
+        features: impl IntoIterator<Item = CodexFeature>,
+    ) -> Self {
+        for feature in features {
+            self.codex_args.push(OsString::from("--disable"));
+            self.codex_args.push(OsString::from(feature.key()));
+        }
         self
     }
 
@@ -1241,9 +1279,9 @@ mod tests {
     use super::{
         clear_runtime_work, dispatch_incoming, ensure_profile_home, ensure_profile_layout,
         record_successful_runtime_request, runtime_request_lifecycle_effect, spawn_app_server,
-        validate_official_initialize_response, ProfileHost, ProfileHostConfig, ProfileHostError,
-        ProfileHostInner, ProfileHostSnapshot, ProfileHostState, ProfileLock, ProfileProcessCwd,
-        PROCESS_HOME_DIRECTORY, RUNTIME_DIRECTORY,
+        validate_official_initialize_response, CodexFeature, ProfileHost, ProfileHostConfig,
+        ProfileHostError, ProfileHostInner, ProfileHostSnapshot, ProfileHostState, ProfileLock,
+        ProfileProcessCwd, PROCESS_HOME_DIRECTORY, RUNTIME_DIRECTORY,
     };
     use serde_json::json;
     use std::collections::{HashMap, HashSet};
@@ -1406,6 +1444,32 @@ mod tests {
 
         assert!(!debug.contains("secret-value"));
         assert!(debug.contains("[redacted]"));
+    }
+
+    #[test]
+    fn disabled_features_use_official_cli_overrides_in_declared_order() {
+        let config = ProfileHostConfig::new("profile", "/tmp/profile", "/tmp")
+            .with_disabled_features([
+                CodexFeature::Plugins,
+                CodexFeature::RemotePlugin,
+                CodexFeature::Apps,
+                CodexFeature::ToolSuggest,
+            ]);
+
+        assert_eq!(
+            config.codex_args,
+            [
+                "--disable",
+                "plugins",
+                "--disable",
+                "remote_plugin",
+                "--disable",
+                "apps",
+                "--disable",
+                "tool_suggest",
+            ]
+            .map(OsString::from)
+        );
     }
 
     #[cfg(unix)]

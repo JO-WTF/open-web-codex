@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use open_web_codex_profile_host::ProfileStartupFile;
+use open_web_codex_profile_host::{CodexFeature, ProfileStartupFile};
 use thiserror::Error;
 use toml_edit::{value, Array, DocumentMut, Item};
 
@@ -22,6 +22,19 @@ const SUPPLY_CHAIN_RUNTIME_FILE: &str = "supply_chain_planner/server.py";
 const SUPPLY_CHAIN_DATA_RUNTIME_FILE: &str = "supply_chain_planner/data_server.py";
 const MAPS_RUNTIME_FILE: &str = "maps_mcp/server.py";
 const MAPS_STYLE_SPEC_PACKAGE: &str = "node_modules/@mapbox/mapbox-gl-style-spec/package.json";
+
+/// Keep the phase-one warehouse acceptance Profile focused on its native
+/// Skills, Roles, and role-local MCP tools. Codex still owns discovery and
+/// prompt construction; these are official feature switches, not a local
+/// tool/plugin filter.
+pub(crate) const fn disabled_codex_features() -> [CodexFeature; 4] {
+    [
+        CodexFeature::Plugins,
+        CodexFeature::RemotePlugin,
+        CodexFeature::Apps,
+        CodexFeature::ToolSuggest,
+    ]
+}
 
 #[derive(Debug)]
 pub(crate) struct BuiltinNetworkCopilotAssets {
@@ -530,6 +543,19 @@ mod tests {
             5
         );
         assert!(!profile.join("config.toml").exists());
+    }
+
+    #[test]
+    fn acceptance_profile_disables_only_remote_model_visible_surfaces() {
+        assert_eq!(
+            disabled_codex_features(),
+            [
+                CodexFeature::Plugins,
+                CodexFeature::RemotePlugin,
+                CodexFeature::Apps,
+                CodexFeature::ToolSuggest,
+            ]
+        );
     }
 
     #[test]

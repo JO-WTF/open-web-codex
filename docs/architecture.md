@@ -73,7 +73,10 @@ typed 校验官方 `initialize` 的四字段，并只对 `codexHome` 执行 Prof
 只允许 `$CODEX_HOME/skills/<id>/SKILL.md` 和 `$CODEX_HOME/agents/<role>.toml` 两种
 typed destination，不写 `config.toml`，不复制工具代码、venv、Node 依赖、Mock 或缓存。
 clean Profile 缺失文件使用 create-new 原子落盘；现有普通文件保留，使开发者修改后的
-Skill watcher 和下一次 Role spawn 仍由 Codex 原生语义拥有。
+Skill watcher 和下一次 Role spawn 仍由 Codex 原生语义拥有。仓网验收 composition 在
+`app-server` 启动前使用 Codex 官方、进程级 `--disable` feature override 关闭
+`plugins`、`remote_plugin`、`apps` 与 `tool_suggest`；不改写持久 Profile 配置，也不在
+Platform 侧过滤 Runtime discovery 或 Tool。
 
 Data/Network Role TOML 各自持有完整 MCP transport 与精确 `enabled_tools`；Root 没有全局
 仓网 MCP。当前 composition 仍把 MCP process cwd 设为 canonical 共享应用资产根，这只是
