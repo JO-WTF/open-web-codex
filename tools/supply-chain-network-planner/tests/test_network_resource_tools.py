@@ -157,6 +157,7 @@ def test_distribution_map_publishes_geojson_for_map_card_only(
         "data_ref",
         "feature_count",
         "layer_counts",
+        "map_card_handoff",
     }
     data_ref = MapResourceRef.model_validate(result.structuredContent["data_ref"])
     assert data_ref.server == "supply_chain"
@@ -177,6 +178,30 @@ def test_distribution_map_publishes_geojson_for_map_card_only(
         "existing_warehouses": expected_existing,
         "candidate_warehouses": 0,
     }
+    handoff = result.structuredContent["map_card_handoff"]
+    assert handoff["schemaVersion"] == "network_distribution_map_card_handoff.v1"
+    assert handoff["tool"] == {
+        "server": "map_utils",
+        "name": "create_map_card",
+    }
+    arguments = handoff["arguments"]
+    assert arguments["sources"] == {
+        "network-distribution": {
+            "type": "geojson",
+            "data_ref": result.structuredContent["data_ref"],
+        }
+    }
+    assert [layer["id"] for layer in arguments["layers"]] == [
+        "demand-cities",
+        "center-warehouses",
+        "cross-docking-warehouses",
+        "warehouse-labels",
+    ]
+    assert [item["label"] for item in arguments["extensions"]["legend"]["items"]] == [
+        "Demand city",
+        "Center warehouse",
+        "Cross-docking warehouse",
+    ]
     assert not list(workspace.rglob("*.json"))
 
     with_candidates = server.prepare_network_distribution_map(
@@ -191,6 +216,15 @@ def test_distribution_map_publishes_geojson_for_map_card_only(
     assert with_candidates.structuredContent["layer_counts"][
         "candidate_warehouses"
     ] == expected_candidates
+    candidate_handoff = with_candidates.structuredContent["map_card_handoff"]
+    assert "candidate-warehouses" in [
+        layer["id"] for layer in candidate_handoff["arguments"]["layers"]
+    ]
+    assert candidate_handoff["arguments"]["extensions"]["legend"]["items"][-1] == {
+        "label": "Candidate warehouse",
+        "color": "#16A34A",
+        "type": "circle",
+    }
 
 
 def test_route_and_cost_tools_use_exact_pair_reuse(tmp_path: Path, monkeypatch) -> None:

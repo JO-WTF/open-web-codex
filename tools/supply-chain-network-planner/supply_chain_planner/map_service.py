@@ -12,6 +12,7 @@ from uuid import UUID
 from pydantic import Field
 
 from .delivery_models import DeliveryModel, validate_delivery_inputs
+from .mcp_contracts import MapResourceRef
 from .network_models import DemandCityRecord, NormalizedInputBatch, WarehouseRecord
 from .optimization_models import (
     AssignmentComparison,
@@ -44,6 +45,10 @@ class WarehouseMapProperties(DeliveryModel):
     warehouse_id: str
     warehouse_name: str
     warehouse_type: Literal["center", "cross_docking"]
+    city_id: str
+    city_name: str
+    province_id: str | None
+    province_name: str | None
     is_existing: bool
     baseline_active: bool
     facility_active: bool
@@ -108,6 +113,37 @@ class NetworkDistributionGeoJson(DeliveryModel):
     )
     type: Literal["FeatureCollection"] = "FeatureCollection"
     features: list[NetworkMapFeature]
+
+
+class MapCardToolTarget(DeliveryModel):
+    server: Literal["map_utils"] = "map_utils"
+    name: Literal["create_map_card"] = "create_map_card"
+
+
+class MapCardGeoJsonSource(DeliveryModel):
+    type: Literal["geojson"] = "geojson"
+    data_ref: MapResourceRef
+
+
+class NetworkDistributionMapCardArguments(DeliveryModel):
+    title: str
+    intent: Literal["visualization"] = "visualization"
+    fallback_text: str
+    summary: str
+    sources: dict[str, MapCardGeoJsonSource]
+    layers: list[dict[str, object]]
+    extensions: dict[str, object]
+
+
+class NetworkDistributionMapCardHandoff(DeliveryModel):
+    """Exact cross-Tool handoff for the generic map-card provider."""
+
+    schema_version: Literal["network_distribution_map_card_handoff.v1"] = Field(
+        default="network_distribution_map_card_handoff.v1",
+        alias="schemaVersion",
+    )
+    tool: MapCardToolTarget = Field(default_factory=MapCardToolTarget)
+    arguments: NetworkDistributionMapCardArguments
 
 
 class NetworkMapLayer(DeliveryModel):
@@ -206,6 +242,10 @@ def build_network_distribution_geojson(
                     warehouse_id=warehouse.warehouse_id,
                     warehouse_name=warehouse.warehouse_name,
                     warehouse_type=warehouse.warehouse_type,
+                    city_id=warehouse.city_id,
+                    city_name=warehouse.city_name,
+                    province_id=warehouse.province_id,
+                    province_name=warehouse.province_name,
                     is_existing=warehouse.is_existing,
                     baseline_active=warehouse.is_existing,
                     facility_active=warehouse.is_existing,
@@ -215,6 +255,178 @@ def build_network_distribution_geojson(
             )
         )
     return NetworkDistributionGeoJson(features=features)
+
+
+def build_network_distribution_map_card_handoff(
+    data_ref: MapResourceRef,
+    *,
+    include_candidates: bool,
+) -> NetworkDistributionMapCardHandoff:
+    """Build the exact generic map-card call without exposing GeoJSON to the model."""
+
+    source_id = "network-distribution"
+    layers: list[dict[str, object]] = [
+        {
+            "id": "demand-cities",
+            "type": "circle",
+            "source": source_id,
+            "filter": ["==", ["get", "kind"], "demand"],
+            "paint": {
+                "circle-color": "#F59E0B",
+                "circle-opacity": 0.78,
+                "circle-radius": [
+                    "interpolate",
+                    ["linear"],
+                    ["to-number", ["get", "demand_quantity"]],
+                    0,
+                    4,
+                    10000,
+                    14,
+                ],
+                "circle-stroke-color": "#7C2D12",
+                "circle-stroke-width": 1,
+            },
+        },
+        {
+            "id": "center-warehouses",
+            "type": "circle",
+            "source": source_id,
+            "filter": [
+                "all",
+                ["==", ["get", "kind"], "warehouse"],
+                ["==", ["get", "is_existing"], True],
+                ["==", ["get", "warehouse_type"], "center"],
+            ],
+            "paint": {
+                "circle-color": "#DC2626",
+                "circle-radius": 9,
+                "circle-stroke-color": "#FFFFFF",
+                "circle-stroke-width": 2,
+            },
+        },
+        {
+            "id": "cross-docking-warehouses",
+            "type": "circle",
+            "source": source_id,
+            "filter": [
+                "all",
+                ["==", ["get", "kind"], "warehouse"],
+                ["==", ["get", "is_existing"], True],
+                ["==", ["get", "warehouse_type"], "cross_docking"],
+            ],
+            "paint": {
+                "circle-color": "#2563EB",
+                "circle-radius": 7,
+                "circle-stroke-color": "#FFFFFF",
+                "circle-stroke-width": 2,
+            },
+        },
+        {
+            "id": "warehouse-labels",
+            "type": "symbol",
+            "source": source_id,
+            "filter": [
+                "all",
+                ["==", ["get", "kind"], "warehouse"],
+                ["==", ["get", "is_existing"], True],
+            ],
+            "layout": {
+                "text-field": ["get", "warehouse_name"],
+                "text-size": 11,
+                "text-offset": [0, 1.3],
+                "text-anchor": "top",
+            },
+            "paint": {
+                "text-color": "#111827",
+                "text-halo-color": "#FFFFFF",
+                "text-halo-width": 1,
+            },
+        },
+    ]
+    legend_items: list[dict[str, object]] = [
+        {"label": "Demand city", "color": "#F59E0B", "type": "circle"},
+        {"label": "Center warehouse", "color": "#DC2626", "type": "circle"},
+        {
+            "label": "Cross-docking warehouse",
+            "color": "#2563EB",
+            "type": "circle",
+        },
+    ]
+    if include_candidates:
+        layers.insert(
+            3,
+            {
+                "id": "candidate-warehouses",
+                "type": "circle",
+                "source": source_id,
+                "filter": [
+                    "all",
+                    ["==", ["get", "kind"], "warehouse"],
+                    ["==", ["get", "is_existing"], False],
+                ],
+                "paint": {
+                    "circle-color": "#16A34A",
+                    "circle-radius": 6,
+                    "circle-stroke-color": "#FFFFFF",
+                    "circle-stroke-width": 2,
+                },
+            },
+        )
+        legend_items.append(
+            {"label": "Candidate warehouse", "color": "#16A34A", "type": "circle"}
+        )
+
+    summary = (
+        "Demand cities and existing warehouses"
+        + (" with candidate warehouses." if include_candidates else ".")
+    )
+    return NetworkDistributionMapCardHandoff(
+        arguments=NetworkDistributionMapCardArguments(
+            title="Warehouse network distribution",
+            fallback_text=summary,
+            summary=summary,
+            sources={
+                source_id: MapCardGeoJsonSource(data_ref=data_ref),
+            },
+            layers=layers,
+            extensions={
+                "hover": {
+                    "layers": [
+                        {
+                            "layer": "demand-cities",
+                            "title_property": "city_name",
+                            "fields": ["province_name", "demand_quantity"],
+                        },
+                        {
+                            "layer": "center-warehouses",
+                            "title_property": "warehouse_name",
+                            "fields": ["warehouse_type", "city_name"],
+                        },
+                        {
+                            "layer": "cross-docking-warehouses",
+                            "title_property": "warehouse_name",
+                            "fields": ["warehouse_type", "city_name"],
+                        },
+                    ]
+                    + (
+                        [
+                            {
+                                "layer": "candidate-warehouses",
+                                "title_property": "warehouse_name",
+                                "fields": ["warehouse_type", "city_name"],
+                            }
+                        ]
+                        if include_candidates
+                        else []
+                    ),
+                },
+                "legend": {
+                    "title": "Network features",
+                    "items": legend_items,
+                },
+            },
+        )
+    )
 
 
 def build_network_comparison_map_bundle(
@@ -247,6 +459,10 @@ def build_network_comparison_map_bundle(
                     warehouse_id=warehouse_id,
                     warehouse_name=warehouse.warehouse_name,
                     warehouse_type=warehouse.warehouse_type,
+                    city_id=warehouse.city_id,
+                    city_name=warehouse.city_name,
+                    province_id=warehouse.province_id,
+                    province_name=warehouse.province_name,
                     is_existing=warehouse.is_existing,
                     baseline_active=warehouse_id in validated.baseline_active_ids,
                     facility_active=warehouse_id in validated.facility_active_ids,

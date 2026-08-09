@@ -44,7 +44,7 @@ description: 当用户要求定义仓网数据需求，计算路线、成本、�
 
 - “展示地图”“看看分布”“地图可视化”默认表示对话内地图卡片，不表示文件交付。不得因此生成网页、PNG、Workspace JSON 或调用 final Tool。
 - 只展示需求城市和当前仓库分布时，调用 `prepare_network_distribution_map` 把精确标准化输入转换为 bounded GeoJSON Resource；该 Tool 不计算路线、成本、覆盖或优化。默认 `include_candidates=false`，除非用户明确要求展示候选仓。
-- 将 `prepare_network_distribution_map` 返回的完整 `data_ref` 原样放入 `create_map_card.sources`，用 Mapbox 图层区分需求城市、中心仓和 cross-docking，并按需求量设置点大小或颜色。需要图例时使用 `extensions.legend`。
+- `prepare_network_distribution_map` 会返回 typed `map_card_handoff`。立即调用其中 `tool.server=map_utils`、`tool.name=create_map_card` 指定的 Tool，并把 `map_card_handoff.arguments` 整体原样作为调用参数；不得读取 GeoJSON、重新设计 sources/layers/legend、搜索其他地图模板或改写 handoff。用户要求展示候选仓时只通过前一 Tool 的 `include_candidates=true` 产生对应 handoff。
 - `create_map_card` 成功后，把其 `structuredContent.embed.code` 原样作为独立段落放入回复，地图才会在 Web 对话中显示。不得只描述卡片已经创建，也不得把 embed 放进代码块、列表或引用。
 - 分布地图链中任一 Tool 失败时立即返回明确失败；不得改用 Leaflet/HTML、脚本、GeoJSON/PNG 文件、Markdown 图片或其他自制展示。
 - 行政区目录用于校验名称和坐标，不等于行政边界 GeoJSON。只有存在经过验证的边界 GeoJSON Resource 时才能叠加自定义边界；否则使用平台底图并明确说明，不从目录行伪造多边形。

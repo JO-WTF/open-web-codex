@@ -262,6 +262,7 @@ async def _run_network_s3_then_s2(
                 "validate_route_matrix",
                 "register_navigation_route_matrix",
                 "plan_cost_matrix",
+                "prepare_network_distribution_map",
                 "evaluate_network_baseline",
                 "evaluate_facility_scenario",
                 "solve_p_median",

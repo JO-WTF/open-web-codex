@@ -602,6 +602,7 @@ mod tests {
         assert!(DATA_SKILL.contains("`city_id`、`city_name`、`demand_quantity`"));
         assert!(DATA_SKILL.contains("不要从行政区目录静默生成候选仓"));
         assert!(NETWORK_SKILL.contains("潜在接口调用量和费用"));
+        assert!(NETWORK_SKILL.contains("`map_card_handoff.arguments` 整体原样作为调用参数"));
         assert!(NETWORK_SKILL.contains("立即向 Supervisor 返回 `needs_data`"));
         assert!(NETWORK_SKILL.contains("不得从 Workspace 文件、旧 Artifact、报告、模型文本"));
         assert!(NETWORK_SKILL.contains("默认表示对话内地图卡片"));
@@ -610,6 +611,8 @@ mod tests {
         assert!(NETWORK_SKILL.contains("固定集合与可选集合必须完整、不重叠"));
         assert!(NETWORK_SKILL.contains("把这些 Tool 当作可组合能力"));
         assert!(NETWORK_SKILL.contains("create-new Workspace 相对输出路径"));
+        assert!(NETWORK_ROLE.contains("call the matching domain Tool directly"));
+        assert!(NETWORK_ROLE.contains("pass its arguments unchanged"));
         for deprecated in [
             "compute_optimal_assignment",
             "evaluate_service_targets",

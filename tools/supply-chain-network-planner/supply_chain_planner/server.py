@@ -53,6 +53,7 @@ from .map_service import (
     NetworkMapService,
     build_network_comparison_map_bundle,
     build_network_distribution_geojson,
+    build_network_distribution_map_card_handoff,
 )
 from .mapping_service import CaseMappingService
 from .matrix import build_cost_matrix as _build_composable_cost_matrix
@@ -63,7 +64,7 @@ from .matrix import validate_route_matrix as _validate_route_matrix_model
 from .matrix_models import CostCalculationPolicy, CostMatrix, RouteMatrixRow
 from .matrix_models import RouteMatrix as ComposableRouteMatrix
 from .matrix_service import CaseMatrixService
-from .mcp_contracts import ResourceRef
+from .mcp_contracts import MapResourceRef, ResourceRef
 from .mcp_resources import McpResourceContractError, McpResourceRuntime, bind_runtime
 from .models import (
     ComparisonToolResult,
@@ -3223,7 +3224,7 @@ def prepare_network_distribution_map(
     ctx: Context,
     include_candidates: bool = False,
 ) -> CallToolResult:
-    """Publish demand and warehouse points for an interactive map card."""
+    """Publish map points and exact map_utils.create_map_card handoff arguments."""
     _runtime().require_workspace(ctx)
     prepared = _load_ready_network(normalized_input_ref)
     normalized = NormalizedInputBatch(
@@ -3260,6 +3261,10 @@ def prepare_network_distribution_map(
                 "existing_warehouses": existing_count,
                 "candidate_warehouses": candidate_count,
             },
+            "map_card_handoff": build_network_distribution_map_card_handoff(
+                MapResourceRef.model_validate(structured["data_ref"]),
+                include_candidates=include_candidates,
+            ).model_dump(mode="json", by_alias=True),
         }
     )
     return result
