@@ -4,8 +4,6 @@
 use crate::common::ResponsesApiRequest;
 use crate::error::ApiError;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use serde::Deserialize;
 use serde::Serialize;
@@ -205,7 +203,7 @@ pub fn responses_request_to_chat_completions_request(
 
     Ok(ChatCompletionsApiRequest {
         model,
-        messages: initial_chat_messages(&input, &instructions)?,
+        messages: responses_input_to_chat_messages(&input, &instructions)?,
         tools,
         tool_choice,
         parallel_tool_calls,
@@ -252,55 +250,6 @@ fn chat_reasoning_effort(effort: ReasoningEffortConfig) -> Result<ChatReasoningE
         ReasoningEffortConfig::Ultra => Err(unsupported("reasoning effort `ultra`")),
         ReasoningEffortConfig::Custom(_) => Err(unsupported("custom reasoning effort")),
     }
-}
-
-/// Translates a stateless text-only request before Chat history support is
-/// enabled. Historical assistant, reasoning, and tool items are rejected
-/// explicitly so this first transport stage cannot omit model context.
-fn initial_chat_messages(
-    input: &[ResponseItem],
-    instructions: &str,
-) -> Result<Vec<ChatMessage>, ApiError> {
-    let mut messages = Vec::with_capacity(input.len() + 1);
-    if !instructions.is_empty() {
-        messages.push(ChatMessage::Text {
-            role: "system".to_string(),
-            content: instructions.to_string(),
-        });
-    }
-    for item in input {
-        let ResponseItem::Message { role, content, .. } = item else {
-            return Err(unsupported(
-                "history items before typed Chat history translation",
-            ));
-        };
-        let role = match role.as_str() {
-            "user" => "user",
-            "system" | "developer" => "system",
-            _ => {
-                return Err(unsupported(
-                    "assistant or unknown message roles before typed Chat history translation",
-                ));
-            }
-        };
-        let content = content
-            .iter()
-            .map(|item| match item {
-                ContentItem::InputText { text } => Ok(text.as_str()),
-                ContentItem::InputImage { .. } => Err(unsupported("image input")),
-                ContentItem::InputAudio { .. } => Err(unsupported("audio input")),
-                ContentItem::OutputText { .. } => Err(unsupported(
-                    "assistant text before typed Chat history translation",
-                )),
-            })
-            .collect::<Result<Vec<_>, _>>()?
-            .join("\n");
-        messages.push(ChatMessage::Text {
-            role: role.to_string(),
-            content,
-        });
-    }
-    Ok(messages)
 }
 
 pub fn responses_tools_to_chat_tools(tools: &[Value]) -> Result<Vec<ChatTool>, ApiError> {
@@ -397,6 +346,11 @@ fn convert_function_tool(
         },
     })
 }
+
+#[path = "chat_translate_history.rs"]
+mod chat_translate_history;
+
+pub(crate) use chat_translate_history::responses_input_to_chat_messages;
 
 #[cfg(test)]
 #[path = "chat_translate_tests.rs"]

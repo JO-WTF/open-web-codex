@@ -4,6 +4,7 @@ use crate::common::ReasoningContext;
 use crate::common::ResponsesApiTools;
 use crate::common::TextControls;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use std::sync::Arc;
 
@@ -192,17 +193,68 @@ fn flattens_function_and_namespace_tools_with_reversible_targets() {
 }
 
 #[test]
-fn rejects_untranslated_history_instead_of_omitting_context() {
-    let mut assistant = request(None);
-    assistant.input = vec![ResponseItem::Message {
-        id: None,
-        role: "assistant".to_string(),
-        content: vec![ContentItem::OutputText {
-            text: "previous answer".to_string(),
-        }],
-        phase: None,
-        internal_chat_message_metadata_passthrough: None,
-    }];
+fn groups_raw_reasoning_assistant_text_and_tool_calls() {
+    let mut request = request(None);
+    request.instructions.clear();
+    request.input = vec![
+        ResponseItem::Reasoning {
+            id: None,
+            summary: Vec::new(),
+            content: Some(vec![
+                codex_protocol::models::ReasoningItemContent::ReasoningText {
+                    text: "check route coordinates".to_string(),
+                },
+            ]),
+            encrypted_content: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "Checking the route.".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        function_call("route", Some("mcp__maps"), "call_1"),
+        ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: "call_1".to_string(),
+            output: FunctionCallOutputPayload::from_text("12 km".to_string()),
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+
+    assert_eq!(
+        responses_request_to_chat_completions_request(request)
+            .unwrap()
+            .messages,
+        vec![
+            ChatMessage::AssistantWithToolCalls {
+                role: "assistant".to_string(),
+                content: "Checking the route.".to_string(),
+                reasoning_content: Some("check route coordinates".to_string()),
+                tool_calls: vec![ChatToolCall {
+                    id: "call_1".to_string(),
+                    r#type: "function".to_string(),
+                    function: ChatToolCallFunction {
+                        name: "mcp__maps__route".to_string(),
+                        arguments: "{}".to_string(),
+                    },
+                }],
+            },
+            ChatMessage::ToolResult {
+                role: "tool".to_string(),
+                tool_call_id: "call_1".to_string(),
+                content: "12 km".to_string(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn rejects_non_text_or_incomplete_chat_history() {
     let mut non_text = request(None);
     non_text.input = vec![ResponseItem::Message {
         id: None,
@@ -222,11 +274,26 @@ fn rejects_untranslated_history_instead_of_omitting_context() {
         encrypted_content: None,
         internal_chat_message_metadata_passthrough: None,
     }];
+    let mut incomplete_tool_group = request(None);
+    incomplete_tool_group.instructions.clear();
+    incomplete_tool_group.input = vec![function_call("route", None, "call_1")];
 
-    for request in [assistant, non_text, reasoning] {
+    for request in [non_text, reasoning, incomplete_tool_group] {
         assert!(matches!(
             responses_request_to_chat_completions_request(request),
             Err(ApiError::InvalidRequest { .. })
         ));
+    }
+}
+
+fn function_call(name: &str, namespace: Option<&str>, call_id: &str) -> ResponseItem {
+    ResponseItem::FunctionCall {
+        id: None,
+        name: name.to_string(),
+        namespace: namespace.map(str::to_string),
+        arguments: "{}".to_string(),
+        encrypted_function_args: None,
+        call_id: call_id.to_string(),
+        internal_chat_message_metadata_passthrough: None,
     }
 }
