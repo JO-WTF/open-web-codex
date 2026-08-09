@@ -149,22 +149,43 @@ impl ChatStreamState {
         Ok(())
     }
 
-    pub(super) fn merge_tool_call(&mut self, delta: ChatToolCallDelta) {
-        let index = delta.index.unwrap_or(self.tool_calls.len());
-        while self.tool_calls.len() <= index {
-            self.tool_calls.push(AccumulatedToolCall::default());
+    pub(super) fn merge_tool_call(&mut self, delta: ChatToolCallDelta) -> Result<(), ApiError> {
+        if delta
+            .r#type
+            .as_deref()
+            .is_some_and(|kind| kind != "function")
+        {
+            return Err(ApiError::Stream(
+                "chat completion tool call delta has non-function type".to_string(),
+            ));
         }
-        let tool_call = &mut self.tool_calls[index];
+        let tool_call = if let Some(position) = self
+            .tool_calls
+            .iter()
+            .position(|tool_call| tool_call.index == delta.index)
+        {
+            &mut self.tool_calls[position]
+        } else {
+            self.tool_calls.push(AccumulatedToolCall {
+                index: delta.index,
+                id: String::new(),
+                function: Default::default(),
+            });
+            self.tool_calls
+                .last_mut()
+                .expect("newly pushed tool call must be present")
+        };
         if let Some(id) = delta.id {
-            tool_call.id = id;
+            tool_call.id.push_str(&id);
         }
         if let Some(function) = delta.function {
             if let Some(name) = function.name {
-                tool_call.function.name = name;
+                tool_call.function.name.push_str(&name);
             }
             if let Some(arguments) = function.arguments {
                 tool_call.function.arguments.push_str(&arguments);
             }
         }
+        Ok(())
     }
 }

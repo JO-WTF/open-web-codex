@@ -7,8 +7,8 @@ pub(super) enum ChatFinishReason {
     ToolCalls,
 }
 
-#[derive(Default)]
 pub(super) struct AccumulatedToolCall {
+    pub(super) index: usize,
     pub(super) id: String,
     pub(super) function: AccumulatedToolCallFunction,
 }
@@ -45,7 +45,9 @@ pub(super) struct ChatDelta {
 
 #[derive(Deserialize)]
 pub(super) struct ChatToolCallDelta {
-    pub(super) index: Option<usize>,
+    pub(super) index: usize,
+    #[serde(rename = "type")]
+    pub(super) r#type: Option<String>,
     pub(super) id: Option<String>,
     pub(super) function: Option<ChatToolCallFunctionDelta>,
 }

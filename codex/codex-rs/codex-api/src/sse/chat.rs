@@ -235,7 +235,10 @@ pub async fn process_chat_sse(
                 state.output_started = true;
             }
             for tool_call in tool_calls {
-                state.merge_tool_call(tool_call);
+                if let Err(error) = state.merge_tool_call(tool_call) {
+                    send_error(&tx_event, error).await;
+                    return;
+                }
             }
         }
     }
@@ -303,6 +306,18 @@ async fn finish_chat_stream(
                 "chat completion returned an incomplete tool call".to_string(),
             ));
         }
+        if tool_call.function.arguments.is_empty() {
+            return Err(ApiError::Stream(
+                "chat completion returned a tool call without arguments".to_string(),
+            ));
+        }
+        serde_json::from_str::<serde_json::Value>(&tool_call.function.arguments).map_err(
+            |error| {
+                ApiError::Stream(format!(
+                    "chat completion returned tool call arguments that are not valid JSON: {error}"
+                ))
+            },
+        )?;
         let target = tool_targets.get(&tool_call.function.name).ok_or_else(|| {
             ApiError::Stream(format!(
                 "chat completion called unknown tool `{}`",

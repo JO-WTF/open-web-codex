@@ -237,6 +237,93 @@ async fn chat_sse_rejects_choice_refusal_and_late_reasoning() {
 }
 
 #[tokio::test]
+async fn chat_sse_preserves_first_seen_tool_slots_and_appends_fragments() {
+    let events = collect(
+        concat!(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":7,\"type\":\"function\",\"id\":\"call_\",\"function\":{\"name\":\"ro\",\"arguments\":\"{\"}},{\"index\":3,\"id\":\"call_b\",\"function\":{\"name\":\"se\",\"arguments\":\"{\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"I will use both tools.\",\"tool_calls\":[{\"index\":7,\"id\":\"call_\",\"function\":{\"name\":\"ute\",\"arguments\":\"}\"}},{\"index\":3,\"function\":{\"name\":\"arch\",\"arguments\":\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n"
+        ),
+        HashMap::from([
+            (
+                "route".to_string(),
+                ChatToolTarget {
+                    name: "route".to_string(),
+                    namespace: None,
+                },
+            ),
+            (
+                "search".to_string(),
+                ChatToolTarget {
+                    name: "search".to_string(),
+                    namespace: None,
+                },
+            ),
+        ]),
+    )
+    .await;
+
+    let completed_calls = events
+        .iter()
+        .filter_map(|event| match event {
+            Ok(ResponseEvent::OutputItemDone(ResponseItem::FunctionCall {
+                name, call_id, ..
+            })) => Some((name.as_str(), call_id.as_str())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        completed_calls,
+        vec![("route", "call_call_"), ("search", "call_b")]
+    );
+    assert!(matches!(
+        events.last(),
+        Some(Ok(ResponseEvent::Completed { .. }))
+    ));
+}
+
+#[tokio::test]
+async fn chat_sse_rejects_invalid_tool_delta_shapes_before_completion() {
+    let cases = [
+        (
+            "missing-index",
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"id\":\"call_1\",\"function\":{\"name\":\"route\",\"arguments\":\"{}\"}}]}}]}\n\n",
+            "invalid chat completion SSE payload",
+        ),
+        (
+            "non-function-type",
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"type\":\"custom\"}]}}]}\n\n",
+            "non-function type",
+        ),
+        (
+            "duplicate-argument-fragment",
+            concat!(
+                "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"route\",\"arguments\":\"{\\\"x\\\":\"}}]}}]}\n\n",
+                "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"x\\\":\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+                "data: [DONE]\n\n"
+            ),
+            "not valid JSON",
+        ),
+    ];
+    for (_name, body, expected) in cases {
+        let events = collect(
+            body,
+            HashMap::from([(
+                "route".to_string(),
+                ChatToolTarget {
+                    name: "route".to_string(),
+                    namespace: None,
+                },
+            )]),
+        )
+        .await;
+        assert!(
+            matches!(events.last(), Some(Err(ApiError::Stream(message))) if message.contains(expected))
+        );
+    }
+}
+
+#[tokio::test]
 async fn chat_sse_uses_unique_local_ids_and_stops_on_interrupt() {
     let body = concat!(
         "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"}}]}\n\n",
