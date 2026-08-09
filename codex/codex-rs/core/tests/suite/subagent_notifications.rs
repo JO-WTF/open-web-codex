@@ -1,8 +1,12 @@
 use anyhow::Result;
+use codex_config::types::McpServerAuth;
+use codex_config::types::McpServerConfig;
+use codex_config::types::McpServerTransportConfig;
 use codex_core::StartThreadOptions;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::config::AgentRoleConfig;
 use codex_features::Feature;
+use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
@@ -35,15 +39,18 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::responses::strip_metadata_from_json;
 use core_test_support::responses::strip_response_item_ids_from_json;
 use core_test_support::skip_if_no_network;
+use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
@@ -53,7 +60,11 @@ use tokio::time::Instant;
 use tokio::time::sleep;
 use tracing::Level;
 use tracing_test::internal::MockWriter;
+use wiremock::Mock;
 use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 const SPAWN_CALL_ID: &str = "spawn-call-1";
 const MULTI_AGENT_V1_NAMESPACE: &str = "multi_agent_v1";
@@ -108,6 +119,101 @@ fn decoded_body(req: &wiremock::Request) -> Option<Vec<u8>> {
     } else {
         Some(req.body.clone())
     }
+}
+
+fn chat_tool_call_response(call_id: &str, name: &str, arguments: &str) -> String {
+    let tool_chunk = json!({
+        "id": format!("chatcmpl-{call_id}"),
+        "choices": [{
+            "index": 0,
+            "delta": {
+                "tool_calls": [{
+                    "index": 0,
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": name, "arguments": arguments},
+                }],
+            },
+        }],
+    });
+    let finish_chunk = json!({
+        "choices": [{
+            "index": 0,
+            "delta": {},
+            "finish_reason": "tool_calls",
+        }],
+    });
+    format!("data: {tool_chunk}\n\ndata: {finish_chunk}\n\ndata: [DONE]\n\n")
+}
+
+fn chat_text_response(id: &str, text: &str) -> String {
+    let text_chunk = json!({
+        "id": format!("chatcmpl-{id}"),
+        "choices": [{
+            "index": 0,
+            "delta": {"content": text},
+        }],
+    });
+    let finish_chunk = json!({
+        "choices": [{
+            "index": 0,
+            "delta": {},
+            "finish_reason": "stop",
+        }],
+    });
+    format!("data: {text_chunk}\n\ndata: {finish_chunk}\n\ndata: [DONE]\n\n")
+}
+
+async fn mount_chat_once_match<M>(server: &MockServer, matcher: M, response: ResponseTemplate)
+where
+    M: wiremock::Match + Send + Sync + 'static,
+{
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .and(matcher)
+        .respond_with(response)
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(server)
+        .await;
+}
+
+fn configure_chat_mcp_echo(config: &mut codex_core::config::Config, command: String) {
+    config.model_provider.wire_api = WireApi::Chat;
+    config.model_provider.supports_standalone_web_search = false;
+    let mut servers = config.mcp_servers.get().clone();
+    servers.insert(
+        "rmcp".to_string(),
+        McpServerConfig {
+            transport: McpServerTransportConfig::Stdio {
+                command,
+                args: Vec::new(),
+                env: None,
+                env_vars: Vec::new(),
+                cwd: None,
+            },
+            auth: McpServerAuth::default(),
+            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
+            enabled: true,
+            required: false,
+            supports_parallel_tool_calls: false,
+            omit_tools_from: None,
+            disabled_reason: None,
+            startup_timeout_sec: Some(Duration::from_secs(10)),
+            tool_timeout_sec: Some(Duration::from_secs(10)),
+            default_tools_approval_mode: None,
+            enabled_tools: Some(["echo".to_string()].into_iter().collect()),
+            disabled_tools: None,
+            scopes: None,
+            oauth: None,
+            oauth_resource: None,
+            tools: HashMap::new(),
+        },
+    );
+    config
+        .mcp_servers
+        .set(servers)
+        .expect("test MCP configuration");
 }
 
 fn log_field<'a>(line: &'a str, name: &str) -> Option<&'a str> {
@@ -1702,6 +1808,117 @@ async fn multi_agent_v2_spawn_sends_agent_message_to_child(
                 && log_field(line, "communication_id") == Some(communication_id)
         })
         .expect("correlated receive event");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chat_parent_child_mcp_mailbox_round_trip() -> Result<()> {
+    let server = start_mock_server().await;
+    let spawn_args = serde_json::to_string(&json!({
+        "message": CHILD_PROMPT,
+        "task_name": "worker",
+    }))?;
+    mount_chat_once_match(
+        &server,
+        |req: &wiremock::Request| {
+            body_contains(req, TURN_1_PROMPT) && !body_contains(req, "Message Type: NEW_TASK")
+        },
+        sse_response(chat_tool_call_response(
+            SPAWN_CALL_ID,
+            "collaboration__spawn_agent",
+            &spawn_args,
+        )),
+    )
+    .await;
+    mount_chat_once_match(
+        &server,
+        |req: &wiremock::Request| {
+            body_contains(req, "Message Type: NEW_TASK")
+                && body_contains(req, CHILD_PROMPT)
+                && !body_contains(req, "mcp-echo-call")
+        },
+        sse_response(chat_tool_call_response(
+            "mcp-echo-call",
+            "mcp__rmcp__echo",
+            r#"{"message":"ping"}"#,
+        )),
+    )
+    .await;
+    mount_chat_once_match(
+        &server,
+        |req: &wiremock::Request| {
+            body_contains(req, SPAWN_CALL_ID) && !body_contains(req, "Message Type: NEW_TASK")
+        },
+        sse_response(chat_tool_call_response(
+            "wait-call",
+            "collaboration__wait_agent",
+            "{}",
+        )),
+    )
+    .await;
+    mount_chat_once_match(
+        &server,
+        |req: &wiremock::Request| {
+            body_contains(req, "Message Type: NEW_TASK")
+                && body_contains(req, "mcp-echo-call")
+                && body_contains(req, "ECHOING: ping")
+        },
+        sse_response(chat_text_response("child-final", "child echo complete")),
+    )
+    .await;
+    mount_chat_once_match(
+        &server,
+        |req: &wiremock::Request| {
+            body_contains(req, "wait-call")
+                && body_contains(req, "Message Type: FINAL_ANSWER")
+                && body_contains(req, "child echo complete")
+        },
+        sse_response(chat_text_response("parent-final", "parent final")),
+    )
+    .await;
+
+    let command = stdio_server_bin()?;
+    let mut builder = test_codex()
+        .with_model("koffing")
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("test config should allow feature update");
+            configure_chat_mcp_echo(config, command.clone());
+        });
+    let test = builder.build(&server).await?;
+    wait_for_mcp_server(&test.codex, "rmcp").await?;
+
+    test.submit_turn(TURN_1_PROMPT).await?;
+
+    let requests = server.received_requests().await.unwrap_or_default();
+    let expected_mailbox = concat!(
+        "Message Type: FINAL_ANSWER\n",
+        "Task name: /root\n",
+        "Sender: /root/worker\n",
+        "Payload:\n",
+        "child echo complete"
+    );
+    let parent_request = requests
+        .iter()
+        .find(|request| {
+            body_contains(request, "wait-call")
+                && body_contains(request, "Message Type: FINAL_ANSWER")
+        })
+        .expect("parent mailbox continuation request");
+    let body: Value =
+        serde_json::from_slice(&decoded_body(parent_request).expect("decode parent Chat request"))?;
+    assert!(body["messages"].as_array().is_some_and(|messages| {
+        messages.iter().any(|message| {
+            message["role"] == "assistant" && message["content"].as_str() == Some(expected_mailbox)
+        })
+    }));
 
     Ok(())
 }
