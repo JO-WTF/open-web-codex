@@ -3,7 +3,7 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档性质 | 当前与下一里程碑的执行计划 |
-| 更新日期 | 2026-08-09 |
+| 更新日期 | 2026-08-10 |
 | 当前阶段 | 阶段一：内置仓网 Copilot 架构纠偏与完整运行闭环 |
 | 当前状态 | 实施中；现有脚本接线的 7/7 E2E 不是阶段一完成证据 |
 | 当前阶段裁决 | Codex 原生协作与 MCP Resource + Workspace 文件 + 最终 Artifact 混合边界；ADR-018 已接受并作为当前基线 |
@@ -39,6 +39,8 @@ Runtime，在浏览器中完成数据准备、距离与成本、覆盖、SLA、�
 6. 默认印尼 Mock 完整链和真实 Excel/CSV/JSON 交互链均通过 Web E2E。
 7. 删除 Work State、Data Intake、SourceAsset、DatasetRelease、DomainResource、Resource
    Broker、Case store、generic Resource→Artifact、Artifact 输入传输和 Platform continuation 等旧路径。
+8. Web 可从 Root Task 查看 child Agent 的官方 Thread/Turn/Item 执行过程；实时与刷新恢复必须
+   一致，不得把不同的 command、MCP Tool、进度、等待、审批和终态统一压成通用占位文案。
 
 阶段一不交付公开 SDK、Studio、五对象 Catalog/Release、Marketplace、第二领域或多用户
 产品流，也不建设 Workspace 数据对象、数据 revision/head、Schema registry、Task 数据绑定、
@@ -62,7 +64,7 @@ mailbox、Workflow DSL、Run Completion Controller、签名链或 exactly-once�
 | 文件选择、字段、映射、标准化、复用和合并 | 用户 + Skill + Tool | Platform 不分类、不猜测、不限制业务复用 |
 | Agent 协同方法 | Supervisor Skill | 不落 Platform workflow 状态机 |
 | 仓网规划能力 | Data/Network MCP domain Tool bindings、Role/Skill 与 pure owners | 阶段一统一拥有 Data mapping/normalize/geography、route/cost facts与matrix、baseline/scenario/p-median/comparison 以及 final map/report；输入输出为 Workspace 相对路径、typed Resource ref 或普通业务参数，不拥有通用 scope/store/codec/writer。未来公共供应链领域层只记为触发式 TODO，不增加当前实现层、提交线或验收节点 |
-| Agent 活动与问题卡片 | Platform projection | 只投影 Runtime 事实并容忍乱序 |
+| Agent 活动与问题卡片 | Codex Runtime 提供 child Thread/Turn/Item 事实；Platform projection 只做授权、安全裁剪和浏览器 DTO | 保留 item type、Tool 身份、bounded action/result、生命周期、错误与时间顺序并容忍乱序；不另建 child 日志、执行历史或状态机，不用通用占位文案替代可安全展示的官方事实 |
 | 地图、报告和明确交付件 | Artifact | 只展示和下载，永远不作为 Task/Agent 输入或交换介质 |
 
 ### Platform 只执行的硬约束
@@ -273,7 +275,8 @@ Provider 全量去重、首消息 compound selection 或完整 4B.3 Thread truth
    encrypted Secret restart、显式 model Turn、两次串行 MCP 调用与 final 均有真实证据；不借机
    实施 model refresh 或完整 R3。
 2. **B — Server 实际适配。** 只完成通用 Copilot 运行对当前 Web Server 必需的 typed bridge 与
-   owning-layer 适配，不建立第二 Runtime、第二上下文或固定业务流程。
+   owning-layer 适配，包括把官方 child Thread/Turn/Item 生命周期投影为可追踪的 Agent activity；
+   不建立第二 Runtime、第二上下文、第二执行日志或固定业务流程。
 3. **C — 通用可组合 Tools。** 统一 `supply_chain` provider 和单一 `ResourceRef`，完成 Data/Network
    可组合 active surface、route/cost pair-level 部分复用，以及 final map/report 的最小交付合同。
 4. **D — 完整案例验收。** 把 Indonesia cold E2E 作为通用 Copilot 的一个完整组合示例，同时验证
@@ -315,16 +318,27 @@ Indonesia 完整验收可以组合为：Root 确定国家和目标；Network chi
 仓库 ID、调用顺序或场景步骤写进 Platform workflow、Tool 状态机或 Supervisor 固定流程。
 
 1. child 发出的 requested schema 投影为统一业务卡片，答案直接回到原 child request。
-2. 覆盖提交、拒绝、取消、超时、中断、校验错误和刷新恢复；UI 不显示 child Thread、MCP、
-   request ID 或 schema。
-3. Agent 活动只显示“数据检查”“路线与成本计算”“仓网求解”等业务进度。
-4. 已删除 Work State/coordination MCP 与 gates、`needs_input` 中继、event projection 的仓网
+2. 覆盖提交、拒绝、取消、超时、中断、校验错误和刷新恢复；UI 不暴露 child Thread ID、raw
+   MCP request/response、app-server request ID 或未裁剪 schema。
+3. Agent activity 以官方 child Thread/Turn/Item 为唯一事实源，展示 Agent 身份、任务、Item
+   类型、MCP server/tool、bounded 参数与结果摘要、经安全裁剪的 command/action/output 摘要、
+   started/completed/failed/waiting/approval 状态和时间顺序。不得继续把所有 commandExecution
+   压成 `Using/Completed a workspace command`，也不得只保留“数据检查”“路线与成本计算”之类
+   无法区分真实步骤的业务占位文案。Browser 可以按 Agent/Turn 展开官方 Item 明细，但不得显示
+   server absolute path、Secret、未裁剪输出、raw JSON-RPC/request ID 或 MCP Resource 内容。
+4. live WebSocket、刷新后的 durable projection 与 official paginated child history 必须收敛到同一
+   Item 身份和终态；乱序 started/completed、child 先于 SubAgentActivity Started、审批等待、失败、
+   取消、中断和 replay 均不得产生重复、丢失或伪造步骤。Platform 不复制 Thread history，只保存
+   可重建的 bounded UI projection。
+5. 已删除 Work State/coordination MCP 与 gates、`needs_input` 中继、event projection 的仓网
    continuation Prompt、主动发 Turn、Data gate global interrupt 和第二调度器路径。
-5. 已删除 Supervisor policy snapshot/binding 与 continuation 表/调度；Runtime history 和 exact
+6. 已删除 Supervisor policy snapshot/binding 与 continuation 表/调度；Runtime history 和 exact
    Item 仍是协作事实 owner。
 
 退出：Root 在 child 运行时仍可响应用户；child success/error/cancel 均由原生终态和 mailbox
-返回；Root final 后 mail 不自动启动新 Turn；Profile 重启时 pending form 明确 interrupted。
+返回；Root final 后 mail 不自动启动新 Turn；Profile 重启时 pending form 明确 interrupted；
+Web Agent activity 可实时展开并在刷新后恢复同一 child Item 序列，实际 MCP Tool、command/action、
+progress、approval 与 terminal outcome 可区分，且没有第二 Thread/history/log owner。
 
 ### Slice 5：原生 Resource 与 Workspace 文件驱动的完整仓网能力
 
@@ -452,6 +466,9 @@ Runtime history 和 Artifact 权威记录重建浏览器视图。
 
 - Root wait 期间 user steer、child error/cancel/terminal mailbox、pending form 刷新、Profile
   restart interrupted、事件 replay、文件删除/替换、单文件原子写失败、hot reload 成功/失败。
+- 三个 Web 自然语言样例都必须能从 Agent activity 观察实际 child Item 序列：Data/Network Agent
+  的 MCP Tool、bounded command/action、进度、等待/审批和终态可区分；刷新后顺序与终态一致，
+  不出现 `Using/Completed a workspace command` 这类替代全部执行内容的占位投影。
 - clean DB + clean Profile + clean Workspace 从当前 schema/config 完整初始化。
 - 旧 Intake、Dataset、SourceAsset、DomainResource/Broker、Case、Work State、continuation、scan 和长 Prompt
   E2E 的代码、migration、fixture、测试与当前文档全部删除。
