@@ -679,7 +679,7 @@ class NetworkFinalArtifactDescriptor(StrictModel):
         max_length=1024,
         alias="workspaceRelativePath",
     )
-    byte_size: int = Field(ge=0, alias="byteSize")
+    byte_size: int = Field(ge=1, alias="byteSize")
 
 
 class NetworkFinalArtifactToolResult(StrictModel):

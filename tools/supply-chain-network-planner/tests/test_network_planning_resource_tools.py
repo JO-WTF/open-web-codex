@@ -11,6 +11,7 @@ from _network_fixtures import (
     indonesia_network_fixture,
     indonesia_route_quotes,
 )
+from pydantic import ValidationError
 
 from supply_chain_planner import server
 from supply_chain_planner.map_service import NetworkComparisonMapBundle
@@ -335,6 +336,22 @@ def test_s2_final_tools_create_exact_self_contained_json_artifacts(
             ctx,
         )
     assert list(outside.iterdir()) == []
+
+
+def test_final_artifact_descriptor_rejects_empty_files() -> None:
+    with pytest.raises(ValidationError):
+        NetworkFinalArtifactToolResult.model_validate(
+            {
+                "summary": "empty",
+                "artifact": {
+                    "schema": "network_planning_report_bundle.v1",
+                    "displayName": "Report",
+                    "mimeType": "application/json",
+                    "workspaceRelativePath": "report.json",
+                    "byteSize": 0,
+                },
+            }
+        )
 
 
 def test_s3_reuses_prepared_resources_and_only_closes_bekasi(
