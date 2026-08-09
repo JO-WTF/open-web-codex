@@ -288,6 +288,23 @@ def compare_assignments(
     targets = sorted(set(requested_service_targets))
     if not targets or any(target <= 0 for target in targets):
         raise ValueError("comparison_requires_positive_service_targets")
+    before_city_ids = [row.demand_city_id for row in before.rows]
+    after_city_ids = [row.demand_city_id for row in after.rows]
+    if len(before_city_ids) != len(set(before_city_ids)) or len(after_city_ids) != len(
+        set(after_city_ids)
+    ):
+        raise ValueError("comparison_assignment_city_duplicate")
+    before_quantities = {
+        row.demand_city_id: row.demand_quantity for row in before.rows
+    }
+    after_quantities = {
+        row.demand_city_id: row.demand_quantity for row in after.rows
+    }
+    if (
+        before_quantities != after_quantities
+        or before.total_demand != after.total_demand
+    ):
+        raise ValueError("comparison_assignment_domain_mismatch")
     before_service = {
         metric.target_hours: metric for metric in service_metrics(before, targets)
     }

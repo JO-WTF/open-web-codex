@@ -272,3 +272,35 @@ def test_real_indonesia_sample3_only_closes_bekasi_without_candidates() -> None:
     assert len(comparison.affected_city_ids) == 50
     assert len(comparison.reassigned_city_ids) == 50
     assert set(comparison.reassigned_city_ids).issubset(comparison.affected_city_ids)
+
+
+def test_comparison_rejects_different_demand_domains() -> None:
+    before = AssignmentResult(
+        objective="min_cost",
+        rows=[
+            AssignmentRow(
+                demand_city_id="city-a",
+                warehouse_id="warehouse-a",
+                demand_quantity=10,
+                duration_hours=1,
+                cost=1,
+            )
+        ],
+        total_demand=10,
+        unassigned_demand=0,
+    )
+    after = before.model_copy(
+        update={
+            "rows": [before.rows[0].model_copy(update={"demand_quantity": 11})],
+            "total_demand": 11,
+        }
+    )
+
+    with pytest.raises(ValueError, match="comparison_assignment_domain_mismatch"):
+        compare_assignments(
+            before,
+            after,
+            [12],
+            {"warehouse-a"},
+            {"warehouse-a"},
+        )

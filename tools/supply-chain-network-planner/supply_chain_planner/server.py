@@ -14,7 +14,7 @@ import urllib.request
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from mcp.server.fastmcp import Context, FastMCP
@@ -91,6 +91,7 @@ from .network_models import (
 )
 from .normalization import NormalizationService
 from .optimization_models import (
+    AssignmentComparison,
     AssignmentResult,
     BaselineResult,
     CostSummary,
@@ -98,6 +99,7 @@ from .optimization_models import (
     ScenarioResult,
     ScenarioSpec,
     ServiceConstrainedSolution,
+    ServiceCoverageConstraint,
 )
 from .readiness import ReadinessEvaluator
 from .report_service import NetworkReportService
@@ -112,6 +114,7 @@ from .resource_store import (
 from .scenario_service import FacilityLocationService, NetworkScenarioService
 from .solver import (
     SolverUnavailable,
+    compare_assignments,
     enumerate_p_median,
     service_metrics,
     solve_assignment,
@@ -2127,8 +2130,7 @@ def _legacy_plan_cost_matrix(
     )
 
 
-@mcp.tool(structured_output=True)
-def compute_optimal_assignment(
+def _legacy_compute_optimal_assignment(
     network_case_ref: ArtifactRef | ResourceRef,
     route_matrix_ref: ArtifactRef,
     cost_matrix_ref: ArtifactRef | None = None,
@@ -2147,8 +2149,7 @@ def compute_optimal_assignment(
     )
 
 
-@mcp.tool(structured_output=True)
-def evaluate_service_targets(
+def _legacy_evaluate_service_targets(
     assignment_ref: ArtifactRef,
     target_hours: list[float],
 ) -> CallToolResult:
@@ -2164,8 +2165,7 @@ def evaluate_service_targets(
     )
 
 
-@mcp.tool(structured_output=True)
-def summarize_network_cost(
+def _legacy_summarize_network_cost(
     assignment_ref: ArtifactRef,
     cost_matrix_ref: ArtifactRef,
     currency: str = "IDR",
@@ -2460,20 +2460,51 @@ def _legacy_solve_service_constrained_location(
 
 @mcp.tool(structured_output=True)
 def compare_network_scenarios(
-    baseline_ref: ArtifactRef,
-    candidate_ref: ArtifactRef,
+    baseline_ref: ResourceRef,
+    candidate_ref: ResourceRef,
+    service_targets: Annotated[list[float], Field(min_length=1, max_length=32)],
+    ctx: Context,
 ) -> CallToolResult:
-    _load_artifact(baseline_ref)
-    _load_artifact(candidate_ref)
-    payload = {
-        "schema_version": "network_comparison.v1",
-        "baseline_ref": baseline_ref.model_dump(mode="json"),
-        "candidate_ref": candidate_ref.model_dump(mode="json"),
-    }
-    return _publish_new_resource(
-        "network_comparison.v1",
-        payload,
-        "Prepared a bounded comparison of the two network scenarios.",
+    """Compare a typed baseline with one scenario or facility-location result."""
+    _runtime().require_workspace(ctx)
+    if any(target <= 0 for target in service_targets):
+        raise McpResourceContractError("comparison_service_targets_invalid")
+    baseline = _runtime().load_model(
+        baseline_ref,
+        "network_baseline.v2",
+        BaselineResult,
+    )
+    if candidate_ref.resource_schema == "network_scenario.v2":
+        candidate = _runtime().load_model(
+            candidate_ref,
+            "network_scenario.v2",
+            ScenarioResult,
+        )
+        candidate_assignment = candidate.assignment
+        candidate_active_ids = set(candidate.active_warehouse_ids)
+    elif candidate_ref.resource_schema == "facility_location_solution.v3":
+        candidate = _runtime().load_model(
+            candidate_ref,
+            "facility_location_solution.v3",
+            PMedianSolution,
+        )
+        if candidate.assignment is None:
+            raise McpResourceContractError("candidate_assignment_unavailable")
+        candidate_assignment = candidate.assignment
+        candidate_active_ids = set(candidate.active_warehouse_ids)
+    else:
+        raise McpResourceContractError("comparison_candidate_schema_invalid")
+    comparison: AssignmentComparison = compare_assignments(
+        baseline.assignment,
+        candidate_assignment,
+        service_targets,
+        set(baseline.active_warehouse_ids),
+        candidate_active_ids,
+    )
+    return _runtime().publish(
+        comparison.schema_version,
+        comparison,
+        f"Compared {len(comparison.city_changes)} city assignments across two network results.",
     )
 
 
@@ -3375,106 +3406,152 @@ def plan_cost_matrix(
 
 @mcp.tool(structured_output=True)
 def evaluate_network_baseline(
-    network_case_ref: ArtifactRef | ResourceRef,
-    route_matrix_ref: ArtifactRef,
+    normalized_input_ref: ResourceRef,
+    route_matrix_ref: ResourceRef,
     objective: Literal["min_time", "min_cost"],
-    service_targets: list[float],
-    cost_matrix_ref: ArtifactRef | None = None,
+    service_targets: Annotated[list[float], Field(min_length=1, max_length=32)],
     coverage_mode: Literal[
-        "actual_if_available", "optimized_existing_footprint"
-    ] = "actual_if_available",
+        "actual_current", "optimized_existing_footprint"
+    ],
+    ctx: Context,
+    cost_matrix_ref: ResourceRef | None = None,
 ) -> CallToolResult:
-    """Evaluate actual coverage when supplied, otherwise an explicit optimized baseline."""
-    case, demand, warehouses = _resource_case_records(network_case_ref)
-    routes = _load_new_model(route_matrix_ref, ComposableRouteMatrix)
-    costs = _load_new_model(cost_matrix_ref, CostMatrix) if cost_matrix_ref else None
+    """Evaluate one explicitly selected actual or optimized-existing baseline."""
+    _runtime().require_workspace(ctx)
+    if any(target <= 0 for target in service_targets):
+        raise McpResourceContractError("baseline_service_targets_invalid")
+    prepared = _load_ready_network(normalized_input_ref)
+    routes = _runtime().load_model(
+        route_matrix_ref,
+        "route_matrix.v2",
+        ComposableRouteMatrix,
+    )
+    costs = (
+        _runtime().load_model(cost_matrix_ref, "cost_matrix.v2", CostMatrix)
+        if cost_matrix_ref is not None
+        else None
+    )
     if objective == "min_cost" and costs is None:
-        raise ValueError("min_cost_baseline_requires_cost_matrix")
-    if coverage_mode == "actual_if_available" and case.current_assignments:
+        raise McpResourceContractError("min_cost_baseline_requires_cost_matrix")
+    active_ids = {
+        warehouse.warehouse_id
+        for warehouse in prepared.warehouses
+        if warehouse.is_existing
+    }
+    if coverage_mode == "actual_current":
+        if not prepared.current_assignments:
+            raise McpResourceContractError("current_assignments_required")
         assignment = solve_current_assignment(
-            [row for row in case.demand],
-            [row for row in case.warehouses],
-            case.current_assignments,
+            prepared.demand_cities,
+            prepared.warehouses,
+            prepared.current_assignments,
             routes,
             costs,
             objective,
         )
         label: Literal["actual_current", "optimized_existing_footprint"] = "actual_current"
-        notice_code = None
     else:
-        active_ids = {warehouse.warehouse_id for warehouse in warehouses if warehouse.is_existing}
         assignment = solve_assignment(
-            [row for row in case.demand],
-            [row for row in case.warehouses],
+            prepared.demand_cities,
+            prepared.warehouses,
             routes,
             costs,
             objective,
             active_ids,
         )
         label = "optimized_existing_footprint"
-        notice_code = "current_assignment_missing"
     baseline = BaselineResult(
         label=label,
+        active_warehouse_ids=sorted(active_ids),
         assignment=assignment,
         service=service_metrics(assignment, sorted(set(service_targets))),
         cost=summarize_assignment_cost(assignment, costs) if costs is not None else None,
-        notice_code=notice_code,
+        notice_code=None,
     )
     message = (
         "Evaluated the actual current assignment."
         if label == "actual_current"
-        else "No current coverage was supplied; evaluated the optimized existing-warehouse footprint."
+        else "Evaluated the optimized existing-warehouse footprint."
     )
-    return _publish_new_resource(baseline.schema_version, baseline, message)
+    return _runtime().publish(baseline.schema_version, baseline, message)
 
 
 @mcp.tool(structured_output=True)
 def evaluate_facility_scenario(
-    network_case_ref: ArtifactRef | ResourceRef,
-    route_matrix_ref: ArtifactRef,
-    scenario: dict[str, Any],
-    cost_matrix_ref: ArtifactRef | None = None,
+    normalized_input_ref: ResourceRef,
+    route_matrix_ref: ResourceRef,
+    scenario: ScenarioSpec,
+    ctx: Context,
+    cost_matrix_ref: ResourceRef | None = None,
 ) -> CallToolResult:
     """Evaluate an add, remove or relocation scenario without a mutable Case."""
-    case, _demand, warehouses = _resource_case_records(network_case_ref)
-    spec = ScenarioSpec.model_validate(scenario)
-    routes = _load_new_model(route_matrix_ref, ComposableRouteMatrix)
-    costs = _load_new_model(cost_matrix_ref, CostMatrix) if cost_matrix_ref else None
-    if spec.objective == "min_cost" and costs is None:
-        raise ValueError("min_cost_scenario_requires_cost_matrix")
-    warehouse_by_id = {warehouse.warehouse_id: warehouse for warehouse in warehouses}
-    add_ids = set(spec.add_warehouse_ids)
-    remove_ids = set(spec.remove_warehouse_ids)
-    for relocation in spec.relocations:
+    _runtime().require_workspace(ctx)
+    if not scenario.service_targets or any(
+        target <= 0 for target in scenario.service_targets
+    ):
+        raise McpResourceContractError("scenario_service_targets_invalid")
+    prepared = _load_ready_network(normalized_input_ref)
+    routes = _runtime().load_model(
+        route_matrix_ref,
+        "route_matrix.v2",
+        ComposableRouteMatrix,
+    )
+    costs = (
+        _runtime().load_model(cost_matrix_ref, "cost_matrix.v2", CostMatrix)
+        if cost_matrix_ref is not None
+        else None
+    )
+    if scenario.objective == "min_cost" and costs is None:
+        raise McpResourceContractError("min_cost_scenario_requires_cost_matrix")
+    warehouse_by_id = {
+        warehouse.warehouse_id: warehouse for warehouse in prepared.warehouses
+    }
+    add_ids = set(scenario.add_warehouse_ids)
+    remove_ids = set(scenario.remove_warehouse_ids)
+    for relocation in scenario.relocations:
         remove_ids.add(relocation.remove_warehouse_id)
         add_ids.add(relocation.add_warehouse_id)
     unknown = (add_ids | remove_ids) - set(warehouse_by_id)
     if unknown:
-        raise ValueError(f"scenario_unknown_warehouses:{','.join(sorted(unknown))}")
+        raise McpResourceContractError("scenario_unknown_warehouses")
     if any(warehouse_by_id[item].is_existing for item in add_ids):
-        raise ValueError("scenario_add_requires_candidate_warehouse")
+        raise McpResourceContractError("scenario_add_requires_candidate_warehouse")
     if any(not warehouse_by_id[item].is_existing for item in remove_ids):
-        raise ValueError("scenario_remove_requires_existing_warehouse")
+        raise McpResourceContractError("scenario_remove_requires_existing_warehouse")
     if add_ids & remove_ids:
-        raise ValueError("scenario_add_remove_conflict")
-    active_ids = {warehouse.warehouse_id for warehouse in warehouses if warehouse.is_existing}
+        raise McpResourceContractError("scenario_add_remove_conflict")
+    active_ids = {
+        warehouse.warehouse_id
+        for warehouse in prepared.warehouses
+        if warehouse.is_existing
+    }
     active_ids.difference_update(remove_ids)
     active_ids.update(add_ids)
+    invalid_upstreams = sorted(
+        warehouse.warehouse_id
+        for warehouse in prepared.warehouses
+        if warehouse.warehouse_id in active_ids
+        and warehouse.upstream_center_id is not None
+        and warehouse.upstream_center_id not in active_ids
+    )
+    if invalid_upstreams:
+        raise McpResourceContractError("scenario_active_upstream_required")
     assignment = solve_assignment(
-        case.demand,
-        case.warehouses,
+        prepared.demand_cities,
+        prepared.warehouses,
         routes,
         costs,
-        spec.objective,
+        scenario.objective,
         active_ids,
     )
     result = ScenarioResult(
+        active_warehouse_ids=sorted(active_ids),
         assignment=assignment,
         cost=summarize_assignment_cost(assignment, costs) if costs is not None else None,
-        service=service_metrics(assignment, sorted(set(spec.service_targets))),
+        service=service_metrics(assignment, sorted(set(scenario.service_targets))),
         warehouse_changes={"added": sorted(add_ids), "removed": sorted(remove_ids)},
     )
-    return _publish_new_resource(
+    return _runtime().publish(
         result.schema_version,
         result,
         f"Evaluated a scenario with {len(add_ids)} added and {len(remove_ids)} removed warehouses.",
@@ -3483,28 +3560,56 @@ def evaluate_facility_scenario(
 
 @mcp.tool(structured_output=True)
 def solve_p_median(
-    network_case_ref: ArtifactRef | ResourceRef,
-    route_matrix_ref: ArtifactRef,
-    cost_matrix_ref: ArtifactRef,
-    number_to_open: int,
-    fixed_existing_ids: list[str] | None = None,
-    optional_existing_ids: list[str] | None = None,
-    time_limit_seconds: float = 30,
+    normalized_input_ref: ResourceRef,
+    route_matrix_ref: ResourceRef,
+    cost_matrix_ref: ResourceRef,
+    number_to_open: Annotated[int, Field(ge=0)],
+    fixed_existing_ids: list[str],
+    optional_existing_ids: list[str],
+    service_targets: Annotated[list[float], Field(min_length=1, max_length=32)],
+    time_limit_seconds: Annotated[float, Field(gt=0, le=300)],
+    ctx: Context,
+    service_constraints: list[ServiceCoverageConstraint] | None = None,
 ) -> CallToolResult:
-    """Solve deterministic finite-candidate p-median with fixed existing sites."""
-    case, _demand, warehouses = _resource_case_records(network_case_ref)
-    routes = _load_new_model(route_matrix_ref, ComposableRouteMatrix)
-    costs = _load_new_model(cost_matrix_ref, CostMatrix)
+    """Solve finite-candidate min-cost p-median under explicit existing-site policy."""
+    _runtime().require_workspace(ctx)
+    if any(target <= 0 for target in service_targets):
+        raise McpResourceContractError("p_median_service_targets_invalid")
+    prepared = _load_ready_network(normalized_input_ref)
+    routes = _runtime().load_model(
+        route_matrix_ref,
+        "route_matrix.v2",
+        ComposableRouteMatrix,
+    )
+    costs = _runtime().load_model(
+        cost_matrix_ref,
+        "cost_matrix.v2",
+        CostMatrix,
+    )
+    route_validation = _validate_route_matrix_model(
+        prepared.demand_cities,
+        prepared.warehouses,
+        routes,
+    )
+    if not route_validation["valid"]:
+        raise McpResourceContractError("p_median_route_matrix_incomplete")
+    if costs.warehouse_scope != "all_warehouses" or costs.missing_routes:
+        raise McpResourceContractError("p_median_cost_matrix_incomplete")
+    constraints = [
+        (constraint.target_hours, constraint.minimum_coverage)
+        for constraint in service_constraints or []
+    ]
     try:
         solved, _branches, timed_out = enumerate_p_median(
-            case.demand,
-            case.warehouses,
+            prepared.demand_cities,
+            prepared.warehouses,
             routes,
             costs,
             number_to_open,
-            set(fixed_existing_ids or []),
-            set(optional_existing_ids or []),
+            set(fixed_existing_ids),
+            set(optional_existing_ids),
             time_limit_seconds,
+            constraints,
         )
     except SolverUnavailable as error:
         solved = None
@@ -3518,31 +3623,40 @@ def solve_p_median(
         )
         solution = PMedianSolution(
             status=status,
-            selected_warehouse_ids=[],
+            active_warehouse_ids=[],
+            opened_candidate_ids=[],
+            closed_existing_ids=[],
             optimality="not_available",
             message=unavailable_message or "No feasible p-median solution was found.",
         )
     else:
-        value, active_ids, assignment = solved
         solution = PMedianSolution(
             status="timeout" if timed_out else "optimal",
-            selected_warehouse_ids=sorted(active_ids),
-            assignment=assignment,
-            objective_value=value,
+            active_warehouse_ids=solved.active_warehouse_ids,
+            opened_candidate_ids=solved.opened_candidate_ids,
+            closed_existing_ids=solved.closed_existing_ids,
+            assignment=solved.assignment,
+            objective_value=solved.objective_value,
+            cost=summarize_assignment_cost(solved.assignment, costs),
+            service=service_metrics(
+                solved.assignment,
+                sorted(set(service_targets)),
+            ),
             optimality="feasible_only" if timed_out else "proven",
             message="The solver returned a feasible solution before the time limit."
             if timed_out
             else None,
         )
-    return _publish_new_resource(
+    return _runtime().publish(
         solution.schema_version,
         solution,
-        f"p-median status is {solution.status}; selected {len(solution.selected_warehouse_ids)} warehouses.",
+        f"p-median status is {solution.status}; opened "
+        f"{len(solution.opened_candidate_ids)} candidates and closed "
+        f"{len(solution.closed_existing_ids)} existing warehouses.",
     )
 
 
-@mcp.tool(structured_output=True)
-def solve_service_constrained_location(
+def _legacy_solve_service_constrained_location_resource(
     network_case_ref: ArtifactRef | ResourceRef,
     route_matrix_ref: ArtifactRef,
     cost_matrix_ref: ArtifactRef,

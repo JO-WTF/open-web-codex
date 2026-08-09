@@ -135,6 +135,11 @@ class PMedianRequest(OptimizationModel):
     time_limit_seconds: float = Field(default=30, gt=0, le=300)
 
 
+class ServiceCoverageConstraint(OptimizationModel):
+    target_hours: float = Field(gt=0)
+    minimum_coverage: float = Field(gt=0, le=1)
+
+
 class PMedianSolution(OptimizationModel):
     schema_version: Literal["facility_location_solution.v3"] = "facility_location_solution.v3"
     status: Literal["optimal", "feasible", "timeout", "infeasible", "unavailable"]

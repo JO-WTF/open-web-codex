@@ -32,18 +32,14 @@ def test_network_server_exposes_only_network_tools() -> None:
     assert names == {
         "build_haversine_route_matrix",
         "compare_network_scenarios",
-        "compute_optimal_assignment",
         "evaluate_facility_scenario",
         "evaluate_network_baseline",
-        "evaluate_service_targets",
         "plan_route_matrix",
         "plan_cost_matrix",
         "publish_network_planning_report",
         "register_navigation_route_matrix",
         "render_network_comparison_map",
         "solve_p_median",
-        "solve_service_constrained_location",
-        "summarize_network_cost",
         "validate_route_matrix",
     }
 
