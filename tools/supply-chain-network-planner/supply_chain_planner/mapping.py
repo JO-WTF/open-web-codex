@@ -5,12 +5,17 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections import defaultdict
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .network_data import SourceInspection
+if TYPE_CHECKING:
+    from .network_data import SourceInspection
 
 
 class MappingContract(BaseModel):
@@ -88,6 +93,8 @@ TARGET_ALIASES: dict[SourceRole, dict[str, tuple[str, ...]]] = {
         "warehouse_type": ("warehouse_type", "facility_type", "site_type", "type"),
         "city_id": ("city_id", "city_code"),
         "city_name": ("city_name", "city"),
+        "province_id": ("province_id", "province_code", "region_id"),
+        "province_name": ("province_name", "province", "region"),
         "longitude": ("longitude", "lon", "lng"),
         "latitude": ("latitude", "lat"),
         "upstream_center_id": ("upstream_center_id", "center_id"),
@@ -100,6 +107,8 @@ TARGET_ALIASES: dict[SourceRole, dict[str, tuple[str, ...]]] = {
         "warehouse_type": ("warehouse_type", "facility_type", "site_type", "type"),
         "city_id": ("city_id", "city_code"),
         "city_name": ("city_name", "city"),
+        "province_id": ("province_id", "province_code", "region_id"),
+        "province_name": ("province_name", "province", "region"),
         "longitude": ("longitude", "lon", "lng"),
         "latitude": ("latitude", "lat"),
         "upstream_center_id": ("upstream_center_id", "center_id"),
@@ -173,110 +182,177 @@ def _transform_for(field: str) -> TransformSpec:
     return TransformSpec(kind=TransformKind.TRIM)
 
 
+@dataclass(frozen=True)
+class FieldObservation:
+    """One structurally inspected field supplied by the owning IO layer."""
+
+    name: str
+    sample_values: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SuggestedFieldMapping:
+    target_field: str
+    source_fields: tuple[str, ...]
+    transform: TransformSpec
+    score: float
+    reason_code: str
+
+
+@dataclass(frozen=True)
+class SuggestedRoleMapping:
+    role: SourceRole
+    confidence: float
+    ambiguous: bool
+    field_mappings: tuple[SuggestedFieldMapping, ...]
+
+
+def suggest_role_mappings(fields: Sequence[FieldObservation]) -> list[SuggestedRoleMapping]:
+    """Suggest domain roles from validated structural fields without source identity.
+
+    This is the single mapping algorithm used by both the active Data surface
+    and the legacy Case adapter.  It never selects a role or a field when more
+    than one alias is present; callers must confirm an ambiguous suggestion.
+    """
+
+    columns: dict[str, list[FieldObservation]] = defaultdict(list)
+    for field in fields:
+        columns[_normalized(field.name)].append(field)
+    existing_values = {
+        value.strip().lower()
+        for key in ("is_existing", "existing")
+        for field in columns.get(key, [])
+        for value in field.sample_values
+    }
+    proposals: list[SuggestedRoleMapping] = []
+    for role, targets in TARGET_ALIASES.items():
+        if role not in REQUIRED_FIELDS:
+            continue
+        if role == SourceRole.CURRENT_ASSIGNMENT and columns.keys() & {
+            "warehouse_type",
+            "warehouse_name",
+            "facility_type",
+            "is_existing",
+            "is_fixed",
+        }:
+            continue
+        if role == SourceRole.EXISTING_WAREHOUSE and existing_values and existing_values <= {
+            "false",
+            "0",
+            "no",
+            "n",
+        }:
+            continue
+        if role == SourceRole.CANDIDATE_WAREHOUSE and existing_values and existing_values <= {
+            "true",
+            "1",
+            "yes",
+            "y",
+        }:
+            continue
+        field_mappings: list[SuggestedFieldMapping] = []
+        matched_targets: set[str] = set()
+        ambiguous = False
+        for target_field, aliases in targets.items():
+            matches = list(
+                dict.fromkeys(
+                    field.name
+                    for alias in aliases
+                    for field in columns.get(alias, [])
+                )
+            )
+            if not matches:
+                continue
+            ambiguous = ambiguous or len(matches) > 1
+            source_field = matches[0]
+            matched_targets.add(target_field)
+            exact = _normalized(source_field) == target_field
+            field_mappings.append(
+                SuggestedFieldMapping(
+                    target_field=target_field,
+                    source_fields=tuple(matches),
+                    transform=_transform_for(target_field),
+                    score=1.0 if exact else 0.9,
+                    reason_code="exact_name" if exact else "alias",
+                )
+            )
+        if not REQUIRED_FIELDS[role].issubset(matched_targets):
+            continue
+        confidence = sum(item.score for item in field_mappings) / max(1, len(field_mappings))
+        proposals.append(
+            SuggestedRoleMapping(
+                role=role,
+                confidence=confidence,
+                ambiguous=ambiguous,
+                field_mappings=tuple(field_mappings),
+            )
+        )
+    ambiguous_roles = _ambiguous_roles(proposals)
+    return [
+        replace(item, ambiguous=True) if item.role in ambiguous_roles else item
+        for item in proposals
+    ]
+
+
+def _ambiguous_roles(proposals: Sequence[SuggestedRoleMapping]) -> set[SourceRole]:
+    if len(proposals) <= 1:
+        return set()
+    top = max(item.confidence for item in proposals)
+    contenders = [item for item in proposals if top - item.confidence < 0.05]
+    return {item.role for item in contenders} if len(contenders) > 1 else set()
+
+
 class SourceRoleClassifier:
     def classify(self, inspection: SourceInspection) -> list[RoleMappingProposal]:
-        columns = {_normalized(field.field_name): field.field_name for field in inspection.fields}
-        existing_values = {
-            value.strip().lower()
-            for field in inspection.fields
-            if _normalized(field.field_name) in {"is_existing", "existing"}
-            for value in field.sample_values
-        }
         proposals: list[RoleMappingProposal] = []
-        for role, targets in TARGET_ALIASES.items():
-            if role == SourceRole.CURRENT_ASSIGNMENT and columns.keys() & {
-                "warehouse_type",
-                "warehouse_name",
-                "facility_type",
-                "is_existing",
-                "is_fixed",
-            }:
-                continue
-            if role == SourceRole.EXISTING_WAREHOUSE and existing_values and existing_values <= {
-                "false",
-                "0",
-                "no",
-                "n",
-            }:
-                continue
-            if role == SourceRole.CANDIDATE_WAREHOUSE and existing_values and existing_values <= {
-                "true",
-                "1",
-                "yes",
-                "y",
-            }:
-                continue
+        suggestions = suggest_role_mappings(
+            [
+                FieldObservation(
+                    name=field.field_name,
+                    sample_values=tuple(field.sample_values),
+                )
+                for field in inspection.fields
+            ]
+        )
+        for suggestion in suggestions:
             field_candidates: list[FieldMappingCandidate] = []
-            matched_targets: set[str] = set()
-            ambiguous = False
-            for target_field, aliases in targets.items():
-                matches = [columns[alias] for alias in aliases if alias in columns]
-                if not matches:
-                    continue
-                ambiguous = ambiguous or len(matches) > 1
-                source_field = matches[0]
-                matched_targets.add(target_field)
-                transform = _transform_for(target_field)
+            for field_mapping in suggestion.field_mappings:
+                source_field = field_mapping.source_fields[0]
                 payload = {
                     "source_id": str(inspection.source.source_id),
                     "source_revision": inspection.source.source_revision,
-                    "source_role": role.value,
-                    "target_entity": TARGET_ENTITIES[role],
-                    "target_field": target_field,
+                    "source_role": suggestion.role.value,
+                    "target_entity": TARGET_ENTITIES[suggestion.role],
+                    "target_field": field_mapping.target_field,
                     "source_field": source_field,
-                    "transform": transform.model_dump(mode="json"),
+                    "transform": field_mapping.transform.model_dump(mode="json"),
                 }
                 field_candidates.append(
                     FieldMappingCandidate(
                         candidate_id=_candidate_id(payload),
                         source_id=str(inspection.source.source_id),
                         source_revision=inspection.source.source_revision,
-                        source_role=role,
-                        target_entity=TARGET_ENTITIES[role],
-                        target_field=target_field,
+                        source_role=suggestion.role,
+                        target_entity=TARGET_ENTITIES[suggestion.role],
+                        target_field=field_mapping.target_field,
                         source_field=source_field,
-                        transform=transform,
-                        score=1.0 if _normalized(source_field) == target_field else 0.9,
-                        reason_code="exact_name" if _normalized(source_field) == target_field else "alias",
+                        transform=field_mapping.transform,
+                        score=field_mapping.score,
+                        reason_code=field_mapping.reason_code,
                     )
                 )
-            required = REQUIRED_FIELDS[role]
-            complete = required.issubset(matched_targets)
-            if not complete:
-                continue
-            confidence = sum(item.score for item in field_candidates) / max(
-                1, len(field_candidates)
-            )
             proposals.append(
                 RoleMappingProposal(
                     source_id=str(inspection.source.source_id),
                     source_name=inspection.source.display_name,
-                    role=role,
-                    confidence=confidence,
+                    role=suggestion.role,
+                    confidence=suggestion.confidence,
                     complete=True,
-                    ambiguous=ambiguous,
+                    ambiguous=suggestion.ambiguous,
                     field_candidates=field_candidates,
                 )
             )
-        return self._mark_role_ambiguity(proposals)
-
-    @staticmethod
-    def _mark_role_ambiguity(
-        proposals: list[RoleMappingProposal],
-    ) -> list[RoleMappingProposal]:
-        if len(proposals) <= 1:
-            return proposals
-        top = max(item.confidence for item in proposals)
-        contenders = [item for item in proposals if top - item.confidence < 0.05]
-        if len(contenders) <= 1:
-            return proposals
-        contender_roles = {item.role for item in contenders}
-        return [
-            item.model_copy(update={"ambiguous": True})
-            if item.role in contender_roles
-            else item
-            for item in proposals
-        ]
+        return proposals
 
 
 class MappingEngine:

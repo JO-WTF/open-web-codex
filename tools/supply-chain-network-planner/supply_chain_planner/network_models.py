@@ -28,11 +28,13 @@ class WarehouseRecord(NetworkRecord):
     warehouse_type: Literal["center", "cross_docking"]
     city_id: str = Field(min_length=1, max_length=128)
     city_name: str = Field(min_length=1, max_length=256)
+    province_id: str | None = Field(default=None, max_length=128)
+    province_name: str | None = Field(default=None, max_length=256)
     longitude: float | None = Field(default=None, ge=-180, le=180)
     latitude: float | None = Field(default=None, ge=-90, le=90)
     upstream_center_id: str | None = Field(default=None, max_length=128)
     is_existing: bool
-    is_fixed: bool
+    is_fixed: bool | None = None
 
 
 class CurrentAssignmentRecord(NetworkRecord):

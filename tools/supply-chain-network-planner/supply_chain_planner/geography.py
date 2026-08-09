@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Mapping, Sequence
+from typing import Any, Literal
 
 from .geo import ProvinceBoundary
+from .network_models import DataQualityIssue, DemandCityRecord, WarehouseRecord
 
 
 def load_administrative_catalog(
@@ -86,6 +88,182 @@ def build_administrative_candidates(catalog: dict[str, Any], level: str) -> dict
             if level == "city" or row.get("is_province_capital") is True
         ],
     }
+
+
+def enrich_network_geography(
+    demand_cities: Sequence[DemandCityRecord],
+    warehouses: Sequence[WarehouseRecord],
+    catalog: dict[str, Any],
+    *,
+    overrides: Mapping[tuple[Literal["demand", "warehouse"], str], str] | None = None,
+    candidate_level: Literal["province", "city"] | None = None,
+) -> tuple[
+    list[DemandCityRecord],
+    list[WarehouseRecord],
+    list[dict[str, Any]],
+    list[DataQualityIssue],
+]:
+    """Enrich typed records from one already-validated country catalog.
+
+    The adapter owns catalog availability and country selection.  Overrides
+    name an exact catalog city ID; an unknown override never falls back to the
+    record's original city name.
+    """
+
+    catalog_rows = catalog.get("rows")
+    if not isinstance(catalog_rows, list):
+        raise ValueError("administrative_catalog_rows_missing")
+    selected_overrides = overrides or {}
+    issues: list[DataQualityIssue] = []
+    enriched_demands = [
+        _enrich_demand_city(
+            record,
+            catalog,
+            selected_overrides.get(("demand", record.city_id)),
+            issues,
+        )
+        for record in demand_cities
+    ]
+    enriched_warehouses = [
+        _enrich_warehouse(
+            record,
+            catalog,
+            selected_overrides.get(("warehouse", record.warehouse_id)),
+            issues,
+        )
+        for record in warehouses
+    ]
+    candidates = (
+        build_administrative_candidates(catalog, candidate_level)["candidates"]
+        if candidate_level is not None
+        else []
+    )
+    return enriched_demands, enriched_warehouses, candidates, issues
+
+
+def _enrich_demand_city(
+    record: DemandCityRecord,
+    catalog: dict[str, Any],
+    override_city_id: str | None,
+    issues: list[DataQualityIssue],
+) -> DemandCityRecord:
+    match = _resolve_record_place(
+        record.city_id,
+        record.city_name,
+        override_city_id,
+        catalog,
+        "demand",
+        record.city_id,
+        issues,
+    )
+    if match is None:
+        return record
+    return DemandCityRecord.model_validate(
+        {
+            **record.model_dump(),
+            "city_id": match.get("city_id"),
+            "city_name": match.get("city_name", match.get("name")),
+            "province_id": match.get("province_id"),
+            "province_name": match.get("province_name"),
+            "longitude": match.get("longitude"),
+            "latitude": match.get("latitude"),
+        }
+    )
+
+
+def _enrich_warehouse(
+    record: WarehouseRecord,
+    catalog: dict[str, Any],
+    override_city_id: str | None,
+    issues: list[DataQualityIssue],
+) -> WarehouseRecord:
+    match = _resolve_record_place(
+        record.city_id,
+        record.city_name,
+        override_city_id,
+        catalog,
+        "warehouse",
+        record.warehouse_id,
+        issues,
+    )
+    if match is None:
+        return record
+    return WarehouseRecord.model_validate(
+        {
+            **record.model_dump(),
+            "city_id": match.get("city_id"),
+            "city_name": match.get("city_name", match.get("name")),
+            "province_id": match.get("province_id"),
+            "province_name": match.get("province_name"),
+            "longitude": match.get("longitude"),
+            "latitude": match.get("latitude"),
+        }
+    )
+
+
+def _resolve_record_place(
+    city_id: str,
+    city_name: str,
+    override_city_id: str | None,
+    catalog: dict[str, Any],
+    entity: Literal["demand", "warehouse"],
+    entity_id: str,
+    issues: list[DataQualityIssue],
+) -> dict[str, Any] | None:
+    if override_city_id is not None:
+        exact = next(
+            (
+                row
+                for row in catalog.get("rows", [])
+                if str(row.get("city_id", "")).strip() == override_city_id
+            ),
+            None,
+        )
+        if exact is None:
+            issues.append(
+                DataQualityIssue(
+                    code="geography_override_city_unknown",
+                    severity="error",
+                    business_message="显式选择的城市不在当前行政区目录中。",
+                    field_name=f"{entity}:{entity_id}",
+                )
+            )
+        return exact
+    if city_id:
+        exact = next(
+            (
+                row
+                for row in catalog.get("rows", [])
+                if str(row.get("city_id", "")).strip() == city_id
+            ),
+            None,
+        )
+        if exact is None:
+            issues.append(
+                DataQualityIssue(
+                    code="geography_city_id_unknown",
+                    severity="error",
+                    business_message="记录中的城市标识不在当前行政区目录中。",
+                    field_name=f"{entity}:{entity_id}",
+                )
+            )
+        return exact
+    resolution = resolve_place_names(
+        [{"city_id": city_id, "city_name": city_name}],
+        catalog,
+    )
+    if resolution["ready"] and len(resolution["resolved"]) == 1:
+        return resolution["resolved"][0]
+    code = "geography_city_ambiguous" if resolution["ambiguous"] else "geography_city_missing"
+    issues.append(
+        DataQualityIssue(
+            code=code,
+            severity="error",
+            business_message="城市无法唯一匹配当前行政区目录。",
+            field_name=f"{entity}:{entity_id}",
+        )
+    )
+    return None
 
 
 def validate_points_within_boundaries(

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 from uuid import UUID
 
 from pydantic import ValidationError
@@ -21,6 +24,31 @@ from .network_models import (
     WarehouseRecord,
 )
 from .workspace_intake import flatten_record, read_rows
+
+NormalizationState = Literal["ready", "needs_input", "needs_geography"]
+
+
+@dataclass(frozen=True)
+class ConfirmedFieldMapping:
+    target_field: str
+    source_field: str
+    transform: TransformSpec
+
+
+@dataclass(frozen=True)
+class ConfirmedSourceRows:
+    """Current validated rows plus caller-confirmed domain field mappings."""
+
+    role: SourceRole | str
+    rows: Sequence[Mapping[str, object]]
+    mappings: Sequence[ConfirmedFieldMapping]
+
+
+class RowNormalizationError(ValueError):
+    def __init__(self, code: str, field_name: str | None = None):
+        super().__init__(code)
+        self.code = code
+        self.field_name = field_name
 
 
 class NetworkInputValidator:
@@ -98,10 +126,180 @@ class NetworkInputValidator:
         return DataQualityIssue(code=code, severity="error", business_message=message)
 
 
+def normalize_confirmed_rows(
+    sources: Sequence[ConfirmedSourceRows],
+) -> tuple[NormalizationState, NormalizedInputBatch]:
+    """Normalize verified rows without reading files or persisting Case state."""
+
+    transforms = TransformRegistry()
+    demands: list[DemandCityRecord] = []
+    warehouses: list[WarehouseRecord] = []
+    assignments: list[CurrentAssignmentRecord] = []
+    quotes: list[RouteQuoteRecord] = []
+    issues: list[DataQualityIssue] = []
+    for source in sources:
+        try:
+            role = SourceRole(source.role)
+        except ValueError:
+            issues.append(
+                DataQualityIssue(
+                    code="normalization_role_unknown",
+                    severity="error",
+                    business_message="输入包含无法识别的数据角色。",
+                    field_name=str(source.role)[:256],
+                )
+            )
+            continue
+        if role == SourceRole.ADMINISTRATIVE_CATALOG:
+            issues.append(
+                DataQualityIssue(
+                    code="normalization_role_unsupported",
+                    severity="error",
+                    business_message="行政区目录应由地理准备工具处理，不能作为仓网记录标准化。",
+                    field_name=role.value,
+                )
+            )
+            continue
+        for row_index, row in enumerate(source.rows, start=1):
+            try:
+                values = _map_confirmed_row(row, source.mappings, transforms)
+                _append_normalized_record(
+                    role,
+                    values,
+                    demands,
+                    warehouses,
+                    assignments,
+                    quotes,
+                )
+            except RowNormalizationError as error:
+                issues.append(
+                    DataQualityIssue(
+                        code=error.code,
+                        severity="error",
+                        business_message=(
+                            f"{role.value} 数据第 {row_index} 行缺少必需字段或格式不正确。"
+                        ),
+                        field_name=error.field_name,
+                    )
+                )
+            except (KeyError, ValueError, ValidationError) as error:
+                issues.append(
+                    DataQualityIssue(
+                        code=f"{role.value}_row_invalid",
+                        severity="error",
+                        business_message=(
+                            f"{role.value} 数据第 {row_index} 行缺少必需字段或格式不正确。"
+                        ),
+                        field_name=str(error)[:256],
+                    )
+                )
+    batch = NormalizedInputBatch(
+        demand_cities=demands,
+        warehouses=warehouses,
+        current_assignments=assignments,
+        route_quotes=quotes,
+        issues=issues,
+    )
+    validated = batch.model_copy(update={"issues": NetworkInputValidator().validate(batch)})
+    if any(issue.severity == "error" for issue in validated.issues):
+        return "needs_input", validated
+    if any(
+        record.longitude is None or record.latitude is None
+        for record in [*validated.demand_cities, *validated.warehouses]
+    ):
+        return "needs_geography", validated
+    return "ready", validated
+
+
+def _map_confirmed_row(
+    row: Mapping[str, object],
+    mappings: Sequence[ConfirmedFieldMapping],
+    transforms: TransformRegistry,
+) -> dict[str, object]:
+    values: dict[str, object] = {}
+    for mapping in mappings:
+        value = row.get(mapping.source_field)
+        if value in (None, "") and "[]." in mapping.source_field:
+            value = row.get(mapping.source_field.rsplit("[].", 1)[-1])
+        if value in (None, ""):
+            continue
+        values[mapping.target_field] = transforms.apply(mapping.transform, value)
+    return values
+
+
+def _append_normalized_record(
+    role: SourceRole,
+    values: Mapping[str, object],
+    demands: list[DemandCityRecord],
+    warehouses: list[WarehouseRecord],
+    assignments: list[CurrentAssignmentRecord],
+    quotes: list[RouteQuoteRecord],
+) -> None:
+    if role == SourceRole.DEMAND:
+        demands.append(
+            DemandCityRecord(
+                city_id=values["city_id"],
+                city_name=values["city_name"],
+                province_id=values.get("province_id"),
+                province_name=values.get("province_name"),
+                demand_quantity=values["demand_quantity"],
+                longitude=values.get("longitude"),
+                latitude=values.get("latitude"),
+            )
+        )
+        return
+    if role in {SourceRole.EXISTING_WAREHOUSE, SourceRole.CANDIDATE_WAREHOUSE}:
+        is_existing = role == SourceRole.EXISTING_WAREHOUSE
+        warehouses.append(
+            WarehouseRecord(
+                warehouse_id=values["warehouse_id"],
+                warehouse_name=values["warehouse_name"],
+                warehouse_type=values["warehouse_type"],
+                city_id=values["city_id"],
+                city_name=values["city_name"],
+                province_id=values.get("province_id"),
+                province_name=values.get("province_name"),
+                longitude=values.get("longitude"),
+                latitude=values.get("latitude"),
+                upstream_center_id=values.get("upstream_center_id"),
+                is_existing=is_existing,
+                is_fixed=values.get("is_fixed"),
+            )
+        )
+        return
+    if role == SourceRole.CURRENT_ASSIGNMENT:
+        assignments.append(
+            CurrentAssignmentRecord(
+                demand_city_id=values["demand_city_id"],
+                serving_warehouse_id=values["serving_warehouse_id"],
+                upstream_center_id=values.get("upstream_center_id"),
+            )
+        )
+        return
+    if role == SourceRole.ROUTE_QUOTE:
+        for field_name in ("layer", "currency", "vehicle_capacity"):
+            if values.get(field_name) in (None, ""):
+                raise RowNormalizationError(
+                    f"route_quote_{field_name}_missing",
+                    field_name,
+                )
+        quotes.append(
+            RouteQuoteRecord(
+                origin_id=values["origin_id"],
+                destination_id=values["destination_id"],
+                layer=str(values["layer"]).lower(),
+                price_per_vehicle=values["price_per_vehicle"],
+                currency=str(values["currency"]).upper(),
+                vehicle_capacity=values["vehicle_capacity"],
+            )
+        )
+        return
+    raise RowNormalizationError("normalization_role_unsupported", role.value)
+
+
 class NormalizationService:
     def __init__(self, repository: CaseRepository):
         self.repository = repository
-        self.transforms = TransformRegistry()
 
     def normalize(
         self, case_id: UUID, workspace_root: Path
@@ -116,87 +314,25 @@ class NormalizationService:
         by_source: dict[tuple[str, SourceRole], list[SelectedMapping]] = defaultdict(list)
         for mapping in mappings:
             by_source[(mapping.source_ref, SourceRole(mapping.source_role))].append(mapping)
-        demands: list[DemandCityRecord] = []
-        warehouses: list[WarehouseRecord] = []
-        assignments: list[CurrentAssignmentRecord] = []
-        quotes: list[RouteQuoteRecord] = []
-        issues: list[DataQualityIssue] = []
+        sources: list[ConfirmedSourceRows] = []
         for (source_ref, role), source_mappings in by_source.items():
-            for row_index, row in enumerate(read_rows(workspace_root, source_ref)):
-                try:
-                    values = self._map_row(flatten_record(row), source_mappings)
-                    if role == SourceRole.DEMAND:
-                        demands.append(
-                            DemandCityRecord(
-                                city_id=values["city_id"],
-                                city_name=values["city_name"],
-                                province_id=values.get("province_id"),
-                                province_name=values.get("province_name"),
-                                demand_quantity=values["demand_quantity"],
-                                longitude=values.get("longitude"),
-                                latitude=values.get("latitude"),
-                            )
-                        )
-                    elif role in {
-                        SourceRole.EXISTING_WAREHOUSE,
-                        SourceRole.CANDIDATE_WAREHOUSE,
-                    }:
-                        is_existing = role == SourceRole.EXISTING_WAREHOUSE
-                        warehouses.append(
-                            WarehouseRecord(
-                                warehouse_id=values["warehouse_id"],
-                                warehouse_name=values["warehouse_name"],
-                                warehouse_type=values["warehouse_type"],
-                                city_id=values["city_id"],
-                                city_name=values["city_name"],
-                                longitude=values.get("longitude"),
-                                latitude=values.get("latitude"),
-                                upstream_center_id=values.get("upstream_center_id"),
-                                is_existing=values.get("is_existing", is_existing),
-                                is_fixed=values.get("is_fixed", is_existing),
-                            )
-                        )
-                    elif role == SourceRole.CURRENT_ASSIGNMENT:
-                        assignments.append(
-                            CurrentAssignmentRecord(
-                                demand_city_id=values["demand_city_id"],
-                                serving_warehouse_id=values["serving_warehouse_id"],
-                                upstream_center_id=values.get("upstream_center_id"),
-                            )
-                        )
-                    elif role == SourceRole.ROUTE_QUOTE:
-                        quotes.append(
-                            RouteQuoteRecord(
-                                origin_id=values["origin_id"],
-                                destination_id=values["destination_id"],
-                                layer=str(values.get("layer") or "last_mile").lower(),
-                                price_per_vehicle=values["price_per_vehicle"],
-                                currency=str(values.get("currency") or "").upper(),
-                                vehicle_capacity=values.get("vehicle_capacity"),
-                            )
-                        )
-                except (KeyError, ValueError, ValidationError) as error:
-                    issues.append(
-                        DataQualityIssue(
-                            code=f"{role.value}_row_invalid",
-                            severity="error",
-                            business_message=(
-                                f"{role.value} 数据第 {row_index + 1} 行缺少必需字段或格式不正确。"
+            sources.append(
+                ConfirmedSourceRows(
+                    role=role,
+                    rows=[flatten_record(row) for row in read_rows(workspace_root, source_ref)],
+                    mappings=[
+                        ConfirmedFieldMapping(
+                            target_field=mapping.target_field,
+                            source_field=mapping.source_field,
+                            transform=TransformSpec.model_validate(
+                                json.loads(mapping.transform_json)
                             ),
-                            source_id=str(source_mappings[0].source_id),
-                            field_name=str(error)[:256],
                         )
-                    )
-        batch = NormalizedInputBatch(
-            demand_cities=demands,
-            warehouses=warehouses,
-            current_assignments=assignments,
-            route_quotes=quotes,
-            issues=issues,
-        )
-        validated = batch.model_copy(
-            update={"issues": NetworkInputValidator().validate(batch)}
-        )
+                        for mapping in source_mappings
+                    ],
+                )
+            )
+        _, validated = normalize_confirmed_rows(sources)
         if any(issue.severity == "error" for issue in validated.issues):
             self.repository.complete_operation(lease, workspace_root, [])
             self.repository.set_facet_state(
@@ -209,17 +345,3 @@ class NormalizationService:
             return validated, None
         result = self.repository.commit_normalized_input(lease, workspace_root, validated)
         return validated, result
-
-    def _map_row(
-        self, row: dict[str, object], mappings: list[SelectedMapping]
-    ) -> dict[str, object]:
-        values: dict[str, object] = {}
-        for mapping in mappings:
-            value = row.get(mapping.source_field)
-            if value in (None, "") and "[]." in mapping.source_field:
-                value = row.get(mapping.source_field.rsplit("[].", 1)[-1])
-            if value in (None, ""):
-                continue
-            spec = TransformSpec.model_validate(json.loads(mapping.transform_json))
-            values[mapping.target_field] = self.transforms.apply(spec, value)
-        return values

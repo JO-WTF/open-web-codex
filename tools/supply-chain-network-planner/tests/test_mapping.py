@@ -3,7 +3,13 @@ from __future__ import annotations
 from uuid import uuid4
 
 from supply_chain_planner.case_types import SourceSummary
-from supply_chain_planner.mapping import MappingEngine, SourceRole, TransformKind
+from supply_chain_planner.mapping import (
+    FieldObservation,
+    MappingEngine,
+    SourceRole,
+    TransformKind,
+    suggest_role_mappings,
+)
 from supply_chain_planner.network_data import FieldInspection, SourceInspection
 
 
@@ -76,3 +82,41 @@ def test_existing_flag_disambiguates_warehouse_role() -> None:
     )
 
     assert [item.role for item in proposal.proposals] == [SourceRole.EXISTING_WAREHOUSE]
+
+
+def test_pure_warehouse_fields_require_existing_or_candidate_confirmation() -> None:
+    proposals = suggest_role_mappings(
+        [
+            FieldObservation(name=field)
+            for field in (
+                "warehouse_id",
+                "warehouse_name",
+                "warehouse_type",
+                "city_id",
+                "city_name",
+            )
+        ]
+    )
+
+    assert [item.role for item in proposals] == [
+        SourceRole.EXISTING_WAREHOUSE,
+        SourceRole.CANDIDATE_WAREHOUSE,
+    ]
+    assert all(item.ambiguous for item in proposals)
+    assert SourceRole.CURRENT_ASSIGNMENT not in {item.role for item in proposals}
+
+
+def test_pure_mapping_marks_multiple_aliases_ambiguous() -> None:
+    proposals = suggest_role_mappings(
+        [
+            FieldObservation(name=field)
+            for field in ("city_id", "city_code", "city_name", "demand_quantity")
+        ]
+    )
+    demand = next(item for item in proposals if item.role == SourceRole.DEMAND)
+    city_mapping = next(
+        item for item in demand.field_mappings if item.target_field == "city_id"
+    )
+
+    assert demand.ambiguous is True
+    assert city_mapping.source_fields == ("city_id", "city_code")

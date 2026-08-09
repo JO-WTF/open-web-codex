@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 from supply_chain_planner.geography import (
     build_administrative_candidates,
+    enrich_network_geography,
     resolve_place_names,
     validate_points_within_boundaries,
 )
+from supply_chain_planner.network_models import DemandCityRecord, WarehouseRecord
 
 
 def _boundary_payload() -> dict:
@@ -66,3 +70,98 @@ def test_city_candidates_are_built_from_catalog_rows() -> None:
         "city",
     )
     assert result["candidates"][0]["warehouse_id"] == "candidate-c-1"
+
+
+def _demand(city_id: str, city_name: str) -> DemandCityRecord:
+    return DemandCityRecord(
+        city_id=city_id,
+        city_name=city_name,
+        demand_quantity=Decimal("10"),
+    )
+
+
+def _warehouse(city_id: str, city_name: str) -> WarehouseRecord:
+    return WarehouseRecord(
+        warehouse_id="wh-1",
+        warehouse_name="Warehouse One",
+        warehouse_type="center",
+        city_id=city_id,
+        city_name=city_name,
+        is_existing=True,
+        is_fixed=True,
+    )
+
+
+def test_unknown_exact_override_never_falls_back_to_original_name() -> None:
+    catalog = {
+        "rows": [
+            {
+                "city_id": "real",
+                "city_name": "Jakarta",
+                "province_id": "p-1",
+                "province_name": "Province One",
+                "longitude": 106.8,
+                "latitude": -6.2,
+            }
+        ]
+    }
+    demand = _demand("local", "Jakarta")
+
+    demands, _, _, issues = enrich_network_geography(
+        [demand],
+        [],
+        catalog,
+        overrides={("demand", "local"): "not-real"},
+    )
+
+    assert [item.code for item in issues] == ["geography_override_city_unknown"]
+    assert demands == [demand]
+    assert demands[0].city_id == "local"
+
+
+def test_country_neutral_catalog_enriches_records_and_candidates() -> None:
+    catalog = {
+        "country_code": "TH",
+        "rows": [
+            {
+                "city_id": "TH-CITY-001",
+                "city_name": "Bangkok",
+                "province_id": "TH-PROV-10",
+                "province_name": "Bangkok",
+                "longitude": 100.5018,
+                "latitude": 13.7563,
+                "is_province_capital": True,
+            }
+        ],
+    }
+
+    demands, warehouses, candidates, issues = enrich_network_geography(
+        [_demand("TH-CITY-001", "Bangkok")],
+        [_warehouse("TH-CITY-001", "Bangkok")],
+        catalog,
+        candidate_level="province",
+    )
+
+    assert issues == []
+    assert demands[0].province_id == "TH-PROV-10"
+    assert warehouses[0].province_name == "Bangkok"
+    assert warehouses[0].model_dump()["province_id"] == "TH-PROV-10"
+    assert candidates[0]["city_id"] == "TH-CITY-001"
+
+
+def test_unknown_record_city_id_does_not_fall_back_to_same_name() -> None:
+    catalog = {
+        "rows": [
+            {"city_id": "c-1", "city_name": "Springfield", "province_id": "p-1"},
+            {"city_id": "c-2", "city_name": "Springfield", "province_id": "p-2"},
+        ]
+    }
+
+    demands, _, _, issues = enrich_network_geography(
+        [_demand("local", "Springfield")],
+        [],
+        catalog,
+    )
+
+    assert [item.code for item in issues] == ["geography_city_id_unknown"]
+    assert demands[0].city_id == "local"
