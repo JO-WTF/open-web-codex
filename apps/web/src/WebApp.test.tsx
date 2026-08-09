@@ -31,6 +31,12 @@ const client = {
   listMcpServerStatus: vi.fn(),
   getAccountRateLimits: vi.fn(),
   getSupervisorOverview: vi.fn(),
+  runIdForThread: vi.fn(),
+  listRunUserInputRequests: vi.fn(),
+  listThreadUserInputRequests: vi.fn(),
+  listRunMcpFormRequests: vi.fn(),
+  listThreadMcpFormRequests: vi.fn(),
+  respondToMcpForm: vi.fn(),
   startThread: vi.fn(),
   resumeThread: vi.fn(),
   listThreadTurns: vi.fn(),
@@ -79,6 +85,12 @@ describe("WebApp workspace-first messaging", () => {
     client.listMcpServerStatus.mockResolvedValue({ data: [] });
     client.getAccountRateLimits.mockResolvedValue({});
     client.getSupervisorOverview.mockResolvedValue(null);
+    client.runIdForThread.mockRejectedValue(new Error("Thread context lookup is still hydrating"));
+    client.listRunUserInputRequests.mockResolvedValue([]);
+    client.listThreadUserInputRequests.mockResolvedValue([]);
+    client.listRunMcpFormRequests.mockResolvedValue([]);
+    client.listThreadMcpFormRequests.mockResolvedValue([]);
+    client.respondToMcpForm.mockResolvedValue(undefined);
     client.startThread.mockImplementation(async (
       _workspaceId: string,
       options: { onRunAccepted?: (value: { taskId: string; runId: string }) => void },
@@ -389,6 +401,60 @@ describe("WebApp workspace-first messaging", () => {
     expect(agentQueue.textContent).toContain("Data Analyst");
     expect(agentQueue.textContent).toContain("Approval resolved");
     expect(within(agentQueue).queryByRole("button", { name: "Accept" })).toBeNull();
+  });
+
+  it("shows a child MCP form from its owning Run without waiting for a Thread lookup", async () => {
+    client.listThreads.mockResolvedValue({
+      data: [{
+        id: "thread-root",
+        name: "Supervisor case",
+        cwd: "/tmp/demo",
+        status: "active",
+        updatedAt: "2026-08-10T00:00:02Z",
+      }],
+    });
+    client.listRunMcpFormRequests.mockResolvedValue([{
+      id: "approval-mcp-child-1",
+      runId: "run-enterprise",
+      source: {
+        kind: "agent",
+        executionId: "execution-data-1",
+        displayTitle: "Wanwan",
+      },
+      serverName: "supply_chain",
+      message: "Allow the supply_chain MCP server to run tool discover_workspace_sources?",
+      fields: [],
+      state: "pending",
+      version: 1,
+      createdAt: "2026-08-10T00:00:03Z",
+    }]);
+    render(<WebApp />);
+
+    fireEvent.click(await screen.findByText("Supervisor case"));
+    await waitFor(() => expect(client.listThreadMcpFormRequests)
+      .toHaveBeenCalledWith("thread-root"));
+    await waitFor(() => expect(screen.queryByText("正在加载 Thread…")).toBeNull());
+
+    act(() => {
+      appServerEventHandler?.({
+        workspace_id: "workspace-1",
+        run_id: "run-enterprise",
+        root_thread_id: "thread-root",
+        message: {
+          method: "platform/mcpFormRequested",
+          params: {
+            threadId: "thread-data",
+            turnId: "turn-data",
+            runId: "run-enterprise",
+            approvalId: "approval-mcp-child-1",
+          },
+        },
+      });
+    });
+
+    expect(await screen.findByText(/Allow the supply_chain MCP server/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Accept" })).toBeTruthy();
+    expect(client.runIdForThread).not.toHaveBeenCalled();
   });
 
   it("rolls back a Provider switch when its model catalog is empty", async () => {

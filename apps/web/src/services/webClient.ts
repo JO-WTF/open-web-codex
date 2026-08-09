@@ -46,6 +46,7 @@ type ThreadContext = {
   projectId: string;
   taskId: string;
   runId: string;
+  rootThreadId: string;
 };
 
 type JsonRecord = Record<string, unknown>;
@@ -350,6 +351,7 @@ export class CodexMonitorWebClient {
         projectId: workspace.project_id,
         taskId: task.id,
         runId: run.id,
+        rootThreadId: run.codex_thread_id,
       };
       this.threadContexts.set(run.codex_thread_id, context);
       return [{ project, task, run, threadId: run.codex_thread_id, context }];
@@ -404,6 +406,7 @@ export class CodexMonitorWebClient {
             projectId,
             taskId,
             runId,
+            rootThreadId: run.codex_thread_id,
           });
           return run;
         }
@@ -913,7 +916,12 @@ export class CodexMonitorWebClient {
       const previous = this.taskEventSequences.get(context.taskId) ?? 0;
       if (event.sequence <= previous) return;
       this.taskEventSequences.set(context.taskId, event.sequence);
-      onEvent({ workspace_id: context.workspaceId, message });
+      onEvent({
+        workspace_id: context.workspaceId,
+        run_id: context.runId,
+        root_thread_id: context.rootThreadId,
+        message,
+      });
     };
     const replayDurableEvents = async () => {
       const contexts = new Map(
@@ -996,7 +1004,12 @@ export class CodexMonitorWebClient {
             context.taskId,
             Math.max(this.taskEventSequences.get(context.taskId) ?? 0, event.sequence),
           );
-          onEvent({ workspace_id: context.workspaceId, message });
+          onEvent({
+            workspace_id: context.workspaceId,
+            run_id: context.runId,
+            root_thread_id: context.rootThreadId,
+            message,
+          });
         }
       }
     }

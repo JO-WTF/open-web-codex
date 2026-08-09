@@ -821,6 +821,8 @@ describe("WebApp direct Server client", () => {
     expect(onOpen).toHaveBeenCalledOnce();
     expect(events).toContainEqual({
       workspace_id: project.id,
+      run_id: run.id,
+      root_thread_id: "thread-1",
       message: {
         method: "thread/status/changed",
         params: {
@@ -862,6 +864,8 @@ describe("WebApp direct Server client", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(events).toContainEqual({
       workspace_id: project.id,
+      run_id: run.id,
+      root_thread_id: "thread-1",
       message: {
         method: "platform/artifact/changed",
         params: {
@@ -947,6 +951,8 @@ describe("WebApp direct Server client", () => {
     await vi.waitFor(() => expect(events).toHaveLength(1));
     expect(events[0]).toEqual({
       workspace_id: project.id,
+      run_id: run.id,
+      root_thread_id: "thread-1",
       message: {
         method: "thread/started",
         params: {
@@ -1307,6 +1313,8 @@ describe("WebApp direct Server client", () => {
 
     expect(events[0]).toEqual({
       workspace_id: project.id,
+      run_id: run.id,
+      root_thread_id: "thread-1",
       message: {
         method: "item/commandExecution/requestApproval",
         id: approval.id,

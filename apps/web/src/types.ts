@@ -60,6 +60,10 @@ export type WorkspaceInfo = {
 
 export type AppServerEvent = {
   workspace_id: string;
+  /** Platform Run that owns this durable event projection. */
+  run_id?: string;
+  /** Root Codex Thread materialized for the owning Run. */
+  root_thread_id?: string;
   message: Record<string, unknown>;
 };
 

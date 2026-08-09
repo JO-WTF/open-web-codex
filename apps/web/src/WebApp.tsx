@@ -1714,12 +1714,13 @@ export default function WebApp() {
         case "platform/userInputRequested": {
           const runId = typeof params.runId === "string" ? params.runId : null;
           const activeThreadId = activeThreadIdRef.current;
-          if (runId && activeThreadId) {
-            void client.runIdForThread(activeThreadId).then((activeRunId) => {
-              if (activeRunId === runId) {
-                void refreshPendingUserInputs(activeThreadId, runId);
-              }
-            }).catch(() => undefined);
+          if (
+            runId
+            && activeThreadId
+            && event.run_id === runId
+            && event.root_thread_id === activeThreadId
+          ) {
+            void refreshPendingUserInputs(activeThreadId, runId);
           }
           return null;
         }
@@ -1741,12 +1742,13 @@ export default function WebApp() {
         case "platform/mcpFormRequested": {
           const runId = typeof params.runId === "string" ? params.runId : null;
           const activeThreadId = activeThreadIdRef.current;
-          if (runId && activeThreadId) {
-            void client.runIdForThread(activeThreadId).then((activeRunId) => {
-              if (activeRunId === runId) {
-                void refreshPendingMcpForms(activeThreadId, runId);
-              }
-            }).catch(() => undefined);
+          if (
+            runId
+            && activeThreadId
+            && event.run_id === runId
+            && event.root_thread_id === activeThreadId
+          ) {
+            void refreshPendingMcpForms(activeThreadId, runId);
           }
           return null;
         }
