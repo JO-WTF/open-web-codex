@@ -11,6 +11,7 @@ from pydantic import BaseModel, ValidationError
 
 from .mcp_contracts import ResourceRef
 from .resource_store import ResourceStore, workspace_resource_root
+from .workspace_files import CreatedWorkspaceFile, create_workspace_file
 from .workspace_scope import trusted_workspace_root
 
 MAX_RESOURCE_BYTES = 32 * 1024 * 1024
@@ -66,6 +67,22 @@ class McpResourceRuntime:
             return self.store.read(resource_id, max_bytes=MAX_RESOURCE_BYTES)
         except (OSError, ValueError) as error:
             raise McpResourceContractError("resource_read_invalid") from error
+
+    def create_workspace_file(
+        self,
+        ctx: Context,
+        relative_path: str,
+        content: bytes,
+        *,
+        max_bytes: int,
+    ) -> CreatedWorkspaceFile:
+        workspace = self.require_workspace(ctx)
+        return create_workspace_file(
+            workspace,
+            relative_path,
+            content,
+            max_bytes=max_bytes,
+        )
 
     def load_payload(self, ref: ResourceRef, expected_schema: str) -> dict[str, Any]:
         if ref.server != self.server_name:

@@ -160,6 +160,15 @@ def test_runtime_accepts_physical_workspace_alias(tmp_path: Path) -> None:
 
     assert runtime.require_workspace(_context(alias.as_uri())) == workspace.resolve()
 
+    created = runtime.create_workspace_file(
+        _context(alias.as_uri()),
+        "result.txt",
+        b"ready",
+        max_bytes=5,
+    )
+    assert created.relative_path == "result.txt"
+    assert (workspace / "result.txt").read_bytes() == b"ready"
+
 
 
 def test_runtime_rejects_different_workspace_and_invalid_metadata(tmp_path: Path) -> None:
@@ -174,6 +183,13 @@ def test_runtime_rejects_different_workspace_and_invalid_metadata(tmp_path: Path
 
     with pytest.raises(McpResourceContractError, match="workspace_scope_mismatch"):
         runtime.require_workspace(_context(other.as_uri()))
+    with pytest.raises(McpResourceContractError, match="workspace_scope_mismatch"):
+        runtime.create_workspace_file(
+            _context(other.as_uri()),
+            "result.txt",
+            b"blocked",
+            max_bytes=16,
+        )
     with pytest.raises(McpResourceContractError, match="workspace_scope_invalid"):
         runtime.require_workspace(_context(None))
     with pytest.raises(McpResourceContractError, match="workspace_scope_invalid"):
