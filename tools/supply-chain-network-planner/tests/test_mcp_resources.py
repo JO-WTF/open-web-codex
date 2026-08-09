@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from pydantic import BaseModel, ConfigDict, Field
@@ -32,6 +33,17 @@ def _runtime(workspace: Path, store: ResourceStore) -> McpResourceRuntime:
         SERVER_NAME,
         URI_PREFIX,
         store=store,
+    )
+
+
+def _context(sandbox_cwd: str | None) -> SimpleNamespace:
+    model_extra = (
+        {}
+        if sandbox_cwd is None
+        else {"codex/sandbox-state-meta": {"sandboxCwd": sandbox_cwd}}
+    )
+    return SimpleNamespace(
+        request_context=SimpleNamespace(meta=SimpleNamespace(model_extra=model_extra))
     )
 
 
@@ -113,3 +125,28 @@ def test_runtime_enforces_publish_read_and_load_size_bounds(
         runtime.read(resource_id)
     with pytest.raises(McpResourceContractError, match="resource_load_invalid"):
         runtime.load_model(ref, "example.v1", ExampleResource)
+
+
+def test_runtime_accepts_physical_workspace_alias(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    alias = tmp_path / "workspace-alias"
+    alias.symlink_to(workspace, target_is_directory=True)
+    runtime = _runtime(workspace, ResourceStore(tmp_path / "resources"))
+
+    assert runtime.require_workspace(_context(alias.as_uri())) == workspace.resolve()
+
+
+def test_runtime_rejects_different_workspace_and_invalid_metadata(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    other = tmp_path / "other"
+    workspace.mkdir()
+    other.mkdir()
+    runtime = _runtime(workspace, ResourceStore(tmp_path / "resources"))
+
+    with pytest.raises(McpResourceContractError, match="workspace_scope_mismatch"):
+        runtime.require_workspace(_context(other.as_uri()))
+    with pytest.raises(McpResourceContractError, match="workspace_scope_invalid"):
+        runtime.require_workspace(_context(None))
+    with pytest.raises(McpResourceContractError, match="workspace_scope_invalid"):
+        runtime.require_workspace(_context("https://example.invalid/workspace"))
