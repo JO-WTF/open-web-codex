@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -83,6 +84,38 @@ class McpResourceRuntime:
             content,
             max_bytes=max_bytes,
         )
+
+    def create_workspace_model(
+        self,
+        ctx: Context,
+        relative_path: str,
+        value: BaseModel,
+        *,
+        max_bytes: int,
+    ) -> CreatedWorkspaceFile:
+        """Create one canonical JSON file from a validated typed model."""
+        if not isinstance(value, BaseModel):
+            raise McpResourceContractError("workspace_model_invalid")
+        try:
+            content = json.dumps(
+                value.model_dump(mode="json", by_alias=True),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        except (TypeError, ValueError) as error:
+            raise McpResourceContractError("workspace_model_invalid") from error
+        try:
+            return self.create_workspace_file(
+                ctx,
+                relative_path,
+                content,
+                max_bytes=max_bytes,
+            )
+        except McpResourceContractError:
+            raise
+        except (OSError, ValueError) as error:
+            raise McpResourceContractError("workspace_file_invalid") from error
 
     def load_payload(self, ref: ResourceRef, expected_schema: str) -> dict[str, Any]:
         if ref.server != self.server_name:

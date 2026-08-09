@@ -170,6 +170,58 @@ def test_runtime_accepts_physical_workspace_alias(tmp_path: Path) -> None:
     assert (workspace / "result.txt").read_bytes() == b"ready"
 
 
+def test_runtime_creates_canonical_workspace_model(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "deliverables").mkdir()
+    runtime = _runtime(
+        workspace,
+        ResourceStore(tmp_path / "resources", uri_prefix=URI_PREFIX),
+    )
+    model = ExampleResource(schemaVersion="example.v1", value=7, note="café")
+    expected = (
+        '{"note":"café","schemaVersion":"example.v1","value":7}'.encode()
+    )
+
+    created = runtime.create_workspace_model(
+        _context(workspace.as_uri()),
+        "deliverables/example.json",
+        model,
+        max_bytes=len(expected),
+    )
+
+    assert created.relative_path == "deliverables/example.json"
+    assert created.byte_size == len(expected)
+    assert (workspace / created.relative_path).read_bytes() == expected
+
+
+def test_runtime_workspace_model_preserves_scope_and_size_errors(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    other = tmp_path / "other"
+    workspace.mkdir()
+    other.mkdir()
+    runtime = _runtime(
+        workspace,
+        ResourceStore(tmp_path / "resources", uri_prefix=URI_PREFIX),
+    )
+    model = ExampleResource(schemaVersion="example.v1", value=7)
+
+    with pytest.raises(McpResourceContractError, match="workspace_scope_mismatch"):
+        runtime.create_workspace_model(
+            _context(other.as_uri()),
+            "example.json",
+            model,
+            max_bytes=1_024,
+        )
+    with pytest.raises(McpResourceContractError, match="workspace_file_invalid"):
+        runtime.create_workspace_model(
+            _context(workspace.as_uri()),
+            "example.json",
+            model,
+            max_bytes=1,
+        )
+
+
 
 def test_runtime_rejects_different_workspace_and_invalid_metadata(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
