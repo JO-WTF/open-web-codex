@@ -535,7 +535,10 @@ mod tests {
             .iter()
             .filter_map(|item| item.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(map_tools, vec!["get_route", "distance_matrix",]);
+        assert_eq!(
+            map_tools,
+            vec!["get_route", "distance_matrix", "create_map_card",]
+        );
         assert!(!data.to_string().contains("__OPEN_WEB_CODEX_"));
         assert!(!network.to_string().contains("__OPEN_WEB_CODEX_"));
         assert_eq!(

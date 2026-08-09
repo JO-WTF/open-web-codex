@@ -55,6 +55,7 @@ tool_timeout_sec = 90
 enabled_tools = [
   "get_route",
   "distance_matrix",
+  "create_map_card",
 ]
 
 [mcp_servers.map_utils.env]
