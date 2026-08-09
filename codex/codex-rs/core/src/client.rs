@@ -33,6 +33,7 @@ use std::sync::atomic::Ordering;
 use codex_api::AgentIdentityTelemetry;
 use codex_api::ApiError;
 use codex_api::AuthProvider;
+use codex_api::ChatCompletionsClient as ApiChatCompletionsClient;
 use codex_api::CompactClient as ApiCompactClient;
 use codex_api::CompactionInput as ApiCompactionInput;
 use codex_api::Compression;
@@ -63,6 +64,7 @@ use codex_api::auth_header_telemetry;
 use codex_api::build_session_headers;
 use codex_api::create_text_param_for_request;
 use codex_api::response_create_client_metadata;
+use codex_api::responses_request_to_chat_completions_request;
 use codex_http_client::ClientRouteClass;
 use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
@@ -138,6 +140,9 @@ use codex_response_debug_context::extract_response_debug_context;
 use codex_response_debug_context::extract_response_debug_context_from_api_error;
 use codex_response_debug_context::telemetry_api_error_message;
 use codex_response_debug_context::telemetry_transport_error_message;
+
+#[path = "client/chat.rs"]
+mod chat;
 
 pub const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 pub const X_CODEX_INSTALLATION_ID_HEADER: &str = "x-codex-installation-id";
@@ -1892,6 +1897,19 @@ impl ModelClientSession {
                 }
 
                 self.stream_responses_api(
+                    prompt,
+                    model_info,
+                    session_telemetry,
+                    effort,
+                    summary,
+                    service_tier,
+                    responses_metadata,
+                    inference_trace,
+                )
+                .await
+            }
+            WireApi::Chat => {
+                self.stream_chat_completions(
                     prompt,
                     model_info,
                     session_telemetry,

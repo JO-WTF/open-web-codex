@@ -240,6 +240,7 @@ fn function_output_to_chat_text(output: &FunctionCallOutputPayload) -> Result<St
 
 fn chat_role(role: &str) -> Result<String, ApiError> {
     match role {
+        // DeepSeek's Chat subset has no developer role; preserve pinned Core developer input as system.
         "developer" | "system" => Ok("system".to_string()),
         "user" => Ok("user".to_string()),
         "assistant" => Ok("assistant".to_string()),
