@@ -36,6 +36,9 @@ def test_data_server_exposes_only_four_composable_tools() -> None:
         "normalize_network_input",
         "prepare_network_geography",
     ]
+    for tool in tools[1:]:
+        assert set(tool.outputSchema["required"]) == {"summary", "resource_ref"}
+        assert "resource_name" not in tool.outputSchema["properties"]
 
 
 def test_sample_one_inspect_publishes_counts_and_fields_resource(tmp_path, monkeypatch) -> None:

@@ -451,7 +451,6 @@ class PlanningSourceCatalog(StrictModel):
 
 class DataAgentResourceToolResult(StrictModel):
     summary: str
-    resource_name: str
     resource_ref: _ResourceRef
 
 
