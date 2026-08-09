@@ -421,34 +421,10 @@ fn project_turn(value: &serde_json::Value) -> Result<ThreadHistoryTurn, ApiError
 
 async fn project_turn_with_refs(
     value: &serde_json::Value,
-    state: &AppState,
-    run_id: Uuid,
+    _state: &AppState,
+    _run_id: Uuid,
 ) -> Result<ThreadHistoryTurn, ApiError> {
-    let mut turn = project_turn(value)?;
-    for item in &mut turn.items {
-        if item.get("type").and_then(serde_json::Value::as_str) != Some("agentMessage") {
-            continue;
-        }
-        let Some(text) = item
-            .get("text")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string)
-        else {
-            continue;
-        };
-        let artifacts = crate::event_projection::resolve_inline_artifacts(&state.db, run_id, &text)
-            .await
-            .map_err(database_error)?;
-        if !artifacts.is_empty() {
-            item.as_object_mut()
-                .expect("projected item must be an object")
-                .insert(
-                    "inlineArtifacts".to_string(),
-                    serde_json::Value::Array(artifacts),
-                );
-        }
-    }
-    Ok(turn)
+    project_turn(value)
 }
 
 #[derive(Default)]

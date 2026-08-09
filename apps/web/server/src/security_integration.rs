@@ -723,22 +723,23 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     .await
     .unwrap();
     let artifact_id = Uuid::now_v7();
-    let artifact_bytes = br#"{"type":"FeatureCollection","features":[]}"#;
+    let artifact_bytes = br#"{"schema_version":"network_planning_report_bundle.v1","kind":"network_planning_report"}"#;
     let artifact_digest = hex::encode(Sha256::digest(artifact_bytes));
     sqlx::query(
         "INSERT INTO artifacts (
-            id, organization_id, profile_id, artifact_schema, display_name,
-            source_server, source_uri, mime_type, expected_size, byte_size,
+            id, organization_id, profile_id, workspace_id, artifact_schema, display_name,
+            source_relative_path, mime_type, expected_size, byte_size,
             content, content_sha256, state
          ) VALUES (
-            $1, $2, $3, 'geojson.v1', 'Security map',
-            'map_utils', 'maps-data://geojson/map-data-security',
-            'application/geo+json', $4, $4, $5, $6, 'ready'
+            $1, $2, $3, $4, 'network_planning_report_bundle.v1',
+            'Warehouse network planning report', 'deliverables/security-report.json',
+            'application/json', $5, $5, $6, $7, 'ready'
          )",
     )
     .bind(artifact_id)
     .bind(first_organization_id)
     .bind(profile_id)
+    .bind(workspace_id)
     .bind(i64::try_from(artifact_bytes.len()).unwrap())
     .bind(artifact_bytes.as_slice())
     .bind(artifact_digest)
@@ -847,52 +848,6 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     assert!(artifact_detail.1.get("source_server").is_none());
     assert!(artifact_detail.1.get("source_uri").is_none());
 
-    sqlx::query(
-        "INSERT INTO run_events (
-            run_id, event_type, projection_version, thread_id, turn_id, item_id, payload
-         ) VALUES (
-            $1, 'codex.item.completed', 1, 'visualization-child-thread',
-            'turn-map-producer', 'item-inline-map', '{}'::jsonb
-         )",
-    )
-    .bind(first_run_id)
-    .execute(&pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO inline_visualization_artifacts (
-            organization_id, run_id, thread_id, producer_turn_id, producer_item_id,
-            artifact_ref, renderer_kind, renderer_payload
-         ) VALUES (
-            $1, $2, 'visualization-child-thread', 'turn-map-producer', 'item-inline-map',
-            'map-cross-turn', 'map.v3', $3
-         )",
-    )
-    .bind(first_organization_id)
-    .bind(first_run_id)
-    .bind(json!({
-        "type": "card",
-        "kind": "map.v3",
-        "id": "map-cross-turn",
-        "title": "Cross-turn map",
-        "intent": "test",
-        "status": "ready",
-        "sources": {},
-        "layers": []
-    }))
-    .execute(&pool)
-    .await
-    .unwrap();
-    let cross_turn_artifacts = crate::event_projection::resolve_inline_artifacts(
-        &pool,
-        first_run_id,
-        "Before\n\n::codex-inline-vis{artifact=\"map-cross-turn\"}\n\nAfter",
-    )
-    .await
-    .unwrap();
-    assert_eq!(cross_turn_artifacts.len(), 1);
-    assert_eq!(cross_turn_artifacts[0]["ref"], "map-cross-turn");
-
     let artifact = call(
         &app,
         authenticated(
@@ -903,7 +858,10 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     )
     .await;
     assert_eq!(artifact.0, StatusCode::OK);
-    assert_eq!(artifact.1["type"], "FeatureCollection");
+    assert_eq!(
+        artifact.1["schema_version"],
+        "network_planning_report_bundle.v1"
+    );
 
     let image_response = app
         .clone()

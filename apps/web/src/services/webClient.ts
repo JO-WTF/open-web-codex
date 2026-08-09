@@ -209,6 +209,13 @@ function runtimeMessage(event: RunEvent): JsonRecord | null {
       params: { ...base, runId: event.run_id, approvalId },
     };
   }
+  if (event.event_type === "platform.artifact.changed") {
+    if (data.sourceType !== "platform/artifact/changed") return null;
+    return {
+      method: "platform/artifact/changed",
+      params: { ...base, ...data },
+    };
+  }
   if (event.event_type === "codex.item.started" || event.event_type === "codex.item.completed") {
     const item = rawItem(event);
     if (!item) return null;

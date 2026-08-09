@@ -825,6 +825,7 @@ export default function WebApp() {
           "turn/started",
           "turn/completed",
           "serverRequest/resolved",
+          "platform/artifact/changed",
           "platform/userInputRequested",
           "platform/userInputResolved",
           "platform/mcpFormRequested",

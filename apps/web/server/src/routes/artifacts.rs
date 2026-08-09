@@ -5,15 +5,17 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use open_web_codex_adapter::{AuthorizedWorkspace, CodexAdapter};
-use open_web_codex_platform_contracts::{error::PlatformError, ArtifactSummary};
-use open_web_codex_platform_store::AppState;
+use open_web_codex_git_runtime::GitRuntime;
+use open_web_codex_platform_contracts::{error::PlatformError, ArtifactSummary, RunEvent};
+use open_web_codex_platform_store::{AppState, LiveEvent};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
+use tokio::sync::broadcast::Sender;
 use uuid::Uuid;
 
+use crate::event_projection::LiveProjection;
+use crate::final_artifacts::validate_materialized_bundle;
 use crate::middleware::auth::AuthenticatedUser;
 
 type ApiError = (StatusCode, Json<PlatformError>);
@@ -21,7 +23,7 @@ type ApiResult<T> = Result<Json<T>, ApiError>;
 
 // Artifact content is persisted server-side before it is presented as durable.
 // This is a process-safety bound, not a business schema limit.
-const MAX_ARTIFACT_BYTES: usize = 128 * 1024 * 1024;
+const MAX_ARTIFACT_BYTES: usize = 100 * 1024 * 1024;
 
 pub async fn list_for_task(
     State(state): State<AppState>,
@@ -71,7 +73,7 @@ pub async fn list_for_task(
          WHERE artifact_grant.task_id = $1
            AND artifact_grant.organization_id = $2
            AND artifact_grant.permission = 'read'
-           AND artifact.retention_state = 'active'
+           AND artifact.state = 'ready'
          ORDER BY artifact.created_at, artifact.id",
     )
     .bind(task_id)
@@ -104,7 +106,6 @@ pub async fn read_content(
          FROM artifacts artifact
          WHERE artifact.id = $1
            AND artifact.organization_id = $2
-           AND artifact.retention_state = 'active'
            AND EXISTS (
                SELECT 1
                FROM artifact_task_grants artifact_grant
@@ -144,7 +145,11 @@ pub async fn read_content(
     Ok(Json(value))
 }
 
-pub(crate) async fn recover_and_materialize_pending(db: PgPool, adapter: Arc<dyn CodexAdapter>) {
+pub(crate) async fn recover_and_materialize_pending(
+    db: PgPool,
+    git: Arc<GitRuntime>,
+    event_bus: Sender<LiveEvent>,
+) {
     if let Err(error) =
         sqlx::query("UPDATE artifacts SET state = 'pending' WHERE state = 'materializing'")
             .execute(&db)
@@ -155,7 +160,7 @@ pub(crate) async fn recover_and_materialize_pending(db: PgPool, adapter: Arc<dyn
     }
     let ids = match sqlx::query_scalar::<_, Uuid>(
         "SELECT id FROM artifacts
-         WHERE state = 'pending' AND retention_state = 'active'
+         WHERE state = 'pending'
          ORDER BY created_at, id",
     )
     .fetch_all(&db)
@@ -167,17 +172,29 @@ pub(crate) async fn recover_and_materialize_pending(db: PgPool, adapter: Arc<dyn
             return;
         }
     };
-    materialize_artifacts(db, adapter, ids).await;
+    materialize_artifacts(db, git, ids, event_bus).await;
 }
 
 pub(crate) async fn materialize_artifacts(
     db: PgPool,
-    adapter: Arc<dyn CodexAdapter>,
+    git: Arc<GitRuntime>,
     artifact_ids: Vec<Uuid>,
+    event_bus: Sender<LiveEvent>,
 ) {
     for artifact_id in artifact_ids {
-        match materialize_artifact(&db, adapter.as_ref(), artifact_id).await {
-            Ok(()) => {}
+        match materialize_artifact(&db, git.as_ref(), artifact_id).await {
+            Ok(Some(projection)) => {
+                if event_bus
+                    .send(LiveEvent {
+                        organization_id: projection.organization_id,
+                        payload: projection.payload,
+                    })
+                    .is_err()
+                {
+                    tracing::debug!("event bus: no active receivers for Artifact change");
+                }
+            }
+            Ok(None) => {}
             Err(error) => {
                 tracing::warn!(%error, %artifact_id, "Artifact materialization failed");
             }
@@ -187,149 +204,213 @@ pub(crate) async fn materialize_artifacts(
 
 async fn materialize_artifact(
     db: &PgPool,
-    adapter: &dyn CodexAdapter,
+    git: &GitRuntime,
     artifact_id: Uuid,
-) -> Result<(), String> {
+) -> Result<Option<LiveProjection>, String> {
     let row = sqlx::query(
         "WITH claimed AS (
              UPDATE artifacts
              SET state = 'materializing', updated_at = now()
-             WHERE id = $1 AND state = 'pending' AND retention_state = 'active'
-             RETURNING id, source_server, source_uri, mime_type, expected_size
+             WHERE id = $1 AND state = 'pending'
+             RETURNING id, organization_id, workspace_id, source_relative_path,
+                       artifact_schema, mime_type, expected_size
          )
-         SELECT claimed.source_server, claimed.source_uri, claimed.mime_type,
-                claimed.expected_size, provenance.producer_thread_id,
-                workspace.id AS workspace_id, workspace.root_path
-         FROM claimed
-         JOIN LATERAL (
-             SELECT producer_run_id, producer_thread_id
-             FROM artifact_provenance
-             WHERE artifact_id = claimed.id
-             ORDER BY created_at, producer_run_id, producer_thread_id
-             LIMIT 1
-         ) provenance ON true
-         JOIN runs run ON run.id = provenance.producer_run_id
-         JOIN workspaces workspace ON workspace.id = run.workspace_id
-         WHERE workspace.state IN ('ready', 'retained')",
+         SELECT claimed.organization_id, claimed.workspace_id,
+                claimed.source_relative_path, claimed.artifact_schema, claimed.mime_type,
+                claimed.expected_size
+         FROM claimed",
     )
     .bind(artifact_id)
     .fetch_optional(db)
     .await
     .map_err(|error| format!("Artifact claim failed: {error}"))?;
     let Some(row) = row else {
-        return Ok(());
+        return Ok(None);
     };
 
-    let expected_size: Option<i64> = row.get("expected_size");
-    if expected_size.is_some_and(|size| {
-        usize::try_from(size)
-            .map(|size| size > MAX_ARTIFACT_BYTES)
-            .unwrap_or(true)
-    }) {
-        mark_failed(db, artifact_id, "size_limit").await?;
-        return Err("Artifact exceeds the materialization size limit".to_string());
-    }
-
-    let source_server: String = row.get("source_server");
-    let source_uri: String = row.get("source_uri");
-    let declared_mime: String = row.get("mime_type");
-    let workspace = AuthorizedWorkspace {
-        id: row.get::<Uuid, _>("workspace_id").to_string(),
-        root: row.get::<String, _>("root_path").into(),
-    };
-    let thread_id: String = row.get("producer_thread_id");
-    let response = match adapter
-        .read_mcp_resource(&workspace, &thread_id, &source_server, &source_uri)
-        .await
+    let expected_size: i64 = row.get("expected_size");
+    if usize::try_from(expected_size)
+        .map(|size| size > MAX_ARTIFACT_BYTES)
+        .unwrap_or(true)
     {
-        Ok(response) => response,
+        return fail_materialization(db, artifact_id, "size_limit").await;
+    }
+
+    let workspace_id: Uuid = row.get("workspace_id");
+    let relative_path: String = row.get("source_relative_path");
+    let bytes = match git.download_file(workspace_id, &relative_path).await {
+        Ok(download) => download.bytes,
         Err(error) => {
-            mark_failed(db, artifact_id, "runtime_read_failed").await?;
-            return Err(format!("Runtime MCP Resource read failed: {error}"));
+            tracing::warn!(%artifact_id, %error, "Workspace Artifact read failed");
+            return fail_materialization(db, artifact_id, "workspace_read_failed").await;
         }
     };
-    let (bytes, response_mime) = match resource_bytes(&response, &source_uri) {
-        Ok(value) => value,
-        Err(error) => {
-            mark_failed(db, artifact_id, "invalid_resource").await?;
-            return Err(error);
-        }
-    };
-    if bytes.len() > MAX_ARTIFACT_BYTES {
-        mark_failed(db, artifact_id, "size_limit").await?;
-        return Err("Artifact exceeds the materialization size limit".to_string());
-    }
-    if let Some(response_mime) = response_mime.as_deref() {
-        if response_mime != declared_mime {
-            mark_failed(db, artifact_id, "mime_mismatch").await?;
-            return Err("MCP Resource content type changed during materialization".to_string());
-        }
-    }
-    if supported_json_mime(&declared_mime) && serde_json::from_slice::<Value>(&bytes).is_err() {
-        mark_failed(db, artifact_id, "invalid_json").await?;
-        return Err("MCP Resource did not contain valid JSON".to_string());
+    let declared_schema: String = row.get("artifact_schema");
+    if let Err(code) = validate_downloaded_artifact(&declared_schema, expected_size, &bytes) {
+        return fail_materialization(db, artifact_id, code).await;
     }
 
     let digest = hex::encode(Sha256::digest(&bytes));
-    let updated = sqlx::query(
-        "UPDATE artifacts
-         SET content = $1, byte_size = $2, content_sha256 = $3, state = 'ready',
-             failure_code = NULL, updated_at = now()
-         WHERE id = $4 AND state = 'materializing'",
+    finish_materialization(
+        db,
+        artifact_id,
+        MaterializationOutcome::Ready {
+            bytes: &bytes,
+            digest: &digest,
+        },
     )
-    .bind(&bytes)
-    .bind(i64::try_from(bytes.len()).map_err(|_| "Artifact size overflow".to_string())?)
-    .bind(digest)
-    .bind(artifact_id)
-    .execute(db)
     .await
-    .map_err(|error| format!("Artifact persistence failed: {error}"))?;
+}
+
+async fn fail_materialization(
+    db: &PgPool,
+    artifact_id: Uuid,
+    failure_code: &str,
+) -> Result<Option<LiveProjection>, String> {
+    finish_materialization(
+        db,
+        artifact_id,
+        MaterializationOutcome::Failed(failure_code),
+    )
+    .await
+}
+
+enum MaterializationOutcome<'a> {
+    Ready { bytes: &'a [u8], digest: &'a str },
+    Failed(&'a str),
+}
+
+async fn finish_materialization(
+    db: &PgPool,
+    artifact_id: Uuid,
+    outcome: MaterializationOutcome<'_>,
+) -> Result<Option<LiveProjection>, String> {
+    let mut transaction = db
+        .begin()
+        .await
+        .map_err(|error| format!("Artifact change transaction failed: {error}"))?;
+    let updated = match outcome {
+        MaterializationOutcome::Ready { bytes, digest } => sqlx::query(
+            "UPDATE artifacts
+             SET content = $1, byte_size = $2, content_sha256 = $3, state = 'ready',
+                 failure_code = NULL, updated_at = now()
+             WHERE id = $4 AND state = 'materializing'",
+        )
+        .bind(bytes)
+        .bind(i64::try_from(bytes.len()).map_err(|_| "Artifact size overflow".to_string())?)
+        .bind(digest)
+        .bind(artifact_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| format!("Artifact persistence failed: {error}"))?,
+        MaterializationOutcome::Failed(failure_code) => sqlx::query(
+            "UPDATE artifacts
+             SET state = 'failed', failure_code = $1, updated_at = now()
+             WHERE id = $2 AND state = 'materializing'",
+        )
+        .bind(failure_code)
+        .bind(artifact_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| format!("Artifact failure persistence failed: {error}"))?,
+    };
     if updated.rows_affected() != 1 {
-        return Err("Artifact state changed during materialization".to_string());
+        transaction
+            .commit()
+            .await
+            .map_err(|error| format!("Artifact unchanged state commit failed: {error}"))?;
+        return Ok(None);
     }
-    Ok(())
-}
-
-async fn mark_failed(db: &PgPool, artifact_id: Uuid, failure_code: &str) -> Result<(), String> {
-    sqlx::query(
-        "UPDATE artifacts
-         SET state = 'failed', failure_code = $1, updated_at = now()
-         WHERE id = $2 AND state = 'materializing'",
+    let row = sqlx::query(
+        "SELECT artifact.organization_id, artifact.artifact_schema,
+                artifact.display_name, artifact.mime_type, artifact.expected_size,
+                artifact.byte_size, artifact.state, artifact.failure_code,
+                provenance.producer_run_id, provenance.producer_thread_id,
+                provenance.producer_turn_id, provenance.producer_item_id
+         FROM artifacts artifact
+         JOIN LATERAL (
+             SELECT producer_run_id, producer_thread_id, producer_turn_id,
+                    producer_item_id
+             FROM artifact_provenance
+             WHERE artifact_id = artifact.id
+               AND organization_id = artifact.organization_id
+             ORDER BY created_at, producer_run_id, producer_thread_id,
+                      producer_turn_id, producer_item_id
+             LIMIT 1
+         ) provenance ON true
+         WHERE artifact.id = $1 AND artifact.state IN ('ready', 'failed')",
     )
-    .bind(failure_code)
     .bind(artifact_id)
-    .execute(db)
+    .fetch_optional(&mut *transaction)
     .await
-    .map_err(|error| format!("Artifact failure persistence failed: {error}"))?;
-    Ok(())
-}
-
-fn resource_bytes(
-    response: &Value,
-    expected_uri: &str,
-) -> Result<(Vec<u8>, Option<String>), String> {
-    let contents = response
-        .get("contents")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "mcpServer/resource/read omitted contents".to_string())?;
-    let content = contents
-        .iter()
-        .find(|content| content.get("uri").and_then(Value::as_str) == Some(expected_uri))
-        .ok_or_else(|| "MCP Resource response did not match the requested URI".to_string())?;
-    let mime_type = content
-        .get("mimeType")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    if let Some(text) = content.get("text").and_then(Value::as_str) {
-        return Ok((text.as_bytes().to_vec(), mime_type));
-    }
-    if let Some(blob) = content.get("blob").and_then(Value::as_str) {
-        return BASE64
-            .decode(blob)
-            .map(|bytes| (bytes, mime_type))
-            .map_err(|_| "MCP Resource blob was not valid base64".to_string());
-    }
-    Err("MCP Resource content was unsupported".to_string())
+    .map_err(|error| format!("Artifact change lookup failed: {error}"))?;
+    let Some(row) = row else {
+        return Err("Artifact terminal state lost its provenance".to_string());
+    };
+    let organization_id: Uuid = row.get("organization_id");
+    let run_id: Uuid = row.get("producer_run_id");
+    let thread_id: String = row.get("producer_thread_id");
+    let turn_id: String = row.get("producer_turn_id");
+    let item_id: String = row.get("producer_item_id");
+    let payload = serde_json::json!({
+        "schemaVersion": 1,
+        "itemType": "platformArtifactChanged",
+        "data": {
+            "sourceType": "platform/artifact/changed",
+            "artifact": {
+                "artifactId": artifact_id,
+                "schema": row.get::<String, _>("artifact_schema"),
+                "displayName": row.get::<String, _>("display_name"),
+                "mimeType": row.get::<String, _>("mime_type"),
+                "expectedSize": row.get::<i64, _>("expected_size"),
+                "byteSize": row.get::<Option<i64>, _>("byte_size"),
+                "state": row.get::<String, _>("state"),
+                "failureCode": row.get::<Option<String>, _>("failure_code"),
+                "url": format!("/api/artifacts/{artifact_id}/content"),
+            }
+        }
+    });
+    let persisted = sqlx::query(
+        "INSERT INTO run_events (
+             run_id, event_type, projection_version, thread_id, turn_id, item_id, payload
+         ) VALUES ($1, 'platform.artifact.changed', 1, $2, $3, $4, $5)
+         RETURNING id, sequence, created_at",
+    )
+    .bind(run_id)
+    .bind(&thread_id)
+    .bind(&turn_id)
+    .bind(&item_id)
+    .bind(&payload)
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(|error| format!("Artifact change event insert failed: {error}"))?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| format!("Artifact change commit failed: {error}"))?;
+    let event = RunEvent {
+        id: persisted.get("id"),
+        sequence: persisted.get("sequence"),
+        run_id,
+        event_type: "platform.artifact.changed".to_string(),
+        projection_version: 1,
+        thread_id: Some(thread_id),
+        turn_id: Some(turn_id),
+        item_id: Some(item_id),
+        payload,
+        created_at: persisted.get("created_at"),
+    };
+    let payload = serde_json::to_vec(&serde_json::json!({
+        "type": "run.event",
+        "version": 1,
+        "event": event,
+    }))
+    .map_err(|error| format!("Artifact change encoding failed: {error}"))?;
+    Ok(Some(LiveProjection {
+        organization_id,
+        payload,
+        pending_artifact_ids: Vec::new(),
+    }))
 }
 
 async fn authorized_artifact_row(
@@ -370,7 +451,7 @@ async fn authorized_artifact_row(
           AND projection.thread_id = provenance.producer_thread_id
          WHERE artifact.id = $1
            AND artifact.organization_id = $2
-           AND artifact.retention_state = 'active'",
+           AND artifact.state = 'ready'",
     )
     .bind(artifact_id)
     .bind(organization_id)
@@ -402,6 +483,20 @@ fn artifact_summary(row: &sqlx::postgres::PgRow) -> ArtifactSummary {
 
 fn supported_json_mime(value: &str) -> bool {
     matches!(value, "application/json" | "application/geo+json")
+}
+
+fn validate_downloaded_artifact(
+    declared_schema: &str,
+    expected_size: i64,
+    bytes: &[u8],
+) -> Result<(), &'static str> {
+    if bytes.len() > MAX_ARTIFACT_BYTES {
+        return Err("size_limit");
+    }
+    if i64::try_from(bytes.len()).ok() != Some(expected_size) {
+        return Err("size_mismatch");
+    }
+    validate_materialized_bundle(declared_schema, bytes)
 }
 
 fn not_found() -> ApiError {
@@ -436,46 +531,28 @@ fn database_error(_error: sqlx::Error) -> ApiError {
 
 #[cfg(test)]
 mod tests {
-    use super::{resource_bytes, supported_json_mime};
-    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-    use serde_json::json;
+    use super::{supported_json_mime, validate_downloaded_artifact};
+    use crate::middleware::auth::AuthenticatedUser;
+    use open_web_codex_git_runtime::{GitRuntime, GitRuntimeConfig};
+    use serde_json::{json, Value};
+    use sqlx::Row;
+    use std::path::Path;
+    use std::process::Command;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+    use uuid::Uuid;
 
-    #[test]
-    fn reads_text_and_blob_mcp_resource_contents() {
-        let (text, mime) = resource_bytes(
-            &json!({
-                "contents": [{
-                    "uri": "supply-chain://resources/one",
-                    "mimeType": "application/json",
-                    "text": "{\"schema_version\":\"network_snapshot.v1\"}"
-                }]
-            }),
-            "supply-chain://resources/one",
-        )
-        .expect("text Resource");
-        assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&text).unwrap()["schema_version"],
-            "network_snapshot.v1"
-        );
-        assert_eq!(mime.as_deref(), Some("application/json"));
-
-        let blob = BASE64.encode(br#"{"type":"FeatureCollection","features":[]}"#);
-        let (decoded, mime) = resource_bytes(
-            &json!({
-                "contents": [{
-                    "uri": "maps-data://geojson/one",
-                    "mimeType": "application/geo+json",
-                    "blob": blob
-                }]
-            }),
-            "maps-data://geojson/one",
-        )
-        .expect("blob Resource");
-        assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&decoded).unwrap()["type"],
-            "FeatureCollection"
-        );
-        assert_eq!(mime.as_deref(), Some("application/geo+json"));
+    fn authenticated_user(organization_id: Uuid, user_id: Uuid) -> AuthenticatedUser {
+        AuthenticatedUser {
+            session_id: Uuid::now_v7(),
+            user_id,
+            name: "Artifact test".to_string(),
+            username: format!("artifact-{user_id}"),
+            email: format!("{user_id}@example.invalid"),
+            role: "owner".to_string(),
+            organization_id,
+            organization_role: "owner".to_string(),
+        }
     }
 
     #[test]
@@ -483,5 +560,515 @@ mod tests {
         assert!(supported_json_mime("application/json"));
         assert!(supported_json_mime("application/geo+json"));
         assert!(!supported_json_mime("text/html"));
+    }
+
+    #[test]
+    fn rejects_downloaded_artifact_size_and_contract_drift() {
+        let valid = br#"{"schema_version":"network_planning_report_bundle.v1","kind":"network_planning_report"}"#;
+        assert_eq!(
+            validate_downloaded_artifact(
+                "network_planning_report_bundle.v1",
+                valid.len() as i64,
+                valid,
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            validate_downloaded_artifact(
+                "network_planning_report_bundle.v1",
+                valid.len() as i64 + 1,
+                valid,
+            ),
+            Err("size_mismatch")
+        );
+        let wrong_schema = br#"{"schema_version":"wrong.v1","kind":"network_planning_report"}"#;
+        assert_eq!(
+            validate_downloaded_artifact(
+                "network_planning_report_bundle.v1",
+                wrong_schema.len() as i64,
+                wrong_schema,
+            ),
+            Err("artifact_bundle_contract_mismatch")
+        );
+    }
+
+    fn git(cwd: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(["-c", "core.hooksPath=/dev/null"])
+            .args(args)
+            .current_dir(cwd)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .expect("run git fixture command");
+        assert!(
+            output.status.success(),
+            "git fixture failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn final_item_frame(
+        workspace_id: Uuid,
+        item_id: &str,
+        relative_path: &str,
+        byte_size: usize,
+    ) -> String {
+        format!(
+            "data: {}\n\n",
+            json!({
+                "method": "app-server-event",
+                "params": {
+                    "workspace_id": workspace_id,
+                    "message": {"method": "item/completed", "params": {
+                        "threadId": "root-thread",
+                        "turnId": "root-turn",
+                        "item": {
+                            "id": item_id,
+                            "type": "mcpToolCall",
+                            "server": "supply_chain",
+                            "tool": "publish_network_planning_report",
+                            "result": {"content": [], "structuredContent": {
+                                "summary": "Created report.",
+                                "artifact": {
+                                    "schema": "network_planning_report_bundle.v1",
+                                    "displayName": "Warehouse network planning report",
+                                    "mimeType": "application/json",
+                                    "workspaceRelativePath": relative_path,
+                                    "byteSize": byte_size
+                                }
+                            }}
+                        }
+                    }}
+                }
+            })
+        )
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL pointing at a disposable PostgreSQL database"]
+    async fn final_workspace_artifact_is_idempotent_materialized_and_recovered() {
+        let database_url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL");
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(4)
+            .connect(&database_url)
+            .await
+            .expect("connect disposable PostgreSQL database");
+        open_web_codex_platform_store::migrate::run(&pool)
+            .await
+            .expect("migrate database");
+
+        let files = TempDir::new().expect("Artifact fixture");
+        let source = files.path().join("source");
+        std::fs::create_dir(&source).unwrap();
+        git(&source, &["init", "-b", "main"]);
+        std::fs::write(source.join("README.md"), "fixture\n").unwrap();
+        git(&source, &["add", "README.md"]);
+        git(
+            &source,
+            &[
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "-m",
+                "fixture",
+            ],
+        );
+        let git_runtime = Arc::new(
+            GitRuntime::new(
+                GitRuntimeConfig::new(files.path().join("runner")).with_local_sources(),
+            )
+            .unwrap(),
+        );
+
+        let organization_id = Uuid::now_v7();
+        let user_id = Uuid::now_v7();
+        let profile_id = Uuid::now_v7();
+        let project_id = Uuid::now_v7();
+        let task_id = Uuid::now_v7();
+        let workspace_id = Uuid::now_v7();
+        let run_id = Uuid::now_v7();
+        let source = git_runtime
+            .validate_source(&source.to_string_lossy())
+            .unwrap();
+        let git_ref = git_runtime.validate_ref("main").unwrap();
+        let checkout = git_runtime
+            .provision(project_id, workspace_id, &source, &git_ref)
+            .await
+            .unwrap();
+        std::fs::create_dir(checkout.root.join("deliverables")).unwrap();
+        let valid = br#"{"kind":"network_planning_report","schema_version":"network_planning_report_bundle.v1"}"#;
+        std::fs::write(checkout.root.join("deliverables/report.json"), valid).unwrap();
+        std::fs::write(checkout.root.join("deliverables/restart.json"), valid).unwrap();
+        std::fs::write(checkout.root.join("deliverables/size.json"), valid).unwrap();
+        let wrong_kind = br#"{"kind":"network_comparison_map","schema_version":"network_planning_report_bundle.v1"}"#;
+        std::fs::write(checkout.root.join("deliverables/wrong.json"), wrong_kind).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            checkout.root.join("deliverables/report.json"),
+            checkout.root.join("deliverables/symlink.json"),
+        )
+        .unwrap();
+
+        sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, 'Artifact', $2)")
+            .bind(organization_id)
+            .bind(format!("artifact-{organization_id}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO users (id, username, name, email, password_hash, role)
+             VALUES ($1, $2, 'Artifact', $3, 'test-only', 'owner')",
+        )
+        .bind(user_id)
+        .bind(format!("artifact-{user_id}"))
+        .bind(format!("{user_id}@example.invalid"))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO profiles (id, organization_id, owner_user_id, runtime_key, name)
+             VALUES ($1, $2, $3, $4, 'Artifact Profile')",
+        )
+        .bind(profile_id)
+        .bind(organization_id)
+        .bind(user_id)
+        .bind(format!("artifact-{profile_id}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO projects (id, organization_id, created_by, name, git_url, default_branch)
+             VALUES ($1, $2, $3, 'Artifact Project', '/tmp/artifact.git', 'main')",
+        )
+        .bind(project_id)
+        .bind(organization_id)
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO workspaces (
+                id, organization_id, project_id, profile_id, created_by, kind, name,
+                root_path, source_ref, state
+             ) VALUES ($1, $2, $3, $4, $5, 'main', 'Artifact Workspace',
+                       $6, 'main', 'ready')",
+        )
+        .bind(workspace_id)
+        .bind(organization_id)
+        .bind(project_id)
+        .bind(profile_id)
+        .bind(user_id)
+        .bind(checkout.root.to_string_lossy().as_ref())
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO tasks (
+                id, organization_id, project_id, created_by, workspace_id, title, status
+             ) VALUES ($1, $2, $3, $4, $5, 'Artifact Task', 'running')",
+        )
+        .bind(task_id)
+        .bind(organization_id)
+        .bind(project_id)
+        .bind(user_id)
+        .bind(workspace_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO runs (
+                id, organization_id, task_id, requested_by, requested_profile_id,
+                workspace_id, status, codex_thread_id
+             ) VALUES ($1, $2, $3, $4, $5, $6, 'running', 'root-thread')",
+        )
+        .bind(run_id)
+        .bind(organization_id)
+        .bind(task_id)
+        .bind(user_id)
+        .bind(profile_id)
+        .bind(workspace_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let intermediate = final_item_frame(
+            workspace_id,
+            "intermediate-item",
+            "deliverables/report.json",
+            valid.len(),
+        )
+        .replace(
+            "publish_network_planning_report",
+            "compare_network_scenarios",
+        );
+        let intermediate = crate::event_projection::persist_frame(intermediate.as_bytes(), &pool)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(intermediate.pending_artifact_ids.is_empty());
+        let invalid = final_item_frame(
+            workspace_id,
+            "invalid-item",
+            "deliverables/report.json",
+            valid.len(),
+        )
+        .replace(
+            "Warehouse network planning report",
+            "Unexpected report title",
+        );
+        let invalid = crate::event_projection::persist_frame(invalid.as_bytes(), &pool)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(invalid.pending_artifact_ids.is_empty());
+        assert_eq!(
+            serde_json::from_slice::<Value>(&invalid.payload)
+                .unwrap()
+                .pointer("/event/payload/data/artifactDelivery/state")
+                .and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM artifacts")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+
+        let frame = final_item_frame(
+            workspace_id,
+            "final-item",
+            "deliverables/report.json",
+            valid.len(),
+        );
+        let first = crate::event_projection::persist_frame(frame.as_bytes(), &pool)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.pending_artifact_ids.len(), 1);
+        assert!(!String::from_utf8_lossy(&first.payload).contains("deliverables/report.json"));
+        let replay = crate::event_projection::persist_frame(frame.as_bytes(), &pool)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(replay.pending_artifact_ids, first.pending_artifact_ids);
+        let artifact_id = first.pending_artifact_ids[0];
+        let app_state = open_web_codex_platform_store::AppState::new(pool.clone());
+        let auth = authenticated_user(organization_id, user_id);
+        let pending_list = super::list_for_task(
+            axum::extract::State(app_state.clone()),
+            auth.clone(),
+            axum::extract::Path(task_id),
+        )
+        .await
+        .unwrap();
+        assert!(pending_list.0.is_empty());
+        assert!(
+            super::authorized_artifact_row(&pool, organization_id, artifact_id)
+                .await
+                .unwrap()
+                .is_none(),
+            "pending Artifact must not be browser-readable"
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM artifacts")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM artifact_provenance")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM artifact_task_grants")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+
+        let ready = super::materialize_artifact(&pool, git_runtime.as_ref(), artifact_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let ready_payload: Value = serde_json::from_slice(&ready.payload).unwrap();
+        assert_eq!(
+            ready_payload
+                .pointer("/event/event_type")
+                .and_then(Value::as_str),
+            Some("platform.artifact.changed")
+        );
+        assert_eq!(
+            ready_payload
+                .pointer("/event/payload/data/artifact/state")
+                .and_then(Value::as_str),
+            Some("ready")
+        );
+        assert!(!ready_payload
+            .to_string()
+            .contains("deliverables/report.json"));
+        let stored = sqlx::query("SELECT state, content FROM artifacts WHERE id = $1")
+            .bind(artifact_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(stored.get::<String, _>("state"), "ready");
+        assert_eq!(stored.get::<Vec<u8>, _>("content"), valid);
+        assert!(
+            super::authorized_artifact_row(&pool, organization_id, artifact_id)
+                .await
+                .unwrap()
+                .is_some(),
+            "ready Artifact must be browser-readable"
+        );
+        let ready_list = super::list_for_task(
+            axum::extract::State(app_state.clone()),
+            auth.clone(),
+            axum::extract::Path(task_id),
+        )
+        .await
+        .unwrap();
+        assert_eq!(ready_list.0.len(), 1);
+        assert_eq!(ready_list.0[0].id, artifact_id);
+        let ready_detail = super::get(
+            axum::extract::State(app_state.clone()),
+            auth,
+            axum::extract::Path(artifact_id),
+        )
+        .await
+        .unwrap();
+        assert_eq!(ready_detail.0.id, artifact_id);
+        let denied = super::get(
+            axum::extract::State(app_state),
+            authenticated_user(Uuid::now_v7(), Uuid::now_v7()),
+            axum::extract::Path(artifact_id),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(denied.0, axum::http::StatusCode::NOT_FOUND);
+
+        for (item_id, path, expected_code) in [
+            (
+                "missing-item",
+                "deliverables/missing.json",
+                "workspace_read_failed",
+            ),
+            (
+                "symlink-item",
+                "deliverables/symlink.json",
+                "workspace_read_failed",
+            ),
+            ("escape-item", "../escape.json", "workspace_read_failed"),
+        ] {
+            let projection = crate::event_projection::persist_frame(
+                final_item_frame(workspace_id, item_id, path, valid.len()).as_bytes(),
+                &pool,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            let failed_id = projection.pending_artifact_ids[0];
+            let failed = super::materialize_artifact(&pool, git_runtime.as_ref(), failed_id)
+                .await
+                .unwrap()
+                .unwrap();
+            let failed_payload: Value = serde_json::from_slice(&failed.payload).unwrap();
+            assert_eq!(
+                failed_payload
+                    .pointer("/event/payload/data/artifact/state")
+                    .and_then(Value::as_str),
+                Some("failed")
+            );
+            assert_eq!(
+                sqlx::query_scalar::<_, String>(
+                    "SELECT failure_code FROM artifacts WHERE id = $1",
+                )
+                .bind(failed_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+                expected_code
+            );
+        }
+
+        for (item_id, path, bytes, declared_size, expected_code) in [
+            (
+                "size-item",
+                "deliverables/size.json",
+                valid.as_slice(),
+                valid.len() + 1,
+                "size_mismatch",
+            ),
+            (
+                "contract-item",
+                "deliverables/wrong.json",
+                wrong_kind.as_slice(),
+                wrong_kind.len(),
+                "artifact_bundle_contract_mismatch",
+            ),
+        ] {
+            assert_eq!(std::fs::read(checkout.root.join(path)).unwrap(), bytes);
+            let projection = crate::event_projection::persist_frame(
+                final_item_frame(workspace_id, item_id, path, declared_size).as_bytes(),
+                &pool,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            let failed_id = projection.pending_artifact_ids[0];
+            super::materialize_artifact(&pool, git_runtime.as_ref(), failed_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                sqlx::query_scalar::<_, String>(
+                    "SELECT failure_code FROM artifacts WHERE id = $1",
+                )
+                .bind(failed_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+                expected_code
+            );
+        }
+
+        let restart = crate::event_projection::persist_frame(
+            final_item_frame(
+                workspace_id,
+                "restart-item",
+                "deliverables/restart.json",
+                valid.len(),
+            )
+            .as_bytes(),
+            &pool,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let restart_id = restart.pending_artifact_ids[0];
+        sqlx::query("UPDATE artifacts SET state = 'materializing' WHERE id = $1")
+            .bind(restart_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (events, mut receiver) = tokio::sync::broadcast::channel(4);
+        super::recover_and_materialize_pending(pool.clone(), git_runtime, events).await;
+        let recovered: Value =
+            serde_json::from_slice(&receiver.recv().await.unwrap().payload).unwrap();
+        assert_eq!(
+            recovered
+                .pointer("/event/payload/data/artifact/state")
+                .and_then(Value::as_str),
+            Some("ready")
+        );
     }
 }

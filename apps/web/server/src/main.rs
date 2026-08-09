@@ -2,6 +2,7 @@ mod builtin_network_copilot;
 #[cfg(test)]
 mod builtin_network_copilot_runtime_tests;
 mod event_projection;
+mod final_artifacts;
 mod middleware;
 mod routes;
 #[cfg(test)]
@@ -266,6 +267,7 @@ async fn main() -> anyhow::Result<()> {
     {
         let event_bus = event_bus.clone();
         let adapter = adapter.clone();
+        let git = git.clone();
         let approvals = approvals.clone();
         let projection_db = state.db.clone();
         tokio::spawn(async move {
@@ -336,7 +338,7 @@ async fn main() -> anyhow::Result<()> {
                             continue;
                         }
                     };
-                    persist_and_broadcast(&public_data, &projection_db, &event_bus, &adapter).await;
+                    persist_and_broadcast(&public_data, &projection_db, &event_bus, &git).await;
                     continue;
                 }
                 let captured = match approvals.capture_event_frame(&data).await {
@@ -356,7 +358,7 @@ async fn main() -> anyhow::Result<()> {
                     },
                     None => data,
                 };
-                persist_and_broadcast(&public_data, &projection_db, &event_bus, &adapter).await;
+                persist_and_broadcast(&public_data, &projection_db, &event_bus, &git).await;
             }
 
             let _ = sub.await;
@@ -366,7 +368,8 @@ async fn main() -> anyhow::Result<()> {
 
     tokio::spawn(routes::artifacts::recover_and_materialize_pending(
         state.db.clone(),
-        adapter.clone(),
+        git.clone(),
+        state.event_bus.clone(),
     ));
 
     let mut app = Router::new().nest(
@@ -405,15 +408,16 @@ async fn persist_and_broadcast(
     data: &[u8],
     projection_db: &sqlx::PgPool,
     event_bus: &tokio::sync::broadcast::Sender<open_web_codex_platform_store::LiveEvent>,
-    adapter: &Arc<dyn CodexAdapter>,
+    git: &Arc<GitRuntime>,
 ) {
     match event_projection::persist_frame(data, projection_db).await {
         Ok(Some(projected)) => {
             if !projected.pending_artifact_ids.is_empty() {
                 tokio::spawn(routes::artifacts::materialize_artifacts(
                     projection_db.clone(),
-                    adapter.clone(),
+                    git.clone(),
                     projected.pending_artifact_ids,
+                    event_bus.clone(),
                 ));
             }
             let live = open_web_codex_platform_store::LiveEvent {

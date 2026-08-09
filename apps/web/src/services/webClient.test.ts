@@ -831,6 +831,53 @@ describe("WebApp direct Server client", () => {
         },
       },
     });
+    socket?.onmessage?.({
+      data: JSON.stringify({
+        type: "run.event",
+        version: 1,
+        event: {
+          id: "artifact-event-live",
+          sequence: 3,
+          run_id: run.id,
+          event_type: "platform.artifact.changed",
+          projection_version: 1,
+          thread_id: "thread-1",
+          turn_id: "turn-1",
+          item_id: "item-final",
+          payload: {
+            data: {
+              sourceType: "platform/artifact/changed",
+              artifact: {
+                artifactId: "artifact-1",
+                schema: "network_planning_report_bundle.v1",
+                state: "ready",
+                url: "/api/artifacts/artifact-1/content",
+              },
+            },
+          },
+          created_at: "2026-07-22T00:00:05Z",
+        },
+      }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(events).toContainEqual({
+      workspace_id: project.id,
+      message: {
+        method: "platform/artifact/changed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-final",
+          sourceType: "platform/artifact/changed",
+          artifact: {
+            artifactId: "artifact-1",
+            schema: "network_planning_report_bundle.v1",
+            state: "ready",
+            url: "/api/artifacts/artifact-1/content",
+          },
+        },
+      },
+    });
     unsubscribe();
   });
 
