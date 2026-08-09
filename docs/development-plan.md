@@ -332,13 +332,14 @@ Indonesia 完整验收可以组合为：Root 确定国家和目标；Network chi
 
 #### Active surface 切换硬门
 
-Data/Network 新 Resource 工具进入 Role allowlist、真实调用或 E2E 之前，必须在同一 merge atom
-删除 generic `ResourceLink→Artifact` 注册、`inline_visualization_artifacts`、通用
-`open-web-artifact/inline-visualization.v1` envelope、Assistant
-`::codex-inline-vis{...}` 文本 parser、跨 child Resource lookup 和 Artifact 输入回流。否则每个
-中间 profile、mapping、matrix、scenario Resource 都会被 Platform 二次物化为 Artifact，形成
-第二数据面。final Artifact 子片尚未就绪时，final map/report 显式 unavailable；不得借旧链维持
-假闭环。
+Data/Network 新 Resource 工具进入 Role allowlist、真实调用或 E2E 之前，必须删除 generic
+`ResourceLink→Artifact` 注册、任意 renderer 注册、跨 child Resource 搜索和 Artifact 输入回流，
+否则每个中间 profile、mapping、matrix、scenario Resource 都会被 Platform 二次物化为 Artifact，
+形成第二数据面。对话内地图只保留一条窄展示合同：exact `map_utils/create_map_card` 返回 bounded
+`map.v3` renderer，Assistant 原样输出其独立行 `::codex-inline-vis{...}` embed；Platform 只保存
+renderer 与 producing Thread 的精确 Resource ref，并在浏览器授权读取时调用 official
+`mcpServer/resource/read`，不保存 Resource 字节、不登记 durable Artifact。final Artifact 子片尚未
+就绪时，导出/下载显式 unavailable；不得借地图卡片冒充文件交付。
 
 #### 数据准备
 
@@ -391,8 +392,9 @@ taskEvidence hashes、双重 ref、隐藏 Task 数据目录和 Artifact 数据�
 
 ### Slice 6：最小 Artifact 与安全投影
 
-1. Artifact 仅承担地图、最终报告和明确交付件的展示、下载与保留；结构化中间数据由
-   Workspace 普通文件或 MCP Resource 拥有。
+1. Artifact 仅承担用户明确要求导出、下载或保留的最终地图、报告和交付件；结构化中间数据由
+   Workspace 普通文件或 MCP Resource 拥有。只要求“展示/看看/可视化”时使用对话内地图卡片，
+   不生成网页、PNG、Workspace JSON 或 durable Artifact。
 2. 最终交付至少包含覆盖关系明细、城市对应仓/距离/时长/成本、SLA 覆盖率、总成本与分仓
    成本、模拟差异、p-median 结果与仓变动、地图和可下载报告。
 3. Artifact 状态只投影真实的生成中、已完成、部分完成或失败；模型文本不能冒充完成。
@@ -413,7 +415,8 @@ producer Item 唯一，Task grant 仍只负责授权。删除 `retention_state`�
 及其 URI dedupe；没有用户 delete/expiry owner 前 Artifact 默认持久。物化 worker 接收现有
 `GitRuntime`，不再通过 Codex `read_mcp_resource` 或 producer Run→Thread 恢复内容。
 
-退出：刷新后地图和报告仍可查看下载；中间矩阵不进入 Artifact 交换链；删除投影后可从
+退出：刷新后对话地图卡片可由 Runtime history、bounded renderer/ref 投影和 provider Resource
+恢复；明确导出的地图和报告仍可查看下载；中间矩阵不进入 Artifact 交换链；durable 交付可从
 Runtime history 和 Artifact 权威记录重建浏览器视图。
 
 ### Slice 7：双 E2E、恢复和全量清理
