@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
-from supply_chain_planner.mcp_contracts import ResourceRef
+from supply_chain_planner.mcp_contracts import MapResourceRef, ResourceRef
 from supply_chain_planner.mcp_resources import (
     McpResourceContractError,
     McpResourceRuntime,
@@ -64,6 +64,55 @@ def test_runtime_publishes_and_strictly_loads_model(tmp_path: Path) -> None:
     ref = ResourceRef.model_validate(result.structuredContent["resource_ref"])
     assert runtime.load_model(ref, "example.v1", ExampleResource).value == 7
     assert json.loads(runtime.read(ref.uri.removeprefix(URI_PREFIX)))["value"] == 7
+
+
+def test_runtime_publishes_geojson_for_map_card_without_workspace_file(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(
+        tmp_path,
+        ResourceStore(tmp_path / "resources", uri_prefix=URI_PREFIX),
+    )
+    geojson = {
+        "schemaVersion": "example_geojson.v1",
+        "type": "FeatureCollection",
+        "features": [],
+    }
+
+    result = runtime.publish_geojson(
+        "example_geojson.v1",
+        geojson,
+        "Prepared map data",
+    )
+
+    assert result.structuredContent is not None
+    assert set(result.structuredContent) == {"summary", "resource_ref", "data_ref"}
+    resource_ref = ResourceRef.model_validate(
+        result.structuredContent["resource_ref"]
+    )
+    data_ref = MapResourceRef.model_validate(result.structuredContent["data_ref"])
+    assert data_ref.server == resource_ref.server == SERVER_NAME
+    assert data_ref.uri == resource_ref.uri
+    assert data_ref.format == "geojson"
+    assert result.content[1].mimeType == "application/geo+json"
+    assert not any(tmp_path.glob("*.json"))
+
+
+def test_runtime_rejects_non_geojson_map_data(tmp_path: Path) -> None:
+    runtime = _runtime(
+        tmp_path,
+        ResourceStore(tmp_path / "resources", uri_prefix=URI_PREFIX),
+    )
+
+    with pytest.raises(
+        McpResourceContractError,
+        match="geojson_feature_collection_required",
+    ):
+        runtime.publish_geojson(
+            "example_geojson.v1",
+            {"schemaVersion": "example_geojson.v1", "features": []},
+            "Invalid map data",
+        )
 
 
 def test_runtime_rejects_forged_server_schema_and_payload(tmp_path: Path) -> None:

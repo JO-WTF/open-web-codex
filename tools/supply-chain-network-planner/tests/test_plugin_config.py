@@ -36,6 +36,7 @@ def test_network_server_exposes_only_network_tools() -> None:
         "evaluate_network_baseline",
         "plan_route_matrix",
         "plan_cost_matrix",
+        "prepare_network_distribution_map",
         "publish_network_planning_report",
         "register_navigation_route_matrix",
         "render_network_comparison_map",

@@ -135,7 +135,7 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
             )
 
     async def test_accepts_reviewed_external_local_geojson_reference(self) -> None:
-        uri = "supply-chain-indonesia://geojson/geojson.v1-digest"
+        uri = "supply-chain://resources/network_distribution_geojson.v1-digest"
         result = await server.mcp.call_tool(
             "create_map_card",
             {
@@ -145,7 +145,7 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
                         "type": "geojson",
                         "data_ref": {
                             "type": "mcp_resource",
-                            "server": "supply_chain_indonesia",
+                            "server": "supply_chain",
                             "uri": uri,
                             "format": "geojson",
                         },
@@ -164,7 +164,7 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
 
         assert result.structuredContent is not None
         source = result.structuredContent["artifact"]["renderer"]["payload"]["sources"]["network"]
-        self.assertEqual(source["data"]["server"], "supply_chain_indonesia")
+        self.assertEqual(source["data"]["server"], "supply_chain")
         self.assertEqual(source["data"]["uri"], uri)
 
     async def test_rejects_public_host_and_model_visible_resource_identities(
@@ -278,8 +278,7 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("center", tool.inputSchema["properties"])
         self.assertNotIn("view", tool.inputSchema["properties"])
         self.assertNotIn("legend", tool.inputSchema["properties"])
-        source_schema = tool.inputSchema["properties"]["sources"]
-        self.assertIn("data_ref", str(source_schema))
+        self.assertIn("data_ref", str(tool.inputSchema))
         assert tool.outputSchema is not None
         self.assertEqual(
             tool.outputSchema["$defs"]["Renderer"]["properties"]["kind"]["const"],

@@ -509,6 +509,7 @@ mod tests {
                 "validate_route_matrix",
                 "register_navigation_route_matrix",
                 "plan_cost_matrix",
+                "prepare_network_distribution_map",
                 "evaluate_network_baseline",
                 "evaluate_facility_scenario",
                 "solve_p_median",
@@ -577,6 +578,9 @@ mod tests {
         assert!(DATA_SKILL.contains("`city_id`、`city_name`、`demand_quantity`"));
         assert!(DATA_SKILL.contains("不要从行政区目录静默生成候选仓"));
         assert!(NETWORK_SKILL.contains("潜在接口调用量和费用"));
+        assert!(NETWORK_SKILL.contains("默认表示对话内地图卡片"));
+        assert!(NETWORK_SKILL.contains("`structuredContent.embed.code`"));
+        assert!(NETWORK_SKILL.contains("不调用路线矩阵、成本矩阵、baseline"));
         assert!(NETWORK_SKILL.contains("固定集合与可选集合必须完整、不重叠"));
         assert!(NETWORK_SKILL.contains("把这些 Tool 当作可组合能力"));
         assert!(NETWORK_SKILL.contains("create-new Workspace 相对输出路径"));

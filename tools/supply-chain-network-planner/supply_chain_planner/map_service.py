@@ -100,6 +100,16 @@ class NetworkMapFeatureCollection(DeliveryModel):
     features: list[NetworkMapFeature]
 
 
+class NetworkDistributionGeoJson(DeliveryModel):
+    """Point-only GeoJSON for interactive current-network map cards."""
+
+    schema_version: Literal["network_distribution_geojson.v1"] = (
+        "network_distribution_geojson.v1"
+    )
+    type: Literal["FeatureCollection"] = "FeatureCollection"
+    features: list[NetworkMapFeature]
+
+
 class NetworkMapLayer(DeliveryModel):
     layer_id: str
     feature_kind: str
@@ -144,6 +154,67 @@ class NetworkComparisonMapBundle(DeliveryModel):
     geojson: NetworkMapFeatureCollection
     layers: list[NetworkMapLayer]
     extensions: NetworkMapExtensions
+
+
+def build_network_distribution_geojson(
+    normalized: NormalizedInputBatch,
+    *,
+    include_candidates: bool,
+) -> NetworkDistributionGeoJson:
+    """Build demand and warehouse points without routing or optimization."""
+
+    features: list[NetworkMapFeature] = []
+    for city in sorted(normalized.demand_cities, key=lambda item: item.city_id):
+        features.append(
+            NetworkMapFeature(
+                id=_feature_id("demand", city.city_id),
+                geometry=PointGeometry(
+                    coordinates=_required_coordinates(
+                        "demand",
+                        city.city_id,
+                        city.longitude,
+                        city.latitude,
+                    )
+                ),
+                properties=DemandMapProperties(
+                    city_id=city.city_id,
+                    city_name=city.city_name,
+                    province_id=city.province_id,
+                    province_name=city.province_name,
+                    demand_quantity=city.demand_quantity,
+                ),
+            )
+        )
+    warehouses = [
+        warehouse
+        for warehouse in normalized.warehouses
+        if warehouse.is_existing or include_candidates
+    ]
+    for warehouse in sorted(warehouses, key=lambda item: item.warehouse_id):
+        features.append(
+            NetworkMapFeature(
+                id=_feature_id("warehouse", warehouse.warehouse_id),
+                geometry=PointGeometry(
+                    coordinates=_required_coordinates(
+                        "warehouse",
+                        warehouse.warehouse_id,
+                        warehouse.longitude,
+                        warehouse.latitude,
+                    )
+                ),
+                properties=WarehouseMapProperties(
+                    warehouse_id=warehouse.warehouse_id,
+                    warehouse_name=warehouse.warehouse_name,
+                    warehouse_type=warehouse.warehouse_type,
+                    is_existing=warehouse.is_existing,
+                    baseline_active=warehouse.is_existing,
+                    facility_active=warehouse.is_existing,
+                    opened_candidate=False,
+                    closed_existing=False,
+                ),
+            )
+        )
+    return NetworkDistributionGeoJson(features=features)
 
 
 def build_network_comparison_map_bundle(

@@ -10,7 +10,7 @@ from mcp.server.fastmcp import Context
 from mcp.types import CallToolResult, ResourceLink, TextContent
 from pydantic import BaseModel, ValidationError
 
-from .mcp_contracts import ResourceRef
+from .mcp_contracts import MapResourceRef, ResourceRef
 from .resource_store import ResourceStore, workspace_resource_root
 from .workspace_files import CreatedWorkspaceFile, create_workspace_file
 from .workspace_scope import trusted_workspace_root
@@ -151,6 +151,23 @@ class McpResourceRuntime:
         value: BaseModel | dict[str, Any],
         description: str,
     ) -> CallToolResult:
+        return self._publish_resource(
+            schema,
+            value,
+            description,
+            mime_type="application/json",
+            include_map_ref=False,
+        )
+
+    def _publish_resource(
+        self,
+        schema: str,
+        value: BaseModel | dict[str, Any],
+        description: str,
+        *,
+        mime_type: str,
+        include_map_ref: bool,
+    ) -> CallToolResult:
         payload_schema = (
             value.get("schemaVersion", value.get("schema_version"))
             if isinstance(value, dict)
@@ -167,6 +184,15 @@ class McpResourceRuntime:
             uri=published.uri,
             resource_schema=published.schema,
         )
+        structured_content: dict[str, Any] = {
+            "summary": description,
+            "resource_ref": ref.model_dump(mode="json"),
+        }
+        if include_map_ref:
+            structured_content["data_ref"] = MapResourceRef(
+                server=self.server_name,
+                uri=published.uri,
+            ).model_dump(mode="json")
         return CallToolResult(
             content=[
                 TextContent(type="text", text=description),
@@ -176,14 +202,35 @@ class McpResourceRuntime:
                     title=published.schema,
                     uri=published.uri,
                     description=description,
-                    mimeType="application/json",
+                    mimeType=mime_type,
                     size=published.size,
                 ),
             ],
-            structuredContent={
-                "summary": description,
-                "resource_ref": ref.model_dump(mode="json"),
-            },
+            structuredContent=structured_content,
+        )
+
+    def publish_geojson(
+        self,
+        schema: str,
+        value: BaseModel | dict[str, Any],
+        description: str,
+    ) -> CallToolResult:
+        """Publish bounded GeoJSON with both domain and map-card references."""
+        payload = (
+            value.model_dump(mode="json", by_alias=True)
+            if isinstance(value, BaseModel)
+            else value
+        )
+        if payload.get("type") != "FeatureCollection" or not isinstance(
+            payload.get("features"), list
+        ):
+            raise McpResourceContractError("geojson_feature_collection_required")
+        return self._publish_resource(
+            schema,
+            value,
+            description,
+            mime_type="application/geo+json",
+            include_map_ref=True,
         )
 
 

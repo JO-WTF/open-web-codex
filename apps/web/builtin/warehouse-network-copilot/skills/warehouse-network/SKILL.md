@@ -41,7 +41,12 @@ description: 当用户要求定义仓网数据需求，计算路线、成本、�
 
 ## 地图与交付
 
-- 用户明确要求交互查看时，可以调用 `create_map_card` 展示已有仓、候选仓、需求点和覆盖关系。只使用地图 Tool 实际返回的 ResourceRef；地图卡片不是计算输入，也不替代最终交付。
+- “展示地图”“看看分布”“地图可视化”默认表示对话内地图卡片，不表示文件交付。不得因此生成网页、PNG、Workspace JSON 或调用 final Tool。
+- 只展示需求城市和当前仓库分布时，调用 `prepare_network_distribution_map` 把精确标准化输入转换为 bounded GeoJSON Resource；该 Tool 不计算路线、成本、覆盖或优化。默认 `include_candidates=false`，除非用户明确要求展示候选仓。
+- 将 `prepare_network_distribution_map` 返回的完整 `data_ref` 原样放入 `create_map_card.sources`，用 Mapbox 图层区分需求城市、中心仓和 cross-docking，并按需求量设置点大小或颜色。需要图例时使用 `extensions.legend`。
+- `create_map_card` 成功后，把其 `structuredContent.embed.code` 原样作为独立段落放入回复，地图才会在 Web 对话中显示。不得只描述卡片已经创建，也不得把 embed 放进代码块、列表或引用。
+- 行政区目录用于校验名称和坐标，不等于行政边界 GeoJSON。只有存在经过验证的边界 GeoJSON Resource 时才能叠加自定义边界；否则使用平台底图并明确说明，不从目录行伪造多边形。
+- 地图卡片不是计算输入。用户要求查看当前分布时，不调用路线矩阵、成本矩阵、baseline、comparison 或 p-median。
 - 用户明确要求可下载交付时，使用仓网 final Tool 生成自包含的对比地图 JSON 和规划报告 JSON。传入精确的标准化、基线、选址结果和 comparison ResourceRef，以及 create-new Workspace 相对输出路径。
 - 中间 Resource 和导航文件不得注册为 Artifact；Artifact 只用于显式最终地图与报告。
 

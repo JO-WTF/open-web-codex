@@ -50,6 +50,7 @@ from .map_service import (
     NetworkComparisonMapBundle,
     NetworkMapService,
     build_network_comparison_map_bundle,
+    build_network_distribution_geojson,
 )
 from .mapping_service import CaseMappingService
 from .matrix import build_cost_matrix as _build_composable_cost_matrix
@@ -3211,6 +3212,54 @@ def _load_ready_network(resource_ref: ResourceRef) -> PreparedNetworkResource:
     if prepared.state != "ready":
         raise McpResourceContractError("normalized_input_not_ready")
     return prepared
+
+
+@mcp.tool(structured_output=True)
+def prepare_network_distribution_map(
+    normalized_input_ref: ResourceRef,
+    ctx: Context,
+    include_candidates: bool = False,
+) -> CallToolResult:
+    """Publish demand and warehouse points for an interactive map card."""
+    _runtime().require_workspace(ctx)
+    prepared = _load_ready_network(normalized_input_ref)
+    normalized = NormalizedInputBatch(
+        demand_cities=prepared.demand_cities,
+        warehouses=prepared.warehouses,
+        current_assignments=prepared.current_assignments,
+        route_quotes=prepared.route_quotes,
+        issues=prepared.issues,
+    )
+    geojson = build_network_distribution_geojson(
+        normalized,
+        include_candidates=include_candidates,
+    )
+    demand_count = len(prepared.demand_cities)
+    existing_count = sum(warehouse.is_existing for warehouse in prepared.warehouses)
+    candidate_count = (
+        sum(not warehouse.is_existing for warehouse in prepared.warehouses)
+        if include_candidates
+        else 0
+    )
+    summary = (
+        f"Prepared interactive map data with {demand_count} demand cities, "
+        f"{existing_count} existing warehouses, and {candidate_count} candidates."
+    )
+    result = _runtime().publish_geojson(geojson.schema_version, geojson, summary)
+    structured = result.structuredContent
+    if structured is None:
+        raise McpResourceContractError("map_data_result_missing")
+    structured.update(
+        {
+            "feature_count": len(geojson.features),
+            "layer_counts": {
+                "demand": demand_count,
+                "existing_warehouses": existing_count,
+                "candidate_warehouses": candidate_count,
+            },
+        }
+    )
+    return result
 
 
 @mcp.tool(structured_output=True)

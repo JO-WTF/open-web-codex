@@ -15,12 +15,14 @@ pass a provider key in chat; the MCP server owns configuration.
    - `batch_reverse_geocode` for coordinates.
    - `get_route` for a route.
    - `distance_matrix` for travel distances or times.
-2. Data Tools return `structuredContent.data_ref` and a matching MCP `resource_link`.
+2. Maps data Tools return `structuredContent.data_ref` and a matching MCP `resource_link`.
+   A reviewed local domain Tool may also return a GeoJSON `data_ref` for map-card authoring.
 3. For a map, copy the complete `data_ref` unchanged to
    `create_map_card.sources.<source-id>.data_ref`. Do not read or reproduce large Resource
    GeoJSON merely to build the card.
-4. The Resource server is exactly `map_utils`, never the model-visible Tool namespace
-   `mcp__map_utils`.
+4. Keep the Resource server exactly as returned by its producing Tool. Maps-provider data uses
+   `map_utils`; reviewed domain GeoJSON may use its own raw MCP server ID. Never substitute the
+   model-visible `mcp__...` Tool namespace.
 5. A successful `create_map_card` call only creates the Artifact; it does not display the map.
    To display it, copy `structuredContent.embed.code` verbatim into the Assistant response as a
    standalone paragraph, with a blank line before and after it. The paragraph may appear anywhere
@@ -72,7 +74,9 @@ Do not:
 - use source URLs, tiles, credentials, or non-GeoJSON source types;
 - invent or rewrite the returned `server` or `uri`.
 
-Even a single point should keep the Tool-returned `data_ref`.
+Even a single point should keep the Tool-returned `data_ref`. Cross-provider input is allowed only
+for a reviewed local MCP GeoJSON Resource whose complete `data_ref` was returned by its Tool in
+the same Run and Thread.
 
 ### Layers
 

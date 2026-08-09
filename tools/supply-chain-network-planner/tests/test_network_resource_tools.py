@@ -16,11 +16,11 @@ from supply_chain_planner.matrix_models import (
     DemandUnitCostRule,
     RouteMatrix,
 )
+from supply_chain_planner.mcp_contracts import MapResourceRef, ResourceRef
 from supply_chain_planner.mcp_resources import (
     McpResourceContractError,
     McpResourceRuntime,
 )
-from supply_chain_planner.mcp_contracts import ResourceRef
 from supply_chain_planner.models import PreparedNetworkResource
 from supply_chain_planner.resource_store import ResourceStore
 
@@ -114,6 +114,63 @@ def test_matrix_tools_expose_composable_resource_schemas() -> None:
     cost = tools["plan_cost_matrix"].inputSchema
     assert "warehouse_scope" in cost["required"]
     assert "calculation_policy" not in cost["required"]
+
+    distribution = tools["prepare_network_distribution_map"].inputSchema
+    assert "ctx" not in distribution["properties"]
+    assert distribution["required"] == ["normalized_input_ref"]
+
+
+def test_distribution_map_publishes_geojson_for_map_card_only(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    workspace, store = _runtime(tmp_path, monkeypatch)
+    ctx = _context(workspace)
+    prepared_ref = _prepared_ref(store)
+
+    result = server.prepare_network_distribution_map(prepared_ref, ctx)
+
+    assert result.structuredContent is not None
+    assert set(result.structuredContent) == {
+        "summary",
+        "resource_ref",
+        "data_ref",
+        "feature_count",
+        "layer_counts",
+    }
+    data_ref = MapResourceRef.model_validate(result.structuredContent["data_ref"])
+    assert data_ref.server == "supply_chain"
+    assert data_ref.format == "geojson"
+    resource_ref = ResourceRef.model_validate(
+        result.structuredContent["resource_ref"]
+    )
+    payload = store.load(resource_ref)
+    assert payload["type"] == "FeatureCollection"
+    kinds = [feature["properties"]["kind"] for feature in payload["features"]]
+    fixture = network_case()
+    expected_demands = len(fixture.demand)
+    expected_existing = sum(warehouse.is_existing for warehouse in fixture.warehouses)
+    assert kinds.count("demand") == expected_demands
+    assert kinds.count("warehouse") == expected_existing
+    assert result.structuredContent["layer_counts"] == {
+        "demand": expected_demands,
+        "existing_warehouses": expected_existing,
+        "candidate_warehouses": 0,
+    }
+    assert not list(workspace.rglob("*.json"))
+
+    with_candidates = server.prepare_network_distribution_map(
+        prepared_ref,
+        ctx,
+        include_candidates=True,
+    )
+    assert with_candidates.structuredContent is not None
+    expected_candidates = sum(
+        not warehouse.is_existing for warehouse in fixture.warehouses
+    )
+    assert with_candidates.structuredContent["layer_counts"][
+        "candidate_warehouses"
+    ] == expected_candidates
 
 
 def test_route_and_cost_tools_use_exact_pair_reuse(tmp_path: Path, monkeypatch) -> None:
