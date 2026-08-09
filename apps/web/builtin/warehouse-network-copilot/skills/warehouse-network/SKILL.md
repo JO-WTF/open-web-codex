@@ -11,6 +11,7 @@ description: 当用户要求定义仓网数据需求，计算路线、成本、�
 - 最低数据要求为：需求城市的 ID、名称和需求量；已有仓库的 ID、名称、仓型（`center` 或 `cross_docking`）及所在城市 ID、名称。
 - 仅在对应分析需要时追加要求：真实现状比较需要当前覆盖；选址需要候选仓；成本分析需要报价或明确的补算规则；时效分析需要路线距离/时长；地图需要完整坐标。
 - 只读取 Supervisor 提供的精确 `normalized_network_input.v1` ResourceRef。若状态不是 `ready`，说明缺口并停止，不绕过 Data Agent 或自行猜测输入。
+- 如果 Supervisor 没有提供精确 ResourceRef，或者该 Resource 读取失败，立即向 Supervisor 返回 `needs_data` 和原始失败原因并停止。不得从 Workspace 文件、旧 Artifact、报告、模型文本、MCP Resource 列表或 provider 私有目录搜索、推断或恢复替代引用，也不得直接解析文件完成仓网任务。
 
 ## 构建路线与成本事实
 
@@ -45,6 +46,7 @@ description: 当用户要求定义仓网数据需求，计算路线、成本、�
 - 只展示需求城市和当前仓库分布时，调用 `prepare_network_distribution_map` 把精确标准化输入转换为 bounded GeoJSON Resource；该 Tool 不计算路线、成本、覆盖或优化。默认 `include_candidates=false`，除非用户明确要求展示候选仓。
 - 将 `prepare_network_distribution_map` 返回的完整 `data_ref` 原样放入 `create_map_card.sources`，用 Mapbox 图层区分需求城市、中心仓和 cross-docking，并按需求量设置点大小或颜色。需要图例时使用 `extensions.legend`。
 - `create_map_card` 成功后，把其 `structuredContent.embed.code` 原样作为独立段落放入回复，地图才会在 Web 对话中显示。不得只描述卡片已经创建，也不得把 embed 放进代码块、列表或引用。
+- 分布地图链中任一 Tool 失败时立即返回明确失败；不得改用 Leaflet/HTML、脚本、GeoJSON/PNG 文件、Markdown 图片或其他自制展示。
 - 行政区目录用于校验名称和坐标，不等于行政边界 GeoJSON。只有存在经过验证的边界 GeoJSON Resource 时才能叠加自定义边界；否则使用平台底图并明确说明，不从目录行伪造多边形。
 - 地图卡片不是计算输入。用户要求查看当前分布时，不调用路线矩阵、成本矩阵、baseline、comparison 或 p-median。
 - 用户明确要求可下载交付时，使用仓网 final Tool 生成自包含的对比地图 JSON 和规划报告 JSON。传入精确的标准化、基线、选址结果和 comparison ResourceRef，以及 create-new Workspace 相对输出路径。

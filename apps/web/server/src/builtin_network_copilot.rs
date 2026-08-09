@@ -579,10 +579,15 @@ mod tests {
         assert!(SUPERVISOR_SKILL.contains("不得用 shell、Workspace 命令、内联代码或自身推理代替 child Tool"));
         assert!(SUPERVISOR_SKILL.contains("必须原生创建或继续 `network_agent`"));
         assert!(SUPERVISOR_SKILL.contains("不得让用户复制代码到浏览器"));
+        assert!(SUPERVISOR_SKILL.contains("普通 Workspace 文件路径不是 MCP ResourceRef"));
+        assert!(SUPERVISOR_SKILL.contains("必须先创建 `data_agent` 重新检查并发布当前 Resource"));
+        assert!(SUPERVISOR_SKILL.contains("不得要求 Network Agent 从 Workspace 文件、旧 Artifact、报告或 Resource 列表寻找引用"));
         assert!(SUPERVISOR_SKILL.contains("不得降级为自制 HTML、文件、图片、文本地图或伪造成功"));
         assert!(DATA_SKILL.contains("`city_id`、`city_name`、`demand_quantity`"));
         assert!(DATA_SKILL.contains("不要从行政区目录静默生成候选仓"));
         assert!(NETWORK_SKILL.contains("潜在接口调用量和费用"));
+        assert!(NETWORK_SKILL.contains("立即向 Supervisor 返回 `needs_data`"));
+        assert!(NETWORK_SKILL.contains("不得从 Workspace 文件、旧 Artifact、报告、模型文本"));
         assert!(NETWORK_SKILL.contains("默认表示对话内地图卡片"));
         assert!(NETWORK_SKILL.contains("`structuredContent.embed.code`"));
         assert!(NETWORK_SKILL.contains("不调用路线矩阵、成本矩阵、baseline"));
