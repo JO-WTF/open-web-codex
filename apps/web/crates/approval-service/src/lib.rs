@@ -1813,7 +1813,10 @@ mod tests {
             content: Some(BTreeMap::new()),
             version: 0,
         };
-        assert_eq!(validate_mcp_form_response(&fields, &request).unwrap(), json!({}));
+        assert_eq!(
+            validate_mcp_form_response(&fields, &request).unwrap(),
+            json!({})
+        );
     }
 
     #[test]
