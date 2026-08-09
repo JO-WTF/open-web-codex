@@ -8,6 +8,9 @@ use bytes::Bytes;
 use codex_api::ApiError;
 use codex_api::AuthError;
 use codex_api::AuthProvider;
+use codex_api::ChatCompletionsApiRequest;
+use codex_api::ChatCompletionsClient;
+use codex_api::ChatStreamOptions;
 use codex_api::Compression;
 use codex_api::Provider;
 use codex_api::ResponsesApiRequest;
@@ -597,5 +600,60 @@ async fn azure_store_sends_ids_and_headers() -> Result<()> {
         .and_then(|id| id.as_str());
     assert_eq!(input_id, Some("msg_1"));
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn chat_client_sends_only_provider_auth_and_protocol_headers() -> Result<()> {
+    let state = RecordingState::default();
+    let transport = RecordingTransport::new(state.clone());
+    let mut chat_provider = provider("chat");
+    chat_provider
+        .headers
+        .insert("x-provider-header", HeaderValue::from_static("configured"));
+    let client = ChatCompletionsClient::new(
+        transport,
+        chat_provider,
+        Arc::new(StaticAuth::new("token", "account")),
+    );
+    let request = ChatCompletionsApiRequest {
+        model: "chat-model".to_string(),
+        messages: Vec::new(),
+        tools: Vec::new(),
+        tool_choice: None,
+        parallel_tool_calls: false,
+        stream: true,
+        stream_options: ChatStreamOptions {
+            include_usage: true,
+        },
+        reasoning_effort: None,
+        service_tier: None,
+    };
+
+    let _stream = client.stream_request(request).await?;
+
+    let requests = state.take_stream_requests();
+    assert_path_ends_with(&requests, "/chat/completions");
+    let headers = &requests[0].headers;
+    assert_eq!(
+        headers
+            .get("x-provider-header")
+            .and_then(|value| value.to_str().ok()),
+        Some("configured")
+    );
+    assert_eq!(
+        headers
+            .get(http::header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok()),
+        Some("Bearer token")
+    );
+    for header in [
+        "session-id",
+        "thread-id",
+        "x-client-request-id",
+        "x-openai-subagent",
+    ] {
+        assert!(!headers.contains_key(header));
+    }
     Ok(())
 }

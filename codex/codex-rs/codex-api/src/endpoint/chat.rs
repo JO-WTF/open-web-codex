@@ -5,16 +5,11 @@ use crate::common::ResponseStream;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::Provider;
-use crate::requests::headers::build_session_headers;
-use crate::requests::headers::insert_header;
-use crate::requests::headers::subagent_header;
 use crate::sse::spawn_chat_response_stream;
 use crate::telemetry::SseTelemetry;
 use codex_client::EncodedJsonBody;
 use codex_client::HttpTransport;
 use codex_client::RequestTelemetry;
-use codex_protocol::protocol::SessionSource;
-use http::HeaderMap;
 use http::HeaderValue;
 use http::Method;
 use std::collections::HashMap;
@@ -24,14 +19,6 @@ use tracing::instrument;
 pub struct ChatCompletionsClient<T: HttpTransport> {
     session: EndpointSession<T>,
     sse_telemetry: Option<Arc<dyn SseTelemetry>>,
-}
-
-#[derive(Default)]
-pub struct ChatCompletionsOptions {
-    pub session_id: Option<String>,
-    pub thread_id: Option<String>,
-    pub session_source: Option<SessionSource>,
-    pub extra_headers: HeaderMap,
 }
 
 impl<T: HttpTransport> ChatCompletionsClient<T> {
@@ -62,14 +49,7 @@ impl<T: HttpTransport> ChatCompletionsClient<T> {
     pub async fn stream_request(
         &self,
         request: ChatCompletionsApiRequest,
-        options: ChatCompletionsOptions,
     ) -> Result<ResponseStream, ApiError> {
-        let ChatCompletionsOptions {
-            session_id,
-            thread_id,
-            session_source,
-            extra_headers,
-        } = options;
         let tool_targets = request
             .tools
             .iter()
@@ -81,20 +61,12 @@ impl<T: HttpTransport> ChatCompletionsClient<T> {
             ))
         })?;
 
-        let mut headers = extra_headers;
-        if let Some(thread_id) = &thread_id {
-            insert_header(&mut headers, "x-client-request-id", thread_id);
-        }
-        headers.extend(build_session_headers(session_id, thread_id));
-        if let Some(subagent) = subagent_header(&session_source) {
-            insert_header(&mut headers, "x-openai-subagent", &subagent);
-        }
         let response = self
             .session
             .stream_encoded_json_with(
                 Method::POST,
                 "chat/completions",
-                headers,
+                Default::default(),
                 Some(body),
                 |request| {
                     request.headers.insert(
