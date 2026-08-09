@@ -11,6 +11,7 @@ use codex_api::is_azure_responses_provider;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_models_manager::cache::ModelsCache;
 use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
@@ -305,10 +306,16 @@ impl ModelProvider for ConfiguredModelProvider {
             RemoteCompactionSupport::Unsupported
         };
 
-        ProviderCapabilities {
+        let mut capabilities = ProviderCapabilities {
             remote_compaction,
             ..ProviderCapabilities::default()
+        };
+        if self.info.wire_api == WireApi::Chat {
+            // Hosted web search is a Responses-only tool. Chat keeps function and namespace
+            // calling, but must not advertise a tool the Chat wire cannot encode.
+            capabilities.web_search = false;
         }
+        capabilities
     }
 
     fn approval_review_preferred_model(&self) -> &'static str {
@@ -590,6 +597,17 @@ mod tests {
         );
 
         assert_eq!(provider.capabilities(), ProviderCapabilities::default());
+    }
+
+    #[test]
+    fn configured_chat_provider_disables_hosted_web_search() {
+        let mut provider_info = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+        provider_info.wire_api = WireApi::Chat;
+
+        let provider = create_model_provider(provider_info, /*auth_manager*/ None);
+
+        assert!(!provider.capabilities().web_search);
+        assert!(ProviderCapabilities::default().web_search);
     }
 
     #[test]

@@ -11,6 +11,7 @@ use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID;
 use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_6_SOL_MODEL_ID;
 use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::WebSearchMode;
@@ -296,6 +297,15 @@ fn use_bedrock_provider(turn: &mut TurnContext) {
     let provider_info = ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None);
     update_config(turn, |config| {
         config.model_provider_id = AMAZON_BEDROCK_PROVIDER_ID.to_string();
+        config.model_provider = provider_info.clone();
+    });
+    turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
+}
+
+fn use_chat_provider(turn: &mut TurnContext) {
+    let mut provider_info = turn.config.model_provider.clone();
+    provider_info.wire_api = WireApi::Chat;
+    update_config(turn, |config| {
         config.model_provider = provider_info.clone();
     });
     turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
@@ -1088,6 +1098,32 @@ async fn sleep_tool_stays_direct_and_outside_code_mode() {
         }
         assert!(!exec.description.contains("clock__sleep"));
     }
+}
+
+#[tokio::test]
+async fn chat_provider_omits_hosted_web_search_and_keeps_mcp_functions() {
+    let plan = probe_with(
+        |turn| {
+            assert_eq!(turn.config.web_search_mode.value(), WebSearchMode::Cached);
+            use_chat_provider(turn);
+        },
+        ToolPlanInputs {
+            tool_runtimes: vec![mcp_runtime(
+                "chat",
+                "mcp__chat",
+                "echo",
+                ToolExposure::Direct,
+            )],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+
+    plan.assert_visible_lacks(&["web_search"]);
+    assert_eq!(
+        plan.namespace_function_names("mcp__chat"),
+        &["echo".to_string()]
+    );
 }
 
 #[tokio::test]
