@@ -1,17 +1,486 @@
-"""Deterministic Case comparison map publication."""
+"""Deterministic network comparison map bundles and legacy publication."""
 
 from __future__ import annotations
 
 import hashlib
+from decimal import Decimal
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 from uuid import UUID
 
-from .case_repository import CaseRepository
-from .case_types import CaseOperationResult, FacetName
-from .resource_store import PublishedResource, ResourceStore
+from pydantic import Field
+
+from .delivery_models import CanonicalDeliveryModel, validate_delivery_inputs
+from .network_models import NormalizedInputBatch
+from .optimization_models import (
+    AssignmentComparison,
+    BaselineResult,
+    PMedianSolution,
+    ServiceComparison,
+)
+
+if TYPE_CHECKING:
+    from .case_repository import CaseRepository
+    from .case_types import CaseOperationResult
+    from .resource_store import PublishedResource, ResourceStore
 
 CandidateSource = Literal["scenario", "facility_location"]
+
+
+class PointGeometry(CanonicalDeliveryModel):
+    type: Literal["Point"] = "Point"
+    coordinates: tuple[float, float]
+
+
+class LineStringGeometry(CanonicalDeliveryModel):
+    type: Literal["LineString"] = "LineString"
+    coordinates: tuple[tuple[float, float], tuple[float, float]]
+
+
+class WarehouseMapProperties(CanonicalDeliveryModel):
+    kind: Literal["warehouse"] = "warehouse"
+    warehouse_id: str
+    warehouse_name: str
+    warehouse_type: Literal["center", "cross_docking"]
+    is_existing: bool
+    baseline_active: bool
+    facility_active: bool
+    opened_candidate: bool
+    closed_existing: bool
+
+
+class DemandMapProperties(CanonicalDeliveryModel):
+    kind: Literal["demand"] = "demand"
+    city_id: str
+    city_name: str
+    province_id: str | None
+    province_name: str | None
+    demand_quantity: Decimal
+
+
+class AssignmentMapProperties(CanonicalDeliveryModel):
+    kind: Literal["last_mile_assignment"] = "last_mile_assignment"
+    scenario: Literal["baseline", "facility"]
+    result_label: str
+    warehouse_id: str
+    demand_city_id: str
+    demand_quantity: Decimal
+    distance_km: float | None
+    duration_hours: float | None
+    unit_cost: float | None
+
+
+class LinehaulMapProperties(CanonicalDeliveryModel):
+    kind: Literal["linehaul_connection"] = "linehaul_connection"
+    scenario: Literal["baseline", "facility"]
+    upstream_center_id: str
+    crossdock_warehouse_id: str
+    assigned_demand: Decimal
+
+
+MapProperties = (
+    WarehouseMapProperties
+    | DemandMapProperties
+    | AssignmentMapProperties
+    | LinehaulMapProperties
+)
+
+
+class NetworkMapFeature(CanonicalDeliveryModel):
+    type: Literal["Feature"] = "Feature"
+    id: str
+    geometry: PointGeometry | LineStringGeometry
+    properties: MapProperties
+
+
+class NetworkMapFeatureCollection(CanonicalDeliveryModel):
+    type: Literal["FeatureCollection"] = "FeatureCollection"
+    features: list[NetworkMapFeature]
+
+
+class NetworkMapLayer(CanonicalDeliveryModel):
+    layer_id: str
+    feature_kind: str
+    geometry_type: Literal["Point", "LineString"]
+    scenario: Literal["baseline", "facility"] | None
+    label: str
+
+
+class NetworkMapLegendItem(CanonicalDeliveryModel):
+    code: str
+    label: str
+    color: str = Field(pattern=r"^#[0-9A-F]{6}$")
+
+
+class NetworkMapExtensions(CanonicalDeliveryModel):
+    legend: list[NetworkMapLegendItem]
+    hover_fields: dict[str, list[str]]
+
+
+class NetworkMapSummary(CanonicalDeliveryModel):
+    country_code: str = Field(pattern=r"^[A-Z]{2}$")
+    baseline_label: str
+    facility_status: str
+    feature_count: int = Field(ge=0)
+    baseline_active_warehouse_ids: list[str]
+    facility_active_warehouse_ids: list[str]
+    opened_candidate_ids: list[str]
+    closed_existing_ids: list[str]
+    before_cost: float | None
+    after_cost: float | None
+    cost_delta: float | None
+    service: list[ServiceComparison]
+
+
+class NetworkComparisonMapBundle(CanonicalDeliveryModel):
+    schema_version: Literal["network_comparison_map_bundle.v1"] = (
+        "network_comparison_map_bundle.v1"
+    )
+    kind: Literal["network_comparison_map"] = "network_comparison_map"
+    title: str = "Warehouse network: baseline vs selected facilities"
+    summary: NetworkMapSummary
+    geojson: NetworkMapFeatureCollection
+    layers: list[NetworkMapLayer]
+    extensions: NetworkMapExtensions
+
+
+def build_network_comparison_map_bundle(
+    normalized: NormalizedInputBatch,
+    baseline: BaselineResult,
+    facility: PMedianSolution,
+    comparison: AssignmentComparison,
+    *,
+    country_code: str,
+) -> NetworkComparisonMapBundle:
+    """Build a self-contained comparison map from exact prepared results."""
+
+    validated = validate_delivery_inputs(normalized, baseline, facility, comparison)
+    opened_ids = set(facility.opened_candidate_ids)
+    closed_ids = set(facility.closed_existing_ids)
+    features: list[NetworkMapFeature] = []
+    for warehouse_id in sorted(validated.warehouse_by_id):
+        warehouse = validated.warehouse_by_id[warehouse_id]
+        coordinates = _required_coordinates(
+            "warehouse",
+            warehouse_id,
+            warehouse.longitude,
+            warehouse.latitude,
+        )
+        features.append(
+            NetworkMapFeature(
+                id=_feature_id("warehouse", warehouse_id),
+                geometry=PointGeometry(coordinates=coordinates),
+                properties=WarehouseMapProperties(
+                    warehouse_id=warehouse_id,
+                    warehouse_name=warehouse.warehouse_name,
+                    warehouse_type=warehouse.warehouse_type,
+                    is_existing=warehouse.is_existing,
+                    baseline_active=warehouse_id in validated.baseline_active_ids,
+                    facility_active=warehouse_id in validated.facility_active_ids,
+                    opened_candidate=warehouse_id in opened_ids,
+                    closed_existing=warehouse_id in closed_ids,
+                ),
+            )
+        )
+    for city_id in sorted(validated.demand_by_id):
+        city = validated.demand_by_id[city_id]
+        coordinates = _required_coordinates(
+            "demand",
+            city_id,
+            city.longitude,
+            city.latitude,
+        )
+        features.append(
+            NetworkMapFeature(
+                id=_feature_id("demand", city_id),
+                geometry=PointGeometry(coordinates=coordinates),
+                properties=DemandMapProperties(
+                    city_id=city_id,
+                    city_name=city.city_name,
+                    province_id=city.province_id,
+                    province_name=city.province_name,
+                    demand_quantity=city.demand_quantity,
+                ),
+            )
+        )
+    features.extend(
+        _assignment_features(
+            "baseline",
+            baseline.label,
+            validated.baseline_rows_by_city,
+            validated.warehouse_by_id,
+            validated.demand_by_id,
+        )
+    )
+    features.extend(
+        _assignment_features(
+            "facility",
+            facility.status,
+            validated.facility_rows_by_city,
+            validated.warehouse_by_id,
+            validated.demand_by_id,
+        )
+    )
+    features.extend(
+        _linehaul_features(
+            "baseline",
+            validated.baseline_active_ids,
+            validated.baseline_rows_by_city,
+            validated.warehouse_by_id,
+        )
+    )
+    features.extend(
+        _linehaul_features(
+            "facility",
+            validated.facility_active_ids,
+            validated.facility_rows_by_city,
+            validated.warehouse_by_id,
+        )
+    )
+    return NetworkComparisonMapBundle(
+        summary=NetworkMapSummary(
+            country_code=country_code,
+            baseline_label=baseline.label,
+            facility_status=facility.status,
+            feature_count=len(features),
+            baseline_active_warehouse_ids=sorted(validated.baseline_active_ids),
+            facility_active_warehouse_ids=sorted(validated.facility_active_ids),
+            opened_candidate_ids=sorted(opened_ids),
+            closed_existing_ids=sorted(closed_ids),
+            before_cost=comparison.before_cost,
+            after_cost=comparison.after_cost,
+            cost_delta=comparison.cost_delta,
+            service=sorted(comparison.service, key=lambda item: item.target_hours),
+        ),
+        geojson=NetworkMapFeatureCollection(features=features),
+        layers=_map_layers(),
+        extensions=_map_extensions(),
+    )
+
+
+def _assignment_features(
+    scenario: Literal["baseline", "facility"],
+    result_label: str,
+    rows_by_city,
+    warehouse_by_id,
+    demand_by_id,
+) -> list[NetworkMapFeature]:
+    features: list[NetworkMapFeature] = []
+    for city_id in sorted(rows_by_city):
+        row = rows_by_city[city_id]
+        if row.warehouse_id is None:
+            continue
+        warehouse = warehouse_by_id[row.warehouse_id]
+        city = demand_by_id[city_id]
+        origin = _required_coordinates(
+            "warehouse",
+            warehouse.warehouse_id,
+            warehouse.longitude,
+            warehouse.latitude,
+        )
+        destination = _required_coordinates(
+            "demand",
+            city_id,
+            city.longitude,
+            city.latitude,
+        )
+        features.append(
+            NetworkMapFeature(
+                id=_feature_id(
+                    scenario,
+                    "last_mile",
+                    warehouse.warehouse_id,
+                    city_id,
+                ),
+                geometry=LineStringGeometry(
+                    coordinates=(origin, destination),
+                ),
+                properties=AssignmentMapProperties(
+                    scenario=scenario,
+                    result_label=result_label,
+                    warehouse_id=warehouse.warehouse_id,
+                    demand_city_id=city_id,
+                    demand_quantity=row.demand_quantity,
+                    distance_km=row.distance_km,
+                    duration_hours=row.duration_hours,
+                    unit_cost=row.cost,
+                ),
+            )
+        )
+    return features
+
+
+def _linehaul_features(
+    scenario: Literal["baseline", "facility"],
+    active_ids,
+    rows_by_city,
+    warehouse_by_id,
+) -> list[NetworkMapFeature]:
+    assigned_demand = {
+        warehouse_id: sum(
+            (
+                row.demand_quantity
+                for row in rows_by_city.values()
+                if row.warehouse_id == warehouse_id
+            ),
+            start=Decimal(0),
+        )
+        for warehouse_id in active_ids
+    }
+    features: list[NetworkMapFeature] = []
+    for warehouse_id in sorted(active_ids):
+        warehouse = warehouse_by_id[warehouse_id]
+        if warehouse.warehouse_type != "cross_docking":
+            continue
+        upstream = warehouse_by_id[warehouse.upstream_center_id]
+        origin = _required_coordinates(
+            "warehouse",
+            upstream.warehouse_id,
+            upstream.longitude,
+            upstream.latitude,
+        )
+        destination = _required_coordinates(
+            "warehouse",
+            warehouse_id,
+            warehouse.longitude,
+            warehouse.latitude,
+        )
+        features.append(
+            NetworkMapFeature(
+                id=_feature_id(
+                    scenario,
+                    "linehaul",
+                    upstream.warehouse_id,
+                    warehouse_id,
+                ),
+                geometry=LineStringGeometry(
+                    coordinates=(origin, destination),
+                ),
+                properties=LinehaulMapProperties(
+                    scenario=scenario,
+                    upstream_center_id=upstream.warehouse_id,
+                    crossdock_warehouse_id=warehouse_id,
+                    assigned_demand=assigned_demand[warehouse_id],
+                ),
+            )
+        )
+    return features
+
+
+def _required_coordinates(
+    entity: str,
+    entity_id: str,
+    longitude: float | None,
+    latitude: float | None,
+) -> tuple[float, float]:
+    if longitude is None or latitude is None:
+        raise ValueError(f"delivery_map_coordinates_required:{entity}:{entity_id}")
+    return longitude, latitude
+
+
+def _feature_id(*parts: str) -> str:
+    return "|".join(f"{len(part)}:{part}" for part in parts)
+
+
+def _map_layers() -> list[NetworkMapLayer]:
+    return [
+        NetworkMapLayer(
+            layer_id="warehouses",
+            feature_kind="warehouse",
+            geometry_type="Point",
+            scenario=None,
+            label="Warehouses",
+        ),
+        NetworkMapLayer(
+            layer_id="demand",
+            feature_kind="demand",
+            geometry_type="Point",
+            scenario=None,
+            label="Demand cities",
+        ),
+        NetworkMapLayer(
+            layer_id="baseline-last-mile",
+            feature_kind="last_mile_assignment",
+            geometry_type="LineString",
+            scenario="baseline",
+            label="Baseline last-mile assignments",
+        ),
+        NetworkMapLayer(
+            layer_id="facility-last-mile",
+            feature_kind="last_mile_assignment",
+            geometry_type="LineString",
+            scenario="facility",
+            label="Selected-facility last-mile assignments",
+        ),
+        NetworkMapLayer(
+            layer_id="baseline-linehaul",
+            feature_kind="linehaul_connection",
+            geometry_type="LineString",
+            scenario="baseline",
+            label="Baseline linehaul connections",
+        ),
+        NetworkMapLayer(
+            layer_id="facility-linehaul",
+            feature_kind="linehaul_connection",
+            geometry_type="LineString",
+            scenario="facility",
+            label="Selected-facility linehaul connections",
+        ),
+    ]
+
+
+def _map_extensions() -> NetworkMapExtensions:
+    return NetworkMapExtensions(
+        legend=[
+            NetworkMapLegendItem(
+                code="existing",
+                label="Existing warehouse",
+                color="#2563EB",
+            ),
+            NetworkMapLegendItem(
+                code="opened_candidate",
+                label="Opened candidate",
+                color="#16A34A",
+            ),
+            NetworkMapLegendItem(
+                code="demand",
+                label="Demand city",
+                color="#DC2626",
+            ),
+            NetworkMapLegendItem(
+                code="baseline",
+                label="Baseline connection",
+                color="#64748B",
+            ),
+            NetworkMapLegendItem(
+                code="facility",
+                label="Selected-facility connection",
+                color="#F59E0B",
+            ),
+        ],
+        hover_fields={
+            "warehouse": [
+                "warehouse_name",
+                "warehouse_type",
+                "baseline_active",
+                "facility_active",
+            ],
+            "demand": ["city_name", "province_name", "demand_quantity"],
+            "last_mile_assignment": [
+                "scenario",
+                "warehouse_id",
+                "demand_city_id",
+                "duration_hours",
+                "unit_cost",
+            ],
+            "linehaul_connection": [
+                "scenario",
+                "upstream_center_id",
+                "crossdock_warehouse_id",
+                "assigned_demand",
+            ],
+        },
+    )
 
 
 class NetworkMapService:
@@ -25,6 +494,8 @@ class NetworkMapService:
         workspace_root: Path,
         candidate_source: CandidateSource,
     ) -> tuple[PublishedResource, dict[str, object], CaseOperationResult]:
+        from .case_types import FacetName
+
         normalized, normalized_id = self.repository.load_normalized_input(
             case_id, workspace_root
         )

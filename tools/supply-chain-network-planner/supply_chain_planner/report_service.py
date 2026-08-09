@@ -1,17 +1,158 @@
-"""Explicit publication of bounded user-facing Case deliverables."""
+"""Pure network report bundles and legacy Case publication."""
 
 from __future__ import annotations
 
 import hashlib
+from decimal import Decimal
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 from uuid import UUID
 
-from .case_repository import CaseRepository
-from .case_types import CaseOperationResult, FacetName
-from .resource_store import PublishedResource, ResourceStore
+from pydantic import Field
+
+from .delivery_models import (
+    CanonicalDeliveryModel,
+    ordered_assignment,
+    ordered_comparison,
+    ordered_cost,
+    ordered_metrics,
+    validate_delivery_inputs,
+)
+from .network_models import DemandCityRecord, NormalizedInputBatch, WarehouseRecord
+from .optimization_models import (
+    AssignmentComparison,
+    AssignmentResult,
+    BaselineResult,
+    CostSummary,
+    PMedianSolution,
+    ServiceMetric,
+)
+
+if TYPE_CHECKING:
+    from .case_repository import CaseRepository
+    from .case_types import CaseOperationResult
+    from .resource_store import PublishedResource, ResourceStore
 
 ReportSource = Literal["baseline", "scenario", "facility_location"]
+
+
+class NetworkReportScope(CanonicalDeliveryModel):
+    demand_city_count: int = Field(ge=0)
+    warehouse_count: int = Field(ge=0)
+    existing_warehouse_count: int = Field(ge=0)
+    candidate_warehouse_count: int = Field(ge=0)
+    total_demand: Decimal = Field(ge=0)
+
+
+class NetworkReportEntities(CanonicalDeliveryModel):
+    demand_cities: list[DemandCityRecord]
+    warehouses: list[WarehouseRecord]
+
+
+class NetworkBaselineReport(CanonicalDeliveryModel):
+    label: Literal["actual_current", "optimized_existing_footprint"]
+    active_warehouse_ids: list[str]
+    assignment: AssignmentResult
+    service: list[ServiceMetric]
+    cost: CostSummary | None
+    notice_code: str | None
+
+
+class NetworkFacilityReport(CanonicalDeliveryModel):
+    status: Literal["optimal", "feasible"]
+    active_warehouse_ids: list[str]
+    opened_candidate_ids: list[str]
+    closed_existing_ids: list[str]
+    assignment: AssignmentResult
+    objective_value: float | None
+    cost: CostSummary | None
+    best_bound: float | None
+    service: list[ServiceMetric]
+    optimality: Literal["proven", "feasible_only", "not_available"]
+    message: str | None
+
+
+class NetworkPlanningReportBundle(CanonicalDeliveryModel):
+    schema_version: Literal["network_planning_report_bundle.v1"] = (
+        "network_planning_report_bundle.v1"
+    )
+    kind: Literal["network_planning_report"] = "network_planning_report"
+    title: str = "Warehouse network planning report"
+    country_code: str = Field(pattern=r"^[A-Z]{2}$")
+    scope: NetworkReportScope
+    entities: NetworkReportEntities
+    baseline: NetworkBaselineReport
+    facility: NetworkFacilityReport
+    comparison: AssignmentComparison
+    notices: list[str]
+
+
+def build_network_planning_report_bundle(
+    normalized: NormalizedInputBatch,
+    baseline: BaselineResult,
+    facility: PMedianSolution,
+    comparison: AssignmentComparison,
+    *,
+    country_code: str,
+) -> NetworkPlanningReportBundle:
+    """Build a complete JSON report without persistence or solver work."""
+
+    validated = validate_delivery_inputs(normalized, baseline, facility, comparison)
+    if facility.assignment is None:  # narrowed by validation; retained for typing.
+        raise ValueError("delivery_facility_assignment_required")
+    notices = sorted(
+        {
+            notice
+            for notice in (baseline.notice_code, facility.message)
+            if notice is not None
+        }
+    )
+    existing_count = sum(
+        1 for warehouse in validated.warehouse_by_id.values() if warehouse.is_existing
+    )
+    return NetworkPlanningReportBundle(
+        country_code=country_code,
+        scope=NetworkReportScope(
+            demand_city_count=len(validated.demand_by_id),
+            warehouse_count=len(validated.warehouse_by_id),
+            existing_warehouse_count=existing_count,
+            candidate_warehouse_count=len(validated.warehouse_by_id) - existing_count,
+            total_demand=baseline.assignment.total_demand,
+        ),
+        entities=NetworkReportEntities(
+            demand_cities=[
+                validated.demand_by_id[city_id]
+                for city_id in sorted(validated.demand_by_id)
+            ],
+            warehouses=[
+                validated.warehouse_by_id[warehouse_id]
+                for warehouse_id in sorted(validated.warehouse_by_id)
+            ],
+        ),
+        baseline=NetworkBaselineReport(
+            label=baseline.label,
+            active_warehouse_ids=sorted(validated.baseline_active_ids),
+            assignment=ordered_assignment(baseline.assignment),
+            service=ordered_metrics(baseline.service),
+            cost=ordered_cost(baseline.cost),
+            notice_code=baseline.notice_code,
+        ),
+        facility=NetworkFacilityReport(
+            status=facility.status,
+            active_warehouse_ids=sorted(validated.facility_active_ids),
+            opened_candidate_ids=sorted(facility.opened_candidate_ids),
+            closed_existing_ids=sorted(facility.closed_existing_ids),
+            assignment=ordered_assignment(facility.assignment),
+            objective_value=facility.objective_value,
+            cost=ordered_cost(facility.cost),
+            best_bound=facility.best_bound,
+            service=ordered_metrics(facility.service),
+            optimality=facility.optimality,
+            message=facility.message,
+        ),
+        comparison=ordered_comparison(comparison),
+        notices=notices,
+    )
 
 
 class NetworkReportService:
@@ -25,6 +166,8 @@ class NetworkReportService:
         workspace_root: Path,
         source: ReportSource,
     ) -> tuple[PublishedResource, dict[str, object], CaseOperationResult]:
+        from .case_types import FacetName
+
         case = self.repository.get_case(case_id, workspace_root)
         if source == "baseline":
             value, source_component_id = self.repository.load_baseline(
