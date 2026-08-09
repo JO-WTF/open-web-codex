@@ -1,15 +1,16 @@
 use super::shared::v2_enum_from_core;
+use crate::JsonSchema;
+use crate::TS;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelAvailabilityNux as CoreModelAvailabilityNux;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::protocol::ModelRerouteReason as CoreModelRerouteReason;
 use codex_protocol::protocol::ModelVerification as CoreModelVerification;
-use schemars::JsonSchema;
+use codex_protocol::protocol::MultiAgentVersion as CoreMultiAgentVersion;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
-use ts_rs::TS;
 
 v2_enum_from_core!(
     pub enum ModelRerouteReason from CoreModelRerouteReason {
@@ -20,6 +21,15 @@ v2_enum_from_core!(
 v2_enum_from_core!(
     pub enum ModelVerification from CoreModelVerification {
         TrustedAccessForCyber
+    }
+);
+
+v2_enum_from_core!(
+    /// Multi-agent runtime supported by a model.
+    pub enum MultiAgentVersion from CoreMultiAgentVersion {
+        Disabled,
+        V1,
+        V2
     }
 );
 
@@ -37,58 +47,6 @@ pub struct ModelProviderCapabilitiesReadResponse {
     pub web_search: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ModelProviderListParams {}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub enum ModelProviderKind {
-    BuiltIn,
-    Local,
-    Custom,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ModelProviderSummary {
-    pub id: String,
-    pub name: String,
-    pub base_url: Option<String>,
-    pub env_key: Option<String>,
-    pub wire_api: String,
-    pub kind: ModelProviderKind,
-    pub is_current: bool,
-    pub model_count: usize,
-    pub can_edit: bool,
-    pub can_delete: bool,
-    pub can_fetch_models: bool,
-    pub models: Vec<ModelProviderModelSummary>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ModelProviderModelSummary {
-    pub model_id: String,
-    pub model_name: Option<String>,
-    pub max_token_len: Option<i64>,
-    pub max_output_tokens: Option<i64>,
-    pub show_in_picker: bool,
-    pub context_window: Option<i64>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ModelProviderListResponse {
-    pub data: Vec<ModelProviderSummary>,
-    pub current_provider_id: String,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -102,9 +60,6 @@ pub struct ModelListParams {
     /// When true, include models that are hidden from the default picker list.
     #[ts(optional = nullable)]
     pub include_hidden: Option<bool>,
-    /// When true, bypass provider-cached models and fetch from the provider endpoint.
-    #[ts(optional = nullable)]
-    pub force_refresh: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -142,6 +97,8 @@ pub struct Model {
     pub availability_nux: Option<ModelAvailabilityNux>,
     pub display_name: String,
     pub description: String,
+    #[serde(default)]
+    pub model_specialty: Option<String>,
     pub hidden: bool,
     pub supported_reasoning_efforts: Vec<ReasoningEffortOption>,
     pub default_reasoning_effort: ReasoningEffort,
@@ -149,6 +106,8 @@ pub struct Model {
     pub input_modalities: Vec<InputModality>,
     #[serde(default)]
     pub supports_personality: bool,
+    /// Multi-agent runtime declared by this model, when available.
+    pub multi_agent_version: Option<MultiAgentVersion>,
     /// Deprecated: use `serviceTiers` instead.
     #[serde(default)]
     pub additional_speed_tiers: Vec<String>,

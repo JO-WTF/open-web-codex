@@ -7,29 +7,17 @@ use std::sync::Arc;
 use codex_api::ApiError;
 use codex_api::Provider;
 use codex_api::SharedAuthProvider;
-use codex_http_client::HttpClientFactory;
-use codex_http_client::OutboundProxyPolicy;
+use codex_api::is_azure_responses_provider;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
-use codex_model_provider_info::ProviderModelInfo;
-use codex_models_manager::manager::ModelsEndpointClient;
+use codex_models_manager::cache::ModelsCache;
 use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::config_types::Verbosity;
 use codex_protocol::error::CodexErr;
-use codex_protocol::openai_models::ApplyPatchToolType;
-use codex_protocol::openai_models::ConfigShellToolType;
-use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
-use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::openai_models::TruncationPolicyConfig;
-use codex_protocol::openai_models::WebSearchToolType;
-use codex_protocol::openai_models::default_input_modalities;
 
 use crate::amazon_bedrock::AmazonBedrockModelProvider;
 use crate::auth::ProviderAuthScope;
@@ -39,6 +27,17 @@ use crate::auth::resolve_provider_auth;
 use crate::auth::resolve_provider_auth_for_scope;
 use crate::models_endpoint::OpenAiModelsEndpoint;
 
+/// Remote context-compaction protocols supported by a model provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteCompactionSupport {
+    /// The provider does not support remote compaction.
+    Unsupported,
+    /// The provider supports only the dedicated `/v1/responses/compact` endpoint.
+    V1,
+    /// The provider supports both the dedicated endpoint and `compaction_trigger` items.
+    V2,
+}
+
 /// Optional provider-backed features that Codex may expose at runtime.
 ///
 /// These capabilities are a provider-owned upper bound. Callers can disable
@@ -47,18 +46,20 @@ use crate::models_endpoint::OpenAiModelsEndpoint;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderCapabilities {
     pub namespace_tools: bool,
-    pub tool_search: bool,
     pub image_generation: bool,
     pub web_search: bool,
+    pub external_web_access: bool,
+    pub remote_compaction: RemoteCompactionSupport,
 }
 
 impl Default for ProviderCapabilities {
     fn default() -> Self {
         Self {
             namespace_tools: true,
-            tool_search: true,
             image_generation: true,
             web_search: true,
+            external_web_access: true,
+            remote_compaction: RemoteCompactionSupport::V2,
         }
     }
 }
@@ -100,6 +101,8 @@ pub type ProviderAccountResult = std::result::Result<ProviderAccountState, Provi
 /// Default model used for automatic approval review when a provider does not
 /// require a backend-specific model ID.
 pub const DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL: &str = "codex-auto-review";
+
+const API_KEY_APPROVAL_REVIEW_PREFERRED_MODEL: &str = "gpt-5.6-luna";
 
 /// Default model used for memory extraction when a provider does not require a
 /// backend-specific model ID.
@@ -229,27 +232,27 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
             .unwrap_or_default();
         Arc::new(StaticModelsManager::new(self.auth_manager(), model_catalog))
     }
+
+    /// Creates a model manager that can use a caller-provided cache for remote catalogs.
+    ///
+    /// Providers with remote catalogs should override this method. The default preserves the
+    /// authoritative catalog returned by [`ModelProvider::models_manager_without_cache`] and does
+    /// not consult `cache`. Implementations should likewise ignore the cache when
+    /// `config_model_catalog` supplies an authoritative static catalog.
+    fn models_manager_with_cache(
+        &self,
+        config_model_catalog: Option<ModelsResponse>,
+        cache: Arc<dyn ModelsCache>,
+    ) -> SharedModelsManager {
+        drop(cache);
+        self.models_manager_without_cache(config_model_catalog)
+    }
 }
 
 pub type ModelProviderFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Shared runtime model provider handle.
 pub type SharedModelProvider = Arc<dyn ModelProvider>;
-
-pub async fn fetch_provider_models(
-    provider_info: ModelProviderInfo,
-    auth_manager: Option<Arc<AuthManager>>,
-) -> codex_protocol::error::Result<Vec<ModelInfo>> {
-    let endpoint = OpenAiModelsEndpoint::new(provider_info, auth_manager);
-    let client_version = codex_models_manager::client_version_to_whole();
-    let (models, _etag) = endpoint
-        .list_models(
-            &client_version,
-            HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy),
-        )
-        .await?;
-    Ok(models)
-}
 
 fn provider_uses_first_party_auth_path(provider: &ModelProviderInfo) -> bool {
     provider.requires_openai_auth
@@ -294,11 +297,30 @@ impl ModelProvider for ConfiguredModelProvider {
     }
 
     fn capabilities(&self) -> ProviderCapabilities {
+        let remote_compaction = if self.info.is_openai()
+            || is_azure_responses_provider(&self.info.name, self.info.base_url.as_deref())
+        {
+            RemoteCompactionSupport::V2
+        } else {
+            RemoteCompactionSupport::Unsupported
+        };
+
         ProviderCapabilities {
-            namespace_tools: true,
-            tool_search: !self.info.is_chat_wire_api(),
-            image_generation: self.info.supports_image_generation,
-            web_search: self.info.supports_web_search,
+            remote_compaction,
+            ..ProviderCapabilities::default()
+        }
+    }
+
+    fn approval_review_preferred_model(&self) -> &'static str {
+        if self
+            .auth_manager
+            .as_ref()
+            .and_then(|auth_manager| auth_manager.auth_cached())
+            .is_some_and(|auth| auth.is_api_key_auth())
+        {
+            API_KEY_APPROVAL_REVIEW_PREFERRED_MODEL
+        } else {
+            DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL
         }
     }
 
@@ -375,17 +397,6 @@ impl ModelProvider for ConfiguredModelProvider {
                 self.auth_manager.clone(),
                 model_catalog,
             )),
-            None if !self.info.models.is_empty() => Arc::new(StaticModelsManager::new(
-                self.auth_manager.clone(),
-                ModelsResponse {
-                    models: self
-                        .info
-                        .models
-                        .iter()
-                        .map(provider_model_to_model_info)
-                        .collect(),
-                },
-            )),
             None => {
                 let endpoint = Arc::new(OpenAiModelsEndpoint::new(
                     self.info.clone(),
@@ -421,61 +432,29 @@ impl ModelProvider for ConfiguredModelProvider {
             }
         }
     }
-}
 
-fn provider_model_to_model_info(model: &ProviderModelInfo) -> ModelInfo {
-    let max_token_len = model.max_token_len.unwrap_or(128_000);
-    let configured_context_window = model.context_window.or(model.max_token_len);
-    ModelInfo {
-        slug: model.model_id.clone(),
-        display_name: model
-            .model_name
-            .clone()
-            .unwrap_or_else(|| model.model_id.clone()),
-        description: None,
-        default_reasoning_level: model
-            .default_reasoning_level
-            .clone()
-            .or(Some(ReasoningEffort::None)),
-        supported_reasoning_levels: model.supported_reasoning_levels.clone(),
-        shell_type: ConfigShellToolType::ShellCommand,
-        visibility: if model.show_in_picker {
-            ModelVisibility::List
-        } else {
-            ModelVisibility::Hide
-        },
-        supported_in_api: true,
-        priority: 0,
-        additional_speed_tiers: Vec::new(),
-        service_tiers: Vec::new(),
-        default_service_tier: None,
-        availability_nux: None,
-        upgrade: None,
-        base_instructions: "base instructions".to_string(),
-        model_messages: None,
-        include_skills_usage_instructions: false,
-        supports_reasoning_summary_parameter: false,
-        default_reasoning_summary: ReasoningSummary::Auto,
-        support_verbosity: false,
-        default_verbosity: None::<Verbosity>,
-        apply_patch_tool_type: None::<ApplyPatchToolType>,
-        web_search_tool_type: WebSearchToolType::Text,
-        truncation_policy: TruncationPolicyConfig::tokens(max_token_len),
-        supports_parallel_tool_calls: false,
-        supports_image_detail_original: false,
-        context_window: Some(configured_context_window.unwrap_or(max_token_len)),
-        max_context_window: configured_context_window,
-        auto_compact_token_limit: None,
-        comp_hash: None,
-        effective_context_window_percent: 95,
-        experimental_supported_tools: Vec::new(),
-        input_modalities: default_input_modalities(),
-        used_fallback_model_metadata: false,
-        supports_search_tool: false,
-        use_responses_lite: false,
-        auto_review_model_override: None,
-        tool_mode: None,
-        multi_agent_version: None,
+    fn models_manager_with_cache(
+        &self,
+        config_model_catalog: Option<ModelsResponse>,
+        cache: Arc<dyn ModelsCache>,
+    ) -> SharedModelsManager {
+        match config_model_catalog {
+            Some(model_catalog) => Arc::new(StaticModelsManager::new(
+                self.auth_manager.clone(),
+                model_catalog,
+            )),
+            None => {
+                let endpoint = Arc::new(OpenAiModelsEndpoint::new(
+                    self.info.clone(),
+                    self.auth_manager.clone(),
+                ));
+                Arc::new(OpenAiModelsManager::new_with_cache(
+                    cache,
+                    endpoint,
+                    self.auth_manager.clone(),
+                ))
+            }
+        }
     }
 }
 
@@ -539,7 +518,6 @@ mod tests {
             auth: None,
             aws: None,
             wire_api: WireApi::Responses,
-            models: Vec::new(),
             query_params: None,
             http_headers: None,
             env_http_headers: None,
@@ -549,8 +527,7 @@ mod tests {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: false,
-            supports_web_search: false,
-            supports_image_generation: false,
+            supports_standalone_web_search: false,
         }
     }
 
@@ -566,7 +543,6 @@ mod tests {
             "supported_in_api": true,
             "priority": 0,
             "upgrade": null,
-            "base_instructions": "base instructions",
             "support_verbosity": false,
             "default_verbosity": null,
             "apply_patch_tool_type": null,
@@ -617,49 +593,38 @@ mod tests {
     }
 
     #[test]
-    fn configured_chat_provider_uses_safe_tool_capability_defaults() {
-        let provider = create_model_provider(
-            ModelProviderInfo {
-                name: "third-party chat".to_string(),
-                wire_api: WireApi::Chat,
-                ..ModelProviderInfo::default()
-            },
-            /*auth_manager*/ None,
-        );
+    fn configured_provider_remote_compaction_matches_provider_support() {
+        let cases = [
+            (
+                ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+                RemoteCompactionSupport::V2,
+            ),
+            (
+                ModelProviderInfo {
+                    name: "Azure".to_string(),
+                    base_url: Some("https://example.com/openai".to_string()),
+                    ..ModelProviderInfo::default()
+                },
+                RemoteCompactionSupport::V2,
+            ),
+            (
+                ModelProviderInfo {
+                    name: "Custom".to_string(),
+                    base_url: Some("https://example.openai.azure.com/openai/v1".to_string()),
+                    ..ModelProviderInfo::default()
+                },
+                RemoteCompactionSupport::V2,
+            ),
+            (
+                provider_for("https://example.test/v1".to_string()),
+                RemoteCompactionSupport::Unsupported,
+            ),
+        ];
 
-        assert_eq!(
-            provider.capabilities(),
-            ProviderCapabilities {
-                namespace_tools: true,
-                tool_search: false,
-                image_generation: false,
-                web_search: false,
-            }
-        );
-    }
-
-    #[test]
-    fn configured_chat_provider_honors_explicit_tool_capability_opt_ins() {
-        let provider = create_model_provider(
-            ModelProviderInfo {
-                name: "third-party chat".to_string(),
-                wire_api: WireApi::Chat,
-                supports_web_search: true,
-                supports_image_generation: true,
-                ..ModelProviderInfo::default()
-            },
-            /*auth_manager*/ None,
-        );
-
-        assert_eq!(
-            provider.capabilities(),
-            ProviderCapabilities {
-                namespace_tools: true,
-                tool_search: false,
-                image_generation: true,
-                web_search: true,
-            }
-        );
+        for (provider_info, expected) in cases {
+            let provider = create_model_provider(provider_info, /*auth_manager*/ None);
+            assert_eq!(provider.capabilities().remote_compaction, expected);
+        }
     }
 
     #[test]
@@ -667,6 +632,33 @@ mod tests {
         let provider = create_model_provider(
             ModelProviderInfo::create_openai_provider(/*base_url*/ None),
             /*auth_manager*/ None,
+        );
+
+        assert_eq!(
+            provider.approval_review_preferred_model(),
+            DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL
+        );
+    }
+
+    #[test]
+    fn configured_provider_uses_luna_for_approval_review_with_api_key_auth() {
+        let provider = create_model_provider(
+            ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+            Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
+                "openai-api-key",
+            ))),
+        );
+
+        assert_eq!(provider.approval_review_preferred_model(), "gpt-5.6-luna");
+    }
+
+    #[test]
+    fn configured_provider_uses_default_approval_review_model_with_chatgpt_auth() {
+        let provider = create_model_provider(
+            ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+            Some(AuthManager::from_auth_for_testing(
+                CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+            )),
         );
 
         assert_eq!(

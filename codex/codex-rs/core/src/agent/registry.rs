@@ -1,6 +1,7 @@
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -28,7 +29,7 @@ pub(crate) struct AgentRegistry {
 #[derive(Default)]
 struct ActiveAgents {
     agent_tree: HashMap<String, AgentMetadata>,
-    role_spawn_counts: HashMap<String, usize>,
+    thread_paths: HashMap<ThreadId, String>,
     used_agent_nicknames: HashSet<String>,
     nickname_reset_count: usize,
 }
@@ -81,50 +82,20 @@ impl AgentRegistry {
         self: &Arc<Self>,
         max_threads: Option<usize>,
     ) -> Result<SpawnReservation> {
-        self.reserve_spawn_slot_for_role(max_threads, None)
-    }
-
-    pub(crate) fn reserve_spawn_slot_for_role(
-        self: &Arc<Self>,
-        max_threads: Option<usize>,
-        role_limit: Option<(&str, usize)>,
-    ) -> Result<SpawnReservation> {
         if let Some(max_threads) = max_threads {
             if !self.try_increment_spawned(max_threads) {
-                return Err(CodexErr::AgentLimitReached { max_threads });
+                return Err(CodexErr::new(CodexErrorDetails::AgentLimitReached {
+                    max_threads,
+                }));
             }
         } else {
             self.total_count.fetch_add(1, Ordering::AcqRel);
         }
-        let reserved_agent_role = if let Some((role, max_instances)) = role_limit {
-            let mut active_agents = self
-                .active_agents
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let current = active_agents
-                .role_spawn_counts
-                .get(role)
-                .copied()
-                .unwrap_or_default();
-            if current >= max_instances {
-                self.total_count.fetch_sub(1, Ordering::AcqRel);
-                return Err(CodexErr::UnsupportedOperation(format!(
-                    "agent role `{role}` instance limit reached ({max_instances})"
-                )));
-            }
-            active_agents
-                .role_spawn_counts
-                .insert(role.to_string(), current + 1);
-            Some(role.to_string())
-        } else {
-            None
-        };
         Ok(SpawnReservation {
             state: Arc::clone(self),
             active: true,
             reserved_agent_nickname: None,
             reserved_agent_path: None,
-            reserved_agent_role,
         })
     }
 
@@ -134,17 +105,11 @@ impl AgentRegistry {
                 .active_agents
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let removed_key = active_agents
-                .agent_tree
-                .iter()
-                .find_map(|(key, metadata)| (metadata.agent_id == Some(thread_id)).then_some(key))
-                .cloned();
-            removed_key
+            active_agents
+                .thread_paths
+                .remove(&thread_id)
                 .and_then(|key| active_agents.agent_tree.remove(key.as_str()))
                 .is_some_and(|metadata| {
-                    if let Some(role) = metadata.agent_role.as_deref() {
-                        decrement_role_spawn_count(&mut active_agents.role_spawn_counts, role);
-                    }
                     !metadata.agent_path.as_ref().is_some_and(AgentPath::is_root)
                 })
         };
@@ -158,14 +123,19 @@ impl AgentRegistry {
             .active_agents
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        active_agents
+        let root_path = AgentPath::ROOT.to_string();
+        let root_thread_id = active_agents
             .agent_tree
-            .entry(AgentPath::ROOT.to_string())
+            .entry(root_path.clone())
             .or_insert_with(|| AgentMetadata {
                 agent_id: Some(thread_id),
                 agent_path: Some(AgentPath::root()),
                 ..Default::default()
-            });
+            })
+            .agent_id;
+        if let Some(root_thread_id) = root_thread_id {
+            active_agents.thread_paths.insert(root_thread_id, root_path);
+        }
     }
 
     pub(crate) fn agent_id_for_path(&self, agent_path: &AgentPath) -> Option<ThreadId> {
@@ -178,12 +148,14 @@ impl AgentRegistry {
     }
 
     pub(crate) fn agent_metadata_for_thread(&self, thread_id: ThreadId) -> Option<AgentMetadata> {
-        self.active_agents
+        let active_agents = self
+            .active_agents
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .agent_tree
-            .values()
-            .find(|metadata| metadata.agent_id == Some(thread_id))
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        active_agents
+            .thread_paths
+            .get(&thread_id)
+            .and_then(|path| active_agents.agent_tree.get(path))
             .cloned()
     }
 
@@ -217,7 +189,17 @@ impl AgentRegistry {
         if let Some(agent_nickname) = agent_metadata.agent_nickname.clone() {
             active_agents.used_agent_nicknames.insert(agent_nickname);
         }
-        active_agents.agent_tree.insert(key, agent_metadata);
+        if let Some(previous_key) = active_agents.thread_paths.insert(thread_id, key.clone())
+            && previous_key != key
+        {
+            active_agents.agent_tree.remove(previous_key.as_str());
+        }
+        if let Some(previous_metadata) = active_agents.agent_tree.insert(key, agent_metadata)
+            && let Some(previous_thread_id) = previous_metadata.agent_id
+            && previous_thread_id != thread_id
+        {
+            active_agents.thread_paths.remove(&previous_thread_id);
+        }
     }
 
     fn reserve_agent_nickname(&self, names: &[&str], preferred: Option<&str>) -> Option<String> {
@@ -317,7 +299,6 @@ pub(crate) struct SpawnReservation {
     active: bool,
     reserved_agent_nickname: Option<String>,
     reserved_agent_path: Option<AgentPath>,
-    reserved_agent_role: Option<String>,
 }
 
 impl SpawnReservation {
@@ -345,7 +326,6 @@ impl SpawnReservation {
     pub(crate) fn commit(mut self, agent_metadata: AgentMetadata) {
         self.reserved_agent_nickname = None;
         self.reserved_agent_path = None;
-        self.reserved_agent_role = None;
         self.state.register_spawned_thread(agent_metadata);
         self.active = false;
     }
@@ -357,26 +337,8 @@ impl Drop for SpawnReservation {
             if let Some(agent_path) = self.reserved_agent_path.take() {
                 self.state.release_reserved_agent_path(&agent_path);
             }
-            if let Some(role) = self.reserved_agent_role.take() {
-                let mut active_agents = self
-                    .state
-                    .active_agents
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                decrement_role_spawn_count(&mut active_agents.role_spawn_counts, &role);
-            }
             self.state.total_count.fetch_sub(1, Ordering::AcqRel);
         }
-    }
-}
-
-fn decrement_role_spawn_count(counts: &mut HashMap<String, usize>, role: &str) {
-    let Some(count) = counts.get_mut(role) else {
-        return;
-    };
-    *count = count.saturating_sub(1);
-    if *count == 0 {
-        counts.remove(role);
     }
 }
 

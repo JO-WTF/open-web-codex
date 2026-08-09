@@ -5,7 +5,6 @@ use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
-use crate::tools::handlers::multi_agents::collab_tool_call_status;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
 use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v2;
 use crate::tools::handlers::multi_agents_v2::message_tool::message_content;
@@ -42,33 +41,34 @@ async fn handle_spawn_agent(
 ) -> Result<SpawnAgentResult, FunctionCallError> {
     let ToolInvocation {
         session,
-        turn,
+        step_context,
         payload,
         call_id,
+        source,
         ..
     } = invocation;
+    let turn = &step_context.turn;
     let arguments = function_arguments(payload)?;
     let args: SpawnAgentArgs = parse_arguments(&arguments)?;
     let fork_mode = args.fork_mode()?;
+    let message = message_content(args.message)?;
     let role_name = args
         .agent_type
         .as_deref()
         .map(str::trim)
         .filter(|role| !role.is_empty());
 
-    let message = message_content(args.message)?;
-    let prompt = message.clone();
     let session_source = turn.session_source.clone();
     let child_depth = next_thread_spawn_depth(&session_source);
-    let mut config =
-        build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
+    let mut config = build_agent_spawn_config(
+        &session.get_base_instructions().await,
+        turn.as_ref(),
+        step_context.environments.primary(),
+    )?;
     if let Some(service_tier) = args.service_tier.as_ref() {
         config.service_tier = Some(service_tier.clone());
     }
     let is_full_history_fork = matches!(fork_mode, Some(SpawnAgentForkMode::FullHistory));
-    if is_full_history_fork {
-        reject_full_fork_agent_type_override(role_name)?;
-    }
     apply_requested_spawn_agent_model_overrides(
         &session,
         turn.as_ref(),
@@ -77,8 +77,13 @@ async fn handle_spawn_agent(
         args.reasoning_effort.clone(),
     )
     .await?;
-    if !is_full_history_fork {
+    if !is_full_history_fork || role_name.is_some() {
         apply_spawn_agent_role(&session, &mut config, role_name).await?;
+        if is_full_history_fork && config.developer_instructions.is_none() {
+            config
+                .developer_instructions
+                .clone_from(&turn.developer_instructions);
+        }
     }
     apply_spawn_agent_service_tier(
         &session,
@@ -87,7 +92,11 @@ async fn handle_spawn_agent(
         args.service_tier.as_deref(),
     )
     .await?;
-    apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
+    apply_spawn_agent_runtime_overrides(
+        &mut config,
+        turn.as_ref(),
+        step_context.environments.primary(),
+    )?;
 
     let spawn_source = thread_spawn_source(
         session.thread_id,
@@ -105,26 +114,15 @@ async fn handle_spawn_agent(
         .session_source
         .get_agent_path()
         .unwrap_or_else(AgentPath::root);
-    let communication = communication_from_tool_message(author, new_agent_path.clone(), message);
+    let communication = communication_from_tool_message(
+        author,
+        new_agent_path.clone(),
+        message,
+        &source,
+        /*trigger_turn*/ true,
+    );
     let context = AgentCommunicationContext::new(AgentCommunicationKind::Spawn, session.thread_id);
-    session
-        .emit_turn_item_started(
-            &turn,
-            &TurnItem::CollabAgentToolCall(CollabAgentToolCallItem {
-                id: call_id.clone(),
-                tool: CollabAgentTool::SpawnAgent,
-                status: CollabAgentToolCallStatus::InProgress,
-                sender_thread_id: session.thread_id,
-                receiver_thread_ids: Vec::new(),
-                receiver_agents: Vec::new(),
-                prompt: Some(prompt.clone()),
-                model: args.model.clone(),
-                reasoning_effort: args.reasoning_effort.clone(),
-                agents_states: Default::default(),
-            }),
-        )
-        .await;
-    let result = Box::pin(
+    let spawned_agent = Box::pin(
         session
             .services
             .agent_control
@@ -137,81 +135,26 @@ async fn handle_spawn_agent(
                     fork_parent_spawn_call_id: fork_mode.as_ref().map(|_| call_id.clone()),
                     fork_mode,
                     parent_thread_id: Some(session.thread_id),
-                    environments: Some(turn.environments.to_selections()),
+                    parent_turn_id: Some(turn.sub_id.clone()),
+                    environments: Some(step_context.environments.to_selections()),
                 },
             ),
     )
     .await
-    .map_err(collab_spawn_error);
-    let (new_thread_id, new_agent_metadata, status) = match &result {
-        Ok(spawned_agent) => (
-            Some(spawned_agent.thread_id),
-            Some(spawned_agent.metadata.clone()),
-            spawned_agent.status.clone(),
-        ),
-        Err(_) => (None, None, AgentStatus::NotFound),
-    };
-    let agent_snapshot = match new_thread_id {
-        Some(thread_id) => {
-            session
-                .services
-                .agent_control
-                .get_agent_config_snapshot(thread_id)
-                .await
-        }
-        None => None,
-    };
-    let (new_agent_nickname, new_agent_role) = match (&agent_snapshot, new_agent_metadata) {
-        (Some(snapshot), _) => (
-            snapshot.session_source.get_nickname(),
-            snapshot.session_source.get_agent_role(),
-        ),
-        (None, Some(metadata)) => (metadata.agent_nickname, metadata.agent_role),
-        (None, None) => (None, None),
-    };
-    let effective_model = agent_snapshot
-        .as_ref()
-        .map(|snapshot| snapshot.model.clone())
-        .or(args.model.clone());
-    let effective_reasoning_effort = agent_snapshot
-        .as_ref()
-        .and_then(|snapshot| snapshot.reasoning_effort.clone())
-        .or(args.reasoning_effort.clone());
-    let receiver_thread_ids = new_thread_id.into_iter().collect();
-    let receiver_agents = new_thread_id
-        .map(|thread_id| CollabAgentRef {
-            thread_id,
-            agent_nickname: new_agent_nickname.clone(),
-            agent_role: new_agent_role,
-        })
-        .into_iter()
-        .collect();
-    let agents_states = new_thread_id
-        .map(|thread_id| [(thread_id, status.clone())].into_iter().collect())
-        .unwrap_or_default();
-    session
-        .emit_turn_item_completed(
-            &turn,
-            TurnItem::CollabAgentToolCall(CollabAgentToolCallItem {
-                id: call_id.clone(),
-                tool: CollabAgentTool::SpawnAgent,
-                status: collab_tool_call_status(&status, new_thread_id),
-                sender_thread_id: session.thread_id,
-                receiver_thread_ids,
-                receiver_agents,
-                prompt: Some(prompt),
-                model: effective_model,
-                reasoning_effort: effective_reasoning_effort,
-                agents_states,
-            }),
-        )
-        .await;
-    let spawned_agent = result?;
+    .map_err(collab_spawn_error)?;
     let new_thread_id = spawned_agent.thread_id;
-    let nickname = new_agent_nickname.or(spawned_agent.metadata.agent_nickname);
+    let agent_snapshot = session
+        .services
+        .agent_control
+        .get_agent_config_snapshot(new_thread_id)
+        .await;
+    let nickname = agent_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.session_source.get_nickname())
+        .or(spawned_agent.metadata.agent_nickname);
     emit_sub_agent_activity(
         &session,
-        &turn,
+        turn,
         SubAgentActivityItem {
             id: call_id,
             agent_thread_id: new_thread_id,

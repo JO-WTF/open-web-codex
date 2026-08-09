@@ -16,7 +16,6 @@ use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerMetadata;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
-use codex_config::ConfigLayerStackOrdering;
 use codex_config::ConfigRequirementsToml;
 use codex_config::ShellEnvironmentPolicyFilterRepresentation;
 use codex_config::config_toml::ConfigToml;
@@ -160,11 +159,7 @@ impl ConfigManager {
                 .collect(),
             layers: params.include_layers.then(|| {
                 layers
-                    .get_layers(
-                        ConfigLayerStackOrdering::HighestPrecedenceFirst,
-                        /*include_disabled*/ true,
-                    )
-                    .iter()
+                    .all_layers_high_to_low()
                     .map(|layer| config_layer_to_api(layer.as_layer()))
                     .collect()
             }),
@@ -380,7 +375,7 @@ impl ConfigManager {
             parsed_segments.push(segments);
         }
 
-        validate_config(&user_config, self.codex_home()).map_err(|err| {
+        validate_config(&user_config).map_err(|err| {
             ConfigManagerError::write(
                 ConfigWriteErrorCode::ConfigValidationError,
                 format!("Invalid configuration: {err}"),
@@ -414,7 +409,7 @@ impl ConfigManager {
                 )
             })?;
         let effective = updated_layers.effective_config();
-        validate_config(&effective, self.codex_home()).map_err(|err| {
+        validate_config(&effective).map_err(|err| {
             ConfigManagerError::write(
                 ConfigWriteErrorCode::ConfigValidationError,
                 format!("Invalid configuration: {err}"),
@@ -583,10 +578,33 @@ fn apply_merge(
         ));
     };
 
-    if matches!(strategy, MergeStrategy::Upsert)
-        && (shell_environment_policy_representation_switch(root, segments, value)
-            || (matches!(value_at_path(root, segments), Some(TomlValue::Table(_)))
-                && matches!(value, TomlValue::Table(_))))
+    let multi_agent_v2_feature_depth = match segments {
+        [features, feature, ..] if features == "features" && feature == "multi_agent_v2" => Some(2),
+        [profiles, _, features, feature, ..]
+            if profiles == "profiles" && features == "features" && feature == "multi_agent_v2" =>
+        {
+            Some(4)
+        }
+        _ => None,
+    };
+    let preserves_multi_agent_v2_feature_config =
+        multi_agent_v2_feature_depth.is_some_and(|feature_depth| {
+            match value_at_path(root, &segments[..feature_depth]) {
+                Some(TomlValue::Boolean(_)) => {
+                    segments.len() > feature_depth || matches!(value, TomlValue::Table(_))
+                }
+                Some(TomlValue::Table(_)) => {
+                    segments.len() == feature_depth && matches!(value, TomlValue::Boolean(_))
+                }
+                _ => false,
+            }
+        });
+
+    if preserves_multi_agent_v2_feature_config
+        || matches!(strategy, MergeStrategy::Upsert)
+            && (shell_environment_policy_representation_switch(root, segments, value)
+                || (matches!(value_at_path(root, segments), Some(TomlValue::Table(_)))
+                    && matches!(value, TomlValue::Table(_))))
     {
         let overlay = sparse_overlay(segments, value);
         merge_toml_values(root, &overlay);
@@ -710,8 +728,9 @@ fn toml_value_to_value(value: &TomlValue) -> anyhow::Result<toml_edit::Value> {
     }
 }
 
-fn validate_config(value: &TomlValue, config_base_dir: &Path) -> std::io::Result<()> {
-    deserialize_config_toml_with_base(value.clone(), config_base_dir).map(|_| ())
+fn validate_config(value: &TomlValue) -> Result<(), toml::de::Error> {
+    let _: ConfigToml = value.clone().try_into()?;
+    Ok(())
 }
 
 fn paths_match(expected: impl AsRef<Path>, provided: impl AsRef<Path>) -> bool {
@@ -740,6 +759,24 @@ fn value_at_semantic_path<'a>(root: &'a TomlValue, segments: &[String]) -> Optio
     shell_environment_filter_entry(root, segments)
         .map(|(_, value)| value)
         .or_else(|| value_at_path(root, segments))
+        .or_else(|| {
+            let (field, parents) = segments.split_last()?;
+            if field != "enabled" {
+                return None;
+            }
+            let is_multi_agent_v2_feature = match parents {
+                [features, feature] => features == "features" && feature == "multi_agent_v2",
+                [profiles, _, features, feature] => {
+                    profiles == "profiles" && features == "features" && feature == "multi_agent_v2"
+                }
+                _ => false,
+            };
+            if !is_multi_agent_v2_feature {
+                return None;
+            }
+            let feature = value_at_path(root, parents)?;
+            matches!(feature, TomlValue::Boolean(_)).then_some(feature)
+        })
 }
 
 fn override_message(layer: &ConfigLayerSource) -> String {

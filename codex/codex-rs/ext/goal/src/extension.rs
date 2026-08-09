@@ -372,7 +372,7 @@ where
             };
             let should_count_for_goal_progress = runtime.is_enabled()
                 && tool_attempt_counts_for_goal_progress(input.outcome)
-                && !(input.tool_name.namespace.is_none()
+                && !(input.tool_name.is_default_namespace()
                     && input.tool_name.name == UPDATE_GOAL_TOOL_NAME);
             if !should_count_for_goal_progress {
                 return;
@@ -420,7 +420,6 @@ where
         &self,
         _session_store: &ExtensionData,
         thread_store: &ExtensionData,
-        _step_store: &ExtensionData,
     ) -> Vec<Arc<dyn codex_extension_api::ToolExecutor<codex_extension_api::ToolCall>>> {
         let Some(runtime) = goal_runtime_handle(thread_store) else {
             return Vec::new();

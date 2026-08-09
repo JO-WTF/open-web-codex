@@ -12,7 +12,6 @@ use codex_login::default_client::set_default_originator;
 use super::*;
 use crate::message_processor::ConnectionSessionState;
 use crate::message_processor::InitializedConnectionSessionState;
-use codex_app_server_protocol::build_manifest;
 
 const NON_ORIGINATING_CLIENT_NAMES: &[&str] = &["codex_app_server_daemon", "codex-backend"];
 
@@ -71,7 +70,11 @@ impl InitializeRequestProcessor {
         let capabilities = params.capabilities.unwrap_or_default();
         let experimental_api_enabled = capabilities.experimental_api;
         let request_attestation = capabilities.request_attestation;
-        let supports_openai_form_elicitation = capabilities.mcp_server_openai_form_elicitation;
+        let extensions = capabilities.extensions.as_ref();
+        let client_mcp_extensions = codex_mcp::client_mcp_extensions(
+            extensions,
+            capabilities.mcp_server_openai_form_elicitation,
+        );
         let opt_out_notification_methods = capabilities
             .opt_out_notification_methods
             .unwrap_or_default();
@@ -98,7 +101,7 @@ impl InitializeRequestProcessor {
                 app_server_client_name: name.clone(),
                 client_version: version,
                 request_attestation,
-                supports_openai_form_elicitation,
+                client_mcp_extensions,
             })
             .is_err()
         {
@@ -141,7 +144,6 @@ impl InitializeRequestProcessor {
             codex_home,
             platform_family: std::env::consts::FAMILY.to_string(),
             platform_os: std::env::consts::OS.to_string(),
-            capability_manifest: Some(build_manifest()),
         };
 
         self.outgoing

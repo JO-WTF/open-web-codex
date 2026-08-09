@@ -14,8 +14,4 @@ limit?: number | null,
 /**
  * When true, include models that are hidden from the default picker list.
  */
-includeHidden?: boolean | null,
-/**
- * When true, bypass provider-cached models and fetch from the provider endpoint.
- */
-forceRefresh?: boolean | null, };
+includeHidden?: boolean | null, };

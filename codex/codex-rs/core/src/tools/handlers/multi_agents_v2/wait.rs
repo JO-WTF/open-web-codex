@@ -50,18 +50,14 @@ impl Handler {
         let min_timeout_ms = turn.config.multi_agent_v2.min_wait_timeout_ms;
         let max_timeout_ms = turn.config.multi_agent_v2.max_wait_timeout_ms;
         let default_timeout_ms = turn.config.multi_agent_v2.default_wait_timeout_ms;
-        let timeout_ms = match args.timeout_ms {
-            Some(ms) if ms < min_timeout_ms => {
-                return Err(FunctionCallError::RespondToModel(format!(
-                    "timeout_ms must be at least {min_timeout_ms}"
-                )));
-            }
+        let requested_timeout_ms = args.timeout_ms;
+        let timeout_ms = match requested_timeout_ms {
             Some(ms) if ms > max_timeout_ms => {
                 return Err(FunctionCallError::RespondToModel(format!(
                     "timeout_ms must be at most {max_timeout_ms}"
                 )));
             }
-            Some(ms) => ms,
+            Some(ms) => ms.max(min_timeout_ms),
             None => default_timeout_ms,
         };
 
@@ -94,7 +90,7 @@ impl Handler {
 
         let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
         let outcome = wait_for_activity(&mut activity_rx, pending_activity, deadline).await;
-        let result = WaitAgentResult::from_outcome(outcome);
+        let result = WaitAgentResult::from_outcome(outcome, requested_timeout_ms, timeout_ms);
 
         session
             .emit_turn_item_completed(
@@ -137,15 +133,24 @@ pub(crate) struct WaitAgentResult {
 }
 
 impl WaitAgentResult {
-    fn from_outcome(outcome: WaitOutcome) -> Self {
+    fn from_outcome(
+        outcome: WaitOutcome,
+        requested_timeout_ms: Option<i64>,
+        timeout_ms: i64,
+    ) -> Self {
         let message = match outcome {
             WaitOutcome::MailboxActivity => "Wait completed.",
-            WaitOutcome::AgentActivity => "Wait completed with agent activity.",
             WaitOutcome::Steered => "Wait interrupted by new input.",
             WaitOutcome::TimedOut => "Wait timed out.",
         };
+        let message = match requested_timeout_ms {
+            Some(requested_timeout_ms) if requested_timeout_ms < timeout_ms => format!(
+                "{message}\n\nRequested timeout of {requested_timeout_ms}ms was clamped to the minimum of {timeout_ms}ms."
+            ),
+            Some(_) | None => message.to_string(),
+        };
         Self {
-            message: message.to_string(),
+            message,
             timed_out: outcome == WaitOutcome::TimedOut,
         }
     }
@@ -171,7 +176,6 @@ impl ToolOutput for WaitAgentResult {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WaitOutcome {
-    AgentActivity,
     MailboxActivity,
     Steered,
     TimedOut,
@@ -184,14 +188,12 @@ async fn wait_for_activity(
 ) -> WaitOutcome {
     if let Some(activity) = pending_activity {
         return match activity {
-            InputQueueActivity::Agent => WaitOutcome::AgentActivity,
             InputQueueActivity::Mailbox => WaitOutcome::MailboxActivity,
             InputQueueActivity::Steer => WaitOutcome::Steered,
         };
     }
     match timeout_at(deadline, activity_rx.changed()).await {
         Ok(Ok(())) => match *activity_rx.borrow_and_update() {
-            InputQueueActivity::Agent => WaitOutcome::AgentActivity,
             InputQueueActivity::Mailbox => WaitOutcome::MailboxActivity,
             InputQueueActivity::Steer => WaitOutcome::Steered,
         },

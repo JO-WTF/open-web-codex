@@ -33,6 +33,8 @@ fn skills_to_info(
                         short_description: interface.short_description,
                         icon_small: interface.icon_small,
                         icon_large: interface.icon_large,
+                        icon_small_url: None,
+                        icon_large_url: None,
                         brand_color: interface.brand_color,
                         default_prompt: interface.default_prompt,
                     }
@@ -68,6 +70,7 @@ fn hooks_to_info(hooks: &[codex_hooks::HookListEntry]) -> Vec<HookMetadata> {
             key: hook.key.clone(),
             event_name: hook.event_name.into(),
             handler_type: hook.handler_type.into(),
+            execution_mode: hook.execution_mode.into(),
             matcher: hook.matcher.clone(),
             command: hook.command.clone(),
             timeout_sec: hook.timeout_sec,
@@ -158,65 +161,13 @@ impl CatalogRequestProcessor {
         &self,
         params: ModelListParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.list_models(params)
-            .await
-            .map(|response| Some(response.into()))
-    }
-
-    pub(crate) async fn model_provider_list(
-        &self,
-        _params: ModelProviderListParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        let config = self.load_latest_config(None).await?;
-        let built_in = codex_model_provider_info::built_in_model_providers(None);
-        let mut providers = config
-            .model_providers
-            .iter()
-            .map(|(id, provider)| {
-                let is_built_in = built_in.contains_key(id);
-                let is_local = matches!(id.as_str(), "ollama" | "lmstudio");
-                let kind = if is_local {
-                    ModelProviderKind::Local
-                } else if is_built_in {
-                    ModelProviderKind::BuiltIn
-                } else {
-                    ModelProviderKind::Custom
-                };
-                ModelProviderSummary {
-                    id: id.clone(),
-                    name: provider.name.clone(),
-                    base_url: provider.base_url.clone(),
-                    env_key: provider.env_key.clone(),
-                    wire_api: provider.wire_api.to_string(),
-                    kind,
-                    is_current: id == &config.model_provider_id,
-                    model_count: provider.models.len(),
-                    can_edit: !is_built_in,
-                    can_delete: !is_built_in && id != &config.model_provider_id,
-                    can_fetch_models: !is_built_in,
-                    models: provider
-                        .models
-                        .iter()
-                        .map(|model| ModelProviderModelSummary {
-                            model_id: model.model_id.clone(),
-                            model_name: model.model_name.clone(),
-                            max_token_len: model.max_token_len,
-                            max_output_tokens: model.max_output_tokens,
-                            show_in_picker: model.show_in_picker,
-                            context_window: model.context_window,
-                        })
-                        .collect(),
-                }
-            })
-            .collect::<Vec<_>>();
-        providers.sort_by(|left, right| left.id.cmp(&right.id));
-        Ok(Some(
-            ModelProviderListResponse {
-                data: providers,
-                current_provider_id: config.model_provider_id,
-            }
-            .into(),
-        ))
+        Self::list_models(
+            self.thread_manager.clone(),
+            self.config.http_client_factory(),
+            params,
+        )
+        .await
+        .map(|response| Some(response.into()))
     }
 
     pub(crate) async fn experimental_feature_list(
@@ -303,51 +254,19 @@ impl CatalogRequestProcessor {
     }
 
     async fn list_models(
-        &self,
+        thread_manager: Arc<ThreadManager>,
+        http_client_factory: codex_http_client::HttpClientFactory,
         params: ModelListParams,
     ) -> Result<ModelListResponse, JSONRPCErrorError> {
         let ModelListParams {
             limit,
             cursor,
             include_hidden,
-            force_refresh,
         } = params;
-        let latest_config = self.load_latest_config(None).await?;
-        let force_refresh = force_refresh.unwrap_or(false);
-        let uses_startup_provider = !force_refresh
-            && latest_config.model_provider_id == self.config.model_provider_id
-            && latest_config.model_provider == self.config.model_provider
-            && latest_config.model_catalog == self.config.model_catalog;
-        let (models_manager, refresh_strategy) = if uses_startup_provider {
-            (
-                self.thread_manager.get_models_manager(),
-                codex_models_manager::manager::RefreshStrategy::OnlineIfUncached,
-            )
-        } else {
-            let mut provider_info = latest_config.model_provider.clone();
-            if force_refresh {
-                provider_info.models.clear();
-            }
-            let provider =
-                create_model_provider(provider_info.clone(), Some(self.auth_manager.clone()));
-            let refresh_strategy = if force_refresh || !provider_info.requires_openai_auth {
-                codex_models_manager::manager::RefreshStrategy::Online
-            } else {
-                codex_models_manager::manager::RefreshStrategy::OnlineIfUncached
-            };
-            (
-                provider.models_manager(
-                    latest_config.codex_home.to_path_buf(),
-                    latest_config.model_catalog.clone(),
-                ),
-                refresh_strategy,
-            )
-        };
         let models = supported_models(
-            models_manager,
+            thread_manager,
             include_hidden.unwrap_or(false),
-            refresh_strategy,
-            latest_config.http_client_factory(),
+            http_client_factory,
         )
         .await;
         let total = models.len();
@@ -588,6 +507,13 @@ impl CatalogRequestProcessor {
             .await;
         let skills_service = self.thread_manager.skills_service();
         let plugins_manager = self.thread_manager.plugins_manager();
+        if force_reload
+            && workspace_codex_plugins_enabled
+            && config.features.enabled(Feature::Plugins)
+        {
+            plugins_manager.clear_cache();
+            skills_service.clear_cache();
+        }
         let fs = self
             .thread_manager
             .environment_manager()
@@ -617,23 +543,38 @@ impl CatalogRequestProcessor {
                             );
                         }
                     };
-                    let effective_skill_roots = if workspace_codex_plugins_enabled {
-                        let plugins_input = config.plugins_config_input();
-                        plugins_manager
-                            .effective_skill_roots_for_layer_stack(
-                                &config_layer_stack,
-                                &plugins_input,
-                            )
-                            .await
-                    } else {
-                        Vec::new()
-                    };
-                    let skills_input = codex_core::skills::SkillsLoadInput::new(
+                    let (effective_skill_roots, plugin_skill_snapshots) =
+                        if workspace_codex_plugins_enabled {
+                            let plugins_input = config.plugins_config_input();
+                            if config_layer_stack == plugins_input.config_layer_stack {
+                                let plugins =
+                                    plugins_manager.plugins_for_config(&plugins_input).await;
+                                (
+                                    plugins.effective_plugin_skill_roots(),
+                                    plugins_manager
+                                        .plugin_skill_snapshots_for_config(&plugins_input),
+                                )
+                            } else {
+                                (
+                                    plugins_manager
+                                        .effective_skill_roots_for_layer_stack(
+                                            &config_layer_stack,
+                                            &plugins_input,
+                                        )
+                                        .await,
+                                    None,
+                                )
+                            }
+                        } else {
+                            (Vec::new(), None)
+                        };
+                    let skills_input = codex_core::skills::HostSkillsLoadInput::new(
                         cwd_abs.clone(),
                         effective_skill_roots,
                         config_layer_stack,
                         config.bundled_skills_enabled(),
-                    );
+                    )
+                    .with_plugin_skill_snapshots(plugin_skill_snapshots);
                     let snapshot = skills_service
                         .snapshot_for_cwd(&skills_input, force_reload, fs)
                         .await;

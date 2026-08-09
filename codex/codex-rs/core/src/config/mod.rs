@@ -9,11 +9,11 @@ use crate::windows_sandbox::resolve_windows_sandbox_private_desktop;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
-use codex_config::ConfigLayerStackOrdering;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
 use codex_config::ConstrainedWithSource;
 use codex_config::FeatureRequirementsToml;
+use codex_config::ManagedAuthPolicy;
 use codex_config::McpServerRequirement;
 use codex_config::PluginRequirementsToml;
 use codex_config::ProfileV2Name;
@@ -43,7 +43,6 @@ use codex_config::types::MemoriesConfig;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_config::types::Notice;
 use codex_config::types::OAuthCredentialsStoreMode;
-use codex_config::types::PluginConfig;
 use codex_config::types::ResumeCwdMode;
 use codex_config::types::SessionPickerViewMode;
 use codex_config::types::ToolSuggestConfig;
@@ -79,9 +78,11 @@ use codex_login::AuthManagerConfig;
 use codex_login::AuthRouteConfig;
 use codex_mcp::McpConfig;
 use codex_mcp::McpPluginAttribution;
+use codex_mcp::McpProtocolMode;
 use codex_mcp::McpServerRegistration;
 use codex_mcp::ResolvedMcpCatalog;
 use codex_memories_read::memory_root;
+use codex_model_provider::ProviderCapabilities;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
@@ -103,6 +104,7 @@ use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ActivePermissionProfile;
+use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::openai_models::ModelsResponse;
@@ -116,13 +118,13 @@ pub use codex_thread_store::ExtraConfig;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use codex_utils_path_uri::PathUri;
+use http::HeaderValue;
 use rmcp::model::ElicitationCapability;
 use rmcp::model::FormElicitationCapability;
 use rmcp::model::UrlElicitationCapability;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
-use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::ErrorKind;
@@ -159,6 +161,7 @@ mod requirements;
 mod resolved_permission_profile;
 #[cfg(test)]
 mod schema;
+pub use auth_keyring::bootstrap_auth_config;
 pub use auth_keyring::resolve_bootstrap_auth_keyring_backend_kind;
 pub use codex_config::ConfigLoadOptions;
 pub use codex_config::Constrained;
@@ -252,6 +255,8 @@ You may also see them addressed as to=/root/..., which indicates your identity i
 "#;
 const DEFAULT_MULTI_AGENT_V2_MODEL_OVERRIDE_USAGE_HINT_TEXT: &str = "Full-history forks (`fork_turns` omitted or `\"all\"`) inherit the parent model and reasoning effort and do not accept overrides. Only set `model` or `reasoning_effort` when explicitly requested by the user, applicable `AGENTS.md` instructions, or skill instructions; when doing so, set `fork_turns` to `\"none\"` or a positive integer string.";
 const DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE: &str = "collaboration";
+const DEFAULT_MULTI_AGENT_V2_WAIT_AGENT_USAGE_HINT_TEXT: &str =
+    "When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.";
 const DEFAULT_MULTI_AGENT_V2_SHARED_USAGE_HINT_TEXT: &str = r#"Note that collaboration tools cannot be called from inside `functions.exec`. Call `spawn_agent`, `send_message`, `followup_task`, `wait_agent`, `interrupt_agent`, and `list_agents` only as direct tool calls using the recipient shown in their tool definitions, such as `to=functions.collaboration.spawn_agent`, since they are intentionally absent from the `functions.exec` `tools.*` namespace. Available tools in `functions.exec` are explicitly described with a `tools` namespace in the developer message.
 
 All agents share the same directory. In detail:
@@ -259,9 +264,17 @@ All agents share the same directory. In detail:
 - All agents use the same current working directory.
 - As a result, edits made by one agent are immediately visible to all other agents.
 "#;
-fn default_multi_agent_v2_usage_hint_text(usage_hint_text: &str, max_concurrency: usize) -> String {
+fn default_multi_agent_v2_usage_hint_text(
+    usage_hint_text: &str,
+    max_concurrency: usize,
+    wait_agent_usage_hint_text: Option<&str>,
+) -> String {
+    let wait_agent_usage_hint_text = match wait_agent_usage_hint_text {
+        Some(wait_agent_usage_hint_text) => format!("{wait_agent_usage_hint_text}\n\n"),
+        None => String::new(),
+    };
     format!(
-        "{usage_hint_text}\n{DEFAULT_MULTI_AGENT_V2_SHARED_USAGE_HINT_TEXT}\nThere are {max_concurrency} available concurrency slots, meaning that up to {max_concurrency} agents can be active at once, including you."
+        "{usage_hint_text}\n{DEFAULT_MULTI_AGENT_V2_SHARED_USAGE_HINT_TEXT}\n{wait_agent_usage_hint_text}There are {max_concurrency} available concurrency slots, meaning that up to {max_concurrency} agents can be active at once, including you."
     )
 }
 
@@ -274,18 +287,16 @@ const LOCAL_DEV_BUILD_VERSION: &str = "0.0.0";
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 const CONFIG_PROFILE_V2_SUFFIX: &str = ".config.toml";
 
-fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
+fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<AbsolutePathBuf> {
     let raw = std::env::var(codex_state::SQLITE_HOME_ENV).ok()?;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return None;
     }
-    let path = PathBuf::from(trimmed);
-    if path.is_absolute() {
-        Some(path)
-    } else {
-        Some(resolved_cwd.join(path))
-    }
+    Some(AbsolutePathBuf::resolve_path_against_base(
+        trimmed,
+        resolved_cwd,
+    ))
 }
 
 fn resolve_cli_auth_credentials_store_mode(
@@ -452,16 +463,12 @@ impl Permissions {
         self.permission_profile_state.profile_workspace_roots()
     }
 
-    fn materialized_permission_profile(&self) -> PermissionProfile {
-        self.permission_profile()
-            .clone()
-            .materialize_project_roots_with_workspace_roots(&self.workspace_roots)
-    }
-
     /// Effective runtime permissions after config requirements and runtime
     /// workspace-root materialization have been applied.
     pub fn effective_permission_profile(&self) -> PermissionProfile {
-        self.materialized_permission_profile()
+        self.permission_profile()
+            .clone()
+            .materialize_project_roots_with_workspace_roots(&self.workspace_roots)
     }
 
     /// Named profile selected by config, if the current profile has one.
@@ -471,7 +478,7 @@ impl Permissions {
 
     /// Effective filesystem sandbox policy derived from the canonical profile.
     pub fn file_system_sandbox_policy(&self) -> FileSystemSandboxPolicy {
-        self.materialized_permission_profile()
+        self.effective_permission_profile()
             .file_system_sandbox_policy()
     }
 
@@ -482,7 +489,7 @@ impl Permissions {
 
     /// Legacy compatibility projection derived from the canonical profile.
     pub fn legacy_sandbox_policy(&self, cwd: &Path) -> SandboxPolicy {
-        let permission_profile = self.materialized_permission_profile();
+        let permission_profile = self.effective_permission_profile();
         compatibility_sandbox_policy_for_permission_profile(&permission_profile, cwd)
     }
 
@@ -683,6 +690,9 @@ pub struct Config {
     /// Base instructions override.
     pub base_instructions: Option<String>,
 
+    /// Origin of the configured base instructions when supplied by another session or lockfile.
+    pub base_instructions_provenance: Option<BaseInstructionsProvenance>,
+
     /// Developer instructions override injected as a separate message.
     pub developer_instructions: Option<String>,
 
@@ -831,6 +841,9 @@ pub struct Config {
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     pub mcp_servers: Constrained<HashMap<String, McpServerConfig>>,
 
+    /// When present, only these MCP servers omit the legacy `mcp__` namespace prefix.
+    pub non_prefixed_mcp_tool_servers: Option<Vec<String>>,
+
     /// Preferred store for MCP OAuth credentials.
     /// keyring: Use an OS-specific keyring service.
     ///          Credentials stored in the keyring will only be readable by Codex unless the user explicitly grants access via OS-level keyring access.
@@ -855,7 +868,7 @@ pub struct Config {
     /// Combined provider map (defaults plus user-defined providers).
     pub model_providers: HashMap<String, ModelProviderInfo>,
 
-    /// Maximum number of bytes to include from an AGENTS.md project doc file.
+    /// Maximum total bytes of project instruction content across all selected environments.
     pub project_doc_max_bytes: usize,
 
     /// Additional filenames to try when looking for project-level docs.
@@ -885,12 +898,6 @@ pub struct Config {
     /// User-defined role declarations keyed by role name.
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
 
-    /// Optional exact set of roles available to Agent spawn operations.
-    pub agent_allowed_roles: Option<BTreeSet<String>>,
-
-    /// Optional per-role limits for resident spawned Agent threads.
-    pub agent_role_spawn_limits: BTreeMap<String, usize>,
-
     /// Memories subsystem settings.
     pub memories: MemoriesConfig,
 
@@ -898,8 +905,8 @@ pub struct Config {
     /// overridden by the `CODEX_HOME` environment variable).
     pub codex_home: AbsolutePathBuf,
 
-    /// Directory where Codex stores the SQLite state DB.
-    pub sqlite_home: PathBuf,
+    /// Resolved configuration shared by all Codex SQLite databases.
+    pub sqlite: codex_state::SqliteConfig,
 
     /// Directory where Codex writes log files (defaults to `$CODEX_HOME/log`).
     pub log_dir: PathBuf,
@@ -984,6 +991,9 @@ pub struct Config {
     /// Whether Codex-owned clients should respect host system proxy settings.
     pub respect_system_proxy: bool,
 
+    /// Process-only ChatGPT routing selection supplied when Codex is launched.
+    pub psp: bool,
+
     /// Optional product SKU forwarded to the host-owned apps MCP server.
     pub apps_mcp_product_sku: Option<String>,
 
@@ -1036,6 +1046,12 @@ pub struct Config {
 
     /// Whether to register the experimental request_user_input tool.
     pub experimental_request_user_input_enabled: bool,
+
+    /// Whether to register the update_plan tool.
+    pub update_plan_enabled: bool,
+
+    /// Policy for collecting and validating tool runtimes.
+    pub tool_registry: ToolRegistryConfig,
 
     /// Configuration for the experimental code-mode tool surface.
     pub code_mode: CodeModeConfig,
@@ -1100,9 +1116,33 @@ pub struct Config {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct ToolRegistryConfig {
+    /// Fail the turn when multiple tools share the same effective name.
+    pub error_on_tool_collisions: bool,
+    /// Include authoritative tool information in per-turn request metadata.
+    pub turn_metadata_includes_tool_info: bool,
+}
+
+const DEFAULT_CODE_MODE_EXEC_YIELD_TIME_MS: u64 = 30_000;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CodeModeConfig {
+    pub default_exec_yield_time_ms: u64,
     pub excluded_tool_namespaces: Vec<String>,
     pub direct_only_tool_namespaces: Vec<String>,
+    /// Keep code mode fail-closed when the standalone host is unavailable.
+    pub disable_in_process_fallback: bool,
+}
+
+impl Default for CodeModeConfig {
+    fn default() -> Self {
+        Self {
+            default_exec_yield_time_ms: DEFAULT_CODE_MODE_EXEC_YIELD_TIME_MS,
+            excluded_tool_namespaces: Vec::new(),
+            direct_only_tool_namespaces: Vec::new(),
+            disable_in_process_fallback: false,
+        }
+    }
 }
 
 pub(crate) const DEFAULT_TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE: &str = concat!(
@@ -1123,6 +1163,78 @@ pub struct TokenBudgetConfig {
 }
 
 impl TokenBudgetConfig {
+    pub(crate) fn validate(&self) -> std::io::Result<()> {
+        if self
+            .reminder_threshold_tokens
+            .is_some_and(|tokens| tokens <= 0)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "features.token_budget.reminder_threshold_tokens must be positive",
+            ));
+        }
+
+        if self.reminder_message_template.trim().is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "features.token_budget.reminder_message_template must not be empty",
+            ));
+        }
+        if self.reminder_message_template.len() > TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE_MAX_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "features.token_budget.reminder_message_template must not exceed {TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE_MAX_BYTES} bytes"
+                ),
+            ));
+        }
+
+        if self
+            .guidance_message
+            .as_ref()
+            .is_some_and(|message| message.len() > TOKEN_BUDGET_GUIDANCE_MESSAGE_MAX_BYTES)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "features.token_budget.guidance_message must not exceed {TOKEN_BUDGET_GUIDANCE_MESSAGE_MAX_BYTES} bytes"
+                ),
+            ));
+        }
+
+        if self
+            .auto_compact_fallback_prompt
+            .as_ref()
+            .is_some_and(|prompt| prompt.len() > AUTO_COMPACT_FALLBACK_PROMPT_MAX_BYTES)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "features.token_budget.auto_compact_fallback_prompt must not exceed {AUTO_COMPACT_FALLBACK_PROMPT_MAX_BYTES} bytes"
+                ),
+            ));
+        }
+        if self.auto_compact_fallback_prompt.is_some()
+            && self.auto_compact_fallback_buffer_tokens.is_none()
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "features.token_budget.auto_compact_fallback_buffer_tokens is required when auto_compact_fallback_prompt is set",
+            ));
+        }
+        if self
+            .auto_compact_fallback_buffer_tokens
+            .is_some_and(|tokens| tokens <= 0)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "features.token_budget.auto_compact_fallback_buffer_tokens must be positive",
+            ));
+        }
+
+        Ok(())
+    }
+
     pub(crate) fn fallback_buffer_tokens(&self) -> i64 {
         if self.auto_compact_fallback_prompt.is_some() {
             self.auto_compact_fallback_buffer_tokens.unwrap_or(0)
@@ -1181,10 +1293,12 @@ pub struct MultiAgentV2Config {
     pub usage_hint_text: Option<String>,
     pub root_agent_usage_hint_text: Option<String>,
     pub subagent_usage_hint_text: Option<String>,
+    pub subagent_developer_instructions: Option<String>,
     pub multi_agent_mode_hint_text: Option<String>,
     pub tool_namespace: Option<String>,
     pub hide_spawn_agent_metadata: bool,
     pub expose_spawn_agent_model_overrides: bool,
+    pub wait_agent_enabled: bool,
     pub non_code_mode_only: bool,
 }
 
@@ -1199,15 +1313,19 @@ impl MultiAgentV2Config {
             root_agent_usage_hint_text: Some(default_multi_agent_v2_usage_hint_text(
                 DEFAULT_MULTI_AGENT_V2_ROOT_AGENT_USAGE_HINT_TEXT,
                 max_concurrent_threads_per_session,
+                Some(DEFAULT_MULTI_AGENT_V2_WAIT_AGENT_USAGE_HINT_TEXT),
             )),
             subagent_usage_hint_text: Some(default_multi_agent_v2_usage_hint_text(
                 DEFAULT_MULTI_AGENT_V2_SUBAGENT_USAGE_HINT_TEXT,
                 max_concurrent_threads_per_session,
+                Some(DEFAULT_MULTI_AGENT_V2_WAIT_AGENT_USAGE_HINT_TEXT),
             )),
+            subagent_developer_instructions: None,
             multi_agent_mode_hint_text: None,
             tool_namespace: Some(DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE.to_string()),
             hide_spawn_agent_metadata: true,
             expose_spawn_agent_model_overrides: true,
+            wait_agent_enabled: true,
             non_code_mode_only: true,
         }
     }
@@ -1250,8 +1368,16 @@ impl AuthManagerConfig for Config {
         Config::auth_keyring_backend_kind(self)
     }
 
+    fn forced_login_method(&self) -> Option<ForcedLoginMethod> {
+        self.forced_login_method
+    }
+
     fn forced_chatgpt_workspace_id(&self) -> Option<Vec<String>> {
         self.forced_chatgpt_workspace_id.clone()
+    }
+
+    fn managed_auth_policy(&self) -> ManagedAuthPolicy {
+        self.config_layer_stack.requirements().managed_auth_policy()
     }
 
     fn chatgpt_base_url(&self) -> String {
@@ -1417,6 +1543,9 @@ impl ConfigBuilder {
                 lock_config_layer_stack,
             )
             .await?;
+            if let Some(provenance) = lockfile_toml.base_instructions_provenance {
+                config.base_instructions_provenance = Some(provenance);
+            }
             config.config_lock_toml = Some(Arc::new(expected_lock_config));
             config.config_lock_allow_codex_version_mismatch = allow_codex_version_mismatch;
             config.config_lock_save_fields_resolved_from_model_catalog =
@@ -1440,6 +1569,10 @@ impl ConfigBuilder {
 }
 
 impl Config {
+    pub fn sqlite_config(&self) -> &codex_state::SqliteConfig {
+        &self.sqlite
+    }
+
     pub(crate) fn multi_agent_version_override(&self) -> Option<MultiAgentVersion> {
         if self.features.enabled(Feature::MultiAgentV2) {
             Some(MultiAgentVersion::V2)
@@ -1515,7 +1648,12 @@ impl Config {
             model_context_window: self.model_context_window,
             model_auto_compact_token_limit: self.model_auto_compact_token_limit,
             tool_output_token_limit: self.tool_output_token_limit,
-            base_instructions: self.base_instructions.clone(),
+            base_instructions: self.base_instructions.clone().filter(|_| {
+                !matches!(
+                    self.base_instructions_provenance,
+                    Some(BaseInstructionsProvenance::Model { .. })
+                )
+            }),
             personality_enabled: self.features.enabled(Feature::Personality),
             personality: self.personality,
             model_catalog: self.model_catalog.clone(),
@@ -1534,13 +1672,19 @@ impl Config {
         } else {
             OutboundProxyPolicy::ReqwestDefault
         };
-        HttpClientFactory::new(outbound_proxy_policy)
+        let factory = HttpClientFactory::new(outbound_proxy_policy);
+        if self.psp {
+            factory.with_chatgpt_cookies([HeaderValue::from_static("oai-chat-psp=true")])
+        } else {
+            factory
+        }
     }
 
     /// Build the plugin-manager input from the effective config.
     pub fn plugins_config_input(&self) -> PluginsConfigInput {
         PluginsConfigInput::new(
             self.config_layer_stack.clone(),
+            self.model_provider_id.clone(),
             self.features.enabled(Feature::Plugins),
             self.features.enabled(Feature::RemotePlugin),
             self.chatgpt_base_url.clone(),
@@ -1554,27 +1698,6 @@ impl Config {
         plugin_id: &str,
         mcp_servers: &mut HashMap<String, McpServerConfig>,
     ) {
-        let effective_config = self.config_layer_stack.effective_config();
-        if let Some(plugins) = effective_config.get("plugins") {
-            match plugins.clone().try_into::<HashMap<String, PluginConfig>>() {
-                Ok(plugins) => {
-                    if let Some(plugin) = plugins.get(plugin_id) {
-                        for (server_name, policy) in &plugin.mcp_servers {
-                            if let Some(server) = mcp_servers.get_mut(server_name) {
-                                policy.apply_to(server);
-                            }
-                        }
-                    }
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        plugin_id,
-                        error = %error,
-                        "failed to apply effective selected-plugin MCP policy"
-                    );
-                }
-            }
-        }
         filter_plugin_mcp_servers_by_requirements(
             plugin_id,
             mcp_servers,
@@ -1624,10 +1747,17 @@ impl Config {
         {
             let mut plugin_mcp_servers = plugin.mcp_servers.clone();
             self.apply_plugin_mcp_server_requirements(&plugin.config_name, &mut plugin_mcp_servers);
-            let attribution = McpPluginAttribution::new(
-                plugin.config_name.clone(),
-                plugin.display_name().to_string(),
-            );
+            let attribution = if plugin.is_agent_plugin() {
+                McpPluginAttribution::agent_plugin(
+                    plugin.config_name.clone(),
+                    plugin.display_name().to_string(),
+                )
+            } else {
+                McpPluginAttribution::new(
+                    plugin.config_name.clone(),
+                    plugin.display_name().to_string(),
+                )
+            };
             for (name, plugin_server) in plugin_mcp_servers {
                 catalog.register(McpServerRegistration::from_plugin(
                     name,
@@ -1659,15 +1789,29 @@ impl Config {
                 .features
                 .enabled(Feature::SkillMcpDependencyInstall),
             approval_policy: self.permissions.approval_policy.clone(),
+            permission_profile: self.permissions.permission_profile().clone(),
+            config_layer_stack: self.config_layer_stack.clone(),
+            approvals_reviewer: self.approvals_reviewer,
+            environment_cwds: HashMap::new(),
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
             use_legacy_landlock: self.features.use_legacy_landlock(),
             apps_enabled: self.features.enabled(Feature::Apps),
             prefix_mcp_tool_names: self.prefix_mcp_tool_names(),
+            non_prefixed_mcp_tool_servers: if self
+                .features
+                .enabled(Feature::NonPrefixedMcpToolNames)
+            {
+                self.non_prefixed_mcp_tool_servers
+                    .clone()
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            },
+            protocol_mode: self.mcp_protocol_mode(),
             client_elicitation_capability: if self.features.enabled(Feature::AuthElicitation) {
-                ElicitationCapability {
-                    form: Some(FormElicitationCapability::default()),
-                    url: Some(UrlElicitationCapability::default()),
-                }
+                ElicitationCapability::new()
+                    .with_form(FormElicitationCapability::new())
+                    .with_url(UrlElicitationCapability::new())
             } else {
                 // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
                 // indicates this should be an empty object.
@@ -1683,6 +1827,15 @@ impl Config {
 
     pub(crate) fn prefix_mcp_tool_names(&self) -> bool {
         !self.features.enabled(Feature::NonPrefixedMcpToolNames)
+            || self.non_prefixed_mcp_tool_servers.is_some()
+    }
+
+    pub fn mcp_protocol_mode(&self) -> McpProtocolMode {
+        if self.features.enabled(Feature::Mcp20260728) {
+            McpProtocolMode::V20260728
+        } else {
+            McpProtocolMode::Legacy
+        }
     }
 
     pub async fn rebuild_preserving_session_layers(
@@ -1691,21 +1844,13 @@ impl Config {
     ) -> std::io::Result<Self> {
         let mut layers = refreshed_config
             .config_layer_stack
-            .get_layers(
-                ConfigLayerStackOrdering::LowestPrecedenceFirst,
-                /*include_disabled*/ true,
-            )
-            .into_iter()
+            .all_layers_low_to_high()
             .filter(|layer| !is_session_layer(&layer.name))
             .cloned()
             .collect::<Vec<_>>();
         layers.extend(
             self.config_layer_stack
-                .get_layers(
-                    ConfigLayerStackOrdering::LowestPrecedenceFirst,
-                    /*include_disabled*/ true,
-                )
-                .into_iter()
+                .all_layers_low_to_high()
                 .filter(|layer| is_session_layer(&layer.name))
                 .cloned(),
         );
@@ -1740,6 +1885,7 @@ impl Config {
             ConfigOverrides {
                 cwd: Some(self.cwd.to_path_buf()),
                 default_zsh_path,
+                psp: Some(refreshed_config.psp),
                 ..Default::default()
             },
             refreshed_config.codex_home.clone(),
@@ -1997,6 +2143,13 @@ fn filter_plugin_mcp_servers_by_requirements(
     let Some(requirements) = plugin_requirements else {
         return;
     };
+    if !requirements
+        .value
+        .values()
+        .any(|plugin| plugin.mcp_servers.is_some())
+    {
+        return;
+    }
     let source = requirements.source.clone();
     let plugin_mcp_requirements = requirements
         .value
@@ -2283,11 +2436,8 @@ fn resolve_tool_suggest_config_from_config(
         }
     };
 
-    let layers = config_layer_stack.get_layers(
-        ConfigLayerStackOrdering::LowestPrecedenceFirst,
-        /*include_disabled*/ false,
-    );
-    if layers.is_empty() {
+    let mut layers = config_layer_stack.layers_low_to_high().peekable();
+    if layers.peek().is_none() {
         for disabled_tool in tool_suggest
             .into_iter()
             .flat_map(|tool_suggest| tool_suggest.disabled_tools.iter().cloned())
@@ -2382,11 +2532,7 @@ fn resolve_permission_config_syntax(
     }
 
     let session_flags_select_profiles = config_layer_stack
-        .get_layers(
-            ConfigLayerStackOrdering::HighestPrecedenceFirst,
-            /*include_disabled*/ false,
-        )
-        .into_iter()
+        .layers_high_to_low()
         .find(|layer| matches!(layer.name, ConfigLayerSource::SessionFlags))
         .and_then(|layer| {
             layer
@@ -2401,10 +2547,7 @@ fn resolve_permission_config_syntax(
     }
 
     let mut selection = None;
-    for layer in config_layer_stack.get_layers(
-        ConfigLayerStackOrdering::LowestPrecedenceFirst,
-        /*include_disabled*/ false,
-    ) {
+    for layer in config_layer_stack.layers_low_to_high() {
         let Ok(layer_selection) = layer.config.clone().try_into::<PermissionSelectionToml>() else {
             continue;
         };
@@ -2486,6 +2629,7 @@ pub struct ConfigOverrides {
     pub tools_web_search_request: Option<bool>,
     pub ephemeral: Option<bool>,
     pub bypass_hook_trust: Option<bool>,
+    pub psp: Option<bool>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
     /// Explicit absolute runtime workspace roots for this session. When set,
@@ -2543,6 +2687,14 @@ fn resolve_experimental_request_user_input_enabled(config_toml: &ConfigToml) -> 
         .is_none_or(|config| config.enabled)
 }
 
+fn resolve_update_plan_enabled(config_toml: &ConfigToml) -> bool {
+    config_toml
+        .tools
+        .as_ref()
+        .and_then(|tools| tools.update_plan.as_ref())
+        .is_none_or(|config| config.enabled)
+}
+
 fn resolve_orchestrator_feature_enabled(
     feature: Option<&codex_config::config_toml::OrchestratorFeatureToml>,
 ) -> bool {
@@ -2551,8 +2703,19 @@ fn resolve_orchestrator_feature_enabled(
 
 fn resolve_code_mode_config(config_toml: &ConfigToml) -> CodeModeConfig {
     let base = code_mode_toml_config(config_toml.features.as_ref());
+    let host = config_toml
+        .features
+        .as_ref()
+        .and_then(|features| features.code_mode_host.as_ref())
+        .and_then(|feature| match feature {
+            FeatureToml::Enabled(_) => None,
+            FeatureToml::Config(config) => Some(config),
+        });
 
     CodeModeConfig {
+        default_exec_yield_time_ms: base
+            .and_then(|config| config.default_exec_yield_time_ms)
+            .unwrap_or(DEFAULT_CODE_MODE_EXEC_YIELD_TIME_MS),
         excluded_tool_namespaces: base
             .and_then(|config| config.excluded_tool_namespaces.as_ref())
             .cloned()
@@ -2560,6 +2723,9 @@ fn resolve_code_mode_config(config_toml: &ConfigToml) -> CodeModeConfig {
         direct_only_tool_namespaces: base
             .and_then(|config| config.direct_only_tool_namespaces.as_ref())
             .cloned()
+            .unwrap_or_default(),
+        disable_in_process_fallback: host
+            .and_then(|config| config.disable_in_process_fallback)
             .unwrap_or_default(),
     }
 }
@@ -2597,8 +2763,24 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
     let expose_spawn_agent_model_overrides = base
         .and_then(|config| config.expose_spawn_agent_model_overrides)
         .unwrap_or(default.expose_spawn_agent_model_overrides);
-    let mut default_root_agent_usage_hint_text = default.root_agent_usage_hint_text;
-    let mut default_subagent_usage_hint_text = default.subagent_usage_hint_text;
+    let wait_agent_enabled = base
+        .and_then(|config| config.wait_agent_enabled)
+        .unwrap_or(default.wait_agent_enabled);
+    let default_wait_agent_usage_hint_text = if wait_agent_enabled {
+        Some(DEFAULT_MULTI_AGENT_V2_WAIT_AGENT_USAGE_HINT_TEXT)
+    } else {
+        None
+    };
+    let mut default_root_agent_usage_hint_text = Some(default_multi_agent_v2_usage_hint_text(
+        DEFAULT_MULTI_AGENT_V2_ROOT_AGENT_USAGE_HINT_TEXT,
+        max_concurrent_threads_per_session,
+        default_wait_agent_usage_hint_text,
+    ));
+    let mut default_subagent_usage_hint_text = Some(default_multi_agent_v2_usage_hint_text(
+        DEFAULT_MULTI_AGENT_V2_SUBAGENT_USAGE_HINT_TEXT,
+        max_concurrent_threads_per_session,
+        default_wait_agent_usage_hint_text,
+    ));
     if expose_spawn_agent_model_overrides {
         default_root_agent_usage_hint_text = Some(append_usage_hint_text(
             default_root_agent_usage_hint_text.as_deref(),
@@ -2617,6 +2799,9 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
         base.map(|config| &config.subagent_usage_hint_text),
         default_subagent_usage_hint_text,
     );
+    let subagent_developer_instructions = base
+        .and_then(|config| config.subagent_developer_instructions.as_ref())
+        .map(|instructions| instructions.trim().to_string());
     let multi_agent_mode_hint_text = base
         .and_then(|config| config.multi_agent_mode_hint_text.as_ref())
         .cloned()
@@ -2637,10 +2822,12 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
         usage_hint_text,
         root_agent_usage_hint_text,
         subagent_usage_hint_text,
+        subagent_developer_instructions,
         multi_agent_mode_hint_text,
         tool_namespace,
         hide_spawn_agent_metadata,
         expose_spawn_agent_model_overrides,
+        wait_agent_enabled,
         non_code_mode_only,
     }
 }
@@ -2656,85 +2843,29 @@ fn resolve_token_budget_config(
     let token_budget_config = token_budget_toml_config(config_toml.features.as_ref());
     let reminder_threshold_tokens =
         token_budget_config.and_then(|config| config.reminder_threshold_tokens);
-    if reminder_threshold_tokens.is_some_and(|tokens| tokens <= 0) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "features.token_budget.reminder_threshold_tokens must be positive",
-        ));
-    }
-
     let reminder_message_template = token_budget_config
         .and_then(|config| config.reminder_message_template.clone())
         .unwrap_or_else(|| DEFAULT_TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE.to_string());
-    if reminder_message_template.trim().is_empty() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "features.token_budget.reminder_message_template must not be empty",
-        ));
-    }
-    if reminder_message_template.len() > TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE_MAX_BYTES {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!(
-                "features.token_budget.reminder_message_template must not exceed {TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE_MAX_BYTES} bytes"
-            ),
-        ));
-    }
-
     let guidance_message = token_budget_config
         .and_then(|config| config.guidance_message.clone())
         .filter(|message| !message.trim().is_empty());
-    if guidance_message
-        .as_ref()
-        .is_some_and(|message| message.len() > TOKEN_BUDGET_GUIDANCE_MESSAGE_MAX_BYTES)
-    {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!(
-                "features.token_budget.guidance_message must not exceed {TOKEN_BUDGET_GUIDANCE_MESSAGE_MAX_BYTES} bytes"
-            ),
-        ));
-    }
-
     let auto_compact_fallback_prompt = token_budget_config
         .and_then(|config| config.auto_compact_fallback_prompt.as_deref())
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
-    if auto_compact_fallback_prompt
-        .as_ref()
-        .is_some_and(|prompt| prompt.len() > AUTO_COMPACT_FALLBACK_PROMPT_MAX_BYTES)
-    {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!(
-                "features.token_budget.auto_compact_fallback_prompt must not exceed {AUTO_COMPACT_FALLBACK_PROMPT_MAX_BYTES} bytes"
-            ),
-        ));
-    }
-
     let auto_compact_fallback_buffer_tokens =
         token_budget_config.and_then(|config| config.auto_compact_fallback_buffer_tokens);
-    if auto_compact_fallback_prompt.is_some() && auto_compact_fallback_buffer_tokens.is_none() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "features.token_budget.auto_compact_fallback_buffer_tokens is required when auto_compact_fallback_prompt is set",
-        ));
-    }
-    if auto_compact_fallback_buffer_tokens.is_some_and(|tokens| tokens <= 0) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "features.token_budget.auto_compact_fallback_buffer_tokens must be positive",
-        ));
-    }
 
-    Ok(Some(TokenBudgetConfig {
+    let token_budget = TokenBudgetConfig {
         reminder_threshold_tokens,
         reminder_message_template,
         guidance_message,
         auto_compact_fallback_prompt,
         auto_compact_fallback_buffer_tokens,
-    }))
+    };
+    token_budget.validate()?;
+    Ok(Some(token_budget))
 }
 
 fn resolve_rollout_budget_config(
@@ -2929,21 +3060,41 @@ pub fn resolve_bootstrap_auth_route_config(
     cfg: &ConfigToml,
     feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
 ) -> std::io::Result<AuthRouteConfig> {
+    resolve_bootstrap_http_client_factory(cfg, feature_requirements)
+        .map(AuthRouteConfig::from_http_client_factory)
+}
+
+/// Resolves shared HTTP routing for startup work that runs before final [`Config`] loading.
+pub fn resolve_bootstrap_http_client_factory(
+    cfg: &ConfigToml,
+    feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
+) -> std::io::Result<HttpClientFactory> {
     resolve_bootstrap_respect_system_proxy(cfg, feature_requirements).map(|respect_system_proxy| {
         let outbound_proxy_policy = if respect_system_proxy {
             OutboundProxyPolicy::RespectSystemProxy
         } else {
             OutboundProxyPolicy::ReqwestDefault
         };
-        AuthRouteConfig::from_http_client_factory(HttpClientFactory::new(outbound_proxy_policy))
+        HttpClientFactory::new(outbound_proxy_policy)
     })
 }
 
 pub(crate) fn resolve_web_search_mode_for_turn(
     web_search_mode: &Constrained<WebSearchMode>,
     permission_profile: &PermissionProfile,
+    provider_capabilities: ProviderCapabilities,
 ) -> WebSearchMode {
     let preferred = web_search_mode.value();
+    let is_allowed = |mode: WebSearchMode| {
+        let provider_supports_mode = match mode {
+            WebSearchMode::Live | WebSearchMode::Indexed => {
+                provider_capabilities.external_web_access
+            }
+            WebSearchMode::Cached | WebSearchMode::Disabled => true,
+        };
+
+        provider_supports_mode && web_search_mode.can_set(&mode).is_ok()
+    };
 
     if matches!(permission_profile, PermissionProfile::Disabled)
         && !matches!(preferred, WebSearchMode::Disabled | WebSearchMode::Indexed)
@@ -2953,12 +3104,12 @@ pub(crate) fn resolve_web_search_mode_for_turn(
             WebSearchMode::Cached,
             WebSearchMode::Disabled,
         ] {
-            if web_search_mode.can_set(&mode).is_ok() {
+            if is_allowed(mode) {
                 return mode;
             }
         }
     } else {
-        if web_search_mode.can_set(&preferred).is_ok() {
+        if is_allowed(preferred) {
             return preferred;
         }
         for mode in [
@@ -2966,7 +3117,7 @@ pub(crate) fn resolve_web_search_mode_for_turn(
             WebSearchMode::Live,
             WebSearchMode::Disabled,
         ] {
-            if web_search_mode.can_set(&mode).is_ok() {
+            if is_allowed(mode) {
                 return mode;
             }
         }
@@ -3106,10 +3257,11 @@ impl Config {
             config_layer_stack.requirements(),
             &mut startup_warnings,
         );
-
         // Destructure every field to ensure ConfigRequirements additions are
         // either applied above or handled while constructing the final Config.
         let ConfigRequirements {
+            allowed_login_methods: _,
+            allowed_chatgpt_workspaces: _,
             sqlite_home: _,
             log_dir: _,
             model_catalog_json: _,
@@ -3118,6 +3270,7 @@ impl Config {
             feedback: _,
             approval_policy: mut constrained_approval_policy,
             approvals_reviewer: mut constrained_approvals_reviewer,
+            auto_review_required_models: _,
             permission_profile: mut constrained_permission_profile,
             windows_sandbox_mode: mut constrained_windows_sandbox_mode,
             windows_sandbox_private_desktop: _,
@@ -3162,6 +3315,7 @@ impl Config {
             tools_web_search_request: override_tools_web_search_request,
             ephemeral,
             bypass_hook_trust,
+            psp,
             additional_writable_roots,
             workspace_roots: workspace_roots_override,
         } = overrides;
@@ -3221,6 +3375,17 @@ impl Config {
             feature_requirements,
             &mut startup_warnings,
         )?;
+        let non_prefixed_mcp_tool_servers = if features.enabled(Feature::NonPrefixedMcpToolNames) {
+            cfg.features
+                .as_ref()
+                .and_then(|features| features.non_prefixed_mcp_tool_names.as_ref())
+                .and_then(|feature| match feature {
+                    FeatureToml::Enabled(_) => None,
+                    FeatureToml::Config(config) => config.server_names.clone(),
+                })
+        } else {
+            None
+        };
         let respect_system_proxy = features.enabled(Feature::RespectSystemProxy);
         let enable_network_proxy = features.enabled(Feature::NetworkProxy);
         let configured_windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg);
@@ -3559,6 +3724,21 @@ impl Config {
         let web_search_config = resolve_web_search_config(&cfg);
         let experimental_request_user_input_enabled =
             resolve_experimental_request_user_input_enabled(&cfg);
+        let update_plan_enabled = resolve_update_plan_enabled(&cfg);
+        let tool_registry = ToolRegistryConfig {
+            error_on_tool_collisions: cfg
+                .features
+                .as_ref()
+                .and_then(|features| features.tool_registry.as_ref())
+                .and_then(|config| config.error_on_tool_collisions)
+                .unwrap_or_default(),
+            turn_metadata_includes_tool_info: cfg
+                .features
+                .as_ref()
+                .and_then(|features| features.tool_registry.as_ref())
+                .and_then(|config| config.turn_metadata_includes_tool_info)
+                .unwrap_or_default(),
+        };
         let code_mode = resolve_code_mode_config(&cfg);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg);
         let token_budget = resolve_token_budget_config(&cfg, &features)?;
@@ -3569,48 +3749,6 @@ impl Config {
         let agent_roles =
             agent_roles::load_agent_roles(fs, &cfg, &config_layer_stack, &mut startup_warnings)
                 .await?;
-        let agent_allowed_roles = cfg
-            .agents
-            .as_ref()
-            .and_then(|agents| agents.allowed_roles.as_ref())
-            .map(|roles| roles.iter().cloned().collect::<BTreeSet<_>>());
-        if agent_allowed_roles.as_ref().is_some_and(|roles| {
-            roles.is_empty()
-                || roles.len()
-                    != cfg
-                        .agents
-                        .as_ref()
-                        .and_then(|agents| agents.allowed_roles.as_ref())
-                        .map(Vec::len)
-                        .unwrap_or_default()
-                || roles
-                    .iter()
-                    .any(|role| role.trim() != role || role.is_empty() || role.len() > 64)
-        }) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "agents.allowed_roles must contain unique non-empty role names",
-            ));
-        }
-        let agent_role_spawn_limits = cfg
-            .agents
-            .as_ref()
-            .and_then(|agents| agents.role_spawn_limits.clone())
-            .unwrap_or_default();
-        if agent_role_spawn_limits.iter().any(|(role, limit)| {
-            role.trim() != role
-                || role.is_empty()
-                || role.len() > 64
-                || *limit == 0
-                || agent_allowed_roles
-                    .as_ref()
-                    .is_some_and(|allowed| !allowed.contains(role))
-        }) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "agents.role_spawn_limits must use allowed non-empty role names and positive limits",
-            ));
-        }
 
         let openai_base_url = cfg
             .openai_base_url
@@ -3797,6 +3935,9 @@ impl Config {
         let base_instructions = base_instructions
             .or(file_base_instructions)
             .or(cfg.instructions.clone());
+        let base_instructions_provenance = base_instructions
+            .as_ref()
+            .map(|_| BaseInstructionsProvenance::Custom);
         let developer_instructions = developer_instructions.or(cfg.developer_instructions);
         let include_permissions_instructions = cfg.include_permissions_instructions.unwrap_or(true);
         let include_apps_instructions = cfg.include_apps_instructions.unwrap_or(true);
@@ -3857,9 +3998,9 @@ impl Config {
         let sqlite_home = cfg
             .sqlite_home
             .as_ref()
-            .map(AbsolutePathBuf::to_path_buf)
+            .cloned()
             .or(sqlite_home_env)
-            .unwrap_or_else(|| codex_home.to_path_buf());
+            .unwrap_or_else(|| codex_home.clone());
         let original_permission_profile = permission_profile.clone();
         apply_requirement_constrained_value(
             "approval_policy",
@@ -4003,6 +4144,7 @@ impl Config {
             enforce_residency: enforce_residency.value,
             notify: cfg.notify,
             base_instructions,
+            base_instructions_provenance,
             personality,
             developer_instructions,
             compact_prompt,
@@ -4020,6 +4162,7 @@ impl Config {
                 env!("CARGO_PKG_VERSION"),
             ),
             mcp_servers,
+            non_prefixed_mcp_tool_servers,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
             mcp_oauth_credentials_store_mode: resolve_mcp_oauth_credentials_store_mode(
@@ -4050,12 +4193,10 @@ impl Config {
             agent_default_subagent_reasoning_effort,
             agent_max_depth,
             agent_roles,
-            agent_allowed_roles,
-            agent_role_spawn_limits,
             memories: memories_config,
             agent_interrupt_message_enabled,
             codex_home,
-            sqlite_home,
+            sqlite: codex_state::SqliteConfig::from_sqlite_home(sqlite_home),
             log_dir,
             config_lock_export_dir: cfg
                 .debug
@@ -4101,6 +4242,7 @@ impl Config {
                 .chatgpt_base_url
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
             respect_system_proxy,
+            psp: psp.unwrap_or_default(),
             apps_mcp_product_sku: cfg.apps_mcp_product_sku.clone(),
             realtime_audio: cfg
                 .audio
@@ -4133,6 +4275,8 @@ impl Config {
             web_search_mode: constrained_web_search_mode.value,
             web_search_config,
             experimental_request_user_input_enabled,
+            update_plan_enabled,
+            tool_registry,
             code_mode,
             use_experimental_unified_exec_tool,
             background_terminal_max_timeout,
@@ -4339,7 +4483,7 @@ impl Config {
     }
 
     pub fn bundled_skills_enabled(&self) -> bool {
-        crate::skills::service::bundled_skills_enabled_from_stack(&self.config_layer_stack)
+        crate::skills::bundled_skills_enabled_from_stack(&self.config_layer_stack)
     }
 
     /// Returns whether effective requirements allow selecting a concrete profile.

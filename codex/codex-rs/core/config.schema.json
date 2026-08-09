@@ -36,13 +36,6 @@
         "$ref": "#/definitions/AgentRoleToml"
       },
       "properties": {
-        "allowed_roles": {
-          "description": "Optional exact set of Agent roles available to the spawn tool.\n\nWhen unset, configured and built-in roles remain available.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
         "default_subagent_model": {
           "description": "Default model for spawned subagents when the spawn call does not select one.",
           "type": "string"
@@ -73,15 +66,6 @@
           "description": "Maximum nesting depth for V1 agent threads. Ignored by V2.",
           "format": "int32",
           "type": "integer"
-        },
-        "role_spawn_limits": {
-          "additionalProperties": {
-            "format": "uint",
-            "minimum": 0.0,
-            "type": "integer"
-          },
-          "description": "Optional maximum number of resident agents for each named role.\n\nRoles omitted from this map remain governed only by the session-wide thread limit.",
-          "type": "object"
         }
       },
       "type": "object"
@@ -381,6 +365,12 @@
     "CodeModeConfigToml": {
       "additionalProperties": false,
       "properties": {
+        "default_exec_yield_time_ms": {
+          "description": "Default yield timeout for code-mode exec calls, in milliseconds.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
         "direct_only_tool_namespaces": {
           "description": "Exact tool namespaces to expose only as direct model tools. These tools bypass deferral, remain top-level in code-mode-only sessions, and are omitted from the nested code-mode tool surface.",
           "items": {
@@ -397,6 +387,19 @@
             "type": "string"
           },
           "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "CodeModeHostConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "disable_in_process_fallback": {
+          "description": "Keep code mode fail-closed when the standalone host is unavailable.",
+          "type": "boolean"
+        },
+        "enabled": {
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -459,6 +462,9 @@
             "auth_elicitation": {
               "type": "boolean"
             },
+            "background_paginated_rollout_migration": {
+              "type": "boolean"
+            },
             "browser_use": {
               "type": "boolean"
             },
@@ -478,6 +484,9 @@
               "type": "boolean"
             },
             "code_mode_host": {
+              "$ref": "#/definitions/FeatureToml_for_CodeModeHostConfigToml"
+            },
+            "code_mode_interrupt": {
               "type": "boolean"
             },
             "code_mode_only": {
@@ -513,6 +522,9 @@
             "deferred_executor": {
               "type": "boolean"
             },
+            "deferred_tool_world_state": {
+              "type": "boolean"
+            },
             "elevated_windows_sandbox": {
               "type": "boolean"
             },
@@ -529,6 +541,9 @@
               "type": "boolean"
             },
             "exec_permission_approvals": {
+              "type": "boolean"
+            },
+            "executed_tool_call_metadata": {
               "type": "boolean"
             },
             "executor_capability_discovery": {
@@ -555,6 +570,12 @@
             "guardian_approval": {
               "type": "boolean"
             },
+            "guardian_reuse_parent_compaction": {
+              "type": "boolean"
+            },
+            "guardianv2": {
+              "type": "boolean"
+            },
             "hooks": {
               "type": "boolean"
             },
@@ -564,10 +585,16 @@
             "image_generation": {
               "type": "boolean"
             },
+            "image_resize_notice": {
+              "type": "boolean"
+            },
             "imagegenext": {
               "type": "boolean"
             },
             "in_app_browser": {
+              "type": "boolean"
+            },
+            "in_app_updates": {
               "type": "boolean"
             },
             "item_ids": {
@@ -580,6 +607,9 @@
               "type": "boolean"
             },
             "local_thread_store_compression": {
+              "type": "boolean"
+            },
+            "mcp_2026_07_28": {
               "type": "boolean"
             },
             "memories": {
@@ -604,7 +634,7 @@
               "$ref": "#/definitions/FeatureToml_for_NetworkProxyConfigToml"
             },
             "non_prefixed_mcp_tool_names": {
-              "type": "boolean"
+              "$ref": "#/definitions/FeatureToml_for_NonPrefixedMcpToolNamesConfigToml"
             },
             "personality": {
               "type": "boolean"
@@ -622,6 +652,9 @@
               "type": "boolean"
             },
             "realtime_conversation": {
+              "type": "boolean"
+            },
+            "recommended_plugins": {
               "type": "boolean"
             },
             "remote_compaction_v2": {
@@ -711,6 +744,9 @@
             "tool_call_mcp_elicitation": {
               "type": "boolean"
             },
+            "tool_registry": {
+              "$ref": "#/definitions/ToolRegistryConfigToml"
+            },
             "tool_search": {
               "type": "boolean"
             },
@@ -735,6 +771,9 @@
             "unified_exec_zsh_fork": {
               "type": "boolean"
             },
+            "unified_image_budget": {
+              "type": "boolean"
+            },
             "use_agent_identity": {
               "type": "boolean"
             },
@@ -742,6 +781,9 @@
               "type": "boolean"
             },
             "use_linux_sandbox_bwrap": {
+              "type": "boolean"
+            },
+            "view_image": {
               "type": "boolean"
             },
             "web_search": {
@@ -990,6 +1032,16 @@
         }
       ]
     },
+    "FeatureToml_for_CodeModeHostConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/CodeModeHostConfigToml"
+        }
+      ]
+    },
     "FeatureToml_for_CurrentTimeReminderConfigToml": {
       "anyOf": [
         {
@@ -1017,6 +1069,16 @@
         },
         {
           "$ref": "#/definitions/NetworkProxyConfigToml"
+        }
+      ]
+    },
+    "FeatureToml_for_NonPrefixedMcpToolNamesConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/NonPrefixedMcpToolNamesConfigToml"
         }
       ]
     },
@@ -1253,6 +1315,43 @@
         },
         {
           "properties": {
+            "input": {
+              "additionalProperties": true,
+              "default": {},
+              "type": "object"
+            },
+            "server": {
+              "type": "string"
+            },
+            "statusMessage": {
+              "default": null,
+              "type": "string"
+            },
+            "timeout": {
+              "default": null,
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "mcp_tool"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "server",
+            "tool",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "type": {
               "enum": [
                 "prompt"
@@ -1392,7 +1491,7 @@
           "type": "array"
         }
       ],
-      "description": "One action binding value in config.\n\nThis accepts either:\n\n1. A single key spec string (`\"ctrl-a\"`). 2. A list of key spec strings (`[\"ctrl-a\", \"alt-a\"]`).\n\nAn empty list explicitly unbinds the action in that scope. Because an explicit empty list is still a configured value, runtime resolution must not fall through to global or built-in defaults for that action."
+      "description": "One action binding value in config.\n\nThis accepts either:\n\n1. A single key or chord string (`\"ctrl-a\"` or `\"ctrl-x ctrl-s\"`). 2. A list of alternative bindings (`[\"ctrl-a\", \"ctrl-x ctrl-s\"]`).\n\nAn empty list explicitly unbinds the action in that scope. Because an explicit empty list is still a configured value, runtime resolution must not fall through to global or built-in defaults for that action."
     },
     "LegacyAppPathString": {
       "type": "string"
@@ -1714,13 +1813,6 @@
           "description": "Additional HTTP headers to include in requests to this provider where the (key, value) pairs are the header name and value.",
           "type": "object"
         },
-        "models": {
-          "description": "Custom-provider models fetched from that provider and cached in config.toml.",
-          "items": {
-            "$ref": "#/definitions/ProviderModelInfo"
-          },
-          "type": "array"
-        },
         "name": {
           "default": "",
           "description": "Friendly display name.",
@@ -1756,14 +1848,9 @@
           "minimum": 0.0,
           "type": "integer"
         },
-        "supports_image_generation": {
+        "supports_standalone_web_search": {
           "default": false,
-          "description": "Whether this provider supports the image-generation extension backend.",
-          "type": "boolean"
-        },
-        "supports_web_search": {
-          "default": false,
-          "description": "Whether this provider exposes the Codex Search API used by hosted and standalone Web Search tools.",
+          "description": "Whether this provider supports the standalone web-search endpoint.",
           "type": "boolean"
         },
         "supports_websockets": {
@@ -1834,6 +1921,10 @@
         "root_agent_usage_hint_text": {
           "type": "string"
         },
+        "subagent_developer_instructions": {
+          "description": "Overrides inherited developer instructions for subagents without role-specific instructions.",
+          "type": "string"
+        },
         "subagent_usage_hint_text": {
           "type": "string"
         },
@@ -1849,6 +1940,10 @@
         },
         "usage_hint_text": {
           "type": "string"
+        },
+        "wait_agent_enabled": {
+          "description": "Expose the multi-agent v2 `wait_agent` tool.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -2104,6 +2199,22 @@
       "type": "string"
     },
     "NetworkUnixSocketPermissionsToml": {
+      "type": "object"
+    },
+    "NonPrefixedMcpToolNamesConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "server_names": {
+          "description": "MCP servers whose tools should omit the legacy `mcp__` namespace prefix.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
       "type": "object"
     },
     "Notice": {
@@ -2538,60 +2649,6 @@
       },
       "type": "object"
     },
-    "ProviderModelInfo": {
-      "additionalProperties": false,
-      "description": "User-configurable model metadata cached under a custom provider.\n\nThird-party providers own their model namespace, so fetched models are stored with the provider instead of being merged into Codex's built-in OpenAI catalog.",
-      "properties": {
-        "context_window": {
-          "description": "Context window length for this model. When unset, falls back to `max_token_len` or 128K at conversion time.",
-          "format": "int64",
-          "type": "integer"
-        },
-        "default_reasoning_level": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ReasoningEffort"
-            }
-          ],
-          "description": "Default reasoning effort level for this model."
-        },
-        "max_output_tokens": {
-          "description": "Maximum output tokens advertised or configured for this model.",
-          "format": "int64",
-          "type": "integer"
-        },
-        "max_token_len": {
-          "description": "Maximum input context length advertised or configured for this model.",
-          "format": "int64",
-          "type": "integer"
-        },
-        "model_id": {
-          "description": "Provider-specific model identifier used on API requests.",
-          "type": "string"
-        },
-        "model_name": {
-          "description": "Friendly model name shown in Codex UI. Defaults to `model_id`.",
-          "type": "string"
-        },
-        "show_in_picker": {
-          "default": true,
-          "description": "Whether this model should be displayed in the model picker.",
-          "type": "boolean"
-        },
-        "supported_reasoning_levels": {
-          "default": [],
-          "description": "Supported reasoning effort levels with descriptions.",
-          "items": {
-            "$ref": "#/definitions/ReasoningEffortPreset"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "model_id"
-      ],
-      "type": "object"
-    },
     "RawMcpServerConfig": {
       "additionalProperties": false,
       "description": "Raw MCP config shape used for deserialization and supported-field JSON Schema generation.\n\nFields that are accepted only to produce targeted validation errors should be skipped in the generated schema.\n\nKeep `TryFrom<RawMcpServerConfig> for McpServerConfig` exhaustively destructuring this struct so new TOML fields cannot be added here without updating the validation/mapping logic that produces [`McpServerConfig`].",
@@ -2698,6 +2755,13 @@
         "oauth_resource": {
           "default": null,
           "type": "string"
+        },
+        "omit_tools_from": {
+          "default": null,
+          "items": {
+            "$ref": "#/definitions/ToolExposureSurface"
+          },
+          "type": "array"
         },
         "required": {
           "default": null,
@@ -2823,28 +2887,6 @@
       "description": "A non-empty reasoning effort value advertised by the model.",
       "minLength": 1,
       "type": "string"
-    },
-    "ReasoningEffortPreset": {
-      "description": "A reasoning effort option that can be surfaced for a model.",
-      "properties": {
-        "description": {
-          "description": "Short human description shown next to the effort in UIs.",
-          "type": "string"
-        },
-        "effort": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ReasoningEffort"
-            }
-          ],
-          "description": "Effort level that the model supports."
-        }
-      },
-      "required": [
-        "description",
-        "effort"
-      ],
-      "type": "object"
     },
     "ReasoningSummary": {
       "description": "A summary of the reasoning performed by the model. This can be useful for debugging and understanding the model's reasoning process. See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries",
@@ -3150,6 +3192,46 @@
       },
       "type": "object"
     },
+    "ToolExposureSurface": {
+      "description": "A model-facing surface on which a tool can be exposed.",
+      "oneOf": [
+        {
+          "description": "Nested tools available to Code Mode scripts.",
+          "enum": [
+            "code_mode"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Tools discovered later through tool search.",
+          "enum": [
+            "deferred"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Tools present in the model's initial tool list.",
+          "enum": [
+            "direct"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "ToolRegistryConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "error_on_tool_collisions": {
+          "description": "Fail the turn when multiple tools share the same effective name.",
+          "type": "boolean"
+        },
+        "turn_metadata_includes_tool_info": {
+          "description": "Include authoritative tool information in per-turn request metadata.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "ToolSuggestConfig": {
       "additionalProperties": false,
       "properties": {
@@ -3214,6 +3296,9 @@
       "properties": {
         "experimental_request_user_input": {
           "$ref": "#/definitions/ExperimentalRequestUserInput"
+        },
+        "update_plan": {
+          "$ref": "#/definitions/UpdatePlanToolConfig"
         },
         "web_search": {
           "allOf": [
@@ -3311,6 +3396,7 @@
               "toggle_fast_mode": null,
               "toggle_raw_output": null,
               "toggle_shortcuts": null,
+              "toggle_side_conversation": null,
               "toggle_vim_mode": null
             },
             "list": {
@@ -3889,6 +3975,14 @@
           ],
           "description": "Toggle the composer shortcut overlay."
         },
+        "toggle_side_conversation": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Switch between a side conversation and its parent without closing either."
+        },
         "toggle_vim_mode": {
           "allOf": [
             {
@@ -3990,6 +4084,7 @@
             "toggle_fast_mode": null,
             "toggle_raw_output": null,
             "toggle_shortcuts": null,
+            "toggle_side_conversation": null,
             "toggle_vim_mode": null
           }
         },
@@ -4706,6 +4801,16 @@
       },
       "type": "object"
     },
+    "UpdatePlanToolConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "UriBasedFileOpener": {
       "oneOf": [
         {
@@ -4815,13 +4920,6 @@
           "description": "The Responses API exposed by OpenAI at `/v1/responses`.",
           "enum": [
             "responses"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "The OpenAI-compatible Chat Completions API exposed at `/v1/chat/completions`. This is the lingua franca of third-party providers (DeepSeek, OpenRouter, vLLM, Ollama's OpenAI shim, etc.). Use this for any provider that is not the native OpenAI Responses API.",
-          "enum": [
-            "chat"
           ],
           "type": "string"
         }
@@ -5032,6 +5130,9 @@
         "auth_elicitation": {
           "type": "boolean"
         },
+        "background_paginated_rollout_migration": {
+          "type": "boolean"
+        },
         "browser_use": {
           "type": "boolean"
         },
@@ -5051,6 +5152,9 @@
           "type": "boolean"
         },
         "code_mode_host": {
+          "$ref": "#/definitions/FeatureToml_for_CodeModeHostConfigToml"
+        },
+        "code_mode_interrupt": {
           "type": "boolean"
         },
         "code_mode_only": {
@@ -5086,6 +5190,9 @@
         "deferred_executor": {
           "type": "boolean"
         },
+        "deferred_tool_world_state": {
+          "type": "boolean"
+        },
         "elevated_windows_sandbox": {
           "type": "boolean"
         },
@@ -5102,6 +5209,9 @@
           "type": "boolean"
         },
         "exec_permission_approvals": {
+          "type": "boolean"
+        },
+        "executed_tool_call_metadata": {
           "type": "boolean"
         },
         "executor_capability_discovery": {
@@ -5128,6 +5238,12 @@
         "guardian_approval": {
           "type": "boolean"
         },
+        "guardian_reuse_parent_compaction": {
+          "type": "boolean"
+        },
+        "guardianv2": {
+          "type": "boolean"
+        },
         "hooks": {
           "type": "boolean"
         },
@@ -5137,10 +5253,16 @@
         "image_generation": {
           "type": "boolean"
         },
+        "image_resize_notice": {
+          "type": "boolean"
+        },
         "imagegenext": {
           "type": "boolean"
         },
         "in_app_browser": {
+          "type": "boolean"
+        },
+        "in_app_updates": {
           "type": "boolean"
         },
         "item_ids": {
@@ -5153,6 +5275,9 @@
           "type": "boolean"
         },
         "local_thread_store_compression": {
+          "type": "boolean"
+        },
+        "mcp_2026_07_28": {
           "type": "boolean"
         },
         "memories": {
@@ -5177,7 +5302,7 @@
           "$ref": "#/definitions/FeatureToml_for_NetworkProxyConfigToml"
         },
         "non_prefixed_mcp_tool_names": {
-          "type": "boolean"
+          "$ref": "#/definitions/FeatureToml_for_NonPrefixedMcpToolNamesConfigToml"
         },
         "personality": {
           "type": "boolean"
@@ -5195,6 +5320,9 @@
           "type": "boolean"
         },
         "realtime_conversation": {
+          "type": "boolean"
+        },
+        "recommended_plugins": {
           "type": "boolean"
         },
         "remote_compaction_v2": {
@@ -5284,6 +5412,9 @@
         "tool_call_mcp_elicitation": {
           "type": "boolean"
         },
+        "tool_registry": {
+          "$ref": "#/definitions/ToolRegistryConfigToml"
+        },
         "tool_search": {
           "type": "boolean"
         },
@@ -5308,6 +5439,9 @@
         "unified_exec_zsh_fork": {
           "type": "boolean"
         },
+        "unified_image_budget": {
+          "type": "boolean"
+        },
         "use_agent_identity": {
           "type": "boolean"
         },
@@ -5315,6 +5449,9 @@
           "type": "boolean"
         },
         "use_linux_sandbox_bwrap": {
+          "type": "boolean"
+        },
+        "view_image": {
           "type": "boolean"
         },
         "web_search": {
@@ -5628,7 +5765,7 @@
     },
     "project_doc_max_bytes": {
       "default": 32768,
-      "description": "Maximum number of bytes to include from an AGENTS.md project doc file.",
+      "description": "Maximum total bytes of project instruction content across all selected environments.",
       "format": "uint",
       "minimum": 0.0,
       "type": "integer"

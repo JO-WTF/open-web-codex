@@ -195,53 +195,19 @@ impl ChatWidget {
             return;
         }
 
-        let provider_id = self.config.model_provider_id.clone();
-        let provider_models = self
-            .config
-            .model_providers
-            .get(&provider_id)
-            .map(|provider| provider.models.clone());
-
         let mut items: Vec<SelectionItem> = Vec::new();
         for preset in presets.into_iter() {
-            let context_window = provider_models
-                .as_ref()
-                .and_then(|models| models.iter().find(|model| model.model_id == preset.model))
-                .and_then(|model| model.context_window);
-            let description = match (
-                (!preset.description.is_empty()).then_some(preset.description.to_string()),
-                context_window,
-            ) {
-                (Some(description), Some(context_window)) => Some(format!(
-                    "{description} · {}K context",
-                    context_window / 1024
-                )),
-                (None, Some(context_window)) => Some(format!("{}K context", context_window / 1024)),
-                (description, None) => description,
-            };
+            let description =
+                (!preset.description.is_empty()).then_some(preset.description.to_string());
             let is_current = preset.model.as_str() == self.current_model();
             let single_supported_effort = preset.supported_reasoning_efforts.len() == 1;
             let preset_for_action = preset.clone();
-            let mut actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                 let preset_for_event = preset_for_action.clone();
                 tx.send(AppEvent::OpenReasoningPopup {
                     model: preset_for_event,
                 });
             })];
-            if provider_models
-                .as_ref()
-                .is_some_and(|models| models.iter().any(|model| model.model_id == preset.model))
-            {
-                let context_model_id = preset.model.clone();
-                let context_provider_id = provider_id.clone();
-                actions.push(Box::new(move |tx| {
-                    tx.send(AppEvent::OpenModelContextWindowPopup {
-                        model_id: context_model_id.clone(),
-                        provider_id: context_provider_id.clone(),
-                        pending_selection: None,
-                    });
-                }));
-            }
             items.push(SelectionItem {
                 name: preset.model.clone(),
                 description,
@@ -254,13 +220,10 @@ impl ChatWidget {
             });
         }
 
-        let subtitle = if provider_id == codex_model_provider_info::OPENAI_PROVIDER_ID {
-            "Access legacy models by running codex -m <model_name> or in your config.toml"
-                .to_string()
-        } else {
-            format!("Showing models for provider '{provider_id}'.")
-        };
-        let header = self.model_menu_header("Select Model and Effort", &subtitle);
+        let header = self.model_menu_header(
+            "Select Model and Effort",
+            "Access legacy models by running codex -m <model_name> or in your config.toml",
+        );
         self.bottom_pane.show_selection_view(SelectionViewParams {
             footer_hint: Some(self.bottom_pane.standard_popup_hint_line()),
             items,

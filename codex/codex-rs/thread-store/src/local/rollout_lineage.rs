@@ -16,6 +16,7 @@ use crate::ThreadStoreResult;
 pub(super) struct RolloutLineageSegment {
     pub(super) thread_id: ThreadId,
     pub(super) rollout_path: PathBuf,
+    pub(super) start_ordinal: u64,
     pub(super) end: Option<HistoryPosition>,
 }
 
@@ -29,33 +30,32 @@ pub(super) struct RolloutLineage {
 }
 
 impl LocalThreadStore {
-    /// Bring every physical rollout in a logical paginated history up to date
-    /// before querying the rebuildable SQLite projection.
-    ///
-    /// Canonical rollout writes and the projection are intentionally separate:
-    /// a process interruption may leave SQLite behind durable JSONL. Paginated
-    /// readers must therefore repair that lag at their ownership boundary
-    /// instead of returning a silently truncated history.
-    pub(super) async fn materialize_rollout_lineage(
-        &self,
-        requested_thread_id: ThreadId,
-    ) -> ThreadStoreResult<RolloutLineage> {
-        let lineage = self.resolve_rollout_lineage(requested_thread_id).await?;
-        for segment in lineage.segments() {
-            let _live_writer_guard = self.live_writer_locks.lock(segment.thread_id).await;
-            super::thread_history_materialization::materialize_to_sqlite(
-                self,
-                segment.thread_id,
-                segment.rollout_path.as_path(),
-            )
-            .await?;
-        }
-        Ok(lineage)
-    }
-
     pub(super) async fn resolve_rollout_lineage(
         &self,
         requested_thread_id: ThreadId,
+    ) -> ThreadStoreResult<RolloutLineage> {
+        self.resolve_rollout_lineage_with_representation(
+            requested_thread_id,
+            LineageRepresentation::Existing,
+        )
+        .await
+    }
+
+    pub(super) async fn resolve_rollout_lineage_for_reference(
+        &self,
+        requested_thread_id: ThreadId,
+    ) -> ThreadStoreResult<RolloutLineage> {
+        self.resolve_rollout_lineage_with_representation(
+            requested_thread_id,
+            LineageRepresentation::PlainForReference,
+        )
+        .await
+    }
+
+    async fn resolve_rollout_lineage_with_representation(
+        &self,
+        requested_thread_id: ThreadId,
+        representation: LineageRepresentation,
     ) -> ThreadStoreResult<RolloutLineage> {
         let mut segments = Vec::new();
         let mut seen = HashSet::new();
@@ -66,10 +66,34 @@ impl LocalThreadStore {
             if !seen.insert(thread_id) {
                 return Err(malformed_lineage(requested_thread_id, "cycle detected"));
             }
+            let _writer_guard = match representation {
+                LineageRepresentation::Existing => None,
+                LineageRepresentation::PlainForReference => {
+                    Some(self.live_writer_locks.lock(thread_id).await)
+                }
+            };
             let rollout_path =
                 read_thread::resolve_rollout_path(self, thread_id, /*include_archived*/ true)
                     .await?
                     .ok_or_else(|| malformed_lineage(thread_id, "missing source rollout"))?;
+            let rollout_path = match representation {
+                LineageRepresentation::Existing => rollout_path,
+                LineageRepresentation::PlainForReference => {
+                    let rollout_path = super::helpers::scoped_rollout_path(
+                        self.config.codex_home.clone(),
+                        rollout_path.as_path(),
+                        "Codex home",
+                    )?;
+                    codex_rollout::materialize_rollout_for_reference(rollout_path.as_path())
+                        .await
+                        .map_err(|err| ThreadStoreError::Internal {
+                            message: format!(
+                                "failed to materialize referenced rollout {}: {err}",
+                                rollout_path.display()
+                            ),
+                        })?
+                }
+            };
             let meta = codex_rollout::read_session_meta_line(rollout_path.as_path())
                 .await
                 .map_err(|err| ThreadStoreError::Internal {
@@ -93,9 +117,16 @@ impl LocalThreadStore {
             if let Some(end) = end {
                 validate_cutoff_bounds(requested_thread_id, rollout_path.as_path(), &end).await?;
             }
+            let start_ordinal = match meta.meta.history_base {
+                Some(base) => base.end_ordinal_exclusive.checked_add(1).ok_or_else(|| {
+                    malformed_lineage(requested_thread_id, "source ordinal overflow")
+                })?,
+                None => 1,
+            };
             segments.push(RolloutLineageSegment {
                 thread_id,
                 rollout_path,
+                start_ordinal,
                 end,
             });
 
@@ -109,26 +140,49 @@ impl LocalThreadStore {
         segments.reverse();
         Ok(RolloutLineage { segments })
     }
+}
 
-    pub(super) async fn resolve_rollout_lineage_at(
-        &self,
-        end: HistoryPosition,
-    ) -> ThreadStoreResult<RolloutLineage> {
-        let mut lineage = self.resolve_rollout_lineage(end.thread_id).await?;
-        let Some(segment) = lineage.segments.last_mut() else {
-            return Err(ThreadStoreError::Internal {
-                message: "rollout lineage has no segments".to_string(),
-            });
-        };
-        validate_cutoff_bounds(end.thread_id, segment.rollout_path.as_path(), &end).await?;
-        segment.end = Some(end);
-        Ok(lineage)
-    }
+#[derive(Clone, Copy)]
+enum LineageRepresentation {
+    Existing,
+    PlainForReference,
 }
 
 impl RolloutLineage {
     pub(super) fn segments(&self) -> &[RolloutLineageSegment] {
         self.segments.as_slice()
+    }
+
+    pub(super) fn segment_index_for_ordinal(&self, ordinal: u64) -> Option<usize> {
+        self.segments.iter().position(|segment| {
+            ordinal >= segment.start_ordinal()
+                && segment
+                    .end_ordinal()
+                    .is_none_or(|end_ordinal| ordinal < end_ordinal)
+        })
+    }
+
+    pub(super) async fn truncate_at(
+        mut self,
+        end: HistoryPosition,
+    ) -> ThreadStoreResult<RolloutLineage> {
+        let segment_index = self
+            .segments
+            .iter()
+            .position(|segment| segment.thread_id == end.thread_id)
+            .ok_or_else(|| ThreadStoreError::Internal {
+                message: "fork position is outside the source lineage".to_string(),
+            })?;
+        self.segments.truncate(segment_index + 1);
+        let segment = self
+            .segments
+            .last_mut()
+            .ok_or_else(|| ThreadStoreError::Internal {
+                message: "rollout lineage has no segments".to_string(),
+            })?;
+        validate_cutoff_bounds(end.thread_id, segment.rollout_path.as_path(), &end).await?;
+        segment.end = Some(end);
+        Ok(self)
     }
 }
 
@@ -138,7 +192,7 @@ impl RolloutLineageSegment {
     }
 
     pub(super) fn start_ordinal(&self) -> u64 {
-        1
+        self.start_ordinal
     }
 
     pub(super) fn end_ordinal(&self) -> Option<u64> {

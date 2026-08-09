@@ -67,7 +67,6 @@ mod tests {
             auth: None,
             aws: None,
             wire_api: WireApi::Responses,
-            models: Vec::new(),
             query_params: None,
             http_headers: None,
             env_http_headers: None,
@@ -77,8 +76,7 @@ mod tests {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: false,
-            supports_web_search: false,
-            supports_image_generation: false,
+            supports_standalone_web_search: false,
         };
 
         let telemetry =

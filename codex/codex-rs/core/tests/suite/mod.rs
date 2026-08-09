@@ -57,6 +57,7 @@ mod compact_remote;
 mod compact_remote_parity;
 mod compact_resume_fork;
 mod current_time_reminder;
+mod cyber_exec_policy;
 mod deprecation_notice;
 mod exec;
 mod exec_policy;
@@ -64,6 +65,7 @@ mod exec_policy;
 mod extension_sandbox;
 mod external_auth;
 mod fork_thread;
+mod git_enrichment;
 #[cfg(not(target_os = "windows"))]
 mod guardian_review;
 #[cfg(not(target_os = "windows"))]
@@ -71,6 +73,7 @@ mod hooks;
 #[cfg(not(target_os = "windows"))]
 mod hooks_mcp;
 mod image_rollout;
+mod injected_models_cache;
 mod items;
 mod json_result;
 mod live_cli;
@@ -78,6 +81,7 @@ mod mcp_auth_elicitation;
 mod mcp_auth_refresh;
 #[cfg(unix)]
 mod mcp_refresh_cleanup;
+mod mcp_startup_refresh_http_proxy;
 mod mcp_tool_cache;
 mod mcp_tool_exposure;
 mod mcp_turn_metadata;
@@ -149,6 +153,7 @@ mod unified_exec_process_events;
 #[cfg(unix)]
 mod unified_exec_zsh_fork_approvals;
 mod unstable_features_warning;
+mod user_message_admission;
 mod user_notification;
 mod user_shell_cmd;
 mod view_image;

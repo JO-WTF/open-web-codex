@@ -16,13 +16,15 @@ use crate::session_prefix::format_inter_agent_completion_message;
 use crate::session_prefix::format_subagent_context_line;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::thread_manager::ResumeThreadWithHistoryOptions;
+use crate::thread_manager::ThreadIdGenerator;
 use crate::thread_manager::ThreadManagerState;
+use crate::thread_manager::default_thread_id_generator;
 use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
-use codex_extension_api::ExtensionDataInit;
 use codex_protocol::AgentPath;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
@@ -70,6 +72,7 @@ pub(crate) struct SpawnAgentOptions {
     pub(crate) fork_parent_spawn_call_id: Option<String>,
     pub(crate) fork_mode: Option<SpawnAgentForkMode>,
     pub(crate) parent_thread_id: Option<ThreadId>,
+    pub(crate) parent_turn_id: Option<String>,
     pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
 }
 
@@ -92,7 +95,7 @@ pub(crate) struct ListedAgent {
 /// An `AgentControl` instance is intended to be created at most once per root thread/session
 /// tree. That same `AgentControl` is then shared with every sub-agent spawned from that root,
 /// which keeps the registry scoped to that root thread rather than the entire `ThreadManager`.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct AgentControl {
     /// ID shared by the whole agent control session. This means every sub-agents from a common
     /// root share the same session ID.
@@ -101,6 +104,8 @@ pub(crate) struct AgentControl {
     /// This is `Weak` to avoid reference cycles and shadow persistence of the form
     /// `ThreadManagerState -> CodexThread -> Session -> SessionServices -> ThreadManagerState`.
     manager: Weak<ThreadManagerState>,
+    /// Captured at construction so delegates retain their manager's allocation policy.
+    thread_id_generator: ThreadIdGenerator,
     state: Arc<AgentRegistry>,
     v2_residency: Arc<V2Residency>,
     agent_execution_limiter: Arc<AgentExecutionLimiter>,
@@ -108,15 +113,31 @@ pub(crate) struct AgentControl {
     rollout_budget: Arc<RolloutBudget>,
 }
 
+impl Default for AgentControl {
+    fn default() -> Self {
+        Self::new(
+            Weak::default(),
+            default_thread_id_generator(),
+            /*rollout_budget*/ None,
+        )
+    }
+}
+
 impl AgentControl {
     /// Construct a new `AgentControl` that can spawn/message agents via the given manager state.
     pub(crate) fn new(
         manager: Weak<ThreadManagerState>,
+        thread_id_generator: ThreadIdGenerator,
         rollout_budget: Option<RolloutBudgetConfig>,
     ) -> Self {
         let control = Self {
+            session_id: SessionId::default(),
             manager,
-            ..Default::default()
+            thread_id_generator,
+            state: Arc::default(),
+            v2_residency: Arc::default(),
+            agent_execution_limiter: Arc::default(),
+            rollout_budget: Arc::default(),
         };
         if let Some(rollout_budget) = rollout_budget {
             control.rollout_budget.configure(rollout_budget);
@@ -134,6 +155,10 @@ impl AgentControl {
         self.session_id
     }
 
+    pub(crate) fn generate_thread_id(&self) -> ThreadId {
+        (self.thread_id_generator)()
+    }
+
     pub(crate) fn rollout_budget(&self) -> &RolloutBudget {
         self.rollout_budget.as_ref()
     }
@@ -143,11 +168,12 @@ impl AgentControl {
         &self,
         agent_id: ThreadId,
         input: Vec<UserInput>,
+        parent_turn_id: Option<String>,
     ) -> CodexResult<String> {
         let state = self.upgrade()?;
         self.ensure_execution_capacity_for_turn_start(agent_id, /*starts_turn*/ true)
             .await?;
-        self.send_input_after_capacity_check(agent_id, &state, input)
+        self.send_input_after_capacity_check(agent_id, &state, input, parent_turn_id)
             .await
     }
 
@@ -156,11 +182,12 @@ impl AgentControl {
         agent_id: ThreadId,
         state: &Arc<ThreadManagerState>,
         input: Vec<UserInput>,
+        parent_turn_id: Option<String>,
     ) -> CodexResult<String> {
         self.handle_thread_request_result(
             agent_id,
             state,
-            state.send_op(agent_id, input.into()).await,
+            state.send_op(agent_id, input.into(), parent_turn_id).await,
         )
         .await
     }
@@ -170,6 +197,7 @@ impl AgentControl {
         agent_id: ThreadId,
         communication: InterAgentCommunication,
         agent_communication_context: AgentCommunicationContext,
+        parent_turn_id: Option<String>,
     ) -> CodexResult<String> {
         let state = self.upgrade()?;
         self.ensure_execution_capacity_for_turn_start(agent_id, communication.trigger_turn)
@@ -179,6 +207,7 @@ impl AgentControl {
             &state,
             communication,
             agent_communication_context,
+            parent_turn_id,
         )
         .await
     }
@@ -189,9 +218,16 @@ impl AgentControl {
         state: &Arc<ThreadManagerState>,
         communication: InterAgentCommunication,
         context: AgentCommunicationContext,
+        parent_turn_id: Option<String>,
     ) -> CodexResult<String> {
-        self.submit_inter_agent_communication(agent_id, state, communication, context)
-            .await
+        self.submit_inter_agent_communication(
+            agent_id,
+            state,
+            communication,
+            context,
+            parent_turn_id,
+        )
+        .await
     }
 
     async fn submit_inter_agent_communication(
@@ -200,15 +236,21 @@ impl AgentControl {
         state: &Arc<ThreadManagerState>,
         communication: InterAgentCommunication,
         context: AgentCommunicationContext,
+        parent_turn_id: Option<String>,
     ) -> CodexResult<String> {
         let communication_for_log =
             crate::agent_communication::logging_enabled().then(|| communication.clone());
+        let parent_turn_id = parent_turn_id.filter(|_| communication.trigger_turn);
         let result = self
             .handle_thread_request_result(
                 agent_id,
                 state,
                 state
-                    .send_op(agent_id, Op::InterAgentCommunication { communication })
+                    .send_op(
+                        agent_id,
+                        Op::InterAgentCommunication { communication },
+                        parent_turn_id,
+                    )
                     .await,
             )
             .await;
@@ -231,7 +273,9 @@ impl AgentControl {
         self.handle_thread_request_result(
             agent_id,
             &state,
-            state.send_op(agent_id, Op::Interrupt).await,
+            state
+                .send_op(agent_id, Op::Interrupt, /*parent_turn_id*/ None)
+                .await,
         )
         .await
     }
@@ -242,7 +286,10 @@ impl AgentControl {
         state: &Arc<ThreadManagerState>,
         result: CodexResult<String>,
     ) -> CodexResult<String> {
-        if matches!(result, Err(CodexErr::InternalAgentDied)) {
+        if result
+            .as_ref()
+            .is_err_and(|err| matches!(err.details(), CodexErrorDetails::InternalAgentDied))
+        {
             let _ = state.remove_thread(&agent_id).await;
             self.forget_v2_residency(agent_id);
             self.state.release_spawned_thread(agent_id);
@@ -262,14 +309,6 @@ impl AgentControl {
         thread.agent_status().await
     }
 
-    /// Wake a live parent wait after a child reaches a bounded progress boundary.
-    pub(crate) async fn notify_agent_activity(&self, agent_id: ThreadId) -> CodexResult<()> {
-        let state = self.upgrade()?;
-        let thread = state.get_thread(agent_id).await?;
-        thread.notify_agent_activity();
-        Ok(())
-    }
-
     pub(crate) fn register_session_root(
         &self,
         current_thread_id: ThreadId,
@@ -287,7 +326,7 @@ impl AgentControl {
     pub(crate) fn ensure_agent_known(&self, agent_id: ThreadId) -> CodexResult<AgentMetadata> {
         self.state
             .agent_metadata_for_thread(agent_id)
-            .ok_or(CodexErr::ThreadNotFound(agent_id))
+            .ok_or_else(|| CodexErr::ThreadNotFound(agent_id))
     }
 
     pub(crate) async fn list_live_agent_subtree_thread_ids(
@@ -512,7 +551,12 @@ impl AgentControl {
                 let context =
                     AgentCommunicationContext::new(AgentCommunicationKind::Result, child_thread_id);
                 let _ = control
-                    .send_inter_agent_communication(parent_thread_id, communication, context)
+                    .send_inter_agent_communication(
+                        parent_thread_id,
+                        communication,
+                        context,
+                        /*parent_turn_id*/ None,
+                    )
                     .await;
                 return;
             }
@@ -631,32 +675,6 @@ impl AgentControl {
         }
 
         Some(Arc::clone(&parent_thread.session.services.exec_policy))
-    }
-
-    async fn inherited_thread_extension_init_for_source(
-        &self,
-        state: &Arc<ThreadManagerState>,
-        session_source: Option<&SessionSource>,
-    ) -> ExtensionDataInit {
-        let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id, ..
-        })) = session_source
-        else {
-            return ExtensionDataInit::default();
-        };
-        let Ok(parent_thread) = state.get_thread(*parent_thread_id).await else {
-            return ExtensionDataInit::default();
-        };
-
-        let mut thread_extension_init = ExtensionDataInit::new();
-        thread_extension_init.insert(
-            parent_thread
-                .session
-                .services
-                .selected_capability_roots
-                .clone(),
-        );
-        thread_extension_init
     }
 
     async fn open_thread_spawn_children(

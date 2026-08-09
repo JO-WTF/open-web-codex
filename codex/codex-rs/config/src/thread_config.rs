@@ -284,8 +284,7 @@ mod tests {
                     wire_api = "responses"
                     requires_openai_auth = false
                     supports_websockets = true
-                    supports_web_search = false
-                    supports_image_generation = false
+                    supports_standalone_web_search = true
 
                     [features]
                     plugins = false
@@ -305,7 +304,6 @@ mod tests {
             auth: None,
             aws: None,
             wire_api: WireApi::Responses,
-            models: Vec::new(),
             query_params: None,
             http_headers: None,
             env_http_headers: None,
@@ -315,8 +313,7 @@ mod tests {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: true,
-            supports_web_search: false,
-            supports_image_generation: false,
+            supports_standalone_web_search: true,
         }
     }
 }

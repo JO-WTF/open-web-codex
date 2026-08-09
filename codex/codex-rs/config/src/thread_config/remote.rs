@@ -159,7 +159,6 @@ fn model_provider_from_proto(
     let id = provider.id;
     let wire_api = match proto::WireApi::try_from(provider.wire_api) {
         Ok(proto::WireApi::Responses) => WireApi::Responses,
-        Ok(proto::WireApi::Chat) => WireApi::Chat,
         Ok(proto::WireApi::Unspecified) => {
             return Err(parse_error("remote thread config omitted wire_api"));
         }
@@ -191,9 +190,7 @@ fn model_provider_from_proto(
         websocket_connect_timeout_ms: provider.websocket_connect_timeout_ms,
         requires_openai_auth: provider.requires_openai_auth,
         supports_websockets: provider.supports_websockets,
-        supports_web_search: false,
-        supports_image_generation: false,
-        models: Vec::new(),
+        supports_standalone_web_search: provider.supports_standalone_web_search,
     };
     Ok((id, info))
 }
@@ -212,7 +209,6 @@ fn model_provider_to_proto(
         auth,
         aws: _,
         wire_api,
-        models: _,
         query_params,
         http_headers,
         env_http_headers,
@@ -222,8 +218,7 @@ fn model_provider_to_proto(
         websocket_connect_timeout_ms,
         requires_openai_auth,
         supports_websockets,
-        supports_web_search: _,
-        supports_image_generation: _,
+        supports_standalone_web_search,
     } = provider;
 
     proto::ModelProvider {
@@ -244,6 +239,7 @@ fn model_provider_to_proto(
         websocket_connect_timeout_ms,
         requires_openai_auth,
         supports_websockets,
+        supports_standalone_web_search,
     }
 }
 
@@ -296,7 +292,6 @@ fn proto_string_map(values: HashMap<String, String>) -> proto::StringMap {
 fn proto_wire_api(wire_api: WireApi) -> proto::WireApi {
     match wire_api {
         WireApi::Responses => proto::WireApi::Responses,
-        WireApi::Chat => proto::WireApi::Chat,
     }
 }
 
@@ -429,6 +424,7 @@ mod tests {
     fn model_provider_proto_roundtrips_through_domain_type() {
         let expected = expected_provider();
         let proto = model_provider_to_proto("local", expected.clone());
+        assert!(proto.supports_standalone_web_search);
         let (id, actual) = model_provider_from_proto(proto).expect("model provider from proto");
 
         assert_eq!(id, "local");
@@ -436,15 +432,13 @@ mod tests {
     }
 
     #[test]
-    fn chat_wire_api_roundtrips_through_model_provider_proto() {
+    fn model_provider_proto_defaults_standalone_web_search_to_false() {
         let expected = ModelProviderInfo {
-            wire_api: WireApi::Chat,
-            models: Vec::new(),
+            supports_standalone_web_search: false,
             ..expected_provider()
         };
         let proto = model_provider_to_proto("local", expected.clone());
-        assert_eq!(proto.wire_api, proto::WireApi::Chat as i32);
-
+        assert!(!proto.supports_standalone_web_search);
         let (id, actual) = model_provider_from_proto(proto).expect("model provider from proto");
 
         assert_eq!(id, "local");
@@ -497,6 +491,7 @@ mod tests {
                             websocket_connect_timeout_ms: Some(10_000),
                             requires_openai_auth: false,
                             supports_websockets: true,
+                            supports_standalone_web_search: true,
                         }],
                         features: HashMap::from([
                             ("plugins".to_string(), false),
@@ -542,7 +537,6 @@ mod tests {
                 cwd: workspace_dir(),
             }),
             wire_api: WireApi::Responses,
-            models: Vec::new(),
             query_params: Some(HashMap::from([(
                 "api-version".to_string(),
                 "2026-04-16".to_string(),
@@ -561,8 +555,7 @@ mod tests {
             websocket_connect_timeout_ms: Some(10_000),
             requires_openai_auth: false,
             supports_websockets: true,
-            supports_web_search: false,
-            supports_image_generation: false,
+            supports_standalone_web_search: true,
             aws: None,
         }
     }

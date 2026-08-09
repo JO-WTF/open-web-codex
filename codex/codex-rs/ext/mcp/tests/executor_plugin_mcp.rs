@@ -102,48 +102,6 @@ command = "expected-command"
 }
 
 #[tokio::test]
-async fn selected_plugin_servers_apply_runtime_plugin_tool_policy() -> TestResult {
-    let codex_home = tempfile::tempdir()?;
-    let plugin_root = tempfile::tempdir()?;
-    std::fs::create_dir_all(plugin_root.path().join(".codex-plugin"))?;
-    std::fs::write(
-        plugin_root.path().join(".codex-plugin/plugin.json"),
-        r#"{"name":"selected-demo","interface":{"displayName":"Selected Demo"}}"#,
-    )?;
-    std::fs::write(
-        plugin_root.path().join(".mcp.json"),
-        r#"{"mcpServers":{"data":{"command":"data-command"}}}"#,
-    )?;
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cli_overrides(vec![
-            ("features.plugins".to_string(), false.into()),
-            (
-                "plugins.selected-root.mcp_servers.data.enabled".to_string(),
-                false.into(),
-            ),
-        ])
-        .build()
-        .await?;
-
-    assert!(!config.features.enabled(Feature::Plugins));
-    let contributions = raw_selected_plugin_contributions(&config, plugin_root.path()).await?;
-    let server = contributions.into_iter().find_map(|contribution| {
-        let McpServerContribution::SelectedPlugin { name, config, .. } = contribution else {
-            return None;
-        };
-        (name == "data").then_some(config)
-    });
-
-    assert_eq!(
-        server.map(|server| (server.enabled, server.enabled_tools)),
-        Some((false, None))
-    );
-    Ok(())
-}
-
-#[tokio::test]
 async fn selected_plugin_package_is_contributed_without_servers_or_connectors() -> TestResult {
     let codex_home = tempfile::tempdir()?;
     let plugin_root = tempfile::tempdir()?;
@@ -272,7 +230,7 @@ async fn raw_selected_plugin_contributions(
     {
         Some(
             ExecutorCapabilityDiscoveryCache::new(environment_manager)
-                .snapshot(&selected_capability_roots)
+                .snapshot(&selected_capability_roots, &Default::default())
                 .await,
         )
     } else {

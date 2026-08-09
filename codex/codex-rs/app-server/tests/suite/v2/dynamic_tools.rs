@@ -1,12 +1,11 @@
 use anyhow::Context;
 use anyhow::Result;
+use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use app_test_support::write_models_cache_with_models;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_app_server_protocol::DynamicToolCallOutputContentItem;
 use codex_app_server_protocol::DynamicToolCallParams;
 use codex_app_server_protocol::DynamicToolCallResponse;
@@ -37,38 +36,16 @@ use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
-use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
 use wiremock::MockServer;
 
 const TINY_PNG_DATA_URL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+const INLINE_AUDIO_DATA_URL: &str = "data:audio/wav;base64,YXVkaW8=";
 const INVALID_AUDIO_URL_ERROR: &str = "audio URLs must use an inline data URL";
 const REMOTE_IMAGE_URL_ERROR: &str =
     "remote image URLs are not supported; use an inline data URL instead";
-
-fn inline_audio_data_url() -> String {
-    const SAMPLE_RATE: u32 = 8_000;
-    const SAMPLE_COUNT: u32 = 8;
-
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(b"RIFF");
-    bytes.extend_from_slice(&(36 + SAMPLE_COUNT).to_le_bytes());
-    bytes.extend_from_slice(b"WAVEfmt ");
-    bytes.extend_from_slice(&16u32.to_le_bytes());
-    bytes.extend_from_slice(&1u16.to_le_bytes());
-    bytes.extend_from_slice(&1u16.to_le_bytes());
-    bytes.extend_from_slice(&SAMPLE_RATE.to_le_bytes());
-    bytes.extend_from_slice(&SAMPLE_RATE.to_le_bytes());
-    bytes.extend_from_slice(&1u16.to_le_bytes());
-    bytes.extend_from_slice(&8u16.to_le_bytes());
-    bytes.extend_from_slice(b"data");
-    bytes.extend_from_slice(&SAMPLE_COUNT.to_le_bytes());
-    bytes.resize(bytes.len() + SAMPLE_COUNT as usize, 0);
-
-    format!("data:audio/wav;base64,{}", BASE64_STANDARD.encode(bytes))
-}
 
 // macOS and Windows Bazel CI can spend tens of seconds starting app-server
 // subprocesses or processing test RPCs under load.
@@ -83,7 +60,7 @@ async fn thread_start_normalizes_legacy_dynamic_tools_into_model_request() -> Re
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -201,7 +178,7 @@ async fn thread_start_rejects_hidden_dynamic_tools_without_namespace() -> Result
     let server = MockServer::start().await;
 
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -243,7 +220,7 @@ async fn thread_start_rejects_invalid_dynamic_tool_inputs() -> Result<()> {
     let server = MockServer::start().await;
 
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -389,7 +366,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -619,7 +596,7 @@ async fn start_function_dynamic_tool_call(call_id: &str) -> Result<PendingDynami
     let server = create_mock_responses_server_sequence_unchecked(response_sequence).await;
 
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
     let config = load_default_config_for_test(&codex_home).await;
     let mut model_info =
         codex_core::test_support::construct_model_info_offline("mock-model", &config);
@@ -722,8 +699,6 @@ async fn dynamic_tool_call_round_trip_handles_content_items() -> Result<()> {
         params,
     } = start_function_dynamic_tool_call(call_id).await?;
 
-    let inline_audio_data_url = inline_audio_data_url();
-
     let response_content_items = vec![
         DynamicToolCallOutputContentItem::InputText {
             text: "dynamic-ok".to_string(),
@@ -732,7 +707,7 @@ async fn dynamic_tool_call_round_trip_handles_content_items() -> Result<()> {
             image_url: TINY_PNG_DATA_URL.to_string(),
         },
         DynamicToolCallOutputContentItem::InputAudio {
-            audio_url: inline_audio_data_url.clone(),
+            audio_url: INLINE_AUDIO_DATA_URL.to_string(),
         },
     ];
     let model_content_items = vec![
@@ -744,7 +719,7 @@ async fn dynamic_tool_call_round_trip_handles_content_items() -> Result<()> {
             detail: Some(DEFAULT_IMAGE_DETAIL),
         },
         FunctionCallOutputContentItem::InputAudio {
-            audio_url: inline_audio_data_url.clone(),
+            audio_url: INLINE_AUDIO_DATA_URL.to_string(),
         },
     ];
     let response = DynamicToolCallResponse {
@@ -777,7 +752,7 @@ async fn dynamic_tool_call_round_trip_handles_content_items() -> Result<()> {
                 image_url: TINY_PNG_DATA_URL.to_string(),
             },
             DynamicToolCallOutputContentItem::InputAudio {
-                audio_url: inline_audio_data_url.clone(),
+                audio_url: INLINE_AUDIO_DATA_URL.to_string(),
             },
         ])
     );
@@ -808,7 +783,7 @@ async fn dynamic_tool_call_round_trip_handles_content_items() -> Result<()> {
             },
             {
                 "type": "input_audio",
-                "audio_url": inline_audio_data_url
+                "audio_url": INLINE_AUDIO_DATA_URL
             }
         ])
     );
@@ -1024,28 +999,4 @@ async fn wait_for_dynamic_tool_completed(
             return Ok(completed);
         }
     }
-}
-
-fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        format!(
-            r#"
-model = "mock-model"
-approval_policy = "never"
-sandbox_mode = "read-only"
-
-model_provider = "mock_provider"
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-wire_api = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-requires_openai_auth = true
-"#
-        ),
-    )
 }

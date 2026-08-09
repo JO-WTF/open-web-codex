@@ -29,9 +29,10 @@ use crate::provider::ModelProviderFuture;
 use crate::provider::ProviderAccountResult;
 use crate::provider::ProviderAccountState;
 use crate::provider::ProviderCapabilities;
+use crate::provider::RemoteCompactionSupport;
 use auth::resolve_provider_auth as resolve_bedrock_provider_auth;
+use catalog::normalize_bedrock_catalog;
 pub(crate) use catalog::static_model_catalog;
-use catalog::with_default_only_service_tier;
 use mantle::bedrock_mantle_runtime_base_url;
 pub use mantle::is_supported_amazon_bedrock_region;
 
@@ -123,9 +124,10 @@ impl ModelProvider for AmazonBedrockModelProvider {
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities {
             namespace_tools: true,
-            tool_search: true,
             image_generation: false,
-            web_search: false,
+            web_search: true,
+            external_web_access: false,
+            remote_compaction: RemoteCompactionSupport::V1,
         }
     }
 
@@ -185,7 +187,7 @@ impl ModelProvider for AmazonBedrockModelProvider {
     ) -> SharedModelsManager {
         Arc::new(StaticModelsManager::new(
             /*auth_manager*/ None,
-            config_model_catalog.map_or_else(static_model_catalog, with_default_only_service_tier),
+            config_model_catalog.map_or_else(static_model_catalog, normalize_bedrock_catalog),
         ))
     }
 
@@ -195,7 +197,7 @@ impl ModelProvider for AmazonBedrockModelProvider {
     ) -> SharedModelsManager {
         Arc::new(StaticModelsManager::new(
             /*auth_manager*/ None,
-            config_model_catalog.map_or_else(static_model_catalog, with_default_only_service_tier),
+            config_model_catalog.map_or_else(static_model_catalog, normalize_bedrock_catalog),
         ))
     }
 }
@@ -355,7 +357,7 @@ mod tests {
     }
 
     #[test]
-    fn capabilities_disable_unsupported_hosted_tools() {
+    fn capabilities_enable_web_search_but_disable_image_generation() {
         let provider = AmazonBedrockModelProvider::new(
             ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
             /*auth_manager*/ None,
@@ -365,9 +367,10 @@ mod tests {
             provider.capabilities(),
             ProviderCapabilities {
                 namespace_tools: true,
-                tool_search: true,
                 image_generation: false,
-                web_search: false,
+                web_search: true,
+                external_web_access: false,
+                remote_compaction: RemoteCompactionSupport::V1,
             }
         );
     }

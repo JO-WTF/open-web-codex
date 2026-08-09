@@ -890,29 +890,6 @@ impl Default for PluginMcpServerConfig {
     }
 }
 
-impl PluginMcpServerConfig {
-    /// Applies this transport-independent plugin policy to one server supplied
-    /// by the plugin manifest.
-    pub fn apply_to(&self, config: &mut McpServerConfig) {
-        config.enabled = self.enabled;
-        if let Some(approval_mode) = self.default_tools_approval_mode {
-            config.default_tools_approval_mode = Some(approval_mode);
-        }
-        if let Some(enabled_tools) = &self.enabled_tools {
-            config.enabled_tools = Some(enabled_tools.clone());
-        }
-        if let Some(disabled_tools) = &self.disabled_tools {
-            config.disabled_tools = Some(disabled_tools.clone());
-        }
-        for (tool_name, tool_policy) in &self.tools {
-            let tool_config = config.tools.entry(tool_name.clone()).or_default();
-            if let Some(approval_mode) = tool_policy.approval_mode {
-                tool_config.approval_mode = Some(approval_mode);
-            }
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct MarketplaceConfig {

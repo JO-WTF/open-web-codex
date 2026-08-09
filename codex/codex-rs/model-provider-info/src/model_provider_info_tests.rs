@@ -20,7 +20,6 @@ base_url = "http://localhost:11434/v1"
         auth: None,
         aws: None,
         wire_api: WireApi::Responses,
-        models: Vec::new(),
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -30,8 +29,7 @@ base_url = "http://localhost:11434/v1"
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
-        supports_web_search: false,
-        supports_image_generation: false,
+        supports_standalone_web_search: false,
     };
 
     let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -55,7 +53,6 @@ query_params = { api-version = "2025-04-01-preview" }
         auth: None,
         aws: None,
         wire_api: WireApi::Responses,
-        models: Vec::new(),
         query_params: Some(maplit::hashmap! {
             "api-version".to_string() => "2025-04-01-preview".to_string(),
         }),
@@ -67,8 +64,7 @@ query_params = { api-version = "2025-04-01-preview" }
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
-        supports_web_search: false,
-        supports_image_generation: false,
+        supports_standalone_web_search: false,
     };
 
     let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -83,6 +79,7 @@ base_url = "https://example.com"
 env_key = "API_KEY"
 http_headers = { "X-Example-Header" = "example-value" }
 env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
+supports_standalone_web_search = true
         "#;
     let expected_provider = ModelProviderInfo {
         name: "Example".into(),
@@ -93,7 +90,6 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
         auth: None,
         aws: None,
         wire_api: WireApi::Responses,
-        models: Vec::new(),
         query_params: None,
         http_headers: Some(maplit::hashmap! {
             "X-Example-Header".to_string() => "example-value".to_string(),
@@ -107,8 +103,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
-        supports_web_search: false,
-        supports_image_generation: false,
+        supports_standalone_web_search: true,
     };
 
     let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -116,9 +111,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
 }
 
 #[test]
-fn test_deserialize_chat_wire_api_is_accepted() {
-    // `wire_api = "chat"` routes the provider through the OpenAI-compatible
-    // Chat Completions API, which is the lingua franca of third-party providers.
+fn test_deserialize_chat_wire_api_shows_helpful_error() {
     let provider_toml = r#"
 name = "OpenAI using Chat Completions"
 base_url = "https://api.openai.com/v1"
@@ -126,25 +119,8 @@ env_key = "OPENAI_API_KEY"
 wire_api = "chat"
         "#;
 
-    let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
-    assert_eq!(provider.wire_api, WireApi::Chat);
-    assert!(!provider.supports_web_search);
-    assert!(!provider.supports_image_generation);
-}
-
-#[test]
-fn test_deserialize_provider_tool_capability_opt_ins() {
-    let provider_toml = r#"
-name = "Compatible provider"
-base_url = "https://example.com/v1"
-wire_api = "chat"
-supports_web_search = true
-supports_image_generation = true
-        "#;
-
-    let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
-    assert!(provider.supports_web_search);
-    assert!(provider.supports_image_generation);
+    let err = toml::from_str::<ModelProviderInfo>(provider_toml).unwrap_err();
+    assert!(err.to_string().contains(CHAT_WIRE_API_REMOVED_ERROR));
 }
 
 #[test]
@@ -158,13 +134,6 @@ supports_websockets = true
 
     let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
     assert_eq!(provider.websocket_connect_timeout_ms, Some(15_000));
-}
-
-#[test]
-fn test_supports_remote_compaction_for_openai() {
-    let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
-
-    assert!(provider.supports_remote_compaction());
 }
 
 #[test]
@@ -183,62 +152,6 @@ fn test_header_auth_uses_chatgpt_codex_base_url() {
         .expect("OpenAI provider should build API provider");
 
     assert_eq!(api_provider.base_url, CHATGPT_CODEX_BASE_URL);
-}
-
-#[test]
-fn test_supports_remote_compaction_for_azure_name() {
-    let provider = ModelProviderInfo {
-        name: "Azure".into(),
-        base_url: Some("https://example.com/openai".into()),
-        env_key: Some("AZURE_OPENAI_API_KEY".into()),
-        env_key_instructions: None,
-        experimental_bearer_token: None,
-        auth: None,
-        aws: None,
-        wire_api: WireApi::Responses,
-        models: Vec::new(),
-        query_params: None,
-        http_headers: None,
-        env_http_headers: None,
-        request_max_retries: None,
-        stream_max_retries: None,
-        stream_idle_timeout_ms: None,
-        websocket_connect_timeout_ms: None,
-        requires_openai_auth: false,
-        supports_websockets: false,
-        supports_web_search: false,
-        supports_image_generation: false,
-    };
-
-    assert!(provider.supports_remote_compaction());
-}
-
-#[test]
-fn test_supports_remote_compaction_for_non_openai_non_azure_provider() {
-    let provider = ModelProviderInfo {
-        name: "Example".into(),
-        base_url: Some("https://example.com/v1".into()),
-        env_key: Some("API_KEY".into()),
-        env_key_instructions: None,
-        experimental_bearer_token: None,
-        auth: None,
-        aws: None,
-        wire_api: WireApi::Responses,
-        models: Vec::new(),
-        query_params: None,
-        http_headers: None,
-        env_http_headers: None,
-        request_max_retries: None,
-        stream_max_retries: None,
-        stream_idle_timeout_ms: None,
-        websocket_connect_timeout_ms: None,
-        requires_openai_auth: false,
-        supports_websockets: false,
-        supports_web_search: false,
-        supports_image_generation: false,
-    };
-
-    assert!(!provider.supports_remote_compaction());
 }
 
 #[test]
@@ -332,7 +245,6 @@ fn test_create_amazon_bedrock_provider() {
                 region: None,
             }),
             wire_api: WireApi::Responses,
-            models: Vec::new(),
             query_params: None,
             http_headers: Some(maplit::hashmap! {
                 AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_HEADER.to_string() =>
@@ -345,8 +257,7 @@ fn test_create_amazon_bedrock_provider() {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: false,
-            supports_web_search: false,
-            supports_image_generation: false,
+            supports_standalone_web_search: false,
         }
     );
 }
@@ -523,7 +434,6 @@ fn test_merge_configured_model_providers_allows_amazon_bedrock_default_fields() 
                 region: None,
             }),
             wire_api: WireApi::Responses,
-            models: Vec::new(),
             ..ModelProviderInfo::default()
         },
     )]);
@@ -546,7 +456,6 @@ fn test_validate_provider_aws_rejects_conflicting_auth() {
         }),
         env_key: Some("AWS_BEARER_TOKEN_BEDROCK".to_string()),
         supports_websockets: false,
-        models: Vec::new(),
         ..ModelProviderInfo::create_openai_provider(/*base_url*/ None)
     };
 
@@ -565,7 +474,6 @@ fn test_validate_provider_aws_rejects_websockets() {
         }),
         requires_openai_auth: false,
         supports_websockets: true,
-        models: Vec::new(),
         ..ModelProviderInfo::create_openai_provider(/*base_url*/ None)
     };
 
@@ -594,37 +502,4 @@ refresh_interval_ms = 0
     let auth = provider.auth.expect("auth config should deserialize");
     assert_eq!(auth.refresh_interval_ms, 0);
     assert_eq!(auth.refresh_interval(), None);
-}
-
-#[test]
-fn test_deserialize_custom_provider_with_cached_models() {
-    let provider_toml = r#"
-name = "DeepSeek"
-base_url = "https://api.deepseek.com/v1"
-env_key = "DEEPSEEK_API_KEY"
-wire_api = "chat"
-
-[[models]]
-model_id = "deepseek-chat"
-model_name = "DeepSeek Chat"
-max_token_len = 64000
-max_output_tokens = 8000
-context_window = 128000
-show_in_picker = true
-"#;
-
-    let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
-
-    assert_eq!(
-        provider.models,
-        vec![ProviderModelInfo {
-            model_id: "deepseek-chat".to_string(),
-            model_name: Some("DeepSeek Chat".to_string()),
-            max_token_len: Some(64_000),
-            max_output_tokens: Some(8_000),
-            show_in_picker: true,
-            context_window: Some(128_000),
-            ..Default::default()
-        }]
-    );
 }

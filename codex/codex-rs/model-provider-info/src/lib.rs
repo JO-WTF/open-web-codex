@@ -7,15 +7,11 @@
 
 use codex_api::Provider as ApiProvider;
 use codex_api::RetryConfig as ApiRetryConfig;
-use codex_api::is_azure_responses_provider;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::EnvVarError;
 use codex_protocol::error::Result as CodexResult;
-use codex_protocol::openai_models::ModelPreset;
-use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::openai_models::ReasoningEffortPreset;
 use http::HeaderMap;
 use http::header::HeaderName;
 use http::header::HeaderValue;
@@ -50,6 +46,7 @@ pub const AMAZON_BEDROCK_DEFAULT_BASE_URL: &str =
     "https://bedrock-mantle.us-east-1.api.aws/openai/v1";
 const AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_HEADER: &str = "x-amzn-mantle-client-agent";
 const AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_VALUE: &str = "codex";
+const CHAT_WIRE_API_REMOVED_ERROR: &str = "`wire_api = \"chat\"` is no longer supported.\nHow to fix: set `wire_api = \"responses\"` in your provider config.\nMore info: https://github.com/openai/codex/discussions/7782";
 pub const LEGACY_OLLAMA_CHAT_PROVIDER_ID: &str = "ollama-chat";
 pub const OLLAMA_CHAT_PROVIDER_REMOVED_ERROR: &str = "`ollama-chat` is no longer supported.\nHow to fix: replace `ollama-chat` with `ollama` in `model_provider`, `oss_provider`, or `--local-provider`.\nMore info: https://github.com/openai/codex/discussions/7782";
 
@@ -60,34 +57,14 @@ pub enum WireApi {
     /// The Responses API exposed by OpenAI at `/v1/responses`.
     #[default]
     Responses,
-    /// The OpenAI-compatible Chat Completions API exposed at
-    /// `/v1/chat/completions`. This is the lingua franca of third-party
-    /// providers (DeepSeek, OpenRouter, vLLM, Ollama's OpenAI shim, etc.).
-    /// Use this for any provider that is not the native OpenAI Responses API.
-    Chat,
 }
 
 impl fmt::Display for WireApi {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let value = match self {
             Self::Responses => "responses",
-            Self::Chat => "chat",
         };
         f.write_str(value)
-    }
-}
-
-impl WireApi {
-    /// Returns `true` when this provider speaks the OpenAI-compatible Chat
-    /// Completions wire protocol.
-    pub fn is_chat(self) -> bool {
-        matches!(self, Self::Chat)
-    }
-
-    /// Returns `true` when this provider speaks the native OpenAI Responses
-    /// wire protocol.
-    pub fn is_responses(self) -> bool {
-        matches!(self, Self::Responses)
     }
 }
 
@@ -99,63 +76,8 @@ impl<'de> Deserialize<'de> for WireApi {
         let value = String::deserialize(deserializer)?;
         match value.as_str() {
             "responses" => Ok(Self::Responses),
-            "chat" => Ok(Self::Chat),
-            _ => Err(serde::de::Error::unknown_variant(
-                &value,
-                &["responses", "chat"],
-            )),
-        }
-    }
-}
-
-/// User-configurable model metadata cached under a custom provider.
-///
-/// Third-party providers own their model namespace, so fetched models are stored
-/// with the provider instead of being merged into Codex's built-in OpenAI catalog.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub struct ProviderModelInfo {
-    /// Provider-specific model identifier used on API requests.
-    pub model_id: String,
-    /// Friendly model name shown in Codex UI. Defaults to `model_id`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_name: Option<String>,
-    /// Maximum input context length advertised or configured for this model.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_token_len: Option<i64>,
-    /// Maximum output tokens advertised or configured for this model.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_output_tokens: Option<i64>,
-    /// Whether this model should be displayed in the model picker.
-    #[serde(default = "default_provider_model_show_in_picker")]
-    pub show_in_picker: bool,
-    /// Context window length for this model. When unset, falls back to
-    /// `max_token_len` or 128K at conversion time.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context_window: Option<i64>,
-    /// Default reasoning effort level for this model.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_reasoning_level: Option<ReasoningEffort>,
-    /// Supported reasoning effort levels with descriptions.
-    #[serde(default)]
-    pub supported_reasoning_levels: Vec<ReasoningEffortPreset>,
-}
-
-fn default_provider_model_show_in_picker() -> bool {
-    true
-}
-
-impl From<&ModelPreset> for ProviderModelInfo {
-    fn from(model: &ModelPreset) -> Self {
-        Self {
-            model_id: model.model.clone(),
-            model_name: (model.display_name != model.model).then(|| model.display_name.clone()),
-            max_token_len: None,
-            max_output_tokens: None,
-            show_in_picker: model.show_in_picker,
-            context_window: None,
-            default_reasoning_level: Some(model.default_reasoning_effort.clone()),
-            supported_reasoning_levels: model.supported_reasoning_efforts.clone(),
+            "chat" => Err(serde::de::Error::custom(CHAT_WIRE_API_REMOVED_ERROR)),
+            _ => Err(serde::de::Error::unknown_variant(&value, &["responses"])),
         }
     }
 }
@@ -186,9 +108,6 @@ pub struct ModelProviderInfo {
     /// Which wire protocol this provider expects.
     #[serde(default)]
     pub wire_api: WireApi,
-    /// Custom-provider models fetched from that provider and cached in config.toml.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub models: Vec<ProviderModelInfo>,
     /// Optional query parameters to append to the base URL.
     pub query_params: Option<HashMap<String, String>>,
     /// Additional HTTP headers to include in requests to this provider where
@@ -218,13 +137,9 @@ pub struct ModelProviderInfo {
     /// Whether this provider supports the Responses API WebSocket transport.
     #[serde(default)]
     pub supports_websockets: bool,
-    /// Whether this provider exposes the Codex Search API used by hosted and
-    /// standalone Web Search tools.
+    /// Whether this provider supports the standalone web-search endpoint.
     #[serde(default)]
-    pub supports_web_search: bool,
-    /// Whether this provider supports the image-generation extension backend.
-    #[serde(default)]
-    pub supports_image_generation: bool,
+    pub supports_standalone_web_search: bool,
 }
 
 /// AWS SigV4 auth configuration for a model provider.
@@ -423,7 +338,6 @@ impl ModelProviderInfo {
             auth: None,
             aws: None,
             wire_api: WireApi::Responses,
-            models: Vec::new(),
             query_params: None,
             http_headers: Some(
                 [("version".to_string(), env!("CARGO_PKG_VERSION").to_string())]
@@ -448,8 +362,7 @@ impl ModelProviderInfo {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: true,
             supports_websockets: true,
-            supports_web_search: true,
-            supports_image_generation: true,
+            supports_standalone_web_search: true,
         }
     }
 
@@ -471,7 +384,6 @@ impl ModelProviderInfo {
                 region: None,
             })),
             wire_api: WireApi::Responses,
-            models: Vec::new(),
             query_params: None,
             http_headers: Some(HashMap::from([(
                 AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_HEADER.to_string(),
@@ -484,8 +396,7 @@ impl ModelProviderInfo {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: false,
-            supports_web_search: false,
-            supports_image_generation: false,
+            supports_standalone_web_search: false,
         }
     }
 
@@ -507,21 +418,8 @@ impl ModelProviderInfo {
         self.name == AMAZON_BEDROCK_PROVIDER_NAME
     }
 
-    pub fn supports_remote_compaction(&self) -> bool {
-        self.is_openai() || is_azure_responses_provider(&self.name, self.base_url.as_deref())
-    }
-
     pub fn has_command_auth(&self) -> bool {
         self.auth.is_some()
-    }
-
-    /// Returns whether this provider uses the Chat wire protocol (`/v1/chat/completions`).
-    ///
-    /// Chat-protocol providers typically expose the standard OpenAI `/v1/models`
-    /// endpoint with `{"data": [...]}` format, while Responses-protocol providers
-    /// use the Codex-native `{"models": [...]}` format.
-    pub fn is_chat_wire_api(&self) -> bool {
-        self.wire_api == WireApi::Chat
     }
 }
 
@@ -633,7 +531,6 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         auth: None,
         aws: None,
         wire_api,
-        models: Vec::new(),
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -643,8 +540,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
-        supports_web_search: false,
-        supports_image_generation: false,
+        supports_standalone_web_search: false,
     }
 }
 

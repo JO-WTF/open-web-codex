@@ -1,19 +1,22 @@
+#[cfg(test)]
 use std::path::Path;
 use std::path::PathBuf;
 
 use crate::JSONRPCNotification;
 use crate::JSONRPCRequest;
+use crate::JsonSchema;
 use crate::RequestId;
+use crate::TS;
+#[cfg(test)]
 use crate::export::GeneratedSchema;
+#[cfg(test)]
 use crate::export::write_json_schema;
 use crate::protocol::v1;
 use crate::protocol::v2;
 use codex_experimental_api_macros::ExperimentalApi;
-use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use strum_macros::Display;
-use ts_rs::TS;
 
 /// Authentication mode for OpenAI-backed providers.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
@@ -90,6 +93,7 @@ macro_rules! experimental_reason_expr {
     };
 }
 
+#[cfg(test)]
 macro_rules! experimental_method_entry {
     (#[experimental($reason:expr)] => $wire:literal) => {
         $wire
@@ -102,21 +106,13 @@ macro_rules! experimental_method_entry {
     };
 }
 
+#[cfg(test)]
 macro_rules! experimental_type_entry {
     (#[experimental($reason:expr)] $ty:ty) => {
         stringify!($ty)
     };
     ($ty:ty) => {
         ""
-    };
-}
-
-macro_rules! experimental_method_reason {
-    (#[experimental($reason:expr)]) => {
-        Some($reason)
-    };
-    () => {
-        None
     };
 }
 
@@ -209,7 +205,7 @@ macro_rules! client_request_definitions {
         $(
             $(#[experimental($reason:expr)])?
             $(#[doc = $variant_doc:literal])*
-            $variant:ident $(=> $wire:literal)? {
+            $variant:ident => $wire:literal {
                 params: $(#[$params_meta:meta])* $params:ty,
                 $(inspect_params: $inspect_params:tt,)?
                 serialization: $serialization:ident $( ( $($serialization_args:tt)* ) )?,
@@ -224,7 +220,8 @@ macro_rules! client_request_definitions {
         pub enum ClientRequest {
             $(
                 $(#[doc = $variant_doc])*
-                $(#[serde(rename = $wire)] #[ts(rename = $wire)])?
+                #[serde(rename = $wire)]
+                #[ts(rename = $wire)]
                 $variant {
                     #[serde(rename = "id")]
                     request_id: RequestId,
@@ -234,44 +231,6 @@ macro_rules! client_request_definitions {
             )*
         }
 
-        /// A registered client-to-server wire method.
-        ///
-        /// This enum is generated from the same registry that defines
-        /// `ClientRequest`, so protocol consumers can enumerate method facts
-        /// without maintaining a second list of wire names.
-        #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
-        #[serde(rename_all = "camelCase")]
-        pub enum ClientRequestMethod {
-            $(
-                $(#[serde(rename = $wire)])?
-                $variant,
-            )*
-        }
-
-        impl ClientRequestMethod {
-            pub const ALL: &[Self] = &[
-                $(Self::$variant,)*
-            ];
-
-            pub fn wire_name(self) -> String {
-                serde_json::to_value(self)
-                    .expect("client request method enum always serializes")
-                    .as_str()
-                    .expect("client request method enum serializes as a string")
-                    .to_string()
-            }
-
-            pub const fn experimental_reason(self) -> Option<&'static str> {
-                match self {
-                    $(
-                        Self::$variant => {
-                            experimental_method_reason!($(#[experimental($reason)])?)
-                        }
-                    )*
-                }
-            }
-        }
-
         impl ClientRequest {
             pub fn id(&self) -> &RequestId {
                 match self {
@@ -279,16 +238,10 @@ macro_rules! client_request_definitions {
                 }
             }
 
-            pub fn method(&self) -> String {
-                serde_json::to_value(self)
-                    .ok()
-                    .and_then(|value| {
-                        value
-                            .get("method")
-                            .and_then(serde_json::Value::as_str)
-                            .map(str::to_owned)
-                    })
-                    .unwrap_or_else(|| "<unknown>".to_string())
+            pub const fn method_name(&self) -> &'static str {
+                match self {
+                    $(Self::$variant { .. } => $wire,)*
+                }
             }
 
             pub fn serialization_scope(&self) -> Option<ClientRequestSerializationScope> {
@@ -305,6 +258,26 @@ macro_rules! client_request_definitions {
             }
         }
 
+        impl TryFrom<JSONRPCRequest> for ClientRequest {
+            type Error = serde_json::Error;
+
+            fn try_from(request: JSONRPCRequest) -> Result<Self, Self::Error> {
+                let JSONRPCRequest {
+                    id: request_id,
+                    method,
+                    params,
+                    trace: _,
+                } = request;
+                let mut request = serde_json::Map::new();
+                request.insert("id".to_string(), serde_json::to_value(request_id)?);
+                request.insert("method".to_string(), serde_json::Value::String(method));
+                if let Some(params) = params {
+                    request.insert("params".to_string(), params);
+                }
+                serde_json::from_value(serde_json::Value::Object(request))
+            }
+        }
+
         /// Typed response from the server to the client.
         #[derive(Serialize, Deserialize, Debug, Clone)]
         #[allow(clippy::large_enum_variant)]
@@ -312,7 +285,7 @@ macro_rules! client_request_definitions {
         pub enum ClientResponse {
             $(
                 $(#[doc = $variant_doc])*
-                $(#[serde(rename = $wire)])?
+                #[serde(rename = $wire)]
                 $variant {
                     #[serde(rename = "id")]
                     request_id: RequestId,
@@ -329,15 +302,9 @@ macro_rules! client_request_definitions {
             }
 
             pub fn method(&self) -> String {
-                serde_json::to_value(self)
-                    .ok()
-                    .and_then(|value| {
-                        value
-                            .get("method")
-                            .and_then(serde_json::Value::as_str)
-                            .map(str::to_owned)
-                    })
-                    .unwrap_or_else(|| "<unknown>".to_string())
+                match self {
+                    $(Self::$variant { .. } => $wire.to_string(),)*
+                }
             }
 
             pub fn into_jsonrpc_parts(
@@ -353,7 +320,8 @@ macro_rules! client_request_definitions {
             }
         }
 
-        #[derive(Debug, Clone)]
+        #[derive(Debug, Clone, Serialize)]
+        #[serde(untagged)]
         #[allow(clippy::large_enum_variant)]
         pub enum ClientResponsePayload {
             $( $variant($response), )*
@@ -361,26 +329,6 @@ macro_rules! client_request_definitions {
         }
 
         impl ClientResponsePayload {
-            pub fn into_jsonrpc_parts_and_payload(
-                self,
-                request_id: RequestId,
-            ) -> std::result::Result<
-                (RequestId, crate::Result, Option<ClientResponsePayload>),
-                serde_json::Error,
-            > {
-                match self {
-                    $(
-                        Self::$variant(response) => {
-                            let result = serde_json::to_value(&response)?;
-                            Ok((request_id, result, Some(Self::$variant(response))))
-                        }
-                    )*
-                    Self::InterruptConversation(response) => {
-                        serde_json::to_value(response).map(|result| (request_id, result, None))
-                    }
-                }
-            }
-
             pub fn into_client_response(self, request_id: RequestId) -> Option<ClientResponse> {
                 match self {
                     $(
@@ -450,22 +398,26 @@ macro_rules! client_request_definitions {
             }
         }
 
+        #[cfg(test)]
         pub(crate) const EXPERIMENTAL_CLIENT_METHODS: &[&str] = &[
             $(
-                experimental_method_entry!($(#[experimental($reason)])? $(=> $wire)?),
+                experimental_method_entry!($(#[experimental($reason)])? => $wire),
             )*
         ];
+        #[cfg(test)]
         pub(crate) const EXPERIMENTAL_CLIENT_METHOD_PARAM_TYPES: &[&str] = &[
             $(
                 experimental_type_entry!($(#[experimental($reason)])? $params),
             )*
         ];
+        #[cfg(test)]
         pub(crate) const EXPERIMENTAL_CLIENT_METHOD_RESPONSE_TYPES: &[&str] = &[
             $(
                 experimental_type_entry!($(#[experimental($reason)])? $response),
             )*
         ];
 
+        #[cfg(test)]
         pub fn export_client_responses(
             out_dir: &::std::path::Path,
         ) -> ::std::result::Result<(), ::ts_rs::ExportError> {
@@ -475,12 +427,14 @@ macro_rules! client_request_definitions {
             Ok(())
         }
 
+        #[cfg(test)]
         pub(crate) fn visit_client_response_types(v: &mut impl ::ts_rs::TypeVisitor) {
             $(
                 v.visit::<$response>();
             )*
         }
 
+        #[cfg(test)]
         #[allow(clippy::vec_init_then_push)]
         pub fn export_client_response_schemas(
             out_dir: &::std::path::Path,
@@ -492,6 +446,7 @@ macro_rules! client_request_definitions {
             Ok(schemas)
         }
 
+        #[cfg(test)]
         #[allow(clippy::vec_init_then_push)]
         pub fn export_client_param_schemas(
             out_dir: &::std::path::Path,
@@ -517,10 +472,18 @@ macro_rules! client_response_payload_from_impl {
 }
 
 client_request_definitions! {
-    Initialize {
+    Initialize => "initialize" {
         params: v1::InitializeParams,
         serialization: None,
         response: v1::InitializeResponse,
+    },
+
+    #[experimental("server/diagnostics")]
+    /// Read content-free, process-local diagnostics.
+    ServerDiagnostics => "server/diagnostics" {
+        params: v2::ServerDiagnosticsParams,
+        serialization: None,
+        response: v2::ServerDiagnosticsResponse,
     },
 
     /// NEW APIs
@@ -603,6 +566,11 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadMetadataUpdateResponse,
     },
+    ThreadSectionMove => "thread/section/move" {
+        params: v2::ThreadSectionMoveParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadSectionMoveResponse,
+    },
     #[experimental("thread/settings/update")]
     ThreadSettingsUpdate => "thread/settings/update" {
         params: v2::ThreadSettingsUpdateParams,
@@ -670,6 +638,26 @@ client_request_definitions! {
         inspect_params: true,
         serialization: None,
         response: v2::ThreadListResponse,
+    },
+    ThreadSectionList => "threadSection/list" {
+        params: v2::ThreadSectionListParams,
+        serialization: global_shared_read("thread-sections"),
+        response: v2::ThreadSectionListResponse,
+    },
+    ThreadSectionCreate => "threadSection/create" {
+        params: v2::ThreadSectionCreateParams,
+        serialization: global("thread-sections"),
+        response: v2::ThreadSectionCreateResponse,
+    },
+    ThreadSectionUpdate => "threadSection/update" {
+        params: v2::ThreadSectionUpdateParams,
+        serialization: global("thread-sections"),
+        response: v2::ThreadSectionUpdateResponse,
+    },
+    ThreadSectionDelete => "threadSection/delete" {
+        params: v2::ThreadSectionDeleteParams,
+        serialization: global("thread-sections"),
+        response: v2::ThreadSectionDeleteResponse,
     },
     #[experimental("thread/search")]
     ThreadSearch => "thread/search" {
@@ -748,6 +736,12 @@ client_request_definitions! {
         params: v2::PluginListParams,
         serialization: None,
         response: v2::PluginListResponse,
+    },
+    #[experimental("plugin/search")]
+    PluginSearch => "plugin/search" {
+        params: v2::PluginSearchParams,
+        serialization: None,
+        response: v2::PluginSearchResponse,
     },
     PluginInstalled => "plugin/installed" {
         params: v2::PluginInstalledParams,
@@ -929,11 +923,6 @@ client_request_definitions! {
         params: v2::ModelListParams,
         serialization: None,
         response: v2::ModelListResponse,
-    },
-    ModelProviderList => "modelProvider/list" {
-        params: v2::ModelProviderListParams,
-        serialization: None,
-        response: v2::ModelProviderListResponse,
     },
     ModelProviderCapabilitiesRead => "modelProvider/capabilities/read" {
         params: v2::ModelProviderCapabilitiesReadParams,
@@ -1190,13 +1179,18 @@ client_request_definitions! {
     },
     ExternalAgentConfigDetect => "externalAgentConfig/detect" {
         params: v2::ExternalAgentConfigDetectParams,
-        serialization: global("config"),
+        serialization: global("external-agent-detect"),
         response: v2::ExternalAgentConfigDetectResponse,
     },
     ExternalAgentConfigImport => "externalAgentConfig/import" {
         params: v2::ExternalAgentConfigImportParams,
         serialization: global("config"),
         response: v2::ExternalAgentConfigImportResponse,
+    },
+    ExternalAgentConfigImportHistoryRecord => "externalAgentConfig/import/recordHistory" {
+        params: v2::ExternalAgentConfigImportHistoryRecordParams,
+        serialization: global("config"),
+        response: v2::ExternalAgentConfigImportHistoryRecordResponse,
     },
     ExternalAgentConfigImportHistoriesRead => "externalAgentConfig/import/readHistories" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
@@ -1229,25 +1223,25 @@ client_request_definitions! {
     },
 
     /// DEPRECATED APIs below
-    GetConversationSummary {
+    GetConversationSummary => "getConversationSummary" {
         params: v1::GetConversationSummaryParams,
         serialization: None,
         response: v1::GetConversationSummaryResponse,
     },
-    GitDiffToRemote {
+    GitDiffToRemote => "gitDiffToRemote" {
         params: v1::GitDiffToRemoteParams,
         serialization: None,
         response: v1::GitDiffToRemoteResponse,
     },
     /// DEPRECATED in favor of GetAccount
-    GetAuthStatus {
+    GetAuthStatus => "getAuthStatus" {
         params: v1::GetAuthStatusParams,
         serialization: global("account-auth"),
         response: v1::GetAuthStatusResponse,
     },
     // Legacy fuzzy search cancellation is intentionally concurrent: clients reuse a
     // cancellation token so a newer request can cancel an older in-flight search.
-    FuzzyFileSearch {
+    FuzzyFileSearch => "fuzzyFileSearch" {
         params: FuzzyFileSearchParams,
         serialization: None,
         response: FuzzyFileSearchResponse,
@@ -1301,44 +1295,6 @@ macro_rules! server_request_definitions {
                     params: $params,
                 },
             )*
-        }
-
-        /// A registered server-to-client wire method.
-        ///
-        /// This enum is generated from the same registry that defines
-        /// `ServerRequest`, so protocol consumers can enumerate method facts
-        /// without maintaining a second list of wire names.
-        #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
-        #[serde(rename_all = "camelCase")]
-        pub enum ServerRequestMethod {
-            $(
-                $(#[serde(rename = $wire)])?
-                $variant,
-            )*
-        }
-
-        impl ServerRequestMethod {
-            pub const ALL: &[Self] = &[
-                $(Self::$variant,)*
-            ];
-
-            pub fn wire_name(self) -> String {
-                serde_json::to_value(self)
-                    .expect("server request method enum always serializes")
-                    .as_str()
-                    .expect("server request method enum serializes as a string")
-                    .to_string()
-            }
-
-            pub const fn experimental_reason(self) -> Option<&'static str> {
-                match self {
-                    $(
-                        Self::$variant => {
-                            experimental_method_reason!($(#[experimental($reason)])?)
-                        }
-                    )*
-                }
-            }
         }
 
         impl ServerRequest {
@@ -1415,22 +1371,26 @@ macro_rules! server_request_definitions {
             }
         }
 
+        #[cfg(test)]
         pub(crate) const EXPERIMENTAL_SERVER_METHODS: &[&str] = &[
             $(
                 experimental_method_entry!($(#[experimental($reason)])? $(=> $wire)?),
             )*
         ];
+        #[cfg(test)]
         pub(crate) const EXPERIMENTAL_SERVER_METHOD_PARAM_TYPES: &[&str] = &[
             $(
                 experimental_type_entry!($(#[experimental($reason)])? $params),
             )*
         ];
+        #[cfg(test)]
         pub(crate) const EXPERIMENTAL_SERVER_METHOD_RESPONSE_TYPES: &[&str] = &[
             $(
                 experimental_type_entry!($(#[experimental($reason)])? $response),
             )*
         ];
 
+        #[cfg(test)]
         pub fn export_server_responses(
             out_dir: &::std::path::Path,
         ) -> ::std::result::Result<(), ::ts_rs::ExportError> {
@@ -1440,12 +1400,14 @@ macro_rules! server_request_definitions {
             Ok(())
         }
 
+        #[cfg(test)]
         pub(crate) fn visit_server_response_types(v: &mut impl ::ts_rs::TypeVisitor) {
             $(
                 v.visit::<$response>();
             )*
         }
 
+        #[cfg(test)]
         #[allow(clippy::vec_init_then_push)]
         pub fn export_server_response_schemas(
             out_dir: &Path,
@@ -1460,6 +1422,7 @@ macro_rules! server_request_definitions {
             Ok(schemas)
         }
 
+        #[cfg(test)]
         #[allow(clippy::vec_init_then_push)]
         pub fn export_server_param_schemas(
             out_dir: &Path,
@@ -1481,8 +1444,7 @@ macro_rules! server_request_definitions {
 macro_rules! server_notification_definitions {
     (
         $(
-            $(#[experimental($reason:expr)])?
-            $(#[doc = $variant_doc:literal])*
+            $(#[$variant_meta:meta])*
             $variant:ident $(=> $wire:literal)? ( $payload:ty )
         ),* $(,)?
     ) => {
@@ -1502,49 +1464,10 @@ macro_rules! server_notification_definitions {
         #[strum(serialize_all = "camelCase")]
         pub enum ServerNotification {
             $(
-                $(#[experimental($reason)])?
-                $(#[doc = $variant_doc])*
+                $(#[$variant_meta])*
                 $(#[serde(rename = $wire)] #[ts(rename = $wire)] #[strum(serialize = $wire)])?
                 $variant($payload),
             )*
-        }
-
-        /// A registered server-to-client notification wire method.
-        ///
-        /// This enum is generated from the same registry that defines
-        /// `ServerNotification`, so protocol consumers can enumerate method
-        /// facts without maintaining a second list of wire names.
-        #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
-        #[serde(rename_all = "camelCase")]
-        pub enum ServerNotificationMethod {
-            $(
-                $(#[serde(rename = $wire)])?
-                $variant,
-            )*
-        }
-
-        impl ServerNotificationMethod {
-            pub const ALL: &[Self] = &[
-                $(Self::$variant,)*
-            ];
-
-            pub fn wire_name(self) -> String {
-                serde_json::to_value(self)
-                    .expect("server notification method enum always serializes")
-                    .as_str()
-                    .expect("server notification method enum serializes as a string")
-                    .to_string()
-            }
-
-            pub const fn experimental_reason(self) -> Option<&'static str> {
-                match self {
-                    $(
-                        Self::$variant => {
-                            experimental_method_reason!($(#[experimental($reason)])?)
-                        }
-                    )*
-                }
-            }
         }
 
         impl ServerNotification {
@@ -1563,12 +1486,7 @@ macro_rules! server_notification_definitions {
             }
         }
 
-        pub(crate) const EXPERIMENTAL_SERVER_NOTIFICATIONS: &[&str] = &[
-            $(
-                experimental_method_entry!($(#[experimental($reason)])? $(=> $wire)?),
-            )*
-        ];
-
+        #[cfg(test)]
         #[allow(clippy::vec_init_then_push)]
         pub fn export_server_notification_schemas(
             out_dir: &::std::path::Path,
@@ -1583,67 +1501,21 @@ macro_rules! server_notification_definitions {
 macro_rules! client_notification_definitions {
     (
         $(
-            $(#[experimental($reason:expr)])?
-            $(#[doc = $variant_doc:literal])*
-            $variant:ident $(=> $wire:literal)? $( ( $payload:ty ) )?
+            $(#[$variant_meta:meta])*
+            $variant:ident $( ( $payload:ty ) )?
         ),* $(,)?
     ) => {
-        #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS, Display, ExperimentalApi)]
+        #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS, Display)]
         #[serde(tag = "method", content = "params", rename_all = "camelCase")]
         #[strum(serialize_all = "camelCase")]
         pub enum ClientNotification {
             $(
-                $(#[experimental($reason)])?
-                $(#[doc = $variant_doc])*
-                $(#[serde(rename = $wire)] #[ts(rename = $wire)] #[strum(serialize = $wire)])?
+                $(#[$variant_meta])*
                 $variant $( ( $payload ) )?,
             )*
         }
 
-        /// A registered client-to-server notification wire method.
-        ///
-        /// This enum is generated from the same registry that defines
-        /// `ClientNotification`, so protocol consumers can enumerate method
-        /// facts without maintaining a second list of wire names.
-        #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
-        #[serde(rename_all = "camelCase")]
-        pub enum ClientNotificationMethod {
-            $(
-                $(#[serde(rename = $wire)])?
-                $variant,
-            )*
-        }
-
-        impl ClientNotificationMethod {
-            pub const ALL: &[Self] = &[
-                $(Self::$variant,)*
-            ];
-
-            pub fn wire_name(self) -> String {
-                serde_json::to_value(self)
-                    .expect("client notification method enum always serializes")
-                    .as_str()
-                    .expect("client notification method enum serializes as a string")
-                    .to_string()
-            }
-
-            pub const fn experimental_reason(self) -> Option<&'static str> {
-                match self {
-                    $(
-                        Self::$variant => {
-                            experimental_method_reason!($(#[experimental($reason)])?)
-                        }
-                    )*
-                }
-            }
-        }
-
-        pub(crate) const EXPERIMENTAL_CLIENT_NOTIFICATIONS: &[&str] = &[
-            $(
-                experimental_method_entry!($(#[experimental($reason)])? $(=> $wire)?),
-            )*
-        ];
-
+        #[cfg(test)]
         pub fn export_client_notification_schemas(
             _out_dir: &::std::path::Path,
         ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
@@ -1856,11 +1728,11 @@ server_notification_definitions! {
     PlanDelta => "item/plan/delta" (v2::PlanDeltaNotification),
     /// Stream base64-encoded stdout/stderr chunks for a running `command/exec` session.
     CommandExecOutputDelta => "command/exec/outputDelta" (v2::CommandExecOutputDeltaNotification),
-    #[experimental("process/outputDelta")]
     /// Stream base64-encoded stdout/stderr chunks for a running `process/spawn` session.
+    #[experimental("process/outputDelta")]
     ProcessOutputDelta => "process/outputDelta" (v2::ProcessOutputDeltaNotification),
-    #[experimental("process/exited")]
     /// Final exit notification for a `process/spawn` session.
+    #[experimental("process/exited")]
     ProcessExited => "process/exited" (v2::ProcessExitedNotification),
     CommandExecutionOutputDelta => "item/commandExecution/outputDelta" (v2::CommandExecutionOutputDeltaNotification),
     TerminalInteraction => "item/commandExecution/terminalInteraction" (v2::TerminalInteractionNotification),
@@ -1915,7 +1787,10 @@ server_notification_definitions! {
     WindowsWorldWritableWarning => "windows/worldWritableWarning" (v2::WindowsWorldWritableWarningNotification),
     WindowsSandboxSetupCompleted => "windowsSandbox/setupCompleted" (v2::WindowsSandboxSetupCompletedNotification),
 
-    AccountLoginCompleted => "account/login/completed" (v2::AccountLoginCompletedNotification),
+    #[serde(rename = "account/login/completed")]
+    #[ts(rename = "account/login/completed")]
+    #[strum(serialize = "account/login/completed")]
+    AccountLoginCompleted(v2::AccountLoginCompletedNotification),
 
 }
 
@@ -1976,6 +1851,167 @@ mod tests {
     fn request_id() -> RequestId {
         const REQUEST_ID: i64 = 1;
         RequestId::Integer(REQUEST_ID)
+    }
+
+    fn decode_client_request_through_json(
+        request: &JSONRPCRequest,
+    ) -> std::result::Result<ClientRequest, String> {
+        serde_json::to_value(request)
+            .and_then(serde_json::from_value)
+            .map_err(|err| err.to_string())
+    }
+
+    #[test]
+    fn jsonrpc_request_conversion_preserves_serde_enum_decoding() {
+        let requests = [
+            JSONRPCRequest {
+                id: RequestId::Integer(1),
+                method: "thread/archive".to_string(),
+                params: Some(json!({"threadId": "thread-1"})),
+                trace: Some(codex_protocol::protocol::W3cTraceContext {
+                    traceparent: Some("traceparent".to_string()),
+                    tracestate: Some("tracestate".to_string()),
+                }),
+            },
+            // Required params preserve distinct omitted and explicit-null errors.
+            JSONRPCRequest {
+                id: RequestId::Integer(2),
+                method: "thread/archive".to_string(),
+                params: None,
+                trace: None,
+            },
+            JSONRPCRequest {
+                id: RequestId::Integer(3),
+                method: "thread/archive".to_string(),
+                params: Some(serde_json::Value::Null),
+                trace: None,
+            },
+            // Optional unit params preserve omitted, null, and empty-object behavior.
+            JSONRPCRequest {
+                id: RequestId::Integer(4),
+                method: "memory/reset".to_string(),
+                params: None,
+                trace: None,
+            },
+            JSONRPCRequest {
+                id: RequestId::Integer(5),
+                method: "memory/reset".to_string(),
+                params: Some(serde_json::Value::Null),
+                trace: None,
+            },
+            JSONRPCRequest {
+                id: RequestId::Integer(6),
+                method: "memory/reset".to_string(),
+                params: Some(json!({})),
+                trace: None,
+            },
+            JSONRPCRequest {
+                id: RequestId::Integer(7),
+                method: "getConversationSummary".to_string(),
+                params: Some(json!({
+                    "conversationId": "67e55044-10b1-426f-9247-bb680e5fe0c8"
+                })),
+                trace: None,
+            },
+            JSONRPCRequest {
+                id: RequestId::Integer(8),
+                method: "unknown/method".to_string(),
+                params: Some(json!({})),
+                trace: None,
+            },
+        ];
+
+        for request in requests {
+            let expected = decode_client_request_through_json(&request);
+            let actual = ClientRequest::try_from(request).map_err(|err| err.to_string());
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn thread_section_move_round_trips_and_serializes_by_thread() -> Result<()> {
+        assert_eq!(
+            serde_json::to_value(v2::ThreadSortKey::SectionPosition)?,
+            json!("section_position")
+        );
+        let request = ClientRequest::ThreadSectionMove {
+            request_id: request_id(),
+            params: v2::ThreadSectionMoveParams {
+                thread_id: "thread-1".to_string(),
+                section_id: Some("01984de2-8f74-7c91-a3b2-5c5e937cf318".to_string()),
+                before_thread_id: Some("thread-2".to_string()),
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(&request)?,
+            json!({
+                "method": "thread/section/move",
+                "id": 1,
+                "params": {
+                    "threadId": "thread-1",
+                    "sectionId": "01984de2-8f74-7c91-a3b2-5c5e937cf318",
+                    "beforeThreadId": "thread-2"
+                }
+            })
+        );
+        assert_eq!(
+            request.serialization_scope(),
+            Some(ClientRequestSerializationScope::Thread {
+                thread_id: "thread-1".to_string()
+            })
+        );
+
+        let append_request = ClientRequest::try_from(JSONRPCRequest {
+            id: request_id(),
+            method: "thread/section/move".to_string(),
+            params: Some(json!({
+                "threadId": "thread-1",
+                "sectionId": "01984de2-8f74-7c91-a3b2-5c5e937cf318"
+            })),
+            trace: None,
+        })?;
+        assert_eq!(
+            append_request,
+            ClientRequest::ThreadSectionMove {
+                request_id: request_id(),
+                params: v2::ThreadSectionMoveParams {
+                    thread_id: "thread-1".to_string(),
+                    section_id: Some("01984de2-8f74-7c91-a3b2-5c5e937cf318".to_string()),
+                    before_thread_id: None,
+                },
+            }
+        );
+
+        let clear_request = ClientRequest::try_from(JSONRPCRequest {
+            id: request_id(),
+            method: "thread/section/move".to_string(),
+            params: Some(json!({
+                "threadId": "thread-1",
+                "sectionId": null
+            })),
+            trace: None,
+        })?;
+        assert_eq!(
+            clear_request,
+            ClientRequest::ThreadSectionMove {
+                request_id: request_id(),
+                params: v2::ThreadSectionMoveParams {
+                    thread_id: "thread-1".to_string(),
+                    section_id: None,
+                    before_thread_id: None,
+                },
+            }
+        );
+        assert!(
+            ClientRequest::try_from(JSONRPCRequest {
+                id: request_id(),
+                method: "thread/section/move".to_string(),
+                params: Some(json!({ "threadId": "thread-1" })),
+                trace: None,
+            })
+            .is_err()
+        );
+        Ok(())
     }
 
     #[test]
@@ -2444,6 +2480,12 @@ mod tests {
                         "thread/started".to_string(),
                         "item/agentMessage/delta".to_string(),
                     ]),
+                    extensions: Some(std::collections::HashMap::from([(
+                        "io.modelcontextprotocol/ui".to_string(),
+                        json!({
+                            "mimeTypes": ["text/html;profile=mcp-app"],
+                        }),
+                    )])),
                 }),
             },
         };
@@ -2465,7 +2507,12 @@ mod tests {
                         "optOutNotificationMethods": [
                             "thread/started",
                             "item/agentMessage/delta"
-                        ]
+                        ],
+                        "extensions": {
+                            "io.modelcontextprotocol/ui": {
+                                "mimeTypes": ["text/html;profile=mcp-app"]
+                            }
+                        }
                     }
                 }
             }),
@@ -2492,7 +2539,12 @@ mod tests {
                     "optOutNotificationMethods": [
                         "thread/started",
                         "item/agentMessage/delta"
-                    ]
+                    ],
+                    "extensions": {
+                        "io.modelcontextprotocol/ui": {
+                            "mimeTypes": ["text/html;profile=mcp-app"]
+                        }
+                    }
                 }
             }
         }))?;
@@ -2515,6 +2567,12 @@ mod tests {
                             "thread/started".to_string(),
                             "item/agentMessage/delta".to_string(),
                         ]),
+                        extensions: Some(std::collections::HashMap::from([(
+                            "io.modelcontextprotocol/ui".to_string(),
+                            json!({
+                                "mimeTypes": ["text/html;profile=mcp-app"],
+                            }),
+                        )])),
                     }),
                 },
             }
@@ -2763,7 +2821,6 @@ mod tests {
             params: None,
         };
         assert_eq!(request.id(), &RequestId::Integer(1));
-        assert_eq!(request.method(), "account/rateLimits/read");
         assert_eq!(
             json!({
                 "method": "account/rateLimits/read",
@@ -2781,7 +2838,6 @@ mod tests {
             params: None,
         };
         assert_eq!(request.id(), &RequestId::Integer(1));
-        assert_eq!(request.method(), "account/usage/read");
         assert_eq!(
             json!({
                 "method": "account/usage/read",
@@ -2799,7 +2855,6 @@ mod tests {
             params: None,
         };
         assert_eq!(request.id(), &RequestId::Integer(1));
-        assert_eq!(request.method(), "account/workspaceMessages/read");
         assert_eq!(
             json!({
                 "method": "account/workspaceMessages/read",
@@ -2824,6 +2879,8 @@ mod tests {
                     parent_thread_id: None,
                     preview: "first prompt".to_string(),
                     ephemeral: true,
+                    section: None,
+                    section_entered_at: None,
                     history_mode: Default::default(),
                     model_provider: "openai".to_string(),
                     created_at: 1,
@@ -2876,6 +2933,8 @@ mod tests {
                         "parentThreadId": null,
                         "preview": "first prompt",
                         "ephemeral": true,
+                        "section": null,
+                        "sectionEnteredAt": null,
                         "historyMode": "legacy",
                         "modelProvider": "openai",
                         "createdAt": 1,
@@ -3241,8 +3300,7 @@ mod tests {
                 "params": {
                     "limit": null,
                     "cursor": null,
-                    "includeHidden": null,
-                    "forceRefresh": null
+                    "includeHidden": null
                 }
             }),
             serde_json::to_value(&request)?,
@@ -3578,10 +3636,19 @@ mod tests {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
                 client_managed_handoffs: Some(true),
+                delegation_ack_filler: Some(false),
                 flush_transcript_tail_on_session_end: Some(true),
                 codex_responses_as_items: None,
                 codex_response_item_prefix: None,
                 codex_response_handoff_mode: Some(CodexResponseHandoffMode::BemTags),
+                codex_response_handoff_channel_prefixes: Some(std::collections::BTreeMap::from([
+                    ("analysis".to_string(), vec!["[THINKING]".to_string()]),
+                    (
+                        "commentary".to_string(),
+                        vec!["[PROGRESS]".to_string(), "[UPDATE]".to_string()],
+                    ),
+                    ("final".to_string(), vec!["[DONE]".to_string()]),
+                ])),
                 thread_id: "thr_123".to_string(),
                 model: Some("realtime-treatment-model".to_string()),
                 output_modality: RealtimeOutputModality::Audio,
@@ -3596,6 +3663,8 @@ mod tests {
                         text: "Understood.".to_string(),
                     },
                 ]),
+                realtime_start_instructions: Some("Use realtime output channels.".to_string()),
+                realtime_end_instructions: Some("Resume normal text responses.".to_string()),
                 prompt: Some(Some("You are on a call".to_string())),
                 realtime_session_id: Some("sess_456".to_string()),
                 transport: None,
@@ -3610,10 +3679,16 @@ mod tests {
                 "params": {
                     "threadId": "thr_123",
                     "clientManagedHandoffs": true,
+                    "delegationAckFiller": false,
                     "flushTranscriptTailOnSessionEnd": true,
                     "codexResponsesAsItems": null,
                     "codexResponseItemPrefix": null,
                     "codexResponseHandoffMode": "bemTags",
+                    "codexResponseHandoffChannelPrefixes": {
+                        "analysis": ["[THINKING]"],
+                        "commentary": ["[PROGRESS]", "[UPDATE]"],
+                        "final": ["[DONE]"]
+                    },
                     "model": "realtime-treatment-model",
                     "outputModality": "audio",
                     "includeStartupContext": false,
@@ -3627,6 +3702,8 @@ mod tests {
                             "text": "Understood."
                         }
                     ],
+                    "realtimeStartInstructions": "Use realtime output channels.",
+                    "realtimeEndInstructions": "Resume normal text responses.",
                     "prompt": "You are on a call",
                     "realtimeSessionId": "sess_456",
                     "transport": null,
@@ -3645,15 +3722,19 @@ mod tests {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
                 client_managed_handoffs: None,
+                delegation_ack_filler: None,
                 flush_transcript_tail_on_session_end: None,
                 codex_responses_as_items: None,
                 codex_response_item_prefix: None,
                 codex_response_handoff_mode: None,
+                codex_response_handoff_channel_prefixes: None,
                 thread_id: "thr_123".to_string(),
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
                 include_startup_context: None,
                 initial_items: None,
+                realtime_start_instructions: None,
+                realtime_end_instructions: None,
                 prompt: None,
                 realtime_session_id: None,
                 transport: None,
@@ -3668,14 +3749,18 @@ mod tests {
                 "params": {
                     "threadId": "thr_123",
                     "clientManagedHandoffs": null,
+                    "delegationAckFiller": null,
                     "flushTranscriptTailOnSessionEnd": null,
                     "codexResponsesAsItems": null,
                     "codexResponseItemPrefix": null,
                     "codexResponseHandoffMode": null,
+                    "codexResponseHandoffChannelPrefixes": null,
                     "model": null,
                     "outputModality": "audio",
                     "includeStartupContext": null,
                     "initialItems": null,
+                    "realtimeStartInstructions": null,
+                    "realtimeEndInstructions": null,
                     "realtimeSessionId": null,
                     "transport": null,
                     "version": null,
@@ -3689,15 +3774,19 @@ mod tests {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
                 client_managed_handoffs: None,
+                delegation_ack_filler: None,
                 flush_transcript_tail_on_session_end: None,
                 codex_responses_as_items: None,
                 codex_response_item_prefix: None,
                 codex_response_handoff_mode: None,
+                codex_response_handoff_channel_prefixes: None,
                 thread_id: "thr_123".to_string(),
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
                 include_startup_context: None,
                 initial_items: None,
+                realtime_start_instructions: None,
+                realtime_end_instructions: None,
                 prompt: Some(None),
                 realtime_session_id: None,
                 transport: None,
@@ -3712,14 +3801,18 @@ mod tests {
                 "params": {
                     "threadId": "thr_123",
                     "clientManagedHandoffs": null,
+                    "delegationAckFiller": null,
                     "flushTranscriptTailOnSessionEnd": null,
                     "codexResponsesAsItems": null,
                     "codexResponseItemPrefix": null,
                     "codexResponseHandoffMode": null,
+                    "codexResponseHandoffChannelPrefixes": null,
                     "model": null,
                     "outputModality": "audio",
                     "includeStartupContext": null,
                     "initialItems": null,
+                    "realtimeStartInstructions": null,
+                    "realtimeEndInstructions": null,
                     "prompt": null,
                     "realtimeSessionId": null,
                     "transport": null,
@@ -3933,15 +4026,19 @@ mod tests {
             request_id: RequestId::Integer(1),
             params: v2::ThreadRealtimeStartParams {
                 client_managed_handoffs: None,
+                delegation_ack_filler: None,
                 flush_transcript_tail_on_session_end: None,
                 codex_responses_as_items: None,
                 codex_response_item_prefix: None,
                 codex_response_handoff_mode: None,
+                codex_response_handoff_channel_prefixes: None,
                 thread_id: "thr_123".to_string(),
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
                 include_startup_context: None,
                 initial_items: None,
+                realtime_start_instructions: None,
+                realtime_end_instructions: None,
                 prompt: Some(Some("You are on a call".to_string())),
                 realtime_session_id: None,
                 transport: None,
