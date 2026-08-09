@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import base64
 import hashlib
 import json
@@ -18,6 +19,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.stdio import stdio_server
 from mcp.types import (
     CallToolResult,
     EmbeddedResource,
@@ -138,6 +140,7 @@ from .workspace_intake import read_json_document
 
 MAX_SOURCE_BYTES = 20 * 1024 * 1024
 MAX_PROFILE_GOAL_CHARS = 8_000
+SANDBOX_STATE_META_CAPABILITY = "codex/sandbox-state-meta"
 MCP_SERVER_NAME = "supply_chain"
 RESOURCE_URI_PREFIX = "supply-chain://resources/"
 
@@ -3926,7 +3929,18 @@ def main() -> None:
         RESOURCE_URI_PREFIX,
     )
     _case_store = CaseRepository.from_profile(_profile_state_root)
-    mcp.run(transport=args.transport)
+    if args.transport == "stdio":
+        asyncio.run(run_stdio())
+    else:
+        mcp.run(transport=args.transport)
+
+
+async def run_stdio() -> None:
+    initialization_options = mcp._mcp_server.create_initialization_options(
+        experimental_capabilities={SANDBOX_STATE_META_CAPABILITY: {}},
+    )
+    async with stdio_server() as streams:
+        await mcp._mcp_server.run(streams[0], streams[1], initialization_options)
 
 
 if __name__ == "__main__":

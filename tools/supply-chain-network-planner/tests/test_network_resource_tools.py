@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -118,6 +119,25 @@ def test_matrix_tools_expose_composable_resource_schemas() -> None:
     distribution = tools["prepare_network_distribution_map"].inputSchema
     assert "ctx" not in distribution["properties"]
     assert distribution["required"] == ["normalized_input_ref"]
+
+
+def test_network_stdio_advertises_native_workspace_metadata(monkeypatch) -> None:
+    captured = {}
+
+    @asynccontextmanager
+    async def fake_stdio_server():
+        yield object(), object()
+
+    async def fake_run(_reader, _writer, initialization_options):
+        captured["options"] = initialization_options
+
+    monkeypatch.setattr(server, "stdio_server", fake_stdio_server)
+    monkeypatch.setattr(server.mcp._mcp_server, "run", fake_run)
+
+    asyncio.run(server.run_stdio())
+
+    options = captured["options"]
+    assert server.SANDBOX_STATE_META_CAPABILITY in options.capabilities.experimental
 
 
 def test_distribution_map_publishes_geojson_for_map_card_only(
