@@ -4,9 +4,26 @@ import asyncio
 import json
 
 from supply_chain_planner import data_server
-from supply_chain_planner.models import ConfirmedSourceDecision, ResourceRef
+from supply_chain_planner.mcp_resources import bind_runtime
+from supply_chain_planner.models import MCP_SERVER_NAME, ConfirmedSourceDecision, ResourceRef
 from supply_chain_planner.resource_store import ResourceStore
 from supply_chain_planner.workspace_intake import discover
+
+RESOURCE_URI_PREFIX = "supply-chain://resources/"
+
+
+def _use_store(tmp_path, monkeypatch) -> ResourceStore:
+    store = ResourceStore(tmp_path / "profile-state")
+    runtime = bind_runtime(
+        tmp_path,
+        tmp_path / "profile",
+        MCP_SERVER_NAME,
+        RESOURCE_URI_PREFIX,
+        store=store,
+    )
+    monkeypatch.setattr(data_server, "_mcp_resource_runtime", runtime)
+    monkeypatch.setattr(data_server, "_workspace", lambda _ctx: tmp_path)
+    return store
 
 
 def test_data_server_exposes_only_four_composable_tools() -> None:
@@ -45,9 +62,7 @@ def test_sample_one_inspect_publishes_counts_and_fields_resource(tmp_path, monke
         ),
         encoding="utf-8",
     )
-    store = ResourceStore(tmp_path / "profile-state")
-    monkeypatch.setattr(data_server, "_resource_store", store)
-    monkeypatch.setattr(data_server, "_workspace", lambda _ctx: tmp_path)
+    store = _use_store(tmp_path, monkeypatch)
 
     result = data_server.inspect_workspace_sources(
         [
@@ -109,9 +124,7 @@ def test_confirmed_rows_normalize_then_prepare_geography_with_country(
         ),
         encoding="utf-8",
     )
-    store = ResourceStore(tmp_path / "profile-state")
-    monkeypatch.setattr(data_server, "_resource_store", store)
-    monkeypatch.setattr(data_server, "_workspace", lambda _ctx: tmp_path)
+    store = _use_store(tmp_path, monkeypatch)
     profiled = data_server.inspect_workspace_sources(
         ["demand.csv", "warehouses.csv", "admin.json"], object()
     )

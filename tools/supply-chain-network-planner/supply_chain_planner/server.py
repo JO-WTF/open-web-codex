@@ -56,6 +56,7 @@ from .matrix import validate_route_matrix as _validate_route_matrix_model
 from .matrix_models import CostMatrix, RouteMatrixPlan, RouteMatrixRow
 from .matrix_models import RouteMatrix as ComposableRouteMatrix
 from .matrix_service import CaseMatrixService
+from .mcp_resources import McpResourceRuntime, bind_runtime
 from .models import (
     ComparisonToolResult,
     CurrentCoverageResult,
@@ -101,7 +102,12 @@ from .optimization_models import (
 from .readiness import ReadinessEvaluator
 from .report_service import NetworkReportService
 from .requirements import RequirementRequest, RequirementService
-from .resource_store import PublishedResource, ResourceStore, resource_ref, workspace_resource_root
+from .resource_store import (
+    RESOURCE_URI_PREFIX,
+    PublishedResource,
+    ResourceStore,
+    resource_ref,
+)
 from .scenario_service import FacilityLocationService, NetworkScenarioService
 from .solver import (
     SolverUnavailable,
@@ -111,7 +117,6 @@ from .solver import (
     solve_current_assignment,
     summarize_assignment_cost,
 )
-from .workspace_intake import trusted_workspace_root
 
 MAX_SOURCE_BYTES = 20 * 1024 * 1024
 MAX_PROFILE_GOAL_CHARS = 8_000
@@ -131,7 +136,7 @@ mcp = FastMCP(
 _workspace_root = Path.cwd().resolve()
 _data_root = Path(os.environ.get("SUPPLY_CHAIN_DATA_ROOT", _workspace_root)).resolve()
 _profile_state_root = Path(os.environ.get("CODEX_HOME", _workspace_root / ".codex")).resolve()
-_resource_store: ResourceStore | None = None
+_mcp_resource_runtime: McpResourceRuntime | None = None
 _case_store: CaseRepository | None = None
 _CONTRACT_PATH = (
     Path(__file__).resolve().parents[1] / "contracts" / "warehouse-network-planning-1.0.0.json"
@@ -139,11 +144,19 @@ _CONTRACT_PATH = (
 
 
 def _store() -> ResourceStore:
-    global _resource_store
-    if _resource_store is None:
-        resource_root = workspace_resource_root(_profile_state_root, _workspace_root)
-        _resource_store = ResourceStore(resource_root)
-    return _resource_store
+    return _runtime().store
+
+
+def _runtime() -> McpResourceRuntime:
+    global _mcp_resource_runtime
+    if _mcp_resource_runtime is None:
+        _mcp_resource_runtime = bind_runtime(
+            _workspace_root,
+            _profile_state_root,
+            MCP_SERVER_NAME,
+            RESOURCE_URI_PREFIX,
+        )
+    return _mcp_resource_runtime
 
 
 def _cases() -> CaseRepository:
@@ -154,10 +167,7 @@ def _cases() -> CaseRepository:
 
 
 def _workspace(ctx: Context) -> Path:
-    workspace = trusted_workspace_root(ctx.request_context.meta)
-    if not workspace.samefile(_workspace_root):
-        raise ValueError("workspace_scope_mismatch")
-    return workspace
+    return _runtime().require_workspace(ctx)
 
 
 def _case_error_result(error: CaseRepositoryError) -> CallToolResult:
@@ -3535,12 +3545,16 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    global _workspace_root, _data_root, _profile_state_root, _resource_store, _case_store
+    global _workspace_root, _data_root, _profile_state_root, _mcp_resource_runtime, _case_store
     _workspace_root = Path.cwd().resolve(strict=True)
     _data_root = Path(os.environ.get("SUPPLY_CHAIN_DATA_ROOT", _workspace_root)).resolve()
     _profile_state_root = Path(os.environ.get("CODEX_HOME", _workspace_root / ".codex")).resolve()
-    resource_root = workspace_resource_root(_profile_state_root, _workspace_root)
-    _resource_store = ResourceStore(resource_root)
+    _mcp_resource_runtime = bind_runtime(
+        _workspace_root,
+        _profile_state_root,
+        MCP_SERVER_NAME,
+        RESOURCE_URI_PREFIX,
+    )
     _case_store = CaseRepository.from_profile(_profile_state_root)
     mcp.run(transport=args.transport)
 

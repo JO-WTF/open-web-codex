@@ -20,9 +20,9 @@ from mcp.types import (
     CallToolResult,
     EmbeddedResource,
     ResourceLink,
-    TextContent,
     TextResourceContents,
 )
+from pydantic import BaseModel, ConfigDict, Field
 
 from .case_models import (
     ArtifactRef,
@@ -48,6 +48,7 @@ from .geography import (
     validate_points_within_boundaries as _validate_points_within_boundaries,
 )
 from .mapping import FieldObservation, TransformSpec, suggest_role_mappings
+from .mcp_resources import McpResourceRuntime, bind_runtime
 from .models import (
     MCP_SERVER_NAME,
     City,
@@ -60,6 +61,7 @@ from .models import (
     PlanningDataset,
     PlanningSource,
     Point,
+    PreparedNetworkResource,
     ResourceRef,
     ServicePolicy,
     ValidationResult,
@@ -71,20 +73,29 @@ from .normalization import (
     ConfirmedSourceRows,
     normalize_confirmed_rows,
 )
-from .resource_store import PublishedResource, ResourceStore, resource_ref, workspace_resource_root
+from .resource_store import PublishedResource, ResourceStore
 from .workspace_intake import (
     discover,
     flatten_record,
     inspect,
     read_json_document,
     read_rows,
-    trusted_workspace_root,
     workspace_source_metadata,
 )
 
 RESOURCE_URI_PREFIX = "supply-chain://resources/"
 MAX_SOURCE_CATALOG_ENTRIES = 500
 SANDBOX_STATE_META_CAPABILITY = "codex/sandbox-state-meta"
+
+
+class _SourceProfileResource(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    schema_version: Literal["source_profile.v1"] = Field(
+        default="source_profile.v1",
+        alias="schemaVersion",
+    )
+    sources: list[dict[str, Any]] = Field(min_length=1, max_length=500)
 
 mcp = FastMCP(
     "Supply Chain Data",
@@ -107,21 +118,26 @@ mcp = FastMCP(
 
 _workspace_root = Path.cwd().resolve()
 _profile_state_root = Path(os.environ.get("CODEX_HOME", _workspace_root / ".codex")).resolve()
-_resource_store: ResourceStore | None = None
+_mcp_resource_runtime: McpResourceRuntime | None = None
 _CONTRACT_PATH = (
     Path(__file__).resolve().parents[1] / "contracts" / "warehouse-network-planning-1.0.0.json"
 )
 
 
 def _store() -> ResourceStore:
-    global _resource_store
-    if _resource_store is None:
-        resource_root = workspace_resource_root(_profile_state_root, _workspace_root)
-        _resource_store = ResourceStore(
-            resource_root,
-            uri_prefix=RESOURCE_URI_PREFIX,
+    return _runtime().store
+
+
+def _runtime() -> McpResourceRuntime:
+    global _mcp_resource_runtime
+    if _mcp_resource_runtime is None:
+        _mcp_resource_runtime = bind_runtime(
+            _workspace_root,
+            _profile_state_root,
+            MCP_SERVER_NAME,
+            RESOURCE_URI_PREFIX,
         )
-    return _resource_store
+    return _mcp_resource_runtime
 
 
 @mcp.resource(
@@ -132,7 +148,7 @@ def _store() -> ResourceStore:
 )
 def read_data_resource(resource_id: str) -> str:
     """Read one immutable data Resource by its opaque Resource name."""
-    return _store().read(resource_id)
+    return _runtime().read(resource_id)
 
 
 def _artifact_ref(published: PublishedResource) -> ArtifactRef:
@@ -252,26 +268,15 @@ def _bounded_intake_envelope(
 
 
 def _workspace(ctx: Context) -> Path:
-    workspace = trusted_workspace_root(ctx.request_context.meta)
-    if not workspace.samefile(_workspace_root):
-        raise ValueError("workspace_scope_mismatch")
-    return workspace
+    return _runtime().require_workspace(ctx)
 
 
-def _publish_json(schema: str, payload: dict[str, Any], summary: str) -> CallToolResult:
-    published = _store().publish(schema, payload)
-    content: list[Any] = [
-        TextContent(type="text", text=summary),
-        _resource_link(published, summary),
-    ]
-    return CallToolResult(
-        content=content,
-        structuredContent={
-            "summary": summary,
-            "resource_name": published.resource_id,
-            "resource_ref": resource_ref(published).model_dump(mode="json"),
-        },
-    )
+def _publish_json(
+    schema: str,
+    payload: BaseModel | dict[str, Any],
+    summary: str,
+) -> CallToolResult:
+    return _runtime().publish(schema, payload, summary)
 
 
 def _intake_contract_metadata() -> dict[str, str]:
@@ -432,13 +437,11 @@ def _load_source_profile(resource_ref: ResourceRef) -> dict[str, Any]:
     contracts.  This function accepts only the latter and never attempts to
     resolve a Workspace path from a model-provided value.
     """
-    if resource_ref.server != MCP_SERVER_NAME:
-        raise ValueError("source_profile_ref must identify supply_chain")
-    if resource_ref.resource_schema != "source_profile.v1":
-        raise ValueError("source_profile_ref must identify source_profile.v1")
-    profile = _store().load(resource_ref)
-    if profile.get("schemaVersion") != "source_profile.v1":
-        raise ValueError("source_profile_resource_schema_mismatch")
+    profile = _runtime().load_model(
+        resource_ref,
+        "source_profile.v1",
+        _SourceProfileResource,
+    ).model_dump(mode="json", by_alias=True)
     sources = profile.get("sources")
     if not isinstance(sources, list) or not sources:
         raise ValueError("source_profile_sources_missing")
@@ -972,12 +975,11 @@ def normalize_network_input(
             )
         )
     state, batch = normalize_confirmed_rows(normalized_sources)
-    payload = {
-        "schemaVersion": "normalized_network_input.v1",
-        "country_code": country,
-        "state": state,
+    payload = PreparedNetworkResource(
+        country_code=country,
+        state=state,
         **batch.model_dump(mode="json"),
-    }
+    )
     return _publish_json(
         "normalized_network_input.v1",
         payload,
@@ -992,26 +994,24 @@ def prepare_network_geography(
     admin_level: str,
     ctx: Context,
     overrides: list[GeographyOverride] | None = None,
-    candidate_level: Literal["province", "city"] | None = None,
 ) -> Annotated[CallToolResult, DataAgentResourceToolResult]:
     """Enrich normalized records from one validated administrative catalog."""
-    if normalized_input_ref.resource_schema != "normalized_network_input.v1":
-        raise ValueError("normalized_input_ref_must_be_normalized_network_input_v1")
-    payload = _store().load(normalized_input_ref)
-    country_code = str(payload.get("country_code", "")).strip().upper()
-    if not re.fullmatch(r"[A-Z]{2,3}", country_code):
-        raise ValueError("normalized_input_country_code_missing")
+    payload = _runtime().load_model(
+        normalized_input_ref,
+        "normalized_network_input.v1",
+        PreparedNetworkResource,
+    )
+    country_code = payload.country_code
     batch = NormalizedInputBatch.model_validate(
-        {
-            key: payload.get(key, [])
-            for key in (
+        payload.model_dump(
+            include={
                 "demand_cities",
                 "warehouses",
                 "current_assignments",
                 "route_quotes",
                 "issues",
-            )
-        }
+            }
+        )
     )
     catalog = _load_administrative_catalog(
         country_code,
@@ -1024,12 +1024,11 @@ def prepare_network_geography(
     }
     if len(override_map) != len(overrides or []):
         raise ValueError("geography_overrides_must_be_unique")
-    demands, warehouses, candidates, issues = enrich_network_geography(
+    demands, warehouses, _candidates, issues = enrich_network_geography(
         batch.demand_cities,
         batch.warehouses,
         catalog,
         overrides=override_map,
-        candidate_level=candidate_level,
     )
     prepared = batch.model_copy(
         update={
@@ -1051,13 +1050,11 @@ def prepare_network_geography(
     )
     return _publish_json(
         "normalized_network_input.v1",
-        {
-            "schemaVersion": "normalized_network_input.v1",
-            "country_code": country_code,
-            "state": state,
+        PreparedNetworkResource(
+            country_code=country_code,
+            state=state,
             **prepared.model_dump(mode="json"),
-            "candidate_warehouses": candidates,
-        },
+        ),
         f"Prepared network geography; state is {state}.",
     )
 
@@ -1579,13 +1576,14 @@ def main() -> None:
     parser.add_argument("--transport", choices=("stdio",), default="stdio")
     parser.parse_args()
 
-    global _workspace_root, _profile_state_root, _resource_store
+    global _workspace_root, _profile_state_root, _mcp_resource_runtime
     _workspace_root = Path.cwd().resolve(strict=True)
     _profile_state_root = Path(os.environ.get("CODEX_HOME", _workspace_root / ".codex")).resolve()
-    resource_root = workspace_resource_root(_profile_state_root, _workspace_root)
-    _resource_store = ResourceStore(
-        resource_root,
-        uri_prefix=RESOURCE_URI_PREFIX,
+    _mcp_resource_runtime = bind_runtime(
+        _workspace_root,
+        _profile_state_root,
+        MCP_SERVER_NAME,
+        RESOURCE_URI_PREFIX,
     )
     asyncio.run(run_stdio())
 

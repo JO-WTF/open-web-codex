@@ -3,9 +3,26 @@ from __future__ import annotations
 import pytest
 
 from supply_chain_planner import server
+from supply_chain_planner.mcp_resources import bind_runtime
 from supply_chain_planner.models import ResourceRef
-from supply_chain_planner.resource_store import ResourceStore
+from supply_chain_planner.resource_store import RESOURCE_URI_PREFIX, ResourceStore
 from supply_chain_planner.server import MAX_PROFILE_GOAL_CHARS, _normalize_profile_goal
+
+
+def _use_store(tmp_path, monkeypatch) -> ResourceStore:
+    store = ResourceStore(tmp_path / "resources")
+    monkeypatch.setattr(
+        server,
+        "_mcp_resource_runtime",
+        bind_runtime(
+            tmp_path,
+            tmp_path / "profile",
+            server.MCP_SERVER_NAME,
+            RESOURCE_URI_PREFIX,
+            store=store,
+        ),
+    )
+    return store
 
 
 def test_profile_goal_has_a_bounded_business_summary_limit() -> None:
@@ -24,7 +41,7 @@ def test_profile_goal_rejects_blank_business_summary() -> None:
 def test_requirement_profile_is_published_without_a_confirmation_request(
     tmp_path, monkeypatch
 ) -> None:
-    monkeypatch.setattr(server, "_resource_store", ResourceStore(tmp_path / "resources"))
+    _use_store(tmp_path, monkeypatch)
 
     result = server.publish_data_requirement_profile(
         "Optimize warehouse coverage for the current demand"
@@ -38,8 +55,7 @@ def test_requirement_profile_is_published_without_a_confirmation_request(
 
 
 def test_input_gap_loads_data_agent_resource_references(tmp_path, monkeypatch) -> None:
-    store = ResourceStore(tmp_path / "resources")
-    monkeypatch.setattr(server, "_resource_store", store)
+    store = _use_store(tmp_path, monkeypatch)
 
     profile_result = server.publish_data_requirement_profile("Optimize warehouse coverage")
     assert profile_result.structuredContent is not None
@@ -78,8 +94,7 @@ def test_input_gap_loads_data_agent_resource_references(tmp_path, monkeypatch) -
 def test_planner_accepts_normalized_data_agent_ref_at_network_boundary(
     tmp_path, monkeypatch
 ) -> None:
-    store = ResourceStore(tmp_path / "resources")
-    monkeypatch.setattr(server, "_resource_store", store)
+    store = _use_store(tmp_path, monkeypatch)
     published = store.publish(
         "normalized_network_input.v1",
         {

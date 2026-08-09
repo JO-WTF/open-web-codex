@@ -9,6 +9,13 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .mapping import SourceRole, TransformKind
+from .network_models import (
+    CurrentAssignmentRecord,
+    DataQualityIssue,
+    DemandCityRecord,
+    RouteQuoteRecord,
+    WarehouseRecord,
+)
 
 SCHEMA_VERSION = "1.0"
 MCP_SERVER_NAME = "supply_chain"
@@ -39,6 +46,22 @@ class ResourceRef(StrictModel):
         max_length=128,
         pattern=r"^[a-z][a-z0-9_.-]*$",
     )
+
+
+class PreparedNetworkResource(StrictModel):
+    """Typed Data-to-Network Resource payload owned by supply_chain."""
+
+    schema_version: Literal["normalized_network_input.v1"] = Field(
+        default="normalized_network_input.v1",
+        alias="schemaVersion",
+    )
+    country_code: str = Field(pattern=r"^[A-Z]{2,3}$")
+    state: Literal["ready", "needs_input", "needs_geography"]
+    demand_cities: list[DemandCityRecord]
+    warehouses: list[WarehouseRecord]
+    current_assignments: list[CurrentAssignmentRecord]
+    route_quotes: list[RouteQuoteRecord]
+    issues: list[DataQualityIssue] = Field(default_factory=list)
 
 
 class ConfirmedFieldDecision(StrictModel):

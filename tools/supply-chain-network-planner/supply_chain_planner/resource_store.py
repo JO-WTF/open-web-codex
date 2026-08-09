@@ -48,14 +48,26 @@ class ResourceStore:
         self.uri_prefix = uri_prefix
         self.root.mkdir(parents=True, exist_ok=True)
 
-    def publish(self, schema: str, value: BaseModel | dict[str, Any]) -> PublishedResource:
-        payload = value.model_dump(mode="json") if isinstance(value, BaseModel) else value
+    def publish(
+        self,
+        schema: str,
+        value: BaseModel | dict[str, Any],
+        *,
+        max_bytes: int | None = None,
+    ) -> PublishedResource:
+        payload = (
+            value.model_dump(mode="json", by_alias=True)
+            if isinstance(value, BaseModel)
+            else value
+        )
         encoded = json.dumps(
             payload,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
+        if max_bytes is not None and len(encoded) > max_bytes:
+            raise ValueError("resource_payload_exceeds_size_limit")
         digest = hashlib.sha256(encoded).hexdigest()[:24]
         safe_schema = re.sub(r"[^a-z0-9_.-]", "-", schema.lower())
         resource_id = f"{safe_schema}-{digest}"
@@ -82,23 +94,31 @@ class ResourceStore:
             size=len(encoded),
         )
 
-    def read(self, resource_id: str) -> str:
-        return self._path(resource_id).read_text(encoding="utf-8")
+    def read(self, resource_id: str, *, max_bytes: int | None = None) -> str:
+        path = self._path(resource_id)
+        if max_bytes is not None and path.stat().st_size > max_bytes:
+            raise ValueError("resource_payload_exceeds_size_limit")
+        return path.read_text(encoding="utf-8")
 
-    def load(self, resource_ref: ResourceRef) -> dict[str, Any]:
+    def load(
+        self,
+        resource_ref: ResourceRef,
+        *,
+        max_bytes: int | None = None,
+    ) -> dict[str, Any]:
         ref = resource_ref
         resource_id = ref.uri.removeprefix(self.uri_prefix)
         actual_schema = resource_id.rsplit("-", maxsplit=1)[0]
         expected_schema = re.sub(r"[^a-z0-9_.-]", "-", ref.resource_schema.lower())
         if actual_schema != expected_schema:
             raise ValueError("resource_ref schema does not match the published Resource")
-        return self.load_uri(ref.uri)
+        return self.load_uri(ref.uri, max_bytes=max_bytes)
 
-    def load_uri(self, uri: str) -> dict[str, Any]:
+    def load_uri(self, uri: str, *, max_bytes: int | None = None) -> dict[str, Any]:
         if not uri.startswith(self.uri_prefix):
             raise ValueError(f"resource URI must start with {self.uri_prefix!r}")
         resource_id = uri.removeprefix(self.uri_prefix)
-        payload = json.loads(self.read(resource_id))
+        payload = json.loads(self.read(resource_id, max_bytes=max_bytes))
         if not isinstance(payload, dict):
             raise ValueError(f"resource {resource_id!r} does not contain a JSON object")
         return payload
