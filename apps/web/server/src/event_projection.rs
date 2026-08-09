@@ -5,6 +5,7 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use crate::final_artifacts::{final_artifact_candidate, FinalArtifactCandidate};
+use crate::inline_maps::{self, InlineMapCandidate};
 
 const PROJECTION_VERSION: i16 = 1;
 
@@ -18,6 +19,7 @@ struct ProjectedEvent {
     payload: Value,
     thread_metadata: Option<ProjectedThreadMetadata>,
     artifacts: Vec<FinalArtifactCandidate>,
+    inline_map: Option<InlineMapCandidate>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -83,6 +85,23 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
     let artifact_result = async {
         let registered = register_artifacts(&mut transaction, &context, &event).await?;
         project_registered_artifacts(&mut event.payload, &registered);
+        if let (Some(candidate), Some(turn_id), Some(item_id)) = (
+            event.inline_map.as_ref(),
+            event.turn_id.as_deref(),
+            event.item_id.as_deref(),
+        ) {
+            inline_maps::register(
+                &mut transaction,
+                context.organization_id,
+                context.run_id,
+                &event.thread_id,
+                turn_id,
+                item_id,
+                candidate,
+            )
+            .await?;
+        }
+        inline_maps::resolve_in_transaction(&mut transaction, run_id, &mut event.payload).await?;
         Ok::<Vec<Uuid>, String>(
             registered
                 .into_iter()
@@ -555,6 +574,11 @@ fn project_frame(data: &[u8]) -> Result<Option<ProjectedEvent>, String> {
         Some(Err(code)) if event_type == "codex.item.completed" => (Vec::new(), Some(code), true),
         _ => (Vec::new(), None, false),
     };
+    let inline_map = if event_type == "codex.item.completed" {
+        item.and_then(inline_maps::candidate)
+    } else {
+        None
+    };
     let thread_metadata = project_thread_metadata(runtime_method, &params);
     let data = if let Some(item) = item {
         project_item(item)
@@ -592,6 +616,7 @@ fn project_frame(data: &[u8]) -> Result<Option<ProjectedEvent>, String> {
         payload,
         thread_metadata,
         artifacts,
+        inline_map,
     }))
 }
 
@@ -2065,7 +2090,7 @@ fn project_registered_artifacts(payload: &mut Value, artifacts: &[RegisteredArti
     }
 }
 
-fn sanitize_value(value: &Value, key: &str) -> Value {
+pub(crate) fn sanitize_value(value: &Value, key: &str) -> Value {
     if is_sensitive_key(key) {
         return Value::String("[redacted]".to_string());
     }
@@ -2460,6 +2485,7 @@ mod tests {
             }),
             thread_metadata: None,
             artifacts: Vec::new(),
+            inline_map: None,
         }
     }
 

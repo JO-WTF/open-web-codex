@@ -3,6 +3,7 @@ mod builtin_network_copilot;
 mod builtin_network_copilot_runtime_tests;
 mod event_projection;
 mod final_artifacts;
+mod inline_maps;
 mod middleware;
 mod routes;
 #[cfg(test)]

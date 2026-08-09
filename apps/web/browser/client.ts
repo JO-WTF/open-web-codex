@@ -341,7 +341,9 @@ export class PlatformClient {
   }
 
   readReplyArtifact(path: string) {
-    if (!/^\/api\/artifacts\/[0-9a-f-]{36}\/content$/i.test(path)) {
+    const finalArtifact = /^\/api\/artifacts\/[0-9a-f-]{36}\/content$/i.test(path);
+    const inlineMapSource = /^\/api\/runs\/[0-9a-f-]{36}\/inline-maps\/[A-Za-z0-9_.-]{1,128}\/sources\/[A-Za-z0-9_.-]{1,128}$/i.test(path);
+    if (!finalArtifact && !inlineMapSource) {
       return Promise.reject(new Error("Reply Artifact path is invalid."));
     }
     return this.request<Record<string, unknown>>(path);

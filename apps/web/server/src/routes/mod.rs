@@ -216,6 +216,10 @@ pub fn router(
         )
         .route("/runs/{id}/thread", axum::routing::get(threads::read))
         .route(
+            "/runs/{id}/inline-maps/{card_ref}/sources/{source_id}",
+            axum::routing::get(threads::read_inline_map_source),
+        )
+        .route(
             "/runs/{id}/thread/turns",
             axum::routing::get(threads::list_turns),
         )

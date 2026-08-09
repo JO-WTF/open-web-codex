@@ -24,6 +24,11 @@ export type MapSourceData =
     artifactId: string;
     mimeType?: string;
     url: string;
+  }
+  | {
+    type: "resource";
+    format: "geojson";
+    url: string;
   };
 
 export type MapSource = {
@@ -254,7 +259,19 @@ function v3Source(id: string, value: unknown): MapSource | undefined {
       : undefined;
   }
   if (value.data.type !== "artifact" || value.data.format !== "geojson")
-    return undefined;
+  {
+    if (value.data.type !== "resource" || value.data.format !== "geojson")
+      return undefined;
+    const url = nonemptyString(value.data.url);
+    if (
+      !url
+      || !/^\/api\/runs\/[0-9a-f-]{36}\/inline-maps\/[A-Za-z0-9_.-]{1,128}\/sources\/[A-Za-z0-9_.-]{1,128}$/i.test(url)
+    ) return undefined;
+    return {
+      ...base,
+      data: { type: "resource", format: "geojson", url },
+    };
+  }
   const artifactId = nonemptyString(value.data.artifact_id);
   const url = nonemptyString(value.data.url);
   if (

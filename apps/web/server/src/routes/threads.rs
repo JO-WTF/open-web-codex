@@ -6,6 +6,8 @@ use axum::{
     http::StatusCode,
     Extension, Json,
 };
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
 use open_web_codex_adapter::{AuthorizedWorkspace, CodexAdapter};
 use open_web_codex_platform_contracts::error::PlatformError;
 use open_web_codex_platform_contracts::{
@@ -13,7 +15,7 @@ use open_web_codex_platform_contracts::{
     ThreadHistoryStatus, ThreadHistoryTurn,
 };
 use open_web_codex_platform_store::AppState;
-use serde_json::json;
+use serde_json::{json, Value};
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -21,6 +23,7 @@ use crate::middleware::auth::AuthenticatedUser;
 
 type ApiError = (StatusCode, Json<PlatformError>);
 type ApiResult<T> = Result<Json<T>, ApiError>;
+const MAX_INLINE_MAP_SOURCE_BYTES: usize = 32 * 1024 * 1024;
 
 pub async fn read(
     State(state): State<AppState>,
@@ -39,6 +42,81 @@ pub async fn read(
     Ok(Json(ThreadHistoryResponse {
         thread: project_thread(thread, &context.thread_id, &state, run_id).await?,
     }))
+}
+
+pub async fn read_inline_map_source(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path((run_id, card_ref, source_id)): Path<(Uuid, String, String)>,
+    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
+) -> ApiResult<Value> {
+    let context = authorized_thread(&state, &auth, run_id).await?;
+    let source = crate::inline_maps::source(
+        &state.db,
+        auth.organization_id,
+        run_id,
+        &card_ref,
+        &source_id,
+    )
+    .await
+    .map_err(database_error)?
+    .ok_or_else(not_found)?;
+    let response = adapter
+        .read_mcp_resource(
+            &context.workspace,
+            &source.thread_id,
+            &source.server,
+            &source.uri,
+        )
+        .await
+        .map_err(runtime_error)?;
+    let bytes = mcp_resource_bytes(&response, &source.uri).map_err(bad_gateway)?;
+    if bytes.len() > MAX_INLINE_MAP_SOURCE_BYTES {
+        return Err(bad_gateway("Inline map source exceeds the size limit"));
+    }
+    let value = serde_json::from_slice::<Value>(&bytes)
+        .map_err(|_| bad_gateway("Inline map source did not contain valid JSON"))?;
+    if !valid_geojson_root(&value) {
+        return Err(bad_gateway("Inline map source did not contain GeoJSON"));
+    }
+    Ok(Json(value))
+}
+
+fn mcp_resource_bytes(response: &Value, expected_uri: &str) -> Result<Vec<u8>, &'static str> {
+    let contents = response
+        .get("contents")
+        .and_then(Value::as_array)
+        .ok_or("mcpServer/resource/read omitted contents")?;
+    let content = contents
+        .iter()
+        .find(|content| content.get("uri").and_then(Value::as_str) == Some(expected_uri))
+        .ok_or("MCP Resource response did not match the requested URI")?;
+    if let Some(text) = content.get("text").and_then(Value::as_str) {
+        return Ok(text.as_bytes().to_vec());
+    }
+    if let Some(blob) = content.get("blob").and_then(Value::as_str) {
+        return BASE64
+            .decode(blob)
+            .map_err(|_| "MCP Resource blob was not valid base64");
+    }
+    Err("MCP Resource content was unsupported")
+}
+
+fn valid_geojson_root(value: &Value) -> bool {
+    matches!(
+        value.get("type").and_then(Value::as_str),
+        Some(
+            "FeatureCollection"
+                | "Feature"
+                | "GeometryCollection"
+                | "Point"
+                | "MultiPoint"
+                | "LineString"
+                | "MultiLineString"
+                | "Polygon"
+                | "MultiPolygon"
+        )
+    )
 }
 
 pub async fn list_turns(
@@ -421,10 +499,27 @@ fn project_turn(value: &serde_json::Value) -> Result<ThreadHistoryTurn, ApiError
 
 async fn project_turn_with_refs(
     value: &serde_json::Value,
-    _state: &AppState,
-    _run_id: Uuid,
+    state: &AppState,
+    run_id: Uuid,
 ) -> Result<ThreadHistoryTurn, ApiError> {
-    project_turn(value)
+    let mut turn = project_turn(value)?;
+    for item in &mut turn.items {
+        if item.get("type").and_then(Value::as_str) != Some("agentMessage") {
+            continue;
+        }
+        let Some(text) = item.get("text").and_then(Value::as_str) else {
+            continue;
+        };
+        let cards = crate::inline_maps::resolve(&state.db, run_id, text)
+            .await
+            .map_err(database_error)?;
+        if !cards.is_empty() {
+            item.as_object_mut()
+                .expect("projected item must be an object")
+                .insert("inlineArtifacts".to_string(), Value::Array(cards));
+        }
+    }
+    Ok(turn)
 }
 
 #[derive(Default)]
@@ -730,7 +825,10 @@ fn database_error(_: sqlx::Error) -> ApiError {
 
 #[cfg(test)]
 mod tests {
-    use super::{project_turn, public_approval_status, ApprovalOverlay, ThreadHistoryOverlay};
+    use super::{
+        mcp_resource_bytes, project_turn, public_approval_status, valid_geojson_root,
+        ApprovalOverlay, ThreadHistoryOverlay,
+    };
     use open_web_codex_platform_contracts::ThreadHistoryTurn;
     use serde_json::json;
     use std::collections::HashMap;
@@ -763,6 +861,23 @@ mod tests {
     #[test]
     fn rejects_turns_without_stable_identity() {
         assert!(project_turn(&json!({ "status": "completed", "items": [] })).is_err());
+    }
+
+    #[test]
+    fn reads_only_the_exact_requested_geojson_resource() {
+        let uri = "supply-chain://resources/distribution";
+        let bytes = mcp_resource_bytes(
+            &json!({"contents": [
+                {"uri": "supply-chain://resources/other", "text": "{}"},
+                {"uri": uri, "mimeType": "application/geo+json", "text": "{\"type\":\"FeatureCollection\",\"features\":[]}"}
+            ]}),
+            uri,
+        )
+        .expect("exact Resource");
+        let value: serde_json::Value = serde_json::from_slice(&bytes).expect("valid JSON");
+        assert!(valid_geojson_root(&value));
+        assert!(mcp_resource_bytes(&json!({"contents": []}), uri).is_err());
+        assert!(!valid_geojson_root(&json!({"type": "Table"})));
     }
 
     #[test]

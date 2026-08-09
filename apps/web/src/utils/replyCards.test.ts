@@ -173,6 +173,28 @@ describe("parseInlineVisualizationArtifact", () => {
     });
   });
 
+  it("accepts an authorized inline-map Resource URL without exposing its MCP URI", () => {
+    const runId = "8e98ff2f-82ee-4cc9-a3e6-2974debf8666";
+    const url = `/api/runs/${runId}/inline-maps/map-network/sources/network`;
+    const parsed = parseInlineVisualizationArtifact(artifact({
+      sources: {
+        routes: {
+          type: "geojson",
+          data: { type: "resource", format: "geojson", url },
+        },
+      },
+    }));
+    if (parsed?.rendererKind !== "map.v3") {
+      throw new Error("Expected a map.v3 Artifact");
+    }
+    expect(parsed.card.sources[0]?.data).toEqual({
+      type: "resource",
+      format: "geojson",
+      url,
+    });
+    expect(JSON.stringify(parsed)).not.toContain("supply-chain://");
+  });
+
   it("rejects unknown source references", () => {
     expect(
       parseInlineVisualizationArtifact(
