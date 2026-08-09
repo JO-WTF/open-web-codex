@@ -53,11 +53,8 @@ required = true
 startup_timeout_sec = 60
 tool_timeout_sec = 90
 enabled_tools = [
-  "batch_geocode",
-  "batch_reverse_geocode",
   "get_route",
   "distance_matrix",
-  "create_map_card",
 ]
 
 [mcp_servers.map_utils.env]

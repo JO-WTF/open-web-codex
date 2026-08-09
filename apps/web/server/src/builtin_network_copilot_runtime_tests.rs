@@ -60,13 +60,7 @@ const NETWORK_TOOLS: [&str; 11] = [
     "solve_p_median",
     "validate_route_matrix",
 ];
-const MAP_TOOLS: [&str; 5] = [
-    "batch_geocode",
-    "batch_reverse_geocode",
-    "create_map_card",
-    "distance_matrix",
-    "get_route",
-];
+const MAP_TOOLS: [&str; 2] = ["distance_matrix", "get_route"];
 const ROOT_PROMPT: &str = "runtime-gate-root-spawn-data-and-network";
 const DATA_CHILD_PROMPT: &str = "runtime-gate-data-child";
 const NETWORK_CHILD_PROMPT: &str = "runtime-gate-network-child";
