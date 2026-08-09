@@ -7,7 +7,7 @@
   "customSourceBranch": "open-codex",
   "customSourceCommit": "0de018a81223aacb6306b4f19ef7a54ee3bfcf8a",
   "customCommitsAboveBase": 0,
-  "integratedUpstreamCommit": "6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9",
-  "observedUpstreamCommit": "cba0e2701c9e3e67a877a16dbbd7a577d477a630",
-  "observedAt": "2026-07-25T00:10:19Z"
+  "integratedUpstreamCommit": "646f7c0a91b8e327d263335da68ae8ef212895ce",
+  "observedUpstreamCommit": "646f7c0a91b8e327d263335da68ae8ef212895ce",
+  "observedAt": "2026-08-09T03:12:39Z"
 }
