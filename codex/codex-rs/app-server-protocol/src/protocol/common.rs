@@ -924,6 +924,11 @@ client_request_definitions! {
         serialization: None,
         response: v2::ModelListResponse,
     },
+    ModelProviderList => "modelProvider/list" {
+        params: v2::ModelProviderListParams,
+        serialization: None,
+        response: v2::ModelProviderListResponse,
+    },
     ModelProviderCapabilitiesRead => "modelProvider/capabilities/read" {
         params: v2::ModelProviderCapabilitiesReadParams,
         serialization: None,
@@ -3309,15 +3314,32 @@ mod tests {
     }
 
     #[test]
+    fn serialize_model_provider_list() -> Result<()> {
+        let request = ClientRequest::ModelProviderList {
+            request_id: RequestId::Integer(7),
+            params: v2::ModelProviderListParams {},
+        };
+        assert_eq!(
+            json!({
+                "method": "modelProvider/list",
+                "id": 7,
+                "params": {}
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn serialize_model_provider_capabilities_read() -> Result<()> {
         let request = ClientRequest::ModelProviderCapabilitiesRead {
-            request_id: RequestId::Integer(7),
+            request_id: RequestId::Integer(8),
             params: v2::ModelProviderCapabilitiesReadParams {},
         };
         assert_eq!(
             json!({
                 "method": "modelProvider/capabilities/read",
-                "id": 7,
+                "id": 8,
                 "params": {}
             }),
             serde_json::to_value(&request)?,
