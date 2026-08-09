@@ -148,6 +148,7 @@ pub struct ProfileHostConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodexFeature {
     Apps,
+    DefaultModeRequestUserInput,
     Plugins,
     RemotePlugin,
     ToolSuggest,
@@ -157,6 +158,7 @@ impl CodexFeature {
     const fn key(self) -> &'static str {
         match self {
             Self::Apps => "apps",
+            Self::DefaultModeRequestUserInput => "default_mode_request_user_input",
             Self::Plugins => "plugins",
             Self::RemotePlugin => "remote_plugin",
             Self::ToolSuggest => "tool_suggest",
@@ -199,6 +201,20 @@ impl ProfileHostConfig {
     ) -> Self {
         for feature in features {
             self.codex_args.push(OsString::from("--disable"));
+            self.codex_args.push(OsString::from(feature.key()));
+        }
+        self
+    }
+
+    /// Enables official, process-scoped Codex features before the `app-server`
+    /// subcommand. The feature remains owned and validated by Codex; the
+    /// Profile composition only selects it for every cold start and restart.
+    pub fn with_enabled_features(
+        mut self,
+        features: impl IntoIterator<Item = CodexFeature>,
+    ) -> Self {
+        for feature in features {
+            self.codex_args.push(OsString::from("--enable"));
             self.codex_args.push(OsString::from(feature.key()));
         }
         self
@@ -1469,6 +1485,17 @@ mod tests {
                 "tool_suggest",
             ]
             .map(OsString::from)
+        );
+    }
+
+    #[test]
+    fn enabled_features_use_official_cli_overrides_in_declared_order() {
+        let config = ProfileHostConfig::new("profile", "/tmp/profile", "/tmp")
+            .with_enabled_features([CodexFeature::DefaultModeRequestUserInput]);
+
+        assert_eq!(
+            config.codex_args,
+            ["--enable", "default_mode_request_user_input"]
         );
     }
 

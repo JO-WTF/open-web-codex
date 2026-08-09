@@ -227,6 +227,7 @@ async fn main() -> anyhow::Result<()> {
                     ProfileHostConfig::new(cli.profile_id.clone(), codex_home, workspace_root)
                         .with_startup_files(startup_files)
                         .with_disabled_features(builtin_network_copilot::disabled_codex_features())
+                        .with_enabled_features(builtin_network_copilot::enabled_codex_features())
                         .with_codex_bin(cli.codex_bin.clone());
                 let workspace_root = host_config.workspace_root.clone();
                 let host = registry

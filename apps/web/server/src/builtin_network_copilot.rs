@@ -36,6 +36,14 @@ pub(crate) const fn disabled_codex_features() -> [CodexFeature; 4] {
     ]
 }
 
+/// Use Codex's native structured user-input lifecycle while the warehouse
+/// supervisor is executing in Default mode. Platform and Web only persist,
+/// authorize, and render the official request; they do not infer questions
+/// from assistant text.
+pub(crate) const fn enabled_codex_features() -> [CodexFeature; 1] {
+    [CodexFeature::DefaultModeRequestUserInput]
+}
+
 #[derive(Debug)]
 pub(crate) struct BuiltinNetworkCopilotAssets {
     supply_chain_launcher: PathBuf,
@@ -569,6 +577,10 @@ mod tests {
                 CodexFeature::ToolSuggest,
             ]
         );
+        assert_eq!(
+            enabled_codex_features(),
+            [CodexFeature::DefaultModeRequestUserInput]
+        );
     }
 
     #[test]
@@ -576,13 +588,17 @@ mod tests {
         assert!(SUPERVISOR_SKILL.contains("让 `network_agent` 定义本次分析所需的数据"));
         assert!(SUPERVISOR_SKILL.contains("Role 昵称固定为 `Wanwan`"));
         assert!(SUPERVISOR_SKILL.contains("任何仓网领域执行都必须委派给对应原生 Role"));
-        assert!(SUPERVISOR_SKILL.contains("不得用 shell、Workspace 命令、内联代码或自身推理代替 child Tool"));
+        assert!(SUPERVISOR_SKILL
+            .contains("不得用 shell、Workspace 命令、内联代码或自身推理代替 child Tool"));
         assert!(SUPERVISOR_SKILL.contains("必须原生创建或继续 `network_agent`"));
         assert!(SUPERVISOR_SKILL.contains("不得让用户复制代码到浏览器"));
         assert!(SUPERVISOR_SKILL.contains("普通 Workspace 文件路径不是 MCP ResourceRef"));
         assert!(SUPERVISOR_SKILL.contains("必须先创建 `data_agent` 重新检查并发布当前 Resource"));
-        assert!(SUPERVISOR_SKILL.contains("不得要求 Network Agent 从 Workspace 文件、旧 Artifact、报告或 Resource 列表寻找引用"));
+        assert!(SUPERVISOR_SKILL.contains(
+            "不得要求 Network Agent 从 Workspace 文件、旧 Artifact、报告或 Resource 列表寻找引用"
+        ));
         assert!(SUPERVISOR_SKILL.contains("不得降级为自制 HTML、文件、图片、文本地图或伪造成功"));
+        assert!(SUPERVISOR_SKILL.contains("必须由 Root 调用原生 `request_user_input`"));
         assert!(DATA_SKILL.contains("`city_id`、`city_name`、`demand_quantity`"));
         assert!(DATA_SKILL.contains("不要从行政区目录静默生成候选仓"));
         assert!(NETWORK_SKILL.contains("潜在接口调用量和费用"));

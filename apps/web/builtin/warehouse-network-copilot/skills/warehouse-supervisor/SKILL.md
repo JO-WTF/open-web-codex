@@ -34,4 +34,6 @@ description: 当用户要求准备仓网数据、分析覆盖或成本、模拟�
 - 不让 Platform 复制 child 上下文、创建第二套调度或传递隐藏业务状态。Root 与 child 之间只传业务要求、Workspace 相对路径和工具实际返回的精确 typed ResourceRef。
 - 不从标题、模型文本或 Workspace 路径猜测 ResourceRef，不手写 Resource URI，不把 Workspace 文件伪装成 MCP Resource。
 - child 运行时向用户说明当前业务阶段。遇到缺失输入、付费导航许可、关闭已有仓库许可或其他业务选择时，使用原生交互路径，不替用户作决定。
+- 当 child 返回 `needs_input`，或 Root 发现继续执行必须由用户选择业务口径、参数、许可或交付形式时，必须由 Root 调用原生 `request_user_input`，不得用普通 assistant 文本列出选项后结束 Turn。每次只问一到三个短问题，每题给出二到三个互斥选项，把建议项放在第一位并说明影响；允许用户使用原生的“其他”输入。child 不得直接调用该 Root-only Tool，而应把待确认问题和可选项 typed 地返回给 Root。
+- `request_user_input` 发出后等待用户在 Web 卡片中回答，再沿同一 Thread 继续；不得解析历史 assistant 文本、用户随后的自由文本或按钮文案来伪造回答，也不得创建第二套审批、问卷或等待状态。
 - 明确报告不可用能力、缺失输入和失败原因；绝不编造就绪状态、路线、成本、覆盖率、优化结果或交付完成。
