@@ -71,6 +71,55 @@ fn map_api_error_maps_cloudflare_blocked_response_to_user_message() {
 }
 
 #[test]
+fn map_api_error_redacts_unauthorized_response_body_everywhere() {
+    const CANARY: &str = "unauthorized-body-canary";
+    const MASKED_TOKEN: &str = "****ABCD";
+    let err = map_api_error(ApiError::Transport(TransportError::Http {
+        status: http::StatusCode::UNAUTHORIZED,
+        url: Some("https://example.com/v1/chat/completions".to_string()),
+        headers: None,
+        body: Some(format!("provider rejected {CANARY}; key {MASKED_TOKEN}")),
+    }));
+
+    let CodexErrorDetails::UnexpectedStatus(response) = err.details() else {
+        panic!("expected CodexErrorDetails::UnexpectedStatus, got {err:?}");
+    };
+    assert!(response.body.is_empty());
+    assert!(response.url.is_none());
+    assert_eq!(
+        response.user_message.as_deref(),
+        Some("Authentication failed. Check the Provider credentials.")
+    );
+
+    let rendered = [
+        err.to_string(),
+        format!("{err:?}"),
+        err.to_error_event(/*message_prefix*/ None).message,
+    ];
+    for value in rendered {
+        assert!(!value.contains(CANARY));
+        assert!(!value.contains(MASKED_TOKEN));
+    }
+}
+
+#[test]
+fn map_api_error_redacts_unauthorized_api_message() {
+    const CANARY: &str = "unauthorized-api-canary";
+    let err = map_api_error(ApiError::Api {
+        status: http::StatusCode::UNAUTHORIZED,
+        message: CANARY.to_string(),
+    });
+
+    assert!(!err.to_string().contains(CANARY));
+    assert!(!format!("{err:?}").contains(CANARY));
+    assert!(
+        !err.to_error_event(/*message_prefix*/ None)
+            .message
+            .contains(CANARY)
+    );
+}
+
+#[test]
 fn map_api_error_maps_cyber_policy_from_400_body() {
     let body = serde_json::json!({
         "error": {

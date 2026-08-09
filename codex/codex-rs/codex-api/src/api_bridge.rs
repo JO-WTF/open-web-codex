@@ -32,12 +32,12 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
         ApiError::Stream(msg) => CodexErr::Stream(msg),
         ApiError::ServerOverloaded => CodexErr::ServerOverloaded,
         ApiError::Api { status, message } => {
-            let user_message = api_error_user_message(status, &message);
+            let (body, url, user_message) = safe_http_error(status, message, None);
             CodexErr::UnexpectedStatus(UnexpectedResponseError {
                 status,
-                body: message,
+                body,
                 user_message,
-                url: None,
+                url,
                 cf_ray: None,
                 request_id: None,
                 identity_authorization_error: None,
@@ -55,7 +55,8 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
                 headers,
                 body,
             } => {
-                let body_text = body.unwrap_or_default();
+                let (body_text, url, user_message) =
+                    safe_http_error(status, body.unwrap_or_default(), url);
 
                 if status == http::StatusCode::SERVICE_UNAVAILABLE
                     && let Ok(value) = serde_json::from_str::<serde_json::Value>(&body_text)
@@ -131,7 +132,7 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
                 } else {
                     CodexErr::UnexpectedStatus(UnexpectedResponseError {
                         status,
-                        user_message: api_error_user_message(status, &body_text),
+                        user_message,
                         body: body_text,
                         url,
                         cf_ray: extract_header(headers.as_ref(), CF_RAY_HEADER),
@@ -179,7 +180,9 @@ fn extract_request_tracking_id(headers: Option<&HeaderMap>) -> Option<String> {
 }
 
 fn api_error_user_message(status: http::StatusCode, body: &str) -> Option<String> {
-    if status == http::StatusCode::FORBIDDEN
+    if status == http::StatusCode::UNAUTHORIZED {
+        Some("Authentication failed. Check the Provider credentials.".to_string())
+    } else if status == http::StatusCode::FORBIDDEN
         && body.contains("Cloudflare")
         && body.contains("blocked")
     {
@@ -187,6 +190,18 @@ fn api_error_user_message(status: http::StatusCode, body: &str) -> Option<String
     } else {
         None
     }
+}
+
+fn safe_http_error(
+    status: http::StatusCode,
+    body: String,
+    url: Option<String>,
+) -> (String, Option<String>, Option<String>) {
+    if status == http::StatusCode::UNAUTHORIZED {
+        return (String::new(), None, api_error_user_message(status, ""));
+    }
+    let user_message = api_error_user_message(status, &body);
+    (body, url, user_message)
 }
 
 fn extract_request_id(headers: Option<&HeaderMap>) -> Option<String> {
