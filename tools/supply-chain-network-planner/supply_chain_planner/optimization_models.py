@@ -55,8 +55,9 @@ class CostSummary(OptimizationModel):
 
 
 class BaselineResult(OptimizationModel):
-    schema_version: Literal["network_baseline.v1"] = "network_baseline.v1"
+    schema_version: Literal["network_baseline.v2"] = "network_baseline.v2"
     label: Literal["actual_current", "optimized_existing_footprint"]
+    active_warehouse_ids: list[str]
     assignment: AssignmentResult
     service: list[ServiceMetric] = Field(default_factory=list)
     cost: CostSummary | None = None
@@ -77,7 +78,8 @@ class ScenarioSpec(OptimizationModel):
 
 
 class ScenarioResult(OptimizationModel):
-    schema_version: Literal["network_scenario.v1"] = "network_scenario.v1"
+    schema_version: Literal["network_scenario.v2"] = "network_scenario.v2"
+    active_warehouse_ids: list[str]
     assignment: AssignmentResult
     cost: CostSummary | None = None
     service: list[ServiceMetric] = Field(default_factory=list)

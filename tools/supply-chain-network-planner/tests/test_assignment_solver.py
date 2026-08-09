@@ -17,7 +17,12 @@ from supply_chain_planner.matrix_models import (
     DemandUnitCostRule,
 )
 from supply_chain_planner.network_models import CurrentAssignmentRecord
-from supply_chain_planner.optimization_models import AssignmentResult, AssignmentRow
+from supply_chain_planner.optimization_models import (
+    AssignmentResult,
+    AssignmentRow,
+    BaselineResult,
+    ScenarioResult,
+)
 from supply_chain_planner.solver import (
     compare_assignments,
     solve_assignment,
@@ -229,8 +234,24 @@ def test_real_indonesia_sample3_only_closes_bekasi_without_candidates() -> None:
         "min_cost",
         after_active,
     )
+    baseline = BaselineResult(
+        label="actual_current",
+        active_warehouse_ids=sorted(before_active),
+        assignment=before,
+    )
+    scenario = ScenarioResult(
+        active_warehouse_ids=sorted(after_active),
+        assignment=after,
+        warehouse_changes={"added": [], "removed": [bekasi_id]},
+    )
 
-    comparison = compare_assignments(before, after, [12], before_active, after_active)
+    comparison = compare_assignments(
+        baseline.assignment,
+        scenario.assignment,
+        [12],
+        set(baseline.active_warehouse_ids),
+        set(scenario.active_warehouse_ids),
+    )
 
     candidate_ids = {
         warehouse.warehouse_id
@@ -244,6 +265,9 @@ def test_real_indonesia_sample3_only_closes_bekasi_without_candidates() -> None:
     assert comparison.requested_service_targets == [12]
     assert comparison.selected_warehouse_ids == []
     assert comparison.removed_warehouse_ids == [bekasi_id]
+    assert set(baseline.active_warehouse_ids) == before_active
+    assert set(scenario.active_warehouse_ids) == after_active
+    assert set(scenario.active_warehouse_ids).isdisjoint(candidate_ids)
     assert assigned_after.isdisjoint(candidate_ids)
     assert len(comparison.affected_city_ids) == 50
     assert len(comparison.reassigned_city_ids) == 50
