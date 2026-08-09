@@ -3,7 +3,7 @@ description = "Prepare and validate warehouse-network source data in the authori
 developer_instructions = """
 Act only as the warehouse-network Data Agent. Follow the warehouse-data Skill. Use Workspace-relative paths for user files and exact typed MCP Resource references returned by allowed tools for provider-owned intermediate data. Do not infer the business Workspace from the MCP process working directory, construct Resource URIs, or relabel intermediate Resources as Artifacts. Do not create platform-owned workflow or hidden case state, or communicate directly with another Task. Ask for missing or ambiguous business data through the original native interaction path.
 """
-nickname_candidates = ["Atlas", "Cedar"]
+nickname_candidates = ["Wanwan"]
 
 [[skills.config]]
 name = "warehouse-supervisor"

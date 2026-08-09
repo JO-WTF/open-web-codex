@@ -1292,11 +1292,8 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
         wait_for_model_request(&model_control, DATA_CHILD_PROMPT, DATA_SPAWN_CALL).await;
     assert_child_skill_policy(
         &data_request,
-        "Inspect and prepare warehouse-network input data",
-        &[
-            "Define warehouse-network data requirements",
-            "Coordinate the built-in warehouse-network Copilot",
-        ],
+        "当用户要求检查或准备当前 Workspace 中的仓网",
+        &["当用户要求定义仓网数据需求", "当用户要求准备仓网数据"],
     );
     let data_mcp = adapter
         .query_profile(ProfileQuery::McpServers {
@@ -1313,10 +1310,10 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
         wait_for_model_request(&model_control, NETWORK_CHILD_PROMPT, NETWORK_SPAWN_CALL).await;
     assert_child_skill_policy(
         &network_request,
-        "Define warehouse-network data requirements",
+        "当用户要求定义仓网数据需求",
         &[
-            "Inspect and prepare warehouse-network input data",
-            "Coordinate the built-in warehouse-network Copilot",
+            "当用户要求检查或准备当前 Workspace 中的仓网",
+            "当用户要求准备仓网数据",
         ],
     );
     let network_mcp = adapter
@@ -1349,11 +1346,8 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
         wait_for_model_request(&model_control, DATA_FOLLOWUP_PROMPT, DATA_FOLLOWUP_CALL).await;
     assert_child_skill_policy(
         &data_followup_request,
-        "Inspect and prepare warehouse-network input data",
-        &[
-            "Define warehouse-network data requirements",
-            "Coordinate the built-in warehouse-network Copilot",
-        ],
+        "当用户要求检查或准备当前 Workspace 中的仓网",
+        &["当用户要求定义仓网数据需求", "当用户要求准备仓网数据"],
     );
     let reloaded_data_mcp = adapter
         .query_profile(ProfileQuery::McpServers {
@@ -1466,10 +1460,7 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
     assert_child_skill_policy(
         &hot_data_request,
         SKILL_HOT_MARKER,
-        &[
-            "Define warehouse-network data requirements",
-            "Coordinate the built-in warehouse-network Copilot",
-        ],
+        &["当用户要求定义仓网数据需求", "当用户要求准备仓网数据"],
     );
     assert!(
         request_developer_text(&hot_data_request).contains(ROLE_HOT_MARKER),

@@ -471,6 +471,15 @@ mod tests {
 
         let data = data.parse::<DocumentMut>().expect("parse data role");
         let network = network.parse::<DocumentMut>().expect("parse network role");
+        assert_eq!(
+            data["nickname_candidates"]
+                .as_array()
+                .expect("data nicknames")
+                .iter()
+                .filter_map(|item| item.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Wanwan"]
+        );
         assert!(data["mcp_servers"]["supply_chain"].get("cwd").is_none());
         assert_eq!(
             data["mcp_servers"]["supply_chain"]["args"]
@@ -562,10 +571,15 @@ mod tests {
     }
 
     #[test]
-    fn network_skill_uses_composable_current_tool_contracts() {
-        assert!(NETWORK_SKILL.contains("composable capabilities"));
-        assert!(NETWORK_SKILL.contains("complete fixed/optional existing-warehouse policy"));
-        assert!(NETWORK_SKILL.contains("create-new Workspace-relative output path"));
+    fn warehouse_skills_define_composable_business_decisions() {
+        assert!(SUPERVISOR_SKILL.contains("让 `network_agent` 定义本次分析所需的数据"));
+        assert!(SUPERVISOR_SKILL.contains("Role 昵称固定为 `Wanwan`"));
+        assert!(DATA_SKILL.contains("`city_id`、`city_name`、`demand_quantity`"));
+        assert!(DATA_SKILL.contains("不要从行政区目录静默生成候选仓"));
+        assert!(NETWORK_SKILL.contains("潜在接口调用量和费用"));
+        assert!(NETWORK_SKILL.contains("固定集合与可选集合必须完整、不重叠"));
+        assert!(NETWORK_SKILL.contains("把这些 Tool 当作可组合能力"));
+        assert!(NETWORK_SKILL.contains("create-new Workspace 相对输出路径"));
         for deprecated in [
             "compute_optimal_assignment",
             "evaluate_service_targets",
