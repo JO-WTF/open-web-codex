@@ -28,12 +28,13 @@ pub enum ChatMessage {
         role: String,
         content: String,
     },
-    AssistantWithToolCalls {
+    Assistant {
         role: String,
         content: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         reasoning_content: Option<String>,
-        tool_calls: Vec<ChatToolCall>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tool_calls: Option<Vec<ChatToolCall>>,
     },
     ToolResult {
         role: String,

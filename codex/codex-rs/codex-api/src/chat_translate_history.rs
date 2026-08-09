@@ -3,7 +3,6 @@ use super::ChatToolCall;
 use super::ChatToolCallFunction;
 use super::unsupported;
 use crate::error::ApiError;
-use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -34,14 +33,13 @@ pub(crate) fn responses_input_to_chat_messages(
         }
         match item {
             ResponseItem::Message { role, content, .. } => {
-                let text = response_message_text(content)?;
+                let role = chat_role(role)?;
+                let text = response_message_text(&role, content)?;
                 if role == "assistant" {
                     index += 1;
                     let tool_calls = take_function_calls(input, &mut index);
                     if tool_calls.is_empty() {
-                        if !text.trim().is_empty() {
-                            push_or_merge_text(&mut messages, "assistant".to_string(), text);
-                        }
+                        push_assistant(&mut messages, text, None, None);
                     } else {
                         push_chat_tool_calls(
                             &mut messages,
@@ -53,24 +51,10 @@ pub(crate) fn responses_input_to_chat_messages(
                     }
                     continue;
                 }
-                if !text.trim().is_empty() {
-                    push_or_merge_text(&mut messages, normalize_role(role), text);
-                }
+                push_text(&mut messages, role, text);
             }
-            ResponseItem::AgentMessage { content, .. } => {
-                let text = content
-                    .iter()
-                    .map(|content| match content {
-                        AgentMessageInputContent::InputText { text } => Ok(text.clone()),
-                        AgentMessageInputContent::EncryptedContent { .. } => {
-                            Err(unsupported("encrypted Agent messages"))
-                        }
-                    })
-                    .collect::<Result<Vec<_>, _>>()?
-                    .join("\n");
-                if !text.trim().is_empty() {
-                    push_or_merge_text(&mut messages, "assistant".to_string(), text);
-                }
+            ResponseItem::AgentMessage { .. } => {
+                return Err(unsupported("native Agent messages"));
             }
             ResponseItem::Reasoning {
                 summary,
@@ -87,19 +71,22 @@ pub(crate) fn responses_input_to_chat_messages(
                 let assistant_content = match input.get(index) {
                     Some(ResponseItem::Message { role, content, .. }) if role == "assistant" => {
                         index += 1;
-                        response_message_text(content)?
+                        response_message_text("assistant", content)?
                     }
-                    _ => String::new(),
+                    _ => {
+                        return Err(unsupported(
+                            "reasoning history not followed by an assistant message",
+                        ));
+                    }
                 };
                 let tool_calls = take_function_calls(input, &mut index);
                 if tool_calls.is_empty() {
-                    if !assistant_content.trim().is_empty() {
-                        push_or_merge_text(
-                            &mut messages,
-                            "assistant".to_string(),
-                            assistant_content,
-                        );
-                    }
+                    push_assistant(
+                        &mut messages,
+                        assistant_content,
+                        Some(reasoning_content),
+                        None,
+                    );
                 } else {
                     push_chat_tool_calls(
                         &mut messages,
@@ -163,17 +150,12 @@ pub(crate) fn responses_input_to_chat_messages(
     Ok(messages)
 }
 
-fn response_message_text(content: &[ContentItem]) -> Result<String, ApiError> {
+fn response_message_text(role: &str, content: &[ContentItem]) -> Result<String, ApiError> {
     content
         .iter()
-        .map(content_item_to_text)
+        .map(|item| content_item_to_text(role, item))
         .collect::<Result<Vec<_>, _>>()
-        .map(|text| {
-            text.into_iter()
-                .filter(|text| !text.is_empty())
-                .collect::<Vec<_>>()
-                .join("\n")
-        })
+        .map(|text| text.concat())
 }
 
 fn raw_chat_reasoning_content(
@@ -226,11 +208,11 @@ fn push_chat_tool_calls(
     expected_tool_outputs: &mut Vec<String>,
 ) {
     expected_tool_outputs.extend(tool_calls.iter().map(|tool_call| tool_call.id.clone()));
-    messages.push(ChatMessage::AssistantWithToolCalls {
+    messages.push(ChatMessage::Assistant {
         role: "assistant".to_string(),
         content,
         reasoning_content,
-        tool_calls,
+        tool_calls: Some(tool_calls),
     });
 }
 
@@ -256,44 +238,52 @@ fn function_output_to_chat_text(output: &FunctionCallOutputPayload) -> Result<St
     }
 }
 
-fn normalize_role(role: &str) -> String {
+fn chat_role(role: &str) -> Result<String, ApiError> {
     match role {
-        "developer" | "system" => "system".to_string(),
-        "user" => "user".to_string(),
-        "assistant" => "assistant".to_string(),
-        other => other.to_string(),
+        "developer" | "system" => Ok("system".to_string()),
+        "user" => Ok("user".to_string()),
+        "assistant" => Ok("assistant".to_string()),
+        _ => Err(unsupported("unsupported message role")),
     }
 }
 
-fn content_item_to_text(item: &ContentItem) -> Result<String, ApiError> {
-    match item {
-        ContentItem::InputText { text } | ContentItem::OutputText { text } => Ok(text.clone()),
-        ContentItem::InputImage { .. } => Err(unsupported("image input")),
-        ContentItem::InputAudio { .. } => Err(unsupported("audio input")),
+fn content_item_to_text(role: &str, item: &ContentItem) -> Result<String, ApiError> {
+    match (role, item) {
+        ("assistant", ContentItem::OutputText { text })
+        | ("system" | "user", ContentItem::InputText { text }) => Ok(text.clone()),
+        (_, ContentItem::InputText { .. } | ContentItem::OutputText { .. }) => {
+            Err(unsupported("message content does not match its role"))
+        }
+        (_, ContentItem::InputImage { .. }) => Err(unsupported("image input")),
+        (_, ContentItem::InputAudio { .. }) => Err(unsupported("audio input")),
     }
 }
 
-fn push_or_merge_text(messages: &mut Vec<ChatMessage>, role: String, text: String) {
-    if let Some(ChatMessage::Text {
-        role: last_role,
-        content,
-    }) = messages.last_mut()
-        && *last_role == role
-    {
-        content.push('\n');
-        content.push_str(&text);
-        return;
-    }
+fn push_text(messages: &mut Vec<ChatMessage>, role: String, text: String) {
     messages.push(ChatMessage::Text {
         role,
         content: text,
     });
 }
 
+fn push_assistant(
+    messages: &mut Vec<ChatMessage>,
+    content: String,
+    reasoning_content: Option<String>,
+    tool_calls: Option<Vec<ChatToolCall>>,
+) {
+    messages.push(ChatMessage::Assistant {
+        role: "assistant".to_string(),
+        content,
+        reasoning_content,
+        tool_calls,
+    });
+}
+
 fn push_tool_result(messages: &mut Vec<ChatMessage>, tool_call_id: String, content: String) {
     let insert_at = messages
         .iter()
-        .rposition(|message| matches!(message, ChatMessage::AssistantWithToolCalls { .. }))
+        .rposition(|message| matches!(message, ChatMessage::Assistant { .. }))
         .map(|idx| idx + 1)
         .unwrap_or(messages.len());
     let mut insert_at = insert_at;

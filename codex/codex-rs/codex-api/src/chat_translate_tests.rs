@@ -231,18 +231,18 @@ fn groups_raw_reasoning_assistant_text_and_tool_calls() {
             .unwrap()
             .messages,
         vec![
-            ChatMessage::AssistantWithToolCalls {
+            ChatMessage::Assistant {
                 role: "assistant".to_string(),
                 content: "Checking the route.".to_string(),
                 reasoning_content: Some("check route coordinates".to_string()),
-                tool_calls: vec![ChatToolCall {
+                tool_calls: Some(vec![ChatToolCall {
                     id: "call_1".to_string(),
                     r#type: "function".to_string(),
                     function: ChatToolCallFunction {
                         name: "mcp__maps__route".to_string(),
                         arguments: "{}".to_string(),
                     },
-                }],
+                }]),
             },
             ChatMessage::ToolResult {
                 role: "tool".to_string(),
@@ -251,6 +251,139 @@ fn groups_raw_reasoning_assistant_text_and_tool_calls() {
             },
         ]
     );
+}
+
+#[test]
+fn preserves_each_supported_message_item_without_merging_or_text_rewrites() {
+    let mut request = request(None);
+    request.instructions.clear();
+    request.input = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputText {
+                    text: " first".to_string(),
+                },
+                ContentItem::InputText {
+                    text: "\nsecond ".to_string(),
+                },
+            ],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: String::new(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: " answer ".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+
+    assert_eq!(
+        responses_request_to_chat_completions_request(request)
+            .unwrap()
+            .messages,
+        vec![
+            ChatMessage::Text {
+                role: "user".to_string(),
+                content: " first\nsecond ".to_string(),
+            },
+            ChatMessage::Text {
+                role: "user".to_string(),
+                content: String::new(),
+            },
+            ChatMessage::Assistant {
+                role: "assistant".to_string(),
+                content: " answer ".to_string(),
+                reasoning_content: None,
+                tool_calls: None,
+            },
+        ]
+    );
+}
+
+#[test]
+fn replays_final_raw_reasoning_with_its_following_assistant_message() {
+    let mut request = request(None);
+    request.instructions.clear();
+    request.input = vec![
+        ResponseItem::Reasoning {
+            id: None,
+            summary: Vec::new(),
+            content: Some(vec![
+                codex_protocol::models::ReasoningItemContent::ReasoningText {
+                    text: "inspect the route first".to_string(),
+                },
+            ]),
+            encrypted_content: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "The route is safe.".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+
+    assert_eq!(
+        responses_request_to_chat_completions_request(request)
+            .unwrap()
+            .messages,
+        vec![ChatMessage::Assistant {
+            role: "assistant".to_string(),
+            content: "The route is safe.".to_string(),
+            reasoning_content: Some("inspect the route first".to_string()),
+            tool_calls: None,
+        }]
+    );
+}
+
+#[test]
+fn rejects_chat_history_items_without_typed_chat_equivalents() {
+    let mut unsupported_role = request(None);
+    unsupported_role.input = vec![text_message("tool", "result")];
+    let mut mismatched_content = request(None);
+    mismatched_content.input = vec![ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "not assistant output".to_string(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    }];
+    let mut agent_message = request(None);
+    agent_message.input = vec![ResponseItem::AgentMessage {
+        id: None,
+        author: "planner".to_string(),
+        recipient: "reviewer".to_string(),
+        content: Vec::new(),
+        internal_chat_message_metadata_passthrough: None,
+    }];
+
+    for request in [unsupported_role, mismatched_content, agent_message] {
+        assert!(matches!(
+            responses_request_to_chat_completions_request(request),
+            Err(ApiError::InvalidRequest { .. })
+        ));
+    }
 }
 
 #[test]
