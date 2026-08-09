@@ -283,6 +283,74 @@ async fn chat_sse_preserves_first_seen_tool_slots_and_appends_fragments() {
 }
 
 #[tokio::test]
+async fn chat_sse_marks_only_plaintext_collaboration_tools() {
+    let events = collect(
+        concat!(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"spawn\",\"function\":{\"name\":\"collaboration__spawn_agent\",\"arguments\":\"{}\"}},{\"index\":1,\"id\":\"other\",\"function\":{\"name\":\"mcp__maps__route\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n"
+        ),
+        HashMap::from([
+            (
+                "collaboration__spawn_agent".to_string(),
+                ChatToolTarget {
+                    name: "spawn_agent".to_string(),
+                    namespace: Some("collaboration".to_string()),
+                },
+            ),
+            (
+                "mcp__maps__route".to_string(),
+                ChatToolTarget {
+                    name: "route".to_string(),
+                    namespace: Some("mcp__maps".to_string()),
+                },
+            ),
+        ]),
+    )
+    .await;
+
+    let markers = events
+        .iter()
+        .filter_map(|event| match event {
+            Ok(ResponseEvent::OutputItemDone(ResponseItem::FunctionCall {
+                name,
+                encrypted_function_args,
+                ..
+            })) => Some((name.as_str(), encrypted_function_args.as_deref())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        markers,
+        vec![("spawn_agent", Some(&[][..])), ("route", None)]
+    );
+}
+
+#[test]
+fn collaboration_plaintext_marker_is_limited_to_message_delivery_tools() {
+    for name in ["spawn_agent", "send_message", "followup_task"] {
+        assert_eq!(
+            collaboration_plaintext_marker(&ChatToolTarget {
+                name: name.to_string(),
+                namespace: Some("collaboration".to_string()),
+            }),
+            Some(Vec::new())
+        );
+    }
+    for target in [
+        ChatToolTarget {
+            name: "wait_agent".to_string(),
+            namespace: Some("collaboration".to_string()),
+        },
+        ChatToolTarget {
+            name: "send_message".to_string(),
+            namespace: Some("mcp__other".to_string()),
+        },
+    ] {
+        assert_eq!(collaboration_plaintext_marker(&target), None);
+    }
+}
+
+#[tokio::test]
 async fn chat_sse_rejects_invalid_tool_delta_shapes_before_completion() {
     let cases = [
         (

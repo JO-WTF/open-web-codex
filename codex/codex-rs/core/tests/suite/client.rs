@@ -1513,7 +1513,8 @@ fn mock_provider(server: &MockServer, wire_api: WireApi) -> ModelProviderInfo {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[expect(clippy::unwrap_used)]
-async fn chat_provider_preflight_failure_does_not_start_inference_trace() -> anyhow::Result<()> {
+async fn chat_provider_rejects_encrypted_agent_history_before_inference_trace() -> anyhow::Result<()>
+{
     let server = MockServer::start().await;
     let provider = mock_provider(&server, WireApi::Chat);
     let codex_home = TempDir::new()?;
@@ -1562,8 +1563,8 @@ async fn chat_provider_preflight_failure_does_not_start_inference_trace() -> any
         id: None,
         author: "agent-a".to_string(),
         recipient: "agent-b".to_string(),
-        content: vec![AgentMessageInputContent::InputText {
-            text: "mailbox message".to_string(),
+        content: vec![AgentMessageInputContent::EncryptedContent {
+            encrypted_content: "encrypted-mailbox-message".to_string(),
         }],
         internal_chat_message_metadata_passthrough: None,
     });
@@ -1605,14 +1606,18 @@ async fn chat_provider_preflight_failure_does_not_start_inference_trace() -> any
         )
         .await
     {
-        Ok(_) => panic!("native AgentMessage history must fail before Chat transport"),
+        Ok(_) => panic!("encrypted AgentMessage history must fail before Chat transport"),
         Err(error) => error,
     };
     assert!(matches!(
         error.details(),
         CodexErrorDetails::InvalidRequest(_)
     ));
-    assert!(error.to_string().contains("native Agent messages"));
+    assert!(
+        error
+            .to_string()
+            .contains("non-plaintext native Agent message")
+    );
     assert!(
         server
             .received_requests()
@@ -1626,6 +1631,41 @@ async fn chat_provider_preflight_failure_does_not_start_inference_trace() -> any
         rollout.inference_calls.is_empty(),
         "Chat preflight rejection must not create an inference attempt"
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chat_provider_sends_plaintext_agent_history_as_assistant_message() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    mount_chat_response(&server, 1).await;
+    let provider = mock_provider(&server, WireApi::Chat);
+    send_request_with_provider_input(
+        provider,
+        None,
+        ReasoningSummary::None,
+        vec![ResponseItem::AgentMessage {
+            id: None,
+            author: "child".to_string(),
+            recipient: "parent".to_string(),
+            content: vec![AgentMessageInputContent::InputText {
+                text: "child completed mailbox work".to_string(),
+            }],
+            internal_chat_message_metadata_passthrough: None,
+        }],
+    )
+    .await?;
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("recorded Chat requests");
+    assert_eq!(requests.len(), 1);
+    let body: serde_json::Value = serde_json::from_slice(&requests[0].body)?;
+    assert!(body["messages"].as_array().is_some_and(|messages| {
+        messages.iter().any(|message| {
+            message["role"] == "assistant" && message["content"] == "child completed mailbox work"
+        })
+    }));
     Ok(())
 }
 
@@ -2106,6 +2146,30 @@ async fn send_request_with_provider(
     effort: Option<ReasoningEffort>,
     summary: ReasoningSummary,
 ) -> Result<(), CodexErr> {
+    send_request_with_provider_input(
+        provider,
+        effort,
+        summary,
+        vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "hello".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        }],
+    )
+    .await
+}
+
+#[expect(clippy::unwrap_used)]
+async fn send_request_with_provider_input(
+    provider: ModelProviderInfo,
+    effort: Option<ReasoningEffort>,
+    summary: ReasoningSummary,
+    input: Vec<ResponseItem>,
+) -> Result<(), CodexErr> {
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider_id = provider.name.clone();
@@ -2151,15 +2215,7 @@ async fn send_request_with_provider(
     let responses_metadata = test_turn_responses_metadata(&client, thread_id);
     let mut client_session = client.new_session();
     let mut prompt = Prompt::default();
-    prompt.input.push(ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: "hello".to_string(),
-        }],
-        phase: None,
-        internal_chat_message_metadata_passthrough: None,
-    });
+    prompt.input = input;
 
     let mut stream = client_session
         .stream(

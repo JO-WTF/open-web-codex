@@ -8,6 +8,7 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::plaintext_agent_message_content;
 
 pub(crate) fn responses_input_to_chat_messages(
     input: &[ResponseItem],
@@ -53,8 +54,13 @@ pub(crate) fn responses_input_to_chat_messages(
                 }
                 push_text(&mut messages, role, text);
             }
-            ResponseItem::AgentMessage { .. } => {
-                return Err(unsupported("native Agent messages"));
+            ResponseItem::AgentMessage { content, .. } => {
+                // Preserve the established assistant-side Chat projection for an
+                // entirely plaintext native mailbox message. The Runtime keeps
+                // the native AgentMessage metadata in its own history.
+                let text = plaintext_agent_message_content(content)
+                    .ok_or_else(|| unsupported("non-plaintext native Agent message"))?;
+                push_text(&mut messages, "assistant".to_string(), text);
             }
             ResponseItem::Reasoning {
                 summary,

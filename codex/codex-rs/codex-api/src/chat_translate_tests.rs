@@ -456,21 +456,78 @@ fn rejects_chat_history_items_without_typed_chat_equivalents() {
         phase: None,
         internal_chat_message_metadata_passthrough: None,
     }];
-    let mut agent_message = request(None);
-    agent_message.input = vec![ResponseItem::AgentMessage {
+    let mut encrypted_agent_message = request(None);
+    encrypted_agent_message.input = vec![ResponseItem::AgentMessage {
         id: None,
         author: "planner".to_string(),
         recipient: "reviewer".to_string(),
-        content: Vec::new(),
+        content: vec![
+            codex_protocol::models::AgentMessageInputContent::EncryptedContent {
+                encrypted_content: "ciphertext".to_string(),
+            },
+        ],
         internal_chat_message_metadata_passthrough: None,
     }];
 
-    for request in [unsupported_role, mismatched_content, agent_message] {
+    for request in [
+        unsupported_role,
+        mismatched_content,
+        encrypted_agent_message,
+    ] {
         assert!(matches!(
             responses_request_to_chat_completions_request(request),
             Err(ApiError::InvalidRequest { .. })
         ));
     }
+}
+
+#[test]
+fn maps_only_plaintext_native_agent_messages_to_assistant_history() {
+    let mut request = request(None);
+    request.instructions.clear();
+    request.input = vec![
+        ResponseItem::AgentMessage {
+            id: None,
+            author: "planner".to_string(),
+            recipient: "reviewer".to_string(),
+            content: vec![
+                codex_protocol::models::AgentMessageInputContent::InputText {
+                    text: "first line".to_string(),
+                },
+                codex_protocol::models::AgentMessageInputContent::InputText {
+                    text: "second line".to_string(),
+                },
+            ],
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::AgentMessage {
+            id: None,
+            author: "reviewer".to_string(),
+            recipient: "planner".to_string(),
+            content: vec![
+                codex_protocol::models::AgentMessageInputContent::InputText {
+                    text: "reply".to_string(),
+                },
+            ],
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+
+    assert_eq!(
+        responses_request_to_chat_completions_request(request)
+            .unwrap()
+            .messages,
+        vec![
+            ChatMessage::Text {
+                role: "assistant".to_string(),
+                content: "first line\nsecond line".to_string(),
+            },
+            ChatMessage::Text {
+                role: "assistant".to_string(),
+                content: "reply".to_string(),
+            },
+        ]
+    );
 }
 
 #[test]

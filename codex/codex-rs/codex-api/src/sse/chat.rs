@@ -331,7 +331,7 @@ async fn finish_chat_stream(
             name: target.name.clone(),
             namespace: target.namespace.clone(),
             arguments: tool_call.function.arguments,
-            encrypted_function_args: None,
+            encrypted_function_args: collaboration_plaintext_marker(target),
             call_id: tool_call.id,
             internal_chat_message_metadata_passthrough: None,
         };
@@ -358,6 +358,15 @@ async fn finish_chat_stream(
         }))
         .await;
     Ok(())
+}
+
+fn collaboration_plaintext_marker(target: &ChatToolTarget) -> Option<Vec<String>> {
+    (target.namespace.as_deref() == Some("collaboration")
+        && matches!(
+            target.name.as_str(),
+            "spawn_agent" | "send_message" | "followup_task"
+        ))
+    .then(Vec::new)
 }
 
 #[cfg(test)]
