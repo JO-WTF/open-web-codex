@@ -575,6 +575,11 @@ mod tests {
     fn warehouse_skills_define_composable_business_decisions() {
         assert!(SUPERVISOR_SKILL.contains("让 `network_agent` 定义本次分析所需的数据"));
         assert!(SUPERVISOR_SKILL.contains("Role 昵称固定为 `Wanwan`"));
+        assert!(SUPERVISOR_SKILL.contains("任何仓网领域执行都必须委派给对应原生 Role"));
+        assert!(SUPERVISOR_SKILL.contains("不得用 shell、Workspace 命令、内联代码或自身推理代替 child Tool"));
+        assert!(SUPERVISOR_SKILL.contains("必须原生创建或继续 `network_agent`"));
+        assert!(SUPERVISOR_SKILL.contains("不得让用户复制代码到浏览器"));
+        assert!(SUPERVISOR_SKILL.contains("不得降级为自制 HTML、文件、图片、文本地图或伪造成功"));
         assert!(DATA_SKILL.contains("`city_id`、`city_name`、`demand_quantity`"));
         assert!(DATA_SKILL.contains("不要从行政区目录静默生成候选仓"));
         assert!(NETWORK_SKILL.contains("潜在接口调用量和费用"));
