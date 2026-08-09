@@ -11,7 +11,7 @@ from uuid import UUID
 from pydantic import Field
 
 from .delivery_models import (
-    CanonicalDeliveryModel,
+    DeliveryModel,
     ordered_assignment,
     ordered_comparison,
     ordered_cost,
@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 ReportSource = Literal["baseline", "scenario", "facility_location"]
 
 
-class NetworkReportScope(CanonicalDeliveryModel):
+class NetworkReportScope(DeliveryModel):
     demand_city_count: int = Field(ge=0)
     warehouse_count: int = Field(ge=0)
     existing_warehouse_count: int = Field(ge=0)
@@ -44,12 +44,12 @@ class NetworkReportScope(CanonicalDeliveryModel):
     total_demand: Decimal = Field(ge=0)
 
 
-class NetworkReportEntities(CanonicalDeliveryModel):
+class NetworkReportEntities(DeliveryModel):
     demand_cities: list[DemandCityRecord]
     warehouses: list[WarehouseRecord]
 
 
-class NetworkBaselineReport(CanonicalDeliveryModel):
+class NetworkBaselineReport(DeliveryModel):
     label: Literal["actual_current", "optimized_existing_footprint"]
     active_warehouse_ids: list[str]
     assignment: AssignmentResult
@@ -58,7 +58,7 @@ class NetworkBaselineReport(CanonicalDeliveryModel):
     notice_code: str | None
 
 
-class NetworkFacilityReport(CanonicalDeliveryModel):
+class NetworkFacilityReport(DeliveryModel):
     status: Literal["optimal", "feasible"]
     active_warehouse_ids: list[str]
     opened_candidate_ids: list[str]
@@ -72,7 +72,7 @@ class NetworkFacilityReport(CanonicalDeliveryModel):
     message: str | None
 
 
-class NetworkPlanningReportBundle(CanonicalDeliveryModel):
+class NetworkPlanningReportBundle(DeliveryModel):
     schema_version: Literal["network_planning_report_bundle.v1"] = (
         "network_planning_report_bundle.v1"
     )

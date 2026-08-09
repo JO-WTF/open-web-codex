@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -10,10 +11,11 @@ from uuid import UUID
 
 from pydantic import Field
 
-from .delivery_models import CanonicalDeliveryModel, validate_delivery_inputs
-from .network_models import NormalizedInputBatch
+from .delivery_models import DeliveryModel, validate_delivery_inputs
+from .network_models import DemandCityRecord, NormalizedInputBatch, WarehouseRecord
 from .optimization_models import (
     AssignmentComparison,
+    AssignmentRow,
     BaselineResult,
     PMedianSolution,
     ServiceComparison,
@@ -27,17 +29,17 @@ if TYPE_CHECKING:
 CandidateSource = Literal["scenario", "facility_location"]
 
 
-class PointGeometry(CanonicalDeliveryModel):
+class PointGeometry(DeliveryModel):
     type: Literal["Point"] = "Point"
     coordinates: tuple[float, float]
 
 
-class LineStringGeometry(CanonicalDeliveryModel):
+class LineStringGeometry(DeliveryModel):
     type: Literal["LineString"] = "LineString"
     coordinates: tuple[tuple[float, float], tuple[float, float]]
 
 
-class WarehouseMapProperties(CanonicalDeliveryModel):
+class WarehouseMapProperties(DeliveryModel):
     kind: Literal["warehouse"] = "warehouse"
     warehouse_id: str
     warehouse_name: str
@@ -49,7 +51,7 @@ class WarehouseMapProperties(CanonicalDeliveryModel):
     closed_existing: bool
 
 
-class DemandMapProperties(CanonicalDeliveryModel):
+class DemandMapProperties(DeliveryModel):
     kind: Literal["demand"] = "demand"
     city_id: str
     city_name: str
@@ -58,7 +60,7 @@ class DemandMapProperties(CanonicalDeliveryModel):
     demand_quantity: Decimal
 
 
-class AssignmentMapProperties(CanonicalDeliveryModel):
+class AssignmentMapProperties(DeliveryModel):
     kind: Literal["last_mile_assignment"] = "last_mile_assignment"
     scenario: Literal["baseline", "facility"]
     result_label: str
@@ -70,7 +72,7 @@ class AssignmentMapProperties(CanonicalDeliveryModel):
     unit_cost: float | None
 
 
-class LinehaulMapProperties(CanonicalDeliveryModel):
+class LinehaulMapProperties(DeliveryModel):
     kind: Literal["linehaul_connection"] = "linehaul_connection"
     scenario: Literal["baseline", "facility"]
     upstream_center_id: str
@@ -86,19 +88,19 @@ MapProperties = (
 )
 
 
-class NetworkMapFeature(CanonicalDeliveryModel):
+class NetworkMapFeature(DeliveryModel):
     type: Literal["Feature"] = "Feature"
     id: str
     geometry: PointGeometry | LineStringGeometry
     properties: MapProperties
 
 
-class NetworkMapFeatureCollection(CanonicalDeliveryModel):
+class NetworkMapFeatureCollection(DeliveryModel):
     type: Literal["FeatureCollection"] = "FeatureCollection"
     features: list[NetworkMapFeature]
 
 
-class NetworkMapLayer(CanonicalDeliveryModel):
+class NetworkMapLayer(DeliveryModel):
     layer_id: str
     feature_kind: str
     geometry_type: Literal["Point", "LineString"]
@@ -106,18 +108,18 @@ class NetworkMapLayer(CanonicalDeliveryModel):
     label: str
 
 
-class NetworkMapLegendItem(CanonicalDeliveryModel):
+class NetworkMapLegendItem(DeliveryModel):
     code: str
     label: str
     color: str = Field(pattern=r"^#[0-9A-F]{6}$")
 
 
-class NetworkMapExtensions(CanonicalDeliveryModel):
+class NetworkMapExtensions(DeliveryModel):
     legend: list[NetworkMapLegendItem]
     hover_fields: dict[str, list[str]]
 
 
-class NetworkMapSummary(CanonicalDeliveryModel):
+class NetworkMapSummary(DeliveryModel):
     country_code: str = Field(pattern=r"^[A-Z]{2}$")
     baseline_label: str
     facility_status: str
@@ -132,7 +134,7 @@ class NetworkMapSummary(CanonicalDeliveryModel):
     service: list[ServiceComparison]
 
 
-class NetworkComparisonMapBundle(CanonicalDeliveryModel):
+class NetworkComparisonMapBundle(DeliveryModel):
     schema_version: Literal["network_comparison_map_bundle.v1"] = (
         "network_comparison_map_bundle.v1"
     )
@@ -261,9 +263,9 @@ def build_network_comparison_map_bundle(
 def _assignment_features(
     scenario: Literal["baseline", "facility"],
     result_label: str,
-    rows_by_city,
-    warehouse_by_id,
-    demand_by_id,
+    rows_by_city: Mapping[str, AssignmentRow],
+    warehouse_by_id: Mapping[str, WarehouseRecord],
+    demand_by_id: Mapping[str, DemandCityRecord],
 ) -> list[NetworkMapFeature]:
     features: list[NetworkMapFeature] = []
     for city_id in sorted(rows_by_city):
@@ -312,9 +314,9 @@ def _assignment_features(
 
 def _linehaul_features(
     scenario: Literal["baseline", "facility"],
-    active_ids,
-    rows_by_city,
-    warehouse_by_id,
+    active_ids: frozenset[str],
+    rows_by_city: Mapping[str, AssignmentRow],
+    warehouse_by_id: Mapping[str, WarehouseRecord],
 ) -> list[NetworkMapFeature]:
     assigned_demand = {
         warehouse_id: sum(

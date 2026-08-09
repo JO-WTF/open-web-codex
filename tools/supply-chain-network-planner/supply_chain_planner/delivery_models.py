@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import math
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
@@ -25,16 +24,8 @@ from .optimization_models import (
 DeliveryValue = TypeVar("DeliveryValue")
 
 
-class CanonicalDeliveryModel(BaseModel):
+class DeliveryModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
-    def canonical_json_bytes(self) -> bytes:
-        return json.dumps(
-            self.model_dump(mode="json"),
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("utf-8")
 
 
 @dataclass(frozen=True)
@@ -71,14 +62,9 @@ def validate_delivery_inputs(
         raise ValueError("delivery_demand_and_warehouse_required")
     before_active = _active_ids("baseline", baseline.active_warehouse_ids, warehouses)
     after_active = _active_ids("facility", facility.active_warehouse_ids, warehouses)
-    invalid_baseline = sorted(
-        item for item in before_active if not warehouses[item].is_existing
-    )
-    if invalid_baseline:
-        raise ValueError(
-            "delivery_baseline_active_requires_existing:"
-            + ",".join(invalid_baseline)
-        )
+    existing = {key for key, item in warehouses.items() if item.is_existing}
+    if before_active != existing:
+        raise ValueError("delivery_baseline_active_must_equal_existing")
     if facility.assignment is None:
         raise ValueError("delivery_facility_assignment_required")
     if facility.status not in {"optimal", "feasible"}:
@@ -90,7 +76,6 @@ def validate_delivery_inputs(
     after_rows = _assignment_rows(
         "facility", facility.assignment, demand, warehouses, after_active
     )
-    existing = {key for key, item in warehouses.items() if item.is_existing}
     candidates = set(warehouses) - existing
     _exact_ids(
         "facility_opened_candidate",

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-import json
 from collections import Counter
 from dataclasses import dataclass
 
 import pytest
-from _network_fixtures import indonesia_network_fixture
+from _network_fixtures import (
+    indonesia_current_assignments,
+    indonesia_network_fixture,
+)
 
 from supply_chain_planner.map_service import (
     NetworkComparisonMapBundle,
@@ -27,7 +29,7 @@ from supply_chain_planner.solver import (
     compare_assignments,
     enumerate_p_median,
     service_metrics,
-    solve_assignment,
+    solve_current_assignment,
     summarize_assignment_cost,
 )
 
@@ -72,17 +74,18 @@ def sample2_delivery() -> Sample2Delivery:
         for warehouse in fixture.warehouses
         if warehouse.is_existing
     }
-    baseline_assignment = solve_assignment(
+    current_assignments = indonesia_current_assignments()
+    baseline_assignment = solve_current_assignment(
         fixture.demand,
         fixture.warehouses,
+        current_assignments,
         routes,
         costs,
         "min_cost",
-        existing_ids,
     )
     targets = [6, 12, 18]
     baseline = BaselineResult(
-        label="optimized_existing_footprint",
+        label="actual_current",
         active_warehouse_ids=sorted(existing_ids),
         assignment=baseline_assignment,
         service=service_metrics(baseline_assignment, targets),
@@ -122,7 +125,7 @@ def sample2_delivery() -> Sample2Delivery:
         normalized=NormalizedInputBatch(
             demand_cities=fixture.demand,
             warehouses=fixture.warehouses,
-            current_assignments=[],
+            current_assignments=current_assignments,
             route_quotes=[],
         ),
         baseline=baseline,
@@ -176,6 +179,13 @@ def test_sample2_builds_complete_self_contained_map_and_report(
     )
     assert len(map_bundle.summary.opened_candidate_ids) == 2
     assert map_bundle.summary.closed_existing_ids == []
+    assert inputs.baseline.label == "actual_current"
+    assert len(inputs.normalized.current_assignments) == 50
+    assert set(inputs.baseline.active_warehouse_ids) == {
+        warehouse.warehouse_id
+        for warehouse in inputs.normalized.warehouses
+        if warehouse.is_existing
+    }
 
     baseline_assigned = {
         row.warehouse_id
@@ -193,16 +203,6 @@ def test_sample2_builds_complete_self_contained_map_and_report(
         warehouse_properties[warehouse_id].baseline_active
         for warehouse_id in zero_demand_active
     )
-    zero_demand_linehaul = [
-        feature
-        for feature in map_bundle.geojson.features
-        if feature.properties.kind == "linehaul_connection"
-        and feature.properties.scenario == "baseline"
-        and feature.properties.crossdock_warehouse_id in zero_demand_active
-    ]
-    assert zero_demand_linehaul
-    assert all(feature.properties.assigned_demand == 0 for feature in zero_demand_linehaul)
-
     assert report_bundle.scope.model_dump(mode="python") == {
         "demand_city_count": 50,
         "warehouse_count": 23,
@@ -231,12 +231,12 @@ def test_sample2_builds_complete_self_contained_map_and_report(
     )
     assert report_bundle.facility.cost.by_warehouse
 
-    map_bytes = map_bundle.canonical_json_bytes()
-    report_bytes = report_bundle.canonical_json_bytes()
-    assert NetworkComparisonMapBundle.model_validate_json(map_bytes) == map_bundle
-    assert NetworkPlanningReportBundle.model_validate_json(report_bytes) == report_bundle
-    _assert_no_external_delivery_identity(json.loads(map_bytes))
-    _assert_no_external_delivery_identity(json.loads(report_bytes))
+    map_payload = map_bundle.model_dump(mode="json")
+    report_payload = report_bundle.model_dump(mode="json")
+    assert NetworkComparisonMapBundle.model_validate(map_payload) == map_bundle
+    assert NetworkPlanningReportBundle.model_validate(report_payload) == report_bundle
+    _assert_no_external_delivery_identity(map_payload)
+    _assert_no_external_delivery_identity(report_payload)
 
 
 def test_delivery_bundles_are_deterministic_for_equivalent_input_order(
@@ -322,11 +322,8 @@ def test_delivery_bundles_are_deterministic_for_equivalent_input_order(
         country_code="ID",
     )
 
-    assert reordered_map.canonical_json_bytes() == expected_map.canonical_json_bytes()
-    assert (
-        reordered_report.canonical_json_bytes()
-        == expected_report.canonical_json_bytes()
-    )
+    assert reordered_map == expected_map
+    assert reordered_report == expected_report
 
 
 def test_map_rejects_missing_coordinates_without_blocking_json_report(
@@ -370,6 +367,7 @@ def test_map_rejects_missing_coordinates_without_blocking_json_report(
     [
         ("unknown_assignment", "delivery_facility_assignment_warehouse_unknown"),
         ("inconsistent_active_delta", "delivery_comparison_selected_warehouse_ids_mismatch"),
+        ("incomplete_baseline_active", "delivery_baseline_active_must_equal_existing"),
         ("missing_cost", "delivery_facility_cost_required"),
         ("missing_service", "delivery_facility_service_required"),
     ],
@@ -380,6 +378,7 @@ def test_delivery_rejects_inconsistent_typed_results(
     error_code: str,
 ) -> None:
     inputs = sample2_delivery
+    baseline = inputs.baseline
     facility = inputs.facility
     comparison = inputs.comparison
     if field == "unknown_assignment":
@@ -398,6 +397,10 @@ def test_delivery_rejects_inconsistent_typed_results(
         comparison = comparison.model_copy(
             update={"selected_warehouse_ids": []}
         )
+    elif field == "incomplete_baseline_active":
+        baseline = baseline.model_copy(
+            update={"active_warehouse_ids": baseline.active_warehouse_ids[1:]}
+        )
     elif field == "missing_cost":
         facility = facility.model_copy(update={"cost": None})
     else:
@@ -406,7 +409,7 @@ def test_delivery_rejects_inconsistent_typed_results(
     with pytest.raises(ValueError, match=error_code):
         build_network_planning_report_bundle(
             inputs.normalized,
-            inputs.baseline,
+            baseline,
             facility,
             comparison,
             country_code="ID",
