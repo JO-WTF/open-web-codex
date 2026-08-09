@@ -7,13 +7,21 @@ from collections import defaultdict
 from collections.abc import Iterable
 from typing import Any
 
-from .case_models import CurrentAssignment, DemandCity, Warehouse
 from .matrix_models import CostMatrix, RouteMatrix
+from .network_models import (
+    CurrentAssignmentRecord,
+    DemandCityRecord,
+    WarehouseRecord,
+)
 from .optimization_models import (
+    AssignmentComparison,
     AssignmentObjective,
     AssignmentResult,
     AssignmentRow,
+    CityAssignmentChange,
     CostSummary,
+    FacilityLocationResult,
+    ServiceComparison,
     ServiceMetric,
 )
 
@@ -28,7 +36,9 @@ class SolverUnavailable(RuntimeError):
 
 
 def _route_index(matrix: RouteMatrix):
-    return {(row.origin_id, row.destination_id): row for row in matrix.rows}
+    return {
+        (row.origin_id, row.destination_id, row.layer): row for row in matrix.rows
+    }
 
 
 def _cost_index(matrix: CostMatrix):
@@ -38,25 +48,59 @@ def _cost_index(matrix: CostMatrix):
     }
 
 
+def _total_unit_cost(
+    costs: dict[tuple[str, str, str], float],
+    warehouse: WarehouseRecord,
+    demand_city_id: str,
+    upstream_center_id: str | None = None,
+) -> float | None:
+    last_mile = costs.get((warehouse.warehouse_id, demand_city_id, "last_mile"))
+    if last_mile is None:
+        return None
+    if warehouse.warehouse_type != "cross_docking":
+        return last_mile
+    upstream = upstream_center_id or warehouse.upstream_center_id
+    if upstream is None:
+        return None
+    linehaul = costs.get((upstream, warehouse.warehouse_id, "linehaul"))
+    return None if linehaul is None else last_mile + linehaul
+
+
+def _validate_warehouse_upstreams(warehouses: Iterable[WarehouseRecord]) -> None:
+    rows = list(warehouses)
+    by_id = {warehouse.warehouse_id: warehouse for warehouse in rows}
+    for warehouse in rows:
+        if warehouse.warehouse_type != "cross_docking":
+            continue
+        if warehouse.upstream_center_id is None:
+            raise ValueError(f"warehouse_upstream_center_required:{warehouse.warehouse_id}")
+        upstream = by_id.get(warehouse.upstream_center_id)
+        if upstream is None:
+            raise ValueError(f"warehouse_upstream_center_missing:{warehouse.warehouse_id}")
+        if upstream.warehouse_type != "center":
+            raise ValueError(f"warehouse_upstream_must_be_center:{warehouse.warehouse_id}")
+
+
 def solve_assignment(
-    demand: Iterable[DemandCity],
-    warehouses: Iterable[Warehouse],
+    demand: Iterable[DemandCityRecord],
+    warehouses: Iterable[WarehouseRecord],
     route_matrix: RouteMatrix,
     cost_matrix: CostMatrix | None,
     objective: AssignmentObjective,
-    active_warehouse_ids: set[str] | None = None,
+    active_warehouse_ids: set[str],
 ) -> AssignmentResult:
     demand_rows = sorted(demand, key=lambda row: row.city_id)
     warehouse_rows = sorted(
         (
             warehouse
             for warehouse in warehouses
-            if active_warehouse_ids is None or warehouse.warehouse_id in active_warehouse_ids
+            if warehouse.warehouse_id in active_warehouse_ids
         ),
         key=lambda row: row.warehouse_id,
     )
     if not warehouse_rows:
         raise ValueError("assignment_requires_active_warehouse")
+    _validate_warehouse_upstreams(warehouse_rows)
     routes = _route_index(route_matrix)
     costs = _cost_index(cost_matrix) if cost_matrix is not None else {}
     rows: list[AssignmentRow] = []
@@ -66,14 +110,13 @@ def solve_assignment(
         for warehouse in warehouse_rows:
             if (
                 warehouse.upstream_center_id
-                and active_warehouse_ids is not None
                 and warehouse.upstream_center_id not in active_warehouse_ids
             ):
                 continue
-            route = routes.get((warehouse.warehouse_id, city.city_id))
+            route = routes.get((warehouse.warehouse_id, city.city_id, "last_mile"))
             if route is None or route.status != "ready":
                 continue
-            cost = costs.get((warehouse.warehouse_id, city.city_id, "last_mile"))
+            cost = _total_unit_cost(costs, warehouse, city.city_id)
             if objective == "min_cost" and cost is None:
                 continue
             choices.append(
@@ -122,9 +165,9 @@ def solve_assignment(
 
 
 def solve_current_assignment(
-    demand: Iterable[DemandCity],
-    warehouses: Iterable[Warehouse],
-    current_assignments: Iterable[CurrentAssignment],
+    demand: Iterable[DemandCityRecord],
+    warehouses: Iterable[WarehouseRecord],
+    current_assignments: Iterable[CurrentAssignmentRecord],
     route_matrix: RouteMatrix,
     cost_matrix: CostMatrix | None,
     objective: AssignmentObjective,
@@ -132,6 +175,7 @@ def solve_current_assignment(
     """Evaluate the recorded assignment without silently re-optimizing it."""
     demand_rows = sorted(demand, key=lambda row: row.city_id)
     warehouses_by_id = {warehouse.warehouse_id: warehouse for warehouse in warehouses}
+    _validate_warehouse_upstreams(warehouses_by_id.values())
     assignments_by_city = {
         assignment.demand_city_id: assignment for assignment in current_assignments
     }
@@ -143,10 +187,22 @@ def solve_current_assignment(
         current = assignments_by_city.get(city.city_id)
         warehouse = warehouses_by_id.get(current.serving_warehouse_id) if current else None
         route = (
-            routes.get((warehouse.warehouse_id, city.city_id)) if warehouse is not None else None
+            routes.get((warehouse.warehouse_id, city.city_id, "last_mile"))
+            if warehouse is not None
+            else None
         )
+        current_upstream = current.upstream_center_id if current else None
+        if (
+            warehouse is not None
+            and current_upstream is not None
+            and current_upstream != warehouse.upstream_center_id
+        ):
+            raise ValueError(
+                f"current_assignment_upstream_mismatch:{city.city_id}:"
+                f"{current_upstream}:{warehouse.upstream_center_id}"
+            )
         cost = (
-            costs.get((warehouse.warehouse_id, city.city_id, "last_mile"))
+            _total_unit_cost(costs, warehouse, city.city_id, warehouse.upstream_center_id)
             if warehouse is not None
             else None
         )
@@ -163,7 +219,7 @@ def solve_current_assignment(
                 AssignmentRow(
                     demand_city_id=city.city_id,
                     warehouse_id=warehouse.warehouse_id,
-                    upstream_center_id=current.upstream_center_id,
+                    upstream_center_id=warehouse.upstream_center_id,
                     demand_quantity=city.demand_quantity,
                     distance_km=route.distance_km,
                     duration_hours=route.duration_hours,
@@ -175,7 +231,9 @@ def solve_current_assignment(
             AssignmentRow(
                 demand_city_id=city.city_id,
                 warehouse_id=warehouse.warehouse_id if warehouse is not None else None,
-                upstream_center_id=current.upstream_center_id if current else None,
+                upstream_center_id=(
+                    warehouse.upstream_center_id if warehouse is not None else None
+                ),
                 demand_quantity=city.demand_quantity,
                 reason=reason,
             )
@@ -218,17 +276,120 @@ def service_metrics(
     ]
 
 
+def compare_assignments(
+    before: AssignmentResult,
+    after: AssignmentResult,
+    requested_service_targets: Iterable[float],
+    before_active_warehouse_ids: set[str],
+    after_active_warehouse_ids: set[str],
+) -> AssignmentComparison:
+    """Compare two complete or partial assignments without workflow state."""
+
+    targets = sorted(set(requested_service_targets))
+    if not targets or any(target <= 0 for target in targets):
+        raise ValueError("comparison_requires_positive_service_targets")
+    before_service = {
+        metric.target_hours: metric for metric in service_metrics(before, targets)
+    }
+    after_service = {
+        metric.target_hours: metric for metric in service_metrics(after, targets)
+    }
+    before_rows = {row.demand_city_id: row for row in before.rows}
+    after_rows = {row.demand_city_id: row for row in after.rows}
+    changes: list[CityAssignmentChange] = []
+    for city_id in sorted(set(before_rows) | set(after_rows)):
+        before_row = before_rows.get(city_id)
+        after_row = after_rows.get(city_id)
+        reassigned = (
+            before_row is not None
+            and after_row is not None
+            and before_row.warehouse_id != after_row.warehouse_id
+        )
+        affected = before_row != after_row
+        changes.append(
+            CityAssignmentChange(
+                demand_city_id=city_id,
+                before_warehouse_id=(before_row.warehouse_id if before_row else None),
+                after_warehouse_id=(after_row.warehouse_id if after_row else None),
+                affected=affected,
+                reassigned=reassigned,
+                duration_hours_delta=_optional_delta(
+                    before_row.duration_hours if before_row else None,
+                    after_row.duration_hours if after_row else None,
+                ),
+                cost_per_unit_delta=_optional_delta(
+                    before_row.cost if before_row else None,
+                    after_row.cost if after_row else None,
+                ),
+            )
+        )
+    before_cost = _complete_assignment_cost(before)
+    after_cost = _complete_assignment_cost(after)
+    return AssignmentComparison(
+        requested_service_targets=targets,
+        service=[
+            ServiceComparison(
+                target_hours=target,
+                before_coverage_rate=before_service[target].coverage_rate,
+                after_coverage_rate=after_service[target].coverage_rate,
+                coverage_rate_delta=(
+                    after_service[target].coverage_rate
+                    - before_service[target].coverage_rate
+                ),
+            )
+            for target in targets
+        ],
+        before_cost=before_cost,
+        after_cost=after_cost,
+        cost_delta=(
+            after_cost - before_cost
+            if before_cost is not None and after_cost is not None
+            else None
+        ),
+        selected_warehouse_ids=sorted(
+            after_active_warehouse_ids - before_active_warehouse_ids
+        ),
+        removed_warehouse_ids=sorted(
+            before_active_warehouse_ids - after_active_warehouse_ids
+        ),
+        affected_city_ids=[item.demand_city_id for item in changes if item.affected],
+        reassigned_city_ids=[item.demand_city_id for item in changes if item.reassigned],
+        city_changes=changes,
+    )
+
+
+def _complete_assignment_cost(assignment: AssignmentResult) -> float | None:
+    if assignment.unassigned_demand or any(
+        row.warehouse_id is not None and row.cost is None for row in assignment.rows
+    ):
+        return None
+    return sum(
+        float(row.demand_quantity) * float(row.cost)
+        for row in assignment.rows
+        if row.warehouse_id is not None and row.cost is not None
+    )
+
+
+def _optional_delta(before: float | None, after: float | None) -> float | None:
+    return after - before if before is not None and after is not None else None
+
+
 def _assignment_objective_value(assignment: AssignmentResult) -> float:
     return sum(
-        (row.cost or row.duration_hours or 0) * float(row.demand_quantity)
+        (
+            row.cost
+            if assignment.objective == "min_cost" and row.cost is not None
+            else row.duration_hours or 0
+        )
+        * float(row.demand_quantity)
         for row in assignment.rows
         if row.warehouse_id is not None
     )
 
 
 def enumerate_p_median(
-    demand: list[DemandCity],
-    warehouses: list[Warehouse],
+    demand: list[DemandCityRecord],
+    warehouses: list[WarehouseRecord],
     route_matrix: RouteMatrix,
     cost_matrix: CostMatrix,
     number_to_open: int,
@@ -244,13 +405,30 @@ def enumerate_p_median(
 
     demand_rows = sorted(demand, key=lambda row: row.city_id)
     warehouse_rows = sorted(warehouses, key=lambda row: row.warehouse_id)
-    fixed = {
-        warehouse.warehouse_id
-        for warehouse in warehouse_rows
-        if warehouse.is_existing and warehouse.is_fixed
+    _validate_warehouse_upstreams(warehouse_rows)
+    warehouse_ids = {warehouse.warehouse_id for warehouse in warehouse_rows}
+    existing_ids = {
+        warehouse.warehouse_id for warehouse in warehouse_rows if warehouse.is_existing
     }
-    fixed |= fixed_existing_ids
-    optional = set(optional_existing_ids) - fixed
+    policy_ids = fixed_existing_ids | optional_existing_ids
+    unknown_policy_ids = policy_ids - warehouse_ids
+    if unknown_policy_ids:
+        raise ValueError(
+            "existing_policy_unknown_warehouses:" + ",".join(sorted(unknown_policy_ids))
+        )
+    non_existing_policy_ids = policy_ids - existing_ids
+    if non_existing_policy_ids:
+        raise ValueError(
+            "existing_policy_requires_existing_warehouses:"
+            + ",".join(sorted(non_existing_policy_ids))
+        )
+    overlap = fixed_existing_ids & optional_existing_ids
+    if overlap:
+        raise ValueError("existing_policy_overlap:" + ",".join(sorted(overlap)))
+    if policy_ids != existing_ids:
+        missing = existing_ids - policy_ids
+        raise ValueError("existing_policy_incomplete:" + ",".join(sorted(missing)))
+    fixed = set(fixed_existing_ids)
     candidates = [
         warehouse
         for warehouse in warehouse_rows
@@ -267,9 +445,7 @@ def enumerate_p_median(
         warehouse_id = warehouse.warehouse_id
         variable = model.NewBoolVar(f"open_{warehouse_id}")
         open_variables[warehouse_id] = variable
-        if warehouse_id in fixed or (warehouse.is_existing and warehouse_id not in optional):
-            model.Add(variable == 1)
-        elif warehouse_id not in optional and warehouse.is_existing:
+        if warehouse_id in fixed:
             model.Add(variable == 1)
     for warehouse in warehouse_rows:
         if warehouse.upstream_center_id:
@@ -286,8 +462,8 @@ def enumerate_p_median(
     for city in demand_rows:
         choices = []
         for warehouse in warehouse_rows:
-            route = routes.get((warehouse.warehouse_id, city.city_id))
-            cost = costs.get((warehouse.warehouse_id, city.city_id, "last_mile"))
+            route = routes.get((warehouse.warehouse_id, city.city_id, "last_mile"))
+            cost = _total_unit_cost(costs, warehouse, city.city_id)
             if route is None or route.status != "ready" or cost is None:
                 continue
             variable = model.NewBoolVar(f"assign_{city.city_id}_{warehouse.warehouse_id}")
@@ -314,7 +490,7 @@ def enumerate_p_median(
         for city in demand_rows:
             for warehouse in warehouse_rows:
                 variable = assignment_variables.get((city.city_id, warehouse.warehouse_id))
-                route = routes.get((warehouse.warehouse_id, city.city_id))
+                route = routes.get((warehouse.warehouse_id, city.city_id, "last_mile"))
                 if (
                     variable is not None
                     and route is not None
@@ -363,8 +539,12 @@ def enumerate_p_median(
             )
             unassigned += city.demand_quantity
             continue
-        route = routes[(selected.warehouse_id, city.city_id)]
-        cost = costs[(selected.warehouse_id, city.city_id, "last_mile")]
+        route = routes[(selected.warehouse_id, city.city_id, "last_mile")]
+        cost = _total_unit_cost(costs, selected, city.city_id)
+        if cost is None:
+            raise ValueError(
+                f"selected_total_cost_missing:{selected.warehouse_id}:{city.city_id}"
+            )
         rows.append(
             AssignmentRow(
                 demand_city_id=city.city_id,
@@ -383,7 +563,18 @@ def enumerate_p_median(
         unassigned_demand=unassigned,
     )
     value = _assignment_objective_value(assignment)
-    return (value, active, assignment), int(solver.NumBranches()), status != cp_model.OPTIMAL
+    result = FacilityLocationResult(
+        objective_value=value,
+        active_warehouse_ids=sorted(active),
+        opened_candidate_ids=sorted(
+            warehouse_id
+            for warehouse_id in active
+            if warehouse_id not in existing_ids
+        ),
+        closed_existing_ids=sorted(existing_ids - active),
+        assignment=assignment,
+    )
+    return result, int(solver.NumBranches()), status != cp_model.OPTIMAL
 
 
 def by_warehouse_cost(assignment: AssignmentResult) -> dict[str, float]:
@@ -401,7 +592,7 @@ def summarize_assignment_cost(
     costs = _cost_index(cost_matrix)
     last_mile_by_warehouse: dict[str, float] = defaultdict(float)
     linehaul_by_warehouse: dict[str, float] = defaultdict(float)
-    missing_routes = list(cost_matrix.missing_routes)
+    missing_routes: list[tuple[str, str, str]] = []
     for row in assignment.rows:
         if row.warehouse_id is None:
             continue

@@ -72,7 +72,7 @@ class ScenarioSpec(OptimizationModel):
     add_warehouse_ids: list[str] = Field(default_factory=list)
     remove_warehouse_ids: list[str] = Field(default_factory=list)
     relocations: list[WarehouseRelocation] = Field(default_factory=list)
-    objective: AssignmentObjective = "min_cost"
+    objective: AssignmentObjective
     service_targets: list[float] = Field(default_factory=list)
 
 
@@ -84,17 +84,61 @@ class ScenarioResult(OptimizationModel):
     warehouse_changes: dict[str, list[str]] = Field(default_factory=dict)
 
 
+class ServiceComparison(OptimizationModel):
+    target_hours: float = Field(gt=0)
+    before_coverage_rate: float = Field(ge=0, le=1)
+    after_coverage_rate: float = Field(ge=0, le=1)
+    coverage_rate_delta: float = Field(ge=-1, le=1)
+
+
+class CityAssignmentChange(OptimizationModel):
+    demand_city_id: str = Field(min_length=1, max_length=128)
+    before_warehouse_id: str | None = None
+    after_warehouse_id: str | None = None
+    affected: bool
+    reassigned: bool
+    duration_hours_delta: float | None = None
+    cost_per_unit_delta: float | None = None
+
+
+class AssignmentComparison(OptimizationModel):
+    schema_version: Literal["network_assignment_comparison.v1"] = (
+        "network_assignment_comparison.v1"
+    )
+    requested_service_targets: list[float]
+    service: list[ServiceComparison]
+    before_cost: float | None = Field(default=None, ge=0)
+    after_cost: float | None = Field(default=None, ge=0)
+    cost_delta: float | None = None
+    selected_warehouse_ids: list[str]
+    removed_warehouse_ids: list[str]
+    affected_city_ids: list[str]
+    reassigned_city_ids: list[str]
+    city_changes: list[CityAssignmentChange]
+
+
+class FacilityLocationResult(OptimizationModel):
+    schema_version: Literal["facility_location_result.v1"] = "facility_location_result.v1"
+    objective_value: float = Field(ge=0)
+    active_warehouse_ids: list[str]
+    opened_candidate_ids: list[str]
+    closed_existing_ids: list[str]
+    assignment: AssignmentResult
+
+
 class PMedianRequest(OptimizationModel):
     number_to_open: int = Field(ge=0)
-    fixed_existing_ids: list[str] = Field(default_factory=list)
-    optional_existing_ids: list[str] = Field(default_factory=list)
+    fixed_existing_ids: list[str]
+    optional_existing_ids: list[str]
     time_limit_seconds: float = Field(default=30, gt=0, le=300)
 
 
 class PMedianSolution(OptimizationModel):
-    schema_version: Literal["facility_location_solution.v2"] = "facility_location_solution.v2"
+    schema_version: Literal["facility_location_solution.v3"] = "facility_location_solution.v3"
     status: Literal["optimal", "feasible", "timeout", "infeasible", "unavailable"]
-    selected_warehouse_ids: list[str]
+    active_warehouse_ids: list[str]
+    opened_candidate_ids: list[str]
+    closed_existing_ids: list[str]
     assignment: AssignmentResult | None = None
     objective_value: float | None = None
     best_bound: float | None = None

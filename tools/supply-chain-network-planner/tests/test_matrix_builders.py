@@ -5,6 +5,7 @@ from _network_fixtures import network_case
 
 from supply_chain_planner.matrix import (
     build_haversine_route_matrix,
+    build_route_matrix_with_reuse,
     plan_route_matrix,
     register_navigation_route_matrix,
     validate_route_matrix,
@@ -17,7 +18,7 @@ def test_haversine_plan_and_matrix_use_explicit_parameters() -> None:
     plan = plan_route_matrix(case.demand, case.warehouses, "haversine", 1.2, 40)
     matrix = build_haversine_route_matrix(case.demand, case.warehouses, 1.2, 40)
 
-    assert plan.route_count == 6
+    assert plan.route_count == 8
     assert plan.estimated_billable_calls == 0
     assert len(matrix.rows) == plan.route_count
     assert matrix.rows[0].duration_hours > 0
@@ -36,14 +37,144 @@ def test_navigation_registration_reports_missing_routes_without_filling_them() -
         RouteMatrixRow(
             origin_id="center-a",
             destination_id="city-a",
+            layer="last_mile",
             distance_km=1,
             duration_hours=0.1,
             method="navigation",
+            tool_version="navigation-provider.v1",
+            origin_longitude=106.8,
+            origin_latitude=-6.2,
+            destination_longitude=106.8,
+            destination_latitude=-6.2,
+            navigation_provider="test-provider",
+            navigation_profile="truck",
         )
     ]
     matrix = register_navigation_route_matrix(case.demand, case.warehouses, rows)
     validation = validate_route_matrix(case.demand, case.warehouses, matrix)
 
-    assert len(matrix.missing_routes) == 5
+    assert len(matrix.missing_routes) == 7
     assert validation["valid"] is False
     assert validation["missing_routes"] == matrix.missing_routes
+
+    with pytest.raises(ValueError, match="navigation_route_duplicate_pair"):
+        register_navigation_route_matrix(case.demand, case.warehouses, [rows[0], rows[0]])
+    with pytest.raises(ValueError, match="navigation_route_unknown_pair"):
+        register_navigation_route_matrix(
+            case.demand,
+            case.warehouses,
+            [rows[0].model_copy(update={"destination_id": "not-required"})],
+        )
+
+
+def test_route_reuse_is_exact_per_pair_and_ignores_unrelated_prior_rows() -> None:
+    case = network_case()
+    original = build_haversine_route_matrix(case.demand, case.warehouses, 1.2, 40)
+    exact = original.rows[0]
+    stale_version = original.rows[1].model_copy(update={"tool_version": "haversine.v0"})
+    stale_coordinates = original.rows[2].model_copy(
+        update={"destination_longitude": original.rows[2].destination_longitude + 0.01}
+    )
+    stale_distance = original.rows[3].model_copy(
+        update={"distance_km": original.rows[3].distance_km + 1}
+    )
+    unrelated = original.rows[4].model_copy(
+        update={"origin_id": "not-required", "destination_id": "also-not-required"}
+    )
+
+    rebuilt = build_route_matrix_with_reuse(
+        case.demand,
+        case.warehouses,
+        [exact, stale_version, stale_coordinates, stale_distance, unrelated],
+        detour_coefficient=1.2,
+        average_speed_kph=40,
+    )
+
+    assert rebuilt.validation["reused_pair_count"] == 1
+    assert rebuilt.validation["stale_pair_count"] == 3
+    assert rebuilt.validation["ignored_prior_row_count"] == 1
+    assert rebuilt.validation["computed_pair_count"] == 7
+    assert exact in rebuilt.rows
+    refreshed = next(
+        row
+        for row in rebuilt.rows
+        if (row.origin_id, row.destination_id, row.layer)
+        == (stale_version.origin_id, stale_version.destination_id, stale_version.layer)
+    )
+    assert refreshed.tool_version == "haversine.v1"
+
+
+def test_crossdock_requires_explicit_upstream_center() -> None:
+    case = network_case()
+    warehouses = [
+        warehouse.model_copy(update={"upstream_center_id": None})
+        if warehouse.warehouse_id == "cross-b"
+        else warehouse
+        for warehouse in case.warehouses
+    ]
+
+    with pytest.raises(ValueError, match="warehouse_upstream_center_required:cross-b"):
+        build_haversine_route_matrix(case.demand, warehouses, 1.2, 40)
+
+
+def test_missing_coordinates_are_reported_as_layered_pairs() -> None:
+    case = network_case()
+    demand = [
+        city.model_copy(update={"longitude": None}) if city.city_id == "city-a" else city
+        for city in case.demand
+    ]
+
+    matrix = build_haversine_route_matrix(demand, case.warehouses, 1.2, 40)
+
+    assert matrix.validation["missing_pair_count"] == 3
+    assert ("center-a", "city-a", "last_mile") in matrix.missing_routes
+    assert ("cross-b", "city-a", "last_mile") in matrix.missing_routes
+    assert ("candidate-c", "city-a", "last_mile") in matrix.missing_routes
+
+
+def test_conflicting_prior_route_rows_are_rejected_per_pair() -> None:
+    case = network_case()
+    original = build_haversine_route_matrix(case.demand, case.warehouses, 1.2, 40)
+
+    with pytest.raises(ValueError, match="route_fact_duplicate_pair"):
+        build_route_matrix_with_reuse(
+            case.demand,
+            case.warehouses,
+            [original.rows[0], original.rows[0]],
+            1.2,
+            40,
+        )
+
+
+def test_haversine_builder_does_not_mislabel_navigation_prior_fact() -> None:
+    case = network_case()
+    original = build_haversine_route_matrix(case.demand, case.warehouses, 1.2, 40)
+    navigation = original.rows[0].model_copy(
+        update={
+            "method": "navigation",
+            "tool_version": "navigation-provider.v1",
+            "detour_coefficient": None,
+            "average_speed_kph": None,
+            "navigation_provider": "test-provider",
+            "navigation_profile": "truck",
+        }
+    )
+
+    rebuilt = build_route_matrix_with_reuse(
+        case.demand,
+        case.warehouses,
+        [navigation],
+        1.2,
+        40,
+    )
+
+    assert rebuilt.method == "haversine"
+    assert rebuilt.validation["reused_pair_count"] == 0
+    assert rebuilt.validation["stale_pair_count"] == 1
+    matching = next(
+        row
+        for row in rebuilt.rows
+        if (row.origin_id, row.destination_id, row.layer)
+        == (navigation.origin_id, navigation.destination_id, navigation.layer)
+    )
+    assert matching.method == "haversine"
