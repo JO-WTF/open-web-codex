@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from _network_fixtures import network_case
+from _network_fixtures import indonesia_network_fixture, network_case
 
 from supply_chain_planner.matrix import (
     build_haversine_route_matrix,
@@ -123,6 +123,38 @@ def test_route_reuse_is_exact_per_pair_and_ignores_unrelated_prior_rows() -> Non
         == (stale_version.origin_id, stale_version.destination_id, stale_version.layer)
     )
     assert refreshed.tool_version == "haversine.v1"
+
+
+def test_indonesia_route_reuse_only_computes_two_removed_round_sensitive_pairs() -> None:
+    fixture = indonesia_network_fixture()
+    original = build_haversine_route_matrix(
+        fixture.demand, fixture.warehouses, 1.2, 42
+    )
+    removed = {
+        next(
+            (row.origin_id, row.destination_id, row.layer)
+            for row in original.rows
+            if row.layer == layer
+        )
+        for layer in ("last_mile", "linehaul")
+    }
+
+    rebuilt = build_route_matrix_with_reuse(
+        fixture.demand,
+        fixture.warehouses,
+        [
+            row
+            for row in original.rows
+            if (row.origin_id, row.destination_id, row.layer) not in removed
+        ],
+        1.2,
+        42,
+    )
+
+    assert len(original.rows) == 1168
+    assert rebuilt.validation["reused_pair_count"] == 1166
+    assert rebuilt.validation["computed_pair_count"] == 2
+    assert rebuilt.validation["stale_pair_count"] == 0
 
 
 def test_crossdock_requires_explicit_upstream_center() -> None:

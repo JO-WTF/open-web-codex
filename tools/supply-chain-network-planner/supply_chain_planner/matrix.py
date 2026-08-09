@@ -187,15 +187,15 @@ def _is_exact_haversine_fact(
         or destination.latitude is None
     ):
         return False
-    expected_distance = round(
+    raw_distance = (
         haversine_km(
             (origin.longitude, origin.latitude),
             (destination.longitude, destination.latitude),
         )
-        * detour_coefficient,
-        6,
+        * detour_coefficient
     )
-    expected_duration = round(expected_distance / average_speed_kph, 6)
+    expected_distance = round(raw_distance, 6)
+    expected_duration = round(raw_distance / average_speed_kph, 6)
     expected_values = (
         origin.longitude,
         origin.latitude,
