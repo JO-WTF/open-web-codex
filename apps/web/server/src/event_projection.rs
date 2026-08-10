@@ -4,7 +4,9 @@ use sqlx::PgPool;
 use sqlx::Row;
 use uuid::Uuid;
 
-use crate::final_artifacts::{final_artifact_candidate, FinalArtifactCandidate};
+use crate::final_artifacts::{
+    artifact_delivery_projection, final_artifact_candidate, FinalArtifactCandidate,
+};
 use crate::inline_maps::{self, InlineMapCandidate};
 
 const PROJECTION_VERSION: i16 = 1;
@@ -49,6 +51,7 @@ struct RegisteredArtifact {
     mime_type: String,
     expected_size: Option<i64>,
     state: String,
+    failure_code: Option<String>,
 }
 
 pub struct LiveProjection {
@@ -84,7 +87,7 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
     let mut pending_artifact_ids = Vec::new();
     let artifact_result = async {
         let registered = register_artifacts(&mut transaction, &context, &event).await?;
-        project_registered_artifacts(&mut event.payload, &registered);
+        project_registered_artifacts(&mut event.payload, &registered)?;
         if let (Some(candidate), Some(turn_id), Some(item_id)) = (
             event.inline_map.as_ref(),
             event.turn_id.as_deref(),
@@ -2119,6 +2122,7 @@ async fn register_artifacts(
             "SELECT artifact.id, artifact.profile_id, artifact.workspace_id,
                     artifact.artifact_schema, artifact.display_name, artifact.mime_type,
                     artifact.source_relative_path, artifact.expected_size, artifact.state,
+                    artifact.failure_code,
                     provenance.producer_task_id
              FROM artifact_provenance provenance
              JOIN artifacts artifact ON artifact.id = provenance.artifact_id
@@ -2137,7 +2141,7 @@ async fn register_artifacts(
         .fetch_optional(&mut **transaction)
         .await
         .map_err(|error| format!("Artifact provenance lookup error: {error}"))?;
-        let (artifact_id, state) = if let Some(existing) = existing_for_item {
+        let (artifact_id, state, failure_code) = if let Some(existing) = existing_for_item {
             if existing.get::<Uuid, _>("profile_id") != context.profile_id
                 || existing.get::<Uuid, _>("workspace_id") != context.workspace_id
                 || existing.get::<Uuid, _>("producer_task_id") != context.task_id
@@ -2155,6 +2159,7 @@ async fn register_artifacts(
             (
                 existing.get::<Uuid, _>("id"),
                 existing.get::<String, _>("state"),
+                existing.get::<Option<String>, _>("failure_code"),
             )
         } else {
             let inserted = sqlx::query(
@@ -2164,7 +2169,7 @@ async fn register_artifacts(
              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
              ON CONFLICT (organization_id, workspace_id, source_relative_path)
              DO NOTHING
-             RETURNING id, state",
+             RETURNING id, state, failure_code",
             )
             .bind(context.organization_id)
             .bind(context.profile_id)
@@ -2181,11 +2186,12 @@ async fn register_artifacts(
                 (
                     inserted.get::<Uuid, _>("id"),
                     inserted.get::<String, _>("state"),
+                    inserted.get::<Option<String>, _>("failure_code"),
                 )
             } else {
                 let existing = sqlx::query(
                     "SELECT id, profile_id, artifact_schema, display_name, mime_type,
-                            expected_size, state
+                            expected_size, state, failure_code
                      FROM artifacts
                      WHERE organization_id = $1 AND workspace_id = $2
                        AND source_relative_path = $3",
@@ -2210,6 +2216,7 @@ async fn register_artifacts(
                 (
                     existing.get::<Uuid, _>("id"),
                     existing.get::<String, _>("state"),
+                    existing.get::<Option<String>, _>("failure_code"),
                 )
             }
         };
@@ -2271,29 +2278,37 @@ async fn register_artifacts(
             mime_type: artifact.mime_type.clone(),
             expected_size: Some(expected_size),
             state,
+            failure_code,
         });
     }
     Ok(registered)
 }
 
-fn project_registered_artifacts(payload: &mut Value, artifacts: &[RegisteredArtifact]) {
+fn project_registered_artifacts(
+    payload: &mut Value,
+    artifacts: &[RegisteredArtifact],
+) -> Result<(), String> {
     if artifacts.is_empty() {
-        return;
+        return Ok(());
     }
     let projected = artifacts
         .iter()
         .map(|artifact| {
-            json!({
-                "artifactId": artifact.id,
-                "schema": artifact.artifact_schema,
-                "displayName": artifact.display_name,
-                "mimeType": artifact.mime_type,
-                "expectedSize": artifact.expected_size,
-                "state": artifact.state,
-                "url": format!("/api/artifacts/{}/content", artifact.id),
-            })
+            let expected_size = artifact
+                .expected_size
+                .ok_or_else(|| "Artifact expected size is missing".to_string())?;
+            artifact_delivery_projection(
+                artifact.id,
+                &artifact.artifact_schema,
+                &artifact.display_name,
+                &artifact.mime_type,
+                expected_size,
+                None,
+                &artifact.state,
+                artifact.failure_code.as_deref(),
+            )
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
     if let Some(data) = payload.pointer_mut("/data").and_then(Value::as_object_mut) {
         if let Some(structured) = data
             .get_mut("result")
@@ -2305,6 +2320,7 @@ fn project_registered_artifacts(payload: &mut Value, artifacts: &[RegisteredArti
         }
         data.insert("artifacts".to_string(), Value::Array(projected));
     }
+    Ok(())
 }
 
 pub(crate) fn sanitize_value(value: &Value, key: &str) -> Value {

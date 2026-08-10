@@ -1,4 +1,6 @@
-use serde_json::{Map, Value};
+use open_web_codex_platform_contracts::{ArtifactFailureSummary, ArtifactState};
+use serde_json::{json, Map, Value};
+use uuid::Uuid;
 
 const MAX_FINAL_ARTIFACT_BYTES: u64 = 100 * 1024 * 1024;
 
@@ -135,10 +137,60 @@ pub(crate) fn validate_materialized_bundle(
     Ok(())
 }
 
+/// Build the safe browser/event projection for one durable Artifact.
+///
+/// The persisted failure code is never copied through. URLs are capabilities
+/// and are intentionally emitted only for a ready Artifact; a failed Artifact
+/// receives the same fixed allowlisted failure summary used by the REST DTO.
+pub(crate) fn artifact_delivery_projection(
+    artifact_id: Uuid,
+    schema: &str,
+    display_name: &str,
+    mime_type: &str,
+    expected_size: i64,
+    byte_size: Option<i64>,
+    persisted_state: &str,
+    failure_code: Option<&str>,
+) -> Result<Value, String> {
+    let state = ArtifactState::from_persisted(persisted_state)
+        .ok_or_else(|| "Artifact state is invalid".to_string())?;
+    let mut value = json!({
+        "artifactId": artifact_id,
+        "schema": schema,
+        "displayName": display_name,
+        "mimeType": mime_type,
+        "expectedSize": expected_size,
+        "byteSize": byte_size,
+        "state": state,
+    });
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| "Artifact projection is not an object".to_string())?;
+    if state.is_ready() {
+        let content_url = format!("/api/artifacts/{artifact_id}/content");
+        // The live item/event projection keeps its existing exact `url`
+        // contract. Typed content/download capabilities belong to the durable
+        // ArtifactSummary DTO, so this event does not advertise a second URL
+        // shape.
+        object.insert("url".to_string(), json!(content_url));
+    }
+    if matches!(state, ArtifactState::Failed) {
+        let failure_code =
+            failure_code.ok_or_else(|| "Failed Artifact has no failure code".to_string())?;
+        let failure = ArtifactFailureSummary::from_persisted(failure_code);
+        object.insert("failure".to_string(), json!(failure));
+    }
+    Ok(value)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{final_artifact_candidate, validate_materialized_bundle};
+    use super::{
+        artifact_delivery_projection, final_artifact_candidate, validate_materialized_bundle,
+    };
+    use open_web_codex_platform_contracts::ArtifactFailureCode;
     use serde_json::json;
+    use uuid::Uuid;
 
     #[test]
     fn accepts_only_exact_final_tool_contracts() {
@@ -255,5 +307,91 @@ mod tests {
                 Err("artifact_bundle_contract_mismatch")
             );
         }
+    }
+
+    #[test]
+    fn projects_only_safe_state_capabilities_and_failure_summary() {
+        let artifact_id = Uuid::nil();
+        let pending = artifact_delivery_projection(
+            artifact_id,
+            "network_planning_report_bundle.v1",
+            "Warehouse network planning report",
+            "application/json",
+            128,
+            None,
+            "pending",
+            None,
+        )
+        .unwrap();
+        assert_eq!(pending["state"], "pending");
+        assert!(pending.get("url").is_none());
+        assert!(pending.get("failure").is_none());
+
+        let materializing = artifact_delivery_projection(
+            artifact_id,
+            "network_planning_report_bundle.v1",
+            "Warehouse network planning report",
+            "application/json",
+            128,
+            None,
+            "materializing",
+            None,
+        )
+        .unwrap();
+        assert_eq!(materializing["state"], "materializing");
+        assert!(materializing.get("url").is_none());
+
+        let ready = artifact_delivery_projection(
+            artifact_id,
+            "network_planning_report_bundle.v1",
+            "Warehouse network planning report",
+            "application/json",
+            128,
+            Some(128),
+            "ready",
+            None,
+        )
+        .unwrap();
+        assert_eq!(ready["state"], "ready");
+        assert_eq!(
+            ready["url"],
+            "/api/artifacts/00000000-0000-0000-0000-000000000000/content"
+        );
+        assert!(ready.get("failure").is_none());
+
+        let failed = artifact_delivery_projection(
+            artifact_id,
+            "network_planning_report_bundle.v1",
+            "Warehouse network planning report",
+            "application/json",
+            128,
+            None,
+            "failed",
+            Some("provider/<credential-fragment>"),
+        )
+        .unwrap();
+        assert_eq!(failed["state"], "failed");
+        assert!(failed.get("url").is_none());
+        assert_eq!(failed["failure"]["code"], "unknown");
+        assert_eq!(
+            failed["failure"]["message"],
+            ArtifactFailureCode::Unknown.summary()
+        );
+        assert!(!failed.to_string().contains("credential-fragment"));
+    }
+
+    #[test]
+    fn rejects_unknown_artifact_state_instead_of_downgrading_it() {
+        assert!(artifact_delivery_projection(
+            Uuid::nil(),
+            "network_planning_report_bundle.v1",
+            "Warehouse network planning report",
+            "application/json",
+            128,
+            None,
+            "future-state",
+            None,
+        )
+        .is_err());
     }
 }

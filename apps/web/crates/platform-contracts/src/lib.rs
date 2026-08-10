@@ -533,6 +533,103 @@ pub struct RuntimeAgentExecution {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Durable Artifact lifecycle owned by the Platform.
+///
+/// This is deliberately narrower than a Runtime or MCP lifecycle: only final
+/// user deliverables may enter it, and an intermediate Resource is never an
+/// Artifact state.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactState {
+    Pending,
+    Materializing,
+    Ready,
+    Failed,
+}
+
+impl ArtifactState {
+    /// Parse the constrained value persisted by the `artifacts.state` check.
+    /// Invalid persisted data is rejected by the owning Server projection
+    /// rather than being silently presented as a different state.
+    pub fn from_persisted(value: &str) -> Option<Self> {
+        match value {
+            "pending" => Some(Self::Pending),
+            "materializing" => Some(Self::Materializing),
+            "ready" => Some(Self::Ready),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+
+    pub fn is_ready(self) -> bool {
+        matches!(self, Self::Ready)
+    }
+}
+
+/// Allowlisted, browser-safe materialization failure classification.
+///
+/// The persisted value is an internal diagnostic code. Only this enum and its
+/// fixed summary may cross the browser boundary; unknown or future values are
+/// intentionally collapsed to `unknown`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactFailureCode {
+    SizeLimit,
+    WorkspaceReadFailed,
+    SizeMismatch,
+    ArtifactSchemaUnsupported,
+    ArtifactJsonInvalid,
+    ArtifactBundleInvalid,
+    ArtifactBundleContractMismatch,
+    Unknown,
+}
+
+impl ArtifactFailureCode {
+    pub fn from_persisted(value: &str) -> Self {
+        match value {
+            "size_limit" => Self::SizeLimit,
+            "workspace_read_failed" => Self::WorkspaceReadFailed,
+            "size_mismatch" => Self::SizeMismatch,
+            "artifact_schema_unsupported" => Self::ArtifactSchemaUnsupported,
+            "artifact_json_invalid" => Self::ArtifactJsonInvalid,
+            "artifact_bundle_invalid" => Self::ArtifactBundleInvalid,
+            "artifact_bundle_contract_mismatch" => Self::ArtifactBundleContractMismatch,
+            _ => Self::Unknown,
+        }
+    }
+
+    pub fn summary(self) -> &'static str {
+        match self {
+            Self::SizeLimit => "Artifact exceeds the server safety limit",
+            Self::WorkspaceReadFailed => "Artifact source could not be read",
+            Self::SizeMismatch => "Artifact size did not match its declaration",
+            Self::ArtifactSchemaUnsupported => "Artifact schema is unsupported",
+            Self::ArtifactJsonInvalid => "Artifact content is not valid JSON",
+            Self::ArtifactBundleInvalid => "Artifact bundle is invalid",
+            Self::ArtifactBundleContractMismatch => {
+                "Artifact content does not match its declared contract"
+            }
+            Self::Unknown => "Artifact materialization failed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ArtifactFailureSummary {
+    pub code: ArtifactFailureCode,
+    pub message: String,
+}
+
+impl ArtifactFailureSummary {
+    pub fn from_persisted(value: &str) -> Self {
+        let code = ArtifactFailureCode::from_persisted(value);
+        Self {
+            message: code.summary().to_string(),
+            code,
+        }
+    }
+}
+
 /// Browser-safe view of one independently authorized, durable Artifact.
 ///
 /// Runtime MCP server names and Resource URIs remain internal. Producer
@@ -547,7 +644,12 @@ pub struct ArtifactSummary {
     pub expected_size: Option<i64>,
     pub byte_size: Option<i64>,
     pub content_sha256: Option<String>,
-    pub state: String,
+    pub state: ArtifactState,
+    pub failure: Option<ArtifactFailureSummary>,
+    /// Present only while the Artifact is ready. These are same-origin API
+    /// capabilities, not storage paths or provider URLs.
+    pub content_url: Option<String>,
+    pub download_url: Option<String>,
     pub producer_run_id: Uuid,
     pub producer_thread_id: String,
     pub producer_turn_id: String,

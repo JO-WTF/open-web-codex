@@ -218,6 +218,10 @@ pub fn router(
             "/artifacts/{id}/content",
             axum::routing::get(artifacts::read_content),
         )
+        .route(
+            "/artifacts/{id}/download",
+            axum::routing::get(artifacts::download),
+        )
         .route("/runs/{id}/thread", axum::routing::get(threads::read))
         .route(
             "/runs/{id}/inline-maps/{card_ref}/sources/{source_id}",

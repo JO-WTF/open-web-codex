@@ -1,12 +1,15 @@
 use std::sync::Arc;
 
 use axum::{
+    body::Body,
     extract::{Path, State},
-    http::StatusCode,
+    http::{header, HeaderName, HeaderValue, Response, StatusCode},
     Json,
 };
 use open_web_codex_git_runtime::GitRuntime;
-use open_web_codex_platform_contracts::{error::PlatformError, ArtifactSummary, RunEvent};
+use open_web_codex_platform_contracts::{
+    error::PlatformError, ArtifactFailureSummary, ArtifactState, ArtifactSummary, RunEvent,
+};
 use open_web_codex_platform_store::{AppState, LiveEvent};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -15,7 +18,7 @@ use tokio::sync::broadcast::Sender;
 use uuid::Uuid;
 
 use crate::event_projection::LiveProjection;
-use crate::final_artifacts::validate_materialized_bundle;
+use crate::final_artifacts::{artifact_delivery_projection, validate_materialized_bundle};
 use crate::middleware::auth::AuthenticatedUser;
 
 type ApiError = (StatusCode, Json<PlatformError>);
@@ -48,11 +51,14 @@ pub async fn list_for_task(
         "SELECT artifact.id, artifact_grant.task_id, artifact.artifact_schema,
                 artifact.display_name, artifact.mime_type, artifact.expected_size,
                 artifact.byte_size, artifact.content_sha256, artifact.state,
+                artifact.failure_code,
                 artifact.created_at, artifact.updated_at,
                 provenance.producer_run_id, provenance.producer_thread_id,
                 provenance.producer_turn_id, provenance.producer_item_id,
                 projection.agent_role AS producer_agent_role
          FROM artifact_task_grants artifact_grant
+         JOIN tasks task ON task.id = artifact_grant.task_id
+           AND task.organization_id = artifact_grant.organization_id
          JOIN artifacts artifact ON artifact.id = artifact_grant.artifact_id
            AND artifact.organization_id = artifact_grant.organization_id
          JOIN LATERAL (
@@ -73,7 +79,6 @@ pub async fn list_for_task(
          WHERE artifact_grant.task_id = $1
            AND artifact_grant.organization_id = $2
            AND artifact_grant.permission = 'read'
-           AND artifact.state = 'ready'
          ORDER BY artifact.created_at, artifact.id",
     )
     .bind(task_id)
@@ -82,7 +87,11 @@ pub async fn list_for_task(
     .await
     .map_err(database_error)?;
 
-    Ok(Json(rows.iter().map(artifact_summary).collect()))
+    let summaries = rows
+        .iter()
+        .map(artifact_summary)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Json(summaries))
 }
 
 pub async fn get(
@@ -93,7 +102,7 @@ pub async fn get(
     let row = authorized_artifact_row(&state.db, auth.organization_id, artifact_id)
         .await?
         .ok_or_else(not_found)?;
-    Ok(Json(artifact_summary(&row)))
+    Ok(Json(artifact_summary(&row)?))
 }
 
 pub async fn read_content(
@@ -101,6 +110,72 @@ pub async fn read_content(
     auth: AuthenticatedUser,
     Path(artifact_id): Path<Uuid>,
 ) -> ApiResult<Value> {
+    let content = authorized_ready_content(&state.db, auth.organization_id, artifact_id).await?;
+    let value = serde_json::from_slice(&content.bytes)
+        .map_err(|_| bad_gateway("Artifact did not contain valid JSON"))?;
+    Ok(Json(value))
+}
+
+pub async fn download(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(artifact_id): Path<Uuid>,
+) -> Result<Response<Body>, ApiError> {
+    let content = authorized_ready_content(&state.db, auth.organization_id, artifact_id).await?;
+    let content_type = match content.mime_type.as_str() {
+        "application/json" => HeaderValue::from_static("application/json"),
+        "application/geo+json" => HeaderValue::from_static("application/geo+json"),
+        _ => return Err(bad_gateway("Artifact content type is unsupported")),
+    };
+    let content_length = HeaderValue::from_str(&content.bytes.len().to_string()).map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PlatformError::internal(
+                "Artifact download response could not be created",
+            )),
+        )
+    })?;
+    let content_disposition = HeaderValue::from_str(&format!(
+        "attachment; filename=\"artifact-{artifact_id}.json\""
+    ))
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PlatformError::internal(
+                "Artifact download filename could not be created",
+            )),
+        )
+    })?;
+    let mut response = Response::new(Body::from(content.bytes));
+    let headers = response.headers_mut();
+    headers.insert(header::CONTENT_TYPE, content_type);
+    headers.insert(header::CONTENT_LENGTH, content_length);
+    headers.insert(header::CONTENT_DISPOSITION, content_disposition);
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        HeaderName::from_static("cross-origin-resource-policy"),
+        HeaderValue::from_static("same-origin"),
+    );
+    Ok(response)
+}
+
+struct AuthorizedArtifactContent {
+    mime_type: String,
+    bytes: Vec<u8>,
+}
+
+async fn authorized_ready_content(
+    db: &PgPool,
+    organization_id: Uuid,
+    artifact_id: Uuid,
+) -> Result<AuthorizedArtifactContent, ApiError> {
     let row = sqlx::query(
         "SELECT artifact.mime_type, artifact.state, artifact.content
          FROM artifacts artifact
@@ -117,32 +192,30 @@ pub async fn read_content(
            )",
     )
     .bind(artifact_id)
-    .bind(auth.organization_id)
-    .fetch_optional(&state.db)
+    .bind(organization_id)
+    .fetch_optional(db)
     .await
     .map_err(database_error)?
     .ok_or_else(not_found)?;
 
-    let state: String = row.get("state");
-    if state != "ready" {
+    let persisted_state: String = row.get("state");
+    let state = ArtifactState::from_persisted(&persisted_state)
+        .ok_or_else(|| database_projection_error("Artifact state is invalid"))?;
+    if !state.is_ready() {
         return Err((
             StatusCode::CONFLICT,
-            Json(PlatformError::bad_request(format!(
-                "Artifact content is not ready (state: {state})"
-            ))),
+            Json(PlatformError::bad_request("Artifact content is not ready")),
         ));
     }
     let mime_type: String = row.get("mime_type");
     if !supported_json_mime(&mime_type) {
         return Err(bad_gateway("Artifact content type is unsupported"));
     }
-    let content: Vec<u8> = row.get("content");
-    if content.len() > MAX_ARTIFACT_BYTES {
+    let bytes: Vec<u8> = row.get("content");
+    if bytes.len() > MAX_ARTIFACT_BYTES {
         return Err(payload_too_large());
     }
-    let value = serde_json::from_slice(&content)
-        .map_err(|_| bad_gateway("Artifact did not contain valid JSON"))?;
-    Ok(Json(value))
+    Ok(AuthorizedArtifactContent { mime_type, bytes })
 }
 
 pub(crate) async fn recover_and_materialize_pending(
@@ -352,22 +425,22 @@ async fn finish_materialization(
     let thread_id: String = row.get("producer_thread_id");
     let turn_id: String = row.get("producer_turn_id");
     let item_id: String = row.get("producer_item_id");
+    let artifact = artifact_delivery_projection(
+        artifact_id,
+        &row.get::<String, _>("artifact_schema"),
+        &row.get::<String, _>("display_name"),
+        &row.get::<String, _>("mime_type"),
+        row.get::<i64, _>("expected_size"),
+        row.get::<Option<i64>, _>("byte_size"),
+        &row.get::<String, _>("state"),
+        row.get::<Option<String>, _>("failure_code").as_deref(),
+    )?;
     let payload = serde_json::json!({
         "schemaVersion": 1,
         "itemType": "platformArtifactChanged",
         "data": {
             "sourceType": "platform/artifact/changed",
-            "artifact": {
-                "artifactId": artifact_id,
-                "schema": row.get::<String, _>("artifact_schema"),
-                "displayName": row.get::<String, _>("display_name"),
-                "mimeType": row.get::<String, _>("mime_type"),
-                "expectedSize": row.get::<i64, _>("expected_size"),
-                "byteSize": row.get::<Option<i64>, _>("byte_size"),
-                "state": row.get::<String, _>("state"),
-                "failureCode": row.get::<Option<String>, _>("failure_code"),
-                "url": format!("/api/artifacts/{artifact_id}/content"),
-            }
+            "artifact": artifact,
         }
     });
     let persisted = sqlx::query(
@@ -422,6 +495,7 @@ async fn authorized_artifact_row(
         "SELECT artifact.id, provenance.task_id, artifact.artifact_schema,
                 artifact.display_name, artifact.mime_type, artifact.expected_size,
                 artifact.byte_size, artifact.content_sha256, artifact.state,
+                artifact.failure_code,
                 artifact.created_at, artifact.updated_at,
                 provenance.producer_run_id, provenance.producer_thread_id,
                 provenance.producer_turn_id, provenance.producer_item_id,
@@ -432,6 +506,8 @@ async fn authorized_artifact_row(
                     provenance.producer_thread_id, provenance.producer_turn_id,
                     provenance.producer_item_id
              FROM artifact_task_grants artifact_grant
+             JOIN tasks task ON task.id = artifact_grant.task_id
+              AND task.organization_id = artifact_grant.organization_id
              JOIN artifact_provenance provenance
                ON provenance.artifact_id = artifact_grant.artifact_id
               AND provenance.organization_id = artifact_grant.organization_id
@@ -450,8 +526,7 @@ async fn authorized_artifact_row(
           AND projection.root_run_id = provenance.producer_run_id
           AND projection.thread_id = provenance.producer_thread_id
          WHERE artifact.id = $1
-           AND artifact.organization_id = $2
-           AND artifact.state = 'ready'",
+           AND artifact.organization_id = $2",
     )
     .bind(artifact_id)
     .bind(organization_id)
@@ -460,9 +535,27 @@ async fn authorized_artifact_row(
     .map_err(database_error)
 }
 
-fn artifact_summary(row: &sqlx::postgres::PgRow) -> ArtifactSummary {
-    ArtifactSummary {
-        id: row.get("id"),
+fn artifact_summary(row: &sqlx::postgres::PgRow) -> Result<ArtifactSummary, ApiError> {
+    let id: Uuid = row.get("id");
+    let persisted_state: String = row.get("state");
+    let state = ArtifactState::from_persisted(&persisted_state)
+        .ok_or_else(|| database_projection_error("Artifact state is invalid"))?;
+    let failure = if matches!(state, ArtifactState::Failed) {
+        let failure_code: String = row.get("failure_code");
+        Some(ArtifactFailureSummary::from_persisted(&failure_code))
+    } else {
+        None
+    };
+    let (content_url, download_url) = if state.is_ready() {
+        (
+            Some(format!("/api/artifacts/{id}/content")),
+            Some(format!("/api/artifacts/{id}/download")),
+        )
+    } else {
+        (None, None)
+    };
+    Ok(ArtifactSummary {
+        id,
         task_id: row.get("task_id"),
         artifact_schema: row.get("artifact_schema"),
         display_name: row.get("display_name"),
@@ -470,7 +563,10 @@ fn artifact_summary(row: &sqlx::postgres::PgRow) -> ArtifactSummary {
         expected_size: row.get("expected_size"),
         byte_size: row.get("byte_size"),
         content_sha256: row.get("content_sha256"),
-        state: row.get("state"),
+        state,
+        failure,
+        content_url,
+        download_url,
         producer_run_id: row.get("producer_run_id"),
         producer_thread_id: row.get("producer_thread_id"),
         producer_turn_id: row.get("producer_turn_id"),
@@ -478,7 +574,7 @@ fn artifact_summary(row: &sqlx::postgres::PgRow) -> ArtifactSummary {
         producer_agent_role: row.get("producer_agent_role"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
-    }
+    })
 }
 
 fn supported_json_mime(value: &str) -> bool {
@@ -529,10 +625,18 @@ fn database_error(_error: sqlx::Error) -> ApiError {
     )
 }
 
+fn database_projection_error(message: &str) -> ApiError {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(PlatformError::internal(message)),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{supported_json_mime, validate_downloaded_artifact};
     use crate::middleware::auth::AuthenticatedUser;
+    use axum::http::StatusCode;
     use open_web_codex_git_runtime::{GitRuntime, GitRuntimeConfig};
     use serde_json::{json, Value};
     use sqlx::Row;
@@ -866,14 +970,47 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(pending_list.0.is_empty());
-        assert!(
-            super::authorized_artifact_row(&pool, organization_id, artifact_id)
-                .await
-                .unwrap()
-                .is_none(),
-            "pending Artifact must not be browser-readable"
+        assert_eq!(pending_list.0.len(), 1);
+        assert_eq!(
+            pending_list.0[0].state,
+            open_web_codex_platform_contracts::ArtifactState::Pending
         );
+        assert!(pending_list.0[0].content_url.is_none());
+        assert!(pending_list.0[0].download_url.is_none());
+        assert!(pending_list.0[0].failure.is_none());
+        let pending_detail = super::get(
+            axum::extract::State(app_state.clone()),
+            auth.clone(),
+            axum::extract::Path(artifact_id),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            pending_detail.0.state,
+            open_web_codex_platform_contracts::ArtifactState::Pending
+        );
+        assert!(super::read_content(
+            axum::extract::State(app_state.clone()),
+            auth.clone(),
+            axum::extract::Path(artifact_id),
+        )
+        .await
+        .is_err_and(|error| error.0 == StatusCode::CONFLICT));
+        assert!(super::download(
+            axum::extract::State(app_state.clone()),
+            auth.clone(),
+            axum::extract::Path(artifact_id),
+        )
+        .await
+        .is_err_and(|error| error.0 == StatusCode::CONFLICT));
+        let wrong_task = super::list_for_task(
+            axum::extract::State(app_state.clone()),
+            auth.clone(),
+            axum::extract::Path(Uuid::now_v7()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(wrong_task.0, StatusCode::NOT_FOUND);
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT count(*) FROM artifacts")
                 .fetch_one(&pool)
@@ -939,16 +1076,50 @@ mod tests {
         .unwrap();
         assert_eq!(ready_list.0.len(), 1);
         assert_eq!(ready_list.0[0].id, artifact_id);
+        assert_eq!(
+            ready_list.0[0].state,
+            open_web_codex_platform_contracts::ArtifactState::Ready
+        );
+        let expected_content_url = format!("/api/artifacts/{artifact_id}/content");
+        let expected_download_url = format!("/api/artifacts/{artifact_id}/download");
+        assert_eq!(
+            ready_list.0[0].content_url.as_deref(),
+            Some(expected_content_url.as_str())
+        );
+        assert_eq!(
+            ready_list.0[0].download_url.as_deref(),
+            Some(expected_download_url.as_str())
+        );
         let ready_detail = super::get(
             axum::extract::State(app_state.clone()),
-            auth,
+            auth.clone(),
             axum::extract::Path(artifact_id),
         )
         .await
         .unwrap();
         assert_eq!(ready_detail.0.id, artifact_id);
+        assert_eq!(ready_detail.0.failure, None);
+        let download = super::download(
+            axum::extract::State(app_state.clone()),
+            auth.clone(),
+            axum::extract::Path(artifact_id),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            download.headers().get(axum::http::header::CONTENT_TYPE),
+            Some(&axum::http::HeaderValue::from_static("application/json"))
+        );
+        let expected_disposition = format!("attachment; filename=\"artifact-{artifact_id}.json\"");
+        assert_eq!(
+            download
+                .headers()
+                .get(axum::http::header::CONTENT_DISPOSITION)
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_disposition.as_str())
+        );
         let denied = super::get(
-            axum::extract::State(app_state),
+            axum::extract::State(app_state.clone()),
             authenticated_user(Uuid::now_v7(), Uuid::now_v7()),
             axum::extract::Path(artifact_id),
         )
@@ -998,6 +1169,40 @@ mod tests {
                 .unwrap(),
                 expected_code
             );
+            if item_id == "missing-item" {
+                sqlx::query(
+                    "UPDATE artifacts SET failure_code = 'provider/<credential-fragment>'
+                     WHERE id = $1",
+                )
+                .bind(failed_id)
+                .execute(&pool)
+                .await
+                .unwrap();
+                let failed_detail = super::get(
+                    axum::extract::State(app_state.clone()),
+                    auth.clone(),
+                    axum::extract::Path(failed_id),
+                )
+                .await
+                .unwrap();
+                assert_eq!(
+                    failed_detail.0.failure.as_ref().map(|failure| failure.code),
+                    Some(open_web_codex_platform_contracts::ArtifactFailureCode::Unknown)
+                );
+                assert_eq!(
+                    failed_detail
+                        .0
+                        .failure
+                        .as_ref()
+                        .map(|failure| failure.message.as_str()),
+                    Some("Artifact materialization failed")
+                );
+                assert!(failed_detail.0.content_url.is_none());
+                assert!(failed_detail.0.download_url.is_none());
+                assert!(!serde_json::to_string(&failed_detail.0)
+                    .unwrap()
+                    .contains("credential-fragment"));
+            }
         }
 
         for (item_id, path, bytes, declared_size, expected_code) in [
@@ -1060,6 +1265,18 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+        let restart_detail = super::get(
+            axum::extract::State(app_state.clone()),
+            auth.clone(),
+            axum::extract::Path(restart_id),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            restart_detail.0.state,
+            open_web_codex_platform_contracts::ArtifactState::Materializing
+        );
+        assert!(restart_detail.0.content_url.is_none());
         let (events, mut receiver) = tokio::sync::broadcast::channel(4);
         super::recover_and_materialize_pending(pool.clone(), git_runtime, events).await;
         let recovered: Value =
@@ -1070,5 +1287,17 @@ mod tests {
                 .and_then(Value::as_str),
             Some("ready")
         );
+        let recovered_detail = super::get(
+            axum::extract::State(app_state),
+            auth,
+            axum::extract::Path(restart_id),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            recovered_detail.0.state,
+            open_web_codex_platform_contracts::ArtifactState::Ready
+        );
+        assert!(recovered_detail.0.content_url.is_some());
     }
 }

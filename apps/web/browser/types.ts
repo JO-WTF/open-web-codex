@@ -313,6 +313,23 @@ export type McpFormResponseAction = "accept" | "decline" | "cancel";
 
 export type McpFormContent = Record<string, string | number | boolean | string[]>;
 
+export type ArtifactState = "pending" | "materializing" | "ready" | "failed";
+
+export type ArtifactFailureCode =
+  | "size_limit"
+  | "workspace_read_failed"
+  | "size_mismatch"
+  | "artifact_schema_unsupported"
+  | "artifact_json_invalid"
+  | "artifact_bundle_invalid"
+  | "artifact_bundle_contract_mismatch"
+  | "unknown";
+
+export type ArtifactFailureSummary = {
+  code: ArtifactFailureCode;
+  message: string;
+};
+
 export type ArtifactSummary = {
   id: string;
   task_id: string;
@@ -322,7 +339,10 @@ export type ArtifactSummary = {
   expected_size: number | null;
   byte_size: number | null;
   content_sha256: string | null;
-  state: "pending" | "materializing" | "ready" | "failed";
+  state: ArtifactState;
+  failure: ArtifactFailureSummary | null;
+  content_url: string | null;
+  download_url: string | null;
   producer_run_id: string;
   producer_thread_id: string;
   producer_turn_id: string;
