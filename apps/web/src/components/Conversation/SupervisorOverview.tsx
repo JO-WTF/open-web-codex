@@ -612,7 +612,12 @@ export default function SupervisorOverview({
                           </div>
                           {activity.detail ? (
                             <details className="web-supervisor-activity-detail">
-                              <summary aria-label="Show safe activity detail">Show details</summary>
+                              <summary
+                                role="button"
+                                aria-label="Show safe activity detail"
+                              >
+                                Show details
+                              </summary>
                               <p>{activity.detail}</p>
                             </details>
                           ) : null}

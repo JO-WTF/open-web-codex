@@ -616,6 +616,7 @@ describe("SupervisorOverview", () => {
 
     const summary = container.querySelector("summary") as HTMLElement | null;
     expect(summary).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Show safe activity detail" })).toBeTruthy();
     expect(summary?.getAttribute("aria-label")).toBe("Show safe activity detail");
     expect((summary?.closest("details") as HTMLDetailsElement | null)?.open).toBe(false);
     fireEvent.click(summary as HTMLElement);
