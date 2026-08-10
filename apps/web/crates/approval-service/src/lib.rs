@@ -73,8 +73,34 @@ pub struct ResolvedApproval {
     pub turn_id: Option<String>,
     pub item_id: Option<String>,
     pub request_type: String,
-    pub request_mode: Option<String>,
+    pub request_mode: Option<ResolvedApprovalRequestMode>,
     pub outcome: ApprovalOutcome,
+}
+
+/// The only Runtime request modes that have a browser-facing route contract.
+/// Unknown or malformed values stay server-side and are omitted from the
+/// resolved notification rather than being treated as a display string.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResolvedApprovalRequestMode {
+    Form,
+    Url,
+}
+
+impl ResolvedApprovalRequestMode {
+    pub fn from_runtime(value: Option<&str>) -> Option<Self> {
+        match value {
+            Some("form") => Some(Self::Form),
+            Some("url") => Some(Self::Url),
+            _ => None,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Form => "form",
+            Self::Url => "url",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -697,10 +723,9 @@ impl ApprovalService {
             turn_id,
             item_id,
             request_type,
-            request_mode: request_payload
-                .get("mode")
-                .and_then(Value::as_str)
-                .map(str::to_string),
+            request_mode: ResolvedApprovalRequestMode::from_runtime(
+                request_payload.get("mode").and_then(Value::as_str),
+            ),
             outcome,
         }))
     }
@@ -1118,7 +1143,10 @@ pub fn project_permission_capabilities(
             .get("globScanMaxDepth")
             .filter(|value| !value.is_null())
         {
-            if depth.as_u64().is_none_or(|depth| depth == 0 || depth > 64) {
+            let depth = depth
+                .as_u64()
+                .ok_or(PendingApprovalUnavailableReason::InvalidPermissions)?;
+            if depth == 0 || usize::try_from(depth).is_err() {
                 return Err(PendingApprovalUnavailableReason::InvalidPermissions);
             }
         }
@@ -2151,8 +2179,9 @@ mod tests {
         is_official_file_system_path, mcp_form_audit_metadata, parse_mcp_form_fields,
         pending_approval_attempted_decision, pending_approval_state,
         project_permission_capabilities, resolved_terminal_state, safe_maps_credential_url,
-        validate_mcp_form_response, validate_user_input_answers, ApprovalOutcome, COMMAND_APPROVAL,
-        MCP_ELICITATION_REQUEST, PERMISSIONS_APPROVAL,
+        validate_mcp_form_response, validate_user_input_answers, ApprovalOutcome,
+        ResolvedApprovalRequestMode, COMMAND_APPROVAL, MCP_ELICITATION_REQUEST,
+        PERMISSIONS_APPROVAL,
     };
     use open_web_codex_platform_contracts::{
         ApprovalDecision, McpFormFieldSchema, McpFormResponseAction, PendingApprovalCapability,
@@ -2191,6 +2220,25 @@ mod tests {
         assert_eq!(permissions["scope"], "turn");
         assert_eq!(permissions["permissions"]["network"]["enabled"], true);
         assert_eq!(state, "approved");
+    }
+
+    #[test]
+    fn projects_only_supported_resolved_request_modes() {
+        assert_eq!(
+            ResolvedApprovalRequestMode::from_runtime(Some("form")),
+            Some(ResolvedApprovalRequestMode::Form)
+        );
+        assert_eq!(
+            ResolvedApprovalRequestMode::from_runtime(Some("url")),
+            Some(ResolvedApprovalRequestMode::Url)
+        );
+        for mode in [
+            None,
+            Some("future"),
+            Some("https://example.invalid/token?secret=redacted"),
+        ] {
+            assert_eq!(ResolvedApprovalRequestMode::from_runtime(mode), None);
+        }
     }
 
     #[test]
@@ -2292,7 +2340,7 @@ mod tests {
         let valid = json!({
             "network": {"enabled": true},
             "fileSystem": {
-                "globScanMaxDepth": 4,
+                "globScanMaxDepth": 65,
                 "entries": [
                     {
                         "path": {"type": "path", "path": "/private/server"},
@@ -2360,6 +2408,11 @@ mod tests {
             .unwrap(),
             vec![PendingApprovalCapability::Network]
         );
+        let large_depth = u64::try_from(usize::MAX).unwrap_or(u64::MAX);
+        assert!(project_permission_capabilities(Some(&json!({
+            "fileSystem": {"globScanMaxDepth": large_depth, "read": ["workspace"]}
+        })))
+        .is_ok());
         for path in [
             json!({"type": "path", "path": "/workspace"}),
             json!({"type": "glob_pattern", "pattern": "*.txt"}),
@@ -2431,6 +2484,11 @@ mod tests {
         ] {
             assert!(project_permission_capabilities(Some(&invalid)).is_err());
         }
+        let overflow: Value = serde_json::from_str("18446744073709551616").unwrap();
+        assert!(project_permission_capabilities(Some(&json!({
+            "fileSystem": {"globScanMaxDepth": overflow, "read": ["workspace"]}
+        })))
+        .is_err());
     }
 
     #[test]

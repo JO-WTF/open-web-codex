@@ -522,10 +522,10 @@ fn public_resolved_approval_frame(
         "requestMethod".to_string(),
         serde_json::Value::String(resolved.request_type.clone()),
     );
-    if let Some(request_mode) = &resolved.request_mode {
+    if let Some(request_mode) = resolved.request_mode {
         public_params.insert(
             "requestMode".to_string(),
-            serde_json::Value::String(request_mode.clone()),
+            serde_json::Value::String(request_mode.as_str().to_string()),
         );
     }
     let public = serde_json::json!({
@@ -813,7 +813,9 @@ mod tests {
         import_file_backed_codex_auth_if_missing, public_approval_frame,
         public_resolved_approval_frame, runtime_resolved_request,
     };
-    use open_web_codex_approval_service::{safe_maps_credential_url, ResolvedApproval};
+    use open_web_codex_approval_service::{
+        safe_maps_credential_url, ResolvedApproval, ResolvedApprovalRequestMode,
+    };
     use serde_json::Value;
     use std::fs;
     use tempfile::TempDir;
@@ -971,7 +973,7 @@ mod tests {
 
     #[test]
     fn public_resolution_uses_platform_identity_and_omits_runtime_request_id() {
-        let mut raw = br#"data: {"method":"app-server-event","params":{"workspace_id":"workspace-1","message":{"method":"serverRequest/resolved","params":{"threadId":"runtime-thread","requestId":"runtime-secret-77"}}}}"#.to_vec();
+        let mut raw = br#"data: {"method":"app-server-event","params":{"workspace_id":"workspace-1","message":{"method":"serverRequest/resolved","params":{"threadId":"runtime-thread","requestId":"runtime-secret-77","mode":"https://example.invalid/token?secret=do-not-project"}}}}"#.to_vec();
         raw.extend_from_slice(b"\n\n");
         assert_eq!(
             runtime_resolved_request(&raw).unwrap(),
@@ -990,7 +992,7 @@ mod tests {
                 turn_id: Some("platform-turn".to_string()),
                 item_id: Some("platform-item".to_string()),
                 request_type: "item/commandExecution/requestApproval".to_string(),
-                request_mode: None,
+                request_mode: Some(ResolvedApprovalRequestMode::Url),
                 outcome: open_web_codex_approval_service::ApprovalOutcome::Accepted,
             },
         )
@@ -998,6 +1000,9 @@ mod tests {
         let text = String::from_utf8(projected.clone()).unwrap();
         assert!(!text.contains("runtime-secret-77"));
         assert!(!text.contains("runtime-thread"));
+        assert!(!text.contains("example.invalid"));
+        assert!(!text.contains("token?secret"));
+        assert!(!text.contains("do-not-project"));
 
         let payload = projected
             .strip_prefix(b"data: ")
@@ -1029,6 +1034,10 @@ mod tests {
                 .pointer("/params/message/params/approvalStatus")
                 .unwrap(),
             "accepted"
+        );
+        assert_eq!(
+            value.pointer("/params/message/params/requestMode").unwrap(),
+            "url"
         );
     }
 }
