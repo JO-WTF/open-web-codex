@@ -10,10 +10,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use open_web_codex_platform_contracts::{
-    ProviderCatalog, ProviderCredentialInput, ProviderKind, ProviderModelSummary, ProviderSummary,
-    UpdateProviderModelRequest, UpsertProviderRequest,
+    error::ProviderCatalogFailure, ProviderCatalog, ProviderCredentialInput, ProviderKind,
+    ProviderModelSummary, ProviderSummary, UpdateProviderModelRequest, UpsertProviderRequest,
 };
 use open_web_codex_profile_host::ProfileHost;
+use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use thiserror::Error;
 use tokio::sync::RwLock;
@@ -31,6 +32,51 @@ pub enum ProviderServiceError {
     Runtime(String),
     #[error("Codex returned an invalid Provider response: {0}")]
     InvalidResponse(String),
+    #[error("Codex Provider model catalog request failed: {0:?}")]
+    ProviderCatalogFailure(ProviderCatalogFailure),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelProviderModelsListResponse {
+    result: ModelProviderModelsListResult,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+enum ModelProviderModelsListResult {
+    Success { models: Vec<ProviderModelSummary> },
+    Failure { error: CodexProviderCatalogFailure },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum CodexProviderCatalogFailure {
+    Authentication,
+    NotFound,
+    RateLimited,
+    Upstream,
+    Timeout,
+    Network,
+    InvalidJson,
+    IncompatibleSchema,
+    EmptyCatalog,
+}
+
+impl From<CodexProviderCatalogFailure> for ProviderCatalogFailure {
+    fn from(value: CodexProviderCatalogFailure) -> Self {
+        match value {
+            CodexProviderCatalogFailure::Authentication => Self::Authentication,
+            CodexProviderCatalogFailure::NotFound => Self::NotFound,
+            CodexProviderCatalogFailure::RateLimited => Self::RateLimited,
+            CodexProviderCatalogFailure::Upstream => Self::Upstream,
+            CodexProviderCatalogFailure::Timeout => Self::Timeout,
+            CodexProviderCatalogFailure::Network => Self::Network,
+            CodexProviderCatalogFailure::InvalidJson => Self::InvalidJson,
+            CodexProviderCatalogFailure::IncompatibleSchema => Self::IncompatibleSchema,
+            CodexProviderCatalogFailure::EmptyCatalog => Self::EmptyCatalog,
+        }
+    }
 }
 
 #[async_trait]
@@ -222,25 +268,21 @@ impl ProviderService {
             )));
         }
 
-        if catalog.current_provider_id != id {
-            self.write_config(vec![config_edit("model_provider".to_string(), json!(id))])
-                .await?;
-        }
         let response = self
             .transport
-            .request("model/list", json!({ "forceRefresh": true }))
+            .request("modelProvider/models/list", json!({ "providerId": id }))
             .await
             .map_err(ProviderServiceError::Runtime)?;
-        let models = model_list_data(&response);
-        if models.is_empty() {
-            return Err(ProviderServiceError::Runtime(format!(
-                "Provider '{id}' returned no models"
-            )));
-        }
+        let models = parse_model_provider_models_list(response)?;
         let persisted_models = models
             .iter()
             .filter_map(provider_model_config_from_catalog)
             .collect::<Vec<_>>();
+        if persisted_models.len() != models.len() {
+            return Err(ProviderServiceError::ProviderCatalogFailure(
+                ProviderCatalogFailure::IncompatibleSchema,
+            ));
+        }
         self.write_config(vec![config_edit(
             format!("{}.models", provider_path(id)?),
             json!(persisted_models),
@@ -543,7 +585,7 @@ impl ProviderOperations for InMemoryProviderService {
     }
 
     async fn refresh_models(&self, id: &str) -> Result<ProviderCatalog, ProviderServiceError> {
-        let mut catalog = self.catalog.write().await;
+        let catalog = self.catalog.read().await;
         let index = require_catalog_provider(&catalog, id)?;
         if !catalog.data[index].can_fetch_models {
             return Err(ProviderServiceError::Forbidden(format!(
@@ -551,17 +593,10 @@ impl ProviderOperations for InMemoryProviderService {
             )));
         }
         if catalog.data[index].models.is_empty() {
-            catalog.data[index].models.push(ProviderModelSummary {
-                model_id: format!("{id}-model"),
-                model_name: Some(format!("{id} model")),
-                max_token_len: None,
-                max_output_tokens: None,
-                show_in_picker: true,
-                context_window: None,
-            });
-            catalog.data[index].model_count = 1;
+            return Err(ProviderServiceError::ProviderCatalogFailure(
+                ProviderCatalogFailure::EmptyCatalog,
+            ));
         }
-        select_catalog_provider(&mut catalog, id);
         Ok(catalog.clone())
     }
 
@@ -764,40 +799,53 @@ fn config_edit(key_path: String, value: Value) -> Value {
     })
 }
 
-fn model_list_data(response: &Value) -> Vec<Value> {
-    unwrap_result(response)
-        .get("data")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
+fn parse_model_provider_models_list(
+    response: Value,
+) -> Result<Vec<ProviderModelSummary>, ProviderServiceError> {
+    let response: ModelProviderModelsListResponse = serde_json::from_value(response)
+        .map_err(|error| ProviderServiceError::InvalidResponse(error.to_string()))?;
+    match response.result {
+        ModelProviderModelsListResult::Success { models } if models.is_empty() => Err(
+            ProviderServiceError::ProviderCatalogFailure(ProviderCatalogFailure::EmptyCatalog),
+        ),
+        ModelProviderModelsListResult::Success { models } => Ok(models),
+        ModelProviderModelsListResult::Failure { error } => {
+            Err(ProviderServiceError::ProviderCatalogFailure(error.into()))
+        }
+    }
 }
 
-fn provider_model_config_from_catalog(value: &Value) -> Option<Value> {
-    let model = value.as_object()?;
-    let model_id = model
-        .get("model")
-        .or_else(|| model.get("id"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
+fn provider_model_config_from_catalog(model: &ProviderModelSummary) -> Option<Value> {
+    let model_id = model.model_id.as_str();
+    if model_id.trim().is_empty()
+        || model_id != model_id.trim()
+        || model_id.chars().any(char::is_control)
+    {
+        return None;
+    }
+    if let Some(model_name) = model.model_name.as_deref() {
+        if model_name.trim().is_empty()
+            || model_name != model_name.trim()
+            || model_name.chars().any(char::is_control)
+        {
+            return None;
+        }
+    }
     let mut persisted = Map::new();
     persisted.insert("model_id".to_string(), json!(model_id));
     persisted.insert(
         "model_name".to_string(),
-        model
-            .get("displayName")
-            .or_else(|| model.get("display_name"))
-            .filter(|value| !value.is_null())
-            .cloned()
-            .unwrap_or_else(|| json!(model_id)),
+        json!(model.model_name.as_deref().unwrap_or(model_id)),
     );
-    persisted.insert("show_in_picker".to_string(), json!(true));
-    if let Some(context_window) = model
-        .get("contextWindow")
-        .or_else(|| model.get("context_window"))
-        .filter(|value| !value.is_null())
-    {
-        persisted.insert("context_window".to_string(), context_window.clone());
+    persisted.insert("show_in_picker".to_string(), json!(model.show_in_picker));
+    if let Some(value) = model.max_token_len {
+        persisted.insert("max_token_len".to_string(), json!(value));
+    }
+    if let Some(value) = model.max_output_tokens {
+        persisted.insert("max_output_tokens".to_string(), json!(value));
+    }
+    if let Some(value) = model.context_window {
+        persisted.insert("context_window".to_string(), json!(value));
     }
     Some(Value::Object(persisted))
 }
@@ -853,13 +901,14 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        provider_model_config_from_catalog, provider_path, upsert_provider_model_context,
-        validate_base_url, validate_credentials, ProviderService, ProviderServiceError,
-        ProviderTransport,
+        parse_model_provider_models_list, provider_model_config_from_catalog, provider_path,
+        upsert_provider_model_context, validate_base_url, validate_credentials, ProviderService,
+        ProviderServiceError, ProviderTransport,
     };
     use async_trait::async_trait;
     use open_web_codex_platform_contracts::{
-        ProviderCredentialInput, ProviderModelSummary, UpsertProviderRequest,
+        error::ProviderCatalogFailure, ProviderCredentialInput, ProviderModelSummary,
+        UpsertProviderRequest,
     };
     use serde_json::{json, Value};
     use tokio::sync::Mutex;
@@ -914,6 +963,20 @@ mod tests {
         })
     }
 
+    fn provider_catalog_failure_wire(failure: ProviderCatalogFailure) -> &'static str {
+        match failure {
+            ProviderCatalogFailure::Authentication => "authentication",
+            ProviderCatalogFailure::NotFound => "notFound",
+            ProviderCatalogFailure::RateLimited => "rateLimited",
+            ProviderCatalogFailure::Upstream => "upstream",
+            ProviderCatalogFailure::Timeout => "timeout",
+            ProviderCatalogFailure::Network => "network",
+            ProviderCatalogFailure::InvalidJson => "invalidJson",
+            ProviderCatalogFailure::IncompatibleSchema => "incompatibleSchema",
+            ProviderCatalogFailure::EmptyCatalog => "emptyCatalog",
+        }
+    }
+
     #[test]
     fn validates_provider_ids_and_quoted_config_paths() {
         assert_eq!(
@@ -957,16 +1020,58 @@ mod tests {
 
     #[test]
     fn model_refresh_persistence_omits_null_toml_values() {
-        let model = provider_model_config_from_catalog(&json!({
-            "model": "deepseek-v4-flash",
-            "displayName": null,
-            "contextWindow": null,
-        }))
-        .unwrap();
+        let model = provider_model_config_from_catalog(&ProviderModelSummary {
+            model_id: "deepseek-v4-flash".to_string(),
+            model_name: None,
+            max_token_len: None,
+            max_output_tokens: None,
+            show_in_picker: true,
+            context_window: None,
+        })
+        .expect("valid Provider model");
 
         assert_eq!(model["model_name"], "deepseek-v4-flash");
         assert!(!model.as_object().unwrap().contains_key("context_window"));
         assert!(!model.as_object().unwrap().values().any(Value::is_null));
+    }
+
+    #[test]
+    fn model_catalog_persistence_rejects_noncanonical_ids_and_preserves_names() {
+        for model_id in [" deepseek-v4-flash", "deepseek-v4-flash ", "deepseek\nv4"] {
+            assert!(provider_model_config_from_catalog(&ProviderModelSummary {
+                model_id: model_id.to_string(),
+                model_name: Some("Display name is preserved".to_string()),
+                max_token_len: None,
+                max_output_tokens: None,
+                show_in_picker: true,
+                context_window: None,
+            })
+            .is_none());
+        }
+
+        let persisted = provider_model_config_from_catalog(&ProviderModelSummary {
+            model_id: "deepseek-v4-flash".to_string(),
+            model_name: Some("Display name".to_string()),
+            max_token_len: None,
+            max_output_tokens: None,
+            show_in_picker: true,
+            context_window: None,
+        })
+        .expect("valid Provider model");
+        assert_eq!(persisted["model_id"], "deepseek-v4-flash");
+        assert_eq!(persisted["model_name"], "Display name");
+
+        for model_name in ["", " Display name", "Display name ", "Display\nname"] {
+            assert!(provider_model_config_from_catalog(&ProviderModelSummary {
+                model_id: "deepseek-v4-flash".to_string(),
+                model_name: Some(model_name.to_string()),
+                max_token_len: None,
+                max_output_tokens: None,
+                show_in_picker: true,
+                context_window: None,
+            })
+            .is_none());
+        }
     }
 
     #[test]
@@ -1046,7 +1151,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refresh_updates_only_the_selected_provider_catalog() {
+    async fn refresh_preserves_current_provider_and_writes_only_target_catalog() {
         let provider_a_models = json!([{
             "modelId": "a-model",
             "modelName": "A model",
@@ -1063,12 +1168,12 @@ mod tests {
             ]),
         );
         let final_catalog = catalog(
-            "provider-b",
+            "provider-a",
             json!([
-                provider("provider-a", false, provider_a_models),
+                provider("provider-a", true, provider_a_models),
                 provider(
                     "provider-b",
-                    true,
+                    false,
                     json!([{
                         "modelId": "b-model",
                         "modelName": "B model",
@@ -1082,8 +1187,19 @@ mod tests {
         );
         let transport = MockTransport::new(vec![
             initial,
-            json!({ "status": "ok" }),
-            json!({ "data": [{ "model": "b-model", "displayName": "B model" }] }),
+            json!({
+                "result": {
+                    "type": "success",
+                    "models": [{
+                        "modelId": "b-model",
+                        "modelName": "B model",
+                        "maxTokenLen": null,
+                        "maxOutputTokens": null,
+                        "showInPicker": true,
+                        "contextWindow": null,
+                    }]
+                }
+            }),
             json!({ "status": "ok" }),
             final_catalog,
         ]);
@@ -1094,16 +1210,182 @@ mod tests {
             .await
             .expect("refresh Provider models");
 
-        assert_eq!(result.current_provider_id, "provider-b");
+        assert_eq!(result.current_provider_id, "provider-a");
         assert_eq!(result.data[0].models[0].model_id, "a-model");
         assert_eq!(result.data[1].models[0].model_id, "b-model");
         let calls = transport.calls.lock().await;
-        assert_eq!(calls[2].0, "model/list");
-        assert_eq!(calls[2].1, json!({ "forceRefresh": true }));
         assert_eq!(
-            calls[3].1["edits"][0]["keyPath"],
+            calls.iter().map(|call| call.0.as_str()).collect::<Vec<_>>(),
+            [
+                "modelProvider/list",
+                "modelProvider/models/list",
+                "config/batchWrite",
+                "modelProvider/list",
+            ]
+        );
+        assert_eq!(calls[1].1, json!({ "providerId": "provider-b" }));
+        assert_eq!(
+            calls[2].1["edits"][0]["keyPath"],
             "model_providers.\"provider-b\".models"
         );
+        assert!(!calls[2].1["edits"]
+            .as_array()
+            .expect("config edits")
+            .iter()
+            .any(|edit| edit["keyPath"] == "model_provider"));
+    }
+
+    #[tokio::test]
+    async fn refresh_failure_matrix_has_no_config_write() {
+        let failures = [
+            ProviderCatalogFailure::Authentication,
+            ProviderCatalogFailure::NotFound,
+            ProviderCatalogFailure::RateLimited,
+            ProviderCatalogFailure::Upstream,
+            ProviderCatalogFailure::Timeout,
+            ProviderCatalogFailure::Network,
+            ProviderCatalogFailure::InvalidJson,
+            ProviderCatalogFailure::IncompatibleSchema,
+            ProviderCatalogFailure::EmptyCatalog,
+        ];
+
+        for failure in failures {
+            let initial = catalog(
+                "provider-a",
+                json!([
+                    provider("provider-a", true, json!([])),
+                    provider(
+                        "provider-b",
+                        false,
+                        json!([{
+                            "modelId": "old-model",
+                            "modelName": "Old model",
+                            "maxTokenLen": null,
+                            "maxOutputTokens": null,
+                            "showInPicker": true,
+                            "contextWindow": null,
+                        }])
+                    ),
+                ]),
+            );
+            let transport = MockTransport::new(vec![
+                initial,
+                json!({
+                    "result": {
+                        "type": "failure",
+                        "error": provider_catalog_failure_wire(failure),
+                    }
+                }),
+            ]);
+            let service = ProviderService::new(transport.clone());
+
+            let error = service
+                .refresh_models("provider-b")
+                .await
+                .expect_err("typed Provider catalog failure");
+            assert!(matches!(
+                error,
+                ProviderServiceError::ProviderCatalogFailure(actual) if actual == failure
+            ));
+            let calls = transport.calls.lock().await;
+            assert_eq!(
+                calls.iter().map(|call| call.0.as_str()).collect::<Vec<_>>(),
+                ["modelProvider/list", "modelProvider/models/list"]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_rejects_noncanonical_display_name_without_config_write() {
+        let initial = catalog(
+            "provider-a",
+            json!([
+                provider("provider-a", true, json!([])),
+                provider(
+                    "provider-b",
+                    false,
+                    json!([{
+                        "modelId": "old-model",
+                        "modelName": "Old model",
+                        "maxTokenLen": null,
+                        "maxOutputTokens": null,
+                        "showInPicker": true,
+                        "contextWindow": null,
+                    }])
+                ),
+            ]),
+        );
+        let transport = MockTransport::new(vec![
+            initial,
+            json!({
+                "result": {
+                    "type": "success",
+                    "models": [{
+                        "modelId": "new-model",
+                        "modelName": " New model",
+                        "maxTokenLen": null,
+                        "maxOutputTokens": null,
+                        "showInPicker": true,
+                        "contextWindow": null,
+                    }]
+                }
+            }),
+        ]);
+        let service = ProviderService::new(transport.clone());
+
+        let error = service
+            .refresh_models("provider-b")
+            .await
+            .expect_err("noncanonical model name must reject the whole catalog");
+        assert!(matches!(
+            error,
+            ProviderServiceError::ProviderCatalogFailure(
+                ProviderCatalogFailure::IncompatibleSchema
+            )
+        ));
+        let calls = transport.calls.lock().await;
+        assert_eq!(
+            calls.iter().map(|call| call.0.as_str()).collect::<Vec<_>>(),
+            ["modelProvider/list", "modelProvider/models/list"]
+        );
+    }
+
+    #[test]
+    fn typed_model_catalog_parser_rejects_empty_success_catalog() {
+        let error = parse_model_provider_models_list(json!({
+            "result": { "type": "success", "models": [] }
+        }))
+        .expect_err("empty catalog is a typed failure");
+        assert!(matches!(
+            error,
+            ProviderServiceError::ProviderCatalogFailure(ProviderCatalogFailure::EmptyCatalog)
+        ));
+    }
+
+    #[test]
+    fn typed_model_catalog_parser_preserves_all_model_metadata() {
+        let models = parse_model_provider_models_list(json!({
+            "result": {
+                "type": "success",
+                "models": [{
+                    "modelId": "deepseek-v4-flash",
+                    "modelName": "DeepSeek V4 Flash",
+                    "maxTokenLen": 64000,
+                    "maxOutputTokens": 8192,
+                    "showInPicker": false,
+                    "contextWindow": 128000,
+                }]
+            }
+        }))
+        .expect("typed model catalog");
+        assert_eq!(models.len(), 1);
+        let persisted = provider_model_config_from_catalog(&models[0]).expect("persisted model");
+        assert_eq!(persisted["model_id"], "deepseek-v4-flash");
+        assert_eq!(persisted["model_name"], "DeepSeek V4 Flash");
+        assert_eq!(persisted["max_token_len"], 64000);
+        assert_eq!(persisted["max_output_tokens"], 8192);
+        assert_eq!(persisted["show_in_picker"], false);
+        assert_eq!(persisted["context_window"], 128000);
     }
 
     #[tokio::test]

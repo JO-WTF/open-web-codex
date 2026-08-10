@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::extract::State;
 use axum::{extract::Path, http::StatusCode, Extension, Json};
-use open_web_codex_platform_contracts::error::{ErrorKind, PlatformError};
+use open_web_codex_platform_contracts::error::{ErrorKind, PlatformError, ProviderCatalogFailure};
 use open_web_codex_platform_contracts::{
     ModelSelection, ProviderCatalog, UpdateProviderModelRequest, UpsertProviderRequest,
 };
@@ -201,6 +201,9 @@ fn provider_service_error(error: ProviderServiceError) -> (StatusCode, Json<Plat
         ProviderServiceError::Forbidden(message) => {
             (StatusCode::FORBIDDEN, PlatformError::forbidden(message))
         }
+        ProviderServiceError::ProviderCatalogFailure(failure) => {
+            provider_catalog_failure_error(failure)
+        }
         ProviderServiceError::Runtime(_) => (
             StatusCode::BAD_GATEWAY,
             PlatformError {
@@ -208,6 +211,7 @@ fn provider_service_error(error: ProviderServiceError) -> (StatusCode, Json<Plat
                 message: "Codex rejected the Provider operation".to_string(),
                 request_id: None,
                 retry_after_ms: None,
+                provider_catalog_failure: None,
             },
         ),
         ProviderServiceError::InvalidResponse(_) => (
@@ -217,17 +221,78 @@ fn provider_service_error(error: ProviderServiceError) -> (StatusCode, Json<Plat
                 message: "Codex returned an invalid Provider response".to_string(),
                 request_id: None,
                 retry_after_ms: None,
+                provider_catalog_failure: None,
             },
         ),
     };
     (status, Json(error))
 }
 
+fn provider_catalog_failure_error(failure: ProviderCatalogFailure) -> (StatusCode, PlatformError) {
+    let (status, kind, message) = match failure {
+        ProviderCatalogFailure::Authentication => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorKind::Unprocessable,
+            "Provider authentication failed",
+        ),
+        ProviderCatalogFailure::NotFound => (
+            StatusCode::BAD_GATEWAY,
+            ErrorKind::CodexRejected,
+            "Provider model catalog was not found",
+        ),
+        ProviderCatalogFailure::RateLimited => (
+            StatusCode::TOO_MANY_REQUESTS,
+            ErrorKind::RateLimited,
+            "Provider model catalog request was rate limited",
+        ),
+        ProviderCatalogFailure::Upstream => (
+            StatusCode::BAD_GATEWAY,
+            ErrorKind::CodexRejected,
+            "Provider model catalog upstream failure",
+        ),
+        ProviderCatalogFailure::Timeout => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            ErrorKind::CodexUnavailable,
+            "Provider model catalog request timed out",
+        ),
+        ProviderCatalogFailure::Network => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            ErrorKind::CodexUnavailable,
+            "Provider model catalog network failure",
+        ),
+        ProviderCatalogFailure::InvalidJson => (
+            StatusCode::BAD_GATEWAY,
+            ErrorKind::CodexRejected,
+            "Provider model catalog returned invalid JSON",
+        ),
+        ProviderCatalogFailure::IncompatibleSchema => (
+            StatusCode::BAD_GATEWAY,
+            ErrorKind::CodexRejected,
+            "Provider model catalog schema is incompatible",
+        ),
+        ProviderCatalogFailure::EmptyCatalog => (
+            StatusCode::BAD_GATEWAY,
+            ErrorKind::CodexRejected,
+            "Provider model catalog is empty",
+        ),
+    };
+    (
+        status,
+        PlatformError {
+            kind,
+            message: message.to_string(),
+            request_id: None,
+            retry_after_ms: None,
+            provider_catalog_failure: Some(failure),
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::provider_error;
     use axum::http::StatusCode;
-    use open_web_codex_platform_contracts::error::ErrorKind;
+    use open_web_codex_platform_contracts::error::{ErrorKind, ProviderCatalogFailure};
     use open_web_codex_provider_service::{secured::AuthorizedProviderError, ProviderServiceError};
 
     #[test]
@@ -240,5 +305,76 @@ mod tests {
         assert_eq!(status, StatusCode::BAD_GATEWAY);
         assert_eq!(error.kind, ErrorKind::CodexRejected);
         assert!(!error.message.contains(secret));
+        assert!(error.provider_catalog_failure.is_none());
+    }
+
+    #[test]
+    fn provider_catalog_failures_map_to_bounded_safe_errors() {
+        let cases = [
+            (
+                ProviderCatalogFailure::Authentication,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                ErrorKind::Unprocessable,
+                "Provider authentication failed",
+            ),
+            (
+                ProviderCatalogFailure::NotFound,
+                StatusCode::BAD_GATEWAY,
+                ErrorKind::CodexRejected,
+                "Provider model catalog was not found",
+            ),
+            (
+                ProviderCatalogFailure::RateLimited,
+                StatusCode::TOO_MANY_REQUESTS,
+                ErrorKind::RateLimited,
+                "Provider model catalog request was rate limited",
+            ),
+            (
+                ProviderCatalogFailure::Upstream,
+                StatusCode::BAD_GATEWAY,
+                ErrorKind::CodexRejected,
+                "Provider model catalog upstream failure",
+            ),
+            (
+                ProviderCatalogFailure::Timeout,
+                StatusCode::SERVICE_UNAVAILABLE,
+                ErrorKind::CodexUnavailable,
+                "Provider model catalog request timed out",
+            ),
+            (
+                ProviderCatalogFailure::Network,
+                StatusCode::SERVICE_UNAVAILABLE,
+                ErrorKind::CodexUnavailable,
+                "Provider model catalog network failure",
+            ),
+            (
+                ProviderCatalogFailure::InvalidJson,
+                StatusCode::BAD_GATEWAY,
+                ErrorKind::CodexRejected,
+                "Provider model catalog returned invalid JSON",
+            ),
+            (
+                ProviderCatalogFailure::IncompatibleSchema,
+                StatusCode::BAD_GATEWAY,
+                ErrorKind::CodexRejected,
+                "Provider model catalog schema is incompatible",
+            ),
+            (
+                ProviderCatalogFailure::EmptyCatalog,
+                StatusCode::BAD_GATEWAY,
+                ErrorKind::CodexRejected,
+                "Provider model catalog is empty",
+            ),
+        ];
+
+        for (failure, expected_status, expected_kind, expected_message) in cases {
+            let (status, error) = provider_error(AuthorizedProviderError::Provider(
+                ProviderServiceError::ProviderCatalogFailure(failure),
+            ));
+            assert_eq!(status, expected_status);
+            assert_eq!(error.kind, expected_kind);
+            assert_eq!(error.message, expected_message);
+            assert_eq!(error.provider_catalog_failure, Some(failure));
+        }
     }
 }

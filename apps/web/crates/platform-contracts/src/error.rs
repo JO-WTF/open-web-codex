@@ -10,6 +10,25 @@ pub struct PlatformError {
     pub request_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_after_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_catalog_failure: Option<ProviderCatalogFailure>,
+}
+
+/// Typed, bounded failure causes returned by Codex when a Provider model
+/// catalog cannot be fetched. This is intentionally a platform error detail,
+/// not a raw Runtime error or upstream response body.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderCatalogFailure {
+    Authentication,
+    NotFound,
+    RateLimited,
+    Upstream,
+    Timeout,
+    Network,
+    InvalidJson,
+    IncompatibleSchema,
+    EmptyCatalog,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -35,6 +54,7 @@ impl PlatformError {
             message: message.into(),
             request_id: None,
             retry_after_ms: None,
+            provider_catalog_failure: None,
         }
     }
 
@@ -44,6 +64,7 @@ impl PlatformError {
             message: message.into(),
             request_id: None,
             retry_after_ms: None,
+            provider_catalog_failure: None,
         }
     }
 
@@ -53,6 +74,7 @@ impl PlatformError {
             message: message.into(),
             request_id: None,
             retry_after_ms: None,
+            provider_catalog_failure: None,
         }
     }
 
@@ -62,6 +84,7 @@ impl PlatformError {
             message: message.into(),
             request_id: None,
             retry_after_ms: None,
+            provider_catalog_failure: None,
         }
     }
 
@@ -71,6 +94,7 @@ impl PlatformError {
             message: message.into(),
             request_id: None,
             retry_after_ms: None,
+            provider_catalog_failure: None,
         }
     }
     pub fn unauthorized(message: impl Into<String>) -> Self {
@@ -79,6 +103,7 @@ impl PlatformError {
             message: message.into(),
             request_id: None,
             retry_after_ms: None,
+            provider_catalog_failure: None,
         }
     }
 
@@ -88,6 +113,7 @@ impl PlatformError {
             message: message.into(),
             request_id: None,
             retry_after_ms: None,
+            provider_catalog_failure: None,
         }
     }
 

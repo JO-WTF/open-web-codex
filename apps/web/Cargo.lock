@@ -1613,6 +1613,7 @@ dependencies = [
  "open-web-codex-profile-host",
  "open-web-codex-profile-registry",
  "open-web-codex-secret-store",
+ "serde",
  "serde_json",
  "sqlx",
  "thiserror",
