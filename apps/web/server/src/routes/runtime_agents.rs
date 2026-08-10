@@ -16,7 +16,8 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::event_projection::{
-    project_agent_item_descriptor, projected_turn_terminal_outcome, ProjectedTurnTerminalOutcome,
+    bounded_runtime_text, project_agent_item_descriptor, projected_turn_terminal_outcome,
+    ProjectedTurnTerminalOutcome,
 };
 use crate::middleware::auth::AuthenticatedUser;
 
@@ -250,12 +251,14 @@ pub async fn list_executions_for_run(
                 thread_id: row.get("agent_thread_id"),
                 turn_id: row.get("turn_id"),
                 ordinal: row.get("ordinal"),
-                task: row.get("task"),
+                task: public_execution_text(row.get("task"), 1_000),
                 status: execution_status(row.get("status")),
-                current_behavior: row.get("current_behavior"),
-                latest_progress: row.get("latest_progress"),
-                display_title: row.get("display_title"),
-                result_summary: row.get("result_summary"),
+                current_behavior: public_execution_text(row.get("current_behavior"), 500)
+                    .unwrap_or_else(|| "Agent activity".to_string()),
+                latest_progress: public_execution_text(row.get("latest_progress"), 1_000),
+                display_title: public_execution_text(row.get("display_title"), 80)
+                    .unwrap_or_else(|| "Agent · Assigned task".to_string()),
+                result_summary: public_execution_text(row.get("result_summary"), 1_000),
                 waiting_approval_id: row.get("waiting_approval_id"),
                 wait_cycle_count: row.get("wait_cycle_count"),
                 first_observed_sequence: row.get("first_observed_sequence"),
@@ -717,7 +720,7 @@ fn wait_progress_summary(value: &str) -> Option<String> {
 }
 
 fn summarize_wait_text(value: &str, max_chars: usize) -> Option<String> {
-    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let normalized = bounded_runtime_text(value, max_chars)?;
     let normalized = normalized
         .strip_prefix("Task:")
         .or_else(|| normalized.strip_prefix("任务："))
@@ -733,8 +736,7 @@ fn summarize_wait_text(value: &str, max_chars: usize) -> Option<String> {
     let summary = sentence_end
         .map(|end| &normalized[..end])
         .unwrap_or(normalized);
-    let summary = summary.chars().take(max_chars).collect::<String>();
-    (!summary.is_empty()).then_some(summary)
+    bounded_runtime_text(summary, max_chars)
 }
 
 fn brief_description(value: &str) -> Option<String> {
@@ -770,8 +772,8 @@ fn activity_with_subject(
         kind,
         status,
         subject,
-        title: title.to_string(),
-        detail,
+        title: bounded_runtime_text(title, 240).unwrap_or_else(|| "Runtime activity".to_string()),
+        detail: detail.and_then(|value| bounded_runtime_text(&value, 1_000)),
         created_at: event.created_at,
     }
 }
@@ -790,11 +792,13 @@ fn string_list(value: Option<&Value>) -> Vec<String> {
 }
 
 fn bounded_detail(value: &str) -> Option<String> {
-    let value = value.trim();
-    if value.is_empty() {
-        return None;
-    }
-    Some(value.chars().take(1_000).collect())
+    bounded_runtime_text(value, 1_000)
+}
+
+fn public_execution_text(value: Option<String>, max_chars: usize) -> Option<String> {
+    value
+        .as_deref()
+        .and_then(|value| bounded_runtime_text(value, max_chars))
 }
 
 fn normalize_tool_name(value: &str) -> String {
@@ -894,7 +898,7 @@ mod tests {
                 "itemType": "collabAgentToolCall",
                 "data": {
                     "tool": "spawn_agent",
-                    "prompt": "Task: Prepare the Indonesia demo data. Include cities and routes.",
+                    "prompt": "Task: Prepare /Users/example/workspaces/id and supply-chain://resources/demand. Include cities and routes.",
                     "receiverThreadIds": []
                 }
             }),
@@ -905,12 +909,60 @@ mod tests {
         assert_eq!(activities[0].status, RuntimeAgentActivityStatus::Running);
         assert_eq!(
             activities[0].title,
-            "Starting: Prepare the Indonesia demo data."
+            "Starting: Prepare [workspace-path]/id and [internal-resource-uri] Include cities and routes."
         );
         assert_eq!(
             activities[0].detail.as_deref(),
-            Some("Task: Prepare the Indonesia demo data. Include cities and routes.")
+            Some("Task: Prepare [workspace-path]/id and [internal-resource-uri] Include cities and routes.")
         );
+        let serialized = serde_json::to_string(&activities).unwrap();
+        assert!(!serialized.contains("/Users/example"));
+        assert!(!serialized.contains("supply-chain://"));
+    }
+
+    #[test]
+    fn sanitizes_assigned_and_current_task_titles_for_live_and_replay() {
+        let prompt =
+            "Task: Continue in /Users/example/workspaces/child and supply-chain://resources/task.";
+        let assigned = project_activities(event(
+            "codex.item.completed",
+            "root-thread",
+            json!({
+                "itemType": "collabAgentToolCall",
+                "data": {
+                    "tool": "spawn_agent",
+                    "prompt": prompt,
+                    "receiverThreadIds": ["child-thread"]
+                }
+            }),
+        ));
+        assert_eq!(
+            assigned[0].title,
+            "Assigned: Continue in [workspace-path]/child and [internal-resource-uri]"
+        );
+
+        let mut wait_context = HashMap::new();
+        wait_context.insert(
+            "child-thread".to_string(),
+            WaitTaskContext {
+                task: Some(prompt.to_string()),
+                latest_progress: None,
+                active: true,
+            },
+        );
+        let started = project_activities_with_wait_context(
+            event("codex.turn.started", "child-thread", Value::Null),
+            &wait_context,
+            &HashMap::new(),
+        );
+        assert_eq!(
+            started[0].title,
+            "Started: Continue in [workspace-path]/child and [internal-resource-uri]"
+        );
+        let serialized =
+            serde_json::to_string(&assigned).unwrap() + &serde_json::to_string(&started).unwrap();
+        assert!(!serialized.contains("/Users/example"));
+        assert!(!serialized.contains("supply-chain://"));
     }
 
     #[test]
@@ -1284,7 +1336,7 @@ mod tests {
     }
 
     #[test]
-    fn uses_typed_workspace_command_fallback_for_unknown_or_empty_actions() {
+    fn uses_typed_execute_fallback_for_unknown_or_empty_actions() {
         for command_actions in [
             json!([]),
             json!([{"type": "unknown", "path": "src/lib.rs"}]),
@@ -1294,21 +1346,28 @@ mod tests {
                 "child-thread",
                 json!({
                     "itemType": "commandExecution",
-                    "data": {"commandActions": command_actions, "status": "completed"}
+                    "data": {
+                        "commandActions": command_actions,
+                        "status": "completed",
+                        "command": "cat /private/profile/<credential-fragment>",
+                        "aggregatedOutput": "secret <credential-fragment>"
+                    }
                 }),
             ));
 
             assert_eq!(activities.len(), 1);
-            assert_eq!(activities[0].title, "Completed workspace operation");
-            assert!(!activities[0].title.contains("workspace command"));
+            assert_eq!(activities[0].title, "Completed workspace action · execute");
             assert_eq!(
                 activities[0].subject,
                 Some(RuntimeAgentActivitySubject::WorkspaceAction {
-                    action: "workspace_command".to_string(),
+                    action: "execute".to_string(),
                     path: None,
                 })
             );
-            assert!(activities[0].detail.is_none());
+            assert_eq!(activities[0].detail.as_deref(), Some("execute"));
+            let serialized = serde_json::to_string(&activities).unwrap();
+            assert!(!serialized.contains("/private/profile"));
+            assert!(!serialized.contains("<credential-fragment>"));
         }
     }
 

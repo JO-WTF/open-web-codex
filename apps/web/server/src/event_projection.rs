@@ -1128,7 +1128,7 @@ async fn project_supervisor_assignment(
     let Some(task) = data
         .get("prompt")
         .and_then(Value::as_str)
-        .and_then(|value| truncated_projection_text(value, 1_000))
+        .and_then(|value| bounded_runtime_text(value, 1_000))
     else {
         return Ok(());
     };
@@ -1309,7 +1309,7 @@ async fn ensure_agent_execution(
     let task = assignment
         .as_ref()
         .and_then(|row| row.get::<Option<String>, _>("task"))
-        .and_then(|value| truncated_projection_text(&value, 1_000));
+        .and_then(|value| bounded_runtime_text(&value, 1_000));
     let first_observed_sequence = assignment_sequence.unwrap_or(sequence);
     let ordinal = next_agent_execution_ordinal(transaction, context.run_id, thread_id).await?;
     let display_title = task
@@ -1559,11 +1559,11 @@ fn project_agent_item_observation(event: &ProjectedEvent) -> Option<AgentExecuti
         let progress = data
             .get("text")
             .and_then(Value::as_str)
-            .and_then(|value| truncated_projection_text(value, 1_000));
+            .and_then(|value| bounded_runtime_text(value, 1_000));
         let behavior = match phase {
             "commentary" => progress
                 .as_deref()
-                .and_then(|value| truncated_projection_text(value, 500))
+                .and_then(|value| bounded_runtime_text(value, 500))
                 .unwrap_or_else(|| "Reported progress".to_string()),
             "final_answer" => "Returned results to the Supervisor".to_string(),
             _ => return None,
@@ -1578,7 +1578,7 @@ fn project_agent_item_observation(event: &ProjectedEvent) -> Option<AgentExecuti
             result_summary: (phase == "final_answer")
                 .then(|| data.get("text").and_then(Value::as_str))
                 .flatten()
-                .and_then(|value| truncated_projection_text(value, 1_000)),
+                .and_then(|value| bounded_runtime_text(value, 1_000)),
         });
     }
 
@@ -1664,7 +1664,7 @@ pub(crate) fn project_agent_item_descriptor(
 fn command_subject(data: &Value) -> RuntimeAgentActivitySubject {
     let Some(actions) = data.get("commandActions").and_then(Value::as_array) else {
         return RuntimeAgentActivitySubject::WorkspaceAction {
-            action: "workspace_command".to_string(),
+            action: "execute".to_string(),
             path: None,
         };
     };
@@ -1691,7 +1691,7 @@ fn command_subject(data: &Value) -> RuntimeAgentActivitySubject {
     }
 
     RuntimeAgentActivitySubject::WorkspaceAction {
-        action: "workspace_command".to_string(),
+        action: "execute".to_string(),
         path: None,
     }
 }
@@ -1721,9 +1721,7 @@ fn subject_label(subject: &RuntimeAgentActivitySubject) -> String {
             (None, None) => "a Runtime tool".to_string(),
         },
         RuntimeAgentActivitySubject::WorkspaceAction { action, path } => {
-            if action == "workspace_command" {
-                "workspace operation".to_string()
-            } else if let Some(path) = path {
+            if let Some(path) = path {
                 format!("workspace action · {action} · {path}")
             } else {
                 format!("workspace action · {action}")
@@ -1738,14 +1736,12 @@ fn subject_label(subject: &RuntimeAgentActivitySubject) -> String {
 
 fn subject_detail(subject: &RuntimeAgentActivitySubject) -> Option<String> {
     match subject {
-        RuntimeAgentActivitySubject::WorkspaceAction { action, path }
-            if action != "workspace_command" =>
-        {
+        RuntimeAgentActivitySubject::WorkspaceAction { action, path } => {
             let detail = path
                 .as_deref()
                 .map(|path| format!("{action} · {path}"))
                 .unwrap_or_else(|| action.clone());
-            Some(detail.chars().take(256).collect())
+            bounded_runtime_text(&detail, 256)
         }
         _ => None,
     }
@@ -1791,7 +1787,7 @@ fn humanize_identifier(value: &str) -> String {
 }
 
 fn bounded_activity_title(value: &str) -> String {
-    value.chars().take(240).collect()
+    bounded_runtime_text(value, 240).unwrap_or_else(|| "Runtime activity".to_string())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1906,21 +1902,21 @@ fn normalize_agent_tool(value: &str) -> String {
 
 fn build_execution_title(agent_label: Option<&str>, task: Option<&str>) -> String {
     let label = agent_label
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("Agent");
+        .and_then(|value| bounded_runtime_text(value, 40))
+        .unwrap_or_else(|| "Agent".to_string());
     let summary = task
-        .and_then(|value| truncated_projection_text(value, 70))
+        .and_then(|value| bounded_runtime_text(value, 70))
         .unwrap_or_else(|| "Assigned task".to_string());
     format!("{label} · {summary}").chars().take(80).collect()
 }
 
-fn truncated_projection_text(value: &str, max_chars: usize) -> Option<String> {
-    let value = value.trim();
-    if value.is_empty() {
-        return None;
-    }
-    Some(value.chars().take(max_chars).collect())
+pub(crate) fn bounded_runtime_text(value: &str, max_chars: usize) -> Option<String> {
+    let normalized = redact_browser_text(value)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let bounded = normalized.chars().take(max_chars).collect::<String>();
+    (!bounded.is_empty()).then_some(bounded)
 }
 
 fn project_event_data(method: &str, params: &Map<String, Value>) -> Value {
@@ -2733,7 +2729,9 @@ fn redact_local_paths(value: &str) -> String {
 
     while cursor < bytes.len() {
         let unix_path = bytes[cursor] == b'/'
-            && (cursor == 0 || is_local_path_boundary(bytes[cursor - 1]))
+            && (cursor == 0
+                || is_local_path_boundary(bytes[cursor - 1])
+                || !bytes[cursor - 1].is_ascii())
             && bytes.get(cursor + 1).is_some_and(|byte| {
                 !byte.is_ascii_whitespace() && !matches!(byte, b'/' | b'>' | b')' | b']' | b'}')
             });
@@ -2741,7 +2739,9 @@ fn redact_local_paths(value: &str) -> String {
             candidate[0].is_ascii_alphabetic()
                 && candidate[1] == b':'
                 && matches!(candidate[2], b'/' | b'\\')
-        }) && (cursor == 0 || is_local_path_boundary(bytes[cursor - 1]));
+        }) && (cursor == 0
+            || is_local_path_boundary(bytes[cursor - 1])
+            || !bytes[cursor - 1].is_ascii());
         if !unix_path && !windows_path {
             cursor += 1;
             continue;
@@ -3073,6 +3073,33 @@ mod tests {
             Some("已完成线路报价完整性检查。")
         );
         assert_ne!(first.behavior, second.behavior);
+    }
+
+    #[test]
+    fn bounds_runtime_text_with_path_and_resource_redaction() {
+        let value = bounded_runtime_text(
+            "  C:\\Users\\example\\workspace\\secret.json\n\tsupply-chain://resources/task  ",
+            240,
+        )
+        .expect("bounded runtime text");
+        assert!(value.contains("[workspace-path]/secret.json"));
+        assert!(value.contains("[internal-resource-uri]"));
+        assert!(!value.contains("C:\\Users\\example"));
+        assert!(!value.contains("supply-chain://"));
+        assert!(!value.contains("  "));
+
+        let title = build_execution_title(
+            None,
+            Some("Task: /Users/example/workspaces/child supply-chain://resources/task"),
+        );
+        assert!(title.contains("[workspace-path]/child"));
+        assert!(title.contains("[internal-resource-uri]"));
+        assert!(!title.contains("/Users/example"));
+        assert!(!title.contains("supply-chain://"));
+
+        let localized = bounded_runtime_text("工作区根目录：/Users/example/workspaces/child", 240)
+            .expect("localized bounded runtime text");
+        assert_eq!(localized, "工作区根目录：[workspace-path]/child");
     }
 
     #[test]
