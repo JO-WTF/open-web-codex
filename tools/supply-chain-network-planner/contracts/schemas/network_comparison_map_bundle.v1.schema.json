@@ -13,6 +13,7 @@
               "type": "number"
             },
             {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
               "type": "string"
             }
           ],
@@ -104,6 +105,7 @@
               "type": "number"
             },
             {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
               "type": "string"
             }
           ],
@@ -207,6 +209,7 @@
               "type": "number"
             },
             {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
               "type": "string"
             }
           ],
@@ -560,25 +563,25 @@
       "additionalProperties": false,
       "properties": {
         "after_coverage_rate": {
-          "maximum": 1.0,
-          "minimum": 0.0,
+          "maximum": 1,
+          "minimum": 0,
           "title": "After Coverage Rate",
           "type": "number"
         },
         "before_coverage_rate": {
-          "maximum": 1.0,
-          "minimum": 0.0,
+          "maximum": 1,
+          "minimum": 0,
           "title": "Before Coverage Rate",
           "type": "number"
         },
         "coverage_rate_delta": {
-          "maximum": 1.0,
-          "minimum": -1.0,
+          "maximum": 1,
+          "minimum": -1,
           "title": "Coverage Rate Delta",
           "type": "number"
         },
         "target_hours": {
-          "exclusiveMinimum": 0.0,
+          "exclusiveMinimum": 0,
           "title": "Target Hours",
           "type": "number"
         }

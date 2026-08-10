@@ -13,7 +13,7 @@
         "after_cost": {
           "anyOf": [
             {
-              "minimum": 0.0,
+              "minimum": 0,
               "type": "number"
             },
             {
@@ -26,7 +26,7 @@
         "before_cost": {
           "anyOf": [
             {
-              "minimum": 0.0,
+              "minimum": 0,
               "type": "number"
             },
             {
@@ -141,6 +141,7 @@
               "type": "number"
             },
             {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
               "type": "string"
             }
           ],
@@ -153,6 +154,7 @@
               "type": "number"
             },
             {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
               "type": "string"
             }
           ],
@@ -174,7 +176,7 @@
         "cost": {
           "anyOf": [
             {
-              "minimum": 0.0,
+              "minimum": 0,
               "type": "number"
             },
             {
@@ -195,6 +197,7 @@
               "type": "number"
             },
             {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
               "type": "string"
             }
           ],
@@ -203,7 +206,7 @@
         "distance_km": {
           "anyOf": [
             {
-              "minimum": 0.0,
+              "minimum": 0,
               "type": "number"
             },
             {
@@ -216,7 +219,7 @@
         "duration_hours": {
           "anyOf": [
             {
-              "minimum": 0.0,
+              "minimum": 0,
               "type": "number"
             },
             {
@@ -365,7 +368,7 @@
           "type": "string"
         },
         "last_mile": {
-          "minimum": 0.0,
+          "minimum": 0,
           "title": "Last Mile",
           "type": "number"
         },
@@ -377,7 +380,7 @@
           "type": "object"
         },
         "linehaul": {
-          "minimum": 0.0,
+          "minimum": 0,
           "title": "Linehaul",
           "type": "number"
         },
@@ -415,7 +418,7 @@
           "type": "string"
         },
         "total": {
-          "minimum": 0.0,
+          "minimum": 0,
           "title": "Total",
           "type": "number"
         }
@@ -451,6 +454,7 @@
               "type": "number"
             },
             {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
               "type": "string"
             }
           ],
@@ -459,8 +463,8 @@
         "latitude": {
           "anyOf": [
             {
-              "maximum": 90.0,
-              "minimum": -90.0,
+              "maximum": 90,
+              "minimum": -90,
               "type": "number"
             },
             {
@@ -473,8 +477,8 @@
         "longitude": {
           "anyOf": [
             {
-              "maximum": 180.0,
-              "minimum": -180.0,
+              "maximum": 180,
+              "minimum": -180,
               "type": "number"
             },
             {
@@ -741,6 +745,7 @@
               "type": "number"
             },
             {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
               "type": "string"
             }
           ],
@@ -766,25 +771,25 @@
       "additionalProperties": false,
       "properties": {
         "after_coverage_rate": {
-          "maximum": 1.0,
-          "minimum": 0.0,
+          "maximum": 1,
+          "minimum": 0,
           "title": "After Coverage Rate",
           "type": "number"
         },
         "before_coverage_rate": {
-          "maximum": 1.0,
-          "minimum": 0.0,
+          "maximum": 1,
+          "minimum": 0,
           "title": "Before Coverage Rate",
           "type": "number"
         },
         "coverage_rate_delta": {
-          "maximum": 1.0,
-          "minimum": -1.0,
+          "maximum": 1,
+          "minimum": -1,
           "title": "Coverage Rate Delta",
           "type": "number"
         },
         "target_hours": {
-          "exclusiveMinimum": 0.0,
+          "exclusiveMinimum": 0,
           "title": "Target Hours",
           "type": "number"
         }
@@ -802,8 +807,8 @@
       "additionalProperties": false,
       "properties": {
         "coverage_rate": {
-          "maximum": 1.0,
-          "minimum": 0.0,
+          "maximum": 1,
+          "minimum": 0,
           "title": "Coverage Rate",
           "type": "number"
         },
@@ -814,13 +819,14 @@
               "type": "number"
             },
             {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
               "type": "string"
             }
           ],
           "title": "Covered Demand"
         },
         "target_hours": {
-          "exclusiveMinimum": 0.0,
+          "exclusiveMinimum": 0,
           "title": "Target Hours",
           "type": "number"
         },
@@ -831,6 +837,7 @@
               "type": "number"
             },
             {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
               "type": "string"
             }
           ],
@@ -880,8 +887,8 @@
         "latitude": {
           "anyOf": [
             {
-              "maximum": 90.0,
-              "minimum": -90.0,
+              "maximum": 90,
+              "minimum": -90,
               "type": "number"
             },
             {
@@ -894,8 +901,8 @@
         "longitude": {
           "anyOf": [
             {
-              "maximum": 180.0,
-              "minimum": -180.0,
+              "maximum": 180,
+              "minimum": -180,
               "type": "number"
             },
             {
