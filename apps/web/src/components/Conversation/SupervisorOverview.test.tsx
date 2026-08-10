@@ -493,8 +493,11 @@ describe("SupervisorOverview", () => {
     expect(screen.queryByText("Completed a workspace command")).toBeNull();
     expect(screen.queryByText("rm -rf /private/secret")).toBeNull();
     expect(screen.queryByText("DEEPSEEK_KEY=do-not-render")).toBeNull();
-    expect(screen.getByRole("alert").textContent).toContain("image generation");
-    expect(screen.getByRole("status").textContent).toContain("Waiting for Agent updates");
+    const log = screen.getByLabelText("Agent behavior log");
+    expect(log.querySelector("[role=alert], [role=status], [aria-live]")).toBeNull();
+    expect(log.textContent).toContain("image generation");
+    expect(log.textContent).toContain("Waiting");
+    expect(log.textContent).toContain("Failed");
   });
 
   it("sorts by Runtime sequence and removes replay duplicates by official identity", () => {
@@ -537,6 +540,62 @@ describe("SupervisorOverview", () => {
     expect(items).toHaveLength(2);
     expect(items[0]?.textContent).toContain("Root turn started");
     expect(items[1]?.textContent).toContain("supply_chain · calculate_routes");
+  });
+
+  it("uses unique useId DOM references for duplicate sequence and Item values", () => {
+    const shared = {
+      sequence: 50,
+      turn_id: "turn-shared",
+      item_id: "item-shared",
+      kind: "tool_completed" as const,
+      status: "completed" as const,
+    };
+    const { container } = render(
+      <SupervisorOverview
+        taskTitle="Network planning"
+        agents={[rootAgent, dataAgent, networkAgent]}
+        activities={[
+          activity(50, {
+            ...shared,
+            thread_id: "data-thread",
+            subject: {
+              kind: "mcp_tool",
+              server: "supply_chain",
+              tool: "validate_data",
+            },
+            title: "Completed a tool",
+          }),
+          activity(50, {
+            ...shared,
+            thread_id: "network-thread",
+            subject: {
+              kind: "runtime_tool",
+              namespace: "network",
+              tool: "compare_routes",
+            },
+            title: "Completed a tool",
+          }),
+        ]}
+        artifacts={[]}
+      />,
+    );
+
+    const ids = [...container.querySelectorAll<HTMLElement>("[id]")]
+      .map((element) => element.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids.some((id) => id.includes("item-shared") || id.includes("data-thread"))).toBe(false);
+
+    const log = screen.getByLabelText("Agent behavior log");
+    const rows = [...log.querySelectorAll<HTMLElement>(".web-supervisor-activity-card")];
+    expect(rows).toHaveLength(2);
+    expect(screen.getByRole("article", { name: /Data Agent.*supply_chain · validate_data/ })).toBeTruthy();
+    expect(screen.getByRole("article", { name: /Network Agent.*network · compare_routes/ })).toBeTruthy();
+    for (const row of rows) {
+      const references = row.getAttribute("aria-labelledby")?.split(" ") ?? [];
+      expect(references.length).toBe(2);
+      expect(references.every((id) => row.ownerDocument.getElementById(id))).toBe(true);
+      expect(row.ownerDocument.getElementById(row.getAttribute("aria-describedby") ?? "")).toBeTruthy();
+    }
   });
 
   it("keeps separate started and completed events for one Runtime Item", () => {
@@ -623,7 +682,7 @@ describe("SupervisorOverview", () => {
     expect((summary?.closest("details") as HTMLDetailsElement | null)?.open).toBe(true);
     expect(screen.getAllByText(detail).length).toBeGreaterThan(0);
     expect(container.querySelector(".web-supervisor-activity-action")).toBeTruthy();
-    expect(screen.getByRole("alert").textContent).toContain("data · validate");
+    expect(screen.getByText("data · validate")).toBeTruthy();
     expect(screen.getByLabelText("Status: Completed")).toBeTruthy();
     expect(screen.getByLabelText("Status: Failed")).toBeTruthy();
   });

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import Bot from "lucide-react/dist/esm/icons/bot";
 import FileCheck2 from "lucide-react/dist/esm/icons/file-check-2";
 import History from "lucide-react/dist/esm/icons/history";
@@ -186,6 +186,73 @@ function activitySubjectAction(
 function activityAction(activity: RuntimeAgentActivity): string {
   return activitySubjectAction(activity.subject)
     ?? (activity.title.trim() || activityKindLabel(activity.kind));
+}
+
+type ActivityRowProps = {
+  activity: RuntimeAgentActivity;
+  actorName: string;
+  action: string;
+  status: ReturnType<typeof activityStatusPresentation>;
+};
+
+function ActivityRow({ activity, actorName, action, status }: ActivityRowProps) {
+  const rowId = useId();
+  const actorId = `${rowId}-actor`;
+  const headingId = `${rowId}-heading`;
+  const statusId = `${rowId}-status`;
+  const timestamp = activityTime(activity.created_at);
+
+  return (
+    <li
+      className={`is-${status.tone}`}
+    >
+      <span
+        className={`is-${status.tone} is-${activity.status}`}
+        aria-hidden="true"
+      />
+      <div className="web-supervisor-activity-copy">
+        <article
+          className="web-supervisor-activity-card"
+          aria-labelledby={`${actorId} ${headingId}`}
+          aria-describedby={statusId}
+        >
+          <div className="web-supervisor-activity-meta">
+            <span
+              id={actorId}
+              className="web-supervisor-activity-actor"
+            >
+              {actorName}
+            </span>
+            <span className="web-supervisor-activity-arrow" aria-hidden="true">→</span>
+            <h3 id={headingId} className="web-supervisor-activity-action">
+              {action}
+            </h3>
+            <span
+              id={statusId}
+              className={`web-supervisor-activity-status is-${status.tone}`}
+              aria-label={`Status: ${status.label}`}
+            >
+              {status.label}
+            </span>
+            {timestamp ? (
+              <time dateTime={activity.created_at}>{timestamp}</time>
+            ) : null}
+          </div>
+          {activity.detail ? (
+            <details className="web-supervisor-activity-detail">
+              <summary
+                role="button"
+                aria-label="Show safe activity detail"
+              >
+                Show details
+              </summary>
+              <p>{activity.detail}</p>
+            </details>
+          ) : null}
+        </article>
+      </div>
+    </li>
+  );
 }
 
 function activityIdentity(activity: RuntimeAgentActivity): string {
@@ -560,70 +627,15 @@ export default function SupervisorOverview({
             {timelineActivities.length ? (
               <ol>
                 {timelineActivities.map((activity) => {
-                  const status = activityStatusPresentation(activity.status);
                   const actor = agentsByThread.get(activity.thread_id);
-                  const timestamp = activityTime(activity.created_at);
-                  const actorName = actor ? agentLabel(actor) : "Runtime Agent";
-                  const action = activityAction(activity);
-                  const activityHeadingId = `web-supervisor-activity-${activity.sequence}-${
-                    activity.item_id ?? activity.kind
-                  }`;
-                  const activityActorId = `${activityHeadingId}-actor`;
-                  const activityStatusId = `${activityHeadingId}-status`;
                   return (
-                    <li
+                    <ActivityRow
                       key={activityIdentity(activity)}
-                      className={`is-${status.tone}`}
-                    >
-                      <span
-                        className={`is-${status.tone} is-${activity.status}`}
-                        aria-hidden="true"
-                      />
-                      <div className="web-supervisor-activity-copy">
-                        <article
-                          className="web-supervisor-activity-card"
-                          role={status.tone === "error"
-                            ? "alert"
-                            : status.tone === "waiting" ? "status" : undefined}
-                          aria-labelledby={`${activityActorId} ${activityHeadingId}`}
-                          aria-describedby={activityStatusId}
-                        >
-                          <div className="web-supervisor-activity-meta">
-                            <span
-                              id={activityActorId}
-                              className="web-supervisor-activity-actor"
-                            >
-                              {actorName}
-                            </span>
-                            <span className="web-supervisor-activity-arrow" aria-hidden="true">→</span>
-                            <h3 id={activityHeadingId} className="web-supervisor-activity-action">
-                              {action}
-                            </h3>
-                            <span
-                              id={activityStatusId}
-                              className={`web-supervisor-activity-status is-${status.tone}`}
-                              aria-label={`Status: ${status.label}`}
-                            >
-                              {status.label}
-                            </span>
-                            {timestamp ? (
-                              <time dateTime={activity.created_at}>{timestamp}</time>
-                            ) : null}
-                          </div>
-                          {activity.detail ? (
-                            <details className="web-supervisor-activity-detail">
-                              <summary
-                                role="button"
-                                aria-label="Show safe activity detail"
-                              >
-                                Show details
-                              </summary>
-                              <p>{activity.detail}</p>
-                            </details>
-                          ) : null}
-                        </article>
-                      </div>
-                    </li>
+                      activity={activity}
+                      actorName={actor ? agentLabel(actor) : "Runtime Agent"}
+                      action={activityAction(activity)}
+                      status={activityStatusPresentation(activity.status)}
+                    />
                   );
                 })}
               </ol>
