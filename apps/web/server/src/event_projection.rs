@@ -81,26 +81,12 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
     let is_root_thread = event.thread_id == context.root_thread_id;
     update_runtime_agent_projection(&mut transaction, &context, &event).await?;
 
-    let savepoint_available = match sqlx::query("SAVEPOINT artifact_projection")
+    sqlx::query("SAVEPOINT artifact_projection")
         .execute(&mut *transaction)
         .await
-    {
-        Ok(_) => true,
-        Err(error) => {
-            mark_artifact_delivery_failure(&mut event.payload, "artifact_projection_failed");
-            tracing::warn!(
-                error = %error,
-                run_id = %run_id,
-                "Artifact projection savepoint unavailable; preserving the Runtime item lifecycle"
-            );
-            false
-        }
-    };
+        .map_err(|error| format!("Artifact projection savepoint error: {error}"))?;
     let mut pending_artifact_ids = Vec::new();
     let artifact_result = async {
-        if !savepoint_available {
-            return Err("artifact_projection_failed".to_string());
-        }
         let registered = register_artifacts(&mut transaction, &context, &event).await?;
         project_registered_artifacts(&mut event.payload, &registered)?;
         if let (Some(candidate), Some(turn_id), Some(item_id)) = (
@@ -132,35 +118,24 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
     match artifact_result {
         Ok(ids) => {
             pending_artifact_ids = ids;
-            if let Err(error) = sqlx::query("RELEASE SAVEPOINT artifact_projection")
+            sqlx::query("RELEASE SAVEPOINT artifact_projection")
                 .execute(&mut *transaction)
                 .await
-            {
-                pending_artifact_ids.clear();
-                mark_artifact_delivery_failure(&mut event.payload, "artifact_projection_failed");
-                tracing::warn!(
-                    error = %error,
-                    run_id = %run_id,
-                    "Artifact projection savepoint release failed"
-                );
-            }
+                .map_err(|error| format!("Artifact projection release error: {error}"))?;
         }
         Err(error) => {
-            if savepoint_available {
-                if let Err(rollback_error) =
-                    sqlx::query("ROLLBACK TO SAVEPOINT artifact_projection")
-                        .execute(&mut *transaction)
-                        .await
-                {
-                    tracing::warn!(error = %rollback_error, "Artifact projection rollback failed");
-                }
-                if let Err(release_error) = sqlx::query("RELEASE SAVEPOINT artifact_projection")
-                    .execute(&mut *transaction)
-                    .await
-                {
-                    tracing::warn!(error = %release_error, "Artifact projection release failed");
-                }
-            }
+            sqlx::query("ROLLBACK TO SAVEPOINT artifact_projection")
+                .execute(&mut *transaction)
+                .await
+                .map_err(|rollback_error| {
+                    format!("Artifact projection rollback error: {rollback_error}")
+                })?;
+            sqlx::query("RELEASE SAVEPOINT artifact_projection")
+                .execute(&mut *transaction)
+                .await
+                .map_err(|release_error| {
+                    format!("Artifact projection release error: {release_error}")
+                })?;
             mark_artifact_delivery_failure(&mut event.payload, "artifact_projection_failed");
             tracing::warn!(
                 error = %error,

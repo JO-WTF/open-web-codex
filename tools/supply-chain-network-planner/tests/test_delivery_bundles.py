@@ -269,6 +269,12 @@ def test_delivery_schema_fixtures_match_models_and_validate_complete_indonesia_b
         schema = json.loads(
             (fixture_root / f"{schema_name}.schema.json").read_text(encoding="utf-8")
         )
+        payload_fixture = json.loads(
+            (fixture_root.parent / "fixtures" / f"{schema_name}.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert payload_fixture == bundle.model_dump(mode="json")
         assert schema == model_schema(schema_name)
         Draft202012Validator.check_schema(schema)
         Draft202012Validator(schema).validate(bundle.model_dump(mode="json"))

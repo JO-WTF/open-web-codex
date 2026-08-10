@@ -201,7 +201,7 @@ fn validate_browser_safe_value(
     match value {
         Value::Object(object) => {
             for (key, value) in object {
-                if crate::event_projection::is_sensitive_key(key) {
+                if artifact_key_is_unsafe(key) {
                     return Err("artifact_content_unsafe");
                 }
                 validate_browser_safe_value(value, depth + 1, nodes)?;
@@ -222,6 +222,18 @@ fn validate_browser_safe_value(
         Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
     Ok(())
+}
+
+fn artifact_key_is_unsafe(key: &str) -> bool {
+    if crate::event_projection::is_sensitive_key(key) {
+        return true;
+    }
+    let normalized = key
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    normalized.contains("config")
 }
 
 pub(crate) fn artifact_delivery_failure(code: &str) -> ArtifactFailureSummary {
