@@ -116,6 +116,37 @@ fn model_provider_models_failure(error: ProviderModelsError) -> ModelProviderMod
     }
 }
 
+fn model_provider_models_success(
+    models: Vec<ProviderModelSummary>,
+) -> ModelProviderModelsListResult {
+    let models = models
+        .into_iter()
+        .map(|model| ModelProviderModelSummary {
+            model_id: model.model_id,
+            model_name: model.model_name,
+            max_token_len: model.max_token_len,
+            max_output_tokens: model.max_output_tokens,
+            show_in_picker: model.show_in_picker,
+            context_window: model.context_window,
+        })
+        .collect::<Vec<_>>();
+    if models.is_empty() {
+        ModelProviderModelsListResult::Failure {
+            error: ModelProviderModelsListFailure::EmptyCatalog,
+        }
+    } else {
+        ModelProviderModelsListResult::Success { models }
+    }
+}
+
+const MAX_MODEL_PROVIDER_ID_CHARS: usize = 128;
+
+fn valid_model_provider_id(provider_id: &str) -> bool {
+    !provider_id.trim().is_empty()
+        && provider_id.chars().count() <= MAX_MODEL_PROVIDER_ID_CHARS
+        && !provider_id.chars().any(char::is_control)
+}
+
 impl CatalogRequestProcessor {
     pub(crate) fn new(
         outgoing: Arc<OutgoingMessageSender>,
@@ -236,38 +267,34 @@ impl CatalogRequestProcessor {
         params: ModelProviderModelsListParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         let config = self.load_latest_config(None).await?;
-        let result = match config.model_providers.get(&params.provider_id) {
-            Some(provider_info) => {
-                let provider =
-                    create_model_provider(provider_info.clone(), Some(self.auth_manager.clone()));
-                provider
-                    .list_models_fresh(
-                        &codex_models_manager::client_version_to_whole(),
-                        config.http_client_factory(),
-                    )
-                    .await
-                    .map_or_else(
-                        |error| ModelProviderModelsListResult::Failure {
-                            error: model_provider_models_failure(error),
-                        },
-                        |models| ModelProviderModelsListResult::Success {
-                            models: models
-                                .into_iter()
-                                .map(|model| ModelProviderModelSummary {
-                                    model_id: model.model_id,
-                                    model_name: model.model_name,
-                                    max_token_len: model.max_token_len,
-                                    max_output_tokens: model.max_output_tokens,
-                                    show_in_picker: model.show_in_picker,
-                                    context_window: model.context_window,
-                                })
-                                .collect(),
-                        },
-                    )
-            }
-            None => ModelProviderModelsListResult::Failure {
+        let result = if !valid_model_provider_id(&params.provider_id) {
+            ModelProviderModelsListResult::Failure {
                 error: ModelProviderModelsListFailure::NotFound,
-            },
+            }
+        } else {
+            match config.model_providers.get(&params.provider_id) {
+                Some(provider_info) => {
+                    let provider = create_model_provider(
+                        provider_info.clone(),
+                        Some(self.auth_manager.clone()),
+                    );
+                    provider
+                        .list_models_fresh(
+                            &codex_models_manager::client_version_to_whole(),
+                            config.http_client_factory(),
+                        )
+                        .await
+                        .map_or_else(
+                            |error| ModelProviderModelsListResult::Failure {
+                                error: model_provider_models_failure(error),
+                            },
+                            model_provider_models_success,
+                        )
+                }
+                None => ModelProviderModelsListResult::Failure {
+                    error: ModelProviderModelsListFailure::NotFound,
+                },
+            }
         };
         Ok(Some(ModelProviderModelsListResponse { result }.into()))
     }
@@ -828,5 +855,46 @@ impl CatalogRequestProcessor {
                 }
             })
             .map_err(|err| internal_error(format!("failed to update skill settings: {err}")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_provider_models_success_rejects_empty_catalogs() {
+        assert_eq!(
+            model_provider_models_success(Vec::new()),
+            ModelProviderModelsListResult::Failure {
+                error: ModelProviderModelsListFailure::EmptyCatalog,
+            }
+        );
+
+        let result = model_provider_models_success(vec![ProviderModelSummary {
+            model_id: "target-model".to_string(),
+            model_name: None,
+            max_token_len: None,
+            max_output_tokens: None,
+            show_in_picker: true,
+            context_window: None,
+        }]);
+        assert!(matches!(
+            result,
+            ModelProviderModelsListResult::Success { models }
+                if models.len() == 1 && models[0].model_id == "target-model"
+        ));
+    }
+
+    #[test]
+    fn model_provider_id_validation_is_bounded_and_exact() {
+        assert!(!valid_model_provider_id(""));
+        assert!(!valid_model_provider_id("  \t"));
+        assert!(!valid_model_provider_id("target\n"));
+        assert!(!valid_model_provider_id(
+            &"x".repeat(MAX_MODEL_PROVIDER_ID_CHARS + 1)
+        ));
+        assert!(valid_model_provider_id("target"));
+        assert!(valid_model_provider_id(" target "));
     }
 }

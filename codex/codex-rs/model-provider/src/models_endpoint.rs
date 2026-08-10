@@ -156,6 +156,9 @@ impl OpenAiModelsEndpoint {
             .map_err(|_| ProviderModelsError::Authentication)?;
         let request_url =
             ModelsClient::<ReqwestTransport>::request_url(&api_provider, client_version);
+        if !valid_models_request_url(&request_url) {
+            return Err(ProviderModelsError::NotFound);
+        }
         let auth_telemetry = auth_header_telemetry(api_auth.as_ref());
         let agent_identity_telemetry = if let Some(CodexAuth::AgentIdentity(auth)) = auth.as_ref() {
             Some(agent_identity_telemetry(auth))
@@ -227,6 +230,13 @@ fn provider_models_error_from_catalog(error: ModelsCatalogError) -> ProviderMode
     }
 }
 
+fn valid_models_request_url(request_url: &str) -> bool {
+    let Ok(uri) = request_url.parse::<http::Uri>() else {
+        return false;
+    };
+    matches!(uri.scheme_str(), Some("http") | Some("https")) && uri.authority().is_some()
+}
+
 fn provider_model_summary_from_rich(
     model: codex_protocol::openai_models::ModelInfo,
 ) -> ProviderModelSummary {
@@ -237,9 +247,11 @@ fn provider_model_summary_from_rich(
     )
     .then_some(model.truncation_policy.limit)
     .filter(|limit| *limit > 0);
-    let model_name = (!model.display_name.trim().is_empty())
-        .then_some(model.display_name)
-        .filter(|name| name.chars().count() <= 512);
+    let display_name = model.display_name.trim();
+    let model_name = (!display_name.is_empty()
+        && display_name.chars().count() <= 512
+        && !display_name.chars().any(char::is_control))
+    .then(|| display_name.to_string());
     ProviderModelSummary {
         model_id: model.slug,
         model_name,
@@ -414,6 +426,7 @@ mod tests {
     use codex_protocol::config_types::ModelProviderAuthInfo;
     use codex_protocol::openai_models::ModelsResponse;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
     use wiremock::Mock;
     use wiremock::MockServer;
     use wiremock::ResponseTemplate;
@@ -479,6 +492,47 @@ mod tests {
         );
 
         assert!(!endpoint.has_command_auth());
+    }
+
+    fn rich_model() -> ModelInfo {
+        serde_json::from_value(json!({
+            "slug": "gpt-test",
+            "display_name": "gpt-test",
+            "description": "desc",
+            "default_reasoning_level": "medium",
+            "supported_reasoning_levels": [{"effort": "low", "description": "low"}],
+            "shell_type": "shell_command",
+            "visibility": "list",
+            "supported_in_api": true,
+            "priority": 1,
+            "support_verbosity": false,
+            "default_verbosity": null,
+            "apply_patch_tool_type": null,
+            "truncation_policy": {"mode": "tokens", "limit": 10_000},
+            "supports_parallel_tool_calls": false,
+            "supports_image_detail_original": false,
+            "context_window": 272_000,
+            "experimental_supported_tools": [],
+        }))
+        .expect("rich model fixture should deserialize")
+    }
+
+    #[test]
+    fn rich_summary_sanitizes_display_name() {
+        let mut model = rich_model();
+        model.display_name = "  Display Name  ".to_string();
+        assert_eq!(
+            provider_model_summary_from_rich(model).model_name,
+            Some("Display Name".to_string())
+        );
+
+        let mut model = rich_model();
+        model.display_name = "bad\u{0007}name".to_string();
+        assert_eq!(provider_model_summary_from_rich(model).model_name, None);
+
+        let mut model = rich_model();
+        model.display_name = "x".repeat(513);
+        assert_eq!(provider_model_summary_from_rich(model).model_name, None);
     }
 
     #[tokio::test]
@@ -559,6 +613,23 @@ mod tests {
                 context_window: None,
             }]
         );
+    }
+
+    #[tokio::test]
+    async fn fresh_catalog_maps_invalid_base_url_to_not_found() {
+        let provider_info =
+            ModelProviderInfo::create_openai_provider(Some("not a valid absolute URL".to_string()));
+        let endpoint = OpenAiModelsEndpoint::new(provider_info, None);
+
+        let error = endpoint
+            .list_model_catalog(
+                "0.0.0",
+                HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy),
+            )
+            .await
+            .expect_err("invalid base URL should be rejected before transport");
+
+        assert_eq!(error, ProviderModelsError::NotFound);
     }
 
     #[tokio::test]

@@ -202,7 +202,9 @@ fn validate_compatible_model_ids(
 }
 
 fn valid_model_id(model_id: &str) -> bool {
-    !model_id.trim().is_empty() && model_id.chars().count() <= MAX_MODEL_ID_CHARS
+    !model_id.trim().is_empty()
+        && model_id.chars().count() <= MAX_MODEL_ID_CHARS
+        && !model_id.chars().any(char::is_control)
 }
 
 fn classify_models_transport_error(error: ApiError) -> ModelsCatalogError {
@@ -369,6 +371,12 @@ mod tests {
             ],
         };
         let rich_body = serde_json::to_vec(&response).unwrap();
+        let mut invalid_response = response.clone();
+        invalid_response.models[0].slug = "bad\nslug".to_string();
+        assert_eq!(
+            parse_models_catalog(&serde_json::to_vec(&invalid_response).unwrap()),
+            Err(ModelsCatalogError::EmptyCatalog)
+        );
 
         let transport = CapturingTransport {
             last_request: Arc::new(Mutex::new(None)),
@@ -420,7 +428,7 @@ mod tests {
     #[test]
     fn parses_openai_compatible_catalog_and_bounds_ids() {
         let result = parse_models_catalog(
-            br#"{"data":[{"id":" first "},{"id":""},{"id":"first"},{"id":"second"}]}"#,
+            br#"{"data":[{"id":" first "},{"id":""},{"id":"first"},{"id":"second"},{"id":"bad\nid"}]}"#,
         )
         .expect("compatible catalog should parse");
         assert_eq!(

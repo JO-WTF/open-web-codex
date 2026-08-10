@@ -134,6 +134,37 @@ request_max_retries = 0
             error: ModelProviderModelsListFailure::NotFound,
         }
     );
+
+    for provider_id in ["", "  ", " target ", "target\n"] {
+        let response: ModelProviderModelsListResponse = app
+            .request(|request_id| ClientRequest::ModelProviderModelsList {
+                request_id,
+                params: ModelProviderModelsListParams {
+                    provider_id: provider_id.to_string(),
+                },
+            })
+            .await?;
+        assert_eq!(
+            response.result,
+            ModelProviderModelsListResult::Failure {
+                error: ModelProviderModelsListFailure::NotFound,
+            }
+        );
+    }
+    let response: ModelProviderModelsListResponse = app
+        .request(|request_id| ClientRequest::ModelProviderModelsList {
+            request_id,
+            params: ModelProviderModelsListParams {
+                provider_id: "x".repeat(129),
+            },
+        })
+        .await?;
+    assert_eq!(
+        response.result,
+        ModelProviderModelsListResult::Failure {
+            error: ModelProviderModelsListFailure::NotFound,
+        }
+    );
     Ok(())
 }
 
