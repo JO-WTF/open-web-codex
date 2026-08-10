@@ -171,6 +171,10 @@ pub fn router(
         )
         .route("/approvals", axum::routing::get(approvals::list_pending))
         .route(
+            "/runs/{id}/approval-requests",
+            axum::routing::get(approvals::list_run_approval_requests),
+        )
+        .route(
             "/runs/{id}/user-input-requests",
             axum::routing::get(approvals::list_run_user_inputs),
         )

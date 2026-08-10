@@ -934,9 +934,23 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     let pending = call(&app, authenticated("GET", "/api/approvals", &first_token)).await;
     assert_eq!(pending.0, StatusCode::OK);
     assert_eq!(pending.1[0]["id"], approval_id.to_string());
-    assert_eq!(pending.1[0]["command"], "git status");
     assert!(!pending.1.to_string().contains("/private/server/path"));
     assert!(!pending.1.to_string().contains("\"77\""));
+
+    let run_pending = call(
+        &app,
+        authenticated(
+            "GET",
+            &format!("/api/runs/{first_run_id}/approval-requests"),
+            &first_token,
+        ),
+    )
+    .await;
+    assert_eq!(run_pending.0, StatusCode::OK);
+    assert_eq!(run_pending.1[0]["subject"]["kind"], "command");
+    assert_eq!(run_pending.1[0]["subject"]["action"], "workspace_command");
+    assert!(!run_pending.1.to_string().contains("git status"));
+    assert!(!run_pending.1.to_string().contains("/private/server/path"));
 
     let decided = call(
         &app,
@@ -987,6 +1001,42 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     .execute(&pool)
     .await
     .unwrap();
+    let child_command_approval_id = approval_service
+        .capture_message(
+            runtime_instance_id,
+            &json!({
+                "id": 771,
+                "method": "item/commandExecution/requestApproval",
+                "params": {
+                    "threadId": "approval-child-thread",
+                    "turnId": "child-turn-1",
+                    "itemId": "child-item-1",
+                    "commandActions": [{"type": "read", "path": "data/input.csv"}]
+                }
+            }),
+        )
+        .await
+        .unwrap()
+        .expect("captured child generic approval");
+    let child_generic_pending = call(
+        &app,
+        authenticated(
+            "GET",
+            &format!("/api/runs/{first_run_id}/approval-requests"),
+            &first_token,
+        ),
+    )
+    .await;
+    assert_eq!(child_generic_pending.0, StatusCode::OK);
+    let child_generic = child_generic_pending
+        .1
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|value| value["id"] == child_command_approval_id.to_string())
+        .expect("child generic approval projection");
+    assert_eq!(child_generic["source"]["kind"], "agent");
+    assert_eq!(child_generic["source"]["displayTitle"], "Data Agent");
     let child_approval_id = approval_service
         .capture_message(
             runtime_instance_id,
@@ -1113,6 +1163,25 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
         .mark_delivery_unknown(actor, &first_dispatch)
         .await
         .expect("mark uncertain delivery");
+    let delivery_unknown = call(
+        &app,
+        authenticated(
+            "GET",
+            &format!("/api/runs/{first_run_id}/approval-requests"),
+            &first_token,
+        ),
+    )
+    .await;
+    assert_eq!(delivery_unknown.0, StatusCode::OK);
+    let retry_pending = delivery_unknown
+        .1
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|value| value["id"] == retry_approval_id.to_string())
+        .expect("delivery-unknown approval projection");
+    assert_eq!(retry_pending["state"], "delivery_unknown");
+    assert_eq!(retry_pending["version"], 2);
     let retry_dispatch = approval_service
         .begin_decision(
             actor,
@@ -1129,6 +1198,20 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
         .complete_decision(actor, &retry_dispatch)
         .await
         .expect("complete retried decision");
+    let terminal = call(
+        &app,
+        authenticated(
+            "GET",
+            &format!("/api/runs/{first_run_id}/approval-requests"),
+            &first_token,
+        ),
+    )
+    .await;
+    assert_eq!(terminal.0, StatusCode::OK);
+    assert!(!terminal
+        .1
+        .to_string()
+        .contains(&retry_approval_id.to_string()));
 
     let next_runtime_instance_id = Uuid::now_v7();
     let reused_request_id = approval_service
@@ -1352,6 +1435,16 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     )
     .await;
     assert_eq!(cross_tenant_mcp_forms.0, StatusCode::NOT_FOUND);
+    let cross_tenant_approval_requests = call(
+        &app,
+        authenticated(
+            "GET",
+            &format!("/api/runs/{first_run_id}/approval-requests"),
+            second_token,
+        ),
+    )
+    .await;
+    assert_eq!(cross_tenant_approval_requests.0, StatusCode::NOT_FOUND);
     let cross_tenant_mcp_form_response = call(
         &app,
         authenticated_json(

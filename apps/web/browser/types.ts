@@ -206,6 +206,54 @@ export type PendingUserInputSummary = {
   createdAt: string;
 };
 
+export type ApprovalRequestSource =
+  | { kind: "root" }
+  | { kind: "agent"; executionId: string | null; displayTitle: string };
+
+export type PendingApprovalState = "pending" | "dispatching" | "delivery_unknown";
+
+export type PendingApprovalCapability =
+  | "network"
+  | "filesystem_read"
+  | "filesystem_write";
+
+export type PendingApprovalFileChangeAction = "write";
+
+export type PendingApprovalSubject =
+  | {
+      kind: "command";
+      action: string;
+      path: string | null;
+      reason: string | null;
+    }
+  | {
+      kind: "file_change";
+      action: PendingApprovalFileChangeAction;
+      path: string | null;
+      reason: string | null;
+    }
+  | { kind: "permissions"; capabilities: PendingApprovalCapability[] }
+  | {
+      kind: "url";
+      url: string | null;
+      server: string | null;
+      message: string | null;
+      available: boolean;
+    };
+
+export type PendingApprovalSummary = {
+  id: string;
+  runId: string;
+  source: ApprovalRequestSource;
+  threadId: string;
+  turnId: string | null;
+  itemId: string | null;
+  subject: PendingApprovalSubject;
+  state: PendingApprovalState;
+  version: number;
+  createdAt: string;
+};
+
 export type McpFormRequestSource =
   | { kind: "root" }
   | { kind: "agent"; executionId: string; displayTitle: string };

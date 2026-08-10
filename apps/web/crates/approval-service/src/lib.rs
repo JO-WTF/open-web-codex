@@ -5,10 +5,11 @@
 //! small authorized projection needed to make a decision.
 
 use open_web_codex_platform_contracts::{
-    ApprovalDecision, ApprovalSummary, DecideApprovalRequest, McpFormFieldSchema,
-    McpFormFieldSummary, McpFormOptionSummary, McpFormRequestSource, McpFormResponseAction,
-    PendingMcpFormSummary, PendingUserInputSummary, RespondMcpFormRequest, RespondUserInputRequest,
-    UserInputOptionSummary, UserInputQuestionSummary, UserInputRequestSource,
+    ApprovalDecision, ApprovalRequestSource, ApprovalSummary, DecideApprovalRequest,
+    McpFormFieldSchema, McpFormFieldSummary, McpFormOptionSummary, McpFormRequestSource,
+    McpFormResponseAction, PendingApprovalState, PendingMcpFormSummary, PendingUserInputSummary,
+    RespondMcpFormRequest, RespondUserInputRequest, UserInputOptionSummary,
+    UserInputQuestionSummary, UserInputRequestSource,
 };
 use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
@@ -33,6 +34,22 @@ const MAX_MCP_FORM_VALUE_BYTES: usize = 8 * 1024;
 pub struct ApprovalActor {
     pub user_id: Uuid,
     pub organization_id: Uuid,
+}
+
+/// Server-only pending approval row; payload is never serialized as a browser DTO.
+#[derive(Debug, Clone)]
+pub struct PendingApprovalRecord {
+    pub id: Uuid,
+    pub run_id: Uuid,
+    pub source: ApprovalRequestSource,
+    pub thread_id: String,
+    pub turn_id: Option<String>,
+    pub item_id: Option<String>,
+    pub request_type: String,
+    pub request_payload: Value,
+    pub state: PendingApprovalState,
+    pub version: i64,
+    pub created_at: sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>,
 }
 
 #[derive(Debug)]
@@ -233,6 +250,99 @@ impl ApprovalService {
         Ok(rows.iter().map(summary_from_row).collect())
     }
 
+    pub async fn list_pending_for_run(
+        &self,
+        actor: ApprovalActor,
+        runtime_instance_id: Uuid,
+        run_id: Uuid,
+    ) -> Result<Vec<PendingApprovalRecord>, ApprovalServiceError> {
+        let authorized = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM runs r \
+             JOIN profiles p ON p.id = r.requested_profile_id \
+             WHERE r.id = $1 AND r.organization_id = $2 AND p.organization_id = $2 \
+               AND p.owner_user_id = $3 AND p.runtime_key = $4)",
+        )
+        .bind(run_id)
+        .bind(actor.organization_id)
+        .bind(actor.user_id)
+        .bind(&self.runtime_key)
+        .fetch_one(&self.db)
+        .await?;
+        if !authorized {
+            return Err(ApprovalServiceError::NotFound);
+        }
+
+        self.cancel_stale_runtime_requests(runtime_instance_id)
+            .await?;
+        let rows = sqlx::query(
+            "SELECT a.id, a.run_id, a.thread_id, a.request_type, a.request_payload, \
+                    a.state, a.version, a.created_at \
+             FROM approvals a \
+             JOIN profiles p ON p.id = a.profile_id \
+             JOIN runs r ON r.id = a.run_id AND r.requested_profile_id = p.id \
+             WHERE a.run_id = $1 AND r.id = $1 AND a.organization_id = $2 \
+               AND r.organization_id = $2 AND p.organization_id = $2 \
+               AND p.owner_user_id = $3 AND p.runtime_key = $4 \
+               AND a.runtime_instance_id = $5 \
+               AND a.state IN ('pending', 'dispatching', 'delivery_unknown') \
+               AND (a.request_type IN ($6, $7, $8) \
+                    OR (a.request_type = $9 AND a.request_payload->>'mode' = 'url')) \
+             ORDER BY a.created_at, a.id",
+        )
+        .bind(run_id)
+        .bind(actor.organization_id)
+        .bind(actor.user_id)
+        .bind(&self.runtime_key)
+        .bind(runtime_instance_id)
+        .bind(COMMAND_APPROVAL)
+        .bind(FILE_APPROVAL)
+        .bind(PERMISSIONS_APPROVAL)
+        .bind(MCP_ELICITATION_REQUEST)
+        .fetch_all(&self.db)
+        .await?;
+
+        let mut records = Vec::with_capacity(rows.len());
+        for row in rows {
+            let payload: Value = row.get("request_payload");
+            let thread_id = row
+                .get::<Option<String>, _>("thread_id")
+                .filter(|value| !value.trim().is_empty())
+                .ok_or(ApprovalServiceError::Invalid)?;
+            let turn_id = payload
+                .get("turnId")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_string);
+            let item_id = payload
+                .get("itemId")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_string);
+            let source = self
+                .resolve_approval_source(actor, run_id, &thread_id, turn_id.as_deref())
+                .await?
+                .unwrap_or_else(|| ApprovalRequestSource::Agent {
+                    execution_id: None,
+                    display_title: "Agent".to_string(),
+                });
+            let state = pending_approval_state(row.get("state"))?;
+            records.push(PendingApprovalRecord {
+                id: row.get("id"),
+                run_id: row.get("run_id"),
+                source,
+                thread_id,
+                turn_id,
+                item_id,
+                request_type: row.get("request_type"),
+                request_payload: payload,
+                state,
+                version: row.get("version"),
+                created_at: row.get("created_at"),
+            });
+        }
+        Ok(records)
+    }
+
     pub async fn list_pending_user_inputs(
         &self,
         actor: ApprovalActor,
@@ -356,13 +466,13 @@ impl ApprovalService {
         Ok(summaries)
     }
 
-    async fn resolve_user_input_source(
+    async fn resolve_approval_source(
         &self,
         actor: ApprovalActor,
         run_id: Uuid,
         thread_id: &str,
         turn_id: Option<&str>,
-    ) -> Result<Option<UserInputRequestSource>, ApprovalServiceError> {
+    ) -> Result<Option<ApprovalRequestSource>, ApprovalServiceError> {
         let is_root = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS(SELECT 1 FROM runs r \
              WHERE r.id = $1 AND r.organization_id = $2 AND r.codex_thread_id = $3)",
@@ -373,11 +483,11 @@ impl ApprovalService {
         .fetch_one(&self.db)
         .await?;
         if is_root {
-            return Ok(Some(UserInputRequestSource::Root));
+            return Ok(Some(ApprovalRequestSource::Root));
         }
 
         let row = sqlx::query(
-            "SELECT execution.id, execution.display_title, execution.status \
+            "SELECT execution.id, execution.display_title \
              FROM runtime_agent_execution_projections execution \
              JOIN runs r ON r.id = execution.root_run_id \
              WHERE execution.root_run_id = $1 AND execution.organization_id = $2 \
@@ -392,10 +502,68 @@ impl ApprovalService {
         .bind(turn_id)
         .fetch_optional(&self.db)
         .await?;
-        Ok(row.map(|row| UserInputRequestSource::Agent {
-            execution_id: row.get("id"),
-            display_title: row.get("display_title"),
+        if let Some(row) = row {
+            return Ok(Some(ApprovalRequestSource::Agent {
+                execution_id: Some(row.get("id")),
+                display_title: row.get("display_title"),
+            }));
+        }
+
+        // Runtime agent projections can be persisted before the execution
+        // projection during event races. Keep the approval recoverable with a
+        // bounded, non-authoritative display fallback until the execution row
+        // arrives; the optional execution id makes that uncertainty explicit.
+        let projection = sqlx::query(
+            "SELECT agent.agent_nickname, agent.agent_role \
+             FROM runtime_agent_projections agent \
+             JOIN runs r ON r.id = agent.root_run_id \
+             WHERE agent.root_run_id = $1 AND agent.organization_id = $2 \
+               AND r.organization_id = $2 AND agent.thread_id = $3 \
+             LIMIT 1",
+        )
+        .bind(run_id)
+        .bind(actor.organization_id)
+        .bind(thread_id)
+        .fetch_optional(&self.db)
+        .await?;
+        let display_title = projection
+            .and_then(|row| {
+                row.get::<Option<String>, _>("agent_nickname")
+                    .or_else(|| row.get::<Option<String>, _>("agent_role"))
+            })
+            .unwrap_or_else(|| "Agent".to_string());
+        Ok(Some(ApprovalRequestSource::Agent {
+            execution_id: None,
+            display_title,
         }))
+    }
+
+    async fn resolve_user_input_source(
+        &self,
+        actor: ApprovalActor,
+        run_id: Uuid,
+        thread_id: &str,
+        turn_id: Option<&str>,
+    ) -> Result<Option<UserInputRequestSource>, ApprovalServiceError> {
+        Ok(
+            match self
+                .resolve_approval_source(actor, run_id, thread_id, turn_id)
+                .await?
+            {
+                Some(ApprovalRequestSource::Root) => Some(UserInputRequestSource::Root),
+                Some(ApprovalRequestSource::Agent {
+                    execution_id: Some(execution_id),
+                    display_title,
+                }) => Some(UserInputRequestSource::Agent {
+                    execution_id,
+                    display_title,
+                }),
+                Some(ApprovalRequestSource::Agent {
+                    execution_id: None, ..
+                })
+                | None => None,
+            },
+        )
     }
 
     async fn resolve_mcp_form_source(
@@ -828,6 +996,15 @@ impl ApprovalService {
     }
 }
 
+fn pending_approval_state(value: String) -> Result<PendingApprovalState, ApprovalServiceError> {
+    match value.as_str() {
+        "pending" => Ok(PendingApprovalState::Pending),
+        "dispatching" => Ok(PendingApprovalState::Dispatching),
+        "delivery_unknown" => Ok(PendingApprovalState::DeliveryUnknown),
+        _ => Err(ApprovalServiceError::Invalid),
+    }
+}
+
 fn resolved_terminal_state(state: &str, decision: Option<&str>) -> Option<&'static str> {
     if !matches!(state, "pending" | "dispatching" | "delivery_unknown") {
         return None;
@@ -859,8 +1036,30 @@ fn approval_payload(request_type: &str, params: &Value) -> Value {
         }
     }
     if request_type == COMMAND_APPROVAL {
-        if let Some(command) = params.get("command") {
-            payload.insert("command".to_string(), command.clone());
+        if let Some(actions) = params.get("commandActions").and_then(Value::as_array) {
+            let actions = actions
+                .iter()
+                .take(16)
+                .filter_map(|action| {
+                    let action = action.as_object()?;
+                    let action_type = action
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .map(|value| value.chars().take(64).collect::<String>())?;
+                    let mut projected = serde_json::Map::new();
+                    projected.insert("type".to_string(), Value::String(action_type));
+                    if let Some(path) = action.get("path").and_then(Value::as_str) {
+                        projected.insert(
+                            "path".to_string(),
+                            Value::String(path.chars().take(512).collect()),
+                        );
+                    }
+                    Some(Value::Object(projected))
+                })
+                .collect::<Vec<_>>();
+            if !actions.is_empty() {
+                payload.insert("commandActions".to_string(), Value::Array(actions));
+            }
         }
     }
     if request_type == PERMISSIONS_APPROVAL {
@@ -1678,9 +1877,10 @@ fn approval_response(
 #[cfg(test)]
 mod tests {
     use super::{
-        approval_outcome, approval_response, mcp_form_audit_metadata, parse_mcp_form_fields,
-        resolved_terminal_state, validate_mcp_form_response, validate_user_input_answers,
-        ApprovalOutcome, COMMAND_APPROVAL, MCP_ELICITATION_REQUEST, PERMISSIONS_APPROVAL,
+        approval_outcome, approval_payload, approval_response, mcp_form_audit_metadata,
+        parse_mcp_form_fields, pending_approval_state, resolved_terminal_state,
+        validate_mcp_form_response, validate_user_input_answers, ApprovalOutcome, COMMAND_APPROVAL,
+        MCP_ELICITATION_REQUEST, PERMISSIONS_APPROVAL,
     };
     use open_web_codex_platform_contracts::{
         ApprovalDecision, McpFormFieldSchema, McpFormResponseAction, RespondMcpFormRequest,
@@ -1709,6 +1909,32 @@ mod tests {
         assert_eq!(permissions["scope"], "turn");
         assert_eq!(permissions["permissions"]["network"]["enabled"], true);
         assert_eq!(state, "approved");
+    }
+
+    #[test]
+    fn stores_only_selected_approval_fields_for_safe_recovery() {
+        let payload = approval_payload(
+            COMMAND_APPROVAL,
+            &json!({
+                "threadId": "thread-1",
+                "command": "cat /private/server/secret.txt",
+                "aggregatedOutput": "password=secret",
+                "commandActions": [{
+                    "type": "read",
+                    "path": "src/lib.rs",
+                    "command": "cat /private/server/secret.txt"
+                }]
+            }),
+        );
+        assert!(payload.get("command").is_none());
+        assert!(payload.get("aggregatedOutput").is_none());
+        assert_eq!(payload["commandActions"][0]["type"], "read");
+        assert_eq!(payload["commandActions"][0]["path"], "src/lib.rs");
+        assert!(payload["commandActions"][0].get("command").is_none());
+        assert_eq!(
+            pending_approval_state("delivery_unknown".to_string()).unwrap(),
+            open_web_codex_platform_contracts::PendingApprovalState::DeliveryUnknown
+        );
     }
 
     #[test]

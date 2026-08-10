@@ -1206,6 +1206,93 @@ pub struct DecideApprovalRequest {
     pub version: i64,
 }
 
+/// Browser-safe identity for the Runtime owner of a generic approval.
+///
+/// The Runtime request id and complete request payload remain server-side.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ApprovalRequestSource {
+    Root,
+    Agent {
+        execution_id: Option<Uuid>,
+        display_title: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PendingApprovalState {
+    Pending,
+    Dispatching,
+    DeliveryUnknown,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PendingApprovalCapability {
+    Network,
+    FilesystemRead,
+    FilesystemWrite,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PendingApprovalFileChangeAction {
+    Write,
+}
+
+/// Bounded, typed subject details for a Runtime-owned generic approval.
+///
+/// These fields are safe presentation facts only. Raw Runtime command lines,
+/// absolute paths, permission payloads and credential-bearing URLs are never
+/// included in this contract.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum PendingApprovalSubject {
+    Command {
+        action: String,
+        path: Option<String>,
+        reason: Option<String>,
+    },
+    FileChange {
+        action: PendingApprovalFileChangeAction,
+        path: Option<String>,
+        reason: Option<String>,
+    },
+    Permissions {
+        capabilities: Vec<PendingApprovalCapability>,
+    },
+    Url {
+        url: Option<String>,
+        server: Option<String>,
+        message: Option<String>,
+        available: bool,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingApprovalSummary {
+    pub id: Uuid,
+    pub run_id: Uuid,
+    pub source: ApprovalRequestSource,
+    pub thread_id: String,
+    pub turn_id: Option<String>,
+    pub item_id: Option<String>,
+    pub subject: PendingApprovalSubject,
+    pub state: PendingApprovalState,
+    pub version: i64,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserInputAnswer {
     pub answers: Vec<String>,

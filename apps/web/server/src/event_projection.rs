@@ -2270,6 +2270,15 @@ pub(crate) fn sanitize_value(value: &Value, key: &str) -> Value {
     }
 }
 
+pub(crate) fn bounded_sanitized_text(value: &Value, key: &str, max_len: usize) -> Option<String> {
+    let sanitized = sanitize_value(value, key);
+    let text = sanitized.as_str()?.trim();
+    if text.is_empty() || text.len() > max_len || text.chars().any(char::is_control) {
+        return None;
+    }
+    Some(text.to_string())
+}
+
 fn redact_browser_text(value: &str) -> String {
     redact_local_paths(&redact_internal_resource_uris(value))
 }
