@@ -105,6 +105,14 @@ export type RuntimeAgentActivityKind =
   | "timeout"
   | "interrupted";
 
+export type RuntimeAgentActivitySubject =
+  | { kind: "mcp_tool"; server: string | null; tool: string | null }
+  | { kind: "runtime_tool"; namespace: string | null; tool: string | null }
+  | { kind: "workspace_action"; action: string; path: string | null }
+  | { kind: "web_search" }
+  | { kind: "image_view" }
+  | { kind: "image_generation" };
+
 export type RuntimeAgentActivity = {
   run_id: string;
   sequence: number;
@@ -113,6 +121,7 @@ export type RuntimeAgentActivity = {
   item_id: string | null;
   kind: RuntimeAgentActivityKind;
   status: "pending" | "running" | "completed" | "failed" | "waiting";
+  subject?: RuntimeAgentActivitySubject | null;
   title: string;
   detail: string | null;
   created_at: string;

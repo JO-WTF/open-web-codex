@@ -453,6 +453,29 @@ pub enum RuntimeAgentActivityStatus {
     Waiting,
 }
 
+/// Typed, bounded description of the Runtime item operation represented by an
+/// Agent activity.  The item itself remains owned by Codex; this is only the
+/// browser-safe descriptor used by the Platform projection.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RuntimeAgentActivitySubject {
+    McpTool {
+        server: Option<String>,
+        tool: Option<String>,
+    },
+    RuntimeTool {
+        namespace: Option<String>,
+        tool: Option<String>,
+    },
+    WorkspaceAction {
+        action: String,
+        path: Option<String>,
+    },
+    WebSearch,
+    ImageView,
+    ImageGeneration,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeAgentExecutionStatus {
@@ -477,6 +500,7 @@ pub struct RuntimeAgentActivity {
     pub item_id: Option<String>,
     pub kind: RuntimeAgentActivityKind,
     pub status: RuntimeAgentActivityStatus,
+    pub subject: Option<RuntimeAgentActivitySubject>,
     pub title: String,
     pub detail: Option<String>,
     pub created_at: DateTime<Utc>,

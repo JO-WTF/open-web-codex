@@ -6,7 +6,8 @@ use axum::{
 use open_web_codex_platform_contracts::error::PlatformError;
 use open_web_codex_platform_contracts::{
     RuntimeAgentActivity, RuntimeAgentActivityKind, RuntimeAgentActivityStatus,
-    RuntimeAgentExecution, RuntimeAgentExecutionStatus, RuntimeAgentProjection,
+    RuntimeAgentActivitySubject, RuntimeAgentExecution, RuntimeAgentExecutionStatus,
+    RuntimeAgentProjection,
 };
 use open_web_codex_platform_store::AppState;
 use serde_json::Value;
@@ -452,6 +453,16 @@ fn project_activities_with_wait_context(
         )];
     }
 
+    let item_descriptor = matches!(
+        event.event_type.as_str(),
+        "codex.item.started" | "codex.item.completed"
+    )
+    .then(|| project_agent_item_descriptor(item_type, data, completed))
+    .flatten();
+    let subject = item_descriptor
+        .as_ref()
+        .map(|descriptor| descriptor.subject.clone());
+    let item_detail = item_descriptor.and_then(|descriptor| descriptor.detail);
     let projected = match event.event_type.as_str() {
         "codex.turn.started" => Some((
             RuntimeAgentActivityKind::TurnStarted,
@@ -532,13 +543,14 @@ fn project_activities_with_wait_context(
     };
     projected
         .map(|(kind, status, title)| {
-            vec![activity(
+            vec![activity_with_subject(
                 &event,
                 event.thread_id.clone(),
                 kind,
                 status,
                 &title,
-                None,
+                item_detail,
+                subject,
             )]
         })
         .unwrap_or_default()
@@ -564,11 +576,22 @@ fn task_event_title(
         .unwrap_or_else(|| fallback.to_string())
 }
 
-fn project_item_activity(
+#[derive(Debug, Clone)]
+pub(crate) struct AgentItemDescriptor {
+    pub(crate) subject: RuntimeAgentActivitySubject,
+    pub(crate) label: String,
+    pub(crate) detail: Option<String>,
+    pub(crate) failed: bool,
+}
+
+/// Project only the safe, bounded descriptor shared by live Agent execution
+/// updates and the rebuildable activity endpoint. Raw item arguments/results
+/// never enter this descriptor.
+pub(crate) fn project_agent_item_descriptor(
     item_type: &str,
     data: &Value,
     completed: bool,
-) -> Option<(RuntimeAgentActivityKind, RuntimeAgentActivityStatus, String)> {
+) -> Option<AgentItemDescriptor> {
     let failed = completed
         && (data.get("error").is_some_and(|value| !value.is_null())
             || data.get("success").and_then(Value::as_bool) == Some(false)
@@ -576,7 +599,50 @@ fn project_item_activity(
                 data.get("status").and_then(Value::as_str),
                 Some("failed" | "error")
             ));
-    let (kind, status) = if failed {
+    let subject = match item_type {
+        "mcpToolCall" => RuntimeAgentActivitySubject::McpTool {
+            server: data
+                .get("server")
+                .and_then(Value::as_str)
+                .and_then(display_identifier),
+            tool: data
+                .get("tool")
+                .and_then(Value::as_str)
+                .and_then(display_identifier),
+        },
+        "dynamicToolCall" => RuntimeAgentActivitySubject::RuntimeTool {
+            namespace: data
+                .get("namespace")
+                .and_then(Value::as_str)
+                .and_then(display_identifier),
+            tool: data
+                .get("tool")
+                .and_then(Value::as_str)
+                .and_then(display_identifier),
+        },
+        "commandExecution" => command_subject(data),
+        "webSearch" => RuntimeAgentActivitySubject::WebSearch,
+        "imageView" => RuntimeAgentActivitySubject::ImageView,
+        "imageGeneration" => RuntimeAgentActivitySubject::ImageGeneration,
+        _ => return None,
+    };
+    let label = subject_label(&subject);
+    let detail = subject_detail(&subject);
+    Some(AgentItemDescriptor {
+        subject,
+        label,
+        detail,
+        failed,
+    })
+}
+
+fn project_item_activity(
+    item_type: &str,
+    data: &Value,
+    completed: bool,
+) -> Option<(RuntimeAgentActivityKind, RuntimeAgentActivityStatus, String)> {
+    let descriptor = project_agent_item_descriptor(item_type, data, completed)?;
+    let (kind, status) = if descriptor.failed {
         (
             RuntimeAgentActivityKind::ToolFailed,
             RuntimeAgentActivityStatus::Failed,
@@ -592,42 +658,131 @@ fn project_item_activity(
             RuntimeAgentActivityStatus::Running,
         )
     };
-    let verb = if failed {
+    let verb = if descriptor.failed {
         "Could not complete"
     } else if completed {
         "Completed"
     } else {
         "Using"
     };
-    let subject = match item_type {
-        "mcpToolCall" => {
-            let server = data
-                .get("server")
-                .and_then(Value::as_str)
-                .map(display_identifier);
-            let tool = data
-                .get("tool")
-                .and_then(Value::as_str)
-                .map(display_identifier);
-            match (server, tool) {
-                (Some(server), Some(tool)) => format!("{server} · {tool}"),
-                (Some(server), None) => server,
-                (None, Some(tool)) => tool,
-                (None, None) => "an enterprise tool".to_string(),
+    Some((
+        kind,
+        status,
+        bounded_title(&format!("{verb} {}", descriptor.label)),
+    ))
+}
+
+fn command_subject(data: &Value) -> RuntimeAgentActivitySubject {
+    let Some(actions) = data.get("commandActions").and_then(Value::as_array) else {
+        return RuntimeAgentActivitySubject::WorkspaceAction {
+            action: "workspace_command".to_string(),
+            path: None,
+        };
+    };
+
+    for action in actions.iter().take(16) {
+        let Some(action) = action.as_object() else {
+            continue;
+        };
+        let Some(action_type) = action.get("type").and_then(Value::as_str) else {
+            continue;
+        };
+        let action_type = match action_type {
+            "read" | "listFiles" | "search" => action_type,
+            _ => continue,
+        };
+        let path = action
+            .get("path")
+            .and_then(Value::as_str)
+            .and_then(safe_workspace_relative_path);
+        return RuntimeAgentActivitySubject::WorkspaceAction {
+            action: action_type.to_string(),
+            path,
+        };
+    }
+
+    RuntimeAgentActivitySubject::WorkspaceAction {
+        action: "workspace_command".to_string(),
+        path: None,
+    }
+}
+
+fn subject_label(subject: &RuntimeAgentActivitySubject) -> String {
+    let label = match subject {
+        RuntimeAgentActivitySubject::McpTool { server, tool } => match (server, tool) {
+            (Some(server), Some(tool)) => {
+                format!(
+                    "{} · {}",
+                    humanize_identifier(server),
+                    humanize_identifier(tool)
+                )
+            }
+            (Some(server), None) => humanize_identifier(server),
+            (None, Some(tool)) => humanize_identifier(tool),
+            (None, None) => "an enterprise tool".to_string(),
+        },
+        RuntimeAgentActivitySubject::RuntimeTool { namespace, tool } => match (namespace, tool) {
+            (Some(namespace), Some(tool)) => format!(
+                "{} · {}",
+                humanize_identifier(namespace),
+                humanize_identifier(tool)
+            ),
+            (Some(namespace), None) => humanize_identifier(namespace),
+            (None, Some(tool)) => humanize_identifier(tool),
+            (None, None) => "a Runtime tool".to_string(),
+        },
+        RuntimeAgentActivitySubject::WorkspaceAction { action, path } => {
+            if action == "workspace_command" {
+                "workspace operation".to_string()
+            } else if let Some(path) = path {
+                format!("workspace action · {action} · {path}")
+            } else {
+                format!("workspace action · {action}")
             }
         }
-        "dynamicToolCall" => data
-            .get("tool")
-            .and_then(Value::as_str)
-            .map(display_identifier)
-            .unwrap_or_else(|| "a Runtime tool".to_string()),
-        "commandExecution" => "a workspace command".to_string(),
-        "webSearch" => "web research".to_string(),
-        "imageView" => "image inspection".to_string(),
-        "imageGeneration" => "image generation".to_string(),
-        _ => return None,
+        RuntimeAgentActivitySubject::WebSearch => "web research".to_string(),
+        RuntimeAgentActivitySubject::ImageView => "image inspection".to_string(),
+        RuntimeAgentActivitySubject::ImageGeneration => "image generation".to_string(),
     };
-    Some((kind, status, format!("{verb} {subject}")))
+    bounded_title(&label)
+}
+
+fn subject_detail(subject: &RuntimeAgentActivitySubject) -> Option<String> {
+    match subject {
+        RuntimeAgentActivitySubject::WorkspaceAction { action, path }
+            if action != "workspace_command" =>
+        {
+            let detail = path
+                .as_deref()
+                .map(|path| format!("{action} · {path}"))
+                .unwrap_or_else(|| action.clone());
+            Some(detail.chars().take(256).collect())
+        }
+        _ => None,
+    }
+}
+
+fn safe_workspace_relative_path(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.contains("://")
+        || value.starts_with('/')
+        || value.starts_with('\\')
+        || value.as_bytes().get(1) == Some(&b':')
+        || value.chars().any(char::is_control)
+        || value.split(['/', '\\']).any(|segment| segment == "..")
+        || looks_sensitive(value)
+    {
+        return None;
+    }
+    Some(value.chars().take(240).collect())
+}
+
+fn looks_sensitive(value: &str) -> bool {
+    let normalized = value.to_ascii_lowercase().replace(['_', '-'], "");
+    ["apikey", "accesstoken", "password", "secret"]
+        .iter()
+        .any(|candidate| normalized.contains(candidate))
 }
 
 fn update_wait_context(event: &ActivityEvent, wait_context: &mut HashMap<String, WaitTaskContext>) {
@@ -730,6 +885,18 @@ fn activity(
     title: &str,
     detail: Option<String>,
 ) -> RuntimeAgentActivity {
+    activity_with_subject(event, thread_id, kind, status, title, detail, None)
+}
+
+fn activity_with_subject(
+    event: &ActivityEvent,
+    thread_id: String,
+    kind: RuntimeAgentActivityKind,
+    status: RuntimeAgentActivityStatus,
+    title: &str,
+    detail: Option<String>,
+    subject: Option<RuntimeAgentActivitySubject>,
+) -> RuntimeAgentActivity {
     RuntimeAgentActivity {
         run_id: event.run_id,
         sequence: event.sequence,
@@ -738,6 +905,7 @@ fn activity(
         item_id: event.item_id.clone(),
         kind,
         status,
+        subject,
         title: title.to_string(),
         detail,
         created_at: event.created_at,
@@ -773,11 +941,31 @@ fn normalize_tool_name(value: &str) -> String {
         .collect()
 }
 
-fn display_identifier(value: &str) -> String {
+fn display_identifier(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.contains("://")
+        || value.starts_with('/')
+        || value.starts_with('\\')
+        || value.as_bytes().get(1) == Some(&b':')
+        || value.chars().any(char::is_control)
+        || looks_sensitive(value)
+    {
+        return None;
+    }
+    Some(value.chars().take(128).collect())
+}
+
+fn humanize_identifier(value: &str) -> String {
     value
-        .trim()
-        .trim_start_matches("mcp__")
         .replace(['_', '-'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn bounded_title(value: &str) -> String {
+    value.chars().take(240).collect()
 }
 
 async fn ensure_run_access(
@@ -1018,6 +1206,214 @@ mod tests {
         let serialized = serde_json::to_string(&activities).unwrap();
         assert!(!serialized.contains("warehouse_path"));
         assert!(!serialized.contains("/private/workspace"));
+    }
+
+    #[test]
+    fn projects_mcp_server_and_tool_for_started_and_completed_items() {
+        let started = project_activities(event(
+            "codex.item.started",
+            "child-thread",
+            json!({
+                "itemType": "mcpToolCall",
+                "data": {
+                    "server": "supply_chain",
+                    "tool": "plan_routes",
+                    "arguments": {"apiKey": "do-not-project"}
+                }
+            }),
+        ));
+        let completed = project_activities(event(
+            "codex.item.completed",
+            "child-thread",
+            json!({
+                "itemType": "mcpToolCall",
+                "data": {
+                    "server": "supply_chain",
+                    "tool": "plan_routes",
+                    "status": "completed",
+                    "result": {"secret": "do-not-project"}
+                }
+            }),
+        ));
+
+        let expected = Some(RuntimeAgentActivitySubject::McpTool {
+            server: Some("supply_chain".to_string()),
+            tool: Some("plan_routes".to_string()),
+        });
+        assert_eq!(started[0].kind, RuntimeAgentActivityKind::ToolStarted);
+        assert_eq!(started[0].status, RuntimeAgentActivityStatus::Running);
+        assert_eq!(started[0].subject, expected);
+        assert_eq!(completed[0].kind, RuntimeAgentActivityKind::ToolCompleted);
+        assert_eq!(completed[0].status, RuntimeAgentActivityStatus::Completed);
+        assert_eq!(completed[0].subject, expected);
+        let serialized = serde_json::to_string(&started).unwrap();
+        assert!(!serialized.contains("apiKey"));
+        assert!(!serialized.contains("do-not-project"));
+    }
+
+    #[test]
+    fn projects_dynamic_tool_namespace_and_tool_without_arguments() {
+        let activities = project_activities(event(
+            "codex.item.started",
+            "child-thread",
+            json!({
+                "itemType": "dynamicToolCall",
+                "data": {
+                    "namespace": "runtime_extensions",
+                    "tool": "lookup_route",
+                    "arguments": {"path": "/private/profile/secret.csv"},
+                    "contentItems": [{"text": "private content"}]
+                }
+            }),
+        ));
+
+        assert_eq!(activities.len(), 1);
+        assert_eq!(
+            activities[0].subject,
+            Some(RuntimeAgentActivitySubject::RuntimeTool {
+                namespace: Some("runtime_extensions".to_string()),
+                tool: Some("lookup_route".to_string()),
+            })
+        );
+        assert_eq!(
+            activities[0].title,
+            "Using runtime extensions · lookup route"
+        );
+        let serialized = serde_json::to_string(&activities).unwrap();
+        assert!(!serialized.contains("/private/profile"));
+        assert!(!serialized.contains("private content"));
+    }
+
+    #[test]
+    fn projects_only_sanitized_command_actions_and_workspace_relative_paths() {
+        let activities = project_activities(event(
+            "codex.item.completed",
+            "child-thread",
+            json!({
+                "itemType": "commandExecution",
+                "data": {
+                    "command": "cat /private/profile/secret.csv",
+                    "aggregatedOutput": "loaded https://example.com/private and password=leak",
+                    "status": "completed",
+                    "commandActions": [{
+                        "type": "read",
+                        "path": "src/routes/runtime_agents.rs",
+                        "command": "cat /private/profile/secret.csv"
+                    }]
+                }
+            }),
+        ));
+
+        assert_eq!(activities.len(), 1);
+        assert_eq!(activities[0].kind, RuntimeAgentActivityKind::ToolCompleted);
+        assert_eq!(
+            activities[0].subject,
+            Some(RuntimeAgentActivitySubject::WorkspaceAction {
+                action: "read".to_string(),
+                path: Some("src/routes/runtime_agents.rs".to_string()),
+            })
+        );
+        assert_eq!(
+            activities[0].detail.as_deref(),
+            Some("read · src/routes/runtime_agents.rs")
+        );
+        let serialized = serde_json::to_string(&activities).unwrap();
+        assert!(!serialized.contains("/private/profile"));
+        assert!(!serialized.contains("https://example.com"));
+        assert!(!serialized.contains("password=leak"));
+    }
+
+    #[test]
+    fn redacts_absolute_url_and_secret_like_command_paths() {
+        let activities = project_activities(event(
+            "codex.item.started",
+            "child-thread",
+            json!({
+                "itemType": "commandExecution",
+                "data": {
+                    "commandActions": [
+                        {"type": "read", "path": "/private/profile/secret.csv"},
+                        {"type": "search", "path": "https://example.com/data"},
+                        {"type": "listFiles", "path": "api_key=secret"}
+                    ],
+                    "command": "/private/profile/secret.csv",
+                    "aggregatedOutput": "https://example.com/data api_key=secret"
+                }
+            }),
+        ));
+
+        assert_eq!(activities.len(), 1);
+        assert_eq!(
+            activities[0].subject,
+            Some(RuntimeAgentActivitySubject::WorkspaceAction {
+                action: "read".to_string(),
+                path: None,
+            })
+        );
+        let serialized = serde_json::to_string(&activities).unwrap();
+        assert!(!serialized.contains("/private/profile"));
+        assert!(!serialized.contains("https://example.com"));
+        assert!(!serialized.contains("api_key"));
+        assert!(!serialized.contains("secret.csv"));
+    }
+
+    #[test]
+    fn uses_typed_workspace_command_fallback_for_unknown_or_empty_actions() {
+        for command_actions in [
+            json!([]),
+            json!([{"type": "unknown", "path": "src/lib.rs"}]),
+        ] {
+            let activities = project_activities(event(
+                "codex.item.completed",
+                "child-thread",
+                json!({
+                    "itemType": "commandExecution",
+                    "data": {"commandActions": command_actions, "status": "completed"}
+                }),
+            ));
+
+            assert_eq!(activities.len(), 1);
+            assert_eq!(activities[0].title, "Completed workspace operation");
+            assert!(!activities[0].title.contains("workspace command"));
+            assert_eq!(
+                activities[0].subject,
+                Some(RuntimeAgentActivitySubject::WorkspaceAction {
+                    action: "workspace_command".to_string(),
+                    path: None,
+                })
+            );
+            assert!(activities[0].detail.is_none());
+        }
+    }
+
+    #[test]
+    fn preserves_failed_terminal_status_and_subject() {
+        let activities = project_activities(event(
+            "codex.item.completed",
+            "child-thread",
+            json!({
+                "itemType": "mcpToolCall",
+                "data": {
+                    "server": "supply_chain",
+                    "tool": "read_file",
+                    "status": "failed",
+                    "error": {"message": "provider secret must not leak"}
+                }
+            }),
+        ));
+
+        assert_eq!(activities[0].kind, RuntimeAgentActivityKind::ToolFailed);
+        assert_eq!(activities[0].status, RuntimeAgentActivityStatus::Failed);
+        assert_eq!(
+            activities[0].subject,
+            Some(RuntimeAgentActivitySubject::McpTool {
+                server: Some("supply_chain".to_string()),
+                tool: Some("read_file".to_string()),
+            })
+        );
+        assert!(!serde_json::to_string(&activities)
+            .unwrap()
+            .contains("provider secret"));
     }
 
     #[test]

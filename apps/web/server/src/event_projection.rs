@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 use crate::final_artifacts::{final_artifact_candidate, FinalArtifactCandidate};
 use crate::inline_maps::{self, InlineMapCandidate};
+use crate::routes::runtime_agents::project_agent_item_descriptor;
 
 const PROJECTION_VERSION: i16 = 1;
 
@@ -1539,42 +1540,8 @@ fn project_agent_item_observation(event: &ProjectedEvent) -> Option<AgentExecuti
         });
     }
 
-    let failed = completed
-        && (data.get("error").is_some_and(|value| !value.is_null())
-            || data.get("success").and_then(Value::as_bool) == Some(false)
-            || matches!(
-                data.get("status").and_then(Value::as_str),
-                Some("failed" | "error")
-            ));
-    let subject = match item_type {
-        "mcpToolCall" => {
-            let server = data
-                .get("server")
-                .and_then(Value::as_str)
-                .map(display_agent_identifier);
-            let tool = data
-                .get("tool")
-                .and_then(Value::as_str)
-                .map(display_agent_identifier);
-            match (server, tool) {
-                (Some(server), Some(tool)) => format!("{server} · {tool}"),
-                (Some(server), None) => server,
-                (None, Some(tool)) => tool,
-                (None, None) => "an enterprise tool".to_string(),
-            }
-        }
-        "dynamicToolCall" => data
-            .get("tool")
-            .and_then(Value::as_str)
-            .map(display_agent_identifier)
-            .unwrap_or_else(|| "a Runtime tool".to_string()),
-        "commandExecution" => "a workspace command".to_string(),
-        "webSearch" => "web research".to_string(),
-        "imageView" => "image inspection".to_string(),
-        "imageGeneration" => "image generation".to_string(),
-        _ => return None,
-    };
-    let verb = if failed {
+    let descriptor = project_agent_item_descriptor(item_type, data, completed)?;
+    let verb = if descriptor.failed {
         "Could not complete"
     } else if completed {
         "Completed"
@@ -1583,7 +1550,7 @@ fn project_agent_item_observation(event: &ProjectedEvent) -> Option<AgentExecuti
     };
     Some(AgentExecutionObservation {
         status: None,
-        behavior: Some(format!("{verb} {subject}")),
+        behavior: Some(format!("{verb} {}", descriptor.label)),
         progress: None,
         approval_id: None,
         clear_waiting: false,
@@ -1656,13 +1623,6 @@ fn normalize_agent_tool(value: &str) -> String {
         .filter(|character| character.is_ascii_alphanumeric())
         .flat_map(char::to_lowercase)
         .collect()
-}
-
-fn display_agent_identifier(value: &str) -> String {
-    value
-        .trim()
-        .trim_start_matches("mcp__")
-        .replace(['_', '-'], " ")
 }
 
 fn build_execution_title(agent_label: Option<&str>, task: Option<&str>) -> String {
@@ -2505,6 +2465,49 @@ mod tests {
             Some("已完成线路报价完整性检查。")
         );
         assert_ne!(first.behavior, second.behavior);
+    }
+
+    #[test]
+    fn uses_the_same_safe_item_descriptor_for_live_execution_observation() {
+        let event = ProjectedEvent {
+            event_type: "codex.item.completed".to_string(),
+            workspace_id: None,
+            thread_id: "child-thread".to_string(),
+            turn_id: Some("turn-1".to_string()),
+            item_id: Some("item-1".to_string()),
+            payload: json!({
+                "itemType": "commandExecution",
+                "data": {
+                    "status": "completed",
+                    "command": "/private/profile/secret.csv",
+                    "aggregatedOutput": "https://example.com/private",
+                    "commandActions": [{
+                        "type": "read",
+                        "path": "src/routes/runtime_agents.rs"
+                    }]
+                }
+            }),
+            thread_metadata: None,
+            artifacts: Vec::new(),
+            inline_map: None,
+        };
+
+        let descriptor =
+            project_agent_item_descriptor("commandExecution", &event.payload["data"], true)
+                .unwrap();
+        let observation = agent_execution_observation(&event).unwrap();
+
+        assert_eq!(
+            observation.behavior.as_deref(),
+            Some("Completed workspace action · read · src/routes/runtime_agents.rs")
+        );
+        let expected = format!("Completed {}", descriptor.label);
+        assert_eq!(observation.behavior.as_deref(), Some(expected.as_str()));
+        assert!(!observation
+            .behavior
+            .as_deref()
+            .unwrap_or_default()
+            .contains("workspace command"));
     }
 
     #[test]
