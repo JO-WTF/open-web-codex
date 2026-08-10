@@ -7,7 +7,8 @@
 use open_web_codex_platform_contracts::{
     ApprovalDecision, ApprovalRequestSource, ApprovalSummary, DecideApprovalRequest,
     McpFormFieldSchema, McpFormFieldSummary, McpFormOptionSummary, McpFormRequestSource,
-    McpFormResponseAction, PendingApprovalState, PendingMcpFormSummary, PendingUserInputSummary,
+    McpFormResponseAction, PendingApprovalCapability, PendingApprovalState,
+    PendingApprovalUnavailableReason, PendingMcpFormSummary, PendingUserInputSummary,
     RespondMcpFormRequest, RespondUserInputRequest, UserInputOptionSummary,
     UserInputQuestionSummary, UserInputRequestSource,
 };
@@ -48,6 +49,7 @@ pub struct PendingApprovalRecord {
     pub request_type: String,
     pub request_payload: Value,
     pub state: PendingApprovalState,
+    pub attempted_decision: Option<ApprovalDecision>,
     pub version: i64,
     pub created_at: sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>,
 }
@@ -276,7 +278,7 @@ impl ApprovalService {
             .await?;
         let rows = sqlx::query(
             "SELECT a.id, a.run_id, a.thread_id, a.request_type, a.request_payload, \
-                    a.state, a.version, a.created_at \
+                    a.state, a.decision, a.version, a.created_at \
              FROM approvals a \
              JOIN profiles p ON p.id = a.profile_id \
              JOIN runs r ON r.id = a.run_id AND r.requested_profile_id = p.id \
@@ -286,7 +288,8 @@ impl ApprovalService {
                AND a.runtime_instance_id = $5 \
                AND a.state IN ('pending', 'dispatching', 'delivery_unknown') \
                AND (a.request_type IN ($6, $7, $8) \
-                    OR (a.request_type = $9 AND a.request_payload->>'mode' = 'url')) \
+                    OR (a.request_type = $9 \
+                        AND COALESCE(a.request_payload->>'mode', '') <> 'form')) \
              ORDER BY a.created_at, a.id",
         )
         .bind(run_id)
@@ -325,7 +328,10 @@ impl ApprovalService {
                     execution_id: None,
                     display_title: "Agent".to_string(),
                 });
-            let state = pending_approval_state(row.get("state"))?;
+            let state_value: String = row.get("state");
+            let state = pending_approval_state(state_value.clone())?;
+            let attempted_decision =
+                pending_approval_attempted_decision(&state_value, row.get("decision"))?;
             records.push(PendingApprovalRecord {
                 id: row.get("id"),
                 run_id: row.get("run_id"),
@@ -336,6 +342,7 @@ impl ApprovalService {
                 request_type: row.get("request_type"),
                 request_payload: payload,
                 state,
+                attempted_decision,
                 version: row.get("version"),
                 created_at: row.get("created_at"),
             });
@@ -731,9 +738,7 @@ impl ApprovalService {
         let (response, terminal_state, decision) =
             approval_response(&request_type, &payload, request.decision)?;
         let previous_decision: Option<String> = row.get("decision");
-        if state != "pending"
-            && !(state == "delivery_unknown" && previous_decision.as_deref() == Some(decision))
-        {
+        if !can_begin_decision(&state, previous_decision.as_deref(), decision) {
             return Err(ApprovalServiceError::Conflict);
         }
         let dispatch_version = version + 1;
@@ -1005,17 +1010,248 @@ fn pending_approval_state(value: String) -> Result<PendingApprovalState, Approva
     }
 }
 
+fn pending_approval_attempted_decision(
+    state: &str,
+    decision: Option<String>,
+) -> Result<Option<ApprovalDecision>, ApprovalServiceError> {
+    match state {
+        "pending" => Ok(None),
+        "dispatching" | "delivery_unknown" => decision
+            .as_deref()
+            .and_then(parse_attempted_decision)
+            .map(Some)
+            .ok_or(ApprovalServiceError::Invalid),
+        _ => Err(ApprovalServiceError::Invalid),
+    }
+}
+
+fn parse_attempted_decision(value: &str) -> Option<ApprovalDecision> {
+    match value {
+        "accept" => Some(ApprovalDecision::Accept),
+        "accept_for_session" => Some(ApprovalDecision::AcceptForSession),
+        "decline" => Some(ApprovalDecision::Decline),
+        "cancel" => Some(ApprovalDecision::Cancel),
+        _ => None,
+    }
+}
+
+/// Shared validator for the loopback, tokenized URL used by Maps credential
+/// elicitation. The approval service owns this policy so every server surface
+/// makes the same decision before accepting or projecting a URL.
+pub fn safe_maps_credential_url(value: &str) -> Option<&str> {
+    let parsed = url::Url::parse(value).ok()?;
+    if parsed.scheme() != "http"
+        || parsed.host_str() != Some("127.0.0.1")
+        || parsed.port().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || parsed.path().len() <= 1
+    {
+        return None;
+    }
+    Some(value)
+}
+
+/// Preserve an official identifier exactly while rejecting values that cannot
+/// safely be displayed as a bounded server name.
+pub fn bounded_identifier(value: Option<&Value>, max_len: usize) -> Option<String> {
+    let value = value.and_then(Value::as_str)?.trim();
+    if value.is_empty()
+        || value.len() > max_len
+        || value.chars().any(char::is_control)
+        || value.contains("://")
+        || value.starts_with('/')
+        || value.starts_with('\\')
+        || value.as_bytes().get(1) == Some(&b':')
+    {
+        return None;
+    }
+    Some(value.to_string())
+}
+
+/// Parse the official permissions object into capabilities only. Paths,
+/// working directories and other request details are deliberately discarded.
+pub fn project_permission_capabilities(
+    value: Option<&Value>,
+) -> Result<Vec<PendingApprovalCapability>, PendingApprovalUnavailableReason> {
+    let permissions = value
+        .and_then(Value::as_object)
+        .ok_or(PendingApprovalUnavailableReason::InvalidPermissions)?;
+    if !has_only_keys(permissions, &["network", "fileSystem"]) {
+        return Err(PendingApprovalUnavailableReason::InvalidPermissions);
+    }
+    let mut capabilities = Vec::new();
+
+    if let Some(network) = permissions.get("network").filter(|value| !value.is_null()) {
+        let network = network
+            .as_object()
+            .ok_or(PendingApprovalUnavailableReason::InvalidPermissions)?;
+        if !has_only_keys(network, &["enabled"]) {
+            return Err(PendingApprovalUnavailableReason::InvalidPermissions);
+        }
+        if let Some(enabled) = network.get("enabled").filter(|value| !value.is_null()) {
+            if enabled
+                .as_bool()
+                .ok_or(PendingApprovalUnavailableReason::InvalidPermissions)?
+            {
+                capabilities.push(PendingApprovalCapability::Network);
+            }
+        }
+    }
+
+    if let Some(file_system) = permissions
+        .get("fileSystem")
+        .filter(|value| !value.is_null())
+    {
+        let file_system = file_system
+            .as_object()
+            .ok_or(PendingApprovalUnavailableReason::InvalidPermissions)?;
+        if !has_only_keys(
+            file_system,
+            &["read", "write", "globScanMaxDepth", "entries"],
+        ) {
+            return Err(PendingApprovalUnavailableReason::InvalidPermissions);
+        }
+        if let Some(depth) = file_system
+            .get("globScanMaxDepth")
+            .filter(|value| !value.is_null())
+        {
+            if depth.as_u64().is_none_or(|depth| depth == 0 || depth > 64) {
+                return Err(PendingApprovalUnavailableReason::InvalidPermissions);
+            }
+        }
+        for (key, capability) in [
+            ("read", PendingApprovalCapability::FilesystemRead),
+            ("write", PendingApprovalCapability::FilesystemWrite),
+        ] {
+            if let Some(entries) = file_system.get(key).filter(|value| !value.is_null()) {
+                let entries = entries
+                    .as_array()
+                    .ok_or(PendingApprovalUnavailableReason::InvalidPermissions)?;
+                if entries
+                    .iter()
+                    .any(|entry| entry.as_str().is_none_or(|value| value.trim().is_empty()))
+                {
+                    return Err(PendingApprovalUnavailableReason::InvalidPermissions);
+                }
+                if !entries.is_empty() {
+                    capabilities.push(capability);
+                }
+            }
+        }
+        if let Some(entries) = file_system.get("entries").filter(|value| !value.is_null()) {
+            let entries = entries
+                .as_array()
+                .ok_or(PendingApprovalUnavailableReason::InvalidPermissions)?;
+            for entry in entries {
+                let entry = entry
+                    .as_object()
+                    .ok_or(PendingApprovalUnavailableReason::InvalidPermissions)?;
+                if !has_only_keys(entry, &["path", "access"])
+                    || !entry.get("path").is_some_and(is_official_file_system_path)
+                {
+                    return Err(PendingApprovalUnavailableReason::InvalidPermissions);
+                }
+                match entry.get("access").and_then(Value::as_str) {
+                    Some("read")
+                        if !capabilities.contains(&PendingApprovalCapability::FilesystemRead) =>
+                    {
+                        capabilities.push(PendingApprovalCapability::FilesystemRead)
+                    }
+                    Some("write")
+                        if !capabilities.contains(&PendingApprovalCapability::FilesystemWrite) =>
+                    {
+                        capabilities.push(PendingApprovalCapability::FilesystemWrite)
+                    }
+                    Some("read" | "write" | "deny") => {}
+                    _ => return Err(PendingApprovalUnavailableReason::InvalidPermissions),
+                }
+            }
+        }
+    }
+
+    if capabilities.is_empty() {
+        return Err(PendingApprovalUnavailableReason::InvalidPermissions);
+    }
+    Ok(capabilities)
+}
+
+fn is_official_file_system_path(value: &Value) -> bool {
+    let Some(path) = value.as_object() else {
+        return false;
+    };
+    let Some(path_type) = path.get("type").and_then(Value::as_str) else {
+        return false;
+    };
+    match path_type {
+        "path" => {
+            has_only_keys(path, &["type", "path"])
+                && path
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| !value.trim().is_empty())
+        }
+        "glob_pattern" => {
+            has_only_keys(path, &["type", "pattern"])
+                && path
+                    .get("pattern")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| !value.trim().is_empty())
+        }
+        "special" => {
+            has_only_keys(path, &["type", "value"])
+                && path
+                    .get("value")
+                    .is_some_and(is_official_file_system_special_path)
+        }
+        _ => false,
+    }
+}
+
+fn is_official_file_system_special_path(value: &Value) -> bool {
+    let Some(special) = value.as_object() else {
+        return false;
+    };
+    let Some(kind) = special.get("kind").and_then(Value::as_str) else {
+        return false;
+    };
+    match kind {
+        "root" | "minimal" | "tmpdir" | "slash_tmp" => has_only_keys(special, &["kind"]),
+        "project_roots" => {
+            has_only_keys(special, &["kind", "subpath"])
+                && special
+                    .get("subpath")
+                    .is_none_or(|value| value.is_null() || is_nonempty_string(value))
+        }
+        "unknown" => {
+            has_only_keys(special, &["kind", "path", "subpath"])
+                && special.get("path").is_some_and(is_nonempty_string)
+                && special
+                    .get("subpath")
+                    .is_none_or(|value| value.is_null() || is_nonempty_string(value))
+        }
+        _ => false,
+    }
+}
+
+fn is_nonempty_string(value: &Value) -> bool {
+    value.as_str().is_some_and(|value| !value.trim().is_empty())
+}
+
 fn resolved_terminal_state(state: &str, decision: Option<&str>) -> Option<&'static str> {
     if !matches!(state, "pending" | "dispatching" | "delivery_unknown") {
         return None;
     }
-    Some(match decision {
-        Some("rejected" | "decline") => "rejected",
-        Some("answered") => "answered",
-        Some("cancel") => "cancelled",
-        Some(_) => "approved",
-        None => "cancelled",
-    })
+    match decision {
+        Some("accept" | "accept_for_session") => Some("approved"),
+        Some("decline") => Some("rejected"),
+        Some("answered") => Some("answered"),
+        Some("cancel") => Some("cancelled"),
+        Some(_) => None,
+        None => Some("cancelled"),
+    }
 }
 
 fn approval_outcome(state: &str) -> Option<ApprovalOutcome> {
@@ -1830,10 +2066,10 @@ fn approval_response(
     payload: &Value,
     decision: ApprovalDecision,
 ) -> Result<(Value, &'static str, &'static str), ApprovalServiceError> {
-    let (terminal_state, stored_decision) = match decision {
-        ApprovalDecision::Accept | ApprovalDecision::AcceptForSession => ("approved", "approved"),
-        ApprovalDecision::Decline => ("rejected", "rejected"),
-        ApprovalDecision::Cancel => ("cancelled", "rejected"),
+    let terminal_state = match decision {
+        ApprovalDecision::Accept | ApprovalDecision::AcceptForSession => "approved",
+        ApprovalDecision::Decline => "rejected",
+        ApprovalDecision::Cancel => "cancelled",
     };
     let response = match request_type {
         COMMAND_APPROVAL | FILE_APPROVAL => {
@@ -1847,44 +2083,80 @@ fn approval_response(
         }
         PERMISSIONS_APPROVAL => match decision {
             ApprovalDecision::Accept => {
+                project_permission_capabilities(payload.get("permissions"))
+                    .map_err(|_| ApprovalServiceError::Invalid)?;
                 json!({ "permissions": payload.get("permissions").cloned().unwrap_or_else(|| json!({})), "scope": "turn" })
             }
             ApprovalDecision::AcceptForSession => {
+                project_permission_capabilities(payload.get("permissions"))
+                    .map_err(|_| ApprovalServiceError::Invalid)?;
                 json!({ "permissions": payload.get("permissions").cloned().unwrap_or_else(|| json!({})), "scope": "session" })
             }
             ApprovalDecision::Decline | ApprovalDecision::Cancel => {
                 json!({ "permissions": {}, "scope": "turn" })
             }
         },
-        MCP_ELICITATION_REQUEST if payload.get("mode").and_then(Value::as_str) == Some("url") => {
-            match decision {
-                ApprovalDecision::Accept | ApprovalDecision::AcceptForSession => {
+        MCP_ELICITATION_REQUEST => {
+            match (
+                payload.get("mode").and_then(Value::as_str),
+                decision.clone(),
+            ) {
+                (Some("form"), _) => return Err(ApprovalServiceError::Invalid),
+                (Some("url"), ApprovalDecision::Accept | ApprovalDecision::AcceptForSession) => {
+                    payload
+                        .get("url")
+                        .and_then(Value::as_str)
+                        .and_then(safe_maps_credential_url)
+                        .ok_or(ApprovalServiceError::Invalid)?;
                     json!({ "action": "accept", "content": null, "_meta": null })
                 }
-                ApprovalDecision::Decline => {
+                (_, ApprovalDecision::Decline) => {
                     json!({ "action": "decline", "content": null, "_meta": null })
                 }
-                ApprovalDecision::Cancel => {
+                (_, ApprovalDecision::Cancel) => {
                     json!({ "action": "cancel", "content": null, "_meta": null })
                 }
+                _ => return Err(ApprovalServiceError::Invalid),
             }
         }
         _ => return Err(ApprovalServiceError::Invalid),
     };
-    Ok((response, terminal_state, stored_decision))
+    Ok((response, terminal_state, canonical_decision(decision)))
+}
+
+fn canonical_decision(decision: ApprovalDecision) -> &'static str {
+    match decision {
+        ApprovalDecision::Accept => "accept",
+        ApprovalDecision::AcceptForSession => "accept_for_session",
+        ApprovalDecision::Decline => "decline",
+        ApprovalDecision::Cancel => "cancel",
+    }
+}
+
+fn can_begin_decision(state: &str, previous_decision: Option<&str>, next_decision: &str) -> bool {
+    match state {
+        "pending" => true,
+        "delivery_unknown" => {
+            parse_attempted_decision(next_decision).is_some()
+                && previous_decision == Some(next_decision)
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        approval_outcome, approval_payload, approval_response, mcp_form_audit_metadata,
-        parse_mcp_form_fields, pending_approval_state, resolved_terminal_state,
+        approval_outcome, approval_payload, approval_response, can_begin_decision,
+        is_official_file_system_path, mcp_form_audit_metadata, parse_mcp_form_fields,
+        pending_approval_attempted_decision, pending_approval_state,
+        project_permission_capabilities, resolved_terminal_state, safe_maps_credential_url,
         validate_mcp_form_response, validate_user_input_answers, ApprovalOutcome, COMMAND_APPROVAL,
         MCP_ELICITATION_REQUEST, PERMISSIONS_APPROVAL,
     };
     use open_web_codex_platform_contracts::{
-        ApprovalDecision, McpFormFieldSchema, McpFormResponseAction, RespondMcpFormRequest,
-        RespondUserInputRequest, UserInputAnswer,
+        ApprovalDecision, McpFormFieldSchema, McpFormResponseAction, PendingApprovalCapability,
+        RespondMcpFormRequest, RespondUserInputRequest, UserInputAnswer,
     };
     use serde_json::{json, Value};
     use std::collections::BTreeMap;
@@ -1899,6 +2171,16 @@ mod tests {
         .unwrap();
         assert_eq!(command, json!({ "decision": "acceptForSession" }));
         assert_eq!(state, "approved");
+        assert_eq!(
+            approval_response(
+                COMMAND_APPROVAL,
+                &json!({}),
+                ApprovalDecision::AcceptForSession,
+            )
+            .unwrap()
+            .2,
+            "accept_for_session"
+        );
 
         let (permissions, state, _) = approval_response(
             PERMISSIONS_APPROVAL,
@@ -1954,6 +2236,237 @@ mod tests {
             json!({ "action": "accept", "content": null, "_meta": null })
         );
         assert_eq!(state, "approved");
+    }
+
+    #[test]
+    fn rejects_unsafe_url_accept_but_allows_typed_decline_and_cancel() {
+        let payload = json!({
+            "mode": "url",
+            "url": "https://example.com/credential"
+        });
+        for decision in [ApprovalDecision::Accept, ApprovalDecision::AcceptForSession] {
+            assert!(approval_response(MCP_ELICITATION_REQUEST, &payload, decision).is_err());
+        }
+        let (decline, _, stored_decline) =
+            approval_response(MCP_ELICITATION_REQUEST, &payload, ApprovalDecision::Decline)
+                .unwrap();
+        assert_eq!(decline["action"], "decline");
+        assert_eq!(stored_decline, "decline");
+        let (cancel, _, stored_cancel) =
+            approval_response(MCP_ELICITATION_REQUEST, &payload, ApprovalDecision::Cancel).unwrap();
+        assert_eq!(cancel["action"], "cancel");
+        assert_eq!(stored_cancel, "cancel");
+    }
+
+    #[test]
+    fn validates_only_tokenized_loopback_credential_urls() {
+        assert_eq!(
+            safe_maps_credential_url("http://127.0.0.1:43123/one-time-token"),
+            Some("http://127.0.0.1:43123/one-time-token")
+        );
+        for value in [
+            "https://example.com/credential",
+            "http://localhost:43123/credential",
+            "http://127.0.0.1/",
+            "http://127.0.0.1:43123/credential?secret=1",
+        ] {
+            assert_eq!(safe_maps_credential_url(value), None);
+        }
+    }
+
+    #[test]
+    fn rejects_generic_decisions_for_mcp_forms() {
+        let payload = json!({"mode": "form"});
+        for decision in [
+            ApprovalDecision::Accept,
+            ApprovalDecision::AcceptForSession,
+            ApprovalDecision::Decline,
+            ApprovalDecision::Cancel,
+        ] {
+            assert!(approval_response(MCP_ELICITATION_REQUEST, &payload, decision).is_err());
+        }
+    }
+
+    #[test]
+    fn projects_only_strict_permission_capabilities() {
+        let valid = json!({
+            "network": {"enabled": true},
+            "fileSystem": {
+                "globScanMaxDepth": 4,
+                "entries": [
+                    {
+                        "path": {"type": "path", "path": "/private/server"},
+                        "access": "read"
+                    },
+                    {
+                        "path": {"type": "glob_pattern", "pattern": "*.txt"},
+                        "access": "write"
+                    },
+                    {
+                        "path": {
+                            "type": "special",
+                            "value": {"kind": "project_roots", "subpath": null}
+                        },
+                        "access": "deny"
+                    }
+                ]
+            }
+        });
+        assert_eq!(
+            project_permission_capabilities(Some(&valid)).unwrap(),
+            vec![
+                PendingApprovalCapability::Network,
+                PendingApprovalCapability::FilesystemRead,
+                PendingApprovalCapability::FilesystemWrite
+            ]
+        );
+        assert_eq!(
+            project_permission_capabilities(Some(&json!({
+                "network": null,
+                "fileSystem": {"read": ["workspace"]}
+            })))
+            .unwrap(),
+            vec![PendingApprovalCapability::FilesystemRead]
+        );
+        assert_eq!(
+            project_permission_capabilities(Some(&json!({
+                "network": {"enabled": null},
+                "fileSystem": {"write": ["workspace"]}
+            })))
+            .unwrap(),
+            vec![PendingApprovalCapability::FilesystemWrite]
+        );
+        assert_eq!(
+            project_permission_capabilities(Some(&json!({
+                "network": {"enabled": true},
+                "fileSystem": null
+            })))
+            .unwrap(),
+            vec![PendingApprovalCapability::Network]
+        );
+        assert_eq!(
+            project_permission_capabilities(Some(&json!({
+                "network": {},
+                "fileSystem": {"read": ["workspace"]}
+            })))
+            .unwrap(),
+            vec![PendingApprovalCapability::FilesystemRead]
+        );
+        assert_eq!(
+            project_permission_capabilities(Some(&json!({
+                "network": {"enabled": true},
+                "fileSystem": {}
+            })))
+            .unwrap(),
+            vec![PendingApprovalCapability::Network]
+        );
+        for path in [
+            json!({"type": "path", "path": "/workspace"}),
+            json!({"type": "glob_pattern", "pattern": "*.txt"}),
+            json!({"type": "special", "value": {"kind": "root"}}),
+            json!({"type": "special", "value": {"kind": "minimal"}}),
+            json!({"type": "special", "value": {"kind": "tmpdir"}}),
+            json!({"type": "special", "value": {"kind": "slash_tmp"}}),
+            json!({"type": "special", "value": {"kind": "project_roots"}}),
+            json!({
+                "type": "special",
+                "value": {"kind": "unknown", "path": "provider-root"}
+            }),
+        ] {
+            assert!(is_official_file_system_path(&path));
+        }
+        for invalid in [
+            json!({"network": {}}),
+            json!({"network": {"enabled": true, "scope": "all"}}),
+            json!({"fileSystem": {"entries": [{"path": "/private", "access": "read"}]}}),
+            json!({"fileSystem": {"globScanMaxDepth": 0, "read": ["/private"]}}),
+            json!({"fileSystem": {"entries": [{"path": {}, "access": "execute"}]}}),
+            json!({
+                "fileSystem": {
+                    "entries": [{"path": {"type": "path"}, "access": "read"}]
+                }
+            }),
+            json!({
+                "fileSystem": {
+                    "entries": [{
+                        "path": {"type": "future", "path": "x"},
+                        "access": "read"
+                    }]
+                }
+            }),
+            json!({
+                "fileSystem": {
+                    "entries": [{
+                        "path": {"type": "path", "path": ""},
+                        "access": "read"
+                    }]
+                }
+            }),
+            json!({
+                "fileSystem": {
+                    "entries": [{
+                        "path": {
+                            "type": "special",
+                            "value": {"kind": "root", "extra": true}
+                        },
+                        "access": "read"
+                    }]
+                }
+            }),
+            json!({
+                "fileSystem": {
+                    "entries": [{
+                        "path": {
+                            "type": "special",
+                            "value": {"kind": "unknown", "path": "", "subpath": null}
+                        },
+                        "access": "read"
+                    }]
+                }
+            }),
+            json!({"other": {"enabled": true}}),
+            json!({"fileSystem": {"entries": []}}),
+            json!({"network": null, "fileSystem": null}),
+            json!({"network": null, "fileSystem": {"read": null}}),
+        ] {
+            assert!(project_permission_capabilities(Some(&invalid)).is_err());
+        }
+    }
+
+    #[test]
+    fn parses_attempted_decisions_only_for_active_dispatch_states() {
+        assert_eq!(
+            pending_approval_attempted_decision("pending", Some("accept".to_string())).unwrap(),
+            None
+        );
+        assert_eq!(
+            pending_approval_attempted_decision(
+                "delivery_unknown",
+                Some("accept_for_session".to_string())
+            )
+            .unwrap(),
+            Some(ApprovalDecision::AcceptForSession)
+        );
+        assert!(
+            pending_approval_attempted_decision("dispatching", Some("approved".to_string()))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn permits_only_exact_delivery_unknown_decision_retries() {
+        let decisions = ["accept", "accept_for_session", "decline", "cancel"];
+        assert!(can_begin_decision("pending", None, "accept"));
+        assert!(!can_begin_decision("dispatching", Some("accept"), "accept"));
+        for previous in decisions {
+            for next in decisions {
+                assert_eq!(
+                    can_begin_decision("delivery_unknown", Some(previous), next),
+                    previous == next,
+                    "retry decision changed from {previous} to {next}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -2239,11 +2752,11 @@ mod tests {
     fn runtime_resolution_settles_only_active_approvals_and_preserves_decisions() {
         assert_eq!(resolved_terminal_state("pending", None), Some("cancelled"));
         assert_eq!(
-            resolved_terminal_state("dispatching", Some("approved")),
+            resolved_terminal_state("dispatching", Some("accept_for_session")),
             Some("approved")
         );
         assert_eq!(
-            resolved_terminal_state("delivery_unknown", Some("rejected")),
+            resolved_terminal_state("delivery_unknown", Some("decline")),
             Some("rejected")
         );
         assert_eq!(
@@ -2262,7 +2775,10 @@ mod tests {
             resolved_terminal_state("dispatching", Some("answered")),
             Some("answered")
         );
-        assert_eq!(resolved_terminal_state("approved", Some("approved")), None);
+        assert_eq!(
+            resolved_terminal_state("dispatching", Some("approved")),
+            None
+        );
         assert_eq!(resolved_terminal_state("rejected", Some("rejected")), None);
         assert_eq!(
             approval_outcome("approved"),

@@ -1245,6 +1245,13 @@ pub enum PendingApprovalFileChangeAction {
     Write,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PendingApprovalUnavailableReason {
+    UnsupportedRequest,
+    InvalidPermissions,
+}
+
 /// Bounded, typed subject details for a Runtime-owned generic approval.
 ///
 /// These fields are safe presentation facts only. Raw Runtime command lines,
@@ -1260,12 +1267,10 @@ pub enum PendingApprovalSubject {
     Command {
         action: String,
         path: Option<String>,
-        reason: Option<String>,
     },
     FileChange {
         action: PendingApprovalFileChangeAction,
         path: Option<String>,
-        reason: Option<String>,
     },
     Permissions {
         capabilities: Vec<PendingApprovalCapability>,
@@ -1273,8 +1278,10 @@ pub enum PendingApprovalSubject {
     Url {
         url: Option<String>,
         server: Option<String>,
-        message: Option<String>,
         available: bool,
+    },
+    Unavailable {
+        reason: PendingApprovalUnavailableReason,
     },
 }
 
@@ -1289,6 +1296,7 @@ pub struct PendingApprovalSummary {
     pub item_id: Option<String>,
     pub subject: PendingApprovalSubject,
     pub state: PendingApprovalState,
+    pub attempted_decision: Option<ApprovalDecision>,
     pub version: i64,
     pub created_at: DateTime<Utc>,
 }
