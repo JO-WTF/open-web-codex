@@ -56,6 +56,7 @@ function activity(
     item_id: `item-${sequence}`,
     kind: "assignment",
     status: "pending",
+    subject: null,
     title: "Task assigned",
     detail: null,
     created_at: `2026-07-26T00:00:${String(sequence).padStart(2, "0")}Z`,

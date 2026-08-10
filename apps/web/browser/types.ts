@@ -121,7 +121,7 @@ export type RuntimeAgentActivity = {
   item_id: string | null;
   kind: RuntimeAgentActivityKind;
   status: "pending" | "running" | "completed" | "failed" | "waiting";
-  subject?: RuntimeAgentActivitySubject | null;
+  subject: RuntimeAgentActivitySubject | null;
   title: string;
   detail: string | null;
   created_at: string;

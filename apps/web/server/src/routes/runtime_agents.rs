@@ -15,6 +15,7 @@ use sqlx::Row;
 use std::collections::HashMap;
 use uuid::Uuid;
 
+use crate::event_projection::project_agent_item_descriptor;
 use crate::middleware::auth::AuthenticatedUser;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
@@ -576,66 +577,6 @@ fn task_event_title(
         .unwrap_or_else(|| fallback.to_string())
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct AgentItemDescriptor {
-    pub(crate) subject: RuntimeAgentActivitySubject,
-    pub(crate) label: String,
-    pub(crate) detail: Option<String>,
-    pub(crate) failed: bool,
-}
-
-/// Project only the safe, bounded descriptor shared by live Agent execution
-/// updates and the rebuildable activity endpoint. Raw item arguments/results
-/// never enter this descriptor.
-pub(crate) fn project_agent_item_descriptor(
-    item_type: &str,
-    data: &Value,
-    completed: bool,
-) -> Option<AgentItemDescriptor> {
-    let failed = completed
-        && (data.get("error").is_some_and(|value| !value.is_null())
-            || data.get("success").and_then(Value::as_bool) == Some(false)
-            || matches!(
-                data.get("status").and_then(Value::as_str),
-                Some("failed" | "error")
-            ));
-    let subject = match item_type {
-        "mcpToolCall" => RuntimeAgentActivitySubject::McpTool {
-            server: data
-                .get("server")
-                .and_then(Value::as_str)
-                .and_then(display_identifier),
-            tool: data
-                .get("tool")
-                .and_then(Value::as_str)
-                .and_then(display_identifier),
-        },
-        "dynamicToolCall" => RuntimeAgentActivitySubject::RuntimeTool {
-            namespace: data
-                .get("namespace")
-                .and_then(Value::as_str)
-                .and_then(display_identifier),
-            tool: data
-                .get("tool")
-                .and_then(Value::as_str)
-                .and_then(display_identifier),
-        },
-        "commandExecution" => command_subject(data),
-        "webSearch" => RuntimeAgentActivitySubject::WebSearch,
-        "imageView" => RuntimeAgentActivitySubject::ImageView,
-        "imageGeneration" => RuntimeAgentActivitySubject::ImageGeneration,
-        _ => return None,
-    };
-    let label = subject_label(&subject);
-    let detail = subject_detail(&subject);
-    Some(AgentItemDescriptor {
-        subject,
-        label,
-        detail,
-        failed,
-    })
-}
-
 fn project_item_activity(
     item_type: &str,
     data: &Value,
@@ -668,121 +609,11 @@ fn project_item_activity(
     Some((
         kind,
         status,
-        bounded_title(&format!("{verb} {}", descriptor.label)),
+        format!("{verb} {}", descriptor.label)
+            .chars()
+            .take(240)
+            .collect(),
     ))
-}
-
-fn command_subject(data: &Value) -> RuntimeAgentActivitySubject {
-    let Some(actions) = data.get("commandActions").and_then(Value::as_array) else {
-        return RuntimeAgentActivitySubject::WorkspaceAction {
-            action: "workspace_command".to_string(),
-            path: None,
-        };
-    };
-
-    for action in actions.iter().take(16) {
-        let Some(action) = action.as_object() else {
-            continue;
-        };
-        let Some(action_type) = action.get("type").and_then(Value::as_str) else {
-            continue;
-        };
-        let action_type = match action_type {
-            "read" | "listFiles" | "search" => action_type,
-            _ => continue,
-        };
-        let path = action
-            .get("path")
-            .and_then(Value::as_str)
-            .and_then(safe_workspace_relative_path);
-        return RuntimeAgentActivitySubject::WorkspaceAction {
-            action: action_type.to_string(),
-            path,
-        };
-    }
-
-    RuntimeAgentActivitySubject::WorkspaceAction {
-        action: "workspace_command".to_string(),
-        path: None,
-    }
-}
-
-fn subject_label(subject: &RuntimeAgentActivitySubject) -> String {
-    let label = match subject {
-        RuntimeAgentActivitySubject::McpTool { server, tool } => match (server, tool) {
-            (Some(server), Some(tool)) => {
-                format!(
-                    "{} · {}",
-                    humanize_identifier(server),
-                    humanize_identifier(tool)
-                )
-            }
-            (Some(server), None) => humanize_identifier(server),
-            (None, Some(tool)) => humanize_identifier(tool),
-            (None, None) => "an enterprise tool".to_string(),
-        },
-        RuntimeAgentActivitySubject::RuntimeTool { namespace, tool } => match (namespace, tool) {
-            (Some(namespace), Some(tool)) => format!(
-                "{} · {}",
-                humanize_identifier(namespace),
-                humanize_identifier(tool)
-            ),
-            (Some(namespace), None) => humanize_identifier(namespace),
-            (None, Some(tool)) => humanize_identifier(tool),
-            (None, None) => "a Runtime tool".to_string(),
-        },
-        RuntimeAgentActivitySubject::WorkspaceAction { action, path } => {
-            if action == "workspace_command" {
-                "workspace operation".to_string()
-            } else if let Some(path) = path {
-                format!("workspace action · {action} · {path}")
-            } else {
-                format!("workspace action · {action}")
-            }
-        }
-        RuntimeAgentActivitySubject::WebSearch => "web research".to_string(),
-        RuntimeAgentActivitySubject::ImageView => "image inspection".to_string(),
-        RuntimeAgentActivitySubject::ImageGeneration => "image generation".to_string(),
-    };
-    bounded_title(&label)
-}
-
-fn subject_detail(subject: &RuntimeAgentActivitySubject) -> Option<String> {
-    match subject {
-        RuntimeAgentActivitySubject::WorkspaceAction { action, path }
-            if action != "workspace_command" =>
-        {
-            let detail = path
-                .as_deref()
-                .map(|path| format!("{action} · {path}"))
-                .unwrap_or_else(|| action.clone());
-            Some(detail.chars().take(256).collect())
-        }
-        _ => None,
-    }
-}
-
-fn safe_workspace_relative_path(value: &str) -> Option<String> {
-    let value = value.trim();
-    if value.is_empty()
-        || value.contains("://")
-        || value.starts_with('/')
-        || value.starts_with('\\')
-        || value.as_bytes().get(1) == Some(&b':')
-        || value.chars().any(char::is_control)
-        || value.split(['/', '\\']).any(|segment| segment == "..")
-        || looks_sensitive(value)
-    {
-        return None;
-    }
-    Some(value.chars().take(240).collect())
-}
-
-fn looks_sensitive(value: &str) -> bool {
-    let normalized = value.to_ascii_lowercase().replace(['_', '-'], "");
-    ["apikey", "accesstoken", "password", "secret"]
-        .iter()
-        .any(|candidate| normalized.contains(candidate))
 }
 
 fn update_wait_context(event: &ActivityEvent, wait_context: &mut HashMap<String, WaitTaskContext>) {
@@ -939,33 +770,6 @@ fn normalize_tool_name(value: &str) -> String {
         .filter(|character| character.is_ascii_alphanumeric())
         .flat_map(char::to_lowercase)
         .collect()
-}
-
-fn display_identifier(value: &str) -> Option<String> {
-    let value = value.trim();
-    if value.is_empty()
-        || value.contains("://")
-        || value.starts_with('/')
-        || value.starts_with('\\')
-        || value.as_bytes().get(1) == Some(&b':')
-        || value.chars().any(char::is_control)
-        || looks_sensitive(value)
-    {
-        return None;
-    }
-    Some(value.chars().take(128).collect())
-}
-
-fn humanize_identifier(value: &str) -> String {
-    value
-        .replace(['_', '-'], " ")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn bounded_title(value: &str) -> String {
-    value.chars().take(240).collect()
 }
 
 async fn ensure_run_access(
