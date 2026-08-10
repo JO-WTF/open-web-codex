@@ -6,7 +6,7 @@ import type {
   RuntimeAgentActivity,
   RuntimeAgentExecution,
 } from "../../../browser/types";
-import SupervisorOverview from "./SupervisorOverview";
+import SupervisorOverview, { orderAndDedupeActivities } from "./SupervisorOverview";
 
 afterEach(cleanup);
 
@@ -370,5 +370,260 @@ describe("SupervisorOverview", () => {
     expect(onLoadArtifactContent).toHaveBeenCalledWith(artifactId);
     expect(await screen.findByText(/"demand_nodes": 12/)).toBeTruthy();
     expect(screen.getByRole("dialog").textContent).toContain("Authorized Artifact");
+  });
+
+  it("renders native Runtime subjects as concrete root and child actions", () => {
+    const rawActivity = {
+      ...activity(20, {
+        thread_id: "root-thread",
+        turn_id: "turn-root",
+        item_id: "item-workspace",
+        kind: "tool_completed",
+        status: "completed",
+        subject: {
+          kind: "workspace_action",
+          action: "read",
+          path: "inputs/planning.csv",
+        },
+        title: "Completed a workspace command",
+        detail: "read · inputs/planning.csv",
+      }),
+      raw_command: "rm -rf /private/secret",
+      raw_output: "DEEPSEEK_KEY=do-not-render",
+    };
+    render(
+      <SupervisorOverview
+        taskTitle="Network planning"
+        agents={[rootAgent, networkAgent]}
+        activities={[
+          activity(10, {
+            thread_id: "network-thread",
+            turn_id: "turn-network",
+            item_id: "item-mcp",
+            kind: "tool_started",
+            status: "running",
+            subject: {
+              kind: "mcp_tool",
+              server: "supply_chain",
+              tool: "list_sources",
+            },
+            title: "Using a workspace command",
+          }),
+          activity(11, {
+            thread_id: "network-thread",
+            turn_id: "turn-network",
+            item_id: "item-runtime",
+            kind: "tool_completed",
+            status: "completed",
+            subject: {
+              kind: "runtime_tool",
+              namespace: "network",
+              tool: "compare_routes",
+            },
+            title: "Completed a workspace command",
+          }),
+          rawActivity,
+          activity(21, {
+            thread_id: "network-thread",
+            turn_id: "turn-network",
+            item_id: "item-search",
+            kind: "tool_completed",
+            status: "completed",
+            subject: { kind: "web_search" },
+            title: "Completed web search",
+          }),
+          activity(22, {
+            thread_id: "network-thread",
+            turn_id: "turn-network",
+            item_id: "item-image",
+            kind: "tool_completed",
+            status: "completed",
+            subject: { kind: "image_view" },
+            title: "Completed image inspection",
+          }),
+          activity(23, {
+            thread_id: "network-thread",
+            turn_id: "turn-network",
+            item_id: "item-generation",
+            kind: "tool_failed",
+            status: "failed",
+            subject: { kind: "image_generation" },
+            title: "Could not complete image generation",
+            detail: "The image provider declined the request.",
+          }),
+          activity(24, {
+            thread_id: "root-thread",
+            turn_id: "turn-root",
+            item_id: "item-wait",
+            kind: "waiting",
+            status: "waiting",
+            title: "Waiting for Agent updates",
+          }),
+          activity(25, {
+            thread_id: "root-thread",
+            turn_id: "turn-root",
+            item_id: "item-workspace-fallback",
+            kind: "tool_started",
+            status: "running",
+            subject: {
+              kind: "workspace_action",
+              action: "workspace_command",
+              path: null,
+            },
+            title: "Using a workspace command",
+          }),
+        ]}
+        artifacts={[]}
+      />,
+    );
+
+    expect(screen.getByText("supply_chain · list_sources")).toBeTruthy();
+    expect(screen.getByText("network · compare_routes")).toBeTruthy();
+    expect(screen.getAllByText("read · inputs/planning.csv").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("workspace operation").length).toBeGreaterThan(0);
+    expect(screen.getByText("web search")).toBeTruthy();
+    expect(screen.getByText("image inspection")).toBeTruthy();
+    expect(screen.getByText("image generation")).toBeTruthy();
+    expect(screen.getAllByText("Root Supervisor").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Network Agent").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Waiting").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Completed").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Failed").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Using a workspace command")).toBeNull();
+    expect(screen.queryByText("Completed a workspace command")).toBeNull();
+    expect(screen.queryByText("rm -rf /private/secret")).toBeNull();
+    expect(screen.queryByText("DEEPSEEK_KEY=do-not-render")).toBeNull();
+    expect(screen.getByRole("alert").textContent).toContain("image generation");
+    expect(screen.getByRole("status").textContent).toContain("Waiting for Agent updates");
+  });
+
+  it("sorts by Runtime sequence and removes replay duplicates by official identity", () => {
+    const earlier = activity(2, {
+      thread_id: "root-thread",
+      turn_id: "turn-root",
+      item_id: "item-root",
+      kind: "turn_started",
+      status: "running",
+      title: "Root turn started",
+    });
+    const later = activity(7, {
+      thread_id: "network-thread",
+      turn_id: "turn-network",
+      item_id: "item-network",
+      kind: "tool_completed",
+      status: "completed",
+      subject: {
+        kind: "mcp_tool",
+        server: "supply_chain",
+        tool: "calculate_routes",
+      },
+      title: "Completed a tool",
+    });
+    const ordered = orderAndDedupeActivities([later, { ...earlier }, earlier, later]);
+    expect(ordered).toHaveLength(2);
+    expect(ordered.map((entry) => entry.sequence)).toEqual([2, 7]);
+
+    render(
+      <SupervisorOverview
+        taskTitle="Network planning"
+        agents={[rootAgent, networkAgent]}
+        activities={[later, earlier, { ...later }, { ...earlier }]}
+        artifacts={[]}
+      />,
+    );
+
+    const log = screen.getByLabelText("Agent behavior log");
+    const items = log.querySelectorAll("ol > li");
+    expect(items).toHaveLength(2);
+    expect(items[0]?.textContent).toContain("Root turn started");
+    expect(items[1]?.textContent).toContain("supply_chain · calculate_routes");
+  });
+
+  it("keeps separate started and completed events for one Runtime Item", () => {
+    const subject = {
+      kind: "mcp_tool" as const,
+      server: "supply_chain",
+      tool: "validate_inputs",
+    };
+    const started = activity(40, {
+      thread_id: "network-thread",
+      turn_id: "turn-network",
+      item_id: "item-validate",
+      kind: "tool_started",
+      status: "running",
+      subject,
+      title: "Using a tool",
+    });
+    const completed = activity(41, {
+      thread_id: "network-thread",
+      turn_id: "turn-network",
+      item_id: "item-validate",
+      kind: "tool_completed",
+      status: "completed",
+      subject,
+      title: "Completed a tool",
+    });
+    render(
+      <SupervisorOverview
+        taskTitle="Network planning"
+        agents={[rootAgent, networkAgent]}
+        activities={[completed, started, { ...started }]}
+        artifacts={[]}
+      />,
+    );
+
+    const log = screen.getByLabelText("Agent behavior log");
+    expect(log.querySelectorAll("ol > li")).toHaveLength(2);
+    expect(log.textContent).toContain("Running");
+    expect(log.textContent).toContain("Completed");
+  });
+
+  it("keeps safe detail keyboard-expandable and exposes status semantics", () => {
+    const detail = "search · inputs/planning.csv";
+    const { container } = render(
+      <SupervisorOverview
+        taskTitle="Network planning"
+        agents={[rootAgent, dataAgent]}
+        activities={[activity(30, {
+          thread_id: "data-thread",
+          turn_id: "turn-data",
+          item_id: "item-read",
+          kind: "tool_completed",
+          status: "completed",
+          subject: {
+            kind: "workspace_action",
+            action: "search",
+            path: "inputs/planning.csv",
+          },
+          title: "Completed a workspace command",
+          detail,
+        }), activity(31, {
+          thread_id: "data-thread",
+          turn_id: "turn-data",
+          item_id: "item-failed",
+          kind: "tool_failed",
+          status: "failed",
+          subject: {
+            kind: "runtime_tool",
+            namespace: "data",
+            tool: "validate",
+          },
+          title: "Could not complete validation",
+        })]}
+        artifacts={[]}
+      />,
+    );
+
+    const summary = container.querySelector("summary") as HTMLElement | null;
+    expect(summary).toBeTruthy();
+    expect(summary?.getAttribute("aria-label")).toBe("Show safe activity detail");
+    expect((summary?.closest("details") as HTMLDetailsElement | null)?.open).toBe(false);
+    fireEvent.click(summary as HTMLElement);
+    expect((summary?.closest("details") as HTMLDetailsElement | null)?.open).toBe(true);
+    expect(screen.getAllByText(detail).length).toBeGreaterThan(0);
+    expect(container.querySelector(".web-supervisor-activity-action")).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain("data · validate");
+    expect(screen.getByLabelText("Status: Completed")).toBeTruthy();
+    expect(screen.getByLabelText("Status: Failed")).toBeTruthy();
   });
 });

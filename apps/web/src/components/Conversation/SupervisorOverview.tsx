@@ -9,6 +9,7 @@ import X from "lucide-react/dist/esm/icons/x";
 import type {
   ArtifactSummary,
   RuntimeAgentActivity,
+  RuntimeAgentActivitySubject,
   RuntimeAgentExecution,
   RuntimeAgentProjection,
   ThreadHistoryTurn,
@@ -146,6 +147,93 @@ function activityStatusPresentation(status: AgentActivityStatus): {
   }
 }
 
+function activitySubjectAction(
+  subject: RuntimeAgentActivitySubject | null | undefined,
+): string | null {
+  if (!subject) return null;
+
+  switch (subject.kind) {
+    case "mcp_tool": {
+      const server = subject.server?.trim();
+      const tool = subject.tool?.trim();
+      return [server, tool].filter(Boolean).join(" · ") || "MCP tool";
+    }
+    case "runtime_tool": {
+      const namespace = subject.namespace?.trim();
+      const tool = subject.tool?.trim();
+      return [namespace, tool].filter(Boolean).join(" · ") || "Runtime tool";
+    }
+    case "workspace_action": {
+      const action = subject.action.trim();
+      const path = subject.path?.trim();
+      // `workspace_command` is the server's bounded unknown-action marker. It
+      // is deliberately rendered as the server's safe neutral label instead
+      // of reviving the old generic "Using/Completed ..." timeline copy.
+      const safeAction = action && action !== "workspace_command"
+        ? action
+        : "workspace operation";
+      return path ? `${safeAction} · ${path}` : safeAction;
+    }
+    case "web_search":
+      return "web search";
+    case "image_view":
+      return "image inspection";
+    case "image_generation":
+      return "image generation";
+  }
+}
+
+function activityAction(activity: RuntimeAgentActivity): string {
+  return activitySubjectAction(activity.subject)
+    ?? (activity.title.trim() || activityKindLabel(activity.kind));
+}
+
+function activityIdentity(activity: RuntimeAgentActivity): string {
+  return [
+    activity.run_id,
+    activity.thread_id,
+    activity.turn_id ?? "",
+    activity.item_id ?? "",
+    String(activity.sequence),
+  ].join("\u001f");
+}
+
+function activitySortKey(activity: RuntimeAgentActivity): string {
+  return [
+    activityIdentity(activity),
+    activity.created_at,
+    activity.kind,
+    activity.status,
+    activity.title,
+    activity.detail ?? "",
+  ].join("\u001f");
+}
+
+/**
+ * Runtime history and live projections can contain the same official Item.
+ * Keep this a pure projection helper: no component cache, event synthesis or
+ * terminal-state rewriting is allowed here.
+ */
+export function orderAndDedupeActivities(
+  activities: RuntimeAgentActivity[],
+): RuntimeAgentActivity[] {
+  const seen = new Set<string>();
+  return [...activities]
+    .sort((left, right) => {
+      const sequenceOrder = left.sequence - right.sequence;
+      if (sequenceOrder !== 0) return sequenceOrder;
+      const leftKey = activitySortKey(left);
+      const rightKey = activitySortKey(right);
+      return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+    })
+    .filter((activity) => {
+      const identity = activityIdentity(activity);
+      if (seen.has(identity)) return false;
+      seen.add(identity);
+      return true;
+    });
+}
+
 function activityKindLabel(kind: RuntimeAgentActivity["kind"]): string {
   switch (kind) {
     case "assignment":
@@ -242,9 +330,9 @@ export default function SupervisorOverview({
 }: Props) {
   const [review, setReview] = useState<ReviewState | null>(null);
   const rootAgent = agents.find((agent) => agent.is_root) ?? null;
-  const rootActivities = activities
-    .filter((activity) => rootAgent && activity.thread_id === rootAgent.thread_id)
-    .sort((left, right) => left.sequence - right.sequence);
+  const orderedActivities = orderAndDedupeActivities(activities);
+  const rootActivities = orderedActivities
+    .filter((activity) => rootAgent && activity.thread_id === rootAgent.thread_id);
   const rootBehavior = [...rootActivities]
     .reverse()
     .find((activity) =>
@@ -254,8 +342,7 @@ export default function SupervisorOverview({
     .reverse()
     .find((activity) => activity.kind === "reporting");
   const agentsByThread = new Map(agents.map((agent) => [agent.thread_id, agent]));
-  const timelineActivities = [...activities].sort((left, right) =>
-    left.sequence - right.sequence);
+  const timelineActivities = orderedActivities;
   const rootStatus = rootAgent
     ? agentStatusPresentation(rootAgent)
     : { label: "Starting", tone: "idle" as const };
@@ -379,10 +466,14 @@ export default function SupervisorOverview({
                 <Detail label="Current task">{taskTitle}</Detail>
                 <Detail label="Run status">{rootStatus.label}</Detail>
                 <Detail label="Current behavior">
-                  {rootBehavior?.detail ?? rootBehavior?.title ?? "Coordinating the collaboration"}
+                  {rootBehavior?.detail
+                    ?? (rootBehavior ? activityAction(rootBehavior) : null)
+                    ?? "Coordinating the collaboration"}
                 </Detail>
                 <Detail label="Latest progress">
-                  {rootProgress?.detail ?? rootProgress?.title ?? "No progress reported yet"}
+                  {rootProgress?.detail
+                    ?? (rootProgress ? activityAction(rootProgress) : null)
+                    ?? "No progress reported yet"}
                 </Detail>
               </dl>
             </article>
@@ -468,26 +559,64 @@ export default function SupervisorOverview({
             </div>
             {timelineActivities.length ? (
               <ol>
-                {timelineActivities.map((activity, index) => {
+                {timelineActivities.map((activity) => {
                   const status = activityStatusPresentation(activity.status);
                   const actor = agentsByThread.get(activity.thread_id);
                   const timestamp = activityTime(activity.created_at);
+                  const actorName = actor ? agentLabel(actor) : "Runtime Agent";
+                  const action = activityAction(activity);
+                  const activityHeadingId = `web-supervisor-activity-${activity.sequence}-${
+                    activity.item_id ?? activity.kind
+                  }`;
+                  const activityActorId = `${activityHeadingId}-actor`;
+                  const activityStatusId = `${activityHeadingId}-status`;
                   return (
                     <li
-                      key={`${activity.sequence}-${activity.thread_id}-${activity.item_id ?? activity.kind}-${index}`}
+                      key={activityIdentity(activity)}
+                      className={`is-${status.tone}`}
                     >
-                      <span className={`is-${activity.status}`} aria-hidden="true" />
+                      <span
+                        className={`is-${status.tone} is-${activity.status}`}
+                        aria-hidden="true"
+                      />
                       <div className="web-supervisor-activity-copy">
-                        <div className="web-supervisor-activity-meta">
-                          <span>{actor ? agentLabel(actor) : "Runtime Agent"}</span>
-                          <span>{activityKindLabel(activity.kind)}</span>
-                          <span>{status.label}</span>
-                          {timestamp ? (
-                            <time dateTime={activity.created_at}>{timestamp}</time>
+                        <article
+                          className="web-supervisor-activity-card"
+                          role={status.tone === "error"
+                            ? "alert"
+                            : status.tone === "waiting" ? "status" : undefined}
+                          aria-labelledby={`${activityActorId} ${activityHeadingId}`}
+                          aria-describedby={activityStatusId}
+                        >
+                          <div className="web-supervisor-activity-meta">
+                            <span
+                              id={activityActorId}
+                              className="web-supervisor-activity-actor"
+                            >
+                              {actorName}
+                            </span>
+                            <span className="web-supervisor-activity-arrow" aria-hidden="true">→</span>
+                            <h3 id={activityHeadingId} className="web-supervisor-activity-action">
+                              {action}
+                            </h3>
+                            <span
+                              id={activityStatusId}
+                              className={`web-supervisor-activity-status is-${status.tone}`}
+                              aria-label={`Status: ${status.label}`}
+                            >
+                              {status.label}
+                            </span>
+                            {timestamp ? (
+                              <time dateTime={activity.created_at}>{timestamp}</time>
+                            ) : null}
+                          </div>
+                          {activity.detail ? (
+                            <details className="web-supervisor-activity-detail">
+                              <summary aria-label="Show safe activity detail">Show details</summary>
+                              <p>{activity.detail}</p>
+                            </details>
                           ) : null}
-                        </div>
-                        <strong>{activity.title}</strong>
-                        {activity.detail ? <p>{activity.detail}</p> : null}
+                        </article>
                       </div>
                     </li>
                   );

@@ -1620,41 +1620,128 @@ body:has(.web-app-shell) {
 }
 
 .web-supervisor-activity-meta {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(84px, max-content) auto minmax(0, 1fr) max-content max-content;
   align-items: center;
   gap: 3px 7px;
   margin-bottom: 3px;
   color: #6f7b8e;
-  font-size: 8px;
+  font-size: 10px;
   line-height: 1.35;
 }
 
-.web-supervisor-activity-meta span:first-child {
+.web-supervisor-activity-actor {
+  min-width: 0;
+  overflow: hidden;
   color: #91a4bf;
+  text-overflow: ellipsis;
   font-weight: 700;
+  white-space: nowrap;
 }
 
-.web-supervisor-activity-meta time {
-  margin-left: auto;
-  color: #687386;
-  font-variant-numeric: tabular-nums;
+.web-supervisor-activity-arrow {
+  color: #6f7b8e;
+  font-size: 11px;
 }
 
-.web-supervisor-activity-copy > strong {
-  display: block;
+.web-supervisor-activity-action {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
   color: #b8c0cc;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 680;
   line-height: 1.4;
 }
 
-.web-supervisor-activity-copy > p {
-  margin: 3px 0 0;
+.web-supervisor-activity-status {
+  flex: 0 0 auto;
+  color: #9ca8b9;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.web-supervisor-activity-status.is-active {
+  color: #71d89c;
+}
+
+.web-supervisor-activity-status.is-waiting {
+  color: #e4b457;
+}
+
+.web-supervisor-activity-status.is-terminal {
+  color: #8eb3ea;
+}
+
+.web-supervisor-activity-status.is-error {
+  color: #ed8b92;
+}
+
+.web-supervisor-activity-meta time {
+  color: #687386;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.web-supervisor-activity-detail {
+  margin-top: 5px;
   color: #8993a3;
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.5;
+}
+
+.web-supervisor-activity-detail summary {
+  width: fit-content;
+  color: #8ea4bd;
+  cursor: pointer;
+  font-weight: 650;
+  outline: none;
+}
+
+.web-supervisor-activity-detail summary:focus-visible {
+  border-radius: 4px;
+  box-shadow: 0 0 0 2px rgb(142 164 189 / 42%);
+}
+
+.web-supervisor-activity-detail p {
+  margin: 4px 0 0;
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 560px) {
+  .web-supervisor-activity-meta {
+    grid-template-columns: minmax(0, 1fr) max-content;
+    gap: 4px 7px;
+  }
+
+  .web-supervisor-activity-arrow {
+    display: none;
+  }
+
+  .web-supervisor-activity-actor {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .web-supervisor-activity-status {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+  }
+
+  .web-supervisor-activity-action {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .web-supervisor-activity-meta time {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: end;
+  }
 }
 
 .web-supervisor-artifacts {
