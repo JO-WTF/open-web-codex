@@ -151,35 +151,47 @@ fn parse_models_catalog(body: &[u8]) -> Result<ModelsCatalog, ModelsCatalogError
     let value =
         serde_json::from_slice::<Value>(body).map_err(|_| ModelsCatalogError::InvalidJson)?;
 
-    if value.get("models").is_some() {
+    let has_models = value.get("models").is_some();
+    let has_data = value.get("data").is_some();
+    if has_models == has_data {
+        return Err(ModelsCatalogError::IncompatibleSchema);
+    }
+
+    if has_models {
         let response = serde_json::from_value::<ModelsResponse>(value)
             .map_err(|_| ModelsCatalogError::IncompatibleSchema)?;
         let models = validate_rich_models(response.models)?;
         return Ok(ModelsCatalog::Rich(models));
     }
 
-    if value.get("data").is_some() {
-        let response = serde_json::from_value::<OpenAiCompatibleModelsResponse>(value)
-            .map_err(|_| ModelsCatalogError::IncompatibleSchema)?;
-        let model_ids = validate_compatible_model_ids(response.data)?;
-        return Ok(ModelsCatalog::OpenAiCompatible(model_ids));
-    }
-
-    Err(ModelsCatalogError::IncompatibleSchema)
+    let response = serde_json::from_value::<OpenAiCompatibleModelsResponse>(value)
+        .map_err(|_| ModelsCatalogError::IncompatibleSchema)?;
+    let model_ids = validate_compatible_model_ids(response.data)?;
+    Ok(ModelsCatalog::OpenAiCompatible(model_ids))
 }
 
 fn validate_rich_models(models: Vec<ModelInfo>) -> Result<Vec<ModelInfo>, ModelsCatalogError> {
     if models.len() > MAX_MODEL_CATALOG_ENTRIES {
         return Err(ModelsCatalogError::IncompatibleSchema);
     }
-    let models = models
-        .into_iter()
-        .filter(|model| valid_model_id(&model.slug))
-        .collect::<Vec<_>>();
     if models.is_empty() {
         return Err(ModelsCatalogError::EmptyCatalog);
     }
-    Ok(models)
+
+    let mut accepted: Vec<ModelInfo> = Vec::with_capacity(models.len());
+    for model in models {
+        if !valid_model_id(&model.slug) {
+            return Err(ModelsCatalogError::IncompatibleSchema);
+        }
+        if accepted.iter().any(|existing| existing == &model) {
+            continue;
+        }
+        if accepted.iter().any(|existing| existing.slug == model.slug) {
+            return Err(ModelsCatalogError::IncompatibleSchema);
+        }
+        accepted.push(model);
+    }
+    Ok(accepted)
 }
 
 fn validate_compatible_model_ids(
@@ -188,21 +200,24 @@ fn validate_compatible_model_ids(
     if models.len() > MAX_MODEL_CATALOG_ENTRIES {
         return Err(ModelsCatalogError::IncompatibleSchema);
     }
+    if models.is_empty() {
+        return Err(ModelsCatalogError::EmptyCatalog);
+    }
     let mut model_ids = Vec::with_capacity(models.len());
     for model in models {
-        let model_id = model.id.trim();
-        if valid_model_id(model_id) && !model_ids.iter().any(|id| id == model_id) {
-            model_ids.push(model_id.to_string());
+        if !valid_model_id(&model.id) {
+            return Err(ModelsCatalogError::IncompatibleSchema);
         }
-    }
-    if model_ids.is_empty() {
-        return Err(ModelsCatalogError::EmptyCatalog);
+        if !model_ids.iter().any(|id| id == &model.id) {
+            model_ids.push(model.id);
+        }
     }
     Ok(model_ids)
 }
 
 fn valid_model_id(model_id: &str) -> bool {
-    !model_id.trim().is_empty()
+    model_id == model_id.trim()
+        && !model_id.is_empty()
         && model_id.chars().count() <= MAX_MODEL_ID_CHARS
         && !model_id.chars().any(char::is_control)
 }
@@ -307,6 +322,35 @@ mod tests {
         }
     }
 
+    fn rich_model(slug: &str) -> ModelInfo {
+        serde_json::from_value(json!({
+            "slug": slug,
+            "display_name": slug,
+            "description": "desc",
+            "default_reasoning_level": "medium",
+            "supported_reasoning_levels": [
+                {"effort": "low", "description": "low"},
+                {"effort": "medium", "description": "medium"},
+                {"effort": "high", "description": "high"}
+            ],
+            "shell_type": "shell_command",
+            "visibility": "list",
+            "minimal_client_version": [0, 99, 0],
+            "supported_in_api": true,
+            "priority": 1,
+            "upgrade": null,
+            "support_verbosity": false,
+            "default_verbosity": null,
+            "apply_patch_tool_type": null,
+            "truncation_policy": {"mode": "bytes", "limit": 10_000},
+            "supports_parallel_tool_calls": false,
+            "supports_image_detail_original": false,
+            "context_window": 272_000,
+            "experimental_supported_tools": [],
+        }))
+        .unwrap()
+    }
+
     #[tokio::test]
     async fn appends_client_version_query() {
         let response = ModelsResponse { models: Vec::new() };
@@ -345,37 +389,14 @@ mod tests {
     #[tokio::test]
     async fn parses_models_response() {
         let response = ModelsResponse {
-            models: vec![
-                serde_json::from_value(json!({
-                    "slug": "gpt-test",
-                    "display_name": "gpt-test",
-                    "description": "desc",
-                    "default_reasoning_level": "medium",
-                    "supported_reasoning_levels": [{"effort": "low", "description": "low"}, {"effort": "medium", "description": "medium"}, {"effort": "high", "description": "high"}],
-                    "shell_type": "shell_command",
-                    "visibility": "list",
-                    "minimal_client_version": [0, 99, 0],
-                    "supported_in_api": true,
-                    "priority": 1,
-                    "upgrade": null,
-                    "support_verbosity": false,
-                    "default_verbosity": null,
-                    "apply_patch_tool_type": null,
-                    "truncation_policy": {"mode": "bytes", "limit": 10_000},
-                    "supports_parallel_tool_calls": false,
-                    "supports_image_detail_original": false,
-                    "context_window": 272_000,
-                    "experimental_supported_tools": [],
-                }))
-                .unwrap(),
-            ],
+            models: vec![rich_model("gpt-test")],
         };
         let rich_body = serde_json::to_vec(&response).unwrap();
         let mut invalid_response = response.clone();
         invalid_response.models[0].slug = "bad\nslug".to_string();
         assert_eq!(
             parse_models_catalog(&serde_json::to_vec(&invalid_response).unwrap()),
-            Err(ModelsCatalogError::EmptyCatalog)
+            Err(ModelsCatalogError::IncompatibleSchema)
         );
 
         let transport = CapturingTransport {
@@ -426,14 +447,79 @@ mod tests {
     }
 
     #[test]
-    fn parses_openai_compatible_catalog_and_bounds_ids() {
-        let result = parse_models_catalog(
-            br#"{"data":[{"id":" first "},{"id":""},{"id":"first"},{"id":"second"},{"id":"bad\nid"}]}"#,
-        )
-        .expect("compatible catalog should parse");
+    fn parses_openai_compatible_catalog_and_dedupes_exact_ids() {
+        let result =
+            parse_models_catalog(br#"{"data":[{"id":"first"},{"id":"first"},{"id":"second"}]}"#)
+                .expect("compatible catalog should parse");
         assert_eq!(
             result,
             ModelsCatalog::OpenAiCompatible(vec!["first".to_string(), "second".to_string()])
+        );
+    }
+
+    #[test]
+    fn rejects_mixed_rich_catalog_entries_without_filtering() {
+        let valid = rich_model("gpt-valid");
+        let duplicate = valid.clone();
+        let result = parse_models_catalog(
+            &serde_json::to_vec(&ModelsResponse {
+                models: vec![valid.clone(), duplicate],
+            })
+            .unwrap(),
+        )
+        .expect("exact duplicate should be accepted");
+        let ModelsCatalog::Rich(models) = result else {
+            panic!("expected a rich catalog");
+        };
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].slug, "gpt-valid");
+
+        for invalid_slug in [
+            " gpt-whitespace ".to_string(),
+            String::new(),
+            "gpt\ncontrol".to_string(),
+            "x".repeat(MAX_MODEL_ID_CHARS + 1),
+        ] {
+            let mut invalid = valid.clone();
+            invalid.slug = invalid_slug;
+            assert_eq!(
+                parse_models_catalog(
+                    &serde_json::to_vec(&ModelsResponse {
+                        models: vec![valid.clone(), invalid],
+                    })
+                    .unwrap(),
+                ),
+                Err(ModelsCatalogError::IncompatibleSchema),
+            );
+        }
+        assert_eq!(
+            parse_models_catalog(br#"{"models":[]}"#),
+            Err(ModelsCatalogError::EmptyCatalog),
+        );
+    }
+
+    #[test]
+    fn rejects_mixed_openai_catalog_entries_without_filtering() {
+        for invalid_id in [
+            " first ".to_string(),
+            String::new(),
+            "bad\ncontrol".to_string(),
+            "x".repeat(MAX_MODEL_ID_CHARS + 1),
+        ] {
+            let body = json!({
+                "data": [
+                    {"id": "valid"},
+                    {"id": invalid_id},
+                ],
+            });
+            assert_eq!(
+                parse_models_catalog(&serde_json::to_vec(&body).unwrap()),
+                Err(ModelsCatalogError::IncompatibleSchema),
+            );
+        }
+        assert_eq!(
+            parse_models_catalog(br#"{"data":[]}"#),
+            Err(ModelsCatalogError::EmptyCatalog),
         );
     }
 
