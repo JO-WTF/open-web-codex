@@ -286,9 +286,10 @@ Provider 全量去重、首消息 compound selection 或完整 4B.3 Thread truth
 
 R2 真实门退出：fresh local session 可添加并列出 DeepSeek Provider；配置只保存 env ref，Platform
 Secret 重启后仍能注入同一密钥；显式 `deepseek-v4-flash` Turn 完成连续两次 MCP tool call 后给出
-final。浏览器响应、日志、Workspace 与普通 Profile 文件均不得出现 Secret 明文。模型 refresh、
-`forceRefresh`/`providerId` model-list 扩展、Turn Provider override、Provider DB/UI 全量重构和
-Browser dead graph 均不属于该门。
+final。浏览器响应、日志、Workspace 与普通 Profile 文件均不得出现 Secret 明文。后续真实空目录
+故障已用窄 follow-up 收口：Codex 只增加 exact Provider 的 fresh typed catalog，Platform 不切换
+current Provider，只在非空成功后持久化目标目录并在刷新/重启后恢复；Turn Provider override、
+Provider owner 全量重构和 Browser dead graph 仍不属于阶段一关键门。
 
 后续 backlog 继续遵守已确认边界：official Thread/Turn/Item/history 是唯一会话事实；Browser legacy、
 Terminal/Usage/prompts、Provider 重复 owner、Task creation selection、Run lease/history overlay 与

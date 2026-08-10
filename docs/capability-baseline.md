@@ -277,7 +277,7 @@ malformed Role 和 Indonesia/Thailand native Workspace exact gate 也在删除�
 | 旧数据引用 | Platform 文件面只接受 Workspace 相对路径；Case/NetworkSnapshot、`source_ref`、ArtifactRef、taskEvidence hashes 和双重 ref 仍在旧 Tool 内 | E1 旧原型；删过重层并保留简化 ResourceStore |
 | 仓网算法 | 数据标准化、球面矩阵、成本、场景、求解、报告、地图代码与 100 项 Python 测试 | E2；最小子集 E3 |
 | Provider 定义与选择 | Profile `config.toml` 和 Runtime 已能持久化 Provider/模型及未来 Thread 默认选择；已物化 Thread 的实际 pair 由 official Thread settings 拥有。Platform 仍镜像 `profile_provider_definitions` 与 global `models.default_selection`，并在启动时回放 | 第二/第三 owner 与 Task pair 全量收敛进入后续 backlog；当前只补真实 DeepSeek 门直接依赖 |
-| Provider 模型刷新 | current Platform 先把目标 Provider 设为默认，再调用 `model/list {forceRefresh:true}`；official 646 没有 `forceRefresh` 或 `providerId`，pre-sync seam 只有 `forceRefresh` | 已证实但进入后续 backlog；当前 R2 真实门不执行 refresh，只要求 `modelProvider/list`、Secret restart 和显式 model Turn |
+| Provider 模型刷新 | Codex 的 provider-scoped `modelProvider/models/list` 对 exact 目标 Provider 执行 fresh `/models`，不切换 current Provider；Platform 只在非空 typed success 后写目标配置并持久化该 Profile 的模型目录，安全列表从该既有持久投影恢复，因为 `modelProvider/list` 只负责 Provider discovery、不回显自定义模型目录 | E3：真实 DeepSeek Web Fetch 得到 `deepseek-v4-flash`/`deepseek-v4-pro`，页面刷新后仍为 2 models；auth/empty/invalid 失败不覆盖旧目录，其他服务器的 cold deployment 仍需使用当前 Server/Codex 对象与持久 Secret 复验 |
 | Provider Secret | Profile/provider scoped Secret 以平台密文保存，只把稳定 env ref 写入 Codex config，并在 owned Profile process 注入 | E2；重启与零明文负向门保留 |
 | Provider metrics | 持久化 schema/route 保留真实 token、延迟、压缩和终态观测；四个没有 Codex producer 的 speculative SHA 字段已删除 | 真实 usage 观测未验收 |
 | 多用户隔离 | 身份 scope 部分存在，产品入口仍单用户 | E0，隔离矩阵未运行 |

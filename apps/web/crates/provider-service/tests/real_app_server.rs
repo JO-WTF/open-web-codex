@@ -323,6 +323,17 @@ async fn secured_provider_credentials_never_enter_codex_config() {
         .apply_scheduled_restart()
         .await
         .expect("apply refreshed Provider catalog"));
+    let restarted_catalog = service
+        .list(actor)
+        .await
+        .expect("list persisted catalog after Profile restart");
+    let restarted_provider = restarted_catalog
+        .data
+        .iter()
+        .find(|provider| provider.id == "secured-provider")
+        .expect("secured Provider remains after Profile restart");
+    assert_eq!(restarted_provider.model_count, 1);
+    assert_eq!(restarted_provider.models[0].model_id, "provider-one-model");
     service
         .update_model(
             actor,

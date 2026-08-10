@@ -256,6 +256,35 @@ impl SecuredProviderService {
         Ok(())
     }
 
+    async fn overlay_persisted_models(
+        &self,
+        profile_id: Uuid,
+        mut catalog: ProviderCatalog,
+    ) -> Result<ProviderCatalog, AuthorizedProviderError> {
+        let rows = sqlx::query(
+            "SELECT provider_id, models FROM profile_provider_definitions \
+             WHERE profile_id = $1 ORDER BY provider_id",
+        )
+        .bind(profile_id)
+        .fetch_all(&self.db)
+        .await?;
+        for row in rows {
+            let provider_id: String = row.get("provider_id");
+            let Some(provider) = catalog
+                .data
+                .iter_mut()
+                .find(|provider| provider.id == provider_id)
+            else {
+                continue;
+            };
+            let models: Vec<ProviderModelSummary> = serde_json::from_value(row.get("models"))
+                .map_err(|error| ProviderServiceError::InvalidResponse(error.to_string()))?;
+            provider.model_count = models.len();
+            provider.models = models;
+        }
+        Ok(catalog)
+    }
+
     async fn authorize(
         &self,
         actor: ProviderActor,
@@ -328,8 +357,9 @@ impl SecuredProviderService {
 #[async_trait]
 impl AuthorizedProviderOperations for SecuredProviderService {
     async fn list(&self, actor: ProviderActor) -> Result<ProviderCatalog, AuthorizedProviderError> {
-        self.authorize(actor).await?;
-        Ok(self.runtime.list().await?)
+        let profile = self.authorize(actor).await?;
+        let catalog = self.runtime.list().await?;
+        self.overlay_persisted_models(profile.id, catalog).await
     }
 
     async fn upsert(
@@ -436,7 +466,7 @@ impl AuthorizedProviderOperations for SecuredProviderService {
         .bind(id)
         .execute(&self.db)
         .await?;
-        Ok(catalog)
+        self.overlay_persisted_models(profile.id, catalog).await
     }
 
     async fn select_model(
@@ -455,7 +485,7 @@ impl AuthorizedProviderOperations for SecuredProviderService {
         .bind(model_id)
         .execute(&self.db)
         .await?;
-        Ok(catalog)
+        self.overlay_persisted_models(profile.id, catalog).await
     }
 
     async fn delete(
@@ -492,7 +522,7 @@ impl AuthorizedProviderOperations for SecuredProviderService {
                 .bind(id)
                 .execute(&self.db)
                 .await?;
-                Ok(catalog)
+                self.overlay_persisted_models(profile.id, catalog).await
             }
             Err(error) => {
                 self.restore_secret(profile, id, previous).await?;

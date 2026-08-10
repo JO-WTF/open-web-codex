@@ -288,7 +288,11 @@ impl ProviderService {
             json!(persisted_models),
         )])
         .await?;
-        self.list().await
+        let mut catalog = self.list().await?;
+        let provider_index = require_catalog_provider(&catalog, id)?;
+        catalog.data[provider_index].model_count = models.len();
+        catalog.data[provider_index].models = models;
+        Ok(catalog)
     }
 
     pub async fn update_model(
@@ -1169,22 +1173,16 @@ mod tests {
                 provider("provider-b", false, json!([])),
             ]),
         );
+        // Codex owns Provider discovery, but its modelProvider/list projection
+        // does not echo a custom Provider's freshly fetched model catalog.
+        // The refresh result must therefore carry the typed catalog returned by
+        // modelProvider/models/list instead of replacing it with this empty
+        // discovery projection.
         let final_catalog = catalog(
             "provider-a",
             json!([
                 provider("provider-a", true, provider_a_models),
-                provider(
-                    "provider-b",
-                    false,
-                    json!([{
-                        "modelId": "b-model",
-                        "modelName": "B model",
-                        "maxTokenLen": null,
-                        "maxOutputTokens": null,
-                        "showInPicker": true,
-                        "contextWindow": null,
-                    }])
-                ),
+                provider("provider-b", false, json!([])),
             ]),
         );
         let transport = MockTransport::new(vec![
