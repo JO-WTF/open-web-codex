@@ -4,12 +4,43 @@ use crate::error::ApiError;
 use crate::provider::Provider;
 use codex_client::HttpTransport;
 use codex_client::RequestTelemetry;
+use codex_client::TransportError;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
 use http::HeaderMap;
 use http::Method;
+use http::StatusCode;
 use http::header::ETAG;
+use serde::Deserialize;
+use serde_json::Value;
 use std::sync::Arc;
+
+const MAX_MODEL_CATALOG_BYTES: usize = 1024 * 1024;
+const MAX_MODEL_CATALOG_ENTRIES: usize = 512;
+const MAX_MODEL_ID_CHARS: usize = 256;
+
+/// A sanitized Provider `/models` response accepted by the Runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModelsCatalog {
+    /// Codex's rich model metadata response.
+    Rich(Vec<ModelInfo>),
+    /// OpenAI-compatible responses that only advertise `data[].id`.
+    OpenAiCompatible(Vec<String>),
+}
+
+/// A bounded, body-free error classification for a Provider `/models` request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelsCatalogError {
+    Authentication,
+    NotFound,
+    RateLimited,
+    Upstream,
+    Timeout,
+    Network,
+    InvalidJson,
+    IncompatibleSchema,
+    EmptyCatalog,
+}
 
 pub struct ModelsClient<T: HttpTransport> {
     session: EndpointSession<T>,
@@ -76,6 +107,123 @@ impl<T: HttpTransport> ModelsClient<T> {
             })?;
 
         Ok((models, header_etag))
+    }
+
+    /// Fetch and validate either Codex rich metadata or an OpenAI-compatible
+    /// `data[].id` catalog without exposing response bytes or request details.
+    pub async fn list_models_catalog(
+        &self,
+        request_url: String,
+        extra_headers: HeaderMap,
+    ) -> Result<ModelsCatalog, ModelsCatalogError> {
+        let response = self
+            .session
+            .execute_with(
+                Method::GET,
+                Self::path(),
+                extra_headers,
+                /*body*/ None,
+                move |req| {
+                    req.url.clone_from(&request_url);
+                },
+            )
+            .await
+            .map_err(classify_models_transport_error)?;
+
+        parse_models_catalog(&response.body)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiCompatibleModelsResponse {
+    data: Vec<OpenAiCompatibleModel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiCompatibleModel {
+    id: String,
+}
+
+fn parse_models_catalog(body: &[u8]) -> Result<ModelsCatalog, ModelsCatalogError> {
+    if body.len() > MAX_MODEL_CATALOG_BYTES {
+        return Err(ModelsCatalogError::IncompatibleSchema);
+    }
+    let value =
+        serde_json::from_slice::<Value>(body).map_err(|_| ModelsCatalogError::InvalidJson)?;
+
+    if value.get("models").is_some() {
+        let response = serde_json::from_value::<ModelsResponse>(value)
+            .map_err(|_| ModelsCatalogError::IncompatibleSchema)?;
+        let models = validate_rich_models(response.models)?;
+        return Ok(ModelsCatalog::Rich(models));
+    }
+
+    if value.get("data").is_some() {
+        let response = serde_json::from_value::<OpenAiCompatibleModelsResponse>(value)
+            .map_err(|_| ModelsCatalogError::IncompatibleSchema)?;
+        let model_ids = validate_compatible_model_ids(response.data)?;
+        return Ok(ModelsCatalog::OpenAiCompatible(model_ids));
+    }
+
+    Err(ModelsCatalogError::IncompatibleSchema)
+}
+
+fn validate_rich_models(models: Vec<ModelInfo>) -> Result<Vec<ModelInfo>, ModelsCatalogError> {
+    if models.len() > MAX_MODEL_CATALOG_ENTRIES {
+        return Err(ModelsCatalogError::IncompatibleSchema);
+    }
+    let models = models
+        .into_iter()
+        .filter(|model| valid_model_id(&model.slug))
+        .collect::<Vec<_>>();
+    if models.is_empty() {
+        return Err(ModelsCatalogError::EmptyCatalog);
+    }
+    Ok(models)
+}
+
+fn validate_compatible_model_ids(
+    models: Vec<OpenAiCompatibleModel>,
+) -> Result<Vec<String>, ModelsCatalogError> {
+    if models.len() > MAX_MODEL_CATALOG_ENTRIES {
+        return Err(ModelsCatalogError::IncompatibleSchema);
+    }
+    let mut model_ids = Vec::with_capacity(models.len());
+    for model in models {
+        let model_id = model.id.trim();
+        if valid_model_id(model_id) && !model_ids.iter().any(|id| id == model_id) {
+            model_ids.push(model_id.to_string());
+        }
+    }
+    if model_ids.is_empty() {
+        return Err(ModelsCatalogError::EmptyCatalog);
+    }
+    Ok(model_ids)
+}
+
+fn valid_model_id(model_id: &str) -> bool {
+    !model_id.trim().is_empty() && model_id.chars().count() <= MAX_MODEL_ID_CHARS
+}
+
+fn classify_models_transport_error(error: ApiError) -> ModelsCatalogError {
+    match error {
+        ApiError::Transport(TransportError::Http { status, .. }) => classify_http_status(status),
+        ApiError::Transport(TransportError::Timeout) => ModelsCatalogError::Timeout,
+        ApiError::Transport(
+            TransportError::Connection(_) | TransportError::Network(_) | TransportError::Build(_),
+        ) => ModelsCatalogError::Network,
+        ApiError::Transport(TransportError::RetryLimit) => ModelsCatalogError::Upstream,
+        ApiError::Api { status, .. } => classify_http_status(status),
+        _ => ModelsCatalogError::Upstream,
+    }
+}
+
+fn classify_http_status(status: StatusCode) -> ModelsCatalogError {
+    match status {
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => ModelsCatalogError::Authentication,
+        StatusCode::NOT_FOUND => ModelsCatalogError::NotFound,
+        StatusCode::TOO_MANY_REQUESTS => ModelsCatalogError::RateLimited,
+        _ => ModelsCatalogError::Upstream,
     }
 }
 
@@ -220,6 +368,7 @@ mod tests {
                 .unwrap(),
             ],
         };
+        let rich_body = serde_json::to_vec(&response).unwrap();
 
         let transport = CapturingTransport {
             last_request: Arc::new(Mutex::new(None)),
@@ -240,6 +389,9 @@ mod tests {
         assert_eq!(models[0].slug, "gpt-test");
         assert_eq!(models[0].supported_in_api, true);
         assert_eq!(models[0].priority, 1);
+
+        let catalog = parse_models_catalog(&rich_body).expect("rich catalog should parse");
+        assert!(matches!(catalog, ModelsCatalog::Rich(models) if models[0].slug == "gpt-test"));
     }
 
     #[tokio::test]
@@ -263,5 +415,60 @@ mod tests {
 
         assert_eq!(models.len(), 0);
         assert_eq!(etag, Some("\"abc\"".to_string()));
+    }
+
+    #[test]
+    fn parses_openai_compatible_catalog_and_bounds_ids() {
+        let result = parse_models_catalog(
+            br#"{"data":[{"id":" first "},{"id":""},{"id":"first"},{"id":"second"}]}"#,
+        )
+        .expect("compatible catalog should parse");
+        assert_eq!(
+            result,
+            ModelsCatalog::OpenAiCompatible(vec!["first".to_string(), "second".to_string()])
+        );
+    }
+
+    #[test]
+    fn classifies_catalog_shape_and_transport_errors_without_details() {
+        assert_eq!(
+            parse_models_catalog(br#"{"data":[]}"#),
+            Err(ModelsCatalogError::EmptyCatalog)
+        );
+        assert_eq!(
+            parse_models_catalog(br#"{"data":[{"name":"missing id"}]}"#),
+            Err(ModelsCatalogError::IncompatibleSchema)
+        );
+        assert_eq!(
+            parse_models_catalog(b"not-json"),
+            Err(ModelsCatalogError::InvalidJson)
+        );
+        assert_eq!(
+            classify_http_status(StatusCode::UNAUTHORIZED),
+            ModelsCatalogError::Authentication
+        );
+        assert_eq!(
+            classify_http_status(StatusCode::NOT_FOUND),
+            ModelsCatalogError::NotFound
+        );
+        assert_eq!(
+            classify_http_status(StatusCode::TOO_MANY_REQUESTS),
+            ModelsCatalogError::RateLimited
+        );
+        assert_eq!(
+            classify_http_status(StatusCode::BAD_GATEWAY),
+            ModelsCatalogError::Upstream
+        );
+        assert_eq!(
+            classify_models_transport_error(ApiError::Transport(TransportError::Timeout)),
+            ModelsCatalogError::Timeout
+        );
+        assert_eq!(
+            classify_models_transport_error(ApiError::Transport(TransportError::Network(
+                "credential fragment must not escape".to_string(),
+            ))),
+            ModelsCatalogError::Network
+        );
+        assert!(!format!("{:?}", ModelsCatalogError::Authentication).contains("secret"));
     }
 }

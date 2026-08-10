@@ -5,6 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use codex_api::AgentIdentityTelemetry;
+use codex_api::ModelsCatalog;
+use codex_api::ModelsCatalogError;
 use codex_api::ModelsClient;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
@@ -37,6 +39,31 @@ use crate::auth::resolve_provider_auth;
 
 const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 const MODELS_ENDPOINT: &str = "/models";
+
+/// Sanitized model metadata returned by a Provider-owned catalog request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderModelSummary {
+    pub model_id: String,
+    pub model_name: Option<String>,
+    pub max_token_len: Option<i64>,
+    pub max_output_tokens: Option<i64>,
+    pub show_in_picker: bool,
+    pub context_window: Option<i64>,
+}
+
+/// Body-free failure classification for a Provider-owned catalog request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderModelsError {
+    Authentication,
+    NotFound,
+    RateLimited,
+    Upstream,
+    Timeout,
+    Network,
+    InvalidJson,
+    IncompatibleSchema,
+    EmptyCatalog,
+}
 
 /// Provider-owned OpenAI-compatible `/models` endpoint.
 #[derive(Debug)]
@@ -114,12 +141,115 @@ impl OpenAiModelsEndpoint {
         .map_err(|_| CodexErr::Timeout)?
     }
 
+    pub(crate) async fn list_model_catalog(
+        &self,
+        client_version: &str,
+        http_client_factory: HttpClientFactory,
+    ) -> Result<Vec<ProviderModelSummary>, ProviderModelsError> {
+        let auth = self.auth().await;
+        let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
+        let api_provider = self
+            .provider_info
+            .to_api_provider(auth_mode)
+            .map_err(|_| ProviderModelsError::NotFound)?;
+        let api_auth = resolve_provider_auth(auth.as_ref(), &self.provider_info)
+            .map_err(|_| ProviderModelsError::Authentication)?;
+        let request_url =
+            ModelsClient::<ReqwestTransport>::request_url(&api_provider, client_version);
+        let auth_telemetry = auth_header_telemetry(api_auth.as_ref());
+        let agent_identity_telemetry = if let Some(CodexAuth::AgentIdentity(auth)) = auth.as_ref() {
+            Some(agent_identity_telemetry(auth))
+        } else {
+            None
+        };
+        let request_telemetry: Arc<dyn RequestTelemetry> = Arc::new(ModelsRequestTelemetry {
+            auth_mode: auth_mode.map(|mode| TelemetryAuthMode::from(mode).to_string()),
+            auth_header_attached: auth_telemetry.attached,
+            auth_header_name: auth_telemetry.name,
+            agent_identity_telemetry,
+            auth_env: self.auth_env(),
+        });
+        let catalog = timeout(MODELS_REFRESH_TIMEOUT, async {
+            let transport = self
+                .transport_builder
+                .build(http_client_factory, request_url.clone())
+                .await
+                .map_err(|_| ProviderModelsError::Network)?;
+            let client = ModelsClient::new(transport, api_provider, api_auth)
+                .with_telemetry(Some(request_telemetry));
+            client
+                .list_models_catalog(request_url, HeaderMap::new())
+                .await
+                .map_err(provider_models_error_from_catalog)
+        })
+        .await
+        .map_err(|_| ProviderModelsError::Timeout)??;
+
+        match catalog {
+            ModelsCatalog::Rich(models) => Ok(models
+                .into_iter()
+                .map(provider_model_summary_from_rich)
+                .collect()),
+            ModelsCatalog::OpenAiCompatible(model_ids) => Ok(model_ids
+                .into_iter()
+                .map(|model_id| ProviderModelSummary {
+                    model_id,
+                    model_name: None,
+                    max_token_len: None,
+                    max_output_tokens: None,
+                    show_in_picker: true,
+                    context_window: None,
+                })
+                .collect()),
+        }
+    }
+
     fn auth_env(&self) -> AuthEnvTelemetry {
         let codex_api_key_env_enabled = self
             .auth_manager
             .as_ref()
             .is_some_and(|auth_manager| auth_manager.codex_api_key_env_enabled());
         collect_auth_env_telemetry(&self.provider_info, codex_api_key_env_enabled)
+    }
+}
+
+fn provider_models_error_from_catalog(error: ModelsCatalogError) -> ProviderModelsError {
+    match error {
+        ModelsCatalogError::Authentication => ProviderModelsError::Authentication,
+        ModelsCatalogError::NotFound => ProviderModelsError::NotFound,
+        ModelsCatalogError::RateLimited => ProviderModelsError::RateLimited,
+        ModelsCatalogError::Upstream => ProviderModelsError::Upstream,
+        ModelsCatalogError::Timeout => ProviderModelsError::Timeout,
+        ModelsCatalogError::Network => ProviderModelsError::Network,
+        ModelsCatalogError::InvalidJson => ProviderModelsError::InvalidJson,
+        ModelsCatalogError::IncompatibleSchema => ProviderModelsError::IncompatibleSchema,
+        ModelsCatalogError::EmptyCatalog => ProviderModelsError::EmptyCatalog,
+    }
+}
+
+fn provider_model_summary_from_rich(
+    model: codex_protocol::openai_models::ModelInfo,
+) -> ProviderModelSummary {
+    let context_window = model.resolved_context_window().filter(|window| *window > 0);
+    let max_token_len = matches!(
+        model.truncation_policy.mode,
+        codex_protocol::openai_models::TruncationMode::Tokens
+    )
+    .then_some(model.truncation_policy.limit)
+    .filter(|limit| *limit > 0);
+    let model_name = (!model.display_name.trim().is_empty())
+        .then_some(model.display_name)
+        .filter(|name| name.chars().count() <= 512);
+    ProviderModelSummary {
+        model_id: model.slug,
+        model_name,
+        max_token_len,
+        max_output_tokens: None,
+        show_in_picker: matches!(
+            model.visibility,
+            codex_protocol::openai_models::ModelVisibility::List
+        ) && model.supported_in_api,
+        context_window,
     }
 }
 
@@ -287,6 +417,7 @@ mod tests {
     use wiremock::Mock;
     use wiremock::MockServer;
     use wiremock::ResponseTemplate;
+    use wiremock::matchers::header;
     use wiremock::matchers::method;
     use wiremock::matchers::path;
     use wiremock::matchers::query_param;
@@ -389,5 +520,83 @@ mod tests {
                 format!("{}/models?client_version=0.0.0", server.uri()),
             ))
         );
+    }
+
+    #[tokio::test]
+    async fn fresh_catalog_accepts_compatible_shape_and_attaches_provider_auth() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .and(header("authorization", "Bearer provider-secret"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"id": "compatible-model"}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut provider_info = ModelProviderInfo::create_openai_provider(Some(server.uri()));
+        provider_info.experimental_bearer_token = Some("provider-secret".to_string());
+        provider_info.request_max_retries = Some(0);
+        let endpoint = OpenAiModelsEndpoint::new(provider_info, None);
+
+        let models = endpoint
+            .list_model_catalog(
+                "0.0.0",
+                HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy),
+            )
+            .await
+            .expect("compatible catalog should succeed");
+
+        assert_eq!(
+            models,
+            vec![ProviderModelSummary {
+                model_id: "compatible-model".to_string(),
+                model_name: None,
+                max_token_len: None,
+                max_output_tokens: None,
+                show_in_picker: true,
+                context_window: None,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn fresh_catalog_maps_http_failures_without_response_details() {
+        let cases = [
+            (401, ProviderModelsError::Authentication),
+            (403, ProviderModelsError::Authentication),
+            (404, ProviderModelsError::NotFound),
+            (429, ProviderModelsError::RateLimited),
+            (500, ProviderModelsError::Upstream),
+            (400, ProviderModelsError::Upstream),
+        ];
+        for (status, expected) in cases {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/models"))
+                .respond_with(
+                    ResponseTemplate::new(status)
+                        .set_body_string("authorization=provider-secret url=https://secret.test"),
+                )
+                .mount(&server)
+                .await;
+            let mut provider_info = ModelProviderInfo::create_openai_provider(Some(server.uri()));
+            provider_info.experimental_bearer_token = Some("provider-secret".to_string());
+            provider_info.request_max_retries = Some(0);
+            let endpoint = OpenAiModelsEndpoint::new(provider_info, None);
+
+            let error = endpoint
+                .list_model_catalog(
+                    "0.0.0",
+                    HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy),
+                )
+                .await
+                .expect_err("HTTP error should be classified");
+
+            assert_eq!(error, expected);
+            assert!(!format!("{error:?}").contains("provider-secret"));
+            assert!(!format!("{error:?}").contains("secret.test"));
+        }
     }
 }

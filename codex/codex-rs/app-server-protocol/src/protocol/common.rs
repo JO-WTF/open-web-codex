@@ -929,6 +929,11 @@ client_request_definitions! {
         serialization: None,
         response: v2::ModelProviderListResponse,
     },
+    ModelProviderModelsList => "modelProvider/models/list" {
+        params: v2::ModelProviderModelsListParams,
+        serialization: None,
+        response: v2::ModelProviderModelsListResponse,
+    },
     ModelProviderCapabilitiesRead => "modelProvider/capabilities/read" {
         params: v2::ModelProviderCapabilitiesReadParams,
         serialization: None,

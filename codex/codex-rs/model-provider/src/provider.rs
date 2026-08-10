@@ -8,6 +8,7 @@ use codex_api::ApiError;
 use codex_api::Provider;
 use codex_api::SharedAuthProvider;
 use codex_api::is_azure_responses_provider;
+use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
@@ -27,6 +28,8 @@ use crate::auth::auth_manager_for_provider;
 use crate::auth::resolve_provider_auth;
 use crate::auth::resolve_provider_auth_for_scope;
 use crate::models_endpoint::OpenAiModelsEndpoint;
+use crate::models_endpoint::ProviderModelSummary;
+use crate::models_endpoint::ProviderModelsError;
 
 /// Remote context-compaction protocols supported by a model provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -248,6 +251,17 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         drop(cache);
         self.models_manager_without_cache(config_model_catalog)
     }
+
+    /// Fetches a fresh Provider-owned model catalog without touching the
+    /// Thread model manager or its cache.
+    fn list_models_fresh(
+        &self,
+        client_version: &str,
+        http_client_factory: HttpClientFactory,
+    ) -> ModelProviderFuture<'_, Result<Vec<ProviderModelSummary>, ProviderModelsError>> {
+        let _ = (client_version, http_client_factory);
+        Box::pin(async { Err(ProviderModelsError::NotFound) })
+    }
 }
 
 pub type ModelProviderFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -462,6 +476,19 @@ impl ModelProvider for ConfiguredModelProvider {
                 ))
             }
         }
+    }
+
+    fn list_models_fresh(
+        &self,
+        client_version: &str,
+        http_client_factory: HttpClientFactory,
+    ) -> ModelProviderFuture<'_, Result<Vec<ProviderModelSummary>, ProviderModelsError>> {
+        let client_version = client_version.to_string();
+        Box::pin(async move {
+            OpenAiModelsEndpoint::new(self.info.clone(), self.auth_manager.clone())
+                .list_model_catalog(&client_version, http_client_factory)
+                .await
+        })
     }
 }
 

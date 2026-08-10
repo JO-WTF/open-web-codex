@@ -59,6 +59,8 @@ pub use crate::endpoint::ChatCompletionsClient;
 pub use crate::endpoint::CompactClient;
 pub use crate::endpoint::ImagesClient;
 pub use crate::endpoint::MemoriesClient;
+pub use crate::endpoint::ModelsCatalog;
+pub use crate::endpoint::ModelsCatalogError;
 pub use crate::endpoint::ModelsClient;
 pub use crate::endpoint::RealtimeCallClient;
 pub use crate::endpoint::RealtimeCallResponse;
