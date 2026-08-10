@@ -5,7 +5,8 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use crate::final_artifacts::{
-    artifact_delivery_projection, final_artifact_candidate, FinalArtifactCandidate,
+    artifact_delivery_failure, artifact_delivery_projection, final_artifact_candidate,
+    FinalArtifactCandidate,
 };
 use crate::inline_maps::{self, InlineMapCandidate};
 
@@ -80,12 +81,26 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
     let is_root_thread = event.thread_id == context.root_thread_id;
     update_runtime_agent_projection(&mut transaction, &context, &event).await?;
 
-    sqlx::query("SAVEPOINT artifact_projection")
+    let savepoint_available = match sqlx::query("SAVEPOINT artifact_projection")
         .execute(&mut *transaction)
         .await
-        .map_err(|error| format!("Artifact projection savepoint error: {error}"))?;
+    {
+        Ok(_) => true,
+        Err(error) => {
+            mark_artifact_delivery_failure(&mut event.payload, "artifact_projection_failed");
+            tracing::warn!(
+                error = %error,
+                run_id = %run_id,
+                "Artifact projection savepoint unavailable; preserving the Runtime item lifecycle"
+            );
+            false
+        }
+    };
     let mut pending_artifact_ids = Vec::new();
     let artifact_result = async {
+        if !savepoint_available {
+            return Err("artifact_projection_failed".to_string());
+        }
         let registered = register_artifacts(&mut transaction, &context, &event).await?;
         project_registered_artifacts(&mut event.payload, &registered)?;
         if let (Some(candidate), Some(turn_id), Some(item_id)) = (
@@ -117,31 +132,36 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
     match artifact_result {
         Ok(ids) => {
             pending_artifact_ids = ids;
-            sqlx::query("RELEASE SAVEPOINT artifact_projection")
+            if let Err(error) = sqlx::query("RELEASE SAVEPOINT artifact_projection")
                 .execute(&mut *transaction)
                 .await
-                .map_err(|error| format!("Artifact projection release error: {error}"))?;
+            {
+                pending_artifact_ids.clear();
+                mark_artifact_delivery_failure(&mut event.payload, "artifact_projection_failed");
+                tracing::warn!(
+                    error = %error,
+                    run_id = %run_id,
+                    "Artifact projection savepoint release failed"
+                );
+            }
         }
         Err(error) => {
-            sqlx::query("ROLLBACK TO SAVEPOINT artifact_projection")
-                .execute(&mut *transaction)
-                .await
-                .map_err(|rollback_error| {
-                    format!("Artifact projection rollback error: {rollback_error}")
-                })?;
-            sqlx::query("RELEASE SAVEPOINT artifact_projection")
-                .execute(&mut *transaction)
-                .await
-                .map_err(|release_error| {
-                    format!("Artifact projection release error: {release_error}")
-                })?;
-            event
-                .payload
-                .pointer_mut("/data")
-                .and_then(Value::as_object_mut)
-                .map(|data| {
-                    data.remove("artifacts");
-                });
+            if savepoint_available {
+                if let Err(rollback_error) =
+                    sqlx::query("ROLLBACK TO SAVEPOINT artifact_projection")
+                        .execute(&mut *transaction)
+                        .await
+                {
+                    tracing::warn!(error = %rollback_error, "Artifact projection rollback failed");
+                }
+                if let Err(release_error) = sqlx::query("RELEASE SAVEPOINT artifact_projection")
+                    .execute(&mut *transaction)
+                    .await
+                {
+                    tracing::warn!(error = %release_error, "Artifact projection release failed");
+                }
+            }
+            mark_artifact_delivery_failure(&mut event.payload, "artifact_projection_failed");
             tracing::warn!(
                 error = %error,
                 run_id = %run_id,
@@ -604,10 +624,7 @@ fn project_frame(data: &[u8]) -> Result<Option<ProjectedEvent>, String> {
             .map(|structured| structured.remove("artifact"));
     }
     if let Some(code) = artifact_delivery_error {
-        payload["data"]["artifactDelivery"] = json!({
-            "state": "failed",
-            "failureCode": code,
-        });
+        mark_artifact_delivery_failure(&mut payload, &code);
     }
 
     Ok(Some(ProjectedEvent {
@@ -621,6 +638,19 @@ fn project_frame(data: &[u8]) -> Result<Option<ProjectedEvent>, String> {
         artifacts,
         inline_map,
     }))
+}
+
+fn mark_artifact_delivery_failure(payload: &mut Value, code: &str) {
+    if let Some(data) = payload.pointer_mut("/data").and_then(Value::as_object_mut) {
+        data.remove("artifacts");
+        data.insert(
+            "artifactDelivery".to_string(),
+            json!({
+                "state": "failed",
+                "failure": artifact_delivery_failure(code),
+            }),
+        );
+    }
 }
 
 struct InternalFrame {
@@ -2568,6 +2598,48 @@ fn redact_browser_text(value: &str) -> String {
     redact_local_paths(&redact_internal_resource_uris(value))
 }
 
+/// Return whether the existing browser text sanitizer would disclose a host
+/// path or internal Resource URI. Artifact materialization reuses this
+/// predicate and rejects the bytes instead of rewriting them.
+pub(crate) fn browser_text_contains_unsafe(value: &str) -> bool {
+    if redact_browser_text(value) != value {
+        return true;
+    }
+    let bytes = value.as_bytes();
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        if !bytes[cursor].is_ascii_alphabetic()
+            || (cursor > 0 && is_uri_scheme_byte(bytes[cursor - 1]))
+        {
+            cursor += 1;
+            continue;
+        }
+        let mut scheme_end = cursor + 1;
+        while scheme_end < bytes.len() && is_uri_scheme_byte(bytes[scheme_end]) {
+            scheme_end += 1;
+        }
+        if bytes.get(scheme_end).copied() != Some(b':') {
+            cursor += 1;
+            continue;
+        }
+        let scheme = value[cursor..scheme_end].to_ascii_lowercase();
+        let separator_len = if bytes.get(scheme_end + 1..scheme_end + 3) == Some(b"//") {
+            1
+        } else {
+            0
+        };
+        let next = scheme_end + 1 + separator_len * 2;
+        if next < bytes.len()
+            && !bytes[next].is_ascii_whitespace()
+            && (!matches!(scheme.as_str(), "http" | "https") || separator_len == 0)
+        {
+            return true;
+        }
+        cursor = scheme_end + 1;
+    }
+    false
+}
+
 /// Remove model-visible, Profile-local MCP Resource identities from browser
 /// projections without changing the Runtime history that Agents use for
 /// handoff. Public HTTP(S) links remain visible; non-public URI schemes are
@@ -2699,7 +2771,7 @@ fn is_uri_terminator(byte: u8) -> bool {
         )
 }
 
-fn is_sensitive_key(key: &str) -> bool {
+pub(crate) fn is_sensitive_key(key: &str) -> bool {
     let normalized = key.to_ascii_lowercase().replace(['_', '-'], "");
     if matches!(
         normalized.as_str(),
@@ -2722,6 +2794,8 @@ fn is_sensitive_key(key: &str) -> bool {
         "secret",
         "token",
         "apikey",
+        "config",
+        "configuration",
         "stdin",
         "chars",
     ]
@@ -2777,6 +2851,8 @@ mod tests {
                     "type": "mcpToolCall",
                     "server": "supply_chain",
                     "tool": "publish_network_planning_report",
+                    "status": "completed",
+                    "error": null,
                     "result": {"content": [], "structuredContent": {
                         "summary": "Created report.",
                         "artifact": {
@@ -2864,6 +2940,30 @@ mod tests {
             .payload
             .pointer("/data/result/structuredContent/artifact")
             .is_none());
+    }
+
+    #[test]
+    fn artifact_projection_failure_is_bounded_and_removes_artifact_fields() {
+        let mut payload = json!({
+            "data": {
+                "artifacts": [{"artifactId": "internal"}],
+                "artifactDelivery": {"failureCode": "provider/<credential-fragment>"}
+            }
+        });
+        mark_artifact_delivery_failure(&mut payload, "artifact_projection_failed");
+        assert!(payload.pointer("/data/artifacts").is_none());
+        assert!(payload
+            .pointer("/data/artifactDelivery/failureCode")
+            .is_none());
+        assert_eq!(
+            payload.pointer("/data/artifactDelivery/state"),
+            Some(&json!("failed"))
+        );
+        assert_eq!(
+            payload.pointer("/data/artifactDelivery/failure/code"),
+            Some(&json!("artifact_projection_failed"))
+        );
+        assert!(!payload.to_string().contains("credential-fragment"));
     }
 
     #[test]

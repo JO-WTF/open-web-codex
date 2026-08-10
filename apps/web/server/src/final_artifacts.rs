@@ -1,8 +1,22 @@
+use jsonschema::{Draft, JSONSchema};
 use open_web_codex_platform_contracts::{ArtifactFailureSummary, ArtifactState};
 use serde_json::{json, Map, Value};
+use std::sync::OnceLock;
 use uuid::Uuid;
 
 const MAX_FINAL_ARTIFACT_BYTES: u64 = 100 * 1024 * 1024;
+const MAX_ARTIFACT_JSON_DEPTH: usize = 32;
+const MAX_ARTIFACT_JSON_NODES: usize = 100_000;
+const MAX_ARTIFACT_JSON_STRING_BYTES: usize = 64 * 1024;
+
+const NETWORK_MAP_SCHEMA: &str = include_str!(
+    "../../../../tools/supply-chain-network-planner/contracts/schemas/\
+network_comparison_map_bundle.v1.schema.json"
+);
+const NETWORK_REPORT_SCHEMA: &str = include_str!(
+    "../../../../tools/supply-chain-network-planner/contracts/schemas/\
+network_planning_report_bundle.v1.schema.json"
+);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FinalArtifactContract {
@@ -11,7 +25,6 @@ pub(crate) struct FinalArtifactContract {
     pub schema: &'static str,
     pub display_name: &'static str,
     pub mime_type: &'static str,
-    pub bundle_kind: &'static str,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,7 +43,6 @@ const CONTRACTS: &[FinalArtifactContract] = &[
         schema: "network_comparison_map_bundle.v1",
         display_name: "Warehouse network: baseline vs selected facilities",
         mime_type: "application/json",
-        bundle_kind: "network_comparison_map",
     },
     FinalArtifactContract {
         server: "supply_chain",
@@ -38,7 +50,6 @@ const CONTRACTS: &[FinalArtifactContract] = &[
         schema: "network_planning_report_bundle.v1",
         display_name: "Warehouse network planning report",
         mime_type: "application/json",
-        bundle_kind: "network_planning_report",
     },
 ];
 
@@ -57,6 +68,20 @@ pub(crate) fn final_artifact_candidate(
     else {
         return Ok(None);
     };
+    let status = item.get("status").and_then(Value::as_str);
+    if status != Some("completed") {
+        return Err("artifact_delivery_invalid");
+    }
+    if item.get("error").is_some_and(|error| !error.is_null()) {
+        return Err("artifact_delivery_invalid");
+    }
+    let result = item
+        .get("result")
+        .and_then(Value::as_object)
+        .ok_or("artifact_delivery_invalid")?;
+    if result.get("isError").and_then(Value::as_bool) == Some(true) {
+        return Err("artifact_delivery_invalid");
+    }
     let structured = item
         .get("result")
         .and_then(Value::as_object)
@@ -121,20 +146,98 @@ pub(crate) fn validate_materialized_bundle(
         .iter()
         .find(|contract| contract.schema == declared_schema)
         .ok_or("artifact_schema_unsupported")?;
-    let root = serde_json::from_slice::<Value>(bytes)
-        .map_err(|_| "artifact_json_invalid")?
-        .as_object()
-        .cloned()
-        .ok_or("artifact_bundle_invalid")?;
-    let snake_schema = root.get("schema_version");
-    let camel_schema = root.get("schemaVersion");
-    if snake_schema.is_some() == camel_schema.is_some()
-        || snake_schema.or(camel_schema).and_then(Value::as_str) != Some(contract.schema)
-        || root.get("kind").and_then(Value::as_str) != Some(contract.bundle_kind)
-    {
-        return Err("artifact_bundle_contract_mismatch");
+    let root = serde_json::from_slice::<Value>(bytes).map_err(|_| "artifact_json_invalid")?;
+    if !root.is_object() {
+        return Err("artifact_bundle_invalid");
+    }
+    let validator = compiled_provider_schema(contract.schema)?;
+    validator
+        .validate(&root)
+        .map_err(|_| "artifact_bundle_contract_mismatch")?;
+    validate_browser_safe_json(bytes, &root)?;
+    Ok(())
+}
+
+fn compiled_provider_schema(schema: &str) -> Result<&'static JSONSchema, &'static str> {
+    fn compile(fixture: &str) -> Result<JSONSchema, ()> {
+        let schema = serde_json::from_str::<Value>(fixture).map_err(|_| ())?;
+        JSONSchema::options()
+            .with_draft(Draft::Draft202012)
+            .compile(&schema)
+            .map_err(|_| ())
+    }
+
+    static MAP: OnceLock<Result<JSONSchema, ()>> = OnceLock::new();
+    static REPORT: OnceLock<Result<JSONSchema, ()>> = OnceLock::new();
+    let result = match schema {
+        "network_comparison_map_bundle.v1" => MAP.get_or_init(|| compile(NETWORK_MAP_SCHEMA)),
+        "network_planning_report_bundle.v1" => {
+            REPORT.get_or_init(|| compile(NETWORK_REPORT_SCHEMA))
+        }
+        _ => return Err("artifact_schema_unsupported"),
+    };
+    result
+        .as_ref()
+        .map_err(|_| "artifact_bundle_contract_mismatch")
+}
+
+fn validate_browser_safe_json(bytes: &[u8], value: &Value) -> Result<(), &'static str> {
+    if bytes.len() > MAX_FINAL_ARTIFACT_BYTES as usize {
+        return Err("artifact_content_unsafe");
+    }
+    let mut nodes = 0;
+    validate_browser_safe_value(value, 0, &mut nodes)
+}
+
+fn validate_browser_safe_value(
+    value: &Value,
+    depth: usize,
+    nodes: &mut usize,
+) -> Result<(), &'static str> {
+    *nodes = nodes.saturating_add(1);
+    if *nodes > MAX_ARTIFACT_JSON_NODES || depth > MAX_ARTIFACT_JSON_DEPTH {
+        return Err("artifact_content_unsafe");
+    }
+    match value {
+        Value::Object(object) => {
+            for (key, value) in object {
+                if crate::event_projection::is_sensitive_key(key) {
+                    return Err("artifact_content_unsafe");
+                }
+                validate_browser_safe_value(value, depth + 1, nodes)?;
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                validate_browser_safe_value(value, depth + 1, nodes)?;
+            }
+        }
+        Value::String(value) => {
+            if value.len() > MAX_ARTIFACT_JSON_STRING_BYTES
+                || crate::event_projection::browser_text_contains_unsafe(value)
+            {
+                return Err("artifact_content_unsafe");
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
     Ok(())
+}
+
+pub(crate) fn artifact_delivery_failure(code: &str) -> ArtifactFailureSummary {
+    let code = match code {
+        "artifact_content_unsafe" => "artifact_content_unsafe",
+        "artifact_projection_failed" => "artifact_projection_failed",
+        "artifact_delivery_invalid"
+        | "final_artifact_output_invalid"
+        | "final_artifact_output_missing"
+        | "final_artifact_descriptor_invalid"
+        | "final_artifact_contract_mismatch"
+        | "final_artifact_path_invalid"
+        | "final_artifact_size_invalid" => "artifact_delivery_invalid",
+        _ => "unknown",
+    };
+    ArtifactFailureSummary::from_persisted(code)
 }
 
 /// Build the safe browser/event projection for one durable Artifact.
@@ -186,10 +289,11 @@ pub(crate) fn artifact_delivery_projection(
 #[cfg(test)]
 mod tests {
     use super::{
-        artifact_delivery_projection, final_artifact_candidate, validate_materialized_bundle,
+        artifact_delivery_failure, artifact_delivery_projection, final_artifact_candidate,
+        validate_browser_safe_json, validate_materialized_bundle,
     };
     use open_web_codex_platform_contracts::ArtifactFailureCode;
-    use serde_json::json;
+    use serde_json::{json, Value};
     use uuid::Uuid;
 
     #[test]
@@ -197,6 +301,8 @@ mod tests {
         let item = json!({
             "server": "supply_chain",
             "tool": "render_network_comparison_map",
+            "status": "completed",
+            "error": null,
             "result": {"structuredContent": {
                 "summary": "Created map.",
                 "artifact": {
@@ -229,6 +335,8 @@ mod tests {
         let base = json!({
             "server": "supply_chain",
             "tool": "publish_network_planning_report",
+            "status": "completed",
+            "error": null,
             "result": {"structuredContent": {
                 "summary": "Created report.",
                 "artifact": {
@@ -285,17 +393,98 @@ mod tests {
     }
 
     #[test]
+    fn requires_official_completed_success_item() {
+        let mut item = json!({
+            "server": "supply_chain",
+            "tool": "publish_network_planning_report",
+            "status": "completed",
+            "error": null,
+            "result": {"structuredContent": {
+                "summary": "Created report.",
+                "artifact": {
+                    "schema": "network_planning_report_bundle.v1",
+                    "displayName": "Warehouse network planning report",
+                    "mimeType": "application/json",
+                    "workspaceRelativePath": "deliverables/report.json",
+                    "byteSize": 128
+                }
+            }}
+        });
+        for status in ["inProgress", "failed", "cancelled", "interrupted", "future"] {
+            item["status"] = json!(status);
+            assert_eq!(
+                final_artifact_candidate(item.as_object().unwrap()),
+                Err("artifact_delivery_invalid")
+            );
+        }
+        item["status"] = json!("completed");
+        item["error"] = json!({"message": "failed"});
+        assert_eq!(
+            final_artifact_candidate(item.as_object().unwrap()),
+            Err("artifact_delivery_invalid")
+        );
+        item["error"] = Value::Null;
+        item["result"] = json!({"isError": true, "structuredContent": {}});
+        assert_eq!(
+            final_artifact_candidate(item.as_object().unwrap()),
+            Err("artifact_delivery_invalid")
+        );
+        item["result"] = Value::Null;
+        assert_eq!(
+            final_artifact_candidate(item.as_object().unwrap()),
+            Err("artifact_delivery_invalid")
+        );
+    }
+
+    #[test]
+    fn rejects_generic_browser_unsafe_content_without_rewriting() {
+        for value in [
+            json!({"summary": "see /Users/alice/private/report.json"}),
+            json!({"summary": "see C:\\Users\\alice\\private\\report.json"}),
+            json!({"summary": "mcp://supply-chain/resource"}),
+            json!({"summary": "file:/private/resource.json"}),
+            json!({"summary": "urn:internal-resource"}),
+            json!({"credential": "<credential-fragment>"}),
+            json!({"refresh_token": "<credential-fragment>"}),
+            json!({"client_secret": "<credential-fragment>"}),
+            json!({"config_path": "/private/config.toml"}),
+        ] {
+            let bytes = serde_json::to_vec(&value).unwrap();
+            assert_eq!(
+                validate_browser_safe_json(&bytes, &value),
+                Err("artifact_content_unsafe")
+            );
+        }
+        let public = json!({"summary": "https://example.invalid/report"});
+        let bytes = serde_json::to_vec(&public).unwrap();
+        assert_eq!(validate_browser_safe_json(&bytes, &public), Ok(()));
+    }
+
+    #[test]
+    fn maps_delivery_failures_to_fixed_allowlisted_summaries() {
+        assert_eq!(
+            artifact_delivery_failure("artifact_content_unsafe").code,
+            ArtifactFailureCode::ArtifactContentUnsafe
+        );
+        let unknown = artifact_delivery_failure("provider/<credential-fragment>");
+        assert_eq!(unknown.code, ArtifactFailureCode::Unknown);
+        assert!(!unknown.message.contains("credential-fragment"));
+    }
+
+    #[test]
     fn validates_materialized_bundle_schema_and_kind() {
-        validate_materialized_bundle(
-            "network_planning_report_bundle.v1",
-            br#"{"schema_version":"network_planning_report_bundle.v1","kind":"network_planning_report"}"#,
-        )
-        .unwrap();
-        validate_materialized_bundle(
-            "network_comparison_map_bundle.v1",
-            br#"{"schemaVersion":"network_comparison_map_bundle.v1","kind":"network_comparison_map"}"#,
-        )
-        .unwrap();
+        let report_fixture = include_bytes!(
+            "../../../../tools/supply-chain-network-planner/contracts/fixtures/\
+network_planning_report_bundle.v1.json"
+        );
+        let map_fixture = include_bytes!(
+            "../../../../tools/supply-chain-network-planner/contracts/fixtures/\
+network_comparison_map_bundle.v1.json"
+        );
+        validate_materialized_bundle("network_planning_report_bundle.v1", report_fixture)
+            .expect("complete provider report fixture must validate");
+        validate_materialized_bundle("network_comparison_map_bundle.v1", map_fixture)
+            .expect("complete provider map fixture must validate");
 
         for bytes in [
             br#"{"schema_version":"wrong.v1","kind":"network_planning_report"}"#.as_slice(),

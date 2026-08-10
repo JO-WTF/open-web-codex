@@ -1,0 +1,2553 @@
+{
+  "baseline": {
+    "active_warehouse_ids": [
+      "WH-CENTER-JAKARTA",
+      "WH-CENTER-MAKASSAR",
+      "WH-CENTER-MEDAN",
+      "WH-CENTER-PALEMBANG",
+      "WH-CENTER-SURABAYA",
+      "WH-CROSS_DOCKING-BANDUNG",
+      "WH-CROSS_DOCKING-BEKASI",
+      "WH-CROSS_DOCKING-DEPOK",
+      "WH-CROSS_DOCKING-SEMARANG",
+      "WH-CROSS_DOCKING-SOUTH_TANGERANG",
+      "WH-CROSS_DOCKING-TANGERANG"
+    ],
+    "assignment": {
+      "objective": "min_cost",
+      "rows": [
+        {
+          "cost": 143563.904,
+          "demand_city_id": "IDN-CITY-001",
+          "demand_quantity": "10563",
+          "distance_km": 21.187968,
+          "duration_hours": 0.504475,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-TANGERANG"
+        },
+        {
+          "cost": 934584.9589999999,
+          "demand_city_id": "IDN-CITY-002",
+          "demand_quantity": "2875",
+          "distance_km": 284.861653,
+          "duration_hours": 6.78242,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-SURABAYA",
+          "warehouse_id": "WH-CROSS_DOCKING-SEMARANG"
+        },
+        {
+          "cost": 123002.8205,
+          "demand_city_id": "IDN-CITY-003",
+          "demand_quantity": "2544",
+          "distance_km": 0.0,
+          "duration_hours": 0.0,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-BEKASI"
+        },
+        {
+          "cost": 287698.64300000004,
+          "demand_city_id": "IDN-CITY-004",
+          "demand_quantity": "2511",
+          "distance_km": 0.0,
+          "duration_hours": 0.0,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-BANDUNG"
+        },
+        {
+          "cost": 2634050.5069999998,
+          "demand_city_id": "IDN-CITY-005",
+          "demand_quantity": "2436",
+          "distance_km": 1681.51237,
+          "duration_hours": 40.036009,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-TANGERANG"
+        },
+        {
+          "cost": 169518.6545,
+          "demand_city_id": "IDN-CITY-006",
+          "demand_quantity": "2057",
+          "distance_km": 31.010556,
+          "duration_hours": 0.738347,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-BEKASI"
+        },
+        {
+          "cost": 111781.952,
+          "demand_city_id": "IDN-CITY-007",
+          "demand_quantity": "1931",
+          "distance_km": 0.0,
+          "duration_hours": 0.0,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-TANGERANG"
+        },
+        {
+          "cost": 849463.8215000001,
+          "demand_city_id": "IDN-CITY-008",
+          "demand_quantity": "1669",
+          "distance_km": 491.787913,
+          "duration_hours": 11.709236,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-TANGERANG"
+        },
+        {
+          "cost": 507292.47949999996,
+          "demand_city_id": "IDN-CITY-009",
+          "demand_quantity": "1654",
+          "distance_km": 0.0,
+          "duration_hours": 0.0,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-SURABAYA",
+          "warehouse_id": "WH-CROSS_DOCKING-SEMARANG"
+        },
+        {
+          "cost": 2351146.235,
+          "demand_city_id": "IDN-CITY-010",
+          "demand_quantity": "1424",
+          "distance_km": 1229.235837,
+          "duration_hours": 29.26752,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-SURABAYA",
+          "warehouse_id": "WH-CROSS_DOCKING-SEMARANG"
+        },
+        {
+          "cost": 139035.7085,
+          "demand_city_id": "IDN-CITY-011",
+          "demand_quantity": "1355",
+          "distance_km": 18.169171,
+          "duration_hours": 0.432599,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-TANGERANG"
+        },
+        {
+          "cost": 1638097.58,
+          "demand_city_id": "IDN-CITY-012",
+          "demand_quantity": "1197",
+          "distance_km": 1017.543752,
+          "duration_hours": 24.227232,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-TANGERANG"
+        },
+        {
+          "cost": 429383.04799999995,
+          "demand_city_id": "IDN-CITY-013",
+          "demand_quantity": "1167",
+          "distance_km": 211.734064,
+          "duration_hours": 5.041287,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-TANGERANG"
+        },
+        {
+          "cost": 157851.7955,
+          "demand_city_id": "IDN-CITY-014",
+          "demand_quantity": "1044",
+          "distance_km": 27.83419,
+          "duration_hours": 0.662719,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-DEPOK"
+        },
+        {
+          "cost": 1791998.0315,
+          "demand_city_id": "IDN-CITY-015",
+          "demand_quantity": "984",
+          "distance_km": 1120.144053,
+          "duration_hours": 26.670097,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-TANGERANG"
+        },
+        {
+          "cost": 1749494.633,
+          "demand_city_id": "IDN-CITY-016",
+          "demand_quantity": "910",
+          "distance_km": 1099.661656,
+          "duration_hours": 26.18242,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-SOUTH_TANGERANG"
+        },
+        {
+          "cost": 973092.2494999999,
+          "demand_city_id": "IDN-CITY-017",
+          "demand_quantity": "844",
+          "distance_km": 310.53318,
+          "duration_hours": 7.393647,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-SURABAYA",
+          "warehouse_id": "WH-CROSS_DOCKING-SEMARANG"
+        },
+        {
+          "cost": 2367901.835,
+          "demand_city_id": "IDN-CITY-018",
+          "demand_quantity": "828",
+          "distance_km": 1240.406237,
+          "duration_hours": 29.533482,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-SURABAYA",
+          "warehouse_id": "WH-CROSS_DOCKING-SEMARANG"
+        },
+        {
+          "cost": 1503276.8915,
+          "demand_city_id": "IDN-CITY-019",
+          "demand_quantity": "726",
+          "distance_km": 663.989608,
+          "duration_hours": 15.809276,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-SURABAYA",
+          "warehouse_id": "WH-CROSS_DOCKING-SEMARANG"
+        },
+        {
+          "cost": 451743.7565,
+          "demand_city_id": "IDN-CITY-020",
+          "demand_quantity": "734",
+          "distance_km": 109.363409,
+          "duration_hours": 2.603891,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-BANDUNG"
+        },
+        {
+          "cost": 2489612.2700000005,
+          "demand_city_id": "IDN-CITY-021",
+          "demand_quantity": "705",
+          "distance_km": 1467.942418,
+          "duration_hours": 34.95101,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-BANDUNG"
+        },
+        {
+          "cost": 208617.78350000002,
+          "demand_city_id": "IDN-CITY-022",
+          "demand_quantity": "693",
+          "distance_km": 64.557221,
+          "duration_hours": 1.537077,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-TANGERANG"
+        },
+        {
+          "cost": 1444175.2325,
+          "demand_city_id": "IDN-CITY-023",
+          "demand_quantity": "659",
+          "distance_km": 880.781608,
+          "duration_hours": 20.970991,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-BEKASI"
+        },
+        {
+          "cost": 1602122.1245,
+          "demand_city_id": "IDN-CITY-024",
+          "demand_quantity": "658",
+          "distance_km": 729.88643,
+          "duration_hours": 17.378248,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-SURABAYA",
+          "warehouse_id": "WH-CROSS_DOCKING-SEMARANG"
+        },
+        {
+          "cost": 1212115.0985,
+          "demand_city_id": "IDN-CITY-025",
+          "demand_quantity": "605",
+          "distance_km": 733.555431,
+          "duration_hours": 17.465605,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-TANGERANG"
+        },
+        {
+          "cost": 4134336.704,
+          "demand_city_id": "IDN-CITY-026",
+          "demand_quantity": "452",
+          "distance_km": 2564.425374,
+          "duration_hours": 61.057747,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-BANDUNG"
+        },
+        {
+          "cost": 3191141.4335,
+          "demand_city_id": "IDN-CITY-027",
+          "demand_quantity": "443",
+          "distance_km": 1789.232636,
+          "duration_hours": 42.600777,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-SURABAYA",
+          "warehouse_id": "WH-CROSS_DOCKING-SEMARANG"
+        },
+        {
+          "cost": 1676630.582,
+          "demand_city_id": "IDN-CITY-028",
+          "demand_quantity": "442",
+          "distance_km": 779.558735,
+          "duration_hours": 18.560922,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-SURABAYA",
+          "warehouse_id": "WH-CROSS_DOCKING-SEMARANG"
+        },
+        {
+          "cost": 248351.648,
+          "demand_city_id": "IDN-CITY-029",
+          "demand_quantity": "435",
+          "distance_km": 91.046464,
+          "duration_hours": 2.167773,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-TANGERANG"
+        },
+        {
+          "cost": 666988.7119999999,
+          "demand_city_id": "IDN-CITY-030",
+          "demand_quantity": "415",
+          "distance_km": 106.464155,
+          "duration_hours": 2.534861,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-SURABAYA",
+          "warehouse_id": "WH-CROSS_DOCKING-SEMARANG"
+        },
+        {
+          "cost": 6957165.327500001,
+          "demand_city_id": "IDN-CITY-031",
+          "demand_quantity": "399",
+          "distance_km": 4446.311123,
+          "duration_hours": 105.864551,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-BANDUNG"
+        },
+        {
+          "cost": 1112368.2575,
+          "demand_city_id": "IDN-CITY-032",
+          "demand_quantity": "374",
+          "distance_km": 667.057537,
+          "duration_hours": 15.882322,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-TANGERANG"
+        },
+        {
+          "cost": 2744402.5324999997,
+          "demand_city_id": "IDN-CITY-033",
+          "demand_quantity": "374",
+          "distance_km": 1491.406702,
+          "duration_hours": 35.509683,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-SURABAYA",
+          "warehouse_id": "WH-CROSS_DOCKING-SEMARANG"
+        },
+        {
+          "cost": 225858.383,
+          "demand_city_id": "IDN-CITY-034",
+          "demand_quantity": "354",
+          "distance_km": 73.171915,
+          "duration_hours": 1.742188,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-DEPOK"
+        },
+        {
+          "cost": 4099791.881,
+          "demand_city_id": "IDN-CITY-035",
+          "demand_quantity": "348",
+          "distance_km": 2394.999601,
+          "duration_hours": 57.0238,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-SURABAYA",
+          "warehouse_id": "WH-CROSS_DOCKING-SEMARANG"
+        },
+        {
+          "cost": 3318716.924,
+          "demand_city_id": "IDN-CITY-036",
+          "demand_quantity": "346",
+          "distance_km": 2020.678854,
+          "duration_hours": 48.111401,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-BANDUNG"
+        },
+        {
+          "cost": 486554.67350000003,
+          "demand_city_id": "IDN-CITY-037",
+          "demand_quantity": "342",
+          "distance_km": 132.570687,
+          "duration_hours": 3.156445,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-BANDUNG"
+        },
+        {
+          "cost": 2055014.2444999998,
+          "demand_city_id": "IDN-CITY-038",
+          "demand_quantity": "324",
+          "distance_km": 1295.488195,
+          "duration_hours": 30.844957,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-TANGERANG"
+        },
+        {
+          "cost": 2653459.9280000003,
+          "demand_city_id": "IDN-CITY-039",
+          "demand_quantity": "292",
+          "distance_km": 1694.451984,
+          "duration_hours": 40.344095,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-TANGERANG"
+        },
+        {
+          "cost": 850655.813,
+          "demand_city_id": "IDN-CITY-040",
+          "demand_quantity": "290",
+          "distance_km": 228.908889,
+          "duration_hours": 5.450212,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-SURABAYA",
+          "warehouse_id": "WH-CROSS_DOCKING-SEMARANG"
+        },
+        {
+          "cost": 5188816.943000001,
+          "demand_city_id": "IDN-CITY-041",
+          "demand_quantity": "285",
+          "distance_km": 3267.4122,
+          "duration_hours": 77.795529,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-BANDUNG"
+        },
+        {
+          "cost": 772295.2235,
+          "demand_city_id": "IDN-CITY-042",
+          "demand_quantity": "274",
+          "distance_km": 176.668496,
+          "duration_hours": 4.206393,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-SURABAYA",
+          "warehouse_id": "WH-CROSS_DOCKING-SEMARANG"
+        },
+        {
+          "cost": 2479898.399,
+          "demand_city_id": "IDN-CITY-043",
+          "demand_quantity": "269",
+          "distance_km": 1578.744298,
+          "duration_hours": 37.58915,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-TANGERANG"
+        },
+        {
+          "cost": 3375326.0165,
+          "demand_city_id": "IDN-CITY-044",
+          "demand_quantity": "253",
+          "distance_km": 2175.696043,
+          "duration_hours": 51.802287,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-TANGERANG"
+        },
+        {
+          "cost": 3015831.7939999998,
+          "demand_city_id": "IDN-CITY-045",
+          "demand_quantity": "243",
+          "distance_km": 1672.359543,
+          "duration_hours": 39.818084,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-SURABAYA",
+          "warehouse_id": "WH-CROSS_DOCKING-SEMARANG"
+        },
+        {
+          "cost": 1412878.226,
+          "demand_city_id": "IDN-CITY-046",
+          "demand_quantity": "240",
+          "distance_km": 750.119722,
+          "duration_hours": 17.859993,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-BANDUNG"
+        },
+        {
+          "cost": 1577784.4505,
+          "demand_city_id": "IDN-CITY-047",
+          "demand_quantity": "236",
+          "distance_km": 969.85442,
+          "duration_hours": 23.091772,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-BEKASI"
+        },
+        {
+          "cost": 948192.2119999999,
+          "demand_city_id": "IDN-CITY-048",
+          "demand_quantity": "214",
+          "distance_km": 293.933155,
+          "duration_hours": 6.998408,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-SURABAYA",
+          "warehouse_id": "WH-CROSS_DOCKING-SEMARANG"
+        },
+        {
+          "cost": 1006060.0549999999,
+          "demand_city_id": "IDN-CITY-049",
+          "demand_quantity": "209",
+          "distance_km": 332.511717,
+          "duration_hours": 7.916946,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-SURABAYA",
+          "warehouse_id": "WH-CROSS_DOCKING-SEMARANG"
+        },
+        {
+          "cost": 3068619.5735,
+          "demand_city_id": "IDN-CITY-050",
+          "demand_quantity": "189",
+          "distance_km": 1971.225081,
+          "duration_hours": 46.93393,
+          "reason": null,
+          "upstream_center_id": "WH-CENTER-JAKARTA",
+          "warehouse_id": "WH-CROSS_DOCKING-TANGERANG"
+        }
+      ],
+      "schema_version": "network_assignment.v1",
+      "total_demand": "50815",
+      "unassigned_demand": "0"
+    },
+    "cost": {
+      "by_warehouse": {
+        "WH-CENTER-JAKARTA": 3882431974.411001,
+        "WH-CENTER-SURABAYA": 5729473091.149502,
+        "WH-CROSS_DOCKING-BANDUNG": 9096718734.1085,
+        "WH-CROSS_DOCKING-BEKASI": 1529504154.726,
+        "WH-CROSS_DOCKING-DEPOK": 138362628.405,
+        "WH-CROSS_DOCKING-SEMARANG": 12561047322.138,
+        "WH-CROSS_DOCKING-SOUTH_TANGERANG": 1537438160.44,
+        "WH-CROSS_DOCKING-TANGERANG": 17148247142.851002
+      },
+      "complete": true,
+      "currency": "IDR",
+      "last_mile": 42011318142.6685,
+      "last_mile_by_warehouse": {
+        "WH-CENTER-JAKARTA": 0.0,
+        "WH-CENTER-SURABAYA": 0.0,
+        "WH-CROSS_DOCKING-BANDUNG": 9096718734.1085,
+        "WH-CROSS_DOCKING-BEKASI": 1529504154.726,
+        "WH-CROSS_DOCKING-DEPOK": 138362628.405,
+        "WH-CROSS_DOCKING-SEMARANG": 12561047322.138,
+        "WH-CROSS_DOCKING-SOUTH_TANGERANG": 1537438160.44,
+        "WH-CROSS_DOCKING-TANGERANG": 17148247142.851002
+      },
+      "linehaul": 9611905065.560503,
+      "linehaul_by_warehouse": {
+        "WH-CENTER-JAKARTA": 3882431974.411001,
+        "WH-CENTER-SURABAYA": 5729473091.149502,
+        "WH-CROSS_DOCKING-BANDUNG": 0.0,
+        "WH-CROSS_DOCKING-BEKASI": 0.0,
+        "WH-CROSS_DOCKING-DEPOK": 0.0,
+        "WH-CROSS_DOCKING-SEMARANG": 0.0,
+        "WH-CROSS_DOCKING-SOUTH_TANGERANG": 0.0,
+        "WH-CROSS_DOCKING-TANGERANG": 0.0
+      },
+      "missing_routes": [],
+      "schema_version": "network_cost_summary.v1",
+      "total": 51623223208.229004
+    },
+    "label": "actual_current",
+    "notice_code": null,
+    "service": [
+      {
+        "coverage_rate": 0.558161960051166,
+        "covered_demand": "28363",
+        "target_hours": 6.0,
+        "total_demand": "50815"
+      },
+      {
+        "coverage_rate": 0.672517957296074,
+        "covered_demand": "34174",
+        "target_hours": 12.0,
+        "total_demand": "50815"
+      },
+      {
+        "coverage_rate": 0.7237429892748204,
+        "covered_demand": "36777",
+        "target_hours": 18.0,
+        "total_demand": "50815"
+      }
+    ]
+  },
+  "comparison": {
+    "affected_city_ids": [
+      "IDN-CITY-001",
+      "IDN-CITY-002",
+      "IDN-CITY-003",
+      "IDN-CITY-004",
+      "IDN-CITY-005",
+      "IDN-CITY-006",
+      "IDN-CITY-007",
+      "IDN-CITY-008",
+      "IDN-CITY-009",
+      "IDN-CITY-010",
+      "IDN-CITY-011",
+      "IDN-CITY-012",
+      "IDN-CITY-013",
+      "IDN-CITY-014",
+      "IDN-CITY-015",
+      "IDN-CITY-016",
+      "IDN-CITY-017",
+      "IDN-CITY-018",
+      "IDN-CITY-019",
+      "IDN-CITY-020",
+      "IDN-CITY-021",
+      "IDN-CITY-022",
+      "IDN-CITY-023",
+      "IDN-CITY-024",
+      "IDN-CITY-025",
+      "IDN-CITY-026",
+      "IDN-CITY-027",
+      "IDN-CITY-028",
+      "IDN-CITY-029",
+      "IDN-CITY-030",
+      "IDN-CITY-031",
+      "IDN-CITY-032",
+      "IDN-CITY-033",
+      "IDN-CITY-034",
+      "IDN-CITY-035",
+      "IDN-CITY-036",
+      "IDN-CITY-037",
+      "IDN-CITY-038",
+      "IDN-CITY-039",
+      "IDN-CITY-040",
+      "IDN-CITY-041",
+      "IDN-CITY-042",
+      "IDN-CITY-043",
+      "IDN-CITY-044",
+      "IDN-CITY-045",
+      "IDN-CITY-046",
+      "IDN-CITY-047",
+      "IDN-CITY-048",
+      "IDN-CITY-049",
+      "IDN-CITY-050"
+    ],
+    "after_cost": 17977937966.86,
+    "before_cost": 51623223208.229,
+    "city_changes": [
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-JAKARTA",
+        "before_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
+        "cost_per_unit_delta": -103563.90400000001,
+        "demand_city_id": "IDN-CITY-001",
+        "duration_hours_delta": -0.504475,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-SURABAYA",
+        "before_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
+        "cost_per_unit_delta": -894584.9589999999,
+        "demand_city_id": "IDN-CITY-002",
+        "duration_hours_delta": -6.78242,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-JAKARTA",
+        "before_warehouse_id": "WH-CROSS_DOCKING-BEKASI",
+        "cost_per_unit_delta": -40000.0,
+        "demand_city_id": "IDN-CITY-003",
+        "duration_hours_delta": 0.682584,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-JAKARTA",
+        "before_warehouse_id": "WH-CROSS_DOCKING-BANDUNG",
+        "cost_per_unit_delta": -40000.00000000003,
+        "demand_city_id": "IDN-CITY-004",
+        "duration_hours_delta": 3.296804,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-MEDAN",
+        "before_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
+        "cost_per_unit_delta": -2594050.5069999998,
+        "demand_city_id": "IDN-CITY-005",
+        "duration_hours_delta": -40.036009,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-JAKARTA",
+        "before_warehouse_id": "WH-CROSS_DOCKING-BEKASI",
+        "cost_per_unit_delta": -93418.144,
+        "demand_city_id": "IDN-CITY-006",
+        "duration_hours_delta": -0.165323,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-JAKARTA",
+        "before_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
+        "cost_per_unit_delta": -40000.0,
+        "demand_city_id": "IDN-CITY-007",
+        "duration_hours_delta": 0.504475,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-PALEMBANG",
+        "before_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
+        "cost_per_unit_delta": -809463.8215000001,
+        "demand_city_id": "IDN-CITY-008",
+        "duration_hours_delta": -11.709236,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-SURABAYA",
+        "before_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
+        "cost_per_unit_delta": -40000.0,
+        "demand_city_id": "IDN-CITY-009",
+        "duration_hours_delta": 6.78242,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-MAKASSAR",
+        "before_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
+        "cost_per_unit_delta": -2311146.235,
+        "demand_city_id": "IDN-CITY-010",
+        "duration_hours_delta": -29.26752,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-JAKARTA",
+        "before_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
+        "cost_per_unit_delta": -79033.5595,
+        "demand_city_id": "IDN-CITY-011",
+        "duration_hours_delta": -0.11510500000000001,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-PALEMBANG",
+        "before_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
+        "cost_per_unit_delta": -786531.55,
+        "demand_city_id": "IDN-CITY-012",
+        "duration_hours_delta": -11.345232000000001,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-JAKARTA",
+        "before_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
+        "cost_per_unit_delta": -41152.07499999995,
+        "demand_city_id": "IDN-CITY-013",
+        "duration_hours_delta": 0.4861890000000004,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-JAKARTA",
+        "before_warehouse_id": "WH-CROSS_DOCKING-DEPOK",
+        "cost_per_unit_delta": -57305.71900000001,
+        "demand_city_id": "IDN-CITY-014",
+        "duration_hours_delta": 0.2983300000000001,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-MEDAN",
+        "before_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
+        "cost_per_unit_delta": -909109.393,
+        "demand_city_id": "IDN-CITY-015",
+        "duration_hours_delta": -13.290911999999999,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-PALEMBANG",
+        "before_warehouse_id": "WH-CROSS_DOCKING-SOUTH_TANGERANG",
+        "cost_per_unit_delta": -746163.6699999999,
+        "demand_city_id": "IDN-CITY-016",
+        "duration_hours_delta": -10.891452000000001,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-SURABAYA",
+        "before_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
+        "cost_per_unit_delta": -786374.1865,
+        "demand_city_id": "IDN-CITY-017",
+        "duration_hours_delta": -5.064788999999999,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-MAKASSAR",
+        "before_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
+        "cost_per_unit_delta": -1278044.977,
+        "demand_city_id": "IDN-CITY-018",
+        "duration_hours_delta": -12.869087,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-SURABAYA",
+        "before_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
+        "cost_per_unit_delta": -872844.4495,
+        "demand_city_id": "IDN-CITY-019",
+        "duration_hours_delta": -6.437332000000001,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-JAKARTA",
+        "before_warehouse_id": "WH-CROSS_DOCKING-BANDUNG",
+        "cost_per_unit_delta": -40158.25,
+        "demand_city_id": "IDN-CITY-020",
+        "duration_hours_delta": 3.2942920000000004,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-MAKASSAR",
+        "before_warehouse_id": "WH-CROSS_DOCKING-BANDUNG",
+        "cost_per_unit_delta": -1521729.6355000003,
+        "demand_city_id": "IDN-CITY-021",
+        "duration_hours_delta": -20.222713999999996,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-JAKARTA",
+        "before_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
+        "cost_per_unit_delta": -46605.88300000003,
+        "demand_city_id": "IDN-CITY-022",
+        "duration_hours_delta": 0.39961999999999986,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-PALEMBANG",
+        "before_warehouse_id": "WH-CROSS_DOCKING-BEKASI",
+        "cost_per_unit_delta": -304613.4205,
+        "demand_city_id": "IDN-CITY-023",
+        "duration_hours_delta": -3.517629000000003,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-SURABAYA",
+        "before_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
+        "cost_per_unit_delta": -698061.184,
+        "demand_city_id": "IDN-CITY-024",
+        "duration_hours_delta": -3.6629949999999987,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-PALEMBANG",
+        "before_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
+        "cost_per_unit_delta": -805827.118,
+        "demand_city_id": "IDN-CITY-025",
+        "duration_hours_delta": -11.65151,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-MAKASSAR",
+        "before_warehouse_id": "WH-CROSS_DOCKING-BANDUNG",
+        "cost_per_unit_delta": -2394703.8745,
+        "demand_city_id": "IDN-CITY-026",
+        "duration_hours_delta": -34.079448,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-MAKASSAR",
+        "before_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
+        "cost_per_unit_delta": -1848380.6664999998,
+        "demand_city_id": "IDN-CITY-027",
+        "duration_hours_delta": -21.922035,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-SURABAYA",
+        "before_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
+        "cost_per_unit_delta": -883186.8039999999,
+        "demand_city_id": "IDN-CITY-028",
+        "duration_hours_delta": -6.601497000000002,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-JAKARTA",
+        "before_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
+        "cost_per_unit_delta": -44085.33099999998,
+        "demand_city_id": "IDN-CITY-029",
+        "duration_hours_delta": 0.43962900000000005,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-SURABAYA",
+        "before_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
+        "cost_per_unit_delta": -166904.14449999994,
+        "demand_city_id": "IDN-CITY-030",
+        "duration_hours_delta": 4.768069000000001,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-MAKASSAR",
+        "before_warehouse_id": "WH-CROSS_DOCKING-BANDUNG",
+        "cost_per_unit_delta": -2652376.432,
+        "demand_city_id": "IDN-CITY-031",
+        "duration_hours_delta": -38.16948900000001,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-PALEMBANG",
+        "before_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
+        "cost_per_unit_delta": -553826.2735000001,
+        "demand_city_id": "IDN-CITY-032",
+        "duration_hours_delta": -7.651497000000001,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-MAKASSAR",
+        "before_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
+        "cost_per_unit_delta": -1868464.1724999999,
+        "demand_city_id": "IDN-CITY-033",
+        "duration_hours_delta": -22.240820000000003,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-JAKARTA",
+        "before_warehouse_id": "WH-CROSS_DOCKING-DEPOK",
+        "cost_per_unit_delta": -44567.21350000001,
+        "demand_city_id": "IDN-CITY-034",
+        "duration_hours_delta": 0.5005289999999998,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-MAKASSAR",
+        "before_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
+        "cost_per_unit_delta": -2309445.7525000004,
+        "demand_city_id": "IDN-CITY-035",
+        "duration_hours_delta": -29.240528,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-MAKASSAR",
+        "before_warehouse_id": "WH-CROSS_DOCKING-BANDUNG",
+        "cost_per_unit_delta": -2645601.436,
+        "demand_city_id": "IDN-CITY-036",
+        "duration_hours_delta": -38.061949,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-JAKARTA",
+        "before_warehouse_id": "WH-CROSS_DOCKING-BANDUNG",
+        "cost_per_unit_delta": -83748.86350000004,
+        "demand_city_id": "IDN-CITY-037",
+        "duration_hours_delta": 2.602377,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-MEDAN",
+        "before_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
+        "cost_per_unit_delta": -1408557.2725,
+        "demand_city_id": "IDN-CITY-038",
+        "duration_hours_delta": -21.218656000000003,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-MEDAN",
+        "before_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
+        "cost_per_unit_delta": -2563397.5945,
+        "demand_city_id": "IDN-CITY-039",
+        "duration_hours_delta": -39.549455,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-SURABAYA",
+        "before_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
+        "cost_per_unit_delta": -638238.88,
+        "demand_city_id": "IDN-CITY-040",
+        "duration_hours_delta": -2.7134349999999996,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-MAKASSAR",
+        "before_warehouse_id": "WH-CROSS_DOCKING-BANDUNG",
+        "cost_per_unit_delta": -2637908.6860000007,
+        "demand_city_id": "IDN-CITY-041",
+        "duration_hours_delta": -37.939842,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-JAKARTA",
+        "before_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
+        "cost_per_unit_delta": -246086.299,
+        "demand_city_id": "IDN-CITY-042",
+        "duration_hours_delta": 3.511209,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-MEDAN",
+        "before_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
+        "cost_per_unit_delta": -2282814.6865000003,
+        "demand_city_id": "IDN-CITY-043",
+        "duration_hours_delta": -35.095758,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-MEDAN",
+        "before_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
+        "cost_per_unit_delta": -2557765.8835,
+        "demand_city_id": "IDN-CITY-044",
+        "duration_hours_delta": -39.460063,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-MAKASSAR",
+        "before_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
+        "cost_per_unit_delta": -1256257.1199999999,
+        "demand_city_id": "IDN-CITY-045",
+        "duration_hours_delta": -12.523247999999999,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-SURABAYA",
+        "before_warehouse_id": "WH-CROSS_DOCKING-BANDUNG",
+        "cost_per_unit_delta": -1217197.417,
+        "demand_city_id": "IDN-CITY-046",
+        "duration_hours_delta": -15.388869,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-PALEMBANG",
+        "before_warehouse_id": "WH-CROSS_DOCKING-BEKASI",
+        "cost_per_unit_delta": -404026.26099999994,
+        "demand_city_id": "IDN-CITY-047",
+        "duration_hours_delta": -5.095609999999997,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-SURABAYA",
+        "before_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
+        "cost_per_unit_delta": -801905.2209999999,
+        "demand_city_id": "IDN-CITY-048",
+        "duration_hours_delta": -5.311313,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-SURABAYA",
+        "before_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
+        "cost_per_unit_delta": -862629.598,
+        "demand_city_id": "IDN-CITY-049",
+        "duration_hours_delta": -6.275193,
+        "reassigned": true
+      },
+      {
+        "affected": true,
+        "after_warehouse_id": "WH-CENTER-MEDAN",
+        "before_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
+        "cost_per_unit_delta": -2591950.048,
+        "demand_city_id": "IDN-CITY-050",
+        "duration_hours_delta": -40.002668,
+        "reassigned": true
+      }
+    ],
+    "cost_delta": -33645285241.368996,
+    "reassigned_city_ids": [
+      "IDN-CITY-001",
+      "IDN-CITY-002",
+      "IDN-CITY-003",
+      "IDN-CITY-004",
+      "IDN-CITY-005",
+      "IDN-CITY-006",
+      "IDN-CITY-007",
+      "IDN-CITY-008",
+      "IDN-CITY-009",
+      "IDN-CITY-010",
+      "IDN-CITY-011",
+      "IDN-CITY-012",
+      "IDN-CITY-013",
+      "IDN-CITY-014",
+      "IDN-CITY-015",
+      "IDN-CITY-016",
+      "IDN-CITY-017",
+      "IDN-CITY-018",
+      "IDN-CITY-019",
+      "IDN-CITY-020",
+      "IDN-CITY-021",
+      "IDN-CITY-022",
+      "IDN-CITY-023",
+      "IDN-CITY-024",
+      "IDN-CITY-025",
+      "IDN-CITY-026",
+      "IDN-CITY-027",
+      "IDN-CITY-028",
+      "IDN-CITY-029",
+      "IDN-CITY-030",
+      "IDN-CITY-031",
+      "IDN-CITY-032",
+      "IDN-CITY-033",
+      "IDN-CITY-034",
+      "IDN-CITY-035",
+      "IDN-CITY-036",
+      "IDN-CITY-037",
+      "IDN-CITY-038",
+      "IDN-CITY-039",
+      "IDN-CITY-040",
+      "IDN-CITY-041",
+      "IDN-CITY-042",
+      "IDN-CITY-043",
+      "IDN-CITY-044",
+      "IDN-CITY-045",
+      "IDN-CITY-046",
+      "IDN-CITY-047",
+      "IDN-CITY-048",
+      "IDN-CITY-049",
+      "IDN-CITY-050"
+    ],
+    "removed_warehouse_ids": [],
+    "requested_service_targets": [
+      6.0,
+      12.0,
+      18.0
+    ],
+    "schema_version": "network_assignment_comparison.v1",
+    "selected_warehouse_ids": [
+      "WH-CANDIDATE-BALIKPAPAN",
+      "WH-CANDIDATE-BANDAR_LAMPUNG"
+    ],
+    "service": [
+      {
+        "after_coverage_rate": 0.7300403424185772,
+        "before_coverage_rate": 0.558161960051166,
+        "coverage_rate_delta": 0.17187838236741115,
+        "target_hours": 6.0
+      },
+      {
+        "after_coverage_rate": 0.8233986027747713,
+        "before_coverage_rate": 0.672517957296074,
+        "coverage_rate_delta": 0.15088064547869728,
+        "target_hours": 12.0
+      },
+      {
+        "after_coverage_rate": 0.9572960739938995,
+        "before_coverage_rate": 0.7237429892748204,
+        "coverage_rate_delta": 0.2335530847190791,
+        "target_hours": 18.0
+      }
+    ]
+  },
+  "country_code": "ID",
+  "entities": {
+    "demand_cities": [
+      {
+        "city_id": "IDN-CITY-001",
+        "city_name": "Jakarta",
+        "demand_quantity": "10563",
+        "latitude": -6.255465,
+        "longitude": 106.781882,
+        "province_id": "IDN-PROV-JAKARTA",
+        "province_name": "Jakarta"
+      },
+      {
+        "city_id": "IDN-CITY-002",
+        "city_name": "Surabaya",
+        "demand_quantity": "2875",
+        "latitude": -7.224981,
+        "longitude": 112.616599,
+        "province_id": "IDN-PROV-EAST-JAVA",
+        "province_name": "East Java"
+      },
+      {
+        "city_id": "IDN-CITY-003",
+        "city_name": "Bekasi",
+        "demand_quantity": "2544",
+        "latitude": -6.178947,
+        "longitude": 106.983834,
+        "province_id": "IDN-PROV-WEST-JAVA",
+        "province_name": "West Java"
+      },
+      {
+        "city_id": "IDN-CITY-004",
+        "city_name": "Bandung",
+        "demand_quantity": "2511",
+        "latitude": -6.929437,
+        "longitude": 107.57619,
+        "province_id": "IDN-PROV-WEST-JAVA",
+        "province_name": "West Java"
+      },
+      {
+        "city_id": "IDN-CITY-005",
+        "city_name": "Medan",
+        "demand_quantity": "2436",
+        "latitude": 3.617313,
+        "longitude": 98.686754,
+        "province_id": "IDN-PROV-NORTH-SUMATRA",
+        "province_name": "North Sumatra"
+      },
+      {
+        "city_id": "IDN-CITY-006",
+        "city_name": "Depok",
+        "demand_quantity": "2057",
+        "latitude": -6.394783,
+        "longitude": 106.897137,
+        "province_id": "IDN-PROV-WEST-JAVA",
+        "province_name": "West Java"
+      },
+      {
+        "city_id": "IDN-CITY-007",
+        "city_name": "Tangerang",
+        "demand_quantity": "1931",
+        "latitude": -6.145467,
+        "longitude": 106.666689,
+        "province_id": "IDN-PROV-BANTEN",
+        "province_name": "Banten"
+      },
+      {
+        "city_id": "IDN-CITY-008",
+        "city_name": "Palembang",
+        "demand_quantity": "1669",
+        "latitude": -2.993686,
+        "longitude": 104.749826,
+        "province_id": "IDN-PROV-SOUTH-SUMATRA",
+        "province_name": "South Sumatra"
+      },
+      {
+        "city_id": "IDN-CITY-009",
+        "city_name": "Semarang",
+        "demand_quantity": "1654",
+        "latitude": -7.028734,
+        "longitude": 110.474234,
+        "province_id": "IDN-PROV-CENTRAL-JAVA",
+        "province_name": "Central Java"
+      },
+      {
+        "city_id": "IDN-CITY-010",
+        "city_name": "Makassar",
+        "demand_quantity": "1424",
+        "latitude": -5.086978,
+        "longitude": 119.530699,
+        "province_id": "IDN-PROV-SOUTH-SULAWESI",
+        "province_name": "South Sulawesi"
+      },
+      {
+        "city_id": "IDN-CITY-011",
+        "city_name": "Tangerang Selatan",
+        "demand_quantity": "1355",
+        "latitude": -6.280471,
+        "longitude": 106.684544,
+        "province_id": "IDN-PROV-BANTEN",
+        "province_name": "Banten"
+      },
+      {
+        "city_id": "IDN-CITY-012",
+        "city_name": "Batam",
+        "demand_quantity": "1197",
+        "latitude": 0.981155,
+        "longitude": 103.948439,
+        "province_id": "IDN-PROV-RIAU-ISLANDS",
+        "province_name": "Riau Islands"
+      },
+      {
+        "city_id": "IDN-CITY-013",
+        "city_name": "Bandar Lampung",
+        "demand_quantity": "1167",
+        "latitude": -5.407757,
+        "longitude": 105.25461,
+        "province_id": "IDN-PROV-LAMPUNG",
+        "province_name": "Lampung"
+      },
+      {
+        "city_id": "IDN-CITY-014",
+        "city_name": "Bogor",
+        "demand_quantity": "1044",
+        "latitude": -6.557546,
+        "longitude": 106.765832,
+        "province_id": "IDN-PROV-WEST-JAVA",
+        "province_name": "West Java"
+      },
+      {
+        "city_id": "IDN-CITY-015",
+        "city_name": "Pekanbaru",
+        "demand_quantity": "984",
+        "latitude": 0.452204,
+        "longitude": 101.466775,
+        "province_id": "IDN-PROV-RIAU",
+        "province_name": "Riau"
+      },
+      {
+        "city_id": "IDN-CITY-016",
+        "city_name": "Padang",
+        "demand_quantity": "910",
+        "latitude": -0.937033,
+        "longitude": 100.395556,
+        "province_id": "IDN-PROV-WEST-SUMATRA",
+        "province_name": "West Sumatra"
+      },
+      {
+        "city_id": "IDN-CITY-017",
+        "city_name": "Malang",
+        "demand_quantity": "844",
+        "latitude": -7.957954,
+        "longitude": 112.626321,
+        "province_id": "IDN-PROV-EAST-JAVA",
+        "province_name": "East Java"
+      },
+      {
+        "city_id": "IDN-CITY-018",
+        "city_name": "Samarinda",
+        "demand_quantity": "828",
+        "latitude": -0.455355,
+        "longitude": 117.065138,
+        "province_id": "IDN-PROV-EAST-KALIMANTAN",
+        "province_name": "East Kalimantan"
+      },
+      {
+        "city_id": "IDN-CITY-019",
+        "city_name": "Denpasar",
+        "demand_quantity": "726",
+        "latitude": -8.655251,
+        "longitude": 115.221655,
+        "province_id": "IDN-PROV-BALI",
+        "province_name": "Bali"
+      },
+      {
+        "city_id": "IDN-CITY-020",
+        "city_name": "Tasikmalaya",
+        "demand_quantity": "734",
+        "latitude": -7.423242,
+        "longitude": 108.235506,
+        "province_id": "IDN-PROV-WEST-JAVA",
+        "province_name": "West Java"
+      },
+      {
+        "city_id": "IDN-CITY-021",
+        "city_name": "Balikpapan",
+        "demand_quantity": "705",
+        "latitude": -1.202072,
+        "longitude": 116.996737,
+        "province_id": "IDN-PROV-EAST-KALIMANTAN",
+        "province_name": "East Kalimantan"
+      },
+      {
+        "city_id": "IDN-CITY-022",
+        "city_name": "Serang",
+        "demand_quantity": "693",
+        "latitude": -6.138282,
+        "longitude": 106.180136,
+        "province_id": "IDN-PROV-BANTEN",
+        "province_name": "Banten"
+      },
+      {
+        "city_id": "IDN-CITY-023",
+        "city_name": "Pontianak",
+        "demand_quantity": "659",
+        "latitude": -0.02415,
+        "longitude": 109.373867,
+        "province_id": "IDN-PROV-WEST-KALIMANTAN",
+        "province_name": "West Kalimantan"
+      },
+      {
+        "city_id": "IDN-CITY-024",
+        "city_name": "Banjarmasin",
+        "demand_quantity": "658",
+        "latitude": -3.360475,
+        "longitude": 114.549389,
+        "province_id": "IDN-PROV-SOUTH-KALIMANTAN",
+        "province_name": "South Kalimantan"
+      },
+      {
+        "city_id": "IDN-CITY-025",
+        "city_name": "Jambi",
+        "demand_quantity": "605",
+        "latitude": -1.612665,
+        "longitude": 103.548039,
+        "province_id": "IDN-PROV-JAMBI",
+        "province_name": "Jambi"
+      },
+      {
+        "city_id": "IDN-CITY-026",
+        "city_name": "Manado",
+        "demand_quantity": "452",
+        "latitude": 1.517023,
+        "longitude": 124.874513,
+        "province_id": "IDN-PROV-NORTH-SULAWESI",
+        "province_name": "North Sulawesi"
+      },
+      {
+        "city_id": "IDN-CITY-027",
+        "city_name": "Kupang",
+        "demand_quantity": "443",
+        "latitude": -10.143742,
+        "longitude": 123.666733,
+        "province_id": "IDN-PROV-EAST-NUSA-TENGGARA",
+        "province_name": "East Nusa Tenggara"
+      },
+      {
+        "city_id": "IDN-CITY-028",
+        "city_name": "Mataram",
+        "demand_quantity": "442",
+        "latitude": -8.603566,
+        "longitude": 116.153243,
+        "province_id": "IDN-PROV-WEST-NUSA-TENGGARA",
+        "province_name": "West Nusa Tenggara"
+      },
+      {
+        "city_id": "IDN-CITY-029",
+        "city_name": "Cilegon",
+        "demand_quantity": "435",
+        "latitude": -6.01064,
+        "longitude": 105.994028,
+        "province_id": "IDN-PROV-BANTEN",
+        "province_name": "Banten"
+      },
+      {
+        "city_id": "IDN-CITY-030",
+        "city_name": "Yogyakarta",
+        "demand_quantity": "415",
+        "latitude": -7.820787,
+        "longitude": 110.377182,
+        "province_id": "IDN-PROV-SPECIAL-REGION-OF-YOGYAKARTA",
+        "province_name": "Special Region of Yogyakarta"
+      },
+      {
+        "city_id": "IDN-CITY-031",
+        "city_name": "Jayapura",
+        "demand_quantity": "399",
+        "latitude": -2.640855,
+        "longitude": 140.748088,
+        "province_id": "IDN-PROV-PAPUA",
+        "province_name": "Papua"
+      },
+      {
+        "city_id": "IDN-CITY-032",
+        "city_name": "Bengkulu",
+        "demand_quantity": "374",
+        "latitude": -3.743539,
+        "longitude": 102.265653,
+        "province_id": "IDN-PROV-BENGKULU",
+        "province_name": "Bengkulu"
+      },
+      {
+        "city_id": "IDN-CITY-033",
+        "city_name": "Palu",
+        "demand_quantity": "374",
+        "latitude": -0.923711,
+        "longitude": 119.863882,
+        "province_id": "IDN-PROV-CENTRAL-SULAWESI",
+        "province_name": "Central Sulawesi"
+      },
+      {
+        "city_id": "IDN-CITY-034",
+        "city_name": "Sukabumi",
+        "demand_quantity": "354",
+        "latitude": -6.940151,
+        "longitude": 106.954876,
+        "province_id": "IDN-PROV-WEST-JAVA",
+        "province_name": "West Java"
+      },
+      {
+        "city_id": "IDN-CITY-035",
+        "city_name": "Ambon",
+        "demand_quantity": "348",
+        "latitude": -3.650005,
+        "longitude": 128.182366,
+        "province_id": "IDN-PROV-MALUKU",
+        "province_name": "Maluku"
+      },
+      {
+        "city_id": "IDN-CITY-036",
+        "city_name": "Kendari",
+        "demand_quantity": "346",
+        "latitude": -3.957986,
+        "longitude": 122.494827,
+        "province_id": "IDN-PROV-SOUTHEAST-SULAWESI",
+        "province_name": "Southeast Sulawesi"
+      },
+      {
+        "city_id": "IDN-CITY-037",
+        "city_name": "Cirebon",
+        "demand_quantity": "342",
+        "latitude": -6.701504,
+        "longitude": 108.550103,
+        "province_id": "IDN-PROV-WEST-JAVA",
+        "province_name": "West Java"
+      },
+      {
+        "city_id": "IDN-CITY-038",
+        "city_name": "Dumai",
+        "demand_quantity": "324",
+        "latitude": 1.850198,
+        "longitude": 101.150993,
+        "province_id": "IDN-PROV-RIAU",
+        "province_name": "Riau"
+      },
+      {
+        "city_id": "IDN-CITY-039",
+        "city_name": "Binjai",
+        "demand_quantity": "292",
+        "latitude": 3.544366,
+        "longitude": 98.447037,
+        "province_id": "IDN-PROV-NORTH-SUMATRA",
+        "province_name": "North Sumatra"
+      },
+      {
+        "city_id": "IDN-CITY-040",
+        "city_name": "Kediri",
+        "demand_quantity": "290",
+        "latitude": -7.833866,
+        "longitude": 112.00193,
+        "province_id": "IDN-PROV-EAST-JAVA",
+        "province_name": "East Java"
+      },
+      {
+        "city_id": "IDN-CITY-041",
+        "city_name": "Sorong",
+        "demand_quantity": "285",
+        "latitude": -0.916691,
+        "longitude": 131.381275,
+        "province_id": "IDN-PROV-SOUTHWEST-PAPUA",
+        "province_name": "Southwest Papua"
+      },
+      {
+        "city_id": "IDN-CITY-042",
+        "city_name": "Tegal",
+        "demand_quantity": "274",
+        "latitude": -6.850493,
+        "longitude": 109.15259,
+        "province_id": "IDN-PROV-CENTRAL-JAVA",
+        "province_name": "Central Java"
+      },
+      {
+        "city_id": "IDN-CITY-043",
+        "city_name": "Pematang Siantar",
+        "demand_quantity": "269",
+        "latitude": 2.927539,
+        "longitude": 99.061751,
+        "province_id": "IDN-PROV-NORTH-SUMATRA",
+        "province_name": "North Sumatra"
+      },
+      {
+        "city_id": "IDN-CITY-044",
+        "city_name": "Banda Aceh",
+        "demand_quantity": "253",
+        "latitude": 5.59544,
+        "longitude": 95.332217,
+        "province_id": "IDN-PROV-ACEH",
+        "province_name": "Aceh"
+      },
+      {
+        "city_id": "IDN-CITY-045",
+        "city_name": "Tarakan",
+        "demand_quantity": "243",
+        "latitude": 3.286581,
+        "longitude": 117.606422,
+        "province_id": "IDN-PROV-NORTH-KALIMANTAN",
+        "province_name": "North Kalimantan"
+      },
+      {
+        "city_id": "IDN-CITY-046",
+        "city_name": "Probolinggo",
+        "demand_quantity": "240",
+        "latitude": -7.76466,
+        "longitude": 113.181557,
+        "province_id": "IDN-PROV-EAST-JAVA",
+        "province_name": "East Java"
+      },
+      {
+        "city_id": "IDN-CITY-047",
+        "city_name": "Singkawang",
+        "demand_quantity": "236",
+        "latitude": 0.823083,
+        "longitude": 108.936917,
+        "province_id": "IDN-PROV-WEST-KALIMANTAN",
+        "province_name": "West Kalimantan"
+      },
+      {
+        "city_id": "IDN-CITY-048",
+        "city_name": "Batu",
+        "demand_quantity": "214",
+        "latitude": -7.754141,
+        "longitude": 112.571646,
+        "province_id": "IDN-PROV-EAST-JAVA",
+        "province_name": "East Java"
+      },
+      {
+        "city_id": "IDN-CITY-049",
+        "city_name": "Pasuruan",
+        "demand_quantity": "209",
+        "latitude": -7.654557,
+        "longitude": 112.906279,
+        "province_id": "IDN-PROV-EAST-JAVA",
+        "province_name": "East Java"
+      },
+      {
+        "city_id": "IDN-CITY-050",
+        "city_name": "Lhokseumawe",
+        "demand_quantity": "189",
+        "latitude": 5.149681,
+        "longitude": 97.129199,
+        "province_id": "IDN-PROV-ACEH",
+        "province_name": "Aceh"
+      }
+    ],
+    "warehouses": [
+      {
+        "city_id": "IDN-CITY-021",
+        "city_name": "Balikpapan",
+        "is_existing": false,
+        "is_fixed": false,
+        "latitude": -1.202072,
+        "longitude": 116.996737,
+        "province_id": "IDN-PROV-EAST-KALIMANTAN",
+        "province_name": "East Kalimantan",
+        "upstream_center_id": "WH-CENTER-MAKASSAR",
+        "warehouse_id": "WH-CANDIDATE-BALIKPAPAN",
+        "warehouse_name": "Balikpapan Candidate Cross Docking",
+        "warehouse_type": "cross_docking"
+      },
+      {
+        "city_id": "IDN-CITY-013",
+        "city_name": "Bandar Lampung",
+        "is_existing": false,
+        "is_fixed": false,
+        "latitude": -5.407757,
+        "longitude": 105.25461,
+        "province_id": "IDN-PROV-LAMPUNG",
+        "province_name": "Lampung",
+        "upstream_center_id": "WH-CENTER-JAKARTA",
+        "warehouse_id": "WH-CANDIDATE-BANDAR_LAMPUNG",
+        "warehouse_name": "Bandar Lampung Candidate Cross Docking",
+        "warehouse_type": "cross_docking"
+      },
+      {
+        "city_id": "IDN-CITY-024",
+        "city_name": "Banjarmasin",
+        "is_existing": false,
+        "is_fixed": false,
+        "latitude": -3.360475,
+        "longitude": 114.549389,
+        "province_id": "IDN-PROV-SOUTH-KALIMANTAN",
+        "province_name": "South Kalimantan",
+        "upstream_center_id": "WH-CENTER-SURABAYA",
+        "warehouse_id": "WH-CANDIDATE-BANJARMASIN",
+        "warehouse_name": "Banjarmasin Candidate Cross Docking",
+        "warehouse_type": "cross_docking"
+      },
+      {
+        "city_id": "IDN-CITY-025",
+        "city_name": "Jambi",
+        "is_existing": false,
+        "is_fixed": false,
+        "latitude": -1.612665,
+        "longitude": 103.548039,
+        "province_id": "IDN-PROV-JAMBI",
+        "province_name": "Jambi",
+        "upstream_center_id": "WH-CENTER-PALEMBANG",
+        "warehouse_id": "WH-CANDIDATE-JAMBI",
+        "warehouse_name": "Jambi Candidate Cross Docking",
+        "warehouse_type": "cross_docking"
+      },
+      {
+        "city_id": "IDN-CITY-036",
+        "city_name": "Kendari",
+        "is_existing": false,
+        "is_fixed": false,
+        "latitude": -3.957986,
+        "longitude": 122.494827,
+        "province_id": "IDN-PROV-SOUTHEAST-SULAWESI",
+        "province_name": "Southeast Sulawesi",
+        "upstream_center_id": "WH-CENTER-MAKASSAR",
+        "warehouse_id": "WH-CANDIDATE-KENDARI",
+        "warehouse_name": "Kendari Candidate Cross Docking",
+        "warehouse_type": "cross_docking"
+      },
+      {
+        "city_id": "IDN-CITY-027",
+        "city_name": "Kupang",
+        "is_existing": false,
+        "is_fixed": false,
+        "latitude": -10.143742,
+        "longitude": 123.666733,
+        "province_id": "IDN-PROV-EAST-NUSA-TENGGARA",
+        "province_name": "East Nusa Tenggara",
+        "upstream_center_id": "WH-CENTER-MAKASSAR",
+        "warehouse_id": "WH-CANDIDATE-KUPANG",
+        "warehouse_name": "Kupang Candidate Cross Docking",
+        "warehouse_type": "cross_docking"
+      },
+      {
+        "city_id": "IDN-CITY-026",
+        "city_name": "Manado",
+        "is_existing": false,
+        "is_fixed": false,
+        "latitude": 1.517023,
+        "longitude": 124.874513,
+        "province_id": "IDN-PROV-NORTH-SULAWESI",
+        "province_name": "North Sulawesi",
+        "upstream_center_id": "WH-CENTER-MAKASSAR",
+        "warehouse_id": "WH-CANDIDATE-MANADO",
+        "warehouse_name": "Manado Candidate Cross Docking",
+        "warehouse_type": "cross_docking"
+      },
+      {
+        "city_id": "IDN-CITY-028",
+        "city_name": "Mataram",
+        "is_existing": false,
+        "is_fixed": false,
+        "latitude": -8.603566,
+        "longitude": 116.153243,
+        "province_id": "IDN-PROV-WEST-NUSA-TENGGARA",
+        "province_name": "West Nusa Tenggara",
+        "upstream_center_id": "WH-CENTER-SURABAYA",
+        "warehouse_id": "WH-CANDIDATE-MATARAM",
+        "warehouse_name": "Mataram Candidate Cross Docking",
+        "warehouse_type": "cross_docking"
+      },
+      {
+        "city_id": "IDN-CITY-016",
+        "city_name": "Padang",
+        "is_existing": false,
+        "is_fixed": false,
+        "latitude": -0.937033,
+        "longitude": 100.395556,
+        "province_id": "IDN-PROV-WEST-SUMATRA",
+        "province_name": "West Sumatra",
+        "upstream_center_id": "WH-CENTER-PALEMBANG",
+        "warehouse_id": "WH-CANDIDATE-PADANG",
+        "warehouse_name": "Padang Candidate Cross Docking",
+        "warehouse_type": "cross_docking"
+      },
+      {
+        "city_id": "IDN-CITY-033",
+        "city_name": "Palu",
+        "is_existing": false,
+        "is_fixed": false,
+        "latitude": -0.923711,
+        "longitude": 119.863882,
+        "province_id": "IDN-PROV-CENTRAL-SULAWESI",
+        "province_name": "Central Sulawesi",
+        "upstream_center_id": "WH-CENTER-MAKASSAR",
+        "warehouse_id": "WH-CANDIDATE-PALU",
+        "warehouse_name": "Palu Candidate Cross Docking",
+        "warehouse_type": "cross_docking"
+      },
+      {
+        "city_id": "IDN-CITY-015",
+        "city_name": "Pekanbaru",
+        "is_existing": false,
+        "is_fixed": false,
+        "latitude": 0.452204,
+        "longitude": 101.466775,
+        "province_id": "IDN-PROV-RIAU",
+        "province_name": "Riau",
+        "upstream_center_id": "WH-CENTER-MEDAN",
+        "warehouse_id": "WH-CANDIDATE-PEKANBARU",
+        "warehouse_name": "Pekanbaru Candidate Cross Docking",
+        "warehouse_type": "cross_docking"
+      },
+      {
+        "city_id": "IDN-CITY-023",
+        "city_name": "Pontianak",
+        "is_existing": false,
+        "is_fixed": false,
+        "latitude": -0.02415,
+        "longitude": 109.373867,
+        "province_id": "IDN-PROV-WEST-KALIMANTAN",
+        "province_name": "West Kalimantan",
+        "upstream_center_id": "WH-CENTER-PALEMBANG",
+        "warehouse_id": "WH-CANDIDATE-PONTIANAK",
+        "warehouse_name": "Pontianak Candidate Cross Docking",
+        "warehouse_type": "cross_docking"
+      },
+      {
+        "city_id": "IDN-CITY-001",
+        "city_name": "Jakarta",
+        "is_existing": true,
+        "is_fixed": true,
+        "latitude": -6.255465,
+        "longitude": 106.781882,
+        "province_id": "IDN-PROV-JAKARTA",
+        "province_name": "Jakarta",
+        "upstream_center_id": null,
+        "warehouse_id": "WH-CENTER-JAKARTA",
+        "warehouse_name": "Jakarta Center",
+        "warehouse_type": "center"
+      },
+      {
+        "city_id": "IDN-CITY-010",
+        "city_name": "Makassar",
+        "is_existing": true,
+        "is_fixed": true,
+        "latitude": -5.086978,
+        "longitude": 119.530699,
+        "province_id": "IDN-PROV-SOUTH-SULAWESI",
+        "province_name": "South Sulawesi",
+        "upstream_center_id": null,
+        "warehouse_id": "WH-CENTER-MAKASSAR",
+        "warehouse_name": "Makassar Center",
+        "warehouse_type": "center"
+      },
+      {
+        "city_id": "IDN-CITY-005",
+        "city_name": "Medan",
+        "is_existing": true,
+        "is_fixed": true,
+        "latitude": 3.617313,
+        "longitude": 98.686754,
+        "province_id": "IDN-PROV-NORTH-SUMATRA",
+        "province_name": "North Sumatra",
+        "upstream_center_id": null,
+        "warehouse_id": "WH-CENTER-MEDAN",
+        "warehouse_name": "Medan Center",
+        "warehouse_type": "center"
+      },
+      {
+        "city_id": "IDN-CITY-008",
+        "city_name": "Palembang",
+        "is_existing": true,
+        "is_fixed": true,
+        "latitude": -2.993686,
+        "longitude": 104.749826,
+        "province_id": "IDN-PROV-SOUTH-SUMATRA",
+        "province_name": "South Sumatra",
+        "upstream_center_id": null,
+        "warehouse_id": "WH-CENTER-PALEMBANG",
+        "warehouse_name": "Palembang Center",
+        "warehouse_type": "center"
+      },
+      {
+        "city_id": "IDN-CITY-002",
+        "city_name": "Surabaya",
+        "is_existing": true,
+        "is_fixed": true,
+        "latitude": -7.224981,
+        "longitude": 112.616599,
+        "province_id": "IDN-PROV-EAST-JAVA",
+        "province_name": "East Java",
+        "upstream_center_id": null,
+        "warehouse_id": "WH-CENTER-SURABAYA",
+        "warehouse_name": "Surabaya Center",
+        "warehouse_type": "center"
+      },
+      {
+        "city_id": "IDN-CITY-004",
+        "city_name": "Bandung",
+        "is_existing": true,
+        "is_fixed": true,
+        "latitude": -6.929437,
+        "longitude": 107.57619,
+        "province_id": "IDN-PROV-WEST-JAVA",
+        "province_name": "West Java",
+        "upstream_center_id": "WH-CENTER-JAKARTA",
+        "warehouse_id": "WH-CROSS_DOCKING-BANDUNG",
+        "warehouse_name": "Bandung Cross Docking",
+        "warehouse_type": "cross_docking"
+      },
+      {
+        "city_id": "IDN-CITY-003",
+        "city_name": "Bekasi",
+        "is_existing": true,
+        "is_fixed": true,
+        "latitude": -6.178947,
+        "longitude": 106.983834,
+        "province_id": "IDN-PROV-WEST-JAVA",
+        "province_name": "West Java",
+        "upstream_center_id": "WH-CENTER-JAKARTA",
+        "warehouse_id": "WH-CROSS_DOCKING-BEKASI",
+        "warehouse_name": "Bekasi Cross Docking",
+        "warehouse_type": "cross_docking"
+      },
+      {
+        "city_id": "IDN-CITY-006",
+        "city_name": "Depok",
+        "is_existing": true,
+        "is_fixed": true,
+        "latitude": -6.394783,
+        "longitude": 106.897137,
+        "province_id": "IDN-PROV-WEST-JAVA",
+        "province_name": "West Java",
+        "upstream_center_id": "WH-CENTER-JAKARTA",
+        "warehouse_id": "WH-CROSS_DOCKING-DEPOK",
+        "warehouse_name": "Depok Cross Docking",
+        "warehouse_type": "cross_docking"
+      },
+      {
+        "city_id": "IDN-CITY-009",
+        "city_name": "Semarang",
+        "is_existing": true,
+        "is_fixed": true,
+        "latitude": -7.028734,
+        "longitude": 110.474234,
+        "province_id": "IDN-PROV-CENTRAL-JAVA",
+        "province_name": "Central Java",
+        "upstream_center_id": "WH-CENTER-SURABAYA",
+        "warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
+        "warehouse_name": "Semarang Cross Docking",
+        "warehouse_type": "cross_docking"
+      },
+      {
+        "city_id": "IDN-CITY-011",
+        "city_name": "Tangerang Selatan",
+        "is_existing": true,
+        "is_fixed": true,
+        "latitude": -6.280471,
+        "longitude": 106.684544,
+        "province_id": "IDN-PROV-BANTEN",
+        "province_name": "Banten",
+        "upstream_center_id": "WH-CENTER-JAKARTA",
+        "warehouse_id": "WH-CROSS_DOCKING-SOUTH_TANGERANG",
+        "warehouse_name": "Tangerang Selatan Cross Docking",
+        "warehouse_type": "cross_docking"
+      },
+      {
+        "city_id": "IDN-CITY-007",
+        "city_name": "Tangerang",
+        "is_existing": true,
+        "is_fixed": true,
+        "latitude": -6.145467,
+        "longitude": 106.666689,
+        "province_id": "IDN-PROV-BANTEN",
+        "province_name": "Banten",
+        "upstream_center_id": "WH-CENTER-JAKARTA",
+        "warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
+        "warehouse_name": "Tangerang Cross Docking",
+        "warehouse_type": "cross_docking"
+      }
+    ]
+  },
+  "facility": {
+    "active_warehouse_ids": [
+      "WH-CANDIDATE-BALIKPAPAN",
+      "WH-CANDIDATE-BANDAR_LAMPUNG",
+      "WH-CENTER-JAKARTA",
+      "WH-CENTER-MAKASSAR",
+      "WH-CENTER-MEDAN",
+      "WH-CENTER-PALEMBANG",
+      "WH-CENTER-SURABAYA",
+      "WH-CROSS_DOCKING-BANDUNG",
+      "WH-CROSS_DOCKING-BEKASI",
+      "WH-CROSS_DOCKING-DEPOK",
+      "WH-CROSS_DOCKING-SEMARANG",
+      "WH-CROSS_DOCKING-SOUTH_TANGERANG",
+      "WH-CROSS_DOCKING-TANGERANG"
+    ],
+    "assignment": {
+      "objective": "min_cost",
+      "rows": [
+        {
+          "cost": 40000.0,
+          "demand_city_id": "IDN-CITY-001",
+          "demand_quantity": "10563",
+          "distance_km": 0.0,
+          "duration_hours": 0.0,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-JAKARTA"
+        },
+        {
+          "cost": 40000.0,
+          "demand_city_id": "IDN-CITY-002",
+          "demand_quantity": "2875",
+          "distance_km": 0.0,
+          "duration_hours": 0.0,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-SURABAYA"
+        },
+        {
+          "cost": 83002.8205,
+          "demand_city_id": "IDN-CITY-003",
+          "demand_quantity": "2544",
+          "distance_km": 28.668547,
+          "duration_hours": 0.682584,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-JAKARTA"
+        },
+        {
+          "cost": 247698.643,
+          "demand_city_id": "IDN-CITY-004",
+          "demand_quantity": "2511",
+          "distance_km": 138.465762,
+          "duration_hours": 3.296804,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-JAKARTA"
+        },
+        {
+          "cost": 40000.0,
+          "demand_city_id": "IDN-CITY-005",
+          "demand_quantity": "2436",
+          "distance_km": 0.0,
+          "duration_hours": 0.0,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-MEDAN"
+        },
+        {
+          "cost": 76100.5105,
+          "demand_city_id": "IDN-CITY-006",
+          "demand_quantity": "2057",
+          "distance_km": 24.067007,
+          "duration_hours": 0.573024,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-JAKARTA"
+        },
+        {
+          "cost": 71781.952,
+          "demand_city_id": "IDN-CITY-007",
+          "demand_quantity": "1931",
+          "distance_km": 21.187968,
+          "duration_hours": 0.504475,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-JAKARTA"
+        },
+        {
+          "cost": 40000.0,
+          "demand_city_id": "IDN-CITY-008",
+          "demand_quantity": "1669",
+          "distance_km": 0.0,
+          "duration_hours": 0.0,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-PALEMBANG"
+        },
+        {
+          "cost": 467292.47949999996,
+          "demand_city_id": "IDN-CITY-009",
+          "demand_quantity": "1654",
+          "distance_km": 284.861653,
+          "duration_hours": 6.78242,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-SURABAYA"
+        },
+        {
+          "cost": 40000.0,
+          "demand_city_id": "IDN-CITY-010",
+          "demand_quantity": "1424",
+          "distance_km": 0.0,
+          "duration_hours": 0.0,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-MAKASSAR"
+        },
+        {
+          "cost": 60002.149000000005,
+          "demand_city_id": "IDN-CITY-011",
+          "demand_quantity": "1355",
+          "distance_km": 13.334766,
+          "duration_hours": 0.317494,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-JAKARTA"
+        },
+        {
+          "cost": 851566.03,
+          "demand_city_id": "IDN-CITY-012",
+          "demand_quantity": "1197",
+          "distance_km": 541.04402,
+          "duration_hours": 12.882,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-PALEMBANG"
+        },
+        {
+          "cost": 388230.973,
+          "demand_city_id": "IDN-CITY-013",
+          "demand_quantity": "1167",
+          "distance_km": 232.153982,
+          "duration_hours": 5.527476,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-JAKARTA"
+        },
+        {
+          "cost": 100546.0765,
+          "demand_city_id": "IDN-CITY-014",
+          "demand_quantity": "1044",
+          "distance_km": 40.364051,
+          "duration_hours": 0.961049,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-JAKARTA"
+        },
+        {
+          "cost": 882888.6385,
+          "demand_city_id": "IDN-CITY-015",
+          "demand_quantity": "984",
+          "distance_km": 561.925759,
+          "duration_hours": 13.379185,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-MEDAN"
+        },
+        {
+          "cost": 1003330.963,
+          "demand_city_id": "IDN-CITY-016",
+          "demand_quantity": "910",
+          "distance_km": 642.220642,
+          "duration_hours": 15.290968,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-PALEMBANG"
+        },
+        {
+          "cost": 186718.063,
+          "demand_city_id": "IDN-CITY-017",
+          "demand_quantity": "844",
+          "distance_km": 97.812042,
+          "duration_hours": 2.328858,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-SURABAYA"
+        },
+        {
+          "cost": 1089856.858,
+          "demand_city_id": "IDN-CITY-018",
+          "demand_quantity": "828",
+          "distance_km": 699.904572,
+          "duration_hours": 16.664395,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-MAKASSAR"
+        },
+        {
+          "cost": 630432.4419999999,
+          "demand_city_id": "IDN-CITY-019",
+          "demand_quantity": "726",
+          "distance_km": 393.621628,
+          "duration_hours": 9.371944,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-SURABAYA"
+        },
+        {
+          "cost": 411585.5065,
+          "demand_city_id": "IDN-CITY-020",
+          "demand_quantity": "734",
+          "distance_km": 247.723671,
+          "duration_hours": 5.898183,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-JAKARTA"
+        },
+        {
+          "cost": 967882.6345,
+          "demand_city_id": "IDN-CITY-021",
+          "demand_quantity": "705",
+          "distance_km": 618.588423,
+          "duration_hours": 14.728296,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-MAKASSAR"
+        },
+        {
+          "cost": 162011.9005,
+          "demand_city_id": "IDN-CITY-022",
+          "demand_quantity": "693",
+          "distance_km": 81.341267,
+          "duration_hours": 1.936697,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-JAKARTA"
+        },
+        {
+          "cost": 1139561.812,
+          "demand_city_id": "IDN-CITY-023",
+          "demand_quantity": "659",
+          "distance_km": 733.041208,
+          "duration_hours": 17.453362,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-PALEMBANG"
+        },
+        {
+          "cost": 904060.9404999999,
+          "demand_city_id": "IDN-CITY-024",
+          "demand_quantity": "658",
+          "distance_km": 576.040627,
+          "duration_hours": 13.715253,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-SURABAYA"
+        },
+        {
+          "cost": 406287.9805,
+          "demand_city_id": "IDN-CITY-025",
+          "demand_quantity": "605",
+          "distance_km": 244.191987,
+          "duration_hours": 5.814095,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-PALEMBANG"
+        },
+        {
+          "cost": 1739632.8295,
+          "demand_city_id": "IDN-CITY-026",
+          "demand_quantity": "452",
+          "distance_km": 1133.088553,
+          "duration_hours": 26.978299,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-MAKASSAR"
+        },
+        {
+          "cost": 1342760.767,
+          "demand_city_id": "IDN-CITY-027",
+          "demand_quantity": "443",
+          "distance_km": 868.507178,
+          "duration_hours": 20.678742,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-MAKASSAR"
+        },
+        {
+          "cost": 793443.778,
+          "demand_city_id": "IDN-CITY-028",
+          "demand_quantity": "442",
+          "distance_km": 502.295852,
+          "duration_hours": 11.959425,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-SURABAYA"
+        },
+        {
+          "cost": 204266.317,
+          "demand_city_id": "IDN-CITY-029",
+          "demand_quantity": "435",
+          "distance_km": 109.510878,
+          "duration_hours": 2.607402,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-JAKARTA"
+        },
+        {
+          "cost": 500084.5675,
+          "demand_city_id": "IDN-CITY-030",
+          "demand_quantity": "415",
+          "distance_km": 306.723045,
+          "duration_hours": 7.30293,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-SURABAYA"
+        },
+        {
+          "cost": 4304788.895500001,
+          "demand_city_id": "IDN-CITY-031",
+          "demand_quantity": "399",
+          "distance_km": 2843.192597,
+          "duration_hours": 67.695062,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-MAKASSAR"
+        },
+        {
+          "cost": 558541.9839999999,
+          "demand_city_id": "IDN-CITY-032",
+          "demand_quantity": "374",
+          "distance_km": 345.694656,
+          "duration_hours": 8.230825,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-PALEMBANG"
+        },
+        {
+          "cost": 875938.36,
+          "demand_city_id": "IDN-CITY-033",
+          "demand_quantity": "374",
+          "distance_km": 557.29224,
+          "duration_hours": 13.268863,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-MAKASSAR"
+        },
+        {
+          "cost": 181291.1695,
+          "demand_city_id": "IDN-CITY-034",
+          "demand_quantity": "354",
+          "distance_km": 94.194113,
+          "duration_hours": 2.242717,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-JAKARTA"
+        },
+        {
+          "cost": 1790346.1284999999,
+          "demand_city_id": "IDN-CITY-035",
+          "demand_quantity": "348",
+          "distance_km": 1166.897419,
+          "duration_hours": 27.783272,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-MAKASSAR"
+        },
+        {
+          "cost": 673115.488,
+          "demand_city_id": "IDN-CITY-036",
+          "demand_quantity": "346",
+          "distance_km": 422.076992,
+          "duration_hours": 10.049452,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-MAKASSAR"
+        },
+        {
+          "cost": 402805.81,
+          "demand_city_id": "IDN-CITY-037",
+          "demand_quantity": "342",
+          "distance_km": 241.87054,
+          "duration_hours": 5.758822,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-JAKARTA"
+        },
+        {
+          "cost": 646456.972,
+          "demand_city_id": "IDN-CITY-038",
+          "demand_quantity": "324",
+          "distance_km": 404.304648,
+          "duration_hours": 9.626301,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-MEDAN"
+        },
+        {
+          "cost": 90062.33350000001,
+          "demand_city_id": "IDN-CITY-039",
+          "demand_quantity": "292",
+          "distance_km": 33.374889,
+          "duration_hours": 0.79464,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-MEDAN"
+        },
+        {
+          "cost": 212416.933,
+          "demand_city_id": "IDN-CITY-040",
+          "demand_quantity": "290",
+          "distance_km": 114.944622,
+          "duration_hours": 2.736777,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-SURABAYA"
+        },
+        {
+          "cost": 2550908.257,
+          "demand_city_id": "IDN-CITY-041",
+          "demand_quantity": "285",
+          "distance_km": 1673.938838,
+          "duration_hours": 39.855687,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-MAKASSAR"
+        },
+        {
+          "cost": 526208.9245,
+          "demand_city_id": "IDN-CITY-042",
+          "demand_quantity": "274",
+          "distance_km": 324.139283,
+          "duration_hours": 7.717602,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-JAKARTA"
+        },
+        {
+          "cost": 197083.7125,
+          "demand_city_id": "IDN-CITY-043",
+          "demand_quantity": "269",
+          "distance_km": 104.722475,
+          "duration_hours": 2.493392,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-MEDAN"
+        },
+        {
+          "cost": 817560.133,
+          "demand_city_id": "IDN-CITY-044",
+          "demand_quantity": "253",
+          "distance_km": 518.373422,
+          "duration_hours": 12.342224,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-MEDAN"
+        },
+        {
+          "cost": 1759574.6739999999,
+          "demand_city_id": "IDN-CITY-045",
+          "demand_quantity": "243",
+          "distance_km": 1146.383116,
+          "duration_hours": 27.294836,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-MAKASSAR"
+        },
+        {
+          "cost": 195680.809,
+          "demand_city_id": "IDN-CITY-046",
+          "demand_quantity": "240",
+          "distance_km": 103.787206,
+          "duration_hours": 2.471124,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-SURABAYA"
+        },
+        {
+          "cost": 1173758.1895,
+          "demand_city_id": "IDN-CITY-047",
+          "demand_quantity": "236",
+          "distance_km": 755.838793,
+          "duration_hours": 17.996162,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-PALEMBANG"
+        },
+        {
+          "cost": 146286.991,
+          "demand_city_id": "IDN-CITY-048",
+          "demand_quantity": "214",
+          "distance_km": 70.857994,
+          "duration_hours": 1.687095,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-SURABAYA"
+        },
+        {
+          "cost": 143430.457,
+          "demand_city_id": "IDN-CITY-049",
+          "demand_quantity": "209",
+          "distance_km": 68.953638,
+          "duration_hours": 1.641753,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-SURABAYA"
+        },
+        {
+          "cost": 476669.52550000005,
+          "demand_city_id": "IDN-CITY-050",
+          "demand_quantity": "189",
+          "distance_km": 291.113017,
+          "duration_hours": 6.931262,
+          "reason": null,
+          "upstream_center_id": null,
+          "warehouse_id": "WH-CENTER-MEDAN"
+        }
+      ],
+      "schema_version": "network_assignment.v1",
+      "total_demand": "50815",
+      "unassigned_demand": "0"
+    },
+    "best_bound": null,
+    "closed_existing_ids": [],
+    "cost": {
+      "by_warehouse": {
+        "WH-CENTER-JAKARTA": 3039490491.636,
+        "WH-CENTER-MAKASSAR": 7078611420.999,
+        "WH-CENTER-MEDAN": 1551901453.2249997,
+        "WH-CENTER-PALEMBANG": 3481792811.2885,
+        "WH-CENTER-SURABAYA": 2826141789.7114997
+      },
+      "complete": true,
+      "currency": "IDR",
+      "last_mile": 17977937966.86,
+      "last_mile_by_warehouse": {
+        "WH-CENTER-JAKARTA": 3039490491.636,
+        "WH-CENTER-MAKASSAR": 7078611420.999,
+        "WH-CENTER-MEDAN": 1551901453.2249997,
+        "WH-CENTER-PALEMBANG": 3481792811.2885,
+        "WH-CENTER-SURABAYA": 2826141789.7114997
+      },
+      "linehaul": 0.0,
+      "linehaul_by_warehouse": {
+        "WH-CENTER-JAKARTA": 0.0,
+        "WH-CENTER-MAKASSAR": 0.0,
+        "WH-CENTER-MEDAN": 0.0,
+        "WH-CENTER-PALEMBANG": 0.0,
+        "WH-CENTER-SURABAYA": 0.0
+      },
+      "missing_routes": [],
+      "schema_version": "network_cost_summary.v1",
+      "total": 17977937966.86
+    },
+    "message": null,
+    "objective_value": 17977937966.86,
+    "opened_candidate_ids": [
+      "WH-CANDIDATE-BALIKPAPAN",
+      "WH-CANDIDATE-BANDAR_LAMPUNG"
+    ],
+    "optimality": "proven",
+    "service": [
+      {
+        "coverage_rate": 0.7300403424185772,
+        "covered_demand": "37097",
+        "target_hours": 6.0,
+        "total_demand": "50815"
+      },
+      {
+        "coverage_rate": 0.8233986027747713,
+        "covered_demand": "41841",
+        "target_hours": 12.0,
+        "total_demand": "50815"
+      },
+      {
+        "coverage_rate": 0.9572960739938995,
+        "covered_demand": "48645",
+        "target_hours": 18.0,
+        "total_demand": "50815"
+      }
+    ],
+    "status": "optimal"
+  },
+  "kind": "network_planning_report",
+  "notices": [],
+  "schema_version": "network_planning_report_bundle.v1",
+  "scope": {
+    "candidate_warehouse_count": 12,
+    "demand_city_count": 50,
+    "existing_warehouse_count": 11,
+    "total_demand": "50815",
+    "warehouse_count": 23
+  },
+  "title": "Warehouse network planning report"
+}

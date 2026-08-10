@@ -668,7 +668,10 @@ mod tests {
 
     #[test]
     fn rejects_downloaded_artifact_size_and_contract_drift() {
-        let valid = br#"{"schema_version":"network_planning_report_bundle.v1","kind":"network_planning_report"}"#;
+        let valid = include_bytes!(
+            "../../../../../tools/supply-chain-network-planner/contracts/fixtures/\
+network_planning_report_bundle.v1.json"
+        );
         assert_eq!(
             validate_downloaded_artifact(
                 "network_planning_report_bundle.v1",
@@ -732,6 +735,8 @@ mod tests {
                             "type": "mcpToolCall",
                             "server": "supply_chain",
                             "tool": "publish_network_planning_report",
+                            "status": "completed",
+                            "error": null,
                             "result": {"content": [], "structuredContent": {
                                 "summary": "Created report.",
                                 "artifact": {
@@ -803,7 +808,10 @@ mod tests {
             .await
             .unwrap();
         std::fs::create_dir(checkout.root.join("deliverables")).unwrap();
-        let valid = br#"{"kind":"network_planning_report","schema_version":"network_planning_report_bundle.v1"}"#;
+        let valid = include_bytes!(
+            "../../../../../tools/supply-chain-network-planner/contracts/fixtures/\
+network_planning_report_bundle.v1.json"
+        );
         std::fs::write(checkout.root.join("deliverables/report.json"), valid).unwrap();
         std::fs::write(checkout.root.join("deliverables/restart.json"), valid).unwrap();
         std::fs::write(checkout.root.join("deliverables/size.json"), valid).unwrap();

@@ -581,6 +581,9 @@ pub enum ArtifactFailureCode {
     ArtifactJsonInvalid,
     ArtifactBundleInvalid,
     ArtifactBundleContractMismatch,
+    ArtifactContentUnsafe,
+    ArtifactDeliveryInvalid,
+    ArtifactProjectionFailed,
     Unknown,
 }
 
@@ -594,6 +597,9 @@ impl ArtifactFailureCode {
             "artifact_json_invalid" => Self::ArtifactJsonInvalid,
             "artifact_bundle_invalid" => Self::ArtifactBundleInvalid,
             "artifact_bundle_contract_mismatch" => Self::ArtifactBundleContractMismatch,
+            "artifact_content_unsafe" => Self::ArtifactContentUnsafe,
+            "artifact_delivery_invalid" => Self::ArtifactDeliveryInvalid,
+            "artifact_projection_failed" => Self::ArtifactProjectionFailed,
             _ => Self::Unknown,
         }
     }
@@ -609,6 +615,9 @@ impl ArtifactFailureCode {
             Self::ArtifactBundleContractMismatch => {
                 "Artifact content does not match its declared contract"
             }
+            Self::ArtifactContentUnsafe => "Artifact content is not safe to display",
+            Self::ArtifactDeliveryInvalid => "Artifact descriptor is invalid",
+            Self::ArtifactProjectionFailed => "Artifact could not be registered",
             Self::Unknown => "Artifact materialization failed",
         }
     }
