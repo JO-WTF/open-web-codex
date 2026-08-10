@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
+import json
+from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator
+from pydantic import ValidationError
 from _network_fixtures import (
     indonesia_current_assignments,
     indonesia_network_fixture,
@@ -13,6 +17,7 @@ from supply_chain_planner.map_service import (
     NetworkComparisonMapBundle,
     build_network_comparison_map_bundle,
 )
+from supply_chain_planner.delivery_schemas import model_schema
 from supply_chain_planner.matrix import build_cost_matrix, build_haversine_route_matrix
 from supply_chain_planner.matrix_models import CostCalculationPolicy, DemandUnitCostRule
 from supply_chain_planner.network_models import NormalizedInputBatch
@@ -237,6 +242,64 @@ def test_sample2_builds_complete_self_contained_map_and_report(
     assert NetworkPlanningReportBundle.model_validate(report_payload) == report_bundle
     _assert_no_external_delivery_identity(map_payload)
     _assert_no_external_delivery_identity(report_payload)
+
+
+def test_delivery_schema_fixtures_match_models_and_validate_complete_indonesia_bundle(
+    sample2_delivery: Sample2Delivery,
+) -> None:
+    inputs = sample2_delivery
+    bundles = {
+        "network_comparison_map_bundle.v1": build_network_comparison_map_bundle(
+            inputs.normalized,
+            inputs.baseline,
+            inputs.facility,
+            inputs.comparison,
+            country_code="ID",
+        ),
+        "network_planning_report_bundle.v1": build_network_planning_report_bundle(
+            inputs.normalized,
+            inputs.baseline,
+            inputs.facility,
+            inputs.comparison,
+            country_code="ID",
+        ),
+    }
+    fixture_root = Path(__file__).parents[1] / "contracts" / "schemas"
+    for schema_name, bundle in bundles.items():
+        schema = json.loads(
+            (fixture_root / f"{schema_name}.schema.json").read_text(encoding="utf-8")
+        )
+        assert schema == model_schema(schema_name)
+        Draft202012Validator.check_schema(schema)
+        Draft202012Validator(schema).validate(bundle.model_dump(mode="json"))
+
+
+def test_delivery_models_reject_unknown_nested_fields(
+    sample2_delivery: Sample2Delivery,
+) -> None:
+    inputs = sample2_delivery
+    bundles = [
+        build_network_comparison_map_bundle(
+            inputs.normalized,
+            inputs.baseline,
+            inputs.facility,
+            inputs.comparison,
+            country_code="ID",
+        ).model_dump(mode="json"),
+        build_network_planning_report_bundle(
+            inputs.normalized,
+            inputs.baseline,
+            inputs.facility,
+            inputs.comparison,
+            country_code="ID",
+        ).model_dump(mode="json"),
+    ]
+    bundles[0]["summary"]["unexpected"] = True
+    bundles[1]["entities"]["demand_cities"][0]["unexpected"] = True
+    with pytest.raises(ValidationError):
+        NetworkComparisonMapBundle.model_validate(bundles[0])
+    with pytest.raises(ValidationError):
+        NetworkPlanningReportBundle.model_validate(bundles[1])
 
 
 def test_delivery_bundles_are_deterministic_for_equivalent_input_order(

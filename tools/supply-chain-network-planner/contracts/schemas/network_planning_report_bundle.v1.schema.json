@@ -1,0 +1,1040 @@
+{
+  "$defs": {
+    "AssignmentComparison": {
+      "additionalProperties": false,
+      "properties": {
+        "affected_city_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Affected City Ids",
+          "type": "array"
+        },
+        "after_cost": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "After Cost"
+        },
+        "before_cost": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Before Cost"
+        },
+        "city_changes": {
+          "items": {
+            "$ref": "#/$defs/CityAssignmentChange"
+          },
+          "title": "City Changes",
+          "type": "array"
+        },
+        "cost_delta": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cost Delta"
+        },
+        "reassigned_city_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reassigned City Ids",
+          "type": "array"
+        },
+        "removed_warehouse_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Removed Warehouse Ids",
+          "type": "array"
+        },
+        "requested_service_targets": {
+          "items": {
+            "type": "number"
+          },
+          "title": "Requested Service Targets",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "network_assignment_comparison.v1",
+          "default": "network_assignment_comparison.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "selected_warehouse_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Selected Warehouse Ids",
+          "type": "array"
+        },
+        "service": {
+          "items": {
+            "$ref": "#/$defs/ServiceComparison"
+          },
+          "title": "Service",
+          "type": "array"
+        }
+      },
+      "required": [
+        "requested_service_targets",
+        "service",
+        "selected_warehouse_ids",
+        "removed_warehouse_ids",
+        "affected_city_ids",
+        "reassigned_city_ids",
+        "city_changes"
+      ],
+      "title": "AssignmentComparison",
+      "type": "object"
+    },
+    "AssignmentResult": {
+      "additionalProperties": false,
+      "properties": {
+        "objective": {
+          "enum": [
+            "min_time",
+            "min_cost"
+          ],
+          "title": "Objective",
+          "type": "string"
+        },
+        "rows": {
+          "items": {
+            "$ref": "#/$defs/AssignmentRow"
+          },
+          "minItems": 1,
+          "title": "Rows",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "network_assignment.v1",
+          "default": "network_assignment.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "total_demand": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "Total Demand"
+        },
+        "unassigned_demand": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "Unassigned Demand"
+        }
+      },
+      "required": [
+        "objective",
+        "rows",
+        "total_demand",
+        "unassigned_demand"
+      ],
+      "title": "AssignmentResult",
+      "type": "object"
+    },
+    "AssignmentRow": {
+      "additionalProperties": false,
+      "properties": {
+        "cost": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cost"
+        },
+        "demand_city_id": {
+          "title": "Demand City Id",
+          "type": "string"
+        },
+        "demand_quantity": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "Demand Quantity"
+        },
+        "distance_km": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Distance Km"
+        },
+        "duration_hours": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Hours"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "upstream_center_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Upstream Center Id"
+        },
+        "warehouse_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Warehouse Id"
+        }
+      },
+      "required": [
+        "demand_city_id",
+        "warehouse_id",
+        "demand_quantity"
+      ],
+      "title": "AssignmentRow",
+      "type": "object"
+    },
+    "CityAssignmentChange": {
+      "additionalProperties": false,
+      "properties": {
+        "affected": {
+          "title": "Affected",
+          "type": "boolean"
+        },
+        "after_warehouse_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "After Warehouse Id"
+        },
+        "before_warehouse_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Before Warehouse Id"
+        },
+        "cost_per_unit_delta": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cost Per Unit Delta"
+        },
+        "demand_city_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Demand City Id",
+          "type": "string"
+        },
+        "duration_hours_delta": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Hours Delta"
+        },
+        "reassigned": {
+          "title": "Reassigned",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "demand_city_id",
+        "affected",
+        "reassigned"
+      ],
+      "title": "CityAssignmentChange",
+      "type": "object"
+    },
+    "CostSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "by_warehouse": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "By Warehouse",
+          "type": "object"
+        },
+        "complete": {
+          "default": true,
+          "title": "Complete",
+          "type": "boolean"
+        },
+        "currency": {
+          "pattern": "^[A-Z]{3}$",
+          "title": "Currency",
+          "type": "string"
+        },
+        "last_mile": {
+          "minimum": 0.0,
+          "title": "Last Mile",
+          "type": "number"
+        },
+        "last_mile_by_warehouse": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Last Mile By Warehouse",
+          "type": "object"
+        },
+        "linehaul": {
+          "minimum": 0.0,
+          "title": "Linehaul",
+          "type": "number"
+        },
+        "linehaul_by_warehouse": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Linehaul By Warehouse",
+          "type": "object"
+        },
+        "missing_routes": {
+          "items": {
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          },
+          "title": "Missing Routes",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "network_cost_summary.v1",
+          "default": "network_cost_summary.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "total": {
+          "minimum": 0.0,
+          "title": "Total",
+          "type": "number"
+        }
+      },
+      "required": [
+        "currency",
+        "total",
+        "linehaul",
+        "last_mile"
+      ],
+      "title": "CostSummary",
+      "type": "object"
+    },
+    "DemandCityRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "city_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "City Id",
+          "type": "string"
+        },
+        "city_name": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "City Name",
+          "type": "string"
+        },
+        "demand_quantity": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "Demand Quantity"
+        },
+        "latitude": {
+          "anyOf": [
+            {
+              "maximum": 90.0,
+              "minimum": -90.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Latitude"
+        },
+        "longitude": {
+          "anyOf": [
+            {
+              "maximum": 180.0,
+              "minimum": -180.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Longitude"
+        },
+        "province_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Province Id"
+        },
+        "province_name": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Province Name"
+        }
+      },
+      "required": [
+        "city_id",
+        "city_name",
+        "demand_quantity"
+      ],
+      "title": "DemandCityRecord",
+      "type": "object"
+    },
+    "NetworkBaselineReport": {
+      "additionalProperties": false,
+      "properties": {
+        "active_warehouse_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Active Warehouse Ids",
+          "type": "array"
+        },
+        "assignment": {
+          "$ref": "#/$defs/AssignmentResult"
+        },
+        "cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CostSummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "label": {
+          "enum": [
+            "actual_current",
+            "optimized_existing_footprint"
+          ],
+          "title": "Label",
+          "type": "string"
+        },
+        "notice_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Notice Code"
+        },
+        "service": {
+          "items": {
+            "$ref": "#/$defs/ServiceMetric"
+          },
+          "title": "Service",
+          "type": "array"
+        }
+      },
+      "required": [
+        "label",
+        "active_warehouse_ids",
+        "assignment",
+        "service",
+        "cost",
+        "notice_code"
+      ],
+      "title": "NetworkBaselineReport",
+      "type": "object"
+    },
+    "NetworkFacilityReport": {
+      "additionalProperties": false,
+      "properties": {
+        "active_warehouse_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Active Warehouse Ids",
+          "type": "array"
+        },
+        "assignment": {
+          "$ref": "#/$defs/AssignmentResult"
+        },
+        "best_bound": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Best Bound"
+        },
+        "closed_existing_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Closed Existing Ids",
+          "type": "array"
+        },
+        "cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CostSummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Message"
+        },
+        "objective_value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Objective Value"
+        },
+        "opened_candidate_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Opened Candidate Ids",
+          "type": "array"
+        },
+        "optimality": {
+          "enum": [
+            "proven",
+            "feasible_only",
+            "not_available"
+          ],
+          "title": "Optimality",
+          "type": "string"
+        },
+        "service": {
+          "items": {
+            "$ref": "#/$defs/ServiceMetric"
+          },
+          "title": "Service",
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "optimal",
+            "feasible"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "active_warehouse_ids",
+        "opened_candidate_ids",
+        "closed_existing_ids",
+        "assignment",
+        "objective_value",
+        "cost",
+        "best_bound",
+        "service",
+        "optimality",
+        "message"
+      ],
+      "title": "NetworkFacilityReport",
+      "type": "object"
+    },
+    "NetworkReportEntities": {
+      "additionalProperties": false,
+      "properties": {
+        "demand_cities": {
+          "items": {
+            "$ref": "#/$defs/DemandCityRecord"
+          },
+          "title": "Demand Cities",
+          "type": "array"
+        },
+        "warehouses": {
+          "items": {
+            "$ref": "#/$defs/WarehouseRecord"
+          },
+          "title": "Warehouses",
+          "type": "array"
+        }
+      },
+      "required": [
+        "demand_cities",
+        "warehouses"
+      ],
+      "title": "NetworkReportEntities",
+      "type": "object"
+    },
+    "NetworkReportScope": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_warehouse_count": {
+          "minimum": 0,
+          "title": "Candidate Warehouse Count",
+          "type": "integer"
+        },
+        "demand_city_count": {
+          "minimum": 0,
+          "title": "Demand City Count",
+          "type": "integer"
+        },
+        "existing_warehouse_count": {
+          "minimum": 0,
+          "title": "Existing Warehouse Count",
+          "type": "integer"
+        },
+        "total_demand": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "Total Demand"
+        },
+        "warehouse_count": {
+          "minimum": 0,
+          "title": "Warehouse Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "demand_city_count",
+        "warehouse_count",
+        "existing_warehouse_count",
+        "candidate_warehouse_count",
+        "total_demand"
+      ],
+      "title": "NetworkReportScope",
+      "type": "object"
+    },
+    "ServiceComparison": {
+      "additionalProperties": false,
+      "properties": {
+        "after_coverage_rate": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "After Coverage Rate",
+          "type": "number"
+        },
+        "before_coverage_rate": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Before Coverage Rate",
+          "type": "number"
+        },
+        "coverage_rate_delta": {
+          "maximum": 1.0,
+          "minimum": -1.0,
+          "title": "Coverage Rate Delta",
+          "type": "number"
+        },
+        "target_hours": {
+          "exclusiveMinimum": 0.0,
+          "title": "Target Hours",
+          "type": "number"
+        }
+      },
+      "required": [
+        "target_hours",
+        "before_coverage_rate",
+        "after_coverage_rate",
+        "coverage_rate_delta"
+      ],
+      "title": "ServiceComparison",
+      "type": "object"
+    },
+    "ServiceMetric": {
+      "additionalProperties": false,
+      "properties": {
+        "coverage_rate": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Coverage Rate",
+          "type": "number"
+        },
+        "covered_demand": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "Covered Demand"
+        },
+        "target_hours": {
+          "exclusiveMinimum": 0.0,
+          "title": "Target Hours",
+          "type": "number"
+        },
+        "total_demand": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "Total Demand"
+        }
+      },
+      "required": [
+        "target_hours",
+        "covered_demand",
+        "total_demand",
+        "coverage_rate"
+      ],
+      "title": "ServiceMetric",
+      "type": "object"
+    },
+    "WarehouseRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "city_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "City Id",
+          "type": "string"
+        },
+        "city_name": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "City Name",
+          "type": "string"
+        },
+        "is_existing": {
+          "title": "Is Existing",
+          "type": "boolean"
+        },
+        "is_fixed": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Is Fixed"
+        },
+        "latitude": {
+          "anyOf": [
+            {
+              "maximum": 90.0,
+              "minimum": -90.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Latitude"
+        },
+        "longitude": {
+          "anyOf": [
+            {
+              "maximum": 180.0,
+              "minimum": -180.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Longitude"
+        },
+        "province_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Province Id"
+        },
+        "province_name": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Province Name"
+        },
+        "upstream_center_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Upstream Center Id"
+        },
+        "warehouse_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Warehouse Id",
+          "type": "string"
+        },
+        "warehouse_name": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Warehouse Name",
+          "type": "string"
+        },
+        "warehouse_type": {
+          "enum": [
+            "center",
+            "cross_docking"
+          ],
+          "title": "Warehouse Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "warehouse_id",
+        "warehouse_name",
+        "warehouse_type",
+        "city_id",
+        "city_name",
+        "is_existing"
+      ],
+      "title": "WarehouseRecord",
+      "type": "object"
+    }
+  },
+  "$id": "urn:open-web-codex:supply-chain:network_planning_report_bundle.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "baseline": {
+      "$ref": "#/$defs/NetworkBaselineReport"
+    },
+    "comparison": {
+      "$ref": "#/$defs/AssignmentComparison"
+    },
+    "country_code": {
+      "pattern": "^[A-Z]{2}$",
+      "title": "Country Code",
+      "type": "string"
+    },
+    "entities": {
+      "$ref": "#/$defs/NetworkReportEntities"
+    },
+    "facility": {
+      "$ref": "#/$defs/NetworkFacilityReport"
+    },
+    "kind": {
+      "const": "network_planning_report",
+      "default": "network_planning_report",
+      "title": "Kind",
+      "type": "string"
+    },
+    "notices": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Notices",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "network_planning_report_bundle.v1",
+      "default": "network_planning_report_bundle.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "#/$defs/NetworkReportScope"
+    },
+    "title": {
+      "default": "Warehouse network planning report",
+      "title": "Title",
+      "type": "string"
+    }
+  },
+  "required": [
+    "country_code",
+    "scope",
+    "entities",
+    "baseline",
+    "facility",
+    "comparison",
+    "notices"
+  ],
+  "title": "Network planning report bundle",
+  "type": "object"
+}

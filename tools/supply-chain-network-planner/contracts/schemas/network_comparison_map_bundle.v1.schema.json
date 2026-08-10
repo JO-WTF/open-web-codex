@@ -1,0 +1,735 @@
+{
+  "$defs": {
+    "AssignmentMapProperties": {
+      "additionalProperties": false,
+      "properties": {
+        "demand_city_id": {
+          "title": "Demand City Id",
+          "type": "string"
+        },
+        "demand_quantity": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "Demand Quantity"
+        },
+        "distance_km": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Distance Km"
+        },
+        "duration_hours": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Duration Hours"
+        },
+        "kind": {
+          "const": "last_mile_assignment",
+          "default": "last_mile_assignment",
+          "title": "Kind",
+          "type": "string"
+        },
+        "result_label": {
+          "title": "Result Label",
+          "type": "string"
+        },
+        "scenario": {
+          "enum": [
+            "baseline",
+            "facility"
+          ],
+          "title": "Scenario",
+          "type": "string"
+        },
+        "unit_cost": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Unit Cost"
+        },
+        "warehouse_id": {
+          "title": "Warehouse Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scenario",
+        "result_label",
+        "warehouse_id",
+        "demand_city_id",
+        "demand_quantity",
+        "distance_km",
+        "duration_hours",
+        "unit_cost"
+      ],
+      "title": "AssignmentMapProperties",
+      "type": "object"
+    },
+    "DemandMapProperties": {
+      "additionalProperties": false,
+      "properties": {
+        "city_id": {
+          "title": "City Id",
+          "type": "string"
+        },
+        "city_name": {
+          "title": "City Name",
+          "type": "string"
+        },
+        "demand_quantity": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "Demand Quantity"
+        },
+        "kind": {
+          "const": "demand",
+          "default": "demand",
+          "title": "Kind",
+          "type": "string"
+        },
+        "province_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Province Id"
+        },
+        "province_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Province Name"
+        }
+      },
+      "required": [
+        "city_id",
+        "city_name",
+        "province_id",
+        "province_name",
+        "demand_quantity"
+      ],
+      "title": "DemandMapProperties",
+      "type": "object"
+    },
+    "LineStringGeometry": {
+      "additionalProperties": false,
+      "properties": {
+        "coordinates": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            }
+          ],
+          "title": "Coordinates",
+          "type": "array"
+        },
+        "type": {
+          "const": "LineString",
+          "default": "LineString",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "coordinates"
+      ],
+      "title": "LineStringGeometry",
+      "type": "object"
+    },
+    "LinehaulMapProperties": {
+      "additionalProperties": false,
+      "properties": {
+        "assigned_demand": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "Assigned Demand"
+        },
+        "crossdock_warehouse_id": {
+          "title": "Crossdock Warehouse Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "linehaul_connection",
+          "default": "linehaul_connection",
+          "title": "Kind",
+          "type": "string"
+        },
+        "scenario": {
+          "enum": [
+            "baseline",
+            "facility"
+          ],
+          "title": "Scenario",
+          "type": "string"
+        },
+        "upstream_center_id": {
+          "title": "Upstream Center Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scenario",
+        "upstream_center_id",
+        "crossdock_warehouse_id",
+        "assigned_demand"
+      ],
+      "title": "LinehaulMapProperties",
+      "type": "object"
+    },
+    "NetworkMapExtensions": {
+      "additionalProperties": false,
+      "properties": {
+        "hover_fields": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Hover Fields",
+          "type": "object"
+        },
+        "legend": {
+          "items": {
+            "$ref": "#/$defs/NetworkMapLegendItem"
+          },
+          "title": "Legend",
+          "type": "array"
+        }
+      },
+      "required": [
+        "legend",
+        "hover_fields"
+      ],
+      "title": "NetworkMapExtensions",
+      "type": "object"
+    },
+    "NetworkMapFeature": {
+      "additionalProperties": false,
+      "properties": {
+        "geometry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PointGeometry"
+            },
+            {
+              "$ref": "#/$defs/LineStringGeometry"
+            }
+          ],
+          "title": "Geometry"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "properties": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WarehouseMapProperties"
+            },
+            {
+              "$ref": "#/$defs/DemandMapProperties"
+            },
+            {
+              "$ref": "#/$defs/AssignmentMapProperties"
+            },
+            {
+              "$ref": "#/$defs/LinehaulMapProperties"
+            }
+          ],
+          "title": "Properties"
+        },
+        "type": {
+          "const": "Feature",
+          "default": "Feature",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "geometry",
+        "properties"
+      ],
+      "title": "NetworkMapFeature",
+      "type": "object"
+    },
+    "NetworkMapFeatureCollection": {
+      "additionalProperties": false,
+      "properties": {
+        "features": {
+          "items": {
+            "$ref": "#/$defs/NetworkMapFeature"
+          },
+          "title": "Features",
+          "type": "array"
+        },
+        "type": {
+          "const": "FeatureCollection",
+          "default": "FeatureCollection",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "features"
+      ],
+      "title": "NetworkMapFeatureCollection",
+      "type": "object"
+    },
+    "NetworkMapLayer": {
+      "additionalProperties": false,
+      "properties": {
+        "feature_kind": {
+          "title": "Feature Kind",
+          "type": "string"
+        },
+        "geometry_type": {
+          "enum": [
+            "Point",
+            "LineString"
+          ],
+          "title": "Geometry Type",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "layer_id": {
+          "title": "Layer Id",
+          "type": "string"
+        },
+        "scenario": {
+          "anyOf": [
+            {
+              "enum": [
+                "baseline",
+                "facility"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Scenario"
+        }
+      },
+      "required": [
+        "layer_id",
+        "feature_kind",
+        "geometry_type",
+        "scenario",
+        "label"
+      ],
+      "title": "NetworkMapLayer",
+      "type": "object"
+    },
+    "NetworkMapLegendItem": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "color": {
+          "pattern": "^#[0-9A-F]{6}$",
+          "title": "Color",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "label",
+        "color"
+      ],
+      "title": "NetworkMapLegendItem",
+      "type": "object"
+    },
+    "NetworkMapSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "after_cost": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "After Cost"
+        },
+        "baseline_active_warehouse_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Baseline Active Warehouse Ids",
+          "type": "array"
+        },
+        "baseline_label": {
+          "title": "Baseline Label",
+          "type": "string"
+        },
+        "before_cost": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Before Cost"
+        },
+        "closed_existing_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Closed Existing Ids",
+          "type": "array"
+        },
+        "cost_delta": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Cost Delta"
+        },
+        "country_code": {
+          "pattern": "^[A-Z]{2}$",
+          "title": "Country Code",
+          "type": "string"
+        },
+        "facility_active_warehouse_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Facility Active Warehouse Ids",
+          "type": "array"
+        },
+        "facility_status": {
+          "title": "Facility Status",
+          "type": "string"
+        },
+        "feature_count": {
+          "minimum": 0,
+          "title": "Feature Count",
+          "type": "integer"
+        },
+        "opened_candidate_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Opened Candidate Ids",
+          "type": "array"
+        },
+        "service": {
+          "items": {
+            "$ref": "#/$defs/ServiceComparison"
+          },
+          "title": "Service",
+          "type": "array"
+        }
+      },
+      "required": [
+        "country_code",
+        "baseline_label",
+        "facility_status",
+        "feature_count",
+        "baseline_active_warehouse_ids",
+        "facility_active_warehouse_ids",
+        "opened_candidate_ids",
+        "closed_existing_ids",
+        "before_cost",
+        "after_cost",
+        "cost_delta",
+        "service"
+      ],
+      "title": "NetworkMapSummary",
+      "type": "object"
+    },
+    "PointGeometry": {
+      "additionalProperties": false,
+      "properties": {
+        "coordinates": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Coordinates",
+          "type": "array"
+        },
+        "type": {
+          "const": "Point",
+          "default": "Point",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "coordinates"
+      ],
+      "title": "PointGeometry",
+      "type": "object"
+    },
+    "ServiceComparison": {
+      "additionalProperties": false,
+      "properties": {
+        "after_coverage_rate": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "After Coverage Rate",
+          "type": "number"
+        },
+        "before_coverage_rate": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Before Coverage Rate",
+          "type": "number"
+        },
+        "coverage_rate_delta": {
+          "maximum": 1.0,
+          "minimum": -1.0,
+          "title": "Coverage Rate Delta",
+          "type": "number"
+        },
+        "target_hours": {
+          "exclusiveMinimum": 0.0,
+          "title": "Target Hours",
+          "type": "number"
+        }
+      },
+      "required": [
+        "target_hours",
+        "before_coverage_rate",
+        "after_coverage_rate",
+        "coverage_rate_delta"
+      ],
+      "title": "ServiceComparison",
+      "type": "object"
+    },
+    "WarehouseMapProperties": {
+      "additionalProperties": false,
+      "properties": {
+        "baseline_active": {
+          "title": "Baseline Active",
+          "type": "boolean"
+        },
+        "city_id": {
+          "title": "City Id",
+          "type": "string"
+        },
+        "city_name": {
+          "title": "City Name",
+          "type": "string"
+        },
+        "closed_existing": {
+          "title": "Closed Existing",
+          "type": "boolean"
+        },
+        "facility_active": {
+          "title": "Facility Active",
+          "type": "boolean"
+        },
+        "is_existing": {
+          "title": "Is Existing",
+          "type": "boolean"
+        },
+        "kind": {
+          "const": "warehouse",
+          "default": "warehouse",
+          "title": "Kind",
+          "type": "string"
+        },
+        "opened_candidate": {
+          "title": "Opened Candidate",
+          "type": "boolean"
+        },
+        "province_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Province Id"
+        },
+        "province_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Province Name"
+        },
+        "warehouse_id": {
+          "title": "Warehouse Id",
+          "type": "string"
+        },
+        "warehouse_name": {
+          "title": "Warehouse Name",
+          "type": "string"
+        },
+        "warehouse_type": {
+          "enum": [
+            "center",
+            "cross_docking"
+          ],
+          "title": "Warehouse Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "warehouse_id",
+        "warehouse_name",
+        "warehouse_type",
+        "city_id",
+        "city_name",
+        "province_id",
+        "province_name",
+        "is_existing",
+        "baseline_active",
+        "facility_active",
+        "opened_candidate",
+        "closed_existing"
+      ],
+      "title": "WarehouseMapProperties",
+      "type": "object"
+    }
+  },
+  "$id": "urn:open-web-codex:supply-chain:network_comparison_map_bundle.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "extensions": {
+      "$ref": "#/$defs/NetworkMapExtensions"
+    },
+    "geojson": {
+      "$ref": "#/$defs/NetworkMapFeatureCollection"
+    },
+    "kind": {
+      "const": "network_comparison_map",
+      "default": "network_comparison_map",
+      "title": "Kind",
+      "type": "string"
+    },
+    "layers": {
+      "items": {
+        "$ref": "#/$defs/NetworkMapLayer"
+      },
+      "title": "Layers",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "network_comparison_map_bundle.v1",
+      "default": "network_comparison_map_bundle.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "summary": {
+      "$ref": "#/$defs/NetworkMapSummary"
+    },
+    "title": {
+      "default": "Warehouse network: baseline vs selected facilities",
+      "title": "Title",
+      "type": "string"
+    }
+  },
+  "required": [
+    "summary",
+    "geojson",
+    "layers",
+    "extensions"
+  ],
+  "title": "Network comparison map bundle",
+  "type": "object"
+}
