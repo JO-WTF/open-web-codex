@@ -1687,7 +1687,7 @@ body:has(.web-app-shell) {
 }
 
 .web-supervisor-activity-meta time {
-  color: #687386;
+  color: var(--web-muted);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -3964,7 +3964,7 @@ body:has(.web-app-shell[data-theme="light"]) {
 }
 
 .web-app-shell[data-theme="light"] .web-supervisor-activity-detail p {
-  color: #68758a;
+  color: #677282;
 }
 
 .web-app-shell[data-theme="light"] .web-supervisor-activity-meta {
@@ -3976,7 +3976,15 @@ body:has(.web-app-shell[data-theme="light"]) {
 }
 
 .web-app-shell[data-theme="light"] .web-supervisor-activity-meta time {
-  color: #7b8798;
+  color: #617083;
+}
+
+.web-app-shell[data-theme="light"] .web-supervisor-activity-status.is-idle {
+  color: #617083;
+}
+
+.web-app-shell[data-theme="light"] .web-supervisor-activity-detail summary {
+  color: #5f6d80;
 }
 
 .web-app-shell[data-theme="light"] .web-supervisor-activity-status.is-active {
