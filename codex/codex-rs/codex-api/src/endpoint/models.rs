@@ -1,4 +1,5 @@
 use crate::auth::SharedAuthProvider;
+use crate::endpoint::session::BoundedResponseError;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::Provider;
@@ -13,11 +14,13 @@ use http::StatusCode;
 use http::header::ETAG;
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 const MAX_MODEL_CATALOG_BYTES: usize = 1024 * 1024;
 const MAX_MODEL_CATALOG_ENTRIES: usize = 512;
 const MAX_MODEL_ID_CHARS: usize = 256;
+const MAX_MODEL_DISPLAY_NAME_CHARS: usize = 512;
 
 /// A sanitized Provider `/models` response accepted by the Runtime.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,17 +121,18 @@ impl<T: HttpTransport> ModelsClient<T> {
     ) -> Result<ModelsCatalog, ModelsCatalogError> {
         let response = self
             .session
-            .execute_with(
+            .execute_bounded_with(
                 Method::GET,
                 Self::path(),
                 extra_headers,
                 /*body*/ None,
+                MAX_MODEL_CATALOG_BYTES,
                 move |req| {
                     req.url.clone_from(&request_url);
                 },
             )
             .await
-            .map_err(classify_models_transport_error)?;
+            .map_err(classify_bounded_response_error)?;
 
         parse_models_catalog(&response.body)
     }
@@ -178,15 +182,13 @@ fn validate_rich_models(models: Vec<ModelInfo>) -> Result<Vec<ModelInfo>, Models
         return Err(ModelsCatalogError::EmptyCatalog);
     }
 
+    let mut slugs = HashSet::with_capacity(models.len());
     let mut accepted: Vec<ModelInfo> = Vec::with_capacity(models.len());
     for model in models {
-        if !valid_model_id(&model.slug) {
-            return Err(ModelsCatalogError::IncompatibleSchema);
-        }
-        if accepted.iter().any(|existing| existing == &model) {
-            continue;
-        }
-        if accepted.iter().any(|existing| existing.slug == model.slug) {
+        if !valid_model_id(&model.slug)
+            || !valid_display_name(&model.display_name)
+            || !slugs.insert(model.slug.clone())
+        {
             return Err(ModelsCatalogError::IncompatibleSchema);
         }
         accepted.push(model);
@@ -203,14 +205,13 @@ fn validate_compatible_model_ids(
     if models.is_empty() {
         return Err(ModelsCatalogError::EmptyCatalog);
     }
+    let mut model_ids_seen = HashSet::with_capacity(models.len());
     let mut model_ids = Vec::with_capacity(models.len());
     for model in models {
-        if !valid_model_id(&model.id) {
+        if !valid_model_id(&model.id) || !model_ids_seen.insert(model.id.clone()) {
             return Err(ModelsCatalogError::IncompatibleSchema);
         }
-        if !model_ids.iter().any(|id| id == &model.id) {
-            model_ids.push(model.id);
-        }
+        model_ids.push(model.id);
     }
     Ok(model_ids)
 }
@@ -220,6 +221,20 @@ fn valid_model_id(model_id: &str) -> bool {
         && !model_id.is_empty()
         && model_id.chars().count() <= MAX_MODEL_ID_CHARS
         && !model_id.chars().any(char::is_control)
+}
+
+fn valid_display_name(display_name: &str) -> bool {
+    !display_name.is_empty()
+        && display_name == display_name.trim()
+        && display_name.chars().count() <= MAX_MODEL_DISPLAY_NAME_CHARS
+        && !display_name.chars().any(char::is_control)
+}
+
+fn classify_bounded_response_error(error: BoundedResponseError) -> ModelsCatalogError {
+    match error {
+        BoundedResponseError::Api(error) => classify_models_transport_error(error),
+        BoundedResponseError::BodyTooLarge => ModelsCatalogError::IncompatibleSchema,
+    }
 }
 
 fn classify_models_transport_error(error: ApiError) -> ModelsCatalogError {
@@ -240,6 +255,7 @@ fn classify_http_status(status: StatusCode) -> ModelsCatalogError {
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => ModelsCatalogError::Authentication,
         StatusCode::NOT_FOUND => ModelsCatalogError::NotFound,
         StatusCode::TOO_MANY_REQUESTS => ModelsCatalogError::RateLimited,
+        StatusCode::REQUEST_TIMEOUT | StatusCode::GATEWAY_TIMEOUT => ModelsCatalogError::Timeout,
         _ => ModelsCatalogError::Upstream,
     }
 }
@@ -249,16 +265,20 @@ mod tests {
     use super::*;
     use crate::auth::AuthProvider;
     use crate::provider::RetryConfig;
+    use bytes::Bytes;
     use codex_client::Request;
     use codex_client::Response;
     use codex_client::StreamResponse;
     use codex_client::TransportError;
+    use futures::stream;
     use http::HeaderMap;
     use http::StatusCode;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::sync::Arc;
     use std::sync::Mutex;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
 
     #[derive(Clone)]
@@ -447,13 +467,10 @@ mod tests {
     }
 
     #[test]
-    fn parses_openai_compatible_catalog_and_dedupes_exact_ids() {
-        let result =
-            parse_models_catalog(br#"{"data":[{"id":"first"},{"id":"first"},{"id":"second"}]}"#)
-                .expect("compatible catalog should parse");
+    fn rejects_duplicate_openai_compatible_ids() {
         assert_eq!(
-            result,
-            ModelsCatalog::OpenAiCompatible(vec!["first".to_string(), "second".to_string()])
+            parse_models_catalog(br#"{"data":[{"id":"first"},{"id":"first"},{"id":"second"}]}"#),
+            Err(ModelsCatalogError::IncompatibleSchema)
         );
     }
 
@@ -466,13 +483,8 @@ mod tests {
                 models: vec![valid.clone(), duplicate],
             })
             .unwrap(),
-        )
-        .expect("exact duplicate should be accepted");
-        let ModelsCatalog::Rich(models) = result else {
-            panic!("expected a rich catalog");
-        };
-        assert_eq!(models.len(), 1);
-        assert_eq!(models[0].slug, "gpt-valid");
+        );
+        assert_eq!(result, Err(ModelsCatalogError::IncompatibleSchema));
 
         for invalid_slug in [
             " gpt-whitespace ".to_string(),
@@ -496,6 +508,42 @@ mod tests {
             parse_models_catalog(br#"{"models":[]}"#),
             Err(ModelsCatalogError::EmptyCatalog),
         );
+    }
+
+    #[test]
+    fn rejects_invalid_rich_display_names_without_normalizing() {
+        let valid = rich_model("gpt-valid");
+        for display_name in [
+            String::new(),
+            " Display Name".to_string(),
+            "Display Name ".to_string(),
+            "bad\u{0007}name".to_string(),
+            "x".repeat(MAX_MODEL_DISPLAY_NAME_CHARS + 1),
+        ] {
+            let mut invalid = valid.clone();
+            invalid.display_name = display_name;
+            assert_eq!(
+                parse_models_catalog(
+                    &serde_json::to_vec(&ModelsResponse {
+                        models: vec![invalid],
+                    })
+                    .unwrap(),
+                ),
+                Err(ModelsCatalogError::IncompatibleSchema)
+            );
+        }
+
+        let catalog = parse_models_catalog(
+            &serde_json::to_vec(&ModelsResponse {
+                models: vec![valid],
+            })
+            .unwrap(),
+        )
+        .expect("valid rich display name should parse");
+        let ModelsCatalog::Rich(models) = catalog else {
+            panic!("expected a rich catalog");
+        };
+        assert_eq!(models[0].display_name, "gpt-valid");
     }
 
     #[test]
@@ -550,6 +598,14 @@ mod tests {
             ModelsCatalogError::RateLimited
         );
         assert_eq!(
+            classify_http_status(StatusCode::REQUEST_TIMEOUT),
+            ModelsCatalogError::Timeout
+        );
+        assert_eq!(
+            classify_http_status(StatusCode::GATEWAY_TIMEOUT),
+            ModelsCatalogError::Timeout
+        );
+        assert_eq!(
             classify_http_status(StatusCode::BAD_GATEWAY),
             ModelsCatalogError::Upstream
         );
@@ -564,5 +620,59 @@ mod tests {
             ModelsCatalogError::Network
         );
         assert!(!format!("{:?}", ModelsCatalogError::Authentication).contains("secret"));
+    }
+
+    #[tokio::test]
+    async fn bounded_catalog_reader_stops_after_first_over_limit_chunk() {
+        let polls = Arc::new(AtomicUsize::new(0));
+        let first = Bytes::from(vec![b'x'; MAX_MODEL_CATALOG_BYTES + 1]);
+        let marker = Bytes::from_static(b"body-canary");
+        let poll_counter = Arc::clone(&polls);
+        let bytes = stream::unfold(vec![first, marker].into_iter(), move |mut chunks| {
+            let poll_counter = Arc::clone(&poll_counter);
+            async move {
+                let chunk = chunks.next()?;
+                poll_counter.fetch_add(1, Ordering::SeqCst);
+                Some((Ok(chunk), chunks))
+            }
+        });
+        let transport = StreamingTransport {
+            bytes: Arc::new(Mutex::new(Some(Box::pin(bytes)))),
+        };
+        let provider = provider("https://example.com/api/codex");
+        let request_url = ModelsClient::<StreamingTransport>::request_url(&provider, "0.99.0");
+        let client = ModelsClient::new(transport, provider, Arc::new(DummyAuth));
+
+        assert_eq!(
+            client
+                .list_models_catalog(request_url, HeaderMap::new())
+                .await,
+            Err(ModelsCatalogError::IncompatibleSchema)
+        );
+        assert_eq!(polls.load(Ordering::SeqCst), 1);
+    }
+
+    struct StreamingTransport {
+        bytes: Arc<Mutex<Option<codex_client::ByteStream>>>,
+    }
+
+    impl HttpTransport for StreamingTransport {
+        async fn execute(&self, _req: Request) -> Result<Response, TransportError> {
+            Err(TransportError::Build("execute should not run".to_string()))
+        }
+
+        async fn stream(&self, _req: Request) -> Result<StreamResponse, TransportError> {
+            let bytes = self
+                .bytes
+                .lock()
+                .expect("stream body lock should not be poisoned")
+                .take()
+                .expect("stream should be consumed once");
+            Ok(StreamResponse {
+                status: StatusCode::OK,
+                headers: HeaderMap::new(),
+                bytes,
+            })
+        }
     }
 }

@@ -142,7 +142,8 @@ fn model_provider_models_success(
 const MAX_MODEL_PROVIDER_ID_CHARS: usize = 128;
 
 fn valid_model_provider_id(provider_id: &str) -> bool {
-    !provider_id.trim().is_empty()
+    provider_id == provider_id.trim()
+        && !provider_id.is_empty()
         && provider_id.chars().count() <= MAX_MODEL_PROVIDER_ID_CHARS
         && !provider_id.chars().any(char::is_control)
 }
@@ -895,6 +896,6 @@ mod tests {
             &"x".repeat(MAX_MODEL_PROVIDER_ID_CHARS + 1)
         ));
         assert!(valid_model_provider_id("target"));
-        assert!(valid_model_provider_id(" target "));
+        assert!(!valid_model_provider_id(" target "));
     }
 }

@@ -268,6 +268,35 @@ pub fn create_client_for_route(
     )
 }
 
+/// Builds the default Codex HTTP client for a concrete outbound route without request URL or
+/// response-header diagnostics.
+///
+/// This mirrors [`create_client_for_route`] exactly, including default headers, the Cloudflare
+/// cookie store, factory-provided cookies on the route-aware branch, sandbox direct routing,
+/// custom-CA fallback, and the selected route policy. Only the transport's sensitive request
+/// diagnostics are disabled.
+pub fn create_client_for_route_without_request_logging(
+    http_client_factory: &HttpClientFactory,
+    request_url: &str,
+    route_class: ClientRouteClass,
+) -> Result<HttpClient, BuildRouteAwareHttpClientError> {
+    if matches!(
+        http_client_factory.outbound_proxy_policy(),
+        OutboundProxyPolicy::ReqwestDefault
+    ) {
+        return Ok(create_client_without_request_logging());
+    }
+    if is_sandboxed() {
+        // Preserve the sandbox's existing no-proxy policy; sandboxed command egress is routed
+        // separately through network-proxy.
+        return Ok(create_client_without_request_logging());
+    }
+
+    default_http_client_builder()
+        .without_request_logging()
+        .build_respecting_outbound_proxy_policy(http_client_factory, request_url, route_class)
+}
+
 /// Builds the default Codex HTTP client for a concrete outbound route without blocking the
 /// async runtime worker that initiated the request.
 pub async fn create_client_for_route_async(
@@ -283,6 +312,30 @@ pub async fn create_client_for_route_async(
         let _permit = permit;
         create_client_for_route(&http_client_factory, &request_url, route_class)
             .map_err(std::io::Error::from)
+    })
+    .await
+    .map_err(std::io::Error::other)?
+}
+
+/// Builds the diagnostics-free default Codex HTTP client for a concrete outbound route without
+/// blocking the async runtime worker that initiated the request.
+pub async fn create_client_for_route_without_request_logging_async(
+    http_client_factory: HttpClientFactory,
+    request_url: String,
+    route_class: ClientRouteClass,
+) -> std::io::Result<HttpClient> {
+    let permit = ROUTE_AWARE_CLIENT_BUILD_PERMIT
+        .acquire()
+        .await
+        .map_err(std::io::Error::other)?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        create_client_for_route_without_request_logging(
+            &http_client_factory,
+            &request_url,
+            route_class,
+        )
+        .map_err(std::io::Error::from)
     })
     .await
     .map_err(std::io::Error::other)?

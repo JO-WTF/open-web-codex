@@ -173,6 +173,89 @@ async fn test_create_client_sets_default_headers() {
 }
 
 #[tokio::test]
+async fn route_client_without_request_logging_preserves_defaults_and_hides_diagnostics() {
+    use codex_http_client::ClientRouteClass;
+    use codex_http_client::HttpClientFactory;
+    use codex_http_client::OutboundProxyPolicy;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("x-sensitive-response", "response-secret-value"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let authority = server
+        .uri()
+        .strip_prefix("http://")
+        .expect("wiremock URI should use HTTP")
+        .to_string();
+    let endpoint =
+        format!("http://request-user:request-password-secret@{authority}/?query-secret-value");
+    let client = create_client_for_route_without_request_logging(
+        &HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        &endpoint,
+        ClientRouteClass::Api,
+    )
+    .expect("route-aware client should build");
+
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(
+        tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_writer(TestLogWriter {
+                buffer: Arc::clone(&buffer),
+            }),
+    );
+    let _guard = tracing::subscriber::set_default(subscriber);
+    tracing::debug!("log capture sentinel");
+
+    let response = client
+        .get(&endpoint)
+        .send()
+        .await
+        .expect("request should succeed");
+    assert!(response.status().is_success());
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("failed to fetch received requests");
+    let [request] = requests.as_slice() else {
+        panic!("expected one request, got {}", requests.len());
+    };
+    assert_eq!(
+        request
+            .headers
+            .get("originator")
+            .and_then(|value| value.to_str().ok()),
+        Some(originator().value.as_str())
+    );
+    assert_eq!(
+        request
+            .headers
+            .get("user-agent")
+            .and_then(|value| value.to_str().ok()),
+        Some(get_codex_user_agent().as_str())
+    );
+
+    let logs = String::from_utf8(buffer.lock().expect("log buffer lock").clone())
+        .expect("logs should be UTF-8");
+    assert!(logs.contains("log capture sentinel"));
+    assert!(!logs.contains("request-password-secret"));
+    assert!(!logs.contains("query-secret-value"));
+    assert!(!logs.contains("response-secret-value"));
+}
+
+#[tokio::test]
 async fn raw_auth_client_does_not_log_sensitive_request_or_response_data() {
     use wiremock::Mock;
     use wiremock::MockServer;
