@@ -802,8 +802,10 @@ fn config_edit(key_path: String, value: Value) -> Value {
 fn parse_model_provider_models_list(
     response: Value,
 ) -> Result<Vec<ProviderModelSummary>, ProviderServiceError> {
-    let response: ModelProviderModelsListResponse = serde_json::from_value(response)
-        .map_err(|error| ProviderServiceError::InvalidResponse(error.to_string()))?;
+    let response: ModelProviderModelsListResponse =
+        serde_json::from_value(response).map_err(|_| {
+            ProviderServiceError::ProviderCatalogFailure(ProviderCatalogFailure::IncompatibleSchema)
+        })?;
     match response.result {
         ModelProviderModelsListResult::Success { models } if models.is_empty() => Err(
             ProviderServiceError::ProviderCatalogFailure(ProviderCatalogFailure::EmptyCatalog),
@@ -1348,6 +1350,58 @@ mod tests {
             calls.iter().map(|call| call.0.as_str()).collect::<Vec<_>>(),
             ["modelProvider/list", "modelProvider/models/list"]
         );
+    }
+
+    #[tokio::test]
+    async fn refresh_rejects_malformed_catalog_shapes_without_config_write() {
+        let malformed_responses = [
+            Value::String("malformed catalog response".to_string()),
+            json!({}),
+            json!({
+                "result": {
+                    "type": "unknown"
+                }
+            }),
+        ];
+
+        for response in malformed_responses {
+            let initial = catalog(
+                "provider-a",
+                json!([
+                    provider("provider-a", true, json!([])),
+                    provider(
+                        "provider-b",
+                        false,
+                        json!([{
+                            "modelId": "old-model",
+                            "modelName": "Old model",
+                            "maxTokenLen": null,
+                            "maxOutputTokens": null,
+                            "showInPicker": true,
+                            "contextWindow": null,
+                        }])
+                    ),
+                ]),
+            );
+            let transport = MockTransport::new(vec![initial, response]);
+            let service = ProviderService::new(transport.clone());
+
+            let error = service
+                .refresh_models("provider-b")
+                .await
+                .expect_err("malformed catalog shape must be typed incompatible schema");
+            assert!(matches!(
+                error,
+                ProviderServiceError::ProviderCatalogFailure(
+                    ProviderCatalogFailure::IncompatibleSchema
+                )
+            ));
+            let calls = transport.calls.lock().await;
+            assert_eq!(
+                calls.iter().map(|call| call.0.as_str()).collect::<Vec<_>>(),
+                ["modelProvider/list", "modelProvider/models/list"]
+            );
+        }
     }
 
     #[test]
