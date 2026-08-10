@@ -204,7 +204,7 @@ async fn authorized_ready_content(
     if !state.is_ready() {
         return Err((
             StatusCode::CONFLICT,
-            Json(PlatformError::bad_request("Artifact content is not ready")),
+            Json(PlatformError::conflict("Artifact content is not ready")),
         ));
     }
     let mime_type: String = row.get("mime_type");
@@ -989,20 +989,30 @@ mod tests {
             pending_detail.0.state,
             open_web_codex_platform_contracts::ArtifactState::Pending
         );
-        assert!(super::read_content(
+        let pending_content = super::read_content(
             axum::extract::State(app_state.clone()),
             auth.clone(),
             axum::extract::Path(artifact_id),
         )
         .await
-        .is_err_and(|error| error.0 == StatusCode::CONFLICT));
-        assert!(super::download(
+        .unwrap_err();
+        assert_eq!(pending_content.0, StatusCode::CONFLICT);
+        assert_eq!(
+            pending_content.1 .0.kind,
+            open_web_codex_platform_contracts::error::ErrorKind::Conflict
+        );
+        let pending_download = super::download(
             axum::extract::State(app_state.clone()),
             auth.clone(),
             axum::extract::Path(artifact_id),
         )
         .await
-        .is_err_and(|error| error.0 == StatusCode::CONFLICT));
+        .unwrap_err();
+        assert_eq!(pending_download.0, StatusCode::CONFLICT);
+        assert_eq!(
+            pending_download.1 .0.kind,
+            open_web_codex_platform_contracts::error::ErrorKind::Conflict
+        );
         let wrong_task = super::list_for_task(
             axum::extract::State(app_state.clone()),
             auth.clone(),
@@ -1202,6 +1212,30 @@ mod tests {
                 assert!(!serde_json::to_string(&failed_detail.0)
                     .unwrap()
                     .contains("credential-fragment"));
+                let failed_content = super::read_content(
+                    axum::extract::State(app_state.clone()),
+                    auth.clone(),
+                    axum::extract::Path(failed_id),
+                )
+                .await
+                .unwrap_err();
+                assert_eq!(failed_content.0, StatusCode::CONFLICT);
+                assert_eq!(
+                    failed_content.1 .0.kind,
+                    open_web_codex_platform_contracts::error::ErrorKind::Conflict
+                );
+                let failed_download = super::download(
+                    axum::extract::State(app_state.clone()),
+                    auth.clone(),
+                    axum::extract::Path(failed_id),
+                )
+                .await
+                .unwrap_err();
+                assert_eq!(failed_download.0, StatusCode::CONFLICT);
+                assert_eq!(
+                    failed_download.1 .0.kind,
+                    open_web_codex_platform_contracts::error::ErrorKind::Conflict
+                );
             }
         }
 
@@ -1277,6 +1311,30 @@ mod tests {
             open_web_codex_platform_contracts::ArtifactState::Materializing
         );
         assert!(restart_detail.0.content_url.is_none());
+        let materializing_content = super::read_content(
+            axum::extract::State(app_state.clone()),
+            auth.clone(),
+            axum::extract::Path(restart_id),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(materializing_content.0, StatusCode::CONFLICT);
+        assert_eq!(
+            materializing_content.1 .0.kind,
+            open_web_codex_platform_contracts::error::ErrorKind::Conflict
+        );
+        let materializing_download = super::download(
+            axum::extract::State(app_state.clone()),
+            auth.clone(),
+            axum::extract::Path(restart_id),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(materializing_download.0, StatusCode::CONFLICT);
+        assert_eq!(
+            materializing_download.1 .0.kind,
+            open_web_codex_platform_contracts::error::ErrorKind::Conflict
+        );
         let (events, mut receiver) = tokio::sync::broadcast::channel(4);
         super::recover_and_materialize_pending(pool.clone(), git_runtime, events).await;
         let recovered: Value =
