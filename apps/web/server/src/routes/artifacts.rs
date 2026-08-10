@@ -1095,6 +1095,14 @@ network_planning_report_bundle.v1.json"
         .await
         .unwrap();
         assert!(wrong_task.0.is_empty());
+        let nonexistent_task = super::list_for_task(
+            axum::extract::State(app_state.clone()),
+            auth.clone(),
+            axum::extract::Path(Uuid::now_v7()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(nonexistent_task.0, StatusCode::NOT_FOUND);
         assert_eq!(
             sqlx::query_scalar::<_, i64>(
                 "SELECT count(*) FROM artifacts WHERE organization_id = $1",
@@ -1199,6 +1207,37 @@ network_planning_report_bundle.v1.json"
             .collect::<Vec<_>>();
         assert!(ready_run_ids.contains(&run_id.to_string()));
         assert!(ready_run_ids.contains(&secondary_run_id.to_string()));
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM run_events
+                 WHERE event_type = 'platform.artifact.changed'
+                   AND run_id IN ($1, $2)",
+            )
+            .bind(run_id)
+            .bind(secondary_run_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            2
+        );
+        let ready_replay = crate::event_projection::persist_frame(frame.as_bytes(), &pool)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(ready_replay.pending_artifact_ids.is_empty());
+        let ready_replay_payload: Value = serde_json::from_slice(&ready_replay.payload).unwrap();
+        assert_eq!(
+            ready_replay_payload
+                .pointer("/event/payload/data/artifacts/0/state")
+                .and_then(Value::as_str),
+            Some("ready")
+        );
+        assert_eq!(
+            ready_replay_payload
+                .pointer("/event/payload/data/artifacts/0/byteSize")
+                .and_then(Value::as_i64),
+            Some(valid.len() as i64)
+        );
         assert_eq!(
             sqlx::query_scalar::<_, i64>(
                 "SELECT count(*) FROM run_events
@@ -1330,6 +1369,14 @@ network_planning_report_bundle.v1.json"
         .await
         .unwrap_err();
         assert_eq!(denied_download.0, axum::http::StatusCode::NOT_FOUND);
+        let cross_org_list = super::list_for_task(
+            axum::extract::State(app_state.clone()),
+            authenticated_user(Uuid::now_v7(), Uuid::now_v7()),
+            axum::extract::Path(ungranted_task_id),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(cross_org_list.0, axum::http::StatusCode::NOT_FOUND);
 
         for (item_id, path, expected_code) in [
             (
