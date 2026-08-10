@@ -1700,6 +1700,30 @@
             },
             "method": {
               "enum": [
+                "modelProvider/models/list"
+              ],
+              "title": "ModelProvider/models/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ModelProviderModelsListParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "ModelProvider/models/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "modelProvider/capabilities/read"
               ],
               "title": "ModelProvider/capabilities/readRequestMethod",
@@ -13876,6 +13900,94 @@
           "showInPicker"
         ],
         "type": "object"
+      },
+      "ModelProviderModelsListFailure": {
+        "enum": [
+          "authentication",
+          "notFound",
+          "rateLimited",
+          "upstream",
+          "timeout",
+          "network",
+          "invalidJson",
+          "incompatibleSchema",
+          "emptyCatalog"
+        ],
+        "type": "string"
+      },
+      "ModelProviderModelsListParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Requests a fresh model catalog from one configured Provider.\n\nThe Provider is resolved by the Runtime from its current config registry; callers never supply a URL or credentials.",
+        "properties": {
+          "providerId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "providerId"
+        ],
+        "title": "ModelProviderModelsListParams",
+        "type": "object"
+      },
+      "ModelProviderModelsListResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "result": {
+            "$ref": "#/definitions/v2/ModelProviderModelsListResult"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "ModelProviderModelsListResponse",
+        "type": "object"
+      },
+      "ModelProviderModelsListResult": {
+        "oneOf": [
+          {
+            "properties": {
+              "models": {
+                "items": {
+                  "$ref": "#/definitions/v2/ModelProviderModelSummary"
+                },
+                "type": "array"
+              },
+              "type": {
+                "enum": [
+                  "success"
+                ],
+                "title": "SuccessModelProviderModelsListResultType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "models",
+              "type"
+            ],
+            "title": "SuccessModelProviderModelsListResult",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "error": {
+                "$ref": "#/definitions/v2/ModelProviderModelsListFailure"
+              },
+              "type": {
+                "enum": [
+                  "failure"
+                ],
+                "title": "FailureModelProviderModelsListResultType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "error",
+              "type"
+            ],
+            "title": "FailureModelProviderModelsListResult",
+            "type": "object"
+          }
+        ]
       },
       "ModelProviderSummary": {
         "properties": {

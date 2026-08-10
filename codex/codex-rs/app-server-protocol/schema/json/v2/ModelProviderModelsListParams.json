@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Requests a fresh model catalog from one configured Provider.\n\nThe Provider is resolved by the Runtime from its current config registry; callers never supply a URL or credentials.",
+  "properties": {
+    "providerId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "providerId"
+  ],
+  "title": "ModelProviderModelsListParams",
+  "type": "object"
+}

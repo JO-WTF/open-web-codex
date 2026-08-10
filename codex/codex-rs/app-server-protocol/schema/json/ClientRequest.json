@@ -2112,6 +2112,18 @@
     "ModelProviderListParams": {
       "type": "object"
     },
+    "ModelProviderModelsListParams": {
+      "description": "Requests a fresh model catalog from one configured Provider.\n\nThe Provider is resolved by the Runtime from its current config registry; callers never supply a URL or credentials.",
+      "properties": {
+        "providerId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "providerId"
+      ],
+      "type": "object"
+    },
     "MultiAgentMode": {
       "description": "Controls the effective multi-agent delegation instructions for a turn. `custom` means the configured mode hint defines the policy instead of a built-in policy.",
       "oneOf": [
@@ -6821,6 +6833,30 @@
         "params"
       ],
       "title": "ModelProvider/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "modelProvider/models/list"
+          ],
+          "title": "ModelProvider/models/listRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ModelProviderModelsListParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "ModelProvider/models/listRequest",
       "type": "object"
     },
     {

@@ -100,6 +100,22 @@ fn errors_to_info(
         .collect()
 }
 
+fn model_provider_models_failure(error: ProviderModelsError) -> ModelProviderModelsListFailure {
+    match error {
+        ProviderModelsError::Authentication => ModelProviderModelsListFailure::Authentication,
+        ProviderModelsError::NotFound => ModelProviderModelsListFailure::NotFound,
+        ProviderModelsError::RateLimited => ModelProviderModelsListFailure::RateLimited,
+        ProviderModelsError::Upstream => ModelProviderModelsListFailure::Upstream,
+        ProviderModelsError::Timeout => ModelProviderModelsListFailure::Timeout,
+        ProviderModelsError::Network => ModelProviderModelsListFailure::Network,
+        ProviderModelsError::InvalidJson => ModelProviderModelsListFailure::InvalidJson,
+        ProviderModelsError::IncompatibleSchema => {
+            ModelProviderModelsListFailure::IncompatibleSchema
+        }
+        ProviderModelsError::EmptyCatalog => ModelProviderModelsListFailure::EmptyCatalog,
+    }
+}
+
 impl CatalogRequestProcessor {
     pub(crate) fn new(
         outgoing: Arc<OutgoingMessageSender>,
@@ -213,6 +229,47 @@ impl CatalogRequestProcessor {
             }
             .into(),
         ))
+    }
+
+    pub(crate) async fn model_provider_models_list(
+        &self,
+        params: ModelProviderModelsListParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let config = self.load_latest_config(None).await?;
+        let result = match config.model_providers.get(&params.provider_id) {
+            Some(provider_info) => {
+                let provider =
+                    create_model_provider(provider_info.clone(), Some(self.auth_manager.clone()));
+                provider
+                    .list_models_fresh(
+                        &codex_models_manager::client_version_to_whole(),
+                        config.http_client_factory(),
+                    )
+                    .await
+                    .map_or_else(
+                        |error| ModelProviderModelsListResult::Failure {
+                            error: model_provider_models_failure(error),
+                        },
+                        |models| ModelProviderModelsListResult::Success {
+                            models: models
+                                .into_iter()
+                                .map(|model| ModelProviderModelSummary {
+                                    model_id: model.model_id,
+                                    model_name: model.model_name,
+                                    max_token_len: model.max_token_len,
+                                    max_output_tokens: model.max_output_tokens,
+                                    show_in_picker: model.show_in_picker,
+                                    context_window: model.context_window,
+                                })
+                                .collect(),
+                        },
+                    )
+            }
+            None => ModelProviderModelsListResult::Failure {
+                error: ModelProviderModelsListFailure::NotFound,
+            },
+        };
+        Ok(Some(ModelProviderModelsListResponse { result }.into()))
     }
 
     pub(crate) async fn experimental_feature_list(
