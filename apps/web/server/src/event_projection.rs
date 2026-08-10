@@ -2007,17 +2007,7 @@ pub(crate) fn project_item(item: &Map<String, Value>) -> Value {
     };
     for key in fields {
         if let Some(value) = item.get(*key) {
-            if *key == "error" && value.is_null() {
-                continue;
-            }
-            projected.insert(
-                (*key).to_string(),
-                if *key == "error" {
-                    project_public_runtime_error(value)
-                } else {
-                    sanitize_value(value, key)
-                },
-            );
+            projected.insert((*key).to_string(), sanitize_value(value, key));
         }
     }
     if item_type == "agentMessage" {
@@ -2349,21 +2339,14 @@ pub(crate) fn sanitize_value(value: &Value, key: &str) -> Value {
 /// is server-only because it may contain provider or credential data.
 pub(crate) fn project_public_runtime_error(value: &Value) -> Value {
     let object = value.as_object();
-    let status = object.and_then(runtime_error_status);
     let info = object.and_then(|object| object.get("codexErrorInfo"));
-    let kind = classify_public_runtime_error(object, info, status);
+    let kind = classify_public_runtime_error(info);
     let (code, message, recoverable) = kind.descriptor();
     let mut projected = Map::new();
     projected.insert("code".to_string(), Value::String(code.to_string()));
     projected.insert("message".to_string(), Value::String(message.to_string()));
     projected.insert("recoverable".to_string(), Value::Bool(recoverable));
-    if let Some(status) = status {
-        projected.insert("status".to_string(), Value::Number(status.into()));
-    }
-    if let Some(info) = object
-        .and_then(|object| object.get("codexErrorInfo"))
-        .and_then(project_public_codex_error_info)
-    {
+    if let Some(info) = info.and_then(project_public_codex_error_info) {
         projected.insert("codexErrorInfo".to_string(), info);
     }
     Value::Object(projected)
@@ -2379,7 +2362,6 @@ fn project_public_event_payload(value: &Value, event_type: &str) -> Value {
     let Some(data) = root.get("data").and_then(Value::as_object) else {
         return value.clone();
     };
-    let item_type = root.get("itemType").and_then(Value::as_str);
     let source_type = data.get("sourceType").and_then(Value::as_str);
     let mut projected = value.clone();
     let Some(projected_root) = projected.as_object_mut() else {
@@ -2401,13 +2383,6 @@ fn project_public_event_payload(value: &Value, event_type: &str) -> Value {
             replace_public_runtime_error(turn, "error");
         }
     } else if source_type == Some("error") {
-        replace_public_runtime_error(projected_data, "error");
-    } else if matches!(event_type, "codex.item.started" | "codex.item.completed")
-        && matches!(
-            item_type,
-            Some("commandExecution" | "mcpToolCall" | "dynamicToolCall")
-        )
-    {
         replace_public_runtime_error(projected_data, "error");
     }
     projected
@@ -2463,26 +2438,12 @@ impl PublicRuntimeErrorKind {
     }
 }
 
-fn classify_public_runtime_error(
-    object: Option<&Map<String, Value>>,
-    info: Option<&Value>,
-    status: Option<u16>,
-) -> PublicRuntimeErrorKind {
-    let info_key = info.and_then(codex_error_info_key);
-    if let Some(kind) = info_key.and_then(|key| classify_codex_error_info(key, status)) {
-        return kind;
-    }
-
-    if let Some(code) = object
-        .and_then(|object| object.get("code"))
-        .and_then(Value::as_str)
-        .map(normalize_runtime_error_code)
-        .and_then(|code| classify_runtime_error_code(code.as_str()))
-    {
-        return code;
-    }
-
-    classify_http_status(status).unwrap_or(PublicRuntimeErrorKind::Unknown)
+fn classify_public_runtime_error(info: Option<&Value>) -> PublicRuntimeErrorKind {
+    let Some(key) = info.and_then(codex_error_info_key) else {
+        return PublicRuntimeErrorKind::Unknown;
+    };
+    classify_codex_error_info(key, info.and_then(codex_error_info_status))
+        .unwrap_or(PublicRuntimeErrorKind::Unknown)
 }
 
 fn classify_codex_error_info(key: &str, status: Option<u16>) -> Option<PublicRuntimeErrorKind> {
@@ -2515,26 +2476,6 @@ fn classify_codex_error_info(key: &str, status: Option<u16>) -> Option<PublicRun
     })
 }
 
-fn classify_runtime_error_code(code: &str) -> Option<PublicRuntimeErrorKind> {
-    Some(match code {
-        "unauthorized" | "authenticationfailed" | "authenticationrequired" => {
-            PublicRuntimeErrorKind::Auth
-        }
-        "ratelimit" | "toomanyrequests" => PublicRuntimeErrorKind::RateLimit,
-        "timeout" | "timedout" | "deadlineexceeded" => PublicRuntimeErrorKind::Timeout,
-        "network" | "networkerror" | "connectionfailed" => PublicRuntimeErrorKind::Network,
-        "interrupted" | "cancelled" | "canceled" | "aborted" => PublicRuntimeErrorKind::Interrupted,
-        "contextwindowexceeded" => PublicRuntimeErrorKind::ContextWindow,
-        "sessionbudgetexceeded" | "usagelimitexceeded" => PublicRuntimeErrorKind::UsageLimit,
-        "serveroverloaded" | "overloaded" => PublicRuntimeErrorKind::Overloaded,
-        "badrequest" | "invalidrequest" => PublicRuntimeErrorKind::BadRequest,
-        "cyberpolicy" | "policyblocked" => PublicRuntimeErrorKind::Policy,
-        "sandboxerror" => PublicRuntimeErrorKind::Sandbox,
-        "internalservererror" | "internalerror" => PublicRuntimeErrorKind::Internal,
-        _ => return None,
-    })
-}
-
 fn classify_http_status(status: Option<u16>) -> Option<PublicRuntimeErrorKind> {
     Some(match status? {
         401 | 403 => PublicRuntimeErrorKind::Auth,
@@ -2545,36 +2486,18 @@ fn classify_http_status(status: Option<u16>) -> Option<PublicRuntimeErrorKind> {
     })
 }
 
-fn runtime_error_status(object: &Map<String, Value>) -> Option<u16> {
-    [
-        "status",
-        "statusCode",
-        "status_code",
-        "httpStatusCode",
-        "http_status_code",
-    ]
-    .iter()
-    .find_map(|key| object.get(*key).and_then(value_status))
-    .or_else(|| {
-        object
-            .get("codexErrorInfo")
-            .and_then(Value::as_object)
-            .and_then(|info| {
-                info.values().find_map(|value| {
-                    value
-                        .as_object()
-                        .and_then(|value| value.get("httpStatusCode"))
-                        .and_then(value_status)
-                })
-            })
-    })
+fn codex_error_info_status(value: &Value) -> Option<u16> {
+    let object = value.as_object()?;
+    let key = codex_error_info_key(value)?;
+    object
+        .get(key)
+        .and_then(Value::as_object)
+        .and_then(|detail| detail.get("httpStatusCode"))
+        .and_then(value_status)
 }
 
 fn value_status(value: &Value) -> Option<u16> {
-    value
-        .as_u64()
-        .and_then(|value| u16::try_from(value).ok())
-        .or_else(|| value.as_str().and_then(|value| value.parse().ok()))
+    value.as_u64().and_then(|value| u16::try_from(value).ok())
 }
 
 fn codex_error_info_key(value: &Value) -> Option<&str> {
@@ -2614,14 +2537,6 @@ fn project_public_codex_error_info(value: &Value) -> Option<Value> {
         key.to_string(),
         Value::Object(detail),
     )])))
-}
-
-fn normalize_runtime_error_code(value: &str) -> String {
-    value
-        .chars()
-        .filter(|character| character.is_ascii_alphanumeric())
-        .flat_map(char::to_lowercase)
-        .collect()
 }
 
 pub(crate) fn bounded_sanitized_text(value: &Value, key: &str, max_len: usize) -> Option<String> {
@@ -3175,6 +3090,21 @@ mod tests {
     }
 
     #[test]
+    fn preserves_mcp_tool_error_semantics_with_existing_sanitizer() {
+        let frame = br#"data: {"method":"app-server-event","params":{"message":{"method":"item/completed","params":{"threadId":"thread-1","item":{"id":"item-1","type":"mcpToolCall","error":{"message":"MCP failed at /private/profile/secret.json","credential":"<credential-fragment>"}}}}}}
+
+"#;
+        let event = project_frame(frame).unwrap().unwrap();
+        assert_eq!(
+            event.payload["data"]["error"]["message"],
+            "MCP failed at [workspace-path]/secret.json"
+        );
+        assert_eq!(event.payload["data"]["error"]["credential"], "[redacted]");
+        assert!(event.payload["data"]["error"].get("code").is_none());
+        assert!(!event.payload.to_string().contains("<credential-fragment>"));
+    }
+
+    #[test]
     fn keeps_unknown_notifications_without_exposing_arbitrary_params() {
         let frame = br#"data: {"method":"app-server-event","params":{"message":{"method":"item/futureEvent","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","credential":"secret","payload":{"local":"value"}}}}}
 
@@ -3258,22 +3188,36 @@ mod tests {
                 true,
             ),
             (
-                json!({"status": 401, "message": "401 <credential-fragment>"}),
-                "auth",
-                false,
-            ),
-            (
-                json!({"status": 503, "message": "503 <credential-fragment>"}),
+                json!({
+                    "message": "upstream <credential-fragment>",
+                    "codexErrorInfo": {"httpConnectionFailed": {"httpStatusCode": 503}}
+                }),
                 "upstream",
                 true,
             ),
             (
                 json!({
-                    "message": "timeout <credential-fragment>",
-                    "code": "timeout"
+                    "message": "disconnected <credential-fragment>",
+                    "codexErrorInfo": {"responseStreamDisconnected": {"httpStatusCode": 504}}
                 }),
                 "timeout",
                 true,
+            ),
+            (
+                json!({
+                    "message": "connection failed <credential-fragment>",
+                    "codexErrorInfo": "responseStreamConnectionFailed"
+                }),
+                "network",
+                true,
+            ),
+            (
+                json!({
+                    "message": "context <credential-fragment>",
+                    "codexErrorInfo": "contextWindowExceeded"
+                }),
+                "context_window",
+                false,
             ),
             (
                 json!({"message": "unknown <credential-fragment>"}),
@@ -3327,6 +3271,17 @@ mod tests {
             "unknown"
         );
 
+        let tool_data = project_item(
+            json!({
+                "type": "mcpToolCall",
+                "error": {
+                    "message": "MCP failed at /private/profile/secret.json",
+                    "credential": canary
+                }
+            })
+            .as_object()
+            .unwrap(),
+        );
         let tool_event = RunEvent {
             id: Uuid::now_v7(),
             sequence: 4,
@@ -3339,17 +3294,28 @@ mod tests {
             payload: json!({
                 "itemType": "mcpToolCall",
                 "data": {
-                    "result": {"error": canary},
-                    "error": {"message": canary}
+                    "result": {"error": "result-level business error"},
+                    "error": tool_data["error"].clone()
                 }
             }),
             created_at: chrono::Utc::now(),
         };
         let projected_tool = project_public_run_event(tool_event);
-        assert_eq!(projected_tool.payload["data"]["result"]["error"], canary);
-        assert!(!projected_tool.payload["data"]["error"]
-            .to_string()
-            .contains(canary));
+        assert_eq!(
+            projected_tool.payload["data"]["result"]["error"],
+            "result-level business error"
+        );
+        assert_eq!(
+            projected_tool.payload["data"]["error"]["message"],
+            "MCP failed at [workspace-path]/secret.json"
+        );
+        assert_eq!(
+            projected_tool.payload["data"]["error"]["credential"],
+            "[redacted]"
+        );
+        assert!(projected_tool.payload["data"]["error"]
+            .get("code")
+            .is_none());
     }
 
     #[test]

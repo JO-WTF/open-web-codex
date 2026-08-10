@@ -859,6 +859,31 @@ mod tests {
     }
 
     #[test]
+    fn preserves_mcp_tool_error_in_authoritative_history() {
+        let projected = project_turn(&json!({
+            "id": "turn-1",
+            "status": "failed",
+            "items": [{
+                "id": "item-1",
+                "type": "mcpToolCall",
+                "error": {
+                    "message": "MCP failed at /private/profile/secret.json",
+                    "credential": "<credential-fragment>"
+                }
+            }]
+        }))
+        .expect("valid failed Turn projection");
+        let value = serde_json::to_value(projected).expect("serializable projection");
+        assert_eq!(
+            value["items"][0]["error"]["message"],
+            "MCP failed at [workspace-path]/secret.json"
+        );
+        assert_eq!(value["items"][0]["error"]["credential"], "[redacted]");
+        assert!(value["items"][0]["error"].get("code").is_none());
+        assert!(!value.to_string().contains("<credential-fragment>"));
+    }
+
+    #[test]
     fn rejects_turns_without_stable_identity() {
         assert!(project_turn(&json!({ "status": "completed", "items": [] })).is_err());
     }
