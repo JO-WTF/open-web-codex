@@ -272,7 +272,7 @@ pub async fn list_task_events(
         .iter()
         .map(|row| {
             let payload: serde_json::Value = row.get("payload");
-            RunEvent {
+            crate::event_projection::project_public_run_event(RunEvent {
                 id: row.get("id"),
                 sequence: row.get("sequence"),
                 run_id: row.get("run_id"),
@@ -283,7 +283,7 @@ pub async fn list_task_events(
                 item_id: row.get("item_id"),
                 payload,
                 created_at: row.get("created_at"),
-            }
+            })
         })
         .collect();
 

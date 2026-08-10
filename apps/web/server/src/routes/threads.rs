@@ -468,17 +468,17 @@ fn project_turn(value: &serde_json::Value) -> Result<ThreadHistoryTurn, ApiError
         .unwrap_or_default();
     let error = object
         .get("error")
-        .and_then(serde_json::Value::as_object)
-        .map(|error| ThreadHistoryError {
-            message: error
-                .get("message")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("Turn failed")
-                .to_string(),
-            additional_details: error
-                .get("additionalDetails")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string),
+        .filter(|error| error.as_object().is_some())
+        .map(|error| {
+            let projected = crate::event_projection::project_public_runtime_error(error);
+            ThreadHistoryError {
+                message: projected
+                    .get("message")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("The Runtime reported an error.")
+                    .to_string(),
+                additional_details: None,
+            }
         });
     Ok(ThreadHistoryTurn {
         id: id.to_string(),
@@ -861,6 +861,37 @@ mod tests {
     #[test]
     fn rejects_turns_without_stable_identity() {
         assert!(project_turn(&json!({ "status": "completed", "items": [] })).is_err());
+    }
+
+    #[test]
+    fn projects_turn_errors_from_structured_status_without_provider_text() {
+        let projected = project_turn(&json!({
+            "id": "turn-1",
+            "status": "failed",
+            "error": {
+                "message": "provider response <credential-fragment>",
+                "additionalDetails": "https://provider.invalid/<credential-fragment>",
+                "codexErrorInfo": "unauthorized"
+            }
+        }))
+        .expect("valid failed Turn projection");
+        let value = serde_json::to_value(projected).expect("serializable projection");
+
+        assert_eq!(value["error"]["message"], "Provider authentication failed.");
+        assert_eq!(value["error"]["additionalDetails"], serde_json::Value::Null);
+        assert!(!value.to_string().contains("credential-fragment"));
+        assert!(!value.to_string().contains("provider.invalid"));
+    }
+
+    #[test]
+    fn omits_explicit_null_turn_errors() {
+        let projected = project_turn(&json!({
+            "id": "turn-1",
+            "status": "completed",
+            "error": null
+        }))
+        .expect("valid completed Turn projection");
+        assert!(projected.error.is_none());
     }
 
     #[test]

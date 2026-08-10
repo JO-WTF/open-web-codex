@@ -1893,6 +1893,7 @@ fn project_event_data(method: &str, params: &Map<String, Value>) -> Value {
         "requestMethod",
         "requestParams",
         "error",
+        "willRetry",
         "message",
         "additionalDetails",
         "codexErrorInfo",
@@ -1924,10 +1925,38 @@ fn project_event_data(method: &str, params: &Map<String, Value>) -> Value {
         "stdin",
     ] {
         if let Some(value) = params.get(key) {
-            data.insert(key.to_string(), sanitize_value(value, key));
+            if matches!(
+                key,
+                "error" | "turnError" | "turn_error" | "runtimeError" | "runtime_error"
+            ) {
+                if value.is_null() {
+                    continue;
+                }
+                data.insert(key.to_string(), project_public_runtime_error(value));
+            } else if matches!(key, "additionalDetails" | "additional_details") {
+                continue;
+            } else if method == "turn/completed" && key == "turn" {
+                data.insert(key.to_string(), project_public_runtime_turn(value));
+            } else {
+                data.insert(key.to_string(), sanitize_value(value, key));
+            }
         }
     }
     Value::Object(data)
+}
+
+fn project_public_runtime_turn(value: &Value) -> Value {
+    let mut projected = sanitize_value(value, "turn");
+    let Some(turn) = projected.as_object_mut() else {
+        return projected;
+    };
+    if let Some(error) = turn.get("error").filter(|value| !value.is_null()) {
+        turn.insert("error".to_string(), project_public_runtime_error(error));
+    } else {
+        turn.remove("error");
+    }
+    turn.remove("additionalDetails");
+    projected
 }
 
 pub(crate) fn project_item(item: &Map<String, Value>) -> Value {
@@ -1978,7 +2007,17 @@ pub(crate) fn project_item(item: &Map<String, Value>) -> Value {
     };
     for key in fields {
         if let Some(value) = item.get(*key) {
-            projected.insert((*key).to_string(), sanitize_value(value, key));
+            if *key == "error" && value.is_null() {
+                continue;
+            }
+            projected.insert(
+                (*key).to_string(),
+                if *key == "error" {
+                    project_public_runtime_error(value)
+                } else {
+                    sanitize_value(value, key)
+                },
+            );
         }
     }
     if item_type == "agentMessage" {
@@ -2304,6 +2343,285 @@ pub(crate) fn sanitize_value(value: &Value, key: &str) -> Value {
         Value::String(value) => Value::String(redact_browser_text(value)),
         _ => value.clone(),
     }
+}
+
+/// Project Runtime errors from structured status/code fields; free-form text
+/// is server-only because it may contain provider or credential data.
+pub(crate) fn project_public_runtime_error(value: &Value) -> Value {
+    let object = value.as_object();
+    let status = object.and_then(runtime_error_status);
+    let info = object.and_then(|object| object.get("codexErrorInfo"));
+    let kind = classify_public_runtime_error(object, info, status);
+    let (code, message, recoverable) = kind.descriptor();
+    let mut projected = Map::new();
+    projected.insert("code".to_string(), Value::String(code.to_string()));
+    projected.insert("message".to_string(), Value::String(message.to_string()));
+    projected.insert("recoverable".to_string(), Value::Bool(recoverable));
+    if let Some(status) = status {
+        projected.insert("status".to_string(), Value::Number(status.into()));
+    }
+    if let Some(info) = object
+        .and_then(|object| object.get("codexErrorInfo"))
+        .and_then(project_public_codex_error_info)
+    {
+        projected.insert("codexErrorInfo".to_string(), info);
+    }
+    Value::Object(projected)
+}
+pub(crate) fn project_public_run_event(mut event: RunEvent) -> RunEvent {
+    event.payload = project_public_event_payload(&event.payload, &event.event_type);
+    event
+}
+fn project_public_event_payload(value: &Value, event_type: &str) -> Value {
+    let Some(root) = value.as_object() else {
+        return value.clone();
+    };
+    let Some(data) = root.get("data").and_then(Value::as_object) else {
+        return value.clone();
+    };
+    let item_type = root.get("itemType").and_then(Value::as_str);
+    let source_type = data.get("sourceType").and_then(Value::as_str);
+    let mut projected = value.clone();
+    let Some(projected_root) = projected.as_object_mut() else {
+        return value.clone();
+    };
+    let Some(projected_data) = projected_root
+        .get_mut("data")
+        .and_then(Value::as_object_mut)
+    else {
+        return value.clone();
+    };
+
+    if event_type == "codex.turn.completed" {
+        replace_public_runtime_error(projected_data, "error");
+        if let Some(turn) = projected_data
+            .get_mut("turn")
+            .and_then(Value::as_object_mut)
+        {
+            replace_public_runtime_error(turn, "error");
+        }
+    } else if source_type == Some("error") {
+        replace_public_runtime_error(projected_data, "error");
+    } else if matches!(event_type, "codex.item.started" | "codex.item.completed")
+        && matches!(
+            item_type,
+            Some("commandExecution" | "mcpToolCall" | "dynamicToolCall")
+        )
+    {
+        replace_public_runtime_error(projected_data, "error");
+    }
+    projected
+}
+
+fn replace_public_runtime_error(object: &mut Map<String, Value>, key: &str) {
+    let Some(value) = object.get(key).filter(|value| !value.is_null()) else {
+        return;
+    };
+    object.insert(key.to_string(), project_public_runtime_error(value));
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PublicRuntimeErrorKind {
+    Auth,
+    RateLimit,
+    Timeout,
+    Network,
+    Upstream,
+    Interrupted,
+    ContextWindow,
+    UsageLimit,
+    Overloaded,
+    BadRequest,
+    Policy,
+    Sandbox,
+    Internal,
+    Unknown,
+}
+
+impl PublicRuntimeErrorKind {
+    fn descriptor(self) -> (&'static str, &'static str, bool) {
+        match self {
+            Self::Auth => ("auth", "Provider authentication failed.", false),
+            Self::RateLimit => ("rate_limit", "The provider rate limit was reached.", true),
+            Self::Timeout => ("timeout", "The provider request timed out.", true),
+            Self::Network => ("network", "The provider could not be reached.", true),
+            Self::Upstream => ("upstream", "The upstream provider returned an error.", true),
+            Self::Interrupted => ("interrupted", "The connection was interrupted.", true),
+            Self::ContextWindow => ("context_window", "The context window was exceeded.", false),
+            Self::UsageLimit => ("usage_limit", "The usage limit was reached.", false),
+            Self::Overloaded => ("overloaded", "The provider is currently overloaded.", true),
+            Self::BadRequest => ("bad_request", "The Runtime rejected the request.", false),
+            Self::Policy => ("policy", "The request was blocked by policy.", false),
+            Self::Sandbox => ("sandbox", "Workspace execution failed.", false),
+            Self::Internal => (
+                "internal",
+                "The Runtime encountered an internal error.",
+                false,
+            ),
+            Self::Unknown => ("unknown", "The Runtime reported an error.", false),
+        }
+    }
+}
+
+fn classify_public_runtime_error(
+    object: Option<&Map<String, Value>>,
+    info: Option<&Value>,
+    status: Option<u16>,
+) -> PublicRuntimeErrorKind {
+    let info_key = info.and_then(codex_error_info_key);
+    if let Some(kind) = info_key.and_then(|key| classify_codex_error_info(key, status)) {
+        return kind;
+    }
+
+    if let Some(code) = object
+        .and_then(|object| object.get("code"))
+        .and_then(Value::as_str)
+        .map(normalize_runtime_error_code)
+        .and_then(|code| classify_runtime_error_code(code.as_str()))
+    {
+        return code;
+    }
+
+    classify_http_status(status).unwrap_or(PublicRuntimeErrorKind::Unknown)
+}
+
+fn classify_codex_error_info(key: &str, status: Option<u16>) -> Option<PublicRuntimeErrorKind> {
+    Some(match key {
+        "unauthorized" => PublicRuntimeErrorKind::Auth,
+        "contextWindowExceeded" => PublicRuntimeErrorKind::ContextWindow,
+        "sessionBudgetExceeded" | "usageLimitExceeded" => PublicRuntimeErrorKind::UsageLimit,
+        "serverOverloaded" => PublicRuntimeErrorKind::Overloaded,
+        "cyberPolicy" => PublicRuntimeErrorKind::Policy,
+        "badRequest" => PublicRuntimeErrorKind::BadRequest,
+        "sandboxError" => PublicRuntimeErrorKind::Sandbox,
+        "threadRollbackFailed" => PublicRuntimeErrorKind::Internal,
+        "activeTurnNotSteerable" => PublicRuntimeErrorKind::Interrupted,
+        "responseStreamDisconnected" => match classify_http_status(status) {
+            Some(PublicRuntimeErrorKind::Auth) => PublicRuntimeErrorKind::Auth,
+            Some(PublicRuntimeErrorKind::RateLimit) => PublicRuntimeErrorKind::RateLimit,
+            Some(PublicRuntimeErrorKind::Timeout) => PublicRuntimeErrorKind::Timeout,
+            Some(PublicRuntimeErrorKind::Upstream) => PublicRuntimeErrorKind::Upstream,
+            _ => PublicRuntimeErrorKind::Interrupted,
+        },
+        "responseStreamConnectionFailed" | "httpConnectionFailed" => {
+            classify_http_status(status).unwrap_or(PublicRuntimeErrorKind::Network)
+        }
+        "responseTooManyFailedAttempts" => {
+            classify_http_status(status).unwrap_or(PublicRuntimeErrorKind::Network)
+        }
+        "internalServerError" => PublicRuntimeErrorKind::Internal,
+        "other" => return None,
+        _ => return None,
+    })
+}
+
+fn classify_runtime_error_code(code: &str) -> Option<PublicRuntimeErrorKind> {
+    Some(match code {
+        "unauthorized" | "authenticationfailed" | "authenticationrequired" => {
+            PublicRuntimeErrorKind::Auth
+        }
+        "ratelimit" | "toomanyrequests" => PublicRuntimeErrorKind::RateLimit,
+        "timeout" | "timedout" | "deadlineexceeded" => PublicRuntimeErrorKind::Timeout,
+        "network" | "networkerror" | "connectionfailed" => PublicRuntimeErrorKind::Network,
+        "interrupted" | "cancelled" | "canceled" | "aborted" => PublicRuntimeErrorKind::Interrupted,
+        "contextwindowexceeded" => PublicRuntimeErrorKind::ContextWindow,
+        "sessionbudgetexceeded" | "usagelimitexceeded" => PublicRuntimeErrorKind::UsageLimit,
+        "serveroverloaded" | "overloaded" => PublicRuntimeErrorKind::Overloaded,
+        "badrequest" | "invalidrequest" => PublicRuntimeErrorKind::BadRequest,
+        "cyberpolicy" | "policyblocked" => PublicRuntimeErrorKind::Policy,
+        "sandboxerror" => PublicRuntimeErrorKind::Sandbox,
+        "internalservererror" | "internalerror" => PublicRuntimeErrorKind::Internal,
+        _ => return None,
+    })
+}
+
+fn classify_http_status(status: Option<u16>) -> Option<PublicRuntimeErrorKind> {
+    Some(match status? {
+        401 | 403 => PublicRuntimeErrorKind::Auth,
+        408 | 504 => PublicRuntimeErrorKind::Timeout,
+        429 => PublicRuntimeErrorKind::RateLimit,
+        500..=599 => PublicRuntimeErrorKind::Upstream,
+        _ => return None,
+    })
+}
+
+fn runtime_error_status(object: &Map<String, Value>) -> Option<u16> {
+    [
+        "status",
+        "statusCode",
+        "status_code",
+        "httpStatusCode",
+        "http_status_code",
+    ]
+    .iter()
+    .find_map(|key| object.get(*key).and_then(value_status))
+    .or_else(|| {
+        object
+            .get("codexErrorInfo")
+            .and_then(Value::as_object)
+            .and_then(|info| {
+                info.values().find_map(|value| {
+                    value
+                        .as_object()
+                        .and_then(|value| value.get("httpStatusCode"))
+                        .and_then(value_status)
+                })
+            })
+    })
+}
+
+fn value_status(value: &Value) -> Option<u16> {
+    value
+        .as_u64()
+        .and_then(|value| u16::try_from(value).ok())
+        .or_else(|| value.as_str().and_then(|value| value.parse().ok()))
+}
+
+fn codex_error_info_key(value: &Value) -> Option<&str> {
+    if let Some(key) = value.as_str() {
+        return classify_codex_error_info(key, None).map(|_| key);
+    }
+    value.as_object().and_then(|object| {
+        object
+            .keys()
+            .find_map(|key| classify_codex_error_info(key, None).map(|_| key.as_str()))
+    })
+}
+
+fn project_public_codex_error_info(value: &Value) -> Option<Value> {
+    let key = codex_error_info_key(value)?;
+    if let Some(string) = value.as_str() {
+        return Some(Value::String(string.to_string()));
+    }
+    let Some(object) = value.as_object() else {
+        return Some(Value::String(key.to_string()));
+    };
+    let nested = object.get(key).and_then(Value::as_object);
+    let mut detail = Map::new();
+    if let Some(nested) = nested {
+        if let Some(status) = nested.get("httpStatusCode").and_then(value_status) {
+            detail.insert("httpStatusCode".to_string(), Value::Number(status.into()));
+        }
+        if let Some(turn_kind) = nested
+            .get("turnKind")
+            .and_then(Value::as_str)
+            .filter(|value| matches!(*value, "review" | "compact"))
+        {
+            detail.insert("turnKind".to_string(), Value::String(turn_kind.to_string()));
+        }
+    }
+    Some(Value::Object(Map::from_iter([(
+        key.to_string(),
+        Value::Object(detail),
+    )])))
+}
+
+fn normalize_runtime_error_code(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 pub(crate) fn bounded_sanitized_text(value: &Value, key: &str, max_len: usize) -> Option<String> {
@@ -2890,17 +3208,148 @@ mod tests {
             Some("active")
         );
 
-        let error = br#"data: {"method":"app-server-event","params":{"message":{"method":"error","params":{"threadId":"thread-1","error":{"message":"stream disconnected","additionalDetails":"retrying sampling request 1/3","apiKey":"must-not-leak"}}}}}
+        let error = br#"data: {"method":"app-server-event","params":{"message":{"method":"error","params":{"threadId":"thread-1","willRetry":true,"error":{"message":"stream disconnected <credential-fragment>","additionalDetails":"provider body https://provider.invalid/<credential-fragment>","codexErrorInfo":{"responseStreamDisconnected":{"httpStatusCode":null}},"apiKey":"must-not-leak"}}}}}
 
 "#;
         let error = project_frame(error).unwrap().unwrap();
         assert_eq!(error.payload["data"]["sourceType"], "error");
         assert_eq!(
             error.payload["data"]["error"]["message"],
-            "stream disconnected"
+            "The connection was interrupted."
         );
-        assert_eq!(error.payload["data"]["error"]["apiKey"], "[redacted]");
-        assert!(!error.payload.to_string().contains("must-not-leak"));
+        assert_eq!(error.payload["data"]["error"]["code"], "interrupted");
+        assert_eq!(error.payload["data"]["willRetry"], true);
+        assert!(!error.payload.to_string().contains("credential-fragment"));
+        assert!(!error.payload.to_string().contains("provider.invalid"));
+
+        let completed = br#"data: {"method":"app-server-event","params":{"message":{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","error":{"message":"provider body <credential-fragment>","additionalDetails":"https://provider.invalid/<credential-fragment>"}}}}}}
+
+"#;
+        let completed = project_frame(completed).unwrap().unwrap();
+        assert_eq!(
+            completed.payload["data"]["turn"]["error"]["code"],
+            "unknown"
+        );
+        assert!(!completed
+            .payload
+            .to_string()
+            .contains("credential-fragment"));
+        assert!(!completed.payload.to_string().contains("provider.invalid"));
+    }
+
+    #[test]
+    fn projects_structured_runtime_error_categories_without_free_form_text() {
+        let cases = [
+            (
+                json!({
+                    "message": "unauthorized <credential-fragment>",
+                    "additionalDetails": "provider response body",
+                    "codexErrorInfo": "unauthorized"
+                }),
+                "auth",
+                false,
+            ),
+            (
+                json!({
+                    "message": "429 <credential-fragment>",
+                    "codexErrorInfo": {"httpConnectionFailed": {"httpStatusCode": 429}}
+                }),
+                "rate_limit",
+                true,
+            ),
+            (
+                json!({"status": 401, "message": "401 <credential-fragment>"}),
+                "auth",
+                false,
+            ),
+            (
+                json!({"status": 503, "message": "503 <credential-fragment>"}),
+                "upstream",
+                true,
+            ),
+            (
+                json!({
+                    "message": "timeout <credential-fragment>",
+                    "code": "timeout"
+                }),
+                "timeout",
+                true,
+            ),
+            (
+                json!({"message": "unknown <credential-fragment>"}),
+                "unknown",
+                false,
+            ),
+        ];
+
+        for (input, code, recoverable) in cases {
+            let projected = project_public_runtime_error(&input);
+            assert_eq!(projected["code"], code);
+            assert_eq!(projected["recoverable"], recoverable);
+            assert!(!projected.to_string().contains("credential-fragment"));
+            assert!(!projected.to_string().contains("provider response body"));
+            assert!(projected.get("additionalDetails").is_none());
+        }
+    }
+
+    #[test]
+    fn reprojects_old_persisted_runtime_errors_at_the_read_boundary() {
+        let canary = "<credential-fragment>";
+        let event = RunEvent {
+            id: Uuid::now_v7(),
+            sequence: 3,
+            run_id: Uuid::now_v7(),
+            event_type: "codex.turn.completed".to_string(),
+            projection_version: 1,
+            thread_id: Some("thread-1".to_string()),
+            turn_id: Some("turn-1".to_string()),
+            item_id: None,
+            payload: json!({
+                "data": {
+                    "error": {
+                        "message": format!("provider body {canary}"),
+                        "additionalDetails": format!("https://provider.invalid/{canary}"),
+                        "codexErrorInfo": {"responseStreamDisconnected": {"httpStatusCode": 504}}
+                    },
+                    "turn": {"error": {"message": canary}}
+                }
+            }),
+            created_at: chrono::Utc::now(),
+        };
+
+        let projected = project_public_run_event(event);
+        let encoded = projected.payload.to_string();
+        assert!(!encoded.contains(canary));
+        assert!(!encoded.contains("provider.invalid"));
+        assert_eq!(projected.payload["data"]["error"]["code"], "timeout");
+        assert_eq!(
+            projected.payload["data"]["turn"]["error"]["code"],
+            "unknown"
+        );
+
+        let tool_event = RunEvent {
+            id: Uuid::now_v7(),
+            sequence: 4,
+            run_id: projected.run_id,
+            event_type: "codex.item.completed".to_string(),
+            projection_version: 1,
+            thread_id: Some("thread-1".to_string()),
+            turn_id: Some("turn-1".to_string()),
+            item_id: Some("item-1".to_string()),
+            payload: json!({
+                "itemType": "mcpToolCall",
+                "data": {
+                    "result": {"error": canary},
+                    "error": {"message": canary}
+                }
+            }),
+            created_at: chrono::Utc::now(),
+        };
+        let projected_tool = project_public_run_event(tool_event);
+        assert_eq!(projected_tool.payload["data"]["result"]["error"], canary);
+        assert!(!projected_tool.payload["data"]["error"]
+            .to_string()
+            .contains(canary));
     }
 
     #[test]
