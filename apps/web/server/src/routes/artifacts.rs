@@ -11,7 +11,6 @@ use open_web_codex_platform_contracts::{
     error::PlatformError, ArtifactFailureSummary, ArtifactState, ArtifactSummary, RunEvent,
 };
 use open_web_codex_platform_store::{AppState, LiveEvent};
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
 use tokio::sync::broadcast::Sender;
@@ -109,11 +108,9 @@ pub async fn read_content(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
     Path(artifact_id): Path<Uuid>,
-) -> ApiResult<Value> {
+) -> Result<Response<Body>, ApiError> {
     let content = authorized_ready_content(&state.db, auth.organization_id, artifact_id).await?;
-    let value = serde_json::from_slice(&content.bytes)
-        .map_err(|_| bad_gateway("Artifact did not contain valid JSON"))?;
-    Ok(Json(value))
+    artifact_content_response(artifact_id, content, false)
 }
 
 pub async fn download(
@@ -122,6 +119,14 @@ pub async fn download(
     Path(artifact_id): Path<Uuid>,
 ) -> Result<Response<Body>, ApiError> {
     let content = authorized_ready_content(&state.db, auth.organization_id, artifact_id).await?;
+    artifact_content_response(artifact_id, content, true)
+}
+
+fn artifact_content_response(
+    artifact_id: Uuid,
+    content: AuthorizedArtifactContent,
+    download: bool,
+) -> Result<Response<Body>, ApiError> {
     let content_type = match content.mime_type.as_str() {
         "application/json" => HeaderValue::from_static("application/json"),
         "application/geo+json" => HeaderValue::from_static("application/geo+json"),
@@ -135,22 +140,24 @@ pub async fn download(
             )),
         )
     })?;
-    let content_disposition = HeaderValue::from_str(&format!(
-        "attachment; filename=\"artifact-{artifact_id}.json\""
-    ))
-    .map_err(|_| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(PlatformError::internal(
-                "Artifact download filename could not be created",
-            )),
-        )
-    })?;
     let mut response = Response::new(Body::from(content.bytes));
     let headers = response.headers_mut();
     headers.insert(header::CONTENT_TYPE, content_type);
     headers.insert(header::CONTENT_LENGTH, content_length);
-    headers.insert(header::CONTENT_DISPOSITION, content_disposition);
+    if download {
+        let content_disposition = HeaderValue::from_str(&format!(
+            "attachment; filename=\"artifact-{artifact_id}.json\""
+        ))
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(PlatformError::internal(
+                    "Artifact download filename could not be created",
+                )),
+            )
+        })?;
+        headers.insert(header::CONTENT_DISPOSITION, content_disposition);
+    }
     headers.insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("private, no-store"),
@@ -256,18 +263,19 @@ pub(crate) async fn materialize_artifacts(
 ) {
     for artifact_id in artifact_ids {
         match materialize_artifact(&db, git.as_ref(), artifact_id).await {
-            Ok(Some(projection)) => {
-                if event_bus
-                    .send(LiveEvent {
-                        organization_id: projection.organization_id,
-                        payload: projection.payload,
-                    })
-                    .is_err()
-                {
-                    tracing::debug!("event bus: no active receivers for Artifact change");
+            Ok(projections) => {
+                for projection in projections {
+                    if event_bus
+                        .send(LiveEvent {
+                            organization_id: projection.organization_id,
+                            payload: projection.payload,
+                        })
+                        .is_err()
+                    {
+                        tracing::debug!("event bus: no active receivers for Artifact change");
+                    }
                 }
             }
-            Ok(None) => {}
             Err(error) => {
                 tracing::warn!(%error, %artifact_id, "Artifact materialization failed");
             }
@@ -279,7 +287,7 @@ async fn materialize_artifact(
     db: &PgPool,
     git: &GitRuntime,
     artifact_id: Uuid,
-) -> Result<Option<LiveProjection>, String> {
+) -> Result<Vec<LiveProjection>, String> {
     let row = sqlx::query(
         "WITH claimed AS (
              UPDATE artifacts
@@ -298,7 +306,7 @@ async fn materialize_artifact(
     .await
     .map_err(|error| format!("Artifact claim failed: {error}"))?;
     let Some(row) = row else {
-        return Ok(None);
+        return Ok(Vec::new());
     };
 
     let expected_size: i64 = row.get("expected_size");
@@ -339,7 +347,7 @@ async fn fail_materialization(
     db: &PgPool,
     artifact_id: Uuid,
     failure_code: &str,
-) -> Result<Option<LiveProjection>, String> {
+) -> Result<Vec<LiveProjection>, String> {
     finish_materialization(
         db,
         artifact_id,
@@ -357,7 +365,7 @@ async fn finish_materialization(
     db: &PgPool,
     artifact_id: Uuid,
     outcome: MaterializationOutcome<'_>,
-) -> Result<Option<LiveProjection>, String> {
+) -> Result<Vec<LiveProjection>, String> {
     let mut transaction = db
         .begin()
         .await
@@ -392,25 +400,13 @@ async fn finish_materialization(
             .commit()
             .await
             .map_err(|error| format!("Artifact unchanged state commit failed: {error}"))?;
-        return Ok(None);
+        return Ok(Vec::new());
     }
     let row = sqlx::query(
         "SELECT artifact.organization_id, artifact.artifact_schema,
                 artifact.display_name, artifact.mime_type, artifact.expected_size,
-                artifact.byte_size, artifact.state, artifact.failure_code,
-                provenance.producer_run_id, provenance.producer_thread_id,
-                provenance.producer_turn_id, provenance.producer_item_id
+                artifact.byte_size, artifact.state, artifact.failure_code
          FROM artifacts artifact
-         JOIN LATERAL (
-             SELECT producer_run_id, producer_thread_id, producer_turn_id,
-                    producer_item_id
-             FROM artifact_provenance
-             WHERE artifact_id = artifact.id
-               AND organization_id = artifact.organization_id
-             ORDER BY created_at, producer_run_id, producer_thread_id,
-                      producer_turn_id, producer_item_id
-             LIMIT 1
-         ) provenance ON true
          WHERE artifact.id = $1 AND artifact.state IN ('ready', 'failed')",
     )
     .bind(artifact_id)
@@ -418,13 +414,9 @@ async fn finish_materialization(
     .await
     .map_err(|error| format!("Artifact change lookup failed: {error}"))?;
     let Some(row) = row else {
-        return Err("Artifact terminal state lost its provenance".to_string());
+        return Err("Artifact terminal state could not be read".to_string());
     };
     let organization_id: Uuid = row.get("organization_id");
-    let run_id: Uuid = row.get("producer_run_id");
-    let thread_id: String = row.get("producer_thread_id");
-    let turn_id: String = row.get("producer_turn_id");
-    let item_id: String = row.get("producer_item_id");
     let artifact = artifact_delivery_projection(
         artifact_id,
         &row.get::<String, _>("artifact_schema"),
@@ -435,55 +427,88 @@ async fn finish_materialization(
         &row.get::<String, _>("state"),
         row.get::<Option<String>, _>("failure_code").as_deref(),
     )?;
-    let payload = serde_json::json!({
-        "schemaVersion": 1,
-        "itemType": "platformArtifactChanged",
-        "data": {
-            "sourceType": "platform/artifact/changed",
-            "artifact": artifact,
-        }
-    });
-    let persisted = sqlx::query(
-        "INSERT INTO run_events (
-             run_id, event_type, projection_version, thread_id, turn_id, item_id, payload
-         ) VALUES ($1, 'platform.artifact.changed', 1, $2, $3, $4, $5)
-         RETURNING id, sequence, created_at",
+    let provenance_rows = sqlx::query(
+        "SELECT DISTINCT provenance.producer_run_id, provenance.producer_thread_id,
+                provenance.producer_turn_id, provenance.producer_item_id
+         FROM artifact_task_grants artifact_grant
+         JOIN tasks task
+           ON task.id = artifact_grant.task_id
+          AND task.organization_id = artifact_grant.organization_id
+         JOIN artifact_provenance provenance
+           ON provenance.artifact_id = artifact_grant.artifact_id
+          AND provenance.organization_id = artifact_grant.organization_id
+          AND provenance.producer_task_id = artifact_grant.task_id
+         WHERE artifact_grant.artifact_id = $1
+           AND artifact_grant.organization_id = $2
+           AND artifact_grant.permission = 'read'
+         ORDER BY provenance.producer_run_id, provenance.producer_thread_id,
+                  provenance.producer_turn_id, provenance.producer_item_id",
     )
-    .bind(run_id)
-    .bind(&thread_id)
-    .bind(&turn_id)
-    .bind(&item_id)
-    .bind(&payload)
-    .fetch_one(&mut *transaction)
+    .bind(artifact_id)
+    .bind(organization_id)
+    .fetch_all(&mut *transaction)
     .await
-    .map_err(|error| format!("Artifact change event insert failed: {error}"))?;
+    .map_err(|error| format!("Artifact provenance scope lookup failed: {error}"))?;
+    if provenance_rows.is_empty() {
+        return Err("Artifact terminal state lost its authorized provenance".to_string());
+    }
+    let mut projections = Vec::with_capacity(provenance_rows.len());
+    for provenance in provenance_rows {
+        let run_id: Uuid = provenance.get("producer_run_id");
+        let thread_id: String = provenance.get("producer_thread_id");
+        let turn_id: String = provenance.get("producer_turn_id");
+        let item_id: String = provenance.get("producer_item_id");
+        let payload = serde_json::json!({
+            "schemaVersion": 1,
+            "itemType": "platformArtifactChanged",
+            "data": {
+                "sourceType": "platform/artifact/changed",
+                "artifact": artifact.clone(),
+            }
+        });
+        let persisted = sqlx::query(
+            "INSERT INTO run_events (
+                 run_id, event_type, projection_version, thread_id, turn_id, item_id, payload
+             ) VALUES ($1, 'platform.artifact.changed', 1, $2, $3, $4, $5)
+             RETURNING id, sequence, created_at",
+        )
+        .bind(run_id)
+        .bind(&thread_id)
+        .bind(&turn_id)
+        .bind(&item_id)
+        .bind(&payload)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|error| format!("Artifact change event insert failed: {error}"))?;
+        let event = RunEvent {
+            id: persisted.get("id"),
+            sequence: persisted.get("sequence"),
+            run_id,
+            event_type: "platform.artifact.changed".to_string(),
+            projection_version: 1,
+            thread_id: Some(thread_id),
+            turn_id: Some(turn_id),
+            item_id: Some(item_id),
+            payload,
+            created_at: persisted.get("created_at"),
+        };
+        let payload = serde_json::to_vec(&serde_json::json!({
+            "type": "run.event",
+            "version": 1,
+            "event": event,
+        }))
+        .map_err(|error| format!("Artifact change encoding failed: {error}"))?;
+        projections.push(LiveProjection {
+            organization_id,
+            payload,
+            pending_artifact_ids: Vec::new(),
+        });
+    }
     transaction
         .commit()
         .await
         .map_err(|error| format!("Artifact change commit failed: {error}"))?;
-    let event = RunEvent {
-        id: persisted.get("id"),
-        sequence: persisted.get("sequence"),
-        run_id,
-        event_type: "platform.artifact.changed".to_string(),
-        projection_version: 1,
-        thread_id: Some(thread_id),
-        turn_id: Some(turn_id),
-        item_id: Some(item_id),
-        payload,
-        created_at: persisted.get("created_at"),
-    };
-    let payload = serde_json::to_vec(&serde_json::json!({
-        "type": "run.event",
-        "version": 1,
-        "event": event,
-    }))
-    .map_err(|error| format!("Artifact change encoding failed: {error}"))?;
-    Ok(Some(LiveProjection {
-        organization_id,
-        payload,
-        pending_artifact_ids: Vec::new(),
-    }))
+    Ok(projections)
 }
 
 async fn authorized_artifact_row(
@@ -639,6 +664,7 @@ mod tests {
     use axum::http::StatusCode;
     use open_web_codex_git_runtime::{GitRuntime, GitRuntimeConfig};
     use serde_json::{json, Value};
+    use sha2::{Digest, Sha256};
     use sqlx::Row;
     use std::path::Path;
     use std::process::Command;
@@ -797,8 +823,11 @@ network_planning_report_bundle.v1.json"
         let profile_id = Uuid::now_v7();
         let project_id = Uuid::now_v7();
         let task_id = Uuid::now_v7();
+        let secondary_task_id = Uuid::now_v7();
+        let ungranted_task_id = Uuid::now_v7();
         let workspace_id = Uuid::now_v7();
         let run_id = Uuid::now_v7();
+        let secondary_run_id = Uuid::now_v7();
         let source = git_runtime
             .validate_source(&source.to_string_lossy())
             .unwrap();
@@ -890,6 +919,25 @@ network_planning_report_bundle.v1.json"
         .execute(&pool)
         .await
         .unwrap();
+        for (id, title) in [
+            (secondary_task_id, "Secondary Artifact Task"),
+            (ungranted_task_id, "Un granted Artifact Task"),
+        ] {
+            sqlx::query(
+                "INSERT INTO tasks (
+                    id, organization_id, project_id, created_by, workspace_id, title, status
+                 ) VALUES ($1, $2, $3, $4, $5, $6, 'running')",
+            )
+            .bind(id)
+            .bind(organization_id)
+            .bind(project_id)
+            .bind(user_id)
+            .bind(workspace_id)
+            .bind(title)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
         sqlx::query(
             "INSERT INTO runs (
                 id, organization_id, task_id, requested_by, requested_profile_id,
@@ -899,6 +947,21 @@ network_planning_report_bundle.v1.json"
         .bind(run_id)
         .bind(organization_id)
         .bind(task_id)
+        .bind(user_id)
+        .bind(profile_id)
+        .bind(workspace_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO runs (
+                id, organization_id, task_id, requested_by, requested_profile_id,
+                workspace_id, status, codex_thread_id
+             ) VALUES ($1, $2, $3, $4, $5, $6, 'running', 'secondary-thread')",
+        )
+        .bind(secondary_run_id)
+        .bind(organization_id)
+        .bind(secondary_task_id)
         .bind(user_id)
         .bind(profile_id)
         .bind(workspace_id)
@@ -944,10 +1007,13 @@ network_planning_report_bundle.v1.json"
             Some("failed")
         );
         assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM artifacts")
-                .fetch_one(&pool)
-                .await
-                .unwrap(),
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM artifacts WHERE organization_id = $1",
+            )
+            .bind(organization_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
             0
         );
 
@@ -1024,38 +1090,81 @@ network_planning_report_bundle.v1.json"
         let wrong_task = super::list_for_task(
             axum::extract::State(app_state.clone()),
             auth.clone(),
-            axum::extract::Path(Uuid::now_v7()),
+            axum::extract::Path(ungranted_task_id),
         )
         .await
-        .unwrap_err();
-        assert_eq!(wrong_task.0, StatusCode::NOT_FOUND);
+        .unwrap();
+        assert!(wrong_task.0.is_empty());
         assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM artifacts")
-                .fetch_one(&pool)
-                .await
-                .unwrap(),
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM artifacts WHERE organization_id = $1",
+            )
+            .bind(organization_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
             1
         );
         assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM artifact_provenance")
-                .fetch_one(&pool)
-                .await
-                .unwrap(),
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM artifact_provenance WHERE organization_id = $1",
+            )
+            .bind(organization_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
             1
         );
         assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM artifact_task_grants")
-                .fetch_one(&pool)
-                .await
-                .unwrap(),
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM artifact_task_grants WHERE organization_id = $1",
+            )
+            .bind(organization_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
             1
         );
 
-        let ready = super::materialize_artifact(&pool, git_runtime.as_ref(), artifact_id)
-            .await
-            .unwrap()
-            .unwrap();
-        let ready_payload: Value = serde_json::from_slice(&ready.payload).unwrap();
+        sqlx::query(
+            "INSERT INTO artifact_task_grants (
+                artifact_id, organization_id, task_id, permission
+             ) VALUES ($1, $2, $3, 'read')",
+        )
+        .bind(artifact_id)
+        .bind(organization_id)
+        .bind(secondary_task_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO artifact_provenance (
+                artifact_id, organization_id, producer_task_id, producer_run_id,
+                producer_thread_id, producer_turn_id, producer_item_id
+             ) VALUES ($1, $2, $3, $4, 'secondary-thread', 'secondary-turn', 'secondary-item')",
+        )
+        .bind(artifact_id)
+        .bind(organization_id)
+        .bind(secondary_task_id)
+        .bind(secondary_run_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let ungranted_list = super::list_for_task(
+            axum::extract::State(app_state.clone()),
+            auth.clone(),
+            axum::extract::Path(ungranted_task_id),
+        )
+        .await
+        .unwrap();
+        assert!(ungranted_list.0.is_empty());
+
+        let ready_projections =
+            super::materialize_artifact(&pool, git_runtime.as_ref(), artifact_id)
+                .await
+                .unwrap();
+        assert_eq!(ready_projections.len(), 2);
+        let ready_payload: Value = serde_json::from_slice(&ready_projections[0].payload).unwrap();
         assert_eq!(
             ready_payload
                 .pointer("/event/event_type")
@@ -1068,9 +1177,41 @@ network_planning_report_bundle.v1.json"
                 .and_then(Value::as_str),
             Some("ready")
         );
+        assert_eq!(
+            ready_payload
+                .pointer("/event/payload/data/artifact/byteSize")
+                .and_then(Value::as_i64),
+            Some(valid.len() as i64)
+        );
         assert!(!ready_payload
             .to_string()
             .contains("deliverables/report.json"));
+        let ready_run_ids = ready_projections
+            .iter()
+            .map(|projection| {
+                serde_json::from_slice::<Value>(&projection.payload)
+                    .unwrap()
+                    .pointer("/event/run_id")
+                    .and_then(Value::as_str)
+                    .expect("Artifact event run identity")
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        assert!(ready_run_ids.contains(&run_id.to_string()));
+        assert!(ready_run_ids.contains(&secondary_run_id.to_string()));
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM run_events
+                 WHERE event_type = 'platform.artifact.changed'
+                   AND run_id IN ($1, $2)",
+            )
+            .bind(run_id)
+            .bind(secondary_run_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            2
+        );
         let stored = sqlx::query("SELECT state, content FROM artifacts WHERE id = $1")
             .bind(artifact_id)
             .fetch_one(&pool)
@@ -1108,6 +1249,12 @@ network_planning_report_bundle.v1.json"
             ready_list.0[0].download_url.as_deref(),
             Some(expected_download_url.as_str())
         );
+        assert_eq!(ready_list.0[0].byte_size, Some(valid.len() as i64));
+        let expected_digest = hex::encode(Sha256::digest(valid));
+        assert_eq!(
+            ready_list.0[0].content_sha256.as_deref(),
+            Some(expected_digest.as_str())
+        );
         let ready_detail = super::get(
             axum::extract::State(app_state.clone()),
             auth.clone(),
@@ -1136,6 +1283,29 @@ network_planning_report_bundle.v1.json"
                 .and_then(|value| value.to_str().ok()),
             Some(expected_disposition.as_str())
         );
+        let content = super::read_content(
+            axum::extract::State(app_state.clone()),
+            auth.clone(),
+            axum::extract::Path(artifact_id),
+        )
+        .await
+        .unwrap();
+        assert!(content
+            .headers()
+            .get(axum::http::header::CONTENT_DISPOSITION)
+            .is_none());
+        let content_bytes = axum::body::to_bytes(content.into_body(), valid.len() + 1)
+            .await
+            .unwrap();
+        let download_bytes = axum::body::to_bytes(download.into_body(), valid.len() + 1)
+            .await
+            .unwrap();
+        assert_eq!(content_bytes.as_ref(), valid);
+        assert_eq!(download_bytes, content_bytes);
+        assert_eq!(
+            hex::encode(Sha256::digest(&content_bytes)),
+            ready_list.0[0].content_sha256.as_deref().unwrap()
+        );
         let denied = super::get(
             axum::extract::State(app_state.clone()),
             authenticated_user(Uuid::now_v7(), Uuid::now_v7()),
@@ -1144,6 +1314,22 @@ network_planning_report_bundle.v1.json"
         .await
         .unwrap_err();
         assert_eq!(denied.0, axum::http::StatusCode::NOT_FOUND);
+        let denied_content = super::read_content(
+            axum::extract::State(app_state.clone()),
+            authenticated_user(Uuid::now_v7(), Uuid::now_v7()),
+            axum::extract::Path(artifact_id),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(denied_content.0, axum::http::StatusCode::NOT_FOUND);
+        let denied_download = super::download(
+            axum::extract::State(app_state.clone()),
+            authenticated_user(Uuid::now_v7(), Uuid::now_v7()),
+            axum::extract::Path(artifact_id),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(denied_download.0, axum::http::StatusCode::NOT_FOUND);
 
         for (item_id, path, expected_code) in [
             (
@@ -1169,7 +1355,9 @@ network_planning_report_bundle.v1.json"
             let failed = super::materialize_artifact(&pool, git_runtime.as_ref(), failed_id)
                 .await
                 .unwrap()
-                .unwrap();
+                .into_iter()
+                .next()
+                .expect("failed Artifact emits a projection");
             let failed_payload: Value = serde_json::from_slice(&failed.payload).unwrap();
             assert_eq!(
                 failed_payload
@@ -1274,7 +1462,6 @@ network_planning_report_bundle.v1.json"
             let failed_id = projection.pending_artifact_ids[0];
             super::materialize_artifact(&pool, git_runtime.as_ref(), failed_id)
                 .await
-                .unwrap()
                 .unwrap();
             assert_eq!(
                 sqlx::query_scalar::<_, String>(

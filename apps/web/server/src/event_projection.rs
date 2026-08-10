@@ -51,6 +51,7 @@ struct RegisteredArtifact {
     display_name: String,
     mime_type: String,
     expected_size: Option<i64>,
+    byte_size: Option<i64>,
     state: String,
     failure_code: Option<String>,
 }
@@ -2127,7 +2128,7 @@ async fn register_artifacts(
             "SELECT artifact.id, artifact.profile_id, artifact.workspace_id,
                     artifact.artifact_schema, artifact.display_name, artifact.mime_type,
                     artifact.source_relative_path, artifact.expected_size, artifact.state,
-                    artifact.failure_code,
+                    artifact.byte_size, artifact.failure_code,
                     provenance.producer_task_id
              FROM artifact_provenance provenance
              JOIN artifacts artifact ON artifact.id = provenance.artifact_id
@@ -2146,85 +2147,88 @@ async fn register_artifacts(
         .fetch_optional(&mut **transaction)
         .await
         .map_err(|error| format!("Artifact provenance lookup error: {error}"))?;
-        let (artifact_id, state, failure_code) = if let Some(existing) = existing_for_item {
-            if existing.get::<Uuid, _>("profile_id") != context.profile_id
-                || existing.get::<Uuid, _>("workspace_id") != context.workspace_id
-                || existing.get::<Uuid, _>("producer_task_id") != context.task_id
-                || existing.get::<String, _>("artifact_schema") != artifact.schema
-                || existing.get::<String, _>("display_name") != artifact.display_name
-                || existing.get::<String, _>("mime_type") != artifact.mime_type
-                || existing.get::<String, _>("source_relative_path")
-                    != artifact.workspace_relative_path
-                || existing.get::<i64, _>("expected_size") != expected_size
-            {
-                return Err(
-                    "Artifact producer Item was replayed with different metadata".to_string(),
-                );
-            }
-            (
-                existing.get::<Uuid, _>("id"),
-                existing.get::<String, _>("state"),
-                existing.get::<Option<String>, _>("failure_code"),
-            )
-        } else {
-            let inserted = sqlx::query(
-                "INSERT INTO artifacts (
-                organization_id, profile_id, workspace_id, artifact_schema,
-                display_name, mime_type, source_relative_path, expected_size
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-             ON CONFLICT (organization_id, workspace_id, source_relative_path)
-             DO NOTHING
-             RETURNING id, state, failure_code",
-            )
-            .bind(context.organization_id)
-            .bind(context.profile_id)
-            .bind(context.workspace_id)
-            .bind(&artifact.schema)
-            .bind(&artifact.display_name)
-            .bind(&artifact.mime_type)
-            .bind(&artifact.workspace_relative_path)
-            .bind(expected_size)
-            .fetch_optional(&mut **transaction)
-            .await
-            .map_err(|error| format!("Artifact registration error: {error}"))?;
-            if let Some(inserted) = inserted {
-                (
-                    inserted.get::<Uuid, _>("id"),
-                    inserted.get::<String, _>("state"),
-                    inserted.get::<Option<String>, _>("failure_code"),
-                )
-            } else {
-                let existing = sqlx::query(
-                    "SELECT id, profile_id, artifact_schema, display_name, mime_type,
-                            expected_size, state, failure_code
-                     FROM artifacts
-                     WHERE organization_id = $1 AND workspace_id = $2
-                       AND source_relative_path = $3",
-                )
-                .bind(context.organization_id)
-                .bind(context.workspace_id)
-                .bind(&artifact.workspace_relative_path)
-                .fetch_optional(&mut **transaction)
-                .await
-                .map_err(|error| format!("Artifact conflict lookup error: {error}"))?
-                .ok_or_else(|| "Artifact conflict could not be resolved".to_string())?;
+        let (artifact_id, state, byte_size, failure_code) =
+            if let Some(existing) = existing_for_item {
                 if existing.get::<Uuid, _>("profile_id") != context.profile_id
+                    || existing.get::<Uuid, _>("workspace_id") != context.workspace_id
+                    || existing.get::<Uuid, _>("producer_task_id") != context.task_id
                     || existing.get::<String, _>("artifact_schema") != artifact.schema
                     || existing.get::<String, _>("display_name") != artifact.display_name
                     || existing.get::<String, _>("mime_type") != artifact.mime_type
+                    || existing.get::<String, _>("source_relative_path")
+                        != artifact.workspace_relative_path
                     || existing.get::<i64, _>("expected_size") != expected_size
                 {
                     return Err(
-                        "Workspace Artifact path was reused with different metadata".to_string()
+                        "Artifact producer Item was replayed with different metadata".to_string(),
                     );
                 }
                 (
                     existing.get::<Uuid, _>("id"),
                     existing.get::<String, _>("state"),
+                    existing.get::<Option<i64>, _>("byte_size"),
                     existing.get::<Option<String>, _>("failure_code"),
                 )
-            }
-        };
+            } else {
+                let inserted = sqlx::query(
+                    "INSERT INTO artifacts (
+                organization_id, profile_id, workspace_id, artifact_schema,
+                display_name, mime_type, source_relative_path, expected_size
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             ON CONFLICT (organization_id, workspace_id, source_relative_path)
+             DO NOTHING
+             RETURNING id, state, byte_size, failure_code",
+                )
+                .bind(context.organization_id)
+                .bind(context.profile_id)
+                .bind(context.workspace_id)
+                .bind(&artifact.schema)
+                .bind(&artifact.display_name)
+                .bind(&artifact.mime_type)
+                .bind(&artifact.workspace_relative_path)
+                .bind(expected_size)
+                .fetch_optional(&mut **transaction)
+                .await
+                .map_err(|error| format!("Artifact registration error: {error}"))?;
+                if let Some(inserted) = inserted {
+                    (
+                        inserted.get::<Uuid, _>("id"),
+                        inserted.get::<String, _>("state"),
+                        inserted.get::<Option<i64>, _>("byte_size"),
+                        inserted.get::<Option<String>, _>("failure_code"),
+                    )
+                } else {
+                    let existing = sqlx::query(
+                        "SELECT id, profile_id, artifact_schema, display_name, mime_type,
+                            expected_size, byte_size, state, failure_code
+                     FROM artifacts
+                     WHERE organization_id = $1 AND workspace_id = $2
+                       AND source_relative_path = $3",
+                    )
+                    .bind(context.organization_id)
+                    .bind(context.workspace_id)
+                    .bind(&artifact.workspace_relative_path)
+                    .fetch_optional(&mut **transaction)
+                    .await
+                    .map_err(|error| format!("Artifact conflict lookup error: {error}"))?
+                    .ok_or_else(|| "Artifact conflict could not be resolved".to_string())?;
+                    if existing.get::<Uuid, _>("profile_id") != context.profile_id
+                        || existing.get::<String, _>("artifact_schema") != artifact.schema
+                        || existing.get::<String, _>("display_name") != artifact.display_name
+                        || existing.get::<String, _>("mime_type") != artifact.mime_type
+                        || existing.get::<i64, _>("expected_size") != expected_size
+                    {
+                        return Err("Workspace Artifact path was reused with different metadata"
+                            .to_string());
+                    }
+                    (
+                        existing.get::<Uuid, _>("id"),
+                        existing.get::<String, _>("state"),
+                        existing.get::<Option<i64>, _>("byte_size"),
+                        existing.get::<Option<String>, _>("failure_code"),
+                    )
+                }
+            };
 
         sqlx::query(
             "INSERT INTO artifact_task_grants (
@@ -2282,6 +2286,7 @@ async fn register_artifacts(
             display_name: artifact.display_name.clone(),
             mime_type: artifact.mime_type.clone(),
             expected_size: Some(expected_size),
+            byte_size,
             state,
             failure_code,
         });
@@ -2308,7 +2313,7 @@ fn project_registered_artifacts(
                 &artifact.display_name,
                 &artifact.mime_type,
                 expected_size,
-                None,
+                artifact.byte_size,
                 &artifact.state,
                 artifact.failure_code.as_deref(),
             )
