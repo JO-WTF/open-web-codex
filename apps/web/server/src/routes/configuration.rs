@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::{extract::State, http::StatusCode, Extension, Json};
+use open_web_codex_approval_service::safe_maps_credential_url;
 use open_web_codex_platform_contracts::error::PlatformError;
 use open_web_codex_platform_contracts::{
     MapsConfiguration, MapsProvider, UpdateMapsConfigurationRequest, UseMapsConfigurationRequest,
@@ -224,22 +225,6 @@ fn validate_maps_key(
         ));
     }
     Ok(key.to_string())
-}
-
-pub(crate) fn safe_maps_credential_url(value: &str) -> Option<&str> {
-    let parsed = url::Url::parse(value).ok()?;
-    if parsed.scheme() != "http"
-        || parsed.host_str() != Some("127.0.0.1")
-        || parsed.port().is_none()
-        || !parsed.username().is_empty()
-        || parsed.password().is_some()
-        || parsed.query().is_some()
-        || parsed.fragment().is_some()
-        || parsed.path().len() <= 1
-    {
-        return None;
-    }
-    Some(value)
 }
 
 async fn submit_key_to_elicitation(

@@ -3,12 +3,13 @@ use std::sync::Arc;
 use axum::{extract::Path, http::StatusCode, Extension, Json};
 use open_web_codex_adapter::CodexAdapter;
 use open_web_codex_approval_service::{
-    ApprovalActor, ApprovalService, ApprovalServiceError, PendingApprovalRecord,
+    bounded_identifier, project_permission_capabilities, safe_maps_credential_url, ApprovalActor,
+    ApprovalService, ApprovalServiceError, PendingApprovalRecord,
 };
 use open_web_codex_platform_contracts::error::PlatformError;
 use open_web_codex_platform_contracts::{
-    ApprovalRequestSource, ApprovalSummary, DecideApprovalRequest, PendingApprovalCapability,
-    PendingApprovalFileChangeAction, PendingApprovalSubject, PendingApprovalSummary,
+    ApprovalRequestSource, ApprovalSummary, DecideApprovalRequest, PendingApprovalFileChangeAction,
+    PendingApprovalSubject, PendingApprovalSummary, PendingApprovalUnavailableReason,
     PendingMcpFormSummary, PendingUserInputSummary, RespondMcpFormRequest, RespondUserInputRequest,
 };
 use serde_json::Value;
@@ -82,6 +83,7 @@ fn project_pending_approval(
             .and_then(|value| bounded_provenance(value, 256)),
         subject,
         state: record.state,
+        attempted_decision: record.attempted_decision,
         version: record.version,
         created_at: record.created_at,
     })
@@ -120,98 +122,42 @@ fn project_pending_subject(
                     _ => None,
                 })
                 .unwrap_or_else(|| ("workspace_command".to_string(), None));
-            PendingApprovalSubject::Command {
-                action,
-                path,
-                reason: safe_reason(payload.get("reason")),
-            }
+            PendingApprovalSubject::Command { action, path }
         }
         "item/fileChange/requestApproval" => PendingApprovalSubject::FileChange {
             action: PendingApprovalFileChangeAction::Write,
             path: None,
-            reason: safe_reason(payload.get("reason")),
         },
-        "item/permissions/requestApproval" => PendingApprovalSubject::Permissions {
-            capabilities: permission_capabilities(payload.get("permissions")),
-        },
-        "mcpServer/elicitation/request"
-            if payload.get("mode").and_then(Value::as_str) == Some("url") =>
-        {
+        "item/permissions/requestApproval" => {
+            match project_permission_capabilities(payload.get("permissions")) {
+                Ok(capabilities) => PendingApprovalSubject::Permissions { capabilities },
+                Err(reason) => PendingApprovalSubject::Unavailable { reason },
+            }
+        }
+        "mcpServer/elicitation/request" => {
+            if payload.get("mode").and_then(Value::as_str) == Some("form") {
+                return Err("MCP form approval belongs to the dedicated form route");
+            }
             let safe_url = payload
                 .get("url")
                 .and_then(Value::as_str)
-                .and_then(crate::routes::configuration::safe_maps_credential_url)
+                .and_then(safe_maps_credential_url)
                 .map(str::to_string);
-            PendingApprovalSubject::Url {
-                url: safe_url.clone(),
-                server: safe_reason(payload.get("serverName")),
-                message: safe_reason(payload.get("message")),
-                available: safe_url.is_some(),
+            if payload.get("mode").and_then(Value::as_str) == Some("url") {
+                PendingApprovalSubject::Url {
+                    url: safe_url.clone(),
+                    server: bounded_identifier(payload.get("serverName"), 128),
+                    available: safe_url.is_some(),
+                }
+            } else {
+                PendingApprovalSubject::Unavailable {
+                    reason: PendingApprovalUnavailableReason::UnsupportedRequest,
+                }
             }
         }
         _ => return Err("unsupported approval subject"),
     };
     Ok(subject)
-}
-
-fn safe_reason(value: Option<&Value>) -> Option<String> {
-    value.and_then(|value| bounded_sanitized_text(value, "reason", 512))
-}
-
-fn permission_capabilities(value: Option<&Value>) -> Vec<PendingApprovalCapability> {
-    let Some(permissions) = value.and_then(Value::as_object) else {
-        return Vec::new();
-    };
-    let mut capabilities = Vec::new();
-    if permissions
-        .get("network")
-        .and_then(Value::as_object)
-        .and_then(|network| network.get("enabled"))
-        .and_then(Value::as_bool)
-        != Some(false)
-        && permissions.get("network").is_some()
-    {
-        capabilities.push(PendingApprovalCapability::Network);
-    }
-    if let Some(file_system) = permissions.get("fileSystem").and_then(Value::as_object) {
-        if file_system
-            .get("read")
-            .and_then(Value::as_array)
-            .is_some_and(|entries| !entries.is_empty())
-        {
-            capabilities.push(PendingApprovalCapability::FilesystemRead);
-        }
-        if file_system
-            .get("write")
-            .and_then(Value::as_array)
-            .is_some_and(|entries| !entries.is_empty())
-        {
-            capabilities.push(PendingApprovalCapability::FilesystemWrite);
-        }
-        if let Some(entries) = file_system.get("entries").and_then(Value::as_array) {
-            for access in entries.iter().filter_map(|entry| {
-                entry
-                    .as_object()
-                    .and_then(|entry| entry.get("access"))
-                    .and_then(Value::as_str)
-            }) {
-                match access {
-                    "read"
-                        if !capabilities.contains(&PendingApprovalCapability::FilesystemRead) =>
-                    {
-                        capabilities.push(PendingApprovalCapability::FilesystemRead)
-                    }
-                    "write"
-                        if !capabilities.contains(&PendingApprovalCapability::FilesystemWrite) =>
-                    {
-                        capabilities.push(PendingApprovalCapability::FilesystemWrite)
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-    capabilities
 }
 
 fn bounded_provenance(value: &str, max_len: usize) -> Option<String> {
@@ -426,6 +372,7 @@ mod tests {
     use super::project_pending_subject;
     use open_web_codex_platform_contracts::{
         PendingApprovalCapability, PendingApprovalFileChangeAction, PendingApprovalSubject,
+        PendingApprovalUnavailableReason,
     };
     use serde_json::json;
 
@@ -437,7 +384,7 @@ mod tests {
                 "command": "cat /private/server/secret.txt",
                 "aggregatedOutput": "password=do-not-show",
                 "commandActions": [{"type": "read", "path": "src/lib.rs"}],
-                "reason": "inspect the workspace"
+                "reason": "embedded secret=do-not-show"
             }),
         )
         .unwrap();
@@ -446,14 +393,13 @@ mod tests {
             PendingApprovalSubject::Command {
                 action: "read".to_string(),
                 path: Some("src/lib.rs".to_string()),
-                reason: Some("inspect the workspace".to_string()),
             }
         );
         let file = project_pending_subject(
             "item/fileChange/requestApproval",
             &json!({
                 "grantRoot": "/private/server",
-                "reason": "allow file changes"
+                "reason": "credential=https://example.com"
             }),
         )
         .unwrap();
@@ -462,7 +408,6 @@ mod tests {
             PendingApprovalSubject::FileChange {
                 action: PendingApprovalFileChangeAction::Write,
                 path: None,
-                reason: Some("allow file changes".to_string())
             }
         );
         let permissions = project_pending_subject(
@@ -500,7 +445,7 @@ mod tests {
                 "mode": "url",
                 "url": "https://example.com/credential",
                 "serverName": "maps",
-                "message": "Open /private/server/config"
+                "message": "secret=do-not-show"
             }),
         )
         .unwrap();
@@ -509,12 +454,41 @@ mod tests {
             PendingApprovalSubject::Url {
                 url: None,
                 server: Some("maps".to_string()),
-                message: Some("Open [workspace-path]/config".to_string()),
                 available: false,
             }
         );
         let encoded = serde_json::to_string(&subject).unwrap();
         assert!(!encoded.contains("example.com"));
         assert!(!encoded.contains("/private/server"));
+        assert!(!encoded.contains("secret=do-not-show"));
+    }
+
+    #[test]
+    fn projects_unknown_mcp_modes_and_malformed_permissions_as_typed_unavailable() {
+        for payload in [
+            json!({"serverName": "mcp", "mode": "future"}),
+            json!({"serverName": "mcp"}),
+        ] {
+            assert_eq!(
+                project_pending_subject("mcpServer/elicitation/request", &payload).unwrap(),
+                PendingApprovalSubject::Unavailable {
+                    reason: PendingApprovalUnavailableReason::UnsupportedRequest
+                }
+            );
+        }
+        assert!(
+            project_pending_subject("mcpServer/elicitation/request", &json!({"mode": "form"}))
+                .is_err()
+        );
+        assert_eq!(
+            project_pending_subject(
+                "item/permissions/requestApproval",
+                &json!({"permissions": {"network": {"enabled": "yes"}}})
+            )
+            .unwrap(),
+            PendingApprovalSubject::Unavailable {
+                reason: PendingApprovalUnavailableReason::InvalidPermissions
+            }
+        );
     }
 }

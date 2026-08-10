@@ -568,42 +568,19 @@ fn public_approval_frame(frame: &[u8], approval_id: uuid::Uuid) -> anyhow::Resul
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("approval omitted threadId"))?;
     let mut request_params = serde_json::Map::new();
-    for key in ["threadId", "turnId", "itemId", "reason", "startedAtMs"] {
+    for key in ["threadId", "turnId", "itemId"] {
         if let Some(value) = params.get(key) {
             request_params.insert(key.to_string(), value.clone());
         }
     }
-    if request_method == "item/commandExecution/requestApproval" {
-        if let Some(command) = params.get("command") {
-            request_params.insert("command".to_string(), command.clone());
-        }
-    }
     if request_method == "mcpServer/elicitation/request" {
-        // Form schema is projected only through the typed, run-scoped pending
-        // form resource backed by approvals.request_payload. Realtime events
-        // are notifications, not a second schema recovery source.
-        for key in ["serverName", "mode", "message"] {
-            if let Some(value) = params.get(key) {
-                request_params.insert(key.to_string(), value.clone());
-            }
-        }
-        if let Some(url) = params
-            .get("url")
-            .and_then(serde_json::Value::as_str)
-            .and_then(routes::configuration::safe_maps_credential_url)
+        if let Some(mode @ ("form" | "url")) =
+            params.get("mode").and_then(serde_json::Value::as_str)
         {
             request_params.insert(
-                "url".to_string(),
-                serde_json::Value::String(url.to_string()),
+                "mode".to_string(),
+                serde_json::Value::String(mode.to_string()),
             );
-        }
-    }
-    if request_method == "item/tool/requestUserInput" {
-        if let Some(questions) = params.get("questions") {
-            request_params.insert("questions".to_string(), questions.clone());
-        }
-        if let Some(timeout) = params.get("autoResolutionMs") {
-            request_params.insert("autoResolutionMs".to_string(), timeout.clone());
         }
     }
     let turn_id = request_params.get("turnId").cloned();
@@ -836,8 +813,7 @@ mod tests {
         import_file_backed_codex_auth_if_missing, public_approval_frame,
         public_resolved_approval_frame, runtime_resolved_request,
     };
-    use crate::routes::configuration::safe_maps_credential_url;
-    use open_web_codex_approval_service::ResolvedApproval;
+    use open_web_codex_approval_service::{safe_maps_credential_url, ResolvedApproval};
     use serde_json::Value;
     use std::fs;
     use tempfile::TempDir;
@@ -914,10 +890,11 @@ mod tests {
         );
         assert_eq!(
             value
-                .pointer("/params/message/params/requestParams/command")
+                .pointer("/params/message/params/requestParams")
                 .unwrap(),
-            "git status"
+            &serde_json::json!({"threadId": "thread-1", "itemId": "item-1"})
         );
+        assert!(!text.contains("git status"));
     }
 
     #[test]
@@ -944,22 +921,20 @@ mod tests {
         );
         assert_eq!(
             value
-                .pointer("/params/message/params/requestParams/serverName")
+                .pointer("/params/message/params/requestParams/mode")
                 .unwrap(),
-            "map_utils"
+            "url"
         );
-        assert_eq!(
-            value
-                .pointer("/params/message/params/requestParams/message")
-                .unwrap(),
-            "A maps provider and API key are required. Configure Mapbox or Google in this app; the selected provider will be saved globally and reused."
-        );
-        assert_eq!(
-            value
-                .pointer("/params/message/params/requestParams/url")
-                .unwrap(),
-            "http://127.0.0.1:43123/one-time-token"
-        );
+        assert!(value
+            .pointer("/params/message/params/requestParams/serverName")
+            .is_none());
+        assert!(value
+            .pointer("/params/message/params/requestParams/message")
+            .is_none());
+        assert!(value
+            .pointer("/params/message/params/requestParams/url")
+            .is_none());
+        assert!(!text.contains("one-time-token"));
         assert!(!text.contains("runtime-secret-id"));
     }
 
@@ -969,8 +944,9 @@ mod tests {
         raw.extend_from_slice(b"\n\n");
         let projected = public_approval_frame(&raw, Uuid::now_v7()).expect("form projection");
         let text = String::from_utf8(projected).unwrap();
-        assert!(text.contains("Provide route inputs"));
-        assert!(text.contains("supply_chain_data"));
+        assert!(text.contains("\"mode\":\"form\""));
+        assert!(!text.contains("Provide route inputs"));
+        assert!(!text.contains("supply_chain_data"));
         assert!(!text.contains("requestedSchema"));
         assert!(!text.contains("secret_business_value"));
         assert!(!text.contains("\"id\":89"));

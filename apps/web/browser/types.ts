@@ -210,6 +210,12 @@ export type ApprovalRequestSource =
   | { kind: "root" }
   | { kind: "agent"; executionId: string | null; displayTitle: string };
 
+export type ApprovalDecision =
+  | "accept"
+  | "acceptForSession"
+  | "decline"
+  | "cancel";
+
 export type PendingApprovalState = "pending" | "dispatching" | "delivery_unknown";
 
 export type PendingApprovalCapability =
@@ -219,26 +225,31 @@ export type PendingApprovalCapability =
 
 export type PendingApprovalFileChangeAction = "write";
 
+export type PendingApprovalUnavailableReason =
+  | "unsupported_request"
+  | "invalid_permissions";
+
 export type PendingApprovalSubject =
   | {
       kind: "command";
       action: string;
       path: string | null;
-      reason: string | null;
     }
   | {
       kind: "file_change";
       action: PendingApprovalFileChangeAction;
       path: string | null;
-      reason: string | null;
     }
   | { kind: "permissions"; capabilities: PendingApprovalCapability[] }
   | {
       kind: "url";
       url: string | null;
       server: string | null;
-      message: string | null;
       available: boolean;
+    }
+  | {
+      kind: "unavailable";
+      reason: PendingApprovalUnavailableReason;
     };
 
 export type PendingApprovalSummary = {
@@ -250,6 +261,7 @@ export type PendingApprovalSummary = {
   itemId: string | null;
   subject: PendingApprovalSubject;
   state: PendingApprovalState;
+  attemptedDecision: ApprovalDecision | null;
   version: number;
   createdAt: string;
 };

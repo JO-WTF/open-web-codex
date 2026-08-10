@@ -1126,6 +1126,200 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     assert!(!child_audit.to_string().contains("navigation"));
     assert!(!child_audit.to_string().contains("1.35"));
 
+    for (request_id, params) in [
+        (
+            772,
+            json!({
+                "threadId": "approval-thread",
+                "turnId": "turn-unsupported-mode",
+                "itemId": "item-unsupported-mode",
+                "mode": "json",
+                "message": "unsupported mode must remain bounded"
+            }),
+        ),
+        (
+            773,
+            json!({
+                "threadId": "approval-thread",
+                "turnId": "turn-missing-mode",
+                "itemId": "item-missing-mode",
+                "message": "missing mode must remain bounded"
+            }),
+        ),
+    ] {
+        let unavailable_id = approval_service
+            .capture_message(
+                runtime_instance_id,
+                &json!({
+                    "id": request_id,
+                    "method": "mcpServer/elicitation/request",
+                    "params": params
+                }),
+            )
+            .await
+            .unwrap()
+            .expect("captured generic unsupported MCP approval");
+        let unsupported_pending = call(
+            &app,
+            authenticated(
+                "GET",
+                &format!("/api/runs/{first_run_id}/approval-requests"),
+                &first_token,
+            ),
+        )
+        .await;
+        assert_eq!(unsupported_pending.0, StatusCode::OK);
+        let unsupported = unsupported_pending
+            .1
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|value| value["id"] == unavailable_id.to_string())
+            .expect("unsupported MCP approval projection");
+        assert_eq!(unsupported["subject"]["kind"], "unavailable");
+        assert_eq!(unsupported["subject"]["reason"], "unsupported_request");
+        assert!(!unsupported.to_string().contains("unsupported mode"));
+        let canceled = call(
+            &app,
+            authenticated_json(
+                "POST",
+                &format!("/api/approvals/{unavailable_id}/decision"),
+                &first_token,
+                json!({"decision": "cancel", "version": 0}),
+            ),
+        )
+        .await;
+        assert_eq!(canceled.0, StatusCode::NO_CONTENT);
+    }
+
+    let unsafe_url_id = approval_service
+        .capture_message(
+            runtime_instance_id,
+            &json!({
+                "id": 774,
+                "method": "mcpServer/elicitation/request",
+                "params": {
+                    "threadId": "approval-thread",
+                    "turnId": "turn-unsafe-url",
+                    "itemId": "item-unsafe-url",
+                    "serverName": "maps",
+                    "mode": "url",
+                    "url": "https://example.invalid/credential?token=redacted"
+                }
+            }),
+        )
+        .await
+        .unwrap()
+        .expect("captured unsafe URL approval");
+    let unsafe_url_pending = call(
+        &app,
+        authenticated(
+            "GET",
+            &format!("/api/runs/{first_run_id}/approval-requests"),
+            &first_token,
+        ),
+    )
+    .await;
+    assert_eq!(unsafe_url_pending.0, StatusCode::OK);
+    let unsafe_url = unsafe_url_pending
+        .1
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|value| value["id"] == unsafe_url_id.to_string())
+        .expect("unsafe URL approval projection");
+    assert_eq!(unsafe_url["subject"]["kind"], "url");
+    assert_eq!(unsafe_url["subject"]["available"], false);
+    assert!(unsafe_url["subject"]["url"].is_null());
+    assert!(!unsafe_url.to_string().contains("credential?token=redacted"));
+    let unsafe_url_accept = call(
+        &app,
+        authenticated_json(
+            "POST",
+            &format!("/api/approvals/{unsafe_url_id}/decision"),
+            &first_token,
+            json!({"decision": "accept", "version": 0}),
+        ),
+    )
+    .await;
+    assert_eq!(unsafe_url_accept.0, StatusCode::UNPROCESSABLE_ENTITY);
+    let unsafe_url_cancel = call(
+        &app,
+        authenticated_json(
+            "POST",
+            &format!("/api/approvals/{unsafe_url_id}/decision"),
+            &first_token,
+            json!({"decision": "cancel", "version": 0}),
+        ),
+    )
+    .await;
+    assert_eq!(unsafe_url_cancel.0, StatusCode::NO_CONTENT);
+
+    let malformed_permissions_id = approval_service
+        .capture_message(
+            runtime_instance_id,
+            &json!({
+                "id": 775,
+                "method": "item/permissions/requestApproval",
+                "params": {
+                    "threadId": "approval-thread",
+                    "turnId": "turn-invalid-permissions",
+                    "itemId": "item-invalid-permissions",
+                    "permissions": {"network": {"enabled": true, "scope": "all"}}
+                }
+            }),
+        )
+        .await
+        .unwrap()
+        .expect("captured malformed permissions approval");
+    let malformed_permissions_pending = call(
+        &app,
+        authenticated(
+            "GET",
+            &format!("/api/runs/{first_run_id}/approval-requests"),
+            &first_token,
+        ),
+    )
+    .await;
+    assert_eq!(malformed_permissions_pending.0, StatusCode::OK);
+    let malformed_permissions = malformed_permissions_pending
+        .1
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|value| value["id"] == malformed_permissions_id.to_string())
+        .expect("malformed permissions projection");
+    assert_eq!(malformed_permissions["subject"]["kind"], "unavailable");
+    assert_eq!(
+        malformed_permissions["subject"]["reason"],
+        "invalid_permissions"
+    );
+    let malformed_permissions_accept = call(
+        &app,
+        authenticated_json(
+            "POST",
+            &format!("/api/approvals/{malformed_permissions_id}/decision"),
+            &first_token,
+            json!({"decision": "accept", "version": 0}),
+        ),
+    )
+    .await;
+    assert_eq!(
+        malformed_permissions_accept.0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let malformed_permissions_cancel = call(
+        &app,
+        authenticated_json(
+            "POST",
+            &format!("/api/approvals/{malformed_permissions_id}/decision"),
+            &first_token,
+            json!({"decision": "cancel", "version": 0}),
+        ),
+    )
+    .await;
+    assert_eq!(malformed_permissions_cancel.0, StatusCode::NO_CONTENT);
+
     let retry_approval_id = approval_service
         .capture_message(
             runtime_instance_id,
@@ -1181,6 +1375,7 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
         .find(|value| value["id"] == retry_approval_id.to_string())
         .expect("delivery-unknown approval projection");
     assert_eq!(retry_pending["state"], "delivery_unknown");
+    assert_eq!(retry_pending["attemptedDecision"], "accept");
     assert_eq!(retry_pending["version"], 2);
     let retry_dispatch = approval_service
         .begin_decision(
