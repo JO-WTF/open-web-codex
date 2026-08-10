@@ -1424,18 +1424,10 @@ fn agent_execution_observation(event: &ProjectedEvent) -> Option<AgentExecutionO
             result_summary: None,
         }),
         "codex.turn.completed" => {
-            let status = projected_turn_terminal_status(&event.payload);
-            let behavior = match status {
-                "failed" => "Agent execution failed",
-                "rejected" => "Agent execution was rejected",
-                "cancelled" => "Agent execution was cancelled",
-                "timeout" => "Agent execution timed out",
-                "interrupted" => "Agent execution interrupted",
-                _ => "Finished this work cycle",
-            };
+            let outcome = projected_turn_terminal_outcome(&event.payload);
             Some(AgentExecutionObservation {
-                status: Some(status),
-                behavior: Some(behavior.to_string()),
+                status: Some(outcome.execution_status()),
+                behavior: Some(outcome.execution_behavior().to_string()),
                 progress: None,
                 approval_id: None,
                 clear_waiting: true,
@@ -1751,31 +1743,75 @@ fn bounded_activity_title(value: &str) -> String {
     value.chars().take(240).collect()
 }
 
-fn projected_turn_terminal_status(payload: &Value) -> &'static str {
-    let status = payload
-        .pointer("/data/status")
-        .and_then(Value::as_str)
-        .or_else(|| payload.pointer("/data/status/type").and_then(Value::as_str))
-        .or_else(|| payload.pointer("/data/turn/status").and_then(Value::as_str))
-        .or_else(|| {
-            payload
-                .pointer("/data/turn/status/type")
-                .and_then(Value::as_str)
-        })
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    if status.contains("fail") || status.contains("error") {
-        "failed"
-    } else if status.contains("reject") {
-        "rejected"
-    } else if status.contains("timeout") {
-        "timeout"
-    } else if status.contains("cancel") {
-        "cancelled"
-    } else if status.contains("interrupt") {
-        "interrupted"
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProjectedTurnTerminalOutcome {
+    Completed,
+    Failed,
+    Rejected,
+    Cancelled,
+    Timeout,
+    Interrupted,
+}
+
+impl ProjectedTurnTerminalOutcome {
+    pub(crate) fn execution_status(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Rejected => "rejected",
+            Self::Cancelled => "cancelled",
+            Self::Timeout => "timeout",
+            Self::Interrupted => "interrupted",
+        }
+    }
+
+    pub(crate) fn execution_behavior(self) -> &'static str {
+        match self {
+            Self::Completed => "Finished this work cycle",
+            Self::Failed => "Agent execution failed",
+            Self::Rejected => "Agent execution was rejected",
+            Self::Cancelled => "Agent execution was cancelled",
+            Self::Timeout => "Agent execution timed out",
+            Self::Interrupted => "Agent execution interrupted",
+        }
+    }
+}
+
+/// Resolve the official Turn terminal status from the already-normalized
+/// payload. Unknown, missing, or overlong status values are conservatively
+/// treated as the Runtime's normal completed outcome; no free-text matching is
+/// used here.
+pub(crate) fn projected_turn_terminal_outcome(payload: &Value) -> ProjectedTurnTerminalOutcome {
+    let status = [
+        payload.pointer("/data/status").and_then(Value::as_str),
+        payload.pointer("/data/status/type").and_then(Value::as_str),
+        payload.pointer("/data/turn/status").and_then(Value::as_str),
+        payload
+            .pointer("/data/turn/status/type")
+            .and_then(Value::as_str),
+    ]
+    .into_iter()
+    .flatten()
+    .map(str::trim)
+    .find(|value| !value.is_empty() && value.len() <= 64);
+
+    let Some(status) = status else {
+        return ProjectedTurnTerminalOutcome::Completed;
+    };
+    if status.eq_ignore_ascii_case("completed") {
+        ProjectedTurnTerminalOutcome::Completed
+    } else if status.eq_ignore_ascii_case("failed") {
+        ProjectedTurnTerminalOutcome::Failed
+    } else if status.eq_ignore_ascii_case("rejected") {
+        ProjectedTurnTerminalOutcome::Rejected
+    } else if status.eq_ignore_ascii_case("cancelled") || status.eq_ignore_ascii_case("canceled") {
+        ProjectedTurnTerminalOutcome::Cancelled
+    } else if status.eq_ignore_ascii_case("timeout") {
+        ProjectedTurnTerminalOutcome::Timeout
+    } else if status.eq_ignore_ascii_case("interrupted") {
+        ProjectedTurnTerminalOutcome::Interrupted
     } else {
-        "completed"
+        ProjectedTurnTerminalOutcome::Completed
     }
 }
 
@@ -2666,6 +2702,67 @@ mod tests {
             Some("已完成线路报价完整性检查。")
         );
         assert_ne!(first.behavior, second.behavior);
+    }
+
+    #[test]
+    fn maps_turn_terminal_outcomes_for_execution_without_text_heuristics() {
+        let cases = [
+            (
+                json!({"data": {"status": "completed"}}),
+                ProjectedTurnTerminalOutcome::Completed,
+            ),
+            (
+                json!({"data": {"status": "FAILED"}}),
+                ProjectedTurnTerminalOutcome::Failed,
+            ),
+            (
+                json!({"data": {"status": "rejected"}}),
+                ProjectedTurnTerminalOutcome::Rejected,
+            ),
+            (
+                json!({"data": {"status": "cancelled"}}),
+                ProjectedTurnTerminalOutcome::Cancelled,
+            ),
+            (
+                json!({"data": {"status": "canceled"}}),
+                ProjectedTurnTerminalOutcome::Cancelled,
+            ),
+            (
+                json!({"data": {"status": {"type": "timeout"}}}),
+                ProjectedTurnTerminalOutcome::Timeout,
+            ),
+            (
+                json!({"data": {"turn": {"status": {"type": "interrupted"}}}}),
+                ProjectedTurnTerminalOutcome::Interrupted,
+            ),
+            (
+                json!({"data": {"status": "failed because of a provider error"}}),
+                ProjectedTurnTerminalOutcome::Completed,
+            ),
+            (json!({"data": {}}), ProjectedTurnTerminalOutcome::Completed),
+        ];
+
+        for (payload, expected) in cases {
+            let event = ProjectedEvent {
+                event_type: "codex.turn.completed".to_string(),
+                workspace_id: None,
+                thread_id: "child-thread".to_string(),
+                turn_id: Some("turn-1".to_string()),
+                item_id: None,
+                payload,
+                thread_metadata: None,
+                artifacts: Vec::new(),
+                inline_map: None,
+            };
+
+            assert_eq!(projected_turn_terminal_outcome(&event.payload), expected);
+            let observation = agent_execution_observation(&event).unwrap();
+            assert_eq!(observation.status, Some(expected.execution_status()));
+            assert_eq!(
+                observation.behavior.as_deref(),
+                Some(expected.execution_behavior())
+            );
+        }
     }
 
     #[test]

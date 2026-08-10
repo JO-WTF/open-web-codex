@@ -15,7 +15,9 @@ use sqlx::Row;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::event_projection::project_agent_item_descriptor;
+use crate::event_projection::{
+    project_agent_item_descriptor, projected_turn_terminal_outcome, ProjectedTurnTerminalOutcome,
+};
 use crate::middleware::auth::AuthenticatedUser;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
@@ -476,17 +478,48 @@ fn project_activities_with_wait_context(
                 projection_wait_context,
             ),
         )),
-        "codex.turn.completed" => Some((
-            RuntimeAgentActivityKind::TurnCompleted,
-            RuntimeAgentActivityStatus::Completed,
-            task_event_title(
-                "Completed",
-                "Finished this work cycle",
-                &event.thread_id,
-                wait_context,
-                projection_wait_context,
-            ),
-        )),
+        "codex.turn.completed" => {
+            let outcome = projected_turn_terminal_outcome(&event.payload);
+            let (kind, status, title) = match outcome {
+                ProjectedTurnTerminalOutcome::Completed => (
+                    RuntimeAgentActivityKind::TurnCompleted,
+                    RuntimeAgentActivityStatus::Completed,
+                    task_event_title(
+                        "Completed",
+                        "Finished this work cycle",
+                        &event.thread_id,
+                        wait_context,
+                        projection_wait_context,
+                    ),
+                ),
+                ProjectedTurnTerminalOutcome::Interrupted => (
+                    RuntimeAgentActivityKind::Interrupted,
+                    RuntimeAgentActivityStatus::Failed,
+                    "Agent turn interrupted".to_string(),
+                ),
+                ProjectedTurnTerminalOutcome::Failed => (
+                    RuntimeAgentActivityKind::Failed,
+                    RuntimeAgentActivityStatus::Failed,
+                    "Agent turn failed".to_string(),
+                ),
+                ProjectedTurnTerminalOutcome::Rejected => (
+                    RuntimeAgentActivityKind::Failed,
+                    RuntimeAgentActivityStatus::Failed,
+                    "Agent turn rejected".to_string(),
+                ),
+                ProjectedTurnTerminalOutcome::Cancelled => (
+                    RuntimeAgentActivityKind::Failed,
+                    RuntimeAgentActivityStatus::Failed,
+                    "Agent turn cancelled".to_string(),
+                ),
+                ProjectedTurnTerminalOutcome::Timeout => (
+                    RuntimeAgentActivityKind::Failed,
+                    RuntimeAgentActivityStatus::Failed,
+                    "Agent turn timed out".to_string(),
+                ),
+            };
+            Some((kind, status, title))
+        }
         "codex.thread.completed" => Some((
             RuntimeAgentActivityKind::Completed,
             RuntimeAgentActivityStatus::Completed,
@@ -985,6 +1018,95 @@ mod tests {
             completed[0].title,
             "Completed: Validate the planning dataset."
         );
+    }
+
+    #[test]
+    fn projects_each_turn_terminal_outcome_with_typed_activity_state() {
+        let cases = [
+            (
+                json!("completed"),
+                RuntimeAgentActivityKind::TurnCompleted,
+                RuntimeAgentActivityStatus::Completed,
+                "Finished this work cycle",
+                "completed",
+            ),
+            (
+                json!("failed"),
+                RuntimeAgentActivityKind::Failed,
+                RuntimeAgentActivityStatus::Failed,
+                "Agent turn failed",
+                "failed",
+            ),
+            (
+                json!("rejected"),
+                RuntimeAgentActivityKind::Failed,
+                RuntimeAgentActivityStatus::Failed,
+                "Agent turn rejected",
+                "rejected",
+            ),
+            (
+                json!("cancelled"),
+                RuntimeAgentActivityKind::Failed,
+                RuntimeAgentActivityStatus::Failed,
+                "Agent turn cancelled",
+                "cancelled",
+            ),
+            (
+                json!("canceled"),
+                RuntimeAgentActivityKind::Failed,
+                RuntimeAgentActivityStatus::Failed,
+                "Agent turn cancelled",
+                "cancelled",
+            ),
+            (
+                json!("timeout"),
+                RuntimeAgentActivityKind::Failed,
+                RuntimeAgentActivityStatus::Failed,
+                "Agent turn timed out",
+                "timeout",
+            ),
+            (
+                json!("interrupted"),
+                RuntimeAgentActivityKind::Interrupted,
+                RuntimeAgentActivityStatus::Failed,
+                "Agent turn interrupted",
+                "interrupted",
+            ),
+        ];
+
+        for (status, expected_kind, expected_status, expected_title, expected_execution_status) in
+            cases
+        {
+            let payload = json!({"data": {"status": status}});
+            let outcome = projected_turn_terminal_outcome(&payload);
+            let activities =
+                project_activities(event("codex.turn.completed", "child-thread", payload));
+
+            assert_eq!(activities.len(), 1);
+            assert_eq!(activities[0].kind, expected_kind);
+            assert_eq!(activities[0].status, expected_status);
+            assert_eq!(activities[0].title, expected_title);
+            assert_eq!(outcome.execution_status(), expected_execution_status);
+        }
+    }
+
+    #[test]
+    fn keeps_waiting_and_input_events_outside_turn_terminal_projection() {
+        let waiting = project_activities(event(
+            "platform.approval.requested",
+            "child-thread",
+            json!({"data": {"requestMethod": "item/tool/requestUserInput"}}),
+        ));
+        assert_eq!(waiting[0].kind, RuntimeAgentActivityKind::InputRequested);
+        assert_eq!(waiting[0].status, RuntimeAgentActivityStatus::Waiting);
+
+        let resolved = project_activities(event(
+            "platform.approval.resolved",
+            "child-thread",
+            json!({"data": {"requestMethod": "item/tool/requestUserInput"}}),
+        ));
+        assert_eq!(resolved[0].kind, RuntimeAgentActivityKind::InputAnswered);
+        assert_eq!(resolved[0].status, RuntimeAgentActivityStatus::Running);
     }
 
     #[test]
