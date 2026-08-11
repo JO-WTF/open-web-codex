@@ -263,7 +263,7 @@ type ParsedModelProviderCatalog = ReturnType<typeof parseModelProviderCatalog>;
 function parseFetchedProviderCatalog(
   value: unknown,
   targetProviderId: string,
-  requiredProviderId: string | null,
+  requiredSelection: { providerId: string; modelId: string } | null,
 ): ParsedModelProviderCatalog | null {
   const payload = unwrapWebRpcResult(value);
   if (!payload || typeof payload !== "object") return null;
@@ -286,10 +286,13 @@ function parseFetchedProviderCatalog(
     }
     seenProviderIds.add(provider.id);
     if (!Array.isArray(provider.models)) return null;
+    const seenModelIds = new Set<string>();
     for (const model of provider.models) {
       if (!model || typeof model !== "object") return null;
       const modelRecord = model as Record<string, unknown>;
       if (typeof modelRecord.modelId !== "string" || !modelRecord.modelId.trim()) return null;
+      if (seenModelIds.has(modelRecord.modelId)) return null;
+      seenModelIds.add(modelRecord.modelId);
     }
   }
   if (!seenProviderIds.has(record.currentProviderId)) return null;
@@ -309,8 +312,21 @@ function parseFetchedProviderCatalog(
   }
   const parsedTarget = catalog.providers.find((provider) => provider.id === targetProviderId);
   if (!parsedTarget || (parsedTarget.models?.length ?? 0) === 0) return null;
-  if (requiredProviderId && !catalog.providers.some((provider) => provider.id === requiredProviderId)) {
+  const parsedCurrentProvider = catalog.providers.find(
+    (provider) => provider.id === record.currentProviderId,
+  );
+  if (record.currentModelId
+    && !parsedCurrentProvider?.models?.some((model) => model.modelId === record.currentModelId)) {
     return null;
+  }
+  if (requiredSelection) {
+    if (!requiredSelection.providerId.trim() || !requiredSelection.modelId.trim()) return null;
+    const requiredProvider = catalog.providers.find(
+      (provider) => provider.id === requiredSelection.providerId,
+    );
+    if (!requiredProvider?.models?.some((model) => model.modelId === requiredSelection.modelId)) {
+      return null;
+    }
   }
   return catalog;
 }
@@ -2856,11 +2872,14 @@ export default function WebApp() {
               if (action === "fetch") {
                 const providerId = typeof input.id === "string" ? input.id.trim() : "";
                 const threadSelection = activeThreadModelSelectionRef.current;
-                const requiredProviderId = threadSelection?.threadId === activeThreadIdRef.current
-                  ? threadSelection.providerId
+                const requiredSelection = threadSelection?.threadId === activeThreadIdRef.current
+                  ? {
+                    providerId: threadSelection.providerId,
+                    modelId: threadSelection.modelId,
+                  }
                   : null;
                 const catalog = providerId
-                  ? parseFetchedProviderCatalog(response, providerId, requiredProviderId)
+                  ? parseFetchedProviderCatalog(response, providerId, requiredSelection)
                   : null;
                 if (!catalog) throw new Error("Invalid Provider model catalog response");
                 const next = projectModelCatalogState(
