@@ -814,6 +814,44 @@ fn request_developer_text(request: &Value) -> String {
         .join("\n")
 }
 
+fn assert_visible_skill_catalog_entry(
+    developer_text: &str,
+    skill_name: &str,
+    description_fragment: &str,
+) {
+    let line_prefix = format!("- {skill_name}: ");
+    let line = developer_text
+        .lines()
+        .find(|line| line.starts_with(&line_prefix))
+        .unwrap_or_else(|| panic!("Runtime omitted Skill catalog entry `{skill_name}`"));
+    assert!(
+        line.contains(description_fragment),
+        "Skill `{skill_name}` catalog entry omitted its frontmatter description: {line}",
+    );
+    assert!(
+        line.contains("(file: ") && line.contains(&format!("{skill_name}/SKILL.md)")),
+        "Skill `{skill_name}` catalog entry omitted its file locator: {line}",
+    );
+}
+
+fn assert_hidden_skill_catalog_entry(
+    developer_text: &str,
+    skill_name: &str,
+    description_fragment: &str,
+) {
+    let line_prefix = format!("- {skill_name}: ");
+    assert!(
+        !developer_text
+            .lines()
+            .any(|line| line.starts_with(&line_prefix)),
+        "disabled Skill `{skill_name}` leaked into the model-visible catalog",
+    );
+    assert!(
+        !developer_text.contains(description_fragment),
+        "disabled Skill `{skill_name}` leaked its frontmatter description",
+    );
+}
+
 fn request_function_output<'a>(request: &'a Value, call_id: &str) -> Option<&'a Value> {
     request["input"].as_array()?.iter().find(|item| {
         item["type"].as_str() == Some("function_call_output")
@@ -1324,17 +1362,20 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
         "the Root skill projection must apply to the first model request",
     );
     let root_developer_text = request_developer_text(&root_request);
-    assert!(
-        root_developer_text.contains("让 `network_agent` 定义本次分析所需的数据和决策参数"),
-        "Root must receive the enabled Supervisor Skill instructions",
+    assert_visible_skill_catalog_entry(
+        &root_developer_text,
+        "warehouse-supervisor",
+        "当用户要求准备仓网数据",
     );
-    assert!(
-        !root_developer_text.contains("只接受 `.xlsx`、`.csv` 和 `.json`"),
-        "Root must not receive the disabled Data Skill instructions",
+    assert_hidden_skill_catalog_entry(
+        &root_developer_text,
+        "warehouse-data",
+        "当用户要求检查或准备当前 Workspace 中的仓网",
     );
-    assert!(
-        !root_developer_text.contains("先根据用户目标向 Supervisor 说明必要数据和决策参数"),
-        "Root must not receive the disabled Network Skill instructions",
+    assert_hidden_skill_catalog_entry(
+        &root_developer_text,
+        "warehouse-network",
+        "当用户要求定义仓网数据需求",
     );
 
     let data_thread_id = wait_for_child_thread(&mut child_events, &root.thread_id).await;
