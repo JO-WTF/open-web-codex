@@ -51,6 +51,28 @@ pub struct AuthorizedWorkspace {
     pub root: PathBuf,
 }
 
+/// Bounded Runtime-owned identity metadata attached to internal event frames.
+///
+/// This is consumed by the Platform event projection to associate an event
+/// with the authoritative child Thread before projecting durable provenance.
+/// It is never exposed as a browser DTO or sent back through the Runtime API.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeThreadIdentity {
+    pub thread_id: String,
+    pub parent_thread_id: String,
+    pub source_kind: String,
+    pub agent_path: Option<String>,
+    pub agent_nickname: Option<String>,
+    pub agent_role: Option<String>,
+}
+
+/// Internal event-envelope result for Runtime child identity hydration.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RuntimeThreadIdentitySidecar {
+    Resolved(RuntimeThreadIdentity),
+    Unavailable { thread_id: String },
+}
+
 /// Stable result of starting a Codex Thread in an authorized workspace.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StartedThread {

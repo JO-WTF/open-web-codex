@@ -1,3 +1,4 @@
+use open_web_codex_adapter::RuntimeThreadIdentitySidecar;
 use open_web_codex_platform_contracts::{RunEvent, RuntimeAgentActivitySubject};
 use serde_json::{json, Map, Value};
 use sqlx::PgPool;
@@ -88,6 +89,7 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
         .map_err(|error| format!("Artifact projection savepoint error: {error}"))?;
     let mut pending_artifact_ids = Vec::new();
     let artifact_result = async {
+        ensure_artifact_producer_identity(&mut transaction, &context, &event).await?;
         let registered = register_artifacts(&mut transaction, &context, &event).await?;
         project_registered_artifacts(&mut event.payload, &registered)?;
         if let (Some(candidate), Some(turn_id), Some(item_id)) = (
@@ -535,7 +537,11 @@ fn project_frame(data: &[u8]) -> Result<Option<ProjectedEvent>, String> {
     let Some(frame) = internal_frame(data)? else {
         return Ok(None);
     };
-    let message = frame.message;
+    let InternalFrame {
+        workspace_id,
+        message,
+        thread_identity,
+    } = frame;
     let runtime_method = message
         .get("method")
         .and_then(Value::as_str)
@@ -579,6 +585,8 @@ fn project_frame(data: &[u8]) -> Result<Option<ProjectedEvent>, String> {
         None
     };
     let thread_metadata = project_thread_metadata(runtime_method, &params);
+    let thread_metadata =
+        merge_thread_identity(&thread_id, thread_metadata, thread_identity.as_ref());
     let data = if let Some(item) = item {
         project_item(item)
     } else {
@@ -605,7 +613,7 @@ fn project_frame(data: &[u8]) -> Result<Option<ProjectedEvent>, String> {
 
     Ok(Some(ProjectedEvent {
         event_type: event_type.to_string(),
-        workspace_id: frame.workspace_id,
+        workspace_id,
         thread_id,
         turn_id,
         item_id,
@@ -619,19 +627,18 @@ fn project_frame(data: &[u8]) -> Result<Option<ProjectedEvent>, String> {
 fn mark_artifact_delivery_failure(payload: &mut Value, code: &str) {
     if let Some(data) = payload.pointer_mut("/data").and_then(Value::as_object_mut) {
         data.remove("artifacts");
-        data.insert(
-            "artifactDelivery".to_string(),
-            json!({
-                "state": "failed",
-                "failure": artifact_delivery_failure(code),
-            }),
-        );
+        let delivery = json!({
+            "state": "failed",
+            "failure": artifact_delivery_failure(code),
+        });
+        data.insert("artifactDelivery".to_string(), delivery);
     }
 }
 
 struct InternalFrame {
     workspace_id: Option<Uuid>,
     message: Map<String, Value>,
+    thread_identity: Option<RuntimeThreadIdentitySidecar>,
 }
 
 fn internal_frame(data: &[u8]) -> Result<Option<InternalFrame>, String> {
@@ -669,9 +676,17 @@ fn internal_frame(data: &[u8]) -> Result<Option<InternalFrame>, String> {
         Some(message) => message.clone(),
         None => return Ok(None),
     };
+    let thread_identity = value
+        .pointer("/params/thread_identity")
+        .map(|value| {
+            serde_json::from_value(value.clone())
+                .map_err(|_| "invalid Runtime Thread identity sidecar".to_string())
+        })
+        .transpose()?;
     Ok(Some(InternalFrame {
         workspace_id,
         message,
+        thread_identity,
     }))
 }
 
@@ -799,6 +814,80 @@ fn project_thread_metadata(
     })
 }
 
+fn merge_thread_identity(
+    event_thread_id: &str,
+    existing: Option<ProjectedThreadMetadata>,
+    sidecar: Option<&RuntimeThreadIdentitySidecar>,
+) -> Option<ProjectedThreadMetadata> {
+    let Some(sidecar) = sidecar else {
+        return existing;
+    };
+    let RuntimeThreadIdentitySidecar::Resolved(identity) = sidecar else {
+        return existing;
+    };
+    if identity.thread_id != event_thread_id || !runtime_thread_identity_is_bounded(identity) {
+        return existing;
+    }
+    let hydrated = ProjectedThreadMetadata {
+        parent_thread_id: Some(identity.parent_thread_id.clone()),
+        source_kind: Some(identity.source_kind.clone()),
+        agent_path: identity.agent_path.clone(),
+        agent_nickname: identity.agent_nickname.clone(),
+        agent_role: identity.agent_role.clone(),
+        status_type: None,
+        active_flags: Vec::new(),
+    };
+    let Some(existing) = existing else {
+        return Some(hydrated);
+    };
+    if metadata_string_conflicts(&existing.parent_thread_id, &hydrated.parent_thread_id)
+        || metadata_string_conflicts(&existing.source_kind, &hydrated.source_kind)
+        || metadata_string_conflicts(&existing.agent_path, &hydrated.agent_path)
+        || metadata_string_conflicts(&existing.agent_nickname, &hydrated.agent_nickname)
+        || metadata_string_conflicts(&existing.agent_role, &hydrated.agent_role)
+    {
+        return Some(existing);
+    }
+    let merged = ProjectedThreadMetadata {
+        parent_thread_id: existing.parent_thread_id.or(hydrated.parent_thread_id),
+        source_kind: existing.source_kind.or(hydrated.source_kind),
+        agent_path: existing.agent_path.or(hydrated.agent_path),
+        agent_nickname: existing.agent_nickname.or(hydrated.agent_nickname),
+        agent_role: existing.agent_role.or(hydrated.agent_role),
+        status_type: existing.status_type.or(hydrated.status_type),
+        active_flags: if existing.active_flags.is_empty() {
+            hydrated.active_flags
+        } else {
+            existing.active_flags
+        },
+    };
+    Some(merged)
+}
+
+fn metadata_string_conflicts(existing: &Option<String>, hydrated: &Option<String>) -> bool {
+    matches!((existing.as_deref(), hydrated.as_deref()), (Some(left), Some(right)) if left != right)
+}
+
+fn runtime_thread_identity_is_bounded(
+    identity: &open_web_codex_adapter::RuntimeThreadIdentity,
+) -> bool {
+    bounded_identity_text(&identity.thread_id, 256)
+        && bounded_identity_text(&identity.parent_thread_id, 256)
+        && bounded_identity_text(&identity.source_kind, 64)
+        && bounded_identity_option(identity.agent_path.as_deref(), 512)
+        && bounded_identity_option(identity.agent_nickname.as_deref(), 128)
+        && bounded_identity_option(identity.agent_role.as_deref(), 128)
+        && identity.source_kind == "thread_spawn"
+}
+
+fn bounded_identity_option(value: Option<&str>, max_len: usize) -> bool {
+    value.is_none_or(|value| bounded_identity_text(value, max_len))
+}
+
+fn bounded_identity_text(value: &str, max_len: usize) -> bool {
+    !value.is_empty() && value.len() <= max_len && value.trim() == value
+}
+
 fn bounded_object_string(values: &Map<String, Value>, key: &str, max_len: usize) -> Option<String> {
     values
         .get(key)
@@ -820,6 +909,34 @@ async fn resolve_event_run_context(
     {
         if event.thread_id == context.root_thread_id {
             ensure_root_agent_projection(transaction, &context).await?;
+        } else if event
+            .thread_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.parent_thread_id.as_deref())
+            .is_some()
+        {
+            let Some(metadata) = event.thread_metadata.as_ref() else {
+                return Err("Runtime child identity metadata was unavailable".to_string());
+            };
+            let Some(parent_thread_id) = metadata.parent_thread_id.as_deref() else {
+                return Err("Runtime child identity omitted parent Thread".to_string());
+            };
+            let Some(parent) =
+                lookup_known_thread_context(transaction, parent_thread_id, event.workspace_id)
+                    .await?
+            else {
+                return Err("Runtime child parent Thread projection is unavailable".to_string());
+            };
+            if parent.run_id != context.run_id
+                || parent.organization_id != context.organization_id
+                || parent.profile_id != context.profile_id
+                || parent.workspace_id != context.workspace_id
+            {
+                return Err(
+                    "Runtime child parent Thread belongs to another Runtime tree".to_string(),
+                );
+            }
+            upsert_child_runtime_agent_projection(transaction, &parent, event).await?;
         }
         return Ok(Some(context));
     }
@@ -834,6 +951,24 @@ async fn resolve_event_run_context(
     else {
         return Ok(None);
     };
+    upsert_child_runtime_agent_projection(transaction, &parent, event).await?;
+    Ok(Some(parent))
+}
+
+async fn upsert_child_runtime_agent_projection(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    parent: &EventRunContext,
+    event: &ProjectedEvent,
+) -> Result<(), String> {
+    let Some(metadata) = event.thread_metadata.as_ref() else {
+        return Err("Runtime child identity metadata was unavailable".to_string());
+    };
+    let Some(parent_thread_id) = metadata.parent_thread_id.as_deref() else {
+        return Err("Runtime child identity omitted parent Thread".to_string());
+    };
+    if parent_thread_id.is_empty() || parent_thread_id == event.thread_id {
+        return Err("Runtime child identity referenced an invalid parent Thread".to_string());
+    }
     let source_kind = metadata
         .source_kind
         .as_deref()
@@ -891,7 +1026,7 @@ async fn resolve_event_run_context(
     if row.is_none() {
         return Err("child Thread is already associated with another Runtime tree".to_string());
     }
-    Ok(Some(parent))
+    Ok(())
 }
 
 async fn ensure_root_agent_projection(
@@ -2172,6 +2307,41 @@ fn redact_mcp_resource_metadata(result: &mut Value) {
     }
 }
 
+async fn ensure_artifact_producer_identity(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    context: &EventRunContext,
+    event: &ProjectedEvent,
+) -> Result<(), String> {
+    if event.thread_id == context.root_thread_id || event.artifacts.is_empty() {
+        return Ok(());
+    }
+    let has_identity: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1
+            FROM runtime_agent_projections
+            WHERE organization_id = $1
+              AND profile_id = $2
+              AND workspace_id = $3
+              AND root_run_id = $4
+              AND thread_id = $5
+              AND agent_role IS NOT NULL
+              AND btrim(agent_role) <> ''
+        )",
+    )
+    .bind(context.organization_id)
+    .bind(context.profile_id)
+    .bind(context.workspace_id)
+    .bind(context.run_id)
+    .bind(&event.thread_id)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(|error| format!("Artifact producer identity lookup error: {error}"))?;
+    if !has_identity {
+        return Err("producer_identity_unavailable".to_string());
+    }
+    Ok(())
+}
+
 async fn register_artifacts(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     context: &EventRunContext,
@@ -3377,6 +3547,7 @@ mod tests {
             payload.pointer("/data/artifactDelivery/failure/code"),
             Some(&json!("artifact_projection_failed"))
         );
+        assert!(payload.pointer("/data/artifactDelivery/reason").is_none());
         assert!(!payload.to_string().contains("credential-fragment"));
     }
 
@@ -4209,10 +4380,105 @@ mod tests {
     }
 
     #[test]
+    fn hydrates_runtime_child_identity_from_internal_sidecar_without_mutating_message() {
+        let identity = open_web_codex_adapter::RuntimeThreadIdentitySidecar::Resolved(
+            open_web_codex_adapter::RuntimeThreadIdentity {
+                thread_id: "child-thread".to_string(),
+                parent_thread_id: "root-thread".to_string(),
+                source_kind: "thread_spawn".to_string(),
+                agent_path: Some("/root/network".to_string()),
+                agent_nickname: Some("Network".to_string()),
+                agent_role: Some("network_agent".to_string()),
+            },
+        );
+        let message = json!({
+            "method": "thread/status/changed",
+            "params": {
+                "threadId": "child-thread",
+                "status": {"type": "idle", "activeFlags": ["waitingOnUserInput"]}
+            }
+        });
+        let frame = json!({
+            "method": "app-server-event",
+            "params": {"thread_identity": identity, "message": message}
+        });
+        let event = project_frame(format!("data: {frame}\n\n").as_bytes())
+            .expect("sidecar frame parses")
+            .expect("sidecar frame projects");
+        let metadata = event.thread_metadata.expect("hydrated metadata");
+        assert_eq!(metadata.parent_thread_id.as_deref(), Some("root-thread"));
+        assert_eq!(metadata.agent_role.as_deref(), Some("network_agent"));
+        assert_eq!(event.payload["data"]["status"]["type"], "idle");
+        assert!(event.payload.to_string().contains("waitingOnUserInput"));
+        assert!(!event.payload.to_string().contains("thread_identity"));
+    }
+
+    #[test]
+    fn rejects_malformed_runtime_identity_sidecar_instead_of_dropping_it() {
+        let frame = json!({
+            "method": "app-server-event",
+            "params": {
+                "thread_identity": {"Resolved": {"thread_id": "child-thread"}},
+                "message": {
+                    "method": "thread/status/changed",
+                    "params": {"threadId": "child-thread", "status": {"type": "idle"}}
+                }
+            }
+        });
+        let error = project_frame(format!("data: {frame}\n\n").as_bytes())
+            .expect_err("malformed sidecar must be observable");
+        assert_eq!(error, "invalid Runtime Thread identity sidecar");
+    }
+
+    #[test]
+    fn rejects_conflicting_sidecar_and_official_thread_metadata() {
+        let identity = open_web_codex_adapter::RuntimeThreadIdentitySidecar::Resolved(
+            open_web_codex_adapter::RuntimeThreadIdentity {
+                thread_id: "child-thread".to_string(),
+                parent_thread_id: "root-thread".to_string(),
+                source_kind: "thread_spawn".to_string(),
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: Some("network_agent".to_string()),
+            },
+        );
+        let frame = json!({
+            "method": "app-server-event",
+            "params": {
+                "thread_identity": identity,
+                "message": {
+                    "method": "thread/started",
+                    "params": {
+                        "thread": {
+                            "id": "child-thread",
+                            "parentThreadId": "root-thread",
+                            "source": {"subAgent": {"thread_spawn": {
+                                "parent_thread_id": "root-thread",
+                                "depth": 1,
+                                "agent_role": "data_planning_agent"
+                            }}}
+                        }
+                    }
+                }
+            }
+        });
+        let event = project_frame(format!("data: {frame}\n\n").as_bytes())
+            .expect("conflicting metadata frame parses")
+            .expect("conflicting metadata frame projects");
+        assert_eq!(
+            event
+                .thread_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.agent_role.as_deref()),
+            Some("data_planning_agent")
+        );
+    }
+
+    #[test]
     fn projects_runtime_child_thread_identity_from_the_official_thread_shape() {
         let workspace_id = Uuid::now_v7();
         let frame = format!(
-            r#"data: {{"method":"app-server-event","params":{{"workspace_id":"{workspace_id}","message":{{"method":"thread/started","params":{{"thread":{{"id":"child-thread","parentThreadId":"root-thread","source":{{"subAgent":{{"thread_spawn":{{"parent_thread_id":"root-thread","depth":1,"agent_path":"/root/network","agent_nickname":"Network","agent_role":"network_planning_agent"}}}}}},"status":{{"type":"idle","activeFlags":[]}}}}}}}}}}}}
+            r#"data: {{"method":"app-server-event","params":{{"workspace_id":"{workspace_id}","message":{{"method":"thread/started","params":{{"thread":{{"id":"child-thread","parentThreadId":"root-thread","source":{{"subAgent":{{"thread_spawn":{{"parent_thread_id":"root-thread","depth":1,"agent_path":"/root/network","agent_nickname":"Network","agent_role":"network_agent"}}}}}},"status":{{"type":"idle","activeFlags":[]}}}}}}}}}}}}
 
 "#
         );
@@ -4226,10 +4492,7 @@ mod tests {
         assert_eq!(metadata.source_kind.as_deref(), Some("thread_spawn"));
         assert_eq!(metadata.agent_path.as_deref(), Some("/root/network"));
         assert_eq!(metadata.agent_nickname.as_deref(), Some("Network"));
-        assert_eq!(
-            metadata.agent_role.as_deref(),
-            Some("network_planning_agent")
-        );
+        assert_eq!(metadata.agent_role.as_deref(), Some("network_agent"));
         assert_eq!(metadata.status_type.as_deref(), Some("idle"));
     }
 

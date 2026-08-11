@@ -780,6 +780,38 @@ network_planning_report_bundle.v1.json"
         )
     }
 
+    fn child_final_item_frame(
+        workspace_id: Uuid,
+        thread_id: &str,
+        turn_id: &str,
+        item_id: &str,
+        relative_path: &str,
+        byte_size: usize,
+    ) -> String {
+        let root = final_item_frame(workspace_id, item_id, relative_path, byte_size);
+        let mut value: Value = serde_json::from_str(
+            root.strip_prefix("data: ")
+                .and_then(|value| value.strip_suffix("\n\n"))
+                .expect("final item frame"),
+        )
+        .expect("final item JSON");
+        let params = value
+            .pointer_mut("/params/message/params")
+            .and_then(Value::as_object_mut)
+            .expect("final item params");
+        params.insert("threadId".to_string(), json!(thread_id));
+        params.insert("turnId".to_string(), json!(turn_id));
+        value["params"]["thread_identity"] = json!({"Resolved": {
+            "thread_id": thread_id,
+            "parent_thread_id": "root-thread",
+            "source_kind": "thread_spawn",
+            "agent_path": "/root/network",
+            "agent_nickname": "Network",
+            "agent_role": "network_agent"
+        }});
+        format!("data: {value}\n\n")
+    }
+
     #[tokio::test]
     #[ignore = "requires TEST_DATABASE_URL pointing at a disposable PostgreSQL database"]
     async fn final_workspace_artifact_is_idempotent_materialized_and_recovered() {
@@ -1588,8 +1620,8 @@ network_planning_report_bundle.v1.json"
             Some("ready")
         );
         let recovered_detail = super::get(
-            axum::extract::State(app_state),
-            auth,
+            axum::extract::State(app_state.clone()),
+            auth.clone(),
             axum::extract::Path(restart_id),
         )
         .await
@@ -1599,5 +1631,92 @@ network_planning_report_bundle.v1.json"
             open_web_codex_platform_contracts::ArtifactState::Ready
         );
         assert!(recovered_detail.0.content_url.is_some());
+
+        let child_thread_id = "network-child";
+        let child_turn_id = "network-turn";
+        let child_item_id = "network-item";
+        let child_relative_path = "deliverables/network-child-report.json";
+        std::fs::write(checkout.root.join(child_relative_path), valid).unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM runtime_agent_projections
+                 WHERE root_run_id = $1 AND thread_id = $2",
+            )
+            .bind(run_id)
+            .bind(child_thread_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            0
+        );
+        sqlx::query(
+            "INSERT INTO runtime_agent_execution_projections
+             (organization_id, profile_id, workspace_id, root_run_id, agent_thread_id,
+              turn_id, ordinal, status, current_behavior, first_observed_sequence, last_observed_sequence)
+             VALUES ($1, $2, $3, $4, $5, $6, 1, 'pending', 'Waiting for child Thread', 1, 1)",
+        )
+        .bind(organization_id)
+        .bind(profile_id)
+        .bind(workspace_id)
+        .bind(run_id)
+        .bind(child_thread_id)
+        .bind(child_turn_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let child_frame = child_final_item_frame(
+            workspace_id,
+            child_thread_id,
+            child_turn_id,
+            child_item_id,
+            child_relative_path,
+            valid.len(),
+        );
+        let child_first = crate::event_projection::persist_frame(child_frame.as_bytes(), &pool)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(child_first.pending_artifact_ids.len(), 1);
+        assert_eq!(
+            sqlx::query_scalar::<_, String>(
+                "SELECT agent_role FROM runtime_agent_projections
+                 WHERE root_run_id = $1 AND thread_id = $2",
+            )
+            .bind(run_id)
+            .bind(child_thread_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            "network_agent"
+        );
+        let child_replay = crate::event_projection::persist_frame(child_frame.as_bytes(), &pool)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            child_replay.pending_artifact_ids,
+            child_first.pending_artifact_ids
+        );
+        let child_artifact_id = child_first.pending_artifact_ids[0];
+        let child_list = super::list_for_task(
+            axum::extract::State(app_state),
+            auth,
+            axum::extract::Path(task_id),
+        )
+        .await
+        .unwrap();
+        let child_summary = child_list
+            .0
+            .iter()
+            .find(|summary| summary.id == child_artifact_id)
+            .expect("child Artifact summary");
+        assert_eq!(child_summary.producer_run_id, run_id);
+        assert_eq!(child_summary.producer_thread_id, child_thread_id);
+        assert_eq!(child_summary.producer_turn_id, child_turn_id);
+        assert_eq!(child_summary.producer_item_id, child_item_id);
+        assert_eq!(
+            child_summary.producer_agent_role.as_deref(),
+            Some("network_agent")
+        );
     }
 }

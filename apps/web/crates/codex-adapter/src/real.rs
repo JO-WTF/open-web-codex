@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use open_web_codex_profile_host::{ProfileHost, ProfileHostConfig, ProfileHostState};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -15,8 +15,8 @@ use tokio::sync::RwLock;
 
 use crate::{
     AdapterError, AuthorizedWorkspace, CanceledProfileLogin, CodexAdapter, HealthStatus,
-    ProfileLoginStatus, ProfileMutation, ProfileQuery, ReviewTarget, StartedProfileLogin,
-    StartedThread, TurnOptions,
+    ProfileLoginStatus, ProfileMutation, ProfileQuery, ReviewTarget, RuntimeThreadIdentity,
+    RuntimeThreadIdentitySidecar, StartedProfileLogin, StartedThread, TurnOptions,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +77,7 @@ pub struct RealCodexAdapter {
     workspace_id: String,
     workspace_root: PathBuf,
     thread_workspaces: Arc<RwLock<HashMap<String, AuthorizedWorkspace>>>,
+    child_thread_identities: Arc<RwLock<HashMap<String, RuntimeThreadIdentity>>>,
     thread_history_modes: Arc<RwLock<HashMap<String, bool>>>,
     suppressed_threads: Arc<RwLock<HashSet<String>>>,
     active_login_id: Arc<RwLock<Option<String>>>,
@@ -120,6 +121,7 @@ impl RealCodexAdapter {
             workspace_id: workspace_id.into(),
             workspace_root,
             thread_workspaces: Arc::new(RwLock::new(HashMap::new())),
+            child_thread_identities: Arc::new(RwLock::new(HashMap::new())),
             thread_history_modes: Arc::new(RwLock::new(HashMap::new())),
             suppressed_threads: Arc::new(RwLock::new(HashSet::new())),
             active_login_id: Arc::new(RwLock::new(None)),
@@ -185,6 +187,7 @@ impl RealCodexAdapter {
         let current = self.host.runtime_instance_id().await;
         if runtime_instance.as_ref() != Some(&current) {
             self.thread_workspaces.write().await.clear();
+            self.child_thread_identities.write().await.clear();
             self.terminal_workspaces.write().await.clear();
             *runtime_instance = Some(current);
         }
@@ -277,6 +280,7 @@ impl RealCodexAdapter {
         let current = self.host.runtime_instance_id().await;
         if runtime.as_ref() != Some(&current) {
             self.thread_workspaces.write().await.clear();
+            self.child_thread_identities.write().await.clear();
             self.terminal_workspaces.write().await.clear();
             *runtime = Some(current);
             return Ok(false);
@@ -293,6 +297,7 @@ impl RealCodexAdapter {
             return Ok(false);
         }
         self.thread_workspaces.write().await.remove(thread_id);
+        self.child_thread_identities.write().await.remove(thread_id);
         self.thread_history_modes.write().await.remove(thread_id);
         Ok(true)
     }
@@ -1093,6 +1098,7 @@ impl CodexAdapter for RealCodexAdapter {
             .request("thread/archive", json!({ "threadId": thread_id }))
             .await?;
         self.thread_workspaces.write().await.remove(thread_id);
+        self.child_thread_identities.write().await.remove(thread_id);
         self.thread_history_modes.write().await.remove(thread_id);
         Ok(())
     }
@@ -1381,7 +1387,7 @@ impl CodexAdapter for RealCodexAdapter {
                             *active = None;
                         }
                     }
-                    self.inherit_child_thread_workspace(&message).await?;
+                    let thread_identity = self.inherit_child_thread_workspace(&message).await?;
                     if let Some(thread_id) = message_thread_id(&message) {
                         if self.suppressed_threads.read().await.contains(thread_id) {
                             continue;
@@ -1410,8 +1416,12 @@ impl CodexAdapter for RealCodexAdapter {
                             None => self.workspace_id.clone(),
                         }
                     };
-                    let frame =
-                        app_server_event_frame(&workspace_id, runtime_instance_id, message)?;
+                    let frame = app_server_event_frame_with_identity(
+                        &workspace_id,
+                        runtime_instance_id,
+                        message,
+                        thread_identity.as_ref(),
+                    )?;
                     if sender.send(frame).is_err() {
                         return Ok(());
                     }
@@ -1440,13 +1450,80 @@ impl CodexAdapter for RealCodexAdapter {
 }
 
 impl RealCodexAdapter {
-    async fn inherit_child_thread_workspace(&self, message: &Value) -> Result<(), AdapterError> {
+    async fn inherit_child_thread_workspace(
+        &self,
+        message: &Value,
+    ) -> Result<Option<RuntimeThreadIdentitySidecar>, AdapterError> {
         let Some(child_thread_id) = message_thread_id(message) else {
-            return Ok(());
+            return Ok(None);
         };
-        let Some(parent_thread_id) = message_parent_thread_id(message) else {
-            return Ok(());
+        let cached_identity = {
+            let identities = self.child_thread_identities.read().await;
+            cached_thread_identity_sidecar(&identities, child_thread_id)
         };
+        if let Some(sidecar) = cached_identity {
+            return Ok(Some(sidecar));
+        }
+        if self
+            .thread_workspaces
+            .read()
+            .await
+            .contains_key(child_thread_id)
+        {
+            return Ok(None);
+        }
+        match self
+            .read_unbound_child_thread_identity(child_thread_id)
+            .await
+        {
+            Ok(Some(identity)) => {
+                match self
+                    .bind_child_thread_workspace(&identity.thread_id, &identity.parent_thread_id)
+                    .await
+                {
+                    Ok(()) => {
+                        self.child_thread_identities
+                            .write()
+                            .await
+                            .insert(child_thread_id.to_string(), identity.clone());
+                        Ok(Some(RuntimeThreadIdentitySidecar::Resolved(identity)))
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            thread_id = child_thread_id,
+                            reason = identity_failure_category(&error),
+                            "Runtime child Thread workspace binding unavailable"
+                        );
+                        Ok(Some(RuntimeThreadIdentitySidecar::Unavailable {
+                            thread_id: child_thread_id.to_string(),
+                        }))
+                    }
+                }
+            }
+            Ok(None) if message_parent_thread_id(message).is_some() => {
+                Ok(Some(RuntimeThreadIdentitySidecar::Unavailable {
+                    thread_id: child_thread_id.to_string(),
+                }))
+            }
+            Ok(None) => Ok(None),
+            Err(error) => {
+                tracing::warn!(
+                    thread_id = child_thread_id,
+                    reason = identity_failure_category(&error),
+                    "Runtime child Thread identity hydration unavailable"
+                );
+                Ok(Some(RuntimeThreadIdentitySidecar::Unavailable {
+                    thread_id: child_thread_id.to_string(),
+                }))
+            }
+        }
+    }
+
+    async fn bind_child_thread_workspace(
+        &self,
+        child_thread_id: &str,
+        parent_thread_id: &str,
+    ) -> Result<(), AdapterError> {
         if child_thread_id == parent_thread_id {
             return Err(AdapterError::Rpc(
                 "Runtime child Thread referenced itself as parent".to_string(),
@@ -1459,7 +1536,9 @@ impl RealCodexAdapter {
             .get(parent_thread_id)
             .cloned();
         let Some(parent_workspace) = parent_workspace else {
-            return Ok(());
+            return Err(AdapterError::Rpc(
+                "Runtime child Thread parent is not bound to an authorized Workspace".to_string(),
+            ));
         };
         let mut thread_workspaces = self.thread_workspaces.write().await;
         match thread_workspaces.get(child_thread_id) {
@@ -1472,6 +1551,48 @@ impl RealCodexAdapter {
                 Ok(())
             }
         }
+    }
+
+    async fn read_unbound_child_thread_identity(
+        &self,
+        child_thread_id: &str,
+    ) -> Result<Option<RuntimeThreadIdentity>, AdapterError> {
+        let response = self
+            .host
+            .request(
+                "thread/read",
+                json!({ "threadId": child_thread_id, "includeTurns": false }),
+            )
+            .await?;
+        let thread = response
+            .get("thread")
+            .and_then(Value::as_object)
+            .ok_or_else(|| AdapterError::Rpc("Runtime thread/read omitted thread".to_string()))?;
+        let returned_thread_id = bounded_map_string(thread, "id", 256).ok_or_else(|| {
+            AdapterError::Rpc("Runtime thread/read omitted thread.id".to_string())
+        })?;
+        if returned_thread_id != child_thread_id {
+            return Err(AdapterError::Rpc(
+                "Runtime thread/read returned a different Thread".to_string(),
+            ));
+        }
+        let Some(parent_thread_id) = thread_spawn_parent_thread_id(thread, child_thread_id)? else {
+            return Ok(None);
+        };
+        let parent_workspace = self
+            .thread_workspaces
+            .read()
+            .await
+            .get(&parent_thread_id)
+            .cloned()
+            .ok_or_else(|| {
+                AdapterError::Rpc(
+                    "Runtime child Thread parent is not bound to an authorized Workspace"
+                        .to_string(),
+                )
+            })?;
+        let authorized_root = self.authorized_root(&parent_workspace)?;
+        parse_runtime_thread_identity(thread, child_thread_id, &authorized_root)
     }
 
     async fn require_terminal(
@@ -1493,6 +1614,111 @@ impl RealCodexAdapter {
         }
         Ok(())
     }
+}
+
+fn thread_spawn_parent_thread_id(
+    thread: &Map<String, Value>,
+    child_thread_id: &str,
+) -> Result<Option<String>, AdapterError> {
+    let source = thread
+        .get("source")
+        .and_then(Value::as_object)
+        .and_then(|source| source.get("subAgent"))
+        .and_then(Value::as_object);
+    let thread_spawn =
+        source.and_then(|source| source.get("thread_spawn").and_then(Value::as_object));
+    let parent_thread_id = first_consistent_string(
+        thread,
+        &["parentThreadId"],
+        thread_spawn,
+        &["parent_thread_id"],
+        256,
+    )?;
+    if thread_spawn.is_none() {
+        if parent_thread_id.is_none() {
+            return Ok(None);
+        }
+        return Err(AdapterError::Rpc(
+            "Runtime Thread parent was not a ThreadSpawn source".to_string(),
+        ));
+    }
+    let Some(parent_thread_id) = parent_thread_id else {
+        return Err(AdapterError::Rpc(
+            "Runtime ThreadSpawn omitted parentThreadId".to_string(),
+        ));
+    };
+    if parent_thread_id == child_thread_id {
+        return Err(AdapterError::Rpc(
+            "Runtime child Thread referenced itself as parent".to_string(),
+        ));
+    }
+    Ok(Some(parent_thread_id))
+}
+
+fn parse_runtime_thread_identity(
+    thread: &Map<String, Value>,
+    child_thread_id: &str,
+    authorized_root: &str,
+) -> Result<Option<RuntimeThreadIdentity>, AdapterError> {
+    let Some(parent_thread_id) = thread_spawn_parent_thread_id(thread, child_thread_id)? else {
+        return Ok(None);
+    };
+    let source = thread
+        .get("source")
+        .and_then(Value::as_object)
+        .and_then(|source| source.get("subAgent"))
+        .and_then(Value::as_object)
+        .ok_or_else(|| AdapterError::Rpc("Runtime Thread source was not a subagent".to_string()))?;
+    let thread_spawn = source
+        .get("thread_spawn")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            AdapterError::Rpc("Runtime Thread source was not a ThreadSpawn".to_string())
+        })?;
+    let cwd = bounded_map_string(thread, "cwd", 4_096)
+        .ok_or_else(|| AdapterError::Rpc("Runtime Thread omitted cwd".to_string()))?;
+    let cwd = Path::new(&cwd).canonicalize().map_err(|error| {
+        AdapterError::Rpc(format!(
+            "Runtime child Thread cwd could not be resolved: {error}"
+        ))
+    })?;
+    if !cwd.starts_with(Path::new(authorized_root)) {
+        return Err(AdapterError::Rpc(
+            "Runtime child Thread cwd is outside its authorized Workspace".to_string(),
+        ));
+    }
+    let status = thread
+        .get("status")
+        .and_then(Value::as_object)
+        .ok_or_else(|| AdapterError::Rpc("Runtime Thread omitted status".to_string()))?;
+    if bounded_map_string(status, "type", 64).is_none() {
+        return Err(AdapterError::Rpc(
+            "Runtime Thread status omitted type".to_string(),
+        ));
+    }
+    let agent_role = first_consistent_string(
+        thread,
+        &["agentRole"],
+        Some(thread_spawn),
+        &["agent_role"],
+        128,
+    )?;
+    let agent_nickname = first_consistent_string(
+        thread,
+        &["agentNickname"],
+        Some(thread_spawn),
+        &["agent_nickname"],
+        128,
+    )?;
+    let agent_path = bounded_map_string(thread_spawn, "agent_path", 512);
+    Ok(Some(RuntimeThreadIdentity {
+        thread_id: child_thread_id.to_string(),
+        parent_thread_id,
+        source_kind: "thread_spawn".to_string(),
+        agent_path,
+        agent_nickname,
+        agent_role,
+    }))
 }
 
 fn terminal_command() -> Vec<String> {
@@ -1534,6 +1760,72 @@ fn message_workspace_id(message: &Value) -> Option<&str> {
     message
         .pointer("/params/workspaceId")
         .and_then(Value::as_str)
+}
+
+fn bounded_map_string(values: &Map<String, Value>, key: &str, max_len: usize) -> Option<String> {
+    values
+        .get(key)
+        .and_then(Value::as_str)
+        .and_then(|value| bounded_text(value, max_len))
+}
+
+fn bounded_text(value: &str, max_len: usize) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty() && value.len() <= max_len).then(|| value.to_string())
+}
+
+fn cached_thread_identity_sidecar(
+    identities: &HashMap<String, RuntimeThreadIdentity>,
+    thread_id: &str,
+) -> Option<RuntimeThreadIdentitySidecar> {
+    identities
+        .get(thread_id)
+        .cloned()
+        .map(RuntimeThreadIdentitySidecar::Resolved)
+}
+
+fn first_consistent_string(
+    primary: &Map<String, Value>,
+    primary_keys: &[&str],
+    secondary: Option<&Map<String, Value>>,
+    secondary_keys: &[&str],
+    max_len: usize,
+) -> Result<Option<String>, AdapterError> {
+    let mut values = Vec::new();
+    for key in primary_keys {
+        if let Some(value) = bounded_map_string(primary, key, max_len) {
+            if !values.iter().any(|existing| existing == &value) {
+                values.push(value);
+            }
+        }
+    }
+    if let Some(values_map) = secondary {
+        for key in secondary_keys {
+            if let Some(value) = bounded_map_string(values_map, key, max_len) {
+                if !values.iter().any(|existing| existing == &value) {
+                    values.push(value);
+                }
+            }
+        }
+    }
+    match values.as_slice() {
+        [] => Ok(None),
+        [value] => Ok(Some(value.clone())),
+        _ => Err(AdapterError::Rpc(
+            "Runtime Thread identity metadata conflicted".to_string(),
+        )),
+    }
+}
+
+fn identity_failure_category(error: &AdapterError) -> &'static str {
+    match error {
+        AdapterError::Rpc(_) => "rpc",
+        AdapterError::Unreachable(_) => "unreachable",
+        AdapterError::ProfileHost(_) => "profile_host",
+        AdapterError::Internal(_) => "internal",
+        AdapterError::NotImplemented(_) => "unsupported",
+        AdapterError::CapabilityUnavailable(_) => "capability",
+    }
 }
 
 fn turn_matches(message: &Value, expected: Option<&str>) -> bool {
@@ -1597,13 +1889,28 @@ fn app_server_event_frame(
     runtime_instance_id: uuid::Uuid,
     message: Value,
 ) -> Result<Vec<u8>, AdapterError> {
+    app_server_event_frame_with_identity(workspace_id, runtime_instance_id, message, None)
+}
+
+fn app_server_event_frame_with_identity(
+    workspace_id: &str,
+    runtime_instance_id: uuid::Uuid,
+    message: Value,
+    thread_identity: Option<&RuntimeThreadIdentitySidecar>,
+) -> Result<Vec<u8>, AdapterError> {
+    let mut params = json!({
+        "workspace_id": workspace_id,
+        "runtime_instance_id": runtime_instance_id,
+        "message": message,
+    });
+    if let Some(thread_identity) = thread_identity {
+        params["thread_identity"] = serde_json::to_value(thread_identity).map_err(|error| {
+            AdapterError::Internal(format!("failed to encode Thread identity: {error}"))
+        })?;
+    }
     let envelope = json!({
         "method": "app-server-event",
-        "params": {
-            "workspace_id": workspace_id,
-            "runtime_instance_id": runtime_instance_id,
-            "message": message,
-        },
+        "params": params,
     });
     let mut frame = b"data: ".to_vec();
     serde_json::to_writer(&mut frame, &envelope)
@@ -1615,12 +1922,16 @@ fn app_server_event_frame(
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_core_batch_write_params, app_server_event_frame, codex_bubblewrap_is_unavailable,
-        codex_sandbox_disabled_by_environment, is_authorized_workspace_root, login_completion,
-        message_parent_thread_id, message_thread_id, thread_start_params, turn_sandbox_policy,
-        RealCodexAdapter, ThreadSkillConfig,
+        agent_core_batch_write_params, app_server_event_frame,
+        app_server_event_frame_with_identity, cached_thread_identity_sidecar,
+        codex_bubblewrap_is_unavailable, codex_sandbox_disabled_by_environment,
+        is_authorized_workspace_root, login_completion, message_parent_thread_id,
+        message_thread_id, parse_runtime_thread_identity, thread_spawn_parent_thread_id,
+        thread_start_params, turn_sandbox_policy, RealCodexAdapter, ThreadSkillConfig,
     };
+    use crate::{RuntimeThreadIdentity, RuntimeThreadIdentitySidecar};
     use serde_json::{json, Value};
+    use std::collections::HashMap;
     use std::path::Path;
 
     #[test]
@@ -1713,6 +2024,163 @@ mod tests {
 
         assert_eq!(value["params"]["workspace_id"], "workspace-1");
         assert_eq!(value["params"]["message"]["method"], "thread/started");
+    }
+
+    #[test]
+    fn wraps_runtime_identity_as_internal_sidecar_without_mutating_message() {
+        let message = json!({
+            "method": "item/completed",
+            "params": {"threadId": "child-thread", "itemId": "item-1"}
+        });
+        let identity = RuntimeThreadIdentitySidecar::Resolved(RuntimeThreadIdentity {
+            thread_id: "child-thread".to_string(),
+            parent_thread_id: "root-thread".to_string(),
+            source_kind: "thread_spawn".to_string(),
+            agent_path: Some("/root/network".to_string()),
+            agent_nickname: Some("Network".to_string()),
+            agent_role: Some("network_agent".to_string()),
+        });
+        let frame = app_server_event_frame_with_identity(
+            "workspace-1",
+            uuid::Uuid::nil(),
+            message.clone(),
+            Some(&identity),
+        )
+        .expect("event frame");
+        let payload = frame
+            .strip_prefix(b"data: ")
+            .and_then(|value| value.strip_suffix(b"\n\n"))
+            .expect("SSE data frame");
+        let value: Value = serde_json::from_slice(payload).expect("valid event JSON");
+        assert_eq!(value["params"]["message"], message);
+        assert_eq!(
+            value["params"]["thread_identity"]["Resolved"]["thread_id"],
+            "child-thread"
+        );
+    }
+
+    #[test]
+    fn parses_only_authoritative_thread_spawn_identity_shape() {
+        let root = tempfile::tempdir().expect("workspace root");
+        let child_cwd = root.path().join("child");
+        std::fs::create_dir(&child_cwd).expect("child cwd");
+        let canonical_root = root.path().canonicalize().expect("canonical root");
+        let thread = json!({
+            "id": "child-thread",
+            "parentThreadId": "root-thread",
+            "agentRole": "network_agent",
+            "agentNickname": "Network",
+            "cwd": child_cwd,
+            "source": {"subAgent": {"thread_spawn": {
+                "parent_thread_id": "root-thread",
+                "depth": 1,
+                "agent_role": "network_agent",
+                "agent_nickname": "Network",
+                "agent_path": "/root/network"
+            }}},
+            "status": {"type": "idle", "activeFlags": []}
+        });
+        let thread = thread.as_object().expect("thread object");
+        let identity = parse_runtime_thread_identity(
+            thread,
+            "child-thread",
+            canonical_root.to_str().expect("root path"),
+        )
+        .expect("authoritative shape");
+        assert_eq!(
+            identity
+                .as_ref()
+                .and_then(|identity| identity.agent_role.as_deref()),
+            Some("network_agent")
+        );
+        assert_eq!(
+            thread_spawn_parent_thread_id(thread, "child-thread").unwrap(),
+            Some("root-thread".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_thread_identity_conflict_self_parent_non_spawn_and_cwd_escape() {
+        let root = tempfile::tempdir().expect("workspace root");
+        let child_cwd = root.path().join("child");
+        std::fs::create_dir(&child_cwd).expect("child cwd");
+        let canonical_root = root.path().canonicalize().expect("canonical root");
+        let base = json!({
+            "id": "child-thread",
+            "parentThreadId": "root-thread",
+            "agentRole": "network_agent",
+            "cwd": child_cwd,
+            "source": {"subAgent": {"thread_spawn": {
+                "parent_thread_id": "root-thread",
+                "depth": 1,
+                "agent_role": "network_agent"
+            }}},
+            "status": {"type": "idle", "activeFlags": []}
+        });
+        let mut conflict = base.clone();
+        conflict["source"]["subAgent"]["thread_spawn"]["agent_role"] = json!("data_planning_agent");
+        let conflict = conflict.as_object().expect("conflict object");
+        assert!(parse_runtime_thread_identity(
+            conflict,
+            "child-thread",
+            canonical_root.to_str().expect("root path")
+        )
+        .is_err());
+
+        let mut self_parent = base.clone();
+        self_parent["parentThreadId"] = json!("child-thread");
+        let self_parent = self_parent.as_object().expect("self-parent object");
+        assert!(parse_runtime_thread_identity(
+            self_parent,
+            "child-thread",
+            canonical_root.to_str().expect("root path")
+        )
+        .is_err());
+
+        let mut non_spawn = base.clone();
+        non_spawn["source"]["subAgent"] = json!("review");
+        let non_spawn = non_spawn.as_object().expect("non-spawn object");
+        assert!(parse_runtime_thread_identity(
+            non_spawn,
+            "child-thread",
+            canonical_root.to_str().expect("root path")
+        )
+        .is_err());
+
+        let outside = tempfile::tempdir().expect("outside root");
+        let mut escaped = base;
+        escaped["cwd"] = json!(outside.path());
+        let escaped = escaped.as_object().expect("escaped object");
+        assert!(parse_runtime_thread_identity(
+            escaped,
+            "child-thread",
+            canonical_root.to_str().expect("root path")
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn reuses_cached_child_identity_until_runtime_state_is_cleared() {
+        let identity = RuntimeThreadIdentity {
+            thread_id: "child-thread".to_string(),
+            parent_thread_id: "root-thread".to_string(),
+            source_kind: "thread_spawn".to_string(),
+            agent_path: Some("/root/network".to_string()),
+            agent_nickname: Some("Network".to_string()),
+            agent_role: Some("network_agent".to_string()),
+        };
+        let mut identities = HashMap::new();
+        identities.insert(identity.thread_id.clone(), identity.clone());
+
+        assert_eq!(
+            cached_thread_identity_sidecar(&identities, "child-thread"),
+            Some(RuntimeThreadIdentitySidecar::Resolved(identity))
+        );
+        identities.clear();
+        assert_eq!(
+            cached_thread_identity_sidecar(&identities, "child-thread"),
+            None
+        );
     }
 
     #[test]
