@@ -213,11 +213,18 @@ impl ApprovalService {
              SELECT r.id, $1, $2, p.organization_id, p.id, $3, $4, $5, 'pending', 0 \
              FROM profiles p \
              JOIN runs r ON r.requested_profile_id = p.id \
-             LEFT JOIN runtime_agent_projections agent \
-               ON agent.root_run_id = r.id AND agent.profile_id = p.id \
-              AND agent.thread_id = $3 \
              WHERE p.runtime_key = $6 AND p.status = 'active' \
-               AND (r.codex_thread_id = $3 OR agent.thread_id IS NOT NULL) \
+               AND (r.codex_thread_id = $3 \
+                    OR EXISTS ( \
+                        SELECT 1 FROM runtime_agent_projections agent \
+                        WHERE agent.root_run_id = r.id AND agent.profile_id = p.id \
+                          AND agent.thread_id = $3 \
+                    ) \
+                    OR EXISTS ( \
+                        SELECT 1 FROM runtime_agent_execution_projections execution \
+                        WHERE execution.root_run_id = r.id AND execution.profile_id = p.id \
+                          AND execution.agent_thread_id = $3 \
+                    )) \
              ORDER BY r.created_at DESC LIMIT 1 \
              ON CONFLICT (profile_id, runtime_instance_id, runtime_request_id) \
              WHERE runtime_instance_id IS NOT NULL AND runtime_request_id IS NOT NULL \

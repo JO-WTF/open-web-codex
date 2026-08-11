@@ -973,20 +973,6 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     assert_eq!(audit_count, 1);
 
     sqlx::query(
-        "INSERT INTO runtime_agent_projections (
-            organization_id, profile_id, workspace_id, root_run_id, thread_id,
-            parent_thread_id, source_kind, agent_path, agent_role
-         ) VALUES ($1, $2, $3, $4, 'approval-child-thread', 'approval-thread',
-                   'thread_spawn', '/root/data', 'data_agent')",
-    )
-    .bind(first_organization_id)
-    .bind(profile_id)
-    .bind(workspace_id)
-    .bind(first_run_id)
-    .execute(&pool)
-    .await
-    .unwrap();
-    sqlx::query(
         "INSERT INTO runtime_agent_execution_projections (
             organization_id, profile_id, workspace_id, root_run_id, agent_thread_id,
             turn_id, ordinal, task, display_title, status, current_behavior,
@@ -1037,6 +1023,20 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
         .expect("child generic approval projection");
     assert_eq!(child_generic["source"]["kind"], "agent");
     assert_eq!(child_generic["source"]["displayTitle"], "Data Agent");
+    sqlx::query(
+        "INSERT INTO runtime_agent_projections (
+            organization_id, profile_id, workspace_id, root_run_id, thread_id,
+            parent_thread_id, source_kind, agent_path, agent_role
+         ) VALUES ($1, $2, $3, $4, 'approval-child-thread', 'approval-thread',
+                   'thread_spawn', '/root/data', 'data_agent')",
+    )
+    .bind(first_organization_id)
+    .bind(profile_id)
+    .bind(workspace_id)
+    .bind(first_run_id)
+    .execute(&pool)
+    .await
+    .unwrap();
     let child_approval_id = approval_service
         .capture_message(
             runtime_instance_id,
