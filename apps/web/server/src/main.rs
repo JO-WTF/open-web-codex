@@ -234,8 +234,12 @@ async fn main() -> anyhow::Result<()> {
                     .register_with_secret_environment(host_config, secret_environment)
                     .await?;
                 providers.restore_persisted_configuration().await?;
-                let real =
-                    RealCodexAdapter::from_host(host, cli.workspace_id.clone(), workspace_root)?;
+                let real = RealCodexAdapter::from_host_with_root_skill_config(
+                    host,
+                    cli.workspace_id.clone(),
+                    workspace_root,
+                    builtin_network_copilot::root_skill_config(),
+                )?;
                 (Arc::new(real), Arc::new(providers))
             }
             other => anyhow::bail!("unknown --codex-mode '{other}'; expected 'fake' or 'real'"),

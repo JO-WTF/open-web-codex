@@ -19,12 +19,30 @@ use crate::{
     StartedThread, TurnOptions,
 };
 
-fn thread_start_params(workspace_root: &str) -> Value {
-    json!({
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadSkillConfig {
+    pub name: String,
+    pub enabled: bool,
+}
+
+fn thread_start_params(workspace_root: &str, skill_config: &[ThreadSkillConfig]) -> Value {
+    let mut params = json!({
         "cwd": workspace_root,
         "approvalPolicy": "on-request",
         "historyMode": "paginated",
-    })
+    });
+    if !skill_config.is_empty() {
+        params["config"] = json!({
+            "skills.config": skill_config
+                .iter()
+                .map(|entry| json!({
+                    "name": entry.name.as_str(),
+                    "enabled": entry.enabled,
+                }))
+                .collect::<Vec<_>>(),
+        });
+    }
+    params
 }
 
 fn thread_fork_params(thread_id: &str, target_root: &str) -> Value {
@@ -66,6 +84,7 @@ pub struct RealCodexAdapter {
     terminal_workspaces: Arc<RwLock<HashMap<String, AuthorizedWorkspace>>>,
     runtime_instance: Arc<Mutex<Option<uuid::Uuid>>>,
     local_events: broadcast::Sender<Value>,
+    root_skill_config: Vec<ThreadSkillConfig>,
 }
 
 impl RealCodexAdapter {
@@ -83,6 +102,15 @@ impl RealCodexAdapter {
         workspace_id: impl Into<String>,
         workspace_root: PathBuf,
     ) -> Result<Self, AdapterError> {
+        Self::from_host_with_root_skill_config(host, workspace_id, workspace_root, Vec::new())
+    }
+
+    pub fn from_host_with_root_skill_config(
+        host: ProfileHost,
+        workspace_id: impl Into<String>,
+        workspace_root: PathBuf,
+        root_skill_config: Vec<ThreadSkillConfig>,
+    ) -> Result<Self, AdapterError> {
         let workspace_root = workspace_root.canonicalize().map_err(|error| {
             AdapterError::Internal(format!("failed to resolve workspace root: {error}"))
         })?;
@@ -99,6 +127,7 @@ impl RealCodexAdapter {
             terminal_workspaces: Arc::new(RwLock::new(HashMap::new())),
             runtime_instance: Arc::new(Mutex::new(None)),
             local_events,
+            root_skill_config,
         })
     }
 
@@ -165,12 +194,16 @@ impl RealCodexAdapter {
     async fn start_thread_in_workspace(
         &self,
         workspace: &AuthorizedWorkspace,
+        skill_config: &[ThreadSkillConfig],
     ) -> Result<StartedThread, AdapterError> {
         let _runtime = self.prepare_runtime().await?;
         let workspace_root = self.authorized_root(workspace)?;
         let result = self
             .host
-            .request("thread/start", thread_start_params(&workspace_root))
+            .request(
+                "thread/start",
+                thread_start_params(&workspace_root, skill_config),
+            )
             .await?;
         let thread_id = result
             .pointer("/thread/id")
@@ -584,7 +617,7 @@ impl CodexAdapter for RealCodexAdapter {
                     id: self.workspace_id.clone(),
                     root: self.workspace_root.clone(),
                 };
-                let started = self.start_thread_in_workspace(&workspace).await?;
+                let started = self.start_thread_in_workspace(&workspace, &[]).await?;
                 Ok(json!({ "threadId": started.thread_id }))
             }
             "send_user_message" => {
@@ -613,7 +646,8 @@ impl CodexAdapter for RealCodexAdapter {
         &self,
         workspace: &AuthorizedWorkspace,
     ) -> Result<StartedThread, AdapterError> {
-        self.start_thread_in_workspace(workspace).await
+        self.start_thread_in_workspace(workspace, &self.root_skill_config)
+            .await
     }
 
     async fn fork_thread(
@@ -1091,7 +1125,7 @@ impl CodexAdapter for RealCodexAdapter {
             ));
         }
         let mut events = self.host.subscribe();
-        let started = self.start_thread_in_workspace(workspace).await?;
+        let started = self.start_thread_in_workspace(workspace, &[]).await?;
         self.suppressed_threads
             .write()
             .await
@@ -1583,10 +1617,63 @@ mod tests {
     use super::{
         agent_core_batch_write_params, app_server_event_frame, codex_bubblewrap_is_unavailable,
         codex_sandbox_disabled_by_environment, is_authorized_workspace_root, login_completion,
-        message_parent_thread_id, message_thread_id, turn_sandbox_policy, RealCodexAdapter,
+        message_parent_thread_id, message_thread_id, thread_start_params, turn_sandbox_policy,
+        RealCodexAdapter, ThreadSkillConfig,
     };
     use serde_json::{json, Value};
     use std::path::Path;
+
+    #[test]
+    fn thread_start_params_omit_skill_config_by_default() {
+        let params = thread_start_params("/runner/workspace", &[]);
+
+        assert_eq!(
+            params,
+            json!({
+                "cwd": "/runner/workspace",
+                "approvalPolicy": "on-request",
+                "historyMode": "paginated",
+            })
+        );
+        assert!(params.get("config").is_none());
+    }
+
+    #[test]
+    fn thread_start_params_project_typed_skill_config_in_order() {
+        let params = thread_start_params(
+            "/runner/workspace",
+            &[
+                ThreadSkillConfig {
+                    name: "warehouse-supervisor".to_string(),
+                    enabled: true,
+                },
+                ThreadSkillConfig {
+                    name: "warehouse-data".to_string(),
+                    enabled: false,
+                },
+                ThreadSkillConfig {
+                    name: "warehouse-network".to_string(),
+                    enabled: false,
+                },
+            ],
+        );
+
+        assert_eq!(
+            params,
+            json!({
+                "cwd": "/runner/workspace",
+                "approvalPolicy": "on-request",
+                "historyMode": "paginated",
+                "config": {
+                    "skills.config": [
+                        { "name": "warehouse-supervisor", "enabled": true },
+                        { "name": "warehouse-data", "enabled": false },
+                        { "name": "warehouse-network", "enabled": false },
+                    ],
+                },
+            })
+        );
+    }
 
     #[test]
     fn accepts_nested_runner_workspaces_without_prefix_confusion() {

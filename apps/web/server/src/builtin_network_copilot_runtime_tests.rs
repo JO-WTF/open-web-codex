@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::Router;
-use open_web_codex_adapter::real::RealCodexAdapter;
+use open_web_codex_adapter::real::{RealCodexAdapter, ThreadSkillConfig};
 use open_web_codex_adapter::{AuthorizedWorkspace, CodexAdapter, ProfileQuery, TurnOptions};
 use open_web_codex_approval_service::{ApprovalActor, ApprovalService};
 use open_web_codex_platform_contracts::{
@@ -34,6 +34,27 @@ use toml_edit::{value, Array, DocumentMut, Item, Table};
 use uuid::Uuid;
 
 use crate::builtin_network_copilot::BuiltinNetworkCopilotAssets;
+
+#[test]
+fn builtin_root_skill_config_is_exact() {
+    assert_eq!(
+        crate::builtin_network_copilot::root_skill_config(),
+        vec![
+            ThreadSkillConfig {
+                name: "warehouse-supervisor".to_string(),
+                enabled: true,
+            },
+            ThreadSkillConfig {
+                name: "warehouse-data".to_string(),
+                enabled: false,
+            },
+            ThreadSkillConfig {
+                name: "warehouse-network".to_string(),
+                enabled: false,
+            },
+        ]
+    );
+}
 
 const WAREHOUSE_SKILLS: [&str; 3] = [
     "warehouse-data",
@@ -1194,10 +1215,11 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
         "Profile startup seeds must not rewrite config.toml",
     );
 
-    let adapter = RealCodexAdapter::from_host(
+    let adapter = RealCodexAdapter::from_host_with_root_skill_config(
         host.clone(),
         "builtin-network-runtime-runner",
         runner_root.clone(),
+        crate::builtin_network_copilot::root_skill_config(),
     )
     .expect("construct real Codex adapter");
     let workspace = AuthorizedWorkspace {
@@ -1288,6 +1310,32 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
         )
         .await
         .expect("start native Root collaboration Turn");
+
+    let root_request = wait_for_model_request(&model_control, ROOT_PROMPT, DATA_SPAWN_CALL).await;
+    let first_request = model_control
+        .requests
+        .lock()
+        .await
+        .first()
+        .cloned()
+        .expect("the Root model request is recorded");
+    assert_eq!(
+        first_request, root_request,
+        "the Root skill projection must apply to the first model request",
+    );
+    let root_developer_text = request_developer_text(&root_request);
+    assert!(
+        root_developer_text.contains("让 `network_agent` 定义本次分析所需的数据和决策参数"),
+        "Root must receive the enabled Supervisor Skill instructions",
+    );
+    assert!(
+        !root_developer_text.contains("只接受 `.xlsx`、`.csv` 和 `.json`"),
+        "Root must not receive the disabled Data Skill instructions",
+    );
+    assert!(
+        !root_developer_text.contains("先根据用户目标向 Supervisor 说明必要数据和决策参数"),
+        "Root must not receive the disabled Network Skill instructions",
+    );
 
     let data_thread_id = wait_for_child_thread(&mut child_events, &root.thread_id).await;
     let data_request =

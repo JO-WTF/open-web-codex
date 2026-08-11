@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use open_web_codex_adapter::real::ThreadSkillConfig;
 use open_web_codex_profile_host::{CodexFeature, ProfileStartupFile};
 use thiserror::Error;
 use toml_edit::{value, Array, DocumentMut, Item};
@@ -42,6 +43,23 @@ pub(crate) const fn disabled_codex_features() -> [CodexFeature; 4] {
 /// from assistant text.
 pub(crate) const fn enabled_codex_features() -> [CodexFeature; 1] {
     [CodexFeature::DefaultModeRequestUserInput]
+}
+
+pub(crate) fn root_skill_config() -> Vec<ThreadSkillConfig> {
+    vec![
+        ThreadSkillConfig {
+            name: "warehouse-supervisor".to_string(),
+            enabled: true,
+        },
+        ThreadSkillConfig {
+            name: "warehouse-data".to_string(),
+            enabled: false,
+        },
+        ThreadSkillConfig {
+            name: "warehouse-network".to_string(),
+            enabled: false,
+        },
+    ]
 }
 
 #[derive(Debug)]
