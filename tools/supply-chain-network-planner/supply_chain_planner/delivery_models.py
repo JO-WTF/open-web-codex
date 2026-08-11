@@ -38,6 +38,52 @@ class ValidatedDeliveryInputs:
     facility_active_ids: frozenset[str]
 
 
+@dataclass(frozen=True)
+class ValidatedBaselineDeliveryInputs:
+    demand_by_id: Mapping[str, DemandCityRecord]
+    warehouse_by_id: Mapping[str, WarehouseRecord]
+    baseline_rows_by_city: Mapping[str, AssignmentRow]
+    baseline_active_ids: frozenset[str]
+
+
+def validate_baseline_delivery_inputs(
+    normalized: NormalizedInputBatch,
+    baseline: BaselineResult,
+) -> ValidatedBaselineDeliveryInputs:
+    """Cross-check one current-network result before rendering a final brief."""
+
+    if any(issue.severity == "error" for issue in normalized.issues):
+        raise ValueError("delivery_normalized_input_has_errors")
+    demand = _index(
+        normalized.demand_cities,
+        lambda item: item.city_id,
+        "delivery_duplicate_demand_city_id",
+    )
+    warehouses = _index(
+        normalized.warehouses,
+        lambda item: item.warehouse_id,
+        "delivery_duplicate_warehouse_id",
+    )
+    if not demand or not warehouses:
+        raise ValueError("delivery_demand_and_warehouse_required")
+    active = _active_ids("baseline", baseline.active_warehouse_ids, warehouses)
+    existing = {key for key, item in warehouses.items() if item.is_existing}
+    if active != existing:
+        raise ValueError("delivery_baseline_active_must_equal_existing")
+    rows = _assignment_rows("baseline", baseline.assignment, demand, warehouses, active)
+    if not baseline.coverage:
+        raise ValueError("delivery_baseline_coverage_required")
+    targets = [item.target_hours for item in baseline.coverage]
+    if len(targets) != len(set(targets)):
+        raise ValueError("delivery_baseline_coverage_targets_duplicate")
+    return ValidatedBaselineDeliveryInputs(
+        demand_by_id=demand,
+        warehouse_by_id=warehouses,
+        baseline_rows_by_city=rows,
+        baseline_active_ids=frozenset(active),
+    )
+
+
 def validate_delivery_inputs(
     normalized: NormalizedInputBatch,
     baseline: BaselineResult,

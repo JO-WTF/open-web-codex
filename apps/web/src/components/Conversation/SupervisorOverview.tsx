@@ -1,5 +1,6 @@
 import { useEffect, useId, useState } from "react";
 import Bot from "lucide-react/dist/esm/icons/bot";
+import Download from "lucide-react/dist/esm/icons/download";
 import FileCheck2 from "lucide-react/dist/esm/icons/file-check-2";
 import History from "lucide-react/dist/esm/icons/history";
 import LoaderCircle from "lucide-react/dist/esm/icons/loader-circle";
@@ -7,6 +8,7 @@ import Network from "lucide-react/dist/esm/icons/network";
 import ShieldCheck from "lucide-react/dist/esm/icons/shield-check";
 import X from "lucide-react/dist/esm/icons/x";
 import type {
+  ArtifactContent,
   ArtifactSummary,
   RuntimeAgentActivity,
   RuntimeAgentActivitySubject,
@@ -18,6 +20,7 @@ import { ModalShell } from "../../features/design-system/components/modal/ModalS
 import TaskApprovalQueue, {
   type TaskApprovalRequest,
 } from "./TaskApprovalQueue";
+import SafeMarkdown from "./messages/SafeMarkdown";
 
 type Props = {
   taskTitle: string;
@@ -32,7 +35,8 @@ type Props = {
     decision: "accept" | "decline",
   ) => void;
   onLoadAgentHistory?: (threadId: string) => Promise<ThreadHistoryTurn[]>;
-  onLoadArtifactContent?: (artifactId: string) => Promise<Record<string, unknown>>;
+  onLoadArtifactContent?: (artifactId: string) => Promise<ArtifactContent>;
+  onDownloadArtifact?: (artifactId: string) => Promise<{ blob: Blob; filename: string }>;
   loading?: boolean;
   error?: string | null;
 };
@@ -57,7 +61,7 @@ type ReviewState =
       title: string;
       loading: boolean;
       error: string | null;
-      content: Record<string, unknown> | null;
+      content: ArtifactContent | null;
     };
 
 const activityTimeFormatter = new Intl.DateTimeFormat(undefined, {
@@ -392,10 +396,13 @@ export default function SupervisorOverview({
   onResolveApproval,
   onLoadAgentHistory,
   onLoadArtifactContent,
+  onDownloadArtifact,
   loading = false,
   error = null,
 }: Props) {
   const [review, setReview] = useState<ReviewState | null>(null);
+  const [downloadingArtifactId, setDownloadingArtifactId] = useState<string | null>(null);
+  const [artifactActionError, setArtifactActionError] = useState<string | null>(null);
   const rootAgent = agents.find((agent) => agent.is_root) ?? null;
   const orderedActivities = orderAndDedupeActivities(activities);
   const rootActivities = orderedActivities
@@ -485,6 +492,35 @@ export default function SupervisorOverview({
               : "Artifact content could not be loaded.",
           }
         : current);
+    }
+  };
+
+  const downloadArtifact = async (artifact: ArtifactSummary) => {
+    if (!onDownloadArtifact || artifact.state !== "ready") return;
+    setDownloadingArtifactId(artifact.id);
+    setArtifactActionError(null);
+    try {
+      const { blob, filename } = await onDownloadArtifact(artifact.id);
+      if (typeof URL.createObjectURL !== "function") {
+        throw new Error("The browser does not support file downloads.");
+      }
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = filename;
+      anchor.style.display = "none";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+    } catch (downloadError) {
+      setArtifactActionError(
+        downloadError instanceof Error
+          ? downloadError.message
+          : "Artifact download failed.",
+      );
+    } finally {
+      setDownloadingArtifactId(null);
     }
   };
 
@@ -646,18 +682,23 @@ export default function SupervisorOverview({
             )}
           </div>
 
-          <div className="web-supervisor-artifacts" aria-label="Evidence Artifacts">
+          <div className="web-supervisor-artifacts" aria-label="Final deliveries">
             <div className="web-supervisor-section-heading">
               <FileCheck2 size={14} aria-hidden="true" />
-              <strong>Evidence Artifacts</strong>
+              <strong>Final deliveries</strong>
               <span>{artifacts.length}</span>
             </div>
+            {artifactActionError ? (
+              <p className="web-supervisor-overview-error" role="alert">
+                {artifactActionError}
+              </p>
+            ) : null}
             {artifacts.length ? (
               <div className="web-supervisor-artifact-list" role="list">
                 {artifacts.map((artifact) => (
                   <div className="web-supervisor-artifact" role="listitem" key={artifact.id}>
                     <span className="web-supervisor-artifact-copy">
-                      <strong>{artifact.artifact_schema}</strong>
+                      <strong>{artifact.display_name || artifact.artifact_schema}</strong>
                       <span>
                         {artifact.producer_agent_role ?? "Root Supervisor"}
                         {artifact.byte_size !== null
@@ -668,21 +709,37 @@ export default function SupervisorOverview({
                     <span className={`web-supervisor-artifact-state is-${artifact.state}`}>
                       {artifact.state}
                     </span>
-                    {onLoadArtifactContent && artifact.state === "ready" ? (
-                      <button
-                        type="button"
-                        className="web-supervisor-review-action is-compact"
-                        onClick={() => void openArtifactContent(artifact)}
-                      >
-                        Open
-                      </button>
+                    {artifact.state === "ready" ? (
+                      <span className="web-supervisor-artifact-actions">
+                        {onLoadArtifactContent ? (
+                          <button
+                            type="button"
+                            className="web-supervisor-review-action is-compact"
+                            onClick={() => void openArtifactContent(artifact)}
+                          >
+                            Open
+                          </button>
+                        ) : null}
+                        {onDownloadArtifact && artifact.download_url ? (
+                          <button
+                            type="button"
+                            className="web-supervisor-review-action is-compact"
+                            disabled={downloadingArtifactId === artifact.id}
+                            aria-label={`Download ${artifact.display_name || artifact.artifact_schema}`}
+                            onClick={() => void downloadArtifact(artifact)}
+                          >
+                            <Download size={12} aria-hidden="true" />
+                            {downloadingArtifactId === artifact.id ? "Downloading…" : "Download"}
+                          </button>
+                        ) : null}
+                      </span>
                     ) : null}
                   </div>
                 ))}
               </div>
             ) : (
               <p className="web-supervisor-overview-empty">
-                Waiting for validated Runtime Resources.
+                Waiting for final deliverables.
               </p>
             )}
           </div>
@@ -746,8 +803,16 @@ export default function SupervisorOverview({
                   This Agent has no recorded Turns.
                 </p>
               )
+            ) : review.content?.kind === "markdown" ? (
+              <article className="web-supervisor-review-markdown web-file-markdown">
+                <SafeMarkdown text={review.content.text} />
+              </article>
+            ) : review.content?.kind === "json" ? (
+              <pre>{JSON.stringify(review.content.value, null, 2)}</pre>
             ) : (
-              <pre>{JSON.stringify(review.content, null, 2)}</pre>
+              <p className="web-supervisor-overview-empty">
+                Artifact content is unavailable.
+              </p>
             )}
           </div>
         </ModalShell>

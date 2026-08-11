@@ -192,7 +192,10 @@ describe("PlatformClient", () => {
     const artifact = { schema_version: "planning-dataset.v1" };
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify(turns), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify(artifact), { status: 200 }));
+      .mockResolvedValueOnce(new Response(JSON.stringify(artifact), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }));
     vi.stubGlobal("fetch", fetchMock);
     const client = new PlatformClient({
       baseUrl: "https://platform.test",
@@ -203,13 +206,72 @@ describe("PlatformClient", () => {
     await expect(
       client.listRunAgentThreadTurns("run/one", "agent/one"),
     ).resolves.toEqual(turns);
-    await expect(client.readArtifactContent(artifactId)).resolves.toEqual(artifact);
+    await expect(client.readArtifactContent(artifactId)).resolves.toEqual({
+      kind: "json",
+      mime_type: "application/json",
+      value: artifact,
+    });
 
     expect(fetchMock.mock.calls[0]?.[0]).toBe(
       "https://platform.test/api/runs/run%2Fone/agents/agent%2Fone/turns",
     );
     expect(fetchMock.mock.calls[1]?.[0]).toBe(
       `https://platform.test/api/artifacts/${artifactId}/content`,
+    );
+  });
+
+  it("reads an authorized Markdown Artifact without JSON coercion", async () => {
+    const artifactId = "8e98ff2f-82ee-4cc9-a3e6-2974debf8667";
+    const markdown = "# Warehouse network planning report\n\nReadable brief.\n";
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(markdown, {
+        status: 200,
+        headers: { "content-type": "text/markdown; charset=utf-8" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PlatformClient({
+      baseUrl: "https://platform.test",
+      token: "session-token",
+    });
+
+    await expect(client.readArtifactContent(artifactId)).resolves.toEqual({
+      kind: "markdown",
+      mime_type: "text/markdown",
+      text: markdown,
+    });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      `https://platform.test/api/artifacts/${artifactId}/content`,
+    );
+  });
+
+  it("downloads an authorized Markdown Artifact with its attachment filename", async () => {
+    const artifactId = "8e98ff2f-82ee-4cc9-a3e6-2974debf8668";
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response("# Warehouse network planning report\n", {
+        status: 200,
+        headers: {
+          "content-type": "text/markdown; charset=utf-8",
+          "content-disposition": "attachment; filename=\"network-brief.md\"",
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PlatformClient({
+      baseUrl: "https://platform.test",
+      token: "session-token",
+    });
+
+    const downloaded = await client.downloadArtifact(artifactId);
+
+    expect(downloaded.filename).toBe("network-brief.md");
+    expect(await downloaded.blob.text()).toBe("# Warehouse network planning report\n");
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform.test/api/artifacts/${artifactId}/download`,
+      expect.objectContaining({
+        cache: "no-store",
+        headers: { authorization: "Bearer session-token" },
+      }),
     );
   });
 

@@ -40,13 +40,13 @@ Runtime 事件转换成浏览器 DTO 和持久化投影。
 | Workspace 授权、执行根与普通文件 | Platform + Runner | Workspace 独立于 Thread/Run；Task 已固定唯一授权 Workspace，Run/fork/recovery 受数据库和服务端不变量约束；真实 Runtime Probe 已证明 Root/child 使用同一 native `sandboxCwd`，同时观察到 macOS `/var` 与 `/private/var` 的同 inode 词法差异；physical-path join 的通用收敛进入后续 backlog，当前仓网链继续以既有 Workspace denial gate 为边界；通用文件 Web 产品流已统一到 `/workspaces/{id}/files` 与 `GitRuntime` |
 | MCP Resource 内容与生命周期 | 各个 MCP provider | Codex 按 Thread/Turn 当前 server inventory 执行 list/read，official Tool Item 保存 ResourceLink/structuredContent；供应链 provider 当前把字节保存在 Profile 私有、按 canonical Workspace 隔离的 `ResourceStore` 中。Platform 不复制内容或提供通用 Resource API；对 exact `map_utils/create_map_card` 展示，Platform 只持久化 bounded renderer/ref 投影，浏览器按组织与 Run 授权通过 producing Thread 的 official `mcpServer/resource/read` 即时取得 GeoJSON |
 | 通用 Copilot Resource/Workspace 基础合同 | 长期由 Platform/Workspace authority 与平台提供的 provider library 分工拥有 | Workspace 授权、canonical containment/no-follow、final file atomic create-new 和 Artifact 物化属于 Platform/Runner；`ResourceRef` envelope、expected-schema 校验、canonical codec、payload bounds、typed errors 与 provider load/publish primitives 长期应由平台提供给所有 Copilot。阶段一仍以内嵌在 `supply_chain` 的领域无关单模块孵化，尚未成为公开 SDK |
-| Task、Run、Approval、Artifact、Audit | Platform | 持久 Artifact 只接受 built-in exact final Tool 的 typed Workspace-relative descriptor，并按 producing Item provenance 物化；中间 Resource 永不注册 Artifact。对话内地图卡片是独立的 bounded presentation projection：只接受 exact `map_utils/create_map_card`、独立行 embed 指令和私有 Resource ref，既不创建 Workspace 文件，也不进入 durable Artifact 列表 |
+| Task、Run、Approval、Artifact、Audit | Platform | 持久 Artifact 只接受 built-in exact final Tool 的 typed Workspace-relative descriptor，并按 producing Item provenance 物化；中间 Resource 永不注册 Artifact。最终地图文件使用 provider-owned JSON bundle，正式结果简报使用有界中文 `text/markdown` 文件；Browser 依据 MIME 安全预览、授权下载，并从 durable `ArtifactSummary.download_url` 在对话正文区域显示文件链接，不依赖 Assistant 复述路径或简报正文。对话内地图卡片是独立的 bounded presentation projection：只接受 exact `map_utils/create_map_card`、独立行 embed 指令和私有 Resource ref，既不创建 Workspace 文件，也不进入 durable Artifact 列表 |
 | 用户输入 | Runtime 请求，Platform Approval 投影 | Root 官方输入路径已在真实 E2E 中通过 |
 | Agent execution | Runtime 事件，Platform projection | 有等待、输入和完整终态投影；属于可重建视图 |
 | Capability Draft/Release/Installation | 无当前生产 owner | Catalog/Studio/Python publish crate、route、DTO、client、UI 与无 owner 数据表均已删除，不参与启动或 readiness |
 | Work State 与 Platform coordination | 无当前 production owner | work-state-service、route、MCP、gate、schema 与第二控制面已由 Slice 4B.2-A 删除；不建设替代状态机 |
 | Data Intake | 无当前 owner | 生产 route、validation crate、SourceAsset/Dataset/Task binding 表与产品入口已删除；阶段一不建设替代状态机 |
-| 仓网规划能力 | 供应链 Python 包的 domain owners | 当前阶段统一拥有 demand/facility/candidate/location/lane/route/cost records，Data mapping/normalization/geography，route/cost fact 与 matrix build/validate/partial reuse，actual/optimized baseline、open/close/relocation scenario、assignment/service/cost evaluation、p-median、before/after comparison 与 final map/report；不拥有通用 Resource/Workspace infrastructure。Case/NetworkSnapshot/source_ref/ArtifactRef 与多层 hashes 仍是待删偏离。未来若第二个供应链 Copilot 证明存在稳定公共领域合同，再评估内部提取，不在阶段一新增实现层 |
+| 仓网规划能力 | 供应链 Python 包的 domain owners | 当前阶段统一拥有 demand/facility/candidate/location/lane/route/cost records，Data mapping/normalization/geography，route/cost fact 与 matrix build/validate/partial reuse，actual/optimized baseline、open/close/relocation scenario、assignment/service/cost evaluation、p-median、before/after comparison、卡片数据和确定性 Markdown 简报；报告输入以 discriminated typed contract 区分单一 baseline 评估和完整 baseline-versus-plan comparison，不为交付伪造方案结果。结构化计算结果与业务简报分离，不拥有通用 Resource/Workspace infrastructure。Case/NetworkSnapshot/source_ref/ArtifactRef 与多层 hashes 仍是待删偏离。未来若第二个供应链 Copilot 证明存在稳定公共领域合同，再评估内部提取，不在阶段一新增实现层 |
 
 Codex Runtime 仍是模型可见对话状态的唯一权威。Platform events、execution、activity
 和协作状态都是投影，不应成为第二个 Thread、Memory 或 Supervisor。
@@ -81,7 +81,7 @@ Platform 侧过滤 Runtime discovery 或 Tool。
 Data/Network Role TOML 各自持有完整 MCP transport、精确 `enabled_tools` 和 Tool 级审批策略；
 Root 没有全局仓网 MCP。Data 的四个有界本地 Tool 统一预批准；Network 以 `prompt` 为默认，
 仅预批准路线/成本/验证/分析/选址/比较等本地 Tool；`map_utils` 仅预批准 `create_map_card`。
-外部导航、距离矩阵和 final Workspace map/report 写入始终保留 official approval。MCP provider
+外部导航、距离矩阵和 final Workspace map/Markdown report 写入始终保留 official approval。MCP provider
 同时在 Tool annotations 中声明 read-only、destructive、idempotent 和 open-world 事实，Role
 policy 只裁决该 child 的精确允许面，不修改全局 `approvalPolicy`。当前 composition 仍把 MCP
 process cwd 设为 canonical 共享应用资产根，这只是
@@ -169,7 +169,8 @@ Case/ArtifactRef compatibility tail，不能把 Data4 slice 的落地误报为 S
 
 用户输入中的完整路线距离、时长和来源方法由 Data provider 作为 typed pair facts 保存在同一个
 `normalized_network_input.v1` Resource 中；Network provider 按明确仓库范围将其物化为
-`route_matrix.v2`，并对缺失、重复和范围外 pair 给出显式验证结果。覆盖口径及未覆盖城市由
+`route_matrix.v2`，矩阵与验证器共享其 typed `warehouse_scope`，并对该范围内缺失、重复和范围外
+pair 给出显式验证结果。覆盖口径及未覆盖城市由
 Network Tool 确定性计算，同时区分城市数量和需求量加权指标；这些领域事实不进入 Platform
 DTO、数据库工作流或 Skill 中的案例规则。
 

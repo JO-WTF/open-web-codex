@@ -1,6 +1,7 @@
 import { PlatformClient } from "../../browser/client";
 import type {
   Approval,
+  ArtifactContent,
   ArtifactSummary,
   McpFormContent,
   McpFormResponseAction,
@@ -648,8 +649,12 @@ export class CodexMonitorWebClient {
     return this.platform.listRunAgentThreadTurns(context.runId, agentThreadId);
   }
 
-  readArtifactContent(artifactId: string): Promise<Record<string, unknown>> {
+  readArtifactContent(artifactId: string): Promise<ArtifactContent> {
     return this.platform.readArtifactContent(artifactId);
+  }
+
+  downloadArtifact(artifactId: string): Promise<{ blob: Blob; filename: string }> {
+    return this.platform.downloadArtifact(artifactId);
   }
 
   async listThreads(workspaceId: string) {

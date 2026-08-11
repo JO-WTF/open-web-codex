@@ -12,6 +12,7 @@
         "register_navigation_route_matrix": { "approval_mode": "approve" },
         "plan_cost_matrix": { "approval_mode": "approve" },
         "prepare_network_distribution_map": { "approval_mode": "approve" },
+        "prepare_network_comparison_map": { "approval_mode": "approve" },
         "evaluate_network_baseline": { "approval_mode": "approve" },
         "evaluate_facility_scenario": { "approval_mode": "approve" },
         "solve_p_median": { "approval_mode": "approve" },

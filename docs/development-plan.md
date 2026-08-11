@@ -280,9 +280,9 @@ Provider 全量去重、首消息 compound selection 或完整 4B.3 Thread truth
    owning-layer 适配，包括把官方 child Thread/Turn/Item 生命周期投影为可追踪的 Agent activity；
    不建立第二 Runtime、第二上下文、第二执行日志或固定业务流程。
 3. **C — 通用可组合 Tools。** 统一 `supply_chain` provider 和单一 `ResourceRef`，Data4 已完成
-   strict inspect→confirmed-normalize→optional-geography active surface；Network13 active surface
+   strict inspect→confirmed-normalize→optional-geography active surface；Network14 active surface
    已完成 provided/haversine/navigation 路线、route/cost pair-level 复用、双覆盖口径以及 final
-   map/report 的最小交付合同。剩余工作是产品 E2E 与 non-active compatibility tail 尾删，不再扩展
+   地图卡片、map 文件与单份中文 Markdown 简报的最小交付合同；正文只显示关键结论和 durable Artifact 授权下载链接，不复制整份简报。剩余工作是产品 E2E 与 non-active compatibility tail 尾删，不再扩展
    Platform 业务状态。
 4. **D — 完整案例验收。** 把 Indonesia cold E2E 作为通用 Copilot 的一个完整组合示例，同时验证
    partial reuse 与跨 Workspace/未授权 ref denial；案例顺序不成为产品 workflow。
@@ -311,6 +311,15 @@ Indonesia 完整验收可以组合为：Root 确定国家和目标；Network chi
 检查与准备文件；Root 使用 native wait/mailbox 并保持可与用户互动；再由 Network child 完成
 所需分析并由 Root 综合交付。这只是覆盖完整能力的一种验收组合，不是固定 Supervisor workflow；
 实际 Agent、工具和先后顺序由用户目标、当前上下文与 Skill 动态决定。
+
+2026-08-11 已补一条真实上传、自然语言“当前覆盖”回归证据：Web 中原样发送
+`根据我上传的数据，评估当前仓网 24 小时时效覆盖率`，总耗时 293.112 秒。Root 直接创建一个
+Data child 和一个 Network child，没有单独的需求定义 child、`request_user_input` 或失败 MCP
+调用；Data 首次即以两位国家代码发布 ready Resource，Network 只调用一次 final report Tool、
+一次地图卡片 Tool，唯一审批是 create-new 写正式简报。结果为实际当前归属 29/50 城（58.0%）、
+需求量加权 74.5%；对话地图卡片 Ready，最终只有一个 2,913 字节中文 Markdown Artifact，正文
+区域从授权 Artifact DTO 显示可点击下载链接。该证据只提高当前覆盖纵向切片，不替代三个产品
+样例、恢复矩阵、跨 Workspace 拒绝和 Stage E 尾删。
 
 当前用三个彼此独立的产品样例证明这一点：
 
@@ -385,7 +394,7 @@ renderer 与 producing Thread 的精确 Resource ref，并在浏览器授权读�
 4. 计算全网和分仓运输成本，完成增仓、减仓、搬迁三类模拟。
 5. 执行 p-median：明确 `p`，已有仓默认固定；只有用户明确许可时才允许指定已有仓关闭。
 6. 执行给定 SLA 下的成本最优规划，输出覆盖、时效、距离、成本和仓库变动。
-7. 生成地图、明细表和最终报告。
+7. 当空间关系有助理解时生成对话内交互地图卡片；结构化计算明细与 Markdown 结果简报分开交付。
 8. 路线按起终点坐标/身份、计算方法、provider 参数和 Tool 版本的 exact pair fact 复用；
    成本按路线 fact、报价/规则、币种和 Tool 版本的 exact lane fact 复用，只补算缺失项。
 
@@ -416,14 +425,17 @@ Data4 strict ResourceRef、完整仓网清单和 pair-level 部分复用都有�
 
 ### Slice 6：最小 Artifact 与安全投影
 
-1. Artifact 仅承担用户明确要求导出、下载或保留的最终地图、报告和交付件；结构化中间数据由
+1. Artifact 仅承担完整分析的 Markdown 结果简报，以及用户明确要求导出、下载或保留的最终地图和其他交付件；结构化中间数据由
    Workspace 普通文件或 MCP Resource 拥有。只要求“展示/看看/可视化”时使用对话内地图卡片，
-   不生成网页、PNG、Workspace JSON 或 durable Artifact。
-2. 最终交付至少包含覆盖关系明细、城市对应仓/距离/时长/成本、SLA 覆盖率、总成本与分仓
-   成本、模拟差异、p-median 结果与仓变动、地图和可下载报告。
+   不生成网页、PNG、Workspace JSON 或地图 Artifact。
+2. 结构化计算结果保存完整覆盖关系及城市对应仓/距离/时长/成本，可由独立表格导出能力交付；
+   正式结果简报只生成一份中文 Markdown 文件，在可下载 Artifact 中说明 SLA 覆盖率、总成本、
+   模拟差异、p-median 结果与仓变动。Assistant 正文只概括关键结论，Browser 从授权 Artifact DTO
+   显示指向该文件的下载链接，不把整份简报插入正文。结构化结果与简报不得用同一 JSON 报告
+   混充；地图在空间关系有助理解时使用对话卡片。
 3. Artifact 状态只投影真实的生成中、已完成、部分完成或失败；模型文本不能冒充完成。
 4. built-in final map/report Tool 使用 exact `(server, tool)` allowlist 和 typed output schema，原子
-   create-new 写一个自包含 Workspace-relative JSON bundle。Platform 从 producing Run 解析授权
+   create-new 写一个自包含 Workspace-relative map JSON 或 report Markdown。Platform 从 producing Run 解析授权
    Workspace，复用 `GitRuntime::download_file` 的 relative-path、regular-file、no-follow、physical
    containment 与 100 MiB 边界，即时复制到 Artifact；中间 MCP Resource 永不注册 Artifact。
 5. Artifact delivery 直接附着在 producing official completed Tool Item，并以 Item provenance 做

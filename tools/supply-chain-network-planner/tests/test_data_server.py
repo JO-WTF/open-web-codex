@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 
+import pytest
+
 from supply_chain_planner import data_server
 from supply_chain_planner.mcp_contracts import ResourceRef
 from supply_chain_planner.mcp_resources import bind_runtime
@@ -57,6 +59,10 @@ def test_data_server_exposes_only_four_composable_tools() -> None:
             "openWorldHint": False,
         }
     geography = next(tool for tool in tools if tool.name == "prepare_network_geography")
+    normalize = next(tool for tool in tools if tool.name == "normalize_network_input")
+    assert normalize.inputSchema["properties"]["country_code"]["pattern"] == (
+        "^[A-Za-z]{2}$"
+    )
     assert "admin_level" not in geography.inputSchema["properties"]
     assert set(geography.inputSchema["required"]) == {
         "normalized_input_ref",
@@ -196,6 +202,9 @@ def test_confirmed_rows_normalize_then_prepare_geography_with_country(
             }
         ),
     ]
+
+    with pytest.raises(ValueError, match="country_code_required_iso_alpha2"):
+        data_server.normalize_network_input(profile_ref, decisions, "IDN", object())
 
     normalized = data_server.normalize_network_input(profile_ref, decisions, "ID", object())
     normalized_ref = ResourceRef.model_validate(normalized.structuredContent["resource_ref"])

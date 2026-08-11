@@ -854,7 +854,7 @@ describe("WebApp direct Server client", () => {
               sourceType: "platform/artifact/changed",
               artifact: {
                 artifactId: "artifact-1",
-                schema: "network_planning_report_bundle.v1",
+                schema: "network_planning_report_markdown.v1",
                 state: "ready",
                 url: "/api/artifacts/artifact-1/content",
               },
@@ -878,7 +878,7 @@ describe("WebApp direct Server client", () => {
           sourceType: "platform/artifact/changed",
           artifact: {
             artifactId: "artifact-1",
-            schema: "network_planning_report_bundle.v1",
+            schema: "network_planning_report_markdown.v1",
             state: "ready",
             url: "/api/artifacts/artifact-1/content",
           },

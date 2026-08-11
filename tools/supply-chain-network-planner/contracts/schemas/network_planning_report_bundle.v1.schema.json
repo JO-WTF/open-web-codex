@@ -1106,7 +1106,7 @@
       "$ref": "#/$defs/NetworkReportScope"
     },
     "title": {
-      "default": "Warehouse network planning report",
+      "default": "仓网规划结果简报",
       "title": "Title",
       "type": "string"
     }

@@ -85,14 +85,10 @@ def _write_sources(workspace: Path) -> list[str]:
     sources = {
         "demand.json": [item.model_dump(mode="json") for item in fixture.demand],
         "existing.json": [
-            item.model_dump(mode="json")
-            for item in fixture.warehouses
-            if item.is_existing
+            item.model_dump(mode="json") for item in fixture.warehouses if item.is_existing
         ],
         "candidates.json": [
-            item.model_dump(mode="json")
-            for item in fixture.warehouses
-            if not item.is_existing
+            item.model_dump(mode="json") for item in fixture.warehouses if not item.is_existing
         ],
         "assignments.json": [
             item.model_dump(mode="json") for item in indonesia_current_assignments()
@@ -100,9 +96,7 @@ def _write_sources(workspace: Path) -> list[str]:
         "quotes.json": [
             {
                 **item.model_dump(mode="json"),
-                **facts[
-                    (item.origin_id, item.destination_id, item.layer)
-                ].model_dump(
+                **facts[(item.origin_id, item.destination_id, item.layer)].model_dump(
                     mode="json",
                     include={
                         "destination_name",
@@ -110,9 +104,7 @@ def _write_sources(workspace: Path) -> list[str]:
                         "duration_hours",
                     },
                 ),
-                "method": facts[
-                    (item.origin_id, item.destination_id, item.layer)
-                ].source_method,
+                "method": facts[(item.origin_id, item.destination_id, item.layer)].source_method,
             }
             for item in indonesia_route_quotes()
         ],
@@ -289,6 +281,7 @@ async def _run_network_s3_then_s2(
                 "validate_route_matrix",
                 "register_navigation_route_matrix",
                 "plan_cost_matrix",
+                "prepare_network_comparison_map",
                 "prepare_network_distribution_map",
                 "evaluate_network_baseline",
                 "evaluate_facility_scenario",
@@ -299,9 +292,7 @@ async def _run_network_s3_then_s2(
             }
             prepared = await _read_resource(session, normalized_ref)
             existing_ids = sorted(
-                item["warehouse_id"]
-                for item in prepared["warehouses"]
-                if item["is_existing"]
+                item["warehouse_id"] for item in prepared["warehouses"] if item["is_existing"]
             )
             common_trace: list[str] = []
             common_trace.append("build_provided_route_matrix")
@@ -372,12 +363,15 @@ async def _run_network_s3_then_s2(
             assert baseline["label"] == "actual_current"
             assert baseline["active_warehouse_ids"] == existing_ids
             assert len(baseline["assignment"]["rows"]) == 50
-            assert baseline_result.structuredContent["coverage_metrics"][0][
-                "city_coverage_rate"
-            ] >= 0
-            assert baseline_result.structuredContent["coverage_metrics"][0][
-                "demand_weighted_coverage_rate"
-            ] >= 0
+            assert (
+                baseline_result.structuredContent["coverage_metrics"][0]["city_coverage_rate"] >= 0
+            )
+            assert (
+                baseline_result.structuredContent["coverage_metrics"][0][
+                    "demand_weighted_coverage_rate"
+                ]
+                >= 0
+            )
 
             s3_trace: list[str] = []
             s3_trace.append("evaluate_facility_scenario")
@@ -429,6 +423,7 @@ async def _run_network_s3_then_s2(
             assert set(s3_trace).isdisjoint(
                 {
                     "solve_p_median",
+                    "prepare_network_comparison_map",
                     "render_network_comparison_map",
                     "publish_network_planning_report",
                 }
@@ -482,6 +477,17 @@ async def _run_network_s3_then_s2(
                 "facility_location_ref": facility_ref,
                 "comparison_ref": comparison_ref,
             }
+            s2_trace.append("prepare_network_comparison_map")
+            inline_map_result = await _call(
+                session,
+                "prepare_network_comparison_map",
+                final_refs,
+                workspace,
+            )
+            assert inline_map_result.structuredContent["map_card_handoff"]["tool"] == {
+                "server": "map_utils",
+                "name": "create_map_card",
+            }
             s2_trace.append("render_network_comparison_map")
             map_result = await _call(
                 session,
@@ -497,8 +503,11 @@ async def _run_network_s3_then_s2(
                 session,
                 "publish_network_planning_report",
                 {
-                    **final_refs,
-                    "output_relative_path": "deliverables/sample2-report.json",
+                    "report_input": {
+                        "mode": "comparison",
+                        **final_refs,
+                    },
+                    "output_relative_path": "deliverables/sample2-report.md",
                 },
                 workspace,
             )
@@ -506,20 +515,22 @@ async def _run_network_s3_then_s2(
                 "network_comparison_map_bundle.v1"
             )
             assert report_result.structuredContent["artifact"]["schema"] == (
-                "network_planning_report_bundle.v1"
+                "network_planning_report_markdown.v1"
             )
             map_payload = json.loads(
                 (workspace / "deliverables/sample2-map.json").read_text(encoding="utf-8")
             )
-            report_payload = json.loads(
-                (workspace / "deliverables/sample2-report.json").read_text(
-                    encoding="utf-8"
-                )
+            report_markdown = (workspace / "deliverables/sample2-report.md").read_text(
+                encoding="utf-8"
             )
             assert map_payload["summary"]["feature_count"] == 187
-            assert len(report_payload["entities"]["demand_cities"]) == 50
-            assert len(report_payload["entities"]["warehouses"]) == 23
-            assert report_payload["baseline"]["label"] == "actual_current"
+            assert "# 仓网规划结果简报" in report_markdown
+            assert "## 时效覆盖" in report_markdown
+            assert "结构化计算结果" in report_markdown
+            assert report_result.content[0].text == (
+                "正式简报已生成：[下载中文 Markdown 简报]"
+                "(deliverables/sample2-report.md)"
+            )
             return [*common_trace, *s3_trace], [*common_trace, *s2_trace]
 
 
@@ -544,8 +555,9 @@ async def smoke() -> None:
             "evaluate_facility_scenario",
             "compare_network_scenarios",
         ]
-        assert s2_trace[-3:] == [
+        assert s2_trace[-4:] == [
             "compare_network_scenarios",
+            "prepare_network_comparison_map",
             "render_network_comparison_map",
             "publish_network_planning_report",
         ]

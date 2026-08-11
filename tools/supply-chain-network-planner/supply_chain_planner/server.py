@@ -50,9 +50,11 @@ from .decision_core import (
     evaluate_financial_case as calculate_financial_case,
 )
 from .map_service import (
+    NetworkComparisonGeoJson,
     NetworkComparisonMapBundle,
     NetworkMapService,
     build_network_comparison_map_bundle,
+    build_network_comparison_map_card_handoff,
     build_network_distribution_geojson,
     build_network_distribution_map_card_handoff,
 )
@@ -83,6 +85,7 @@ from .models import (
     NetworkMapRenderToolResult,
     NetworkMapToolResult,
     NetworkPlanningReportToolResult,
+    NetworkReportInput,
     NetworkScenarioResult,
     NetworkSnapshot,
     NetworkSnapshotPreparationToolResult,
@@ -120,9 +123,12 @@ from .optimization_models import (
 )
 from .readiness import ReadinessEvaluator
 from .report_service import (
-    NetworkPlanningReportBundle,
+    NETWORK_PLANNING_MARKDOWN_SCHEMA,
     NetworkReportService,
+    build_network_baseline_assessment_report_bundle,
     build_network_planning_report_bundle,
+    render_network_baseline_assessment_markdown,
+    render_network_planning_report_markdown,
 )
 from .requirements import RequirementRequest, RequirementService
 from .resource_store import (
@@ -235,9 +241,7 @@ def _baseline_coverage_projection(
     return coverage, detail_target, uncovered
 
 
-def _coverage_metric_summary(
-    metrics: list[CoverageMetricSummary], *, limit: int = 8
-) -> str:
+def _coverage_metric_summary(metrics: list[CoverageMetricSummary], *, limit: int = 8) -> str:
     shown = [
         f"{metric.target_hours:g}h city-count={metric.city_coverage_rate:.1%} "
         f"({metric.covered_city_count}/{metric.total_city_count}), "
@@ -1417,7 +1421,7 @@ def _feature_line(
     }
 
 
-def prepare_network_comparison_map(
+def _legacy_prepare_network_comparison_map(
     snapshot_resource_name: str,
     current_result_resource_name: str,
     candidate_result_resource_name: str,
@@ -3463,6 +3467,7 @@ def build_haversine_route_matrix(
         prior.rows if prior is not None else [],
         detour_coefficient,
         average_speed_kph,
+        warehouse_scope="all_warehouses",
     )
     validation = matrix.validation
     return _runtime().publish(
@@ -3491,6 +3496,7 @@ def build_provided_route_matrix(
         prepared.demand_cities,
         warehouses,
         prepared.provided_route_facts,
+        warehouse_scope=warehouse_scope,
     )
     validation = matrix.validation
     return _runtime().publish(
@@ -3517,9 +3523,12 @@ def validate_route_matrix(
         "route_matrix.v2",
         ComposableRouteMatrix,
     )
+    warehouses = prepared.warehouses
+    if matrix.warehouse_scope == "existing_only":
+        warehouses = [warehouse for warehouse in warehouses if warehouse.is_existing]
     validation = _validate_route_matrix_model(
         prepared.demand_cities,
-        prepared.warehouses,
+        warehouses,
         matrix,
     )
     payload = {
@@ -3563,11 +3572,17 @@ def register_navigation_route_matrix(
         if prior_route_matrix_ref is not None
         else None
     )
+    if prior is not None and prior.warehouse_scope != supplied.warehouse_scope:
+        raise McpResourceContractError("navigation_route_matrix_scope_mismatch")
+    warehouses = prepared.warehouses
+    if supplied.warehouse_scope == "existing_only":
+        warehouses = [warehouse for warehouse in warehouses if warehouse.is_existing]
     prior_rows = prior.rows if prior is not None else []
     matrix = _register_composable_navigation_matrix(
         prepared.demand_cities,
-        prepared.warehouses,
+        warehouses,
         [*prior_rows, *supplied.rows],
+        warehouse_scope=supplied.warehouse_scope,
     )
     if matrix.missing_routes:
         raise McpResourceContractError("navigation_matrix_incomplete")
@@ -3648,9 +3663,7 @@ def evaluate_network_baseline(
     route_matrix_ref: ResourceRef,
     objective: Literal["min_time", "min_cost"],
     service_targets: Annotated[list[float], Field(min_length=1, max_length=32)],
-    coverage_mode: Literal[
-        "actual_current", "optimized_existing_footprint"
-    ],
+    coverage_mode: Literal["actual_current", "optimized_existing_footprint"],
     ctx: Context,
     cost_matrix_ref: ResourceRef | None = None,
 ) -> Annotated[CallToolResult, NetworkBaselineResourceToolResult]:
@@ -3672,9 +3685,7 @@ def evaluate_network_baseline(
     if objective == "min_cost" and costs is None:
         raise McpResourceContractError("min_cost_baseline_requires_cost_matrix")
     active_ids = {
-        warehouse.warehouse_id
-        for warehouse in prepared.warehouses
-        if warehouse.is_existing
+        warehouse.warehouse_id for warehouse in prepared.warehouses if warehouse.is_existing
     }
     if coverage_mode == "actual_current":
         if not prepared.current_assignments:
@@ -3731,14 +3742,10 @@ def evaluate_network_baseline(
         raise McpResourceContractError("baseline_result_missing")
     result.structuredContent.update(
         {
-            "coverage_metrics": [
-                metric.model_dump(mode="json") for metric in coverage
-            ],
+            "coverage_metrics": [metric.model_dump(mode="json") for metric in coverage],
             "detail_target_hours": detail_target,
             "uncovered_city_count": len(uncovered),
-            "uncovered_cities": [
-                item.model_dump(mode="json") for item in uncovered[:100]
-            ],
+            "uncovered_cities": [item.model_dump(mode="json") for item in uncovered[:100]],
             "uncovered_cities_truncated": len(uncovered) > 100,
         }
     )
@@ -3755,9 +3762,7 @@ def evaluate_facility_scenario(
 ) -> CallToolResult:
     """Evaluate an add, remove or relocation scenario without a mutable Case."""
     _runtime().require_workspace(ctx)
-    if not scenario.service_targets or any(
-        target <= 0 for target in scenario.service_targets
-    ):
+    if not scenario.service_targets or any(target <= 0 for target in scenario.service_targets):
         raise McpResourceContractError("scenario_service_targets_invalid")
     prepared = _load_ready_network(normalized_input_ref)
     routes = _runtime().load_model(
@@ -3772,9 +3777,7 @@ def evaluate_facility_scenario(
     )
     if scenario.objective == "min_cost" and costs is None:
         raise McpResourceContractError("min_cost_scenario_requires_cost_matrix")
-    warehouse_by_id = {
-        warehouse.warehouse_id: warehouse for warehouse in prepared.warehouses
-    }
+    warehouse_by_id = {warehouse.warehouse_id: warehouse for warehouse in prepared.warehouses}
     add_ids = set(scenario.add_warehouse_ids)
     remove_ids = set(scenario.remove_warehouse_ids)
     for relocation in scenario.relocations:
@@ -3790,9 +3793,7 @@ def evaluate_facility_scenario(
     if add_ids & remove_ids:
         raise McpResourceContractError("scenario_add_remove_conflict")
     active_ids = {
-        warehouse.warehouse_id
-        for warehouse in prepared.warehouses
-        if warehouse.is_existing
+        warehouse.warehouse_id for warehouse in prepared.warehouses if warehouse.is_existing
     }
     active_ids.difference_update(remove_ids)
     active_ids.update(add_ids)
@@ -4026,8 +4027,8 @@ def _load_final_delivery_inputs(
     return prepared, normalized, baseline, facility, comparison
 
 
-def _write_final_delivery_bundle(
-    bundle: NetworkComparisonMapBundle | NetworkPlanningReportBundle,
+def _write_final_delivery_json_bundle(
+    bundle: NetworkComparisonMapBundle,
     output_relative_path: str,
     ctx: Context,
     summary: str,
@@ -4054,6 +4055,87 @@ def _write_final_delivery_bundle(
     )
 
 
+def _write_final_delivery_markdown(
+    markdown: str,
+    output_relative_path: str,
+    ctx: Context,
+    summary: str,
+) -> CallToolResult:
+    if Path(output_relative_path).suffix.lower() != ".md":
+        raise McpResourceContractError("report_output_requires_markdown")
+    content = markdown.encode("utf-8")
+    try:
+        created = _runtime().create_workspace_file(
+            ctx,
+            output_relative_path,
+            content,
+            max_bytes=MAX_WORKSPACE_FILE_BYTES,
+        )
+    except McpResourceContractError:
+        raise
+    except (OSError, ValueError) as error:
+        raise McpResourceContractError("workspace_file_invalid") from error
+    structured = NetworkFinalArtifactToolResult(
+        summary=summary,
+        artifact=NetworkFinalArtifactDescriptor(
+            schema=NETWORK_PLANNING_MARKDOWN_SCHEMA,
+            displayName="Warehouse network planning report",
+            mimeType="text/markdown",
+            workspaceRelativePath=created.relative_path,
+            byteSize=created.byte_size,
+        ),
+    )
+    encoded_path = urllib.parse.quote(created.relative_path, safe="/-._~")
+    link_text = f"正式简报已生成：[下载中文 Markdown 简报]({encoded_path})"
+    return CallToolResult(
+        content=[TextContent(type="text", text=link_text)],
+        structuredContent=structured.model_dump(mode="json", by_alias=True),
+    )
+
+
+@mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
+def prepare_network_comparison_map(
+    normalized_input_ref: ResourceRef,
+    baseline_ref: ResourceRef,
+    facility_location_ref: ResourceRef,
+    comparison_ref: ResourceRef,
+    ctx: Context,
+) -> CallToolResult:
+    """Publish exact baseline-versus-plan GeoJSON and map-card arguments."""
+    _runtime().require_workspace(ctx)
+    prepared, normalized, baseline, facility, comparison = _load_final_delivery_inputs(
+        normalized_input_ref,
+        baseline_ref,
+        facility_location_ref,
+        comparison_ref,
+    )
+    bundle = build_network_comparison_map_bundle(
+        normalized,
+        baseline,
+        facility,
+        comparison,
+        country_code=prepared.country_code,
+    )
+    geojson = NetworkComparisonGeoJson(features=bundle.geojson.features)
+    summary = (
+        f"Prepared an interactive comparison map with {len(geojson.features)} "
+        "features from the validated baseline and facility result."
+    )
+    result = _runtime().publish_geojson(geojson.schema_version, geojson, summary)
+    structured = result.structuredContent
+    if structured is None:
+        raise McpResourceContractError("map_data_result_missing")
+    structured.update(
+        {
+            "feature_count": len(geojson.features),
+            "map_card_handoff": build_network_comparison_map_card_handoff(
+                MapResourceRef.model_validate(structured["data_ref"]),
+            ).model_dump(mode="json", by_alias=True),
+        }
+    )
+    return result
+
+
 @mcp.tool(structured_output=True, annotations=FINAL_WORKSPACE_DELIVERY_TOOL)
 def render_network_comparison_map(
     normalized_input_ref: ResourceRef,
@@ -4065,13 +4147,11 @@ def render_network_comparison_map(
 ) -> CallToolResult:
     """Create a self-contained baseline-versus-facility map JSON file."""
     _runtime().require_workspace(ctx)
-    prepared, normalized, baseline, facility, comparison = (
-        _load_final_delivery_inputs(
-            normalized_input_ref,
-            baseline_ref,
-            facility_location_ref,
-            comparison_ref,
-        )
+    prepared, normalized, baseline, facility, comparison = _load_final_delivery_inputs(
+        normalized_input_ref,
+        baseline_ref,
+        facility_location_ref,
+        comparison_ref,
     )
     bundle = build_network_comparison_map_bundle(
         normalized,
@@ -4080,7 +4160,7 @@ def render_network_comparison_map(
         comparison,
         country_code=prepared.country_code,
     )
-    return _write_final_delivery_bundle(
+    return _write_final_delivery_json_bundle(
         bundle,
         output_relative_path,
         ctx,
@@ -4090,35 +4170,57 @@ def render_network_comparison_map(
 
 @mcp.tool(structured_output=True, annotations=FINAL_WORKSPACE_DELIVERY_TOOL)
 def publish_network_planning_report(
-    normalized_input_ref: ResourceRef,
-    baseline_ref: ResourceRef,
-    facility_location_ref: ResourceRef,
-    comparison_ref: ResourceRef,
+    report_input: NetworkReportInput,
     output_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
     ctx: Context,
 ) -> CallToolResult:
-    """Create a self-contained warehouse network planning report JSON file."""
+    """Create a Markdown brief for a baseline assessment or plan comparison."""
     _runtime().require_workspace(ctx)
-    prepared, normalized, baseline, facility, comparison = (
-        _load_final_delivery_inputs(
-            normalized_input_ref,
-            baseline_ref,
-            facility_location_ref,
-            comparison_ref,
+    prepared = _load_ready_network(report_input.normalized_input_ref)
+    normalized = NormalizedInputBatch(
+        demand_cities=prepared.demand_cities,
+        warehouses=prepared.warehouses,
+        current_assignments=prepared.current_assignments,
+        route_quotes=prepared.route_quotes,
+        provided_route_facts=prepared.provided_route_facts,
+        issues=prepared.issues,
+    )
+    baseline = _runtime().load_model(
+        report_input.baseline_ref,
+        "network_baseline.v2",
+        BaselineResult,
+    )
+    if report_input.mode == "baseline":
+        bundle = build_network_baseline_assessment_report_bundle(
+            normalized,
+            baseline,
+            country_code=prepared.country_code,
         )
-    )
-    bundle = build_network_planning_report_bundle(
-        normalized,
-        baseline,
-        facility,
-        comparison,
-        country_code=prepared.country_code,
-    )
-    return _write_final_delivery_bundle(
-        bundle,
+        markdown = render_network_baseline_assessment_markdown(bundle)
+    else:
+        facility = _runtime().load_model(
+            report_input.facility_location_ref,
+            "facility_location_solution.v3",
+            PMedianSolution,
+        )
+        comparison = _runtime().load_model(
+            report_input.comparison_ref,
+            "network_assignment_comparison.v1",
+            AssignmentComparison,
+        )
+        bundle = build_network_planning_report_bundle(
+            normalized,
+            baseline,
+            facility,
+            comparison,
+            country_code=prepared.country_code,
+        )
+        markdown = render_network_planning_report_markdown(bundle)
+    return _write_final_delivery_markdown(
+        markdown,
         output_relative_path,
         ctx,
-        "Created the self-contained warehouse network planning report.",
+        "已生成仓网分析中文 Markdown 简报。",
     )
 
 

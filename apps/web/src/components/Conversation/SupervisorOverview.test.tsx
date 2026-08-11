@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   RuntimeAgentActivity,
@@ -8,7 +8,11 @@ import type {
 } from "../../../browser/types";
 import SupervisorOverview, { orderAndDedupeActivities } from "./SupervisorOverview";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 const rootAgent = {
   run_id: "run-1",
@@ -304,7 +308,7 @@ describe("SupervisorOverview", () => {
     expect(screen.getByText("network_planning_agent · Task 2")).toBeTruthy();
     expect(screen.getByText("Validated capacity and demand inputs.")).toBeTruthy();
     expect(screen.getByText("Using network planner · compare scenarios")).toBeTruthy();
-    expect(screen.getByText("Evidence Artifacts")).toBeTruthy();
+    expect(screen.getByText("Final deliveries")).toBeTruthy();
     expect(screen.getByText("planning-dataset.v1")).toBeTruthy();
     expect(screen.getByText("data_agent · 2,048 bytes")).toBeTruthy();
   });
@@ -340,8 +344,12 @@ describe("SupervisorOverview", () => {
   it("opens ready Artifact content through the authorized loader", async () => {
     const artifactId = "8e98ff2f-82ee-4cc9-a3e6-2974debf8666";
     const onLoadArtifactContent = vi.fn().mockResolvedValue({
-      schema_version: "planning-dataset.v1",
-      demand_nodes: 12,
+      kind: "json",
+      mime_type: "application/json",
+      value: {
+        schema_version: "planning-dataset.v1",
+        demand_nodes: 12,
+      },
     });
     render(
       <SupervisorOverview
@@ -376,6 +384,104 @@ describe("SupervisorOverview", () => {
     expect(onLoadArtifactContent).toHaveBeenCalledWith(artifactId);
     expect(await screen.findByText(/"demand_nodes": 12/)).toBeTruthy();
     expect(screen.getByRole("dialog").textContent).toContain("Authorized Artifact");
+  });
+
+  it("opens a Markdown report as readable authorized content", async () => {
+    const artifactId = "8e98ff2f-82ee-4cc9-a3e6-2974debf8667";
+    const onLoadArtifactContent = vi.fn().mockResolvedValue({
+      kind: "markdown",
+      mime_type: "text/markdown",
+      text: [
+        "# Warehouse network planning report",
+        "",
+        "## Executive summary",
+        "",
+        "- Planned city coverage: **92.0%**",
+      ].join("\n"),
+    });
+    render(
+      <SupervisorOverview
+        taskTitle="Network planning"
+        agents={[rootAgent, networkAgent]}
+        artifacts={[{
+          id: artifactId,
+          task_id: "task-1",
+          artifact_schema: "network_planning_report_markdown.v1",
+          display_name: "Warehouse network planning report",
+          mime_type: "text/markdown",
+          expected_size: 1024,
+          byte_size: 1024,
+          content_sha256: "c".repeat(64),
+          state: "ready",
+          failure: null,
+          content_url: `/api/artifacts/${artifactId}/content`,
+          download_url: `/api/artifacts/${artifactId}/download`,
+          producer_run_id: "run-1",
+          producer_thread_id: "network-thread",
+          producer_turn_id: "turn-network",
+          producer_item_id: "item-report",
+          producer_agent_role: "network_agent",
+          created_at: "2026-08-11T00:00:03Z",
+          updated_at: "2026-08-11T00:00:04Z",
+        }]}
+        onLoadArtifactContent={onLoadArtifactContent}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    expect(onLoadArtifactContent).toHaveBeenCalledWith(artifactId);
+    expect((await screen.findAllByRole("heading", {
+      name: "Warehouse network planning report",
+    })).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/Planned city coverage:/).textContent).toContain("92.0%");
+    expect(screen.queryByText(/"kind": "markdown"/)).toBeNull();
+  });
+
+  it("downloads a ready final delivery through the authorized client", async () => {
+    const artifactId = "8e98ff2f-82ee-4cc9-a3e6-2974debf8668";
+    const onDownloadArtifact = vi.fn().mockResolvedValue({
+      blob: new Blob(["# Brief\n"], { type: "text/markdown" }),
+      filename: "warehouse-network-brief.md",
+    });
+    const createObjectURL = vi.fn().mockReturnValue("blob:network-report");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    render(
+      <SupervisorOverview
+        taskTitle="Network planning"
+        agents={[rootAgent, networkAgent]}
+        artifacts={[{
+          id: artifactId,
+          task_id: "task-1",
+          artifact_schema: "network_planning_report_markdown.v1",
+          display_name: "Warehouse network planning report",
+          mime_type: "text/markdown",
+          expected_size: 128,
+          byte_size: 128,
+          content_sha256: "d".repeat(64),
+          state: "ready",
+          failure: null,
+          content_url: `/api/artifacts/${artifactId}/content`,
+          download_url: `/api/artifacts/${artifactId}/download`,
+          producer_run_id: "run-1",
+          producer_thread_id: "network-thread",
+          producer_turn_id: "turn-network",
+          producer_item_id: "item-report",
+          producer_agent_role: "network_agent",
+          created_at: "2026-08-11T00:00:03Z",
+          updated_at: "2026-08-11T00:00:04Z",
+        }]}
+        onDownloadArtifact={onDownloadArtifact}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", {
+      name: "Download Warehouse network planning report",
+    }));
+    expect(onDownloadArtifact).toHaveBeenCalledWith(artifactId);
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1));
+    expect(click).toHaveBeenCalledTimes(1);
   });
 
   it("renders native Runtime subjects as concrete root and child actions", () => {

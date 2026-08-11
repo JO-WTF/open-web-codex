@@ -14,7 +14,7 @@ def load_administrative_catalog(
     admin_level: str,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
-    requested_country = {"IDN": "ID"}.get(country_code.upper(), country_code.upper())
+    requested_country = country_code.upper()
     payload_country = str(payload.get("country_code", country_code)).upper()
     if requested_country != payload_country:
         raise ValueError("administrative_catalog_country_mismatch")

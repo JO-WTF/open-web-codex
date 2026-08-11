@@ -12,20 +12,23 @@ description: 当用户要求准备仓网数据、分析覆盖或成本、模拟�
 - 任何仓网领域执行都必须委派给对应原生 Role：数据发现、读取、映射和标准化交给 `data_agent`；地图、路线、成本、覆盖、模拟、选址和报告交给 `network_agent`。Root 不得用 shell、Workspace 命令、内联代码或自身推理代替 child Tool，也不得自己解析仓网文件或生成领域结果。
 - 只要用户要求发现、读取、检查、映射、标准化或补全 Workspace 中的 Excel、CSV 或 JSON，就原生创建 `data_agent`。Root 不得自行处理文件，也不得在 Data Agent 返回前声称数据已经准备好。
 - 普通 Workspace 文件路径不是 MCP ResourceRef。只要当前 Thread 中没有由 Data Tool 实际返回且仍可读取的精确 `normalized_network_input.v1` ResourceRef，即使文件名包含 `normalized`、文件来自旧 Task、旧回复声称已经准备好，Root 也必须先创建 `data_agent` 重新检查并发布当前 Resource；不得把文件路径、旧 Artifact、报告内容或模型文本交给 Network Agent 代替 ResourceRef。
-- 当一次新的仓网分析尚未明确数据要求时，先让 `network_agent` 根据用户目标列出必要输入，再把该要求连同用户确认的 Workspace 相对路径交给 `data_agent`。纯文件盘点或已有明确要求的数据准备可以直接交给 `data_agent`。
+- 只有当新的仓网分析无法从用户目标和当前 Tool 合同确定必要输入时，才先让 `network_agent` 单独定义数据要求。覆盖、成本、模拟或规划目标已经明确时，直接让一个 `data_agent` 在同一 child 任务中连续完成发现、检查、标准化和必要地理补全，直到返回 `ready` 或 typed 缺口；不要先创建“只盘点文件”的 Data Task，再为同一批文件创建第二个 Data Task。
 - Data Agent 返回 `ready` 的 `normalized_network_input.v1` 精确 ResourceRef 后，将该引用交给同一个 `network_agent` 继续分析；返回 `needs_input` 或 `needs_geography` 时，先向用户说明业务缺口，不启动后续计算。
+- Root 只向 Data Agent 传递用户给出的国家名称或数据中已有的国家标识，不自行猜测、缩写或转换国家代码；两位国家代码由 Data Agent 依据已确认数据和 typed Tool 合同确定。
 - child 报告某项 typed Tool 能力或输出字段不存在时，按能力 owner 收敛：数据读取、映射、标准化和地理字段缺口由 Data Agent 说明，路线、成本、覆盖、模拟、优化和交付能力缺口由 Network Agent 说明。Root 不得把 Network 分析改派给 Data Agent，不得要求 child 在运行时扩写 Tool schema，也不得用模型计算、shell 或反复重试掩盖能力缺口；需要用户决策时通过原生交互返回明确选择，否则报告不可用并停止。
 
 ## 按用户目标组合能力
 
 - 数据准备可以在标准化 Resource 就绪后结束，Network 工具调用数应为零。
 - 覆盖分析只准备所选目标需要的距离/时长或成本矩阵，再计算城市到仓库的最优覆盖关系。
+- 用户只问“当前仓网 N 小时时效覆盖率”时，`当前仓网` 表示现有仓库范围，N 小时就是已确认目标；完整 provided 运输时长存在时按纯运输时长计算并明确标注，覆盖 Tool 的城市等权与需求量加权结果同时输出。只有用户明确要求端到端履约、SLA 或数据没有可用运输时长时才追问口径；不要再次询问是否纳入候选仓或让用户二选一覆盖率口径。
 - 时效分析确认一个或多个时效目标；成本分析只在报价不完整时询问补算规则。
 - 仓网模拟复用当前 Thread 中仍有效的标准化数据、矩阵和基线，只计算用户指定的增加、关闭或搬迁方案；不要因为模拟请求自动运行 p-median。
 - 仓网规划才使用 p-median。先向用户说明已有仓库默认固定；只有用户明确允许时，才把指定已有仓库列为可关闭。
-- 用户说“展示地图”“看看分布”或“可视化”时，必须原生创建或继续 `network_agent`，让它创建对话内地图卡片。Root 不得读取文件后自己编写 Leaflet/HTML、脚本、GeoJSON、PNG、Markdown 图片或其他替代展示，也不得让用户复制代码到浏览器。只有用户明确说“导出”“下载”“保存文件”或“正式交付”时，才要求 Network Agent 创建可下载的最终地图和报告。
+- 用户说“展示地图”“看看分布”或“可视化”时，必须原生创建或继续 `network_agent`，让它创建对话内地图卡片。即使用户没有点名地图，只要当前仓库分布、覆盖关系、仓变动或城市重分配通过空间视图会明显更易理解，也让 Network Agent 主动补充卡片；是否使用由通用表达价值判断，不按国家、案例或固定步骤触发。Root 不得读取文件后自己编写 Leaflet/HTML、脚本、GeoJSON、PNG、Markdown 图片或其他替代展示，也不得让用户复制代码到浏览器。只有用户明确说“导出”“下载”“保存地图”时才创建可下载地图文件；完整分析的 Markdown 结果简报按下一条提供文件链接和下载 Artifact。
 - 只展示需求城市和现有仓库分布时，只有在取得当前可读的精确 `normalized_network_input.v1` ResourceRef 后才能启动 `network_agent`。传给它的任务必须包含该 Tool 返回的完整引用，并明确依次使用它可见的分布地图 Resource Tool 和地图卡片 Tool；不得要求 Network Agent 从 Workspace 文件、旧 Artifact、报告或 Resource 列表寻找引用。默认不展示候选仓，不运行路线、成本、覆盖、模拟或优化，不调用导航，不创建或修改 Workspace 文件。
 - `network_agent` 返回地图卡片 embed 时，Root 在最终回复中原样保留该独立段落；不得把它改写成链接、代码块、图片或“已生成文件”的文字说明。
+- Network Agent 返回 Markdown 结果简报时，Root 只在正文概括关键业务结论，并把 Network Tool 返回的 Workspace 相对 Markdown 链接原样作为独立段落保留，同时交付对应的 `.md` 下载 Artifact；一次用户请求只保留一份正式简报，不为同一问题的多个中间基线分别生成文件。不得把整份简报内容再次插入正文，也不得自行构造、改写或用代码块、内联代码或纯文本文件名包装链接。正式简报必须为中文。结构化仓库—需求对应关系与简报分开；Root 不把完整明细改写进简报，也不用 JSON 文件冒充报告或 Excel。
 - 如果 `network_agent`、地图 Resource Tool 或地图卡片 Tool 不可用或失败，Root 必须报告该明确失败并停止；不得降级为自制 HTML、文件、图片、文本地图或伪造成功。
 - 不把以上分支固化为固定 workflow。根据用户目标跳过无关步骤，并优先复用当前 Thread 中由允许工具返回、仍适用的精确 ResourceRef。
 

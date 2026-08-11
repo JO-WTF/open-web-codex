@@ -31,6 +31,7 @@ enabled_tools = [
   "register_navigation_route_matrix",
   "plan_cost_matrix",
   "prepare_network_distribution_map",
+  "prepare_network_comparison_map",
   "evaluate_network_baseline",
   "evaluate_facility_scenario",
   "solve_p_median",
@@ -58,6 +59,9 @@ approval_mode = "approve"
 approval_mode = "approve"
 
 [mcp_servers.supply_chain.tools.prepare_network_distribution_map]
+approval_mode = "approve"
+
+[mcp_servers.supply_chain.tools.prepare_network_comparison_map]
 approval_mode = "approve"
 
 [mcp_servers.supply_chain.tools.evaluate_network_baseline]

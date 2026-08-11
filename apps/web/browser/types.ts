@@ -352,6 +352,18 @@ export type ArtifactSummary = {
   updated_at: string;
 };
 
+export type ArtifactContent =
+  | {
+      kind: "json";
+      mime_type: "application/json" | "application/geo+json";
+      value: Record<string, unknown>;
+    }
+  | {
+      kind: "markdown";
+      mime_type: "text/markdown";
+      text: string;
+    };
+
 export type Workspace = {
   id: string;
   project_id: string;

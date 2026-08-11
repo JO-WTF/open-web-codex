@@ -453,14 +453,14 @@ def _load_source_profile(resource_ref: ResourceRef) -> dict[str, Any]:
 def normalize_network_input(
     source_profile_ref: ResourceRef,
     confirmed_sources: list[ConfirmedSourceDecision],
-    country_code: str,
+    country_code: Annotated[str, Field(pattern=r"^[A-Za-z]{2}$")],
     ctx: Context,
 ) -> Annotated[CallToolResult, DataAgentResourceToolResult]:
     """Normalize exact Workspace files using only explicit confirmed decisions."""
     profile = _load_source_profile(source_profile_ref)
     country = country_code.strip().upper()
-    if not re.fullmatch(r"[A-Z]{2,3}", country):
-        raise ValueError("country_code_required_iso_alpha2_or_alpha3")
+    if not re.fullmatch(r"[A-Z]{2}", country):
+        raise ValueError("country_code_required_iso_alpha2")
     available = {str(source["relative_path"]): source for source in profile.get("sources", [])}
     if not confirmed_sources or len(confirmed_sources) > len(available):
         raise ValueError("confirmed_sources_must_select_profile_sources")

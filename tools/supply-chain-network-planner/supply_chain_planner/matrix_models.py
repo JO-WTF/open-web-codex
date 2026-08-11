@@ -49,6 +49,7 @@ class RouteMatrixRow(MatrixModel):
 class RouteMatrix(MatrixModel):
     schema_version: Literal["route_matrix.v2"] = "route_matrix.v2"
     method: RouteMethod
+    warehouse_scope: WarehouseScope
     rows: list[RouteMatrixRow] = Field(default_factory=list)
     missing_routes: list[tuple[str, str, NetworkLayer]] = Field(default_factory=list)
     validation: dict[str, object] = Field(default_factory=dict)

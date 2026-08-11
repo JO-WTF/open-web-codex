@@ -8,16 +8,14 @@ const MAX_FINAL_ARTIFACT_BYTES: u64 = 100 * 1024 * 1024;
 const MAX_ARTIFACT_JSON_DEPTH: usize = 32;
 const MAX_ARTIFACT_JSON_NODES: usize = 100_000;
 const MAX_ARTIFACT_JSON_STRING_BYTES: usize = 64 * 1024;
+const MAX_ARTIFACT_MARKDOWN_LINE_BYTES: usize = 16 * 1024;
+const NETWORK_REPORT_MARKDOWN_SCHEMA: &str = "network_planning_report_markdown.v1";
+const NETWORK_REPORT_MARKDOWN_MARKER: &str = "<!-- network_planning_report_markdown.v1 -->";
 
 const NETWORK_MAP_SCHEMA: &str = include_str!(
     "../../../../tools/supply-chain-network-planner/contracts/schemas/\
 network_comparison_map_bundle.v1.schema.json"
 );
-const NETWORK_REPORT_SCHEMA: &str = include_str!(
-    "../../../../tools/supply-chain-network-planner/contracts/schemas/\
-network_planning_report_bundle.v1.schema.json"
-);
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FinalArtifactContract {
     pub server: &'static str,
@@ -47,9 +45,9 @@ const CONTRACTS: &[FinalArtifactContract] = &[
     FinalArtifactContract {
         server: "supply_chain",
         tool: "publish_network_planning_report",
-        schema: "network_planning_report_bundle.v1",
+        schema: NETWORK_REPORT_MARKDOWN_SCHEMA,
         display_name: "Warehouse network planning report",
-        mime_type: "application/json",
+        mime_type: "text/markdown",
     },
 ];
 
@@ -146,6 +144,9 @@ pub(crate) fn validate_materialized_bundle(
         .iter()
         .find(|contract| contract.schema == declared_schema)
         .ok_or("artifact_schema_unsupported")?;
+    if contract.mime_type == "text/markdown" {
+        return validate_browser_safe_markdown(bytes);
+    }
     let root = serde_json::from_slice::<Value>(bytes).map_err(|_| "artifact_json_invalid")?;
     if !root.is_object() {
         return Err("artifact_bundle_invalid");
@@ -168,17 +169,47 @@ fn compiled_provider_schema(schema: &str) -> Result<&'static JSONSchema, &'stati
     }
 
     static MAP: OnceLock<Result<JSONSchema, ()>> = OnceLock::new();
-    static REPORT: OnceLock<Result<JSONSchema, ()>> = OnceLock::new();
     let result = match schema {
         "network_comparison_map_bundle.v1" => MAP.get_or_init(|| compile(NETWORK_MAP_SCHEMA)),
-        "network_planning_report_bundle.v1" => {
-            REPORT.get_or_init(|| compile(NETWORK_REPORT_SCHEMA))
-        }
         _ => return Err("artifact_schema_unsupported"),
     };
     result
         .as_ref()
         .map_err(|_| "artifact_bundle_contract_mismatch")
+}
+
+fn validate_browser_safe_markdown(bytes: &[u8]) -> Result<(), &'static str> {
+    if bytes.len() > MAX_FINAL_ARTIFACT_BYTES as usize {
+        return Err("artifact_content_unsafe");
+    }
+    let markdown = std::str::from_utf8(bytes).map_err(|_| "artifact_bundle_invalid")?;
+    let (title, remainder) = markdown
+        .split_once('\n')
+        .ok_or("artifact_bundle_contract_mismatch")?;
+    if !title.starts_with("# ")
+        || title.len() <= 2
+        || title.len() > 258
+        || crate::event_projection::browser_text_contains_unsafe(title)
+    {
+        return Err("artifact_bundle_contract_mismatch");
+    }
+    let marker_prefix = format!("\n{NETWORK_REPORT_MARKDOWN_MARKER}\n");
+    let body = remainder
+        .strip_prefix(&marker_prefix)
+        .ok_or("artifact_bundle_contract_mismatch")?;
+    if body.contains('<')
+        || body.contains('>')
+        || body
+            .lines()
+            .any(|line| line.len() > MAX_ARTIFACT_MARKDOWN_LINE_BYTES)
+        || markdown
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+        || crate::event_projection::browser_text_contains_unsafe(markdown)
+    {
+        return Err("artifact_content_unsafe");
+    }
+    Ok(())
 }
 
 fn validate_browser_safe_json(bytes: &[u8], value: &Value) -> Result<(), &'static str> {
@@ -352,10 +383,10 @@ mod tests {
             "result": {"structuredContent": {
                 "summary": "Created report.",
                 "artifact": {
-                    "schema": "network_planning_report_bundle.v1",
+                    "schema": "network_planning_report_markdown.v1",
                     "displayName": "Warehouse network planning report",
-                    "mimeType": "application/json",
-                    "workspaceRelativePath": "deliverables/report.json",
+                    "mimeType": "text/markdown",
+                    "workspaceRelativePath": "deliverables/report.md",
                     "byteSize": 128
                 }
             }}
@@ -414,10 +445,10 @@ mod tests {
             "result": {"structuredContent": {
                 "summary": "Created report.",
                 "artifact": {
-                    "schema": "network_planning_report_bundle.v1",
+                    "schema": "network_planning_report_markdown.v1",
                     "displayName": "Warehouse network planning report",
-                    "mimeType": "application/json",
-                    "workspaceRelativePath": "deliverables/report.json",
+                    "mimeType": "text/markdown",
+                    "workspaceRelativePath": "deliverables/report.md",
                     "byteSize": 128
                 }
             }}
@@ -487,25 +518,35 @@ mod tests {
     fn validates_materialized_bundle_schema_and_kind() {
         let report_fixture = include_bytes!(
             "../../../../tools/supply-chain-network-planner/contracts/fixtures/\
-network_planning_report_bundle.v1.json"
+network_planning_report_markdown.v1.md"
         );
         let map_fixture = include_bytes!(
             "../../../../tools/supply-chain-network-planner/contracts/fixtures/\
 network_comparison_map_bundle.v1.json"
         );
-        validate_materialized_bundle("network_planning_report_bundle.v1", report_fixture)
+        validate_materialized_bundle("network_planning_report_markdown.v1", report_fixture)
             .expect("complete provider report fixture must validate");
+        validate_materialized_bundle(
+            "network_planning_report_markdown.v1",
+            "# 当前仓网评估简报\n\n<!-- network_planning_report_markdown.v1 -->\n\n## 时效覆盖\n\n- 覆盖城市数：45/50。\n".as_bytes(),
+        )
+        .expect("provider-owned Chinese assessment with natural ratio must validate");
         validate_materialized_bundle("network_comparison_map_bundle.v1", map_fixture)
             .expect("complete provider map fixture must validate");
 
         for bytes in [
-            br#"{"schema_version":"wrong.v1","kind":"network_planning_report"}"#.as_slice(),
-            br#"{"schema_version":"network_planning_report_bundle.v1","kind":"wrong"}"#.as_slice(),
-            br#"{"schema_version":"network_planning_report_bundle.v1","schemaVersion":"network_planning_report_bundle.v1","kind":"network_planning_report"}"#.as_slice(),
+            b"# \n\n<!-- network_planning_report_markdown.v1 -->\n".as_slice(),
+            b"# Warehouse network planning report\n\nMissing marker\n".as_slice(),
+            b"# Warehouse network planning report\n\n<!-- wrong.v1 -->\n".as_slice(),
+            b"# Warehouse network planning report\n\n<!-- network_planning_report_markdown.v1 -->\n\nSee /Users/private/report.md\n".as_slice(),
         ] {
             assert_eq!(
-                validate_materialized_bundle("network_planning_report_bundle.v1", bytes),
-                Err("artifact_bundle_contract_mismatch")
+                validate_materialized_bundle("network_planning_report_markdown.v1", bytes),
+                if bytes.ends_with(b"report.md\n") {
+                    Err("artifact_content_unsafe")
+                } else {
+                    Err("artifact_bundle_contract_mismatch")
+                }
             );
         }
     }
@@ -515,9 +556,9 @@ network_comparison_map_bundle.v1.json"
         let artifact_id = Uuid::nil();
         let pending = artifact_delivery_projection(
             artifact_id,
-            "network_planning_report_bundle.v1",
+            "network_planning_report_markdown.v1",
             "Warehouse network planning report",
-            "application/json",
+            "text/markdown",
             128,
             None,
             "pending",
@@ -530,9 +571,9 @@ network_comparison_map_bundle.v1.json"
 
         let materializing = artifact_delivery_projection(
             artifact_id,
-            "network_planning_report_bundle.v1",
+            "network_planning_report_markdown.v1",
             "Warehouse network planning report",
-            "application/json",
+            "text/markdown",
             128,
             None,
             "materializing",
@@ -544,9 +585,9 @@ network_comparison_map_bundle.v1.json"
 
         let ready = artifact_delivery_projection(
             artifact_id,
-            "network_planning_report_bundle.v1",
+            "network_planning_report_markdown.v1",
             "Warehouse network planning report",
-            "application/json",
+            "text/markdown",
             128,
             Some(128),
             "ready",
@@ -562,9 +603,9 @@ network_comparison_map_bundle.v1.json"
 
         let failed = artifact_delivery_projection(
             artifact_id,
-            "network_planning_report_bundle.v1",
+            "network_planning_report_markdown.v1",
             "Warehouse network planning report",
-            "application/json",
+            "text/markdown",
             128,
             None,
             "failed",
@@ -585,9 +626,9 @@ network_comparison_map_bundle.v1.json"
     fn rejects_unknown_artifact_state_instead_of_downgrading_it() {
         assert!(artifact_delivery_projection(
             Uuid::nil(),
-            "network_planning_report_bundle.v1",
+            "network_planning_report_markdown.v1",
             "Warehouse network planning report",
-            "application/json",
+            "text/markdown",
             128,
             None,
             "future-state",

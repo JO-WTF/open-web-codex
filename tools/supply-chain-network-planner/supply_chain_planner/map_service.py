@@ -86,10 +86,7 @@ class LinehaulMapProperties(DeliveryModel):
 
 
 MapProperties = (
-    WarehouseMapProperties
-    | DemandMapProperties
-    | AssignmentMapProperties
-    | LinehaulMapProperties
+    WarehouseMapProperties | DemandMapProperties | AssignmentMapProperties | LinehaulMapProperties
 )
 
 
@@ -108,9 +105,15 @@ class NetworkMapFeatureCollection(DeliveryModel):
 class NetworkDistributionGeoJson(DeliveryModel):
     """Point-only GeoJSON for interactive current-network map cards."""
 
-    schema_version: Literal["network_distribution_geojson.v1"] = (
-        "network_distribution_geojson.v1"
-    )
+    schema_version: Literal["network_distribution_geojson.v1"] = "network_distribution_geojson.v1"
+    type: Literal["FeatureCollection"] = "FeatureCollection"
+    features: list[NetworkMapFeature]
+
+
+class NetworkComparisonGeoJson(DeliveryModel):
+    """Comparison GeoJSON published specifically for an inline map card."""
+
+    schema_version: Literal["network_comparison_geojson.v1"] = "network_comparison_geojson.v1"
     type: Literal["FeatureCollection"] = "FeatureCollection"
     features: list[NetworkMapFeature]
 
@@ -140,6 +143,17 @@ class NetworkDistributionMapCardHandoff(DeliveryModel):
 
     schema_version: Literal["network_distribution_map_card_handoff.v1"] = Field(
         default="network_distribution_map_card_handoff.v1",
+        alias="schemaVersion",
+    )
+    tool: MapCardToolTarget = Field(default_factory=MapCardToolTarget)
+    arguments: NetworkDistributionMapCardArguments
+
+
+class NetworkComparisonMapCardHandoff(DeliveryModel):
+    """Exact comparison-map handoff for the generic map-card provider."""
+
+    schema_version: Literal["network_comparison_map_card_handoff.v1"] = Field(
+        default="network_comparison_map_card_handoff.v1",
         alias="schemaVersion",
     )
     tool: MapCardToolTarget = Field(default_factory=MapCardToolTarget)
@@ -181,9 +195,7 @@ class NetworkMapSummary(DeliveryModel):
 
 
 class NetworkComparisonMapBundle(DeliveryModel):
-    schema_version: Literal["network_comparison_map_bundle.v1"] = (
-        "network_comparison_map_bundle.v1"
-    )
+    schema_version: Literal["network_comparison_map_bundle.v1"] = "network_comparison_map_bundle.v1"
     kind: Literal["network_comparison_map"] = "network_comparison_map"
     title: str = "Warehouse network: baseline vs selected facilities"
     summary: NetworkMapSummary
@@ -372,13 +384,10 @@ def build_network_distribution_map_card_handoff(
                 },
             },
         )
-        legend_items.append(
-            {"label": "Candidate warehouse", "color": "#16A34A", "type": "circle"}
-        )
+        legend_items.append({"label": "Candidate warehouse", "color": "#16A34A", "type": "circle"})
 
-    summary = (
-        "Demand cities and existing warehouses"
-        + (" with candidate warehouses." if include_candidates else ".")
+    summary = "Demand cities and existing warehouses" + (
+        " with candidate warehouses." if include_candidates else "."
     )
     return NetworkDistributionMapCardHandoff(
         arguments=NetworkDistributionMapCardArguments(
@@ -423,6 +432,187 @@ def build_network_distribution_map_card_handoff(
                 "legend": {
                     "title": "Network features",
                     "items": legend_items,
+                },
+            },
+        )
+    )
+
+
+def build_network_comparison_map_card_handoff(
+    data_ref: MapResourceRef,
+) -> NetworkComparisonMapCardHandoff:
+    """Build a bounded baseline-versus-plan map-card call from typed GeoJSON."""
+
+    source_id = "network-comparison"
+    layers: list[dict[str, object]] = [
+        {
+            "id": "baseline-assignments",
+            "type": "line",
+            "source": source_id,
+            "filter": [
+                "all",
+                ["==", ["get", "kind"], "last_mile_assignment"],
+                ["==", ["get", "scenario"], "baseline"],
+            ],
+            "paint": {
+                "line-color": "#64748B",
+                "line-opacity": 0.24,
+                "line-width": 1,
+            },
+        },
+        {
+            "id": "planned-assignments",
+            "type": "line",
+            "source": source_id,
+            "filter": [
+                "all",
+                ["==", ["get", "kind"], "last_mile_assignment"],
+                ["==", ["get", "scenario"], "facility"],
+            ],
+            "paint": {
+                "line-color": "#16A34A",
+                "line-opacity": 0.58,
+                "line-width": 2,
+            },
+        },
+        {
+            "id": "demand-cities",
+            "type": "circle",
+            "source": source_id,
+            "filter": ["==", ["get", "kind"], "demand"],
+            "paint": {
+                "circle-color": "#F59E0B",
+                "circle-opacity": 0.78,
+                "circle-radius": 5,
+                "circle-stroke-color": "#7C2D12",
+                "circle-stroke-width": 1,
+            },
+        },
+        {
+            "id": "active-existing-warehouses",
+            "type": "circle",
+            "source": source_id,
+            "filter": [
+                "all",
+                ["==", ["get", "kind"], "warehouse"],
+                ["==", ["get", "is_existing"], True],
+                ["==", ["get", "facility_active"], True],
+            ],
+            "paint": {
+                "circle-color": "#2563EB",
+                "circle-radius": 8,
+                "circle-stroke-color": "#FFFFFF",
+                "circle-stroke-width": 2,
+            },
+        },
+        {
+            "id": "opened-candidates",
+            "type": "circle",
+            "source": source_id,
+            "filter": [
+                "all",
+                ["==", ["get", "kind"], "warehouse"],
+                ["==", ["get", "opened_candidate"], True],
+            ],
+            "paint": {
+                "circle-color": "#16A34A",
+                "circle-radius": 9,
+                "circle-stroke-color": "#FFFFFF",
+                "circle-stroke-width": 2,
+            },
+        },
+        {
+            "id": "closed-existing-warehouses",
+            "type": "circle",
+            "source": source_id,
+            "filter": [
+                "all",
+                ["==", ["get", "kind"], "warehouse"],
+                ["==", ["get", "closed_existing"], True],
+            ],
+            "paint": {
+                "circle-color": "#DC2626",
+                "circle-radius": 9,
+                "circle-stroke-color": "#7F1D1D",
+                "circle-stroke-width": 2,
+            },
+        },
+        {
+            "id": "warehouse-labels",
+            "type": "symbol",
+            "source": source_id,
+            "filter": [
+                "all",
+                ["==", ["get", "kind"], "warehouse"],
+                ["==", ["get", "facility_active"], True],
+            ],
+            "layout": {
+                "text-field": ["get", "warehouse_name"],
+                "text-size": 11,
+                "text-offset": [0, 1.3],
+                "text-anchor": "top",
+            },
+            "paint": {
+                "text-color": "#111827",
+                "text-halo-color": "#FFFFFF",
+                "text-halo-width": 1,
+            },
+        },
+    ]
+    summary = (
+        "Baseline and planned warehouse-to-demand assignments, including "
+        "opened and closed facilities."
+    )
+    return NetworkComparisonMapCardHandoff(
+        arguments=NetworkDistributionMapCardArguments(
+            title="Warehouse network comparison",
+            fallback_text=summary,
+            summary=summary,
+            sources={source_id: MapCardGeoJsonSource(data_ref=data_ref)},
+            layers=layers,
+            extensions={
+                "hover": {
+                    "layers": [
+                        {
+                            "layer": "demand-cities",
+                            "title_property": "city_name",
+                            "fields": ["province_name", "demand_quantity"],
+                        },
+                        {
+                            "layer": "active-existing-warehouses",
+                            "title_property": "warehouse_name",
+                            "fields": ["warehouse_type", "city_name"],
+                        },
+                        {
+                            "layer": "opened-candidates",
+                            "title_property": "warehouse_name",
+                            "fields": ["warehouse_type", "city_name"],
+                        },
+                        {
+                            "layer": "closed-existing-warehouses",
+                            "title_property": "warehouse_name",
+                            "fields": ["warehouse_type", "city_name"],
+                        },
+                    ]
+                },
+                "legend": {
+                    "title": "Network comparison",
+                    "items": [
+                        {"label": "Baseline assignment", "color": "#64748B", "type": "line"},
+                        {"label": "Planned assignment", "color": "#16A34A", "type": "line"},
+                        {"label": "Demand city", "color": "#F59E0B", "type": "circle"},
+                        {
+                            "label": "Active existing warehouse",
+                            "color": "#2563EB",
+                            "type": "circle",
+                        },
+                        {"label": "Opened candidate", "color": "#16A34A", "type": "circle"},
+                        {
+                            "label": "Closed existing warehouse",
+                            "color": "#DC2626",
+                            "type": "circle",
+                        },
+                    ],
                 },
             },
         )
@@ -785,14 +975,10 @@ class NetworkMapService:
     ) -> tuple[PublishedResource, dict[str, object], CaseOperationResult]:
         from .case_types import FacetName
 
-        normalized, normalized_id = self.repository.load_normalized_input(
-            case_id, workspace_root
-        )
+        normalized, normalized_id = self.repository.load_normalized_input(case_id, workspace_root)
         baseline, baseline_id = self.repository.load_baseline(case_id, workspace_root)
         if candidate_source == "scenario":
-            candidate, candidate_id = self.repository.load_scenario(
-                case_id, workspace_root
-            )
+            candidate, candidate_id = self.repository.load_scenario(case_id, workspace_root)
             candidate_assignment = candidate.assignment
             candidate_label = "scenario"
             candidate_service = candidate.service
@@ -809,14 +995,10 @@ class NetworkMapService:
         warehouses = {item.warehouse_id: item for item in normalized.warehouses}
         demand = {item.city_id: item for item in normalized.demand_cities}
         baseline_active = {
-            row.warehouse_id
-            for row in baseline.assignment.rows
-            if row.warehouse_id is not None
+            row.warehouse_id for row in baseline.assignment.rows if row.warehouse_id is not None
         }
         candidate_active = {
-            row.warehouse_id
-            for row in candidate_assignment.rows
-            if row.warehouse_id is not None
+            row.warehouse_id for row in candidate_assignment.rows if row.warehouse_id is not None
         }
         features: list[dict[str, object]] = []
         for warehouse in sorted(warehouses.values(), key=lambda item: item.warehouse_id):
@@ -898,12 +1080,8 @@ class NetworkMapService:
             "baseline_label": baseline.label,
             "candidate_source": candidate_source,
             "candidate_label": candidate_label,
-            "baseline_service": [
-                item.model_dump(mode="json") for item in baseline.service
-            ],
-            "candidate_service": [
-                item.model_dump(mode="json") for item in candidate_service
-            ],
+            "baseline_service": [item.model_dump(mode="json") for item in baseline.service],
+            "candidate_service": [item.model_dump(mode="json") for item in candidate_service],
         }
         geojson = {
             "type": "FeatureCollection",

@@ -24,7 +24,9 @@ from supply_chain_planner.mcp_resources import (
     McpResourceRuntime,
 )
 from supply_chain_planner.models import (
+    NetworkBaselineReportInput,
     NetworkBaselineResourceToolResult,
+    NetworkComparisonReportInput,
     NetworkFinalArtifactToolResult,
     PreparedNetworkResource,
 )
@@ -37,7 +39,10 @@ from supply_chain_planner.optimization_models import (
     ScenarioSpec,
     ServiceCoverageConstraint,
 )
-from supply_chain_planner.report_service import NetworkPlanningReportBundle
+from supply_chain_planner.report_service import (
+    NETWORK_PLANNING_MARKDOWN_MARKER,
+    NETWORK_PLANNING_MARKDOWN_SCHEMA,
+)
 from supply_chain_planner.resource_store import ResourceStore
 
 BEKASI_ID = "WH-CROSS_DOCKING-BEKASI"
@@ -66,9 +71,7 @@ def _runtime(tmp_path: Path, monkeypatch) -> tuple[Path, ResourceStore]:
 
 def _context(workspace: Path) -> SimpleNamespace:
     meta = SimpleNamespace(
-        model_extra={
-            "codex/sandbox-state-meta": {"sandboxCwd": workspace.as_uri()}
-        }
+        model_extra={"codex/sandbox-state-meta": {"sandboxCwd": workspace.as_uri()}}
     )
     return SimpleNamespace(request_context=SimpleNamespace(meta=meta))
 
@@ -119,14 +122,10 @@ def _published_network(
         warehouse_scope="all_warehouses",
     )
     existing_ids = {
-        warehouse.warehouse_id
-        for warehouse in fixture.warehouses
-        if warehouse.is_existing
+        warehouse.warehouse_id for warehouse in fixture.warehouses if warehouse.is_existing
     }
     candidate_ids = {
-        warehouse.warehouse_id
-        for warehouse in fixture.warehouses
-        if not warehouse.is_existing
+        warehouse.warehouse_id for warehouse in fixture.warehouses if not warehouse.is_existing
     }
     return (
         server.resource_ref(store.publish(prepared.schema_version, prepared)),
@@ -146,9 +145,7 @@ def _sample2_resource_refs(
     store: ResourceStore,
     ctx: SimpleNamespace,
 ) -> tuple[ResourceRef, ResourceRef, ResourceRef, ResourceRef]:
-    prepared_ref, route_ref, cost_ref, existing_ids, _candidate_ids = _published_network(
-        store
-    )
+    prepared_ref, route_ref, cost_ref, existing_ids, _candidate_ids = _published_network(store)
     baseline_result = server.evaluate_network_baseline(
         prepared_ref,
         route_ref,
@@ -208,6 +205,7 @@ def test_network_planning_tools_require_explicit_parameters_and_hide_context() -
         "register_navigation_route_matrix",
         "plan_cost_matrix",
         "prepare_network_distribution_map",
+        "prepare_network_comparison_map",
         "evaluate_network_baseline",
         "evaluate_facility_scenario",
         "compare_network_scenarios",
@@ -251,9 +249,7 @@ def test_network_planning_tools_require_explicit_parameters_and_hide_context() -
 
     scenario = tools["evaluate_facility_scenario"].inputSchema
     assert "ctx" not in scenario["properties"]
-    assert {"normalized_input_ref", "route_matrix_ref", "scenario"}.issubset(
-        scenario["required"]
-    )
+    assert {"normalized_input_ref", "route_matrix_ref", "scenario"}.issubset(scenario["required"])
 
     p_median = tools["solve_p_median"].inputSchema
     assert "ctx" not in p_median["properties"]
@@ -271,9 +267,16 @@ def test_network_planning_tools_require_explicit_parameters_and_hide_context() -
 
     comparison = tools["compare_network_scenarios"].inputSchema
     assert "ctx" not in comparison["properties"]
-    assert {"baseline_ref", "candidate_ref", "service_targets"}.issubset(
-        comparison["required"]
-    )
+    assert {"baseline_ref", "candidate_ref", "service_targets"}.issubset(comparison["required"])
+
+    comparison_map = tools["prepare_network_comparison_map"].inputSchema
+    assert "ctx" not in comparison_map["properties"]
+    assert set(comparison_map["required"]) == {
+        "normalized_input_ref",
+        "baseline_ref",
+        "facility_location_ref",
+        "comparison_ref",
+    }
 
     final_required = {
         "normalized_input_ref",
@@ -282,16 +285,15 @@ def test_network_planning_tools_require_explicit_parameters_and_hide_context() -
         "comparison_ref",
         "output_relative_path",
     }
-    for name in (
-        "render_network_comparison_map",
-        "publish_network_planning_report",
-    ):
-        final_schema = tools[name].inputSchema
-        assert "ctx" not in final_schema["properties"]
-        assert set(final_schema["required"]) == final_required
+    final_schema = tools["render_network_comparison_map"].inputSchema
+    assert "ctx" not in final_schema["properties"]
+    assert set(final_schema["required"]) == final_required
+    report_schema = tools["publish_network_planning_report"].inputSchema
+    assert "ctx" not in report_schema["properties"]
+    assert set(report_schema["required"]) == {"report_input", "output_relative_path"}
 
 
-def test_s2_final_tools_create_exact_self_contained_json_artifacts(
+def test_s2_creates_inline_comparison_map_and_markdown_report_artifact(
     tmp_path: Path, monkeypatch
 ) -> None:
     workspace, store = _runtime(tmp_path, monkeypatch)
@@ -311,17 +313,22 @@ def test_s2_final_tools_create_exact_self_contained_json_artifacts(
         "outputs/network-map.json",
         ctx,
     )
+    report_input = NetworkComparisonReportInput(
+        normalized_input_ref=refs[0],
+        baseline_ref=refs[1],
+        facility_location_ref=refs[2],
+        comparison_ref=refs[3],
+    )
     report_result = server.publish_network_planning_report(
-        *refs,
-        "outputs/network-report.json",
+        report_input,
+        "outputs/network-report.md",
         ctx,
     )
+    inline_map_result = server.prepare_network_comparison_map(*refs, ctx)
 
     assert map_result.structuredContent is not None
     assert report_result.structuredContent is not None
-    map_tool_result = NetworkFinalArtifactToolResult.model_validate(
-        map_result.structuredContent
-    )
+    map_tool_result = NetworkFinalArtifactToolResult.model_validate(map_result.structuredContent)
     report_tool_result = NetworkFinalArtifactToolResult.model_validate(
         report_result.structuredContent
     )
@@ -333,14 +340,10 @@ def test_s2_final_tools_create_exact_self_contained_json_artifacts(
         "workspaceRelativePath",
         "byteSize",
     }
-    assert map_tool_result.artifact.artifact_schema == (
-        "network_comparison_map_bundle.v1"
-    )
-    assert report_tool_result.artifact.artifact_schema == (
-        "network_planning_report_bundle.v1"
-    )
+    assert map_tool_result.artifact.artifact_schema == ("network_comparison_map_bundle.v1")
+    assert report_tool_result.artifact.artifact_schema == (NETWORK_PLANNING_MARKDOWN_SCHEMA)
     assert map_tool_result.artifact.mime_type == "application/json"
-    assert report_tool_result.artifact.mime_type == "application/json"
+    assert report_tool_result.artifact.mime_type == "text/markdown"
 
     map_path = workspace / map_tool_result.artifact.workspace_relative_path
     report_path = workspace / report_tool_result.artifact.workspace_relative_path
@@ -349,28 +352,36 @@ def test_s2_final_tools_create_exact_self_contained_json_artifacts(
     map_bundle = NetworkComparisonMapBundle.model_validate(
         json.loads(map_path.read_text(encoding="utf-8"))
     )
-    report_bundle = NetworkPlanningReportBundle.model_validate(
-        json.loads(report_path.read_text(encoding="utf-8"))
-    )
+    report_markdown = report_path.read_text(encoding="utf-8")
     assert map_bundle.summary.feature_count == 187
     assert map_bundle.summary.opened_candidate_ids == [
         "WH-CANDIDATE-KENDARI",
         "WH-CANDIDATE-MANADO",
     ]
-    assert len(report_bundle.entities.demand_cities) == 50
-    assert len(report_bundle.entities.warehouses) == 23
-    assert len(report_bundle.baseline.assignment.rows) == 50
-    assert len(report_bundle.facility.assignment.rows) == 50
-    assert report_bundle.baseline.label == "actual_current"
-    assert [metric.target_hours for metric in report_bundle.baseline.coverage] == [
-        6,
-        12,
-        18,
-    ]
-    assert [metric.target_hours for metric in report_bundle.facility.service] == [
-        6,
-        12,
-        18,
+    assert report_markdown.startswith("# 仓网规划结果简报\n")
+    assert NETWORK_PLANNING_MARKDOWN_MARKER in report_markdown
+    assert "## 执行摘要" in report_markdown
+    assert "## 时效覆盖" in report_markdown
+    assert "基线城市覆盖率" in report_markdown
+    assert "方案需求量加权覆盖率" in report_markdown
+    assert "WH-CANDIDATE-KENDARI" in report_markdown
+    assert "WH-CANDIDATE-MANADO" in report_markdown
+    assert "结构化计算结果" in report_markdown
+    assert report_result.content[0].text == (
+        "正式简报已生成：[下载中文 Markdown 简报](outputs/network-report.md)"
+    )
+
+    assert inline_map_result.structuredContent is not None
+    assert inline_map_result.structuredContent["feature_count"] == 187
+    handoff = inline_map_result.structuredContent["map_card_handoff"]
+    assert handoff["schemaVersion"] == "network_comparison_map_card_handoff.v1"
+    assert handoff["tool"] == {
+        "server": "map_utils",
+        "name": "create_map_card",
+    }
+    assert [layer["id"] for layer in handoff["arguments"]["layers"]][:2] == [
+        "baseline-assignments",
+        "planned-assignments",
     ]
 
     with pytest.raises(McpResourceContractError, match="workspace_file_invalid"):
@@ -380,21 +391,31 @@ def test_s2_final_tools_create_exact_self_contained_json_artifacts(
             ctx,
         )
     for invalid_path in (
-        (workspace / "absolute.json").as_posix(),
-        "../escape.json",
+        (workspace / "absolute.md").as_posix(),
+        "../escape.md",
     ):
         with pytest.raises(McpResourceContractError, match="workspace_file_invalid"):
-            server.publish_network_planning_report(*refs, invalid_path, ctx)
+            server.publish_network_planning_report(report_input, invalid_path, ctx)
     outside = tmp_path / "outside"
     outside.mkdir()
     (workspace / "linked").symlink_to(outside, target_is_directory=True)
     with pytest.raises(McpResourceContractError, match="workspace_file_invalid"):
         server.publish_network_planning_report(
-            *refs,
-            "linked/report.json",
+            report_input,
+            "linked/report.md",
             ctx,
         )
     assert list(outside.iterdir()) == []
+
+    with pytest.raises(
+        McpResourceContractError,
+        match="report_output_requires_markdown",
+    ):
+        server.publish_network_planning_report(
+            report_input,
+            "outputs/not-a-markdown-report.json",
+            ctx,
+        )
 
 
 def test_final_artifact_descriptor_rejects_empty_files() -> None:
@@ -403,24 +424,56 @@ def test_final_artifact_descriptor_rejects_empty_files() -> None:
             {
                 "summary": "empty",
                 "artifact": {
-                    "schema": "network_planning_report_bundle.v1",
+                    "schema": "network_planning_report_markdown.v1",
                     "displayName": "Report",
-                    "mimeType": "application/json",
-                    "workspaceRelativePath": "report.json",
+                    "mimeType": "text/markdown",
+                    "workspaceRelativePath": "report.md",
                     "byteSize": 0,
                 },
             }
         )
 
 
-def test_s3_reuses_prepared_resources_and_only_closes_bekasi(
+def test_baseline_assessment_creates_markdown_without_comparison_refs(
     tmp_path: Path, monkeypatch
 ) -> None:
     workspace, store = _runtime(tmp_path, monkeypatch)
+    (workspace / "outputs").mkdir()
     ctx = _context(workspace)
-    prepared_ref, route_ref, cost_ref, existing_ids, candidate_ids = _published_network(
-        store
+    normalized_ref, baseline_ref, _facility_ref, _comparison_ref = (
+        _sample2_resource_refs(store, ctx)
     )
+
+    result = server.publish_network_planning_report(
+        NetworkBaselineReportInput(
+            normalized_input_ref=normalized_ref,
+            baseline_ref=baseline_ref,
+        ),
+        "outputs/current-network-assessment.md",
+        ctx,
+    )
+
+    assert result.structuredContent is not None
+    artifact = NetworkFinalArtifactToolResult.model_validate(result.structuredContent)
+    assert artifact.artifact.artifact_schema == NETWORK_PLANNING_MARKDOWN_SCHEMA
+    markdown = (workspace / artifact.artifact.workspace_relative_path).read_text(
+        encoding="utf-8"
+    )
+    assert result.content[0].text == (
+        "正式简报已生成：[下载中文 Markdown 简报]"
+        "(outputs/current-network-assessment.md)"
+    )
+    assert markdown.startswith("# 当前仓网评估简报\n")
+    assert NETWORK_PLANNING_MARKDOWN_MARKER in markdown
+    assert "## 时效覆盖" in markdown
+    assert "## 未达标城市（按需求量排序）" in markdown
+    assert "结构化计算结果" in markdown
+
+
+def test_s3_reuses_prepared_resources_and_only_closes_bekasi(tmp_path: Path, monkeypatch) -> None:
+    workspace, store = _runtime(tmp_path, monkeypatch)
+    ctx = _context(workspace)
+    prepared_ref, route_ref, cost_ref, existing_ids, candidate_ids = _published_network(store)
     baseline_ref = _result_ref(
         server.evaluate_network_baseline(
             prepared_ref,
@@ -499,9 +552,7 @@ def test_comparison_accepts_actual_and_optimized_baseline_resources(
 ) -> None:
     workspace, store = _runtime(tmp_path, monkeypatch)
     ctx = _context(workspace)
-    prepared_ref, route_ref, cost_ref, _existing_ids, _candidate_ids = (
-        _published_network(store)
-    )
+    prepared_ref, route_ref, cost_ref, _existing_ids, _candidate_ids = _published_network(store)
     actual_ref = _result_ref(
         server.evaluate_network_baseline(
             prepared_ref,
@@ -545,9 +596,7 @@ def test_s2_opens_exactly_two_candidates_and_compares_actual_baseline(
 ) -> None:
     workspace, store = _runtime(tmp_path, monkeypatch)
     ctx = _context(workspace)
-    prepared_ref, route_ref, cost_ref, existing_ids, _candidate_ids = _published_network(
-        store
-    )
+    prepared_ref, route_ref, cost_ref, existing_ids, _candidate_ids = _published_network(store)
     baseline_result = server.evaluate_network_baseline(
         prepared_ref,
         route_ref,
@@ -622,14 +671,10 @@ def test_s2_opens_exactly_two_candidates_and_compares_actual_baseline(
     assert comparison.requested_service_targets == [6, 12, 18]
 
 
-def test_baseline_and_p_median_reject_missing_explicit_inputs(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_baseline_and_p_median_reject_missing_explicit_inputs(tmp_path: Path, monkeypatch) -> None:
     workspace, store = _runtime(tmp_path, monkeypatch)
     ctx = _context(workspace)
-    prepared_ref, route_ref, cost_ref, existing_ids, _candidate_ids = _published_network(
-        store
-    )
+    prepared_ref, route_ref, cost_ref, existing_ids, _candidate_ids = _published_network(store)
     prepared = server._runtime().load_model(
         prepared_ref,
         "normalized_network_input.v1",

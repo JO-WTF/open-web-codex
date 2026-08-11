@@ -51,9 +51,7 @@ def plan_route_matrix(
         method=method,
         detour_coefficient=detour_coefficient,
         average_speed_kph=average_speed_kph,
-        estimated_billable_calls=(
-            len(expected) if method == "navigation" else 0
-        ),
+        estimated_billable_calls=(len(expected) if method == "navigation" else 0),
     )
 
 
@@ -69,6 +67,7 @@ def build_haversine_route_matrix(
         [],
         detour_coefficient,
         average_speed_kph,
+        warehouse_scope="all_warehouses",
     )
 
 
@@ -76,6 +75,8 @@ def build_provided_route_matrix(
     demand_cities: list[DemandCityRecord],
     warehouses: list[WarehouseRecord],
     provided_route_facts: list[ProvidedRouteFactRecord],
+    *,
+    warehouse_scope: WarehouseScope,
 ) -> RouteMatrix:
     """Materialize exact uploaded distance/duration facts for expected route pairs."""
 
@@ -112,6 +113,7 @@ def build_provided_route_matrix(
     ]
     return RouteMatrix(
         method="provided",
+        warehouse_scope=warehouse_scope,
         rows=rows,
         missing_routes=missing,
         validation={
@@ -131,6 +133,8 @@ def build_route_matrix_with_reuse(
     existing_rows: list[RouteMatrixRow],
     detour_coefficient: float,
     average_speed_kph: float,
+    *,
+    warehouse_scope: WarehouseScope,
 ) -> RouteMatrix:
     """Reuse exact layered route facts and compute only missing expected pairs."""
 
@@ -156,9 +160,7 @@ def build_route_matrix_with_reuse(
     for origin, destination, layer in expected:
         origin_warehouse = warehouse_by_id[origin]
         destination_point = (
-            demand_by_id[destination]
-            if layer == "last_mile"
-            else warehouse_by_id[destination]
+            demand_by_id[destination] if layer == "last_mile" else warehouse_by_id[destination]
         )
         candidates = existing_index.get((origin, destination, layer), [])
         if len(candidates) > 1:
@@ -215,6 +217,7 @@ def build_route_matrix_with_reuse(
         computed += 1
     return RouteMatrix(
         method="haversine",
+        warehouse_scope=warehouse_scope,
         rows=rows,
         missing_routes=missing,
         validation={
@@ -323,6 +326,8 @@ def register_navigation_route_matrix(
     demand_cities: list[DemandCityRecord],
     warehouses: list[WarehouseRecord],
     rows: list[RouteMatrixRow],
+    *,
+    warehouse_scope: WarehouseScope,
 ) -> RouteMatrix:
     expected = set(_expected_route_pairs(demand_cities, warehouses))
     warehouse_by_id = {warehouse.warehouse_id: warehouse for warehouse in warehouses}
@@ -344,17 +349,17 @@ def register_navigation_route_matrix(
             raise ValueError("navigation_matrix_requires_navigation_method")
         if not row.navigation_provider or not row.navigation_profile:
             raise ValueError("navigation_parameters_unavailable")
-        provenance.add(
-            (row.navigation_provider, row.navigation_profile, row.tool_version)
-        )
+        provenance.add((row.navigation_provider, row.navigation_profile, row.tool_version))
         origin = warehouse_by_id.get(row.origin_id)
         destination = (
             demand_by_id.get(row.destination_id)
             if row.layer == "last_mile"
             else warehouse_by_id.get(row.destination_id)
         )
-        if origin is None or destination is None or not _route_endpoints_match(
-            row, origin, destination
+        if (
+            origin is None
+            or destination is None
+            or not _route_endpoints_match(row, origin, destination)
         ):
             raise ValueError(
                 f"navigation_route_endpoint_mismatch:{row.origin_id}:{row.destination_id}:{row.layer}"
@@ -364,6 +369,7 @@ def register_navigation_route_matrix(
     missing = sorted(expected - supplied)
     return RouteMatrix(
         method="navigation",
+        warehouse_scope=warehouse_scope,
         rows=rows,
         missing_routes=missing,
         validation={"route_count": len(rows), "complete": not missing},
@@ -445,11 +451,7 @@ def build_cost_matrix(
             raise ValueError(f"cost_quote_duplicate_pair:{key}")
         quote_index[key] = quote
         quote_currencies.add(str(quote.currency).upper())
-    policy = (
-        None
-        if fallback_rule is None
-        else CostCalculationPolicy.model_validate(fallback_rule)
-    )
+    policy = None if fallback_rule is None else CostCalculationPolicy.model_validate(fallback_rule)
     rules = _cost_rules_by_layer(policy)
     rule_currencies = {rule.currency for rule in rules.values()}
     currencies = quote_currencies | rule_currencies
@@ -490,11 +492,7 @@ def build_cost_matrix(
         if quote is not None:
             if str(quote.currency).upper() != currency:
                 raise ValueError("cost_currency_mismatch")
-            exact = [
-                row
-                for row in prior_candidates
-                if _is_exact_quoted_cost(row, quote, currency)
-            ]
+            exact = [row for row in prior_candidates if _is_exact_quoted_cost(row, quote, currency)]
             if exact:
                 rows.append(exact[0])
                 reused += 1
@@ -529,11 +527,7 @@ def build_cost_matrix(
         if route_fact is None:
             missing.append((origin, destination, layer))
             continue
-        exact = [
-            row
-            for row in prior_candidates
-            if _is_exact_calculated_cost(row, route, rule)
-        ]
+        exact = [row for row in prior_candidates if _is_exact_calculated_cost(row, route, rule)]
         if exact:
             rows.append(exact[0])
             reused += 1
@@ -628,8 +622,7 @@ def _is_exact_calculated_cost(
 ) -> bool:
     route_fact = _route_fact_provenance(route)
     expected_cost = (
-        rule.fixed_cost_per_demand_unit
-        + rule.cost_per_km_per_demand_unit * route.distance_km
+        rule.fixed_cost_per_demand_unit + rule.cost_per_km_per_demand_unit * route.distance_km
     )
     return (
         row.source == "calculated"

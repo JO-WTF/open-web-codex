@@ -86,8 +86,7 @@ async def smoke() -> None:
                 assert reused.structuredContent["status"] == "reused"
                 assert created.structuredContent["dataClassification"] == "synthetic_demo"
         (workspace / "network.csv").write_text(
-            "city_id,city_name,demand_quantity,latitude,longitude\n"
-            "city-1,Jakarta,10,-6.2,106.8\n",
+            "city_id,city_name,demand_quantity,latitude,longitude\ncity-1,Jakarta,10,-6.2,106.8\n",
             encoding="utf-8",
         )
         data_parameters = StdioServerParameters(
@@ -146,6 +145,7 @@ async def smoke() -> None:
                     "register_navigation_route_matrix",
                     "validate_route_matrix",
                     "plan_cost_matrix",
+                    "prepare_network_comparison_map",
                     "prepare_network_distribution_map",
                     "evaluate_network_baseline",
                     "evaluate_facility_scenario",

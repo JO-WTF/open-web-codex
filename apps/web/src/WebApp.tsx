@@ -2742,6 +2742,10 @@ export default function WebApp() {
     (artifactId: string) => client.readArtifactContent(artifactId),
     [client],
   );
+  const downloadArtifact = useCallback(
+    (artifactId: string) => client.downloadArtifact(artifactId),
+    [client],
+  );
   const retryActiveThreadCreation = () => {
     if (!activeWorkspaceId || activeThread?.creationStatus !== "failed") return;
     void startThread(
@@ -2780,6 +2784,7 @@ export default function WebApp() {
               onResolveApproval={resolveApproval}
               onLoadAgentHistory={loadAgentHistory}
               onLoadArtifactContent={loadArtifactContent}
+              onDownloadArtifact={downloadArtifact}
               loading={supervisorOverviewLoading}
               error={supervisorOverviewError}
             />
@@ -2911,6 +2916,7 @@ export default function WebApp() {
           selectedModelId={selectedProviderModelId}
           onSelectModel={(modelId) => { void selectThreadModel(modelId); }}
         messages={messages}
+        finalArtifacts={supervisorOverview?.artifacts ?? []}
         taskApprovals={delegatedTaskApprovals}
         workspaceId={activeWorkspaceId ?? undefined}
         draft={draft}

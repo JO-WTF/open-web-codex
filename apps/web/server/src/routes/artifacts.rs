@@ -130,6 +130,7 @@ fn artifact_content_response(
     let content_type = match content.mime_type.as_str() {
         "application/json" => HeaderValue::from_static("application/json"),
         "application/geo+json" => HeaderValue::from_static("application/geo+json"),
+        "text/markdown" => HeaderValue::from_static("text/markdown; charset=utf-8"),
         _ => return Err(bad_gateway("Artifact content type is unsupported")),
     };
     let content_length = HeaderValue::from_str(&content.bytes.len().to_string()).map_err(|_| {
@@ -145,8 +146,13 @@ fn artifact_content_response(
     headers.insert(header::CONTENT_TYPE, content_type);
     headers.insert(header::CONTENT_LENGTH, content_length);
     if download {
+        let extension = match content.mime_type.as_str() {
+            "text/markdown" => "md",
+            "application/json" | "application/geo+json" => "json",
+            _ => return Err(bad_gateway("Artifact content type is unsupported")),
+        };
         let content_disposition = HeaderValue::from_str(&format!(
-            "attachment; filename=\"artifact-{artifact_id}.json\""
+            "attachment; filename=\"artifact-{artifact_id}.{extension}\""
         ))
         .map_err(|_| {
             (
@@ -215,7 +221,7 @@ async fn authorized_ready_content(
         ));
     }
     let mime_type: String = row.get("mime_type");
-    if !supported_json_mime(&mime_type) {
+    if !supported_artifact_mime(&mime_type) {
         return Err(bad_gateway("Artifact content type is unsupported"));
     }
     let bytes: Vec<u8> = row.get("content");
@@ -602,8 +608,11 @@ fn artifact_summary(row: &sqlx::postgres::PgRow) -> Result<ArtifactSummary, ApiE
     })
 }
 
-fn supported_json_mime(value: &str) -> bool {
-    matches!(value, "application/json" | "application/geo+json")
+fn supported_artifact_mime(value: &str) -> bool {
+    matches!(
+        value,
+        "application/json" | "application/geo+json" | "text/markdown"
+    )
 }
 
 fn validate_downloaded_artifact(
@@ -659,7 +668,7 @@ fn database_projection_error(message: &str) -> ApiError {
 
 #[cfg(test)]
 mod tests {
-    use super::{supported_json_mime, validate_downloaded_artifact};
+    use super::{supported_artifact_mime, validate_downloaded_artifact};
     use crate::middleware::auth::AuthenticatedUser;
     use axum::http::StatusCode;
     use open_web_codex_git_runtime::{GitRuntime, GitRuntimeConfig};
@@ -686,21 +695,22 @@ mod tests {
     }
 
     #[test]
-    fn limits_browser_content_to_typed_json_artifacts() {
-        assert!(supported_json_mime("application/json"));
-        assert!(supported_json_mime("application/geo+json"));
-        assert!(!supported_json_mime("text/html"));
+    fn limits_browser_content_to_typed_artifact_mimes() {
+        assert!(supported_artifact_mime("application/json"));
+        assert!(supported_artifact_mime("application/geo+json"));
+        assert!(supported_artifact_mime("text/markdown"));
+        assert!(!supported_artifact_mime("text/html"));
     }
 
     #[test]
     fn rejects_downloaded_artifact_size_and_contract_drift() {
         let valid = include_bytes!(
             "../../../../../tools/supply-chain-network-planner/contracts/fixtures/\
-network_planning_report_bundle.v1.json"
+network_planning_report_markdown.v1.md"
         );
         assert_eq!(
             validate_downloaded_artifact(
-                "network_planning_report_bundle.v1",
+                "network_planning_report_markdown.v1",
                 valid.len() as i64,
                 valid,
             ),
@@ -708,16 +718,16 @@ network_planning_report_bundle.v1.json"
         );
         assert_eq!(
             validate_downloaded_artifact(
-                "network_planning_report_bundle.v1",
+                "network_planning_report_markdown.v1",
                 valid.len() as i64 + 1,
                 valid,
             ),
             Err("size_mismatch")
         );
-        let wrong_schema = br#"{"schema_version":"wrong.v1","kind":"network_planning_report"}"#;
+        let wrong_schema = b"# Warehouse network planning report\n\nMissing marker\n";
         assert_eq!(
             validate_downloaded_artifact(
-                "network_planning_report_bundle.v1",
+                "network_planning_report_markdown.v1",
                 wrong_schema.len() as i64,
                 wrong_schema,
             ),
@@ -766,9 +776,9 @@ network_planning_report_bundle.v1.json"
                             "result": {"content": [], "structuredContent": {
                                 "summary": "Created report.",
                                 "artifact": {
-                                    "schema": "network_planning_report_bundle.v1",
+                                    "schema": "network_planning_report_markdown.v1",
                                     "displayName": "Warehouse network planning report",
-                                    "mimeType": "application/json",
+                                    "mimeType": "text/markdown",
                                     "workspaceRelativePath": relative_path,
                                     "byteSize": byte_size
                                 }
@@ -871,17 +881,17 @@ network_planning_report_bundle.v1.json"
         std::fs::create_dir(checkout.root.join("deliverables")).unwrap();
         let valid = include_bytes!(
             "../../../../../tools/supply-chain-network-planner/contracts/fixtures/\
-network_planning_report_bundle.v1.json"
+network_planning_report_markdown.v1.md"
         );
-        std::fs::write(checkout.root.join("deliverables/report.json"), valid).unwrap();
-        std::fs::write(checkout.root.join("deliverables/restart.json"), valid).unwrap();
-        std::fs::write(checkout.root.join("deliverables/size.json"), valid).unwrap();
-        let wrong_kind = br#"{"kind":"network_comparison_map","schema_version":"network_planning_report_bundle.v1"}"#;
-        std::fs::write(checkout.root.join("deliverables/wrong.json"), wrong_kind).unwrap();
+        std::fs::write(checkout.root.join("deliverables/report.md"), valid).unwrap();
+        std::fs::write(checkout.root.join("deliverables/restart.md"), valid).unwrap();
+        std::fs::write(checkout.root.join("deliverables/size.md"), valid).unwrap();
+        let wrong_kind = b"# Warehouse network planning report\n\n<!-- wrong.v1 -->\n";
+        std::fs::write(checkout.root.join("deliverables/wrong.md"), wrong_kind).unwrap();
         #[cfg(unix)]
         std::os::unix::fs::symlink(
-            checkout.root.join("deliverables/report.json"),
-            checkout.root.join("deliverables/symlink.json"),
+            checkout.root.join("deliverables/report.md"),
+            checkout.root.join("deliverables/symlink.md"),
         )
         .unwrap();
 
@@ -1004,7 +1014,7 @@ network_planning_report_bundle.v1.json"
         let intermediate = final_item_frame(
             workspace_id,
             "intermediate-item",
-            "deliverables/report.json",
+            "deliverables/report.md",
             valid.len(),
         )
         .replace(
@@ -1019,7 +1029,7 @@ network_planning_report_bundle.v1.json"
         let invalid = final_item_frame(
             workspace_id,
             "invalid-item",
-            "deliverables/report.json",
+            "deliverables/report.md",
             valid.len(),
         )
         .replace(
@@ -1052,7 +1062,7 @@ network_planning_report_bundle.v1.json"
         let frame = final_item_frame(
             workspace_id,
             "final-item",
-            "deliverables/report.json",
+            "deliverables/report.md",
             valid.len(),
         );
         let first = crate::event_projection::persist_frame(frame.as_bytes(), &pool)
@@ -1060,7 +1070,7 @@ network_planning_report_bundle.v1.json"
             .unwrap()
             .unwrap();
         assert_eq!(first.pending_artifact_ids.len(), 1);
-        assert!(!String::from_utf8_lossy(&first.payload).contains("deliverables/report.json"));
+        assert!(!String::from_utf8_lossy(&first.payload).contains("deliverables/report.md"));
         let replay = crate::event_projection::persist_frame(frame.as_bytes(), &pool)
             .await
             .unwrap()
@@ -1223,9 +1233,7 @@ network_planning_report_bundle.v1.json"
                 .and_then(Value::as_i64),
             Some(valid.len() as i64)
         );
-        assert!(!ready_payload
-            .to_string()
-            .contains("deliverables/report.json"));
+        assert!(!ready_payload.to_string().contains("deliverables/report.md"));
         let ready_run_ids = ready_projections
             .iter()
             .map(|projection| {
@@ -1344,9 +1352,11 @@ network_planning_report_bundle.v1.json"
         .unwrap();
         assert_eq!(
             download.headers().get(axum::http::header::CONTENT_TYPE),
-            Some(&axum::http::HeaderValue::from_static("application/json"))
+            Some(&axum::http::HeaderValue::from_static(
+                "text/markdown; charset=utf-8"
+            ))
         );
-        let expected_disposition = format!("attachment; filename=\"artifact-{artifact_id}.json\"");
+        let expected_disposition = format!("attachment; filename=\"artifact-{artifact_id}.md\"");
         assert_eq!(
             download
                 .headers()
@@ -1418,7 +1428,7 @@ network_planning_report_bundle.v1.json"
             ),
             (
                 "symlink-item",
-                "deliverables/symlink.json",
+                "deliverables/symlink.md",
                 "workspace_read_failed",
             ),
             ("escape-item", "../escape.json", "workspace_read_failed"),
@@ -1517,14 +1527,14 @@ network_planning_report_bundle.v1.json"
         for (item_id, path, bytes, declared_size, expected_code) in [
             (
                 "size-item",
-                "deliverables/size.json",
+                "deliverables/size.md",
                 valid.as_slice(),
                 valid.len() + 1,
                 "size_mismatch",
             ),
             (
                 "contract-item",
-                "deliverables/wrong.json",
+                "deliverables/wrong.md",
                 wrong_kind.as_slice(),
                 wrong_kind.len(),
                 "artifact_bundle_contract_mismatch",
@@ -1558,7 +1568,7 @@ network_planning_report_bundle.v1.json"
             final_item_frame(
                 workspace_id,
                 "restart-item",
-                "deliverables/restart.json",
+                "deliverables/restart.md",
                 valid.len(),
             )
             .as_bytes(),
@@ -1635,7 +1645,7 @@ network_planning_report_bundle.v1.json"
         let child_thread_id = "network-child";
         let child_turn_id = "network-turn";
         let child_item_id = "network-item";
-        let child_relative_path = "deliverables/network-child-report.json";
+        let child_relative_path = "deliverables/network-child-report.md";
         std::fs::write(checkout.root.join(child_relative_path), valid).unwrap();
         assert_eq!(
             sqlx::query_scalar::<_, i64>(

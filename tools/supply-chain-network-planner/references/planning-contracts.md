@@ -42,23 +42,25 @@ Use that exact stable name when citing evidence; never expose or relabel the opa
 Resource URI as a human-readable name. `data_ref` is the Runtime handoff identity,
 whereas `resource_name` is the report citation identity.
 
-The Resource is the Runtime handoff. When a completed MCP Tool result contains a
-supported Resource link, the Platform registers the same content as a Task-owned
-Artifact:
+The Resource is the Runtime handoff. Intermediate Resource links remain provider-owned
+and are never registered as Task-owned Artifacts. Only an allowlisted final map or report
+Tool may register its explicit Workspace-relative delivery descriptor:
 
 1. the Artifact receives an independent ID and Task read grant;
 2. Run, Thread, Turn and Item IDs are recorded only as producer provenance;
-3. content is materialized through the official MCP Resource read path;
-4. JSON syntax, MIME type, immutable source metadata and size are checked, while the
-   enterprise E2E also asserts that content `schema_version` matches the Artifact
-   schema;
+3. content is materialized from the authorized Workspace create-new file;
+4. the exact delivery contract, MIME type and size are checked: map exports use the
+   provider-owned JSON bundle contract, while report briefs use bounded, browser-safe
+   `text/markdown`;
 5. browser DTOs expose the Artifact identity and authorized content URL, not the
    internal MCP Resource URI.
 
 Artifact registration does not change the calculation contract. A child Agent still
 passes the original `data_ref` unchanged inside Runtime; the Platform Artifact provides
-durable product identity, authorization and recovery. Deleting a producing Run must not
-delete the Artifact, its Task grant or provenance identity.
+durable product identity, authorization and recovery only for the explicit final file.
+Deleting a producing Run must not delete the Artifact, its Task grant or provenance
+identity. Interactive maps use the separate exact map-card handoff and do not become
+Workspace files or Artifacts unless the user explicitly asks to export one.
 
 Current lifecycle states are:
 

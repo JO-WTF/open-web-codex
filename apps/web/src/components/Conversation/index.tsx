@@ -10,6 +10,7 @@ import FollowUpQueue, { type QueuedFollowUp } from "./FollowUpQueue";
 import UserInputQueue from "./UserInputQueue";
 import McpFormQueue from "./McpFormQueue";
 import type {
+  ArtifactSummary,
   McpFormContent,
   McpFormResponseAction,
   PendingMcpFormSummary,
@@ -57,6 +58,7 @@ type Props = {
   onSelectModel?: (modelId: string) => void;
   providerCatalogOpenRequest?: number;
   messages: MessageEntry[];
+  finalArtifacts?: ArtifactSummary[];
   taskApprovals?: TaskApprovalRequest[];
   workspaceId?: string;
   thinking?: boolean;
@@ -91,6 +93,25 @@ type Props = {
   onResolveApproval?: (workspaceId: string, requestId: number | string, decision: "accept" | "decline") => void;
 };
 
+function FinalArtifactLinks({ artifacts }: { artifacts: ArtifactSummary[] }) {
+  const ready = artifacts.filter((artifact) => (
+    artifact.state === "ready" && Boolean(artifact.download_url)
+  ));
+  if (ready.length === 0) return null;
+  return (
+    <section className="web-final-artifact-links" aria-label="生成的文件">
+      {ready.map((artifact) => (
+        <p key={artifact.id}>
+          <span>{artifact.mime_type === "text/markdown" ? "正式简报" : "生成文件"}：</span>
+          <a href={artifact.download_url ?? undefined} download>
+            {artifact.mime_type === "text/markdown" ? "下载 Markdown 文件" : "下载文件"}
+          </a>
+        </p>
+      ))}
+    </section>
+  );
+}
+
 export default function Conversation({
   goal,
   workspaceName,
@@ -124,6 +145,7 @@ export default function Conversation({
   onSelectModel,
   providerCatalogOpenRequest,
   messages,
+  finalArtifacts = [],
   taskApprovals = [],
   workspaceId,
   thinking,
@@ -171,7 +193,7 @@ export default function Conversation({
     const area = messageAreaRef.current;
     if (!area || !isAtBottomRef.current) return;
     area.scrollTop = area.scrollHeight;
-  }, [conversationId, messages, visibleStart]);
+  }, [conversationId, finalArtifacts.length, messages, visibleStart]);
 
   const loadOlderMessages = useCallback(() => {
     setVisibleStart((current) => previousConversationStart(messages, current));
@@ -246,6 +268,7 @@ export default function Conversation({
             workspaceId={workspaceId}
             onResolveApproval={onResolveApproval}
           />
+          <FinalArtifactLinks artifacts={finalArtifacts} />
           <TaskApprovalQueue
             approvals={taskApprovals}
             ariaLabel="Task approvals"

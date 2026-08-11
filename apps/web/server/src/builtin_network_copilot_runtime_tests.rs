@@ -68,7 +68,7 @@ const DATA_TOOLS: [&str; 4] = [
     "normalize_network_input",
     "prepare_network_geography",
 ];
-const NETWORK_TOOLS: [&str; 13] = [
+const NETWORK_TOOLS: [&str; 14] = [
     "build_haversine_route_matrix",
     "build_provided_route_matrix",
     "compare_network_scenarios",
@@ -76,6 +76,7 @@ const NETWORK_TOOLS: [&str; 13] = [
     "evaluate_network_baseline",
     "plan_cost_matrix",
     "plan_route_matrix",
+    "prepare_network_comparison_map",
     "prepare_network_distribution_map",
     "publish_network_planning_report",
     "register_navigation_route_matrix",

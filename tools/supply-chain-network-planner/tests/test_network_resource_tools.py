@@ -50,9 +50,7 @@ def _runtime(tmp_path: Path, monkeypatch) -> tuple[Path, ResourceStore]:
 
 def _context(workspace: Path) -> SimpleNamespace:
     meta = SimpleNamespace(
-        model_extra={
-            "codex/sandbox-state-meta": {"sandboxCwd": workspace.as_uri()}
-        }
+        model_extra={"codex/sandbox-state-meta": {"sandboxCwd": workspace.as_uri()}}
     )
     return SimpleNamespace(request_context=SimpleNamespace(meta=meta))
 
@@ -114,9 +112,7 @@ def test_matrix_tools_expose_composable_resource_schemas() -> None:
     assert "prior_route_matrix_ref" not in plan["properties"]
     haversine = tools["build_haversine_route_matrix"].inputSchema
     assert "route_plan_ref" not in haversine["properties"]
-    assert {"detour_coefficient", "average_speed_kph"}.issubset(
-        haversine["required"]
-    )
+    assert {"detour_coefficient", "average_speed_kph"}.issubset(haversine["required"])
     provided = tools["build_provided_route_matrix"].inputSchema
     assert "warehouse_scope" in provided["required"]
     assert "provided_route_facts" not in provided["properties"]
@@ -173,9 +169,7 @@ def test_distribution_map_publishes_geojson_for_map_card_only(
     data_ref = MapResourceRef.model_validate(result.structuredContent["data_ref"])
     assert data_ref.server == "supply_chain"
     assert data_ref.format == "geojson"
-    resource_ref = ResourceRef.model_validate(
-        result.structuredContent["resource_ref"]
-    )
+    resource_ref = ResourceRef.model_validate(result.structuredContent["resource_ref"])
     payload = store.load(resource_ref)
     assert payload["type"] == "FeatureCollection"
     kinds = [feature["properties"]["kind"] for feature in payload["features"]]
@@ -221,12 +215,11 @@ def test_distribution_map_publishes_geojson_for_map_card_only(
         include_candidates=True,
     )
     assert with_candidates.structuredContent is not None
-    expected_candidates = sum(
-        not warehouse.is_existing for warehouse in fixture.warehouses
+    expected_candidates = sum(not warehouse.is_existing for warehouse in fixture.warehouses)
+    assert (
+        with_candidates.structuredContent["layer_counts"]["candidate_warehouses"]
+        == expected_candidates
     )
-    assert with_candidates.structuredContent["layer_counts"][
-        "candidate_warehouses"
-    ] == expected_candidates
     candidate_handoff = with_candidates.structuredContent["map_card_handoff"]
     assert "candidate-warehouses" in [
         layer["id"] for layer in candidate_handoff["arguments"]["layers"]
@@ -243,14 +236,10 @@ def test_route_and_cost_tools_use_exact_pair_reuse(tmp_path: Path, monkeypatch) 
     ctx = _context(workspace)
     prepared_ref = _prepared_ref(store)
 
-    plan_ref = _result_ref(
-        server.plan_route_matrix(prepared_ref, "haversine", ctx, 1.2, 40)
-    )
+    plan_ref = _result_ref(server.plan_route_matrix(prepared_ref, "haversine", ctx, 1.2, 40))
     assert plan_ref.resource_schema == "route_matrix_plan.v2"
 
-    route_ref = _result_ref(
-        server.build_haversine_route_matrix(prepared_ref, 1.2, 40, ctx)
-    )
+    route_ref = _result_ref(server.build_haversine_route_matrix(prepared_ref, 1.2, 40, ctx))
     original = server._runtime().load_model(route_ref, "route_matrix.v2", RouteMatrix)
     partial = original.model_copy(update={"rows": original.rows[:-2]})
     partial_ref = server.resource_ref(store.publish(partial.schema_version, partial))
@@ -272,9 +261,7 @@ def test_route_and_cost_tools_use_exact_pair_reuse(tmp_path: Path, monkeypatch) 
     assert completed.validation["computed_pair_count"] == 2
     assert completed.validation["missing_pair_count"] == 0
 
-    validation_ref = _result_ref(
-        server.validate_route_matrix(prepared_ref, completed_ref, ctx)
-    )
+    validation_ref = _result_ref(server.validate_route_matrix(prepared_ref, completed_ref, ctx))
     assert store.load(validation_ref)["valid"] is True
 
     cost_ref = _result_ref(
@@ -288,9 +275,7 @@ def test_route_and_cost_tools_use_exact_pair_reuse(tmp_path: Path, monkeypatch) 
     )
     original_cost = server._runtime().load_model(cost_ref, "cost_matrix.v2", CostMatrix)
     partial_cost = original_cost.model_copy(update={"rows": original_cost.rows[:-2]})
-    partial_cost_ref = server.resource_ref(
-        store.publish(partial_cost.schema_version, partial_cost)
-    )
+    partial_cost_ref = server.resource_ref(store.publish(partial_cost.schema_version, partial_cost))
     completed_cost_ref = _result_ref(
         server.plan_cost_matrix(
             prepared_ref,
@@ -317,9 +302,7 @@ def test_provided_route_tool_consumes_only_typed_normalized_facts(
 ) -> None:
     workspace, store = _runtime(tmp_path, monkeypatch)
     fixture = network_case()
-    computed = build_haversine_route_matrix(
-        fixture.demand, fixture.warehouses, 1.2, 40
-    )
+    computed = build_haversine_route_matrix(fixture.demand, fixture.warehouses, 1.2, 40)
     facts = [
         ProvidedRouteFactRecord(
             origin_id=row.origin_id,
@@ -348,6 +331,38 @@ def test_provided_route_tool_consumes_only_typed_normalized_facts(
     assert matrix.validation["source_method_counts"] == {"uploaded-estimate": 8}
 
 
+def test_existing_only_route_matrix_validates_without_candidate_routes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace, store = _runtime(tmp_path, monkeypatch)
+    fixture = network_case()
+    computed = build_haversine_route_matrix(fixture.demand, fixture.warehouses, 1.2, 40)
+    facts = [
+        ProvidedRouteFactRecord(
+            origin_id=row.origin_id,
+            destination_id=row.destination_id,
+            layer=row.layer,
+            distance_km=row.distance_km,
+            duration_hours=row.duration_hours,
+            source_method="uploaded-estimate",
+        )
+        for row in computed.rows
+    ]
+    prepared_ref = _prepared_ref(store, provided_route_facts=facts)
+    ctx = _context(workspace)
+
+    matrix_ref = _result_ref(server.build_provided_route_matrix(prepared_ref, "existing_only", ctx))
+    matrix = server._runtime().load_model(matrix_ref, "route_matrix.v2", RouteMatrix)
+    validation_ref = _result_ref(server.validate_route_matrix(prepared_ref, matrix_ref, ctx))
+    validation = store.load(validation_ref)
+
+    assert matrix.warehouse_scope == "existing_only"
+    assert matrix.validation["ignored_input_pair_count"] > 0
+    assert matrix.missing_routes == []
+    assert validation["valid"] is True
+    assert validation["missing_routes"] == []
+
+
 def test_navigation_tool_merges_prior_workspace_file_and_reports_counts(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -368,9 +383,17 @@ def test_navigation_tool_merges_prior_workspace_file_and_reports_counts(
         )
         for row in haversine.rows
     ]
-    prior = RouteMatrix(method="navigation", rows=rows[:3])
+    prior = RouteMatrix(
+        method="navigation",
+        warehouse_scope="all_warehouses",
+        rows=rows[:3],
+    )
     prior_ref = server.resource_ref(store.publish(prior.schema_version, prior))
-    supplied = RouteMatrix(method="navigation", rows=rows[3:])
+    supplied = RouteMatrix(
+        method="navigation",
+        warehouse_scope="all_warehouses",
+        rows=rows[3:],
+    )
     (workspace / "navigation.json").write_text(
         json.dumps(supplied.model_dump(mode="json")),
         encoding="utf-8",

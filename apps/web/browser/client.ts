@@ -41,6 +41,7 @@ import type {
   MapsProvider,
   RuntimeAgentProjection,
   ArtifactSummary,
+  ArtifactContent,
 } from "./types";
 
 type ClientOptions = {
@@ -186,6 +187,61 @@ export class PlatformClient {
       throw error;
     }
     return payload as T;
+  }
+
+  private async requestArtifactContent(path: string): Promise<ArtifactContent> {
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      cache: "no-store",
+      headers: {
+        ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
+      },
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      let payload: Record<string, unknown> | null = null;
+      try {
+        const parsed = text ? JSON.parse(text) as unknown : null;
+        payload = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+          ? parsed as Record<string, unknown>
+          : null;
+      } catch {
+        payload = null;
+      }
+      const message = typeof payload?.message === "string"
+        ? payload.message
+        : `Request failed (HTTP ${response.status}).`;
+      throw new PlatformRequestError(message, {
+        providerCatalogFailure: null,
+      }, {
+        code: message,
+        status: response.status,
+        kind: typeof payload?.kind === "string" ? payload.kind : undefined,
+      });
+    }
+    const mimeType = response.headers.get("content-type")
+      ?.split(";", 1)[0]
+      ?.trim()
+      ?.toLowerCase();
+    if (mimeType === "text/markdown") {
+      return { kind: "markdown", mime_type: "text/markdown", text };
+    }
+    if (mimeType === "application/json" || mimeType === "application/geo+json") {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text) as unknown;
+      } catch {
+        throw new Error("Artifact JSON content is invalid.");
+      }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("Artifact JSON content is invalid.");
+      }
+      return {
+        kind: "json",
+        mime_type: mimeType,
+        value: parsed as Record<string, unknown>,
+      };
+    }
+    throw new Error("Artifact content type is unsupported.");
   }
 
   health() {
@@ -411,9 +467,42 @@ export class PlatformClient {
   }
 
   readArtifactContent(artifactId: string) {
-    return this.readReplyArtifact(
+    return this.requestArtifactContent(
       `/api/artifacts/${encodeURIComponent(artifactId)}/content`,
     );
+  }
+
+  async downloadArtifact(artifactId: string) {
+    const response = await fetch(
+      `${this.baseUrl}/api/artifacts/${encodeURIComponent(artifactId)}/download`,
+      {
+        cache: "no-store",
+        headers: this.token ? { authorization: `Bearer ${this.token}` } : undefined,
+      },
+    );
+    if (!response.ok) {
+      const text = await response.text();
+      let message = `Request failed (HTTP ${response.status}).`;
+      try {
+        const payload = JSON.parse(text) as { message?: unknown };
+        if (typeof payload.message === "string") message = payload.message;
+      } catch {
+        // Keep the typed fallback for non-JSON platform errors.
+      }
+      throw new Error(message);
+    }
+    const contentDisposition = response.headers.get("content-disposition") ?? "";
+    const encodedFilename = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+    const quotedFilename = contentDisposition.match(/filename="([^"]+)"/i)?.[1];
+    let filename = quotedFilename || `artifact-${artifactId}`;
+    if (encodedFilename) {
+      try {
+        filename = decodeURIComponent(encodedFilename);
+      } catch {
+        // Use the ASCII fallback when decoding fails.
+      }
+    }
+    return { blob: await response.blob(), filename };
   }
 
   archiveRunThread(runId: string) {

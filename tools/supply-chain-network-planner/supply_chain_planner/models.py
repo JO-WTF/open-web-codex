@@ -41,7 +41,7 @@ class PreparedNetworkResource(StrictModel):
         default="normalized_network_input.v1",
         alias="schemaVersion",
     )
-    country_code: str = Field(pattern=r"^[A-Z]{2,3}$")
+    country_code: str = Field(pattern=r"^[A-Z]{2}$")
     state: Literal["ready", "needs_input", "needs_geography"]
     demand_cities: list[DemandCityRecord]
     warehouses: list[WarehouseRecord]
@@ -712,10 +712,10 @@ class NetworkFinalArtifactDescriptor(StrictModel):
 
     artifact_schema: Literal[
         "network_comparison_map_bundle.v1",
-        "network_planning_report_bundle.v1",
+        "network_planning_report_markdown.v1",
     ] = Field(alias="schema")
     display_name: str = Field(min_length=1, max_length=256, alias="displayName")
-    mime_type: Literal["application/json"] = Field(alias="mimeType")
+    mime_type: Literal["application/json", "text/markdown"] = Field(alias="mimeType")
     workspace_relative_path: str = Field(
         min_length=1,
         max_length=1024,
@@ -727,6 +727,30 @@ class NetworkFinalArtifactDescriptor(StrictModel):
 class NetworkFinalArtifactToolResult(StrictModel):
     summary: str = Field(min_length=1, max_length=512)
     artifact: NetworkFinalArtifactDescriptor
+
+
+class NetworkBaselineReportInput(StrictModel):
+    """Exact typed inputs for a single current-network assessment brief."""
+
+    mode: Literal["baseline"] = "baseline"
+    normalized_input_ref: _ResourceRef
+    baseline_ref: _ResourceRef
+
+
+class NetworkComparisonReportInput(StrictModel):
+    """Exact typed inputs for a baseline-versus-plan comparison brief."""
+
+    mode: Literal["comparison"] = "comparison"
+    normalized_input_ref: _ResourceRef
+    baseline_ref: _ResourceRef
+    facility_location_ref: _ResourceRef
+    comparison_ref: _ResourceRef
+
+
+NetworkReportInput = Annotated[
+    NetworkBaselineReportInput | NetworkComparisonReportInput,
+    Field(discriminator="mode"),
+]
 
 
 class CurrentCoverageToolResult(CurrentCoverageResult):

@@ -723,7 +723,8 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     .await
     .unwrap();
     let artifact_id = Uuid::now_v7();
-    let artifact_bytes = br#"{"schema_version":"network_planning_report_bundle.v1","kind":"network_planning_report"}"#;
+    let artifact_bytes =
+        b"# Warehouse network planning report\n\n<!-- network_planning_report_markdown.v1 -->\n";
     let artifact_digest = hex::encode(Sha256::digest(artifact_bytes));
     sqlx::query(
         "INSERT INTO artifacts (
@@ -731,9 +732,9 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
             source_relative_path, mime_type, expected_size, byte_size,
             content, content_sha256, state
          ) VALUES (
-            $1, $2, $3, $4, 'network_planning_report_bundle.v1',
-            'Warehouse network planning report', 'deliverables/security-report.json',
-            'application/json', $5, $5, $6, $7, 'ready'
+            $1, $2, $3, $4, 'network_planning_report_markdown.v1',
+            'Warehouse network planning report', 'deliverables/security-report.md',
+            'text/markdown', $5, $5, $6, $7, 'ready'
          )",
     )
     .bind(artifact_id)
@@ -848,20 +849,20 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     assert!(artifact_detail.1.get("source_server").is_none());
     assert!(artifact_detail.1.get("source_uri").is_none());
 
-    let artifact = call(
-        &app,
-        authenticated(
+    let artifact = app
+        .clone()
+        .oneshot(authenticated(
             "GET",
             &format!("/api/artifacts/{artifact_id}/content"),
             &first_token,
-        ),
-    )
-    .await;
-    assert_eq!(artifact.0, StatusCode::OK);
-    assert_eq!(
-        artifact.1["schema_version"],
-        "network_planning_report_bundle.v1"
-    );
+        ))
+        .await
+        .expect("Artifact content response");
+    assert_eq!(artifact.status(), StatusCode::OK);
+    let artifact_body = to_bytes(artifact.into_body(), 1024 * 1024)
+        .await
+        .expect("Artifact content body");
+    assert_eq!(artifact_body.as_ref(), artifact_bytes);
 
     let image_response = app
         .clone()

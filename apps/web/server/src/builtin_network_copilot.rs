@@ -545,6 +545,7 @@ mod tests {
                 "register_navigation_route_matrix",
                 "plan_cost_matrix",
                 "prepare_network_distribution_map",
+                "prepare_network_comparison_map",
                 "evaluate_network_baseline",
                 "evaluate_facility_scenario",
                 "solve_p_median",
@@ -557,14 +558,14 @@ mod tests {
             network["mcp_servers"]["supply_chain"]["default_tools_approval_mode"].as_str(),
             Some("prompt")
         );
-        for tool in &supply_chain_tools[..11] {
+        for tool in &supply_chain_tools[..12] {
             assert_eq!(
                 network["mcp_servers"]["supply_chain"]["tools"][*tool]["approval_mode"].as_str(),
                 Some("approve"),
                 "safe Network Tool {tool} must be preapproved",
             );
         }
-        for tool in &supply_chain_tools[11..] {
+        for tool in &supply_chain_tools[12..] {
             assert!(
                 network["mcp_servers"]["supply_chain"]["tools"]
                     .get(*tool)
@@ -667,9 +668,15 @@ mod tests {
         assert!(SUPERVISOR_SKILL.contains("不得降级为自制 HTML、文件、图片、文本地图或伪造成功"));
         assert!(SUPERVISOR_SKILL.contains("必须由 Root 调用原生 `request_user_input`"));
         assert!(SUPERVISOR_SKILL.contains("按能力 owner 收敛"));
+        assert!(SUPERVISOR_SKILL.contains("不要先创建“只盘点文件”的 Data Task"));
+        assert!(SUPERVISOR_SKILL.contains("不自行猜测、缩写或转换国家代码"));
+        assert!(SUPERVISOR_SKILL.contains("不要再次询问是否纳入候选仓"));
+        assert!(SUPERVISOR_SKILL.contains("一次用户请求只保留一份正式简报"));
         assert!(DATA_SKILL.contains("`city_id`、`city_name`、`demand_quantity`"));
         assert!(DATA_SKILL.contains("不要从行政区目录静默生成候选仓"));
         assert!(DATA_SKILL.contains("路线距离、时长和计算来源"));
+        assert!(DATA_SKILL.contains("ISO 3166-1 两位大写代码"));
+        assert!(DATA_SKILL.contains("不得再枚举全部 MCP Resources"));
         assert!(NETWORK_SKILL.contains("潜在接口调用量和费用"));
         assert!(NETWORK_SKILL.contains("按城市数量和按需求量加权"));
         assert!(NETWORK_SKILL.contains("`map_card_handoff.arguments` 整体原样作为调用参数"));
@@ -680,7 +687,15 @@ mod tests {
         assert!(NETWORK_SKILL.contains("不调用路线矩阵、成本矩阵、baseline"));
         assert!(NETWORK_SKILL.contains("固定集合与可选集合必须完整、不重叠"));
         assert!(NETWORK_SKILL.contains("把这些 Tool 当作可组合能力"));
-        assert!(NETWORK_SKILL.contains("create-new Workspace 相对输出路径"));
+        assert!(NETWORK_SKILL.contains("应主动生成对话内地图卡片"));
+        assert!(NETWORK_SKILL.contains("create-new 中文 Markdown 文件"));
+        assert!(NETWORK_SKILL.contains("Workspace 相对 Markdown 链接逐字原样"));
+        assert!(NETWORK_SKILL.contains("只调用一次 `publish_network_planning_report`"));
+        assert!(NETWORK_SKILL.contains("正式简报以该实际基线为准"));
+        assert!(NETWORK_SKILL.contains("不要让用户在两种指标中二选一"));
+        assert!(NETWORK_SKILL.contains("矩阵 Resource 自己携带该 scope"));
+        assert!(NETWORK_SKILL.contains("完整仓网分析、模拟或规划达到可交付终态时"));
+        assert!(NETWORK_SKILL.contains("不用 JSON 报告冒充 Excel"));
         assert!(NETWORK_ROLE.contains("call the matching domain Tool directly"));
         assert!(NETWORK_ROLE.contains("pass its arguments unchanged"));
         for deprecated in [

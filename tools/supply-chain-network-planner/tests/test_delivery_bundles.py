@@ -27,8 +27,10 @@ from supply_chain_planner.optimization_models import (
     PMedianSolution,
 )
 from supply_chain_planner.report_service import (
+    NETWORK_PLANNING_MARKDOWN_MARKER,
     NetworkPlanningReportBundle,
     build_network_planning_report_bundle,
+    render_network_planning_report_markdown,
 )
 from supply_chain_planner.solver import (
     compare_assignments,
@@ -76,9 +78,7 @@ def sample2_delivery() -> Sample2Delivery:
         warehouse_scope="all_warehouses",
     )
     existing_ids = {
-        warehouse.warehouse_id
-        for warehouse in fixture.warehouses
-        if warehouse.is_existing
+        warehouse.warehouse_id for warehouse in fixture.warehouses if warehouse.is_existing
     }
     current_assignments = indonesia_current_assignments()
     baseline_assignment = solve_current_assignment(
@@ -160,9 +160,7 @@ def test_sample2_builds_complete_self_contained_map_and_report(
         country_code="ID",
     )
 
-    feature_kinds = Counter(
-        feature.properties.kind for feature in map_bundle.geojson.features
-    )
+    feature_kinds = Counter(feature.properties.kind for feature in map_bundle.geojson.features)
     expected_linehaul = sum(
         1
         for warehouse in inputs.normalized.warehouses
@@ -195,9 +193,7 @@ def test_sample2_builds_complete_self_contained_map_and_report(
     }
 
     baseline_assigned = {
-        row.warehouse_id
-        for row in inputs.baseline.assignment.rows
-        if row.warehouse_id is not None
+        row.warehouse_id for row in inputs.baseline.assignment.rows if row.warehouse_id is not None
     }
     zero_demand_active = set(inputs.baseline.active_warehouse_ids) - baseline_assigned
     assert zero_demand_active
@@ -207,8 +203,7 @@ def test_sample2_builds_complete_self_contained_map_and_report(
         if feature.properties.kind == "warehouse"
     }
     assert all(
-        warehouse_properties[warehouse_id].baseline_active
-        for warehouse_id in zero_demand_active
+        warehouse_properties[warehouse_id].baseline_active for warehouse_id in zero_demand_active
     )
     assert report_bundle.scope.model_dump(mode="python") == {
         "demand_city_count": 50,
@@ -233,8 +228,7 @@ def test_sample2_builds_complete_self_contained_map_and_report(
     assert report_bundle.facility.cost is not None
     assert report_bundle.facility.cost.complete is True
     assert report_bundle.facility.cost.total == (
-        report_bundle.facility.cost.linehaul
-        + report_bundle.facility.cost.last_mile
+        report_bundle.facility.cost.linehaul + report_bundle.facility.cost.last_mile
     )
     assert report_bundle.facility.cost.by_warehouse
 
@@ -272,9 +266,7 @@ def test_delivery_schema_fixtures_match_models_and_validate_complete_indonesia_b
             (fixture_root / f"{schema_name}.schema.json").read_text(encoding="utf-8")
         )
         payload_fixture = json.loads(
-            (fixture_root.parent / "fixtures" / f"{schema_name}.json").read_text(
-                encoding="utf-8"
-            )
+            (fixture_root.parent / "fixtures" / f"{schema_name}.json").read_text(encoding="utf-8")
         )
         assert payload_fixture == bundle.model_dump(mode="json")
         assert schema == model_schema(schema_name)
@@ -322,9 +314,7 @@ def test_delivery_bundles_are_deterministic_for_equivalent_input_order(
     )
     reversed_baseline = inputs.baseline.model_copy(
         update={
-            "active_warehouse_ids": list(
-                reversed(inputs.baseline.active_warehouse_ids)
-            ),
+            "active_warehouse_ids": list(reversed(inputs.baseline.active_warehouse_ids)),
             "assignment": inputs.baseline.assignment.model_copy(
                 update={"rows": list(reversed(inputs.baseline.assignment.rows))}
             ),
@@ -333,12 +323,8 @@ def test_delivery_bundles_are_deterministic_for_equivalent_input_order(
     )
     reversed_facility = inputs.facility.model_copy(
         update={
-            "active_warehouse_ids": list(
-                reversed(inputs.facility.active_warehouse_ids)
-            ),
-            "opened_candidate_ids": list(
-                reversed(inputs.facility.opened_candidate_ids)
-            ),
+            "active_warehouse_ids": list(reversed(inputs.facility.active_warehouse_ids)),
+            "opened_candidate_ids": list(reversed(inputs.facility.opened_candidate_ids)),
             "assignment": inputs.facility.assignment.model_copy(
                 update={"rows": list(reversed(inputs.facility.assignment.rows))}
             ),
@@ -351,15 +337,9 @@ def test_delivery_bundles_are_deterministic_for_equivalent_input_order(
                 reversed(inputs.comparison.requested_service_targets)
             ),
             "service": list(reversed(inputs.comparison.service)),
-            "selected_warehouse_ids": list(
-                reversed(inputs.comparison.selected_warehouse_ids)
-            ),
-            "affected_city_ids": list(
-                reversed(inputs.comparison.affected_city_ids)
-            ),
-            "reassigned_city_ids": list(
-                reversed(inputs.comparison.reassigned_city_ids)
-            ),
+            "selected_warehouse_ids": list(reversed(inputs.comparison.selected_warehouse_ids)),
+            "affected_city_ids": list(reversed(inputs.comparison.affected_city_ids)),
+            "reassigned_city_ids": list(reversed(inputs.comparison.reassigned_city_ids)),
             "city_changes": list(reversed(inputs.comparison.city_changes)),
         }
     )
@@ -395,6 +375,38 @@ def test_delivery_bundles_are_deterministic_for_equivalent_input_order(
 
     assert reordered_map == expected_map
     assert reordered_report == expected_report
+    assert render_network_planning_report_markdown(
+        reordered_report
+    ) == render_network_planning_report_markdown(expected_report)
+
+
+def test_report_markdown_is_a_bounded_brief_not_a_json_assignment_dump(
+    sample2_delivery: Sample2Delivery,
+) -> None:
+    inputs = sample2_delivery
+    bundle = build_network_planning_report_bundle(
+        inputs.normalized,
+        inputs.baseline,
+        inputs.facility,
+        inputs.comparison,
+        country_code="ID",
+    )
+
+    markdown = render_network_planning_report_markdown(bundle)
+
+    assert markdown.startswith("# 仓网规划结果简报\n\n")
+    assert NETWORK_PLANNING_MARKDOWN_MARKER in markdown
+    assert "## 执行摘要" in markdown
+    assert "## 仓库变动" in markdown
+    assert "## 时效覆盖" in markdown
+    assert "基线城市覆盖率" in markdown
+    assert "方案城市覆盖率" in markdown
+    assert "## 受影响的需求城市" in markdown
+    assert "## 成本汇总" in markdown
+    assert "结构化计算结果" in markdown
+    assert '"schema_version"' not in markdown
+    assert '"rows"' not in markdown
+    assert len(markdown.encode("utf-8")) < 32 * 1024
 
 
 def test_map_rejects_missing_coordinates_without_blocking_json_report(
@@ -456,18 +468,14 @@ def test_delivery_rejects_inconsistent_typed_results(
         assignment = facility.assignment.model_copy(
             update={
                 "rows": [
-                    facility.assignment.rows[0].model_copy(
-                        update={"warehouse_id": "not-real"}
-                    ),
+                    facility.assignment.rows[0].model_copy(update={"warehouse_id": "not-real"}),
                     *facility.assignment.rows[1:],
                 ]
             }
         )
         facility = facility.model_copy(update={"assignment": assignment})
     elif field == "inconsistent_active_delta":
-        comparison = comparison.model_copy(
-            update={"selected_warehouse_ids": []}
-        )
+        comparison = comparison.model_copy(update={"selected_warehouse_ids": []})
     elif field == "incomplete_baseline_active":
         baseline = baseline.model_copy(
             update={"active_warehouse_ids": baseline.active_warehouse_ids[1:]}

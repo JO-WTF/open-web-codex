@@ -3470,10 +3470,10 @@ mod tests {
                     "result": {"content": [], "structuredContent": {
                         "summary": "Created report.",
                         "artifact": {
-                            "schema": "network_planning_report_bundle.v1",
+                            "schema": "network_planning_report_markdown.v1",
                             "displayName": "Warehouse network planning report",
-                            "mimeType": "application/json",
-                            "workspaceRelativePath": "outputs/network-report.json",
+                            "mimeType": "text/markdown",
+                            "workspaceRelativePath": "outputs/network-report.md",
                             "byteSize": 128
                         }
                     }}
@@ -3485,7 +3485,7 @@ mod tests {
         assert_eq!(projected.artifacts.len(), 1);
         assert_eq!(
             projected.artifacts[0].workspace_relative_path,
-            "outputs/network-report.json"
+            "outputs/network-report.md"
         );
         assert!(projected
             .payload
@@ -3494,7 +3494,7 @@ mod tests {
         assert!(!projected
             .payload
             .to_string()
-            .contains("outputs/network-report.json"));
+            .contains("outputs/network-report.md"));
 
         let item = json!({
             "method": "app-server-event",

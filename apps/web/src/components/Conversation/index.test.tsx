@@ -38,6 +38,41 @@ const baseProps = {
 };
 
 describe("Conversation auto-scroll", () => {
+  it("renders ready final artifacts as downloadable links without embedding report content", () => {
+    render(
+      <Conversation
+        {...baseProps}
+        messages={[{ id: "assistant-1", level: "assistant", text: "分析完成。" }]}
+        finalArtifacts={[{
+          id: "artifact-1",
+          task_id: "task-1",
+          artifact_schema: "network_planning_report_markdown.v1",
+          display_name: "Warehouse network planning report",
+          mime_type: "text/markdown",
+          expected_size: 1024,
+          byte_size: 1024,
+          content_sha256: "a".repeat(64),
+          state: "ready",
+          failure: null,
+          content_url: "/api/artifacts/artifact-1/content",
+          download_url: "/api/artifacts/artifact-1/download",
+          producer_run_id: "run-1",
+          producer_thread_id: "thread-1",
+          producer_turn_id: "turn-1",
+          producer_item_id: "item-1",
+          producer_agent_role: "network_agent",
+          created_at: "2026-08-11T00:00:00Z",
+          updated_at: "2026-08-11T00:00:00Z",
+        }]}
+      />,
+    );
+
+    const link = screen.getByRole("link", { name: "下载 Markdown 文件" });
+    expect(link.getAttribute("href")).toBe("/api/artifacts/artifact-1/download");
+    expect(link.hasAttribute("download")).toBe(true);
+    expect(screen.queryByText("Warehouse network planning report")).toBeNull();
+  });
+
   it("does not show Working while the connection is reconnecting", () => {
     render(
       <Conversation

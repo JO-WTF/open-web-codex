@@ -30,6 +30,7 @@ evaluate_network_baseline
 evaluate_facility_scenario
 solve_p_median
 compare_network_scenarios
+prepare_network_comparison_map
 render_network_comparison_map
 publish_network_planning_report
 ```
@@ -38,7 +39,8 @@ publish_network_planning_report
 
 Data Tool 会把用户输入中完整的起点、终点、距离、时长与来源方法保存在
 `normalized_network_input.v1`；Network Tool 可以按分析范围把这些事实物化为
-`route_matrix.v2`，无需让模型重读文件或重新估算。基线和比较结果同时返回按城市数量与按需求量
+`route_matrix.v2`。矩阵自身持有 `warehouse_scope`，验证器按同一 scope 校验，不会因标准化资源
+同时包含未参与本次分析的候选仓而要求 Data 重新发布资源；也无需让模型重读文件或重新估算。基线和比较结果同时返回按城市数量与按需求量
 加权的覆盖指标，并以 typed Resource 支持实际基线、优化基线或场景之间的比较；模型只负责解释，
 不自行汇总这些数值。
 
@@ -46,11 +48,19 @@ Data Tool 会把用户输入中完整的起点、终点、距离、时长与来�
 
 Data Role 的四个文件准备 Tool 都是已评审的有界本地能力，可在精确 allowlist 内预批准。
 Network/standalone Plugin 以 `prompt` 为默认，只对路线规划、本地矩阵、验证、baseline、scenario、
-p-median 和 comparison 等无外部副作用的 Tool 配置逐项预批准。最终 map/report Tool 会以
-create-new 语义写 Workspace 文件，因此继续请求 official approval。地图导航和距离矩阵属于
-`map_utils` 的外部、可能计费操作，也不能由本包预批准。Tool annotations 描述 provider
+p-median、comparison 和卡片数据准备等无外部副作用的 Tool 配置逐项预批准。对话内地图卡片
+复用 `map_utils/create_map_card`，当空间分布、覆盖关系、仓库变动或城市重分配有助于理解时可由
+Skill 自动使用，不创建 Workspace 文件。最终 map 文件与 Markdown report Tool 会以 create-new
+语义写 Workspace 文件，因此继续请求 official approval。地图导航和距离矩阵属于 `map_utils`
+的外部、可能计费操作，也不能由本包预批准。Tool annotations 描述 provider
 事实，Role/Plugin policy 决定当前 Agent 的精确预批准面；两者都不改变全局 Runtime
 `approvalPolicy`。
+
+仓库—需求城市对应关系、距离、时长和成本是结构化计算结果；业务结果简报是独立的 Markdown
+交付。`publish_network_planning_report` 通过带判别字段的 `report_input` 分别接受单一 baseline
+评估或完整 baseline-versus-plan comparison，从经过验证的 typed 结果确定性生成中文 `.md`，同时返回
+一个指向该 Workspace 文件的安全相对链接。对话只概括关键结论并展示链接，不重复插入整份简报；完整对应明细不重复塞进简报；需要 Excel 时必须使用真实
+表格导出 Tool，当前没有该 Tool 就显式报告能力缺口，不能用 JSON 或改扩展名冒充 Excel。
 
 ## 6.0 能力包
 

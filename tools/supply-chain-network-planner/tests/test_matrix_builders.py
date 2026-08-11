@@ -44,6 +44,7 @@ def test_provided_route_matrix_materializes_exact_existing_scope() -> None:
         fixture.demand,
         existing,
         indonesia_provided_route_facts(),
+        warehouse_scope="existing_only",
     )
 
     assert matrix.method == "provided"
@@ -80,7 +81,12 @@ def test_navigation_registration_reports_missing_routes_without_filling_them() -
             navigation_profile="truck",
         )
     ]
-    matrix = register_navigation_route_matrix(case.demand, case.warehouses, rows)
+    matrix = register_navigation_route_matrix(
+        case.demand,
+        case.warehouses,
+        rows,
+        warehouse_scope="all_warehouses",
+    )
     validation = validate_route_matrix(case.demand, case.warehouses, matrix)
 
     assert len(matrix.missing_routes) == 7
@@ -88,12 +94,18 @@ def test_navigation_registration_reports_missing_routes_without_filling_them() -
     assert validation["missing_routes"] == matrix.missing_routes
 
     with pytest.raises(ValueError, match="navigation_route_duplicate_pair"):
-        register_navigation_route_matrix(case.demand, case.warehouses, [rows[0], rows[0]])
+        register_navigation_route_matrix(
+            case.demand,
+            case.warehouses,
+            [rows[0], rows[0]],
+            warehouse_scope="all_warehouses",
+        )
     with pytest.raises(ValueError, match="navigation_route_unknown_pair"):
         register_navigation_route_matrix(
             case.demand,
             case.warehouses,
             [rows[0].model_copy(update={"destination_id": "not-required"})],
+            warehouse_scope="all_warehouses",
         )
 
     haversine = build_haversine_route_matrix(case.demand, case.warehouses, 1.2, 40)
@@ -115,6 +127,7 @@ def test_navigation_registration_reports_missing_routes_without_filling_them() -
             case.demand,
             case.warehouses,
             mixed_provenance,
+            warehouse_scope="all_warehouses",
         )
 
 
@@ -139,6 +152,7 @@ def test_route_reuse_is_exact_per_pair_and_ignores_unrelated_prior_rows() -> Non
         [exact, stale_version, stale_coordinates, stale_distance, unrelated],
         detour_coefficient=1.2,
         average_speed_kph=40,
+        warehouse_scope="all_warehouses",
     )
 
     assert rebuilt.validation["reused_pair_count"] == 1
@@ -157,9 +171,7 @@ def test_route_reuse_is_exact_per_pair_and_ignores_unrelated_prior_rows() -> Non
 
 def test_indonesia_route_reuse_only_computes_two_removed_round_sensitive_pairs() -> None:
     fixture = indonesia_network_fixture()
-    original = build_haversine_route_matrix(
-        fixture.demand, fixture.warehouses, 1.2, 42
-    )
+    original = build_haversine_route_matrix(fixture.demand, fixture.warehouses, 1.2, 42)
     removed = {
         next(
             (row.origin_id, row.destination_id, row.layer)
@@ -179,6 +191,7 @@ def test_indonesia_route_reuse_only_computes_two_removed_round_sensitive_pairs()
         ],
         1.2,
         42,
+        warehouse_scope="all_warehouses",
     )
 
     assert len(original.rows) == 1168
@@ -226,6 +239,7 @@ def test_conflicting_prior_route_rows_are_rejected_per_pair() -> None:
             [original.rows[0], original.rows[0]],
             1.2,
             40,
+            warehouse_scope="all_warehouses",
         )
 
 
@@ -249,6 +263,7 @@ def test_haversine_builder_does_not_mislabel_navigation_prior_fact() -> None:
         [navigation],
         1.2,
         40,
+        warehouse_scope="all_warehouses",
     )
 
     assert rebuilt.method == "haversine"
