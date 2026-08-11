@@ -1972,6 +1972,13 @@ fn project_event_data(method: &str, params: &Map<String, Value>) -> Value {
         "stdin",
     ] {
         if let Some(value) = params.get(key) {
+            if method == "item/agentMessage/delta" && key == "delta" {
+                // A delta can begin or end in the middle of Markdown link
+                // syntax.  Publishing it would let the browser concatenate
+                // an unsafe destination before the completed Item projection
+                // can apply the full-link sanitizer.
+                continue;
+            }
             if matches!(
                 key,
                 "error" | "turnError" | "turn_error" | "runtimeError" | "runtime_error"
@@ -1997,6 +2004,23 @@ fn project_public_runtime_turn(value: &Value) -> Value {
     let Some(turn) = projected.as_object_mut() else {
         return projected;
     };
+    if let Some(items) = value.get("items").and_then(Value::as_array) {
+        let projected_items = items
+            .iter()
+            .filter_map(|item| {
+                let source = item.as_object()?;
+                let mut projected = project_item(source);
+                if let (Some(id), Some(target)) = (
+                    source.get("id").and_then(Value::as_str),
+                    projected.as_object_mut(),
+                ) {
+                    target.insert("id".to_string(), Value::String(id.to_string()));
+                }
+                Some(projected)
+            })
+            .collect();
+        turn.insert("items".to_string(), Value::Array(projected_items));
+    }
     if let Some(error) = turn.get("error").filter(|value| !value.is_null()) {
         turn.insert("error".to_string(), project_public_runtime_error(error));
     } else {
@@ -2054,7 +2078,12 @@ pub(crate) fn project_item(item: &Map<String, Value>) -> Value {
     };
     for key in fields {
         if let Some(value) = item.get(*key) {
-            projected.insert((*key).to_string(), sanitize_value(value, key));
+            let projected_value = if item_type == "agentMessage" && *key == "text" {
+                redact_agent_markdown_value(value)
+            } else {
+                sanitize_value(value, key)
+            };
+            projected.insert((*key).to_string(), projected_value);
         }
     }
     if item_type == "agentMessage" {
@@ -2442,12 +2471,29 @@ fn project_public_event_payload(value: &Value, event_type: &str) -> Value {
         replace_public_runtime_error(projected_data, "error");
         if let Some(turn) = projected_data
             .get_mut("turn")
-            .and_then(Value::as_object_mut)
+            .filter(|turn| turn.is_object())
         {
-            replace_public_runtime_error(turn, "error");
+            let projected_turn = project_public_runtime_turn(turn);
+            projected_data.insert("turn".to_string(), projected_turn);
         }
     } else if source_type == Some("error") {
         replace_public_runtime_error(projected_data, "error");
+    }
+    if source_type == Some("item/agentMessage/delta") {
+        projected_data.remove("delta");
+    }
+    if root.get("itemType").and_then(Value::as_str) == Some("agentMessage") {
+        let mut item = projected_data.clone();
+        item.insert(
+            "type".to_string(),
+            Value::String("agentMessage".to_string()),
+        );
+        if let Some(item_id) = root.get("itemId").and_then(Value::as_str) {
+            item.insert("id".to_string(), Value::String(item_id.to_string()));
+        }
+        if let Value::Object(projected_item) = project_item(&item) {
+            *projected_data = projected_item;
+        }
     }
     projected
 }
@@ -2616,6 +2662,289 @@ fn redact_browser_text(value: &str) -> String {
     redact_local_paths(&redact_internal_resource_uris(value))
 }
 
+fn redact_agent_markdown_value(value: &Value) -> Value {
+    match value {
+        Value::String(value) => Value::String(redact_agent_markdown(value)),
+        _ => sanitize_value(value, "text"),
+    }
+}
+
+fn redact_agent_markdown(value: &str) -> String {
+    let markdown =
+        redact_markdown_reference_destinations(&redact_markdown_link_destinations(value));
+    redact_local_paths(&redact_internal_resource_uris(&markdown))
+}
+
+/// Reference-style Markdown links keep their destination on a separate
+/// definition line.  Remove only unsafe definitions so `[label][ref]` remains
+/// readable text while safe Workspace-relative and HTTP(S) definitions keep
+/// working.  This intentionally handles definitions only; it is not a full
+/// Markdown parser.
+fn redact_markdown_reference_destinations(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    for line in value.split_inclusive('\n') {
+        let content = line.strip_suffix('\n').unwrap_or(line);
+        let Some(destination) = markdown_reference_destination(content) else {
+            output.push_str(line);
+            continue;
+        };
+        if markdown_href_is_safe(destination) {
+            output.push_str(line);
+        } else if line.ends_with('\n') {
+            output.push('\n');
+        }
+    }
+    output
+}
+
+fn markdown_reference_destination(line: &str) -> Option<&str> {
+    let leading = line.len() - line.trim_start_matches(' ').len();
+    if leading > 3 {
+        return None;
+    }
+    let line = &line[leading..];
+    let open = line.as_bytes().first().copied();
+    if open != Some(b'[') {
+        return None;
+    }
+    let close = find_matching_markdown_bracket(line.as_bytes(), 0)?;
+    if line.as_bytes().get(close + 1) != Some(&b':') {
+        return None;
+    }
+    markdown_destination(&line[close + 2..])
+}
+
+/// Keep only public HTTP(S) and validated Workspace-relative Markdown links.
+///
+/// Runtime assistant text is Markdown, so redacting a local path after the
+/// Markdown parser has seen it can turn `/server/root/file.csv` into a new
+/// clickable relative destination.  Project the link syntax first: unsafe
+/// destinations lose their link but retain the human-readable label.  This is
+/// deliberately a small, conservative scanner rather than a second Markdown
+/// renderer; incomplete syntax is left for the existing text sanitizer.
+fn redact_markdown_link_destinations(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut output = String::with_capacity(value.len());
+    let mut copied_until = 0;
+    let mut cursor = 0;
+
+    while cursor < bytes.len() {
+        let Some(relative_open) = value[cursor..].find('[') else {
+            break;
+        };
+        let open = cursor + relative_open;
+        if is_escaped_markdown_byte(bytes, open) {
+            cursor = open + 1;
+            continue;
+        }
+        let Some(close) = find_matching_markdown_bracket(bytes, open) else {
+            break;
+        };
+        let Some(destination_start) = close
+            .checked_add(1)
+            .filter(|index| bytes.get(*index) == Some(&b'('))
+            .map(|index| index + 1)
+        else {
+            cursor = close + 1;
+            continue;
+        };
+        let Some(destination_end) = find_markdown_link_end(bytes, destination_start) else {
+            break;
+        };
+        let raw_destination = &value[destination_start..destination_end];
+        let Some(destination) = markdown_destination(raw_destination) else {
+            cursor = destination_end + 1;
+            continue;
+        };
+        let label_start = if open > 0 && bytes[open - 1] == b'!' {
+            open - 1
+        } else {
+            open
+        };
+        let label = &value[open + 1..close];
+        let safe_label = redact_markdown_link_destinations(label);
+        if markdown_href_is_safe(destination) {
+            output.push_str(&value[copied_until..label_start]);
+            if label_start != open {
+                output.push('!');
+            }
+            output.push('[');
+            output.push_str(&safe_label);
+            output.push_str(&value[close..=destination_end]);
+        } else {
+            output.push_str(&value[copied_until..label_start]);
+            output.push_str(&safe_label);
+        }
+        copied_until = destination_end + 1;
+        cursor = destination_end + 1;
+    }
+
+    if copied_until == 0 {
+        return value.to_string();
+    }
+    output.push_str(&value[copied_until..]);
+    output
+}
+
+fn is_escaped_markdown_byte(bytes: &[u8], index: usize) -> bool {
+    let mut backslashes = 0;
+    let mut cursor = index;
+    while cursor > 0 && bytes[cursor - 1] == b'\\' {
+        backslashes += 1;
+        cursor -= 1;
+    }
+    backslashes % 2 == 1
+}
+
+fn find_matching_markdown_bracket(bytes: &[u8], open: usize) -> Option<usize> {
+    let mut depth = 0;
+    let mut cursor = open;
+    while cursor < bytes.len() {
+        if is_escaped_markdown_byte(bytes, cursor) {
+            cursor += 1;
+            continue;
+        }
+        match bytes[cursor] {
+            b'[' => depth += 1,
+            b']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(cursor);
+                }
+            }
+            _ => {}
+        }
+        cursor += 1;
+    }
+    None
+}
+
+fn find_markdown_link_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut depth = 0;
+    let mut cursor = start;
+    while cursor < bytes.len() {
+        if is_escaped_markdown_byte(bytes, cursor) {
+            cursor += 1;
+            continue;
+        }
+        match bytes[cursor] {
+            b'(' => depth += 1,
+            b')' if depth == 0 => return Some(cursor),
+            b')' => depth -= 1,
+            _ => {}
+        }
+        cursor += 1;
+    }
+    None
+}
+
+fn markdown_destination(raw: &str) -> Option<&str> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if let Some(rest) = raw.strip_prefix('<') {
+        let end = rest.find('>')?;
+        let destination = &rest[..end];
+        let title = rest[end + 1..].trim();
+        if title.is_empty() || matches!(title.as_bytes().first(), Some(b'\'' | b'"' | b'(')) {
+            return Some(destination);
+        }
+        return None;
+    }
+    let mut fields = raw.split_whitespace();
+    let destination = fields.next()?;
+    let title = fields.collect::<Vec<_>>();
+    if title.is_empty()
+        || matches!(
+            title.first().and_then(|value| value.as_bytes().first()),
+            Some(b'\'' | b'"' | b'(')
+        )
+    {
+        Some(destination)
+    } else {
+        None
+    }
+}
+
+fn markdown_href_is_safe(destination: &str) -> bool {
+    let destination = destination.trim();
+    if destination.is_empty() || destination.chars().any(char::is_control) {
+        return false;
+    }
+    if destination
+        .get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("http://"))
+        || destination
+            .get(..8)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("https://"))
+    {
+        return true;
+    }
+    if markdown_href_has_uri_scheme(destination) {
+        return false;
+    }
+    if let Some(decoded) = percent_decode_ascii(destination) {
+        if markdown_href_has_unsafe_path_shape(&decoded) {
+            return false;
+        }
+    }
+    safe_workspace_relative_path(destination).is_some()
+}
+
+fn markdown_href_has_uri_scheme(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if !bytes.first().is_some_and(u8::is_ascii_alphabetic) {
+        return false;
+    }
+    let mut cursor = 1;
+    while cursor < bytes.len()
+        && (bytes[cursor].is_ascii_alphanumeric() || matches!(bytes[cursor], b'+' | b'-' | b'.'))
+    {
+        cursor += 1;
+    }
+    bytes.get(cursor) == Some(&b':')
+}
+
+fn markdown_href_has_unsafe_path_shape(value: &str) -> bool {
+    value.starts_with('/')
+        || value.starts_with('\\')
+        || value.as_bytes().get(1) == Some(&b':')
+        || value.contains("://")
+        || value.chars().any(char::is_control)
+        || value.split(['/', '\\']).any(|segment| segment == "..")
+}
+
+fn percent_decode_ascii(value: &str) -> Option<String> {
+    if !value.as_bytes().contains(&b'%') {
+        return None;
+    }
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        if bytes[cursor] == b'%' {
+            let high = bytes.get(cursor + 1).and_then(|byte| hex_value(*byte))?;
+            let low = bytes.get(cursor + 2).and_then(|byte| hex_value(*byte))?;
+            decoded.push((high << 4) | low);
+            cursor += 3;
+        } else {
+            decoded.push(bytes[cursor]);
+            cursor += 1;
+        }
+    }
+    String::from_utf8(decoded).ok()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
 /// Return whether the existing browser text sanitizer would disclose a host
 /// path or internal Resource URI. Artifact materialization reuses this
 /// predicate and rejects the bytes instead of rewriting them.
@@ -2728,6 +3057,12 @@ fn redact_local_paths(value: &str) -> String {
     let mut cursor = 0;
 
     while cursor < bytes.len() {
+        let unc_path = bytes
+            .get(cursor..cursor + 2)
+            .is_some_and(|candidate| matches!(candidate, [b'\\', b'\\'] | [b'/', b'/']))
+            && (cursor == 0
+                || is_local_path_boundary(bytes[cursor - 1])
+                || !bytes[cursor - 1].is_ascii());
         let unix_path = bytes[cursor] == b'/'
             && (cursor == 0
                 || is_local_path_boundary(bytes[cursor - 1])
@@ -2742,12 +3077,19 @@ fn redact_local_paths(value: &str) -> String {
         }) && (cursor == 0
             || is_local_path_boundary(bytes[cursor - 1])
             || !bytes[cursor - 1].is_ascii());
-        if !unix_path && !windows_path {
+        if !unc_path && !unix_path && !windows_path {
             cursor += 1;
             continue;
         }
 
-        let mut path_end = cursor + if windows_path { 3 } else { 1 };
+        let mut path_end = cursor
+            + if unc_path {
+                2
+            } else if windows_path {
+                3
+            } else {
+                1
+            };
         while path_end < bytes.len() && !is_local_path_terminator(bytes[path_end]) {
             path_end += 1;
         }
@@ -3255,6 +3597,15 @@ mod tests {
     }
 
     #[test]
+    fn removes_unc_paths_from_generic_browser_text() {
+        let value =
+            r#"Runner opened \\server\share\runner\workspaces\workspace-1\normalized\file.csv."#;
+        let projected = redact_browser_text(value);
+        assert!(!projected.contains(r#"\\server\share\runner\workspaces"#));
+        assert!(projected.contains("[workspace-path]/file.csv"));
+    }
+
+    #[test]
     fn preserves_mcp_tool_error_semantics_with_existing_sanitizer() {
         let frame = br#"data: {"method":"app-server-event","params":{"message":{"method":"item/completed","params":{"threadId":"thread-1","item":{"id":"item-1","type":"mcpToolCall","error":{"message":"MCP failed at /private/profile/secret.json","credential":"<credential-fragment>"}}}}}}
 
@@ -3522,6 +3873,213 @@ mod tests {
             "[workspace-path]/lib.rs"
         );
         assert_eq!(safe_path("src/lib.rs"), "src/lib.rs");
+    }
+
+    #[test]
+    fn projects_agent_markdown_links_without_absolute_destinations() {
+        let markdown = r#"[unix](/Users/example/runner/workspaces/workspace-1/normalized/file.csv)
+[mac](/private/var/runner/workspaces/workspace-1/normalized/file.csv)
+[drive](C:/Users/example/runner/workspaces/workspace-1/normalized/file.csv)
+[unc](\\server\share\runner\workspaces\workspace-1\normalized\file.csv)
+[file](file:///Users/example/runner/workspaces/workspace-1/normalized/file.csv)
+[relative](normalized/file.csv)
+[up](../normalized/file.csv)
+[http](http://example.com/file.csv)
+[https](https://example.com/file.csv)"#;
+        let projected = project_item(
+            json!({"type": "agentMessage", "phase": "final_answer", "text": markdown})
+                .as_object()
+                .expect("agent message object"),
+        );
+        let text = projected["text"].as_str().expect("projected markdown");
+        assert!(text.contains("[relative](normalized/file.csv)"));
+        assert!(text.contains("[http](http://example.com/file.csv)"));
+        assert!(text.contains("[https](https://example.com/file.csv)"));
+        assert!(!text.contains("[unix]("));
+        assert!(!text.contains("[mac]("));
+        assert!(!text.contains("[drive]("));
+        assert!(!text.contains("[unc]("));
+        assert!(!text.contains("[file]("));
+        assert!(!text.contains("[up]("));
+        assert!(!text.contains("[workspace-path]"));
+        assert!(!text.contains("[internal-resource-uri]"));
+
+        let completed_frame = json!({
+            "method": "app-server-event",
+            "params": {"message": {
+                "method": "item/completed",
+                "params": {"threadId": "child-thread", "turnId": "turn-1", "item": {
+                    "id": "item-1",
+                    "type": "agentMessage",
+                    "phase": "commentary",
+                    "text": markdown,
+                }}
+            }}
+        });
+        let completed = project_frame(format!("data: {completed_frame}\n\n").as_bytes())
+            .expect("completed frame parses")
+            .expect("completed frame projects");
+        let completed_text = completed.payload["data"]["text"]
+            .as_str()
+            .expect("completed projected text");
+        assert!(completed_text.contains("[relative](normalized/file.csv)"));
+        assert!(completed_text.contains("[http](http://example.com/file.csv)"));
+        assert!(completed_text.contains("[https](https://example.com/file.csv)"));
+        for label in ["unix", "mac", "drive", "unc", "file", "up"] {
+            assert!(!completed_text.contains(&format!("[{label}](")));
+        }
+        assert!(!completed_text.contains("[workspace-path]"));
+        assert!(!completed_text.contains("[internal-resource-uri]"));
+        assert!(!completed_text.contains("/Users/example/runner/workspaces"));
+        assert!(!completed_text.contains("/private/var/runner/workspaces"));
+        assert!(!completed_text.contains("C:/Users/example/runner/workspaces"));
+        assert!(!completed_text.contains("\\\\server\\share\\runner\\workspaces"));
+        assert!(!completed_text.contains("file:///Users/example/runner/workspaces"));
+
+        let delta_frames = [
+            "[csv](",
+            "/Users/example/runner/workspaces/workspace-1/normalized/file.csv)",
+        ];
+        for delta in delta_frames {
+            let frame = json!({
+                "method": "app-server-event",
+                "params": {"message": {
+                    "method": "item/agentMessage/delta",
+                    "params": {
+                        "threadId": "child-thread",
+                        "turnId": "turn-1",
+                        "itemId": "item-1",
+                        "delta": delta,
+                    }
+                }}
+            });
+            let projected = project_frame(format!("data: {frame}\n\n").as_bytes())
+                .expect("delta frame parses")
+                .expect("delta frame projects");
+            assert!(projected.payload["data"].get("delta").is_none());
+        }
+
+        assert!(!text.contains("/Users/example/runner/workspaces"));
+        assert!(!text.contains("/private/var/runner/workspaces"));
+        assert!(!text.contains("C:/Users/example/runner/workspaces"));
+        assert!(!text.contains("\\\\server\\share\\runner\\workspaces"));
+        assert!(!text.contains("file:///Users/example/runner/workspaces"));
+    }
+
+    #[test]
+    fn reprojects_persisted_agent_message_with_safe_item_shape() {
+        let event = RunEvent {
+            id: Uuid::now_v7(),
+            sequence: 9,
+            run_id: Uuid::now_v7(),
+            event_type: "codex.item.completed".to_string(),
+            projection_version: 1,
+            thread_id: Some("child-thread".to_string()),
+            turn_id: Some("turn-1".to_string()),
+            item_id: Some("item-1".to_string()),
+            payload: json!({
+                "schemaVersion": 1,
+                "threadId": "child-thread",
+                "turnId": "turn-1",
+                "itemId": "item-1",
+                "itemType": "agentMessage",
+                "data": {
+                    "type": "agentMessage",
+                    "phase": "final_answer",
+                    "text": "[unc](\\\\server\\share\\secret.csv) [abs](/Users/example/secret.csv)"
+                }
+            }),
+            created_at: chrono::Utc::now(),
+        };
+
+        let projected = project_public_run_event(event);
+        let data = projected.payload["data"].as_object().expect("item data");
+        assert_eq!(data["type"], "agentMessage");
+        assert!(data["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("unc")));
+        assert!(!data.contains_key("data"));
+        assert!(!projected.payload.to_string().contains("/Users/example"));
+        assert!(!projected.payload.to_string().contains("\\\\server\\share"));
+    }
+
+    #[test]
+    fn omits_persisted_agent_message_delta_text() {
+        let event = RunEvent {
+            id: Uuid::now_v7(),
+            sequence: 10,
+            run_id: Uuid::now_v7(),
+            event_type: "codex.item.delta".to_string(),
+            projection_version: 1,
+            thread_id: Some("child-thread".to_string()),
+            turn_id: Some("turn-1".to_string()),
+            item_id: Some("item-1".to_string()),
+            payload: json!({
+                "schemaVersion": 1,
+                "threadId": "child-thread",
+                "turnId": "turn-1",
+                "itemId": "item-1",
+                "itemType": "agentMessage",
+                "data": {
+                    "sourceType": "item/agentMessage/delta",
+                    "delta": "/Users/example/secret.csv)"
+                }
+            }),
+            created_at: chrono::Utc::now(),
+        };
+
+        let projected = project_public_run_event(event);
+        assert!(projected.payload["data"].get("delta").is_none());
+        assert!(!projected.payload.to_string().contains("/Users/example"));
+    }
+
+    #[test]
+    fn projects_markdown_reference_destinations_safely() {
+        let markdown = "[report][unc]\n[report][abs]\n[report][up]\n[report][relative]\n[report][https]\n\n[unc]: \\\\server\\share\\secret.csv\n[abs]: /Users/example/secret.csv\n[up]: ../secret.csv\n[relative]: normalized/file.csv\n[https]: https://example.com/report.csv";
+        let projected = project_item(
+            json!({"type": "agentMessage", "phase": "final_answer", "text": markdown})
+                .as_object()
+                .expect("agent message object"),
+        );
+        let text = projected["text"].as_str().expect("projected markdown");
+        assert!(!text.contains("\\\\server\\share\\secret.csv"));
+        assert!(!text.contains("/Users/example/secret.csv"));
+        assert!(!text.contains("../secret.csv"));
+        assert!(text.contains("[relative]: normalized/file.csv"));
+        assert!(text.contains("[https]: https://example.com/report.csv"));
+        assert!(!text.contains("[workspace-path]"));
+    }
+
+    #[test]
+    fn projects_turn_completed_nested_agent_items_through_item_owner() {
+        let frame = json!({
+            "method": "app-server-event",
+            "params": {"message": {
+                "method": "turn/completed",
+                "params": {
+                    "threadId": "root-thread",
+                    "turn": {
+                        "id": "turn-1",
+                        "status": "completed",
+                        "items": [{
+                            "id": "item-1",
+                            "type": "agentMessage",
+                            "phase": "final_answer",
+                            "text": "[unsafe](/Users/example/secret.csv)"
+                        }]
+                    }
+                }
+            }}
+        });
+        let projected = project_frame(format!("data: {frame}\n\n").as_bytes())
+            .expect("turn frame parses")
+            .expect("turn frame projects");
+        let turn = &projected.payload["data"]["turn"];
+        let item = &turn["items"][0];
+        assert_eq!(item["id"], "item-1");
+        assert!(item["text"].as_str().is_some_and(|text| text == "unsafe"));
+        assert!(!turn.to_string().contains("/Users/example"));
+        assert!(!turn.to_string().contains("[workspace-path]"));
     }
 
     #[test]

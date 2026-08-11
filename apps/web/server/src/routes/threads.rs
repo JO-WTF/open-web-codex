@@ -400,8 +400,8 @@ async fn project_thread(
         preview: object
             .get("preview")
             .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
+            .and_then(|preview| crate::event_projection::bounded_runtime_text(preview, 500))
+            .unwrap_or_default(),
         created_at: object
             .get("createdAt")
             .and_then(serde_json::Value::as_i64)
@@ -856,6 +856,31 @@ mod tests {
         let encoded = value.to_string();
         assert!(!encoded.contains("/private/server/workspace"));
         assert!(!encoded.contains("secret"));
+    }
+
+    #[test]
+    fn projects_root_and_child_history_agent_messages_with_one_safe_contract() {
+        for (turn_id, phase) in [("root-turn", "commentary"), ("child-turn", "final_answer")] {
+            let projected = project_turn(&json!({
+                "id": turn_id,
+                "status": "completed",
+                "items": [{
+                    "id": format!("item-{turn_id}"),
+                    "type": "agentMessage",
+                    "phase": phase,
+                    "text": "[safe](normalized/file.csv) [web](https://example.com/report.csv) [unsafe](/Users/example/secret.csv)",
+                }]
+            }))
+            .expect("history turn projects");
+            let item = &projected.items[0];
+            let text = item["text"].as_str().expect("assistant text");
+            assert!(text.contains("[safe](normalized/file.csv)"));
+            assert!(text.contains("[web](https://example.com/report.csv)"));
+            assert!(text.contains("unsafe"));
+            assert!(!text.contains("/Users/example"));
+            assert!(!text.contains("[workspace-path]"));
+            assert!(!text.contains("[internal-resource-uri]"));
+        }
     }
 
     #[test]
