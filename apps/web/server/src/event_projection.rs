@@ -3284,9 +3284,8 @@ fn redact_local_paths(value: &str) -> String {
                 || is_local_path_boundary(bytes[cursor - 1])
                 || !bytes[cursor - 1].is_ascii());
         let unix_path = bytes[cursor] == b'/'
-            && (cursor == 0
-                || is_local_path_boundary(bytes[cursor - 1])
-                || !bytes[cursor - 1].is_ascii())
+            && is_local_path_start_boundary(value, cursor)
+            && !is_markdown_delimiter_slash(bytes, cursor)
             && bytes.get(cursor + 1).is_some_and(|byte| {
                 !byte.is_ascii_whitespace() && !matches!(byte, b'/' | b'>' | b')' | b']' | b'}')
             });
@@ -3333,6 +3332,37 @@ fn is_local_path_boundary(byte: u8) -> bool {
             byte,
             b'"' | b'\'' | b'`' | b'=' | b'(' | b'[' | b'{' | b',' | b';'
         )
+}
+
+fn is_local_path_start_boundary(value: &str, cursor: usize) -> bool {
+    if cursor == 0 {
+        return true;
+    }
+    let bytes = value.as_bytes();
+    let previous = bytes[cursor - 1];
+    if is_local_path_boundary(previous) {
+        return true;
+    }
+    if previous.is_ascii() {
+        return false;
+    }
+    let previous_character = value[..cursor]
+        .chars()
+        .next_back()
+        .expect("non-ASCII path boundary has a preceding character");
+    if previous_character.is_alphanumeric() {
+        return value[cursor + 1..]
+            .chars()
+            .next()
+            .map_or(true, |character| {
+                character.is_ascii() || !character.is_alphanumeric()
+            });
+    }
+    true
+}
+
+fn is_markdown_delimiter_slash(bytes: &[u8], cursor: usize) -> bool {
+    cursor > 0 && bytes.get(cursor - 1) == Some(&b'`') && bytes.get(cursor + 1) == Some(&b'`')
 }
 
 fn is_local_path_terminator(byte: u8) -> bool {
@@ -4214,6 +4244,169 @@ mod tests {
     }
 
     #[test]
+    fn projects_angle_markdown_destinations_across_live_nested_replay_and_history_owners() {
+        let markdown = "[angle](</Users/example/runner/workspaces/workspace-1/normalized/file.csv>) [relative](normalized/file.csv) [http](http://example.com/file.csv) [https](https://example.com/file.csv)";
+        let projected_item = project_item(
+            json!({"type": "agentMessage", "phase": "final_answer", "text": markdown})
+                .as_object()
+                .expect("agent message object"),
+        );
+        let projected_text = projected_item["text"].as_str().expect("projected markdown");
+        assert!(!projected_text.contains("[angle]("));
+        assert!(!projected_text.contains("/Users/example/runner/workspaces"));
+        assert!(projected_text.contains("[relative](normalized/file.csv)"));
+        assert!(projected_text.contains("[http](http://example.com/file.csv)"));
+        assert!(projected_text.contains("[https](https://example.com/file.csv)"));
+
+        let completed_frame = json!({
+            "method": "app-server-event",
+            "params": {"message": {
+                "method": "item/completed",
+                "params": {"threadId": "child-thread", "turnId": "turn-1", "item": {
+                    "id": "item-angle",
+                    "type": "agentMessage",
+                    "phase": "final_answer",
+                    "text": markdown,
+                }}
+            }}
+        });
+        let live = project_frame(format!("data: {completed_frame}\n\n").as_bytes())
+            .expect("completed frame parses")
+            .expect("completed frame projects");
+        let live_text = live.payload["data"]["text"]
+            .as_str()
+            .expect("live markdown");
+        assert!(!live_text.contains("[angle]("));
+        assert!(!live_text.contains("/Users/example/runner/workspaces"));
+        assert!(live_text.contains("[relative](normalized/file.csv)"));
+
+        let nested_frame = json!({
+            "method": "app-server-event",
+            "params": {"message": {
+                "method": "turn/completed",
+                "params": {"threadId": "root-thread", "turn": {
+                    "id": "turn-angle",
+                    "status": "completed",
+                    "items": [{
+                        "id": "item-angle",
+                        "type": "agentMessage",
+                        "phase": "final_answer",
+                        "text": markdown,
+                    }]
+                }}
+            }}
+        });
+        let nested = project_frame(format!("data: {nested_frame}\n\n").as_bytes())
+            .expect("nested frame parses")
+            .expect("nested frame projects");
+        let nested_text = nested.payload["data"]["turn"]["items"][0]["text"]
+            .as_str()
+            .expect("nested markdown");
+        assert!(!nested_text.contains("[angle]("));
+        assert!(!nested_text.contains("/Users/example/runner/workspaces"));
+        assert!(nested_text.contains("[relative](normalized/file.csv)"));
+
+        let replay = project_public_run_event(RunEvent {
+            id: Uuid::now_v7(),
+            sequence: 11,
+            run_id: Uuid::now_v7(),
+            event_type: "codex.item.completed".to_string(),
+            projection_version: 1,
+            thread_id: Some("child-thread".to_string()),
+            turn_id: Some("turn-1".to_string()),
+            item_id: Some("item-angle".to_string()),
+            payload: json!({
+                "schemaVersion": 1,
+                "threadId": "child-thread",
+                "turnId": "turn-1",
+                "itemId": "item-angle",
+                "itemType": "agentMessage",
+                "data": {"type": "agentMessage", "text": markdown}
+            }),
+            created_at: chrono::Utc::now(),
+        });
+        let replay_text = replay.payload["data"]["text"]
+            .as_str()
+            .expect("replay markdown");
+        assert!(!replay_text.contains("[angle]("));
+        assert!(!replay_text.contains("/Users/example/runner/workspaces"));
+        assert!(replay_text.contains("[relative](normalized/file.csv)"));
+    }
+
+    #[test]
+    fn preserves_natural_slashes_across_agent_message_projection_owners() {
+        let markdown = "城市数/需求占比 1500/公里/需求单位 中间节点/上游关系 仓ID/名称/类型 `center`/`cross_docking` 字段映射/标准化";
+        let projected_item = project_item(
+            json!({"type": "agentMessage", "phase": "final_answer", "text": markdown})
+                .as_object()
+                .expect("agent message object"),
+        );
+        assert_eq!(projected_item["text"], markdown);
+
+        let completed_frame = json!({
+            "method": "app-server-event",
+            "params": {"message": {
+                "method": "item/completed",
+                "params": {"threadId": "child-thread", "turnId": "turn-1", "item": {
+                    "id": "item-slashes",
+                    "type": "agentMessage",
+                    "phase": "final_answer",
+                    "text": markdown,
+                }}
+            }}
+        });
+        let completed = project_frame(format!("data: {completed_frame}\n\n").as_bytes())
+            .expect("completed frame parses")
+            .expect("completed frame projects");
+        assert_eq!(completed.payload["data"]["text"], markdown);
+
+        let replay = project_public_run_event(RunEvent {
+            id: Uuid::now_v7(),
+            sequence: 12,
+            run_id: Uuid::now_v7(),
+            event_type: "codex.item.completed".to_string(),
+            projection_version: 1,
+            thread_id: Some("child-thread".to_string()),
+            turn_id: Some("turn-1".to_string()),
+            item_id: Some("item-slashes".to_string()),
+            payload: json!({
+                "schemaVersion": 1,
+                "threadId": "child-thread",
+                "turnId": "turn-1",
+                "itemId": "item-slashes",
+                "itemType": "agentMessage",
+                "data": {"type": "agentMessage", "text": markdown}
+            }),
+            created_at: chrono::Utc::now(),
+        });
+        assert_eq!(replay.payload["data"]["text"], markdown);
+
+        let localized = redact_browser_text(
+            "工作区：/Users/example/runner/workspaces/workspace-1/normalized/file.csv",
+        );
+        assert_eq!(localized, "工作区：[workspace-path]/file.csv");
+        let adjacent_path = redact_browser_text(
+            "路径/Users/example/runner/workspaces/workspace-1/normalized/file.csv",
+        );
+        assert!(!adjacent_path.contains("/Users/example/runner/workspaces"));
+        assert!(adjacent_path.contains("[workspace-path]/file.csv"));
+        for path in [
+            "路径C:\\Users\\example\\runner\\workspaces\\workspace-1\\normalized\\file.csv",
+            "路径\\\\server\\share\\runner\\workspaces\\workspace-1\\normalized\\file.csv",
+        ] {
+            let redacted = redact_browser_text(path);
+            assert!(!redacted.contains("C:\\Users\\example"));
+            assert!(!redacted.contains("\\\\server\\share"));
+            assert!(redacted.contains("[workspace-path]/file.csv"));
+        }
+        let fenced_path = redact_browser_text(
+            "`/Users/example/runner/workspaces/workspace-1/normalized/file.csv`",
+        );
+        assert!(!fenced_path.contains("/Users/example/runner/workspaces"));
+        assert!(fenced_path.contains("[workspace-path]/file.csv"));
+    }
+
+    #[test]
     fn reprojects_persisted_agent_message_with_safe_item_shape() {
         let event = RunEvent {
             id: Uuid::now_v7(),
@@ -4510,5 +4703,6 @@ mod tests {
         assert!(!event.payload.to_string().contains("[redacted]"));
     }
 }
+
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;

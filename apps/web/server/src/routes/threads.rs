@@ -888,6 +888,39 @@ mod tests {
     }
 
     #[test]
+    fn projects_markdown_destinations_and_natural_slashes_in_authoritative_history() {
+        let projected = project_turn(
+            &json!({
+                "id": "turn-angle",
+                "status": "completed",
+                "items": [{
+                    "id": "item-angle",
+                    "type": "agentMessage",
+                    "phase": "final_answer",
+                    "text": "[angle](</Users/example/runner/workspaces/workspace-1/normalized/file.csv>) [relative](normalized/file.csv) [http](http://example.com/file.csv) [https](https://example.com/file.csv) 城市数/需求占比 1500/公里/需求单位 中间节点/上游关系 仓ID/名称/类型 `center`/`cross_docking` 字段映射/标准化"
+                }]
+            }),
+        )
+        .expect("history turn projects");
+        let text = projected.items[0]["text"].as_str().expect("assistant text");
+        assert!(!text.contains("[angle]("));
+        assert!(!text.contains("/Users/example/runner/workspaces"));
+        assert!(text.contains("[relative](normalized/file.csv)"));
+        assert!(text.contains("[http](http://example.com/file.csv)"));
+        assert!(text.contains("[https](https://example.com/file.csv)"));
+        for phrase in [
+            "城市数/需求占比",
+            "1500/公里/需求单位",
+            "中间节点/上游关系",
+            "仓ID/名称/类型",
+            "`center`/`cross_docking`",
+            "字段映射/标准化",
+        ] {
+            assert!(text.contains(phrase), "missing preserved phrase: {phrase}");
+        }
+    }
+
+    #[test]
     fn preserves_mcp_tool_error_in_authoritative_history() {
         let projected = project_turn(&json!({
             "id": "turn-1",
