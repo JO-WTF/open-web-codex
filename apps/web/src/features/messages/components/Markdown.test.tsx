@@ -566,4 +566,19 @@ describe("Markdown file-like href behavior", () => {
     expect(screen.getByText("Ready")).toBeTruthy();
   });
 
+  it("records CommonMark entity canonicalization of an absolute destination", () => {
+    render(
+      <Markdown
+        value="See [server path](&#47;Users&#47;runner&#47;workspaces&#47;workspace-1&#47;normalized&#47;file.csv)"
+        className="markdown"
+      />,
+    );
+
+    const link = screen.getByRole("link", { name: "server path" });
+    expect(link.getAttribute("href")).toBe(
+      "/Users/runner/workspaces/workspace-1/normalized/file.csv",
+    );
+    expect(link.getAttribute("href")).not.toContain("&#47;");
+  });
+
 });

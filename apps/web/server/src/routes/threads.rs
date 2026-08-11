@@ -868,7 +868,7 @@ mod tests {
                     "id": format!("item-{turn_id}"),
                     "type": "agentMessage",
                     "phase": phase,
-                    "text": "[safe](normalized/file.csv) [web](https://example.com/report.csv) [unsafe](/Users/example/secret.csv)",
+                    "text": "[safe](normalized/file.csv) [web](https://example.com/report.csv) [unsafe](/Users/example/secret.csv) [entity](&#47;Users/example/entity.csv)",
                 }]
             }))
             .expect("history turn projects");
@@ -877,9 +877,13 @@ mod tests {
             assert!(text.contains("[safe](normalized/file.csv)"));
             assert!(text.contains("[web](https://example.com/report.csv)"));
             assert!(text.contains("unsafe"));
+            assert!(text.contains("entity"));
             assert!(!text.contains("/Users/example"));
             assert!(!text.contains("[workspace-path]"));
             assert!(!text.contains("[internal-resource-uri]"));
+            assert!(!text.contains("[unsafe]("));
+            assert!(!text.contains("[entity]("));
+            assert!(!text.contains("&#47;"));
         }
     }
 

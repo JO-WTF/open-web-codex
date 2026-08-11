@@ -2869,7 +2869,10 @@ fn markdown_destination(raw: &str) -> Option<&str> {
 
 fn markdown_href_is_safe(destination: &str) -> bool {
     let destination = destination.trim();
-    if destination.is_empty() || destination.chars().any(char::is_control) {
+    if destination.is_empty()
+        || destination.chars().any(char::is_control)
+        || markdown_destination_has_entity_reference(destination)
+    {
         return false;
     }
     if destination
@@ -2890,6 +2893,53 @@ fn markdown_href_is_safe(destination: &str) -> bool {
         }
     }
     safe_workspace_relative_path(destination).is_some()
+}
+
+fn markdown_destination_has_entity_reference(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        if bytes[cursor] != b'&' {
+            cursor += 1;
+            continue;
+        }
+        let mut end = cursor + 1;
+        if bytes.get(end) == Some(&b'#') {
+            end += 1;
+            let hexadecimal = matches!(bytes.get(end), Some(b'x' | b'X'));
+            if hexadecimal {
+                end += 1;
+                let digit_start = end;
+                while bytes
+                    .get(end)
+                    .is_some_and(|byte| hex_value(*byte).is_some())
+                {
+                    end += 1;
+                }
+                if end > digit_start && bytes.get(end) == Some(&b';') {
+                    return true;
+                }
+            } else {
+                let digit_start = end;
+                while bytes.get(end).is_some_and(u8::is_ascii_digit) {
+                    end += 1;
+                }
+                if end > digit_start && bytes.get(end) == Some(&b';') {
+                    return true;
+                }
+            }
+        } else if bytes.get(end).is_some_and(u8::is_ascii_alphabetic) {
+            end += 1;
+            while bytes.get(end).is_some_and(u8::is_ascii_alphanumeric) {
+                end += 1;
+            }
+            if bytes.get(end) == Some(&b';') {
+                return true;
+            }
+        }
+        cursor += 1;
+    }
+    false
 }
 
 fn markdown_href_has_uri_scheme(value: &str) -> bool {
@@ -3884,6 +3934,14 @@ mod tests {
 [file](file:///Users/example/runner/workspaces/workspace-1/normalized/file.csv)
 [relative](normalized/file.csv)
 [up](../normalized/file.csv)
+[entity-decimal](&#47;Users/example/runner/workspaces/workspace-1/normalized/file.csv)
+[entity-hex](&#x2F;Users/example/runner/workspaces/workspace-1/normalized/file.csv)
+[entity-hex-upper](&#X2F;Users/example/runner/workspaces/workspace-1/normalized/file.csv)
+[entity-named](&sol;Users/example/runner/workspaces/workspace-1/normalized/file.csv)
+[entity-file](file&#58;&#47;&#47;&#47;Users/example/runner/workspaces/workspace-1/normalized/file.csv)
+[entity-traversal](docs/&#46;&#46;/secret.csv)
+[entity-unc](&#92;&#92;server\share\secret.csv)
+[entity-percent](&#37;2FUsers/example/runner/workspaces/workspace-1/normalized/file.csv)
 [http](http://example.com/file.csv)
 [https](https://example.com/file.csv)"#;
         let projected = project_item(
@@ -3901,8 +3959,24 @@ mod tests {
         assert!(!text.contains("[unc]("));
         assert!(!text.contains("[file]("));
         assert!(!text.contains("[up]("));
+        for label in [
+            "entity-decimal",
+            "entity-hex",
+            "entity-hex-upper",
+            "entity-named",
+            "entity-file",
+            "entity-traversal",
+            "entity-unc",
+            "entity-percent",
+        ] {
+            assert!(!text.contains(&format!("[{label}](")));
+        }
         assert!(!text.contains("[workspace-path]"));
         assert!(!text.contains("[internal-resource-uri]"));
+        assert!(!text.contains("/Users/example/runner/workspaces"));
+        assert!(!text.contains("\\\\server\\share"));
+        assert!(!text.contains("&#"));
+        assert!(!text.contains("&sol;"));
 
         let completed_frame = json!({
             "method": "app-server-event",
@@ -3935,6 +4009,8 @@ mod tests {
         assert!(!completed_text.contains("C:/Users/example/runner/workspaces"));
         assert!(!completed_text.contains("\\\\server\\share\\runner\\workspaces"));
         assert!(!completed_text.contains("file:///Users/example/runner/workspaces"));
+        assert!(!completed_text.contains("&#"));
+        assert!(!completed_text.contains("&sol;"));
 
         let delta_frames = [
             "[csv](",
@@ -3986,7 +4062,7 @@ mod tests {
                 "data": {
                     "type": "agentMessage",
                     "phase": "final_answer",
-                    "text": "[unc](\\\\server\\share\\secret.csv) [abs](/Users/example/secret.csv)"
+                    "text": "[unc](\\\\server\\share\\secret.csv) [abs](/Users/example/secret.csv) [entity](&#x2F;Users/example/entity.csv)"
                 }
             }),
             created_at: chrono::Utc::now(),
@@ -4001,6 +4077,11 @@ mod tests {
         assert!(!data.contains_key("data"));
         assert!(!projected.payload.to_string().contains("/Users/example"));
         assert!(!projected.payload.to_string().contains("\\\\server\\share"));
+        assert!(!projected.payload.to_string().contains("&#x2F;"));
+        assert!(!data["text"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("[entity]("));
     }
 
     #[test]
@@ -4035,7 +4116,7 @@ mod tests {
 
     #[test]
     fn projects_markdown_reference_destinations_safely() {
-        let markdown = "[report][unc]\n[report][abs]\n[report][up]\n[report][relative]\n[report][https]\n\n[unc]: \\\\server\\share\\secret.csv\n[abs]: /Users/example/secret.csv\n[up]: ../secret.csv\n[relative]: normalized/file.csv\n[https]: https://example.com/report.csv";
+        let markdown = "[report][unc]\n[report][abs]\n[report][up]\n[report][relative]\n[report][https]\n[report][entity-decimal]\n[report][entity-hex]\n[report][entity-hex-upper]\n[report][entity-named]\n[report][entity-file]\n[report][entity-traversal]\n[report][entity-unc]\n[report][entity-percent]\n\n[unc]: \\\\server\\share\\secret.csv\n[abs]: /Users/example/secret.csv\n[up]: ../secret.csv\n[relative]: normalized/file.csv\n[https]: https://example.com/report.csv\n[entity-decimal]: &#47;Users/example/secret.csv\n[entity-hex]: &#x2F;Users/example/secret.csv\n[entity-hex-upper]: &#X2F;Users/example/secret.csv\n[entity-named]: &sol;Users/example/secret.csv\n[entity-file]: file&#58;&#47;&#47;&#47;Users/example/secret.csv\n[entity-traversal]: docs/&#46;&#46;/secret.csv\n[entity-unc]: &#92;&#92;server\\share\\secret.csv\n[entity-percent]: &#37;2FUsers/example/secret.csv";
         let projected = project_item(
             json!({"type": "agentMessage", "phase": "final_answer", "text": markdown})
                 .as_object()
@@ -4048,6 +4129,25 @@ mod tests {
         assert!(text.contains("[relative]: normalized/file.csv"));
         assert!(text.contains("[https]: https://example.com/report.csv"));
         assert!(!text.contains("[workspace-path]"));
+        for label in [
+            "unc",
+            "abs",
+            "up",
+            "entity-decimal",
+            "entity-hex",
+            "entity-hex-upper",
+            "entity-named",
+            "entity-file",
+            "entity-traversal",
+            "entity-unc",
+            "entity-percent",
+        ] {
+            assert!(!text.contains(&format!("[{label}]:")));
+        }
+        assert!(!text.contains("/Users/example"));
+        assert!(!text.contains("\\\\server\\share"));
+        assert!(!text.contains("&#"));
+        assert!(!text.contains("&sol;"));
     }
 
     #[test]
@@ -4065,7 +4165,7 @@ mod tests {
                             "id": "item-1",
                             "type": "agentMessage",
                             "phase": "final_answer",
-                            "text": "[unsafe](/Users/example/secret.csv)"
+                            "text": "[unsafe](/Users/example/secret.csv) [entity](&#X2F;Users/example/entity.csv)"
                         }]
                     }
                 }
@@ -4077,9 +4177,14 @@ mod tests {
         let turn = &projected.payload["data"]["turn"];
         let item = &turn["items"][0];
         assert_eq!(item["id"], "item-1");
-        assert!(item["text"].as_str().is_some_and(|text| text == "unsafe"));
+        let text = item["text"].as_str().expect("projected item text");
+        assert!(text.contains("unsafe"));
+        assert!(text.contains("entity"));
+        assert!(!text.contains("[unsafe]("));
+        assert!(!text.contains("[entity]("));
         assert!(!turn.to_string().contains("/Users/example"));
         assert!(!turn.to_string().contains("[workspace-path]"));
+        assert!(!turn.to_string().contains("&#X2F;"));
     }
 
     #[test]
