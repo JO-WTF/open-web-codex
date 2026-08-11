@@ -90,10 +90,11 @@ development. The MCP client must advertise URL elicitation support. If the curre
 cannot render the key request, the tool fails safely instead of requesting the key in a model-visible
 form.
 
-The plugin sets `default_tools_approval_mode` to `approve`, so all `map_utils` Tool calls run
-without a per-call approval prompt. This setting does not bypass the separate maps-provider
-credential elicitation: missing credentials still require the user to select a provider and save a
-key through the typed in-app flow.
+The plugin keeps `default_tools_approval_mode` at `prompt` because geocoding, routing, and distance
+matrix calls reach a credentialed external provider and may be billable. Only the local
+`create_map_card` presentation Tool is explicitly preapproved. This policy does not replace the
+separate maps-provider credential elicitation: missing credentials still require the user to select
+a provider and save a key through the typed in-app flow.
 
 `scripts/setup-maps-mcp-env.sh` writes detailed setup logs to
 `$OPEN_WEB_CODEX_LOG_DIR/maps-mcp-env.log` by default. The log records timestamps, Python/pip

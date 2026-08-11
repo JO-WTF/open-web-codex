@@ -78,8 +78,13 @@ Skill watcher 和下一次 Role spawn 仍由 Codex 原生语义拥有。仓网�
 `plugins`、`remote_plugin`、`apps` 与 `tool_suggest`；不改写持久 Profile 配置，也不在
 Platform 侧过滤 Runtime discovery 或 Tool。
 
-Data/Network Role TOML 各自持有完整 MCP transport 与精确 `enabled_tools`；Root 没有全局
-仓网 MCP。当前 composition 仍把 MCP process cwd 设为 canonical 共享应用资产根，这只是
+Data/Network Role TOML 各自持有完整 MCP transport、精确 `enabled_tools` 和 Tool 级审批策略；
+Root 没有全局仓网 MCP。Data 的四个有界本地 Tool 统一预批准；Network 以 `prompt` 为默认，
+仅预批准路线/成本/验证/分析/选址/比较等本地 Tool；`map_utils` 仅预批准 `create_map_card`。
+外部导航、距离矩阵和 final Workspace map/report 写入始终保留 official approval。MCP provider
+同时在 Tool annotations 中声明 read-only、destructive、idempotent 和 open-world 事实，Role
+policy 只裁决该 child 的精确允许面，不修改全局 `approvalPolicy`。当前 composition 仍把 MCP
+process cwd 设为 canonical 共享应用资产根，这只是
 下一切片迁移输入而非目标合同：目标是 launcher、代码和 fixture 来自显式只读 application
 assets，stdio MCP config 不设置 cwd，provider Resource scope 复用官方 Thread Workspace
 cwd。maps 状态根单独指向 Profile 私有 `.open-web-codex/mcp-state/maps-mcp`。真实 stdio

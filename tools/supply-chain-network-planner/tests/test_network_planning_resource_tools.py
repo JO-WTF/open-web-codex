@@ -146,17 +146,20 @@ def _sample2_resource_refs(
     prepared_ref, route_ref, cost_ref, existing_ids, _candidate_ids = _published_network(
         store
     )
-    baseline_ref = _result_ref(
-        server.evaluate_network_baseline(
-            prepared_ref,
-            route_ref,
-            "min_cost",
-            [6, 12, 18],
-            "actual_current",
-            ctx,
-            cost_ref,
-        )
+    baseline_result = server.evaluate_network_baseline(
+        prepared_ref,
+        route_ref,
+        "min_cost",
+        [6, 12, 18],
+        "actual_current",
+        ctx,
+        cost_ref,
     )
+    baseline_ref = _result_ref(baseline_result)
+    assert baseline_result.structuredContent is not None
+    baseline_summary = baseline_result.structuredContent["summary"]
+    assert "active warehouses 11" in baseline_summary
+    assert "6h=" in baseline_summary and "12h=" in baseline_summary
     facility_ref = _result_ref(
         server.solve_p_median(
             prepared_ref,
@@ -183,6 +186,44 @@ def _sample2_resource_refs(
 
 def test_network_planning_tools_require_explicit_parameters_and_hide_context() -> None:
     tools = {tool.name: tool for tool in asyncio.run(server.mcp.list_tools())}
+
+    safe_local_tools = {
+        "plan_route_matrix",
+        "build_haversine_route_matrix",
+        "validate_route_matrix",
+        "register_navigation_route_matrix",
+        "plan_cost_matrix",
+        "prepare_network_distribution_map",
+        "evaluate_network_baseline",
+        "evaluate_facility_scenario",
+        "compare_network_scenarios",
+    }
+    for name in safe_local_tools:
+        annotations = tools[name].annotations
+        assert annotations is not None
+        assert annotations.model_dump(by_alias=True, exclude_none=True) == {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        }
+    p_median_annotations = tools["solve_p_median"].annotations
+    assert p_median_annotations is not None
+    assert p_median_annotations.model_dump(by_alias=True, exclude_none=True) == {
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    }
+    for name in {"render_network_comparison_map", "publish_network_planning_report"}:
+        annotations = tools[name].annotations
+        assert annotations is not None
+        assert annotations.model_dump(by_alias=True, exclude_none=True) == {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": False,
+            "openWorldHint": True,
+        }
 
     baseline = tools["evaluate_network_baseline"].inputSchema
     assert "ctx" not in baseline["properties"]
@@ -380,19 +421,23 @@ def test_s3_reuses_prepared_resources_and_only_closes_bekasi(
     assert set(baseline.active_warehouse_ids) == existing_ids
     assert baseline.label == "actual_current"
 
-    scenario_ref = _result_ref(
-        server.evaluate_facility_scenario(
-            prepared_ref,
-            route_ref,
-            ScenarioSpec(
-                remove_warehouse_ids=[BEKASI_ID],
-                objective="min_cost",
-                service_targets=[12],
-            ),
-            ctx,
-            cost_ref,
-        )
+    scenario_result = server.evaluate_facility_scenario(
+        prepared_ref,
+        route_ref,
+        ScenarioSpec(
+            remove_warehouse_ids=[BEKASI_ID],
+            objective="min_cost",
+            service_targets=[12],
+        ),
+        ctx,
+        cost_ref,
     )
+    scenario_ref = _result_ref(scenario_result)
+    assert scenario_result.structuredContent is not None
+    scenario_summary = scenario_result.structuredContent["summary"]
+    assert "10 active warehouses" in scenario_summary
+    assert f"removed [{BEKASI_ID}]" in scenario_summary
+    assert "service 12h=" in scenario_summary
     scenario = server._runtime().load_model(
         scenario_ref,
         "network_scenario.v2",
@@ -405,14 +450,17 @@ def test_s3_reuses_prepared_resources_and_only_closes_bekasi(
     assert scenario.cost is not None and scenario.cost.complete
     assert [metric.target_hours for metric in scenario.service] == [12]
 
-    comparison_ref = _result_ref(
-        server.compare_network_scenarios(
-            baseline_ref,
-            scenario_ref,
-            [12],
-            ctx,
-        )
+    comparison_result = server.compare_network_scenarios(
+        baseline_ref,
+        scenario_ref,
+        [12],
+        ctx,
     )
+    comparison_ref = _result_ref(comparison_result)
+    assert comparison_result.structuredContent is not None
+    comparison_summary = comparison_result.structuredContent["summary"]
+    assert "affected 50, reassigned 50" in comparison_summary
+    assert "service 12h" in comparison_summary
     comparison = server._runtime().load_model(
         comparison_ref,
         "network_assignment_comparison.v1",
@@ -434,36 +482,40 @@ def test_s2_opens_exactly_two_candidates_and_compares_actual_baseline(
     prepared_ref, route_ref, cost_ref, existing_ids, _candidate_ids = _published_network(
         store
     )
-    baseline_ref = _result_ref(
-        server.evaluate_network_baseline(
-            prepared_ref,
-            route_ref,
-            "min_cost",
-            [6, 12, 18],
-            "actual_current",
-            ctx,
-            cost_ref,
-        )
+    baseline_result = server.evaluate_network_baseline(
+        prepared_ref,
+        route_ref,
+        "min_cost",
+        [6, 12, 18],
+        "actual_current",
+        ctx,
+        cost_ref,
     )
-    facility_ref = _result_ref(
-        server.solve_p_median(
-            prepared_ref,
-            route_ref,
-            cost_ref,
-            2,
-            sorted(existing_ids),
-            [],
-            [6, 12, 18],
-            30,
-            ctx,
-            [
-                ServiceCoverageConstraint(
-                    target_hours=18,
-                    minimum_coverage=0.5,
-                )
-            ],
-        )
+    baseline_ref = _result_ref(baseline_result)
+    assert baseline_result.structuredContent is not None
+    assert "6h=" in baseline_result.structuredContent["summary"]
+    facility_result = server.solve_p_median(
+        prepared_ref,
+        route_ref,
+        cost_ref,
+        2,
+        sorted(existing_ids),
+        [],
+        [6, 12, 18],
+        30,
+        ctx,
+        [
+            ServiceCoverageConstraint(
+                target_hours=18,
+                minimum_coverage=0.5,
+            )
+        ],
     )
+    facility_ref = _result_ref(facility_result)
+    assert facility_result.structuredContent is not None
+    facility_summary = facility_result.structuredContent["summary"]
+    assert "opened [WH-CANDIDATE-KENDARI, WH-CANDIDATE-MANADO]" in facility_summary
+    assert "service 6h=" in facility_summary
     facility = server._runtime().load_model(
         facility_ref,
         "facility_location_solution.v3",
@@ -483,14 +535,17 @@ def test_s2_opens_exactly_two_candidates_and_compares_actual_baseline(
     assert facility.cost is not None and facility.cost.complete
     assert [metric.target_hours for metric in facility.service] == [6, 12, 18]
 
-    comparison_ref = _result_ref(
-        server.compare_network_scenarios(
-            baseline_ref,
-            facility_ref,
-            [6, 12, 18],
-            ctx,
-        )
+    comparison_result = server.compare_network_scenarios(
+        baseline_ref,
+        facility_ref,
+        [6, 12, 18],
+        ctx,
     )
+    comparison_ref = _result_ref(comparison_result)
+    assert comparison_result.structuredContent is not None
+    comparison_summary = comparison_result.structuredContent["summary"]
+    assert "selected [WH-CANDIDATE-KENDARI, WH-CANDIDATE-MANADO]" in comparison_summary
+    assert "service 6h" in comparison_summary and "18h" in comparison_summary
     comparison = server._runtime().load_model(
         comparison_ref,
         "network_assignment_comparison.v1",

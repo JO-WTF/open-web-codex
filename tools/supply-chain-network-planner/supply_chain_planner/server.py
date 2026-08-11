@@ -26,6 +26,7 @@ from mcp.types import (
     ResourceLink,
     TextContent,
     TextResourceContents,
+    ToolAnnotations,
 )
 from pydantic import Field, ValidationError
 
@@ -111,6 +112,7 @@ from .optimization_models import (
     ScenarioSpec,
     ServiceConstrainedSolution,
     ServiceCoverageConstraint,
+    ServiceMetric,
 )
 from .readiness import ReadinessEvaluator
 from .report_service import (
@@ -145,9 +147,63 @@ SANDBOX_STATE_META_CAPABILITY = "codex/sandbox-state-meta"
 MCP_SERVER_NAME = "supply_chain"
 RESOURCE_URI_PREFIX = "supply-chain://resources/"
 
+CONTENT_ADDRESSED_RESOURCE_TOOL = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+BOUNDED_LOCAL_COMPUTE_TOOL = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=False,
+    openWorldHint=False,
+)
+FINAL_WORKSPACE_DELIVERY_TOOL = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=False,
+    openWorldHint=True,
+)
+
 
 def resource_ref(published: PublishedResource) -> ResourceRef:
     return _resource_ref(published, MCP_SERVER_NAME)
+
+
+def _bounded_id_summary(values: list[str], *, limit: int = 4) -> str:
+    unique = list(dict.fromkeys(values))
+    shown: list[str] = []
+    rendered_chars = 0
+    for value in unique[:limit]:
+        bounded = value if len(value) <= 64 else f"{value[:61]}..."
+        separator_chars = 2 if shown else 0
+        if shown and rendered_chars + separator_chars + len(bounded) > 160:
+            break
+        shown.append(bounded)
+        rendered_chars += separator_chars + len(bounded)
+    if not shown:
+        return "none"
+    remaining = len(unique) - len(shown)
+    suffix = f", +{remaining} more" if remaining else ""
+    return f"{', '.join(shown)}{suffix}"
+
+
+def _service_metric_summary(metrics: list[ServiceMetric], *, limit: int = 8) -> str:
+    shown = [f"{metric.target_hours:g}h={metric.coverage_rate:.1%}" for metric in metrics[:limit]]
+    if not shown:
+        return "none"
+    remaining = len(metrics) - len(shown)
+    suffix = f", +{remaining} more" if remaining else ""
+    return f"{', '.join(shown)}{suffix}"
+
+
+def _cost_metric_summary(cost: CostSummary | None) -> str:
+    if cost is None:
+        return "unavailable"
+    state = "complete" if cost.complete else "incomplete"
+    return f"{cost.total:.2f} {cost.currency} ({state})"
+
 
 mcp = FastMCP(
     "Supply Chain Network Planner",
@@ -2475,7 +2531,7 @@ def _legacy_solve_service_constrained_location(
     )
 
 
-@mcp.tool(structured_output=True)
+@mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def compare_network_scenarios(
     baseline_ref: ResourceRef,
     candidate_ref: ResourceRef,
@@ -2518,10 +2574,31 @@ def compare_network_scenarios(
         set(baseline.active_warehouse_ids),
         candidate_active_ids,
     )
+    service_summary = (
+        ", ".join(
+            f"{metric.target_hours:g}h {metric.before_coverage_rate:.1%}→"
+            f"{metric.after_coverage_rate:.1%} ({metric.coverage_rate_delta:+.1%})"
+            for metric in comparison.service[:8]
+        )
+        or "none"
+    )
+    if len(comparison.service) > 8:
+        service_summary = f"{service_summary}, +{len(comparison.service) - 8} more"
+    cost_summary = (
+        "unavailable"
+        if comparison.before_cost is None or comparison.after_cost is None
+        else f"{comparison.before_cost:.2f}→{comparison.after_cost:.2f} "
+        f"({comparison.cost_delta or 0:+.2f})"
+    )
     return _runtime().publish(
         comparison.schema_version,
         comparison,
-        f"Compared {len(comparison.city_changes)} city assignments across two network results.",
+        f"Compared {len(comparison.city_changes)} city assignments; selected "
+        f"[{_bounded_id_summary(comparison.selected_warehouse_ids)}], removed "
+        f"[{_bounded_id_summary(comparison.removed_warehouse_ids)}], affected "
+        f"{len(comparison.affected_city_ids)}, reassigned "
+        f"{len(comparison.reassigned_city_ids)}; cost {cost_summary}; service "
+        f"{service_summary}.",
     )
 
 
@@ -3218,7 +3295,7 @@ def _load_ready_network(resource_ref: ResourceRef) -> PreparedNetworkResource:
     return prepared
 
 
-@mcp.tool(structured_output=True)
+@mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def prepare_network_distribution_map(
     normalized_input_ref: ResourceRef,
     ctx: Context,
@@ -3270,7 +3347,7 @@ def prepare_network_distribution_map(
     return result
 
 
-@mcp.tool(structured_output=True)
+@mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def plan_route_matrix(
     normalized_input_ref: ResourceRef,
     route_method: Literal["haversine", "navigation", "provided"],
@@ -3296,7 +3373,7 @@ def plan_route_matrix(
     )
 
 
-@mcp.tool(structured_output=True)
+@mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def build_haversine_route_matrix(
     normalized_input_ref: ResourceRef,
     detour_coefficient: float,
@@ -3334,7 +3411,7 @@ def build_haversine_route_matrix(
     )
 
 
-@mcp.tool(structured_output=True)
+@mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def validate_route_matrix(
     normalized_input_ref: ResourceRef,
     route_matrix_ref: ResourceRef,
@@ -3365,7 +3442,7 @@ def validate_route_matrix(
     )
 
 
-@mcp.tool(structured_output=True)
+@mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def register_navigation_route_matrix(
     normalized_input_ref: ResourceRef,
     navigation_result_relative_path: Annotated[
@@ -3420,7 +3497,7 @@ def register_navigation_route_matrix(
     )
 
 
-@mcp.tool(structured_output=True)
+@mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def plan_cost_matrix(
     normalized_input_ref: ResourceRef,
     warehouse_scope: Literal["existing_only", "all_warehouses"],
@@ -3473,7 +3550,7 @@ def plan_cost_matrix(
     )
 
 
-@mcp.tool(structured_output=True)
+@mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def evaluate_network_baseline(
     normalized_input_ref: ResourceRef,
     route_matrix_ref: ResourceRef,
@@ -3537,15 +3614,21 @@ def evaluate_network_baseline(
         cost=summarize_assignment_cost(assignment, costs) if costs is not None else None,
         notice_code=None,
     )
-    message = (
-        "Evaluated the actual current assignment."
+    label_text = (
+        "actual current assignment"
         if label == "actual_current"
-        else "Evaluated the optimized existing-warehouse footprint."
+        else "optimized existing-warehouse footprint"
+    )
+    message = (
+        f"Evaluated the {label_text}; active warehouses "
+        f"{len(baseline.active_warehouse_ids)}, cost "
+        f"{_cost_metric_summary(baseline.cost)}, service "
+        f"{_service_metric_summary(baseline.service)}."
     )
     return _runtime().publish(baseline.schema_version, baseline, message)
 
 
-@mcp.tool(structured_output=True)
+@mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def evaluate_facility_scenario(
     normalized_input_ref: ResourceRef,
     route_matrix_ref: ResourceRef,
@@ -3623,11 +3706,15 @@ def evaluate_facility_scenario(
     return _runtime().publish(
         result.schema_version,
         result,
-        f"Evaluated a scenario with {len(add_ids)} added and {len(remove_ids)} removed warehouses.",
+        f"Evaluated a scenario with {len(result.active_warehouse_ids)} active warehouses; "
+        f"added [{_bounded_id_summary(sorted(add_ids))}], removed "
+        f"[{_bounded_id_summary(sorted(remove_ids))}]; cost "
+        f"{_cost_metric_summary(result.cost)}, service "
+        f"{_service_metric_summary(result.service)}.",
     )
 
 
-@mcp.tool(structured_output=True)
+@mcp.tool(structured_output=True, annotations=BOUNDED_LOCAL_COMPUTE_TOOL)
 def solve_p_median(
     normalized_input_ref: ResourceRef,
     route_matrix_ref: ResourceRef,
@@ -3719,9 +3806,12 @@ def solve_p_median(
     return _runtime().publish(
         solution.schema_version,
         solution,
-        f"p-median status is {solution.status}; opened "
-        f"{len(solution.opened_candidate_ids)} candidates and closed "
-        f"{len(solution.closed_existing_ids)} existing warehouses.",
+        f"p-median status is {solution.status}; active warehouses "
+        f"{len(solution.active_warehouse_ids)}, opened "
+        f"[{_bounded_id_summary(solution.opened_candidate_ids)}], closed "
+        f"[{_bounded_id_summary(solution.closed_existing_ids)}]; cost "
+        f"{_cost_metric_summary(solution.cost)}, service "
+        f"{_service_metric_summary(solution.service)}.",
     )
 
 
@@ -3846,7 +3936,7 @@ def _write_final_delivery_bundle(
     )
 
 
-@mcp.tool(structured_output=True)
+@mcp.tool(structured_output=True, annotations=FINAL_WORKSPACE_DELIVERY_TOOL)
 def render_network_comparison_map(
     normalized_input_ref: ResourceRef,
     baseline_ref: ResourceRef,
@@ -3880,7 +3970,7 @@ def render_network_comparison_map(
     )
 
 
-@mcp.tool(structured_output=True)
+@mcp.tool(structured_output=True, annotations=FINAL_WORKSPACE_DELIVERY_TOOL)
 def publish_network_planning_report(
     normalized_input_ref: ResourceRef,
     baseline_ref: ResourceRef,

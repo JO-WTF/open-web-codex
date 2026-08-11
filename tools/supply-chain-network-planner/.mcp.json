@@ -3,7 +3,19 @@
     "supply_chain": {
       "command": "./bin/supply-chain-planner-launcher",
       "args": [],
-      "default_tools_approval_mode": "approve",
+      "default_tools_approval_mode": "prompt",
+      "tools": {
+        "plan_route_matrix": { "approval_mode": "approve" },
+        "build_haversine_route_matrix": { "approval_mode": "approve" },
+        "validate_route_matrix": { "approval_mode": "approve" },
+        "register_navigation_route_matrix": { "approval_mode": "approve" },
+        "plan_cost_matrix": { "approval_mode": "approve" },
+        "prepare_network_distribution_map": { "approval_mode": "approve" },
+        "evaluate_network_baseline": { "approval_mode": "approve" },
+        "evaluate_facility_scenario": { "approval_mode": "approve" },
+        "solve_p_median": { "approval_mode": "approve" },
+        "compare_network_scenarios": { "approval_mode": "approve" }
+      },
       "env_vars": [
         "CODEX_HOME",
         "OPEN_WEB_CODEX_DATA_DIR",

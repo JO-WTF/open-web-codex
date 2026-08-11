@@ -193,7 +193,9 @@ Profile seed 与显式应用资产 composition：
   不从 cwd、Workspace、`CARGO_MANIFEST_DIR` 或源码树扫描 fallback；部署 root symlink 可用，
   child escape 拒绝。3 项 composition 单测覆盖含引号、空格和非 ASCII 的 TOML 路径；
 - Profile 不复制 Tool、venv、Node dependency、Mock、cache 或 test。Data/Network Role 持有
-  role-local MCP transport 与精确 tool allowlist，Root 没有全局仓网 MCP；maps cwd 是共享只读
+  role-local MCP transport、精确 tool allowlist 与 Tool 级 approval policy，Root 没有全局仓网
+  MCP；Data4 全部是有界本地预批准，Network 只预批准本地计算/验证，maps 只预批准
+  `create_map_card`，外部地图调用和 final Workspace 文件保持 `prompt`。maps cwd 是共享只读
   asset root，状态写入 Profile 私有 `mcp-state/maps-mcp`；
 - `probe-builtin-network-copilot-mcp-assets.sh` 真实启动 Data、Demo、Network、maps 四个 stdio
   MCP 并读取 inventory，退出码 0；启动前后两个共享 asset tree 的文件集合、size 和 mtime

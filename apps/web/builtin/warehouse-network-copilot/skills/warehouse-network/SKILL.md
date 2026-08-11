@@ -1,9 +1,13 @@
 ---
 name: warehouse-network
-description: 当用户要求定义仓网数据需求，计算路线、成本、覆盖关系、时效满足率、仓网模拟或 p-median 选址，或者生成仓网地图与报告时，使用此 Skill。输入使用精确 typed MCP ResourceRef 或用户确认的 Workspace 相对文件。
+description: 仅供仓网 Supervisor 原生 spawn 的 network_agent child 使用。当用户要求定义仓网数据需求，计算路线、成本、覆盖关系、时效满足率、仓网模拟或 p-median 选址，或者生成仓网地图与报告时，使用此 Skill。输入使用精确 typed MCP ResourceRef 或用户确认的 Workspace 相对文件。
 ---
 
 # 分析仓网
+
+只有当前 Role 正是由 Supervisor 原生 spawn 的 `network_agent` child 才能继续，且 child 不得加载或反向读取 `warehouse-supervisor` Skill。若当前是 Root 或其他 Role，立即停止，不读取数据、不调用 Tool，改用 `warehouse-supervisor`，由 Root 通过原生 spawn 创建网络代理。
+
+所有分析必须直接消费上游 exact `ResourceRef` 和当前 Tool 返回的 bounded summary。不得使用 `ls`、`find`、`git`、`jq`、`cat`、内联 Python 或其他 Workspace 命令重读原始文件、中间 Resource、旧 Artifact 或最终报告来重建指标；Tool 合同不足时返回明确缺口，不得用 shell 旁路补协议。
 
 ## 定义数据要求
 
@@ -12,6 +16,7 @@ description: 当用户要求定义仓网数据需求，计算路线、成本、�
 - 仅在对应分析需要时追加要求：真实现状比较需要当前覆盖；选址需要候选仓；成本分析需要报价或明确的补算规则；时效分析需要路线距离/时长；地图需要完整坐标。
 - 只读取 Supervisor 提供的精确 `normalized_network_input.v1` ResourceRef。若状态不是 `ready`，说明缺口并停止，不绕过 Data Agent 或自行猜测输入。
 - 如果 Supervisor 没有提供精确 ResourceRef，或者该 Resource 读取失败，立即向 Supervisor 返回 `needs_data` 和原始失败原因并停止。不得从 Workspace 文件、旧 Artifact、报告、模型文本、MCP Resource 列表或 provider 私有目录搜索、推断或恢复替代引用，也不得直接解析文件完成仓网任务。
+- 用户提示词或当前 Thread 已经明确给出路线、成本、目标、时效、仓库变更或交付选择时，直接沿用，不重复询问同一选择。
 
 ## 构建路线与成本事实
 

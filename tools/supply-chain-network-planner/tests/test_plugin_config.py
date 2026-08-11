@@ -23,8 +23,19 @@ def test_plugin_manifest_and_mcp_config_are_wired() -> None:
     server = mcp_config["mcpServers"]["supply_chain"]
     assert server["command"] == "./bin/supply-chain-planner-launcher"
     assert "cwd" not in server
-    assert server["default_tools_approval_mode"] == "approve"
-    assert "tools" not in server
+    assert server["default_tools_approval_mode"] == "prompt"
+    assert server["tools"] == {
+        "plan_route_matrix": {"approval_mode": "approve"},
+        "build_haversine_route_matrix": {"approval_mode": "approve"},
+        "validate_route_matrix": {"approval_mode": "approve"},
+        "register_navigation_route_matrix": {"approval_mode": "approve"},
+        "plan_cost_matrix": {"approval_mode": "approve"},
+        "prepare_network_distribution_map": {"approval_mode": "approve"},
+        "evaluate_network_baseline": {"approval_mode": "approve"},
+        "evaluate_facility_scenario": {"approval_mode": "approve"},
+        "solve_p_median": {"approval_mode": "approve"},
+        "compare_network_scenarios": {"approval_mode": "approve"},
+    }
 
 
 def test_network_server_exposes_only_network_tools() -> None:

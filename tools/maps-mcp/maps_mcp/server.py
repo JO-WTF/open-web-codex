@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.session import ServerSession
-from mcp.types import CallToolResult, ResourceLink, TextContent
+from mcp.types import CallToolResult, ResourceLink, TextContent, ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from .clients import GoogleMapsClient, MapboxMapsClient
@@ -34,6 +34,19 @@ from .map_card import (
 Provider = Literal["google", "mapbox"]
 TravelMode = Literal["driving", "driving_traffic", "walking", "bicycling", "transit", "two_wheeler"]
 MCP_SERVER_NAME = "map_utils"
+
+LOCAL_PRESENTATION_TOOL = ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=False,
+    openWorldHint=False,
+)
+EXTERNAL_BILLABLE_TOOL = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=False,
+    openWorldHint=True,
+)
 
 
 class Point(BaseModel):
@@ -279,7 +292,7 @@ def _route_geojson(
     return {"type": "FeatureCollection", "features": features}
 
 
-@mcp.tool(structured_output=True)
+@mcp.tool(structured_output=True, annotations=LOCAL_PRESENTATION_TOOL)
 async def create_map_card(
     title: str,
     sources: dict[str, GeoJsonSource],
@@ -408,7 +421,7 @@ def _point(point: Point) -> dict[str, float]:
     return point.model_dump()
 
 
-@mcp.tool(structured_output=True)
+@mcp.tool(structured_output=True, annotations=EXTERNAL_BILLABLE_TOOL)
 async def batch_geocode(
     addresses: list[str],
     ctx: Context[ServerSession, None],
@@ -430,7 +443,7 @@ async def batch_geocode(
     )
 
 
-@mcp.tool(structured_output=True)
+@mcp.tool(structured_output=True, annotations=EXTERNAL_BILLABLE_TOOL)
 async def batch_reverse_geocode(
     points: list[Point],
     ctx: Context[ServerSession, None],
@@ -454,7 +467,7 @@ async def batch_reverse_geocode(
     )
 
 
-@mcp.tool(structured_output=True)
+@mcp.tool(structured_output=True, annotations=EXTERNAL_BILLABLE_TOOL)
 async def get_route(
     origin: Point,
     destination: Point,
@@ -489,7 +502,7 @@ async def get_route(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=EXTERNAL_BILLABLE_TOOL)
 async def distance_matrix(
     origins: list[Point],
     destinations: list[Point],

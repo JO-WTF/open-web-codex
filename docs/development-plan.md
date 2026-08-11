@@ -198,10 +198,12 @@ Catalog/Studio/Python publish 生产系统及其失去 owner 的旧 DB schema。
    已存在普通文件归 Profile 所有并保留。Server 绑定经过校验的显式应用资产根；Runtime 不
    扫描 process cwd、Workspace 或源码树。缺少配置或预期 launcher 时明确 unavailable。
 3. Root 只暴露原生多 Agent 面，不配置全局仓网 MCP；Data/Network Role 通过原生 Role
-   config 启用各自 Skill、MCP server 和 `enabled_tools`。MCP 进程 cwd 是 canonical 只读应用
-   Tool root；maps credential/resource state 位于 Profile 私有 runtime，业务 Workspace 只能
-   来自 native `sandboxCwd`。工具代码、共享 venv、Node 依赖、Mock、测试和缓存均不复制进
-   Profile。
+   config 启用各自 Skill、MCP server、`enabled_tools` 和精确 Tool approval policy。Data4 全部
+   有界本地预批准；Network 只预批准本地路线/成本/验证/分析/选址/比较，`map_utils` 只预批准
+   `create_map_card`；外部地图请求和 final Workspace 文件保持 `prompt`，不把全局
+   `approvalPolicy` 降为 `never`。MCP 进程 cwd 是 canonical 只读应用 Tool root；maps
+   credential/resource state 位于 Profile 私有 runtime，业务 Workspace 只能来自 native
+   `sandboxCwd`。工具代码、共享 venv、Node 依赖、Mock、测试和缓存均不复制进 Profile。
 4. Skill watcher/`forceReload` 对下一 Turn 生效；Role 文件修改对下一次 spawn 生效；MCP
    reload 在安全 step 边界切换。Role 集合、allowlist、增删改名只对新 Root Thread 保证，
    不修改 Codex 弥补这一边界。

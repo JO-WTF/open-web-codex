@@ -39,6 +39,24 @@ def test_data_server_exposes_only_four_composable_tools() -> None:
         assert set(tool.outputSchema["required"]) == {"summary", "resource_ref"}
         assert "resource_name" not in tool.outputSchema["properties"]
 
+    discover_annotations = tools[0].annotations
+    assert discover_annotations is not None
+    assert discover_annotations.model_dump(by_alias=True, exclude_none=True) == {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+    for tool in tools[1:]:
+        annotations = tool.annotations
+        assert annotations is not None
+        assert annotations.model_dump(by_alias=True, exclude_none=True) == {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        }
+
 
 def test_sample_one_inspect_publishes_counts_and_fields_resource(tmp_path, monkeypatch) -> None:
     (tmp_path / "demand-cities.csv").write_text(

@@ -38,6 +38,16 @@ publish_network_planning_report
 
 每个大数据结果都写入 Resource Store。Data/Network Agent 消息只传经校验的 typed `ResourceRef` 或工具返回的精确引用，不传原始文件、整张矩阵、完整工具结果或内部路径。缺失数据、矩阵不完整、求解器不可用和超时都是显式状态；不会自动加载 Mock、填零或切换旧实现。
 
+## Tool 审批
+
+Data Role 的四个文件准备 Tool 都是已评审的有界本地能力，可在精确 allowlist 内预批准。
+Network/standalone Plugin 以 `prompt` 为默认，只对路线规划、本地矩阵、验证、baseline、scenario、
+p-median 和 comparison 等无外部副作用的 Tool 配置逐项预批准。最终 map/report Tool 会以
+create-new 语义写 Workspace 文件，因此继续请求 official approval。地图导航和距离矩阵属于
+`map_utils` 的外部、可能计费操作，也不能由本包预批准。Tool annotations 描述 provider
+事实，Role/Plugin policy 决定当前 Agent 的精确预批准面；两者都不改变全局 Runtime
+`approvalPolicy`。
+
 ## 6.0 能力包
 
 | Package | 责任 |

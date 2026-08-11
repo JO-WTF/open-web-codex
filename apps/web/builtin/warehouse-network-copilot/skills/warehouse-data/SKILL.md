@@ -1,9 +1,13 @@
 ---
 name: warehouse-data
-description: 当用户要求检查或准备当前 Workspace 中的仓网 Excel、CSV、JSON 数据，推断和映射字段，标准化需求、仓库、当前覆盖或路线报价，或者补全行政区与经纬度时，使用此 Skill。
+description: 仅供仓网 Supervisor 原生 spawn 的 data_agent child 使用。当用户要求检查或准备当前 Workspace 中的仓网 Excel、CSV、JSON 数据，推断和映射字段，标准化需求、仓库、当前覆盖或路线报价，或者补全行政区与经纬度时，使用此 Skill。
 ---
 
 # 准备仓网数据
+
+只有当前 Role 正是由 Supervisor 原生 spawn 的 `data_agent` child 才能继续，且 child 不得加载或反向读取 `warehouse-supervisor` Skill。若当前是 Root 或其他 Role，立即停止，不读文件、不调用 Tool，改用 `warehouse-supervisor`，由 Root 通过原生 spawn 创建数据代理（昵称 `Wanwan`）。
+
+数据文件的发现、检查、规范化和地理补全必须直接使用 Role 允许的四个 Data MCP Tool。不得使用 `ls`、`find`、`git`、`jq`、`cat`、内联 Python 或其他 Workspace 命令扫描业务文件、仓库结构或 Git 元数据；Tool 不可用时返回明确失败，不得用 shell 旁路替代。
 
 ## 检查输入
 
@@ -17,6 +21,7 @@ description: 当用户要求检查或准备当前 Workspace 中的仓网 Excel�
   - 候选仓库：与已有仓库相同的基础字段，并明确是候选仓；只有选址或增加候选仓的分析需要。
   - 路线报价：起点、终点、价格；当前 Tool 合同还要求币种、车型容量及路线层级，缺少时用通俗业务语言说明。
 - 使用检查 Tool 给出的字段建议，但只应用用户确认的文件角色和字段映射。不要把相似列名、样例值或文件名当作最终确认。
+- 用户提示词或当前 Thread 已经明确给出文件角色、映射或参数时，直接沿用，不重复询问同一选择。
 - 用业务语言解释缺失项，例如“缺少每个需求城市的需求量”，而不是只返回内部 schema 名或 Runtime 标识。
 
 ## 标准化与地理补全

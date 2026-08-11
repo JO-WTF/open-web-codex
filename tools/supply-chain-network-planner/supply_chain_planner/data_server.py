@@ -21,6 +21,7 @@ from mcp.types import (
     EmbeddedResource,
     ResourceLink,
     TextResourceContents,
+    ToolAnnotations,
 )
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -77,6 +78,19 @@ from .workspace_intake import (
 RESOURCE_URI_PREFIX = "supply-chain://resources/"
 MAX_SOURCE_CATALOG_ENTRIES = 500
 SANDBOX_STATE_META_CAPABILITY = "codex/sandbox-state-meta"
+
+READ_ONLY_LOCAL_TOOL = ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+CONTENT_ADDRESSED_RESOURCE_TOOL = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+)
 
 
 class _SourceProfileResource(BaseModel):
@@ -291,7 +305,7 @@ def _wrap_intake_payload(
     }
 
 
-@mcp.tool(structured_output=True)
+@mcp.tool(structured_output=True, annotations=READ_ONLY_LOCAL_TOOL)
 def discover_workspace_sources(ctx: Context) -> dict[str, Any]:
     """Discover bounded Excel/CSV/JSON metadata across the trusted Workspace."""
     root = _workspace(ctx)
@@ -305,7 +319,7 @@ def discover_workspace_sources(ctx: Context) -> dict[str, Any]:
     }
 
 
-@mcp.tool(structured_output=True)
+@mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def inspect_workspace_sources(
     relative_paths: list[str],
     ctx: Context,
@@ -435,7 +449,7 @@ def _load_source_profile(resource_ref: ResourceRef) -> dict[str, Any]:
     return profile
 
 
-@mcp.tool(structured_output=True)
+@mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def normalize_network_input(
     source_profile_ref: ResourceRef,
     confirmed_sources: list[ConfirmedSourceDecision],
@@ -488,7 +502,7 @@ def normalize_network_input(
     )
 
 
-@mcp.tool(structured_output=True)
+@mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def prepare_network_geography(
     normalized_input_ref: ResourceRef,
     administrative_catalog_relative_path: str,

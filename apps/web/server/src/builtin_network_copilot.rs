@@ -516,6 +516,14 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["--data-server"]
         );
+        assert_eq!(
+            data["mcp_servers"]["supply_chain"]["default_tools_approval_mode"].as_str(),
+            Some("approve")
+        );
+        assert!(data["developer_instructions"]
+            .as_str()
+            .expect("data instructions")
+            .contains("Do not use shell, Workspace command, Git, jq, or ad-hoc Python"));
         assert!(network["mcp_servers"]["supply_chain"].get("cwd").is_none());
         assert!(network["mcp_servers"]["supply_chain"]["args"]
             .as_array()
@@ -544,6 +552,25 @@ mod tests {
                 "publish_network_planning_report",
             ]
         );
+        assert_eq!(
+            network["mcp_servers"]["supply_chain"]["default_tools_approval_mode"].as_str(),
+            Some("prompt")
+        );
+        for tool in &supply_chain_tools[..10] {
+            assert_eq!(
+                network["mcp_servers"]["supply_chain"]["tools"][*tool]["approval_mode"].as_str(),
+                Some("approve"),
+                "safe Network Tool {tool} must be preapproved",
+            );
+        }
+        for tool in &supply_chain_tools[10..] {
+            assert!(
+                network["mcp_servers"]["supply_chain"]["tools"]
+                    .get(*tool)
+                    .is_none(),
+                "final Workspace Tool {tool} must inherit prompt",
+            );
+        }
         assert_eq!(
             network["mcp_servers"]["map_utils"]["command"].as_str(),
             Some(path_text("maps launcher", &assets.maps_launcher).expect("path"))
@@ -575,6 +602,27 @@ mod tests {
             map_tools,
             vec!["get_route", "distance_matrix", "create_map_card",]
         );
+        assert_eq!(
+            network["mcp_servers"]["map_utils"]["default_tools_approval_mode"].as_str(),
+            Some("prompt")
+        );
+        assert_eq!(
+            network["mcp_servers"]["map_utils"]["tools"]["create_map_card"]["approval_mode"]
+                .as_str(),
+            Some("approve")
+        );
+        for tool in ["get_route", "distance_matrix"] {
+            assert!(
+                network["mcp_servers"]["map_utils"]["tools"]
+                    .get(tool)
+                    .is_none(),
+                "external Map Tool {tool} must inherit prompt",
+            );
+        }
+        assert!(network["developer_instructions"]
+            .as_str()
+            .expect("network instructions")
+            .contains("Do not use shell, Workspace command, Git, jq, or ad-hoc Python"));
         assert!(!data.to_string().contains("__OPEN_WEB_CODEX_"));
         assert!(!network.to_string().contains("__OPEN_WEB_CODEX_"));
         assert_eq!(
