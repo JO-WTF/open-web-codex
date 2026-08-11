@@ -815,7 +815,7 @@ describe("WebApp workspace-first messaging", () => {
     });
 
     expect(await screen.findByText(/Allow the supply_chain MCP server/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Accept" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeTruthy();
     expect(client.runIdForThread).not.toHaveBeenCalled();
   });
 

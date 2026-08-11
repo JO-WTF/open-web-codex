@@ -115,7 +115,8 @@ describe("McpFormQueue", () => {
     fireEvent.change(screen.getByLabelText(/Use navigation/), { target: { value: "true" } });
     fireEvent.change(screen.getByLabelText(/Method/), { target: { value: "navigation" } });
     fireEvent.click(screen.getByRole("button", { name: "6 hours" }));
-    fireEvent.click(screen.getByRole("button", { name: "Accept" }));
+    expect(screen.getByText("Data Agent requests additional information")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     expect(onSubmit).toHaveBeenCalledWith("approval-1", 3, "accept", {
       name: "Actual plan",
@@ -154,21 +155,28 @@ describe("McpFormQueue", () => {
     );
 
     expect(screen.getByText(/Allow the supply_chain MCP server/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Accept" }));
+    expect(screen.getByText("Data Agent requests approval to run an MCP tool")).toBeTruthy();
+    expect(screen.getByText("MCP tool approval")).toBeTruthy();
+    expect(screen.getByText("MCP server")).toBeTruthy();
+    expect(screen.getByText("supply_chain_data").tagName).toBe("CODE");
+    expect(screen.queryByText(/needs details/i)).toBeNull();
+    expect(screen.getByRole("button", { name: "Approve" }).className)
+      .toContain("web-mcp-form-action-primary");
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
     expect(onSubmit).toHaveBeenCalledWith("approval-tool-1", 3, "accept", {});
   });
 
   it("blocks acceptance when a bounded field is invalid", () => {
     render(<McpFormQueue requests={[request]} submittingIds={new Set()} onSubmit={vi.fn()} />);
     fireEvent.change(screen.getByLabelText(/Warehouse count/), { target: { value: "1.5" } });
-    expect((screen.getByRole("button", { name: "Accept" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("omits untouched optional boolean and multi-select fields but keeps explicit false and empty values", () => {
     const onSubmit = vi.fn();
     render(<McpFormQueue requests={[optionalFieldsRequest]} submittingIds={new Set()} onSubmit={onSubmit} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Accept" }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     const omittedContent = onSubmit.mock.calls[0]?.[3];
     expect(omittedContent).not.toHaveProperty("includeExistingWarehouses");
     expect(omittedContent).not.toHaveProperty("candidateTiers");
@@ -176,7 +184,7 @@ describe("McpFormQueue", () => {
     fireEvent.change(screen.getByLabelText(/Include existing warehouses/), { target: { value: "false" } });
     fireEvent.click(screen.getByRole("button", { name: "Urban candidates" }));
     fireEvent.click(screen.getByRole("button", { name: "Urban candidates" }));
-    fireEvent.click(screen.getByRole("button", { name: "Accept" }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     expect(onSubmit.mock.calls[1]?.[3]).toMatchObject({
       includeExistingWarehouses: false,

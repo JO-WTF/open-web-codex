@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import ListChecks from "lucide-react/dist/esm/icons/list-checks";
+import ShieldCheck from "lucide-react/dist/esm/icons/shield-check";
 import type {
   McpFormContent,
   McpFormFieldSummary,
@@ -20,10 +21,17 @@ type Props = {
   ) => Promise<void> | void;
 };
 
-function sourceLabel(request: PendingMcpFormSummary) {
+function requesterLabel(request: PendingMcpFormSummary) {
   return request.source.kind === "agent"
-    ? `${request.source.displayTitle} needs details`
-    : "Supervisor needs details";
+    ? request.source.displayTitle
+    : "Root Supervisor";
+}
+
+function requestTitle(request: PendingMcpFormSummary) {
+  const requester = requesterLabel(request);
+  return request.fields.length === 0
+    ? `${requester} requests approval to run an MCP tool`
+    : `${requester} requests additional information`;
 }
 
 function initialFieldValue(field: McpFormFieldSummary): FieldValue {
@@ -114,6 +122,7 @@ function McpFormCard({
   onSubmit: Props["onSubmit"];
 }) {
   const [values, setValues] = useState<Record<string, FieldValue>>(() => initialValues(request));
+  const isToolApproval = request.fields.length === 0;
 
   useEffect(() => setValues(initialValues(request)), [request]);
 
@@ -132,13 +141,27 @@ function McpFormCard({
   };
 
   return (
-    <div className="web-user-input-card web-mcp-form-card" role="group" aria-label={sourceLabel(request)}>
-      <div className="web-user-input-title">
-        <ListChecks size={16} aria-hidden="true" />
-        <span>{sourceLabel(request)}</span>
+    <div
+      className={`web-user-input-card web-mcp-form-card${isToolApproval ? " is-tool-approval" : " is-form-request"}`}
+      role="group"
+      aria-label={requestTitle(request)}
+    >
+      <div className="web-mcp-form-heading">
+        <span className="web-mcp-form-icon" aria-hidden="true">
+          {isToolApproval ? <ShieldCheck size={19} /> : <ListChecks size={19} />}
+        </span>
+        <div className="web-mcp-form-heading-copy">
+          <div className="web-mcp-form-kicker">
+            {isToolApproval ? "MCP tool approval" : "MCP information request"}
+          </div>
+          <div className="web-mcp-form-title">{requestTitle(request)}</div>
+          <div className="web-mcp-form-server">
+            <span>MCP server</span>
+            <code>{request.serverName}</code>
+          </div>
+        </div>
       </div>
-      <div className="web-mcp-form-server">{request.serverName}</div>
-      <p className="web-user-input-prompt">{request.message}</p>
+      <p className="web-user-input-prompt web-mcp-form-prompt">{request.message}</p>
       {request.fields.map((field) => (
         <fieldset className="web-user-input-question web-mcp-form-field" key={field.name}>
           <legend className="web-user-input-header">
@@ -230,13 +253,28 @@ function McpFormCard({
         </fieldset>
       ))}
       <div className="web-user-input-actions web-mcp-form-actions">
-        <button type="button" disabled={!valid || submitting} onClick={() => submit("accept")}>
-          {submitting ? "Submitting…" : "Accept"}
+        <button
+          className="web-mcp-form-action web-mcp-form-action-primary"
+          type="button"
+          disabled={!valid || submitting}
+          onClick={() => submit("accept")}
+        >
+          {submitting ? "Submitting…" : isToolApproval ? "Approve" : "Submit"}
         </button>
-        <button type="button" disabled={submitting} onClick={() => submit("decline")}>
+        <button
+          className="web-mcp-form-action web-mcp-form-action-decline"
+          type="button"
+          disabled={submitting}
+          onClick={() => submit("decline")}
+        >
           Decline
         </button>
-        <button type="button" disabled={submitting} onClick={() => submit("cancel")}>
+        <button
+          className="web-mcp-form-action web-mcp-form-action-cancel"
+          type="button"
+          disabled={submitting}
+          onClick={() => submit("cancel")}
+        >
           Cancel
         </button>
       </div>

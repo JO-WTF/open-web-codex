@@ -949,7 +949,7 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     .await;
     assert_eq!(run_pending.0, StatusCode::OK);
     assert_eq!(run_pending.1[0]["subject"]["kind"], "command");
-    assert_eq!(run_pending.1[0]["subject"]["action"], "workspace_command");
+    assert_eq!(run_pending.1[0]["subject"]["action"], "execute");
     assert!(!run_pending.1.to_string().contains("git status"));
     assert!(!run_pending.1.to_string().contains("/private/server/path"));
 
@@ -979,7 +979,8 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
             turn_id, ordinal, task, display_title, status, current_behavior,
             first_observed_sequence, last_observed_sequence
          ) VALUES ($1, $2, $3, $4, 'approval-child-thread', 'child-turn-1', 1,
-                   'Prepare data', 'Data Agent', 'waiting', 'Waiting for input', 1, 1)",
+                   'Prepare data', 'Agent · use this ResourceRef for the full assigned task',
+                   'waiting', 'Waiting for input', 1, 1)",
     )
     .bind(first_organization_id)
     .bind(profile_id)
@@ -1023,7 +1024,8 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
         .find(|value| value["id"] == child_command_approval_id.to_string())
         .expect("child generic approval projection");
     assert_eq!(child_generic["source"]["kind"], "agent");
-    assert_eq!(child_generic["source"]["displayTitle"], "Data Agent");
+    assert_eq!(child_generic["source"]["displayTitle"], "Agent");
+    assert!(!child_generic.to_string().contains("ResourceRef"));
     let early_child_frame = format!(
         "data: {}\n\n",
         json!({
@@ -1070,9 +1072,9 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     sqlx::query(
         "INSERT INTO runtime_agent_projections (
             organization_id, profile_id, workspace_id, root_run_id, thread_id,
-            parent_thread_id, source_kind, agent_path, agent_role
+            parent_thread_id, source_kind, agent_path, agent_nickname, agent_role
          ) VALUES ($1, $2, $3, $4, 'approval-child-thread', 'approval-thread',
-                   'thread_spawn', '/root/data', 'data_agent')",
+                   'thread_spawn', '/root/data', 'Wanwan', 'data_agent')",
     )
     .bind(first_organization_id)
     .bind(profile_id)
@@ -1139,7 +1141,8 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     assert_eq!(child_forms.0, StatusCode::OK);
     assert_eq!(child_forms.1[0]["id"], child_approval_id.to_string());
     assert_eq!(child_forms.1[0]["source"]["kind"], "agent");
-    assert_eq!(child_forms.1[0]["source"]["displayTitle"], "Data Agent");
+    assert_eq!(child_forms.1[0]["source"]["displayTitle"], "Wanwan");
+    assert!(!child_forms.1.to_string().contains("ResourceRef"));
     assert_eq!(child_forms.1[0]["fields"].as_array().unwrap().len(), 2);
     assert!(!child_forms.1.to_string().contains("requestedSchema"));
     assert!(!child_forms.1.to_string().contains("approval-child-thread"));

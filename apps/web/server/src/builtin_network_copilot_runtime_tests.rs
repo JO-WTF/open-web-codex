@@ -1115,8 +1115,8 @@ impl FormGateStore {
         sqlx::query(
             "INSERT INTO runtime_agent_projections \
              (organization_id, profile_id, workspace_id, root_run_id, thread_id, \
-              parent_thread_id, source_kind, agent_role) \
-             VALUES ($1, $2, $3, $4, $5, $6, 'thread_spawn', 'data_agent')",
+              parent_thread_id, source_kind, agent_nickname, agent_role) \
+             VALUES ($1, $2, $3, $4, $5, $6, 'thread_spawn', 'Wanwan', 'data_agent')",
         )
         .bind(self.actor.organization_id)
         .bind(self.profile_id)
@@ -1132,7 +1132,8 @@ impl FormGateStore {
              (organization_id, profile_id, workspace_id, root_run_id, agent_thread_id, \
               ordinal, task, display_title, status, current_behavior, \
               first_observed_sequence, last_observed_sequence) \
-             VALUES ($1, $2, $3, $4, $5, 1, 'Collect route options', 'Data Agent', \
+             VALUES ($1, $2, $3, $4, $5, 1, 'Collect route options', \
+                     'Agent · use this ResourceRef for the full assigned task', \
                      'waiting', 'Waiting for user form input', 1, 1)",
         )
         .bind(self.actor.organization_id)
@@ -1862,7 +1863,7 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
     assert_eq!(refreshed[0].fields.len(), 2);
     assert!(matches!(
         &refreshed[0].source,
-        McpFormRequestSource::Agent { display_title, .. } if display_title == "Data Agent"
+        McpFormRequestSource::Agent { display_title, .. } if display_title == "Wanwan"
     ));
     assert!(
         approvals

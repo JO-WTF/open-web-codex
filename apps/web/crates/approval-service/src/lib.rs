@@ -488,7 +488,12 @@ impl ApprovalService {
         for row in rows {
             let payload: Value = row.get("request_payload");
             let source = self
-                .resolve_mcp_form_source(actor, run_id, row.get("thread_id"))
+                .resolve_mcp_form_source(
+                    actor,
+                    run_id,
+                    row.get("thread_id"),
+                    payload.get("turnId").and_then(Value::as_str),
+                )
                 .await?
                 .ok_or(ApprovalServiceError::Invalid)?;
             summaries.push(PendingMcpFormSummary {
@@ -526,8 +531,8 @@ impl ApprovalService {
             return Ok(Some(ApprovalRequestSource::Root));
         }
 
-        let row = sqlx::query(
-            "SELECT execution.id, execution.display_title \
+        let execution_id = sqlx::query_scalar::<_, Uuid>(
+            "SELECT execution.id \
              FROM runtime_agent_execution_projections execution \
              JOIN runs r ON r.id = execution.root_run_id \
              WHERE execution.root_run_id = $1 AND execution.organization_id = $2 \
@@ -542,17 +547,12 @@ impl ApprovalService {
         .bind(turn_id)
         .fetch_optional(&self.db)
         .await?;
-        if let Some(row) = row {
-            return Ok(Some(ApprovalRequestSource::Agent {
-                execution_id: Some(row.get("id")),
-                display_title: row.get("display_title"),
-            }));
-        }
 
-        // Runtime agent projections can be persisted before the execution
-        // projection during event races. Keep the approval recoverable with a
-        // bounded, non-authoritative display fallback until the execution row
-        // arrives; the optional execution id makes that uncertainty explicit.
+        // The execution display title describes the assigned task, not the
+        // Agent identity. Approval cards must use the authoritative child
+        // projection's nickname/role so a long task or ResourceRef never
+        // becomes the requester label. The optional execution id keeps an
+        // early projection race explicit without inventing an identity.
         let projection = sqlx::query(
             "SELECT agent.agent_nickname, agent.agent_role \
              FROM runtime_agent_projections agent \
@@ -573,7 +573,7 @@ impl ApprovalService {
             })
             .unwrap_or_else(|| "Agent".to_string());
         Ok(Some(ApprovalRequestSource::Agent {
-            execution_id: None,
+            execution_id,
             display_title,
         }))
     }
@@ -611,37 +611,27 @@ impl ApprovalService {
         actor: ApprovalActor,
         run_id: Uuid,
         thread_id: &str,
+        turn_id: Option<&str>,
     ) -> Result<Option<McpFormRequestSource>, ApprovalServiceError> {
-        let is_root = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM runs r \
-             WHERE r.id = $1 AND r.organization_id = $2 AND r.codex_thread_id = $3)",
+        Ok(
+            match self
+                .resolve_approval_source(actor, run_id, thread_id, turn_id)
+                .await?
+            {
+                Some(ApprovalRequestSource::Root) => Some(McpFormRequestSource::Root),
+                Some(ApprovalRequestSource::Agent {
+                    execution_id: Some(execution_id),
+                    display_title,
+                }) => Some(McpFormRequestSource::Agent {
+                    execution_id,
+                    display_title,
+                }),
+                Some(ApprovalRequestSource::Agent {
+                    execution_id: None, ..
+                })
+                | None => None,
+            },
         )
-        .bind(run_id)
-        .bind(actor.organization_id)
-        .bind(thread_id)
-        .fetch_one(&self.db)
-        .await?;
-        if is_root {
-            return Ok(Some(McpFormRequestSource::Root));
-        }
-
-        let row = sqlx::query(
-            "SELECT execution.id, execution.display_title \
-             FROM runtime_agent_execution_projections execution \
-             JOIN runs r ON r.id = execution.root_run_id \
-             WHERE execution.root_run_id = $1 AND execution.organization_id = $2 \
-               AND r.organization_id = $2 AND execution.agent_thread_id = $3 \
-             ORDER BY execution.ordinal DESC LIMIT 1",
-        )
-        .bind(run_id)
-        .bind(actor.organization_id)
-        .bind(thread_id)
-        .fetch_optional(&self.db)
-        .await?;
-        Ok(row.map(|row| McpFormRequestSource::Agent {
-            execution_id: row.get("id"),
-            display_title: row.get("display_title"),
-        }))
     }
 
     /// Resolve a Runtime request id to its browser-safe platform identity.
