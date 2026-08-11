@@ -58,6 +58,7 @@ from .map_service import (
 )
 from .mapping_service import CaseMappingService
 from .matrix import build_cost_matrix as _build_composable_cost_matrix
+from .matrix import build_provided_route_matrix as _build_provided_route_matrix
 from .matrix import build_route_matrix_with_reuse
 from .matrix import plan_route_matrix as _plan_composable_route_matrix
 from .matrix import register_navigation_route_matrix as _register_composable_navigation_matrix
@@ -75,6 +76,7 @@ from .models import (
     FacilityLocationToolResult,
     FinancialEvaluation,
     FinancialEvaluationToolResult,
+    NetworkBaselineResourceToolResult,
     NetworkFinalArtifactDescriptor,
     NetworkFinalArtifactToolResult,
     NetworkInput,
@@ -92,6 +94,7 @@ from .models import (
     RiskRegisterToolResult,
     RouteEntry,
     ScenarioComparison,
+    UncoveredCitySummary,
     ValidationResult,
 )
 from .models import RouteMatrix as LegacyRouteMatrix
@@ -107,6 +110,7 @@ from .optimization_models import (
     AssignmentResult,
     BaselineResult,
     CostSummary,
+    CoverageMetricSummary,
     PMedianSolution,
     ScenarioResult,
     ScenarioSpec,
@@ -132,6 +136,7 @@ from .scenario_service import FacilityLocationService, NetworkScenarioService
 from .solver import (
     SolverUnavailable,
     compare_assignments,
+    coverage_metrics,
     enumerate_p_median,
     service_metrics,
     solve_assignment,
@@ -190,12 +195,60 @@ def _bounded_id_summary(values: list[str], *, limit: int = 4) -> str:
 
 
 def _service_metric_summary(metrics: list[ServiceMetric], *, limit: int = 8) -> str:
-    shown = [f"{metric.target_hours:g}h={metric.coverage_rate:.1%}" for metric in metrics[:limit]]
+    shown = [
+        f"{metric.target_hours:g}h demand-weighted={metric.coverage_rate:.1%}"
+        for metric in metrics[:limit]
+    ]
     if not shown:
         return "none"
     remaining = len(metrics) - len(shown)
     suffix = f", +{remaining} more" if remaining else ""
     return f"{', '.join(shown)}{suffix}"
+
+
+def _baseline_coverage_projection(
+    assignment: AssignmentResult,
+    demand_cities: list[DemandCityRecord],
+    warehouses: list[WarehouseRecord],
+    targets: list[float],
+) -> tuple[list[CoverageMetricSummary], float, list[UncoveredCitySummary]]:
+    coverage = coverage_metrics(assignment, targets)
+    detail_target = max(targets)
+    demand_by_id = {item.city_id: item for item in demand_cities}
+    warehouse_by_id = {item.warehouse_id: item for item in warehouses}
+    uncovered: list[UncoveredCitySummary] = []
+    for row in sorted(assignment.rows, key=lambda item: item.demand_city_id):
+        if row.duration_hours is not None and row.duration_hours <= detail_target:
+            continue
+        demand = demand_by_id[row.demand_city_id]
+        warehouse = warehouse_by_id.get(row.warehouse_id) if row.warehouse_id else None
+        uncovered.append(
+            UncoveredCitySummary(
+                demand_city_id=row.demand_city_id,
+                demand_city_name=demand.city_name,
+                warehouse_id=row.warehouse_id,
+                warehouse_name=warehouse.warehouse_name if warehouse else None,
+                duration_hours=row.duration_hours,
+                demand_quantity=row.demand_quantity,
+            )
+        )
+    return coverage, detail_target, uncovered
+
+
+def _coverage_metric_summary(
+    metrics: list[CoverageMetricSummary], *, limit: int = 8
+) -> str:
+    shown = [
+        f"{metric.target_hours:g}h city-count={metric.city_coverage_rate:.1%} "
+        f"({metric.covered_city_count}/{metric.total_city_count}), "
+        f"demand-weighted={metric.demand_weighted_coverage_rate:.1%}"
+        for metric in metrics[:limit]
+    ]
+    if not shown:
+        return "none"
+    remaining = len(metrics) - len(shown)
+    suffix = f", +{remaining} more" if remaining else ""
+    return f"{'; '.join(shown)}{suffix}"
 
 
 def _cost_metric_summary(cost: CostSummary | None) -> str:
@@ -2538,7 +2591,7 @@ def compare_network_scenarios(
     service_targets: Annotated[list[float], Field(min_length=1, max_length=32)],
     ctx: Context,
 ) -> CallToolResult:
-    """Compare a typed baseline with one scenario or facility-location result."""
+    """Compare a typed baseline with another baseline, scenario, or location result."""
     _runtime().require_workspace(ctx)
     if any(target <= 0 for target in service_targets):
         raise McpResourceContractError("comparison_service_targets_invalid")
@@ -2552,6 +2605,14 @@ def compare_network_scenarios(
             candidate_ref,
             "network_scenario.v2",
             ScenarioResult,
+        )
+        candidate_assignment = candidate.assignment
+        candidate_active_ids = set(candidate.active_warehouse_ids)
+    elif candidate_ref.resource_schema == "network_baseline.v2":
+        candidate = _runtime().load_model(
+            candidate_ref,
+            "network_baseline.v2",
+            BaselineResult,
         )
         candidate_assignment = candidate.assignment
         candidate_active_ids = set(candidate.active_warehouse_ids)
@@ -2576,7 +2637,8 @@ def compare_network_scenarios(
     )
     service_summary = (
         ", ".join(
-            f"{metric.target_hours:g}h {metric.before_coverage_rate:.1%}→"
+            f"{metric.target_hours:g}h demand-weighted "
+            f"{metric.before_coverage_rate:.1%}→"
             f"{metric.after_coverage_rate:.1%} ({metric.coverage_rate_delta:+.1%})"
             for metric in comparison.service[:8]
         )
@@ -3309,6 +3371,7 @@ def prepare_network_distribution_map(
         warehouses=prepared.warehouses,
         current_assignments=prepared.current_assignments,
         route_quotes=prepared.route_quotes,
+        provided_route_facts=prepared.provided_route_facts,
         issues=prepared.issues,
     )
     geojson = build_network_distribution_geojson(
@@ -3369,7 +3432,8 @@ def plan_route_matrix(
         plan.schema_version,
         plan,
         f"Planned {plan.route_count} layered routes using {plan.method}; "
-        f"estimated billable navigation calls: {plan.estimated_billable_calls}.",
+        f"estimated billable navigation calls: {plan.estimated_billable_calls}; "
+        f"provided route facts available: {len(prepared.provided_route_facts)}.",
     )
 
 
@@ -3408,6 +3472,34 @@ def build_haversine_route_matrix(
         f"{validation['reused_pair_count']} reused, "
         f"{validation['computed_pair_count']} computed, and "
         f"{validation['missing_pair_count']} missing pairs.",
+    )
+
+
+@mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
+def build_provided_route_matrix(
+    normalized_input_ref: ResourceRef,
+    warehouse_scope: Literal["existing_only", "all_warehouses"],
+    ctx: Context,
+) -> CallToolResult:
+    """Materialize uploaded distance and duration facts for one warehouse scope."""
+    _runtime().require_workspace(ctx)
+    prepared = _load_ready_network(normalized_input_ref)
+    warehouses = prepared.warehouses
+    if warehouse_scope == "existing_only":
+        warehouses = [warehouse for warehouse in warehouses if warehouse.is_existing]
+    matrix = _build_provided_route_matrix(
+        prepared.demand_cities,
+        warehouses,
+        prepared.provided_route_facts,
+    )
+    validation = matrix.validation
+    return _runtime().publish(
+        matrix.schema_version,
+        matrix,
+        f"Built provided route matrix for {warehouse_scope} with "
+        f"{validation['provided_pair_count']} supplied, "
+        f"{validation['missing_pair_count']} missing, and "
+        f"{validation['ignored_input_pair_count']} out-of-scope pair facts.",
     )
 
 
@@ -3561,7 +3653,7 @@ def evaluate_network_baseline(
     ],
     ctx: Context,
     cost_matrix_ref: ResourceRef | None = None,
-) -> CallToolResult:
+) -> Annotated[CallToolResult, NetworkBaselineResourceToolResult]:
     """Evaluate one explicitly selected actual or optimized-existing baseline."""
     _runtime().require_workspace(ctx)
     if any(target <= 0 for target in service_targets):
@@ -3606,11 +3698,19 @@ def evaluate_network_baseline(
             active_ids,
         )
         label = "optimized_existing_footprint"
+    ordered_targets = sorted(set(service_targets))
+    coverage, detail_target, uncovered = _baseline_coverage_projection(
+        assignment,
+        prepared.demand_cities,
+        prepared.warehouses,
+        ordered_targets,
+    )
     baseline = BaselineResult(
         label=label,
         active_warehouse_ids=sorted(active_ids),
         assignment=assignment,
-        service=service_metrics(assignment, sorted(set(service_targets))),
+        service=service_metrics(assignment, ordered_targets),
+        coverage=coverage,
         cost=summarize_assignment_cost(assignment, costs) if costs is not None else None,
         notice_code=None,
     )
@@ -3623,9 +3723,26 @@ def evaluate_network_baseline(
         f"Evaluated the {label_text}; active warehouses "
         f"{len(baseline.active_warehouse_ids)}, cost "
         f"{_cost_metric_summary(baseline.cost)}, service "
-        f"{_service_metric_summary(baseline.service)}."
+        f"{_coverage_metric_summary(coverage)}; uncovered at "
+        f"{detail_target:g}h: {len(uncovered)} cities."
     )
-    return _runtime().publish(baseline.schema_version, baseline, message)
+    result = _runtime().publish(baseline.schema_version, baseline, message)
+    if result.structuredContent is None:
+        raise McpResourceContractError("baseline_result_missing")
+    result.structuredContent.update(
+        {
+            "coverage_metrics": [
+                metric.model_dump(mode="json") for metric in coverage
+            ],
+            "detail_target_hours": detail_target,
+            "uncovered_city_count": len(uncovered),
+            "uncovered_cities": [
+                item.model_dump(mode="json") for item in uncovered[:100]
+            ],
+            "uncovered_cities_truncated": len(uncovered) > 100,
+        }
+    )
+    return result
 
 
 @mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
@@ -3903,6 +4020,7 @@ def _load_final_delivery_inputs(
         warehouses=prepared.warehouses,
         current_assignments=prepared.current_assignments,
         route_quotes=prepared.route_quotes,
+        provided_route_facts=prepared.provided_route_facts,
         issues=prepared.issues,
     )
     return prepared, normalized, baseline, facility, comparison

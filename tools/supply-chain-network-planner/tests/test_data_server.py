@@ -56,6 +56,12 @@ def test_data_server_exposes_only_four_composable_tools() -> None:
             "idempotentHint": True,
             "openWorldHint": False,
         }
+    geography = next(tool for tool in tools if tool.name == "prepare_network_geography")
+    assert "admin_level" not in geography.inputSchema["properties"]
+    assert set(geography.inputSchema["required"]) == {
+        "normalized_input_ref",
+        "administrative_catalog_relative_path",
+    }
 
 
 def test_sample_one_inspect_publishes_counts_and_fields_resource(tmp_path, monkeypatch) -> None:
@@ -200,7 +206,6 @@ def test_confirmed_rows_normalize_then_prepare_geography_with_country(
     prepared = data_server.prepare_network_geography(
         normalized_ref,
         "admin.json",
-        "city",
         object(),
     )
     prepared_ref = ResourceRef.model_validate(prepared.structuredContent["resource_ref"])

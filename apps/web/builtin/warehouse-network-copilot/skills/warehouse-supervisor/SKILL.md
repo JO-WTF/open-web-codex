@@ -14,6 +14,7 @@ description: 当用户要求准备仓网数据、分析覆盖或成本、模拟�
 - 普通 Workspace 文件路径不是 MCP ResourceRef。只要当前 Thread 中没有由 Data Tool 实际返回且仍可读取的精确 `normalized_network_input.v1` ResourceRef，即使文件名包含 `normalized`、文件来自旧 Task、旧回复声称已经准备好，Root 也必须先创建 `data_agent` 重新检查并发布当前 Resource；不得把文件路径、旧 Artifact、报告内容或模型文本交给 Network Agent 代替 ResourceRef。
 - 当一次新的仓网分析尚未明确数据要求时，先让 `network_agent` 根据用户目标列出必要输入，再把该要求连同用户确认的 Workspace 相对路径交给 `data_agent`。纯文件盘点或已有明确要求的数据准备可以直接交给 `data_agent`。
 - Data Agent 返回 `ready` 的 `normalized_network_input.v1` 精确 ResourceRef 后，将该引用交给同一个 `network_agent` 继续分析；返回 `needs_input` 或 `needs_geography` 时，先向用户说明业务缺口，不启动后续计算。
+- child 报告某项 typed Tool 能力或输出字段不存在时，按能力 owner 收敛：数据读取、映射、标准化和地理字段缺口由 Data Agent 说明，路线、成本、覆盖、模拟、优化和交付能力缺口由 Network Agent 说明。Root 不得把 Network 分析改派给 Data Agent，不得要求 child 在运行时扩写 Tool schema，也不得用模型计算、shell 或反复重试掩盖能力缺口；需要用户决策时通过原生交互返回明确选择，否则报告不可用并停止。
 
 ## 按用户目标组合能力
 

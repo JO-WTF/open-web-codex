@@ -432,6 +432,76 @@
       "title": "CostSummary",
       "type": "object"
     },
+    "CoverageMetricSummary": {
+      "additionalProperties": false,
+      "description": "Both city-count and demand-weighted service coverage for one target.",
+      "properties": {
+        "city_coverage_rate": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "City Coverage Rate",
+          "type": "number"
+        },
+        "covered_city_count": {
+          "minimum": 0,
+          "title": "Covered City Count",
+          "type": "integer"
+        },
+        "covered_demand": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Covered Demand"
+        },
+        "demand_weighted_coverage_rate": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Demand Weighted Coverage Rate",
+          "type": "number"
+        },
+        "target_hours": {
+          "exclusiveMinimum": 0,
+          "title": "Target Hours",
+          "type": "number"
+        },
+        "total_city_count": {
+          "minimum": 0,
+          "title": "Total City Count",
+          "type": "integer"
+        },
+        "total_demand": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Total Demand"
+        }
+      },
+      "required": [
+        "target_hours",
+        "covered_city_count",
+        "total_city_count",
+        "city_coverage_rate",
+        "covered_demand",
+        "total_demand",
+        "demand_weighted_coverage_rate"
+      ],
+      "title": "CoverageMetricSummary",
+      "type": "object"
+    },
     "DemandCityRecord": {
       "additionalProperties": false,
       "properties": {
@@ -546,6 +616,13 @@
             }
           ]
         },
+        "coverage": {
+          "items": {
+            "$ref": "#/$defs/CoverageMetricSummary"
+          },
+          "title": "Coverage",
+          "type": "array"
+        },
         "label": {
           "enum": [
             "actual_current",
@@ -578,6 +655,7 @@
         "active_warehouse_ids",
         "assignment",
         "service",
+        "coverage",
         "cost",
         "notice_code"
       ],

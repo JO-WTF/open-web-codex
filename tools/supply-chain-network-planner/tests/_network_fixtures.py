@@ -9,6 +9,7 @@ from supply_chain_planner.matrix_models import CostMatrix, CostMatrixRow, RouteC
 from supply_chain_planner.network_models import (
     CurrentAssignmentRecord,
     DemandCityRecord,
+    ProvidedRouteFactRecord,
     WarehouseRecord,
 )
 
@@ -70,6 +71,28 @@ def indonesia_route_quotes() -> list[RouteCostQuote]:
             price_per_vehicle=row["price_per_vehicle"],
             currency=row["currency"],
             vehicle_capacity=row["vehicle_capacity"],
+        )
+        for row in _csv_rows(path)
+    ]
+
+
+def indonesia_provided_route_facts() -> list[ProvidedRouteFactRecord]:
+    path = (
+        Path(__file__).parents[1]
+        / "examples"
+        / "indonesia-network"
+        / "base"
+        / "route-quotes.csv"
+    )
+    return [
+        ProvidedRouteFactRecord(
+            origin_id=row["origin_id"],
+            destination_id=row["destination_id"],
+            destination_name=row["destination_name"],
+            layer=row["layer"],
+            distance_km=row["distance_km"],
+            duration_hours=row["duration_hours"],
+            source_method=row["method"],
         )
         for row in _csv_rows(path)
     ]

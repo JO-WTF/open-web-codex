@@ -498,7 +498,11 @@ def normalize_network_input(
     return _publish_json(
         "normalized_network_input.v1",
         payload,
-        f"Normalized {len(confirmed_sources)} confirmed Workspace sources; state is {state}.",
+        f"Normalized {len(confirmed_sources)} confirmed Workspace sources; "
+        f"{len(batch.demand_cities)} demand cities, {len(batch.warehouses)} warehouses, "
+        f"{len(batch.current_assignments)} current assignments, "
+        f"{len(batch.route_quotes)} route quotes, and "
+        f"{len(batch.provided_route_facts)} provided route facts; state is {state}.",
     )
 
 
@@ -506,7 +510,6 @@ def normalize_network_input(
 def prepare_network_geography(
     normalized_input_ref: ResourceRef,
     administrative_catalog_relative_path: str,
-    admin_level: str,
     ctx: Context,
     overrides: list[GeographyOverride] | None = None,
 ) -> Annotated[CallToolResult, DataAgentResourceToolResult]:
@@ -524,14 +527,21 @@ def prepare_network_geography(
                 "warehouses",
                 "current_assignments",
                 "route_quotes",
+                "provided_route_facts",
                 "issues",
             }
         )
     )
+    catalog_document = read_json_document(
+        _workspace(ctx), administrative_catalog_relative_path
+    )
+    admin_level = catalog_document.get("admin_level")
+    if not isinstance(admin_level, str) or not admin_level.strip():
+        raise ValueError("administrative_catalog_level_missing")
     catalog = _load_administrative_catalog(
         country_code,
-        admin_level,
-        read_json_document(_workspace(ctx), administrative_catalog_relative_path),
+        admin_level.strip(),
+        catalog_document,
     )
     override_map = {
         (override.entity, override.entity_id): override.catalog_city_id
@@ -570,7 +580,11 @@ def prepare_network_geography(
             state=state,
             **prepared.model_dump(mode="json"),
         ),
-        f"Prepared network geography; state is {state}.",
+        f"Prepared network geography from the catalog's {admin_level.strip()} level; "
+        f"{len(prepared.demand_cities)} demand cities and "
+        f"{len(prepared.warehouses)} warehouses; missing-coordinate records "
+        f"{sum(item.longitude is None or item.latitude is None for item in [*prepared.demand_cities, *prepared.warehouses])}; "
+        f"state is {state}.",
     )
 
 

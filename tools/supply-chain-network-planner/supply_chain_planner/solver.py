@@ -20,6 +20,7 @@ from .optimization_models import (
     AssignmentRow,
     CityAssignmentChange,
     CostSummary,
+    CoverageMetricSummary,
     FacilityLocationResult,
     ServiceComparison,
     ServiceMetric,
@@ -274,6 +275,40 @@ def service_metrics(
         )
         for target in targets
     ]
+
+
+def coverage_metrics(
+    assignment: AssignmentResult,
+    targets: Iterable[float],
+) -> list[CoverageMetricSummary]:
+    """Compute both supported service-coverage denominators from one assignment."""
+
+    target_values = list(targets)
+    total_city_count = len(assignment.rows)
+    demand_by_target = {
+        metric.target_hours: metric
+        for metric in service_metrics(assignment, target_values)
+    }
+    result: list[CoverageMetricSummary] = []
+    for target in target_values:
+        covered_city_count = sum(
+            row.duration_hours is not None and row.duration_hours <= target
+            for row in assignment.rows
+        )
+        result.append(
+            CoverageMetricSummary(
+                target_hours=target,
+                covered_city_count=covered_city_count,
+                total_city_count=total_city_count,
+                city_coverage_rate=(
+                    covered_city_count / total_city_count if total_city_count else 0
+                ),
+                covered_demand=demand_by_target[target].covered_demand,
+                total_demand=demand_by_target[target].total_demand,
+                demand_weighted_coverage_rate=demand_by_target[target].coverage_rate,
+            )
+        )
+    return result
 
 
 def compare_assignments(

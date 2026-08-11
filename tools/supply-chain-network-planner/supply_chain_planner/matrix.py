@@ -19,11 +19,17 @@ from .matrix_models import (
     RouteMatrixRow,
     WarehouseScope,
 )
-from .network_models import DemandCityRecord, RouteQuoteRecord, WarehouseRecord
+from .network_models import (
+    DemandCityRecord,
+    ProvidedRouteFactRecord,
+    RouteQuoteRecord,
+    WarehouseRecord,
+)
 
 HAVERSINE_TOOL_VERSION = "haversine.v1"
 QUOTE_UNIT_COST_TOOL_VERSION = "quote-unit-cost.v1"
 DISTANCE_UNIT_COST_TOOL_VERSION = "distance-unit-cost.v1"
+PROVIDED_INPUT_TOOL_VERSION = "provided-input.v1"
 
 
 def plan_route_matrix(
@@ -63,6 +69,59 @@ def build_haversine_route_matrix(
         [],
         detour_coefficient,
         average_speed_kph,
+    )
+
+
+def build_provided_route_matrix(
+    demand_cities: list[DemandCityRecord],
+    warehouses: list[WarehouseRecord],
+    provided_route_facts: list[ProvidedRouteFactRecord],
+) -> RouteMatrix:
+    """Materialize exact uploaded distance/duration facts for expected route pairs."""
+
+    expected = _expected_route_pairs(demand_cities, warehouses)
+    expected_set = set(expected)
+    supplied: dict[tuple[str, str, NetworkLayer], ProvidedRouteFactRecord] = {}
+    ignored = 0
+    source_methods: dict[str, int] = {}
+    for fact in provided_route_facts:
+        key = (fact.origin_id, fact.destination_id, fact.layer)
+        if key not in expected_set:
+            ignored += 1
+            continue
+        if key in supplied:
+            raise ValueError(
+                f"provided_route_fact_duplicate_pair:{fact.origin_id}:"
+                f"{fact.destination_id}:{fact.layer}"
+            )
+        supplied[key] = fact
+        source_methods[fact.source_method] = source_methods.get(fact.source_method, 0) + 1
+    missing = sorted(expected_set - set(supplied))
+    rows = [
+        RouteMatrixRow(
+            origin_id=fact.origin_id,
+            destination_id=fact.destination_id,
+            layer=fact.layer,
+            distance_km=fact.distance_km,
+            duration_hours=fact.duration_hours,
+            method="provided",
+            tool_version=PROVIDED_INPUT_TOOL_VERSION,
+        )
+        for key in expected
+        if (fact := supplied.get(key)) is not None
+    ]
+    return RouteMatrix(
+        method="provided",
+        rows=rows,
+        missing_routes=missing,
+        validation={
+            "expected_pair_count": len(expected),
+            "provided_pair_count": len(rows),
+            "ignored_input_pair_count": ignored,
+            "missing_pair_count": len(missing),
+            "complete": not missing,
+            "source_method_counts": dict(sorted(source_methods.items())),
+        },
     )
 
 

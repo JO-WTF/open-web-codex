@@ -142,6 +142,7 @@ async def smoke() -> None:
                 expected_tools = {
                     "plan_route_matrix",
                     "build_haversine_route_matrix",
+                    "build_provided_route_matrix",
                     "register_navigation_route_matrix",
                     "validate_route_matrix",
                     "plan_cost_matrix",

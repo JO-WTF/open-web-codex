@@ -24,6 +24,7 @@ from .optimization_models import (
     AssignmentResult,
     BaselineResult,
     CostSummary,
+    CoverageMetricSummary,
     PMedianSolution,
     ServiceMetric,
 )
@@ -54,6 +55,7 @@ class NetworkBaselineReport(DeliveryModel):
     active_warehouse_ids: list[str]
     assignment: AssignmentResult
     service: list[ServiceMetric]
+    coverage: list[CoverageMetricSummary]
     cost: CostSummary | None
     notice_code: str | None
 
@@ -134,6 +136,7 @@ def build_network_planning_report_bundle(
             active_warehouse_ids=sorted(validated.baseline_active_ids),
             assignment=ordered_assignment(baseline.assignment),
             service=ordered_metrics(baseline.service),
+            coverage=sorted(baseline.coverage, key=lambda item: item.target_hours),
             cost=ordered_cost(baseline.cost),
             notice_code=baseline.notice_code,
         ),

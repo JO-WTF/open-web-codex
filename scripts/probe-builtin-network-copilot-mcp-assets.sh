@@ -29,7 +29,8 @@ trap 'rm -rf -- "$probe_root"' EXIT
 profile_home="$probe_root/profile"
 profile_runtime="$profile_home/.open-web-codex"
 profile_logs="$profile_runtime/logs"
-mkdir -p "$profile_logs" "$profile_runtime/mcp-state/maps-mcp"
+workspace_root="$probe_root/workspace"
+mkdir -p "$profile_logs" "$profile_runtime/mcp-state/maps-mcp" "$workspace_root"
 
 snapshot_tree() {
   python3 - "$1" "$2" <<'PY'
@@ -41,7 +42,9 @@ import sys
 root = pathlib.Path(sys.argv[1]).resolve(strict=True)
 output = pathlib.Path(sys.argv[2])
 rows: list[str] = []
+volatile_directories = {".pytest_cache", ".ruff_cache", ".venv", "__pycache__"}
 for directory, names, files in os.walk(root, followlinks=False):
+    names[:] = [name for name in names if name not in volatile_directories]
     base = pathlib.Path(directory)
     for name in sorted([*names, *files]):
         path = base / name
@@ -78,7 +81,7 @@ export SUPPLY_CHAIN_MCP_AUTO_INSTALL=0
 export MAPS_MCP_AUTO_INSTALL=0
 export PYTHONDONTWRITEBYTECODE=1
 
-SUPPLY_LAUNCHER="$supply_launcher" SUPPLY_ROOT="$supply_root" \
+SUPPLY_LAUNCHER="$supply_launcher" PROBE_WORKSPACE="$workspace_root" \
   "$supply_venv/bin/python" - <<'PY'
 import asyncio
 import os
@@ -86,58 +89,51 @@ import os
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-REQUIRED = {
+EXPECTED = {
     "--data-server": {
         "discover_workspace_sources",
         "inspect_workspace_sources",
         "normalize_network_input",
-        "validate_normalized_network_input",
-        "load_administrative_catalog",
-        "resolve_place_names",
-        "build_administrative_candidates",
-        "validate_points_within_boundaries",
+        "prepare_network_geography",
     },
-    "--demo-server": {"create_demo_workspace_sources"},
     "network": {
-        "compute_optimal_assignment",
-        "evaluate_service_targets",
-        "summarize_network_cost",
-        "compare_network_scenarios",
         "plan_route_matrix",
         "build_haversine_route_matrix",
+        "build_provided_route_matrix",
         "validate_route_matrix",
         "register_navigation_route_matrix",
         "plan_cost_matrix",
+        "prepare_network_distribution_map",
         "evaluate_network_baseline",
         "evaluate_facility_scenario",
         "solve_p_median",
-        "solve_service_constrained_location",
+        "compare_network_scenarios",
         "render_network_comparison_map",
+        "publish_network_planning_report",
     },
 }
 
 
 async def inspect(mode: str) -> None:
-    root = os.environ["SUPPLY_ROOT"]
-    args = ["--workspace-root", root]
+    workspace = os.environ["PROBE_WORKSPACE"]
+    args = []
     if mode != "network":
-        args.insert(0, mode)
+        args.append(mode)
     params = StdioServerParameters(
         command=os.environ["SUPPLY_LAUNCHER"],
         args=args,
-        cwd=root,
+        cwd=workspace,
         env=dict(os.environ),
     )
     async with stdio_client(params) as streams:
         async with ClientSession(*streams) as session:
             await asyncio.wait_for(session.initialize(), timeout=20)
             names = {tool.name for tool in (await asyncio.wait_for(session.list_tools(), timeout=20)).tools}
-            missing = REQUIRED[mode] - names
-            assert not missing, f"{mode} missing tools: {sorted(missing)}"
+            assert names == EXPECTED[mode], f"{mode} inventory mismatch: {sorted(names)}"
 
 
 async def main() -> None:
-    for mode in ("--data-server", "--demo-server", "network"):
+    for mode in ("--data-server", "network"):
         await inspect(mode)
 
 

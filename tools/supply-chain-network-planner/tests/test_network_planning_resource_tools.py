@@ -9,6 +9,7 @@ import pytest
 from _network_fixtures import (
     indonesia_current_assignments,
     indonesia_network_fixture,
+    indonesia_provided_route_facts,
     indonesia_route_quotes,
 )
 from pydantic import ValidationError
@@ -23,6 +24,7 @@ from supply_chain_planner.mcp_resources import (
     McpResourceRuntime,
 )
 from supply_chain_planner.models import (
+    NetworkBaselineResourceToolResult,
     NetworkFinalArtifactToolResult,
     PreparedNetworkResource,
 )
@@ -100,6 +102,7 @@ def _published_network(
         warehouses=fixture.warehouses,
         current_assignments=indonesia_current_assignments(),
         route_quotes=route_quotes,
+        provided_route_facts=indonesia_provided_route_facts(),
     )
     routes = build_haversine_route_matrix(
         fixture.demand,
@@ -159,7 +162,17 @@ def _sample2_resource_refs(
     assert baseline_result.structuredContent is not None
     baseline_summary = baseline_result.structuredContent["summary"]
     assert "active warehouses 11" in baseline_summary
-    assert "6h=" in baseline_summary and "12h=" in baseline_summary
+    assert "6h city-count=" in baseline_summary
+    assert "12h city-count=" in baseline_summary
+    typed_baseline = NetworkBaselineResourceToolResult.model_validate(
+        baseline_result.structuredContent
+    )
+    assert [metric.target_hours for metric in typed_baseline.coverage_metrics] == [
+        6,
+        12,
+        18,
+    ]
+    assert typed_baseline.uncovered_city_count == len(typed_baseline.uncovered_cities)
     facility_ref = _result_ref(
         server.solve_p_median(
             prepared_ref,
@@ -190,6 +203,7 @@ def test_network_planning_tools_require_explicit_parameters_and_hide_context() -
     safe_local_tools = {
         "plan_route_matrix",
         "build_haversine_route_matrix",
+        "build_provided_route_matrix",
         "validate_route_matrix",
         "register_navigation_route_matrix",
         "plan_cost_matrix",
@@ -348,6 +362,11 @@ def test_s2_final_tools_create_exact_self_contained_json_artifacts(
     assert len(report_bundle.baseline.assignment.rows) == 50
     assert len(report_bundle.facility.assignment.rows) == 50
     assert report_bundle.baseline.label == "actual_current"
+    assert [metric.target_hours for metric in report_bundle.baseline.coverage] == [
+        6,
+        12,
+        18,
+    ]
     assert [metric.target_hours for metric in report_bundle.facility.service] == [
         6,
         12,
@@ -420,6 +439,7 @@ def test_s3_reuses_prepared_resources_and_only_closes_bekasi(
     )
     assert set(baseline.active_warehouse_ids) == existing_ids
     assert baseline.label == "actual_current"
+    assert [metric.target_hours for metric in baseline.coverage] == [6, 12, 18]
 
     scenario_result = server.evaluate_facility_scenario(
         prepared_ref,
@@ -437,7 +457,7 @@ def test_s3_reuses_prepared_resources_and_only_closes_bekasi(
     scenario_summary = scenario_result.structuredContent["summary"]
     assert "10 active warehouses" in scenario_summary
     assert f"removed [{BEKASI_ID}]" in scenario_summary
-    assert "service 12h=" in scenario_summary
+    assert "service 12h demand-weighted=" in scenario_summary
     scenario = server._runtime().load_model(
         scenario_ref,
         "network_scenario.v2",
@@ -474,6 +494,52 @@ def test_s3_reuses_prepared_resources_and_only_closes_bekasi(
     assert len(comparison.reassigned_city_ids) == 50
 
 
+def test_comparison_accepts_actual_and_optimized_baseline_resources(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace, store = _runtime(tmp_path, monkeypatch)
+    ctx = _context(workspace)
+    prepared_ref, route_ref, cost_ref, _existing_ids, _candidate_ids = (
+        _published_network(store)
+    )
+    actual_ref = _result_ref(
+        server.evaluate_network_baseline(
+            prepared_ref,
+            route_ref,
+            "min_cost",
+            [12],
+            "actual_current",
+            ctx,
+            cost_ref,
+        )
+    )
+    optimized_ref = _result_ref(
+        server.evaluate_network_baseline(
+            prepared_ref,
+            route_ref,
+            "min_cost",
+            [12],
+            "optimized_existing_footprint",
+            ctx,
+            cost_ref,
+        )
+    )
+
+    comparison_ref = _result_ref(
+        server.compare_network_scenarios(actual_ref, optimized_ref, [12], ctx)
+    )
+    comparison = server._runtime().load_model(
+        comparison_ref,
+        "network_assignment_comparison.v1",
+        AssignmentComparison,
+    )
+
+    assert comparison.selected_warehouse_ids == []
+    assert comparison.removed_warehouse_ids == []
+    assert comparison.requested_service_targets == [12]
+    assert len(comparison.city_changes) == 50
+
+
 def test_s2_opens_exactly_two_candidates_and_compares_actual_baseline(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -493,7 +559,7 @@ def test_s2_opens_exactly_two_candidates_and_compares_actual_baseline(
     )
     baseline_ref = _result_ref(baseline_result)
     assert baseline_result.structuredContent is not None
-    assert "6h=" in baseline_result.structuredContent["summary"]
+    assert "6h city-count=" in baseline_result.structuredContent["summary"]
     facility_result = server.solve_p_median(
         prepared_ref,
         route_ref,
@@ -515,7 +581,7 @@ def test_s2_opens_exactly_two_candidates_and_compares_actual_baseline(
     assert facility_result.structuredContent is not None
     facility_summary = facility_result.structuredContent["summary"]
     assert "opened [WH-CANDIDATE-KENDARI, WH-CANDIDATE-MANADO]" in facility_summary
-    assert "service 6h=" in facility_summary
+    assert "service 6h demand-weighted=" in facility_summary
     facility = server._runtime().load_model(
         facility_ref,
         "facility_location_solution.v3",

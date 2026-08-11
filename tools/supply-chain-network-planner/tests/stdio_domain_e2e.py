@@ -16,6 +16,7 @@ import pytest
 from _network_fixtures import (
     indonesia_current_assignments,
     indonesia_network_fixture,
+    indonesia_provided_route_facts,
     indonesia_route_quotes,
 )
 from mcp import ClientSession, StdioServerParameters
@@ -77,6 +78,10 @@ async def _read_resource(
 
 def _write_sources(workspace: Path) -> list[str]:
     fixture = indonesia_network_fixture()
+    facts = {
+        (item.origin_id, item.destination_id, item.layer): item
+        for item in indonesia_provided_route_facts()
+    }
     sources = {
         "demand.json": [item.model_dump(mode="json") for item in fixture.demand],
         "existing.json": [
@@ -93,7 +98,23 @@ def _write_sources(workspace: Path) -> list[str]:
             item.model_dump(mode="json") for item in indonesia_current_assignments()
         ],
         "quotes.json": [
-            item.model_dump(mode="json") for item in indonesia_route_quotes()
+            {
+                **item.model_dump(mode="json"),
+                **facts[
+                    (item.origin_id, item.destination_id, item.layer)
+                ].model_dump(
+                    mode="json",
+                    include={
+                        "destination_name",
+                        "distance_km",
+                        "duration_hours",
+                    },
+                ),
+                "method": facts[
+                    (item.origin_id, item.destination_id, item.layer)
+                ].source_method,
+            }
+            for item in indonesia_route_quotes()
         ],
     }
     for relative_path, rows in sources.items():
@@ -168,10 +189,14 @@ def _confirmed_sources() -> list[dict[str, object]]:
             "mappings": _mappings(
                 ("origin_id", "normalize_identifier"),
                 ("destination_id", "normalize_identifier"),
+                ("destination_name", "trim"),
                 ("layer", "trim"),
+                ("distance_km", "parse_decimal"),
+                ("duration_hours", "parse_decimal"),
                 ("price_per_vehicle", "parse_decimal"),
                 ("currency", "trim"),
                 ("vehicle_capacity", "parse_decimal"),
+                ("method", "trim"),
             ),
         },
     ]
@@ -224,6 +249,7 @@ async def _prepare_normalized_resource(
             assert len(payload["warehouses"]) == 23
             assert len(payload["current_assignments"]) == 50
             assert len(payload["route_quotes"]) == 580
+            assert len(payload["provided_route_facts"]) == 580
             return ref, trace
 
 
@@ -259,6 +285,7 @@ async def _run_network_s3_then_s2(
             assert inventory == {
                 "plan_route_matrix",
                 "build_haversine_route_matrix",
+                "build_provided_route_matrix",
                 "validate_route_matrix",
                 "register_navigation_route_matrix",
                 "plan_cost_matrix",
@@ -277,6 +304,21 @@ async def _run_network_s3_then_s2(
                 if item["is_existing"]
             )
             common_trace: list[str] = []
+            common_trace.append("build_provided_route_matrix")
+            provided_result = await _call(
+                session,
+                "build_provided_route_matrix",
+                {
+                    "normalized_input_ref": normalized_ref,
+                    "warehouse_scope": "existing_only",
+                },
+                workspace,
+            )
+            provided_ref = provided_result.structuredContent["resource_ref"]
+            provided = await _read_resource(session, provided_ref)
+            assert len(provided["rows"]) == 556
+            assert provided["validation"]["missing_pair_count"] == 0
+
             common_trace.append("build_haversine_route_matrix")
             routes_result = await _call(
                 session,
@@ -317,7 +359,7 @@ async def _run_network_s3_then_s2(
                 "evaluate_network_baseline",
                 {
                     "normalized_input_ref": normalized_ref,
-                    "route_matrix_ref": routes_ref,
+                    "route_matrix_ref": provided_ref,
                     "cost_matrix_ref": costs_ref,
                     "objective": "min_cost",
                     "service_targets": [6, 12, 18],
@@ -330,6 +372,12 @@ async def _run_network_s3_then_s2(
             assert baseline["label"] == "actual_current"
             assert baseline["active_warehouse_ids"] == existing_ids
             assert len(baseline["assignment"]["rows"]) == 50
+            assert baseline_result.structuredContent["coverage_metrics"][0][
+                "city_coverage_rate"
+            ] >= 0
+            assert baseline_result.structuredContent["coverage_metrics"][0][
+                "demand_weighted_coverage_rate"
+            ] >= 0
 
             s3_trace: list[str] = []
             s3_trace.append("evaluate_facility_scenario")
@@ -338,7 +386,7 @@ async def _run_network_s3_then_s2(
                 "evaluate_facility_scenario",
                 {
                     "normalized_input_ref": normalized_ref,
-                    "route_matrix_ref": routes_ref,
+                    "route_matrix_ref": provided_ref,
                     "cost_matrix_ref": costs_ref,
                     "scenario": {
                         "add_warehouse_ids": [],

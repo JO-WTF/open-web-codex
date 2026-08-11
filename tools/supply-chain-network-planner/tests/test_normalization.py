@@ -192,3 +192,97 @@ def test_route_quote_missing_business_fields_is_typed_issue() -> None:
 
         assert state == "needs_input"
         assert f"route_quote_{missing}_missing" in {item.code for item in batch.issues}
+
+
+def test_route_quote_preserves_complete_provided_route_fact() -> None:
+    row = {
+        "origin_id": "WH-1",
+        "destination_id": "CITY-1",
+        "destination_name": "City One",
+        "layer": "last_mile",
+        "distance_km": "12.5",
+        "duration_hours": "0.5",
+        "price_per_vehicle": "100",
+        "currency": "IDR",
+        "vehicle_capacity": "1",
+        "method": "haversine",
+    }
+    decimal_fields = {
+        "distance_km",
+        "duration_hours",
+        "price_per_vehicle",
+        "vehicle_capacity",
+    }
+    id_fields = {"origin_id", "destination_id"}
+    state, batch = normalize_confirmed_rows(
+        [
+            ConfirmedSourceRows(
+                role=SourceRole.ROUTE_QUOTE,
+                rows=[row],
+                mappings=[
+                    _mapping(
+                        field,
+                        TransformKind.PARSE_DECIMAL
+                        if field in decimal_fields
+                        else TransformKind.NORMALIZE_IDENTIFIER
+                        if field in id_fields
+                        else TransformKind.TRIM,
+                    )
+                    for field in row
+                ],
+            )
+        ]
+    )
+
+    assert state == "needs_input"  # demand and warehouse inputs are intentionally absent
+    assert len(batch.route_quotes) == 1
+    assert len(batch.provided_route_facts) == 1
+    fact = batch.provided_route_facts[0]
+    assert fact.distance_km == 12.5
+    assert fact.duration_hours == 0.5
+    assert fact.source_method == "haversine"
+
+
+def test_incomplete_provided_route_fact_rejects_the_entire_route_row() -> None:
+    state, batch = normalize_confirmed_rows(
+        [
+            ConfirmedSourceRows(
+                role=SourceRole.ROUTE_QUOTE,
+                rows=[
+                    {
+                        "origin_id": "WH-1",
+                        "destination_id": "CITY-1",
+                        "layer": "last_mile",
+                        "distance_km": "12.5",
+                        "price_per_vehicle": "100",
+                        "currency": "IDR",
+                        "vehicle_capacity": "1",
+                    }
+                ],
+                mappings=[
+                    _mapping(
+                        field,
+                        TransformKind.PARSE_DECIMAL
+                        if field in {"distance_km", "price_per_vehicle", "vehicle_capacity"}
+                        else TransformKind.NORMALIZE_IDENTIFIER
+                        if field in {"origin_id", "destination_id"}
+                        else TransformKind.TRIM,
+                    )
+                    for field in (
+                        "origin_id",
+                        "destination_id",
+                        "layer",
+                        "distance_km",
+                        "price_per_vehicle",
+                        "currency",
+                        "vehicle_capacity",
+                    )
+                ],
+            )
+        ]
+    )
+
+    assert state == "needs_input"
+    assert batch.route_quotes == []
+    assert batch.provided_route_facts == []
+    assert "provided_route_fact_incomplete" in {issue.code for issue in batch.issues}

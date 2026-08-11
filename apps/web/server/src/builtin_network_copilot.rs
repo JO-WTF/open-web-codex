@@ -540,6 +540,7 @@ mod tests {
             vec![
                 "plan_route_matrix",
                 "build_haversine_route_matrix",
+                "build_provided_route_matrix",
                 "validate_route_matrix",
                 "register_navigation_route_matrix",
                 "plan_cost_matrix",
@@ -556,14 +557,14 @@ mod tests {
             network["mcp_servers"]["supply_chain"]["default_tools_approval_mode"].as_str(),
             Some("prompt")
         );
-        for tool in &supply_chain_tools[..10] {
+        for tool in &supply_chain_tools[..11] {
             assert_eq!(
                 network["mcp_servers"]["supply_chain"]["tools"][*tool]["approval_mode"].as_str(),
                 Some("approve"),
                 "safe Network Tool {tool} must be preapproved",
             );
         }
-        for tool in &supply_chain_tools[10..] {
+        for tool in &supply_chain_tools[11..] {
             assert!(
                 network["mcp_servers"]["supply_chain"]["tools"]
                     .get(*tool)
@@ -665,9 +666,12 @@ mod tests {
         ));
         assert!(SUPERVISOR_SKILL.contains("不得降级为自制 HTML、文件、图片、文本地图或伪造成功"));
         assert!(SUPERVISOR_SKILL.contains("必须由 Root 调用原生 `request_user_input`"));
+        assert!(SUPERVISOR_SKILL.contains("按能力 owner 收敛"));
         assert!(DATA_SKILL.contains("`city_id`、`city_name`、`demand_quantity`"));
         assert!(DATA_SKILL.contains("不要从行政区目录静默生成候选仓"));
+        assert!(DATA_SKILL.contains("路线距离、时长和计算来源"));
         assert!(NETWORK_SKILL.contains("潜在接口调用量和费用"));
+        assert!(NETWORK_SKILL.contains("按城市数量和按需求量加权"));
         assert!(NETWORK_SKILL.contains("`map_card_handoff.arguments` 整体原样作为调用参数"));
         assert!(NETWORK_SKILL.contains("立即向 Supervisor 返回 `needs_data`"));
         assert!(NETWORK_SKILL.contains("不得从 Workspace 文件、旧 Artifact、报告、模型文本"));
@@ -686,6 +690,19 @@ mod tests {
             "solve_service_constrained_location",
         ] {
             assert!(!NETWORK_ROLE.contains(deprecated));
+        }
+        for case_specific in [
+            "Indonesia",
+            "印尼",
+            "BEKASI",
+            "KENDARI",
+            "MANADO",
+            "6/12/18",
+            "demand-cities.csv",
+        ] {
+            assert!(!SUPERVISOR_SKILL.contains(case_specific));
+            assert!(!DATA_SKILL.contains(case_specific));
+            assert!(!NETWORK_SKILL.contains(case_specific));
         }
     }
 

@@ -8,15 +8,17 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .mapping import SourceRole, TransformKind
+from .mapping import REQUIRED_FIELDS, TARGET_ALIASES, SourceRole, TransformKind
 from .mcp_contracts import ResourceRef as _ResourceRef
 from .network_models import (
     CurrentAssignmentRecord,
     DataQualityIssue,
     DemandCityRecord,
+    ProvidedRouteFactRecord,
     RouteQuoteRecord,
     WarehouseRecord,
 )
+from .optimization_models import CoverageMetricSummary
 
 SCHEMA_VERSION = "1.0"
 MCP_SERVER_NAME = "supply_chain"
@@ -45,6 +47,7 @@ class PreparedNetworkResource(StrictModel):
     warehouses: list[WarehouseRecord]
     current_assignments: list[CurrentAssignmentRecord]
     route_quotes: list[RouteQuoteRecord]
+    provided_route_facts: list[ProvidedRouteFactRecord] = Field(default_factory=list)
     issues: list[DataQualityIssue] = Field(default_factory=list)
 
 
@@ -61,9 +64,29 @@ class ConfirmedSourceDecision(StrictModel):
     mappings: list[ConfirmedFieldDecision] = Field(min_length=1, max_length=64)
 
     @model_validator(mode="after")
-    def reject_catalog_role(self) -> ConfirmedSourceDecision:
+    def validate_role_mapping(self) -> ConfirmedSourceDecision:
         if self.role == SourceRole.ADMINISTRATIVE_CATALOG:
             raise ValueError("administrative catalog is prepared by the geography tool")
+        allowed = set(TARGET_ALIASES[self.role])
+        targets = [mapping.target_field for mapping in self.mappings]
+        sources = [mapping.source_field for mapping in self.mappings]
+        unknown = sorted(set(targets) - allowed)
+        if unknown:
+            raise ValueError(
+                "confirmed target fields are not allowed for "
+                f"{self.role.value}: {', '.join(unknown)}; allowed: "
+                f"{', '.join(sorted(allowed))}"
+            )
+        if len(set(targets)) != len(targets):
+            raise ValueError("confirmed target fields must be unique")
+        if len(set(sources)) != len(sources):
+            raise ValueError("confirmed source fields must be unique")
+        missing = sorted(REQUIRED_FIELDS[self.role] - set(targets))
+        if missing:
+            raise ValueError(
+                f"confirmed mapping for {self.role.value} is missing required fields: "
+                f"{', '.join(missing)}"
+            )
         return self
 
 
@@ -452,6 +475,25 @@ class PlanningSourceCatalog(StrictModel):
 class DataAgentResourceToolResult(StrictModel):
     summary: str
     resource_ref: _ResourceRef
+
+
+class UncoveredCitySummary(StrictModel):
+    demand_city_id: str = Field(min_length=1, max_length=128)
+    demand_city_name: str = Field(min_length=1, max_length=256)
+    warehouse_id: str | None = Field(default=None, max_length=128)
+    warehouse_name: str | None = Field(default=None, max_length=256)
+    duration_hours: float | None = Field(default=None, ge=0)
+    demand_quantity: Decimal = Field(ge=0)
+
+
+class NetworkBaselineResourceToolResult(StrictModel):
+    summary: str
+    resource_ref: _ResourceRef
+    coverage_metrics: list[CoverageMetricSummary] = Field(max_length=32)
+    detail_target_hours: float = Field(gt=0)
+    uncovered_city_count: int = Field(ge=0)
+    uncovered_cities: list[UncoveredCitySummary] = Field(max_length=100)
+    uncovered_cities_truncated: bool
 
 
 class NetworkSnapshot(NetworkInput):

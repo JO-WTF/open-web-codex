@@ -1,23 +1,23 @@
 from __future__ import annotations
 
+import json
 from collections import Counter
 from dataclasses import dataclass
-import json
 from pathlib import Path
 
 import pytest
-from jsonschema import Draft202012Validator
-from pydantic import ValidationError
 from _network_fixtures import (
     indonesia_current_assignments,
     indonesia_network_fixture,
 )
+from jsonschema import Draft202012Validator
+from pydantic import ValidationError
 
+from supply_chain_planner.delivery_schemas import model_schema
 from supply_chain_planner.map_service import (
     NetworkComparisonMapBundle,
     build_network_comparison_map_bundle,
 )
-from supply_chain_planner.delivery_schemas import model_schema
 from supply_chain_planner.matrix import build_cost_matrix, build_haversine_route_matrix
 from supply_chain_planner.matrix_models import CostCalculationPolicy, DemandUnitCostRule
 from supply_chain_planner.network_models import NormalizedInputBatch
@@ -32,6 +32,7 @@ from supply_chain_planner.report_service import (
 )
 from supply_chain_planner.solver import (
     compare_assignments,
+    coverage_metrics,
     enumerate_p_median,
     service_metrics,
     solve_current_assignment,
@@ -94,6 +95,7 @@ def sample2_delivery() -> Sample2Delivery:
         active_warehouse_ids=sorted(existing_ids),
         assignment=baseline_assignment,
         service=service_metrics(baseline_assignment, targets),
+        coverage=coverage_metrics(baseline_assignment, targets),
         cost=summarize_assignment_cost(baseline_assignment, costs),
     )
     best, _, timed_out = enumerate_p_median(

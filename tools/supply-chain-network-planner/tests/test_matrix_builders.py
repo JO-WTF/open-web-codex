@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import pytest
-from _network_fixtures import indonesia_network_fixture, network_case
+from _network_fixtures import (
+    indonesia_network_fixture,
+    indonesia_provided_route_facts,
+    network_case,
+)
 
 from supply_chain_planner.matrix import (
     build_haversine_route_matrix,
+    build_provided_route_matrix,
     build_route_matrix_with_reuse,
     plan_route_matrix,
     register_navigation_route_matrix,
@@ -29,6 +34,31 @@ def test_haversine_requires_speed_and_detour_coefficient() -> None:
     with pytest.raises(ValueError, match="haversine_requires"):
         case = network_case()
         plan_route_matrix(case.demand, case.warehouses, "haversine", None, 40)
+
+
+def test_provided_route_matrix_materializes_exact_existing_scope() -> None:
+    fixture = indonesia_network_fixture()
+    existing = [warehouse for warehouse in fixture.warehouses if warehouse.is_existing]
+
+    matrix = build_provided_route_matrix(
+        fixture.demand,
+        existing,
+        indonesia_provided_route_facts(),
+    )
+
+    assert matrix.method == "provided"
+    assert len(matrix.rows) == 556
+    assert matrix.missing_routes == []
+    assert matrix.validation == {
+        "expected_pair_count": 556,
+        "provided_pair_count": 556,
+        "ignored_input_pair_count": 24,
+        "missing_pair_count": 0,
+        "complete": True,
+        "source_method_counts": {"haversine": 556},
+    }
+    assert {row.method for row in matrix.rows} == {"provided"}
+    assert {row.tool_version for row in matrix.rows} == {"provided-input.v1"}
 
 
 def test_navigation_registration_reports_missing_routes_without_filling_them() -> None:

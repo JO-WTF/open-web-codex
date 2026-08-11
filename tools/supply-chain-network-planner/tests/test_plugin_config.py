@@ -27,6 +27,7 @@ def test_plugin_manifest_and_mcp_config_are_wired() -> None:
     assert server["tools"] == {
         "plan_route_matrix": {"approval_mode": "approve"},
         "build_haversine_route_matrix": {"approval_mode": "approve"},
+        "build_provided_route_matrix": {"approval_mode": "approve"},
         "validate_route_matrix": {"approval_mode": "approve"},
         "register_navigation_route_matrix": {"approval_mode": "approve"},
         "plan_cost_matrix": {"approval_mode": "approve"},
@@ -42,6 +43,7 @@ def test_network_server_exposes_only_network_tools() -> None:
     names = {tool.name for tool in asyncio.run(network_mcp.list_tools())}
     assert names == {
         "build_haversine_route_matrix",
+        "build_provided_route_matrix",
         "compare_network_scenarios",
         "evaluate_facility_scenario",
         "evaluate_network_baseline",

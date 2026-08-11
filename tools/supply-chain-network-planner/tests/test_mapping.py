@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+import pytest
+from pydantic import ValidationError
+
 from supply_chain_planner.case_types import SourceSummary
 from supply_chain_planner.mapping import (
     FieldObservation,
@@ -10,6 +13,7 @@ from supply_chain_planner.mapping import (
     TransformKind,
     suggest_role_mappings,
 )
+from supply_chain_planner.models import ConfirmedSourceDecision
 from supply_chain_planner.network_data import FieldInspection, SourceInspection
 
 
@@ -61,6 +65,58 @@ def test_mapping_retains_numeric_transform() -> None:
         item for item in demand.field_candidates if item.target_field == "demand_quantity"
     )
     assert quantity.transform.kind == TransformKind.PARSE_INTEGER
+
+
+def test_route_mapping_retains_provided_distance_duration_and_method() -> None:
+    proposal = MappingEngine().propose(
+        [
+            _inspection(
+                "routes.csv",
+                [
+                    "origin_id",
+                    "destination_id",
+                    "layer",
+                    "distance_km",
+                    "duration_hours",
+                    "price_per_vehicle",
+                    "currency",
+                    "vehicle_capacity",
+                    "method",
+                ],
+            )
+        ]
+    )
+    route = next(item for item in proposal.proposals if item.role == SourceRole.ROUTE_QUOTE)
+    mappings = {item.target_field: item for item in route.field_candidates}
+
+    assert mappings["distance_km"].transform.kind == TransformKind.PARSE_DECIMAL
+    assert mappings["duration_hours"].transform.kind == TransformKind.PARSE_DECIMAL
+    assert mappings["method"].transform.kind == TransformKind.TRIM
+
+
+def test_confirmed_mapping_rejects_unknown_duplicate_and_missing_targets() -> None:
+    base = {
+        "relative_path": "demand.csv",
+        "role": "demand",
+        "mappings": [
+            {
+                "source_field": field,
+                "target_field": field,
+                "transform": "trim",
+            }
+            for field in ("city_id", "city_name", "demand_quantity")
+        ],
+    }
+    for mappings, message in (
+        (
+            [*base["mappings"], {"source_field": "x", "target_field": "demand_id", "transform": "trim"}],
+            "not allowed",
+        ),
+        (base["mappings"][:-1], "missing required fields"),
+        ([*base["mappings"], base["mappings"][0]], "must be unique"),
+    ):
+        with pytest.raises(ValidationError, match=message):
+            ConfirmedSourceDecision.model_validate({**base, "mappings": mappings})
 
 
 def test_existing_flag_disambiguates_warehouse_role() -> None:

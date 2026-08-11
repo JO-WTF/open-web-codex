@@ -23,6 +23,7 @@ from supply_chain_planner.mcp_resources import (
     McpResourceRuntime,
 )
 from supply_chain_planner.models import PreparedNetworkResource
+from supply_chain_planner.network_models import ProvidedRouteFactRecord
 from supply_chain_planner.resource_store import ResourceStore
 
 
@@ -56,7 +57,12 @@ def _context(workspace: Path) -> SimpleNamespace:
     return SimpleNamespace(request_context=SimpleNamespace(meta=meta))
 
 
-def _prepared_ref(store: ResourceStore, *, state: str = "ready") -> ResourceRef:
+def _prepared_ref(
+    store: ResourceStore,
+    *,
+    state: str = "ready",
+    provided_route_facts: list[ProvidedRouteFactRecord] | None = None,
+) -> ResourceRef:
     fixture = network_case()
     prepared = PreparedNetworkResource(
         country_code="ID",
@@ -65,6 +71,7 @@ def _prepared_ref(store: ResourceStore, *, state: str = "ready") -> ResourceRef:
         warehouses=fixture.warehouses,
         current_assignments=[],
         route_quotes=[],
+        provided_route_facts=provided_route_facts or [],
     )
     return server.resource_ref(store.publish(prepared.schema_version, prepared))
 
@@ -94,6 +101,7 @@ def test_matrix_tools_expose_composable_resource_schemas() -> None:
     for name in (
         "plan_route_matrix",
         "build_haversine_route_matrix",
+        "build_provided_route_matrix",
         "validate_route_matrix",
         "register_navigation_route_matrix",
         "plan_cost_matrix",
@@ -109,6 +117,9 @@ def test_matrix_tools_expose_composable_resource_schemas() -> None:
     assert {"detour_coefficient", "average_speed_kph"}.issubset(
         haversine["required"]
     )
+    provided = tools["build_provided_route_matrix"].inputSchema
+    assert "warehouse_scope" in provided["required"]
+    assert "provided_route_facts" not in provided["properties"]
     navigation = tools["register_navigation_route_matrix"].inputSchema
     assert "navigation_result_relative_path" in navigation["required"]
     assert "navigation_result_ref" not in navigation["properties"]
@@ -299,6 +310,42 @@ def test_route_and_cost_tools_use_exact_pair_reuse(tmp_path: Path, monkeypatch) 
     assert completed_cost.validation["reused_pair_count"] == len(original_cost.rows) - 2
     assert completed_cost.validation["computed_pair_count"] == 2
     assert completed_cost.validation["missing_pair_count"] == 0
+
+
+def test_provided_route_tool_consumes_only_typed_normalized_facts(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace, store = _runtime(tmp_path, monkeypatch)
+    fixture = network_case()
+    computed = build_haversine_route_matrix(
+        fixture.demand, fixture.warehouses, 1.2, 40
+    )
+    facts = [
+        ProvidedRouteFactRecord(
+            origin_id=row.origin_id,
+            destination_id=row.destination_id,
+            layer=row.layer,
+            distance_km=row.distance_km,
+            duration_hours=row.duration_hours,
+            source_method="uploaded-estimate",
+        )
+        for row in computed.rows
+    ]
+    prepared_ref = _prepared_ref(store, provided_route_facts=facts)
+
+    result_ref = _result_ref(
+        server.build_provided_route_matrix(
+            prepared_ref,
+            "all_warehouses",
+            _context(workspace),
+        )
+    )
+    matrix = server._runtime().load_model(result_ref, "route_matrix.v2", RouteMatrix)
+
+    assert len(matrix.rows) == 8
+    assert matrix.missing_routes == []
+    assert matrix.validation["provided_pair_count"] == 8
+    assert matrix.validation["source_method_counts"] == {"uploaded-estimate": 8}
 
 
 def test_navigation_tool_merges_prior_workspace_file_and_reports_counts(

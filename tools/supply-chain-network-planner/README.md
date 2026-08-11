@@ -21,22 +21,26 @@ Network Agent 的主要工具是：
 ```text
 plan_route_matrix
 build_haversine_route_matrix
+build_provided_route_matrix
 register_navigation_route_matrix
 validate_route_matrix
 plan_cost_matrix
-compute_optimal_assignment
+prepare_network_distribution_map
 evaluate_network_baseline
-evaluate_service_targets
-summarize_network_cost
 evaluate_facility_scenario
 solve_p_median
-solve_service_constrained_location
 compare_network_scenarios
 render_network_comparison_map
 publish_network_planning_report
 ```
 
 每个大数据结果都写入 Resource Store。Data/Network Agent 消息只传经校验的 typed `ResourceRef` 或工具返回的精确引用，不传原始文件、整张矩阵、完整工具结果或内部路径。缺失数据、矩阵不完整、求解器不可用和超时都是显式状态；不会自动加载 Mock、填零或切换旧实现。
+
+Data Tool 会把用户输入中完整的起点、终点、距离、时长与来源方法保存在
+`normalized_network_input.v1`；Network Tool 可以按分析范围把这些事实物化为
+`route_matrix.v2`，无需让模型重读文件或重新估算。基线和比较结果同时返回按城市数量与按需求量
+加权的覆盖指标，并以 typed Resource 支持实际基线、优化基线或场景之间的比较；模型只负责解释，
+不自行汇总这些数值。
 
 ## Tool 审批
 

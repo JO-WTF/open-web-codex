@@ -20,6 +20,7 @@ from .network_models import (
     DataQualityIssue,
     DemandCityRecord,
     NormalizedInputBatch,
+    ProvidedRouteFactRecord,
     RouteQuoteRecord,
     WarehouseRecord,
 )
@@ -111,6 +112,14 @@ class NetworkInputValidator:
         ]
         if len(set(quote_keys)) != len(quote_keys):
             issues.append(self._error("route_quote_duplicate", "路线报价键必须唯一。"))
+        provided_fact_keys = [
+            (row.origin_id, row.destination_id, row.layer)
+            for row in batch.provided_route_facts
+        ]
+        if len(set(provided_fact_keys)) != len(provided_fact_keys):
+            issues.append(
+                self._error("provided_route_fact_duplicate", "已提供路线事实键必须唯一。")
+            )
         if not batch.current_assignments:
             issues.append(
                 DataQualityIssue(
@@ -136,6 +145,7 @@ def normalize_confirmed_rows(
     warehouses: list[WarehouseRecord] = []
     assignments: list[CurrentAssignmentRecord] = []
     quotes: list[RouteQuoteRecord] = []
+    provided_route_facts: list[ProvidedRouteFactRecord] = []
     issues: list[DataQualityIssue] = []
     for source in sources:
         try:
@@ -170,6 +180,7 @@ def normalize_confirmed_rows(
                     warehouses,
                     assignments,
                     quotes,
+                    provided_route_facts,
                 )
             except RowNormalizationError as error:
                 issues.append(
@@ -198,6 +209,7 @@ def normalize_confirmed_rows(
         warehouses=warehouses,
         current_assignments=assignments,
         route_quotes=quotes,
+        provided_route_facts=provided_route_facts,
         issues=issues,
     )
     validated = batch.model_copy(update={"issues": NetworkInputValidator().validate(batch)})
@@ -234,6 +246,7 @@ def _append_normalized_record(
     warehouses: list[WarehouseRecord],
     assignments: list[CurrentAssignmentRecord],
     quotes: list[RouteQuoteRecord],
+    provided_route_facts: list[ProvidedRouteFactRecord],
 ) -> None:
     if role == SourceRole.DEMAND:
         demands.append(
@@ -283,6 +296,20 @@ def _append_normalized_record(
                     f"route_quote_{field_name}_missing",
                     field_name,
                 )
+        route_fact_fields = ("distance_km", "duration_hours", "method")
+        supplied_route_fact_fields = {
+            field_name
+            for field_name in route_fact_fields
+            if values.get(field_name) not in (None, "")
+        }
+        if supplied_route_fact_fields and supplied_route_fact_fields != set(
+            route_fact_fields
+        ):
+            missing = sorted(set(route_fact_fields) - supplied_route_fact_fields)
+            raise RowNormalizationError(
+                "provided_route_fact_incomplete",
+                ",".join(missing),
+            )
         quotes.append(
             RouteQuoteRecord(
                 origin_id=values["origin_id"],
@@ -293,6 +320,18 @@ def _append_normalized_record(
                 vehicle_capacity=values["vehicle_capacity"],
             )
         )
+        if supplied_route_fact_fields:
+            provided_route_facts.append(
+                ProvidedRouteFactRecord(
+                    origin_id=values["origin_id"],
+                    destination_id=values["destination_id"],
+                    destination_name=values.get("destination_name"),
+                    layer=str(values["layer"]).lower(),
+                    distance_km=values["distance_km"],
+                    duration_hours=values["duration_hours"],
+                    source_method=str(values["method"]).strip(),
+                )
+            )
         return
     raise RowNormalizationError("normalization_role_unsupported", role.value)
 

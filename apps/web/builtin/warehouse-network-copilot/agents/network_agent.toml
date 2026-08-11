@@ -26,6 +26,7 @@ default_tools_approval_mode = "prompt"
 enabled_tools = [
   "plan_route_matrix",
   "build_haversine_route_matrix",
+  "build_provided_route_matrix",
   "validate_route_matrix",
   "register_navigation_route_matrix",
   "plan_cost_matrix",
@@ -42,6 +43,9 @@ enabled_tools = [
 approval_mode = "approve"
 
 [mcp_servers.supply_chain.tools.build_haversine_route_matrix]
+approval_mode = "approve"
+
+[mcp_servers.supply_chain.tools.build_provided_route_matrix]
 approval_mode = "approve"
 
 [mcp_servers.supply_chain.tools.validate_route_matrix]

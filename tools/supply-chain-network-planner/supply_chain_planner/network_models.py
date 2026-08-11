@@ -52,6 +52,18 @@ class RouteQuoteRecord(NetworkRecord):
     vehicle_capacity: Decimal = Field(gt=0)
 
 
+class ProvidedRouteFactRecord(NetworkRecord):
+    """Distance and duration facts supplied by an authorized input source."""
+
+    origin_id: str = Field(min_length=1, max_length=128)
+    destination_id: str = Field(min_length=1, max_length=128)
+    destination_name: str | None = Field(default=None, max_length=256)
+    layer: Literal["linehaul", "last_mile"]
+    distance_km: float = Field(ge=0)
+    duration_hours: float = Field(ge=0)
+    source_method: str = Field(min_length=1, max_length=128)
+
+
 class DataQualityIssue(NetworkRecord):
     code: str = Field(min_length=1, max_length=128)
     severity: Literal["info", "warning", "error"]
@@ -65,4 +77,5 @@ class NormalizedInputBatch(NetworkRecord):
     warehouses: list[WarehouseRecord]
     current_assignments: list[CurrentAssignmentRecord]
     route_quotes: list[RouteQuoteRecord]
+    provided_route_facts: list[ProvidedRouteFactRecord] = Field(default_factory=list)
     issues: list[DataQualityIssue] = Field(default_factory=list)

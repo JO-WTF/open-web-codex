@@ -280,8 +280,10 @@ Provider 全量去重、首消息 compound selection 或完整 4B.3 Thread truth
    owning-layer 适配，包括把官方 child Thread/Turn/Item 生命周期投影为可追踪的 Agent activity；
    不建立第二 Runtime、第二上下文、第二执行日志或固定业务流程。
 3. **C — 通用可组合 Tools。** 统一 `supply_chain` provider 和单一 `ResourceRef`，Data4 已完成
-   strict inspect→confirmed-normalize→optional-geography active surface；Network9、route/cost
-   pair-level 部分复用，以及 final map/report 的最小交付合同仍按同一 owner 链继续收敛。
+   strict inspect→confirmed-normalize→optional-geography active surface；Network13 active surface
+   已完成 provided/haversine/navigation 路线、route/cost pair-level 复用、双覆盖口径以及 final
+   map/report 的最小交付合同。剩余工作是产品 E2E 与 non-active compatibility tail 尾删，不再扩展
+   Platform 业务状态。
 4. **D — 完整案例验收。** 把 Indonesia cold E2E 作为通用 Copilot 的一个完整组合示例，同时验证
    partial reuse 与跨 Workspace/未授权 ref denial；案例顺序不成为产品 workflow。
 5. **E — 旧 caller 尾删。** D 通过后再原子删除 Network non-active compatibility tail 中的
@@ -375,8 +377,11 @@ renderer 与 producing Thread 的精确 Resource ref，并在浏览器授权读�
 
 1. 构建已有仓/候选仓到需求城市的距离与时长；询问曲面距离×绕路系数或导航。缺绕路系数
    时询问；导航前展示路线数量、接口消耗和费用风险并取得许可。
+   用户已经提供完整起终点距离、时长与来源方法时，由 Data Tool 保留 typed pair facts，
+   Network Tool 按当前分析范围直接物化并验证，不重复询问估算参数或让模型重读文件。
 2. 优先使用用户路线报价；缺失路线时询问计价逻辑，禁止以零成本填补。
-3. 按成本优先或时效优先计算覆盖；计算一个或多个 SLA 目标的满足率。
+3. 按成本优先或时效优先计算覆盖；计算一个或多个 SLA 目标的满足率，同时明确返回按城市
+   数量与按需求量加权的两种口径及确定性的未覆盖城市，模型不得自行汇总。
 4. 计算全网和分仓运输成本，完成增仓、减仓、搬迁三类模拟。
 5. 执行 p-median：明确 `p`，已有仓默认固定；只有用户明确许可时才允许指定已有仓关闭。
 6. 执行给定 SLA 下的成本最优规划，输出覆盖、时效、距离、成本和仓库变动。

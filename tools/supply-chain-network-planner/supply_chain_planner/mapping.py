@@ -127,10 +127,14 @@ TARGET_ALIASES: dict[SourceRole, dict[str, tuple[str, ...]]] = {
     SourceRole.ROUTE_QUOTE: {
         "origin_id": ("origin_id", "origin_city_id", "ori_city_id"),
         "destination_id": ("destination_id", "destination_city_id", "dest_city_id"),
+        "destination_name": ("destination_name", "destination_city_name", "dest_city_name"),
         "layer": ("layer", "network_layer"),
+        "distance_km": ("distance_km", "route_distance_km"),
+        "duration_hours": ("duration_hours", "travel_time_hours"),
         "price_per_vehicle": ("price_per_vehicle", "vehicle_price", "price", "cost"),
         "currency": ("currency", "currency_code"),
         "vehicle_capacity": ("vehicle_capacity", "capacity"),
+        "method": ("method", "route_method", "source_method"),
     },
 }
 
@@ -171,7 +175,14 @@ def _candidate_id(payload: dict[str, object]) -> str:
 def _transform_for(field: str) -> TransformSpec:
     if field in {"demand_quantity"}:
         return TransformSpec(kind=TransformKind.PARSE_INTEGER)
-    if field in {"longitude", "latitude", "price_per_vehicle", "vehicle_capacity"}:
+    if field in {
+        "longitude",
+        "latitude",
+        "price_per_vehicle",
+        "vehicle_capacity",
+        "distance_km",
+        "duration_hours",
+    }:
         return TransformSpec(kind=TransformKind.PARSE_DECIMAL)
     if field == "warehouse_type":
         return TransformSpec(kind=TransformKind.NORMALIZE_WAREHOUSE_TYPE)

@@ -41,6 +41,18 @@ class ServiceMetric(OptimizationModel):
     coverage_rate: float = Field(ge=0, le=1)
 
 
+class CoverageMetricSummary(OptimizationModel):
+    """Both city-count and demand-weighted service coverage for one target."""
+
+    target_hours: float = Field(gt=0)
+    covered_city_count: int = Field(ge=0)
+    total_city_count: int = Field(ge=0)
+    city_coverage_rate: float = Field(ge=0, le=1)
+    covered_demand: Decimal = Field(ge=0)
+    total_demand: Decimal = Field(ge=0)
+    demand_weighted_coverage_rate: float = Field(ge=0, le=1)
+
+
 class CostSummary(OptimizationModel):
     schema_version: Literal["network_cost_summary.v1"] = "network_cost_summary.v1"
     currency: str = Field(pattern=r"^[A-Z]{3}$")
@@ -60,6 +72,7 @@ class BaselineResult(OptimizationModel):
     active_warehouse_ids: list[str]
     assignment: AssignmentResult
     service: list[ServiceMetric] = Field(default_factory=list)
+    coverage: list[CoverageMetricSummary] = Field(default_factory=list)
     cost: CostSummary | None = None
     notice_code: str | None = None
 

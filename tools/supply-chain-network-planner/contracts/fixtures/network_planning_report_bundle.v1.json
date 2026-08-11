@@ -560,6 +560,35 @@
       "schema_version": "network_cost_summary.v1",
       "total": 51623223208.229004
     },
+    "coverage": [
+      {
+        "city_coverage_rate": 0.34,
+        "covered_city_count": 17,
+        "covered_demand": "28363",
+        "demand_weighted_coverage_rate": 0.558161960051166,
+        "target_hours": 6.0,
+        "total_city_count": 50,
+        "total_demand": "50815"
+      },
+      {
+        "city_coverage_rate": 0.44,
+        "covered_city_count": 22,
+        "covered_demand": "34174",
+        "demand_weighted_coverage_rate": 0.672517957296074,
+        "target_hours": 12.0,
+        "total_city_count": 50,
+        "total_demand": "50815"
+      },
+      {
+        "city_coverage_rate": 0.54,
+        "covered_city_count": 27,
+        "covered_demand": "36777",
+        "demand_weighted_coverage_rate": 0.7237429892748204,
+        "target_hours": 18.0,
+        "total_city_count": 50,
+        "total_demand": "50815"
+      }
+    ],
     "label": "actual_current",
     "notice_code": null,
     "service": [
