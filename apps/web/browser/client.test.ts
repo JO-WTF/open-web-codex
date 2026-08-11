@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { PlatformClient } from "./client";
+import {
+  isPlatformRequestError,
+  PlatformClient,
+} from "./client";
 
 describe("PlatformClient", () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -398,6 +401,47 @@ describe("PlatformClient", () => {
       "Server returned a non-JSON response for /api/health (HTTP 200",
     );
     expect(fetchMock.mock.calls[0]?.[1]?.cache).toBe("no-store");
+  });
+
+  it("projects the typed Provider catalog failure without exposing extra fields", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({
+      kind: "provider_catalog",
+      message: "secret upstream response",
+      provider_catalog_failure: "timeout",
+      request_id: "secret-request-id",
+      retry_after_ms: 1_000,
+    }), { status: 504 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PlatformClient({ baseUrl: "https://platform.test" });
+
+    const error = await client.refreshProviderModels("provider/one").catch((value) => value);
+    expect(isPlatformRequestError(error)).toBe(true);
+    expect(error).toMatchObject({
+      name: "PlatformRequestError",
+      message: "secret upstream response",
+      code: "secret upstream response",
+      status: 504,
+      kind: "provider_catalog",
+      detail: { providerCatalogFailure: "timeout" },
+    });
+    expect(error).not.toHaveProperty("requestId");
+    expect(error).not.toHaveProperty("detail.requestId");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://platform.test/api/providers/provider%2Fone/models/refresh",
+    );
+  });
+
+  it("discards an unknown Provider catalog failure cause", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({
+      message: "secret provider body",
+      provider_catalog_failure: "secret_internal_cause",
+    }), { status: 502 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PlatformClient({ baseUrl: "https://platform.test" });
+
+    const error = await client.refreshProviderModels("provider-1").catch((value) => value);
+    expect(isPlatformRequestError(error)).toBe(true);
+    expect(error).toMatchObject({ detail: { providerCatalogFailure: null } });
   });
 
   it("uses username rather than email as the login identifier", async () => {

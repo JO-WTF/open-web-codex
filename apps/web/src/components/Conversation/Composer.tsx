@@ -569,7 +569,13 @@ export default function Composer({ draft, onDraftChange, onSend, onStop, running
                               </button>
                               <span className="web-model-catalog-actions">
                                 {provider.canEdit ? <button type="button" onClick={() => openProviderForm(provider)}>Edit</button> : null}
-                                {provider.canFetchModels ? <button type="button" onClick={() => writeProvider({ action: "fetch", id: provider.id })}>Fetch</button> : null}
+                                {provider.canFetchModels ? (
+                                  <button
+                                    type="button"
+                                    disabled={catalogLoading}
+                                    onClick={() => writeProvider({ action: "fetch", id: provider.id })}
+                                  >Fetch</button>
+                                ) : null}
                                 {provider.canEdit ? <button type="button" onClick={() => { setCatalogOpen(false); setEditingProvider("new"); setProviderDraft({ id: `${provider.id}-copy`, name: `${provider.name} Copy`, baseUrl: provider.baseUrl ?? "", credentialMode: provider.envKey ? "environment" : "none", envKey: provider.envKey ?? "", apiKey: "", wireApi: provider.wireApi ?? "responses" }); }}>Copy</button> : null}
                                 {provider.canDelete ? <button className="is-danger" type="button" onClick={() => openDeleteProviderDialog(provider)}>Delete</button> : null}
                               </span>

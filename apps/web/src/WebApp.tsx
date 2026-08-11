@@ -10,6 +10,10 @@ import type {
   PendingMcpFormSummary,
   PendingUserInputSummary,
 } from "../browser/types";
+import {
+  isPlatformRequestError,
+  type ProviderCatalogFailure,
+} from "../browser/client";
 import Layout from "./components/Layout";
 import Sidebar from "./components/Sidebar";
 import Conversation from "./components/Conversation";
@@ -234,6 +238,116 @@ function modelSummariesForProvider(
   }));
 }
 
+const PROVIDER_CATALOG_FAILURE_MESSAGES: Record<ProviderCatalogFailure, string> = {
+  authentication: "Provider authentication failed. Check its credential configuration.",
+  not_found: "Provider model catalog was not found. Check the Provider URL.",
+  rate_limited: "Provider model catalog is rate limited. Try again later.",
+  upstream: "The provider could not return its model catalog. Try again later.",
+  timeout: "Provider model catalog timed out. Try again.",
+  network: "Provider model catalog is unreachable. Check the Provider URL.",
+  invalid_json: "Provider returned invalid model catalog data. Check the Provider URL.",
+  incompatible_schema: "Provider model catalog is incompatible. Check the Provider URL and schema.",
+  empty_catalog: "Provider returned no usable models; the existing catalog was kept.",
+};
+
+export function providerCatalogFailureMessage(error: unknown): string {
+  if (isPlatformRequestError(error)) {
+    const cause = error.detail.providerCatalogFailure;
+    if (cause) return PROVIDER_CATALOG_FAILURE_MESSAGES[cause];
+  }
+  return "Unable to fetch Provider models. Try again.";
+}
+
+type ParsedModelProviderCatalog = ReturnType<typeof parseModelProviderCatalog>;
+
+function parseFetchedProviderCatalog(
+  value: unknown,
+  targetProviderId: string,
+  requiredProviderId: string | null,
+): ParsedModelProviderCatalog | null {
+  const payload = unwrapWebRpcResult(value);
+  if (!payload || typeof payload !== "object") return null;
+  const record = payload as Record<string, unknown>;
+  if (!Array.isArray(record.data)) return null;
+  if (typeof record.currentProviderId !== "string" || !record.currentProviderId.trim()) return null;
+  if (record.currentModelId !== undefined
+    && record.currentModelId !== null
+    && (typeof record.currentModelId !== "string" || !record.currentModelId.trim())) {
+    return null;
+  }
+  const seenProviderIds = new Set<string>();
+  for (const candidate of record.data) {
+    if (!candidate || typeof candidate !== "object") return null;
+    const provider = candidate as Record<string, unknown>;
+    if (typeof provider.id !== "string" || !provider.id.trim()
+      || typeof provider.name !== "string" || !provider.name.trim()
+      || seenProviderIds.has(provider.id)) {
+      return null;
+    }
+    seenProviderIds.add(provider.id);
+    if (!Array.isArray(provider.models)) return null;
+    for (const model of provider.models) {
+      if (!model || typeof model !== "object") return null;
+      const modelRecord = model as Record<string, unknown>;
+      if (typeof modelRecord.modelId !== "string" || !modelRecord.modelId.trim()) return null;
+    }
+  }
+  if (!seenProviderIds.has(record.currentProviderId)) return null;
+  const target = record.data.find((candidate) => {
+    if (!candidate || typeof candidate !== "object") return false;
+    return (candidate as Record<string, unknown>).id === targetProviderId;
+  });
+  if (!target || typeof target !== "object") return null;
+  const targetRecord = target as Record<string, unknown>;
+  if (typeof targetRecord.name !== "string" || !targetRecord.name.trim()) return null;
+  if (!Array.isArray(targetRecord.models) || targetRecord.models.length === 0) return null;
+
+  const catalog = parseModelProviderCatalog(value);
+  if (catalog.providers.length !== record.data.length
+    || catalog.providers.some((provider) => !seenProviderIds.has(provider.id))) {
+    return null;
+  }
+  const parsedTarget = catalog.providers.find((provider) => provider.id === targetProviderId);
+  if (!parsedTarget || (parsedTarget.models?.length ?? 0) === 0) return null;
+  if (requiredProviderId && !catalog.providers.some((provider) => provider.id === requiredProviderId)) {
+    return null;
+  }
+  return catalog;
+}
+
+type ModelCatalogState = {
+  providers: ModelProviderSummary[];
+  currentProviderId: string | null;
+  providerModels: ModelSummary[];
+  selectedProviderModelId: string | null;
+};
+
+function projectModelCatalogState(
+  catalog: ParsedModelProviderCatalog,
+  activeThreadId: string | null,
+  threadSelection: { threadId: string; providerId: string; modelId: string } | null,
+): ModelCatalogState {
+  const selectedProviderId = threadSelection?.threadId === activeThreadId
+    ? threadSelection.providerId
+    : catalog.currentProviderId;
+  const selectedModelId = threadSelection?.threadId === activeThreadId
+    ? threadSelection.modelId
+    : catalog.currentModelId;
+  const selectedProvider = catalog.providers.find((provider) => provider.id === selectedProviderId);
+  const providerModels = modelSummariesForProvider(selectedProvider);
+  return {
+    providers: catalog.providers.map((provider) => ({
+      ...provider,
+      isCurrent: provider.id === selectedProviderId,
+    })),
+    currentProviderId: selectedProviderId,
+    providerModels,
+    selectedProviderModelId: selectedModelId && providerModels.some((model) => model.id === selectedModelId)
+      ? selectedModelId
+      : providerModels[0]?.id ?? null,
+  };
+}
+
 /* ─────────── Component ─────────── */
 
 export function resolveTurnStartedAt(
@@ -361,26 +475,15 @@ export default function WebApp() {
     try {
       const providerResponse = await client.listModelProviders(activeWorkspaceId);
       const catalog = parseModelProviderCatalog(providerResponse);
-      const threadSelection = activeThreadModelSelectionRef.current;
-      const selectedProviderId = threadSelection?.threadId === activeThreadIdRef.current
-        ? threadSelection.providerId
-        : catalog.currentProviderId;
-      const selectedModelId = threadSelection?.threadId === activeThreadIdRef.current
-        ? threadSelection.modelId
-        : catalog.currentModelId;
-      const selectedProvider = catalog.providers.find((provider) => provider.id === selectedProviderId);
-      const nextModels = modelSummariesForProvider(selectedProvider);
-      setModelProviders(catalog.providers.map((provider) => ({
-        ...provider,
-        isCurrent: provider.id === selectedProviderId,
-      })));
-      setCurrentProviderId(selectedProviderId);
-      setProviderModels(nextModels);
-      setSelectedProviderModelId(
-        selectedModelId && nextModels.some((model) => model.id === selectedModelId)
-          ? selectedModelId
-          : nextModels[0]?.id ?? null,
+      const next = projectModelCatalogState(
+        catalog,
+        activeThreadIdRef.current,
+        activeThreadModelSelectionRef.current,
       );
+      setModelProviders(next.providers);
+      setCurrentProviderId(next.currentProviderId);
+      setProviderModels(next.providerModels);
+      setSelectedProviderModelId(next.selectedProviderModelId);
     } catch (error) {
       setCatalogError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -2747,15 +2850,39 @@ export default function WebApp() {
             if (!activeWorkspaceId) return;
             setCatalogLoading(true);
             setCatalogError(null);
+            const action = typeof input.action === "string" ? input.action : "upsert";
             try {
-              await client.writeModelProvider(activeWorkspaceId, input);
-              if (input.action === "upsert" && input.select === true && typeof input.id === "string") {
+              const response = await client.writeModelProvider(activeWorkspaceId, input);
+              if (action === "fetch") {
+                const providerId = typeof input.id === "string" ? input.id.trim() : "";
+                const threadSelection = activeThreadModelSelectionRef.current;
+                const requiredProviderId = threadSelection?.threadId === activeThreadIdRef.current
+                  ? threadSelection.providerId
+                  : null;
+                const catalog = providerId
+                  ? parseFetchedProviderCatalog(response, providerId, requiredProviderId)
+                  : null;
+                if (!catalog) throw new Error("Invalid Provider model catalog response");
+                const next = projectModelCatalogState(
+                  catalog,
+                  activeThreadIdRef.current,
+                  threadSelection,
+                );
+                setModelProviders(next.providers);
+                setCurrentProviderId(next.currentProviderId);
+                setProviderModels(next.providerModels);
+                setSelectedProviderModelId(next.selectedProviderModelId);
+                return;
+              }
+              if (action === "upsert" && input.select === true && typeof input.id === "string") {
                 await selectProviderAndDefaultModel(input.id);
                 return;
               }
               await refreshModelCatalog();
             } catch (error) {
-              setCatalogError(error instanceof Error ? error.message : String(error));
+              setCatalogError(action === "fetch"
+                ? providerCatalogFailureMessage(error)
+                : error instanceof Error ? error.message : String(error));
               throw error;
             } finally {
               setCatalogLoading(false);

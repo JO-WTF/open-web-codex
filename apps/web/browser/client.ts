@@ -48,6 +48,69 @@ type ClientOptions = {
   token?: string;
 };
 
+export type ProviderCatalogFailure =
+  | "authentication"
+  | "not_found"
+  | "rate_limited"
+  | "upstream"
+  | "timeout"
+  | "network"
+  | "invalid_json"
+  | "incompatible_schema"
+  | "empty_catalog";
+
+export type PlatformRequestDetail = {
+  providerCatalogFailure: ProviderCatalogFailure | null;
+};
+
+export class PlatformRequestError extends Error {
+  readonly detail: PlatformRequestDetail;
+  readonly code?: string;
+  readonly status?: number;
+  readonly kind?: string;
+
+  constructor(message: string, detail: PlatformRequestDetail, metadata?: {
+    code?: string;
+    status?: number;
+    kind?: string;
+  }) {
+    super(message);
+    this.name = "PlatformRequestError";
+    this.detail = detail;
+    this.code = metadata?.code;
+    this.status = metadata?.status;
+    this.kind = metadata?.kind;
+  }
+}
+
+const PROVIDER_CATALOG_FAILURES = new Set<ProviderCatalogFailure>([
+  "authentication",
+  "not_found",
+  "rate_limited",
+  "upstream",
+  "timeout",
+  "network",
+  "invalid_json",
+  "incompatible_schema",
+  "empty_catalog",
+]);
+
+function providerCatalogFailure(value: unknown): ProviderCatalogFailure | null {
+  return typeof value === "string" && PROVIDER_CATALOG_FAILURES.has(value as ProviderCatalogFailure)
+    ? (value as ProviderCatalogFailure)
+    : null;
+}
+
+export function isPlatformRequestError(error: unknown): error is PlatformRequestError {
+  if (error instanceof PlatformRequestError) return true;
+  if (!error || typeof error !== "object") return false;
+  const detail = (error as { detail?: unknown }).detail;
+  if (!detail || typeof detail !== "object") return false;
+  const candidate = detail as Partial<PlatformRequestDetail>;
+  return candidate.providerCatalogFailure === null
+    || providerCatalogFailure(candidate.providerCatalogFailure) !== null;
+}
+
 type LiveEnvelope =
   | { type: "ready"; version: number }
   | { type: "run.event"; version: number; event: RunEvent }
@@ -113,15 +176,13 @@ export class PlatformClient {
       const message = typeof record?.message === "string"
         ? record.message
         : `Request failed (HTTP ${response.status}).`;
-      const error = new Error(message) as Error & {
-        code?: string;
-        status?: number;
-        kind?: string;
-      };
-      error.name = "PlatformRequestError";
-      error.code = message;
-      error.status = response.status;
-      error.kind = typeof record?.kind === "string" ? record.kind : undefined;
+      const error = new PlatformRequestError(message, {
+        providerCatalogFailure: providerCatalogFailure(record?.provider_catalog_failure),
+      }, {
+        code: message,
+        status: response.status,
+        kind: typeof record?.kind === "string" ? record.kind : undefined,
+      });
       throw error;
     }
     return payload as T;

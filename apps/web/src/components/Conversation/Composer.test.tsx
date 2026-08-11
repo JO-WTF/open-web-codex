@@ -7,6 +7,42 @@ import Composer from "./Composer";
 afterEach(cleanup);
 
 describe("Web Composer context usage", () => {
+  it("disables Provider Fetch while the catalog request is loading", () => {
+    const onWriteProvider = vi.fn();
+    render(
+      <Composer
+        draft=""
+        onDraftChange={vi.fn()}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+        running={false}
+        stopping={false}
+        busy={false}
+        disabled={false}
+        tokenUsage={null}
+        catalogLoading
+        currentProviderId="provider-1"
+        providers={[{
+          id: "provider-1",
+          name: "Provider",
+          kind: "custom",
+          isCurrent: true,
+          modelCount: 1,
+          canFetchModels: true,
+          models: [{ modelId: "model-1" }],
+        }]}
+        models={[{ id: "model-1", model: "model-1", displayName: "Model 1" }]}
+        onWriteProvider={async (input) => { onWriteProvider(input); }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Provider" }));
+    const fetchButton = screen.getByRole("button", { name: "Fetch" });
+    expect((fetchButton as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(fetchButton);
+    expect(onWriteProvider).not.toHaveBeenCalled();
+  });
+
   it("renders real context usage and hover details from token usage", () => {
     render(
       <Composer

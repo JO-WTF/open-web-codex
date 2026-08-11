@@ -11,8 +11,10 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebApp, {
+  providerCatalogFailureMessage,
   resolveTurnStartedAt,
 } from "./WebApp";
+import { PlatformRequestError } from "../browser/client";
 import type { AppServerEvent } from "./types";
 
 let appServerEventHandler: ((event: AppServerEvent) => void) | null = null;
@@ -104,6 +106,253 @@ describe("WebApp workspace-first messaging", () => {
     client.sendUserMessage.mockResolvedValue({ turn: { id: "turn-1" } });
     client.interruptTurn.mockResolvedValue({ status: "interrupted" });
     client.respondToServerRequest.mockResolvedValue({});
+  });
+
+  it.each([
+    ["authentication", "Provider authentication failed. Check its credential configuration."],
+    ["not_found", "Provider model catalog was not found. Check the Provider URL."],
+    ["rate_limited", "Provider model catalog is rate limited. Try again later."],
+    ["upstream", "The provider could not return its model catalog. Try again later."],
+    ["timeout", "Provider model catalog timed out. Try again."],
+    ["network", "Provider model catalog is unreachable. Check the Provider URL."],
+    ["invalid_json", "Provider returned invalid model catalog data. Check the Provider URL."],
+    ["incompatible_schema", "Provider model catalog is incompatible. Check the Provider URL and schema."],
+    ["empty_catalog", "Provider returned no usable models; the existing catalog was kept."],
+  ] as const)("maps Provider catalog cause %s to a safe actionable message", (cause, message) => {
+    expect(providerCatalogFailureMessage(new PlatformRequestError("secret runtime body", {
+      providerCatalogFailure: cause,
+    }))).toBe(message);
+    expect(message).not.toContain("secret runtime body");
+  });
+
+  it("uses a fixed generic message for an unknown or missing Provider catalog cause", () => {
+    expect(providerCatalogFailureMessage(new PlatformRequestError("secret runtime body", {
+      providerCatalogFailure: null,
+    }))).toBe("Unable to fetch Provider models. Try again.");
+    expect(providerCatalogFailureMessage(new Error("secret runtime body"))).toBe(
+      "Unable to fetch Provider models. Try again.",
+    );
+  });
+
+  it("applies a successful Fetch snapshot directly without a stale catalog read", async () => {
+    client.listModelProviders.mockResolvedValue({
+      currentProviderId: "provider-1",
+      currentModelId: "old-model",
+      data: [{
+        id: "provider-1",
+        name: "Provider",
+        kind: "custom",
+        canFetchModels: true,
+        models: [{ modelId: "old-model", showInPicker: true }],
+      }],
+    });
+    client.writeModelProvider.mockResolvedValueOnce({
+      currentProviderId: "provider-1",
+      currentModelId: "new-model",
+      data: [{
+        id: "provider-1",
+        name: "Provider",
+        kind: "custom",
+        canFetchModels: true,
+        models: [{ modelId: "new-model", showInPicker: true }],
+      }],
+    });
+    render(<WebApp />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Provider" }));
+    const dialog = await screen.findByRole("dialog", { name: "Providers and models" });
+    expect(within(dialog).getAllByText("old-model").length).toBeGreaterThan(0);
+    client.listModelProviders.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Fetch" }));
+
+    await waitFor(() => expect(within(dialog).getAllByText("new-model").length).toBeGreaterThan(0));
+    await waitFor(() => expect(client.writeModelProvider).toHaveBeenCalledTimes(1));
+    expect(client.writeModelProvider).toHaveBeenCalledWith(
+      "workspace-1",
+      { action: "fetch", id: "provider-1" },
+    );
+    expect(client.listModelProviders).not.toHaveBeenCalled();
+    expect(screen.queryByText("Unable to fetch Provider models. Try again.")).toBeNull();
+  });
+
+  it("preserves the catalog and hides raw error text when Fetch fails", async () => {
+    client.listModelProviders.mockResolvedValue({
+      currentProviderId: "provider-1",
+      currentModelId: "old-model",
+      data: [{
+        id: "provider-1",
+        name: "Provider",
+        kind: "custom",
+        canFetchModels: true,
+        models: [{ modelId: "old-model", showInPicker: true }],
+      }],
+    });
+    client.writeModelProvider.mockRejectedValueOnce(new PlatformRequestError(
+      "secret provider response",
+      { providerCatalogFailure: "authentication" },
+    ));
+    render(<WebApp />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Provider" }));
+    const dialog = await screen.findByRole("dialog", { name: "Providers and models" });
+    expect(within(dialog).getAllByText("old-model").length).toBeGreaterThan(0);
+    client.listModelProviders.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Fetch" }));
+
+    await screen.findByText("Provider authentication failed. Check its credential configuration.");
+    expect(within(dialog).getAllByText("old-model").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Provider" })).toBeTruthy();
+    expect(screen.queryByText("secret provider response")).toBeNull();
+    expect(client.listModelProviders).not.toHaveBeenCalled();
+  });
+
+  it("preserves the existing catalog for malformed, duplicate, empty, or stale current data", async () => {
+    client.listModelProviders.mockResolvedValue({
+      currentProviderId: "provider-1",
+      currentModelId: "old-model",
+      data: [{
+        id: "provider-1",
+        name: "Provider",
+        kind: "custom",
+        canFetchModels: true,
+        models: [{ modelId: "old-model", showInPicker: true }],
+      }],
+    });
+    client.writeModelProvider
+      .mockResolvedValueOnce({
+        currentProviderId: "provider-1",
+        currentModelId: "new-model",
+        data: [
+          {
+            id: "provider-1",
+            name: "Provider",
+            kind: "custom",
+            canFetchModels: true,
+            models: [{ modelId: "new-model", showInPicker: true }],
+          },
+          { id: "broken", name: "Broken", models: "not-an-array" },
+        ],
+      })
+      .mockResolvedValueOnce({
+        currentProviderId: "provider-1",
+        currentModelId: "new-model",
+        data: [
+          {
+            id: "provider-1",
+            name: "Provider",
+            kind: "custom",
+            canFetchModels: true,
+            models: [{ modelId: "new-model", showInPicker: true }],
+          },
+          {
+            id: "provider-1",
+            name: "Duplicate",
+            kind: "custom",
+            models: [{ modelId: "new-model", showInPicker: true }],
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        currentProviderId: "provider-1",
+        currentModelId: "new-model",
+        data: [{
+          id: "provider-1",
+          name: "Provider",
+          kind: "custom",
+          canFetchModels: true,
+          models: [],
+        }],
+      })
+      .mockResolvedValueOnce({
+        currentProviderId: "missing-provider",
+        currentModelId: "new-model",
+        data: [{
+          id: "provider-1",
+          name: "Provider",
+          kind: "custom",
+          canFetchModels: true,
+          models: [{ modelId: "new-model", showInPicker: true }],
+        }],
+      });
+    render(<WebApp />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Provider" }));
+    const dialog = await screen.findByRole("dialog", { name: "Providers and models" });
+    expect(within(dialog).getAllByText("old-model").length).toBeGreaterThan(0);
+    const fetchButton = screen.getByRole("button", { name: "Fetch" });
+
+    fireEvent.click(fetchButton);
+    await screen.findByText("Unable to fetch Provider models. Try again.");
+    expect(within(dialog).getAllByText("old-model").length).toBeGreaterThan(0);
+    expect(screen.queryByText("new-model")).toBeNull();
+    expect(screen.queryByText("Invalid Provider model catalog response")).toBeNull();
+
+    fireEvent.click(fetchButton);
+    await screen.findByText("Unable to fetch Provider models. Try again.");
+    expect(within(dialog).getAllByText("old-model").length).toBeGreaterThan(0);
+    expect(screen.queryByText("new-model")).toBeNull();
+
+    fireEvent.click(fetchButton);
+    await screen.findByText("Unable to fetch Provider models. Try again.");
+    expect(within(dialog).getAllByText("old-model").length).toBeGreaterThan(0);
+    expect(screen.queryByText("new-model")).toBeNull();
+
+    fireEvent.click(fetchButton);
+    await screen.findByText("Unable to fetch Provider models. Try again.");
+    expect(within(dialog).getAllByText("old-model").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Provider" })).toBeTruthy();
+  });
+
+  it("rejects a Fetch snapshot that drops the active Thread Provider", async () => {
+    client.listThreads.mockResolvedValue({
+      data: [{
+        id: "thread-first",
+        name: "First thread",
+        cwd: "/tmp/demo",
+        updatedAt: Date.now(),
+        modelProvider: "missing-provider",
+        model: "thread-model",
+      }],
+    });
+    client.listThreadTurns.mockResolvedValue([{
+      id: "turn-1",
+      status: "completed",
+      items: [{ id: "assistant-1", type: "agentMessage", text: "Thread ready" }],
+    }]);
+    client.listModelProviders.mockResolvedValue({
+      currentProviderId: "provider-1",
+      currentModelId: "old-model",
+      data: [{
+        id: "provider-1",
+        name: "Provider",
+        kind: "custom",
+        canFetchModels: true,
+        models: [{ modelId: "old-model", showInPicker: true }],
+      }],
+    });
+    client.writeModelProvider.mockResolvedValueOnce({
+      currentProviderId: "provider-1",
+      currentModelId: "new-model",
+      data: [{
+        id: "provider-1",
+        name: "Provider",
+        kind: "custom",
+        canFetchModels: true,
+        models: [{ modelId: "new-model", showInPicker: true }],
+      }],
+    });
+    render(<WebApp />);
+
+    fireEvent.click(await screen.findByText("First thread"));
+    await screen.findByText("Thread ready");
+    fireEvent.click(screen.getByRole("button", { name: "Codex" }));
+    const dialog = await screen.findByRole("dialog", { name: "Providers and models" });
+    expect(within(dialog).getAllByText("thread-model").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Fetch" }));
+
+    await screen.findByText("Unable to fetch Provider models. Try again.");
+    expect(within(dialog).getAllByText("thread-model").length).toBeGreaterThan(0);
+    expect(screen.queryByText("new-model")).toBeNull();
   });
 
   it("keeps a local send time when Runtime reports a different Turn start", () => {
