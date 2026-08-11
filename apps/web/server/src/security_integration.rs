@@ -1023,6 +1023,49 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
         .expect("child generic approval projection");
     assert_eq!(child_generic["source"]["kind"], "agent");
     assert_eq!(child_generic["source"]["displayTitle"], "Data Agent");
+    let early_child_frame = format!(
+        "data: {}\n\n",
+        json!({
+            "method": "app-server-event",
+            "params": {
+                "workspace_id": workspace_id,
+                "message": {
+                    "method": "platform/approvalRequested",
+                    "params": {
+                        "approvalId": child_command_approval_id,
+                        "threadId": "approval-child-thread",
+                        "turnId": "child-turn-1",
+                        "itemId": "child-item-1",
+                        "requestMethod": "item/commandExecution/requestApproval",
+                        "requestParams": {
+                            "threadId": "approval-child-thread",
+                            "turnId": "child-turn-1",
+                            "itemId": "child-item-1"
+                        }
+                    }
+                }
+            }
+        })
+    );
+    let early_child_projection =
+        crate::event_projection::persist_frame(early_child_frame.as_bytes(), &pool)
+            .await
+            .unwrap()
+            .expect("early child approval event projection");
+    assert_eq!(
+        early_child_projection.organization_id,
+        first_organization_id
+    );
+    let projected_child_approval_events: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM run_events
+         WHERE run_id = $1 AND event_type = 'platform.approval.requested'
+           AND thread_id = 'approval-child-thread'",
+    )
+    .bind(first_run_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(projected_child_approval_events, 1);
     sqlx::query(
         "INSERT INTO runtime_agent_projections (
             organization_id, profile_id, workspace_id, root_run_id, thread_id,

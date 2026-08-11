@@ -966,7 +966,28 @@ async fn lookup_known_thread_context(
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|error| format!("projected Thread run lookup error: {error}"))?;
-    Ok(projected.as_ref().map(event_run_context))
+    if let Some(projected) = projected {
+        return Ok(Some(event_run_context(&projected)));
+    }
+
+    let execution = sqlx::query(
+        "SELECT execution.root_run_id AS run_id, run.task_id, execution.organization_id,
+                execution.profile_id, execution.workspace_id,
+                run.codex_thread_id AS root_thread_id
+         FROM runtime_agent_execution_projections execution
+         JOIN runs run ON run.id = execution.root_run_id
+           AND run.organization_id = execution.organization_id
+         WHERE execution.agent_thread_id = $1
+           AND ($2::uuid IS NULL OR execution.workspace_id = $2)
+         ORDER BY execution.created_at DESC
+         LIMIT 1",
+    )
+    .bind(thread_id)
+    .bind(workspace_id)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(|error| format!("projected agent execution run lookup error: {error}"))?;
+    Ok(execution.as_ref().map(event_run_context))
 }
 
 fn event_run_context(row: &sqlx::postgres::PgRow) -> EventRunContext {
@@ -1025,6 +1046,27 @@ async fn update_runtime_agent_projection(
     .await
     .map_err(|error| format!("Runtime agent projection update error: {error}"))?
     .rows_affected();
+    if updated == 0 {
+        let execution_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                SELECT 1 FROM runtime_agent_execution_projections execution
+                WHERE execution.root_run_id = $1
+                  AND execution.profile_id = $2
+                  AND execution.workspace_id = $3
+                  AND execution.agent_thread_id = $4
+             )",
+        )
+        .bind(context.run_id)
+        .bind(context.profile_id)
+        .bind(context.workspace_id)
+        .bind(&event.thread_id)
+        .fetch_one(&mut **transaction)
+        .await
+        .map_err(|error| format!("Runtime agent execution lookup error: {error}"))?;
+        if execution_exists {
+            return Ok(());
+        }
+    }
     if updated != 1 {
         return Err("Runtime agent projection changed during event delivery".to_string());
     }
