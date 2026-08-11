@@ -142,19 +142,25 @@ source、mapping、revision、operation、dependency、readiness 和 deliverable
 当前 `ResourceStore` 以内容寻址 URI 为同一 logical `supply_chain` provider 的 Data/Network
 能力提供不可变 Resource 内容，并以 Profile 私有、canonical Workspace 隔离的物理目录保存
 字节；这一 provider content owner 与 Codex 官方 MCP Resource 合同一致，不应与
-CaseRepository 一起删除。当前迁移仍未完成：旧 Tool 会把同一 Resource 同时包装为
-`DataAgentRef` 和 `ArtifactRef`、在下游重算 content SHA，并散落各自的 load/publish/schema
-处理。阶段一允许把 scope/ref/store/codec/bounds/error/writer 的领域无关实现集中在
-`supply_chain` 单一模块，供 Data、Network 和 final Tool 共用；这只是平台级 Copilot
-infrastructure 的内嵌孵化位置，不改变 provider 对 Resource 字节和生命周期的所有权。
+CaseRepository 一起删除。Data4 与 Network 的 decorated active surface 已统一使用 strict typed
+`ResourceRef`：
+Data Server 的 inspect 只发布 `source_profile.v1`，normalize 只接受显式确认的 source
+mapping，prepare-geography 只接受已校验的行政区输入。CaseRepository、NetworkSnapshot、
+ArtifactRef 和其 wrappers 只存在于尚未装饰的 legacy compatibility tail，必须在 Stage E
+原子删除；不能通过新增第二套 resolver 或兼容包装绕过该切换。阶段一允许把
+scope/ref/store/codec/bounds/error/writer
+的领域无关实现集中在 `supply_chain` 单一模块，供 Data、Network 和 final Tool 共用；这只是
+平台级 Copilot infrastructure 的内嵌孵化位置，不改变 provider 对 Resource 字节和生命周期的所有权。
 
-Data Server 同时接受 `source_ref/sourceRef/source_refs/sourceRefs/source/source_file`、
-`mappings/entities`、`fields/field_mappings/fieldMappings` 等多种 wire shape。它提高了当前
-仓网原型的容错率，但也证明模型正在承担协议翻译。这些对象和 aliases 全部属于删除
-范围，不能通过新增通用 resolver 修补。目标工具合同对用户文件直接使用经校验的
-Workspace 相对路径，对 provider-owned intermediate 使用单一 typed MCP Resource ref；Platform 不建立
-数据 revision/binding/fingerprint/cache 或通用 Broker。跨 Task 可发现若在阶段一实现，只能是从
-official history exact Item 重建的授权 `{server, uri}` 引用投影；当前源码尚无该完整合同。
+Data4 active surface 不再接受 `source_ref/sourceRef/source_refs/sourceRefs/source/source_file`、
+`mappings/entities` 或 `fields/field_mappings/fieldMappings` aliases。discover 可选，inspect
+只产生 source-profile Resource，normalize 使用 `ResourceRef` 加显式 confirmed source decisions，
+并可在缺少坐标时返回 `needs_geography`；prepare-geography 再接收 adapter 已验证的行政区
+catalog 与可选 overrides。Network active surface 已是 strict `ResourceRef`；尚有旧
+Case/ArtifactRef compatibility tail，不能把 Data4 slice 的落地误报为 Stage E 尾删完成。用户文件继续使用经校验的 Workspace 相对路径，provider-owned intermediate
+继续使用单一 typed MCP Resource ref；Platform 不建立数据 revision/binding/fingerprint/cache
+或通用 Broker。跨 Task 可发现若在阶段一实现，只能是从 official history exact Item 重建的授权
+`{server, uri}` 引用投影。
 
 当前 `artifacts`、`artifact_task_grants`、exact Item provenance 和物化字节是可保留的
 Platform owner，但注册和来源合同尚未收敛。`artifact_candidates` 会把任何完成 MCP Tool
@@ -204,8 +210,9 @@ SDK 当前只有 `tool init/validate/test/pack`，Web 也没有消费 SDK 包的
 
 1. 供应链 Case/NetworkSnapshot 仍在普通 Workspace 文件和 MCP Resource 之外保存
    source/mapping/workflow 事实。
-2. 供应链 Tool 中 `source_ref`、MCP Resource、ArtifactRef 和普通 Workspace 文件仍混用；
-   Data/Network 跨 server 直接打开 provider 目录，taskEvidence/content SHA 成为额外信任层。
+2. 供应链 legacy compatibility tail 中 `source_ref`、MCP Resource、ArtifactRef 和普通 Workspace
+   文件仍混用；active Data/Network ResourceRef surface 已不再保留该混用，legacy tail 的跨 server
+   provider 目录访问和 taskEvidence/content SHA 仍成为额外信任层。
 3. Event Projection 把 generic ResourceLink 提升成 Artifact、执行跨 child Resource lookup 并解析
    模型文本呈现指令；Run-scoped inline 表和无 writer 的 `retention_state` 又伪装了不存在的
    持久展示与保留生命周期，使 Artifact 超出最终交付 owner。

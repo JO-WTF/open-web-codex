@@ -36,7 +36,7 @@ render_network_comparison_map
 publish_network_planning_report
 ```
 
-每个大数据结果都写入 Resource Store。Agent 消息只传 `ArtifactRef` 或工具返回的精确引用，不传原始文件、整张矩阵、完整工具结果或内部路径。缺失数据、矩阵不完整、求解器不可用和超时都是显式状态；不会自动加载 Mock、填零或切换旧实现。
+每个大数据结果都写入 Resource Store。Data/Network Agent 消息只传经校验的 typed `ResourceRef` 或工具返回的精确引用，不传原始文件、整张矩阵、完整工具结果或内部路径。缺失数据、矩阵不完整、求解器不可用和超时都是显式状态；不会自动加载 Mock、填零或切换旧实现。
 
 ## 6.0 能力包
 
