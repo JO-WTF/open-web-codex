@@ -29,7 +29,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc, Mutex, Semaphore};
 use tokio::task::JoinHandle;
-use tokio::time::{timeout, Duration};
+use tokio::time::{sleep, timeout, Duration};
 use toml_edit::{value, Array, DocumentMut, Item, Table};
 use uuid::Uuid;
 
@@ -698,27 +698,71 @@ fn event_thread_id(event: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
-async fn wait_for_child_thread(
-    events: &mut broadcast::Receiver<ProfileHostEvent>,
+async fn list_direct_child_thread_ids(
+    host: &ProfileHost,
     parent_thread_id: &str,
+    agent_role: &str,
+    excluded_thread_ids: &[&str],
+) -> Vec<String> {
+    let response = host
+        .request(
+            "thread/list",
+            json!({
+                "parentThreadId": parent_thread_id,
+                "sourceKinds": ["subAgentThreadSpawn"],
+                "archived": false,
+                "useStateDbOnly": true,
+                "limit": 100,
+            }),
+        )
+        .await
+        .expect("official direct-child thread/list");
+    assert!(
+        response
+            .get("nextCursor")
+            .is_none_or(|cursor| cursor.is_null()),
+        "official direct-child thread/list must fit in one page: {response}",
+    );
+    response["data"]
+        .as_array()
+        .expect("official direct-child thread/list data")
+        .iter()
+        .filter_map(|thread| {
+            let id = thread.get("id").and_then(Value::as_str)?;
+            let parent = thread.get("parentThreadId").and_then(Value::as_str)?;
+            let role = thread.get("agentRole").and_then(Value::as_str)?;
+            (parent == parent_thread_id && role == agent_role && !excluded_thread_ids.contains(&id))
+                .then(|| id.to_string())
+        })
+        .collect()
+}
+
+async fn wait_for_direct_child_thread(
+    host: &ProfileHost,
+    parent_thread_id: &str,
+    agent_role: &str,
+    excluded_thread_ids: &[&str],
 ) -> String {
     timeout(Duration::from_secs(30), async {
         loop {
-            let event = events.recv().await.expect("Profile Host event").message;
-            if event["method"] == "thread/started"
-                && event
-                    .pointer("/params/thread/parentThreadId")
-                    .and_then(Value::as_str)
-                    == Some(parent_thread_id)
-            {
-                return event_thread_id(&event)
-                    .expect("child thread id")
-                    .to_string();
+            let matching_ids = list_direct_child_thread_ids(
+                host,
+                parent_thread_id,
+                agent_role,
+                excluded_thread_ids,
+            )
+            .await;
+            match matching_ids.as_slice() {
+                [thread_id] => return thread_id.clone(),
+                [] => sleep(Duration::from_millis(100)).await,
+                _ => panic!(
+                    "official direct-child thread/list found multiple `{agent_role}` children for parent `{parent_thread_id}`: {matching_ids:?}"
+                ),
             }
         }
     })
     .await
-    .expect("native child Thread starts")
+    .expect("official direct-child thread/list found no matching child within 30s")
 }
 
 async fn wait_for_model_request(
@@ -1334,7 +1378,6 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
         "Standard Root must not inherit Role-local warehouse MCP Servers: {root_servers:?}",
     );
 
-    let mut child_events = host.subscribe();
     let mut terminal_events = host.subscribe();
     adapter
         .send_user_message(
@@ -1378,7 +1421,8 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
         "当用户要求定义仓网数据需求",
     );
 
-    let data_thread_id = wait_for_child_thread(&mut child_events, &root.thread_id).await;
+    let data_thread_id =
+        wait_for_direct_child_thread(&host, &root.thread_id, "data_agent", &[]).await;
     let data_request =
         wait_for_model_request(&model_control, DATA_CHILD_PROMPT, DATA_SPAWN_CALL).await;
     assert_child_skill_policy(
@@ -1396,7 +1440,13 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
         .expect("query Data child MCP inventory");
     assert_role_mcp_inventory(&data_mcp, &[("supply_chain", &DATA_TOOLS[..])]);
 
-    let network_thread_id = wait_for_child_thread(&mut child_events, &root.thread_id).await;
+    let network_thread_id = wait_for_direct_child_thread(
+        &host,
+        &root.thread_id,
+        "network_agent",
+        &[data_thread_id.as_str()],
+    )
+    .await;
     let network_request =
         wait_for_model_request(&model_control, NETWORK_CHILD_PROMPT, NETWORK_SPAWN_CALL).await;
     assert_child_skill_policy(
@@ -1531,7 +1581,6 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
         "an existing child request cannot be retroactively changed",
     );
 
-    let mut hot_child_events = host.subscribe();
     let mut hot_terminal_events = host.subscribe();
     adapter
         .send_user_message(
@@ -1545,7 +1594,13 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
         )
         .await
         .expect("start Root Turn for next Role spawn");
-    let hot_data_thread_id = wait_for_child_thread(&mut hot_child_events, &root.thread_id).await;
+    let hot_data_thread_id = wait_for_direct_child_thread(
+        &host,
+        &root.thread_id,
+        "data_agent",
+        &[data_thread_id.as_str(), network_thread_id.as_str()],
+    )
+    .await;
     let hot_data_request =
         wait_for_model_request(&model_control, HOT_DATA_PROMPT, HOT_DATA_SPAWN_CALL).await;
     assert_child_skill_policy(
@@ -1698,7 +1753,6 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
             .await
             .expect("adapter event subscription")
     });
-    let mut child_events = host.subscribe();
     let root_turn = adapter
         .send_user_message(
             &workspace,
@@ -1724,7 +1778,8 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
                 .contains("unknown agent_type"),
         "native Data Role spawn failed before form elicitation: {spawn_result_request}",
     );
-    let child_thread_id = wait_for_child_thread(&mut child_events, &root.thread_id).await;
+    let child_thread_id =
+        wait_for_direct_child_thread(&host, &root.thread_id, "data_agent", &[]).await;
     wait_for_model_request(&model_control, FORM_CHILD_PROMPT, FORM_SPAWN_CALL).await;
     store.bind_child(&root.thread_id, &child_thread_id).await;
 
@@ -2052,14 +2107,6 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
                 .await
                 .expect("malformed Role Runtime event")
                 .message;
-            assert!(
-                !(event["method"] == "thread/started"
-                    && event
-                        .pointer("/params/thread/parentThreadId")
-                        .and_then(Value::as_str)
-                        == Some(root.thread_id.as_str())),
-                "a malformed unavailable Role must not create a child: {event}",
-            );
             if event["method"] == "turn/completed"
                 && event_thread_id(&event) == Some(root.thread_id.as_str())
             {
@@ -2074,6 +2121,13 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
     })
     .await
     .expect("Root handles malformed Role failure");
+
+    let malformed_children =
+        list_direct_child_thread_ids(&host, &root.thread_id, "broken_agent", &[]).await;
+    assert!(
+        malformed_children.is_empty(),
+        "a malformed unavailable Role must not create a child: {malformed_children:?}",
+    );
 
     let failed_spawn_request = model_control
         .requests
